@@ -23,9 +23,7 @@
 | Issue | 当前负责人及交接事实 | 当前工作与下一步 |
 | --- | --- | --- |
 | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | Web slice 已合入；原 Worker owner `01a17acb-4309-7b62-b94e-d5056faa7778` 独占 deployment-entry 两文件 | AC-8～10 已凭 #3792 的两视口浏览器证据补签；AC-11/12 已由 PR #3795 merge `ddc1c6318484de0eb09aded999c63965ef8a687d` 交付。自动 Consumer 注册合同、已批准生产供应及真实 MCP/Provider 联合验收仍未完成。 |
-| [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783) | ACK owner 已将只读私有输入交给协调者做离线候选；上线权仍由 ACK owner 持有 | 22 项离线回归已独立通过，原输入与非认证声明保留。旧 adapter 将 Directory 状态冒充 LDAP 当前状态；可信 current-status authority 合同仍待确认，标记 needs-info。候选未准入 rollout。 |
-
-身份边界备注：LDAP 为临时方案，后续切 OIDC；#3783 的 live login/TLS adoption/有效账号正向回归按用户决定跳过，归档候选仅保留 fail-closed 约束。LDAP 或 OIDC adapter 均不得恢复 Directory-only fallback。
+| [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783) | ACK owner 已将只读私有输入交给协调者做离线候选；用户已决定关闭现场 adoption 缺口 | 已关闭并归档：当前 source 的 fail-closed 候选 30 项场景通过，原输入与非认证声明保留；live login/TLS adoption/有效账号正向回归按用户决定跳过。LDAP 为临时方案，后续切 OIDC；LDAP 或 OIDC adapter 均不得恢复 Directory-only fallback。 |
 | [#3786](https://github.com/AgoraIO-Extensions/agent-infra/issues/3786) | session-owned，原 owner `01a187db-3f47-72e1-8855-dd94cae95dc3` 实际继续处理 | PR #3800 已合入 `1b983100`；Issue 当前仍 OPEN/REOPENED，由原 owner 继续控制真实 API/SSE/DB 验证，其他 session 不接管或重放旧 execution。 |
 | [#3747](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747) | 同一 session-owned owner | 保留真实自定义 Runtime 验收及原失败证据；新修复的源码/镜像不混入旧冻结候选。 |
 | [#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779) | 性能/ACK owner，独立验收票 | 在 #3777/#3778 完整开发收口后冻结 source/image/config、资源窗口和到达轨迹，验证 warm 延迟、耗尽、隔离与清理；不以单测或 Pod Ready 代签。 |
