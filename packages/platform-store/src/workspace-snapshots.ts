@@ -49,24 +49,29 @@ export class PostgresWorkspaceSnapshotStoreV1
 	}
 	async create(input: WorkspaceSnapshotRecordV1) {
 		try {
-			const [row] = await this.#database
-				.insert(workspaceSnapshots)
-				.values({
-					id: input.snapshotId,
-					ownerType: input.ownerType,
-					ownerId: input.ownerId,
-					digest: input.digest,
-					sizeBytes: input.sizeBytes,
-					unpackedSizeBytes: input.unpackedSizeBytes,
-					fileCount: input.fileCount,
-					mediaType: input.mediaType,
-					source: input.source,
-					objectRef: input.objectRef,
-					objectVersion: input.objectVersion,
-					status: input.status,
-					createdAt: new Date(input.createdAt),
-				})
-				.returning();
+			const [row] = await this.#database.transaction(async (transaction) => {
+				await transaction.execute(
+					sql`select pg_advisory_xact_lock(hashtextextended(${input.objectRef} || ':' || ${input.objectVersion}, 0))`,
+				);
+				return transaction
+					.insert(workspaceSnapshots)
+					.values({
+						id: input.snapshotId,
+						ownerType: input.ownerType,
+						ownerId: input.ownerId,
+						digest: input.digest,
+						sizeBytes: input.sizeBytes,
+						unpackedSizeBytes: input.unpackedSizeBytes,
+						fileCount: input.fileCount,
+						mediaType: input.mediaType,
+						source: input.source,
+						objectRef: input.objectRef,
+						objectVersion: input.objectVersion,
+						status: input.status,
+						createdAt: new Date(input.createdAt),
+					})
+					.returning();
+			});
 			if (!row) throw new WorkspaceSnapshotErrorV1("invalid_name");
 			return record(row);
 		} catch (error) {
@@ -225,6 +230,9 @@ export class PostgresWorkspaceSnapshotStoreV1
 			try {
 				await input.deleter.deleteObjectVersion(candidate);
 				await this.#database.transaction(async (transaction) => {
+					await transaction.execute(
+						sql`select pg_advisory_xact_lock(hashtextextended(${candidate.objectRef} || ':' || ${candidate.objectVersion}, 0))`,
+					);
 					const [row] = await transaction
 						.select({ status: workspaceSnapshots.status })
 						.from(workspaceSnapshots)

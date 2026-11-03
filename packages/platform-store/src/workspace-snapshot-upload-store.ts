@@ -351,6 +351,9 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				workspaceSnapshotLimitsV1.maxOwnerBytes
 			)
 				throw new WorkspaceSnapshotErrorV1("quota_exceeded");
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(hashtextextended(${value.objectRef} || ':' || ${value.objectVersion}, 0))`,
+			);
 			const [row] = await tx
 				.insert(workspaceSnapshots)
 				.values({
