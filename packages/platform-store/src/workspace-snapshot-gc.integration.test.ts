@@ -148,3 +148,38 @@ it("holds the publication lock during object deletion", async () => {
 	expect(publication).toBeDefined();
 	expect(await publication).toMatchObject({ code: "conflict" });
 });
+
+it("reports retained bytes and eligible GC delay instead of masking unknown as zero", async () => {
+	const before = await store.readGcMetrics({ now, retentionMs: 86400000 });
+	const a = snapshot();
+	await store.create(a);
+	const after = await store.readGcMetrics({ now, retentionMs: 86400000 });
+	expect(after.storedBytes).toBe(before.storedBytes + a.sizeBytes);
+	expect(after.oldestEligibleDelayMs).toBeGreaterThanOrEqual(
+		now.getTime() - Date.parse(a.createdAt) - 86400000,
+	);
+	await expect(
+		store.readGcMetrics({ now: new Date("invalid"), retentionMs: 86400000 }),
+	).rejects.toMatchObject({ code: "invalid_input" });
+	await expect(
+		store.readGcMetrics({ now, retentionMs: Number.MAX_SAFE_INTEGER }),
+	).rejects.toMatchObject({ code: "invalid_input" });
+});
+
+it("counts bound bytes without including them in GC delay and excludes deleted bytes", async () => {
+	const before = await store.readGcMetrics({ now, retentionMs: 86400000 });
+	const bound = { ...snapshot(), createdAt: "2000-01-01T00:00:00Z" };
+	await store.create(bound);
+	const agent = randomUUID();
+	await db`insert into platform.agents (id) values (${agent})`;
+	await db`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,runtime_revision) values (${agent},1,'synthetic',now(),1)`;
+	await db`insert into platform.workspace_snapshot_bindings (snapshot_id,agent_id,configuration_revision,name,digest,size_bytes) values (${bound.snapshotId},${agent},1,'repo',${bound.digest},${bound.sizeBytes})`;
+	const after = await store.readGcMetrics({ now, retentionMs: 86400000 });
+	expect(after.storedBytes).toBe(before.storedBytes + bound.sizeBytes);
+	expect(after.oldestEligibleDelayMs).toBe(before.oldestEligibleDelayMs);
+	const deleted = { ...snapshot(), status: "deleted" as const };
+	await store.create(deleted);
+	expect(await store.readGcMetrics({ now, retentionMs: 86400000 })).toEqual(
+		after,
+	);
+});

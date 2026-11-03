@@ -298,6 +298,42 @@ export class PostgresWorkspaceSnapshotStoreV1
 		}
 		return { scanned: candidates.length, deleted, failed };
 	}
+	async readGcMetrics(input: { now: Date; retentionMs: number }) {
+		if (
+			!Number.isFinite(input.now.getTime()) ||
+			!Number.isSafeInteger(input.retentionMs) ||
+			input.retentionMs < 0
+		)
+			throw new WorkspaceSnapshotErrorV1("invalid_input");
+		const cutoff = new Date(input.now.getTime() - input.retentionMs);
+		if (!Number.isFinite(cutoff.getTime()))
+			throw new WorkspaceSnapshotErrorV1("invalid_input");
+		const [row] = await this.#database
+			.select({
+				storedBytes: sql<string>`coalesce(sum(${workspaceSnapshots.sizeBytes}), 0)`,
+				oldestEligible: sql<
+					Date | string | null
+				>`min(case when ${workspaceSnapshots.createdAt} < ${cutoff.toISOString()}::timestamptz and not exists (select 1 from ${workspaceSnapshotBindings} b where b.snapshot_id = ${workspaceSnapshots.id}) then ${workspaceSnapshots.createdAt} end)`,
+			})
+			.from(workspaceSnapshots)
+			.where(sql`${workspaceSnapshots.status} <> 'deleted'`);
+		const storedBytes = Number(row?.storedBytes ?? 0);
+		const oldest =
+			row?.oldestEligible == null
+				? null
+				: new Date(row.oldestEligible).getTime();
+		if (
+			!Number.isSafeInteger(storedBytes) ||
+			storedBytes < 0 ||
+			(oldest !== null && !Number.isFinite(oldest))
+		)
+			throw new WorkspaceSnapshotErrorV1("unavailable");
+		return {
+			storedBytes,
+			oldestEligibleDelayMs:
+				oldest === null ? 0 : Math.max(0, cutoff.getTime() - oldest),
+		};
+	}
 	async close() {
 		await this.#client.end();
 	}

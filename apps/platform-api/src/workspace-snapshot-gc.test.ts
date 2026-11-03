@@ -1,14 +1,23 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ collect: vi.fn(), close: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	collect: vi.fn(),
+	close: vi.fn(),
+	metrics: vi.fn(),
+}));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWorkspaceSnapshotStoreV1: class {
 		collectExpired = mocks.collect;
+		readGcMetrics = mocks.metrics;
 		close = mocks.close;
 	},
 }));
 
 import { startWorkspaceSnapshotGcV1 } from "./workspace-snapshot-gc.js";
+
+beforeEach(() => {
+	mocks.metrics.mockResolvedValue({ storedBytes: 0, oldestEligibleDelayMs: 0 });
+});
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -50,6 +59,8 @@ it("uses exact object versions, avoids overlap, and drains before closing", asyn
 		failed: 0,
 		outcome: "completed",
 		durationMs: 5000,
+		storedBytes: 0,
+		oldestEligibleDelayMs: 0,
 	});
 	await vi.advanceTimersByTimeAsync(10000);
 	expect(mocks.collect).toHaveBeenCalledTimes(1);
@@ -131,5 +142,38 @@ it("contains a rejected async telemetry callback", async () => {
 	});
 	await vi.advanceTimersByTimeAsync(1000);
 	expect(mocks.collect).toHaveBeenCalledTimes(1);
+	await gc.close();
+});
+
+it("reports unknown metrics and resumes collection after a metrics read failure", async () => {
+	vi.useFakeTimers();
+	mocks.collect.mockResolvedValue({ scanned: 2, deleted: 1, failed: 0 });
+	mocks.metrics
+		.mockRejectedValueOnce(new Error("private-database-detail"))
+		.mockResolvedValue({ storedBytes: 32, oldestEligibleDelayMs: 100 });
+	const observe = vi.fn();
+	const gc = startWorkspaceSnapshotGcV1({
+		databaseUrl: "unused",
+		storage: { remove: vi.fn() },
+		policy: { retentionMs: 1000, intervalMs: 1000, observe },
+	});
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(observe.mock.calls[0]?.[0]).toMatchObject({
+		scanned: 2,
+		deleted: 1,
+		storedBytes: null,
+		oldestEligibleDelayMs: null,
+		outcome: "unavailable",
+	});
+	expect(JSON.stringify(observe.mock.calls)).not.toContain(
+		"private-database-detail",
+	);
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(mocks.collect).toHaveBeenCalledTimes(2);
+	expect(observe.mock.calls[1]?.[0]).toMatchObject({
+		storedBytes: 32,
+		oldestEligibleDelayMs: 100,
+		outcome: "completed",
+	});
 	await gc.close();
 });

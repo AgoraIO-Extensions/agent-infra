@@ -71,7 +71,7 @@ M1.1 的只读工作区快照范围见 [PRD 5.8](../prd/PRD-agent-platform-M1.md
 
 `observe` 接收 `scanned`、`deleted`、`failed`、`durationMs` 和 `outcome`；部署需将其接入
 现有监控并验证失败告警。回调不接收源码、对象地址或原始异常。单项失败检查 `failed`，
-不能只凭轮次 `outcome=completed` 宣称全部删除成功。该回调尚不提供存储总用量或 GC 延迟指标。
+不能只凭轮次 `outcome=completed` 宣称全部删除成功。`storedBytes` 为未完成删除记录的归档字节总量，`oldestEligibleDelayMs` 为最早到期且未绑定记录超过保留期限的时长；读取失败时两者为 `null`，不能作为零用量或零延迟。
 
 上线验收需保留当前源码与镜像 receipt、实际配置、过期未绑定记录的精确版本删除及审计回读、
 失败重试、保留引用负向与监控接收证据。源码中的调度入口或单元测试不证明目标部署已启用。

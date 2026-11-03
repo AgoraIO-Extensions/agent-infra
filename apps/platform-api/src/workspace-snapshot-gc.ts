@@ -9,6 +9,8 @@ export interface WorkspaceSnapshotGcDeploymentV1 {
 	readonly observe: (
 		result: WorkspaceSnapshotGcResultV1 & {
 			durationMs: number;
+			storedBytes: number | null;
+			oldestEligibleDelayMs: number | null;
 			outcome: "completed" | "unavailable";
 		},
 	) => void;
@@ -53,9 +55,25 @@ export function startWorkspaceSnapshotGcV1(input: {
 		} catch {
 			result = { scanned: 0, deleted: 0, failed: 1, outcome: "unavailable" };
 		}
+		let metrics: {
+			storedBytes: number | null;
+			oldestEligibleDelayMs: number | null;
+		} = { storedBytes: null, oldestEligibleDelayMs: null };
+		try {
+			metrics = await store.readGcMetrics({
+				now: new Date(),
+				retentionMs: policy.retentionMs,
+			});
+		} catch {
+			result = { ...result, outcome: "unavailable" };
+		}
 		try {
 			await Promise.resolve(
-				policy.observe({ ...result, durationMs: Date.now() - start }),
+				policy.observe({
+					...result,
+					...metrics,
+					durationMs: Date.now() - start,
+				}),
 			);
 		} catch {
 			/* Telemetry failure must not stop retries. */
