@@ -575,6 +575,8 @@ function deployment(
 	const profile = profileForWorkload(value, resource, resources);
 	const name = serviceResourceName(value.agentId, resource.metadata.name);
 	const service = serviceLabel(resource.metadata.name);
+	const isEntryService =
+		value.multiService.entryServiceName === resource.metadata.name;
 	const labels = {
 		...resource.spec.template.metadata.labels,
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
@@ -616,8 +618,17 @@ function deployment(
 					securityContext: agentPodSecurityContext(),
 					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
-						(container) => ({
+						(container, index) => ({
 							...container,
+							env: [
+								...(container.env ?? []).filter(
+									({ name }) =>
+										name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+								),
+								...(isEntryService && index === 0
+									? modelCredentialEnvironment(value)
+									: []),
+							],
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -683,6 +694,8 @@ function statefulSet(
 		resource.spec.serviceName,
 	);
 	const service = serviceLabel(resource.metadata.name);
+	const isEntryService =
+		value.multiService.entryServiceName === resource.metadata.name;
 	const labels = {
 		...resource.spec.template.metadata.labels,
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
@@ -721,8 +734,17 @@ function statefulSet(
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
 					securityContext: agentPodSecurityContext(),
 					containers: resource.spec.template.spec.containers.map(
-						(container) => ({
+						(container, index) => ({
 							...container,
+							env: [
+								...(container.env ?? []).filter(
+									({ name }) =>
+										name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+								),
+								...(isEntryService && index === 0
+									? modelCredentialEnvironment(value)
+									: []),
+							],
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
