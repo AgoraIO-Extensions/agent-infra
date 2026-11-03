@@ -6,7 +6,7 @@ import {
 	type WorkspaceSnapshotRecordV1,
 	type WorkspaceSnapshotStoreV1,
 } from "@agent-infra/platform-core";
-import { and, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import {
@@ -184,35 +184,39 @@ export class PostgresWorkspaceSnapshotStoreV1
 					id: workspaceSnapshots.id,
 					ownerType: workspaceSnapshots.ownerType,
 					ownerId: workspaceSnapshots.ownerId,
+					status: workspaceSnapshots.status,
 					objectRef: workspaceSnapshots.objectRef,
 					objectVersion: workspaceSnapshots.objectVersion,
 				})
 				.from(workspaceSnapshots)
 				.where(
 					and(
-						eq(workspaceSnapshots.status, "ready"),
+						inArray(workspaceSnapshots.status, ["ready", "deleting"]),
 						lt(workspaceSnapshots.createdAt, cutoff),
 						isNull(workspaceSnapshots.deletedAt),
 						sql`not exists (select 1 from ${workspaceSnapshotBindings} b where b.snapshot_id = ${workspaceSnapshots.id})`,
+						sql`not exists (select 1 from ${workspaceSnapshots} other where other.id <> ${workspaceSnapshots.id} and other.object_ref = ${workspaceSnapshots.objectRef} and other.object_version = ${workspaceSnapshots.objectVersion} and other.status <> 'deleted')`,
 					),
 				)
 				.for("update", { skipLocked: true });
 			for (const row of rows) {
-				await transaction
-					.update(workspaceSnapshots)
-					.set({ status: "deleting" })
-					.where(eq(workspaceSnapshots.id, row.id));
-				await transaction.insert(auditEvents).values({
-					id: randomUUID(),
-					traceId: randomUUID(),
-					actorType: "system",
-					actorId: "workspace-snapshot-gc",
-					action: "workspace.snapshot.gc.deletion_requested",
-					targetType: "workspace_snapshot",
-					targetId: row.id,
-					outcome: "succeeded",
-					details: { objectVersion: row.objectVersion },
-				});
+				if (row.status === "ready") {
+					await transaction
+						.update(workspaceSnapshots)
+						.set({ status: "deleting" })
+						.where(eq(workspaceSnapshots.id, row.id));
+					await transaction.insert(auditEvents).values({
+						id: randomUUID(),
+						traceId: randomUUID(),
+						actorType: "system",
+						actorId: "workspace-snapshot-gc",
+						action: "workspace.snapshot.gc.deletion_requested",
+						targetType: "workspace_snapshot",
+						targetId: row.id,
+						outcome: "succeeded",
+						details: { objectVersion: row.objectVersion },
+					});
+				}
 			}
 			return rows;
 		});
@@ -235,6 +239,14 @@ export class PostgresWorkspaceSnapshotStoreV1
 						.where(eq(workspaceSnapshotBindings.snapshotId, candidate.id))
 						.limit(1);
 					if (binding) return;
+					const [shared] = await transaction
+						.select({ id: workspaceSnapshots.id })
+						.from(workspaceSnapshots)
+						.where(
+							sql`${workspaceSnapshots.id} <> ${candidate.id} and ${workspaceSnapshots.objectRef} = ${candidate.objectRef} and ${workspaceSnapshots.objectVersion} = ${candidate.objectVersion} and ${workspaceSnapshots.status} <> 'deleted'`,
+						)
+						.limit(1);
+					if (shared) return;
 					await transaction
 						.update(workspaceSnapshots)
 						.set({ status: "deleted", deletedAt: input.now })
