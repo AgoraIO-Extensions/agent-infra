@@ -354,6 +354,14 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 			await tx.execute(
 				sql`select pg_advisory_xact_lock(hashtextextended(${value.objectRef} || ':' || ${value.objectVersion}, 0))`,
 			);
+			const [retired] = await tx
+				.select({ id: workspaceSnapshots.id })
+				.from(workspaceSnapshots)
+				.where(
+					sql`${workspaceSnapshots.objectRef} = ${value.objectRef} and ${workspaceSnapshots.objectVersion} = ${value.objectVersion} and ${workspaceSnapshots.status} in ('deleting', 'deleted')`,
+				)
+				.limit(1);
+			if (retired) throw new WorkspaceSnapshotErrorV1("conflict");
 			const [row] = await tx
 				.insert(workspaceSnapshots)
 				.values({

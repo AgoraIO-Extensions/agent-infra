@@ -53,6 +53,14 @@ export class PostgresWorkspaceSnapshotStoreV1
 				await transaction.execute(
 					sql`select pg_advisory_xact_lock(hashtextextended(${input.objectRef} || ':' || ${input.objectVersion}, 0))`,
 				);
+				const [retired] = await transaction
+					.select({ id: workspaceSnapshots.id })
+					.from(workspaceSnapshots)
+					.where(
+						sql`${workspaceSnapshots.objectRef} = ${input.objectRef} and ${workspaceSnapshots.objectVersion} = ${input.objectVersion} and ${workspaceSnapshots.status} in ('deleting', 'deleted')`,
+					)
+					.limit(1);
+				if (retired) throw new WorkspaceSnapshotErrorV1("conflict");
 				return transaction
 					.insert(workspaceSnapshots)
 					.values({
@@ -228,49 +236,56 @@ export class PostgresWorkspaceSnapshotStoreV1
 		let failed = 0;
 		for (const candidate of candidates) {
 			try {
-				await input.deleter.deleteObjectVersion(candidate);
-				await this.#database.transaction(async (transaction) => {
-					await transaction.execute(
-						sql`select pg_advisory_xact_lock(hashtextextended(${candidate.objectRef} || ':' || ${candidate.objectVersion}, 0))`,
-					);
-					const [row] = await transaction
-						.select({ status: workspaceSnapshots.status })
-						.from(workspaceSnapshots)
-						.where(eq(workspaceSnapshots.id, candidate.id))
-						.for("update")
-						.limit(1);
-					if (row?.status !== "deleting") return;
-					const [binding] = await transaction
-						.select({ snapshotId: workspaceSnapshotBindings.snapshotId })
-						.from(workspaceSnapshotBindings)
-						.where(eq(workspaceSnapshotBindings.snapshotId, candidate.id))
-						.limit(1);
-					if (binding) return;
-					const [shared] = await transaction
-						.select({ id: workspaceSnapshots.id })
-						.from(workspaceSnapshots)
-						.where(
-							sql`${workspaceSnapshots.id} <> ${candidate.id} and ${workspaceSnapshots.objectRef} = ${candidate.objectRef} and ${workspaceSnapshots.objectVersion} = ${candidate.objectVersion} and ${workspaceSnapshots.status} = 'ready'`,
-						)
-						.limit(1);
-					if (shared) return;
-					await transaction
-						.update(workspaceSnapshots)
-						.set({ status: "deleted", deletedAt: input.now })
-						.where(eq(workspaceSnapshots.id, candidate.id));
-					await transaction.insert(auditEvents).values({
-						id: randomUUID(),
-						traceId: randomUUID(),
-						actorType: "system",
-						actorId: "workspace-snapshot-gc",
-						action: "workspace.snapshot.gc.deleted",
-						targetType: "workspace_snapshot",
-						targetId: candidate.id,
-						outcome: "succeeded",
-						details: { objectVersion: candidate.objectVersion },
-					});
-				});
-				deleted++;
+				const completed = await this.#database.transaction(
+					async (transaction) => {
+						await transaction.execute(
+							sql`select pg_advisory_xact_lock(hashtextextended(${candidate.objectRef} || ':' || ${candidate.objectVersion}, 0))`,
+						);
+						const [row] = await transaction
+							.select({ status: workspaceSnapshots.status })
+							.from(workspaceSnapshots)
+							.where(eq(workspaceSnapshots.id, candidate.id))
+							.for("update")
+							.limit(1);
+						if (row?.status !== "deleting") return;
+						const [binding] = await transaction
+							.select({ snapshotId: workspaceSnapshotBindings.snapshotId })
+							.from(workspaceSnapshotBindings)
+							.where(eq(workspaceSnapshotBindings.snapshotId, candidate.id))
+							.limit(1);
+						if (binding) return;
+						const [shared] = await transaction
+							.select({ id: workspaceSnapshots.id })
+							.from(workspaceSnapshots)
+							.where(
+								sql`${workspaceSnapshots.id} <> ${candidate.id} and ${workspaceSnapshots.objectRef} = ${candidate.objectRef} and ${workspaceSnapshots.objectVersion} = ${candidate.objectVersion} and ${workspaceSnapshots.status} = 'ready'`,
+							)
+							.limit(1);
+						if (shared) return false;
+						// Keep the object lock across I/O: publication must not race the delete.
+						await input.deleter.deleteObjectVersion({
+							objectRef: candidate.objectRef,
+							objectVersion: candidate.objectVersion,
+						});
+						await transaction
+							.update(workspaceSnapshots)
+							.set({ status: "deleted", deletedAt: input.now })
+							.where(eq(workspaceSnapshots.id, candidate.id));
+						await transaction.insert(auditEvents).values({
+							id: randomUUID(),
+							traceId: randomUUID(),
+							actorType: "system",
+							actorId: "workspace-snapshot-gc",
+							action: "workspace.snapshot.gc.deleted",
+							targetType: "workspace_snapshot",
+							targetId: candidate.id,
+							outcome: "succeeded",
+							details: { objectVersion: candidate.objectVersion },
+						});
+						return true;
+					},
+				);
+				if (completed) deleted++;
 			} catch {
 				failed++;
 			}
