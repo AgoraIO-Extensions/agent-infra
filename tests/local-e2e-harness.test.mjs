@@ -672,7 +672,16 @@ const id = process.env.TEST_IMAGE_ID === "manifest" ? manifestDigest : process.e
 const image = {Id:id,Os:"linux",Architecture:process.env.TEST_IMAGE_ARCH ?? "arm64",RepoDigests:["registry.example/worker@"+manifestDigest]};
 if(args[0] === "info") console.log("aarch64");
 else if(args[0] === "image" && args[1] === "inspect") { if(!images[args[2]]) process.exit(1); console.log(JSON.stringify([images[args[2]]])); }
-else if(args[0] === "build") { images[args[args.indexOf("--tag")+1]] = image; images[image.Id] = image; }
+else if(args[0] === "build") {
+  const output = args[args.indexOf("--output")+1];
+  const archive = output?.match(/"dest=([^"]+)"/)?.[1];
+  if (!archive || !args.includes("SOURCE_DATE_EPOCH=0") || !args.includes("--provenance=false") || !output.includes("rewrite-timestamp=true")) process.exit(45);
+  fs.writeFileSync(archive, JSON.stringify({tag:args[args.indexOf("--tag")+1],image}));
+}
+else if(args[0] === "image" && args[1] === "load") {
+  const exported = JSON.parse(fs.readFileSync(args[args.indexOf("--input")+1], "utf8"));
+  images[exported.tag] = exported.image; images[exported.image.Id] = exported.image;
+}
 else if(args[0] === "tag") { if(!images[args[1]]) process.exit(44); images[args[2]] = images[args[1]]; }
 else if(args.includes("--raw")) process.stdout.write(raw + (process.env.TEST_CHANGED_MANIFEST ? "\\n" : ""));
 else process.exit(43);
@@ -724,6 +733,11 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			.split("\n")
 			.map(JSON.parse);
 		assert.equal(initialCalls.filter((args) => args[0] === "build").length, 4);
+		assert.equal(
+			initialCalls.filter((args) => args[0] === "image" && args[1] === "load")
+				.length,
+			4,
+		);
 		assert.equal(
 			initialCalls.some((args) => args[0] === "push"),
 			false,

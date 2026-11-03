@@ -565,6 +565,32 @@ async function overlayInputs(directory, prefix = "") {
 	return inputs;
 }
 
+const componentImageBuildPolicy = Object.freeze({
+	sourceDateEpoch: 0,
+	exporter: "oci",
+	rewriteTimestamp: true,
+	provenance: false,
+});
+
+async function buildComponentImage(args) {
+	const directory = await mkdtemp(join(stateRoot, "image-export-"));
+	const archive = join(directory, "image.tar");
+	// Quote the whole CSV field so commas in a private state path remain a path.
+	const destination = `"dest=${archive.replaceAll('"', '""')}"`;
+	try {
+		docker([
+			"build", "--build-arg", `SOURCE_DATE_EPOCH=${componentImageBuildPolicy.sourceDateEpoch}`,
+			`--provenance=${componentImageBuildPolicy.provenance}`, "--output",
+			`type=${componentImageBuildPolicy.exporter},${destination},rewrite-timestamp=${componentImageBuildPolicy.rewriteTimestamp}`,
+			...args,
+		], { stdio: "inherit" });
+		// Export before loading: containerd cannot rewrite timestamps while unpacking.
+		docker(["image", "load", "--input", archive], { stdio: "inherit" });
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
+
 async function componentInputForSource(source, service, platform) {
 	const overlayDirectory =
 		service === "platform-api"
@@ -588,6 +614,7 @@ async function componentInputForSource(source, service, platform) {
 			...overlays,
 			{ path: "target-platform", content: platform },
 			{ path: "build-args", content: JSON.stringify(buildArgs) },
+			{ path: "image-build-policy", content: JSON.stringify(componentImageBuildPolicy) },
 		]),
 		overlayDirectory: overlays.length ? overlayDirectory : null,
 		buildArgs,
@@ -653,9 +680,8 @@ async function buildPlatformImages(source) {
 				fail(`Component cache image changed: ${service}`);
 			if (!previous || !image) {
 				context ??= await cleanContext(source.sha);
-				docker(
+				await buildComponentImage(
 					[
-						"build",
 						"--network", "host", "--platform",
 						platform,
 						...input.buildArgs.flatMap((arg) => ["--build-arg", arg]),
@@ -668,12 +694,10 @@ async function buildPlatformImages(source) {
 						alias,
 						context,
 					],
-					{ stdio: "inherit" },
 				);
 				if (input.overlayDirectory) {
-					docker(
+					await buildComponentImage(
 						[
-							"build",
 							"--platform",
 							platform,
 							"--file",
@@ -682,7 +706,6 @@ async function buildPlatformImages(source) {
 							alias,
 							input.overlayDirectory,
 						],
-						{ stdio: "inherit" },
 					);
 				}
 				image = inspectLocalImage(alias);
