@@ -672,7 +672,17 @@ const id = process.env.TEST_IMAGE_ID === "manifest" ? manifestDigest : process.e
 const image = {Id:id,Os:"linux",Architecture:process.env.TEST_IMAGE_ARCH ?? "arm64",RepoDigests:["registry.example/worker@"+manifestDigest]};
 if(args[0] === "info") console.log("aarch64");
 else if(args[0] === "image" && args[1] === "inspect") { if(!images[args[2]]) process.exit(1); console.log(JSON.stringify([images[args[2]]])); }
-else if(args[0] === "build") { images[args[args.indexOf("--tag")+1]] = image; images[image.Id] = image; }
+else if(args[0] === "build") {
+  if (args.includes("--network") && (fs.statSync(args[args.indexOf("--file")+1]).mode & 0o777) !== 0o644) process.exit(46);
+  const output = args[args.indexOf("--output")+1];
+  const archive = output?.match(/"dest=([^"]+)"/)?.[1];
+  if (!archive || !args.includes("SOURCE_DATE_EPOCH=0") || !args.includes("--provenance=false") || !output.includes("rewrite-timestamp=true")) process.exit(45);
+  fs.writeFileSync(archive, JSON.stringify({tag:args[args.indexOf("--tag")+1],image}));
+}
+else if(args[0] === "image" && args[1] === "load") {
+  const exported = JSON.parse(fs.readFileSync(args[args.indexOf("--input")+1], "utf8"));
+  images[exported.tag] = exported.image; images[exported.image.Id] = exported.image;
+}
 else if(args[0] === "tag") { if(!images[args[1]]) process.exit(44); images[args[2]] = images[args[1]]; }
 else if(args.includes("--raw")) process.stdout.write(raw + (process.env.TEST_CHANGED_MANIFEST ? "\\n" : ""));
 else process.exit(43);
@@ -700,10 +710,20 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			overrides = {},
 			entrypoint = "deploy/local/e2e-harness.mjs",
 		) =>
-			execFileAsync(process.execPath, [entrypoint, action], {
-				cwd: repository,
-				env: { ...env, ...overrides },
-			});
+			execFileAsync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"-e",
+					"process.umask(0o077); await import((await import('node:url')).pathToFileURL(process.argv[1]).href);",
+					entrypoint,
+					action,
+				],
+				{
+					cwd: repository,
+					env: { ...env, ...overrides },
+				},
+			);
 		await cli("sync");
 		await cli("build");
 		const first = JSON.parse(
@@ -724,6 +744,11 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			.split("\n")
 			.map(JSON.parse);
 		assert.equal(initialCalls.filter((args) => args[0] === "build").length, 4);
+		assert.equal(
+			initialCalls.filter((args) => args[0] === "image" && args[1] === "load")
+				.length,
+			4,
+		);
 		assert.equal(
 			initialCalls.some((args) => args[0] === "push"),
 			false,

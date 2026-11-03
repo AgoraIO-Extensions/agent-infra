@@ -46,6 +46,12 @@ Docker context 所在 VM 的系统时钟不能回拨：Worker 签发的 Runtime 
 `publish-images` workflow 发布。Web、API、Worker 和目录同步属于业务镜像，只在 release tag
 或 full release dispatch 时发布；本地 E2E 从固定源码构建这四个业务组件。
 
+源码解包保留 Git archive 的规范权限，不继承调用者的 `umask`，避免非 root 服务无法读取配置。
+业务镜像及其私有依赖 overlay 使用固定 `SOURCE_DATE_EPOCH=0`，先导出规范化文件时间戳的
+单平台 OCI archive，再导入本地 Docker。构建策略计入组件输入哈希，临时 archive 在成功或
+失败后清理。该策略避免时钟变化引起无变化源码重建的 digest 漂移；同输入 digest 不一致、
+来源、架构和 Registry 原始字节校验仍然拒绝，不能用新镜像覆盖旧的成功绑定。
+
 发布流程仅保留 `main` 浮动 tag 时，先从固定源码对应的成功 workflow run 下载
 `published-indexes-<sourceRevision>-<attempt>` artifact，并设置
 `E2E_HARNESS_PUBLISHED_INDEXES_FILE=/absolute/path/to/published-indexes.jsonl`。
