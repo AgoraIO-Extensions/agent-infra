@@ -2039,7 +2039,7 @@ export function createWorkloadRuntimeV1(
 					throw new Error("multi-service workload unavailable");
 				return multiWorkload;
 			};
-			const identity = state.identity;
+			let identity = state.identity;
 			const activation = createSecretActivationUseCaseV1({
 				store: input.secrets.store,
 				decryptor: options.decryptor,
@@ -2058,15 +2058,17 @@ export function createWorkloadRuntimeV1(
 									secretDataKey(candidate.secretKey),
 									candidate.plaintext,
 								);
-						if (multiServiceRuntime)
-							await multiServiceRuntime.bindSecretFence(
+						let updatedIdentity = identity;
+						if (multiServiceRuntime) {
+							updatedIdentity = await multiServiceRuntime.bindSecretFence(
 								requireMultiWorkload(),
 								identity,
 								candidate.kubernetesSecretRef.name,
 								candidate.fence,
 								secretUid,
 							);
-						else
+							identity = updatedIdentity;
+						} else
 							await adapter.bindSecretFence(
 								workload,
 								identity,
@@ -2076,8 +2078,8 @@ export function createWorkloadRuntimeV1(
 							);
 						return {
 							outcome: "applied",
-							workloadUid: identity.uid,
-							workloadGeneration: identity.generation,
+							workloadUid: updatedIdentity.uid,
+							workloadGeneration: updatedIdentity.generation,
 						};
 					},
 					async observeCandidate(candidate) {

@@ -1006,6 +1006,7 @@ export function createMultiServiceRuntimeOperations(options: {
 }) {
 	const { client } = options;
 	const resources = resolveMultiServiceResourceConfigurationV1(options.policy);
+	type WorkloadIdentity = { uid: string; generation: number };
 	const imagePullSecrets =
 		workloadImagePullSpecV1(options.policy.imagePullSecretName)
 			.imagePullSecrets ?? [];
@@ -1695,8 +1696,9 @@ export function createMultiServiceRuntimeOperations(options: {
 			secretName: string,
 			fence: number,
 			secretUid: string,
-		) {
-			const members = memberResources(value);
+		): Promise<WorkloadIdentity> {
+			const entry = entryWorkloadResource(value);
+			const members = snapshotMemberResources(value, entry.metadata.name);
 			if (!members.length)
 				throw new Error("multi-service Secret consumers unavailable");
 			const identities: MemberIdentitySnapshot = {};
@@ -1793,7 +1795,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					expectedEntryIdentity.generation
 			)
 				throw new Error("multi-service entry identity unavailable");
-			await replaceWorkloadWithConflictRetry(
+			const updatedEntry = await replaceWorkloadWithConflictRetry(
 				{
 					...currentEntryAfter,
 					metadata: {
@@ -1809,6 +1811,19 @@ export function createMultiServiceRuntimeOperations(options: {
 				currentEntryAfter,
 				value,
 			);
+			const updatedMetadata = updatedEntry.metadata;
+			if (
+				!updatedMetadata ||
+				updatedMetadata.uid !== expectedEntryIdentity.uid ||
+				typeof updatedMetadata.generation !== "number" ||
+				!Number.isSafeInteger(updatedMetadata.generation) ||
+				updatedMetadata.generation < 1
+			)
+				throw new Error("multi-service entry update identity unavailable");
+			return {
+				uid: updatedMetadata.uid,
+				generation: updatedMetadata.generation,
+			};
 		},
 		async observeSecretFence(
 			value: MultiServiceDesired,

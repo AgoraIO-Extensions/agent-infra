@@ -749,6 +749,65 @@ describe("multi-service resource policy", () => {
 		);
 	});
 
+	it("returns the updated entry identity after binding a Secret fence", async () => {
+		const fake = fakeClient();
+		const replace = fake.client.replace.bind(fake.client);
+		const client: WorkerKubernetesClientV1 = {
+			...fake.client,
+			async replace(object) {
+				const updated = await replace(object);
+				if (
+					updated.kind === "Deployment" &&
+					updated.metadata?.name?.endsWith("-web")
+				) {
+					updated.metadata.generation = (updated.metadata.generation ?? 0) + 1;
+				}
+				return updated;
+			},
+		};
+		const operations = createMultiServiceRuntimeOperations({
+			client,
+			policy: basePolicy,
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		value.secretRefs.push({
+			schemaVersion: 1,
+			ownerType: "agent-owner",
+			ownerId: "owner-a",
+			agentId: "agent-a",
+			secretId: "owner-secret",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1",
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+			wrappingKeyVersion: "key-a",
+			name: "owner-secret",
+		});
+		const identity = await operations.apply(value);
+		if (identity === "pending")
+			throw new Error("multi-service apply did not return identity");
+		const entryResource = fake.resources.get(
+			`Deployment/${workloadResourceNameV1("agent-a")}-web`,
+		) as V1Deployment;
+		if (!entryResource.metadata) throw new Error("entry metadata missing");
+		entryResource.metadata.generation = identity.generation;
+		const updated = await operations.bindSecretFence(
+			value,
+			identity,
+			"owner-secret",
+			7,
+			"secret-uid",
+		);
+		expect(updated.uid).toBe(identity.uid);
+		const liveEntry = fake.resources.get(
+			`Deployment/${workloadResourceNameV1("agent-a")}-web`,
+		) as V1Deployment;
+		expect(updated.generation).toBe(liveEntry.metadata?.generation);
+		expect(updated.generation).toBeGreaterThanOrEqual(identity.generation);
+	});
+
 	it("re-reads and retries a Deployment update after a Kubernetes conflict", async () => {
 		const fake = fakeClient();
 		let conflictInjected = false;
