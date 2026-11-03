@@ -326,6 +326,7 @@ describe("platform-core package surface", () => {
 			"parseTaskFeedbackSubmitV1",
 			"parseTaskPrincipalV1",
 			"parseTimedOutUnknownStopResolutionInputV1",
+			"planWorkspaceSnapshotGcV1",
 			"parseWorkloadCapabilitiesV1",
 			"parseWorkloadExecutionCapacityV1",
 			"parseWorkloadSecretRecoveriesV1",
