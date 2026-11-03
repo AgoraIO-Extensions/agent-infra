@@ -188,6 +188,29 @@ function environmentSecrets(value: MultiServiceDesired) {
 	}));
 }
 
+function modelCredentialEnvironment(value: MultiServiceDesired) {
+	if (
+		value.runtimeManifest.interactionMode !== "platform-adapter" ||
+		value.runtimeManifest.capabilities?.modelSelection !== true ||
+		value.secretRefs.length !== 1
+	)
+		return [];
+	const [secret] = value.secretRefs;
+	if (!secret) return [];
+	return [
+		{
+			name: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+			valueFrom: {
+				secretKeyRef: {
+					name: secret.name,
+					key: "CUSTOM_MODEL_API_KEY",
+					optional: false,
+				},
+			},
+		},
+	];
+}
+
 function matchesEnvironmentSecrets(
 	value: MultiServiceDesired,
 	spec: V1PodSpec | undefined,
@@ -617,6 +640,13 @@ function deployment(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							env: [
+								...(container.env ?? []).filter(
+									({ name }) =>
+										name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+								),
+								...modelCredentialEnvironment(value),
+							],
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -722,6 +752,13 @@ function statefulSet(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							env: [
+								...(container.env ?? []).filter(
+									({ name }) =>
+										name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+								),
+								...modelCredentialEnvironment(value),
+							],
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -844,6 +881,7 @@ function migrationJob(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							env: container.env,
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
