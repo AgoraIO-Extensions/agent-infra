@@ -170,13 +170,11 @@ export class PostgresWorkspaceSnapshotStoreV1
 	 * transaction before object I/O and rechecked in a second transaction after
 	 * exact-version deletion, so a concurrent bind cannot be silently lost.
 	 */
-	async collectExpired(
-		input: {
-			readonly now: Date;
-			readonly retentionMs: number;
-			readonly deleter: WorkspaceSnapshotObjectVersionDeleterV1;
-		},
-	): Promise<WorkspaceSnapshotGcResultV1> {
+	async collectExpired(input: {
+		readonly now: Date;
+		readonly retentionMs: number;
+		readonly deleter: WorkspaceSnapshotObjectVersionDeleterV1;
+	}): Promise<WorkspaceSnapshotGcResultV1> {
 		if (!Number.isSafeInteger(input.retentionMs) || input.retentionMs < 0)
 			throw new WorkspaceSnapshotErrorV1("invalid_input");
 		const cutoff = new Date(input.now.getTime() - input.retentionMs);
