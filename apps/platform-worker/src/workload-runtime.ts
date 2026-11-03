@@ -77,6 +77,10 @@ import {
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
 import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
+import type {
+	WorkspaceSnapshotMaterializerInputV1,
+	WorkspaceSnapshotPodProjectionV1,
+} from "./workspace-snapshot-materializer.js";
 
 export type WorkloadBrowserBindingResolverV1 = (input: {
 	readonly agentId: string;
@@ -109,6 +113,19 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly fetch?: typeof fetch;
 	/** Deployment-owned Session binding for the current Browser Sandbox. */
 	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
+	/** Server-derived snapshot projection; request/runtime/annotation inputs are never accepted. */
+	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
+	/** Resolves persisted snapshot bindings to immutable materializer inputs. */
+	readonly workspaceSnapshotResolver?: (input: {
+		readonly agentId: string;
+		readonly configurationRevision: number;
+		readonly workloadRevision: number;
+		readonly fence: number;
+		readonly bindings: readonly { snapshotId: string; name: string }[];
+	}) => Promise<{
+		readonly inputs: readonly WorkspaceSnapshotMaterializerInputV1[];
+		readonly projection?: WorkspaceSnapshotPodProjectionV1;
+	}>;
 	/** Bounded multi-service health facts; recording is observational only. */
 	readonly onHealthDiagnostic?: (
 		diagnostic: MultiServiceHealthDiagnosticV1,
@@ -564,6 +581,7 @@ export function createWorkloadRuntimeV1(
 		onHealthDiagnostic: options.onHealthDiagnostic,
 	});
 	const fetcher = options.fetch ?? globalThis.fetch;
+	let activeSnapshotProjection: WorkspaceSnapshotPodProjectionV1 | undefined;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
 		WorkloadCapabilitiesV1
@@ -682,6 +700,8 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
+			workspaceSnapshotProjection:
+				activeSnapshotProjection ?? options.workspaceSnapshotProjection,
 			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid, podResourceVersion }) {
 				let probeStartedAt = performance.now();
@@ -1327,7 +1347,40 @@ export function createWorkloadRuntimeV1(
 			return capabilities;
 		},
 		async preflight(input, state) {
+			activeSnapshotProjection = undefined;
 			const configuration = state.candidate.configuration;
+			const snapshotBindings =
+				configuration.source.kind === "custom"
+					? (configuration.source.workspaceSnapshots ?? [])
+					: [];
+			let snapshotMaterialization:
+				| Awaited<
+						ReturnType<
+							NonNullable<WorkloadRuntimeOptionsV1["workspaceSnapshotResolver"]>
+						>
+				  >
+				| undefined;
+			if (snapshotBindings.length > 0) {
+				if (!options.workspaceSnapshotResolver)
+					throw new WorkloadPreflightRejectedErrorV1(
+						"snapshot-materialization",
+					);
+				try {
+					snapshotMaterialization = await options.workspaceSnapshotResolver({
+						agentId: state.agentId,
+						configurationRevision: configuration.revision,
+						workloadRevision: state.revision,
+						fence: state.fence,
+						bindings: snapshotBindings,
+					});
+					if (snapshotMaterialization.projection)
+						activeSnapshotProjection = snapshotMaterialization.projection;
+				} catch {
+					throw new WorkloadPreflightRejectedErrorV1(
+						"snapshot-materialization",
+					);
+				}
+			}
 			// 平台身份入口需要部署提供可信的路由集成；没有时是确定性的策略拒绝（#3034）。
 			// 在 Registry 准入、模型投影和任何 Kubernetes 写入之前结束，不消耗重试预算。
 			if (
@@ -1450,6 +1503,20 @@ export function createWorkloadRuntimeV1(
 						desiredState: "running",
 						replicas: 1,
 						multiService: multiServiceManifest,
+						...(snapshotMaterialization
+							? {
+									workspaceSnapshots: snapshotMaterialization.inputs.map(
+										(input) => ({
+											snapshotId: input.snapshotId,
+											name: input.name,
+											digest: input.digest,
+											sizeBytes: input.sizeBytes,
+											objectRef: input.objectRef,
+											mountPath: `/opt/agent/workspaces/${input.name}`,
+										}),
+									),
+								}
+							: {}),
 					});
 					return { configuration, deployment };
 				} catch {
@@ -1711,6 +1778,16 @@ export function createWorkloadRuntimeV1(
 									? JSON.stringify(materializedSkills.appliedBindings)
 									: undefined,
 								skillGenerationId: materializedSkills.generationId,
+							}
+						: {}),
+					...(snapshotMaterialization
+						? {
+								workspaceSnapshots: snapshotMaterialization.inputs.map(
+									(input) => ({
+										...input,
+										mountPath: `/opt/agent/workspaces/${input.name}`,
+									}),
+								),
 							}
 						: {}),
 					desiredState: "running",
