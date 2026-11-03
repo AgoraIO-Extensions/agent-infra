@@ -65,6 +65,8 @@ export function projectWorkspaceSnapshotMaterializerV1(
 	const names = new Set<string>();
 	const mounts = new Map<string, readonly V1VolumeMount[]>();
 	for (const snapshot of snapshots) {
+		if (!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(snapshot.name))
+			throw new Error("workspace snapshot name is invalid");
 		if (names.has(snapshot.name))
 			throw new Error("workspace snapshot names must be unique");
 		names.add(snapshot.name);

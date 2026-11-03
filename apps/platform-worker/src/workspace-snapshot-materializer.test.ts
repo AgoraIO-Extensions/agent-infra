@@ -94,4 +94,11 @@ describe("workspace snapshot materializer projection", () => {
 			),
 		).toThrow();
 	});
+
+	it("rejects unsafe workspace names before deriving mount paths", () => {
+		const input = { ...snapshot, name: "../escape" };
+		expect(() =>
+			projectWorkspaceSnapshotMaterializerV1([input], policy),
+		).toThrow("workspace snapshot name is invalid");
+	});
 });
