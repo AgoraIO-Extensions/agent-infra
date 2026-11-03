@@ -2,8 +2,12 @@
 
 ## 状态
 
-提案，依赖 #3054 的 Owner/架构评审。默认 Landlock 路径保持不变；本 ADR 只定义 ACK
-节点缺少 Landlock ABI V5 时的可选部署模式。
+已实现的可选部署模式，适用范围与部署约束以
+[工程 Spec 的 Codex 执行屏障](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
+为准。默认 Landlock 路径保持不变，部署必须显式选择本模式。
+
+实现合入不代表生产启用已获批准，也不代表 ACK 验收完成。生产启用前仍须完成
+Owner/架构评审和下述验收；具名非生产环境的实测不能代替这些门禁。
 
 ## 背景
 
