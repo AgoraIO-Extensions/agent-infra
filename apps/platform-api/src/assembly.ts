@@ -114,7 +114,10 @@ import {
 	type PresentPlatformAgent,
 } from "./projection.js";
 import { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
-import { createRuntimeModelSelectionReaderFromStoreV1 } from "./runtime-model-selection-reader.js";
+import {
+	createConversationModelSelectionReaderV1,
+	createRuntimeModelSelectionReaderFromStoreV1,
+} from "./runtime-model-selection-reader.js";
 import {
 	createRuntimeNativeMetadataCurrentCheckerV1,
 	createRuntimeNativeMetadataRequestRegistryV1,
@@ -693,7 +696,7 @@ export function assemblePlatformApi(
 			: undefined);
 	if (input.modelSelection !== undefined && input.modelDirectory !== undefined)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
-	const modelSelection =
+	const runtimeModelSelection =
 		input.modelSelection ??
 		(input.modelDirectory
 			? createRuntimeModelSelectionReaderFromStoreV1({
@@ -703,6 +706,57 @@ export function assemblePlatformApi(
 					),
 				})
 			: undefined);
+	const modelSelection = createConversationModelSelectionReaderV1({
+		runtimeReader: runtimeModelSelection,
+		async readTarget(identity, conversationId) {
+			const scope = { actorId: identity.userId, channelId: "web" };
+			const target = await conversationQuery.getAuthorizationTarget(
+				scope,
+				conversationId,
+			);
+			if (!target) return null;
+			const currentUser = await resolveCurrentTaskUser(
+				input.identity,
+				identity.userId,
+				randomUUID(),
+			);
+			if (!currentUser || currentUser.accountStatus !== "active") return null;
+			const agent = await managementQuery.getAgent(
+				{
+					kind: "user",
+					userId: identity.userId,
+					organizationIds: currentUser.organizationIds,
+				},
+				target.agentId,
+			);
+			if (!agent) return null;
+			const actor = {
+				agentId: target.agentId,
+				actorId: identity.userId,
+				organizationIds: currentUser.organizationIds,
+				isAdministrator: identity.roles.includes("system_admin"),
+			};
+			const result = await configurationQuery.read({
+				...actor,
+				intent: "discover",
+			});
+			if (result.outcome !== "found") return null;
+			const runtime = await configurationQuery.readRuntimePresentation({
+				...actor,
+				accountStatus: currentUser.accountStatus,
+				expected: {
+					configurationRevision: result.configuration.revision,
+					management: agent.management,
+				},
+			});
+			if (runtime.outcome !== "found")
+				throw new Error("Current Runtime capability is unavailable");
+			return {
+				configuration: result.configuration,
+				modelSelectionSupported: runtime.capabilities?.modelSelection === true,
+			};
+		},
+	});
 	const savedKeyCandidatesTransport = input.savedKeyCandidates
 		? createWorkerSavedKeyCandidatesTransportV1(input.savedKeyCandidates)
 		: undefined;

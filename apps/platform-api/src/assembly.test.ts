@@ -253,8 +253,9 @@ describe("Platform API production assembly", () => {
 		});
 		expect(deployed.dependencies.workspaceSnapshots).toBeDefined();
 		await deployed.close();
-		expect(assembly.dependencies.conversation.modelSelection).toBe(
-			modelSelection,
+		// Deployment readers are scoped by the current Agent source and capability.
+		expect(assembly.dependencies.conversation.modelSelection?.read).toBeTypeOf(
+			"function",
 		);
 		expect(assembly.dependencies.nativeMetadata?.reader).toBeDefined();
 		expect(assembly.dependencies.nativeMetadataCurrent).toMatchObject({
