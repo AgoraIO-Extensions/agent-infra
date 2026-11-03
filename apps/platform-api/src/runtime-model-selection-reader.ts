@@ -6,12 +6,74 @@ import {
 	type RuntimeModelDirectoryResponseV1,
 	RuntimeModelDirectoryResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
-import type { PostgresConversationQueryV1 } from "@agent-infra/platform-store";
+import type {
+	AgentConfigurationProjectionV1,
+	PostgresConversationQueryV1,
+} from "@agent-infra/platform-store";
 import type {
 	ConversationModelSelectionReaderV1,
 	ConversationModelSelectionReaderV1 as Reader,
 } from "./http/conversation-routes.js";
 import type { IdentityContext } from "./http/identity.js";
+
+export function createConversationModelSelectionReaderV1(options: {
+	readonly readTarget: (
+		identity: IdentityContext,
+		conversationId: string,
+	) => Promise<{
+		readonly configuration: Pick<
+			AgentConfigurationProjectionV1,
+			| "agentId"
+			| "source"
+			| "modelOptions"
+			| "defaultModelOptionId"
+			| "defaultReasoningLevel"
+		>;
+		readonly modelSelectionSupported: boolean;
+	} | null>;
+	readonly runtimeReader?: Reader;
+}): Reader {
+	return {
+		async read(identity, conversationId) {
+			const target = await options.readTarget(identity, conversationId);
+			if (!target) return null;
+			const configuration = target.configuration;
+			if (configuration.source.kind === "standard") {
+				return {
+					agentId: configuration.agentId,
+					source: "standard" as const,
+					available: target.modelSelectionSupported,
+					options: configuration.modelOptions.map((option) => ({
+						optionId: option.optionId,
+						modelId: option.modelId,
+						displayName: option.modelId,
+						reasoningLevels: [...option.reasoningLevels],
+					})),
+					currentModelOptionId: configuration.defaultModelOptionId,
+					currentReasoningLevel: configuration.defaultReasoningLevel,
+				};
+			}
+			if (configuration.source.interactionMode !== "platform-adapter")
+				return null;
+			if (!target.modelSelectionSupported)
+				return {
+					agentId: configuration.agentId,
+					source: "custom-platform-adapter" as const,
+					available: false,
+					options: [],
+					currentModelOptionId: null,
+					currentReasoningLevel: null,
+				};
+			if (!options.runtimeReader)
+				throw new Error("Runtime model directory is unavailable");
+			const result = await options.runtimeReader.read(identity, conversationId);
+			return result?.agentId === configuration.agentId &&
+				result.source === "custom-platform-adapter"
+				? result
+				: null;
+		},
+	};
+}
 
 export interface RuntimeModelDirectoryTransportV1 {
 	read(

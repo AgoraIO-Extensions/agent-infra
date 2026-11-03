@@ -13,6 +13,7 @@ import { ConversationEventWakeHubV1 } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
+import { createConversationModelSelectionReaderV1 } from "../runtime-model-selection-reader.js";
 
 import {
 	type ConversationRoutesDependencies,
@@ -624,6 +625,47 @@ describe("Conversation HTTP routes", () => {
 			}),
 		});
 		expect(response.status).toBe(503);
+	});
+
+	it("accepts a standard first message with effective defaults without an active Runtime directory", async () => {
+		const runtimeReader = { read: vi.fn().mockResolvedValue(null) };
+		const modelSelection = createConversationModelSelectionReaderV1({
+			runtimeReader,
+			readTarget: async () => ({
+				configuration: {
+					agentId: "agent-1",
+					source: {
+						kind: "standard",
+						templateId: "codex",
+						connectionEnabled: false,
+					},
+					modelOptions: [
+						{
+							optionId: "model-primary",
+							endpointId: "relay",
+							modelId: "model-1",
+							reasoningLevels: ["medium"],
+						},
+					],
+					defaultModelOptionId: "model-primary",
+					defaultReasoningLevel: "medium",
+				},
+				modelSelectionSupported: true,
+			}),
+		});
+		const input = dependencies({ modelSelection });
+		const app = testApp(input).app;
+		const response = await app.request(
+			"/api/v1/conversations/conversation-1/messages",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "First message" }),
+			},
+		);
+		expect(response.status).toBe(202);
+		expect(runtimeReader.read).not.toHaveBeenCalled();
+		expect(input.commands(identity).accept).toHaveBeenCalledOnce();
 	});
 
 	it("does not read the Runtime directory before the first message without a selection", async () => {
