@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	assertWorkspaceSnapshotBindingQuotaV1,
 	WorkspaceSnapshotBindingErrorV1,
@@ -8,6 +9,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import {
 	agentConfigurationRevisions,
+	auditEvents,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 } from "./schema.js";
@@ -107,6 +109,23 @@ export class PostgresWorkspaceSnapshotBindingStoreV1
 				})
 				.returning();
 			if (!row) throw new WorkspaceSnapshotBindingErrorV1("conflict");
+			await transaction.insert(auditEvents).values({
+				id: randomUUID(),
+				traceId: randomUUID(),
+				requestId: randomUUID(),
+				actorType: input.ownerType,
+				actorId: input.ownerId,
+				action: "workspace.snapshot.bound",
+				targetType: "workspace_snapshot",
+				targetId: snapshot.id,
+				outcome: "succeeded",
+				details: {
+					agentId: input.agentId,
+					configurationRevision: input.configurationRevision,
+					name: input.name,
+					digest: snapshot.digest,
+				},
+			});
 			return bindingProjection(row);
 		});
 	}
@@ -129,6 +148,22 @@ export class PostgresWorkspaceSnapshotBindingStoreV1
 				.for("update")
 				.limit(1);
 			if (!snapshot) throw new WorkspaceSnapshotBindingErrorV1("not_found");
+			const [binding] = await transaction
+				.select()
+				.from(workspaceSnapshotBindings)
+				.where(
+					and(
+						eq(workspaceSnapshotBindings.snapshotId, input.snapshotId),
+						eq(workspaceSnapshotBindings.agentId, input.agentId),
+						eq(
+							workspaceSnapshotBindings.configurationRevision,
+							input.configurationRevision,
+						),
+					),
+				)
+				.for("share")
+				.limit(1);
+			if (!binding) throw new WorkspaceSnapshotBindingErrorV1("not_found");
 			const deleted = await transaction
 				.delete(workspaceSnapshotBindings)
 				.where(
@@ -144,6 +179,23 @@ export class PostgresWorkspaceSnapshotBindingStoreV1
 				.returning({ snapshotId: workspaceSnapshotBindings.snapshotId });
 			if (!deleted.length)
 				throw new WorkspaceSnapshotBindingErrorV1("not_found");
+			await transaction.insert(auditEvents).values({
+				id: randomUUID(),
+				traceId: randomUUID(),
+				requestId: randomUUID(),
+				actorType: input.ownerType,
+				actorId: input.ownerId,
+				action: "workspace.snapshot.unbound",
+				targetType: "workspace_snapshot",
+				targetId: input.snapshotId,
+				outcome: "succeeded",
+				details: {
+					agentId: input.agentId,
+					configurationRevision: input.configurationRevision,
+					name: binding.name,
+					digest: binding.digest,
+				},
+			});
 		});
 	}
 

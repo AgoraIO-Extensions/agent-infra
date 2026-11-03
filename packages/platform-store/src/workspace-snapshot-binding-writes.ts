@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationRecord,
 	assertWorkspaceSnapshotBindingQuotaV1,
@@ -10,6 +11,7 @@ import {
 	agentApplications,
 	agentOwners,
 	agents,
+	auditEvents,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 } from "./schema.js";
@@ -79,16 +81,6 @@ export async function insertWorkspaceSnapshotBindingsV1(
 		input.configuration.source.kind === "custom"
 			? (input.configuration.source.workspaceSnapshots ?? [])
 			: [];
-	if (bindings.length === 0) return;
-	const names = new Set<string>();
-	const ids = new Set<string>();
-	for (const binding of bindings) {
-		workspaceSnapshotMountPathV1(binding.name);
-		if (names.has(binding.name) || ids.has(binding.snapshotId))
-			throw new WorkspaceSnapshotBindingErrorV1("conflict");
-		names.add(binding.name);
-		ids.add(binding.snapshotId);
-	}
 	const previous =
 		input.previousConfigurationRevision === undefined
 			? []
@@ -105,6 +97,37 @@ export async function insertWorkspaceSnapshotBindingsV1(
 						),
 					)
 					.for("share");
+	if (bindings.length === 0) {
+		for (const row of previous) {
+			await transaction.insert(auditEvents).values({
+				id: randomUUID(),
+				traceId: randomUUID(),
+				requestId: randomUUID(),
+				actorType: input.ownerType,
+				actorId: input.ownerId,
+				action: "workspace.snapshot.unbound",
+				targetType: "workspace_snapshot",
+				targetId: row.snapshotId,
+				outcome: "succeeded",
+				details: {
+					agentId: row.agentId,
+					configurationRevision: row.configurationRevision,
+					name: row.name,
+					digest: row.digest,
+				},
+			});
+		}
+		return;
+	}
+	const names = new Set<string>();
+	const ids = new Set<string>();
+	for (const binding of bindings) {
+		workspaceSnapshotMountPathV1(binding.name);
+		if (names.has(binding.name) || ids.has(binding.snapshotId))
+			throw new WorkspaceSnapshotBindingErrorV1("conflict");
+		names.add(binding.name);
+		ids.add(binding.snapshotId);
+	}
 	const retained = new Map(previous.map((row) => [row.snapshotId, row]));
 	const added = bindings.filter(
 		({ snapshotId, name }) => retained.get(snapshotId)?.name !== name,
@@ -159,4 +182,47 @@ export async function insertWorkspaceSnapshotBindingsV1(
 		};
 	});
 	await transaction.insert(workspaceSnapshotBindings).values(rows);
+	for (const row of previous) {
+		const next = bindings.find(
+			(binding) =>
+				binding.snapshotId === row.snapshotId && binding.name === row.name,
+		);
+		if (next) continue;
+		await transaction.insert(auditEvents).values({
+			id: randomUUID(),
+			traceId: randomUUID(),
+			requestId: randomUUID(),
+			actorType: input.ownerType,
+			actorId: input.ownerId,
+			action: "workspace.snapshot.unbound",
+			targetType: "workspace_snapshot",
+			targetId: row.snapshotId,
+			outcome: "succeeded",
+			details: {
+				agentId: row.agentId,
+				configurationRevision: row.configurationRevision,
+				name: row.name,
+				digest: row.digest,
+			},
+		});
+	}
+	for (const row of rows) {
+		await transaction.insert(auditEvents).values({
+			id: randomUUID(),
+			traceId: randomUUID(),
+			requestId: randomUUID(),
+			actorType: input.ownerType,
+			actorId: input.ownerId,
+			action: "workspace.snapshot.bound",
+			targetType: "workspace_snapshot",
+			targetId: row.snapshotId,
+			outcome: "succeeded",
+			details: {
+				agentId: row.agentId,
+				configurationRevision: row.configurationRevision,
+				name: row.name,
+				digest: row.digest,
+			},
+		});
+	}
 }

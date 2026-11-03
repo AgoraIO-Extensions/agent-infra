@@ -400,7 +400,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				{
 					digest: row.digest,
 					sizeBytes: row.sizeBytes,
-					sourceKind: row.source.kind,
+					source: row.source,
 				},
 			);
 			return record(tx, row);
