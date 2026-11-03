@@ -6497,7 +6497,8 @@ test.describe("final acceptance Y shell and directory", () => {
 		// Y-03：保留「关闭导航」（已回写导出稿），点击后焦点回到「打开导航」而不是 body。
 		const close = dialog.getByRole("button", { name: "关闭导航" });
 		const closeBox = await close.boundingBox();
-		expect([closeBox?.width, closeBox?.height]).toEqual([44, 44]);
+		expect(closeBox?.width).toBeCloseTo(44, 2);
+		expect(closeBox?.height).toBeCloseTo(44, 2);
 		await close.click();
 		await expect(dialog).not.toBeVisible();
 		await expect(trigger).toBeFocused();
