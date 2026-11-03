@@ -54,7 +54,9 @@ export function startWorkspaceSnapshotGcV1(input: {
 			result = { scanned: 0, deleted: 0, failed: 1, outcome: "unavailable" };
 		}
 		try {
-			policy.observe({ ...result, durationMs: Date.now() - start });
+			await Promise.resolve(
+				policy.observe({ ...result, durationMs: Date.now() - start }),
+			);
 		} catch {
 			/* Telemetry failure must not stop retries. */
 		}

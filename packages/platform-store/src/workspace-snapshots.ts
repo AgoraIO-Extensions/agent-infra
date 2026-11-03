@@ -253,7 +253,13 @@ export class PostgresWorkspaceSnapshotStoreV1
 							.from(workspaceSnapshotBindings)
 							.where(eq(workspaceSnapshotBindings.snapshotId, candidate.id))
 							.limit(1);
-						if (binding) return;
+						if (binding) {
+							await transaction
+								.update(workspaceSnapshots)
+								.set({ status: "ready" })
+								.where(eq(workspaceSnapshots.id, candidate.id));
+							return false;
+						}
 						const [shared] = await transaction
 							.select({ id: workspaceSnapshots.id })
 							.from(workspaceSnapshots)

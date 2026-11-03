@@ -114,3 +114,22 @@ it("continues scheduling when telemetry throws", async () => {
 	await gc.close();
 	expect(vi.getTimerCount()).toBe(0);
 });
+
+it("contains a rejected async telemetry callback", async () => {
+	vi.useFakeTimers();
+	mocks.collect.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
+	const gc = startWorkspaceSnapshotGcV1({
+		databaseUrl: "unused",
+		storage: { remove: vi.fn() },
+		policy: {
+			retentionMs: 1000,
+			intervalMs: 1000,
+			observe: async () => {
+				throw new Error("async telemetry failure");
+			},
+		},
+	});
+	await vi.advanceTimersByTimeAsync(1000);
+	expect(mocks.collect).toHaveBeenCalledTimes(1);
+	await gc.close();
+});
