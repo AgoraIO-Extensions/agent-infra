@@ -481,6 +481,73 @@ describe("multi-service resource policy", () => {
 			).toBe(true);
 		}
 	});
+	it("normalizes SDK envFrom objects but detects Secret reference drift", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			policy: basePolicy,
+			client: {
+				...fake.client,
+				async read(kind, name) {
+					const resource = await fake.client.read(kind, name);
+					return resource
+						? ObjectSerializer.deserialize(
+								JSON.parse(JSON.stringify(resource)),
+								`V1${kind}`,
+								"",
+							)
+						: null;
+				},
+			},
+		});
+		const value = validateAgentWorkloadDesiredV1({
+			...desired(),
+			secretRefs: [
+				{
+					schemaVersion: 1,
+					ownerType: "agent-owner",
+					ownerId: "owner-a",
+					agentId: "agent-a",
+					secretId: "secret-a",
+					secretVersion: 1,
+					configRevision: 1,
+					algorithmVersion: "aes-256-gcm:v1",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					wrappingKeyVersion: "key-a",
+					name: "owner-secret",
+				},
+			],
+		});
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		markWorkloadsReady(fake);
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		for (const resource of fake.resources.values()) {
+			if (resource.kind !== "Deployment") continue;
+			const container = (resource as V1Deployment).spec?.template.spec
+				?.containers[0];
+			if (!container) throw new Error("missing container");
+			const original = container.envFrom;
+			for (const changed of [
+				[],
+				[{ secretRef: { name: "foreign-secret", optional: false } }],
+				[{ secretRef: { name: "owner-secret", optional: true } }],
+				[
+					{
+						secretRef: { name: "owner-secret", optional: false },
+						prefix: "OTHER_",
+					},
+				],
+				[{ configMapRef: { name: "owner-secret", optional: false } }],
+			]) {
+				container.envFrom = changed;
+				expect(await operations.observe(value, identity)).toBe("drifted");
+			}
+			container.envFrom = original;
+		}
+		expect(await operations.observe(value, identity)).toBe("healthy");
+	});
+
 	it.each([undefined, "registry-pull"])(
 		"uses deployment pull policy %s for SDK-deserialized workloads and migration",
 		async (imagePullSecretName) => {

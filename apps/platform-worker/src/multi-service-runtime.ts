@@ -194,7 +194,11 @@ function matchesEnvironmentSecrets(
 ) {
 	const expected = environmentSecrets(value);
 	return (spec?.containers ?? []).every((container) =>
-		isDeepStrictEqual(container.envFrom ?? [], expected),
+		// Kubernetes SDK instances must compare by their wire values.
+		isDeepStrictEqual(
+			JSON.parse(JSON.stringify(container.envFrom ?? [])),
+			expected,
+		),
 	);
 }
 
