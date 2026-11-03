@@ -76,3 +76,41 @@ it("retries after failure and does not expose the storage error", async () => {
 	});
 	await gc.close();
 });
+
+it.each([
+	{ retentionMs: -1, intervalMs: 1000 },
+	{ retentionMs: Number.NaN, intervalMs: 1000 },
+	{ retentionMs: 1000, intervalMs: 999 },
+	{ retentionMs: 1000, intervalMs: 2147483648 },
+])("rejects invalid deployment policy before scheduling: %j", (policy) => {
+	vi.useFakeTimers();
+	expect(() =>
+		startWorkspaceSnapshotGcV1({
+			databaseUrl: "unused",
+			storage: { remove: vi.fn() },
+			policy: { ...policy, observe: vi.fn() },
+		}),
+	).toThrow("WORKSPACE_SNAPSHOT_GC_CONFIGURATION_INVALID");
+	expect(vi.getTimerCount()).toBe(0);
+	expect(mocks.collect).not.toHaveBeenCalled();
+});
+
+it("continues scheduling when telemetry throws", async () => {
+	vi.useFakeTimers();
+	mocks.collect.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
+	const gc = startWorkspaceSnapshotGcV1({
+		databaseUrl: "unused",
+		storage: { remove: vi.fn() },
+		policy: {
+			retentionMs: 1000,
+			intervalMs: 1000,
+			observe: () => {
+				throw new Error("synthetic telemetry failure");
+			},
+		},
+	});
+	await vi.advanceTimersByTimeAsync(2000);
+	expect(mocks.collect).toHaveBeenCalledTimes(2);
+	await gc.close();
+	expect(vi.getTimerCount()).toBe(0);
+});
