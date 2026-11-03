@@ -2058,8 +2058,9 @@ export function createWorkloadRuntimeV1(
 									secretDataKey(candidate.secretKey),
 									candidate.plaintext,
 								);
+						let updatedIdentity = identity;
 						if (multiServiceRuntime)
-							await multiServiceRuntime.bindSecretFence(
+							updatedIdentity = await multiServiceRuntime.bindSecretFence(
 								requireMultiWorkload(),
 								identity,
 								candidate.kubernetesSecretRef.name,
@@ -2076,8 +2077,8 @@ export function createWorkloadRuntimeV1(
 							);
 						return {
 							outcome: "applied",
-							workloadUid: identity.uid,
-							workloadGeneration: identity.generation,
+							workloadUid: updatedIdentity.uid,
+							workloadGeneration: updatedIdentity.generation,
 						};
 					},
 					async observeCandidate(candidate) {
