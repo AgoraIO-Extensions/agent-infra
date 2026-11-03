@@ -306,6 +306,8 @@ export class PostgresWorkspaceSnapshotStoreV1
 		)
 			throw new WorkspaceSnapshotErrorV1("invalid_input");
 		const cutoff = new Date(input.now.getTime() - input.retentionMs);
+		if (!Number.isFinite(cutoff.getTime()))
+			throw new WorkspaceSnapshotErrorV1("invalid_input");
 		const [row] = await this.#database
 			.select({
 				storedBytes: sql<string>`coalesce(sum(${workspaceSnapshots.sizeBytes}), 0)`,

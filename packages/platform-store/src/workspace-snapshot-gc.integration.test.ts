@@ -161,6 +161,9 @@ it("reports retained bytes and eligible GC delay instead of masking unknown as z
 	await expect(
 		store.readGcMetrics({ now: new Date("invalid"), retentionMs: 86400000 }),
 	).rejects.toMatchObject({ code: "invalid_input" });
+	await expect(
+		store.readGcMetrics({ now, retentionMs: Number.MAX_SAFE_INTEGER }),
+	).rejects.toMatchObject({ code: "invalid_input" });
 });
 
 it("counts bound bytes without including them in GC delay and excludes deleted bytes", async () => {
