@@ -121,6 +121,19 @@ export interface WorkspaceSnapshotStoreV1 {
 	): Promise<WorkspaceSnapshotRecordV1>;
 }
 
+export type WorkspaceSnapshotGcResultV1 = {
+	readonly scanned: number;
+	readonly deleted: number;
+	readonly failed: number;
+};
+
+export interface WorkspaceSnapshotObjectVersionDeleterV1 {
+	deleteObjectVersion(input: {
+		readonly objectRef: string;
+		readonly objectVersion: string;
+	}): Promise<void>;
+}
+
 export interface WorkspaceSnapshotBindingStoreV1 {
 	bind(input: {
 		readonly ownerType: "user" | "application";
