@@ -616,6 +616,7 @@ require_source_tuple() { :; }
 require_file() { :; }
 prepare_evidence() { :; }
 configuration_source_preflight() { :; }
+image_cache_gate() { :; }
 preflight_agent_requests() { :; }
 bootstrap_database() { :; }
 bootstrap_inputs() { :; }
