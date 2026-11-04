@@ -179,11 +179,15 @@ async function main(inputPath) {
 	const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 	const serviceToken = (await privateFile(job.runtimeServiceTokenFile, "SERVICE_TOKEN")).toString().trim();
 	if (!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken)) throw new Error("SERVICE_TOKEN_INVALID");
+	const modelCredential = (await privateFile(job.relayKeyFile, "MODEL_CREDENTIAL")).toString().trim();
+	if (!/^[\x21-\x7e]{32,4096}$/u.test(modelCredential)) throw new Error("MODEL_CREDENTIAL_INVALID");
 	const attestation = createHmac("sha256", serviceToken)
 		.update(`agent-infra-container-boundary-v1\0${name}`)
 		.digest("base64url");
 	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
+	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	await writeFile(attestationFile, attestation, { mode: 0o600 });
+	await writeFile(modelCredentialFile, modelCredential, { mode: 0o600 });
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
 	const modelEndpoint = job.protocol === "openai-responses-v1" ? `${relayOrigin}/v1` : relayOrigin;
 	const modelConfig = JSON.stringify({
@@ -198,6 +202,7 @@ async function main(inputPath) {
 			endpoint: modelEndpoint,
 			model: job.modelId,
 			reasoningLevels: [job.reasoningLevel, "high"].filter((value, index, values) => values.indexOf(value) === index),
+			credentialEnvironmentVariable: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT",
 		}],
 	});
 	const pod = {
@@ -232,6 +237,7 @@ async function main(inputPath) {
 					{ name: "AGENT_INFRA_RUNTIME_GRANT_KEY_ID", value: "ack-validation-v1" },
 					{ name: "AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY", value: publicKey },
 					{ name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG", value: modelConfig },
+					{ name: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT", valueFrom: { secretKeyRef: { name: secretName, key: "model-credential" } } },
 					{ name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE", value: "container-boundary" },
 					{ name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED", value: "worker-v1" },
 					{ name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE", value: name },
@@ -258,7 +264,7 @@ async function main(inputPath) {
 	let portForward;
 	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	try {
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, "--dry-run=client", "-o", "json"]);
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, `--from-file=model-credential=${modelCredentialFile}`, "--dry-run=client", "-o", "json"]);
 		run([...kubeArgs, "apply", "-f", "-"], secret);
 		run([...kubeArgs, "create", "-f", "-"], JSON.stringify(pod));
 		try {
@@ -338,6 +344,7 @@ async function main(inputPath) {
 		portForward?.kill("SIGTERM");
 		await unlink(generatedJob).catch(() => {});
 		await unlink(attestationFile).catch(() => {});
+		await unlink(modelCredentialFile).catch(() => {});
 		try { run([...kubeArgs, "delete", "pod", name, "--ignore-not-found", "--wait=false"]); } catch {}
 		try { run([...kubeArgs, "delete", "secret", secretName, "--ignore-not-found"]); } catch {}
 	}
