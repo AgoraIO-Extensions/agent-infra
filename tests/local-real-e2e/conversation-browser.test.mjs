@@ -402,6 +402,60 @@ function mixedHistoryDetail() {
 	};
 }
 
+function modelOperationEvent(eventId, sequence, fact) {
+	return {
+		schemaVersion: 2,
+		kind: "event",
+		eventId,
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		sequence,
+		conversationCursor: eventId,
+		occurredAt: "2026-09-29T00:00:00.000Z",
+		type: "execution.operation",
+		payload: {
+			kind: "model",
+			operationRef: "model-operation-1",
+			attemptRef: "model-attempt-1",
+			model: {
+				configVersion: "config-1",
+				modelOptionId: "option-1",
+				modelId: "model-1",
+			},
+			...fact,
+		},
+	};
+}
+
+test("model duration reads contract-valid persisted operation events (#3923)", () => {
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...mixedHistoryDetail(),
+		events: [
+			persistedEvent("earlier-event", "execution-old"),
+			modelOperationEvent("model-started", 2, {
+				phase: "started",
+				startedAt: "2026-09-29T00:00:00.000Z",
+			}),
+			modelOperationEvent("model-completed", 3, {
+				phase: "completed",
+				startedAt: "2026-09-29T00:00:00.000Z",
+				finishedAt: "2026-09-29T00:00:01.250Z",
+				durationMs: 1250,
+			}),
+		],
+	});
+	const events = currentExecutionEvents(
+		detail,
+		"conversation-1",
+		"execution-1",
+	);
+	assert.equal(events?.length, 2);
+	assert.deepEqual(modelDurationEvidence(events, "execution-1"), {
+		modelDurationMs: 1250,
+		modelDurationAttempts: { observed: 1, withDuration: 1 },
+	});
+});
+
 test("conversation detail keeps earlier execution events outside the submitted execution subset", () => {
 	const detail = ConversationDetailProjectionV2Schema.parse(
 		mixedHistoryDetail(),
