@@ -13,6 +13,16 @@ const script = new URL(
 	"../deploy/ack/template-model-preflight.mjs",
 	import.meta.url,
 ).pathname;
+
+test("template model config binds the relay credential into the V4 option", async () => {
+	const source = await readFile(script, "utf8");
+	assert.match(
+		source,
+		/credentialEnvironmentVariable: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT"/u,
+	);
+	assert.match(source, /--from-file=model-credential=\$\{job\.relayKeyFile\}/u);
+	assert.match(source, /AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT/u);
+});
 const baseJob = {
 	schemaVersion: 1,
 	scope: "isolated-template-real-model",
@@ -327,6 +337,7 @@ for (const scenario of [
 		const secret = "fixture-secret-must-not-appear";
 		const grant = join(directory, "grant.pem");
 		const token = join(directory, "token");
+		const relayKey = join(directory, "relay-key");
 		const { privateKey } = generateKeyPairSync("ed25519");
 		await writeFile(
 			grant,
@@ -334,12 +345,16 @@ for (const scenario of [
 			{ mode: 0o600 },
 		);
 		await writeFile(token, secret, { mode: 0o600 });
+		await writeFile(relayKey, "synthetic-relay-credential-0123456789012345", {
+			mode: 0o600,
+		});
 		const output = join(directory, "output");
 		const job = {
 			...baseJob,
 			outputDirectory: output,
 			grantPrivateKeyFile: grant,
 			runtimeServiceTokenFile: token,
+			relayKeyFile: relayKey,
 			...(scenario === "custom-wait-failed"
 				? { podReadyTimeoutSeconds: 1800 }
 				: {}),
