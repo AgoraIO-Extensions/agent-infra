@@ -16,7 +16,8 @@ const snapshot = {
 	expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
 };
 const policy = {
-	imageDigest: digest,
+	imageDigest: `registry.example.test/platform-worker@${digest}`,
+	allowedOrigins: ["https://objects.example.test"],
 	cacheSizeLimit: "2Gi",
 	credentialSecretName: "snapshot-credentials",
 };
@@ -26,8 +27,8 @@ describe("workspace snapshot materializer projection", () => {
 		const result = projectWorkspaceSnapshotMaterializerV1([snapshot], policy);
 		expect(result.initContainers[0]).toMatchObject({
 			name: "workspace-snapshot-materializer",
-			image: digest,
-			args: ["--manifest=/run/workspace-snapshots/manifest.json"],
+			image: `registry.example.test/platform-worker@${digest}`,
+			command: ["node", "/app/dist/workspaceSnapshotInit.mjs"],
 		});
 		expect(result.containerMounts.get("repo")).toContainEqual({
 			name: "workspace-snapshots",

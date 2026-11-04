@@ -83,6 +83,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly evaluation?: PlatformWorkloadWorkerOptionsV1["evaluation"];
 	/** Deployment-owned immutable Skill materializer; no caller paths or URLs cross this boundary. */
 	readonly skillMaterializer?: PlatformWorkloadWorkerOptionsV1["skillMaterializer"];
+	/** Server-owned resolver for persisted Workspace Snapshot bindings. */
+	readonly workspaceSnapshotResolver?: PlatformWorkloadWorkerOptionsV1["workspaceSnapshotResolver"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Server-resolved binding for the current Session-owned Browser Sandbox. */
@@ -268,6 +270,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				: {}),
 			...(input.skillMaterializer
 				? { skillMaterializer: input.skillMaterializer }
+				: {}),
+			...(input.workspaceSnapshotResolver
+				? { workspaceSnapshotResolver: input.workspaceSnapshotResolver }
 				: {}),
 			fetch: runtimeFetch,
 			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
