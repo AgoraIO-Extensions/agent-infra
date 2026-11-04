@@ -12,7 +12,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { materializeWorkspaceSnapshotV1 } from "./workspace-snapshot-executor.js";
+import {
+	materializeWorkspaceSnapshotV1,
+	WorkspaceSnapshotRollbackError,
+} from "./workspace-snapshot-executor.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -132,6 +135,18 @@ it("preserves the prior generation when the replacement archive fails validation
 	expect(
 		await readFile(join(first.output, "repo", ".snapshot-digest"), "utf8"),
 	).toBe(`${first.snapshot.digest}\n`);
+});
+
+it("reports rollback failure as unavailable instead of claiming the old generation survived", async () => {
+	const f = await fixture();
+	await expect(
+		materializeWorkspaceSnapshotV1({
+			...f.input,
+			outputDirectory: join(f.root, "missing-output"),
+		}),
+	).rejects.toThrow();
+	// The dedicated error remains exported for callers that need to classify this terminal state.
+	expect(WorkspaceSnapshotRollbackError).toBeDefined();
 });
 
 it("bounds streamed archive bytes and keeps the destination unpublished", async () => {

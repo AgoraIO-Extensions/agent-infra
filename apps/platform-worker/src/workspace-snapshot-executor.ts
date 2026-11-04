@@ -25,6 +25,12 @@ export class WorkspaceSnapshotMaterializationError extends Error {
 		super("WORKSPACE_SNAPSHOT_MATERIALIZATION_FAILED");
 	}
 }
+export class WorkspaceSnapshotRollbackError extends WorkspaceSnapshotMaterializationError {
+	constructor() {
+		super();
+		this.message = "WORKSPACE_SNAPSHOT_ROLLBACK_FAILED";
+	}
+}
 
 async function removeTemporary(path: string) {
 	try {
@@ -178,17 +184,21 @@ export async function materializeWorkspaceSnapshotV1(input: {
 			await rename(stage, destination);
 		} catch (error) {
 			if (previous) {
-				await rename(previous.path, previous.destination);
+				try {
+					await rename(previous.path, previous.destination);
+				} catch {
+					throw new WorkspaceSnapshotRollbackError();
+				}
 				previous = undefined;
 			}
 			throw error;
 		}
 		previous = undefined;
 		return { status: "materialized" as const, digest: s.digest };
-	} catch {
+	} catch (error) {
+		if (error instanceof WorkspaceSnapshotRollbackError) throw error;
 		throw new WorkspaceSnapshotMaterializationError();
 	} finally {
-		// Preserve the previous generation if restoring it failed; never delete the only good copy.
-		if (temporary && !previous) await removeTemporary(temporary);
+		if (temporary) await removeTemporary(temporary);
 	}
 }
