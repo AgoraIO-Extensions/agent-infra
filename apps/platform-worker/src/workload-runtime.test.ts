@@ -6659,7 +6659,11 @@ it("restores snapshot projection after runtime recreation and refreshes signing"
 	expect(JSON.stringify(f.state)).not.toContain("signature=");
 	const state = f.state;
 	assert(state);
-	const prior = f.resources.get("Secret/snapshot-credentials") as V1Secret;
+	const secretName = workloads[0]?.spec?.template.spec?.volumes?.find(
+		(v) => v.name === "workspace-snapshot-credentials",
+	)?.secret?.secretName;
+	if (!secretName) throw Error("missing snapshot secret");
+	const prior = f.resources.get(`Secret/${secretName}`) as V1Secret;
 	const oldManifest = prior.stringData?.["manifest.json"];
 	const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6 * 60_000);
 	try {
@@ -6670,7 +6674,7 @@ it("restores snapshot projection after runtime recreation and refreshes signing"
 			requestId: "retry",
 			traceId: "retry",
 		});
-		const fresh = f.resources.get("Secret/snapshot-credentials") as V1Secret;
+		const fresh = f.resources.get(`Secret/${secretName}`) as V1Secret;
 		expect(fresh.stringData?.["manifest.json"]).not.toBe(oldManifest);
 		const manifest = JSON.parse(fresh.stringData?.["manifest.json"] ?? "null");
 		expect(Date.parse(manifest.snapshots[0].expiresAt)).toBeGreaterThan(

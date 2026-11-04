@@ -1715,14 +1715,14 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						result.status === "rejected",
 				);
 				if (failure) throw failure.reason;
-				if (allocation.workspaceSnapshotProjection)
+				if (allocation.workspaceSnapshotProjection?.manifest)
 					await writeWorkspaceSnapshotSecretV1(
 						options.client,
 						allocation.workspaceSnapshotProjection,
 						metadata(allocation, sessionSnapshotSecretNameV1(allocation)),
 					);
 				await ensure(pod);
-				if (allocation.workspaceSnapshotProjection) {
+				if (allocation.workspaceSnapshotProjection?.manifest) {
 					const created = await options.client.read<V1Pod>(
 						"Pod",
 						allocation.podName,
