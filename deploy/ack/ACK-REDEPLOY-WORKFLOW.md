@@ -25,7 +25,7 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 ## 镜像缓存准备
 
 启用严格 ECI Session 缓存时，在私有 capsule 中设置 `ACK_IMAGE_CACHE_REQUIRED=true`。
-先部署支持不可变镜像 `Never` 拉取观测的 Worker，再启用准入。发布预热、短期云身份、
+先部署支持不可变镜像 `Never` 拉取观测的 Worker，再启用准入。发布计划、运维机 Kubernetes 身份、
 完整容器集合与失败门禁见[镜像缓存](IMAGE-CACHE.md)。该配置不改变现有 namespace/源码归属。
 
 ## 搬迁私有输入包

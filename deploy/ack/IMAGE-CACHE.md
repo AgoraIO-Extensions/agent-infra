@@ -6,7 +6,7 @@
 
 ## 发布与部署
 
-1. 正式 `Publish images` 成功后，独立 `ACK image cache` workflow 校验同 run/attempt 的六镜像
+1. 正式 `Publish images` 成功后，独立 `ACK image cache plan` workflow 校验同 run/attempt 的六镜像
    index 回执，选择 `linux/amd64` child digest，只上传不可变 cache plan artifact；它不取得
    云身份、Kubernetes 凭据或 registry pull secret，也不创建缓存。
 2. 部署入口设置 `ACK_IMAGE_CACHE_REQUIRED=true` 后，从同源 Runtime/模板 manifest 和已批准的
@@ -14,8 +14,8 @@
    `ImageCache` CR，复用集群内 `imagePullSecret`，等待 Ready 并实时回读。GitHub Action
    只是计划生成器，不是缓存执行器。
 3. `all`、独立配置初始化、预检、配置发布和 provision 均在启用镜像前检查缓存。
-   回执必须匹配完整镜像集合与 source，且在五分钟内。部署重复阶段可在该窗口内复用；超过
-   窗口重新调用查询。没有成功的当前回执，不发布新镜像配置。
+   每次均实时查询 CR，并在全部组就绪后再次回读。回执必须匹配完整镜像集合与 source；
+   磁盘旧回执不能代替实时查询。没有成功的当前回执，不发布新镜像配置。
 4. `deploy` 分两阶段：先保持现场旧准入不变完成 Helm/Worker rollout，核对全部 Worker Pod
    Ready、实际镜像 digest 且旧 Pod 已退出，再重新检查缓存并启用新准入。已有严格准入时
    遗漏开关直接拒绝部署，不能静默降级。
@@ -28,10 +28,11 @@
 更严格观测策略的版本；其他 Pod 身份和安全字段保持原校验。
 
 当前/历史准入镜像集合会一起重新验证，避免旧 Agent 恢复和回滚版本失去缓存。每份计划最多
-24 组，每组最多 8 个不同镜像；云端本流程缓存最多 48 份，超预算拒绝创建，不删除活动缓存。
+24 组，每组最多 8 个不同镜像；创建前统计本 owner 的 CR，达到 48 份则拒绝创建。
+同一集群的运维预热必须串行执行，避免并发检查超出预算。本流程不删除活动缓存。
 缓存不设置自动到期或 LRU，以免仍在使用的精确 ID 被淘汰。退休版本由运维核对所有活动 Agent、
-保留 Session 与回滚输入后，先移除准入登记，再按 owner 标签和精确 ID 清理；本流程云身份
-没有删除权限。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
+保留 Session 与回滚输入后，先移除准入登记，再按 owner 标签和精确 ID 清理；预热身份
+不需要删除权限。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
 
 已有 Failed/Expired 对象最多使用一个独立 retry generation，不覆盖旧对象；第二次失败仍
 停止并保留失败回执。修复权限、网络或容量后由运维处理该失败 generation，再显式重试。
@@ -45,15 +46,42 @@
 
 GitHub Environment `ack-image-cache` 仅用于受保护 `main` 生成计划 artifact，不需要 RAM OIDC。
 缓存执行由 SRE/ACK 运维机完成：kubeconfig 的 Kubernetes RBAC 只允许目标集群的
-`eci.alibabacloud.com` ImageCache create/get/update，registry 凭据留在集群 Secret，不进入
+`eci.alibabacloud.com` ImageCache create/get/list，registry 凭据留在集群 Secret，不进入
 GitHub、repo、日志或 issue。该运维身份不需要 Kubernetes 业务 Pod 写权限、应用 Secret、
 数据库或镜像删除权限。
 
 普通发布触发计划生成；部署运维机下载同 run/attempt 的 plan 后执行现有 `image-cache.ts`
-Kubernetes backend。若运维机无法读取集群或 Secret，必须停止并报告具体权限，不冷拉绕过。
+Kubernetes backend。运维机只引用 Secret 名称，不读取凭据正文。CR 查询失败、缓存未 Ready 或拉取 Secret
+无效时停止，不冷拉绕过。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。
 
-当前手动替代缓存使用 `agent-infra:ack-ghcr-pull` 和 owner 标签，详见 #3931 交接；它只证明
-当前四个 digest 的隔离消费，不自动覆盖后续发布版本。
+## 运维端执行
+
+使用 Node.js 24，在受控代码 checkout 中执行。先核对 `ACK image cache plan` 运行来自本仓
+受保护 main、结论成功，回读其触发的 Publish images run/attempt 和 source。以下变量由本次
+已批准部署填入，不能从未验证的 artifact 自动决定目标集群或 source：
+
+```bash
+# CACHE_PLAN_RUN_ID / CACHE_PLAN_ATTEMPT 指计划 workflow 的 run/attempt。
+# ACK_SOURCE_SHA 指批准发布的源码 SHA，不是 workflow 代码的 SHA。
+umask 077
+mkdir -p "$CACHE_PLAN_DIR"
+gh run download "$CACHE_PLAN_RUN_ID" --repo AgoraIO-Extensions/agent-infra \
+  --name "ack-cache-plan-$CACHE_PLAN_ATTEMPT" --dir "$CACHE_PLAN_DIR"
+export ACK_SOURCE_SHA ACK_KUBECONFIG ACK_NAMESPACE
+export ACK_IMAGE_PULL_SECRET=ack-ghcr-pull
+node deploy/ack/image-cache.ts ensure \
+  "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-ready.json"
+node deploy/ack/image-cache.ts check \
+  "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-checked.json"
+```
+
+`ensure` 创建或复用缓存并等待，`check` 只读且不会创建。失败回执包含安全错误码和已经完成的
+组，不能用于启用新镜像。计划 artifact 不是 Ready 回执；即使预热成功，仍需通过正常部署入口
+设置 `ACK_IMAGE_CACHE_REQUIRED=true`，从同源 manifest/Custom 请求生成完整计划并实时验证。
+这一步会覆盖实际 Session 的 init/sidecar 镜像组合，并生成严格准入配置。单独运行 `ensure`
+不会修改业务 Pod、Agent 配置或准入策略。
+
+计划格式如下：
 
 ```json
 {
@@ -66,8 +94,9 @@ Kubernetes backend。若运维机无法读取集群或 Secret，必须停止并�
 }
 ```
 
-云步骤还回读 OCI manifest/config 摘要和架构，拒绝把 multi-arch index 当成 amd64 child。
-源 manifest、Agent 配置和现有容量/模型准入仍由原 ACK 入口校验，不以缓存成功替代。
+正式发布计划只选取同 source 发布回执中的 amd64 child digest；多架构 index 不作为缓存输入。
+部署 manifest、Custom 镜像平台、Agent 配置和现有容量/模型准入仍由原 ACK 入口校验，
+不以缓存成功替代。
 
 ## 验收与恢复
 
@@ -79,5 +108,4 @@ Pod 就绪与真实 Agent/模型结果分别记录。
 缓存失败时先修复缓存，不删除准入或改回 IfNotPresent 绕过用户选择的启动门禁。新镜像只在
 缓存重新 Ready、回执和准入映射更新后启用。现有运行中的 Agent 不因本流程失败被重启。
 
-`image-cache.ts ensure/check` 的 Kubernetes CR 后端仅供显式隔离诊断或首次引导验证；它不会
-作为正式发布/部署链路的备用成功路径。其 owner、缓存和诊断资源须单独记录并清理。
+GitHub 发布成功只触发计划生成；尚未运行运维预热或部署入口时，不代表缓存已创建。

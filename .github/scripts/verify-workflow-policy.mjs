@@ -205,16 +205,18 @@ export function validateWorkflowDocuments(workflows) {
   const cacheAdmission = "github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository))";
   const cache = workflows["ack-image-cache.yml"];
   const cacheJobs = cache?.jobs ?? {};
-  if (cache?.name !== "ACK image cache" ||
+  if (cache?.name !== "ACK image cache plan" ||
       Object.keys(cache.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
       JSON.stringify(cache.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
       !sameObject(cache.permissions, {contents: "read"}) ||
       Object.keys(cacheJobs).sort().join() !== "prepare" ||
       cacheJobs.prepare?.if !== cacheAdmission ||
+      cacheJobs.prepare?.environment !== "ack-image-cache" ||
+      Object.keys(cache.on?.workflow_dispatch?.inputs ?? {}).sort().join() !== "publish_attempt,publish_run_id" ||
       !sameObject(cacheJobs.prepare?.permissions, {contents: "read", actions: "read"}) ||
       !sameObject(cache.concurrency, {group: "ack-image-cache-cn-hangzhou", "cancel-in-progress": false}))
     errors.push("ACK cache plan must use trusted publication validation without cloud identity");
-  for (const [jobName, job] of Object.entries(cacheJobs)) {
+  for (const job of Object.values(cacheJobs)) {
     for (const step of job.steps ?? []) {
       if (step.uses?.startsWith("actions/checkout@") &&
           (step.with?.ref !== "${{ github.sha }}" || step.with?.["persist-credentials"] !== false))
@@ -223,6 +225,14 @@ export function validateWorkflowDocuments(workflows) {
         errors.push("ACK cache plan workflow must not acquire cloud identity");
     }
   }
+  const planSteps = cacheJobs.prepare?.steps ?? [];
+  const planRun = planSteps.find(step => step.run);
+  const planUpload = planSteps.find(step => step.uses?.startsWith("actions/upload-artifact@"));
+  if (planSteps.length !== 4 || planSteps.filter(step => step.run).length !== 1 ||
+      planRun?.run !== 'node deploy/ack/image-cache-release.ts "$PUBLISH_RUN_ID" "$PUBLISH_ATTEMPT" "$RUNNER_TEMP/cache-plan.json"' ||
+      !sameObject(planRun?.env, {GH_TOKEN: "${{ github.token }}", PUBLISH_RUN_ID: "${{ github.event.workflow_run.id || inputs.publish_run_id }}", PUBLISH_ATTEMPT: "${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}"}) ||
+      !sameObject(planUpload?.with, {name: "ack-cache-plan-${{ github.run_attempt }}", path: "${{ runner.temp }}/cache-plan.json", "if-no-files-found": "error"}))
+    errors.push("ACK cache plan must validate the publication and upload only the immutable plan");
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||
       !sameObject(publish?.permissions, { contents: "read", packages: "write" }) ||

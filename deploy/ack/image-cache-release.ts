@@ -4,7 +4,7 @@ import { lstat, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseCachePlan, planFromIndexes } from "./image-cache.ts";
+import { planFromIndexes } from "./image-cache.ts";
 
 const repository = "AgoraIO-Extensions/agent-infra";
 export function validateReleaseRun(run: any, id: string, attempt: string) {
@@ -20,13 +20,6 @@ export function validateReleaseRun(run: any, id: string, attempt: string) {
 async function main() {
 	const [id, attempt, output] = process.argv.slice(2);
 	assert(output, "CACHE_RUN_INVALID");
-	if (process.env.ACK_DEPLOYMENT_CACHE_PLAN) {
-		assert(process.env.GITHUB_EVENT_NAME === "workflow_dispatch" && process.env.ACK_DEPLOYMENT_CACHE_PLAN.length <= 20_000, "CACHE_DEPLOYMENT_PLAN_UNTRUSTED");
-		const plan = parseCachePlan(JSON.parse(process.env.ACK_DEPLOYMENT_CACHE_PLAN));
-		await writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-		console.info(JSON.stringify({ sourceSha: plan.sourceSha, cacheCount: plan.groups.length, mode: "approved-deployment" }));
-		return;
-	}
 	assert(/^\d+$/u.test(id ?? "") && /^\d+$/u.test(attempt ?? ""), "CACHE_RUN_INVALID");
 	const gh = (args: string[]) => execFileSync("gh", args, { encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
 	const run = JSON.parse(gh(["api", `repos/${repository}/actions/runs/${id}/attempts/${attempt}`]));

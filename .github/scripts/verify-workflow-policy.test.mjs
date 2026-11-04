@@ -445,6 +445,10 @@ test("cache deployment rejects widened event, code and cloud identity boundaries
     w => { w.jobs.prepare.permissions["id-token"] = "write"; },
     w => { w.jobs.prepare.steps.push({uses: "aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6"}); },
     w => { w.on.pull_request = {}; },
+    w => { w.jobs.prepare.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
+    w => { w.jobs.prepare.steps.at(-1).with.path = "${{ runner.temp }}"; },
+    w => { w.jobs.prepare.steps.find(step => step.run).env.GH_TOKEN = "${{ secrets.CLOUD_TOKEN }}"; },
+    w => { w.jobs.prepare.environment = "unprotected"; },
   ]) {
     const workflows = await actualWorkflows();
     mutate(workflows["ack-image-cache.yml"]);
