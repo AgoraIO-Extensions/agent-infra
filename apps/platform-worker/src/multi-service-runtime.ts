@@ -1966,6 +1966,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					member.kind as "Deployment" | "StatefulSet",
 					serviceResourceName(value.agentId, member.metadata.name),
 				);
+				if (!current && !activationFence) continue;
 				if (
 					!current ||
 					!owned(current, value) ||
