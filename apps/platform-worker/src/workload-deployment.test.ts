@@ -302,6 +302,15 @@ describe("production Worker deployment", () => {
 		});
 		expect(options.skillMaterializer).toBe(materializer);
 	});
+	it("forwards the deployment-owned Workspace Snapshot resolver to Worker options", async () => {
+		const deployment = await input();
+		const resolver = async () => ({ inputs: [] as const });
+		const options = await createProductionWorkloadWorkerOptionsV1({
+			...deployment,
+			workspaceSnapshotResolver: resolver,
+		});
+		expect(options.workspaceSnapshotResolver).toBe(resolver);
+	});
 	it("rejects a malformed Skill materializer before Kubernetes access", async () => {
 		const deployment = await input();
 		Object.defineProperty(deployment, "skillMaterializer", {
