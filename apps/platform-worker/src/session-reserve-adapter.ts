@@ -30,6 +30,7 @@ import {
 	type SessionSandboxResourceInputV1,
 	sessionSandboxReserveResourcesV1,
 	sessionSandboxResourceMatchesV1,
+	sessionSandboxRuntimeContainerName,
 	// This adapter deliberately consumes the resource-only renderer; it never
 	// manufactures a principal or channel for an unclaimed reserve.
 } from "./session-workload-adapter.js";
@@ -426,7 +427,7 @@ export function createSessionSandboxReserveAdapterV1(
 			const pod = observed.find((r) => r.kind === "Pod") as V1Pod;
 			const service = observed.find((r) => r.kind === "Service") as V1Service;
 			const status = pod.status?.containerStatuses?.find(
-				(entry) => entry.name === "runtime",
+				(entry) => entry.name === sessionSandboxRuntimeContainerName,
 			);
 			if (
 				pod.status?.phase !== "Running" ||

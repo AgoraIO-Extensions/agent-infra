@@ -5,6 +5,7 @@ import {
 	decideSessionSandboxObservationV1,
 	decideSessionSandboxRetryV1,
 	isSessionSandboxDeletionProgressValidV1,
+	isSessionSandboxNormalStartupV1,
 	isSessionSandboxObservationValidV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
@@ -496,7 +497,8 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 				}),
 			).toEqual({ changed: false, delayMs: 1_000 });
 		}
-		for (const age of [-1, 60_001, Number.NaN, Number.POSITIVE_INFINITY]) {
+		// Missing, future or non-finite anchors keep the stalled-attempt ladder.
+		for (const age of [-1, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
 			expect(
 				decideSessionSandboxRetryV1({
 					previous: { progress, attempt: 10 },
@@ -507,6 +509,94 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 				}).delayMs,
 			).toBe(2_000);
 		}
+	});
+
+	it("restarts the original ladder when healthy startup outlives the window (#3922)", () => {
+		const progress = progressOf({ status: "observed" });
+		const delay = (attemptCount: number, normalPrepareAgeMs: number) =>
+			decideSessionSandboxRetryV1({
+				previous: { progress, attempt: 10 },
+				progress,
+				attemptCount,
+				status: "observed",
+				normalPrepareAgeMs,
+			}).delayMs;
+		// About 60 one-second observations ran inside the window: the stalled
+		// attempt ladder alone would jump straight to its 60 s cap.
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, attempt: 10 },
+				progress,
+				attemptCount: 71,
+				status: "observed",
+			}).delayMs,
+		).toBe(60_000);
+		// Instead the ladder restarts at the window end, step for step.
+		const schedule: number[] = [];
+		let ageMs = 60_001;
+		for (let attempt = 71; schedule.length < 13; attempt += 1) {
+			const next = delay(attempt, ageMs);
+			schedule.push(next);
+			ageMs += next;
+		}
+		expect(schedule).toEqual([
+			1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
+			32_000, 60_000, 60_000,
+		]);
+		// Never slower than the stalled-attempt ladder when few attempts ran.
+		expect(delay(12, 180_000)).toBe(1_000);
+		expect(delay(16, 180_000)).toBe(2_000);
+		// The cap and the "changed" reset are unchanged.
+		expect(delay(500, 3_600_000)).toBe(60_000);
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, attempt: 10 },
+				progress: progressOf({ status: "ready", finished: true }),
+				attemptCount: 500,
+				status: "ready",
+				normalPrepareAgeMs: 3_600_000,
+			}),
+		).toEqual({ changed: true, delayMs: 1_000 });
+	});
+
+	it("treats only failure-free creating, initializing or starting Pods as normal startup", () => {
+		const observed: SessionSandboxObservationV1 = {
+			status: "observed",
+			resources: [],
+		};
+		expect(isSessionSandboxNormalStartupV1(observed)).toBe(false);
+		for (const waitingReason of [
+			"ContainerCreating",
+			"PodInitializing",
+		] as const)
+			expect(
+				isSessionSandboxNormalStartupV1({ ...observed, waitingReason }),
+			).toBe(true);
+		expect(
+			isSessionSandboxNormalStartupV1({ ...observed, runtimeStarting: true }),
+		).toBe(true);
+		for (const waitingReason of [
+			"ImagePullBackOff",
+			"ErrImagePull",
+			"InvalidImageName",
+			"CreateContainerConfigError",
+		] as const)
+			expect(
+				isSessionSandboxNormalStartupV1({ ...observed, waitingReason }),
+			).toBe(false);
+		for (const failureCode of [
+			"eci.image_pull",
+			"runtime.startup",
+			"runtime.configuration",
+		] as const)
+			expect(
+				isSessionSandboxNormalStartupV1({
+					...observed,
+					runtimeStarting: true,
+					waitingReason: "ContainerCreating",
+					failureCode,
+				}),
+			).toBe(false);
 	});
 
 	it("treats an unrecognized previous record as a change", () => {

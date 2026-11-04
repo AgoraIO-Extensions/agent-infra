@@ -16,6 +16,7 @@ import {
 	decideSessionSandboxObservationV1,
 	decideSessionSandboxRetryV1,
 	isSessionSandboxDeletionProgressValidV1,
+	isSessionSandboxNormalStartupV1,
 	isTaskApiChannelV1,
 	resolveCurrentPersonalApiUserV1,
 	type SessionSandboxDeletionProgressV1,
@@ -852,9 +853,7 @@ export async function recordSandboxObservation(
 			claim.purpose === "prepare" &&
 			claim.desiredState === "running" &&
 			decision.status === "observed" &&
-			observation.failureCode === undefined &&
-			(observation.waitingReason === "ContainerCreating" ||
-				observation.waitingReason === "PodInitializing") &&
+			isSessionSandboxNormalStartupV1(observation) &&
 			observation.resources.length === 6 &&
 			lastChange?.status === "observed" &&
 			Number.isFinite(auditAgeMs) &&

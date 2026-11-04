@@ -132,6 +132,8 @@ export function sessionSandboxServiceTokenV1(
 }
 
 const sessionSandboxTokenPattern = /^[A-Za-z0-9_-]{43}$/;
+/** Session Pod 唯一 Runtime 容器名；渲染、启动观测与预留 bootstrap 共用（#3922）。 */
+export const sessionSandboxRuntimeContainerName = "runtime";
 /** 本 Sandbox Secret 中文件交换派生 token 的键（#3276）。 */
 export const sessionSandboxFileExchangeSecretKey = "file-exchange-token";
 export const sessionSandboxContainerBoundaryAttestationSecretKey =
@@ -896,7 +898,7 @@ function renderSessionSandboxResourcesV1(
 			securityContext: agentPodSecurityContext(),
 			containers: [
 				{
-					name: "runtime",
+					name: sessionSandboxRuntimeContainerName,
 					image: allocation.imageDigest,
 					imagePullPolicy: "IfNotPresent",
 					resources: structuredClone(allocation.resources),
@@ -1707,6 +1709,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
 			let failureCode: SessionSandboxObservationV1["failureCode"];
 			let waitingReason: SessionSandboxObservationV1["waitingReason"];
+			let runtimeStarting = false;
 			const expectedResources = sessionSandboxResourcesV1(
 				purpose === "control"
 					? { ...allocation, desiredState: "stopped" }
@@ -1798,15 +1801,20 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					)
 						status = "observed";
 					if (status === "observed") {
+						// Only the rendered Runtime container is startup evidence; other
+						// container statuses never classify this Session (#3922).
 						const container = pod.status?.containerStatuses?.find(
-							(entry) => entry.name === "agent",
+							(entry) => entry.name === sessionSandboxRuntimeContainerName,
 						);
 						const podWaitingReason = container?.state?.waiting?.reason;
 						const normalWaitingReason =
 							podWaitingReason === "ContainerCreating" ||
 							podWaitingReason === "PodInitializing";
+						const terminated =
+							container?.state?.terminated !== undefined ||
+							container?.lastState?.terminated !== undefined ||
+							(container?.restartCount ?? 0) > 0;
 						if (normalWaitingReason) waitingReason = podWaitingReason;
-						const terminatedReason = container?.lastState?.terminated?.reason;
 						if (
 							podWaitingReason === "ErrImagePull" ||
 							podWaitingReason === "ImagePullBackOff" ||
@@ -1817,10 +1825,17 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							failureCode = "runtime.configuration";
 						else if (
 							(podWaitingReason && !normalWaitingReason) ||
-							terminatedReason ||
+							terminated ||
 							pod.status?.phase === "Failed"
 						)
 							failureCode = "runtime.startup";
+						// The Host is still starting: the container runs, is not yet Ready,
+						// and has neither restarted nor terminated.
+						else if (
+							container?.state?.running !== undefined &&
+							container.ready !== true
+						)
+							runtimeStarting = true;
 					}
 				}
 			}
@@ -1829,6 +1844,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					purpose === "control" && status === "ready" ? "observed" : status,
 				...(failureCode === undefined ? {} : { failureCode }),
 				...(waitingReason === undefined ? {} : { waitingReason }),
+				...(runtimeStarting ? { runtimeStarting: true as const } : {}),
 				resources,
 			};
 		},

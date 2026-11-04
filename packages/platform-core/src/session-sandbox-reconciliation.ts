@@ -124,6 +124,11 @@ export interface SessionSandboxObservationV1 {
 		| "ErrImagePull"
 		| "InvalidImageName"
 		| "CreateContainerConfigError";
+	/**
+	 * The Runtime container runs but is not Ready yet, and has neither restarted
+	 * nor terminated: the Host is still starting. Used only like `waitingReason`.
+	 */
+	readonly runtimeStarting?: true;
 	/** Bounded startup evidence from the Pod status; never a log message. */
 	readonly failureCode?:
 		| "eci.image_pull"
@@ -377,6 +382,20 @@ const sessionSandboxRetryBaseDelayMsV1 = 1_000;
 const sessionSandboxRetryBaseDelayRetriesV1 = 5;
 /** 证据长期不变时的重试间隔上限；条目始终保留，只是不再每秒重试。 */
 const sessionSandboxRetryMaxDelayMsV1 = 60_000;
+/** 正常 prepare 观察窗口上限（工程 Spec §10.1.1）；不是用户等待承诺或 SLO。 */
+const sessionSandboxNormalPrepareWindowMsV1 = 60_000;
+
+/** Healthy Pod startup evidence that may use the bounded normal prepare pace. */
+export function isSessionSandboxNormalStartupV1(
+	observation: SessionSandboxObservationV1,
+): boolean {
+	return (
+		observation.failureCode === undefined &&
+		(observation.waitingReason === "ContainerCreating" ||
+			observation.waitingReason === "PodInitializing" ||
+			observation.runtimeStarting === true)
+	);
+}
 
 /**
  * 同一次停滞里第 `retryCount` 次重试的延迟：前 5 次 1 s，之后 2、4、8、16、32 s
@@ -393,6 +412,24 @@ export function sessionSandboxRetryDelayMsV1(retryCount: number): number {
 		sessionSandboxRetryBaseDelayMsV1 *
 			2 ** (retryCount - sessionSandboxRetryBaseDelayRetriesV1),
 	);
+}
+
+/**
+ * 停滞持续 `elapsedMs` 后，按上面的阶梯逐次重试所处的重试序号（每次观察都在上一次
+ * 延迟到期时执行）。正常启动超出观察窗口时，用它让阶梯从窗口结束重新计时（#3922）。
+ */
+function sessionSandboxRetryCountAfterMsV1(elapsedMs: number): number {
+	let retryCount = 1;
+	let offsetMs = sessionSandboxRetryBaseDelayMsV1;
+	while (
+		sessionSandboxRetryDelayMsV1(retryCount) <
+			sessionSandboxRetryMaxDelayMsV1 &&
+		offsetMs + sessionSandboxRetryDelayMsV1(retryCount) <= elapsedMs
+	) {
+		offsetMs += sessionSandboxRetryDelayMsV1(retryCount);
+		retryCount += 1;
+	}
+	return retryCount;
 }
 
 /**
@@ -467,7 +504,11 @@ export function decideSessionSandboxRetryV1(input: {
 	readonly progress: string;
 	readonly attemptCount: unknown;
 	readonly status: string;
-	/** Internal normal-prepare observation window; never a user-facing SLO. */
+	/**
+	 * Age of the current normal-startup anchor (only passed for healthy startup
+	 * evidence). Within the window it keeps the base pace; afterwards the ladder
+	 * restarts from the window end. Internal pacing, never a user-facing SLO.
+	 */
 	readonly normalPrepareAgeMs?: number;
 }): { readonly changed: boolean; readonly delayMs: number } {
 	const { previous } = input;
@@ -479,23 +520,28 @@ export function decideSessionSandboxRetryV1(input: {
 		(previous.attempt as number) >= 0 &&
 		Number.isSafeInteger(attemptCount) &&
 		(attemptCount as number) > (previous.attempt as number);
-	const normalPrepareWindow =
-		Number.isFinite(input.normalPrepareAgeMs) &&
-		(input.normalPrepareAgeMs ?? -1) >= 0 &&
-		(input.normalPrepareAgeMs ?? Number.POSITIVE_INFINITY) <= 60_000;
+	if (!unchanged)
+		return { changed: true, delayMs: sessionSandboxRetryBaseDelayMsV1 };
+	const stalledDelayMs = sessionSandboxRetryDelayMsV1(
+		// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
+		Math.max(1, (attemptCount as number) - (previous.attempt as number)),
+	);
+	const ageMs = input.normalPrepareAgeMs;
+	if (ageMs === undefined || !Number.isFinite(ageMs) || ageMs < 0)
+		return { changed: false, delayMs: stalledDelayMs };
+	if (ageMs <= sessionSandboxNormalPrepareWindowMsV1)
+		return { changed: false, delayMs: sessionSandboxRetryBaseDelayMsV1 };
+	// 窗口内的每秒观察也计入了停滞序号；超出窗口后不能因此直接取上限，而是从窗口
+	// 结束重新走阶梯，同时不慢于原有按尝试序号的阶梯（#3922）。
 	return {
-		changed: !unchanged,
-		delayMs:
-			unchanged && normalPrepareWindow
-				? sessionSandboxRetryBaseDelayMsV1
-				: unchanged
-					? sessionSandboxRetryDelayMsV1(
-							// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
-							Math.max(
-								1,
-								(attemptCount as number) - (previous.attempt as number),
-							),
-						)
-					: sessionSandboxRetryBaseDelayMsV1,
+		changed: false,
+		delayMs: Math.min(
+			stalledDelayMs,
+			sessionSandboxRetryDelayMsV1(
+				sessionSandboxRetryCountAfterMsV1(
+					ageMs - sessionSandboxNormalPrepareWindowMsV1,
+				),
+			),
+		),
 	};
 }

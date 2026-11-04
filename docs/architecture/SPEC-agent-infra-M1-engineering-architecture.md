@@ -697,12 +697,15 @@ Sandbox 身份、ServiceAccount、通用出网或网络可达均不授予 Connec
 
 正常 prepare 的有限观察例外：当 claim purpose 为 `prepare`、期望状态为运行中、Sandbox 的
 generation/resourceFence 与 claim 一致、六类资源身份完整、最近一次持久观测为 `observed` 且没有
-failureCode，并且 Pod waiting reason 精确为 `ContainerCreating` 或 `PodInitializing` 时，Worker
-可以用当前 generation/fence 绑定的 `conversation.sandbox.observed` 审计 occurred_at 作为持久锚，
-在最多 60 秒的内部观察窗口内将下一次正常观察安排为约 1 秒。该 60 秒是观察窗口上限，不是
-性能 SLO 或用户等待承诺。缺少锚、锚在未来、unknown/已知失败、drain、身份缺失、generation/fence
-变化或窗口超时均沿原有有界退避；该例外不改变 Session 串行准入、lease、abort、CAS、fence、
-unknown 或恢复屏障。每次 claim 保留一次 apply 和一次完整 observe，不能以高频读取替代持久重试。
+failureCode，并且 Session Pod 渲染的 Runtime 容器处于正常启动时，Worker 可以用当前
+generation/fence 绑定的 `conversation.sandbox.observed` 审计 occurred_at 作为持久锚，在最多 60 秒的
+内部观察窗口内将下一次正常观察安排为约 1 秒。正常启动指该容器的 waiting reason 精确为
+`ContainerCreating` 或 `PodInitializing`，或容器已运行但尚未 Ready，且没有重启或 terminated 记录；
+其他容器的状态不作为启动证据。该 60 秒是观察窗口上限，不是性能 SLO 或用户等待承诺。缺少锚、
+锚在未来、unknown/已知失败、drain、身份缺失或 generation/fence 变化均沿原有有界退避。窗口超时
+而启动证据仍正常时，原有退避阶梯从窗口结束时重新计时，且不慢于按停滞尝试序号计算的原阶梯，
+不能因窗口内的观察次数直接取 60 秒上限。该例外不改变 Session 串行准入、lease、abort、CAS、
+fence、unknown 或恢复屏障。每次 claim 保留一次 apply 和一次完整 observe，不能以高频读取替代持久重试。
 
 新的已验证 Workload 状态提交时，同一事务按 Agent → 会话 → Sandbox 分配 → 调谐 outbox 的
 加锁顺序，为 policy 已过期的空闲 Sandbox 写入升级意图：`resourceFence + 1`、目标保持运行，

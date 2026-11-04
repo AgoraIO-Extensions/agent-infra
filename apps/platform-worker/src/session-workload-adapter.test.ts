@@ -8,6 +8,7 @@ import type {
 import { sessionSandboxFileExchangeTokenV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
+	V1ContainerStatus,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
@@ -36,6 +37,7 @@ import {
 	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
 	sessionSandboxResourcesV1,
+	sessionSandboxRuntimeContainerName,
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
@@ -1243,55 +1245,136 @@ describe("session sandbox workload adapter", () => {
 		expect((await adapter.observe(allocation)).status).toBe("unknown");
 	});
 
-	it("classifies bounded Pod startup evidence without retaining container messages", async () => {
+	it("classifies bounded startup evidence from the rendered Runtime container only (#3922)", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
 		const pod = await client.read<V1Pod>("Pod", allocation.podName);
 		if (!pod) throw new Error("Missing Session Pod");
+		// Status fixtures use the name the renderer wrote, so they cannot drift.
+		const name = pod.spec?.containers[0]?.name;
+		expect(name).toBe(sessionSandboxRuntimeContainerName);
+		if (!name) throw new Error("Missing Session Pod container");
+		const container: V1ContainerStatus = {
+			name,
+			ready: false,
+			restartCount: 0,
+			image: allocation.imageDigest,
+			imageID: "",
+		};
+		const observeWith = async (
+			status: Partial<V1ContainerStatus>,
+			phase = "Pending",
+		) => {
+			pod.status = {
+				phase,
+				conditions: [{ type: "Ready", status: "False" }],
+				containerStatuses: [{ ...container, ...status }],
+			};
+			const observation = await adapter.observe(allocation);
+			expect(JSON.stringify(observation)).not.toMatch(/secret|private/);
+			return observation;
+		};
+		const startupFields = (observation: object) =>
+			Object.keys(observation).filter((key) =>
+				["failureCode", "waitingReason", "runtimeStarting"].includes(key),
+			);
+
+		for (const reason of ["ContainerCreating", "PodInitializing"] as const) {
+			const observation = await observeWith({ state: { waiting: { reason } } });
+			expect(observation).toMatchObject({
+				status: "observed",
+				waitingReason: reason,
+			});
+			expect(startupFields(observation)).toEqual(["waitingReason"]);
+		}
+		// Started but not yet Ready, never restarted: the Host is still starting.
+		const starting = await observeWith(
+			{ state: { running: { startedAt: new Date(0) } } },
+			"Running",
+		);
+		expect(starting).toMatchObject({
+			status: "observed",
+			runtimeStarting: true,
+		});
+		expect(startupFields(starting)).toEqual(["runtimeStarting"]);
+
+		for (const reason of [
+			"ErrImagePull",
+			"ImagePullBackOff",
+			"InvalidImageName",
+		])
+			expect(
+				await observeWith({
+					state: { waiting: { reason, message: "secret" } },
+				}),
+			).toMatchObject({ status: "observed", failureCode: "eci.image_pull" });
+		expect(
+			await observeWith({
+				state: {
+					waiting: { reason: "CreateContainerConfigError", message: "private" },
+				},
+			}),
+		).toMatchObject({
+			status: "observed",
+			failureCode: "runtime.configuration",
+		});
+		for (const status of [
+			{
+				restartCount: 1,
+				state: { running: { startedAt: new Date(0) } },
+				lastState: {
+					terminated: { exitCode: 1, reason: "Error", message: "secret" },
+				},
+			},
+			{
+				state: {
+					terminated: { exitCode: 0, reason: "Completed", message: "private" },
+				},
+			},
+			{
+				restartCount: 2,
+				state: { waiting: { reason: "CrashLoopBackOff", message: "secret" } },
+			},
+		] satisfies Partial<V1ContainerStatus>[]) {
+			const observation = await observeWith(status, "Running");
+			expect(observation).toMatchObject({
+				status: "observed",
+				failureCode: "runtime.startup",
+			});
+			expect(startupFields(observation)).toEqual(["failureCode"]);
+		}
+
+		// Another container's status is never startup evidence for this Session.
 		pod.status = {
 			phase: "Pending",
 			containerStatuses: [
 				{
+					...container,
 					name: "agent",
-					ready: false,
-					restartCount: 0,
-					image: allocation.imageDigest,
-					imageID: "",
 					state: { waiting: { reason: "ImagePullBackOff", message: "secret" } },
 				},
 			],
 		};
-		const container = pod.status.containerStatuses?.[0];
-		if (!container) throw new Error("Missing Session Pod container status");
-		container.state = { waiting: { reason: "ContainerCreating" } };
-		const creating = await adapter.observe(allocation);
-		expect(creating).toMatchObject({
-			status: "observed",
-			waitingReason: "ContainerCreating",
-		});
-		expect(creating).not.toHaveProperty("failureCode");
-		container.state = { waiting: { reason: "PodInitializing" } };
-		const initializing = await adapter.observe(allocation);
-		expect(initializing).toMatchObject({
-			status: "observed",
-			waitingReason: "PodInitializing",
-		});
-		expect(initializing).not.toHaveProperty("failureCode");
-		container.state = {
-			waiting: { reason: "ImagePullBackOff", message: "secret" },
+		const unrelated = await adapter.observe(allocation);
+		expect(unrelated.status).toBe("observed");
+		expect(startupFields(unrelated)).toEqual([]);
+
+		// A Ready Pod carries no startup classification.
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+			containerStatuses: [
+				{
+					...container,
+					ready: true,
+					state: { running: { startedAt: new Date(0) } },
+				},
+			],
 		};
-		expect(await adapter.observe(allocation)).toMatchObject({
-			status: "observed",
-			failureCode: "eci.image_pull",
-		});
-		container.state = {
-			waiting: { reason: "CreateContainerConfigError", message: "private" },
-		};
-		expect(await adapter.observe(allocation)).toMatchObject({
-			status: "observed",
-			failureCode: "runtime.configuration",
-		});
+		const ready = await adapter.observe(allocation);
+		expect(ready.status).toBe("ready");
+		expect(startupFields(ready)).toEqual([]);
 	});
 
 	it("records each resource identity and blocks UID drift before any mutation", async () => {
