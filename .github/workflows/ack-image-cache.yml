@@ -96,10 +96,10 @@ jobs:
           VSWITCH_ID: ${{ vars.ACK_CACHE_VSWITCH_ID }}
           SECURITY_GROUP_ID: ${{ vars.ACK_CACHE_SECURITY_GROUP_ID }}
         run: |
-          test -n "$ROLE_ARN" && test -n "$PROVIDER_ARN" && test -n "$VSWITCH_ID" && test -n "$SECURITY_GROUP_ID" || {
+          if [[ -z "$ROLE_ARN" || -z "$PROVIDER_ARN" || -z "$VSWITCH_ID" || -z "$SECURITY_GROUP_ID" ]]; then
             echo "ACK cache deployment identity is not configured" >&2
             exit 1
-          }
+          fi
       - name: Assume cache-only deployment identity
         uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0
         with:
