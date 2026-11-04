@@ -11,8 +11,10 @@ import {
 	assistantDeliveryEvidence,
 	currentExecutionEvents,
 	currentExecutionFrames,
+	modelDurationEvidence,
 	modelStartObservationMs,
 	restoredHistoryPreservesEvents,
+	turnStageTimings,
 } from "./conversation-browser-validation.mjs";
 
 import {
@@ -196,6 +198,7 @@ async function run(input, evidence) {
 		const page = await owner.newPage();
 		await page.addInitScript(() => {
 			window.__agentInfraSseFrames = [];
+			window.__agentInfraRequests = [];
 			window.__agentInfraChunkSequence = 0;
 			window.__agentInfraAssistantRenders = [];
 			window.__agentInfraStreamStartAssistantLength = 0;
@@ -224,7 +227,6 @@ async function run(input, evidence) {
 			});
 			const fetchImpl = window.fetch.bind(window);
 			window.fetch = async (input, init) => {
-				const response = await fetchImpl(input, init);
 				const url = new URL(
 					typeof input === "string"
 						? input
@@ -233,6 +235,27 @@ async function run(input, evidence) {
 							: String(input),
 					window.location.href,
 				);
+				const method = String(
+					init?.method ?? (input instanceof Request ? input.method : "GET"),
+				).toUpperCase();
+				// Page-clock timing of this turn's create and message POSTs (#3923);
+				// no URL, ID or body is kept.
+				const kind =
+					method !== "POST"
+						? undefined
+						: /^\/api\/v1\/agents\/[^/]+\/conversations$/.test(url.pathname)
+							? "create"
+							: /^\/api\/v1\/conversations\/[^/]+\/messages$/.test(url.pathname)
+								? "message"
+								: undefined;
+				const request =
+					kind === undefined ? undefined : { kind, sentAt: performance.now() };
+				if (request) window.__agentInfraRequests.push(request);
+				const response = await fetchImpl(input, init);
+				if (request) {
+					request.respondedAt = performance.now();
+					request.status = response.status;
+				}
 				if (!url.pathname.endsWith("/events") || !response.body)
 					return response;
 				window.__agentInfraStreamStartAssistantLength = assistantTextLength();
@@ -308,6 +331,7 @@ async function run(input, evidence) {
 			await page.getByRole("textbox", { name: "消息" }).fill(turn.prompt);
 			await page.evaluate(() => {
 				window.__agentInfraSseFrames = [];
+				window.__agentInfraRequests = [];
 				window.__agentInfraAssistantRenders = [];
 				window.__agentInfraStreamStartAssistantLength = 0;
 				window.__agentInfraTurnAssistantOffset = document.querySelectorAll(
@@ -566,16 +590,31 @@ async function run(input, evidence) {
 				.innerText();
 			evidence.stage = "reply-check";
 			assertTurnReply(renderedAnswer, turn.expectedReply);
+			const browserClickToModelStartObservedMs = modelStartObservationMs(
+				events,
+				currentFrames,
+				clickedAt,
+			);
+			const requests = await page.evaluate(
+				() => window.__agentInfraRequests ?? [],
+			);
 			evidence.timings = {
 				browserClickToAcceptedMs: Math.max(0, acceptedAt - clickedAt),
-				browserClickToModelStartObservedMs: modelStartObservationMs(
-					events,
-					currentFrames,
-					clickedAt,
-				),
+				browserClickToModelStartObservedMs,
 				browserClickToFirstTextMs: firstFrame.at - clickedAt,
 				browserClickToCompletedMs: terminalFrame.at - clickedAt,
-				modelDurationMs: null,
+				...turnStageTimings({
+					clickedAt,
+					firstTurn: turnIndex === 0,
+					requests,
+					modelStartAt:
+						browserClickToModelStartObservedMs === null
+							? null
+							: clickedAt + browserClickToModelStartObservedMs,
+					firstTextAt: firstFrame.at,
+				}),
+				...modelDurationEvidence(events, receipt.executionId),
+				// Server queue and Session preparation facts are not exposed yet.
 				queueDurationMs: null,
 				sessionPreparationMs: null,
 			};

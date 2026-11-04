@@ -262,7 +262,44 @@ for (const { truncate, sessionPreparationMs } of [
 							turn.timings.browserClickToFirstTextMs,
 					);
 					assert.equal(turn.timings.modelDurationMs, null);
+					// The fixture publishes no model facts (#3923).
+					assert.deepEqual(turn.timings.modelDurationAttempts, {
+						observed: 0,
+						withDuration: 0,
+					});
+					assert.equal(
+						turn.timings.browserAcceptedToModelStartObservedMs,
+						null,
+					);
+					assert.equal(
+						turn.timings.browserModelStartObservedToFirstTextMs,
+						null,
+					);
+					assert(Number.isFinite(turn.timings.browserMessageSentToAcceptedMs));
+					assert(turn.timings.browserMessageSentToAcceptedMs >= 0);
 				}
+			const [first, ...later] = result.turns;
+			for (const name of [
+				"browserClickToConversationCreatedMs",
+				"browserConversationCreatedToMessageSentMs",
+				"browserMessageSentToAcceptedMs",
+			])
+				assert(
+					Number.isFinite(first.timings[name]) && first.timings[name] >= 0,
+					`${name} must be a finite page-clock interval`,
+				);
+			// The page waits for preparation between creating and sending.
+			assert(
+				first.timings.browserConversationCreatedToMessageSentMs >=
+					sessionPreparationMs,
+			);
+			for (const turn of later.filter((turn) => turn.timings)) {
+				assert.equal(turn.timings.browserClickToConversationCreatedMs, null);
+				assert.equal(
+					turn.timings.browserConversationCreatedToMessageSentMs,
+					null,
+				);
+			}
 			for (const privateText of [...prompts, ...expected])
 				assert(!JSON.stringify(result).includes(privateText));
 			assert.equal(result.modelCallVerified, false);
