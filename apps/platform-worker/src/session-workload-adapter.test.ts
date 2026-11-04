@@ -411,6 +411,22 @@ describe("custom retained PVC rebind (#3305)", () => {
 });
 
 describe("session sandbox workload adapter", () => {
+	it("accepts a deployment tightening immutable image pulls without accepting other Pod drift", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		if (!pod?.spec?.containers[0]) throw new Error("missing Pod");
+		pod.spec.containers[0].imagePullPolicy = "Never";
+		await expect(adapter.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+		pod.spec.containers[0].image = `registry.example.test/foreign@sha256:${"b".repeat(64)}`;
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
 	it("projects a complete approved file on the real Session Pod and rejects drift without changing cleanup authority", async () => {
 		const profile = {
 			schemaVersion: 1 as const,

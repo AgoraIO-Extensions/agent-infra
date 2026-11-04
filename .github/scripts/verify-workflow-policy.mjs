@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "secret-scan.yml"];
 
 // Keep the ignored-event boundary identical for concurrency, admission and the
 // aggregate name: skipped metadata must never publish a required CI check.
@@ -201,6 +201,32 @@ export function validateWorkflowDocuments(workflows) {
   if (enrollmentStep?.run !== "node .github/scripts/auto-merge.mjs" ||
       !sameObject(enrollmentStep?.env, {GITHUB_TOKEN: "${{ secrets.GH_TOKEN }}"})) {
     errors.push("Auto-merge Enrollment must use the fixed repository Secret");
+  }
+  const cacheAdmission = "github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository))";
+  const cache = workflows["ack-image-cache.yml"];
+  const cacheJobs = cache?.jobs ?? {};
+  if (cache?.name !== "ACK image cache" ||
+      Object.keys(cache.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
+      JSON.stringify(cache.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
+      !sameObject(cache.permissions, {contents: "read"}) ||
+      Object.keys(cacheJobs).sort().join() !== "prepare,warm" ||
+      cacheJobs.prepare?.if !== cacheAdmission || cacheJobs.warm?.if !== undefined ||
+      cacheJobs.warm?.needs !== "prepare" || cacheJobs.warm?.environment !== "ack-image-cache" ||
+      !sameObject(cacheJobs.prepare?.permissions, {contents: "read", actions: "read"}) ||
+      !sameObject(cacheJobs.warm?.permissions, {contents: "read", packages: "read", "id-token": "write"}) ||
+      !sameObject(cache.concurrency, {group: "ack-image-cache-cn-hangzhou", "cancel-in-progress": false}))
+    errors.push("ACK cache must isolate trusted publication validation from protected deployment identity");
+  for (const [jobName, job] of Object.entries(cacheJobs)) {
+    for (const step of job.steps ?? []) {
+      if (step.uses?.startsWith("actions/checkout@") &&
+          (step.with?.ref !== "${{ github.sha }}" || step.with?.["persist-credentials"] !== false))
+        errors.push("ACK cache must execute only the trusted default-branch workflow SHA");
+      if (step.uses?.startsWith("aliyun/configure-aliyun-credentials-action@") &&
+          (jobName !== "warm" || step.uses !== "aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6" ||
+          step.with?.["role-to-assume"] !== "${{ vars.ACK_CACHE_ROLE_ARN }}" ||
+          step.with?.["oidc-provider-arn"] !== "${{ vars.ACK_CACHE_OIDC_PROVIDER_ARN }}"))
+        errors.push("ACK cache cloud identity must stay in the protected warm job");
+    }
   }
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||

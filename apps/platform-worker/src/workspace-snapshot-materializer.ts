@@ -5,6 +5,7 @@ import type {
 	V1Volume,
 	V1VolumeMount,
 } from "@kubernetes/client-node";
+import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
 
 export interface WorkspaceSnapshotMaterializerInputV1 {
 	readonly snapshotId: string;
@@ -210,7 +211,14 @@ export function workspaceSnapshotPodSpecMatchesV1(
 		const actual = (spec.initContainers ?? []).find(
 			(container) => container.name === expected.name,
 		);
-		if (!actual || JSON.stringify(actual) !== JSON.stringify(expected))
+		if (
+			!actual ||
+			!immutableImagePullPolicyMatches(actual, expected) ||
+			JSON.stringify({
+				...actual,
+				imagePullPolicy: expected.imagePullPolicy,
+			}) !== JSON.stringify(expected)
+		)
 			return false;
 	}
 	const volumes = new Map(

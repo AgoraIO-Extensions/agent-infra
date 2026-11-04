@@ -59,10 +59,12 @@ function fixture(foreign = false) {
 			);
 		if (
 			args.includes("mutatingadmissionpolicy") ||
-			args.includes("mutatingadmissionpolicybinding")
+			args.includes("mutatingadmissionpolicybinding") ||
+			args.includes("validatingadmissionpolicy") ||
+			args.includes("validatingadmissionpolicybinding")
 		)
-			return store.get(`${args[0]}/${args[2]}`)
-				? JSON.stringify(store.get(`${args[0]}/${args[2]}`))
+			return store.get(`${args[1]}/${args[2]}`)
+				? JSON.stringify(store.get(`${args[1]}/${args[2]}`))
 				: "";
 		const getIndex = args.indexOf("get");
 		if (getIndex >= 0)
