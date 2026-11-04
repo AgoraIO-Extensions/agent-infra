@@ -58,8 +58,19 @@ export function openPostgresWorkspaceSnapshotMaterializationReaderV1(
 				order by b.name asc
 			`;
 			if (rows.length !== value.bindings.length) throw new Error();
+			const requested = new Map(
+				value.bindings.map((b) => [b.snapshotId, b.name]),
+			);
+			if (
+				requested.size !== value.bindings.length ||
+				new Set(value.bindings.map((b) => b.name)).size !==
+					value.bindings.length
+			)
+				throw new Error();
 			const expectedFence = value.fence;
 			return rows.map((row) => {
+				if (requested.get(row.snapshot_id) !== row.name) throw new Error();
+				requested.delete(row.snapshot_id);
 				const state = row.state;
 				if (
 					row.status !== "ready" ||

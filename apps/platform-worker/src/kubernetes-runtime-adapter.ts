@@ -1655,11 +1655,25 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			};
 			if (options.workspaceSnapshotProjection) {
 				const projection = options.workspaceSnapshotProjection;
-				await writeWorkspaceSnapshotSecretV1(
-					client,
-					projection,
-					metadata(value),
+				const snapshotOwner = await client.read<V1ServiceAccount>(
+					"ServiceAccount",
+					value.serviceAccount.name,
 				);
+				if (!snapshotOwner?.metadata?.uid)
+					throw new WorkloadKubernetesError("unavailable");
+				await writeWorkspaceSnapshotSecretV1(client, projection, {
+					...metadata(value),
+					ownerReferences: [
+						{
+							apiVersion: "v1",
+							kind: "ServiceAccount",
+							name: value.serviceAccount.name,
+							uid: snapshotOwner.metadata.uid,
+							controller: true,
+							blockOwnerDeletion: false,
+						},
+					],
+				});
 				const workloadSpec = workload.spec;
 				const podSpec = workloadSpec?.template?.spec;
 				if (!podSpec) throw new WorkloadKubernetesError("policy");

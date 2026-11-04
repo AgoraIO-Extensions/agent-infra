@@ -70,3 +70,36 @@ it("rejects missing persisted bindings", async () => {
 	);
 	await expect(reader.read(request)).rejects.toThrow();
 });
+
+it.each([{ snapshot_id: "snapshot-other" }, { name: "other" }])(
+	"rejects same-count binding substitutions (%j)",
+	async (change) => {
+		database.query.mockResolvedValueOnce([{ ...row, ...change }]);
+		const reader = openPostgresWorkspaceSnapshotMaterializationReaderV1(
+			"postgresql://synthetic",
+		);
+		await expect(reader.read(request)).rejects.toThrow();
+	},
+);
+it("rejects duplicate requested or returned bindings", async () => {
+	const reader = openPostgresWorkspaceSnapshotMaterializationReaderV1(
+		"postgresql://synthetic",
+	);
+	database.query.mockResolvedValueOnce([row, row]);
+	await expect(
+		reader.read({
+			...request,
+			bindings: [...request.bindings, ...request.bindings],
+		}),
+	).rejects.toThrow();
+	database.query.mockResolvedValueOnce([row, row]);
+	await expect(
+		reader.read({
+			...request,
+			bindings: [
+				...request.bindings,
+				{ snapshotId: "snapshot-b", name: "environment" },
+			],
+		}),
+	).rejects.toThrow();
+});

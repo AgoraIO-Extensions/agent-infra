@@ -1358,6 +1358,32 @@ it("accepts only the trusted snapshot projection across apply and observe", asyn
 	expect(f.writes.slice(writes).every((x) => x.kind === "Secret")).toBe(true);
 	const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
 	if (!pod?.spec) throw Error("missing pod");
+	const manifest = await f.client.read<V1Secret>(
+		"Secret",
+		"snapshot-credentials",
+	);
+	expect(manifest?.metadata?.ownerReferences?.[0]).toMatchObject({
+		kind: "ServiceAccount",
+		name: desired.serviceAccount.name,
+	});
+	for (const mutation of ["extra-init", "extra-volume", "extra-mount"]) {
+		const drift = structuredClone(pod);
+		if (!drift.spec) throw Error("missing spec");
+		if (mutation === "extra-init")
+			drift.spec.initContainers?.push({
+				name: "untrusted",
+				image: "untrusted:latest",
+			});
+		if (mutation === "extra-volume")
+			drift.spec.volumes?.push({ name: "untrusted", emptyDir: {} });
+		if (mutation === "extra-mount")
+			drift.spec.containers[0]?.volumeMounts?.push({
+				name: "workspace-snapshots",
+				mountPath: "/untrusted",
+			});
+		f.resources.set(`Pod/${desired.service.name}-0`, drift);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	}
 	const mount = pod.spec.containers[0]?.volumeMounts?.find(
 		(m) => m.name === "workspace-snapshots",
 	);
