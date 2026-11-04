@@ -3,20 +3,22 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "secret-scan.yml"];
 
-// Keep the ignored-event boundary identical for concurrency, admission and the
-// aggregate name: skipped metadata must never publish a required CI check.
-const CI_METADATA_EVENT = "github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip'";
+// Label events must never start a CI run: a newer run without the required CI
+// check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip
+// changes rerun the head's latest CI run through ci-waiver.yml instead.
+const CI_PULL_REQUEST_TYPES = ["opened", "synchronize", "reopened"];
+const CI_NOT_WAIVED = "needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true'";
 const CI_JOB_CONDITIONS = {
-  "ci-exemption": "",
-  "changes": "always() && !cancelled()",
-  "web-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true'",
-  "backend-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
-  "backend-package-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
-  "backend-contracts-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
-  "ci_heavy": "always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')",
-  "workload-kind": "!cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true')",
+  "ci-exemption": undefined,
+  "changes": "${{ always() && !cancelled() }}",
+  "web-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}",
+  "backend-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
+  "backend-package-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
+  "backend-contracts-tests": "${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}",
+  "ci_heavy": `\${{ always() && !cancelled() && (${CI_NOT_WAIVED}) }}`,
+  "workload-kind": `\${{ !cancelled() && (${CI_NOT_WAIVED}) && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}`,
 };
 
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
@@ -108,33 +110,51 @@ export function validateWorkflowDocuments(workflows) {
     errors.push(`Expected workflows: ${REQUIRED_WORKFLOWS.join(", ")}`);
   }
   const ci = workflows["ci.yml"];
-  if (ci?.name !== "CI" || ci.jobs?.ci?.name !== `\${{ ${CI_METADATA_EVENT} && 'CI metadata event ignored' || 'CI' }}`) {
-    errors.push("CI workflow and required check must retain the exact metadata-only naming exception");
+  if (ci?.name !== "CI" || ci.jobs?.ci?.name !== "CI") {
+    errors.push("CI workflow and required check must keep the fixed CI name");
+  }
+  if (Object.keys(ci?.on ?? {}).sort().join() !== "pull_request,push" ||
+      JSON.stringify(ci?.on?.pull_request?.types) !== JSON.stringify(CI_PULL_REQUEST_TYPES) ||
+      JSON.stringify(ci?.on?.push?.branches) !== JSON.stringify(["main"])) {
+    errors.push("CI must run only for PR source events and main pushes, never label events");
   }
   if (!sameObject(ci?.concurrency, {
-    group: `\${{ ${CI_METADATA_EVENT} && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}`,
+    group: "ci-${{ github.event.pull_request.number || github.ref }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
-  })) errors.push("CI must isolate unrelated label events from validation concurrency");
+  })) errors.push("CI must keep one validation concurrency group per PR or ref");
   if (Object.keys(ci?.jobs ?? {}).sort().join() !== [...Object.keys(CI_JOB_CONDITIONS), "ci"].sort().join())
     errors.push("CI jobs must retain the guarded validation lanes");
   for (const [name, condition] of Object.entries(CI_JOB_CONDITIONS)) {
-    const expected = `\${{ !(${CI_METADATA_EVENT})${condition ? ` && ${condition}` : ""} }}`;
-    if (ci?.jobs?.[name]?.if !== expected)
-      errors.push(`CI/${name}: job admission must retain the exact metadata guard and validation condition`);
+    if (ci?.jobs?.[name]?.if !== condition)
+      errors.push(`CI/${name}: job admission must retain the exact validation condition`);
   }
   if (ci?.jobs?.ci?.if !== "${{ always() && !cancelled() }}")
-    errors.push("CI aggregate must run to evaluate its name for metadata and waiver events");
-  const validationEvent = `!(${CI_METADATA_EVENT}) && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')`;
+    errors.push("CI aggregate must always run to report waivers and failed lanes");
   const aggregateConditions = {
-    "Require CI lanes": `\${{ ${validationEvent} && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success' || needs.backend-package-tests.result != 'success' || needs.backend-contracts-tests.result != 'success'))) }}`,
-    "Report completed CI lanes": `\${{ ${validationEvent} }}`,
-    "Report ignored metadata event": `\${{ ${CI_METADATA_EVENT} }}`,
-    "Report CI waiver": `\${{ !(${CI_METADATA_EVENT}) && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip == 'true' }}`,
+    "Require CI lanes": `\${{ (${CI_NOT_WAIVED}) && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success' || needs.backend-package-tests.result != 'success' || needs.backend-contracts-tests.result != 'success'))) }}`,
+    "Report completed CI lanes": `\${{ ${CI_NOT_WAIVED} }}`,
+    "Report CI waiver": "${{ needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip == 'true' }}",
   };
   const aggregateSteps = ci?.jobs?.ci?.steps ?? [];
   if (aggregateSteps.map((step) => step.name).sort().join() !== Object.keys(aggregateConditions).sort().join() ||
       aggregateSteps.some((step) => !Object.hasOwn(aggregateConditions, step.name) || step.if !== aggregateConditions[step.name]))
-    errors.push("CI aggregate must separate validation, metadata and live-waiver reporting");
+    errors.push("CI aggregate must separate validation and live-waiver reporting");
+  const waiver = workflows["ci-waiver.yml"];
+  const waiverJob = waiver?.jobs?.rerun;
+  const waiverStep = waiverJob?.steps?.find((step) => step.name === "Rerun the latest CI run of the current head");
+  if (waiver?.name !== "CI waiver" ||
+      Object.keys(waiver?.on ?? {}).join() !== "pull_request_target" ||
+      JSON.stringify(waiver?.on?.pull_request_target?.types) !== JSON.stringify(["labeled", "unlabeled"]) ||
+      JSON.stringify(waiver?.permissions) !== "{}" ||
+      !sameObject(waiver?.concurrency, {group: "ci-waiver-${{ github.event.pull_request.number }}", "cancel-in-progress": true}) ||
+      Object.keys(waiver?.jobs ?? {}).join() !== "rerun" ||
+      waiverJob?.name !== "Re-evaluate CI exemption" ||
+      waiverJob?.if !== "github.event.label.name == 'ci:skip' && github.event.pull_request.head.repo.full_name == github.repository" ||
+      !sameObject(waiverJob?.permissions, {actions: "write", contents: "read"}) ||
+      waiverStep?.run !== "node .github/scripts/ci-waiver.mjs" ||
+      !sameObject(waiverStep?.env, {GITHUB_TOKEN: "${{ github.token }}"})) {
+    errors.push("CI waiver must only rerun CI for ci:skip changes with minimal permissions");
+  }
   for (const [name, workflow] of Object.entries(workflows)) {
     const runName = workflow["run-name"];
     if (typeof runName !== "string" || !runName.includes(" | ") ||
