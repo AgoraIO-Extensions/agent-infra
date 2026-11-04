@@ -26,7 +26,7 @@ test("template model config binds the relay credential into the V4 option", asyn
 	);
 	assert.match(source, /AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT/u);
 	assert.match(source, /modelCredentialFile/);
-	assert.match(source, /modelCredentialFile, "utf8"/u);
+	assert.match(source, /writeFile\(modelCredentialFile, modelCredential/u);
 });
 const baseJob = {
 	schemaVersion: 1,
