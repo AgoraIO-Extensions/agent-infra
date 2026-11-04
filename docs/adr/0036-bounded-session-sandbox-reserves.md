@@ -10,6 +10,7 @@
 采用按 Agent 及已验证配置准备的新会话预留实例。提前生成最终 Session/Sandbox ID 对，
 Pod 使用最终身份，真实用户领取时保持 ID、Pod 和 PVC 不变。沿现有 Platform DB/Worker
 实现一次性分配，首阶段只支持无 Owner Secret 的标准模板，不增加通用 Runtime 身份重绑接口。
+让未领取实例预先持有 Owner Secret 的扩展已由 [ADR-0038](0038-no-owner-secret-in-session-reserves.md) 否决。
 首版只预先完成计算、镜像和 Host bootstrap。原生 Session 仍在真实授权投递时准备，其等待
 完整计入可执行耗时；不能将预留池命中或 `/healthz` 当作原生进程已暖。
 

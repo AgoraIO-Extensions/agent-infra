@@ -761,6 +761,7 @@ Sandbox policy 是否过期无关；所属 Agent 的管理状态不是可用且�
 规格、env 摘要、模型投影、只读 Skill generation、Connection Consumer 配置、网络策略及
 Runtime 签名/传输配置版本；任一影响实际 Pod 输入或授权的修订改变，未领取项立即失去领取资格。
 custom Owner Secret、自有交互入口及不满足这些条件的模板保持原准备路径，不自动扩展预热资格。
+未领取实例不预先持有 Owner Secret 的决定与重新评估条件见 [ADR-0038](../adr/0038-no-owner-secret-in-session-reserves.md)。
 
 未领取实例只有全新专属 PVC、原临时目录及已验证的只读 Skill 挂载；不复制业务工作区、
 原生会话历史或个人记忆。Secret 只能包含该 Sandbox 的派生服务凭据、无 Key 模型投影及
