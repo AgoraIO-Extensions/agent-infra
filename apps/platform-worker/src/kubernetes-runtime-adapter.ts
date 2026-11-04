@@ -84,6 +84,7 @@ import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
 } from "./workspace-snapshot-materializer.js";
+import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 const selectorNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
 const selectorPrefixPattern =
@@ -302,6 +303,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		hasDriftedPodSpec,
 		networkPolicy,
 	} = createKubernetesWorkloadPolicyHelpersV1({
+		workspaceSnapshotProjection: options.workspaceSnapshotProjection,
 		connectionConsumerControl: options.connectionConsumerControl,
 		policy,
 		imageRepository,
@@ -1653,23 +1655,25 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			};
 			if (options.workspaceSnapshotProjection) {
 				const projection = options.workspaceSnapshotProjection;
-				const manifestSecretName =
-					projection.volumes.find(
-						(volume) => volume.name === "workspace-snapshot-credentials",
-					)?.secret?.secretName ?? "workspace-snapshot-credentials";
-				const manifestSecret = await client.read<V1Secret>(
-					"Secret",
-					manifestSecretName,
+				const snapshotOwner = await client.read<V1ServiceAccount>(
+					"ServiceAccount",
+					value.serviceAccount.name,
 				);
-				const secret: V1Secret = {
-					apiVersion: "v1",
-					kind: "Secret",
-					metadata: { ...manifestSecret?.metadata, name: manifestSecretName },
-					type: "Opaque",
-					stringData: { "manifest.json": projection.manifest },
-				};
-				if (manifestSecret) await client.replace(secret);
-				else await client.create(secret);
+				if (!snapshotOwner?.metadata?.uid)
+					throw new WorkloadKubernetesError("unavailable");
+				await writeWorkspaceSnapshotSecretV1(client, projection, {
+					...metadata(value),
+					ownerReferences: [
+						{
+							apiVersion: "v1",
+							kind: "ServiceAccount",
+							name: value.serviceAccount.name,
+							uid: snapshotOwner.metadata.uid,
+							controller: true,
+							blockOwnerDeletion: false,
+						},
+					],
+				});
 				const workloadSpec = workload.spec;
 				const podSpec = workloadSpec?.template?.spec;
 				if (!podSpec) throw new WorkloadKubernetesError("policy");

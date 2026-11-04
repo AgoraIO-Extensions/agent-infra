@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
 	V1Container,
 	V1EmptyDirVolumeSource,
@@ -55,10 +56,13 @@ function assertSignedUrl(input: WorkspaceSnapshotMaterializerInputV1) {
 		throw new Error("workspace snapshot signed URL has an invalid expiry");
 }
 
-export function projectWorkspaceSnapshotMaterializerV1(
-	snapshots: readonly WorkspaceSnapshotMaterializerInputV1[],
+export function projectWorkspaceSnapshotPodShapeV1(
+	snapshots: readonly Omit<
+		WorkspaceSnapshotMaterializerInputV1,
+		"signedUrl" | "expiresAt"
+	>[],
 	policy: WorkspaceSnapshotMaterializerPolicyV1,
-): WorkspaceSnapshotPodProjectionV1 {
+): Omit<WorkspaceSnapshotPodProjectionV1, "manifest"> {
 	if (
 		!/^([a-z0-9.-]+(?::[0-9]+)?\/)[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/.test(
 			policy.imageDigest,
@@ -77,9 +81,12 @@ export function projectWorkspaceSnapshotMaterializerV1(
 		names.add(snapshot.name);
 		if (!/^sha256:[a-f0-9]{64}$/.test(snapshot.digest))
 			throw new Error("workspace snapshot digest is invalid");
-		assertSignedUrl(snapshot);
-		if (!policy.allowedOrigins.includes(new URL(snapshot.signedUrl).origin))
-			throw new Error("workspace snapshot origin is not approved");
+		if (
+			!snapshot.objectRef ||
+			!Number.isSafeInteger(snapshot.sizeBytes) ||
+			snapshot.sizeBytes <= 0
+		)
+			throw new Error("workspace snapshot object metadata is incomplete");
 		const path = `/opt/agent/workspaces/${snapshot.name}`;
 		mounts.set(snapshot.name, [
 			{
@@ -91,19 +98,7 @@ export function projectWorkspaceSnapshotMaterializerV1(
 		]);
 	}
 	const emptyDir: V1EmptyDirVolumeSource = { sizeLimit: policy.cacheSizeLimit };
-	const manifest = JSON.stringify({
-		schemaVersion: 1,
-		allowedOrigins: [...policy.allowedOrigins],
-		snapshots: snapshots.map((snapshot) => ({
-			snapshotId: snapshot.snapshotId,
-			name: snapshot.name,
-			digest: snapshot.digest,
-			sizeBytes: snapshot.sizeBytes,
-			objectRef: snapshot.objectRef,
-			signedUrl: snapshot.signedUrl,
-			expiresAt: snapshot.expiresAt,
-		})),
-	});
+
 	return {
 		volumes: [
 			{ name: volumeName, emptyDir },
@@ -142,8 +137,32 @@ export function projectWorkspaceSnapshotMaterializerV1(
 			},
 		],
 		containerMounts: mounts,
-		manifest,
 	};
+}
+
+export function projectWorkspaceSnapshotMaterializerV1(
+	snapshots: readonly WorkspaceSnapshotMaterializerInputV1[],
+	policy: WorkspaceSnapshotMaterializerPolicyV1,
+): WorkspaceSnapshotPodProjectionV1 {
+	for (const snapshot of snapshots) {
+		assertSignedUrl(snapshot);
+		if (!policy.allowedOrigins.includes(new URL(snapshot.signedUrl).origin))
+			throw new Error("workspace snapshot origin is not approved");
+	}
+	const manifest = JSON.stringify({
+		schemaVersion: 1,
+		allowedOrigins: [...policy.allowedOrigins],
+		snapshots: snapshots.map((snapshot) => ({
+			snapshotId: snapshot.snapshotId,
+			name: snapshot.name,
+			digest: snapshot.digest,
+			sizeBytes: snapshot.sizeBytes,
+			objectRef: snapshot.objectRef,
+			signedUrl: snapshot.signedUrl,
+			expiresAt: snapshot.expiresAt,
+		})),
+	});
+	return { ...projectWorkspaceSnapshotPodShapeV1(snapshots, policy), manifest };
 }
 
 /** Apply the platform projection to an existing trusted PodSpec. */
@@ -201,45 +220,126 @@ export function applyWorkspaceSnapshotProjectionV1(
 	};
 }
 
-/** Fail closed when a live Pod loses any platform-owned snapshot materialization shape. */
+function sameWire(left: unknown, right: unknown) {
+	return isDeepStrictEqual(
+		JSON.parse(JSON.stringify(left)),
+		JSON.parse(JSON.stringify(right)),
+	);
+}
+function normalizedMount(mount: V1VolumeMount) {
+	return {
+		...mount,
+		readOnly: mount.readOnly ?? false,
+		subPath: mount.subPath ?? "",
+		subPathExpr: mount.subPathExpr ?? "",
+		mountPropagation: mount.mountPropagation ?? "None",
+		recursiveReadOnly: mount.recursiveReadOnly ?? "Disabled",
+	};
+}
+function normalizedContainer(container: V1Container) {
+	return {
+		...container,
+		args: container.args ?? [],
+		env: container.env ?? [],
+		envFrom: container.envFrom ?? [],
+		ports: container.ports ?? [],
+		resources: container.resources ?? {},
+		terminationMessagePath:
+			container.terminationMessagePath ?? "/dev/termination-log",
+		terminationMessagePolicy: container.terminationMessagePolicy ?? "File",
+		volumeMounts: (container.volumeMounts ?? []).map(normalizedMount),
+	};
+}
+function normalizedVolume(volume: V1Volume) {
+	return {
+		...volume,
+		...(volume.secret
+			? {
+					secret: {
+						...volume.secret,
+						optional: volume.secret.optional ?? false,
+						defaultMode: volume.secret.defaultMode ?? 420,
+					},
+				}
+			: {}),
+		...(volume.emptyDir
+			? {
+					emptyDir: {
+						...volume.emptyDir,
+						medium: volume.emptyDir.medium ?? "",
+					},
+				}
+			: {}),
+	};
+}
+/** Compare the complete trusted projection, including Kubernetes API defaults. */
 export function workspaceSnapshotPodSpecMatchesV1(
 	spec: V1PodSpec | undefined,
 	projection: WorkspaceSnapshotPodProjectionV1,
 ): boolean {
 	if (!spec) return false;
 	for (const expected of projection.initContainers) {
-		const actual = (spec.initContainers ?? []).find(
-			(container) => container.name === expected.name,
+		const actual = (spec.initContainers ?? []).filter(
+			(x) => x.name === expected.name,
 		);
 		if (
-			!actual ||
-			!immutableImagePullPolicyMatches(actual, expected) ||
-			JSON.stringify({
-				...actual,
-				imagePullPolicy: expected.imagePullPolicy,
-			}) !== JSON.stringify(expected)
+			actual.length !== 1 ||
+			!actual[0] ||
+			!immutableImagePullPolicyMatches(actual[0], expected) ||
+			!sameWire(
+				normalizedContainer({
+					...actual[0],
+					imagePullPolicy: expected.imagePullPolicy,
+				}),
+				normalizedContainer(expected),
+			)
 		)
 			return false;
 	}
-	const volumes = new Map(
-		(spec.volumes ?? []).map((volume) => [volume.name, volume]),
-	);
 	for (const expected of projection.volumes) {
-		if (JSON.stringify(volumes.get(expected.name)) !== JSON.stringify(expected))
+		const actual = (spec.volumes ?? []).filter((x) => x.name === expected.name);
+		if (
+			actual.length !== 1 ||
+			!sameWire(normalizedVolume(actual[0]!), normalizedVolume(expected))
+		)
 			return false;
 	}
-	for (const container of spec.containers) {
-		for (const mounts of projection.containerMounts.values()) {
-			for (const mount of mounts) {
-				const actual = (container.volumeMounts ?? []).find(
-					(candidate) =>
-						candidate.name === mount.name &&
-						candidate.mountPath === mount.mountPath,
-				);
-				if (actual?.readOnly !== true || actual?.subPath !== mount.subPath)
-					return false;
-			}
+	for (const container of spec.containers)
+		for (const mount of [...projection.containerMounts.values()].flat()) {
+			const actual = (container.volumeMounts ?? []).filter(
+				(x) => x.name === mount.name && x.mountPath === mount.mountPath,
+			);
+			if (
+				actual.length !== 1 ||
+				!sameWire(normalizedMount(actual[0]!), normalizedMount(mount))
+			)
+				return false;
 		}
-	}
 	return true;
+}
+/** Validate platform additions before checking the remaining Pod with the existing policy. */
+export function withoutVerifiedWorkspaceSnapshotProjectionV1(
+	spec: V1PodSpec | undefined,
+	projection: WorkspaceSnapshotPodProjectionV1 | undefined,
+): V1PodSpec | undefined {
+	if (!projection) return spec;
+	if (!spec || !workspaceSnapshotPodSpecMatchesV1(spec, projection))
+		return undefined;
+	const initNames = new Set(projection.initContainers.map((x) => x.name));
+	const volumeNames = new Set(projection.volumes.map((x) => x.name));
+	const mounts = [...projection.containerMounts.values()].flat();
+	return {
+		...spec,
+		initContainers: (spec.initContainers ?? []).filter(
+			(x) => !initNames.has(x.name),
+		),
+		volumes: (spec.volumes ?? []).filter((x) => !volumeNames.has(x.name)),
+		containers: spec.containers.map((c) => ({
+			...c,
+			volumeMounts: (c.volumeMounts ?? []).filter(
+				(x) =>
+					!mounts.some((m) => m.name === x.name && m.mountPath === x.mountPath),
+			),
+		})),
+	};
 }

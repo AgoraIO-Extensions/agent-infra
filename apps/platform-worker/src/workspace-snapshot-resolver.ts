@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import {
 	projectWorkspaceSnapshotMaterializerV1,
+	projectWorkspaceSnapshotPodShapeV1,
 	type WorkspaceSnapshotMaterializerInputV1,
 	type WorkspaceSnapshotMaterializerPolicyV1,
 } from "./workspace-snapshot-materializer.js";
@@ -33,7 +35,19 @@ export function createWorkspaceSnapshotResolverV1(input: {
 	readonly policy: WorkspaceSnapshotMaterializerPolicyV1;
 	readonly allowedOrigins: readonly string[];
 }) {
-	return async (value: Parameters<typeof input.read>[0]) => {
+	const scopedPolicy = (value: {
+		agentId: string;
+		configurationRevision: number;
+	}) => ({
+		...input.policy,
+		credentialSecretName: `${input.policy.credentialSecretName.slice(0, 40)}-${createHash(
+			"sha256",
+		)
+			.update(JSON.stringify([value.agentId, value.configurationRevision]))
+			.digest("hex")
+			.slice(0, 16)}`,
+	});
+	const resolve = async (value: Parameters<typeof input.read>[0]) => {
 		const records = await input.read(value);
 		if (records.length !== value.bindings.length) throw new Error();
 		const byId = new Map(
@@ -73,8 +87,20 @@ export function createWorkspaceSnapshotResolverV1(input: {
 			inputs: snapshots,
 			projection: projectWorkspaceSnapshotMaterializerV1(
 				snapshots,
-				input.policy,
+				scopedPolicy(value),
 			),
 		};
 	};
+	return Object.assign(resolve, {
+		project: (
+			snapshots: readonly Omit<
+				WorkspaceSnapshotMaterializerInputV1,
+				"signedUrl" | "expiresAt"
+			>[],
+			value: { agentId: string; configurationRevision: number },
+		) => ({
+			...projectWorkspaceSnapshotPodShapeV1(snapshots, scopedPolicy(value)),
+			manifest: "",
+		}),
+	});
 }

@@ -59,7 +59,9 @@ import {
 import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
+	workspaceSnapshotPodSpecMatchesV1,
 } from "./workspace-snapshot-materializer.js";
+import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 /**
  * Runtime inputs for one Session Sandbox (#1466). `modelConfiguration` and
@@ -132,6 +134,24 @@ export function sessionSandboxServiceTokenV1(
 		.digest("base64url");
 }
 
+/** Unique to the Sandbox generation/fence, never shared across Session attempts. */
+export function sessionSnapshotSecretNameV1(
+	allocation: Pick<
+		SessionSandboxResourceInputV1,
+		"sandboxId" | "generation" | "resourceFence"
+	>,
+) {
+	return `sandbox-ws-${createHash("sha256")
+		.update(
+			JSON.stringify([
+				allocation.sandboxId,
+				allocation.generation,
+				allocation.resourceFence,
+			]),
+		)
+		.digest("hex")
+		.slice(0, 32)}`;
+}
 const sessionSandboxTokenPattern = /^[A-Za-z0-9_-]{43}$/;
 /** Session Pod 唯一 Runtime 容器名；渲染、启动观测与预留 bootstrap 共用（#3922）。 */
 export const sessionSandboxRuntimeContainerName = "runtime";
@@ -1128,6 +1148,15 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			(expectedSpec.ephemeralContainers?.length ?? 0)
 	)
 		return false;
+	if (
+		!workspaceSnapshotPodSpecMatchesV1(currentSpec, {
+			initContainers: expectedSpec.initContainers ?? [],
+			volumes: [],
+			containerMounts: new Map(),
+			manifest: "",
+		})
+	)
+		return false;
 	const normalizeEnv = (env: typeof expectedContainer.env) =>
 		(env ?? [])
 			.map(({ name, value, valueFrom }) => ({ name, value, valueFrom }))
@@ -1688,7 +1717,38 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						result.status === "rejected",
 				);
 				if (failure) throw failure.reason;
+				if (allocation.workspaceSnapshotProjection?.manifest)
+					await writeWorkspaceSnapshotSecretV1(
+						options.client,
+						allocation.workspaceSnapshotProjection,
+						metadata(allocation, sessionSnapshotSecretNameV1(allocation)),
+					);
 				await ensure(pod);
+				if (allocation.workspaceSnapshotProjection?.manifest) {
+					const created = await options.client.read<V1Pod>(
+						"Pod",
+						allocation.podName,
+					);
+					if (!created?.metadata?.uid || !owned(created, pod, allocation))
+						throw new WorkloadKubernetesError("unavailable");
+					await writeWorkspaceSnapshotSecretV1(
+						options.client,
+						allocation.workspaceSnapshotProjection,
+						{
+							...metadata(allocation, sessionSnapshotSecretNameV1(allocation)),
+							ownerReferences: [
+								{
+									apiVersion: "v1",
+									kind: "Pod",
+									name: allocation.podName,
+									uid: created.metadata.uid,
+									controller: true,
+									blockOwnerDeletion: false,
+								},
+							],
+						},
+					);
+				}
 			}
 			return {
 				sandboxId: allocation.sandboxId,
@@ -1840,6 +1900,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					}
 				}
 			}
+			if (
+				status === "observed" &&
+				purpose === "business" &&
+				allocation.workspaceSnapshotProjection
+			)
+				await writeWorkspaceSnapshotSecretV1(
+					options.client,
+					allocation.workspaceSnapshotProjection,
+					metadata(allocation, sessionSnapshotSecretNameV1(allocation)),
+				);
 			return {
 				status:
 					purpose === "control" && status === "ready" ? "observed" : status,
@@ -2197,6 +2267,33 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				});
 			}
 
+			const snapshotSource = {
+				...allocation,
+				generation: context.sourceGeneration ?? allocation.generation,
+				resourceFence: context.sourceResourceFence ?? allocation.resourceFence,
+			};
+			const snapshotName = sessionSnapshotSecretNameV1(snapshotSource);
+			const snapshotSecret = await options.client.read<V1Secret>(
+				"Secret",
+				snapshotName,
+			);
+			if (snapshotSecret) {
+				if (
+					!owned(
+						snapshotSecret,
+						{
+							apiVersion: "v1",
+							kind: "Secret",
+							metadata: metadata(snapshotSource, snapshotName),
+						},
+						snapshotSource,
+					)
+				)
+					throw new WorkloadKubernetesError("conflict");
+				await options.client.delete(snapshotSecret);
+				if (await options.client.read("Secret", snapshotName))
+					throw new WorkloadKubernetesError("unavailable");
+			}
 			const pvcExpected = expectedResources.find(
 				(resource) => resource.kind === "PersistentVolumeClaim",
 			);

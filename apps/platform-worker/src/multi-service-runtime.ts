@@ -52,6 +52,7 @@ import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
 } from "./workspace-snapshot-materializer.js";
+import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 	multiService: NonNullable<AgentWorkloadDesiredV1["multiService"]>;
@@ -1389,7 +1390,25 @@ export function createMultiServiceRuntimeOperations(options: {
 			// 被拒绝的 Agent 不能留下半安装或被部分清理的多服务资源。
 			validateMultiServiceResourceCapacityV1(value, resources);
 			await pruneStaleResources(value, ownership);
-			await put(serviceAccount(value), value, ownership);
+			const snapshotOwner = await put(serviceAccount(value), value, ownership);
+			if (options.policy.workspaceSnapshotProjection)
+				await writeWorkspaceSnapshotSecretV1(
+					client,
+					options.policy.workspaceSnapshotProjection,
+					{
+						...serviceAccount(value).metadata,
+						ownerReferences: [
+							{
+								apiVersion: "v1",
+								kind: "ServiceAccount",
+								name: serviceAccount(value).metadata?.name ?? "",
+								uid: snapshotOwner.metadata?.uid ?? "",
+								controller: true,
+								blockOwnerDeletion: false,
+							},
+						],
+					},
+				);
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
 				await put(migrationNetworkPolicy(value), value, ownership);

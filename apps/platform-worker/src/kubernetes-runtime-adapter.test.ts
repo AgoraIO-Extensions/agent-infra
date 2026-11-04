@@ -1313,3 +1313,82 @@ describe("GA Kubernetes Workload adapter", () => {
 		).toThrow();
 	});
 });
+
+it("accepts only the trusted snapshot projection across apply and observe", async () => {
+	const { projectWorkspaceSnapshotMaterializerV1 } = await import(
+		"./workspace-snapshot-materializer.js"
+	);
+	const f = fixture();
+	const projection = projectWorkspaceSnapshotMaterializerV1(
+		[
+			{
+				snapshotId: "snapshot-a",
+				name: "repo",
+				digest: `sha256:${"b".repeat(64)}`,
+				sizeBytes: 128,
+				objectRef: "object-a",
+				signedUrl: "https://objects.example.test/archive",
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			},
+		],
+		{
+			imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
+			allowedOrigins: ["https://objects.example.test"],
+			cacheSizeLimit: "2Gi",
+			credentialSecretName: "snapshot-credentials",
+		},
+	);
+	const originalCreate = f.client.create.bind(f.client);
+	vi.spyOn(f.client, "create").mockImplementation(async (object) => {
+		expect(object.metadata?.namespace).toBe(f.client.namespace);
+		return originalCreate(object);
+	});
+	const adapter = createKubernetesRuntimeAdapterV1({
+		client: f.client,
+		policy: workloadTestPolicy,
+		probe: f.probe,
+		workspaceSnapshotProjection: projection,
+	});
+	const desired = workloadDesiredFixture();
+	const identity = await adapter.apply(desired);
+	if (!identity || identity === "pending") throw Error("not applied");
+	expect(await adapter.observe(desired, identity)).toBe("healthy");
+	const writes = f.writes.length;
+	expect(await adapter.apply(desired)).toEqual(identity);
+	expect(f.writes.slice(writes).every((x) => x.kind === "Secret")).toBe(true);
+	const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+	if (!pod?.spec) throw Error("missing pod");
+	const manifest = await f.client.read<V1Secret>(
+		"Secret",
+		"snapshot-credentials",
+	);
+	expect(manifest?.metadata?.ownerReferences?.[0]).toMatchObject({
+		kind: "ServiceAccount",
+		name: desired.serviceAccount.name,
+	});
+	for (const mutation of ["extra-init", "extra-volume", "extra-mount"]) {
+		const drift = structuredClone(pod);
+		if (!drift.spec) throw Error("missing spec");
+		if (mutation === "extra-init")
+			drift.spec.initContainers?.push({
+				name: "untrusted",
+				image: "untrusted:latest",
+			});
+		if (mutation === "extra-volume")
+			drift.spec.volumes?.push({ name: "untrusted", emptyDir: {} });
+		if (mutation === "extra-mount")
+			drift.spec.containers[0]?.volumeMounts?.push({
+				name: "workspace-snapshots",
+				mountPath: "/untrusted",
+			});
+		f.resources.set(`Pod/${desired.service.name}-0`, drift);
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+	}
+	const mount = pod.spec.containers[0]?.volumeMounts?.find(
+		(m) => m.name === "workspace-snapshots",
+	);
+	if (!mount) throw Error("missing snapshot mount");
+	mount.readOnly = false;
+	f.resources.set(`Pod/${desired.service.name}-0`, pod);
+	expect(await adapter.observe(desired, identity)).toBe("drifted");
+});

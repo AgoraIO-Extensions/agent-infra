@@ -29,8 +29,13 @@ import {
 	skillHubRuntimeDataSubPathV1,
 	skillHubVolumeMountV1,
 } from "./kubernetes-runtime-skill-mount.js";
+import {
+	type WorkspaceSnapshotPodProjectionV1,
+	withoutVerifiedWorkspaceSnapshotProjectionV1,
+} from "./workspace-snapshot-materializer.js";
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
+	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Exact pull repository selected by the trusted standard-template binding. */
 	readonly imageRepository: string;
@@ -168,12 +173,19 @@ export function createKubernetesPodValidationV1(dependencies: {
 	}
 
 	function hasUnsafePodSpec(
-		pod: V1PodSpec | undefined,
+		podInput: V1PodSpec | undefined,
 		expectedIdentity?: {
 			readonly hostname: string;
 			readonly subdomain: string;
 		},
 	) {
+		const projectedPod = withoutVerifiedWorkspaceSnapshotProjectionV1(
+			podInput,
+			dependencies.workspaceSnapshotProjection,
+		);
+		if (!projectedPod) return true;
+		const pod = projectedPod;
+
 		const hasUnexpectedIdentity = expectedIdentity
 			? pod?.hostname !== expectedIdentity.hostname ||
 				pod?.subdomain !== expectedIdentity.subdomain
@@ -468,10 +480,14 @@ export function createKubernetesPodValidationV1(dependencies: {
 			readonly subdomain: string;
 		},
 	) {
-		const pod = dependencies.connectionConsumerControl
+		const projectedPod = dependencies.connectionConsumerControl
 			? runtimeConnectionConsumerControlPodV1({ spec: specInput }).spec
 			: specInput;
-		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
+		if (hasUnsafePodSpec(projectedPod, expectedIdentity)) return true;
+		const pod = withoutVerifiedWorkspaceSnapshotProjectionV1(
+			projectedPod,
+			dependencies.workspaceSnapshotProjection,
+		);
 		const skillHubMount = skillHubVolumeMountV1(value);
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		const connection = connectionFor(value.agentId);

@@ -53,6 +53,7 @@ import {
 	codexContainerBoundaryEnvironmentV1,
 	workloadRuntimeAuthEnvironmentV1,
 } from "./workload-runtime-auth.js";
+import type { WorkspaceSnapshotPodProjectionV1 } from "./workspace-snapshot-materializer.js";
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -87,6 +88,7 @@ function skillHubRuntimeEnvironmentV1(value: AgentWorkloadDesiredV1) {
 
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
+	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Exact pull repository selected by the trusted standard-template binding. */
 	readonly imageRepository: string;
@@ -499,6 +501,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		canResumeScaledDownStatefulSet,
 		hasDriftedPodSpec,
 	} = createKubernetesPodValidationV1({
+		workspaceSnapshotProjection: dependencies.workspaceSnapshotProjection,
 		connectionConsumerControl: dependencies.connectionConsumerControl,
 		policy,
 		imageRepository,

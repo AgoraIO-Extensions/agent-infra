@@ -115,6 +115,7 @@ describe("platform-store package surface", () => {
 			"openPostgresSecretKeyRotationStoreV1",
 			"openPostgresWorkloadReconciliationStoreV1",
 			"openPostgresWorkloadStateReaderV1",
+			"openPostgresWorkspaceSnapshotMaterializationReaderV1",
 			"outboxWakeChannelV1",
 			"platformDatabaseUrlFromEnvironment",
 			"platformQueueResourceSnapshotTimeoutMs",

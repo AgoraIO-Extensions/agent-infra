@@ -44,6 +44,7 @@ import {
 	sessionSandboxLabelsV1,
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
+	sessionSnapshotSecretNameV1,
 } from "./session-workload-adapter.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
@@ -821,7 +822,94 @@ function createSessionSandboxAllocationResolverV1(
 		resourceFence: number,
 		requireCurrentTemplateTrust = true,
 	): Promise<SessionSandboxAllocationV1> => {
+		const snapshots = deployment.workspaceSnapshots ?? [];
+		let snapshotProjection: Awaited<
+			ReturnType<
+				NonNullable<WorkloadRuntimeOptionsV1["workspaceSnapshotResolver"]>
+			>
+		>["projection"];
+		if (
+			snapshots.length &&
+			desiredState === "running" &&
+			requireCurrentTemplateTrust
+		) {
+			if (!workload.workspaceSnapshotResolver)
+				throw new WorkloadKubernetesError("policy");
+			const resolved = await workload.workspaceSnapshotResolver({
+				agentId: binding.agentId,
+				configurationRevision: deployment.configRevision,
+				workloadRevision: deployment.workloadRevision,
+				fence: deployment.fence,
+				bindings: snapshots.map((x) => ({
+					snapshotId: x.snapshotId,
+					name: x.name,
+				})),
+			});
+			const metadata = resolved.inputs.map((x) => ({
+				snapshotId: x.snapshotId,
+				name: x.name,
+				digest: x.digest,
+				sizeBytes: x.sizeBytes,
+				objectRef: x.objectRef,
+				mountPath: `/opt/agent/workspaces/${x.name}`,
+			}));
+			const sort = (items: typeof metadata) =>
+				[...items].sort((a, b) => a.name.localeCompare(b.name));
+			if (
+				!resolved.projection ||
+				!isDeepStrictEqual(sort(metadata), sort([...snapshots]))
+			)
+				throw new WorkloadKubernetesError("policy");
+			snapshotProjection = {
+				...resolved.projection,
+				volumes: resolved.projection.volumes.map((v) =>
+					v.name === "workspace-snapshot-credentials"
+						? {
+								...v,
+								secret: {
+									...v.secret,
+									secretName: sessionSnapshotSecretNameV1({
+										sandboxId: binding.sandboxId,
+										generation,
+										resourceFence,
+									}),
+								},
+							}
+						: v,
+				),
+			};
+		}
+		if (snapshots.length && !requireCurrentTemplateTrust) {
+			const project = workload.workspaceSnapshotResolver?.project;
+			if (!project) throw new WorkloadKubernetesError("policy");
+			const shape = project(snapshots, {
+				agentId: binding.agentId,
+				configurationRevision: deployment.configRevision,
+			});
+			snapshotProjection = {
+				...shape,
+				volumes: shape.volumes.map((v) =>
+					v.name === "workspace-snapshot-credentials"
+						? {
+								...v,
+								secret: {
+									...v.secret,
+									secretName: sessionSnapshotSecretNameV1({
+										sandboxId: binding.sandboxId,
+										generation,
+										resourceFence,
+									}),
+								},
+							}
+						: v,
+				),
+			};
+		}
+
 		const allocation: SessionSandboxAllocationV1 = {
+			...(snapshotProjection
+				? { workspaceSnapshotProjection: snapshotProjection }
+				: {}),
 			...resourceFor(
 				binding,
 				policy,
