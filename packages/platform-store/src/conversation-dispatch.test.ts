@@ -1224,6 +1224,67 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("keeps a starting Runtime on the normal pace and restarts the ladder after the window (#3922)", async () => {
+		const { itemId, store, work } =
+			await seedSandboxPrepareIntent("runtime-starting");
+		const observe = async (startup: {
+			readonly waitingReason?: "ContainerCreating";
+			readonly runtimeStarting?: true;
+			readonly failureCode?: "runtime.startup";
+		}) => {
+			await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "runtime-starting-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim) throw new Error("Expected Sandbox claim");
+			const resources = claim.previousObservation?.resources ?? [];
+			expect(resources).toHaveLength(6);
+			expect(
+				await store.recordSandboxObservation({
+					claim,
+					observation: { status: "observed", resources, ...startup },
+				}),
+			).toBe("committed");
+			const [row] = await client<{ delayMs: number }[]>`
+				select extract(epoch from (available_at - clock_timestamp())) * 1000 as "delayMs"
+				from platform.outbox_items where id = ${itemId}`;
+			return Number(row?.delayMs);
+		};
+		const ageAnchor = (seconds: number) =>
+			client`update platform.conversation_audit_events
+				set occurred_at = clock_timestamp() - ${seconds} * interval '1 second'
+				where conversation_id = ${work.conversationId} and action = 'conversation.sandbox.observed'`;
+		try {
+			// ContainerCreating, then a started Runtime whose Host is not Ready yet.
+			const startup: number[] = [];
+			for (let index = 0; index < 6; index += 1)
+				startup.push(await observe({ waitingReason: "ContainerCreating" }));
+			for (let index = 0; index < 8; index += 1)
+				startup.push(await observe({ runtimeStarting: true }));
+			for (const delay of startup) expect(delay).toBeLessThanOrEqual(1_000);
+			// Unchanged progress keeps one anchor audit for the whole startup.
+			expect((await sandboxRetryState(itemId)).audits).toBe(1);
+			// Outliving the 60 s window restarts the ladder instead of jumping to 60 s.
+			await ageAnchor(61);
+			expect(await observe({ runtimeStarting: true })).toBeLessThanOrEqual(
+				1_000,
+			);
+			// A known failure keeps the stalled-attempt ladder, already at its cap.
+			expect(await observe({ failureCode: "runtime.startup" })).toBeGreaterThan(
+				30_000,
+			);
+			// Long after the window the restarted ladder reaches its cap again.
+			await ageAnchor(200);
+			expect(await observe({ runtimeStarting: true })).toBeGreaterThan(30_000);
+			expect((await sandboxRetryState(itemId)).audits).toBe(1);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each(["workload", "configuration"] as const)(
 		"defers waiting Sandbox claims before taking Agent locks across Worker restarts (%s, #3461)",
 		async (waitingFor) => {
