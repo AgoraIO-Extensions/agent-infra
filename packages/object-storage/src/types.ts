@@ -41,3 +41,10 @@ export interface ObjectStorageDataV1
 	upload(request: ObjectUploadV1): Promise<StoredFileObjectV1>;
 	download(request: ObjectDownloadV1): Promise<ReadableStream<Uint8Array>>;
 }
+
+/** Short-lived, exact-version read capability for platform-owned materializers. */
+export interface ObjectStorageReadUrlV1 {
+	readonly objectRef: string;
+	readonly version: string;
+	readonly expiresInSeconds: number;
+}

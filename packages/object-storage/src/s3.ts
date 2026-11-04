@@ -18,6 +18,7 @@ import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,
 	ObjectStorageError,
+	type ObjectStorageReadUrlV1,
 	type ObjectUploadV1,
 } from "./types.js";
 
@@ -38,7 +39,10 @@ function status(error: unknown) {
 }
 export function createS3ObjectStorageV1(
 	options: S3ObjectStorageOptionsV1,
-): ObjectStorageDataV1 & { close(): void } {
+): ObjectStorageDataV1 & {
+	close(): void;
+	createReadUrl(input: ObjectStorageReadUrlV1): Promise<string>;
+} {
 	if (
 		(options.contentPolicy === "skill-package" &&
 			options.prefix !== "skill-packages/") ||
@@ -147,6 +151,30 @@ export function createS3ObjectStorageV1(
 	}
 	return {
 		inspect,
+		async createReadUrl(input) {
+			if (
+				!input.version ||
+				input.version.length > 256 ||
+				[...input.version].some((character) => character.charCodeAt(0) < 32) ||
+				!Number.isSafeInteger(input.expiresInSeconds) ||
+				input.expiresInSeconds < 1 ||
+				input.expiresInSeconds > 900
+			)
+				throw new ObjectStorageError("invalid");
+			const object = await inspect(input.objectRef, input.version);
+			if (!object || object.version !== input.version)
+				throw new ObjectStorageError("missing");
+			return getSignedUrl(
+				client,
+				new GetObjectCommand({
+					Bucket: options.bucket,
+					Key: key(input.objectRef),
+					VersionId: input.version,
+					IfMatch: object.etag,
+				}),
+				{ expiresIn: input.expiresInSeconds },
+			);
+		},
 		async scan(cursor: string | null, limit: number, objectRef?: string) {
 			try {
 				if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
