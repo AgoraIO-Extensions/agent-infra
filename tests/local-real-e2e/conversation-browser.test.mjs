@@ -11,8 +11,10 @@ import {
 	assistantDeliveryEvidence,
 	currentExecutionEvents,
 	currentExecutionFrames,
+	modelDurationEvidence,
 	modelStartObservationMs,
 	restoredHistoryPreservesEvents,
+	turnStageTimings,
 } from "./conversation-browser-validation.mjs";
 
 const script = join(import.meta.dirname, "conversation-browser.mjs");
@@ -91,6 +93,202 @@ test("model-start timing rejects absent, foreign and invalid-clock observations"
 			null,
 		);
 	}
+});
+
+const createRequest = {
+	kind: "create",
+	status: 201,
+	sentAt: 101,
+	respondedAt: 150,
+};
+const messageRequest = {
+	kind: "message",
+	status: 202,
+	sentAt: 31_200,
+	respondedAt: 31_260,
+};
+const stageInput = {
+	clickedAt: 100,
+	firstTurn: true,
+	requests: [createRequest, messageRequest],
+	modelStartAt: 31_500,
+	firstTextAt: 32_000,
+};
+
+test("turn stage timings split the first turn on one page clock", () => {
+	assert.deepEqual(turnStageTimings(stageInput), {
+		browserClickToConversationCreatedMs: 50,
+		browserConversationCreatedToMessageSentMs: 31_050,
+		browserMessageSentToAcceptedMs: 60,
+		browserAcceptedToModelStartObservedMs: 240,
+		browserModelStartObservedToFirstTextMs: 500,
+	});
+	// A rejected attempt before the accepted message does not count.
+	assert.equal(
+		turnStageTimings({
+			...stageInput,
+			requests: [
+				createRequest,
+				{ ...messageRequest, status: 409, sentAt: 200, respondedAt: 210 },
+				messageRequest,
+			],
+		}).browserConversationCreatedToMessageSentMs,
+		31_050,
+	);
+	// Later turns never report first-turn creation intervals.
+	assert.deepEqual(
+		turnStageTimings({
+			...stageInput,
+			firstTurn: false,
+			requests: [messageRequest],
+		}),
+		{
+			browserClickToConversationCreatedMs: null,
+			browserConversationCreatedToMessageSentMs: null,
+			browserMessageSentToAcceptedMs: 60,
+			browserAcceptedToModelStartObservedMs: 240,
+			browserModelStartObservedToFirstTextMs: 500,
+		},
+	);
+});
+
+test("turn stage timings stay null for missing, duplicate or out-of-order points", () => {
+	const nulls = (input) =>
+		Object.entries(turnStageTimings({ ...stageInput, ...input }))
+			.filter(([, value]) => value === null)
+			.map(([name]) => name);
+	const all = Object.keys(turnStageTimings(stageInput));
+	for (const clickedAt of [-1, Number.NaN, Number.POSITIVE_INFINITY])
+		assert.deepEqual(nulls({ clickedAt }), all);
+	assert.deepEqual(nulls({ requests: undefined }), all.slice(0, 4));
+	// No create, or two accepted messages: nothing derived from them.
+	assert.deepEqual(nulls({ requests: [messageRequest] }), all.slice(0, 2));
+	assert.deepEqual(
+		nulls({ requests: [createRequest, messageRequest, messageRequest] }),
+		[all[1], all[2], all[3]],
+	);
+	// A request sent before the click, or a response before its request.
+	assert.deepEqual(
+		nulls({ requests: [{ ...createRequest, sentAt: 99 }, messageRequest] }),
+		all.slice(0, 2),
+	);
+	assert.deepEqual(
+		nulls({
+			requests: [createRequest, { ...messageRequest, respondedAt: 31_100 }],
+		}),
+		[all[1], all[2], all[3]],
+	);
+	// The message cannot precede the create response it waited for.
+	assert.deepEqual(
+		nulls({ requests: [createRequest, { ...messageRequest, sentAt: 140 }] }),
+		[all[1]],
+	);
+	// Model start before 202 has no accepted-to-start interval; a missing
+	// start has neither; first text before model start has no start-to-text.
+	assert.deepEqual(nulls({ modelStartAt: 31_000 }), [all[3]]);
+	assert.deepEqual(nulls({ modelStartAt: null }), [all[3], all[4]]);
+	assert.deepEqual(nulls({ firstTextAt: 31_400 }), [all[4]]);
+});
+
+const modelFact = (overrides = {}) => ({
+	eventId: `model-${Math.random()}`,
+	executionId: "execution-1",
+	type: "execution.operation",
+	...overrides,
+	payload: {
+		kind: "model",
+		operationRef: "model-1",
+		attemptRef: "attempt-1",
+		phase: "started",
+		...overrides.payload,
+	},
+});
+
+test("model duration folds persisted attempts of the current execution only", () => {
+	assert.deepEqual(
+		modelDurationEvidence(
+			[
+				modelFact(),
+				modelFact({ payload: { phase: "completed", durationMs: 1200 } }),
+				// A replayed duplicate keeps one attempt.
+				modelFact({ payload: { phase: "completed", durationMs: 1200 } }),
+				modelFact({ payload: { attemptRef: "attempt-2", phase: "started" } }),
+				modelFact({
+					payload: {
+						attemptRef: "attempt-2",
+						phase: "failed",
+						durationMs: 300,
+					},
+				}),
+				modelFact({ executionId: "execution-2", payload: { durationMs: 900 } }),
+				modelFact({ payload: { kind: "tool", durationMs: 700 } }),
+				{ ...modelFact(), type: "text.delta" },
+			],
+			"execution-1",
+		),
+		{
+			modelDurationMs: 1500,
+			modelDurationAttempts: { observed: 2, withDuration: 2 },
+		},
+	);
+});
+
+test("model duration stays null without an observed attempt carrying a duration", () => {
+	const empty = {
+		modelDurationMs: null,
+		modelDurationAttempts: { observed: 0, withDuration: 0 },
+	};
+	assert.deepEqual(modelDurationEvidence([], "execution-1"), empty);
+	assert.deepEqual(modelDurationEvidence(undefined, "execution-1"), empty);
+	// Intent-only attempts are not observed model calls.
+	assert.deepEqual(
+		modelDurationEvidence(
+			[modelFact({ payload: { phase: "intent", durationMs: 10 } })],
+			"execution-1",
+		),
+		empty,
+	);
+	// The latest fact wins; a later fact without duration leaves it unknown.
+	assert.deepEqual(
+		modelDurationEvidence(
+			[
+				modelFact(),
+				modelFact({ payload: { phase: "completed", durationMs: 50 } }),
+				modelFact({ payload: { phase: "unknown" } }),
+			],
+			"execution-1",
+		),
+		{
+			modelDurationMs: null,
+			modelDurationAttempts: { observed: 1, withDuration: 0 },
+		},
+	);
+	// A terminal fact alone is observed only when it carries startedAt.
+	assert.deepEqual(
+		modelDurationEvidence(
+			[modelFact({ payload: { phase: "completed", durationMs: 50 } })],
+			"execution-1",
+		),
+		empty,
+	);
+	assert.deepEqual(
+		modelDurationEvidence(
+			[
+				modelFact({
+					payload: {
+						phase: "completed",
+						startedAt: "2026-11-04T00:00:00.000Z",
+						durationMs: 50,
+					},
+				}),
+			],
+			"execution-1",
+		),
+		{
+			modelDurationMs: 50,
+			modelDurationAttempts: { observed: 1, withDuration: 1 },
+		},
+	);
 });
 
 test("coalesced text and completion wait for the current reply to render after delivery", () => {

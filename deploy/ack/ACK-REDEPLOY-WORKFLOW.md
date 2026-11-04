@@ -941,7 +941,19 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 
 浏览器旅程已有 `browserClickToAcceptedMs`、`browserClickToFirstTextMs` 和
 `browserClickToCompletedMs`。它们是客户端观察的总时间，不能通过相减推定真实排队、Session
-准备或模型执行耗时。没有对应阶段事实时，原 `null` 保持未知并进入后续性能 Issue。
+准备或模型执行耗时。
+
+同一页面时钟下另有分段。首轮记录点击到 Conversation 创建响应
+（`browserClickToConversationCreatedMs`），以及创建响应到页面发出消息
+（`browserConversationCreatedToMessageSentMs`）；后者是页面观察到的 Session 准备等待，
+包含页面 500 毫秒的轮询粒度。每轮记录消息发出到 202（`browserMessageSentToAcceptedMs`）、
+202 到观察到模型开始（`browserAcceptedToModelStartObservedMs`）和模型开始到首文本
+（`browserModelStartObservedToFirstTextMs`）。分段都包含网络与 SSE 投递，不等于服务端排队、
+Session 准备或供应商首 token 耗时，也不能与服务端或 Runtime 时间戳相减；缺失、重复或顺序
+不合法时为 `null`。`modelDurationMs` 汇总当前 Execution 持久模型事实中已观察尝试的
+`durationMs`，`modelDurationAttempts` 给出已观察尝试数和带耗时的尝试数，没有耗时时为
+`null`。`queueDurationMs` 与 `sessionPreparationMs` 的服务端事实尚未暴露，原 `null` 保持未知并进入
+后续性能 Issue。
 
 [Core Web Vitals](https://web.dev/articles/vitals) 的 LCP 2.5 秒、INP 200 毫秒、CLS 0.1
 目标针对按移动端/桌面分组的真实用户第 75 百分位；不能套作 API 或模型响应阈值，也不能由

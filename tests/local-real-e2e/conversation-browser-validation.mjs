@@ -75,6 +75,99 @@ export function modelStartObservationMs(events, frames, clickedAt) {
 	return Math.min(...observed.map((frame) => frame.at)) - clickedAt;
 }
 
+const pageTime = (value) => Number.isFinite(value) && value >= 0;
+const pageInterval = (from, to) =>
+	pageTime(from) && pageTime(to) && from <= to ? to - from : null;
+
+/**
+ * Same-page-clock intervals around one turn (#3923). `requests` are the page's
+ * own create/message POSTs; only one 201 create and one 202 message count.
+ * These are browser observations, never server queue or preparation facts.
+ */
+export function turnStageTimings({
+	clickedAt,
+	firstTurn,
+	requests,
+	modelStartAt,
+	firstTextAt,
+}) {
+	const only = (kind, status) => {
+		if (!pageTime(clickedAt) || !Array.isArray(requests)) return null;
+		const matches = requests.filter(
+			(request) => request?.kind === kind && request.status === status,
+		);
+		const [request] = matches;
+		return matches.length === 1 &&
+			request.sentAt >= clickedAt &&
+			pageInterval(request.sentAt, request.respondedAt) !== null
+			? request
+			: null;
+	};
+	const message = only("message", 202);
+	const create = firstTurn ? only("create", 201) : null;
+	return {
+		browserClickToConversationCreatedMs: create
+			? create.respondedAt - clickedAt
+			: null,
+		browserConversationCreatedToMessageSentMs:
+			create && message
+				? pageInterval(create.respondedAt, message.sentAt)
+				: null,
+		browserMessageSentToAcceptedMs: message
+			? message.respondedAt - message.sentAt
+			: null,
+		browserAcceptedToModelStartObservedMs: message
+			? pageInterval(message.respondedAt, modelStartAt)
+			: null,
+		browserModelStartObservedToFirstTextMs:
+			pageTime(clickedAt) && pageTime(modelStartAt) && modelStartAt >= clickedAt
+				? pageInterval(modelStartAt, firstTextAt)
+				: null,
+	};
+}
+
+/**
+ * Persisted model durations of one execution, folded like Eval model facts:
+ * one entry per (operationRef, attemptRef), the latest fact wins, and only
+ * observed attempts (started or carrying startedAt) count. Missing is null.
+ */
+export function modelDurationEvidence(events, executionId) {
+	const attempts = new Map();
+	for (const event of Array.isArray(events) ? events : []) {
+		const fact = event?.payload;
+		if (
+			event?.type !== "execution.operation" ||
+			event.executionId !== executionId ||
+			fact?.kind !== "model" ||
+			typeof fact.operationRef !== "string" ||
+			typeof fact.attemptRef !== "string"
+		)
+			continue;
+		const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
+		attempts.set(key, {
+			observed:
+				attempts.get(key)?.observed === true ||
+				fact.phase === "started" ||
+				fact.startedAt !== undefined,
+			durationMs:
+				Number.isSafeInteger(fact.durationMs) && fact.durationMs >= 0
+					? fact.durationMs
+					: null,
+		});
+	}
+	const observed = [...attempts.values()].filter((attempt) => attempt.observed);
+	const measured = observed.filter((attempt) => attempt.durationMs !== null);
+	return {
+		modelDurationMs: measured.length
+			? measured.reduce((sum, attempt) => sum + attempt.durationMs, 0)
+			: null,
+		modelDurationAttempts: {
+			observed: observed.length,
+			withDuration: measured.length,
+		},
+	};
+}
+
 /** The observer runs before forwarding a chunk; coalesced frames cannot require an earlier paint. */
 export function assistantDeliveryEvidence(frames, renders, baseline = 0) {
 	if (!Array.isArray(frames) || !Array.isArray(renders)) return null;
