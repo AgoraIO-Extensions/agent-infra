@@ -7,10 +7,12 @@
 ## 发布与部署
 
 1. 正式 `Publish images` 成功后，独立 `ACK image cache` workflow 校验同 run/attempt 的六镜像
-   index 回执，选择 `linux/amd64` child digest，按实际镜像集合幂等制作缓存。
+   index 回执，选择 `linux/amd64` child digest，只上传不可变 cache plan artifact；它不取得
+   云身份、Kubernetes 凭据或 registry pull secret，也不创建缓存。
 2. 部署入口设置 `ACK_IMAGE_CACHE_REQUIRED=true` 后，从同源 Runtime/模板 manifest 和已批准的
-   Custom 最终镜像请求生成清单。通过已有 `gh` 身份调用同一受保护 workflow，云端重新查询，
-   使用它返回的同一批缓存 ID。本地不保存云密钥，不另造部署副本。
+   Custom 最终镜像请求生成清单，由受控 ACK 运维机使用既有 kubeconfig/RBAC 调用
+   `ImageCache` CR，复用集群内 `imagePullSecret`，等待 Ready 并实时回读。GitHub Action
+   只是计划生成器，不是缓存执行器。
 3. `all`、独立配置初始化、预检、配置发布和 provision 均在启用镜像前检查缓存。
    回执必须匹配完整镜像集合与 source，且在五分钟内。部署重复阶段可在该窗口内复用；超过
    窗口重新调用查询。没有成功的当前回执，不发布新镜像配置。
@@ -39,24 +41,19 @@
 新 Custom 镜像经正常部署入口预热并登记后才可创建 Session；绕过部署入口直接通过 API
 采用未登记镜像，会被准入拒绝，不自动退回冷启动。
 
-## 一次性身份配置
+## 一次性运维身份配置
 
-云身份边界以[开发工作流 §10.1](../../docs/architecture/SPEC-ai-native-development-workflow.md#101-ack-镜像缓存部署)为准。
+GitHub Environment `ack-image-cache` 仅用于受保护 `main` 生成计划 artifact，不需要 RAM OIDC。
+缓存执行由 SRE/ACK 运维机完成：kubeconfig 的 Kubernetes RBAC 只允许目标集群的
+`eci.alibabacloud.com` ImageCache create/get/update，registry 凭据留在集群 Secret，不进入
+GitHub、repo、日志或 issue。该运维身份不需要 Kubernetes 业务 Pod 写权限、应用 Secret、
+数据库或镜像删除权限。
 
-- 建立 GitHub Environment `ack-image-cache`，deployment branch policy 仅允许受保护 `main`。
-- RAM OIDC issuer 为 `https://token.actions.githubusercontent.com`，audience 为 `sts.aliyuncs.com`；
-  trust 的 subject 精确限制为 `repo:AgoraIO-Extensions/agent-infra:environment:ack-image-cache`。
-- 角色只允许杭州缓存的 `eci:CreateImageCache`、`eci:DescribeImageCaches`，不授予 Kubernetes、
-  应用 Secret、数据库或镜像删除权限。按云 API 的关联权限要求校验，不添加管理员策略。
-- Environment variables：`ACK_CACHE_OIDC_PROVIDER_ARN`、`ACK_CACHE_ROLE_ARN`、
-  `ACK_CACHE_VSWITCH_ID`、`ACK_CACHE_SECURITY_GROUP_ID`；可设置 `ACK_IMAGE_CACHE_SIZE_GIB`
-  （20–100，默认 30）。交换机必须能通过受控出口访问 GHCR 镜像和 blob 地址。
-- GitHub 自身的短期 package-read token 仅传给云端镜像制作请求，凭据不进入日志、回执或 Git。
-  带云身份的代码来自本次默认分支 workflow SHA；发布 source SHA 仅作数据，不用于执行 checkout。
+普通发布触发计划生成；部署运维机下载同 run/attempt 的 plan 后执行现有 `image-cache.ts`
+Kubernetes backend。若运维机无法读取集群或 Secret，必须停止并报告具体权限，不冷拉绕过。
 
-普通发布自动触发；需要复核某次发布时，在 main 运行 `ack-image-cache.yml`，传入
-`publish_run_id` 和 `publish_attempt`。本地部署使用受保护的 `deployment_plan` 输入，内容
-仅包含本仓 GHCR 不可变镜像引用，不允许 URL、脚本、凭据或任意仓库。
+当前手动替代缓存使用 `agent-infra:ack-ghcr-pull` 和 owner 标签，详见 #3931 交接；它只证明
+当前四个 digest 的隔离消费，不自动覆盖后续发布版本。
 
 ```json
 {

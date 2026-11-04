@@ -209,23 +209,18 @@ export function validateWorkflowDocuments(workflows) {
       Object.keys(cache.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
       JSON.stringify(cache.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
       !sameObject(cache.permissions, {contents: "read"}) ||
-      Object.keys(cacheJobs).sort().join() !== "prepare,warm" ||
-      cacheJobs.prepare?.if !== cacheAdmission || cacheJobs.warm?.if !== undefined ||
-      cacheJobs.warm?.needs !== "prepare" || cacheJobs.warm?.environment !== "ack-image-cache" ||
+      Object.keys(cacheJobs).sort().join() !== "prepare" ||
+      cacheJobs.prepare?.if !== cacheAdmission ||
       !sameObject(cacheJobs.prepare?.permissions, {contents: "read", actions: "read"}) ||
-      !sameObject(cacheJobs.warm?.permissions, {contents: "read", packages: "read", "id-token": "write"}) ||
       !sameObject(cache.concurrency, {group: "ack-image-cache-cn-hangzhou", "cancel-in-progress": false}))
-    errors.push("ACK cache must isolate trusted publication validation from protected deployment identity");
+    errors.push("ACK cache plan must use trusted publication validation without cloud identity");
   for (const [jobName, job] of Object.entries(cacheJobs)) {
     for (const step of job.steps ?? []) {
       if (step.uses?.startsWith("actions/checkout@") &&
           (step.with?.ref !== "${{ github.sha }}" || step.with?.["persist-credentials"] !== false))
         errors.push("ACK cache must execute only the trusted default-branch workflow SHA");
-      if (step.uses?.startsWith("aliyun/configure-aliyun-credentials-action@") &&
-          (jobName !== "warm" || step.uses !== "aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6" ||
-          step.with?.["role-to-assume"] !== "${{ vars.ACK_CACHE_ROLE_ARN }}" ||
-          step.with?.["oidc-provider-arn"] !== "${{ vars.ACK_CACHE_OIDC_PROVIDER_ARN }}"))
-        errors.push("ACK cache cloud identity must stay in the protected warm job");
+      if (step.uses?.startsWith("aliyun/configure-aliyun-credentials-action@"))
+        errors.push("ACK cache plan workflow must not acquire cloud identity");
     }
   }
   const publish = workflows["publish-images.yml"];

@@ -557,7 +557,7 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
   回退冷拉取。Worker 只对相同不可变 digest 接受 `IfNotPresent` 到 `Never` 的观测收紧，其他
   身份、容器与安全字段仍精确校验。既有 Pod 不受创建
   策略影响。缓存准备不赋予产品 Worker 集群级权限，不改变会话、持久卷、凭据或 reserve 归属。
-  发布来源及云端短期身份边界见[开发工作流 §10.1](SPEC-ai-native-development-workflow.md#101-ack-镜像缓存部署)。
+  发布计划及部署运维身份边界见[开发工作流 §10.1](SPEC-ai-native-development-workflow.md#101-ack-镜像缓存部署)。
 - 平台会话的个人记忆、工作区和原生 Session 数据保存在所属 Sandbox 的独立持久卷；Runtime 内的文件与进程防护继续有效，不能以 Pod 分离代替必要负向验证。
 
 Owner 不能修改 CPU、内存、副本数和存储规格。资源规格由平台按 Agent 类型选择预设 Profile，Web 审批页展示该配置；API 创建复用相同规格选择，不增加审批。

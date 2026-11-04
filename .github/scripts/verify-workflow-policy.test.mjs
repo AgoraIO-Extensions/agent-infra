@@ -442,11 +442,8 @@ test("CI policy rejects weakened metadata routing and same-name skipped checks",
 test("cache deployment rejects widened event, code and cloud identity boundaries", async () => {
   for (const mutate of [
     w => { w.jobs.prepare.if += " || true"; },
-    w => { w.jobs.warm.if = "always()"; },
-    w => { w.jobs.warm.environment = "unprotected"; },
     w => { w.jobs.prepare.permissions["id-token"] = "write"; },
-    w => { w.jobs.warm.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
-    w => { w.jobs.warm.steps.find(s => s.name === "Assume cache-only deployment identity").with["role-to-assume"] = "arbitrary"; },
+    w => { w.jobs.prepare.steps.push({uses: "aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6"}); },
     w => { w.on.pull_request = {}; },
   ]) {
     const workflows = await actualWorkflows();

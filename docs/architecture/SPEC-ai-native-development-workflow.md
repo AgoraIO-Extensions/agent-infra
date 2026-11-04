@@ -167,15 +167,17 @@ resolution 为准。
 
 ### 10.1 ACK 镜像缓存部署
 
-镜像缓存属于部署准备，不属于开发 CI。独立的 `ack-image-cache.yml` 只消费本仓成功的正式
-`Publish images` 运行的同 attempt 发布回执；执行代码固定为受保护默认分支，不执行发布输入
-所指向的任意历史代码。受保护 main 上的显式部署调用也可提交有界的不可变 GHCR 镜像集合，
-由现有部署入口从同源 manifest 及已批准 Custom 最终镜像请求生成；输入只作数据，不执行代码。
-它可通过受保护的 `ack-image-cache` GitHub Environment 和受限 RAM
-OIDC 角色取得短期身份，仅创建及查询杭州 ECI 镜像缓存；不得访问 Kubernetes、应用 Secret、
-数据库或部署业务。开发 CI 和镜像构建 job 不获得该身份，不存储云账号长期密钥。
+独立的 `ack-image-cache.yml` 只消费本仓成功的正式 `Publish images` 运行的同 attempt
+发布回执，校验不可变镜像引用、架构和 source 后输出缓存计划 artifact。执行代码固定为受保护
+默认分支，不执行发布输入所指向的历史代码。该 workflow 不取得云身份、Kubernetes 凭据或
+registry 拉取凭据，不创建缓存；其成功只表示计划生成成功，不表示缓存 Ready。
 
-每份缓存绑定不可变镜像引用、架构和原发布 source。部署前必须重新回读缓存 Ready 及精确
-镜像集合；缓存未完成、失败、过期或来源不符时不启用新镜像，现有运行实例保持不变。
+受控 ACK 运维机使用既有 kubeconfig 和 Kubernetes RBAC 消费计划，通过 ImageCache CR
+创建/复用缓存并等待 Ready；私有 registry 凭据只引用集群内既有 imagePullSecret。已批准的
+Custom 最终镜像与 init 容器组合由原部署入口生成有界不可变计划，不经 GitHub 传递生产材料。
+部署入口每次启用镜像前实时核对缓存身份、Ready、到期时间及精确镜像集合；缓存未完成、失败、
+过期或来源不符时不启用新镜像，现有运行实例保持不变。GitHub 发布后尚未执行部署预热时，
+不能宣称无人值守预热已完成。
+
 缓存 Ready 不代表 Pod 实际使用缓存；验收还需同 Pod UID 的镜像身份、完全命中及启动事件。
 缓存不是 Session reserve，不包含用户凭据、会话、PVC 或原生进程状态。

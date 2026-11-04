@@ -168,34 +168,7 @@ test("waits are bounded and an earlier cache disappearing aborts final validatio
 	);
 });
 
-import { signedParameters } from "../deploy/ack/image-cache-cloud.ts";
 import { deploymentCachePlan } from "../deploy/ack/image-cache-deployment.ts";
-import { validateReleaseRun } from "../deploy/ack/image-cache-release.ts";
-
-test("cloud credentials can only follow successful same-repository exact attempts", () => {
-	const run = {
-		id: 42,
-		run_attempt: 2,
-		status: "completed",
-		conclusion: "success",
-		repository: { full_name: "AgoraIO-Extensions/agent-infra" },
-		head_repository: { full_name: "AgoraIO-Extensions/agent-infra" },
-		path: ".github/workflows/publish-images.yml",
-		event: "workflow_dispatch",
-		head_branch: "main",
-		display_title: `workflow_dispatch | publish-images | main | ${sha}`,
-	};
-	assert.equal(validateReleaseRun(run, "42", "2"), sha);
-	for (const change of [
-		{ conclusion: "failure" },
-		{ run_attempt: 1 },
-		{ head_branch: "feature" },
-		{ head_repository: { full_name: "attacker/fork" } },
-		{ path: ".github/workflows/ci.yml" },
-		{ event: "pull_request" },
-	])
-		assert.throws(() => validateReleaseRun({ ...run, ...change }, "42", "2"));
-});
 
 test("deployment cache plan covers the final custom image and complete multi-container Pod set", () => {
 	const entry = { repository: ref.split("@")[0], digest: ref.split("@")[1] };
@@ -245,32 +218,6 @@ test("deployment cache plan covers the final custom image and complete multi-con
 	);
 });
 
-test("RPC signing canonicalizes independently of parameter insertion order and keeps secrets out of parameters", () => {
-	const fields = {
-		Action: "DescribeImageCaches",
-		Timestamp: "2026-11-04T10:00:00Z",
-		SignatureNonce: "test-nonce",
-		Image: "a/b:tag with spaces*",
-	};
-	const first = signedParameters(fields, "test-secret");
-	const second = signedParameters(
-		Object.fromEntries(Object.entries(fields).reverse()),
-		"test-secret",
-	);
-	assert.equal(first.get("Signature"), second.get("Signature"));
-	assert.equal(first.get("Image"), fields.Image);
-	assert(!first.toString().includes("test-secret"));
-	assert.notEqual(
-		first.get("Signature"),
-		signedParameters(
-			{ ...fields, Action: "CreateImageCache" },
-			"test-secret",
-		).get("Signature"),
-	);
-});
-
-import { verifyDispatchedReceipt } from "../deploy/ack/image-cache-dispatch.ts";
-
 test("stable releases validate latest promotions without treating them as extra cache inputs", () => {
 	const names = [
 		"agent-runtime-host",
@@ -319,30 +266,6 @@ test("owned failed caches use one bounded recovery generation without deleting t
 	assert.equal(created.length, 1);
 	store.set(created[0], { ...ready, phase: "Failed" });
 	await assert.rejects(ensureCaches(plan, backend), /CACHE_PREPARATION_FAILED/);
-});
-
-test("a deployment accepts only a fresh receipt for the exact image groups", () => {
-	const now = Date.now();
-	const receipt = {
-		schemaVersion: 1,
-		kind: "ack-image-cache",
-		status: "ready",
-		sourceSha: sha,
-		platform: plan.platform,
-		checkedAt: new Date(now).toISOString(),
-		caches: [{ name: ready.name, id: ready.id, images: [ref] }],
-	};
-	assert.equal(verifyDispatchedReceipt(receipt, plan, now), receipt);
-	for (const change of [
-		{ status: "failed" },
-		{ sourceSha: "d".repeat(40) },
-		{ checkedAt: new Date(now - 301000).toISOString() },
-		{ caches: [] },
-		{ caches: [{ id: ready.id, images: [ref.replace("codex", "pi")] }] },
-	])
-		assert.throws(() =>
-			verifyDispatchedReceipt({ ...receipt, ...change }, plan, now),
-		);
 });
 
 import { cacheWorkerReady } from "../deploy/ack/image-cache-worker.ts";
