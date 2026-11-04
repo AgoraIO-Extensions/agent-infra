@@ -29,13 +29,13 @@
 		"hono": "4.13.7",
 		"yaml": "2.8.3",
 		"zod": "catalog:",
-		"@agent-infra/native-metadata-transport": "workspace:*"
+		"@agent-infra/native-metadata-transport": "workspace:*",
+		"postgres": "catalog:"
 	},
 	"devDependencies": {
 		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
-		"postgres": "catalog:",
 		"tsdown": "^0.22.14",
 		"tsx": "^4.23.1",
 		"typescript": "catalog:",
