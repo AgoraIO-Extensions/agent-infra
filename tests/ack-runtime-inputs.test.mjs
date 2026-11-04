@@ -1170,6 +1170,8 @@ umask 077
 require_source_tuple() { :; }
 require_file() { :; }
 prepare_evidence() { :; }
+image_cache_gate() { :; }
+activate_cache_admission() { :; }
 render_manifest() { :; }
 validate_workload_capacity() { :; }
 die() { exit 2; }
@@ -1455,6 +1457,7 @@ configuration_source_preflight() { echo config-preflight; }
 bootstrap_database() { echo database; }
 preflight_agent_requests() { echo request-preflight; }
 reserve_plan_preflight() { :; }
+image_cache_gate() { :; }
 bootstrap_inputs() { echo bootstrap; }
 deploy() { echo deploy; }
 template_preflight() { echo preflight; }
@@ -1619,6 +1622,7 @@ configuration_source_preflight() { :; }
 preflight_agent_requests() { :; }
 reserve_plan_preflight() { echo plan; ${failure === "plan" ? "return 1" : ":"}; }
 bootstrap_database() { echo database; }
+image_cache_gate() { :; }
 bootstrap_inputs() { echo bootstrap; }
 deploy() { echo deploy; }
 template_preflight() { echo templates; }

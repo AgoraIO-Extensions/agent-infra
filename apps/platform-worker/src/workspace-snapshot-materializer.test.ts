@@ -96,6 +96,25 @@ describe("workspace snapshot materializer projection", () => {
 		).toThrow();
 	});
 
+	it("accepts local-only init image policy but still rejects init command drift", () => {
+		const projection = projectWorkspaceSnapshotMaterializerV1(
+			[snapshot],
+			policy,
+		);
+		const spec = structuredClone(
+			applyWorkspaceSnapshotProjectionV1(
+				{ containers: [{ name: "agent", image: policy.imageDigest }] },
+				projection,
+			),
+		);
+		const init = spec.initContainers?.[0];
+		if (!init) throw new Error("missing materializer");
+		init.imagePullPolicy = "Never";
+		expect(workspaceSnapshotPodSpecMatchesV1(spec, projection)).toBe(true);
+		init.command = ["different-command"];
+		expect(workspaceSnapshotPodSpecMatchesV1(spec, projection)).toBe(false);
+	});
+
 	it("rejects unsafe workspace names before deriving mount paths", () => {
 		const input = { ...snapshot, name: "../escape" };
 		expect(() =>

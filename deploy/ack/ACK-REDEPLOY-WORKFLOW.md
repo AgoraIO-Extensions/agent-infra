@@ -22,6 +22,12 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 保留原始确认链接与样本口径；不能勾选未执行的隔离、耗尽或 UID 清理检查。问题单先回读
 实际状态再收口，诊断成功不能回填失败 attempt，未定位的根因明确保留 unknown。
 
+## 镜像缓存准备
+
+启用严格 ECI Session 缓存时，在私有 capsule 中设置 `ACK_IMAGE_CACHE_REQUIRED=true`。
+先部署支持不可变镜像 `Never` 拉取观测的 Worker，再启用准入。发布预热、短期云身份、
+完整容器集合与失败门禁见[镜像缓存](IMAGE-CACHE.md)。该配置不改变现有 namespace/源码归属。
+
 ## 搬迁私有输入包
 
 在另一台机器检出已发布镜像对应的源码 commit，保持 checkout 干净，并安装 Node 24、pnpm、

@@ -164,3 +164,18 @@ resolution 为准。
 - Secret 不写入日志、Summary、评论或 Artifact；产品和生产凭证不进入开发自动化。
 - 修改 workflow、凭证或 required-check 来源后，必须在默认分支生效后验证真实 GitHub 行为。
   本地 fixture 与实现 PR 的静态检查不能替代 hosted 验证。
+
+### 10.1 ACK 镜像缓存部署
+
+镜像缓存属于部署准备，不属于开发 CI。独立的 `ack-image-cache.yml` 只消费本仓成功的正式
+`Publish images` 运行的同 attempt 发布回执；执行代码固定为受保护默认分支，不执行发布输入
+所指向的任意历史代码。受保护 main 上的显式部署调用也可提交有界的不可变 GHCR 镜像集合，
+由现有部署入口从同源 manifest 及已批准 Custom 最终镜像请求生成；输入只作数据，不执行代码。
+它可通过受保护的 `ack-image-cache` GitHub Environment 和受限 RAM
+OIDC 角色取得短期身份，仅创建及查询杭州 ECI 镜像缓存；不得访问 Kubernetes、应用 Secret、
+数据库或部署业务。开发 CI 和镜像构建 job 不获得该身份，不存储云账号长期密钥。
+
+每份缓存绑定不可变镜像引用、架构和原发布 source。部署前必须重新回读缓存 Ready 及精确
+镜像集合；缓存未完成、失败、过期或来源不符时不启用新镜像，现有运行实例保持不变。
+缓存 Ready 不代表 Pod 实际使用缓存；验收还需同 Pod UID 的镜像身份、完全命中及启动事件。
+缓存不是 Session reserve，不包含用户凭据、会话、PVC 或原生进程状态。

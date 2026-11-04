@@ -45,7 +45,21 @@
       "required": ["enabled", "architecture"],
       "properties": {
         "enabled": {"type": "boolean"},
-        "architecture": {"type": "string", "enum": ["amd64", "arm64"]}
+        "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
+        "imageCache": {
+          "type": "object", "additionalProperties": false,
+          "required": ["required", "entries"],
+          "properties": {
+            "required": {"type": "boolean"},
+            "entries": {"type": "array", "maxItems": 24, "items": {
+              "type": "object", "additionalProperties": false, "required": ["images", "cacheId"],
+              "properties": {
+                "images": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^ghcr\\.io/agoraio-extensions/agent-infra/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$"}},
+                "cacheId": {"type": "string", "pattern": "^imc-[a-z0-9]+$"}
+              }
+            }}
+          }
+        }
       }
     },
     "resources": {"type": "object"},

@@ -64,6 +64,9 @@ scheduling:
 sessionRuntimeScheduling:
   enabled: false
   architecture: amd64
+  imageCache:
+    required: false
+    entries: []
 resources:
   api:
     requests: {cpu: 100m, memory: 128Mi}

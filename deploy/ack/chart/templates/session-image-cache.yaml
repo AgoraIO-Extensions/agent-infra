@@ -1,0 +1,132 @@
+{{- if and (not .Values.bootstrap.databaseOnly) .Values.sessionRuntimeScheduling.imageCache.required }}
+{{- if or (not .Values.sessionRuntimeScheduling.enabled) (ne .Values.sessionRuntimeScheduling.architecture "amd64") (empty .Values.sessionRuntimeScheduling.imageCache.entries) }}
+{{- fail "required image cache needs ECI Session scheduling, amd64 and verified cache entries" }}
+{{- end }}
+{{- $name := printf "%s-session-image-cache" .Release.Namespace }}
+{{- $cacheMap := dict }}
+{{- range .Values.sessionRuntimeScheduling.imageCache.entries }}
+{{- $_ := set $cacheMap .cacheId .images }}
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchLabels:
+        agent-infra.agora.io/managed: session-sandbox-v1
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  variables:
+    - name: images
+      expression: >-
+        object.spec.containers.map(c, c.image) + (has(object.spec.initContainers) ? object.spec.initContainers.map(c, c.image) : [])
+    - name: caches
+      expression: {{ $cacheMap | toJson | quote }}
+    - name: matches
+      expression: variables.caches.filter(id, variables.images.all(i, i in variables.caches[id]) && variables.caches[id].all(i, i in variables.images))
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          size(variables.matches) == 1 ? [
+            JSONPatch{op:"add",path:"/metadata/annotations",value:has(object.metadata.annotations)?object.metadata.annotations:{}},
+            JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1eci-imc-id",value:variables.matches[0]},
+            JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1eci-auto-imc",value:"false"},
+            JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1imc-perfect-match",value:"true"}
+          ] + object.spec.containers.map(c,
+            JSONPatch{op:"add",path:"/spec/containers/" + string(object.spec.containers.indexOf(c)) + "/imagePullPolicy",value:"Never"}) +
+            (has(object.spec.initContainers) ? object.spec.initContainers.map(c,
+            JSONPatch{op:"add",path:"/spec/initContainers/" + string(object.spec.initContainers.indexOf(c)) + "/imagePullPolicy",value:"Never"}) : []) : []
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+spec:
+  policyName: {{ $name }}
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchLabels:
+        agent-infra.agora.io/managed: session-sandbox-v1
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchLabels:
+        agent-infra.agora.io/managed: session-sandbox-v1
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  variables:
+    - name: images
+      expression: >-
+        object.spec.containers.map(c, c.image) + (has(object.spec.initContainers) ? object.spec.initContainers.map(c, c.image) : [])
+    - name: caches
+      expression: {{ $cacheMap | toJson | quote }}
+  validations:
+    - expression: >-
+        object.spec.containers.all(c, c.imagePullPolicy == 'Never') &&
+        (!has(object.spec.initContainers) || object.spec.initContainers.all(c, c.imagePullPolicy == 'Never')) &&
+        has(object.metadata.annotations) &&
+        'k8s.aliyun.com/eci-imc-id' in object.metadata.annotations &&
+        variables.caches.exists(id,
+          id == object.metadata.annotations['k8s.aliyun.com/eci-imc-id'] &&
+          variables.images.all(i, i in variables.caches[id]) && variables.caches[id].all(i, i in variables.images)) &&
+        object.metadata.annotations['k8s.aliyun.com/eci-auto-imc'] == 'false' &&
+        object.metadata.annotations['k8s.aliyun.com/imc-perfect-match'] == 'true'
+      message: ACK_IMAGE_CACHE_NOT_PREPARED
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchLabels:
+        agent-infra.agora.io/managed: session-sandbox-v1
+{{- end }}
