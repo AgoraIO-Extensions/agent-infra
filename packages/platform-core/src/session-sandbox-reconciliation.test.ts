@@ -580,10 +580,19 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 			"ErrImagePull",
 			"InvalidImageName",
 			"CreateContainerConfigError",
-		] as const)
+		] as const) {
 			expect(
 				isSessionSandboxNormalStartupV1({ ...observed, waitingReason }),
 			).toBe(false);
+			// A failure waiting reason wins over runtimeStarting.
+			expect(
+				isSessionSandboxNormalStartupV1({
+					...observed,
+					waitingReason,
+					runtimeStarting: true,
+				}),
+			).toBe(false);
+		}
 		for (const failureCode of [
 			"eci.image_pull",
 			"runtime.startup",

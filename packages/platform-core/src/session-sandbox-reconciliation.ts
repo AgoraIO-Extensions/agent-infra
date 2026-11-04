@@ -389,12 +389,14 @@ const sessionSandboxNormalPrepareWindowMsV1 = 60_000;
 export function isSessionSandboxNormalStartupV1(
 	observation: SessionSandboxObservationV1,
 ): boolean {
-	return (
-		observation.failureCode === undefined &&
-		(observation.waitingReason === "ContainerCreating" ||
-			observation.waitingReason === "PodInitializing" ||
-			observation.runtimeStarting === true)
-	);
+	if (observation.failureCode !== undefined) return false;
+	// Any other waiting reason is failure evidence, even next to runtimeStarting.
+	if (observation.waitingReason !== undefined)
+		return (
+			observation.waitingReason === "ContainerCreating" ||
+			observation.waitingReason === "PodInitializing"
+		);
+	return observation.runtimeStarting === true;
 }
 
 /**
