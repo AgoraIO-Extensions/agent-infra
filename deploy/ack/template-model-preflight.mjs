@@ -185,7 +185,9 @@ async function main(inputPath) {
 		.update(`agent-infra-container-boundary-v1\0${name}`)
 		.digest("base64url");
 	const attestationFile = join(job.outputDirectory, `.attestation-${owner}`);
+	const modelCredentialFile = join(job.outputDirectory, `.model-credential-${owner}`);
 	await writeFile(attestationFile, attestation, { mode: 0o600 });
+	await writeFile(modelCredentialFile, modelCredential, { mode: 0o600 });
 	const relayOrigin = new URL(job.approvedRelayOrigin).origin;
 	const modelEndpoint = job.protocol === "openai-responses-v1" ? `${relayOrigin}/v1` : relayOrigin;
 	const modelConfig = JSON.stringify({
@@ -262,7 +264,7 @@ async function main(inputPath) {
 	let portForward;
 	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	try {
-		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, `--from-file=model-credential=${job.relayKeyFile}`, "--dry-run=client", "-o", "json"]);
+		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, `--from-file=model-credential=${modelCredentialFile}`, "--dry-run=client", "-o", "json"]);
 		run([...kubeArgs, "apply", "-f", "-"], secret);
 		run([...kubeArgs, "create", "-f", "-"], JSON.stringify(pod));
 		try {
@@ -342,6 +344,7 @@ async function main(inputPath) {
 		portForward?.kill("SIGTERM");
 		await unlink(generatedJob).catch(() => {});
 		await unlink(attestationFile).catch(() => {});
+		await unlink(modelCredentialFile).catch(() => {});
 		try { run([...kubeArgs, "delete", "pod", name, "--ignore-not-found", "--wait=false"]); } catch {}
 		try { run([...kubeArgs, "delete", "secret", secretName, "--ignore-not-found"]); } catch {}
 	}
