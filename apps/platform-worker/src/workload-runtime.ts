@@ -2210,6 +2210,28 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is unavailable");
 		},
 		async cleanup(state, deleteNewVolume, input) {
+			// Pending Secrets cannot be removed while their initial consumers exist.
+			if (
+				deleteNewVolume &&
+				"manifest" in state.candidate.configuration.source &&
+				state.candidate.deployment !== null &&
+				bindingsFor(state, input, candidateKeyless(state)).length > 0 &&
+				bindingsFor(state, input, candidateKeyless(state)).every(
+					({ materialization, record }) =>
+						materialization === "current" &&
+						record.lifecycleState === "pending",
+				)
+			) {
+				const workload = desired(state);
+				if (!isMultiService(workload)) return false;
+				if (
+					!(await multiService.cleanupAgent(workload, deleteNewVolume, {
+						allowOwnershipTransition: true,
+					}))
+				)
+					return false;
+				return cleanupUnactivatedSecrets(state, input);
+			}
 			if (deleteNewVolume && !(await cleanupUnactivatedSecrets(state, input)))
 				return false;
 			let resourcesRemoved: boolean;

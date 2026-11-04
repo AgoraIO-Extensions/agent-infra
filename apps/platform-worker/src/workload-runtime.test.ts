@@ -3098,6 +3098,82 @@ describe("assembled Workload Runtime contracts", () => {
 				});
 		}
 	});
+	it.each(["none", "foreign", "pod"])(
+		"cleans a failed initial multi-service workload with a pending referenced Secret (remaining consumer: %s)",
+		async (remaining) => {
+			const foreign = remaining === "foreign";
+			const cleanup = secretCleanupStore(pendingSecretRecord());
+			const configuration = secretConfiguration({
+				source: multiServiceConfigurationFixture().source,
+			});
+			const secrets = cleanupSecrets(cleanup);
+			const f = fixture(
+				{
+					decryptor: {
+						async decrypt() {
+							return {
+								outcome: "decrypted",
+								plaintext: new TextEncoder().encode("controlled-secret-value"),
+							};
+						},
+					},
+				},
+				{ configuration, secrets },
+			);
+			await f.tick(4);
+			const state = f.state;
+			assert(state?.candidate.deployment && state.identity);
+			if (foreign) {
+				const consumer = [...f.resources.values()].find(
+					(resource) => resource.kind === "Deployment",
+				);
+				assert(consumer?.metadata);
+				consumer.metadata.labels = {};
+			}
+			if (remaining === "pod") {
+				const consumer = [...f.resources.values()].find(
+					(resource) => resource.kind === "Deployment",
+				) as V1Deployment;
+				assert(consumer?.metadata && consumer.spec?.template.spec);
+				f.resources.set("Pod/remaining-consumer", {
+					apiVersion: "v1",
+					kind: "Pod",
+					metadata: { ...consumer.metadata, name: "remaining-consumer" },
+					spec: structuredClone(consumer.spec.template.spec),
+				} as V1Pod);
+			}
+			const runtime = createWorkloadRuntimeV1(f.options);
+			let cleaned = false;
+			for (let attempt = 0; attempt < 4 && !cleaned; attempt++) {
+				const result = runtime.cleanup({ ...state, phase: "cleaning" }, true, {
+					configuration,
+					secrets,
+					management: f.management,
+					state,
+					requestId: "cleanup-pending",
+					traceId: "cleanup-pending",
+				});
+				if (foreign) {
+					await expect(result).rejects.toThrow(
+						"multi-service resource drifted",
+					);
+					break;
+				}
+				cleaned = (await result) === true;
+			}
+			expect(cleaned).toBe(remaining === "none");
+			expect(
+				[...f.resources.values()].some(
+					(resource) => resource.kind === "Deployment",
+				),
+			).toBe(foreign);
+			expect(
+				[...f.resources.values()].some(
+					(resource) => resource.kind === "Secret",
+				),
+			).toBe(remaining !== "none");
+		},
+	);
 	it("binds multi-service activation to the actual entry workload identity", async () => {
 		const f = fixture(
 			{},
