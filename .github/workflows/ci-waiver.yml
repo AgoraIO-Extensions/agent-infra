@@ -1,0 +1,45 @@
+name: CI waiver
+run-name: >-
+  ${{ format('PR #{0} | ci-waiver | {1}', github.event.pull_request.number, github.event.action) }}
+
+# Label events do not start CI runs, so an unrelated label can never become the
+# latest CI run of a head and hide its required check (#3935). Only ci:skip
+# changes re-evaluate the exemption by rerunning that head's latest CI run.
+on:
+  pull_request_target:
+    types: [labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: ci-waiver-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  rerun:
+    name: Re-evaluate CI exemption
+    if: >-
+      github.event.label.name == 'ci:skip' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Rerun the latest CI run of the current head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/ci-waiver.mjs

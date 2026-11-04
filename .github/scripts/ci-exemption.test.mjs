@@ -11,8 +11,8 @@ import { imageNames } from "../../deploy/release/image-manifest.mjs";
 
 const exec = promisify(execFile);
 const workflow = YAML.parse(await fs.readFile(".github/workflows/ci.yml", "utf8"));
-const metadataEvent = "github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip'";
-const guarded = (condition) => `\${{ !(${metadataEvent}) && ${condition} }}`;
+const waiverWorkflow = YAML.parse(await fs.readFile(".github/workflows/ci-waiver.yml", "utf8"));
+const notWaived = "needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true'";
 const exemption = workflow.jobs["ci-exemption"];
 const step = exemption.steps.find((value) => value.id === "label");
 
@@ -173,21 +173,23 @@ test("a labels API failure falls back to normal checks without failing the workf
   assert.match(result.summary, /normal checks apply/);
 });
 
-test("CI waiver transitions cancel older PR runs and retain checks on lookup failure", () => {
-  assert.deepEqual(workflow.on.pull_request.types,
-    ["opened", "synchronize", "reopened", "labeled", "unlabeled"]);
+test("CI runs only for source events and keeps one validation group per PR (#3935)", () => {
+  // Label events never start a CI run, so a newer run without the required
+  // check can no longer hide a passing one; ci-waiver.yml handles ci:skip.
+  assert.deepEqual(workflow.on.pull_request.types, ["opened", "synchronize", "reopened"]);
   assert.deepEqual(workflow.on.push.branches, ["main"]);
   assert.deepEqual(workflow.concurrency, {
-    group: `\${{ ${metadataEvent} && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}`,
+    group: "ci-${{ github.event.pull_request.number || github.ref }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
+  assert.equal(exemption.if, undefined);
   assert.deepEqual(exemption.permissions, { "pull-requests": "read" });
   assert.equal(exemption.outputs.skip, "${{ steps.label.outputs.skip }}");
-  assert.equal(workflow.jobs.ci.name, `\${{ ${metadataEvent} && 'CI metadata event ignored' || 'CI' }}`);
+  assert.equal(workflow.jobs.ci.name, "CI");
   assert.deepEqual(workflow.jobs.ci.needs,
     ["ci-exemption", "changes", "web-tests", "backend-tests", "backend-package-tests", "backend-contracts-tests", "ci_heavy"]);
-	assert.equal(workflow.jobs.ci.steps.find((value) => value.name === "Require CI lanes").if,
-		guarded("(needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success' || needs.backend-package-tests.result != 'success' || needs.backend-contracts-tests.result != 'success')))"));
+  assert.equal(workflow.jobs.ci.steps.find((value) => value.name === "Require CI lanes").if,
+    `\${{ (${notWaived}) && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success' || needs.backend-package-tests.result != 'success' || needs.backend-contracts-tests.result != 'success'))) }}`);
   assert.equal(workflow.jobs.ci.if, "${{ always() && !cancelled() }}");
   assert.equal(workflow.jobs["ci_heavy"].name, "CI heavy validation");
   assert.deepEqual(workflow.jobs["ci_heavy"].needs, ["ci-exemption", "changes"]);
@@ -202,70 +204,72 @@ test("CI waiver transitions cancel older PR runs and retain checks on lookup fai
 	assert.match(imageBuild.run, /--images=/);
   assert.deepEqual(workflow.jobs["workload-kind"].needs, ["ci-exemption", "changes"]);
   assert.equal(workflow.jobs["workload-kind"].if,
-    guarded("!cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true')"));
+    `\${{ !cancelled() && (${notWaived}) && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}`);
   assert.equal(workflow.jobs.changes.name, "Classify changes");
   assert.equal(workflow.jobs["web-tests"].name, "Web validation");
   assert.equal(workflow.jobs["backend-tests"].name, "Backend integration tests");
 });
 
-// Evaluate the boolean/format subset used by this workflow against synthetic event
-// contexts. GitHub's hosted concurrency and check publication still need readback.
-function routeEvent({ event = "pull_request", action = "opened", label, runId = 1, exemptionResult = "success", liveSkip = "false" } = {}) {
-  const github = { event_name: event, event: { action, label: { name: label ?? "" }, pull_request: event === "pull_request" ? { number: 3845 } : {} }, ref: "refs/heads/main", run_id: runId };
-  const needs = Object.fromEntries(Object.keys(workflow.jobs).map((name) => [name, {
-    result: name === "ci-exemption" ? exemptionResult : "success",
-    outputs: { skip: liveSkip, source: "true", web: "true", workload: "true" },
-  }]));
+// Evaluate the boolean/format subset used by these workflows against synthetic
+// event contexts. GitHub's hosted run selection still needs readback.
+function evaluator(github, needs = {}) {
   const evaluate = (expression) => runInNewContext(expression.replace(/\bneeds\.([a-z][a-z0-9_-]*)/g, 'needs["$1"]'), {
     github, needs, always: () => true, cancelled: () => false,
     format: (template, ...values) => template.replace(/\{(\d+)\}/g, (_, index) => values[index]),
   });
   const render = (value) => value.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => String(evaluate(expression.trim())));
+  const condition = (value) => value === undefined || evaluate(value.replace(/^\$\{\{|\}\}$/g, "").trim());
+  return { evaluate, render, condition };
+}
+
+function routeEvent({ event = "pull_request", action = "opened", exemptionResult = "success", liveSkip = "false" } = {}) {
+  const github = { event_name: event, event: { action, pull_request: event === "pull_request" ? { number: 3845 } : {} }, ref: "refs/heads/main" };
+  const needs = Object.fromEntries(Object.keys(workflow.jobs).map((name) => [name, {
+    result: name === "ci-exemption" ? exemptionResult : "success",
+    outputs: { skip: liveSkip, source: "true", web: "true", workload: "true" },
+  }]));
+  const { render, condition } = evaluator(github, needs);
   return {
     group: render(workflow.concurrency.group),
     jobs: Object.entries(workflow.jobs).map(([id, job]) => {
-      const run = job.if === undefined || evaluate(job.if.slice(3, -2).trim());
-      // Hosted GitHub preserves the expression text when a dynamic-name job is skipped.
-      const name = run ? render(job.name) : job.name.replace(/\$\{\{\s*|\s*\}\}/g, "");
-      return { id, name, run, ...(id === "ci" ? {
-        steps: Object.fromEntries(job.steps.map((step) => [step.name, run && (step.if === undefined || evaluate(step.if.slice(3, -2).trim()))])),
+      const run = condition(job.if);
+      return { id, name: job.name, run, ...(id === "ci" ? {
+        steps: Object.fromEntries(job.steps.map((step) => [step.name, run && condition(step.if)])),
       } : {}) };
     }),
   };
 }
 
-test("ordinary label events cannot replace pending/running CI or publish the required CI check", () => {
-  const validation = routeEvent();
-  for (const action of ["labeled", "unlabeled"]) {
-    for (const label of ["agent:codex", "ready-for-human", "priority:P1"]) {
-      const ignored = routeEvent({ action, label, runId: 2 });
-      assert.notEqual(ignored.group, validation.group);
-      assert.notEqual(ignored.group, routeEvent({ action, label, runId: 3 }).group);
-      assert(ignored.jobs.filter((job) => job.id !== "ci").every((job) => !job.run), `${action} ${label} must not run validation`);
-      assert(ignored.jobs.every((job) => job.name !== "CI"), "skipped metadata jobs must not publish CI");
-      const aggregate = ignored.jobs.find((job) => job.id === "ci");
-      assert.equal(aggregate.name, "CI metadata event ignored");
-      assert.equal(aggregate.run, true);
-      assert.deepEqual(aggregate.steps, {
-        "Require CI lanes": false, "Report completed CI lanes": false,
-        "Report ignored metadata event": true, "Report CI waiver": false,
-      });
-      for (const previous of [undefined, "failure", "pending", "in_progress"]) {
-        const checks = new Map(previous ? [["CI", previous]] : []);
-        for (const job of ignored.jobs) checks.set(job.name, job.run ? "success" : "skipped");
-        assert.equal(checks.get("CI"), previous, "metadata must not replace missing/failed or live CI");
-      }
-    }
+test("label events never start CI; only ci:skip on a same-repository PR reaches the waiver rerun (#3935)", () => {
+  for (const action of ["labeled", "unlabeled", "edited", "ready_for_review"])
+    assert(!workflow.on.pull_request.types.includes(action), `${action} must not start a CI run`);
+  assert.deepEqual(Object.keys(workflow.on).sort(), ["pull_request", "push"]);
+  assert.deepEqual(waiverWorkflow.on, { pull_request_target: { types: ["labeled", "unlabeled"] } });
+  const job = waiverWorkflow.jobs.rerun;
+  for (const [label, repository, expected] of [
+    ["ci:skip", "fixture/repository", true],
+    ["agent:codex", "fixture/repository", false],
+    ["ready-for-human", "fixture/repository", false],
+    ["", "fixture/repository", false],
+    ["ci:skip", "outside/fork", false],
+  ]) {
+    const github = {
+      repository: "fixture/repository",
+      event: { label: { name: label }, pull_request: { head: { repo: { full_name: repository } } } },
+    };
+    assert.equal(evaluator(github).evaluate(job.if), expected, `${label} from ${repository}`);
   }
+  // The waiver never checks out or runs PR code and holds no other write scope.
+  assert.deepEqual(job.permissions, { actions: "write", contents: "read" });
+  assert.equal(job.steps[0].with.ref, "${{ github.event.repository.default_branch }}");
+  assert.equal(job.steps[0].with["persist-credentials"], false);
 });
 
-test("source events, waiver transitions and missing label metadata retain real CI routing", () => {
+test("source events and the live waiver keep the real CI routing", () => {
   for (const input of [
     { action: "opened" }, { action: "synchronize" }, { action: "reopened" },
-    { action: "labeled", label: "ci:skip" }, { action: "unlabeled", label: "ci:skip" },
-    { action: "labeled" }, { action: "unlabeled", label: "" },
-    { action: "labeled", label: "ci:skip", exemptionResult: "failure" },
-    { event: "push", action: "labeled", label: "agent:codex" },
+    { action: "opened", exemptionResult: "failure" },
+    { event: "push", action: "push" },
   ]) {
     const route = routeEvent(input);
     assert.equal(route.group, input.event === "push" ? "ci-refs/heads/main" : "ci-3845");
@@ -274,20 +278,18 @@ test("source events, waiver transitions and missing label metadata retain real C
     const aggregate = route.jobs.find((job) => job.id === "ci");
     assert.equal(aggregate.name, "CI");
     assert.equal(aggregate.run, true);
-    assert.equal(aggregate.steps["Report ignored metadata event"], false);
     assert.equal(aggregate.steps["Report CI waiver"], false);
     assert.equal(aggregate.steps["Require CI lanes"], input.exemptionResult === "failure");
   }
-  const waived = routeEvent({ action: "labeled", label: "ci:skip", liveSkip: "true" });
+  const waived = routeEvent({ action: "synchronize", liveSkip: "true" });
   assert.equal(waived.group, "ci-3845");
   assert.deepEqual(waived.jobs.find((job) => job.id === "ci"), {
     id: "ci", name: "CI", run: true, steps: {
-      "Require CI lanes": false, "Report completed CI lanes": false,
-      "Report ignored metadata event": false, "Report CI waiver": true,
+      "Require CI lanes": false, "Report completed CI lanes": false, "Report CI waiver": true,
     },
   });
   assert(waived.jobs.filter((job) => ["web-tests", "backend-tests", "ci_heavy", "workload-kind"].includes(job.id)).every((job) => !job.run));
-  const lookupFailed = routeEvent({ action: "labeled", label: "ci:skip", liveSkip: "true", exemptionResult: "failure" }).jobs.find((job) => job.id === "ci");
+  const lookupFailed = routeEvent({ action: "synchronize", liveSkip: "true", exemptionResult: "failure" }).jobs.find((job) => job.id === "ci");
   assert.equal(lookupFailed.name, "CI");
   assert.equal(lookupFailed.steps["Require CI lanes"], true);
   assert.equal(lookupFailed.steps["Report CI waiver"], false);

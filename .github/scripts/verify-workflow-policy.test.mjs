@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 8);
+  assert.equal(Object.keys(workflows).length, 9);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -417,26 +417,49 @@ test("release policy rejects missing input validation and unbound Platform artif
   }
 });
 
-test("CI policy rejects weakened metadata routing and same-name skipped checks", async () => {
+test("CI policy rejects label triggers, dynamic names and weakened guards", async () => {
   for (const mutate of [
-    (workflow) => { workflow.jobs.ci.name = "CI"; },
+    (workflow) => { workflow.on.pull_request.types.push("labeled"); },
+    (workflow) => { workflow.on.pull_request.types.push("unlabeled"); },
+    (workflow) => { workflow.on.pull_request_target = { types: ["labeled"] }; },
     (workflow) => { workflow.jobs.ci.name = "${{ github.event.label.name != 'ci:skip' && 'CI metadata event ignored' || 'CI' }}"; },
-    (workflow) => { workflow.concurrency.group = "ci-${{ github.event.pull_request.number || github.ref }}"; },
+    (workflow) => { workflow.concurrency.group = "ci-${{ github.run_id }}"; },
     (workflow) => { workflow.concurrency["cancel-in-progress"] = false; },
     (workflow) => { workflow.jobs["ci-exemption"].if = "${{ true }}"; },
-    (workflow) => { workflow.jobs.changes.if = "${{ always() && !cancelled() }}"; },
-    (workflow) => { workflow.jobs.ci_heavy.if = workflow.jobs["ci-exemption"].if; },
+    (workflow) => { workflow.jobs.changes.if = "${{ !cancelled() }}"; },
+    (workflow) => { workflow.jobs.ci_heavy.if = "${{ always() }}"; },
     (workflow) => { workflow.jobs.ci.if = "${{ false }}"; },
     (workflow) => { workflow.jobs.ci.if = workflow.jobs.ci_heavy.if; },
     (workflow) => { workflow.jobs.ci.steps.find((step) => step.name === "Report CI waiver").if = "${{ true }}"; },
     (workflow) => { workflow.jobs.ci.steps.find((step) => step.name === "Require CI lanes").if = "${{ false }}"; },
     (workflow) => { workflow.jobs.ci.steps[0] = workflow.jobs.ci.steps[1]; },
-    (workflow) => { workflow.jobs.ci.name = workflow.jobs.ci.name.replace("github.event.label.name != '' && ", ""); },
   ]) {
     const workflows = await actualWorkflows();
     mutate(workflows["ci.yml"]);
     assert(validateWorkflowDocuments(workflows).some((error) => error.startsWith("CI")));
   }
+});
+
+test("CI waiver only reruns CI for ci:skip changes with minimal permissions", async () => {
+  for (const mutate of [
+    (workflow) => { workflow.on.pull_request_target.types.push("opened"); },
+    (workflow) => { workflow.on.pull_request = { types: ["labeled"] }; },
+    (workflow) => { workflow.permissions = { actions: "write" }; },
+    (workflow) => { workflow.concurrency["cancel-in-progress"] = false; },
+    (workflow) => { workflow.jobs.rerun.if = "github.event.pull_request.head.repo.full_name == github.repository"; },
+    (workflow) => { workflow.jobs.rerun.if = "github.event.label.name == 'ci:skip'"; },
+    (workflow) => { workflow.jobs.rerun.permissions["pull-requests"] = "write"; },
+    (workflow) => { workflow.jobs.rerun.steps.at(-1).run = "gh run rerun --failed"; },
+    (workflow) => { workflow.jobs.rerun.steps.at(-1).env.GITHUB_TOKEN = "${{ secrets.GH_TOKEN }}"; },
+    (workflow) => { workflow.jobs.extra = { "runs-on": "ubuntu-24.04", steps: [] }; },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["ci-waiver.yml"]);
+    assert(validateWorkflowDocuments(workflows).some((error) => error.startsWith("CI waiver")));
+  }
+  const workflows = await actualWorkflows();
+  workflows["ci-waiver.yml"].jobs.rerun.steps[0].with.ref = "${{ github.event.pull_request.head.sha }}";
+  assert(validateWorkflowDocuments(workflows).some((error) => error.includes("must not execute PR head")));
 });
 
 test("cache deployment rejects widened event, code and cloud identity boundaries", async () => {

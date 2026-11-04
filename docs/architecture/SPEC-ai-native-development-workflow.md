@@ -101,17 +101,19 @@ Issue Gate 在 PR 的 opened、reopened、synchronize、edited 和 ready_for_rev
 Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加豁免标签。被豁免的检查 job 以原生
 `skipped` 结束；`CI` 汇总 job 仅报告已豁免并满足 required check，不作为测试通过的证据。
 
-添加、移除 `ci:skip` 标签及新提交都会重新运行 workflow，执行时回读当前标签；重跑旧事件也不能复用
-已撤销的标签。CI 执行中添加标签会取消同一 PR、同一 head 的旧运行，再发布豁免结果。
-移除 `ci:skip` 后恢复正常检查，标签保留期间的新提交继续豁免；旧 head 重跑不会取消新 head。
+新提交触发 CI 时回读当前标签。添加或移除 `ci:skip` 由独立的 `CI waiver` workflow 处理：它以
+`pull_request_target` 运行默认分支代码，不 checkout 或执行 PR head，只对同仓 PR 生效；先取消当前
+head 正在执行的 CI，再重跑该 head 最近一次 CI。重跑时 `Check CI exemption` 回读实时标签，因此重跑
+旧运行也不能复用已撤销的标签。当前 head 尚无 CI 运行时不处理，由即将开始的运行自行回读。
+移除 `ci:skip` 后恢复正常检查，标签保留期间的新提交继续豁免；只操作当前 head 的运行。
 读取失败时运行原有 CI，不能因此豁免。main push、独立 Connection E2E、Issue Gate、
 CODEOWNER approval、conversation resolution 与 PR review 不受该标签影响。
 
-其他已知标签的增删不取消或替换正在执行、等待中的 CI，也不运行仓库检查。此类事件使用
-独立并发组；仅汇总 job 执行轻量状态报告，以非必需名称 `CI metadata event ignored` 结束，
-不能发布名为 `CI` 的 skipped 检查替代缺失或失败的验证。汇总 job 必须执行，确保 GitHub
-求值动态名称，而不是在跳过 job 时将表达式原文当作检查名。标签名缺失的事件仍运行正常检查。
-并发组、仓库 job 入口、汇总步骤与名称使用同一事件判定，真实验证路径继续发布原 required `CI`。
+其他标签的增删不触发 CI workflow。已观察到：标签事件产生的新 CI 运行若不含 `CI` 检查，会让同一
+head 上已通过的 `CI` 不再被计入，PR 停在 BLOCKED；重跑旧运行也不能恢复，只有更新的真实运行可以
+（#3935）。因此 CI 只订阅 `opened`、`synchronize`、`reopened` 与 main push，汇总 job 固定名为
+`CI` 并总是执行，以报告豁免或失败的 lane。`CI waiver` 对其他标签直接结束，不取消、不重跑 CI，
+也不发布任何检查。
 
 ### 7.3 Automated PR Review
 
