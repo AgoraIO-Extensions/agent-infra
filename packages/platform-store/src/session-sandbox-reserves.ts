@@ -239,7 +239,8 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		configuration.source.interactionMode === "platform-adapter" &&
 		!configuration.secrets.length &&
 		configuration.revision === decoded.state.sourceConfigurationRevision &&
-		verified.configuration.revision === configuration.revision;
+		verified.configuration.revision === configuration.revision &&
+		isDeepStrictEqual(verified.configuration, configuration);
 	if (!standardConfiguration && !platformAdapterConfiguration) return null;
 	try {
 		const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
