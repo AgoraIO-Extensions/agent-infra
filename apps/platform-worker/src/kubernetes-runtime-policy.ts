@@ -12,7 +12,6 @@ import type {
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
-	V1EnvVar,
 	V1Ingress,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
@@ -57,34 +56,6 @@ import {
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
-
-const customModelCredentialEnvironmentNameV1 =
-	"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER";
-
-export function customModelCredentialEnvironmentV1(
-	value: AgentWorkloadDesiredV1,
-): V1EnvVar[] {
-	if (
-		value.runtimeManifest.interactionMode !== "platform-adapter" ||
-		value.runtimeManifest.capabilities?.modelSelection !== true ||
-		value.secretRefs.length !== 1
-	)
-		return [];
-	const [secret] = value.secretRefs;
-	if (!secret) return [];
-	return [
-		{
-			name: customModelCredentialEnvironmentNameV1,
-			valueFrom: {
-				secretKeyRef: {
-					name: secret.name,
-					key: "CUSTOM_MODEL_API_KEY",
-					optional: false,
-				},
-			},
-		},
-	];
-}
 
 /** Build the only public route origin accepted by the Workload contract. */
 export function createWorkloadInteractionOriginV1(input: {
@@ -239,7 +210,6 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 						),
 				)
 				.map(([name, value]) => ({ name, value })),
-			...customModelCredentialEnvironmentV1(value),
 			...(injection?.env ?? []),
 			...(runtimeDriver
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
