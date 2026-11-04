@@ -6553,3 +6553,56 @@ describe("sandbox drain with legacy null modelProjection (#2885)", () => {
 		).toMatchObject({ status: "stopped", finished: true });
 	});
 });
+
+it("keeps signed snapshot authorization out of persisted desired workload", async () => {
+	const configuration = configurationFixture();
+	assert(configuration.source.kind === "custom");
+	const snapshot = {
+		snapshotId: "snapshot-a",
+		name: "repo",
+		digest: `sha256:${"b".repeat(64)}`,
+		sizeBytes: 128,
+		objectRef: "object-a",
+		signedUrl:
+			"https://objects.example.test/archive?signature=synthetic-private",
+		expiresAt: new Date(Date.now() + 60_000).toISOString(),
+	};
+	const boundConfiguration = {
+		...configuration,
+		source: {
+			...configuration.source,
+			workspaceSnapshots: [
+				{ snapshotId: snapshot.snapshotId, name: snapshot.name },
+			],
+		},
+	};
+	const f = fixture(
+		{ workspaceSnapshotResolver: async () => ({ inputs: [snapshot] }) },
+		{ configuration: boundConfiguration },
+	);
+	await f.tick(1);
+	assert(f.state);
+	const candidate = await createWorkloadRuntimeV1(f.options).preflight(
+		{
+			configuration: boundConfiguration,
+			state: f.state,
+			management: f.management,
+			requestId: "request-a",
+			traceId: "trace-a",
+		},
+		f.state,
+	);
+	const deployment = validateAgentWorkloadDesiredV1(candidate.deployment);
+	expect(deployment.workspaceSnapshots).toEqual([
+		{
+			snapshotId: snapshot.snapshotId,
+			name: "repo",
+			digest: snapshot.digest,
+			sizeBytes: 128,
+			objectRef: "object-a",
+			mountPath: "/opt/agent/workspaces/repo",
+		},
+	]);
+	expect(JSON.stringify(candidate)).not.toContain(snapshot.signedUrl);
+	expect(JSON.stringify(candidate)).not.toContain(snapshot.expiresAt);
+});

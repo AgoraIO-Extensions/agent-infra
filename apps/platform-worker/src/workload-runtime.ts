@@ -1784,7 +1784,11 @@ export function createWorkloadRuntimeV1(
 						? {
 								workspaceSnapshots: snapshotMaterialization.inputs.map(
 									(input) => ({
-										...input,
+										snapshotId: input.snapshotId,
+										name: input.name,
+										digest: input.digest,
+										sizeBytes: input.sizeBytes,
+										objectRef: input.objectRef,
 										mountPath: `/opt/agent/workspaces/${input.name}`,
 									}),
 								),
