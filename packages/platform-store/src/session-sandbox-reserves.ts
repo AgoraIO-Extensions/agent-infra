@@ -226,21 +226,26 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		return null;
 	const verified = decoded.state.verified;
 	const configuration = agent?.runtimeConfiguration;
-	if (
-		configuration?.source.kind !== "standard" ||
-		configuration.secrets.length ||
-		configuration.source.templateId !== approved.templateId ||
-		configuration.source.imageDigest !== approved.imageDigest ||
-		configuration.revision !== decoded.state.sourceConfigurationRevision ||
-		verified.configuration.revision !== configuration.revision ||
-		!isDeepStrictEqual(verified.configuration, configuration)
-	)
-		return null;
+	const standardConfiguration =
+		configuration?.source.kind === "standard" &&
+		!configuration.secrets.length &&
+		configuration.source.templateId === approved.templateId &&
+		configuration.source.imageDigest === approved.imageDigest &&
+		configuration.revision === decoded.state.sourceConfigurationRevision &&
+		verified.configuration.revision === configuration.revision &&
+		isDeepStrictEqual(verified.configuration, configuration);
+	const platformAdapterConfiguration =
+		configuration?.source.kind === "custom" &&
+		configuration.source.interactionMode === "platform-adapter" &&
+		!configuration.secrets.length &&
+		configuration.revision === decoded.state.sourceConfigurationRevision &&
+		verified.configuration.revision === configuration.revision;
+	if (!standardConfiguration && !platformAdapterConfiguration) return null;
 	try {
 		const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
 		const projection = validateRuntimeModelProjectionV4(
 			verified.modelProjection,
-			configuration,
+			standardConfiguration ? configuration : undefined,
 		);
 		if (
 			deployment.agentId !== agentId ||
