@@ -242,5 +242,10 @@ export {
 	type PostgresWorkloadStateReaderV1,
 } from "./workload-reconciliation.js";
 export { PostgresWorkspaceSnapshotBindingStoreV1 } from "./workspace-snapshot-bindings.ts";
+export {
+	openPostgresWorkspaceSnapshotMaterializationReaderV1,
+	type WorkspaceSnapshotMaterializationReadV1,
+	type WorkspaceSnapshotMaterializationRecordV1,
+} from "./workspace-snapshot-materialization-reader.js";
 export { PostgresWorkspaceSnapshotUploadStoreV1 } from "./workspace-snapshot-upload-store.ts";
 export { PostgresWorkspaceSnapshotStoreV1 } from "./workspace-snapshots.ts";
