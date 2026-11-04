@@ -2215,6 +2215,7 @@ export function createWorkloadRuntimeV1(
 				deleteNewVolume &&
 				"manifest" in state.candidate.configuration.source &&
 				state.candidate.deployment !== null &&
+				bindingsFor(state, input, candidateKeyless(state)).length > 0 &&
 				bindingsFor(state, input, candidateKeyless(state)).every(
 					({ materialization, record }) =>
 						materialization === "current" &&
