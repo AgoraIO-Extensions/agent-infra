@@ -255,6 +255,13 @@ if(config.schemaVersion!==3||!option)process.exit(2);
 process.stdout.write(JSON.stringify({moduleSha256:hash(moduleBytes),configurationSha256:hash(configBytes),effectiveConfigurationSha256:hash(effectiveBytes),processId:Number(pid),processStart,schemaVersion:config.schemaVersion,configVersion:config.configVersion,modelOptionId:option.modelOptionId,modelId:option.model,reasoningLevels:option.reasoningLevels}));
 `;
 
+// Fixed protected journal root; bound execution only, no conversation text or credentials.
+export const protectedModelFactsReadbackScript = `
+const fs=require('node:fs');let count=0,bytes=0;const matches=[];
+function walk(p,depth=0){if(depth>7)throw Error('depth');for(const e of fs.readdirSync(p,{withFileTypes:true})){if(++count>3000)throw Error('files');const f=p+'/'+e.name;if(e.isDirectory())walk(f,depth+1);else if(e.isFile()&&e.name.endsWith('.json')){const size=fs.statSync(f).size;if(size>1000000)continue;if((bytes+=size)>10000000)throw Error('bytes');let x;try{x=JSON.parse(fs.readFileSync(f,'utf8'))}catch{continue}if(x.binding?.agentId!==process.argv[1])continue;for(const t of x.turns??[])if(t.executionId===process.argv[2])matches.push({agentId:x.binding.agentId,executionId:t.executionId,status:t.status,facts:(t.operationFacts??[]).filter(f=>f.kind==='model')});}}}
+walk('/var/lib/agent-runtime');if(matches.length!==1)process.exit(2);process.stdout.write(JSON.stringify(matches[0]));
+`;
+
 export async function executeCustomCapacityJob(
 	jobPath: string,
 	externalSignal?: AbortSignal,
@@ -457,6 +464,7 @@ export async function executeCustomCapacityJob(
 			expectedModelId: job.expectedModelId,
 			expectedReply: "READY",
 			signal,
+            readProtectedModelFacts: async (binding: {agentId: string; executionId: string}) => readJson(Buffer.from(await kube.execInPod(podRef, ["node", "-e", protectedModelFactsReadbackScript, binding.agentId, binding.executionId]))),
 			checkpoint: async (checkpoint: unknown) => {
 				signal.throwIfAborted();
 				await atomicWrite(
@@ -508,7 +516,7 @@ export async function executeCustomCapacityJob(
 				"CUSTOM_CAPACITY_INPUT_DRIFT",
 			);
 		signal.throwIfAborted();
-		const modelFacts = measured.modelFacts.map((fact: any) => ({
+		const modelFacts = measured.protectedModelFacts?.length ? measured.protectedModelFacts.map((fact: any) => ({...fact, executionId: measured.executionId})) : measured.modelFacts.map((fact: any) => ({
 			...fact.payload,
 			executionId: fact.executionId,
 			cursor: fact.cursor,
@@ -542,6 +550,7 @@ export async function executeCustomCapacityJob(
 			replyMatched: measured.replyMatched,
 			replySha256: measured.replySha256,
 			modelFacts,
+			modelFactSource: measured.protectedModelFacts?.length ? "protected-driver-journal" : "runtime-event-stream",
 			submittedAt,
 			completedAt,
 			podUidSha256: sha256(observed.uid),
