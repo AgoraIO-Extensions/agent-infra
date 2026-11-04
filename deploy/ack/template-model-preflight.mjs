@@ -202,7 +202,6 @@ async function main(inputPath) {
 			endpoint: modelEndpoint,
 			model: job.modelId,
 			reasoningLevels: [job.reasoningLevel, "high"].filter((value, index, values) => values.indexOf(value) === index),
-			credentialEnvironmentVariable: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT",
 		}],
 	});
 	const pod = {
@@ -237,7 +236,6 @@ async function main(inputPath) {
 					{ name: "AGENT_INFRA_RUNTIME_GRANT_KEY_ID", value: "ack-validation-v1" },
 					{ name: "AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY", value: publicKey },
 					{ name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG", value: modelConfig },
-					{ name: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT", valueFrom: { secretKeyRef: { name: secretName, key: "model-credential" } } },
 					{ name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE", value: "container-boundary" },
 					{ name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED", value: "worker-v1" },
 					{ name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE", value: name },

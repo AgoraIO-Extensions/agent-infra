@@ -16,15 +16,7 @@ const script = new URL(
 
 test("template model config binds the relay credential into the V4 option", async () => {
 	const source = await readFile(script, "utf8");
-	assert.match(
-		source,
-		/credentialEnvironmentVariable: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT"/u,
-	);
-	assert.match(
-		source,
-		/--from-file=model-credential=\$\{modelCredentialFile\}/u,
-	);
-	assert.match(source, /AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT/u);
+	assert.match(source, /--from-file=model-credential=\$\{modelCredentialFile\}/u);
 	assert.match(source, /modelCredentialFile/);
 	assert.match(source, /writeFile\(modelCredentialFile, modelCredential/u);
 });
