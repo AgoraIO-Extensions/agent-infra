@@ -117,3 +117,58 @@ test("ACK can keep the control Worker on ordinary nodes while Sessions use ECI",
 	assert.equal(worker.spec.template.spec.tolerations, undefined);
 	assert.equal(policies(result).length, 2);
 });
+
+test("required cache admission covers every container and denies unknown image groups only on Session CREATE", () => {
+	const entry = {
+		images: [
+			`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${"a".repeat(64)}`,
+		],
+		cacheId: "imc-test123",
+	};
+	const result = render(
+		"1.36.1",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.imageCache.required=true",
+		"--set-json",
+		`sessionRuntimeScheduling.imageCache.entries=${JSON.stringify([entry])}`,
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const all = parseAllDocuments(result.stdout).map((d) => d.toJSON());
+	const validate = all.find((r) => r?.kind === "ValidatingAdmissionPolicy");
+	const binding = all.find(
+		(r) => r?.kind === "ValidatingAdmissionPolicyBinding",
+	);
+	assert.deepEqual(binding.spec.validationActions, ["Deny"]);
+	assert.equal(
+		validate.spec.matchConstraints.namespaceSelector.matchLabels[
+			"kubernetes.io/metadata.name"
+		],
+		"tenant-workloads",
+	);
+	assert.equal(
+		validate.spec.matchConstraints.objectSelector.matchLabels[
+			"agent-infra.agora.io/managed"
+		],
+		"session-sandbox-v1",
+	);
+	assert.deepEqual(validate.spec.matchConstraints.resourceRules[0].operations, [
+		"CREATE",
+	]);
+	assert.match(validate.spec.variables[0].expression, /initContainers/);
+	assert.match(validate.spec.validations[0].expression, /eci-imc-id/);
+	assert.match(validate.spec.validations[0].expression, /variables.images.all/);
+	assert.equal(
+		validate.spec.validations[0].message,
+		"ACK_IMAGE_CACHE_NOT_PREPARED",
+	);
+	assert.notEqual(
+		render(
+			"1.36.1",
+			"--set",
+			"sessionRuntimeScheduling.imageCache.required=true",
+		).status,
+		0,
+	);
+});

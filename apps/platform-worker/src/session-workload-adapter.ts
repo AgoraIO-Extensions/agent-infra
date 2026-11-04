@@ -33,6 +33,7 @@ import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
 } from "./connection-consumer-projection.js";
+import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
@@ -1144,7 +1145,7 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		currentSpec.hostIPC === expectedSpec.hostIPC &&
 		currentContainer.name === expectedContainer.name &&
 		currentContainer.image === expectedContainer.image &&
-		currentContainer.imagePullPolicy === expectedContainer.imagePullPolicy &&
+		immutableImagePullPolicyMatches(currentContainer, expectedContainer) &&
 		stableJson(currentContainer.resources) ===
 			stableJson(expectedContainer.resources) &&
 		currentContainer.workingDir === expectedContainer.workingDir &&

@@ -211,6 +211,16 @@ console.log(JSON.stringify({items:[]}));
 					[
 						["mutatingadmissionpolicy", "agent-infra-session-eci"],
 						["mutatingadmissionpolicybinding", "agent-infra-session-eci"],
+						[
+							"mutatingadmissionpolicybinding",
+							"agent-infra-session-image-cache",
+						],
+						[
+							"validatingadmissionpolicybinding",
+							"agent-infra-session-image-cache",
+						],
+						["mutatingadmissionpolicy", "agent-infra-session-image-cache"],
+						["validatingadmissionpolicy", "agent-infra-session-image-cache"],
 						["namespace", "agent-infra"],
 					],
 				);

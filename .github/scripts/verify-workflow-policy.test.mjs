@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 7);
+  assert.equal(Object.keys(workflows).length, 8);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -436,5 +436,21 @@ test("CI policy rejects weakened metadata routing and same-name skipped checks",
     const workflows = await actualWorkflows();
     mutate(workflows["ci.yml"]);
     assert(validateWorkflowDocuments(workflows).some((error) => error.startsWith("CI")));
+  }
+});
+
+test("cache deployment rejects widened event, code and cloud identity boundaries", async () => {
+  for (const mutate of [
+    w => { w.jobs.prepare.if += " || true"; },
+    w => { w.jobs.warm.if = "always()"; },
+    w => { w.jobs.warm.environment = "unprotected"; },
+    w => { w.jobs.prepare.permissions["id-token"] = "write"; },
+    w => { w.jobs.warm.steps[0].with.ref = "${{ github.event.workflow_run.head_sha }}"; },
+    w => { w.jobs.warm.steps.find(s => s.name === "Assume cache-only deployment identity").with["role-to-assume"] = "arbitrary"; },
+    w => { w.on.pull_request = {}; },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["ack-image-cache.yml"]);
+    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("ACK cache")));
   }
 });

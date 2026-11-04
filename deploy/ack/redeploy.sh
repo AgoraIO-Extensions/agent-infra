@@ -52,6 +52,9 @@ Optional validation inputs:
   ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
   ACK_CUSTOM_CAPACITY_JOB_FILE private custom ACP capacity job; optional for all
   ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
+  ACK_IMAGE_CACHE_REQUIRED   true enables strict prewarming and Session cache admission
+  ACK_IMAGE_PULL_SECRET      existing registry pull Secret (diagnostic bootstrap only)
+  ACK_IMAGE_CACHE_SIZE_GIB   cache disk size, 20..100 GiB (default 30)
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
   ACK_LOGIN_BOOTSTRAP_FILE private existing login inputs and identity output binding
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
@@ -120,9 +123,13 @@ let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
  if(!/^v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]*$/.test(version))process.exit(1);
  process.stdout.write(version);}catch{process.exit(1)}
 });') || die "ACK_CLUSTER_VERSION_READ_FAILED"
+	local -a cache_values=(--values "$values_file")
+	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true && -f "$evidence_dir/image-cache.values.json" ]]; then
+		cache_values+=(--values "$evidence_dir/image-cache.values.json")
+	fi
 	helm template "$release" "$chart_dir" \
 		--namespace "$namespace" --kube-version "$kube_version" \
-		--values "$values_file" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
+		"${cache_values[@]}" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
 	for placeholder in \
 		"sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 		"https://ack.example.invalid" \
@@ -162,6 +169,7 @@ bootstrap_inputs() {
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
 	configuration_source_preflight
+	if [[ "$1" == apply ]]; then image_cache_gate; fi
 	node "$repo_root/deploy/ack/bootstrap-inputs.ts" "$1" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" >"$evidence_dir/bootstrap-inputs.json"
 	if [[ "$1" == apply ]]; then
 		restart_config_consumers
@@ -231,6 +239,34 @@ bootstrap_login() {
 	fi
 }
 
+image_cache_gate() {
+	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" != true ]]; then
+		local existing_cache_policy
+		existing_cache_policy=$(kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=30s get validatingadmissionpolicy "${namespace}-session-image-cache" --ignore-not-found -o name 2>/dev/null) || die "cannot verify existing cache admission"
+		[[ -z "$existing_cache_policy" ]] || die "strict cache admission is already enabled; ACK_IMAGE_CACHE_REQUIRED=true must be retained"
+		return 0
+	fi
+	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
+	require_file ACK_RUNTIME_IMAGE_MANIFEST "$runtime_manifest"
+	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
+	if ! node "$repo_root/deploy/ack/image-cache-deployment.ts" "$evidence_dir"; then
+		die "image caches are not Ready; new images were not enabled"
+	fi
+}
+
+activate_cache_admission() {
+	[[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]] || return 0
+	node "$repo_root/deploy/ack/image-cache-worker.ts" check || die "compatible Worker must be fully rolled out before cache admission"
+	local policy
+	policy=$(mktemp "$evidence_dir/image-cache-admission.XXXXXXXX")
+	if ! helm template "$release" "$chart_dir" --namespace "$namespace" --kube-version 1.36.1 \
+		--values "$values_file" --values "$evidence_dir/image-cache.values.json" \
+		--show-only templates/session-image-cache.yaml >"$policy"; then
+		die "cache admission rendering failed before image activation"
+	fi
+	kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=30s apply -f "$policy" >/dev/null || die "cache admission update failed before image activation"
+}
+
 custom_preflight() {
 	[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || die "ACK_SOURCE_SHA must be the 40-hex application commit"
 	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
@@ -238,6 +274,7 @@ custom_preflight() {
 	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
 	prepare_evidence
+	image_cache_gate
 	local attempt_receipt
 	attempt_receipt=$(mktemp "$evidence_dir/custom-preflight.XXXXXXXX")
 	if ! node --experimental-strip-types "$repo_root/deploy/ack/custom-capacity-register.mts" \
@@ -259,6 +296,8 @@ runtime_inputs() {
 	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
 	prepare_evidence
+	image_cache_gate
+	activate_cache_admission
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
@@ -286,6 +325,7 @@ template_preflight() {
 	require_file ACK_TEMPLATE_PREFLIGHT_JOBS_FILE "$jobs"
 	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
 	prepare_evidence
+	image_cache_gate
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
@@ -382,6 +422,11 @@ plan() {
 deploy() {
 	require_source_tuple
 	prepare_evidence
+	image_cache_gate
+	local -a cache_values=(--values "$values_file")
+	if [[ "${ACK_IMAGE_CACHE_REQUIRED:-false}" == true ]]; then
+		cache_values+=(--values "$evidence_dir/image-cache.existing.values.json")
+	fi
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
@@ -393,7 +438,7 @@ deploy() {
 		helm upgrade --install "$release" "$chart_dir" \
 		--namespace "$namespace" \
 		--create-namespace \
-		--values "$values_file" \
+		"${cache_values[@]}" \
 		--set bootstrap.databaseOnly=false \
 		--wait \
 		--timeout "$timeout"
@@ -401,6 +446,9 @@ deploy() {
 	kubectl -n "$namespace" rollout status deployment/agent-infra-web --timeout="$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-worker --timeout="$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-directory --timeout="$timeout"
+	image_cache_gate
+	activate_cache_admission
+	render_manifest "$rendered_manifest"
 	snapshot deployed "$rendered_manifest"
 	unlink "$rendered_manifest"
 	trap - EXIT
@@ -412,6 +460,8 @@ provision() {
 	local requests=${ACK_AGENT_REQUESTS_FILE:-}
 	require_file ACK_AGENT_REQUESTS_FILE "$requests"
 	prepare_evidence
+	image_cache_gate
+	activate_cache_admission
 	validate_template_receipts
 	validate_workload_capacity
 	[[ -n "${ACK_AGENT_STATE_DIR:-}" && -n "${ACK_BROWSER_BLUEPRINT_DIR:-}" ]] || die "Agent state and browser blueprint directories are required"
@@ -649,6 +699,10 @@ NODE
 	local admission="${namespace}-session-eci"
 	kubectl --kubeconfig "$ACK_KUBECONFIG" delete mutatingadmissionpolicy "$admission" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup admission policy deletion failed"
 	kubectl --kubeconfig "$ACK_KUBECONFIG" delete mutatingadmissionpolicybinding "$admission" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup admission binding deletion failed"
+	local cache_kind
+	for cache_kind in mutatingadmissionpolicybinding validatingadmissionpolicybinding mutatingadmissionpolicy validatingadmissionpolicy; do
+		kubectl --kubeconfig "$ACK_KUBECONFIG" delete "$cache_kind" "${namespace}-session-image-cache" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup cache admission deletion failed"
+	done
 	kubectl --kubeconfig "$ACK_KUBECONFIG" delete namespace "$namespace" --wait --timeout="$timeout" >/dev/null 2>&1 || die "cleanup namespace deletion failed"
 	local remaining_namespace
 	remaining_namespace=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" --ignore-not-found -o name 2>/dev/null) \
@@ -691,6 +745,7 @@ case "$command" in
 		configuration_source_preflight
 		preflight_agent_requests
 		reserve_plan_preflight
+		image_cache_gate
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply

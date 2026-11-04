@@ -57,9 +57,9 @@ export function createCleanupPlan(
 			ready: readiness(resource),
 		})));
 	}
-	const admission = [`${input.namespace}-session-eci`].flatMap((name) => {
+	const admission = [`${input.namespace}-session-eci`, `${input.namespace}-session-image-cache`].flatMap((name) => {
 		const result: RecordValue[] = [];
-		for (const kind of ["mutatingadmissionpolicy", "mutatingadmissionpolicybinding"]) {
+		for (const kind of (name.endsWith("session-image-cache") ? ["mutatingadmissionpolicy", "mutatingadmissionpolicybinding", "validatingadmissionpolicy", "validatingadmissionpolicybinding"] : ["mutatingadmissionpolicy", "mutatingadmissionpolicybinding"])) {
 			const raw = read(["get", kind, name, "--ignore-not-found", "-o", "json"]);
 			if (raw.trim()) {
 				const resource = JSON.parse(raw);
