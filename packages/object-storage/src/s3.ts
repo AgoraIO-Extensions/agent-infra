@@ -154,6 +154,7 @@ export function createS3ObjectStorageV1(
 		async createReadUrl(input) {
 			if (
 				!input.version ||
+				input.version === "null" ||
 				input.version.length > 256 ||
 				[...input.version].some((character) => character.charCodeAt(0) < 32) ||
 				!Number.isSafeInteger(input.expiresInSeconds) ||
@@ -170,7 +171,6 @@ export function createS3ObjectStorageV1(
 					Bucket: options.bucket,
 					Key: key(input.objectRef),
 					VersionId: input.version,
-					IfMatch: object.etag,
 				}),
 				{ expiresIn: input.expiresInSeconds },
 			);
