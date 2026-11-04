@@ -4,7 +4,8 @@ import { createWorkspaceSnapshotResolverV1 } from "./workspace-snapshot-resolver
 const expiresAt = new Date(Date.now() + 60_000).toISOString();
 const digest = `sha256:${"a".repeat(64)}`;
 const policy = {
-	imageDigest: digest,
+	imageDigest: `registry.example.test/platform-worker@${digest}`,
+	allowedOrigins: ["https://objects.example.test"],
 	cacheSizeLimit: "2Gi",
 	credentialSecretName: "workspace-snapshot-credentials",
 };

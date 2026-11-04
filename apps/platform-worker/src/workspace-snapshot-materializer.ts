@@ -18,6 +18,7 @@ export interface WorkspaceSnapshotMaterializerInputV1 {
 
 export interface WorkspaceSnapshotMaterializerPolicyV1 {
 	readonly imageDigest: string;
+	readonly allowedOrigins: readonly string[];
 	readonly cacheSizeLimit: string;
 	readonly credentialSecretName: string;
 }
@@ -32,7 +33,6 @@ export interface WorkspaceSnapshotPodProjectionV1 {
 const volumeName = "workspace-snapshots";
 const credentialsVolumeName = "workspace-snapshot-credentials";
 const materializerMount = "/materialized";
-const manifestPath = "/run/workspace-snapshots/manifest.json";
 
 function assertSignedUrl(input: WorkspaceSnapshotMaterializerInputV1) {
 	if (!input.objectRef || input.sizeBytes <= 0)
@@ -58,7 +58,11 @@ export function projectWorkspaceSnapshotMaterializerV1(
 	snapshots: readonly WorkspaceSnapshotMaterializerInputV1[],
 	policy: WorkspaceSnapshotMaterializerPolicyV1,
 ): WorkspaceSnapshotPodProjectionV1 {
-	if (!/^sha256:[a-f0-9]{64}$/.test(policy.imageDigest))
+	if (
+		!/^([a-z0-9.-]+(?::[0-9]+)?\/)[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/.test(
+			policy.imageDigest,
+		)
+	)
 		throw new Error("workspace snapshot materializer image must be immutable");
 	if (!policy.credentialSecretName || !policy.cacheSizeLimit)
 		throw new Error("workspace snapshot materializer policy is incomplete");
@@ -73,6 +77,8 @@ export function projectWorkspaceSnapshotMaterializerV1(
 		if (!/^sha256:[a-f0-9]{64}$/.test(snapshot.digest))
 			throw new Error("workspace snapshot digest is invalid");
 		assertSignedUrl(snapshot);
+		if (!policy.allowedOrigins.includes(new URL(snapshot.signedUrl).origin))
+			throw new Error("workspace snapshot origin is not approved");
 		const path = `/opt/agent/workspaces/${snapshot.name}`;
 		mounts.set(snapshot.name, [
 			{
@@ -86,6 +92,7 @@ export function projectWorkspaceSnapshotMaterializerV1(
 	const emptyDir: V1EmptyDirVolumeSource = { sizeLimit: policy.cacheSizeLimit };
 	const manifest = JSON.stringify({
 		schemaVersion: 1,
+		allowedOrigins: [...policy.allowedOrigins],
 		snapshots: snapshots.map((snapshot) => ({
 			snapshotId: snapshot.snapshotId,
 			name: snapshot.name,
@@ -113,8 +120,16 @@ export function projectWorkspaceSnapshotMaterializerV1(
 				name: "workspace-snapshot-materializer",
 				image: policy.imageDigest,
 				imagePullPolicy: "IfNotPresent",
-				command: ["/bin/materialize"],
-				args: [`--manifest=${manifestPath}`],
+				command: ["node", "/app/dist/workspaceSnapshotInit.mjs"],
+				securityContext: {
+					runAsNonRoot: true,
+					runAsUser: 1000,
+					runAsGroup: 1000,
+					readOnlyRootFilesystem: true,
+					allowPrivilegeEscalation: false,
+					capabilities: { drop: ["ALL"] },
+					seccompProfile: { type: "RuntimeDefault" },
+				},
 				volumeMounts: [
 					{ name: volumeName, mountPath: materializerMount },
 					{

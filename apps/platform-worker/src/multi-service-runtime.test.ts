@@ -441,7 +441,8 @@ describe("multi-service resource policy", () => {
 				},
 			],
 			{
-				imageDigest: `sha256:${"b".repeat(64)}`,
+				imageDigest: `registry.example.test/platform-worker@sha256:${"b".repeat(64)}`,
+				allowedOrigins: ["https://objects.example.test"],
 				cacheSizeLimit: "2Gi",
 				credentialSecretName: "snapshot-credentials",
 			},
