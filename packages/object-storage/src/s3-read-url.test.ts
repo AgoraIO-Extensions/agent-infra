@@ -35,16 +35,21 @@ it("signs an immutable version for a header-free GET and bounds its lifetime", a
 	});
 	try {
 		const objectRef = "00000000-0000-4000-8000-000000000001";
-		const url = new URL(
-			await storage.createReadUrl({
-				objectRef,
-				version,
-				expiresInSeconds: 300,
-			}),
-		);
+		const result = await storage.createReadUrl({
+			objectRef,
+			version,
+			expiresInSeconds: 300,
+		});
+		const url = new URL(result.signedUrl);
 		expect(url.pathname).toBe(`/snapshots/workspace-snapshots/${objectRef}`);
 		expect(url.searchParams.get("versionId")).toBe(version);
 		expect(url.searchParams.get("X-Amz-Expires")).toBe("300");
+		const signedAt = url.searchParams.get("X-Amz-Date") ?? "";
+		const iso = signedAt.replace(
+			/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+			"$1-$2-$3T$4:$5:$6Z",
+		);
+		expect(Date.parse(result.expiresAt)).toBe(Date.parse(iso) + 300_000);
 		expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
 		expect(requests).toEqual([
 			{ method: "HEAD", version },

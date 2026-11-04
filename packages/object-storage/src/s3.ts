@@ -41,7 +41,9 @@ export function createS3ObjectStorageV1(
 	options: S3ObjectStorageOptionsV1,
 ): ObjectStorageDataV1 & {
 	close(): void;
-	createReadUrl(input: ObjectStorageReadUrlV1): Promise<string>;
+	createReadUrl(
+		input: ObjectStorageReadUrlV1,
+	): Promise<{ signedUrl: string; expiresAt: string }>;
 } {
 	if (
 		(options.contentPolicy === "skill-package" &&
@@ -165,15 +167,23 @@ export function createS3ObjectStorageV1(
 			const object = await inspect(input.objectRef, input.version);
 			if (!object || object.version !== input.version)
 				throw new ObjectStorageError("missing");
-			return getSignedUrl(
+			const signingDate = new Date();
+			const signedUrl = await getSignedUrl(
 				client,
 				new GetObjectCommand({
 					Bucket: options.bucket,
 					Key: key(input.objectRef),
 					VersionId: input.version,
 				}),
-				{ expiresIn: input.expiresInSeconds },
+				{ expiresIn: input.expiresInSeconds, signingDate },
 			);
+			return {
+				signedUrl,
+				expiresAt: new Date(
+					Math.floor(signingDate.getTime() / 1000) * 1000 +
+						input.expiresInSeconds * 1000,
+				).toISOString(),
+			};
 		},
 		async scan(cursor: string | null, limit: number, objectRef?: string) {
 			try {

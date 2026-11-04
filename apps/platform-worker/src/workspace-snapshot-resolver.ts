@@ -29,7 +29,7 @@ export function createWorkspaceSnapshotResolverV1(input: {
 		readonly objectRef: string;
 		readonly objectVersion: string;
 		readonly expiresInSeconds: number;
-	}) => Promise<string>;
+	}) => Promise<{ readonly signedUrl: string; readonly expiresAt: string }>;
 	readonly policy: WorkspaceSnapshotMaterializerPolicyV1;
 	readonly allowedOrigins: readonly string[];
 }) {
@@ -46,7 +46,7 @@ export function createWorkspaceSnapshotResolverV1(input: {
 			if (!binding || binding.name !== record.name || names.has(record.name))
 				throw new Error();
 			names.add(record.name);
-			const signedUrl = await input.createReadUrl({
+			const { signedUrl, expiresAt } = await input.createReadUrl({
 				objectRef: record.objectRef,
 				objectVersion: record.objectVersion,
 				expiresInSeconds: 300,
@@ -66,7 +66,7 @@ export function createWorkspaceSnapshotResolverV1(input: {
 				sizeBytes: record.sizeBytes,
 				objectRef: record.objectRef,
 				signedUrl,
-				expiresAt: new Date(Date.now() + 300_000).toISOString(),
+				expiresAt,
 			});
 		}
 		return {
