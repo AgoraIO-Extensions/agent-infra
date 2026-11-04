@@ -6606,3 +6606,84 @@ it("keeps signed snapshot authorization out of persisted desired workload", asyn
 	expect(JSON.stringify(candidate)).not.toContain(snapshot.signedUrl);
 	expect(JSON.stringify(candidate)).not.toContain(snapshot.expiresAt);
 });
+
+it("restores snapshot projection after runtime recreation and refreshes signing", async () => {
+	const { projectWorkspaceSnapshotMaterializerV1 } = await import(
+		"./workspace-snapshot-materializer.js"
+	);
+	const configuration = configurationFixture();
+	assert(configuration.source.kind === "custom");
+	let generation = 0;
+	const resolver = vi.fn(async () => {
+		const snapshot = {
+			snapshotId: "snapshot-a",
+			name: "repo",
+			digest: `sha256:${"b".repeat(64)}`,
+			sizeBytes: 128,
+			objectRef: "object-a",
+			signedUrl: `https://objects.example.test/archive?signature=${++generation}`,
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+		};
+		return {
+			inputs: [snapshot],
+			projection: projectWorkspaceSnapshotMaterializerV1([snapshot], {
+				imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
+				allowedOrigins: ["https://objects.example.test"],
+				cacheSizeLimit: "2Gi",
+				credentialSecretName: "snapshot-credentials",
+			}),
+		};
+	});
+	const f = fixture(
+		{ workspaceSnapshotResolver: resolver },
+		{
+			configuration: {
+				...configuration,
+				source: {
+					...configuration.source,
+					workspaceSnapshots: [{ snapshotId: "snapshot-a", name: "repo" }],
+				},
+			},
+		},
+	);
+	await f.tick(10);
+	expect(f.state?.phase).toBe("ready");
+	const workloads = [...f.resources.values()].filter(
+		(x) => x.kind === "StatefulSet",
+	) as V1StatefulSet[];
+	expect(workloads).toHaveLength(1);
+	expect(workloads[0]?.spec?.template.spec?.initContainers?.[0]?.name).toBe(
+		"workspace-snapshot-materializer",
+	);
+	expect(resolver.mock.calls.length).toBeGreaterThan(1);
+	expect(JSON.stringify(f.state)).not.toContain("signature=");
+	const state = f.state;
+	assert(state);
+	const prior = f.resources.get("Secret/snapshot-credentials") as V1Secret;
+	const oldManifest = prior.stringData?.["manifest.json"];
+	const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6 * 60_000);
+	try {
+		await createWorkloadRuntimeV1(f.options).apply(state, false, {
+			state,
+			configuration: state.candidate.configuration,
+			management: f.management,
+			requestId: "retry",
+			traceId: "retry",
+		});
+		const fresh = f.resources.get("Secret/snapshot-credentials") as V1Secret;
+		expect(fresh.stringData?.["manifest.json"]).not.toBe(oldManifest);
+		const manifest = JSON.parse(fresh.stringData?.["manifest.json"] ?? "null");
+		expect(Date.parse(manifest.snapshots[0].expiresAt)).toBeGreaterThan(
+			Date.now(),
+		);
+		expect(
+			(
+				f.resources.get(
+					`StatefulSet/${workloads[0]?.metadata?.name}`,
+				) as V1StatefulSet
+			).metadata?.generation,
+		).toBe(workloads[0]?.metadata?.generation);
+	} finally {
+		clock.mockRestore();
+	}
+});

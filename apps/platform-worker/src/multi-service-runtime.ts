@@ -52,6 +52,7 @@ import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
 } from "./workspace-snapshot-materializer.js";
+import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 	multiService: NonNullable<AgentWorkloadDesiredV1["multiService"]>;
@@ -1390,6 +1391,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			validateMultiServiceResourceCapacityV1(value, resources);
 			await pruneStaleResources(value, ownership);
 			await put(serviceAccount(value), value, ownership);
+			if (options.policy.workspaceSnapshotProjection)
+				await writeWorkspaceSnapshotSecretV1(
+					client,
+					options.policy.workspaceSnapshotProjection,
+					serviceAccount(value).metadata ?? {},
+				);
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
 				await put(migrationNetworkPolicy(value), value, ownership);

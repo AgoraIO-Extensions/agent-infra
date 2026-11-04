@@ -3004,3 +3004,54 @@ describe("native Session policy binding", () => {
 		await expect(adapter.observe(input)).rejects.toThrow();
 	});
 });
+
+it("creates a Session-scoped signed manifest and rejects altered snapshot init", async () => {
+	const { projectWorkspaceSnapshotMaterializerV1 } = await import(
+		"./workspace-snapshot-materializer.js"
+	);
+	const { sessionSnapshotSecretNameV1 } = await import(
+		"./session-workload-adapter.js"
+	);
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const projection = projectWorkspaceSnapshotMaterializerV1(
+		[
+			{
+				snapshotId: "snapshot-a",
+				name: "repo",
+				digest: `sha256:${"b".repeat(64)}`,
+				sizeBytes: 128,
+				objectRef: "object-a",
+				signedUrl: "https://objects.example.test/archive",
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			},
+		],
+		{
+			imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
+			allowedOrigins: ["https://objects.example.test"],
+			cacheSizeLimit: "2Gi",
+			credentialSecretName: sessionSnapshotSecretNameV1(allocation),
+		},
+	);
+	const selected = { ...allocation, workspaceSnapshotProjection: projection };
+	await adapter.apply(selected);
+	const pod = await client.read<V1Pod>("Pod", allocation.podName);
+	expect(pod?.spec?.initContainers).toHaveLength(1);
+	const secret = await client.read<V1Secret>(
+		"Secret",
+		sessionSnapshotSecretNameV1(allocation),
+	);
+	expect(secret?.metadata?.namespace).toBe(allocation.namespace);
+	expect(secret?.metadata?.ownerReferences?.[0]?.uid).toBe(pod?.metadata?.uid);
+	expect(
+		sessionSnapshotSecretNameV1({ ...allocation, sandboxId: "other" }),
+	).not.toBe(sessionSnapshotSecretNameV1(allocation));
+	expect(
+		sessionSnapshotSecretNameV1({ ...allocation, resourceFence: 10 }),
+	).not.toBe(sessionSnapshotSecretNameV1(allocation));
+	const drift = structuredClone(pod);
+	if (!drift?.spec?.initContainers?.[0]) throw Error("no init");
+	drift.spec.initContainers[0].command = ["sh", "-c", "untrusted"];
+	client.resources.set(`Pod/${allocation.podName}`, drift);
+	expect((await adapter.observe(selected)).status).toBe("unknown");
+});

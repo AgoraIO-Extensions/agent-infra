@@ -113,3 +113,42 @@ it("does not extend authorization that expires while signing", async () => {
 		}),
 	).rejects.toThrow("expiry");
 });
+
+it("isolates manifest Secrets by Agent/configuration and projects drain shape without signing", async () => {
+	const sign = vi.fn(async () => ({
+		signedUrl: "https://objects.example.test/archive",
+		expiresAt: new Date(Date.now() + 60_000).toISOString(),
+	}));
+	const resolver = createWorkspaceSnapshotResolverV1({
+		read: async () => [record],
+		createReadUrl: sign,
+		policy,
+		allowedOrigins: policy.allowedOrigins,
+	});
+	const input = {
+		agentId: "agent-a",
+		configurationRevision: 1,
+		workloadRevision: 1,
+		fence: 1,
+		bindings: [{ snapshotId: record.snapshotId, name: record.name }],
+	};
+	const a = await resolver(input);
+	const b = await resolver({ ...input, agentId: "agent-b" });
+	const next = await resolver({ ...input, configurationRevision: 2 });
+	const secret = (p: typeof a.projection) =>
+		p.volumes.find((v) => v.name === "workspace-snapshot-credentials")?.secret
+			?.secretName;
+	expect(
+		new Set([
+			secret(a.projection),
+			secret(b.projection),
+			secret(next.projection),
+		]).size,
+	).toBe(3);
+	sign.mockClear();
+	const shape = resolver.project([record], input);
+	expect(shape.initContainers).toEqual(a.projection.initContainers);
+	expect(secret(shape)).toBe(secret(a.projection));
+	expect(shape.manifest).toBe("");
+	expect(sign).not.toHaveBeenCalled();
+});
