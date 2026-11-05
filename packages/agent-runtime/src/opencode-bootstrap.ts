@@ -40,7 +40,10 @@ import {
 	workspaceGlobAllowed,
 	workspacePathAllowed,
 } from "./workspace-path.js";
-import { workspaceSnapshotFileAllowed } from "./workspace-snapshot-path.js";
+import {
+	workspaceSnapshotFileAllowed,
+	workspaceSnapshotReadRoots,
+} from "./workspace-snapshot-path.js";
 
 /**
  * #3226：把平台固定的文件交换说明写到 Conversation 目录 `config/agent-infra/` 下。该目录在
@@ -373,6 +376,22 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					},
 					authorize: async (tool) => {
 						const identity = openCodeToolName(tool);
+						if (tool.title === "external_directory") {
+							const input = tool.rawInput;
+							const directory =
+								input &&
+								typeof input === "object" &&
+								!Array.isArray(input) &&
+								"directory" in input &&
+								typeof input.directory === "string"
+									? input.directory
+									: undefined;
+							return (
+								directory !== undefined &&
+								(await workspaceSnapshotReadRoots()).includes(directory)
+							);
+						}
+
 						if (identity === "WebSearch")
 							return (
 								!!tool.rawInput &&
