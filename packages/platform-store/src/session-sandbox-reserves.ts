@@ -415,7 +415,7 @@ async function lockBudget(
      and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id
      and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text
      and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text))
-   or (a.status = 'unavailable' and a.resource_observation->>'status' = 'stopped' and a.resource_observation->'sourceStop'->'removed' is not null)
+   or (a.status = 'unavailable' and a.resource_observation->>'status' = 'stopped' and jsonb_typeof(a.resource_observation->'sourceStop'->'removed') = 'array')
   )`;
 	return { ...config, enabled: policy.enabled };
 }
