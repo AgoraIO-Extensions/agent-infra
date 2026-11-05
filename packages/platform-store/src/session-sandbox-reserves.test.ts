@@ -1113,13 +1113,15 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 	it("releases compute for an unavailable allocation after confirmed source cleanup", async () => {
 		await ready();
 		const created = await create();
-		const allocation = "result" in created ? created.result.conversationId : undefined;
+		const allocation =
+			"result" in created ? created.result.conversationId : undefined;
 		if (!allocation) throw new Error("Expected allocation");
-		const [row] = await sql<{ sandbox_id: string }[]>
-			`select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${allocation}`;
+		const [row] = await sql<
+			{ sandbox_id: string }[]
+		>`select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${allocation}`;
 		if (!row) throw new Error("Expected allocation row");
 		await sql`update platform.session_sandbox_allocations set status = 'unavailable', desired_state = 'stopped', resource_observation = ${sql.json({ status: "stopped", resources: [], sourceStop: { removed: [{ kind: "Pod", name: "sandbox", namespace: "reserve-test" }] } })} where sandbox_id = ${row.sandbox_id}`;
-		await reserves().applyConfiguration();
+		await reserves().reconcileCapacity("agent");
 		expect(
 			await sql`select compute_released, released from platform.session_sandbox_resource_charges where sandbox_id = ${row.sandbox_id}`,
 		).toEqual([{ compute_released: true, released: false }]);
