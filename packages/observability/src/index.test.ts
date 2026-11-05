@@ -845,3 +845,41 @@ it("keeps a bounded Runtime error code on the runtime stage without an HTTP stat
 	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("protocolCode");
 	expect(lines[1]).not.toContain("PRIVATE");
 });
+
+it("keeps a bounded scheduled-retry reason on the task_dispatch stage (#3960)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "task_dispatch",
+		outcome: "failed",
+		code: "TASK_UNAVAILABLE",
+		protocolCode: "RUNTIME_ROUTE_STALE",
+		operationRef: "conversation.turn.submit.v1",
+	});
+	telemetry.record({
+		stage: "task_dispatch",
+		outcome: "failed",
+		code: "TASK_UNAVAILABLE",
+		protocolCode: "PRIVATE\nSENTINEL",
+	});
+	expect(lines).toHaveLength(2);
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		stage: "task_dispatch",
+		code: "TASK_UNAVAILABLE",
+		protocolCode: "RUNTIME_ROUTE_STALE",
+	});
+	expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
+		code: "TASK_UNAVAILABLE",
+	});
+	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("protocolCode");
+	expect(lines[1]).not.toContain("PRIVATE");
+});

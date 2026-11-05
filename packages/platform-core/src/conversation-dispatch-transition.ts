@@ -292,7 +292,7 @@ export async function retry(
 		transition,
 	});
 	return scheduled
-		? { schemaVersion: 1, outcome, retryScheduled: true }
+		? { schemaVersion: 1, outcome, retryScheduled: true, errorCode }
 		: { schemaVersion: 1, outcome: "stale" };
 }
 

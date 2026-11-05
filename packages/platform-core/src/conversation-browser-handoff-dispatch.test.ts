@@ -142,6 +142,7 @@ describe("Conversation Browser handoff dispatch", () => {
 			schemaVersion: 1,
 			outcome: "unknown",
 			retryScheduled: true,
+			errorCode: "BROWSER_HANDOFF_ACCEPTANCE_UNKNOWN",
 		});
 		expect(h.finished).toBeNull();
 		expect(h.retried).toMatchObject({

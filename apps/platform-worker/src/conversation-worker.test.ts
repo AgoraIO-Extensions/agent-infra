@@ -1278,6 +1278,38 @@ describe("conversation dispatch observability", () => {
 			{ schemaVersion: 1, outcome: "retry", retryScheduled: true },
 			{ outcome: "failed", code: "TASK_UNAVAILABLE" },
 		],
+		// #3960：已排期的重试带上 Store attempt event 的同一个原因码。
+		[
+			{
+				schemaVersion: 1,
+				outcome: "retry",
+				retryScheduled: true,
+				errorCode: "RUNTIME_ROUTE_STALE",
+			},
+			{
+				outcome: "failed",
+				code: "TASK_UNAVAILABLE",
+				protocolCode: "RUNTIME_ROUTE_STALE",
+			},
+		],
+		[
+			{
+				schemaVersion: 1,
+				outcome: "busy",
+				retryScheduled: true,
+				errorCode: "RUNTIME_BUSY",
+			},
+			{ outcome: "waiting", protocolCode: "RUNTIME_BUSY" },
+		],
+		[
+			{
+				schemaVersion: 1,
+				outcome: "unknown",
+				retryScheduled: true,
+				errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			},
+			{ outcome: "unknown", protocolCode: "RUNTIME_ACCEPTANCE_UNKNOWN" },
+		],
 		[
 			{ schemaVersion: 1, outcome: "unknown", retryScheduled: false },
 			{ outcome: "unknown" },

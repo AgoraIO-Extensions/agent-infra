@@ -130,7 +130,8 @@ export interface OperationalEvent {
 	readonly status?: number;
 	/**
 	 * 响应里的协议错误码（如 `DEPENDENCY_UNAVAILABLE`），用于 `http` 阶段；`runtime` 阶段
-	 * 记录 Runtime Host 返回的稳定错误码（#3276）。只记码，不是错误正文。
+	 * 记录 Runtime Host 返回的稳定错误码（#3276）；`task_dispatch` 阶段记录已排期重试的
+	 * 原因码（#3960）。只记码，不是错误正文。
 	 */
 	readonly protocolCode?: string;
 	/** Bounded server-side failure stage, never a free-form error message. */
@@ -695,15 +696,18 @@ export function startObservability(options: ObservabilityOptions) {
 				const details = {
 					...labels,
 					...(code && codes.has(code) ? { code } : {}),
-					// 状态码只对 http 阶段有意义；协议错误码对 http 与 runtime（Runtime Host 返回的
-					// 稳定错误码，#3276）阶段有意义。两者都必须是有界的值，其余一律丢弃。
+					// 状态码只对 http 阶段有意义；协议错误码对 http、runtime（Runtime Host 返回的
+					// 稳定错误码，#3276）与 task_dispatch（已排期重试的原因码，#3960）阶段有意义。
+					// 两者都必须是有界的值，其余一律丢弃。
 					...(stage === "http" &&
 					Number.isInteger(status) &&
 					(status as number) >= 100 &&
 					(status as number) <= 599
 						? { status }
 						: {}),
-					...((stage === "http" || stage === "runtime") &&
+					...((stage === "http" ||
+						stage === "runtime" ||
+						stage === "task_dispatch") &&
 					typeof protocolCode === "string" &&
 					protocolCodePattern.test(protocolCode)
 						? { protocolCode }
