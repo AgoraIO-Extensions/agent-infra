@@ -951,10 +951,17 @@ async function sessionOwnerSecretMaterializationV1(
 		});
 		if (decryption.outcome !== "decrypted") return reject([target]);
 		try {
+			let plaintext: string;
+			try {
+				plaintext = new TextDecoder("utf-8", { fatal: true }).decode(
+					decryption.plaintext,
+				);
+			} catch {
+				// Unusable plaintext is a rejected decryption, never a success.
+				return await reject([target]);
+			}
 			await audit(target, "succeeded");
-			data[record.name] = new TextDecoder("utf-8", { fatal: true }).decode(
-				decryption.plaintext,
-			);
+			data[record.name] = plaintext;
 		} catch {
 			throw new WorkloadKubernetesError("policy");
 		} finally {

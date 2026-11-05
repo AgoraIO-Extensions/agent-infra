@@ -413,6 +413,7 @@ function customOwnerSecretFixture(
 	const behavior: {
 		resolve?: () => Promise<readonly unknown[]>;
 		audit?: (outcome: "succeeded" | "rejected") => Promise<void>;
+		plaintext?: Uint8Array;
 	} = {};
 	const keyring = createWorkloadSecretKeyringDecryptorV1({
 		keys: [
@@ -441,8 +442,11 @@ function customOwnerSecretFixture(
 		decryptor: {
 			async decrypt(input) {
 				const result = await keyring.decrypt(input);
-				if (result.outcome === "decrypted") decryptions.push(result.plaintext);
-				return result;
+				if (result.outcome !== "decrypted") return result;
+				const plaintext = behavior.plaintext ?? result.plaintext;
+				if (plaintext !== result.plaintext) result.plaintext.fill(0);
+				decryptions.push(plaintext);
+				return { outcome: "decrypted", plaintext };
 			},
 		},
 		sessionOwnerSecrets: {
@@ -880,6 +884,18 @@ describe("production SessionSandbox resource receiver", () => {
 			).rejects.toThrow();
 			expect(o.decryptions).toEqual([]);
 			expect(o.audits.map(({ outcome }) => outcome)).toEqual(["rejected"]);
+			expect(f.resources.has(sessionSecret)).toBe(false);
+		});
+
+		it("records unusable plaintext as a rejected decryption and zeroes it", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			o.behavior.plaintext = Uint8Array.from([0xff, 0xfe, 0xfd]);
+			await expect(
+				o.receive(o.claim, new AbortController().signal),
+			).rejects.toThrow();
+			expect(o.audits.map(({ outcome }) => outcome)).toEqual(["rejected"]);
+			expect(o.decryptions[0]?.every((byte) => byte === 0)).toBe(true);
 			expect(f.resources.has(sessionSecret)).toBe(false);
 		});
 
