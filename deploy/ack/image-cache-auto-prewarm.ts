@@ -19,7 +19,7 @@ export function validatePlanArtifact(artifact: PlanArtifact, expectedName: strin
 export function validatePlanWorkflowRun(run: any, defaultHead: string) {
 	assert(String(run.head_sha) === defaultHead && run.status === "completed" && run.conclusion === "success", "CACHE_PLAN_RUN_INVALID");
 	assert(run.path === ".github/workflows/ack-image-cache.yml" && run.repository?.full_name === repository && run.head_repository?.full_name === repository, "CACHE_PLAN_RUN_UNTRUSTED");
-	assert(run.event === "workflow_dispatch" || (run.event === "workflow_run" && run.head_branch === "main"), "CACHE_PLAN_RUN_UNTRUSTED");
+	assert(run.head_branch === "main" && (run.event === "workflow_dispatch" || run.event === "workflow_run"), "CACHE_PLAN_RUN_UNTRUSTED");
 }
 function command(args: string[], options: { cwd?: string; maxBuffer?: number } = {}) {
 	return execFileSync(args[0], args.slice(1), { cwd: options.cwd, encoding: "utf8", timeout: 120_000, maxBuffer: options.maxBuffer ?? 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();

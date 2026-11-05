@@ -25,6 +25,7 @@ test("requires the plan workflow run to be successful and trusted", () => {
 		path: ".github/workflows/ack-image-cache.yml",
 		repository: { full_name: "AgoraIO-Extensions/agent-infra" },
 		head_repository: { full_name: "AgoraIO-Extensions/agent-infra" },
+		head_branch: "main",
 		event: "workflow_dispatch",
 	};
 	assert.doesNotThrow(() => validatePlanWorkflowRun(trusted, "a".repeat(40)));
@@ -33,6 +34,7 @@ test("requires the plan workflow run to be successful and trusted", () => {
 		{ head_repository: { full_name: "fork/agent-infra" } },
 		{ conclusion: "failure" },
 		{ head_sha: "b".repeat(40) },
+		{ head_branch: "feature" },
 	])
 		assert.throws(() =>
 			validatePlanWorkflowRun({ ...trusted, ...change }, "a".repeat(40)),
