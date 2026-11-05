@@ -63,7 +63,11 @@ export async function runOnce(env = process.env) {
 		await atomicJson(join(runDir, "run.json"), { ...run, artifact: matching[0], plan: { sourceSha: plan.sourceSha, groups: plan.groups.length } });
 		if (dryRun) return { status: "plan-ready", runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, cacheCount: plan.groups.length, planFile };
 		const receipt = join(runDir, "cache-ready.json");
-		const ready = await ensureCachesWithReceipt(plan, kubernetesBackend(kubeconfig, namespace, env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30)), receipt, { timeoutMs: Number(env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_800_000) });
+		const cacheSizeGiB = Number(env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30);
+		const timeoutMs = Number(env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_800_000);
+		assert(Number.isFinite(cacheSizeGiB) && cacheSizeGiB > 0, "ACK_IMAGE_CACHE_SIZE_GIB_INVALID");
+		assert(Number.isFinite(timeoutMs) && timeoutMs > 0, "ACK_IMAGE_CACHE_TIMEOUT_MS_INVALID");
+		const ready = await ensureCachesWithReceipt(plan, kubernetesBackend(kubeconfig, namespace, env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", cacheSizeGiB), receipt, { timeoutMs });
 		assert(ready.status === "ready" && ready.sourceSha === plan.sourceSha && ready.caches.length === plan.groups.length, "CACHE_PREWARM_INCOMPLETE");
 		await atomicJson(join(stateDir, "last-success.json"), { runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, receipt, completedAt: new Date().toISOString() });
 		return { status: "ready", runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, cacheCount: ready.caches.length, receipt };
