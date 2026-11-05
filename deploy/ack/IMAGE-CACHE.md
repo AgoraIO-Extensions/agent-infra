@@ -50,11 +50,48 @@ GitHub Environment `ack-image-cache` 仅用于受保护 `main` 生成计划 arti
 GitHub、repo、日志或 issue。该运维身份不需要 Kubernetes 业务 Pod 写权限、应用 Secret、
 数据库或镜像删除权限。
 
-普通发布触发计划生成；部署运维机下载同 run/attempt 的 plan 后执行现有 `image-cache.ts`
-Kubernetes backend。运维机只引用 Secret 名称，不读取凭据正文。CR 查询失败、缓存未 Ready 或拉取 Secret
-无效时停止，不冷拉绕过。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。
+普通发布触发计划生成；受控 ACK 运维机可通过 `ack-image-cache-prewarm.timer` 每 5 分钟轮询
+成功的 plan workflow，下载同 run/attempt 的 artifact，再执行现有 `image-cache.ts` Kubernetes
+backend。kubeconfig、`gh` 登录态和 registry Secret 都留在运维机；GitHub 不获得它们。
+运维机只引用 Secret 名称，不读取凭据正文。CR 查询失败、缓存未 Ready 或拉取 Secret 无效时停止，
+不冷拉绕过。轮询器按 run/attempt 和私有状态目录幂等，串行等待 Ready；失败保留脱敏 receipt，
+下一轮复用同名 CR，不创建副本。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。
 
 ## 运维端执行
+
+### 自动轮询（推荐）
+
+在受控运维机安装 Node 24、`gh`、`kubectl`，并让 `gh auth status` 使用只读 Actions artifact
+读取权限。将 service/timer 安装到机器，不把 token、kubeconfig 或 Secret 写入仓库：
+
+```bash
+sudo install -m 0644 deploy/ack/ack-image-cache-prewarm.service /etc/systemd/system/
+sudo install -m 0644 deploy/ack/ack-image-cache-prewarm.timer /etc/systemd/system/
+sudo install -d -o agent-infra-ack -g agent-infra-ack -m 0700 /var/lib/agent-infra/ack-image-cache
+sudo systemctl daemon-reload
+sudo systemctl enable --now ack-image-cache-prewarm.timer
+systemctl list-timers ack-image-cache-prewarm.timer
+```
+
+`/etc/agent-infra/ack-image-cache-prewarm.env` 至少包含：
+
+```bash
+ACK_AUTO_PREWARM_STATE_DIR=/var/lib/agent-infra/ack-image-cache
+ACK_KUBECONFIG=/etc/agent-infra/hzacsagentprod01-cucc.config
+GH_CONFIG_DIR=/etc/agent-infra/gh
+ACK_NAMESPACE=agent-infra
+ACK_IMAGE_PULL_SECRET=ack-ghcr-pull
+ACK_IMAGE_CACHE_SIZE_GIB=30
+```
+
+以 `agent-infra-ack` 用户在 `/etc/agent-infra/gh` 完成一次 `gh auth login`（只读 Actions
+artifact 权限）后再启动 timer。轮询器只处理受保护 `main` 上成功的 `ACK image cache plan` run，校验单一未过期 artifact、
+source/digest plan 和 workflow attempt，然后调用 `ensure`。日志只输出状态、run/attempt、
+source 和 cache 数量；计划和 receipt 写入 0700 状态目录。`systemctl start ack-image-cache-prewarm.service`
+可手动运行一次，`journalctl -u ack-image-cache-prewarm.service` 可查看结果。
+
+GitHub workflow 绿灯仍只代表 plan artifact 成功；systemd 服务成功且 receipt 为 Ready 才代表
+预热完成。部署入口仍需实时 `check` 并通过严格准入，不能把轮询成功当作业务验收。
 
 使用 Node.js 24，在受控代码 checkout 中执行。先核对 `ACK image cache plan` 运行来自本仓
 受保护 main、结论成功，回读其触发的 Publish images run/attempt 和 source。以下变量由本次

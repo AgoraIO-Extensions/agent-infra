@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll trusted ACK image cache plans
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=ack-image-cache-prewarm.service
+
+[Install]
+WantedBy=timers.target
