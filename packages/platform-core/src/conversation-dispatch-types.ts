@@ -591,6 +591,11 @@ export type ConversationDispatchDecisionV1 =
 			readonly schemaVersion: 1;
 			readonly outcome: "busy" | "unknown" | "retry";
 			readonly retryScheduled: boolean;
+			/**
+			 * #3960：与 Store attempt event 相同的有界符号码（例如 `RUNTIME_ROUTE_STALE`），
+			 * 只在重试已排期时出现，供观测归因；调度不读取它。
+			 */
+			readonly errorCode?: string;
 	  }
 	| { readonly schemaVersion: 1; readonly outcome: "rejected" | "stale" }
 	| { readonly schemaVersion: 1; readonly outcome: "already_completed" };

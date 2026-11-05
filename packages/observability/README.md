@@ -16,7 +16,7 @@
 
 `record` 只记录调用方已确认的阶段结果。`durationMs` 进入耗时直方图；当前 Span 在采集时创建并结束，其自身时长不是该阶段的实际耗时。业务 `traceId` 仍是受控关联属性；持久会话 outbox 另存有界的 W3C `traceparent`（仅 ID 与 flags）。Worker 对合法 context 建立独立的 root span，并用 SpanLink 关联发起请求，不把异步等待计算进 API span；缺失或格式错误的 context 会忽略并开新的 root span。context 永远不作为身份或授权依据，重试共享原持久 context 但由 attempt/operation 区分。
 
-Conversation Worker 在已有 dispatch use case 返回决定后记录一次带实测耗时的 `task_dispatch`：`accepted` 为 `completed`，`busy`/`retry` 为带 `TASK_UNAVAILABLE` 的 `failed`，`unknown` 为 `unknown`，`rejected`/`stale`/`already_completed` 为 `rejected`。`operationRef` 只使用 Store 提供的固定 operation 名称；item ID 不进入日志或指标标签。dispatch 抛出异常时记录 `failed`，遥测采集失败仍由 Worker 原有错误处理和重试语义决定。未装配 observability 时不产生该阶段记录。
+Conversation Worker 在已有 dispatch use case 返回决定后记录一次带实测耗时的 `task_dispatch`：`accepted` 为 `completed`，`busy` 为 `waiting`，`retry` 为带 `TASK_UNAVAILABLE` 的 `failed`，`unknown` 为 `unknown`，`rejected`/`stale`/`already_completed` 为 `rejected`。已排期的重试另带 `protocolCode`，取值是写入 Store attempt event 的同一个有界原因码（例如 `RUNTIME_ROUTE_STALE`、`SESSION_SANDBOX_UPDATING`），只进入日志与 Trace，不作为指标标签（#3960）；Store 或转移失败未排期的重试不带原因码。`operationRef` 只使用 Store 提供的固定 operation 名称；item ID 不进入日志或指标标签。dispatch 抛出异常时记录 `failed`，遥测采集失败仍由 Worker 原有错误处理和重试语义决定。未装配 observability 时不产生该阶段记录。
 
 Conversation Worker 在已有 durable queue discovery 返回至少一个会话任务后记录一次 `task_wait/completed`，耗时是该次 Store discovery 的实测等待时间，`operationRef` 固定为 `conversation.queue.find`；空页面、只有 sandbox maintenance 的页面和下一次 poll 的 timer sleep 不产生事件。Store discovery 失败记录一次带 `TASK_UNAVAILABLE` 的 `task_wait/failed`，然后继续抛出原错误交给既有 discovery/retry 处理。该阶段只记录批次等待，不写入 item、Conversation 或 execution ID；遥测采集失败不会改变 Worker 的投递、重试或停止语义。
 

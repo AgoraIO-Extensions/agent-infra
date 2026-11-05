@@ -4877,7 +4877,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						itemId: work.itemId,
 						workerId: "not-submitted-core-worker",
 					}),
-				).toEqual({ schemaVersion: 1, outcome: "retry", retryScheduled: true });
+				).toEqual({
+					schemaVersion: 1,
+					outcome: "retry",
+					retryScheduled: true,
+					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
+				});
 				expect((await dispatchState(work))?.execution_status).toBe("submitted");
 				await waitForAvailableItem(work.itemId);
 				await useCase.dispatch({

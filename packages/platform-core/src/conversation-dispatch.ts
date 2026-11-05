@@ -226,7 +226,12 @@ export function createConversationDispatchUseCaseV1(
 					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
 					hostSessionRef,
 				}))
-					? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+					? {
+							schemaVersion: 1,
+							outcome: "retry",
+							retryScheduled: true,
+							errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
+						}
 					: { schemaVersion: 1, outcome: "stale" };
 			} catch {
 				return { schemaVersion: 1, outcome: "retry", retryScheduled: false };
@@ -1576,7 +1581,12 @@ export function createConversationDispatchUseCaseV1(
 									retryDelayMs,
 									errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
 								}))
-									? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+									? {
+											schemaVersion: 1,
+											outcome: "retry",
+											retryScheduled: true,
+											errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
+										}
 									: { schemaVersion: 1, outcome: "stale" };
 							} catch {
 								return {
@@ -1778,7 +1788,12 @@ export function createConversationDispatchUseCaseV1(
 							retryDelayMs,
 							errorCode: failure.code,
 						}))
-							? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+							? {
+									schemaVersion: 1,
+									outcome: "retry",
+									retryScheduled: true,
+									errorCode: failure.code,
+								}
 							: { schemaVersion: 1, outcome: "stale" };
 					} catch {
 						return {

@@ -1775,6 +1775,7 @@ describe("Conversation Worker dispatch", () => {
 			schemaVersion: 1,
 			outcome: "retry",
 			retryScheduled: true,
+			errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
 		});
 		expect(store.current.executionStatus).toBe("waiting");
 		expect(store.released).toBe(1);
@@ -3200,6 +3201,7 @@ describe("Conversation Worker dispatch", () => {
 			schemaVersion: 1,
 			outcome: "retry",
 			retryScheduled: true,
+			errorCode: "EVENT_PERSISTENCE_UNAVAILABLE",
 		});
 		expect(runtimeHost.acknowledgedEventCount()).toBe(0);
 		expect(harness.events.persisted).toHaveLength(1);
@@ -3223,6 +3225,7 @@ describe("Conversation Worker dispatch", () => {
 			schemaVersion: 1,
 			outcome: "retry",
 			retryScheduled: true,
+			errorCode: "EVENT_PERSISTENCE_UNAVAILABLE",
 		});
 		expect(harness.events.persisted).toHaveLength(1);
 		expect(harness.store.current.executionStatus).toBe("completed");
@@ -3403,7 +3406,12 @@ describe("Conversation Worker dispatch", () => {
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN" as const,
 				message: "Runtime command acceptance could not be confirmed" as const,
 			},
-			{ schemaVersion: 1, outcome: "unknown", retryScheduled: true },
+			{
+				schemaVersion: 1,
+				outcome: "unknown",
+				retryScheduled: true,
+				errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			},
 			"RUNTIME_ACCEPTANCE_UNKNOWN",
 			"retry_scheduled",
 			undefined,
@@ -3507,6 +3515,7 @@ describe("Conversation Worker dispatch", () => {
 				schemaVersion: 1,
 				outcome: "retry",
 				retryScheduled: true,
+				errorCode: code,
 			});
 			expect(store.current.executionStatus).toBe("unknown");
 			expect(store.errorCode).toBe(code);
@@ -3851,6 +3860,7 @@ describe("Conversation Worker dispatch", () => {
 			schemaVersion: 1,
 			outcome: "unknown",
 			retryScheduled: true,
+			errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
 		});
 		expect(runtimeHost.sideEffectCount()).toBe(0);
 		expect(store.current.executionStatus).toBe("unknown");
@@ -4522,6 +4532,7 @@ describe("Runtime-reported unsubmitted Turns (#3373)", () => {
 			schemaVersion: 1,
 			outcome: "retry",
 			retryScheduled: true,
+			errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
 		});
 		// 没有进入 unknown：退回投递前的状态，并记录 Host 返回的 Session Ref。
 		expect(store.current.executionStatus).toBe("submitted");

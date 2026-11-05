@@ -848,6 +848,89 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	it("rechecks authority once after each route resolution while preparing (#3960)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const order: string[] = [];
+			h.dispatchStore.readRuntimeState.mockImplementation(async () => {
+				order.push("state");
+				return h.state;
+			});
+			h.resolveRuntimeHost.mockImplementation(async (input) => {
+				order.push(input.reuseSignedReadiness ? "route" : "signed-route");
+				return { ...h.target };
+			});
+			await h.runtime.runtimeHost.dispatch(h.request(reference));
+			// 每轮复核是 stateFor + current。首次解析之后原有两轮紧挨着的复核
+			// （中间没有解析或发送），合并为一轮；其余解析和发送前复核不变。
+			expect(order.slice(0, order.indexOf("signed-route") + 2)).toEqual([
+				"state",
+				"route",
+				"state",
+				"route",
+				"state",
+				"signed-route",
+				"state",
+			]);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it.each(
+		(
+			["purpose", "agent", "workload", "configurationRevision"] as const
+		).flatMap((change) =>
+			([1, 2, 3] as const).map((resolution) => [change, resolution] as const),
+		),
+	)(
+		"rejects a %s change made during route resolution %s before sending (#3960)",
+		async (change, resolution) => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				h.resolveRuntimeHost.mockClear();
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					if (h.resolveRuntimeHost.mock.calls.length === resolution) {
+						const record = h.record();
+						if (change === "purpose") h.setUser(null);
+						else if (change === "agent")
+							h.setRecord({ ...record, agent: { ...h.agent, revision: 2 } });
+						else if (change === "workload")
+							h.setRecord({
+								...record,
+								workload: { ...h.workload, revision: 4 },
+							});
+						else h.setRecord({ ...record, configurationRevision: 2 });
+					}
+					return { ...h.target };
+				});
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({
+					// 标准模板的修订变化先被 current() 判为工作负载不可用。
+					code:
+						change === "configurationRevision"
+							? "RUNTIME_WORKLOAD_UNAVAILABLE"
+							: "RUNTIME_ROUTE_STALE",
+					notSent: true,
+				});
+				// 紧随该次解析的复核发现变化，不再继续解析。
+				expect(h.resolveRuntimeHost).toHaveBeenCalledTimes(resolution);
+				expect(h.fetcher).not.toHaveBeenCalled();
+				if (change === "purpose")
+					expect(h.taskAuthorizationStore.recordControl).toHaveBeenCalledWith(
+						expect.objectContaining({ reason: "authorization_revoked" }),
+					);
+				else
+					expect(h.taskAuthorizationStore.recordControl).not.toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it.each([
 		"principal",
 		"source",

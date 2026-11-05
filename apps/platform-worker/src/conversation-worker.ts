@@ -792,6 +792,11 @@ export function createPlatformConversationWorkerV2(
 						...(decision.outcome === "retry"
 							? { code: "TASK_UNAVAILABLE" as const }
 							: {}),
+						// #3960：已排期重试的有界原因码（与 Store attempt event 相同），用于把
+						// 受理到模型开始之间的等待按原因归因；观测层再按协议码格式过滤。
+						...("errorCode" in decision && decision.errorCode !== undefined
+							? { protocolCode: decision.errorCode }
+							: {}),
 						// The operation is a bounded Store value. Item IDs stay out of
 						// telemetry to avoid high-cardinality labels and logs.
 						operationRef: item.operation,

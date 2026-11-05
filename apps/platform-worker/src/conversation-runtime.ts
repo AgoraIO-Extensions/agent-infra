@@ -543,34 +543,26 @@ export function createConversationRuntimeV2(
 		);
 		if (target.workerId !== options.signing.workerId)
 			denied("RUNTIME_WORKER_BINDING_INVALID");
-		state = await stateFor(context, signal);
-		const afterRoute = await current(context, state, command, signal);
-		if (
-			beforeRoute.authority.purpose !== afterRoute.authority.purpose ||
-			beforeRoute.record.configurationRevision !==
-				afterRoute.record.configurationRevision ||
-			!isDeepStrictEqual(beforeRoute.record.agent, afterRoute.record.agent) ||
-			!isDeepStrictEqual(
-				beforeRoute.record.workload,
-				afterRoute.record.workload,
-			)
-		)
-			unavailable("RUNTIME_ROUTE_STALE");
-		authority = afterRoute.authority;
 		// Directory, route and control persistence all cross asynchronous boundaries.
-		// Recheck the authorization and route immediately before minting any wire grant.
+		// Recheck the authorization and route after the first resolution. Two rounds
+		// used to run here back to back, with no resolution or send between them; a
+		// change landing after this round is still caught by the round that follows
+		// the next resolution, before anything is sent (#3960).
 		state = await stateFor(context, signal);
 		const finalRoute = await current(context, state, command, signal);
-		if (finalRoute.authority.purpose !== authority.purpose) {
+		if (finalRoute.authority.purpose !== beforeRoute.authority.purpose) {
 			if (finalRoute.authority.purpose === "control")
 				await control(context, finalRoute.authority.reason, signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
 		if (
-			afterRoute.record.configurationRevision !==
+			beforeRoute.record.configurationRevision !==
 				finalRoute.record.configurationRevision ||
-			!isDeepStrictEqual(afterRoute.record.agent, finalRoute.record.agent) ||
-			!isDeepStrictEqual(afterRoute.record.workload, finalRoute.record.workload)
+			!isDeepStrictEqual(beforeRoute.record.agent, finalRoute.record.agent) ||
+			!isDeepStrictEqual(
+				beforeRoute.record.workload,
+				finalRoute.record.workload,
+			)
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		authority = finalRoute.authority;
