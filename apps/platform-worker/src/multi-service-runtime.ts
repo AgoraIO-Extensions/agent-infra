@@ -618,6 +618,10 @@ function deployment(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							env: (container.env ?? []).filter(
+								({ name }) =>
+									name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+							),
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -723,6 +727,10 @@ function statefulSet(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							env: (container.env ?? []).filter(
+								({ name }) =>
+									name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+							),
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -845,6 +853,10 @@ function migrationJob(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							env: (container.env ?? []).filter(
+								({ name }) =>
+									name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+							),
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
