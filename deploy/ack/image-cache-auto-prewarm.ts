@@ -38,7 +38,7 @@ async function atomicJson(path: string, value: unknown) {
 export async function runOnce(env = process.env) {
 	const stateDir = privatePath(env.ACK_AUTO_PREWARM_STATE_DIR ?? "", "ACK_AUTO_PREWARM_STATE_DIR");
 	const dryRun = env.ACK_AUTO_PREWARM_DRY_RUN === "true";
-	if (!dryRun) privatePath(env.ACK_KUBECONFIG ?? "", "ACK_KUBECONFIG");
+	const kubeconfig = dryRun ? "" : privatePath(env.ACK_KUBECONFIG ?? "", "ACK_KUBECONFIG");
 	const namespace = env.ACK_NAMESPACE ?? "agent-infra";
 	assert(/^[a-z0-9][a-z0-9-]*$/u.test(namespace), "CACHE_TARGET_INVALID");
 	await mkdir(stateDir, { recursive: true, mode: 0o700 });
