@@ -19,6 +19,14 @@
       }
     },
     "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "configurationFile": {"type": "string", "pattern": "^/"}
+      }
+    },
     "encryption": {
       "type": "object",
       "additionalProperties": false,

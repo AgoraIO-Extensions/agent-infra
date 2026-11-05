@@ -32,6 +32,9 @@ secrets:
   workerDirectoryRead: agent-infra-worker-directory-read
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
+files:
+  enabled: false
+  configurationFile: /app/deployment/file-deployment.json
 encryption:
   keyVersion: key-v1
 worker:

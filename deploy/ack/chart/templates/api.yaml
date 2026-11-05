@@ -61,6 +61,9 @@ spec:
             - {name: AGENT_INFRA_ENCRYPTION_PUBLIC_KEY_FILE, value: /var/run/agent-infra/encryption-public-key/public.pem}
             - {name: AGENT_INFRA_ENCRYPTION_KEY_VERSION, value: {{ .Values.encryption.keyVersion | quote }} }
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/tls.crt}
+            {{- if .Values.files.enabled }}
+            - {name: PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE, value: {{ .Values.files.configurationFile | quote }} }
+            {{- end }}
           volumeMounts:
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
             - {name: proxy-token, mountPath: /var/run/agent-infra/proxy-token, readOnly: true}
