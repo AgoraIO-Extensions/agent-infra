@@ -50,7 +50,7 @@ export async function runOnce(env = process.env) {
 		validatePlanWorkflowRun(JSON.parse(command(["gh", "api", `repos/${repository}/actions/runs/${run.databaseId}`])), run.headSha);
 		const artifacts = JSON.parse(command(["gh", "api", `repos/${repository}/actions/runs/${run.databaseId}/artifacts?per_page=100`])) as { artifacts: PlanArtifact[] };
 		const expectedName = `ack-cache-plan-${run.attempt}`;
-		const matching = artifacts.artifacts.filter(artifact => artifact.name === expectedName);
+		const matching = artifacts.artifacts.filter(artifact => artifact.name === expectedName).map(artifact => ({ ...artifact, sizeInBytes: (artifact as any).sizeInBytes ?? (artifact as any).size_in_bytes }));
 		assert(matching.length === 1, "CACHE_PLAN_ARTIFACT_INVALID");
 		validatePlanArtifact(matching[0], expectedName);
 		const runDir = join(stateDir, `run-${run.databaseId}-attempt-${run.attempt}`);
