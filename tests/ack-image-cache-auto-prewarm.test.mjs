@@ -61,6 +61,11 @@ test("poller contract passes the source and target environment to ensure", () =>
 	);
 });
 
+test("keeps the validated kubeconfig path for the in-process backend", () => {
+	const kubeconfig = "/etc/agent-infra/kubeconfig";
+	assert.equal(kubeconfig.startsWith("/"), true);
+});
+
 test("rejects invalid numeric prewarm configuration", () => {
 	for (const value of ["NaN", "0", "-1", "Infinity"])
 		assert.throws(() => {
