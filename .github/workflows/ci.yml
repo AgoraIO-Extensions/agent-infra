@@ -364,7 +364,7 @@ jobs:
         run: |
           set -euo pipefail
           docker_root=$(docker info --format '{{.DockerRootDir}}')
-          target_kib=$((40 * 1024 * 1024))
+          target_kib=$((1000 * 1024 * 1024))
           available() { df -Pk "$docker_root" | awk 'NR==2 {print $4}'; }
           before=$(available)
           printf 'runner-disk: phase=job-start available_kib=%s target_kib=%s\n' "$before" "$target_kib"
