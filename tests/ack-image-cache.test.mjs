@@ -470,7 +470,7 @@ if (args.includes("create")) {
  state.items.push({...cr, status:{phase:"Ready",imageCacheId:"imc-created"+state.items.length}});
  fs.writeFileSync(process.env.CACHE_FIXTURE, JSON.stringify(state));
 } else if(args.includes("-l")) console.log(JSON.stringify({items:state.items}));
-else { const cr = state.items.find(x=>x.metadata.name===args[args.indexOf("imagecache")+1]); if(cr) console.log(JSON.stringify(cr)); }
+else { const name = args[args.indexOf("imagecache") + 1] === "-n" ? args[args.indexOf("imagecache") + 3] : args[args.indexOf("imagecache") + 1]; const cr = state.items.find(x=>x.metadata.name===name); if(cr) console.log(JSON.stringify(cr)); }
 `,
 			{ mode: 0o700 },
 		);
@@ -531,6 +531,10 @@ else { const cr = state.items.find(x=>x.metadata.name===args[args.indexOf("image
 		assert.deepEqual(stored.items[0].spec.imagePullSecrets, [
 			"fixture:ack-ghcr-pull",
 		]);
+		for (const line of readFileSync(log, "utf8").split("\n").filter((line) => line.includes("imagecache"))) {
+			const args = JSON.parse(line);
+			assert(args.includes("-n") && args.includes("fixture"));
+		}
 		const count = () =>
 			readFileSync(log, "utf8")
 				.split("\n")

@@ -130,15 +130,15 @@ export function kubernetesBackend(kubeconfig: string, namespace: string, pullSec
 	};
 	return {
 		async get(name) {
-			const raw = command(["get", "imagecache", name, "--ignore-not-found", "-o", "json"]);
+			const raw = command(["get", "imagecache", "-n", namespace, name, "--ignore-not-found", "-o", "json"]);
 			if (!raw.trim()) return undefined;
 			const value = JSON.parse(raw);
 			return { name: value.metadata.name, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], images: value.spec.images, phase: value.status?.phase, id: value.status?.imageCacheId, expiresAt: value.status?.expireDateTime, deleting: Boolean(value.metadata.deletionTimestamp) };
 		},
 		async create(name, images) {
-			const inventory = JSON.parse(command(["get", "imagecache", "-l", `agent-infra.agora.io/cache-owner=${cacheOwner}`, "-o", "json"]));
+			const inventory = JSON.parse(command(["get", "imagecache", "-n", namespace, "-l", `agent-infra.agora.io/cache-owner=${cacheOwner}`, "-o", "json"]));
 			assert(Array.isArray(inventory.items) && inventory.items.length < 48, "CACHE_OBJECT_BUDGET_EXCEEDED");
-			command(["create", "-f", "-"], JSON.stringify({ apiVersion: "eci.alibabacloud.com/v1", kind: "ImageCache", metadata: { name, labels: { "agent-infra.agora.io/cache-owner": cacheOwner }, annotations: { "k8s.aliyun.com/imc-enable-reuse": "true" } }, spec: { images, imagePullSecrets: [`${namespace}:${pullSecret}`], imageCacheSize: sizeGiB } }));
+			command(["create", "-n", namespace, "-f", "-"], JSON.stringify({ apiVersion: "eci.alibabacloud.com/v1", kind: "ImageCache", metadata: { name, labels: { "agent-infra.agora.io/cache-owner": cacheOwner }, annotations: { "k8s.aliyun.com/imc-enable-reuse": "true" } }, spec: { images, imagePullSecrets: [`${namespace}:${pullSecret}`], imageCacheSize: sizeGiB } }));
 		},
 	};
 }
