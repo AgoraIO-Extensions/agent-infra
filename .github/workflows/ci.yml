@@ -355,6 +355,33 @@ jobs:
     env:
       SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      # Building every image uses about 30 GiB. Some ubuntu-24.04 runners have a
+      # 71 GiB root with about 16 GiB free (#3941); only those remove toolchains
+      # this job never uses.
+      - name: Free runner disk for image builds
+        if: ${{ needs.changes.outputs.runtime == 'true' || needs.changes.outputs.images != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          target_kib=$((40 * 1024 * 1024))
+          available() { df -Pk "$docker_root" | awk 'NR==2 {print $4}'; }
+          before=$(available)
+          printf 'runner-disk: phase=job-start available_kib=%s target_kib=%s\n' "$before" "$target_kib"
+          if (( before >= target_kib )); then exit 0; fi
+          df -hT
+          lsblk -o NAME,SIZE,TYPE,MOUNTPOINT || true
+          sudo dmsetup status || true
+          started=$SECONDS
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm /usr/local/julia* \
+            /usr/local/share/powershell /opt/az /usr/lib/google-cloud-sdk /usr/local/share/boost
+          docker image prune --all --force > /dev/null
+          after=$(available)
+          printf 'runner-disk: phase=after-cleanup available_kib=%s freed_kib=%s seconds=%s\n' \
+            "$after" "$((after - before))" "$((SECONDS - started))"
+          sudo dmsetup status || true
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -585,6 +612,23 @@ jobs:
         if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm smoke
 
+      # Deployment images use about 13 GiB and the installed Skill image about
+      # 3.3 GiB, which must still leave the 5 GiB checked by later steps (#3941).
+      - name: Check runner disk before deployment images
+        if: ${{ needs.changes.outputs.images != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          available_kib=$(df -Pk "$docker_root" | awk 'NR==2 {print $4}')
+          required_kib=$((22 * 1024 * 1024))
+          printf 'runner-disk: phase=before-deployment-images available_kib=%s required_kib=%s\n' "$available_kib" "$required_kib"
+          if (( available_kib < required_kib )); then
+            printf '::error title=Runner disk capacity::%s has %s KiB available; deployment images need %s KiB (#3941)\n' \
+              "$docker_root" "$available_kib" "$required_kib"
+            exit 1
+          fi
+
       - name: Build deployment images
         id: images
         if: ${{ needs.changes.outputs.images != '' }}
@@ -592,7 +636,9 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CI_CACHE_WRITE: ${{ github.event_name == 'push' }}
           IMAGE_NAMES: ${{ needs.changes.outputs.images }}
-        run: node deploy/release/ci-image-build.mjs build --images="${IMAGE_NAMES}"
+        run: |
+          node deploy/release/ci-image-build.mjs build --images="${IMAGE_NAMES}"
+          df -Pk "$(docker info --format '{{.DockerRootDir}}')" | awk 'NR==2 {print "runner-disk: phase=after-deployment-images available_kib=" $4}'
 
       - name: Verify built Web image compatibility
         if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
