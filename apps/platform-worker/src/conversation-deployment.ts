@@ -7,7 +7,9 @@ import {
 import type { BrowserCapabilityBindingV1 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
+	type PlatformSecretRecordV1,
 	validateAgentWorkloadDesiredV1,
+	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
 	type RuntimeModelProjectionV4,
@@ -39,6 +41,8 @@ import {
 	type SessionSandboxCustomSecretMaterializationV1,
 	type SessionSandboxResourceInputV1,
 	type SessionSandboxRuntimeInputV1,
+	sessionSandboxContainerBoundaryAttestationSecretKey,
+	sessionSandboxFileExchangeSecretKey,
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
@@ -494,6 +498,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 							"running",
 							sandboxResource.sandbox.generation,
 							sandboxResource.resourceFence,
+							true,
+							// The recorded Session Secret is re-checked by identity (#3938).
+							resources?.find((resource) => resource.kind === "Secret"),
 						),
 						resources,
 					);
@@ -804,6 +811,166 @@ export function createSessionSandboxResourceInputResolverV1(
 	return resourceFor;
 }
 
+const ownerSecretNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const sessionPlatformSecretKeys: ReadonlySet<string> = new Set([
+	"token",
+	"model-config",
+	sessionSandboxFileExchangeSecretKey,
+	sessionSandboxContainerBoundaryAttestationSecretKey,
+]);
+
+function ownerSecretRecordMatches(
+	record: PlatformSecretRecordV1,
+	reference: AgentWorkloadDesiredV1["secretRefs"][number] | undefined,
+): boolean {
+	return (
+		reference !== undefined &&
+		record.ownerType === "agent-owner" &&
+		reference.ownerType === "agent-owner" &&
+		record.ownerId === reference.ownerId &&
+		record.agentId === reference.agentId &&
+		record.secretId === reference.secretId &&
+		record.secretVersion === reference.secretVersion &&
+		record.configRevision === reference.configRevision &&
+		record.crypto.algorithmVersion === reference.algorithmVersion &&
+		record.crypto.wrappingAlgorithmVersion ===
+			reference.wrappingAlgorithmVersion &&
+		record.crypto.wrappingKeyVersion === reference.wrappingKeyVersion
+	);
+}
+
+/**
+ * Owner values for one custom Session Secret (Engineering Spec §10.1.1, #3938).
+ * Values come only from Platform DB ciphertext decrypted with the Worker
+ * keyring; every decryption is audited and its plaintext buffer is zeroed. A
+ * Session Secret already recorded for this Sandbox keeps its immutable
+ * values, so steady-state observation re-checks the binding without
+ * decrypting again.
+ */
+async function sessionOwnerSecretMaterializationV1(
+	workload: WorkloadRuntimeOptionsV1,
+	allocation: SessionSandboxAllocationV1,
+	deployment: AgentWorkloadDesiredV1,
+	recordedSecret: SessionSandboxResourceIdentityV1 | undefined,
+): Promise<SessionSandboxCustomSecretMaterializationV1> {
+	const references = allocation.runtime?.custom?.secretRefs ?? [];
+	const store = workload.sessionOwnerSecrets;
+	if (!store || !references.length) throw new WorkloadKubernetesError("policy");
+	const audit = (
+		target: { readonly secretId: string; readonly wrappingKeyVersion: string },
+		outcome: "succeeded" | "rejected",
+	) =>
+		store.auditDecryption({
+			agentId: deployment.agentId,
+			secretId: target.secretId,
+			wrappingKeyVersion: target.wrappingKeyVersion,
+			outcome,
+			traceId: deployment.traceId,
+			requestId: deployment.requestId,
+			workerId: workload.workerId,
+		});
+	const reject = async (
+		targets: readonly {
+			readonly secretId: string;
+			readonly wrappingKeyVersion: string;
+		}[],
+	): Promise<never> => {
+		// The rejection stands even when its audit cannot be written.
+		await Promise.allSettled(
+			targets.map((target) => audit(target, "rejected")),
+		);
+		throw new WorkloadKubernetesError("policy");
+	};
+	let records: PlatformSecretRecordV1[];
+	try {
+		records = (
+			await store.resolve({ agentId: deployment.agentId, references })
+		).map((record) => validatePlatformSecretRecordV1(record));
+		if (
+			records.length !== references.length ||
+			records.some(
+				(record, index) =>
+					record.agentId !== deployment.agentId ||
+					!ownerSecretRecordMatches(record, references[index]),
+			)
+		)
+			throw new Error();
+	} catch {
+		return reject(references);
+	}
+	const names = records.map((record) => record.name);
+	if (
+		new Set(names).size !== names.length ||
+		names.some(
+			(name) =>
+				!ownerSecretNamePattern.test(name) ||
+				name.startsWith("AGENT_INFRA_") ||
+				sessionPlatformSecretKeys.has(name),
+		)
+	)
+		return reject(references);
+	const environmentNames = names.toSorted();
+	if (
+		recordedSecret?.kind === "Secret" &&
+		recordedSecret.namespace === allocation.namespace &&
+		recordedSecret.name === allocation.secretName
+	) {
+		const live = await workload.client.read<V1Secret>(
+			"Secret",
+			allocation.secretName,
+		);
+		if (
+			live?.metadata?.uid === recordedSecret.uid &&
+			live.metadata.namespace === allocation.namespace &&
+			live.metadata.name === allocation.secretName &&
+			!live.metadata.deletionTimestamp &&
+			live.immutable === true &&
+			hasSessionSandboxIdentityV1(live, allocation)
+		) {
+			const data: Record<string, string> = {};
+			for (const name of names) {
+				const encoded = live.data?.[name];
+				const decoded =
+					typeof encoded === "string" ? Buffer.from(encoded, "base64") : null;
+				if (!decoded || decoded.toString("base64") !== encoded) break;
+				data[name] = decoded.toString("utf8");
+			}
+			if (Object.keys(data).length === names.length)
+				return { data, environmentNames };
+		}
+	}
+	const data: Record<string, string> = {};
+	for (const record of records) {
+		const target = {
+			secretId: record.secretId,
+			wrappingKeyVersion: record.crypto.wrappingKeyVersion,
+		};
+		const decryption = await workload.decryptor.decrypt({
+			encryptedRecord: record,
+			traceId: deployment.traceId,
+		});
+		if (decryption.outcome !== "decrypted") return reject([target]);
+		try {
+			let plaintext: string;
+			try {
+				plaintext = new TextDecoder("utf-8", { fatal: true }).decode(
+					decryption.plaintext,
+				);
+			} catch {
+				// Unusable plaintext is a rejected decryption, never a success.
+				return await reject([target]);
+			}
+			await audit(target, "succeeded");
+			data[record.name] = plaintext;
+		} catch {
+			throw new WorkloadKubernetesError("policy");
+		} finally {
+			decryption.plaintext.fill(0);
+		}
+	}
+	return { data, environmentNames };
+}
+
 function createSessionSandboxAllocationResolverV1(
 	workload: WorkloadRuntimeOptionsV1,
 	options: { readonly serviceToken: string },
@@ -821,6 +988,8 @@ function createSessionSandboxAllocationResolverV1(
 		generation: number,
 		resourceFence: number,
 		requireCurrentTemplateTrust = true,
+		/** Store-recorded identity of this Sandbox's Session Secret, if any. */
+		recordedSecret?: SessionSandboxResourceIdentityV1,
 	): Promise<SessionSandboxAllocationV1> => {
 		const snapshots = deployment.workspaceSnapshots ?? [];
 		let snapshotProjection: Awaited<
@@ -925,71 +1094,20 @@ function createSessionSandboxAllocationResolverV1(
 		};
 		if (
 			allocation.runtime?.custom &&
-			(desiredState === "running" || !requireCurrentTemplateTrust)
-		) {
-			const data: Record<string, string> = {};
-			const sourceSecret = !requireCurrentTemplateTrust
-				? await workload.client.read<V1Secret>("Secret", allocation.secretName)
-				: null;
-			const refs = requireCurrentTemplateTrust
-				? allocation.runtime.custom.secretRefs
-				: [];
-			if (
-				!requireCurrentTemplateTrust &&
-				sourceSecret?.data &&
-				hasSessionSandboxIdentityV1(sourceSecret, allocation)
-			) {
-				for (const [name, encoded] of Object.entries(sourceSecret.data)) {
-					if (["token", "model-config"].includes(name)) continue;
-					if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-						throw new WorkloadKubernetesError("policy");
-					const decoded = Buffer.from(encoded, "base64");
-					if (decoded.toString("base64") !== encoded)
-						throw new WorkloadKubernetesError("policy");
-					data[name] = decoded.toString("utf8");
-				}
-			}
-			for (const ref of refs) {
-				const secret = await workload.client.read<V1Secret>("Secret", ref.name);
-				const annotations = secret?.metadata?.annotations;
-				if (
-					!secret ||
-					secret.metadata?.namespace !== allocation.namespace ||
-					secret.immutable !== true ||
-					annotations?.["agent-infra.agora.io/secret-id"] !== ref.secretId ||
-					annotations?.["agent-infra.agora.io/secret-version"] !==
-						String(ref.secretVersion) ||
-					annotations?.["agent-infra.agora.io/config-revision"] !==
-						String(ref.configRevision) ||
-					!secret.data
-				)
-					throw new WorkloadKubernetesError("policy");
-				for (const [name, encoded] of Object.entries(secret.data)) {
-					if (
-						!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
-						name.startsWith("AGENT_INFRA_") ||
-						["token", "model-config"].includes(name) ||
-						data[name] !== undefined
-					)
-						throw new WorkloadKubernetesError("policy");
-					try {
-						const decoded = Buffer.from(encoded, "base64");
-						if (decoded.toString("base64") !== encoded) throw new Error();
-						data[name] = decoded.toString("utf8");
-					} catch {
-						throw new WorkloadKubernetesError("policy");
-					}
-				}
-			}
-			const materialization: SessionSandboxCustomSecretMaterializationV1 = {
-				data,
-				environmentNames: Object.keys(data).toSorted(),
-			};
+			desiredState === "running" &&
+			requireCurrentTemplateTrust
+		)
 			bindSessionSandboxCustomSecretMaterializationV1(
 				allocation,
-				materialization,
+				await sessionOwnerSecretMaterializationV1(
+					workload,
+					allocation,
+					deployment,
+					recordedSecret,
+				),
 			);
-		}
+		// Drain and stopped renders never carry Owner values: the Session Secret
+		// is an absent kind there and is deleted by recorded identity.
 		return allocation;
 	};
 }
@@ -1283,6 +1401,7 @@ export function createProductionSessionSandboxReceiverV1(
 				workloadResourceConfigurationHashV1(workload.policy)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
+		const previous = claim.previousObservation?.resources ?? [];
 		const allocation = await allocationFor(
 			claim.sandbox,
 			claim.policy,
@@ -1292,8 +1411,8 @@ export function createProductionSessionSandboxReceiverV1(
 			claim.sandbox.generation,
 			claim.resourceFence,
 			claim.desiredState === "running",
+			previous.find((resource) => resource.kind === "Secret"),
 		);
-		const previous = claim.previousObservation?.resources ?? [];
 		if (claim.desiredState === "stopped") {
 			if (!recordDeletionProgress)
 				throw new Error("Session Sandbox deletion CAS is unavailable");
