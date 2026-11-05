@@ -800,3 +800,88 @@ test("event count is bounded independently of byte count", async (t) => {
 	await assert.rejects(f.run(), { code: "CUSTOM_CAPACITY_EVENT_LIMIT" });
 	assert.equal(f.state.acks.length, 256);
 });
+
+function journalStream(res, _body, state) {
+	res.writeHead(200, { "content-type": "text/event-stream" });
+	res.end(
+		state.wire
+			.filter((e) => e.type !== "operation")
+			.map(frame)
+			.join(""),
+	);
+}
+function journalFor(f, binding) {
+	return {
+		...binding,
+		status: "completed",
+		facts: f.state.wire
+			.filter((e) => e.type === "operation")
+			.map((e) => e.payload),
+	};
+}
+test("ACP completion accepts bound protected journal facts without inventing stream events", async (t) => {
+	const f = await setup(t, { stream: journalStream });
+	const r = await f.run({
+		readProtectedModelFacts: async (binding) => journalFor(f, binding),
+	});
+	assert.equal(r.modelFacts.length, 0);
+	assert.equal(r.protectedModelFacts.length, 3);
+	assert.equal(r.replyMatched, true);
+	assert.deepEqual(f.state.denied, ["service", "grant"]);
+});
+for (const [name, mutate] of [
+	[
+		"another Agent",
+		(j) => {
+			j.agentId = "other";
+		},
+	],
+	[
+		"another execution",
+		(j) => {
+			j.executionId = "other";
+		},
+	],
+	[
+		"unfinished turn",
+		(j) => {
+			j.status = "running";
+		},
+	],
+	[
+		"missing completed fact",
+		(j) => {
+			j.facts.pop();
+		},
+	],
+	[
+		"different model",
+		(j) => {
+			j.facts[2].model = { ...j.facts[2].model, modelId: "other" };
+		},
+	],
+	[
+		"different attempt",
+		(j) => {
+			j.facts[2].attemptRef = "other";
+		},
+	],
+	[
+		"invalid duration",
+		(j) => {
+			j.facts[2].durationMs = 100000;
+		},
+	],
+])
+	test(`protected journal rejects ${name}`, async (t) => {
+		const f = await setup(t, { stream: journalStream });
+		await assert.rejects(
+			f.run({
+				readProtectedModelFacts: async (binding) => {
+					const j = structuredClone(journalFor(f, binding));
+					mutate(j);
+					return j;
+				},
+			}),
+		);
+	});

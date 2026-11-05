@@ -40,10 +40,7 @@ import {
 	workspaceGlobAllowed,
 	workspacePathAllowed,
 } from "./workspace-path.js";
-import {
-	workspaceSnapshotFileAllowed,
-	workspaceSnapshotReadRoots,
-} from "./workspace-snapshot-path.js";
+import { workspaceSnapshotFileAllowed } from "./workspace-snapshot-path.js";
 
 /**
  * #3226：把平台固定的文件交换说明写到 Conversation 目录 `config/agent-infra/` 下。该目录在

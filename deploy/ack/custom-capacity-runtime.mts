@@ -5,6 +5,7 @@ import {
 	type RuntimeEventPersistRequestV3,
 	type RuntimeEventV2,
 	RuntimeSubmitTurnRequestV3Schema,
+	RuntimeOperationFactV2Schema,
 } from "../../packages/contracts/src/runtime/index.ts";
 
 const MAX_BYTES = 1_048_576;
@@ -30,6 +31,7 @@ export interface CustomRuntimeOptions {
 	expectedModelId: string;
 	expectedReply: string;
 	signal: AbortSignal;
+	readProtectedModelFacts?: (binding: { agentId: string; executionId: string }, signal: AbortSignal) => Promise<unknown>;
 	checkpoint: (value: Record<string, unknown>) => Promise<void>;
 	fetch?: typeof fetch;
 	now?: () => number;
@@ -52,6 +54,24 @@ const errorCode = (error: unknown) =>
 	error && typeof error === "object" && "code" in error
 		? error.code
 		: undefined;
+
+/** Journal facts are independently bound; they are never fabricated as SSE events. */
+export function validateProtectedModelFacts(value: unknown, options: Pick<CustomRuntimeOptions, "agentId" | "modelOptionId" | "reasoningLevel" | "runtimeConfigVersion" | "expectedModelId">, executionId: string) {
+ const v = value as { agentId?: string; executionId?: string; status?: string; facts?: unknown[] };
+ if (!v || v.agentId !== options.agentId || v.executionId !== executionId || v.status !== "completed" || !Array.isArray(v.facts) || v.facts.length !== 3) fail("CUSTOM_CAPACITY_JOURNAL_BINDING_INVALID");
+ const facts = v.facts.map(raw => RuntimeOperationFactV2Schema.parse(raw));
+ if (facts.map(f => f.phase).join(",") !== "intent,started,completed") fail("CUSTOM_CAPACITY_MODEL_FACT_INVALID");
+ const first = facts[0]!;
+ for (const f of facts) {
+  if (f.kind !== "model" || first.kind !== "model" || f.operationRef !== first.operationRef || f.attemptRef !== first.attemptRef || f.model.configVersion !== options.runtimeConfigVersion || f.model.modelOptionId !== options.modelOptionId || f.model.modelId !== options.expectedModelId || f.model.reasoningLevel !== options.reasoningLevel || "failureCode" in f) fail("CUSTOM_CAPACITY_MODEL_IDENTITY_INVALID");
+ }
+ const started = facts[1]!, completed = facts[2]!;
+ const a = "startedAt" in started ? Date.parse(started.startedAt as string) : NaN;
+ const b = "finishedAt" in completed ? Date.parse(completed.finishedAt as string) : NaN;
+ const duration = "durationMs" in completed ? completed.durationMs : undefined;
+ if (!Number.isFinite(a) || !Number.isFinite(b) || b < a || typeof duration !== "number" || !Number.isSafeInteger(duration) || duration < 0 || Math.abs(duration - (b-a)) > MAX_DURATION_SAMPLING_SKEW_MS) fail("CUSTOM_CAPACITY_MODEL_FACT_INVALID");
+ return facts;
+}
 
 // Race dependencies as well as native fetch: a late body/checkpoint cannot sign success.
 async function bounded<T>(
@@ -277,6 +297,7 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 		let reply = "";
 		let completedAt: string | undefined;
 		const modelFacts: RuntimeEventV2[] = [];
+		let protectedModelFacts: ReturnType<typeof validateProtectedModelFacts> = [];
 		let intent: RuntimeEventV2 | undefined;
 		const cursors = new Set<string>();
 		const eventKeys = new Set<string>();
@@ -420,9 +441,13 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 						if (!["running", "completed"].includes(event.payload.status))
 							fail("CUSTOM_CAPACITY_EXECUTION_UNCONFIRMED");
 					} else if (event.type === "completed") {
+						if (event.payload.status === "completed" && modelFacts.length === 0 && !intent && options.readProtectedModelFacts) {
+                            protectedModelFacts = validateProtectedModelFacts(await bounded(options.readProtectedModelFacts({agentId: options.agentId, executionId}, signal), signal), options, executionId);
+                            check();
+                        }
 						if (
 							event.payload.status !== "completed" ||
-							modelFacts.length !== 2 ||
+							(modelFacts.length !== 2 && protectedModelFacts.length !== 3) ||
 							reply.trim() !== options.expectedReply
 						)
 							fail("CUSTOM_CAPACITY_COMPLETION_INVALID");
@@ -465,6 +490,7 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 							replyMatched: true as const,
 							replySha256: hash(reply),
 							modelFacts,
+							protectedModelFacts,
 							negativeChecks,
 						};
 				}

@@ -226,27 +226,23 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		return null;
 	const verified = decoded.state.verified;
 	const configuration = agent?.runtimeConfiguration;
-	const standardConfiguration =
-		configuration?.source.kind === "standard" &&
-		!configuration.secrets.length &&
-		configuration.source.templateId === approved.templateId &&
-		configuration.source.imageDigest === approved.imageDigest &&
-		configuration.revision === decoded.state.sourceConfigurationRevision &&
-		verified.configuration.revision === configuration.revision &&
-		isDeepStrictEqual(verified.configuration, configuration);
-	const platformAdapterConfiguration =
-		configuration?.source.kind === "custom" &&
-		configuration.source.interactionMode === "platform-adapter" &&
-		!configuration.secrets.length &&
-		configuration.revision === decoded.state.sourceConfigurationRevision &&
-		verified.configuration.revision === configuration.revision &&
-		isDeepStrictEqual(verified.configuration, configuration);
-	if (!standardConfiguration && !platformAdapterConfiguration) return null;
+	// Reserves stay standard-template only (ADR-0038, #3937): custom
+	// platform-adapter Agents keep the original preparation path.
+	if (
+		configuration?.source.kind !== "standard" ||
+		configuration.secrets.length ||
+		configuration.source.templateId !== approved.templateId ||
+		configuration.source.imageDigest !== approved.imageDigest ||
+		configuration.revision !== decoded.state.sourceConfigurationRevision ||
+		verified.configuration.revision !== configuration.revision ||
+		!isDeepStrictEqual(verified.configuration, configuration)
+	)
+		return null;
 	try {
 		const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
 		const projection = validateRuntimeModelProjectionV4(
 			verified.modelProjection,
-			standardConfiguration ? configuration : undefined,
+			configuration,
 		);
 		if (
 			deployment.agentId !== agentId ||
@@ -412,12 +408,15 @@ async function lockBudget(
 	}
 	// Only the original Session lifecycle's confirmed stop receipt releases compute. PVC remains charged.
 	await tx`update platform.session_sandbox_resource_charges ch set compute_released = true from platform.session_sandbox_allocations a
-  where a.sandbox_id = ch.sandbox_id and a.status = 'stopped' and a.desired_state = 'stopped' and exists (
-   select 1 from platform.outbox_items o where o.scope_type = 'conversation' and o.scope_id = a.conversation_id and o.operation = 'conversation.sandbox.reconcile.v1'
-   and o.payload->'lifecycle'->'stopReceipt'->>'sandboxId' = a.sandbox_id
-   and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id
-   and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text
-   and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text)`;
+  where a.sandbox_id = ch.sandbox_id and a.desired_state = 'stopped' and (
+   (a.status = 'stopped' and exists (
+     select 1 from platform.outbox_items o where o.scope_type = 'conversation' and o.scope_id = a.conversation_id and o.operation = 'conversation.sandbox.reconcile.v1'
+     and o.payload->'lifecycle'->'stopReceipt'->>'sandboxId' = a.sandbox_id
+     and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id
+     and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text
+     and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text))
+   or (a.status = 'unavailable' and a.resource_observation->>'status' = 'stopped' and jsonb_typeof(a.resource_observation->'sourceStop'->'removed') = 'array')
+  )`;
 	return { ...config, enabled: policy.enabled };
 }
 async function usedBudget(
@@ -471,6 +470,9 @@ export async function admitNewSessionSandboxV1(
 			)
 		: null;
 	const config = await lockBudget(tx, configured);
+	// A live DB policy cannot silently enable new cold Sessions when the API
+	// deployment did not provide the matching reserve configuration.
+	if (config?.enabled && configured === undefined) unavailable();
 	if (current && configured?.enabled && config?.enabled) {
 		const rows = await tx<
 			ReserveRow[]
@@ -566,6 +568,15 @@ export async function reserveSessionSandboxResumeBudgetV1(
 	await tx`update platform.session_sandbox_resource_charges set compute_released = false where sandbox_id = ${sandboxId}`;
 }
 
+export class SessionSandboxPreparationBudgetErrorV1 extends Error {
+	constructor(
+		readonly reason: "budget_configuration_unavailable" | "budget_exhausted",
+		readonly retryDelayMs: number,
+	) {
+		super("Session Sandbox preparation is waiting for its deployment budget");
+	}
+}
+
 /** Rechecks the deployment budget before an original Session preparation/recovery write. */
 export async function reserveSessionSandboxPreparationBudgetV1(
 	tx: Transaction,
@@ -574,17 +585,29 @@ export async function reserveSessionSandboxPreparationBudgetV1(
 ): Promise<void> {
 	const config = await lockBudget(tx);
 	if (!config) return;
-	if (policy.namespace !== config.namespace) unavailable();
+	if (policy.namespace !== config.namespace)
+		throw new SessionSandboxPreparationBudgetErrorV1(
+			"budget_configuration_unavailable",
+			config.failureBackoffMs,
+		);
 	const [row] = await tx<
 		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
 	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
 	// Disabled admission leaves new cold Sessions uncharged; retained charges still enforce their budget.
 	if (!row && !config.enabled) return;
-	if (!row) unavailable();
+	if (!row)
+		throw new SessionSandboxPreparationBudgetErrorV1(
+			"budget_configuration_unavailable",
+			config.failureBackoffMs,
+		);
 	const approved = config.resourceCosts.find(
 		(c) => c.resourceConfigurationHash === policy.resourceConfigurationHash,
 	);
-	if (!approved) unavailable();
+	if (!approved)
+		throw new SessionSandboxPreparationBudgetErrorV1(
+			"budget_configuration_unavailable",
+			config.failureBackoffMs,
+		);
 	const resources = {
 		cpuMillis: Math.max(row.resources.cpuMillis, approved.resources.cpuMillis),
 		memoryBytes: Math.max(
@@ -612,7 +635,10 @@ export async function reserveSessionSandboxPreparationBudgetV1(
 			added,
 		)
 	)
-		unavailable();
+		throw new SessionSandboxPreparationBudgetErrorV1(
+			"budget_exhausted",
+			config.failureBackoffMs,
+		);
 	await tx`update platform.session_sandbox_resource_charges set resources = ${tx.json(resources as unknown as Json)}, compute_released = false where sandbox_id = ${sandboxId}`;
 }
 /** Releases CPU/memory only after a durable stop receipt; retained PVC remains charged. */

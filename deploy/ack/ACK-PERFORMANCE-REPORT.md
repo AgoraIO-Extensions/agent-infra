@@ -27,3 +27,14 @@
 本报告不替代 #3829 两次从空状态无干预全绿，也不替代 #3779 的 reserve 验收。
 
 汇总证据 SHA-256：`d8ba40b5897e6c7a2b4c81bfddaa60b9c66ec476d218140681c9e4d3fdf1da00`。
+
+## 2026-11-05 首轮优化状态
+
+[#3921](https://github.com/AgoraIO-Extensions/agent-infra/issues/3921) 复核了 3c1f0660 样本（[#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779)：标准首轮受理 2.409 / 3.680 秒，custom 首轮 80.809 / 81.578 秒）对应的候选。以下均未在 ACK 上做同源前后对照，不能当作实测收益。
+
+- Session 启动观测：此前读错了 Runtime 容器名，正常启动被当成停滞，观察间隔按 1 秒×5、2、4、8、16、32、60 秒递增；[#3922](https://github.com/AgoraIO-Extensions/agent-infra/issues/3922) 修复后，60 秒窗口内每秒观察一次。按代码推算，Pod 在第 20、40、50、70 秒就绪时，发现延迟由 15、27、17、57 秒降到 1 秒以内。
+- 首轮分段：[#3923](https://github.com/AgoraIO-Extensions/agent-infra/issues/3923) 让浏览器回执在同一页面时钟下拆出创建、等待 Session 和受理三段，并读取已持久的模型耗时。服务端用已有的阶段指标（`drain.prepare`、`drain.route`、`sandbox.reconcile.prepare` 等）和 `conversation.sandbox.observed` 审计时间，暂不新增 Runtime 事实。
+- custom 预留实例：不扩展，理由见 [ADR-0038](../../docs/adr/0038-no-owner-secret-in-session-reserves.md)。custom 冷路径的镜像缓存由 [#3931](https://github.com/AgoraIO-Extensions/agent-infra/issues/3931) 负责，严格模式尚未开启。
+- 同 Session 原生复用和 Runtime 提交前的多次路由复核，在 ACK 对照给出阶段占比之前不改。
+
+剩余缺口仍是同源 ACK 对照（#3921 AC-3），需要 ACK owner 提供执行窗口。

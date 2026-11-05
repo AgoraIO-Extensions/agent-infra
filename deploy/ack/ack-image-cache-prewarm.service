@@ -1,0 +1,19 @@
+[Unit]
+Description=ACK image cache prewarm from trusted GitHub plan artifacts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent-infra-ack
+Group=agent-infra-ack
+WorkingDirectory=/opt/agent-infra
+EnvironmentFile=/etc/agent-infra/ack-image-cache-prewarm.env
+ExecStart=/usr/bin/node deploy/ack/image-cache-auto-prewarm.ts
+TimeoutStartSec=31min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agent-infra/ack-image-cache
+UMask=0077

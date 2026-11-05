@@ -86,6 +86,7 @@ describe("platform-store package surface", () => {
 			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
+			"PostgresSessionOwnerSecretStoreV1",
 			"PostgresSessionSandboxReserveStoreV1",
 			"PostgresSkillHubAgentBindingAdmissionV1",
 			"PostgresSkillHubLifecycleV1",

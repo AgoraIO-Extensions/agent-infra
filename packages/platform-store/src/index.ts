@@ -199,6 +199,10 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export {
+	PostgresSessionOwnerSecretStoreV1,
+	type SessionOwnerSecretReferenceV1,
+} from "./session-owner-secrets.ts";
 export { requestSessionSandboxResume } from "./session-sandbox.js";
 export type { SessionSandboxClaimWaitReasonV1 } from "./session-sandbox-reconciliation.js";
 export {

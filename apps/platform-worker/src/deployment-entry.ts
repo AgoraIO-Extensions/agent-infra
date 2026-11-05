@@ -10,7 +10,10 @@ import {
 	type SessionSandboxReserveConfigurationV1,
 	sessionSandboxReserveDigestV1,
 } from "@agent-infra/platform-core";
-import { PostgresEvaluationTaskAuthorityV1 } from "@agent-infra/platform-store";
+import {
+	PostgresEvaluationTaskAuthorityV1,
+	PostgresSessionOwnerSecretStoreV1,
+} from "@agent-infra/platform-store";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
@@ -620,9 +623,14 @@ async function createPrepared(signal: AbortSignal) {
 		signal,
 	);
 	// Workload 监测与会话路由共享同一份签名 readiness 记录，排空据此复用（#1889）。
+	// custom Session 的 Owner Secret 只从 Platform DB 原始密文解密物化（#3938）。
+	const sessionOwnerSecrets = new PostgresSessionOwnerSecretStoreV1({
+		databaseUrl: productionWorkload.databaseUrl,
+	});
 	const workload = {
 		...productionWorkload,
 		readinessLedger: createWorkloadReadinessLedgerV1(),
+		sessionOwnerSecrets,
 	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {
@@ -739,6 +747,7 @@ async function createPrepared(signal: AbortSignal) {
 			closeDeployment: async () => {
 				await installationStore?.close();
 				await evaluationAuthority?.close();
+				await sessionOwnerSecrets.close();
 			},
 			relayKeyDecryptor,
 			evaluationPolicy,
