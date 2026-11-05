@@ -226,27 +226,23 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		return null;
 	const verified = decoded.state.verified;
 	const configuration = agent?.runtimeConfiguration;
-	const standardConfiguration =
-		configuration?.source.kind === "standard" &&
-		!configuration.secrets.length &&
-		configuration.source.templateId === approved.templateId &&
-		configuration.source.imageDigest === approved.imageDigest &&
-		configuration.revision === decoded.state.sourceConfigurationRevision &&
-		verified.configuration.revision === configuration.revision &&
-		isDeepStrictEqual(verified.configuration, configuration);
-	const platformAdapterConfiguration =
-		configuration?.source.kind === "custom" &&
-		configuration.source.interactionMode === "platform-adapter" &&
-		!configuration.secrets.length &&
-		configuration.revision === decoded.state.sourceConfigurationRevision &&
-		verified.configuration.revision === configuration.revision &&
-		isDeepStrictEqual(verified.configuration, configuration);
-	if (!standardConfiguration && !platformAdapterConfiguration) return null;
+	// Reserves stay standard-template only (ADR-0038, #3937): custom
+	// platform-adapter Agents keep the original preparation path.
+	if (
+		configuration?.source.kind !== "standard" ||
+		configuration.secrets.length ||
+		configuration.source.templateId !== approved.templateId ||
+		configuration.source.imageDigest !== approved.imageDigest ||
+		configuration.revision !== decoded.state.sourceConfigurationRevision ||
+		verified.configuration.revision !== configuration.revision ||
+		!isDeepStrictEqual(verified.configuration, configuration)
+	)
+		return null;
 	try {
 		const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
 		const projection = validateRuntimeModelProjectionV4(
 			verified.modelProjection,
-			standardConfiguration ? configuration : undefined,
+			configuration,
 		);
 		if (
 			deployment.agentId !== agentId ||
