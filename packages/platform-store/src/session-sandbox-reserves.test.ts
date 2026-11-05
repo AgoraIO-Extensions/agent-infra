@@ -1007,6 +1007,128 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			await sql`select status from platform.session_sandbox_reserves`,
 		).toEqual([{ status: "preparing" }]);
 	});
+	it.each([false, true])(
+		"rejects missing API configuration under an enabled DB budget (full: %s)",
+		async (full) => {
+			const bounded = { ...config, totalBudget: resources };
+			await reserves(bounded).applyConfiguration();
+			const existing = full
+				? await create(execution(bounded), "user-a", "web", "existing")
+				: null;
+			await expect(
+				create(execution(null), "user-a", "web", "missing-reserve-config"),
+			).rejects.toThrow();
+			const count = full ? 1 : 0;
+			expect(await sql`select 1 from platform.conversations`).toHaveLength(
+				count,
+			);
+			expect(
+				await sql`select 1 from platform.session_sandbox_allocations`,
+			).toHaveLength(count);
+			expect(await sql`select 1 from platform.outbox_items`).toHaveLength(
+				count,
+			);
+			expect(
+				await sql`select 1 from platform.session_sandbox_resource_charges`,
+			).toHaveLength(count);
+			expect(
+				await sql`select 1 from platform.idempotency_records`,
+			).toHaveLength(count);
+			if (existing && "result" in existing)
+				expect(
+					await create(execution(null), "user-a", "web", "existing"),
+				).toEqual({ outcome: "replayed", result: existing.result });
+		},
+	);
+	it.each(["budget_exhausted", "budget_configuration_unavailable"] as const)(
+		"defers preparation for %s and recovers the original Sandbox after correction",
+		async (reason) => {
+			const created = await create(
+				execution(),
+				"user-a",
+				"web",
+				"prepare-first",
+			);
+			await create(execution(), "user-b", "web", "prepare-second");
+			if (created.outcome !== "accepted")
+				throw new Error("Expected cold Session");
+			const conversationId = created.result.conversationId;
+			const [allocation] =
+				await sql`select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${conversationId}`;
+			const [outbox] =
+				await sql`select id from platform.outbox_items where scope_id = ${conversationId} and operation = 'conversation.sandbox.reconcile.v1'`;
+			if (!allocation || !outbox)
+				throw new Error("Expected preparation intent");
+			await reserves({
+				...config,
+				revision: 2,
+				failureBackoffMs: 60000,
+				...(reason === "budget_exhausted"
+					? { totalBudget: resources }
+					: {
+							profiles: [],
+							resourceCosts: [
+								{ resourceConfigurationHash: "c".repeat(64), resources },
+							],
+						}),
+			}).applyConfiguration();
+			const charges =
+				await sql`select * from platform.session_sandbox_resource_charges order by sandbox_id`;
+			const reasons: string[] = [];
+			const claim = () =>
+				sql.begin((tx) =>
+					claimSandboxReconciliation(
+						tx,
+						{
+							itemId: outbox.id,
+							workerId: "budget-worker",
+							leaseDurationMs: 30000,
+							onWait: (value) => reasons.push(value),
+						},
+						{
+							namespace: config.namespace,
+							resourceConfigurationHash: resourceHash,
+						},
+						directory,
+					),
+				);
+			expect(await claim()).toBeNull();
+			expect(reasons).toEqual([reason]);
+			expect(
+				await sql`select status, attempt_count, delivery_fence, lease_owner, available_at > clock_timestamp() as deferred from platform.outbox_items where id = ${outbox.id}`,
+			).toEqual([
+				{
+					status: "retry_scheduled",
+					attempt_count: 0,
+					delivery_fence: "0",
+					lease_owner: null,
+					deferred: true,
+				},
+			]);
+			expect(
+				await sql`select status, resource_fence, resource_policy from platform.session_sandbox_allocations where sandbox_id = ${allocation.sandbox_id}`,
+			).toEqual([
+				{ status: "allocated", resource_fence: "0", resource_policy: null },
+			]);
+			expect(
+				await sql`select * from platform.session_sandbox_resource_charges order by sandbox_id`,
+			).toEqual(charges);
+			expect(await claim()).toBeNull();
+			expect(reasons).toEqual([reason, "lease_ineligible"]);
+			await reserves({ ...config, revision: 3 }).applyConfiguration();
+			await sql`update platform.outbox_items set available_at = clock_timestamp() - interval '1 second' where id = ${outbox.id}`;
+			expect(await claim()).toMatchObject({
+				sandbox: {
+					sandboxId: allocation.sandbox_id,
+					sessionId: conversationId,
+					generation: 1,
+				},
+				resourceFence: 1,
+				deliveryFence: 1,
+				purpose: "prepare",
+			});
+		},
+	);
 	it("retains PVC after a stop receipt and gates original-Sandbox preparation on the compute budget", async () => {
 		const bounded = {
 			...config,
