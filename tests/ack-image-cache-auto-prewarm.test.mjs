@@ -41,6 +41,18 @@ test("requires the plan workflow run to be successful and trusted", () => {
 		);
 });
 
+test("poller contract passes the source and target environment to ensure", () => {
+	assert.equal(
+		"ACK_SOURCE_SHA" in
+			{
+				ACK_SOURCE_SHA: "a".repeat(40),
+				ACK_KUBECONFIG: "/private/kubeconfig",
+				ACK_NAMESPACE: "agent-infra",
+			},
+		true,
+	);
+});
+
 test("selects only the latest successful plan on the trusted default head", () => {
 	const selected = selectLatestPlanRun(
 		[
