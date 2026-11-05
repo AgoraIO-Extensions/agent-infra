@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
 	selectLatestPlanRun,
@@ -50,6 +51,13 @@ test("poller contract passes the source and target environment to ensure", () =>
 				ACK_NAMESPACE: "agent-infra",
 			},
 		true,
+	);
+	assert.match(
+		readFileSync(
+			new URL("../deploy/ack/ack-image-cache-prewarm.service", import.meta.url),
+			"utf8",
+		),
+		/TimeoutStartSec=31min/,
 	);
 });
 
