@@ -36,7 +36,8 @@ async function atomicJson(path: string, value: unknown) {
 }
 export async function runOnce(env = process.env) {
 	const stateDir = privatePath(env.ACK_AUTO_PREWARM_STATE_DIR ?? "", "ACK_AUTO_PREWARM_STATE_DIR");
-	const kubeconfig = privatePath(env.ACK_KUBECONFIG ?? "", "ACK_KUBECONFIG");
+	const dryRun = env.ACK_AUTO_PREWARM_DRY_RUN === "true";
+	if (!dryRun) privatePath(env.ACK_KUBECONFIG ?? "", "ACK_KUBECONFIG");
 	const namespace = env.ACK_NAMESPACE ?? "agent-infra";
 	assert(/^[a-z0-9][a-z0-9-]*$/u.test(namespace), "CACHE_TARGET_INVALID");
 	await mkdir(stateDir, { recursive: true, mode: 0o700 });
@@ -59,6 +60,7 @@ export async function runOnce(env = process.env) {
 		const plan = parseCachePlan(JSON.parse(await readFile(planFile, "utf8")));
 		assert(/^[a-f0-9]{40}$/u.test(plan.sourceSha), "CACHE_PLAN_SOURCE_INVALID");
 		await atomicJson(join(runDir, "run.json"), { ...run, artifact: matching[0], plan: { sourceSha: plan.sourceSha, groups: plan.groups.length } });
+		if (dryRun) return { status: "plan-ready", runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, cacheCount: plan.groups.length, planFile };
 		const receipt = join(runDir, "cache-ready.json");
 		const node = env.ACK_NODE ?? process.execPath;
 		const script = env.ACK_IMAGE_CACHE_SCRIPT ?? join(process.cwd(), "deploy/ack/image-cache.ts");
