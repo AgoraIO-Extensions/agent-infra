@@ -376,7 +376,7 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
             /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm /usr/local/julia* \
             /usr/local/share/powershell /opt/az /usr/lib/google-cloud-sdk /usr/local/share/boost
-          docker image prune --all --force > /dev/null
+          docker system prune --all --force > /dev/null
           after=$(available)
           printf 'runner-disk: phase=after-cleanup available_kib=%s freed_kib=%s seconds=%s\n' \
             "$after" "$((after - before))" "$((SECONDS - started))"
