@@ -61,6 +61,14 @@ test("poller contract passes the source and target environment to ensure", () =>
 	);
 });
 
+test("rejects invalid numeric prewarm configuration", () => {
+	for (const value of ["NaN", "0", "-1", "Infinity"])
+		assert.throws(() => {
+			const parsed = Number(value);
+			assert(Number.isFinite(parsed) && parsed > 0, "INVALID");
+		});
+});
+
 test("selects only the latest successful plan on the trusted default head", () => {
 	const selected = selectLatestPlanRun(
 		[

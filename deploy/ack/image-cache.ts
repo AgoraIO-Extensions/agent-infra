@@ -106,7 +106,7 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 	return { schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date(now()).toISOString(), status: "ready", caches: results, businessVerified: false };
 }
 
-export async function ensureCachesWithReceipt(plan: CachePlan, backend: CacheBackend, output: string, options: { checkOnly?: boolean } = {}) {
+export async function ensureCachesWithReceipt(plan: CachePlan, backend: CacheBackend, output: string, options: { checkOnly?: boolean; timeoutMs?: number } = {}) {
 	let caches: { name: string; id: string; images: string[] }[] = [];
 	const write = (status: string, reason?: string) => writeFile(output, `${JSON.stringify({ schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date().toISOString(), status, caches, businessVerified: false, ...(reason ? { reason } : {}) }, null, 2)}\n`, { mode: 0o600 });
 	await write("preparing");
