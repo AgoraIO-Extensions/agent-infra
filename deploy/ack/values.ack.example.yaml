@@ -10,6 +10,8 @@
 # - ingress.tlsSecret / ingress.className           cluster TLS Secret / class
 # - images.pullSecrets                              GHCR pull Secret name(s)
 # - secrets.*                                       Secret names in this namespace
+# - files.enabled=true and files.configurationFile  when enabling the file data plane;
+#   the referenced file must be a key in secrets.apiConfiguration.
 #
 # The chart expects these existing Secret/ConfigMap objects in the namespace:
 # - ack-ghcr-pull
