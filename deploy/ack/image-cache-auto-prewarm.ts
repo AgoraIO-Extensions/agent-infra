@@ -11,7 +11,7 @@ export type PlanRun = { databaseId: number; headSha: string; attempt: number; st
 export type PlanArtifact = { id: number; name: string; sizeInBytes: number; expired: boolean };
 
 export function selectLatestPlanRun(runs: PlanRun[], defaultHead: string) {
-	return [...runs].filter(run => run.status === "completed" && run.conclusion === "success" && run.headSha === defaultHead && ["workflow_dispatch", "workflow_run"].includes(run.event)).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+	return [...runs].filter(run => run.status === "completed" && run.conclusion === "success" && (defaultHead === "*" || run.headSha === defaultHead) && /^[a-f0-9]{40}$/u.test(run.headSha) && ["workflow_dispatch", "workflow_run"].includes(run.event)).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
 }
 export function validatePlanArtifact(artifact: PlanArtifact, expectedName: string) {
 	assert(artifact.name === expectedName && !artifact.expired && artifact.sizeInBytes > 0 && artifact.sizeInBytes < 1_000_000, "CACHE_PLAN_ARTIFACT_INVALID");
@@ -45,9 +45,9 @@ export async function runOnce(env = process.env) {
 	try {
 		const defaultHead = command(["gh", "api", `repos/${repository}/git/ref/heads/main`, "--jq", ".object.sha"]);
 		const runs = JSON.parse(command(["gh", "run", "list", "--repo", repository, "--workflow", workflow, "--status", "success", "--limit", "20", "--json", "databaseId,headSha,attempt,status,conclusion,event,createdAt"])) as PlanRun[];
-		const run = selectLatestPlanRun(runs, defaultHead);
+		const run = selectLatestPlanRun(runs, "*");
 		if (!run) return { status: "idle", reason: "NO_SUCCESSFUL_PLAN" };
-		validatePlanWorkflowRun(JSON.parse(command(["gh", "api", `repos/${repository}/actions/runs/${run.databaseId}`])), defaultHead);
+		validatePlanWorkflowRun(JSON.parse(command(["gh", "api", `repos/${repository}/actions/runs/${run.databaseId}`])), run.headSha);
 		const artifacts = JSON.parse(command(["gh", "api", `repos/${repository}/actions/runs/${run.databaseId}/artifacts?per_page=100`])) as { artifacts: PlanArtifact[] };
 		const expectedName = `ack-cache-plan-${run.attempt}`;
 		const matching = artifacts.artifacts.filter(artifact => artifact.name === expectedName);
