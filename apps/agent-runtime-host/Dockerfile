@@ -31,7 +31,8 @@ RUN pnpm --fetch-timeout=300000 install --frozen-lockfile --store-dir /pnpm-stor
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/agent-runtime-host... build
-RUN install -D -m 0555 packages/agent-runtime/dist/native-shell.mjs /opt/agent-infra/native-shell.mjs \
+RUN pnpm exec esbuild packages/agent-runtime/src/native-shell.ts --bundle --platform=node --format=esm --outfile=/tmp/native-shell.mjs \
+    && install -D -m 0555 /tmp/native-shell.mjs /opt/agent-infra/native-shell.mjs \
     && ln /opt/agent-infra/native-shell.mjs /opt/agent-infra/native-bash.mjs
 RUN pnpm --config.store-dir=/pnpm-store --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
 RUN rm /prod/agent-runtime-host/pnpm-lock.yaml \
