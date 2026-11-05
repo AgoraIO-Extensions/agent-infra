@@ -184,6 +184,23 @@ export function resolveOpenCodeSkillHome(
 	return skillDirectory?.nativeRoot ?? join(directory, "home");
 }
 
+/**
+ * OpenCode checks `external_directory` in its own permission layer before it
+ * asks the ACP host. Keep that rule as narrow as the host-side snapshot
+ * authority: only the verified mount and descendants are allowed.
+ */
+export function openCodeSnapshotPermissionRules(roots: readonly string[]) {
+	return Object.fromEntries(
+		roots.flatMap((root) => {
+			const normalizedRoot = root === "/" ? root : root.replace(/\/+$/, "");
+			return [
+				[normalizedRoot, "allow"],
+				[`${normalizedRoot}/**`, "allow"],
+			];
+		}),
+	);
+}
+
 export function validateOpenCodeRuntimeOptions(
 	options: OpenCodeRuntimeOptions,
 ) {
@@ -292,6 +309,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				const platformInstructions = await writeOpenCodePlatformInstructions(
 					join(directory, "config"),
 				);
+				const snapshotRoots = await workspaceSnapshotReadRoots();
 				const nativeModel = `anthropic/${option.model}`;
 				const shellAvailable = await nativeShellAvailable(
 					join(directory, "workspace"),
@@ -330,6 +348,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					// Bash 仅在固定子进程 launcher 的真实安装/ABI 准入后开放（#3218）。
 					permission: {
 						"*": "deny",
+						external_directory: openCodeSnapshotPermissionRules(snapshotRoots),
 						read: "ask",
 						edit: "ask",
 						glob: "ask",

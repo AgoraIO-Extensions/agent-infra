@@ -6,6 +6,7 @@ import {
 	type OpenCodeRuntimeOptions,
 	openCodeNativeSkillPrompt,
 	openCodeSearchAllowed,
+	openCodeSnapshotPermissionRules,
 	resolveOpenCodeSkillHome,
 	validateOpenCodeRuntimeOptions,
 } from "./opencode-bootstrap.js";
@@ -31,6 +32,27 @@ function options(
 		...override,
 	};
 }
+
+it("allows only verified snapshot roots in OpenCode external-directory permission", () => {
+	expect(
+		openCodeSnapshotPermissionRules([
+			"/opt/agent/workspaces/env",
+			"/opt/agent/workspaces/repo",
+		]),
+	).toEqual({
+		"/opt/agent/workspaces/env": "allow",
+		"/opt/agent/workspaces/env/**": "allow",
+		"/opt/agent/workspaces/repo": "allow",
+		"/opt/agent/workspaces/repo/**": "allow",
+	});
+	expect(
+		openCodeSnapshotPermissionRules(["/opt/agent/workspaces/repo/"]),
+	).toEqual({
+		"/opt/agent/workspaces/repo": "allow",
+		"/opt/agent/workspaces/repo/**": "allow",
+	});
+	expect(openCodeSnapshotPermissionRules([])).toEqual({});
+});
 
 it("rejects keyless OpenCode startup without Host authorization", () => {
 	expect(() => validateOpenCodeRuntimeOptions(options())).toThrow(
