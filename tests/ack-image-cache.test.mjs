@@ -531,7 +531,9 @@ else { const name = args[args.indexOf("imagecache") + 1] === "-n" ? args[args.in
 		assert.deepEqual(stored.items[0].spec.imagePullSecrets, [
 			"fixture:ack-ghcr-pull",
 		]);
-		for (const line of readFileSync(log, "utf8").split("\n").filter((line) => line.includes("imagecache"))) {
+		for (const line of readFileSync(log, "utf8")
+			.split("\n")
+			.filter((line) => line.includes("imagecache"))) {
 			const args = JSON.parse(line);
 			assert(args.includes("-n") && args.includes("fixture"));
 		}
