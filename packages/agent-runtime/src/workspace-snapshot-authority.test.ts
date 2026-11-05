@@ -10,11 +10,15 @@ vi.mock("node:fs/promises", () => fs);
 
 import { workspaceSnapshotReadRoots } from "./workspace-snapshot-path.js";
 
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const root = "/opt/agent/workspaces";
 const snapshot = `${root}/repo`;
 const marker = `${snapshot}/.snapshot-digest`;
 function fixture() {
-	vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+	Object.defineProperty(process, "platform", {
+		configurable: true,
+		value: "linux",
+	});
 	fs.access.mockRejectedValue(Object.assign(new Error(), { code: "EROFS" }));
 	fs.realpath.mockImplementation(async (path: string) => path);
 	fs.lstat.mockImplementation(async (path: string) => ({
@@ -31,6 +35,8 @@ function fixture() {
 	);
 }
 afterEach(() => {
+	if (platformDescriptor)
+		Object.defineProperty(process, "platform", platformDescriptor);
 	vi.restoreAllMocks();
 	vi.resetAllMocks();
 });
