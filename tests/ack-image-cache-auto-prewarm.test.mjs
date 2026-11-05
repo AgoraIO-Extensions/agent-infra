@@ -50,7 +50,13 @@ test("selects only the latest successful plan on the trusted default head", () =
 		"a".repeat(40),
 	);
 	assert.equal(selected.databaseId, 2);
-	assert.equal(selectLatestPlanRun([run(5, "2026-11-05T04:00:00Z", { headSha: "c".repeat(40) })], "*").databaseId, 5);
+	assert.equal(
+		selectLatestPlanRun(
+			[run(5, "2026-11-05T04:00:00Z", { headSha: "c".repeat(40) })],
+			"*",
+		).databaseId,
+		5,
+	);
 });
 
 test("rejects stale, expired, empty and oversized plan artifacts", () => {
