@@ -1811,3 +1811,79 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			});
 	});
 });
+
+describe("reserve eligibility stays standard-only (ADR-0038, #3937)", () => {
+	/**
+	 * Keep the approved deployment, digest, resource hash and verified V4
+	 * template projection; only the configuration source becomes custom
+	 * platform-adapter. #3929 accepted the variants without Owner Secret.
+	 */
+	async function useCustomSource(input: {
+		readonly ownerSecret: boolean;
+		readonly snapshot: boolean;
+	}) {
+		const configuration = {
+			schemaVersion: 2,
+			agentId: "agent",
+			revision: 1,
+			source: {
+				kind: "custom",
+				imageDigest,
+				admissionRevision: "admitted",
+				interactionMode: "platform-adapter",
+				connectionEnabled: false,
+				...(input.snapshot
+					? { workspaceSnapshots: [{ snapshotId: "snapshot-a", name: "repo" }] }
+					: {}),
+			},
+			modelConfiguration: null,
+			environment: [],
+			secrets: input.ownerSecret
+				? [
+						{
+							name: "MODEL_API_KEY",
+							secretId: "owner-secret",
+							version: 1,
+							isSet: true,
+						},
+					]
+				: [],
+			channels: [],
+			channelRevision: "channels-a",
+		};
+		const [row] = await sql<
+			{
+				state: { verified: Record<string, unknown> } & Record<string, unknown>;
+			}[]
+		>`select state from platform.workload_reconciliations where agent_id = 'agent'`;
+		if (!row) throw new Error("Expected the verified Workload");
+		const version = { ...row.state.verified, configuration };
+		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id = 'agent' and revision = 1`;
+		await sql`update platform.workload_reconciliations set state = ${sql.json({ ...row.state, candidate: version, verified: version } as unknown as postgres.JSONValue)} where agent_id = 'agent'`;
+	}
+
+	it.each([
+		{ ownerSecret: false, snapshot: false },
+		{ ownerSecret: false, snapshot: true },
+		{ ownerSecret: true, snapshot: false },
+		{ ownerSecret: true, snapshot: true },
+	])(
+		"prepares and claims no reserve for a custom platform-adapter Agent (Owner Secret: $ownerSecret, snapshot: $snapshot)",
+		async (input) => {
+			const standard = await ready();
+			await useCustomSource(input);
+			expect(await reserves().prepare("agent")).toBeNull();
+			const created = await create(execution());
+			expect(created.outcome).toBe("accepted");
+			const allocations = await sql<
+				{ sandbox_id: string; admission_profile_digest: string | null }[]
+			>`select sandbox_id, admission_profile_digest from platform.session_sandbox_allocations`;
+			expect(allocations).toHaveLength(1);
+			expect(allocations[0]?.sandbox_id).not.toBe(standard.sandboxId);
+			expect(allocations[0]?.admission_profile_digest).toBeNull();
+			expect(
+				await sql`select sandbox_id, status from platform.session_sandbox_reserves`,
+			).toEqual([{ sandbox_id: standard.sandboxId, status: "ready" }]);
+		},
+	);
+});
