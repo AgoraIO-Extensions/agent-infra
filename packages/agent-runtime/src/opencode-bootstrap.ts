@@ -191,10 +191,13 @@ export function resolveOpenCodeSkillHome(
  */
 export function openCodeSnapshotPermissionRules(roots: readonly string[]) {
 	return Object.fromEntries(
-		roots.flatMap((root) => [
-			[root, "allow"],
-			[`${root}/**`, "allow"],
-		]),
+		roots.flatMap((root) => {
+			const normalizedRoot = root === "/" ? root : root.replace(/\/+$/, "");
+			return [
+				[normalizedRoot, "allow"],
+				[`${normalizedRoot}/**`, "allow"],
+			];
+		}),
 	);
 }
 

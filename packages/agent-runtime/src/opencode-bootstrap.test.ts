@@ -45,6 +45,12 @@ it("allows only verified snapshot roots in OpenCode external-directory permissio
 		"/opt/agent/workspaces/repo": "allow",
 		"/opt/agent/workspaces/repo/**": "allow",
 	});
+	expect(
+		openCodeSnapshotPermissionRules(["/opt/agent/workspaces/repo/"]),
+	).toEqual({
+		"/opt/agent/workspaces/repo": "allow",
+		"/opt/agent/workspaces/repo/**": "allow",
+	});
 	expect(openCodeSnapshotPermissionRules([])).toEqual({});
 });
 
