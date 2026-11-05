@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
-import { parseCachePlan } from "./image-cache.ts";
-import { dispatchCachePreparation, verifyDispatchedReceipt } from "./image-cache-dispatch.ts";
+import { ensureCachesWithReceipt, kubernetesBackend, parseCachePlan } from "./image-cache.ts";
 import { privateJson } from "./private-input.ts";
 
 export function deploymentCachePlan(sourceSha: string, runtime: any, templates: any, bodies: any[]) {
@@ -45,6 +44,7 @@ async function main() {
 	const [outputDirectory] = process.argv.slice(2);
 	const env = process.env;
 	assert(outputDirectory && env.ACK_SOURCE_SHA && env.ACK_RUNTIME_IMAGE_MANIFEST && env.ACK_TEMPLATE_IMAGE_MANIFEST, "CACHE_DEPLOYMENT_INPUT_REQUIRED");
+	for (const name of ["image-cache.ready.json", "image-cache.values.json"]) await rm(`${outputDirectory}/${name}`, { force: true });
 	const bodies = [];
 	if (env.ACK_AGENT_REQUESTS_FILE) {
 		const requests = await privateJson(env.ACK_AGENT_REQUESTS_FILE);
@@ -71,10 +71,16 @@ async function main() {
 	}
 	await writeFile(`${outputDirectory}/image-cache.existing.values.json`, `${JSON.stringify({ sessionRuntimeScheduling: { imageCache: { required: previousEntries.length > 0, entries: previousEntries } } })}\n`, { mode: 0o600 });
 	await writeFile(`${outputDirectory}/image-cache.plan.json`, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-	let receipt: any;
-	try { receipt = verifyDispatchedReceipt(JSON.parse(await readFile(`${outputDirectory}/image-cache.ready.json`, "utf8")), plan); } catch {}
-	if (!receipt) receipt = await dispatchCachePreparation(plan);
-	await writeFile(`${outputDirectory}/image-cache.ready.json`, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+	const receipt = await ensureCachesWithReceipt(
+		plan,
+		kubernetesBackend(
+			env.ACK_KUBECONFIG,
+			namespace,
+			env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull",
+			Number(env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30),
+		),
+		`${outputDirectory}/image-cache.ready.json`,
+	);
 	await writeFile(`${outputDirectory}/image-cache.values.json`, `${JSON.stringify({ sessionRuntimeScheduling: { imageCache: { required: true, entries: receipt.caches.map(c => ({ images: c.images, cacheId: c.id })) } } }, null, 2)}\n`, { mode: 0o600 });
 	console.info(JSON.stringify({ status: receipt.status, cacheCount: receipt.caches.length }));
 }

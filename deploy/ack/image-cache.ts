@@ -8,7 +8,7 @@ export const cacheOwner = "agent-infra-release-cache-v1";
 const digest = /^sha256:[a-f0-9]{64}$/u;
 const image = /^ghcr\.io\/agoraio-extensions\/agent-infra\/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/u;
 export type CachePlan = { schemaVersion: 1; sourceSha: string; platform: "linux/amd64"; groups: string[][] };
-export type CacheState = { name: string; id?: string; phase?: string; images: string[]; owner?: string; expiresAt?: string };
+export type CacheState = { name: string; id?: string; phase?: string; images: string[]; owner?: string; expiresAt?: string; deleting?: boolean };
 export type CacheBackend = { namePrefix?: string; get(name: string): Promise<CacheState | undefined>; create(name: string, images: string[]): Promise<void> };
 export const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -55,7 +55,7 @@ export function cacheName(images: string[], prefix = "agent-infra-imc") {
 
 export function assertCacheReady(cache: CacheState, images: string[], now = Date.now()) {
 	assert(cache.owner === cacheOwner && hash([...cache.images].sort()) === hash([...images].sort()), "CACHE_IDENTITY_MISMATCH");
-	assert(cache.phase === "Ready" && /^imc-[a-z0-9]+$/u.test(cache.id ?? ""), "CACHE_NOT_READY");
+	assert(!cache.deleting && cache.phase === "Ready" && /^imc-[a-z0-9]+$/u.test(cache.id ?? ""), "CACHE_NOT_READY");
 	assert(!cache.expiresAt || (Number.isFinite(Date.parse(cache.expiresAt)) && Date.parse(cache.expiresAt) > now + 300_000), "CACHE_EXPIRED");
 }
 
@@ -77,6 +77,7 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 		}
 		if (!cache) {
 			assert(!options.checkOnly, "CACHE_MISSING");
+			assert(now() < deadline, "CACHE_TIMEOUT");
 			await backend.create(name, images);
 		}
 		while (true) {
@@ -105,6 +106,21 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 	return { schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date(now()).toISOString(), status: "ready", caches: results, businessVerified: false };
 }
 
+export async function ensureCachesWithReceipt(plan: CachePlan, backend: CacheBackend, output: string, options: { checkOnly?: boolean } = {}) {
+	let caches: { name: string; id: string; images: string[] }[] = [];
+	const write = (status: string, reason?: string) => writeFile(output, `${JSON.stringify({ schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date().toISOString(), status, caches, businessVerified: false, ...(reason ? { reason } : {}) }, null, 2)}\n`, { mode: 0o600 });
+	await write("preparing");
+	try {
+		const receipt = await ensureCaches(plan, backend, { ...options, onProgress: async progress => { caches = progress; await write("preparing"); } });
+		await writeFile(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+		return receipt;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "";
+		await write("failed", /^CACHE_[A-Z_]+$/u.test(message) ? message : "CACHE_PREPARATION_FAILED");
+		throw new Error("ACK_IMAGE_CACHE_FAILED");
+	}
+}
+
 export function kubernetesBackend(kubeconfig: string, namespace: string, pullSecret: string, sizeGiB = 30): CacheBackend {
 	assert(kubeconfig && /^[a-z0-9][a-z0-9-]*$/u.test(namespace) && /^[a-z0-9][a-z0-9.-]*$/u.test(pullSecret), "CACHE_TARGET_INVALID");
 	assert(Number.isInteger(sizeGiB) && sizeGiB >= 20 && sizeGiB <= 100, "CACHE_SIZE_INVALID");
@@ -114,13 +130,15 @@ export function kubernetesBackend(kubeconfig: string, namespace: string, pullSec
 	};
 	return {
 		async get(name) {
-			const raw = command(["get", "imagecache", name, "--ignore-not-found", "-o", "json"]);
+			const raw = command(["get", "imagecache", "-n", namespace, name, "--ignore-not-found", "-o", "json"]);
 			if (!raw.trim()) return undefined;
 			const value = JSON.parse(raw);
-			return { name: value.metadata.name, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], images: value.spec.images, phase: value.status?.phase, id: value.status?.imageCacheId, expiresAt: value.status?.expireDateTime };
+			return { name: value.metadata.name, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], images: value.spec.images, phase: value.status?.phase, id: value.status?.imageCacheId, expiresAt: value.status?.expireDateTime, deleting: Boolean(value.metadata.deletionTimestamp) };
 		},
 		async create(name, images) {
-			command(["create", "-f", "-"], JSON.stringify({ apiVersion: "eci.alibabacloud.com/v1", kind: "ImageCache", metadata: { name, labels: { "agent-infra.agora.io/cache-owner": cacheOwner }, annotations: { "k8s.aliyun.com/imc-enable-reuse": "true" } }, spec: { images, imagePullSecrets: [`${namespace}:${pullSecret}`], imageCacheSize: sizeGiB } }));
+			const inventory = JSON.parse(command(["get", "imagecache", "-n", namespace, "-l", `agent-infra.agora.io/cache-owner=${cacheOwner}`, "-o", "json"]));
+			assert(Array.isArray(inventory.items) && inventory.items.length < 48, "CACHE_OBJECT_BUDGET_EXCEEDED");
+			command(["create", "-n", namespace, "-f", "-"], JSON.stringify({ apiVersion: "eci.alibabacloud.com/v1", kind: "ImageCache", metadata: { name, labels: { "agent-infra.agora.io/cache-owner": cacheOwner }, annotations: { "k8s.aliyun.com/imc-enable-reuse": "true" } }, spec: { images, imagePullSecrets: [`${namespace}:${pullSecret}`], imageCacheSize: sizeGiB } }));
 		},
 	};
 }
@@ -137,8 +155,7 @@ async function main() {
 	const plan = parseCachePlan(JSON.parse(await readFile(file, "utf8")));
 	assert(plan.sourceSha === process.env.ACK_SOURCE_SHA, "CACHE_RELEASE_SOURCE_MISMATCH");
 	const backend = kubernetesBackend(process.env.ACK_KUBECONFIG ?? "", process.env.ACK_NAMESPACE ?? "", process.env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(process.env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30));
-	const receipt = await ensureCaches(plan, backend, { checkOnly: action === "check" });
-	await writeFile(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+	const receipt = await ensureCachesWithReceipt(plan, backend, output, { checkOnly: action === "check" });
 	console.info(JSON.stringify({ status: "ready", cacheCount: receipt.caches.length, sourceSha: plan.sourceSha }));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => { console.error("ACK_IMAGE_CACHE_FAILED"); process.exitCode = 1; });

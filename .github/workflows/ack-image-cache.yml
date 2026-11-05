@@ -1,7 +1,7 @@
-name: ACK image cache
+name: ACK image cache plan
 run-name: >-
-  ${{ github.event_name }} | ack-image-cache | main |
-  ${{ inputs.request_id || github.event.workflow_run.id || inputs.publish_run_id }}
+  ${{ github.event_name }} | ack-image-cache-plan | main |
+  ${{ github.event.workflow_run.id || inputs.publish_run_id }}
 on:
   workflow_run:
     workflows: [Publish images]
@@ -14,14 +14,6 @@ on:
         type: string
       publish_attempt:
         description: Exact successful attempt
-        required: false
-        type: string
-      deployment_plan:
-        description: Approved deployment image groups, immutable GHCR digests only
-        required: false
-        type: string
-      request_id:
-        description: Deployment correlation ID
         required: false
         type: string
 permissions:
@@ -39,6 +31,7 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: ack-image-cache
     permissions:
       contents: read
       actions: read
@@ -55,7 +48,6 @@ jobs:
       - name: Validate exact publication and build cache plan
         env:
           GH_TOKEN: ${{ github.token }}
-          ACK_DEPLOYMENT_CACHE_PLAN: ${{ inputs.deployment_plan }}
           PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
           PUBLISH_ATTEMPT: ${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}
         run: node deploy/ack/image-cache-release.ts "$PUBLISH_RUN_ID" "$PUBLISH_ATTEMPT" "$RUNNER_TEMP/cache-plan.json"
@@ -64,62 +56,4 @@ jobs:
         with:
           name: ack-cache-plan-${{ github.run_attempt }}
           path: ${{ runner.temp }}/cache-plan.json
-          if-no-files-found: error
-  warm:
-    needs: prepare
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    environment: ack-image-cache
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
-    steps:
-      - name: Checkout trusted deployment code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-      - name: Download verified cache plan
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: ack-cache-plan-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cache-plan
-      - name: Require deployment identity configuration
-        env:
-          ROLE_ARN: ${{ vars.ACK_CACHE_ROLE_ARN }}
-          PROVIDER_ARN: ${{ vars.ACK_CACHE_OIDC_PROVIDER_ARN }}
-          VSWITCH_ID: ${{ vars.ACK_CACHE_VSWITCH_ID }}
-          SECURITY_GROUP_ID: ${{ vars.ACK_CACHE_SECURITY_GROUP_ID }}
-        run: |
-          if [[ -z "$ROLE_ARN" || -z "$PROVIDER_ARN" || -z "$VSWITCH_ID" || -z "$SECURITY_GROUP_ID" ]]; then
-            echo "ACK cache deployment identity is not configured" >&2
-            exit 1
-          fi
-      - name: Assume cache-only deployment identity
-        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0
-        with:
-          oidc-provider-arn: ${{ vars.ACK_CACHE_OIDC_PROVIDER_ARN }}
-          role-to-assume: ${{ vars.ACK_CACHE_ROLE_ARN }}
-          role-session-name: ack-cache-${{ github.run_id }}
-          role-session-expiration: 1800
-          audience: sts.aliyuncs.com
-      - name: Prepare caches and wait for Ready
-        env:
-          GHCR_CACHE_USER: ${{ github.actor }}
-          GHCR_CACHE_TOKEN: ${{ github.token }}
-          ACK_CACHE_VSWITCH_ID: ${{ vars.ACK_CACHE_VSWITCH_ID }}
-          ACK_CACHE_SECURITY_GROUP_ID: ${{ vars.ACK_CACHE_SECURITY_GROUP_ID }}
-          ACK_IMAGE_CACHE_SIZE_GIB: ${{ vars.ACK_IMAGE_CACHE_SIZE_GIB || '30' }}
-        run: node deploy/ack/image-cache-cloud.ts "$RUNNER_TEMP/cache-plan/cache-plan.json" "$RUNNER_TEMP/cache-ready.json"
-      - name: Upload cache readiness receipt
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
-        with:
-          name: ack-cache-ready-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cache-ready.json
           if-no-files-found: error

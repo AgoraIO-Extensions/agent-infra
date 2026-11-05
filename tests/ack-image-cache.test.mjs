@@ -123,6 +123,7 @@ test("foreign, partial, failed, expired and missing caches never satisfy the gat
 		{ ...ready, images: [] },
 		{ ...ready, phase: "Failed" },
 		{ ...ready, phase: "Expired" },
+		{ ...ready, deleting: true },
 		{ ...ready, expiresAt: new Date(0).toISOString() },
 	]) {
 		await assert.rejects(
@@ -168,34 +169,7 @@ test("waits are bounded and an earlier cache disappearing aborts final validatio
 	);
 });
 
-import { signedParameters } from "../deploy/ack/image-cache-cloud.ts";
 import { deploymentCachePlan } from "../deploy/ack/image-cache-deployment.ts";
-import { validateReleaseRun } from "../deploy/ack/image-cache-release.ts";
-
-test("cloud credentials can only follow successful same-repository exact attempts", () => {
-	const run = {
-		id: 42,
-		run_attempt: 2,
-		status: "completed",
-		conclusion: "success",
-		repository: { full_name: "AgoraIO-Extensions/agent-infra" },
-		head_repository: { full_name: "AgoraIO-Extensions/agent-infra" },
-		path: ".github/workflows/publish-images.yml",
-		event: "workflow_dispatch",
-		head_branch: "main",
-		display_title: `workflow_dispatch | publish-images | main | ${sha}`,
-	};
-	assert.equal(validateReleaseRun(run, "42", "2"), sha);
-	for (const change of [
-		{ conclusion: "failure" },
-		{ run_attempt: 1 },
-		{ head_branch: "feature" },
-		{ head_repository: { full_name: "attacker/fork" } },
-		{ path: ".github/workflows/ci.yml" },
-		{ event: "pull_request" },
-	])
-		assert.throws(() => validateReleaseRun({ ...run, ...change }, "42", "2"));
-});
 
 test("deployment cache plan covers the final custom image and complete multi-container Pod set", () => {
 	const entry = { repository: ref.split("@")[0], digest: ref.split("@")[1] };
@@ -245,32 +219,6 @@ test("deployment cache plan covers the final custom image and complete multi-con
 	);
 });
 
-test("RPC signing canonicalizes independently of parameter insertion order and keeps secrets out of parameters", () => {
-	const fields = {
-		Action: "DescribeImageCaches",
-		Timestamp: "2026-11-04T10:00:00Z",
-		SignatureNonce: "test-nonce",
-		Image: "a/b:tag with spaces*",
-	};
-	const first = signedParameters(fields, "test-secret");
-	const second = signedParameters(
-		Object.fromEntries(Object.entries(fields).reverse()),
-		"test-secret",
-	);
-	assert.equal(first.get("Signature"), second.get("Signature"));
-	assert.equal(first.get("Image"), fields.Image);
-	assert(!first.toString().includes("test-secret"));
-	assert.notEqual(
-		first.get("Signature"),
-		signedParameters(
-			{ ...fields, Action: "CreateImageCache" },
-			"test-secret",
-		).get("Signature"),
-	);
-});
-
-import { verifyDispatchedReceipt } from "../deploy/ack/image-cache-dispatch.ts";
-
 test("stable releases validate latest promotions without treating them as extra cache inputs", () => {
 	const names = [
 		"agent-runtime-host",
@@ -319,30 +267,6 @@ test("owned failed caches use one bounded recovery generation without deleting t
 	assert.equal(created.length, 1);
 	store.set(created[0], { ...ready, phase: "Failed" });
 	await assert.rejects(ensureCaches(plan, backend), /CACHE_PREPARATION_FAILED/);
-});
-
-test("a deployment accepts only a fresh receipt for the exact image groups", () => {
-	const now = Date.now();
-	const receipt = {
-		schemaVersion: 1,
-		kind: "ack-image-cache",
-		status: "ready",
-		sourceSha: sha,
-		platform: plan.platform,
-		checkedAt: new Date(now).toISOString(),
-		caches: [{ name: ready.name, id: ready.id, images: [ref] }],
-	};
-	assert.equal(verifyDispatchedReceipt(receipt, plan, now), receipt);
-	for (const change of [
-		{ status: "failed" },
-		{ sourceSha: "d".repeat(40) },
-		{ checkedAt: new Date(now - 301000).toISOString() },
-		{ caches: [] },
-		{ caches: [{ id: ready.id, images: [ref.replace("codex", "pi")] }] },
-	])
-		assert.throws(() =>
-			verifyDispatchedReceipt({ ...receipt, ...change }, plan, now),
-		);
 });
 
 import { cacheWorkerReady } from "../deploy/ack/image-cache-worker.ts";
@@ -492,4 +416,164 @@ image_cache_gate
 	);
 	assert.equal(result.status, 42, result.stderr);
 	assert.match(result.stdout, /strict cache admission is already enabled/);
+});
+
+import { validateReleaseRun } from "../deploy/ack/image-cache-release.ts";
+
+test("cache plan publication requires successful same-repository exact attempts", () => {
+	const run = {
+		id: 42,
+		run_attempt: 2,
+		status: "completed",
+		conclusion: "success",
+		repository: { full_name: "AgoraIO-Extensions/agent-infra" },
+		head_repository: { full_name: "AgoraIO-Extensions/agent-infra" },
+		path: ".github/workflows/publish-images.yml",
+		event: "workflow_dispatch",
+		head_branch: "main",
+		display_title: `workflow_dispatch | publish-images | main | ${sha}`,
+	};
+	assert.equal(validateReleaseRun(run, "42", "2"), sha);
+	for (const change of [
+		{ conclusion: "failure" },
+		{ run_attempt: 1 },
+		{ head_branch: "feature" },
+		{ head_repository: { full_name: "attacker/fork" } },
+		{ path: ".github/workflows/ci.yml" },
+		{ event: "pull_request" },
+	])
+		assert.throws(() => validateReleaseRun({ ...run, ...change }, "42", "2"));
+});
+
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// Execute the actual CLI against a stateful Kubernetes boundary. No gh/cloud
+// executable is supplied: ready receipts must come from live CR reads.
+test("deployment uses Kubernetes, retains partial failure evidence and rejects stale ready files", () => {
+	const directory = mkdtempSync(join(tmpdir(), "ack-cache-cli-"));
+	try {
+		const fixture = join(directory, "cluster.json");
+		const log = join(directory, "calls.jsonl");
+		writeFileSync(
+			join(directory, "kubectl"),
+			`#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(process.env.CACHE_FIXTURE, "utf8"));
+fs.appendFileSync(process.env.CACHE_CALLS, JSON.stringify(args) + "\\n");
+if (args.includes("validatingadmissionpolicy")) process.exit(0);
+if (state.denied) { console.error("private-server-token"); process.exit(1); }
+if (args.includes("create")) {
+ const cr = JSON.parse(fs.readFileSync(0,"utf8"));
+ state.items.push({...cr, status:{phase:"Ready",imageCacheId:"imc-created"+state.items.length}});
+ fs.writeFileSync(process.env.CACHE_FIXTURE, JSON.stringify(state));
+} else if(args.includes("-l")) console.log(JSON.stringify({items:state.items}));
+else { const name = args[args.indexOf("imagecache") + 1] === "-n" ? args[args.indexOf("imagecache") + 3] : args[args.indexOf("imagecache") + 1]; const cr = state.items.find(x=>x.metadata.name===name); if(cr) console.log(JSON.stringify(cr)); }
+`,
+			{ mode: 0o700 },
+		);
+		const entry = { repository: ref.split("@")[0], digest: ref.split("@")[1] };
+		const manifest = (images) => ({
+			schemaVersion: 1,
+			commitSha: sha,
+			platform: "linux/amd64",
+			images,
+		});
+		const runtime = join(directory, "runtime.json");
+		const templates = join(directory, "templates.json");
+		writeFileSync(runtime, JSON.stringify(manifest({ runtimeHost: entry })), {
+			mode: 0o600,
+		});
+		writeFileSync(
+			templates,
+			JSON.stringify(
+				manifest(
+					Object.fromEntries(
+						["codex", "claude", "opencode", "pi"].map((n) => [
+							n,
+							{ ...entry, repository: entry.repository.replace("codex", n) },
+						]),
+					),
+				),
+			),
+			{ mode: 0o600 },
+		);
+		const run = (state) => {
+			writeFileSync(fixture, JSON.stringify(state));
+			return spawnSync(
+				process.execPath,
+				["deploy/ack/image-cache-deployment.ts", directory],
+				{
+					encoding: "utf8",
+					env: {
+						PATH: directory,
+						ACK_KUBECONFIG: "/fixture/kubeconfig",
+						ACK_NAMESPACE: "fixture",
+						ACK_SOURCE_SHA: sha,
+						ACK_RUNTIME_IMAGE_MANIFEST: runtime,
+						ACK_TEMPLATE_IMAGE_MANIFEST: templates,
+						CACHE_FIXTURE: fixture,
+						CACHE_CALLS: log,
+					},
+				},
+			);
+		};
+		const success = run({ items: [] });
+		assert.equal(success.status, 0, success.stderr);
+		const receiptFile = join(directory, "image-cache.ready.json");
+		const receipt = JSON.parse(readFileSync(receiptFile));
+		assert.equal(receipt.status, "ready");
+		assert.equal(receipt.caches.length, 4);
+		assert(existsSync(join(directory, "image-cache.values.json")));
+		const stored = JSON.parse(readFileSync(fixture));
+		assert.deepEqual(stored.items[0].spec.imagePullSecrets, [
+			"fixture:ack-ghcr-pull",
+		]);
+		for (const line of readFileSync(log, "utf8")
+			.split("\n")
+			.filter((line) => line.includes("imagecache"))) {
+			const args = JSON.parse(line);
+			assert(args.includes("-n") && args.includes("fixture"));
+		}
+		const count = () =>
+			readFileSync(log, "utf8")
+				.split("\n")
+				.filter((x) => x.includes('"create"')).length;
+		const created = count();
+		assert.equal(run(stored).status, 0);
+		assert.equal(count(), created);
+		stored.items[1].metadata.labels["agent-infra.agora.io/cache-owner"] =
+			"foreign";
+		assert.notEqual(run(stored).status, 0);
+		const failed = JSON.parse(readFileSync(receiptFile));
+		assert.equal(failed.status, "failed");
+		assert.equal(failed.caches.length, 1);
+		assert.equal(failed.reason, "CACHE_IDENTITY_MISMATCH");
+		assert(!existsSync(join(directory, "image-cache.values.json")));
+		const denied = run({ denied: true, items: [] });
+		assert.notEqual(denied.status, 0);
+		assert.doesNotMatch(
+			denied.stdout + denied.stderr + readFileSync(receiptFile),
+			/private-server-token/,
+		);
+		assert.equal(
+			JSON.parse(readFileSync(receiptFile)).reason,
+			"CACHE_KUBERNETES_REQUEST_FAILED",
+		);
+		const budget = run({
+			items: Array.from({ length: 48 }, (_, i) => ({
+				metadata: { name: `old-${i}` },
+			})),
+		});
+		assert.notEqual(budget.status, 0);
+		assert.equal(
+			JSON.parse(readFileSync(receiptFile)).reason,
+			"CACHE_OBJECT_BUDGET_EXCEEDED",
+		);
+		assert.equal(count(), created);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
