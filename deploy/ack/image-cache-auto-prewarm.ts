@@ -4,6 +4,7 @@ import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseCachePlan } from "./image-cache.ts";
+import { ensureCachesWithReceipt, kubernetesBackend } from "./image-cache.ts";
 
 const repository = "AgoraIO-Extensions/agent-infra";
 const workflow = "ack-image-cache.yml";
@@ -23,9 +24,6 @@ export function validatePlanWorkflowRun(run: any, defaultHead: string) {
 }
 function command(args: string[], options: { cwd?: string; maxBuffer?: number; env?: NodeJS.ProcessEnv } = {}) {
 	return execFileSync(args[0], args.slice(1), { cwd: options.cwd, env: options.env, encoding: "utf8", timeout: 120_000, maxBuffer: options.maxBuffer ?? 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();
-}
-function ensureCommand(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-	return execFileSync(args[0], args.slice(1), { cwd, env, encoding: "utf8", timeout: 1_860_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 function privatePath(value: string, name: string) { assert(value && value.startsWith("/"), `${name}_PATH_INVALID`); return value; }
 async function acquireLock(path: string) {
@@ -65,10 +63,7 @@ export async function runOnce(env = process.env) {
 		await atomicJson(join(runDir, "run.json"), { ...run, artifact: matching[0], plan: { sourceSha: plan.sourceSha, groups: plan.groups.length } });
 		if (dryRun) return { status: "plan-ready", runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, cacheCount: plan.groups.length, planFile };
 		const receipt = join(runDir, "cache-ready.json");
-		const node = env.ACK_NODE ?? process.execPath;
-		const script = env.ACK_IMAGE_CACHE_SCRIPT ?? join(process.cwd(), "deploy/ack/image-cache.ts");
-		ensureCommand([node, script, "ensure", planFile, receipt], process.cwd(), { ...env, ACK_SOURCE_SHA: plan.sourceSha, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace, ACK_IMAGE_CACHE_TIMEOUT_MS: env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? "1800000" });
-		const ready = JSON.parse(await readFile(receipt, "utf8"));
+		const ready = await ensureCachesWithReceipt(plan, kubernetesBackend(kubeconfig, namespace, env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30)), receipt, { timeoutMs: Number(env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_800_000) });
 		assert(ready.status === "ready" && ready.sourceSha === plan.sourceSha && ready.caches.length === plan.groups.length, "CACHE_PREWARM_INCOMPLETE");
 		await atomicJson(join(stateDir, "last-success.json"), { runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, receipt, completedAt: new Date().toISOString() });
 		return { status: "ready", runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, cacheCount: ready.caches.length, receipt };
