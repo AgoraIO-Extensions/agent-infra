@@ -82,6 +82,7 @@ GH_CONFIG_DIR=/etc/agent-infra/gh
 ACK_NAMESPACE=agent-infra
 ACK_IMAGE_PULL_SECRET=ack-ghcr-pull
 ACK_IMAGE_CACHE_SIZE_GIB=30
+ACK_IMAGE_CACHE_TIMEOUT_MS=1800000
 ```
 
 以 `agent-infra-ack` 用户在 `/etc/agent-infra/gh` 完成一次 `gh auth login`（只读 Actions

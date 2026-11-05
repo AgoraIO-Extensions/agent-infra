@@ -67,7 +67,7 @@ export async function runOnce(env = process.env) {
 		const receipt = join(runDir, "cache-ready.json");
 		const node = env.ACK_NODE ?? process.execPath;
 		const script = env.ACK_IMAGE_CACHE_SCRIPT ?? join(process.cwd(), "deploy/ack/image-cache.ts");
-		ensureCommand([node, script, "ensure", planFile, receipt], process.cwd(), { ...env, ACK_SOURCE_SHA: plan.sourceSha, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace });
+		ensureCommand([node, script, "ensure", planFile, receipt], process.cwd(), { ...env, ACK_SOURCE_SHA: plan.sourceSha, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace, ACK_IMAGE_CACHE_TIMEOUT_MS: env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? "1800000" });
 		const ready = JSON.parse(await readFile(receipt, "utf8"));
 		assert(ready.status === "ready" && ready.sourceSha === plan.sourceSha && ready.caches.length === plan.groups.length, "CACHE_PREWARM_INCOMPLETE");
 		await atomicJson(join(stateDir, "last-success.json"), { runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, receipt, completedAt: new Date().toISOString() });
