@@ -138,7 +138,7 @@ export async function nativeShellPlan(
 		await grant("execute,read-file,read-dir", path);
 	await grant("read-file,read-dir", "/opt/codex/agent-infra-skills");
 	for (const snapshot of await workspaceSnapshotReadRoots())
-		await grant("execute,read-file,read-dir", snapshot);
+		await grant("read-file,read-dir", snapshot);
 	await grant("read-dir", "/proc");
 	await grant("read-file,read-dir", "/etc/ssl/certs");
 	// Node/OpenSSL reads this system file at startup, before the probe script runs.
