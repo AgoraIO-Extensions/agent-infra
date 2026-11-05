@@ -1856,6 +1856,82 @@ describe("PostgreSQL Workload steps", () => {
 			await sql`select * from platform.secret_records where configuration_revision = 7`,
 		).toHaveLength(0);
 	});
+
+	it("keeps an activating Secret bound to its candidate during an environment revision", async () => {
+		const crypto = secretCryptoFixture();
+		const record = crypto.encryptor.encrypt({
+			schemaVersion: 1,
+			secretId: "activating-secret",
+			ownerType: "agent-owner",
+			ownerId: "owner-a",
+			agentId: "agent-a",
+			name: "ACTIVATING_SECRET",
+			secretVersion: 1,
+			configRevision: 1,
+			plaintext: "candidate-secret",
+			occurredAt: "2026-09-07T00:00:00Z",
+		});
+		await configureSecretReference(1, {
+			secretId: record.secretId,
+			name: record.name,
+			version: record.secretVersion,
+		});
+		const [base] = await sql<{ configuration: Record<string, unknown> }[]>`
+			select configuration from platform.agent_configuration_revisions
+			where agent_id = 'agent-a' and revision = 1
+		`;
+		if (!base) throw new Error("missing base configuration");
+		const current = {
+			...base.configuration,
+			revision: 2,
+			environment: [{ name: "LOG_LEVEL", value: "info" }],
+		};
+		await sql`
+			insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, configuration, created_at)
+			select 'agent-a', 2, source_reference, ${sql.json(current)}, now()
+			from platform.agent_configuration_revisions
+			where agent_id = 'agent-a' and revision = 1
+		`;
+		await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+		await insertSecretRecord(record);
+		await sql`
+			insert into platform.workload_reconciliations
+			(agent_id, revision, state, next_attempt_at)
+			values ('agent-a', 1, ${sql.json({
+				schemaVersion: 1,
+				agentId: "agent-a",
+				sourceConfigurationRevision: 1,
+				sourceLifecycleRevision: 1,
+				revision: 1,
+				fence: 1,
+				phase: "activating",
+				candidate: { configuration: base.configuration, deployment: null },
+				verified: null,
+				verifiedRevision: null,
+				identity: null,
+				rollback: false,
+				failureCode: null,
+				attempts: 1,
+			} as unknown as postgres.JSONValue)}, clock_timestamp())
+		`;
+		const step = vi.fn(async (input: WorkloadReconciliationInputV1) => {
+			if (!input.state) throw new Error("missing reconciliation state");
+			return {
+				...input.state,
+				sourceConfigurationRevision: input.configuration.revision,
+			};
+		});
+		expect(await first.runNext("worker-activating", step)).toBe("advanced");
+		expect(step).toHaveBeenCalledOnce();
+		const binding = step.mock.calls[0]?.[0]?.secrets?.bindings[0];
+		expect(step.mock.calls[0]?.[0]?.secrets?.bindings).toHaveLength(1);
+		expect(binding).toBeDefined();
+		if (!binding) throw new Error("missing secret binding");
+		expect(validatePlatformSecretRecordV1(binding.record).configRevision).toBe(
+			1,
+		);
+	});
 	it.each([
 		["pending", false],
 		["applying", false],

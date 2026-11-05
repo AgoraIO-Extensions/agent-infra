@@ -782,7 +782,18 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				task = claimed;
 			}
 			let secretConfiguration = configuration;
-			if (state?.rollback || (state?.phase === "cleaning" && !state.rollback)) {
+			if (
+				state?.phase === "activating" &&
+				state.candidate.configuration.revision !== configuration.revision
+			) {
+				// Secret activation belongs to the candidate revision. A concurrent
+				// environment-only configuration revision must not make the still
+				// applying Secret record look stale before the candidate is verified.
+				secretConfiguration = state.candidate.configuration;
+			} else if (
+				state?.rollback ||
+				(state?.phase === "cleaning" && !state.rollback)
+			) {
 				if (
 					state.rollback &&
 					(!state.verified ||
