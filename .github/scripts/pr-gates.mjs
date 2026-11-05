@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-const CLOSE_KEYWORD = /^\s*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gim;
+const PRIMARY_ISSUE_KEYWORD = /^\s*(?:(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)|refs)\s+#(\d+)\b/gim;
 
 function labelNames(labels = []) {
   return labels.map((label) => (typeof label === "string" ? label : label.name));
@@ -9,7 +9,7 @@ function labelNames(labels = []) {
 
 export function extractPrimaryIssueNumbers(body = "") {
   const withoutFences = body.replace(/```[\s\S]*?```/g, "");
-  return [...withoutFences.matchAll(CLOSE_KEYWORD)].map((match) => Number(match[1]));
+  return [...withoutFences.matchAll(PRIMARY_ISSUE_KEYWORD)].map((match) => Number(match[1]));
 }
 
 export function evaluateIssueGate({
@@ -22,7 +22,7 @@ export function evaluateIssueGate({
       ok: false,
       description:
         issueNumbers.length === 0
-          ? "PR must contain exactly one Closes #<issue> reference"
+          ? "PR must contain exactly one Closes #<issue> or Refs #<issue> reference"
           : "PR contains more than one primary Issue",
     };
   }
