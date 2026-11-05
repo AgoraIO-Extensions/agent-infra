@@ -170,6 +170,8 @@ it("keeps only the fixed Session Sandbox claim wait steps (#3089)", () => {
 		"sandbox.workload_not_ready",
 		"sandbox.configuration_pending",
 		"sandbox.capacity_mismatch",
+		"sandbox.budget_configuration_unavailable",
+		"sandbox.budget_exhausted",
 		"sandbox.lease_ineligible",
 		"sandbox.policy_changed",
 	];

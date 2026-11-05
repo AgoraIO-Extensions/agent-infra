@@ -41,6 +41,7 @@ import { lockConversation, lockOutbox } from "./conversation-dispatch-sql.js";
 import {
 	releaseSessionSandboxComputeBudgetV1,
 	reserveSessionSandboxPreparationBudgetV1,
+	SessionSandboxPreparationBudgetErrorV1,
 } from "./session-sandbox-reserves.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
@@ -56,6 +57,7 @@ export type SessionSandboxClaimWaitReasonV1 =
 	| "workload_not_ready"
 	| "configuration_pending"
 	| "capacity_mismatch"
+	| SessionSandboxPreparationBudgetErrorV1["reason"]
 	| "lease_ineligible"
 	| "policy_changed";
 export interface SandboxClaimRequest {
@@ -524,12 +526,26 @@ export async function claimSandboxReconciliation(
 		wait("policy_changed");
 		return null;
 	}
-	if (context.purpose === "prepare")
-		await reserveSessionSandboxPreparationBudgetV1(
-			transaction,
-			sandbox.sandboxId,
-			context.policy,
-		);
+	if (context.purpose === "prepare") {
+		try {
+			await reserveSessionSandboxPreparationBudgetV1(
+				transaction,
+				sandbox.sandboxId,
+				context.policy,
+			);
+		} catch (error) {
+			if (!(error instanceof SessionSandboxPreparationBudgetErrorV1))
+				throw error;
+			const retryDelayMs = Math.max(1_000, error.retryDelayMs);
+			await transaction`update platform.outbox_items
+				set status = 'retry_scheduled',
+					available_at = clock_timestamp() + (${retryDelayMs}::bigint * interval '1 millisecond'),
+					lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp()
+				where id = ${input.itemId}`;
+			wait(error.reason);
+			return null;
+		}
+	}
 	const resourceFence = Math.max(1, Number(allocation.resource_fence));
 	const deliveryFence = Number(outbox.delivery_fence) + 1;
 	if (

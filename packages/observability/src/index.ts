@@ -192,6 +192,8 @@ const operationalFailureSteps = new Set([
 	"sandbox.workload_not_ready",
 	"sandbox.configuration_pending",
 	"sandbox.capacity_mismatch",
+	"sandbox.budget_configuration_unavailable",
+	"sandbox.budget_exhausted",
 	"sandbox.lease_ineligible",
 	"sandbox.policy_changed",
 	// Runtime 文件交换与执行期文件授权被拒绝的检查步骤（#3307）。对外仍是与对象不存在相同的 404。
