@@ -24,6 +24,9 @@ export function validatePlanWorkflowRun(run: any, defaultHead: string) {
 function command(args: string[], options: { cwd?: string; maxBuffer?: number; env?: NodeJS.ProcessEnv } = {}) {
 	return execFileSync(args[0], args.slice(1), { cwd: options.cwd, env: options.env, encoding: "utf8", timeout: 120_000, maxBuffer: options.maxBuffer ?? 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
+function ensureCommand(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
+	return execFileSync(args[0], args.slice(1), { cwd, env, encoding: "utf8", timeout: 1_860_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
 function privatePath(value: string, name: string) { assert(value && value.startsWith("/"), `${name}_PATH_INVALID`); return value; }
 async function acquireLock(path: string) {
 	try { const handle = await open(path, "wx", 0o600); await handle.writeFile(`${process.pid}\n`); return handle; }
@@ -64,7 +67,7 @@ export async function runOnce(env = process.env) {
 		const receipt = join(runDir, "cache-ready.json");
 		const node = env.ACK_NODE ?? process.execPath;
 		const script = env.ACK_IMAGE_CACHE_SCRIPT ?? join(process.cwd(), "deploy/ack/image-cache.ts");
-		command([node, script, "ensure", planFile, receipt], { cwd: process.cwd(), env: { ...env, ACK_SOURCE_SHA: plan.sourceSha, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } });
+		ensureCommand([node, script, "ensure", planFile, receipt], process.cwd(), { ...env, ACK_SOURCE_SHA: plan.sourceSha, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace });
 		const ready = JSON.parse(await readFile(receipt, "utf8"));
 		assert(ready.status === "ready" && ready.sourceSha === plan.sourceSha && ready.caches.length === plan.groups.length, "CACHE_PREWARM_INCOMPLETE");
 		await atomicJson(join(stateDir, "last-success.json"), { runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, receipt, completedAt: new Date().toISOString() });

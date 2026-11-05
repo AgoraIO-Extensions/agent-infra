@@ -10,6 +10,7 @@ Group=agent-infra-ack
 WorkingDirectory=/opt/agent-infra
 EnvironmentFile=/etc/agent-infra/ack-image-cache-prewarm.env
 ExecStart=/usr/bin/node deploy/ack/image-cache-auto-prewarm.ts
+TimeoutStartSec=31min
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
