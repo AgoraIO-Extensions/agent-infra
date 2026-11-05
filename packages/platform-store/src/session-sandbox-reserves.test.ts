@@ -1110,6 +1110,15 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			).toEqual([{ compute_released: false, released: false }]);
 		}
 	});
+	it("releases compute for an unavailable allocation after confirmed source cleanup", async () => {
+		const original = await ready();
+		await create();
+		await sql`update platform.session_sandbox_allocations set status = 'unavailable', desired_state = 'stopped', resource_observation = ${sql.json({ status: "stopped", resources: [], sourceStop: { removed: [{ kind: "Pod", name: "sandbox", namespace: "reserve-test" }] } })} where sandbox_id = ${original.sandboxId}`;
+		await reserves().applyConfiguration();
+		expect(
+			await sql`select compute_released, released from platform.session_sandbox_resource_charges where sandbox_id = ${original.sandboxId}`,
+		).toEqual([{ compute_released: true, released: false }]);
+	});
 	it("never-enabled default-off preserves the cold path without charging resources", async () => {
 		const off = { ...config, enabled: false };
 		const result = await create(

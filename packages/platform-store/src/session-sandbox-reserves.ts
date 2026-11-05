@@ -408,12 +408,15 @@ async function lockBudget(
 	}
 	// Only the original Session lifecycle's confirmed stop receipt releases compute. PVC remains charged.
 	await tx`update platform.session_sandbox_resource_charges ch set compute_released = true from platform.session_sandbox_allocations a
-  where a.sandbox_id = ch.sandbox_id and a.status = 'stopped' and a.desired_state = 'stopped' and exists (
-   select 1 from platform.outbox_items o where o.scope_type = 'conversation' and o.scope_id = a.conversation_id and o.operation = 'conversation.sandbox.reconcile.v1'
-   and o.payload->'lifecycle'->'stopReceipt'->>'sandboxId' = a.sandbox_id
-   and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id
-   and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text
-   and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text)`;
+  where a.sandbox_id = ch.sandbox_id and a.desired_state = 'stopped' and (
+   (a.status = 'stopped' and exists (
+     select 1 from platform.outbox_items o where o.scope_type = 'conversation' and o.scope_id = a.conversation_id and o.operation = 'conversation.sandbox.reconcile.v1'
+     and o.payload->'lifecycle'->'stopReceipt'->>'sandboxId' = a.sandbox_id
+     and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id
+     and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text
+     and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text))
+   or (a.status = 'unavailable' and a.resource_observation->>'status' = 'stopped' and a.resource_observation->'sourceStop'->'removed' is not null)
+  )`;
 	return { ...config, enabled: policy.enabled };
 }
 async function usedBudget(
