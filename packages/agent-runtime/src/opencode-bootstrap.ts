@@ -40,6 +40,7 @@ import {
 	workspaceGlobAllowed,
 	workspacePathAllowed,
 } from "./workspace-path.js";
+import { workspaceSnapshotFileAllowed } from "./workspace-snapshot-path.js";
 
 /**
  * #3226：把平台固定的文件交换说明写到 Conversation 目录 `config/agent-infra/` 下。该目录在
@@ -432,6 +433,11 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 							typeof tool.rawInput.filePath !== "string"
 						)
 							return false;
+						if (
+							tool.kind === "read" &&
+							(await workspaceSnapshotFileAllowed(tool.rawInput.filePath))
+						)
+							return true;
 						return workspacePathAllowed(
 							join(directory, "workspace"),
 							join(directory, "workspace", ".memory"),
