@@ -76,8 +76,10 @@ Issue → 实现与验证 → PR 流程。
 
 ### 7.1 PR 内容
 
-PR 正文包含唯一的 `Closes #<primary issue>`，说明问题、最终改动、AC evidence、验证结果和
-必要的人工验证。primary Issue 必须在 PR 之前创建；Issue 可以在 PR 创建前后处于 open 或 closed，
+PR 正文包含唯一的主 Issue 引用：完整交付并可关闭时使用 `Closes #<primary issue>`；仅交付部分能力、
+仍待外部验收时使用 `Refs #<primary issue>`，合并不关闭 Issue。两种写法均通过相同的 Issue Gate，
+说明问题、最终改动、AC evidence、验证结果和必要的人工验证。primary Issue 必须在 PR 之前创建；
+Issue 可以在 PR 创建前后处于 open 或 closed，
 只要它仍是有效的非 `wontfix` Issue。一个 Issue 可以由多个 PR 交付，后续 PR 继续引用同一 primary
 Issue。文档和普通代码 PR 使用同一规则。
 

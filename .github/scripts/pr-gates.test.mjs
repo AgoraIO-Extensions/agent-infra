@@ -68,6 +68,17 @@ test("ignores closing keywords inside fenced examples", () => {
   );
 });
 
+test("Refs keeps the primary Issue open while retaining all Issue Gate checks", async () => {
+  const fixture = gateFixture();
+  fixture.pr.body = "Refs #42";
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  assert(fixture.calls.some((call) => call.apiPath.endsWith("/issues/42")));
+  fixture.pr.body = "Refs #42\nCloses #42";
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+  assert.deepEqual(extractPrimaryIssueNumbers("```md\nRefs #9\n```\nRefs #42"), [42]);
+  assert.deepEqual(extractPrimaryIssueNumbers("References #42\nRelated to #7"), []);
+});
+
 test("Issue Gate rejects missing and duplicated primary Issues", () => {
   assert.equal(evaluateIssueGate({ issueNumbers: [] }).ok, false);
   assert.equal(evaluateIssueGate({ issueNumbers: [1, 2] }).ok, false);
