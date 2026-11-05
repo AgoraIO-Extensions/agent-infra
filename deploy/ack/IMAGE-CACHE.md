@@ -55,7 +55,7 @@ GitHub、repo、日志或 issue。该运维身份不需要 Kubernetes 业务 Pod
 backend。kubeconfig、`gh` 登录态和 registry Secret 都留在运维机；GitHub 不获得它们。
 运维机只引用 Secret 名称，不读取凭据正文。CR 查询失败、缓存未 Ready 或拉取 Secret 无效时停止，
 不冷拉绕过。轮询器按 run/attempt 和私有状态目录幂等，串行等待 Ready；失败保留脱敏 receipt，
-下一轮复用同名 CR，不创建副本。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。
+每轮下载到独立临时目录、校验后持久化计划并清理下载目录，下一轮复用同名 CR，不创建副本。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。
 
 ## 运维端执行
 
