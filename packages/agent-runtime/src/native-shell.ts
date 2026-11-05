@@ -5,6 +5,8 @@ import { access, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { workspaceSnapshotReadRoots } from "./workspace-snapshot-path.js";
+
 const helper = "/usr/bin/setpriv";
 const shell = "/bin/bash";
 const dataRights = [
@@ -135,6 +137,8 @@ export async function nativeShellPlan(
 	for (const path of ["/bin", "/sbin", "/usr", "/lib", "/lib64"])
 		await grant("execute,read-file,read-dir", path);
 	await grant("read-file,read-dir", "/opt/codex/agent-infra-skills");
+	for (const snapshot of await workspaceSnapshotReadRoots())
+		await grant("read-file,read-dir", snapshot);
 	await grant("read-dir", "/proc");
 	await grant("read-file,read-dir", "/etc/ssl/certs");
 	// Node/OpenSSL reads this system file at startup, before the probe script runs.
