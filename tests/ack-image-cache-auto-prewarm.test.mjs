@@ -42,16 +42,7 @@ test("requires the plan workflow run to be successful and trusted", () => {
 		);
 });
 
-test("poller contract passes the source and target environment to ensure", () => {
-	assert.equal(
-		"ACK_SOURCE_SHA" in
-			{
-				ACK_SOURCE_SHA: "a".repeat(40),
-				ACK_KUBECONFIG: "/private/kubeconfig",
-				ACK_NAMESPACE: "agent-infra",
-			},
-		true,
-	);
+test("service allows the bounded readiness wait", () => {
 	assert.match(
 		readFileSync(
 			new URL("../deploy/ack/ack-image-cache-prewarm.service", import.meta.url),
@@ -59,19 +50,6 @@ test("poller contract passes the source and target environment to ensure", () =>
 		),
 		/TimeoutStartSec=31min/,
 	);
-});
-
-test("keeps the validated kubeconfig path for the in-process backend", () => {
-	const kubeconfig = "/etc/agent-infra/kubeconfig";
-	assert.equal(kubeconfig.startsWith("/"), true);
-});
-
-test("rejects invalid numeric prewarm configuration", () => {
-	for (const value of ["NaN", "0", "-1", "Infinity"])
-		assert.throws(() => {
-			const parsed = Number(value);
-			assert(Number.isFinite(parsed) && parsed > 0, "INVALID");
-		});
 });
 
 test("selects only the latest successful plan on the trusted default head", () => {

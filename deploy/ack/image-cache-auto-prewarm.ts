@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, lstat, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseCachePlan } from "./image-cache.ts";
@@ -56,9 +56,23 @@ export async function runOnce(env = process.env) {
 		validatePlanArtifact(matching[0], expectedName);
 		const runDir = join(stateDir, `run-${run.databaseId}-attempt-${run.attempt}`);
 		await mkdir(runDir, { recursive: true, mode: 0o700 });
-		command(["gh", "run", "download", String(run.databaseId), "--repo", repository, "--name", expectedName, "--dir", runDir]);
+		// gh refuses to extract over an existing file. Isolate each download so
+		// the next timer tick can revalidate and resume the same run safely.
+		const downloadDir = await mkdtemp(join(stateDir, "download-"));
+		let plan;
+		let downloadedPlan;
+		try {
+			command(["gh", "run", "download", String(run.databaseId), "--repo", repository, "--name", expectedName, "--dir", downloadDir]);
+			const file = join(downloadDir, "cache-plan.json");
+			const stat = await lstat(file);
+			assert(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size < 1_000_000, "CACHE_PLAN_ARTIFACT_INVALID");
+			downloadedPlan = JSON.parse(await readFile(file, "utf8"));
+			plan = parseCachePlan(downloadedPlan);
+		} finally {
+			await rm(downloadDir, { recursive: true, force: true });
+		}
 		const planFile = join(runDir, "cache-plan.json");
-		const plan = parseCachePlan(JSON.parse(await readFile(planFile, "utf8")));
+		await atomicJson(planFile, downloadedPlan);
 		assert(/^[a-f0-9]{40}$/u.test(plan.sourceSha), "CACHE_PLAN_SOURCE_INVALID");
 		await atomicJson(join(runDir, "run.json"), { ...run, artifact: matching[0], plan: { sourceSha: plan.sourceSha, groups: plan.groups.length } });
 		if (dryRun) return { status: "plan-ready", runId: run.databaseId, runAttempt: run.attempt, sourceSha: plan.sourceSha, cacheCount: plan.groups.length, planFile };
