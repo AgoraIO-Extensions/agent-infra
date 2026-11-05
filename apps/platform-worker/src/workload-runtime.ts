@@ -91,6 +91,26 @@ export type WorkloadBrowserBindingResolverV1 = (input: {
 	readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
 }) => BrowserCapabilityBindingV1 | undefined;
 
+/**
+ * Platform DB ciphertext for custom Session Owner Secrets (Engineering Spec
+ * §10.1.1, #3938). It returns encrypted records only; the Worker decrypts.
+ */
+export interface SessionOwnerSecretSourceV1 {
+	resolve(input: {
+		readonly agentId: string;
+		readonly references: readonly AgentWorkloadDesiredV1["secretRefs"][number][];
+	}): Promise<readonly unknown[]>;
+	auditDecryption(input: {
+		readonly agentId: string;
+		readonly secretId: string;
+		readonly wrappingKeyVersion: string;
+		readonly outcome: "succeeded" | "rejected";
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly workerId: string;
+	}): Promise<void>;
+}
+
 export interface WorkloadRuntimeOptionsV1 {
 	/** Deployment-owned service token used only for Codex container-boundary attestations. */
 	readonly containerBoundaryServiceToken?: string;
@@ -102,6 +122,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly registrySubjectRef: string;
 	/** Workload-only decryptor supports Store-authorized current and active-origin records. */
 	readonly decryptor: SecretActivationDecryptorPortV1;
+	/** Without it, custom platform-adapter Sessions fail closed. */
+	readonly sessionOwnerSecrets?: SessionOwnerSecretSourceV1;
 	readonly modelCatalog?: ModelCatalogAdapterV1;
 	readonly modelAccess?: ModelAccessValidatorV1;
 	/** Explicit trusted deployment rollout for keyless Codex configurations. */

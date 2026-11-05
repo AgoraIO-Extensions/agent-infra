@@ -20,6 +20,8 @@ import {
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
+import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
+import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import type {
 	KubernetesObject,
 	V1NetworkPolicy,
@@ -54,6 +56,7 @@ import {
 } from "./test-support/session-sandbox-v4.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
+	type SessionOwnerSecretSourceV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -304,6 +307,171 @@ function drainClaim(
 	};
 }
 
+let ownerSecretKeys:
+	| { readonly publicDer: Buffer; readonly privateDer: Buffer }
+	| undefined;
+function ownerSecretKeyPair() {
+	if (!ownerSecretKeys) {
+		const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+			modulusLength: 3072,
+		});
+		ownerSecretKeys = {
+			publicDer: publicKey.export({ format: "der", type: "spki" }),
+			privateDer: privateKey.export({ format: "der", type: "pkcs8" }),
+		};
+	}
+	return ownerSecretKeys;
+}
+
+/** Real Platform DB ciphertext for one active custom Owner Secret (#3938). */
+function encryptedOwnerSecret(
+	input: {
+		readonly ownerId?: string;
+		readonly name?: string;
+		readonly plaintext?: string;
+	} = {},
+) {
+	const { publicDer } = ownerSecretKeyPair();
+	const ownerId = input.ownerId ?? "actor-a";
+	const pending = createSecretEncryptorV1({
+		encryptionKeys: {
+			schemaVersion: 1,
+			activeWrappingKeyVersion: "key-a",
+			keys: [
+				{
+					schemaVersion: 1,
+					keyVersion: "key-a",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					publicKeySpkiDerBase64: publicDer.toString("base64"),
+					publicKeyFingerprint: createHash("sha256")
+						.update(publicDer)
+						.digest("hex"),
+					rsaModulusBits: 3072,
+					status: "active",
+				},
+			],
+		},
+	}).encrypt({
+		schemaVersion: 1,
+		secretId: "owner-secret",
+		ownerType: "agent-owner",
+		ownerId,
+		agentId: "agent-a",
+		name: input.name ?? "MODEL_API_KEY",
+		secretVersion: 1,
+		configRevision: 1,
+		plaintext: input.plaintext ?? "owner-value",
+		occurredAt: "2026-11-05T00:00:00.000Z",
+	});
+	const reference = {
+		schemaVersion: 1 as const,
+		ownerType: "agent-owner" as const,
+		ownerId,
+		agentId: "agent-a",
+		secretId: "owner-secret",
+		secretVersion: 1,
+		configRevision: 1,
+		algorithmVersion: "aes-256-gcm:v1" as const,
+		wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+		wrappingKeyVersion: "key-a",
+		name: "agent-owner-secret-v1-r1",
+	};
+	return {
+		reference,
+		record: {
+			...pending,
+			lifecycleState: "active" as const,
+			kubernetesSecretRef: reference,
+			activationFence: {
+				schemaVersion: 1 as const,
+				agentId: "agent-a",
+				secretId: "owner-secret",
+				secretVersion: 1,
+				configRevision: 1,
+				kubernetesSecretName: reference.name,
+				workloadUid: "workload-a",
+				workloadGeneration: 1,
+				fence: 1,
+			},
+		},
+	};
+}
+
+/** Custom platform-adapter receiver whose Owner values come only from ciphertext. */
+function customOwnerSecretFixture(
+	f: ReturnType<typeof fixture>,
+	secret: ReturnType<typeof encryptedOwnerSecret> = encryptedOwnerSecret(),
+	reference: ReturnType<
+		typeof encryptedOwnerSecret
+	>["reference"] = secret.reference,
+) {
+	const reads: string[] = [];
+	const decryptions: Uint8Array[] = [];
+	const audits: Parameters<SessionOwnerSecretSourceV1["auditDecryption"]>[0][] =
+		[];
+	const resolved: unknown[] = [];
+	const behavior: {
+		resolve?: () => Promise<readonly unknown[]>;
+		audit?: (outcome: "succeeded" | "rejected") => Promise<void>;
+	} = {};
+	const keyring = createWorkloadSecretKeyringDecryptorV1({
+		keys: [
+			{
+				keyVersion: "key-a",
+				privateKeyPkcs8DerBase64:
+					ownerSecretKeyPair().privateDer.toString("base64"),
+			},
+		],
+	});
+	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
+	(deployment as { secretRefs: (typeof reference)[] }).secretRefs = [reference];
+	const options: WorkloadRuntimeOptionsV1 = {
+		...f.options,
+		client: {
+			...f.client,
+			async read<T extends KubernetesObject>(
+				kind: Parameters<typeof f.client.read>[0],
+				name: string,
+			): Promise<T | null> {
+				reads.push(`${kind}/${name}`);
+				return f.client.read<T>(kind, name);
+			},
+		},
+		policy: { ...f.options.policy, nativeEgress: nativeEgressFixture() },
+		decryptor: {
+			async decrypt(input) {
+				const result = await keyring.decrypt(input);
+				if (result.outcome === "decrypted") decryptions.push(result.plaintext);
+				return result;
+			},
+		},
+		sessionOwnerSecrets: {
+			async resolve(input) {
+				resolved.push(input.references);
+				return behavior.resolve ? behavior.resolve() : [secret.record];
+			},
+			async auditDecryption(input) {
+				audits.push(input);
+				await behavior.audit?.(input.outcome);
+			},
+		},
+	};
+	const claim = { ...f.claim, deployment, modelProjection: null };
+	return {
+		secret,
+		reads,
+		decryptions,
+		audits,
+		resolved,
+		behavior,
+		options,
+		claim,
+		receive: createProductionSessionSandboxReceiverV1(options, {
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+		}),
+	};
+}
+
 describe("production SessionSandbox resource receiver", () => {
 	it("takes the image pull Secret only from deployment policy", async () => {
 		const f = fixture();
@@ -544,76 +712,236 @@ describe("production SessionSandbox resource receiver", () => {
 		);
 	});
 
-	it("copies custom Owner Secret data into the Session Secret and keeps it out of the claim", async () => {
-		const f = fixture();
-		const ownerSecretName = "agent-owner-secret";
-		await f.client.create({
-			apiVersion: "v1",
-			kind: "Secret",
-			metadata: {
-				name: ownerSecretName,
-				namespace: f.options.policy.namespace,
-				annotations: {
-					"agent-infra.agora.io/secret-id": "owner-secret",
-					"agent-infra.agora.io/secret-version": "1",
-					"agent-infra.agora.io/config-revision": "1",
+	describe("custom Owner Secret materialization (#3938)", () => {
+		const sessionSecret = "Secret/sandbox-allocation-a";
+		const decoded = (secret: V1Secret | undefined, name: string) =>
+			Buffer.from(secret?.data?.[name] ?? "", "base64").toString();
+
+		it("decrypts Platform DB ciphertext into the Session Secret without reading the Agent Secret", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			await o.receive(o.claim, new AbortController().signal);
+			const secret = f.resources.get(sessionSecret) as V1Secret;
+			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			expect(decoded(secret, "MODEL_API_KEY")).toBe("owner-value");
+			expect(
+				JSON.stringify(
+					(
+						f.resources.get(
+							"NetworkPolicy/sandbox-allocation-a",
+						) as V1NetworkPolicy
+					).spec?.egress,
+				),
+			).not.toContain("8.8.8.8");
+			expect(
+				pod.spec?.containers[0]?.env?.find(
+					(entry) => entry.name === "MODEL_API_KEY",
+				)?.valueFrom?.secretKeyRef,
+			).toEqual({
+				name: "sandbox-allocation-a",
+				key: "MODEL_API_KEY",
+				optional: false,
+			});
+			expect(o.reads).not.toContain(`Secret/${o.secret.reference.name}`);
+			expect(o.resolved).toEqual([[o.secret.reference]]);
+			expect(o.audits).toEqual([
+				{
+					agentId: "agent-a",
+					secretId: "owner-secret",
+					wrappingKeyVersion: "key-a",
+					outcome: "succeeded",
+					traceId: o.claim.deployment.traceId,
+					requestId: o.claim.deployment.requestId,
+					workerId: "worker-a",
 				},
-			},
-			immutable: true,
-			data: { MODEL_API_KEY: Buffer.from("owner-value").toString("base64") },
+			]);
+			expect(o.decryptions).toHaveLength(1);
+			expect(o.decryptions[0]?.every((byte) => byte === 0)).toBe(true);
+			for (const value of [o.claim, pod, o.audits])
+				expect(JSON.stringify(value)).not.toContain("owner-value");
 		});
-		const secretRef = {
-			schemaVersion: 1 as const,
-			ownerType: "agent-owner" as const,
-			ownerId: "actor-a",
-			agentId: "agent-a",
-			secretId: "owner-secret",
-			secretVersion: 1,
-			configRevision: 1,
-			algorithmVersion: "aes-256-gcm:v1" as const,
-			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-			wrappingKeyVersion: "key-a",
-			name: ownerSecretName,
-		};
-		const customDeployment = workloadDesiredFixture(
-			1,
-			"agent-a",
-			"internal-only",
-		);
-		(customDeployment as { secretRefs: (typeof secretRef)[] }).secretRefs = [
-			secretRef,
-		];
-		const customClaim = {
-			...f.claim,
-			deployment: customDeployment,
-			modelProjection: null,
-		};
-		const receive = createProductionSessionSandboxReceiverV1(
-			{
-				...f.options,
-				policy: { ...f.options.policy, nativeEgress: nativeEgressFixture() },
+
+		it("re-checks a recorded Session Secret by identity without decrypting again", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			const signal = new AbortController().signal;
+			const first = await o.receive(o.claim, signal);
+			const uid = (f.resources.get(sessionSecret) as V1Secret).metadata?.uid;
+			const second = await o.receive(
+				{ ...o.claim, previousObservation: first },
+				signal,
+			);
+			expect(o.resolved).toHaveLength(2);
+			expect(o.decryptions).toHaveLength(1);
+			expect(o.audits).toHaveLength(1);
+			expect(
+				second.resources.find((resource) => resource.kind === "Secret")?.uid,
+			).toBe(uid);
+			expect(
+				decoded(f.resources.get(sessionSecret) as V1Secret, "MODEL_API_KEY"),
+			).toBe("owner-value");
+		});
+
+		it("decrypts again instead of trusting a replaced Session Secret", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			const signal = new AbortController().signal;
+			const first = await o.receive(o.claim, signal);
+			const original = f.resources.get(sessionSecret) as V1Secret;
+			await f.client.delete(original);
+			await f.client.create({
+				...original,
+				metadata: {
+					name: original.metadata?.name,
+					namespace: original.metadata?.namespace,
+					labels: original.metadata?.labels,
+					annotations: original.metadata?.annotations,
+				},
+				data: {
+					...original.data,
+					MODEL_API_KEY: Buffer.from("forged-value").toString("base64"),
+				},
+			});
+			await expect(
+				o.receive({ ...o.claim, previousObservation: first }, signal),
+			).rejects.toThrow();
+			expect(o.decryptions).toHaveLength(2);
+			expect(
+				decoded(f.resources.get(sessionSecret) as V1Secret, "MODEL_API_KEY"),
+			).toBe("forged-value");
+		});
+
+		it.each([
+			[
+				"the Store cannot resolve the verified references",
+				(o: ReturnType<typeof customOwnerSecretFixture>) => {
+					o.behavior.resolve = async () => {
+						throw new Error("unavailable");
+					};
+				},
+			],
+			[
+				"the Store returns a record for another Owner",
+				(o: ReturnType<typeof customOwnerSecretFixture>) => {
+					const foreign = encryptedOwnerSecret({ ownerId: "actor-b" }).record;
+					o.behavior.resolve = async () => [foreign];
+				},
+			],
+			[
+				"an Owner Secret name is reserved for the platform",
+				(o: ReturnType<typeof customOwnerSecretFixture>) => {
+					const reserved = encryptedOwnerSecret({
+						name: "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+					}).record;
+					o.behavior.resolve = async () => [reserved];
+				},
+			],
+		])(
+			"rejects before decryption when %s and audits the rejection",
+			async (_name, arrange) => {
+				const f = fixture();
+				const o = customOwnerSecretFixture(f);
+				arrange(o);
+				await expect(
+					o.receive(o.claim, new AbortController().signal),
+				).rejects.toThrow();
+				expect(o.decryptions).toEqual([]);
+				expect(
+					o.audits.map(({ secretId, outcome }) => ({ secretId, outcome })),
+				).toEqual([{ secretId: "owner-secret", outcome: "rejected" }]);
+				expect(f.resources.has(sessionSecret)).toBe(false);
+				expect(f.resources.has("Pod/sandbox-allocation-a")).toBe(false);
 			},
-			{ serviceToken: sessionSandboxDeploymentTokenFixture },
 		);
-		await receive(customClaim, new AbortController().signal);
-		const customNetwork = f.resources.get(
-			"NetworkPolicy/sandbox-allocation-a",
-		) as V1NetworkPolicy;
-		expect(JSON.stringify(customNetwork.spec?.egress)).not.toContain("8.8.8.8");
-		const sandboxSecret = f.resources.get(
-			"Secret/sandbox-allocation-a",
-		) as V1Secret;
-		const sandboxPod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
-		expect(
-			Buffer.from(sandboxSecret.data?.MODEL_API_KEY ?? "", "base64").toString(),
-		).toBe("owner-value");
-		expect(JSON.stringify(customClaim)).not.toContain("owner-value");
-		expect(JSON.stringify(sandboxPod)).not.toContain("owner-value");
-		expect(
-			sandboxPod.spec?.containers[0]?.env?.some(
-				(entry) => entry.name === "MODEL_API_KEY",
-			),
-		).toBe(true);
+
+		it("rejects ciphertext authenticated for another Owner and audits the failed decryption", async () => {
+			const f = fixture();
+			const sealed = encryptedOwnerSecret();
+			// The reference and record both claim actor-b; the AEAD tag was sealed for actor-a.
+			const relabeled = {
+				...sealed.record,
+				ownerId: "actor-b",
+				kubernetesSecretRef: { ...sealed.reference, ownerId: "actor-b" },
+				crypto: {
+					...sealed.record.crypto,
+					aadBinding: {
+						...sealed.record.crypto.aadBinding,
+						ownerId: "actor-b",
+					},
+				},
+			};
+			const o = customOwnerSecretFixture(
+				f,
+				{ reference: relabeled.kubernetesSecretRef, record: relabeled },
+				relabeled.kubernetesSecretRef,
+			);
+			await expect(
+				o.receive(o.claim, new AbortController().signal),
+			).rejects.toThrow();
+			expect(o.decryptions).toEqual([]);
+			expect(o.audits.map(({ outcome }) => outcome)).toEqual(["rejected"]);
+			expect(f.resources.has(sessionSecret)).toBe(false);
+		});
+
+		it("fails closed and zeroes the plaintext when the success audit cannot be written", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			o.behavior.audit = async (outcome) => {
+				if (outcome === "succeeded") throw new Error("audit unavailable");
+			};
+			await expect(
+				o.receive(o.claim, new AbortController().signal),
+			).rejects.toThrow();
+			expect(o.decryptions).toHaveLength(1);
+			expect(o.decryptions[0]?.every((byte) => byte === 0)).toBe(true);
+			expect(f.resources.has(sessionSecret)).toBe(false);
+		});
+
+		it("rejects a custom Session when the Owner Secret Store is not configured", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			const { sessionOwnerSecrets: _absent, ...options } = o.options;
+			const receive = createProductionSessionSandboxReceiverV1(options, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+			});
+			await expect(
+				receive(o.claim, new AbortController().signal),
+			).rejects.toThrow();
+			expect(o.decryptions).toEqual([]);
+			expect(f.resources.has(sessionSecret)).toBe(false);
+		});
+
+		it("drains a custom Session without decrypting or reading Owner Secrets", async () => {
+			const f = fixture();
+			const o = customOwnerSecretFixture(f);
+			const signal = new AbortController().signal;
+			const first = await o.receive(o.claim, signal);
+			const pod = await f.client.read<V1Pod>("Pod", "sandbox-allocation-a");
+			if (!pod) throw new Error("Expected prepared Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			await f.client.replace(pod);
+			const ready = await o.receive(
+				{ ...o.claim, previousObservation: first },
+				signal,
+			);
+			expect(ready.status).toBe("ready");
+			const reads = o.reads.length;
+			const stopped = await o.receive(
+				drainClaim({ ...f, claim: o.claim }, ready),
+				signal,
+				async () => "committed",
+			);
+			expect(stopped.status).toBe("stopped");
+			expect(o.decryptions).toHaveLength(1);
+			expect(o.resolved).toHaveLength(2);
+			expect(o.reads.slice(reads)).not.toContain(
+				`Secret/${o.secret.reference.name}`,
+			);
+			expect(f.resources.has(sessionSecret)).toBe(false);
+		});
 	});
 	it("materializes snapshots through the production custom Session receiver with isolated Secrets", async () => {
 		const f = fixture();
@@ -643,43 +971,8 @@ describe("production SessionSandbox resource receiver", () => {
 				credentialSecretName: "snapshot-credentials",
 			},
 		});
-		const ownerSecretName = "agent-owner-secret";
-		await f.client.create({
-			apiVersion: "v1",
-			kind: "Secret",
-			metadata: {
-				name: ownerSecretName,
-				namespace: f.options.policy.namespace,
-				annotations: {
-					"agent-infra.agora.io/secret-id": "owner-secret",
-					"agent-infra.agora.io/secret-version": "1",
-					"agent-infra.agora.io/config-revision": "1",
-				},
-			},
-			immutable: true,
-			data: { MODEL_API_KEY: Buffer.from("owner-value").toString("base64") },
-		});
-		const secretRef = {
-			schemaVersion: 1 as const,
-			ownerType: "agent-owner" as const,
-			ownerId: "actor-a",
-			agentId: "agent-a",
-			secretId: "owner-secret",
-			secretVersion: 1,
-			configRevision: 1,
-			algorithmVersion: "aes-256-gcm:v1" as const,
-			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
-			wrappingKeyVersion: "key-a",
-			name: ownerSecretName,
-		};
-		const customDeployment = workloadDesiredFixture(
-			1,
-			"agent-a",
-			"internal-only",
-		);
-		(customDeployment as { secretRefs: (typeof secretRef)[] }).secretRefs = [
-			secretRef,
-		];
+		const o = customOwnerSecretFixture(f);
+		const customDeployment = o.claim.deployment;
 		Object.assign(customDeployment, {
 			workspaceSnapshots: [
 				{
@@ -692,16 +985,11 @@ describe("production SessionSandbox resource receiver", () => {
 				},
 			],
 		});
-		const customClaim = {
-			...f.claim,
-			deployment: customDeployment,
-			modelProjection: null,
-		};
+		const customClaim = o.claim;
 		const receive = createProductionSessionSandboxReceiverV1(
 			{
-				...f.options,
+				...o.options,
 				workspaceSnapshotResolver: resolver,
-				policy: { ...f.options.policy, nativeEgress: nativeEgressFixture() },
 			},
 			{ serviceToken: sessionSandboxDeploymentTokenFixture },
 		);
