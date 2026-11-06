@@ -2177,6 +2177,8 @@ export function createWorkloadRuntimeV1(
 				return multiWorkload;
 			};
 			let identity = state.identity;
+			const resultWithIdentity = (status: "pending" | "active" | "failed") =>
+				multiServiceRuntime ? { status, identity } : status;
 			const activation = createSecretActivationUseCaseV1({
 				store: input.secrets.store,
 				decryptor: options.decryptor,
@@ -2260,10 +2262,10 @@ export function createWorkloadRuntimeV1(
 					traceId: input.traceId,
 				});
 				if (result.outcome === "failed" || result.outcome === "stale")
-					return "failed";
-				if (result.outcome !== "active") return "pending";
+					return resultWithIdentity("failed");
+				if (result.outcome !== "active") return resultWithIdentity("pending");
 			}
-			return "active";
+			return resultWithIdentity("active");
 		},
 		async promote(state) {
 			await restoreSnapshotProjection(state);

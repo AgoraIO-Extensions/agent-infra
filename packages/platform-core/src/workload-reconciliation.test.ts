@@ -897,6 +897,42 @@ describe("durable Workload reconciliation", () => {
 		await f.tick(7);
 		expect(f.state?.verified?.configuration.source.imageDigest).toBe("image-b");
 	});
+	it.each(["pending", "active"] as const)(
+		"persists Secret activation identity across restart (%s)",
+		async (status) => {
+			const f = fixture();
+			await f.tick(5);
+			expect(f.state?.phase).toBe("activating");
+			vi.mocked(f.runtime.activateSecrets).mockResolvedValueOnce({
+				status,
+				identity: { uid: "uid-a", generation: 2 },
+			});
+			await f.tick();
+			expect(f.state?.identity).toEqual({ uid: "uid-a", generation: 2 });
+			f.restart();
+			await f.tick(3);
+			expect(f.state?.phase).toBe("ready");
+			expect(
+				vi.mocked(f.runtime.promote).mock.calls.at(-1)?.[0].identity,
+			).toEqual({ uid: "uid-a", generation: 2 });
+		},
+	);
+	it.each([
+		{ uid: "foreign", generation: 2 },
+		{ uid: "uid-a", generation: 0 },
+		{ uid: "uid-a", generation: 1.5 },
+	])("rejects invalid activation identity %j", async (identity) => {
+		const f = fixture();
+		await f.tick(5);
+		vi.mocked(f.runtime.activateSecrets).mockResolvedValueOnce({
+			status: "active",
+			identity,
+		});
+		await f.tick();
+		expect(f.state?.identity).toEqual({ uid: "uid-a", generation: 1 });
+		expect(f.state?.phase).toBe("activating");
+		expect(f.runtime.promote).not.toHaveBeenCalled();
+	});
 	it("creates and promotes only after observation and Secret activation, surviving every restart", async () => {
 		const f = fixture();
 		for (let i = 0; i < 8; i++) {

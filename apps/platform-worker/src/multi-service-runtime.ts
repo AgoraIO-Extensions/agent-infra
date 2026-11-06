@@ -1821,6 +1821,12 @@ export function createMultiServiceRuntimeOperations(options: {
 				!currentEntryAfter.metadata.resourceVersion ||
 				!owned(currentEntryAfter, value) ||
 				currentEntryAfter.metadata.deletionTimestamp ||
+				(currentEntryAfter.metadata.annotations?.[
+					secretUidAnnotation(secretName)
+				] !== undefined &&
+					currentEntryAfter.metadata.annotations[
+						secretUidAnnotation(secretName)
+					] !== secretUid) ||
 				currentEntryAfter.metadata.uid !== expectedEntryIdentity.uid ||
 				currentEntryAfter.metadata.generation !==
 					expectedEntryIdentity.generation
@@ -1836,6 +1842,8 @@ export function createMultiServiceRuntimeOperations(options: {
 						annotations: {
 							...currentEntryAfter.metadata.annotations,
 							[memberIdentityAnnotation]: serializeMemberSnapshot(identities),
+							[secretFenceAnnotation(secretName)]: String(fence),
+							[secretUidAnnotation(secretName)]: secretUid,
 						},
 					},
 				},
@@ -1922,7 +1930,10 @@ export function createMultiServiceRuntimeOperations(options: {
 				currentEntry.metadata.annotations?.[memberIdentityAnnotation],
 			);
 			if (!snapshot) return false;
-			for (const member of memberResources(value)) {
+			for (const member of snapshotMemberResources(
+				value,
+				entry.metadata.name,
+			)) {
 				const identity = snapshot[member.metadata.name];
 				const current = await client.read<V1Deployment | V1StatefulSet>(
 					member.kind as "Deployment" | "StatefulSet",
