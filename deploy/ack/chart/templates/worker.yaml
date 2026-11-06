@@ -69,7 +69,7 @@ spec:
             - {name: PLATFORM_WORKER_DEPLOYMENT_MODULE, value: file:///app/dist/deployment.mjs}
             - name: PLATFORM_WORKER_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
-            - {name: PLATFORM_WORKER_WECOM_ENABLED, value: "false"}
+            - {name: PLATFORM_WORKER_WECOM_ENABLED, value: {{ .Values.wecom.enabled | quote }}}
             - {name: PLATFORM_WORKER_SERVICE_TOKEN_FILE, value: /var/run/agent-infra/runtime-auth/service-token}
             - name: PLATFORM_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}

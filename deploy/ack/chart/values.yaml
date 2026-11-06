@@ -35,6 +35,8 @@ secrets:
 files:
   enabled: false
   configurationFile: /app/deployment/file-deployment.json
+wecom:
+  enabled: false
 encryption:
   keyVersion: key-v1
 worker:
