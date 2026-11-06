@@ -23,6 +23,7 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1PodSecurityContext,
 	V1Secret,
 	V1Service,
 	V1ServiceAccount,
@@ -916,7 +917,12 @@ function renderSessionSandboxResourcesV1(
 			restartPolicy: "Always",
 			...workloadImagePullSpecV1(allocation.imagePullSecretName),
 			// Same non-root identity as the Agent-level Workload (#1466).
-			securityContext: agentPodSecurityContext(),
+			securityContext: {
+				...agentPodSecurityContext(),
+				// Re-mounting an initialized PVC must preserve the Runtime's 0700
+				// private directories rather than recursively adding group access.
+				fsGroupChangePolicy: "OnRootMismatch",
+			},
 			containers: [
 				{
 					name: sessionSandboxRuntimeContainerName,
@@ -1128,6 +1134,27 @@ function stableJson(value: unknown): string {
 	return JSON.stringify(value);
 }
 
+function podSecurityContextMatches(
+	current: V1PodSecurityContext | undefined,
+	expected: V1PodSecurityContext | undefined,
+) {
+	const policy = current?.fsGroupChangePolicy;
+	if (
+		policy !== undefined &&
+		policy !== "Always" &&
+		policy !== expected?.fsGroupChangePolicy
+	)
+		return false;
+	// Existing Pods finish under their fenced lifecycle; changing this mount-only
+	// field must not replace a live Pod. Every other security field remains exact.
+	return (
+		stableJson({
+			...current,
+			fsGroupChangePolicy: expected?.fsGroupChangePolicy,
+		}) === stableJson(expected ?? {})
+	);
+}
+
 function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 	if (
 		current.metadata?.annotations?.[runtimeConnectionConsumerAnnotation] !==
@@ -1168,8 +1195,10 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		currentSpec.automountServiceAccountToken ===
 			expectedSpec.automountServiceAccountToken &&
 		currentSpec.enableServiceLinks === expectedSpec.enableServiceLinks &&
-		stableJson(currentSpec.securityContext ?? {}) ===
-			stableJson(expectedSpec.securityContext ?? {}) &&
+		podSecurityContextMatches(
+			currentSpec.securityContext,
+			expectedSpec.securityContext,
+		) &&
 		currentSpec.restartPolicy === expectedSpec.restartPolicy &&
 		currentSpec.hostNetwork === expectedSpec.hostNetwork &&
 		currentSpec.hostPID === expectedSpec.hostPID &&
