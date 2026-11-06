@@ -35,6 +35,10 @@ const timeoutMs = {
 	publish: 10 * 60_000,
 };
 const contextLimit = { bytes: 256 * 1024 * 1024, files: 20_000 };
+// Fixed for every commit, as in the local E2E Harness. With rewrite-timestamp, a per-commit
+// epoch rewrote file times in every built layer, so unchanged layers (pinned Codex, OpenCode,
+// Chromium installs) still got new Digests and ACK re-pulled almost the whole image (#3978).
+const sourceDateEpoch = "0";
 const repositoryPattern = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const assertInjectedRuntime =
 	"const {access,readdir}=await import('node:fs/promises');" +
@@ -581,12 +585,6 @@ async function main() {
 		timeoutMs: timeoutMs.git,
 	});
 	if (!/^[a-f0-9]{40}$/.test(commitSha)) fail("Git HEAD is invalid");
-	const epoch = runCommand(git, ["show", "-s", "--format=%ct", "HEAD"], {
-		cwd: repositoryRoot,
-		name: "Git epoch",
-		timeoutMs: timeoutMs.git,
-	});
-	if (!/^[1-9][0-9]*$/.test(epoch)) fail("Git commit epoch is invalid");
 
 	const platform = process.env.PLATFORM ?? "linux/amd64";
 	if (!/^linux\/(?:amd64|arm64)$/.test(platform)) fail("PLATFORM is invalid");
@@ -615,7 +613,7 @@ async function main() {
 			buildResults[image.key] = await buildImage({
 				image,
 				commitSha,
-				epoch,
+				epoch: sourceDateEpoch,
 				platform,
 				platformTag,
 				prefix,

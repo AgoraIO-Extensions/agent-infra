@@ -73,7 +73,9 @@ IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
 ```
 
 该入口对每个镜像执行两次无缓存构建并比较 Digest，检查最终镜像的 non-root 用户，并以只读
-根文件系统运行最小 probe。两次 Digest 不一致时，入口先比较两份 OCI archive 并在 stderr
+根文件系统运行最小 probe。构建固定使用 `SOURCE_DATE_EPOCH=0` 并改写层内文件时间戳，内容未变的
+layer 在不同 commit 间保持同一 Digest，部署只需拉取变化的 layer；镜像 revision 仍由 Commit SHA 标识。
+两次 Digest 不一致时，入口先比较两份 OCI archive 并在 stderr
 输出有界诊断：manifest/config 的差异字段、不同 layer 的 Digest 与 diff_id、前 3 个不同 layer
 中最多 50 条路径的类型/大小/sha256/mode/owner/mtime 变化，以及 `/var/lib/dpkg/status` 的
 包版本差异；诊断不输出其他文件内容或 config 值，随后仍以 `<image> image is not reproducible`
