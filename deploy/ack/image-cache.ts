@@ -187,7 +187,8 @@ async function main() {
 	assert(plan.sourceSha === process.env.ACK_SOURCE_SHA, "CACHE_RELEASE_SOURCE_MISMATCH");
 	const backend = kubernetesBackend(process.env.ACK_KUBECONFIG ?? "", process.env.ACK_NAMESPACE ?? "", process.env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(process.env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30));
 	const timeoutMs = Number(process.env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_200_000);
-	const receipt = await ensureCachesWithReceipt(plan, backend, output, { checkOnly: action === "check", timeoutMs });
+	const concurrency = Number(process.env.ACK_IMAGE_CACHE_CONCURRENCY ?? 1);
+	const receipt = await ensureCachesWithReceipt(plan, backend, output, { checkOnly: action === "check", timeoutMs, concurrency });
 	console.info(JSON.stringify({ status: "ready", cacheCount: receipt.caches.length, sourceSha: plan.sourceSha }));
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => { console.error("ACK_IMAGE_CACHE_FAILED"); process.exitCode = 1; });
