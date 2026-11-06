@@ -472,9 +472,11 @@ test("cache deployment rejects widened event, code and cloud identity boundaries
     w => { w.jobs.prepare.steps.at(-1).with.path = "${{ runner.temp }}"; },
     w => { w.jobs.prepare.steps.find(step => step.run).env.GH_TOKEN = "${{ secrets.CLOUD_TOKEN }}"; },
     w => { w.jobs.prepare.environment = "unprotected"; },
+    w => { w.jobs.execute.steps[3].env.ACK_KUBECONFIG_B64 = "${{ secrets.WRONG_SECRET }}"; },
+    w => { w.jobs.execute.steps[6].run = "echo keep"; },
   ]) {
     const workflows = await actualWorkflows();
     mutate(workflows["ack-image-cache.yml"]);
-    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("ACK cache")));
+    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("ACK cache") || error.startsWith("ack-image-cache.yml")));
   }
 });
