@@ -147,7 +147,14 @@ export function validateTemplatePreflightJob(value) {
 	if (relay.protocol !== "https:" || relay.username || relay.password || relay.search || relay.hash)
 		throw new Error("RELAY_ORIGIN_INVALID");
 	const nodeSelector = value.placement?.nodeSelector;
-	if (!nodeSelector || nodeSelector.type !== "virtual-kubelet") throw new Error("ECI_PLACEMENT_REQUIRED");
+	const hostname = nodeSelector?.["kubernetes.io/hostname"];
+	const pinnedEcs = nodeSelector?.type === undefined &&
+		nodeSelector?.["kubernetes.io/arch"] === "amd64" &&
+		nodeSelector?.["kubernetes.io/os"] === "linux" &&
+		typeof hostname === "string" && /^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(hostname) &&
+		!hostname.startsWith("virtual-kubelet-") && value.expectedNodePrefix === hostname;
+	if (!nodeSelector || (nodeSelector.type !== "virtual-kubelet" && !pinnedEcs))
+		throw new Error("TEMPLATE_PLACEMENT_INVALID");
 	const podReadyTimeoutSeconds = value.podReadyTimeoutSeconds ?? 900;
 	if (!Number.isSafeInteger(podReadyTimeoutSeconds) || podReadyTimeoutSeconds < 60 || podReadyTimeoutSeconds > 1800 || value.podReadyTimeoutSeconds === null)
 		throw new Error("POD_READY_TIMEOUT_INVALID");
