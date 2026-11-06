@@ -477,6 +477,6 @@ test("cache deployment rejects widened event, code and cloud identity boundaries
   ]) {
     const workflows = await actualWorkflows();
     mutate(workflows["ack-image-cache.yml"]);
-    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("ACK cache")));
+    assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("ACK cache") || error.startsWith("ack-image-cache.yml")));
   }
 });

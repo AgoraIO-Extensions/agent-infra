@@ -275,7 +275,9 @@ export function validateWorkflowDocuments(workflows) {
       executeSteps[3]?.name !== "Write temporary kubeconfig" ||
       executeSteps[4]?.name !== "Ensure ImageCache groups are Ready" ||
       executeSteps[5]?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
-      executeSteps[6]?.name !== "Remove temporary kubeconfig")
+      executeSteps[6]?.name !== "Remove temporary kubeconfig" ||
+      executeSteps[6]?.if !== "always()" ||
+      executeSteps[6]?.run !== 'rm -f "$RUNNER_TEMP/ack-kubeconfig"')
     errors.push("ACK cache execute job must consume the plan with the protected kubeconfig Secret and clean it up");
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||
