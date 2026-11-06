@@ -79,7 +79,7 @@ export async function runOnce(env = process.env) {
 		const receipt = join(runDir, "cache-ready.json");
 		const cacheSizeGiB = Number(env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30);
 		const timeoutMs = Number(env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_800_000);
-		const concurrency = Number(env.ACK_IMAGE_CACHE_CONCURRENCY ?? 3);
+		const concurrency = Number(env.ACK_IMAGE_CACHE_CONCURRENCY ?? 6);
 		assert(Number.isFinite(cacheSizeGiB) && cacheSizeGiB > 0, "ACK_IMAGE_CACHE_SIZE_GIB_INVALID");
 		assert(Number.isFinite(timeoutMs) && timeoutMs > 0, "ACK_IMAGE_CACHE_TIMEOUT_MS_INVALID");
 		assert(Number.isInteger(concurrency) && concurrency > 0 && concurrency <= 8, "ACK_IMAGE_CACHE_CONCURRENCY_INVALID");
