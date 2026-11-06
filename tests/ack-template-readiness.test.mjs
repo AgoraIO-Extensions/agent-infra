@@ -50,6 +50,44 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+const ecsJob = {
+	...baseJob,
+	expectedNodePrefix: "cn-hangzhou.10.0.1.219",
+	placement: {
+		nodeSelector: {
+			"kubernetes.io/hostname": "cn-hangzhou.10.0.1.219",
+			"kubernetes.io/arch": "amd64",
+			"kubernetes.io/os": "linux",
+		},
+	},
+};
+test("accepts an explicitly pinned ECS template preflight", () => {
+	assert.equal(
+		validateTemplatePreflightJob(ecsJob).expectedNodePrefix,
+		ecsJob.placement.nodeSelector["kubernetes.io/hostname"],
+	);
+});
+for (const prefix of [undefined, "", "cn-hangzhou.", "other-node"]) {
+	test(`rejects ECS placement without exact node evidence: ${prefix}`, () => {
+		assert.throws(() =>
+			validateTemplatePreflightJob({ ...ecsJob, expectedNodePrefix: prefix }),
+		);
+	});
+}
+for (const key of [
+	"kubernetes.io/hostname",
+	"kubernetes.io/arch",
+	"kubernetes.io/os",
+]) {
+	test(`rejects ECS placement missing ${key}`, () => {
+		const nodeSelector = { ...ecsJob.placement.nodeSelector };
+		delete nodeSelector[key];
+		assert.throws(() =>
+			validateTemplatePreflightJob({ ...ecsJob, placement: { nodeSelector } }),
+		);
+	});
+}
+
 const expectedPod = {
 	name: "ack-preflight-claude-fixture",
 	owner: "fixture-owner",
