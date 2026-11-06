@@ -150,6 +150,81 @@ test("prepares independent groups concurrently within the configured pool", asyn
 	assert.equal(peak, 3);
 });
 
+test("serializes progress snapshots while concurrent workers settle together", async () => {
+	const refs = ["a", "b", "c", "d"].map(
+		(value) =>
+			`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${value.repeat(64)}`,
+	);
+	const state = new Map();
+	const snapshots = [];
+	let activeWrites = 0;
+	const receipt = await ensureCaches(
+		{ ...plan, groups: refs.map((ref) => [ref]) },
+		{
+			get: async (name) => state.get(name),
+			create: async (name, images) =>
+				state.set(name, {
+					name,
+					id: `imc-${name.slice(-6)}`,
+					phase: "Ready",
+					images,
+					owner: cacheOwner,
+				}),
+		},
+		{
+			concurrency: 3,
+			onProgress: async (progress) => {
+				activeWrites++;
+				assert.equal(activeWrites, 1);
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				snapshots.push(progress.length);
+				activeWrites--;
+			},
+		},
+	);
+	assert.equal(receipt.caches.length, 4);
+	assert.deepEqual(
+		snapshots,
+		[...snapshots].sort((a, b) => a - b),
+	);
+	assert.equal(activeWrites, 0);
+});
+
+test("waits for other workers before returning the first preparation failure", async () => {
+	const refs = ["a", "b"].map(
+		(value) =>
+			`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${value.repeat(64)}`,
+	);
+	let settled = false;
+	const state = new Map();
+	await assert.rejects(
+		ensureCaches(
+			{ ...plan, groups: refs.map((ref) => [ref]) },
+			{
+				get: async (name) => state.get(name),
+				create: async (name, images) => {
+					if (images[0].includes("a".repeat(64))) {
+						await new Promise((resolve) => setTimeout(resolve, 5));
+						throw new Error("CACHE_PREPARATION_FAILED");
+					}
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					state.set(name, {
+						name,
+						id: "imc-other",
+						phase: "Ready",
+						images,
+						owner: cacheOwner,
+					});
+					settled = true;
+				},
+			},
+			{ concurrency: 2 },
+		),
+		/CACHE_PREPARATION_FAILED/,
+	);
+	assert.equal(settled, true);
+});
+
 test("foreign, partial, failed, expired and missing caches never satisfy the gate", async () => {
 	for (const cache of [
 		undefined,

@@ -69,10 +69,16 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 	const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 	const deadline = now() + timeoutMs;
 	const results = new Map<string, { name: string; id: string; images: string[] }>();
-	const progress = async () => options.onProgress?.(plan.groups.flatMap(images => {
-		const key = hash([...images].sort());
-		return results.get(key) ? [results.get(key)!] : [];
-	}));
+	let progressTail: Promise<void> = Promise.resolve();
+	const progress = () => {
+		progressTail = progressTail.then(async () => {
+			await options.onProgress?.(plan.groups.flatMap(images => {
+				const key = hash([...images].sort());
+				return results.get(key) ? [results.get(key)!] : [];
+			}));
+		});
+		return progressTail;
+	};
 	const ensureOne = async (images: string[]) => {
 		let name = cacheName(images, backend.namePrefix);
 		let cache = await backend.get(name);
@@ -111,7 +117,11 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 			await ensureOne(plan.groups[index]);
 		}
 	};
-	await Promise.all(Array.from({ length: Math.min(concurrency, plan.groups.length) }, worker));
+	const outcomes = await Promise.allSettled(Array.from({ length: Math.min(concurrency, plan.groups.length) }, worker));
+	await progressTail;
+	for (const outcome of outcomes) {
+		if (outcome.status === "rejected") throw outcome.reason;
+	}
 	const orderedResults = plan.groups.flatMap(images => {
 		const key = hash([...images].sort());
 		return results.get(key) ? [results.get(key)!] : [];
