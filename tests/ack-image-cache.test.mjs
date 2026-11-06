@@ -116,6 +116,40 @@ test("new cache is awaited and checked again after preparation", async () => {
 	assert.equal(reads, 4);
 });
 
+test("prepares independent groups concurrently within the configured pool", async () => {
+	const refs = Array.from(
+		{ length: 6 },
+		(_, index) =>
+			`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${String(index + 1).repeat(64)}`,
+	);
+	const state = new Map();
+	let active = 0;
+	let peak = 0;
+	const backend = {
+		get: async (name) => state.get(name),
+		create: async (name, images) => {
+			active++;
+			peak = Math.max(peak, active);
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			state.set(name, {
+				name,
+				id: `imc-${name.slice(-6)}`,
+				phase: "Ready",
+				images,
+				owner: cacheOwner,
+			});
+			active--;
+		},
+	};
+	const receipt = await ensureCaches(
+		{ ...plan, groups: refs.map((ref) => [ref]) },
+		backend,
+		{ concurrency: 3 },
+	);
+	assert.equal(receipt.caches.length, 6);
+	assert.equal(peak, 3);
+});
+
 test("foreign, partial, failed, expired and missing caches never satisfy the gate", async () => {
 	for (const cache of [
 		undefined,
