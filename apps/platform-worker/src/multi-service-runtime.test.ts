@@ -482,6 +482,96 @@ describe("multi-service resource policy", () => {
 			).toBe(true);
 		}
 	});
+	it("injects saved Owner environment into every multi-service consumer", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+		});
+		const configuration = MultiServiceManifestDocumentV1Schema.parse({
+			...statefulManifest,
+			resources: [
+				...statefulManifest.resources,
+				...migrationManifest.resources.filter((r) => r.kind === "Job"),
+			].map((r) => {
+				if (
+					r.kind !== "Deployment" &&
+					r.kind !== "StatefulSet" &&
+					r.kind !== "Job"
+				)
+					return r;
+				return {
+					...r,
+					spec: {
+						...r.spec,
+						template: {
+							...r.spec.template,
+							spec: {
+								...r.spec.template.spec,
+								containers: r.spec.template.spec.containers.map((c) => ({
+									...c,
+									env: [
+										{ name: "LOG_LEVEL", value: "warn" },
+										{ name: "MANIFEST_ONLY", value: "kept" },
+									],
+								})),
+							},
+						},
+					},
+				};
+			}),
+		});
+		const value = validateAgentWorkloadDesiredV1({
+			...desired(configuration),
+			env: { LOG_LEVEL: "info", OWNER_ONLY: "saved" },
+		});
+		if (!isMultiService(value)) throw new Error("invalid fixture");
+		await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(r) => r.kind === "Job",
+		) as V1Job;
+		job.status = { succeeded: 1 };
+		await operations.apply(value);
+		const consumers = [...fake.resources.values()].filter((r) =>
+			["Deployment", "StatefulSet", "Job"].includes(r.kind ?? ""),
+		);
+		expect(consumers.map((r) => r.kind).sort()).toEqual([
+			"Deployment",
+			"Job",
+			"StatefulSet",
+		]);
+		for (const resource of consumers) {
+			const pod = (resource as V1Deployment | V1StatefulSet | V1Job).spec
+				?.template.spec;
+			for (const container of pod?.containers ?? []) {
+				expect(container.env).toEqual(
+					expect.arrayContaining([
+						{ name: "LOG_LEVEL", value: "info" },
+						{ name: "OWNER_ONLY", value: "saved" },
+						{ name: "MANIFEST_ONLY", value: "kept" },
+					]),
+				);
+				expect(
+					container.env?.filter((e) => e.name === "LOG_LEVEL"),
+				).toHaveLength(1);
+			}
+		}
+		await operations.apply({ ...value, env: { LOG_LEVEL: "debug" } });
+		for (const resource of fake.resources.values()) {
+			if (resource.kind !== "Deployment" && resource.kind !== "StatefulSet")
+				continue;
+			for (const container of (resource as V1Deployment | V1StatefulSet).spec
+				?.template.spec?.containers ?? []) {
+				expect(container.env).toEqual(
+					expect.arrayContaining([
+						{ name: "LOG_LEVEL", value: "debug" },
+						{ name: "MANIFEST_ONLY", value: "kept" },
+					]),
+				);
+				expect(container.env?.some((e) => e.name === "OWNER_ONLY")).toBe(false);
+			}
+		}
+	});
 	it("normalizes SDK envFrom objects but detects Secret reference drift", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({

@@ -183,6 +183,16 @@ function entryWorkloadResource(value: MultiServiceDesired) {
 	return resource;
 }
 
+function configuredEnvironment(
+	value: MultiServiceDesired,
+	declared: V1Container["env"],
+) {
+	return [
+		...(declared ?? []).filter(({ name }) => !Object.hasOwn(value.env, name)),
+		...Object.entries(value.env).map(([name, value]) => ({ name, value })),
+	].filter(({ name }) => name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER");
+}
+
 function environmentSecrets(value: MultiServiceDesired) {
 	return value.secretRefs.map((ref) => ({
 		secretRef: { name: ref.name, optional: false },
@@ -618,10 +628,7 @@ function deployment(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
-							env: (container.env ?? []).filter(
-								({ name }) =>
-									name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
-							),
+							env: configuredEnvironment(value, container.env),
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -727,10 +734,7 @@ function statefulSet(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
-							env: (container.env ?? []).filter(
-								({ name }) =>
-									name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
-							),
+							env: configuredEnvironment(value, container.env),
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
@@ -853,10 +857,7 @@ function migrationJob(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
-							env: (container.env ?? []).filter(
-								({ name }) =>
-									name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
-							),
+							env: configuredEnvironment(value, container.env),
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
