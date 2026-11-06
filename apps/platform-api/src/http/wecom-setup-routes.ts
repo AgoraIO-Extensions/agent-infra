@@ -10,6 +10,7 @@ import {
 import type { Context, Hono } from "hono";
 import type { WecomBotQrConfigurationV1 } from "../wecom-setup-assembly.js";
 import { HttpProtocolError, parseJson, requestMetadata } from "./common.js";
+import type { ConfigurationRoutesDependencies } from "./configuration-routes.js";
 import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 /**
@@ -30,6 +31,38 @@ export function resolveWecomBotQrAvailabilityV1(
 				qrAvailable: false,
 				qrUnavailableReason: "authorization_correlation_unverified",
 			};
+}
+
+/** Keep the Owner-only status contract available when setup inputs are absent. */
+export function registerUnavailableWecomBotStatusRouteV2(
+	app: Hono,
+	dependencies: Pick<
+		ConfigurationRoutesDependencies,
+		"identity" | "configurationQuery"
+	>,
+) {
+	app.get("/api/v2/agents/:agentId/wecom-bot", async (context) => {
+		const metadata = requestMetadata(context.req.raw);
+		const identity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			metadata.traceId,
+		);
+		const current = await dependencies.configurationQuery
+			.read({
+				agentId: context.req.param("agentId"),
+				actorId: identity.userId,
+				organizationIds: identity.organizationIds,
+				isAdministrator: false,
+				intent: "manage",
+			})
+			.catch(() => {
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			});
+		if (current.outcome !== "found")
+			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	});
 }
 
 export function registerWecomSetupRoutesV1(
