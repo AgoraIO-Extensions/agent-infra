@@ -299,6 +299,7 @@ function secretCleanupStore(
 		readonly currentConfigurationRevision?: number;
 		readonly storedOwnerId?: string;
 		readonly failTransitionOnce?: boolean;
+		readonly activation?: boolean;
 	} = {},
 ) {
 	let persistedRecord = structuredClone(record);
@@ -353,18 +354,20 @@ function secretCleanupStore(
 			}
 			if (
 				input.claim.fence !== claimFence ||
-				input.plan.next.lifecycleState !== "failed"
+				(!options.activation && input.plan.next.lifecycleState !== "failed")
 			)
 				return false;
 			candidate = {
 				...candidate,
-				lifecycleState: "failed",
-				failureRetryable: input.plan.next.error.retryable,
+				lifecycleState: input.plan.next.lifecycleState,
+				failureRetryable:
+					input.plan.next.lifecycleState === "failed"
+						? input.plan.next.error.retryable
+						: null,
 			};
 			persistedRecord = validatePlatformSecretRecordV1({
 				...persistedRecord,
-				lifecycleState: "failed",
-				error: input.plan.next.error,
+				...input.plan.next,
 			});
 			return true;
 		},
@@ -3053,6 +3056,71 @@ describe("assembled Workload Runtime contracts", () => {
 		await expect(runtime.capabilities(promoting)).rejects.toThrow(
 			"Runtime capabilities are unavailable",
 		);
+	});
+	it("persists multi-service Secret binding generations through activation and promotion", async () => {
+		const store = secretCleanupStore(pendingSecretRecord(), {
+			activation: true,
+		});
+		const f = fixture(
+			{
+				decryptor: {
+					decrypt: async () => ({
+						outcome: "decrypted",
+						plaintext: new Uint8Array([1, 2, 3]),
+					}),
+				},
+			},
+			{
+				configuration: secretConfiguration({
+					source: multiServiceConfigurationFixture().source,
+				}),
+				secrets: cleanupSecrets(store),
+			},
+		);
+		const original = f.options.client;
+		Object.assign(f.options, {
+			client: {
+				...original,
+				async replace<T extends KubernetesObject>(object: T) {
+					const updated = await original.replace(object);
+					if (updated.kind === "Deployment" && updated.metadata)
+						updated.metadata.generation =
+							(updated.metadata.generation ?? 0) + 1;
+					f.resources.set(
+						`${updated.kind}/${updated.metadata?.name}`,
+						structuredClone(updated),
+					);
+					return updated;
+				},
+			},
+		});
+		for (let i = 0; i < 10; i++) {
+			for (const resource of [...f.resources.values()]) {
+				if (resource.kind !== "Deployment") continue;
+				const workload = resource as V1Deployment;
+				f.resources.set(`Pod/${resource.metadata?.name}`, {
+					apiVersion: "v1",
+					kind: "Pod",
+					metadata: {
+						name: resource.metadata?.name,
+						labels: workload.spec?.template.metadata?.labels,
+					},
+					spec: workload.spec?.template.spec,
+					status: { phase: "Running", containerStatuses: [{ ready: true }] },
+				} as KubernetesObject);
+			}
+			await f.tick(1);
+		}
+		expect(f.state?.phase).toBe("ready");
+		expect(store.record.lifecycleState).toBe("active");
+		const entry = await f.client.read<V1Deployment>(
+			"Deployment",
+			`${workloadResourceNameV1("agent-a")}-web`,
+		);
+		expect(f.state?.identity).toEqual({
+			uid: entry?.metadata?.uid,
+			generation: entry?.metadata?.generation,
+		});
 	});
 	it("materializes multi-service Owner Secrets before creating their consumers", async () => {
 		const record = pendingSecretRecord();

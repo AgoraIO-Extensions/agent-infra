@@ -407,7 +407,15 @@ export interface WorkloadRuntimePortV1 {
 	activateSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
-	): Promise<"pending" | "active" | "failed">;
+	): Promise<
+		| "pending"
+		| "active"
+		| "failed"
+		| {
+				readonly status: "pending" | "active" | "failed";
+				readonly identity: WorkloadIdentityV1;
+		  }
+	>;
 	promote(state: WorkloadReconciliationStateV1): Promise<void>;
 	discardUnactivatedSecrets(
 		state: WorkloadReconciliationStateV1,
@@ -688,14 +696,28 @@ export function createWorkloadReconciliationV1(dependencies: {
 							};
 						}
 						case "activating": {
-							const activation = await runtime.activateSecrets(state, input);
-							if (activation === "active") return advance("promoting");
+							const result = await runtime.activateSecrets(state, input);
+							if (typeof result === "object") {
+								if (
+									!state.identity ||
+									result.identity.uid !== state.identity.uid ||
+									!Number.isSafeInteger(result.identity.generation) ||
+									result.identity.generation < state.identity.generation
+								)
+									throw new Error("Secret activation identity drifted");
+							}
+							const identity =
+								typeof result === "object" ? result.identity : state.identity;
+							const activation =
+								typeof result === "object" ? result.status : result;
+							if (activation === "active")
+								return advance("promoting", { identity });
 							if (
 								activation === "failed" ||
 								state.attempts + 1 >= maximumAttempts
 							)
-								return failed("reconciliation_failed");
-							return { ...state, attempts: state.attempts + 1 };
+								return { ...failed("reconciliation_failed"), identity };
+							return { ...state, identity, attempts: state.attempts + 1 };
 						}
 						case "promoting": {
 							// Re-establish a closed route before rechecking a partially published candidate.

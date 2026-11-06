@@ -786,6 +786,12 @@ describe("multi-service resource policy", () => {
 			wrappingKeyVersion: "key-a",
 			name: "owner-secret",
 		});
+		const secretUid = await operations.materializeSecret(
+			value,
+			"owner-secret",
+			"API_KEY",
+			new Uint8Array([1]),
+		);
 		const identity = await operations.apply(value);
 		if (identity === "pending")
 			throw new Error("multi-service apply did not return identity");
@@ -799,7 +805,7 @@ describe("multi-service resource policy", () => {
 			identity,
 			"owner-secret",
 			7,
-			"secret-uid",
+			secretUid,
 		);
 		expect(updated.uid).toBe(identity.uid);
 		const liveEntry = fake.resources.get(
@@ -807,6 +813,23 @@ describe("multi-service resource policy", () => {
 		) as V1Deployment;
 		expect(updated.generation).toBe(liveEntry.metadata?.generation);
 		expect(updated.generation).toBeGreaterThanOrEqual(identity.generation);
+		for (const resource of [...fake.resources.values()]) {
+			if (resource.kind !== "Deployment") continue;
+			const workload = resource as V1Deployment;
+			fake.resources.set(`Pod/${resource.metadata?.name}`, {
+				apiVersion: "v1",
+				kind: "Pod",
+				metadata: {
+					name: resource.metadata?.name,
+					labels: workload.spec?.template.metadata?.labels,
+				},
+				spec: workload.spec?.template.spec,
+				status: { phase: "Running", containerStatuses: [{ ready: true }] },
+			} as KubernetesObject);
+		}
+		expect(
+			await operations.observeSecretFence(value, updated, "owner-secret", 7),
+		).toBe(true);
 	});
 
 	it("cleans multi-service consumers before removing a materialized Secret", async () => {
