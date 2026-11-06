@@ -65,7 +65,7 @@ jobs:
       github.repository == 'AgoraIO-Extensions/agent-infra' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 100
     environment: ack-image-cache
     permissions:
       contents: read
@@ -107,9 +107,16 @@ jobs:
           set -euo pipefail
           ACK_SOURCE_SHA="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).sourceSha)' "$RUNNER_TEMP/ack-cache-plan/cache-plan.json")"
           export ACK_SOURCE_SHA
-          node deploy/ack/image-cache.ts ensure \
-            "$RUNNER_TEMP/ack-cache-plan/cache-plan.json" \
-            "$RUNNER_TEMP/cache-ready.json"
+          for attempt in 1 2 3; do
+            if node deploy/ack/image-cache.ts ensure \
+              "$RUNNER_TEMP/ack-cache-plan/cache-plan.json" \
+              "$RUNNER_TEMP/cache-ready.json"; then
+              exit 0
+            fi
+            echo "ImageCache ensure attempt $attempt did not reach Ready; reusing the same CRs on the next attempt" >&2
+            sleep 10
+          done
+          exit 1
       - name: Upload Ready receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         if: always()
