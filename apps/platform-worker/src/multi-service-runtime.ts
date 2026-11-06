@@ -1976,11 +1976,34 @@ export function createMultiServiceRuntimeOperations(options: {
 				readonly workloadGeneration: number;
 				readonly fence: number;
 			},
+			// Trusted content verification supplies this UID after initial consumers are removed.
+			verifiedSecretUid?: string,
 		) {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret) return true;
+			let hasCurrentConsumer = false;
+			for (const member of memberResources(value)) {
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				if (!current) continue;
+				hasCurrentConsumer = true;
+				if (
+					!owned(current, value) ||
+					referencesSecret(current.spec?.template.spec, ref.name)
+				)
+					return false;
+			}
 			if (
 				activationFence &&
+				!hasCurrentConsumer &&
+				secret.metadata?.uid !== verifiedSecretUid
+			)
+				return false;
+			if (
+				activationFence &&
+				hasCurrentConsumer &&
 				!(await this.observeSecretFence(
 					value,
 					{
@@ -1992,40 +2015,23 @@ export function createMultiServiceRuntimeOperations(options: {
 				))
 			)
 				return false;
-			for (const member of memberResources(value)) {
-				const current = await client.read<V1Deployment | V1StatefulSet>(
-					member.kind as "Deployment" | "StatefulSet",
-					serviceResourceName(value.agentId, member.metadata.name),
-				);
-				if (!current && !activationFence) continue;
-				if (
-					!current ||
-					!owned(current, value) ||
-					referencesSecret(current.spec?.template.spec, ref.name)
-				)
-					return false;
-			}
 			const pods = await client.list<V1Pod>(
 				"Pod",
 				`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
 			);
-			if (
-				pods.some(
-					(pod) =>
-						!pod.metadata?.deletionTimestamp &&
-						pod.spec?.containers?.some((container) =>
-							container.envFrom?.some(
-								(entry) => entry.secretRef?.name === ref.name,
-							),
-						),
-				)
-			)
+			if (pods.some((pod) => referencesSecret(pod.spec, ref.name)))
 				return false;
 			if (
 				!secret.metadata?.uid ||
 				secret.immutable !== true ||
 				secret.type !== "Opaque" ||
-				!owned(secret, value)
+				!owned(secret, value) ||
+				!ownedByAgent(secret, value) ||
+				secret.metadata.annotations?.[secretIdAnnotation] !== ref.secretId ||
+				secret.metadata.annotations?.[secretVersionAnnotation] !==
+					String(ref.secretVersion) ||
+				secret.metadata.annotations?.[secretConfigRevisionAnnotation] !==
+					String(ref.configRevision)
 			)
 				return false;
 			await client.delete(secret);

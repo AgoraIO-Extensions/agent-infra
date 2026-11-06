@@ -1145,11 +1145,49 @@ export function createWorkloadRuntimeV1(
 								candidate.lifecycleState !== record.lifecycleState
 							)
 								return false;
+							let verifiedSecretUid: string | undefined;
+							if (
+								multiServiceRuntime &&
+								activationFence &&
+								state.verified === null &&
+								(await options.client.read("Secret", reference.name))
+							) {
+								// Deleted consumers no longer witness the Secret UID. Re-establish it from trusted bytes.
+								const decryption = await options.decryptor.decrypt({
+									encryptedRecord: record,
+									traceId: input.traceId,
+								});
+								if (decryption.outcome !== "decrypted") {
+									await input.secrets?.auditDecryption(
+										record.secretId,
+										record.crypto.wrappingKeyVersion,
+										"rejected",
+									);
+									return false;
+								}
+								try {
+									await input.secrets?.auditDecryption(
+										record.secretId,
+										record.crypto.wrappingKeyVersion,
+										"succeeded",
+									);
+									verifiedSecretUid =
+										await multiServiceRuntime.materializeSecret(
+											workload as MultiServiceDesired,
+											reference.name,
+											secretDataKey(record.name),
+											decryption.plaintext,
+										);
+								} finally {
+									decryption.plaintext.fill(0);
+								}
+							}
 							return multiServiceRuntime
 								? multiServiceRuntime.removeImmutableSecret(
 										workload as MultiServiceDesired,
 										reference,
 										activationFence ?? undefined,
+										verifiedSecretUid,
 									)
 								: adapter.removeImmutableSecret(
 										workload,
@@ -2311,7 +2349,7 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is unavailable");
 		},
 		async cleanup(state, deleteNewVolume, input) {
-			// Pending Secrets cannot be removed while their initial consumers exist.
+			// Unactivated Secrets cannot be removed while their initial consumers exist.
 			if (
 				deleteNewVolume &&
 				"manifest" in state.candidate.configuration.source &&
@@ -2320,7 +2358,7 @@ export function createWorkloadRuntimeV1(
 				bindingsFor(state, input, candidateKeyless(state)).every(
 					({ materialization, record }) =>
 						materialization === "current" &&
-						record.lifecycleState === "pending",
+						["pending", "applying", "observed"].includes(record.lifecycleState),
 				)
 			) {
 				const workload = desired(state);

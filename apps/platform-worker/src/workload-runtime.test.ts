@@ -3098,9 +3098,24 @@ describe("assembled Workload Runtime contracts", () => {
 				});
 		}
 	});
-	it.each(["none", "foreign", "pod"])(
-		"cleans a failed initial multi-service workload with a pending referenced Secret (remaining consumer: %s)",
-		async (remaining) => {
+	it.each(
+		(["pending", "applying", "observed"] as const).flatMap((lifecycleState) =>
+			[
+				"none",
+				"foreign",
+				"pod",
+				"terminating-pod",
+				...(lifecycleState === "pending"
+					? []
+					: ["secret-drift", "key-unavailable"]),
+			].map((remaining) => ({
+				lifecycleState,
+				remaining,
+			})),
+		),
+	)(
+		"cleans a failed initial multi-service workload with a $lifecycleState Secret (remaining consumer: $remaining)",
+		async ({ lifecycleState, remaining }) => {
 			const foreign = remaining === "foreign";
 			const cleanup = secretCleanupStore(pendingSecretRecord());
 			const configuration = secretConfiguration({
@@ -3123,6 +3138,37 @@ describe("assembled Workload Runtime contracts", () => {
 			await f.tick(4);
 			const state = f.state;
 			assert(state?.candidate.deployment && state.identity);
+			const ref = validateAgentWorkloadDesiredV1(state.candidate.deployment)
+				.secretRefs[0];
+			assert(ref);
+			expect(await f.client.read("Secret", ref.name)).not.toBeNull();
+			expect(
+				[...f.resources.values()].filter(
+					(resource) => resource.kind === "Deployment",
+				),
+			).toHaveLength(2);
+			const materialized = secretCleanupStore(
+				validatePlatformSecretRecordV1({
+					...cleanup.record,
+					lifecycleState,
+					...(lifecycleState === "pending"
+						? {}
+						: {
+								kubernetesSecretRef: ref,
+								activationFence: {
+									schemaVersion: 1,
+									agentId: ref.agentId,
+									secretId: ref.secretId,
+									secretVersion: ref.secretVersion,
+									configRevision: ref.configRevision,
+									kubernetesSecretName: ref.name,
+									workloadUid: state.identity.uid,
+									workloadGeneration: state.identity.generation,
+									fence: 1,
+								},
+							}),
+				}),
+			);
 			if (foreign) {
 				const consumer = [...f.resources.values()].find(
 					(resource) => resource.kind === "Deployment",
@@ -3130,7 +3176,7 @@ describe("assembled Workload Runtime contracts", () => {
 				assert(consumer?.metadata);
 				consumer.metadata.labels = {};
 			}
-			if (remaining === "pod") {
+			if (remaining === "pod" || remaining === "terminating-pod") {
 				const consumer = [...f.resources.values()].find(
 					(resource) => resource.kind === "Deployment",
 				) as V1Deployment;
@@ -3138,30 +3184,59 @@ describe("assembled Workload Runtime contracts", () => {
 				f.resources.set("Pod/remaining-consumer", {
 					apiVersion: "v1",
 					kind: "Pod",
-					metadata: { ...consumer.metadata, name: "remaining-consumer" },
+					metadata: {
+						...consumer.metadata,
+						name: "remaining-consumer",
+						...(remaining === "terminating-pod"
+							? { deletionTimestamp: new Date() }
+							: {}),
+					},
 					spec: structuredClone(consumer.spec.template.spec),
 				} as V1Pod);
+			}
+			if (remaining === "secret-drift") {
+				const secret = await f.client.read<V1Secret>("Secret", ref.name);
+				assert(secret);
+				f.resources.set(`Secret/${ref.name}`, {
+					...secret,
+					data: { BOT_TOKEN: "ZHJpZnQ=" },
+				} as V1Secret);
+			}
+			if (remaining === "key-unavailable") {
+				Object.assign(f.options, {
+					decryptor: {
+						decrypt: async () => ({
+							outcome: "failed",
+							code: "SECRET_KEY_UNAVAILABLE",
+						}),
+					},
+				});
 			}
 			const runtime = createWorkloadRuntimeV1(f.options);
 			let cleaned = false;
 			for (let attempt = 0; attempt < 4 && !cleaned; attempt++) {
 				const result = runtime.cleanup({ ...state, phase: "cleaning" }, true, {
 					configuration,
-					secrets,
+					secrets: cleanupSecrets(materialized),
 					management: f.management,
 					state,
 					requestId: "cleanup-pending",
 					traceId: "cleanup-pending",
 				});
-				if (foreign) {
+				if (foreign || remaining === "secret-drift") {
 					await expect(result).rejects.toThrow(
-						"multi-service resource drifted",
+						foreign
+							? "multi-service resource drifted"
+							: "multi-service Secret drifted",
 					);
 					break;
 				}
 				cleaned = (await result) === true;
 			}
 			expect(cleaned).toBe(remaining === "none");
+			expect(materialized.record.lifecycleState).toBe(
+				remaining === "none" ? "failed" : lifecycleState,
+			);
 			expect(
 				[...f.resources.values()].some(
 					(resource) => resource.kind === "Deployment",
