@@ -170,7 +170,10 @@ import {
 	type WecomReceiptRoutesDependenciesV1,
 	type WecomRoutesDependenciesV1,
 } from "./http/wecom-routes.js";
-import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
+import {
+	registerUnavailableWecomBotStatusRouteV2,
+	registerWecomSetupRoutesV1,
+} from "./http/wecom-setup-routes.js";
 import {
 	registerWorkspaceSnapshotRoutesV1,
 	type WorkspaceSnapshotRouteDependenciesV1,
@@ -298,6 +301,8 @@ export function createPlatformApp(
 		);
 	if (dependencies.wecomSetup)
 		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
+	else
+		registerUnavailableWecomBotStatusRouteV2(app, dependencies.configuration);
 	if (dependencies.wecomApplicationSetup)
 		registerWecomSetupRoutesV1(app, {
 			...dependencies.wecomApplicationSetup,
