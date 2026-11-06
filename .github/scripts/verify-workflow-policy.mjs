@@ -100,6 +100,18 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
+    if (secret === "ACK_KUBECONFIG_B64") {
+      if (
+        workflowName !== "ack-image-cache.yml" ||
+        jobName !== "execute" ||
+        step.name !== "Write temporary kubeconfig" ||
+        step.env?.ACK_KUBECONFIG_B64 !== "${{ secrets.ACK_KUBECONFIG_B64 }}" ||
+        occurrences !== 1
+      ) {
+        errors.push(`${workflowName}/${jobName}: ACK_KUBECONFIG_B64 is allowed only in the temporary kubeconfig step`);
+      }
+      continue;
+    }
     errors.push(`${workflowName}/${jobName}: Secret ${secret} is not allowlisted`);
   }
 }
@@ -229,7 +241,7 @@ export function validateWorkflowDocuments(workflows) {
       Object.keys(cache.on ?? {}).sort().join() !== "workflow_dispatch,workflow_run" ||
       JSON.stringify(cache.on?.workflow_run) !== JSON.stringify({workflows: ["Publish images"], types: ["completed"]}) ||
       !sameObject(cache.permissions, {contents: "read"}) ||
-      Object.keys(cacheJobs).sort().join() !== "prepare" ||
+      Object.keys(cacheJobs).sort().join() !== "execute,prepare" ||
       cacheJobs.prepare?.if !== cacheAdmission ||
       cacheJobs.prepare?.environment !== "ack-image-cache" ||
       Object.keys(cache.on?.workflow_dispatch?.inputs ?? {}).sort().join() !== "publish_attempt,publish_run_id" ||
@@ -253,6 +265,18 @@ export function validateWorkflowDocuments(workflows) {
       !sameObject(planRun?.env, {GH_TOKEN: "${{ github.token }}", PUBLISH_RUN_ID: "${{ github.event.workflow_run.id || inputs.publish_run_id }}", PUBLISH_ATTEMPT: "${{ github.event.workflow_run.run_attempt || inputs.publish_attempt }}"}) ||
       !sameObject(planUpload?.with, {name: "ack-cache-plan-${{ github.run_attempt }}", path: "${{ runner.temp }}/cache-plan.json", "if-no-files-found": "error"}))
     errors.push("ACK cache plan must validate the publication and upload only the immutable plan");
+  const executeSteps = cacheJobs.execute?.steps ?? [];
+  if ((Array.isArray(cacheJobs.execute?.needs) ? cacheJobs.execute.needs.join() : cacheJobs.execute?.needs) !== "prepare" ||
+      cacheJobs.execute?.environment !== "ack-image-cache" ||
+      !sameObject(cacheJobs.execute?.permissions, {contents: "read", actions: "read"}) ||
+      executeSteps.length !== 7 ||
+      executeSteps[0]?.uses !== "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
+      executeSteps[2]?.uses !== "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" ||
+      executeSteps[3]?.name !== "Write temporary kubeconfig" ||
+      executeSteps[4]?.name !== "Ensure ImageCache groups are Ready" ||
+      executeSteps[5]?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      executeSteps[6]?.name !== "Remove temporary kubeconfig")
+    errors.push("ACK cache execute job must consume the plan with the protected kubeconfig Secret and clean it up");
   const publish = workflows["publish-images.yml"];
   if (publish?.name !== "Publish images" ||
       !sameObject(publish?.permissions, { contents: "read", packages: "write" }) ||
