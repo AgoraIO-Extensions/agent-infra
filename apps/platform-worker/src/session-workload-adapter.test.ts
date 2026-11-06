@@ -1260,6 +1260,34 @@ describe("session sandbox workload adapter", () => {
 		pod.spec.containers[0].readinessProbe.timeoutSeconds = 2;
 		expect((await adapter.observe(allocation)).status).toBe("unknown");
 	});
+	it.each([undefined, "Always"])(
+		"keeps a running legacy Pod with fsGroup policy %s without changing its resource identity",
+		async (policy) => {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(allocation);
+			const pod = await client.read<V1Pod>("Pod", allocation.podName);
+			if (!pod?.spec?.securityContext) throw new Error("Missing Session Pod");
+			expect(pod.spec.securityContext.fsGroupChangePolicy).toBe(
+				"OnRootMismatch",
+			);
+			pod.spec.securityContext.fsGroupChangePolicy = policy;
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			const before = structuredClone(pod);
+			expect((await adapter.observe(allocation)).status).toBe("ready");
+			await adapter.apply(allocation);
+			expect(await client.read("Pod", allocation.podName)).toEqual(before);
+			// Compatibility with the former mount policy cannot hide identity drift.
+			pod.spec.securityContext.fsGroup = 2000;
+			expect((await adapter.observe(allocation)).status).toBe("unknown");
+			await expect(adapter.apply(allocation)).rejects.toMatchObject({
+				code: "conflict",
+			});
+		},
+	);
 
 	it("classifies bounded startup evidence from the rendered Runtime container only (#3922)", async () => {
 		const client = api();
@@ -1986,6 +2014,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			runAsUser: 1000,
 			runAsGroup: 1000,
 			fsGroup: 1000,
+			fsGroupChangePolicy: "OnRootMismatch",
 			seccompProfile: { type: "RuntimeDefault" },
 		});
 		expect(container?.securityContext).toMatchObject({
