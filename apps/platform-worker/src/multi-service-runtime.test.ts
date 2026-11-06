@@ -809,6 +809,82 @@ describe("multi-service resource policy", () => {
 		expect(updated.generation).toBeGreaterThanOrEqual(identity.generation);
 	});
 
+	it("cleans multi-service consumers before removing a materialized Secret", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: basePolicy,
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const ref = {
+			schemaVersion: 1 as const,
+			ownerType: "agent-owner" as const,
+			ownerId: "owner-a",
+			agentId: "agent-a",
+			secretId: "owner-secret",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: "owner-secret",
+		};
+		value.secretRefs.push(ref);
+		const identity = await operations.apply(value);
+		if (identity === "pending") throw new Error("workload is pending");
+		const secretUid = await operations.materializeSecret(
+			value,
+			ref.name,
+			"API_KEY",
+			new Uint8Array([1, 2, 3]),
+		);
+		const bound = await operations.bindSecretFence(
+			value,
+			identity,
+			ref.name,
+			7,
+			secretUid,
+		);
+		const fence = {
+			workloadUid: bound.uid,
+			workloadGeneration: bound.generation,
+			fence: 7,
+		};
+		expect(
+			await operations.removeImmutableSecret(value, ref, fence, secretUid),
+		).toBe(false);
+		expect(
+			await operations.cleanupAgent(value, false, {
+				allowOwnershipTransition: true,
+			}),
+		).toBe(true);
+		expect(await operations.removeImmutableSecret(value, ref, fence)).toBe(
+			false,
+		);
+		expect(
+			await operations.removeImmutableSecret(value, ref, fence, "stale-uid"),
+		).toBe(false);
+		const secret = await fake.client.read("Secret", ref.name);
+		if (!secret?.metadata) throw new Error("missing Secret metadata");
+		const annotations = secret.metadata.annotations;
+		for (const [key, changed] of [
+			["agent-infra.agora.io/agent-id", "foreign-agent"],
+			["agent-infra.agora.io/fence", String(value.fence + 1)],
+		] as const) {
+			secret.metadata.annotations = { ...annotations, [key]: changed };
+			expect(
+				await operations.removeImmutableSecret(value, ref, fence, secretUid),
+			).toBe(false);
+		}
+		secret.metadata.annotations = annotations;
+		expect(
+			await operations.removeImmutableSecret(value, ref, fence, secretUid),
+		).toBe(true);
+		expect(await fake.client.read("Secret", ref.name)).toBeNull();
+	});
+
 	it("re-reads and retries a Deployment update after a Kubernetes conflict", async () => {
 		const fake = fakeClient();
 		let conflictInjected = false;
