@@ -105,7 +105,8 @@ jobs:
           ACK_IMAGE_CACHE_CONCURRENCY: '6'
         run: |
           set -euo pipefail
-          export ACK_SOURCE_SHA="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).sourceSha)' "$RUNNER_TEMP/ack-cache-plan/cache-plan.json")"
+          ACK_SOURCE_SHA="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).sourceSha)' "$RUNNER_TEMP/ack-cache-plan/cache-plan.json")"
+          export ACK_SOURCE_SHA
           node deploy/ack/image-cache.ts ensure \
             "$RUNNER_TEMP/ack-cache-plan/cache-plan.json" \
             "$RUNNER_TEMP/cache-ready.json"
