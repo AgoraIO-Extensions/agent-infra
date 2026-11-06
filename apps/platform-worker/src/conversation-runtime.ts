@@ -533,7 +533,8 @@ export function createConversationRuntimeV2(
 				sandboxResource: state.sandboxResource,
 				purpose: authority.purpose,
 				command,
-				// 签名 readiness 只要求在发送前最后一次解析（postTarget）执行（#2134）。
+				// 签名 readiness 只要求在发送前最后一次解析执行（#2134）：通常是 postTarget，
+				// Session Sandbox 复用分支是 finalTarget（#3966）。
 				reuseSignedReadiness: true,
 				...(authority.purpose === "control"
 					? { skipControlReadiness: true as const }
@@ -566,6 +567,15 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		authority = finalRoute.authority;
+		// A Session Sandbox business submit may send to this observation without a
+		// third resolution (#3347). It is then the last resolution before the send,
+		// so it runs the full signed readiness (HLD §8.2, #3966).
+		const reusableFinalTarget =
+			finalRoute.authority.purpose === "business" &&
+			state.sandboxResource != null &&
+			(command === "turn.submit" ||
+				command === "turn.supplement" ||
+				command === "native-capability.invoke");
 		const finalTarget = await bounded(
 			options.resolveRuntimeHost({
 				agentId: context.claim.agentId,
@@ -580,7 +590,7 @@ export function createConversationRuntimeV2(
 				sandboxResource: state.sandboxResource,
 				purpose: finalRoute.authority.purpose,
 				command,
-				reuseSignedReadiness: true,
+				...(reusableFinalTarget ? {} : { reuseSignedReadiness: true as const }),
 				...(finalRoute.authority.purpose === "control"
 					? { skipControlReadiness: true as const }
 					: {}),
@@ -620,10 +630,8 @@ export function createConversationRuntimeV2(
 		let routeObservedAt = finalTargetObservedAt;
 		let postTarget = finalTarget;
 		const canReuseFinalTarget =
+			reusableFinalTarget &&
 			state.sandboxResource != null &&
-			(command === "turn.submit" ||
-				command === "turn.supplement" ||
-				command === "native-capability.invoke") &&
 			isDeepStrictEqual(postTargetRoute.record, finalRoute.record);
 		if (
 			!canReuseFinalTarget ||

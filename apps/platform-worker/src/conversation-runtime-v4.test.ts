@@ -848,6 +848,113 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	describe("Session Sandbox route reuse (#3347, #3966)", () => {
+		const sandboxResource = () => ({
+			sandbox: {
+				schemaVersion: 1,
+				sandboxId: "sandbox",
+				agentId: "agent",
+				sessionId: "conversation",
+				principal: { kind: "user", id: "user" },
+				channelId: "web",
+				generation: 1,
+				resourceName: "runtime",
+				workspaceScope: "sandbox",
+			},
+			resourceFence: 1,
+			desiredState: "running",
+			status: "ready",
+			policy: null,
+			observation: {
+				status: "ready",
+				resources: [
+					{
+						kind: "Pod",
+						namespace: "test",
+						name: "runtime",
+						uid: "pod-current",
+						resourceVersion: "1",
+					},
+				],
+			},
+		});
+		const resolutions = (
+			h: ReturnType<typeof runtimeV4Harness>,
+			from: number,
+		) => h.resolveRuntimeHost.mock.calls.slice(from).map(([input]) => input);
+
+		it("runs full signed readiness on the reused second resolution", async () => {
+			const h = runtimeV4Harness();
+			try {
+				Object.assign(h.state, { sandboxResource: sandboxResource() });
+				const reference = await h.authorize();
+				const before = h.resolveRuntimeHost.mock.calls.length;
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).resolves.toMatchObject({ result: { outcome: "accepted" } });
+				// 第二次解析即准备阶段最后一次解析，执行完整签名 readiness；
+				// 发送前复核沿用同一 Pod 的该次结果。
+				expect(
+					resolutions(h, before).map((input) => input.reuseSignedReadiness),
+				).toEqual([true, undefined, true]);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("resolves a third time with full readiness once the proof expires", async () => {
+			const h = runtimeV4Harness();
+			try {
+				Object.assign(h.state, { sandboxResource: sandboxResource() });
+				const reference = await h.authorize();
+				const before = h.resolveRuntimeHost.mock.calls.length;
+				h.dispatchStore.readRuntimeState.mockImplementation(async () => {
+					if (h.resolveRuntimeHost.mock.calls.length - before === 2)
+						h.setNow(time + 2_000);
+					return h.state;
+				});
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).resolves.toMatchObject({ result: { outcome: "accepted" } });
+				expect(
+					resolutions(h, before).map((input) => input.reuseSignedReadiness),
+				).toEqual([true, undefined, undefined, true]);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("keeps the third full control readiness before a control request", async () => {
+			const h = runtimeV4Harness();
+			try {
+				Object.assign(h.state, { sandboxResource: sandboxResource() });
+				const reference = await h.authorize();
+				Object.assign(h.state, { stopPending: true });
+				const before = h.resolveRuntimeHost.mock.calls.length;
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toThrow();
+				const calls = resolutions(h, before);
+				expect(calls.map((input) => input.purpose)).toEqual([
+					"control",
+					"control",
+					"control",
+				]);
+				expect(calls.map((input) => input.skipControlReadiness)).toEqual([
+					true,
+					true,
+					undefined,
+				]);
+				// 控制请求在第三次完整控制 readiness 之后才发出，业务提交没有发出。
+				expect(h.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+					expect.stringMatching(/\/status$/),
+				]);
+			} finally {
+				h.runtime.close();
+			}
+		});
+	});
+
 	it("rechecks authority once after each route resolution while preparing (#3960)", async () => {
 		const h = runtimeV4Harness();
 		try {
