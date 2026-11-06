@@ -59,15 +59,27 @@ export function assertCacheReady(cache: CacheState, images: string[], now = Date
 	assert(!cache.expiresAt || (Number.isFinite(Date.parse(cache.expiresAt)) && Date.parse(cache.expiresAt) > now + 300_000), "CACHE_EXPIRED");
 }
 
-export async function ensureCaches(plan: CachePlan, backend: CacheBackend, options: { timeoutMs?: number; checkOnly?: boolean; sleep?: (ms: number) => Promise<void>; now?: () => number; onProgress?: (caches: { name: string; id: string; images: string[] }[]) => Promise<void> } = {}) {
+export async function ensureCaches(plan: CachePlan, backend: CacheBackend, options: { timeoutMs?: number; checkOnly?: boolean; concurrency?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; onProgress?: (caches: { name: string; id: string; images: string[] }[]) => Promise<void> } = {}) {
 	plan = parseCachePlan(plan);
 	const now = options.now ?? Date.now;
 	const timeoutMs = options.timeoutMs ?? 1_200_000;
 	assert(Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 1_800_000, "CACHE_TIMEOUT_INVALID");
+	const concurrency = options.concurrency ?? 1;
+	assert(Number.isInteger(concurrency) && concurrency > 0 && concurrency <= 8, "CACHE_CONCURRENCY_INVALID");
 	const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 	const deadline = now() + timeoutMs;
-	const results: { name: string; id: string; images: string[] }[] = [];
-	for (const images of plan.groups) {
+	const results = new Map<string, { name: string; id: string; images: string[] }>();
+	let progressTail: Promise<void> = Promise.resolve();
+	const progress = () => {
+		progressTail = progressTail.then(async () => {
+			await options.onProgress?.(plan.groups.flatMap(images => {
+				const key = hash([...images].sort());
+				return results.get(key) ? [results.get(key)!] : [];
+			}));
+		});
+		return progressTail;
+	};
+	const ensureOne = async (images: string[]) => {
 		let name = cacheName(images, backend.namePrefix);
 		let cache = await backend.get(name);
 		if (cache && ["Failed", "Expired", "UpdateFailed"].includes(cache.phase ?? "") ) {
@@ -86,8 +98,8 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 				assert(cache.owner === cacheOwner && hash([...cache.images].sort()) === hash(images), "CACHE_IDENTITY_MISMATCH");
 				if (cache.phase === "Ready") {
 					assertCacheReady(cache, images, now());
-					results.push({ name, id: cache.id!, images });
-					await options.onProgress?.([...results]);
+					results.set(hash([...images].sort()), { name, id: cache.id!, images });
+					await progress();
 					break;
 				}
 				assert(!["Failed", "Expired", "UpdateFailed"].includes(cache.phase ?? ""), "CACHE_PREPARATION_FAILED");
@@ -96,17 +108,36 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 			assert(now() < deadline, "CACHE_TIMEOUT");
 			await sleep(Math.min(10_000, deadline - now()));
 		}
+	};
+	let next = 0;
+	const worker = async () => {
+		while (true) {
+			const index = next++;
+			if (index >= plan.groups.length) return;
+			await ensureOne(plan.groups[index]);
+		}
+	};
+	const outcomes = await Promise.allSettled(Array.from({ length: Math.min(concurrency, plan.groups.length) }, worker));
+	await progressTail;
+	for (const outcome of outcomes) {
+		if (outcome.status === "rejected") throw outcome.reason;
 	}
+	const orderedResults = plan.groups.flatMap(images => {
+		const key = hash([...images].sort());
+		return results.get(key) ? [results.get(key)!] : [];
+	});
+	// Every group must have reached Ready before final validation.
+	assert(orderedResults.length === plan.groups.length, "CACHE_PREPARATION_INCOMPLETE");
 	// Earlier groups must still be valid after the final group finishes.
-	for (const result of results) {
+	for (const result of orderedResults) {
 		const current = await backend.get(result.name);
 		assert(current && current.id === result.id, "CACHE_IDENTITY_MISMATCH");
 		assertCacheReady(current, result.images, now());
 	}
-	return { schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date(now()).toISOString(), status: "ready", caches: results, businessVerified: false };
+	return { schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date(now()).toISOString(), status: "ready", caches: orderedResults, businessVerified: false };
 }
 
-export async function ensureCachesWithReceipt(plan: CachePlan, backend: CacheBackend, output: string, options: { checkOnly?: boolean; timeoutMs?: number } = {}) {
+export async function ensureCachesWithReceipt(plan: CachePlan, backend: CacheBackend, output: string, options: { checkOnly?: boolean; concurrency?: number; timeoutMs?: number } = {}) {
 	let caches: { name: string; id: string; images: string[] }[] = [];
 	const write = (status: string, reason?: string) => writeFile(output, `${JSON.stringify({ schemaVersion: 1, kind: "ack-image-cache", sourceSha: plan.sourceSha, platform: plan.platform, checkedAt: new Date().toISOString(), status, caches, businessVerified: false, ...(reason ? { reason } : {}) }, null, 2)}\n`, { mode: 0o600 });
 	await write("preparing");
