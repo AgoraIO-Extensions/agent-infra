@@ -529,6 +529,14 @@ image_cache_gate
 
 import { validateReleaseRun } from "../deploy/ack/image-cache-release.ts";
 
+test("image-cache CLI forwards the bounded concurrency setting", () => {
+	const source = readFileSync(
+		new URL("../deploy/ack/image-cache.ts", import.meta.url),
+		"utf8",
+	);
+	assert.match(source, /ACK_IMAGE_CACHE_CONCURRENCY/);
+});
+
 test("cache plan publication requires successful same-repository exact attempts", () => {
 	const run = {
 		id: 42,
