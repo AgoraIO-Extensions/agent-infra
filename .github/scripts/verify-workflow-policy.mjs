@@ -273,6 +273,7 @@ export function validateWorkflowDocuments(workflows) {
       executeSteps[0]?.uses !== "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
       executeSteps[2]?.uses !== "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" ||
       executeSteps[3]?.name !== "Write temporary kubeconfig" ||
+      !sameObject(executeSteps[3]?.env, {ACK_KUBECONFIG_B64: "${{ secrets.ACK_KUBECONFIG_B64 }}"}) ||
       executeSteps[4]?.name !== "Ensure ImageCache groups are Ready" ||
       executeSteps[5]?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
       executeSteps[6]?.name !== "Remove temporary kubeconfig" ||
