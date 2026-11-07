@@ -351,7 +351,9 @@ export function decideSessionSandboxObservationV1(
 	// A validated stop receipt proves that the previous non-PVC identities were
 	// removed. A replacement may therefore legitimately have new UIDs; the
 	// resurrection check below still rejects any old UID returning.
-	const replacementAfterStop = claim.lifecycle?.stopReceipt !== undefined;
+	const replacementAfterStop =
+		claim.lifecycle?.stopReceipt !== null &&
+		claim.lifecycle?.stopReceipt !== undefined;
 	const resurrectedSource =
 		claim.lifecycle?.stopReceipt?.removed.some(({ resource: old }) =>
 			observation.resources.some(
