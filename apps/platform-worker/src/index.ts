@@ -42,6 +42,7 @@ export * from "./saved-key-candidates-production.js";
 export * from "./saved-key-candidates-service.js";
 export * from "./session-reserve-deployment.js";
 export * from "./session-reserve-worker.js";
+export * from "./skill-hub-delivery.js";
 export * from "./skill-materialization.js";
 export * from "./skill-materializer-production-assembly.js";
 export * from "./skill-materializer-store-adapter.js";

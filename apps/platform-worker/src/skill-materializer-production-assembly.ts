@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { SkillHubAppliedReceiptV1 } from "@agent-infra/contracts";
 import type {
@@ -26,10 +27,18 @@ type Materializer = Pick<
 	"materialize" | "readCurrentDetails"
 >;
 
+import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import {
+	skillHubAgentAssemblyRootV1,
+	writeSkillHubDeliveryV1,
+} from "./skill-hub-delivery.js";
+
 export interface DeploymentSkillMaterializerAssemblyV1 {
 	readonly storage: ObjectStorageDataV1;
 	readonly assemblyRoot: string;
 	readonly runtimeUid: number;
+	/** Bounded immutable transport for clusters whose Runtime PVCs cannot be shared. */
+	readonly delivery?: { readonly client: WorkerKubernetesClientV1 };
 	readonly resolveBindings: (
 		input: WorkloadSkillMaterializationInputV1,
 	) => Promise<readonly WorkloadSkillMaterializationBindingV1[]>;
@@ -122,6 +131,9 @@ export function createDeploymentSkillMaterializerFactoryV1(
 		!assembly.assemblyRoot.startsWith("/") ||
 		!Number.isSafeInteger(assembly.runtimeUid) ||
 		assembly.runtimeUid <= 0 ||
+		(assembly.delivery !== undefined &&
+			(typeof assembly.delivery.client?.read !== "function" ||
+				typeof assembly.delivery.client?.create !== "function")) ||
 		typeof assembly.resolveBindings !== "function" ||
 		typeof assembly.recordAppliedReceipt !== "function" ||
 		typeof assembly.verifyAdmission !== "function"
@@ -129,10 +141,21 @@ export function createDeploymentSkillMaterializerFactoryV1(
 		throw new Error("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
 	return async ({ signal }) => {
 		signal.throwIfAborted();
+		const rootFor = (input: WorkloadSkillMaterializationInputV1) =>
+			assembly.delivery
+				? skillHubAgentAssemblyRootV1(assembly.assemblyRoot, input.agentId)
+				: assembly.assemblyRoot;
 		return createObjectStorageWorkloadSkillMaterializerV1({
-			materializerFor: () => {
+			materializerFor: async (input) => {
+				const root = rootFor(input);
+				if (assembly.delivery)
+					await mkdir(root, { mode: 0o700 }).catch(
+						(error: NodeJS.ErrnoException) => {
+							if (error.code !== "EEXIST") throw error;
+						},
+					);
 				const materializer: Materializer = new SkillPackageMaterializerV1({
-					assemblyRoot: assembly.assemblyRoot,
+					assemblyRoot: root,
 					runtimeUid: assembly.runtimeUid,
 					readPackage: (object) => readObject(assembly.storage, object, signal),
 					verifyAdmission: assembly.verifyAdmission,
@@ -141,6 +164,31 @@ export function createDeploymentSkillMaterializerFactoryV1(
 			},
 			resolveBindings: assembly.resolveBindings,
 			writeAppliedReceipt: assembly.recordAppliedReceipt,
+			...(assembly.delivery
+				? {
+						deliverGeneration: async (
+							input: WorkloadSkillMaterializationInputV1,
+							result: import("./skill-materialization.js").WorkloadSkillMaterializationResultV1,
+						) => {
+							const first = result.skills[0];
+							const delivery = assembly.delivery;
+							if (!first || !delivery) return;
+							await writeSkillHubDeliveryV1(
+								delivery.client,
+								{
+									schemaVersion: 1,
+									agentId: input.agentId,
+									agentVersion: first.agentVersion,
+									configurationRevision: input.configurationRevision,
+									generationId: result.generationId,
+									projections: [...result.skills],
+									appliedBindings: [...(result.appliedBindings ?? [])],
+								},
+								rootFor(input),
+							);
+						},
+					}
+				: {}),
 		});
 	};
 }

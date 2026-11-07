@@ -8,6 +8,7 @@ import {
 	createProductionNativeMetadataReaderFromWorkerV1,
 	inspectProductionRelayKeyPolicyV1,
 	mergeProductionPlatformApiDeploymentPortsV1,
+	resolveDeploymentSkillAgentVersionV1,
 } from "./deployment.js";
 import {
 	createDirectoryOrganizationAuthorityResolverV1,
@@ -157,6 +158,10 @@ const nativeMetadataWorker =
 		: undefined);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
+const deploymentAgentVersion = resolveDeploymentSkillAgentVersionV1(
+	apiInput?.agentVersion,
+	process.env.AGENT_INFRA_AGENT_VERSION,
+);
 const configuredDatabaseUrl = databaseUrl;
 if (typeof ldap?.verifyCurrentStatus !== "function") {
 	throw new Error("LDAP current account authority is required");
@@ -315,6 +320,9 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+		...(deploymentAgentVersion !== undefined
+			? { agentVersion: deploymentAgentVersion }
+			: {}),
 		...(sessionReserveDeployment.configuration
 			? {
 					sessionSandboxReserves: structuredClone(

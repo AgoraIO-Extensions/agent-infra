@@ -41,6 +41,10 @@ encryption:
   keyVersion: key-v1
 worker:
   keyVersions: key-v1
+# API and Worker configuration modules consume the same fixed Skill Agent Version.
+agentVersion: ""
+skillHub:
+  enabled: false
 replicas:
   # API configuration Secret updates require a rollout. Keep two serving Pods
   # so RollingUpdate(maxUnavailable=0) has a live endpoint throughout it.

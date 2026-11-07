@@ -127,6 +127,37 @@ it("maps Store bindings and keeps fixed actor facts out of Workload input", asyn
 	});
 });
 
+it("re-resolves deployment-owned actor facts for each synchronization and rejects invalid facts", async () => {
+	const store = storeFixture();
+	let active = true;
+	const actor = vi.fn(async (value) => {
+		expect(value.agentId).toBe(input.agentId);
+		if (!active) throw new Error("disabled");
+		return {
+			actorId: "current-owner",
+			organizationIds: ["current-org"],
+			isAdministrator: false,
+		};
+	});
+	const adapter = createSkillHubStoreMaterializationAdapterV1({
+		store,
+		agentVersion: "agent-version-1",
+		actor,
+		resolvePackageObject: async () => packageObject,
+	});
+	await adapter.resolveBindings({
+		...input,
+		actorId: "forged-owner",
+	} as typeof input);
+	expect(store.lastResolve).toMatchObject({
+		actorId: "current-owner",
+		organizationIds: ["current-org"],
+	});
+	active = false;
+	await expect(adapter.resolveBindings(input)).rejects.toThrow();
+	expect(actor).toHaveBeenCalledTimes(2);
+});
+
 it.each([
 	["failed", { ...binding, state: "failed", failureReason: "materialize" }],
 	["revoked", { ...binding, state: "revoked", failureReason: null }],

@@ -53,7 +53,11 @@ export type SkillHubStoreMaterializationAdapterOptionsV1 = Readonly<{
 	readonly agentVersion:
 		| string
 		| ((input: WorkloadSkillMaterializationInputV1) => string);
-	readonly actor: SkillHubMaterializationActorFactsV1;
+	readonly actor:
+		| SkillHubMaterializationActorFactsV1
+		| ((
+				input: WorkloadSkillMaterializationInputV1,
+		  ) => Promise<SkillHubMaterializationActorFactsV1>);
 	readonly resolvePackageObject: SkillHubPackageObjectResolverV1;
 }>;
 
@@ -178,7 +182,14 @@ export function createSkillHubStoreMaterializationAdapterV1(
 			typeof options.agentVersion !== "function")
 	)
 		reject("Invalid Skill materialization adapter");
-	const actor = validateActorFacts(options.actor);
+	const actorSource = options.actor;
+	const actorFor =
+		typeof actorSource === "function"
+			? actorSource
+			: (() => {
+					const fixed = validateActorFacts(actorSource);
+					return async () => fixed;
+				})();
 
 	return {
 		async resolveBindings(
@@ -187,6 +198,7 @@ export function createSkillHubStoreMaterializationAdapterV1(
 			validateInput(input);
 			input.signal?.throwIfAborted();
 			const agentVersion = resolveAgentVersion(options.agentVersion, input);
+			const actor = validateActorFacts(await actorFor(input));
 			const signal = input.signal ?? new AbortController().signal;
 			let bindings: readonly SkillHubSyncBindingV1[];
 			try {

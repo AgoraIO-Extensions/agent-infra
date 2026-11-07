@@ -438,6 +438,10 @@ const workloadInput = {
 	...configuredWorkloadInput,
 	policy: {
 		...configuredWorkloadInput.policy,
+		...(process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE &&
+		configuredWorkloadInput.policy.skillDeliveryImage === undefined
+			? { skillDeliveryImage: process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE }
+			: {}),
 		...(runtimeAuth ? { runtimeAuth } : {}),
 		...(fileExchangeEgress ? { fileExchangeEgress } : {}),
 		...(nativeMetadataGatewayPort !== undefined &&
@@ -586,6 +590,20 @@ async function createPrepared(signal: AbortSignal) {
 		throw new Error(
 			"PLATFORM_WORKER_NAMESPACE must match the workload policy namespace",
 		);
+	if (
+		process.env.PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED === "true" &&
+		(!skillMaterialization?.delivery ||
+			skillMaterialization.delivery.client.namespace !== namespace ||
+			skillMaterialization.agentVersion !==
+				process.env.AGENT_INFRA_AGENT_VERSION ||
+			!skillMaterialization.agentVersion ||
+			skillMaterialization.assemblyRoot !==
+				process.env.PLATFORM_WORKER_SKILL_ASSEMBLY_ROOT ||
+			!workloadInput.policy.skillDeliveryImage ||
+			workloadInput.policy.skillDeliveryImage !==
+				process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE)
+	)
+		throw new Error("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
 	const skillMaterializer = await resolveDeploymentSkillMaterializerV1({
 		databaseUrl,
 		signal,
@@ -594,6 +612,11 @@ async function createPrepared(signal: AbortSignal) {
 			createSkillMaterializer ??
 			createDeploymentSkillHubMaterializerFactoryV1(skillMaterialization),
 	});
+	if (
+		process.env.PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED === "true" &&
+		!skillMaterializer
+	)
+		throw new Error("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
 	const productionWorkload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,

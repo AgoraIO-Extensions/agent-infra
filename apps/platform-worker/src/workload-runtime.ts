@@ -1906,8 +1906,13 @@ export function createWorkloadRuntimeV1(
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),
-					...(materializedSkills
+					...(materializedSkills &&
+					(!options.policy.skillDeliveryImage ||
+						materializedSkills.skills.length > 0)
 						? {
+								...(options.policy.skillDeliveryImage
+									? { skillDeliveryImage: options.policy.skillDeliveryImage }
+									: {}),
 								skills: materializedSkills.skills,
 								skillAppliedBindings: materializedSkills.appliedBindings?.length
 									? JSON.stringify(materializedSkills.appliedBindings)

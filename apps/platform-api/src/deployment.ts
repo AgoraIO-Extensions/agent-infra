@@ -228,6 +228,23 @@ export function createProductionNativeMetadataReaderFromWorkerV1(options: {
 	});
 }
 
+export function resolveDeploymentSkillAgentVersionV1(
+	configured: string | undefined,
+	environment: string | undefined,
+) {
+	const injected = environment === "" ? undefined : environment;
+	if (
+		configured !== undefined &&
+		injected !== undefined &&
+		configured !== injected
+	)
+		throw new Error("PLATFORM_AGENT_VERSION_CONFIGURATION_CONFLICT");
+	const value = injected ?? configured;
+	if (value !== undefined && !isSkillHubAgentVersionV1(value))
+		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
+	return value;
+}
+
 /** Merge explicit mounted deployment ports without allowing duplicate authorities. */
 export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly apiInput: ProductionPlatformApiInputV1;

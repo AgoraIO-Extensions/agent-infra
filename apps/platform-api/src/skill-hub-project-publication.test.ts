@@ -99,6 +99,7 @@ const policy = {
 	signer: { ...keys, keyId: "key-1", trustRevision: "trust-1" },
 };
 const infected = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE";
+let scannerUnavailable = false;
 const scanner = {
 	scan: async (selected: {
 		packageDigest: string;
@@ -108,6 +109,7 @@ const scanner = {
 		policyRevision: string;
 		openPackage: () => Promise<ReadableStream<Uint8Array>>;
 	}) => {
+		if (scannerUnavailable) throw new Error("scanner process unavailable");
 		// 受控扫描器读取实际包字节，发现测试特征时拒绝。
 		const bytes = Buffer.from(
 			await new Response(await selected.openPackage()).arrayBuffer(),
@@ -471,6 +473,27 @@ describe("Skill Hub web project editing and publication over HTTP (#2906)", () =
 		expect(JSON.stringify(audits)).not.toMatch(
 			new RegExp(`${bodyMarker}|script-executed|iVBORw0KGgo`),
 		);
+	});
+
+	it("maps an unavailable deployment scanner to 503 without creating a version", async () => {
+		const projectId = await createProject();
+		expect((await save(projectId, 0)).status).toBe(200);
+		scannerUnavailable = true;
+		try {
+			const response = await publish(
+				projectId,
+				1,
+				"1.0.0",
+				"PRIVATE",
+				"publish-scanner-unavailable",
+			);
+			expect(response.status).toBe(503);
+			const versions =
+				await sql`select count(*)::int as count from platform.skill_hub_versions where skill_id = ${projectId}`;
+			expect(versions[0]?.count).toBe(0);
+		} finally {
+			scannerUnavailable = false;
+		}
 	});
 
 	it("never changes a committed version and requires a new version for changed content", async () => {
