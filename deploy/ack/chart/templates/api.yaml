@@ -56,6 +56,9 @@ spec:
             - {name: PLATFORM_API_CONFIGURATION_MODULE, value: file:///app/deployment/configuration.mjs}
             - {name: PLATFORM_API_PROXY_TOKEN_FILE, value: /var/run/agent-infra/proxy-token/token}
             - {name: PLATFORM_PUBLIC_ORIGIN, value: {{ .Values.publicOrigin | quote }}}
+            {{- with .Values.agentVersion }}
+            - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
+            {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}
             - {name: AGENT_INFRA_ENCRYPTION_PUBLIC_KEY_FILE, value: /var/run/agent-infra/encryption-public-key/public.pem}

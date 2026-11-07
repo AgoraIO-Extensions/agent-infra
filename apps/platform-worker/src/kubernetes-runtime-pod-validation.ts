@@ -26,9 +26,11 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import {
+	skillHubRuntimeBindingV1,
 	skillHubRuntimeDataSubPathV1,
 	skillHubVolumeMountV1,
 } from "./kubernetes-runtime-skill-mount.js";
+import { skillHubDeliveryProjectionV1 } from "./skill-hub-delivery.js";
 import {
 	type WorkspaceSnapshotPodProjectionV1,
 	withoutVerifiedWorkspaceSnapshotProjectionV1,
@@ -48,6 +50,17 @@ export function createKubernetesPodValidationV1(dependencies: {
 }) {
 	const { policy, imageRepository, workloadEnvironment, environmentSecrets } =
 		dependencies;
+	const withoutSkillDelivery = (
+		value: AgentWorkloadDesiredV1,
+		spec: V1PodSpec | undefined,
+	) =>
+		withoutVerifiedWorkspaceSnapshotProjectionV1(
+			spec,
+			skillHubDeliveryProjectionV1(
+				skillHubRuntimeBindingV1(value),
+				value.skillDeliveryImage,
+			),
+		);
 	const topologyLabelValues = structuredClone(
 		policy.allowedPodTopologyLabelValues ?? {},
 	);
@@ -182,7 +195,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 		},
 	) {
 		const projectedPod = withoutVerifiedWorkspaceSnapshotProjectionV1(
-			podInput,
+			withoutSkillDelivery(value, podInput),
 			workspaceSnapshotWorkloadProjectionV1(
 				value,
 				dependencies.workspaceSnapshotProjection,
@@ -490,13 +503,15 @@ export function createKubernetesPodValidationV1(dependencies: {
 			: specInput;
 		if (hasUnsafePodSpec(value, projectedPod, expectedIdentity)) return true;
 		const pod = withoutVerifiedWorkspaceSnapshotProjectionV1(
-			projectedPod,
+			withoutSkillDelivery(value, projectedPod),
 			workspaceSnapshotWorkloadProjectionV1(
 				value,
 				dependencies.workspaceSnapshotProjection,
 			),
 		);
-		const skillHubMount = skillHubVolumeMountV1(value);
+		const skillHubMount = value.skillDeliveryImage
+			? null
+			: skillHubVolumeMountV1(value);
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		const connection = connectionFor(value.agentId);
 		const probe = container?.readinessProbe;

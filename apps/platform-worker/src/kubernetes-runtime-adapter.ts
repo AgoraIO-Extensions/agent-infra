@@ -72,6 +72,7 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
 import {
+	skillHubRuntimeBindingV1,
 	skillHubRuntimeDataSubPathV1,
 	skillHubVolumeMountV1,
 } from "./kubernetes-runtime-skill-mount.js";
@@ -80,6 +81,10 @@ import {
 	isMultiService,
 	type MultiServiceHealthDiagnosticV1,
 } from "./multi-service-runtime.js";
+import {
+	readSkillHubDeliveryV1,
+	skillHubDeliveryProjectionV1,
+} from "./skill-hub-delivery.js";
 import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
@@ -138,6 +143,8 @@ export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 export { skillHubWorkloadMountRootV1 } from "./kubernetes-runtime-skill-mount.js";
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	/** Immutable Worker image containing the credential-free Skill init entrypoint. */
+	readonly skillDeliveryImage?: string;
 	/** Deployment-owned pull Secret used only for private Workload images. */
 	readonly imagePullSecretName?: string;
 	/** Explicit deployment approval for the Codex container-boundary mode. */
@@ -211,6 +218,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 }) {
 	const { client } = options;
 	const policy = structuredClone(options.policy);
+	skillHubDeliveryProjectionV1(undefined, policy.skillDeliveryImage);
 	workloadImagePullSpecV1(policy.imagePullSecretName);
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
@@ -1387,6 +1395,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			const skillBinding = skillHubRuntimeBindingV1(value);
+			if (
+				skillBinding &&
+				value.skillDeliveryImage &&
+				value.replicas !== 0 &&
+				!(await readSkillHubDeliveryV1(client, skillBinding))
+			)
+				throw new WorkloadKubernetesError("unavailable");
 			if (isMultiService(value)) {
 				const applied = await multiService.apply(value);
 				if (applied === "pending" || applied === null) return applied;
@@ -1600,7 +1616,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
 			};
-			const skillHubMount = skillHubVolumeMountV1(value);
+			const skillHubMount = value.skillDeliveryImage
+				? null
+				: skillHubVolumeMountV1(value);
 			const service: V1Service = {
 				apiVersion: "v1",
 				kind: "Service",
@@ -1785,6 +1803,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					},
 				},
 			};
+			const skillProjection = skillHubDeliveryProjectionV1(
+				skillBinding,
+				value.skillDeliveryImage,
+			);
+			if (skillProjection && workload.spec?.template.spec)
+				workload.spec.template.spec = applyWorkspaceSnapshotProjectionV1(
+					workload.spec.template.spec,
+					skillProjection,
+				);
 			const projection = workspaceSnapshotWorkloadProjectionV1(
 				value,
 				options.workspaceSnapshotProjection,
@@ -2042,6 +2069,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					networkPolicyRef: workloadResourceNameV1(value.agentId),
 					secretRefs: value.secretRefs,
 					...(value.skills ? { skills: value.skills } : {}),
+					...(value.skillDeliveryImage
+						? { skillDeliveryImage: value.skillDeliveryImage }
+						: {}),
 					...(value.skillGenerationId
 						? { skillGenerationId: value.skillGenerationId }
 						: {}),

@@ -53,7 +53,11 @@ export type WorkloadSkillMaterializationBindingV1 = Readonly<{
 export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 	readonly materializerFor: (
 		input: WorkloadSkillMaterializationInputV1,
-	) => Pick<SkillPackageMaterializerV1, "materialize" | "readCurrentDetails">;
+	) =>
+		| Pick<SkillPackageMaterializerV1, "materialize" | "readCurrentDetails">
+		| Promise<
+				Pick<SkillPackageMaterializerV1, "materialize" | "readCurrentDetails">
+		  >;
 	readonly resolveBindings: (
 		input: WorkloadSkillMaterializationInputV1,
 	) => Promise<readonly WorkloadSkillMaterializationBindingV1[]>;
@@ -61,10 +65,14 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 	readonly writeAppliedReceipt?: (
 		receipt: SkillHubAppliedReceiptV1,
 	) => Promise<void>;
+	readonly deliverGeneration?: (
+		input: WorkloadSkillMaterializationInputV1,
+		result: WorkloadSkillMaterializationResultV1,
+	) => Promise<void>;
 }): WorkloadSkillMaterializerV1 {
 	return {
 		async materialize(input) {
-			const materializer = options.materializerFor(input);
+			const materializer = await options.materializerFor(input);
 			const current = await materializer.readCurrentDetails();
 			const bindings = await options.resolveBindings(input);
 			if (bindings.length > 10) throw new Error("Too many Skills");
@@ -172,6 +180,7 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 				skills,
 				appliedBindings,
 			});
+			await options.deliverGeneration?.(input, validated);
 			if (options.writeAppliedReceipt) {
 				for (const appliedReceipt of appliedReceipts)
 					await options.writeAppliedReceipt(appliedReceipt);

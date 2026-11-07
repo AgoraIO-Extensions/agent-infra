@@ -47,6 +47,9 @@ E2E 证书的 `enterprise-directory-sync` SAN 和同名 Service alias；迁移�
 
 ## Session Runtime 的 ECI 调度
 
+Skill 包供应、固定版本与跨节点只读交付的配置见 [ACK Skill Hub 装配](SKILL-HUB.md)。
+Skill 与 Session 工作区的存储分别验证，不将 RWO 云盘视为跨节点共享卷。
+
 `scheduling.worker` 只决定 `platform-worker` 调度服务本身的位置，不决定它创建的 Session
 Runtime Pod。常驻平台服务可以使用同一集群的普通节点，按会话创建的执行 Pod 使用 ECI。
 
