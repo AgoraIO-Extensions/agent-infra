@@ -370,6 +370,56 @@ describe("Session Sandbox observation decision", () => {
 			),
 		).toEqual({ status: "ready", observation: replacement, finished: true });
 	});
+	it("accepts a replaced Pod when the retained PVC is unchanged", () => {
+		const retainedPVC = ready.resources.find(
+			(resource) => resource.kind === "PersistentVolumeClaim",
+		);
+		const pod = ready.resources.find((resource) => resource.kind === "Pod");
+		if (!retainedPVC || !pod) throw new Error("Missing replacement fixture");
+		const receipt: SessionSandboxStopReceiptV1 = {
+			schemaVersion: 1,
+			sandboxId: sandbox.sandboxId,
+			sessionId: sandbox.sessionId,
+			sourceGeneration: 1,
+			sourceResourceFence: 1,
+			targetGeneration: 1,
+			targetResourceFence: 2,
+			removed: ready.resources
+				.filter(
+					(resource) =>
+						resource.kind !== "PersistentVolumeClaim" &&
+						resource.kind !== "Pod",
+				)
+				.map((resource) => ({
+					resource,
+					preconditions: {
+						uid: resource.uid,
+						resourceVersion: resource.resourceVersion,
+					},
+					absence: {
+						kind: resource.kind,
+						namespace: resource.namespace,
+						name: resource.name,
+					},
+				})),
+			retainedPVC,
+		};
+		const replacement = {
+			...ready,
+			resources: ready.resources.map((resource) =>
+				resource.kind === "Pod"
+					? { ...resource, uid: "replacement-pod" }
+					: resource,
+			),
+		};
+		expect(
+			decideSessionSandboxObservationV1(
+				{ ...claim, lifecycle: { stopReceipt: receipt } as never },
+				ready,
+				replacement,
+			),
+		).toEqual({ status: "ready", observation: replacement, finished: true });
+	});
 });
 
 describe("Session Sandbox reconcile retry pacing (#2456)", () => {

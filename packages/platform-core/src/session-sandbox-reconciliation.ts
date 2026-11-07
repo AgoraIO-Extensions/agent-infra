@@ -392,9 +392,20 @@ export function decideSessionSandboxObservationV1(
 	// A validated stop receipt proves that the previous non-PVC identities were
 	// removed. A replacement may therefore legitimately have new UIDs; the
 	// resurrection check below still rejects any old UID returning.
+	const stopReceipt = claim.lifecycle?.stopReceipt;
+	const retainedPVC = stopReceipt?.retainedPVC;
 	const replacementAfterStop =
-		claim.lifecycle?.stopReceipt !== null &&
-		claim.lifecycle?.stopReceipt !== undefined;
+		stopReceipt !== null &&
+		stopReceipt !== undefined &&
+		retainedPVC !== null &&
+		retainedPVC !== undefined &&
+		observation.resources.some(
+			(resource) =>
+				resource.kind === "PersistentVolumeClaim" &&
+				resource.namespace === retainedPVC.namespace &&
+				resource.name === retainedPVC.name &&
+				resource.uid === retainedPVC.uid,
+		);
 	const identityChanged =
 		previous?.resources.some((old) => {
 			if (
@@ -409,16 +420,25 @@ export function decideSessionSandboxObservationV1(
 				return false;
 			if (old.kind === "PersistentVolumeClaim" || !replacementAfterStop)
 				return true;
-			return !claim.lifecycle.stopReceipt.removed.some(
+			if (old.kind === "Pod") return false;
+			return !stopReceipt.removed.some(
 				({ resource }) =>
 					resource.kind === old.kind && resource.uid === old.uid,
 			);
 		}) ?? false;
 	const resurrectedSource =
-		claim.lifecycle?.stopReceipt?.removed.some(({ resource: old }) =>
-			observation.resources.some(
-				(current) => current.kind === old.kind && current.uid === old.uid,
-			),
+		stopReceipt?.removed.some(
+			({ resource: old }) =>
+				!previous?.resources.some(
+					(current) =>
+						current.kind === old.kind &&
+						current.name === old.name &&
+						current.namespace === old.namespace &&
+						current.uid === old.uid,
+				) &&
+				observation.resources.some(
+					(current) => current.kind === old.kind && current.uid === old.uid,
+				),
 		) ?? false;
 	const unknown =
 		observation.status === "unknown" || identityChanged || resurrectedSource;
