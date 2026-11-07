@@ -139,7 +139,7 @@ describe("deployment-owned Workload egress", () => {
 		["invalid port", { destination: { ip: "203.0.113.8" }, port: 0 }],
 	])("rejects snapshot storage %s", (_label, entry) => {
 		expect(() =>
-			workloadEgressRulesV1({ workspaceSnapshotEgress: [entry] }),
+			workloadEgressRulesV1({ workspaceSnapshotEgress: [entry] as never }),
 		).toThrow();
 	});
 	it("compiles the fixed native metadata Worker destination", () => {

@@ -1006,7 +1006,7 @@ describe("production SessionSandbox resource receiver", () => {
 				},
 			],
 		});
-		const customClaim = o.claim;
+		let customClaim = o.claim;
 		const snapshotEgress = [
 			{
 				destination: {
@@ -1016,11 +1016,16 @@ describe("production SessionSandbox resource receiver", () => {
 				port: 9000,
 			},
 		] as const;
-		customClaim.policy.resourceConfigurationHash =
-			workloadResourceConfigurationHashV1({
-				...o.options.policy,
-				workspaceSnapshotEgress: snapshotEgress,
-			});
+		customClaim = {
+			...o.claim,
+			policy: {
+				...o.claim.policy,
+				resourceConfigurationHash: workloadResourceConfigurationHashV1({
+					...o.options.policy,
+					workspaceSnapshotEgress: snapshotEgress,
+				}),
+			},
+		};
 		const receive = createProductionSessionSandboxReceiverV1(
 			{
 				...o.options,
