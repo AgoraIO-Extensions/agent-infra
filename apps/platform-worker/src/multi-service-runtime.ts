@@ -51,6 +51,11 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import {
+	requireWorkspaceSnapshotEgressV1,
+	type WorkloadEgressPolicyV1,
+	workloadEgressRulesV1,
+} from "./workload-network.js";
+import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
 	workspaceSnapshotPodSpecMatchesV1,
@@ -83,6 +88,12 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
 	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
+	readonly workspaceSnapshotEgress?: WorkloadEgressPolicyV1["workspaceSnapshotEgress"];
+	readonly modelEgress?: WorkloadEgressPolicyV1["modelEgress"];
+	readonly connectionEgress?: WorkloadEgressPolicyV1["connectionEgress"];
+	readonly nativeMetadataWorkerEgress?: WorkloadEgressPolicyV1["nativeMetadataWorkerEgress"];
+	readonly fileExchangeEgress?: WorkloadEgressPolicyV1["fileExchangeEgress"];
+	readonly dnsEgress?: WorkloadEgressPolicyV1["dnsEgress"];
 }
 
 function applyWorkspaceSnapshotToPodSpecV1(
@@ -887,7 +898,10 @@ function migrationJob(
 	return result;
 }
 
-function migrationNetworkPolicy(value: MultiServiceDesired): V1NetworkPolicy {
+function migrationNetworkPolicy(
+	value: MultiServiceDesired,
+	policy?: MultiServiceRuntimePolicyV1,
+): V1NetworkPolicy {
 	const name = migrationJobName(value);
 	return {
 		apiVersion: "networking.k8s.io/v1",
@@ -900,8 +914,22 @@ function migrationNetworkPolicy(value: MultiServiceDesired): V1NetworkPolicy {
 					"agent-infra.agora.io/service": "migration",
 				},
 			},
-			policyTypes: ["Ingress"],
+			...(policy?.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+				? { policyTypes: ["Ingress", "Egress"] as const }
+				: { policyTypes: ["Ingress"] as const }),
 			ingress: [],
+			...(policy?.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+				? {
+						egress: workloadEgressRulesV1({
+							modelEgress: policy.modelEgress,
+							connectionEgress: policy.connectionEgress,
+							nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress,
+							fileExchangeEgress: policy.fileExchangeEgress,
+							workspaceSnapshotEgress: policy.workspaceSnapshotEgress,
+							dnsEgress: policy.dnsEgress,
+						}),
+					}
+				: {}),
 		},
 	};
 }
@@ -957,7 +985,9 @@ function networkPolicy(
 					"agent-infra.agora.io/service": serviceLabel(resource.metadata.name),
 				},
 			},
-			policyTypes: ["Ingress"],
+			...(policy.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+				? { policyTypes: ["Ingress", "Egress"] as const }
+				: { policyTypes: ["Ingress"] as const }),
 			ingress: [
 				{
 					_from: [
@@ -972,6 +1002,31 @@ function networkPolicy(
 					],
 				},
 			],
+			...(policy.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+				? {
+						egress: [
+							...workloadEgressRulesV1({
+								modelEgress: policy.modelEgress,
+								connectionEgress: policy.connectionEgress,
+								nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress,
+								fileExchangeEgress: policy.fileExchangeEgress,
+								workspaceSnapshotEgress: policy.workspaceSnapshotEgress,
+								dnsEgress: policy.dnsEgress,
+							}),
+							{
+								to: [
+									{
+										podSelector: {
+											matchLabels: {
+												[ownerLabel]: workloadResourceNameV1(value.agentId),
+											},
+										},
+									},
+								],
+							},
+						],
+					}
+				: {}),
 		},
 	};
 }
@@ -1027,6 +1082,9 @@ export function createMultiServiceRuntimeOperations(options: {
 	readonly onWorkspaceSnapshot?: WorkspaceSnapshotObservationCallbackV1;
 }) {
 	const { client } = options;
+	workloadEgressRulesV1(options.policy);
+	if (options.policy.workspaceSnapshotProjection)
+		requireWorkspaceSnapshotEgressV1(options.policy.workspaceSnapshotEgress);
 	const resources = resolveMultiServiceResourceConfigurationV1(options.policy);
 	type WorkloadIdentity = { uid: string; generation: number };
 	const imagePullSecrets =
@@ -1521,7 +1579,11 @@ export function createMultiServiceRuntimeOperations(options: {
 				);
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
-				await put(migrationNetworkPolicy(value), value, ownership);
+				await put(
+					migrationNetworkPolicy(value, options.policy),
+					value,
+					ownership,
+				);
 				const job = await put(
 					migrationJob(value, migration, resources, options.policy),
 					value,

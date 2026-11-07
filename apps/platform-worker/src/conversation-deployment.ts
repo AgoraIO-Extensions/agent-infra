@@ -543,6 +543,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 function sessionSandboxEgressPolicyV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
 	standard: boolean,
+	snapshotEnabled = false,
 ): SessionSandboxAllocationV1["egress"] {
 	return {
 		...(standard && policy.nativeEgress
@@ -558,6 +559,9 @@ function sessionSandboxEgressPolicyV1(
 		// #3289：与 Agent Workload 同一条部署声明；只在配置了文件交换 origin 时存在。
 		...(policy.fileExchangeEgress
 			? { fileExchangeEgress: policy.fileExchangeEgress }
+			: {}),
+		...(policy.workspaceSnapshotEgress && snapshotEnabled
+			? { workspaceSnapshotEgress: policy.workspaceSnapshotEgress }
 			: {}),
 		...(policy.dnsEgress ? { dnsEgress: policy.dnsEgress } : {}),
 	};
@@ -782,6 +786,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			egress: sessionSandboxEgressPolicyV1(
 				egressPolicy,
 				templateBinding !== undefined,
+				Boolean(deployment.workspaceSnapshots?.length),
 			),
 			imageDigest: `${templateBinding?.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 			imagePullSecretName: workload.policy.imagePullSecretName,

@@ -123,6 +123,7 @@ function validPodSelector(value: Readonly<Record<string, string>> | undefined) {
 import {
 	hasAdditionalEgressPolicyV1,
 	nativeEgressPolicyAnnotationV1,
+	requireWorkspaceSnapshotEgressV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -211,6 +212,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 }) {
 	const { client } = options;
 	const policy = structuredClone(options.policy);
+	if (options.workspaceSnapshotProjection)
+		requireWorkspaceSnapshotEgressV1(policy.workspaceSnapshotEgress);
 	workloadImagePullSpecV1(policy.imagePullSecretName);
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
@@ -244,7 +247,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
 	if (!templateBinding)
 		delete (policy as { nativeEgress?: unknown }).nativeEgress;
-	const egress = workloadEgressRulesV1(policy);
+	const egress = workloadEgressRulesV1(
+		options.workspaceSnapshotProjection
+			? policy
+			: { ...policy, workspaceSnapshotEgress: undefined },
+	);
 	const imageRepository =
 		templateBinding?.imageRepository ?? policy.imageRepository;
 	const connection = runtimeConnectionConsumerProjectionV1(

@@ -298,6 +298,9 @@ export function workloadResourceConfigurationHashV1(
 					cpu: policy.resources.limits.cpu,
 					memory: policy.resources.limits.memory,
 				},
+				...(policy.workspaceSnapshotEgress === undefined
+					? {}
+					: { workspaceSnapshotEgress: policy.workspaceSnapshotEgress }),
 			}),
 		)
 		.digest("hex");

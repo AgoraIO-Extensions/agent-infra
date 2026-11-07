@@ -14,6 +14,7 @@ import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
+import { projectWorkspaceSnapshotMaterializerV1 } from "./workspace-snapshot-materializer.js";
 
 const egress: WorkloadEgressPolicyV1 = {
 	modelEgress: [
@@ -96,6 +97,50 @@ describe("deployment-owned Workload egress", () => {
 				ports: [{ protocol: "TCP", port: 443 }],
 			},
 		]);
+	});
+	it("compiles snapshot storage only as an exact deployment-owned target", () => {
+		expect(
+			workloadEgressRulesV1({
+				workspaceSnapshotEgress: [
+					{
+						destination: {
+							namespace: "agent-infra-d-ac-1107",
+							podLabels: { app: "d-snapshot-storage" },
+						},
+						port: 9000,
+					},
+				],
+			}),
+		).toEqual([
+			{
+				to: [
+					{
+						namespaceSelector: {
+							matchLabels: {
+								"kubernetes.io/metadata.name": "agent-infra-d-ac-1107",
+							},
+						},
+						podSelector: { matchLabels: { app: "d-snapshot-storage" } },
+					},
+				],
+				ports: [{ protocol: "TCP", port: 9000 }],
+			},
+		]);
+	});
+	it.each([
+		["CIDR", { destination: { cidr: "10.0.0.0/8" }, port: 9000 }],
+		[
+			"empty selector",
+			{
+				destination: { namespace: "agent-infra-d-ac-1107", podLabels: {} },
+				port: 9000,
+			},
+		],
+		["invalid port", { destination: { ip: "203.0.113.8" }, port: 0 }],
+	])("rejects snapshot storage %s", (_label, entry) => {
+		expect(() =>
+			workloadEgressRulesV1({ workspaceSnapshotEgress: [entry] }),
+		).toThrow();
 	});
 	it("compiles the fixed native metadata Worker destination", () => {
 		expect(
@@ -273,6 +318,73 @@ describe("deployment-owned Workload egress", () => {
 		) as V1NetworkPolicy;
 		api.resources.set(`NetworkPolicy/${desired.service.name}`, roundtrip);
 		expect(await adapter.observe(desired, identity)).toBe("healthy");
+	});
+	it("does not add snapshot egress without a trusted projection, then adds only the approved target", async () => {
+		const workspaceSnapshotEgress = [
+			{
+				destination: {
+					namespace: "agent-infra-d-ac-1107",
+					podLabels: { app: "d-snapshot-storage" },
+				},
+				port: 9000,
+			},
+		] as const;
+		const desired = workloadDesiredFixture();
+		const withoutProjectionApi = fakeKubernetesApi();
+		const withoutProjection = createKubernetesRuntimeAdapterV1({
+			client: withoutProjectionApi.client,
+			policy: { ...workloadTestPolicy, workspaceSnapshotEgress },
+			probe: async () => true,
+		});
+		await withoutProjection.apply(desired);
+		const without = await withoutProjectionApi.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		expect(
+			without?.spec?.egress?.some((rule) => rule.ports?.[0]?.port === 9000),
+		).toBe(false);
+
+		const projection = projectWorkspaceSnapshotMaterializerV1(
+			[
+				{
+					snapshotId: "snapshot-a",
+					name: "repo",
+					digest: `sha256:${"a".repeat(64)}`,
+					sizeBytes: 128,
+					objectRef: "object-a",
+					signedUrl: "https://objects.example.test/archive",
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			],
+			{
+				imageDigest: `registry.example.test/worker@sha256:${"b".repeat(64)}`,
+				allowedOrigins: ["https://objects.example.test"],
+				cacheSizeLimit: "2Gi",
+				credentialSecretName: "snapshot-credentials",
+				resources: {
+					requests: { cpu: "100m", memory: "128Mi" },
+					limits: { cpu: "1", memory: "512Mi" },
+				},
+			},
+		);
+		const withProjectionApi = fakeKubernetesApi();
+		const withProjection = createKubernetesRuntimeAdapterV1({
+			client: withProjectionApi.client,
+			policy: { ...workloadTestPolicy, workspaceSnapshotEgress },
+			workspaceSnapshotProjection: projection,
+			probe: async () => true,
+		});
+		await withProjection.apply(desired);
+		const withSnapshot = await withProjectionApi.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		expect(
+			withSnapshot?.spec?.egress?.some(
+				(rule) => rule.ports?.[0]?.port === 9000,
+			),
+		).toBe(true);
 	});
 	it.each([
 		{ destination: { ip: "0.0.0.0/0" }, port: 443 },

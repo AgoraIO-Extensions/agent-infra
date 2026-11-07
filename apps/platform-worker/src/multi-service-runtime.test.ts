@@ -350,6 +350,15 @@ const basePolicy = {
 	ingressClassName: "nginx",
 	tlsSecretName: "tls",
 	routeSelector: { "app.kubernetes.io/name": "ingress" },
+	workspaceSnapshotEgress: [
+		{
+			destination: {
+				namespace: "agent-infra-d-ac-1107",
+				podLabels: { app: "d-snapshot-storage" },
+			},
+			port: 9000,
+		},
+	],
 } satisfies MultiServiceRuntimePolicyV1;
 
 function snapshotProjection() {
@@ -499,6 +508,83 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
+	it("adds snapshot egress only when the trusted projection exists and preserves same-Agent peer traffic", async () => {
+		const workspaceSnapshotEgress = [
+			{
+				destination: {
+					namespace: "agent-infra-d-ac-1107",
+					podLabels: { app: "d-snapshot-storage" },
+				},
+				port: 9000,
+			},
+		] as const;
+		const value = desired(manifest);
+		if (!isMultiService(value)) throw new Error();
+		const without = fakeClient();
+		const withoutOperations = createMultiServiceRuntimeOperations({
+			client: without.client,
+			policy: { ...basePolicy, workspaceSnapshotEgress },
+		});
+		await withoutOperations.apply(value);
+		const workloadName = workloadResourceNameV1(value.agentId);
+		const withoutNetwork = without.resources.get(
+			`NetworkPolicy/${workloadName}-web-network`,
+		) as V1NetworkPolicy | undefined;
+		expect(withoutNetwork?.spec?.policyTypes).toEqual(["Ingress"]);
+		expect(withoutNetwork?.spec?.egress).toBeUndefined();
+
+		const withSnapshot = fakeClient();
+		const withOperations = createMultiServiceRuntimeOperations({
+			client: withSnapshot.client,
+			policy: {
+				...basePolicy,
+				workspaceSnapshotProjection: snapshotProjection(),
+				workspaceSnapshotEgress,
+				modelEgress: [{ destination: { ip: "203.0.113.8" }, port: 443 }],
+				connectionEgress: [{ destination: { ip: "203.0.113.9" }, port: 443 }],
+			},
+		});
+		await withOperations.apply(value);
+		const withNetwork = withSnapshot.resources.get(
+			`NetworkPolicy/${workloadName}-web-network`,
+		) as V1NetworkPolicy | undefined;
+		expect(withNetwork?.spec?.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(withNetwork?.spec?.egress).toEqual([
+			{
+				to: [{ ipBlock: { cidr: "203.0.113.8/32" } }],
+				ports: [{ protocol: "TCP", port: 443 }],
+			},
+			{
+				to: [{ ipBlock: { cidr: "203.0.113.9/32" } }],
+				ports: [{ protocol: "TCP", port: 443 }],
+			},
+			{
+				to: [
+					{
+						namespaceSelector: {
+							matchLabels: {
+								"kubernetes.io/metadata.name": "agent-infra-d-ac-1107",
+							},
+						},
+						podSelector: { matchLabels: { app: "d-snapshot-storage" } },
+					},
+				],
+				ports: [{ protocol: "TCP", port: 9000 }],
+			},
+			{
+				to: [
+					{
+						podSelector: {
+							matchLabels: {
+								"agent-infra.agora.io/agent": workloadName,
+							},
+						},
+					},
+				],
+			},
+		]);
+	});
+
 	it("observes live snapshot Pods through ReplicaSet ownership while old Pods terminate", async () => {
 		const fake = fakeClient();
 		const projection = snapshotProjection();
@@ -536,7 +622,8 @@ describe("multi-service resource policy", () => {
 				},
 			};
 			const pod = snapshotPod(controller, projection);
-			pod.metadata!.ownerReferences = [
+			if (!pod.metadata) throw new Error();
+			pod.metadata.ownerReferences = [
 				{
 					apiVersion: "apps/v1",
 					kind: "ReplicaSet",
