@@ -518,6 +518,57 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
+	it("preserves same-Agent migration dependencies when snapshot egress isolates the Job", async () => {
+		const value = desired(migrationManifest);
+		if (!isMultiService(value)) throw new Error();
+		const without = fakeClient();
+		await createMultiServiceRuntimeOperations({
+			client: without.client,
+			policy: basePolicy,
+		}).apply(value);
+		const withoutNetwork = [...without.resources.values()].find(
+			(resource) => resource.kind === "NetworkPolicy",
+		) as V1NetworkPolicy | undefined;
+		expect(withoutNetwork?.spec?.policyTypes).toEqual(["Ingress"]);
+		expect(withoutNetwork?.spec?.egress).toBeUndefined();
+
+		const withSnapshot = fakeClient();
+		await createMultiServiceRuntimeOperations({
+			client: withSnapshot.client,
+			policy: {
+				...basePolicy,
+				workspaceSnapshotProjection: snapshotProjection(),
+				workspaceSnapshotEgress: [
+					{ destination: { ip: "203.0.113.10" }, port: 9000 },
+				],
+			},
+		}).apply(value);
+		const network = [...withSnapshot.resources.values()].find(
+			(resource) => resource.kind === "NetworkPolicy",
+		) as V1NetworkPolicy | undefined;
+		expect(network?.spec?.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(network?.spec?.ingress).toEqual([]);
+		expect(network?.spec?.egress).toEqual([
+			{
+				to: [{ ipBlock: { cidr: "203.0.113.10/32" } }],
+				ports: [{ protocol: "TCP", port: 9000 }],
+			},
+			{
+				to: [
+					{
+						podSelector: {
+							matchLabels: {
+								"agent-infra.agora.io/agent": workloadResourceNameV1(
+									value.agentId,
+								),
+							},
+						},
+					},
+				],
+			},
+		]);
+	});
+
 	it("adds snapshot egress only when the trusted projection exists and preserves same-Agent peer traffic", async () => {
 		const workspaceSnapshotEgress = [
 			{

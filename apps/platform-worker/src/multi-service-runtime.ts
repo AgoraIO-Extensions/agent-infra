@@ -920,14 +920,27 @@ function migrationNetworkPolicy(
 			ingress: [],
 			...(policy?.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
 				? {
-						egress: workloadEgressRulesV1({
-							modelEgress: policy.modelEgress,
-							connectionEgress: policy.connectionEgress,
-							nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress,
-							fileExchangeEgress: policy.fileExchangeEgress,
-							workspaceSnapshotEgress: policy.workspaceSnapshotEgress,
-							dnsEgress: policy.dnsEgress,
-						}),
+						egress: [
+							...workloadEgressRulesV1({
+								modelEgress: policy.modelEgress,
+								connectionEgress: policy.connectionEgress,
+								nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress,
+								fileExchangeEgress: policy.fileExchangeEgress,
+								workspaceSnapshotEgress: policy.workspaceSnapshotEgress,
+								dnsEgress: policy.dnsEgress,
+							}),
+							{
+								to: [
+									{
+										podSelector: {
+											matchLabels: {
+												[ownerLabel]: workloadResourceNameV1(value.agentId),
+											},
+										},
+									},
+								],
+							},
+						],
 					}
 				: {}),
 		},
