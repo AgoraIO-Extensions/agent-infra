@@ -18,6 +18,7 @@ import {
 	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxNormalStartupV1,
 	isTaskApiChannelV1,
+	planSessionSandboxLostPodRecoveryTransitionV1,
 	resolveCurrentPersonalApiUserV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
@@ -778,6 +779,19 @@ export async function recordSandboxObservation(
 ): Promise<"committed" | "stale" | "unknown"> {
 	const context = await ownedContext(transaction, claim, policy, directory);
 	if (!context) return "stale";
+	if (
+		observation.status === "unknown" &&
+		observation.failureCode === "sandbox.pod_lost" &&
+		context.purpose === "prepare" &&
+		!context.lifecycle
+	) {
+		const recovery = await requestSessionSandboxLostPodRecoveryV1(
+			transaction,
+			claim,
+			context,
+		);
+		if (recovery) return recovery;
+	}
 	const decision =
 		context.purpose === "drain" && context.lifecycle
 			? decideSessionSandboxDrainObservationV1({
@@ -901,4 +915,73 @@ export async function recordSandboxObservation(
 			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),
 			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status, progress, progressAttempt: Number(context.outbox.attempt_count) })})`;
 	return unknown ? "unknown" : "committed";
+}
+
+/**
+ * #3985：Worker 在没有 lifecycle 的准备认领里读回记录的 Pod 已不存在，Store 仍是旧的 ready 回执。
+ * 写入与空闲回收相同形状的 lifecycle 并立即请求恢复：下一次认领排空来源（已不存在的 Pod 记为
+ * absent，保留 PVC），再沿保留 PVC 的替换准备重建。条件不满足时返回 undefined，按普通未知观测处理。
+ */
+async function requestSessionSandboxLostPodRecoveryV1(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	context: NonNullable<Awaited<ReturnType<typeof ownedContext>>>,
+): Promise<"committed" | "stale" | undefined> {
+	const [managementRow] = await transaction<
+		{ management: AgentManagementStateV1 }[]
+	>`
+		select ${transaction.unsafe(agentManagementStateJsonSql("a"))} as management
+		from platform.agent_applications a where a.agent_id = ${context.sandbox.agentId}`;
+	const management = managementRow?.management;
+	if (!management) return undefined;
+	const executions = await transaction<
+		{ status: string }[]
+	>`select status from platform.conversation_executions where conversation_id = ${context.sandbox.sessionId}`;
+	const pending =
+		await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${context.sandbox.sessionId} and status = 'pending' limit 1`;
+	const payload = (context.outbox.payload ?? {}) as {
+		deployment?: unknown;
+		modelProjection?: unknown;
+	};
+	const next = planSessionSandboxLostPodRecoveryTransitionV1({
+		management,
+		current: {
+			sandbox: context.sandbox,
+			resourceFence: Number(context.allocation.resource_fence),
+			policy: context.allocation.resource_policy,
+			observation: context.allocation.resource_observation,
+			deployment: payload.deployment ?? null,
+			modelProjection: payload.modelProjection ?? null,
+		},
+		allocationDesiredState: context.allocation.desired_state,
+		executionStatuses: executions.map((execution) => execution.status),
+		generationBarrierPending: pending.length > 0,
+	});
+	if (!next) return undefined;
+	const reopened = await transaction`update platform.outbox_items
+		set payload = payload || ${transaction.json({ lifecycle: next.lifecycle } as unknown as Parameters<typeof transaction.json>[0])},
+			status = 'pending', lease_owner = null, lease_expires_at = null,
+			available_at = clock_timestamp(), updated_at = clock_timestamp()
+		where id = ${claim.itemId} and status = 'processing'
+			and lease_owner = ${claim.leaseOwner}
+			and delivery_fence = ${claim.deliveryFence}
+			and lease_expires_at > clock_timestamp()
+		returning id`;
+	if (reopened.length !== 1) return "stale";
+	await transaction`update platform.session_sandbox_allocations
+		set desired_state = ${next.desiredState}, status = ${next.status},
+			resource_fence = ${next.resourceFence}, updated_at = clock_timestamp()
+		where sandbox_id = ${claim.sandbox.sandboxId}`;
+	await transaction`insert into platform.audit_events
+		(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
+		values (${randomUUID()}, ${context.outbox.trace_id}, 'system', ${claim.leaseOwner},
+			'conversation.sandbox.lost_pod_recovery_requested', 'sandbox', ${claim.sandbox.sandboxId}, 'succeeded',
+			${context.outbox.request_id}, ${context.sandbox.agentId}, clock_timestamp(),
+			${transaction.json({
+				conversationId: context.sandbox.sessionId,
+				reason: "pod_lost",
+				sourceResourceFence: Number(context.allocation.resource_fence),
+				resourceFence: next.resourceFence,
+			})})`;
+	return "committed";
 }

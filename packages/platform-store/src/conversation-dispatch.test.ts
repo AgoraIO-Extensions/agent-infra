@@ -10418,6 +10418,131 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		});
 	});
 
+	/** #3987 reopens the settled intent after a Turn found its live route gone. */
+	async function claimReopened(
+		store: PostgresConversationDispatchStoreV1,
+		itemId: string,
+	) {
+		// The prepare authority is captured for the Sandbox principal, an Owner here.
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent-dispatch', 'actor-dispatch', now()) on conflict do nothing`;
+		await client`update platform.outbox_items set status = 'pending',
+			available_at = clock_timestamp() where id = ${itemId}`;
+		const claim = await store.claimSandboxReconciliation({
+			schemaVersion: 1,
+			itemId,
+			workerId: "lost-pod-worker",
+			leaseDurationMs: 30_000,
+		});
+		if (!claim) throw new Error("Expected Sandbox claim");
+		return claim;
+	}
+
+	it("drains a ready Sandbox whose Pod was lost and resumes it at once (#3985)", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "submitted",
+		});
+		const lost = await prepared(work);
+		const store = sandboxStore();
+		try {
+			const claim = await claimReopened(store, lost.itemId);
+			// A Sandbox never reclaimed before has no lifecycle: an ordinary prepare.
+			expect(claim).toMatchObject({ purpose: "prepare", resourceFence: 1 });
+			expect(claim.lifecycle ?? null).toBeNull();
+			expect(
+				await store.recordSandboxObservation({
+					claim,
+					observation: {
+						status: "unknown",
+						failureCode: "sandbox.pod_lost",
+						resources: lost.resources,
+					},
+				}),
+			).toBe("committed");
+			expect(await sandboxState(work.conversationId)).toMatchObject({
+				desired_state: "stopped",
+				status: "unavailable",
+				resource_fence: 2,
+				intent_status: "pending",
+				payload: {
+					lifecycle: {
+						reason: "idle_reclaim",
+						resumeRequested: true,
+						stopReceipt: null,
+						source: {
+							resourceFence: 1,
+							observation: { status: "ready", resources: lost.resources },
+						},
+					},
+				},
+			});
+			expect(
+				await client`select actor_id, target_id, details from platform.audit_events where action = 'conversation.sandbox.lost_pod_recovery_requested'`,
+			).toEqual([
+				{
+					actor_id: "lost-pod-worker",
+					target_id: lost.sandboxId,
+					details: {
+						conversationId: work.conversationId,
+						reason: "pod_lost",
+						sourceResourceFence: 1,
+						resourceFence: 2,
+					},
+				},
+			]);
+			// The next claim drains the recorded source; the Turn holds no Sandbox work.
+			const drain = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId: lost.itemId,
+				workerId: "lost-pod-worker",
+				leaseDurationMs: 30_000,
+			});
+			expect(drain).toMatchObject({
+				purpose: "drain",
+				drainComputeAllowed: true,
+				lifecycle: { reason: "idle_reclaim", resumeRequested: true },
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps a lost-Pod Sandbox running while an execution may still occupy it (#3985)", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+		});
+		const lost = await prepared(work);
+		const store = sandboxStore();
+		try {
+			const claim = await claimReopened(store, lost.itemId);
+			expect(
+				await store.recordSandboxObservation({
+					claim,
+					observation: {
+						status: "unknown",
+						failureCode: "sandbox.pod_lost",
+						resources: lost.resources,
+					},
+				}),
+			).toBe("unknown");
+			// Resource absence never frees a possibly active Execution (ADR 0023).
+			expect(await sandboxState(work.conversationId)).toMatchObject({
+				desired_state: "running",
+				status: "unknown",
+				resource_fence: 1,
+				intent_status: "retry_scheduled",
+			});
+			expect(
+				(await sandboxState(work.conversationId))?.payload.lifecycle,
+			).toBeUndefined();
+			expect(
+				await client`select 1 from platform.audit_events where action = 'conversation.sandbox.lost_pod_recovery_requested'`,
+			).toHaveLength(0);
+		} finally {
+			await store.close();
+		}
+	});
+
 	/** 把所属 Agent 的 Workload 置为失败（Pod 健康检查失败），verified 部署保留。 */
 	async function failAgentWorkload() {
 		await client`update platform.workload_reconciliations set state = state

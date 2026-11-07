@@ -735,6 +735,12 @@ Sandbox policy 是否过期无关；所属 Agent 的管理状态不是可用且�
 变化触发，沿 `reason: upgrade` 的排空、`stopReceipt` 和重新准备规则执行；已满足空闲回收条件的过期 Sandbox
 先回收，不立即为其重新准备计算资源，其余过期的空闲 Sandbox 仍按升级处理；不能把升级期间的等待解释为空闲回收。
 
+Session Sandbox Pod 被平台之外删除（驱逐、节点丢失或手工删除）时，Store 仍保留着之前的 ready 回执。Worker
+在路由失效后重开的重新调谐中读回记录的 Pod 已不存在，只上报这一证据（`sandbox.pod_lost`），不在原
+fence 下直接重建。没有执行占用该 Sandbox 时，Store 写入与空闲回收相同形状的生命周期并立即请求恢复：排空时把已不存在的
+Pod 记为 absent、保留 PVC，再在原 Sandbox 和 PVC 上按替换准备恢复。仍有活跃或待核实的执行时保持占用，不据资源缺失
+释放。同名但身份不同的 Pod 不算丢失，仍按冲突处理。
+
 历史 Agent 共享 PVC 不能直接标记为新 Sandbox 已隔离。迁移须先停止旧业务准入，核实并排空
 旧执行源；unknown 或归属不明时保持隔离维护，不自动复制共享历史、补造主体或新建 Session。
 只有逐 Session 证明原映射、数据归属和独占资源，才可在原事务/fence 下切换；原证据按政策保留。
