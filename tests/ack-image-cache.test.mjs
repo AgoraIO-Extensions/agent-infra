@@ -703,65 +703,95 @@ else { const name = args[args.indexOf("imagecache") + 1] === "-n" ? args[args.in
 	}
 });
 
-// #3995: the 48-object budget fills after eight releases; operators retire old release caches.
-const owned = (index, extra = {}) => ({
+// #3995/#4001: operators retire old release caches; each template keeps its latest and current versions.
+const image = (repository, seed) =>
+	`ghcr.io/agoraio-extensions/agent-infra/${repository}@sha256:${String(seed).padStart(64, "0")}`;
+const pi = (seed) => [image("agent-runtime-pi", seed)];
+const owned = (index, images, extra = {}) => ({
 	name: `agent-infra-imc-${String(index).padStart(32, "0")}`,
 	uid: `uid-${index}`,
 	id: `imc-old${index}`,
 	createdAt: new Date(Date.UTC(2026, 10, 1) + index * 3_600_000).toISOString(),
 	owner: cacheOwner,
-	images: [
-		`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-pi@sha256:${String(index).padStart(64, "0")}`,
-	],
+	images,
 	...extra,
 });
 
-test("retire selection keeps the newest, planned, admission-pinned and in-use caches and retires the oldest rest", () => {
-	const planned = { ...owned(0), name: cacheName([ref]) };
-	const retry = { ...owned(1), name: `${cacheName([ref])}-retry1` };
-	const pinned = owned(2, { id: "imc-pinned" });
-	const deleting = owned(3, { deleting: true });
-	const foreign = owned(4, { owner: "someone-else" });
-	const running = owned(5);
-	const rest = Array.from({ length: 30 }, (_, i) => owned(10 + i));
+test("retire keeps the latest and current version of each template and retires every other version", () => {
+	// The plan covers codex: its version is the latest one waiting for upgrade.
+	const codexOld = owned(1, [image("agent-runtime-codex", 1)]);
+	const codexCurrent = owned(2, [image("agent-runtime-codex", 2)]);
+	const codexLatest = owned(3, [ref], { name: cacheName([ref]) });
+	const codexRetry = owned(4, [ref], { name: `${cacheName([ref])}-retry1` });
+	// The plan does not cover pi: its newest created version is the latest one.
+	const piOld = owned(5, pi(5));
+	const piPinned = owned(6, pi(6), { id: "imc-pinned" });
+	const piDeleting = owned(7, pi(7), { deleting: true });
+	const piCurrent = owned(8, pi(8));
+	const piOlder = owned(9, pi(9));
+	const piLatest = owned(10, pi(10));
+	const piLatestRetry = owned(11, pi(10), { name: `${piLatest.name}-retry1` });
+	// A multi-container Pod image set is a template of its own.
+	const podOld = owned(12, [
+		image("agent-runtime-host", 12),
+		image("agent-runtime-codex", 12),
+	]);
+	const podLatest = owned(13, [
+		image("agent-runtime-host", 13),
+		image("agent-runtime-codex", 13),
+	]);
+	const foreign = owned(14, pi(14), { owner: "someone-else" });
 	const selection = selectCachesToRetire({
-		caches: [planned, retry, pinned, deleting, foreign, running, ...rest],
+		caches: [
+			codexOld,
+			codexCurrent,
+			codexLatest,
+			codexRetry,
+			piOld,
+			piPinned,
+			piDeleting,
+			piCurrent,
+			piOlder,
+			piLatest,
+			piLatestRetry,
+			podOld,
+			podLatest,
+			foreign,
+		],
 		plan,
 		admissionIds: ["imc-pinned"],
-		// A live Pod (an active Agent or a retained Session) still starts from this image.
-		inUseImages: running.images,
-		keep: 18,
+		// Live Pods in any environment still start from these images.
+		inUseImages: [
+			...codexCurrent.images,
+			...piCurrent.images,
+			"docker.io/library/postgres:16",
+		],
 	});
-	// The newest 18 owned caches stay; the plan, the retry generation, the pinned ID and the
-	// in-use image always stay.
 	assert.deepEqual(
 		selection.retire.map((cache) => cache.name),
-		rest.slice(0, 12).map((cache) => cache.name),
+		[codexOld, piOld, piOlder, podOld].map((cache) => cache.name),
 	);
 	assert.deepEqual(selection.kept, {
-		current_plan: 2,
+		latest: 5,
 		admission_reference: 1,
-		in_use: 1,
+		in_use: 2,
 		deleting: 1,
-		newest: 18,
 	});
-	assert.equal(selection.owned, 35);
+	assert.equal(selection.owned, 13);
 	assert.equal(selection.foreign, 1);
-	for (const keep of [5, 49, 1.5])
-		assert.throws(
-			() =>
-				selectCachesToRetire({
-					caches: rest,
-					plan,
-					admissionIds: [],
-					inUseImages: [],
-					keep,
-				}),
-			/CACHE_RETIRE_KEEP_INVALID/u,
-		);
+	// Before the plan's caches exist (the budget is full), older unused versions of its templates still retire.
+	assert.deepEqual(
+		selectCachesToRetire({
+			caches: [codexOld, codexCurrent],
+			plan,
+			admissionIds: [],
+			inUseImages: codexCurrent.images,
+		}).retire.map((cache) => cache.name),
+		[codexOld.name],
+	);
 	for (const broken of [
-		owned(6, { createdAt: "not-a-date" }),
-		owned(7, { images: undefined }),
+		owned(6, pi(6), { createdAt: "not-a-date" }),
+		owned(7, undefined),
 	])
 		assert.throws(
 			() =>
@@ -770,7 +800,6 @@ test("retire selection keeps the newest, planned, admission-pinned and in-use ca
 					plan,
 					admissionIds: [],
 					inUseImages: [],
-					keep: 6,
 				}),
 			/CACHE_INVENTORY_INVALID/u,
 		);
@@ -815,7 +844,7 @@ test("strict Session admission pins are read from every image-cache policy and f
 });
 
 test("retire is a dry run without the exact confirmation and deletes only the selected caches with it", async () => {
-	const inventory = Array.from({ length: 20 }, (_, i) => owned(i));
+	const inventory = Array.from({ length: 3 }, (_, i) => owned(i, pi(i)));
 	const removed = [];
 	const backend = {
 		async inventory() {
@@ -831,18 +860,17 @@ test("retire is a dry run without the exact confirmation and deletes only the se
 			removed.push(cache.uid);
 		},
 	};
-	const planned = await retireCaches(plan, backend, { keep: 18, now: () => 0 });
+	const planned = await retireCaches(plan, backend, { now: () => 0 });
 	assert.equal(planned.status, "planned");
 	assert.deepEqual(
 		planned.retired.map((cache) => cache.name),
 		[owned(0).name, owned(1).name],
 	);
 	assert.deepEqual(removed, []);
-	const wrong = await retireCaches(plan, backend, { keep: 18, confirm: "yes" });
+	const wrong = await retireCaches(plan, backend, { confirm: "yes" });
 	assert.equal(wrong.status, "planned");
 	assert.deepEqual(removed, []);
 	const retired = await retireCaches(plan, backend, {
-		keep: 18,
 		confirm: retireConfirmation,
 	});
 	assert.equal(retired.status, "retired");
@@ -869,7 +897,7 @@ test("retire is a dry run without the exact confirmation and deletes only the se
 			retireCaches(
 				plan,
 				{ ...backend, ...failing },
-				{ keep: 18, confirm: retireConfirmation },
+				{ confirm: retireConfirmation },
 			),
 			/CACHE_(ADMISSION|POD_INVENTORY)_UNREADABLE/u,
 		);
