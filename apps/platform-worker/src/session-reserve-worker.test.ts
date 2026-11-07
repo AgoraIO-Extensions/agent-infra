@@ -388,6 +388,12 @@ describe("Session reserve Worker", () => {
 		expect(f.store.retire).toHaveBeenCalledWith(f.row.sandboxId);
 	});
 
+	it("does not refresh a reserve before a ready inspection", async () => {
+		const f = fixture({ status: "preparing" });
+		await f.worker.reconcile();
+		expect(f.store.refreshReady).not.toHaveBeenCalled();
+	});
+
 	it("never resends a create with an unknown response or upgrades observation into completion", async () => {
 		const f = fixture({ status: "unknown" });
 		const resource = {
