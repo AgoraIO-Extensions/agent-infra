@@ -35,6 +35,7 @@ export function createWorkspaceSnapshotResolverV1(input: {
 	readonly policy: WorkspaceSnapshotMaterializerPolicyV1;
 	readonly allowedOrigins: readonly string[];
 }) {
+	projectWorkspaceSnapshotPodShapeV1([], input.policy);
 	const scopedPolicy = (value: {
 		agentId: string;
 		configurationRevision: number;

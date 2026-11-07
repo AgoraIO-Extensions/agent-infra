@@ -9,6 +9,7 @@ import {
 
 export const workloadApiVersions = {
 	Deployment: "apps/v1",
+	ReplicaSet: "apps/v1",
 	StatefulSet: "apps/v1",
 	Service: "v1",
 	Endpoints: "v1",
@@ -142,6 +143,7 @@ export function createWorkerKubernetesClientV1(
 	const check = (object: KubernetesObject) => {
 		if (
 			object.metadata?.namespace !== namespace ||
+			object.kind === "ReplicaSet" ||
 			!Object.hasOwn(workloadApiVersions, object.kind ?? "") ||
 			object.apiVersion !==
 				workloadApiVersions[object.kind as WorkloadResourceKind]

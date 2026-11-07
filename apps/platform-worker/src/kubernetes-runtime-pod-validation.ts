@@ -32,6 +32,7 @@ import {
 import {
 	type WorkspaceSnapshotPodProjectionV1,
 	withoutVerifiedWorkspaceSnapshotProjectionV1,
+	workspaceSnapshotWorkloadProjectionV1,
 } from "./workspace-snapshot-materializer.js";
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
@@ -173,6 +174,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 	}
 
 	function hasUnsafePodSpec(
+		value: AgentWorkloadDesiredV1,
 		podInput: V1PodSpec | undefined,
 		expectedIdentity?: {
 			readonly hostname: string;
@@ -181,7 +183,10 @@ export function createKubernetesPodValidationV1(dependencies: {
 	) {
 		const projectedPod = withoutVerifiedWorkspaceSnapshotProjectionV1(
 			podInput,
-			dependencies.workspaceSnapshotProjection,
+			workspaceSnapshotWorkloadProjectionV1(
+				value,
+				dependencies.workspaceSnapshotProjection,
+			),
 		);
 		if (!projectedPod) return true;
 		const pod = projectedPod;
@@ -483,10 +488,13 @@ export function createKubernetesPodValidationV1(dependencies: {
 		const projectedPod = dependencies.connectionConsumerControl
 			? runtimeConnectionConsumerControlPodV1({ spec: specInput }).spec
 			: specInput;
-		if (hasUnsafePodSpec(projectedPod, expectedIdentity)) return true;
+		if (hasUnsafePodSpec(value, projectedPod, expectedIdentity)) return true;
 		const pod = withoutVerifiedWorkspaceSnapshotProjectionV1(
 			projectedPod,
-			dependencies.workspaceSnapshotProjection,
+			workspaceSnapshotWorkloadProjectionV1(
+				value,
+				dependencies.workspaceSnapshotProjection,
+			),
 		);
 		const skillHubMount = skillHubVolumeMountV1(value);
 		const container = pod?.containers.find((entry) => entry.name === "agent");

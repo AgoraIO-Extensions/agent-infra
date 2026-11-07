@@ -230,6 +230,59 @@ describe("Conversation Worker discovery and shutdown", () => {
 			}),
 		);
 	});
+	it("records actual snapshot init duration once across repeated Session preparation polls", async () => {
+		const claim = {
+			schemaVersion: 1,
+			execution: null,
+			purpose: "prepare",
+			sandbox: { agentId: "agent-a", sessionId: "conversation-a" },
+		} as never;
+		mocks.find.mockResolvedValue([
+			{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+		]);
+		mocks.claimSandbox.mockResolvedValue(claim);
+		mocks.recordSandbox.mockResolvedValue(undefined);
+		const workspaceSnapshot = {
+			podUid: "pod-a",
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			outcome: "failed" as const,
+			attempt: 2,
+			durationMs: 2345,
+		};
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+			receiveSandbox: async () => ({
+				status: "observed",
+				failureCode: "workspace.materialization",
+				resources: [],
+				workspaceSnapshot,
+			}),
+		});
+		try {
+			for (let count = 1; count <= 2; count++) {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() =>
+					expect(mocks.recordSandbox).toHaveBeenCalledTimes(count),
+				);
+			}
+			const events = telemetry.record.mock.calls
+				.map(([event]) => event)
+				.filter(
+					(event) => event.operationRef === "workspace.snapshot.materialize",
+				);
+			expect(events).toHaveLength(1);
+			expect(events[0]).toMatchObject({
+				failureStep: "workspace.materialization",
+				attempt: 2,
+				durationMs: 2345,
+				outcome: "failed",
+			});
+		} finally {
+			await worker.stop();
+		}
+	});
 	it.each([
 		["prepare", "ready"],
 		["drain", "stopped"],

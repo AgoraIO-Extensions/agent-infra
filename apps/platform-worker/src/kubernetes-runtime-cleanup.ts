@@ -25,6 +25,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import type { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
+import { workspaceSnapshotCacheNameV1 } from "./workspace-snapshot-materializer.js";
 
 export function createKubernetesWorkloadCleanupV1(
 	dependencies: { readonly client: WorkerKubernetesClientV1 } & Pick<
@@ -208,9 +209,17 @@ export function createKubernetesWorkloadCleanupV1(
 		deleteNewVolume: boolean,
 	) {
 		const name = workloadResourceNameV1(value.agentId);
-		const pvc = await client.read<V1PersistentVolumeClaim>(
-			"PersistentVolumeClaim",
+		const claimNames = [
 			`${name}-data`,
+			workspaceSnapshotCacheNameV1(value.agentId),
+		];
+		const pvcs = await Promise.all(
+			claimNames.map((claimName) =>
+				client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					claimName,
+				),
+			),
 		);
 		// Reject a stale cleanup before advancing even the durable PVC fence.
 		const existingResources = await Promise.all([
@@ -221,11 +230,12 @@ export function createKubernetesWorkloadCleanupV1(
 			client.read("NetworkPolicy", name),
 			client.read("Ingress", name),
 		]);
-		for (const resource of [pvc, ...existingResources]) {
+		for (const resource of [...pvcs, ...existingResources]) {
 			if (resource)
 				own(resource, value.agentId, value.workloadRevision, value.fence);
 		}
-		if (pvc) {
+		for (const pvc of pvcs) {
+			if (!pvc) continue;
 			own(pvc, value.agentId, value.workloadRevision, value.fence);
 			if (
 				!pvc.metadata?.deletionTimestamp &&
@@ -262,11 +272,10 @@ export function createKubernetesWorkloadCleanupV1(
 		// decision. This adapter only owns Kubernetes state, so it must retain
 		// Agent-labelled immutable material rather than bulk-delete it.
 		if (!(await remove("Service", `${name}-probe`, value))) return false;
-		if (
-			deleteNewVolume &&
-			!(await remove("PersistentVolumeClaim", `${name}-data`, value))
-		)
-			return false;
+		if (deleteNewVolume)
+			for (const claimName of claimNames)
+				if (!(await remove("PersistentVolumeClaim", claimName, value)))
+					return false;
 		return true;
 	}
 	function validateRecoveryCreation(
@@ -292,6 +301,10 @@ export function createKubernetesWorkloadCleanupV1(
 			client.read("ServiceAccount", name),
 			client.read("NetworkPolicy", name),
 			client.read("PersistentVolumeClaim", value.persistentVolume.name),
+			client.read(
+				"PersistentVolumeClaim",
+				workspaceSnapshotCacheNameV1(value.agentId),
+			),
 		]);
 		// A newer management fence on any retained resource invalidates this
 		// cleanup, including retries after the candidate StatefulSet disappeared.

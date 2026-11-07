@@ -18,6 +18,7 @@ import {
 	type WorkloadRuntimeOptionsV1,
 } from "./workload-runtime.js";
 import { createWorkloadStepFailureLoggerV1 } from "./workload-step-failure.js";
+import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observation.js";
 
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
@@ -100,9 +101,20 @@ export function createPlatformWorkloadWorkerV1(
 			// Logging is observational and must not stop reconciliation.
 		}
 	}
+	const observeSnapshot = createWorkspaceSnapshotObserverV1((event) =>
+		observeWorkload(options.observability, event),
+	);
 	const runtime = createWorkloadRuntimeV1({
 		...options,
 		workerId,
+		onWorkspaceSnapshot(observation) {
+			observeSnapshot(observation);
+			try {
+				options.onWorkspaceSnapshot?.(observation);
+			} catch {
+				// Optional diagnostics never alter reconciliation.
+			}
+		},
 		onHealthDiagnostic(diagnostic: MultiServiceHealthDiagnosticV1) {
 			try {
 				options.onHealthDiagnostic?.(diagnostic);

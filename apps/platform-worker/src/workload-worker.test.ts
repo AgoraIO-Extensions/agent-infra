@@ -98,6 +98,38 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it("records one materialization outcome per actual Pod init attempt", async () => {
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformWorkloadWorkerV1({
+			...fixture(),
+			observability: telemetry,
+		});
+		const observe = vi
+			.mocked(createWorkloadRuntimeV1)
+			.mock.calls.at(-1)?.[0].onWorkspaceSnapshot;
+		if (!observe) throw new Error("missing snapshot observer");
+		const snapshot = {
+			agentId: "agent-a",
+			podUid: "pod-a",
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			outcome: "completed" as const,
+			attempt: 2,
+			durationMs: 1234,
+		};
+		observe(snapshot);
+		observe(snapshot);
+		expect(telemetry.record).toHaveBeenCalledTimes(1);
+		expect(telemetry.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				operationRef: "workspace.snapshot.materialize",
+				outcome: "completed",
+				attempt: 2,
+				durationMs: 1234,
+			}),
+		);
+		await worker.stop();
+	});
+
 	it("advances a newly due lifecycle while another Agent monitor remains in flight", async () => {
 		const monitor = Promise.withResolvers<"idle">();
 		monitorStore.runNext.mockReturnValueOnce(monitor.promise);

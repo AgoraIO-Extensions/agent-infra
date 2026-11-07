@@ -1,4 +1,6 @@
+import { posix } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	V1Container,
 	V1EmptyDirVolumeSource,
@@ -7,6 +9,11 @@ import type {
 	V1VolumeMount,
 } from "@kubernetes/client-node";
 import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
+import {
+	matchesResources,
+	quantityRatio,
+	workloadResourceNameV1,
+} from "./kubernetes-runtime-comparison.js";
 
 export interface WorkspaceSnapshotMaterializerInputV1 {
 	readonly snapshotId: string;
@@ -23,6 +30,10 @@ export interface WorkspaceSnapshotMaterializerPolicyV1 {
 	readonly allowedOrigins: readonly string[];
 	readonly cacheSizeLimit: string;
 	readonly credentialSecretName: string;
+	readonly resources: {
+		readonly requests: { readonly cpu: string; readonly memory: string };
+		readonly limits: { readonly cpu: string; readonly memory: string };
+	};
 }
 
 export interface WorkspaceSnapshotPodProjectionV1 {
@@ -35,6 +46,47 @@ export interface WorkspaceSnapshotPodProjectionV1 {
 const volumeName = "workspace-snapshots";
 const credentialsVolumeName = "workspace-snapshot-credentials";
 const materializerMount = "/materialized";
+const snapshotMountRoot = "/opt/agent/workspaces";
+
+function overlapsSnapshotRoot(path: string) {
+	const normalized = posix.normalize(path);
+	return (
+		normalized === "/" ||
+		normalized === snapshotMountRoot ||
+		normalized.startsWith(`${snapshotMountRoot}/`) ||
+		snapshotMountRoot.startsWith(`${normalized}/`)
+	);
+}
+
+export function workspaceSnapshotCacheNameV1(agentId: string) {
+	return `${workloadResourceNameV1(agentId)}-workspaces`;
+}
+
+/** Session and multi-service Pods keep independent temporary volumes. */
+export function workspaceSnapshotWorkloadProjectionV1(
+	value: AgentWorkloadDesiredV1,
+	projection: WorkspaceSnapshotPodProjectionV1 | undefined,
+): WorkspaceSnapshotPodProjectionV1 | undefined {
+	if (
+		!projection ||
+		value.runtimeManifest.interactionMode !== "self-managed" ||
+		value.multiService
+	)
+		return projection;
+	return {
+		...projection,
+		volumes: projection.volumes.map((volume) =>
+			volume.name === volumeName
+				? {
+						name: volumeName,
+						persistentVolumeClaim: {
+							claimName: workspaceSnapshotCacheNameV1(value.agentId),
+						},
+					}
+				: volume,
+		),
+	};
+}
 
 function assertSignedUrl(input: WorkspaceSnapshotMaterializerInputV1) {
 	if (!input.objectRef || input.sizeBytes <= 0)
@@ -71,10 +123,30 @@ export function projectWorkspaceSnapshotPodShapeV1(
 		throw new Error("workspace snapshot materializer image must be immutable");
 	if (!policy.credentialSecretName || !policy.cacheSizeLimit)
 		throw new Error("workspace snapshot materializer policy is incomplete");
+	const cacheSize = quantityRatio(policy.cacheSizeLimit);
+	if (!cacheSize || cacheSize[0] <= 0n)
+		throw new Error("workspace snapshot cache size is invalid");
+	for (const resource of ["cpu", "memory"] as const) {
+		const request = quantityRatio(policy.resources?.requests?.[resource] ?? "");
+		const limit = quantityRatio(policy.resources?.limits?.[resource] ?? "");
+		if (
+			!request ||
+			!limit ||
+			request[0] <= 0n ||
+			limit[0] <= 0n ||
+			request[0] * limit[1] > limit[0] * request[1]
+		)
+			throw new Error(
+				"workspace snapshot materializer resource policy is invalid",
+			);
+	}
 	const names = new Set<string>();
 	const mounts = new Map<string, readonly V1VolumeMount[]>();
 	for (const snapshot of snapshots) {
-		if (!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(snapshot.name))
+		if (
+			snapshot.name.length > 63 ||
+			!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(snapshot.name)
+		)
 			throw new Error("workspace snapshot name is invalid");
 		if (names.has(snapshot.name))
 			throw new Error("workspace snapshot names must be unique");
@@ -117,6 +189,7 @@ export function projectWorkspaceSnapshotPodShapeV1(
 				image: policy.imageDigest,
 				imagePullPolicy: "IfNotPresent",
 				command: ["node", "/app/dist/workspaceSnapshotInit.mjs"],
+				resources: structuredClone(policy.resources),
 				securityContext: {
 					runAsNonRoot: true,
 					runAsUser: 1000,
@@ -204,7 +277,7 @@ export function applyWorkspaceSnapshotProjectionV1(
 				mounts.some((mount) =>
 					(container.volumeMounts ?? []).some(
 						(existing) =>
-							existing.mountPath === mount.mountPath ||
+							overlapsSnapshotRoot(existing.mountPath) ||
 							existing.name === mount.name,
 					),
 				)
@@ -270,6 +343,14 @@ function normalizedVolume(volume: V1Volume) {
 					},
 				}
 			: {}),
+		...(volume.persistentVolumeClaim
+			? {
+					persistentVolumeClaim: {
+						...volume.persistentVolumeClaim,
+						readOnly: volume.persistentVolumeClaim.readOnly ?? false,
+					},
+				}
+			: {}),
 	};
 }
 /** Compare the complete trusted projection, including Kubernetes API defaults. */
@@ -286,10 +367,24 @@ export function workspaceSnapshotPodSpecMatchesV1(
 			actual.length !== 1 ||
 			!actual[0] ||
 			!immutableImagePullPolicyMatches(actual[0], expected) ||
+			(expected.name === "workspace-snapshot-materializer" &&
+				!matchesResources(actual[0].resources, {
+					requests: {
+						cpu: expected.resources?.requests?.cpu ?? "",
+						memory: expected.resources?.requests?.memory ?? "",
+					},
+					limits: {
+						cpu: expected.resources?.limits?.cpu ?? "",
+						memory: expected.resources?.limits?.memory ?? "",
+					},
+				})) ||
 			!sameWire(
 				normalizedContainer({
 					...actual[0],
 					imagePullPolicy: expected.imagePullPolicy,
+					...(expected.name === "workspace-snapshot-materializer"
+						? { resources: expected.resources }
+						: {}),
 				}),
 				normalizedContainer(expected),
 			)
@@ -304,7 +399,22 @@ export function workspaceSnapshotPodSpecMatchesV1(
 		)
 			return false;
 	}
-	for (const container of spec.containers)
+	for (const container of spec.containers) {
+		for (const actual of container.volumeMounts ?? []) {
+			const expected = [...projection.containerMounts.values()]
+				.flat()
+				.find(
+					(mount) =>
+						mount.name === actual.name && mount.mountPath === actual.mountPath,
+				);
+			if (
+				projection.containerMounts.size > 0 &&
+				!expected &&
+				(overlapsSnapshotRoot(actual.mountPath) ||
+					projection.volumes.some((volume) => volume.name === actual.name))
+			)
+				return false;
+		}
 		for (const mount of [...projection.containerMounts.values()].flat()) {
 			const actual = (container.volumeMounts ?? []).filter(
 				(x) => x.name === mount.name && x.mountPath === mount.mountPath,
@@ -315,6 +425,7 @@ export function workspaceSnapshotPodSpecMatchesV1(
 			)
 				return false;
 		}
+	}
 	return true;
 }
 /** Validate platform additions before checking the remaining Pod with the existing policy. */

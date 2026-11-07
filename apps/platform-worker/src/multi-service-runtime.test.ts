@@ -13,6 +13,8 @@ import type {
 	V1Job,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
+	V1Pod,
+	V1ReplicaSet,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
@@ -350,6 +352,76 @@ const basePolicy = {
 	routeSelector: { "app.kubernetes.io/name": "ingress" },
 } satisfies MultiServiceRuntimePolicyV1;
 
+function snapshotProjection() {
+	return projectWorkspaceSnapshotMaterializerV1(
+		[
+			{
+				snapshotId: "snapshot-a",
+				name: "repo",
+				digest: `sha256:${"a".repeat(64)}`,
+				sizeBytes: 128,
+				objectRef: "object-a",
+				signedUrl: "https://objects.example.test/snapshot-a",
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			},
+		],
+		{
+			imageDigest: `registry.example.test/platform-worker@sha256:${"b".repeat(64)}`,
+			allowedOrigins: ["https://objects.example.test"],
+			cacheSizeLimit: "2Gi",
+			credentialSecretName: "snapshot-credentials",
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: { cpu: "1", memory: "512Mi" },
+			},
+		},
+	);
+}
+
+function snapshotPod(
+	controller: V1Deployment | V1Job,
+	projection: ReturnType<typeof snapshotProjection>,
+): V1Pod {
+	return {
+		apiVersion: "v1",
+		kind: "Pod",
+		metadata: {
+			name: `${controller.metadata?.name}-pod`,
+			namespace: "agents",
+			uid: `pod-${controller.metadata?.uid}`,
+			labels: controller.spec?.template.metadata?.labels,
+			ownerReferences: [
+				{
+					apiVersion: controller.apiVersion ?? "",
+					kind: controller.kind ?? "",
+					name: controller.metadata?.name ?? "",
+					uid: controller.metadata?.uid ?? "",
+					controller: true,
+				},
+			],
+		},
+		spec: structuredClone(controller.spec?.template.spec),
+		status: {
+			initContainerStatuses: [
+				{
+					name: "workspace-snapshot-materializer",
+					image: projection.initContainers[0]?.image ?? "",
+					imageID: "",
+					restartCount: 0,
+					ready: true,
+					state: {
+						terminated: {
+							exitCode: 0,
+							startedAt: new Date("2026-11-07T00:00:00Z"),
+							finishedAt: new Date("2026-11-07T00:00:02Z"),
+						},
+					},
+				},
+			],
+		},
+	};
+}
+
 /** 记录每一次 Kubernetes 调用（含读取与列举），用于证明拒绝发生在任何调用之前。 */
 function recordingClient(client: WorkerKubernetesClientV1) {
 	const calls: string[] = [];
@@ -427,6 +499,127 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
+	it("observes live snapshot Pods through ReplicaSet ownership while old Pods terminate", async () => {
+		const fake = fakeClient();
+		const projection = snapshotProjection();
+		const observations: unknown[] = [];
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, workspaceSnapshotProjection: projection },
+			onWorkspaceSnapshot: (observation) => observations.push(observation),
+		});
+		const value = desired(manifest);
+		if (!isMultiService(value)) throw new Error();
+		const identity = await operations.apply(value);
+		if (!identity || identity === "pending") throw new Error();
+		markWorkloadsReady(fake);
+		expect(await operations.observe(value, identity)).toBe("pending");
+		for (const resource of [...fake.resources.values()]) {
+			if (resource.kind !== "Deployment") continue;
+			const controller = resource as V1Deployment;
+			const replicaSet: V1ReplicaSet = {
+				apiVersion: "apps/v1",
+				kind: "ReplicaSet",
+				metadata: {
+					name: `${controller.metadata?.name}-rs`,
+					namespace: "agents",
+					uid: `rs-${controller.metadata?.uid}`,
+					ownerReferences: [
+						{
+							apiVersion: "apps/v1",
+							kind: "Deployment",
+							name: controller.metadata?.name ?? "",
+							uid: controller.metadata?.uid ?? "",
+							controller: true,
+						},
+					],
+				},
+			};
+			const pod = snapshotPod(controller, projection);
+			pod.metadata!.ownerReferences = [
+				{
+					apiVersion: "apps/v1",
+					kind: "ReplicaSet",
+					name: replicaSet.metadata?.name ?? "",
+					uid: replicaSet.metadata?.uid ?? "",
+					controller: true,
+				},
+			];
+			fake.resources.set(`ReplicaSet/${replicaSet.metadata?.name}`, replicaSet);
+			fake.resources.set(`Pod/${pod.metadata?.name}`, pod);
+		}
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		expect(observations.length).toBeGreaterThan(0);
+		expect(observations[0]).toMatchObject({
+			outcome: "completed",
+			durationMs: 2000,
+			attempt: 1,
+		});
+		const pod = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Pod",
+		) as V1Pod;
+		if (!pod.metadata?.name) throw new Error();
+		const terminating = structuredClone(pod);
+		terminating.metadata = {
+			...terminating.metadata,
+			name: `${pod.metadata.name}-old`,
+			uid: "terminating-old-pod",
+			deletionTimestamp: new Date(),
+		};
+		const oldInit = terminating.status?.initContainerStatuses?.[0];
+		if (!oldInit) throw new Error();
+		oldInit.state = { terminated: { exitCode: 1 } };
+		fake.resources.set(`Pod/${terminating.metadata.name}`, terminating);
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		fake.resources.delete(`Pod/${pod.metadata.name}`);
+		expect(await operations.observe(value, identity)).toBe("pending");
+		fake.resources.set(`Pod/${pod.metadata.name}`, pod);
+		fake.resources.delete(`Pod/${terminating.metadata.name}`);
+		const init = pod.status?.initContainerStatuses?.[0];
+		if (!init) throw new Error();
+		init.state = {
+			terminated: { exitCode: 1, message: "private snapshot content" },
+		};
+		expect(await operations.observe(value, identity)).toBe("unhealthy");
+		expect(JSON.stringify(observations)).not.toContain(
+			"private snapshot content",
+		);
+		const replicaSet = [...fake.resources.values()].find(
+			(resource) => resource.kind === "ReplicaSet",
+		) as V1ReplicaSet;
+		if (!replicaSet.metadata?.ownerReferences?.[0]) throw new Error();
+		replicaSet.metadata.ownerReferences[0].uid = "foreign-deployment";
+		expect(await operations.observe(value, identity)).toBe("drifted");
+	});
+
+	it("rejects a migration whose snapshot init failed before launching application workloads", async () => {
+		const fake = fakeClient();
+		const projection = snapshotProjection();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, workspaceSnapshotProjection: projection },
+		});
+		const value = desired(migrationManifest);
+		if (!isMultiService(value)) throw new Error();
+		expect(await operations.apply(value)).toBe("pending");
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job;
+		const pod = snapshotPod(job, projection);
+		const init = pod.status?.initContainerStatuses?.[0];
+		if (!init) throw new Error();
+		init.state = { terminated: { exitCode: 1 } };
+		fake.resources.set(`Pod/${pod.metadata?.name}`, pod);
+		await expect(operations.apply(value)).rejects.toThrow(
+			WorkloadPreflightRejectedErrorV1,
+		);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
+	});
+
 	it("injects the platform snapshot projection into every workload and migration Pod", async () => {
 		const fake = fakeClient();
 		const projection = projectWorkspaceSnapshotMaterializerV1(
@@ -445,6 +638,10 @@ describe("multi-service resource policy", () => {
 				imageDigest: `registry.example.test/platform-worker@sha256:${"b".repeat(64)}`,
 				allowedOrigins: ["https://objects.example.test"],
 				cacheSizeLimit: "2Gi",
+				resources: {
+					requests: { cpu: "100m", memory: "128Mi" },
+					limits: { cpu: "1", memory: "512Mi" },
+				},
 				credentialSecretName: "snapshot-credentials",
 			},
 		);

@@ -141,6 +141,40 @@ describe("Session Sandbox actual resource receipt", () => {
 	it("accepts the six actual direct-Pod resources without a fabricated controller", () => {
 		expect(isSessionSandboxObservationValidV1(claim, ready)).toBe(true);
 	});
+	it("binds snapshot init observations to the actual Pod and rejects failure disguised as ready", () => {
+		const pod = ready.resources.find((resource) => resource.kind === "Pod");
+		if (!pod) throw new Error();
+		const workspaceSnapshot = {
+			podUid: pod.uid,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			outcome: "failed" as const,
+			attempt: 2,
+			durationMs: 2000,
+		};
+		expect(
+			isSessionSandboxObservationValidV1(claim, {
+				...ready,
+				status: "observed",
+				failureCode: "workspace.materialization",
+				workspaceSnapshot,
+			}),
+		).toBe(true);
+		expect(
+			isSessionSandboxObservationValidV1(claim, {
+				...ready,
+				failureCode: "workspace.materialization",
+				workspaceSnapshot,
+			}),
+		).toBe(false);
+		expect(
+			isSessionSandboxObservationValidV1(claim, {
+				...ready,
+				status: "observed",
+				failureCode: "workspace.materialization",
+				workspaceSnapshot: { ...workspaceSnapshot, podUid: "foreign-pod" },
+			}),
+		).toBe(false);
+	});
 	it("accepts delete progress for the per-Sandbox Secret (#1466)", () => {
 		const secret = ready.resources.find(
 			(resource) => resource.kind === "Secret",

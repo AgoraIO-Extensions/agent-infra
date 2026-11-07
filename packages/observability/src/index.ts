@@ -102,6 +102,7 @@ export const operationalMetricOperations = [
 	"drain.persist_batch",
 	"sandbox.reconcile.prepare",
 	"sandbox.reconcile.drain",
+	"workspace.snapshot.materialize",
 	"sse.open",
 	"sse.ended",
 ] as const;
@@ -183,6 +184,7 @@ const operationalFailureSteps = new Set([
 	"eci.image_pull",
 	"runtime.startup",
 	"runtime.configuration",
+	"workspace.materialization",
 	// Session Sandbox 准备认领读回记录的 Pod 已不存在（#3985）。
 	"sandbox.pod_lost",
 	"runtime.execution",

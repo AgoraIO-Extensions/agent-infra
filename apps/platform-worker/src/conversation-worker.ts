@@ -44,6 +44,7 @@ import {
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observation.js";
 
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
@@ -306,6 +307,9 @@ export function createPlatformConversationWorkerV2(
 	});
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
+	});
+	const observeSnapshot = createWorkspaceSnapshotObserverV1((event) => {
+		if (options.observability) record(options.observability, event);
 	});
 	const conversationEvents = options.observability
 		? createObservedConversationEvents({
@@ -957,6 +961,11 @@ export function createPlatformConversationWorkerV2(
 		)
 			return;
 		await store.recordSandboxObservation({ claim, observation });
+		if (!reconciliationFailed && observation.workspaceSnapshot)
+			observeSnapshot({
+				...observation.workspaceSnapshot,
+				agentId: claim.sandbox.agentId,
+			});
 		if (options.observability && !reconciliationFailed)
 			record(options.observability, {
 				stage: "workload",

@@ -3158,6 +3158,10 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 			imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
 			allowedOrigins: ["https://objects.example.test"],
 			cacheSizeLimit: "2Gi",
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: { cpu: "1", memory: "512Mi" },
+			},
 			credentialSecretName: sessionSnapshotSecretNameV1(allocation),
 		},
 	);
@@ -3177,9 +3181,55 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 	expect(
 		sessionSnapshotSecretNameV1({ ...allocation, resourceFence: 10 }),
 	).not.toBe(sessionSnapshotSecretNameV1(allocation));
+	if (!pod?.spec?.initContainers?.[0]?.image) throw Error("no init");
+	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	const missing = await adapter.observe(selected);
+	expect(missing.status).toBe("observed");
+	expect(missing.workspaceSnapshot).toBeUndefined();
+	pod.status = {
+		phase: "Pending",
+		conditions: [{ type: "Ready", status: "False" }],
+		initContainerStatuses: [
+			{
+				name: "workspace-snapshot-materializer",
+				image: pod.spec.initContainers[0].image,
+				imageID: pod.spec.initContainers[0].image,
+				ready: false,
+				restartCount: 1,
+				state: {
+					waiting: { reason: "CrashLoopBackOff", message: "signature=private" },
+				},
+				lastState: {
+					terminated: {
+						exitCode: 1,
+						startedAt: new Date("2026-11-07T00:00:00Z"),
+						finishedAt: new Date("2026-11-07T00:00:03Z"),
+						message: "secret source",
+					},
+				},
+			},
+		],
+	};
+	const failed = await adapter.observe(selected);
+	expect(failed).toMatchObject({
+		status: "observed",
+		failureCode: "workspace.materialization",
+		workspaceSnapshot: {
+			podUid: pod.metadata?.uid,
+			outcome: "failed",
+			attempt: 1,
+			durationMs: 3000,
+		},
+	});
+	expect(JSON.stringify(failed)).not.toMatch(/signature|private|secret source/);
 	const drift = structuredClone(pod);
 	if (!drift?.spec?.initContainers?.[0]) throw Error("no init");
 	drift.spec.initContainers[0].command = ["sh", "-c", "untrusted"];
 	client.resources.set(`Pod/${allocation.podName}`, drift);
-	expect((await adapter.observe(selected)).status).toBe("unknown");
+	const drifted = await adapter.observe(selected);
+	expect(drifted.status).toBe("unknown");
+	expect(drifted.workspaceSnapshot).toBeUndefined();
 });

@@ -56,6 +56,20 @@ M1.1 的只读工作区快照范围见 [PRD 5.8](../prd/PRD-agent-platform-M1.md
 它实际调用模型并持久化业务结果，使用应用自身的身份；受控测试、本地真实模型和平台部署
 必须分别验收，不能把参考应用迁入成功推导为用户现有工程已迁入。
 
+## 快照物化部署与回读
+
+部署方按[工程 Spec 10.15.4](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#10154-worker-物化与网络)
+配置固定 materializer 镜像、存储目标、短期授权和缓存额度。materializer policy 必须显式提供
+`resources.requests` 与 `resources.limits` 的 `cpu`、`memory`；缺失、非正数或 request 超过
+limit 时配置被拒绝。单镜像自有入口另建 Agent 专属的 `-workspaces` RWO retain 卷，使用相同
+storage profile；namespace 存储预算须同时容纳原数据卷和快照缓存卷。停启后校验 retained
+PVC UID 与完整内容，Session 和多服务各 Pod 继续使用独立 emptyDir。
+
+Worker 需要 namespace 内 ReplicaSet 的只读 `get` 权限，以验证多服务 Pod 的控制器 UID 链。
+物化观测使用 `workspace.snapshot.materialize`，记录实际 init 耗时、结果和尝试次数；
+`workspace.materialization` 表示物化失败。业务就绪仍走原有 Runtime 或自有入口验证，
+不能用物化完成代替；日志与指标中不包含文件内容、签名 URL 或原始异常。
+
 ## 快照 GC 部署与回读
 
 快照存储启用后，部署方在私有配置模块的
