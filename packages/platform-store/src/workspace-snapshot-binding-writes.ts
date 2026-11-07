@@ -65,7 +65,7 @@ export async function assertWorkspaceSnapshotTargetOwnerV1(
 	if (!owner) throw new WorkspaceSnapshotBindingErrorV1("forbidden");
 }
 
-/** Snapshot rows are copied with the configuration revision; only new attachments use caller ownership. */
+/** Unchanged references carry forward; changing a reference requires its uploader. */
 export async function insertWorkspaceSnapshotBindingsV1(
 	transaction: Transaction,
 	input: Owner & {
@@ -97,8 +97,35 @@ export async function insertWorkspaceSnapshotBindingsV1(
 						),
 					)
 					.for("share");
+	const removed = previous.filter(
+		(row) =>
+			!bindings.some(
+				(binding) =>
+					binding.snapshotId === row.snapshotId && binding.name === row.name,
+			),
+	);
+	if (removed.length) {
+		await assertWorkspaceSnapshotTargetOwnerV1(transaction, input);
+		const owned = await transaction
+			.select({ id: workspaceSnapshots.id })
+			.from(workspaceSnapshots)
+			.where(
+				and(
+					eq(workspaceSnapshots.ownerType, input.ownerType),
+					eq(workspaceSnapshots.ownerId, input.ownerId),
+					inArray(
+						workspaceSnapshots.id,
+						removed.map((row) => row.snapshotId),
+					),
+				),
+			)
+			.orderBy(asc(workspaceSnapshots.id))
+			.for("share");
+		if (owned.length !== removed.length)
+			throw new WorkspaceSnapshotBindingErrorV1("not_found");
+	}
 	if (bindings.length === 0) {
-		for (const row of previous) {
+		for (const row of removed) {
 			await transaction.insert(auditEvents).values({
 				id: randomUUID(),
 				traceId: randomUUID(),
@@ -132,7 +159,7 @@ export async function insertWorkspaceSnapshotBindingsV1(
 	const added = bindings.filter(
 		({ snapshotId, name }) => retained.get(snapshotId)?.name !== name,
 	);
-	if (added.length)
+	if (added.length && !removed.length)
 		await assertWorkspaceSnapshotTargetOwnerV1(transaction, input);
 	const snapshots = added.length
 		? await transaction
@@ -182,12 +209,7 @@ export async function insertWorkspaceSnapshotBindingsV1(
 		};
 	});
 	await transaction.insert(workspaceSnapshotBindings).values(rows);
-	for (const row of previous) {
-		const next = bindings.find(
-			(binding) =>
-				binding.snapshotId === row.snapshotId && binding.name === row.name,
-		);
-		if (next) continue;
+	for (const row of removed) {
 		await transaction.insert(auditEvents).values({
 			id: randomUUID(),
 			traceId: randomUUID(),
