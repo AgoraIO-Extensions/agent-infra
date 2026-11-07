@@ -145,8 +145,9 @@ function fixture() {
 		},
 		policy: {
 			namespace: workloadTestPolicy.namespace,
-			resourceConfigurationHash:
-				workloadResourceConfigurationHashV1(workloadTestPolicy),
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				options.policy,
+			),
 			configurationRevision: 1,
 			workloadRevision: 1,
 			managementFence: 1,
@@ -1006,9 +1007,27 @@ describe("production SessionSandbox resource receiver", () => {
 			],
 		});
 		const customClaim = o.claim;
+		const snapshotEgress = [
+			{
+				destination: {
+					namespace: "agent-infra-d-ac-1107",
+					podLabels: { app: "d-snapshot-storage" },
+				},
+				port: 9000,
+			},
+		] as const;
+		customClaim.policy.resourceConfigurationHash =
+			workloadResourceConfigurationHashV1({
+				...o.options.policy,
+				workspaceSnapshotEgress: snapshotEgress,
+			});
 		const receive = createProductionSessionSandboxReceiverV1(
 			{
 				...o.options,
+				policy: {
+					...o.options.policy,
+					workspaceSnapshotEgress: snapshotEgress,
+				},
 				workspaceSnapshotResolver: resolver,
 			},
 			{ serviceToken: sessionSandboxDeploymentTokenFixture },
