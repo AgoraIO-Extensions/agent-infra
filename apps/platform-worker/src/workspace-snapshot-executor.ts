@@ -168,36 +168,48 @@ export async function materializeWorkspaceSnapshotV1(input: {
 			`${cacheMetadataPrefix}${s.name}.json`,
 		);
 		const metadata = await exists(metadataPath);
-		if (
-			metadata &&
-			(!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024)
-		)
+		if (metadata && (!metadata.isFile() || metadata.isSymbolicLink()))
 			throw new Error();
-		const old = await exists(destination);
+		let old = await exists(destination);
 		if (old && (!old.isDirectory() || old.isSymbolicLink())) throw new Error();
 		const stamp = await exists(join(destination, marker));
-		if (stamp && (!stamp.isFile() || stamp.isSymbolicLink() || stamp.size > 80))
-			throw new Error();
-		if (
-			stamp &&
-			metadata &&
-			(await readFile(join(destination, marker), "utf8")).trim() === s.digest
-		) {
-			const verified = JSON.parse(await readFile(metadataPath, "utf8"));
-			if (
-				verified.digest === s.digest &&
-				verified.objectRef === s.objectRef &&
-				verified.sizeBytes === s.sizeBytes &&
-				verified.contentDigest ===
-					(await contentDigest(
-						destination,
-						input.maxUnpackedBytes,
-						input.signal,
-					))
-			)
-				return { status: "reused" as const, digest: s.digest };
+		if (stamp && (!stamp.isFile() || stamp.isSymbolicLink())) throw new Error();
+		const cachedDigest =
+			stamp && stamp.size <= 80
+				? (await readFile(join(destination, marker), "utf8")).trim()
+				: undefined;
+		let invalidCache = Boolean(
+			old && (!cachedDigest || !/^sha256:[a-f0-9]{64}$/.test(cachedDigest)),
+		);
+		if (cachedDigest === s.digest) {
+			try {
+				if (metadata && metadata.size <= 1024) {
+					const verified = JSON.parse(await readFile(metadataPath, "utf8"));
+					if (
+						verified?.digest === s.digest &&
+						verified.objectRef === s.objectRef &&
+						verified.sizeBytes === s.sizeBytes &&
+						verified.contentDigest ===
+							(await contentDigest(
+								destination,
+								input.maxUnpackedBytes,
+								input.signal,
+							))
+					)
+						return { status: "reused" as const, digest: s.digest };
+				}
+			} catch {
+				input.signal.throwIfAborted();
+				// Invalid cache bytes are not authority; retry from the signed object.
+			}
+			invalidCache = true;
 		}
 		input.signal.throwIfAborted();
+		if (invalidCache) {
+			await removeTemporary(destination);
+			await removeTemporary(metadataPath);
+			old = undefined;
+		}
 		temporary = await mkdtemp(join(input.outputDirectory, ".snapshot-stage-"));
 		const response = await (input.fetch ?? fetch)(url, {
 			redirect: "error",

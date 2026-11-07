@@ -103,6 +103,42 @@ it("reuses unchanged content after kubelet adjusts fsGroup permissions on remoun
 	expect((await materializeWorkspaceSnapshotV1(f.input)).status).toBe("reused");
 	expect(f.fetch).toHaveBeenCalledTimes(1);
 });
+it.each(["metadata-json", "metadata-size", "content-size", "marker-size"])(
+	"repairs corrupt %s by downloading the trusted archive again",
+	async (kind) => {
+		const f = await fixture();
+		const input = { ...f.input, maxUnpackedBytes: 32 };
+		await materializeWorkspaceSnapshotV1(input);
+		if (kind === "marker-size")
+			await writeFile(
+				join(f.output, "repo", ".snapshot-digest"),
+				"x".repeat(2048),
+			);
+		else if (kind === "content-size")
+			await writeFile(join(f.output, "repo", "value.txt"), Buffer.alloc(1024));
+		else
+			await writeFile(
+				join(f.output, ".snapshot-cache-repo.json"),
+				kind === "metadata-json" ? "{" : "x".repeat(2048),
+			);
+		expect((await materializeWorkspaceSnapshotV1(input)).status).toBe(
+			"materialized",
+		);
+		expect((await materializeWorkspaceSnapshotV1(input)).status).toBe("reused");
+		expect(f.fetch).toHaveBeenCalledTimes(2);
+	},
+);
+
+it("honors cancellation while verifying a retained cache without fetching again", async () => {
+	const f = await fixture();
+	await materializeWorkspaceSnapshotV1(f.input);
+	const controller = new AbortController();
+	controller.abort();
+	await expect(
+		materializeWorkspaceSnapshotV1({ ...f.input, signal: controller.signal }),
+	).rejects.toThrow("WORKSPACE_SNAPSHOT_MATERIALIZATION_FAILED");
+	expect(f.fetch).toHaveBeenCalledTimes(1);
+});
 it("counts a hardlinked file once against the unpacked byte budget", async () => {
 	const f = await fixture("abcdefghijklmnop");
 	await link(
