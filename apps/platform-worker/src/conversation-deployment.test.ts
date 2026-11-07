@@ -1771,7 +1771,10 @@ describe("production SessionSandbox resource receiver", () => {
 					...(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>),
 					workloadRevision: 2,
 				},
-				previousObservation: stopped,
+				// A live route-loss retry can still carry the allocation's stale
+				// pre-drain observation even though the stop receipt proves those
+				// resources were removed.
+				previousObservation: { ...stopped, resources: observation.resources },
 				lifecycle: {
 					...claim.lifecycle,
 					stopReceipt: stopped.sourceStop,
