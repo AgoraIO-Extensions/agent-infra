@@ -224,7 +224,10 @@ export function skillHubDeliveryProjectionV1(
 	return {
 		manifest: "",
 		volumes: [
-			{ name: "skill-files", emptyDir: { medium: "Memory", sizeLimit: "2Mi" } },
+			{
+				name: "skill-files",
+				emptyDir: { medium: "Memory", sizeLimit: "16Mi" },
+			},
 			{
 				name: "skill-package",
 				secret: { secretName: name, defaultMode: 0o444, optional: false },

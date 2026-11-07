@@ -256,6 +256,35 @@ it("init rejects a traversal manifest before creating any destination file", asy
 	expect(await readdir(target)).toEqual([]);
 });
 
+it("materializes a large small-file set within the tmpfs budget", async () => {
+	const source = await directory();
+	const target = await directory();
+	const files = Array.from({ length: 1000 }, (_, index) => ({
+		key: `file-${index}`,
+		path: `skills/fixture/references/f-${index}.txt`,
+		sizeBytes: 1,
+		sha256: createHash("sha256").update("x").digest("hex"),
+	}));
+	const manifest = {
+		schemaVersion: 1,
+		agentId: "agent-a",
+		agentVersion: "v1",
+		configurationRevision: 1,
+		generationId: "a".repeat(64),
+		files,
+	};
+	await writeFile(join(source, "manifest.json"), JSON.stringify(manifest));
+	for (const file of files) await writeFile(join(source, file.key), "x");
+	const digest = createHash("sha256")
+		.update(JSON.stringify(manifest))
+		.digest("hex");
+	await materializeSkillHubDeliveryV1(source, target, digest);
+	expect(
+		(await lstat(join(target, ".agents/skills/fixture/references/f-999.txt")))
+			.mode & 0o222,
+	).toBe(0);
+}, 20_000);
+
 it("renders stable Workload init mounts without changing its writable PVC subpath", async () => {
 	const { f, materialize } = await setup();
 	const desired = { ...(await materialize()), skillDeliveryImage: initImage };
