@@ -289,6 +289,22 @@ function desired(multiService = manifest) {
 	});
 }
 
+function snapshotDesired(multiService = manifest) {
+	return validateAgentWorkloadDesiredV1({
+		...desired(multiService),
+		workspaceSnapshots: [
+			{
+				snapshotId: "snapshot-a",
+				name: "repo",
+				digest: `sha256:${"b".repeat(64)}`,
+				sizeBytes: 128,
+				mountPath: "/opt/agent/workspaces/repo",
+				objectRef: "object-a",
+			},
+		],
+	});
+}
+
 function fakeClient(options: { bumpGeneration?: boolean } = {}) {
 	const resources = new Map<string, KubernetesObject>();
 	const client: WorkerKubernetesClientV1 = {
@@ -518,8 +534,38 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
+	it.each([manifest, migrationManifest])(
+		"rejects additive snapshot egress policies before workload writes and during observation %#",
+		async (source) => {
+			const value = snapshotDesired(source);
+			if (!isMultiService(value)) throw new Error();
+			const fake = fakeClient();
+			const foreign = {
+				kind: "NetworkPolicy",
+				metadata: { name: "foreign" },
+				spec: { podSelector: {}, policyTypes: ["Egress"], egress: [{}] },
+			};
+			fake.resources.set("NetworkPolicy/foreign", foreign);
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: {
+					...basePolicy,
+					workspaceSnapshotProjection: snapshotProjection(),
+				},
+			});
+			await expect(operations.apply(value)).rejects.toMatchObject({
+				code: "policy",
+			});
+			expect(fake.resources.size).toBe(1);
+			fake.resources.delete("NetworkPolicy/foreign");
+			const identity = await operations.apply(value);
+			fake.resources.set("NetworkPolicy/foreign", foreign);
+			expect(await operations.observe(value, identity)).toBe("drifted");
+		},
+	);
+
 	it("preserves same-Agent migration dependencies when snapshot egress isolates the Job", async () => {
-		const value = desired(migrationManifest);
+		const value = snapshotDesired(migrationManifest);
 		if (!isMultiService(value)) throw new Error();
 		const without = fakeClient();
 		await createMultiServiceRuntimeOperations({
@@ -531,7 +577,6 @@ describe("multi-service resource policy", () => {
 		) as V1NetworkPolicy | undefined;
 		expect(withoutNetwork?.spec?.policyTypes).toEqual(["Ingress"]);
 		expect(withoutNetwork?.spec?.egress).toBeUndefined();
-
 		const withSnapshot = fakeClient();
 		await createMultiServiceRuntimeOperations({
 			client: withSnapshot.client,
@@ -579,7 +624,7 @@ describe("multi-service resource policy", () => {
 				port: 9000,
 			},
 		] as const;
-		const value = desired(manifest);
+		const value = snapshotDesired(manifest);
 		if (!isMultiService(value)) throw new Error();
 		const without = fakeClient();
 		const withoutOperations = createMultiServiceRuntimeOperations({
@@ -593,6 +638,22 @@ describe("multi-service resource policy", () => {
 		) as V1NetworkPolicy | undefined;
 		expect(withoutNetwork?.spec?.policyTypes).toEqual(["Ingress"]);
 		expect(withoutNetwork?.spec?.egress).toBeUndefined();
+		const noBinding = fakeClient();
+		const noBindingValue = desired();
+		if (!isMultiService(noBindingValue)) throw new Error();
+		await createMultiServiceRuntimeOperations({
+			client: noBinding.client,
+			policy: {
+				...basePolicy,
+				workspaceSnapshotProjection: snapshotProjection(),
+				workspaceSnapshotEgress,
+			},
+		}).apply(noBindingValue);
+		const noBindingNetwork = noBinding.resources.get(
+			`NetworkPolicy/${workloadName}-web-network`,
+		) as V1NetworkPolicy | undefined;
+		expect(noBindingNetwork?.spec?.policyTypes).toEqual(["Ingress"]);
+		expect(noBindingNetwork?.spec?.egress).toBeUndefined();
 
 		const withSnapshot = fakeClient();
 		const withOperations = createMultiServiceRuntimeOperations({
@@ -659,10 +720,23 @@ describe("multi-service resource policy", () => {
 			},
 			onWorkspaceSnapshot: (observation) => observations.push(observation),
 		});
-		const value = desired(manifest);
+		const value = snapshotDesired(manifest);
 		if (!isMultiService(value)) throw new Error();
 		const identity = await operations.apply(value);
 		if (!identity || identity === "pending") throw new Error();
+		const expectedNetwork = [...fake.resources.values()].find(
+			(resource) =>
+				resource.kind === "NetworkPolicy" &&
+				resource.metadata?.name?.endsWith("-web-network"),
+		) as V1NetworkPolicy | undefined;
+		if (!expectedNetwork?.spec)
+			throw new Error("network policy fixture missing");
+		expectedNetwork.spec = {
+			...expectedNetwork.spec,
+			egress: [{}],
+		};
+		expect(await operations.observe(value, identity)).toBe("drifted");
+		await operations.apply(value);
 		markWorkloadsReady(fake);
 		expect(await operations.observe(value, identity)).toBe("pending");
 		for (const resource of [...fake.resources.values()]) {
@@ -755,7 +829,7 @@ describe("multi-service resource policy", () => {
 				workspaceSnapshotEgress: snapshotStorageEgress,
 			},
 		});
-		const value = desired(migrationManifest);
+		const value = snapshotDesired(migrationManifest);
 		if (!isMultiService(value)) throw new Error();
 		expect(await operations.apply(value)).toBe("pending");
 		const job = [...fake.resources.values()].find(
@@ -809,7 +883,7 @@ describe("multi-service resource policy", () => {
 				workspaceSnapshotEgress: snapshotStorageEgress,
 			},
 		});
-		const value = desired(migrationManifest);
+		const value = snapshotDesired(migrationManifest);
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
 		await operations.apply(value);

@@ -1368,6 +1368,35 @@ async function snapshotFixture() {
 	return { ...f, adapter, desired, projection };
 }
 
+it("rejects additive egress policies before snapshot writes and during observation", async () => {
+	const f = await snapshotFixture();
+	const foreign = {
+		kind: "NetworkPolicy",
+		metadata: { name: "foreign" },
+		spec: { podSelector: {}, policyTypes: ["Egress"], egress: [{}] },
+	};
+	const list = f.client.list.bind(f.client);
+	vi.spyOn(f.client, "list").mockImplementation(async (kind, selector) =>
+		kind === "NetworkPolicy" && selector === ""
+			? ([foreign] as never)
+			: list(kind, selector),
+	);
+	await expect(f.adapter.apply(f.desired)).rejects.toMatchObject({
+		code: "policy",
+	});
+	expect(f.writes).toHaveLength(0);
+	vi.mocked(f.client.list).mockImplementation(list);
+	const identity = await f.adapter.apply(f.desired);
+	if (!identity || identity === "pending") throw Error("not applied");
+	expect(await f.adapter.observe(f.desired, identity)).toBe("healthy");
+	vi.mocked(f.client.list).mockImplementation(async (kind, selector) =>
+		kind === "NetworkPolicy" && selector === ""
+			? ([foreign] as never)
+			: list(kind, selector),
+	);
+	expect(await f.adapter.observe(f.desired, identity)).toBe("drifted");
+});
+
 it("accepts only the trusted snapshot projection across apply and observe", async () => {
 	const f = await snapshotFixture();
 	const { adapter, desired } = f;

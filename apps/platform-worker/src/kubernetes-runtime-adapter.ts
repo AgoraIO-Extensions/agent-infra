@@ -597,7 +597,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		);
 		const network = await client.read<V1NetworkPolicy>("NetworkPolicy", name);
 		if (
-			policy.nativeEgress &&
+			(policy.nativeEgress || options.workspaceSnapshotProjection) &&
 			hasAdditionalEgressPolicyV1(
 				await client.list<V1NetworkPolicy>("NetworkPolicy", ""),
 				networkPolicy(value),
@@ -1409,7 +1409,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			if (
-				policy.nativeEgress &&
+				(policy.nativeEgress || options.workspaceSnapshotProjection) &&
 				value.replicas !== 0 &&
 				hasAdditionalEgressPolicyV1(
 					await client.list<V1NetworkPolicy>("NetworkPolicy", ""),

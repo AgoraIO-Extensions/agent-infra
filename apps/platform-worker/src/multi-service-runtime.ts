@@ -40,6 +40,7 @@ import {
 	desiredAnnotation,
 	fingerprintAnnotation,
 	hasSameStructure,
+	matchesNetworkPolicySpec,
 	ownerLabel,
 	revisionLabel,
 	secretConfigRevisionAnnotation,
@@ -51,6 +52,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import {
+	hasAdditionalEgressPolicyV1,
 	requireWorkspaceSnapshotEgressV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
@@ -99,8 +101,9 @@ export interface MultiServiceRuntimePolicyV1 {
 function applyWorkspaceSnapshotToPodSpecV1(
 	spec: V1PodSpec,
 	policy: MultiServiceRuntimePolicyV1,
+	enabled: boolean,
 ): V1PodSpec {
-	return policy.workspaceSnapshotProjection
+	return enabled && policy.workspaceSnapshotProjection
 		? applyWorkspaceSnapshotProjectionV1(
 				spec,
 				policy.workspaceSnapshotProjection,
@@ -672,7 +675,11 @@ function deployment(
 	const podSpec = resultSpec?.template?.spec;
 	if (!resultSpec || !podSpec)
 		throw new Error("multi-service pod spec missing");
-	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(podSpec, policy);
+	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(
+		podSpec,
+		policy,
+		Boolean(value.workspaceSnapshots?.length),
+	);
 	return result;
 }
 
@@ -796,7 +803,11 @@ function statefulSet(
 	const podSpec = resultSpec?.template?.spec;
 	if (!resultSpec || !podSpec)
 		throw new Error("multi-service pod spec missing");
-	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(podSpec, policy);
+	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(
+		podSpec,
+		policy,
+		Boolean(value.workspaceSnapshots?.length),
+	);
 	return result;
 }
 
@@ -894,7 +905,11 @@ function migrationJob(
 	const podSpec = resultSpec?.template?.spec;
 	if (!resultSpec || !podSpec)
 		throw new Error("multi-service pod spec missing");
-	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(podSpec, policy);
+	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(
+		podSpec,
+		policy,
+		Boolean(value.workspaceSnapshots?.length),
+	);
 	return result;
 }
 
@@ -914,11 +929,15 @@ function migrationNetworkPolicy(
 					"agent-infra.agora.io/service": "migration",
 				},
 			},
-			...(policy?.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+			...(value.workspaceSnapshots?.length &&
+			policy?.workspaceSnapshotProjection &&
+			policy.workspaceSnapshotEgress
 				? { policyTypes: ["Ingress", "Egress"] as const }
 				: { policyTypes: ["Ingress"] as const }),
 			ingress: [],
-			...(policy?.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+			...(value.workspaceSnapshots?.length &&
+			policy?.workspaceSnapshotProjection &&
+			policy.workspaceSnapshotEgress
 				? {
 						egress: [
 							...workloadEgressRulesV1({
@@ -998,7 +1017,9 @@ function networkPolicy(
 					"agent-infra.agora.io/service": serviceLabel(resource.metadata.name),
 				},
 			},
-			...(policy.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+			...(value.workspaceSnapshots?.length &&
+			policy.workspaceSnapshotProjection &&
+			policy.workspaceSnapshotEgress
 				? { policyTypes: ["Ingress", "Egress"] as const }
 				: { policyTypes: ["Ingress"] as const }),
 			ingress: [
@@ -1015,7 +1036,9 @@ function networkPolicy(
 					],
 				},
 			],
-			...(policy.workspaceSnapshotProjection && policy.workspaceSnapshotEgress
+			...(value.workspaceSnapshots?.length &&
+			policy.workspaceSnapshotProjection &&
+			policy.workspaceSnapshotEgress
 				? {
 						egress: [
 							...workloadEgressRulesV1({
@@ -1520,6 +1543,66 @@ export function createMultiServiceRuntimeOperations(options: {
 			}
 		}
 	}
+	async function hasAdditionalSnapshotEgress(
+		value: MultiServiceDesired,
+		validateExpectedPolicies = true,
+	) {
+		if (
+			!options.policy.workspaceSnapshotProjection ||
+			!value.workspaceSnapshots?.length ||
+			value.replicas === 0
+		)
+			return false;
+		const policies = await client.list<V1NetworkPolicy>("NetworkPolicy", "");
+		const expectedPolicies = value.multiService.resources
+			.filter(
+				(resource) =>
+					resource.kind === "Deployment" ||
+					resource.kind === "StatefulSet" ||
+					resource.kind === "Job",
+			)
+			.map((resource) =>
+				resource.kind === "Job"
+					? migrationNetworkPolicy(value, options.policy)
+					: networkPolicy(value, resource, options.policy),
+			);
+		if (validateExpectedPolicies)
+			for (const expected of expectedPolicies) {
+				const current = await client.read<V1NetworkPolicy>(
+					"NetworkPolicy",
+					expected.metadata?.name ?? "",
+				);
+				if (
+					!current ||
+					!owned(current, value) ||
+					!matchesNetworkPolicySpec(current.spec, expected.spec)
+				)
+					return true;
+			}
+		for (const resource of value.multiService.resources) {
+			const expected =
+				resource.kind === "Deployment" || resource.kind === "StatefulSet"
+					? networkPolicy(value, resource, options.policy)
+					: resource.kind === "Job"
+						? migrationNetworkPolicy(value, options.policy)
+						: undefined;
+			if (
+				expected &&
+				hasAdditionalEgressPolicyV1(
+					policies.filter((policy) => !ownedByAgent(policy, value)),
+					{
+						...expected,
+						metadata: {
+							...expected.metadata,
+							name: `${expected.metadata?.name}-expected`,
+						},
+					},
+				)
+			)
+				return true;
+		}
+		return false;
+	}
 	async function scaleDown(value: MultiServiceDesired) {
 		let pending = false;
 		for (const resource of value.multiService.resources) {
@@ -1570,6 +1653,8 @@ export function createMultiServiceRuntimeOperations(options: {
 			// 总量上限必须在任何 Kubernetes 写入（含清理旧版本资源）之前校验，
 			// 被拒绝的 Agent 不能留下半安装或被部分清理的多服务资源。
 			validateMultiServiceResourceCapacityV1(value, resources);
+			if (await hasAdditionalSnapshotEgress(value, false))
+				throw new WorkloadKubernetesError("policy");
 			await pruneStaleResources(value, ownership);
 			const snapshotOwner = await put(serviceAccount(value), value, ownership);
 			if (options.policy.workspaceSnapshotProjection)
@@ -1750,6 +1835,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			identity: { uid: string; generation: number } | "pending",
 		) {
+			if (await hasAdditionalSnapshotEgress(value)) return "drifted" as const;
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
 				const job = await client.read<V1Job>("Job", migrationJobName(value));

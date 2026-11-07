@@ -3228,6 +3228,22 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 		},
 	};
 	await adapter.apply(selected);
+	const foreign: V1NetworkPolicy = {
+		kind: "NetworkPolicy",
+		metadata: { name: "foreign" },
+		spec: { podSelector: {}, policyTypes: ["Egress"], egress: [{}] },
+	};
+	const list = client.list;
+	client.list = async () => [foreign] as never;
+	const count = client.resources.size;
+	await expect(adapter.apply(selected)).rejects.toMatchObject({
+		code: "policy",
+	});
+	expect(client.resources.size).toBe(count);
+	await expect(adapter.observe(selected)).rejects.toMatchObject({
+		code: "policy",
+	});
+	client.list = list;
 	const pod = await client.read<V1Pod>("Pod", allocation.podName);
 	expect(pod?.spec?.initContainers).toHaveLength(1);
 	const secret = await client.read<V1Secret>(

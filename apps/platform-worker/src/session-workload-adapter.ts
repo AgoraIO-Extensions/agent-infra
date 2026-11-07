@@ -1644,7 +1644,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			await validateSkillSource(allocation);
 			if (
 				allocation.desiredState === "running" &&
-				allocation.egress.nativeEgress &&
+				(allocation.egress.nativeEgress ||
+					allocation.workspaceSnapshotProjection) &&
 				hasAdditionalEgressPolicyV1(
 					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
 					resources.find((r) => r.kind === "NetworkPolicy") as V1NetworkPolicy,
@@ -1819,7 +1820,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (
 				purpose === "business" &&
 				allocation.desiredState === "running" &&
-				allocation.egress.nativeEgress &&
+				(allocation.egress.nativeEgress ||
+					allocation.workspaceSnapshotProjection) &&
 				hasAdditionalEgressPolicyV1(
 					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
 					expectedResources.find(
