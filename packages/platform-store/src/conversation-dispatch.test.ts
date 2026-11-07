@@ -1075,6 +1075,58 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("reopens a completed Sandbox reconcile after a live runtime-unavailable failure", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "submitted",
+		});
+		const [sandbox] = await client<{ sandbox_id: string }[]>`
+			select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+		if (!sandbox) throw new Error("Expected Sandbox fixture");
+		const itemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 status, available_at, created_at, updated_at)
+			values (${`conversation:sandbox:${work.conversationId}:0`}, 'conversation', ${work.conversationId},
+				'conversation.sandbox.reconcile.v1', ${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					sessionGeneration: 99,
+				})}, 'trace-history', 'request-history',
+				'succeeded', 'infinity', now(), now())`;
+		await client`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 status, available_at, created_at, updated_at)
+			values (${itemId}, 'conversation', ${work.conversationId},
+				'conversation.sandbox.reconcile.v1', ${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					sessionGeneration: 1,
+				})}, 'trace-reopen', 'request-reopen',
+				'succeeded', 'infinity', now(), now())`;
+		const opened = await claim(work.itemId, "runtime-unavailable-worker");
+		try {
+			if (opened.decision.outcome !== "claimed")
+				throw new Error("Expected Turn claim");
+			expect(
+				await opened.store.requestSandboxReconciliation({
+					claim: opened.decision.claim,
+				}),
+			).toBe(true);
+			const [row] = await client<{ status: string; available: boolean }[]>`
+				select status, available_at <= clock_timestamp() as available
+				from platform.outbox_items where id = ${itemId}`;
+			expect(row).toEqual({ status: "pending", available: true });
+			const [historical] = await client<{ status: string }[]>`
+				select status from platform.outbox_items
+				where id = ${`conversation:sandbox:${work.conversationId}:0`}`;
+			expect(historical?.status).toBe("succeeded");
+		} finally {
+			await opened.store.close();
+		}
+	});
+
 	/** 一个待认领的 Sandbox 准备意图（沿用上面“唤醒仍在启动的 Sandbox”用例的装配）。 */
 	async function seedSandboxPrepareIntent(label: string) {
 		const work = await seed("conversation.turn.submit.v1", {
