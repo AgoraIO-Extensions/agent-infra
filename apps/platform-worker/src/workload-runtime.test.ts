@@ -6773,6 +6773,10 @@ it("restores snapshot projection after runtime recreation and refreshes signing"
 				imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
 				allowedOrigins: ["https://objects.example.test"],
 				cacheSizeLimit: "2Gi",
+				resources: {
+					requests: { cpu: "100m", memory: "128Mi" },
+					limits: { cpu: "1", memory: "512Mi" },
+				},
 				credentialSecretName: "snapshot-credentials",
 			}),
 		};

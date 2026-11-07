@@ -114,6 +114,42 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly previousObservation: SessionSandboxObservationV1 | null;
 }
 
+export interface WorkspaceSnapshotObservationV1 {
+	readonly podUid: string;
+	readonly imageDigest: string;
+	readonly outcome: "completed" | "failed";
+	/** One-based init process attempt, derived from Kubernetes restartCount. */
+	readonly attempt: number;
+	readonly durationMs?: number;
+}
+
+export function isWorkspaceSnapshotObservationValidV1(
+	value: unknown,
+): value is WorkspaceSnapshotObservationV1 {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const observation = value as Record<string, unknown>;
+	return (
+		Object.keys(observation).every((key) =>
+			["podUid", "imageDigest", "outcome", "attempt", "durationMs"].includes(
+				key,
+			),
+		) &&
+		typeof observation.podUid === "string" &&
+		/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(observation.podUid) &&
+		typeof observation.imageDigest === "string" &&
+		/^sha256:[a-f0-9]{64}$/.test(observation.imageDigest) &&
+		(observation.outcome === "completed" || observation.outcome === "failed") &&
+		Number.isSafeInteger(observation.attempt) &&
+		Number(observation.attempt) >= 1 &&
+		Number(observation.attempt) <= 1_000_000 &&
+		(observation.durationMs === undefined ||
+			(typeof observation.durationMs === "number" &&
+				Number.isFinite(observation.durationMs) &&
+				observation.durationMs >= 0 &&
+				observation.durationMs <= 3_600_000))
+	);
+}
+
 export interface SessionSandboxObservationV1 {
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
 	/** Pod startup state used only to bound normal prepare observation. */
@@ -133,7 +169,9 @@ export interface SessionSandboxObservationV1 {
 	readonly failureCode?:
 		| "eci.image_pull"
 		| "runtime.startup"
-		| "runtime.configuration";
+		| "runtime.configuration"
+		| "workspace.materialization";
+	readonly workspaceSnapshot?: WorkspaceSnapshotObservationV1;
 	readonly sourceStop?: SessionSandboxStopReceiptV1;
 	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
@@ -259,9 +297,12 @@ export function isSessionSandboxObservationValidV1(
 		!observation ||
 		!["observed", "ready", "stopped", "unknown"].includes(observation.status) ||
 		(observation.failureCode !== undefined &&
-			!["eci.image_pull", "runtime.startup", "runtime.configuration"].includes(
-				observation.failureCode,
-			)) ||
+			![
+				"eci.image_pull",
+				"runtime.startup",
+				"runtime.configuration",
+				"workspace.materialization",
+			].includes(observation.failureCode)) ||
 		!Array.isArray(observation.resources)
 	)
 		return false;
@@ -299,6 +340,19 @@ export function isSessionSandboxObservationValidV1(
 			return false;
 		seen.add(resource.kind);
 	}
+	if (
+		observation.workspaceSnapshot !== undefined &&
+		(!isWorkspaceSnapshotObservationValidV1(observation.workspaceSnapshot) ||
+			!observation.resources.some(
+				(resource) =>
+					resource.kind === "Pod" &&
+					resource.uid === observation.workspaceSnapshot?.podUid,
+			) ||
+			(observation.workspaceSnapshot.outcome === "failed" &&
+				(observation.status === "ready" ||
+					observation.failureCode !== "workspace.materialization")))
+	)
+		return false;
 	if (observation.status === "ready") {
 		const pod = observation.resources.find(
 			(resource) => resource.kind === "Pod",

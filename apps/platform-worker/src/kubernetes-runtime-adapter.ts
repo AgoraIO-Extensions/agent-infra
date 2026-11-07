@@ -83,10 +83,17 @@ import {
 import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
+	workspaceSnapshotCacheNameV1,
+	workspaceSnapshotWorkloadProjectionV1,
 } from "./workspace-snapshot-materializer.js";
+import {
+	type WorkspaceSnapshotObservationCallbackV1,
+	workspaceSnapshotPodObservationV1,
+} from "./workspace-snapshot-observation.js";
 import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 const selectorNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+const snapshotCacheUidAnnotation = "agent-infra.agora.io/workspace-cache-uid";
 const selectorPrefixPattern =
 	/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$/;
 const selectorValuePattern =
@@ -188,6 +195,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
 	/** Server-derived snapshot materialization; absent means no snapshot input. */
 	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
+	readonly onWorkspaceSnapshot?: WorkspaceSnapshotObservationCallbackV1;
 	/** Deployment-owned service token retained in Worker memory for attestation only. */
 	readonly containerBoundaryServiceToken?: string;
 	readonly probe: (input: {
@@ -313,6 +321,65 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 		egress,
 	});
+	function persistentVolumeNames(value: AgentWorkloadDesiredV1) {
+		const projection = workspaceSnapshotWorkloadProjectionV1(
+			value,
+			options.workspaceSnapshotProjection,
+		);
+		return [
+			value.persistentVolume.name,
+			...(projection?.volumes.some((volume) => volume.persistentVolumeClaim)
+				? [workspaceSnapshotCacheNameV1(value.agentId)]
+				: []),
+		];
+	}
+
+	async function ensurePersistentVolume(
+		value: AgentWorkloadDesiredV1,
+		name: string,
+	) {
+		const pvc = await client.read<V1PersistentVolumeClaim>(
+			"PersistentVolumeClaim",
+			name,
+		);
+		if (!pvc) {
+			return put<V1PersistentVolumeClaim>(
+				{
+					apiVersion: "v1",
+					kind: "PersistentVolumeClaim",
+					metadata: metadata(value, name),
+					spec: persistentVolumeClaimSpec(),
+				},
+				value,
+			);
+		}
+		own(pvc, value.agentId, value.workloadRevision, value.fence);
+		if (
+			pvc.metadata?.deletionTimestamp ||
+			!matchesPersistentVolumeClaimSpec(pvc.spec)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		if (
+			pvc.metadata?.labels?.[revisionLabel] !==
+				String(value.workloadRevision) ||
+			pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
+				String(value.fence)
+		) {
+			const expected = metadata(value, name);
+			return client.replace({
+				...pvc,
+				metadata: {
+					...pvc.metadata,
+					labels: { ...pvc.metadata?.labels, ...expected.labels },
+					annotations: {
+						...pvc.metadata?.annotations,
+						...expected.annotations,
+					},
+				},
+			});
+		}
+		return pvc;
+	}
 
 	async function put<T extends KubernetesObject>(
 		object: T,
@@ -540,19 +607,28 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const probe = await client.read<V1Service>("Service", `${name}-probe`);
 		const service = await client.read<V1Service>("Service", name);
 		const routeIngress = await client.read<V1Ingress>("Ingress", name);
-		const pvc = await client.read<V1PersistentVolumeClaim>(
-			"PersistentVolumeClaim",
-			value.persistentVolume.name,
-		);
-		if (!serviceAccount || !network || !probe || !service || !pvc)
-			return "drifted";
-		if (
-			pvc.metadata?.deletionTimestamp ||
-			!matchesPersistentVolumeClaimSpec(pvc.spec)
-		)
-			return "drifted";
-		own(pvc, value.agentId, value.workloadRevision, value.fence);
-		if (!hasCurrentMetadata(pvc, value)) return "drifted";
+		if (!serviceAccount || !network || !probe || !service) return "drifted";
+		for (const claimName of persistentVolumeNames(value)) {
+			const pvc = await client.read<V1PersistentVolumeClaim>(
+				"PersistentVolumeClaim",
+				claimName,
+			);
+			if (
+				!pvc ||
+				pvc.metadata?.deletionTimestamp ||
+				!matchesPersistentVolumeClaimSpec(pvc.spec)
+			)
+				return "drifted";
+			own(pvc, value.agentId, value.workloadRevision, value.fence);
+			if (!hasCurrentMetadata(pvc, value)) return "drifted";
+			if (
+				claimName === workspaceSnapshotCacheNameV1(value.agentId) &&
+				(!pvc.metadata?.uid ||
+					current.metadata?.annotations?.[snapshotCacheUidAnnotation] !==
+						pvc.metadata.uid)
+			)
+				return "drifted";
+		}
 		for (const ref of value.secretRefs) {
 			const secret = await client.read<V1Secret>("Secret", ref.name);
 			if (!secret || !isLiveOwnedImmutableSecret(secret, value, ref))
@@ -668,7 +744,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		};
 		if (
 			!hasSafePodMetadata(value, pod.metadata, { pod, workload: current }) ||
-			hasUnsafePodSpec(pod.spec, expectedPodIdentity)
+			hasUnsafePodSpec(value, pod.spec, expectedPodIdentity)
 		)
 			return "drifted";
 		const container = pod.spec?.containers.find(
@@ -689,6 +765,26 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			return "unhealthy";
 		if (hasDriftedPodSpec(value, pod.spec, expectedPodIdentity))
 			return "drifted";
+		const snapshot = workspaceSnapshotPodObservationV1(
+			pod,
+			workspaceSnapshotWorkloadProjectionV1(
+				value,
+				options.workspaceSnapshotProjection,
+			),
+		);
+		if (snapshot) {
+			try {
+				options.onWorkspaceSnapshot?.({ ...snapshot, agentId: value.agentId });
+			} catch {
+				/* Observations never alter reconciliation. */
+			}
+			if (snapshot.outcome === "failed") return "unhealthy";
+		}
+		if (
+			options.workspaceSnapshotProjection &&
+			snapshot?.outcome !== "completed"
+		)
+			return "pending";
 		if (
 			current.status?.observedGeneration !== identity.generation ||
 			current.status.readyReplicas !== 1 ||
@@ -908,6 +1004,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const [current, ...existingResources] = await Promise.all([
 				client.read<V1StatefulSet>("StatefulSet", name),
 				client.read("PersistentVolumeClaim", `${name}-data`),
+				client.read(
+					"PersistentVolumeClaim",
+					workspaceSnapshotCacheNameV1(agentId),
+				),
 				client.read("Service", name),
 				client.read("Service", `${name}-probe`),
 				client.read("ServiceAccount", name),
@@ -918,11 +1018,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				if (resource) own(resource, agentId, workloadRevision, fence);
 			}
 			if (!current) {
-				const pvc = await client.read<V1PersistentVolumeClaim>(
-					"PersistentVolumeClaim",
+				for (const claimName of [
 					`${name}-data`,
-				);
-				if (pvc) {
+					workspaceSnapshotCacheNameV1(agentId),
+				]) {
+					const pvc = await client.read<V1PersistentVolumeClaim>(
+						"PersistentVolumeClaim",
+						claimName,
+					);
+					if (!pvc) continue;
 					own(pvc, agentId, workloadRevision, fence);
 					if (
 						pvc.metadata?.labels?.[revisionLabel] !==
@@ -1319,6 +1423,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				client.read("Service", `${name}-probe`),
 				client.read("ServiceAccount", name),
 				client.read("NetworkPolicy", name),
+				client.read(
+					"PersistentVolumeClaim",
+					workspaceSnapshotCacheNameV1(value.agentId),
+				),
 			]);
 			for (const resource of [current, existingPvc, ...existingResources]) {
 				if (!resource) continue;
@@ -1333,10 +1441,42 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					throw new WorkloadKubernetesError("conflict");
 				if (resource.metadata?.deletionTimestamp)
 					throw new WorkloadKubernetesError("conflict");
+				if (
+					resource.kind === "PersistentVolumeClaim" &&
+					persistentVolumeNames(value).includes(
+						resource.metadata?.name ?? "",
+					) &&
+					!matchesPersistentVolumeClaimSpec(
+						(resource as V1PersistentVolumeClaim).spec,
+					)
+				)
+					throw new WorkloadKubernetesError("conflict");
 			}
 			if (current && hasDriftedImmutableStatefulSetSpec(value, current.spec))
 				throw new WorkloadKubernetesError("conflict");
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
+				throw new WorkloadKubernetesError("conflict");
+			const existingCache = existingResources.at(-1);
+			const retainedCacheUid =
+				existingPvc?.metadata?.annotations?.[snapshotCacheUidAnnotation];
+			if (
+				persistentVolumeNames(value).includes(
+					workspaceSnapshotCacheNameV1(value.agentId),
+				) &&
+				retainedCacheUid !== undefined &&
+				retainedCacheUid !== existingCache?.metadata?.uid
+			)
+				throw new WorkloadKubernetesError("conflict");
+			if (
+				current?.spec?.template.spec?.volumes?.some(
+					(volume) =>
+						volume.persistentVolumeClaim?.claimName ===
+						workspaceSnapshotCacheNameV1(value.agentId),
+				) &&
+				(!existingCache?.metadata?.uid ||
+					current.metadata?.annotations?.[snapshotCacheUidAnnotation] !==
+						existingCache.metadata.uid)
+			)
 				throw new WorkloadKubernetesError("conflict");
 			if (!current && value.replicas === 0) {
 				const pvc = await client.read<V1PersistentVolumeClaim>(
@@ -1489,49 +1629,38 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				},
 				value,
 			);
-			const pvc = await client.read<V1PersistentVolumeClaim>(
-				"PersistentVolumeClaim",
-				value.persistentVolume.name,
-			);
-			if (pvc) {
-				own(pvc, value.agentId, value.workloadRevision, value.fence);
-				if (
-					pvc.metadata?.deletionTimestamp ||
-					!matchesPersistentVolumeClaimSpec(pvc.spec)
-				)
+			let snapshotCacheUid: string | undefined;
+			for (const claimName of persistentVolumeNames(value)) {
+				const claim = await ensurePersistentVolume(value, claimName);
+				if (claimName === workspaceSnapshotCacheNameV1(value.agentId)) {
+					if (!claim.metadata?.uid)
+						throw new WorkloadKubernetesError("unavailable");
+					snapshotCacheUid = claim.metadata.uid;
+				}
+			}
+			if (snapshotCacheUid) {
+				const data = await client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					value.persistentVolume.name,
+				);
+				if (!data) throw new WorkloadKubernetesError("unavailable");
+				own(data, value.agentId, value.workloadRevision, value.fence);
+				const retained =
+					data.metadata?.annotations?.[snapshotCacheUidAnnotation];
+				if (retained !== undefined && retained !== snapshotCacheUid)
 					throw new WorkloadKubernetesError("conflict");
-				const desiredMetadata = metadata(value, value.persistentVolume.name);
-				if (
-					pvc.metadata?.labels?.[revisionLabel] !==
-						String(value.workloadRevision) ||
-					pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-						String(value.fence)
-				) {
+				if (retained === undefined)
 					await client.replace({
-						...pvc,
+						...data,
 						metadata: {
-							...pvc.metadata,
-							labels: {
-								...pvc.metadata?.labels,
-								...desiredMetadata.labels,
-							},
+							...data.metadata,
 							annotations: {
-								...pvc.metadata?.annotations,
-								...desiredMetadata.annotations,
+								...data.metadata?.annotations,
+								[snapshotCacheUidAnnotation]: snapshotCacheUid,
 							},
 						},
 					});
-				}
-			} else
-				await put<V1PersistentVolumeClaim>(
-					{
-						apiVersion: "v1",
-						kind: "PersistentVolumeClaim",
-						metadata: metadata(value, value.persistentVolume.name),
-						spec: persistentVolumeClaimSpec(),
-					},
-					value,
-				);
+			}
 			await put(networkPolicy(value), value);
 			const injection = modelBindings(value);
 			if (injection) {
@@ -1572,6 +1701,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					annotations: {
 						...metadata(value).annotations,
 						[desiredAnnotation]: JSON.stringify(value),
+						...(snapshotCacheUid
+							? { [snapshotCacheUidAnnotation]: snapshotCacheUid }
+							: {}),
 						...(modelProjection
 							? { [modelFingerprintAnnotation]: modelProjection.fingerprint }
 							: {}),
@@ -1653,8 +1785,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					},
 				},
 			};
-			if (options.workspaceSnapshotProjection) {
-				const projection = options.workspaceSnapshotProjection;
+			const projection = workspaceSnapshotWorkloadProjectionV1(
+				value,
+				options.workspaceSnapshotProjection,
+			);
+			if (projection) {
 				const snapshotOwner = await client.read<V1ServiceAccount>(
 					"ServiceAccount",
 					value.serviceAccount.name,
@@ -1679,7 +1814,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				if (!podSpec) throw new WorkloadKubernetesError("policy");
 				workloadSpec.template.spec = applyWorkspaceSnapshotProjectionV1(
 					podSpec,
-					options.workspaceSnapshotProjection,
+					projection,
 				);
 			}
 			const applied = await put(workload, value);

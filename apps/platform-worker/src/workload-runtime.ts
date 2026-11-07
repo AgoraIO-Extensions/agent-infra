@@ -81,6 +81,7 @@ import type {
 	WorkspaceSnapshotMaterializerInputV1,
 	WorkspaceSnapshotPodProjectionV1,
 } from "./workspace-snapshot-materializer.js";
+import type { WorkspaceSnapshotObservationCallbackV1 } from "./workspace-snapshot-observation.js";
 import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 export type WorkloadBrowserBindingResolverV1 = (input: {
@@ -138,6 +139,7 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
 	/** Server-derived snapshot projection; request/runtime/annotation inputs are never accepted. */
 	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
+	readonly onWorkspaceSnapshot?: WorkspaceSnapshotObservationCallbackV1;
 	/** Resolves persisted snapshot bindings to immutable materializer inputs. */
 	readonly workspaceSnapshotResolver?: ((input: {
 		readonly agentId: string;
@@ -615,6 +617,7 @@ export function createWorkloadRuntimeV1(
 					snapshotProjections.get(state) ?? options.workspaceSnapshotProjection,
 			},
 			onHealthDiagnostic: options.onHealthDiagnostic,
+			onWorkspaceSnapshot: options.onWorkspaceSnapshot,
 		});
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const snapshotProjections = new WeakMap<
@@ -775,6 +778,7 @@ export function createWorkloadRuntimeV1(
 			client: options.client,
 			policy: options.policy,
 			onHealthDiagnostic: options.onHealthDiagnostic,
+			onWorkspaceSnapshot: options.onWorkspaceSnapshot,
 			modelProjection,
 			standardTemplateBinding,
 			workspaceSnapshotProjection:

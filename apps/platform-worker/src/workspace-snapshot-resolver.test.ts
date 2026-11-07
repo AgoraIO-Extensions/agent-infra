@@ -7,6 +7,10 @@ const policy = {
 	imageDigest: `registry.example.test/platform-worker@${digest}`,
 	allowedOrigins: ["https://objects.example.test"],
 	cacheSizeLimit: "2Gi",
+	resources: {
+		requests: { cpu: "100m", memory: "128Mi" },
+		limits: { cpu: "1", memory: "512Mi" },
+	},
 	credentialSecretName: "workspace-snapshot-credentials",
 };
 const record = {

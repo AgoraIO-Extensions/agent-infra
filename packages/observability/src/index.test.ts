@@ -132,6 +132,7 @@ it("keeps the bounded Session Sandbox workload failure steps (#2733)", () => {
 		"workload.policy",
 		"workload.conflict",
 		"workload.unavailable",
+		"workspace.materialization",
 		"workload.sandbox-secret-name",
 	])
 		telemetry.record({
@@ -146,6 +147,7 @@ it("keeps the bounded Session Sandbox workload failure steps (#2733)", () => {
 		"workload.policy",
 		"workload.conflict",
 		"workload.unavailable",
+		"workspace.materialization",
 		undefined,
 	]);
 });

@@ -271,6 +271,26 @@ export function fakeKubernetesApi() {
 					status: {
 						podIP: "10.244.0.10",
 						conditions: [{ type: "Ready", status: "True" }],
+						...(templateSpec.initContainers?.length
+							? {
+									initContainerStatuses: templateSpec.initContainers.map(
+										(init) => ({
+											name: init.name,
+											image: init.image ?? "",
+											imageID: init.image ?? "",
+											ready: true,
+											restartCount: 0,
+											state: {
+												terminated: {
+													exitCode: 0,
+													startedAt: new Date("2026-11-07T10:00:00Z"),
+													finishedAt: new Date("2026-11-07T10:00:01Z"),
+												},
+											},
+										}),
+									),
+								}
+							: {}),
 					},
 				};
 				resources.set(`Pod/${podName}`, pod);

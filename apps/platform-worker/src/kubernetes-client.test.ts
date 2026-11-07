@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { KubeConfig, KubernetesObjectApi } from "@kubernetes/client-node";
+import { describe, expect, it, vi } from "vitest";
 import {
+	createWorkerKubernetesClientV1,
 	WorkloadKubernetesError,
 	workloadKubernetesFailureV1,
 } from "./kubernetes-client.js";
@@ -68,4 +70,47 @@ describe("Kubernetes failure details (#2532)", () => {
 		).toBe(policy);
 		expect(policy.details).toEqual({});
 	});
+});
+
+it("reads ReplicaSet ownership in its namespace and rejects every mutation before the API call", async () => {
+	const config = new KubeConfig();
+	config.loadFromOptions({
+		clusters: [{ name: "test", server: "https://127.0.0.1:6443" }],
+		users: [{ name: "test" }],
+		contexts: [{ name: "test", cluster: "test", user: "test" }],
+		currentContext: "test",
+	});
+	const replicaSet = {
+		apiVersion: "apps/v1",
+		kind: "ReplicaSet",
+		metadata: {
+			namespace: "test",
+			name: "member-abc",
+			uid: "uid",
+			resourceVersion: "1",
+		},
+	};
+	const read = vi
+		.spyOn(KubernetesObjectApi.prototype, "read")
+		.mockResolvedValue(replicaSet);
+	try {
+		const client = createWorkerKubernetesClientV1("test", config);
+		expect(await client.read("ReplicaSet", "member-abc")).toEqual(replicaSet);
+		expect(read).toHaveBeenCalledWith({
+			apiVersion: "apps/v1",
+			kind: "ReplicaSet",
+			metadata: { namespace: "test", name: "member-abc" },
+		});
+		await expect(client.create(replicaSet)).rejects.toMatchObject({
+			code: "policy",
+		});
+		await expect(client.replace(replicaSet)).rejects.toMatchObject({
+			code: "policy",
+		});
+		await expect(client.delete(replicaSet)).rejects.toMatchObject({
+			code: "policy",
+		});
+	} finally {
+		read.mockRestore();
+	}
 });

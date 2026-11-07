@@ -1673,6 +1673,7 @@ test("Adapter bindings and Worker authority stay namespace scoped", () => {
 				["deployments", "statefulsets"],
 				["create", "delete", "get", "list", "patch", "update", "watch"],
 			],
+			[["apps"], ["replicasets"], ["get"]],
 			[
 				["batch"],
 				["jobs"],

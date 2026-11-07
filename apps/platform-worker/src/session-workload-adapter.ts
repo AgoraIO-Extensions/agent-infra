@@ -62,6 +62,7 @@ import {
 	type WorkspaceSnapshotPodProjectionV1,
 	workspaceSnapshotPodSpecMatchesV1,
 } from "./workspace-snapshot-materializer.js";
+import { workspaceSnapshotPodObservationV1 } from "./workspace-snapshot-observation.js";
 import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 /**
@@ -1800,6 +1801,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			let failureCode: SessionSandboxObservationV1["failureCode"];
 			let waitingReason: SessionSandboxObservationV1["waitingReason"];
 			let runtimeStarting = false;
+			let workspaceSnapshot: SessionSandboxObservationV1["workspaceSnapshot"];
 			const expectedResources = sessionSandboxResourcesV1(
 				purpose === "control"
 					? { ...allocation, desiredState: "stopped" }
@@ -1881,6 +1883,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
+					if (matches && status !== "unknown" && purpose === "business") {
+						workspaceSnapshot = workspaceSnapshotPodObservationV1(
+							pod,
+							allocation.workspaceSnapshotProjection,
+						);
+						if (workspaceSnapshot?.outcome === "failed") {
+							failureCode = "workspace.materialization";
+							status = "observed";
+						}
+					}
 					if (
 						status === "ready" &&
 						(pod.status?.phase !== "Running" ||
@@ -1890,7 +1902,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							))
 					)
 						status = "observed";
-					if (status === "observed") {
+					if (status === "observed" && failureCode === undefined) {
 						// Only the rendered Runtime container is startup evidence; other
 						// container statuses never classify this Session (#3922).
 						const container = pod.status?.containerStatuses?.find(
@@ -1945,6 +1957,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				...(failureCode === undefined ? {} : { failureCode }),
 				...(waitingReason === undefined ? {} : { waitingReason }),
 				...(runtimeStarting ? { runtimeStarting: true as const } : {}),
+				...(workspaceSnapshot === undefined ? {} : { workspaceSnapshot }),
 				resources,
 			};
 		},

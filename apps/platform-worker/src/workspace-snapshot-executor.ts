@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import {
 	chmod,
@@ -7,6 +8,7 @@ import {
 	mkdtemp,
 	readdir,
 	readFile,
+	readlink,
 	rename,
 	rm,
 	writeFile,
@@ -20,6 +22,7 @@ import type { WorkspaceSnapshotMaterializerInputV1 } from "./workspace-snapshot-
 
 const execute = promisify(execFile);
 const marker = ".snapshot-digest";
+const cacheMetadataPrefix = ".snapshot-cache-";
 export class WorkspaceSnapshotMaterializationError extends Error {
 	constructor() {
 		super("WORKSPACE_SNAPSHOT_MATERIALIZATION_FAILED");
@@ -60,6 +63,62 @@ async function normalizeModes(path: string): Promise<void> {
 			await chmod(child, stat.mode & 0o111 ? 0o755 : 0o644);
 		else throw new WorkspaceSnapshotMaterializationError();
 	}
+}
+
+async function contentDigest(
+	root: string,
+	maxBytes: number,
+	signal: AbortSignal,
+) {
+	const hash = createHash("sha256");
+	let bytes = 0;
+	let entries = 0;
+	const files = new Map<string, { digest: string; path: string }>();
+	async function visit(relative: string) {
+		signal.throwIfAborted();
+		const path = join(root, relative);
+		const stat = await lstat(path);
+		if (++entries > 100_001) throw new WorkspaceSnapshotMaterializationError();
+		// Kubelet may add group write bits on remount; preserve executable semantics.
+		hash.update(JSON.stringify([relative, stat.mode & 0o111]));
+		if (stat.isDirectory()) {
+			hash.update("directory");
+			for (const name of (await readdir(path)).sort())
+				await visit(join(relative, name));
+		} else if (stat.isSymbolicLink()) {
+			hash.update(JSON.stringify(["link", await readlink(path)]));
+		} else if (stat.isFile()) {
+			const identity = `${stat.dev}:${stat.ino}`;
+			const previous = files.get(identity);
+			if (previous) hash.update(JSON.stringify(["hardlink", previous.path]));
+			else {
+				const fileHash = createHash("sha256");
+				for await (const chunk of createReadStream(path, { signal })) {
+					bytes += chunk.length;
+					if (bytes > maxBytes + 80)
+						throw new WorkspaceSnapshotMaterializationError();
+					fileHash.update(chunk);
+				}
+				const digest = fileHash.digest("hex");
+				files.set(identity, { digest, path: relative });
+				hash.update(JSON.stringify(["file", stat.size, digest]));
+			}
+		} else throw new WorkspaceSnapshotMaterializationError();
+	}
+	await visit("");
+	return hash.digest("hex");
+}
+
+/** Old generations are inaccessible to business containers and removed before init succeeds. */
+export async function pruneWorkspaceSnapshotCacheV1(
+	outputDirectory: string,
+	names: readonly string[],
+) {
+	const keep = new Set(
+		names.flatMap((name) => [name, `${cacheMetadataPrefix}${name}.json`]),
+	);
+	for (const name of await readdir(outputDirectory))
+		if (!keep.has(name)) await removeTemporary(join(outputDirectory, name));
 }
 
 /** Only the trusted init container can write this volume; business mounts are read-only. */
@@ -104,6 +163,16 @@ export async function materializeWorkspaceSnapshotV1(input: {
 		const root = await lstat(input.outputDirectory);
 		if (!root.isDirectory() || root.isSymbolicLink()) throw new Error();
 		const destination = join(input.outputDirectory, s.name);
+		const metadataPath = join(
+			input.outputDirectory,
+			`${cacheMetadataPrefix}${s.name}.json`,
+		);
+		const metadata = await exists(metadataPath);
+		if (
+			metadata &&
+			(!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024)
+		)
+			throw new Error();
 		const old = await exists(destination);
 		if (old && (!old.isDirectory() || old.isSymbolicLink())) throw new Error();
 		const stamp = await exists(join(destination, marker));
@@ -111,9 +180,23 @@ export async function materializeWorkspaceSnapshotV1(input: {
 			throw new Error();
 		if (
 			stamp &&
+			metadata &&
 			(await readFile(join(destination, marker), "utf8")).trim() === s.digest
-		)
-			return { status: "reused" as const, digest: s.digest };
+		) {
+			const verified = JSON.parse(await readFile(metadataPath, "utf8"));
+			if (
+				verified.digest === s.digest &&
+				verified.objectRef === s.objectRef &&
+				verified.sizeBytes === s.sizeBytes &&
+				verified.contentDigest ===
+					(await contentDigest(
+						destination,
+						input.maxUnpackedBytes,
+						input.signal,
+					))
+			)
+				return { status: "reused" as const, digest: s.digest };
+		}
 		input.signal.throwIfAborted();
 		temporary = await mkdtemp(join(input.outputDirectory, ".snapshot-stage-"));
 		const response = await (input.fetch ?? fetch)(url, {
@@ -174,6 +257,21 @@ export async function materializeWorkspaceSnapshotV1(input: {
 			flag: "wx",
 		});
 		await chmod(stage, 0o755);
+		const verified = {
+			digest: s.digest,
+			objectRef: s.objectRef,
+			sizeBytes: s.sizeBytes,
+			contentDigest: await contentDigest(
+				stage,
+				input.maxUnpackedBytes,
+				input.signal,
+			),
+		};
+		await writeFile(
+			join(temporary, "metadata.json"),
+			JSON.stringify(verified),
+			{ mode: 0o600, flag: "wx" },
+		);
 		input.signal.throwIfAborted();
 		if (old) {
 			const path = join(temporary, "previous");
@@ -194,6 +292,7 @@ export async function materializeWorkspaceSnapshotV1(input: {
 			throw error;
 		}
 		previous = undefined;
+		await rename(join(temporary, "metadata.json"), metadataPath);
 		return { status: "materialized" as const, digest: s.digest };
 	} catch (error) {
 		if (error instanceof WorkspaceSnapshotRollbackError) throw error;

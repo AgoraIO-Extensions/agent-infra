@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	chmod,
+	link,
 	lstat,
 	mkdir,
 	mkdtemp,
@@ -14,6 +16,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	materializeWorkspaceSnapshotV1,
+	pruneWorkspaceSnapshotCacheV1,
 	WorkspaceSnapshotRollbackError,
 } from "./workspace-snapshot-executor.js";
 
@@ -74,6 +77,73 @@ it("extracts a validated archive and reuses only its completed digest", async ()
 	);
 	expect((await materializeWorkspaceSnapshotV1(f.input)).status).toBe("reused");
 	expect(f.fetch).toHaveBeenCalledTimes(1);
+});
+it("redownloads an incomplete or modified retained cache despite its old completion marker", async () => {
+	const f = await fixture();
+	await materializeWorkspaceSnapshotV1(f.input);
+	await writeFile(join(f.output, "repo", "value.txt"), "corrupted-cache");
+	expect((await materializeWorkspaceSnapshotV1(f.input)).status).toBe(
+		"materialized",
+	);
+	expect(await readFile(join(f.output, "repo", "value.txt"), "utf8")).toBe(
+		"version-one",
+	);
+	await rm(join(f.output, "repo", "value.txt"));
+	expect((await materializeWorkspaceSnapshotV1(f.input)).status).toBe(
+		"materialized",
+	);
+	expect(f.fetch).toHaveBeenCalledTimes(3);
+});
+it("reuses unchanged content after kubelet adjusts fsGroup permissions on remount", async () => {
+	const f = await fixture();
+	await materializeWorkspaceSnapshotV1(f.input);
+	await chmod(join(f.output, "repo"), 0o2775);
+	await chmod(join(f.output, "repo", "value.txt"), 0o664);
+	await chmod(join(f.output, "repo", ".snapshot-digest"), 0o664);
+	expect((await materializeWorkspaceSnapshotV1(f.input)).status).toBe("reused");
+	expect(f.fetch).toHaveBeenCalledTimes(1);
+});
+it("counts a hardlinked file once against the unpacked byte budget", async () => {
+	const f = await fixture("abcdefghijklmnop");
+	await link(
+		join(f.root, "source", "root", "value.txt"),
+		join(f.root, "source", "root", "alias.txt"),
+	);
+	const archive = execFileSync(
+		"tar",
+		["--format=ustar", "-czf", "-", "-C", join(f.root, "source"), "root"],
+		{ env: { ...process.env, COPYFILE_DISABLE: "1" } },
+	);
+	const input = {
+		...f.input,
+		maxUnpackedBytes: 16,
+		snapshot: {
+			...f.snapshot,
+			sizeBytes: archive.length,
+			digest: `sha256:${createHash("sha256").update(archive).digest("hex")}`,
+		},
+		fetch: vi.fn(async () => new Response(archive)),
+	};
+	expect((await materializeWorkspaceSnapshotV1(input)).status).toBe(
+		"materialized",
+	);
+	expect((await materializeWorkspaceSnapshotV1(input)).status).toBe("reused");
+	expect(await readFile(join(f.output, "repo", "alias.txt"), "utf8")).toBe(
+		"abcdefghijklmnop",
+	);
+});
+it("removes unbound generations and interrupted stages without following symlinks", async () => {
+	const f = await fixture();
+	await materializeWorkspaceSnapshotV1(f.input);
+	await symlink(f.root, join(f.output, "unbound"));
+	await mkdir(join(f.output, ".snapshot-stage-interrupted"));
+	await pruneWorkspaceSnapshotCacheV1(f.output, ["repo"]);
+	expect((await materializeWorkspaceSnapshotV1(f.input)).status).toBe("reused");
+	await expect(lstat(join(f.output, "unbound"))).rejects.toThrow();
+	await expect(
+		lstat(join(f.output, ".snapshot-stage-interrupted")),
+	).rejects.toThrow();
+	expect((await lstat(f.root)).isDirectory()).toBe(true);
 });
 it("rejects digest tampering without publishing a completion marker", async () => {
 	const f = await fixture();

@@ -1314,7 +1314,7 @@ describe("GA Kubernetes Workload adapter", () => {
 	});
 });
 
-it("accepts only the trusted snapshot projection across apply and observe", async () => {
+async function snapshotFixture() {
 	const { projectWorkspaceSnapshotMaterializerV1 } = await import(
 		"./workspace-snapshot-materializer.js"
 	);
@@ -1335,6 +1335,10 @@ it("accepts only the trusted snapshot projection across apply and observe", asyn
 			imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
 			allowedOrigins: ["https://objects.example.test"],
 			cacheSizeLimit: "2Gi",
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: { cpu: "1", memory: "512Mi" },
+			},
 			credentialSecretName: "snapshot-credentials",
 		},
 	);
@@ -1350,6 +1354,12 @@ it("accepts only the trusted snapshot projection across apply and observe", asyn
 		workspaceSnapshotProjection: projection,
 	});
 	const desired = workloadDesiredFixture();
+	return { ...f, adapter, desired, projection };
+}
+
+it("accepts only the trusted snapshot projection across apply and observe", async () => {
+	const f = await snapshotFixture();
+	const { adapter, desired } = f;
 	const identity = await adapter.apply(desired);
 	if (!identity || identity === "pending") throw Error("not applied");
 	expect(await adapter.observe(desired, identity)).toBe("healthy");
@@ -1391,4 +1401,123 @@ it("accepts only the trusted snapshot projection across apply and observe", asyn
 	mount.readOnly = false;
 	f.resources.set(`Pod/${desired.service.name}-0`, pod);
 	expect(await adapter.observe(desired, identity)).toBe("drifted");
+});
+
+it("retains an Agent-owned RWO snapshot cache on stop and checks ownership before writes", async () => {
+	const f = await snapshotFixture();
+	const { adapter, desired } = f;
+	const identity = await adapter.apply(desired);
+	if (!identity || identity === "pending") throw Error("not applied");
+	const cacheName = `${desired.service.name}-workspaces`;
+	const cache = await f.client.read<V1PersistentVolumeClaim>(
+		"PersistentVolumeClaim",
+		cacheName,
+	);
+	expect(cache?.spec).toMatchObject({
+		accessModes: ["ReadWriteOnce"],
+		resources: { requests: { storage: workloadTestPolicy.storageSize } },
+	});
+	expect(cache?.metadata?.ownerReferences).toBeUndefined();
+	const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+	expect(
+		pod?.spec?.volumes?.find((v) => v.name === "workspace-snapshots"),
+	).toEqual({
+		name: "workspace-snapshots",
+		persistentVolumeClaim: { claimName: cacheName },
+	});
+	if (!cache?.metadata) throw Error("missing cache");
+	const foreign = structuredClone(cache);
+	if (!foreign.metadata?.annotations) throw Error("missing cache ownership");
+	foreign.metadata.annotations["agent-infra.agora.io/agent-id"] =
+		"another-agent";
+	f.resources.set(`PersistentVolumeClaim/${cacheName}`, foreign);
+	const writes = f.writes.length;
+	await expect(adapter.apply(desired)).rejects.toThrow();
+	expect(f.writes).toHaveLength(writes);
+	f.resources.set(`PersistentVolumeClaim/${cacheName}`, cache);
+	const replaced = structuredClone(cache);
+	replaced.metadata = { ...cache.metadata, uid: "replacement-cache" };
+	f.resources.set(`PersistentVolumeClaim/${cacheName}`, replaced);
+	expect(await adapter.observe(desired, identity)).toBe("drifted");
+	await expect(adapter.apply(desired)).rejects.toThrow();
+	expect(f.writes).toHaveLength(writes);
+	f.resources.set(`PersistentVolumeClaim/${cacheName}`, cache);
+	await adapter.cleanupAgent(
+		desired.agentId,
+		desired.workloadRevision,
+		desired.fence,
+		false,
+	);
+	expect(
+		(
+			await f.client.read<V1PersistentVolumeClaim>(
+				"PersistentVolumeClaim",
+				cacheName,
+			)
+		)?.metadata?.uid,
+	).toBe(cache.metadata.uid);
+	const stoppedCache = structuredClone(cache);
+	stoppedCache.metadata = { ...cache.metadata, uid: "replacement-after-stop" };
+	f.resources.set(`PersistentVolumeClaim/${cacheName}`, stoppedCache);
+	const afterStop = f.writes.length;
+	await expect(adapter.apply(workloadDesiredFixture(2))).rejects.toThrow();
+	expect(f.writes).toHaveLength(afterStop);
+});
+
+it("observes only verified snapshot init attempts and blocks readiness on failure or missing evidence", async () => {
+	const f = await snapshotFixture();
+	const observed = vi.fn();
+	const adapter = createKubernetesRuntimeAdapterV1({
+		client: f.client,
+		policy: workloadTestPolicy,
+		probe: f.probe,
+		workspaceSnapshotProjection: f.projection,
+		onWorkspaceSnapshot: observed,
+	});
+	const identity = await adapter.apply(f.desired);
+	if (!identity || identity === "pending") throw Error("not applied");
+	const pod = await f.client.read<V1Pod>("Pod", `${f.desired.service.name}-0`);
+	const init = pod?.status?.initContainerStatuses?.[0];
+	if (!pod?.status || !init) throw Error("missing init status");
+	init.state = {
+		terminated: {
+			exitCode: 42,
+			startedAt: new Date("2026-11-07T10:00:00Z"),
+			finishedAt: new Date("2026-11-07T10:00:02Z"),
+			message: "untrusted-source-content",
+		},
+	};
+	f.resources.set(`Pod/${pod.metadata?.name}`, pod);
+	expect(await adapter.observe(f.desired, identity)).toBe("unhealthy");
+	expect(observed).toHaveBeenCalledWith(
+		expect.objectContaining({
+			outcome: "failed",
+			attempt: 1,
+			durationMs: 2000,
+		}),
+	);
+	expect(JSON.stringify(observed.mock.calls)).not.toContain(
+		"untrusted-source-content",
+	);
+	pod.status.initContainerStatuses = [];
+	f.resources.set(`Pod/${pod.metadata?.name}`, pod);
+	expect(await adapter.observe(f.desired, identity)).toBe("pending");
+});
+
+it("keeps platform-adapter snapshot validation on an independent emptyDir", async () => {
+	const f = await snapshotFixture();
+	const desired = workloadDesiredFixture(1, "adapter-agent", "internal-only");
+	const identity = await f.adapter.apply(desired);
+	if (!identity || identity === "pending") throw Error("not applied");
+	const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+	expect(
+		pod?.spec?.volumes?.find((v) => v.name === "workspace-snapshots"),
+	).toEqual({ name: "workspace-snapshots", emptyDir: { sizeLimit: "2Gi" } });
+	expect(
+		await f.client.read(
+			"PersistentVolumeClaim",
+			`${desired.service.name}-workspaces`,
+		),
+	).toBeNull();
+	expect(await f.adapter.observe(desired, identity)).toBe("healthy");
 });

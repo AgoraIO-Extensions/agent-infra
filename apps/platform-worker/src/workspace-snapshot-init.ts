@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { workspaceSnapshotLimitsV1 } from "@agent-infra/platform-core";
 import {
 	materializeWorkspaceSnapshotV1,
+	pruneWorkspaceSnapshotCacheV1,
 	WorkspaceSnapshotMaterializationError,
 } from "./workspace-snapshot-executor.js";
 import type { WorkspaceSnapshotMaterializerInputV1 } from "./workspace-snapshot-materializer.js";
@@ -91,6 +92,12 @@ export async function runWorkspaceSnapshotInitV1() {
 	}
 	const { snapshots, allowedOrigins } =
 		parseWorkspaceSnapshotInitManifestV1(value);
+	// Remove interrupted stages before allocating another archive. This keeps a
+	// retained Agent cache recoverable after an init container is killed at ENOSPC.
+	await pruneWorkspaceSnapshotCacheV1(
+		"/materialized",
+		snapshots.map((snapshot) => snapshot.name),
+	);
 	const signal = AbortSignal.timeout(300_000);
 	for (const snapshot of snapshots) {
 		await materializeWorkspaceSnapshotV1({
@@ -102,6 +109,10 @@ export async function runWorkspaceSnapshotInitV1() {
 			maxUnpackedBytes: workspaceSnapshotLimitsV1.maxUnpackedBytes,
 		});
 	}
+	await pruneWorkspaceSnapshotCacheV1(
+		"/materialized",
+		snapshots.map((snapshot) => snapshot.name),
+	);
 }
 if (
 	process.argv[1] &&

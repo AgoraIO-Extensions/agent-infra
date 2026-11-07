@@ -23,6 +23,7 @@ import type {
 	V1PersistentVolumeClaim,
 	V1Pod,
 	V1PodSpec,
+	V1ReplicaSet,
 	V1Secret,
 	V1Service,
 	V1ServiceAccount,
@@ -52,7 +53,12 @@ import {
 import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
+	workspaceSnapshotPodSpecMatchesV1,
 } from "./workspace-snapshot-materializer.js";
+import {
+	type WorkspaceSnapshotObservationCallbackV1,
+	workspaceSnapshotPodObservationV1,
+} from "./workspace-snapshot-observation.js";
 import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
 
 export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
@@ -1018,6 +1024,7 @@ export function createMultiServiceRuntimeOperations(options: {
 	readonly onHealthDiagnostic?: (
 		diagnostic: MultiServiceHealthDiagnosticV1,
 	) => void;
+	readonly onWorkspaceSnapshot?: WorkspaceSnapshotObservationCallbackV1;
 }) {
 	const { client } = options;
 	const resources = resolveMultiServiceResourceConfigurationV1(options.policy);
@@ -1029,6 +1036,94 @@ export function createMultiServiceRuntimeOperations(options: {
 		!!spec && hasSameStructure(spec.imagePullSecrets ?? [], imagePullSecrets);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
+	async function observeSnapshotPods(
+		value: MultiServiceDesired,
+		controller: V1Deployment | V1StatefulSet | V1Job,
+	): Promise<"healthy" | "pending" | "unhealthy" | "drifted"> {
+		const projection = options.policy.workspaceSnapshotProjection;
+		if (!projection) return "healthy";
+		if (
+			!controller.metadata?.uid ||
+			!workspaceSnapshotPodSpecMatchesV1(
+				controller.spec?.template.spec,
+				projection,
+			)
+		)
+			return "drifted";
+		const expectedLabels = controller.spec?.template.metadata?.labels ?? {};
+		const pods = (
+			await client.list<V1Pod>(
+				"Pod",
+				`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
+			)
+		).filter((pod) =>
+			Object.entries(expectedLabels).every(
+				([key, expected]) => pod.metadata?.labels?.[key] === expected,
+			),
+		);
+		if (!pods.length) return "pending";
+		let pending = false;
+		for (const pod of pods) {
+			const owners =
+				pod.metadata?.ownerReferences?.filter(
+					(owner) => owner.controller === true,
+				) ?? [];
+			const owner = owners[0];
+			if (
+				pod.metadata?.namespace !== client.namespace ||
+				!pod.metadata?.uid ||
+				pod.metadata.deletionTimestamp ||
+				owners.length !== 1 ||
+				!owner
+			)
+				return "drifted";
+			if (controller.kind === "Deployment") {
+				if (owner.apiVersion !== "apps/v1" || owner.kind !== "ReplicaSet")
+					return "drifted";
+				const replicaSet = await client.read<V1ReplicaSet>(
+					"ReplicaSet",
+					owner.name,
+				);
+				const parents =
+					replicaSet?.metadata?.ownerReferences?.filter(
+						(parent) => parent.controller === true,
+					) ?? [];
+				if (
+					replicaSet?.metadata?.namespace !== client.namespace ||
+					replicaSet.metadata.uid !== owner.uid ||
+					replicaSet.metadata.deletionTimestamp ||
+					parents.length !== 1 ||
+					parents[0]?.apiVersion !== "apps/v1" ||
+					parents[0]?.kind !== "Deployment" ||
+					parents[0]?.name !== controller.metadata.name ||
+					parents[0]?.uid !== controller.metadata.uid
+				)
+					return "drifted";
+			} else if (
+				owner.apiVersion !== controller.apiVersion ||
+				owner.kind !== controller.kind ||
+				owner.name !== controller.metadata.name ||
+				owner.uid !== controller.metadata.uid
+			)
+				return "drifted";
+			if (!workspaceSnapshotPodSpecMatchesV1(pod.spec, projection))
+				return "drifted";
+			const observation = workspaceSnapshotPodObservationV1(pod, projection);
+			if (observation) {
+				try {
+					options.onWorkspaceSnapshot?.({
+						...observation,
+						agentId: value.agentId,
+					});
+				} catch {
+					// Telemetry never changes workload readiness.
+				}
+			}
+			if (observation?.outcome === "failed") return "unhealthy";
+			if (observation?.outcome !== "completed") pending = true;
+		}
+		return pending ? "pending" : "healthy";
+	}
 	const manifestPvc = (value: MultiServiceDesired, name: string) =>
 		value.multiService.resources.find(
 			(resource): resource is MultiServicePvcResource =>
@@ -1431,9 +1526,15 @@ export function createMultiServiceRuntimeOperations(options: {
 					value,
 					ownership,
 				);
+				const snapshots = await observeSnapshotPods(value, job as V1Job);
+				if (snapshots === "unhealthy" || snapshots === "drifted")
+					throw new WorkloadPreflightRejectedErrorV1(
+						"snapshot-materialization",
+					);
 				if (jobFailed(job as V1Job))
 					throw new WorkloadPreflightRejectedErrorV1("desired-workload");
-				if (!jobSucceeded(job as V1Job)) return "pending" as const;
+				if (!jobSucceeded(job as V1Job) || snapshots === "pending")
+					return "pending" as const;
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "PersistentVolumeClaim")
@@ -1587,6 +1688,8 @@ export function createMultiServiceRuntimeOperations(options: {
 					await emitHealthDiagnostic(value, "workload_drifted");
 					return "drifted" as const;
 				}
+				const snapshots = await observeSnapshotPods(value, job);
+				if (snapshots !== "healthy") return snapshots;
 				if (jobFailed(job)) {
 					await emitHealthDiagnostic(value, "migration_failed");
 					return "unhealthy" as const;
@@ -1637,6 +1740,8 @@ export function createMultiServiceRuntimeOperations(options: {
 					)
 						return "drifted" as const;
 				}
+				const snapshots = await observeSnapshotPods(value, current);
+				if (snapshots !== "healthy") return snapshots;
 				// 工作负载还在启动：与单镜像路径一致返回 pending，由调谐按重试上限等待，
 				// 而不是在第一次观测时就判定失败。
 				if (

@@ -19,6 +19,10 @@ const policy = {
 	imageDigest: `registry.example.test/platform-worker@${digest}`,
 	allowedOrigins: ["https://objects.example.test"],
 	cacheSizeLimit: "2Gi",
+	resources: {
+		requests: { cpu: "100m", memory: "128Mi" },
+		limits: { cpu: "1", memory: "512Mi" },
+	},
 	credentialSecretName: "snapshot-credentials",
 };
 
@@ -29,6 +33,7 @@ describe("workspace snapshot materializer projection", () => {
 			name: "workspace-snapshot-materializer",
 			image: `registry.example.test/platform-worker@${digest}`,
 			command: ["node", "/app/dist/workspaceSnapshotInit.mjs"],
+			resources: policy.resources,
 		});
 		expect(result.containerMounts.get("repo")).toContainEqual({
 			name: "workspace-snapshots",
@@ -121,6 +126,44 @@ describe("workspace snapshot materializer projection", () => {
 			projectWorkspaceSnapshotMaterializerV1([input], policy),
 		).toThrow("workspace snapshot name is invalid");
 	});
+	it.each([
+		"/",
+		"/opt",
+		"/opt/agent/workspaces",
+		"/opt/agent/workspaces/repo/nested",
+	])(
+		"rejects an existing mount at %s before injecting snapshots",
+		(mountPath) => {
+			const projection = projectWorkspaceSnapshotMaterializerV1(
+				[snapshot],
+				policy,
+			);
+			expect(() =>
+				applyWorkspaceSnapshotProjectionV1(
+					{
+						containers: [
+							{
+								name: "agent",
+								volumeMounts: [{ name: "user-volume", mountPath }],
+							},
+						],
+					},
+					projection,
+				),
+			).toThrow("workspace snapshot mount collides");
+		},
+	);
+	it("rejects deployment resource limits below requests", () => {
+		expect(() =>
+			projectWorkspaceSnapshotMaterializerV1([snapshot], {
+				...policy,
+				resources: {
+					...policy.resources,
+					limits: { cpu: "1m", memory: "1Mi" },
+				},
+			}),
+		).toThrow("resource policy is invalid");
+	});
 });
 
 it("accepts API defaults and SDK objects but rejects mutated init credentials or mount flags", () => {
@@ -133,7 +176,7 @@ it("accepts API defaults and SDK objects but rejects mutated init credentials or
 	const init = actual.initContainers![0]!;
 	init.terminationMessagePath = "/dev/termination-log";
 	init.terminationMessagePolicy = "File";
-	init.resources = {};
+	init.resources = structuredClone(policy.resources);
 	Object.setPrototypeOf(init, { sdkObject: true });
 	actual.volumes!.find((v) => v.secret)!.secret!.defaultMode = 420;
 	expect(workspaceSnapshotPodSpecMatchesV1(actual, projection)).toBe(true);

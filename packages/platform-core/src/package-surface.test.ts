@@ -224,6 +224,7 @@ describe("platform-core package surface", () => {
 			"isWecomMediaRejectionV1",
 			"isWorkspaceReferenceV1",
 			"isWorkspaceSnapshotGcEligibleV1",
+			"isWorkspaceSnapshotObservationValidV1",
 			"markSkillHubInstallationUpgradeV1",
 			"markSkillHubUpgradeV1",
 			"modelOptionDisplayNameV1",

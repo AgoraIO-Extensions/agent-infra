@@ -102,6 +102,7 @@ export const operationalMetricOperations = [
 	"drain.persist_batch",
 	"sandbox.reconcile.prepare",
 	"sandbox.reconcile.drain",
+	"workspace.snapshot.materialize",
 	"sse.open",
 	"sse.ended",
 ] as const;
@@ -183,6 +184,7 @@ const operationalFailureSteps = new Set([
 	"eci.image_pull",
 	"runtime.startup",
 	"runtime.configuration",
+	"workspace.materialization",
 	"runtime.execution",
 	"model.execution",
 	// Session Sandbox 准备任务认领等待的原因（SessionSandboxClaimWaitReasonV1，#3089）。
