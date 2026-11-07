@@ -498,6 +498,20 @@ describe("durable Workload reconciliation", () => {
 		});
 	});
 	describe("swallowed step exceptions are observable (#2532)", () => {
+		it("terminates a deterministic rejection discovered while applying", async () => {
+			const f = fixture();
+			await f.tick(3);
+			vi.mocked(f.runtime.apply).mockRejectedValue(
+				new WorkloadPreflightRejectedErrorV1("desired-workload"),
+			);
+			await f.tick();
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				failureCode: "reconciliation_failed",
+				lastFailure: { reason: "preflight_rejected", attempts: 1 },
+			});
+		});
+
 		it("converges permanent model binding mismatch without retrying ready work", async () => {
 			class ModelConfigurationErrorV1 extends Error {
 				readonly retryable = false;

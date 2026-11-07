@@ -10,6 +10,7 @@ import {
 	parseMultiServiceResourceConfigurationV1,
 } from "@agent-infra/contracts/pilot";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import { WorkloadPreflightRejectedErrorV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1ConfigMap,
@@ -1430,6 +1431,8 @@ export function createMultiServiceRuntimeOperations(options: {
 					value,
 					ownership,
 				);
+				if (jobFailed(job as V1Job))
+					throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 				if (!jobSucceeded(job as V1Job)) return "pending" as const;
 			}
 			for (const resource of value.multiService.resources) {

@@ -904,6 +904,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 							);
 						return observe(failed("reconciliation_failed", lastFailure));
 					}
+					// A deterministic rejection can also be discovered while applying a
+					// previously accepted candidate (for example, a migration Job that
+					// has reached Failed). Do not treat it as an image/PVC readiness wait.
+					if (error instanceof WorkloadPreflightRejectedErrorV1)
+						return observe(failed("reconciliation_failed", lastFailure));
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
 					if (
