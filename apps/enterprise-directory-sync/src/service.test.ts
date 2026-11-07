@@ -47,6 +47,7 @@ function fixture(sourceId = "wecom") {
 					{
 						userId: "u1",
 						email: "u1@example.test",
+						displayName: "Employee One",
 						active: true,
 						departmentIds: [1],
 					},
@@ -87,6 +88,9 @@ describe("directory service", () => {
 		const { service } = fixture();
 		expect(
 			(await service.app.request("/internal/directory/snapshot")).status,
+		).toBe(401);
+		expect(
+			(await service.app.request("/internal/directory/v3/snapshot")).status,
 		).toBe(401);
 		expect((await service.app.request("/readyz")).status).toBe(503);
 		expect(
@@ -135,6 +139,16 @@ describe("directory service", () => {
 		const snapshot = await client.loadCurrent(now);
 		expect(snapshot.complete).toBe(true);
 		expect(snapshot.members[0]?.userId).toBe("u1");
+		expect(snapshot.members[0]).not.toHaveProperty("displayName");
+		const named = createDirectoryClient({
+			endpoint: "https://directory.example.test/internal/directory/v3/snapshot",
+			token: readToken,
+			fetch: fetchService,
+		});
+		expect((await named.loadCurrent(now)).members[0]?.displayName).toBe(
+			"Employee One",
+		);
+		await expect(named.loadCurrent(snapshot.validUntil)).rejects.toThrow();
 		await expect(client.loadCurrent(snapshot.validUntil)).rejects.toThrow();
 		const unauthorized = createDirectoryClient({
 			endpoint: "https://directory.example.test/internal/directory/snapshot",

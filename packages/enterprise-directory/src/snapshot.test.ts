@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
 	createSnapshot,
+	displayNameForDirectoryMember,
+	fromDirectorySnapshot,
 	fromDirectorySnapshotV1,
 	requireCurrentSnapshot,
 	resolveActiveMemberByEmail,
 	summarizeSnapshotChange,
+	toDirectorySnapshot,
 	toDirectorySnapshotV1,
 } from "./index.js";
 
@@ -22,6 +25,7 @@ const snapshot = () =>
 			{
 				userId: "wecom-a",
 				email: "A@example.test",
+				displayName: "Person A",
 				active: true,
 				departmentIds: [2],
 			},
@@ -35,6 +39,20 @@ const snapshot = () =>
 	});
 
 describe("directory snapshot", () => {
+	it("prefers the trusted display name and keeps the legacy fallback", () => {
+		const current = snapshot();
+		const member = current.members[0];
+		if (!member) throw new Error("member missing");
+		expect(displayNameForDirectoryMember(member)).toBe("Person A");
+		expect(
+			displayNameForDirectoryMember({
+				userId: "legacy-user",
+				email: "legacy.user@example.test",
+				active: true,
+				departmentIds: [2],
+			}),
+		).toBe("legacy.user");
+	});
 	it("summarizes only aggregate changes and unmappable members", () => {
 		const previous = snapshot();
 		const firstMember = previous.members[0];
@@ -101,7 +119,7 @@ describe("directory snapshot", () => {
 
 	it("maps wire data into an independent domain snapshot", () => {
 		const original = snapshot();
-		const mapped = fromDirectorySnapshotV1(toDirectorySnapshotV1(original));
+		const mapped = fromDirectorySnapshot(toDirectorySnapshot(original));
 		expect(mapped).toEqual(original);
 		const mappedMember = mapped.members[0];
 		const originalMember = original.members[0];
@@ -207,4 +225,32 @@ describe("directory snapshot", () => {
 			}),
 		).toThrow();
 	});
+});
+
+it("serves names on V3 and strips them from legacy projections", async () => {
+	const { toDirectorySnapshotV2, toDirectorySnapshotV3 } = await import(
+		"./wire.js"
+	);
+	const original = snapshot();
+	const v1 = toDirectorySnapshotV1(original);
+	const v2 = toDirectorySnapshotV2(original);
+	expect(v1.members[0]).not.toHaveProperty("displayName");
+	expect(v2.members[0]).not.toHaveProperty("displayName");
+	expect(fromDirectorySnapshot(v1).members[0]).not.toHaveProperty(
+		"displayName",
+	);
+	expect(fromDirectorySnapshot(v2).members[0]).not.toHaveProperty(
+		"displayName",
+	);
+	expect(fromDirectorySnapshot(toDirectorySnapshotV3(original))).toEqual(
+		original,
+	);
+	const noName = {
+		...original,
+		members: original.members.map(
+			({ displayName: _name, ...member }) => member,
+		),
+	};
+	expect(toDirectorySnapshot(noName).schemaVersion).toBe(1);
+	expect(fromDirectorySnapshot(toDirectorySnapshot(noName))).toEqual(noName);
 });

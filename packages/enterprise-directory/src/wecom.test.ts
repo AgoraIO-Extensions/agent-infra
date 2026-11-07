@@ -26,13 +26,25 @@ const complete = {
 	"/cgi-bin/user/list:1": {
 		errcode: 0,
 		userlist: [
-			{ userid: "u1", email: "u1@example.test", status: 1, department: [1, 2] },
+			{
+				userid: "u1",
+				email: "u1@example.test",
+				name: "Person One",
+				status: 1,
+				department: [1, 2],
+			},
 		],
 	},
 	"/cgi-bin/user/list:2": {
 		errcode: 0,
 		userlist: [
-			{ userid: "u1", email: "u1@example.test", status: 1, department: [1, 2] },
+			{
+				userid: "u1",
+				email: "u1@example.test",
+				name: "Person One",
+				status: 1,
+				department: [1, 2],
+			},
 			{ userid: "u2", email: "", status: 2, department: [2] },
 		],
 	},
@@ -46,6 +58,7 @@ describe("WeCom complete fetch", () => {
 			{
 				userId: "u1",
 				email: "u1@example.test",
+				displayName: "Person One",
 				active: true,
 				departmentIds: [1, 2],
 			},
@@ -93,4 +106,21 @@ describe("WeCom complete fetch", () => {
 			await expect(source(failed).fetchComplete()).rejects.toThrow();
 		}
 	});
+});
+
+it("normalizes blank or missing source names without invalidating members", async () => {
+	const withoutNames = structuredClone(complete);
+	for (const path of [
+		"/cgi-bin/user/list:1",
+		"/cgi-bin/user/list:2",
+	] as const) {
+		for (const user of withoutNames[path].userlist) {
+			if ("name" in user) user.name = "   ";
+		}
+	}
+	const result = await source(withoutNames).fetchComplete();
+	expect(result.members).toHaveLength(2);
+	expect(
+		result.members.every((member) => member.displayName === undefined),
+	).toBe(true);
 });

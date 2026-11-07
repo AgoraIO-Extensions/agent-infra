@@ -115,3 +115,76 @@ it("keeps V2 generated response validation aligned with its schema", async () =>
 		expect(validate(value)).toBe(ok);
 	}
 });
+
+it("publishes V3 names while keeping legacy schemas strict", async () => {
+	const { EnterpriseDirectorySnapshotV3Schema } = await import(
+		"./enterprise-directory.js"
+	);
+	const document = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/enterprise-directory.v3.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const validate = new Ajv2020({
+		strictSchema: false,
+		validateFormats: false,
+	}).compile({
+		components: document.components,
+		$ref: "#/components/schemas/EnterpriseDirectorySnapshotV3",
+	});
+	const member = {
+		userId: "employee-a",
+		email: "a@example.test",
+		active: true,
+		departmentIds: [1],
+	};
+	const snapshot = {
+		schemaVersion: 3,
+		revision: "00000000-0000-4000-8000-000000000000",
+		source: "internal",
+		rootDepartmentId: 1,
+		fetchedAt: 1000,
+		validUntil: 2000,
+		complete: true,
+		departments: [{ id: 1, name: "Company", parentId: 0 }],
+		members: [member],
+	};
+	for (const [name, accepted] of [
+		[undefined, true],
+		["王小明", true],
+		["", false],
+		[" ", false],
+		["x".repeat(257), false],
+		[42, false],
+	] as const) {
+		const value = {
+			...snapshot,
+			members: [
+				{ ...member, ...(name === undefined ? {} : { displayName: name }) },
+			],
+		};
+		expect(EnterpriseDirectorySnapshotV3Schema.safeParse(value).success).toBe(
+			accepted,
+		);
+		expect(validate(value)).toBe(accepted);
+	}
+	const named = {
+		...snapshot,
+		schemaVersion: 2,
+		members: [{ ...member, displayName: "王小明" }],
+	};
+	expect(EnterpriseDirectorySnapshotV2Schema.safeParse(named).success).toBe(
+		false,
+	);
+	expect(
+		EnterpriseDirectorySnapshotV1Schema.safeParse({
+			...named,
+			schemaVersion: 1,
+			source: "wecom",
+		}).success,
+	).toBe(false);
+});

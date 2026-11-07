@@ -1,6 +1,7 @@
 import {
 	EnterpriseDirectorySnapshotV1Schema,
 	EnterpriseDirectorySnapshotV2Schema,
+	EnterpriseDirectorySnapshotV3Schema,
 } from "@agent-infra/contracts/enterprise-directory";
 import { type DirectorySnapshot, validateSnapshot } from "./snapshot.js";
 
@@ -54,11 +55,14 @@ export function toDirectorySnapshotV1(value: DirectorySnapshot) {
 	});
 }
 
-/** Read either stored/wire version while keeping the domain representation stable. */
+/** Read supported stored/wire versions while keeping the domain representation stable. */
 export function fromDirectorySnapshot(value: unknown): DirectorySnapshot {
 	const v1 = EnterpriseDirectorySnapshotV1Schema.safeParse(value);
 	if (v1.success) return fromDirectorySnapshotV1(v1.data);
-	const dto = EnterpriseDirectorySnapshotV2Schema.parse(value);
+	const v2 = EnterpriseDirectorySnapshotV2Schema.safeParse(value);
+	const dto = v2.success
+		? v2.data
+		: EnterpriseDirectorySnapshotV3Schema.parse(value);
 	return validateSnapshot({ ...dto, schemaVersion: 1 });
 }
 export function toDirectorySnapshotV2(value: DirectorySnapshot) {
@@ -66,9 +70,20 @@ export function toDirectorySnapshotV2(value: DirectorySnapshot) {
 	return EnterpriseDirectorySnapshotV2Schema.parse({
 		...snapshot,
 		schemaVersion: 2,
+		members: snapshot.members.map(
+			({ displayName: _name, ...member }) => member,
+		),
+	});
+}
+export function toDirectorySnapshotV3(value: DirectorySnapshot) {
+	return EnterpriseDirectorySnapshotV3Schema.parse({
+		...validateSnapshot(value),
+		schemaVersion: 3,
 	});
 }
 export function toDirectorySnapshot(value: DirectorySnapshot) {
+	if (value.members.some((member) => member.displayName !== undefined))
+		return toDirectorySnapshotV3(value);
 	return value.source === "wecom"
 		? toDirectorySnapshotV1(value)
 		: toDirectorySnapshotV2(value);
