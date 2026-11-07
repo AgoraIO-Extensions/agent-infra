@@ -1531,6 +1531,10 @@ export class CodexAppServerBridge {
 		process.stdout.on("data", (chunk: Buffer) => this.receive(chunk));
 		process.stdin.on("error", () => this.fail(exited()));
 		process.once("error", () => this.fail(unavailable()));
+		process.once("exit", () => {
+			// Descendants can retain stdio after the app-server has exited.
+			if (!this.#closing) this.fail(exited());
+		});
 		process.once("close", () => {
 			this.#callbacks?.close();
 			this.#isClosed = true;
