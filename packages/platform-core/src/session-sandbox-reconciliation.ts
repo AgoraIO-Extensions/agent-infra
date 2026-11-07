@@ -358,7 +358,8 @@ export function decideSessionSandboxObservationV1(
 			if (old.kind === "PersistentVolumeClaim" || !replacementAfterStop)
 				return true;
 			return !claim.lifecycle.stopReceipt.removed.some(
-				({ resource }) => resource.kind === old.kind && resource.uid === old.uid,
+				({ resource }) =>
+					resource.kind === old.kind && resource.uid === old.uid,
 			);
 		}) ?? false;
 	const resurrectedSource =
@@ -368,9 +369,7 @@ export function decideSessionSandboxObservationV1(
 			),
 		) ?? false;
 	const unknown =
-		observation.status === "unknown" ||
-		(!replacementAfterStop && identityChanged) ||
-		resurrectedSource;
+		observation.status === "unknown" || identityChanged || resurrectedSource;
 	return {
 		status: unknown ? ("unknown" as const) : observation.status,
 		observation: unknown && previous ? previous : observation,
