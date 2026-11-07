@@ -529,6 +529,69 @@ export function planSessionSandboxIdleReclaimTransitionV1(input: {
 	};
 }
 
+/**
+ * #3985：没有 lifecycle 的准备认领里，Worker 读回记录的 Pod 已不存在（外部删除、驱逐或节点丢失），
+ * Store 仍保留着旧的 ready 回执。按空闲回收相同的形状排空来源、保留 PVC，并立即请求恢复，
+ * 之后沿保留 PVC 的替换准备重建；不在原 fence 下盲目重建。只有执行都不占用 Sandbox 时才允许。
+ */
+export function planSessionSandboxLostPodRecoveryTransitionV1(input: {
+	readonly management: Pick<
+		AgentManagementStateV1,
+		| "applicationId"
+		| "agentId"
+		| "status"
+		| "revision"
+		| "fence"
+		| "workloadRevision"
+		| "desiredState"
+	>;
+	readonly current: SessionSandboxSourceV1;
+	readonly allocationDesiredState: string;
+	readonly executionStatuses: readonly string[];
+	readonly generationBarrierPending: boolean;
+}) {
+	const { management, current } = input;
+	if (
+		management.agentId !== current.sandbox.agentId ||
+		management.status !== "available" ||
+		management.desiredState !== "running" ||
+		input.allocationDesiredState !== "running" ||
+		!Number.isSafeInteger(current.resourceFence) ||
+		current.resourceFence < 1 ||
+		current.resourceFence >= Number.MAX_SAFE_INTEGER ||
+		!current.policy ||
+		current.observation?.status !== "ready" ||
+		!current.observation.resources.some(
+			(resource) => resource.kind === "Pod",
+		) ||
+		current.deployment === null ||
+		typeof current.deployment !== "object" ||
+		input.generationBarrierPending ||
+		!canDrainSessionSandboxComputeV1(input.executionStatuses)
+	)
+		return null;
+	return {
+		resourceFence: current.resourceFence + 1,
+		status: "unavailable" as const,
+		desiredState: "stopped" as const,
+		lifecycle: {
+			schemaVersion: 1,
+			reason: "idle_reclaim" as const,
+			authority: {
+				kind: "management" as const,
+				applicationId: management.applicationId,
+				managementRevision: management.revision,
+				managementFence: management.fence,
+				workloadRevision: management.workloadRevision,
+				targetDesiredState: "running" as const,
+			},
+			source: current,
+			stopReceipt: null,
+			resumeRequested: true,
+		} satisfies SessionSandboxLifecycleV1,
+	};
+}
+
 /** Idle reclaim is stricter than upgrade: waiting/submitted work must stay warm. */
 export function canReclaimIdleSessionSandboxV1(
 	executionStatuses: readonly string[],

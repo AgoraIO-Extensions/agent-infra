@@ -6,6 +6,7 @@ import {
 	canReclaimIdleSessionSandboxV1,
 	decideSessionSandboxDrainObservationV1,
 	planSessionSandboxIdleReclaimTransitionV1,
+	planSessionSandboxLostPodRecoveryTransitionV1,
 	planSessionSandboxUpgradeTransitionV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxStopReceiptV1,
@@ -1145,6 +1146,112 @@ describe("idle Sandbox upgrade plan (ADR 0023)", () => {
 				generationBarrierPending: true,
 			}),
 		).toBeNull();
+	});
+
+	it("drains a Sandbox whose Pod was lost and asks to resume it at once (#3985)", () => {
+		const { current, management } = upgradeFixture();
+		const input = {
+			management,
+			current,
+			allocationDesiredState: "running",
+			// The Turn that found the route gone was returned to its pre-delivery state.
+			executionStatuses: ["completed", "submitted"],
+			generationBarrierPending: false,
+		};
+		expect(planSessionSandboxLostPodRecoveryTransitionV1(input)).toEqual({
+			resourceFence: 4,
+			status: "unavailable",
+			desiredState: "stopped",
+			lifecycle: {
+				schemaVersion: 1,
+				reason: "idle_reclaim",
+				authority: {
+					kind: "management",
+					applicationId: "application",
+					managementRevision: 5,
+					managementFence: 2,
+					workloadRevision: 2,
+					targetDesiredState: "running",
+				},
+				source: current,
+				stopReceipt: null,
+				resumeRequested: true,
+			},
+		});
+		const resumed = planSessionSandboxLostPodRecoveryTransitionV1(input);
+		if (!resumed) throw new Error("Expected a recovery plan");
+		// The drain then continues into the retained-PVC replacement preparation.
+		expect(shouldContinueSessionSandboxPreparationV1(resumed.lifecycle)).toBe(
+			true,
+		);
+	});
+
+	it.each([
+		["a processing execution", { executionStatuses: ["processing"] }],
+		["an unknown execution", { executionStatuses: ["unknown"] }],
+		["a pending generation barrier", { generationBarrierPending: true }],
+		["a Sandbox already stopping", { allocationDesiredState: "stopped" }],
+	] as const)("does not drain a lost-Pod Sandbox with %s", (_, override) => {
+		const { current, management } = upgradeFixture();
+		expect(
+			planSessionSandboxLostPodRecoveryTransitionV1({
+				management,
+				current,
+				allocationDesiredState: "running",
+				executionStatuses: ["completed"],
+				generationBarrierPending: false,
+				...override,
+			}),
+		).toBeNull();
+	});
+
+	it("needs a complete ready source with a recorded Pod and a running Agent (#3985)", () => {
+		const { current, management } = upgradeFixture();
+		const base = {
+			management,
+			current,
+			allocationDesiredState: "running",
+			executionStatuses: ["completed"],
+			generationBarrierPending: false,
+		};
+		const observation = current.observation;
+		if (!observation) throw new Error("Expected a source observation");
+		for (const changed of [
+			{ ...current, observation: null },
+			{
+				...current,
+				observation: { ...observation, status: "unknown" as const },
+			},
+			{
+				...current,
+				observation: {
+					...observation,
+					resources: observation.resources.filter(
+						(resource) => resource.kind !== "Pod",
+					),
+				},
+			},
+			{ ...current, policy: null },
+			{ ...current, deployment: null },
+			{ ...current, resourceFence: 0 },
+		])
+			expect(
+				planSessionSandboxLostPodRecoveryTransitionV1({
+					...base,
+					current: changed,
+				}),
+			).toBeNull();
+		for (const changed of [
+			{ ...management, status: "stopped" as const },
+			{ ...management, desiredState: "stopped" as const },
+			{ ...management, agentId: "another-agent" },
+		])
+			expect(
+				planSessionSandboxLostPodRecoveryTransitionV1({
+					...base,
+					management: changed,
+				}),
+			).toBeNull();
 	});
 
 	it("keeps existing management lifecycles preparing while idle reclaim waits for resume", () => {
