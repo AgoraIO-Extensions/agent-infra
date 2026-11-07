@@ -789,6 +789,25 @@ test("retire keeps the latest and current version of each template and retires e
 		}).retire.map((cache) => cache.name),
 		[codexOld.name],
 	);
+	// A newest version that is already being deleted does not displace the last usable one.
+	const opencodeUsable = owned(15, [image("agent-runtime-opencode", 15)]);
+	const opencodeDeleting = owned(16, [image("agent-runtime-opencode", 16)], {
+		deleting: true,
+	});
+	assert.deepEqual(
+		selectCachesToRetire({
+			caches: [opencodeUsable, opencodeDeleting],
+			plan,
+			admissionIds: [],
+			inUseImages: [],
+		}),
+		{
+			retire: [],
+			kept: { latest: 1, admission_reference: 0, in_use: 0, deleting: 1 },
+			owned: 2,
+			foreign: 0,
+		},
+	);
 	for (const broken of [
 		owned(6, pi(6), { createdAt: "not-a-date" }),
 		owned(7, undefined),

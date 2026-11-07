@@ -99,7 +99,12 @@ export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CacheP
 	for (const cache of owned) assert(cache.uid && Number.isFinite(Date.parse(cache.createdAt)) && Array.isArray(cache.images), "CACHE_INVENTORY_INVALID");
 	const newestFirst = [...owned].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.name.localeCompare(a.name));
 	const latest = new Map<string, string>();
-	for (const cache of newestFirst) if (!latest.has(templateOf(cache.images))) latest.set(templateOf(cache.images), hash([...cache.images].sort()));
+	for (const cache of newestFirst) {
+		// A version already being deleted cannot be the one a template keeps.
+		if (cache.deleting) continue;
+		const template = templateOf(cache.images);
+		if (!latest.has(template)) latest.set(template, hash([...cache.images].sort()));
+	}
 	const kept: Record<string, number> = { latest: 0, admission_reference: 0, in_use: 0, deleting: 0 };
 	const retire: OwnedCache[] = [];
 	for (const cache of [...newestFirst].reverse()) {
