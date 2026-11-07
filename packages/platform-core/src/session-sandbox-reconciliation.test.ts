@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
+import type { SessionSandboxStopReceiptV1 } from "./session-sandbox-lifecycle.js";
 import {
 	canAdvanceSessionSandboxDeletionProgressV1,
 	decideSessionSandboxObservationV1,
@@ -289,6 +290,51 @@ describe("Session Sandbox observation decision", () => {
 			observation: refreshed,
 			finished: true,
 		});
+	});
+	it("accepts new resource identities after a verified stop receipt", () => {
+		const retainedPVC = ready.resources.find(
+			(resource) => resource.kind === "PersistentVolumeClaim",
+		);
+		if (!retainedPVC) throw new Error("Missing retained PVC fixture");
+		const receipt: SessionSandboxStopReceiptV1 = {
+			schemaVersion: 1,
+			sandboxId: sandbox.sandboxId,
+			sessionId: sandbox.sessionId,
+			sourceGeneration: 1,
+			sourceResourceFence: 1,
+			targetGeneration: 1,
+			targetResourceFence: 2,
+			removed: ready.resources
+				.filter((resource) => resource.kind !== "PersistentVolumeClaim")
+				.map((resource) => ({
+					resource,
+					preconditions: {
+						uid: resource.uid,
+						resourceVersion: resource.resourceVersion,
+					},
+					absence: {
+						kind: resource.kind,
+						namespace: resource.namespace,
+						name: resource.name,
+					},
+				})),
+			retainedPVC,
+		};
+		const replacement = {
+			...ready,
+			resources: ready.resources.map((resource) =>
+				resource.kind === "PersistentVolumeClaim"
+					? resource
+					: { ...resource, uid: `replacement-${resource.uid}` },
+			),
+		};
+		expect(
+			decideSessionSandboxObservationV1(
+				{ ...claim, lifecycle: { stopReceipt: receipt } as never },
+				ready,
+				replacement,
+			),
+		).toEqual({ status: "ready", observation: replacement, finished: true });
 	});
 });
 
