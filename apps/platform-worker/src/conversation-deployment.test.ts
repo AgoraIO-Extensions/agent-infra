@@ -1954,6 +1954,83 @@ describe("production SessionSandbox resource receiver", () => {
 			expect(pod?.metadata?.labels?.[managedLabel]).toBe("session-sandbox-v1");
 		});
 
+		it("reports an externally deleted Pod as lost instead of recreating it, then recovers through the reclaim drain (#3985)", async () => {
+			const f = fixture();
+			const signal = await readyRunning(f);
+			const observation = await f.receive(f.claim, signal);
+			expect(observation.status).toBe("ready");
+			const sourcePVC = observation.resources.find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			);
+			const original = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			if (!original?.metadata?.uid) throw new Error("Expected prepared Pod");
+			// Eviction, node loss or `kubectl delete pod`: no Store lifecycle authorizes it.
+			await f.client.delete(original);
+			const writes = f.writes.length;
+			// The reopened reconcile (#3987) is an ordinary prepare with the stale ready receipt.
+			const lost = await f.receive(
+				{ ...f.claim, previousObservation: observation },
+				signal,
+			);
+			expect(lost).toEqual({
+				status: "unknown",
+				failureCode: "sandbox.pod_lost",
+				resources: observation.resources,
+			});
+			// The evidence goes to the Store; nothing is recreated under the old fence.
+			expect(f.writes.length).toBe(writes);
+			expect(
+				await f.client.read("Pod", f.claim.sandbox.resourceName),
+			).toBeNull();
+			// A Pod with the same name but another identity is not "lost"; apply still refuses it.
+			const impostor = await f.client.create<V1Pod>({
+				...original,
+				metadata: {
+					...original.metadata,
+					uid: undefined,
+					resourceVersion: undefined,
+				},
+			});
+			await expect(
+				f.receive({ ...f.claim, previousObservation: observation }, signal),
+			).rejects.toMatchObject({ code: "conflict" });
+			await f.client.delete(impostor);
+			// The Store-authorized reclaim drain records the vanished Pod as absent and keeps the PVC.
+			const { stopped, replacement } = await resumeAfterDrain(
+				f,
+				observation,
+				signal,
+			);
+			if (stopped.status !== "stopped" || !stopped.sourceStop)
+				throw new Error("Expected a stop receipt");
+			expect(stopped.sourceStop.removed).toContainEqual(
+				expect.objectContaining({
+					resource: expect.objectContaining({
+						kind: "Pod",
+						uid: original.metadata.uid,
+					}),
+					absence: expect.objectContaining({ kind: "Pod" }),
+				}),
+			);
+			expect(stopped.sourceStop.retainedPVC?.uid).toBe(sourcePVC?.uid);
+			// The replacement preparation recreates the Pod on the same PVC.
+			await f.receive(replacement, signal);
+			const recreated = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			expect(recreated?.metadata?.uid).toBeDefined();
+			expect(recreated?.metadata?.uid).not.toBe(original.metadata.uid);
+			const pvc = await f.client.read<KubernetesObject>(
+				"PersistentVolumeClaim",
+				f.claim.sandbox.resourceName,
+			);
+			expect(pvc?.metadata?.uid).toBe(sourcePVC?.uid);
+		});
+
 		it.each([
 			["a foreign managed label", "label"],
 			["no managed annotation", "annotation"],

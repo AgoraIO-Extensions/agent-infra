@@ -183,6 +183,8 @@ const operationalFailureSteps = new Set([
 	"eci.image_pull",
 	"runtime.startup",
 	"runtime.configuration",
+	// Session Sandbox 准备认领读回记录的 Pod 已不存在（#3985）。
+	"sandbox.pod_lost",
 	"runtime.execution",
 	"model.execution",
 	// Session Sandbox 准备任务认领等待的原因（SessionSandboxClaimWaitReasonV1，#3089）。

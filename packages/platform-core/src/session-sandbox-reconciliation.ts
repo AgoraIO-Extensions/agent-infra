@@ -133,7 +133,9 @@ export interface SessionSandboxObservationV1 {
 	readonly failureCode?:
 		| "eci.image_pull"
 		| "runtime.startup"
-		| "runtime.configuration";
+		| "runtime.configuration"
+		// #3985：准备认领读回记录的 Pod 已不存在；只作为一次观测的证据，不写入分配。
+		| "sandbox.pod_lost";
 	readonly sourceStop?: SessionSandboxStopReceiptV1;
 	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
@@ -259,9 +261,12 @@ export function isSessionSandboxObservationValidV1(
 		!observation ||
 		!["observed", "ready", "stopped", "unknown"].includes(observation.status) ||
 		(observation.failureCode !== undefined &&
-			!["eci.image_pull", "runtime.startup", "runtime.configuration"].includes(
-				observation.failureCode,
-			)) ||
+			![
+				"eci.image_pull",
+				"runtime.startup",
+				"runtime.configuration",
+				"sandbox.pod_lost",
+			].includes(observation.failureCode)) ||
 		!Array.isArray(observation.resources)
 	)
 		return false;

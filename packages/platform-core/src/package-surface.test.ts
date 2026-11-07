@@ -346,6 +346,7 @@ describe("platform-core package surface", () => {
 			"planEvaluationScoreFailureV1",
 			"planEvaluationScoreIntentV1",
 			"planSessionSandboxIdleReclaimTransitionV1",
+			"planSessionSandboxLostPodRecoveryTransitionV1",
 			"planSessionSandboxManagementTransitionV1",
 			"planSessionSandboxUpgradeTransitionV1",
 			"planTaskSystemControlV1",

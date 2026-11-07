@@ -1442,6 +1442,23 @@ export function createProductionSessionSandboxReceiverV1(
 			// when a live route disappears during the replacement; never pass those
 			// old UIDs to apply as current resources.
 			previousForApply = [];
+		} else if (!claim.lifecycle) {
+			// #3985：没有 lifecycle 的准备里，记录的 Pod 读回不存在（外部删除、驱逐或节点丢失）。
+			// 不在原 fence 下重建，把这条证据交给 Store：按空闲回收相同的形状排空、保留 PVC 后恢复。
+			// 同名的另一个 Pod（UID 不同）不算丢失，仍由下面的 apply 判冲突。
+			const recordedPod = previous.find((resource) => resource.kind === "Pod");
+			if (
+				recordedPod &&
+				(await workload.client.read("Pod", recordedPod.name)) === null
+			) {
+				signal.throwIfAborted();
+				return {
+					status: "unknown" as const,
+					failureCode: "sandbox.pod_lost" as const,
+					resources: previous,
+				};
+			}
+			signal.throwIfAborted();
 		}
 		await adapter.apply(allocation, previousForApply);
 		signal.throwIfAborted();
