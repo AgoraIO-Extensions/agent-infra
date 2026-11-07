@@ -3183,6 +3183,13 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 	).not.toBe(sessionSnapshotSecretNameV1(allocation));
 	if (!pod?.spec?.initContainers?.[0]?.image) throw Error("no init");
 	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	const missing = await adapter.observe(selected);
+	expect(missing.status).toBe("observed");
+	expect(missing.workspaceSnapshot).toBeUndefined();
+	pod.status = {
 		phase: "Pending",
 		conditions: [{ type: "Ready", status: "False" }],
 		initContainerStatuses: [

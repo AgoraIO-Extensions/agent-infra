@@ -1892,6 +1892,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							failureCode = "workspace.materialization";
 							status = "observed";
 						}
+						if (
+							allocation.workspaceSnapshotProjection &&
+							workspaceSnapshot?.outcome !== "completed" &&
+							status === "ready"
+						)
+							status = "observed";
 					}
 					if (
 						status === "ready" &&
