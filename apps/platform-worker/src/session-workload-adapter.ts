@@ -54,6 +54,7 @@ import {
 	hasAdditionalEgressPolicyV1,
 	nativeEgressPolicyAnnotationsV1,
 	nativeEgressPolicyAnnotationV1,
+	requireWorkspaceSnapshotEgressV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -475,6 +476,7 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 					"connectionEgress",
 					"nativeMetadataWorkerEgress",
 					"fileExchangeEgress",
+					"workspaceSnapshotEgress",
 					"dnsEgress",
 				].includes(key),
 		)
@@ -509,6 +511,13 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
+	if (value.workspaceSnapshotProjection)
+		requireWorkspaceSnapshotEgressV1(value.egress.workspaceSnapshotEgress);
+	if (
+		value.egress.workspaceSnapshotEgress !== undefined &&
+		value.workspaceSnapshotProjection === undefined
+	)
+		throw new WorkloadKubernetesError("policy");
 	// 排空（drain-only）allocation 的 runtime 允许为 null（旧 payload 形状）：
 	// cleanup 和 control-mode observe 在 stopped 状态下只需沙箱身份标签，
 	// 不依赖模型配置字段。创建资源的入口另行要求 runtime 非空。
@@ -1653,7 +1662,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			await validateSkillSource(allocation);
 			if (
 				allocation.desiredState === "running" &&
-				allocation.egress.nativeEgress &&
+				(allocation.egress.nativeEgress ||
+					allocation.workspaceSnapshotProjection) &&
 				hasAdditionalEgressPolicyV1(
 					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
 					resources.find((r) => r.kind === "NetworkPolicy") as V1NetworkPolicy,
@@ -1828,7 +1838,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (
 				purpose === "business" &&
 				allocation.desiredState === "running" &&
-				allocation.egress.nativeEgress &&
+				(allocation.egress.nativeEgress ||
+					allocation.workspaceSnapshotProjection) &&
 				hasAdditionalEgressPolicyV1(
 					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
 					expectedResources.find(

@@ -48,6 +48,14 @@ export interface WorkloadEgressPolicyV1 {
 	 * 只接受精确 IP 或 namespace/Pod 选择器，不接受 CIDR；Runtime 输入与 Owner env 不参与。
 	 */
 	readonly fileExchangeEgress?: WorkloadEgressPolicyV1["modelEgress"];
+	/** Snapshot materializer target; only compiled when a trusted snapshot projection is present. */
+	readonly workspaceSnapshotEgress?: readonly {
+		readonly destination: Exclude<
+			WorkloadEgressDestinationV1,
+			{ readonly cidr: string }
+		>;
+		readonly port: number;
+	}[];
 	readonly dnsEgress?: readonly WorkloadEgressDestinationV1[];
 }
 
@@ -426,17 +434,20 @@ export function workloadEgressRulesV1(
 	const connections = policy.connectionEgress ?? [];
 	const nativeMetadata = policy.nativeMetadataWorkerEgress ?? [];
 	const fileExchange = policy.fileExchangeEgress ?? [];
+	const workspaceSnapshot = policy.workspaceSnapshotEgress ?? [];
 	const dns = policy.dnsEgress ?? [];
 	if (
 		!Array.isArray(models) ||
 		!Array.isArray(connections) ||
 		!Array.isArray(nativeMetadata) ||
 		!Array.isArray(fileExchange) ||
+		!Array.isArray(workspaceSnapshot) ||
 		!Array.isArray(dns) ||
 		models.length > 128 ||
 		connections.length > 128 ||
 		nativeMetadata.length > 1 ||
 		fileExchange.length > 1 ||
+		workspaceSnapshot.length > 8 ||
 		dns.length > 16
 	)
 		throw new WorkloadKubernetesError("policy");
@@ -460,6 +471,8 @@ export function workloadEgressRulesV1(
 		...[...models, ...connections, ...nativeMetadata].map(tcpRule(true)),
 		// 文件交换只到单一 origin，不接受网段。
 		...fileExchange.map(tcpRule(false)),
+		// Snapshot materializer target is deployment-owned and never accepts CIDR.
+		...workspaceSnapshot.map(tcpRule(false)),
 		...nativeRules(policy.nativeEgress),
 		...dns.map((destination) => ({
 			to: [destinationPeer(destination, false)],
@@ -469,4 +482,12 @@ export function workloadEgressRulesV1(
 			],
 		})),
 	];
+}
+
+export function requireWorkspaceSnapshotEgressV1(
+	value: WorkloadEgressPolicyV1["workspaceSnapshotEgress"],
+) {
+	if (!Array.isArray(value) || value.length === 0)
+		throw new WorkloadKubernetesError("policy");
+	workloadEgressRulesV1({ workspaceSnapshotEgress: value });
 }

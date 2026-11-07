@@ -128,6 +128,23 @@ function configurationFixture(
 	};
 }
 
+it("binds the snapshot storage target into the trusted resource configuration hash", () => {
+	const base = structuredClone(workloadTestPolicy);
+	const target = {
+		destination: {
+			namespace: "agent-infra-d-ac-1107",
+			podLabels: { app: "d-snapshot-storage" },
+		},
+		port: 9000,
+	};
+	expect(workloadResourceConfigurationHashV1(base)).not.toBe(
+		workloadResourceConfigurationHashV1({
+			...base,
+			workspaceSnapshotEgress: [target],
+		}),
+	);
+});
+
 function multiServiceConfigurationFixture(): AgentConfigurationRecordV2 {
 	const deployment = (name: string, digest: string) => ({
 		apiVersion: "apps/v1",
@@ -6804,7 +6821,21 @@ it("restores snapshot projection after runtime recreation and refreshes signing"
 		};
 	});
 	const f = fixture(
-		{ workspaceSnapshotResolver: resolver },
+		{
+			workspaceSnapshotResolver: resolver,
+			policy: {
+				...workloadTestPolicy,
+				workspaceSnapshotEgress: [
+					{
+						destination: {
+							namespace: "agent-infra-d-ac-1107",
+							podLabels: { app: "d-snapshot-storage" },
+						},
+						port: 9000,
+					},
+				],
+			},
+		},
 		{
 			configuration: {
 				...configuration,

@@ -50,6 +50,7 @@ import {
 	type WorkloadEgressDestinationV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
+import { projectWorkspaceSnapshotMaterializerV1 } from "./workspace-snapshot-materializer.js";
 
 const api = () => {
 	const resources = new Map<string, KubernetesObject>();
@@ -771,6 +772,52 @@ describe("session sandbox workload adapter", () => {
 		await expect(adapter.apply(allocation)).rejects.toMatchObject({
 			code: "conflict",
 		});
+	});
+	it("adds snapshot storage egress only with a trusted snapshot projection", async () => {
+		const workspaceSnapshotEgress = [
+			{
+				destination: {
+					namespace: "agent-infra-d-ac-1107",
+					podLabels: { app: "d-snapshot-storage" },
+				},
+				port: 9000,
+			},
+		] as const;
+		const projection = projectWorkspaceSnapshotMaterializerV1(
+			[
+				{
+					snapshotId: "snapshot-a",
+					name: "repo",
+					digest: `sha256:${"a".repeat(64)}`,
+					sizeBytes: 128,
+					objectRef: "object-a",
+					signedUrl: "https://objects.example.test/archive",
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			],
+			{
+				imageDigest: `registry.example.test/worker@sha256:${"b".repeat(64)}`,
+				allowedOrigins: ["https://objects.example.test"],
+				cacheSizeLimit: "2Gi",
+				credentialSecretName: "snapshot-credentials",
+				resources: {
+					requests: { cpu: "100m", memory: "128Mi" },
+					limits: { cpu: "1", memory: "512Mi" },
+				},
+			},
+		);
+		const selected = {
+			...allocation,
+			workspaceSnapshotProjection: projection,
+			egress: { workspaceSnapshotEgress },
+		};
+		const [, , policy] = sessionSandboxResourcesV1(selected);
+		expect(policy.spec?.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(policy.spec?.egress).toEqual(
+			workloadEgressRulesV1({ workspaceSnapshotEgress }),
+		);
+		const noProjection = { ...allocation, egress: { workspaceSnapshotEgress } };
+		expect(() => sessionSandboxResourcesV1(noProjection)).toThrow();
 	});
 
 	it.each([
@@ -3165,8 +3212,38 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 			credentialSecretName: sessionSnapshotSecretNameV1(allocation),
 		},
 	);
-	const selected = { ...allocation, workspaceSnapshotProjection: projection };
+	const selected = {
+		...allocation,
+		workspaceSnapshotProjection: projection,
+		egress: {
+			workspaceSnapshotEgress: [
+				{
+					destination: {
+						namespace: "agent-infra-d-ac-1107",
+						podLabels: { app: "d-snapshot-storage" },
+					},
+					port: 9000,
+				},
+			],
+		},
+	};
 	await adapter.apply(selected);
+	const foreign: V1NetworkPolicy = {
+		kind: "NetworkPolicy",
+		metadata: { name: "foreign" },
+		spec: { podSelector: {}, policyTypes: ["Egress"], egress: [{}] },
+	};
+	const list = client.list;
+	client.list = async () => [foreign] as never;
+	const count = client.resources.size;
+	await expect(adapter.apply(selected)).rejects.toMatchObject({
+		code: "policy",
+	});
+	expect(client.resources.size).toBe(count);
+	await expect(adapter.observe(selected)).rejects.toMatchObject({
+		code: "policy",
+	});
+	client.list = list;
 	const pod = await client.read<V1Pod>("Pod", allocation.podName);
 	expect(pod?.spec?.initContainers).toHaveLength(1);
 	const secret = await client.read<V1Secret>(

@@ -128,6 +128,7 @@ function validPodSelector(value: Readonly<Record<string, string>> | undefined) {
 import {
 	hasAdditionalEgressPolicyV1,
 	nativeEgressPolicyAnnotationV1,
+	requireWorkspaceSnapshotEgressV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -218,6 +219,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 }) {
 	const { client } = options;
 	const policy = structuredClone(options.policy);
+	if (options.workspaceSnapshotProjection)
+		requireWorkspaceSnapshotEgressV1(policy.workspaceSnapshotEgress);
 	skillHubDeliveryProjectionV1(undefined, policy.skillDeliveryImage);
 	workloadImagePullSpecV1(policy.imagePullSecretName);
 	const multiService = createMultiServiceRuntimeOperations({
@@ -252,7 +255,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
 	if (!templateBinding)
 		delete (policy as { nativeEgress?: unknown }).nativeEgress;
-	const egress = workloadEgressRulesV1(policy);
+	const egress = workloadEgressRulesV1(
+		options.workspaceSnapshotProjection
+			? policy
+			: { ...policy, workspaceSnapshotEgress: undefined },
+	);
 	const imageRepository =
 		templateBinding?.imageRepository ?? policy.imageRepository;
 	const connection = runtimeConnectionConsumerProjectionV1(
@@ -598,7 +605,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		);
 		const network = await client.read<V1NetworkPolicy>("NetworkPolicy", name);
 		if (
-			policy.nativeEgress &&
+			(policy.nativeEgress || options.workspaceSnapshotProjection) &&
 			hasAdditionalEgressPolicyV1(
 				await client.list<V1NetworkPolicy>("NetworkPolicy", ""),
 				networkPolicy(value),
@@ -1418,7 +1425,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			if (
-				policy.nativeEgress &&
+				(policy.nativeEgress || options.workspaceSnapshotProjection) &&
 				value.replicas !== 0 &&
 				hasAdditionalEgressPolicyV1(
 					await client.list<V1NetworkPolicy>("NetworkPolicy", ""),
