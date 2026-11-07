@@ -6,6 +6,7 @@
 # - images.{web,api,worker,directory,postgres}      immutable repo@sha256 digests
 # - images.runtimeHost.{repository,digest}          Worker-created Runtime images
 # - publicOrigin                                    actual ACK LB origin
+# - agentVersion                                   fixed Skill Agent Version when Skill Hub is enabled
 # - directory.corpId                                real WeCom Corp ID
 # - ingress.tlsSecret / ingress.className           cluster TLS Secret / class
 # - images.pullSecrets                              GHCR pull Secret name(s)
@@ -37,4 +38,10 @@
 postgres:
   enabled: false
 migrations:
+  enabled: false
+
+# Enable only after the API/Worker private configuration exports the complete
+# Store-backed Skill materializer and the immutable Worker delivery entrypoint.
+agentVersion: ""
+skillHub:
   enabled: false

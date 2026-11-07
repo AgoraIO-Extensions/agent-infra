@@ -1835,6 +1835,15 @@ export function createWorkloadRuntimeV1(
 					}),
 				);
 			}
+			const persistedDeployment =
+				state.candidate.deployment === null
+					? null
+					: validateAgentWorkloadDesiredV1(state.candidate.deployment);
+			const frozenSkillDeliveryImage =
+				persistedDeployment?.skillDeliveryImage ??
+				(state.candidate.deployment === null && state.identity === null
+					? options.policy.skillDeliveryImage
+					: undefined);
 			try {
 				const deployment = validateAgentWorkloadDesiredV1({
 					schemaVersion: 1,
@@ -1909,8 +1918,12 @@ export function createWorkloadRuntimeV1(
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),
-					...(materializedSkills
+					...(materializedSkills &&
+					(!frozenSkillDeliveryImage || materializedSkills.skills.length > 0)
 						? {
+								...(frozenSkillDeliveryImage
+									? { skillDeliveryImage: frozenSkillDeliveryImage }
+									: {}),
 								skills: materializedSkills.skills,
 								skillAppliedBindings: materializedSkills.appliedBindings?.length
 									? JSON.stringify(materializedSkills.appliedBindings)

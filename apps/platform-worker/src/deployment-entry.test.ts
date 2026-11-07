@@ -238,6 +238,14 @@ beforeAll(async () => {
 		format: "esm",
 		outfile: join(directory, "kubernetes-runtime-comparison.js"),
 	});
+	await build({
+		entryPoints: [new URL("./skill-hub-delivery.ts", import.meta.url).pathname],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "skill-hub-delivery.js"),
+	});
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -910,6 +918,14 @@ it("keeps ordinary Workload startup when optional Skill input is incomplete", as
 	} finally {
 		await writeFile(path, original);
 	}
+});
+
+it("rejects explicitly enabled Skill materialization when its configuration is absent", () => {
+	const result = run({
+		PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED: "true",
+	});
+	expect(result.status).not.toBe(0);
+	expect(result.stdout).toContain("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
 });
 
 it("passes the deployment-owned nonsecret installation producer to the Conversation Worker", async () => {

@@ -51,6 +51,11 @@
       "properties": {"api": {"type": "integer", "minimum": 2, "maximum": 10}}
     },
     "publicOrigin": {"type": "string", "pattern": "^https://"},
+    "agentVersion": {"type": "string", "pattern": "^([A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$"},
+    "skillHub": {
+      "type": "object", "additionalProperties": false, "required": ["enabled"],
+      "properties": {"enabled": {"type": "boolean"}}
+    },
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
     "scheduling": {"type": "object"},
     "sessionRuntimeScheduling": {

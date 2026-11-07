@@ -1,4 +1,8 @@
 {{- if not .Values.bootstrap.databaseOnly }}
+{{- $skillHub := .Values.skillHub | default dict }}
+{{- if and $skillHub.enabled (not .Values.agentVersion) }}
+{{- fail "skillHub.enabled requires the fixed agentVersion" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -61,7 +65,29 @@ spec:
       {{- include "ack.pullSecrets" . | nindent 6 }}
       {{- include "ack.scheduling" .Values.scheduling.worker | nindent 6 }}
       securityContext:
+        {{- if $skillHub.enabled }}
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+        {{- else }}
         {{- include "ack.securityContext" . | nindent 8 }}
+        {{- end }}
+      {{- if $skillHub.enabled }}
+      initContainers:
+        - name: skill-assembly-permissions
+          image: {{ .Values.images.worker }}
+          command: [node, -e, "const fs=require('node:fs'); fs.chownSync('/skill-assembly',0,1000); fs.chmodSync('/skill-assembly',0o700); fs.chownSync('/skill-assembly',1001,1000)"]
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN]}
+          resources: {{ toYaml .Values.resources.worker | nindent 12 }}
+          volumeMounts: [{name: skill-assembly, mountPath: /skill-assembly}]
+      {{- end }}
       containers:
         - name: platform-worker
           image: {{ .Values.images.worker }}
@@ -80,7 +106,15 @@ spec:
             - {name: AGENT_INFRA_WORKER_KEY_VERSIONS, value: {{ .Values.worker.keyVersions | quote }} }
             - {name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY, value: {{ .Values.images.runtimeHost.repository | quote }}}
             - {name: AGENT_INFRA_RUNTIME_IMAGE_DIGEST, value: {{ .Values.images.runtimeHost.digest | quote }}}
+            {{- with .Values.agentVersion }}
+            - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
+            {{- end }}
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/ca.crt}
+            {{- if $skillHub.enabled }}
+            - {name: PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED, value: "true"}
+            - {name: PLATFORM_WORKER_SKILL_INIT_IMAGE, value: {{ .Values.images.worker | quote }}}
+            - {name: PLATFORM_WORKER_SKILL_ASSEMBLY_ROOT, value: /var/lib/agent-infra/skill-assembly}
+            {{- end }}
           volumeMounts:
             - {name: worker-configuration, mountPath: /app/dist/configuration.mjs, subPath: configuration.mjs, readOnly: true}
             - {name: worker-configuration, mountPath: /var/run/agent-infra/deployment, readOnly: true}
@@ -88,7 +122,13 @@ spec:
             - {name: keyring, mountPath: /var/run/agent-infra/keyring, readOnly: true}
             - {name: directory-read, mountPath: /var/run/agent-infra/directory, readOnly: true}
             - {name: directory-ca, mountPath: /var/run/agent-infra/directory-ca, readOnly: true}
+            {{- if $skillHub.enabled }}
+            - {name: skill-assembly, mountPath: /var/lib/agent-infra/skill-assembly}
+            {{- end }}
       volumes:
+        {{- if $skillHub.enabled }}
+        - {name: skill-assembly, emptyDir: {medium: Memory, sizeLimit: 128Mi}}
+        {{- end }}
         - {name: worker-configuration, secret: {secretName: {{ .Values.secrets.workerConfiguration }}}}
         - name: runtime-auth
           secret: {secretName: {{ .Values.secrets.workerRuntimeAuth }}, items: [{key: runtime-grant.pem, path: runtime-grant.pem}, {key: service-token, path: service-token}]}

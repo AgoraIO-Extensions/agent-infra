@@ -48,6 +48,20 @@ export type SkillHubProviderImportDeploymentV1 = Readonly<{
 	readonly scanner: SkillPackageScannerV1;
 }>;
 
+export async function readCurrentSkillAdmissionPolicyV1(
+	provider:
+		| Pick<SkillHubProviderImportDeploymentV1, "resolveAdmissionPolicy">
+		| undefined,
+) {
+	try {
+		const policy = await provider?.resolveAdmissionPolicy();
+		if (!policy) throw new Error();
+		return policy;
+	} catch {
+		throw new SkillHubOperationErrorV1("unavailable");
+	}
+}
+
 export function assembleSkillHubReadApiV1(input: {
 	readonly databaseUrl: string;
 	readonly identity: IdentityAdapter;
@@ -238,9 +252,9 @@ export function assembleSkillHubReadApiV1(input: {
 					importer: createSkillProviderImportV1({
 						registry: input.providerImport.registry,
 						admit: async ({ context, key, selection, candidate }) => {
-							const policy =
-								await input.providerImport?.resolveAdmissionPolicy();
-							if (!policy) throw new SkillHubOperationErrorV1("unavailable");
+							const policy = await readCurrentSkillAdmissionPolicyV1(
+								input.providerImport,
+							);
 							return providerImport.admitVersion(
 								context,
 								{
@@ -279,8 +293,9 @@ export function assembleSkillHubReadApiV1(input: {
 							files.map((file) => ({ path: file.path, bytes: file.bytes })),
 						),
 					admit: async ({ context, key, selection, source, archiveBytes }) => {
-						const policy = await input.providerImport?.resolveAdmissionPolicy();
-						if (!policy) throw new SkillHubOperationErrorV1("unavailable");
+						const policy = await readCurrentSkillAdmissionPolicyV1(
+							input.providerImport,
+						);
 						try {
 							return await projectSupplier.admitVersion(
 								context,
@@ -352,7 +367,9 @@ export function assembleSkillHubReadApiV1(input: {
  * 来源、签名、摘要或依赖失败属于平台侧，按不可用返回，不暴露内部原因。
  */
 function projectAdmissionFailure(error: unknown) {
-	if (!(error instanceof SkillPackageAdmissionErrorV1)) return error;
+	if (error instanceof SkillHubOperationErrorV1) return error;
+	if (!(error instanceof SkillPackageAdmissionErrorV1))
+		return new SkillHubOperationErrorV1("unavailable");
 	return new SkillHubOperationErrorV1(
 		[
 			"invalid_archive",

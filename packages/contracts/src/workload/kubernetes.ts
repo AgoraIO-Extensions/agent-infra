@@ -12,6 +12,7 @@ import {
 import {
 	ImageAdmissionPolicyEvidenceV1Schema,
 	ImmutableOciDigestV1Schema,
+	OciImageReferenceV1Schema,
 	RuntimeManifestParsingEvidenceV1Schema,
 } from "./registry.ts";
 import {
@@ -219,6 +220,8 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
 	/** Worker-only JSON envelope; Runtime validates its strict Applied contract. */
 	skillAppliedBindings: z.string().max(30_000).optional(),
+	/** Frozen Worker-owned init image; absence retains the original PVC delivery. */
+	skillDeliveryImage: OciImageReferenceV1Schema.optional(),
 	skillGenerationId: z
 		.string()
 		.regex(/^[a-f0-9]{64}$/)
@@ -393,6 +396,7 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
 	skillAppliedBindings: z.string().max(30_000).optional(),
+	skillDeliveryImage: OciImageReferenceV1Schema.optional(),
 	skillGenerationId: z
 		.string()
 		.regex(/^[a-f0-9]{64}$/)
@@ -701,7 +705,12 @@ export function validateAgentWorkloadDesiredV1(
 		(desired.skills ?? []).some((skill) => skill.agentId !== desired.agentId) ||
 		new Set((desired.skills ?? []).map((skill) => skill.targetPath)).size !==
 			(desired.skills ?? []).length ||
-		(desired.skills !== undefined) !== (desired.skillGenerationId !== undefined)
+		(desired.skills !== undefined) !==
+			(desired.skillGenerationId !== undefined) ||
+		(desired.skillDeliveryImage !== undefined &&
+			(!desired.skills?.length ||
+				!desired.skillAppliedBindings ||
+				desired.multiService !== undefined))
 	) {
 		throw new Error("Desired Workload correlation mismatch");
 	}
@@ -752,7 +761,8 @@ export function validateAgentWorkloadAppliedV1(
 		JSON.stringify(appliedSecrets) !== JSON.stringify(desiredSecrets) ||
 		JSON.stringify(applied.skills ?? []) !==
 			JSON.stringify(desired.skills ?? []) ||
-		applied.skillGenerationId !== desired.skillGenerationId
+		applied.skillGenerationId !== desired.skillGenerationId ||
+		applied.skillDeliveryImage !== desired.skillDeliveryImage
 	) {
 		throw new Error("Applied Workload correlation mismatch");
 	}

@@ -47,6 +47,10 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
+	readSkillHubDeliveryV1,
+	skillHubDeliveryProjectionV1,
+} from "./skill-hub-delivery.js";
+import {
 	hasAdditionalEgressPolicyV1,
 	nativeEgressPolicyAnnotationsV1,
 	nativeEgressPolicyAnnotationV1,
@@ -233,6 +237,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly runtime: SessionSandboxRuntimeInputV1 | null;
 	/** Frozen Hub package input from the Store's verified deployment. */
 	readonly skillHub?: RuntimeSkillHubBindingV1;
+	readonly skillDeliveryImage?: string;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -411,6 +416,7 @@ function metadata(
 }
 
 function validateResourceInput(value: SessionSandboxResourceInputV1) {
+	skillHubDeliveryProjectionV1(value.skillHub, value.skillDeliveryImage);
 	workloadImagePullSpecV1(value.imagePullSecretName);
 	if (value.skillHub !== undefined) {
 		const parsed = RuntimeSkillHubBindingV1Schema.safeParse(value.skillHub);
@@ -811,11 +817,12 @@ function runtimeEnvironment(
 function renderSessionSandboxResourcesV1(
 	allocation: SessionSandboxResourceInputV1,
 ): SessionSandboxResourceSetV1 {
-	const skillMount = allocation.skillHub
-		? skillHubVolumeMountV1({
-				skillGenerationId: allocation.skillHub.generationId,
-			})
-		: null;
+	const skillMount =
+		allocation.skillHub && !allocation.skillDeliveryImage
+			? skillHubVolumeMountV1({
+					skillGenerationId: allocation.skillHub.generationId,
+				})
+			: null;
 	const custom = customSecretMaterializations.get(allocation);
 	if (
 		allocation.desiredState === "running" &&
@@ -991,6 +998,12 @@ function renderSessionSandboxResourcesV1(
 			],
 		},
 	};
+	const skillProjection = skillHubDeliveryProjectionV1(
+		allocation.skillHub,
+		allocation.skillDeliveryImage,
+	);
+	if (skillProjection && pod.spec)
+		pod.spec = applyWorkspaceSnapshotProjectionV1(pod.spec, skillProjection);
 	if (allocation.workspaceSnapshotProjection) {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
 		pod.spec = applyWorkspaceSnapshotProjectionV1(
@@ -1444,6 +1457,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		allocation: SessionSandboxAllocationV1,
 	) => {
 		if (!allocation.skillHub || allocation.desiredState !== "running") return;
+		if (allocation.skillDeliveryImage) {
+			if (!(await readSkillHubDeliveryV1(options.client, allocation.skillHub)))
+				throw new WorkloadKubernetesError("unavailable");
+			return;
+		}
 		const owner = workloadResourceNameV1(allocation.agentId);
 		const name = `${owner}-data`;
 		const source = await options.client.read("PersistentVolumeClaim", name);

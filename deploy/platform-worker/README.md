@@ -363,6 +363,10 @@ export const workloadInput = {
 物理 PVC 交付与 Runtime 实际加载仍沿各自装配验证；本消费者的通过只证明原包当前仍获准，
 不能单独证明字节已到 Runtime。
 
+无法共享 RWO 卷时，可显式提供 `skillMaterialization.delivery.client`，使用有界不可变交付并按
+Agent 隔离 assembly root；输入、限额和真实验收见 [ACK Skill Hub 装配](../ack/SKILL-HUB.md)。
+`actor` 的异步部署 resolver 每次重新获取当前主体事实，不能以固定测试身份代替当前 Owner。
+
 ## 标准模板原生通用出网
 
 部署可在私有 `workloadInput.policy` 中配置 `nativeEgress`，允许标准模板的原生网络工具访问

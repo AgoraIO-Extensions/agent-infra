@@ -767,6 +767,9 @@ export function createSessionSandboxResourceInputResolverV1(
 			throw new WorkloadKubernetesError("policy");
 		const allocation: SessionSandboxResourceInputV1 = {
 			...(skillHub ? { skillHub } : {}),
+			...(deployment.skillDeliveryImage
+				? { skillDeliveryImage: deployment.skillDeliveryImage }
+				: {}),
 			schemaVersion: binding.schemaVersion,
 			agentId: binding.agentId,
 			sessionId: binding.sessionId,

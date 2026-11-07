@@ -47,6 +47,7 @@ import {
 } from "./kubernetes.fixture.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
+import { skillHubDeliveryIdentityV1 } from "./skill-hub-delivery.js";
 import { nativeEgressFixture } from "./test-support/native-egress.js";
 import {
 	sessionSandboxDeploymentTokenFixture,
@@ -543,6 +544,95 @@ describe("production SessionSandbox resource receiver", () => {
 				)
 			).status,
 		).toBe("ready");
+	});
+
+	it("delivers a sealed Skill generation to Session nodes without mounting the Agent RWO volume", async () => {
+		const f = await skillFixture();
+		const image = `registry.example.test/worker@sha256:${"f".repeat(64)}`;
+		f.claim.deployment = { ...f.claim.deployment, skillDeliveryImage: image };
+		const receive = createProductionSessionSandboxReceiverV1(
+			{
+				...f.options,
+				policy: {
+					...f.options.policy,
+					skillDeliveryImage: `registry.example.test/worker@sha256:${"a".repeat(64)}`,
+				},
+			},
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		const { name, digest, manifest } = skillHubDeliveryIdentityV1(f.binding);
+		const index = Buffer.from(
+			`# Skills\n\n- session-notes@1.0.0 (${"a".repeat(64)})\n`,
+		);
+		await f.client.create<V1Secret>({
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: {
+				name,
+				namespace: workloadTestPolicy.namespace,
+				annotations: {
+					"agent-infra.agora.io/agent-id": f.binding.agentId,
+					"agent-infra.agora.io/skill-delivery": digest,
+				},
+			},
+			immutable: true,
+			type: "Opaque",
+			data: {
+				"manifest.json": Buffer.from(JSON.stringify(manifest)).toString(
+					"base64",
+				),
+				...Object.fromEntries(
+					manifest.files.map((file) => [
+						file.key,
+						(file.path === "SKILLS.md" ? index : Buffer.from("x")).toString(
+							"base64",
+						),
+					]),
+				),
+			},
+		});
+		f.resources.delete(`PersistentVolumeClaim/${f.sourceName}`);
+		const observed = await receive(f.claim, new AbortController().signal);
+		expect(observed.status).toBe("observed");
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		expect(pod.spec?.initContainers?.[0]?.image).toBe(image);
+		expect(pod.spec?.containers[0]?.volumeMounts).toContainEqual({
+			name: "skill-files",
+			mountPath: "/opt/agent-infra-skill-hub/.agents",
+			subPath: ".agents",
+			readOnly: true,
+		});
+		expect(
+			pod.spec?.volumes?.some(
+				(v) => v.persistentVolumeClaim?.claimName === f.sourceName,
+			),
+		).toBe(false);
+		expect(
+			pod.spec?.containers[0]?.volumeMounts?.some(
+				(m) => m.name === "skill-package",
+			),
+		).toBe(false);
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		expect(
+			(
+				await receive(
+					{ ...f.claim, previousObservation: observed },
+					new AbortController().signal,
+				)
+			).status,
+		).toBe("ready");
+		const init = pod.spec?.initContainers?.[0];
+		if (!init) throw new Error();
+		init.args = ["0".repeat(64)];
+		await expect(
+			receive(
+				{ ...f.claim, previousObservation: observed },
+				new AbortController().signal,
+			),
+		).rejects.toThrow();
 	});
 
 	it("mount layout is discoverable by the real Runtime Skill directory", async () => {

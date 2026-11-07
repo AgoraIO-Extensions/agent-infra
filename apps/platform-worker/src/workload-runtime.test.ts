@@ -598,6 +598,28 @@ it("publishes the deployment-owned image pull Secret without mounting it", async
 	expect(workload?.spec?.template.spec?.containers[0]?.envFrom).toEqual([]);
 });
 
+it("keeps an unbound Agent workspace unchanged when bounded Skill delivery is enabled", async () => {
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			skillDeliveryImage: `registry.example.test/worker@sha256:${"f".repeat(64)}`,
+		},
+		skillMaterializer: {
+			materialize: async () => ({
+				generationId: "e".repeat(64),
+				skills: [],
+				appliedBindings: [],
+			}),
+		},
+	});
+	await f.tick(2);
+	expect(f.state?.candidate.deployment).not.toHaveProperty(
+		"skillDeliveryImage",
+	);
+	expect(f.state?.candidate.deployment).not.toHaveProperty("skillGenerationId");
+	expect(f.state?.candidate.deployment).not.toHaveProperty("skills");
+});
+
 function secretConfiguration(
 	overrides: Partial<AgentConfigurationRecordV2> = {},
 ): AgentConfigurationRecordV2 {
