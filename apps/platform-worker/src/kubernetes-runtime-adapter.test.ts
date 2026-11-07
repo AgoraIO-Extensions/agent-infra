@@ -1349,7 +1349,18 @@ async function snapshotFixture() {
 	});
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: f.client,
-		policy: workloadTestPolicy,
+		policy: {
+			...workloadTestPolicy,
+			workspaceSnapshotEgress: [
+				{
+					destination: {
+						namespace: "agent-infra-d-ac-1107",
+						podLabels: { app: "d-snapshot-storage" },
+					},
+					port: 9000,
+				},
+			],
+		},
 		probe: f.probe,
 		workspaceSnapshotProjection: projection,
 	});
@@ -1469,7 +1480,18 @@ it("observes only verified snapshot init attempts and blocks readiness on failur
 	const observed = vi.fn();
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: f.client,
-		policy: workloadTestPolicy,
+		policy: {
+			...workloadTestPolicy,
+			workspaceSnapshotEgress: [
+				{
+					destination: {
+						namespace: "agent-infra-d-ac-1107",
+						podLabels: { app: "d-snapshot-storage" },
+					},
+					port: 9000,
+				},
+			],
+		},
 		probe: f.probe,
 		workspaceSnapshotProjection: f.projection,
 		onWorkspaceSnapshot: observed,

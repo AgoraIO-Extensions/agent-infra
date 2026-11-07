@@ -361,6 +361,16 @@ const basePolicy = {
 	],
 } satisfies MultiServiceRuntimePolicyV1;
 
+const snapshotStorageEgress = [
+	{
+		destination: {
+			namespace: "agent-infra-d-ac-1107",
+			podLabels: { app: "d-snapshot-storage" },
+		},
+		port: 9000,
+	},
+] as const;
+
 function snapshotProjection() {
 	return projectWorkspaceSnapshotMaterializerV1(
 		[
@@ -591,7 +601,11 @@ describe("multi-service resource policy", () => {
 		const observations: unknown[] = [];
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
-			policy: { ...basePolicy, workspaceSnapshotProjection: projection },
+			policy: {
+				...basePolicy,
+				workspaceSnapshotProjection: projection,
+				workspaceSnapshotEgress: snapshotStorageEgress,
+			},
 			onWorkspaceSnapshot: (observation) => observations.push(observation),
 		});
 		const value = desired(manifest);
@@ -684,7 +698,11 @@ describe("multi-service resource policy", () => {
 		const projection = snapshotProjection();
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
-			policy: { ...basePolicy, workspaceSnapshotProjection: projection },
+			policy: {
+				...basePolicy,
+				workspaceSnapshotProjection: projection,
+				workspaceSnapshotEgress: snapshotStorageEgress,
+			},
 		});
 		const value = desired(migrationManifest);
 		if (!isMultiService(value)) throw new Error();
@@ -734,7 +752,11 @@ describe("multi-service resource policy", () => {
 		);
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
-			policy: { ...basePolicy, workspaceSnapshotProjection: projection },
+			policy: {
+				...basePolicy,
+				workspaceSnapshotProjection: projection,
+				workspaceSnapshotEgress: snapshotStorageEgress,
+			},
 		});
 		const value = desired(migrationManifest);
 		if (!isMultiService(value))
