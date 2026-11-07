@@ -137,6 +137,7 @@ function fixture(
 					| import("@agent-infra/platform-store").SessionSandboxReserveInspectionV1
 					| null,
 		),
+		refreshReady: vi.fn(async () => true),
 		reconcileCapacity: vi.fn(async (_agentId: string) => ({
 			target: 1,
 			prepared: 0,
@@ -368,6 +369,23 @@ describe("Session reserve Worker", () => {
 		});
 		expect(await f.worker.reconcile()).toMatchObject({ retired: 2 });
 		expect(f.store.retire).not.toHaveBeenCalled();
+		expect(f.store.refreshReady).toHaveBeenCalledWith(
+			f.row.sandboxId,
+			configuration.ttlMs,
+		);
+	});
+
+	it("retires a ready reserve when its conditional refresh loses the race", async () => {
+		const f = fixture({ status: "ready" });
+		confirmed(f);
+		f.store.inspect.mockResolvedValue({
+			...f.claim,
+			currentProfileDigest: f.claim.profile.digest,
+		});
+		f.store.refreshReady.mockResolvedValue(false);
+		await f.worker.reconcile();
+		expect(f.store.refreshReady).toHaveBeenCalledOnce();
+		expect(f.store.retire).toHaveBeenCalledWith(f.row.sandboxId);
 	});
 
 	it("never resends a create with an unknown response or upgrades observation into completion", async () => {

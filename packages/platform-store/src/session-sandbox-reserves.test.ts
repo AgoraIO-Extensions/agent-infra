@@ -699,6 +699,38 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			],
 		});
 	});
+	it("refreshes only a live ready reserve and never revives a claimed or expired row", async () => {
+		const reserve = await ready();
+		const before = await sql<{ expires_at: Date }[]>`
+			select expires_at from platform.session_sandbox_reserves
+			where sandbox_id = ${reserve.sandboxId}`;
+		expect(await reserve.store.refreshReady(reserve.sandboxId, 120000)).toBe(
+			true,
+		);
+		const after = await sql<{ expires_at: Date }[]>`
+			select expires_at from platform.session_sandbox_reserves
+			where sandbox_id = ${reserve.sandboxId}`;
+		expect(after[0]?.expires_at.getTime()).toBeGreaterThan(
+			before[0]?.expires_at.getTime() ?? 0,
+		);
+
+		await sql`
+			update platform.session_sandbox_reserves
+			set expires_at = clock_timestamp() - interval '1 second'
+			where sandbox_id = ${reserve.sandboxId}`;
+		expect(await reserve.store.refreshReady(reserve.sandboxId, 120000)).toBe(
+			false,
+		);
+
+		const live = await ready();
+		expect(
+			await create(execution(), "user-a", "web", "claim-before-refresh"),
+		).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: live.sessionId },
+		});
+		expect(await live.store.refreshReady(live.sandboxId, 120000)).toBe(false);
+	});
 	it("records DELETE acknowledgement versus absence and permits a fresh same-UID retry after rejection", async () => {
 		const reserve = await ready();
 		expect(await reserve.store.retire(reserve.sandboxId)).toBe(true);

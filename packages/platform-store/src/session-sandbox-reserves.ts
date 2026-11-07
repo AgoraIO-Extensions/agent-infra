@@ -750,6 +750,23 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			};
 		});
 	}
+	/** Keep a verified ready reserve alive while this Worker is healthy. */
+	async refreshReady(sandboxId: string, ttlMs: number): Promise<boolean> {
+		if (!sandboxId || !Number.isSafeInteger(ttlMs) || ttlMs < 1) unavailable();
+		return this.#client.begin(async (tx) => {
+			await lockBudget(tx, this.#configuration);
+			const rows = await tx`
+				update platform.session_sandbox_reserves
+				set expires_at = clock_timestamp() + ${ttlMs} * interval '1 millisecond',
+					updated_at = clock_timestamp()
+				where sandbox_id = ${sandboxId}
+					and status = 'ready'
+					and retired_at is null
+					and expires_at > clock_timestamp()
+				returning sandbox_id`;
+			return rows.length === 1;
+		});
+	}
 	async statistics(input: { readonly windowMs: number }) {
 		if (!Number.isSafeInteger(input.windowMs) || input.windowMs < 1)
 			unavailable();

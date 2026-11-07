@@ -24,6 +24,7 @@ export type SessionReserveStoreV1 = Pick<
 	| "list"
 	| "listPage"
 	| "inspect"
+	| "refreshReady"
 	| "applyConfiguration"
 	| "reconcileCapacity"
 	| "claimLease"
@@ -410,6 +411,9 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					if (await store.retire(row.sandboxId)) result.retired++;
 					return;
 				}
+			}
+			if (!(await store.refreshReady(row.sandboxId, configuration.ttlMs))) {
+				if (await store.retire(row.sandboxId)) result.retired++;
 			}
 		} catch {
 			if (await store.retire(row.sandboxId)) result.retired++;
