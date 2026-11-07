@@ -306,6 +306,10 @@ export interface ConversationDispatchStorePortV1 {
 		 */
 		readonly hostSessionRef?: string;
 	}): Promise<boolean>;
+	/** Reopen the existing Session Sandbox reconcile intent after a live runtime route is gone. */
+	requestSandboxReconciliation?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean>;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;

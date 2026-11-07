@@ -332,6 +332,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		| "sandbox_wait"
 		| "stop_changed" = "available";
 	released = 0;
+	sandboxReconciliationRequests = 0;
 	releaseDelays: number[] = [];
 
 	constructor(seed = claim()) {
@@ -491,6 +492,11 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 			executionStatus:
 				input.transition.executionStatus ?? this.current.executionStatus,
 		};
+		return true;
+	}
+
+	async requestSandboxReconciliation() {
+		this.sandboxReconciliationRequests += 1;
 		return true;
 	}
 
@@ -1922,6 +1928,7 @@ describe("Conversation Worker dispatch", () => {
 			expect(f.store.released).toBe(released);
 			expect(f.store.outboxStatus).toBe("retry_scheduled");
 			expect(f.store.errorCode).toBe("RUNTIME_WORKLOAD_UNAVAILABLE");
+			expect(f.store.sandboxReconciliationRequests).toBe(1);
 			expect(runtimeHost.sideEffectCount()).toBe(0);
 			if (!notSent) return;
 			expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });

@@ -1736,6 +1736,16 @@ export function createConversationDispatchUseCaseV1(
 				}
 				const failure = runtimeFailure(error);
 				if (
+					failure.code === "RUNTIME_WORKLOAD_UNAVAILABLE" &&
+					dependencies.store.requestSandboxReconciliation
+				) {
+					try {
+						await dependencies.store.requestSandboxReconciliation({ claim });
+					} catch {
+						// Reconciliation is best-effort here; the Turn retry remains authoritative.
+					}
+				}
+				if (
 					failure.code === "RUNTIME_STOP_PENDING" &&
 					isRuntimeEventOperation(claim.operation) &&
 					claim.executionDeliveryFence > 0

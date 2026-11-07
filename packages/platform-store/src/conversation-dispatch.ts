@@ -104,6 +104,53 @@ export interface PostgresConversationDispatchOptionsV1 {
 }
 
 /**
+ * A live Sandbox route can disappear after its reconcile intent has already
+ * succeeded. Reopen that same intent so the next Worker pass recreates the
+ * Pod/PVC-bound route instead of retrying the Turn forever.
+ */
+async function reopenSandboxReconciliationForRuntimeUnavailable(
+	transaction: Transaction,
+	claim: ConversationDispatchClaimV1,
+): Promise<boolean> {
+	const [row] = await transaction<
+		{
+			id: string;
+			status: string;
+			desired_state: string;
+			session_generation: string;
+		}[]
+	>`
+		select o.id, o.status, s.desired_state, s.session_generation::text
+		from platform.outbox_items o
+		join platform.session_sandbox_allocations s on s.conversation_id = o.scope_id
+		where o.scope_type = 'conversation'
+			and o.scope_id = ${claim.conversationId}
+			and o.operation = 'conversation.sandbox.reconcile.v1'
+			and o.payload->>'sessionGeneration' = ${String(claim.sessionGeneration)}
+			and s.sandbox_id = ${claim.sandbox?.sandboxId ?? null}
+			and s.session_generation = ${claim.sessionGeneration}
+		for update of o, s
+	`;
+	if (
+		!row ||
+		row.session_generation !== String(claim.sessionGeneration) ||
+		row.desired_state !== "running" ||
+		row.status === "processing"
+	)
+		return false;
+	const updated = await transaction`
+		update platform.outbox_items
+		set status = case when status in ('succeeded', 'failed') then 'pending' else status end,
+			available_at = clock_timestamp(), lease_owner = null,
+			lease_expires_at = null, updated_at = clock_timestamp()
+		where id = ${row.id}
+			and status in ('pending', 'retry_scheduled', 'succeeded', 'failed')
+		returning id
+	`;
+	return updated.length === 1;
+}
+
+/**
  * stop 认领本地取消时要结算的原执行条目（提交、重新生成或原生调用，只能有一个）。只在它没有被 Worker
  * 持有时返回：正在投递的提交由它自己的认领看到 stop 再处理（#2548），这里不与之竞争（#2674）。
  */
@@ -1640,6 +1687,20 @@ export class PostgresConversationDispatchStoreV1
 				input.errorCode,
 			);
 		});
+	}
+
+	async requestSandboxReconciliation(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				reopenSandboxReconciliationForRuntimeUnavailable(
+					transaction,
+					input.claim,
+				),
+			),
+		);
 	}
 
 	async close(): Promise<void> {
