@@ -1552,6 +1552,35 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await bridge.close();
 	});
 
+	it.each(["before", "during"] as const)(
+		"reports child exit %s a frame read without waiting for inherited stdio to close",
+		async (phase) => {
+			const directory = await mkdtemp(join(tmpdir(), "codex-exited-stdio-"));
+			directories.push(directory);
+			const { bridge, process: child } = createStalledBridge(directory);
+			const iterator = bridge.frames()[Symbol.asyncIterator]();
+			const read = () => iterator.next().catch((error: unknown) => error);
+			const pending = phase === "during" ? read() : undefined;
+			try {
+				child.emit("exit", 9, null);
+				const outcome = await Promise.race([
+					pending ?? read(),
+					new Promise((resolve) =>
+						setTimeout(() => resolve("still waiting"), 100),
+					),
+				]);
+				expect(outcome).toMatchObject({ code: "CODEX_APP_SERVER_EXITED" });
+				// Descendants may still own stdio: retain private data until close.
+				await expect(access(directory)).resolves.toBeUndefined();
+			} finally {
+				child.emit("close", 9, null);
+				await bridge.close();
+				directories.splice(directories.indexOf(directory), 1);
+			}
+			await expectPathRemoved(directory);
+		},
+	);
+
 	it.each(["malformed-frame", "oversized-frame", "queue-overflow"])(
 		"reaps its child after fatal %s output without an explicit close",
 		async (mode) => {
