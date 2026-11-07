@@ -108,19 +108,21 @@ describe("WeCom complete fetch", () => {
 	});
 });
 
-it("normalizes blank or missing source names without invalidating members", async () => {
-	const withoutNames = structuredClone(complete);
-	for (const path of [
-		"/cgi-bin/user/list:1",
-		"/cgi-bin/user/list:2",
-	] as const) {
-		for (const user of withoutNames[path].userlist) {
-			if ("name" in user) user.name = "   ";
+it("omits blank or overlong source names without invalidating members", async () => {
+	for (const name of ["", "   ", "x".repeat(257)]) {
+		const withoutNames = structuredClone(complete);
+		for (const path of [
+			"/cgi-bin/user/list:1",
+			"/cgi-bin/user/list:2",
+		] as const) {
+			for (const user of withoutNames[path].userlist) {
+				if ("name" in user) user.name = name;
+			}
 		}
+		const result = await source(withoutNames).fetchComplete();
+		expect(result.members).toHaveLength(2);
+		expect(
+			result.members.every((member) => member.displayName === undefined),
+		).toBe(true);
 	}
-	const result = await source(withoutNames).fetchComplete();
-	expect(result.members).toHaveLength(2);
-	expect(
-		result.members.every((member) => member.displayName === undefined),
-	).toBe(true);
 });

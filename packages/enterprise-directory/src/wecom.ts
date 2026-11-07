@@ -120,7 +120,9 @@ export function createWeComSource(config: WeComSourceConfig) {
 					const member = {
 						userId: user.userid,
 						email: user.email,
-						...(displayName ? { displayName } : {}),
+						...(displayName && displayName.length <= 256
+							? { displayName }
+							: {}),
 						active: user.status === 1,
 						departmentIds: user.department.toSorted((a, b) => a - b),
 					};
