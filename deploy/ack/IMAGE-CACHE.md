@@ -31,8 +31,8 @@
 24 组，每组最多 8 个不同镜像；创建前统计本 owner 的 CR，达到 48 份则拒绝创建。
 同一集群的运维预热必须串行执行，避免并发检查超出预算。本流程不删除活动缓存。
 缓存不设置自动到期或 LRU，以免仍在使用的精确 ID 被淘汰。退休版本由运维核对所有活动 Agent、
-保留 Session 与回滚输入后，先移除准入登记，再按 owner 标签和精确 ID 清理；预热身份
-不需要删除权限。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
+保留 Session 与回滚输入后，先移除准入登记，再按 owner 标签和精确 ID 清理，可使用下文的
+`retire` 命令；预热身份不需要删除权限。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
 
 已有 Failed/Expired 对象最多使用一个独立 retry generation，不覆盖旧对象；第二次失败仍
 停止并保留失败回执。修复权限、网络或容量后由运维处理该失败 generation，再显式重试。
@@ -136,6 +136,33 @@ node deploy/ack/image-cache.ts check \
 正式发布计划只选取同 source 发布回执中的 amd64 child digest；多架构 index 不作为缓存输入。
 部署 manifest、Custom 镜像平台、Agent 配置和现有容量/模型准入仍由原 ACK 入口校验，
 不以缓存成功替代。
+
+### 退休旧缓存
+
+每次发布新建 6 份缓存，第 8 次发布后 owner 下的缓存达到 48 份，预热回执的 `reason` 变为
+`CACHE_OBJECT_BUDGET_EXCEEDED`。此时由运维用自己的 kubeconfig（需要 ImageCache delete 和
+MutatingAdmissionPolicy get/list 权限；预热身份仍不需要删除权限）对当前发布的计划执行 `retire`：
+
+```bash
+export ACK_SOURCE_SHA ACK_KUBECONFIG
+# 先只生成回执，核对其中的待删除列表
+node deploy/ack/image-cache.ts retire \
+  "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-retire.json"
+# 核对无误后确认删除
+ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-cache.ts retire \
+  "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-retire.json"
+```
+
+`retire` 只处理 owner 为 `agent-infra-release-cache-v1` 的缓存，以下对象一律保留：
+
+- 当前计划中的缓存及其 retry generation；
+- 任一 `*-session-image-cache` 严格准入登记引用的缓存 ID；
+- 正在删除的对象；
+- 最新的 `ACK_IMAGE_CACHE_RETIRE_KEEP` 份（默认 18 份，约 3 个版本，最少 6 份），用于近期版本和回滚。
+
+其余缓存按创建时间从早到晚列为待删除。读不出准入登记时直接失败，不删除任何对象。每次删除前
+都会重新读回 owner、UID 和缓存 ID，并把 UID 作为删除前置条件。不在严格准入中的镜像失去缓存后
+回退为直接拉取；仍需依赖严格准入的旧 Agent 要先恢复准入登记或保留其缓存，再执行 `retire`。
 
 ## 验收与恢复
 

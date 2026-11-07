@@ -53,6 +53,74 @@ export function cacheName(images: string[], prefix = "agent-infra-imc") {
 	return `${prefix}-${hash({ platform: "linux/amd64", images: [...images].sort() }).slice(0, 32)}`;
 }
 
+export const retireConfirmation = "RETIRE_OWNED_IMAGE_CACHES";
+export type OwnedCache = { name: string; uid: string; id?: string; createdAt: string; owner?: string; deleting?: boolean };
+export type RetireBackend = {
+	namePrefix?: string;
+	inventory(): Promise<OwnedCache[]>;
+	admissionCacheIds(): Promise<string[]>;
+	remove(cache: OwnedCache): Promise<void>;
+};
+
+/** Cache IDs pinned by a strict Session admission policy (`imagePullPolicy: Never`) must never be retired. */
+export function admissionCacheIds(policies: unknown[]): string[] {
+	const ids = new Set<string>();
+	for (const policy of policies as { metadata?: { name?: string }; spec?: { variables?: { name?: string; expression?: unknown }[] } }[]) {
+		if (!policy?.metadata?.name?.endsWith("-session-image-cache")) continue;
+		const variable = policy.spec?.variables?.find((entry) => entry?.name === "caches");
+		assert(typeof variable?.expression === "string", "CACHE_ADMISSION_UNREADABLE");
+		let map: unknown;
+		try { map = JSON.parse(variable.expression); } catch { throw new Error("CACHE_ADMISSION_UNREADABLE"); }
+		assert(map && typeof map === "object" && !Array.isArray(map), "CACHE_ADMISSION_UNREADABLE");
+		for (const id of Object.keys(map)) ids.add(id);
+	}
+	return [...ids].sort();
+}
+
+/**
+ * Retires the oldest owned release caches that no current plan group, retry generation or strict
+ * admission policy uses. The newest `keep` owned caches always stay, so recent releases and
+ * rollbacks keep their snapshots. Foreign and already deleting objects are never touched.
+ */
+export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CachePlan; admissionIds: string[]; keep: number; namePrefix?: string }) {
+	const plan = parseCachePlan(input.plan);
+	assert(Number.isInteger(input.keep) && input.keep >= 6 && input.keep <= 48, "CACHE_RETIRE_KEEP_INVALID");
+	const planned = new Set(plan.groups.flatMap((images) => { const name = cacheName(images, input.namePrefix); return [name, `${name}-retry1`]; }));
+	const admission = new Set(input.admissionIds);
+	const owned = input.caches.filter((cache) => cache.owner === cacheOwner);
+	for (const cache of owned) assert(cache.uid && Number.isFinite(Date.parse(cache.createdAt)), "CACHE_INVENTORY_INVALID");
+	const newestFirst = [...owned].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.name.localeCompare(a.name));
+	const newest = new Set(newestFirst.slice(0, input.keep).map((cache) => cache.name));
+	const kept: Record<string, number> = { current_plan: 0, admission_reference: 0, newest: 0, deleting: 0 };
+	const retire: OwnedCache[] = [];
+	for (const cache of [...newestFirst].reverse()) {
+		if (planned.has(cache.name)) kept.current_plan++;
+		else if (cache.id && admission.has(cache.id)) kept.admission_reference++;
+		else if (cache.deleting) kept.deleting++;
+		else if (newest.has(cache.name)) kept.newest++;
+		else retire.push(cache);
+	}
+	return { retire, kept, owned: owned.length, foreign: input.caches.length - owned.length };
+}
+
+/** Dry run unless `confirm` matches; every deletion re-checks identity in the backend. */
+export async function retireCaches(plan: CachePlan, backend: RetireBackend, options: { keep: number; confirm?: string; now?: () => number }) {
+	plan = parseCachePlan(plan);
+	const now = options.now ?? Date.now;
+	const selection = selectCachesToRetire({ caches: await backend.inventory(), plan, admissionIds: await backend.admissionCacheIds(), keep: options.keep, namePrefix: backend.namePrefix });
+	const confirmed = options.confirm === retireConfirmation;
+	const retired: { name: string; createdAt: string }[] = [];
+	if (confirmed) for (const cache of selection.retire) {
+		await backend.remove(cache);
+		retired.push({ name: cache.name, createdAt: cache.createdAt });
+	}
+	return {
+		schemaVersion: 1, kind: "ack-image-cache-retire", sourceSha: plan.sourceSha, checkedAt: new Date(now()).toISOString(),
+		status: confirmed ? "retired" : "planned", keep: options.keep, owned: selection.owned, kept: selection.kept,
+		retired: confirmed ? retired : selection.retire.map((cache) => ({ name: cache.name, createdAt: cache.createdAt })),
+	};
+}
+
 export function assertCacheReady(cache: CacheState, images: string[], now = Date.now()) {
 	assert(cache.owner === cacheOwner && hash([...cache.images].sort()) === hash([...images].sort()), "CACHE_IDENTITY_MISMATCH");
 	assert(!cache.deleting && cache.phase === "Ready" && /^imc-[a-z0-9]+$/u.test(cache.id ?? ""), "CACHE_NOT_READY");
@@ -174,6 +242,35 @@ export function kubernetesBackend(kubeconfig: string, namespace: string, pullSec
 	};
 }
 
+/** Operator-only backend for `retire`; the prewarm identity keeps create/get/list only. */
+export function kubernetesRetireBackend(kubeconfig: string): RetireBackend {
+	assert(kubeconfig, "CACHE_TARGET_INVALID");
+	const command = (args: string[], input?: string) => {
+		try { return execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=30s", ...args], { input, encoding: "utf8", timeout: 40_000, stdio: ["pipe", "pipe", "pipe"] }); }
+		catch { throw new Error("CACHE_KUBERNETES_REQUEST_FAILED"); }
+	};
+	const read = (value: any): OwnedCache => ({ name: value.metadata.name, uid: value.metadata.uid, id: value.status?.imageCacheId, createdAt: value.metadata.creationTimestamp, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], deleting: Boolean(value.metadata.deletionTimestamp) });
+	return {
+		async inventory() {
+			const inventory = JSON.parse(command(["get", "imagecache", "-l", `agent-infra.agora.io/cache-owner=${cacheOwner}`, "-o", "json"]));
+			assert(Array.isArray(inventory.items), "CACHE_INVENTORY_INVALID");
+			return inventory.items.map(read);
+		},
+		async admissionCacheIds() {
+			const policies = JSON.parse(command(["get", "mutatingadmissionpolicies", "-o", "json"]));
+			assert(Array.isArray(policies.items), "CACHE_ADMISSION_UNREADABLE");
+			return admissionCacheIds(policies.items);
+		},
+		async remove(cache) {
+			const raw = command(["get", "imagecache", cache.name, "--ignore-not-found", "-o", "json"]);
+			if (!raw.trim()) return;
+			const current = read(JSON.parse(raw));
+			assert(current.owner === cacheOwner && current.uid === cache.uid && current.id === cache.id && !current.deleting, "CACHE_IDENTITY_MISMATCH");
+			command(["delete", "--raw", `/apis/eci.alibabacloud.com/v1/imagecaches/${encodeURIComponent(cache.name)}`, "-f", "-"], JSON.stringify({ kind: "DeleteOptions", apiVersion: "v1", preconditions: { uid: cache.uid } }));
+		},
+	};
+}
+
 async function main() {
 	const [action, file, output] = process.argv.slice(2);
 	assert(file && output, "CACHE_ARGUMENTS_INVALID");
@@ -182,9 +279,15 @@ async function main() {
 		await writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
 		return;
 	}
-	assert(action === "ensure" || action === "check", "CACHE_ARGUMENTS_INVALID");
+	assert(action === "ensure" || action === "check" || action === "retire", "CACHE_ARGUMENTS_INVALID");
 	const plan = parseCachePlan(JSON.parse(await readFile(file, "utf8")));
 	assert(plan.sourceSha === process.env.ACK_SOURCE_SHA, "CACHE_RELEASE_SOURCE_MISMATCH");
+	if (action === "retire") {
+		const receipt = await retireCaches(plan, kubernetesRetireBackend(process.env.ACK_KUBECONFIG ?? ""), { keep: Number(process.env.ACK_IMAGE_CACHE_RETIRE_KEEP ?? 18), confirm: process.env.ACK_IMAGE_CACHE_RETIRE_CONFIRM });
+		await writeFile(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+		console.info(JSON.stringify({ status: receipt.status, owned: receipt.owned, retired: receipt.retired.length, sourceSha: plan.sourceSha }));
+		return;
+	}
 	const backend = kubernetesBackend(process.env.ACK_KUBECONFIG ?? "", process.env.ACK_NAMESPACE ?? "", process.env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(process.env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30));
 	const timeoutMs = Number(process.env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_200_000);
 	const concurrency = Number(process.env.ACK_IMAGE_CACHE_CONCURRENCY ?? 1);
