@@ -63,3 +63,36 @@ test("ACK Skill delivery requires a version and separates Worker from Runtime UI
 		{ medium: "Memory", sizeLimit: "128Mi" },
 	);
 });
+
+test("ACK Skill Hub projects the pinned scanner and namespace-local object store", () => {
+	const result = render(
+		"--set",
+		"skillHub.enabled=true",
+		"--set",
+		"skillHub.objectStorage.enabled=true",
+		"--set-string",
+		"agentVersion=v1",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = parseAllDocuments(result.stdout).map((doc) => doc.toJSON());
+	const api = resources.find(
+		(x) => x.kind === "Deployment" && x.metadata.name === "agent-infra-api",
+	).spec.template.spec;
+	assert.equal(api.initContainers[0].name, "skill-scanner-runtime");
+	assert.equal(api.initContainers[0].image, api.containers[0].image);
+	assert(api.volumes.some((x) => x.name === "skill-scanner"));
+	assert.equal(
+		resources.find(
+			(x) => x.kind === "Service" && x.metadata.name === "agent-infra-minio",
+		).spec.ports[0].port,
+		9000,
+	);
+	assert.equal(
+		resources.find(
+			(x) =>
+				x.kind === "PersistentVolumeClaim" &&
+				x.metadata.name === "agent-infra-minio",
+		).spec.resources.requests.storage,
+		"20Gi",
+	);
+});

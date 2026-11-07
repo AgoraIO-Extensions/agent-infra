@@ -7,6 +7,7 @@ export default defineConfig({
 		workspaceSnapshotInit: "./src/workspace-snapshot-init.ts",
 		workspaceSnapshot: "./src/workspace-snapshot-resolver.ts",
 		skillHubInit: "./src/skill-hub-init.ts",
+		kubernetesClient: "./src/kubernetes-client.ts",
 	},
 	format: "esm",
 	outDir: "./dist",

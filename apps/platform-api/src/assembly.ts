@@ -720,7 +720,7 @@ export function assemblePlatformApi(
 				identity.userId,
 				randomUUID(),
 			);
-			if (!currentUser || currentUser.accountStatus !== "active") return null;
+			if (currentUser?.accountStatus !== "active") return null;
 			const agent = await managementQuery.getAgent(
 				{
 					kind: "user",
