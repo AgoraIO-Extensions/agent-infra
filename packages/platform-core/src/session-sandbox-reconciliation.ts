@@ -420,25 +420,16 @@ export function decideSessionSandboxObservationV1(
 				return false;
 			if (old.kind === "PersistentVolumeClaim" || !replacementAfterStop)
 				return true;
-			if (old.kind === "Pod") return false;
 			return !stopReceipt.removed.some(
 				({ resource }) =>
 					resource.kind === old.kind && resource.uid === old.uid,
 			);
 		}) ?? false;
 	const resurrectedSource =
-		stopReceipt?.removed.some(
-			({ resource: old }) =>
-				!previous?.resources.some(
-					(current) =>
-						current.kind === old.kind &&
-						current.name === old.name &&
-						current.namespace === old.namespace &&
-						current.uid === old.uid,
-				) &&
-				observation.resources.some(
-					(current) => current.kind === old.kind && current.uid === old.uid,
-				),
+		stopReceipt?.removed.some(({ resource: old }) =>
+			observation.resources.some(
+				(current) => current.kind === old.kind && current.uid === old.uid,
+			),
 		) ?? false;
 	const unknown =
 		observation.status === "unknown" || identityChanged || resurrectedSource;
