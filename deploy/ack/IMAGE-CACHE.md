@@ -141,7 +141,7 @@ node deploy/ack/image-cache.ts check \
 
 每次发布新建 6 份缓存，第 8 次发布后 owner 下的缓存达到 48 份，预热回执的 `reason` 变为
 `CACHE_OBJECT_BUDGET_EXCEEDED`。此时由运维用自己的 kubeconfig（需要 ImageCache delete 和
-MutatingAdmissionPolicy get/list 权限；预热身份仍不需要删除权限）对当前发布的计划执行 `retire`：
+MutatingAdmissionPolicy get/list、全集群 Pod list 权限；预热身份仍不需要删除权限）对当前发布的计划执行 `retire`：
 
 ```bash
 export ACK_SOURCE_SHA ACK_KUBECONFIG
@@ -157,10 +157,11 @@ ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-c
 
 - 当前计划中的缓存及其 retry generation；
 - 任一 `*-session-image-cache` 严格准入登记引用的缓存 ID；
+- 镜像仍被集群中任一运行中 Pod（活动 Agent、保留 Session 或预热探针）使用的缓存；
 - 正在删除的对象；
 - 最新的 `ACK_IMAGE_CACHE_RETIRE_KEEP` 份（默认 18 份，约 3 个版本，最少 6 份），用于近期版本和回滚。
 
-其余缓存按创建时间从早到晚列为待删除。读不出准入登记时直接失败，不删除任何对象。每次删除前
+其余缓存按创建时间从早到晚列为待删除。读不出准入登记或 Pod 清单时直接失败，不删除任何对象。每次删除前
 都会重新读回 owner、UID 和缓存 ID，并把 UID 作为删除前置条件。不在严格准入中的镜像失去缓存后
 回退为直接拉取；仍需依赖严格准入的旧 Agent 要先恢复准入登记或保留其缓存，再执行 `retire`。
 

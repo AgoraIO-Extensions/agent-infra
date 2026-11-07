@@ -54,11 +54,13 @@ export function cacheName(images: string[], prefix = "agent-infra-imc") {
 }
 
 export const retireConfirmation = "RETIRE_OWNED_IMAGE_CACHES";
-export type OwnedCache = { name: string; uid: string; id?: string; createdAt: string; owner?: string; deleting?: boolean };
+export type OwnedCache = { name: string; uid: string; id?: string; createdAt: string; owner?: string; deleting?: boolean; images: string[] };
 export type RetireBackend = {
 	namePrefix?: string;
 	inventory(): Promise<OwnedCache[]>;
 	admissionCacheIds(): Promise<string[]>;
+	/** Images of every live Pod in the cluster: caches that active Agents still start from stay. */
+	inUseImages(): Promise<string[]>;
 	remove(cache: OwnedCache): Promise<void>;
 };
 
@@ -78,24 +80,26 @@ export function admissionCacheIds(policies: unknown[]): string[] {
 }
 
 /**
- * Retires the oldest owned release caches that no current plan group, retry generation or strict
- * admission policy uses. The newest `keep` owned caches always stay, so recent releases and
+ * Retires the oldest owned release caches that no current plan group, retry generation, strict
+ * admission policy or live Pod uses. The newest `keep` owned caches always stay, so recent releases and
  * rollbacks keep their snapshots. Foreign and already deleting objects are never touched.
  */
-export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CachePlan; admissionIds: string[]; keep: number; namePrefix?: string }) {
+export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CachePlan; admissionIds: string[]; inUseImages: string[]; keep: number; namePrefix?: string }) {
 	const plan = parseCachePlan(input.plan);
 	assert(Number.isInteger(input.keep) && input.keep >= 6 && input.keep <= 48, "CACHE_RETIRE_KEEP_INVALID");
 	const planned = new Set(plan.groups.flatMap((images) => { const name = cacheName(images, input.namePrefix); return [name, `${name}-retry1`]; }));
 	const admission = new Set(input.admissionIds);
+	const inUse = new Set(input.inUseImages);
 	const owned = input.caches.filter((cache) => cache.owner === cacheOwner);
-	for (const cache of owned) assert(cache.uid && Number.isFinite(Date.parse(cache.createdAt)), "CACHE_INVENTORY_INVALID");
+	for (const cache of owned) assert(cache.uid && Number.isFinite(Date.parse(cache.createdAt)) && Array.isArray(cache.images), "CACHE_INVENTORY_INVALID");
 	const newestFirst = [...owned].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.name.localeCompare(a.name));
 	const newest = new Set(newestFirst.slice(0, input.keep).map((cache) => cache.name));
-	const kept: Record<string, number> = { current_plan: 0, admission_reference: 0, newest: 0, deleting: 0 };
+	const kept: Record<string, number> = { current_plan: 0, admission_reference: 0, in_use: 0, deleting: 0, newest: 0 };
 	const retire: OwnedCache[] = [];
 	for (const cache of [...newestFirst].reverse()) {
 		if (planned.has(cache.name)) kept.current_plan++;
 		else if (cache.id && admission.has(cache.id)) kept.admission_reference++;
+		else if (cache.images.some((image) => inUse.has(image))) kept.in_use++;
 		else if (cache.deleting) kept.deleting++;
 		else if (newest.has(cache.name)) kept.newest++;
 		else retire.push(cache);
@@ -107,7 +111,7 @@ export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CacheP
 export async function retireCaches(plan: CachePlan, backend: RetireBackend, options: { keep: number; confirm?: string; now?: () => number }) {
 	plan = parseCachePlan(plan);
 	const now = options.now ?? Date.now;
-	const selection = selectCachesToRetire({ caches: await backend.inventory(), plan, admissionIds: await backend.admissionCacheIds(), keep: options.keep, namePrefix: backend.namePrefix });
+	const selection = selectCachesToRetire({ caches: await backend.inventory(), plan, admissionIds: await backend.admissionCacheIds(), inUseImages: await backend.inUseImages(), keep: options.keep, namePrefix: backend.namePrefix });
 	const confirmed = options.confirm === retireConfirmation;
 	const retired: { name: string; createdAt: string }[] = [];
 	if (confirmed) for (const cache of selection.retire) {
@@ -246,10 +250,10 @@ export function kubernetesBackend(kubeconfig: string, namespace: string, pullSec
 export function kubernetesRetireBackend(kubeconfig: string): RetireBackend {
 	assert(kubeconfig, "CACHE_TARGET_INVALID");
 	const command = (args: string[], input?: string) => {
-		try { return execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=30s", ...args], { input, encoding: "utf8", timeout: 40_000, stdio: ["pipe", "pipe", "pipe"] }); }
+		try { return execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=30s", ...args], { input, encoding: "utf8", timeout: 40_000, maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }); }
 		catch { throw new Error("CACHE_KUBERNETES_REQUEST_FAILED"); }
 	};
-	const read = (value: any): OwnedCache => ({ name: value.metadata.name, uid: value.metadata.uid, id: value.status?.imageCacheId, createdAt: value.metadata.creationTimestamp, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], deleting: Boolean(value.metadata.deletionTimestamp) });
+	const read = (value: any): OwnedCache => ({ name: value.metadata.name, uid: value.metadata.uid, id: value.status?.imageCacheId, createdAt: value.metadata.creationTimestamp, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], deleting: Boolean(value.metadata.deletionTimestamp), images: value.spec?.images });
 	return {
 		async inventory() {
 			const inventory = JSON.parse(command(["get", "imagecache", "-l", `agent-infra.agora.io/cache-owner=${cacheOwner}`, "-o", "json"]));
@@ -260,6 +264,11 @@ export function kubernetesRetireBackend(kubeconfig: string): RetireBackend {
 			const policies = JSON.parse(command(["get", "mutatingadmissionpolicies", "-o", "json"]));
 			assert(Array.isArray(policies.items), "CACHE_ADMISSION_UNREADABLE");
 			return admissionCacheIds(policies.items);
+		},
+		async inUseImages() {
+			// Only image references are read; Pod specs, env and Secrets never leave the cluster.
+			const images = command(["get", "pods", "--all-namespaces", "-o", "jsonpath={range .items[*]}{range .spec.containers[*]}{.image}{\"\\n\"}{end}{range .spec.initContainers[*]}{.image}{\"\\n\"}{end}{end}"]);
+			return [...new Set(images.split("\n").map((line) => line.trim()).filter(Boolean))];
 		},
 		async remove(cache) {
 			const raw = command(["get", "imagecache", cache.name, "--ignore-not-found", "-o", "json"]);

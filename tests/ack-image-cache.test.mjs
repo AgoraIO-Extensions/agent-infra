@@ -710,23 +710,30 @@ const owned = (index, extra = {}) => ({
 	id: `imc-old${index}`,
 	createdAt: new Date(Date.UTC(2026, 10, 1) + index * 3_600_000).toISOString(),
 	owner: cacheOwner,
+	images: [
+		`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-pi@sha256:${String(index).padStart(64, "0")}`,
+	],
 	...extra,
 });
 
-test("retire selection keeps the newest, planned and admission-pinned caches and retires the oldest rest", () => {
+test("retire selection keeps the newest, planned, admission-pinned and in-use caches and retires the oldest rest", () => {
 	const planned = { ...owned(0), name: cacheName([ref]) };
 	const retry = { ...owned(1), name: `${cacheName([ref])}-retry1` };
 	const pinned = owned(2, { id: "imc-pinned" });
 	const deleting = owned(3, { deleting: true });
 	const foreign = owned(4, { owner: "someone-else" });
+	const running = owned(5);
 	const rest = Array.from({ length: 30 }, (_, i) => owned(10 + i));
 	const selection = selectCachesToRetire({
-		caches: [planned, retry, pinned, deleting, foreign, ...rest],
+		caches: [planned, retry, pinned, deleting, foreign, running, ...rest],
 		plan,
 		admissionIds: ["imc-pinned"],
+		// A live Pod (an active Agent or a retained Session) still starts from this image.
+		inUseImages: running.images,
 		keep: 18,
 	});
-	// The newest 18 owned caches stay; the plan, the retry generation and the pinned ID always stay.
+	// The newest 18 owned caches stay; the plan, the retry generation, the pinned ID and the
+	// in-use image always stay.
 	assert.deepEqual(
 		selection.retire.map((cache) => cache.name),
 		rest.slice(0, 12).map((cache) => cache.name),
@@ -734,27 +741,39 @@ test("retire selection keeps the newest, planned and admission-pinned caches and
 	assert.deepEqual(selection.kept, {
 		current_plan: 2,
 		admission_reference: 1,
-		newest: 18,
+		in_use: 1,
 		deleting: 1,
+		newest: 18,
 	});
-	assert.equal(selection.owned, 34);
+	assert.equal(selection.owned, 35);
 	assert.equal(selection.foreign, 1);
 	for (const keep of [5, 49, 1.5])
 		assert.throws(
 			() =>
-				selectCachesToRetire({ caches: rest, plan, admissionIds: [], keep }),
+				selectCachesToRetire({
+					caches: rest,
+					plan,
+					admissionIds: [],
+					inUseImages: [],
+					keep,
+				}),
 			/CACHE_RETIRE_KEEP_INVALID/u,
 		);
-	assert.throws(
-		() =>
-			selectCachesToRetire({
-				caches: [owned(5, { createdAt: "not-a-date" })],
-				plan,
-				admissionIds: [],
-				keep: 6,
-			}),
-		/CACHE_INVENTORY_INVALID/u,
-	);
+	for (const broken of [
+		owned(6, { createdAt: "not-a-date" }),
+		owned(7, { images: undefined }),
+	])
+		assert.throws(
+			() =>
+				selectCachesToRetire({
+					caches: [broken],
+					plan,
+					admissionIds: [],
+					inUseImages: [],
+					keep: 6,
+				}),
+			/CACHE_INVENTORY_INVALID/u,
+		);
 });
 
 test("strict Session admission pins are read from every image-cache policy and fail closed", () => {
@@ -805,6 +824,9 @@ test("retire is a dry run without the exact confirmation and deletes only the se
 		async admissionCacheIds() {
 			return [];
 		},
+		async inUseImages() {
+			return [];
+		},
 		async remove(cache) {
 			removed.push(cache.uid);
 		},
@@ -829,20 +851,27 @@ test("retire is a dry run without the exact confirmation and deletes only the se
 		{ name: owned(0).name, createdAt: owned(0).createdAt },
 		{ name: owned(1).name, createdAt: owned(1).createdAt },
 	]);
-	// An unreadable admission policy stops before any deletion.
+	// An unreadable admission policy or Pod inventory stops before any deletion.
 	removed.length = 0;
-	await assert.rejects(
-		retireCaches(
-			plan,
-			{
-				...backend,
-				async admissionCacheIds() {
-					throw new Error("CACHE_ADMISSION_UNREADABLE");
-				},
+	for (const failing of [
+		{
+			async admissionCacheIds() {
+				throw new Error("CACHE_ADMISSION_UNREADABLE");
 			},
-			{ keep: 18, confirm: retireConfirmation },
-		),
-		/CACHE_ADMISSION_UNREADABLE/u,
-	);
+		},
+		{
+			async inUseImages() {
+				throw new Error("CACHE_POD_INVENTORY_UNREADABLE");
+			},
+		},
+	])
+		await assert.rejects(
+			retireCaches(
+				plan,
+				{ ...backend, ...failing },
+				{ keep: 18, confirm: retireConfirmation },
+			),
+			/CACHE_(ADMISSION|POD_INVENTORY)_UNREADABLE/u,
+		);
 	assert.deepEqual(removed, []);
 });
