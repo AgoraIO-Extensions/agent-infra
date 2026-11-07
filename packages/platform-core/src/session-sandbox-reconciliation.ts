@@ -389,17 +389,31 @@ export function decideSessionSandboxObservationV1(
 ) {
 	if (!isSessionSandboxObservationValidV1(claim, observation))
 		throw new TypeError("Invalid Sandbox observation");
+	// A validated stop receipt proves that the previous non-PVC identities were
+	// removed. A replacement may therefore legitimately have new UIDs; the
+	// resurrection check below still rejects any old UID returning.
+	const replacementAfterStop =
+		claim.lifecycle?.stopReceipt !== null &&
+		claim.lifecycle?.stopReceipt !== undefined;
 	const identityChanged =
-		previous?.resources.some(
-			(old) =>
-				!observation.resources.some(
+		previous?.resources.some((old) => {
+			if (
+				observation.resources.some(
 					(current) =>
 						current.kind === old.kind &&
 						current.name === old.name &&
 						current.namespace === old.namespace &&
 						current.uid === old.uid,
-				),
-		) ?? false;
+				)
+			)
+				return false;
+			if (old.kind === "PersistentVolumeClaim" || !replacementAfterStop)
+				return true;
+			return !claim.lifecycle.stopReceipt.removed.some(
+				({ resource }) =>
+					resource.kind === old.kind && resource.uid === old.uid,
+			);
+		}) ?? false;
 	const resurrectedSource =
 		claim.lifecycle?.stopReceipt?.removed.some(({ resource: old }) =>
 			observation.resources.some(

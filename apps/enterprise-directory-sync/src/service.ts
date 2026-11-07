@@ -6,6 +6,7 @@ import {
 	requireCurrentSnapshot,
 	toDirectorySnapshotV1,
 	toDirectorySnapshotV2,
+	toDirectorySnapshotV3,
 } from "@agent-infra/enterprise-directory";
 import { Hono } from "hono";
 
@@ -53,6 +54,7 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 	for (const [path, encode] of [
 		["/internal/directory/snapshot", toDirectorySnapshotV1],
 		["/internal/directory/v2/snapshot", toDirectorySnapshotV2],
+		["/internal/directory/v3/snapshot", toDirectorySnapshotV3],
 	] as const) {
 		app.get(path, async (context) => {
 			if (!tokenMatches(context.req.header("Authorization"), input.readToken)) {

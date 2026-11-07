@@ -17,6 +17,7 @@ const usersResponse = responseBase.extend({
 		z.object({
 			userid: z.string().min(1),
 			email: z.string().default(""),
+			name: z.string().default(""),
 			status: z.number().int(),
 			department: z.array(z.number().int().positive()).min(1),
 		}),
@@ -115,9 +116,13 @@ export function createWeComSource(config: WeComSourceConfig) {
 						throw new WeComSourceError();
 					}
 					returnedIds.add(user.userid);
+					const displayName = user.name.trim();
 					const member = {
 						userId: user.userid,
 						email: user.email,
+						...(displayName && displayName.length <= 256
+							? { displayName }
+							: {}),
 						active: user.status === 1,
 						departmentIds: user.department.toSorted((a, b) => a - b),
 					};

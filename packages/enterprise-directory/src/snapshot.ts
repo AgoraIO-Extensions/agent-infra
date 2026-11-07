@@ -13,6 +13,8 @@ export interface DirectoryDepartment {
 export interface DirectoryMember {
 	userId: string;
 	email: string;
+	/** Trusted source display name; never an identity or authorization key. */
+	displayName?: string;
 	active: boolean;
 	departmentIds: number[];
 }
@@ -41,6 +43,18 @@ export interface DirectorySnapshotSummary {
 	invalidEmailMembers: number;
 	duplicateEmailMembers: number;
 	unmappableMembers: number;
+}
+
+/**
+ * Returns the trusted name used by directory pickers. Older snapshots may not
+ * carry a display name, so their existing email-local-part projection remains
+ * a presentation fallback.
+ */
+export function displayNameForDirectoryMember(member: DirectoryMember): string {
+	const displayName = member.displayName?.trim();
+	if (displayName) return displayName;
+	const localPart = member.email.split("@", 1)[0]?.trim();
+	return localPart || member.userId;
 }
 
 export class DirectoryUnavailableError extends Error {
@@ -165,6 +179,10 @@ export function validateSnapshot(
 		if (
 			!member.userId.trim() ||
 			typeof member.email !== "string" ||
+			(member.displayName !== undefined &&
+				(typeof member.displayName !== "string" ||
+					!member.displayName.trim() ||
+					member.displayName.length > 256)) ||
 			typeof member.active !== "boolean" ||
 			member.departmentIds.length === 0 ||
 			member.departmentIds.some((id) => !Number.isSafeInteger(id) || id < 1)
