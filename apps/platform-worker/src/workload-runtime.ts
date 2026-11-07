@@ -1832,8 +1832,12 @@ export function createWorkloadRuntimeV1(
 					}),
 				);
 			}
+			const persistedDeployment =
+				state.candidate.deployment === null
+					? null
+					: validateAgentWorkloadDesiredV1(state.candidate.deployment);
 			const frozenSkillDeliveryImage =
-				state.candidate.deployment?.skillDeliveryImage ??
+				persistedDeployment?.skillDeliveryImage ??
 				(state.candidate.deployment === null && state.identity === null
 					? options.policy.skillDeliveryImage
 					: undefined);
