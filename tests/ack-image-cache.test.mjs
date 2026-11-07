@@ -648,6 +648,10 @@ else { const name = args[args.indexOf("imagecache") + 1] === "-n" ? args[args.in
 		assert.deepEqual(stored.items[0].spec.imagePullSecrets, [
 			"fixture:ack-ghcr-pull",
 		]);
+		assert.equal(
+			stored.items[0].metadata.annotations["k8s.aliyun.com/imc-enable-flash"],
+			"true",
+		);
 		for (const line of readFileSync(log, "utf8")
 			.split("\n")
 			.filter((line) => line.includes("imagecache"))) {
