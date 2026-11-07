@@ -24,6 +24,7 @@ export type SessionReserveStoreV1 = Pick<
 	| "list"
 	| "listPage"
 	| "inspect"
+	| "refreshReady"
 	| "applyConfiguration"
 	| "reconcileCapacity"
 	| "claimLease"
@@ -389,31 +390,35 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		>[number],
 		result: SessionReserveReconcileResultV1,
 	) {
+		if (row.status !== "ready") return;
 		const inspection = await store.inspect(row.sandboxId);
 		if (
-			inspection?.status !== "ready" ||
-			inspection.currentProfileDigest !== row.profileDigest ||
-			!inspection.deployment ||
-			!inspection.modelProjection
+			inspection?.status === "ready" &&
+			inspection.currentProfileDigest === row.profileDigest &&
+			inspection.deployment &&
+			inspection.modelProjection
 		) {
-			if (await store.retire(row.sandboxId)) result.retired++;
+			try {
+				for (const kind of creationOrder) {
+					const current = await adapter.read(
+						inspection,
+						kind,
+						abortController.signal,
+					);
+					if (!current) {
+						if (await store.retire(row.sandboxId)) result.retired++;
+						return;
+					}
+				}
+				if (!(await store.refreshReady(row.sandboxId, configuration.ttlMs))) {
+					if (await store.retire(row.sandboxId)) result.retired++;
+				}
+			} catch {
+				if (await store.retire(row.sandboxId)) result.retired++;
+			}
 			return;
 		}
-		try {
-			for (const kind of creationOrder) {
-				const current = await adapter.read(
-					inspection,
-					kind,
-					abortController.signal,
-				);
-				if (!current) {
-					if (await store.retire(row.sandboxId)) result.retired++;
-					return;
-				}
-			}
-		} catch {
-			if (await store.retire(row.sandboxId)) result.retired++;
-		}
+		if (await store.retire(row.sandboxId)) result.retired++;
 	}
 	async function clean(
 		claim: Claim,
