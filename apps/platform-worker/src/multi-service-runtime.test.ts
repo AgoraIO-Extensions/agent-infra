@@ -499,7 +499,7 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
-	it("observes snapshot init from actual Deployment Pods through their ReplicaSet ownership", async () => {
+	it("observes live snapshot Pods through ReplicaSet ownership while old Pods terminate", async () => {
 		const fake = fakeClient();
 		const projection = snapshotProjection();
 		const observations: unknown[] = [];
@@ -558,6 +558,23 @@ describe("multi-service resource policy", () => {
 		const pod = [...fake.resources.values()].find(
 			(resource) => resource.kind === "Pod",
 		) as V1Pod;
+		if (!pod.metadata?.name) throw new Error();
+		const terminating = structuredClone(pod);
+		terminating.metadata = {
+			...terminating.metadata,
+			name: `${pod.metadata.name}-old`,
+			uid: "terminating-old-pod",
+			deletionTimestamp: new Date(),
+		};
+		const oldInit = terminating.status?.initContainerStatuses?.[0];
+		if (!oldInit) throw new Error();
+		oldInit.state = { terminated: { exitCode: 1 } };
+		fake.resources.set(`Pod/${terminating.metadata.name}`, terminating);
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		fake.resources.delete(`Pod/${pod.metadata.name}`);
+		expect(await operations.observe(value, identity)).toBe("pending");
+		fake.resources.set(`Pod/${pod.metadata.name}`, pod);
+		fake.resources.delete(`Pod/${terminating.metadata.name}`);
 		const init = pod.status?.initContainerStatuses?.[0];
 		if (!init) throw new Error();
 		init.state = {

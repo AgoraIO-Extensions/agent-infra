@@ -1056,10 +1056,12 @@ export function createMultiServiceRuntimeOperations(options: {
 				"Pod",
 				`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
 			)
-		).filter((pod) =>
-			Object.entries(expectedLabels).every(
-				([key, expected]) => pod.metadata?.labels?.[key] === expected,
-			),
+		).filter(
+			(pod) =>
+				!pod.metadata?.deletionTimestamp &&
+				Object.entries(expectedLabels).every(
+					([key, expected]) => pod.metadata?.labels?.[key] === expected,
+				),
 		);
 		if (!pods.length) return "pending";
 		let pending = false;
@@ -1072,7 +1074,6 @@ export function createMultiServiceRuntimeOperations(options: {
 			if (
 				pod.metadata?.namespace !== client.namespace ||
 				!pod.metadata?.uid ||
-				pod.metadata.deletionTimestamp ||
 				owners.length !== 1 ||
 				!owner
 			)
