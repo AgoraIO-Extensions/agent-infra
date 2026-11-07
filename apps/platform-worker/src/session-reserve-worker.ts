@@ -390,6 +390,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		>[number],
 		result: SessionReserveReconcileResultV1,
 	) {
+		if (row.status !== "ready") return;
 		const inspection = await store.inspect(row.sandboxId);
 		if (
 			inspection?.status === "ready" &&
