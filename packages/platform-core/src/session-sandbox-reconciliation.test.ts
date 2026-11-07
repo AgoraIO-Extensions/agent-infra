@@ -385,11 +385,7 @@ describe("Session Sandbox observation decision", () => {
 			targetGeneration: 1,
 			targetResourceFence: 2,
 			removed: ready.resources
-				.filter(
-					(resource) =>
-						resource.kind !== "PersistentVolumeClaim" &&
-						resource.kind !== "Pod",
-				)
+				.filter((resource) => resource.kind !== "PersistentVolumeClaim")
 				.map((resource) => ({
 					resource,
 					preconditions: {
@@ -407,7 +403,7 @@ describe("Session Sandbox observation decision", () => {
 		const replacement = {
 			...ready,
 			resources: ready.resources.map((resource) =>
-				resource.kind === "Pod"
+				resource.kind !== "PersistentVolumeClaim"
 					? { ...resource, uid: "replacement-pod" }
 					: resource,
 			),
@@ -419,6 +415,40 @@ describe("Session Sandbox observation decision", () => {
 				replacement,
 			),
 		).toEqual({ status: "ready", observation: replacement, finished: true });
+	});
+	it("rejects a removed UID resurrecting in a replacement observation", () => {
+		const retainedPVC = ready.resources.find(
+			(resource) => resource.kind === "PersistentVolumeClaim",
+		);
+		const pod = ready.resources.find((resource) => resource.kind === "Pod");
+		if (!retainedPVC || !pod) throw new Error("Missing replacement fixture");
+		const receipt: SessionSandboxStopReceiptV1 = {
+			schemaVersion: 1,
+			sandboxId: sandbox.sandboxId,
+			sessionId: sandbox.sessionId,
+			sourceGeneration: 1,
+			sourceResourceFence: 1,
+			targetGeneration: 1,
+			targetResourceFence: 2,
+			removed: [
+				{
+					resource: pod,
+					preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
+					absence: { kind: pod.kind, namespace: pod.namespace, name: pod.name },
+				},
+			],
+			retainedPVC,
+		};
+		const result = decideSessionSandboxObservationV1(
+			{ ...claim, lifecycle: { stopReceipt: receipt } as never },
+			ready,
+			ready,
+		);
+		expect(result).toEqual({
+			status: "unknown",
+			observation: ready,
+			finished: false,
+		});
 	});
 });
 
