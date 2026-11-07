@@ -270,6 +270,49 @@ async function rows(agentId: string) {
 	return db`select snapshot_id,configuration_revision,name,digest,size_bytes from platform.workspace_snapshot_bindings where agent_id=${agentId} order by configuration_revision,name`;
 }
 
+async function replaceSnapshots(
+	agentId: string,
+	originalSnapshotId: string,
+	next: readonly { snapshotId: string; name: string }[],
+	actorId = "owner",
+) {
+	return coreUpdates().update(
+		{
+			schemaVersion: 2,
+			agentId,
+			changes: {
+				source: {
+					...source(originalSnapshotId),
+					workspaceSnapshots: [...next],
+				},
+			},
+			...metadata(),
+		},
+		actor(actorId),
+	);
+}
+
+async function configurationEffects(agentId: string) {
+	return {
+		agent: [
+			...(await db`select current_configuration_revision,authorization_revision from platform.agents where id=${agentId}`),
+		],
+		revisions: [
+			...(await db`select revision,configuration from platform.agent_configuration_revisions where agent_id=${agentId} order by revision`),
+		],
+		bindings: [...(await rows(agentId))],
+		audits: [
+			...(await db`select id from platform.audit_events where agent_id=${agentId} or target_id=${agentId} or details->>'agentId'=${agentId} order by id`),
+		],
+		receipts: [
+			...(await db`select id from platform.idempotency_records where scope_id=${agentId} order by id`),
+		],
+		outbox: [
+			...(await db`select id from platform.outbox_items where scope_id=${agentId} order by id`),
+		],
+	};
+}
+
 async function rejectBindingWrites() {
 	await db.unsafe(
 		"create function platform.reject_snapshot_binding() returns trigger language plpgsql as $$ begin raise exception 'synthetic binding failure'; end $$",
@@ -505,6 +548,135 @@ describe("workspace snapshot bindings on real configuration transactions", () =>
 		expect((await rows(result.agentId)).map((row) => row.digest)).toEqual([
 			value.digest,
 			value.digest,
+		]);
+	});
+	it.each(["all", "partial", "rename", "replace"] as const)(
+		"rejects co-owner %s removal of another uploader's references without transaction effects",
+		async (change) => {
+			const repo = await snapshot();
+			const env = await snapshot();
+			const coownerRepo = await snapshot("user", "coowner");
+			const { result } = await create(repo.id);
+			await replaceSnapshots(result.agentId, repo.id, [
+				{ snapshotId: repo.id, name: "repo" },
+				{ snapshotId: env.id, name: "env" },
+			]);
+			const next =
+				change === "all"
+					? []
+					: change === "partial"
+						? [{ snapshotId: env.id, name: "env" }]
+						: [
+								{
+									snapshotId: change === "replace" ? coownerRepo.id : repo.id,
+									name: change === "rename" ? "renamed" : "repo",
+								},
+								{ snapshotId: env.id, name: "env" },
+							];
+			const before = await configurationEffects(result.agentId);
+			await expect(
+				replaceSnapshots(result.agentId, repo.id, next, "coowner"),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			expect(await configurationEffects(result.agentId)).toEqual(before);
+		},
+	);
+	it.each(["all", "partial"] as const)(
+		"allows the uploader's %s removal and later co-owner revisions retaining the remaining references",
+		async (change) => {
+			const repo = await snapshot();
+			const env = await snapshot(
+				"user",
+				change === "partial" ? "coowner" : "owner",
+			);
+			const { result } = await create(repo.id);
+			await replaceSnapshots(
+				result.agentId,
+				repo.id,
+				[
+					{ snapshotId: repo.id, name: "repo" },
+					{ snapshotId: env.id, name: "env" },
+				],
+				change === "partial" ? "coowner" : "owner",
+			);
+			const next =
+				change === "all" ? [] : [{ snapshotId: env.id, name: "env" }];
+			await replaceSnapshots(result.agentId, repo.id, next);
+			expect((await current(result.agentId)).source).toMatchObject({
+				workspaceSnapshots: next,
+			});
+			expect(
+				(await rows(result.agentId)).filter(
+					(row) => row.configuration_revision === "3",
+				),
+			).toHaveLength(next.length);
+			expect(
+				await db`select target_id from platform.audit_events where action='workspace.snapshot.unbound' and details->>'agentId'=${result.agentId} and details->>'configurationRevision'='2' order by target_id`,
+			).toHaveLength(change === "all" ? 2 : 1);
+			await coreUpdates().update(
+				{
+					schemaVersion: 2,
+					agentId: result.agentId,
+					changes: { environment: [{ name: "MODE", value: "retained" }] },
+					...metadata(),
+				},
+				actor("coowner"),
+			);
+			expect((await current(result.agentId)).source).toMatchObject({
+				workspaceSnapshots: next,
+			});
+			expect(
+				(await rows(result.agentId)).filter(
+					(row) => row.configuration_revision === "4",
+				),
+			).toHaveLength(next.length);
+		},
+	);
+	it("keeps user and application uploaders distinct during configuration removal even with the same ID", async () => {
+		const material = `papi_${randomBytes(32).toString("base64url")}`;
+		await db`insert into platform.platform_applications (id,name,responsible_user_id,status,authorization_revision) values ('same-id','Synthetic app','app-responsible','active','app-1') on conflict do nothing`;
+		await db`insert into platform.platform_api_credentials (id,principal_type,principal_id,credential_hash,scopes) values (${randomUUID()},'application','same-id',${hash(material)},'["agent:create"]')`;
+		const upload = await snapshot("application", "same-id");
+		const api = createAgentApiCreationV1({
+			transaction: foundation,
+			admissions,
+		});
+		const created = await api.create(
+			{
+				schemaVersion: 2,
+				name: "Synthetic same-ID Agent",
+				description: "Synthetic",
+				source: source(upload.id),
+				coOwnerIds: ["same-id"],
+				availability: [],
+				environment: [],
+				secrets: [],
+				...metadata(),
+			},
+			material,
+		);
+		expect(
+			await db`select owner_id from platform.agent_owners where agent_id=${created.agentId} and owner_id='same-id'`,
+		).toEqual([{ owner_id: "same-id" }]);
+		const before = await configurationEffects(created.agentId);
+		await expect(
+			replaceSnapshots(created.agentId, upload.id, [], "same-id"),
+		).rejects.toMatchObject({ code: "persistence_failed" });
+		expect(await configurationEffects(created.agentId)).toEqual(before);
+	});
+	it("restores the uploader's original binding through a new configuration revision", async () => {
+		const first = await snapshot();
+		const second = await snapshot();
+		const { result } = await create(first.id);
+		await replaceSnapshots(result.agentId, first.id, [
+			{ snapshotId: second.id, name: "repo" },
+		]);
+		await replaceSnapshots(result.agentId, first.id, [
+			{ snapshotId: first.id, name: "repo" },
+		]);
+		expect((await rows(result.agentId)).map((row) => row.digest)).toEqual([
+			first.digest,
+			second.digest,
+			first.digest,
 		]);
 	});
 	it("rolls back a new configuration revision when binding persistence fails", async () => {
