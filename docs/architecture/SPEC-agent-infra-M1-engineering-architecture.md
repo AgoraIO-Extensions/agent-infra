@@ -382,6 +382,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。
 - 浏览器、Agent、模型和普通调用方不能提交、覆盖或伪造这些字段；`platform-api` 必须验证部署身份边界后才创建 HttpOnly、Secure、SameSite 会话，且不在 Local Storage 保存上游身份凭证。
 - Helm 以环境变量向第一方 Adapter 注入允许成为 `system_admin` 的 LDAP 稳定 UID 集合；每次敏感管理员操作按当前 LDAP UID 精确匹配并检查账号有效。邮箱、企微 userid、Relay 角色和请求字段都不能赋予平台管理员身份。该配置为空时不产生隐式管理员。
 - Platform 通过受认证的版本化接口消费通用组织目录，不直接调用企业上游协议。独立配套同步服务的 Adapter 每天从企微或企业内部接口拉取员工与部门，上游 Adapter 负责核实成员有效性与部门归属语义，不能把未知状态默认为有效或把查询范围当成直接归属。只有全量校验成功才原子发布带来源、版本、完整性标记和最长一天有效期的快照；失败保留上一版用于诊断，但过期或不完整快照不能继续授权。Platform 以 LDAP 与快照中唯一、有效的邮箱一对一关联，缺失、重复、停用或无法核实均拒绝依赖该映射的 Owner/可用范围新增与敏感操作；不按名字或请求提交的邮箱猜测。组织成员变化以新完整快照生效，允许最长一天延迟。
+- 目录快照的 V3 展示投影可携带来源提供的可选姓名；姓名仅用于展示与搜索，不参与 LDAP 关联、稳定用户 ID 或权限判定。V1/V2 继续输出既有严格字段，旧快照无姓名时可回退邮箱本地部分。
 - 平台不维护独立员工目录，只保存业务所需的稳定 LDAP 用户引用、管理员手动禁用状态和授权记录。管理员禁用在 Platform DB 中持久化并审计，优先于 LDAP active 结果；解除禁用也须当前 LDAP 账号有效，不修改 LDAP 或企微源数据。
 - LDAP 当前账号状态、Platform 手动禁用及适用的组织快照在每次敏感操作前重新解析；LDAP 停用和手动禁用立即拒绝，短期缓存不能成为独立权限来源。IdentityAdapter 或目录依赖缺失、非法、过期或不可用时，依赖其结果的敏感操作 fail closed，不能使用调用方字段或不受控旧缓存继续授权。
 - Agent 详情投影 `GET /api/v2/agents/{agentId}/detail` 为每个 Owner 返回服务端当次解析的有效状态，可见性与 `GET /api/v2/agents/{agentId}` 相同，不可见与不存在不可区分；`AgentProjectionV2`、列表和命令响应保持不变。第一方 LDAP IdentityAdapter 逐个 Owner 按上述当前事实判定：LDAP 中已查不到该账号为 `departed`；LDAP 停用或 Platform 管理员禁用为 `disabled`；LDAP、禁用记录与适用的目录快照均确认有效才为 `active`；任一依赖失败、快照缺失或过期、邮箱关联无法核实时为 `unavailable`。单个 Owner 的状态不使整个投影失败，也不以默认值、旧缓存或调用方字段补齐；未提供该能力的 IdentityAdapter 只返回 `unavailable`。状态只用于展示，不替代 9.2 的授权检查。

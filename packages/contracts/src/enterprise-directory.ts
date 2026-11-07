@@ -99,3 +99,32 @@ export const enterpriseDirectoryOpenApiPathsV2 = {
 		},
 	},
 };
+
+/** Names are presentation metadata; legacy responses keep their strict shape. */
+export const EnterpriseDirectorySnapshotV3Schema =
+	EnterpriseDirectorySnapshotV2Schema.extend({
+		schemaVersion: z.literal(3),
+		members: z.array(
+			EnterpriseDirectorySnapshotV1Schema.shape.members.element.extend({
+				displayName: z.string().min(1).max(256).regex(/\S/u).optional(),
+			}),
+		),
+	});
+export const enterpriseDirectoryOpenApiPathsV3 = {
+	"/internal/directory/v3/snapshot": {
+		get: {
+			...legacyRead,
+			operationId: "readEnterpriseDirectorySnapshotV3",
+			summary: "Read the current enterprise directory with display names",
+			responses: {
+				...legacyRead.responses,
+				200: {
+					...legacyRead.responses[200],
+					content: {
+						"application/json": { schema: EnterpriseDirectorySnapshotV3Schema },
+					},
+				},
+			},
+		},
+	},
+};
