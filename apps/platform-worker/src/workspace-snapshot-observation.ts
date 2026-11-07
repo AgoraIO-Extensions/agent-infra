@@ -32,8 +32,17 @@ export function workspaceSnapshotPodObservationV1(
 	);
 	if (!expected?.image || status?.length !== 1 || !status[0]) return undefined;
 	const init = status[0];
+	const expectedDigest = expected.image.split("@")[1];
+	const observedDigests = [init.image, init.imageID]
+		.map((image) => image?.split("@")[1])
+		.filter((digest): digest is string => typeof digest === "string");
+	const imageMatches =
+		init.image === expected.image ||
+		(init.image?.startsWith("sha256:") === true &&
+			!!expectedDigest &&
+			observedDigests.includes(expectedDigest));
 	if (
-		init.image !== expected.image ||
+		!imageMatches ||
 		!Number.isSafeInteger(init.restartCount) ||
 		init.restartCount < 0
 	)

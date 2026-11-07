@@ -80,6 +80,17 @@ it("projects actual init duration and attempt without any raw message or URL", (
 	).not.toMatch(/private|secret|signature|https/);
 });
 
+it("accepts Kubernetes status imageID when image is reported as a content digest", () => {
+	const observed = workspaceSnapshotPodObservationV1(
+		pod({
+			image: `sha256:${"c".repeat(64)}`,
+			imageID: image,
+		}),
+		projection,
+	);
+	expect(observed).toMatchObject({ outcome: "completed", attempt: 1 });
+});
+
 it("reports the same failed attempt while it is terminated or waiting for a restart", () => {
 	const failed = {
 		exitCode: 1,
