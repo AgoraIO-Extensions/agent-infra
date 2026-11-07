@@ -4,6 +4,7 @@ import {
 	MultiServiceResourceProfileAnnotationV1,
 } from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import { WorkloadPreflightRejectedErrorV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1ConfigMap,
@@ -836,7 +837,7 @@ describe("multi-service resource policy", () => {
 		recorded.calls.length = 0;
 		await operations.apply(value);
 		expect(recorded.calls).not.toContain(
-			"replace Deployment/" + workloadResourceNameV1("agent-a") + "-web",
+			`replace Deployment/${workloadResourceNameV1("agent-a")}-web`,
 		);
 	});
 
@@ -1851,6 +1852,9 @@ describe("multi-service runtime operations", () => {
 			failed: 1,
 			conditions: [{ type: "Failed", status: "True" }],
 		};
+		await expect(operations.apply(value)).rejects.toBeInstanceOf(
+			WorkloadPreflightRejectedErrorV1,
+		);
 		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
 			"unhealthy",
 		);
