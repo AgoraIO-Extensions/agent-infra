@@ -10507,7 +10507,7 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		}
 	});
 
-	it("keeps a lost-Pod Sandbox running while an execution may still occupy it (#3985)", async () => {
+	it("keeps a lost-Pod Sandbox running while an execution may still occupy it, then recovers once it settles (#3985)", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "processing",
 		});
@@ -10538,6 +10538,36 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 			expect(
 				await client`select 1 from platform.audit_events where action = 'conversation.sandbox.lost_pod_recovery_requested'`,
 			).toHaveLength(0);
+			// The fallback keeps the recorded ready source, so recovery proceeds once the
+			// execution settles and the Worker reports the lost Pod again.
+			await client`update platform.conversation_executions set status = 'completed'
+				where execution_id = ${work.executionId}`;
+			const retried = await claimReopened(store, lost.itemId);
+			expect(
+				await store.recordSandboxObservation({
+					claim: retried,
+					observation: {
+						status: "unknown",
+						failureCode: "sandbox.pod_lost",
+						resources: lost.resources,
+					},
+				}),
+			).toBe("committed");
+			expect(await sandboxState(work.conversationId)).toMatchObject({
+				desired_state: "stopped",
+				status: "unavailable",
+				resource_fence: 2,
+				intent_status: "pending",
+				payload: {
+					lifecycle: {
+						reason: "idle_reclaim",
+						resumeRequested: true,
+						source: {
+							observation: { status: "ready", resources: lost.resources },
+						},
+					},
+				},
+			});
 		} finally {
 			await store.close();
 		}
