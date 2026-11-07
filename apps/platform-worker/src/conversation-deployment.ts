@@ -1437,11 +1437,11 @@ export function createProductionSessionSandboxReceiverV1(
 		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
 			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
 			signal.throwIfAborted();
-			// The retained PVC was just rebound by the authorized CAS above; its
-			// target identity is checked by the normal apply readback below.
-			previousForApply = previous.filter(
-				(resource) => resource.kind !== "PersistentVolumeClaim",
-			);
+			// The stop receipt proves every non-PVC source resource was deleted. The
+			// allocation observation may still contain that stale source snapshot
+			// when a live route disappears during the replacement; never pass those
+			// old UIDs to apply as current resources.
+			previousForApply = [];
 		}
 		await adapter.apply(allocation, previousForApply);
 		signal.throwIfAborted();
