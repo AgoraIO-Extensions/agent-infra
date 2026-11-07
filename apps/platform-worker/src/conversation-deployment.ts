@@ -1448,6 +1448,6 @@ export function createProductionSessionSandboxReceiverV1(
 		// One complete observe per claim; normal prepare pacing is durable in Store.
 		// Keep the lease/abort/CAS boundary here and let the next claim use the
 		// persisted generation/fence audit anchor instead of a hot in-lease loop.
-		return adapter.observe(allocation, previous);
+		return adapter.observe(allocation, previousForApply);
 	};
 }

@@ -1785,7 +1785,8 @@ describe("production SessionSandbox resource receiver", () => {
 					},
 				},
 			};
-			await receive(replacement, signal);
+			const replacementObservation = await receive(replacement, signal);
+			expect(replacementObservation.status).toBe("observed");
 			const secret = await f.client.read<V1Secret>(
 				"Secret",
 				f.claim.sandbox.resourceName,
