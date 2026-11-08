@@ -128,9 +128,7 @@ async function activeReservationUsage(
 			and(
 				eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
 				eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
-				eq(workspaceSnapshotUploadReservations.status, "reserved"),
-				sql`${workspaceSnapshotUploadReservations.expiresAt} > clock_timestamp()`,
-				sql`(${workspaceSnapshotUploadReservations.snapshotId} is null or not exists (select 1 from platform.workspace_snapshots s where s.id = ${workspaceSnapshotUploadReservations.snapshotId} and s.status <> 'deleted'))`,
+				sql`(${workspaceSnapshotUploadReservations.status} = 'reserved' or (${workspaceSnapshotUploadReservations.status} = 'expired' and ${workspaceSnapshotUploadReservations.objectRef} is not null))`,
 				...(excludeId
 					? [sql`${workspaceSnapshotUploadReservations.id} <> ${excludeId}`]
 					: []),
