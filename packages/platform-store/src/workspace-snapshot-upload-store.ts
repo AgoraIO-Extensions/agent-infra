@@ -604,15 +604,11 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					and(
 						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
 						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
-						eq(workspaceSnapshotUploadReservations.status, "reserved"),
+						sql`${workspaceSnapshotUploadReservations.status} = 'reserved'`,
+						sql`${workspaceSnapshotUploadReservations.snapshotId} is null`,
 						sql`${workspaceSnapshotUploadReservations.expiresAt} <= now()`,
 					),
 				);
-			const completed = await replay(tx, owner, key);
-			if (completed)
-				return {
-					state: completed.requestDigest === digest ? "completed" : "conflict",
-				};
 			const [existing] = await tx
 				.select()
 				.from(workspaceSnapshotUploadReservations)
@@ -625,6 +621,43 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				)
 				.for("update")
 				.limit(1);
+			const completed = await replay(tx, owner, key);
+			if (completed) {
+				if (completed.requestDigest !== digest) return { state: "conflict" };
+				const reservationId = randomUUID();
+				if (existing?.status === "reserved") return { state: "in_progress" };
+				if (existing) {
+					await tx
+						.update(workspaceSnapshotUploadReservations)
+						.set({
+							id: reservationId,
+							reservedBytes: bytes,
+							status: "reserved",
+							expiresAt: new Date(expiresAt),
+							updatedAt: new Date(),
+							releasedAt: null,
+							snapshotId: completed.record.snapshotId,
+							objectRef: completed.record.objectRef,
+							objectVersion: completed.record.objectVersion,
+						})
+						.where(eq(workspaceSnapshotUploadReservations.id, existing.id));
+				} else {
+					await tx.insert(workspaceSnapshotUploadReservations).values({
+						id: reservationId,
+						ownerType: owner.kind,
+						ownerId: owner.id,
+						idempotencyKey: key,
+						requestDigest: digest,
+						reservedBytes: bytes,
+						status: "reserved",
+						expiresAt: new Date(expiresAt),
+						snapshotId: completed.record.snapshotId,
+						objectRef: completed.record.objectRef,
+						objectVersion: completed.record.objectVersion,
+					});
+				}
+				return { state: "reserved", reservationId };
+			}
 			if (existing) {
 				if (existing.requestDigest !== digest) return { state: "conflict" };
 				if (existing.status === "completed") return { state: "completed" };
@@ -683,8 +716,8 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					status: "released",
 					releasedAt: new Date(),
 					updatedAt: new Date(),
-					objectRef: null,
-					objectVersion: null,
+					objectRef: sql`case when ${workspaceSnapshotUploadReservations.snapshotId} is null then null else ${workspaceSnapshotUploadReservations.objectRef} end`,
+					objectVersion: sql`case when ${workspaceSnapshotUploadReservations.snapshotId} is null then null else ${workspaceSnapshotUploadReservations.objectVersion} end`,
 				})
 				.where(
 					and(

@@ -266,7 +266,6 @@ export function createWorkspaceSnapshotServiceV1(
 			digest: string;
 			source: unknown;
 			body: ReadableStream<Uint8Array>;
-			bodySizeBytes?: number;
 			signal?: AbortSignal;
 		}) {
 			let spool:
@@ -325,30 +324,6 @@ export function createWorkspaceSnapshotServiceV1(
 				if (reservation.state === "reserved") {
 					reservationId = reservation.reservationId;
 					reservationOwner = principal;
-				}
-				if (reservation.state === "completed") {
-					await revalidateUploadPrincipal(input.material, principal);
-					const existing = await options.store.findIdempotency(
-						principal,
-						input.idempotencyKey,
-					);
-					if (
-						!existing ||
-						existing.requestDigest !== reservationDigest ||
-						existing.record.ownerId !== principal.id ||
-						existing.record.ownerType !== principal.kind ||
-						existing.record.digest !== input.digest ||
-						!isDeepStrictEqual(existing.record.source, provenance.source)
-					)
-						throw new WorkspaceSnapshotServiceErrorV1("unavailable");
-					if (
-						input.bodySizeBytes !== undefined &&
-						input.bodySizeBytes !== existing.record.sizeBytes
-					)
-						throw new WorkspaceSnapshotServiceErrorV1("invalid_archive");
-					if (!input.body.locked)
-						void input.body.cancel().catch(() => undefined);
-					return { record: existing.record, replayed: true };
 				}
 				spool = await spools.spool(
 					input.body,

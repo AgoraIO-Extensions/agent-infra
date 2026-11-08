@@ -269,19 +269,19 @@ describe("workspace snapshot upload service with real file spool", () => {
 		expect(await readdir(f.directory)).toEqual([]);
 	});
 
-	it("does not read replay bodies and rejects a changed declared digest", async () => {
+	it("validates body bytes on replay and rejects changed content or forged digest", async () => {
 		const f = await fixture();
 		const first = await f.service.upload(f.upload());
 		expect(await f.service.upload(f.upload())).toEqual({
 			record: first.record,
 			replayed: true,
 		});
-		expect(
-			await f.service.upload({
+		await expect(
+			f.service.upload({
 				...f.upload(),
 				body: stream(archive("different bytes")),
 			}),
-		).toEqual({ record: first.record, replayed: true });
+		).rejects.toMatchObject({ code: "invalid_archive" });
 		await expect(
 			f.service.upload(f.upload("alice", "different bytes")),
 		).rejects.toMatchObject({ code: "conflict" });
@@ -445,29 +445,6 @@ describe("workspace snapshot upload service with real file spool", () => {
 		expect(f.objects.size).toBe(0);
 		expect(f.store.releaseUploadReservation).toHaveBeenCalledOnce();
 		expect(await readdir(f.directory)).toEqual([]);
-	});
-	it("returns a completed replay before consuming the request body or spool quota", async () => {
-		const f = await fixture();
-		const first = await f.service.upload(f.upload());
-		f.options.quota.read.mockClear();
-		const body = new ReadableStream<Uint8Array>({
-			pull() {
-				throw new Error("replay body must not be read");
-			},
-		});
-		const replay = await f.service.upload({
-			...f.upload(),
-			body,
-		});
-		expect(replay).toEqual({ record: first.record, replayed: true });
-		expect(f.storage.upload).toHaveBeenCalledOnce();
-		expect(f.options.quota.read).not.toHaveBeenCalled();
-		await expect(
-			f.service.upload({
-				...f.upload(),
-				bodySizeBytes: first.record.sizeBytes + 1,
-			}),
-		).rejects.toMatchObject({ code: "invalid_archive" });
 	});
 	it.each(["authentication_required", "forbidden", "not_found"] as const)(
 		"cleans a transaction rejected for %s without requiring an active credential",
