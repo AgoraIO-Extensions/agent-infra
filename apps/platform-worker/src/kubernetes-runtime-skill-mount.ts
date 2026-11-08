@@ -6,6 +6,28 @@ import { WorkloadKubernetesError } from "./kubernetes-client.js";
 export const skillHubWorkloadMountRootV1 = "/opt/agent-infra-skill-hub";
 export const skillHubRuntimeDataSubPathV1 = "runtime-data";
 
+type SkillDeliveryDeployment = Pick<
+	AgentWorkloadDesiredV1,
+	"skillDeliveryImage" | "skillGenerationId"
+>;
+
+export function frozenSkillHubDeliveryImageV1(input: {
+	readonly configuredImage: string | undefined;
+	readonly candidate: SkillDeliveryDeployment | null;
+	readonly verified: SkillDeliveryDeployment | null;
+	readonly workloadExists: boolean;
+}): string | undefined {
+	if (input.candidate !== null) return input.candidate.skillDeliveryImage;
+	if (input.verified !== null)
+		return (
+			input.verified.skillDeliveryImage ??
+			(input.verified.skillGenerationId === undefined
+				? input.configuredImage
+				: undefined)
+		);
+	return input.workloadExists ? undefined : input.configuredImage;
+}
+
 export function skillHubVolumeMountV1(
 	value: Pick<AgentWorkloadDesiredV1, "skillGenerationId">,
 ): {

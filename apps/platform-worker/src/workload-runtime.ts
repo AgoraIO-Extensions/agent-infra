@@ -59,6 +59,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
+import { frozenSkillHubDeliveryImageV1 } from "./kubernetes-runtime-skill-mount.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createMultiServiceRuntimeOperations,
@@ -1839,11 +1840,15 @@ export function createWorkloadRuntimeV1(
 				state.candidate.deployment === null
 					? null
 					: validateAgentWorkloadDesiredV1(state.candidate.deployment);
-			const frozenSkillDeliveryImage =
-				persistedDeployment?.skillDeliveryImage ??
-				(state.candidate.deployment === null && state.identity === null
-					? options.policy.skillDeliveryImage
-					: undefined);
+			const frozenSkillDeliveryImage = frozenSkillHubDeliveryImageV1({
+				configuredImage: options.policy.skillDeliveryImage,
+				candidate: persistedDeployment,
+				verified:
+					state.verified?.deployment == null
+						? null
+						: validateAgentWorkloadDesiredV1(state.verified.deployment),
+				workloadExists: state.identity !== null,
+			});
 			try {
 				const deployment = validateAgentWorkloadDesiredV1({
 					schemaVersion: 1,
