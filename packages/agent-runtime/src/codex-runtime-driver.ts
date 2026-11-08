@@ -686,7 +686,8 @@ interface CodexJournalStatusEvent {
 	adapterEventKey: string;
 	occurredAt: string;
 	type: "status";
-	payload: { status: "running" };
+	/** #4038：`unknown` 报告被持有、终态事件被压住的 Execution。 */
+	payload: { status: "running" | "unknown" };
 }
 
 interface CodexJournalTextEvent {
@@ -1904,7 +1905,8 @@ function isCodexJournalEvent(value: unknown): value is CodexJournalEvent {
 		isPlainRecord(value.payload) &&
 		hasOnlyKeys(value.payload, ["status"]) &&
 		value.type === "status" &&
-		value.payload.status === "running" &&
+		(value.payload.status === "running" ||
+			value.payload.status === "unknown") &&
 		hasOnlyKeys(value, [
 			"cursor",
 			"adapterEventKey",
@@ -12059,14 +12061,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					kind: "tool",
 					phase,
 				} as RuntimeOperationFactV2);
+				// The Runtime waits on this fact's ACK, not on a later status event.
+				const factCursor = resolved.journal.events.at(-1)?.cursor ?? "";
 				call.phase = phase;
 				if (requestId !== undefined) call.rpcRequestId = requestId;
 				if (requestDigest !== undefined) call.requestDigest = requestDigest;
 				if (phase === "unknown") {
 					call.held = true;
 					resolved.journal.externalActionsBlocked = true;
+					this.appendHeldStatusEvent(resolved.session, resolved.journal);
 				}
-				return resolved.journal.events.at(-1)?.cursor ?? "";
+				return factCursor;
 			});
 			this.notifyEventStream(streamKey);
 			return cursor;
@@ -12234,7 +12239,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							resolved.journal.externalActionsBlocked = true;
 							const call = resolved.journal.standardMcpCalls?.[callKey];
 							if (call) call.held = true;
+							this.appendHeldStatusEvent(resolved.session, resolved.journal);
 						}).catch(() => {});
+						this.notifyEventStream(streamKey);
 						throw unavailableError();
 					}
 				},
@@ -12251,6 +12258,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				resolved.journal.externalActionsBlocked = true;
 				const call = resolved.journal.standardMcpCalls?.[callKey];
 				if (call) call.held = true;
+				this.appendHeldStatusEvent(resolved.session, resolved.journal);
 			}).catch(() => {});
 			await save("unknown", {
 				failureCode: "recovery_unconfirmed",
@@ -13393,6 +13401,34 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return true;
 	}
 
+	/**
+	 * #4038：被持有的 Execution 不写终态事件，原生已停止或隔离，Host 状态为 unknown。
+	 * 向平台如实报告 unknown，平台按 Runtime HLD §7.3 的恢复预算收敛；本 Driver 仍保留
+	 * 占用，不释放会话（工程 Spec §13.5.4 第 4 步）。
+	 */
+	private appendHeldStatusEvent(
+		session: CodexSession,
+		journal: CodexEventJournal,
+	) {
+		if (
+			journal.events.some(
+				(event) =>
+					event.type === "completed" ||
+					(event.type === "status" && event.payload.status === "unknown"),
+			)
+		)
+			return false;
+		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
+		journal.events.push({
+			cursor,
+			adapterEventKey,
+			occurredAt: new Date().toISOString(),
+			type: "status",
+			payload: { status: "unknown" },
+		});
+		return true;
+	}
+
 	private appendTextEvent(
 		session: CodexSession,
 		journal: CodexEventJournal,
@@ -13692,6 +13728,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			journal.externalActionsBlocked = true;
 			for (const call of Object.values(journal.standardMcpCalls ?? {}))
 				call.held = true;
+			this.appendHeldStatusEvent(session, journal);
 			return false;
 		}
 		// Native supports background processes across inference Turns. Keep the

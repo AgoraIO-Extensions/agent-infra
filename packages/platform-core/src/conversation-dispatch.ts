@@ -328,25 +328,27 @@ export function createConversationDispatchUseCaseV1(
 		// Runtime-held Execution) may never end its event stream. The drain then
 		// keeps its lease, so the #3373 budget is never checked again. Stop
 		// reading once the budget is spent; the re-claim settles the Execution.
+		// The budget starts with the status response or with a persisted unknown
+		// status event, whichever comes first.
 		const recoveryDeadline =
-			responseStatus === "unknown" &&
-			!claim.metadataRecovery &&
-			isRuntimeEventOperation(claim.operation)
+			!claim.metadataRecovery && isRuntimeEventOperation(claim.operation)
 				? new AbortController()
 				: undefined;
-		const recoveryTimer = recoveryDeadline
-			? setTimeout(
-					() => recoveryDeadline.abort(),
-					Math.max(
-						0,
-						recoveryBudgetMs -
-							(claim.executionStatus === "unknown"
-								? (claim.recoveryElapsedMs ?? 0)
-								: 0),
-					),
-				)
-			: undefined;
-		recoveryTimer?.unref?.();
+		let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+		const armRecoveryDeadline = (elapsedMs: number) => {
+			if (!recoveryDeadline || recoveryTimer) return;
+			recoveryTimer = setTimeout(
+				() => recoveryDeadline.abort(),
+				Math.max(0, recoveryBudgetMs - elapsedMs),
+			);
+			recoveryTimer.unref?.();
+		};
+		if (responseStatus === "unknown")
+			armRecoveryDeadline(
+				claim.executionStatus === "unknown"
+					? (claim.recoveryElapsedMs ?? 0)
+					: 0,
+			);
 		// Positive Host proof that the original Turn finished. It is persisted
 		// under the live lease like a terminal status response, so the Worker
 		// continues the drain with the control-purpose recovery Grant.
@@ -679,6 +681,11 @@ export function createConversationDispatchUseCaseV1(
 						terminalEventSeen = true;
 						finalStatus = eventFinalStatus;
 					}
+					if (
+						transition?.executionStatus === "unknown" &&
+						!terminalCommitPossible
+					)
+						armRecoveryDeadline(0);
 					unacknowledgedCursor = runtimeEvent.cursor;
 					unacknowledgedEvents++;
 					if (
