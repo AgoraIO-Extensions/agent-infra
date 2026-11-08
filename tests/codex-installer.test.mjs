@@ -343,7 +343,7 @@ test("upstream installer falls back to the official release asset API after a 5x
 			`import { readFile } from "node:fs/promises";
 globalThis.fetch = async (url) => {
   if (url.endsWith(".tar.gz")) return new Response("gateway timeout", { status: 504 });
-  if (url.includes("/releases/tags/test")) return new Response(JSON.stringify({ assets: [{ id: 7, name: ${JSON.stringify(`${name}.tar.gz`)} }] }));
+  if (url.includes("/releases/tags/test")) return new Response(JSON.stringify({ tag_name: "test", assets: [{ id: 7, name: ${JSON.stringify(`${name}.tar.gz`)} }] }));
   if (url.includes("/releases/assets/7")) return new Response(await readFile(${JSON.stringify(archive)}));
   return ${catalogFetch} new Response("synthetic license");
 };`,
@@ -358,6 +358,97 @@ globalThis.fetch = async (url) => {
 		await cleanFixture(root);
 	}
 });
+
+for (const [scenario, metadata] of [
+	[
+		"wrong tag",
+		{ tag_name: "other", assets: [{ id: 7, name: "codex-test.tar.gz" }] },
+	],
+	[
+		"duplicate exact asset names",
+		{
+			tag_name: "test",
+			assets: [
+				{ id: 7, name: "codex-test.tar.gz" },
+				{ id: 8, name: "codex-test.tar.gz" },
+			],
+		},
+	],
+	[
+		"invalid asset id",
+		{ tag_name: "test", assets: [{ id: 0, name: "codex-test.tar.gz" }] },
+	],
+])
+	test(`upstream installer rejects ${scenario} metadata`, async () => {
+		const root = await mkdtemp(
+			join(tmpdir(), "codex-installer-official-asset-invalid-"),
+		);
+		const destination = join(root, "installed");
+		try {
+			const installer = await stageInstaller(root);
+			const binary = Buffer.from("synthetic invalid fallback bytes");
+			const name = "codex-test";
+			await writeFile(join(root, name), binary);
+			const archive = join(root, "archive.tar.gz");
+			execFileSync("tar", ["-czf", archive, "-C", root, name]);
+			const archiveHash = digest(await readFile(archive));
+			await writeFile(
+				join(root, "packages/agent-runtime/src/codex-release.json"),
+				JSON.stringify({
+					provenance: { upstreamTag: "test", upstreamCommit },
+					artifacts: {
+						amd64: {
+							name,
+							archiveSha256: archiveHash,
+							executableSha256: digest(binary),
+						},
+					},
+					codeModeHostArtifacts: {
+						amd64: {
+							name,
+							archiveSha256: archiveHash,
+							executableSha256: digest(binary),
+						},
+					},
+					legal: { LICENSE: digest("synthetic license") },
+				}),
+			);
+			await mkdir(destination, { recursive: true });
+			await writeFile(join(destination, "sentinel"), "keep-existing-install");
+			const preload = join(root, "download-fixture.mjs");
+			await writeFile(
+				preload,
+				`import { readFile } from "node:fs/promises";
+globalThis.fetch = async (url) => {
+  if (url.endsWith(".tar.gz")) return new Response("gateway timeout", { status: 504 });
+  if (url.includes("/releases/tags/test")) return new Response(${JSON.stringify(JSON.stringify(metadata))});
+  if (url.includes("/releases/assets/7")) return new Response(await readFile(${JSON.stringify(archive)}));
+  return ${catalogFetch} new Response("synthetic license");
+};`,
+			);
+			assert.throws(
+				() =>
+					execFileSync(
+						process.execPath,
+						["--import", preload, installer, "amd64", destination],
+						{ stdio: "pipe" },
+					),
+				/Codex release asset unavailable/,
+			);
+			assert.equal(
+				await readFile(join(destination, "sentinel"), "utf8"),
+				"keep-existing-install",
+			);
+			assert.deepEqual(
+				(await readdir(root)).filter((entry) =>
+					entry.startsWith(".codex-install-"),
+				),
+				[],
+			);
+		} finally {
+			await cleanFixture(root);
+		}
+	});
 
 test("upstream installer retries a connect timeout before Codex headers", async () => {
 	const root = await mkdtemp(
@@ -456,6 +547,48 @@ test("upstream installer validates the archive member before replacing an existi
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+for (const assetId of [0, -1])
+	test(`upstream installer rejects non-positive pinned asset id ${assetId}`, async () => {
+		const root = await mkdtemp(
+			join(tmpdir(), "codex-installer-invalid-asset-id-"),
+		);
+		const destination = join(root, "installed");
+		try {
+			const installer = await stageInstaller(root);
+			await writeFile(
+				join(root, "packages/agent-runtime/src/codex-release.json"),
+				JSON.stringify({
+					provenance: { upstreamTag: "test", upstreamCommit },
+					artifacts: {
+						amd64: {
+							assetId,
+							name: "codex-test",
+							archiveSha256: "sha256:invalid",
+							executableSha256: "sha256:invalid",
+						},
+					},
+					codeModeHostArtifacts: {
+						amd64: {
+							name: "codex-host-test",
+							archiveSha256: "sha256:invalid",
+							executableSha256: "sha256:invalid",
+						},
+					},
+					legal: {},
+				}),
+			);
+			assert.throws(
+				() =>
+					execFileSync(process.execPath, [installer, "amd64", destination], {
+						stdio: "pipe",
+					}),
+				/Invalid Codex executable archive member/,
+			);
+		} finally {
+			await cleanFixture(root);
+		}
+	});
 
 test("upstream installer keeps the previous install when staging validation fails", async () => {
 	const root = await mkdtemp(
