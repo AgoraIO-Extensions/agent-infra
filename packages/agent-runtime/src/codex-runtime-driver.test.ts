@@ -15214,6 +15214,20 @@ describe("Codex structured Skill input", () => {
 					expect(read).toHaveBeenCalledTimes(
 						mode === "revoked after read" ? 1 : 0,
 					);
+					// #4038：持有原 Execution 时向平台报告 unknown；另一 Conversation 的调用不影响原执行。
+					const statuses = (
+						await fixture.driver.replayEvents(
+							accepted.nativeSessionRef,
+							command.executionId,
+						)
+					).flatMap((event) =>
+						event.type === "status" ? [event.payload.status] : [],
+					);
+					expect(statuses).toEqual(
+						mode === "other Conversation"
+							? ["running"]
+							: ["running", "unknown"],
+					);
 				} else {
 					const result = await pending;
 					expect(result.success).toBe(true);
