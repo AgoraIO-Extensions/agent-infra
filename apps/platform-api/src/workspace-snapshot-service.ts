@@ -325,6 +325,25 @@ export function createWorkspaceSnapshotServiceV1(
 					reservationId = reservation.reservationId;
 					reservationOwner = principal;
 				}
+				if (reservation.state === "completed") {
+					await revalidateUploadPrincipal(input.material, principal);
+					const existing = await options.store.findIdempotency(
+						principal,
+						input.idempotencyKey,
+					);
+					if (
+						!existing ||
+						existing.requestDigest !== reservationDigest ||
+						existing.record.ownerId !== principal.id ||
+						existing.record.ownerType !== principal.kind ||
+						existing.record.digest !== input.digest ||
+						!isDeepStrictEqual(existing.record.source, provenance.source)
+					)
+						throw new WorkspaceSnapshotServiceErrorV1("unavailable");
+					if (!input.body.locked)
+						void input.body.cancel().catch(() => undefined);
+					return { record: existing.record, replayed: true };
+				}
 				spool = await spools.spool(
 					input.body,
 					workspaceSnapshotLimitsV1.maxArchiveBytes,
