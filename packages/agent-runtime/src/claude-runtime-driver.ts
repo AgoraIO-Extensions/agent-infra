@@ -177,6 +177,45 @@ export function claudeNativeQuerySettings(): Pick<
  * still useful for discovery/read APIs, but they must not become a native path.
  * Claude's built-in session commands remain available without an Applied root.
  */
+export async function readClaudeNativeSkillFileV1(
+	directory: RuntimeFilesystemSkillDirectoryV1,
+	filePath: string,
+): Promise<Uint8Array | undefined> {
+	const root = directory.nativeRoot;
+	if (!root) return undefined;
+	const relativePath = relative(join(root, ".agents", "skills"), filePath);
+	if (
+		!relativePath ||
+		relativePath.startsWith("..") ||
+		isAbsolute(relativePath)
+	)
+		return undefined;
+	const [name, ...parts] = relativePath.split("/");
+	const resourcePath = parts.join("/");
+	if (!name || !resourcePath) return undefined;
+	return directory.readSkill(name, resourcePath);
+}
+
+export function claudeNativeSkillCatalogV1(
+	directory?: RuntimeFilesystemSkillDirectoryV1,
+): string {
+	if (!directory) return "";
+	const root =
+		claudeNativeSkillLaunchOptions(directory).additionalDirectories?.[0];
+	if (!root) return "";
+	const skills = directory.findSkills().map((skill) => ({
+		name: skill.name,
+		version: skill.version,
+		entryPath: resolve(root, skill.targetPath, "SKILL.md"),
+		readOnly: true,
+	}));
+	if (skills.length === 0) return "";
+	const metadata = JSON.stringify(skills);
+	if (Buffer.byteLength(metadata, "utf8") > 30_000)
+		throw new RuntimeSkillDirectoryErrorV1();
+	return `\nInstalled fixed-version Skills (metadata only): ${metadata}\nUse Read to load a selected entry, then only its declared bundled resources relative to that entry. These Skill paths are additional read-only inputs; they never grant write or execution permission.\n`;
+}
+
 export function claudeNativeSkillLaunchOptions(
 	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
 ): Pick<ClaudeQueryOptions, "additionalDirectories" | "skills" | "extraArgs"> {
@@ -2131,29 +2170,24 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				this.options.skillDirectory,
 			);
 			const skillRoot = skillLaunchOptions.additionalDirectories?.[0];
+			const skillCatalog = claudeNativeSkillCatalogV1(
+				this.options.skillDirectory,
+			);
 			const resolveReadOnlySkillFile = skillRoot
 				? async (filePath: string, signal: AbortSignal) => {
 						if (signal.aborted) return undefined;
-						const relativePath = relative(skillRoot, filePath);
-						if (
-							!relativePath ||
-							relativePath.startsWith("..") ||
-							isAbsolute(relativePath)
-						)
-							return undefined;
-						const [name, ...parts] = relativePath.split("/");
-						const resourcePath = parts.join("/");
-						if (!name || !resourcePath) return undefined;
-						const bytes = await this.options.skillDirectory?.readSkill(
-							name,
-							resourcePath,
+						const skillDirectory = this.options.skillDirectory;
+						if (!skillDirectory) return undefined;
+						const bytes = await readClaudeNativeSkillFileV1(
+							skillDirectory,
+							filePath,
 						);
 						if (!bytes || signal.aborted) return undefined;
 						const verifiedRoot = join(directory, "tmp", "verified-skill-reads");
 						await mkdir(verifiedRoot, { recursive: true, mode: 0o700 });
 						const target = join(
 							verifiedRoot,
-							`${randomUUID()}-${basename(resourcePath)}`,
+							`${randomUUID()}-${basename(filePath)}`,
 						);
 						await writeFile(target, bytes, { mode: 0o400 });
 						await chmod(target, 0o400);
@@ -2207,7 +2241,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
 					...skillLaunchOptions,
-					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}`,
+					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories${skillCatalog ? "; the installed Skill paths listed below are additional read-only inputs" : ""}. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}${skillCatalog}`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
 					thinking: { type: "adaptive" },

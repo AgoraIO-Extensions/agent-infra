@@ -11,8 +11,12 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
-import { claudeNativeSkillLaunchOptions } from "./claude-runtime-driver.js";
+import { expect, it, vi } from "vitest";
+import {
+	claudeNativeSkillCatalogV1,
+	claudeNativeSkillLaunchOptions,
+	readClaudeNativeSkillFileV1,
+} from "./claude-runtime-driver.js";
 import { piNativeSkillArguments } from "./pi-bootstrap.js";
 import {
 	createFilesystemRuntimeSkillDirectoryV1,
@@ -72,7 +76,9 @@ function expectNativeRejected(
 	);
 }
 
-async function fixture() {
+const reference = "fixed reference marker\n";
+
+async function fixture(withReference = false) {
 	const root = await realpath(
 		await mkdtemp(join(tmpdir(), "runtime-skill-root-")),
 	);
@@ -86,6 +92,18 @@ async function fixture() {
 	const file = input.manifest.files[0];
 	if (!file) throw new Error("Missing fixture file");
 	file.sha256 = fileDigest;
+	if (withReference) {
+		const path = join(skillRoot, "references");
+		await mkdir(path);
+		await writeFile(join(path, "expected.txt"), reference, { mode: 0o444 });
+		const { createHash } = await import("node:crypto");
+		input.manifest.files.push({
+			path: "references/expected.txt",
+			sizeBytes: Buffer.byteLength(reference),
+			sha256: createHash("sha256").update(reference).digest("hex"),
+		});
+		await chmod(path, 0o555);
+	}
 	await chmod(root, 0o555);
 	await chmod(join(root, ".agents"), 0o555);
 	await chmod(join(root, ".agents", "skills"), 0o555);
@@ -95,6 +113,10 @@ async function fixture() {
 
 async function removeFixture(root: string) {
 	await chmod(
+		join(root, ".agents/skills/workspace-summary/references"),
+		0o755,
+	).catch(() => {});
+	await chmod(
 		join(root, ".agents", "skills", "workspace-summary"),
 		0o755,
 	).catch(() => {});
@@ -103,6 +125,94 @@ async function removeFixture(root: string) {
 	await chmod(root, 0o755).catch(() => {});
 	await rm(root, { recursive: true, force: true });
 }
+
+it.each(["SKILL.md", "references/expected.txt"])(
+	"reads canonical mounted Skill path through Claude bridge: %s",
+	async (resourcePath) => {
+		const f = await fixture(true);
+		try {
+			const directory = createFilesystemRuntimeSkillDirectoryV1({
+				root: f.root,
+				agentId: "agent-a",
+				agentVersion: "version-a",
+				generationId: "e".repeat(64),
+				projections: [f.input],
+			});
+			await expect(
+				readClaudeNativeSkillFileV1(
+					directory,
+					join(f.root, f.input.targetPath, resourcePath),
+				),
+			).resolves.toEqual(
+				new TextEncoder().encode(
+					resourcePath === "SKILL.md" ? content : reference,
+				),
+			);
+		} finally {
+			await removeFixture(f.root);
+		}
+	},
+);
+
+it("gives Claude only bounded fixed-version metadata before an explicit Skill read", async () => {
+	const f = await fixture(true);
+	try {
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root: f.root,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [f.input],
+		});
+		const read = vi.spyOn(directory, "readSkill");
+		const metadata = claudeNativeSkillCatalogV1(directory);
+		expect(metadata).toContain('"name":"workspace-summary"');
+		expect(metadata).toContain('"version":"1.0.0"');
+		expect(metadata).toContain(join(f.root, f.input.targetPath, "SKILL.md"));
+		expect(metadata).not.toContain(content);
+		expect(metadata).not.toContain(reference);
+		expect(read).not.toHaveBeenCalled();
+		const entry = directory.findSkills()[0];
+		if (!entry) throw new Error("Missing fixture Skill");
+		expect(() =>
+			claudeNativeSkillCatalogV1({
+				...directory,
+				findSkills: () => [{ ...entry, version: "v".repeat(30_001) }],
+			}),
+		).toThrow(RuntimeSkillDirectoryErrorV1);
+	} finally {
+		await removeFixture(f.root);
+	}
+});
+
+it("keeps unknown and unlisted Claude Skill paths unavailable", async () => {
+	const f = await fixture(true);
+	try {
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root: f.root,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [f.input],
+		});
+		for (const path of [
+			join(f.root, ".agents/skills/unknown/SKILL.md"),
+			join(f.root, f.input.targetPath, "references/missing.txt"),
+		])
+			await expect(
+				readClaudeNativeSkillFileV1(directory, path),
+			).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
+		for (const path of [
+			join(f.root, ".agents/SKILLS.md"),
+			join(`${f.root}-other`, f.input.targetPath, "SKILL.md"),
+		])
+			await expect(
+				readClaudeNativeSkillFileV1(directory, path),
+			).resolves.toBeUndefined();
+	} finally {
+		await removeFixture(f.root);
+	}
+});
 
 it("reads byte-identical verified Skill files from the mounted generation", async () => {
 	const f = await fixture();
