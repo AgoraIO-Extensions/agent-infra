@@ -2815,7 +2815,9 @@ function isCodexRuntimeRequirements(
 		Object.values(artifacts).every(
 			(artifact) =>
 				isPlainRecord(artifact) &&
-				hasOnlyKeys(artifact, artifactStrings) &&
+				hasOnlyKeys(artifact, [...artifactStrings, "assetId"]) &&
+				(artifact.assetId === undefined ||
+					(Number.isSafeInteger(artifact.assetId) && artifact.assetId > 0)) &&
 				artifactStrings.every((key) => nonEmptyString(artifact[key])),
 		)
 	);
