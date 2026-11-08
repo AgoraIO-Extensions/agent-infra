@@ -1,4 +1,5 @@
 FROM clamav/clamav@sha256:75fb5fd95fcbe1d7e6d240c369c1572b686ee2c95949d1042b5148de8eddebb4 AS skill-scanner
+FROM dappros/minio@sha256:624bad2fe79a8613aa3c5c9b765ebcab365080b8445cf1b05c357cc7753725f0 AS skill-object-storage
 
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder
 RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' \
@@ -26,6 +27,7 @@ FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd
 RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' 'clamav-scanner=1.4.6-r0' \
 	&& rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /var/log/apk.log
 COPY --from=skill-scanner /var/lib/clamav/ /var/lib/clamav/
+COPY --from=skill-object-storage /usr/bin/minio /usr/bin/minio
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/platform-api/ ./

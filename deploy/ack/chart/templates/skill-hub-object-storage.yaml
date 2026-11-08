@@ -62,6 +62,7 @@ spec:
         - name: minio
           image: {{ $objectStorage.image | quote }}
           imagePullPolicy: IfNotPresent
+          command: ["/usr/bin/minio"]
           args: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
           ports:
             - {name: s3, containerPort: 9000}
