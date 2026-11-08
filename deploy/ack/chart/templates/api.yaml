@@ -50,9 +50,9 @@ spec:
               set -eu
               mkdir -p /scanner/bin /scanner/lib /scanner/usr-lib /scanner/db
               cp -L /usr/bin/clamscan /scanner/bin/clamscan
-              cp -a /lib/. /scanner/lib/
-              cp -a /usr/lib/. /scanner/usr-lib/
-              cp -a /var/lib/clamav/. /scanner/db/
+              cp -R /lib/. /scanner/lib/
+              cp -R /usr/lib/. /scanner/usr-lib/
+              cp -R /var/lib/clamav/. /scanner/db/
               cat > /scanner/bin/clamscan-wrapper <<'EOF'
               #!/bin/sh
               set -eu
