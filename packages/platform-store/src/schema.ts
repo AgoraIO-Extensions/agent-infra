@@ -233,6 +233,7 @@ export const platformInfrastructureTables = [
 	skillHubInstallations,
 	skillHubAgentBindings,
 	skillHubProjectContents,
+	workspaceSnapshotUploadReservations,
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 ] as const;
