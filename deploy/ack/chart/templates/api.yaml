@@ -52,7 +52,10 @@ spec:
               cp -L /usr/bin/clamscan /scanner/bin/clamscan
               cp -R /lib/. /scanner/lib/
               cp -R /usr/lib/. /scanner/usr-lib/
-              cp -R /var/lib/clamav/. /scanner/db/
+              for file in /var/lib/clamav/*.cvd /var/lib/clamav/*.cld; do
+                [ -f "$file" ] || continue
+                cp "$file" /scanner/db/
+              done
               cat > /scanner/bin/clamscan-wrapper <<'EOF'
               #!/bin/sh
               set -eu
