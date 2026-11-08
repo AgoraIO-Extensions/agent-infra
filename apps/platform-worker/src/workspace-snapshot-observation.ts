@@ -36,6 +36,12 @@ export function workspaceSnapshotPodObservationV1(
 	const observedDigests = [init.image, init.imageID]
 		.map((image) => image?.split("@")[1])
 		.filter((digest): digest is string => typeof digest === "string");
+	if (
+		!expectedDigest ||
+		!init.imageID ||
+		init.imageID.split("@")[1] !== expectedDigest
+	)
+		return undefined;
 	const imageMatches =
 		init.image === expected.image ||
 		(init.image?.startsWith("sha256:") === true &&

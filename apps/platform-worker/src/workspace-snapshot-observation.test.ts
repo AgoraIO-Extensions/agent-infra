@@ -131,6 +131,17 @@ it("rejects unrelated statuses, drifted specs and invalid restart counters", () 
 		),
 	).toBeUndefined();
 	expect(
+		workspaceSnapshotPodObservationV1(
+			pod({
+				imageID: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
+			}),
+			projection,
+		),
+	).toBeUndefined();
+	expect(
+		workspaceSnapshotPodObservationV1(pod({ imageID: undefined }), projection),
+	).toBeUndefined();
+	expect(
 		workspaceSnapshotPodObservationV1(pod({ restartCount: -1 }), projection),
 	).toBeUndefined();
 	const drifted = pod();
