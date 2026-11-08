@@ -80,7 +80,7 @@ spec:
             httpGet: {path: /minio/health/live, port: s3}
             initialDelaySeconds: 15
             periodSeconds: 15
-          resources: {{ toYaml .Values.resources.api | nindent 12 }}
+          resources: {{ toYaml (.Values.resources.skillObjectStorage | default .Values.resources.api) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
@@ -149,7 +149,7 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ $objectStorage.secretName }}, key: {{ $objectStorage.accessKeyKey }}}}
             - name: MINIO_ROOT_PASSWORD
               valueFrom: {secretKeyRef: {name: {{ $objectStorage.secretName }}, key: {{ $objectStorage.secretKeyKey }}}}
-          resources: {{ toYaml .Values.resources.api | nindent 12 }}
+          resources: {{ toYaml (.Values.resources.skillObjectStorage | default .Values.resources.api) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
