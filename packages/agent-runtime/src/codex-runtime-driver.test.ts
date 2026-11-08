@@ -14080,7 +14080,7 @@ const runtimeRequirementMutations: RuntimeRequirementMutation[] = [
 								? "codex-other-archive"
 								: field === "assetId"
 									? Number(current[field]) + 1
-								: `sha256:${"f".repeat(64)}`;
+									: `sha256:${"f".repeat(64)}`;
 						return binding;
 					},
 				],
