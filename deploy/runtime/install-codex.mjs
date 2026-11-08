@@ -73,11 +73,52 @@ function retryableTransportError(error) {
 async function downloadBytes(url, expected) {
 	const signal = AbortSignal.timeout(downloadBudgetMs);
 	const unavailable = new Error("Codex release asset unavailable");
+	const officialAssetFallback = async () => {
+		const parsed = new URL(url);
+		const match = /^\/openai\/codex\/releases\/download\/([^/]+)\/([^/]+\.tar\.gz)$/u.exec(parsed.pathname);
+		if (!match) throw unavailable;
+		const [, tag, assetName] = match;
+		const metadata = await fetch(
+			`https://api.github.com/repos/openai/codex/releases/tags/${encodeURIComponent(tag)}`,
+			{
+				signal,
+				headers: {
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": "2022-11-28",
+					"User-Agent": "agent-infra-codex-installer",
+				},
+			},
+		);
+		if (!metadata.ok) throw unavailable;
+		const release = await metadata.json();
+		const assets = Array.isArray(release.assets)
+			? release.assets.filter((asset) => asset?.name === assetName && Number.isSafeInteger(asset?.id))
+			: [];
+		if (assets.length !== 1) throw unavailable;
+		const asset = assets[0];
+		const response = await fetch(
+			`https://api.github.com/repos/openai/codex/releases/assets/${asset.id}?download=1&cache=${Date.now()}`,
+			{
+				signal,
+				headers: {
+					Accept: "application/octet-stream",
+					"X-GitHub-Api-Version": "2022-11-28",
+					"User-Agent": "agent-infra-codex-installer",
+					"Cache-Control": "no-cache",
+				},
+			},
+		);
+		if (!response.ok) throw unavailable;
+		const bytes = Buffer.from(await response.arrayBuffer());
+		if (sha256(bytes) !== expected) throw new Error("Codex release asset checksum mismatch");
+		return bytes;
+	};
 	for (let attempt = 1; attempt <= downloadAttempts; attempt++) {
 		try {
 			const response = await fetch(url, { signal });
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => undefined);
+				if (response.status >= 500) return await officialAssetFallback();
 				throw unavailable;
 			}
 			const bytes = Buffer.from(await response.arrayBuffer());

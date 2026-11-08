@@ -301,6 +301,64 @@ globalThis.fetch = async (url) => {
 	}
 });
 
+test("upstream installer falls back to the official release asset API after a 5xx", async () => {
+	const root = await mkdtemp(
+		join(tmpdir(), "codex-installer-official-asset-fallback-"),
+	);
+	const destination = join(root, "installed");
+	try {
+		const installer = await stageInstaller(root);
+		const binary = Buffer.from("synthetic official fallback bytes");
+		const name = "codex-test";
+		await writeFile(join(root, name), binary);
+		const archive = join(root, "archive.tar.gz");
+		execFileSync("tar", ["-czf", archive, "-C", root, name]);
+		const archiveBytes = await readFile(archive);
+		const archiveHash = digest(archiveBytes);
+		await writeFile(
+			join(root, "packages/agent-runtime/src/codex-release.json"),
+			JSON.stringify({
+				provenance: { upstreamTag: "test", upstreamCommit },
+				artifacts: {
+					amd64: {
+						name,
+						archiveSha256: archiveHash,
+						executableSha256: digest(binary),
+					},
+				},
+				codeModeHostArtifacts: {
+					amd64: {
+						name,
+						archiveSha256: archiveHash,
+						executableSha256: digest(binary),
+					},
+				},
+				legal: { LICENSE: digest("synthetic license") },
+			}),
+		);
+		const catalogFetch = `url === ${JSON.stringify(upstreamCatalogUrl)} ? new Response(${JSON.stringify(upstreamCatalog)}) : url.endsWith("/models.json") ? new Response("", { status: 404 }) :`;
+		const preload = join(root, "download-fixture.mjs");
+		await writeFile(
+			preload,
+			`import { readFile } from "node:fs/promises";
+globalThis.fetch = async (url) => {
+  if (url.endsWith(".tar.gz")) return new Response("gateway timeout", { status: 504 });
+  if (url.includes("/releases/tags/test")) return new Response(JSON.stringify({ assets: [{ id: 7, name: ${JSON.stringify(`${name}.tar.gz`)} }] }));
+  if (url.includes("/releases/assets/7")) return new Response(await readFile(${JSON.stringify(archive)}));
+  return ${catalogFetch} new Response("synthetic license");
+};`,
+		);
+		execFileSync(
+			process.execPath,
+			["--import", preload, installer, "amd64", destination],
+			{ stdio: "pipe" },
+		);
+		assert.deepEqual(await readFile(join(destination, "bin/codex")), binary);
+	} finally {
+		await cleanFixture(root);
+	}
+});
+
 test("upstream installer retries a connect timeout before Codex headers", async () => {
 	const root = await mkdtemp(
 		join(tmpdir(), "codex-installer-connect-timeout-"),
