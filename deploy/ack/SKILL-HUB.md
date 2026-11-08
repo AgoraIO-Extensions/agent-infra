@@ -15,6 +15,11 @@ ACK `skillHub.enabled` 会在 API Pod 的 init container 中从固定 digest 的
 不能继续指向不存在的 `/usr/bin/clamscan` 或空数据库目录。扫描器随 API 镜像 source-bound 发布，
 升级时必须一起回读其 ClamAV engine 与 `rulesetDigest`。
 
+API 镜像构建时由官方 FreshClam 更新并自检签名库，再执行要求无警告的原生扫描；
+上游镜像自带数据库只作为增量更新种子。更新失败或扫描出现过期警告时构建失败。
+签名库固化在最终镜像中，运行中不更新；部署须在库过期前重新发布镜像，并同步当前
+admission policy 的 engine 与 `rulesetDigest`，不能忽略警告或改写已发布包的扫描回执。
+
 Signer 由部署维护；同一发布的签名必须能在 API 重启、多副本和 Worker 校验时验证。
 不得在配置模块加载时临时生成签名 key。签名私钥只进入 API；Worker 只读取对应的公钥、
 当前 key 状态及 trust/policy 修订。缺少包存储、扫描器或当前信任输入时，发布保持不可用。

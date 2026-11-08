@@ -32,5 +32,17 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/platform-api/ ./
 
+ARG SOURCE_COMMIT
+# Refresh upstream seed signatures for each source build, then require a warning-free native scan.
+RUN printf '%s\n' 'DatabaseMirror database.clamav.net' 'DatabaseDirectory /var/lib/clamav' \
+    'DatabaseOwner clamav' 'ConnectTimeout 15' 'ReceiveTimeout 60' 'MaxAttempts 2' \
+    'TestDatabases yes' > /tmp/skill-freshclam.conf \
+    && printf 'Updating Skill signatures for source %s\n' "$SOURCE_COMMIT" \
+    && freshclam --config-file=/tmp/skill-freshclam.conf --stdout \
+    && scan_result="$(clamscan --stdout --no-summary /etc/alpine-release 2>&1)" \
+    && printf '%s\n' "$scan_result" \
+    && test "$scan_result" = '/etc/alpine-release: OK' \
+    && rm -f /tmp/skill-freshclam.conf /var/lib/clamav/freshclam.dat
+
 USER node
 CMD ["node", "dist/index.mjs"]

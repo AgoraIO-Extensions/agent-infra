@@ -317,7 +317,10 @@ async function buildImage({
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
 				...(image.buildArgs ?? []).flatMap((value) => ["--build-arg", value]),
-				...(image.dockerfile === "apps/agent-runtime-host/Dockerfile"
+				...([
+					"apps/agent-runtime-host/Dockerfile",
+					"apps/platform-api/Dockerfile",
+				].includes(image.dockerfile)
 					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
 					: []),
 				...(image.target ? ["--target", image.target] : []),

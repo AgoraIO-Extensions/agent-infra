@@ -260,7 +260,12 @@ test("image build validates reproducibility and read-only non-root execution", a
 				assert.ok(buildArgs.includes("VITE_PLATFORM_LOGOUT_URL=/auth/logout"));
 			}
 			if (
-				args.some((arg) => arg.endsWith("apps/agent-runtime-host/Dockerfile"))
+				args.some((arg) =>
+					[
+						"apps/agent-runtime-host/Dockerfile",
+						"apps/platform-api/Dockerfile",
+					].some((path) => arg.endsWith(path)),
+				)
 			)
 				assert.ok(buildArgs.includes(`SOURCE_COMMIT=${commitSha}`));
 			assert.ok(args.includes("--provenance=false"));
