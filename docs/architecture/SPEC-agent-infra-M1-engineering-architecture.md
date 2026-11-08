@@ -1444,7 +1444,7 @@ Session Sandbox，以及 §10.9 等各 Driver 的 Conversation 文件边界。�
 不新增平台 Build Service，不读取 Connection 数据库或保存 Provider Credential。
 
 - `POST /api/v2/workspace-snapshots` 使用 Bearer 凭证、必填 `Idempotency-Key`、
-  `Content-Type: application/x-tar` 和 `X-Content-SHA256`。内容为 gzip 压缩的 tar；
+  `Content-Type: application/x-tar+gzip` 和 `X-Content-SHA256`。内容为 gzip 压缩的 tar；
   SHA-256 对传输的归档字节计算，响应 `digest` 为 `sha256:<hex>`。接收端流式计算，
   不信任客户端的长度或摘要，不把整个上限归档缓存在内存。
 - 接收先保留上传配额，写入不可公开的临时对象；解压校验通过后固定对象版本，再用短事务
