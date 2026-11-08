@@ -1,3 +1,5 @@
+FROM clamav/clamav@sha256:75fb5fd95fcbe1d7e6d240c369c1572b686ee2c95949d1042b5148de8eddebb4 AS skill-scanner
+
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder
 RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' \
 	&& npm install --global npm@11.19.1 \
@@ -21,8 +23,9 @@ RUN cp -R /prod/platform-api /prod/platform-api-normalized \
     && mv /prod/platform-api-normalized /prod/platform-api
 
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runner
-RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' \
+RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' 'clamav-scanner=1.4.6-r0' \
 	&& rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /var/log/apk.log
+COPY --from=skill-scanner /var/lib/clamav/ /var/lib/clamav/
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/platform-api/ ./

@@ -39,6 +39,37 @@ spec:
       securityContext:
         {{- include "ack.securityContext" . | nindent 8 }}
       {{- include "ack.scheduling" .Values.scheduling.api | nindent 6 }}
+      {{- $skillHub := .Values.skillHub | default dict }}
+      {{- if $skillHub.enabled }}
+      initContainers:
+        - name: skill-scanner-runtime
+          image: {{ ($skillHub.scannerImage | default .Values.images.api) | quote }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              mkdir -p /scanner/bin /scanner/lib /scanner/usr-lib /scanner/db
+              cp -L /usr/bin/clamscan /scanner/bin/clamscan
+              cp -a /lib/. /scanner/lib/
+              cp -a /usr/lib/. /scanner/usr-lib/
+              cp -a /var/lib/clamav/. /scanner/db/
+              cat > /scanner/bin/clamscan-wrapper <<'EOF'
+              #!/bin/sh
+              set -eu
+              export LD_LIBRARY_PATH=/opt/agent-infra/skill-scanner/lib:/opt/agent-infra/skill-scanner/usr-lib
+              exec /opt/agent-infra/skill-scanner/bin/clamscan "$@"
+              EOF
+              chmod 0755 /scanner/bin/clamscan-wrapper
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{ toYaml .Values.resources.api | nindent 12 }}
+          volumeMounts:
+            - {name: skill-scanner, mountPath: /scanner}
+      {{- end }}
       containers:
         - name: platform-api
           image: {{ .Values.images.api }}
@@ -73,6 +104,9 @@ spec:
             - {name: encryption-public-key, mountPath: /var/run/agent-infra/encryption-public-key, readOnly: true}
             - {name: directory-ca, mountPath: /var/run/agent-infra/directory-ca, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+            {{- if $skillHub.enabled }}
+            - {name: skill-scanner, mountPath: /opt/agent-infra/skill-scanner, readOnly: true}
+            {{- end }}
       volumes:
         - {name: api-configuration, secret: {secretName: {{ .Values.secrets.apiConfiguration }}}}
         - name: proxy-token
@@ -82,5 +116,8 @@ spec:
         - name: directory-ca
           secret: {secretName: {{ .Values.secrets.directoryCa }}, items: [{key: tls.crt, path: tls.crt}]}
         - {name: tmp, emptyDir: {}}
+        {{- if $skillHub.enabled }}
+        - {name: skill-scanner, emptyDir: {}}
+        {{- end }}
 
 {{- end }}

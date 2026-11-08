@@ -54,7 +54,23 @@
     "agentVersion": {"type": "string", "pattern": "^([A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$"},
     "skillHub": {
       "type": "object", "additionalProperties": false, "required": ["enabled"],
-      "properties": {"enabled": {"type": "boolean"}}
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "scannerImage": {"type": "string", "pattern": "^(?:|[a-z0-9./:_-]+@sha256:[0-9a-f]{64})$"},
+        "objectStorage": {
+          "type": "object", "additionalProperties": false, "required": ["enabled", "image", "secretName", "accessKeyKey", "secretKeyKey", "bucket", "storageClass", "storageSize"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "image": {"type": "string", "pattern": "^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$"},
+            "secretName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+            "accessKeyKey": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+            "secretKeyKey": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+            "bucket": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{2,62}$"},
+            "storageClass": {"type": "string", "minLength": 1},
+            "storageSize": {"type": "string", "pattern": "^[1-9][0-9]*(?:Mi|Gi|Ti)$"}
+          }
+        }
+      }
     },
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
     "scheduling": {"type": "object"},

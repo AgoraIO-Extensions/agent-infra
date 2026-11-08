@@ -10,6 +10,11 @@ API 配置模块须提供真实 `providerImport`：版本化 S3 兼容存储、�
 admission policy。固定包样本不能替代网页项目供应。API 镜像必须实际包含所配置的扫描器，
 其版本、规则集与分析器清单按 [SkillSpector 部署说明](../platform-api/README.md#skillspector-原生扫描器)固定。
 
+ACK `skillHub.enabled` 会在 API Pod 的 init container 中从固定 digest 的 Platform API 镜像投影
+其内置的 `clamscan`、动态库和预加载的签名数据库；API 配置必须把 scanner executable 指向该只读投影，
+不能继续指向不存在的 `/usr/bin/clamscan` 或空数据库目录。扫描器随 API 镜像 source-bound 发布，
+升级时必须一起回读其 ClamAV engine 与 `rulesetDigest`。
+
 Signer 由部署维护；同一发布的签名必须能在 API 重启、多副本和 Worker 校验时验证。
 不得在配置模块加载时临时生成签名 key。签名私钥只进入 API；Worker 只读取对应的公钥、
 当前 key 状态及 trust/policy 修订。缺少包存储、扫描器或当前信任输入时，发布保持不可用。
@@ -42,6 +47,11 @@ API 自动读取 `AGENT_INFRA_AGENT_VERSION`；模块若显式声明 `apiInput.a
 
 `skillHub.enabled` 不会生成这些业务输入。声明开启但 materializer、固定版本、namespace、
 assembly root 或 init image 不完整、不一致时，Worker 拒绝启动。
+
+启用 `skillHub.objectStorage` 时，ACK Chart 会在当前 namespace 创建独占的 `agent-infra-minio`
+Service、PVC 和单副本 MinIO，并用 post-install/post-upgrade Job 创建同名 bucket、开启 versioning。
+访问密钥只从预先创建的 Secret 引用；API/Worker 配置中的 S3 endpoint、bucket、prefix 和凭证必须
+与这些值完全一致。不要把现有其他 namespace 的 MinIO 当作该 Skill 包存储。
 
 配置模块的最小结构如下；具体数据库、目录、公钥、存储和扫描实现必须继续使用部署已有的
 适配器，不能把下面的占位函数直接部署：
