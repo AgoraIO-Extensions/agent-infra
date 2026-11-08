@@ -136,6 +136,46 @@ test("the same capsule relocates without editing source templates or credential 
 	}
 });
 
+// #4026: strict cache admission is enabled from the private capsule with plain values.
+test("cache admission settings are plain capsule values with exact shapes", async (t) => {
+	const f = await fixture(t);
+	f.value.environment.ACK_IMAGE_CACHE_REQUIRED = "true";
+	f.value.environment.ACK_IMAGE_CACHE_SIZE_GIB = "30";
+	f.value.environment.ACK_IMAGE_PULL_SECRET = "ack-ghcr-pull";
+	await f.save("capsule.json", f.value);
+	const result = await materializeCapsule(f.manifest, f.source);
+	assert.equal(result.environment.ACK_IMAGE_CACHE_REQUIRED, "true");
+	assert.equal(result.environment.ACK_IMAGE_CACHE_SIZE_GIB, "30");
+	assert.equal(result.environment.ACK_IMAGE_PULL_SECRET, "ack-ghcr-pull");
+	for (const [name, value] of [
+		["ACK_IMAGE_CACHE_REQUIRED", "yes"],
+		["ACK_IMAGE_CACHE_REQUIRED", "@CAPSULE_ROOT@/cache"],
+		["ACK_IMAGE_CACHE_SIZE_GIB", "19"],
+		["ACK_IMAGE_CACHE_SIZE_GIB", "101"],
+		["ACK_IMAGE_PULL_SECRET", "@CAPSULE_ROOT@/pull-secret"],
+		["ACK_IMAGE_PULL_SECRET", "Bad_Name"],
+	]) {
+		await f.save("capsule.json", {
+			...f.value,
+			environment: { ...f.value.environment, [name]: value },
+		});
+		await assert.rejects(
+			materializeCapsule(f.manifest, f.source),
+			/CAPSULE_ENVIRONMENT_INVALID/,
+			`${name}=${value}`,
+		);
+	}
+	// Every other variable still has to be a capsule path.
+	await f.save("capsule.json", {
+		...f.value,
+		environment: { ...f.value.environment, ACK_EVIDENCE_DIR: "evidence" },
+	});
+	await assert.rejects(
+		materializeCapsule(f.manifest, f.source),
+		/CAPSULE_ENVIRONMENT_PATH_INVALID/,
+	);
+});
+
 test("the runner invokes the existing workflow without shell interpolation and returns its exit", async (t) => {
 	const f = await fixture(t);
 	const previous = {

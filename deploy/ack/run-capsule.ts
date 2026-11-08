@@ -26,6 +26,17 @@ const variables = new Set([
 ]);
 const capsulePrefix = "@CAPSULE_ROOT@/";
 const sourceToken = "@SOURCE_ROOT@";
+/** Plain (non-path) capsule values and the exact shape each one accepts. */
+const plainValues: Record<string, RegExp> = {
+	ACK_NAMESPACE: /[\s\S]*/u,
+	ACK_RELEASE: /[\s\S]*/u,
+	ACK_PUBLIC_ORIGIN: /[\s\S]*/u,
+	ACK_CUSTOM_AGENT_PROBE: /[\s\S]*/u,
+	ACK_HELM_TIMEOUT: /[\s\S]*/u,
+	ACK_IMAGE_CACHE_REQUIRED: /^(?:true|false)$/u,
+	ACK_IMAGE_CACHE_SIZE_GIB: /^(?:[2-9][0-9]|100)$/u,
+	ACK_IMAGE_PULL_SECRET: /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/u,
+};
 
 type MaterializedCapsule = {
 	sourceRoot: string;
@@ -79,7 +90,8 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	for (const [name, value] of Object.entries(input.environment)) {
 		assert(variables.has(name), "CAPSULE_ENVIRONMENT_INVALID");
 		assert(typeof value === "string" || (name === "ACK_CUSTOM_AGENT_CONFIGS" && Array.isArray(value) && value.length <= 20 && value.every((v) => typeof v === "string")));
-		if (!["ACK_NAMESPACE", "ACK_RELEASE", "ACK_PUBLIC_ORIGIN", "ACK_CUSTOM_AGENT_PROBE", "ACK_HELM_TIMEOUT"].includes(name))
+		if (Object.hasOwn(plainValues, name)) assert(typeof value === "string" && plainValues[name].test(value), "CAPSULE_ENVIRONMENT_INVALID");
+		else
 			for (const path of Array.isArray(value) ? value : [value]) assert(path === "" || (typeof path === "string" && path.startsWith(capsulePrefix)), "CAPSULE_ENVIRONMENT_PATH_INVALID");
 	}
 	const directories = input.directories.map(relativePath);
