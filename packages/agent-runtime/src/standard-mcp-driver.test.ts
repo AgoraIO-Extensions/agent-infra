@@ -557,6 +557,17 @@ it("actual Driver waits for original intent and result ACKs and sends MCP only o
 	).toHaveLength(0);
 	const intent = (await operationEvents(env.driver, env.ref)).at(-1);
 	if (!intent) throw new Error("Missing intent");
+	await expect(
+		env.driver.validateExternalAction({
+			nativeSessionRef: env.ref,
+			executionId: reference.executionId,
+			runtimeOperationId: reference.executionId,
+			operationRef: intent.payload.operationRef,
+			attemptRef: intent.payload.attemptRef,
+			kind: "tool",
+			toolId: "workspace.read_text_file",
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 	await env.driver.acknowledgeEvents(
 		env.ref,
 		reference.executionId,

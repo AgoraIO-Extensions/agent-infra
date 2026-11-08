@@ -15125,6 +15125,7 @@ describe("Codex structured Skill input", () => {
 			await writeFile(join(root, "proof.txt"), text);
 			const path = join(directory, "driver.json");
 			let authorizations = 0;
+			let validatingDriver: CodexRuntimeDriver | undefined;
 			const fixture = await skillDiscoveryFixture(
 				(bridge) => {
 					if (!bridge.launch) throw new Error("missing controlled launch");
@@ -15132,8 +15133,17 @@ describe("Codex structured Skill input", () => {
 				},
 				{
 					path,
-					authorizeExternalAction: async () => {
+					authorizeExternalAction: async (action) => {
 						authorizations++;
+						expect(action.toolId).toBe("workspace.read_text_file");
+						if (!validatingDriver) throw new Error("missing controlled Driver");
+						await validatingDriver.validateExternalAction(action);
+						await expect(
+							validatingDriver.validateExternalAction({
+								...action,
+								toolId: "mcp:foreign-tool",
+							}),
+						).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 						if (
 							mode === "revoked before read" ||
 							(mode === "revoked after read" && authorizations >= 3)
@@ -15143,6 +15153,7 @@ describe("Codex structured Skill input", () => {
 					},
 				},
 			);
+			validatingDriver = fixture.driver;
 			const command = submitCommand();
 			const accepted = await fixture.driver.execute(command);
 			const state = JSON.parse(await readFile(path, "utf8"));
