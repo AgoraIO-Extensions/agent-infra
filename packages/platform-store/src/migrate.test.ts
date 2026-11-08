@@ -2021,6 +2021,7 @@ describe("published Relay authority migration", () => {
 			73,
 			74,
 			75,
+			76,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2095,8 +2096,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 75,
-			tag: "0075_workspace_snapshots",
+			idx: 76,
+			tag: "0076_workspace_snapshot_upload_reservations",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2433,6 +2434,10 @@ describe("published Relay authority migration", () => {
 				"session_sandbox_resource_charges:session_sandbox_resource_charges_pkey",
 			);
 			expectedDelta.checks.push(
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_bytes_positive",
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_digest_format",
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_owner_type",
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_status",
 				"workspace_snapshot_bindings:workspace_snapshot_binding_digest_format",
 				"workspace_snapshot_bindings:workspace_snapshot_binding_name",
 				"workspace_snapshots:workspace_snapshot_digest_format",
@@ -2441,6 +2446,22 @@ describe("published Relay authority migration", () => {
 				"workspace_snapshots:workspace_snapshot_status",
 			);
 			expectedDelta.columns.push(
+				...[
+					"id",
+					"owner_type",
+					"owner_id",
+					"idempotency_key",
+					"request_digest",
+					"reserved_bytes",
+					"status",
+					"expires_at",
+					"created_at",
+					"updated_at",
+					"released_at",
+					"snapshot_id",
+					"object_ref",
+					"object_version",
+				].map((name) => `workspace_snapshot_upload_reservations:${name}`),
 				...[
 					"agent_id",
 					"configuration_revision",
@@ -2468,6 +2489,9 @@ describe("published Relay authority migration", () => {
 				].map((name) => `workspace_snapshots:${name}`),
 			);
 			expectedDelta.indexes.push(
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_key_unique",
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_owner_status_idx",
+				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservations_pkey",
 				"workspace_snapshot_bindings:workspace_snapshot_agent_name_revision_unique",
 				"workspace_snapshot_bindings:workspace_snapshot_binding_agent_idx",
 				"workspace_snapshot_bindings:workspace_snapshot_bindings_snapshot_id_agent_id_configuration_",

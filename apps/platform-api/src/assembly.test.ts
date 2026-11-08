@@ -239,6 +239,9 @@ describe("Platform API production assembly", () => {
 			spool: { spool: vi.fn() },
 			storage: { upload: vi.fn(), remove: vi.fn() },
 			store: {
+				reserveUpload: vi.fn(),
+				releaseUploadReservation: vi.fn(),
+				attachUploadObject: vi.fn(),
 				findIdempotency: vi.fn(),
 				create: vi.fn(),
 				list: vi.fn(),

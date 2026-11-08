@@ -69,7 +69,30 @@ export interface WorkspaceSnapshotPrincipalV1 {
 	readonly scopes: readonly string[];
 }
 
+export type WorkspaceSnapshotUploadReservationV1 =
+	| { readonly state: "reserved"; readonly reservationId: string }
+	| { readonly state: "completed" }
+	| { readonly state: "in_progress" }
+	| { readonly state: "conflict" };
+
 export interface WorkspaceSnapshotUploadStoreV1 {
+	reserveUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		idempotencyKey: string,
+		requestDigest: string,
+		reservedBytes: number,
+		expiresAt: string,
+	): Promise<WorkspaceSnapshotUploadReservationV1>;
+	releaseUploadReservation(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+	): Promise<void>;
+	attachUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+		objectVersion: string,
+	): Promise<void>;
 	findIdempotency(
 		owner: WorkspaceSnapshotPrincipalV1,
 		key: string,
@@ -82,6 +105,7 @@ export interface WorkspaceSnapshotUploadStoreV1 {
 		owner: WorkspaceSnapshotPrincipalV1,
 		idempotencyKey: string,
 		requestDigest: string,
+		reservationId?: string,
 	): Promise<WorkspaceSnapshotRecordV1>;
 	list(
 		owner: WorkspaceSnapshotPrincipalV1,

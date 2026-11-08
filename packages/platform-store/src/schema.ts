@@ -60,6 +60,7 @@ import { browserSessions } from "./schema-sessions";
 import {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
 export {
@@ -154,6 +155,7 @@ export {
 export {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
 import {
@@ -232,6 +234,7 @@ export const platformInfrastructureTables = [
 	skillHubInstallations,
 	skillHubAgentBindings,
 	skillHubProjectContents,
+	workspaceSnapshotUploadReservations,
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 ] as const;

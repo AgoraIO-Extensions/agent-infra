@@ -3,8 +3,9 @@ import type {
 	WorkspaceSnapshotPrincipalV1,
 	WorkspaceSnapshotRecordV1,
 } from "@agent-infra/platform-core";
+import { workspaceSnapshotLimitsV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -98,6 +99,392 @@ const directory = {
 };
 
 describe("workspace snapshot publication on PostgreSQL", () => {
+	it("reserves owner quota before object publication and converges idempotency", async () => {
+		const who = owner();
+		const digest = "b".repeat(64);
+		const expiresAt = new Date(Date.now() + 60_000).toISOString();
+		const reservations = await Promise.all(
+			Array.from({ length: 5 }, (_, index) =>
+				store.reserveUpload(
+					who,
+					`reservation-${index}`,
+					digest,
+					workspaceSnapshotLimitsV1.maxArchiveBytes,
+					expiresAt,
+				),
+			),
+		);
+		expect(reservations.every((value) => value.state === "reserved")).toBe(
+			true,
+		);
+		await expect(
+			store.reserveUpload(
+				who,
+				"reservation-over-limit",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				expiresAt,
+			),
+		).rejects.toMatchObject({ code: "quota_exceeded" });
+		const first = reservations[0];
+		if (first?.state !== "reserved") throw new Error("reservation missing");
+		await expect(
+			store.reserveUpload(who, "reservation-0", digest, 1, expiresAt),
+		).resolves.toEqual({ state: "in_progress" });
+		await expect(
+			store.reserveUpload(who, "reservation-0", "c".repeat(64), 1, expiresAt),
+		).resolves.toEqual({ state: "conflict" });
+		await store.releaseUploadReservation(who, first.reservationId);
+		await expect(
+			store.reserveUpload(
+				who,
+				"reservation-over-limit",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				expiresAt,
+			),
+		).resolves.toMatchObject({ state: "reserved" });
+	});
+	it("reclaims an expired reservation before accepting the next upload", async () => {
+		const who = owner();
+		const digest = "d".repeat(64);
+		const expired = await store.reserveUpload(
+			who,
+			"expired-reservation",
+			digest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		expect(expired.state).toBe("reserved");
+		if (expired.state !== "reserved") throw new Error("reservation missing");
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second' where id=${expired.reservationId}`;
+		const next = await store.reserveUpload(
+			who,
+			"next-reservation",
+			digest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		expect(next.state).toBe("reserved");
+		const rows =
+			await db`select status from platform.workspace_snapshot_upload_reservations where owner_id=${who.id} and idempotency_key='expired-reservation'`;
+		expect(rows).toEqual([{ status: "expired" }]);
+	});
+	it("replays a completed legacy idempotency record before reserving new quota", async () => {
+		const who = owner();
+		const digest = "e".repeat(64);
+		await store.create(
+			input(who, workspaceSnapshotLimitsV1.maxArchiveBytes),
+			who,
+			"legacy-replay",
+			digest,
+		);
+		for (let index = 0; index < 4; index++)
+			await store.create(
+				input(who, workspaceSnapshotLimitsV1.maxArchiveBytes),
+				who,
+				`full-quota-${index}`,
+				digest,
+			);
+		expect(
+			await store.reserveUpload(
+				who,
+				"legacy-replay",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				new Date(Date.now() + 60_000).toISOString(),
+			),
+		).toEqual({ state: "completed" });
+		await expect(
+			store.reserveUpload(
+				who,
+				"legacy-replay",
+				"f".repeat(64),
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				new Date(Date.now() + 60_000).toISOString(),
+			),
+		).resolves.toEqual({ state: "conflict" });
+	});
+	it("fences late release and attachment after an expired lease is renewed", async () => {
+		const who = owner();
+		const digest = "f".repeat(64);
+		const reserve = () =>
+			store.reserveUpload(
+				who,
+				"fenced-renewal",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				new Date(Date.now() + 60_000).toISOString(),
+			);
+		const first = await reserve();
+		if (first.state !== "reserved") throw new Error("reservation missing");
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second' where id=${first.reservationId}`;
+		const second = await reserve();
+		if (second.state !== "reserved") throw new Error("renewal missing");
+		expect(second.reservationId).not.toBe(first.reservationId);
+		await store.releaseUploadReservation(who, first.reservationId);
+		await expect(
+			store.attachUploadObject(
+				who,
+				first.reservationId,
+				randomUUID(),
+				randomUUID(),
+			),
+		).rejects.toMatchObject({ code: "unavailable" });
+		await expect(reserve()).resolves.toEqual({ state: "in_progress" });
+		await expect(
+			store.create(
+				input(who),
+				who,
+				"fenced-renewal",
+				digest,
+				first.reservationId,
+			),
+		).rejects.toMatchObject({ code: "conflict" });
+		const rows =
+			await db`select id,status from platform.workspace_snapshot_upload_reservations where owner_id=${who.id}`;
+		expect(rows).toEqual([{ id: second.reservationId, status: "reserved" }]);
+	});
+	it("legacy publication cannot consume quota already reserved by another upload", async () => {
+		const who = owner();
+		for (let index = 0; index < 4; index++)
+			await store.create(
+				input(who, workspaceSnapshotLimitsV1.maxArchiveBytes),
+				who,
+				`quota-seed-${index}`,
+				requestDigest,
+			);
+		const reservation = await store.reserveUpload(
+			who,
+			"reserved-upload",
+			requestDigest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		if (reservation.state !== "reserved")
+			throw new Error("reservation missing");
+		await expect(
+			store.create(
+				input(who, workspaceSnapshotLimitsV1.maxArchiveBytes),
+				who,
+				"legacy-overcommit",
+				requestDigest,
+			),
+		).rejects.toMatchObject({ code: "quota_exceeded" });
+		const record = input(who, workspaceSnapshotLimitsV1.maxArchiveBytes);
+		await store.attachUploadObject(
+			who,
+			reservation.reservationId,
+			record.objectRef,
+			record.objectVersion,
+		);
+		await expect(
+			store.create(
+				record,
+				who,
+				"reserved-upload",
+				requestDigest,
+				reservation.reservationId,
+			),
+		).resolves.toMatchObject({ snapshotId: record.snapshotId });
+	});
+	it("retains expired object quota until exact-version cleanup succeeds", async () => {
+		const who = owner();
+		for (let index = 0; index < 4; index++)
+			await store.create(
+				input(who, workspaceSnapshotLimitsV1.maxArchiveBytes),
+				who,
+				`orphan-seed-${index}`,
+				requestDigest,
+			);
+		const reservation = await store.reserveUpload(
+			who,
+			"expired-object",
+			requestDigest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		if (reservation.state !== "reserved")
+			throw new Error("reservation missing");
+		const object = input(who);
+		await store.attachUploadObject(
+			who,
+			reservation.reservationId,
+			object.objectRef,
+			object.objectVersion,
+		);
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second' where id=${reservation.reservationId}`;
+		const nextUpload = () =>
+			store.reserveUpload(
+				who,
+				"after-expired-object",
+				requestDigest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				new Date(Date.now() + 60_000).toISOString(),
+			);
+		await expect(nextUpload()).rejects.toMatchObject({
+			code: "quota_exceeded",
+		});
+		const deleteObjectVersion = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("private-storage-detail"));
+		const failed = await store.collectExpiredUploadReservations({
+			now: new Date(),
+			deleter: { deleteObjectVersion },
+		});
+		expect(failed.failed).toBeGreaterThanOrEqual(1);
+		await expect(nextUpload()).rejects.toMatchObject({
+			code: "quota_exceeded",
+		});
+		deleteObjectVersion.mockResolvedValue(undefined);
+		const recovered = await store.collectExpiredUploadReservations({
+			now: new Date(),
+			deleter: { deleteObjectVersion },
+		});
+		expect(recovered.released).toBeGreaterThanOrEqual(1);
+		expect(deleteObjectVersion).toHaveBeenCalledWith({
+			objectRef: object.objectRef,
+			objectVersion: object.objectVersion,
+		});
+		await expect(nextUpload()).resolves.toMatchObject({ state: "reserved" });
+		const rows =
+			await db`select status,object_ref,object_version from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`;
+		expect(rows).toEqual([
+			{ status: "expired", object_ref: null, object_version: null },
+		]);
+	});
+	it("a failing old cleanup does not starve later expired leases in a bounded batch", async () => {
+		const who = owner();
+		const leases = [];
+		for (const key of ["fails-first", "healthy-second"]) {
+			const lease = await store.reserveUpload(
+				who,
+				key,
+				requestDigest,
+				1,
+				new Date(Date.now() + 60_000).toISOString(),
+			);
+			if (lease.state !== "reserved") throw new Error("reservation missing");
+			leases.push(lease.reservationId);
+		}
+		const firstId = leases[0];
+		const secondId = leases[1];
+		if (!firstId || !secondId) throw new Error("lease pair missing");
+		const object = input(who);
+		await store.attachUploadObject(
+			who,
+			firstId,
+			object.objectRef,
+			object.objectVersion,
+		);
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second',updated_at='2000-01-01' where id=${firstId}`;
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second',updated_at='2001-01-01' where id=${secondId}`;
+		const deleteObjectVersion = vi.fn(async () => {
+			throw new Error("synthetic storage failure");
+		});
+		expect(
+			await store.collectExpiredUploadReservations({
+				now: new Date(),
+				limit: 1,
+				deleter: { deleteObjectVersion },
+			}),
+		).toMatchObject({ scanned: 1, failed: 1 });
+		expect(
+			await store.collectExpiredUploadReservations({
+				now: new Date(),
+				limit: 1,
+				deleter: { deleteObjectVersion },
+			}),
+		).toMatchObject({ scanned: 1, released: 1, failed: 0 });
+		const rows =
+			await db`select status,released_at,object_ref from platform.workspace_snapshot_upload_reservations where id=${firstId}`;
+		expect(rows).toEqual([
+			{ status: "reserved", released_at: null, object_ref: object.objectRef },
+		]);
+		await store.releaseUploadReservation(who, firstId);
+	});
+
+	it("recovery preserves a published version and reconciles its durable receipt", async () => {
+		const who = owner();
+		const reservation = await store.reserveUpload(
+			who,
+			"published-reservation",
+			requestDigest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		if (reservation.state !== "reserved")
+			throw new Error("reservation missing");
+		const object = input(who);
+		await store.attachUploadObject(
+			who,
+			reservation.reservationId,
+			object.objectRef,
+			object.objectVersion,
+		);
+		await store.create(object, who, "published-reservation", requestDigest);
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second' where id=${reservation.reservationId}`;
+		const deleteObjectVersion = vi.fn(async () => {});
+		const result = await store.collectExpiredUploadReservations({
+			now: new Date(),
+			deleter: { deleteObjectVersion },
+		});
+		expect(result.reconciled).toBeGreaterThanOrEqual(1);
+		expect(deleteObjectVersion).not.toHaveBeenCalledWith({
+			objectRef: object.objectRef,
+			objectVersion: object.objectVersion,
+		});
+		const rows =
+			await db`select status,snapshot_id from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`;
+		expect(rows).toEqual([
+			{ status: "completed", snapshot_id: object.snapshotId },
+		]);
+	});
+	it("permits cleanup with the held lease after revocation without permitting publication", async () => {
+		const who = owner();
+		const token = await credential(who);
+		const bound = store.forCredential(token.material, directory);
+		const reservation = await bound.store.reserveUpload(
+			who,
+			"revoked-reservation",
+			requestDigest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		if (reservation.state !== "reserved")
+			throw new Error("reservation missing");
+		const object = input(who);
+		await bound.store.attachUploadObject(
+			who,
+			reservation.reservationId,
+			object.objectRef,
+			object.objectVersion,
+		);
+		await db`update platform.platform_api_credentials set revoked_at=now() where id=${token.id}`;
+		await expect(
+			bound.store.create(
+				object,
+				who,
+				"revoked-reservation",
+				requestDigest,
+				reservation.reservationId,
+			),
+		).rejects.toMatchObject({ code: "authentication_required" });
+		await store.releaseUploadReservation(owner(), reservation.reservationId);
+		const [beforeCleanup] =
+			await db`select status from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`;
+		expect(beforeCleanup?.status).toBe("reserved");
+		await bound.store.releaseUploadReservation(who, reservation.reservationId);
+		const [afterCleanup] =
+			await db`select status,object_ref,object_version from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`;
+		expect(afterCleanup).toEqual({
+			status: "released",
+			object_ref: null,
+			object_version: null,
+		});
+		expect(await store.findIdempotency(who, "revoked-reservation")).toBeNull();
+	});
+
 	it("separates a user and application with the same ID and idempotency key", async () => {
 		const person = owner();
 		const application = owner("application", person.id);
