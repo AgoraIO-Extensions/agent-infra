@@ -24,6 +24,9 @@ seccompProfile:
 nodeSelector:
 {{ toYaml . | nindent 2 }}
 {{- end }}
+{{- with .nodeName }}
+nodeName: {{ . }}
+{{- end }}
 {{- with .tolerations }}
 tolerations:
 {{ toYaml . | nindent 2 }}
