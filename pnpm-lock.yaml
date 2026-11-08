@@ -206,6 +206,9 @@ importers:
       '@agent-infra/wecom':
         specifier: workspace:*
         version: link:../../packages/wecom
+      '@aws-sdk/client-s3':
+        specifier: 3.1129.0
+        version: 3.1129.0
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.7)

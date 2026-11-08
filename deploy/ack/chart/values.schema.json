@@ -61,7 +61,7 @@
           "type": "object", "additionalProperties": false, "required": ["enabled", "image", "secretName", "accessKeyKey", "secretKeyKey", "bucket", "storageClass", "storageSize"],
           "properties": {
             "enabled": {"type": "boolean"},
-            "image": {"type": "string", "pattern": "^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$"},
+            "image": {"type": "string", "pattern": "^(?:|[a-z0-9./:_-]+@sha256:[0-9a-f]{64})$"},
             "secretName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
             "accessKeyKey": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
             "secretKeyKey": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},

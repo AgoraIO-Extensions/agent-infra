@@ -70,7 +70,7 @@ const images = [
 			"node",
 			"--input-type=module",
 			"-e",
-			`${assertInjectedRuntime}await import('./dist/index.mjs')`,
+			`${assertInjectedRuntime}await import('@aws-sdk/client-s3');await import('./dist/index.mjs')`,
 		],
 	},
 	{

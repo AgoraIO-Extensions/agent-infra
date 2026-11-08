@@ -95,4 +95,10 @@ test("ACK Skill Hub projects the pinned scanner and namespace-local object store
 		).spec.resources.requests.storage,
 		"20Gi",
 	);
+	const storage = resources.find(
+		(x) => x.kind === "Deployment" && x.metadata.name === "agent-infra-minio",
+	).spec.template.spec;
+	assert.equal(storage.containers[0].image, api.containers[0].image);
+	const pvc = resources.find((x) => x.kind === "PersistentVolumeClaim");
+	assert.equal(pvc.metadata.annotations["helm.sh/resource-policy"], "keep");
 });

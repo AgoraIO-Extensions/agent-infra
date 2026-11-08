@@ -21,6 +21,8 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: agent-infra-minio
+  annotations:
+    helm.sh/resource-policy: keep
   labels: {{- include "ack.labels" . | nindent 4 }}
     app.kubernetes.io/component: skill-object-storage
 spec:
@@ -60,7 +62,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: minio
-          image: {{ $objectStorage.image | quote }}
+          image: {{ ($objectStorage.image | default .Values.images.api) | quote }}
           imagePullPolicy: IfNotPresent
           command: ["/usr/bin/minio"]
           args: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
@@ -120,7 +122,7 @@ spec:
           command: ["node", "--input-type=module", "-e"]
           args:
             - |
-              import { S3Client, HeadBucketCommand, CreateBucketCommand, PutBucketVersioningCommand } from "@aws-sdk/client-s3";
+              import { S3Client, HeadBucketCommand, CreateBucketCommand, PutBucketVersioningCommand, GetBucketVersioningCommand } from "@aws-sdk/client-s3";
               const client = new S3Client({endpoint:"http://agent-infra-minio:9000",region:"us-east-1",forcePathStyle:true,credentials:{accessKeyId:process.env.MINIO_ROOT_USER,secretAccessKey:process.env.MINIO_ROOT_PASSWORD},maxAttempts:1});
               const bucket = process.env.MINIO_BUCKET;
               for (let attempt = 0; attempt < 60; attempt++) {
@@ -142,6 +144,9 @@ spec:
                 }
               }
               await client.send(new PutBucketVersioningCommand({Bucket: bucket,VersioningConfiguration:{Status:"Enabled"}}));
+              const versioning = await client.send(new GetBucketVersioningCommand({Bucket: bucket}));
+              if (versioning.Status !== "Enabled") throw new Error("SKILL_BUCKET_VERSIONING_UNAVAILABLE");
+              client.destroy();
           env:
             - name: MINIO_BUCKET
               value: {{ $objectStorage.bucket | quote }}
