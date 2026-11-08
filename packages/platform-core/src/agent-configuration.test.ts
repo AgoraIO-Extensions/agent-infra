@@ -31,6 +31,7 @@ import {
 	FakeAgentConfigurationTransactionV1,
 } from "./fake-agent-configuration.ts";
 import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachment.fixture.ts";
+import { WorkspaceSnapshotBindingErrorV1 } from "./workspace-snapshot.ts";
 
 const serverInstant = new Date("2026-08-31T04:00:00.000Z");
 const actor = {
@@ -1346,6 +1347,45 @@ describe("Initial Agent configuration admission", () => {
 });
 
 describe("Agent configuration policy", () => {
+	it.each([
+		["not_found", "not_authorized"],
+		["forbidden", "not_authorized"],
+		["unavailable", "persistence_failed"],
+	] as const)(
+		"maps snapshot binding %s without exposing resource visibility",
+		async (code, expectedCode) => {
+			const transaction = new FakeAgentConfigurationTransactionV1(
+				agentConfigurationConformanceRecordV1,
+			);
+			const harness = createHarness({
+				dependencies: {
+					transaction: {
+						read: transaction.read.bind(transaction),
+						async commit() {
+							if (code === "unavailable")
+								throw new Error("database unavailable");
+							throw new WorkspaceSnapshotBindingErrorV1(code);
+						},
+					},
+				},
+			});
+			await expect(
+				harness.useCase.update(
+					{
+						...command,
+						changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+					},
+					actor,
+				),
+			).rejects.toEqual(
+				expect.objectContaining({
+					name: "AgentConfigurationError",
+					code: expectedCode,
+				}),
+			);
+		},
+	);
+
 	it("fails closed before policy on malformed persisted configuration and transaction envelopes", async () => {
 		for (const read of [
 			async () => ({

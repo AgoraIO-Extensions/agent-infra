@@ -81,6 +81,7 @@ import {
 	type PendingSecretRecordAttachmentsV1,
 	resolvePendingSecretRecordAttachmentsV1,
 } from "./secret-record-attachments.js";
+import { WorkspaceSnapshotBindingErrorV1 } from "./workspace-snapshot.js";
 
 function isOwnerHandoffChanges(
 	changes: UpdateAgentConfigurationCommandV2["changes"],
@@ -907,7 +908,12 @@ function createAgentConfigurationUseCaseV1Internal(
 				),
 				command.agentId,
 			);
-		} catch {
+		} catch (error) {
+			if (
+				error instanceof WorkspaceSnapshotBindingErrorV1 &&
+				(error.code === "not_found" || error.code === "forbidden")
+			)
+				throw new AgentConfigurationError("not_authorized");
 			throw new AgentConfigurationError("persistence_failed");
 		}
 		if (decision.outcome === "stale") {
