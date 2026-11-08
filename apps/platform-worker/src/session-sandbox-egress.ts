@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { V1NetworkPolicy } from "@kubernetes/client-node";
+import type { V1LabelSelector, V1NetworkPolicy } from "@kubernetes/client-node";
 import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
@@ -40,6 +40,43 @@ export interface SessionSandboxEgressReceiptV1 {
 type Operation = "apply" | "observe" | "revoke" | "remove";
 const prefix = "agent-infra.agora.io/";
 const labelValue = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+
+/**
+ * Session labels are platform-controlled. Evaluate an existing selector against
+ * that exact label set so an Agent policy keyed by a different controlled label
+ * is recognized as disjoint instead of conservatively blocking every Session.
+ */
+function selectorMatchesLabels(
+	selector: V1LabelSelector | undefined,
+	labels: Readonly<Record<string, string>>,
+) {
+	for (const [key, value] of Object.entries(selector?.matchLabels ?? {}))
+		if (labels[key] !== value) return false;
+	for (const expression of selector?.matchExpressions ?? []) {
+		const present = Object.hasOwn(labels, expression.key);
+		const value = labels[expression.key];
+		const values = expression.values ?? [];
+		switch (expression.operator) {
+			case "In":
+				if (!present || value === undefined || !values.includes(value))
+					return false;
+				break;
+			case "NotIn":
+				if (present && value !== undefined && values.includes(value))
+					return false;
+				break;
+			case "Exists":
+				if (!present) return false;
+				break;
+			case "DoesNotExist":
+				if (present) return false;
+				break;
+			default:
+				return false;
+		}
+	}
+	return true;
+}
 
 /**
  * #1251 calls this before creating a Pod and before admitting work. The profile
@@ -178,8 +215,10 @@ export function createSessionSandboxEgressV1(options: {
 	}
 	async function exclusive(desired: V1NetworkPolicy) {
 		const labels = desired.spec?.podSelector?.matchLabels ?? {};
-		// NetworkPolicies are additive. Conservatively reject another potentially
-		// overlapping allow policy, including expression selectors. Empty denies are safe.
+		// NetworkPolicies are additive. Reject another allow policy only when its
+		// selector matches the exact platform-controlled Session labels. A policy
+		// keyed by an unrelated controlled label (for example an Agent label) is
+		// disjoint and must not block every Session in the namespace.
 		const policies = await client.list<V1NetworkPolicy>("NetworkPolicy", "");
 		if (
 			policies.some((policy) => {
@@ -192,10 +231,7 @@ export function createSessionSandboxEgressV1(options: {
 					!policy.spec?.egress?.length
 				)
 					return false;
-				if (policy.spec.podSelector?.matchExpressions?.length) return true;
-				return !Object.entries(policy.spec.podSelector?.matchLabels ?? {}).some(
-					([key, value]) => Object.hasOwn(labels, key) && labels[key] !== value,
-				);
+				return selectorMatchesLabels(policy.spec?.podSelector, labels);
 			})
 		)
 			throw new WorkloadKubernetesError("policy");

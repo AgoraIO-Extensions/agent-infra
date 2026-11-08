@@ -184,6 +184,25 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 		await expect(adapter.observe(binding, known)).rejects.toThrow();
 		await expect(adapter.apply(binding, known)).rejects.toThrow();
 	});
+	it("accepts allow policies whose controlled selectors are disjoint from a Session", async () => {
+		for (const selector of [
+			{ matchLabels: { "agent-infra.agora.io/agent": "another-agent" } },
+			{
+				matchExpressions: [
+					{ key: "agent-infra.agora.io/agent", operator: "Exists" as const },
+				],
+			},
+		]) {
+			const { api, adapter } = setup();
+			api.resources.set("NetworkPolicy/foreign", {
+				apiVersion: "networking.k8s.io/v1",
+				kind: "NetworkPolicy",
+				metadata: { name: "agent-policy" },
+				spec: { podSelector: selector, policyTypes: ["Egress"], egress: [{}] },
+			} as V1NetworkPolicy);
+			await expect(adapter.apply(binding)).resolves.toBeDefined();
+		}
+	});
 	it("revokes to empty egress and retains the deny until all Sandbox Pods are gone", async () => {
 		const { api, adapter } = setup();
 		const known = await adapter.apply(binding);
