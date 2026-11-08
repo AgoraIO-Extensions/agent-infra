@@ -318,10 +318,10 @@ it.each(["foreign", "missing"] as const)(
 			await db`select current_configuration_revision from platform.agents where id=${agentId}`;
 		expect(Number(agent?.current_configuration_revision)).toBe(1);
 		expect(
-			await db`select revision from platform.agent_configuration_revisions where agent_id=${agentId}`,
+			await db`select revision::int as revision from platform.agent_configuration_revisions where agent_id=${agentId}`,
 		).toEqual([{ revision: 1 }]);
 		expect(
-			await db`select snapshot_id,configuration_revision from platform.workspace_snapshot_bindings where agent_id=${agentId}`,
+			await db`select snapshot_id,configuration_revision::int as configuration_revision from platform.workspace_snapshot_bindings where agent_id=${agentId}`,
 		).toEqual([{ snapshot_id: original, configuration_revision: 1 }]);
 	},
 );
