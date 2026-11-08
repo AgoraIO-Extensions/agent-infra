@@ -153,15 +153,16 @@ ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-c
   "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-retire.json"
 ```
 
-`retire` 只处理 owner 为 `agent-infra-release-cache-v1` 的缓存，以下对象一律保留：
+`retire` 只处理 owner 为 `agent-infra-release-cache-v1` 的缓存，每个模板只保留当前版本和最新待升级版本。
+模板指缓存中镜像的仓库（不含 digest），同一组镜像 digest 是该模板的一个版本：
 
-- 当前计划中的缓存及其 retry generation；
-- 任一 `*-session-image-cache` 严格准入登记引用的缓存 ID；
-- 镜像仍被集群中任一运行中 Pod（活动 Agent、保留 Session 或预热探针）使用的缓存；
-- 正在删除的对象；
-- 最新的 `ACK_IMAGE_CACHE_RETIRE_KEEP` 份（默认 18 份，约 3 个版本，最少 6 份），用于近期版本和回滚。
+- 最新待升级版本：当前计划中的缓存及其 retry generation；计划未覆盖的模板（例如部署入口生成的
+  多容器镜像组合）保留最新创建的版本；
+- 当前版本：任一 `*-session-image-cache` 严格准入登记引用的缓存 ID，以及镜像仍被集群中任一运行中
+  Pod（活动 Agent、保留 Session 或预热探针）使用的缓存。多个环境运行不同版本时，各环境的当前版本都保留；
+- 正在删除的对象不处理。
 
-其余缓存按创建时间从早到晚列为待删除。读不出准入登记或 Pod 清单时直接失败，不删除任何对象。每次删除前
+其余版本按创建时间从早到晚列为待删除；回滚到更早的版本时，由部署入口重新预热。读不出准入登记或 Pod 清单时直接失败，不删除任何对象。每次删除前
 都会重新读回 owner、UID 和缓存 ID，并把 UID 作为删除前置条件。不在严格准入中的镜像失去缓存后
 回退为直接拉取；仍需依赖严格准入的旧 Agent 要先恢复准入登记或保留其缓存，再执行 `retire`。
 

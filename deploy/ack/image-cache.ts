@@ -79,39 +79,51 @@ export function admissionCacheIds(policies: unknown[]): string[] {
 	return [...ids].sort();
 }
 
+/** A template is the set of image repositories a cache holds; each distinct digest set is one version of it. */
+const templateOf = (images: string[]) => [...new Set(images.map((ref) => ref.split("@")[0]))].sort().join(",");
+
 /**
- * Retires the oldest owned release caches that no current plan group, retry generation, strict
- * admission policy or live Pod uses. The newest `keep` owned caches always stay, so recent releases and
- * rollbacks keep their snapshots. Foreign and already deleting objects are never touched.
+ * Keeps two versions per template: the latest one waiting for upgrade (the current plan, or the newest
+ * created version of a template the plan does not cover) and the current one (pinned by a strict
+ * admission policy or used by a live Pod; every environment's current version stays). Everything else
+ * owned by the release cache owner is retired, oldest first. Foreign and already deleting objects are
+ * never touched.
  */
-export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CachePlan; admissionIds: string[]; inUseImages: string[]; keep: number; namePrefix?: string }) {
+export function selectCachesToRetire(input: { caches: OwnedCache[]; plan: CachePlan; admissionIds: string[]; inUseImages: string[]; namePrefix?: string }) {
 	const plan = parseCachePlan(input.plan);
-	assert(Number.isInteger(input.keep) && input.keep >= 6 && input.keep <= 48, "CACHE_RETIRE_KEEP_INVALID");
 	const planned = new Set(plan.groups.flatMap((images) => { const name = cacheName(images, input.namePrefix); return [name, `${name}-retry1`]; }));
+	const plannedTemplates = new Set(plan.groups.map(templateOf));
 	const admission = new Set(input.admissionIds);
 	const inUse = new Set(input.inUseImages);
 	const owned = input.caches.filter((cache) => cache.owner === cacheOwner);
 	for (const cache of owned) assert(cache.uid && Number.isFinite(Date.parse(cache.createdAt)) && Array.isArray(cache.images), "CACHE_INVENTORY_INVALID");
 	const newestFirst = [...owned].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.name.localeCompare(a.name));
-	const newest = new Set(newestFirst.slice(0, input.keep).map((cache) => cache.name));
-	const kept: Record<string, number> = { current_plan: 0, admission_reference: 0, in_use: 0, deleting: 0, newest: 0 };
+	const latest = new Map<string, string>();
+	for (const cache of newestFirst) {
+		// A version already being deleted cannot be the one a template keeps.
+		if (cache.deleting) continue;
+		const template = templateOf(cache.images);
+		if (!latest.has(template)) latest.set(template, hash([...cache.images].sort()));
+	}
+	const kept: Record<string, number> = { latest: 0, admission_reference: 0, in_use: 0, deleting: 0 };
 	const retire: OwnedCache[] = [];
 	for (const cache of [...newestFirst].reverse()) {
-		if (planned.has(cache.name)) kept.current_plan++;
+		const template = templateOf(cache.images);
+		if (planned.has(cache.name)) kept.latest++;
 		else if (cache.id && admission.has(cache.id)) kept.admission_reference++;
 		else if (cache.images.some((image) => inUse.has(image))) kept.in_use++;
 		else if (cache.deleting) kept.deleting++;
-		else if (newest.has(cache.name)) kept.newest++;
+		else if (!plannedTemplates.has(template) && latest.get(template) === hash([...cache.images].sort())) kept.latest++;
 		else retire.push(cache);
 	}
 	return { retire, kept, owned: owned.length, foreign: input.caches.length - owned.length };
 }
 
 /** Dry run unless `confirm` matches; every deletion re-checks identity in the backend. */
-export async function retireCaches(plan: CachePlan, backend: RetireBackend, options: { keep: number; confirm?: string; now?: () => number }) {
+export async function retireCaches(plan: CachePlan, backend: RetireBackend, options: { confirm?: string; now?: () => number } = {}) {
 	plan = parseCachePlan(plan);
 	const now = options.now ?? Date.now;
-	const selection = selectCachesToRetire({ caches: await backend.inventory(), plan, admissionIds: await backend.admissionCacheIds(), inUseImages: await backend.inUseImages(), keep: options.keep, namePrefix: backend.namePrefix });
+	const selection = selectCachesToRetire({ caches: await backend.inventory(), plan, admissionIds: await backend.admissionCacheIds(), inUseImages: await backend.inUseImages(), namePrefix: backend.namePrefix });
 	const confirmed = options.confirm === retireConfirmation;
 	const retired: { name: string; createdAt: string }[] = [];
 	if (confirmed) for (const cache of selection.retire) {
@@ -120,7 +132,7 @@ export async function retireCaches(plan: CachePlan, backend: RetireBackend, opti
 	}
 	return {
 		schemaVersion: 1, kind: "ack-image-cache-retire", sourceSha: plan.sourceSha, checkedAt: new Date(now()).toISOString(),
-		status: confirmed ? "retired" : "planned", keep: options.keep, owned: selection.owned, kept: selection.kept,
+		status: confirmed ? "retired" : "planned", owned: selection.owned, kept: selection.kept,
 		retired: confirmed ? retired : selection.retire.map((cache) => ({ name: cache.name, createdAt: cache.createdAt })),
 	};
 }
@@ -292,7 +304,7 @@ async function main() {
 	const plan = parseCachePlan(JSON.parse(await readFile(file, "utf8")));
 	assert(plan.sourceSha === process.env.ACK_SOURCE_SHA, "CACHE_RELEASE_SOURCE_MISMATCH");
 	if (action === "retire") {
-		const receipt = await retireCaches(plan, kubernetesRetireBackend(process.env.ACK_KUBECONFIG ?? ""), { keep: Number(process.env.ACK_IMAGE_CACHE_RETIRE_KEEP ?? 18), confirm: process.env.ACK_IMAGE_CACHE_RETIRE_CONFIRM });
+		const receipt = await retireCaches(plan, kubernetesRetireBackend(process.env.ACK_KUBECONFIG ?? ""), { confirm: process.env.ACK_IMAGE_CACHE_RETIRE_CONFIRM });
 		await writeFile(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
 		console.info(JSON.stringify({ status: receipt.status, owned: receipt.owned, retired: receipt.retired.length, sourceSha: plan.sourceSha }));
 		return;
