@@ -591,6 +591,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 			const currentTime = new Date(clock[0]?.now ?? "").getTime();
 			if (!Number.isFinite(currentTime))
 				throw new WorkspaceSnapshotErrorV1("unavailable");
+			const currentTimeIso = new Date(currentTime).toISOString();
 			if (Date.parse(expiresAt) <= currentTime)
 				throw new WorkspaceSnapshotErrorV1("invalid_input");
 			await tx
@@ -605,14 +606,9 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
 						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
 						eq(workspaceSnapshotUploadReservations.status, "reserved"),
-						sql`${workspaceSnapshotUploadReservations.expiresAt} <= now()`,
+						sql`${workspaceSnapshotUploadReservations.expiresAt} <= ${currentTimeIso}`,
 					),
 				);
-			const completed = await replay(tx, owner, key);
-			if (completed)
-				return {
-					state: completed.requestDigest === digest ? "completed" : "conflict",
-				};
 			const [existing] = await tx
 				.select()
 				.from(workspaceSnapshotUploadReservations)
@@ -625,6 +621,11 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				)
 				.for("update")
 				.limit(1);
+			const completed = await replay(tx, owner, key);
+			if (completed) {
+				if (completed.requestDigest !== digest) return { state: "conflict" };
+				return { state: "completed" };
+			}
 			if (existing) {
 				if (existing.requestDigest !== digest) return { state: "conflict" };
 				if (existing.status === "completed") return { state: "completed" };
