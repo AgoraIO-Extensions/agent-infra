@@ -2147,6 +2147,45 @@ describe("production SessionSandbox resource receiver", () => {
 				f.claim.sandbox.resourceName,
 			);
 			expect(pvc?.metadata?.uid).toBe(sourcePVC?.uid);
+
+			if (!recreated) throw new Error("Expected replacement Pod");
+			recreated.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			await f.client.replace(recreated);
+			const ready = await f.receive(replacement, signal);
+			expect(ready.status).toBe("ready");
+			const running = await f.client.read("Pod", f.claim.sandbox.resourceName);
+			if (!running) throw new Error("Expected running replacement");
+			await f.client.delete(running);
+			const retry = { ...replacement, previousObservation: ready };
+			const beforeRetry = f.writes.length;
+			// The first recovery's receipt cannot authorize a second Pod replacement.
+			await expect(f.receive(retry, signal)).resolves.toEqual({
+				status: "unknown",
+				failureCode: "sandbox.pod_lost",
+				resources: ready.resources,
+			});
+			expect(f.writes).toHaveLength(beforeRetry);
+			expect(
+				await f.client.read("Pod", f.claim.sandbox.resourceName),
+			).toBeNull();
+			const foreign = await f.client.create<V1Pod>({
+				...recreated,
+				metadata: {
+					...recreated.metadata,
+					uid: undefined,
+					resourceVersion: undefined,
+				},
+			});
+			await expect(f.receive(retry, signal)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(
+				(await f.client.read("Pod", f.claim.sandbox.resourceName))?.metadata
+					?.uid,
+			).toBe(foreign.metadata?.uid);
 		});
 
 		it.each([
