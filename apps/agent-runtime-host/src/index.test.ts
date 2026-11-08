@@ -1611,6 +1611,7 @@ describe("RuntimeHost environment assembly", () => {
 					toolId: "workspace.read_text_file",
 				};
 				const protection = vi.mocked(assertStandardMcpProcessProtection);
+				const previousProtection = protection.getMockImplementation();
 				protection.mockClear();
 				protection.mockImplementation(() => {
 					throw new Error(
@@ -1631,6 +1632,8 @@ describe("RuntimeHost environment assembly", () => {
 					);
 				} finally {
 					protection.mockReset();
+					if (previousProtection)
+						protection.mockImplementation(previousProtection);
 				}
 			} finally {
 				await runtime.close();
