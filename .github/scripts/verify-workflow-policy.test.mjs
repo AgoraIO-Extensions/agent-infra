@@ -473,6 +473,8 @@ test("cache deployment rejects widened event, code and cloud identity boundaries
     w => { w.jobs.prepare.steps.find(step => step.run).env.GH_TOKEN = "${{ secrets.CLOUD_TOKEN }}"; },
     w => { w.jobs.prepare.environment = "unprotected"; },
     w => { w.jobs.execute.steps[3].env.ACK_KUBECONFIG_B64 = "${{ secrets.WRONG_SECRET }}"; },
+    w => { w.jobs.execute.steps[4].run = w.jobs.execute.steps[4].run.replace("for attempt in 1 2 3", "for attempt in 1"); },
+    w => { w.jobs.execute.steps[4].run = w.jobs.execute.steps[4].run.replace("ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-cache.ts retire", "node deploy/ack/image-cache.ts retire"); },
     w => { w.jobs.execute.steps[6].run = "echo keep"; },
   ]) {
     const workflows = await actualWorkflows();

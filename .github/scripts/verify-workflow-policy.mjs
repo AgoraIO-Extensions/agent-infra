@@ -276,6 +276,7 @@ export function validateWorkflowDocuments(workflows) {
       !sameObject(executeSteps[3]?.env, {ACK_KUBECONFIG_B64: "${{ secrets.ACK_KUBECONFIG_B64 }}"}) ||
       executeSteps[4]?.name !== "Ensure ImageCache groups are Ready" ||
       executeSteps[4]?.run?.includes("for attempt in 1 2 3") !== true ||
+      executeSteps[4]?.run?.includes("ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-cache.ts retire") !== true ||
       executeSteps[5]?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
       executeSteps[6]?.name !== "Remove temporary kubeconfig" ||
       executeSteps[6]?.if !== "always()" ||

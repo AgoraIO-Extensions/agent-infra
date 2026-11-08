@@ -7,12 +7,13 @@
 ## 发布与部署
 
 1. 正式 `Publish images` 成功后，独立 `ACK image cache plan` workflow 校验同 run/attempt 的六镜像
-   index 回执，选择 `linux/amd64` child digest，只上传不可变 cache plan artifact；它不取得
-   云身份、Kubernetes 凭据或 registry pull secret，也不创建缓存。
+   index 回执，选择 `linux/amd64` child digest，上传不可变 cache plan artifact；计划 job 不取得
+   云身份、Kubernetes 凭据或 registry pull secret。同一 workflow 的执行 job 只在受保护 environment
+   `ack-image-cache` 中运行，先按下文规则退休旧缓存，再创建或复用本次计划的缓存并等待 Ready。
 2. 部署入口设置 `ACK_IMAGE_CACHE_REQUIRED=true` 后，从同源 Runtime/模板 manifest 和已批准的
    Custom 最终镜像请求生成清单，由受控 ACK 运维机使用既有 kubeconfig/RBAC 调用
-   `ImageCache` CR，复用集群内 `imagePullSecret`，等待 Ready 并实时回读。GitHub Action
-   只是计划生成器，不是缓存执行器。
+   `ImageCache` CR，复用集群内 `imagePullSecret`，等待 Ready 并实时回读。发布后的预热
+   不能替代这一步。
 3. `all`、独立配置初始化、预检、配置发布和 provision 均在启用镜像前检查缓存。
    每次均实时查询 CR，并在全部组就绪后再次回读。回执必须匹配完整镜像集合与 source；
    磁盘旧回执不能代替实时查询。没有成功的当前回执，不发布新镜像配置。
@@ -30,9 +31,9 @@
 当前/历史准入镜像集合会一起重新验证，避免旧 Agent 恢复和回滚版本失去缓存。每份计划最多
 24 组，每组最多 8 个不同镜像；创建前统计本 owner 的 CR，达到 48 份则拒绝创建。
 同一集群的运维预热必须串行执行，避免并发检查超出预算。本流程不删除活动缓存。
-缓存不设置自动到期或 LRU，以免仍在使用的精确 ID 被淘汰。退休版本由运维核对所有活动 Agent、
-保留 Session 与回滚输入后，先移除准入登记，再按 owner 标签和精确 ID 清理，可使用下文的
-`retire` 命令；预热身份不需要删除权限。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
+缓存不设置自动到期或 LRU，以免仍在使用的精确 ID 被淘汰。发布预热每次用下文的 `retire` 退休
+既不是当前版本、也不是最新待升级版本的缓存；严格准入登记引用的版本要由运维核对所有活动 Agent、
+保留 Session 与回滚输入后先移除准入登记，才会被退休。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
 
 已有 Failed/Expired 对象最多使用一个独立 retry generation，不覆盖旧对象；第二次失败仍
 停止并保留失败回执。修复权限、网络或容量后由运维处理该失败 generation，再显式重试。
@@ -44,11 +45,12 @@
 
 ## 一次性运维身份配置
 
-GitHub Environment `ack-image-cache` 仅用于受保护 `main` 生成计划 artifact，不需要 RAM OIDC。
-缓存执行由 SRE/ACK 运维机完成：kubeconfig 的 Kubernetes RBAC 只允许目标集群的
-`eci.alibabacloud.com` ImageCache create/get/list，registry 凭据留在集群 Secret，不进入
-GitHub、repo、日志或 issue。该运维身份不需要 Kubernetes 业务 Pod 写权限、应用 Secret、
-数据库或镜像删除权限。
+GitHub Environment `ack-image-cache` 只对受保护 `main` 开放，不需要 RAM OIDC。计划 job 不取得凭据；
+执行 job 把该 environment 的 `ACK_KUBECONFIG_B64` Secret 写成临时 kubeconfig，结束时删除。该
+kubeconfig 的 Kubernetes RBAC 需要目标集群的 `eci.alibabacloud.com` ImageCache
+create/get/list/delete、MutatingAdmissionPolicy get/list 和全集群 Pod list（退休只读取镜像引用）；
+registry 凭据留在集群 Secret，不进入 GitHub、repo、日志或 issue。该身份不需要 Kubernetes 业务 Pod
+写权限、应用 Secret、数据库或镜像仓库删除权限。
 
 普通发布触发计划生成；受控 ACK 运维机可通过 `ack-image-cache-prewarm.timer` 每 5 分钟轮询
 成功的 plan workflow，下载同 run/attempt 的 artifact，再执行现有 `image-cache.ts` Kubernetes
@@ -139,9 +141,10 @@ node deploy/ack/image-cache.ts check \
 
 ### 退休旧缓存
 
-每次发布新建 6 份缓存，第 8 次发布后 owner 下的缓存达到 48 份，预热回执的 `reason` 变为
-`CACHE_OBJECT_BUDGET_EXCEEDED`。此时由运维用自己的 kubeconfig（需要 ImageCache delete 和
-MutatingAdmissionPolicy get/list、全集群 Pod list 权限；预热身份仍不需要删除权限）对当前发布的计划执行 `retire`：
+发布预热的执行 job 每次在 `ensure` 前用本次计划自动执行 `retire` 并确认删除，回执 `cache-retire.json`
+与 Ready 回执一起上传。`retire` 失败时仍继续预热，但 job 结论为失败。不退休时每次发布新建 6 份缓存，
+第 8 次发布后 owner 下的缓存达到 48 份，预热回执的 `reason` 变为 `CACHE_OBJECT_BUDGET_EXCEEDED`。
+运维也可以用权限相同的 kubeconfig 对指定计划手动执行：
 
 ```bash
 export ACK_SOURCE_SHA ACK_KUBECONFIG

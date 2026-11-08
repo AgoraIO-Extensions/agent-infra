@@ -107,11 +107,20 @@ jobs:
           set -euo pipefail
           ACK_SOURCE_SHA="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).sourceSha)' "$RUNNER_TEMP/ack-cache-plan/cache-plan.json")"
           export ACK_SOURCE_SHA
+          # Keep only each template's current version and this plan's version before preparing it.
+          # A failed retire never stops preparation, but it fails the job.
+          retire_status=0
+          ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-cache.ts retire \
+            "$RUNNER_TEMP/ack-cache-plan/cache-plan.json" \
+            "$RUNNER_TEMP/cache-retire.json" || retire_status=$?
+          if [ "$retire_status" -ne 0 ]; then
+            echo "ImageCache retire failed; preparing the plan anyway and failing the job afterwards" >&2
+          fi
           for attempt in 1 2 3; do
             if node deploy/ack/image-cache.ts ensure \
               "$RUNNER_TEMP/ack-cache-plan/cache-plan.json" \
               "$RUNNER_TEMP/cache-ready.json"; then
-              exit 0
+              exit "$retire_status"
             fi
             echo "ImageCache ensure attempt $attempt did not reach Ready; reusing the same CRs on the next attempt" >&2
             sleep 10
@@ -122,7 +131,9 @@ jobs:
         if: always()
         with:
           name: ack-cache-ready-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cache-ready.json
+          path: |
+            ${{ runner.temp }}/cache-ready.json
+            ${{ runner.temp }}/cache-retire.json
           if-no-files-found: warn
       - name: Remove temporary kubeconfig
         if: always()
