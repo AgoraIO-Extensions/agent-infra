@@ -1417,6 +1417,84 @@ test("exported design viewport matrix conversation", async ({ page }, info) => {
 	expect(fixture.unexpected).toEqual([]);
 });
 
+test("keeps typed slash arguments until the user confirms the selected Skill", async ({
+	page,
+}) => {
+	const fixture = await routingFixture(page, {
+		messageRoles: true,
+		nativeCapabilities: 2,
+	});
+	await page.route(
+		`**/api/v2/conversations/${fixture.conversationId}`,
+		(route) =>
+			route.fulfill({
+				json: history(fixture.conversationId, [
+					{
+						...event(1, fixture.conversationId),
+						schemaVersion: 1,
+						type: "execution.status",
+						payload: { status: "completed" },
+					},
+				]),
+			}),
+	);
+	const invocations: unknown[] = [];
+	await page.route("**/native-capability/invoke", async (route) => {
+		invocations.push(route.request().postDataJSON());
+		await route.fulfill({ status: 409, json: { outcome: "busy" } });
+	});
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const input = page.getByLabel("消息", { exact: true });
+	await input.fill("/受控 Skill-1 列出变更\n保留风险说明");
+	await expect(page.getByRole("option")).toHaveCount(1);
+	await input.press("Enter");
+	await expect(page.getByText("Skill · 受控 Skill-1")).toBeVisible();
+	await expect(input).toHaveValue("列出变更\n保留风险说明");
+	await expect(input).toBeFocused();
+	expect(invocations).toHaveLength(0);
+	await page.getByRole("button", { name: "确认发送" }).click();
+	await expect.poll(() => invocations.length).toBe(1);
+	expect(invocations[0]).toMatchObject({
+		capabilityId: "0".padStart(64, "d"),
+		directoryRevision: "d".repeat(64),
+		parameters: "列出变更\n保留风险说明",
+	});
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("preserves native slash commands when the directory cannot be read", async ({
+	page,
+}, info) => {
+	const fixture = await routingFixture(page, {
+		messageRoles: true,
+		nativeCapabilities: 2,
+	});
+	await page.route("**/native-metadata?*", (route) =>
+		route.fulfill({ status: 503, body: "" }),
+	);
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const input = page.getByLabel("消息", { exact: true });
+	for (const draft of ["/compact", "/goal 完成当前任务"]) {
+		await input.fill(draft);
+		await expect(page.getByText("目录读取失败", { exact: true })).toBeVisible();
+		await page.getByRole("button", { name: "发送", exact: true }).click();
+		await expect(
+			page.getByRole("alert").filter({ hasText: "内容没有作为普通消息发送。" }),
+		).toBeVisible();
+		await expect(input).toHaveValue(draft);
+	}
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
+	await info.attach("native-command-directory-unavailable", {
+		body: await page.screenshot({ animations: "disabled" }),
+		contentType: "image/png",
+	});
+});
+
 for (const viewport of [
 	{ width: 1366, height: 500 },
 	{ width: 820, height: 600 },

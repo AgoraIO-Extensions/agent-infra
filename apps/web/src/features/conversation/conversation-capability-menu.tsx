@@ -27,8 +27,8 @@ import {
 } from "./conversation-capability-picker.js";
 
 /**
- * 命令与 Skill 目录对当前会话的状态。只有 ready / partial 表示目录可用：此时以 / 开头、
- * 未选择目录项的草稿不会作为普通消息发出；其他状态下按普通消息发送（NI-86）。
+ * 命令与 Skill 目录对当前会话的状态。只有 ready / partial 表示目录可用；
+ * 无法确认的斜杠指令保留草稿并说明原因，不降级为普通消息。
  */
 export type CapabilityCatalog =
 	| { status: "unsupported" }
@@ -46,7 +46,9 @@ const catalogNotices = {
 	"no-execution": "发送第一条消息后可使用命令与 Skill。",
 } as const;
 
-export function catalogAvailable(catalog: CapabilityCatalog) {
+export function catalogAvailable(
+	catalog: CapabilityCatalog,
+): catalog is Extract<CapabilityCatalog, { status: "ready" | "partial" }> {
 	return catalog.status === "ready" || catalog.status === "partial";
 }
 
@@ -78,7 +80,7 @@ export function useCapabilityComposer({
 		catalog.status === "ready" || catalog.status === "partial"
 			? catalog.capabilities
 			: undefined;
-	const query = capabilityQuery(draft) ?? "";
+	const query = capabilityQuery(draft, capabilities) ?? "";
 	const options = useMemo(
 		() =>
 			capabilities ? filterConversationCapabilities(capabilities, query) : [],
@@ -103,7 +105,9 @@ export function useCapabilityComposer({
 		setError(undefined);
 		setOpen(false);
 		insertedSlash.current = false;
-		if (draft.startsWith("/")) setDraft("");
+		const query = capabilityQuery(draft, [capability]);
+		if (query !== undefined)
+			setDraft(draft.slice(query.length + 1).replace(/^\s/u, ""));
 		focusInput();
 	}
 	return {
@@ -118,11 +122,12 @@ export function useCapabilityComposer({
 		catalog,
 		busy,
 		setError,
-		/** 草稿变化：以 / 开头时打开弹层并回到第一项，其他内容收起。 */
+		/** 草稿变化：斜杠指令打开弹层并回到第一项，路径等普通内容收起。 */
 		onDraftChange(value: string) {
 			setDraft(value);
 			setActiveIndex(0);
-			if (value.startsWith("/") && !busy) setOpen(true);
+			if (capabilityQuery(value, capabilities) !== undefined && !busy)
+				setOpen(true);
 			else {
 				setOpen(false);
 				insertedSlash.current = false;

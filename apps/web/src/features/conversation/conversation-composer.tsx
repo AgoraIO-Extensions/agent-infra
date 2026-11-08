@@ -24,6 +24,7 @@ import {
 import {
 	type CapabilityInvocationBody,
 	type ConversationCapabilityV1,
+	capabilityQuery,
 	prepareCapabilityInvocation,
 } from "./conversation-capability-picker.js";
 import {
@@ -164,10 +165,17 @@ export function ConversationComposer({
 			onInvokeCapability(prepared.body, selected);
 			return;
 		}
-		if (draft.startsWith("/")) {
-			// 目录可用时，未选择目录项的 / 草稿不作为普通消息发出；目录不可用时按普通消息发送。
+		const query = capabilityQuery(
+			draft,
+			catalogAvailable(catalog) ? catalog.capabilities : [],
+		);
+		if (query !== undefined) {
 			if (catalogAvailable(catalog)) {
-				capability.setError("请先选择目录中的命令或 Skill。");
+				capability.setError(
+					query && capability.options.length === 0
+						? `当前目录没有可用的 /${query} 命令或 Skill，请检查名称或重新选择；内容没有作为普通消息发送。`
+						: "请先选择目录中的命令或 Skill。",
+				);
 				capability.onDraftChange(draft);
 				return;
 			}
@@ -175,6 +183,16 @@ export function ConversationComposer({
 				capability.setError("命令与 Skill 目录正在读取，请稍后再发送。");
 				return;
 			}
+			capability.setError(
+				`${
+					catalog.status === "no-execution"
+						? "发送第一条普通消息后才能使用命令与 Skill。"
+						: catalog.status === "unsupported"
+							? "当前模板尚未接入命令与 Skill。"
+							: "命令与 Skill 目录读取失败，请重试目录。"
+				}内容没有作为普通消息发送。`,
+			);
+			return;
 		}
 		capability.setError(undefined);
 		onSendMessage();

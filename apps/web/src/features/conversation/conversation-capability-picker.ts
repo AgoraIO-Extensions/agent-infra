@@ -23,9 +23,25 @@ function bounded(value: string, maximum: number) {
 	);
 }
 
-/** 草稿以 / 开头时，「/」之后的全部文本是目录搜索词；否则不是命令查询。 */
-export function capabilityQuery(draft: string): string | undefined {
-	return draft.startsWith("/") ? draft.slice(1) : undefined;
+/** 只搜索开头的 /名称；空白之后保留为参数，含路径分隔符的文本仍是普通消息。 */
+export function capabilityQuery(
+	draft: string,
+	capabilities: readonly ConversationCapabilityV1[] = [],
+): string | undefined {
+	if (!draft.startsWith("/")) return undefined;
+	const input = draft.slice(1);
+	const normalized = input.toLocaleLowerCase();
+	let matchedName: string | undefined;
+	for (const { name } of capabilities) {
+		if (
+			normalized.startsWith(name.toLocaleLowerCase()) &&
+			(input.length === name.length || /\s/u.test(input[name.length] ?? "")) &&
+			name.length > (matchedName?.length ?? 0)
+		)
+			matchedName = input.slice(0, name.length);
+	}
+	if (matchedName !== undefined) return matchedName;
+	return /^\/([^/\s]*)(?:\s|$)/u.exec(draft)?.[1];
 }
 
 export function filterConversationCapabilities(

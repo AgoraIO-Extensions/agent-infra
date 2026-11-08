@@ -29,6 +29,26 @@ const capabilities = [
 ];
 
 describe("conversation capability picker model", () => {
+	it("searches the slash command name without treating its arguments as search terms", () => {
+		expect(capabilityQuery("/compact focus on the current task")).toBe(
+			"compact",
+		);
+		expect(capabilityQuery("/workspace-summary 列出变更")).toBe(
+			"workspace-summary",
+		);
+		expect(capabilityQuery("/etc/hosts 这个文件是什么？")).toBeUndefined();
+	});
+
+	it("recognizes the complete advertised name before separating arguments", () => {
+		const spacedName = { ...capabilities[0], name: "Review changes" };
+		expect(capabilityQuery("/REVIEW CHANGES inspect files", [spacedName])).toBe(
+			"REVIEW CHANGES",
+		);
+		expect(
+			capabilityQuery("/review changeset inspect files", [spacedName]),
+		).toBe("review");
+	});
+
 	it("treats only drafts starting with / as a directory query", () => {
 		expect(capabilityQuery("/work")).toBe("work");
 		expect(capabilityQuery("/")).toBe("");
