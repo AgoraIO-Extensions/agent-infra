@@ -173,27 +173,35 @@ test("source configuration preflight accepts versioned Secrets from the rendered
 	assert.equal(receipt.status, "passed");
 });
 
-test("source configuration preflight accepts directory mounted deployment wrappers", async (t) => {
-	const f = await fixture(t, true);
-	for (const [index, component] of [
-		[0, "api"],
-		[1, "worker"],
-	]) {
-		const container = f.documents[index].spec.template.spec.containers[0];
-		container.env[0].value = `file:///app/deployment/${component === "api" ? "configuration.mjs" : "deployment.mjs"}`;
+for (const missingEntrypoint of [false, true]) {
+	test(`source configuration preflight checks directory mounted worker entrypoint (missing=${missingEntrypoint})`, async (t) => {
+		const f = await fixture(t, true);
+		const container = f.documents[1].spec.template.spec.containers[0];
+		container.env[0].value = "file:///app/deployment/deployment.mjs";
 		container.volumeMounts = [
 			{ name: "configuration", mountPath: "/app/deployment", readOnly: true },
 		];
-	}
-	const receipt = await validateConfigurationSourceBindings(
-		f.bootstrap,
-		f.runtime,
-		f.templates,
-		sourceSha,
-		f.render(),
-	);
-	assert.equal(receipt.status, "passed");
-});
+		if (!missingEntrypoint) {
+			const deployment = join(f.root, "deployment.mjs");
+			await writeFile(deployment, 'export * from "./configuration.mjs";', {
+				mode: 0o600,
+			});
+			const bootstrap = JSON.parse(await readFile(f.bootstrap, "utf8"));
+			bootstrap.objects[0].files["deployment.mjs"] = deployment;
+			await writeFile(f.bootstrap, JSON.stringify(bootstrap), { mode: 0o600 });
+		}
+		const receipt = await validateConfigurationSourceBindings(
+			f.bootstrap,
+			f.runtime,
+			f.templates,
+			sourceSha,
+			f.render(),
+		);
+		assert.equal(receipt.status, missingEntrypoint ? "failed" : "passed");
+		if (missingEntrypoint)
+			assert.equal(receipt.failureCode, "CONFIG_SOURCE_INPUT_INVALID");
+	});
+}
 
 test("source configuration preflight rejects a RuntimeHost digest drift", async (t) => {
 	const f = await fixture(t, true);

@@ -40,6 +40,8 @@ function configurationFile(input: any, documents: any[], component: "api" | "wor
 	assert(volumes?.length === 1 && typeof volumes[0].secret?.secretName === "string" && !volumes[0].secret.items);
 	const objects = input.objects?.filter((entry: any) => entry.kind === "Secret" && entry.name === volumes[0].secret.secretName);
 	assert(objects?.length === 1);
+	if (component === "worker" && !mount.subPath)
+		assert(typeof objects[0].files?.["deployment.mjs"] === "string");
 	const file = objects[0].files?.["configuration.mjs"];
 	assert(typeof file === "string", "CONFIG_SOURCE_INPUT_INVALID");
 	return file;
