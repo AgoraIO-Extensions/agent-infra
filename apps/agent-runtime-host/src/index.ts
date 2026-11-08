@@ -88,6 +88,7 @@ import {
 	readRuntimeSkillHubBindingV1,
 	runtimeSkillHubMountRootV1,
 } from "./skill-hub-configuration.js";
+import { standardMcpInputUnavailable } from "./standard-mcp-files.js";
 import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
 import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
@@ -352,6 +353,15 @@ export function startRuntimeHost(options: StartOptions) {
 	return server;
 }
 
+function standardMcpProcessProtectionAvailable() {
+	try {
+		assertStandardMcpProcessProtection();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export async function assembleRuntimeHost(
 	environment: NodeJS.ProcessEnv,
 	filesystem?: RuntimeLegacyMigrationFilesystem,
@@ -443,6 +453,12 @@ export async function assembleRuntimeHost(
 			schemaVersion: 1,
 			reason: "invalid",
 		};
+	// Spec §13.5.4: unverifiable protection closes only the Standard MCP
+	// capability. The consumer snapshot stays for Worker/Host agreement, and
+	// non-Connection tools are not gated on it (#3984).
+	const standardMcpProtected =
+		connectionConsumer?.status === "available" &&
+		standardMcpProcessProtectionAvailable();
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
 			? (() => {
@@ -547,7 +563,7 @@ export async function assembleRuntimeHost(
 		});
 		// Protected Standard MCP is assembled only for a pinned, explicitly gated
 		// native transport. Connection credentials remain in this Host client.
-		const standardConnectionClient =
+		const standardConnectionInput =
 			supportsProtectedStandardMcp &&
 			agentId !== undefined &&
 			connectionConsumer?.status === "available"
@@ -563,6 +579,14 @@ export async function assembleRuntimeHost(
 						}),
 					})
 				: undefined;
+		// Keep the selected path, but never read material in this Host.
+		const standardConnectionClient =
+			standardConnectionInput && !standardMcpProtected
+				? {
+						...standardConnectionInput,
+						resolveInput: async () => standardMcpInputUnavailable(),
+					}
+				: standardConnectionInput;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
 					isolationMode: codexIsolationMode,
@@ -599,7 +623,8 @@ export async function assembleRuntimeHost(
 							await assembledHost.authorizeExternalAction(action);
 						if (
 							action.kind !== "tool" ||
-							connectionConsumer?.status !== "available"
+							connectionConsumer?.status !== "available" ||
+							!standardMcpProtected
 						)
 							return authorized;
 						return {

@@ -45,6 +45,7 @@ const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openPiRuntime: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
 	assertRuntimeProcessProtection: vi.fn(),
+	assertStandardMcpProcessProtection: vi.fn(),
 	readCodexInstalledSkillDeployment: vi.fn(),
 }));
 
@@ -60,7 +61,8 @@ vi.mock("./process-protection.js", () => ({
 
 // Assembly tests exercise real private file reception, not Linux acceptance.
 vi.mock("./standard-mcp-protection.js", () => ({
-	assertStandardMcpProcessProtection: vi.fn(),
+	assertStandardMcpProcessProtection:
+		runtimeAssemblyMocks.assertStandardMcpProcessProtection,
 }));
 
 vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
@@ -201,6 +203,7 @@ async function claudeAssemblyFixture(
 
 afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
+	runtimeAssemblyMocks.assertStandardMcpProcessProtection.mockReset();
 	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockClear();
 	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
 		actualMessageRuntimes.ClaudeRuntimeDriver.open,
@@ -1604,6 +1607,151 @@ describe("RuntimeHost environment assembly", () => {
 					revalidate,
 				});
 				expect(authorization).toHaveBeenCalledWith(action);
+			} finally {
+				await runtime.close();
+			}
+		},
+	);
+
+	it.each([true, false])(
+		"gates Codex tools on Standard MCP protection only when it holds at assembly, protected=%s",
+		async (protectedHost) => {
+			// #3984：ECI 内核没有 Yama，进程保护无法核实。Host 只关闭标准 MCP Connection
+			// 能力，consumer 快照保持可用；workspace 读取等工具不再被这项检查拦截。
+			const values = await environment();
+			values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(
+				values.AGENT_INFRA_RUNTIME_DATA_DIR,
+			);
+			await mkdir(
+				join(
+					values.AGENT_INFRA_RUNTIME_DATA_DIR,
+					"codex-driver.json.native",
+					"conversations",
+					"standard-mcp-input",
+				),
+				{ recursive: true, mode: 0o700 },
+			);
+			const profile = {
+				schemaVersion: 1 as const,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				consumerId: "platform",
+				audience: "fixture-resource",
+				egressProfile: { ref: "fixture-egress", revision: "r1" },
+			};
+			const approval = {
+				schemaVersion: 1,
+				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+				source: { ref: "fixture-deployment", revision: "r1" },
+				egressEnforced: true,
+			};
+			const file = join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "consumer.json");
+			await writeFile(file, JSON.stringify({ profile, approval }));
+			const unprotected = () => {
+				throw Object.assign(new Error("synthetic protection unavailable"), {
+					code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+				});
+			};
+			if (!protectedHost)
+				runtimeAssemblyMocks.assertStandardMcpProcessProtection.mockImplementation(
+					unprotected,
+				);
+			let openedWith: CodexRuntimeDriverOptions | undefined;
+			runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+				protocolVersion: 2,
+				codexVersion: "synthetic-codex",
+				upstreamTag: "synthetic-tag",
+				upstreamCommit: "synthetic-commit",
+				schemaSha256: "synthetic-schema-sha256",
+			});
+			runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+				async (options: CodexRuntimeDriverOptions) => {
+					openedWith = options;
+					return FakeRuntimeDriver.open(
+						join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "v4-driver.json"),
+					);
+				},
+			);
+			const runtime = await assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: file,
+				AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+					approval.configFingerprint,
+					approval.source.ref,
+					approval.source.revision,
+				]),
+				AGENT_INFRA_RUNTIME_DRIVER: "codex",
+				AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
+				AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 4,
+					configVersion: "configuration-4-fingerprint",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							protocol: "openai-responses-v1",
+							authentication: "bearer",
+							endpoint: "https://models.example.test/v1",
+							model: "gpt-5.3-codex",
+							reasoningLevels: ["high"],
+						},
+					],
+				}),
+			});
+			try {
+				// Worker/Host 仍按同一 consumer 快照核对，其他业务不被拒绝。
+				expect(runtime.connectionConsumer).toMatchObject({
+					status: "available",
+					configFingerprint: approval.configFingerprint,
+				});
+				expect(openedWith?.standardConnectionClient?.target).toMatchObject({
+					status: "available",
+					configFingerprint: approval.configFingerprint,
+				});
+				if (!protectedHost) {
+					// 保护之后变得可核实，也不在本 Host 读取 Connection 材料。
+					runtimeAssemblyMocks.assertStandardMcpProcessProtection.mockReset();
+					await expect(
+						openedWith?.standardConnectionClient?.resolveInput(
+							reference,
+							new AbortController().signal,
+						),
+					).rejects.toMatchObject({
+						code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+					});
+					// 关闭的输入不进入读取材料的路径（该路径先检查进程保护）。
+					expect(
+						runtimeAssemblyMocks.assertStandardMcpProcessProtection,
+					).not.toHaveBeenCalled();
+				}
+				const revalidate = vi.fn();
+				vi.spyOn(runtime.host, "authorizeExternalAction").mockResolvedValue({
+					revalidate,
+				});
+				const delivered = await openedWith?.authorizeExternalAction?.({
+					nativeSessionRef: "synthetic-native-session",
+					executionId: "synthetic-execution",
+					operationRef: "synthetic-operation",
+					attemptRef: "synthetic-attempt",
+					runtimeOperationId: "synthetic-execution",
+					kind: "tool",
+				});
+				runtimeAssemblyMocks.assertStandardMcpProcessProtection.mockImplementation(
+					unprotected,
+				);
+				if (protectedHost) {
+					// 组装时保护成立：运行中失效仍按原逻辑封闭工具。
+					expect(() => delivered?.revalidate?.()).toThrow(
+						"synthetic protection unavailable",
+					);
+					expect(revalidate).not.toHaveBeenCalled();
+				} else {
+					expect(delivered).toEqual({ revalidate });
+					delivered?.revalidate?.();
+					expect(revalidate).toHaveBeenCalledOnce();
+				}
 			} finally {
 				await runtime.close();
 			}
