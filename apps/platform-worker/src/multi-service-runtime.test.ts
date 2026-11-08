@@ -441,7 +441,7 @@ function snapshotPod(
 				{
 					name: "workspace-snapshot-materializer",
 					image: projection.initContainers[0]?.image ?? "",
-					imageID: "",
+					imageID: projection.initContainers[0]?.image ?? "",
 					restartCount: 0,
 					ready: true,
 					state: {
