@@ -353,6 +353,57 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 			{ status: "expired", object_ref: null, object_version: null },
 		]);
 	});
+	it("a failing old cleanup does not starve later expired leases in a bounded batch", async () => {
+		const who = owner();
+		const leases = [];
+		for (const key of ["fails-first", "healthy-second"]) {
+			const lease = await store.reserveUpload(
+				who,
+				key,
+				requestDigest,
+				1,
+				new Date(Date.now() + 60_000).toISOString(),
+			);
+			if (lease.state !== "reserved") throw new Error("reservation missing");
+			leases.push(lease.reservationId);
+		}
+		const firstId = leases[0];
+		const secondId = leases[1];
+		if (!firstId || !secondId) throw new Error("lease pair missing");
+		const object = input(who);
+		await store.attachUploadObject(
+			who,
+			firstId,
+			object.objectRef,
+			object.objectVersion,
+		);
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second',updated_at='2000-01-01' where id=${firstId}`;
+		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second',updated_at='2001-01-01' where id=${secondId}`;
+		const deleteObjectVersion = vi.fn(async () => {
+			throw new Error("synthetic storage failure");
+		});
+		expect(
+			await store.collectExpiredUploadReservations({
+				now: new Date(),
+				limit: 1,
+				deleter: { deleteObjectVersion },
+			}),
+		).toMatchObject({ scanned: 1, failed: 1 });
+		expect(
+			await store.collectExpiredUploadReservations({
+				now: new Date(),
+				limit: 1,
+				deleter: { deleteObjectVersion },
+			}),
+		).toMatchObject({ scanned: 1, released: 1, failed: 0 });
+		const rows =
+			await db`select status,released_at,object_ref from platform.workspace_snapshot_upload_reservations where id=${firstId}`;
+		expect(rows).toEqual([
+			{ status: "reserved", released_at: null, object_ref: object.objectRef },
+		]);
+		await store.releaseUploadReservation(who, firstId);
+	});
+
 	it("recovery preserves a published version and reconciles its durable receipt", async () => {
 		const who = owner();
 		const reservation = await store.reserveUpload(

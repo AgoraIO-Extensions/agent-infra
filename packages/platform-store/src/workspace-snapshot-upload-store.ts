@@ -260,6 +260,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired') and ${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now} and ${workspaceSnapshotUploadReservations.releasedAt} is null`,
 			)
 			.orderBy(
+				asc(workspaceSnapshotUploadReservations.updatedAt),
 				asc(workspaceSnapshotUploadReservations.expiresAt),
 				asc(workspaceSnapshotUploadReservations.id),
 			)
@@ -360,6 +361,30 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				if (outcome === "reconciled") result.reconciled++;
 			} catch {
 				result.failed++;
+				try {
+					await this.#run(
+						{
+							kind: candidate.ownerType as WorkspaceSnapshotPrincipalV1["kind"],
+							id: candidate.ownerId,
+							scopes: [],
+						},
+						"agent:create",
+						undefined,
+						async (tx) => {
+							await tx
+								.update(workspaceSnapshotUploadReservations)
+								.set({ updatedAt: sql`clock_timestamp()` })
+								.where(
+									and(
+										eq(workspaceSnapshotUploadReservations.id, candidate.id),
+										sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired')`,
+									),
+								);
+						},
+					);
+				} catch {
+					// A database outage keeps the original quota and retries next tick.
+				}
 			}
 		}
 		return result;
