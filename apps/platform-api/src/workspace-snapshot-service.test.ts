@@ -328,6 +328,19 @@ describe("workspace snapshot upload service with real file spool", () => {
 		expect(original.record.snapshotId).toBeTruthy();
 		expect(f.storage.upload).toHaveBeenCalledOnce();
 	});
+	it("releases an attached object before allowing the same key to retry", async () => {
+		const f = await fixture();
+		f.store.attachUploadObject.mockRejectedValueOnce(
+			new WorkspaceSnapshotErrorV1("unavailable"),
+		);
+		await expect(f.service.upload(f.upload())).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(f.storage.remove).toHaveBeenCalledOnce();
+		expect(await f.service.upload(f.upload())).toMatchObject({
+			replayed: false,
+		});
+	});
 
 	it("cleans only the redundant exact object version when concurrent uploads replay", async () => {
 		const f = await fixture();

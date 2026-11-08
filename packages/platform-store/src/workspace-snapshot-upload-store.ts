@@ -446,6 +446,8 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 						sql`${workspaceSnapshotUploadReservations.expiresAt} <= now()`,
 					),
 				);
+			const completed = await replay(tx, owner, key);
+			if (completed) return { state: "completed" };
 			const [existing] = await tx
 				.select()
 				.from(workspaceSnapshotUploadReservations)
@@ -513,6 +515,8 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					status: "released",
 					releasedAt: new Date(),
 					updatedAt: new Date(),
+					objectRef: null,
+					objectVersion: null,
 				})
 				.where(
 					and(

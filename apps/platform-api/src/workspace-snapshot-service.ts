@@ -454,6 +454,7 @@ export function createWorkspaceSnapshotServiceV1(
 			} catch (error) {
 				if (reservationId && safeToRemove) {
 					try {
+						if (pendingObject) await removePendingObject();
 						await options.store.releaseUploadReservation(
 							await principalFor(input.material, "agent:create"),
 							reservationId,

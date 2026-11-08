@@ -164,8 +164,23 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 			new Date(Date.now() + 60_000).toISOString(),
 		);
 		expect(next.state).toBe("reserved");
-		const rows = await db`select status from platform.workspace_snapshot_upload_reservations where owner_id=${who.id} and idempotency_key='expired-reservation'`;
+		const rows =
+			await db`select status from platform.workspace_snapshot_upload_reservations where owner_id=${who.id} and idempotency_key='expired-reservation'`;
 		expect(rows).toEqual([{ status: "expired" }]);
+	});
+	it("replays a completed legacy idempotency record before reserving new quota", async () => {
+		const who = owner();
+		const digest = "e".repeat(64);
+		await store.create(input(who), who, "legacy-replay", digest);
+		expect(
+			await store.reserveUpload(
+				who,
+				"legacy-replay",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				new Date(Date.now() + 60_000).toISOString(),
+			),
+		).toEqual({ state: "completed" });
 	});
 
 	it("separates a user and application with the same ID and idempotency key", async () => {
