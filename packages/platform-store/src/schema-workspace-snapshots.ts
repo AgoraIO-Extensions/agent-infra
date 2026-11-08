@@ -14,6 +14,59 @@ import {
 import { agentConfigurationRevisions, agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
 
+export const workspaceSnapshotUploadReservations = platformSchema.table(
+	"workspace_snapshot_upload_reservations",
+	{
+		id: text("id").primaryKey(),
+		ownerType: varchar("owner_type", { length: 32 }).notNull(),
+		ownerId: text("owner_id").notNull(),
+		idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+		requestDigest: varchar("request_digest", { length: 64 }).notNull(),
+		reservedBytes: bigint("reserved_bytes", { mode: "number" }).notNull(),
+		status: varchar("status", { length: 16 }).default("reserved").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		releasedAt: timestamp("released_at", { withTimezone: true }),
+		snapshotId: text("snapshot_id"),
+		objectRef: text("object_ref"),
+		objectVersion: text("object_version"),
+	},
+	(table) => [
+		check(
+			"workspace_snapshot_upload_reservation_owner_type",
+			sql`${table.ownerType} in ('user','application')`,
+		),
+		check(
+			"workspace_snapshot_upload_reservation_digest_format",
+			sql`${table.requestDigest} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"workspace_snapshot_upload_reservation_bytes_positive",
+			sql`${table.reservedBytes} > 0`,
+		),
+		check(
+			"workspace_snapshot_upload_reservation_status",
+			sql`${table.status} in ('reserved','completed','released','expired')`,
+		),
+		uniqueIndex("workspace_snapshot_upload_reservation_key_unique").on(
+			table.ownerType,
+			table.ownerId,
+			table.idempotencyKey,
+		),
+		index("workspace_snapshot_upload_reservation_owner_status_idx").on(
+			table.ownerType,
+			table.ownerId,
+			table.status,
+			table.expiresAt,
+		),
+	],
+);
+
 export const workspaceSnapshots = platformSchema.table(
 	"workspace_snapshots",
 	{

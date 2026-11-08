@@ -3,6 +3,7 @@ import type {
 	WorkspaceSnapshotPrincipalV1,
 	WorkspaceSnapshotRecordV1,
 } from "@agent-infra/platform-core";
+import { workspaceSnapshotLimitsV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migratePlatformDatabase } from "./migrate.js";
@@ -98,6 +99,75 @@ const directory = {
 };
 
 describe("workspace snapshot publication on PostgreSQL", () => {
+	it("reserves owner quota before object publication and converges idempotency", async () => {
+		const who = owner();
+		const digest = "b".repeat(64);
+		const expiresAt = new Date(Date.now() + 60_000).toISOString();
+		const reservations = await Promise.all(
+			Array.from({ length: 5 }, (_, index) =>
+				store.reserveUpload(
+					who,
+					`reservation-${index}`,
+					digest,
+					workspaceSnapshotLimitsV1.maxArchiveBytes,
+					expiresAt,
+				),
+			),
+		);
+		expect(reservations.every((value) => value.state === "reserved")).toBe(
+			true,
+		);
+		await expect(
+			store.reserveUpload(
+				who,
+				"reservation-over-limit",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				expiresAt,
+			),
+		).rejects.toMatchObject({ code: "quota_exceeded" });
+		const first = reservations[0];
+		if (first?.state !== "reserved") throw new Error("reservation missing");
+		await expect(
+			store.reserveUpload(who, "reservation-0", digest, 1, expiresAt),
+		).resolves.toEqual({ state: "in_progress" });
+		await expect(
+			store.reserveUpload(who, "reservation-0", "c".repeat(64), 1, expiresAt),
+		).resolves.toEqual({ state: "conflict" });
+		await store.releaseUploadReservation(who, first.reservationId);
+		await expect(
+			store.reserveUpload(
+				who,
+				"reservation-over-limit",
+				digest,
+				workspaceSnapshotLimitsV1.maxArchiveBytes,
+				expiresAt,
+			),
+		).resolves.toMatchObject({ state: "reserved" });
+	});
+	it("reclaims an expired reservation before accepting the next upload", async () => {
+		const who = owner();
+		const digest = "d".repeat(64);
+		const expired = await store.reserveUpload(
+			who,
+			"expired-reservation",
+			digest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() - 1_000).toISOString(),
+		);
+		expect(expired.state).toBe("reserved");
+		const next = await store.reserveUpload(
+			who,
+			"next-reservation",
+			digest,
+			workspaceSnapshotLimitsV1.maxArchiveBytes,
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		expect(next.state).toBe("reserved");
+		const rows = await db`select status from platform.workspace_snapshot_upload_reservations where owner_id=${who.id} and idempotency_key='expired-reservation'`;
+		expect(rows).toEqual([{ status: "expired" }]);
+	});
+
 	it("separates a user and application with the same ID and idempotency key", async () => {
 		const person = owner();
 		const application = owner("application", person.id);

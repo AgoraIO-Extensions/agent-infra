@@ -6,6 +6,7 @@ import {
 	type WorkspaceSnapshotPrincipalV1,
 	type WorkspaceSnapshotQuotaReaderV1,
 	type WorkspaceSnapshotRecordV1,
+	type WorkspaceSnapshotUploadReservationV1,
 	type WorkspaceSnapshotUploadStoreV1,
 	workspaceSnapshotLimitsV1,
 } from "@agent-infra/platform-core";
@@ -19,6 +20,7 @@ import {
 	platformApiCredentials,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadReservations,
 } from "./schema.js";
 
 type Transaction = Parameters<
@@ -111,6 +113,33 @@ async function usage(database: Reader, owner: WorkspaceSnapshotPrincipalV1) {
 		throw new WorkspaceSnapshotErrorV1("unavailable");
 	return total;
 }
+
+async function activeReservationUsage(
+	database: Reader,
+	owner: WorkspaceSnapshotPrincipalV1,
+	excludeId?: string,
+) {
+	const [row] = await database
+		.select({
+			total: sql<string>`coalesce(sum(${workspaceSnapshotUploadReservations.reservedBytes}), 0)`,
+		})
+		.from(workspaceSnapshotUploadReservations)
+		.where(
+			and(
+				eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
+				eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
+				eq(workspaceSnapshotUploadReservations.status, "reserved"),
+				sql`${workspaceSnapshotUploadReservations.expiresAt} > now()`,
+				...(excludeId
+					? [sql`${workspaceSnapshotUploadReservations.id} <> ${excludeId}`]
+					: []),
+			),
+		);
+	const total = Number(row?.total);
+	if (!Number.isSafeInteger(total) || total < 0)
+		throw new WorkspaceSnapshotErrorV1("unavailable");
+	return total;
+}
 async function replay(
 	database: Reader,
 	owner: WorkspaceSnapshotPrincipalV1,
@@ -179,6 +208,34 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 		this.#client = postgres(databaseUrl, { max: 4 });
 		this.#database = drizzle(this.#client);
 	}
+	reserveUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		key: string,
+		digest: string,
+		bytes: number,
+		expiresAt: string,
+	) {
+		return this.#reserveUpload(owner, key, digest, bytes, expiresAt);
+	}
+	releaseUploadReservation(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+	) {
+		return this.#releaseUploadReservation(owner, reservationId);
+	}
+	attachUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+		objectVersion: string,
+	) {
+		return this.#attachUploadObject(
+			owner,
+			reservationId,
+			objectRef,
+			objectVersion,
+		);
+	}
 
 	/** Captures request authentication in closures, never in metadata/records or persisted payloads. */
 	forCredential(
@@ -196,6 +253,30 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					this.#resolve(auth, scope),
 			},
 			store: {
+				reserveUpload: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					key: string,
+					digest: string,
+					bytes: number,
+					expiresAt: string,
+				) => this.#reserveUpload(owner, key, digest, bytes, expiresAt, auth),
+				releaseUploadReservation: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					reservationId: string,
+				) => this.#releaseUploadReservation(owner, reservationId, auth),
+				attachUploadObject: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					reservationId: string,
+					objectRef: string,
+					objectVersion: string,
+				) =>
+					this.#attachUploadObject(
+						owner,
+						reservationId,
+						objectRef,
+						objectVersion,
+						auth,
+					),
 				findIdempotency: (owner: WorkspaceSnapshotPrincipalV1, key: string) =>
 					this.#find(owner, key, auth),
 				create: (
@@ -203,7 +284,8 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					owner: WorkspaceSnapshotPrincipalV1,
 					key: string,
 					digest: string,
-				) => this.#create(value, owner, key, digest, auth),
+					reservationId?: string,
+				) => this.#create(value, owner, key, digest, auth, reservationId),
 				list: (owner: WorkspaceSnapshotPrincipalV1) => this.#list(owner, auth),
 				get: (owner: WorkspaceSnapshotPrincipalV1, id: string) =>
 					this.#get(owner, id, auth),
@@ -328,8 +410,142 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 		owner: WorkspaceSnapshotPrincipalV1,
 		key: string,
 		digest: string,
+		reservationId?: string,
 	) {
-		return this.#create(value, owner, key, digest);
+		return this.#create(value, owner, key, digest, undefined, reservationId);
+	}
+	async #reserveUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		key: string,
+		digest: string,
+		bytes: number,
+		expiresAt: string,
+		auth?: Authorization,
+	): Promise<WorkspaceSnapshotUploadReservationV1> {
+		if (
+			!/^[A-Za-z0-9._~-]{1,128}$/.test(key) ||
+			!/^[a-f0-9]{64}$/.test(digest) ||
+			!Number.isSafeInteger(bytes) ||
+			bytes <= 0 ||
+			!Number.isFinite(Date.parse(expiresAt))
+		)
+			throw new WorkspaceSnapshotErrorV1("invalid_input");
+		return this.#run(owner, "agent:create", auth, async (tx) => {
+			await tx
+				.update(workspaceSnapshotUploadReservations)
+				.set({
+					status: "expired",
+					releasedAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
+						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
+						eq(workspaceSnapshotUploadReservations.status, "reserved"),
+						sql`${workspaceSnapshotUploadReservations.expiresAt} <= now()`,
+					),
+				);
+			const [existing] = await tx
+				.select()
+				.from(workspaceSnapshotUploadReservations)
+				.where(
+					and(
+						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
+						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
+						eq(workspaceSnapshotUploadReservations.idempotencyKey, key),
+					),
+				)
+				.for("update")
+				.limit(1);
+			if (existing) {
+				if (existing.requestDigest !== digest) return { state: "conflict" };
+				if (existing.status === "completed") return { state: "completed" };
+				if (existing.status === "reserved") return { state: "in_progress" };
+				if (existing.objectRef) return { state: "conflict" };
+				const total =
+					(await usage(tx, owner)) +
+					(await activeReservationUsage(tx, owner, existing.id)) +
+					bytes;
+				if (total > workspaceSnapshotLimitsV1.maxOwnerBytes)
+					throw new WorkspaceSnapshotErrorV1("quota_exceeded");
+				await tx
+					.update(workspaceSnapshotUploadReservations)
+					.set({
+						reservedBytes: bytes,
+						status: "reserved",
+						expiresAt: new Date(expiresAt),
+						updatedAt: new Date(),
+						releasedAt: null,
+					})
+					.where(eq(workspaceSnapshotUploadReservations.id, existing.id));
+				return { state: "reserved", reservationId: existing.id };
+			}
+			const total =
+				(await usage(tx, owner)) +
+				(await activeReservationUsage(tx, owner)) +
+				bytes;
+			if (total > workspaceSnapshotLimitsV1.maxOwnerBytes)
+				throw new WorkspaceSnapshotErrorV1("quota_exceeded");
+			const id = randomUUID();
+			await tx.insert(workspaceSnapshotUploadReservations).values({
+				id,
+				ownerType: owner.kind,
+				ownerId: owner.id,
+				idempotencyKey: key,
+				requestDigest: digest,
+				reservedBytes: bytes,
+				status: "reserved",
+				expiresAt: new Date(expiresAt),
+			});
+			return { state: "reserved", reservationId: id };
+		});
+	}
+	#releaseUploadReservation(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		auth?: Authorization,
+	) {
+		return this.#run(owner, "agent:create", auth, async (tx) => {
+			await tx
+				.update(workspaceSnapshotUploadReservations)
+				.set({
+					status: "released",
+					releasedAt: new Date(),
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(workspaceSnapshotUploadReservations.id, reservationId),
+						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
+						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
+						eq(workspaceSnapshotUploadReservations.status, "reserved"),
+					),
+				);
+		});
+	}
+	#attachUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+		objectVersion: string,
+		auth?: Authorization,
+	) {
+		return this.#run(owner, "agent:create", auth, async (tx) => {
+			const updated = await tx
+				.update(workspaceSnapshotUploadReservations)
+				.set({ objectRef, objectVersion, updatedAt: new Date() })
+				.where(
+					and(
+						eq(workspaceSnapshotUploadReservations.id, reservationId),
+						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
+						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
+						eq(workspaceSnapshotUploadReservations.status, "reserved"),
+					),
+				)
+				.returning({ id: workspaceSnapshotUploadReservations.id });
+			if (!updated[0]) throw new WorkspaceSnapshotErrorV1("unavailable");
+		});
 	}
 	#create(
 		value: WorkspaceSnapshotRecordV1,
@@ -337,6 +553,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 		key: string,
 		digest: string,
 		auth?: Authorization,
+		reservationId?: string,
 	) {
 		validateUpload(value, owner, digest);
 		return this.#run(owner, "agent:create", auth, async (tx) => {
@@ -347,10 +564,31 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				return existing.record;
 			}
 			if (
+				!reservationId &&
 				(await usage(tx, owner)) + value.sizeBytes >
-				workspaceSnapshotLimitsV1.maxOwnerBytes
+					workspaceSnapshotLimitsV1.maxOwnerBytes
 			)
 				throw new WorkspaceSnapshotErrorV1("quota_exceeded");
+			if (reservationId) {
+				const [reservation] = await tx
+					.select()
+					.from(workspaceSnapshotUploadReservations)
+					.where(
+						and(
+							eq(workspaceSnapshotUploadReservations.id, reservationId),
+							eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
+							eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
+							eq(workspaceSnapshotUploadReservations.status, "reserved"),
+							eq(workspaceSnapshotUploadReservations.requestDigest, digest),
+							sql`${workspaceSnapshotUploadReservations.expiresAt} > now()`,
+						),
+					)
+					.for("update")
+					.limit(1);
+				if (!reservation) throw new WorkspaceSnapshotErrorV1("unavailable");
+				if (value.sizeBytes > reservation.reservedBytes)
+					throw new WorkspaceSnapshotErrorV1("quota_exceeded");
+			}
 			await tx.execute(
 				sql`select pg_advisory_xact_lock(hashtextextended(${value.objectRef} || ':' || ${value.objectVersion}, 0))`,
 			);
@@ -403,6 +641,15 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					source: row.source,
 				},
 			);
+			if (reservationId)
+				await tx
+					.update(workspaceSnapshotUploadReservations)
+					.set({
+						status: "completed",
+						snapshotId: row.id,
+						updatedAt: new Date(),
+					})
+					.where(eq(workspaceSnapshotUploadReservations.id, reservationId));
 			return record(tx, row);
 		});
 	}

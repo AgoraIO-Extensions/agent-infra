@@ -154,6 +154,7 @@ export {
 export {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
 import {

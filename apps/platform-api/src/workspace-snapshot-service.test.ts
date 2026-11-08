@@ -91,6 +91,14 @@ async function fixture() {
 		readOnly: { kind: "user", id: "same-id", scopes: ["agent:read"] },
 	};
 	const records = new Map<string, WorkspaceSnapshotRecordV1>();
+	const reservations = new Map<
+		string,
+		{
+			digest: string;
+			id: string;
+			status: "reserved" | "completed" | "released";
+		}
+	>();
 	const idempotency = new Map<
 		string,
 		{ requestDigest: string; record: WorkspaceSnapshotRecordV1 }
@@ -125,6 +133,40 @@ async function fixture() {
 		owner: WorkspaceSnapshotPrincipalV1,
 	) => record.ownerId === owner.id && record.ownerType === owner.kind;
 	const store = {
+		reserveUpload: vi.fn(
+			async (
+				_owner: WorkspaceSnapshotPrincipalV1,
+				key: string,
+				requestDigest: string,
+				bytes: number,
+			) => {
+				const existing = reservations.get(key);
+				if (existing) {
+					if (existing.digest !== requestDigest)
+						return { state: "conflict" as const };
+					if (existing.status === "completed")
+						return { state: "completed" as const };
+					if (existing.status === "reserved")
+						return { state: "in_progress" as const };
+				}
+				if (ownerStoredBytes + bytes > 10 * 1024 ** 3)
+					throw new WorkspaceSnapshotErrorV1("quota_exceeded");
+				const id = randomUUID();
+				reservations.set(key, {
+					digest: requestDigest,
+					id,
+					status: "reserved",
+				});
+				return { state: "reserved" as const, reservationId: id };
+			},
+		),
+		releaseUploadReservation: vi.fn(
+			async (_owner: WorkspaceSnapshotPrincipalV1, reservationId: string) => {
+				for (const value of reservations.values())
+					if (value.id === reservationId) value.status = "released";
+			},
+		),
+		attachUploadObject: vi.fn(async () => undefined),
 		findIdempotency: vi.fn(
 			async (owner: WorkspaceSnapshotPrincipalV1, key: string) =>
 				idempotency.get(ownerKey(owner, key)) ?? null,
@@ -135,6 +177,7 @@ async function fixture() {
 				owner: WorkspaceSnapshotPrincipalV1,
 				key: string,
 				requestDigest: string,
+				_reservationId?: string,
 			) => {
 				const original = idempotency.get(ownerKey(owner, key));
 				if (original) {
@@ -144,6 +187,8 @@ async function fixture() {
 				}
 				records.set(record.snapshotId, record);
 				idempotency.set(ownerKey(owner, key), { requestDigest, record });
+				const reservation = reservations.get(key);
+				if (reservation) reservation.status = "completed";
 				return record;
 			},
 		),
@@ -202,6 +247,7 @@ async function fixture() {
 		objects,
 		idempotency,
 		records,
+		reservations,
 		setOwnerUsage: (bytes: number) => {
 			ownerStoredBytes = bytes;
 		},
@@ -272,46 +318,31 @@ describe("workspace snapshot upload service with real file spool", () => {
 		expect(await readdir(f.directory)).toEqual([]);
 	});
 
-	it("replays a concurrent commit that fills the owner quota after the initial read", async () => {
+	it("reserves quota before an upload can fill the owner quota", async () => {
 		const f = await fixture();
 		const original = await f.service.upload(f.upload());
 		f.setOwnerUsage(10 * 1024 ** 3);
-		f.store.findIdempotency.mockResolvedValueOnce(null);
-		expect(await f.service.upload(f.upload())).toEqual({
-			record: original.record,
-			replayed: true,
-		});
+		await expect(
+			f.service.upload(f.upload("alice", "new", "quota-race")),
+		).rejects.toMatchObject({ code: "quota_exceeded" });
+		expect(original.record.snapshotId).toBeTruthy();
 		expect(f.storage.upload).toHaveBeenCalledOnce();
 	});
 
 	it("cleans only the redundant exact object version when concurrent uploads replay", async () => {
 		const f = await fixture();
-		const create = f.store.create.getMockImplementation();
-		if (!create) throw new Error("missing fixture create");
-		let arrivals = 0;
-		let release: () => void = () => {};
-		const barrier = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		f.store.create.mockImplementation(async (...args) => {
-			if (++arrivals === 2) release();
-			await barrier;
-			return create(...args);
-		});
-		const results = await Promise.all([
+		const results = await Promise.allSettled([
 			f.service.upload(f.upload()),
 			f.service.upload(f.upload()),
 		]);
-		expect(results[0]?.record.snapshotId).toBe(results[1]?.record.snapshotId);
-		expect(results.map((result) => result.replayed).sort()).toEqual([
-			false,
-			true,
-		]);
+		expect(
+			results.filter((result) => result.status === "fulfilled"),
+		).toHaveLength(1);
+		expect(
+			results.filter((result) => result.status === "rejected"),
+		).toHaveLength(1);
 		expect(f.objects.size).toBe(1);
-		expect(f.storage.remove).toHaveBeenCalledOnce();
-		const [ref, version] = f.storage.remove.mock.calls[0] ?? [];
-		expect(ref).not.toBe(results[0]?.record.objectRef);
-		expect(version).toBeTruthy();
+		expect(f.storage.remove).not.toHaveBeenCalled();
 		expect(await readdir(f.directory)).toEqual([]);
 	});
 
