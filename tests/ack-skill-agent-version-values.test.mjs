@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
 
@@ -101,4 +110,52 @@ test("ACK Skill Hub projects the pinned scanner and namespace-local object store
 	assert.equal(storage.containers[0].image, api.containers[0].image);
 	const pvc = resources.find((x) => x.kind === "PersistentVolumeClaim");
 	assert.equal(pvc.metadata.annotations["helm.sh/resource-policy"], "keep");
+});
+
+test("scanner projection copies signature files without image home-directory files", () => {
+	const result = render(
+		"--set",
+		"skillHub.enabled=true",
+		"--set-string",
+		"agentVersion=v1",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const api = parseAllDocuments(result.stdout)
+		.map((doc) => doc.toJSON())
+		.find(
+			(x) => x.kind === "Deployment" && x.metadata.name === "agent-infra-api",
+		);
+	const copy =
+		api.spec.template.spec.initContainers[0].args[0].match(
+			/for file[\s\S]*?done/,
+		)[0];
+	const root = mkdtempSync(join(tmpdir(), "ack-skill-signatures-"));
+	try {
+		const source = join(root, "source");
+		const target = join(root, "target");
+		mkdirSync(source);
+		mkdirSync(target);
+		for (const name of [
+			"main.cvd",
+			"daily.cld",
+			".bashrc",
+			".profile",
+			"freshclam.dat",
+		])
+			writeFileSync(join(source, name), "signature projection test");
+		const copied = spawnSync(
+			"sh",
+			[
+				"-ec",
+				copy
+					.replaceAll("/var/lib/clamav", source)
+					.replaceAll("/scanner/db", target),
+			],
+			{ encoding: "utf8" },
+		);
+		assert.equal(copied.status, 0, copied.stderr);
+		assert.deepEqual(readdirSync(target).sort(), ["daily.cld", "main.cvd"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
