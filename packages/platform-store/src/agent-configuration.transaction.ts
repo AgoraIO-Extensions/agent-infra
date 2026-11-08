@@ -6,6 +6,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
+import { WorkspaceSnapshotBindingErrorV1 } from "@agent-infra/platform-core";
 import { and, eq, notInArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
@@ -541,6 +542,11 @@ export class PostgresAgentConfigurationTransactionV1
 			if (error instanceof StaleAgentConfigurationCommit) {
 				return { outcome: "stale" };
 			}
+			if (
+				error instanceof WorkspaceSnapshotBindingErrorV1 &&
+				(error.code === "not_found" || error.code === "forbidden")
+			)
+				throw error;
 			if (error instanceof AgentConfigurationStoreError) throw error;
 			throw new AgentConfigurationStoreError();
 		}

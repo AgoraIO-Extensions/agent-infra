@@ -298,18 +298,30 @@ it("uses the assembled V2 reader and real configuration transaction for attach, 
 		await db`select snapshot_id from platform.workspace_snapshot_bindings where agent_id=${agentId} and configuration_revision=3`,
 	).toEqual([]);
 });
-it("rejects a foreign snapshot without advancing or partially binding the Agent", async () => {
-	const agentId = await createAgent(await snapshot(ownerId));
-	const foreign = await snapshot(randomUUID());
-	const refused = await update(agentId, [
-		{ snapshotId: foreign, name: "foreign" },
-	]);
-	expect(refused.status).toBeGreaterThanOrEqual(400);
-	expect(await refused.text()).not.toContain(foreign);
-	const [agent] =
-		await db`select current_configuration_revision from platform.agents where id=${agentId}`;
-	expect(Number(agent?.current_configuration_revision)).toBe(1);
-	expect(
-		await db`select snapshot_id from platform.workspace_snapshot_bindings where agent_id=${agentId} and configuration_revision=2`,
-	).toEqual([]);
-});
+it.each(["foreign", "missing"] as const)(
+	"hides a %s snapshot without advancing or partially binding the Agent",
+	async (kind) => {
+		const original = await snapshot(ownerId);
+		const agentId = await createAgent(original);
+		const refusedId =
+			kind === "foreign" ? await snapshot(randomUUID()) : randomUUID();
+		const valid = await snapshot(ownerId);
+		const refused = await update(agentId, [
+			{ snapshotId: valid, name: "valid" },
+			{ snapshotId: refusedId, name: "refused" },
+		]);
+		expect(refused.status).toBe(404);
+		const body = await refused.text();
+		expect(body).toContain("RESOURCE_UNAVAILABLE");
+		expect(body).not.toContain(refusedId);
+		const [agent] =
+			await db`select current_configuration_revision from platform.agents where id=${agentId}`;
+		expect(Number(agent?.current_configuration_revision)).toBe(1);
+		expect(
+			await db`select revision::int as revision from platform.agent_configuration_revisions where agent_id=${agentId}`,
+		).toEqual([{ revision: 1 }]);
+		expect(
+			await db`select snapshot_id,configuration_revision::int as configuration_revision from platform.workspace_snapshot_bindings where agent_id=${agentId}`,
+		).toEqual([{ snapshot_id: original, configuration_revision: 1 }]);
+	},
+);
