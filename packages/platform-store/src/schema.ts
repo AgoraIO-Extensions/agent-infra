@@ -60,6 +60,7 @@ import { browserSessions } from "./schema-sessions";
 import {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
 export {
