@@ -173,6 +173,10 @@ function boundedError(error: unknown): WorkspaceSnapshotServiceErrorV1 {
 
 /** Only explicit transactional refusals prove this upload did not commit. */
 function rejectedBeforeCommit(error: unknown): boolean {
+	if (error instanceof PersonalApiCredentialErrorV1)
+		return ["authentication_required", "forbidden", "not_found"].includes(
+			error.code,
+		);
 	return (
 		error instanceof WorkspaceSnapshotErrorV1 &&
 		[
@@ -269,6 +273,7 @@ export function createWorkspaceSnapshotServiceV1(
 				| undefined;
 			let pendingObject: { ref: string; version: string } | undefined;
 			let reservationId: string | undefined;
+			let reservationOwner: WorkspaceSnapshotPrincipalV1 | undefined;
 			let safeToRemove = true;
 			async function removePendingObject() {
 				if (!pendingObject) return;
@@ -316,8 +321,10 @@ export function createWorkspaceSnapshotServiceV1(
 					reservation.state === "in_progress"
 				)
 					throw new WorkspaceSnapshotServiceErrorV1("conflict");
-				if (reservation.state === "reserved")
+				if (reservation.state === "reserved") {
 					reservationId = reservation.reservationId;
+					reservationOwner = principal;
+				}
 				spool = await spools.spool(
 					input.body,
 					workspaceSnapshotLimitsV1.maxArchiveBytes,
@@ -360,6 +367,8 @@ export function createWorkspaceSnapshotServiceV1(
 						replayed: true,
 					};
 				}
+				if (!reservationId)
+					throw new WorkspaceSnapshotServiceErrorV1("unavailable");
 				signal.throwIfAborted();
 				const objectRef = randomUUID();
 				const stored = await options.storage.upload({
@@ -435,7 +444,6 @@ export function createWorkspaceSnapshotServiceV1(
 					saved = readback.record;
 					reconciled = true;
 				}
-				reservationId = undefined;
 				validateSavedRecord(saved, principal, archive, provenance.source);
 				if (saved.objectRef === objectRef) {
 					if (
@@ -443,6 +451,7 @@ export function createWorkspaceSnapshotServiceV1(
 						saved.snapshotId !== record.snapshotId
 					)
 						throw new WorkspaceSnapshotServiceErrorV1("unavailable");
+					reservationId = undefined;
 					pendingObject = undefined;
 					return { record: saved, replayed: reconciled };
 				}
@@ -450,13 +459,19 @@ export function createWorkspaceSnapshotServiceV1(
 				// Cleanup is attempted once; a failure must remain visible for later reconciliation.
 				safeToRemove = false;
 				await removePendingObject();
+				if (reservationId)
+					await options.store.releaseUploadReservation(
+						principal,
+						reservationId,
+					);
+				reservationId = undefined;
 				return { record: saved, replayed: true };
 			} catch (error) {
-				if (reservationId && safeToRemove) {
+				if (reservationId && reservationOwner && safeToRemove) {
 					try {
 						if (pendingObject) await removePendingObject();
 						await options.store.releaseUploadReservation(
-							await principalFor(input.material, "agent:create"),
+							reservationOwner,
 							reservationId,
 						);
 						reservationId = undefined;

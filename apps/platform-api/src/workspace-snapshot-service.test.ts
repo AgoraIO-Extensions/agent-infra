@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ObjectStorageDataV1 } from "@agent-infra/object-storage";
 import {
+	PersonalApiCredentialErrorV1,
 	WorkspaceSnapshotErrorV1,
 	type WorkspaceSnapshotRecordV1,
 } from "@agent-infra/platform-core";
@@ -135,12 +136,13 @@ async function fixture() {
 	const store = {
 		reserveUpload: vi.fn(
 			async (
-				_owner: WorkspaceSnapshotPrincipalV1,
+				owner: WorkspaceSnapshotPrincipalV1,
 				key: string,
 				requestDigest: string,
 				bytes: number,
 			) => {
-				const existing = reservations.get(key);
+				const scope = ownerKey(owner, key);
+				const existing = reservations.get(scope);
 				if (existing) {
 					if (existing.digest !== requestDigest)
 						return { state: "conflict" as const };
@@ -152,7 +154,7 @@ async function fixture() {
 				if (ownerStoredBytes + bytes > 10 * 1024 ** 3)
 					throw new WorkspaceSnapshotErrorV1("quota_exceeded");
 				const id = randomUUID();
-				reservations.set(key, {
+				reservations.set(scope, {
 					digest: requestDigest,
 					id,
 					status: "reserved",
@@ -187,7 +189,7 @@ async function fixture() {
 				}
 				records.set(record.snapshotId, record);
 				idempotency.set(ownerKey(owner, key), { requestDigest, record });
-				const reservation = reservations.get(key);
+				const reservation = reservations.get(ownerKey(owner, key));
 				if (reservation) reservation.status = "completed";
 				return record;
 			},
@@ -342,7 +344,7 @@ describe("workspace snapshot upload service with real file spool", () => {
 		});
 	});
 
-	it("cleans only the redundant exact object version when concurrent uploads replay", async () => {
+	it("rejects a concurrent duplicate before it writes another object", async () => {
 		const f = await fixture();
 		const results = await Promise.allSettled([
 			f.service.upload(f.upload()),
@@ -441,8 +443,29 @@ describe("workspace snapshot upload service with real file spool", () => {
 		expect(f.store.create).not.toHaveBeenCalled();
 		expect(f.storage.remove).toHaveBeenCalledOnce();
 		expect(f.objects.size).toBe(0);
+		expect(f.store.releaseUploadReservation).toHaveBeenCalledOnce();
 		expect(await readdir(f.directory)).toEqual([]);
 	});
+	it.each(["authentication_required", "forbidden", "not_found"] as const)(
+		"cleans a transaction rejected for %s without requiring an active credential",
+		async (code) => {
+			const f = await fixture();
+			f.store.create.mockImplementationOnce(async () => {
+				f.options.credentials.resolve.mockResolvedValue(null);
+				throw new PersonalApiCredentialErrorV1(code);
+			});
+			await expect(f.service.upload(f.upload())).rejects.toMatchObject({
+				code: code === "authentication_required" ? code : "forbidden",
+			});
+			expect(f.storage.remove).toHaveBeenCalledOnce();
+			expect(f.store.releaseUploadReservation).toHaveBeenCalledOnce();
+			expect(f.objects.size).toBe(0);
+			expect([...f.reservations.values()].map((value) => value.status)).toEqual(
+				["released"],
+			);
+			expect(await readdir(f.directory)).toEqual([]);
+		},
+	);
 
 	it("uses the concrete spool by default and cancels aborted uploads before storage writes", async () => {
 		const f = await fixture();

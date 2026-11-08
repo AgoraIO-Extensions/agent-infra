@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
 	collect: vi.fn(),
 	close: vi.fn(),
 	metrics: vi.fn(),
+	recover: vi.fn(),
+	closeUploads: vi.fn(),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWorkspaceSnapshotStoreV1: class {
@@ -11,12 +13,22 @@ vi.mock("@agent-infra/platform-store", () => ({
 		readGcMetrics = mocks.metrics;
 		close = mocks.close;
 	},
+	PostgresWorkspaceSnapshotUploadStoreV1: class {
+		collectExpiredUploadReservations = mocks.recover;
+		close = mocks.closeUploads;
+	},
 }));
 
 import { startWorkspaceSnapshotGcV1 } from "./workspace-snapshot-gc.js";
 
 beforeEach(() => {
 	mocks.metrics.mockResolvedValue({ storedBytes: 0, oldestEligibleDelayMs: 0 });
+	mocks.recover.mockResolvedValue({
+		scanned: 0,
+		released: 0,
+		reconciled: 0,
+		failed: 0,
+	});
 });
 
 afterEach(() => {
@@ -61,10 +73,46 @@ it("uses exact object versions, avoids overlap, and drains before closing", asyn
 		durationMs: 5000,
 		storedBytes: 0,
 		oldestEligibleDelayMs: 0,
+		uploadReservations: { scanned: 0, released: 0, reconciled: 0, failed: 0 },
 	});
 	await vi.advanceTimersByTimeAsync(10000);
 	expect(mocks.collect).toHaveBeenCalledTimes(1);
 });
+it("retries expired upload cleanup without exposing object identities or raw errors", async () => {
+	vi.useFakeTimers();
+	const observe = vi.fn();
+	const remove = vi.fn(async () => {});
+	mocks.collect.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
+	mocks.recover
+		.mockRejectedValueOnce(new Error("private-storage-detail"))
+		.mockImplementationOnce(async (input) => {
+			await input.deleter.deleteObjectVersion({
+				objectRef: "private-ref",
+				objectVersion: "private-version",
+			});
+			return { scanned: 1, released: 1, reconciled: 0, failed: 0 };
+		});
+	const gc = startWorkspaceSnapshotGcV1({
+		databaseUrl: "unused",
+		storage: { remove },
+		policy: { retentionMs: 1000, intervalMs: 1000, observe },
+	});
+	await vi.advanceTimersByTimeAsync(2000);
+	expect(mocks.recover).toHaveBeenCalledTimes(2);
+	expect(remove).toHaveBeenCalledWith("private-ref", "private-version");
+	expect(observe.mock.calls[0]?.[0]).toMatchObject({
+		outcome: "unavailable",
+		uploadReservations: { failed: 1 },
+	});
+	expect(observe.mock.calls[1]?.[0]).toMatchObject({
+		outcome: "completed",
+		uploadReservations: { released: 1, failed: 0 },
+	});
+	expect(JSON.stringify(observe.mock.calls)).not.toContain("private-");
+	await gc.close();
+	expect(mocks.closeUploads).toHaveBeenCalledOnce();
+});
+
 it("retries after failure and does not expose the storage error", async () => {
 	vi.useFakeTimers();
 	const observe = vi.fn();

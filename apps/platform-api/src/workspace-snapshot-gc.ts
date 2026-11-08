@@ -1,6 +1,15 @@
 import type { ObjectStorageDataV1 } from "@agent-infra/object-storage";
 import type { WorkspaceSnapshotGcResultV1 } from "@agent-infra/platform-core";
-import { PostgresWorkspaceSnapshotStoreV1 } from "@agent-infra/platform-store";
+import {
+	PostgresWorkspaceSnapshotStoreV1,
+	PostgresWorkspaceSnapshotUploadStoreV1,
+} from "@agent-infra/platform-store";
+
+type UploadRecoveryResult = Awaited<
+	ReturnType<
+		PostgresWorkspaceSnapshotUploadStoreV1["collectExpiredUploadReservations"]
+	>
+>;
 
 export interface WorkspaceSnapshotGcDeploymentV1 {
 	readonly retentionMs: number;
@@ -12,6 +21,7 @@ export interface WorkspaceSnapshotGcDeploymentV1 {
 			storedBytes: number | null;
 			oldestEligibleDelayMs: number | null;
 			outcome: "completed" | "unavailable";
+			uploadReservations: UploadRecoveryResult;
 		},
 	) => void;
 }
@@ -32,11 +42,29 @@ export function startWorkspaceSnapshotGcV1(input: {
 	)
 		throw new Error("WORKSPACE_SNAPSHOT_GC_CONFIGURATION_INVALID");
 	const store = new PostgresWorkspaceSnapshotStoreV1(input.databaseUrl);
+	const uploads = new PostgresWorkspaceSnapshotUploadStoreV1(input.databaseUrl);
 	let closed = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let running: Promise<void> = Promise.resolve();
 	async function run() {
 		const start = Date.now();
+		let uploadReservations: UploadRecoveryResult;
+		try {
+			uploadReservations = await uploads.collectExpiredUploadReservations({
+				now: new Date(),
+				deleter: {
+					deleteObjectVersion: ({ objectRef, objectVersion }) =>
+						input.storage.remove(objectRef, objectVersion),
+				},
+			});
+		} catch {
+			uploadReservations = {
+				scanned: 0,
+				released: 0,
+				reconciled: 0,
+				failed: 1,
+			};
+		}
 		let result: WorkspaceSnapshotGcResultV1 & {
 			outcome: "completed" | "unavailable";
 		};
@@ -55,6 +83,8 @@ export function startWorkspaceSnapshotGcV1(input: {
 		} catch {
 			result = { scanned: 0, deleted: 0, failed: 1, outcome: "unavailable" };
 		}
+		if (uploadReservations.failed > 0)
+			result = { ...result, outcome: "unavailable" };
 		let metrics: {
 			storedBytes: number | null;
 			oldestEligibleDelayMs: number | null;
@@ -72,6 +102,7 @@ export function startWorkspaceSnapshotGcV1(input: {
 				policy.observe({
 					...result,
 					...metrics,
+					uploadReservations,
 					durationMs: Date.now() - start,
 				}),
 			);
@@ -92,7 +123,7 @@ export function startWorkspaceSnapshotGcV1(input: {
 			closed = true;
 			clearTimeout(timer);
 			await running;
-			await store.close();
+			await Promise.all([store.close(), uploads.close()]);
 		},
 	};
 }
