@@ -576,7 +576,7 @@ describe("workspace snapshot bindings on real configuration transactions", () =>
 			const before = await configurationEffects(result.agentId);
 			await expect(
 				replaceSnapshots(result.agentId, repo.id, next, "coowner"),
-			).rejects.toMatchObject({ code: "persistence_failed" });
+			).rejects.toMatchObject({ code: "not_authorized" });
 			expect(await configurationEffects(result.agentId)).toEqual(before);
 		},
 	);
@@ -660,7 +660,7 @@ describe("workspace snapshot bindings on real configuration transactions", () =>
 		const before = await configurationEffects(created.agentId);
 		await expect(
 			replaceSnapshots(created.agentId, upload.id, [], "same-id"),
-		).rejects.toMatchObject({ code: "persistence_failed" });
+		).rejects.toMatchObject({ code: "not_authorized" });
 		expect(await configurationEffects(created.agentId)).toEqual(before);
 	});
 	it("restores the uploader's original binding through a new configuration revision", async () => {
