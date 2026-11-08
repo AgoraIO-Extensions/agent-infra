@@ -14016,7 +14016,7 @@ it("revokes model access for every alias when a shared native RPC fails", async 
 interface StoredRuntimeRequirements {
 	schemaVersion: number;
 	provenance: Record<string, string | number>;
-	artifacts: Record<string, Record<string, string>>;
+	artifacts: Record<string, Record<string, string | number>>;
 	lane: string;
 	barrier: Record<string, string | number>;
 }
@@ -14078,7 +14078,9 @@ const runtimeRequirementMutations: RuntimeRequirementMutation[] = [
 						current[field] =
 							field === "name"
 								? "codex-other-archive"
-								: `sha256:${"f".repeat(64)}`;
+								: field === "assetId"
+									? Number(current[field]) + 1
+									: `sha256:${"f".repeat(64)}`;
 						return binding;
 					},
 				],

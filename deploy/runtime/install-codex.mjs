@@ -70,14 +70,57 @@ function retryableTransportError(error) {
 	}
 	return false;
 }
-async function downloadBytes(url, expected) {
+async function downloadBytes(url, expected, pinnedAssetId) {
 	const signal = AbortSignal.timeout(downloadBudgetMs);
 	const unavailable = new Error("Codex release asset unavailable");
+	const validAssetId = (value) => Number.isSafeInteger(value) && value > 0;
+	const officialAssetFallback = async (fallbackAssetId) => {
+		const parsed = new URL(url);
+		const match = /^\/openai\/codex\/releases\/download\/([^/]+)\/([^/]+\.tar\.gz)$/u.exec(parsed.pathname);
+		if (!match) throw unavailable;
+		const [, tag, assetName] = match;
+		let assetId = validAssetId(fallbackAssetId) ? fallbackAssetId : undefined;
+		try {
+			const metadata = await fetch(
+				`https://api.github.com/repos/openai/codex/releases/tags/${encodeURIComponent(tag)}`,
+				{ signal, headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "agent-infra-codex-installer" } },
+			);
+			if (metadata.ok) {
+				const releaseMetadata = await metadata.json();
+				if (releaseMetadata?.tag_name !== tag) throw unavailable;
+				const assets = Array.isArray(releaseMetadata.assets)
+					? releaseMetadata.assets.filter((asset) => asset?.name === assetName)
+					: [];
+				if (assets.length !== 1 || !validAssetId(assets[0]?.id)) throw unavailable;
+				assetId = assets[0].id;
+			}
+		} catch (error) {
+			if (error === unavailable) throw error;
+		}
+		if (!validAssetId(assetId)) throw unavailable;
+		const response = await fetch(
+			`https://api.github.com/repos/openai/codex/releases/assets/${assetId}?download=1&cache=${Date.now()}`,
+			{
+				signal,
+				headers: {
+					Accept: "application/octet-stream",
+					"X-GitHub-Api-Version": "2022-11-28",
+					"User-Agent": "agent-infra-codex-installer",
+					"Cache-Control": "no-cache",
+				},
+			},
+		);
+		if (!response.ok) throw unavailable;
+		const bytes = Buffer.from(await response.arrayBuffer());
+		if (sha256(bytes) !== expected) throw new Error("Codex release asset checksum mismatch");
+		return bytes;
+	};
 	for (let attempt = 1; attempt <= downloadAttempts; attempt++) {
 		try {
 			const response = await fetch(url, { signal });
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => undefined);
+				if (response.status >= 500) return await officialAssetFallback(pinnedAssetId);
 				throw unavailable;
 			}
 			const bytes = Buffer.from(await response.arrayBuffer());
@@ -94,8 +137,8 @@ async function downloadBytes(url, expected) {
 	throw new Error("Codex release asset download failed");
 }
 
-async function download(url, expected, path) {
-	await writeFile(path, await downloadBytes(url, expected));
+async function download(url, expected, path, pinnedAssetId) {
+	await writeFile(path, await downloadBytes(url, expected, pinnedAssetId));
 }
 
 const [architecture, destination, ...extra] = process.argv.slice(2);
@@ -110,6 +153,8 @@ if (release.schemaVersion !== undefined || release.distribution !== undefined) {
 for (const executable of [artifact, codeModeHostArtifact])
 	if (
 		typeof executable?.name !== "string" ||
+		(executable?.assetId !== undefined &&
+			(!Number.isSafeInteger(executable.assetId) || executable.assetId <= 0)) ||
 		!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(executable.name)
 	)
 		throw new Error("Invalid Codex executable archive member");
@@ -137,6 +182,7 @@ try {
 				`https://github.com/openai/codex/releases/download/${release.provenance.upstreamTag}/${executable.name}.tar.gz`,
 				executable.archiveSha256,
 				archive,
+				executable.assetId,
 			);
 			execFileSync("tar", ["-xzf", archive, "-C", directory, executable.name], {
 				stdio: "ignore",

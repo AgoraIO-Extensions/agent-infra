@@ -48,8 +48,10 @@ function officialRelease(bytes) {
 			[release.codeModeHostArtifacts[architecture], "codex-code-mode-host"],
 		])
 			if (
-				!hasKeys(artifact, "archiveSha256,executableSha256,name") ||
+				!hasKeys(artifact, "archiveSha256,assetId,executableSha256,name") ||
 				artifact.name !== `${name}-${target}-unknown-linux-musl` ||
+				!Number.isSafeInteger(artifact.assetId) ||
+				artifact.assetId <= 0 ||
 				!digestPattern.test(artifact.archiveSha256) ||
 				!digestPattern.test(artifact.executableSha256)
 			)
