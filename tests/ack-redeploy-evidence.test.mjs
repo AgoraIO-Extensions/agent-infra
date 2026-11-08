@@ -366,6 +366,47 @@ test("plan consumes the original RuntimeHost artifact and rejects invalid input 
 		]);
 		const source = git(["rev-parse", "HEAD"]);
 		const f = fixture();
+		for (const [index, component] of [
+			[1, "api"],
+			[2, "worker"],
+		]) {
+			const spec = f.documents[index].spec.template.spec;
+			const container = spec.containers[0];
+			container.name = `platform-${component}`;
+			container.env.push({
+				name:
+					component === "api"
+						? "PLATFORM_API_CONFIGURATION_MODULE"
+						: "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+				value:
+					component === "api"
+						? "file:///app/deployment/configuration.mjs"
+						: "file:///app/dist/deployment.mjs",
+			});
+			container.volumeMounts =
+				component === "api"
+					? [
+							{
+								name: "configuration",
+								mountPath: "/app/deployment",
+								readOnly: true,
+							},
+						]
+					: [
+							{
+								name: "configuration",
+								mountPath: "/app/dist/configuration.mjs",
+								subPath: "configuration.mjs",
+								readOnly: true,
+							},
+						];
+			spec.volumes = [
+				{
+					name: "configuration",
+					secret: { secretName: `agent-infra-${component}-configuration-v2` },
+				},
+			];
+		}
 		const platform = join(directory, "platform.json");
 		const runtime = join(directory, "runtime-host.json");
 		const values = join(directory, "values.yaml");
@@ -390,7 +431,7 @@ esac
 		await writeFile(
 			join(bin, "kubectl"),
 			`#!/bin/sh
-printf "called\\n" >> "$ACK_TEST_LOG"
+printf "%s\\n" "$*" >> "$ACK_TEST_LOG"
 if [ "$ACK_TEST_CLUSTER_FAIL" = 1 ]; then echo "TOKEN=private-canary" >&2; exit 1; fi
 case " $* " in
 *" version "*) printf '{"serverVersion":{"gitVersion":"v1.36.1"}}';;
@@ -458,12 +499,12 @@ esac
 				objects: [
 					{
 						kind: "Secret",
-						name: "agent-infra-worker-configuration",
+						name: "agent-infra-worker-configuration-v2",
 						files: { "configuration.mjs": workerConfig },
 					},
 					{
 						kind: "Secret",
-						name: "agent-infra-api-configuration",
+						name: "agent-infra-api-configuration-v2",
 						files: { "configuration.mjs": apiConfig },
 					},
 				],
@@ -516,10 +557,13 @@ esac
 			).failureCode,
 			"CONFIG_RUNTIME_DIGEST_MISMATCH",
 		);
-		assert(
-			!(await readdir(directory)).includes("cluster.log"),
-			"all must reject configuration before any cluster call",
+		const calls = (await readFile(log, "utf8")).trim().split("\n");
+		assert.equal(
+			calls.length,
+			1,
+			"all only reads the cluster version before rejecting configuration",
 		);
+		assert.match(calls[0], / version --request-timeout=10s -o json$/);
 		const failure = run({ ACK_TEST_CLUSTER_FAIL: "1" });
 		assert.notEqual(failure.status, 0);
 		assert.match(failure.stderr, /ACK_CLUSTER_VERSION_READ_FAILED/);

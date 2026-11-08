@@ -1453,6 +1453,7 @@ set -euo pipefail
 require_source_tuple() { echo source; }
 require_file() { [[ -n "$2" ]]; }
 prepare_evidence() { :; }
+render_manifest() { :; }
 configuration_source_preflight() { echo config-preflight; }
 bootstrap_database() { echo database; }
 preflight_agent_requests() { echo request-preflight; }
@@ -1618,6 +1619,7 @@ set -euo pipefail
 require_source_tuple() { :; }
 require_file() { [[ -n "$2" ]]; }
 prepare_evidence() { :; }
+render_manifest() { :; }
 configuration_source_preflight() { :; }
 preflight_agent_requests() { :; }
 reserve_plan_preflight() { echo plan; ${failure === "plan" ? "return 1" : ":"}; }

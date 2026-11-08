@@ -156,7 +156,7 @@ configuration_source_preflight() {
 	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$ACK_TEMPLATE_IMAGE_MANIFEST"
 	if ! node --experimental-strip-types "$repo_root/deploy/ack/configuration-source-preflight.ts" \
 		"$ACK_BOOTSTRAP_INPUTS_FILE" "$runtime_manifest" "$ACK_TEMPLATE_IMAGE_MANIFEST" "$source_sha" \
-		"$evidence_dir/configuration-source-preflight.json" >"$evidence_dir/configuration-source-preflight.stdout"; then
+		"$evidence_dir/configuration-source-preflight.json" "$1" >"$evidence_dir/configuration-source-preflight.stdout"; then
 		die "source-bound configuration preflight failed; no Helm write was attempted"
 	fi
 }
@@ -168,7 +168,7 @@ bootstrap_inputs() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
-	configuration_source_preflight
+	configuration_source_preflight "$rendered_manifest"
 	if [[ "$1" == apply ]]; then image_cache_gate; fi
 	node "$repo_root/deploy/ack/bootstrap-inputs.ts" "$1" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" >"$evidence_dir/bootstrap-inputs.json"
 	if [[ "$1" == apply ]]; then
@@ -410,7 +410,7 @@ plan() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
-	configuration_source_preflight
+	configuration_source_preflight "$rendered_manifest"
 	helm lint "$chart_dir" --values "$values_file" --strict >/dev/null 2>&1 || die "HELM_LINT_FAILED"
 	reserve_plan_preflight
 	snapshot plan "$rendered_manifest"
@@ -430,7 +430,7 @@ deploy() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
-	configuration_source_preflight
+	configuration_source_preflight "$rendered_manifest"
 	"$repo_root/deploy/ack/preflight.sh"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
@@ -742,7 +742,12 @@ case "$command" in
 		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 		require_file ACK_LOGIN_BOOTSTRAP_FILE "${ACK_LOGIN_BOOTSTRAP_FILE:-}"
 		prepare_evidence
-		configuration_source_preflight
+		rendered_manifest=$(mktemp)
+		trap 'unlink "$rendered_manifest"' EXIT
+		render_manifest "$rendered_manifest"
+		configuration_source_preflight "$rendered_manifest"
+		unlink "$rendered_manifest"
+		trap - EXIT
 		preflight_agent_requests
 		reserve_plan_preflight
 		image_cache_gate
