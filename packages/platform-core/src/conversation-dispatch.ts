@@ -324,6 +324,29 @@ export function createConversationDispatchUseCaseV1(
 			leaseDurationMs,
 			renewBusinessAuthority,
 		);
+		// #4038: a Host that reports the original Turn as unknown (for example a
+		// Runtime-held Execution) may never end its event stream. The drain then
+		// keeps its lease, so the #3373 budget is never checked again. Stop
+		// reading once the budget is spent; the re-claim settles the Execution.
+		const recoveryDeadline =
+			responseStatus === "unknown" &&
+			!claim.metadataRecovery &&
+			isRuntimeEventOperation(claim.operation)
+				? new AbortController()
+				: undefined;
+		const recoveryTimer = recoveryDeadline
+			? setTimeout(
+					() => recoveryDeadline.abort(),
+					Math.max(
+						0,
+						recoveryBudgetMs -
+							(claim.executionStatus === "unknown"
+								? (claim.recoveryElapsedMs ?? 0)
+								: 0),
+					),
+				)
+			: undefined;
+		recoveryTimer?.unref?.();
 		// Positive Host proof that the original Turn finished. It is persisted
 		// under the live lease like a terminal status response, so the Worker
 		// continues the drain with the control-purpose recovery Grant.
@@ -537,7 +560,9 @@ export function createConversationDispatchUseCaseV1(
 			const iterator = dependencies.runtimeHost
 				.events(
 					eventRequest,
-					eventHeartbeat.signal,
+					recoveryDeadline
+						? AbortSignal.any([eventHeartbeat.signal, recoveryDeadline.signal])
+						: eventHeartbeat.signal,
 					batching ? { beforeRead } : {},
 				)
 				[Symbol.asyncIterator]();
@@ -679,6 +704,16 @@ export function createConversationDispatchUseCaseV1(
 			// an expired business read into a failed Turn.
 			if (!current || (renewalRefused && !terminalCommitPossible))
 				return retryInterruptedDrain();
+			// The re-claim measures the budget again and closes the Execution.
+			if (recoveryDeadline?.signal.aborted && !terminalCommitPossible)
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					"RUNTIME_ACCEPTANCE_UNKNOWN",
+					"unknown",
+					{},
+				);
 			const failure = runtimeFailure(error);
 			return failure.retryable
 				? retry(
@@ -696,6 +731,7 @@ export function createConversationDispatchUseCaseV1(
 						terminalCommitPossible ? {} : rejectedTransition(claim),
 					);
 		} finally {
+			clearTimeout(recoveryTimer);
 			await eventHeartbeat.stop();
 		}
 		if (
