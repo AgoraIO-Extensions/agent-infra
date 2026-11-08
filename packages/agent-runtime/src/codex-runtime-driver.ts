@@ -7495,6 +7495,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				phase === "failed");
 		if (
 			!fact ||
+			(action.toolId !== undefined &&
+				(fact.kind !== "tool" || fact.toolId !== action.toolId)) ||
 			(!validSourceReserve &&
 				!validSourceBind &&
 				phase !== "intent" &&
@@ -11976,6 +11978,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operationRef: prepared.call.operationRef,
 			attemptRef: prepared.call.attemptRef,
 			kind: "tool",
+			...(workspace ? { toolId: "workspace.read_text_file" } : {}),
 		};
 		let deliveryGuard: (() => void) | undefined;
 		const checkDriverCurrent = () => {

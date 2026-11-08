@@ -37,6 +37,7 @@ import {
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
+import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openClaudeRuntimeDriver: vi.fn(),
@@ -1604,6 +1605,33 @@ describe("RuntimeHost environment assembly", () => {
 					revalidate,
 				});
 				expect(authorization).toHaveBeenCalledWith(action);
+				const toolAction = {
+					...action,
+					kind: "tool" as const,
+					toolId: "workspace.read_text_file",
+				};
+				const protection = vi.mocked(assertStandardMcpProcessProtection);
+				protection.mockClear();
+				protection.mockImplementation(() => {
+					throw new Error(
+						"synthetic Connection process protection unavailable",
+					);
+				});
+				try {
+					const local = await openedWith?.authorizeExternalAction?.(toolAction);
+					expect(() => local?.revalidate?.()).not.toThrow();
+					expect(revalidate).toHaveBeenCalledOnce();
+					expect(protection).not.toHaveBeenCalled();
+					const connection = await openedWith?.authorizeExternalAction?.({
+						...toolAction,
+						toolId: "mcp:synthetic-connection-tool",
+					});
+					expect(() => connection?.revalidate?.()).toThrow(
+						"synthetic Connection process protection unavailable",
+					);
+				} finally {
+					protection.mockReset();
+				}
 			} finally {
 				await runtime.close();
 			}

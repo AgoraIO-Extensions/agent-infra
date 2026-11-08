@@ -285,6 +285,8 @@ export interface RuntimeExternalActionAuthorization {
 	readonly operationRef: string;
 	readonly attemptRef: string;
 	readonly kind: "model" | "tool";
+	/** Driver-owned tool identity, checked against the durable operation fact. */
+	readonly toolId?: string;
 	/** Source reservation/binding may arrive after its parent operation has a terminal outcome. */
 	readonly purpose?: "source-reserve" | "source-bind";
 }

@@ -599,6 +599,8 @@ export async function assembleRuntimeHost(
 							await assembledHost.authorizeExternalAction(action);
 						if (
 							action.kind !== "tool" ||
+							// The Driver binds this local reader to its durable tool fact.
+							action.toolId === "workspace.read_text_file" ||
 							connectionConsumer?.status !== "available"
 						)
 							return authorized;
