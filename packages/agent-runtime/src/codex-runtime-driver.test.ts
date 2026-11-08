@@ -14016,7 +14016,7 @@ it("revokes model access for every alias when a shared native RPC fails", async 
 interface StoredRuntimeRequirements {
 	schemaVersion: number;
 	provenance: Record<string, string | number>;
-	artifacts: Record<string, Record<string, string>>;
+	artifacts: Record<string, Record<string, string | number>>;
 	lane: string;
 	barrier: Record<string, string | number>;
 }
