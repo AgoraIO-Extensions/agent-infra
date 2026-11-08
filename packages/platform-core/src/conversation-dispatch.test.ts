@@ -1153,6 +1153,113 @@ describe("bounded unknown recovery", () => {
 		expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
 	});
 
+	// #4038：Runtime 持有的 Execution 没有终态事件，Host 事件流不会结束。drain 一直续租，
+	// 认领时的预算检查不再执行，该 Execution 会一直占用 Agent 并发额度。
+	it.each(["unknown", "running"] as const)(
+		"bounds a re-claimed drain by the recovery budget only while the Host reports %s",
+		async (hostStatus) => {
+			vi.useFakeTimers();
+			const hostSessionRef = "host-session-conversation-1";
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					hostSessionRef,
+					recoveryElapsedMs: 1_000,
+				}),
+			);
+			let reads = 0;
+			let finishStream: (() => void) | undefined;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: vi.fn(),
+				recoverStatus: vi.fn(),
+				async recoverOriginalStatus() {
+					return {
+						schemaVersion: 2,
+						hostSessionRef,
+						executionId: "execution-1",
+						outcome: "found",
+						status: hostStatus,
+					};
+				},
+				renewAuthorization: vi.fn(async () => {}),
+				async *events(_request, signal) {
+					reads++;
+					// Like the Worker client: empty pages until aborted or finished.
+					await new Promise<void>((resolve, reject) => {
+						finishStream = resolve;
+						signal?.addEventListener(
+							"abort",
+							() =>
+								reject(
+									new ConversationRuntimeHostError("RUNTIME_INTERRUPTED", true),
+								),
+							{ once: true },
+						);
+					});
+					yield {
+						schemaVersion: 1,
+						adapterEventKey: "event-completed",
+						executionId: "execution-1",
+						cursor: "cursor-completed",
+						occurredAt: "2026-11-08T00:00:00.000Z",
+						type: "completed",
+						payload: { status: "completed" },
+					};
+				},
+				acknowledge: vi.fn(async () => {}),
+			};
+			const useCase = createConversationDispatchUseCaseV1(
+				{
+					store,
+					authorization: authorization(),
+					runtimeHost,
+					events: new MemoryEvents(store),
+				},
+				{ leaseDurationMs: 300, retryDelayMs: 0, recoveryBudgetMs: 10_000 },
+			);
+			try {
+				let settled = false;
+				const draining = dispatch(useCase).finally(() => {
+					settled = true;
+				});
+				await vi.advanceTimersByTimeAsync(8_999);
+				expect(reads).toBe(1);
+				expect(settled).toBe(false);
+				await vi.advanceTimersByTimeAsync(1);
+				if (hostStatus === "running") {
+					// A Turn the Host still runs is drained as before.
+					expect(settled).toBe(false);
+					finishStream?.();
+					await vi.advanceTimersByTimeAsync(0);
+					await expect(draining).resolves.toMatchObject({
+						outcome: "accepted",
+					});
+					expect(store.current.executionStatus).toBe("completed");
+					return;
+				}
+				await expect(draining).resolves.toEqual({
+					schemaVersion: 1,
+					outcome: "unknown",
+					retryScheduled: true,
+					errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				});
+				expect(store.outboxStatus).toBe("retry_scheduled");
+				expect(store.current.executionStatus).toBe("unknown");
+				// The Store measures the budget again from unknown_since on re-claim.
+				store.current = { ...store.current, recoveryElapsedMs: 10_000 };
+				await expect(dispatch(useCase)).resolves.toEqual({
+					schemaVersion: 1,
+					outcome: "rejected",
+				});
+				expect(reads).toBe(1);
+				expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
+				expect(store.current.executionStatus).toBe("failed");
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
 	it.each([0, 86_400_001, 1.5])(
 		"rejects an invalid recovery budget %s",
 		(recoveryBudgetMs) => {
