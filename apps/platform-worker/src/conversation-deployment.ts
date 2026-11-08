@@ -1440,25 +1440,18 @@ export function createProductionSessionSandboxReceiverV1(
 				resources: retainedResources(stopReceipt),
 			};
 		}
-		let previousForApply = previous;
-		// 没有保留 PVC 的回执（#2918）按新建准备：apply 会创建 PVC，同名的未归属对象仍判冲突。
-		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
-			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
-			signal.throwIfAborted();
-			// The stop receipt proves every non-PVC source resource was deleted. The
-			// allocation observation may still contain that stale source snapshot
-			// when a live route disappears during the replacement; never pass those
-			// old UIDs to apply as current resources.
-			previousForApply = [];
-		} else if (!claim.lifecycle) {
-			// #3985：没有 lifecycle 的准备里，记录的 Pod 读回不存在（外部删除、驱逐或节点丢失）。
-			// 不在原 fence 下重建，把这条证据交给 Store：按空闲回收相同的形状排空、保留 PVC 后恢复。
-			// 同名的另一个 Pod（UID 不同）不算丢失，仍由下面的 apply 判冲突。
-			const recordedPod = previous.find((resource) => resource.kind === "Pod");
-			if (
-				recordedPod &&
-				(await workload.client.read("Pod", recordedPod.name)) === null
-			) {
+		const recordedPod = previous.find((resource) => resource.kind === "Pod");
+		// A ready replacement owns its current UIDs; an older stop receipt cannot replace them again.
+		const preparedReplacement =
+			claim.previousObservation?.status === "ready" &&
+			claim.lifecycle?.preparation?.generation === claim.sandbox.generation &&
+			claim.lifecycle.preparation.resourceFence === claim.resourceFence &&
+			!claim.lifecycle.stopReceipt?.removed.some(
+				({ resource }) =>
+					resource.kind === "Pod" && resource.uid === recordedPod?.uid,
+			);
+		if ((!claim.lifecycle || preparedReplacement) && recordedPod) {
+			if ((await workload.client.read("Pod", recordedPod.name)) === null) {
 				signal.throwIfAborted();
 				return {
 					status: "unknown" as const,
@@ -1467,6 +1460,13 @@ export function createProductionSessionSandboxReceiverV1(
 				};
 			}
 			signal.throwIfAborted();
+		}
+		let previousForApply = previous;
+		// 没有保留 PVC 的回执（#2918）按新建准备；旧来源 UID 只在首次替换时排除。
+		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
+			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
+			signal.throwIfAborted();
+			previousForApply = preparedReplacement ? previous : [];
 		}
 		await adapter.apply(allocation, previousForApply);
 		signal.throwIfAborted();

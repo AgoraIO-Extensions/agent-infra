@@ -782,8 +782,7 @@ export async function recordSandboxObservation(
 	if (
 		observation.status === "unknown" &&
 		observation.failureCode === "sandbox.pod_lost" &&
-		context.purpose === "prepare" &&
-		!context.lifecycle
+		context.purpose === "prepare"
 	) {
 		const recovery = await requestSessionSandboxLostPodRecoveryV1(
 			transaction,
@@ -918,7 +917,7 @@ export async function recordSandboxObservation(
 }
 
 /**
- * #3985：Worker 在没有 lifecycle 的准备认领里读回记录的 Pod 已不存在，Store 仍是旧的 ready 回执。
+ * #3985：Worker 读回已就绪的 Pod 丢失（含恢复后的再次丢失），Store 仍是旧的 ready 回执。
  * 写入与空闲回收相同形状的 lifecycle 并立即请求恢复：下一次认领排空来源（已不存在的 Pod 记为
  * absent，保留 PVC），再沿保留 PVC 的替换准备重建。条件不满足时返回 undefined，按普通未知观测处理。
  */

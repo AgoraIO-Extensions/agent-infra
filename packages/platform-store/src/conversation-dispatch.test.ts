@@ -11000,6 +11000,36 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 			} finally {
 				await resumed.store.close();
 			}
+			await client`update platform.conversation_executions set status = 'completed' where execution_id = ${work.executionId}`;
+			// A ready replacement can lose its Pod again while its old receipt is retained.
+			const lostAgain = await claimReopened(store, sandbox.itemId);
+			expect(lostAgain.lifecycle?.stopReceipt).toEqual(receipt);
+			await expect(
+				store.recordSandboxObservation({
+					claim: lostAgain,
+					observation: {
+						status: "unknown",
+						failureCode: "sandbox.pod_lost",
+						resources: rebuilt,
+					},
+				}),
+			).resolves.toBe("committed");
+			expect(await sandboxState(work.conversationId)).toMatchObject({
+				resource_fence: 3,
+				desired_state: "stopped",
+				intent_status: "pending",
+				payload: {
+					lifecycle: {
+						reason: "idle_reclaim",
+						stopReceipt: null,
+						resumeRequested: true,
+						source: {
+							resourceFence: 2,
+							observation: { status: "ready", resources: rebuilt },
+						},
+					},
+				},
+			});
 		} finally {
 			await Promise.allSettled([
 				turn.store.close(),
