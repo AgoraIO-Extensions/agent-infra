@@ -111,6 +111,7 @@ spec:
       automountServiceAccountToken: false
       restartPolicy: OnFailure
       {{- include "ack.pullSecrets" . | nindent 6 }}
+      {{- include "ack.scheduling" .Values.scheduling.skillObjectStorage | nindent 6 }}
       securityContext:
         {{- include "ack.securityContext" . | nindent 8 }}
       containers:
