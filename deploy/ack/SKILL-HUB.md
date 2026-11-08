@@ -53,6 +53,10 @@ Service、PVC 和单副本 MinIO，并用 post-install/post-upgrade Job 创建�
 访问密钥只从预先创建的 Secret 引用；API/Worker 配置中的 S3 endpoint、bucket、prefix 和凭证必须
 与这些值完全一致。不要把现有其他 namespace 的 MinIO 当作该 Skill 包存储。
 
+MinIO 默认使用同一固定 API 镜像中的二进制，bucket hook 使用 API 声明的生产 S3 SDK 依赖，
+开启 versioning 后立即回读确认。PVC 带有 Helm 保留策略，回滚或卸载不会删除已发布包；
+数据清理由版本、配置和执行引用的生命周期决定，不能作为失败部署的自动回滚步骤。
+
 配置模块的最小结构如下；具体数据库、目录、公钥、存储和扫描实现必须继续使用部署已有的
 适配器，不能把下面的占位函数直接部署：
 

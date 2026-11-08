@@ -48,7 +48,7 @@ skillHub:
   scannerImage: ""
   objectStorage:
     enabled: false
-    image: hub-master.agoralab.co/devops/magic/bitnamilegacy/minio@sha256:42d31192b68fd66a36b757b38338edb086d7f38b6361ecf0f9b9bfd78d5725ce
+    image: ""
     secretName: agent-infra-skill-store
     accessKeyKey: accessKeyId
     secretKeyKey: secretAccessKey

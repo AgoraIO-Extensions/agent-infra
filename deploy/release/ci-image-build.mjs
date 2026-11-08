@@ -136,6 +136,10 @@ async function build() {
       assert.equal(image.Id, imageId);
       assert.equal(image.Config.Labels["org.opencontainers.image.revision"], expected.commit);
       assert.equal(image.Config.Labels["agent-infra.lockfile-sha256"], expected.lockfileSha256);
+      if (name === "platform-api") {
+        command("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", imageId,
+          "node", "--input-type=module", "-e", "await import('@aws-sdk/client-s3')"]);
+      }
       manifest.images.push({
         name,
         imageId,
