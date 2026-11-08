@@ -266,6 +266,7 @@ export function createWorkspaceSnapshotServiceV1(
 			digest: string;
 			source: unknown;
 			body: ReadableStream<Uint8Array>;
+			bodySizeBytes?: number;
 			signal?: AbortSignal;
 		}) {
 			let spool:
@@ -340,6 +341,11 @@ export function createWorkspaceSnapshotServiceV1(
 						!isDeepStrictEqual(existing.record.source, provenance.source)
 					)
 						throw new WorkspaceSnapshotServiceErrorV1("unavailable");
+					if (
+						input.bodySizeBytes !== undefined &&
+						input.bodySizeBytes !== existing.record.sizeBytes
+					)
+						throw new WorkspaceSnapshotServiceErrorV1("invalid_archive");
 					if (!input.body.locked)
 						void input.body.cancel().catch(() => undefined);
 					return { record: existing.record, replayed: true };

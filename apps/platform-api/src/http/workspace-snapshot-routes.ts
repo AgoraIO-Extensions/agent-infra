@@ -28,6 +28,7 @@ export interface WorkspaceSnapshotRouteDependenciesV1 {
 		digest: string;
 		source: unknown;
 		body: ReadableStream<Uint8Array>;
+		bodySizeBytes?: number;
 		signal?: AbortSignal;
 	}): Promise<{ record: WorkspaceSnapshotRecordV1; replayed: boolean }>;
 	list(
@@ -121,6 +122,10 @@ export function registerWorkspaceSnapshotRoutesV1(
 				digest: `sha256:${digest}`,
 				source: parsed.source,
 				body: context.req.raw.body,
+				...(context.req.header("Content-Length") &&
+				/^\d+$/.test(context.req.header("Content-Length") ?? "")
+					? { bodySizeBytes: Number(context.req.header("Content-Length")) }
+					: {}),
 				signal: context.req.raw.signal,
 			});
 			return context.json(

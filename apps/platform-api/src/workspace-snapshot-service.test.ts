@@ -462,6 +462,12 @@ describe("workspace snapshot upload service with real file spool", () => {
 		expect(replay).toEqual({ record: first.record, replayed: true });
 		expect(f.storage.upload).toHaveBeenCalledOnce();
 		expect(f.options.quota.read).not.toHaveBeenCalled();
+		await expect(
+			f.service.upload({
+				...f.upload(),
+				bodySizeBytes: first.record.sizeBytes + 1,
+			}),
+		).rejects.toMatchObject({ code: "invalid_archive" });
 	});
 	it.each(["authentication_required", "forbidden", "not_found"] as const)(
 		"cleans a transaction rejected for %s without requiring an active credential",
