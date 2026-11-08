@@ -710,6 +710,83 @@ describe("functional conversation screen", () => {
 		});
 	});
 
+	it("preserves slash arguments when selecting and confirming a Skill", async () => {
+		const { requests } = setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) return nativeCatalog(url);
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+			if (url.pathname.endsWith("/native-capability/invoke"))
+				return Response.json({ outcome: "busy" }, { status: 409 });
+		});
+		const input = await composer();
+		fireEvent.change(input, {
+			target: { value: "/workspace-summary 列出变更\n保留风险说明" },
+		});
+		await screen.findByRole("option", { name: /workspace-summary/ });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(input.value).toBe("列出变更\n保留风险说明");
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+		fireEvent.click(screen.getByRole("button", { name: "确认发送" }));
+		await waitFor(() =>
+			expect(
+				requests.filter((request) => request.method === "POST"),
+			).toHaveLength(1),
+		);
+		const invocation = requests.find((request) => request.method === "POST");
+		expect(invocation?.url).toContain("/native-capability/invoke");
+		expect(await invocation?.json()).toMatchObject({
+			parameters: "列出变更\n保留风险说明",
+		});
+	});
+
+	it.each([
+		["/compact", true],
+		["/goal 完成当前任务", true],
+		["/compact", false],
+		["/goal 完成当前任务", false],
+	] as const)(
+		"never downgrades %s to a plain message with native metadata enabled=%s",
+		async (draft, nativeMetadata) => {
+			const { requests } = setup((request) => {
+				const url = new URL(request.url);
+				if (url.pathname === "/api/v2/agents/agent-1")
+					return Response.json({
+						...agent,
+						capabilities: { ...agent.capabilities, nativeMetadata },
+					});
+				if (url.pathname.endsWith("/native-metadata"))
+					return new Response(null, { status: 503 });
+				if (url.pathname === "/api/v2/conversations/conversation-1")
+					return Response.json(idleHistory());
+				if (request.method === "POST") return receipt();
+			});
+			const input = await composer();
+			fireEvent.change(input, { target: { value: draft } });
+			await screen.findByText(
+				nativeMetadata ? "目录读取失败" : "当前模板尚未接入命令与 Skill。",
+			);
+			fireEvent.click(screen.getByRole("button", { name: "发送" }));
+			await waitFor(() =>
+				expect(
+					requests.some((request) => request.method === "POST") ||
+						screen.queryByText(/内容没有作为普通消息发送。/) !== null,
+				).toBe(true),
+			);
+			expect(
+				requests.filter((request) => request.method === "POST"),
+			).toHaveLength(0);
+			expect(input.value).toBe(draft);
+			expect(
+				screen
+					.getByText(/内容没有作为普通消息发送。/)
+					.closest('[role="alert"]'),
+			).toBeTruthy();
+		},
+	);
+
 	it("keeps an unselected slash draft out of plain messages while the catalog is available", async () => {
 		const { requests } = setup((request) => {
 			const url = new URL(request.url);
@@ -723,7 +800,7 @@ describe("functional conversation screen", () => {
 		// 没有可选项时 Enter 不被弹层拦截，但目录可用时也不作为普通消息发出。
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect((await screen.findByRole("alert")).textContent).toBe(
-			"请先选择目录中的命令或 Skill。",
+			"当前目录没有可用的 /xyz 命令或 Skill，请检查名称或重新选择；内容没有作为普通消息发送。",
 		);
 		expect(requests.filter((request) => request.method === "POST")).toEqual([]);
 	});
@@ -865,6 +942,15 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "/" } });
 		await screen.findByText("发送第一条消息后可使用命令与 Skill。");
+		fireEvent.change(input, { target: { value: "/goal 完成当前任务" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText(
+			"发送第一条普通消息后才能使用命令与 Skill。内容没有作为普通消息发送。",
+		);
+		expect(input.value).toBe("/goal 完成当前任务");
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
 		expect(
 			requests.some((request) =>
 				new URL(request.url).pathname.endsWith("/native-metadata"),

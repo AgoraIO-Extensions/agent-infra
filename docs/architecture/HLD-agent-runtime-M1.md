@@ -324,6 +324,12 @@ Codex 的首个只读原生命令定义为“查看原生会话状态”：目�
 只合入 Driver V2 不能证明其消费者已贯通。旧 V4 输入缺少冻结选择时明确拒绝，保留
 只读查询和既有 Skill；不得从上一条消息补造模型选择或借 metadata context 执行压缩。
 
+同一固定 Codex 版本还提供 `thread/goal/set|get|clear` 与目标更新通知。当前平台未开放 `/goal`：
+原生 Goal 可以自行产生后续 Turn，尚缺对应的平台持久目标、持续执行、预算、控制和恢复合同。
+公开 RPC 存在不代表当前业务 Execution 已授权这些后续 Turn；不能只打开原生开关或发送普通提示。
+该差额由 [#4045](https://github.com/AgoraIO-Extensions/agent-infra/issues/4045) 承接，具体提案见
+[ADR-0039](../adr/0039-native-command-discovery-and-goal-lifecycle.md)；提案通过前保持不可用。
+
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
 每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和加载证据作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
