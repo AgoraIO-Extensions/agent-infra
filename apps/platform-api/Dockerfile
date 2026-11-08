@@ -1,4 +1,6 @@
-FROM clamav/clamav@sha256:75fb5fd95fcbe1d7e6d240c369c1572b686ee2c95949d1042b5148de8eddebb4 AS skill-scanner
+# The scanner stage only supplies the architecture-independent virus database, and this digest
+# is published for linux/amd64 only, so every target architecture copies the same database from it.
+FROM --platform=linux/amd64 clamav/clamav@sha256:75fb5fd95fcbe1d7e6d240c369c1572b686ee2c95949d1042b5148de8eddebb4 AS skill-scanner
 FROM dappros/minio@sha256:624bad2fe79a8613aa3c5c9b765ebcab365080b8445cf1b05c357cc7753725f0 AS skill-object-storage
 
 FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder

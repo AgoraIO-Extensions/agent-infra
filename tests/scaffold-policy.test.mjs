@@ -30,9 +30,9 @@ test("Platform Worker typecheck builds dist-backed workspace dependencies throug
 test("deployment images pin every base image by digest", async () => {
 	for (const [service, path] of dockerfiles) {
 		const dockerfile = await readFile(path, "utf8");
-		const images = [...dockerfile.matchAll(/^FROM\s+(\S+)/gm)].map(
-			(match) => match[1],
-		);
+		const images = [
+			...dockerfile.matchAll(/^FROM\s+(?:--platform=\S+\s+)?(\S+)/gm),
+		].map((match) => match[1]);
 
 		assert.ok(images.length > 0, `${service} must declare a base image`);
 		for (const image of images) {
