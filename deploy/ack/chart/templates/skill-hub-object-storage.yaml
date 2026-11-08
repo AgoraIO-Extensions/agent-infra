@@ -51,7 +51,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       {{- include "ack.pullSecrets" . | nindent 6 }}
-      {{- include "ack.scheduling" .Values.scheduling.worker | nindent 6 }}
+      {{- include "ack.scheduling" .Values.scheduling.skillObjectStorage | nindent 6 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

@@ -70,6 +70,7 @@ scheduling:
   web: {}
   directory: {}
   postgres: {}
+  skillObjectStorage: {}
   worker:
     nodeSelector:
       kubernetes.io/arch: amd64
