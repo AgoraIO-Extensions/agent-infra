@@ -58,10 +58,12 @@ function selectorMatchesLabels(
 		const values = expression.values ?? [];
 		switch (expression.operator) {
 			case "In":
-				if (!present || value === undefined || !values.includes(value)) return false;
+				if (!present || value === undefined || !values.includes(value))
+					return false;
 				break;
 			case "NotIn":
-				if (present && value !== undefined && values.includes(value)) return false;
+				if (present && value !== undefined && values.includes(value))
+					return false;
 				break;
 			case "Exists":
 				if (!present) return false;
