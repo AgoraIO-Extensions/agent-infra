@@ -70,34 +70,31 @@ function retryableTransportError(error) {
 	}
 	return false;
 }
-async function downloadBytes(url, expected) {
+async function downloadBytes(url, expected, pinnedAssetId) {
 	const signal = AbortSignal.timeout(downloadBudgetMs);
 	const unavailable = new Error("Codex release asset unavailable");
-	const officialAssetFallback = async () => {
+	const officialAssetFallback = async (fallbackAssetId) => {
 		const parsed = new URL(url);
 		const match = /^\/openai\/codex\/releases\/download\/([^/]+)\/([^/]+\.tar\.gz)$/u.exec(parsed.pathname);
 		if (!match) throw unavailable;
 		const [, tag, assetName] = match;
-		const metadata = await fetch(
-			`https://api.github.com/repos/openai/codex/releases/tags/${encodeURIComponent(tag)}`,
-			{
-				signal,
-				headers: {
-					Accept: "application/vnd.github+json",
-					"X-GitHub-Api-Version": "2022-11-28",
-					"User-Agent": "agent-infra-codex-installer",
-				},
-			},
-		);
-		if (!metadata.ok) throw unavailable;
-		const release = await metadata.json();
-		const assets = Array.isArray(release.assets)
-			? release.assets.filter((asset) => asset?.name === assetName && Number.isSafeInteger(asset?.id))
-			: [];
-		if (assets.length !== 1) throw unavailable;
-		const asset = assets[0];
+		let assetId = Number.isSafeInteger(fallbackAssetId) ? fallbackAssetId : undefined;
+		try {
+			const metadata = await fetch(
+				`https://api.github.com/repos/openai/codex/releases/tags/${encodeURIComponent(tag)}`,
+				{ signal, headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "agent-infra-codex-installer" } },
+			);
+			if (metadata.ok) {
+				const release = await metadata.json();
+				const assets = Array.isArray(release.assets)
+					? release.assets.filter((asset) => asset?.name === assetName && Number.isSafeInteger(asset?.id))
+					: [];
+				if (assets.length === 1) assetId = assets[0].id;
+			}
+		} catch {}
+		if (!Number.isSafeInteger(assetId)) throw unavailable;
 		const response = await fetch(
-			`https://api.github.com/repos/openai/codex/releases/assets/${asset.id}?download=1&cache=${Date.now()}`,
+			`https://api.github.com/repos/openai/codex/releases/assets/${assetId}?download=1&cache=${Date.now()}`,
 			{
 				signal,
 				headers: {
@@ -118,7 +115,7 @@ async function downloadBytes(url, expected) {
 			const response = await fetch(url, { signal });
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => undefined);
-				if (response.status >= 500) return await officialAssetFallback();
+				if (response.status >= 500) return await officialAssetFallback(pinnedAssetId);
 				throw unavailable;
 			}
 			const bytes = Buffer.from(await response.arrayBuffer());
@@ -135,8 +132,8 @@ async function downloadBytes(url, expected) {
 	throw new Error("Codex release asset download failed");
 }
 
-async function download(url, expected, path) {
-	await writeFile(path, await downloadBytes(url, expected));
+async function download(url, expected, path, pinnedAssetId) {
+	await writeFile(path, await downloadBytes(url, expected, pinnedAssetId));
 }
 
 const [architecture, destination, ...extra] = process.argv.slice(2);
@@ -151,6 +148,7 @@ if (release.schemaVersion !== undefined || release.distribution !== undefined) {
 for (const executable of [artifact, codeModeHostArtifact])
 	if (
 		typeof executable?.name !== "string" ||
+		(executable?.assetId !== undefined && !Number.isSafeInteger(executable.assetId)) ||
 		!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(executable.name)
 	)
 		throw new Error("Invalid Codex executable archive member");
@@ -178,6 +176,7 @@ try {
 				`https://github.com/openai/codex/releases/download/${release.provenance.upstreamTag}/${executable.name}.tar.gz`,
 				executable.archiveSha256,
 				archive,
+				executable.assetId,
 			);
 			execFileSync("tar", ["-xzf", archive, "-C", directory, executable.name], {
 				stdio: "ignore",
