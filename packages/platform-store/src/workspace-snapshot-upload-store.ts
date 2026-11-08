@@ -257,7 +257,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 			.select()
 			.from(workspaceSnapshotUploadReservations)
 			.where(
-				sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired') and ${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now} and ${workspaceSnapshotUploadReservations.releasedAt} is null`,
+				sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired') and ${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now.toISOString()} and ${workspaceSnapshotUploadReservations.releasedAt} is null`,
 			)
 			.orderBy(
 				asc(workspaceSnapshotUploadReservations.updatedAt),
@@ -289,7 +289,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 								and(
 									eq(workspaceSnapshotUploadReservations.id, candidate.id),
 									sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired')`,
-									sql`${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now} and ${workspaceSnapshotUploadReservations.expiresAt} <= clock_timestamp()`,
+									sql`${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now.toISOString()} and ${workspaceSnapshotUploadReservations.expiresAt} <= clock_timestamp()`,
 								),
 							)
 							.for("update")
