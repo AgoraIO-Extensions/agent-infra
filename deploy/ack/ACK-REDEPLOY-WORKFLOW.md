@@ -11,6 +11,28 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
 
+## 部署仓库交付与失败反馈
+
+将 ACK Helm 交付到独立部署仓库时，保存完整 chart、上游 exact source SHA、逐文件 SHA-256、
+同一次 full release 的 run/attempt 和镜像 manifest。部署仓库入口显式设置 `ACK_CHART_DIR`，
+再调用对应 clean source checkout 的 `redeploy.sh`；source/image/config、ownership 和实际回读
+门禁继续适用。`run-capsule.ts` 会清除继承的 `ACK_*` 变量，仅在父进程设置该路径不能证明
+使用了部署仓库 chart。私有输入仍保存在仓库外，不将配置模块、凭据或浏览器状态混入 chart。
+部署仓库单独修正 Helm 运维内容时，分别保存上游 chart 基线和最终文件 hash，并记录变更原因；
+不将 Helm 修正伪装成上游应用源码，也不改写镜像 manifest 的 source SHA。
+
+已有环境的 values 回放须保留 raw user overrides 中显式 `null` 的含义，比较最终渲染与现场
+manifest，避免默认调度条件重新出现；不能只依据合并后的 `helm get values -a`。部署前回读
+namespace UID/owner、release 最新 revision 与当前发布窗口，进行真实 API server dry-run，
+不得在另一运行尚未收敛时启动第二次 Helm 发布。
+启用 ResourceQuota 时还须检查 migration Job 等后续 Pod 模板的 CPU/内存资源声明；Job 的
+dry-run 不会替 Job controller 创建 Pod，不能覆盖 quota 对实际 Pod 的拒绝。迁移使用声明的
+资源预算和有界 deadline，不能关闭 quota 绕过缺失声明。
+
+每次执行单独保存成功或失败 attempt。任一阶段失败后停止后续步骤，先核对写入状态并将
+错误类别、根因或 unknown、修正和新增预检反哺流程与部署内容，再从部署仓库入口执行完整
+的新 attempt。保留原失败结果，不以临时补丁、后来恢复或 Helm 成功代替原 attempt 的结果。
+
 ## 收尾与定向变更
 
 完成既定 clean rebuild 验收后保留冻结输入、成功及失败 attempt 回执；进入收尾不再执行
