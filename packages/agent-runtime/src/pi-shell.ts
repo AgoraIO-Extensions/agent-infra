@@ -4,7 +4,7 @@ import {
 	nativeShellLauncherEnvironment,
 } from "./native-shell-admission.js";
 
-export const piNativeShellToolName = "sandbox_bash";
+export const piNativeShellToolName = "bash";
 export { nativeShellAvailable as piNativeShellAvailable } from "./native-shell-admission.js";
 
 export async function createPiNativeShellTool(workspace: string) {
@@ -28,7 +28,7 @@ export async function createPiNativeShellTool(workspace: string) {
 				throw new Error("RUNTIME_NATIVE_SHELL_UNAVAILABLE");
 			return tool.execute(...args);
 		},
-		// A missing extension must not expose Pi's unwrapped builtin bash fallback.
+		// The launcher-backed definition replaces Pi's ordinary Bash implementation.
 		name: piNativeShellToolName,
 	};
 }

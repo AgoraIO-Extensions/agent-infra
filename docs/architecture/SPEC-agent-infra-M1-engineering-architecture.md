@@ -1385,10 +1385,11 @@ OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独�
 唯一工程权威；各 Driver 的映射与验收只在
 [Runtime HLD 8.5.4](HLD-agent-runtime-M1.md#854-session-sandbox-原生工具)维护。
 
-四个标准模板在 Session Sandbox 内默认启用固定版本的原生工具：shell 与进程、文件读写、编辑与
-补丁、目录列举与搜索、原生 Skill 及其脚本，以及该版本自带的网络工具。隔离依据是 §10.1.1 的
-Session Sandbox，以及 §10.9 等各 Driver 的 Conversation 文件边界。原生工具不以缺少每次尝试的
-执行前回调为由拒绝，Driver 也不能为此退回只允许模型输出的模式。自定义 Agent 不受本节约束。
+四个标准模板在 Session Sandbox 内默认启用固定版本提供的完整原生工具目录：shell 与进程、文件读写、
+编辑与补丁、目录列举与搜索、原生 Skill 及其脚本，以及该版本自带的网络工具。平台不能用静态
+allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿上游身份透传并记录事实。隔离依据是
+§10.1.1 的 Session Sandbox，以及 §10.9 等各 Driver 的 Conversation 文件边界。原生工具不以缺少每次
+尝试的执行前回调为由拒绝，Driver 也不能为此退回只允许模型输出的模式。自定义 Agent 不受本节约束。
 
 | 类别 | 范围 | 准入与事实 |
 | --- | --- | --- |

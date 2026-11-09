@@ -27,7 +27,10 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 	cleanupReadOnlyFile?: (filePath: string) => Promise<void>;
 }>;
 
-/** #3217：Claude 标准模板开放的原生工具，Driver 的流式事件与恢复按同一清单识别。 */
+/**
+ * Driver-owned names used by old receipts. New native names are accepted too;
+ * the pinned SDK catalog is exposed separately from this compatibility list.
+ */
 export const claudeWorkspaceToolNames: readonly string[] = Object.freeze([
 	"Read",
 	"Write",
@@ -38,10 +41,41 @@ export const claudeWorkspaceToolNames: readonly string[] = Object.freeze([
 	"Bash",
 ]);
 
+/** Complete built-in catalog for Claude SDK 0.3.246/native 2.1.246. */
+export const claudeNativeToolNames: readonly string[] = Object.freeze([
+	"Read",
+	"Write",
+	"Edit",
+	"Glob",
+	"Grep",
+	"Bash",
+	"WebFetch",
+	"WebSearch",
+	"TodoWrite",
+	"Agent",
+	"Task",
+	"NotebookEdit",
+	"Skill",
+	"AskUserQuestion",
+	"EnterPlanMode",
+	"ExitPlanMode",
+	"KillShell",
+]);
+
+const claudeNativeToolName = /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/;
+
+export function isClaudeNativeToolName(value: unknown): boolean {
+	return (
+		typeof value === "string" &&
+		claudeNativeToolName.test(value) &&
+		!value.startsWith("mcp_")
+	);
+}
+
 /**
- * Fixed core tools. 文件读写、列举与搜索只在本 Conversation 的工作区、memory 与只读 Skill
- * 根内可用（#3217）；Bash 仅在固定子进程边界准入后开放，且每次调用重新准入（#3218）。
- * WebFetch/WebSearch 仅由 Driver 的实际调用许可接入额外模型边界；子 Agent 与任意文件根不开放。
+ * Claude's pinned preset is exposed in full. The policy below keeps the
+ * Conversation boundary for path-bearing inputs and re-checks the special
+ * shell/network boundaries without maintaining a platform tool allowlist.
  */
 export function claudeWorkspaceTools(
 	workspace: string,
@@ -130,6 +164,36 @@ export function claudeWorkspaceTools(
 				return undefined;
 			return record;
 		}
+		if (!["Read", "Write", "Edit"].includes(name)) {
+			if (!isClaudeNativeToolName(name)) return undefined;
+			for (const key of [
+				"file_path",
+				"filePath",
+				"notebook_path",
+				"notebookPath",
+				"path",
+				"cwd",
+				"directory",
+				"working_directory",
+				"workdir",
+			] as const) {
+				const value = record[key];
+				if (value === undefined) continue;
+				if (typeof value !== "string" || value.includes("\0")) return undefined;
+				const roots = [workspace, memory, ...readOnlyRoots];
+				const allowed = [
+					"path",
+					"cwd",
+					"directory",
+					"working_directory",
+					"workdir",
+				].includes(key)
+					? await workspaceDirectoryAllowed(roots, resolve(workspace, value))
+					: await workspacePathAllowed(workspace, memory, value);
+				if (!allowed) return undefined;
+			}
+			return record;
+		}
 		if (
 			!["Read", "Write", "Edit"].includes(name) ||
 			!input ||
@@ -176,13 +240,7 @@ export function claudeWorkspaceTools(
 		return undefined;
 	};
 	return {
-		tools: [
-			...claudeWorkspaceToolNames.filter(
-				(name) =>
-					name !== "Bash" || onToolOperation?.authorizeShell !== undefined,
-			),
-			...(onToolOperation?.authorizeNetwork ? ["WebFetch", "WebSearch"] : []),
-		],
+		tools: [...claudeNativeToolNames],
 		settings: {
 			autoMemoryEnabled: true,
 			autoMemoryDirectory: memory,

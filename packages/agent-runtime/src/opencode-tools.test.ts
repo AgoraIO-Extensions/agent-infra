@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
 	openCodeFetchAllowed,
+	openCodeNativeToolInputAllowed,
 	openCodePatchAllowed,
 	openCodeToolName,
 } from "./opencode-tools.js";
 
-it("uses only the pinned pending title and kind pair", () => {
+it("preserves pinned identities and accepts new native titles", () => {
 	expect(openCodeToolName({ kind: "search", title: "glob" })).toBe("Glob");
 	expect(openCodeToolName({ kind: "other", title: "todowrite" })).toBe(
 		"TodoWrite",
@@ -22,6 +23,9 @@ it("uses only the pinned pending title and kind pair", () => {
 	expect(
 		openCodeToolName({ kind: "search", title: "model supplied text" }),
 	).toBeUndefined();
+	expect(
+		openCodeToolName({ kind: "other", title: "workspace_native_tool" }),
+	).toBe("workspace_native_tool");
 });
 it("validates all patch destinations including move and symlink escapes", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "opencode-patch-")));
@@ -70,4 +74,31 @@ it("permits only unauthenticated HTTP fetch input", () => {
 		"javascript:alert(1)",
 	])
 		expect(openCodeFetchAllowed({ url })).toBe(false);
+});
+
+it("keeps unknown native path inputs in the Conversation workspace", async () => {
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "opencode-native-input-")),
+	);
+	const workspace = join(root, "workspace");
+	await mkdir(workspace);
+	try {
+		expect(
+			await openCodeNativeToolInputAllowed(workspace, {
+				prompt: "inspect the current workspace",
+			}),
+		).toBe(true);
+		expect(
+			await openCodeNativeToolInputAllowed(workspace, {
+				path: "/etc/passwd",
+			}),
+		).toBe(false);
+		expect(
+			await openCodeNativeToolInputAllowed(workspace, {
+				filePath: "./local.txt",
+			}),
+		).toBe(true);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

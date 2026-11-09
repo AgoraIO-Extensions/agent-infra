@@ -1,7 +1,12 @@
 import { resolve } from "node:path";
-import { workspacePathAllowed } from "./workspace-path.js";
+import {
+	workspaceDirectoryAllowed,
+	workspacePathAllowed,
+} from "./workspace-path.js";
 
-/** Fixed 1.19.0 pending ACP titles, before later human-readable titles replace them. */
+const nativeToolTitle = /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/;
+
+/** Map pinned titles while retaining a stable identity for new native titles. */
 export function openCodeToolName(tool: {
 	kind?: string | null;
 	title?: string | null;
@@ -15,8 +20,51 @@ export function openCodeToolName(tool: {
 		todowrite: ["other", "TodoWrite"],
 		apply_patch: ["edit", "ApplyPatch"],
 	};
-	const entry = typeof tool.title !== "string" ? undefined : names[tool.title];
-	return entry && entry[0] === tool.kind ? entry[1] : undefined;
+	if (typeof tool.title !== "string") return undefined;
+	const entry = names[tool.title];
+	if (entry) return entry[0] === tool.kind ? entry[1] : undefined;
+	return nativeToolTitle.test(tool.title) ? tool.title : undefined;
+}
+
+/**
+ * Unknown native tools still run inside the pinned ACP process. Guard common
+ * path-bearing fields without inventing a second tool-specific allowlist.
+ */
+export async function openCodeNativeToolInputAllowed(
+	workspace: string,
+	input: unknown,
+) {
+	if (input === undefined) return true;
+	if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+	const record = input as Record<string, unknown>;
+	if ("url" in record) return openCodeFetchAllowed(record);
+	for (const key of [
+		"filePath",
+		"file_path",
+		"notebookPath",
+		"notebook_path",
+		"path",
+		"cwd",
+		"directory",
+		"workdir",
+		"workingDirectory",
+	] as const) {
+		const value = record[key];
+		if (value === undefined) continue;
+		if (typeof value !== "string" || value.includes("\0")) return false;
+		const roots = [workspace, `${workspace}/.memory`];
+		const allowed = [
+			"path",
+			"cwd",
+			"directory",
+			"workdir",
+			"workingDirectory",
+		].includes(key)
+			? await workspaceDirectoryAllowed(roots, resolve(workspace, value))
+			: await workspacePathAllowed(workspace, `${workspace}/.memory`, value);
+		if (!allowed) return false;
+	}
+	return true;
 }
 
 export async function openCodePatchAllowed(workspace: string, value: unknown) {

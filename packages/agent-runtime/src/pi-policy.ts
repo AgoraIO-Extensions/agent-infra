@@ -19,8 +19,7 @@ import {
 	createWriteToolDefinition,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { createPiNativeShellTool, piNativeShellToolName } from "./pi-shell.js";
-import { piWorkspaceToolNames } from "./pi-tools.js";
+import { createPiNativeShellTool } from "./pi-shell.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import {
 	workspaceDirectoryAllowed,
@@ -267,9 +266,9 @@ export default async function piWorkspacePolicy(pi: ExtensionAPI) {
 		const browserTool = /^mcp__agent[-_]infra[-_]browser__/.test(
 			event.toolName,
 		);
+		const activeTools = new Set(pi.getActiveTools());
 		if (
-			!piWorkspaceToolNames.includes(event.toolName) &&
-			!(shell && event.toolName === piNativeShellToolName) &&
+			!activeTools.has(event.toolName) &&
 			!(connectionMcp && connectionTool) &&
 			!(browserMcp && browserTool)
 		)
