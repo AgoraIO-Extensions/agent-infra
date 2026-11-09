@@ -1,3 +1,6 @@
+{{- if and .Values.sessionRuntimeScheduling.protectedRuntime.enabled (not .Values.sessionRuntimeScheduling.enabled) }}
+{{- fail "sessionRuntimeScheduling.protectedRuntime requires sessionRuntimeScheduling.enabled=true" }}
+{{- end }}
 {{- if not .Values.bootstrap.databaseOnly }}
 {{- if .Values.sessionRuntimeScheduling.enabled }}
 {{- if not (semverCompare ">=1.36.0-0" .Capabilities.KubeVersion.Version) }}
@@ -31,6 +34,10 @@ spec:
             JSONPatch{op:"add",path:"/spec/nodeSelector",value:has(object.spec.nodeSelector)?object.spec.nodeSelector:{}},
             JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},
             JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"{{ .Values.sessionRuntimeScheduling.architecture }}"}
+            {{- if .Values.sessionRuntimeScheduling.protectedRuntime.enabled }},
+            JSONPatch{op:"add",path:"/metadata/annotations",value:has(object.metadata.annotations)?object.metadata.annotations:{}},
+            JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1eci-host-sysctls",value:"kernel.yama.ptrace_scope={{ .Values.sessionRuntimeScheduling.protectedRuntime.yamaPtraceScope }}"}
+            {{- end }}
           ] + (
             !has(object.spec.tolerations) ?
             [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}] :

@@ -63,6 +63,11 @@ scheduling:
 sessionRuntimeScheduling:
   enabled: true
   architecture: amd64
+  # Optional protected Direct MCP Runtime profile. Keep disabled until the
+  # ECI provider/profile is approved and the real /proc + negative matrix passes.
+  protectedRuntime:
+    enabled: false
+    yamaPtraceScope: "2"
 ```
 
 `nodeSelector: null` 用于清除 chart 默认的 Worker selector；空对象会与默认值合并。
@@ -73,6 +78,14 @@ sessionRuntimeScheduling:
 字段，不修改容器、安全上下文、资源、身份或凭证。重复求值不追加相同 toleration。
 开启该选项的部署账号需要创建集群级准入策略的权限，低于 1.36 的版本在渲染阶段拒绝。
 关闭选项只影响后续 Pod 创建，已有 Pod 仍沿原有生命周期运行。
+
+`sessionRuntimeScheduling.protectedRuntime.enabled` 是独立的显式 opt-in。开启后同一
+Session-only AdmissionPolicy 只给受管 Session Pod 加入
+`k8s.aliyun.com/eci-host-sysctls=kernel.yama.ptrace_scope=<2|3>`；不改变 API、Worker、
+数据库或容器 `securityContext`，不授予 `SYS_PTRACE`、`privileged` 或 capabilities。该
+annotation 只是向 ECI 请求受控 placement，不能代替实际 `/proc`、NoNewPrivs、capability、
+ptrace/process_vm_readv、proc mem、pidfd_getfd 与 FD/fdinfo 拒绝回读；Provider 不接受时
+保持 MCP 不可用，不回退到环境变量或放宽权限。
 
 ECI 调度成功不代表网络策略生效。还须单独验证目标 Driver 的内核能力、实际模型调用、
 持久卷、出站和入口隔离；不能用 Pod Ready 或已创建 NetworkPolicy 对象代替真实负向验证。
