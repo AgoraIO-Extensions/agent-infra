@@ -183,7 +183,11 @@ export async function objectCleanupConformanceV1(storage: ObjectStorageDataV1) {
 	}
 }
 
-/** A retained current version must close both future and already-started conditional writes. */
+/**
+ * A retained current version closes future conditional writes. An already-started
+ * provider PUT must first reach the service writer deadline; object storage cannot
+ * cancel an in-flight request, so recovery preserves its charge until that point.
+ */
 export async function objectUploadFenceConformanceV1(
 	storage: ObjectStorageDataV1,
 ) {
@@ -282,13 +286,18 @@ export async function objectUploadFenceConformanceV1(
 				throw new Error("Upload ended before body gate");
 			}),
 		]);
-		const lateFence = await storage.fenceUpload(lateRef);
 		release();
 		const result = await outcome;
 		expect(result).toMatchObject({
-			status: "rejected",
-			error: { code: expect.stringMatching(/^(conflict|unavailable)$/) },
+			status: "fulfilled",
 		});
+		if (result.status !== "fulfilled")
+			throw new Error("Upload ended before the writer deadline");
+		// A provider may serialize a same-key fence behind an in-flight PUT.
+		// The recovery writer deadline must expire/abort that request first;
+		// only then can the adapter establish and confirm the current fence.
+		const lateFence = await storage.fenceUpload(lateRef);
+		await storage.remove(lateRef, result.value.version);
 		expect((await storage.scan(null, 100, lateRef)).objects).toEqual([
 			{
 				objectRef: lateRef,
