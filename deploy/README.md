@@ -191,6 +191,27 @@ binding service secret。Platform API/Worker 不读取或转交该 secret，也�
 必须重新确认并 claim。Connection 原生的 binding、确认、claim 和 revoke 合同由 Connection
 维护，本平台只消费其已部署接口。
 
+默认数据库确认 producer 可从 Worker 的受信 `connectionInstallation` 读取
+`principalBindingsByAgent`，为 PAT 路线提供部署批准的原用户映射：
+
+```ts
+principalBindingsByAgent: {
+  "platform-agent-id": {
+    configuration: { ref: "approved-oauth-config", revision: "r1" },
+    issuer: "https://connection.example.test/",
+    principals: { "platform-user-id": "connection-principal-id" },
+  },
+}
+```
+
+绑定必须匹配同一 Agent 的批准配置引用、修订和 issuer。配置须使用实际获准的 canonical
+ID，不从邮箱、Owner、请求、回调或 token 名称推导。映射按部署快照捕获，更新须推进对应
+安装配置修订并受控重新装配；同一 issuer 下的用户映射冲突或不同用户共享同一 Principal
+会关闭安装能力，不部分启用。自定义 `authorize` 与该映射不能同时配置。
+默认 producer 先完成原 Core/Store 权限和 `finalCheck` 两次核对，再为原用户的 PAT 命令添加
+已有签名字段 `connectionPrincipalId`；未找到精确绑定时拒绝，不回退共享或其他 Agent。
+标准 OAuth 不添加该字段。此配置不签发 Connection 授权，也不发布 MCP 安装或运输 token。
+
 Worker 的同源 `connectionInstallation` 可以只导出 `configuration`；默认确认 producer
 读取 Platform DB 的这份事实，在 `finalCheck` 后再次核对原用户、权限、Execution、Pod、
 代次与 profile/config。已 configured 的外部 `authorize` 接收合同仍可使用；缺失或漂移时

@@ -353,6 +353,19 @@ export const isNativeMetadataWorkerOriginV1 = (value) => {
 		format: "esm",
 		outfile: join(directory, "connection-consumer-projection.js"),
 	});
+	await build({
+		entryPoints: [
+			new URL(
+				"./connection-installation-principal-bindings.ts",
+				import.meta.url,
+			).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "connection-installation-principal-bindings.js"),
+	});
 	await symlink(
 		new URL("../node_modules", import.meta.url).pathname,
 		join(directory, "node_modules"),
@@ -437,6 +450,41 @@ try {
    process.exit(0);
  }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+	if (process.env.RUN_INSTALLATION_APPROVAL) {
+	 const mode = process.env.RUN_INSTALLATION_APPROVAL;
+	 const {PostgresConnectionInstallationAuthorizationTransactionV1: Store} = await import('@agent-infra/platform-store');
+	 const configuration = (await import('./configuration.mjs')).connectionInstallation.configuration;
+	 const reference = {agentId:'agent-a',conversationId:'conversation-a',executionId:'execution-a',sessionGeneration:1};
+	 const scope = {agentId:'agent-a',sandboxId:'sandbox-a',podUid:'pod-a',sessionGeneration:1,configFingerprint:configuration.configFingerprint,source:configuration.source,oauthConfiguration:{ref:configuration.ref,revision:configuration.revision}};
+	 const input = {principal:{kind:'user',id:'alice'},reference,scope,authorizationId:'authorization-a',command:'begin'};
+	 const current = {
+	   user:{schemaVersion:1,userId:'alice',accountStatus:'active',organizationIds:['eng'],authorizationRevision:'identity-r1'},
+	   agent:{schemaVersion:1,agentId:'agent-a',applicationId:'application-a',applicantId:'owner',status:'available',revision:1,approvalRevision:1,decisionReason:null,serviceAvailability:'ready',desiredState:'running',workloadRevision:1,fence:1,ownerIds:['owner'],availability:[{kind:'user',userId:'alice'}],failureCode:null},
+	   boundary:{schemaVersion:1,principal:input.principal,agentId:'agent-a',channelId:'web',identityRevision:'identity-r1',agentAuthorizationRevision:'agent-r1',accessSources:[{kind:'user',userId:'alice'}]},
+	   agentAuthorizationRevision:'agent-r1',reference,scope
+	 };
+	 const saved = {authorization:{schemaVersion:1,authorizationId:input.authorizationId,confirmationRevision:'confirmation-r1',principal:input.principal,reference,scope,status:'awaiting_confirmation',expiresAt:600000},identityRevision:'identity-r1',agentAuthorizationRevision:'agent-r1'};
+	 let reads = 0, finalChecks = 0;
+	 if (mode === 'core-denied') current.user.accountStatus = 'disabled';
+	 const originalTransaction = Store.prototype.transaction;
+	 // Keep the real Core producer and production assembly; replace only DB I/O.
+	 Store.prototype.transaction = async (work) => work({
+	   current:async()=>{ reads++;return current; }, read:async()=>saved,
+	   now:async()=>1000,hasUnresolvedSend:async()=>false,commandAllowed:async()=>true
+	 });
+	 try {
+	   const result = await conversation.connectionInstallation?.authorize(input,signal,async()=>{
+	     finalChecks++;
+	     if(mode==='final-check-denied')throw new Error('controlled finalCheck denial');
+	     if(mode==='revoked-after-final-check')current.user.accountStatus='disabled';
+	   });
+	   console.log(JSON.stringify({result:result??null,reads,finalChecks,workloadReady:!!workload,configured:!!conversation.connectionInstallation}));
+	 } finally {
+	   Store.prototype.transaction = originalTransaction;
+	   await conversation.closeDeployment?.();
+	 }
+	 process.exit(0);
+	}
 	if (process.env.RUN_SKILL_CHECK === "true") {
 	 console.log(JSON.stringify({ skillMaterializer: typeof workload.skillMaterializer?.materialize }));
 	 process.exit(0);
@@ -998,6 +1046,114 @@ export const connectionInstallation = {
 		await writeFile(path, original);
 	}
 });
+
+const approvedPatInstallationModule = `
+export const connectionInstallation = {
+  configuration: {
+    schemaVersion: 1, ref: "oauth-config", revision: "r1", clientId: "platform-client",
+    callbackUrl: "https://platform.example.test/connection/callback",
+    issuer: "https://connection.example.test/",
+    authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+    tokenEndpoint: "https://connection.example.test/oauth/token",
+    revocationEndpoint: "https://connection.example.test/oauth/revoke",
+    resource: "https://connection.example.test/mcp/v1", scope: "mcp",
+    configFingerprint: ${JSON.stringify(connectionConsumerApproval.configFingerprint)},
+    source: ${JSON.stringify(connectionConsumerApproval.source)},
+    runtimeOrigin: "https://runtime.example.test:3443/",
+    patBinding: { consumerId: "platform-worker", bindingEndpoint: "https://connection.example.test/api/v1/connection/pat-bindings" }
+  },
+  principalBindingsByAgent: {
+    "agent-a": {
+      configuration: { ref: "oauth-config", revision: "r1" },
+      issuer: "https://connection.example.test/",
+      principals: { alice: "connection-alice" }
+    }
+  }
+};
+connectionInstallation.authorize = undefined;
+`;
+
+it.each([
+	"approved",
+	"core-denied",
+	"final-check-denied",
+	"revoked-after-final-check",
+])(
+	"assembles and executes default PAT authorization with principal bindings (%s)",
+	async (mode) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		await writeFile(path, `${original}\n${approvedPatInstallationModule}`);
+		try {
+			const result = run({
+				RUN_INSTALLATION_APPROVAL: mode,
+			});
+			expect(result.status, result.stderr).toBe(0);
+			const value = JSON.parse(result.stdout);
+			expect(value.workloadReady).toBe(true);
+			expect(value.configured).toBe(true);
+			expect(value.reads).toBe(
+				mode === "core-denied" || mode === "final-check-denied" ? 1 : 2,
+			);
+			expect(value.finalChecks).toBe(mode === "core-denied" ? 0 : 1);
+			if (mode === "approved") {
+				expect(value.result).toMatchObject({
+					principal: { kind: "user", id: "alice" },
+					connectionPrincipalId: "connection-alice",
+					revision: "confirmation-r1",
+				});
+			} else expect(value.result).toBeNull();
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
+it.each([
+	[
+		"wrong issuer",
+		'connectionInstallation.principalBindingsByAgent["agent-a"].issuer="https://foreign.example.test/";',
+	],
+	[
+		"old configuration",
+		'connectionInstallation.principalBindingsByAgent["agent-a"].configuration.revision="old";',
+	],
+	[
+		"invalid principal",
+		'connectionInstallation.principalBindingsByAgent["agent-a"].principals.alice="";',
+	],
+	[
+		"conflicting users",
+		'connectionInstallation.principalBindingsByAgent["agent-a"].principals.bob="connection-alice";',
+	],
+	[
+		"custom producer conflict",
+		"connectionInstallation.authorize=async()=>null;",
+	],
+])(
+	"isolates invalid principal bindings from ordinary Workload assembly (%s)",
+	async (_label, mutation) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		await writeFile(
+			path,
+			`${original}\n${approvedPatInstallationModule}\n${mutation}\n`,
+		);
+		try {
+			const result = run({ RUN_INSTALLATION_APPROVAL: "invalid-mapping" });
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({
+				result: null,
+				reads: 0,
+				finalChecks: 0,
+				workloadReady: true,
+				configured: false,
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it.each([
 	"export const connectionInstallation = null;",
