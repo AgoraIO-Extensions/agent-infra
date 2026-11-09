@@ -451,8 +451,10 @@ it("uses the formal HTTP Host route with real V6 signatures and no legacy fallba
 				return app.fetch(new Request(url, init));
 			},
 		});
+		// The signed HTTP route is reached; this isolated fixture has no accepted
+		// Runtime session, so Host refuses before Driver execution.
 		await expect(client.nativeCapability(f.unsigned)).rejects.toMatchObject({
-			code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+			code: "RUNTIME_SESSION_BINDING_MISMATCH",
 			retryable: false,
 		});
 		expect(calls).toEqual([

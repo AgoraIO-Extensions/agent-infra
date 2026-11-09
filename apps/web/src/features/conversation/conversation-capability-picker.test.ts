@@ -94,15 +94,30 @@ describe("conversation capability picker model", () => {
 		});
 	});
 
-	it("keeps a discovered state-changing command out of the legacy invocation wire", () => {
+	it("prepares a state-changing command with the saved model selection", () => {
 		expect(
 			prepareCapabilityInvocation(
 				{ ...capabilities[1], effect: "state_changing" },
 				"",
+				[],
+				{
+					schemaVersion: 1,
+					modelOptionId: "model-primary",
+					reasoningLevel: "high",
+				},
 			),
 		).toEqual({
-			error:
-				"该有状态原生命令已被发现，但执行接缝尚未接入；不会作为普通消息发送。",
+			body: {
+				schemaVersion: 3,
+				capabilityId: "f".repeat(64),
+				directoryRevision: "c".repeat(64),
+				parameters: "",
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-primary",
+					reasoningLevel: "high",
+				},
+			},
 		});
 	});
 

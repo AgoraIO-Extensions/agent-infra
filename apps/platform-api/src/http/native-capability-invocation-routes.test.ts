@@ -232,7 +232,7 @@ const statefulBody = {
 	},
 };
 
-it("preserves explicit V3 selection for the authenticated admission handler", async () => {
+it("preserves explicit V3 selection and returns a sanitized V6 receipt", async () => {
 	const admit = vi.fn<
 		NonNullable<
 			NativeCapabilityInvocationRouteDependenciesV1["admitWithIdentity"]
@@ -243,7 +243,15 @@ it("preserves explicit V3 selection for the authenticated admission handler", as
 			...statefulBody,
 			conversationId: "conversation",
 		});
-		return { outcome: "unsupported" };
+		return {
+			outcome: "accepted",
+			plan: {
+				conversationId: "conversation",
+				executionId: "execution-v6",
+				capabilityId: statefulBody.capabilityId,
+				directoryRevision: statefulBody.directoryRevision,
+			},
+		} as never;
 	});
 	const response = await app({
 		buildRequest: async ({ conversationId, body: parsed }) => ({
@@ -256,8 +264,19 @@ it("preserves explicit V3 selection for the authenticated admission handler", as
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(statefulBody),
 	});
-	expect(response.status).toBe(503);
-	expect(await response.json()).toEqual({ outcome: "unsupported" });
+	expect(response.status).toBe(202);
+	expect(await response.json()).toEqual({
+		outcome: "accepted",
+		result: {
+			schemaVersion: 1,
+			status: "submitted",
+			conversationId: "conversation",
+			executionId: "execution-v6",
+			capabilityId: statefulBody.capabilityId,
+			capabilityKind: "command",
+			directoryRevision: statefulBody.directoryRevision,
+		},
+	});
 	expect(admit).toHaveBeenCalledOnce();
 });
 

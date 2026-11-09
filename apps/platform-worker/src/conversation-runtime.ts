@@ -193,7 +193,9 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly workerId: string;
 		readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
 	}>;
-	readonly executionKeys?: WorkerExecutionKeyReaderV4;
+	readonly executionKeys?: WorkerExecutionKeyReaderV4 & {
+		readonly readAcceptedExecutionV6?: WorkerExecutionKeyReaderV6["readAcceptedExecution"];
+	};
 	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;
 	readonly fetch?: typeof fetch;
 	readonly reconnectDelayMs?: number;
@@ -397,15 +399,35 @@ export function createConversationRuntimeV2(
 		return promise;
 	}
 	const originalExecutionKeys = options.executionKeys;
-	const executionKeys: WorkerExecutionKeyReaderV4 | undefined =
-		originalExecutionKeys && {
-			readAcceptedExecution: (request) =>
-				trackKeyDependency(() =>
-					originalExecutionKeys.readAcceptedExecution(request),
-				),
-			readCiphertext: (binding) =>
-				trackKeyDependency(() => originalExecutionKeys.readCiphertext(binding)),
-		};
+	const executionKeys:
+		| (WorkerExecutionKeyReaderV4 & {
+				readonly readAcceptedExecutionV6?: WorkerExecutionKeyReaderV6["readAcceptedExecution"];
+		  })
+		| undefined = originalExecutionKeys && {
+		readAcceptedExecution: (request) => {
+			const readV6 = originalExecutionKeys.readAcceptedExecutionV6;
+			const candidate = request as unknown as { schemaVersion?: number };
+			if (candidate.schemaVersion === 6 && readV6)
+				return trackKeyDependency(() =>
+					readV6(
+						request as unknown as Parameters<
+							WorkerExecutionKeyReaderV6["readAcceptedExecution"]
+						>[0],
+					),
+				) as never;
+			return trackKeyDependency(() =>
+				originalExecutionKeys.readAcceptedExecution(request),
+			);
+		},
+		readCiphertext: (binding) =>
+			trackKeyDependency(() => originalExecutionKeys.readCiphertext(binding)),
+		...(originalExecutionKeys.readAcceptedExecutionV6
+			? {
+					readAcceptedExecutionV6:
+						originalExecutionKeys.readAcceptedExecutionV6,
+				}
+			: {}),
+	};
 	const originalDecryptor = options.relayKeyDecryptor;
 	const decryptor: RelayKeyWorkerDecryptorV1 | undefined =
 		originalDecryptor && {

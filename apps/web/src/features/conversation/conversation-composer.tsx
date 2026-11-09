@@ -155,6 +155,15 @@ export function ConversationComposer({
 				selected,
 				draft,
 				skillSelected ? (skillControlFiles?.attachmentIds ?? []) : [],
+				selected.kind === "command" &&
+					selected.effect === "state_changing" &&
+					model?.saved
+					? {
+							schemaVersion: 1,
+							modelOptionId: model.modelId,
+							reasoningLevel: model.reasoning,
+						}
+					: undefined,
 			);
 			if ("error" in prepared) {
 				capability.setError(prepared.error);

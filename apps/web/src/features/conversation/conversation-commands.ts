@@ -37,6 +37,7 @@ import type {
 import type {
 	NativeCapabilityInvocationRequestV1,
 	NativeCapabilityInvocationRequestV2,
+	NativeCapabilityInvocationRequestV3,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { CapabilityInvocationBody } from "./conversation-capability-picker.js";
 
@@ -131,7 +132,10 @@ function failure(status?: number, error?: unknown): ConversationCommandResult {
 function nativeCapabilityRequestBody(
 	body: NativeCapabilityCommandBody,
 	idempotencyKey: string,
-): NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2 {
+):
+	| NativeCapabilityInvocationRequestV1
+	| NativeCapabilityInvocationRequestV2
+	| NativeCapabilityInvocationRequestV3 {
 	const request = {
 		...body,
 		idempotencyKey,

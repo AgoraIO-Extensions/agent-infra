@@ -313,7 +313,7 @@ describe("Platform API production assembly", () => {
 			},
 		);
 		expect(response.status).toBe(503);
-		expect(await response.json()).toEqual({ outcome: "unsupported" });
+		expect(await response.json()).toEqual({ outcome: "unavailable" });
 		await assembly.close();
 		let override: ReturnType<typeof assemblePlatformApi> | undefined;
 		try {
