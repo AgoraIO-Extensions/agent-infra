@@ -43,7 +43,7 @@ docker run --rm --publish 8080:8080 \
 docker buildx build --platform linux/amd64 --build-arg SOURCE_COMMIT="$SOURCE_SHA" \
   --file tests/fixtures/custom-agent-web/Dockerfile.signed \
   --output type=image,name="$IMAGE_REFERENCE",push=true,oci-mediatypes=true \
-  tests/fixtures/custom-agent-web
+  .
 ```
 
 真实 ACK 验收由 [重部署工作流](../../../deploy/ack/ACK-REDEPLOY-WORKFLOW.md) 绑定当前 Agent、
@@ -76,3 +76,24 @@ docker build --build-arg SAMPLE_VERSION=sample-platform-auth \
 
 这仍是 verifier fixture 和 image contract；固定 Digest、Gateway、LDAP、Kubernetes/TLS、真实
 浏览器和 key rotation 的生产验收需要独立证据。
+
+## 工作区快照业务样例
+
+`signed-server.ts` 的 `/api/snapshot-check?input=<0..1000000>` 会在认证后调用固定的
+`node` 解释器执行 `/opt/agent/workspaces/repo/main.ts`，该脚本从另一个只读绑定的
+`/opt/agent/workspaces/env/dependency.ts` 导入依赖并返回 `repoVersion`、依赖版本和计算结果。HTTP 参数只允许
+`input`，服务端不接受路径、模块名或工作区根目录；子进程超时、异常、额外输出和错误 metadata
+都折叠为无正文的 503。`web` 角色只把认证身份转发到同 Agent 的 `api` Service，并重新校验
+结果，不能直接读取工作区。
+
+`snapshots/repo-v1` 与 `repo-v2` 是测试输入，不会被复制进镜像；ACK 验收必须把它们和
+`snapshots/env` 作为三个独立的快照上传。绑定名称固定为 `repo` 和 `env`；两个 repo snapshotId
+交替占用同一个 `repo` 绑定，不能再嵌套一层目录。输入 7 时，repo v1 返回 `repoVersion=1`、
+`total=55`，切换到 v2 返回 `repoVersion=2`、`total=60`，回滚后再次得到 55。结果摘要可以回显版本和
+数值，不能回显源码、路径或环境文件正文。
+
+合入后的 source-bound full release 可选启用 `publish-images.yml` 的
+`own_entry_fixture=true`，发布 `custom-agent-web-signed` 的 linux/amd64 immutable digest，
+并上传 `signed-own-entry-amd64-<sourceSha>-<attempt>` receipt。该 receipt 只可用于同一
+source SHA 的私有 ACK capsule；本 fixture 不提供 Platform Task API、Connection supply、
+Ingress 或 DNS 证据，相关门禁继续由 #3870 与 #3874 的独立验收处理。

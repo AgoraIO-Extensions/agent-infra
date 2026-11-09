@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: ""
+      own_entry_fixture:
+        description: Publish the signed self-managed snapshot business fixture in a full release
+        required: false
+        type: boolean
+        default: false
       smoke:
         description: Run the two-architecture release smoke with an isolated tag
         required: false
@@ -38,6 +43,62 @@ env:
   IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && inputs.full_release && format('release-{0}', inputs.source_sha) || github.ref_name }}
 
 jobs:
+  own-entry-fixture:
+    name: Signed own-entry fixture (linux/amd64)
+    if: github.event_name == 'workflow_dispatch' && inputs.full_release == true && inputs.own_entry_fixture == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Validate release source
+        env:
+          INPUT_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if [[ ! "$INPUT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "own-entry fixture requires a 40-hex source_sha" >&2
+            exit 1
+          fi
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
+      - name: Verify merged source
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Verify snapshot business fixture
+        run: node --test tests/signed-own-entry.test.mjs tests/snapshot-business.test.mjs
+      - name: Set up Docker OCI image store
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5 # v5.6.0
+        with:
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true,"cdi":false}}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.11.1
+        with:
+          driver: docker
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Build and publish the signed entry
+        env:
+          PLATFORM: linux/amd64
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/signed-own-entry.json" --images=signedOwnEntry
+      - name: Upload signed entry receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: signed-own-entry-amd64-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed-own-entry.json
+
   infrastructure:
     name: Standard template images (${{ matrix.platform }})
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.smoke == true || inputs.full_release == true))

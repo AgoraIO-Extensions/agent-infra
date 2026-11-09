@@ -130,6 +130,14 @@ const customBaseImage = {
 	command: ["node", "--version"],
 };
 
+const signedOwnEntryImage = {
+	key: "signedOwnEntry",
+	name: "custom-agent-web-signed",
+	dockerfile: "tests/fixtures/custom-agent-web/Dockerfile.signed",
+	runOptions: ["--entrypoint", "node"],
+	command: ["--check", "/app/signed-server.ts"],
+};
+
 function fail(message) {
 	throw new Error(message);
 }
@@ -320,6 +328,7 @@ async function buildImage({
 				...([
 					"apps/agent-runtime-host/Dockerfile",
 					"apps/platform-api/Dockerfile",
+					"tests/fixtures/custom-agent-web/Dockerfile.signed",
 				].includes(image.dockerfile)
 					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
 					: []),
@@ -540,7 +549,7 @@ async function main() {
 		extra.some((value) => value !== "--custom-base-image" && value !== imageOption)
 	) {
 		fail(
-			"usage: build-images.mjs <image-manifest.json> [--images=web,platformApi,platformWorker,enterpriseDirectorySync,runtimeHost,codex,claude,opencode,pi] [--custom-base-image]",
+			"usage: build-images.mjs <image-manifest.json> [--images=web,platformApi,platformWorker,enterpriseDirectorySync,runtimeHost,codex,claude,opencode,pi,signedOwnEntry] [--custom-base-image]",
 		);
 	}
 	if (customBase && imageOption) fail("custom base image cannot be combined with --images");
@@ -553,7 +562,7 @@ async function main() {
 			if (names.length === 0 || new Set(names).size !== names.length) {
 				fail("image selection must contain at least one unique image key");
 			}
-			const selected = [...images, ...standardTemplateImages].filter((image) => names.includes(image.key));
+			const selected = [...images, ...standardTemplateImages, signedOwnEntryImage].filter((image) => names.includes(image.key));
 			if (selected.length !== names.length) {
 				fail(`unknown image selection: ${names.join(",")}`);
 			}

@@ -5,6 +5,12 @@ import {
 	type ServerResponse,
 } from "node:http";
 import { pathToFileURL } from "node:url";
+import {
+	runSnapshotBusiness,
+	type SnapshotBusinessResult,
+	snapshotBusinessInput,
+	snapshotBusinessResult,
+} from "./snapshot-business.ts";
 
 export const ownEntryPage =
 	'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>自定义应用</title></head><body><main><h1>自定义应用</h1><p>已通过应用身份验证</p><button id="check">读取服务状态</button><p id="result"></p></main><script>document.getElementById(\'check\').onclick=async()=>{const r=await fetch(\'/api/check\');if(r.ok)document.getElementById(\'result\').textContent=(await r.json()).message;};</script></body></html>';
@@ -21,6 +27,8 @@ type Configuration = {
 	publicKey: string;
 	role: "single" | "web" | "api";
 	backend?: string;
+	/** An in-process test may supply an isolated mounted-root substitute. */
+	snapshotRoot?: string;
 };
 type Identity = { status: 200 | 401 | 403; token?: string };
 const cookieName = "__Host-custom-entry";
@@ -115,7 +123,8 @@ export function createOwnEntryServer(configuration: Configuration) {
 		response.end(body);
 	}
 	async function handle(request: IncomingMessage, response: ServerResponse) {
-		const pathname = new URL(request.url ?? "/", "http://application").pathname;
+		const url = new URL(request.url ?? "/", "http://application");
+		const pathname = url.pathname;
 		if (request.method === "GET" && pathname === "/healthz") {
 			send(response, 200, '{"status":"ready"}', "application/json");
 			return;
@@ -176,6 +185,43 @@ export function createOwnEntryServer(configuration: Configuration) {
 		}
 		if (pathname === "/app" && configuration.role !== "api") {
 			send(response, 200, ownEntryPage, "text/html; charset=utf-8");
+			return;
+		}
+		if (pathname === "/api/snapshot-check") {
+			let input: number;
+			try {
+				if (
+					[...url.searchParams.keys()].some((name) => name !== "input") ||
+					url.searchParams.getAll("input").length > 1
+				)
+					throw new Error();
+				input = snapshotBusinessInput(url.searchParams.get("input"));
+			} catch {
+				send(response, 400);
+				return;
+			}
+			let result: SnapshotBusinessResult;
+			if (configuration.role === "web") {
+				const upstream = await fetch(
+					`${configuration.backend}/api/snapshot-check?input=${input}`,
+					{
+						headers: { authorization: `Bearer ${authenticated.token}` },
+						redirect: "error",
+						signal: AbortSignal.timeout(6000),
+					},
+				);
+				if (upstream.status !== 200) {
+					send(response, 502);
+					return;
+				}
+				result = snapshotBusinessResult(await upstream.json(), input);
+			} else {
+				result = await runSnapshotBusiness(
+					configuration.snapshotRoot ?? "/opt/agent/workspaces",
+					input,
+				);
+			}
+			send(response, 200, JSON.stringify(result), "application/json");
 			return;
 		}
 		if (pathname === "/api/check") {
