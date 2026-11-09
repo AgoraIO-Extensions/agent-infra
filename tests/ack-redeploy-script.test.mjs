@@ -16,6 +16,67 @@ import { parse } from "yaml";
 const root = join(import.meta.dirname, "..");
 const script = join(root, "deploy/ack/redeploy.sh");
 
+test("bootstrap candidate creation and replay leave live consumers untouched", async (t) => {
+	const source = await readFile(script, "utf8");
+	const start = source.indexOf("bootstrap_inputs() {");
+	const end = source.indexOf("bootstrap_database() {");
+	assert(start > 0 && end > start);
+	const bootstrap = source.slice(start, end);
+	const directory = await mkdtemp(join(tmpdir(), "ack-bootstrap-rollout-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	for (const createCount of [2, 0]) {
+		const result = spawnSync(
+			"bash",
+			[
+				"-c",
+				`set -euo pipefail
+require_source_tuple(){ :; }
+require_file(){ :; }
+prepare_evidence(){ :; }
+render_manifest(){ :; }
+configuration_source_preflight(){ :; }
+image_cache_gate(){ :; }
+node(){
+  case "$1" in
+    */bootstrap-inputs.ts)
+      test "$2" = apply
+      printf '{"schemaVersion":1,"kind":"ack-private-inputs","createCount":${createCount}}\\n'
+      ;;
+    *) echo "UNEXPECTED_CONSUMER_OPERATION" >&2; exit 99;;
+  esac
+}
+kubectl(){
+  case " $* " in
+    *" get deployment "*) printf 'deployment.apps/live-consumer\\n';;
+    *) echo "UNEXPECTED_CONSUMER_OPERATION" >&2; exit 99;;
+  esac
+}
+repo_root=/synthetic
+namespace=test-ns
+ACK_KUBECONFIG=/synthetic/kubeconfig
+ACK_BOOTSTRAP_INPUTS_FILE=/synthetic/bootstrap.json
+timeout=30s
+evidence_dir="$1"
+${bootstrap}
+bootstrap_inputs apply
+`,
+				"bootstrap-test",
+				directory,
+			],
+			{
+				encoding: "utf8",
+				env: { ...process.env, BASH_ENV: "/dev/null" },
+			},
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.doesNotMatch(result.stderr, /UNEXPECTED_CONSUMER_OPERATION/);
+		const receipt = JSON.parse(
+			await readFile(join(directory, "bootstrap-inputs.json"), "utf8"),
+		);
+		assert.equal(receipt.createCount, createCount);
+	}
+});
+
 test("ACK re-deploy script is executable shell and exposes bounded commands", async () => {
 	await access(script);
 	execFileSync("bash", ["-n", script], { stdio: "pipe" });
@@ -66,7 +127,7 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 			"destroy must fail closed when namespace absence cannot be verified",
 		);
 	if (
-		!source.includes("restart_config_consumers") ||
+		!source.includes('"$repo_root/deploy/ack/runtime-inputs.ts" apply') ||
 		!source.includes("template-validation.mjs")
 	)
 		throw new Error(

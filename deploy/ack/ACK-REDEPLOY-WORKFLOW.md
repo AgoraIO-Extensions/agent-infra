@@ -396,11 +396,11 @@ API 和 Worker 分别按渲染清单声明的副本数验证；Worker 仍必须�
 rollout 后或新登录后漂移都失败。`plan`/`deployed` 快照区分渲染的 desired、副本声明和
 现场 observed/updated/available/ready；没有现场对象或状态时记为 null。
 
-配置 restart、Helm deploy 和 `runtime-inputs apply` 在变更前开启 API Deployment watch，
+Helm `deploy` 和 `runtime-inputs apply` 在变更前开启 API Deployment watch，
 从初始 ADDED 事件覆盖到变更后回读的同一 resourceVersion，保留最小 available 副本数。
 零可用副本、UID/副本漂移、watch 中断、无法覆盖终态版本或超时均留下失败/unknown 回执；
-全新安装没有旧 API 时记为 `not-applicable-new-deployment`。独立回执为
-`api-rollout-configuration.json`、`api-rollout-deploy.json`，runtime-inputs 内嵌 `apiRollout`。
+全新安装没有旧 API 时记为 `not-applicable-new-deployment`。Helm 采用的独立回执为
+`api-rollout-deploy.json`，runtime-inputs 内嵌 `apiRollout`。
 这些只是 Deployment 事件窗口证据，`httpAvailabilityVerified=false`；不能据此证明 HTTP
 全程可用。空 Cookie 的两主体登录及 session 回读仍由已有登录 gate 独立完成。
 
@@ -559,6 +559,8 @@ deploy/ack/redeploy.sh bootstrap-inputs
 
 工具先校验全部本地输入、集群 UID、namespace ownership 和已有对象，再创建缺失对象；
 任何已有内容漂移均拒绝，不覆盖、收养或删除既有资源。每个写入后立即回读字节和 ownership。
+依赖准备不重启 API/Worker；新版本化配置通过 `deploy` 切换挂载，声明的身份、模板验证和容量
+更新通过 `runtime-inputs` 采用并验证 rollout。
 重跑复用同一安装标识和输入；创建请求失去响应时，下一次回读实际状态再决定，不强制重建。
 支持迁移前准备其他显式列出的运行时 Secret，但不会从 configuration 模块中执行代码
 或猜测缺失凭证。分享 receipt 只包含数量及集群/namespace 哈希，不包含文件内容、路径或名称。

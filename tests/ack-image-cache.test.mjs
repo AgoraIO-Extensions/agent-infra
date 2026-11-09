@@ -470,7 +470,7 @@ test("cache failure prevents bootstrap configuration writes and restarts, includ
 	);
 	const bootstrap = script.slice(
 		script.indexOf("bootstrap_inputs() {"),
-		script.indexOf("restart_config_consumers() {"),
+		script.indexOf("bootstrap_database() {"),
 	);
 	const all = script.slice(
 		script.indexOf("\tall)") + 6,
@@ -486,7 +486,7 @@ preflight_agent_requests(){ :; }
 reserve_plan_preflight(){ :; }
 image_cache_gate(){ exit 42; }
 node(){ echo WRITE; }
-restart_config_consumers(){ echo RESTART; }
+kubectl(){ echo RESTART; }
 bootstrap_database(){ echo WRITE; }
 repo_root=/synthetic
 ACK_BOOTSTRAP_INPUTS_FILE=/synthetic/input

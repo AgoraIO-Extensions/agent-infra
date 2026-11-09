@@ -153,7 +153,7 @@ first authorization-start proxy，最大 348 ms，不是独立 claim 或纯排�
 | 使用包的 source 关联作为 Actions 权限门禁 | 仓库关联与显式 Actions Write 独立；未关联或首次发布不等于没有写权限 | 不把 metadata 回读当作权限判定；真实 push 验证写入，允许 package admin 仅授予目标仓库 Write |
 | 发布清单通过预检，渲染入口却接受不同 source 的 Runtime | shell 与 renderer 各自维护不同解析逻辑，测试又可能在脏 checkout 提前退出 | 两入口复用同一 source/arch/schema 校验器；从干净 Git fixture 执行真实 plan，覆盖正式 nested 与旧 flat 清单和无效输入拒绝 |
 | YAML 修改通过文本检查，发布工作流却无法解析 | block scalar 中混入了少于首行缩进的制表符 | 提交前执行 workflow policy 的 YAML 解析和 actionlint；`git diff --check` 不能代替语法校验 |
-| 修改配置 Secret 后 API 仍使用旧 origin/模板状态 | Kubernetes Secret 投影更新不会重载已经启动的 Node 模块 | `bootstrap-inputs apply` 后显式滚动 API/Worker，并等待两者 rollout |
+| 修改配置 Secret 后 API 仍使用旧 origin/模板状态 | Kubernetes Secret 投影更新不会重载已经启动的 Node 模块 | 通过 `runtime-inputs` 更新声明键并验证 rollout；新版本化配置由 Helm `deploy` 切换挂载。`bootstrap-inputs` 只创建并回读依赖，不重启消费者 |
 | 部署一段时间后四模板重新变成 `stale` | Real-runtime validation receipt 有有效期；旧 receipt 不能授权新部署 | 创建 Agent 前验证四份 receipt 的来源 SHA、镜像、Driver、revision、model、状态和剩余有效期 |
 | 标准 API Agent 返回通用 `400` | 模型准入先于镜像准入，但请求 source 尚未有 image digest | 预镜像阶段只按受信 template identity 做 keyless admission；最终 image admission 仍绑定 exact digest |
 | 用旧模板 receipt 继续部署新镜像 | receipt 只在 exact image/config tuple 下有效 | 不把历史 receipt、Pod Ready、fixture 或 `/models` 成功当成当前模板验证 |

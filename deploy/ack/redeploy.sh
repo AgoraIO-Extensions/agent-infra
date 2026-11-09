@@ -171,43 +171,8 @@ bootstrap_inputs() {
 	configuration_source_preflight "$rendered_manifest"
 	if [[ "$1" == apply ]]; then image_cache_gate; fi
 	node "$repo_root/deploy/ack/bootstrap-inputs.ts" "$1" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" >"$evidence_dir/bootstrap-inputs.json"
-	if [[ "$1" == apply ]]; then
-		restart_config_consumers
-	fi
 	unlink "$rendered_manifest"
 	trap - EXIT
-}
-
-restart_config_consumers() {
-	export KUBECONFIG="$ACK_KUBECONFIG"
-	local count=0
-	local component
-	local -a deployments=()
-	local found
-	for component in api worker; do
-		found=$(kubectl -n "$namespace" get deployment "agent-infra-$component" --ignore-not-found -o name 2>/dev/null || true)
-		if [[ -n "$found" ]]; then
-			count=$((count + 1))
-			deployments+=("deployment/agent-infra-$component")
-		fi
-	done
-	if [[ "$count" -eq 0 ]]; then
-		printf '%s\n' '{"schemaVersion":1,"kind":"ack-configuration-rollout","restartApplied":false,"deploymentCount":0}' >"$evidence_dir/configuration-rollout.json"
-		chmod 600 "$evidence_dir/configuration-rollout.json"
-		return
-	fi
-	if [[ " ${deployments[*]} " == *" deployment/agent-infra-api "* ]]; then
-		node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" live \
-			"$evidence_dir/api-rollout-configuration.json" "$timeout" -- \
-			kubectl -n "$namespace" rollout restart "${deployments[@]}" >/dev/null
-	else
-		kubectl -n "$namespace" rollout restart "${deployments[@]}" >/dev/null
-	fi
-	for component in "${deployments[@]}"; do
-		kubectl -n "$namespace" rollout status "$component" --timeout="$timeout" >/dev/null
-	done
-	printf '{"schemaVersion":1,"kind":"ack-configuration-rollout","restartApplied":true,"deploymentCount":%s}\n' "$count" >"$evidence_dir/configuration-rollout.json"
-	chmod 600 "$evidence_dir/configuration-rollout.json"
 }
 
 bootstrap_database() {
