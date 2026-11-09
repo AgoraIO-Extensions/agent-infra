@@ -141,6 +141,10 @@ export function registerWorkspaceSnapshotRoutesV1(
 						metadata.traceId,
 					),
 					conflict: new HttpProtocolError("CONFLICT", metadata.traceId),
+					rate_limited: new HttpProtocolError(
+						"UPLOAD_RATE_LIMITED",
+						metadata.traceId,
+					),
 					quota_exceeded: new HttpProtocolError(
 						"INVALID_REQUEST",
 						metadata.traceId,

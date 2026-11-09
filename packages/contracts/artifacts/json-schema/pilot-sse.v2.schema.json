@@ -802,7 +802,8 @@
                                 "CONNECTION_UNAVAILABLE",
                                 "PROVIDER_RATE_LIMITED",
                                 "DEPENDENCY_UNAVAILABLE",
-                                "INTERNAL_ERROR"
+                                "INTERNAL_ERROR",
+                                "UPLOAD_RATE_LIMITED"
                               ],
                               "type": "string"
                             },
@@ -1486,7 +1487,8 @@
                                     "CONNECTION_UNAVAILABLE",
                                     "PROVIDER_RATE_LIMITED",
                                     "DEPENDENCY_UNAVAILABLE",
-                                    "INTERNAL_ERROR"
+                                    "INTERNAL_ERROR",
+                                    "UPLOAD_RATE_LIMITED"
                                   ],
                                   "type": "string"
                                 },
@@ -3985,7 +3987,8 @@
                             "CONNECTION_UNAVAILABLE",
                             "PROVIDER_RATE_LIMITED",
                             "DEPENDENCY_UNAVAILABLE",
-                            "INTERNAL_ERROR"
+                            "INTERNAL_ERROR",
+                            "UPLOAD_RATE_LIMITED"
                           ],
                           "type": "string"
                         },
@@ -4541,7 +4544,8 @@
                                 "CONNECTION_UNAVAILABLE",
                                 "PROVIDER_RATE_LIMITED",
                                 "DEPENDENCY_UNAVAILABLE",
-                                "INTERNAL_ERROR"
+                                "INTERNAL_ERROR",
+                                "UPLOAD_RATE_LIMITED"
                               ],
                               "type": "string"
                             },

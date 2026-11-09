@@ -467,6 +467,7 @@ describe("platform-core package surface", () => {
 			"workloadManagementObservationV1",
 			"workspaceSnapshotLimitsV1",
 			"workspaceSnapshotMountPathV1",
+			"workspaceSnapshotUploadPolicyV1",
 			"writeFileLimitDeclarationV1",
 		]);
 		const testingSurface = await import(

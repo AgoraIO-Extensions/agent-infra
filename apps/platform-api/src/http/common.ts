@@ -6,7 +6,7 @@ import {
 import type { PilotProtocolErrorV1 } from "@agent-infra/contracts/pilot";
 import { currentRequestMetadata } from "@agent-infra/observability/http";
 
-export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 503;
+export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
 
 type ProtocolErrorCode = PilotProtocolErrorV1["code"];
 
@@ -45,6 +45,12 @@ const protocolErrors = {
 		false,
 	],
 	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
+	UPLOAD_RATE_LIMITED: [
+		429,
+		"UPLOAD_RATE_LIMITED",
+		"Snapshot upload capacity is temporarily exhausted.",
+		true,
+	],
 	AGENT_STARTING: [
 		409,
 		"AGENT_STARTING",

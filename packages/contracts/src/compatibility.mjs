@@ -6370,6 +6370,39 @@ function normalizeQueueFullErrorCodeAddition(previous, current) {
 	return normalized;
 }
 
+// #3873 appends one retryable upload error; all existing codes and fields stay exact.
+function normalizeUploadRateLimitErrorCodeAddition(previous, current) {
+	const code = '"UPLOAD_RATE_LIMITED"';
+	if (
+		JSON.stringify(previous).includes(code) ||
+		!JSON.stringify(current).includes(code)
+	)
+		return current;
+	const normalized = structuredClone(current);
+	const codes = [
+		"AGENT_BUSY",
+		"AGENT_STARTING",
+		"AGENT_UPDATING",
+		"RUNTIME_UNAVAILABLE",
+		"CONNECTION_UNAVAILABLE",
+		"PROVIDER_RATE_LIMITED",
+		"DEPENDENCY_UNAVAILABLE",
+		"INTERNAL_ERROR",
+		"UPLOAD_RATE_LIMITED",
+	];
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		if (
+			sameValue(value.properties?.code?.enum, codes) &&
+			value.properties?.retryable?.const === true
+		)
+			value.properties.code.enum = codes.slice(0, -1);
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return normalized;
+}
+
 // #3639: allow only the pinned experiment/scoring surface and explicit credential ceilings.
 function normalizeEvaluationExperiments3639(document) {
 	if (
@@ -7171,6 +7204,12 @@ function normalizeWorkspaceSnapshot3871(previous, current) {
 }
 
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const uploadRateLimit = normalizeUploadRateLimitErrorCodeAddition(
+		previousValue,
+		currentValue,
+	);
+	if (!sameValue(uploadRateLimit, currentValue))
+		return findBreakingChanges(previousValue, uploadRateLimit);
 	const snapshots = normalizeWorkspaceSnapshot3871(previousValue, currentValue);
 	if (snapshots.invalid)
 		return ["removed or changed published workspace snapshot contract"];
