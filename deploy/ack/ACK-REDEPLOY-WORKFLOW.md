@@ -11,6 +11,30 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
 
+## 部署仓库交付与失败反馈
+
+将 ACK Helm 交付到独立部署仓库时，保存完整 chart、上游 exact source SHA、逐文件 SHA-256、
+同一次 full release 的 run/attempt 和镜像 manifest。部署仓库入口显式设置 `ACK_CHART_DIR`，
+再调用对应 clean source checkout 的 `redeploy.sh`；source/image/config、ownership 和实际回读
+门禁继续适用。`run-capsule.ts` 会清除继承的 `ACK_*` 变量，仅在父进程设置该路径不能证明
+使用了部署仓库 chart。私有输入仍保存在仓库外，不将配置模块、凭据或浏览器状态混入 chart。
+部署仓库单独修正 Helm 运维内容时，分别保存上游 chart 基线和最终文件 hash，并记录变更原因；
+不将 Helm 修正伪装成上游应用源码，也不改写镜像 manifest 的 source SHA。
+
+已有环境的 values 回放须保留 raw user overrides 中显式 `null` 的含义，比较最终渲染与现场
+manifest，避免默认调度条件重新出现；不能只依据合并后的 `helm get values -a`。部署前回读
+namespace UID/owner、release 最新 revision 与当前发布窗口，进行真实 API server dry-run，
+不得在另一运行尚未收敛时启动第二次 Helm 发布。
+启用 ResourceQuota 时还须检查 migration Job 等后续 Pod 模板的 CPU/内存资源声明；Job 的
+dry-run 不会替 Job controller 创建 Pod，不能覆盖 quota 对实际 Pod 的拒绝。迁移使用声明的
+资源预算和有界 deadline，不能关闭 quota 绕过缺失声明。
+受控 CA 输入在写入前执行严格证书链、用途和 hostname 校验，包含 CA key usage 与叶证书的
+SKI/AKI 扩展；单个客户端兼容模式下的成功不能覆盖严格客户端的真实失败。
+
+每次执行单独保存成功或失败 attempt。任一阶段失败后停止后续步骤，先核对写入状态并将
+错误类别、根因或 unknown、修正和新增预检反哺流程与部署内容，再从部署仓库入口执行完整
+的新 attempt。保留原失败结果，不以临时补丁、后来恢复或 Helm 成功代替原 attempt 的结果。
+
 ## 收尾与定向变更
 
 完成既定 clean rebuild 验收后保留冻结输入、成功及失败 attempt 回执；进入收尾不再执行
@@ -262,13 +286,16 @@ export ACK_CAPTURE_DIR=/private/ack/input-capsule
 deploy/ack/redeploy.sh capture-inputs
 ```
 
-该命令读取精确 Helm release 的合并 values、集群版本和渲染出的 Secret/ConfigMap 依赖，
+该命令固定同一 Helm release revision，读取合并 values、原始 user overrides、集群版本和渲染出的 Secret/ConfigMap 依赖，
 在 `ACK_CAPTURE_DIR` 下以 `0600` 保存文件引用和脱敏 receipt，不写 ACK。它生成
 `values.reuse.yaml`、`values.fresh.yaml`、`bootstrap-inputs.reuse.json` 和
 `bootstrap-inputs.fresh.json`。fresh 配置会为新的 PostgreSQL 生成独立的管理员、Platform、
 目录运行和目录迁移账号；不会错误复用旧环境中共用一个角色/数据库的 URL。旧 values 中被
 当前 schema 拒绝的字段会被移除并记录在本地 receipt。采集仍不生成源码绑定的镜像 manifest，
 部署前必须补齐同一个 `ACK_SOURCE_SHA` 的 Platform/Runtime amd64 manifest。
+
+原始 overrides 中用于删除默认键的显式 `null` 会保留到 reuse/fresh values；只保存合并结果
+会丢失该意图，再次渲染时可能重新引入默认的节点选择器等配置。非 null 的已解析值保持不变。
 
 `ACK_AGENT_STATE_DIR` 必须是仓库外、当前用户拥有的既有 `0700` 目录。
 创建成功即以 `0600` 原子写入 `agent-bindings.json`；它是私有操作状态，
