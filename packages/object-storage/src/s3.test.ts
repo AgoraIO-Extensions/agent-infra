@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { expect, it } from "vitest";
 import {
 	objectCleanupConformanceV1,
 	objectStorageConformanceV1,
 	objectTextDeclarationConformanceV1,
+	objectUploadFenceConformanceV1,
 } from "./conformance.ts";
 import { startMinioFileFixtureV1 } from "./minio.test-support.ts";
 import { createS3ObjectStorageV1 } from "./s3.ts";
@@ -58,6 +59,60 @@ it("rejects persisted invalid text as a content conflict", async () => {
 		await expect(fixture.storage.inspect(objectRef)).rejects.toMatchObject({
 			code: "conflict",
 		});
+	} finally {
+		await fixture.close();
+	}
+}, 60000);
+
+it("retains an actual S3 fence and refuses old conditional writes after it is current", async () => {
+	const fixture = await startMinioFileFixtureV1();
+	try {
+		await objectUploadFenceConformanceV1(fixture.storage);
+		const objectRef = randomUUID();
+		const fence = await fixture.storage.fenceUpload(objectRef);
+		const head = await fixture.client.send(
+			new HeadObjectCommand({
+				Bucket: fixture.bucket,
+				Key: `${fixture.prefix}${objectRef}`,
+			}),
+		);
+		expect(head).toMatchObject({
+			VersionId: fence.version,
+			ContentLength: 0,
+			Metadata: { "agent-infra-upload-fence": "v1" },
+		});
+		await expect(
+			fixture.client.send(
+				new PutObjectCommand({
+					Bucket: fixture.bucket,
+					Key: `${fixture.prefix}${objectRef}`,
+					Body: Buffer.from("late write"),
+					ContentType: "text/plain",
+					IfNoneMatch: "*",
+				}),
+			),
+		).rejects.toMatchObject({ $metadata: { httpStatusCode: 412 } });
+		expect(await fixture.storage.fenceUpload(objectRef)).toEqual(fence);
+		// A second fence models a previously unknown fence PUT completing later.
+		const successor = await fixture.client.send(
+			new PutObjectCommand({
+				Bucket: fixture.bucket,
+				Key: `${fixture.prefix}${objectRef}`,
+				Body: new Uint8Array(),
+				ContentLength: 0,
+				ContentType: "application/vnd.agent-infra.upload-fence",
+				Metadata: { "agent-infra-upload-fence": "v1" },
+			}),
+		);
+		expect(successor.VersionId).toBeTruthy();
+		expect(await fixture.storage.fenceUpload(objectRef)).toEqual({
+			version: successor.VersionId,
+		});
+		await fixture.storage.remove(objectRef, fence.version);
+		expect(await fixture.storage.inspect(objectRef, fence.version)).toBeNull();
+		await expect(
+			fixture.storage.remove(objectRef, successor.VersionId ?? ""),
+		).rejects.toMatchObject({ code: "conflict" });
 	} finally {
 		await fixture.close();
 	}

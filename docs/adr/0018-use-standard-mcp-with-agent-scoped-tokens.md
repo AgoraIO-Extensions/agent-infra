@@ -9,8 +9,9 @@
 ## 决策
 
 Platform 使用 Connection 的既有标准 MCP/OAuth 或获准 PAT，按原用户/独立应用与 Agent
-隔离客户端 token、受保护保管和撤销。token/安装独立与 Grant 权限范围分别表达，不默认
-为每个 Agent 创建 Consumer，也不以 token 名称推断不同权限。完整消费合同由
+隔离客户端 token、受保护保管和撤销。token/安装独立与 Grant 权限范围分别表达，不以 token
+名称推断不同权限。Platform 自动登记的 Consumer 粒度修订见
+[ADR 0040](0040-auto-register-connection-agents-for-oauth.md)。完整消费合同由
 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成)、
 [工程 Spec §13.5.3](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1353-secretref权威与交付边界)
 及两份 HLD 定义，本 ADR 不单独覆盖上级要求。

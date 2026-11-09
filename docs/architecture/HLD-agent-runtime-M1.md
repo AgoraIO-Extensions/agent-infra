@@ -843,6 +843,11 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 ### 9.1 Codex 独立 Connection consumer profile
 
+正式 Agent 的自动 Consumer 登记和逐用户/安装 OAuth client 准备遵循工程 Spec
+[§13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-自动登记与-oauth-安装准备)。
+Worker 登记回执不产生 Runtime 执行授权；Host 只消费匹配原用户、Agent 和安装修订的获准输入，
+不把长期 Consumer 关联当作共享 OAuth client 或 Token，也不因已登记而跳过保护与真实接入验收。
+
 固定官方 Runtime 的标准 MCP 客户端优先消费 Connection 签发的 OAuth token 或获准 PAT。
 主体/Agent 独立 token、binding、SecretRef 与保管边界以
 [工程 Spec §13.5.3](SPEC-agent-infra-M1-engineering-architecture.md#1353-secretref权威与交付边界)

@@ -40,6 +40,8 @@ export interface ObjectStorageDataV1
 		FileReconciliationStorageV1 {
 	upload(request: ObjectUploadV1): Promise<StoredFileObjectV1>;
 	download(request: ObjectDownloadV1): Promise<ReadableStream<Uint8Array>>;
+	/** Trusted recovery only: retain a zero-byte current version that blocks conditional uploads. */
+	fenceUpload(objectRef: string): Promise<{ readonly version: string }>;
 }
 
 /** Short-lived, exact-version read capability for platform-owned materializers. */

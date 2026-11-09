@@ -61,6 +61,7 @@ import {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 	workspaceSnapshotUploadAdmissions,
+	workspaceSnapshotUploadObjects,
 	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
@@ -157,6 +158,7 @@ export {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 	workspaceSnapshotUploadAdmissions,
+	workspaceSnapshotUploadObjects,
 	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
@@ -237,6 +239,7 @@ export const platformInfrastructureTables = [
 	skillHubAgentBindings,
 	skillHubProjectContents,
 	workspaceSnapshotUploadReservations,
+	workspaceSnapshotUploadObjects,
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 	workspaceSnapshotUploadAdmissions,

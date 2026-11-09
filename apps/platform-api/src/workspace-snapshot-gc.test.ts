@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	close: vi.fn(),
 	metrics: vi.fn(),
 	recover: vi.fn(),
+	objects: vi.fn(),
 	closeUploads: vi.fn(),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
@@ -15,6 +16,7 @@ vi.mock("@agent-infra/platform-store", () => ({
 	},
 	PostgresWorkspaceSnapshotUploadStoreV1: class {
 		collectExpiredUploadReservations = mocks.recover;
+		collectUploadObjects = mocks.objects;
 		close = mocks.closeUploads;
 	},
 }));
@@ -22,6 +24,14 @@ vi.mock("@agent-infra/platform-store", () => ({
 import { startWorkspaceSnapshotGcV1 } from "./workspace-snapshot-gc.js";
 
 beforeEach(() => {
+	mocks.objects.mockResolvedValue({
+		scanned: 0,
+		deletedVersions: 0,
+		reconciled: 0,
+		released: 0,
+		continued: 0,
+		failed: 0,
+	});
 	mocks.metrics.mockResolvedValue({ storedBytes: 0, oldestEligibleDelayMs: 0 });
 	mocks.recover.mockResolvedValue({
 		scanned: 0,
@@ -53,7 +63,7 @@ it("uses exact object versions, avoids overlap, and drains before closing", asyn
 	});
 	const gc = startWorkspaceSnapshotGcV1({
 		databaseUrl: "unused",
-		storage: { remove },
+		storage: { remove, scan: vi.fn(), fenceUpload: vi.fn() },
 		policy: { retentionMs: 1000, intervalMs: 1000, observe },
 	});
 	await vi.advanceTimersByTimeAsync(1000);
@@ -74,6 +84,14 @@ it("uses exact object versions, avoids overlap, and drains before closing", asyn
 		storedBytes: 0,
 		oldestEligibleDelayMs: 0,
 		uploadReservations: { scanned: 0, released: 0, reconciled: 0, failed: 0 },
+		uploadObjects: {
+			scanned: 0,
+			deletedVersions: 0,
+			reconciled: 0,
+			released: 0,
+			continued: 0,
+			failed: 0,
+		},
 	});
 	await vi.advanceTimersByTimeAsync(10000);
 	expect(mocks.collect).toHaveBeenCalledTimes(1);
@@ -94,7 +112,7 @@ it("retries expired upload cleanup without exposing object identities or raw err
 		});
 	const gc = startWorkspaceSnapshotGcV1({
 		databaseUrl: "unused",
-		storage: { remove },
+		storage: { remove, scan: vi.fn(), fenceUpload: vi.fn() },
 		policy: { retentionMs: 1000, intervalMs: 1000, observe },
 	});
 	await vi.advanceTimersByTimeAsync(2000);
@@ -121,7 +139,7 @@ it("retries after failure and does not expose the storage error", async () => {
 		.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
 	const gc = startWorkspaceSnapshotGcV1({
 		databaseUrl: "unused",
-		storage: { remove: vi.fn() },
+		storage: { remove: vi.fn(), scan: vi.fn(), fenceUpload: vi.fn() },
 		policy: { retentionMs: 0, intervalMs: 1000, observe },
 	});
 	await vi.advanceTimersByTimeAsync(2000);
@@ -146,7 +164,7 @@ it.each([
 	expect(() =>
 		startWorkspaceSnapshotGcV1({
 			databaseUrl: "unused",
-			storage: { remove: vi.fn() },
+			storage: { remove: vi.fn(), scan: vi.fn(), fenceUpload: vi.fn() },
 			policy: { ...policy, observe: vi.fn() },
 		}),
 	).toThrow("WORKSPACE_SNAPSHOT_GC_CONFIGURATION_INVALID");
@@ -159,7 +177,7 @@ it("continues scheduling when telemetry throws", async () => {
 	mocks.collect.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
 	const gc = startWorkspaceSnapshotGcV1({
 		databaseUrl: "unused",
-		storage: { remove: vi.fn() },
+		storage: { remove: vi.fn(), scan: vi.fn(), fenceUpload: vi.fn() },
 		policy: {
 			retentionMs: 1000,
 			intervalMs: 1000,
@@ -179,7 +197,7 @@ it("contains a rejected async telemetry callback", async () => {
 	mocks.collect.mockResolvedValue({ scanned: 0, deleted: 0, failed: 0 });
 	const gc = startWorkspaceSnapshotGcV1({
 		databaseUrl: "unused",
-		storage: { remove: vi.fn() },
+		storage: { remove: vi.fn(), scan: vi.fn(), fenceUpload: vi.fn() },
 		policy: {
 			retentionMs: 1000,
 			intervalMs: 1000,
@@ -202,7 +220,7 @@ it("reports unknown metrics and resumes collection after a metrics read failure"
 	const observe = vi.fn();
 	const gc = startWorkspaceSnapshotGcV1({
 		databaseUrl: "unused",
-		storage: { remove: vi.fn() },
+		storage: { remove: vi.fn(), scan: vi.fn(), fenceUpload: vi.fn() },
 		policy: { retentionMs: 1000, intervalMs: 1000, observe },
 	});
 	await vi.advanceTimersByTimeAsync(1000);

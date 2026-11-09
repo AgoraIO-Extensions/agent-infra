@@ -2,19 +2,24 @@ import { type KeyObject, verify } from "node:crypto";
 import { TextDecoder } from "node:util";
 
 import {
+	type RuntimeBusinessRequestV4,
+	type RuntimeExecutionGrantV4,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionGrantV5Schema,
 	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimeNativeCapabilityRequestV5Schema,
 	RuntimeNativeCapabilityRequestV6Schema,
+	type RuntimeNativeCapabilityTransportV4,
 	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeRestoreExecutionKeyRequestV5Schema,
 	RuntimeSubmitTurnRequestV4Schema,
+	type RuntimeSubmitTurnTransportV4,
 	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4Schema,
+	type RuntimeSupplementTransportV4,
 	RuntimeSupplementTransportV4Schema,
 	VerifiedRuntimeExecutionGrantV4Schema,
 	validateRuntimeBusinessBindingV4,
@@ -29,9 +34,33 @@ import {
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5,
 } from "@agent-infra/contracts/runtime";
 
-import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	isRuntimeAuthorizationDenial,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+type RuntimeV4DenialStage =
+	| "runtime-v4-request-schema"
+	| "runtime-v4-transport-schema"
+	| "runtime-v4-grant-schema"
+	| "runtime-v4-grant-signature"
+	| "runtime-v4-claims"
+	| "runtime-v4-business-binding"
+	| "runtime-v4-private-key";
+
+function preserveOrDeny(error: unknown, stage: RuntimeV4DenialStage): never {
+	// Inner V4 validators already carry a fixed stage. Preserve only that
+	// bounded diagnostic; all other failures get the boundary's stage.
+	if (isRuntimeAuthorizationDenial(error) && error.diagnostic) throw error;
+	runtimeAuthorizationDenied(stage);
+}
+
+function denyGrantSignature(stage?: RuntimeV4DenialStage): never {
+	if (stage) runtimeAuthorizationDenied(stage);
+	runtimeAuthorizationDenied();
+}
 
 /** Verify the independently versioned V6 grant without projecting it to V4. */
 export function createRuntimeExecutionGrantValidatorV6(
@@ -66,10 +95,10 @@ export function createRuntimeExecutionGrantValidatorV6(
 	};
 }
 
-function decode(segment: string): Buffer {
-	if (!/^[A-Za-z0-9_-]+$/.test(segment)) runtimeAuthorizationDenied();
+function decode(segment: string, stage?: RuntimeV4DenialStage): Buffer {
+	if (!/^[A-Za-z0-9_-]+$/.test(segment)) denyGrantSignature(stage);
 	const decoded = Buffer.from(segment, "base64url");
-	if (decoded.toString("base64url") !== segment) runtimeAuthorizationDenied();
+	if (decoded.toString("base64url") !== segment) denyGrantSignature(stage);
 	return decoded;
 }
 
@@ -86,13 +115,13 @@ export function createRuntimeExecutionGrantVerifierV4(
 function verifySignedRuntimeToken(
 	publicKeys: ReadonlyMap<string, KeyObject>,
 	token: string,
+	stage?: RuntimeV4DenialStage,
 ): unknown {
 	const parts = token.split(".");
-	if (parts.length !== 3) runtimeAuthorizationDenied();
+	if (parts.length !== 3) denyGrantSignature(stage);
 	const [headerPart, claimsPart, signaturePart] = parts;
-	if (!headerPart || !claimsPart || !signaturePart)
-		runtimeAuthorizationDenied();
-	const header = JSON.parse(utf8.decode(decode(headerPart))) as {
+	if (!headerPart || !claimsPart || !signaturePart) denyGrantSignature(stage);
+	const header = JSON.parse(utf8.decode(decode(headerPart, stage))) as {
 		alg?: unknown;
 		kid?: unknown;
 		typ?: unknown;
@@ -104,7 +133,7 @@ function verifySignedRuntimeToken(
 		header.typ !== "runtime-execution+jws" ||
 		typeof header.kid !== "string"
 	)
-		runtimeAuthorizationDenied();
+		denyGrantSignature(stage);
 	const key = publicKeys.get(header.kid);
 	if (
 		key?.asymmetricKeyType !== "ed25519" ||
@@ -112,11 +141,11 @@ function verifySignedRuntimeToken(
 			null,
 			Buffer.from(`${headerPart}.${claimsPart}`, "ascii"),
 			key,
-			decode(signaturePart),
+			decode(signaturePart, stage),
 		)
 	)
-		runtimeAuthorizationDenied();
-	return JSON.parse(utf8.decode(decode(claimsPart))) as unknown;
+		denyGrantSignature(stage);
+	return JSON.parse(utf8.decode(decode(claimsPart, stage))) as unknown;
 }
 
 /** Signature-only verifier used by the independent recovery Grant schema. */
@@ -124,15 +153,23 @@ function verifySignedRuntimeGrantV4(
 	publicKeys: ReadonlyMap<string, KeyObject>,
 	value: unknown,
 ) {
+	let grant: RuntimeExecutionGrantV4;
 	try {
-		const grant = RuntimeExecutionGrantV4Schema.parse(value);
-		return {
-			token: grant.token,
-			claims: verifySignedRuntimeToken(publicKeys, grant.token),
-		};
-	} catch {
-		runtimeAuthorizationDenied();
+		grant = RuntimeExecutionGrantV4Schema.parse(value);
+	} catch (error) {
+		preserveOrDeny(error, "runtime-v4-grant-schema");
 	}
+	let claims: unknown;
+	try {
+		claims = verifySignedRuntimeToken(
+			publicKeys,
+			grant.token,
+			"runtime-v4-grant-signature",
+		);
+	} catch (error) {
+		preserveOrDeny(error, "runtime-v4-grant-signature");
+	}
+	return { token: grant.token, claims };
 }
 
 async function validateRuntimeExecutionGrantV4(
@@ -144,8 +181,9 @@ async function validateRuntimeExecutionGrantV4(
 		readonly now?: () => number;
 	},
 ) {
+	let parsedRequest: RuntimeBusinessRequestV4;
 	try {
-		const parsedRequest =
+		parsedRequest =
 			request !== null && typeof request === "object" && "selection" in request
 				? RuntimeSubmitTurnRequestV4Schema.parse(request)
 				: request !== null &&
@@ -153,11 +191,21 @@ async function validateRuntimeExecutionGrantV4(
 						"capabilityId" in request
 					? RuntimeNativeCapabilityRequestV4Schema.parse(request)
 					: RuntimeSupplementRequestV4Schema.parse(request);
-		const verification =
+	} catch (error) {
+		preserveOrDeny(error, "runtime-v4-request-schema");
+	}
+	let verification: { token: string; claims: unknown };
+	try {
+		verification =
 			VerifiedRuntimeExecutionGrantV4Schema.parse(verificationInput);
 		if (verification.token !== parsedRequest.grant.token)
-			runtimeAuthorizationDenied();
-		const claims = validateVerifiedRuntimeExecutionGrantClaimsV4(
+			runtimeAuthorizationDenied("runtime-v4-business-binding");
+	} catch (error) {
+		preserveOrDeny(error, "runtime-v4-claims");
+	}
+	let claims: ReturnType<typeof validateVerifiedRuntimeExecutionGrantClaimsV4>;
+	try {
+		claims = validateVerifiedRuntimeExecutionGrantClaimsV4(
 			verification.claims,
 			{
 				expectedIssuer: options.expectedIssuer,
@@ -165,11 +213,15 @@ async function validateRuntimeExecutionGrantV4(
 				now: (options.now ?? Date.now)(),
 			},
 		);
-		await validateRuntimeBusinessBindingV4(parsedRequest, claims);
-		return { request: parsedRequest, claims };
-	} catch {
-		runtimeAuthorizationDenied();
+	} catch (error) {
+		preserveOrDeny(error, "runtime-v4-claims");
 	}
+	try {
+		await validateRuntimeBusinessBindingV4(parsedRequest, claims);
+	} catch (error) {
+		preserveOrDeny(error, "runtime-v4-business-binding");
+	}
+	return { request: parsedRequest, claims };
 }
 
 export function createRuntimeExecutionGrantValidatorV4(
@@ -182,8 +234,9 @@ export function createRuntimeExecutionGrantValidatorV4(
 ) {
 	const verifyGrant = createRuntimeExecutionGrantVerifierV4(publicKeys);
 	return async (request: unknown) => {
+		let parsedRequest: RuntimeBusinessRequestV4;
 		try {
-			const parsedRequest =
+			parsedRequest =
 				request !== null &&
 				typeof request === "object" &&
 				"selection" in request
@@ -193,14 +246,14 @@ export function createRuntimeExecutionGrantValidatorV4(
 							"capabilityId" in request
 						? RuntimeNativeCapabilityRequestV4Schema.parse(request)
 						: RuntimeSupplementRequestV4Schema.parse(request);
-			return await validateRuntimeExecutionGrantV4(
-				parsedRequest,
-				verifyGrant(parsedRequest.grant),
-				options,
-			);
-		} catch {
-			runtimeAuthorizationDenied();
+		} catch (error) {
+			preserveOrDeny(error, "runtime-v4-request-schema");
 		}
+		return await validateRuntimeExecutionGrantV4(
+			parsedRequest,
+			verifyGrant(parsedRequest.grant),
+			options,
+		);
 	};
 }
 
@@ -218,6 +271,10 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 		options,
 	);
 	return async (transport: unknown) => {
+		let parsed:
+			| RuntimeSubmitTurnTransportV4
+			| RuntimeNativeCapabilityTransportV4
+			| RuntimeSupplementTransportV4;
 		try {
 			const businessRequest =
 				transport !== null &&
@@ -225,7 +282,7 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 				"businessRequest" in transport
 					? transport.businessRequest
 					: undefined;
-			const parsed =
+			parsed =
 				businessRequest !== null &&
 				typeof businessRequest === "object" &&
 				"selection" in businessRequest
@@ -235,8 +292,13 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 							"capabilityId" in businessRequest
 						? RuntimeNativeCapabilityTransportV4Schema.parse(transport)
 						: RuntimeSupplementTransportV4Schema.parse(transport);
-			const accepted = await validateGrant(parsed.businessRequest);
-			const privateField = validateRuntimePrivateRelayKeyFieldV1(
+		} catch (error) {
+			preserveOrDeny(error, "runtime-v4-transport-schema");
+		}
+		const accepted = await validateGrant(parsed.businessRequest);
+		let privateField: ReturnType<typeof validateRuntimePrivateRelayKeyFieldV1>;
+		try {
+			privateField = validateRuntimePrivateRelayKeyFieldV1(
 				parsed.privateKeyField,
 				{
 					request: accepted.request,
@@ -244,13 +306,10 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 					requestDigest: accepted.claims.requestDigest,
 				},
 			);
-			return {
-				...accepted,
-				relayKey: privateField.keyDelivery.relayKey,
-			};
-		} catch {
-			runtimeAuthorizationDenied();
+		} catch (error) {
+			preserveOrDeny(error, "runtime-v4-private-key");
 		}
+		return { ...accepted, relayKey: privateField.keyDelivery.relayKey };
 	};
 }
 
