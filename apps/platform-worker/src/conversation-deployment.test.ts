@@ -724,6 +724,44 @@ describe("production SessionSandbox resource receiver", () => {
 		).toBeDefined();
 	});
 
+	it("refreshes source identities after a same-name Pod replacement before draining", async () => {
+		const f = fixture();
+		const signal = new AbortController().signal;
+		await f.receive(f.claim, signal);
+		const pod = await f.client.read<V1Pod>("Pod", f.claim.sandbox.resourceName);
+		if (!pod?.metadata) throw new Error("Expected prepared Pod");
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		await f.client.replace(pod);
+		const ready = await f.receive(f.claim, signal);
+		const drain = drainClaim(f, ready);
+		const currentPod = await f.client.read<V1Pod>(
+			"Pod",
+			f.claim.sandbox.resourceName,
+		);
+		if (!currentPod) throw new Error("Expected current Pod");
+		const oldPodUid = currentPod.metadata?.uid;
+		await f.client.delete(currentPod);
+		await f.client.create({
+			...structuredClone(pod),
+			metadata: {
+				...pod.metadata,
+				uid: "replacement-pod",
+				resourceVersion: "99",
+			},
+		});
+
+		const observed = await f.receive(drain, signal, async () => "committed");
+		expect(observed.status).toBe("observed");
+		const refreshedPod = observed.resources.find(
+			(resource) => resource.kind === "Pod",
+		);
+		expect(refreshedPod?.uid).toBeDefined();
+		expect(refreshedPod?.uid).not.toBe(oldPodUid);
+	});
+
 	it.each(["missing", "other-agent", "terminating"])(
 		"rejects a %s source PVC before creating Session resources",
 		async (mutation) => {
