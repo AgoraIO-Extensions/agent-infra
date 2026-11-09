@@ -154,6 +154,42 @@ describe("runtime Connection snapshot projection", () => {
 			volumes: [],
 		});
 	});
+	it("carries an opaque persisted OAuth client binding through the Host projection", async () => {
+		const input = source();
+		const captured = createRuntimeConnectionConsumerSnapshotV1(
+			input.profile,
+			input.approval,
+			{
+				clientId: "opaque/client:id",
+				profileFingerprint: input.approval.configFingerprint,
+				source: { revision: "r1", ref: "approved-deployment" },
+			},
+		);
+		if (!captured) throw new Error("Missing binding snapshot");
+		const projection = runtimeConnectionConsumerProjectionV1(captured);
+		const revision = projection.env.find(
+			(entry) => entry.name === runtimeConnectionConsumerRevisionEnvironment,
+		)?.value;
+		const file = projection.volumes[0]?.downwardAPI?.items?.[0];
+		if (!revision || !file?.fieldRef || !file.path)
+			throw new Error("Missing binding projection");
+		const directory = await mkdtemp(join(tmpdir(), "consumer-binding-host-"));
+		try {
+			const path = join(directory, file.path);
+			await writeFile(
+				path,
+				projection.annotations[runtimeConnectionConsumerAnnotation] ?? "",
+			);
+			expect(
+				await readRuntimeConnectionConsumerProfile(path, revision),
+			).toMatchObject({
+				status: "available",
+				oauthClientId: "opaque/client:id",
+			});
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it.each([
 		[undefined, source().approval],
 		[source().profile, undefined],

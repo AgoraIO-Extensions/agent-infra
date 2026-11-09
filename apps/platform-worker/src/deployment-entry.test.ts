@@ -695,6 +695,42 @@ it("projects distinct approved consumers and installations by Agent", async () =
 	}
 });
 
+it("projects a persisted random OAuth client returned by the deployment resolver", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const original = await readFile(configurationPath, "utf8");
+	const binding = {
+		clientId: "oauth-client-random",
+		profileFingerprint: connectionConsumerApproval.configFingerprint,
+		source: connectionConsumerApproval.source,
+	};
+	try {
+		await writeFile(
+			configurationPath,
+			`${original}\nexport const resolveConnectionConsumerBindingsByAgent = async (signal) => { signal.throwIfAborted(); return ${JSON.stringify(
+				{
+					"agent-a": {
+						profile: connectionConsumerProfile,
+						approval: connectionConsumerApproval,
+						oauthClientBinding: binding,
+						installationSupply: { ref: "installation-a", revision: "r1" },
+					},
+				},
+			)}; };\n`,
+		);
+		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			snapshot: null,
+			snapshots: {
+				"agent-a": expect.stringContaining('"clientId":"oauth-client-random"'),
+			},
+			installations: { "agent-a": '["installation-a","r1"]' },
+		});
+	} finally {
+		await writeFile(configurationPath, original);
+	}
+});
+
 it("rejects a per-Agent consumer map without a matching installation map", async () => {
 	const configurationPath = join(directory, "configuration.mjs");
 	const original = await readFile(configurationPath, "utf8");
