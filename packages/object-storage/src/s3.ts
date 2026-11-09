@@ -195,31 +195,48 @@ export function createS3ObjectStorageV1(
 		async fenceUpload(objectRef) {
 			try {
 				const abortSignal = signal();
-				const current = await headCurrent(objectRef, abortSignal);
-				if (current && isUploadFence(current))
-					return { version: current.VersionId };
+				const initial = await headCurrent(objectRef, abortSignal);
+				if (initial && isUploadFence(initial))
+					return { version: initial.VersionId };
 				const versioning = await client.send(
 					new GetBucketVersioningCommand({ Bucket: options.bucket }),
 					{ abortSignal },
 				);
 				if (versioning.Status !== "Enabled")
 					throw new ObjectStorageError("unavailable");
-				// Retain the current zero-byte version: deleting the key would reopen If-None-Match writes.
-				await client.send(
-					new PutObjectCommand({
-						Bucket: options.bucket,
-						Key: key(objectRef),
-						Body: new Uint8Array(),
-						ContentLength: 0,
-						ContentType: uploadFenceMediaType,
-						Metadata: { [uploadFenceMetadata]: "v1" },
-					}),
-					{ abortSignal },
-				);
-				const fenced = await headCurrent(objectRef, abortSignal);
-				if (!fenced || !isUploadFence(fenced))
+				for (let attempt = 0; attempt < 3; attempt++) {
+					// Retain the current zero-byte version: deleting the key would reopen
+					// If-None-Match writes. A bounded retry handles a provider that has
+					// not made the first fence PUT visible yet.
+					try {
+						await client.send(
+							new PutObjectCommand({
+								Bucket: options.bucket,
+								Key: key(objectRef),
+								Body: new Uint8Array(),
+								ContentLength: 0,
+								ContentType: uploadFenceMediaType,
+								Metadata: { [uploadFenceMetadata]: "v1" },
+							}),
+							{ abortSignal },
+						);
+					} catch (error) {
+						// A provider may reject a fence PUT while an older conditional
+						// PUT is still completing. Only a documented conditional conflict
+						// is retryable; a lost response remains unknown to the caller.
+						const code = status(error);
+						if (code !== 409 && code !== 412) throw error;
+						if (attempt === 2) throw error;
+						continue;
+					}
+					const fenced = await headCurrent(objectRef, abortSignal);
+					if (fenced && isUploadFence(fenced))
+						return { version: fenced.VersionId };
+					// A successful PUT followed by an unconfirmed HEAD is unknown;
+					// do not issue another fence PUT that could create extra markers.
 					throw new ObjectStorageError("unavailable");
-				return { version: fenced.VersionId };
+				}
+				throw new ObjectStorageError("unavailable");
 			} catch (error) {
 				if (error instanceof ObjectStorageError) throw error;
 				throw new ObjectStorageError("unavailable");
