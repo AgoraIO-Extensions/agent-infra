@@ -106,6 +106,7 @@ type DeploymentConfiguration = {
 				{
 					readonly profile: unknown;
 					readonly approval: unknown;
+					readonly oauthClientBinding?: unknown;
 					readonly installationSupply: unknown;
 				}
 			>
