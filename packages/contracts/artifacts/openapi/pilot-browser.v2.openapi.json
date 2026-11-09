@@ -10875,34 +10875,208 @@
         ],
         "type": "object"
       },
-      "NativeMetadataProjectionV1": {
-        "oneOf": [
+      "NativeMetadataProjectionV1OrV2": {
+        "anyOf": [
           {
-            "additionalProperties": false,
-            "properties": {
-              "readAt": {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                "type": "string"
-              },
-              "selector": {
-                "const": "status",
-                "type": "string"
-              },
-              "status": {
-                "enum": [
-                  "active",
-                  "idle",
-                  "not_loaded",
-                  "system_error"
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "readAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                    "type": "string"
+                  },
+                  "selector": {
+                    "const": "status",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "idle",
+                      "not_loaded",
+                      "system_error"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "selector",
+                  "status",
+                  "readAt"
                 ],
-                "type": "string"
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "capabilities": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "availability": {
+                          "const": "available",
+                          "type": "string"
+                        },
+                        "description": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "effect": {
+                          "const": "read_only",
+                          "type": "string"
+                        },
+                        "id": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "command",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "parameters": {
+                          "items": {
+                            "not": {}
+                          },
+                          "maxItems": 0,
+                          "type": "array"
+                        },
+                        "source": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "version": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "version"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "name",
+                        "description",
+                        "source",
+                        "parameters",
+                        "effect",
+                        "availability"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "revision": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "selector": {
+                    "const": "commands",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "selector",
+                  "revision",
+                  "capabilities"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "capabilities": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "availability": {
+                          "const": "discovered",
+                          "type": "string"
+                        },
+                        "description": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "id": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "skill",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "source": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "version": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "version"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "name",
+                        "description",
+                        "source",
+                        "availability"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "revision": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "selector": {
+                    "const": "skills",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "selector",
+                  "revision",
+                  "capabilities"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "selector",
-              "status",
-              "readAt"
             ],
             "type": "object"
           },
@@ -10922,7 +11096,10 @@
                       "type": "string"
                     },
                     "effect": {
-                      "const": "read_only",
+                      "enum": [
+                        "read_only",
+                        "state_changing"
+                      ],
                       "type": "string"
                     },
                     "id": {
@@ -10940,10 +11117,33 @@
                     },
                     "parameters": {
                       "items": {
-                        "not": {}
+                        "additionalProperties": false,
+                        "properties": {
+                          "hint": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "text",
+                            "type": "string"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "required",
+                          "hint"
+                        ],
+                        "type": "object"
                       },
-                      "maxItems": 0,
+                      "maxItems": 1,
                       "type": "array"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
                     },
                     "source": {
                       "additionalProperties": false,
@@ -10967,6 +11167,7 @@
                     }
                   },
                   "required": [
+                    "schemaVersion",
                     "id",
                     "kind",
                     "name",
@@ -10981,9 +11182,17 @@
                 "maxItems": 128,
                 "type": "array"
               },
+              "projectionVersion": {
+                "const": 2,
+                "type": "number"
+              },
               "revision": {
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
               },
               "selector": {
                 "const": "commands",
@@ -10991,92 +11200,15 @@
               }
             },
             "required": [
-              "selector",
-              "revision",
-              "capabilities"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "capabilities": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "availability": {
-                      "const": "discovered",
-                      "type": "string"
-                    },
-                    "description": {
-                      "maxLength": 4096,
-                      "type": "string"
-                    },
-                    "id": {
-                      "pattern": "^[a-f0-9]{64}$",
-                      "type": "string"
-                    },
-                    "kind": {
-                      "const": "skill",
-                      "type": "string"
-                    },
-                    "name": {
-                      "maxLength": 256,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "source": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "name": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "version": {
-                          "maxLength": 128,
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "version"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "kind",
-                    "name",
-                    "description",
-                    "source",
-                    "availability"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 128,
-                "type": "array"
-              },
-              "revision": {
-                "pattern": "^[a-f0-9]{64}$",
-                "type": "string"
-              },
-              "selector": {
-                "const": "skills",
-                "type": "string"
-              }
-            },
-            "required": [
+              "schemaVersion",
+              "projectionVersion",
               "selector",
               "revision",
               "capabilities"
             ],
             "type": "object"
           }
-        ],
-        "type": "object"
+        ]
       },
       "PersistedConversationEventV1": {
         "oneOf": [
@@ -25182,6 +25314,14 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "projectionVersion",
+            "schema": {
+              "const": 2,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -25189,7 +25329,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NativeMetadataProjectionV1"
+                  "$ref": "#/components/schemas/NativeMetadataProjectionV1OrV2"
                 }
               }
             },

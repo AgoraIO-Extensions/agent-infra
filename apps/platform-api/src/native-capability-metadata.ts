@@ -1,4 +1,7 @@
-import type { NativeMetadataProjectionV1 } from "@agent-infra/contracts/runtime";
+import {
+	NativeMetadataCommandsProjectionV2Schema,
+	type NativeMetadataProjectionV1OrV2,
+} from "@agent-infra/contracts/runtime";
 import type {
 	NativeCapabilityAdmissionCapabilityV1,
 	NativeCapabilityAdmissionRequestV1,
@@ -63,9 +66,14 @@ function projectionSelector(selector: Selector): "commands" | "skills" {
 }
 
 function coreProjection(
-	projection: NativeMetadataProjectionV1,
+	projection: NativeMetadataProjectionV1OrV2,
 ): NativeCapabilityMetadataProjectionV1 | undefined {
 	if (projection.selector === "status") return undefined;
+	// The legacy admission contract cannot authorize state-changing or
+	// parameterized commands. Keep the V2 projection out of the V1 cache until
+	// the V6 admission consumer is installed.
+	if (NativeMetadataCommandsProjectionV2Schema.safeParse(projection).success)
+		return undefined;
 	const capabilities: NativeCapabilityMetadataV1[] =
 		projection.capabilities.map((capability) => ({
 			id: capability.id,

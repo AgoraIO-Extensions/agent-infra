@@ -1,15 +1,18 @@
-import { NativeMetadataProjectionV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	NativeMetadataCommandsProjectionV2Schema,
+	NativeMetadataProjectionV1OrV2Schema,
+} from "@agent-infra/contracts/runtime";
 import { useQuery } from "@tanstack/react-query";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { client as defaultClient } from "../../pilot/generated-v2/client.gen.js";
 import { readConversationNativeMetadataV1 } from "../../pilot/generated-v2/sdk.gen.js";
-import type { NativeMetadataProjectionV1 } from "../../pilot/generated-v2/types.gen.js";
+import type { NativeMetadataProjectionV1OrV2 as GeneratedNativeMetadataProjectionV1OrV2 } from "../../pilot/generated-v2/types.gen.js";
 import { readFailed } from "../background-read.js";
 import { collectionReadFailure } from "../collection-read-failure.js";
 import type { ConversationCapabilityV1 } from "./conversation-capability-picker.js";
 
 export function nativeMetadataCapabilities(
-	projection: NativeMetadataProjectionV1 | undefined,
+	projection: GeneratedNativeMetadataProjectionV1OrV2 | undefined,
 ): readonly ConversationCapabilityV1[] {
 	if (!projection || projection.selector === "status") return [];
 	return projection.capabilities.map((capability) => ({
@@ -18,6 +21,13 @@ export function nativeMetadataCapabilities(
 		description: capability.description,
 		source: capability.source.name,
 		version: capability.source.version,
+		...("schemaVersion" in capability && capability.schemaVersion === 2
+			? {
+					schemaVersion: 2 as const,
+					effect: capability.effect,
+					parameters: capability.parameters,
+				}
+			: {}),
 		identity: capability.id,
 		directoryRevision: projection.revision,
 	}));
@@ -28,6 +38,7 @@ export function useConversationNativeMetadata({
 	conversationId,
 	executionId,
 	selector = "skills",
+	projectionVersion,
 	enabled = true,
 	client = defaultClient,
 }: {
@@ -35,6 +46,7 @@ export function useConversationNativeMetadata({
 	readonly conversationId: string;
 	readonly executionId?: string;
 	readonly selector?: "commands" | "skills";
+	readonly projectionVersion?: 2;
 	readonly enabled?: boolean;
 	readonly client?: Client;
 }) {
@@ -45,6 +57,8 @@ export function useConversationNativeMetadata({
 			conversationId,
 			executionId ?? null,
 			selector,
+			projectionVersion ?? null,
+			projectionVersion,
 		],
 		enabled: enabled && Boolean(identityKey && conversationId && executionId),
 		retry: false,
@@ -54,7 +68,10 @@ export function useConversationNativeMetadata({
 			const result = await readConversationNativeMetadataV1({
 				client,
 				path: { conversationId, executionId },
-				query: { selector },
+				query:
+					projectionVersion === 2
+						? { selector, projectionVersion: 2 as const }
+						: { selector },
 				signal,
 				throwOnError: false,
 			});
@@ -63,7 +80,10 @@ export function useConversationNativeMetadata({
 				throw Object.assign(new Error("Native metadata is unavailable"), {
 					retryable: collectionReadFailure(result.response?.status).retryable,
 				});
-			const parsed = NativeMetadataProjectionV1Schema.safeParse(result.data);
+			const parsed =
+				projectionVersion === 2
+					? NativeMetadataCommandsProjectionV2Schema.safeParse(result.data)
+					: NativeMetadataProjectionV1OrV2Schema.safeParse(result.data);
 			if (!parsed.success || parsed.data.selector !== selector)
 				throw new Error("Native metadata response is invalid");
 			return parsed.data;

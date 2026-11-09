@@ -5,6 +5,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import {
 	NativeMetadataCurrentRequestV1Schema,
+	NativeMetadataProjectionV1OrV2Schema,
 	NativeMetadataProjectionV1Schema,
 	NativeMetadataRequestIdentityV1Schema,
 	PlatformNativeMetadataReadRequestV1Schema,
@@ -12,6 +13,7 @@ import {
 	RuntimeNativeMetadataBindingResponseV1Schema,
 	RuntimeNativeMetadataProofClaimsV1Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	runtimeNativeMetadataProofSigningPayloadV1,
 	runtimeNativeMetadataRequestSigningPayloadV1,
@@ -74,6 +76,48 @@ describe("Native metadata V1 contracts", () => {
 				],
 			}),
 		).toMatchObject({ success: true });
+	});
+
+	it("carries the versioned command effect without widening V1", () => {
+		const projection = {
+			schemaVersion: 1,
+			projectionVersion: 2,
+			selector: "commands" as const,
+			revision: "a".repeat(64),
+			capabilities: [
+				{
+					schemaVersion: 2 as const,
+					id: "b".repeat(64),
+					kind: "command" as const,
+					name: "compact",
+					description: "Compact the native session",
+					source: { name: "codex", version: "0.153.0" },
+					parameters: [],
+					effect: "state_changing" as const,
+					availability: "available" as const,
+				},
+			],
+		};
+		expect(NativeMetadataProjectionV1Schema.safeParse(projection).success).toBe(
+			false,
+		);
+		expect(
+			NativeMetadataProjectionV1OrV2Schema.safeParse(projection).success,
+		).toBe(true);
+		expect(
+			RuntimeNativeMetadataReadResponseV1OrV2Schema.safeParse({
+				...identity,
+				originalHostScopeRef: "host-ref",
+				projection,
+			}).success,
+		).toBe(true);
+		expect(
+			RuntimeNativeMetadataReadResponseV1Schema.safeParse({
+				...identity,
+				originalHostScopeRef: "host-ref",
+				projection,
+			}).success,
+		).toBe(false);
 	});
 
 	it("rejects duplicate capability ids, extra fields, and excessive lifetime", () => {

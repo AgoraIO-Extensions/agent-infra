@@ -56,6 +56,24 @@ describe("public native metadata routes", () => {
 				readStartedAt: expect.any(Number),
 				expiresAt: expect.any(Number),
 			}),
+			undefined,
+		);
+	});
+
+	it("passes explicit command projection version negotiation to the reader", async () => {
+		const reader = { read: vi.fn().mockResolvedValue(projection) };
+		const fixture = setup(reader);
+		const response = await fixture.app.request(
+			`${path}?selector=commands&projectionVersion=2`,
+		);
+		expect(response.status).toBe(200);
+		expect(fixture.reader.read).toHaveBeenCalledWith(
+			identity,
+			"conversation-1",
+			"execution-1",
+			"commands",
+			expect.anything(),
+			2,
 		);
 	});
 
@@ -64,6 +82,8 @@ describe("public native metadata routes", () => {
 		`${path}?selector=status&selector=status`,
 		`${path}?selector=status&extra=value`,
 		`${path}?selector=unknown`,
+		`${path}?selector=skills&projectionVersion=2`,
+		`${path}?selector=commands&projectionVersion=3`,
 	])("rejects malformed selector query: %s", async (url) => {
 		const fixture = setup();
 		const response = await fixture.app.request(url);

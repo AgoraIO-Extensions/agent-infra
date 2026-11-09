@@ -6,6 +6,8 @@ export type ConversationCapabilityV1 = Readonly<{
 	description: string;
 	source: string;
 	version?: string;
+	effect?: "read_only" | "state_changing";
+	parameters?: readonly { kind: "text"; required: boolean; hint: string }[];
 	/** Stable service-provided identity used to invalidate replaced metadata. */
 	identity?: string;
 	directoryRevision?: string;
@@ -117,6 +119,11 @@ export function prepareCapabilityInvocation(
 ): { error: string } | { body: CapabilityInvocationBody } {
 	if (!selected.identity || !selected.directoryRevision)
 		return { error: "所选版本已失效，请重新选择；不会作为普通消息发送。" };
+	if (selected.kind === "command" && selected.effect === "state_changing")
+		return {
+			error:
+				"该有状态原生命令已被发现，但执行接缝尚未接入；不会作为普通消息发送。",
+		};
 	if (selected.kind === "skill" && parameterText.trim() === "")
 		return { error: "请在输入框补充这次任务的目标与范围。" };
 	// 只读命令没有参数：输入框里有内容时不静默丢弃，请用户先清空。

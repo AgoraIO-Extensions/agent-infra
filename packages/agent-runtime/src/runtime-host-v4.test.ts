@@ -557,6 +557,7 @@ it.each([1, 2])(
 			.digest("hex");
 		const projection = NativeMetadataCommandsProjectionV2Schema.parse({
 			schemaVersion: 1,
+			projectionVersion: 2,
 			selector: "commands",
 			revision,
 			capabilities: [

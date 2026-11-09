@@ -10,8 +10,8 @@
 
 会话页已经可以调用旧版只读命令与 Skill，但 Codex 有状态命令的消费链尚未完整装配：
 
-- Codex Driver 的 `readNativeMetadataV2` 提供 `compact`、副作用与参数声明；公开目录读取仍只接
-  `NativeMetadataProjectionV1`，不能发现该目录。
+- Codex Driver 的 `readNativeMetadataV2` 提供 `compact`、副作用与参数声明；公开目录读取现在已增加
+  显式 `projectionVersion=2` 读取并能传递该投影，但还没有把它接入 V3 admission。
 - 默认 Platform API assembly 对 Invocation V3 返回 `unsupported`。已有 Core/Store、Worker、Host
   和 Driver 的 V6 接缝不等于默认生产装配已贯通。
 - Web 的命令模型仍表示无参数只读命令，不能据此准备带当前模型选择的 V3 请求。
@@ -38,8 +38,8 @@ Paseo `01888dc5deb7c964491f784f260cb64378a7c4ed` 的
 
 ### 一、接通已有 compact 合同
 
-1. 保留 V1 目录和严格解析。新增显式协商的 commands V2 读取，公开入口、生成 Client、API、Worker
-   和 Host 必须使用同一版本；旧服务明确返回不支持。版本纳入读取请求、签名与响应核对，不能把
+1. 保留 V1 目录和严格解析。显式协商的 commands V2 读取已贯通公开入口、生成 Client、API、Worker
+   和 Host；旧 admission 仍明确拒绝它。版本纳入读取请求、签名与响应核对，不能把
    `state_changing` 投影成 V1 的 `read_only`。
 2. 沿用原 `native_metadata_read` 的主体、Agent、Conversation、原 Execution、generation、原 Host
    配置和请求期限。读取 V2 不恢复会话、不创建 Turn、不安装业务 Key；各 await 边界继续当前授权复核。

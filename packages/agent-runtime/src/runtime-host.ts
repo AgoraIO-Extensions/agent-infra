@@ -6,6 +6,7 @@ import type {
 	BrowserCapabilityBindingV1,
 	BrowserCapabilityDeclarationV1,
 	NativeMetadataObjectScopeV1,
+	NativeMetadataProjectionV1OrV2,
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
 	RuntimeBrowserHandoffRequestV3,
@@ -29,7 +30,7 @@ import type {
 	RuntimeNativeCapabilityTransportV5,
 	RuntimeNativeCapabilityTransportV6,
 	RuntimeNativeMetadataReadRequestV1,
-	RuntimeNativeMetadataReadResponseV1,
+	RuntimeNativeMetadataReadResponseV1OrV2,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimePinnedExecutionKeyScopeV4,
@@ -64,7 +65,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import {
 	maximumRuntimeEventReplayPageBytesV4,
-	NativeMetadataProjectionV1Schema,
+	NativeMetadataProjectionV1OrV2Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
@@ -83,7 +84,7 @@ import {
 	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeNativeCapabilityTransportV6Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
-	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	RuntimeOperationResponseV5Schema,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	RuntimeReplayRequestV1Schema,
@@ -2572,7 +2573,7 @@ export class RuntimeHost {
 	async readNativeMetadataV1(
 		value: RuntimeNativeMetadataReadRequestV1,
 		context: RuntimeHostNativeMetadataReadContextV1,
-	): Promise<RuntimeNativeMetadataReadResponseV1> {
+	): Promise<RuntimeNativeMetadataReadResponseV1OrV2> {
 		this.requireLegacyHost();
 		const parsed = RuntimeNativeMetadataReadRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
@@ -2645,13 +2646,23 @@ export class RuntimeHost {
 			nativeMetadataReadDenied();
 		}
 
+		const readerV2 =
+			request.projectionVersion === 2 && request.selector === "commands"
+				? this.options.driver.readNativeMetadataV2
+				: undefined;
+		if (request.projectionVersion === 2 && !readerV2) driverInvalid();
 		const reader = this.options.driver.readNativeMetadataV1;
-		if (!reader) driverInvalid();
+		if (!reader && !readerV2) driverInvalid();
 		let projection: unknown;
 		try {
 			projection = await callBoundedNativeMetadataDriver({
 				read: context,
-				work: () => reader.call(this.options.driver, request.selector, context),
+				work: (): Promise<NativeMetadataProjectionV1OrV2> =>
+					readerV2
+						? readerV2.call(this.options.driver, "commands", context)
+						: reader
+							? reader.call(this.options.driver, request.selector, context)
+							: driverInvalid(),
 			});
 		} catch (error) {
 			if (error instanceof RuntimeHostError && error.httpStatus === 403)
@@ -2660,10 +2671,14 @@ export class RuntimeHost {
 			driverInvalid();
 		}
 		const parsedProjection =
-			NativeMetadataProjectionV1Schema.safeParse(projection);
+			NativeMetadataProjectionV1OrV2Schema.safeParse(projection);
 		if (
 			!parsedProjection.success ||
-			parsedProjection.data.selector !== request.selector
+			parsedProjection.data.selector !== request.selector ||
+			(request.projectionVersion === 2
+				? !("projectionVersion" in parsedProjection.data) ||
+					parsedProjection.data.projectionVersion !== 2
+				: "projectionVersion" in parsedProjection.data)
 		)
 			driverInvalid();
 
@@ -2677,7 +2692,7 @@ export class RuntimeHost {
 			apiRequestSourceRef: _source,
 			...identity
 		} = request;
-		const response = RuntimeNativeMetadataReadResponseV1Schema.safeParse({
+		const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.safeParse({
 			...identity,
 			projection: parsedProjection.data,
 		});

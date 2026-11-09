@@ -7,6 +7,10 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
+import {
+	type NativeMetadataCommandsProjectionV2,
+	NativeMetadataCommandsProjectionV2Schema,
+} from "./native-metadata-v2.ts";
 
 const selector = z.enum(["status", "commands", "skills"]);
 const positiveSafeInteger = z.number().int().positive().safe();
@@ -63,6 +67,8 @@ const readIdentity = {
 	schemaVersion: SchemaVersionV1Schema,
 	readId: OpaqueIdV1Schema,
 	selector,
+	/** Explicit request negotiation for the versioned command projection. */
+	projectionVersion: z.literal(2).optional(),
 	scope: NativeMetadataObjectScopeV1Schema,
 	readStartedAt: positiveSafeInteger,
 	expiresAt: positiveSafeInteger,
@@ -152,6 +158,15 @@ export const NativeMetadataProjectionV1Schema = z.discriminatedUnion(
 export type NativeMetadataProjectionV1 = z.infer<
 	typeof NativeMetadataProjectionV1Schema
 >;
+
+/** Runtime metadata envelope that can carry the explicitly versioned command projection. */
+export const NativeMetadataProjectionV1OrV2Schema = z.union([
+	NativeMetadataProjectionV1Schema,
+	NativeMetadataCommandsProjectionV2Schema,
+]);
+export type NativeMetadataProjectionV1OrV2 =
+	| NativeMetadataProjectionV1
+	| NativeMetadataCommandsProjectionV2;
 
 export const PlatformNativeMetadataReadRequestV1Schema = z
 	.strictObject({
@@ -316,6 +331,22 @@ export type RuntimeNativeMetadataReadResponseV1 = z.infer<
 	typeof RuntimeNativeMetadataReadResponseV1Schema
 >;
 
+/** V1 request identity with a V2 command projection remains transport-compatible. */
+export const RuntimeNativeMetadataReadResponseV1OrV2Schema = z.union([
+	RuntimeNativeMetadataReadResponseV1Schema,
+	z
+		.strictObject({
+			...readIdentity,
+			selector: z.literal("commands"),
+			originalHostScopeRef: OpaqueIdV1Schema,
+			projection: NativeMetadataCommandsProjectionV2Schema,
+		})
+		.superRefine(validateReadLifetime),
+]);
+export type RuntimeNativeMetadataReadResponseV1OrV2 = z.infer<
+	typeof RuntimeNativeMetadataReadResponseV1OrV2Schema
+>;
+
 export interface RuntimeNativeMetadataProofClaimsValidationContextV1 {
 	readonly request: RuntimeNativeMetadataBindingResponseV1;
 	readonly expectedIssuer: string;
@@ -353,6 +384,7 @@ export function validateRuntimeNativeMetadataProofClaimsV1(
 		claims.expiresAt !== request.expiresAt ||
 		claims.readId !== request.readId ||
 		claims.selector !== request.selector ||
+		claims.projectionVersion !== request.projectionVersion ||
 		claims.requestId !== request.requestId ||
 		claims.traceId !== request.traceId ||
 		claims.originalHostScopeRef !== request.originalHostScopeRef ||
@@ -383,6 +415,7 @@ export function runtimeNativeMetadataRequestSigningPayloadV1(
 		schemaVersion: request.schemaVersion,
 		readId: request.readId,
 		selector: request.selector,
+		...(request.projectionVersion === 2 ? { projectionVersion: 2 } : {}),
 		scope: {
 			schemaVersion: scope.schemaVersion,
 			principal: { kind: scope.principal.kind, id: scope.principal.id },
@@ -450,4 +483,6 @@ export const RuntimeNativeMetadataV1SchemaDefinitions = {
 	RuntimeNativeMetadataReadRequestV1: RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1:
 		RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2:
+		RuntimeNativeMetadataReadResponseV1OrV2Schema,
 };

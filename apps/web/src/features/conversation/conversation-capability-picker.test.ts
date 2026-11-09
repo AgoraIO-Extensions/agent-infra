@@ -94,6 +94,18 @@ describe("conversation capability picker model", () => {
 		});
 	});
 
+	it("keeps a discovered state-changing command out of the legacy invocation wire", () => {
+		expect(
+			prepareCapabilityInvocation(
+				{ ...capabilities[1], effect: "state_changing" },
+				"",
+			),
+		).toEqual({
+			error:
+				"该有状态原生命令已被发现，但执行接缝尚未接入；不会作为普通消息发送。",
+		});
+	});
+
 	it("keeps Invocation V1 without control files and upgrades a Skill to V2 with them", () => {
 		expect(prepareCapabilityInvocation(capabilities[0], "列出变更")).toEqual({
 			body: {

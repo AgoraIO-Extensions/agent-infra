@@ -6998,6 +6998,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		return NativeMetadataCommandsProjectionV2Schema.parse({
 			schemaVersion: 1,
+			projectionVersion: 2,
 			selector: "commands",
 			revision,
 			capabilities: [

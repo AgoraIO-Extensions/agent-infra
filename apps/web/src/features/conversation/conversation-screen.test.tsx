@@ -273,10 +273,13 @@ function idleHistory() {
 function nativeCatalog(url: URL) {
 	if (url.searchParams.get("selector") === "commands")
 		return Response.json({
+			schemaVersion: 1,
+			projectionVersion: 2,
 			selector: "commands",
 			revision: "c".repeat(64),
 			capabilities: [
 				{
+					schemaVersion: 2,
 					id: "f".repeat(64),
 					kind: "command",
 					name: "list-files",

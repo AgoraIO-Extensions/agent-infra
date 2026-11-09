@@ -26,7 +26,7 @@ import {
 	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeNativeCapabilityTransportV6Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
-	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
 	RuntimeRestoreExecutionKeyTransportV5Schema,
@@ -379,7 +379,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			context.req.raw,
 			RuntimeNativeMetadataReadRequestV1Schema,
 		);
-		const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
+		const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
 			await options.nativeMetadataRead(request, context.req.raw.signal),
 		);
 		return context.json(response);

@@ -324,6 +324,10 @@ Codex 的首个只读原生命令定义为“查看原生会话状态”：目�
 只合入 Driver V2 不能证明其消费者已贯通。旧 V4 输入缺少冻结选择时明确拒绝，保留
 只读查询和既有 Skill；不得从上一条消息补造模型选择或借 metadata context 执行压缩。
 
+当前目录读取已支持显式 `projectionVersion=2` 的 Codex command effect/parameter 投影；它只证明
+发现链路，不授予执行权，V1 admission 会拒绝该版本的 state-changing command。默认 API 的 V3
+admission 仍未接通，因此 `/compact` 继续不可执行。
+
 同一固定 Codex 版本还提供 `thread/goal/set|get|clear` 与目标更新通知。当前平台未开放 `/goal`：
 原生 Goal 可以自行产生后续 Turn，尚缺对应的平台持久目标、持续执行、预算、控制和恢复合同。
 公开 RPC 存在不代表当前业务 Execution 已授权这些后续 Turn；不能只打开原生开关或发送普通提示。

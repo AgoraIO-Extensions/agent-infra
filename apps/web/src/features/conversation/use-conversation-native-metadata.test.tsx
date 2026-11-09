@@ -67,6 +67,62 @@ describe("conversation native metadata consumer", () => {
 		expect(nativeMetadataCapabilities(undefined)).toEqual([]);
 	});
 
+	it("preserves the negotiated state-changing command metadata", async () => {
+		const requests: Request[] = [];
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input, init) => {
+				requests.push(new Request(input, init));
+				return Response.json({
+					schemaVersion: 1,
+					projectionVersion: 2,
+					selector: "commands",
+					revision: "a".repeat(64),
+					capabilities: [
+						{
+							schemaVersion: 2,
+							id: "b".repeat(64),
+							kind: "command",
+							name: "compact",
+							description: "Compact the native session",
+							source: { name: "codex", version: "0.153.0" },
+							parameters: [],
+							effect: "state_changing",
+							availability: "available",
+						},
+					],
+				});
+			},
+		});
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		clients.push(queryClient);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() =>
+				useConversationNativeMetadata({
+					identityKey: "login-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					selector: "commands",
+					projectionVersion: 2,
+					client,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.available).toBe(true));
+		expect(new URL(requests[0].url).search).toBe(
+			"?selector=commands&projectionVersion=2",
+		);
+		expect(result.current.capabilities[0]).toMatchObject({
+			name: "compact",
+			effect: "state_changing",
+		});
+	});
+
 	it("stays unavailable when there is no execution or the API refuses the read", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false } },

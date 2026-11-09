@@ -1,7 +1,7 @@
 import {
 	type RuntimeNativeMetadataReadRequestV1,
 	RuntimeNativeMetadataReadRequestV1Schema,
-	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import { createNativeMetadataJsonTransport } from "@agent-infra/native-metadata-transport";
@@ -33,7 +33,7 @@ export function createWorkerRuntimeNativeMetadataClientV1(options: {
 					signal: signal,
 					traceId: request.traceId,
 				});
-				const result = RuntimeNativeMetadataReadResponseV1Schema.parse(
+				const result = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
 					response.value,
 				);
 				const { projection: _projection, ...responseBinding } = result;

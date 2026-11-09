@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import {
-	type NativeMetadataProjectionV1,
+	type NativeMetadataProjectionV1OrV2,
 	PlatformNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataBindingResponseV1Schema,
 	type RuntimeNativeMetadataProofV1,
 	RuntimeNativeMetadataProofV1Schema,
 	type RuntimeNativeMetadataReadRequestV1,
-	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import type { IdentityContext } from "./http/identity.js";
@@ -47,11 +47,23 @@ function sameBinding(
 	);
 }
 
+function projectionMatchesVersion(
+	projection: NativeMetadataProjectionV1OrV2,
+	projectionVersion: 2 | undefined,
+) {
+	if (projection.selector !== "commands")
+		return projectionVersion === undefined;
+	const versioned =
+		"projectionVersion" in projection && projection.projectionVersion === 2;
+	return projectionVersion === 2 ? versioned : !versioned;
+}
+
 type ResolveRequest = (input: {
 	readonly identity: IdentityContext;
 	readonly conversationId: string;
 	readonly executionId: string;
 	readonly selector: "status" | "commands" | "skills";
+	readonly projectionVersion?: 2;
 	readonly signal: AbortSignal;
 	readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
 }) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
@@ -63,12 +75,14 @@ async function prepareRead(
 	executionId: string,
 	selector: "status" | "commands" | "skills",
 	requestContext: RuntimeNativeMetadataRequestContextV1,
+	projectionVersion?: 2,
 ) {
 	const input = {
 		identity,
 		conversationId,
 		executionId,
 		selector,
+		...(projectionVersion === 2 ? { projectionVersion: 2 as const } : {}),
 		signal: requestContext.signal,
 		requestContext,
 	};
@@ -120,6 +134,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 		readonly conversationId: string;
 		readonly executionId: string;
 		readonly selector: "status" | "commands" | "skills";
+		readonly projectionVersion?: 2;
 		readonly signal: AbortSignal;
 		readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
 	}) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
@@ -139,7 +154,8 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 			executionId: string,
 			selector: "status" | "commands" | "skills",
 			requestContext: RuntimeNativeMetadataRequestContextV1,
-		): Promise<NativeMetadataProjectionV1 | null> {
+			projectionVersion?: 2,
+		): Promise<NativeMetadataProjectionV1OrV2 | null> {
 			if (!requestContext) return null;
 			try {
 				const { binding, revalidate } = await prepareRead(
@@ -149,6 +165,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					executionId,
 					selector,
 					requestContext,
+					projectionVersion,
 				);
 				const proof = RuntimeNativeMetadataProofV1Schema.parse(
 					await requestContext.run((signal) =>
@@ -159,7 +176,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					),
 				);
 				await revalidate();
-				const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
+				const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
 					await requestContext.run(() =>
 						options.transport.read(
 							{ ...binding, proof },
@@ -174,7 +191,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					);
 				if (
 					!sameBinding(binding, responseBinding) ||
-					response.projection.selector !== selector
+					!projectionMatchesVersion(response.projection, projectionVersion)
 				)
 					throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
 				await revalidate();
@@ -210,7 +227,8 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 			executionId: string,
 			selector: "status" | "commands" | "skills",
 			requestContext: RuntimeNativeMetadataRequestContextV1,
-		): Promise<NativeMetadataProjectionV1 | null> {
+			projectionVersion?: 2,
+		): Promise<NativeMetadataProjectionV1OrV2 | null> {
 			if (!requestContext) return null;
 			const registry = options.requestRegistry;
 			if (!registry) {
@@ -226,6 +244,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 					executionId,
 					selector,
 					requestContext,
+					projectionVersion,
 				);
 				const { originalHostScopeRef: _hostScope, ...requestIdentity } =
 					binding;
@@ -238,8 +257,9 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 				const request = PlatformNativeMetadataReadRequestV1Schema.parse({
 					...requestIdentity,
 					apiRequestSourceRef: requestSourceRef,
+					...(projectionVersion === 2 ? { projectionVersion: 2 as const } : {}),
 				});
-				const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
+				const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
 					await requestContext.run((signal) =>
 						options.gateway.read(request, signal),
 					),
@@ -248,7 +268,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 				if (
 					runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
 						runtimeNativeMetadataRequestSigningPayloadV1(binding) ||
-					response.projection.selector !== selector
+					!projectionMatchesVersion(response.projection, projectionVersion)
 				)
 					throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
 				await revalidate();
