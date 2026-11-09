@@ -97,6 +97,15 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
+        "protectedRuntime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "yamaPtraceScope"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "yamaPtraceScope": {"type": "string", "enum": ["2", "3"]}
+          }
+        },
         "imageCache": {
           "type": "object", "additionalProperties": false,
           "required": ["required", "entries"],
