@@ -25,6 +25,10 @@ Secret 内容不进入 values、模板渲染日志或 API 配置；省略该 Sec
 该凭据只允许固定的 `/internal/runtime/oauth/v1/callback` 路由，不能复用 Worker business/
 installation credential。外置 `platform-api` 的文件装配仍由其部署方负责。
 
+每个 Platform Store 有独立的 PostgreSQL 连接池。API 进程启动时把每个池的上限压到
+`PLATFORM_API_STORE_POOL_MAX`（默认 2，取值 1–10，非法值拒绝启动），空闲连接 30 秒后回收
+（可用 `PGIDLE_TIMEOUT` 覆盖），避免多个 API 副本用尽数据库连接（#4048）。Worker 不受此设置影响。
+
 Helm 的第一方 in-cluster API 使用以下仅含引用的 values。部署 owner 预先创建 API 专属
 Secret；配置 Secret 的全部文件只读挂到 `/app/deployment`，入口加载所选 key，辅助模块可用
 相对 import，私有 adapter 的依赖包仍由部署镜像提供。不要把 Worker keyring 放入该 Secret。
