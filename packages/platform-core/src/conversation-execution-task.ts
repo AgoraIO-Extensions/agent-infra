@@ -182,6 +182,25 @@ export interface ConversationTaskAdmissionPolicyV1 {
 	readonly waitingTimeoutMs: number;
 }
 
+/**
+ * 确认未发送的工作（等待中的任务，或已占位但尚未交给 Runtime 的 Turn）能否继续等待 Agent。
+ * Agent 可用、期望运行，且服务就绪、启动中或更新中时为 true；已停止、停用或故障未恢复时为
+ * false，这类工作以 `AGENT_UNAVAILABLE` 明确失败（Runtime HLD §8.4）。
+ */
+export function isConversationAgentRunnableV1(
+	agent: {
+		readonly status: string | null;
+		readonly desiredState: string | null;
+		readonly serviceAvailability: string | null;
+	} | null,
+): boolean {
+	return (
+		agent?.status === "available" &&
+		agent.desiredState === "running" &&
+		["ready", "starting", "updating"].includes(agent.serviceAvailability ?? "")
+	);
+}
+
 /** Only never-sent waiting tasks use this decision; capacity is checked separately. */
 export function decideConversationTaskWaitingV1(state: {
 	readonly nowMs: number;
@@ -215,18 +234,12 @@ export function decideConversationTaskWaitingV1(state: {
 	if (state.isolationPending) return { outcome: "wait" };
 	if (!state.conversationAvailable)
 		return { outcome: "fail", reason: "CONVERSATION_UNAVAILABLE" };
-	if (
-		state.agent?.status !== "available" ||
-		state.agent.desiredState !== "running" ||
-		!["ready", "starting", "updating"].includes(
-			state.agent.serviceAvailability ?? "",
-		)
-	)
+	if (!isConversationAgentRunnableV1(state.agent))
 		return { outcome: "fail", reason: "AGENT_UNAVAILABLE" };
 	return {
 		outcome:
 			!state.sandboxReady ||
-			state.agent.serviceAvailability !== "ready" ||
+			state.agent?.serviceAvailability !== "ready" ||
 			state.occupied ||
 			state.earlierWaiting
 				? "wait"

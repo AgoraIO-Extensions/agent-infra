@@ -18,6 +18,7 @@ import {
 	executionPrincipalProjection,
 	type GenerationTombstoneRow,
 	type MessageRow,
+	maximumSafeCounter,
 	type OutboxRow,
 	StaleDispatchLease,
 	type StopRow,
@@ -392,6 +393,89 @@ export async function cancelStoppedTurn(
 }
 
 /**
+ * #4077：Agent 已停止、停用或故障未恢复时，以原因终结已占位但确认未发送的 Turn（Runtime HLD
+ * §8.4），不再按 `AUTHORIZATION_UNAVAILABLE` 无限重试。调用方持有 Agent、Conversation、Outbox
+ * 与 Execution 锁，条目当前没有有效租约，且不存在待处理的 stop。不符合条件时返回 false，不写入。
+ * 终态与 Core 的 reject 一致：Execution failed、会话 ready、条目 failed 并记录原因码；
+ * 用户消息保持不变。
+ */
+export async function failUnsentTurn(
+	transaction: Transaction,
+	outbox: OutboxRow,
+	conversation: ConversationRow,
+	execution: ExecutionRow,
+	payload: ConversationPayload,
+	errorCode: string,
+): Promise<boolean> {
+	const previousFence = safeCounter(outbox.delivery_fence);
+	if (
+		execution.status !== "submitted" ||
+		payload.metadataRecovery !== undefined ||
+		previousFence === undefined ||
+		previousFence >= maximumSafeCounter ||
+		safeCounter(execution.delivery_fence) !== previousFence ||
+		!executionUnsent(execution, conversation)
+	)
+		return false;
+	const failed = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_executions
+		set status = 'failed', updated_at = clock_timestamp()
+		where execution_id = ${execution.execution_id}
+			and conversation_id = ${conversation.id}
+			and session_generation = ${payload.sessionGeneration}
+			and delivery_fence = ${execution.delivery_fence}
+			and status = 'submitted'
+		returning execution_id
+	`;
+	const readied = await transaction<{ id: string }[]>`
+		update platform.conversations
+		set status = 'ready', updated_at = clock_timestamp()
+		where id = ${conversation.id}
+			and session_generation = ${payload.sessionGeneration}
+			and authorization_revision = ${execution.authorization_revision}
+		returning id
+	`;
+	// 上一次重试已在当前 fence 写过尝试事件，失败事件使用下一个 fence。
+	const fence = previousFence + 1;
+	const closed = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set status = 'failed', lease_owner = null, lease_expires_at = null,
+			delivery_fence = ${fence}, updated_at = clock_timestamp()
+		where id = ${outbox.id} and status = ${outbox.status}
+			and delivery_fence = ${outbox.delivery_fence}
+		returning id
+	`;
+	if (failed.length !== 1 || readied.length !== 1 || closed.length !== 1)
+		throw new StaleDispatchLease();
+	await failPendingSupplements(
+		transaction,
+		conversation.id,
+		execution.execution_id,
+		payload.sessionGeneration,
+	);
+	await insertPlatformExecutionStatus(
+		transaction,
+		conversation.id,
+		execution.execution_id,
+		"failed",
+	);
+	await transaction`
+		insert into platform.persisted_events
+			(event_id, stream_id, sequence, stream_cursor, event_type, payload,
+			 trace_id, occurred_at)
+		values
+			(${`outbox:${outbox.id}:${fence}`}, ${`outbox:${outbox.id}`}, ${fence},
+			 ${fence}, 'outbox.failed',
+			 jsonb_build_object(
+				'attemptCount', ${outbox.attempt_count}::int,
+				'deliveryFence', ${String(fence)}::text,
+				'errorCode', ${errorCode}::text
+			 ), ${outbox.trace_id}, clock_timestamp())
+	`;
+	return true;
+}
+
+/**
  * Cancel a Turn whose Runtime submission was already prepared when a stop was
  * accepted, but whose key delivery was rejected by that stop. The submit claim
  * still owns its processing outbox; the stop outbox must remain unclaimed so
@@ -557,8 +641,10 @@ async function insertPlatformExecutionStatus(
  * host_session_ref），这只说明请求将发往哪里，不说明已经发出。
  * 已受理原操作 Host、Runtime 游标，或目标 Host 会话与会话当前引用不一致的执行，
  * 可能已经到达 Runtime，仍不在本地收敛。
+ * #4077：已占位（`submitted`）但尚未交给 Runtime 的 Turn 用同一判断。写入 pin 的投递准备
+ * 会在同一更新中把状态改为 `unknown`，所以带 pin 的 `submitted` 只来自 releaseUnsentDispatch。
  */
-function waitingExecutionUnsent(
+function executionUnsent(
 	execution: ExecutionRow,
 	conversation: ConversationRow,
 ) {
@@ -597,7 +683,7 @@ export function bindingMatches(
 			safeCounter(execution.delivery_fence) === undefined ||
 			safeCounter(execution.delivery_fence) !==
 				safeCounter(outbox.delivery_fence) ||
-			!waitingExecutionUnsent(execution, conversation) ||
+			!executionUnsent(execution, conversation) ||
 			outbox.operation !== "conversation.turn.submit.v1" ||
 			payload.metadataRecovery !== undefined ||
 			payload.turnId !== execution.turn_id)

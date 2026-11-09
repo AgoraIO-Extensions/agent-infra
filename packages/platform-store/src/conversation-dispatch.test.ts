@@ -5204,12 +5204,13 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				await client`update platform.agents set current_configuration_revision = 5 where id = 'agent-dispatch'`;
 			} else if (drift === "lifecycle") {
 				await client`update platform.agent_applications set workload_revision = 5, fence = 5 where agent_id = 'agent-dispatch'`;
-			} else {
-				await client`update platform.agent_applications set status = 'stopped', desired_state = 'stopped', service_availability = null where agent_id = 'agent-dispatch'`;
 			}
 			const { store, decision } = await claim(work.itemId);
 			try {
 				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				// #4077：认领时 Agent 已停止的未发送 Turn 直接失败；这里覆盖认领之后才停止的竞争。
+				if (drift === "stopped")
+					await client`update platform.agent_applications set status = 'stopped', desired_state = 'stopped', service_availability = null where agent_id = 'agent-dispatch'`;
 				expect(
 					await store.prepareRuntimeDispatch({
 						claim: decision.claim,
@@ -5526,6 +5527,216 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			}
 		},
 	);
+
+	// #4077：Agent 已停止、停用或故障未恢复时，已占位但确认未发送的 Turn 以原因明确失败
+	// （Runtime HLD §8.4），不再按 AUTHORIZATION_UNAVAILABLE 无限重试。
+	describe("never-sent submitted Turn of an Agent that cannot run (#4077)", () => {
+		const fault = {
+			status: "available",
+			desiredState: "running",
+			serviceAvailability: "unavailable",
+			failureCode: "reconciliation_failed",
+		};
+
+		async function setAgent(agent: {
+			status: string;
+			desiredState: string;
+			serviceAvailability: string | null;
+			failureCode: string | null;
+		}) {
+			await client`update platform.agent_applications
+				set status = ${agent.status}, desired_state = ${agent.desiredState},
+					service_availability = ${agent.serviceAvailability},
+					failure_code = ${agent.failureCode}
+				where agent_id = 'agent-dispatch'`;
+		}
+
+		// 与现场一致：此前的认领已经按 AUTHORIZATION_UNAVAILABLE 重新安排过。
+		async function retriedOnce(work: Awaited<ReturnType<typeof seed>>) {
+			const first = await claim(work.itemId);
+			try {
+				if (first.decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${first.decision.outcome}`);
+				expect(
+					await first.store.retry({
+						claim: first.decision.claim,
+						retryDelayMs: 0,
+						errorCode: "AUTHORIZATION_UNAVAILABLE",
+						transition: {},
+					}),
+				).toBe(true);
+			} finally {
+				await first.store.close();
+			}
+			await waitForAvailableItem(work.itemId);
+		}
+
+		async function attemptEvents(work: Awaited<ReturnType<typeof seed>>) {
+			return client<{ event_type: string; code: string | null }[]>`
+				select event_type, payload->>'errorCode' as code from platform.persisted_events
+				where stream_id = ${`outbox:${work.itemId}`} order by sequence`;
+		}
+
+		it.each([
+			{ label: "fault not recovered", ...fault },
+			{
+				label: "stopped",
+				status: "stopped",
+				desiredState: "stopped",
+				serviceAvailability: null,
+				failureCode: null,
+			},
+			{
+				label: "disabled",
+				status: "disabled",
+				desiredState: "stopped",
+				serviceAvailability: null,
+				failureCode: null,
+			},
+		])(
+			"fails the Turn with AGENT_UNAVAILABLE when the Agent is $label",
+			async (agent) => {
+				const work = await seed();
+				await retriedOnce(work);
+				await setAgent(agent);
+				const failed = await claim(work.itemId);
+				try {
+					expect(failed.decision).toEqual({ outcome: "failed" });
+				} finally {
+					await failed.store.close();
+				}
+				expect(await dispatchState(work)).toEqual({
+					status: "failed",
+					outbox_fence: 2,
+					execution_status: "failed",
+					execution_fence: 1,
+				});
+				const [conversation] = await client<{ status: string }[]>`
+					select status from platform.conversations where id = ${work.conversationId}`;
+				expect(conversation?.status).toBe("ready");
+				expect(
+					await client`select event_type, event_payload, source from platform.conversation_events
+						where execution_id = ${work.executionId}`,
+				).toEqual([
+					{
+						event_type: "execution.status",
+						event_payload: { type: "execution.status", status: "failed" },
+						source: "platform",
+					},
+				]);
+				expect(await attemptEvents(work)).toEqual([
+					{
+						event_type: "outbox.retry_scheduled",
+						code: "AUTHORIZATION_UNAVAILABLE",
+					},
+					{ event_type: "outbox.failed", code: "AGENT_UNAVAILABLE" },
+				]);
+				// 与 Core reject 一致，用户消息不改写。
+				const [message] = await client<{ status: string }[]>`
+					select status from platform.conversation_messages where message_id = ${work.messageId}`;
+				expect(message?.status).toBe("submitted");
+				const again = await claim(work.itemId);
+				try {
+					expect(again.decision).toEqual({ outcome: "failed" });
+				} finally {
+					await again.store.close();
+				}
+			},
+		);
+
+		it.each(["starting", "updating"])(
+			"keeps claiming the Turn while the Agent is %s",
+			async (serviceAvailability) => {
+				const work = await seed();
+				await retriedOnce(work);
+				await setAgent({
+					status: "available",
+					desiredState: "running",
+					serviceAvailability,
+					failureCode: null,
+				});
+				const { store, decision } = await claim(work.itemId);
+				try {
+					expect(decision.outcome).toBe("claimed");
+				} finally {
+					await store.close();
+				}
+				expect(await dispatchState(work)).toMatchObject({
+					status: "processing",
+					execution_status: "submitted",
+				});
+			},
+		);
+
+		it.each([
+			{
+				label: "a Runtime cursor",
+				pin: { last_runtime_cursor: "cursor-4077" },
+			},
+			{
+				label: "an accepted original Host Session",
+				pin: {
+					runtime_submit_protocol: "v4",
+					original_operation_digest: "a".repeat(43),
+					accepted_original_host_session_ref: "host-accepted-4077",
+				},
+			},
+			{
+				label: "a pin to another Host Session",
+				pin: {
+					runtime_submit_protocol: "v4",
+					original_operation_digest: "a".repeat(43),
+					original_submit_host_session_ref: "host-elsewhere-4077",
+				},
+			},
+		])(
+			"leaves a Turn with $label to the existing recovery path",
+			async ({ pin }) => {
+				const work = await seed();
+				await retriedOnce(work);
+				await client`update platform.conversation_executions set ${client(pin)}
+					where execution_id = ${work.executionId}`;
+				await setAgent(fault);
+				const { store, decision } = await claim(work.itemId);
+				try {
+					expect(decision.outcome).not.toBe("failed");
+				} finally {
+					await store.close();
+				}
+				expect(await dispatchState(work)).toMatchObject({
+					execution_status: "submitted",
+				});
+				expect(await attemptEvents(work)).toEqual([
+					{
+						event_type: "outbox.retry_scheduled",
+						code: "AUTHORIZATION_UNAVAILABLE",
+					},
+				]);
+			},
+		);
+
+		it("lets a pending stop cancel the Turn instead of failing it", async () => {
+			const work = await seed();
+			await retriedOnce(work);
+			await seedStop(work);
+			await setAgent(fault);
+			const { store, decision } = await claim(work.itemId);
+			try {
+				expect(decision).toEqual({ outcome: "succeeded" });
+			} finally {
+				await store.close();
+			}
+			expect(await dispatchState(work)).toMatchObject({
+				execution_status: "cancelled",
+			});
+			expect(await attemptEvents(work)).toEqual([
+				{
+					event_type: "outbox.retry_scheduled",
+					code: "AUTHORIZATION_UNAVAILABLE",
+				},
+			]);
+		});
+	});
 
 	it("filters unready business work until the Sandbox is ready", async () => {
 		const work = await seed();

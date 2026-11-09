@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decideConversationTaskWaitingV1 } from "./index.js";
+import {
+	decideConversationTaskWaitingV1,
+	isConversationAgentRunnableV1,
+} from "./index.js";
 
 function waiting(
 	changes: Partial<Parameters<typeof decideConversationTaskWaitingV1>[0]> = {},
@@ -82,7 +85,22 @@ describe("never-sent task waiting decision", () => {
 			outcome: "fail",
 			reason: "AGENT_UNAVAILABLE",
 		});
+		// #4077：已占位未发送的 Turn 用同一判断，不能单独漂移。
+		expect(isConversationAgentRunnableV1(agent)).toBe(false);
 	});
+
+	it.each(["ready", "starting", "updating"])(
+		"keeps never-sent work for a running Agent that is %s (#4077)",
+		(serviceAvailability) => {
+			expect(
+				isConversationAgentRunnableV1({
+					status: "available",
+					desiredState: "running",
+					serviceAvailability,
+				}),
+			).toBe(true);
+		},
+	);
 
 	it("fails an unavailable Conversation only after isolation is confirmed", () => {
 		expect(
