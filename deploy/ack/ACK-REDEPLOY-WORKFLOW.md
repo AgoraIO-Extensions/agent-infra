@@ -28,6 +28,8 @@ namespace UID/owner、release 最新 revision 与当前发布窗口，进行真�
 启用 ResourceQuota 时还须检查 migration Job 等后续 Pod 模板的 CPU/内存资源声明；Job 的
 dry-run 不会替 Job controller 创建 Pod，不能覆盖 quota 对实际 Pod 的拒绝。迁移使用声明的
 资源预算和有界 deadline，不能关闭 quota 绕过缺失声明。
+受控 CA 输入在写入前执行严格证书链、用途和 hostname 校验，包含 CA key usage 与叶证书的
+SKI/AKI 扩展；单个客户端兼容模式下的成功不能覆盖严格客户端的真实失败。
 
 每次执行单独保存成功或失败 attempt。任一阶段失败后停止后续步骤，先核对写入状态并将
 错误类别、根因或 unknown、修正和新增预检反哺流程与部署内容，再从部署仓库入口执行完整
