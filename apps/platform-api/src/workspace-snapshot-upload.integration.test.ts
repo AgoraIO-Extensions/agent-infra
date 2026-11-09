@@ -1,7 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { WorkspaceSnapshotMetadataV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	PilotProtocolErrorV1Schema,
+	WorkspaceSnapshotMetadataV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
+import { workspaceSnapshotUploadPolicyV1 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -183,6 +187,37 @@ describe("snapshot HTTP -> disk spool -> archive -> object bytes -> PostgreSQL",
 			headers: { Authorization: `Bearer ${user}` },
 		});
 		expect(await list.json()).toHaveLength(1);
+	});
+	it("returns retryable 429 before reading replay bytes when shared owner admission is exhausted", async () => {
+		const id = randomUUID();
+		const user = await token("user", id);
+		expect((await upload(user, "limited-replay")).status).toBe(201);
+		// Released attempts still consume the sliding window; seed its remaining attempts.
+		const [first] =
+			await db`select id from platform.workspace_snapshot_upload_admissions where owner_type='user' and owner_id=${id}`;
+		if (!first) throw new Error("Admission missing");
+		await db`insert into platform.workspace_snapshot_upload_admissions (id,owner_type,owner_id,policy_hash,reserved_bytes,created_at,expires_at,retain_until,released_at)
+			select gen_random_uuid()::text,owner_type,owner_id,policy_hash,reserved_bytes,created_at,expires_at,retain_until,clock_timestamp()
+			from platform.workspace_snapshot_upload_admissions cross join generate_series(1,${workspaceSnapshotUploadPolicyV1.defaults.maximumRequestsPerWindow - 1}) where id=${first.id}`;
+		const refused = await upload(
+			user,
+			"limited-replay",
+			Buffer.from("invalid archive"),
+			sha(bytes),
+		);
+		expect(refused.status).toBe(429);
+		expect(refused.headers.get("Cache-Control")).toContain("no-store");
+		expect(
+			PilotProtocolErrorV1Schema.parse(await refused.json()),
+		).toMatchObject({ code: "UPLOAD_RATE_LIMITED", retryable: true });
+		const [snapshots] =
+			await db`select count(*)::int as count from platform.workspace_snapshots where owner_type='user' and owner_id=${id}`;
+		expect(snapshots?.count).toBe(1);
+		const [admissions] =
+			await db`select count(*)::int as count from platform.workspace_snapshot_upload_admissions where owner_type='user' and owner_id=${id}`;
+		expect(admissions?.count).toBe(
+			workspaceSnapshotUploadPolicyV1.defaults.maximumRequestsPerWindow,
+		);
 	});
 	it("deletes the exact object before releasing stored quota and retains deletion audit", async () => {
 		const id = randomUUID();

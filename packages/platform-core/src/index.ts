@@ -232,3 +232,4 @@ export * from "./workspace-snapshot.js";
 export * from "./workspace-snapshot-archive.js";
 export * from "./workspace-snapshot-gc.js";
 export * from "./workspace-snapshot-security.js";
+export * from "./workspace-snapshot-upload-admission.js";

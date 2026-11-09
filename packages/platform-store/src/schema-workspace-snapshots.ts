@@ -14,6 +14,46 @@ import {
 import { agentConfigurationRevisions, agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
 
+export const workspaceSnapshotUploadAdmissions = platformSchema.table(
+	"workspace_snapshot_upload_admissions",
+	{
+		id: text("id").primaryKey(),
+		ownerType: varchar("owner_type", { length: 32 }).notNull(),
+		ownerId: text("owner_id").notNull(),
+		policyHash: varchar("policy_hash", { length: 64 }).notNull(),
+		reservedBytes: bigint("reserved_bytes", { mode: "number" }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
+		releasedAt: timestamp("released_at", { withTimezone: true }),
+	},
+	(table) => [
+		check(
+			"snapshot_upload_admission_owner_type",
+			sql`${table.ownerType} in ('user','application')`,
+		),
+		check(
+			"snapshot_upload_admission_id",
+			sql`${table.id} ~ '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'`,
+		),
+		check(
+			"snapshot_upload_admission_policy_hash",
+			sql`${table.policyHash} ~ '^[a-f0-9]{64}$'`,
+		),
+		check("snapshot_upload_admission_bytes", sql`${table.reservedBytes} > 0`),
+		check(
+			"snapshot_upload_admission_times",
+			sql`${table.expiresAt} > ${table.createdAt} and ${table.retainUntil} >= ${table.expiresAt} and (${table.releasedAt} is null or ${table.releasedAt} >= ${table.createdAt})`,
+		),
+		index("snapshot_upload_admission_retention_idx").on(table.retainUntil),
+		index("snapshot_upload_admission_owner_created_idx").on(
+			table.ownerType,
+			table.ownerId,
+			table.createdAt,
+		),
+	],
+);
+
 export const workspaceSnapshotUploadReservations = platformSchema.table(
 	"workspace_snapshot_upload_reservations",
 	{

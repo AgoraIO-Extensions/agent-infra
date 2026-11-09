@@ -2022,6 +2022,7 @@ describe("published Relay authority migration", () => {
 			74,
 			75,
 			76,
+			77,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2096,8 +2097,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 76,
-			tag: "0076_workspace_snapshot_upload_reservations",
+			idx: 77,
+			tag: "0077_snapshot_upload_admission",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2434,6 +2435,10 @@ describe("published Relay authority migration", () => {
 				"session_sandbox_resource_charges:session_sandbox_resource_charges_pkey",
 			);
 			expectedDelta.checks.push(
+				...["owner_type", "id", "policy_hash", "bytes", "times"].map(
+					(name) =>
+						`workspace_snapshot_upload_admissions:snapshot_upload_admission_${name}`,
+				),
 				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_bytes_positive",
 				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_digest_format",
 				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_owner_type",
@@ -2446,6 +2451,17 @@ describe("published Relay authority migration", () => {
 				"workspace_snapshots:workspace_snapshot_status",
 			);
 			expectedDelta.columns.push(
+				...[
+					"id",
+					"owner_type",
+					"owner_id",
+					"policy_hash",
+					"reserved_bytes",
+					"created_at",
+					"expires_at",
+					"retain_until",
+					"released_at",
+				].map((name) => `workspace_snapshot_upload_admissions:${name}`),
 				...[
 					"id",
 					"owner_type",
@@ -2489,6 +2505,9 @@ describe("published Relay authority migration", () => {
 				].map((name) => `workspace_snapshots:${name}`),
 			);
 			expectedDelta.indexes.push(
+				"workspace_snapshot_upload_admissions:workspace_snapshot_upload_admissions_pkey",
+				"workspace_snapshot_upload_admissions:snapshot_upload_admission_retention_idx",
+				"workspace_snapshot_upload_admissions:snapshot_upload_admission_owner_created_idx",
 				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_key_unique",
 				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservation_owner_status_idx",
 				"workspace_snapshot_upload_reservations:workspace_snapshot_upload_reservations_pkey",

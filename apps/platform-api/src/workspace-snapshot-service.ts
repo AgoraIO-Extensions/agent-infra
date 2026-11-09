@@ -9,7 +9,9 @@ import {
 	WorkspaceSnapshotErrorV1,
 	type WorkspaceSnapshotRecordV1,
 	WorkspaceSnapshotSecurityErrorV1,
+	type WorkspaceSnapshotUploadPolicyV1,
 	workspaceSnapshotLimitsV1,
+	workspaceSnapshotUploadPolicyV1,
 } from "@agent-infra/platform-core";
 import {
 	createWorkspaceSnapshotFileSpoolV1,
@@ -39,6 +41,14 @@ export interface WorkspaceSnapshotSpoolV1 {
 	}>;
 }
 export interface WorkspaceSnapshotServiceStoreV1 {
+	admitUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		policy: WorkspaceSnapshotUploadPolicyV1,
+	): Promise<{ readonly leaseId: string; readonly expiresAt: string }>;
+	releaseUploadAdmission(
+		owner: WorkspaceSnapshotPrincipalV1,
+		leaseId: string,
+	): Promise<void>;
 	reserveUpload(
 		owner: WorkspaceSnapshotPrincipalV1,
 		idempotencyKey: string,
@@ -101,6 +111,7 @@ export interface WorkspaceSnapshotQuotaReaderV1 {
 	}>;
 }
 export interface WorkspaceSnapshotServiceOptionsV1 {
+	readonly uploadPolicy?: WorkspaceSnapshotUploadPolicyV1;
 	readonly credentials: WorkspaceSnapshotCredentialResolverV1;
 	readonly spool?: WorkspaceSnapshotSpoolV1;
 	readonly storage: Pick<ObjectStorageDataV1, "upload" | "remove">;
@@ -120,6 +131,7 @@ export class WorkspaceSnapshotServiceErrorV1 extends Error {
 			| "forbidden"
 			| "conflict"
 			| "quota_exceeded"
+			| "rate_limited"
 			| "invalid_archive"
 			| "unavailable",
 	) {
@@ -140,6 +152,8 @@ function boundedError(error: unknown): WorkspaceSnapshotServiceErrorV1 {
 		);
 	if (error instanceof WorkspaceSnapshotErrorV1) {
 		const code: string = error.code;
+		if (code === "rate_limited")
+			return new WorkspaceSnapshotServiceErrorV1("rate_limited");
 		if (code === "bound" || code === "conflict")
 			return new WorkspaceSnapshotServiceErrorV1("conflict");
 		if (code === "quota_exceeded" || code === "snapshot_limit_exceeded")
@@ -160,6 +174,8 @@ function boundedError(error: unknown): WorkspaceSnapshotServiceErrorV1 {
 		);
 	}
 	if (error instanceof WorkspaceSnapshotSpoolErrorV1) {
+		if (error.code === "busy")
+			return new WorkspaceSnapshotServiceErrorV1("rate_limited");
 		return new WorkspaceSnapshotServiceErrorV1(
 			error.code === "limit_exceeded"
 				? "quota_exceeded"
@@ -229,11 +245,35 @@ async function disposeSpool(
 	}
 }
 
+async function releaseAdmission(
+	store: WorkspaceSnapshotServiceStoreV1,
+	admission: { owner: WorkspaceSnapshotPrincipalV1; leaseId: string },
+) {
+	try {
+		await store.releaseUploadAdmission(admission.owner, admission.leaseId);
+	} catch {
+		throw new WorkspaceSnapshotServiceErrorV1("unavailable");
+	}
+}
+
 export function createWorkspaceSnapshotServiceV1(
 	options: WorkspaceSnapshotServiceOptionsV1,
 ) {
 	const now = options.now ?? (() => new Date());
-	const spools = options.spool ?? createWorkspaceSnapshotFileSpoolV1();
+	const uploadPolicy = workspaceSnapshotUploadPolicyV1.parse(
+		options.uploadPolicy ?? workspaceSnapshotUploadPolicyV1.defaults,
+	);
+	const spools =
+		options.spool ??
+		createWorkspaceSnapshotFileSpoolV1({
+			maximumActiveSpools: Math.min(
+				uploadPolicy.maximumConcurrentUploads,
+				Math.floor(
+					uploadPolicy.maximumTemporaryBytes /
+						workspaceSnapshotLimitsV1.maxArchiveBytes,
+				),
+			),
+		});
 	async function principalFor(
 		material: string,
 		scope: "agent:create" | "agent:read" | "agent:manage",
@@ -275,6 +315,9 @@ export function createWorkspaceSnapshotServiceV1(
 			let reservationId: string | undefined;
 			let reservationOwner: WorkspaceSnapshotPrincipalV1 | undefined;
 			let safeToRemove = true;
+			let admission:
+				| { owner: WorkspaceSnapshotPrincipalV1; leaseId: string }
+				| undefined;
 			async function removePendingObject() {
 				if (!pendingObject) return;
 				await options.storage.remove(pendingObject.ref, pendingObject.version);
@@ -288,6 +331,13 @@ export function createWorkspaceSnapshotServiceV1(
 				)
 					throw new WorkspaceSnapshotServiceErrorV1("invalid_archive");
 				const principal = await principalFor(input.material, "agent:create");
+				const signal = AbortSignal.any([
+					AbortSignal.timeout(uploadPolicy.uploadTimeoutMs),
+					...(input.signal ? [input.signal] : []),
+				]);
+				const lease = await options.store.admitUpload(principal, uploadPolicy);
+				admission = { owner: principal, leaseId: lease.leaseId };
+				signal.throwIfAborted();
 				const source = structuredClone(input.source);
 				const isBuilder =
 					typeof source === "object" &&
@@ -302,10 +352,6 @@ export function createWorkspaceSnapshotServiceV1(
 						? await options.authorizeBuilderSource?.(principal, source)
 						: false,
 				});
-				const signal = AbortSignal.any([
-					AbortSignal.timeout(5 * 60_000),
-					...(input.signal ? [input.signal] : []),
-				]);
 				const reservationDigest = createHash("sha256")
 					.update(JSON.stringify([input.digest, provenance.source]))
 					.digest("hex");
@@ -314,7 +360,7 @@ export function createWorkspaceSnapshotServiceV1(
 					input.idempotencyKey,
 					reservationDigest,
 					workspaceSnapshotLimitsV1.maxArchiveBytes,
-					new Date(now().getTime() + 5 * 60_000).toISOString(),
+					lease.expiresAt,
 				);
 				if (
 					reservation.state === "conflict" ||
@@ -379,7 +425,7 @@ export function createWorkspaceSnapshotServiceV1(
 						sizeBytes: archive.sizeBytes,
 						sha256: archive.digest.slice(7),
 					},
-					expiresAt: new Date(now().getTime() + 5 * 60_000).toISOString(),
+					expiresAt: lease.expiresAt,
 					body: spool.replay(),
 					signal,
 				});
@@ -406,6 +452,7 @@ export function createWorkspaceSnapshotServiceV1(
 					);
 				signal.throwIfAborted();
 				await revalidateUploadPrincipal(input.material, principal);
+				signal.throwIfAborted();
 				const record: WorkspaceSnapshotRecordV1 = {
 					snapshotId: `snapshot_${randomUUID()}`,
 					ownerType: principal.kind,
@@ -490,7 +537,11 @@ export function createWorkspaceSnapshotServiceV1(
 					void input.body.cancel().catch(() => undefined);
 				throw boundedError(error);
 			} finally {
-				await disposeSpool(spool);
+				try {
+					await disposeSpool(spool);
+				} finally {
+					if (admission) await releaseAdmission(options.store, admission);
+				}
 			}
 		},
 		async list(material: string) {

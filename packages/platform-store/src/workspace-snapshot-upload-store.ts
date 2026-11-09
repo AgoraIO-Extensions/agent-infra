@@ -6,6 +6,7 @@ import {
 	type WorkspaceSnapshotPrincipalV1,
 	type WorkspaceSnapshotQuotaReaderV1,
 	type WorkspaceSnapshotRecordV1,
+	type WorkspaceSnapshotUploadPolicyV1,
 	type WorkspaceSnapshotUploadReservationV1,
 	type WorkspaceSnapshotUploadStoreV1,
 	workspaceSnapshotLimitsV1,
@@ -22,6 +23,10 @@ import {
 	workspaceSnapshots,
 	workspaceSnapshotUploadReservations,
 } from "./schema.js";
+import {
+	admitWorkspaceSnapshotUploadV1,
+	releaseWorkspaceSnapshotUploadAdmissionV1,
+} from "./workspace-snapshot-upload-admission.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -206,6 +211,33 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 	constructor(databaseUrl: string) {
 		this.#client = postgres(databaseUrl, { max: 4 });
 		this.#database = drizzle(this.#client);
+	}
+	admitUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		policy: WorkspaceSnapshotUploadPolicyV1,
+	) {
+		return this.#admitUpload(owner, policy);
+	}
+	releaseUploadAdmission(owner: WorkspaceSnapshotPrincipalV1, leaseId: string) {
+		return this.#releaseUploadAdmission(owner, leaseId);
+	}
+	#admitUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		policy: WorkspaceSnapshotUploadPolicyV1,
+		auth?: Authorization,
+	) {
+		return this.#run(owner, "agent:create", auth, (tx) =>
+			admitWorkspaceSnapshotUploadV1(tx, owner, policy),
+		);
+	}
+	#releaseUploadAdmission(
+		owner: WorkspaceSnapshotPrincipalV1,
+		leaseId: string,
+	) {
+		// A server-held lease only releases accounting; revoked credentials cannot block cleanup.
+		return this.#run(owner, "agent:create", undefined, (tx) =>
+			releaseWorkspaceSnapshotUploadAdmissionV1(tx, owner, leaseId),
+		);
 	}
 	reserveUpload(
 		owner: WorkspaceSnapshotPrincipalV1,
@@ -406,6 +438,14 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 					this.#resolve(auth, scope),
 			},
 			store: {
+				admitUpload: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					policy: WorkspaceSnapshotUploadPolicyV1,
+				) => this.#admitUpload(owner, policy, auth),
+				releaseUploadAdmission: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					leaseId: string,
+				) => this.#releaseUploadAdmission(owner, leaseId),
 				reserveUpload: (
 					owner: WorkspaceSnapshotPrincipalV1,
 					key: string,

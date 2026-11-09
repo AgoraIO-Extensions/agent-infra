@@ -1,3 +1,4 @@
+import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceSnapshotServiceErrorV1 } from "../workspace-snapshot-service.js";
@@ -35,6 +36,27 @@ function fixture() {
 }
 
 describe("workspace snapshot HTTP boundary", () => {
+	it("maps exhausted upload admission to a stable retryable 429", async () => {
+		const f = fixture();
+		f.deps.upload.mockRejectedValueOnce(
+			new WorkspaceSnapshotServiceErrorV1("rate_limited"),
+		);
+		const response = await f.app.request("/api/v2/workspace-snapshots", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${material}`,
+				"Idempotency-Key": "rate-test",
+				"Content-Type": "application/x-tar+gzip",
+				"X-Content-SHA256": digest,
+			},
+			body: new Uint8Array([1]),
+		});
+		expect(response.status).toBe(429);
+		expect(
+			PilotProtocolErrorV1Schema.parse(await response.json()),
+		).toMatchObject({ code: "UPLOAD_RATE_LIMITED", retryable: true });
+		expect(response.headers.get("Cache-Control")).toContain("no-store");
+	});
 	it("returns a bounded conflict when an attached snapshot cannot be deleted", async () => {
 		const f = fixture();
 		f.deps.remove.mockRejectedValueOnce(

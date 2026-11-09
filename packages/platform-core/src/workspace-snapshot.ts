@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { WorkspaceSnapshotUploadPolicyV1 } from "./workspace-snapshot-upload-admission.js";
 
 export const workspaceSnapshotLimitsV1 = Object.freeze({
 	maxSnapshotsPerAgent: 4,
@@ -18,6 +19,7 @@ export type WorkspaceSnapshotErrorCodeV1 =
 	| "invalid_input"
 	| "conflict"
 	| "quota_exceeded"
+	| "rate_limited"
 	| "not_found"
 	| "unavailable"
 	| "bound";
@@ -76,6 +78,14 @@ export type WorkspaceSnapshotUploadReservationV1 =
 	| { readonly state: "conflict" };
 
 export interface WorkspaceSnapshotUploadStoreV1 {
+	admitUpload(
+		owner: WorkspaceSnapshotPrincipalV1,
+		policy: WorkspaceSnapshotUploadPolicyV1,
+	): Promise<{ readonly leaseId: string; readonly expiresAt: string }>;
+	releaseUploadAdmission(
+		owner: WorkspaceSnapshotPrincipalV1,
+		leaseId: string,
+	): Promise<void>;
 	reserveUpload(
 		owner: WorkspaceSnapshotPrincipalV1,
 		idempotencyKey: string,

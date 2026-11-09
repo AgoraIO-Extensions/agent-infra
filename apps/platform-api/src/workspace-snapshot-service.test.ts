@@ -8,6 +8,8 @@ import {
 	PersonalApiCredentialErrorV1,
 	WorkspaceSnapshotErrorV1,
 	type WorkspaceSnapshotRecordV1,
+	type WorkspaceSnapshotUploadPolicyV1,
+	workspaceSnapshotUploadPolicyV1,
 } from "@agent-infra/platform-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -134,6 +136,16 @@ async function fixture() {
 		owner: WorkspaceSnapshotPrincipalV1,
 	) => record.ownerId === owner.id && record.ownerType === owner.kind;
 	const store = {
+		admitUpload: vi.fn(
+			async (
+				_owner: WorkspaceSnapshotPrincipalV1,
+				_policy: WorkspaceSnapshotUploadPolicyV1,
+			) => ({
+				leaseId: randomUUID(),
+				expiresAt: new Date(Date.now() + 360_000).toISOString(),
+			}),
+		),
+		releaseUploadAdmission: vi.fn(async () => undefined),
 		reserveUpload: vi.fn(
 			async (
 				owner: WorkspaceSnapshotPrincipalV1,
@@ -257,6 +269,101 @@ async function fixture() {
 }
 
 describe("workspace snapshot upload service with real file spool", () => {
+	it("applies admission to completed replays and rejects before consuming their body", async () => {
+		const f = await fixture();
+		await f.service.upload(f.upload());
+		expect(f.store.admitUpload).toHaveBeenCalledOnce();
+		expect(f.store.releaseUploadAdmission).toHaveBeenCalledOnce();
+		f.store.admitUpload.mockRejectedValueOnce(
+			new WorkspaceSnapshotErrorV1("rate_limited"),
+		);
+		const pull = vi.fn();
+		const cancel = vi.fn();
+		const body = new ReadableStream<Uint8Array>(
+			{ pull, cancel },
+			{ highWaterMark: 0 },
+		);
+		await expect(
+			f.service.upload({ ...f.upload(), body }),
+		).rejects.toMatchObject({ code: "rate_limited", message: "rate_limited" });
+		expect(pull).not.toHaveBeenCalled();
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(f.store.reserveUpload).toHaveBeenCalledOnce();
+		expect(f.storage.upload).toHaveBeenCalledOnce();
+		expect(f.store.releaseUploadAdmission).toHaveBeenCalledOnce();
+	});
+
+	it("releases every admitted replay after validating actual bytes, including a rejected digest", async () => {
+		const f = await fixture();
+		const first = await f.service.upload(f.upload());
+		await expect(
+			f.service.upload({
+				...f.upload(),
+				body: stream(archive("different bytes")),
+			}),
+		).rejects.toMatchObject({ code: "invalid_archive" });
+		const replay = await f.service.upload(f.upload());
+		expect(replay).toEqual({ record: first.record, replayed: true });
+		expect(f.store.admitUpload).toHaveBeenCalledTimes(3);
+		expect(f.store.releaseUploadAdmission).toHaveBeenCalledTimes(3);
+		expect(f.storage.upload).toHaveBeenCalledOnce();
+	});
+
+	it("releases admission even if spool disposal fails and surfaces unavailable", async () => {
+		const f = await fixture();
+		const dispose = vi.fn(async () => {
+			throw new Error("private-spool-detail");
+		});
+		const service = createWorkspaceSnapshotServiceV1({
+			...f.options,
+			spool: {
+				spool: async () => ({
+					sizeBytes: 1,
+					replay: () => stream(Buffer.from("invalid archive")),
+					dispose,
+				}),
+			},
+		});
+		await expect(service.upload(f.upload())).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(dispose).toHaveBeenCalledOnce();
+		expect(f.store.releaseUploadAdmission).toHaveBeenCalledOnce();
+	});
+
+	it("validates and captures timeout policy before accepting uploads", async () => {
+		const f = await fixture();
+		expect(() =>
+			createWorkspaceSnapshotServiceV1({
+				...f.options,
+				uploadPolicy: {
+					...workspaceSnapshotUploadPolicyV1.defaults,
+					uploadTimeoutMs: 0,
+				},
+			}),
+		).toThrow();
+		const policy = {
+			...workspaceSnapshotUploadPolicyV1.defaults,
+			uploadTimeoutMs: 20,
+		};
+		const service = createWorkspaceSnapshotServiceV1({
+			...f.options,
+			uploadPolicy: policy,
+		});
+		policy.uploadTimeoutMs = 100_000;
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(Buffer.from("x"));
+			},
+		});
+		await expect(service.upload({ ...f.upload(), body })).rejects.toMatchObject(
+			{ code: "unavailable" },
+		);
+		expect(f.store.admitUpload.mock.calls[0]?.[1].uploadTimeoutMs).toBe(20);
+		expect(f.store.releaseUploadAdmission).toHaveBeenCalledOnce();
+		expect(f.storage.upload).not.toHaveBeenCalled();
+		expect(await readdir(f.directory)).toEqual([]);
+	});
 	it("validates and uploads the supplied bytes using a UUID object key", async () => {
 		const f = await fixture();
 		const result = await f.service.upload(f.upload());

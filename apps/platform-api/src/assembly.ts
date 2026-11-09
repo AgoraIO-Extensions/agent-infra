@@ -39,6 +39,7 @@ import {
 	readFileLimitDeclarationV1,
 	resolveFileLimitsV1,
 	type WecomIdentityPortV1,
+	workspaceSnapshotUploadPolicyV1,
 	writeFileLimitDeclarationV1,
 } from "@agent-infra/platform-core";
 import {
@@ -583,12 +584,20 @@ export function assemblePlatformApi(
 		transaction: personalApiCredentialStore,
 		userDirectory,
 	});
+	const snapshotUploadPolicy = input.workspaceSnapshotDeployment
+		? workspaceSnapshotUploadPolicyV1.parse(
+				input.workspaceSnapshotDeployment.uploadPolicy ??
+					workspaceSnapshotUploadPolicyV1.defaults,
+			)
+		: undefined;
 	const snapshotStore = input.workspaceSnapshotDeployment
 		? new PostgresWorkspaceSnapshotUploadStoreV1(input.databaseUrl)
 		: undefined;
 	const snapshotSpool = input.workspaceSnapshotDeployment
 		? (input.workspaceSnapshotDeployment.spool ??
-			createWorkspaceSnapshotFileSpoolV1())
+			createWorkspaceSnapshotFileSpoolV1({
+				maximumActiveSpools: snapshotUploadPolicy?.maximumConcurrentUploads,
+			}))
 		: undefined;
 	function snapshotServiceFor(
 		material: string,
@@ -604,6 +613,7 @@ export function assemblePlatformApi(
 		);
 		return createWorkspaceSnapshotServiceV1({
 			...deployment,
+			uploadPolicy: snapshotUploadPolicy,
 			spool: snapshotSpool,
 			credentials: deployment.credentials ?? bound.credentials,
 			store: deployment.store ?? bound.store,

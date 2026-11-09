@@ -3,9 +3,20 @@ import type {
 	WorkspaceSnapshotPrincipalV1,
 	WorkspaceSnapshotRecordV1,
 } from "@agent-infra/platform-core";
-import { workspaceSnapshotLimitsV1 } from "@agent-infra/platform-core";
+import {
+	workspaceSnapshotLimitsV1,
+	workspaceSnapshotUploadPolicyV1,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -97,6 +108,157 @@ const directory = {
 		authorizationRevision: "current-1",
 	}),
 };
+
+describe("snapshot upload admission shared by API replicas", () => {
+	const defaults = workspaceSnapshotUploadPolicyV1.defaults;
+	beforeEach(async () => {
+		await db`truncate platform.workspace_snapshot_upload_admissions`;
+	});
+	it("serializes concurrent admissions from separate Store clients", async () => {
+		const replica = new PostgresWorkspaceSnapshotUploadStoreV1(
+			database.databaseUrl,
+		);
+		try {
+			const who = owner();
+			const policy = { ...defaults, maximumConcurrentUploadsPerOwner: 1 };
+			const outcomes = await Promise.allSettled([
+				store.admitUpload(who, policy),
+				replica.admitUpload(who, policy),
+			]);
+			expect(
+				outcomes.filter((result) => result.status === "fulfilled"),
+			).toHaveLength(1);
+			expect(
+				outcomes.find((result) => result.status === "rejected"),
+			).toMatchObject({ reason: { code: "rate_limited" } });
+			const first = outcomes.find((result) => result.status === "fulfilled");
+			if (first?.status !== "fulfilled") throw new Error("Admission missing");
+			await replica.releaseUploadAdmission(
+				owner("application", who.id),
+				first.value.leaseId,
+			);
+			await expect(replica.admitUpload(who, policy)).rejects.toMatchObject({
+				code: "rate_limited",
+			});
+			await replica.releaseUploadAdmission(who, first.value.leaseId);
+			expect((await store.admitUpload(who, policy)).leaseId).not.toBe(
+				first.value.leaseId,
+			);
+		} finally {
+			await replica.close();
+		}
+	});
+	it("enforces global concurrency across owners and counts principal kinds separately", async () => {
+		const policy = {
+			...defaults,
+			maximumConcurrentUploads: 2,
+			maximumConcurrentUploadsPerOwner: 1,
+		};
+		const person = owner();
+		const application = owner("application", person.id);
+		const first = await store.admitUpload(person, policy);
+		await store.admitUpload(application, policy);
+		await expect(store.admitUpload(owner(), policy)).rejects.toMatchObject({
+			code: "rate_limited",
+		});
+		await store.releaseUploadAdmission(person, first.leaseId);
+		await expect(store.admitUpload(owner(), policy)).resolves.toHaveProperty(
+			"leaseId",
+		);
+	});
+	it("retains released attempts in the owner's sliding rate window", async () => {
+		const policy = { ...defaults, maximumRequestsPerWindow: 2 };
+		const who = owner();
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const lease = await store.admitUpload(who, policy);
+			await store.releaseUploadAdmission(who, lease.leaseId);
+		}
+		await expect(store.admitUpload(who, policy)).rejects.toMatchObject({
+			code: "rate_limited",
+		});
+		await expect(
+			store.admitUpload(owner("application", who.id), policy),
+		).resolves.toHaveProperty("leaseId");
+	});
+	it("retains global request accounting after every spool is released", async () => {
+		const policy = {
+			...defaults,
+			maximumRequestsPerWindow: 2,
+			maximumGlobalRequestsPerWindow: 2,
+		};
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const who = owner();
+			const lease = await store.admitUpload(who, policy);
+			await store.releaseUploadAdmission(who, lease.leaseId);
+		}
+		await expect(store.admitUpload(owner(), policy)).rejects.toMatchObject({
+			code: "rate_limited",
+		});
+	});
+	it("reserves the maximum archive size against the shared temporary budget", async () => {
+		const policy = {
+			...defaults,
+			maximumTemporaryBytes: workspaceSnapshotLimitsV1.maxArchiveBytes,
+		};
+		const who = owner();
+		const lease = await store.admitUpload(who, policy);
+		await expect(store.admitUpload(owner(), policy)).rejects.toMatchObject({
+			code: "rate_limited",
+		});
+		await store.releaseUploadAdmission(who, lease.leaseId);
+		await expect(store.admitUpload(owner(), policy)).resolves.toHaveProperty(
+			"leaseId",
+		);
+	});
+	it("expires abandoned leases and fences their late releases", async () => {
+		const policy = {
+			...defaults,
+			maximumConcurrentUploads: 1,
+			maximumConcurrentUploadsPerOwner: 1,
+		};
+		const who = owner();
+		const abandoned = await store.admitUpload(who, policy);
+		await db`update platform.workspace_snapshot_upload_admissions set created_at=clock_timestamp()-interval '10 minutes',expires_at=clock_timestamp()-interval '1 second' where id=${abandoned.leaseId}`;
+		const renewed = await store.admitUpload(who, policy);
+		expect(renewed.leaseId).not.toBe(abandoned.leaseId);
+		await store.releaseUploadAdmission(who, abandoned.leaseId);
+		await expect(store.admitUpload(who, policy)).rejects.toMatchObject({
+			code: "rate_limited",
+		});
+	});
+	it("refuses mixed replica policies until retained accounting has expired", async () => {
+		const who = owner();
+		const lease = await store.admitUpload(who, defaults);
+		await store.releaseUploadAdmission(who, lease.leaseId);
+		const changed = { ...defaults, maximumRequestsPerWindow: 30 };
+		await expect(store.admitUpload(owner(), changed)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		await db`update platform.workspace_snapshot_upload_admissions set created_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour',retain_until=clock_timestamp()-interval '1 second' where id=${lease.leaseId}`;
+		await expect(store.admitUpload(owner(), changed)).resolves.toHaveProperty(
+			"leaseId",
+		);
+		const [rows] =
+			await db`select count(*)::int as count from platform.workspace_snapshot_upload_admissions where id=${lease.leaseId}`;
+		expect(rows?.count).toBe(0);
+	});
+	it("checks the current credential while allowing a server-held lease to be released after revocation", async () => {
+		const who = owner();
+		const token = await credential(who);
+		const bound = store.forCredential(token.material, directory);
+		const lease = await bound.store.admitUpload(who, defaults);
+		await db`update platform.platform_api_credentials set revoked_at=clock_timestamp() where id=${token.id}`;
+		await expect(bound.store.admitUpload(who, defaults)).rejects.toMatchObject({
+			code: "authentication_required",
+		});
+		await expect(
+			bound.store.releaseUploadAdmission(who, lease.leaseId),
+		).resolves.toBeUndefined();
+		const [row] =
+			await db`select released_at from platform.workspace_snapshot_upload_admissions where id=${lease.leaseId}`;
+		expect(row?.released_at).toBeInstanceOf(Date);
+	});
+});
 
 describe("workspace snapshot publication on PostgreSQL", () => {
 	it("reserves owner quota before object publication and converges idempotency", async () => {

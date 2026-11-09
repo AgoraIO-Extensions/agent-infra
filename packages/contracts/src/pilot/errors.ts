@@ -11,6 +11,7 @@ export const PilotRetryableErrorCodeV1Schema = z.enum([
 	"PROVIDER_RATE_LIMITED",
 	"DEPENDENCY_UNAVAILABLE",
 	"INTERNAL_ERROR",
+	"UPLOAD_RATE_LIMITED",
 ]);
 
 export const PilotTerminalErrorCodeV1Schema = z.enum([

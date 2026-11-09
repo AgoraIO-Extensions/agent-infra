@@ -60,6 +60,7 @@ import { browserSessions } from "./schema-sessions";
 import {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadAdmissions,
 	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
@@ -155,6 +156,7 @@ export {
 export {
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadAdmissions,
 	workspaceSnapshotUploadReservations,
 } from "./schema-workspace-snapshots";
 
@@ -237,6 +239,7 @@ export const platformInfrastructureTables = [
 	workspaceSnapshotUploadReservations,
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
+	workspaceSnapshotUploadAdmissions,
 ] as const;
 
 import { sessionSandboxAllocations } from "./schema-session-sandboxes";
