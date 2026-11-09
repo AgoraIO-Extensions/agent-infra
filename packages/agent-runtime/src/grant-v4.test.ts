@@ -194,6 +194,10 @@ describe("Runtime V4 Grant trust boundary", () => {
 		expect(runtimeHostErrorDiagnostic(error as RuntimeHostError)).toBe(
 			"runtime-v4-private-key",
 		);
+		const serialized = JSON.stringify(error);
+		expect(serialized).not.toContain(accepted.grant.token);
+		expect(serialized).not.toContain("private-key-value-k1");
+		expect(serialized).not.toContain("synthetic input");
 	});
 
 	it("keeps each V4 validation boundary distinguishable without exposing input", async () => {
