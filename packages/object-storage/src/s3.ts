@@ -266,11 +266,14 @@ export function createS3ObjectStorageV1(
 				const position: { key?: string; version?: string } = cursor
 					? JSON.parse(cursor)
 					: {};
+				const decodedPositionKey = position.key
+					? decodeURIComponent(position.key)
+					: undefined;
 				if (
-					position.key &&
+					decodedPositionKey &&
 					(objectRef === undefined
-						? !position.key.startsWith(options.prefix)
-						: position.key !== scanPrefix)
+						? !decodedPositionKey.startsWith(options.prefix)
+						: decodedPositionKey !== scanPrefix)
 				)
 					throw new ObjectStorageError("invalid");
 				const page = await client.send(
@@ -308,7 +311,11 @@ export function createS3ObjectStorageV1(
 					objects,
 					cursor: page.IsTruncated
 						? JSON.stringify({
-								key: page.NextKeyMarker,
+								// A ref-scoped scan never advances to another key. Some
+								// S3-compatible providers return an encoded or omitted
+								// NextKeyMarker for same-key version pages; keep the
+								// scope canonical and advance only by VersionIdMarker.
+								key: objectRef === undefined ? page.NextKeyMarker : scanPrefix,
 								version: page.NextVersionIdMarker,
 							})
 						: null,
