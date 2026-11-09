@@ -1,4 +1,4 @@
-/** #3217：始终可用的文件工具；隔离 Bash 由 #3218 的实际内核/安装准入另行选择。 */
+/** Names shipped by the pinned Pi release; shell is replaced by our launcher. */
 export const piWorkspaceToolNames: readonly string[] = Object.freeze([
 	"read",
 	"write",
@@ -6,6 +6,8 @@ export const piWorkspaceToolNames: readonly string[] = Object.freeze([
 	"find",
 	"grep",
 	"ls",
+	"sandbox_bash",
+	"powershell",
 ]);
 
 const piToolIds: Readonly<Record<string, string>> = Object.freeze({
@@ -18,9 +20,13 @@ const piToolIds: Readonly<Record<string, string>> = Object.freeze({
 	sandbox_bash: "Bash",
 });
 
-/** 工具事实与事件使用的稳定工具标识；未开放的工具记为 unavailable。 */
+const nativeToolName = /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/;
+
+/** Preserve native identities while keeping malformed event names unavailable. */
 export function piToolId(toolName: unknown) {
-	return typeof toolName === "string" && Object.hasOwn(piToolIds, toolName)
+	if (typeof toolName !== "string" || !nativeToolName.test(toolName))
+		return "unavailable";
+	return Object.hasOwn(piToolIds, toolName)
 		? (piToolIds[toolName] as string)
-		: "unavailable";
+		: toolName;
 }

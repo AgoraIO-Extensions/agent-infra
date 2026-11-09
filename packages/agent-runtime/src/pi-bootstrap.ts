@@ -145,6 +145,11 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				const shellAvailable = await piNativeShellAvailable(
 					join(directory, "workspace"),
 				);
+				const nativeToolNames = piWorkspaceToolNames.filter(
+					(name) =>
+						(name !== piNativeShellToolName || shellAvailable) &&
+						(name !== "powershell" || process.platform === "win32"),
+				);
 				const write = async (name: string, value: Record<string, unknown>) => {
 					const file = await DurableJsonFile.open(
 						join(config, name),
@@ -213,10 +218,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						"--no-themes",
 						"--no-context-files",
 						"--tools",
-						[
-							...piWorkspaceToolNames,
-							...(shellAvailable ? [piNativeShellToolName] : []),
-						].join(","),
+						nativeToolNames.join(","),
 						"--extension",
 						fileURLToPath(new URL("../dist/pi-policy.mjs", import.meta.url)),
 					],

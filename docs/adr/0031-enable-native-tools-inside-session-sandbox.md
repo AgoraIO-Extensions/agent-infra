@@ -21,7 +21,7 @@
 
 ## 决策
 
-1. **边界。** 四个标准模板（Codex、Claude、OpenCode、Pi）在 Session Sandbox 内默认启用固定版本的原生工具。范围包括命令与脚本、文件读写与编辑、目录列举与搜索、原生 Skill，以及该版本自带的网络工具。Session Sandbox 是这些工具的隔离边界。自定义 Agent 不受本 ADR 约束。
+1. **边界。** 四个标准模板（Codex、Claude、OpenCode、Pi）在 Session Sandbox 内默认启用其固定版本提供的完整原生工具目录。范围包括命令与脚本、文件读写与编辑、目录列举与搜索、原生 Skill，以及该版本自带的网络工具；平台不能用静态 tool allowlist 隐藏目录中的原生能力。Session Sandbox 是这些工具的隔离边界。自定义 Agent 不受本 ADR 约束。
 2. **外部操作。** PRD §13.3 的外部操作只指跨出当前 Sandbox、由平台或 Connection 代为执行的调用：
    - **平台中介调用**：模型请求、Driver 执行的标准 MCP 与 Connection 调用、Driver 执行的受控工具、平台文件与接口操作、Browser 外部副作用。这类调用保留持久 intent、当前授权、结果或 unknown 的执行前屏障。
    - **原生直接出网**：由部署批准的出站策略在网络层预先授权，Runtime 只记录工具事实，不逐次拦截。

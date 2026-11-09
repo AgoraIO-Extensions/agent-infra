@@ -28,7 +28,7 @@ export async function createPiNativeShellTool(workspace: string) {
 				throw new Error("RUNTIME_NATIVE_SHELL_UNAVAILABLE");
 			return tool.execute(...args);
 		},
-		// A missing extension must not expose Pi's unwrapped builtin bash fallback.
+		// The launcher-backed definition replaces Pi's ordinary Bash implementation.
 		name: piNativeShellToolName,
 	};
 }

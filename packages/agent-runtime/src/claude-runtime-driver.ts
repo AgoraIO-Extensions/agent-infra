@@ -55,8 +55,8 @@ import {
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import {
 	type ClaudeToolOperationCallbacks,
-	claudeWorkspaceToolNames,
 	claudeWorkspaceTools,
+	isClaudeNativeToolName,
 } from "./claude-workspace.js";
 import {
 	validateModelAccess,
@@ -1355,8 +1355,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							if (event.payload.phase === "started")
 								tools.set(
 									event.payload.id,
-									claudeWorkspaceToolNames.includes(event.payload.name ?? "") ||
-										(event.payload.name?.startsWith("mcp_") ?? false)
+									isClaudeNativeToolName(event.payload.name) ||
+										(typeof event.payload.name === "string" &&
+											event.payload.name.startsWith("mcp_"))
 										? (event.payload.name ?? unavailable())
 										: "unavailable",
 								);
@@ -2066,7 +2067,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 			onStarted: async (toolUseId, toolName) => {
 				if (
-					!claudeWorkspaceToolNames.includes(toolName) ||
+					!isClaudeNativeToolName(toolName) ||
+					["WebFetch", "WebSearch"].includes(toolName) ||
 					toolFacts.has(toolUseId)
 				)
 					return;
@@ -2384,12 +2386,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						const requested = nativeToolName.startsWith("mcp__connection__")
 							? nativeToolName.slice("mcp__connection__".length)
 							: nativeToolName;
-						// #3217：模型调用未开放的工具时，原生 CLI 自己返回工具错误；这里只记为
-						// unavailable 工具，不让本轮失败。
 						const name =
-							claudeWorkspaceToolNames.includes(requested) ||
-							["WebFetch", "WebSearch"].includes(requested) ||
-							requested.startsWith("mcp_")
+							isClaudeNativeToolName(requested) ||
+							(typeof requested === "string" && requested.startsWith("mcp_"))
 								? requested
 								: "unavailable";
 						tools.set(message.event.content_block.id, name);

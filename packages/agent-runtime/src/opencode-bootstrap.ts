@@ -29,6 +29,7 @@ import {
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import {
 	openCodeFetchAllowed,
+	openCodeNativeToolInputAllowed,
 	openCodePatchAllowed,
 	openCodeToolName,
 } from "./opencode-tools.js";
@@ -344,25 +345,27 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						platformInstructions,
 						join(directory, "workspace/.memory/MEMORY.md"),
 					],
-					// #3217：列举与搜索类工具经 ACP 权限请求按本 Conversation 路径授权；
-					// Bash 仅在固定子进程 launcher 的真实安装/ABI 准入后开放（#3218）。
+					// The pinned ACP catalog remains visible; path and shell checks happen
+					// in authorize instead of a platform-owned tool allowlist.
 					permission: {
 						"*": "deny",
 						external_directory: openCodeSnapshotPermissionRules(snapshotRoots),
 						read: "ask",
+						write: "ask",
 						edit: "ask",
+						list: "ask",
+						apply_patch: "ask",
 						glob: "ask",
 						grep: "ask",
 						webfetch: "ask",
 						websearch: "ask",
 						todowrite: "ask",
-						...(shellAvailable ? { bash: "ask" } : {}),
+						...(shellAvailable ? { bash: "ask" } : { bash: "deny" }),
 					},
 					autoupdate: false,
 					share: "disabled",
 					agent: { title: { disable: true }, summary: { disable: true } },
 					formatter: false,
-					lsp: false,
 				};
 				return {
 					command: options.executable,
@@ -470,7 +473,10 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 							!("filePath" in tool.rawInput) ||
 							typeof tool.rawInput.filePath !== "string"
 						)
-							return false;
+							return openCodeNativeToolInputAllowed(
+								join(directory, "workspace"),
+								tool.rawInput,
+							);
 						if (
 							tool.kind === "read" &&
 							(await workspaceSnapshotFileAllowed(tool.rawInput.filePath))

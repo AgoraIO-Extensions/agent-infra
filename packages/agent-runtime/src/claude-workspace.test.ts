@@ -316,7 +316,7 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 	}
 });
 
-// #3217：列举与搜索类原生工具只在本 Conversation 的目录内可用，shell 与网络工具仍关闭。
+// #4078：固定 Claude preset 的完整 native tool surface 对模型可见；边界仍由授权器执行。
 describe("Claude workspace list and search tools", () => {
 	async function fixture() {
 		const root = await realpath(
@@ -345,16 +345,28 @@ describe("Claude workspace list and search tools", () => {
 		return { root, workspace, memory, skillRoot, outside, tools, decide };
 	}
 
-	it("declares list and search tools but not shell, network or sub-agent tools", async () => {
+	it("declares the full native preset and keeps special boundaries", async () => {
 		const f = await fixture();
 		try {
 			expect(f.tools.tools).toEqual(
-				expect.arrayContaining(["Glob", "Grep", "TodoWrite"]),
+				expect.arrayContaining([
+					"Glob",
+					"Grep",
+					"Bash",
+					"WebFetch",
+					"WebSearch",
+					"Agent",
+					"Task",
+				]),
 			);
-			for (const name of ["Bash", "WebFetch", "WebSearch", "Agent", "Task"]) {
-				expect(f.tools.tools).not.toContain(name);
+			for (const name of ["Bash", "WebFetch", "WebSearch"])
 				expect(await f.decide(name, { command: "ls" })).toBe("deny");
-			}
+			expect(await f.decide("Agent", { prompt: "inspect the workspace" })).toBe(
+				"allow",
+			);
+			expect(
+				await f.decide("Task", { description: "inspect the workspace" }),
+			).toBe("allow");
 		} finally {
 			await rm(f.root, { recursive: true, force: true });
 		}
@@ -414,7 +426,7 @@ it("revalidates the fixed shell boundary for every Bash permission and preserves
 		toolUseID: "shell",
 		requestId: "request",
 	};
-	expect(tools.tools).toContain("Bash");
+	expect(tools.tools).toEqual(expect.arrayContaining(["Bash", "WebFetch"]));
 	expect(
 		await tools.canUseTool?.("Bash", { command: "true" }, options),
 	).toMatchObject({ behavior: "allow" });
