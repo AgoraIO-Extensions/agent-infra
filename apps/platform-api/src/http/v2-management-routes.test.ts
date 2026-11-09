@@ -1320,6 +1320,38 @@ describe("reads re-read a snapshot that went stale while projecting (#2661)", ()
 		).toEqual(["agent-1", "agent-2", "agent-2"]);
 	});
 
+	// #4048：一页 Agent 逐个投影；同时进行的投影不超过 4 个，结果顺序不变。
+	it("projects an Agent page with at most four concurrent projections", async () => {
+		reads = 0;
+		const h = createApp();
+		const current = new Map(
+			Array.from({ length: 10 }, (_, index) => [`agent-${index + 1}`, 1]),
+		);
+		h.listAgents.mockImplementation(listFrom(current, () => {}));
+		const project = projectAgainst(current);
+		let active = 0;
+		let peak = 0;
+		h.readAgentProjection.mockImplementation(
+			async (input: { agent: AgentAt }) => {
+				active++;
+				peak = Math.max(peak, active);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				active--;
+				return project(input);
+			},
+		);
+
+		const response = await h.app.request("/api/v2/agents?limit=10");
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { items: ListedAgent[] };
+		expect(body.items.map(({ agentId }) => agentId)).toEqual([
+			...current.keys(),
+		]);
+		expect(h.readAgentProjection).toHaveBeenCalledTimes(10);
+		expect(peak).toBe(4);
+	});
+
 	it("fails with the retryable dependency error only after the bounded re-reads", async () => {
 		reads = 0;
 		const h = createApp();

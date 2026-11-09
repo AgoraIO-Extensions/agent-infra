@@ -48,6 +48,10 @@ import type {
 import type { Context, Hono } from "hono";
 import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
+	createConcurrencyLimit,
+	listProjectionConcurrency,
+} from "./bounded-concurrency.js";
+import {
 	HttpProtocolError,
 	parseIdempotencyKey,
 	parseJson,
@@ -478,6 +482,7 @@ async function projectPage<Item, Projection>(
 	const projected = new Map<string, { item: Item; projection: Projection }>();
 	for (let rereads = 0; ; rereads += 1) {
 		const page = await read();
+		const limit = createConcurrencyLimit(listProjectionConcurrency);
 		// 等全部投影结束再决定：不让上一轮还在进行的投影和重读叠在一起。
 		const settled = await Promise.allSettled(
 			page.items.map(async (item) => {
@@ -485,9 +490,11 @@ async function projectPage<Item, Projection>(
 				if (previous && isDeepStrictEqual(previous.item, item)) {
 					return previous.projection;
 				}
-				const projection = await project(item);
-				projected.set(key(item), { item, projection });
-				return projection;
+				return limit(async () => {
+					const projection = await project(item);
+					projected.set(key(item), { item, projection });
+					return projection;
+				});
 			}),
 		);
 		const items: Projection[] = [];
