@@ -519,6 +519,13 @@
       "when": 1794191824548,
       "tag": "0077_snapshot_upload_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1794214381547,
+      "tag": "0078_workspace_snapshot_upload_objects",
+      "breakpoints": true
     }
   ]
 }

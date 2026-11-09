@@ -8,6 +8,7 @@ import {
 	GetBucketVersioningCommand,
 	GetObjectCommand,
 	HeadObjectCommand,
+	type HeadObjectCommandOutput,
 	ListObjectVersionsCommand,
 	PutObjectCommand,
 	S3Client,
@@ -36,6 +37,32 @@ export interface S3ObjectStorageOptionsV1 {
 function status(error: unknown) {
 	return (error as { $metadata?: { httpStatusCode?: number } })?.$metadata
 		?.httpStatusCode;
+}
+const uploadFenceMetadata = "agent-infra-upload-fence";
+const uploadFenceMediaType = "application/vnd.agent-infra.upload-fence";
+type FenceHead = Pick<
+	HeadObjectCommandOutput,
+	"Metadata" | "ContentLength" | "ContentType" | "VersionId"
+>;
+function isUploadFence(
+	head: FenceHead,
+): head is FenceHead & { VersionId: string } {
+	if (head.Metadata?.[uploadFenceMetadata] === undefined) return false;
+	if (
+		head.Metadata[uploadFenceMetadata] !== "v1" ||
+		head.ContentLength !== 0 ||
+		head.ContentType !== uploadFenceMediaType ||
+		!head.VersionId ||
+		head.VersionId === "null" ||
+		head.VersionId.length > 256 ||
+		!head.VersionId.isWellFormed() ||
+		[...head.VersionId].some(
+			(character) =>
+				character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+		)
+	)
+		throw new ObjectStorageError("unavailable");
+	return true;
 }
 export function createS3ObjectStorageV1(
 	options: S3ObjectStorageOptionsV1,
@@ -84,6 +111,17 @@ export function createS3ObjectStorageV1(
 		const timeout = AbortSignal.timeout(Math.min(remaining, options.timeoutMs));
 		return parent ? AbortSignal.any([timeout, parent]) : timeout;
 	}
+	async function headCurrent(objectRef: string, abortSignal: AbortSignal) {
+		try {
+			return await client.send(
+				new HeadObjectCommand({ Bucket: options.bucket, Key: key(objectRef) }),
+				{ abortSignal },
+			);
+		} catch (error) {
+			if (status(error) === 404) return null;
+			throw error;
+		}
+	}
 	async function inspect(
 		objectRef: string,
 		version?: string,
@@ -98,6 +136,7 @@ export function createS3ObjectStorageV1(
 				}),
 				{ abortSignal },
 			);
+			if (isUploadFence(head)) throw new ObjectStorageError("conflict");
 			if (
 				(version !== undefined && head.VersionId !== version) ||
 				!head.VersionId ||
@@ -153,6 +192,39 @@ export function createS3ObjectStorageV1(
 	}
 	return {
 		inspect,
+		async fenceUpload(objectRef) {
+			try {
+				const abortSignal = signal();
+				const current = await headCurrent(objectRef, abortSignal);
+				if (current && isUploadFence(current))
+					return { version: current.VersionId };
+				const versioning = await client.send(
+					new GetBucketVersioningCommand({ Bucket: options.bucket }),
+					{ abortSignal },
+				);
+				if (versioning.Status !== "Enabled")
+					throw new ObjectStorageError("unavailable");
+				// Retain the current zero-byte version: deleting the key would reopen If-None-Match writes.
+				await client.send(
+					new PutObjectCommand({
+						Bucket: options.bucket,
+						Key: key(objectRef),
+						Body: new Uint8Array(),
+						ContentLength: 0,
+						ContentType: uploadFenceMediaType,
+						Metadata: { [uploadFenceMetadata]: "v1" },
+					}),
+					{ abortSignal },
+				);
+				const fenced = await headCurrent(objectRef, abortSignal);
+				if (!fenced || !isUploadFence(fenced))
+					throw new ObjectStorageError("unavailable");
+				return { version: fenced.VersionId };
+			} catch (error) {
+				if (error instanceof ObjectStorageError) throw error;
+				throw new ObjectStorageError("unavailable");
+			}
+		},
 		async createReadUrl(input) {
 			if (
 				!input.version ||
@@ -250,6 +322,9 @@ export function createS3ObjectStorageV1(
 			try {
 				if (!version || version === "null")
 					throw new ObjectStorageError("invalid");
+				const current = await headCurrent(objectRef, signal());
+				if (current && isUploadFence(current) && current.VersionId === version)
+					throw new ObjectStorageError("conflict");
 				await client.send(
 					new DeleteObjectCommand({
 						Bucket: options.bucket,
@@ -368,6 +443,8 @@ export function createS3ObjectStorageV1(
 					throw new ObjectStorageError("conflict");
 				return object;
 			} catch (error) {
+				if (!request.body.locked)
+					await request.body.cancel().catch(() => undefined);
 				if (error instanceof ObjectStorageError) throw error;
 				throw new ObjectStorageError("unavailable");
 			}
@@ -388,6 +465,7 @@ export function createS3ObjectStorageV1(
 				);
 				if (
 					!object.Body ||
+					object.Metadata?.[uploadFenceMetadata] !== undefined ||
 					object.VersionId !== request.version ||
 					object.ETag !== request.etag ||
 					object.ContentLength === undefined ||

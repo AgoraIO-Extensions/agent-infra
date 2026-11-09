@@ -171,7 +171,11 @@ export interface PlatformApiAssemblyInput {
 	> &
 		Partial<
 			Pick<WorkspaceSnapshotServiceOptionsV1, "credentials" | "store" | "quota">
-		> & { readonly gc?: WorkspaceSnapshotGcDeploymentV1 };
+		> & {
+			readonly storage: WorkspaceSnapshotServiceOptionsV1["storage"] &
+				Pick<ObjectStorageDataV1, "scan">;
+			readonly gc?: WorkspaceSnapshotGcDeploymentV1;
+		};
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;

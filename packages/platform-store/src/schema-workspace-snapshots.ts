@@ -107,6 +107,51 @@ export const workspaceSnapshotUploadReservations = platformSchema.table(
 	],
 );
 
+// Independent of a quota lease: a retry must never erase an old PUT's fence.
+export const workspaceSnapshotUploadObjects = platformSchema.table(
+	"workspace_snapshot_upload_objects",
+	{
+		objectRef: text("object_ref").primaryKey(),
+		reservationId: text("reservation_id").notNull(),
+		ownerType: varchar("owner_type", { length: 32 }).notNull(),
+		ownerId: text("owner_id").notNull(),
+		idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+		requestDigest: varchar("request_digest", { length: 64 }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		state: varchar("state", { length: 16 }).default("pending").notNull(),
+		objectVersion: text("object_version"),
+		fenceVersion: text("fence_version"),
+		scanCursor: text("scan_cursor"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"snapshot_upload_object_owner_type",
+			sql`${table.ownerType} in ('user','application')`,
+		),
+		check(
+			"snapshot_upload_object_state",
+			sql`${table.state} in ('pending','published','retired')`,
+		),
+		check(
+			"snapshot_upload_object_request_digest",
+			sql`${table.requestDigest} ~ '^[a-f0-9]{64}$'`,
+		),
+		index("snapshot_upload_object_recovery_idx").on(
+			table.updatedAt,
+			table.objectRef,
+		),
+		uniqueIndex("snapshot_upload_object_reservation_idx").on(
+			table.reservationId,
+		),
+	],
+);
+
 export const workspaceSnapshots = platformSchema.table(
 	"workspace_snapshots",
 	{

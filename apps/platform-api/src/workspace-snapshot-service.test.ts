@@ -108,6 +108,7 @@ async function fixture() {
 	>();
 	const objects = new Map<string, { version: string; bytes: Buffer }>();
 	const storage = {
+		fenceUpload: vi.fn(async (_ref: string) => ({ version: randomUUID() })),
 		upload: vi.fn(
 			async (request: Parameters<ObjectStorageDataV1["upload"]>[0]) => {
 				expect(request.objectRef).toMatch(/^[a-f0-9-]{36}$/);
@@ -180,6 +181,8 @@ async function fixture() {
 					if (value.id === reservationId) value.status = "released";
 			},
 		),
+		beginUploadObject: vi.fn(async () => undefined),
+		retireUploadObject: vi.fn(async () => undefined),
 		attachUploadObject: vi.fn(async () => undefined),
 		findIdempotency: vi.fn(
 			async (owner: WorkspaceSnapshotPrincipalV1, key: string) =>
@@ -436,6 +439,77 @@ describe("workspace snapshot upload service with real file spool", () => {
 		).rejects.toMatchObject({ code: "quota_exceeded" });
 		expect(original.record.snapshotId).toBeTruthy();
 		expect(f.storage.upload).toHaveBeenCalledOnce();
+	});
+	it("persists the object intent before storage I/O and refuses a failed declaration", async () => {
+		const f = await fixture();
+		f.store.beginUploadObject.mockImplementationOnce(async () => {
+			expect(f.storage.upload).not.toHaveBeenCalled();
+		});
+		await f.service.upload(f.upload());
+		expect(f.store.beginUploadObject).toHaveBeenCalledOnce();
+		expect(f.store.beginUploadObject.mock.invocationCallOrder[0]).toBeLessThan(
+			f.storage.upload.mock.invocationCallOrder[0] ?? 0,
+		);
+		const rejected = await fixture();
+		rejected.store.beginUploadObject.mockRejectedValueOnce(
+			new WorkspaceSnapshotErrorV1("unavailable"),
+		);
+		await expect(
+			rejected.service.upload(rejected.upload()),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(rejected.storage.upload).not.toHaveBeenCalled();
+		expect(rejected.storage.fenceUpload).not.toHaveBeenCalled();
+		expect(rejected.store.create).not.toHaveBeenCalled();
+		expect(await readdir(rejected.directory)).toEqual([]);
+	});
+	it("retains the intent and quota when storage commits but loses the PUT response", async () => {
+		const f = await fixture();
+		const upload = f.storage.upload.getMockImplementation();
+		if (!upload) throw new Error("missing fixture upload");
+		f.storage.upload.mockImplementationOnce(async (request) => {
+			await upload(request);
+			throw new Error("lost PUT response with private endpoint");
+		});
+		await expect(f.service.upload(f.upload())).rejects.toMatchObject({
+			code: "unavailable",
+			message: "unavailable",
+		});
+		expect(f.store.beginUploadObject).toHaveBeenCalledOnce();
+		expect(f.store.attachUploadObject).not.toHaveBeenCalled();
+		expect(f.store.releaseUploadReservation).not.toHaveBeenCalled();
+		expect(f.store.releaseUploadAdmission).toHaveBeenCalledOnce();
+		expect(f.store.create).not.toHaveBeenCalled();
+		expect(f.storage.remove).not.toHaveBeenCalled();
+		expect(f.objects.size).toBe(1);
+		expect([...f.reservations.values()].map((r) => r.status)).toEqual([
+			"reserved",
+		]);
+		expect(await readdir(f.directory)).toEqual([]);
+	});
+	it("does not remove or release an object when retirement or its storage fence fails", async () => {
+		for (const failure of ["retire", "fence"] as const) {
+			const f = await fixture();
+			f.store.attachUploadObject.mockRejectedValueOnce(
+				new WorkspaceSnapshotErrorV1("unavailable"),
+			);
+			if (failure === "retire")
+				f.store.retireUploadObject.mockRejectedValueOnce(
+					new WorkspaceSnapshotErrorV1("conflict"),
+				);
+			else
+				f.storage.fenceUpload.mockRejectedValueOnce(
+					new Error("unknown fence response"),
+				);
+			await expect(f.service.upload(f.upload())).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			expect(f.storage.remove).not.toHaveBeenCalled();
+			expect(f.store.releaseUploadReservation).not.toHaveBeenCalled();
+			expect(f.objects.size).toBe(1);
+			if (failure === "retire")
+				expect(f.storage.fenceUpload).not.toHaveBeenCalled();
+			expect(await readdir(f.directory)).toEqual([]);
+		}
 	});
 	it("releases an attached object before allowing the same key to retry", async () => {
 		const f = await fixture();
