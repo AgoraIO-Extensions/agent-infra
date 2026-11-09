@@ -83,6 +83,55 @@ test("ACK scopes both Session admission objects to one namespace and managed Pod
 	assert.match(policy.spec.mutations[0].jsonPatch.expression, /value:"arm64"/);
 });
 
+test("ACK can select a cluster-provided RuntimeClass instead of ECI placement", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.runtimeClassName=runv",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const policy = policies(result).find(
+		(x) => x.kind === "MutatingAdmissionPolicy",
+	);
+	const expression = policy.spec.mutations[0].jsonPatch.expression;
+	assert.match(expression, /runtimeClassName/);
+	assert.match(expression, /runv/);
+	assert.match(expression, /kubernetes\.io~1arch/);
+	assert.doesNotMatch(expression, /virtual-kubelet/);
+	assert.doesNotMatch(expression, /alibabacloud/);
+});
+
+test("ACK rejects ECI image-cache admission when a RuntimeClass is selected", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.runtimeClassName=runv",
+		"--set",
+		"sessionRuntimeScheduling.imageCache.required=true",
+	);
+	assert.notEqual(result.status, 0);
+	assert.match(
+		result.stderr,
+		/required image cache needs ECI Session scheduling/,
+	);
+});
+
+test("ACK rejects malformed RuntimeClass names", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.runtimeClassName=RunV",
+	);
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /runtimeClassName/);
+});
+
 test("ACK rejects an unsupported Session architecture", () => {
 	const result = render(
 		"1.36.0",

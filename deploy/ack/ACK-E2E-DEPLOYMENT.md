@@ -63,18 +63,23 @@ scheduling:
 sessionRuntimeScheduling:
   enabled: true
   architecture: amd64
+  # For an ACK Sandboxed Container V2/runV pool, set the cluster-provided
+  # RuntimeClass instead of using the default ECI placement.
+  # runtimeClassName: runv
 ```
 
 `nodeSelector: null` 用于清除 chart 默认的 Worker selector；空对象会与默认值合并。
 
 该选项默认关闭，使用 GA `MutatingAdmissionPolicy`，不依赖外部调度 Webhook。策略和绑定
 同时限定 Helm release namespace、`agent-infra.agora.io/managed=session-sandbox-v1`
-标签与 Pod `CREATE` 操作；只补 ECI nodeSelector 和 provider toleration，保留其他非冲突调度
-字段，不修改容器、安全上下文、资源、身份或凭证。重复求值不追加相同 toleration。
+标签与 Pod `CREATE` 操作；默认只补 ECI nodeSelector 和 provider toleration。设置
+`runtimeClassName` 后改为注入集群提供的 RuntimeClass 和架构 selector，跳过 ECI
+selector/toleration；RuntimeClass、handler、专用节点池和其调度规则必须由集群管理员预先
+提供。两种模式都不修改容器、安全上下文、资源、身份或凭证。重复求值不追加相同 toleration。
 开启该选项的部署账号需要创建集群级准入策略的权限，低于 1.36 的版本在渲染阶段拒绝。
 关闭选项只影响后续 Pod 创建，已有 Pod 仍沿原有生命周期运行。
 
-ECI 调度成功不代表网络策略生效。还须单独验证目标 Driver 的内核能力、实际模型调用、
+ECI 或 RuntimeClass 调度成功不代表网络策略或 native capability 生效。还须单独验证目标 Driver 的内核能力、实际模型调用、
 持久卷、出站和入口隔离；不能用 Pod Ready 或已创建 NetworkPolicy 对象代替真实负向验证。
 Runtime image 必须是 `architecture` 对应的不可变 manifest Digest。
 

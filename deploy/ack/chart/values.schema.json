@@ -97,6 +97,7 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
+        "runtimeClassName": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$", "maxLength": 253},
         "imageCache": {
           "type": "object", "additionalProperties": false,
           "required": ["required", "entries"],

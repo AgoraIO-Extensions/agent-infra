@@ -1,6 +1,6 @@
 {{- if and (not .Values.bootstrap.databaseOnly) .Values.sessionRuntimeScheduling.imageCache.required }}
-{{- if or (not .Values.sessionRuntimeScheduling.enabled) (ne .Values.sessionRuntimeScheduling.architecture "amd64") (empty .Values.sessionRuntimeScheduling.imageCache.entries) }}
-{{- fail "required image cache needs ECI Session scheduling, amd64 and verified cache entries" }}
+{{- if or (not .Values.sessionRuntimeScheduling.enabled) (ne .Values.sessionRuntimeScheduling.architecture "amd64") (ne (.Values.sessionRuntimeScheduling.runtimeClassName | default "") "") (empty .Values.sessionRuntimeScheduling.imageCache.entries) }}
+{{- fail "required image cache needs ECI Session scheduling, amd64, no RuntimeClass and verified cache entries" }}
 {{- end }}
 {{- $name := printf "%s-session-image-cache" .Release.Namespace }}
 {{- $cacheMap := dict }}

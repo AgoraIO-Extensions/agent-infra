@@ -11,6 +11,7 @@ const script = new URL(
 );
 for (const scenario of [
 	"passed",
+	"runtime-class",
 	"unsupported",
 	"ownership-changed",
 	"invalid-image",
@@ -49,6 +50,7 @@ if(args.includes('exec') && process.env.PROBE_TEST_SCENARIO === 'unsupported') p
 							? "runtime:latest"
 							: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
 					ACK_RUNTIME_DRIVER: "codex",
+					ACK_RUNTIME_CLASS: scenario === "runtime-class" ? "runv" : "",
 					ACK_RUNTIME_PLACEMENT_FILE: "",
 					KUBECTL_BIN: binary,
 					PROBE_TEST_LOG: log,
@@ -56,7 +58,10 @@ if(args.includes('exec') && process.env.PROBE_TEST_SCENARIO === 'unsupported') p
 					PROBE_TEST_SCENARIO: scenario,
 				},
 			});
-			assert.equal(result.status, scenario === "passed" ? 0 : 1);
+			assert.equal(
+				result.status,
+				["passed", "runtime-class"].includes(scenario) ? 0 : 1,
+			);
 			if (scenario === "invalid-image") {
 				await assert.rejects(readFile(log), { code: "ENOENT" });
 				return;
@@ -79,16 +84,39 @@ if(args.includes('exec') && process.env.PROBE_TEST_SCENARIO === 'unsupported') p
 				pod.spec.containers[0].securityContext.allowPrivilegeEscalation,
 				false,
 			);
+			assert.equal(
+				pod.spec.runtimeClassName,
+				scenario === "runtime-class" ? "runv" : undefined,
+			);
 			if (scenario !== "ownership-changed") {
 				const execute = calls.find((args) => args.includes("exec"));
-				assert.deepEqual(execute.slice(execute.indexOf("--") + 1), [
-					"setpriv",
-					"--no-new-privs",
-					"--landlock-access",
-					"fs:ioctl-dev",
-					"--",
-					"/bin/true",
-				]);
+				assert.deepEqual(
+					execute.slice(execute.indexOf("--") + 1),
+					scenario === "runtime-class"
+						? [
+								"bwrap",
+								"--unshare-user",
+								"--unshare-pid",
+								"--unshare-net",
+								"--die-with-parent",
+								"--ro-bind",
+								"/",
+								"/",
+								"--proc",
+								"/proc",
+								"--dev",
+								"/dev",
+								"/bin/true",
+							]
+						: [
+								"setpriv",
+								"--no-new-privs",
+								"--landlock-access",
+								"fs:ioctl-dev",
+								"--",
+								"/bin/true",
+							],
+				);
 			}
 			if (scenario === "passed")
 				assert.equal(

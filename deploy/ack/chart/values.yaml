@@ -89,6 +89,11 @@ scheduling:
 sessionRuntimeScheduling:
   enabled: false
   architecture: amd64
+  # Optional cluster-provided RuntimeClass for Session Sandbox Pods. When set,
+  # the admission policy uses this handler and skips the ECI virtual-kubelet
+  # selector/toleration. The RuntimeClass and its handler are cluster-owned and
+  # must be provisioned separately.
+  runtimeClassName: ""
   imageCache:
     required: false
     entries: []
