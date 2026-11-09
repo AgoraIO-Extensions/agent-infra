@@ -96,6 +96,19 @@ export interface WorkspaceSnapshotUploadStoreV1 {
 	releaseUploadReservation(
 		owner: WorkspaceSnapshotPrincipalV1,
 		reservationId: string,
+		objectFence?: { readonly objectRef: string; readonly version: string },
+	): Promise<void>;
+	/** Persist the immutable object intent before attempting a storage write. */
+	beginUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+	): Promise<void>;
+	/** Commit the publication fence before any irreversible storage cleanup. */
+	retireUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
 	): Promise<void>;
 	attachUploadObject(
 		owner: WorkspaceSnapshotPrincipalV1,

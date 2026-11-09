@@ -10,6 +10,9 @@ type UploadRecoveryResult = Awaited<
 		PostgresWorkspaceSnapshotUploadStoreV1["collectExpiredUploadReservations"]
 	>
 >;
+type UploadObjectRecoveryResult = Awaited<
+	ReturnType<PostgresWorkspaceSnapshotUploadStoreV1["collectUploadObjects"]>
+>;
 
 export interface WorkspaceSnapshotGcDeploymentV1 {
 	readonly retentionMs: number;
@@ -22,13 +25,14 @@ export interface WorkspaceSnapshotGcDeploymentV1 {
 			oldestEligibleDelayMs: number | null;
 			outcome: "completed" | "unavailable";
 			uploadReservations: UploadRecoveryResult;
+			uploadObjects: UploadObjectRecoveryResult;
 		},
 	) => void;
 }
 
 export function startWorkspaceSnapshotGcV1(input: {
 	databaseUrl: string;
-	storage: Pick<ObjectStorageDataV1, "remove">;
+	storage: Pick<ObjectStorageDataV1, "remove" | "scan" | "fenceUpload">;
 	policy: WorkspaceSnapshotGcDeploymentV1;
 }) {
 	const { policy } = input;
@@ -38,7 +42,10 @@ export function startWorkspaceSnapshotGcV1(input: {
 		!Number.isSafeInteger(policy.intervalMs) ||
 		policy.intervalMs < 1000 ||
 		policy.intervalMs > 2147483647 ||
-		typeof policy.observe !== "function"
+		typeof policy.observe !== "function" ||
+		typeof input.storage.scan !== "function" ||
+		typeof input.storage.fenceUpload !== "function" ||
+		typeof input.storage.remove !== "function"
 	)
 		throw new Error("WORKSPACE_SNAPSHOT_GC_CONFIGURATION_INVALID");
 	const store = new PostgresWorkspaceSnapshotStoreV1(input.databaseUrl);
@@ -49,6 +56,22 @@ export function startWorkspaceSnapshotGcV1(input: {
 	async function run() {
 		const start = Date.now();
 		let uploadReservations: UploadRecoveryResult;
+		let uploadObjects: UploadObjectRecoveryResult;
+		try {
+			uploadObjects = await uploads.collectUploadObjects({
+				now: new Date(),
+				storage: input.storage,
+			});
+		} catch {
+			uploadObjects = {
+				scanned: 0,
+				deletedVersions: 0,
+				reconciled: 0,
+				released: 0,
+				continued: 0,
+				failed: 1,
+			};
+		}
 		try {
 			uploadReservations = await uploads.collectExpiredUploadReservations({
 				now: new Date(),
@@ -83,7 +106,7 @@ export function startWorkspaceSnapshotGcV1(input: {
 		} catch {
 			result = { scanned: 0, deleted: 0, failed: 1, outcome: "unavailable" };
 		}
-		if (uploadReservations.failed > 0)
+		if (uploadReservations.failed > 0 || uploadObjects.failed > 0)
 			result = { ...result, outcome: "unavailable" };
 		let metrics: {
 			storedBytes: number | null;
@@ -103,6 +126,7 @@ export function startWorkspaceSnapshotGcV1(input: {
 					...result,
 					...metrics,
 					uploadReservations,
+					uploadObjects,
 					durationMs: Date.now() - start,
 				}),
 			);

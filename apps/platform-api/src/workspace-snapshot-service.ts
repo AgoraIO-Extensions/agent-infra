@@ -64,6 +64,17 @@ export interface WorkspaceSnapshotServiceStoreV1 {
 	releaseUploadReservation(
 		owner: WorkspaceSnapshotPrincipalV1,
 		reservationId: string,
+		objectFence?: { readonly objectRef: string; readonly version: string },
+	): Promise<void>;
+	beginUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+	): Promise<void>;
+	retireUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
 	): Promise<void>;
 	attachUploadObject(
 		owner: WorkspaceSnapshotPrincipalV1,
@@ -114,7 +125,10 @@ export interface WorkspaceSnapshotServiceOptionsV1 {
 	readonly uploadPolicy?: WorkspaceSnapshotUploadPolicyV1;
 	readonly credentials: WorkspaceSnapshotCredentialResolverV1;
 	readonly spool?: WorkspaceSnapshotSpoolV1;
-	readonly storage: Pick<ObjectStorageDataV1, "upload" | "remove">;
+	readonly storage: Pick<
+		ObjectStorageDataV1,
+		"upload" | "remove" | "fenceUpload"
+	>;
 	readonly store: WorkspaceSnapshotServiceStoreV1;
 	readonly quota: WorkspaceSnapshotQuotaReaderV1;
 	readonly now?: () => Date;
@@ -312,6 +326,7 @@ export function createWorkspaceSnapshotServiceV1(
 				| Awaited<ReturnType<WorkspaceSnapshotSpoolV1["spool"]>>
 				| undefined;
 			let pendingObject: { ref: string; version: string } | undefined;
+			let objectFence: { objectRef: string; version: string } | undefined;
 			let reservationId: string | undefined;
 			let reservationOwner: WorkspaceSnapshotPrincipalV1 | undefined;
 			let safeToRemove = true;
@@ -320,7 +335,18 @@ export function createWorkspaceSnapshotServiceV1(
 				| undefined;
 			async function removePendingObject() {
 				if (!pendingObject) return;
+				if (!reservationOwner || !reservationId)
+					throw new WorkspaceSnapshotServiceErrorV1("unavailable");
+				await options.store.retireUploadObject(
+					reservationOwner,
+					reservationId,
+					pendingObject.ref,
+				);
+				const fence = await options.storage.fenceUpload(pendingObject.ref);
+				if (!fence.version || fence.version === "null")
+					throw new WorkspaceSnapshotServiceErrorV1("unavailable");
 				await options.storage.remove(pendingObject.ref, pendingObject.version);
+				objectFence = { objectRef: pendingObject.ref, version: fence.version };
 				pendingObject = undefined;
 			}
 			try {
@@ -417,6 +443,14 @@ export function createWorkspaceSnapshotServiceV1(
 					throw new WorkspaceSnapshotServiceErrorV1("unavailable");
 				signal.throwIfAborted();
 				const objectRef = randomUUID();
+				await options.store.beginUploadObject(
+					principal,
+					reservationId,
+					objectRef,
+				);
+				// A lost/rejected PUT response cannot prove that storage did not commit.
+				// Keep its durable intent and charge for storage-fenced recovery.
+				safeToRemove = false;
 				const stored = await options.storage.upload({
 					objectRef,
 					descriptor: {
@@ -433,8 +467,10 @@ export function createWorkspaceSnapshotServiceV1(
 					typeof stored.version === "string" &&
 					stored.version.length > 0 &&
 					stored.version !== "null"
-				)
+				) {
 					pendingObject = { ref: objectRef, version: stored.version };
+					safeToRemove = true;
+				}
 				if (
 					!pendingObject ||
 					!stored.etag ||
@@ -510,6 +546,7 @@ export function createWorkspaceSnapshotServiceV1(
 					await options.store.releaseUploadReservation(
 						principal,
 						reservationId,
+						objectFence,
 					);
 				reservationId = undefined;
 				return { record: saved, replayed: true };
@@ -520,6 +557,7 @@ export function createWorkspaceSnapshotServiceV1(
 						await options.store.releaseUploadReservation(
 							reservationOwner,
 							reservationId,
+							objectFence,
 						);
 						reservationId = undefined;
 					} catch {
