@@ -6,7 +6,7 @@ export const piWorkspaceToolNames: readonly string[] = Object.freeze([
 	"find",
 	"grep",
 	"ls",
-	"bash",
+	"sandbox_bash",
 	"powershell",
 ]);
 
@@ -17,7 +17,7 @@ const piToolIds: Readonly<Record<string, string>> = Object.freeze({
 	find: "Find",
 	grep: "Grep",
 	ls: "List",
-	bash: "Bash",
+	sandbox_bash: "Bash",
 });
 
 const nativeToolName = /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/;

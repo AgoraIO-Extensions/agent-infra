@@ -50,8 +50,8 @@ console.log("loaded-without-pi-sdk");
 );
 
 it("advertises Bash only through the launcher-backed definition", async () => {
-	expect(piWorkspaceToolNames).toContain("bash");
-	expect(piNativeShellToolName).toBe("bash");
+	expect(piWorkspaceToolNames).toContain("sandbox_bash");
+	expect(piNativeShellToolName).toBe("sandbox_bash");
 	expect(piToolId(piNativeShellToolName)).toBe("Bash");
 	expect(piToolId("future-native-tool")).toBe("future-native-tool");
 	expect(await piNativeShellAvailable("/missing/session/workspace")).toBe(

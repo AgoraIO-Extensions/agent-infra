@@ -4,7 +4,7 @@ import {
 	nativeShellLauncherEnvironment,
 } from "./native-shell-admission.js";
 
-export const piNativeShellToolName = "bash";
+export const piNativeShellToolName = "sandbox_bash";
 export { nativeShellAvailable as piNativeShellAvailable } from "./native-shell-admission.js";
 
 export async function createPiNativeShellTool(workspace: string) {

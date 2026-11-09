@@ -348,10 +348,13 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					// The pinned ACP catalog remains visible; path and shell checks happen
 					// in authorize instead of a platform-owned tool allowlist.
 					permission: {
-						"*": "ask",
+						"*": "deny",
 						external_directory: openCodeSnapshotPermissionRules(snapshotRoots),
 						read: "ask",
+						write: "ask",
 						edit: "ask",
+						list: "ask",
+						apply_patch: "ask",
 						glob: "ask",
 						grep: "ask",
 						webfetch: "ask",
