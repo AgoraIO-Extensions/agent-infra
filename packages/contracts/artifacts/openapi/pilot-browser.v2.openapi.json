@@ -11078,6 +11078,141 @@
         ],
         "type": "object"
       },
+      "NativeMetadataProjectionV1OrV2": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/NativeMetadataProjectionV1"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "capabilities": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "availability": {
+                      "const": "available",
+                      "type": "string"
+                    },
+                    "description": {
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    "effect": {
+                      "enum": [
+                        "read_only",
+                        "state_changing"
+                      ],
+                      "type": "string"
+                    },
+                    "id": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "parameters": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "hint": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "text",
+                            "type": "string"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "required",
+                          "hint"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 1,
+                      "type": "array"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    },
+                    "source": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "version": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "id",
+                    "kind",
+                    "name",
+                    "description",
+                    "source",
+                    "parameters",
+                    "effect",
+                    "availability"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "projectionVersion": {
+                "const": 2,
+                "type": "number"
+              },
+              "revision": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "selector": {
+                "const": "commands",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "projectionVersion",
+              "selector",
+              "revision",
+              "capabilities"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "PersistedConversationEventV1": {
         "oneOf": [
           {
@@ -25183,6 +25318,14 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "projectionVersion",
+            "schema": {
+              "const": 2,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -25190,7 +25333,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NativeMetadataProjectionV1"
+                  "$ref": "#/components/schemas/NativeMetadataProjectionV1OrV2"
                 }
               }
             },

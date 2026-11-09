@@ -40,6 +40,7 @@ export type NativeMetadataCommandCapabilityV2 = z.infer<
 
 export const NativeMetadataCommandsProjectionV2Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
+	projectionVersion: z.literal(2),
 	selector: z.literal("commands"),
 	revision: digest,
 	capabilities: z.array(NativeMetadataCommandCapabilityV2Schema).max(128),

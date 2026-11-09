@@ -335,6 +335,7 @@ export function projectNativeMetadataCommandsV2(input: {
 	]);
 	const projection = NativeMetadataCommandsProjectionV2Schema.parse({
 		schemaVersion: 1,
+		projectionVersion: 2,
 		selector: "commands",
 		revision,
 		capabilities: commands.map(({ identity, ...command }) => {

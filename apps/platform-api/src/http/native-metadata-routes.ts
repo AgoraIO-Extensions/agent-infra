@@ -1,4 +1,4 @@
-import type { NativeMetadataProjectionV1 } from "@agent-infra/contracts/runtime";
+import type { NativeMetadataProjectionV1OrV2 } from "@agent-infra/contracts/runtime";
 import type { Hono } from "hono";
 import {
 	createRuntimeNativeMetadataRequestContextV1,
@@ -23,7 +23,8 @@ export interface RuntimeNativeMetadataPublicReaderV1 {
 		executionId: string,
 		selector: "status" | "commands" | "skills",
 		requestContext: RuntimeNativeMetadataRequestContextV1,
-	): Promise<NativeMetadataProjectionV1 | null>;
+		projectionVersion?: 2,
+	): Promise<NativeMetadataProjectionV1OrV2 | null>;
 }
 
 export interface NativeMetadataRoutesDependenciesV1 {
@@ -39,15 +40,22 @@ function selector(request: Request, metadata: RequestMetadata) {
 	const search = new URL(request.url).searchParams;
 	const keys = [...search.keys()];
 	if (
-		keys.length !== 1 ||
-		keys[0] !== "selector" ||
-		search.getAll("selector").length !== 1
+		keys.some((key) => key !== "selector" && key !== "projectionVersion") ||
+		search.getAll("selector").length !== 1 ||
+		search.getAll("projectionVersion").length > 1
 	)
 		invalid(metadata);
 	const value = search.get("selector");
 	if (value !== "status" && value !== "commands" && value !== "skills")
 		invalid(metadata);
-	return value;
+	const projectionVersion = search.get("projectionVersion");
+	if (projectionVersion !== null && projectionVersion !== "2")
+		invalid(metadata);
+	if (projectionVersion === "2" && value !== "commands") invalid(metadata);
+	return {
+		selector: value as "status" | "commands" | "skills",
+		...(projectionVersion === "2" ? { projectionVersion: 2 as const } : {}),
+	};
 }
 
 function responseError(error: unknown, metadata: RequestMetadata) {
@@ -76,13 +84,15 @@ export function registerNativeMetadataRoutes(
 			});
 			try {
 				const identity = await requestContext.authenticate();
+				const selected = selector(context.req.raw, metadata);
 				const projection = await requestContext.run(() =>
 					dependencies.reader.read(
 						identity,
 						context.req.param("conversationId"),
 						context.req.param("executionId"),
-						selector(context.req.raw, metadata),
+						selected.selector,
 						requestContext,
+						selected.projectionVersion,
 					),
 				);
 				if (!projection)

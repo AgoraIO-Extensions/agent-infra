@@ -94,6 +94,33 @@ describe("conversation capability picker model", () => {
 		});
 	});
 
+	it("prepares a state-changing command with the saved model selection", () => {
+		expect(
+			prepareCapabilityInvocation(
+				{ ...capabilities[1], effect: "state_changing" },
+				"",
+				[],
+				{
+					schemaVersion: 1,
+					modelOptionId: "model-primary",
+					reasoningLevel: "high",
+				},
+			),
+		).toEqual({
+			body: {
+				schemaVersion: 3,
+				capabilityId: "f".repeat(64),
+				directoryRevision: "c".repeat(64),
+				parameters: "",
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-primary",
+					reasoningLevel: "high",
+				},
+			},
+		});
+	});
+
 	it("keeps Invocation V1 without control files and upgrades a Skill to V2 with them", () => {
 		expect(prepareCapabilityInvocation(capabilities[0], "列出变更")).toEqual({
 			body: {

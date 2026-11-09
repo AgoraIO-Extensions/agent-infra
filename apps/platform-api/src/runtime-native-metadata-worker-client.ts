@@ -2,7 +2,7 @@ import {
 	type PlatformNativeMetadataReadRequestV1,
 	PlatformNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataProofMaximumLifetimeMsV1,
-	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 } from "@agent-infra/contracts/runtime";
 import { createNativeMetadataJsonTransport } from "@agent-infra/native-metadata-transport";
 
@@ -41,7 +41,9 @@ export function createPlatformWorkerNativeMetadataGatewayClientV1(options: {
 				const response = await post(JSON.stringify(request), {
 					signal: transportSignal,
 				});
-				return RuntimeNativeMetadataReadResponseV1Schema.parse(response.value);
+				return RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
+					response.value,
+				);
 			} catch {
 				throw new Error("PLATFORM_WORKER_UNAVAILABLE");
 			}

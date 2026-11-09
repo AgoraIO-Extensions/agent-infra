@@ -1,14 +1,20 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
 	type RuntimeBusinessRequestV4,
 	RuntimeNativeCapabilityRequestV4Schema,
 	type RuntimeNativeCapabilityRequestV5,
 	RuntimeNativeCapabilityRequestV5Schema,
+	type RuntimeNativeCapabilityRequestV6,
+	RuntimeNativeCapabilityRequestV6Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimeSelectionV1,
 	RuntimeSelectionV1Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
+	runtimeOperationDigestInputV6,
+	runtimeOperationDigestV6,
 	validateRuntimePinnedExecutionKeyScopeV4,
 } from "@agent-infra/contracts/runtime";
 import { parseTaskAuthorizationBoundaryV1 } from "@agent-infra/platform-core";
@@ -212,5 +218,132 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		authorizationRecordId: authorization.id,
 		selection,
 		...(stopPending && submit ? { stopPending: true as const } : {}),
+	};
+}
+
+export type AcceptedExecutionKeyProjectionV6 = Readonly<{
+	readonly schemaVersion: 6;
+	readonly binding: ReturnType<typeof runtimeOperationDigestInputV6>;
+	readonly operationDigest: string;
+	readonly deliveryFence: number;
+	readonly executionDeliveryFence: number;
+	readonly authorizationRecordId: string;
+	readonly stopPending: boolean;
+	readonly dispatchState: "ready" | "unknown" | "accepted" | "terminal";
+}>;
+
+/** Read the accepted V6 native command from the V2 outbox/Execution claim. */
+export async function readAcceptedExecutionKeyInTransactionV6(
+	transaction: Transaction,
+	value: RuntimeNativeCapabilityRequestV6,
+): Promise<AcceptedExecutionKeyProjectionV6 | null> {
+	const request = RuntimeNativeCapabilityRequestV6Schema.parse(value);
+	const [candidate] = await transaction<{ id: string }[]>`
+		select id from platform.outbox_items
+		where scope_type = 'conversation'
+			and scope_id = ${request.conversationId}
+			and id = ${`conversation:native-capability:${request.executionId}`}
+			and operation = 'conversation.native-capability.invoke.v2'
+			and payload->>'executionId' = ${request.executionId}
+	`;
+	if (!candidate) return null;
+	const outbox = await lockOutbox(
+		transaction,
+		candidate.id,
+		request.conversationId,
+	);
+	const conversation = await lockConversation(
+		transaction,
+		request.conversationId,
+	);
+	const execution = await lockExecution(
+		transaction,
+		request.conversationId,
+		request.executionId,
+	);
+	if (!outbox || !conversation || !execution) return null;
+	const parsedOperation = operation(outbox.operation);
+	if (parsedOperation !== "conversation.native-capability.invoke.v2")
+		return null;
+	const payload = exactPayload(outbox.payload, parsedOperation);
+	const binding = payload?.nativeCapabilityV6;
+	if (
+		!payload ||
+		!binding ||
+		!bindingMatches(outbox, payload, conversation, execution) ||
+		payload.executionId !== request.executionId ||
+		payload.conversationId !== request.conversationId ||
+		binding.operation.id !== request.operation.id ||
+		binding.operation.kind !== "execution" ||
+		binding.directoryRevision !== request.directoryRevision ||
+		binding.capabilityId !== request.capabilityId ||
+		binding.parameters !== request.parameters ||
+		binding.parametersDigest !== request.parametersDigest ||
+		binding.capabilitySourceVersion !== request.capabilitySourceVersion ||
+		binding.hostSessionRef !== request.hostSessionRef ||
+		outbox.status !== "processing" ||
+		outbox.lease_owner === null ||
+		outbox.lease_expires_at === null ||
+		!["submitted", "processing", "unknown"].includes(execution.status) ||
+		safeCounter(outbox.delivery_fence, 1) !== request.operation.deliveryFence ||
+		safeCounter(execution.delivery_fence, 1) !==
+			request.operation.executionDeliveryFence
+	)
+		return null;
+	const principal = executionPrincipalProjection(execution);
+	if (
+		!isDeepStrictEqual(principal, request.principal) ||
+		execution.agent_id !== request.agentId ||
+		execution.actor_id !== request.principal.id ||
+		execution.channel_id !== request.channelId ||
+		execution.session_generation !== request.sessionGeneration ||
+		conversation.host_session_ref !== request.hostSessionRef
+	)
+		return null;
+	const key = executionKeyProjection(execution);
+	if (
+		!key.executionSource ||
+		!key.relayKeyBinding ||
+		key.executionSource !== request.executionSource ||
+		key.relayKeyBinding.purpose !== request.keyBinding.purpose ||
+		key.relayKeyBinding.subjectId !== request.keyBinding.subjectId ||
+		key.relayKeyBinding.keyId !== request.keyBinding.ciphertextRef ||
+		key.relayKeyBinding.keyVersion !== request.keyBinding.version
+	)
+		return null;
+	const [authorization] = await transaction<
+		{ id: string; boundary: unknown; revoked_at: Date | null }[]
+	>`
+		select id, boundary, revoked_at
+		from platform.task_authorization_records
+		where execution_id = ${execution.execution_id}
+	`;
+	if (!authorization || authorization.revoked_at !== null) return null;
+	const boundary = parseTaskAuthorizationBoundaryV1(authorization.boundary);
+	if (
+		!isDeepStrictEqual(boundary.principal, principal) ||
+		boundary.agentId !== execution.agent_id ||
+		boundary.channelId !== execution.channel_id ||
+		boundary.agentAuthorizationRevision !== execution.authorization_revision
+	)
+		return null;
+	const operationDigest = await runtimeOperationDigestV6(request);
+	if (operationDigest !== binding.operationDigest) return null;
+	const [clock] = await transaction<{ checked_at: Date }[]>`
+		select clock_timestamp() as checked_at
+	`;
+	if (!clock || outbox.lease_expires_at.getTime() <= clock.checked_at.getTime())
+		return null;
+	const stopPending =
+		(await readStop(transaction, request.executionId))?.status === "submitted";
+	return {
+		schemaVersion: 6,
+		binding: runtimeOperationDigestInputV6(request),
+		operationDigest,
+		deliveryFence: safeCounter(outbox.delivery_fence, 1) ?? 1,
+		executionDeliveryFence: safeCounter(execution.delivery_fence, 1) ?? 1,
+		authorizationRecordId: authorization.id,
+		stopPending,
+		dispatchState: "ready",
 	};
 }

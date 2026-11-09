@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IdentityContext } from "./http/identity.js";
+import type { RuntimeNativeMetadataPublicReaderV1 } from "./http/native-metadata-routes.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
@@ -64,12 +65,13 @@ function fixture(
 		readNativeCapabilityCurrentScopeV1: vi.fn().mockResolvedValue(current),
 	};
 	const reader = {
-		read: vi.fn(
+		read: vi.fn<RuntimeNativeMetadataPublicReaderV1["read"]>(
 			async (
 				_identity: IdentityContext,
 				_conversation: string,
 				_execution: string,
 				selector: "status" | "commands" | "skills",
+				_requestContext,
 			) =>
 				selector === "commands"
 					? {
@@ -178,6 +180,37 @@ describe("native capability metadata revalidation", () => {
 				scope,
 			}),
 		).toBe(true);
+	});
+
+	it("does not downgrade a V2 state-changing directory into V1 admission", async () => {
+		const f = fixture();
+		f.reader.read.mockImplementation(
+			async (_identity, _conversation, _execution, selector) =>
+				selector === "commands"
+					? {
+							schemaVersion: 1 as const,
+							projectionVersion: 2 as const,
+							selector: "commands" as const,
+							revision,
+							capabilities: [
+								{
+									schemaVersion: 2 as const,
+									id: capabilityId,
+									kind: "command" as const,
+									name: "compact",
+									description: "Compact the native session",
+									source: { name: "runtime", version: "2" },
+									parameters: [],
+									effect: "state_changing" as const,
+									availability: "available" as const,
+								},
+							],
+						}
+					: { selector: "skills" as const, revision, capabilities: [] },
+		);
+		await expect(
+			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "unavailable" });
 	});
 
 	it("fails closed on current generation or authorization drift", async () => {

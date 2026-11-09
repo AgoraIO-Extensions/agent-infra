@@ -22,6 +22,7 @@ export function useConversationCapabilityCatalog({
 		conversationId,
 		executionId,
 		selector: "commands",
+		projectionVersion: 2,
 		enabled,
 	});
 	const skills = useConversationNativeMetadata({

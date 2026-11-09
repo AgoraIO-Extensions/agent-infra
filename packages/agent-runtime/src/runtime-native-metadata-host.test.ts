@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
+	NativeMetadataCommandsProjectionV2,
 	NativeMetadataProjectionV1,
 	RuntimeNativeMetadataReadRequestV1,
 } from "@agent-infra/contracts/runtime";
@@ -142,6 +143,46 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 			await f.host.close();
 		},
 	);
+
+	it("prefers the versioned command directory when the Driver exposes it", async () => {
+		const f = await fixture();
+		const value = {
+			...f.request,
+			selector: "commands" as const,
+			projectionVersion: 2 as const,
+		};
+		const projection: NativeMetadataCommandsProjectionV2 = {
+			schemaVersion: 1,
+			projectionVersion: 2,
+			selector: "commands",
+			revision: "b".repeat(64),
+			capabilities: [
+				{
+					schemaVersion: 2,
+					id: "c".repeat(64),
+					kind: "command",
+					name: "compact",
+					description: "Compact the native session",
+					source: { name: "Codex", version: "0.153.0" },
+					parameters: [],
+					effect: "state_changing",
+					availability: "available",
+				},
+			],
+		};
+		const readNativeMetadataV1 = vi.fn();
+		const readNativeMetadataV2 = vi.fn().mockResolvedValue(projection);
+		Object.assign(f.driver, { readNativeMetadataV1, readNativeMetadataV2 });
+
+		const response = await f.host.readNativeMetadataV1(value, context(value));
+		expect(response.projection).toEqual(projection);
+		expect(readNativeMetadataV2).toHaveBeenCalledWith(
+			"commands",
+			expect.anything(),
+		);
+		expect(readNativeMetadataV1).not.toHaveBeenCalled();
+		await f.host.close();
+	});
 
 	it.each([
 		"cross-scope",

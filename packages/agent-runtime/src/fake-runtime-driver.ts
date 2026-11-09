@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
+	NativeMetadataCommandsProjectionV2,
 	NativeMetadataProjectionV1,
 	RuntimeCapabilitiesV1,
 	RuntimeEventV1,
@@ -172,6 +173,32 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 					source: { name: "fake", version: "1" },
 					parameters: [],
 					effect: "read_only",
+					availability: "available",
+				},
+			],
+		};
+	}
+
+	async readNativeMetadataV2(
+		selector: "commands",
+		read: import("./driver.js").RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataCommandsProjectionV2> {
+		read.assertCurrent();
+		return {
+			schemaVersion: 1,
+			projectionVersion: 2,
+			selector,
+			revision: fakeNativeCommandDirectoryRevision,
+			capabilities: [
+				{
+					schemaVersion: 2,
+					id: fakeNativeCommandCapabilityId,
+					kind: "command",
+					name: "compact",
+					description: "Compact the native session",
+					source: { name: "fake", version: "1" },
+					parameters: [],
+					effect: "state_changing",
 					availability: "available",
 				},
 			],

@@ -1,6 +1,7 @@
 import type {
 	NativeMetadataCommandsProjectionV2,
 	NativeMetadataProjectionV1,
+	NativeMetadataProjectionV1OrV2,
 	NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1,
 	RuntimeDriverCommandV1,
@@ -99,7 +100,7 @@ export interface RuntimeNativeMetadataReaderV1 {
 	readNativeMetadataV1(
 		selector: NativeMetadataSelectorV1,
 		read: RuntimeNativeMetadataReadContextV1,
-	): Promise<NativeMetadataProjectionV1>;
+	): Promise<NativeMetadataProjectionV1OrV2>;
 }
 
 /** Optional command-directory seam for versioned effects and parameters. */

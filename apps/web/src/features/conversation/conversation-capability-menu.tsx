@@ -452,7 +452,11 @@ export function CapabilityMenu({
 							</small>
 						</span>
 						<span className="capability-option-kind">
-							{item.kind === "skill" ? "Skill" : "只读命令"}
+							{item.kind === "skill"
+								? "Skill"
+								: item.effect === "state_changing"
+									? "有状态命令"
+									: "只读命令"}
 						</span>
 					</ListboxOption>
 				))}

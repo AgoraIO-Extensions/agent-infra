@@ -8,13 +8,14 @@
 
 ## 问题
 
-会话页已经可以调用旧版只读命令与 Skill，但 Codex 有状态命令的消费链尚未完整装配：
+会话页此前只能调用旧版只读命令与 Skill；本次实现补齐 Codex 有状态命令的 compact 消费链，仍保留
+Goal 生命周期缺口：
 
-- Codex Driver 的 `readNativeMetadataV2` 提供 `compact`、副作用与参数声明；公开目录读取仍只接
-  `NativeMetadataProjectionV1`，不能发现该目录。
-- 默认 Platform API assembly 对 Invocation V3 返回 `unsupported`。已有 Core/Store、Worker、Host
-  和 Driver 的 V6 接缝不等于默认生产装配已贯通。
-- Web 的命令模型仍表示无参数只读命令，不能据此准备带当前模型选择的 V3 请求。
+- Codex Driver 的 `readNativeMetadataV2` 提供 `compact`、副作用与参数声明；公开目录读取已增加
+  显式 `projectionVersion=2` 读取并传递该投影。
+- 默认 Platform API assembly 已接入 Invocation V3：服务端复核目录、原 Session、配置、Key 引用与
+  有效选择，再通过 Core/Store V6、Worker、Host 和 Driver 交付；旧 V1/V2 仍保持原义。
+- Web 的命令模型按 effect/parameters 展示有状态命令，并在模型选择已保存时准备 V3 请求。
 - `/goal` 所需的目标管理与自主后续 Turn 尚无平台生命周期合同。
 
 现有依据为[平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)、
@@ -38,8 +39,8 @@ Paseo `01888dc5deb7c964491f784f260cb64378a7c4ed` 的
 
 ### 一、接通已有 compact 合同
 
-1. 保留 V1 目录和严格解析。新增显式协商的 commands V2 读取，公开入口、生成 Client、API、Worker
-   和 Host 必须使用同一版本；旧服务明确返回不支持。版本纳入读取请求、签名与响应核对，不能把
+1. 保留 V1 目录和严格解析。显式协商的 commands V2 读取已贯通公开入口、生成 Client、API、Worker
+   和 Host；旧 admission 仍明确拒绝它。版本纳入读取请求、签名与响应核对，不能把
    `state_changing` 投影成 V1 的 `read_only`。
 2. 沿用原 `native_metadata_read` 的主体、Agent、Conversation、原 Execution、generation、原 Host
    配置和请求期限。读取 V2 不恢复会话、不创建 Turn、不安装业务 Key；各 await 边界继续当前授权复核。
@@ -81,7 +82,8 @@ Paseo `01888dc5deb7c964491f784f260cb64378a7c4ed` 的
 ## 实施与验收顺序
 
 1. 输入框先修正斜杠名称、参数保留和无法确认命令时的误发行为；路径文本继续走普通消息。
-2. 评审并同步 commands V2 端到端读取及默认 V3 admission 合同，完成 compact 的生产装配与 Web 调用。
+2. commands V2 端到端读取、默认 V3 admission、V6 Host/Driver 交付与 Web 调用已完成代码装配；真实
+   Runtime 和浏览器正向/负向验收仍按下表独立执行。
 3. 负责人确认 Goal 的父 Execution、预算和活跃控制语义，更新正式文档后再实现 Goal 合同。
 4. 分别验证真实 Runtime 与同一浏览器页的发现、选择、确认、原生终态和刷新恢复；覆盖过期/撤权、
    跨主体/会话、stale 目录、模型/Key 变化、重复提交、断连、重启与 unknown 不重放。

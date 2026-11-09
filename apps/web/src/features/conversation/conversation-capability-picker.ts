@@ -6,9 +6,17 @@ export type ConversationCapabilityV1 = Readonly<{
 	description: string;
 	source: string;
 	version?: string;
+	effect?: "read_only" | "state_changing";
+	parameters?: readonly { kind: "text"; required: boolean; hint: string }[];
 	/** Stable service-provided identity used to invalidate replaced metadata. */
 	identity?: string;
 	directoryRevision?: string;
+}>;
+
+export type CapabilitySelectionV1 = Readonly<{
+	schemaVersion: 1;
+	modelOptionId: string;
+	reasoningLevel: string;
 }>;
 
 const maximumCapabilities = 150;
@@ -101,9 +109,18 @@ export type CapabilityInvocationBodyV2 = Readonly<{
 	attachments: readonly string[];
 }>;
 
+export type CapabilityInvocationBodyV3 = Readonly<{
+	schemaVersion: 3;
+	capabilityId: string;
+	directoryRevision: string;
+	parameters: string;
+	selection: CapabilitySelectionV1;
+}>;
+
 export type CapabilityInvocationBody =
 	| CapabilityInvocationBodyV1
-	| CapabilityInvocationBodyV2;
+	| CapabilityInvocationBodyV2
+	| CapabilityInvocationBodyV3;
 
 /**
  * 提交前校验：Skill 需要用输入框补充目标与范围（与服务端 invalid_parameters 规则一致）；
@@ -114,9 +131,27 @@ export function prepareCapabilityInvocation(
 	selected: ConversationCapabilityV1,
 	parameterText: string,
 	controlFileIds: readonly string[] = [],
+	selection?: CapabilitySelectionV1,
 ): { error: string } | { body: CapabilityInvocationBody } {
 	if (!selected.identity || !selected.directoryRevision)
 		return { error: "所选版本已失效，请重新选择；不会作为普通消息发送。" };
+	if (selected.kind === "command" && selected.effect === "state_changing") {
+		if (!selection?.modelOptionId || !selection.reasoningLevel)
+			return { error: "请先保存当前模型与思考强度，再发送有状态命令。" };
+		if (controlFileIds.length > 0)
+			return { error: "有状态原生命令不接受控制文件。" };
+		if (!bounded(parameterText, maximumParameterBytes))
+			return { error: "补充内容过长，请缩短后再发送。" };
+		return {
+			body: {
+				schemaVersion: 3,
+				capabilityId: selected.identity,
+				directoryRevision: selected.directoryRevision,
+				parameters: parameterText,
+				selection,
+			},
+		};
+	}
 	if (selected.kind === "skill" && parameterText.trim() === "")
 		return { error: "请在输入框补充这次任务的目标与范围。" };
 	// 只读命令没有参数：输入框里有内容时不静默丢弃，请用户先清空。

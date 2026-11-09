@@ -10,8 +10,7 @@ import {
 	RuntimeNativeMetadataBindingResponseV1Schema,
 	type RuntimeNativeMetadataProofV1,
 	type RuntimeNativeMetadataReadRequestV1,
-	type RuntimeNativeMetadataReadResponseV1,
-	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 
@@ -175,7 +174,9 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 		async read(
 			value: PlatformNativeMetadataReadRequestV1,
 			signal: AbortSignal,
-		): Promise<RuntimeNativeMetadataReadResponseV1> {
+		): Promise<
+			import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadResponseV1OrV2
+		> {
 			if (signal.aborted) unavailable();
 			const request = PlatformNativeMetadataReadRequestV1Schema.parse(value);
 			const binding = await options.binding.resolve({ request, signal });
@@ -201,7 +202,7 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 				signal,
 			});
 			if (signal.aborted || !transport) unavailable();
-			const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
+			const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
 				await transport.read(
 					{
 						...parsedBinding,

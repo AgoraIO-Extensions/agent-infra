@@ -894,6 +894,9 @@ async function createConversationPrepared(signal: AbortSignal) {
 				readAcceptedExecution: (
 					request: Parameters<typeof acceptedStore.readAcceptedExecution>[0],
 				) => acceptedStore.readAcceptedExecution(request),
+				readAcceptedExecutionV6: (
+					request: Parameters<typeof acceptedStore.readAcceptedExecutionV6>[0],
+				) => acceptedStore.readAcceptedExecutionV6(request),
 				readCiphertext: (binding: Parameters<typeof ciphertextStore.read>[0]) =>
 					ciphertextStore.read(binding),
 			},

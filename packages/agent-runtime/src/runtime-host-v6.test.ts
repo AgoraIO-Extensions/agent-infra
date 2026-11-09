@@ -4,14 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+	RuntimeBusinessGrantClaimsV2Schema,
 	RuntimeBusinessGrantClaimsV6Schema,
 	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
 	runtimeRequestDigestV6,
 } from "@agent-infra/contracts/runtime";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
-import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
+import {
+	FakeRuntimeDriver,
+	fakeNativeCommandCapabilityId,
+	fakeNativeCommandDirectoryRevision,
+} from "./fake-runtime-driver.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import { RuntimeHost } from "./runtime-host.js";
 
@@ -20,22 +25,75 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-it("validates V6 admission and fails closed before Store/Key/Driver side effects", async () => {
+it("executes a state-changing V6 command through the Driver and preserves the receipt", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v6-admission-"));
 	const store = await FileRuntimeStore.open(join(directory, "host.json"));
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
-	const host = await RuntimeHost.open({
-		store,
-		driver,
-		grantValidation: { expectedIssuer: "platform-fixture" },
-		validateGrantV6: async (_value) => ({ request, claims }),
+	const clock = Date.now();
+	const seed = await store.prepareOperation({
+		authorization: RuntimeBusinessGrantClaimsV2Schema.parse({
+			schemaVersion: 2,
+			issuer: "platform-fixture",
+			audience: "runtime_host",
+			workerId: "worker-1",
+			principal: { kind: "user", id: "alice" },
+			channelId: "web",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "seed-execution",
+			turnId: "seed-turn",
+			sessionGeneration: 1,
+			traceId: "seed-trace",
+			hostSessionRef: null,
+			issuedAt: clock,
+			expiresAt: clock + 30_000,
+			grantId: "seed-grant",
+			operation: {
+				kind: "execution",
+				id: "seed-execution",
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			},
+			requestDigest: "a".repeat(64),
+			purpose: "business",
+			authorizationRecordId: "seed-authorization",
+			allowedCommands: ["turn.submit"],
+			attachments: [],
+		}),
+		binding: {
+			principal: { kind: "user", id: "alice" },
+			channelId: "web",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "seed-execution",
+			turnId: "seed-turn",
+			sessionGeneration: 1,
+		},
+		operationId: "seed-execution",
+		kind: "submit-turn",
+		scope: "execution:seed-execution",
+		deliveryFence: 1,
+		requestDigest: "seed-request-digest",
+		command: (nativeSessionRef) => ({
+			schemaVersion: 1,
+			kind: "submit-turn",
+			operationId: "seed-execution",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "seed-execution",
+			turnId: "seed-turn",
+			sessionGeneration: 1,
+			...(nativeSessionRef ? { nativeSessionRef } : {}),
+			input: { text: "seed", attachments: [] },
+		}),
 	});
-	cleanups.push(async () => {
-		await host.close();
-		await store.close();
-		await rm(directory, { recursive: true, force: true });
-	});
-
+	const seedRecord = await driver.execute(seed.operation.command);
+	await store.resolveOperation(
+		seed.session.hostSessionRef,
+		seed.operation.operationId,
+		seedRecord.result,
+		seedRecord.nativeSessionRef,
+	);
 	const request = RuntimeNativeCapabilityRequestV6Schema.parse({
 		schemaVersion: 6,
 		requestId: "request-1",
@@ -48,7 +106,7 @@ it("validates V6 admission and fails closed before Store/Key/Driver side effects
 		executionId: "execution-1",
 		turnId: "turn-1",
 		sessionGeneration: 1,
-		hostSessionRef: "session-1",
+		hostSessionRef: seed.session.hostSessionRef,
 		operation: {
 			kind: "execution",
 			id: "execution-1",
@@ -66,12 +124,12 @@ it("validates V6 admission and fails closed before Store/Key/Driver side effects
 			ciphertextRef: "key-1",
 			version: 1,
 		},
-		capabilityId: "c".repeat(64),
+		capabilityId: fakeNativeCommandCapabilityId,
 		capabilityKind: "command",
-		directoryRevision: "d".repeat(64),
+		directoryRevision: fakeNativeCommandDirectoryRevision,
 		parameters: "compact",
 		parametersDigest: createHash("sha256").update("compact").digest("hex"),
-		capabilitySourceVersion: "0.153.0",
+		capabilitySourceVersion: "1",
 		selection: {
 			schemaVersion: 1,
 			modelOptionId: "model-option-primary",
@@ -84,8 +142,8 @@ it("validates V6 admission and fails closed before Store/Key/Driver side effects
 		schemaVersion: 6,
 		issuer: "platform-fixture",
 		audience: "runtime_host",
-		issuedAt: 1,
-		expiresAt: 30_000,
+		issuedAt: clock,
+		expiresAt: clock + 30_000,
 		grantId: "grant-1",
 		workerId: "worker-1",
 		principal: request.principal,
@@ -127,13 +185,37 @@ it("validates V6 admission and fails closed before Store/Key/Driver side effects
 		},
 		keyDelivery: { relayKey: "private-key-value-k1" },
 	});
-	const transport = { businessRequest: request, privateKeyField };
-	const before = await readFile(join(directory, "host.json"), "utf8");
-	const execute = vi.spyOn(driver, "execute");
-
-	await expect(host.nativeCapabilityV6(transport)).rejects.toMatchObject({
-		code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+	const host = await RuntimeHost.open({
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "platform-fixture" },
+		validateGrantV6: async (_value) => ({ request, claims }),
 	});
-	expect(await readFile(join(directory, "host.json"), "utf8")).toBe(before);
-	expect(execute).not.toHaveBeenCalled();
+	cleanups.push(async () => {
+		await host.close();
+		await store.close();
+		await rm(directory, { recursive: true, force: true });
+	});
+
+	const response = await host.nativeCapabilityV6({
+		businessRequest: request,
+		privateKeyField,
+	});
+	expect(response).toMatchObject({
+		schemaVersion: 6,
+		operationId: request.executionId,
+		result: { outcome: "accepted", status: "completed" },
+	});
+	const persisted = JSON.parse(
+		await readFile(join(directory, "host.json"), "utf8"),
+	) as {
+		sessions: Record<
+			string,
+			{ operations: Record<string, { command: { schemaVersion: number } }> }
+		>;
+	};
+	expect(
+		persisted.sessions[request.hostSessionRef]?.operations[request.executionId]
+			?.command.schemaVersion,
+	).toBe(2);
 });

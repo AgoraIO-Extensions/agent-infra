@@ -89,6 +89,7 @@ export type NativeSessionCallSite =
 	| "executeBrowserHandoffV3"
 	| "executeBrowserSideEffectV3"
 	| "executeNativeCapabilityV5"
+	| "executeNativeCapabilityV6"
 	| "assertOpen"
 	| "recoverEvidence";
 

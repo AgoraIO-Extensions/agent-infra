@@ -270,11 +270,13 @@ async function routingFixture(
 				const count = Math.ceil((nativeCapabilities ?? 0) / 2);
 				return route.fulfill({
 					json: {
+						...(commands ? { schemaVersion: 1, projectionVersion: 2 } : {}),
 						selector: commands ? "commands" : "skills",
 						revision: (commands ? "c" : "d").repeat(64),
 						capabilities: Array.from({ length: count }, (_, index) =>
 							commands
 								? {
+										schemaVersion: 2,
 										id: `${index}`.padStart(64, "c"),
 										kind: "command",
 										name: `受控命令-${index + 1}`,

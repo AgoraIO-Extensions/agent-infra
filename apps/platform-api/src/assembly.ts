@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { NativeMetadataCommandsProjectionV2Schema } from "@agent-infra/contracts/runtime";
 import {
 	type ObjectStorageDataV1,
 	requireEvaluationObjectStorageV1,
@@ -25,6 +26,7 @@ import {
 	createEvaluationDataV1,
 	createEvaluationExperimentsV1,
 	createNativeCapabilityAdmissionUseCaseV1,
+	createNativeCapabilityAdmissionUseCaseV6,
 	createPersonalApiAgentReadUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
 	createPersonalRelayKeyUseCaseV1,
@@ -1028,8 +1030,108 @@ export function assemblePlatformApi(
 						conversationId,
 					}),
 					admitWithIdentity: async ({ identity, request, requestContext }) => {
-						// The legacy metadata/admission pipeline cannot authorize V3.
-						if (request.schemaVersion === 3) return { outcome: "unsupported" };
+						if (request.schemaVersion === 3) {
+							const authorizeV6 = async () => {
+								const decision = await conversationAuthorization.authorize(
+									identity,
+									{
+										schemaVersion: 1,
+										operation: "native-capability.invoke",
+										conversationId: request.conversationId,
+									},
+								);
+								if (decision.outcome !== "allowed")
+									return { outcome: "denied" as const };
+								requestContext.confirmPolicy(
+									decision.authority,
+									request.conversationId,
+								);
+								const snapshot =
+									await conversationTransaction.readNativeCapabilityV6Authorization(
+										{
+											authority: decision.authority,
+											conversationId: request.conversationId,
+										},
+									);
+								if (!snapshot) return { outcome: "denied" as const };
+								return { outcome: "allowed" as const, snapshot };
+							};
+							const first = await authorizeV6();
+							if (first.outcome !== "allowed") return first;
+							const projection = await assembledNativeMetadata?.reader.read(
+								identity,
+								request.conversationId,
+								first.snapshot.metadataExecutionId,
+								"commands",
+								requestContext,
+								2,
+							);
+							if (!projection) return { outcome: "unavailable" as const };
+							const commands =
+								NativeMetadataCommandsProjectionV2Schema.safeParse(projection);
+							if (!commands.success) return { outcome: "unsupported" as const };
+							const capability = commands.data.capabilities.find(
+								(entry) => entry.id === request.capabilityId,
+							);
+							if (
+								!capability ||
+								commands.data.revision !== request.directoryRevision
+							)
+								return { outcome: "stale" as const };
+							if (capability.effect !== "state_changing")
+								return { outcome: "unsupported" as const };
+							const executionId = randomUUID();
+							const runtimeRequest = {
+								schemaVersion: 6 as const,
+								requestId: request.requestId,
+								traceId: request.traceId,
+								principal: first.snapshot.authority.principal,
+								executionSource: first.snapshot.executionSource,
+								channelId: first.snapshot.authority.channelId,
+								agentId: first.snapshot.authority.agentId,
+								conversationId: request.conversationId,
+								executionId,
+								turnId: randomUUID(),
+								sessionGeneration: first.snapshot.sessionGeneration,
+								hostSessionRef: first.snapshot.hostSessionRef,
+								operation: {
+									kind: "execution" as const,
+									id: executionId,
+									deliveryFence: 1,
+									executionDeliveryFence: 1,
+								},
+								keyBinding: first.snapshot.keyBinding,
+								capabilityId: request.capabilityId,
+								capabilityKind: "command" as const,
+								directoryRevision: request.directoryRevision,
+								parameters: request.parameters,
+								parametersDigest: createHash("sha256")
+									.update(request.parameters, "utf8")
+									.digest("hex"),
+								capabilitySourceVersion: capability.source.version,
+								selection: request.selection,
+								configVersion: first.snapshot.configVersion,
+							};
+							const useCase = createNativeCapabilityAdmissionUseCaseV6({
+								authorization: {
+									authorize: async () => {
+										const next = await authorizeV6();
+										return next.outcome === "allowed"
+											? {
+													outcome: "allowed" as const,
+													authority: next.snapshot.authority,
+													taskAuthority: next.snapshot.taskAuthority,
+													modelConfigurationRevision:
+														next.snapshot.modelConfigurationRevision,
+													keyBinding: next.snapshot.keyBinding,
+												}
+											: { outcome: "denied" as const };
+									},
+								},
+								transaction: conversationTransaction,
+							});
+							return useCase.admit(runtimeRequest, request);
+						}
 						const metadata =
 							nativeCapabilityMetadata ??
 							createDefaultNativeCapabilityMetadata?.(identity, requestContext);

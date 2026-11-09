@@ -7,6 +7,7 @@ import type {
 	NativeCapabilityAdmissionDecisionV1,
 	NativeCapabilityAdmissionRequest,
 	NativeCapabilityAdmissionRequestV3,
+	NativeCapabilityAdmissionV6Decision,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 import type { z } from "zod";
@@ -32,6 +33,9 @@ type HttpRequest =
 type AdmissionRequest =
 	| NativeCapabilityAdmissionRequest
 	| NativeCapabilityAdmissionRequestV3;
+type AdmissionDecision =
+	| NativeCapabilityAdmissionDecisionV1
+	| NativeCapabilityAdmissionV6Decision;
 
 /**
  * The old V1 wire has no version field and stays exact, so a body is V2 only
@@ -62,22 +66,15 @@ export interface NativeCapabilityInvocationRouteDependenciesV1 {
 		readonly conversationId: string;
 		readonly body: HttpRequest;
 	}): Promise<AdmissionRequest>;
-	readonly admit?: (
-		request: AdmissionRequest,
-	) => Promise<NativeCapabilityAdmissionDecisionV1>;
+	readonly admit?: (request: AdmissionRequest) => Promise<AdmissionDecision>;
 	readonly admitWithIdentity?: (input: {
 		readonly identity: IdentityContext;
 		readonly request: AdmissionRequest;
 		readonly requestContext: RuntimeNativeMetadataRequestContextV1;
-	}) => Promise<NativeCapabilityAdmissionDecisionV1>;
+	}) => Promise<AdmissionDecision>;
 }
 
-function outcomeStatus(
-	outcome: Extract<
-		NativeCapabilityAdmissionDecisionV1,
-		{ outcome: string }
-	>["outcome"],
-) {
+function outcomeStatus(outcome: AdmissionDecision["outcome"]) {
 	if (outcome === "accepted" || outcome === "replayed") return 202;
 	if (outcome === "denied" || outcome === "disabled") return 403;
 	if (outcome === "busy" || outcome === "conflict" || outcome === "stale")
@@ -86,12 +83,27 @@ function outcomeStatus(
 	return 503;
 }
 
-function sanitizedDecision(decision: NativeCapabilityAdmissionDecisionV1) {
-	if (decision.outcome === "accepted" || decision.outcome === "replayed")
+function sanitizedDecision(decision: AdmissionDecision) {
+	if (decision.outcome === "accepted" || decision.outcome === "replayed") {
+		const result =
+			"result" in decision
+				? decision.result
+				: "plan" in decision
+					? {
+							schemaVersion: 1 as const,
+							status: "submitted" as const,
+							conversationId: decision.plan.conversationId,
+							executionId: decision.plan.executionId,
+							capabilityId: decision.plan.capabilityId,
+							capabilityKind: "command" as const,
+							directoryRevision: decision.plan.directoryRevision,
+						}
+					: undefined;
 		return {
 			outcome: decision.outcome,
-			result: decision.result,
+			...(result ? { result } : {}),
 		};
+	}
 	return {
 		outcome: decision.outcome,
 		...("reason" in decision && decision.reason

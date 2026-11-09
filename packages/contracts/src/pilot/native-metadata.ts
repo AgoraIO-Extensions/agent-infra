@@ -2,6 +2,7 @@ import { z } from "zod";
 import { OpaqueIdV1Schema } from "../index.ts";
 import {
 	NativeMetadataProjectionV1Schema,
+	NativeMetadataProjectionV1OrV2Schema,
 	NativeMetadataSelectorV1Schema,
 } from "../runtime/native-metadata-v1.ts";
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
@@ -32,12 +33,15 @@ export const nativeMetadataOpenApiPathsV1 = {
 						conversationId: OpaqueIdV1Schema,
 						executionId: OpaqueIdV1Schema,
 					}),
-					query: z.strictObject({ selector: NativeMetadataSelectorV1Schema }),
+					query: z.strictObject({
+						selector: NativeMetadataSelectorV1Schema,
+						projectionVersion: z.literal(2).optional(),
+					}),
 				},
 				responses: {
 					"200": response(
 						"Current authenticated native metadata projection",
-						NativeMetadataProjectionV1Schema,
+						NativeMetadataProjectionV1OrV2Schema,
 					),
 					...errors,
 				},
@@ -47,4 +51,5 @@ export const nativeMetadataOpenApiPathsV1 = {
 
 export const nativeMetadataSchemasV1 = {
 	NativeMetadataProjectionV1: NativeMetadataProjectionV1Schema,
+	NativeMetadataProjectionV1OrV2: NativeMetadataProjectionV1OrV2Schema,
 };

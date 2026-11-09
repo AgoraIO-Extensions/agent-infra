@@ -54,6 +54,7 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 		readonly conversationId: string;
 		readonly executionId: string;
 		readonly selector: Selector;
+		readonly projectionVersion?: 2;
 		readonly signal: AbortSignal;
 		readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
 	}): Promise<RuntimeNativeMetadataBindingResponseV1 | null> => {
@@ -118,6 +119,9 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 				schemaVersion: 1,
 				readId: requestId(),
 				selector: input.selector,
+				...(input.projectionVersion === 2
+					? { projectionVersion: 2 as const }
+					: {}),
 				scope: publicScope,
 				readStartedAt,
 				expiresAt,

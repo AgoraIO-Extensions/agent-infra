@@ -1870,6 +1870,31 @@ export type NativeMetadataProjectionV1 = {
     selector: 'skills';
 };
 
+export type NativeMetadataProjectionV1OrV2 = NativeMetadataProjectionV1 | {
+    capabilities: Array<{
+        availability: 'available';
+        description: string;
+        effect: 'read_only' | 'state_changing';
+        id: string;
+        kind: 'command';
+        name: string;
+        parameters: Array<{
+            hint: string;
+            kind: 'text';
+            required: boolean;
+        }>;
+        schemaVersion: 2;
+        source: {
+            name: string;
+            version: string;
+        };
+    }>;
+    projectionVersion: 2;
+    revision: string;
+    schemaVersion: 1;
+    selector: 'commands';
+};
+
 export type PersistedConversationEventV1 = {
     conversationCursor: string;
     conversationId: string;
@@ -6554,6 +6579,7 @@ export type ReadConversationNativeMetadataV1Data = {
     };
     query: {
         selector: 'status' | 'commands' | 'skills';
+        projectionVersion?: 2;
     };
     url: '/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata';
 };
@@ -6587,7 +6613,7 @@ export type ReadConversationNativeMetadataV1Responses = {
     /**
      * Current authenticated native metadata projection
      */
-    200: NativeMetadataProjectionV1;
+    200: NativeMetadataProjectionV1OrV2;
 };
 
 export type ReadConversationNativeMetadataV1Response = ReadConversationNativeMetadataV1Responses[keyof ReadConversationNativeMetadataV1Responses];
