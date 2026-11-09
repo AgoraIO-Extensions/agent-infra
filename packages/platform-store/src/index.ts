@@ -145,7 +145,10 @@ export {
 	type PlatformMigrationOptions,
 	platformDatabaseUrlFromEnvironment,
 } from "./migrate.ts";
-export { configureStoreQueryObservability } from "./observed-postgres.js";
+export {
+	configureStorePoolMax,
+	configureStoreQueryObservability,
+} from "./observed-postgres.js";
 export {
 	type ClaimedOutboxItem,
 	type ClaimOutboxItemInput,

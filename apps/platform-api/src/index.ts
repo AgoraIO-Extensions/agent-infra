@@ -5,6 +5,7 @@ import {
 } from "@agent-infra/observability";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import {
+	configureStorePoolMax,
 	configureStoreQueryObservability,
 	type StoreQueryObservability,
 } from "@agent-infra/platform-store";
@@ -289,6 +290,23 @@ export async function loadPlatformApiAssembly(
 	};
 }
 
+/**
+ * #4048：API 进程中每个 Store 连接池的上限。API 有约 50 个独立 Store 池，两个副本叠加
+ * 会用尽数据库连接；默认 2，部署可用 `PLATFORM_API_STORE_POOL_MAX`（1–10）覆盖。
+ * Worker 不设此上限，避免拖慢派发。
+ */
+export function platformApiStorePoolMaxV1(
+	environment: NodeJS.ProcessEnv,
+): number {
+	const value = environment.PLATFORM_API_STORE_POOL_MAX;
+	if (value === undefined) return 2;
+	if (!/^(?:[1-9]|10)$/.test(value))
+		throw new Error(
+			"PLATFORM_API_STORE_POOL_MAX must be an integer from 1 to 10",
+		);
+	return Number(value);
+}
+
 export async function startPlatformApiFromDeployment(
 	options: DeploymentStartOptions = {},
 ) {
@@ -309,6 +327,7 @@ export async function startPlatformApiFromDeployment(
 				: {}),
 			...options.observabilityOptions,
 		});
+		configureStorePoolMax(platformApiStorePoolMaxV1(process.env));
 		configureStoreQueryObservability({
 			observability: platformApiStoreQueryObservabilityV1(observability),
 		});
