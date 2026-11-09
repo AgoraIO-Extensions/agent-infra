@@ -765,6 +765,9 @@ test("signed own-entry snapshot fixture builds from the source-bound context", a
 			),
 		);
 		assert.ok(
+			builds.every((args) => args.includes(`SOURCE_COMMIT=${commitSha}`)),
+		);
+		assert.ok(
 			calls.some(
 				(args) =>
 					args[0] === "push" &&
