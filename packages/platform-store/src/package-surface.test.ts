@@ -104,6 +104,7 @@ describe("platform-store package surface", () => {
 			"TaskAuthorizationStoreError",
 			"TaskCurrentAuthorityUnavailableErrorV1",
 			"bindEvaluationAnalysisPolicyV1",
+			"configureStorePoolMax",
 			"configureStoreQueryObservability",
 			"conversationEventWakeChannelV1",
 			"createPostgresOutboxStore",

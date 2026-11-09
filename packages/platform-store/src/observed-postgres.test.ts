@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import observedPostgres, {
+	configureStorePoolMax,
 	platformPostgresIdleTimeoutSeconds,
 	withPlatformPoolDefaults,
 } from "./observed-postgres.js";
@@ -13,6 +14,7 @@ describe("Platform Store pool defaults", () => {
 
 	afterEach(() => {
 		vi.unstubAllEnvs();
+		configureStorePoolMax(undefined);
 	});
 
 	it("closes idle connections after 30 seconds unless a pool sets its own timeout", async () => {
@@ -42,6 +44,30 @@ describe("Platform Store pool defaults", () => {
 			idle_timeout: platformPostgresIdleTimeoutSeconds,
 		});
 	});
+
+	it("caps every later pool at the configured process limit", async () => {
+		configureStorePoolMax(2);
+		const large = observedPostgres(url, { max: 10 });
+		const small = observedPostgres(url, { max: 1 });
+		const unset = observedPostgres(url);
+		try {
+			expect(large.options.max).toBe(2);
+			expect(small.options.max).toBe(1);
+			expect(unset.options.max).toBe(2);
+			expect(withPlatformPoolDefaults({ max: 4 }, {}).max).toBe(2);
+		} finally {
+			await Promise.all([large.end(), small.end(), unset.end()]);
+		}
+		configureStorePoolMax(undefined);
+		expect(withPlatformPoolDefaults({ max: 10 }, {}).max).toBe(10);
+	});
+
+	it.each([0, 101, 1.5, Number.NaN])(
+		"rejects an invalid process pool limit %s",
+		(value) => {
+			expect(() => configureStorePoolMax(value)).toThrow(RangeError);
+		},
+	);
 
 	it("applies the default to Store clients created from raw postgres", () => {
 		const directory = fileURLToPath(new URL(".", import.meta.url));
