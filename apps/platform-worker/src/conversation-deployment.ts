@@ -1352,6 +1352,44 @@ export function createProductionSessionSandboxReceiverV1(
 					"control",
 				);
 				signal.throwIfAborted();
+				// A same-name replacement can be created by the formal lifecycle
+				// recovery path after the captured source Pod was removed. The
+				// allocation identity (labels/annotations and policy) is still the
+				// authority, while the old UID is only a stale observation. Re-read
+				// without the stale resource identities so ownership/spec checks can
+				// refresh the source before cleanup; foreign or drifted resources still
+				// remain unknown because the adapter keeps its ownership/spec guards.
+				if (observed.status === "unknown") {
+					const refreshed = await adapter.observe(
+						sourceAllocation,
+						[],
+						"control",
+					);
+					signal.throwIfAborted();
+					const sameResourceSet =
+						refreshed.resources.length === sourceResources.length &&
+						refreshed.resources.every((resource) =>
+							sourceResources.some(
+								(prior) =>
+									prior.kind === resource.kind &&
+									prior.namespace === resource.namespace &&
+									prior.name === resource.name,
+							),
+						) &&
+						sourceResources.every((prior) =>
+							refreshed.resources.some(
+								(resource) =>
+									resource.kind === prior.kind &&
+									resource.namespace === prior.namespace &&
+									resource.name === prior.name,
+							),
+						);
+					if (refreshed.status !== "unknown" && sameResourceSet)
+						return {
+							status: "observed" as const,
+							resources: refreshed.resources,
+						};
+				}
 				if (
 					observed.status !== "unknown" &&
 					observed.resources.length === sourceResources.length &&

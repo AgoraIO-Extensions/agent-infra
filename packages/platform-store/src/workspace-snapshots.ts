@@ -15,6 +15,8 @@ import {
 	workspaceSnapshots,
 } from "./schema.js";
 
+import { assertSnapshotObjectPublishableV1 } from "./workspace-snapshot-upload-objects.js";
+
 type Owner = { ownerType: "user" | "application"; ownerId: string };
 type Row = typeof workspaceSnapshots.$inferSelect;
 function record(
@@ -50,8 +52,10 @@ export class PostgresWorkspaceSnapshotStoreV1
 	async create(input: WorkspaceSnapshotRecordV1) {
 		try {
 			const [row] = await this.#database.transaction(async (transaction) => {
-				await transaction.execute(
-					sql`select pg_advisory_xact_lock(hashtextextended(${input.objectRef} || ':' || ${input.objectVersion}, 0))`,
+				await assertSnapshotObjectPublishableV1(
+					transaction,
+					input.objectRef,
+					input.objectVersion,
 				);
 				const [retired] = await transaction
 					.select({ id: workspaceSnapshots.id })

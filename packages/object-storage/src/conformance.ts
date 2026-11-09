@@ -182,3 +182,131 @@ export async function objectCleanupConformanceV1(storage: ObjectStorageDataV1) {
 		expect(await storage.inspect(object.objectRef)).toBeNull();
 	}
 }
+
+/**
+ * A retained current version closes future conditional writes. An already-started
+ * provider PUT must first reach the service writer deadline; object storage cannot
+ * cancel an in-flight request, so recovery preserves its charge until that point.
+ */
+export async function objectUploadFenceConformanceV1(
+	storage: ObjectStorageDataV1,
+) {
+	const bytes = Buffer.from("bounded upload fence fixture");
+	const request = {
+		objectRef: randomUUID(),
+		expiresAt: new Date(Date.now() + 60_000).toISOString(),
+		descriptor: {
+			name: "fixture.txt",
+			mediaType: "text/plain",
+			sizeBytes: bytes.length,
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+		},
+	};
+	const body = () =>
+		new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes.slice());
+				controller.close();
+			},
+		});
+	const stored = await storage.upload({ ...request, body: body() });
+	const fenced = await storage.fenceUpload(request.objectRef);
+	expect(fenced.version).not.toBe(stored.version);
+	expect(await storage.fenceUpload(request.objectRef)).toEqual(fenced);
+	expect(await storage.inspect(request.objectRef, stored.version)).toEqual(
+		stored,
+	);
+	await expect(
+		storage.remove(request.objectRef, fenced.version),
+	).rejects.toMatchObject({ code: "conflict" });
+	await expect(storage.inspect(request.objectRef)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	await expect(
+		storage.upload({ ...request, body: body() }),
+	).rejects.toMatchObject({ code: "conflict" });
+	const found: string[] = [];
+	let cursor: string | null = null;
+	for (let pageNumber = 0; pageNumber < 5; pageNumber++) {
+		const page = await storage.scan(cursor, 1, request.objectRef);
+		expect(page.objects.length).toBeLessThanOrEqual(1);
+		for (const object of page.objects) {
+			expect(object.objectRef).toBe(request.objectRef);
+			found.push(object.version);
+		}
+		cursor = page.cursor;
+		if (cursor === null) break;
+	}
+	expect(cursor).toBeNull();
+	expect(found.toSorted()).toEqual([stored.version, fenced.version].toSorted());
+	await storage.remove(request.objectRef, stored.version);
+	await storage.remove(request.objectRef, stored.version);
+	expect(await storage.inspect(request.objectRef, stored.version)).toBeNull();
+	expect((await storage.scan(null, 100, request.objectRef)).objects).toEqual([
+		{
+			objectRef: request.objectRef,
+			version: fenced.version,
+			createdAt: expect.any(String),
+		},
+	]);
+
+	let started!: () => void;
+	let release!: () => void;
+	const began = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const released = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const lateRef = randomUUID();
+	const pending = storage.upload({
+		...request,
+		objectRef: lateRef,
+		body: new ReadableStream<Uint8Array>(
+			{
+				async pull(controller) {
+					controller.enqueue(bytes.slice(0, 1));
+					started();
+					await released;
+					controller.enqueue(bytes.slice(1));
+					controller.close();
+				},
+			},
+			{ highWaterMark: 0 },
+		),
+	});
+	const outcome = pending.then(
+		(value) => ({ status: "fulfilled" as const, value }),
+		(error: unknown) => ({ status: "rejected" as const, error }),
+	);
+	try {
+		await Promise.race([
+			began,
+			outcome.then(() => {
+				throw new Error("Upload ended before body gate");
+			}),
+		]);
+		release();
+		const result = await outcome;
+		expect(result).toMatchObject({
+			status: "fulfilled",
+		});
+		if (result.status !== "fulfilled")
+			throw new Error("Upload ended before the writer deadline");
+		// A provider may serialize a same-key fence behind an in-flight PUT.
+		// The recovery writer deadline must expire/abort that request first;
+		// only then can the adapter establish and confirm the current fence.
+		const lateFence = await storage.fenceUpload(lateRef);
+		await storage.remove(lateRef, result.value.version);
+		expect((await storage.scan(null, 100, lateRef)).objects).toEqual([
+			{
+				objectRef: lateRef,
+				version: lateFence.version,
+				createdAt: expect.any(String),
+			},
+		]);
+	} finally {
+		release();
+		await outcome;
+	}
+}

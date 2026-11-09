@@ -88,6 +88,15 @@ function input(
 	};
 }
 const requestDigest = "b".repeat(64);
+// Upgrade fixture: these exact-version rows were written before migration 0078.
+// New uploads must use beginUploadObject; their independent ledger is tested separately.
+async function seedLegacyObject(
+	reservationId: string,
+	value: WorkspaceSnapshotRecordV1,
+) {
+	await db`update platform.workspace_snapshot_upload_reservations set object_ref=${value.objectRef},object_version=${value.objectVersion} where id=${reservationId}`;
+}
+
 async function credential(
 	who: WorkspaceSnapshotPrincipalV1,
 	scopes = [...who.scopes],
@@ -450,7 +459,7 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 			),
 		).resolves.toMatchObject({ snapshotId: record.snapshotId });
 	});
-	it("retains expired object quota until exact-version cleanup succeeds", async () => {
+	it("retains expired legacy object quota until exact-version cleanup succeeds", async () => {
 		const who = owner();
 		for (let index = 0; index < 4; index++)
 			await store.create(
@@ -469,12 +478,7 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 		if (reservation.state !== "reserved")
 			throw new Error("reservation missing");
 		const object = input(who);
-		await store.attachUploadObject(
-			who,
-			reservation.reservationId,
-			object.objectRef,
-			object.objectVersion,
-		);
+		await seedLegacyObject(reservation.reservationId, object);
 		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second' where id=${reservation.reservationId}`;
 		const nextUpload = () =>
 			store.reserveUpload(
@@ -533,12 +537,7 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 		const secondId = leases[1];
 		if (!firstId || !secondId) throw new Error("lease pair missing");
 		const object = input(who);
-		await store.attachUploadObject(
-			who,
-			firstId,
-			object.objectRef,
-			object.objectVersion,
-		);
+		await seedLegacyObject(firstId, object);
 		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second',updated_at='2000-01-01' where id=${firstId}`;
 		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second',updated_at='2001-01-01' where id=${secondId}`;
 		const deleteObjectVersion = vi.fn(async () => {
@@ -563,10 +562,13 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 		expect(rows).toEqual([
 			{ status: "reserved", released_at: null, object_ref: object.objectRef },
 		]);
-		await store.releaseUploadReservation(who, firstId);
+		await store.collectExpiredUploadReservations({
+			now: new Date(),
+			deleter: { deleteObjectVersion: async () => {} },
+		});
 	});
 
-	it("recovery preserves a published version and reconciles its durable receipt", async () => {
+	it("legacy recovery preserves a published version and reconciles its durable receipt", async () => {
 		const who = owner();
 		const reservation = await store.reserveUpload(
 			who,
@@ -578,12 +580,7 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 		if (reservation.state !== "reserved")
 			throw new Error("reservation missing");
 		const object = input(who);
-		await store.attachUploadObject(
-			who,
-			reservation.reservationId,
-			object.objectRef,
-			object.objectVersion,
-		);
+		await seedLegacyObject(reservation.reservationId, object);
 		await store.create(object, who, "published-reservation", requestDigest);
 		await db`update platform.workspace_snapshot_upload_reservations set expires_at=now()-interval '1 second' where id=${reservation.reservationId}`;
 		const deleteObjectVersion = vi.fn(async () => {});
@@ -637,6 +634,21 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 			await db`select status from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`;
 		expect(beforeCleanup?.status).toBe("reserved");
 		await bound.store.releaseUploadReservation(who, reservation.reservationId);
+		expect(
+			(
+				await db`select released_at from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`
+			)[0]?.released_at,
+		).toBeNull();
+		await bound.store.retireUploadObject(
+			who,
+			reservation.reservationId,
+			object.objectRef,
+		);
+		// Trusted storage-fence receipt; native S3 behavior has separate conformance.
+		await bound.store.releaseUploadReservation(who, reservation.reservationId, {
+			objectRef: object.objectRef,
+			version: "confirmed-storage-fence",
+		});
 		const [afterCleanup] =
 			await db`select status,object_ref,object_version from platform.workspace_snapshot_upload_reservations where id=${reservation.reservationId}`;
 		expect(afterCleanup).toEqual({

@@ -53,35 +53,57 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		string,
 		{ bytes: Uint8Array; metadata: StoredFileObjectV1; createdAt: string }
 	>();
+	private fences = new Map<string, { version: string; createdAt: string }>();
+	async fenceUpload(objectRef: string) {
+		requireReference(objectRef);
+		let fence = this.fences.get(objectRef);
+		if (!fence) {
+			fence = { version: randomUUID(), createdAt: new Date().toISOString() };
+			this.fences.set(objectRef, fence);
+		}
+		return { version: fence.version };
+	}
 	async scan(cursor: string | null, limit: number, objectRef?: string) {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
 			throw new ObjectStorageError("invalid");
 		if (objectRef !== undefined) requireReference(objectRef);
-		const keys = [...this.objects.keys()]
-			.sort()
-			.filter((key) => objectRef === undefined || key === objectRef)
-			.filter((key) => !cursor || key > cursor)
+		const values = [
+			...[...this.objects].map(([ref, value]) => ({
+				objectRef: ref,
+				version: value.metadata.version,
+				createdAt: value.createdAt,
+			})),
+			...[...this.fences].map(([ref, value]) => ({
+				objectRef: ref,
+				...value,
+			})),
+		]
+			.map((value) => ({ key: `${value.objectRef}:${value.version}`, value }))
+			.sort((left, right) =>
+				left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+			)
+			.filter(
+				({ value }) => objectRef === undefined || value.objectRef === objectRef,
+			)
+			.filter(({ key }) => !cursor || key > cursor)
 			.slice(0, limit);
 		return {
-			objects: keys.map((objectRef) => {
-				const value = this.objects.get(objectRef);
-				if (!value) throw new ObjectStorageError("missing");
-				return {
-					objectRef,
-					version: value.metadata.version,
-					createdAt: value.createdAt,
-				};
-			}),
-			cursor: keys.length === limit ? (keys.at(-1) ?? null) : null,
+			objects: values.map(({ value }) => value),
+			cursor: values.length === limit ? (values.at(-1)?.key ?? null) : null,
 		};
 	}
 	async remove(objectRef: string, version: string) {
 		requireReference(objectRef);
+		if (this.fences.get(objectRef)?.version === version)
+			throw new ObjectStorageError("conflict");
 		if (this.objects.get(objectRef)?.metadata.version === version)
 			this.objects.delete(objectRef);
 	}
 	async inspect(objectRef: string, version?: string) {
 		requireReference(objectRef);
+		const fence = this.fences.get(objectRef);
+		if (fence && (version === undefined || version === fence.version))
+			throw new ObjectStorageError("conflict");
 		const value = this.objects.get(objectRef);
 		return value &&
 			(version === undefined || value.metadata.version === version)
@@ -91,6 +113,10 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 	async upload(request: ObjectUploadV1) {
 		requireReference(request.objectRef);
 		requireActive(request.expiresAt, request.signal);
+		if (this.fences.has(request.objectRef)) {
+			await request.body.cancel();
+			throw new ObjectStorageError("conflict");
+		}
 		const existing = this.objects.get(request.objectRef);
 		if (existing) {
 			await request.body.cancel();
@@ -141,6 +167,9 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		const metadata = { ...measured, etag: randomUUID(), version: randomUUID() };
 		sameContent(metadata, request.descriptor);
 		requireActive(request.expiresAt, request.signal);
+		// Match S3's condition at commit, including a fence installed during body I/O.
+		if (this.fences.has(request.objectRef))
+			throw new ObjectStorageError("conflict");
 		const raced = this.objects.get(request.objectRef);
 		if (raced) {
 			sameContent(raced.metadata, request.descriptor);

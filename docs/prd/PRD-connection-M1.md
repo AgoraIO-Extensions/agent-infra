@@ -4,7 +4,7 @@
 
 ## 1. 产品目标
 
-Connection 是与 Agent 平台并行建设的独立系统。员工在 Connection 中登录、连接外部账号、查看可用能力，并把明确选择的能力授权给独立 Consumer。Agent Platform 可以作为一个 Consumer 使用，但不是 Connection 的必经入口、授权权威或状态存储。
+Connection 是与 Agent 平台并行建设的独立系统。员工在 Connection 中登录、连接外部账号、查看可用能力，并把明确选择的能力授权给独立 Consumer。Agent Platform 的 Agent 作为独立 Consumer 使用 Connection；Platform 不是其必经入口、授权权威或状态存储。
 
 首个受监督 Pilot 使用 GitHub，目标是：
 
@@ -22,7 +22,7 @@ Pilot 成功只适用于具名环境、测试主体、专用账号、受控 priv
 | 概念 | 产品含义 |
 | --- | --- |
 | Principal | Connection 识别的稳定员工主体 |
-| Consumer | 使用 Connection MCP/API 的客户端或服务；每种产品独立注册 |
+| Consumer | 使用 Connection MCP/API 的独立客户端或服务；Platform 的每个正式 Agent 分别登记 |
 | ConsumerInstance | Consumer 的独立登录或 token 实例，可单独撤销 |
 | Actor | Consumer 内由 Connection 解析并单独授权的稳定单元 |
 | Provider | GitHub 等外部平台 |
@@ -32,7 +32,7 @@ Pilot 成功只适用于具名环境、测试主体、专用账号、受控 priv
 | ActionCall | Connection 接受并持久化的一次调用 |
 | Effect | WRITE Action 可能产生的外部副作用 |
 
-Connection 是这些对象的唯一权威。Platform 只保存自身 Agent、Execution、工具事实和经受信采集得到的关联引用。
+Connection 是这些对象的唯一权威。Platform 只保存自身 Agent、登记关联与交付事实、Execution、工具事实和经受信采集得到的关联引用。
 
 ## 3. 系统边界
 
@@ -49,6 +49,7 @@ Connection 是这些对象的唯一权威。Platform 只保存自身 Agent、Exe
 
 - Agent、Owner、使用范围、任务和自身工具执行事实。
 - 作为已注册 Consumer 使用 Connection 的公开 MCP/API；不通过 Platform API 代理调用。
+- 自动登记自身正式创建的 Agent，并保存与对应 Consumer 的关联和本平台的登记处理状态。
 - 在可信运行采集得到时保存 Connection 返回的调用关联引用和核实状态。
 - 只在 Platform 自己的 Agent policy 范围内决定是否发起自身任务，不把该 policy 当作 Connection 授权输入。
 
@@ -64,6 +65,7 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 
 - Direct MCP Client 使用部署批准的标准 MCP endpoint，通过 Connection OAuth 或获准 PAT 访问；客户端和服务端分别完成兼容性验证，不要求为接入统一采用私有原生协议。
 - Connection OAuth 使用 Authorization Code + PKCE；OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience 和 scope；ConsumerInstance 定义多个 Actor 时，token 或服务端受信 session 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。
+- Platform 自动登记的 Agent 默认采用上述 OAuth 路线；获准 PAT 保留为独立可选方式，不因 OAuth 登记或授权失败自动切换。
 - Connection PAT 只适用于经过注册和批准的 Consumer，不能替代 OAuth 的主体隔离规则。
 - Agent Consumer 可通过用户确认的 token binding 取得独立 PAT；确认、领取和撤销均绑定实际主体及 ConsumerInstance。不同用户或应用、不同 Agent 使用不同 token，客户端不能回退到 Owner 或共享部署 token。
 - BrowserSession 只用于 Connection Web 管理操作，不能作为 MCP 调用凭据。
@@ -84,10 +86,15 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 - LDAP 密码不保存、不记录、不进入 Token、Cookie、错误、审计或模型上下文。
 - OAuth 客户端注册、ConsumerInstance、token、Grant 和撤销均由 Connection 服务端解析和持久化。
 - Grant 绑定当前 Principal、Consumer、Connection 和用户确认的精确 ActionVersion 集合；Consumer 定义 Actor 或实例级授权时还须绑定服务端解析的对应范围。相同 Principal/Consumer 的获准实例可以使用同一 Grant，调用仍须分别验证当前 token 与 ConsumerInstance；共享 Grant 不允许共享 token。
-- 一个 Consumer 下可以为不同 Agent 提供独立 token，不要求每个 Agent 新建 Consumer。若需要不同 Agent 的外部账号或能力权限不同，须使用能表达该差异的 Consumer/Actor/Grant 授权，不能仅以 token 名称推断权限。
+- Platform 为每个正式 Agent 自动登记专用 Consumer；同一 Agent 的不同用户、不同安装仍使用独立 token。其他客户端的 Consumer 粒度按其批准的接入规则确定；独立 token 不替代具体账号和能力授权，不能仅以 token 名称推断权限。
 - Provider OAuth 只建立或更新 Connection，不自动创建 Grant。
 - Owner 或 Consumer policy 不能替 Principal 创建、扩大或替换 Grant；能力扩张必须由授权主体在 Connection 中重新确认。
 - 拒绝响应不能泄露其他 Principal、Connection、Grant、Credential、调用或审计是否存在。
+
+Platform 的创建与关联体验见
+[Platform PRD §9.1](PRD-agent-platform-M1.md#91-创建时自动关联与用户-oauth)。Connection 独立验证
+系统登记权限、登记归属与 Owner，并建立真实 Consumer 和用户 OAuth 安装；登记权限不授予
+Provider/Action 能力，不替用户创建 Grant。客户端登记完成与本人授权分别确认。
 
 ## 7. 调用、幂等与未知结果
 

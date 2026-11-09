@@ -21,12 +21,22 @@ import {
 	platformApiCredentials,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
+	workspaceSnapshotUploadObjects,
 	workspaceSnapshotUploadReservations,
 } from "./schema.js";
 import {
 	admitWorkspaceSnapshotUploadV1,
 	releaseWorkspaceSnapshotUploadAdmissionV1,
 } from "./workspace-snapshot-upload-admission.js";
+import {
+	assertSnapshotObjectPublishableV1,
+	beginSnapshotUploadObjectV1,
+	lockSnapshotUploadObjectV1,
+	recoverSnapshotUploadObjectPageV1,
+	releaseSnapshotUploadReservationV1,
+	retireSnapshotUploadObjectV1,
+	type SnapshotUploadRecoveryStorageV1,
+} from "./workspace-snapshot-upload-objects.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -251,8 +261,30 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 	releaseUploadReservation(
 		owner: WorkspaceSnapshotPrincipalV1,
 		reservationId: string,
+		objectFence?: { readonly objectRef: string; readonly version: string },
 	) {
-		return this.#releaseUploadReservation(owner, reservationId);
+		return this.#releaseUploadReservation(owner, reservationId, objectFence);
+	}
+	beginUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+	) {
+		return this.#run(owner, "agent:create", undefined, (tx) =>
+			beginSnapshotUploadObjectV1(tx, owner, reservationId, objectRef),
+		);
+	}
+	retireUploadObject(
+		owner: WorkspaceSnapshotPrincipalV1,
+		reservationId: string,
+		objectRef: string,
+	) {
+		// Cleanup remains possible after the originating API credential is revoked.
+		return this.#run(owner, "agent:create", undefined, (tx) =>
+			retireSnapshotUploadObjectV1(tx, owner, reservationId, objectRef),
+		).then((retired) => {
+			if (!retired) throw new WorkspaceSnapshotErrorV1("conflict");
+		});
 	}
 	attachUploadObject(
 		owner: WorkspaceSnapshotPrincipalV1,
@@ -289,7 +321,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 			.select()
 			.from(workspaceSnapshotUploadReservations)
 			.where(
-				sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired') and ${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now.toISOString()} and ${workspaceSnapshotUploadReservations.releasedAt} is null`,
+				sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired') and ${workspaceSnapshotUploadReservations.expiresAt} <= ${input.now.toISOString()} and ${workspaceSnapshotUploadReservations.releasedAt} is null and not exists (select 1 from ${workspaceSnapshotUploadObjects} where ${workspaceSnapshotUploadObjects.reservationId} = ${workspaceSnapshotUploadReservations.id})`,
 			)
 			.orderBy(
 				asc(workspaceSnapshotUploadReservations.updatedAt),
@@ -327,6 +359,14 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 							.for("update")
 							.limit(1);
 						if (!current) return "skipped";
+						const [intent] = await tx
+							.select()
+							.from(workspaceSnapshotUploadObjects)
+							.where(
+								eq(workspaceSnapshotUploadObjects.reservationId, current.id),
+							)
+							.limit(1);
+						if (intent) return "skipped";
 						if (current.objectRef && current.objectVersion) {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(hashtextextended(${current.objectRef} || ':' || ${current.objectVersion}, 0))`,
@@ -369,6 +409,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 									.where(
 										eq(workspaceSnapshotUploadReservations.id, current.id),
 									);
+
 								return "reconciled";
 							}
 							await input.deleter.deleteObjectVersion({
@@ -376,6 +417,8 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 								objectVersion: current.objectVersion,
 							});
 						}
+						// Independently persisted write intents require storage fencing, not a lease timeout.
+						if (current.objectRef && !current.objectVersion) return "skipped";
 						await tx
 							.update(workspaceSnapshotUploadReservations)
 							.set({
@@ -422,6 +465,116 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 		return result;
 	}
 
+	async collectUploadObjects(input: {
+		now: Date;
+		limit?: number;
+		storage: SnapshotUploadRecoveryStorageV1;
+	}) {
+		const limit = input.limit ?? 100;
+		if (
+			!Number.isFinite(input.now.getTime()) ||
+			!Number.isSafeInteger(limit) ||
+			limit < 1 ||
+			limit > 100
+		)
+			throw new WorkspaceSnapshotErrorV1("invalid_input");
+		const candidates = await this.#database
+			.select()
+			.from(workspaceSnapshotUploadObjects)
+			.where(sql`
+			(${workspaceSnapshotUploadObjects.state} = 'retired' or ${workspaceSnapshotUploadObjects.expiresAt} <= ${input.now.toISOString()})
+			and (${workspaceSnapshotUploadObjects.state} = 'pending' or not exists (select 1 from ${workspaceSnapshots} where ${workspaceSnapshots.objectRef} = ${workspaceSnapshotUploadObjects.objectRef} and ${workspaceSnapshots.status} <> 'deleted'))
+		`)
+			.orderBy(
+				asc(workspaceSnapshotUploadObjects.updatedAt),
+				asc(workspaceSnapshotUploadObjects.objectRef),
+			)
+			.limit(limit);
+		const result = {
+			scanned: candidates.length,
+			deletedVersions: 0,
+			reconciled: 0,
+			released: 0,
+			continued: 0,
+			failed: 0,
+		};
+		for (const candidate of candidates) {
+			const owner: WorkspaceSnapshotPrincipalV1 = {
+				kind: candidate.ownerType as WorkspaceSnapshotPrincipalV1["kind"],
+				id: candidate.ownerId,
+				scopes: [],
+			};
+			try {
+				// The retirement commit survives any timeout/rollback during later storage I/O.
+				const claimed = await this.#run(
+					owner,
+					"agent:create",
+					undefined,
+					async (tx) => {
+						const [eligible] = await tx
+							.select({ ref: workspaceSnapshotUploadObjects.objectRef })
+							.from(workspaceSnapshotUploadObjects)
+							.where(
+								and(
+									eq(
+										workspaceSnapshotUploadObjects.objectRef,
+										candidate.objectRef,
+									),
+									sql`(${workspaceSnapshotUploadObjects.state} = 'retired' or (${workspaceSnapshotUploadObjects.expiresAt} <= ${input.now.toISOString()} and ${workspaceSnapshotUploadObjects.expiresAt} <= clock_timestamp()))`,
+								),
+							)
+							.limit(1);
+						if (!eligible) return undefined;
+						return retireSnapshotUploadObjectV1(
+							tx,
+							owner,
+							candidate.reservationId,
+							candidate.objectRef,
+						);
+					},
+				);
+				if (claimed === false) {
+					result.reconciled++;
+					continue;
+				}
+				if (claimed === undefined) continue;
+				const recovered = await this.#run(
+					owner,
+					"agent:create",
+					undefined,
+					(tx) =>
+						recoverSnapshotUploadObjectPageV1(
+							tx,
+							candidate.objectRef,
+							input.storage,
+						),
+				);
+				result.deletedVersions += recovered.deletedVersions;
+				if (recovered.released) result.released++;
+				if (recovered.continued) result.continued++;
+			} catch {
+				result.failed++;
+				try {
+					// Fair rotation without advancing the failed page's checkpoint.
+					await this.#run(owner, "agent:create", undefined, async (tx) => {
+						await tx
+							.update(workspaceSnapshotUploadObjects)
+							.set({ updatedAt: sql`clock_timestamp()` })
+							.where(
+								eq(
+									workspaceSnapshotUploadObjects.objectRef,
+									candidate.objectRef,
+								),
+							);
+					});
+				} catch {
+					/* Database outages retain the intent and its charge. */
+				}
+			}
+		}
+		return result;
+	}
+
 	/** Captures request authentication in closures, never in metadata/records or persisted payloads. */
 	forCredential(
 		material: string,
@@ -456,7 +609,24 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				releaseUploadReservation: (
 					owner: WorkspaceSnapshotPrincipalV1,
 					reservationId: string,
-				) => this.#releaseUploadReservation(owner, reservationId),
+					objectFence?: {
+						readonly objectRef: string;
+						readonly version: string;
+					},
+				) => this.#releaseUploadReservation(owner, reservationId, objectFence),
+				beginUploadObject: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					reservationId: string,
+					objectRef: string,
+				) =>
+					this.#run(owner, "agent:create", auth, (tx) =>
+						beginSnapshotUploadObjectV1(tx, owner, reservationId, objectRef),
+					),
+				retireUploadObject: (
+					owner: WorkspaceSnapshotPrincipalV1,
+					reservationId: string,
+					objectRef: string,
+				) => this.retireUploadObject(owner, reservationId, objectRef),
 				attachUploadObject: (
 					owner: WorkspaceSnapshotPrincipalV1,
 					reservationId: string,
@@ -715,26 +885,15 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 	#releaseUploadReservation(
 		owner: WorkspaceSnapshotPrincipalV1,
 		reservationId: string,
+		objectFence?: { readonly objectRef: string; readonly version: string },
 	) {
-		// The server-held lease permits cleanup after revocation, never publication.
 		return this.#run(owner, "agent:create", undefined, async (tx) => {
-			await tx
-				.update(workspaceSnapshotUploadReservations)
-				.set({
-					status: "released",
-					releasedAt: new Date(),
-					updatedAt: new Date(),
-					objectRef: null,
-					objectVersion: null,
-				})
-				.where(
-					and(
-						eq(workspaceSnapshotUploadReservations.id, reservationId),
-						eq(workspaceSnapshotUploadReservations.ownerType, owner.kind),
-						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
-						sql`${workspaceSnapshotUploadReservations.status} in ('reserved','expired')`,
-					),
-				);
+			await releaseSnapshotUploadReservationV1(
+				tx,
+				owner,
+				reservationId,
+				objectFence,
+			);
 		});
 	}
 	#attachUploadObject(
@@ -747,6 +906,30 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 		if (!validText(objectRef) || !validText(objectVersion))
 			throw new WorkspaceSnapshotErrorV1("invalid_input");
 		return this.#run(owner, "agent:create", auth, async (tx) => {
+			await lockSnapshotUploadObjectV1(tx, objectRef);
+			const [intent] = await tx
+				.select()
+				.from(workspaceSnapshotUploadObjects)
+				.where(eq(workspaceSnapshotUploadObjects.objectRef, objectRef))
+				.limit(1);
+			if (!intent)
+				await beginSnapshotUploadObjectV1(tx, owner, reservationId, objectRef);
+			const attached = await tx
+				.update(workspaceSnapshotUploadObjects)
+				.set({ objectVersion, updatedAt: sql`clock_timestamp()` })
+				.where(
+					and(
+						eq(workspaceSnapshotUploadObjects.objectRef, objectRef),
+						eq(workspaceSnapshotUploadObjects.reservationId, reservationId),
+						eq(workspaceSnapshotUploadObjects.ownerType, owner.kind),
+						eq(workspaceSnapshotUploadObjects.ownerId, owner.id),
+						eq(workspaceSnapshotUploadObjects.state, "pending"),
+						sql`${workspaceSnapshotUploadObjects.expiresAt} > clock_timestamp()`,
+						sql`(${workspaceSnapshotUploadObjects.objectVersion} is null or ${workspaceSnapshotUploadObjects.objectVersion} = ${objectVersion})`,
+					),
+				)
+				.returning({ ref: workspaceSnapshotUploadObjects.objectRef });
+			if (!attached[0]) throw new WorkspaceSnapshotErrorV1("unavailable");
 			const updated = await tx
 				.update(workspaceSnapshotUploadReservations)
 				.set({ objectRef, objectVersion, updatedAt: new Date() })
@@ -757,7 +940,7 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 						eq(workspaceSnapshotUploadReservations.ownerId, owner.id),
 						eq(workspaceSnapshotUploadReservations.status, "reserved"),
 						sql`${workspaceSnapshotUploadReservations.expiresAt} > clock_timestamp()`,
-						sql`(${workspaceSnapshotUploadReservations.objectRef} is null or (${workspaceSnapshotUploadReservations.objectRef} = ${objectRef} and ${workspaceSnapshotUploadReservations.objectVersion} = ${objectVersion}))`,
+						sql`${workspaceSnapshotUploadReservations.objectRef} = ${objectRef} and (${workspaceSnapshotUploadReservations.objectVersion} is null or ${workspaceSnapshotUploadReservations.objectVersion} = ${objectVersion})`,
 					),
 				)
 				.returning({ id: workspaceSnapshotUploadReservations.id });
@@ -817,8 +1000,11 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 				if (value.sizeBytes > reservation.reservedBytes)
 					throw new WorkspaceSnapshotErrorV1("quota_exceeded");
 			}
-			await tx.execute(
-				sql`select pg_advisory_xact_lock(hashtextextended(${value.objectRef} || ':' || ${value.objectVersion}, 0))`,
+			await assertSnapshotObjectPublishableV1(
+				tx,
+				value.objectRef,
+				value.objectVersion,
+				reservationId,
 			);
 			const [retired] = await tx
 				.select({ id: workspaceSnapshots.id })
@@ -878,6 +1064,20 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 						updatedAt: new Date(),
 					})
 					.where(eq(workspaceSnapshotUploadReservations.id, reservationId));
+			await tx
+				.update(workspaceSnapshotUploadObjects)
+				.set({ state: "published", updatedAt: sql`clock_timestamp()` })
+				.where(
+					and(
+						eq(workspaceSnapshotUploadObjects.objectRef, value.objectRef),
+						eq(
+							workspaceSnapshotUploadObjects.objectVersion,
+							value.objectVersion,
+						),
+						eq(workspaceSnapshotUploadObjects.ownerType, owner.kind),
+						eq(workspaceSnapshotUploadObjects.ownerId, owner.id),
+					),
+				);
 			return record(tx, row);
 		});
 	}
