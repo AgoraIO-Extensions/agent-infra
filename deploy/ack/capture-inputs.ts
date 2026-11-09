@@ -64,6 +64,41 @@ export function sanitizeValues(value: any, schema: AnyRecord): any {
 	return result;
 }
 
+/** Coalesced Helm values omit null deletions; replay their raw override intent. */
+export function capturedValues(
+	resolved: AnyRecord,
+	overrides: AnyRecord,
+	schema: AnyRecord,
+) {
+	const values = sanitizeValues(structuredClone(resolved), schema);
+	const restore = (input: AnyRecord, path: string[] = []) => {
+		for (const [key, item] of Object.entries(input)) {
+			if (item === null) {
+				let target = values;
+				for (const part of path) {
+					if (!Object.hasOwn(target, part))
+						Object.defineProperty(target, part, {
+							value: {}, enumerable: true, writable: true, configurable: true,
+						});
+					assert(
+						target[part] && typeof target[part] === "object" && !Array.isArray(target[part]),
+						"CAPTURE_NULL_OVERRIDE_SHAPE_CONFLICT",
+					);
+					target = target[part];
+				}
+				Object.defineProperty(target, key, {
+					value: null, enumerable: true, writable: true, configurable: true,
+				});
+			} else if (typeof item === "object" && !Array.isArray(item)) {
+				// Helm replaces arrays as a whole; only maps lose null deletions.
+				restore(item, [...path, key]);
+			}
+		}
+	};
+	restore(sanitizeValues(overrides, schema));
+	return values;
+}
+
 export function freshDatabaseValues(values: AnyRecord, installationId: string) {
 	assert(/^[a-f0-9-]{36}$/u.test(installationId));
 	const result = structuredClone(values);
@@ -130,6 +165,7 @@ function objectFiles(
 	return mkdir(directory, { recursive: true, mode: 0o700 }).then(async () => {
 		const files: Record<string, string> = {};
 		for (const [key, encoded] of Object.entries(object.data ?? {})) {
+			assert(typeof encoded === "string", "CAPTURE_OBJECT_DATA_INVALID");
 			const file = join(directory, key);
 			await writePrivate(
 				file,
@@ -180,6 +216,7 @@ async function copyObjectFiles(objects: AnyRecord[], output: string) {
 	for (const object of objects) {
 		const files: Record<string, string> = {};
 		for (const [key, source] of Object.entries(object.files)) {
+			assert(typeof source === "string", "CAPTURE_OBJECT_FILE_INVALID");
 			const targetDirectory = join(output, "objects-reuse", `${object.kind}-${object.name}`);
 			await mkdir(targetDirectory, { recursive: true, mode: 0o700 });
 			const target = join(targetDirectory, key);
@@ -225,6 +262,12 @@ export async function captureInputs(options: {
 			timeout: 30_000,
 			maxBuffer: 16 * 1024 * 1024,
 		});
+	const history = JSON.parse(helm([
+		"--kubeconfig", options.kubeconfig, "-n", options.namespace,
+		"history", options.release, "-o", "json",
+	]));
+	const helmRevision = Number(history.at(-1)?.revision);
+	assert(Number.isSafeInteger(helmRevision) && helmRevision > 0, "CAPTURE_RELEASE_REVISION_INVALID");
 	const rawValues = helm([
 		"--kubeconfig",
 		options.kubeconfig,
@@ -233,12 +276,27 @@ export async function captureInputs(options: {
 		"get",
 		"values",
 		options.release,
+		"--revision",
+		String(helmRevision),
 		"-a",
 		"-o",
 		"yaml",
 	]);
+	const rawOverrides = helm([
+		"--kubeconfig",
+		options.kubeconfig,
+		"-n",
+		options.namespace,
+		"get",
+		"values",
+		options.release,
+		"--revision",
+		String(helmRevision),
+		"-o",
+		"yaml",
+	]);
 	const schema = JSON.parse(await readFile(join(options.chart, "values.schema.json"), "utf8"));
-	const values = sanitizeValues(parse(rawValues) ?? {}, schema);
+	const values = capturedValues(parse(rawValues) ?? {}, parse(rawOverrides) ?? {}, schema);
 	const valuesFile = join(options.output, "values.reuse.yaml");
 	await writePrivate(valuesFile, stringify(values));
 	const versionRaw = execute("kubectl", ["version", "-o", "json"], options.kubeconfig);
@@ -320,6 +378,7 @@ export async function captureInputs(options: {
 		schemaVersion: 1,
 		kind: "ack-input-capture",
 		readOnly: true,
+		helmRevision,
 		namespace: options.namespace,
 		release: options.release,
 		kubeVersion,

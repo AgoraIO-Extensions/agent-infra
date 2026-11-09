@@ -262,13 +262,16 @@ export ACK_CAPTURE_DIR=/private/ack/input-capsule
 deploy/ack/redeploy.sh capture-inputs
 ```
 
-该命令读取精确 Helm release 的合并 values、集群版本和渲染出的 Secret/ConfigMap 依赖，
+该命令固定同一 Helm release revision，读取合并 values、原始 user overrides、集群版本和渲染出的 Secret/ConfigMap 依赖，
 在 `ACK_CAPTURE_DIR` 下以 `0600` 保存文件引用和脱敏 receipt，不写 ACK。它生成
 `values.reuse.yaml`、`values.fresh.yaml`、`bootstrap-inputs.reuse.json` 和
 `bootstrap-inputs.fresh.json`。fresh 配置会为新的 PostgreSQL 生成独立的管理员、Platform、
 目录运行和目录迁移账号；不会错误复用旧环境中共用一个角色/数据库的 URL。旧 values 中被
 当前 schema 拒绝的字段会被移除并记录在本地 receipt。采集仍不生成源码绑定的镜像 manifest，
 部署前必须补齐同一个 `ACK_SOURCE_SHA` 的 Platform/Runtime amd64 manifest。
+
+原始 overrides 中用于删除默认键的显式 `null` 会保留到 reuse/fresh values；只保存合并结果
+会丢失该意图，再次渲染时可能重新引入默认的节点选择器等配置。非 null 的已解析值保持不变。
 
 `ACK_AGENT_STATE_DIR` 必须是仓库外、当前用户拥有的既有 `0700` 目录。
 创建成功即以 `0600` 原子写入 `agent-bindings.json`；它是私有操作状态，
