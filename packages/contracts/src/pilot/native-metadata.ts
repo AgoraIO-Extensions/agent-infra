@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { OpaqueIdV1Schema } from "../index.ts";
 import {
+	NativeMetadataProjectionV1Schema,
 	NativeMetadataProjectionV1OrV2Schema,
 	NativeMetadataSelectorV1Schema,
 } from "../runtime/native-metadata-v1.ts";
@@ -49,5 +50,6 @@ export const nativeMetadataOpenApiPathsV1 = {
 } as const;
 
 export const nativeMetadataSchemasV1 = {
+	NativeMetadataProjectionV1: NativeMetadataProjectionV1Schema,
 	NativeMetadataProjectionV1OrV2: NativeMetadataProjectionV1OrV2Schema,
 };

@@ -1834,7 +1834,7 @@ export type NativeCapabilityInvocationResultV1 = {
     status: 'submitted';
 };
 
-export type NativeMetadataProjectionV1OrV2 = {
+export type NativeMetadataProjectionV1 = {
     readAt: string;
     selector: 'status';
     status: 'active' | 'idle' | 'not_loaded' | 'system_error';
@@ -1868,7 +1868,9 @@ export type NativeMetadataProjectionV1OrV2 = {
     }>;
     revision: string;
     selector: 'skills';
-} | {
+};
+
+export type NativeMetadataProjectionV1OrV2 = NativeMetadataProjectionV1 | {
     capabilities: Array<{
         availability: 'available';
         description: string;
