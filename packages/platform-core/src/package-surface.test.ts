@@ -205,6 +205,7 @@ describe("platform-core package surface", () => {
 			"isAgentRuntimePresentationVisibleV1",
 			"isBatchableConversationEventV1",
 			"isConfirmedResultFileV1",
+			"isConversationAgentRunnableV1",
 			"isConversationGenerationBarrierConfirmedV1",
 			"isCurrentTaskFeedbackUseV1",
 			"isEvaluationFileRuntimeCurrentV1",

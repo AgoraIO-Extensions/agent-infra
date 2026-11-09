@@ -3,6 +3,7 @@ import type {
 	ConversationDispatchClaimV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
+import { isConversationAgentRunnableV1 } from "@agent-infra/platform-core";
 import {
 	executionKeyProjection,
 	executionPrincipalProjection,
@@ -16,6 +17,7 @@ import {
 import {
 	bindingMatches,
 	cancelStoppedTurn,
+	failUnsentTurn,
 	isolationProjection,
 	lockConversation,
 	lockExecution,
@@ -242,6 +244,54 @@ export async function claimWork(
 			return { outcome: "failed" };
 		}
 		if (decision.outcome === "wait") return { outcome: "busy" };
+	}
+	// #4077：已占位但确认未发送的 Turn 遇到已停止、停用或故障未恢复的 Agent 时以原因明确失败，
+	// 与等待中的任务一致（Runtime HLD §8.4），不再按 AUTHORIZATION_UNAVAILABLE 无限重试。
+	// 启动或更新中照常认领重试；待处理的 stop 仍由下方的本地取消处理。
+	if (
+		execution.status === "submitted" &&
+		isTurn(selectedOperation) &&
+		!isolation &&
+		stop?.status !== "submitted"
+	) {
+		const [agent] = await transaction<
+			{
+				status: string | null;
+				desired_state: string | null;
+				service_availability: string | null;
+			}[]
+		>`
+			select status, desired_state, service_availability
+			from platform.agent_applications where agent_id = ${execution.agent_id}
+		`;
+		if (
+			!isConversationAgentRunnableV1(
+				agent
+					? {
+							status: agent.status,
+							desiredState: agent.desired_state,
+							serviceAvailability: agent.service_availability,
+						}
+					: null,
+			) &&
+			(await failUnsentTurn(
+				transaction,
+				outbox,
+				conversation,
+				execution,
+				payload,
+				"AGENT_UNAVAILABLE",
+			))
+		) {
+			await recordTaskStatus(
+				transaction,
+				{ outbox, conversation, execution },
+				"failed",
+				input.workerId,
+				"AGENT_UNAVAILABLE",
+			);
+			return { outcome: "failed" };
+		}
 	}
 	// #3373：只核实状态的恢复认领（Execution 为 processing/unknown，沿原操作查询，不提交新 Turn）
 	// 不以 Sandbox 就绪为前置；Sandbox、Agent Pod 或 Owner 重启期间查询失败按可重试处理，
