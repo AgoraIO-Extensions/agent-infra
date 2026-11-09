@@ -18,6 +18,7 @@ import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
 } from "./connection-consumer-projection.js";
+import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { quantityRatio } from "./kubernetes-runtime-comparison.js";
@@ -122,6 +123,7 @@ type DeploymentConfiguration = {
 		readonly authorize?: NonNullable<
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["authorize"];
+		readonly principalBindingsByAgent?: unknown;
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
 	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
@@ -142,17 +144,35 @@ type DeploymentConfiguration = {
 	};
 };
 
+type ResolvedConnectionInstallation = NonNullable<
+	DeploymentConfiguration["connectionInstallation"]
+> & {
+	readonly bindPrincipal: ReturnType<
+		typeof createConnectionInstallationPrincipalBindingsV1
+	>;
+};
+
 function resolveConnectionInstallation(
 	value: unknown,
-): DeploymentConfiguration["connectionInstallation"] | undefined {
+): ResolvedConnectionInstallation | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	const candidate = value as Record<string, unknown>;
+	if (
+		candidate.authorize !== undefined &&
+		candidate.principalBindingsByAgent !== undefined
+	)
+		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	if (Object.hasOwn(candidate, "configurationsByAgent")) {
 		if (
 			Object.keys(candidate).some(
-				(key) => !["configurationsByAgent", "authorize"].includes(key),
+				(key) =>
+					![
+						"configurationsByAgent",
+						"authorize",
+						"principalBindingsByAgent",
+					].includes(key),
 			) ||
 			(candidate.authorize !== undefined &&
 				typeof candidate.authorize !== "function") ||
@@ -187,24 +207,40 @@ function resolveConnectionInstallation(
 			authorize: candidate.authorize as NonNullable<
 				DeploymentConfiguration["connectionInstallation"]
 			>["authorize"],
+			bindPrincipal: createConnectionInstallationPrincipalBindingsV1({
+				configurationsByAgent: configurationsByAgent as Record<
+					string,
+					import("@agent-infra/contracts/runtime").RuntimeOAuthConfigurationV1
+				>,
+				principalBindingsByAgent: candidate.principalBindingsByAgent,
+			}),
 		};
 	}
 	if (
-		!["configuration", "authorize,configuration"].includes(
-			Object.keys(candidate).sort().join(","),
+		!Object.hasOwn(candidate, "configuration") ||
+		Object.keys(candidate).some(
+			(key) =>
+				!["configuration", "authorize", "principalBindingsByAgent"].includes(
+					key,
+				),
 		) ||
 		(candidate.authorize !== undefined &&
 			typeof candidate.authorize !== "function")
 	)
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	try {
+		const configuration = RuntimeOAuthConfigurationV1Schema.parse(
+			structuredClone(candidate.configuration),
+		);
 		return {
-			configuration: RuntimeOAuthConfigurationV1Schema.parse(
-				structuredClone(candidate.configuration),
-			),
+			configuration,
 			authorize: candidate.authorize as NonNullable<
 				ConversationRuntimeOptionsV2["connectionInstallation"]
 			>["authorize"],
+			bindPrincipal: createConnectionInstallationPrincipalBindingsV1({
+				configuration,
+				principalBindingsByAgent: candidate.principalBindingsByAgent,
+			}),
 		};
 	} catch {
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
@@ -490,7 +526,7 @@ const connectionInstallationRevision = perAgentConsumerSelection
 			connectionInstallationSupply,
 			connectionConsumerSnapshot,
 		);
-let connectionInstallation: DeploymentConfiguration["connectionInstallation"];
+let connectionInstallation: ResolvedConnectionInstallation | undefined;
 try {
 	connectionInstallation = resolveConnectionInstallation(
 		configuredConnectionInstallation,
@@ -737,9 +773,12 @@ async function createPrepared(signal: AbortSignal) {
 				const { createConnectionInstallationAuthorizationV1 } = await import(
 					"@agent-infra/platform-core"
 				);
-				authorize = createConnectionInstallationAuthorizationV1({
+				const authorizeCurrent = createConnectionInstallationAuthorizationV1({
 					store: installationStore,
 				}).authorize;
+				const bindPrincipal = connectionInstallation.bindPrincipal;
+				authorize = async (...args) =>
+					bindPrincipal(await authorizeCurrent(...args));
 			}
 		}
 		authorizedInstallation = {
