@@ -664,4 +664,32 @@ describe("workspace snapshot upload service with real file spool", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 		expect(f.storage.upload).toHaveBeenCalledOnce();
 	});
+
+	it("does not fence or release an intent while the writer is still pending", async () => {
+		const f = await fixture();
+		let started!: () => void;
+		const writerStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		f.storage.upload.mockImplementationOnce(async (request) => {
+			started();
+			await new Promise<void>((resolve) => {
+				if (request.signal?.aborted) resolve();
+				else
+					request.signal?.addEventListener("abort", () => resolve(), {
+						once: true,
+					});
+			});
+			throw new Error("writer aborted at its deadline");
+		});
+		const aborted = new AbortController();
+		const pending = f.service.upload({ ...f.upload(), signal: aborted.signal });
+		await writerStarted;
+		expect(f.storage.fenceUpload).not.toHaveBeenCalled();
+		expect(f.store.releaseUploadReservation).not.toHaveBeenCalled();
+		aborted.abort();
+		await expect(pending).rejects.toMatchObject({ code: "unavailable" });
+		expect(f.storage.fenceUpload).not.toHaveBeenCalled();
+		expect(f.store.releaseUploadReservation).not.toHaveBeenCalled();
+	});
 });
