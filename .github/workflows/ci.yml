@@ -416,6 +416,10 @@ jobs:
         if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm build
 
+      - name: Run repository meta tests
+        if: ${{ needs.changes.outputs.source == 'true' }}
+        run: pnpm test:meta
+
       - name: Validate real observability Collector and PostgreSQL
         id: observability
         if: ${{ needs.changes.outputs.source == 'true' }}

@@ -187,13 +187,26 @@ test("CLI retains a watch receipt around a real subprocess and cleans up the obs
 	);
 	await writeFile(
 		join(dir, "bin/kubectl"),
-		`#!${process.execPath}\nconst fs=require('node:fs'); const args=process.argv.slice(2); const file=process.env.WATCH_TEST_STATE; if(args.includes('--watch')) { if(!args.includes('--output-watch-events'))process.exit(2); let prior; const emit=()=>{ const d=JSON.parse(fs.readFileSync(file)); if(d.metadata.resourceVersion===prior)return; const type=prior?'MODIFIED':'ADDED';prior=d.metadata.resourceVersion; process.stdout.write([type,d.metadata.uid,prior,d.metadata.generation,d.spec.replicas,d.status.observedGeneration,d.status.updatedReplicas,d.status.availableReplicas,d.status.readyReplicas].join('|')+'\\n'); };emit();setInterval(emit,10); } else if(args.includes('get'))process.stdout.write(fs.readFileSync(file));`,
+		`#!${process.execPath}\nconst fs=require('node:fs'); const args=process.argv.slice(2); const file=process.env.WATCH_TEST_STATE; if(args.includes('--watch')) { if(!args.includes('--output-watch-events'))process.exit(2); let prior; const emit=()=>{ const d=JSON.parse(fs.readFileSync(file)); if(d.metadata.resourceVersion===prior)return; const type=prior?'MODIFIED':'ADDED';prior=d.metadata.resourceVersion; process.stdout.write([type,d.metadata.uid,prior,d.metadata.generation,d.spec.replicas,d.status.observedGeneration,d.status.updatedReplicas,d.status.availableReplicas,d.status.readyReplicas].join('|')+'\\n'); if(prior==='2')fs.writeFileSync(file+'.observed-2',''); };emit();setInterval(emit,10); } else if(args.includes('get'))process.stdout.write(fs.readFileSync(file));`,
 		{ mode: 0o700 },
 	);
 	const command = join(dir, "change.cjs");
 	await writeFile(
 		command,
-		`const fs=require('node:fs');const file=process.env.WATCH_TEST_STATE;const d=JSON.parse(fs.readFileSync(file));d.metadata.resourceVersion='2';d.status.availableReplicas=1;fs.writeFileSync(file,JSON.stringify(d));setTimeout(()=>{d.metadata.resourceVersion='3';d.status.availableReplicas=2;fs.writeFileSync(file,JSON.stringify(d));},80);`,
+		`const fs=require('node:fs');
+const file=process.env.WATCH_TEST_STATE;
+const d=JSON.parse(fs.readFileSync(file));
+const publish=()=>{fs.writeFileSync(file+'.next',JSON.stringify(d));fs.renameSync(file+'.next',file);};
+d.metadata.resourceVersion='2';d.status.availableReplicas=1;publish();
+const deadline=Date.now()+4000;
+const finish=()=>{
+  if(!fs.existsSync(file+'.observed-2')){
+    if(Date.now()>=deadline)process.exit(2);
+    return setTimeout(finish,10);
+  }
+  d.metadata.resourceVersion='3';d.status.availableReplicas=2;publish();
+};
+finish();`,
 	);
 	await run(
 		process.execPath,

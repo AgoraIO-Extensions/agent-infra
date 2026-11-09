@@ -155,6 +155,9 @@ function build(
 ) {
 	const childEnvironment = {
 		...process.env,
+		GITHUB_JOB: "",
+		GITHUB_RUN_ID: "",
+		GITHUB_RUN_ATTEMPT: "",
 		DOCKER_BIN: join(directory, "docker.mjs"),
 		FAKE_DOCKER_LOG: join(directory, "docker.log"),
 		FAKE_DOCKER_STATE: join(directory, "docker-state.json"),
