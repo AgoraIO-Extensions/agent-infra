@@ -95,10 +95,10 @@ export function createRuntimeExecutionGrantValidatorV6(
 	};
 }
 
-function decode(segment: string): Buffer {
-	if (!/^[A-Za-z0-9_-]+$/.test(segment)) denyGrantSignature();
+function decode(segment: string, stage?: RuntimeV4DenialStage): Buffer {
+	if (!/^[A-Za-z0-9_-]+$/.test(segment)) denyGrantSignature(stage);
 	const decoded = Buffer.from(segment, "base64url");
-	if (decoded.toString("base64url") !== segment) denyGrantSignature();
+	if (decoded.toString("base64url") !== segment) denyGrantSignature(stage);
 	return decoded;
 }
 
@@ -121,7 +121,7 @@ function verifySignedRuntimeToken(
 	if (parts.length !== 3) denyGrantSignature(stage);
 	const [headerPart, claimsPart, signaturePart] = parts;
 	if (!headerPart || !claimsPart || !signaturePart) denyGrantSignature(stage);
-	const header = JSON.parse(utf8.decode(decode(headerPart))) as {
+	const header = JSON.parse(utf8.decode(decode(headerPart, stage))) as {
 		alg?: unknown;
 		kid?: unknown;
 		typ?: unknown;
@@ -141,11 +141,11 @@ function verifySignedRuntimeToken(
 			null,
 			Buffer.from(`${headerPart}.${claimsPart}`, "ascii"),
 			key,
-			decode(signaturePart),
+			decode(signaturePart, stage),
 		)
 	)
 		denyGrantSignature(stage);
-	return JSON.parse(utf8.decode(decode(claimsPart))) as unknown;
+	return JSON.parse(utf8.decode(decode(claimsPart, stage))) as unknown;
 }
 
 /** Signature-only verifier used by the independent recovery Grant schema. */
