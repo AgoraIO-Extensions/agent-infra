@@ -2,6 +2,7 @@ import { type KeyObject, verify } from "node:crypto";
 import { TextDecoder } from "node:util";
 
 import {
+	type RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionGrantV5Schema,
 	RuntimeNativeCapabilityRequestV4Schema,
@@ -29,7 +30,10 @@ import {
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5,
 } from "@agent-infra/contracts/runtime";
 
-import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	isRuntimeAuthorizationDenial,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 
@@ -136,7 +140,7 @@ function verifySignedRuntimeGrantV4(
 }
 
 async function validateRuntimeExecutionGrantV4(
-	request: unknown,
+	request: RuntimeBusinessRequestV4,
 	verificationInput: unknown,
 	options: {
 		readonly expectedIssuer: string;
@@ -144,20 +148,20 @@ async function validateRuntimeExecutionGrantV4(
 		readonly now?: () => number;
 	},
 ) {
+	let verification: ReturnType<
+		typeof VerifiedRuntimeExecutionGrantV4Schema.parse
+	>;
 	try {
-		const parsedRequest =
-			request !== null && typeof request === "object" && "selection" in request
-				? RuntimeSubmitTurnRequestV4Schema.parse(request)
-				: request !== null &&
-						typeof request === "object" &&
-						"capabilityId" in request
-					? RuntimeNativeCapabilityRequestV4Schema.parse(request)
-					: RuntimeSupplementRequestV4Schema.parse(request);
-		const verification =
+		verification =
 			VerifiedRuntimeExecutionGrantV4Schema.parse(verificationInput);
-		if (verification.token !== parsedRequest.grant.token)
-			runtimeAuthorizationDenied();
-		const claims = validateVerifiedRuntimeExecutionGrantClaimsV4(
+	} catch {
+		runtimeAuthorizationDenied("v4-verification-schema");
+	}
+	if (verification.token !== request.grant.token)
+		runtimeAuthorizationDenied("v4-token-binding");
+	let claims: ReturnType<typeof validateVerifiedRuntimeExecutionGrantClaimsV4>;
+	try {
+		claims = validateVerifiedRuntimeExecutionGrantClaimsV4(
 			verification.claims,
 			{
 				expectedIssuer: options.expectedIssuer,
@@ -165,11 +169,15 @@ async function validateRuntimeExecutionGrantV4(
 				now: (options.now ?? Date.now)(),
 			},
 		);
-		await validateRuntimeBusinessBindingV4(parsedRequest, claims);
-		return { request: parsedRequest, claims };
 	} catch {
-		runtimeAuthorizationDenied();
+		runtimeAuthorizationDenied("v4-claims");
 	}
+	try {
+		await validateRuntimeBusinessBindingV4(request, claims);
+	} catch {
+		runtimeAuthorizationDenied("v4-business-binding");
+	}
+	return { request, claims };
 }
 
 export function createRuntimeExecutionGrantValidatorV4(
@@ -182,8 +190,9 @@ export function createRuntimeExecutionGrantValidatorV4(
 ) {
 	const verifyGrant = createRuntimeExecutionGrantVerifierV4(publicKeys);
 	return async (request: unknown) => {
+		let parsedRequest: RuntimeBusinessRequestV4;
 		try {
-			const parsedRequest =
+			parsedRequest =
 				request !== null &&
 				typeof request === "object" &&
 				"selection" in request
@@ -193,13 +202,24 @@ export function createRuntimeExecutionGrantValidatorV4(
 							"capabilityId" in request
 						? RuntimeNativeCapabilityRequestV4Schema.parse(request)
 						: RuntimeSupplementRequestV4Schema.parse(request);
+		} catch {
+			runtimeAuthorizationDenied("v4-request-schema");
+		}
+		let verification: ReturnType<typeof verifyGrant>;
+		try {
+			verification = verifyGrant(parsedRequest.grant);
+		} catch {
+			runtimeAuthorizationDenied("v4-token-verification");
+		}
+		try {
 			return await validateRuntimeExecutionGrantV4(
 				parsedRequest,
-				verifyGrant(parsedRequest.grant),
+				verification,
 				options,
 			);
-		} catch {
-			runtimeAuthorizationDenied();
+		} catch (error) {
+			if (isRuntimeAuthorizationDenial(error)) throw error;
+			runtimeAuthorizationDenied("v4-validation");
 		}
 	};
 }
@@ -218,6 +238,7 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 		options,
 	);
 	return async (transport: unknown) => {
+		let parsed: { businessRequest: unknown; privateKeyField: unknown };
 		try {
 			const businessRequest =
 				transport !== null &&
@@ -225,7 +246,7 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 				"businessRequest" in transport
 					? transport.businessRequest
 					: undefined;
-			const parsed =
+			parsed =
 				businessRequest !== null &&
 				typeof businessRequest === "object" &&
 				"selection" in businessRequest
@@ -235,8 +256,13 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 							"capabilityId" in businessRequest
 						? RuntimeNativeCapabilityTransportV4Schema.parse(transport)
 						: RuntimeSupplementTransportV4Schema.parse(transport);
-			const accepted = await validateGrant(parsed.businessRequest);
-			const privateField = validateRuntimePrivateRelayKeyFieldV1(
+		} catch {
+			runtimeAuthorizationDenied("v4-transport-schema");
+		}
+		const accepted = await validateGrant(parsed.businessRequest);
+		let privateField: ReturnType<typeof validateRuntimePrivateRelayKeyFieldV1>;
+		try {
+			privateField = validateRuntimePrivateRelayKeyFieldV1(
 				parsed.privateKeyField,
 				{
 					request: accepted.request,
@@ -244,13 +270,13 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 					requestDigest: accepted.claims.requestDigest,
 				},
 			);
-			return {
-				...accepted,
-				relayKey: privateField.keyDelivery.relayKey,
-			};
 		} catch {
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("v4-private-relay-binding");
 		}
+		return {
+			...accepted,
+			relayKey: privateField.keyDelivery.relayKey,
+		};
 	};
 }
 

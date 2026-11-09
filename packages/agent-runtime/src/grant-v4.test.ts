@@ -11,7 +11,7 @@ import {
 	validateRuntimePinnedExecutionKeyScopeV4,
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
-
+import { RuntimeHostError, runtimeHostErrorDiagnostic } from "./errors.js";
 import {
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV4,
@@ -250,6 +250,47 @@ describe("Runtime V4 Grant trust boundary", () => {
 		]) {
 			await expect(validateGrant(changed)).rejects.toThrow(
 				"Runtime authorization is unavailable",
+			);
+		}
+	});
+
+	it("reports only the failing V4 authorization stage", async () => {
+		const accepted = signed();
+		const [header, payload, signature] = accepted.grant.token.split(".");
+		if (!header || !payload || !signature) throw new Error("Invalid fixture");
+		const changedSource = RuntimeSubmitTurnRequestV4Schema.parse({
+			...request,
+			executionSource: "platform-api",
+		});
+		const cases = [
+			{
+				request: { ...accepted, sessionGeneration: 0 },
+				reason: "v4-request-schema",
+			},
+			{
+				request: {
+					...accepted,
+					grant: {
+						...accepted.grant,
+						token: `${header}.${payload}.${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`,
+					},
+				},
+				reason: "v4-token-verification",
+			},
+			{ request: signed({ issuer: "other-issuer" }), reason: "v4-claims" },
+			{
+				request: signed({}, {}, changedSource),
+				reason: "v4-business-binding",
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			const error = await validateGrant(testCase.request).catch(
+				(caught: unknown) => caught,
+			);
+			expect(error).toBeInstanceOf(RuntimeHostError);
+			expect(runtimeHostErrorDiagnostic(error as RuntimeHostError)).toBe(
+				testCase.reason,
 			);
 		}
 	});
