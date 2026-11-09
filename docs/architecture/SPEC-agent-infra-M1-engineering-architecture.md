@@ -2037,8 +2037,10 @@ Platform Session 仍按所属 Sandbox 隔离客户端状态，不能由 token �
 服务端先从当前身份与持久关系固定主体及 Agent，再由获准的受保护客户端领取、保存、
 选择和撤销 token。callback/query/body、token 名称、
 Owner 或 Runtime 自报字段不能改绑；binding 服务凭据与 MCP token 不互换，API/Worker
-不领取 token 来代调用。原主体与 Agent、Consumer/实例、issuer/resource、凭据修订/期限
+不领取 token 来代调用。原主体与 Agent、获准 Consumer、issuer/resource、凭据来源/期限
 或当前授权无法确认时拒绝，不回退到另一 token、Owner、责任人或共享部署凭据。
+Direct PAT 的服务端实例绑定与逐次验证由 Connection 按 HLD §5.2 负责；客户端安装引用
+与服务端 ConsumerInstance 事实的区别见 §13.5.5，不把读取未公开的实例 ID 作为通用前置。
 
 标准 MCP/token 接入不以私有 FD3、native callback 或 DPoP 为通用前置。选用额外证明的
 profile 必须明确配置、两端可互操作且保持自身门禁；不允许凭兼容开关跳过必需证明。
@@ -2107,7 +2109,8 @@ unknown WRITE 不得让原生继续推理。缺少任一门禁时能力保持关
 
 **受保护输入。** Host 从当前经过验证且已持久接受的原执行解析 principal、Agent、
 Conversation、Sandbox、generation 与授权修订，再定位获准安装的 SecretRef。安装的
-Consumer/实例、issuer/resource、凭据修订与期限必须与该原执行及完整 profile 一致。
+获准 Consumer、安装绑定、issuer/resource、凭据修订与期限必须与该原执行及完整 profile 一致；
+Direct PAT 的安装绑定使用 §13.5.5 定义的客户端引用，不据此宣称服务端实例已独立核实。
 callback、请求字段、模型/工具参数和 token 名称不能选择安装；SecretRef 或安装映射缺失
 时不可用，不尝试其他 token。领取、刷新与撤销只消费 Connection 实际发布且匹配部署的
 合同，不发明 identity、binder 或 record-query 路由，不把 metadata 声明当作服务端身份验证。
@@ -2162,15 +2165,17 @@ Runtime HLD §11.2 的最终产物、主体/Agent、秘密保护、撤销、确�
 
 本节定义 §13.5.4 客户端的安装输入交付，不定义 Connection 签发、身份或 Grant 的第二权威。
 初始文件 profile 复用 Host 现有专用 `standard-mcp-input/bindings` 与 `materials` 布局。
-供应方是部署批准的 SecretRef 供应边界：只有在 Connection 原主体的独立确认、安装/实例及
-当前凭据引用能按实际发布的合同核实时，才提供对应原 principal＋Agent 的安装输入。
+供应方是部署批准的 SecretRef 供应边界：只有在 Connection 原主体的独立确认、本次领取或
+既有获准 export 来源及当前凭据引用能按实际发布的合同核实时，才提供对应原 principal＋Agent
+的安装输入。Direct PAT 的实际签发与主体/Consumer 绑定按下文核对，不要求服务端额外返回
+其内部 ConsumerInstance ID；这不免除服务端对实例、期限、撤销与当前授权的逐次验证。
 部署或文件声明不能替代服务端身份、当前授权及合法领取。缺少匹配部署的服务合同或供应
 引用时，该安装保持不可用；客户端不猜 binder、identity 或原记录路由。
 
 **供应与接收。** 可信部署配置固定输入供应引用与修订，以及完整 Consumer profile 的
 fingerprint/source；请求、callback、模型、工具、Token 名称和 Owner 不能选择或覆盖它们。
 输入包含非敏感安装 metadata 和分离的 material 引用，不在同一普通 JSON/config 中嵌入
-Token。metadata 使用已有客户端字段：principal、Agent、service/Consumer/instance、
+Token。metadata 使用已有客户端字段：principal、Agent、service/Consumer、安装绑定引用、
 issuer/resource/audience、profile/source、credentialRef/revision/expiry 与获准服务合同引用。
 Runtime 的当前原执行仍须在使用前独立解析并匹配这些字段，不从安装 descriptor 取得业务
 执行权限。API/Worker/Web 交付非敏感配置，不读取、解密或代转客户端秘密；一次性
@@ -2186,12 +2191,54 @@ Token，按现有客户端约束验证，不 trim 或改写。供应引用及修
 分别核对，不能把一个当成另一个。安装时不伪造 Conversation、generation 或 Execution
 来补 `scope`；它只在当前 reader 从原持久执行解析后补入并重验。
 
-初始供应形式限定部署批准的 Runtime 私有文件 SecretRef export，不新增 Kubernetes Secret
+**Direct PAT 的引用来源。** 已发布 USER/PAT binding 路线由原受保护 Host 创建 binding，
+原用户在 Connection 独立确认后，由同一 Consumer 服务身份领取。Host 必须将同次 claim 的
+`issued.account.id` 与原用户的批准 Connection Principal 映射精确比较，将 `issued.consumerId`
+与获准实际 Consumer ID 精确比较，并校验 `tokenId`、Token 及 `expiresAt`；创建时的原 binding、
+Agent、安装授权、配置 ref/revision、issuer 与完整 profile/source 也须仍然一致。claim 不能反向
+自证两系统主体相同；不从邮箱、显示名、Owner 或 Token 名称建立映射。批准映射缺失或冲突时拒绝。
+
+本路线保留上述版本 `1` 的字段及 reader 校验；引用语义由获准供应合同明确，不能只凭文件中
+的前缀启用路线。当前 `instanceRef` 是客户端安装绑定引用，不是可提交给 Connection 的身份或
+授权证明。新的 Host PAT 生产者使用以下来源，不要求 Connection 返回完整安装 descriptor：
+
+| 字段 | Direct PAT 来源与含义 |
+| --- | --- |
+| `instanceRef` | `host-pat-binding:` 加原 `bindingId` UTF-8 字节的 SHA-256 小写十六进制值；只关联本地安装，不代表 ConsumerInstance ID，也不携带原始 binding ID |
+| `credentialRef` | 同次成功 claim 返回的真实 `issued.tokenId`；不是服务端实例或 OAuth client ID |
+| `credentialRevision` | Host 受保护记录中的不可变材料发布修订；不是 Connection 的 credential/instance revision |
+| `expiresAt` | 同次 claim 的真实到期时间转换为现有毫秒时间戳，不延长有效期 |
+
+Host 在自身专用受保护安装记录中绑定实际 account/Consumer/token 引用、原 binding、原用户＋Agent、
+安装授权及配置修订；原始 binding ID 不随 operation fact、journal 或普通平台接口输出，
+固定 PAT callback 的瞬时转交仅按 §13.5.6 的窄例外处理。安装记录、
+本地修订和上述 hash 都不是 Connection 授权或远端调用关联的第二权威。服务端实例 ID/revision
+未公开时保持未知，不从 tokenId、本地随机值或 binding 引用推导；服务端仍从当前 PAT 解析和
+验证真实实例。后续若取得真实服务端引用，按其发布合同独立核实，不重解释已有本地引用。
+
+旧版本 `1` export 的引用继续按其原批准来源校验，不批量改写历史 journal，也不将历史字段
+重新声明为已核实的远端实例。此修订只为新 Host PAT 生产者明确引用来源，不改 Consumer profile
+版本、既有文件字段、原业务身份或原生 Connection 协议；其他路线不能以本地引用替代各自必需的
+服务端证明。实际字段集合或格式变化仍须版本化，不作静默兼容。
+
+`contract.ref/revision`、`serverInfo`、工具及结果 schema 仍由部署批准。客户端维护方可以依据
+固定 Connection 源码/产物及标准 MCP 协议维护并评审兼容合同，不要求服务端另发完整 descriptor。
+初始化/发现只核对实际服务与获准兼容范围，不能补造主体或实例证明；宽松 schema、MCP success
+或本地引用不能把未知副作用判为成功，原调用关联和 unknown 规则仍按 §13.5.4 分别验证。
+
+供应形式继续限定部署批准的 Runtime 私有文件 SecretRef export，不新增 Kubernetes Secret
 取值、HTTP Token 上传、原生 header helper、MCP 代理或通用秘密服务。供应路径、临时材料
 与目标均位于现有 native/tool 共享拒绝树的固定非 Conversation 子目录，禁止路径别名、
 任意 URL/外部路径和请求选择。输入文件保持 Host 专用 UID、私有目录与有界、非符号/硬链接
 材料；这些文件条件只是准入条件，不签收隔离。供应方须在已批准的秘密边界交付 export，
 不能先在模型、工具或普通 staging 文件暴露秘密再声明安装安全。
+
+Direct PAT 的生产供应者为同一受保护 `createProtectedRuntimeOAuthClient` 的 claim 分支：
+完成上述核对并持久保存真实领取结果后，才按本节规则产生获准私有 export，继续交给
+`receiveProtectedStandardMcpInstallation` 和原 reader。供应引用/修订、路径与重新装配目标由
+部署固定，不能由 callback 或请求选择；不得直接把 `.access` 文件存在、`awaiting_verification`
+或平台确认当作发布完成。实际 publisher、调用入口与生产接收链须沿 #851 评审、实现和验证；
+本合同合入不表示该链已交付或允许读取真实 Token。
 
 Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 的真实 Linux/进程保护。
 原生启动与工具文件边界仍按同节在最终产物验证；不更改节点政策、不提升权限、不接受
@@ -2368,15 +2415,18 @@ signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序�
 callback。Worker 收到合法 begin 响应后，把 state 的 hash、authorizationId、原 scope、
 当前 Runtime HTTPS 目标及期限关联到同一 Platform 安装事务，再开放登录入口；未保存映射
 时不向浏览器返回 URL。原事务唯一约束与 CAS 保证同一 state 只定位一个当前安装且只消费
-一次。回跳只接受标准 code/state/iss 或协议 error，拒绝额外、重复和矛盾参数；目标、主体、
-Consumer、安装和任意 redirect 参数均不能来自回跳。与 Connection 原流程一致，回跳不
+一次。回跳格式由获准配置固定：标准 OAuth 只接受 code/state/iss 或协议 error；PAT binding
+只接受唯一的 `binding_id`。两种格式不混用，拒绝额外、重复和矛盾参数；目标、主体、Consumer、
+安装和任意 redirect 参数均不能来自回跳。PAT 原 ID 只在固定 callback 窄通道和 Host 私有事务中
+使用，Platform 持久定位与事实投影只保留其 hash。与 Connection 原流程一致，回跳不
 依赖浏览器 Cookie、CSRF 或 Origin，也不创建用户会话或自动确认；独立用户确认仍走上述
 正常门禁。schema、体积、期限、issuer、配置及当前原执行/Pod 都须在转交前匹配。
 
-API 在有界请求内向原目标的 `/internal/runtime/oauth/v1/callback` 瞬时转交一次；授权码
-只存在于该窄通道和受保护 Runtime，不进入 Platform DB、outbox、journal、Trace、日志或
-错误。state 单次消费须先提交，转交失响应/取消/崩溃保留 delivery unknown；不靠 HTTP
-重试、重定向、队列或重开事务再次提交 code。响应和浏览器跳转仅含原安装非敏感引用与
+API 在有界请求内向原目标的 `/internal/runtime/oauth/v1/callback` 瞬时转交一次；标准 OAuth
+授权码或 PAT 原 binding ID 只存在于该窄通道和受保护 Runtime，不进入 Platform DB、outbox、
+journal、Trace、日志或错误。state/binding hash 的定位须先提交单次消费，转交失响应/取消/崩溃
+保留 delivery unknown；不靠 HTTP 重试、重定向、队列或重开事务再次提交 code 或 binding ID。
+响应和浏览器跳转仅含原安装非敏感引用与
 受限状态，采用 no-store/no-referrer；部署入口必须排除 callback query 的访问日志与追踪。
 
 回跳使用独立 callback-only 服务认证，其部署 SecretRef 与 Worker business/installation
@@ -2400,10 +2450,14 @@ Token 主体、Consumer/实例、generation、期限和授权。供应方仅消�
 核对 §13.5.3 要求的原主体/安装映射；标准 OAuth response 未提供的 identity/instance 字段
 不能从邮箱、显示名、Token 名称、local state、JWT 猜测或 metadata 声明补造。缺少可信映射
 时，即使领取成功也不发布可用安装，不调用业务工具；不得为了补证查询猜测的私有接口。
+已有 USER/PAT binding claim 按 §13.5.5 的真实 account/Consumer/token 与本地安装引用核对；
+不把标准 OAuth 未解决的映射要求或候选实例查询接口追加为该 PAT 路线的前置，也不自动回退路线。
 
 有效凭据通过 §13.5.5 的同一私有 export/接收器交付，access Token 与 metadata 分离；
 refresh Token/verifier 只保留在同一受保护客户端的专用材料中，不进入 reader 的普通 metadata。
 安装/凭据引用区分本地事务引用与 Connection 已确认引用，不以本地随机 ID 冒充服务端实例。
+Direct PAT 的类型化引用与旧 export 兼容边界见 §13.5.5，取舍见
+[ADR 0040](../adr/0040-separate-direct-pat-installation-from-server-instance.md)。
 发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。初版仍采用受控
 重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
 热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。

@@ -873,8 +873,9 @@ Runtime 内接收不替代合法领取；配置缺失与已配置但不可用分
 快照保持。供应未知时不选择普通 Secret/env、原生 helper 或 Worker 解密作为替代。
 标准 OAuth 的合法领取、回跳转交、原主体确认、发布与不确定性只遵循工程 Spec
 [§13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
-API/Worker/Web 不取得 Token；OAuth 事务来源不代替原主体/实例映射与 Connection 当前授权，
-供应合同不足时不启用，PAT 路线不被 OAuth 回跳或兑换要求覆盖。
+API/Worker/Web 不取得 Token；OAuth 事务来源不代替原主体与安装来源的可信映射及 Connection 当前授权。
+Direct PAT 的客户端安装引用与服务端实例事实按 §13.5.5 区分；供应合同不足时不启用，
+PAT 路线不被 OAuth 回跳、兑换或未公开实例查询要求覆盖。
 
 平台自有的安装确认、非敏感命令交付和 callback 定位沿同一 §13.5.6 实施：Worker 使用
 当前原 claim，不为登录创建或延长 Turn；Host 的 `createRuntimeOAuthApp` 为

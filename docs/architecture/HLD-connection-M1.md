@@ -74,6 +74,10 @@ Connection PAT 只对经过注册和批准的 Consumer 开放。每个 PAT 必�
 
 Agent PAT binding 复用获准 Consumer 的固定 HTTPS callback 与服务认证。创建 binding 时绑定原授权事务，用户在 Connection 中确认当前 Principal；callback 只携带不透明 binding 引用，不在 URL 返回 PAT。只有相同 Consumer 的受认证客户端可单次领取，跨 Consumer、重复、过期或取消的领取拒绝；服务认证凭据不能作为 MCP PAT 使用。PAT 与 TOKEN ConsumerInstance 单独撤销，不影响其他实例，也不删除 Provider Credential。客户端将该绑定与自己的可信主体/Agent 消费用途对应，细则见工程 Spec §13.5.3。
 
+Direct PAT 客户端的安装引用与服务端实例事实按
+[工程 Spec §13.5.5](SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)
+区分；客户端不必先读取未公开的内部实例 ID，Connection 的签发绑定与逐次实例验证要求不变。
+
 ## 6. Catalog 与授权
 
 Catalog 是只读投影，只包含 Provider、immutable ActionVersion、输入/输出 Schema、effect、required scope 和发布状态。Catalog 不包含 Principal、Connection、Grant、Credential、调用或审计。
