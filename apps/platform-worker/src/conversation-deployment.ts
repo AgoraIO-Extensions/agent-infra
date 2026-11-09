@@ -173,12 +173,15 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (
 				!target ||
 				typeof value.clientId !== "string" ||
-				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.clientId) ||
+				value.clientId.length === 0 ||
 				value.profileFingerprint !== target.configFingerprint ||
 				!source ||
 				typeof source !== "object" ||
 				Array.isArray(source) ||
-				JSON.stringify(source) !== JSON.stringify(target.source)
+				typeof (source as Record<string, unknown>).ref !== "string" ||
+				typeof (source as Record<string, unknown>).revision !== "string" ||
+				(source as Record<string, unknown>).ref !== target.source.ref ||
+				(source as Record<string, unknown>).revision !== target.source.revision
 			)
 				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			return {

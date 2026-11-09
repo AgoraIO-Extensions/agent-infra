@@ -108,11 +108,17 @@ export function createRuntimeConnectionConsumerSnapshotV1(
 			throw new Error();
 		if (oauthClientBinding !== undefined) {
 			const binding = oauthClientBinding as Record<string, unknown>;
+			const source = binding.source;
 			if (
 				typeof binding.clientId !== "string" ||
-				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(binding.clientId) ||
+				binding.clientId.length === 0 ||
 				binding.profileFingerprint !== approved.configFingerprint ||
-				JSON.stringify(binding.source) !== JSON.stringify(approved.source)
+				!source ||
+				typeof source !== "object" ||
+				Array.isArray(source) ||
+				(source as Record<string, unknown>).ref !== approved.source.ref ||
+				(source as Record<string, unknown>).revision !==
+					approved.source.revision
 			)
 				throw new Error();
 		}

@@ -108,11 +108,15 @@ export function createConnectionConsumerDcrResolverV1(
 			);
 			if (binding !== undefined) {
 				if (
-					!agentIdPattern.test(binding.clientId) ||
+					typeof binding.clientId !== "string" ||
+					binding.clientId.length === 0 ||
 					binding.callbackUrl !== callbackUrl ||
 					binding.profileFingerprint !== profileFingerprint ||
-					JSON.stringify(binding.source) !==
-						JSON.stringify(options.approvalSource) ||
+					!binding.source ||
+					typeof binding.source !== "object" ||
+					Array.isArray(binding.source) ||
+					binding.source.ref !== options.approvalSource.ref ||
+					binding.source.revision !== options.approvalSource.revision ||
 					(expectedClientId !== undefined &&
 						binding.clientId !== expectedClientId)
 				)

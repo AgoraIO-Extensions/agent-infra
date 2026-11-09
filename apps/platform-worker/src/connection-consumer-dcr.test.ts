@@ -173,12 +173,17 @@ describe("per-Agent Connection DCR resolver", () => {
 		});
 		const second = await createConnectionConsumerDcrResolverV1({
 			...options,
+			loadOAuthClientBindingForAgent: async () => ({
+				...(persisted as ConnectionConsumerOAuthClientBindingV1),
+				clientId: "opaque/client:id",
+				source: { revision: "r1", ref: "deployment" },
+			}),
 			fetch: async () => {
 				throw new Error("registration must not repeat");
 			},
 		})(new AbortController().signal);
 		expect(second["agent-a"]?.oauthClientBinding.clientId).toBe(
-			"oauth-client-random",
+			"opaque/client:id",
 		);
 		expect(registrations).toBe(1);
 	});
