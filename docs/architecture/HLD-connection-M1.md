@@ -4,7 +4,7 @@
 
 本文定义 Connection M1 的独立 Direct MCP/API GitHub Pilot。产品行为以 [Connection M1 产品需求](../prd/PRD-connection-M1.md) 和 [Agent 平台 M1 产品需求](../prd/PRD-agent-platform-M1.md) 为准；跨系统工程边界以 [M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) 为准。
 
-Connection 是独立系统、独立部署单元、独立数据库和独立授权权威。Agent Platform 是一个 Consumer，不是 Connection 的代理、issuer、Grant store、Provider executor 或审计权威。旧 Platform Tool Gateway、delegated assertion 和 Platform policy fence 不属于当前架构。
+Connection 是独立系统、独立部署单元、独立数据库和独立授权权威。Agent Platform 通过各 Agent 的 Consumer 使用 Connection，不是其代理、issuer、Grant store、Provider executor 或审计权威。旧 Platform Tool Gateway、delegated assertion 和 Platform policy fence 不属于当前架构。
 
 ## 2. 设计目标
 
@@ -29,9 +29,10 @@ flowchart LR
     K --> GH[GitHub]
     AR[Agent Platform MCP Client] --> CA
     AP[Agent Platform] --> PD[(Platform DB)]
+    AP -->|受限 Consumer 登记与原操作核实| CA
 ```
 
-Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
+Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、登记关联与交付事实、Execution、工具事实和受信采集得到的关联引用。
 
 Runtime callback/client 准备层的范围见 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
 其 bootstrap/provenance 投影和内部 slot 不替代本 HLD 的 token 绑定与服务端校验；
@@ -64,7 +65,13 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 ### 5.2 Consumer 与 Instance
 
-每个 Direct MCP 产品独立注册 Consumer。Connection 为每次 OAuth client installation 或 PAT binding 创建独立 ConsumerInstance，并将签发的凭据绑定到该实例与当前 Principal；调用方不能选择已有的其他实例。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；服务端保存并在每次调用校验该 generation，generation 变化立即使旧 token 失效。定义 Actor 的 Consumer 还须由 token 或受信服务端 session 解析唯一 Actor；无法解析时拒绝，调用方不得自报 Actor。只有选用 sender constraint 的 profile 另验安装公钥持有证明，规则见第 3 节。
+Direct MCP Consumer 按获准客户端边界独立注册。Connection 为每次 OAuth client installation 或 PAT binding 创建独立 ConsumerInstance，并将签发的凭据绑定到该实例与当前 Principal；调用方不能选择已有的其他实例。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；服务端保存并在每次调用校验该 generation，generation 变化立即使旧 token 失效。定义 Actor 的 Consumer 还须由 token 或受信服务端 session 解析唯一 Actor；无法解析时拒绝，调用方不得自报 Actor。只有选用 sender constraint 的 profile 另验安装公钥持有证明，规则见第 3 节。
+
+Platform 按 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-创建时自动关联与用户-oauth)
+为每个正式 Agent 自动登记专用 Consumer。受限机器登记、真实回执、长期关联与逐用户/安装的
+OAuth client 准备只在
+[工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-自动登记与-oauth-安装准备)
+定义；登记认证不成为 MCP 或用户 Grant 权限，Connection 的当前身份、实例与授权检查不变。
 
 Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
@@ -73,10 +80,6 @@ Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` �
 Connection PAT 只对经过注册和批准的 Consumer 开放。每个 PAT 必须绑定唯一 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；定义 Actor 的 Consumer 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。PAT 仅以 hash 持久化，支持单独轮换和撤销，并执行与 OAuth access token 相同的 Principal/Consumer/Instance/Actor/Grant/Action 检查；PAT 不包含 Provider Credential。
 
 Agent PAT binding 复用获准 Consumer 的固定 HTTPS callback 与服务认证。创建 binding 时绑定原授权事务，用户在 Connection 中确认当前 Principal；callback 只携带不透明 binding 引用，不在 URL 返回 PAT。只有相同 Consumer 的受认证客户端可单次领取，跨 Consumer、重复、过期或取消的领取拒绝；服务认证凭据不能作为 MCP PAT 使用。PAT 与 TOKEN ConsumerInstance 单独撤销，不影响其他实例，也不删除 Provider Credential。客户端将该绑定与自己的可信主体/Agent 消费用途对应，细则见工程 Spec §13.5.3。
-
-Direct PAT 客户端的安装引用与服务端实例事实按
-[工程 Spec §13.5.5](SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)
-区分；客户端不必先读取未公开的内部实例 ID，Connection 的签发绑定与逐次实例验证要求不变。
 
 ## 6. Catalog 与授权
 
