@@ -6,6 +6,24 @@ import {
 
 let configured: StoreQueryObservabilityOptions = {};
 
+/**
+ * #4048：每个 Store 有独立连接池。未显式设置 `idle_timeout` 时空闲 30 秒回收连接，
+ * 避免多个副本的空闲连接占满数据库；部署仍可用 postgres.js 原生的 PGIDLE_TIMEOUT 覆盖。
+ */
+export const platformPostgresIdleTimeoutSeconds = 30;
+
+export function withPlatformPoolDefaults<
+	T extends rawPostgres.Options<Record<string, rawPostgres.PostgresType>>,
+>(options?: T, environment: NodeJS.ProcessEnv = process.env): T {
+	const value = { ...options } as T;
+	if (
+		value.idle_timeout === undefined &&
+		environment.PGIDLE_TIMEOUT === undefined
+	)
+		value.idle_timeout = platformPostgresIdleTimeoutSeconds;
+	return value;
+}
+
 export function configureStoreQueryObservability(
 	options: StoreQueryObservabilityOptions | undefined,
 ): void {
@@ -15,7 +33,12 @@ export function configureStoreQueryObservability(
 function observedPostgres(
 	...args: Parameters<typeof rawPostgres>
 ): ReturnType<typeof rawPostgres> {
-	return observePostgresClient(rawPostgres(...args), configured);
+	const [first, second] = args;
+	const client =
+		typeof first === "string"
+			? rawPostgres(first, withPlatformPoolDefaults(second))
+			: rawPostgres(withPlatformPoolDefaults(first));
+	return observePostgresClient(client, configured);
 }
 
 namespace observedPostgres {

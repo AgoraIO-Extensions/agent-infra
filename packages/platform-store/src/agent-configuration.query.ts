@@ -28,6 +28,7 @@ import {
 } from "./agent-configuration.shared.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readAgentManagementState } from "./agent-management.js";
+import { withPlatformPoolDefaults } from "./observed-postgres.js";
 import {
 	agentAvailability,
 	agentConfigurationRevisions,
@@ -143,7 +144,10 @@ export class PostgresAgentConfigurationQueryV1 {
 	readonly #database;
 
 	constructor(options: PostgresAgentConfigurationOptionsV1) {
-		this.#client = postgres(options.databaseUrl, { max: 10 });
+		this.#client = postgres(
+			options.databaseUrl,
+			withPlatformPoolDefaults({ max: 10 }),
+		);
 		this.#database = drizzle(this.#client);
 	}
 
