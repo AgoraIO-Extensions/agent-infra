@@ -40,8 +40,30 @@ spec:
         {{- include "ack.securityContext" . | nindent 8 }}
       {{- include "ack.scheduling" .Values.scheduling.api | nindent 6 }}
       {{- $skillHub := .Values.skillHub | default dict }}
-      {{- if $skillHub.enabled }}
+      {{- $platformApi := .Values.platformApi | default dict }}
+      {{- $callbackAuth := $platformApi.connectionCallbackAuthSecretRef }}
+      {{- if or $skillHub.enabled $callbackAuth }}
       initContainers:
+        {{- if $callbackAuth }}
+        # Secret projections are root-owned; the forwarder requires UID 1000/0600.
+        - name: connection-callback-auth
+          image: {{ .Values.images.api | quote }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              cp "$1" "$2"
+              chmod 0600 "$2"
+            - callback-auth
+            - /callback-source/callback.auth
+            - /var/run/agent-infra/connection-callback-auth/callback.auth
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          resources: {{ toYaml .Values.resources.api | nindent 12 }}
+          volumeMounts:
+            - {name: connection-callback-auth-source, mountPath: /callback-source, readOnly: true}
+            - {name: connection-callback-auth, mountPath: /var/run/agent-infra/connection-callback-auth}
+        {{- end }}
+        {{- if $skillHub.enabled }}
         - name: skill-scanner-runtime
           image: {{ ($skillHub.scannerImage | default .Values.images.api) | quote }}
           command: ["/bin/sh", "-ec"]
@@ -72,6 +94,7 @@ spec:
           resources: {{ toYaml .Values.resources.api | nindent 12 }}
           volumeMounts:
             - {name: skill-scanner, mountPath: /scanner}
+        {{- end }}
       {{- end }}
       containers:
         - name: platform-api
@@ -98,6 +121,12 @@ spec:
             - {name: AGENT_INFRA_ENCRYPTION_PUBLIC_KEY_FILE, value: /var/run/agent-infra/encryption-public-key/public.pem}
             - {name: AGENT_INFRA_ENCRYPTION_KEY_VERSION, value: {{ .Values.encryption.keyVersion | quote }} }
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/tls.crt}
+            {{- with $platformApi.connectionWebPath }}
+            - {name: AGENT_INFRA_CONNECTION_WEB_PATH, value: {{ . | quote }}}
+            {{- end }}
+            {{- if $callbackAuth }}
+            - {name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE, value: /var/run/agent-infra/connection-callback-auth/callback.auth}
+            {{- end }}
             {{- if .Values.files.enabled }}
             - {name: PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE, value: {{ .Values.files.configurationFile | quote }} }
             {{- end }}
@@ -107,6 +136,9 @@ spec:
             - {name: encryption-public-key, mountPath: /var/run/agent-infra/encryption-public-key, readOnly: true}
             - {name: directory-ca, mountPath: /var/run/agent-infra/directory-ca, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+            {{- if $callbackAuth }}
+            - {name: connection-callback-auth, mountPath: /var/run/agent-infra/connection-callback-auth, readOnly: true}
+            {{- end }}
             {{- if $skillHub.enabled }}
             - {name: skill-scanner, mountPath: /opt/agent-infra/skill-scanner, readOnly: true}
             {{- end }}
@@ -119,6 +151,14 @@ spec:
         - name: directory-ca
           secret: {secretName: {{ .Values.secrets.directoryCa }}, items: [{key: tls.crt, path: tls.crt}]}
         - {name: tmp, emptyDir: {}}
+        {{- if $callbackAuth }}
+        - name: connection-callback-auth-source
+          secret:
+            secretName: {{ $callbackAuth.name }}
+            defaultMode: 288
+            items: [{key: {{ $callbackAuth.key | quote }}, path: callback.auth}]
+        - {name: connection-callback-auth, emptyDir: {medium: Memory, sizeLimit: 16Ki}}
+        {{- end }}
         {{- if $skillHub.enabled }}
         - {name: skill-scanner, emptyDir: {}}
         {{- end }}

@@ -28,6 +28,40 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 先部署支持不可变镜像 `Never` 拉取观测的 Worker，再启用准入。发布计划、运维机 Kubernetes 身份、
 完整容器集合与失败门禁见[镜像缓存](IMAGE-CACHE.md)。该配置不改变现有 namespace/源码归属。
 
+## Connection Direct 接入
+
+ACK 的 Connection 接入复用[工程 Spec §13.5.3](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1353-secretref权威与交付边界)
+的 Direct 默认方案和[现有安装流程](../README.md#platform-connection-安装确认)。
+每个原用户或应用与 Agent 组合使用独立 token，由受保护 RuntimeHost 直接调用 MCP；
+不以 Delegated 内部接口或自动创建 Consumer 为已有获准 Consumer 安装的前置。
+
+网站入口通过 `platformApi.connectionWebPath` 指定已批准的控制台绝对路径，例如
+`/connection/connections`；Chart 将其投射为 API 的 `AGENT_INFRA_CONNECTION_WEB_PATH`。
+origin 仍取自批准的 Consumer profile，路径不能包含外部 origin、query 或相对导航。
+默认空值不投射；路径和完整 profile 均通过服务端校验后，Web 才取得可用入口。
+若受信配置模块已导出 Consumer profile/approval，模块还须导出
+`connectionWebPath = process.env.AGENT_INFRA_CONNECTION_WEB_PATH`，才能消费该投射；
+模块的显式配置仍优先，不以环境变量覆盖。
+
+部署方先准备对应真实 Agent 的注册回执、API/Worker 安装配置、稳定主体映射和 Host 私有供应。
+Consumer 注册使用实际返回的内部 Consumer ID，不能用业务 Agent ID 或 OAuth client ID 替代。
+用户仍须在 Connection 独立确认账号绑定和 Action 授权。
+PAT claim 返回的 `tokenId` 不是 ConsumerInstance ID；领取成功后若缺少 reader 所需的可信
+安装 metadata，继续保持 `awaiting_verification`，不能伪造 descriptor 或启用模板。
+Host 的进程保护和最终安装验证遵循[Host 接收边界](../../apps/agent-runtime-host/README.md#oauth-callback-内部认证)。
+
+ACK Chart 可通过 `platformApi.connectionCallbackAuthSecretRef: { name, key }` 引用已有的
+callback-only Secret，字段与主 Helm Chart 相同。Chart 用 API 镜像的非 root init container
+将 Secret 投影复制到内存卷，生成 API UID 持有的 `0600` 普通文件，供现有 callback forwarder
+读取。API 仅以只读方式挂载该文件；原始 Secret 只挂载给 initializer。省略引用时不增加安装
+callback 的环境变量、volume 或 initializer。更新该 Secret 后须按受控部署流程重新 rollout。
+
+该 Secret 只用于平台向 Host 转交原安装的 callback，不保存 Connection 服务 secret、用户
+PAT 或 Worker 业务认证凭据，也不代替 Host callback HTTPS、安装绑定或当前授权检查。
+完成配置后，先验一个真实 Agent 的原用户确认、Host 领取、reader 安装和获准 READ，再按
+既有验收范围覆盖其他主体、Agent、模板、撤销和 unknown WRITE 不重放；配置或单测通过
+不能作为真实 MCP/Provider 验收。
+
 ## 搬迁私有输入包
 
 在另一台机器检出已发布镜像对应的源码 commit，保持 checkout 干净，并安装 Node 24、pnpm、

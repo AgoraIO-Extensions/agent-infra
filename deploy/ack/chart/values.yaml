@@ -32,6 +32,11 @@ secrets:
   workerDirectoryRead: agent-infra-worker-directory-read
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
+platformApi:
+  # Approved console path; the origin remains in the Consumer profile.
+  connectionWebPath: ""
+  # Optional existing callback-only Secret; never a Connection PAT/service secret.
+  # connectionCallbackAuthSecretRef: {name: approved-callback-auth, key: callback.auth}
 files:
   enabled: false
   configurationFile: /app/deployment/file-deployment.json
