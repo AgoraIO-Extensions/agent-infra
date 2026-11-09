@@ -62,6 +62,10 @@ import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { SseResourceTracker } from "../sse-resource-tracker.js";
 import {
+	createConcurrencyLimit,
+	listProjectionConcurrency,
+} from "./bounded-concurrency.js";
+import {
 	HttpProtocolError,
 	parseIdempotencyKey,
 	parseJson,
@@ -1088,18 +1092,21 @@ export function registerConversationRoutes(
 				metadata.traceId,
 			);
 			const useCase = dependencies.commands(identity);
+			const limit = createConcurrencyLimit(listProjectionConcurrency);
 			const items = await Promise.all(
-				result.items.map(async (item) => {
-					const effective = await effectiveConversation(
-						useCase,
-						item.conversationId,
-						metadata.traceId,
-					);
-					return project(
-						() => conversationProjection(item, effective),
-						metadata.traceId,
-					);
-				}),
+				result.items.map((item) =>
+					limit(async () => {
+						const effective = await effectiveConversation(
+							useCase,
+							item.conversationId,
+							metadata.traceId,
+						);
+						return project(
+							() => conversationProjection(item, effective),
+							metadata.traceId,
+						);
+					}),
+				),
 			);
 			return context.json(
 				ConversationPageV1Schema.parse({

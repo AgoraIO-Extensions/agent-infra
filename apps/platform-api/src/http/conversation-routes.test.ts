@@ -908,6 +908,56 @@ describe("Conversation HTTP routes", () => {
 		}
 	});
 
+	// #4048：一页会话逐个读取当前状态；同时进行的读取不超过 4 个，结果顺序不变。
+	it("reads a conversation page with at most four concurrent reads", async () => {
+		const input = dependencies();
+		const items = Array.from({ length: 10 }, (_, index) => ({
+			...conversation,
+			conversationId: `conversation-${index + 1}`,
+		}));
+		vi.mocked(input.query.list).mockResolvedValue({ items, nextCursor: null });
+		const command = input.commands(identity);
+		const found = (await command.readConversation({
+			schemaVersion: 1,
+			conversationId: "conversation-1",
+		})) as { outcome: "found"; result: { conversation: object } };
+		let active = 0;
+		let peak = 0;
+		const readConversation = vi.fn(
+			async (request: { conversationId: string }) => {
+				active++;
+				peak = Math.max(peak, active);
+				await delay(5);
+				active--;
+				return {
+					...found,
+					result: {
+						...found.result,
+						conversation: {
+							...found.result.conversation,
+							conversationId: request.conversationId,
+						},
+					},
+				};
+			},
+		);
+		command.readConversation = readConversation as never;
+
+		const response = await testApp(input).app.request(
+			"/api/v1/agents/agent-1/conversations",
+		);
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			items: { conversationId: string }[];
+		};
+		expect(body.items.map(({ conversationId }) => conversationId)).toEqual(
+			items.map(({ conversationId }) => conversationId),
+		);
+		expect(readConversation).toHaveBeenCalledTimes(10);
+		expect(peak).toBe(4);
+	});
+
 	it("returns actor-scoped history, timeline, and execution details", async () => {
 		const { app, dependencies: input } = testApp();
 		const list = await app.request("/api/v1/agents/agent-1/conversations");
