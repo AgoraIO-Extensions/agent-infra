@@ -11,7 +11,7 @@ import {
 	validateRuntimePinnedExecutionKeyScopeV4,
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
-
+import { type RuntimeHostError, runtimeHostErrorDiagnostic } from "./errors.js";
 import {
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV4,
@@ -156,6 +156,67 @@ function privateFieldFor(
 }
 
 describe("Runtime V4 Grant trust boundary", () => {
+	it("preserves only a bounded internal denial stage", async () => {
+		const accepted = signed();
+		const [header, payload, signature] = accepted.grant.token.split(".");
+		if (!header || !payload || !signature) throw new Error("Invalid fixture");
+		const forged = {
+			...accepted,
+			grant: {
+				...accepted.grant,
+				token: `${header}.${payload}.${
+					signature[0] === "A" ? "B" : "A"
+				}${signature.slice(1)}`,
+			},
+		};
+		await expect(validateGrant(forged)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+			httpStatus: 403,
+			diagnostic: "runtime-v4-grant-signature",
+		});
+		const privateKeyField = privateFieldFor(accepted);
+		let error: unknown;
+		try {
+			await validateKeyDelivery({
+				businessRequest: accepted,
+				privateKeyField: {
+					...privateKeyField,
+					context: { ...privateKeyField.context, grantId: "other-grant" },
+				},
+			});
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+			diagnostic: "runtime-v4-private-key",
+		});
+		expect(runtimeHostErrorDiagnostic(error as RuntimeHostError)).toBe(
+			"runtime-v4-private-key",
+		);
+	});
+
+	it("keeps each V4 validation boundary distinguishable without exposing input", async () => {
+		const accepted = signed();
+		await expect(validateGrant({})).rejects.toMatchObject({
+			diagnostic: "runtime-v4-request-schema",
+		});
+		expect(() =>
+			verifyGrant({ ...accepted.grant, schemaVersion: 3 } as never),
+		).toThrowError(
+			expect.objectContaining({ diagnostic: "runtime-v4-grant-schema" }),
+		);
+		await expect(
+			validateGrant(signed({ expiresAt: now + 30_001 })),
+		).rejects.toMatchObject({ diagnostic: "runtime-v4-claims" });
+		await expect(
+			validateGrant(signed({ executionSource: "platform-api" })),
+		).rejects.toMatchObject({ diagnostic: "runtime-v4-business-binding" });
+		await expect(validateKeyDelivery({} as never)).rejects.toMatchObject({
+			diagnostic: "runtime-v4-transport-schema",
+		});
+	});
+
 	it("accepts a private Key only after the signed submit and supplement bindings", async () => {
 		const submitted = signed();
 		await expect(
