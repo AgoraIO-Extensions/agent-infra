@@ -407,7 +407,7 @@ jobs:
       - name: Check formatting and lint
         run: pnpm check
 
-      - name: Verify ACK callback deployment
+      - name: Verify ACK Connection deployment
         run: |
           helm version --short
           node --test tests/ack-connection-callback.test.mjs tests/ack-worker-internal-service.test.mjs

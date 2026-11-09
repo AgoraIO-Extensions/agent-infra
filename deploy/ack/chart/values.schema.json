@@ -23,6 +23,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "connectionWebPath": {"type": "string", "maxLength": 2048, "pattern": "^(|/|/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*/?)$"},
         "connectionCallbackAuthSecretRef": {
           "type": "object",
           "additionalProperties": false,

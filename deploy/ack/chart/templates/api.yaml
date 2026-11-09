@@ -121,6 +121,9 @@ spec:
             - {name: AGENT_INFRA_ENCRYPTION_PUBLIC_KEY_FILE, value: /var/run/agent-infra/encryption-public-key/public.pem}
             - {name: AGENT_INFRA_ENCRYPTION_KEY_VERSION, value: {{ .Values.encryption.keyVersion | quote }} }
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/tls.crt}
+            {{- with $platformApi.connectionWebPath }}
+            - {name: AGENT_INFRA_CONNECTION_WEB_PATH, value: {{ . | quote }}}
+            {{- end }}
             {{- if $callbackAuth }}
             - {name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE, value: /var/run/agent-infra/connection-callback-auth/callback.auth}
             {{- end }}

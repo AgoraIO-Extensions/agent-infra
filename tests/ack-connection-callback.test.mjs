@@ -45,7 +45,53 @@ test("ACK without a callback SecretRef keeps the callback receiver unconfigured"
 			(item) => item.name === "PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE",
 		),
 	);
+	assert(
+		!pod.containers[0].env.some(
+			(item) => item.name === "AGENT_INFRA_CONNECTION_WEB_PATH",
+		),
+	);
 });
+
+test("ACK projects the approved console path without configuring a callback credential", () => {
+	const pod = api(
+		render(
+			"--set-string",
+			"platformApi.connectionWebPath=/connection/connections",
+		),
+	);
+	assert.equal(
+		pod.containers[0].env.find(
+			(item) => item.name === "AGENT_INFRA_CONNECTION_WEB_PATH",
+		)?.value,
+		"/connection/connections",
+	);
+	assert(
+		!pod.volumes.some((item) =>
+			item.name.startsWith("connection-callback-auth"),
+		),
+	);
+});
+
+for (const invalid of [
+	"https://foreign.example/connection",
+	"//foreign.example/connection",
+	"/connection/../admin",
+])
+	test(`ACK rejects an unsafe console path: ${invalid}`, () => {
+		const result = spawnSync(
+			"helm",
+			[
+				"template",
+				"callback-test",
+				chart,
+				"--set-string",
+				`platformApi.connectionWebPath=${invalid}`,
+			],
+			{ encoding: "utf8" },
+		);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /connectionWebPath/);
+	});
 
 test("ACK prepares the owner-only callback file required by the forwarder", async (t) => {
 	const pod = api(render(...reference));

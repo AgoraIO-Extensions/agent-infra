@@ -35,6 +35,14 @@ ACK 的 Connection 接入复用[工程 Spec §13.5.3](../../docs/architecture/SP
 每个原用户或应用与 Agent 组合使用独立 token，由受保护 RuntimeHost 直接调用 MCP；
 不以 Delegated 内部接口或自动创建 Consumer 为已有获准 Consumer 安装的前置。
 
+网站入口通过 `platformApi.connectionWebPath` 指定已批准的控制台绝对路径，例如
+`/connection/connections`；Chart 将其投射为 API 的 `AGENT_INFRA_CONNECTION_WEB_PATH`。
+origin 仍取自批准的 Consumer profile，路径不能包含外部 origin、query 或相对导航。
+默认空值不投射；路径和完整 profile 均通过服务端校验后，Web 才取得可用入口。
+若受信配置模块已导出 Consumer profile/approval，模块还须导出
+`connectionWebPath = process.env.AGENT_INFRA_CONNECTION_WEB_PATH`，才能消费该投射；
+模块的显式配置仍优先，不以环境变量覆盖。
+
 部署方先准备对应真实 Agent 的注册回执、API/Worker 安装配置、稳定主体映射和 Host 私有供应。
 Consumer 注册使用实际返回的内部 Consumer ID，不能用业务 Agent ID 或 OAuth client ID 替代。
 用户仍须在 Connection 独立确认账号绑定和 Action 授权。
