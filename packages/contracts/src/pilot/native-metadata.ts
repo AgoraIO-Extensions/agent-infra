@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { OpaqueIdV1Schema } from "../index.ts";
 import {
-	NativeMetadataProjectionV1Schema,
 	NativeMetadataProjectionV1OrV2Schema,
+	NativeMetadataProjectionV1Schema,
 	NativeMetadataSelectorV1Schema,
 } from "../runtime/native-metadata-v1.ts";
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
