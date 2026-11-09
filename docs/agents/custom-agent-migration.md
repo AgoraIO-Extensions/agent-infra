@@ -52,6 +52,12 @@ M1.1 的只读工作区快照范围见 [PRD 5.8](../prd/PRD-agent-platform-M1.md
 本入口的既有镜像验收与工作区快照验收分别记录，后者须验证真实依赖加载、只读、版本切换、
 回滚、恢复、跨主体隔离及日志无内容泄漏；不能以合成快照成功宣称用户私有工程已迁入。
 
+自有入口的快照业务验收可以复用
+[`custom-agent-web` signed snapshot fixture](../../tests/fixtures/custom-agent-web/README.md)：
+它通过认证的 `web`/`api` 入口执行工作区中的 repo 脚本并导入 env 快照依赖，发布 receipt
+必须绑定同一 source SHA。该 fixture 只覆盖自有 HTTP 入口的业务判据，不替代 Platform Task
+API、Connection installation supply、Ingress、DNS、TLS 或真实 ACK 的双主体验收。
+
 需要独立验证迁入流程时，可使用[自有入口发票参考应用](../../tests/fixtures/custom-agent-invoice/README.md)。
 它实际调用模型并持久化业务结果，使用应用自身的身份；受控测试、本地真实模型和平台部署
 必须分别验收，不能把参考应用迁入成功推导为用户现有工程已迁入。

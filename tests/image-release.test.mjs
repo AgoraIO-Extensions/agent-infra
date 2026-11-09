@@ -726,6 +726,56 @@ test("standard template publication uses stable architecture tags and preserves 
 	}
 });
 
+test("signed own-entry snapshot fixture builds from the source-bound context", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-signed-entry-"));
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(
+			manifestPath,
+			directory,
+			{ IMAGE_TAG: "release-test" },
+			"registry.example/agent-infra",
+			["--images=signedOwnEntry"],
+		);
+		assert.equal(result.status, 0, result.stderr);
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+		assert.equal(manifest.commitSha, commitSha);
+		assert.deepEqual(Object.keys(manifest.images), ["signedOwnEntry"]);
+		assert.match(
+			manifest.images.signedOwnEntry.digest,
+			/^sha256:[a-f0-9]{64}$/u,
+		);
+		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		const builds = calls.filter(
+			(args) => args[0] === "buildx" && args[1] === "build",
+		);
+		assert.equal(builds.length, 2);
+		assert.ok(
+			builds.every((args) =>
+				args.some(
+					(value) =>
+						typeof value === "string" &&
+						value.endsWith("tests/fixtures/custom-agent-web/Dockerfile.signed"),
+				),
+			),
+		);
+		assert.ok(
+			calls.some(
+				(args) =>
+					args[0] === "push" &&
+					args[1].includes("custom-agent-web-signed:release-test-linux-amd64"),
+			),
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("publication push failures emit redacted categories and stop before remote readback", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-push-failure-"));
 	try {
