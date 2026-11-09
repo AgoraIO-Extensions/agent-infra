@@ -19,6 +19,21 @@
       }
     },
     "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "platformApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connectionCallbackAuthSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "key"],
+          "properties": {
+            "name": {"type": "string", "maxLength": 253, "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
+            "key": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*$"}
+          }
+        }
+      }
+    },
     "files": {
       "type": "object",
       "additionalProperties": false,
