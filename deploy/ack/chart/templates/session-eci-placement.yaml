@@ -6,6 +6,13 @@
 {{- if not (semverCompare ">=1.36.0-0" .Capabilities.KubeVersion.Version) }}
 {{- fail "sessionRuntimeScheduling requires Kubernetes 1.36 or later (GA MutatingAdmissionPolicy)" }}
 {{- end }}
+{{- $runtimeClassName := .Values.sessionRuntimeScheduling.runtimeClassName | default "" }}
+{{- if and .Values.sessionRuntimeScheduling.imageCache.required (ne $runtimeClassName "") }}
+{{- fail "sessionRuntimeScheduling.imageCache is only supported with ECI placement; disable it for a RuntimeClass" }}
+{{- end }}
+{{- if and .Values.sessionRuntimeScheduling.protectedRuntime.enabled (ne $runtimeClassName "") }}
+{{- fail "sessionRuntimeScheduling.protectedRuntime requires ECI placement; disable it for a RuntimeClass" }}
+{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicy
 metadata:
@@ -31,14 +38,21 @@ spec:
       jsonPatch:
         expression: >-
           [
+            {{- if ne $runtimeClassName "" }}
+            JSONPatch{op:"add",path:"/spec/runtimeClassName",value:{{ $runtimeClassName | quote }}},
+            {{- end }}
             JSONPatch{op:"add",path:"/spec/nodeSelector",value:has(object.spec.nodeSelector)?object.spec.nodeSelector:{}},
+            {{- if eq $runtimeClassName "" }}
             JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},
-            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"{{ .Values.sessionRuntimeScheduling.architecture }}"}
-            {{- if .Values.sessionRuntimeScheduling.protectedRuntime.enabled }},
+            {{- end }}
+            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:{{ .Values.sessionRuntimeScheduling.architecture | quote }}{{- if and (eq $runtimeClassName "") .Values.sessionRuntimeScheduling.protectedRuntime.enabled }},
             JSONPatch{op:"add",path:"/metadata/annotations",value:has(object.metadata.annotations)?object.metadata.annotations:{}},
             JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1eci-host-sysctls",value:"kernel.yama.ptrace_scope={{ .Values.sessionRuntimeScheduling.protectedRuntime.yamaPtraceScope }}"}
             {{- end }}
           ] + (
+            {{- if ne $runtimeClassName "" }}
+            []
+            {{- else }}
             !has(object.spec.tolerations) ?
             [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}] :
             object.spec.tolerations.exists(t,
@@ -47,6 +61,7 @@ spec:
               has(t.value) && t.value=="alibabacloud" &&
               has(t.effect) && t.effect=="NoSchedule") ? [] :
             [JSONPatch{op:"add",path:"/spec/tolerations/-",value:{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}}]
+            {{- end }}
           )
 ---
 apiVersion: admissionregistration.k8s.io/v1

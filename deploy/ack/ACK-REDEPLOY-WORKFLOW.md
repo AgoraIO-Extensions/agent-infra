@@ -136,9 +136,11 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 示例只展示格式；完整输入包仍需后文规定的所有镜像 manifest、四份 job、容量/登录/credential
 配置和 Agent 请求及浏览器蓝图。完整八 Agent 矩阵包含四个标准模板、两个自定义 ACP、
 一个单服务自有入口和一个 web/api 多服务自有入口；后两者使用自己的入口验证配置。
-要求业务 Session 使用 ECI 时，private values 必须显式设置
-`sessionRuntimeScheduling.enabled=true` 和匹配镜像的 `architecture`，并满足
-[Session ECI 调度](./ACK-E2E-DEPLOYMENT.md#session-runtime-的-eci-调度)的集群版本要求。
+要求业务 Session 使用 ECI 或集群 RuntimeClass 时，private values 必须显式设置
+`sessionRuntimeScheduling.enabled=true` 和匹配镜像的 `architecture`；RuntimeClass 模式
+还必须设置集群已提供的 `sessionRuntimeScheduling.runtimeClassName`，并满足
+[Session Runtime 调度](./ACK-E2E-DEPLOYMENT.md#session-runtime-的-eci-调度)的集群版本与
+handler 要求。
 `plan` 的渲染结果应包含策略及绑定；最终按业务 Session Pod UID 回读实际 Node 标签和 imageID。
 Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Session 的节点证据。
 `inputs` 显式列出需要解析路径的 JSON 模板。

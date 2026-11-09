@@ -7,6 +7,29 @@ Worker 可运行在 ECI。Runtime 的系统要求按 Driver 单独确认；Codex
 边界；该模式必须单独做 Pod 安全上下文、跨 Session 负例和真实工具验收，不能用 Landlock
 预检结果冒充。Pi 等 Messages Driver 不能替 Codex 通过任一检查。
 
+## Cluster-provided RuntimeClass
+
+当当前节点/ECI 不支持 bwrap 所需的 user/mount/pid namespace 时，部署可以为 Session
+Sandbox 选择一个由集群管理员提供的 `RuntimeClass`（例如 ACK Sandboxed Container V2/runV）。
+在私有 values 中设置 `sessionRuntimeScheduling.runtimeClassName` 后，Admission Policy 会给
+受管 Session Pod 注入该 RuntimeClass 和架构 selector，并跳过 ECI `virtual-kubelet` selector
+与 toleration。Chart 不创建或伪造 RuntimeClass handler；handler、专用节点池、RuntimeClass
+调度规则和 NetworkPolicy 能力由 SRE 提供。
+
+该模式的独立探针使用同一 pinned image 和安全上下文创建短生命周期 Pod：设置
+`ACK_RUNTIME_CLASS=<cluster-runtime-class>` 后运行
+`node deploy/ack/runtime-isolation-preflight.mjs`，脚本会执行
+`bwrap --unshare-user --unshare-pid --unshare-net ... /bin/true`。未设置该环境变量时，脚本
+保持默认的 Landlock ABI V5 `setpriv` 探针；两种结果不能互相代签。探针只验证 namespace
+能力，不注入模型凭证，也不代表真实业务回合通过。
+
+该模式仍使用 Worker-owned `container-boundary`、专属 PVC/ServiceAccount/Secret、non-root、
+只读 rootfs、drop ALL、no-new-privileges 和 RuntimeDefault。启用前必须用相同 pinned Runtime
+image 和安全上下文执行真实 bwrap/user/mount/pid namespace、工作区写入、跨 Session 隔离、
+网络拒绝、取消/重启 probe；通过后再执行真实 Codex 模型和 PNG/PDF 字节/hash 验收。仅有
+RuntimeClass、Pod Ready 或 handler 配置不能代替 capability probe。ECI image cache admission
+与 RuntimeClass 模式不能同时启用。
+
 镜像使用正式 `deploy/release/build-images.mjs` 或 `publish-images` workflow 的产物，
 从发布 receipt 选择节点架构对应的 OCI image manifest Digest。不要使用 tag、multi-arch
 index 或临时简化的 Dockerfile。每个模板仍需同一 image/Driver/configurationRevision 的真实
