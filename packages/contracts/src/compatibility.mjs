@@ -3929,6 +3929,36 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 		"NativeCapabilityInvocationResponseV1",
 		"NativeCapabilityInvocationResultV1",
 	];
+	const syntheticCombinedBaseline =
+		previous.paths?.[metadataPath] === undefined &&
+		previous.paths?.[capabilityPath] === undefined &&
+		previous.components?.schemas?.NativeMetadataProjectionV1 === undefined &&
+		previous.components?.schemas?.NativeMetadataProjectionV1OrV2 !== undefined;
+	if (syntheticCombinedBaseline) {
+		const addition = {
+			paths: {
+				[metadataPath]: current.paths?.[metadataPath],
+				[capabilityPath]: current.paths?.[capabilityPath],
+			},
+			schemas: Object.fromEntries(
+				[...metadataSchemas, ...capabilitySchemas].map((name) => [
+					name,
+					current.components?.schemas?.[name],
+				]),
+			),
+		};
+		if (
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+				"4ce869534756955ddc4dedb4fdace803ab74e5066b970ce3b52bef7290550380"
+		)
+			return false;
+		const normalized = structuredClone(current);
+		delete normalized.paths[metadataPath];
+		delete normalized.paths[capabilityPath];
+		for (const name of [...metadataSchemas, ...capabilitySchemas])
+			delete normalized.components.schemas[name];
+		return sameValue(previous, normalized);
+	}
 	if (
 		previous.paths?.[metadataPath] !== undefined ||
 		previous.paths?.[capabilityPath] !== undefined ||
@@ -3936,11 +3966,29 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 		capabilitySchemas.some((name) => previous.components?.schemas?.[name])
 	)
 		return false;
-	const withoutCapability = structuredClone(current);
+	const currentWithoutMetadataV2 = structuredClone(current);
+	if (currentWithoutMetadataV2.components?.schemas?.NativeMetadataProjectionV1OrV2) {
+		currentWithoutMetadataV2.paths[metadataPath].get.parameters =
+			currentWithoutMetadataV2.paths[metadataPath].get.parameters.filter(
+				(parameter) => parameter.name !== "projectionVersion",
+			);
+		currentWithoutMetadataV2.paths[metadataPath].get.responses["200"] = {
+				...currentWithoutMetadataV2.paths[metadataPath].get.responses["200"],
+				content: {
+					"application/json": {
+						schema: {
+							$ref: "#/components/schemas/NativeMetadataProjectionV1",
+						},
+					},
+				},
+			};
+		delete currentWithoutMetadataV2.components.schemas.NativeMetadataProjectionV1OrV2;
+	}
+	const withoutCapability = structuredClone(currentWithoutMetadataV2);
 	delete withoutCapability.paths[capabilityPath];
 	for (const name of capabilitySchemas)
 		delete withoutCapability.components.schemas[name];
-	const withoutMetadata = structuredClone(current);
+	const withoutMetadata = structuredClone(currentWithoutMetadataV2);
 	delete withoutMetadata.paths[metadataPath];
 	for (const name of metadataSchemas)
 		delete withoutMetadata.components.schemas[name];
@@ -3956,6 +4004,8 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 function isNativeMetadataProjectionV2OpenApiAddition(previous, current) {
 	const path =
 		"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
+	const capabilityPath =
+		"/api/v2/conversations/{conversationId}/native-capability/invoke";
 	const schema = "NativeMetadataProjectionV1OrV2";
 	const previousPath = previous.paths?.[path]?.get;
 	const currentPath = current.paths?.[path]?.get;
@@ -3966,6 +4016,7 @@ function isNativeMetadataProjectionV2OpenApiAddition(previous, current) {
 	if (
 		!previousPath ||
 		!currentPath ||
+		!sameValue(previous.paths?.[capabilityPath], current.paths?.[capabilityPath]) ||
 		previous.components?.schemas?.NativeMetadataProjectionV1 === undefined ||
 		previous.components?.schemas?.[schema] !== undefined ||
 		current.components?.schemas?.[schema] === undefined ||
