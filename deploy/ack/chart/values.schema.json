@@ -98,6 +98,15 @@
         "enabled": {"type": "boolean"},
         "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
         "runtimeClassName": {"type": "string", "pattern": "^(|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$", "maxLength": 253},
+        "protectedRuntime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "yamaPtraceScope"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "yamaPtraceScope": {"type": "string", "enum": ["2", "3"]}
+          }
+        },
         "imageCache": {
           "type": "object", "additionalProperties": false,
           "required": ["required", "entries"],

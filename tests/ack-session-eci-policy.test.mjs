@@ -120,6 +120,20 @@ test("ACK rejects ECI image-cache admission when a RuntimeClass is selected", ()
 	);
 });
 
+test("ACK rejects the ECI protected profile when a RuntimeClass is selected", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.runtimeClassName=runv",
+		"--set",
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+	);
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /protectedRuntime requires ECI placement/);
+});
+
 test("ACK rejects malformed RuntimeClass names", () => {
 	const result = render(
 		"1.36.0",
@@ -142,6 +156,84 @@ test("ACK rejects an unsupported Session architecture", () => {
 	);
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /architecture/);
+});
+
+test("ACK keeps the protected Runtime profile disabled by default", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const policy = policies(result).find(
+		(x) => x.kind === "MutatingAdmissionPolicy",
+	);
+	assert.doesNotMatch(
+		policy.spec.mutations[0].jsonPatch.expression,
+		/eci-host-sysctls/,
+	);
+});
+
+test("ACK scopes the protected Runtime sysctl annotation to Session Pods", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+		"--set-string",
+		"sessionRuntimeScheduling.protectedRuntime.yamaPtraceScope=2",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const all = parseAllDocuments(result.stdout).map((document) =>
+		document.toJSON(),
+	);
+	const policy = all.find((x) => x?.kind === "MutatingAdmissionPolicy");
+	const worker = all.find(
+		(x) =>
+			x?.kind === "Deployment" && x.metadata?.name === "agent-infra-worker",
+	);
+	assert.match(
+		policy.spec.mutations[0].jsonPatch.expression,
+		/eci-host-sysctls/,
+	);
+	assert.match(
+		policy.spec.mutations[0].jsonPatch.expression,
+		/kernel\.yama\.ptrace_scope=2/,
+	);
+	assert.equal(
+		worker.spec.template.metadata?.annotations?.[
+			"k8s.aliyun.com/eci-host-sysctls"
+		],
+		undefined,
+	);
+});
+
+test("ACK rejects a protected Runtime profile without ECI Session admission", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+	);
+	assert.notEqual(result.status, 0);
+	assert.match(
+		result.stderr,
+		/protectedRuntime requires sessionRuntimeScheduling\.enabled=true/,
+	);
+});
+
+test("ACK rejects a protected Runtime sysctl outside the supported Yama values", () => {
+	const result = render(
+		"1.36.0",
+		"--set",
+		"sessionRuntimeScheduling.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.protectedRuntime.enabled=true",
+		"--set",
+		"sessionRuntimeScheduling.protectedRuntime.yamaPtraceScope=1",
+	);
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /yamaPtraceScope/);
 });
 
 test("ACK can keep the control Worker on ordinary nodes while Sessions use ECI", () => {

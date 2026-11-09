@@ -3949,7 +3949,7 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 		};
 		if (
 			createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-				"4ce869534756955ddc4dedb4fdace803ab74e5066b970ce3b52bef7290550380"
+			"4ce869534756955ddc4dedb4fdace803ab74e5066b970ce3b52bef7290550380"
 		)
 			return false;
 		const normalized = structuredClone(current);
@@ -3967,22 +3967,25 @@ function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
 	)
 		return false;
 	const currentWithoutMetadataV2 = structuredClone(current);
-	if (currentWithoutMetadataV2.components?.schemas?.NativeMetadataProjectionV1OrV2) {
+	if (
+		currentWithoutMetadataV2.components?.schemas?.NativeMetadataProjectionV1OrV2
+	) {
 		currentWithoutMetadataV2.paths[metadataPath].get.parameters =
 			currentWithoutMetadataV2.paths[metadataPath].get.parameters.filter(
 				(parameter) => parameter.name !== "projectionVersion",
 			);
 		currentWithoutMetadataV2.paths[metadataPath].get.responses["200"] = {
-				...currentWithoutMetadataV2.paths[metadataPath].get.responses["200"],
-				content: {
-					"application/json": {
-						schema: {
-							$ref: "#/components/schemas/NativeMetadataProjectionV1",
-						},
+			...currentWithoutMetadataV2.paths[metadataPath].get.responses["200"],
+			content: {
+				"application/json": {
+					schema: {
+						$ref: "#/components/schemas/NativeMetadataProjectionV1",
 					},
 				},
-			};
-		delete currentWithoutMetadataV2.components.schemas.NativeMetadataProjectionV1OrV2;
+			},
+		};
+		delete currentWithoutMetadataV2.components.schemas
+			.NativeMetadataProjectionV1OrV2;
 	}
 	const withoutCapability = structuredClone(currentWithoutMetadataV2);
 	delete withoutCapability.paths[capabilityPath];
@@ -4016,7 +4019,10 @@ function isNativeMetadataProjectionV2OpenApiAddition(previous, current) {
 	if (
 		!previousPath ||
 		!currentPath ||
-		!sameValue(previous.paths?.[capabilityPath], current.paths?.[capabilityPath]) ||
+		!sameValue(
+			previous.paths?.[capabilityPath],
+			current.paths?.[capabilityPath],
+		) ||
 		previous.components?.schemas?.NativeMetadataProjectionV1 === undefined ||
 		previous.components?.schemas?.[schema] !== undefined ||
 		current.components?.schemas?.[schema] === undefined ||

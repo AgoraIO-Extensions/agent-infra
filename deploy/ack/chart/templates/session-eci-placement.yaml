@@ -1,3 +1,6 @@
+{{- if and .Values.sessionRuntimeScheduling.protectedRuntime.enabled (not .Values.sessionRuntimeScheduling.enabled) }}
+{{- fail "sessionRuntimeScheduling.protectedRuntime requires sessionRuntimeScheduling.enabled=true" }}
+{{- end }}
 {{- if not .Values.bootstrap.databaseOnly }}
 {{- if .Values.sessionRuntimeScheduling.enabled }}
 {{- if not (semverCompare ">=1.36.0-0" .Capabilities.KubeVersion.Version) }}
@@ -6,6 +9,9 @@
 {{- $runtimeClassName := .Values.sessionRuntimeScheduling.runtimeClassName | default "" }}
 {{- if and .Values.sessionRuntimeScheduling.imageCache.required (ne $runtimeClassName "") }}
 {{- fail "sessionRuntimeScheduling.imageCache is only supported with ECI placement; disable it for a RuntimeClass" }}
+{{- end }}
+{{- if and .Values.sessionRuntimeScheduling.protectedRuntime.enabled (ne $runtimeClassName "") }}
+{{- fail "sessionRuntimeScheduling.protectedRuntime requires ECI placement; disable it for a RuntimeClass" }}
 {{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicy
@@ -39,7 +45,10 @@ spec:
             {{- if eq $runtimeClassName "" }}
             JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},
             {{- end }}
-            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:{{ .Values.sessionRuntimeScheduling.architecture | quote }}}
+            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:{{ .Values.sessionRuntimeScheduling.architecture | quote }}{{- if and (eq $runtimeClassName "") .Values.sessionRuntimeScheduling.protectedRuntime.enabled }},
+            JSONPatch{op:"add",path:"/metadata/annotations",value:has(object.metadata.annotations)?object.metadata.annotations:{}},
+            JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1eci-host-sysctls",value:"kernel.yama.ptrace_scope={{ .Values.sessionRuntimeScheduling.protectedRuntime.yamaPtraceScope }}"}
+            {{- end }}
           ] + (
             {{- if ne $runtimeClassName "" }}
             []
