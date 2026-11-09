@@ -2446,6 +2446,10 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 用户 OAuth 及 MCP 仍分别沿 §13.5.6、§13.5.4；取舍见
 [ADR 0040](../adr/0040-auto-register-connection-agents-for-oauth.md)。
 
+优先复用 Connection 已发布的 Agent 管理、OAuth 和查询能力及获准部署配置，不以新增接口或
+修改 OAuth 核心为前提。已有批准 Consumer/client 的标准 OAuth 接线可沿 §13.5.6 独立推进，
+不等待本节的后台自动 Consumer 登记；两条交付分别验收，不能互相冒充完成。
+
 **创建边界。** Web 申请审批通过、API 创建请求通过平台准入并进入 `creating` 时，由 Core
 在各自原创建事务中产生同一登记规则下的意图。Store 原子保存 Agent、登记操作及既有 outbox
 意图，不在 SQL Adapter 或 HTTP/UI 中作登记决策，也不在浏览器创建成功后补第二次请求。
@@ -2480,25 +2484,30 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 返回 Consumer 原始 secret、用户 access/refresh Token、PAT 或 Provider Credential；若路线
 需要额外秘密，须先具名批准其受保护接收边界，不能把秘密投递给 API/Worker 再补安全声明。
 固定服务目标、认证、method/path、版本化 schema、限额和恢复语义须由 Connection 原 owner
-正式发布并与消费方共同评审；拒绝重定向、调用方 URL/header 覆盖和 SDK 隐藏重试。
+的既有或经批准更新的合同明确，并与消费方共同评审。现有路由/配置满足所需
+权限和语义时直接复用；仅对已确认无法满足的具体步骤讨论扩展。拒绝重定向、调用方
+URL/header 覆盖和 SDK 隐藏重试。
 
 **回执与持久关联。** Platform DB 保存本平台的登记来源/外部引用、原操作、请求摘要、
 实际 Consumer ID、服务端回执/修订、关联修订及交付状态，不复制远端 Grant、凭据、调用或
-审计状态。回执须精确匹配原操作、来源、Agent、Owner/登记政策及当前批准修订；按同名对象、
-时间或列表近似匹配不能确认登记。关联查询沿当前 Platform Agent 权限，不能泄露其他 Agent
+审计状态。回执或读回须精确核对原操作所绑定的来源、稳定业务 Agent ID、实际 Consumer ID、
+Owner/mode/callback、登记政策及适用修订。允许复用现有 `GET /api/v1/connection/agents` 授权可见的完整结果，
+按稳定业务 ID 精确筛选并核对字段；不强制增加专用操作查询接口。按同名对象、时间或列表
+近似匹配不能确认登记。关联查询沿当前 Platform Agent 权限，不能泄露其他 Agent
 或原用户的安装信息。已登记只表示本地交付得到核实，不代表远端当前授权或 MCP 可用。
 
 | 本地登记操作状态 | 含义与恢复 |
 | --- | --- |
 | `pending` | 意图已持久保存，尚未开始实际发送 |
 | `sending` | 实际发送前已持久提交；并发 Worker 不得再发送同一操作 |
-| `registered` | 原登记的真实非秘密回执与关联已持久核实 |
+| `registered` | 真实非秘密回执或获准精确读回已确认目标对象及关联，并已持久保存 |
 | `failed` | 按已发布合同确认请求未生效或被确定拒绝；修复和重试仍核对原外部引用及幂等语义 |
 | `unknown` | 发送、响应或结果持久提交不确定；只按原操作/外部引用精确核实，未核实前不换键重建 |
 
 Connection 的同键同请求须能恢复同一对象，同键异请求须拒绝；丢响应的非秘密查询回执须
-独立可用。Consumer 已创建但回执未保存时，先核实原结果，再恢复同一关联；没有确定的
-读取/恢复合同则保持 `unknown`。外部失败不删除本地 Agent 或污染其他 Agent，不用重建
+独立可用，可以由现有精确资源查询满足。读回确认登记目标不等于证明原 HTTP 请求已被接受，
+原投递不确定事实仍须保留。Consumer 已创建但回执未保存时，先核实目标，再恢复同一关联；
+没有确定的读取/恢复合同则保持 `unknown`。外部失败不删除本地 Agent 或污染其他 Agent，不用重建
 Agent/Consumer 隐藏部分成功；原模型、control 与只读恢复沿自身授权继续。
 
 **定向 OAuth 准备。** Consumer 登记完成后，只能在该真实 Consumer 下为原用户/Agent/安装
@@ -2506,11 +2515,16 @@ Agent/Consumer 隐藏部分成功；原模型、control 与只读恢复沿自身
 Consumer selector；Connection 验证它属于登记权限范围。client metadata、精确 HTTPS callback、
 resource、scope、回执与生命周期均须匹配批准合同，不靠更换 `client_name` 选择 Consumer，
 也不把固定产品 Consumer 的通用 DCR 当作新 Agent 登记。ACK 不回退为未经受控回传的 loopback。
+已有合法预注册 client 的非秘密回执可以作为安装输入，不要求为接线另建登记接口；其真实
+Consumer、用户/安装粒度、精确回调和生命周期仍须核实，不能推测部署中是否已预置。
 
 client 登记另按原用户＋Agent＋安装修订持久绑定原操作、请求摘要、幂等键、实际 Consumer
 及批准配置，复用上述交付状态与核实规则，但与 Consumer 登记操作分开保存。client 创建
 丢响应、崩溃或回执保存失败时，该安装独立进入 `unknown`；只核实原 client/实例，未核实前
 不换键、创建新安装或新 client 掩盖结果，也不清除已确认的长期 Consumer 关联。
+恢复可依现有精确查询，或已发布的 client 有效期、放弃与回收合同；后者只有在满足其确定
+条件后才允许下一登记尝试，并保留原不确定事实，不强制增加非标准查询 API。该例外仅涉及
+client 登记，不允许重发不确定的授权码兑换、refresh 或业务操作。
 
 一次性 client 与 refresh session 分开管理；新安装不复活已消费/撤销的 client，也不把一个
 Agent 级 clientId 供应给不同用户。OAuth 登记回执只保存所需非秘密配置与真实绑定来源；

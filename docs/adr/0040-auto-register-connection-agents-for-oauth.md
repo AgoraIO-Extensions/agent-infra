@@ -21,6 +21,8 @@ Consumer 登记、回执核实及持久关联。Connection 独立批准受限机
 取得独立凭据，由受保护 Host 直连 MCP，登记不代替本人确认或业务授权。
 已核实回执与批准策略提供具名的动态配置来源，完整快照校验及版本字段保持；Consumer 登记
 和逐安装 client 登记分别保留原操作及 unknown 核实，避免用新对象掩盖部分成功。
+优先复用现有 Agent/OAuth/查询能力与合法预注册输入；已有 Consumer 的 OAuth 接线不等待
+后台自动 Consumer 登记。是否扩展管理权限或接口由具体互操作缺口决定，不以修改 OAuth 核心为前提。
 
 产品行为只在 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-创建时自动关联与用户-oauth)
 维护；完整登记、回执、OAuth 准备及失败合同只在工程 Spec
