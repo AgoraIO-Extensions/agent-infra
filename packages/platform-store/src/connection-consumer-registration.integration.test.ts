@@ -152,6 +152,41 @@ it("does not register pending Web submissions; approval atomically adds one inde
 	]);
 });
 
+it("only lists registrations from the worker's configured source namespace", async () => {
+	await submit("agent-a");
+	await submit("agent-b");
+	await approve("agent-a");
+	await approve("agent-b");
+	await sql`
+		update platform.connection_consumer_registrations
+		set source_namespace = 'foreign-registration-test',
+			request = jsonb_set(request, '{sourceNamespace}', to_jsonb('foreign-registration-test'::text))
+		where agent_id = 'agent-b'
+	`;
+	const foreign = new PostgresConnectionConsumerRegistrationStoreV1({
+		databaseUrl: database.databaseUrl,
+		policy: { ...policy, sourceNamespace: "foreign-registration-test" },
+	});
+	try {
+		const local = await registrations.pending();
+		const foreignIds = await foreign.pending();
+		expect(local).toHaveLength(1);
+		expect(foreignIds).toHaveLength(1);
+		expect(local[0]).not.toBe(foreignIds[0]);
+		expect(
+			await sql`
+				select agent_id, source_namespace from platform.connection_consumer_registrations
+				where operation_id in (${local[0]}, ${foreignIds[0]}) order by agent_id
+			`,
+		).toEqual([
+			{ agent_id: "agent-a", source_namespace: policy.sourceNamespace },
+			{ agent_id: "agent-b", source_namespace: "foreign-registration-test" },
+		]);
+	} finally {
+		await foreign.close();
+	}
+});
+
 it("rolls back the approval transition and workload outbox if registration persistence fails", async () => {
 	await submit();
 	await sql`create function platform.registration_fault() returns trigger language plpgsql as $$ begin raise exception 'controlled registration failure'; end $$`;

@@ -114,6 +114,7 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 			select o.id from platform.outbox_items o
 			join platform.connection_consumer_registrations r on r.operation_id = o.id
 			where o.operation = ${connectionConsumerRegistrationOperationV1}
+				and r.source_namespace = ${this.#policy.sourceNamespace}
 				and ((o.status in ('pending','retry_scheduled') and o.available_at <= clock_timestamp())
 					or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp()))
 			order by o.available_at, o.id limit ${limit}
