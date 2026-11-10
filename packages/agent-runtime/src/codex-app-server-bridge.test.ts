@@ -22,21 +22,61 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 
 const hubFilesystem = vi.hoisted(() => ({
 	state: "missing" as "missing" | "mounted" | "symlink",
+	sessionRoot: undefined as string | undefined,
+	sessionLaunch: undefined as
+		| { cwd?: string; env?: NodeJS.ProcessEnv }
+		| undefined,
 }));
-vi.mock("node:fs/promises", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:fs/promises")>();
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
 	return {
 		...actual,
+		spawn: (...args: Parameters<typeof actual.spawn>) => {
+			const options = args[2];
+			if (
+				hubFilesystem.sessionRoot &&
+				typeof options?.cwd === "string" &&
+				options.cwd.startsWith("/workspace/")
+			) {
+				hubFilesystem.sessionLaunch = { cwd: options.cwd, env: options.env };
+				return actual.spawn(args[0], args[1], {
+					...options,
+					cwd: options.cwd.replace("/workspace", hubFilesystem.sessionRoot),
+				});
+			}
+			return actual.spawn(...args);
+		},
+	};
+});
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	const mapped = (path: Parameters<typeof actual.lstat>[0]) =>
+		hubFilesystem.sessionRoot &&
+		typeof path === "string" &&
+		path.startsWith("/workspace/")
+			? path.replace("/workspace", hubFilesystem.sessionRoot)
+			: path;
+	return {
+		...actual,
+		mkdir: (path: Parameters<typeof actual.mkdir>[0], ...args: unknown[]) =>
+			actual.mkdir(mapped(path), ...(args as [])),
 		realpath: async (
 			path: Parameters<typeof actual.realpath>[0],
 			...args: unknown[]
-		) =>
-			path === "/opt/agent-infra-skill-hub/.agents" &&
-			hubFilesystem.state !== "missing"
-				? hubFilesystem.state === "symlink"
+		) => {
+			if (
+				path === "/opt/agent-infra-skill-hub/.agents" &&
+				hubFilesystem.state !== "missing"
+			)
+				return hubFilesystem.state === "symlink"
 					? "/another-agent/.agents"
-					: path
-				: actual.realpath(path, ...(args as [])),
+					: path;
+			if (mapped(path) !== path) {
+				await actual.realpath(mapped(path));
+				return path;
+			}
+			return actual.realpath(path, ...(args as []));
+		},
 		lstat: async (
 			path: Parameters<typeof actual.lstat>[0],
 			...args: unknown[]
@@ -45,7 +85,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 				path === "/opt/agent-infra-skill-hub/.agents" &&
 					hubFilesystem.state === "mounted"
 					? process.cwd()
-					: path,
+					: mapped(path),
 				...(args as []),
 			),
 	};
@@ -91,6 +131,10 @@ import type {
 	CodexConnectionRecoveryResponse,
 } from "./codex-connection-client.js";
 import type { CodexNativeCallbackHandler } from "./codex-native-callback.js";
+import {
+	type CodexSessionExecutorAdmissionV1,
+	createCodexSessionExecutorBindingV1,
+} from "./codex-session-executor.js";
 import { codexSkillLaunch } from "./codex-skill-launch.internal.js";
 
 const directories: string[] = [];
@@ -431,6 +475,8 @@ async function expectPathRemoved(path: string) {
 
 afterEach(async () => {
 	hubFilesystem.state = "missing";
+	hubFilesystem.sessionRoot = undefined;
+	hubFilesystem.sessionLaunch = undefined;
 	for (const pid of childPids.splice(0)) {
 		try {
 			process.kill(pid, "SIGKILL");
@@ -462,6 +508,154 @@ afterEach(async () => {
 });
 
 describe.sequential("Codex app-server v2 bridge", () => {
+	async function sessionExecutorFixture() {
+		const directory = await mkdtemp(join(tmpdir(), "codex-executor-bridge-"));
+		directories.push(directory);
+		await mkdir(join(directory, "runtime"));
+		hubFilesystem.sessionRoot = directory;
+		const binding = createCodexSessionExecutorBindingV1({
+			namespace: "runtime",
+			podName: "sandbox-session-one",
+			sandboxId: "session-one",
+			agentId: "agent-one",
+			conversationId: "conversation-one",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			imageDigest: `ghcr.io/example/runtime@sha256:${"a".repeat(64)}`,
+		});
+		const listeners = new Set<() => void>();
+		let failed = false;
+		const admission: CodexSessionExecutorAdmissionV1 = {
+			binding,
+			epoch: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			assertCurrent: vi.fn(async () => {
+				if (failed) throw new Error("synthetic executor failure");
+			}),
+			onFailure(listener) {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+			close: async () => {},
+		};
+		return {
+			directory,
+			admission,
+			poison() {
+				failed = true;
+				for (const listener of listeners) listener();
+			},
+			configuration: options({
+				isolationMode: "session-executor",
+				sessionExecutor: admission,
+				dataDirectory: "/workspace/runtime/codex-driver.json.native",
+				conversationKey: binding.conversationKey,
+				officialLane: true,
+				nativeBarrierRequired: false,
+				model: "synthetic/gpt-5.6-sol",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:8080",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		};
+	}
+
+	it("pins the verified Session executor and closes the native stream on epoch failure", async () => {
+		const { capturePath, sandboxCapturePath } = await installFakeCodex("echo");
+		const fixture = await sessionExecutorFixture();
+		const previous = process.env.CODEX_EXEC_SERVER_URL;
+		process.env.CODEX_EXEC_SERVER_URL = "ws://127.0.0.1:9999";
+		try {
+			const bridge = await CodexAppServerBridge.open(fixture.configuration);
+			const server = (await readCaptures(capturePath, 3)).at(-1);
+			expect(hubFilesystem.sessionLaunch).toMatchObject({
+				cwd: fixture.admission.binding.workspaceRoot,
+				env: { CODEX_EXEC_SERVER_URL: "ws://127.0.0.1:8068" },
+			});
+			expect(server?.args).toContain('sandbox_mode="workspace-write"');
+			expect(server?.args).not.toContain('sandbox_mode="externalSandbox"');
+			await expect(readFile(sandboxCapturePath)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			for (const method of [
+				"command/exec",
+				"command/exec/write",
+				"fs/readFile",
+			])
+				await expect(
+					bridge.send({ id: 1, method, params: {} }),
+				).rejects.toMatchObject({ code: "CODEX_APP_SERVER_FRAME_INVALID" });
+			const waiting = bridge.frames()[Symbol.asyncIterator]().next();
+			fixture.poison();
+			await expect(waiting).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_UNAVAILABLE",
+			});
+			await expect(
+				bridge.send({ id: 2, method: "turn/start", params: {} }),
+			).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CLOSED" });
+			await bridge.close();
+			if (server) await expectChildExited(server.pid);
+		} finally {
+			if (previous === undefined) delete process.env.CODEX_EXEC_SERVER_URL;
+			else process.env.CODEX_EXEC_SERVER_URL = previous;
+		}
+	});
+
+	it.each([
+		{ sessionExecutor: undefined },
+		{ conversationKey: "a".repeat(64) },
+		{ dataDirectory: "/workspace/another-driver.native" },
+		{ isolationMode: "container-boundary" },
+		{ officialLane: false },
+		{ nativeCallback: async () => ({}) },
+		{ execServerUrl: "ws://127.0.0.1:9999" },
+	])(
+		"rejects an unbound or overridden Session executor before spawning: %j",
+		async (override) => {
+			const { capturePath } = await installFakeCodex("echo");
+			const fixture = await sessionExecutorFixture();
+			await expect(
+				CodexAppServerBridge.open({
+					...fixture.configuration,
+					...override,
+				} as Parameters<typeof CodexAppServerBridge.open>[0]),
+			).rejects.toMatchObject({
+				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+			});
+			await expect(readFile(capturePath)).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		},
+	);
+
+	it("rejects persisted environment selection before a Session executor starts", async () => {
+		const { capturePath } = await installFakeCodex("echo");
+		const fixture = await sessionExecutorFixture();
+		const bridge = await CodexAppServerBridge.open(fixture.configuration);
+		await bridge.close();
+		const home = join(
+			fixture.directory,
+			"runtime/codex-driver.json.native/conversations",
+			fixture.admission.binding.conversationKey,
+			"home",
+		);
+		await writeFile(
+			join(home, "environments.toml"),
+			'default_environment = "local"\n',
+		);
+		await expect(
+			CodexAppServerBridge.open(fixture.configuration),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+		expect(
+			(await readCaptures(capturePath, 5)).filter(
+				(capture) =>
+					capture.args[0] === "app-server" && capture.args[1] === "--stdio",
+			),
+		).toHaveLength(1);
+	});
+
 	it("admits Linux sandbox capabilities before sharing model credentials", async () => {
 		const { sandboxCapturePath } = await installFakeCodex("echo");
 		const bridge = await CodexAppServerBridge.open(

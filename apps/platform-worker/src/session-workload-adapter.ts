@@ -1,6 +1,13 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import {
+	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
+	CODEX_SESSION_EXECUTOR_BINDING_ENV,
+	type CodexSessionExecutorBindingV1,
+	createCodexSessionExecutorBindingV1,
+	verifyCodexSessionExecutorBindingV1,
+} from "@agent-infra/agent-runtime";
+import {
 	RuntimeModelConfigurationV4Schema,
 	type RuntimeSkillHubBindingV1,
 	RuntimeSkillHubBindingV1Schema,
@@ -29,6 +36,15 @@ import type {
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
 import {
+	type CodexSessionExecutorPolicyV1,
+	sessionExecutorAttestationSecretKeyV1,
+	sessionExecutorBindingSecretKeyV1,
+	sessionExecutorContainerNameV1,
+	sessionExecutorPodEnvironmentV1,
+	sessionExecutorPodProjectionV1,
+	validateCodexSessionExecutorPolicyV1,
+} from "./codex-session-executor.js";
+import {
 	isRuntimeConnectionEnvironmentV1,
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerControlPodV1,
@@ -41,6 +57,7 @@ import {
 	agentAnnotation,
 	agentContainerSecurityContext,
 	agentPodSecurityContext,
+	matchesResources,
 	ownerLabel,
 	workloadImagePullSpecV1,
 	workloadResourceNameV1,
@@ -88,6 +105,10 @@ export interface SessionSandboxRuntimeInputV1 {
 	/** Explicit deployment approval for the Codex container-boundary mode. */
 	readonly codexContainerBoundaryEnabled?: boolean;
 	readonly codexContainerBoundaryAttestation?: string;
+	readonly sessionExecutor?: {
+		readonly binding: CodexSessionExecutorBindingV1;
+		readonly attestation: string;
+	};
 	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
 	readonly nativeMetadataWorkerOrigin?: string;
 	/**
@@ -244,6 +265,8 @@ export interface SessionSandboxAllocationV1 {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
 	};
+	/** Trusted deployment resource layout; absent preserves the existing single container. */
+	readonly codexSessionExecutor?: CodexSessionExecutorPolicyV1;
 	readonly storageSize: string;
 	readonly storageClassName?: string;
 	readonly desiredState: "running" | "stopped";
@@ -524,6 +547,32 @@ function validateResourceInput(value: SessionSandboxResourceInputV1) {
 	if (value.runtime !== null) {
 		validateRuntimeInput(value.runtime);
 	}
+	if (value.codexSessionExecutor !== undefined) {
+		validateCodexSessionExecutorPolicyV1(value.codexSessionExecutor);
+		const binding = value.runtime?.sessionExecutor?.binding;
+		if (
+			!binding ||
+			value.workspaceMountPath !== "/workspace" ||
+			value.containerPort === 8068 ||
+			value.containerPort === 8070 ||
+			stableJson(binding) !==
+				stableJson(
+					createCodexSessionExecutorBindingV1({
+						namespace: value.namespace,
+						podName: value.podName,
+						agentId: value.agentId,
+						conversationId: value.sessionId,
+						sessionGeneration: value.generation,
+						sandboxId: value.sandboxId,
+						resourceFence: value.resourceFence,
+						imageDigest: value.imageDigest,
+					}),
+				)
+		)
+			throw new WorkloadKubernetesError("policy");
+	} else if (value.runtime?.sessionExecutor !== undefined) {
+		throw new WorkloadKubernetesError("policy");
+	}
 }
 
 function validateAllocation(value: SessionSandboxAllocationV1) {
@@ -552,6 +601,7 @@ const optionalRuntimeInputKeys = [
 	"custom",
 	"fileExchange",
 	"nativeMetadataWorkerOrigin",
+	"sessionExecutor",
 ];
 
 function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
@@ -603,6 +653,23 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					runtime.fileExchange.serviceToken === runtime.serviceToken))
 		)
 			throw new Error();
+		if (runtime.sessionExecutor !== undefined) {
+			if (
+				!runtime.sessionExecutor ||
+				Object.keys(runtime.sessionExecutor).sort().join(",") !==
+					"attestation,binding" ||
+				runtime.driver !== "codex" ||
+				runtime.custom !== undefined ||
+				runtime.codexContainerBoundaryEnabled === true ||
+				runtime.codexContainerBoundaryAttestation !== undefined
+			)
+				throw new Error();
+			verifyCodexSessionExecutorBindingV1(
+				runtime.sessionExecutor.binding,
+				runtime.sessionExecutor.attestation,
+				runtime.serviceToken,
+			);
+		}
 		if (runtime.custom !== undefined) {
 			if (
 				!Array.isArray(runtime.custom.secretRefs) ||
@@ -772,6 +839,23 @@ function runtimeEnvironment(
 			valueFrom: secretRef("model-config"),
 		},
 		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+		...(runtime.sessionExecutor
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+						value: "session-executor",
+					},
+					{
+						name: CODEX_SESSION_EXECUTOR_BINDING_ENV,
+						valueFrom: secretRef(sessionExecutorBindingSecretKeyV1),
+					},
+					{
+						name: CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
+						valueFrom: secretRef(sessionExecutorAttestationSecretKeyV1),
+					},
+					...sessionExecutorPodEnvironmentV1(),
+				]
+			: []),
 		...(runtime.driver === "codex" &&
 		runtime.codexContainerBoundaryEnabled === true
 			? [
@@ -836,9 +920,13 @@ function renderSessionSandboxResourcesV1(
 			(name) =>
 				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
 				name.startsWith("AGENT_INFRA_") ||
-				["token", "model-config", sessionSandboxFileExchangeSecretKey].includes(
-					name,
-				),
+				[
+					"token",
+					"model-config",
+					sessionSandboxFileExchangeSecretKey,
+					sessionExecutorBindingSecretKeyV1,
+					sessionExecutorAttestationSecretKeyV1,
+				].includes(name),
 		) ||
 			!custom.environmentNames.every((name) =>
 				Object.hasOwn(custom.data, name),
@@ -858,6 +946,8 @@ function renderSessionSandboxResourcesV1(
 			Object.keys(allocation.env ?? {}).some(
 				(name) =>
 					name.startsWith("AGENT_INFRA_") ||
+					(allocation.runtime?.sessionExecutor &&
+						name.startsWith("CODEX_EXEC_SERVER")) ||
 					runtimeEnv.some((entry) => entry.name === name),
 			))
 	)
@@ -931,6 +1021,14 @@ function renderSessionSandboxResourcesV1(
 			automountServiceAccountToken: false,
 			// Other Sandboxes' Service addresses are not injected into this one.
 			enableServiceLinks: false,
+			...(allocation.runtime?.sessionExecutor
+				? {
+						shareProcessNamespace: false,
+						hostPID: false,
+						hostIPC: false,
+						hostNetwork: false,
+					}
+				: {}),
 			restartPolicy: "Always",
 			...workloadImagePullSpecV1(allocation.imagePullSecretName),
 			// Same non-root identity as the Agent-level Workload (#1466).
@@ -1011,6 +1109,28 @@ function renderSessionSandboxResourcesV1(
 			allocation.workspaceSnapshotProjection,
 		);
 	}
+	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
+		if (!pod.spec) throw new WorkloadKubernetesError("policy");
+		const projection = sessionExecutorPodProjectionV1({
+			binding: allocation.runtime.sessionExecutor.binding,
+			policy: allocation.codexSessionExecutor,
+		});
+		Object.assign(pod.spec, projection.placement);
+		projection.executor.volumeMounts?.push(
+			...(skillMount ? [{ ...skillMount, name: "skill-hub" }] : []),
+			...[...(skillProjection?.containerMounts.values() ?? [])].flat(),
+			...[
+				...(allocation.workspaceSnapshotProjection?.containerMounts.values() ??
+					[]),
+			].flat(),
+		);
+		pod.spec.initContainers = [
+			...(pod.spec.initContainers ?? []),
+			projection.init,
+		];
+		pod.spec.containers.push(projection.executor);
+		pod.spec.volumes?.push(projection.volume);
+	}
 	const secret: V1Secret = {
 		apiVersion: "v1",
 		kind: "Secret",
@@ -1046,6 +1166,16 @@ function renderSessionSandboxResourcesV1(
 										Buffer.from(
 											allocation.runtime.codexContainerBoundaryAttestation,
 										).toString("base64"),
+								}
+							: {}),
+						...(allocation.runtime.sessionExecutor
+							? {
+									[sessionExecutorBindingSecretKeyV1]: Buffer.from(
+										JSON.stringify(allocation.runtime.sessionExecutor.binding),
+									).toString("base64"),
+									[sessionExecutorAttestationSecretKeyV1]: Buffer.from(
+										allocation.runtime.sessionExecutor.attestation,
+									).toString("base64"),
 								}
 							: {}),
 						...(custom
@@ -1098,7 +1228,9 @@ export function sessionSandboxReserveResourcesV1(
 		input.resourceFence !== 1 ||
 		input.desiredState !== "running" ||
 		!input.runtime ||
-		input.runtime.custom
+		input.runtime.custom ||
+		input.runtime.sessionExecutor !== undefined ||
+		input.codexSessionExecutor !== undefined
 	)
 		throw new WorkloadKubernetesError("policy");
 	validateResourceInput(input);
@@ -1186,6 +1318,12 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		return false;
 	const currentSpec = (current as V1Pod).spec;
 	const expectedSpec = expected.spec;
+	if (
+		expectedSpec?.containers.some(
+			(container) => container.name === sessionExecutorContainerNameV1,
+		)
+	)
+		return sessionExecutorPodSpecMatches(currentSpec, expectedSpec);
 	const currentContainer = currentSpec?.containers?.[0];
 	const expectedContainer = expectedSpec?.containers?.[0];
 	if (!currentSpec || !expectedSpec || !currentContainer || !expectedContainer)
@@ -1256,6 +1394,180 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		) &&
 		stableJson(currentSpec.volumes ?? []) ===
 			stableJson(expectedSpec.volumes ?? [])
+	);
+}
+
+/** New executor Pods compare every field of every container; no legacy layout tolerances. */
+function sessionExecutorPodSpecMatches(
+	current: V1Pod["spec"],
+	expected: NonNullable<V1Pod["spec"]>,
+) {
+	if (
+		!current ||
+		current.containers.length !== expected.containers.length ||
+		(current.initContainers?.length ?? 0) !==
+			(expected.initContainers?.length ?? 0) ||
+		(current.ephemeralContainers?.length ?? 0) !== 0 ||
+		current.shareProcessNamespace !== false ||
+		current.hostPID === true ||
+		current.hostIPC === true ||
+		current.hostNetwork === true
+	)
+		return false;
+	const normalizeMount = (
+		mount: NonNullable<V1Container["volumeMounts"]>[number],
+	) => ({
+		...mount,
+		readOnly: mount.readOnly ?? false,
+		subPath: mount.subPath ?? "",
+		subPathExpr: mount.subPathExpr ?? "",
+		mountPropagation: mount.mountPropagation ?? "None",
+		recursiveReadOnly: mount.recursiveReadOnly ?? "Disabled",
+	});
+	const normalizeContainer = (container: V1Container) => ({
+		...container,
+		command: container.command ?? [],
+		args: container.args ?? [],
+		env: (container.env ?? [])
+			.map((entry) => ({
+				...entry,
+				value: entry.value ?? "",
+				...(entry.valueFrom
+					? {
+							valueFrom: {
+								...entry.valueFrom,
+								...(entry.valueFrom.fieldRef
+									? {
+											fieldRef: {
+												apiVersion: "v1",
+												...entry.valueFrom.fieldRef,
+											},
+										}
+									: {}),
+								...(entry.valueFrom.secretKeyRef
+									? {
+											secretKeyRef: {
+												optional: false,
+												...entry.valueFrom.secretKeyRef,
+											},
+										}
+									: {}),
+							},
+						}
+					: {}),
+			}))
+			.sort((left, right) => left.name.localeCompare(right.name)),
+		envFrom: container.envFrom ?? [],
+		ports: (container.ports ?? []).map((port) => ({
+			protocol: "TCP",
+			...port,
+		})),
+		volumeMounts: (container.volumeMounts ?? []).map(normalizeMount),
+		volumeDevices: container.volumeDevices ?? [],
+		stdin: container.stdin ?? false,
+		stdinOnce: container.stdinOnce ?? false,
+		tty: container.tty ?? false,
+		terminationMessagePath:
+			container.terminationMessagePath ?? "/dev/termination-log",
+		terminationMessagePolicy: container.terminationMessagePolicy ?? "File",
+		readinessProbe: readinessProbeShape(container.readinessProbe),
+	});
+	const containersMatch = (
+		actual: readonly V1Container[],
+		desired: readonly V1Container[],
+	) =>
+		actual.every((container, index) => {
+			const target = desired[index];
+			if (!target || !immutableImagePullPolicyMatches(container, target))
+				return false;
+			const resources = target.resources;
+			if (
+				resources &&
+				!matchesResources(container.resources, {
+					requests: {
+						cpu: resources.requests?.cpu ?? "",
+						memory: resources.requests?.memory ?? "",
+					},
+					limits: {
+						cpu: resources.limits?.cpu ?? "",
+						memory: resources.limits?.memory ?? "",
+					},
+				})
+			)
+				return false;
+			return (
+				stableJson(
+					normalizeContainer({
+						...container,
+						imagePullPolicy: target.imagePullPolicy,
+						...(resources ? { resources } : {}),
+					}),
+				) === stableJson(normalizeContainer(target))
+			);
+		});
+	if (
+		!containersMatch(current.containers, expected.containers) ||
+		!containersMatch(
+			current.initContainers ?? [],
+			expected.initContainers ?? [],
+		)
+	)
+		return false;
+	const normalizePod = (spec: NonNullable<V1Pod["spec"]>) => ({
+		...spec,
+		containers: [],
+		initContainers: [],
+		ephemeralContainers: [],
+		nodeName: undefined,
+		imagePullSecrets: spec.imagePullSecrets ?? [],
+		serviceAccount: spec.serviceAccount ?? spec.serviceAccountName,
+		dnsPolicy: spec.dnsPolicy ?? "ClusterFirst",
+		schedulerName: spec.schedulerName ?? "default-scheduler",
+		terminationGracePeriodSeconds: spec.terminationGracePeriodSeconds ?? 30,
+		priority: spec.priority ?? 0,
+		preemptionPolicy: spec.preemptionPolicy ?? "PreemptLowerPriority",
+		hostPID: spec.hostPID ?? false,
+		hostIPC: spec.hostIPC ?? false,
+		hostNetwork: spec.hostNetwork ?? false,
+		tolerations: (spec.tolerations ?? []).filter(
+			(entry) =>
+				![
+					{
+						key: "node.kubernetes.io/memory-pressure",
+						operator: "Exists",
+						effect: "NoSchedule",
+					},
+					{
+						key: "node.kubernetes.io/not-ready",
+						operator: "Exists",
+						effect: "NoExecute",
+						tolerationSeconds: 300,
+					},
+					{
+						key: "node.kubernetes.io/unreachable",
+						operator: "Exists",
+						effect: "NoExecute",
+						tolerationSeconds: 300,
+					},
+				].some((allowed) => stableJson(entry) === stableJson(allowed)),
+		),
+		volumes: (spec.volumes ?? []).map((volume) => ({
+			...volume,
+			...(volume.persistentVolumeClaim
+				? {
+						persistentVolumeClaim: {
+							readOnly: false,
+							...volume.persistentVolumeClaim,
+						},
+					}
+				: {}),
+			...(volume.secret
+				? { secret: { defaultMode: 420, optional: false, ...volume.secret } }
+				: {}),
+		})),
+	});
+	return (
+		stableJson(normalizePod(current)) === stableJson(normalizePod(expected))
 	);
 }
 

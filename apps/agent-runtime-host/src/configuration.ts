@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
+	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	type CodexRuntimeModelOption,
 	validateCodexModelAccess,
+	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeModelConfigurationV3Schema,
@@ -34,7 +37,18 @@ export function readCodexIsolationMode(
 	serviceToken?: string,
 ) {
 	const value = environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE ?? "landlock";
-	if (value !== "landlock" && value !== "container-boundary")
+	if (
+		value !== "landlock" &&
+		value !== "container-boundary" &&
+		value !== "session-executor"
+	)
+		runtimeConfigurationInvalid();
+	if (value === "session-executor")
+		readCodexSessionExecutorBindingV1(environment, serviceToken);
+	else if (
+		environment[CODEX_SESSION_EXECUTOR_BINDING_ENV] !== undefined ||
+		environment[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV] !== undefined
+	)
 		runtimeConfigurationInvalid();
 	if (
 		value === "container-boundary" &&
@@ -62,6 +76,53 @@ export function readCodexIsolationMode(
 			runtimeConfigurationInvalid();
 	}
 	return value;
+}
+
+export function readCodexSessionExecutorBindingV1(
+	environment: NodeJS.ProcessEnv,
+	serviceToken?: string,
+) {
+	try {
+		if (
+			environment.AGENT_INFRA_RUNTIME_DRIVER !== "codex" ||
+			environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE !== "session-executor" ||
+			!serviceToken ||
+			!environment.AGENT_INFRA_RUNTIME_POD_UID ||
+			environment.AGENT_INFRA_RUNTIME_POD_UID.length > 256 ||
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE !== undefined ||
+			environment.CODEX_EXEC_SERVER_URL !== undefined ||
+			environment.CODEX_HOME !== undefined ||
+			Object.keys(environment).some(
+				(key) =>
+					key.startsWith("AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_") &&
+					environment[key] !== undefined,
+			)
+		)
+			runtimeConfigurationInvalid();
+		const configuration = RuntimeModelConfigurationV4Schema.parse(
+			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
+		);
+		if (
+			configuration.modelOptions.some(
+				(option) => option.protocol !== "openai-responses-v1",
+			)
+		)
+			runtimeConfigurationInvalid();
+		const binding = verifyCodexSessionExecutorBindingV1(
+			JSON.parse(environment[CODEX_SESSION_EXECUTOR_BINDING_ENV] ?? ""),
+			environment[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV] ?? "",
+			serviceToken,
+		);
+		if (
+			binding.agentId !== environment.AGENT_INFRA_RUNTIME_AGENT_ID ||
+			binding.podName !== environment.AGENT_INFRA_RUNTIME_POD_NAME ||
+			binding.namespace !== environment.AGENT_INFRA_RUNTIME_NAMESPACE
+		)
+			runtimeConfigurationInvalid();
+		return binding;
+	} catch {
+		runtimeConfigurationInvalid();
+	}
 }
 
 const FILE_EXCHANGE_TOKEN = /^[\x21-\x7e]{32,4096}$/;

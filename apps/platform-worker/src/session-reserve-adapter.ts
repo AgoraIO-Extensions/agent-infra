@@ -167,6 +167,9 @@ export function createSessionSandboxReserveResourceInputV1(
 	)
 		throw new WorkloadKubernetesError("conflict");
 	const policy = options.workload.policy;
+	// Reserves have no business Conversation binding or executor promotion receipt.
+	if (policy.codexSessionExecutor !== undefined)
+		throw new WorkloadKubernetesError("policy");
 	if (
 		policy.namespace !== claim.profile.policy.namespace ||
 		options.workload.client.namespace !== policy.namespace ||

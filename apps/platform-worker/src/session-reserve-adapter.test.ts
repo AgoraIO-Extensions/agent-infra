@@ -377,6 +377,35 @@ describe("Session reserve resource adapter", () => {
 			await expect(f.adapter.render({ ...f.claim, profile })).rejects.toThrow();
 		expect(f.create).not.toHaveBeenCalled();
 	});
+	it("rejects old reserves for an independently approved executor layout before writes", () => {
+		const f = fixture();
+		const policy = {
+			...f.options.workload.policy,
+			codexSessionExecutor: {
+				resources: {
+					requests: { cpu: "100m", memory: "64Mi" },
+					limits: { cpu: "500m", memory: "128Mi" },
+				},
+			},
+		};
+		expect(() =>
+			createSessionSandboxReserveResourceInputV1(
+				{ ...f.options, workload: { ...f.options.workload, policy } },
+				{
+					...f.claim,
+					profile: {
+						...f.claim.profile,
+						policy: {
+							...f.claim.profile.policy,
+							resourceConfigurationHash:
+								workloadResourceConfigurationHashV1(policy),
+						},
+					},
+				},
+			),
+		).toThrow();
+		expect(f.create).not.toHaveBeenCalled();
+	});
 	it.each(["cpuMillis", "memoryBytes", "storageBytes"] as const)(
 		"rejects an approved profile that undercounts actual %s resources",
 		async (field) => {

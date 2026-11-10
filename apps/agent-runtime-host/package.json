@@ -17,13 +17,15 @@
 	"dependencies": {
 		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/native-metadata-transport": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "4.13.7",
-		"@agent-infra/native-metadata-transport": "workspace:*"
+		"ws": "8.21.3"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
+		"@types/ws": "8.18.1",
 		"tsdown": "0.22.14",
 		"tsx": "^4.23.1",
 		"typescript": "catalog:",

@@ -46,6 +46,11 @@ import {
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
 import {
+	CODEX_SESSION_EXECUTOR_ENDPOINT,
+	type CodexSessionExecutorAdmissionV1,
+	parseCodexSessionExecutorBindingV1,
+} from "./codex-session-executor.js";
+import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
@@ -257,7 +262,11 @@ export function codexConversationKey(binding: {
 
 export interface CodexAppServerBridgeOptions {
 	/** Deployment-owned isolation boundary for the Linux native process. */
-	readonly isolationMode?: "landlock" | "container-boundary";
+	readonly isolationMode?:
+		| "landlock"
+		| "container-boundary"
+		| "session-executor";
+	readonly sessionExecutor?: CodexSessionExecutorAdmissionV1;
 	/** Fixed installed-Skill launch policy, only for a new official-lane process. */
 	readonly disableBundledSkills?: true;
 	readonly officialLane?: boolean;
@@ -528,7 +537,11 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
-	readonly isolationMode: "landlock" | "container-boundary";
+	readonly isolationMode:
+		| "landlock"
+		| "container-boundary"
+		| "session-executor";
+	readonly sessionExecutor?: CodexSessionExecutorAdmissionV1;
 	readonly disableBundledSkills: boolean;
 	officialLane: boolean;
 	readonly launchPath?: string;
@@ -666,6 +679,61 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]) {
 	);
 }
 
+/** @internal Receives trusted deployment authority, pinning its identity and epoch. */
+export function receiveCodexSessionExecutorAdmissionV1(
+	input: unknown,
+): CodexSessionExecutorAdmissionV1 {
+	if (
+		!isPlainRecord(input) ||
+		!exactKeys(input, [
+			"binding",
+			"epoch",
+			"assertCurrent",
+			"onFailure",
+			"close",
+		]) ||
+		typeof input.epoch !== "string" ||
+		!/^[-a-f0-9]{36}$/.test(input.epoch) ||
+		typeof input.assertCurrent !== "function" ||
+		typeof input.onFailure !== "function" ||
+		typeof input.close !== "function"
+	)
+		configurationInvalid();
+	let binding: CodexSessionExecutorAdmissionV1["binding"];
+	try {
+		binding = Object.freeze(parseCodexSessionExecutorBindingV1(input.binding));
+	} catch {
+		configurationInvalid();
+	}
+	const { epoch, assertCurrent, onFailure, close } = input;
+	const assertPinned = () => {
+		if (
+			input.epoch !== epoch ||
+			!isDeepStrictEqual(input.binding, binding) ||
+			input.assertCurrent !== assertCurrent ||
+			input.onFailure !== onFailure ||
+			input.close !== close
+		)
+			configurationInvalid();
+	};
+	return Object.freeze({
+		binding,
+		epoch,
+		async assertCurrent() {
+			assertPinned();
+			await assertCurrent.call(input);
+			assertPinned();
+		},
+		onFailure(listener: () => void) {
+			assertPinned();
+			const unsubscribe = onFailure.call(input, listener);
+			if (typeof unsubscribe !== "function") configurationInvalid();
+			return unsubscribe;
+		},
+		close: () => close.call(input),
+	});
+}
+
 function hasPinnedProvenance(
 	value: unknown,
 ): value is CodexAppServerProvenanceV2 {
@@ -712,6 +780,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
 		"isolationMode",
+		"sessionExecutor",
 		"disableBundledSkills",
 		"officialLane",
 		"launchPath",
@@ -765,7 +834,17 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
 	const isolationMode = input.isolationMode ?? "landlock";
-	if (isolationMode !== "landlock" && isolationMode !== "container-boundary")
+	if (
+		isolationMode !== "landlock" &&
+		isolationMode !== "container-boundary" &&
+		isolationMode !== "session-executor"
+	)
+		configurationInvalid();
+	const sessionExecutor =
+		isolationMode === "session-executor"
+			? receiveCodexSessionExecutorAdmissionV1(input.sessionExecutor)
+			: undefined;
+	if (!sessionExecutor && input.sessionExecutor !== undefined)
 		configurationInvalid();
 	if (
 		input.nativeBarrierRequired !== undefined &&
@@ -773,6 +852,21 @@ function validateOptions(input: unknown): ValidatedOptions {
 	)
 		configurationInvalid();
 	const privateLane = privateNativeLaneRequired(input);
+	if (
+		sessionExecutor &&
+		(platform !== "linux" ||
+			privateLane ||
+			input.officialLane !== true ||
+			sessionExecutor.binding.conversationKey !== input.conversationKey ||
+			sessionExecutor.binding.workspaceRoot !==
+				join(
+					input.dataDirectory,
+					conversationBoundaryDirectory,
+					input.conversationKey,
+					"workspace",
+				))
+	)
+		configurationInvalid();
 	if (
 		isolationMode === "container-boundary" &&
 		(platform !== "linux" || privateLane)
@@ -841,6 +935,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 	}
 	return {
 		isolationMode,
+		...(sessionExecutor ? { sessionExecutor } : {}),
 		disableBundledSkills: input.disableBundledSkills === true,
 		...(input.launchPath !== undefined ? { launchPath: input.launchPath } : {}),
 		dataDirectory: input.dataDirectory,
@@ -1065,6 +1160,7 @@ async function persistentLaunchPolicy(
 	dataDirectory: string,
 	conversationKey: string,
 	isolated: IsolatedLaunchPolicy,
+	remoteOnly = false,
 ): Promise<ConversationLaunchPolicy> {
 	try {
 		// Resolve the deployment parent (for example a mounted PVC), never follow a
@@ -1110,6 +1206,7 @@ async function persistentLaunchPolicy(
 			join(home, "config.toml"),
 			join(home, "managed_config.toml"),
 			join(home, "auth.json"),
+			...(remoteOnly ? [join(home, "environments.toml")] : []),
 			join(workspace, ".codex"),
 		]) {
 			const found = await lstat(file).catch((error: NodeJS.ErrnoException) => {
@@ -1504,6 +1601,7 @@ export class CodexAppServerBridge {
 	#process: ChildProcessWithoutNullStreams;
 	#shutdownTimeoutMs: number;
 	#callbacks?: ReturnType<typeof serveCodexNativeCallbacks>;
+	#unsubscribeExecutor?: () => void;
 
 	private constructor(
 		process: ChildProcessWithoutNullStreams,
@@ -1516,6 +1614,7 @@ export class CodexAppServerBridge {
 		},
 		nativeCallback?: CodexNativeCallbackHandler,
 		nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler,
+		private readonly sessionExecutor?: CodexSessionExecutorAdmissionV1,
 	) {
 		this.#process = process;
 		this.#skillLaunch = Object.freeze({
@@ -1536,6 +1635,7 @@ export class CodexAppServerBridge {
 			if (!this.#closing) this.fail(exited());
 		});
 		process.once("close", () => {
+			this.#unsubscribeExecutor?.();
 			this.#callbacks?.close();
 			this.#isClosed = true;
 			this.#resolveExit();
@@ -1543,6 +1643,9 @@ export class CodexAppServerBridge {
 			else this.fail(exited());
 			void this.cleanIsolatedDirectory();
 		});
+		this.#unsubscribeExecutor = sessionExecutor?.onFailure(() =>
+			this.fail(unavailable()),
+		);
 		const callbackRequired =
 			nativeCallback !== undefined || nativeConnectionBootstrap !== undefined;
 		if (!callbackRequired) return;
@@ -1567,6 +1670,7 @@ export class CodexAppServerBridge {
 
 	static async open(options: CodexAppServerBridgeOptions) {
 		const validated = validateOptions(options);
+		await validated.sessionExecutor?.assertCurrent();
 		const launchPath = validated.launchPath ?? env.PATH;
 		const executable = await resolveExecutable(launchPath, "codex");
 		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
@@ -1587,7 +1691,14 @@ export class CodexAppServerBridge {
 				validated.dataDirectory,
 				validated.conversationKey,
 				launchPolicy,
+				validated.sessionExecutor !== undefined,
 			);
+			if (
+				validated.sessionExecutor &&
+				validated.sessionExecutor.binding.workspaceRoot !==
+					nativeLaunchPolicy.directory
+			)
+				configurationInvalid();
 			// A platform without an enforceable Conversation boundary never starts a
 			// native process; there is no unrestricted fallback.
 			if (platform === "linux" && validated.isolationMode === "landlock") {
@@ -1603,7 +1714,8 @@ export class CodexAppServerBridge {
 				];
 			} else if (
 				platform === "linux" &&
-				validated.isolationMode === "container-boundary"
+				(validated.isolationMode === "container-boundary" ||
+					validated.isolationMode === "session-executor")
 			) {
 				// The dedicated Runtime Pod is the isolation boundary. This
 				// mode is Worker-owned; the default remains Landlock above.
@@ -1623,6 +1735,7 @@ export class CodexAppServerBridge {
 		const [command = executable, ...boundaryArguments] = boundary;
 		let process: ChildProcessWithoutNullStreams;
 		try {
+			await validated.sessionExecutor?.assertCurrent();
 			process = spawn(
 				command,
 				[
@@ -1668,7 +1781,7 @@ export class CodexAppServerBridge {
 					...(platform === "linux"
 						? [
 								"--config",
-								`sandbox_mode=${JSON.stringify(validated.isolationMode === "container-boundary" ? "workspace-write" : linuxNativeSandboxMode)}`,
+								`sandbox_mode=${JSON.stringify(validated.isolationMode === "landlock" ? linuxNativeSandboxMode : "workspace-write")}`,
 								// If a pinned code path still sandboxes a child, keep it on
 								// the backend this deployment can run: the namespace sandbox
 								// needs privileges the runtime never has.
@@ -1690,9 +1803,11 @@ export class CodexAppServerBridge {
 					],
 					cwd: nativeLaunchPolicy.directory,
 					env: {
-						// 白名单环境，不继承宿主的 CODEX_EXEC_SERVER_URL 等执行器覆盖；
-						// 不设置该变量时，原生工具在本 Conversation 进程内本地执行（#3201）。
+						// Only trusted Session authority can select the fixed remote executor.
 						...nativeLaunchPolicy.environment,
+						...(validated.sessionExecutor
+							? { CODEX_EXEC_SERVER_URL: CODEX_SESSION_EXECUTOR_ENDPOINT }
+							: {}),
 						...loopbackProxyEnvironment(),
 						...(validated.modelAccess
 							? {
@@ -1718,6 +1833,7 @@ export class CodexAppServerBridge {
 			},
 			validated.nativeCallback,
 			validated.nativeConnectionBootstrap,
+			validated.sessionExecutor,
 		);
 		try {
 			await bridge.waitForSpawn(validated.startupTimeoutMs);
@@ -1741,6 +1857,22 @@ export class CodexAppServerBridge {
 	async send(frame: CodexAppServerFrame) {
 		if (this.#closing || this.#isClosed || this.#failure) throw closed();
 		if (!isPlainRecord(frame)) throw invalidFrame();
+		if (this.sessionExecutor) {
+			// These standalone app-server APIs are local-only in the pinned release.
+			if (
+				typeof frame.method === "string" &&
+				(frame.method.startsWith("command/exec") ||
+					frame.method.startsWith("fs/"))
+			)
+				throw invalidFrame();
+			try {
+				await this.sessionExecutor.assertCurrent();
+			} catch {
+				this.fail(unavailable());
+				throw unavailable();
+			}
+			if (this.#closing || this.#isClosed || this.#failure) throw closed();
+		}
 		let encoded: string;
 		try {
 			const payload = JSON.stringify(frame);
@@ -1779,6 +1911,7 @@ export class CodexAppServerBridge {
 	}
 
 	async close() {
+		this.#unsubscribeExecutor?.();
 		this.#callbacks?.close();
 		await this.#callbacks?.finished;
 		if (this.#isClosed) {

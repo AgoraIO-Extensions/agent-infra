@@ -49,6 +49,7 @@ import {
 } from "@agent-infra/platform-core";
 import type { V1StatefulSet } from "@kubernetes/client-node";
 import { parseAllDocuments } from "yaml";
+import { validateCodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
@@ -287,6 +288,8 @@ export interface WorkloadProbeObservationV1 {
 export function workloadResourceConfigurationHashV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
 ): string {
+	if (policy.codexSessionExecutor !== undefined)
+		validateCodexSessionExecutorPolicyV1(policy.codexSessionExecutor);
 	return createHash("sha256")
 		.update(
 			JSON.stringify({
@@ -299,6 +302,36 @@ export function workloadResourceConfigurationHashV1(
 					cpu: policy.resources.limits.cpu,
 					memory: policy.resources.limits.memory,
 				},
+				...(policy.codexSessionExecutor === undefined
+					? {}
+					: {
+							codexSessionExecutor: {
+								resources: {
+									requests: {
+										cpu: policy.codexSessionExecutor.resources.requests.cpu,
+										memory:
+											policy.codexSessionExecutor.resources.requests.memory,
+									},
+									limits: {
+										cpu: policy.codexSessionExecutor.resources.limits.cpu,
+										memory: policy.codexSessionExecutor.resources.limits.memory,
+									},
+								},
+								tmpSizeLimit:
+									policy.codexSessionExecutor.tmpSizeLimit ?? "128Mi",
+								...(policy.codexSessionExecutor.placement === undefined
+									? {}
+									: {
+											placement: {
+												architecture:
+													policy.codexSessionExecutor.placement.architecture,
+												runtimeClassName:
+													policy.codexSessionExecutor.placement
+														.runtimeClassName ?? "",
+											},
+										}),
+							},
+						}),
 				...(policy.workspaceSnapshotEgress === undefined
 					? {}
 					: { workspaceSnapshotEgress: policy.workspaceSnapshotEgress }),

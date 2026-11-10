@@ -3,6 +3,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
+	CodexSessionExecutorAdmissionV1,
 	RuntimeBrowserCapabilityAssemblyV1,
 	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
@@ -21,8 +22,10 @@ import {
 	discoverRuntimeBrowserCapabilityV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
+	openCodexSessionExecutorAdmissionV1,
 	openOpenCodeRuntime,
 	openPiRuntime,
+	pinCodexSessionExecutorEpochV1,
 	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
@@ -48,6 +51,7 @@ import {
 	readCodexInstalledSkillDeployment,
 	readCodexIsolationMode,
 	readCodexPilotConfiguration,
+	readCodexSessionExecutorBindingV1,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
 	readRuntimeModelConfigurationV4,
@@ -412,6 +416,15 @@ export async function assembleRuntimeHost(
 		binding === "codex"
 			? readCodexIsolationMode(environment, serviceToken)
 			: undefined;
+	const sessionExecutorBinding =
+		codexIsolationMode === "session-executor"
+			? readCodexSessionExecutorBindingV1(environment, serviceToken)
+			: undefined;
+	if (
+		binding !== "codex" &&
+		environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE === "session-executor"
+	)
+		runtimeConfigurationInvalid();
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
@@ -503,6 +516,8 @@ export async function assembleRuntimeHost(
 	let openedStore: FileRuntimeStore | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
+	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
+	let detachSessionExecutorFailure: (() => void) | undefined;
 	const verifiedBrowserCapability = () => {
 		const result = discoverRuntimeBrowserCapabilityV1(
 			{},
@@ -512,19 +527,48 @@ export async function assembleRuntimeHost(
 			? result
 			: undefined;
 	};
-	const close = async () => {
-		if (oauth?.status === "available") await oauth.client.close();
-		try {
-			await assembledHost?.close();
-		} finally {
+	let closing: Promise<void> | undefined;
+	const close = () => {
+		closing ??= (async () => {
+			detachSessionExecutorFailure?.();
 			try {
-				await closeDriver?.();
+				await sessionExecutor?.close();
+				// Cancel native transport before Host waits for active remote work.
+				if (sessionExecutor) await closeDriver?.();
+				if (oauth?.status === "available") await oauth.client.close();
 			} finally {
-				await openedStore?.close();
+				try {
+					await assembledHost?.close();
+				} finally {
+					try {
+						await closeDriver?.();
+					} finally {
+						await openedStore?.close();
+					}
+				}
 			}
-		}
+		})();
+		return closing;
 	};
 	try {
+		if (sessionExecutorBinding) {
+			sessionExecutor = await openCodexSessionExecutorAdmissionV1(
+				sessionExecutorBinding,
+				required("AGENT_INFRA_RUNTIME_POD_UID"),
+			);
+			await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
+			detachSessionExecutorFailure = sessionExecutor.onFailure(() => {
+				void Promise.resolve()
+					.then(async () => {
+						if (assembledHost) await close();
+						else {
+							await sessionExecutor?.close();
+							await closeDriver?.();
+						}
+					})
+					.catch(() => undefined);
+			});
+		}
 		const storePath = join(dataDirectory, "host.json");
 		if (legacyMigration) {
 			const { bytes } = await readRuntimeLegacyJournal(storePath);
@@ -563,9 +607,11 @@ export async function assembleRuntimeHost(
 						}),
 					})
 				: undefined;
+		await sessionExecutor?.assertCurrent();
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
 					isolationMode: codexIsolationMode,
+					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
 					...(standardConnectionClient ? { standardConnectionClient } : {}),
@@ -702,9 +748,14 @@ export async function assembleRuntimeHost(
 								path: join(dataDirectory, "claude-driver"),
 							})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
-		closeDriver = async () => {
-			if ("close" in driver) await driver.close();
+		let closingDriver: Promise<void> | undefined;
+		closeDriver = () => {
+			closingDriver ??= (async () => {
+				if ("close" in driver) await driver.close();
+			})();
+			return closingDriver;
 		};
+		await sessionExecutor?.assertCurrent();
 		const rawValidateV4 =
 			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
 				? createRuntimeExecutionGrantValidatorV4(
@@ -903,6 +954,7 @@ export async function assembleRuntimeHost(
 			new Map([[keyId, publicKey]]),
 		);
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
+		await sessionExecutor?.assertCurrent();
 		return {
 			host,
 			browserCapability: () => browserCapabilityAssembly,

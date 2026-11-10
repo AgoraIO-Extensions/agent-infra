@@ -246,6 +246,16 @@ beforeAll(async () => {
 		format: "esm",
 		outfile: join(directory, "skill-hub-delivery.js"),
 	});
+	await build({
+		entryPoints: [
+			new URL("./codex-session-executor.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "codex-session-executor.js"),
+	});
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -547,6 +557,37 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 		},
 		installationConfigured: false,
 	});
+});
+
+it("rejects an executor layout without its summed Store charge before constructing adapters", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}\nObject.assign(workloadInput.policy, ${JSON.stringify({
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: { cpu: "1", memory: "1Gi" },
+			},
+			storageSize: "1Gi",
+			codexSessionExecutor: {
+				resources: {
+					requests: { cpu: "100m", memory: "64Mi" },
+					limits: { cpu: "500m", memory: "256Mi" },
+				},
+			},
+		})});\n`,
+	);
+	try {
+		const result = run();
+		expect(result.status).not.toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			error: "CODEX_SESSION_EXECUTOR_RESOURCE_COST_INVALID",
+			calls: [],
+		});
+	} finally {
+		await writeFile(path, original);
+	}
 });
 
 it("loads reserve policy from a deployment file when the module omits it", async () => {

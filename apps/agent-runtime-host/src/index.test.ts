@@ -16,7 +16,12 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
 	type ClaudeRuntimeDriverOptions,
+	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
+	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	type CodexRuntimeDriverOptions,
+	type CodexSessionExecutorAdmissionV1,
+	codexSessionExecutorAttestationV1,
+	createCodexSessionExecutorBindingV1,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
@@ -42,6 +47,7 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openClaudeRuntimeDriver: vi.fn(),
 	openCodexRuntimeDriver: vi.fn(),
+	openCodexSessionExecutorAdmission: vi.fn(),
 	openOpenCodeRuntime: vi.fn(),
 	openPiRuntime: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
@@ -78,6 +84,8 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 		...actual,
 		ClaudeRuntimeDriver: MockClaudeRuntimeDriver,
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
+		openCodexSessionExecutorAdmissionV1:
+			runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
 		openOpenCodeRuntime: runtimeAssemblyMocks.openOpenCodeRuntime,
 		openPiRuntime: runtimeAssemblyMocks.openPiRuntime,
 		verifyCodexPilotInstallation:
@@ -137,6 +145,96 @@ async function environment() {
 			.toString(),
 		AGENT_INFRA_RUNTIME_GRANT_ISSUER: "synthetic-platform",
 		AGENT_INFRA_RUNTIME_SERVICE_TOKEN: "synthetic-token",
+	};
+}
+
+async function sessionExecutorFixture() {
+	const base = await environment();
+	const binding = createCodexSessionExecutorBindingV1({
+		namespace: "runtime-test",
+		podName: "sandbox-session-a",
+		agentId: "agent-a",
+		conversationId: "conversation-a",
+		sessionGeneration: 1,
+		sandboxId: "session-a",
+		resourceFence: 1,
+		imageDigest: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
+	});
+	const serviceToken = "synthetic-session-service-token";
+	const values: NodeJS.ProcessEnv = {
+		...base,
+		AGENT_INFRA_RUNTIME_DRIVER: "codex",
+		AGENT_INFRA_RUNTIME_ISOLATION_MODE: "session-executor",
+		AGENT_INFRA_RUNTIME_WORKER_ID: "worker-a",
+		AGENT_INFRA_RUNTIME_SERVICE_TOKEN: serviceToken,
+		AGENT_INFRA_RUNTIME_AGENT_ID: binding.agentId,
+		AGENT_INFRA_RUNTIME_POD_UID: "synthetic-pod-uid",
+		AGENT_INFRA_RUNTIME_POD_NAME: binding.podName,
+		AGENT_INFRA_RUNTIME_NAMESPACE: binding.namespace,
+		[CODEX_SESSION_EXECUTOR_BINDING_ENV]: JSON.stringify(binding),
+		[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV]: codexSessionExecutorAttestationV1(
+			binding,
+			serviceToken,
+		),
+		AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+			schemaVersion: 4,
+			configVersion: "session-executor-fixture",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					protocol: "openai-responses-v1",
+					authentication: "bearer",
+					endpoint: "https://models.example.test/v1",
+					model: "synthetic-model",
+					reasoningLevels: ["high"],
+				},
+			],
+		}),
+	};
+	let closed = false;
+	let failed = false;
+	const listeners = new Set<() => void>();
+	const assertCurrent = vi.fn(async () => {
+		if (closed || failed) throw new Error("CODEX_SESSION_EXECUTOR_INVALID");
+	});
+	const closeAdmission = vi.fn(async () => {
+		closed = true;
+		listeners.clear();
+	});
+	const admission: CodexSessionExecutorAdmissionV1 = {
+		binding,
+		epoch: "11111111-1111-4111-8111-111111111111",
+		assertCurrent,
+		onFailure(listener) {
+			listeners.add(listener);
+			if (failed) listener();
+			return () => listeners.delete(listener);
+		},
+		close: closeAdmission,
+	};
+	runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockResolvedValue(
+		admission,
+	);
+	const closeDriver = vi.fn(async () => undefined);
+	runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(async () => {
+		const driver = await FakeRuntimeDriver.open(
+			join(base.AGENT_INFRA_RUNTIME_DATA_DIR, "executor-fixture-driver.json"),
+		);
+		return Object.assign(driver, { close: closeDriver });
+	});
+	return {
+		values,
+		admission,
+		assertCurrent,
+		closeAdmission,
+		closeDriver,
+		listenerCount: () => listeners.size,
+		fail() {
+			failed = true;
+			for (const listener of [...listeners]) listener();
+		},
 	};
 }
 
@@ -207,6 +305,7 @@ afterEach(async () => {
 		actualMessageRuntimes.ClaudeRuntimeDriver.open,
 	);
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
+	runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockReset();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockClear();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
 		actualMessageRuntimes.openOpenCodeRuntime,
@@ -224,6 +323,144 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("waits for Session executor admission before opening a native Driver", async () => {
+		const fixture = await sessionExecutorFixture();
+		const startup = Promise.withResolvers<CodexSessionExecutorAdmissionV1>();
+		runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockReturnValue(
+			startup.promise,
+		);
+		const assembling = assembleRuntimeHost(fixture.values);
+		await vi.waitFor(() =>
+			expect(
+				runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+			).toHaveBeenCalledWith(fixture.admission.binding, "synthetic-pod-uid"),
+		);
+		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
+		startup.resolve(fixture.admission);
+		const runtime = await assembling;
+		try {
+			expect(runtimeAssemblyMocks.openCodexRuntimeDriver).toHaveBeenCalledWith(
+				expect.objectContaining({
+					isolationMode: "session-executor",
+					sessionExecutor: fixture.admission,
+					modelOptions: [
+						expect.not.objectContaining({ credential: expect.anything() }),
+					],
+				}),
+			);
+			expect(fixture.assertCurrent).toHaveBeenCalled();
+			expect(fixture.listenerCount()).toBe(1);
+		} finally {
+			await Promise.all([runtime.close(), runtime.close()]);
+		}
+		expect(fixture.closeDriver).toHaveBeenCalledOnce();
+		expect(fixture.closeAdmission).toHaveBeenCalledOnce();
+		expect(fixture.listenerCount()).toBe(0);
+	});
+
+	it("rejects a foreign Session attestation before executor or Driver startup", async () => {
+		const fixture = await sessionExecutorFixture();
+		fixture.values[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV] =
+			codexSessionExecutorAttestationV1(
+				fixture.admission.binding,
+				"foreign-session-service-token",
+			);
+		await expect(assembleRuntimeHost(fixture.values)).rejects.toThrow(
+			/^RUNTIME_CONFIGURATION_INVALID$/,
+		);
+		expect(
+			runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+		).not.toHaveBeenCalled();
+		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
+	});
+
+	it("keeps the native Driver and Host store unopened when executor startup fails", async () => {
+		const fixture = await sessionExecutorFixture();
+		runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockRejectedValue(
+			new Error("CODEX_SESSION_EXECUTOR_INVALID"),
+		);
+		await expect(assembleRuntimeHost(fixture.values)).rejects.toThrow(
+			/^CODEX_SESSION_EXECUTOR_INVALID$/,
+		);
+		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
+		await expect(
+			readFile(
+				join(fixture.values.AGENT_INFRA_RUNTIME_DATA_DIR ?? "", "host.json"),
+			),
+		).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
+	it("closes executor admission and its subscription after native startup failure", async () => {
+		const fixture = await sessionExecutorFixture();
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockRejectedValue(
+			new Error("synthetic-native-startup-failure"),
+		);
+		await expect(assembleRuntimeHost(fixture.values)).rejects.toThrow(
+			/^synthetic-native-startup-failure$/,
+		);
+		expect(fixture.closeAdmission).toHaveBeenCalledOnce();
+		expect(fixture.listenerCount()).toBe(0);
+	});
+
+	it("rejects a replacement executor epoch after Host restart for the same binding", async () => {
+		const fixture = await sessionExecutorFixture();
+		const runtime = await assembleRuntimeHost(fixture.values);
+		await runtime.close();
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockClear();
+		const closeReplacement = vi.fn(async () => undefined);
+		runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockResolvedValue({
+			...fixture.admission,
+			epoch: "22222222-2222-4222-8222-222222222222",
+			assertCurrent: async () => undefined,
+			close: closeReplacement,
+		});
+		await expect(assembleRuntimeHost(fixture.values)).rejects.toThrow(
+			/^CODEX_SESSION_EXECUTOR_INVALID$/,
+		);
+		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
+		expect(closeReplacement).toHaveBeenCalledOnce();
+	});
+
+	it("rejects admission loss during Driver startup and closes the opened Driver", async () => {
+		const fixture = await sessionExecutorFixture();
+		const openDriver =
+			runtimeAssemblyMocks.openCodexRuntimeDriver.getMockImplementation();
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			async (...args) => {
+				const driver = await openDriver?.(...args);
+				fixture.fail();
+				return driver;
+			},
+		);
+		await expect(assembleRuntimeHost(fixture.values)).rejects.toThrow(
+			/^CODEX_SESSION_EXECUTOR_INVALID$/,
+		);
+		expect(fixture.closeDriver).toHaveBeenCalledOnce();
+		expect(fixture.closeAdmission).toHaveBeenCalled();
+		expect(fixture.listenerCount()).toBe(0);
+	});
+
+	it("closes the native Driver and Host on executor epoch loss without readmitting it", async () => {
+		const fixture = await sessionExecutorFixture();
+		const runtime = await assembleRuntimeHost(fixture.values);
+		const closeHost = vi.spyOn(runtime.host, "close");
+		fixture.fail();
+		await vi.waitFor(() => expect(closeHost).toHaveBeenCalledOnce());
+		await runtime.close();
+		expect(fixture.closeDriver).toHaveBeenCalledOnce();
+		expect(fixture.listenerCount()).toBe(0);
+		expect(
+			runtimeAssemblyMocks.openCodexSessionExecutorAdmission,
+		).toHaveBeenCalledOnce();
+		await expect(
+			runtime.host.readiness(
+				{} as never,
+				"worker-a",
+				new AbortController().signal,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_READINESS_UNAVAILABLE" });
+	});
+
 	it("assembles the fixed Worker current client from deployment environment", async () => {
 		let currentBaseUrl = "";
 		let currentToken = "";
