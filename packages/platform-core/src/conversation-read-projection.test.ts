@@ -74,6 +74,76 @@ describe("Conversation read projection", () => {
 		]);
 	});
 
+	it("keeps a completed empty answer processing until its terminal event is persisted", () => {
+		const input = {
+			messages: [
+				{
+					messageId: "message-1",
+					text: "Run it",
+					executionId: "execution-1",
+					status: "submitted",
+					createdAt: first,
+				},
+			],
+			executions: [
+				{
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sourceMessageId: "message-1",
+					status: "completed",
+					createdAt: first,
+					updatedAt: second,
+					traceId: "trace-1",
+				},
+			],
+			events: [],
+		};
+
+		expect(projectConversationMessagesV1(input)).toEqual([
+			expect.objectContaining({
+				messageId: "message-1",
+				role: "user",
+				status: "submitted",
+			}),
+			expect.objectContaining({
+				messageId: "assistant:execution-1",
+				role: "assistant",
+				text: "",
+				status: "processing",
+			}),
+		]);
+
+		expect(
+			projectConversationMessagesV1({
+				...input,
+				events: [
+					{
+						executionId: "execution-1",
+						sequence: 1,
+						eventType: "execution.status",
+						eventPayload: {
+							type: "execution.status",
+							status: "completed",
+						},
+						occurredAt: second,
+					},
+				],
+			}),
+		).toEqual([
+			expect.objectContaining({
+				messageId: "message-1",
+				role: "user",
+				status: "submitted",
+			}),
+			expect.objectContaining({
+				messageId: "assistant:execution-1",
+				role: "assistant",
+				text: "",
+				status: "completed",
+			}),
+		]);
+	});
+
 	it("owns execution status timing and failure projection facts", () => {
 		expect(
 			projectConversationExecutionV1({
