@@ -15,13 +15,16 @@ import {
 	PostgresSessionOwnerSecretStoreV1,
 } from "@agent-infra/platform-store";
 import {
+	sessionSandboxResourceCostsV1,
+	validateSessionExecutorResourceCostsV1,
+} from "./codex-session-executor.js";
+import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
 } from "./connection-consumer-projection.js";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
-import { quantityRatio } from "./kubernetes-runtime-comparison.js";
 import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
@@ -324,18 +327,17 @@ if (
 	throw new Error("SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_CONFLICT");
 }
 
+// Reject an undercharged executor tuple before opening Store or Kubernetes adapters.
+if (configuredWorkloadInput.policy.codexSessionExecutor !== undefined)
+	validateSessionExecutorResourceCostsV1(
+		configuredWorkloadInput.policy,
+		workloadResourceConfigurationHashV1(configuredWorkloadInput.policy),
+		sessionSandboxReserves,
+	);
+
 /** Private deployment readback: the same loader as the production reserve loop. */
 export function readPlatformSessionReserveDeploymentV1() {
 	const policy = configuredWorkloadInput.policy;
-	const quantity = (value: string, scale: bigint) => {
-		const ratio = quantityRatio(value);
-		if (!ratio || ratio[0] <= 0n)
-			throw new Error("SESSION_RESERVE_RESOURCE_COST_INVALID");
-		const count = (ratio[0] * scale + ratio[1] - 1n) / ratio[1];
-		if (count > BigInt(Number.MAX_SAFE_INTEGER))
-			throw new Error("SESSION_RESERVE_RESOURCE_COST_INVALID");
-		return Number(count);
-	};
 	return {
 		source:
 			configuredSessionSandboxReservesFromFile === undefined
@@ -358,13 +360,12 @@ export function readPlatformSessionReserveDeploymentV1() {
 			namespace: policy.namespace,
 			resourceProfileRef: policy.resourceProfileRef,
 			resources: policy.resources,
+			...(policy.codexSessionExecutor
+				? { codexSessionExecutor: policy.codexSessionExecutor }
+				: {}),
 			storageSize: policy.storageSize,
 		},
-		resourceCosts: {
-			cpuMillis: quantity(policy.resources.limits.cpu, 1000n),
-			memoryBytes: quantity(policy.resources.limits.memory, 1n),
-			storageBytes: quantity(policy.storageSize, 1n),
-		},
+		resourceCosts: sessionSandboxResourceCostsV1(policy),
 	};
 }
 

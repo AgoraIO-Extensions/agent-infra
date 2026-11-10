@@ -17,6 +17,7 @@ export { validateModelAccess as validateCodexModelAccess } from "./codex-app-ser
 export { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";
 export * from "./codex-installation.js";
 export * from "./codex-runtime-driver.js";
+export * from "./codex-session-executor.js";
 export * from "./driver.js";
 export * from "./errors.js";
 export * from "./fake-runtime-driver.js";

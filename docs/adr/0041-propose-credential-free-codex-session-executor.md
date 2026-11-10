@@ -2,7 +2,7 @@
 
 ## 状态
 
-提议，关联 #3054。须 Owner/架构评审；当前没有对应实现或生产启用批准。
+架构方案已按 #4085 评审合入，关联 #3054；独立部署模式默认关闭，实际启用与目标环境验收另行完成。
 完整执行边界以[工程 Spec §11.2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
 为准，协议接线见 [Runtime HLD §10.3](../architecture/HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
 本提案不修改现有模式的 Landlock、Provider sandbox 或凭据保护门禁。
@@ -43,7 +43,7 @@ local fallback。标准 native 事件和平台授权/持久化边界保持，不
 
 ## 实施与验收顺序
 
-1. 先完成本提案与工程 Spec/HLD 的评审；仅文档合入不表示实现或业务验收通过。
+1. 工程 Spec/HLD 与本方案已按 #4085 评审合入；文档和代码合入均不代替真实业务验收。
 2. 贯通 Worker 资源渲染/比较与容量回执、Host 绑定验证、Bridge remote-only 启动和 Driver Turn
    policy，保留默认 Landlock 与现有 `container-boundary` 路径。
 3. 验证真实固定 Codex 的本人读写、shell、patch、图片与搜索；用合成 marker 证明控制侧凭据、

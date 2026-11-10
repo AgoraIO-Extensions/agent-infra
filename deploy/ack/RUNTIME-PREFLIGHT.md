@@ -7,6 +7,39 @@ Worker 可运行在 ECI。Runtime 的系统要求按 Driver 单独确认；Codex
 边界；该模式必须单独做 Pod 安全上下文、跨 Session 负例和真实工具验收，不能用 Landlock
 预检结果冒充。Pi 等 Messages Driver 不能替 Codex 通过任一检查。
 
+## Session 独立 executor
+
+当目标环境缺少 namespace/Landlock 能力时，标准 Codex 业务 Session 可以选择
+[独立 executor](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)。
+它复用现有 Session Pod，由独立无凭据容器执行命令与文件 I/O；不需要 RAM 登录或新增节点池。
+在 Worker 私有部署模块的 `policy` 中显式增加以下配置，旧 `codexContainerBoundaryEnabled`
+不启用本模式：
+
+```typescript
+codexSessionExecutor: {
+  resources: {
+    requests: { cpu: "250m", memory: "256Mi" },
+    limits: { cpu: "1", memory: "512Mi" },
+  },
+  tmpSizeLimit: "128Mi",
+}
+```
+
+资源值只是格式示例，须按真实执行负载批准。控制容器与 executor 的 limits 总和进入 Store
+资源费用；部署须提供新资源摘要对应的足额 `resourceCosts`，缺失或低报在启动前拒绝。
+首版不接受该模式的预留 reserve，须使用正式分配的新 Session；旧 reserves 不被升级或冒名采用。
+API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs 流程交付。
+
+Worker 创建精确工作区 `subPath`，只向控制容器注入签名绑定及派生服务 token；executor 不拿
+Host Secret/PVC 根/历史或模型凭据，不共享 PID，只有固定 loopback 执行端点。
+受信启动程序在业务开放前完成独立合成目录的执行/读写检查；readiness 只读核对绑定、实例和活性。
+断连使准入永久失效，不自动重连为原执行担保；executor 替换后须按正式 Session 生命周期处理，
+不能删除持久 epoch 记录、手工改 PVC/DB 或重复投递命令来恢复。
+
+采用前须在目标同版本镜像上完成真实 shell/patch/图片与搜索、凭据/进程/文件/跨 Session 负向、
+取消/后台进程/重启恢复，以及 Web/企微和 PNG/PDF 字节/hash 验收。配置、Pod Ready 和离线
+模型替身均不能代签。未启用时原 Landlock、`container-boundary` 与 RuntimeClass 路径保持。
+
 ## Cluster-provided RuntimeClass
 
 当当前节点/ECI 不支持 bwrap 所需的 user/mount/pid namespace 时，部署可以为 Session

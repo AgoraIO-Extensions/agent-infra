@@ -34,6 +34,7 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import type { CodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
 	type RuntimeConnectionConsumerSnapshotsByAgentV1,
 	runtimeConnectionConsumerProjectionV1,
@@ -150,6 +151,8 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly imagePullSecretName?: string;
 	/** Explicit deployment approval for the Codex container-boundary mode. */
 	readonly codexContainerBoundaryEnabled?: boolean;
+	/** Worker-owned approval for standard keyless Codex business Sessions only. */
+	readonly codexSessionExecutor?: CodexSessionExecutorPolicyV1;
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionConsumerSnapshotsByAgent?: RuntimeConnectionConsumerSnapshotsByAgentV1;

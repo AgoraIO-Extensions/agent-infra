@@ -1,6 +1,10 @@
 import { createPublicKey } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+	codexSessionExecutorAttestationV1,
+	createCodexSessionExecutorBindingV1,
+} from "@agent-infra/agent-runtime";
+import {
 	type ApprovedConnectionConsumerTargetV1,
 	resolveApprovedConnectionConsumerProfileV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
@@ -27,6 +31,11 @@ import {
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
 import type { V1Secret, V1Service } from "@kubernetes/client-node";
+import {
+	sessionExecutorAttestationSecretKeyV1,
+	sessionExecutorBindingSecretKeyV1,
+	validateCodexSessionExecutorPolicyV1,
+} from "./codex-session-executor.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -576,6 +585,8 @@ export function createSessionSandboxResourceInputResolverV1(
 	options: { readonly serviceToken: string },
 ) {
 	const egressPolicy = structuredClone(workload.policy);
+	if (workload.policy.codexSessionExecutor !== undefined)
+		validateCodexSessionExecutorPolicyV1(workload.policy.codexSessionExecutor);
 	workloadEgressRulesV1(egressPolicy);
 	const connectionConsumerSnapshot = workload.policy.connectionConsumerSnapshot;
 	const connectionInstallationRevision =
@@ -696,9 +707,39 @@ export function createSessionSandboxResourceInputResolverV1(
 			deployment.secretRefs.length > 0
 		)
 			throw new WorkloadKubernetesError("policy");
+		const serviceToken = sessionSandboxServiceTokenV1(
+			options.serviceToken,
+			policy.namespace,
+			binding.sandboxId,
+		);
+		const executorBinding =
+			templateBinding.driver === "codex" &&
+			workload.policy.codexSessionExecutor !== undefined
+				? createCodexSessionExecutorBindingV1({
+						namespace: policy.namespace,
+						podName: binding.resourceName,
+						agentId: binding.agentId,
+						conversationId: binding.sessionId,
+						sessionGeneration: generation,
+						sandboxId: binding.sandboxId,
+						resourceFence,
+						imageDigest: `${templateBinding.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
+					})
+				: undefined;
 		return {
 			driver: templateBinding.driver,
-			...(templateBinding.driver === "codex"
+			...(executorBinding
+				? {
+						sessionExecutor: {
+							binding: executorBinding,
+							attestation: codexSessionExecutorAttestationV1(
+								executorBinding,
+								serviceToken,
+							),
+						},
+					}
+				: {}),
+			...(templateBinding.driver === "codex" && !executorBinding
 				? {
 						codexContainerBoundaryEnabled:
 							workload.policy.codexContainerBoundaryEnabled === true,
@@ -723,11 +764,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			grantPublicKey: auth.grantPublicKey,
 			grantIssuer: auth.grantIssuer,
 			nativeMetadataWorkerOrigin: auth.nativeMetadataWorkerOrigin,
-			serviceToken: sessionSandboxServiceTokenV1(
-				options.serviceToken,
-				policy.namespace,
-				binding.sandboxId,
-			),
+			serviceToken,
 			...fileExchange(),
 		};
 	};
@@ -768,7 +805,20 @@ export function createSessionSandboxResourceInputResolverV1(
 				`${workloadResourceNameV1(binding.agentId)}-data`
 		)
 			throw new WorkloadKubernetesError("policy");
+		const runtime = runtimeFor(
+			binding,
+			policy,
+			deployment,
+			modelProjection,
+			requireCurrentTemplateTrust,
+			generation,
+			resourceFence,
+		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(runtime?.sessionExecutor &&
+			workload.policy.codexSessionExecutor !== undefined
+				? { codexSessionExecutor: workload.policy.codexSessionExecutor }
+				: {}),
 			...(skillHub ? { skillHub } : {}),
 			...(deployment.skillDeliveryImage
 				? { skillDeliveryImage: deployment.skillDeliveryImage }
@@ -794,20 +844,14 @@ export function createSessionSandboxResourceInputResolverV1(
 				templateBinding !== undefined,
 				Boolean(deployment.workspaceSnapshots?.length),
 			),
-			imageDigest: `${templateBinding?.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
+			imageDigest:
+				runtime?.sessionExecutor?.binding.imageDigest ??
+				`${templateBinding?.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 			imagePullSecretName: workload.policy.imagePullSecretName,
 			containerPort: deployment.service.port,
 			env: deployment.env,
 			// V4-only: a static-key or missing projection fails before any write.
-			runtime: runtimeFor(
-				binding,
-				policy,
-				deployment,
-				modelProjection,
-				requireCurrentTemplateTrust,
-				generation,
-				resourceFence,
-			),
+			runtime,
 			connectionConsumerSnapshot,
 			connectionInstallationRevision,
 			authorizedIngressSelector: workload.policy.workerSelector,
@@ -828,6 +872,8 @@ const sessionPlatformSecretKeys: ReadonlySet<string> = new Set([
 	"model-config",
 	sessionSandboxFileExchangeSecretKey,
 	sessionSandboxContainerBoundaryAttestationSecretKey,
+	sessionExecutorBindingSecretKeyV1,
+	sessionExecutorAttestationSecretKeyV1,
 ]);
 
 function ownerSecretRecordMatches(

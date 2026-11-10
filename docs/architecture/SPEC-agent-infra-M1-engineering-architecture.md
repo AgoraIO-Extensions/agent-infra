@@ -1602,9 +1602,10 @@ Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临�
 
 #### 11.2.1 Codex Session 独立 executor（提案）
 
-本节为待 Owner/架构评审的执行边界提案，尚未实现，不改变现有 `landlock` 或
-`container-boundary` 的约束。取舍见 [ADR-0041](../adr/0041-propose-credential-free-codex-session-executor.md)；
-评审和实现验收完成前，部署不得启用此路径。
+本节执行边界已按 #4085 评审合入，作为独立、默认关闭的 `session-executor` 部署模式实现，
+不改变现有 `landlock` 或 `container-boundary` 的约束。
+取舍见 [ADR-0041](../adr/0041-propose-credential-free-codex-session-executor.md)；
+实现合入不代表目标 ACK 或业务验收通过，部署启用前仍须完成本节验收。
 
 候选仅用于 Worker 独占管理、采用 keyless 模型配置的标准 Codex 业务 Session Sandbox。
 每个 Session Pod 增加一个无业务凭据的固定 Codex `exec-server` 容器，RuntimeHost 与持模型

@@ -27,6 +27,12 @@ case "$#:${1:-}" in
       *) exit 1 ;;
     esac
     ;;
+  2:--session-executor)
+    case "$2" in
+      init|run) exec /usr/bin/tini -s -- "$runtime_node" --disable-sigusr1 /app/dist/session-executor-runner.mjs "$2" ;;
+      *) exit 1 ;;
+    esac
+    ;;
   *) exit 1 ;;
 esac
 # Native CLIs may leave orphaned descendants when they exit. The container

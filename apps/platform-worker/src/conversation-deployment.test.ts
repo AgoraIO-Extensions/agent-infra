@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { createAppliedRuntimeSkillDirectoryV1 } from "@agent-infra/agent-runtime";
+import {
+	createAppliedRuntimeSkillDirectoryV1,
+	verifyCodexSessionExecutorBindingV1,
+} from "@agent-infra/agent-runtime";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import {
@@ -30,6 +33,10 @@ import type {
 	V1Service,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
+import {
+	sessionExecutorAttestationSecretKeyV1,
+	sessionExecutorBindingSecretKeyV1,
+} from "./codex-session-executor.js";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	runtimeConnectionConsumerAnnotation,
@@ -169,6 +176,84 @@ function fixture() {
 		}),
 	};
 }
+
+it("derives the executor only from independent Worker policy and authoritative Conversation/fence", async () => {
+	const f = fixture();
+	const policy = {
+		...f.options.policy,
+		codexContainerBoundaryEnabled: true,
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "100m", memory: "64Mi" },
+				limits: { cpu: "500m", memory: "256Mi" },
+			},
+		},
+	};
+	const claim = {
+		...f.claim,
+		policy: {
+			...f.claim.policy,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		},
+	};
+	const receive = createProductionSessionSandboxReceiverV1(
+		{ ...f.options, policy },
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	const observation = await receive(claim, new AbortController().signal);
+	const secret = f.resources.get("Secret/sandbox-allocation-a") as V1Secret;
+	const binding = verifyCodexSessionExecutorBindingV1(
+		JSON.parse(
+			Buffer.from(
+				secret.data?.[sessionExecutorBindingSecretKeyV1] ?? "",
+				"base64",
+			).toString(),
+		),
+		Buffer.from(
+			secret.data?.[sessionExecutorAttestationSecretKeyV1] ?? "",
+			"base64",
+		).toString(),
+		sessionSandboxServiceTokenV1(
+			sessionSandboxDeploymentTokenFixture,
+			policy.namespace,
+			claim.sandbox.sandboxId,
+		),
+	);
+	expect(binding).toMatchObject({
+		namespace: policy.namespace,
+		podName: claim.sandbox.resourceName,
+		agentId: claim.sandbox.agentId,
+		conversationId: claim.sandbox.sessionId,
+		sessionGeneration: claim.sandbox.generation,
+		sandboxId: claim.sandbox.sandboxId,
+		resourceFence: claim.resourceFence,
+		imageDigest: `${policy.imageRepository}@${claim.policy.imageDigest}`,
+	});
+	const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+	expect(pod.spec?.containers).toHaveLength(2);
+	expect(JSON.stringify(pod)).not.toContain('"value":"container-boundary"');
+	pod.status = {
+		phase: "Running",
+		conditions: [{ type: "Ready", status: "True" }],
+	};
+	expect(
+		(
+			await receive(
+				{ ...claim, previousObservation: observation },
+				new AbortController().signal,
+			)
+		).status,
+	).toBe("ready");
+	Object.assign(pod.spec?.containers[1] ?? {}, {
+		envFrom: [{ secretRef: { name: "owner-credential" } }],
+	});
+	await expect(
+		receive(
+			{ ...claim, previousObservation: observation },
+			new AbortController().signal,
+		),
+	).rejects.toThrow();
+});
 
 async function skillFixture() {
 	const f = fixture();
@@ -633,6 +718,51 @@ describe("production SessionSandbox resource receiver", () => {
 				new AbortController().signal,
 			),
 		).rejects.toThrow();
+	});
+
+	it("keeps the approved Skill projection read-only in the executor without Connection mounts", async () => {
+		const f = await skillFixture();
+		const policy = {
+			...f.options.policy,
+			codexSessionExecutor: {
+				resources: {
+					requests: { cpu: "100m", memory: "64Mi" },
+					limits: { cpu: "500m", memory: "256Mi" },
+				},
+			},
+		};
+		const receive = createProductionSessionSandboxReceiverV1(
+			{ ...f.options, policy },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		await receive(
+			{
+				...f.claim,
+				policy: {
+					...f.claim.policy,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				},
+			},
+			new AbortController().signal,
+		);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const executor = pod.spec?.containers[1];
+		expect(executor?.volumeMounts).toContainEqual({
+			name: "skill-hub",
+			mountPath: "/opt/agent-infra-skill-hub/.agents",
+			subPath: `generations/${f.binding.generationId}/.agents`,
+			readOnly: true,
+		});
+		expect(executor?.volumeMounts?.map((mount) => mount.name)).toEqual([
+			"workspace",
+			"executor-tmp",
+			"skill-hub",
+		]);
+		expect(executor?.env?.map((entry) => entry.name)).toEqual([
+			"AGENT_INFRA_CODEX_SESSION_EXECUTOR_BINDING",
+			"AGENT_INFRA_RUNTIME_POD_UID",
+		]);
 	});
 
 	it("mount layout is discoverable by the real Runtime Skill directory", async () => {

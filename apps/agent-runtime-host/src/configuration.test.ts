@@ -1,9 +1,16 @@
 import { createHmac } from "node:crypto";
+import {
+	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
+	CODEX_SESSION_EXECUTOR_BINDING_ENV,
+	codexSessionExecutorAttestationV1,
+	createCodexSessionExecutorBindingV1,
+} from "@agent-infra/agent-runtime";
 import { describe, expect, it } from "vitest";
 
 import {
 	readCodexIsolationMode,
 	readCodexPilotConfiguration,
+	readCodexSessionExecutorBindingV1,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
 	readRuntimeModelConfigurationV4,
@@ -36,7 +43,127 @@ function environment(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+function sessionExecutorEnvironment() {
+	const serviceToken = "synthetic-session-service-token";
+	const binding = createCodexSessionExecutorBindingV1({
+		namespace: "runtime-test",
+		podName: "sandbox-session-a",
+		agentId: "agent-a",
+		conversationId: "conversation-a",
+		sessionGeneration: 1,
+		sandboxId: "session-a",
+		resourceFence: 1,
+		imageDigest: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
+	});
+	const values: NodeJS.ProcessEnv = {
+		AGENT_INFRA_RUNTIME_DRIVER: "codex",
+		AGENT_INFRA_RUNTIME_ISOLATION_MODE: "session-executor",
+		AGENT_INFRA_RUNTIME_AGENT_ID: binding.agentId,
+		AGENT_INFRA_RUNTIME_POD_UID: "synthetic-pod-uid",
+		AGENT_INFRA_RUNTIME_POD_NAME: binding.podName,
+		AGENT_INFRA_RUNTIME_NAMESPACE: binding.namespace,
+		[CODEX_SESSION_EXECUTOR_BINDING_ENV]: JSON.stringify(binding),
+		[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV]: codexSessionExecutorAttestationV1(
+			binding,
+			serviceToken,
+		),
+		AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+			...configuration,
+			schemaVersion: 4,
+			modelOptions: configuration.modelOptions.map(
+				({ credentialEnvironmentVariable: _, ...option }) => ({
+					...option,
+					protocol: "openai-responses-v1",
+					authentication: "bearer",
+				}),
+			),
+		}),
+	};
+	return { values, binding, serviceToken };
+}
+
 describe("Runtime deployment configuration", () => {
+	it("accepts a keyless Session executor only with its own signed Pod binding", () => {
+		const { values, binding, serviceToken } = sessionExecutorEnvironment();
+		expect(readCodexIsolationMode(values, serviceToken)).toBe(
+			"session-executor",
+		);
+		expect(readCodexSessionExecutorBindingV1(values, serviceToken)).toEqual(
+			binding,
+		);
+		expect(() => readCodexIsolationMode(values)).toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+		expect(() =>
+			readCodexIsolationMode(values, "foreign-session-service-token"),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
+	it.each([
+		{ [CODEX_SESSION_EXECUTOR_BINDING_ENV]: undefined },
+		{ [CODEX_SESSION_EXECUTOR_BINDING_ENV]: "{}" },
+		{ [CODEX_SESSION_EXECUTOR_ATTESTATION_ENV]: undefined },
+		{ [CODEX_SESSION_EXECUTOR_ATTESTATION_ENV]: "a".repeat(43) },
+		{ AGENT_INFRA_RUNTIME_DRIVER: "custom" },
+		{ AGENT_INFRA_RUNTIME_AGENT_ID: "foreign-agent" },
+		{ AGENT_INFRA_RUNTIME_POD_NAME: "sandbox-foreign" },
+		{ AGENT_INFRA_RUNTIME_NAMESPACE: "foreign-namespace" },
+		{ AGENT_INFRA_RUNTIME_POD_UID: undefined },
+		{ AGENT_INFRA_RUNTIME_POD_UID: "" },
+		{ AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: "{}" },
+		{ AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential" },
+		{ CODEX_EXEC_SERVER_URL: "ws://127.0.0.1:8068" },
+		{ CODEX_HOME: "/synthetic/native-home" },
+	])(
+		"rejects a foreign or incompatible Session executor deployment",
+		(patch) => {
+			const { values, serviceToken } = sessionExecutorEnvironment();
+			expect(() =>
+				readCodexIsolationMode({ ...values, ...patch }, serviceToken),
+			).toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+		},
+	);
+
+	it("does not let the old container attestation or another isolation mode authorize an executor", () => {
+		const { values, serviceToken } = sessionExecutorEnvironment();
+		expect(() =>
+			readCodexIsolationMode(
+				{
+					...values,
+					[CODEX_SESSION_EXECUTOR_ATTESTATION_ENV]: undefined,
+					AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED: "worker-v1",
+					AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION: "a".repeat(43),
+				},
+				serviceToken,
+			),
+		).toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+		expect(() =>
+			readCodexIsolationMode(
+				{ ...values, AGENT_INFRA_RUNTIME_ISOLATION_MODE: "landlock" },
+				serviceToken,
+			),
+		).toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+	});
+
+	it.each([
+		{ schemaVersion: 2 },
+		{ schemaVersion: 3 },
+		{ credential: "synthetic-credential" },
+		{ credentialEnvironmentVariable: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_X" },
+	])(
+		"requires the raw Session model configuration to be credential-free V4",
+		(patch) => {
+			const { values, serviceToken } = sessionExecutorEnvironment();
+			const model = JSON.parse(values.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "");
+			if ("schemaVersion" in patch) Object.assign(model, patch);
+			else Object.assign(model.modelOptions[0], patch);
+			values.AGENT_INFRA_RUNTIME_MODEL_CONFIG = JSON.stringify(model);
+			expect(() => readCodexIsolationMode(values, serviceToken)).toThrow(
+				/^RUNTIME_CONFIGURATION_INVALID$/,
+			);
+		},
+	);
+
 	it("defaults Codex isolation to Landlock and accepts the Worker-owned container mode", () => {
 		expect(readCodexIsolationMode({})).toBe("landlock");
 		const serviceToken = "synthetic-service-token";

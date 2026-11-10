@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { platform } from "node:process";
 import { isDeepStrictEqual } from "node:util";
 import {
 	FileProjectionV1Schema,
@@ -54,6 +55,7 @@ import {
 	type CodexAppServerFrame,
 	type CodexModelAccess,
 	codexConversationKey,
+	receiveCodexSessionExecutorAdmissionV1,
 	runCodexConnectionRecovery,
 	validateModelAccess,
 	validateModelEndpoint,
@@ -119,6 +121,10 @@ import {
 	sameCodexNativeAttemptV1,
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
+import {
+	type CodexSessionExecutorAdmissionV1,
+	codexSessionExecutorBindingDigestV1,
+} from "./codex-session-executor.js";
 import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
@@ -615,7 +621,11 @@ import {
 
 export interface CodexRuntimeDriverOptions {
 	/** Deployment-owned native isolation boundary; defaults to Landlock. */
-	readonly isolationMode?: "landlock" | "container-boundary";
+	readonly isolationMode?:
+		| "landlock"
+		| "container-boundary"
+		| "session-executor";
+	readonly sessionExecutor?: CodexSessionExecutorAdmissionV1;
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
@@ -886,6 +896,7 @@ interface CodexRuntimeRequirements {
 	artifacts: typeof release.artifacts;
 	lane: string;
 	barrier?: typeof nativeBarrier;
+	sessionExecutorBindingDigest?: string;
 }
 
 // These are requirements of this Driver, not proof that an installed binary
@@ -2773,12 +2784,18 @@ function isCodexRuntimeRequirements(
 			"artifacts",
 			"lane",
 			"barrier",
+			"sessionExecutorBindingDigest",
 		]) ||
 		!Number.isSafeInteger(value.schemaVersion) ||
 		Number(value.schemaVersion) < 1 ||
 		!nonEmptyString(value.lane) ||
 		!isPlainRecord(value.provenance) ||
 		!isPlainRecord(value.artifacts) ||
+		(value.sessionExecutorBindingDigest !== undefined &&
+			(typeof value.sessionExecutorBindingDigest !== "string" ||
+				!/^[a-f0-9]{64}$/.test(value.sessionExecutorBindingDigest) ||
+				value.lane !== "official-model-only" ||
+				value.barrier !== undefined)) ||
 		(value.barrier === undefined
 			? value.lane !== "official-model-only"
 			: !isPlainRecord(value.barrier))
@@ -4463,6 +4480,7 @@ class CodexRpc {
 		const readOnly =
 			(method === "thread/read" ||
 				method === "skills/list" ||
+				method === "environment/status" ||
 				method === "thread/items/list") &&
 			signal !== undefined;
 		if (
@@ -4787,7 +4805,73 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private assertRuntimeRequirements(session: CodexSession) {
+		this.assertSessionExecutorBinding(session);
 		if (!this.runtimeRequirementsMatch(session)) unavailable();
+	}
+
+	private sessionExecutorFailed = false;
+	private unsubscribeSessionExecutor?: () => void;
+
+	private assertSessionExecutorBinding(binding: {
+		agentId: string;
+		conversationId: string;
+		sessionGeneration: number;
+	}) {
+		const expected = this.sessionExecutor?.binding;
+		if (
+			expected &&
+			(binding.agentId !== expected.agentId ||
+				binding.conversationId !== expected.conversationId ||
+				binding.sessionGeneration !== expected.sessionGeneration)
+		)
+			unavailable();
+	}
+
+	private failSessionExecutor() {
+		if (this.sessionExecutorFailed) return;
+		this.sessionExecutorFailed = true;
+		for (const { rpc } of [...this.rpcsByTransport.values()])
+			rpc.failNotification(unavailableError());
+		if (this.sessionExecutor)
+			this.revokeModelConversation?.(
+				this.sessionExecutor.binding.conversationKey,
+			);
+		for (const key of this.eventWaiters.keys()) this.notifyEventStream(key);
+	}
+
+	private async assertSessionExecutorCurrent() {
+		if (!this.sessionExecutor) return;
+		if (this.closed || this.sessionExecutorFailed) unavailable();
+		try {
+			await this.sessionExecutor.assertCurrent();
+		} catch {
+			this.failSessionExecutor();
+			unavailable();
+		}
+		if (this.sessionExecutorFailed) unavailable();
+	}
+
+	private async assertSessionExecutorEnvironment(
+		rpc: CodexRpc,
+		signal?: AbortSignal,
+	) {
+		if (!this.sessionExecutor) return;
+		signal?.throwIfAborted();
+		await this.assertSessionExecutorCurrent();
+		signal?.throwIfAborted();
+		await rpc.request(
+			"environment/status",
+			{ environmentId: "remote" },
+			(value) => {
+				if (!isPlainRecord(value) || value.status !== "ready") unavailable();
+			},
+			false,
+			false,
+			Date.now() + rpcRequestTimeoutMs,
+			signal,
+		);
+		signal?.throwIfAborted();
+		await this.assertSessionExecutorCurrent();
 	}
 
 	private readonly resumedSessions = new Set<string>();
@@ -4950,7 +5034,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		 * outside the open path.
 		 */
 		private readonly codexInputRootPath?: string,
-	) {}
+		private readonly sessionExecutor?: CodexSessionExecutorAdmissionV1,
+	) {
+		this.unsubscribeSessionExecutor = sessionExecutor?.onFailure(() =>
+			this.failSessionExecutor(),
+		);
+	}
 
 	private readonly connectionRecoveries = new Map<
 		string,
@@ -5645,6 +5734,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		assertCurrent?: () => void,
 		metadataRead?: NativeMetadataReadBoundary,
 	) {
+		await this.assertSessionExecutorCurrent();
 		if (metadataRead) await metadataRead.revalidate();
 		assertCurrent?.();
 		if (this.closed) unavailable();
@@ -5673,6 +5763,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		assertCurrent?: () => void,
 		metadataRead?: NativeMetadataReadBoundary,
 	) {
+		if (
+			this.sessionExecutor &&
+			conversationKey !== this.sessionExecutor.binding.conversationKey
+		)
+			unavailable();
+		await this.assertSessionExecutorCurrent();
 		let bridge: CodexAppServerTransport;
 		let resolvedBridge: CodexAppServerTransport | undefined;
 		let abandonedOpen = false;
@@ -5787,6 +5883,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			fail: (error) => rpc.failNotification(error),
 		};
 		this.textDeltaBatches.add(textDeltas);
+		let unsubscribeExecutor: (() => void) | undefined;
 		const rpc = new CodexRpc(
 			bridge,
 			(frame) =>
@@ -5801,6 +5898,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					textDeltas,
 				),
 			() => {
+				unsubscribeExecutor?.();
+				if (this.sessionExecutor) this.failSessionExecutor();
 				// Deltas already accepted from this process still commit in order.
 				void (textDeltas.flushing ?? Promise.resolve()).then(() =>
 					this.textDeltaBatches.delete(textDeltas),
@@ -5833,6 +5932,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						this.handleStandardMcpTool(conversationKey, params, signal)
 				: undefined,
 		);
+		unsubscribeExecutor = this.sessionExecutor?.onFailure(() =>
+			rpc.failNotification(unavailableError()),
+		);
 		if (skillProcess) this.nativeSkillProcessesByRpc.set(rpc, skillProcess);
 		try {
 			// Every native process is admitted on its own; a contained
@@ -5856,6 +5958,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				assertCurrent,
 				metadataRead,
 			);
+			if (this.sessionExecutor) {
+				// Fixed upstream read-only remote info initializes this process's environment.
+				await rpc.request(
+					"environment/info",
+					{ environmentId: "remote" },
+					(value) => {
+						if (!isPlainRecord(value)) protocolInvalid();
+					},
+				);
+				await this.assertSessionExecutorEnvironment(rpc);
+			}
 			assertCurrent?.();
 			if (skillProcess && (this.installedSkill || this.skillDirectory)) {
 				if (metadataRead) await metadataRead.revalidate();
@@ -5885,11 +5998,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				// the epoch only after this assembly operation has fully completed.
 			}
 		} catch (error) {
+			unsubscribeExecutor?.();
 			await rpc.close().catch(() => {});
 			if (error instanceof RuntimeHostError) throw error;
 			unavailable();
 		}
-		if (this.closed || (skillProcess && !skillProcess.active)) {
+		if (
+			this.closed ||
+			this.sessionExecutorFailed ||
+			(skillProcess && !skillProcess.active)
+		) {
 			await rpc.close().catch(() => {});
 			unavailable();
 		}
@@ -5982,6 +6100,51 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const privateLane =
 			options.nativeLane === "private-callback" ||
 			options.connectionClient !== undefined;
+		let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
+		if (options.isolationMode === "session-executor") {
+			if (
+				!Object.keys(options).every((key) =>
+					[
+						"isolationMode",
+						"sessionExecutor",
+						"browserCapability",
+						"installedSkill",
+						"skillDirectory",
+						"standardConnectionClient",
+						"nativeLane",
+						"path",
+						"launchPath",
+						"configVersion",
+						"defaultModelOptionId",
+						"defaultReasoningLevel",
+						"modelOptions",
+						"authorizeExternalAction",
+						"connectionClient",
+					].includes(key),
+				)
+			)
+				configurationInvalid();
+			try {
+				sessionExecutor = receiveCodexSessionExecutorAdmissionV1(
+					options.sessionExecutor,
+				);
+			} catch {
+				configurationInvalid();
+			}
+			if (
+				platform !== "linux" ||
+				privateLane ||
+				sessionExecutor.binding.workspaceRoot !==
+					join(
+						`${options.path}.native`,
+						"conversations",
+						sessionExecutor.binding.conversationKey,
+						"workspace",
+					)
+			)
+				configurationInvalid();
+			await sessionExecutor.assertCurrent();
+		} else if (options.sessionExecutor !== undefined) configurationInvalid();
 		if (
 			options.nativeLane === "official-model-only" &&
 			options.connectionClient
@@ -6005,9 +6168,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					target: structuredClone(options.standardConnectionClient.target),
 				}
 			: undefined;
-		const requiredRuntime = privateLane
+		const requiredRuntime: CodexRuntimeRequirements = privateLane
 			? privateRuntimeRequirements
-			: officialRuntimeRequirements;
+			: {
+					...officialRuntimeRequirements,
+					...(sessionExecutor
+						? {
+								sessionExecutorBindingDigest:
+									codexSessionExecutorBindingDigestV1(sessionExecutor.binding),
+							}
+						: {}),
+				};
 		const requiredBridgeOptions = {
 			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 			nativeBarrierRequired: privateLane,
@@ -6102,9 +6273,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		// Native storage stays a sibling of the Driver state on the Agent PVC; the
 		// bridge owns the per-Conversation layout beneath it.
-		const openConversationBridge = (conversationKey: string) =>
-			openBridge({
+		const openConversationBridge = async (conversationKey: string) => {
+			if (sessionExecutor) {
+				if (conversationKey !== sessionExecutor.binding.conversationKey)
+					unavailable();
+				await sessionExecutor.assertCurrent();
+			}
+			return openBridge({
 				isolationMode: options.isolationMode,
+				...(sessionExecutor ? { sessionExecutor } : {}),
 				dataDirectory: `${options.path}.native`,
 				conversationKey,
 				...(options.launchPath === undefined
@@ -6153,6 +6330,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						}
 					: {}),
 			});
+		};
 		const assertContainedConfigurationFor = async (
 			rpc: CodexRpc,
 			expected: Parameters<typeof assertContainedConfiguration>[1],
@@ -6195,6 +6373,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			);
 		const probeNative = async (signal: AbortSignal) => {
 			signal.throwIfAborted();
+			if (sessionExecutor) {
+				if (!driver) unavailable();
+				await driver.assertSessionExecutorCurrent();
+				for (const rpc of new Set(driver.conversationRpcs.values())) {
+					signal.throwIfAborted();
+					await driver.assertSessionExecutorEnvironment(rpc, signal);
+				}
+				signal.throwIfAborted();
+				return configuredCapabilities;
+			}
 			// Dedicated temporary native HOME; never pass a real Conversation key or Store.
 			const directory = await mkdtemp(
 				join(dirname(options.path), ".readiness-"),
@@ -6301,6 +6489,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				options.skillDirectory,
 				options.browserCapability,
 				inputRoot,
+				sessionExecutor,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -6308,6 +6497,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		try {
+			if (sessionExecutor) {
+				for (const session of Object.values(driver.readState().sessions))
+					driver.assertRuntimeRequirements(session);
+				await driver.assertSessionExecutorCurrent();
+			}
 			await driver.loadArchivedJournals(codexJournalArchiveRoot(options.path));
 			// #3226：先沿已保存进度收敛中断的结果发布，再处理其他未确认操作。
 			await driver.recoverResultPublications();
@@ -6354,6 +6548,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		context?: RuntimeDriverExecutionContextV1,
 	) {
+		this.assertSessionExecutorBinding(command);
+		await this.assertSessionExecutorCurrent();
 		const key = operationKey(command);
 		const inFlight = this.inFlightOperations.get(key);
 		if (inFlight) return inFlight;
@@ -8326,6 +8522,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let submissionStarted = false;
 		try {
 			const connection = await this.rpc(session.nativeSessionRef);
+			await this.assertSessionExecutorEnvironment(connection);
 			// The File Grant is checked once more at the submission boundary: a grant
 			// that lapsed during thread setup or admission must not cross it.
 			revalidateInput();
@@ -8337,6 +8534,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					clientUserMessageId: command.operationId,
 					input: nativeInput.items,
 					...(nativeSelection ?? {}),
+					...(this.sessionExecutor
+						? {
+								sandboxPolicy: {
+									type: "externalSandbox",
+									networkAccess: "restricted",
+								},
+							}
+						: {}),
 				},
 				(value) => {
 					const started = isPlainRecord(value) ? value.turn : undefined;
@@ -9397,6 +9602,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getCapabilities() {
+		await this.assertSessionExecutorCurrent();
 		const installedSkills = this.installedSkill
 			? [
 					{
@@ -9710,6 +9916,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			let waiter = initialWaiter;
 			let hasInitialReplay = true;
 			while (!signal?.aborted) {
+				if (driver.sessionExecutorFailed) unavailable();
 				if (!hasInitialReplay) {
 					waiter = driver.waitForEvent(key, signal);
 				}
@@ -9721,9 +9928,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							cursor,
 						);
 					}
+					if (driver.sessionExecutorFailed) unavailable();
 					hasInitialReplay = false;
 					if (pending.length > 0) {
 						for (const event of pending) {
+							if (driver.sessionExecutorFailed) unavailable();
 							if (signal?.aborted) return;
 							cursor = event.cursor;
 							yield event;
@@ -9759,6 +9968,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async shutdown() {
 		this.closed = true;
+		this.unsubscribeSessionExecutor?.();
 		// #3226：关闭后发布的后续提交会失败并留给重启恢复收敛，不在此等待上传。
 		this.resultPublicationContexts.clear();
 		this.initialModelStatusPending.clear();
@@ -12282,6 +12492,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal: AbortSignal,
 	): Promise<CodexModelRequestJournal> {
 		signal.throwIfAborted();
+		await this.assertSessionExecutorCurrent();
+		if (
+			this.sessionExecutor &&
+			context.conversationKey !== this.sessionExecutor.binding.conversationKey
+		)
+			unavailable();
 		const submitting = this.resolveNativeSourceJournal(
 			this.readState(),
 			this.sharesOneNativeTransport() ? undefined : context.conversationKey,
@@ -12431,6 +12647,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			)
 				unavailable();
 			const revalidation: unknown = authorization?.revalidate?.();
+			if (this.sessionExecutorFailed) unavailable();
 			if (revalidation !== undefined) {
 				void Promise.resolve(revalidation).catch(() => {});
 				unavailable();
@@ -12512,6 +12729,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} finally {
 				waiting.abort();
 			}
+			await this.assertSessionExecutorCurrent();
 			assertCurrent();
 		} catch (error) {
 			if (signal.aborted) {

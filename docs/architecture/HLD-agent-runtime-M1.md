@@ -953,7 +953,7 @@ Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生
 
 适用范围与完整边界以工程 Spec
 [§11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)为准；
-本提案不修改上文已实现模式，评审与实现验收前不启用。
+本方案按 #4085 评审后以独立 `session-executor` 模式实现；上文模式保持，目标部署仍须单独验收。
 
 固定 Codex `0.153.0` 的 app-server 保留在控制容器，通过部署固定的
 `CODEX_EXEC_SERVER_URL` 只选择同 Session Pod 的 remote environment。启动前拒绝可覆盖

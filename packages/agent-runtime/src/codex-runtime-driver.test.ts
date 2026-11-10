@@ -38,6 +38,55 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const executorFilesystem = vi.hoisted(() => ({
+	root: undefined as string | undefined,
+}));
+vi.mock("node:process", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:process")>()),
+	platform: "linux",
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	const mapped = <T>(path: T): T =>
+		executorFilesystem.root &&
+		typeof path === "string" &&
+		path.startsWith("/workspace/")
+			? (path.replace("/workspace", executorFilesystem.root) as T)
+			: path;
+	const calls = Object.fromEntries(
+		(
+			[
+				"mkdir",
+				"open",
+				"readFile",
+				"rm",
+				"rmdir",
+				"lstat",
+				"mkdtemp",
+				"writeFile",
+				"readdir",
+			] as const
+		).map((name) => [
+			name,
+			(...args: unknown[]) =>
+				Reflect.apply(actual[name], actual, [
+					mapped(args[0]),
+					...args.slice(1),
+				]),
+		]),
+	);
+	return {
+		...actual,
+		...calls,
+		rename: (source: string, target: string) =>
+			actual.rename(mapped(source), mapped(target)),
+		realpath: async (path: string) => {
+			const result = await actual.realpath(mapped(path));
+			return mapped(path) === path ? result : path;
+		},
+	};
+});
+
 import nativeBarrierManifest from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
@@ -75,6 +124,10 @@ import {
 	createCodexNativeSkillInputV1,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
+import {
+	type CodexSessionExecutorAdmissionV1,
+	createCodexSessionExecutorBindingV1,
+} from "./codex-session-executor.js";
 import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
@@ -1016,6 +1069,8 @@ class TestCodexBridge {
 	beforeInterrupt?: () => Promise<void>;
 	interruptError?: { code: number; message: string };
 	resumeError?: { code: number; message: string };
+	environmentStatus = "ready";
+	holdEnvironmentStatus = false;
 
 	private readonly queuedFrames: CodexAppServerFrame[] = [];
 	private readonly processingReceipts = new Map<
@@ -1087,6 +1142,14 @@ class TestCodexBridge {
 		}
 		if (method === "config/read") {
 			this.respond(id, this.configReadResult);
+			return;
+		}
+		if (method === "environment/info" || method === "environment/status") {
+			if (method === "environment/status" && this.holdEnvironmentStatus) return;
+			this.respond(
+				id,
+				method === "environment/info" ? {} : { status: this.environmentStatus },
+			);
 			return;
 		}
 		if (method === "model/list") {
@@ -1758,6 +1821,7 @@ afterEach(async () => {
 	modelTransportTestHooks.waitForInitialModelRequest = false;
 	modelTransportTestHooks.waitForModelRequest = undefined;
 	await Promise.all(drivers.splice(0).map((driver) => driver.close()));
+	executorFilesystem.root = undefined;
 	await Promise.all(
 		servers.splice(0).map(
 			(server) =>
@@ -14041,6 +14105,325 @@ class RuntimeBindingDriver extends CodexRuntimeDriver {
 		return RuntimeBindingDriver.openWithBridge(options, factory);
 	}
 }
+
+describe("Codex verified Session executor", () => {
+	async function fixture(overrides: Partial<CodexRuntimeDriverOptions> = {}) {
+		executorFilesystem.root = await runtimeDirectory();
+		const path = "/workspace/runtime/codex-driver.json";
+		const command = submitCommand();
+		const binding = createCodexSessionExecutorBindingV1({
+			namespace: "runtime",
+			podName: "sandbox-session-one",
+			sandboxId: "session-one",
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+			resourceFence: 1,
+			imageDigest: `ghcr.io/example/runtime@sha256:${"a".repeat(64)}`,
+		});
+		const listeners = new Set<() => void>();
+		let failed = false;
+		const admission: CodexSessionExecutorAdmissionV1 = {
+			binding,
+			epoch: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			assertCurrent: vi.fn(async () => {
+				if (failed) throw new Error("synthetic executor failure");
+			}),
+			onFailure(listener) {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+			close: async () => {},
+		};
+		const bridge = new TestCodexBridge();
+		const open = vi.fn(async (launch: CodexAppServerBridgeOptions) => {
+			if (!launch.modelAccess) throw new Error("missing model access");
+			bridge.setConfigReadResult(
+				applyOfficialLaneConfig(
+					modelAccessConfigReadResult(launch.modelAccess) as {
+						config: Record<string, unknown>;
+						origins: Record<string, unknown>;
+					},
+				),
+			);
+			return bridge;
+		});
+		const options: CodexRuntimeDriverOptions = {
+			...driverOptions(path),
+			isolationMode: "session-executor",
+			sessionExecutor: admission,
+			nativeLane: "official-model-only",
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				...upstreamModelAccess,
+			})),
+			authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			...overrides,
+		};
+		return {
+			path,
+			admission,
+			bridge,
+			open,
+			options,
+			async start(override: Partial<CodexRuntimeDriverOptions> = {}) {
+				const driver = await RuntimeBindingDriver.openBound(
+					{ ...options, ...override },
+					open,
+				);
+				drivers.push(driver);
+				return driver;
+			},
+			poison() {
+				failed = true;
+				for (const listener of listeners) listener();
+			},
+		};
+	}
+
+	it("keeps readiness read-only and places externalSandbox only on the verified model Turn", async () => {
+		const f = await fixture();
+		const driver = await f.start();
+		const before = await readFile(f.path, "utf8");
+		expect(
+			await driver.probeReadiness(new AbortController().signal),
+		).toMatchObject({ modelSelection: true });
+		expect(f.open).not.toHaveBeenCalled();
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		await driver.execute(submitCommandV2());
+		expect(f.open).toHaveBeenCalledTimes(1);
+		expect(f.open.mock.calls[0]?.[0]).toMatchObject({
+			isolationMode: "session-executor",
+			conversationKey: f.admission.binding.conversationKey,
+		});
+		expect(
+			f.bridge.requests.find((request) => request.method === "thread/start")
+				?.params,
+		).not.toHaveProperty("sandbox");
+		expect(
+			f.bridge.requests.find((request) => request.method === "thread/start")
+				?.params,
+		).not.toHaveProperty("sandboxPolicy");
+		expect(
+			f.bridge.requests.find((request) => request.method === "turn/start")
+				?.params,
+		).toMatchObject({
+			sandboxPolicy: { type: "externalSandbox", networkAccess: "restricted" },
+		});
+		const previous = f.bridge.requests.length;
+		await driver.probeReadiness(new AbortController().signal);
+		expect(f.bridge.requests.slice(previous)).toEqual([
+			{ method: "environment/status", params: { environmentId: "remote" } },
+		]);
+		expect(f.open).toHaveBeenCalledTimes(1);
+		expect(
+			f.bridge.requests.some(
+				(request) =>
+					request.method === "command/exec" || request.method.startsWith("fs/"),
+			),
+		).toBe(false);
+	});
+
+	it("keeps the default official mode free of the external executor policy", async () => {
+		const f = await fixture({
+			isolationMode: undefined,
+			sessionExecutor: undefined,
+		});
+		const driver = await f.start();
+		await driver.execute(submitCommandV2());
+		expect(
+			f.bridge.requests.find((request) => request.method === "turn/start")
+				?.params,
+		).not.toHaveProperty("sandboxPolicy");
+		expect(
+			f.bridge.requests.some((request) =>
+				request.method.startsWith("environment/"),
+			),
+		).toBe(false);
+	});
+
+	it("aborts only the read-only readiness query while the admitted Session keeps running", async () => {
+		const f = await fixture();
+		const driver = await f.start();
+		await driver.execute(submitCommandV2());
+		const close = vi.spyOn(f.bridge, "close");
+		f.bridge.holdEnvironmentStatus = true;
+		const count = f.bridge.requests.length;
+		const abort = new AbortController();
+		const reading = driver.probeReadiness(abort.signal);
+		await vi.waitFor(() => expect(f.bridge.requests.length).toBe(count + 1));
+		abort.abort();
+		await expect(reading).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(close).not.toHaveBeenCalled();
+		f.bridge.holdEnvironmentStatus = false;
+		expect(await driver.getCapabilities()).toMatchObject({
+			modelSelection: true,
+		});
+	});
+
+	it("rejects adopting an existing official Session into the executor mode", async () => {
+		const f = await fixture({
+			isolationMode: undefined,
+			sessionExecutor: undefined,
+		});
+		const driver = await f.start();
+		await driver.execute(submitCommandV2());
+		await driver.close();
+		const before = await readFile(f.path, "utf8");
+		f.open.mockClear();
+		await expect(
+			f.start({
+				isolationMode: "session-executor",
+				sessionExecutor: f.admission,
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(f.open).not.toHaveBeenCalled();
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	});
+
+	it.each([
+		{ agentId: "foreign-agent" },
+		{ conversationId: "foreign-conversation" },
+		{ sessionGeneration: 2 },
+	])(
+		"rejects foreign Session identity before persisting or opening native state: %j",
+		async (foreign) => {
+			const f = await fixture();
+			const driver = await f.start();
+			const before = await readFile(f.path, "utf8");
+			await expect(
+				driver.execute(submitCommandV2(foreign)),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(await readFile(f.path, "utf8")).toBe(before);
+			expect(f.open).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ sessionExecutor: undefined },
+		{ nativeLane: "private-callback" as const },
+		{ isolationMode: "container-boundary" as const },
+		{ path: "/workspace/runtime/another-driver.json" },
+		{ execServerUrl: "ws://127.0.0.1:9999" },
+	])(
+		"requires the exact trusted Session authority and storage path: %j",
+		async (override) => {
+			const f = await fixture(override);
+			await expect(f.start()).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+			expect(f.open).not.toHaveBeenCalled();
+		},
+	);
+
+	it("fails an active native stream and denies capabilities, readiness and new Turns after executor loss", async () => {
+		const f = await fixture();
+		const driver = await f.start();
+		const close = vi.spyOn(f.bridge, "close");
+		const accepted = await driver.execute(submitCommandV2());
+		const initial = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-codex",
+		);
+		const events = (
+			await driver.subscribeEvents(
+				accepted.nativeSessionRef,
+				"execution-codex",
+				initial.at(-1)?.cursor,
+			)
+		)[Symbol.asyncIterator]();
+		const pending = events.next();
+		f.poison();
+		await expect(pending).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		await expect(driver.getCapabilities()).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		await expect(
+			driver.probeReadiness(new AbortController().signal),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(driver.execute(submitCommandV2())).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(close).toHaveBeenCalled();
+		expect(f.open).toHaveBeenCalledTimes(1);
+		expect(
+			f.bridge.requests.filter((request) => request.method === "turn/start"),
+		).toHaveLength(1);
+		const saved = JSON.parse(
+			await readFile(f.path, "utf8"),
+		) as StoredCodexDriverState;
+		expect(
+			saved.sessions[accepted.nativeSessionRef]?.executions?.["execution-codex"]
+				?.status,
+		).toBe("running");
+	});
+
+	it("terminates an active model request as unknown without replaying it after executor loss", async () => {
+		let calls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				calls++;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write('data: {"type":"response.created","response":{}}\n\n');
+			}),
+		);
+		const f = await fixture();
+		const driver = await f.start({
+			modelOptions: f.options.modelOptions.map((option) => ({
+				...option,
+				endpoint,
+			})),
+		});
+		const accepted = await driver.execute(submitCommandV2());
+		const access = f.open.mock.calls[0]?.[0].modelAccess;
+		if (!access) throw new Error("missing model access");
+		const response = await modelRequest(access, f.bridge);
+		const body = response.text().catch(() => "closed");
+		f.poison();
+		await body;
+		await vi.waitFor(async () => {
+			const state = JSON.parse(
+				await readFile(f.path, "utf8"),
+			) as StoredCodexDriverState;
+			const events = Object.values(
+				state.sessions[accepted.nativeSessionRef]?.journals ?? {},
+			).flatMap((journal) => journal.events);
+			expect(
+				events.filter((event) => event.type === "operation").at(-1)?.payload,
+			).toMatchObject({ phase: "unknown" });
+		});
+		expect(calls).toBe(1);
+		expect((await modelRequest(access, f.bridge)).status).toBe(401);
+		expect(calls).toBe(1);
+	});
+
+	it("refuses a Turn when the native remote environment is disconnected", async () => {
+		const f = await fixture();
+		const driver = await f.start();
+		f.bridge.environmentStatus = "disconnected";
+		await expect(driver.execute(submitCommandV2())).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(
+			f.bridge.requests.filter((request) => request.method === "turn/start"),
+		).toHaveLength(0);
+		expect(
+			f.bridge.requests.filter(
+				(request) => request.method === "environment/info",
+			),
+		).toHaveLength(1);
+		await expect(driver.execute(submitCommandV2())).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(f.open).toHaveBeenCalledTimes(1);
+	});
+});
 
 type RuntimeRequirementMutation = [
 	string,
