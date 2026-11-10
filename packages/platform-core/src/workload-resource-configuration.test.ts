@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	type CodexSessionExecutorResourcePolicyV1,
+	resourceQuantityEqualsV1,
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
 	workloadResourceConfigurationHashV1,
+	workloadResourcesEqualV1,
 } from "./workload-resource-configuration.js";
 
 const legacy = {
@@ -22,6 +24,36 @@ const executor: CodexSessionExecutorResourcePolicyV1 = {
 };
 
 describe("shared workload resource contract", () => {
+	it("accepts Kubernetes quantity canonicalization while retaining exact resource keys", () => {
+		const declared = {
+			requests: { cpu: "0.25", memory: "0.25Gi" },
+			limits: { cpu: "1000m", memory: "0.5Gi" },
+		};
+		const actual = {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		};
+		expect(workloadResourcesEqualV1(actual, declared)).toBe(true);
+		expect(
+			workloadResourcesEqualV1(
+				{ ...actual, limits: { ...actual.limits, memory: "513Mi" } },
+				declared,
+			),
+		).toBe(false);
+		expect(
+			workloadResourcesEqualV1(
+				{ ...actual, limits: { ...actual.limits, "ephemeral-storage": "1Gi" } },
+				declared,
+			),
+		).toBe(false);
+		expect(workloadResourcesEqualV1({ ...actual, extra: true }, declared)).toBe(
+			false,
+		);
+		expect(resourceQuantityEqualsV1("128Mi", "0.125Gi")).toBe(true);
+		expect(resourceQuantityEqualsV1("0", "0")).toBe(false);
+		expect(resourceQuantityEqualsV1(undefined, undefined)).toBe(false);
+	});
+
 	it("retains the persisted legacy and executor Worker resource hashes", () => {
 		expect(workloadResourceConfigurationHashV1(legacy)).toBe(
 			"3b87ccddc22230b5a9a245e1a6f205e9683e34f78c9abce3229597289fb70723",

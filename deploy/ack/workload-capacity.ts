@@ -7,6 +7,7 @@ import {
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
 	workloadResourceConfigurationHashV1,
+	workloadResourcesEqualV1,
 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 const digest = /^sha256:[a-f0-9]{64}$/u;
@@ -68,7 +69,7 @@ function verifyMeasurement(
 		: Array.isArray(facts) && facts.some((fact: any) => fact.phase === "completed") &&
 			!facts.some((fact: any) => ["failed", "unknown"].includes(fact.phase)),
 		"CAPACITY_MODEL_FACT_MISSING");
-	assert.deepEqual(resources(value.observedResources), resources(policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+	assert(workloadResourcesEqualV1(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
 	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
 	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
 		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
@@ -80,8 +81,8 @@ function verifyMeasurement(
 		if (executorMode) {
 			assert(typeof policy.storageClassName === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(policy.storageClassName), "CAPACITY_STORAGE_CLASS_MISSING");
 			assert.equal(value.storageClassName, policy.storageClassName, "CAPACITY_STORAGE_CLASS_DRIFT");
-			assert.deepEqual(resources(value.observedExecutorResources), resources(policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
-			assert.deepEqual(resources(value.observedInitResources), resources(policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
+			assert(workloadResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
+			assert(workloadResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
 		} else {
 			assert(value.observedExecutorResources === undefined && value.observedInitResources === undefined, "CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED");
 		}

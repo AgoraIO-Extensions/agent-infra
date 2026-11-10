@@ -136,6 +136,67 @@ test("Codex executor capacity binds both containers to the canonical policy and 
 	assert.equal(f.checkReceipt().imageCount, 1);
 });
 
+test("measured Kubernetes quantity aliases preserve the approved raw policy hash", () => {
+	const f = executorFixture();
+	f.input.resources = {
+		requests: { cpu: "0.1", memory: "0.125Gi" },
+		limits: { cpu: "1000m", memory: "2048Mi" },
+	};
+	f.input.codexSessionExecutor.resources = {
+		requests: { cpu: "0.25", memory: "0.25Gi" },
+		limits: { cpu: "1000m", memory: "0.5Gi" },
+	};
+	const receipt = {
+		...f.measured,
+		codexSessionExecutor: f.input.codexSessionExecutor,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(f.input),
+		resourceCosts: sessionSandboxResourceCostsV1(f.input),
+		observedResources: {
+			requests: { cpu: "100m", memory: "128Mi" },
+			limits: { cpu: "1", memory: "2Gi" },
+		},
+		observedExecutorResources: {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+		observedInitResources: {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+	};
+	assert.equal(f.checkReceipt(receipt).imageCount, 1);
+});
+
+for (const field of [
+	"observedResources",
+	"observedExecutorResources",
+	"observedInitResources",
+])
+	test(`measured ${field} rejects undeclared resource keys`, () => {
+		const f = executorFixture();
+		const receipt = structuredClone(f.measured);
+		receipt[field] = structuredClone(receipt[field]);
+		receipt[field].limits.gpu = "1";
+		assert.throws(() => f.checkReceipt(receipt));
+		delete receipt[field].limits.gpu;
+		receipt[field].extra = {};
+		assert.throws(() => f.checkReceipt(receipt));
+	});
+
+for (const field of [
+	"observedResources",
+	"observedExecutorResources",
+	"observedInitResources",
+])
+	test(`measured ${field} rejects changed quantity amounts`, () => {
+		const f = executorFixture();
+		const receipt = structuredClone(f.measured);
+		receipt[field] = structuredClone(receipt[field]);
+		receipt[field].limits.memory =
+			field === "observedResources" ? "2049Mi" : "513Mi";
+		assert.throws(() => f.checkReceipt(receipt));
+	});
+
 test("Codex executor rejects a legacy single-container receipt", () => {
 	assert.throws(
 		() => executorFixture().checkReceipt(measurement),

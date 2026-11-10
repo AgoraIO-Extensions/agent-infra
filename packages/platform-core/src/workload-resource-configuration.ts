@@ -58,6 +58,48 @@ export function quantityRatioV1(
 	return [numerator, denominator];
 }
 
+export function resourceQuantityEqualsV1(
+	actual: unknown,
+	expected: unknown,
+): boolean {
+	if (typeof actual !== "string" || typeof expected !== "string") return false;
+	const a = quantityRatioV1(actual);
+	const b = quantityRatioV1(expected);
+	return !!a && !!b && a[0] > 0n && b[0] > 0n && a[0] * b[1] === b[0] * a[1];
+}
+
+/** API canonicalization may change quantity spelling, never the approved resource keys. */
+export function workloadResourcesEqualV1(
+	actual: unknown,
+	expected: unknown,
+): boolean {
+	const a = actual as
+		| CodexSessionExecutorResourcePolicyV1["resources"]
+		| undefined;
+	const b = expected as
+		| CodexSessionExecutorResourcePolicyV1["resources"]
+		| undefined;
+	if (
+		!a ||
+		!b ||
+		Object.keys(a).sort().join(",") !== "limits,requests" ||
+		Object.keys(b).sort().join(",") !== "limits,requests"
+	)
+		return false;
+	return (["requests", "limits"] as const).every((level) => {
+		const left = a[level];
+		const right = b[level];
+		return (
+			!!left &&
+			!!right &&
+			Object.keys(left).sort().join(",") === "cpu,memory" &&
+			Object.keys(right).sort().join(",") === "cpu,memory" &&
+			resourceQuantityEqualsV1(left.cpu, right.cpu) &&
+			resourceQuantityEqualsV1(left.memory, right.memory)
+		);
+	});
+}
+
 function resourceValue(value: unknown): string {
 	if (typeof value !== "string" || !value)
 		throw new TypeError("WORKLOAD_RESOURCE_INVALID");

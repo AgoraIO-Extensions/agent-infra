@@ -1119,3 +1119,108 @@ test("only explicitly approved provider topology labels are accepted after sched
 			/PREFLIGHT_TOPOLOGY_INVALID/u,
 		);
 });
+
+for (const role of ["control", "executor", "init"]) {
+	test(`capacity observation accepts numeric resource aliases for ${role} without changing raw evidence`, () => {
+		const fixture = executorFixture();
+		const container =
+			role === "control"
+				? fixture.observed.spec.containers[0]
+				: role === "executor"
+					? fixture.observed.spec.containers[1]
+					: fixture.observed.spec.initContainers[0];
+		container.resources =
+			role === "control"
+				? {
+						requests: { cpu: "0.1", memory: "0.125Gi" },
+						limits: { cpu: "1000m", memory: "2048Mi" },
+					}
+				: {
+						requests: { cpu: "0.25", memory: "0.25Gi" },
+						limits: { cpu: "1000m", memory: "0.5Gi" },
+					};
+		const raw = structuredClone(container.resources);
+		const receipt = fixture.observe();
+		assert.deepEqual(container.resources, raw);
+		if (role === "executor")
+			assert.deepEqual(receipt.observedExecutorResources, raw);
+		if (role === "init") assert.deepEqual(receipt.observedInitResources, raw);
+	});
+}
+
+test("capacity observation accepts numeric tmp size aliases without changing the live projection", () => {
+	const fixture = executorFixture();
+	for (const volume of fixture.observed.spec.volumes) {
+		if (volume.emptyDir) volume.emptyDir.sizeLimit = "0.125Gi";
+	}
+	fixture.observe();
+	assert.equal(fixture.observed.spec.volumes[1].emptyDir.sizeLimit, "0.125Gi");
+	assert.equal(fixture.observed.spec.volumes[2].emptyDir.sizeLimit, "0.125Gi");
+});
+
+for (const [role, field, value] of [
+	["control", "cpu", "0.2"],
+	["executor", "memory", "0.125Gi"],
+	["init", "cpu", "0.5"],
+]) {
+	test(`resource normalization still rejects changed ${role} ${field}`, () => {
+		const fixture = executorFixture();
+		const container =
+			role === "control"
+				? fixture.observed.spec.containers[0]
+				: role === "executor"
+					? fixture.observed.spec.containers[1]
+					: fixture.observed.spec.initContainers[0];
+		container.resources.requests[field] = value;
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	});
+}
+
+for (const role of ["control", "executor", "init"]) {
+	test(`resource normalization still rejects extra ${role} resource fields`, () => {
+		const fixture = executorFixture();
+		const container =
+			role === "control"
+				? fixture.observed.spec.containers[0]
+				: role === "executor"
+					? fixture.observed.spec.containers[1]
+					: fixture.observed.spec.initContainers[0];
+		container.resources.limits["ephemeral-storage"] = "1Gi";
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	});
+}
+
+test("tmp size normalization still rejects changed or missing limits", () => {
+	for (const size of ["0.25Gi", undefined, "invalid", "0"]) {
+		const fixture = executorFixture();
+		fixture.observed.spec.volumes[2].emptyDir.sizeLimit = size;
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	}
+});
+
+test("API canonical values match fractional executor policy quantities without rewriting the policy", () => {
+	const job = {
+		...executorJob,
+		codexSessionExecutor: {
+			...executorPolicy,
+			resources: {
+				requests: { cpu: "0.25", memory: "0.25Gi" },
+				limits: { cpu: "1", memory: "0.5Gi" },
+			},
+			tmpSizeLimit: "0.125Gi",
+		},
+	};
+	const fixture = executorFixture(job);
+	fixture.observed.spec.containers[1].resources = structuredClone(
+		executorPolicy.resources,
+	);
+	fixture.observed.spec.initContainers[0].resources = structuredClone(
+		executorPolicy.resources,
+	);
+	fixture.observed.spec.volumes[2].emptyDir.sizeLimit = "128Mi";
+	const receipt = fixture.observe();
+	assert.equal(receipt.observedExecutorResources.limits.memory, "512Mi");
+	assert.equal(receipt.observedInitResources.requests.cpu, "250m");
+	assert.equal(job.codexSessionExecutor.resources.limits.memory, "0.5Gi");
+	assert.equal(job.codexSessionExecutor.tmpSizeLimit, "0.125Gi");
+});

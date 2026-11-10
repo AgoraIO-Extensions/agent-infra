@@ -8,7 +8,7 @@ import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, sessionSandboxResourceCostsV1, quantityRatioV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
@@ -18,10 +18,6 @@ const sourcePattern = /^[a-f0-9]{40}$/u;
 const namePattern = /^(?:ack-preflight-|sandbox-preflight-)[a-z0-9-]+$/u;
 const controlResources = (job) => job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits };
 const usesExecutor = (job) => job.templateId === "codex" && job.codexSessionExecutor !== undefined;
-const sameQuantity = (left, right) => {
-	const a = quantityRatioV1(left), b = quantityRatioV1(right);
-	return !!a && !!b && a[0] > 0n && b[0] > 0n && a[0] * b[1] === b[0] * a[1];
-};
 const startupEventReasons = new Set([
 	"Pulling", "Pulled", "SuccessfulHitImageCache", "ImageCacheNotFullMatch",
 	"ImageCacheAutoCreated", "ImageCacheAutoEliminated",
@@ -364,6 +360,23 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	}
 	if (expected.pod.metadata.uid) assert.equal(observed.metadata?.uid, expected.pod.metadata.uid, "EXECUTOR_LAYOUT_DRIFT");
 	const comparison = structuredClone(observed.spec);
+	// Only proven numeric aliases are normalized for comparison; receipts retain the raw readback.
+	for (const key of ["containers", "initContainers"]) {
+		const wanted = expected.pod.spec[key];
+		if (wanted === undefined) continue;
+		assert(Array.isArray(comparison[key]) && comparison[key].length === wanted.length, "EXECUTOR_LAYOUT_DRIFT");
+		for (const [index, container] of comparison[key].entries()) {
+			assert(workloadResourcesEqualV1(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
+			container.resources = structuredClone(wanted[index].resources);
+		}
+	}
+	assert(Array.isArray(comparison.volumes) && comparison.volumes.length === expected.pod.spec.volumes.length, "EXECUTOR_LAYOUT_DRIFT");
+	for (const [index, volume] of comparison.volumes.entries()) {
+		const size = expected.pod.spec.volumes[index].emptyDir?.sizeLimit;
+		if (size === undefined) continue;
+		assert(resourceQuantityEqualsV1(volume.emptyDir?.sizeLimit, size), "EXECUTOR_LAYOUT_DRIFT");
+		volume.emptyDir.sizeLimit = size;
+	}
 	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && entry.tolerationSeconds === 300 && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key))));
 	for (const key of ["hostPID", "hostIPC", "hostNetwork", "shareProcessNamespace"]) comparison[key] ??= false;
 	assertProjection(comparison, expected.pod.spec);
@@ -385,7 +398,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		}
 		assert.equal(container.securityContext.privileged ?? false, false, "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.procMount ?? "Default", "Default", "EXECUTOR_LAYOUT_DRIFT");
-		assert.deepEqual(container.resources, wanted.resources, "EXECUTOR_LAYOUT_DRIFT");
+		assert(workloadResourcesEqualV1(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.capabilities.add?.length ?? 0, 0, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [key, value] of Object.entries(container.securityContext)) {
 			if (key in wanted.securityContext) continue;
@@ -421,8 +434,8 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	if (expected.pvc.metadata.uid !== undefined) assert.equal(pvc.metadata.uid, expected.pvc.metadata.uid, "EXECUTOR_PVC_DRIFT");
 	assert.deepEqual(pvc.spec.accessModes, expected.pvc.spec.accessModes, "EXECUTOR_PVC_DRIFT");
 	assert.equal(pvc.spec.storageClassName, job.storageClassName, "EXECUTOR_PVC_DRIFT");
-	assert(sameQuantity(pvc.spec.resources.requests.storage, job.storageSize), "EXECUTOR_PVC_DRIFT");
-	assert(sameQuantity(pvc.status.capacity?.storage, job.storageSize), "EXECUTOR_PVC_DRIFT");
+	assert(resourceQuantityEqualsV1(pvc.spec.resources.requests.storage, job.storageSize), "EXECUTOR_PVC_DRIFT");
+	assert(resourceQuantityEqualsV1(pvc.status.capacity?.storage, job.storageSize), "EXECUTOR_PVC_DRIFT");
 	assert.equal(observed.status?.phase, "Running", "EXECUTOR_LAYOUT_NOT_READY");
 	assert.equal(observed.status.containerStatuses?.length, usesExecutor(job) ? 2 : 1, "EXECUTOR_LAYOUT_NOT_READY");
 	for (const status of observed.status.containerStatuses) assert(status.ready === true && status.restartCount === 0 && status.state?.running && typeof status.containerID === "string" && status.containerID && status.imageID?.endsWith(job.imageDigest), "EXECUTOR_LAYOUT_NOT_READY");
