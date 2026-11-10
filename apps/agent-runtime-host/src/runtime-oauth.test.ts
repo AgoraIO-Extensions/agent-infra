@@ -48,10 +48,15 @@ import {
 } from "./runtime-oauth.js";
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
-import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
+	createProtectedStandardMcpInput,
+	standardMcpInstallationKey,
+} from "./standard-mcp-input.js";
+import {
+	receiveProtectedStandardMcpInstallation,
 	recoverProtectedStandardMcpMaterialRotation,
 	replaceProtectedStandardMcpMaterials,
+	standardMcpExportKey,
 } from "./standard-mcp-installation.js";
 
 const protection = vi.hoisted(() => ({
@@ -60,6 +65,10 @@ const protection = vi.hoisted(() => ({
 	secretReads: 0,
 	secretWrites: 0,
 	failRecordWrite: false,
+	afterExportMaterialWrite: undefined as (() => void) | undefined,
+	publicationTail: undefined as (() => void) | undefined,
+	publicationRecordTail: undefined as (() => void) | undefined,
+	afterPublicationManifestRead: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
@@ -106,6 +115,72 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 					return write(...args);
 				};
 			}
+			if (
+				path.includes("standard-mcp-export/") &&
+				path.includes("/materials/") &&
+				path.endsWith(".token")
+			) {
+				const write = file.writeFile.bind(file);
+				file.writeFile = async (...args: Parameters<typeof file.writeFile>) => {
+					await write(...args);
+					protection.afterExportMaterialWrite?.();
+				};
+			}
+			if (/standard-mcp-export\/[a-f0-9]{64}$/.test(path)) {
+				const sync = file.sync.bind(file);
+				file.sync = async () => {
+					if (protection.publicationTail) {
+						const complete = await fs.stat(join(path, "manifest.json")).then(
+							() => true,
+							() => false,
+						);
+						const locked = await fs.stat(join(path, ".publish.lock")).then(
+							() => true,
+							() => false,
+						);
+						if (complete && !locked) {
+							const fault = protection.publicationTail;
+							protection.publicationTail = undefined;
+							fault();
+						}
+					}
+					return sync();
+				};
+			}
+			if (path.endsWith("standard-mcp-oauth/records")) {
+				const sync = file.sync.bind(file);
+				file.sync = async () => {
+					if (protection.publicationRecordTail) {
+						const names = (await fs.readdir(path)).filter((name) =>
+							/^[a-f0-9]{64}\.json$/.test(name),
+						);
+						for (const name of names) {
+							const record = JSON.parse(
+								await fs.readFile(join(path, name), "utf8"),
+							);
+							if (record.publication?.state === "committed") {
+								const fault = protection.publicationRecordTail;
+								protection.publicationRecordTail = undefined;
+								fault();
+								break;
+							}
+						}
+					}
+					return sync();
+				};
+			}
+			if (
+				path.includes("standard-mcp-export/") &&
+				path.endsWith("/manifest.json")
+			) {
+				const read = file.read.bind(file);
+				file.read = (async (...args: Parameters<typeof file.read>) => {
+					const result = await read(...args);
+					if (result.bytesRead)
+						await protection.afterPublicationManifestRead?.();
+					return result;
+				}) as typeof file.read;
+			}
 			return file;
 		},
 	};
@@ -118,6 +193,11 @@ afterEach(async () => {
 	protection.secretReads = 0;
 	protection.secretWrites = 0;
 	protection.failRecordWrite = false;
+	protection.afterExportMaterialWrite = undefined;
+	protection.publicationTail = undefined;
+	protection.publicationRecordTail = undefined;
+	protection.afterPublicationManifestRead = undefined;
+	vi.unstubAllGlobals();
 });
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const access = "synthetic-oauth-access-material";
@@ -508,6 +588,491 @@ async function deployment(f: Awaited<ReturnType<typeof fixture>>) {
 		serviceToken: "fixture-service",
 	};
 }
+
+async function publicationFixture() {
+	const f = await fixture();
+	await f.client.close();
+	const options = await deployment(f);
+	const delivery = { ref: "approved-oauth-supply", revision: "r1" };
+	const metadata = {
+		schemaVersion: 1,
+		principal: structuredClone(f.principal),
+		agentId: f.scope.agentId,
+		serviceRef: "connection",
+		consumerId: f.target.profile.consumerId,
+		instanceRef: "confirmed-instance-a",
+		issuer: f.configuration.issuer,
+		resource: f.target.url,
+		audience: f.target.profile.audience,
+		configFingerprint: f.target.configFingerprint,
+		source: f.target.source,
+		credentialRef: "host-oauth-installation-a",
+		credentialRevision: "r1",
+		expiresAt: Date.now() + 120_000,
+		contract: {
+			ref: "approved-mcp-contract",
+			revision: "r1",
+			serverInfo: { name: "fixture", version: "1" },
+			tools: [{ name: "read_note", succeededResultSchema: { type: "object" } }],
+		},
+	};
+	const connectionPrincipalId = "confirmed-connection-user-a";
+	// Controlled actual-binding receipt; this fixture is not production approval.
+	const publication = {
+		schemaVersion: 1,
+		authorizationId: "authorization-a",
+		confirmationRevision: "confirmation-r1",
+		configurationFingerprint: createHash("sha256")
+			.update(JSON.stringify(f.configuration))
+			.digest("hex"),
+		clientId: f.configuration.clientId,
+		connectionPrincipalId,
+		delivery,
+		metadata,
+		scope: structuredClone(f.scope),
+		reference: structuredClone(
+			f.signed("begin", { connectionPrincipalId }).reference,
+		),
+	};
+	const publications = join(f.root, "publications");
+	await mkdir(publications, { mode: 0o700 });
+	const publicationFile = join(
+		publications,
+		`${standardMcpExportKey(delivery.ref, delivery.revision)}.json`,
+	);
+	await writeFile(publicationFile, JSON.stringify(publication), {
+		mode: 0o600,
+	});
+	const revision = JSON.stringify([delivery.ref, delivery.revision]);
+	vi.stubGlobal("fetch", f.fetch);
+	const assembly = await prepareRuntimeOAuth({
+		...options,
+		environment: {
+			...options.environment,
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION: revision,
+			AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION: "true",
+		},
+	});
+	if (assembly?.status !== "available")
+		throw Error("OAuth assembly unavailable");
+	closes.push(assembly.client.close);
+	const signed = (command: "begin" | "confirm" | "refresh" | "status") =>
+		f.signed(command, { connectionPrincipalId });
+	const begun = await assembly.client.authorized(signed("begin"));
+	const url = new URL(String(begun.authorizationUrl));
+	await assembly.client.callback({
+		schemaVersion: 1,
+		state: url.searchParams.get("state")!,
+		issuer: f.configuration.issuer,
+		code: "synthetic-authorization-code",
+	});
+	const source = join(
+		f.directory,
+		"codex-driver.json.native",
+		"conversations",
+		"standard-mcp-export",
+		standardMcpExportKey(delivery.ref, delivery.revision),
+	);
+	return {
+		...f,
+		client: assembly.client,
+		delivery,
+		metadata,
+		publication,
+		publicationFile,
+		revision,
+		signed,
+		source,
+		receive: () =>
+			receiveProtectedStandardMcpInstallation({
+				dataDirectory: f.directory,
+				agentId: f.scope.agentId,
+				target: f.target,
+				revision,
+				requireOAuthPublication: true,
+			}),
+	};
+}
+
+it("publishes confirmed OAuth access material through the original export receiver", async () => {
+	const f = await publicationFixture();
+	const { metadata, signed, revision, source } = f;
+	expect((await f.client.authorized(signed("confirm"))).phase).toBe(
+		"awaiting_verification",
+	);
+	expect(f.calls).toHaveLength(1);
+	const reception = await receiveProtectedStandardMcpInstallation({
+		dataDirectory: f.directory,
+		agentId: f.scope.agentId,
+		target: f.target,
+		revision,
+		requireOAuthPublication: true,
+	});
+	expect(reception.status).toBe("available");
+	const reader = await createProtectedStandardMcpInput({
+		dataDirectory: f.directory,
+		target: f.target,
+		store: f.store,
+		delivery: reception,
+	});
+	const input = await reader?.resolveInput(
+		signed("confirm").reference,
+		new AbortController().signal,
+	);
+	expect(input).toMatchObject({
+		token: access,
+		instanceRef: metadata.instanceRef,
+		principal: f.principal,
+	});
+	await f.client.authorized(signed("confirm"));
+	expect(f.calls).toHaveLength(1);
+
+	const binding = await readFile(
+		join(
+			source,
+			"bindings",
+			`${standardMcpInstallationKey(f.principal, f.scope.agentId, f.target)}.json`,
+		),
+		"utf8",
+	);
+	expect(binding).not.toContain(access);
+	expect(binding).not.toContain(refresh);
+	expect(await readdir(join(source, "materials"))).toHaveLength(1);
+});
+
+it.each([
+	[
+		"client",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.clientId = "another-client";
+		},
+	],
+	[
+		"actual Connection principal",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.connectionPrincipalId = "another-connection-user";
+		},
+	],
+	[
+		"platform principal",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.metadata.principal.id = "bob";
+		},
+	],
+	[
+		"Agent",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.metadata.agentId = "agent-b";
+		},
+	],
+	[
+		"authorization",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.authorizationId = "another-authorization";
+		},
+	],
+	[
+		"confirmation",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.confirmationRevision = "old";
+		},
+	],
+	[
+		"configuration",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.configurationFingerprint = "0".repeat(64);
+		},
+	],
+	[
+		"supply",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.delivery.revision = "old";
+		},
+	],
+	[
+		"Execution",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.reference.executionId = "another-execution";
+		},
+	],
+	[
+		"Pod",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.scope.podUid = "another-pod";
+		},
+	],
+	[
+		"instance",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.metadata.instanceRef = "";
+		},
+	],
+	[
+		"expired binding",
+		(r: Awaited<ReturnType<typeof publicationFixture>>["publication"]) => {
+			r.metadata.expiresAt = Date.now() - 1;
+		},
+	],
+])(
+	"rejects an OAuth publication receipt with mismatched %s before exchanging secrets",
+	async (_name, mutate) => {
+		const f = await publicationFixture();
+		mutate(f.publication);
+		await writeFile(f.publicationFile, JSON.stringify(f.publication));
+		await expect(
+			f.client.authorized(f.signed("confirm")),
+		).rejects.toMatchObject({ code: "CONNECTION_OAUTH_UNAVAILABLE" });
+		expect(f.calls).toHaveLength(0);
+		await expect(readdir(f.source)).rejects.toMatchObject({ code: "ENOENT" });
+	},
+);
+
+it("keeps successful OAuth unverified when no actual-binding receipt was supplied", async () => {
+	const f = await publicationFixture();
+	await rm(f.publicationFile);
+	expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+		"awaiting_verification",
+	);
+	expect(f.calls).toHaveLength(1);
+	expect((await f.receive()).status).toBe("unavailable");
+});
+
+it("does not publish a receipt with a lifetime beyond the acquired token", async () => {
+	const f = await publicationFixture();
+	f.publication.metadata.expiresAt = Date.now() + 7_200_000;
+	await writeFile(f.publicationFile, JSON.stringify(f.publication));
+	expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+		"unknown",
+	);
+	await f.client.authorized(f.signed("confirm"));
+	expect(f.calls).toHaveLength(1);
+	expect((await f.receive()).status).toBe("unavailable");
+});
+
+it.each(["receipt drift", "original authorization loss"])(
+	"keeps partial OAuth publication unavailable after %s without another exchange",
+	async (failure) => {
+		const f = await publicationFixture();
+		protection.afterExportMaterialWrite = () => {
+			protection.afterExportMaterialWrite = undefined;
+			if (failure === "receipt drift")
+				writeFileSync(
+					f.publicationFile,
+					JSON.stringify({ ...f.publication, confirmationRevision: "changed" }),
+				);
+			else f.setRevoked();
+		};
+		expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+			"unknown",
+		);
+		expect(f.calls).toHaveLength(1);
+		expect(await readFile(join(f.source, ".publish.lock"), "utf8")).toBe("");
+		expect((await f.receive()).status).toBe("unavailable");
+		if (failure === "receipt drift") {
+			await f.client.authorized(f.signed("confirm"));
+			expect(f.calls).toHaveLength(1);
+		}
+	},
+);
+
+it.each(["directory sync", "final authority", "process protection"])(
+	"keeps the export unavailable when transaction commit fails at %s",
+	async (failure) => {
+		const f = await publicationFixture();
+		protection.publicationRecordTail = () => {
+			if (failure === "directory sync")
+				throw Error("synthetic-directory-sync-failure");
+			if (failure === "final authority") f.setRevoked();
+			if (failure === "process protection")
+				protection.check.mockImplementation(() => {
+					throw Error("synthetic-protection-loss");
+				});
+		};
+		if (failure === "process protection") {
+			await expect(
+				f.client.authorized(f.signed("confirm")),
+			).rejects.toBeDefined();
+			protection.check.mockReset();
+		} else
+			expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+				"unknown",
+			);
+		expect(f.calls).toHaveLength(1);
+		expect(await readFile(join(f.source, ".publish.lock"), "utf8")).toBe("");
+		expect((await f.receive()).status).toBe("unavailable");
+		if (failure !== "final authority")
+			await f.client.authorized(f.signed("confirm"));
+		expect(f.calls).toHaveLength(1);
+	},
+);
+
+it.each(["directory sync", "final authority", "process protection"])(
+	"preserves a committed publication after unlock cleanup encounters %s",
+	async (failure) => {
+		const f = await publicationFixture();
+		protection.publicationTail = () => {
+			if (failure === "directory sync")
+				throw Error("synthetic-cleanup-sync-failure");
+			if (failure === "final authority") f.setRevoked();
+			if (failure === "process protection")
+				protection.check.mockImplementation(() => {
+					throw Error("synthetic-post-commit-protection-loss");
+				});
+		};
+		if (failure === "process protection") {
+			await expect(
+				f.client.authorized(f.signed("confirm")),
+			).rejects.toBeDefined();
+			protection.check.mockReset();
+		} else
+			expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+				"awaiting_verification",
+			);
+		const received = await f.receive();
+		expect(received.status).toBe("available");
+		const reader = await createProtectedStandardMcpInput({
+			dataDirectory: f.directory,
+			target: f.target,
+			store: f.store,
+			delivery: received,
+		});
+		const resolve = () =>
+			reader?.resolveInput(
+				f.signed("confirm").reference,
+				new AbortController().signal,
+			);
+		if (failure === "final authority")
+			await expect(resolve()).rejects.toBeDefined();
+		else expect(await resolve()).toMatchObject({ token: access });
+		expect(f.calls).toHaveLength(1);
+	},
+);
+
+it.each(["refresh", "revoke"])(
+	"closes an already received publication before %s and never selects old access material",
+	async (command) => {
+		const f = await publicationFixture();
+		await f.client.authorized(f.signed("confirm"));
+		const received = await f.receive();
+		const reader = await createProtectedStandardMcpInput({
+			dataDirectory: f.directory,
+			target: f.target,
+			store: f.store,
+			delivery: received,
+		});
+		const resolve = () =>
+			reader?.resolveInput(
+				f.signed("confirm").reference,
+				new AbortController().signal,
+			);
+		expect(await resolve()).toMatchObject({ token: access });
+		if (command === "refresh") await f.client.authorized(f.signed("refresh"));
+		else await f.client.revoke();
+		await expect(resolve()).rejects.toBeDefined();
+		expect((await f.receive()).status).toBe("unavailable");
+		if (command === "revoke") {
+			expect(await readdir(join(f.source, "materials"))).toHaveLength(0);
+			expect(
+				await readdir(
+					join(
+						f.directory,
+						"codex-driver.json.native",
+						"conversations",
+						"standard-mcp-input",
+						"materials",
+					),
+				),
+			).toHaveLength(0);
+		}
+	},
+);
+
+it("refuses old access when refresh starts during the last committed publication check", async () => {
+	const f = await publicationFixture();
+	await f.client.authorized(f.signed("confirm"));
+	const received = await f.receive();
+	const reader = await createProtectedStandardMcpInput({
+		dataDirectory: f.directory,
+		target: f.target,
+		store: f.store,
+		delivery: received,
+	});
+	let checks = 0;
+	protection.afterPublicationManifestRead = async () => {
+		if (++checks === 2) {
+			protection.afterPublicationManifestRead = undefined;
+			await f.client.authorized(f.signed("refresh"));
+		}
+	};
+	await expect(
+		reader?.resolveInput(
+			f.signed("confirm").reference,
+			new AbortController().signal,
+		),
+	).rejects.toBeDefined();
+	expect(checks).toBe(2);
+	expect(f.calls).toHaveLength(2);
+});
+
+it.each(["proof", "transaction"])(
+	"requires the original %s for every access read",
+	async (missing) => {
+		const f = await publicationFixture();
+		await f.client.authorized(f.signed("confirm"));
+		const received = await f.receive();
+		const reader = await createProtectedStandardMcpInput({
+			dataDirectory: f.directory,
+			target: f.target,
+			store: f.store,
+			delivery: received,
+		});
+		if (missing === "proof")
+			await rm(join(f.source, ".oauth-publication.json"));
+		else {
+			const marker = JSON.parse(
+				await readFile(join(f.source, ".oauth-publication.json"), "utf8"),
+			);
+			await rm(join(f.root, "records", `${marker.transactionKey}.json`));
+		}
+		await expect(
+			reader?.resolveInput(
+				f.signed("confirm").reference,
+				new AbortController().signal,
+			),
+		).rejects.toBeDefined();
+		expect((await f.receive()).status).toBe("unavailable");
+	},
+);
+
+it("refuses to consume an otherwise complete export with an interrupted publication lock", async () => {
+	const f = await publicationFixture();
+	await f.client.authorized(f.signed("confirm"));
+	await writeFile(join(f.source, ".publish.lock"), "", { mode: 0o600 });
+	expect((await f.receive()).status).toBe("unavailable");
+	await f.client.authorized(f.signed("confirm"));
+	expect(f.calls).toHaveLength(1);
+});
+
+it("never overwrites a different binding under the same approved export revision", async () => {
+	const f = await publicationFixture();
+	const bindings = join(f.source, "bindings");
+	await mkdir(bindings, { recursive: true, mode: 0o700 });
+	const key = standardMcpInstallationKey(
+		f.principal,
+		f.scope.agentId,
+		f.target,
+	);
+	const file = join(bindings, `${key}.json`);
+	const before = JSON.stringify({ ...f.metadata, credentialRevision: "older" });
+	await writeFile(file, before, { mode: 0o600 });
+	expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+		"unknown",
+	);
+	expect(await readFile(file, "utf8")).toBe(before);
+	expect((await f.receive()).status).toBe("unavailable");
+	await f.client.authorized(f.signed("confirm"));
+	expect(f.calls).toHaveLength(1);
+});
 
 it("uses the DCR client binding separately from the approved Consumer", async () => {
 	const f = await fixture();

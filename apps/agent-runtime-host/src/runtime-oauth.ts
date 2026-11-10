@@ -68,6 +68,17 @@ export async function prepareRuntimeOAuth(options: {
 	if (file === undefined) return undefined;
 	try {
 		if (
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION !==
+				undefined &&
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION !== "true"
+		)
+			unavailable();
+		if (
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION === "true" &&
+			!environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION
+		)
+			unavailable();
+		if (
 			!file ||
 			targetSnapshot?.status !== "available" ||
 			!options.agentId ||
@@ -195,6 +206,13 @@ export async function prepareRuntimeOAuth(options: {
 			dataDirectory: options.dataDirectory,
 			store: options.store,
 			configuration,
+			...(environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION !==
+			"true"
+				? {}
+				: {
+						publicationRevision:
+							environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION,
+					}),
 			target,
 			principal,
 			scope,

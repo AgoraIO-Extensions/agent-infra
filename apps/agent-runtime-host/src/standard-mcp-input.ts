@@ -60,6 +60,10 @@ export async function createProtectedStandardMcpInput(options: {
 	const { dataDirectory, store } = options;
 	if (options.delivery?.status === "unavailable")
 		return { target, resolveInput: async () => unavailable() };
+	const assertMetadataCurrent =
+		options.delivery?.status === "available"
+			? options.delivery.assertMetadataCurrent
+			: undefined;
 	const allowedKeys =
 		options.delivery?.status === "available"
 			? new Set(options.delivery.installationKeys)
@@ -167,6 +171,9 @@ export async function createProtectedStandardMcpInput(options: {
 					reference,
 					target,
 				);
+				if (assertMetadataCurrent)
+					await assertMetadataCurrent(key, metadataText);
+				signal.throwIfAborted();
 				assertStandardMcpProcessProtection();
 				const material = standardMcpMaterialKey(
 					key,
@@ -195,6 +202,10 @@ export async function createProtectedStandardMcpInput(options: {
 				signal.throwIfAborted();
 				assertStandardMcpProcessProtection();
 				if (currentMetadata !== metadataText) unavailable();
+				if (assertMetadataCurrent)
+					await assertMetadataCurrent(key, currentMetadata);
+				signal.throwIfAborted();
+				assertStandardMcpProcessProtection();
 				return validateStandardMcpInput(
 					{ ...publicInput, scope: current.scope, token },
 					reference,

@@ -116,6 +116,24 @@ describe("deployment-approved Connection principal bindings", () => {
 		).toBeNull();
 	});
 
+	it("binds an explicitly approved OAuth identity without using a PAT profile", () => {
+		const { patBinding: _pat, ...oauth } = configuration;
+		const bind = createConnectionInstallationPrincipalBindingsV1({
+			configuration: oauth,
+			principalBindingsByAgent: { "agent-a": binding },
+		});
+		expect(bind(approval)?.connectionPrincipalId).toBe("connection-alice");
+		expect(
+			bind({ ...approval, principal: { kind: "user", id: "bob" } }),
+		).toBeNull();
+		expect(
+			bind({
+				...approval,
+				reference: { ...approval.reference, agentId: "agent-b" },
+			}),
+		).toBeNull();
+	});
+
 	it("keeps standard OAuth approval unchanged", () => {
 		const { patBinding: _pat, ...oauth } = configuration;
 		const bind = createConnectionInstallationPrincipalBindingsV1({

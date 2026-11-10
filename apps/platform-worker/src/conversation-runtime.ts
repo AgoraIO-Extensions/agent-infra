@@ -23,6 +23,7 @@ import {
 	type RuntimeOAuthAuthorizedRequestV1,
 	RuntimeOAuthAuthorizedRequestV1Schema,
 	RuntimeOAuthConfigurationV1Schema,
+	RuntimeOAuthGrantClaimsV1Schema,
 	type RuntimeOAuthResponseV1,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
@@ -2355,7 +2356,10 @@ export function createConversationRuntimeV2(
 							"reference",
 							"revision",
 							"scope",
-							...(configuration.patBinding ? ["connectionPrincipalId"] : []),
+							...(configuration.patBinding ||
+							approval.connectionPrincipalId !== undefined
+								? ["connectionPrincipalId"]
+								: []),
 							...(snapshot.commandId ? ["commandId"] : []),
 							...(snapshot.attemptId ? ["attemptId"] : []),
 							...(snapshot.attemptOwner ? ["attemptOwner"] : []),
@@ -2379,10 +2383,11 @@ export function createConversationRuntimeV2(
 						},
 						approvalInput,
 					) ||
-					(configuration.patBinding
-						? typeof approval.connectionPrincipalId !== "string" ||
-							!approval.connectionPrincipalId
-						: approval.connectionPrincipalId !== undefined)
+					(configuration.patBinding &&
+						approval.connectionPrincipalId === undefined) ||
+					!RuntimeOAuthGrantClaimsV1Schema.shape.connectionPrincipalId.safeParse(
+						approval.connectionPrincipalId,
+					).success
 				)
 					installationUnavailable();
 				const approved = structuredClone(approval);

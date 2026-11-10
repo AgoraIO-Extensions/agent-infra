@@ -1150,17 +1150,24 @@ export const connectionInstallation = {
 connectionInstallation.authorize = undefined;
 `;
 
-it.each([
-	"approved",
-	"core-denied",
-	"final-check-denied",
-	"revoked-after-final-check",
-])(
-	"assembles and executes default PAT authorization with principal bindings (%s)",
-	async (mode) => {
+it.each(
+	["PAT", "OAuth"].flatMap((route) =>
+		[
+			"approved",
+			"core-denied",
+			"final-check-denied",
+			"revoked-after-final-check",
+		].map((mode) => [route, mode] as const),
+	),
+)(
+	"assembles and executes default %s authorization with principal bindings (%s)",
+	async (route, mode) => {
 		const path = join(directory, "configuration.mjs");
 		const original = await readFile(path, "utf8");
-		await writeFile(path, `${original}\n${approvedPatInstallationModule}`);
+		await writeFile(
+			path,
+			`${original}\n${approvedPatInstallationModule}\n${route === "OAuth" ? "delete connectionInstallation.configuration.patBinding;" : ""}`,
+		);
 		try {
 			const result = run({
 				RUN_INSTALLATION_APPROVAL: mode,

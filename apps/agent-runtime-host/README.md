@@ -43,6 +43,43 @@ Host 启动时可消费部署批准的私有文件 export，随后使用已有�
 `0600`，不使用路径别名、符号链接、硬链接或特殊文件。供应修订不可变；相同修订不能换
 成其他内容。metadata 与文件名不构成 Connection 身份、独立确认或当前授权证明。
 
+## OAuth access Token 发布
+
+发布信任边界见
+[工程 Spec §13.5.6](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
+Host 在部署显式设置 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true` 时，
+复用已配置的 `AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION` 选择单次发布回执，
+路径固定为 `codex-driver.json.native/conversations/standard-mcp-oauth/publications/<exportKey>.json`。
+`exportKey` 使用上文同一 supply ref/revision 的算法，不从登录请求或 callback 选择来源。
+目录及文件复用上述私有 UID、权限、链接和真实保护要求。
+
+回执为上限 65,536 bytes 的非秘密 JSON，字段仅包含：
+
+- `schemaVersion: 1`、原 `authorizationId`、`confirmationRevision`。
+- `clientId`、`configurationFingerprint`，后者为解析且已替换 DCR client 的实际
+  `RuntimeOAuthConfigurationV1` 经 `JSON.stringify` 后 UTF-8 字节的 SHA-256。
+- `connectionPrincipalId`：供应方按实际服务合同核实的已绑定 Connection 主体，必须与
+  原安装签名授权一致；注册时计划的用户不是实际登录者证明。
+- 原安装 `scope` 和原 Execution `reference`，不跨 Pod、generation 或授权使用。
+- `delivery: { ref, revision }`、完整版本 1 `metadata`；两系统主体与实际 ConsumerInstance
+  的映射须由批准供应边界核实，metadata 中的平台 principal 不能替代该映射。
+
+该文件承接已核实回执，不执行远端身份核实或生成批准。不存在回执时，换码结果仍为
+`awaiting_verification`；已提供但不匹配时不读取 code/verifier、不交换 Token。确认兑换的
+私有材料持久成功后，Host 才发布 access Token，refresh Token/verifier 不进入 export。
+metadata 的期限不能超过实际领取期限，同一供应或凭据修订不可换内容。
+
+export 的 `.oauth-publication.json` 只保存原事务 key、安装/材料 key、metadata 摘要与
+供应引用，receiver 和 reader 每次使用均核对原私有事务的提交状态与同一内容。显式选择
+OAuth 发布时，缺少 sidecar 或原事务不回退 legacy export。
+
+发布期间 export 中的 `.publish.lock` 阻止接收；失败或崩溃留下的锁不按 PID/时间删除，
+不得自动重发兑换来补造结果。所有 payload、sidecar、原事务与目录持久确认及最终检查
+之后成功解除锁才提交；提交后的 cleanup sync 失败不回滚该事实，重启若锁恢复则拒绝，
+无锁也只核实同一提交结果。成功只提交同一 export，不热改已有 reader 或 Thread；
+原接收器仍在受控重新装配时核对供应修订。受限 phase 不宣称 Grant、真实 MCP 或 Provider
+验收。刷新产生的新材料仍需新的批准修订与受控接收，不改写已发布快照。
+
 ## OAuth callback 内部认证
 
 选择 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE` 的 Host 还须在既有私有 TLS 目录

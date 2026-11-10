@@ -33,6 +33,11 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
 import {
+	eraseProtectedRuntimeOAuthPublication,
+	publishProtectedRuntimeOAuthInstallation,
+	readProtectedRuntimeOAuthPublication,
+} from "./runtime-oauth-publication.js";
+import {
 	assertProtectedStandardMcpDirectoryCurrent,
 	openProtectedStandardMcpDirectory,
 	protectedStandardMcpPath,
@@ -42,9 +47,11 @@ import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
 	ensurePrivateDirectory,
 	finalizeProtectedStandardMcpMaterialRotation,
+	isStandardMcpOAuthPublicationState,
 	publishMaterial,
 	recoverProtectedStandardMcpMaterialRotation,
 	replaceProtectedStandardMcpMaterials,
+	type StandardMcpOAuthPublicationState,
 	withProtectedStandardMcpMaterialLock,
 } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
@@ -67,6 +74,7 @@ interface Transaction {
 	expiresAt: number;
 	requestDigest: string;
 	tokenExpiresAt?: number;
+	publication?: StandardMcpOAuthPublicationState;
 }
 
 async function readProtectedOAuthMaterial(
@@ -198,6 +206,7 @@ function parseTransaction(text: string): Transaction {
 		"expiresAt",
 		"requestDigest",
 		...(value.tokenExpiresAt === undefined ? [] : ["tokenExpiresAt"]),
+		...(value.publication === undefined ? [] : ["publication"]),
 	]
 		.sort()
 		.join(",");
@@ -245,6 +254,8 @@ function parseTransaction(text: string): Transaction {
 		!Number.isSafeInteger(value.expiresAt) ||
 		value.expiresAt < 1 ||
 		!/^[a-f0-9]{64}$/.test(value.requestDigest) ||
+		(value.publication !== undefined &&
+			!isStandardMcpOAuthPublicationState(value.publication)) ||
 		(value.tokenExpiresAt !== undefined &&
 			(!Number.isSafeInteger(value.tokenExpiresAt) || value.tokenExpiresAt < 1))
 	)
@@ -299,6 +310,7 @@ async function writeRecord(path: string, name: string, value: unknown) {
 export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
+	publicationRevision?: string;
 	patBindingSecret?: string;
 	target: ApprovedConnectionConsumerTargetV1 & {
 		readonly oauthClientId?: string;
@@ -491,6 +503,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		assertStandardMcpProcessProtection();
 		const recordDirectory = await openProtectedStandardMcpDirectory(records);
 		const materialNames = new Set<string>();
+		const publications: StandardMcpOAuthPublicationState[] = [];
 		let names: string[];
 		try {
 			names = (
@@ -504,6 +517,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				const key = name.slice(0, -5);
 				const record = await load(key, true);
 				if (record && isDeepStrictEqual(record.principal, principal)) {
+					if (record.publication) {
+						record.publication.state = "pending";
+						await writeRecord(records, name, record);
+						publications.push(structuredClone(record.publication));
+					}
 					materialNames.add(`${key}.access`);
 					materialNames.add(`${key}.refresh`);
 				}
@@ -569,6 +587,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			}
 			if (failures.length > 0)
 				throw new AggregateError(failures, "OAuth revocation incomplete");
+			for (const publication of publications)
+				await eraseProtectedRuntimeOAuthPublication({
+					dataDirectory: options.dataDirectory,
+					publication,
+				});
 		} finally {
 			await directory.close();
 		}
@@ -706,6 +729,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			// Connection PAT bindings have no refresh-token contract; a new
 			// browser-confirmed binding is required after expiry.
 			return response(record);
+		}
+		if (record.publication) {
+			record.publication.state = "pending";
+			await writeRecord(records, `${key}.json`, record);
+			check(snapshot, record, true);
 		}
 		const accessName = `${key}.access`;
 		const refreshName = `${key}.refresh`;
@@ -982,6 +1010,16 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					}
 					return response(record);
 				}
+				const publication = await readProtectedRuntimeOAuthPublication({
+					dataDirectory: options.dataDirectory,
+					revision: options.publicationRevision,
+					target,
+					clientId: configuration.clientId,
+					configurationFingerprint,
+					transaction: record,
+					assertCurrent: () => check(snapshot, record, true),
+				});
+				check(snapshot, record, true);
 				const code = await readProtectedStandardMcpBytes(
 					materials,
 					`${key}.code`,
@@ -1037,8 +1075,24 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					}
 					record.phase = "awaiting_verification";
 					record.tokenExpiresAt = tokens.expiresAt;
+					if (publication)
+						record.publication = { ...publication.commit, state: "pending" };
 					await writeRecord(records, `${key}.json`, record);
 					check(snapshot, record);
+					if (publication) {
+						const commitPublication =
+							await publishProtectedRuntimeOAuthInstallation({
+								publication,
+								accessToken: tokens.accessToken,
+								expiresAt: tokens.expiresAt,
+								transactionKey: key,
+							});
+						check(snapshot, record, true);
+						record.publication = { ...publication.commit, state: "committed" };
+						await writeRecord(records, `${key}.json`, record);
+						check(snapshot, record, true);
+						await commitPublication();
+					}
 				} catch {
 					record.phase = "unknown";
 					await writeRecord(records, `${key}.json`, record).catch(
