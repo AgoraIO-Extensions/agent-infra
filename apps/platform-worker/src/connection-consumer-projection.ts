@@ -19,6 +19,8 @@ export const runtimeConnectionConsumerRevisionEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION";
 export const runtimeConnectionInstallationRevisionEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION";
+export const runtimeConnectionOAuthPublicationEnvironment =
+	"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION";
 export const runtimeConnectionAcpMcpBridgeEnvironment =
 	"AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE";
 export const runtimeConnectionPiMcpBridgeEnvironment =
@@ -49,11 +51,22 @@ export function runtimeConnectionInstallationRevisionForAgentV1(
 	return byAgent[agentId] ?? null;
 }
 
+export function runtimeConnectionInstallationOAuthPublicationForAgentV1(
+	publication: boolean | undefined,
+	byAgent: Readonly<Record<string, boolean>> | undefined,
+	agentId: string,
+): boolean | undefined {
+	if (byAgent === undefined) return publication;
+	if (!Object.hasOwn(byAgent, agentId)) return undefined;
+	return byAgent[agentId];
+}
+
 export function isRuntimeConnectionEnvironmentV1(name: string): boolean {
 	return [
 		runtimeConnectionConsumerFileEnvironment,
 		runtimeConnectionConsumerRevisionEnvironment,
 		runtimeConnectionInstallationRevisionEnvironment,
+		runtimeConnectionOAuthPublicationEnvironment,
 		runtimeConnectionAcpMcpBridgeEnvironment,
 		runtimeConnectionPiMcpBridgeEnvironment,
 	].includes(name);
@@ -171,12 +184,17 @@ export function runtimeConnectionConsumerProjectionV1(
 		readonly driver: "codex" | "claude" | "acp" | "pi";
 		readonly templateId: string;
 	},
+	oauthPublication?: boolean,
 ): {
 	annotations: Record<string, string>;
 	env: V1EnvVar[];
 	volumeMounts: V1VolumeMount[];
 	volumes: V1Volume[];
 } {
+	if (oauthPublication !== undefined && typeof oauthPublication !== "boolean")
+		throw new WorkloadKubernetesError("policy");
+	if (oauthPublication === true && (!snapshot || installationRevision == null))
+		throw new WorkloadKubernetesError("policy");
 	if (installationRevision != null && !snapshot)
 		throw new WorkloadKubernetesError("policy");
 	if (snapshot === undefined || snapshot === null)
@@ -233,6 +251,14 @@ export function runtimeConnectionConsumerProjectionV1(
 						{
 							name: runtimeConnectionInstallationRevisionEnvironment,
 							value: installationRevision,
+						},
+					]
+				: []),
+			...(installationRevision != null && oauthPublication === true
+				? [
+						{
+							name: runtimeConnectionOAuthPublicationEnvironment,
+							value: "true",
 						},
 					]
 				: []),

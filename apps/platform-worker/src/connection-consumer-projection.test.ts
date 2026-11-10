@@ -10,7 +10,9 @@ import {
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerRevisionEnvironment,
 	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationOAuthPublicationForAgentV1,
 	runtimeConnectionInstallationRevisionEnvironment,
+	runtimeConnectionOAuthPublicationEnvironment,
 	runtimeConnectionPiMcpBridgeEnvironment,
 } from "./connection-consumer-projection.js";
 import {
@@ -274,6 +276,158 @@ describe("runtime Connection snapshot projection", () => {
 			}).env,
 		).not.toContainEqual(bridge);
 	});
+	it("projects OAuth publication only for an explicitly approved OAuth installation", () => {
+		const revision = createRuntimeConnectionInstallationRevisionV1(
+			{ ref: "approved-installation", revision: "r1" },
+			snapshot(),
+		);
+		if (!revision) throw new Error("Missing installation revision");
+		const publication = {
+			name: runtimeConnectionOAuthPublicationEnvironment,
+			value: "true",
+		};
+		expect(
+			runtimeConnectionConsumerProjectionV1(
+				snapshot(),
+				revision,
+				undefined,
+				true,
+			).env,
+		).toContainEqual(publication);
+		expect(
+			runtimeConnectionConsumerProjectionV1(
+				snapshot(),
+				revision,
+				undefined,
+				false,
+			).env,
+		).not.toContainEqual(publication);
+	});
+	it("observes the approved publication flag and rejects live StatefulSet flag drift", async () => {
+		const api = fakeKubernetesApi();
+		const desired = workloadDesiredFixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: api.client,
+			policy: {
+				...workloadTestPolicy,
+				connectionConsumerSnapshot: snapshot(),
+				connectionInstallationRevision: '["approved-supply","r1"]',
+				connectionInstallationOAuthPublication: true,
+			},
+			probe: async () => true,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw Error("Missing workload");
+		const workload = await api.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		const publication = workload?.spec?.template.spec?.containers[0]?.env?.find(
+			(x) => x.name === runtimeConnectionOAuthPublicationEnvironment,
+		);
+		expect(publication?.value).toBe("true");
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		if (!publication) throw Error("Missing publication flag");
+		publication.value = "false";
+		if (!workload) throw Error("Missing workload");
+		await api.client.replace(workload);
+		expect(await adapter.observe(desired, identity)).not.toBe("healthy");
+	});
+
+	it("projects each Agent's complete StatefulSet delivery from the default per-Agent policy", async () => {
+		const api = fakeKubernetesApi();
+		const profile = source();
+		const anotherProfile = {
+			...profile.profile,
+			consumerId: "other-agent-consumer",
+		};
+		const anotherSnapshot = createRuntimeConnectionConsumerSnapshotV1(
+			anotherProfile,
+			{
+				...profile.approval,
+				configFingerprint:
+					connectionConsumerProfileFingerprintV1(anotherProfile),
+			},
+		);
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: api.client,
+			policy: {
+				...workloadTestPolicy,
+				connectionConsumerSnapshotsByAgent: {
+					"agent-a": snapshot(),
+					"agent-b": anotherSnapshot ?? null,
+				},
+				connectionInstallationRevisionsByAgent: {
+					"agent-a": '["supply-a","r1"]',
+					"agent-b": '["supply-b","r2"]',
+				},
+				connectionInstallationOAuthPublicationsByAgent: {
+					"agent-a": true,
+					"agent-b": false,
+				},
+			},
+			probe: async () => true,
+		});
+		for (const agent of ["agent-a", "agent-b"]) {
+			const desired = workloadDesiredFixture(1, agent);
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw Error("Missing workload");
+			const workload = await api.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			expect(
+				workload?.spec?.template.metadata?.annotations?.[
+					runtimeConnectionConsumerAnnotation
+				],
+			).toBe(agent === "agent-a" ? snapshot() : anotherSnapshot);
+			expect(
+				workload?.spec?.template.spec?.containers[0]?.volumeMounts?.find(
+					(x) => x.name === "connection-consumer",
+				)?.readOnly,
+			).toBe(true);
+			expect(
+				workload?.spec?.template.spec?.volumes?.find(
+					(x) => x.name === "connection-consumer",
+				),
+			).toBeDefined();
+			expect(
+				workload?.spec?.template.spec?.containers[0]?.env?.some(
+					(x) => x.name === runtimeConnectionOAuthPublicationEnvironment,
+				),
+			).toBe(agent === "agent-a");
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+		}
+		await expect(
+			adapter.apply(workloadDesiredFixture(1, "agent-c")),
+		).rejects.toThrow();
+	});
+
+	it("requires a complete installation for explicit publication and does not inherit missing per-Agent approval", () => {
+		expect(() =>
+			runtimeConnectionConsumerProjectionV1(
+				snapshot(),
+				undefined,
+				undefined,
+				true,
+			),
+		).toThrow();
+		expect(
+			runtimeConnectionInstallationOAuthPublicationForAgentV1(
+				true,
+				{},
+				"other-agent",
+			),
+		).toBeUndefined();
+		expect(
+			runtimeConnectionInstallationOAuthPublicationForAgentV1(
+				true,
+				{ "agent-a": false },
+				"agent-a",
+			),
+		).toBe(false);
+	});
+
 	it("projects the protected Pi bridge only for the pinned Pi template", () => {
 		const revision = createRuntimeConnectionInstallationRevisionV1(
 			{ ref: "approved-installation", revision: "r1" },

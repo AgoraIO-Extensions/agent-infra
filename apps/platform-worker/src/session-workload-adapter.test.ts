@@ -21,6 +21,7 @@ import {
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerFileEnvironment,
 	runtimeConnectionInstallationRevisionEnvironment,
+	runtimeConnectionOAuthPublicationEnvironment,
 } from "./connection-consumer-projection.js";
 import type {
 	WorkerKubernetesClientV1,
@@ -453,6 +454,7 @@ describe("session sandbox workload adapter", () => {
 			...allocation,
 			connectionConsumerSnapshot: snapshot,
 			connectionInstallationRevision: installationRevision,
+			connectionInstallationOAuthPublication: true,
 		};
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
@@ -482,6 +484,10 @@ describe("session sandbox workload adapter", () => {
 		);
 		if (!installation) throw new Error("Missing installation selector");
 		expect(installation.value).toBe(installationRevision);
+		expect(pod.spec.containers[0]?.env).toContainEqual({
+			name: runtimeConnectionOAuthPublicationEnvironment,
+			value: "true",
+		});
 		for (const changed of [
 			["other-supply", "r7"],
 			["private-session-supply", "r8"],

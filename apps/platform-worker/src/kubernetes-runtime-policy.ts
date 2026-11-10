@@ -26,6 +26,7 @@ import {
 	isRuntimeConnectionEnvironmentV1,
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationOAuthPublicationForAgentV1,
 	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -132,6 +133,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 						agentId,
 					),
 			templateBinding,
+			dependencies.connectionConsumerControl
+				? undefined
+				: runtimeConnectionInstallationOAuthPublicationForAgentV1(
+						policy.connectionInstallationOAuthPublication,
+						policy.connectionInstallationOAuthPublicationsByAgent,
+						agentId,
+					),
 		);
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
