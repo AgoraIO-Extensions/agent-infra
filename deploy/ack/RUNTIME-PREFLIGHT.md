@@ -16,6 +16,11 @@ Sandbox 选择一个由集群管理员提供的 `RuntimeClass`（例如 ACK Sand
 与 toleration。Chart 不创建或伪造 RuntimeClass handler；handler、专用节点池、RuntimeClass
 调度规则和 NetworkPolicy 能力由 SRE 提供。
 
+启用前须核对 RuntimeClass 提供方支持的集群版本。
+[ACK runV 支持范围](https://www.alibabacloud.com/help/en/ack/ack-managed-and-ack-dedicated/user-guide/overview-10/)
+当前列出 Kubernetes 1.16–1.34，而本 Chart 的 Session 准入策略要求 1.36 及以上；在提供方确认
+目标版本兼容前，不能把 `runtimeClassName: runv` 示例视为该版本可部署方案。
+
 该模式的独立探针使用同一 pinned image 和安全上下文创建短生命周期 Pod：设置
 `ACK_RUNTIME_CLASS=<cluster-runtime-class>` 后运行
 `node deploy/ack/runtime-isolation-preflight.mjs`，脚本会执行
