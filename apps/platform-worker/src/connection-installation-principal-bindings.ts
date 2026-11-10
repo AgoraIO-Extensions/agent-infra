@@ -41,6 +41,7 @@ export function createConnectionInstallationPrincipalBindingsV1(options: {
 		: undefined;
 	const configurationFor = (agentId: string) =>
 		configurations === undefined ? shared : configurations.get(agentId);
+	const mappingConfigured = options.principalBindingsByAgent !== undefined;
 	const bindings = new Map<
 		string,
 		{ ref: string; revision: string; principals: ReadonlyMap<string, string> }
@@ -55,7 +56,7 @@ export function createConnectionInstallationPrincipalBindingsV1(options: {
 			const configuration = configurationFor(agentId);
 			if (
 				!OpaqueIdV1Schema.safeParse(agentId).success ||
-				!configuration?.patBinding ||
+				!configuration ||
 				!record(value) ||
 				Object.keys(value).sort().join(",") !==
 					"configuration,issuer,principals" ||
@@ -110,7 +111,7 @@ export function createConnectionInstallationPrincipalBindingsV1(options: {
 		const agentId = approved.reference.agentId;
 		const configuration = configurationFor(agentId);
 		if (!configuration) return null;
-		if (!configuration.patBinding) return approved;
+		if (!configuration.patBinding && !mappingConfigured) return approved;
 		const binding = bindings.get(agentId);
 		if (
 			approved.principal.kind !== "user" ||

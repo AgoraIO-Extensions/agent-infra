@@ -604,6 +604,9 @@ export async function assembleRuntimeHost(
 							agentId,
 							target: connectionConsumer,
 							revision: installationRevision,
+							requireOAuthPublication:
+								environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION !==
+								undefined,
 						}),
 					})
 				: undefined;

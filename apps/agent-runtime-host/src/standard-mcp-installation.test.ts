@@ -243,9 +243,21 @@ it("publishes durable separated input and resolves only its authenticated origin
 	expect(faults.events.indexOf("metadata-rename")).toBeLessThan(
 		faults.events.indexOf("metadata-directory-sync"),
 	);
-	expect(await receiveProtectedStandardMcpInstallation(env.options)).toEqual(
-		receipt,
-	);
+	const repeated = await receiveProtectedStandardMcpInstallation(env.options);
+	expect(repeated).toMatchObject({
+		status: receipt.status,
+		...(receipt.status === "available"
+			? { installationKeys: receipt.installationKeys }
+			: {}),
+	});
+	const again = await createProtectedStandardMcpInput({
+		...env.options,
+		store: env.store,
+		delivery: repeated,
+	});
+	expect(
+		await again?.resolveInput(reference, new AbortController().signal),
+	).toEqual(env.fixture.input);
 });
 
 it("preserves the absent source state without any protection or material access", async () => {

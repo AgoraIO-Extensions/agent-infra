@@ -2496,6 +2496,31 @@ Token 主体、Consumer/实例、generation、期限和授权。供应方仅消�
 有效凭据通过 §13.5.5 的同一私有 export/接收器交付，access Token 与 metadata 分离；
 refresh Token/verifier 只保留在同一受保护客户端的专用材料中，不进入 reader 的普通 metadata。
 安装/凭据引用区分本地事务引用与 Connection 已确认引用，不以本地随机 ID 冒充服务端实例。
+
+Host 的 `prepareRuntimeOAuth` 仅在部署显式选择 OAuth 发布时消费批准的非秘密安装发布
+回执文件；缺失实际回执或提交证明不能降级到旧 export 来源。该回执须绑定原
+`authorizationId`、`confirmationRevision`、精确 OAuth client 与配置指纹、供应引用/修订，
+并显式包含 Connection 已确认实际绑定的 `connectionPrincipalId`、原平台主体，以及该
+client/实例对应的 §13.5.5 版本 1 metadata，并与原签名授权中的 Connection 主体一致。
+既有 `principalBindingsByAgent` 可为 OAuth/PAT 提供同一批准的原主体映射，仍须在 Core
+授权及最终复核后签入；缺映射不从 Owner、邮箱或请求补齐。注册时的计划用户不作为实际绑定证明；两系统
+主体关系由原批准来源核实，不能靠邮箱、PKCE 或 metadata 中的平台主体推出。文件只承接
+供应方按实际服务合同核实的结果，不让文件声明或本地 ID 代替该核实。原配置未选择发布回执时，已领取
+材料保持 `awaiting_verification`。回执不匹配时不能发布；配置、回执或原授权在等待后漂移
+即拒绝，不从请求、callback 或模型接收这些字段。Host 先核对非秘密绑定，兑换成功并持久
+确认私有材料后，由 `publishProtectedRuntimeOAuthInstallation` 将 access Token 写入同一
+私有 export；refresh Token/verifier 不进入 export。发布失败不重发 code/refresh，受限
+phase 不宣称已连接。供应修订不可变，失败或崩溃的未确认发布阻止原接收器消费，不能
+通过覆盖修订或删除锁自动重试。
+原私有事务先持久记录 publication `pending`；原 export 的 sidecar 绑定该事务、安装与材料
+key、完整 metadata 摘要及同一供应修订。payload、sidecar、原事务的 `committed` 描述与
+目录全部持久确认并通过最终授权/保护检查后，成功解除发布锁是提交点。此前任一步失败
+保留锁，接收器拒绝；提交后的目录同步仅确认清理持久性，失败不把已提交事实回写成
+未提交。重启若锁恢复则拒绝，锁缺失时也须核实同一原事务和内容，不能重发换码来恢复。
+reader 在材料读取前后及最终原授权复核后继续核对该提交事实和固定 metadata 快照。
+refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确认后擦除该事务拥有的
+私有 export/reader 材料副本，不删除其他主体或 Agent 的材料。
+
 发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。初版仍采用受控
 重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
 热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。

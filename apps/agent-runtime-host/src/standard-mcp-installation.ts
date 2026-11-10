@@ -33,7 +33,11 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 export type StandardMcpInstallationDelivery =
 	| { status: "unconfigured" }
 	| { status: "unavailable" }
-	| { status: "available"; installationKeys: ReadonlySet<string> };
+	| {
+			status: "available";
+			installationKeys: ReadonlySet<string>;
+			assertMetadataCurrent?: (key: string, text: string) => Promise<void>;
+	  };
 
 /** Nonsecret path key; source selection comes only from trusted deployment. */
 export function standardMcpExportKey(ref: string, revision: string) {
@@ -636,13 +640,21 @@ async function publishMaterialUnlocked(
 	}
 }
 
-async function publishMetadata(
+export async function publishMetadata(
 	path: string,
 	name: string,
 	metadata: Record<string, unknown>,
+	options: { guard?: () => void; immutable?: boolean } = {},
 ) {
-	assertStandardMcpProcessProtection();
-	const directory = await openProtectedStandardMcpDirectory(path);
+	const assertCurrent = () => {
+		assertStandardMcpProcessProtection();
+		options.guard?.();
+	};
+	assertCurrent();
+	const directory = await openProtectedStandardMcpDirectory(
+		path,
+		options.guard,
+	);
 	const temporary = `.stage-${randomUUID()}.json`;
 	const temporaryPath = protectedStandardMcpPath(directory, path, temporary);
 	try {
@@ -650,6 +662,7 @@ async function publishMetadata(
 			path,
 			name,
 			65_536,
+			options.guard,
 		).catch((error: NodeJS.ErrnoException) => {
 			if (error.code === "ENOENT") return undefined;
 			throw error;
@@ -658,8 +671,9 @@ async function publishMetadata(
 			const existing: unknown = JSON.parse(previous);
 			if (!isRecord(existing)) unavailable();
 			if (
-				existing.credentialRef === metadata.credentialRef &&
-				existing.credentialRevision === metadata.credentialRevision &&
+				(options.immutable ||
+					(existing.credentialRef === metadata.credentialRef &&
+						existing.credentialRevision === metadata.credentialRevision)) &&
 				!isDeepStrictEqual(existing, metadata)
 			)
 				unavailable();
@@ -673,17 +687,21 @@ async function publishMetadata(
 			0o600,
 		);
 		try {
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 			await file.writeFile(JSON.stringify(metadata), "utf8");
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 			await file.sync();
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 		} finally {
 			await file.close();
 		}
-		assertStandardMcpProcessProtection();
-		await assertProtectedStandardMcpDirectoryCurrent(path, directory);
-		assertStandardMcpProcessProtection();
+		assertCurrent();
+		await assertProtectedStandardMcpDirectoryCurrent(
+			path,
+			directory,
+			options.guard,
+		);
+		assertCurrent();
 		await rename(
 			temporaryPath,
 			protectedStandardMcpPath(directory, path, name),
@@ -691,7 +709,11 @@ async function publishMetadata(
 		// A failure here can leave the new metadata visible. Caller keeps the
 		// capability unavailable; restart must verify the same export/result.
 		await directory.sync();
-		await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+		await assertProtectedStandardMcpDirectoryCurrent(
+			path,
+			directory,
+			options.guard,
+		);
 	} finally {
 		try {
 			await unlink(temporaryPath).catch((error: NodeJS.ErrnoException) => {
@@ -703,14 +725,194 @@ async function publishMetadata(
 	}
 }
 
+export interface StandardMcpOAuthPublicationState {
+	state: "pending" | "committed";
+	delivery: { ref: string; revision: string };
+	installationKey: string;
+	metadataDigest: string;
+	materialKey: string;
+}
+
+export function isStandardMcpOAuthPublicationState(
+	value: unknown,
+): value is StandardMcpOAuthPublicationState {
+	return (
+		isRecord(value) &&
+		Object.keys(value).sort().join(",") ===
+			"delivery,installationKey,materialKey,metadataDigest,state" &&
+		["pending", "committed"].includes(String(value.state)) &&
+		typeof value.installationKey === "string" &&
+		/^[a-f0-9]{64}$/.test(value.installationKey) &&
+		typeof value.materialKey === "string" &&
+		/^[a-f0-9]{64}$/.test(value.materialKey) &&
+		typeof value.metadataDigest === "string" &&
+		/^[a-f0-9]{64}$/.test(value.metadataDigest) &&
+		isRecord(value.delivery) &&
+		Object.keys(value.delivery).sort().join(",") === "ref,revision" &&
+		[value.delivery.ref, value.delivery.revision].every(
+			(x) =>
+				typeof x === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(x),
+		)
+	);
+}
+
+/** An interrupted Host publication is never a consumable export. */
+export async function assertProtectedStandardMcpExportCommitted(
+	source: string,
+	required = false,
+) {
+	const directory = await openProtectedStandardMcpDirectory(source);
+	try {
+		const pending = await lstat(
+			protectedStandardMcpPath(directory, source, ".publish.lock"),
+		).then(
+			() => true,
+			(error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") return false;
+				throw error;
+			},
+		);
+		await assertProtectedStandardMcpDirectoryCurrent(source, directory);
+		if (pending) unavailable();
+
+		const proof = await readProtectedStandardMcpBytes(
+			source,
+			".oauth-publication.json",
+			8192,
+		).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return undefined;
+			throw error;
+		});
+		if (proof === undefined) {
+			if (required) unavailable();
+			return;
+		}
+		const marker: unknown = JSON.parse(proof);
+		if (
+			!isRecord(marker) ||
+			Object.keys(marker).sort().join(",") !==
+				"expected,schemaVersion,transactionKey" ||
+			marker.schemaVersion !== 1 ||
+			typeof marker.transactionKey !== "string" ||
+			!/^[a-f0-9]{64}$/.test(marker.transactionKey) ||
+			!isRecord(marker.expected) ||
+			Object.keys(marker.expected).sort().join(",") !==
+				"delivery,installationKey,materialKey,metadataDigest"
+		)
+			unavailable();
+		const expected = { ...marker.expected, state: "committed" };
+		if (
+			!isStandardMcpOAuthPublicationState(expected) ||
+			basename(source) !==
+				standardMcpExportKey(expected.delivery.ref, expected.delivery.revision)
+		)
+			unavailable();
+		const records = join(
+			dirname(dirname(source)),
+			"standard-mcp-oauth",
+			"records",
+		);
+		const recordName = `${marker.transactionKey}.json`;
+		const recordText = await readProtectedStandardMcpBytes(
+			records,
+			recordName,
+			16_384,
+		);
+		const record: unknown = JSON.parse(recordText);
+		const metadataText = await readProtectedStandardMcpBytes(
+			join(source, "bindings"),
+			`${expected.installationKey}.json`,
+			65_536,
+		);
+		if (
+			!isRecord(record) ||
+			record.schemaVersion !== 1 ||
+			record.phase !== "awaiting_verification" ||
+			!isDeepStrictEqual(record.publication, expected) ||
+			typeof record.authorizationId !== "string" ||
+			createHash("sha256")
+				.update(
+					JSON.stringify([expected.installationKey, record.authorizationId]),
+				)
+				.digest("hex") !== marker.transactionKey ||
+			createHash("sha256").update(metadataText).digest("hex") !==
+				expected.metadataDigest
+		)
+			unavailable();
+		const metadata: unknown = JSON.parse(metadataText);
+		const manifest: unknown = JSON.parse(
+			await readProtectedStandardMcpBytes(source, "manifest.json", 8192),
+		);
+		if (
+			!isRecord(manifest) ||
+			!isDeepStrictEqual(manifest.installationKeys, [
+				expected.installationKey,
+			]) ||
+			!isDeepStrictEqual(manifest.delivery, expected.delivery)
+		)
+			unavailable();
+		if (
+			!isRecord(metadata) ||
+			typeof metadata.credentialRef !== "string" ||
+			typeof metadata.credentialRevision !== "string" ||
+			standardMcpMaterialKey(
+				expected.installationKey,
+				metadata.credentialRef,
+				metadata.credentialRevision,
+			) !== expected.materialKey
+		)
+			unavailable();
+		if (
+			!isRecord(metadata) ||
+			!isRecord(record.scope) ||
+			!isDeepStrictEqual(record.principal, metadata.principal) ||
+			record.scope.agentId !== metadata.agentId ||
+			record.scope.configFingerprint !== metadata.configFingerprint ||
+			!isDeepStrictEqual(record.scope.source, metadata.source)
+		)
+			unavailable();
+		await assertProtectedStandardMcpDirectoryCurrent(source, directory);
+		if (
+			await lstat(
+				protectedStandardMcpPath(directory, source, ".publish.lock"),
+			).then(
+				() => true,
+				(error: NodeJS.ErrnoException) => {
+					if (error.code === "ENOENT") return false;
+					throw error;
+				},
+			)
+		)
+			unavailable();
+		if (
+			(await readProtectedStandardMcpBytes(
+				source,
+				".oauth-publication.json",
+				8192,
+			)) !== proof
+		)
+			unavailable();
+		// Refresh/revoke may have closed this publication while other files awaited.
+		if (
+			(await readProtectedStandardMcpBytes(records, recordName, 16_384)) !==
+			recordText
+		)
+			unavailable();
+	} finally {
+		await directory.close();
+	}
+}
+
 /** Host startup reception only. No token, raw path or parser error escapes. */
 export async function receiveProtectedStandardMcpInstallation(options: {
 	dataDirectory: string;
 	agentId: string;
 	target: ApprovedConnectionConsumerTargetV1;
 	revision: string | undefined;
+	requireOAuthPublication?: boolean;
 }): Promise<StandardMcpInstallationDelivery> {
 	if (options.revision === undefined) return { status: "unconfigured" };
+	const requireOAuthPublication = options.requireOAuthPublication === true;
 	try {
 		const { dataDirectory, agentId, revision } = options;
 		const target = structuredClone(options.target);
@@ -743,6 +945,10 @@ export async function receiveProtectedStandardMcpInstallation(options: {
 		const exportDirectory = await openProtectedStandardMcpDirectory(exportRoot);
 		await exportDirectory.close();
 		const source = join(exportRoot, standardMcpExportKey(ref, sourceRevision));
+		await assertProtectedStandardMcpExportCommitted(
+			source,
+			requireOAuthPublication,
+		);
 		const manifestText = await readProtectedStandardMcpBytes(
 			source,
 			"manifest.json",
@@ -771,6 +977,7 @@ export async function receiveProtectedStandardMcpInstallation(options: {
 		)
 			unavailable();
 		const keys = new Set(manifest.installationKeys as string[]);
+		const selectedMetadata = new Map<string, string>();
 		const destination = join(root, "standard-mcp-input");
 		for (const path of [
 			destination,
@@ -809,10 +1016,15 @@ export async function receiveProtectedStandardMcpInstallation(options: {
 						`${key}.json`,
 						65_536,
 					);
+					await assertProtectedStandardMcpExportCommitted(
+						source,
+						requireOAuthPublication,
+					);
 					const metadata = validateStandardMcpInstallationMetadata(
 						JSON.parse(metadataText),
 						target,
 					);
+					selectedMetadata.set(key, metadataText);
 					if (
 						metadata.agentId !== agentId ||
 						standardMcpInstallationKey(metadata.principal, agentId, target) !==
@@ -887,7 +1099,21 @@ export async function receiveProtectedStandardMcpInstallation(options: {
 			await directory.close();
 		}
 		assertStandardMcpProcessProtection();
-		return { status: "available", installationKeys: keys };
+		await assertProtectedStandardMcpExportCommitted(
+			source,
+			requireOAuthPublication,
+		);
+		return {
+			status: "available",
+			installationKeys: keys,
+			async assertMetadataCurrent(key, text) {
+				if (selectedMetadata.get(key) !== text) unavailable();
+				await assertProtectedStandardMcpExportCommitted(
+					source,
+					requireOAuthPublication,
+				);
+			},
+		};
 	} catch {
 		return { status: "unavailable" };
 	}

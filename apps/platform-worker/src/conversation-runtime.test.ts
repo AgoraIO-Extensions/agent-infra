@@ -2367,6 +2367,67 @@ it("sends a separately authorized installation request from the original Worker 
 	}
 });
 
+it("signs the approved Connection principal for a standard OAuth installation", async () => {
+	const h = installationHarness();
+	h.installationAuthorize.mockImplementation(
+		async (input, _signal, finalCheck) => {
+			await finalCheck();
+			return {
+				...input,
+				revision: "confirmation-r1",
+				connectionPrincipalId: "connection-user",
+			};
+		},
+	);
+	try {
+		const runtimeGrant = await h.authorize();
+		const result = await h.runtime.connectionInstallation.request({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+			command: "begin",
+		});
+		expect(result.phase).toBe("awaiting_callback");
+		const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+		const claims = JSON.parse(
+			Buffer.from(body.grant.token.split(".")[1], "base64url").toString(),
+		);
+		expect(claims.connectionPrincipalId).toBe("connection-user");
+		expect(claims.principal).toEqual({ kind: "user", id: "user" });
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it.each(["", null, 42])(
+	"refuses an invalid approved OAuth principal %j before sending",
+	async (connectionPrincipalId) => {
+		const h = installationHarness();
+		h.installationAuthorize.mockImplementation(
+			async (input, _signal, finalCheck) => {
+				await finalCheck();
+				return {
+					...input,
+					revision: "confirmation-r1",
+					connectionPrincipalId: connectionPrincipalId as unknown as string,
+				};
+			},
+		);
+		try {
+			const runtimeGrant = await h.authorize();
+			await expect(
+				h.runtime.connectionInstallation.request({
+					execution: h.events(runtimeGrant),
+					authorizationId: "authorization-a",
+					command: "begin",
+				}),
+			).rejects.toMatchObject({ code: "CONNECTION_INSTALLATION_UNAVAILABLE" });
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			await h.runtime.close();
+		}
+	},
+);
+
 it("accepts PAT begin callback metadata once and keeps confirm/status responses clean", async () => {
 	const h = installationHarness("https://runtime.test:3443/", true);
 	const responses = [
