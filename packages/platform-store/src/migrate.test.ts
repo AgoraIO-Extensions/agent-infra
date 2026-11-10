@@ -2548,17 +2548,46 @@ describe("published Relay authority migration", () => {
 				"workspace_snapshots:workspace_snapshots_pkey",
 			);
 			expectedDelta.columns.push(
-				...['agent_id','association_revision','consumer_id','consumer_revision','created_at','failure_code','idempotency_key','operation_id','receipt','registered_at','request','request_digest','sending_at','source_key','source_namespace','status','updated_at'].map((name) => `connection_consumer_registrations:${name}`),
+				...[
+					"agent_id",
+					"association_revision",
+					"consumer_id",
+					"consumer_revision",
+					"created_at",
+					"failure_code",
+					"idempotency_key",
+					"operation_id",
+					"receipt",
+					"registered_at",
+					"request",
+					"request_digest",
+					"sending_at",
+					"source_key",
+					"source_namespace",
+					"status",
+					"updated_at",
+				].map((name) => `connection_consumer_registrations:${name}`),
 			);
 			expectedDelta.checks.push(
-				...['digest','failure','receipt','request','revision','source','status'].map((name) => `connection_consumer_registrations:connection_consumer_registration_${name}`),
+				...[
+					"digest",
+					"failure",
+					"receipt",
+					"request",
+					"revision",
+					"source",
+					"status",
+				].map(
+					(name) =>
+						`connection_consumer_registrations:connection_consumer_registration_${name}`,
+				),
 			);
 			expectedDelta.indexes.push(
-				'connection_consumer_registrations:connection_consumer_registration_agent_unique',
-				'connection_consumer_registrations:connection_consumer_registration_consumer_unique',
-				'connection_consumer_registrations:connection_consumer_registration_source_unique',
-				'connection_consumer_registrations:connection_consumer_registration_status_idx',
-				'connection_consumer_registrations:connection_consumer_registrations_pkey',
+				"connection_consumer_registrations:connection_consumer_registration_agent_unique",
+				"connection_consumer_registrations:connection_consumer_registration_consumer_unique",
+				"connection_consumer_registrations:connection_consumer_registration_source_unique",
+				"connection_consumer_registrations:connection_consumer_registration_status_idx",
+				"connection_consumer_registrations:connection_consumer_registrations_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

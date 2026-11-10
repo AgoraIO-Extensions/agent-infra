@@ -182,7 +182,7 @@ it("accepts API defaults and SDK objects but rejects mutated init credentials or
 	expect(workspaceSnapshotPodSpecMatchesV1(actual, projection)).toBe(true);
 	for (const mutate of [
 		(p: typeof spec) => {
-			p.initContainers![0]!.image = "registry.example.test/other@" + digest;
+			p.initContainers![0]!.image = `registry.example.test/other@${digest}`;
 		},
 		(p: typeof spec) => {
 			p.initContainers![0]!.command = ["sh", "-c", "untrusted"];
