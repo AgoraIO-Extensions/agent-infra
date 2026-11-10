@@ -35,7 +35,7 @@
 既不是当前版本、也不是最新待升级版本的缓存；严格准入登记引用的版本要由运维核对所有活动 Agent、
 保留 Session 与回滚输入后先移除准入登记，才会被退休。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
 
-已有 Failed/Expired 对象最多使用一个独立 retry generation，不覆盖旧对象；第二次失败仍
+已有 Failed/ProviderFailed/Expired/UpdateFailed 对象最多使用一个独立 retry generation，不覆盖旧对象；第二次失败仍
 停止并保留失败回执。修复权限、网络或容量后由运维处理该失败 generation，再显式重试。
 
 带 workspace snapshot 或其他 init 容器时，额外提供 `ACK_IMAGE_CACHE_EXTRA_GROUPS_FILE`，
@@ -51,6 +51,12 @@ kubeconfig 的 Kubernetes RBAC 需要目标集群的 `eci.alibabacloud.com` Imag
 create/get/list/delete、MutatingAdmissionPolicy get/list 和全集群 Pod list（退休只读取镜像引用）；
 registry 凭据留在集群 Secret，不进入 GitHub、repo、日志或 issue。该身份不需要 Kubernetes 业务 Pod
 写权限、应用 Secret、数据库或镜像仓库删除权限。
+
+该 environment 的非秘密变量 `ACK_NAMESPACE`、`ACK_IMAGE_PULL_SECRET` 必须明确指定当前批准的
+namespace 与既有 registry Secret，不能沿用已删除环境的名称。`validate-target` 在任何退休或创建前检查 namespace 存在，且 registry
+Secret 为 `kubernetes.io/dockerconfigjson`；只输出其元数据，不导出凭据。执行身份需要 namespace get
+及该 registry Secret 的按名称 get 权限；不因此取得其他应用 Secret 权限。缺变量、引用或权限即停止，
+不会创建 namespace、复制 Secret 或用默认名称回退。
 
 普通发布触发计划生成；受控 ACK 运维机可通过 `ack-image-cache-prewarm.timer` 每 5 分钟轮询
 成功的 plan workflow，下载同 run/attempt 的 artifact，再执行现有 `image-cache.ts` Kubernetes
@@ -81,8 +87,8 @@ systemctl list-timers ack-image-cache-prewarm.timer
 ACK_AUTO_PREWARM_STATE_DIR=/var/lib/agent-infra/ack-image-cache
 ACK_KUBECONFIG=/etc/agent-infra/hzacsagentprod01-cucc.config
 GH_CONFIG_DIR=/etc/agent-infra/gh
-ACK_NAMESPACE=agent-infra
-ACK_IMAGE_PULL_SECRET=ack-ghcr-pull
+ACK_NAMESPACE=approved-ack-namespace
+ACK_IMAGE_PULL_SECRET=approved-registry-pull
 ACK_IMAGE_CACHE_SIZE_GIB=30
 ACK_IMAGE_CACHE_TIMEOUT_MS=1800000
 ACK_IMAGE_CACHE_CONCURRENCY=6
@@ -109,7 +115,7 @@ mkdir -p "$CACHE_PLAN_DIR"
 gh run download "$CACHE_PLAN_RUN_ID" --repo AgoraIO-Extensions/agent-infra \
   --name "ack-cache-plan-$CACHE_PLAN_ATTEMPT" --dir "$CACHE_PLAN_DIR"
 export ACK_SOURCE_SHA ACK_KUBECONFIG ACK_NAMESPACE
-export ACK_IMAGE_PULL_SECRET=ack-ghcr-pull
+export ACK_IMAGE_PULL_SECRET=approved-registry-pull
 node deploy/ack/image-cache.ts ensure \
   "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-ready.json"
 node deploy/ack/image-cache.ts check \

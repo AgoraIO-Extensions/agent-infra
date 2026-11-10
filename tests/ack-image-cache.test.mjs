@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parse } from "yaml";
 import {
 	admissionCacheIds,
 	assertCacheReady,
@@ -410,6 +411,63 @@ test("owned failed caches use one bounded recovery generation without deleting t
 	await assert.rejects(ensureCaches(plan, backend), /CACHE_PREPARATION_FAILED/);
 });
 
+test("ProviderFailed uses only retry1 and stops immediately if that generation also fails", async () => {
+	const originalName = cacheName([ref]);
+	const original = { ...ready, id: "", phase: "ProviderFailed" };
+	const store = new Map([[originalName, original]]);
+	const created = [];
+	let clock = 0;
+	const options = {
+		now: () => clock,
+		timeoutMs: 100,
+		sleep: async (ms) => {
+			clock += ms;
+		},
+	};
+	const backend = {
+		get: async (name) => store.get(name),
+		create: async (name, images) => {
+			created.push(name);
+			store.set(name, { ...ready, name, images });
+		},
+	};
+	const receipt = await ensureCaches(plan, backend, options);
+	assert.deepEqual(created, [`${originalName}-retry1`]);
+	assert.equal(store.get(originalName), original);
+	assert.equal(receipt.caches[0].name, `${originalName}-retry1`);
+	store.set(`${originalName}-retry1`, {
+		...original,
+		name: `${originalName}-retry1`,
+	});
+	await assert.rejects(
+		ensureCaches(plan, backend, options),
+		/CACHE_PREPARATION_FAILED/,
+	);
+	assert.equal(clock, 0);
+	assert.equal(created.length, 1);
+	assert.equal(store.get(originalName), original);
+});
+
+test("ProviderFailed observed while creating fails without polling until timeout", async () => {
+	const failed = { ...ready, id: "", phase: "ProviderFailed" };
+	let reads = 0;
+	await assert.rejects(
+		ensureCaches(
+			plan,
+			{
+				get: async () => (++reads === 1 ? undefined : failed),
+				create: async () => {},
+			},
+			{
+				sleep: async () =>
+					assert.fail("terminal ProviderFailed must not be polled"),
+			},
+		),
+		/CACHE_PREPARATION_FAILED/,
+	);
+	assert.equal(reads, 2);
+});
+
 import { cacheWorkerReady } from "../deploy/ack/image-cache-worker.ts";
 
 test("cache activation waits for the exact Worker digest and every old Worker to exit", () => {
@@ -490,6 +548,41 @@ test("cache activation waits for the exact Worker digest and every old Worker to
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+
+test("the protected cache workflow rejects missing target or pull reference before any mutation", () => {
+	const workflow = parse(
+		readFileSync(
+			new URL("../.github/workflows/ack-image-cache.yml", import.meta.url),
+			"utf8",
+		),
+	);
+	const step = workflow.jobs.execute.steps.find(
+		(step) => step.name === "Ensure ImageCache groups are Ready",
+	);
+	assert.match(step.env.ACK_NAMESPACE, /^\$\{\{ vars\.ACK_NAMESPACE \}\}$/);
+	assert.match(
+		step.env.ACK_IMAGE_PULL_SECRET,
+		/^\$\{\{ vars\.ACK_IMAGE_PULL_SECRET \}\}$/,
+	);
+	const commands = `node(){ case "$*" in *"validate-target"*) return 1;; *"-e"*) echo approved-source;; *) echo unexpected-mutation;; esac; };`;
+	for (const target of [
+		{ ACK_NAMESPACE: "", ACK_IMAGE_PULL_SECRET: "approved-pull" },
+		{ ACK_NAMESPACE: "approved", ACK_IMAGE_PULL_SECRET: "" },
+		{ ACK_NAMESPACE: "approved", ACK_IMAGE_PULL_SECRET: "missing-pull" },
+	]) {
+		const result = spawnSync("bash", ["-c", `${commands}\n${step.run}`], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				RUNNER_TEMP: "/fixture",
+				ACK_KUBECONFIG: "/fixture/kubeconfig",
+				...target,
+			},
+		});
+		assert.notEqual(result.status, 0);
+		assert.doesNotMatch(result.stdout, /unexpected-mutation/);
+	}
+});
 
 test("cache failure prevents bootstrap configuration writes and restarts, including all", () => {
 	const script = readFileSync(
@@ -614,6 +707,14 @@ const state = JSON.parse(fs.readFileSync(process.env.CACHE_FIXTURE, "utf8"));
 fs.appendFileSync(process.env.CACHE_CALLS, JSON.stringify(args) + "\\n");
 if (args.includes("validatingadmissionpolicy")) process.exit(0);
 if (state.denied) { console.error("private-server-token"); process.exit(1); }
+if (args.includes("namespace")) {
+ if (!state.namespaceMissing) console.log(JSON.stringify({metadata:{name:"fixture",uid:"namespace-uid",...(state.namespaceTerminating?{deletionTimestamp:"2026-11-11T00:00:00Z"}:{})}}));
+ process.exit(0);
+}
+if (args.includes("secret")) {
+ if (!state.pullSecretMissing) console.log("ack-ghcr-pull|fixture|secret-uid|"+(state.secretType||"kubernetes.io/dockerconfigjson")+"|"+(state.secretTerminating?"2026-11-11T00:00:00Z":""));
+ process.exit(0);
+}
 if (args.includes("create")) {
  const cr = JSON.parse(fs.readFileSync(0,"utf8"));
  state.items.push({...cr, status:{phase:"Ready",imageCacheId:"imc-created"+state.items.length}});
@@ -693,8 +794,61 @@ else { const name = args[args.indexOf("imagecache") + 1] === "-n" ? args[args.in
 		const count = () =>
 			readFileSync(log, "utf8")
 				.split("\n")
-				.filter((x) => x.includes('"create"')).length;
+				.filter((x) => x.includes('"create"') || x.includes('"delete"')).length;
 		const created = count();
+		const targetPlan = join(directory, "target-plan.json");
+		const targetReceipt = join(directory, "target-receipt.json");
+		writeFileSync(targetPlan, JSON.stringify(plan));
+		const validateTarget = () =>
+			spawnSync(
+				process.execPath,
+				[
+					"deploy/ack/image-cache.ts",
+					"validate-target",
+					targetPlan,
+					targetReceipt,
+				],
+				{
+					encoding: "utf8",
+					env: {
+						PATH: directory,
+						ACK_SOURCE_SHA: sha,
+						ACK_KUBECONFIG: "/fixture/kubeconfig",
+						ACK_NAMESPACE: "fixture",
+						ACK_IMAGE_PULL_SECRET: "ack-ghcr-pull",
+						CACHE_FIXTURE: fixture,
+						CACHE_CALLS: log,
+					},
+				},
+			);
+		assert.equal(validateTarget().status, 0);
+		assert.equal(JSON.parse(readFileSync(targetReceipt)).status, "passed");
+		assert.equal(count(), created);
+		for (const [invalid, reason] of [
+			[{ namespaceMissing: true, items: [] }, "CACHE_NAMESPACE_UNAVAILABLE"],
+			[
+				{ namespaceTerminating: true, items: [] },
+				"CACHE_NAMESPACE_UNAVAILABLE",
+			],
+			[{ pullSecretMissing: true, items: [] }, "CACHE_PULL_SECRET_INVALID"],
+			[{ secretType: "Opaque", items: [] }, "CACHE_PULL_SECRET_INVALID"],
+			[{ secretTerminating: true, items: [] }, "CACHE_PULL_SECRET_INVALID"],
+		]) {
+			assert.notEqual(run(invalid).status, 0);
+			assert.equal(JSON.parse(readFileSync(receiptFile)).reason, reason);
+			assert.equal(
+				count(),
+				created,
+				"invalid pull reference must fail before any CR creation",
+			);
+			assert.notEqual(validateTarget().status, 0);
+			assert.equal(JSON.parse(readFileSync(targetReceipt)).reason, reason);
+			assert.equal(
+				count(),
+				created,
+				"target validation must neither create nor delete caches",
+			);
+		}
 		assert.equal(run(stored).status, 0);
 		assert.equal(count(), created);
 		stored.items[1].metadata.labels["agent-infra.agora.io/cache-owner"] =

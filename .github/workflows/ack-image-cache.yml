@@ -98,15 +98,20 @@ jobs:
       - name: Ensure ImageCache groups are Ready
         env:
           ACK_KUBECONFIG: ${{ runner.temp }}/ack-kubeconfig
-          ACK_NAMESPACE: agent-infra
-          ACK_IMAGE_PULL_SECRET: ack-ghcr-pull
+          ACK_NAMESPACE: ${{ vars.ACK_NAMESPACE }}
+          ACK_IMAGE_PULL_SECRET: ${{ vars.ACK_IMAGE_PULL_SECRET }}
           ACK_IMAGE_CACHE_SIZE_GIB: '30'
           ACK_IMAGE_CACHE_TIMEOUT_MS: '1800000'
           ACK_IMAGE_CACHE_CONCURRENCY: '6'
         run: |
           set -euo pipefail
+          test -n "$ACK_NAMESPACE"
+          test -n "$ACK_IMAGE_PULL_SECRET"
           ACK_SOURCE_SHA="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).sourceSha)' "$RUNNER_TEMP/ack-cache-plan/cache-plan.json")"
           export ACK_SOURCE_SHA
+          node deploy/ack/image-cache.ts validate-target \
+            "$RUNNER_TEMP/ack-cache-plan/cache-plan.json" \
+            "$RUNNER_TEMP/cache-target.json"
           # Keep only each template's current version and this plan's version before preparing it.
           # A failed retire never stops preparation, but it fails the job.
           retire_status=0
@@ -132,6 +137,7 @@ jobs:
         with:
           name: ack-cache-ready-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/cache-target.json
             ${{ runner.temp }}/cache-ready.json
             ${{ runner.temp }}/cache-retire.json
           if-no-files-found: warn

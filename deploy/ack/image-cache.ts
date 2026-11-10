@@ -170,7 +170,7 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 	const ensureOne = async (images: string[]) => {
 		let name = cacheName(images, backend.namePrefix);
 		let cache = await backend.get(name);
-		if (cache && ["Failed", "Expired", "UpdateFailed"].includes(cache.phase ?? "") ) {
+		if (cache && ["Failed", "ProviderFailed", "Expired", "UpdateFailed"].includes(cache.phase ?? "") ) {
 			assert(cache.owner === cacheOwner && hash([...cache.images].sort()) === hash(images), "CACHE_IDENTITY_MISMATCH");
 			name = `${name}-retry1`;
 			cache = await backend.get(name);
@@ -190,7 +190,7 @@ export async function ensureCaches(plan: CachePlan, backend: CacheBackend, optio
 					await progress();
 					break;
 				}
-				assert(!["Failed", "Expired", "UpdateFailed"].includes(cache.phase ?? ""), "CACHE_PREPARATION_FAILED");
+				assert(!["Failed", "ProviderFailed", "Expired", "UpdateFailed"].includes(cache.phase ?? ""), "CACHE_PREPARATION_FAILED");
 			}
 			assert(!options.checkOnly, "CACHE_NOT_READY");
 			assert(now() < deadline, "CACHE_TIMEOUT");
@@ -240,14 +240,31 @@ export async function ensureCachesWithReceipt(plan: CachePlan, backend: CacheBac
 	}
 }
 
-export function kubernetesBackend(kubeconfig: string, namespace: string, pullSecret: string, sizeGiB = 30): CacheBackend {
+export function kubernetesBackend(kubeconfig: string, namespace: string, pullSecret: string, sizeGiB = 30): CacheBackend & {
+	validateTarget(): { namespaceUid: string; pullSecretUid: string };
+} {
 	assert(kubeconfig && /^[a-z0-9][a-z0-9-]*$/u.test(namespace) && /^[a-z0-9][a-z0-9.-]*$/u.test(pullSecret), "CACHE_TARGET_INVALID");
 	assert(Number.isInteger(sizeGiB) && sizeGiB >= 20 && sizeGiB <= 100, "CACHE_SIZE_INVALID");
 	const command = (args: string[], input?: string) => {
 		try { return execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=30s", ...args], { input, encoding: "utf8", timeout: 40_000, stdio: ["pipe", "pipe", "pipe"] }); }
 		catch { throw new Error("CACHE_KUBERNETES_REQUEST_FAILED"); }
 	};
+	const validateTarget = () => {
+		const namespaceRaw = command(["get", "namespace", namespace, "--ignore-not-found", "-o", "json"]);
+		const target = namespaceRaw.trim() ? JSON.parse(namespaceRaw) : undefined;
+		assert(target?.metadata?.name === namespace && target.metadata.uid && !target.metadata.deletionTimestamp,
+			"CACHE_NAMESPACE_UNAVAILABLE");
+		// Read only metadata/type into the process; registry credentials stay in the Secret.
+		const [secretName, secretNamespace, secretUid, secretType, deleting] = command([
+			"get", "secret", pullSecret, "-n", namespace, "--ignore-not-found", "-o",
+			'jsonpath={.metadata.name}{"|"}{.metadata.namespace}{"|"}{.metadata.uid}{"|"}{.type}{"|"}{.metadata.deletionTimestamp}',
+		]).trim().split("|");
+		assert(secretName === pullSecret && secretNamespace === namespace && secretUid
+			&& secretType === "kubernetes.io/dockerconfigjson" && !deleting, "CACHE_PULL_SECRET_INVALID");
+		return { namespaceUid: target.metadata.uid, pullSecretUid: secretUid };
+	};
 	return {
+		validateTarget,
 		async get(name) {
 			const raw = command(["get", "imagecache", "-n", namespace, name, "--ignore-not-found", "-o", "json"]);
 			if (!raw.trim()) return undefined;
@@ -255,6 +272,7 @@ export function kubernetesBackend(kubeconfig: string, namespace: string, pullSec
 			return { name: value.metadata.name, owner: value.metadata.labels?.["agent-infra.agora.io/cache-owner"], images: value.spec.images, phase: value.status?.phase, id: value.status?.imageCacheId, expiresAt: value.status?.expireDateTime, deleting: Boolean(value.metadata.deletionTimestamp) };
 		},
 		async create(name, images) {
+			validateTarget();
 			const inventory = JSON.parse(command(["get", "imagecache", "-n", namespace, "-l", `agent-infra.agora.io/cache-owner=${cacheOwner}`, "-o", "json"]));
 			assert(Array.isArray(inventory.items) && inventory.items.length < 48, "CACHE_OBJECT_BUDGET_EXCEEDED");
 			command(["create", "-n", namespace, "-f", "-"], JSON.stringify({ apiVersion: "eci.alibabacloud.com/v1", kind: "ImageCache", metadata: { name, labels: { "agent-infra.agora.io/cache-owner": cacheOwner }, annotations: { "k8s.aliyun.com/imc-enable-reuse": "true", "k8s.aliyun.com/imc-enable-flash": "true" } }, spec: { images, imagePullSecrets: [`${namespace}:${pullSecret}`], imageCacheSize: sizeGiB } }));
@@ -304,7 +322,7 @@ async function main() {
 		await writeFile(output, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
 		return;
 	}
-	assert(action === "ensure" || action === "check" || action === "retire", "CACHE_ARGUMENTS_INVALID");
+	assert(action === "ensure" || action === "check" || action === "retire" || action === "validate-target", "CACHE_ARGUMENTS_INVALID");
 	const plan = parseCachePlan(JSON.parse(await readFile(file, "utf8")));
 	assert(plan.sourceSha === process.env.ACK_SOURCE_SHA, "CACHE_RELEASE_SOURCE_MISMATCH");
 	if (action === "retire") {
@@ -314,6 +332,19 @@ async function main() {
 		return;
 	}
 	const backend = kubernetesBackend(process.env.ACK_KUBECONFIG ?? "", process.env.ACK_NAMESPACE ?? "", process.env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(process.env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30));
+	if (action === "validate-target") {
+		let receipt;
+		try {
+			receipt = { status: "passed", ...backend.validateTarget() };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "";
+			receipt = { status: "failed", reason: /^CACHE_[A-Z_]+$/u.test(message) ? message : "CACHE_TARGET_INVALID" };
+		}
+		await writeFile(output, `${JSON.stringify({ schemaVersion: 1, kind: "ack-image-cache-target", sourceSha: plan.sourceSha,
+			namespace: process.env.ACK_NAMESPACE, pullSecret: process.env.ACK_IMAGE_PULL_SECRET, ...receipt, businessVerified: false }, null, 2)}\n`, { mode: 0o600 });
+		assert(receipt.status === "passed", "CACHE_TARGET_INVALID");
+		return;
+	}
 	const timeoutMs = Number(process.env.ACK_IMAGE_CACHE_TIMEOUT_MS ?? 1_200_000);
 	const concurrency = Number(process.env.ACK_IMAGE_CACHE_CONCURRENCY ?? 1);
 	const receipt = await ensureCachesWithReceipt(plan, backend, output, { checkOnly: action === "check", timeoutMs, concurrency });
