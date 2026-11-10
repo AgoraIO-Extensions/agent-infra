@@ -1617,7 +1617,8 @@ Worker 从权威 Session/Conversation/generation/fence 派生并固定执行工�
 本代 Conversation `workspace` 的精确 PVC `subPath`，保持与控制容器所见工作区的绝对路径一致；
 不挂载 PVC 根、RuntimeHost/Driver 状态、native HOME、journal、Secret 或其他代次目录。
 初始化须校验每级目录归属、权限及无符号链接；仅给 executor 独立、有界且不持久化的临时卷。
-工具、获准只读资源和可执行文件随同一已验证镜像固定，不能从控制容器复制凭据或动态配置。
+可执行文件随已验证镜像固定；获准 Skill 等只读资源继续沿原交付合同绑定修订/摘要与只读投影，
+不增加授权，也不从控制容器复制凭据或动态配置。
 
 启用使用独立版本的 Worker-owned 绑定与 attestation，覆盖 Agent、Session、Sandbox、Conversation
 代次、resource fence、工作区和镜像身份；原 `codexContainerBoundaryEnabled` 不授权此模式。
