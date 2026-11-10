@@ -342,6 +342,56 @@ describe("credential-free Codex Session executor", () => {
 		expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(true);
 	});
 
+	it.each([
+		["256Mi", "1Gi"],
+		["268435456", "1073741824"],
+	])(
+		"accepts declared control storage resources with request=%s and limit=%s",
+		(request, limit) => {
+			const input = allocation();
+			Object.assign(input.resources.requests, { "ephemeral-storage": "256Mi" });
+			Object.assign(input.resources.limits, { "ephemeral-storage": "1Gi" });
+			const pod = sessionSandboxResourcesV1(input)[5];
+			const current = observed(pod);
+			const resources = current.spec?.containers[0]?.resources;
+			if (!resources) throw new Error();
+			Object.assign(resources.requests ?? {}, {
+				cpu: "0.1",
+				memory: "134217728",
+				"ephemeral-storage": request,
+			});
+			Object.assign(resources.limits ?? {}, {
+				cpu: "1000m",
+				memory: "1024Mi",
+				"ephemeral-storage": limit,
+			});
+			expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(true);
+		},
+	);
+
+	it.each([
+		["missing request", "requests", "ephemeral-storage", undefined],
+		["missing limit", "limits", "ephemeral-storage", undefined],
+		["changed request", "requests", "ephemeral-storage", "128Mi"],
+		["changed limit", "limits", "ephemeral-storage", "2Gi"],
+		["extra request", "requests", "example.test/resource", "1"],
+		["extra limit", "limits", "example.test/resource", "1"],
+	] as const)(
+		"rejects control storage resource drift: %s",
+		(_name, level, key, value) => {
+			const input = allocation();
+			Object.assign(input.resources.requests, { "ephemeral-storage": "256Mi" });
+			Object.assign(input.resources.limits, { "ephemeral-storage": "1Gi" });
+			const pod = sessionSandboxResourcesV1(input)[5];
+			const current = observed(pod);
+			const values = current.spec?.containers[0]?.resources?.[level];
+			if (!values) throw new Error();
+			if (value === undefined) delete values[key];
+			else values[key] = value;
+			expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(false);
+		},
+	);
+
 	it.each([undefined, 300])(
 		"accepts standard NoExecute defaults with seconds=%s for a real Session",
 		(seconds) => {
