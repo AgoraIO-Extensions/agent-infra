@@ -591,6 +591,10 @@ export function createSessionSandboxResourceInputResolverV1(
 	const connectionConsumerSnapshot = workload.policy.connectionConsumerSnapshot;
 	const connectionInstallationRevision =
 		workload.policy.connectionInstallationRevision;
+	const connectionInstallationOAuthPublication =
+		workload.policy.connectionInstallationOAuthPublication;
+	const connectionInstallationOAuthPublicationsByAgent =
+		workload.policy.connectionInstallationOAuthPublicationsByAgent;
 	/**
 	 * Session Runtime inputs come only from the Store-verified V4 projection and
 	 * the Worker's runtime auth (#1466). Anything else fails before any write.
@@ -854,6 +858,9 @@ export function createSessionSandboxResourceInputResolverV1(
 			runtime,
 			connectionConsumerSnapshot,
 			connectionInstallationRevision,
+			connectionInstallationOAuthPublication:
+				connectionInstallationOAuthPublicationsByAgent?.[binding.agentId] ??
+				connectionInstallationOAuthPublication,
 			authorizedIngressSelector: workload.policy.workerSelector,
 			resources: workload.policy.resources,
 			storageSize: workload.policy.storageSize,

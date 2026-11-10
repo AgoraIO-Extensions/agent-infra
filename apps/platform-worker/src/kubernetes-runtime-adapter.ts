@@ -159,8 +159,13 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly connectionInstallationRevisionsByAgent?: Readonly<
 		Record<string, string | null>
 	>;
+	/** Explicit deployment opt-in for the Host OAuth publication path. */
+	readonly connectionInstallationOAuthPublicationsByAgent?: Readonly<
+		Record<string, boolean>
+	>;
 	/** Captured nonsecret supply ref/revision tuple; null keeps selection unavailable. */
 	readonly connectionInstallationRevision?: string | null;
+	readonly connectionInstallationOAuthPublication?: boolean;
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;
@@ -273,6 +278,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			? undefined
 			: policy.connectionInstallationRevision,
 		templateBinding,
+		options.connectionConsumerControl
+			? undefined
+			: policy.connectionInstallationOAuthPublication,
 	);
 	if (
 		standardTemplateBinding !== undefined &&

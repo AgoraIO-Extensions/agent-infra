@@ -574,6 +574,23 @@ async function createPrepared(signal: AbortSignal) {
 				]),
 			)
 		: connectionInstallationSuppliesByAgent;
+	const connectionInstallationOAuthPublicationsByAgent =
+		connectionInstallation?.configurationsByAgent !== undefined &&
+		resolvedInstallationSuppliesByAgent !== undefined
+			? Object.fromEntries(
+					Object.entries(connectionInstallation.configurationsByAgent).map(
+						([agentId, configuration]) => [
+							agentId,
+							configuration.patBinding === undefined &&
+								resolvedInstallationSuppliesByAgent[agentId] !== undefined,
+						],
+					),
+				)
+			: undefined;
+	const connectionInstallationOAuthPublication =
+		connectionInstallation?.configuration !== undefined &&
+		connectionInstallationSupply !== undefined &&
+		connectionInstallation.configuration.patBinding === undefined;
 	if (
 		resolvedProfilesByAgent !== undefined &&
 		resolvedInstallationSuppliesByAgent === undefined
@@ -672,7 +689,13 @@ async function createPrepared(signal: AbortSignal) {
 								resolvedInstallationRevisionsByAgent,
 						}
 					: {}),
+				...(connectionInstallationOAuthPublicationsByAgent
+					? {
+							connectionInstallationOAuthPublicationsByAgent,
+						}
+					: {}),
 				connectionInstallationRevision,
+				connectionInstallationOAuthPublication,
 			},
 			databaseUrl,
 			workerId: signing.workerId,

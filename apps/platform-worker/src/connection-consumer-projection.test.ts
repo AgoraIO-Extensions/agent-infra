@@ -11,6 +11,7 @@ import {
 	runtimeConnectionConsumerRevisionEnvironment,
 	runtimeConnectionConsumerSnapshotForAgentV1,
 	runtimeConnectionInstallationRevisionEnvironment,
+	runtimeConnectionOAuthPublicationEnvironment,
 	runtimeConnectionPiMcpBridgeEnvironment,
 } from "./connection-consumer-projection.js";
 import {
@@ -273,6 +274,33 @@ describe("runtime Connection snapshot projection", () => {
 				templateId: "opencode",
 			}).env,
 		).not.toContainEqual(bridge);
+	});
+	it("projects OAuth publication only for an explicitly approved OAuth installation", () => {
+		const revision = createRuntimeConnectionInstallationRevisionV1(
+			{ ref: "approved-installation", revision: "r1" },
+			snapshot(),
+		);
+		if (!revision) throw new Error("Missing installation revision");
+		const publication = {
+			name: runtimeConnectionOAuthPublicationEnvironment,
+			value: "true",
+		};
+		expect(
+			runtimeConnectionConsumerProjectionV1(
+				snapshot(),
+				revision,
+				undefined,
+				true,
+			).env,
+		).toContainEqual(publication);
+		expect(
+			runtimeConnectionConsumerProjectionV1(
+				snapshot(),
+				revision,
+				undefined,
+				false,
+			).env,
+		).not.toContainEqual(publication);
 	});
 	it("projects the protected Pi bridge only for the pinned Pi template", () => {
 		const revision = createRuntimeConnectionInstallationRevisionV1(

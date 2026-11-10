@@ -261,6 +261,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly skillDeliveryImage?: string;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
+	readonly connectionInstallationOAuthPublication?: boolean;
 	readonly resources: {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
@@ -958,6 +959,10 @@ function renderSessionSandboxResourcesV1(
 			: undefined,
 		allocation.desiredState === "running"
 			? allocation.connectionInstallationRevision
+			: undefined,
+		undefined,
+		allocation.desiredState === "running"
+			? allocation.connectionInstallationOAuthPublication
 			: undefined,
 	);
 	const resourceLabels = { ...labels(allocation) };
