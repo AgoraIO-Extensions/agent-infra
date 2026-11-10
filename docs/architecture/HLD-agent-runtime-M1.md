@@ -949,6 +949,32 @@ Landlock 模式只有探针正常退出且退出码为 0，才允许启动 `app-
 
 Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。Landlock 模式在 Linux 由部署可信 `setpriv` 的 allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加；`container-boundary` 模式由专属 Runtime Pod/PVC/NetworkPolicy 与 Provider `workspace-write` 共同承担。缺少所选模式的边界时平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)和 [ADR-0035](../adr/0035-codex-container-boundary-mode.md) 为准。
 
+### 10.3 Codex Session 独立 executor 提案
+
+适用范围与完整边界以工程 Spec
+[§11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)为准；
+本提案不修改上文已实现模式，评审与实现验收前不启用。
+
+固定 Codex `0.153.0` 的 app-server 保留在控制容器，通过部署固定的
+`CODEX_EXEC_SERVER_URL` 只选择同 Session Pod 的 remote environment。启动前拒绝可覆盖
+environment 选择的持久/工作区配置；不能继承请求、Owner 或宿主提供的 executor override。
+模型 `turn/start` 使用 RPC `sandboxPolicy: {type:"externalSandbox",networkAccess:"restricted"}`，
+这不是 `sandbox_mode` 配置值；`thread/start.sandbox` 也不接收该 policy 类型。
+该 policy 把 enforcement 交给上述已验证外部边界，不自行创建隔离或替代 NetworkPolicy。
+
+固定 upstream 的模型 `exec_command`、`apply_patch`、`view_image` 与文件访问须走所选 remote
+process/filesystem；独立 app-server `command/exec` 和 `fs/*` 是 local-only 客户端 API，
+不得用作该模式的模型工具或恢复回退。平台固定工作区 reader 与文件交换仍沿现有有界接口。
+同一 RPC 的开始/完成/失败事实、模型 intent、Host Grant 与服务端 Conversation/代次绑定保持原义。
+
+固定远端命令检查属于业务入口开放前的受信部署初始化，只使用合成 scratch，不使用
+`readiness.read` 或业务 Grant。Readiness 只读核对本代部署准入结果、活性和身份；仅有 app-server
+initialize/config/read 或模型 completed 不充分。Executor 未就绪时固定版本可能继续对话并将
+工具标为 unsupported，Host 必须在此前拒绝该 Turn。取消、恢复及后台进程清退须以实际远端
+进程状态和 Pod 生命周期收口，不能假定直接 `exec-server --listen` 会随 app-server stdin 关闭。
+Executor 实例或传输会话变化使原准入失效；只有原实例/会话才能恢复已有进程句柄。
+新的连接或容器实例不能代签原操作终态、stop 或资源释放，也不自动重放命令。
+
 ## 11. 验证
 
 ### 11.1 通用 Runtime 与 Driver 验证

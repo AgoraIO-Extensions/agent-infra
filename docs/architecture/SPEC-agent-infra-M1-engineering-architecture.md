@@ -1600,6 +1600,59 @@ Codex Linux 的默认 Landlock 部署必须启用并完整支持 ABI V5 的文�
 
 Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临时卷，随 Pod 删除，不保存业务持久数据。Runtime 为每次原生启动分配独立临时目录，仍遵循 [Conversation 隔离边界](#109-codex-原生-conversation-隔离边界)，不能把共享 `/tmp` 根加入原生文件访问许可。生产 Workload 和镜像准入探针必须使用一致的临时卷容量与安全约束；部署参数见 [Kubernetes 交付拓扑](../../deploy/README.md)。
 
+#### 11.2.1 Codex Session 独立 executor（提案）
+
+本节为待 Owner/架构评审的执行边界提案，尚未实现，不改变现有 `landlock` 或
+`container-boundary` 的约束。取舍见 [ADR-0041](../adr/0041-propose-credential-free-codex-session-executor.md)；
+评审和实现验收完成前，部署不得启用此路径。
+
+候选仅用于 Worker 独占管理、采用 keyless 模型配置的标准 Codex 业务 Session Sandbox。
+每个 Session Pod 增加一个无业务凭据的固定 Codex `exec-server` 容器，RuntimeHost 与持模型
+传输凭据的 app-server 留在控制容器。两个容器保持独立 PID 与 mount 可见域，禁止
+`shareProcessNamespace`、host PID/IPC/network、额外 capabilities、privileged 或放松 seccomp。
+原 non-root、只读 rootfs、禁提权、drop ALL、RuntimeDefault 与独立 SA/PVC/NetworkPolicy 继续适用。
+它不适用于 Agent 级常驻 Workload、自定义 Agent、共享执行器或私有 callback lane。
+
+Worker 从权威 Session/Conversation/generation/fence 派生并固定执行工作区。Executor 只挂载
+本代 Conversation `workspace` 的精确 PVC `subPath`，保持与控制容器所见工作区的绝对路径一致；
+不挂载 PVC 根、RuntimeHost/Driver 状态、native HOME、journal、Secret 或其他代次目录。
+初始化须校验每级目录归属、权限及无符号链接；仅给 executor 独立、有界且不持久化的临时卷。
+可执行文件随已验证镜像固定；获准 Skill 等只读资源继续沿原交付合同绑定修订/摘要与只读投影，
+不增加授权，也不从控制容器复制凭据或动态配置。
+
+启用使用独立版本的 Worker-owned 绑定与 attestation，覆盖 Agent、Session、Sandbox、Conversation
+代次、resource fence、工作区和镜像身份；原 `codexContainerBoundaryEnabled` 不授权此模式。
+RuntimeHost 验证绑定，Worker 按实际 Pod 的容器、安全上下文、挂载和 Secret 引用回读比较；
+任一漂移拒绝执行。用户、Owner env、模型与工作区文件不能选择 endpoint、执行模式或路径。
+Endpoint 固定在同 Session Pod 的 loopback，不新增 Service/Ingress 或跨 Pod 的无认证监听。
+同 Pod 网络共享不构成身份授权，executor 访问 Host 的模型/控制入口仍须被既有授权门禁拒绝。
+
+只有上述外部边界有效时，Driver 才能为模型 Turn 选择固定版本公开 RPC 的
+`SandboxPolicy.externalSandbox`。所有模型可控制的命令、补丁、图片和文件访问必须经过唯一
+remote environment；禁止 Host 本地执行、文件访问或其他 environment 的回退。持久 HOME 中的
+`environments.toml` 等配置不能覆盖该选择；未覆盖的本地执行接缝必须拒绝，不能隐式沿用。
+平台中介文件交换与固定有界 reader 继续遵循各自授权和路径校验，不成为本地任意文件访问回退。
+模型 Key、loopback token、平台服务 token、Connection/Browser 凭据及 Host 文件、进程、FD
+均留在控制侧，既不放进 executor env，也不能经其 `/proc`、mount、网络或文件工具取得。
+
+部署准入在业务入口开放前，由受信启动程序以固定命令完成远端执行和工作区挂载检查；
+只使用独立合成 scratch，不读取会话历史、不调用模型、不接受自由命令，结果绑定本代 Pod/镜像/
+挂载身份。该初始化不消费 `readiness.read`；现有签名 readiness 只读核对已完成的准入结果、
+executor 活性和绑定，不执行命令、读写工作区或扩大 Grant 用途。
+缺失、断连、超时或配置漂移拒绝就绪/新 Turn，不能仅隐藏工具后把模型回合 completed 当作执行成功。
+准入结果还须绑定实际 executor 容器实例及传输会话代次；即使 Pod UID、镜像和挂载未变，
+executor 重启或断连也使原结果失效。恢复原进程句柄只接受原 exec-server 实例/会话的可核实恢复；
+新实例不能证明旧命令已终止、签收旧 stop/unknown 或获得旧执行权，须重新完成部署准入。
+在途失败沿原 operation/attempt、unknown、stop 与恢复路径收敛，不重放工具或创建替代执行。
+Pod 停止与代次退休同时覆盖两容器及所有后台子进程；新增 CPU/内存、临时卷和启动成本进入原
+容量配置、资源摘要及回执。旧 reserves 不得未经重验绑定到新布局，回滚须先按正式生命周期排空。
+
+准入前须在目标 ACK 的同版本镜像上验证本人 shell/patch/图片/搜索成功，并拒绝控制侧凭据、
+`/proc`/FD、Host/native 状态、兄弟 Conversation/代次、路径别名及跨 Session Pod/PVC/网络访问。
+同时覆盖 executor 未启动/崩溃、无本地回退、取消、后台进程、重启恢复与资源释放；最后完成
+真实模型、Web/企微业务及 PNG/PDF 字节/hash 回读。离线模型替身只证明被测协议/隔离接缝，
+不证明 ACK 环境、真实模型或业务验收通过。
+
 ### 11.3 数据与生命周期边界
 
 Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在所属 Sandbox PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration`、§10.1.1 的 Sandbox 归属及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
