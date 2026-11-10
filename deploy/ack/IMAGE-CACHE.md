@@ -7,9 +7,9 @@
 ## 发布与部署
 
 1. 正式 `Publish images` 成功后，独立 `ACK image cache plan` workflow 校验同 run/attempt 的六镜像
-   index 回执，选择 `linux/amd64` child digest，上传不可变 cache plan artifact；计划 job 不取得
-   云身份、Kubernetes 凭据或 registry pull secret。同一 workflow 的执行 job 只在受保护 environment
-   `ack-image-cache` 中运行，先按下文规则退休旧缓存，再创建或复用本次计划的缓存并等待 Ready。
+   index 回执，选择 `linux/amd64` child digest，上传不可变 cache plan artifact；workflow 不取得
+   云身份、Kubernetes 凭据或 registry pull secret，也不执行缓存创建或退休。受控 ACK 运维机或
+   现有部署入口校验目标后消费该计划，在同一缓存池创建或复用缓存并等待 Ready。
 2. 部署入口设置 `ACK_IMAGE_CACHE_REQUIRED=true` 后，从同源 Runtime/模板 manifest 和已批准的
    Custom 最终镜像请求生成清单，由受控 ACK 运维机使用既有 kubeconfig/RBAC 调用
    `ImageCache` CR，复用集群内 `imagePullSecret`，等待 Ready 并实时回读。发布后的预热
@@ -31,7 +31,7 @@
 当前/历史准入镜像集合会一起重新验证，避免旧 Agent 恢复和回滚版本失去缓存。每份计划最多
 48 组，每组最多 8 个不同镜像；创建前统计本 owner 的 CR，达到 48 份则拒绝创建。
 同一集群的运维预热必须串行执行，避免并发检查超出预算。本流程不删除活动缓存。
-缓存不设置自动到期或 LRU，以免仍在使用的精确 ID 被淘汰。发布预热每次用下文的 `retire` 退休
+缓存不设置自动到期或 LRU，以免仍在使用的精确 ID 被淘汰。需要回收预算时，用下文的 `retire` 退休
 既不是当前版本、也不是最新待升级版本的缓存；严格准入登记引用的版本要由运维核对所有活动 Agent、
 保留 Session 与回滚输入后先移除准入登记，才会被退休。缓存创建和使用产生云资源费用，应把这两个上限纳入部署预算。
 
@@ -45,23 +45,20 @@
 
 ## 一次性运维身份配置
 
-GitHub Environment `ack-image-cache` 只对受保护 `main` 开放，不需要 RAM OIDC。计划 job 不取得凭据；
-执行 job 把该 environment 的 `ACK_KUBECONFIG_B64` Secret 写成临时 kubeconfig，结束时删除。该
-kubeconfig 的 Kubernetes RBAC 需要目标集群的 `eci.alibabacloud.com` ImageCache
-create/get/list/delete、MutatingAdmissionPolicy get/list 和全集群 Pod list（退休只读取镜像引用）；
-registry 凭据留在集群 Secret，不进入 GitHub、repo、日志或 issue。该身份不需要 Kubernetes 业务 Pod
-写权限、应用 Secret、数据库或镜像仓库删除权限。
+GitHub Environment `ack-image-cache` 只对受保护 `main` 开放，workflow 只生成同源不可变计划。
+集群 kubeconfig 与 registry Secret 的读取和写前检查留在已有受控 ACK 运维身份；GitHub runner
+不取得它们。`kubectl -o jsonpath` 只在客户端过滤输出，不能证明 Secret 没有离开集群。
 
-该 environment 的非秘密变量 `ACK_NAMESPACE`、`ACK_IMAGE_PULL_SECRET` 必须明确指定当前批准的
-namespace 与既有 registry Secret，不能沿用已删除环境的名称。`validate-target` 在任何退休或创建前检查 namespace 存在，且 registry
-Secret 为 `kubernetes.io/dockerconfigjson`；只输出其元数据，不导出凭据。执行身份需要 namespace get
-及该 registry Secret 的按名称 get 权限；不因此取得其他应用 Secret 权限。缺变量、引用或权限即停止，
-不会创建 namespace、复制 Secret 或用默认名称回退。
+运维入口必须明确设置 `ACK_NAMESPACE`、`ACK_IMAGE_PULL_SECRET`，不能沿用已删除环境的名称。
+`validate-target` 读取 namespace/registry Secret 的 metadata/type 并核验未删除；操作者既有权限
+需要 namespace get 和批准 registry Secret 的按名称 get，不复制或轮换凭据，不输出 Secret 正文。
+ImageCache 操作需要 create/get/list，显式退休另需 delete、MutatingAdmissionPolicy get/list 与
+全集群 Pod list。缺引用或权限即停止，不创建 namespace 或使用默认目标回退。
 
 普通发布触发计划生成；受控 ACK 运维机可通过 `ack-image-cache-prewarm.timer` 每 5 分钟轮询
 成功的 plan workflow，下载同 run/attempt 的 artifact，再执行现有 `image-cache.ts` Kubernetes
 backend。kubeconfig、`gh` 登录态和 registry Secret 都留在运维机；GitHub 不获得它们。
-运维机只引用 Secret 名称，不读取凭据正文。CR 查询失败、缓存未 Ready 或拉取 Secret 无效时停止，
+CR 只引用 Secret 名称；校验器不把凭据字节写入日志或回执。CR 查询失败、缓存未 Ready 或拉取 Secret 无效时停止，
 不冷拉绕过。轮询器按 run/attempt 和私有状态目录幂等，串行等待 Ready；失败保留脱敏 receipt，
 每轮下载到独立临时目录、校验后持久化计划并清理下载目录，下一轮复用同名 CR，不创建副本。正常部署仍使用原有部署身份，读取旧 VAP 并更新准入所需权限保持不变。
 
@@ -116,6 +113,8 @@ gh run download "$CACHE_PLAN_RUN_ID" --repo AgoraIO-Extensions/agent-infra \
   --name "ack-cache-plan-$CACHE_PLAN_ATTEMPT" --dir "$CACHE_PLAN_DIR"
 export ACK_SOURCE_SHA ACK_KUBECONFIG ACK_NAMESPACE
 export ACK_IMAGE_PULL_SECRET=approved-registry-pull
+node deploy/ack/image-cache.ts validate-target \
+  "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-target.json"
 node deploy/ack/image-cache.ts ensure \
   "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-ready.json"
 node deploy/ack/image-cache.ts check \
@@ -147,13 +146,16 @@ node deploy/ack/image-cache.ts check \
 
 ### 退休旧缓存
 
-发布预热的执行 job 每次在 `ensure` 前用本次计划自动执行 `retire` 并确认删除，回执 `cache-retire.json`
-与 Ready 回执一起上传。`retire` 失败时仍继续预热，但 job 结论为失败。不退休时每次发布新建 6 份缓存，
+退休只由受控运维入口在明确批准后执行，workflow 不自动删除旧缓存。先执行 `validate-target`，
+再输出退休计划；仅显式设置确认值时删除计划中的对象，保留该回执与 Ready 回执。
+不退休时每次发布新建 6 份缓存，
 第 8 次发布后 owner 下的缓存达到 48 份，预热回执的 `reason` 变为 `CACHE_OBJECT_BUDGET_EXCEEDED`。
 运维也可以用权限相同的 kubeconfig 对指定计划手动执行：
 
 ```bash
-export ACK_SOURCE_SHA ACK_KUBECONFIG
+export ACK_SOURCE_SHA ACK_KUBECONFIG ACK_NAMESPACE ACK_IMAGE_PULL_SECRET
+node deploy/ack/image-cache.ts validate-target \
+  "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-target.json"
 # 先只生成回执，核对其中的待删除列表
 node deploy/ack/image-cache.ts retire \
   "$CACHE_PLAN_DIR/cache-plan.json" "$CACHE_PLAN_DIR/cache-retire.json"

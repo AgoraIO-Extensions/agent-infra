@@ -331,6 +331,7 @@ async function main() {
 		console.info(JSON.stringify({ status: receipt.status, owned: receipt.owned, retired: receipt.retired.length, sourceSha: plan.sourceSha }));
 		return;
 	}
+	if (action === "validate-target") assert(process.env.ACK_IMAGE_PULL_SECRET, "CACHE_TARGET_INVALID");
 	const backend = kubernetesBackend(process.env.ACK_KUBECONFIG ?? "", process.env.ACK_NAMESPACE ?? "", process.env.ACK_IMAGE_PULL_SECRET ?? "ack-ghcr-pull", Number(process.env.ACK_IMAGE_CACHE_SIZE_GIB ?? 30));
 	if (action === "validate-target") {
 		let receipt;

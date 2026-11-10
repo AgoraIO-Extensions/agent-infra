@@ -174,12 +174,14 @@ resolution 为准。
 独立的 `ack-image-cache.yml` 只消费本仓成功的正式 `Publish images` 运行的同 attempt
 发布回执，校验不可变镜像引用、架构和 source 后输出缓存计划 artifact。执行代码固定为受保护
 默认分支，不执行发布输入所指向的历史代码。计划 job 不取得云身份、Kubernetes 凭据或
-registry 拉取凭据，其成功只表示计划生成成功。执行 job 只在受保护 environment `ack-image-cache`
-中运行，用其中的 kubeconfig Secret 先退休每个模板当前版本和最新待升级版本以外的缓存，再创建或
-复用本次计划的缓存并等待 Ready；退休规则与权限见 [ACK 镜像缓存](../../deploy/ack/IMAGE-CACHE.md#退休旧缓存)。
+registry 拉取凭据，其成功只表示计划生成成功。workflow 不执行缓存创建或退休，不取得集群
+kubeconfig、Secret get 权限或 registry 凭据；`kubectl -o jsonpath` 是客户端输出过滤，不能作为
+Secret 未离开集群的证明。
 
-受控 ACK 运维机也可使用既有 kubeconfig 和 Kubernetes RBAC 消费计划，通过 ImageCache CR
-创建/复用缓存并等待 Ready；私有 registry 凭据只引用集群内既有 imagePullSecret。已批准的
+受控 ACK 运维机使用既有 kubeconfig 和 Kubernetes RBAC 消费计划，通过 ImageCache CR
+创建/复用缓存并等待 Ready；私有 registry 凭据只引用集群内既有 imagePullSecret。写入前由该
+运维入口核验 namespace 与 registry Secret 的类型、身份及删除状态，不向 GitHub 传递 Secret。
+退休必须显式确认，规则与权限见 [ACK 镜像缓存](../../deploy/ack/IMAGE-CACHE.md#退休旧缓存)。已批准的
 Custom 最终镜像与 init 容器组合由原部署入口生成有界不可变计划，不经 GitHub 传递生产材料。
 部署入口每次启用镜像前实时核对缓存身份、Ready、到期时间及精确镜像集合；缓存未完成、失败、
 过期或来源不符时不启用新镜像，现有运行实例保持不变。GitHub 发布后尚未执行部署预热时，

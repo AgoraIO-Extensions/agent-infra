@@ -549,39 +549,17 @@ test("cache activation waits for the exact Worker digest and every old Worker to
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-test("the protected cache workflow rejects missing target or pull reference before any mutation", () => {
-	const workflow = parse(
-		readFileSync(
-			new URL("../.github/workflows/ack-image-cache.yml", import.meta.url),
-			"utf8",
-		),
+test("the protected cache workflow publishes only the plan without cluster credentials or writes", () => {
+	const source = readFileSync(
+		new URL("../.github/workflows/ack-image-cache.yml", import.meta.url),
+		"utf8",
 	);
-	const step = workflow.jobs.execute.steps.find(
-		(step) => step.name === "Ensure ImageCache groups are Ready",
+	const workflow = parse(source);
+	assert.deepEqual(Object.keys(workflow.jobs), ["prepare"]);
+	assert.doesNotMatch(
+		source,
+		/ACK_KUBECONFIG|kubectl|image-cache\.ts (?:ensure|retire)|secrets\./,
 	);
-	assert.match(step.env.ACK_NAMESPACE, /^\$\{\{ vars\.ACK_NAMESPACE \}\}$/);
-	assert.match(
-		step.env.ACK_IMAGE_PULL_SECRET,
-		/^\$\{\{ vars\.ACK_IMAGE_PULL_SECRET \}\}$/,
-	);
-	const commands = `node(){ case "$*" in *"validate-target"*) return 1;; *"-e"*) echo approved-source;; *) echo unexpected-mutation;; esac; };`;
-	for (const target of [
-		{ ACK_NAMESPACE: "", ACK_IMAGE_PULL_SECRET: "approved-pull" },
-		{ ACK_NAMESPACE: "approved", ACK_IMAGE_PULL_SECRET: "" },
-		{ ACK_NAMESPACE: "approved", ACK_IMAGE_PULL_SECRET: "missing-pull" },
-	]) {
-		const result = spawnSync("bash", ["-c", `${commands}\n${step.run}`], {
-			encoding: "utf8",
-			env: {
-				...process.env,
-				RUNNER_TEMP: "/fixture",
-				ACK_KUBECONFIG: "/fixture/kubeconfig",
-				...target,
-			},
-		});
-		assert.notEqual(result.status, 0);
-		assert.doesNotMatch(result.stdout, /unexpected-mutation/);
-	}
 });
 
 test("cache failure prevents bootstrap configuration writes and restarts, including all", () => {
