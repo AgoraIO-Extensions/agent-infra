@@ -174,8 +174,7 @@ it("only lists registrations from the worker's configured source namespace", asy
 		expect(foreignIds).toHaveLength(1);
 		const localId = local[0];
 		const foreignId = foreignIds[0];
-		if (!localId || !foreignId)
-			throw new Error("Missing registration outbox");
+		if (!localId || !foreignId) throw new Error("Missing registration outbox");
 		expect(localId).not.toBe(foreignId);
 		expect(
 			await sql`
