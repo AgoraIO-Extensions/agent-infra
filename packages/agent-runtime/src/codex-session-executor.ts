@@ -33,7 +33,11 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 	const root = "/workspace";
 	const base = await lstat(root);
 	if (!base.isDirectory() || base.isSymbolicLink()) invalid();
-	const directory = async (path: string, create: boolean) => {
+	const directory = async (
+		path: string,
+		create: boolean,
+		allowLegacyRuntime = false,
+	) => {
 		if (create)
 			await mkdir(path, { mode: 0o700 }).catch(
 				(error: NodeJS.ErrnoException) => {
@@ -41,15 +45,21 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 				},
 			);
 		const info = await lstat(path);
+		const legacyRuntime =
+			allowLegacyRuntime &&
+			path === "/workspace/runtime" &&
+			(info.mode & 0o7777) === 0o755;
 		if (
 			!info.isDirectory() ||
 			info.isSymbolicLink() ||
 			info.uid !== process.getuid?.() ||
-			(info.mode & 0o077) !== 0
+			((info.mode & 0o077) !== 0 && !legacyRuntime)
 		)
 			invalid();
+		return info;
 	};
-	await directory("/workspace/runtime", true);
+	const runtime = await directory("/workspace/runtime", true, true);
+	const legacyRuntime = (runtime.mode & 0o7777) === 0o755;
 	const missing = (error: NodeJS.ErrnoException) => {
 		if (error.code === "ENOENT") return undefined;
 		throw error;
@@ -126,6 +136,17 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 			)
 				invalid();
 			const sessions = Object.values(saved.sessions);
+			if (
+				legacyRuntime &&
+				(sessions.length === 0 ||
+					!sessions.every(
+						(session) =>
+							session.agentId === binding.agentId &&
+							session.conversationId === binding.conversationId &&
+							session.sessionGeneration <= binding.sessionGeneration,
+					))
+			)
+				invalid();
 			newGeneration =
 				sessions.length > 0 &&
 				sessions.every(
@@ -142,12 +163,45 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 	for (const [index, part] of binding.workspaceSubPath.split("/").entries()) {
 		current = posix.join(current, part);
 		// Only the new generation's own directories may be created; retained native parents must survive.
-		await directory(current, !state || (newGeneration && index >= 3));
+		await directory(
+			current,
+			!state || (newGeneration && index >= 3),
+			legacyRuntime,
+		);
 	}
 	await directory(
 		posix.join(posix.dirname(binding.workspaceRoot), "home"),
 		!state || newGeneration,
 	);
+	// Earlier single-container Sessions created this parent with mkdir's default mode.
+	if (legacyRuntime) {
+		const file = await open(
+			"/workspace/runtime",
+			constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+		);
+		try {
+			const pinned = await file.stat();
+			if (
+				!pinned.isDirectory() ||
+				pinned.uid !== runtime.uid ||
+				pinned.ino !== runtime.ino ||
+				pinned.dev !== runtime.dev ||
+				(pinned.mode & 0o7777) !== 0o755
+			)
+				invalid();
+			await file.chmod(0o700);
+			await file.sync();
+			const after = await lstat("/workspace/runtime");
+			if (
+				after.ino !== runtime.ino ||
+				after.dev !== runtime.dev ||
+				(after.mode & 0o7777) !== 0o700
+			)
+				invalid();
+		} finally {
+			await file.close();
+		}
+	}
 }
 
 export interface CodexSessionExecutorStatusV1 {
