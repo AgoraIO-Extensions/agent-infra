@@ -878,6 +878,44 @@ test("executor readback permits safe API defaults without accepting security ove
 	assert.equal(fixture.observe().storageClassName, "test-essd");
 });
 
+for (const seconds of [undefined, 300]) {
+	test(`executor readback permits standard NoExecute defaults with seconds=${seconds}`, () => {
+		const fixture = executorFixture();
+		for (const key of [
+			"node.kubernetes.io/not-ready",
+			"node.kubernetes.io/unreachable",
+		]) {
+			fixture.observed.spec.tolerations.push({
+				key,
+				operator: "Exists",
+				effect: "NoExecute",
+				...(seconds === undefined ? {} : { tolerationSeconds: seconds }),
+			});
+		}
+		assert.equal(fixture.observe().storageClassName, "test-essd");
+	});
+}
+
+for (const changed of [
+	{ tolerationSeconds: null },
+	{ tolerationSeconds: 600 },
+	{ value: "" },
+	{ operator: "Equal", value: "unreviewed" },
+	{ effect: "NoSchedule" },
+	{ key: "node.kubernetes.io/disk-pressure" },
+]) {
+	test(`executor readback rejects unapproved default toleration changes ${JSON.stringify(changed)}`, () => {
+		const fixture = executorFixture();
+		fixture.observed.spec.tolerations.push({
+			key: "node.kubernetes.io/not-ready",
+			operator: "Exists",
+			effect: "NoExecute",
+			...changed,
+		});
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
+	});
+}
+
 test("non-Codex global executor policy measures only its real control container and PVC", () => {
 	const job = {
 		...executorJob,

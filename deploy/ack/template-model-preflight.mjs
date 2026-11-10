@@ -377,7 +377,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		assert(resourceQuantityEqualsV1(volume.emptyDir?.sizeLimit, size), "EXECUTOR_LAYOUT_DRIFT");
 		volume.emptyDir.sizeLimit = size;
 	}
-	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && entry.tolerationSeconds === 300 && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key))));
+	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && (entry.tolerationSeconds === undefined || entry.tolerationSeconds === 300) && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key))));
 	for (const key of ["hostPID", "hostIPC", "hostNetwork", "shareProcessNamespace"]) comparison[key] ??= false;
 	assertProjection(comparison, expected.pod.spec);
 	assert(observed.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
