@@ -1839,10 +1839,12 @@ function sessionExecutorPodSpecMatches(
 				resources &&
 				!matchesResources(container.resources, {
 					requests: {
+						...resources.requests,
 						cpu: resources.requests?.cpu ?? "",
 						memory: resources.requests?.memory ?? "",
 					},
 					limits: {
+						...resources.limits,
 						cpu: resources.limits?.cpu ?? "",
 						memory: resources.limits?.memory ?? "",
 					},

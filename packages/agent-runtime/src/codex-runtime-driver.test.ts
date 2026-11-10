@@ -14423,6 +14423,115 @@ describe("Codex verified Session executor", () => {
 			expect(after.operations[key]).toEqual(operation);
 	});
 
+	it("privatizes a retained legacy runtime directory without changing the original Session", async () => {
+		const f = await settledFixture();
+		if (!executorFilesystem.root) throw new Error("missing workspace root");
+		const runtime = join(executorFilesystem.root, "runtime");
+		const marker = join(f.admission.binding.workspaceRoot, "retained-marker");
+		await writeFile(marker, "original workspace", { mode: 0o600 });
+		const before = await readFile(f.path, "utf8");
+		await chmod(runtime, 0o755);
+		expect((await lstat(runtime)).mode & 0o777).toBe(0o755);
+
+		await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);
+
+		expect((await lstat(runtime)).mode & 0o777).toBe(0o700);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		expect(await readFile(marker, "utf8")).toBe("original workspace");
+	});
+
+	it("initializes a new generation from a retained legacy runtime directory", async () => {
+		const f = await settledFixture(true);
+		if (!executorFilesystem.root) throw new Error("missing workspace root");
+		const runtime = join(executorFilesystem.root, "runtime");
+		const before = await readFile(f.path, "utf8");
+		const next = replacementAdmission(f.admission, { sessionGeneration: 2 });
+		await chmod(runtime, 0o755);
+
+		await initializeCodexSessionExecutorWorkspaceV1(next.binding);
+
+		expect((await lstat(runtime)).mode & 0o777).toBe(0o700);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		expect((await lstat(next.binding.workspaceRoot)).isDirectory()).toBe(true);
+	});
+
+	it.each([0o750, 0o770, 0o777, 0o1755])(
+		"does not migrate an unrecognized runtime directory mode %o",
+		async (mode) => {
+			const f = await settledFixture();
+			if (!executorFilesystem.root) throw new Error("missing workspace root");
+			const runtime = join(executorFilesystem.root, "runtime");
+			const before = await readFile(f.path, "utf8");
+			await chmod(runtime, mode);
+
+			await expect(
+				initializeCodexSessionExecutorWorkspaceV1(f.admission.binding),
+			).rejects.toThrow("CODEX_SESSION_EXECUTOR_INVALID");
+
+			expect((await lstat(runtime)).mode & 0o7777).toBe(mode);
+			expect(await readFile(f.path, "utf8")).toBe(before);
+		},
+	);
+
+	it("does not migrate a legacy runtime directory owned by another user", async () => {
+		const f = await settledFixture();
+		if (!executorFilesystem.root || !process.getuid)
+			throw new Error("missing workspace ownership");
+		const runtime = join(executorFilesystem.root, "runtime");
+		const before = await readFile(f.path, "utf8");
+		await chmod(runtime, 0o755);
+		const uid = vi
+			.spyOn(process, "getuid")
+			.mockReturnValue(process.getuid() + 1);
+		try {
+			await expect(
+				initializeCodexSessionExecutorWorkspaceV1(f.admission.binding),
+			).rejects.toThrow("CODEX_SESSION_EXECUTOR_INVALID");
+		} finally {
+			uid.mockRestore();
+		}
+		expect((await lstat(runtime)).mode & 0o777).toBe(0o755);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	});
+
+	it.each([
+		"lost mapping",
+		"foreign Session",
+		"empty mapping",
+		"missing workspace",
+	] as const)(
+		"does not change legacy permissions when rejecting %s",
+		async (failure) => {
+			const f = await settledFixture();
+			if (!executorFilesystem.root) throw new Error("missing workspace root");
+			const runtime = join(executorFilesystem.root, "runtime");
+			await chmod(runtime, 0o755);
+			if (failure === "lost mapping") await rm(f.path);
+			else if (failure === "missing workspace")
+				await rm(f.admission.binding.workspaceRoot, {
+					recursive: true,
+					force: true,
+				});
+			else {
+				const saved = JSON.parse(
+					await readFile(f.path, "utf8"),
+				) as StoredCodexDriverState;
+				const session = saved.sessions[f.accepted.nativeSessionRef];
+				if (!session) throw new Error("missing retained Session");
+				if (failure === "empty mapping") saved.sessions = {};
+				else Object.assign(session, { agentId: "foreign-agent" });
+				await writeFile(f.path, `${JSON.stringify(saved)}\n`);
+			}
+
+			await expect(
+				initializeCodexSessionExecutorWorkspaceV1(f.admission.binding),
+			).rejects.toThrow();
+			expect((await lstat(runtime)).mode & 0o777).toBe(0o755);
+			if (failure === "lost mapping")
+				await expect(lstat(f.path)).rejects.toMatchObject({ code: "ENOENT" });
+		},
+	);
+
 	it.each(["workspace", "home", "retained parent"] as const)(
 		"does not recreate a missing %s for retained executor storage",
 		async (missing) => {
