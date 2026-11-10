@@ -3,7 +3,12 @@ import {
 	type CodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import type { SessionSandboxReserveConfigurationV1 } from "@agent-infra/platform-core";
-import type { V1Container, V1EnvVar, V1Volume } from "@kubernetes/client-node";
+import type {
+	V1Container,
+	V1EnvVar,
+	V1PodSpec,
+	V1Volume,
+} from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
 	agentContainerSecurityContext,
@@ -17,6 +22,10 @@ export interface CodexSessionExecutorPolicyV1 {
 		readonly limits: { readonly cpu: string; readonly memory: string };
 	};
 	readonly tmpSizeLimit?: string;
+	readonly placement?: {
+		readonly architecture: "amd64" | "arm64";
+		readonly runtimeClassName?: string;
+	};
 }
 
 export function validateCodexSessionExecutorPolicyV1(
@@ -25,7 +34,8 @@ export function validateCodexSessionExecutorPolicyV1(
 	if (
 		!policy ||
 		Object.keys(policy).some(
-			(key) => key !== "resources" && key !== "tmpSizeLimit",
+			(key) =>
+				key !== "resources" && key !== "tmpSizeLimit" && key !== "placement",
 		) ||
 		!policy.resources ||
 		Object.keys(policy.resources).sort().join(",") !== "limits,requests"
@@ -60,6 +70,27 @@ export function validateCodexSessionExecutorPolicyV1(
 		throw new WorkloadKubernetesError("policy");
 	const tmp = quantityRatio(policy.tmpSizeLimit ?? "128Mi");
 	if (!tmp || tmp[0] <= 0n) throw new WorkloadKubernetesError("policy");
+	if (policy.placement !== undefined) {
+		const placement = policy.placement;
+		if (
+			!placement ||
+			typeof placement !== "object" ||
+			Array.isArray(placement) ||
+			!Object.hasOwn(placement, "architecture") ||
+			Object.keys(placement).some(
+				(key) => key !== "architecture" && key !== "runtimeClassName",
+			) ||
+			!["amd64", "arm64"].includes(placement.architecture) ||
+			(placement.runtimeClassName !== undefined &&
+				(typeof placement.runtimeClassName !== "string" ||
+					placement.runtimeClassName.length > 253 ||
+					(placement.runtimeClassName !== "" &&
+						!/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(
+							placement.runtimeClassName,
+						))))
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
 }
 
 export const sessionExecutorContainerNameV1 = "codex-session-executor";
@@ -134,7 +165,33 @@ export function sessionExecutorPodProjectionV1(input: {
 			sizeLimit: input.policy.tmpSizeLimit ?? "128Mi",
 		},
 	};
-	return { init, executor, volume };
+	const placement: Pick<
+		V1PodSpec,
+		"nodeSelector" | "runtimeClassName" | "tolerations"
+	> = input.policy.placement
+		? input.policy.placement.runtimeClassName
+			? {
+					nodeSelector: {
+						"kubernetes.io/arch": input.policy.placement.architecture,
+					},
+					runtimeClassName: input.policy.placement.runtimeClassName,
+				}
+			: {
+					nodeSelector: {
+						type: "virtual-kubelet",
+						"kubernetes.io/arch": input.policy.placement.architecture,
+					},
+					tolerations: [
+						{
+							key: "virtual-kubelet.io/provider",
+							operator: "Equal",
+							value: "alibabacloud",
+							effect: "NoSchedule",
+						},
+					],
+				}
+		: {};
+	return { init, executor, volume, placement };
 }
 
 /** Store budgets charge concurrent containers; the init uses no more than the executor. */

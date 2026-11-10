@@ -133,28 +133,14 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 	const root = "/workspace";
 	const base = await lstat(root);
 	if (!base.isDirectory() || base.isSymbolicLink()) invalid();
-	const existingState = await lstat(
-		"/workspace/runtime/codex-driver.json",
-	).catch((error: NodeJS.ErrnoException) => {
-		if (error.code === "ENOENT") return undefined;
-		throw error;
-	});
-	if (
-		existingState &&
-		(!existingState.isFile() || existingState.isSymbolicLink())
-	)
-		invalid();
-	const segments = binding.workspaceSubPath.split("/");
-	let current = root;
-	for (const part of segments) {
-		current = posix.join(current, part);
-		if (!existingState)
-			await mkdir(current, { mode: 0o700 }).catch(
+	const directory = async (path: string, create: boolean) => {
+		if (create)
+			await mkdir(path, { mode: 0o700 }).catch(
 				(error: NodeJS.ErrnoException) => {
 					if (error.code !== "EEXIST") throw error;
 				},
 			);
-		const info = await lstat(current);
+		const info = await lstat(path);
 		if (
 			!info.isDirectory() ||
 			info.isSymbolicLink() ||
@@ -162,20 +148,55 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 			(info.mode & 0o077) !== 0
 		)
 			invalid();
-	}
-	const home = posix.join(posix.dirname(binding.workspaceRoot), "home");
-	if (!existingState)
-		await mkdir(home, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
-			if (error.code !== "EEXIST") throw error;
-		});
-	const info = await lstat(home);
+	};
+	await directory("/workspace/runtime", true);
+	const missing = (error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	};
+	const statePath = "/workspace/runtime/codex-driver.json";
+	const state = await lstat(statePath).catch(missing);
+	const native = await lstat(`${statePath}.native`).catch(missing);
+	// Never turn a lost mapping with surviving native data into an empty Session.
 	if (
-		!info.isDirectory() ||
-		info.isSymbolicLink() ||
-		info.uid !== process.getuid?.() ||
-		(info.mode & 0o077) !== 0
+		(state && (!state.isFile() || state.isSymbolicLink())) ||
+		(!state && native)
 	)
 		invalid();
+	if (!state) {
+		const file = await open(
+			statePath,
+			constants.O_CREAT |
+				constants.O_EXCL |
+				constants.O_WRONLY |
+				constants.O_NOFOLLOW,
+			0o600,
+		);
+		try {
+			await file.writeFile(
+				JSON.stringify({ schemaVersion: 2, sessions: {}, operations: {} }) +
+					"\n",
+			);
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		const parent = await open("/workspace/runtime", constants.O_RDONLY);
+		try {
+			await parent.sync();
+		} finally {
+			await parent.close();
+		}
+	}
+	let current = root;
+	for (const part of binding.workspaceSubPath.split("/")) {
+		current = posix.join(current, part);
+		await directory(current, !state);
+	}
+	await directory(
+		posix.join(posix.dirname(binding.workspaceRoot), "home"),
+		!state,
+	);
 }
 
 export interface CodexSessionExecutorStatusV1 {

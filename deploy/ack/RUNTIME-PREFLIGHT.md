@@ -22,10 +22,14 @@ codexSessionExecutor: {
     limits: { cpu: "1", memory: "512Mi" },
   },
   tmpSizeLimit: "128Mi",
+  // 与该 release 的 Session ECI admission / Runtime image 架构一致。
+  placement: { architecture: "amd64" },
 }
 ```
 
-资源值只是格式示例，须按真实执行负载批准。控制容器与 executor 的 limits 总和进入 Store
+资源值只是格式示例，须按真实执行负载批准。`placement` 是可信部署输入：未配置时不添加调度字段；
+ECI 使用精确架构/virtual-kubelet selector 与 provider toleration，RuntimeClass 则显式设置
+`runtimeClassName` 并跳过 ECI 字段。它必须与该 release 的实际准入策略一致，漂移仍拒绝。控制容器与 executor 的 limits 总和进入 Store
 资源费用；部署须提供新资源摘要对应的足额 `resourceCosts`，缺失或低报在启动前拒绝。
 首版不接受该模式的预留 reserve，须使用正式分配的新 Session；旧 reserves 不被升级或冒名采用。
 API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs 流程交付。
@@ -33,8 +37,11 @@ API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs �
 Worker 创建精确工作区 `subPath`，只向控制容器注入签名绑定及派生服务 token；executor 不拿
 Host Secret/PVC 根/历史或模型凭据，不共享 PID，只有固定 loopback 执行端点。
 受信启动程序在业务开放前完成独立合成目录的执行/读写检查；readiness 只读核对绑定、实例和活性。
-断连使准入永久失效，不自动重连为原执行担保；executor 替换后须按正式 Session 生命周期处理，
-不能删除持久 epoch 记录、手工改 PVC/DB 或重复投递命令来恢复。
+断连使当前实例准入永久失效，不自动重连为原执行担保。正式 Worker 替换准备须先通过 Store
+停止回执、执行占用和保留 PVC UID 校验；只有同一 Conversation/代次的全部既有工作均为已知
+终态，且本次已验证绑定的 resource fence 更高时，Driver 才更新执行边界要求并恢复后续新 Turn。
+旧操作、历史和事实不改写；unknown/在途不据新实例补造终态。同 fence 替换会被持久 epoch
+拒绝，不能删除该记录、手工改 PVC/DB 或重复投递命令来恢复。
 
 采用前须在目标同版本镜像上完成真实 shell/patch/图片与搜索、凭据/进程/文件/跨 Session 负向、
 取消/后台进程/重启恢复，以及 Web/企微和 PNG/PDF 字节/hash 验收。配置、Pod Ready 和离线

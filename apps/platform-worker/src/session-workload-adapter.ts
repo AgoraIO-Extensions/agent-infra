@@ -1115,6 +1115,7 @@ function renderSessionSandboxResourcesV1(
 			binding: allocation.runtime.sessionExecutor.binding,
 			policy: allocation.codexSessionExecutor,
 		});
+		Object.assign(pod.spec, projection.placement);
 		projection.executor.volumeMounts?.push(
 			...(skillMount ? [{ ...skillMount, name: "skill-hub" }] : []),
 			...[...(skillProjection?.containerMounts.values() ?? [])].flat(),

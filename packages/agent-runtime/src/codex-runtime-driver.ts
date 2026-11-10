@@ -897,6 +897,7 @@ interface CodexRuntimeRequirements {
 	lane: string;
 	barrier?: typeof nativeBarrier;
 	sessionExecutorBindingDigest?: string;
+	sessionExecutorResourceFence?: number;
 }
 
 // These are requirements of this Driver, not proof that an installed binary
@@ -2785,15 +2786,20 @@ function isCodexRuntimeRequirements(
 			"lane",
 			"barrier",
 			"sessionExecutorBindingDigest",
+			"sessionExecutorResourceFence",
 		]) ||
 		!Number.isSafeInteger(value.schemaVersion) ||
 		Number(value.schemaVersion) < 1 ||
 		!nonEmptyString(value.lane) ||
 		!isPlainRecord(value.provenance) ||
 		!isPlainRecord(value.artifacts) ||
+		(value.sessionExecutorBindingDigest === undefined) !==
+			(value.sessionExecutorResourceFence === undefined) ||
 		(value.sessionExecutorBindingDigest !== undefined &&
 			(typeof value.sessionExecutorBindingDigest !== "string" ||
 				!/^[a-f0-9]{64}$/.test(value.sessionExecutorBindingDigest) ||
+				!Number.isSafeInteger(value.sessionExecutorResourceFence) ||
+				Number(value.sessionExecutorResourceFence) < 1 ||
 				value.lane !== "official-model-only" ||
 				value.barrier !== undefined)) ||
 		(value.barrier === undefined
@@ -4809,6 +4815,116 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!this.runtimeRequirementsMatch(session)) unavailable();
 	}
 
+	private sessionExecutorQuiescent(
+		state: CodexDriverState,
+		session: CodexSession,
+	) {
+		if (
+			session.activeExecutionId !== undefined ||
+			session.acceptanceUncertainOperationKey !== undefined ||
+			Object.values(state.operations).some(
+				(operation) =>
+					operation.nativeSessionRef === session.nativeSessionRef &&
+					(operation.state !== "resolved" ||
+						!operation.record ||
+						operation.admissionPending ||
+						operation.admissionRecoveryPending ||
+						operation.record.result.outcome === "unknown"),
+			)
+		)
+			return false;
+		const turns = new Set([
+			...Object.keys(session.journals ?? {}),
+			...Object.keys(session.archivedJournals ?? {}),
+			...Object.values(session.executions).map(
+				(execution) => execution.nativeTurnId,
+			),
+		]);
+		for (const turnId of turns) {
+			const execution = Object.values(session.executions).find(
+				(candidate) => candidate.nativeTurnId === turnId,
+			);
+			const journal = this.journalView(session, turnId);
+			const last = journal?.events.at(-1);
+			if (
+				!execution ||
+				execution.status === "running" ||
+				!journal ||
+				last?.type !== "completed" ||
+				last.payload.status !== execution.status ||
+				(journal.nativeCompletionStatus !== undefined &&
+					journal.nativeCompletionStatus !== execution.status) ||
+				journal.pendingOperationKey !== undefined ||
+				journal.connectionRecovery !== undefined ||
+				journal.connectionRecoveryCursor !== undefined ||
+				(journal.resultPublication && !journal.resultPublication.settled) ||
+				pendingNativeToolAttempts(journal).length > 0 ||
+				pendingNativeSources(journal).length > 0 ||
+				Object.values(journal.standardMcpCalls ?? {}).some(
+					(call) =>
+						call.held ||
+						(call.phase !== "completed" && call.phase !== "failed"),
+				) ||
+				latestOperationAttemptFacts(journal.events).some(
+					(fact) => fact.phase !== "completed" && fact.phase !== "failed",
+				)
+			)
+				return false;
+		}
+		return true;
+	}
+
+	private async receiveSessionExecutorReplacement() {
+		if (!this.sessionExecutor) return false;
+		await this.assertSessionExecutorCurrent();
+		const binding = this.sessionExecutor.binding;
+		const rebound = await this.update(
+			(state) => {
+				let changed = false;
+				for (const session of Object.values(state.sessions)) {
+					if (
+						session.agentId !== binding.agentId ||
+						session.conversationId !== binding.conversationId ||
+						session.sessionGeneration > binding.sessionGeneration
+					)
+						unavailable();
+					if (
+						session.sessionGeneration === binding.sessionGeneration &&
+						this.runtimeRequirementsMatch(session)
+					)
+						continue;
+					const prior = session.requiredRuntime;
+					if (
+						!prior?.sessionExecutorBindingDigest ||
+						prior.sessionExecutorResourceFence === undefined ||
+						binding.resourceFence <= prior.sessionExecutorResourceFence ||
+						!isDeepStrictEqual(
+							{
+								...prior,
+								sessionExecutorBindingDigest:
+									this.requiredRuntime.sessionExecutorBindingDigest,
+								sessionExecutorResourceFence:
+									this.requiredRuntime.sessionExecutorResourceFence,
+							},
+							this.requiredRuntime,
+						) ||
+						!this.sessionExecutorQuiescent(state, session)
+					)
+						unavailable();
+					// Earlier, fully settled generations remain history and never gain current native authority.
+					if (session.sessionGeneration < binding.sessionGeneration) continue;
+					// Trusted Worker prepares this Pod only after Store stopReceipt and retained-PVC UID gates.
+					session.requiredRuntime = structuredClone(this.requiredRuntime);
+					changed = true;
+				}
+				return changed;
+			},
+			{ skipUnchanged: true },
+		);
+		await this.assertSessionExecutorCurrent();
+		return rebound;
+	}
+
 	private sessionExecutorFailed = false;
 	private unsubscribeSessionExecutor?: () => void;
 
@@ -6176,6 +6292,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						? {
 								sessionExecutorBindingDigest:
 									codexSessionExecutorBindingDigestV1(sessionExecutor.binding),
+								sessionExecutorResourceFence:
+									sessionExecutor.binding.resourceFence,
 							}
 						: {}),
 				};
@@ -6497,19 +6615,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		try {
-			if (sessionExecutor) {
-				for (const session of Object.values(driver.readState().sessions))
-					driver.assertRuntimeRequirements(session);
-				await driver.assertSessionExecutorCurrent();
-			}
 			await driver.loadArchivedJournals(codexJournalArchiveRoot(options.path));
+			const executorRebound = await driver.receiveSessionExecutorReplacement();
 			// #3226：先沿已保存进度收敛中断的结果发布，再处理其他未确认操作。
 			await driver.recoverResultPublications();
 			await driver.recoverStandardMcpCalls();
 			await driver.recoverUnconfirmedModelOperations();
 			// Archives Turns finished before this open, including those of a state
 			// just upgraded from version 1; a failed pass only leaves them hot (#1705).
-			await driver.archiveFinishedJournals().catch(() => undefined);
+			// A replacement changes only requirements, preserving its hot history.
+			if (!executorRebound)
+				await driver.archiveFinishedJournals().catch(() => undefined);
 			assertInstalledSkillCurrent();
 			return driver;
 		} catch (error) {

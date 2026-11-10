@@ -549,6 +549,27 @@ describe("executor resource accounting", () => {
 		).not.toBe(workloadResourceConfigurationHashV1(enabled));
 	});
 
+	it("binds the exact approved placement into the resource configuration hash", () => {
+		const hash = (placement: CodexSessionExecutorPolicyV1["placement"]) =>
+			workloadResourceConfigurationHashV1({
+				...workloadTestPolicy,
+				codexSessionExecutor: {
+					...executorPolicy,
+					...(placement ? { placement } : {}),
+				},
+			});
+		const eci = hash({ architecture: "amd64" });
+		expect(eci).not.toBe(hash(undefined));
+		expect(eci).toBe(hash({ architecture: "amd64", runtimeClassName: "" }));
+		expect(eci).not.toBe(hash({ architecture: "arm64" }));
+		expect(eci).not.toBe(
+			hash({ architecture: "amd64", runtimeClassName: "runv" }),
+		);
+		expect(hash({ architecture: "amd64", runtimeClassName: "runv" })).not.toBe(
+			hash({ architecture: "amd64", runtimeClassName: "runc" }),
+		);
+	});
+
 	it("charges the summed concurrent container limits and rejects missing or smaller Store costs", () => {
 		const input = allocation();
 		const expected = {
@@ -591,5 +612,166 @@ describe("executor resource accounting", () => {
 		{ ...executorPolicy, extra: "untrusted" },
 	])("rejects invalid or open-ended deployment policy", (policy) => {
 		expect(() => validateCodexSessionExecutorPolicyV1(policy)).toThrow();
+	});
+});
+
+describe("trusted executor Pod placement", () => {
+	const eciToleration = {
+		key: "virtual-kubelet.io/provider",
+		operator: "Equal",
+		value: "alibabacloud",
+		effect: "NoSchedule",
+	};
+	const selected = (
+		placement: NonNullable<CodexSessionExecutorPolicyV1["placement"]>,
+	) => ({
+		...allocation(),
+		codexSessionExecutor: { ...executorPolicy, placement },
+	});
+	it("does not add placement when the deployment leaves it unspecified", () => {
+		for (const enabled of [true, false]) {
+			const pod = sessionSandboxResourcesV1(allocation(enabled))[5];
+			expect(pod.spec?.nodeSelector).toBeUndefined();
+			expect(pod.spec?.runtimeClassName).toBeUndefined();
+			expect(pod.spec?.tolerations).toBeUndefined();
+		}
+	});
+	it.each(["amd64", "arm64"] as const)(
+		"accepts the reviewed %s ECI admission tuple only with explicit approval",
+		(architecture) => {
+			const input = selected({ architecture });
+			const pod = sessionSandboxResourcesV1(input)[5];
+			const unapproved = sessionSandboxResourcesV1(allocation())[5];
+			const admitted = observed(unapproved);
+			Object.assign(admitted.spec ?? {}, {
+				nodeSelector: {
+					type: "virtual-kubelet",
+					"kubernetes.io/arch": architecture,
+				},
+				tolerations: [eciToleration],
+			});
+			expect(pod.spec?.nodeSelector).toEqual({
+				type: "virtual-kubelet",
+				"kubernetes.io/arch": architecture,
+			});
+			expect(pod.spec?.tolerations).toEqual([eciToleration]);
+			expect(pod.spec?.runtimeClassName).toBeUndefined();
+			expect(sessionSandboxResourceMatchesV1(admitted, pod, input)).toBe(true);
+			expect(
+				sessionSandboxResourceMatchesV1(admitted, unapproved, allocation()),
+			).toBe(false);
+		},
+	);
+	it.each(["amd64", "arm64"] as const)(
+		"renders the exact %s RuntimeClass tuple without ECI selection",
+		(architecture) => {
+			const input = selected({ architecture, runtimeClassName: "runv" });
+			const pod = sessionSandboxResourcesV1(input)[5];
+			expect(pod.spec?.runtimeClassName).toBe("runv");
+			expect(pod.spec?.nodeSelector).toEqual({
+				"kubernetes.io/arch": architecture,
+			});
+			expect(pod.spec?.tolerations).toBeUndefined();
+			expect(sessionSandboxResourceMatchesV1(observed(pod), pod, input)).toBe(
+				true,
+			);
+			const eci = observed(pod);
+			Object.assign(eci.spec ?? {}, {
+				nodeSelector: {
+					"kubernetes.io/arch": architecture,
+					type: "virtual-kubelet",
+				},
+				tolerations: [eciToleration],
+			});
+			expect(sessionSandboxResourceMatchesV1(eci, pod, input)).toBe(false);
+		},
+	);
+	it("treats an explicit empty RuntimeClass as canonical ECI placement", () => {
+		expect(
+			sessionSandboxResourcesV1(
+				selected({ architecture: "amd64", runtimeClassName: "" }),
+			)[5],
+		).toEqual(
+			sessionSandboxResourcesV1(selected({ architecture: "amd64" }))[5],
+		);
+	});
+	it.each([
+		[
+			"foreign architecture",
+			{
+				nodeSelector: {
+					type: "virtual-kubelet",
+					"kubernetes.io/arch": "arm64",
+				},
+				tolerations: [eciToleration],
+			},
+		],
+		[
+			"foreign selector",
+			{
+				nodeSelector: {
+					type: "virtual-kubelet",
+					"kubernetes.io/arch": "amd64",
+					"topology.kubernetes.io/zone": "other",
+				},
+				tolerations: [eciToleration],
+			},
+		],
+		[
+			"foreign RuntimeClass",
+			{
+				runtimeClassName: "unreviewed",
+				nodeSelector: {
+					type: "virtual-kubelet",
+					"kubernetes.io/arch": "amd64",
+				},
+				tolerations: [eciToleration],
+			},
+		],
+		[
+			"wildcard provider toleration",
+			{
+				tolerations: [
+					{
+						key: "virtual-kubelet.io/provider",
+						operator: "Exists",
+						effect: "NoSchedule",
+					},
+				],
+			},
+		],
+		[
+			"foreign provider toleration",
+			{ tolerations: [{ ...eciToleration, value: "another-provider" }] },
+		],
+		[
+			"extra toleration",
+			{
+				tolerations: [eciToleration, { key: "unreviewed", operator: "Exists" }],
+			},
+		],
+		["missing toleration", { tolerations: [] }],
+	] as const)("rejects scheduling drift: %s", (_name, change) => {
+		const input = selected({ architecture: "amd64" });
+		const pod = sessionSandboxResourcesV1(input)[5];
+		const current = observed(pod);
+		Object.assign(current.spec ?? {}, structuredClone(change));
+		expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(false);
+	});
+	it.each([
+		{},
+		{ architecture: "x86_64" },
+		{ architecture: "amd64", extra: true },
+		{ architecture: "amd64", runtimeClassName: "../runv" },
+		{ architecture: "amd64", runtimeClassName: "A" },
+		{ architecture: "amd64", runtimeClassName: "a".repeat(254) },
+		{ architecture: "amd64", runtimeClassName: null },
+	])("rejects invalid or open-ended placement", (placement) => {
+		expect(() =>
+			validateCodexSessionExecutorPolicyV1({
+				...executorPolicy,
+				placement,
+			} as CodexSessionExecutorPolicyV1),
+		).toThrow();
 	});
 });

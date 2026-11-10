@@ -319,6 +319,17 @@ export function workloadResourceConfigurationHashV1(
 								},
 								tmpSizeLimit:
 									policy.codexSessionExecutor.tmpSizeLimit ?? "128Mi",
+								...(policy.codexSessionExecutor.placement === undefined
+									? {}
+									: {
+											placement: {
+												architecture:
+													policy.codexSessionExecutor.placement.architecture,
+												runtimeClassName:
+													policy.codexSessionExecutor.placement
+														.runtimeClassName ?? "",
+											},
+										}),
 							},
 						}),
 				...(policy.workspaceSnapshotEgress === undefined
