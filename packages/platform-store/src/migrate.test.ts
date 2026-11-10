@@ -748,6 +748,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
+				"connection_consumer_registrations",
 				"connection_installation_authorizations",
 				"connection_installation_commands",
 				"platform_api_credentials",
@@ -2024,6 +2025,7 @@ describe("published Relay authority migration", () => {
 			76,
 			77,
 			78,
+			79,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2102,8 +2104,8 @@ describe("published Relay authority migration", () => {
 			tag: "0077_snapshot_upload_admission",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 78,
-			tag: "0078_workspace_snapshot_upload_objects",
+			idx: 79,
+			tag: "0079_connection_consumer_registrations",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2544,6 +2546,19 @@ describe("published Relay authority migration", () => {
 				"workspace_snapshots:workspace_snapshot_owner_id_unique",
 				"workspace_snapshots:workspace_snapshot_owner_idx",
 				"workspace_snapshots:workspace_snapshots_pkey",
+			);
+			expectedDelta.columns.push(
+				...['agent_id','association_revision','consumer_id','consumer_revision','created_at','failure_code','idempotency_key','operation_id','receipt','registered_at','request','request_digest','sending_at','source_key','source_namespace','status','updated_at'].map((name) => `connection_consumer_registrations:${name}`),
+			);
+			expectedDelta.checks.push(
+				...['digest','failure','receipt','request','revision','source','status'].map((name) => `connection_consumer_registrations:connection_consumer_registration_${name}`),
+			);
+			expectedDelta.indexes.push(
+				'connection_consumer_registrations:connection_consumer_registration_agent_unique',
+				'connection_consumer_registrations:connection_consumer_registration_consumer_unique',
+				'connection_consumer_registrations:connection_consumer_registration_source_unique',
+				'connection_consumer_registrations:connection_consumer_registration_status_idx',
+				'connection_consumer_registrations:connection_consumer_registrations_pkey',
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,
