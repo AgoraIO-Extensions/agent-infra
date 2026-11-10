@@ -342,6 +342,47 @@ describe("credential-free Codex Session executor", () => {
 		expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(true);
 	});
 
+	it.each([undefined, 300])(
+		"accepts standard NoExecute defaults with seconds=%s for a real Session",
+		(seconds) => {
+			const input = allocation();
+			const pod = sessionSandboxResourcesV1(input)[5];
+			const current = observed(pod);
+			if (!current.spec) throw new Error();
+			current.spec.tolerations = [
+				"node.kubernetes.io/not-ready",
+				"node.kubernetes.io/unreachable",
+			].map((key) => ({
+				key,
+				operator: "Exists",
+				effect: "NoExecute",
+				...(seconds === undefined ? {} : { tolerationSeconds: seconds }),
+			}));
+			expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(true);
+		},
+	);
+
+	it.each([
+		{ tolerationSeconds: 600 },
+		{ value: "" },
+		{ effect: "NoSchedule" },
+		{ key: "node.kubernetes.io/disk-pressure" },
+	])("rejects drifted NoExecute defaults for a real Session: %j", (changed) => {
+		const input = allocation();
+		const pod = sessionSandboxResourcesV1(input)[5];
+		const current = observed(pod);
+		if (!current.spec) throw new Error();
+		current.spec.tolerations = [
+			{
+				key: "node.kubernetes.io/not-ready",
+				operator: "Exists",
+				effect: "NoExecute",
+				...changed,
+			},
+		];
+		expect(sessionSandboxResourceMatchesV1(current, pod, input)).toBe(false);
+	});
+
 	it("rejects unapproved, custom, static-key and legacy mode combinations before render", () => {
 		const input = allocation();
 		if (!input.runtime?.sessionExecutor) throw new Error();

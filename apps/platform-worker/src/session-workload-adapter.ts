@@ -1549,6 +1549,16 @@ function sessionExecutorPodSpecMatches(
 						effect: "NoExecute",
 						tolerationSeconds: 300,
 					},
+					{
+						key: "node.kubernetes.io/not-ready",
+						operator: "Exists",
+						effect: "NoExecute",
+					},
+					{
+						key: "node.kubernetes.io/unreachable",
+						operator: "Exists",
+						effect: "NoExecute",
+					},
 				].some((allowed) => stableJson(entry) === stableJson(allowed)),
 		),
 		volumes: (spec.volumes ?? []).map((volume) => ({
