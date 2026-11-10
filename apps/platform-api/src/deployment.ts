@@ -9,6 +9,7 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentDefaultRelayKeyBindingV1,
 	captureAgentApiCreatePrincipalsV1,
+	captureConnectionConsumerRegistrationPolicyV1,
 	isSkillHubAgentVersionV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
@@ -18,7 +19,6 @@ import {
 	createSecretEncryptorV1,
 } from "@agent-infra/secret-store";
 import { createAgentDefaultRelayKeyCandidatesV1 } from "./agent-default-relay-key-validation.js";
-
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
 import {
@@ -103,6 +103,7 @@ export interface ProductionPlatformApiInputV1
 		>["verify"];
 	};
 	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerRegistration?: PlatformApiAssemblyInput["connectionConsumerRegistration"];
 	/** Server-resolved Connection Web console path; separate from the MCP endpoint. */
 	readonly connectionWebPath?: unknown;
 	readonly connectionInstallation?: Omit<
@@ -568,6 +569,14 @@ export function createProductionPlatformApiAssemblyInputV1(
 		return { ...authority, users };
 	};
 	return {
+		...(input.connectionConsumerRegistration !== undefined
+			? {
+					connectionConsumerRegistration:
+						captureConnectionConsumerRegistrationPolicyV1(
+							input.connectionConsumerRegistration,
+						),
+				}
+			: {}),
 		...(input.sessionSandboxReserves
 			? { sessionSandboxReserves: input.sessionSandboxReserves }
 			: {}),

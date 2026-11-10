@@ -20,7 +20,10 @@ import {
 	createModelAccessValidatorV1,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
-import { parseEvaluationAnalysisPolicyV1 } from "@agent-infra/platform-core";
+import {
+	captureConnectionConsumerRegistrationPolicyV1,
+	parseEvaluationAnalysisPolicyV1,
+} from "@agent-infra/platform-core";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { KubeConfig } from "@kubernetes/client-node";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -56,6 +59,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	/** Deployment-owned service token retained in Worker memory for Codex boundary attestations. */
 	readonly serviceToken: string;
 	readonly databaseUrl: string;
+	readonly connectionConsumerRegistration?: PlatformWorkloadWorkerOptionsV1["connectionConsumerRegistration"];
 	readonly workerId: string;
 	readonly kubernetes:
 		| { readonly mode: "in-cluster" }
@@ -125,6 +129,15 @@ export async function createProductionWorkloadWorkerOptionsV1(
 	let stage: WorkloadDeploymentErrorV1["code"] = "WORKER_CONFIGURATION_INVALID";
 	try {
 		signal.throwIfAborted();
+		const connectionConsumerRegistration =
+			input.connectionConsumerRegistration === undefined
+				? undefined
+				: {
+						...input.connectionConsumerRegistration,
+						policy: captureConnectionConsumerRegistrationPolicyV1(
+							input.connectionConsumerRegistration.policy,
+						),
+					};
 		if (input.evaluation?.loadAnalysisPolicy)
 			parseEvaluationAnalysisPolicyV1(
 				await input.evaluation.loadAnalysisPolicy(),
@@ -247,6 +260,11 @@ export async function createProductionWorkloadWorkerOptionsV1(
 		signal.throwIfAborted();
 		return {
 			databaseUrl: input.databaseUrl,
+			...(connectionConsumerRegistration !== undefined
+				? {
+						connectionConsumerRegistration,
+					}
+				: {}),
 			workerId: input.workerId,
 			containerBoundaryServiceToken: input.serviceToken,
 			policy: structuredClone(input.policy),

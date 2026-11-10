@@ -13,7 +13,9 @@ import {
 	type ApplicationFoundationWritePlanV1,
 	agentApiCreationIdsV1,
 	type CommitApplicationFoundationResultV1,
+	type ConnectionConsumerRegistrationPolicyV1,
 	captureAgentApiCreatePrincipalsV1,
+	captureConnectionConsumerRegistrationPolicyV1,
 	type PendingSecretRecordAttachmentsV1,
 	PersonalApiCredentialErrorV1,
 	planAgentApiCreationCompletionV1,
@@ -30,6 +32,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
 import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readAgentManagementState } from "./agent-management.js";
+import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
 import postgres from "./observed-postgres.js";
 import { isPostgresError } from "./postgres-error.js";
 import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
@@ -52,6 +55,7 @@ import { insertWorkspaceSnapshotBindingsV1 } from "./workspace-snapshot-binding-
 
 export interface PostgresApplicationFoundationOptions {
 	readonly databaseUrl: string;
+	readonly connectionConsumerRegistration?: ConnectionConsumerRegistrationPolicyV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly apiCreation?: {
 		readonly allowedPrincipals: Parameters<
@@ -448,8 +452,15 @@ export class PostgresApplicationFoundationTransactionV1
 	readonly #userDirectory;
 	readonly #apiCreation;
 	readonly #allowedPrincipals;
+	readonly #connectionConsumerRegistration;
 
 	constructor(options: PostgresApplicationFoundationOptions) {
+		this.#connectionConsumerRegistration =
+			options.connectionConsumerRegistration === undefined
+				? undefined
+				: captureConnectionConsumerRegistrationPolicyV1(
+						options.connectionConsumerRegistration,
+					);
 		this.#allowedPrincipals = captureAgentApiCreatePrincipalsV1(
 			options.apiCreation?.allowedPrincipals,
 		);
@@ -844,6 +855,22 @@ export class PostgresApplicationFoundationTransactionV1
 						createdAt: outboxIntent.occurredAt,
 						updatedAt: outboxIntent.occurredAt,
 					});
+					if (this.#connectionConsumerRegistration)
+						await insertConnectionConsumerRegistrationV1(transaction, {
+							policy: this.#connectionConsumerRegistration,
+							platformAgentId: ids.agentId,
+							platformOwnerId: ownerId,
+							consumerName: rows.application.name,
+							transition: {
+								operation: "api_create",
+								creationChannel: "api",
+								from: null,
+								to: rows.application.status,
+							},
+							traceId: rows.application.traceId,
+							requestId: rows.application.requestId,
+							occurredAt: rows.agent.createdAt,
+						});
 					await transaction
 						.update(idempotencyRecords)
 						.set({

@@ -160,6 +160,8 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	/** Explicit deployment policy; absent keeps dynamic Consumer registration disabled. */
+	readonly connectionConsumerRegistration?: import("@agent-infra/platform-core").ConnectionConsumerRegistrationPolicyV1;
 	/**
 	 * Optional fail-closed deployment boundary. The deployment must supply the
 	 * credential resolver, archive validator, object storage transaction, quota,
@@ -461,6 +463,7 @@ export function assemblePlatformApi(
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 		userDirectory,
+		connectionConsumerRegistration: input.connectionConsumerRegistration,
 		...(input.agentApiCreation
 			? {
 					apiCreation: {
@@ -476,6 +479,7 @@ export function assemblePlatformApi(
 	const managementTransaction = new PostgresAgentManagementTransactionV1({
 		databaseUrl: input.databaseUrl,
 		userDirectory,
+		connectionConsumerRegistration: input.connectionConsumerRegistration,
 	});
 	const managementQuery = new PostgresAgentManagementQueryV1({
 		databaseUrl: input.databaseUrl,

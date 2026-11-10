@@ -243,6 +243,38 @@ describe("production Worker deployment", () => {
 		});
 		expect(options.files).toBe(files);
 	});
+	it("passes only explicit validated dynamic registration policy and the approved adapter", async () => {
+		const deployment = await input();
+		expect(
+			(await createProductionWorkloadWorkerOptionsV1(deployment))
+				.connectionConsumerRegistration,
+		).toBeUndefined();
+		const policy = {
+			schemaVersion: 1 as const,
+			sourceNamespace: "controlled-production-worker",
+			revision: "policy-1",
+			callbackUrl: "https://platform.example.test/connection/callback",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp:tools",
+		};
+		const adapter = { register: vi.fn(), reconcile: vi.fn() };
+		expect(
+			(
+				await createProductionWorkloadWorkerOptionsV1({
+					...deployment,
+					connectionConsumerRegistration: { policy, adapter },
+				})
+			).connectionConsumerRegistration,
+		).toEqual({ policy, adapter });
+		await expect(
+			createProductionWorkloadWorkerOptionsV1({
+				...deployment,
+				connectionConsumerRegistration: {
+					policy: { ...policy, sourceNamespace: "" },
+				},
+			}),
+		).rejects.toMatchObject({ code: "WORKER_CONFIGURATION_INVALID" });
+	});
 	it("forwards separate apply and observe retry budgets", async () => {
 		const deployment = await input();
 		const options = await createProductionWorkloadWorkerOptionsV1({

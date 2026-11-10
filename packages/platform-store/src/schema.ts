@@ -25,6 +25,7 @@ import {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
 } from "./schema-connection-installation.js";
+import { connectionConsumerRegistrations } from "./schema-connection-registration.js";
 import {
 	conversationAuditEvents,
 	conversationEvents,
@@ -69,6 +70,7 @@ export {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
 } from "./schema-connection-installation.js";
+export { connectionConsumerRegistrations } from "./schema-connection-registration.js";
 
 import {
 	skillHubAgentBindings,
@@ -176,6 +178,7 @@ import {
 } from "./schema-evaluation.js";
 
 export const platformInfrastructureTables = [
+	connectionConsumerRegistrations,
 	evaluationExperiments,
 	evaluationSampleTasks,
 	evaluationScoreIntents,
