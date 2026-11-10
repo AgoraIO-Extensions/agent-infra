@@ -4,6 +4,7 @@ import { lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateBytes, privateJson } from "./private-input.ts";
+import { workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { validateTemplatePreflightJob } from "./template-model-preflight.mjs";
 
 export async function prepareTemplatePreflight(listFile: string, manifestFile: string, evidenceDirectory: string, worktree: string, sourceSha: string, kubeconfig: string, namespace: string) {
@@ -35,6 +36,11 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 		jobs.push(job);
 	}
 	assert.equal(seen.size, 4);
+	const capacity = jobs.map((job) => job.resourceProfileRef === undefined ? null : JSON.stringify({
+		resourceConfigurationHash: workloadResourceConfigurationHashV1({ ...job, resources: job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits } }),
+		storageSize: job.storageSize, storageClassName: job.storageClassName, modelEgress: job.modelEgress, dnsEgress: job.dnsEgress, allowedPodTopologyLabelValues: job.allowedPodTopologyLabelValues,
+	}));
+	assert(capacity.every((tuple) => tuple === capacity[0]), "PREFLIGHT_CAPACITY_POLICY_DRIFT");
 	const runDirectory = await mkdtemp(join(directory, "template-run-"));
 	const files = [];
 	for (const job of jobs) {

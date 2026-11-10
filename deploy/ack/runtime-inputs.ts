@@ -13,6 +13,7 @@ import { validateCapacityBindings } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
 import { prepareReserveInput, readReserveApi, readReserveWorker } from "./session-reserve-inputs.ts";
 import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
+import { workloadResourceConfigurationHashV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
@@ -151,7 +152,16 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		requests: { cpu: capacity.resources?.requests?.cpu, memory: capacity.resources?.requests?.memory },
 		limits: { cpu: capacity.resources?.limits?.cpu, memory: capacity.resources?.limits?.memory },
 	};
-	const resourceConfigurationHash = hash(JSON.stringify({ resourceProfileRef: capacity.resourceProfileRef, ...resources }));
+	const resourceConfigurationHash = workloadResourceConfigurationHashV1({
+		resourceProfileRef: capacity.resourceProfileRef,
+		resources,
+		...(capacity.codexSessionExecutor === undefined
+			? {}
+			: { codexSessionExecutor: capacity.codexSessionExecutor }),
+		...(capacity.workspaceSnapshotEgress === undefined
+			? {}
+			: { workspaceSnapshotEgress: capacity.workspaceSnapshotEgress }),
+	});
 	assert(Array.isArray(capacity.evidence) && capacity.evidence.length <= 64);
 	const evidenceFiles = new Map<string, string>();
 	for (const entry of capacity.evidence) {

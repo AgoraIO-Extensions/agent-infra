@@ -34,6 +34,27 @@ ECI 使用精确架构/virtual-kubelet selector 与 provider toleration，Runtim
 首版不接受该模式的预留 reserve，须使用正式分配的新 Session；旧 reserves 不被升级或冒名采用。
 API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs 流程交付。
 
+正式 `template-preflight` 的四个 job 与容量输入必须声明相同的 `resourceProfileRef`、
+`resources`、`codexSessionExecutor`、`storageSize` 和 `storageClassName`；已有
+`workspaceSnapshotEgress` 也属于资源摘要，不能在发布时省略。未声明 executor 的旧 job
+继续沿原单容器路径，不得拿它的测量回执启用新模式。
+
+启用新模式的 Codex job 创建独立、带 ownership 的临时 PVC、初始化容器、控制容器和 executor，
+绑定固定的合成 Conversation 与代次。模型凭据只在控制侧；实际 Pod/PVC、初始化终态、
+容器实例、资源和挂载回读匹配后才生成容量回执。回执同时保存共享资源摘要、控制与执行容器
+资源及派生费用；其他模板仍为单容器，其摘要绑定同一部署策略，费用只证明自身实际布局。
+新容量 job 还须声明获准的 `modelEgress` 和 `dnsEgress`；模型出口只接受精确 IP 与模型
+端口，DNS 只接受精确 IP 或非空 namespace/Pod 选择器。预检创建独立 ServiceAccount 和
+默认拒绝入站、出站的 NetworkPolicy，只放行这些出口。ECI 添加的 region/zone 标签须在
+`allowedPodTopologyLabelValues` 中明确允许。结束后只清理本次拥有的临时资源。
+该独立预检只提供模板与容量证据，NetworkPolicy 回读不代表数据面隔离或真实业务 Session 验收。
+
+已有环境先从当前 release 只读采集候选，保留历史绑定和无关配置键。新增 owned 配置 Secret
+名称并在候选 values 中绑定，经正式 `bootstrap-inputs`、Helm `deploy` 和 `runtime-inputs`
+采用；既有数据库使用 `initializeDatabase=false`。发布门禁与部署后 mounted-capacity 检查
+使用同一资源摘要，并核对 Worker 实际加载的 executor、快照出口和存储策略。不能手工改摘要、
+补造测量或覆盖旧状态绕过资源不足与配置漂移。
+
 Worker 创建精确工作区 `subPath`，只向控制容器注入签名绑定及派生服务 token；executor 不拿
 Host Secret/PVC 根/历史或模型凭据，不共享 PID，只有固定 loopback 执行端点。
 受信启动程序在业务开放前完成独立合成目录的执行/读写检查；readiness 只读核对绑定、实例和活性。
