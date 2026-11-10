@@ -26,6 +26,7 @@ import {
 	RuntimeOAuthGrantClaimsV1Schema,
 	type RuntimeOAuthResponseV1,
 } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
 	type ConversationDispatchAuthorizationPortV1,
@@ -349,6 +350,18 @@ export function createConversationRuntimeV2(
 						RuntimeOAuthConfigurationV1Schema.safeParse(value),
 					]),
 				);
+	let installationConfigurationsByAgentAndPrincipal:
+		| import("@agent-infra/contracts/runtime").RuntimeOAuthConfigurationsByAgentAndPrincipalV1
+		| undefined;
+	try {
+		if (installation?.configurationsByAgentAndPrincipal !== undefined)
+			installationConfigurationsByAgentAndPrincipal =
+				parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1(
+					installation.configurationsByAgentAndPrincipal,
+				);
+	} catch {
+		// Keep this explicit source selected but unusable; never fall back.
+	}
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 	function recordDrainStage(
@@ -2179,10 +2192,13 @@ export function createConversationRuntimeV2(
 				if (
 					!installation ||
 					typeof installationAuthorize !== "function" ||
-					(installationConfigurationsByAgent === undefined &&
-						!installationConfiguration?.success) ||
-					(installation.configuration !== undefined &&
-						installationConfigurationsByAgent !== undefined)
+					[
+						installation.configuration,
+						installation.configurationsByAgent,
+						installation.configurationsByAgentAndPrincipal,
+					].filter((value) => value !== undefined).length !== 1 ||
+					(installation.configurationsByAgentAndPrincipal !== undefined &&
+						!installationConfigurationsByAgentAndPrincipal)
 				)
 					installationUnavailable();
 				if (
@@ -2230,16 +2246,34 @@ export function createConversationRuntimeV2(
 				);
 				const pod = pods?.[0];
 				const target = prepared.target.connectionConsumer;
-				if (context.kind !== "business") installationUnavailable();
+				if (context.kind !== "business" || context.principal.kind !== "user")
+					installationUnavailable();
+				const principalConfigurations =
+					installationConfigurationsByAgentAndPrincipal &&
+					Object.hasOwn(
+						installationConfigurationsByAgentAndPrincipal,
+						context.claim.agentId,
+					)
+						? installationConfigurationsByAgentAndPrincipal[
+								context.claim.agentId
+							]
+						: undefined;
 				const selectedConfiguration =
-					installationConfigurationsByAgent === undefined
-						? installationConfiguration
-						: Object.hasOwn(
-									installationConfigurationsByAgent,
-									context.claim.agentId,
-								)
-							? installationConfigurationsByAgent[context.claim.agentId]
-							: undefined;
+					installation.configurationsByAgentAndPrincipal !== undefined
+						? RuntimeOAuthConfigurationV1Schema.safeParse(
+								principalConfigurations &&
+									Object.hasOwn(principalConfigurations, context.principal.id)
+									? principalConfigurations[context.principal.id]
+									: undefined,
+							)
+						: installationConfigurationsByAgent === undefined
+							? installationConfiguration
+							: Object.hasOwn(
+										installationConfigurationsByAgent,
+										context.claim.agentId,
+									)
+								? installationConfigurationsByAgent[context.claim.agentId]
+								: undefined;
 				if (!selectedConfiguration?.success) installationUnavailable();
 				const configuration = selectedConfiguration.data;
 				if (

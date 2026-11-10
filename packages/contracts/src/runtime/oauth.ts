@@ -71,6 +71,45 @@ export type RuntimeOAuthConfigurationV1 = z.infer<
 	typeof RuntimeOAuthConfigurationV1Schema
 >;
 
+/** Deployment-approved registration receipt and MCP contract; contains no credential. */
+const installationIdentifier = z
+	.string()
+	.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+export const RuntimeOAuthBindingReadDescriptorV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	registrationKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._~-]{7,127}$/),
+	clientName: z.string().min(1).max(100),
+	clientId: installationIdentifier,
+	instanceId: installationIdentifier,
+	configurationFingerprint: fingerprint,
+	serviceRef: installationIdentifier,
+	contract: z.strictObject({
+		ref: installationIdentifier,
+		revision: installationIdentifier,
+		serverInfo: z.strictObject({
+			name: installationIdentifier,
+			version: installationIdentifier,
+		}),
+		tools: z
+			.array(
+				z.strictObject({
+					name: installationIdentifier,
+					succeededResultSchema: z.record(z.string(), z.unknown()),
+					failedResultSchema: z.record(z.string(), z.unknown()).optional(),
+				}),
+			)
+			.min(1)
+			.max(32),
+	}),
+});
+export type RuntimeOAuthBindingReadDescriptorV1 = z.infer<
+	typeof RuntimeOAuthBindingReadDescriptorV1Schema
+>;
+
+export type RuntimeOAuthConfigurationsByAgentAndPrincipalV1 = Readonly<
+	Record<string, Readonly<Record<string, RuntimeOAuthConfigurationV1>>>
+>;
+
 export const RuntimeOAuthScopeV1Schema = z.strictObject({
 	agentId: OpaqueIdV1Schema,
 	sandboxId: OpaqueIdV1Schema,

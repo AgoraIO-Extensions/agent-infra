@@ -49,6 +49,7 @@ const {
 	connectionConsumerProfileApproval,
 	connectionInstallationConfiguration,
 	connectionInstallationsByAgent,
+	connectionInstallationsByAgentAndPrincipal,
 	connectionInstallationCallback,
 	applicationCredentialDelivery,
 	apiInput,
@@ -211,7 +212,9 @@ const browser = createPostgresLdapBrowserDeployment({
 });
 const callbackForwarder =
 	connectionInstallationCallback ??
-	((connectionInstallationConfiguration || connectionInstallationsByAgent) &&
+	((connectionInstallationConfiguration ||
+		connectionInstallationsByAgent ||
+		connectionInstallationsByAgentAndPrincipal) &&
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
 		? {
 				forward: createProtectedConnectionInstallationForwarder({
@@ -337,11 +340,15 @@ export function createPlatformApiAssemblyInput() {
 		connectionConsumerProfileApproval:
 			resolvedConnectionConsumerProfileApproval,
 		connectionWebPath: resolvedConnectionWebPath,
-		...(connectionInstallationConfiguration || connectionInstallationsByAgent
+		...(connectionInstallationConfiguration ||
+		connectionInstallationsByAgent ||
+		connectionInstallationsByAgentAndPrincipal
 			? {
 					connectionInstallation: {
 						configuration: connectionInstallationConfiguration,
 						bindingsByAgent: connectionInstallationsByAgent,
+						bindingsByAgentAndPrincipal:
+							connectionInstallationsByAgentAndPrincipal,
 						publicOrigin,
 					},
 				}

@@ -2,9 +2,9 @@ import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
-
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { NativeCapabilityInvocationRequestV1 } from "@agent-infra/contracts/pilot";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import * as telemetryModule from "@agent-infra/observability";
 import {
 	PostgresAgentManagementQueryV1,
@@ -979,9 +979,13 @@ describe("Platform API production assembly", () => {
 	});
 });
 
-it.each([false, true])(
-	"assembles only a consistent per-Agent installation callback (mismatch=%s)",
-	async (mismatch) => {
+it.each(
+	[false, true].flatMap((mismatch) =>
+		[false, true].map((perPrincipal) => [mismatch, perPrincipal] as const),
+	),
+)(
+	"assembles only a consistent installation callback (mismatch=%s, perPrincipal=%s)",
+	async (mismatch, perPrincipal) => {
 		const unavailable = async () => {
 			throw Error("unused test adapter");
 		};
@@ -1028,6 +1032,11 @@ it.each([false, true])(
 			"agent-a": bindingFor("agent-a"),
 			"agent-b": bindingFor("agent-b"),
 		};
+		if (perPrincipal)
+			for (const binding of Object.values(bindingsByAgent))
+				binding.configuration.revision = runtimeOAuthConfigurationRevisionV1(
+					binding.configuration,
+				);
 		const assembly = assemblePlatformApi({
 			taskAdmissionPolicy: {
 				maximumWaitingTasksPerAgent: 2,
@@ -1048,7 +1057,14 @@ it.each([false, true])(
 			presentAgent: unavailable,
 			connectionInstallation: {
 				publicOrigin: "https://platform.test",
-				bindingsByAgent,
+				...(perPrincipal
+					? {
+							bindingsByAgentAndPrincipal: {
+								"agent-a": { alice: bindingsByAgent["agent-a"] },
+								"agent-b": { bob: bindingsByAgent["agent-b"] },
+							},
+						}
+					: { bindingsByAgent }),
 			},
 			connectionInstallationCallback: { forward: vi.fn(async () => {}) },
 		});

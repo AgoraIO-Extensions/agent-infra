@@ -78,7 +78,11 @@
 			"import": "./dist/files.mjs"
 		},
 		"./json-schema/runtime-oauth.v1": "./artifacts/json-schema/runtime-oauth.v1.schema.json",
-		"./openapi/runtime-oauth.v1": "./artifacts/openapi/runtime-oauth.v1.openapi.json"
+		"./openapi/runtime-oauth.v1": "./artifacts/openapi/runtime-oauth.v1.openapi.json",
+		"./runtime/oauth-installation-node": {
+			"types": "./dist/runtime/oauth-installation-node.d.mts",
+			"import": "./dist/runtime/oauth-installation-node.mjs"
+		}
 	},
 	"files": [
 		"dist",

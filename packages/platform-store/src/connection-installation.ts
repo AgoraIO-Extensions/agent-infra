@@ -11,6 +11,7 @@ import {
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
 	type ConnectionInstallationCommandDrainStoreV1,
 	ConnectionInstallationErrorV1,
@@ -134,6 +135,9 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 	readonly #directory: TaskUserDirectoryV1;
 	readonly #callbackConfiguration: RuntimeOAuthConfigurationV1 | undefined;
 	readonly #sharedBinding: InstallationBinding | undefined;
+	readonly #bindingsByAgentAndPrincipal:
+		| ReadonlyMap<string, ReadonlyMap<string, InstallationBinding>>
+		| undefined;
 	readonly #bindingsByAgent:
 		| ReadonlyMap<string, InstallationBinding | null>
 		| undefined;
@@ -146,9 +150,53 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		bindingsByAgent?: Readonly<
 			Record<string, ConnectionInstallationBindingInputV1>
 		>;
+		bindingsByAgentAndPrincipal?: Readonly<
+			Record<
+				string,
+				Readonly<Record<string, ConnectionInstallationBindingInputV1>>
+			>
+		>;
 	}) {
 		this.#directory = options.directory;
-		if (options.bindingsByAgent !== undefined) {
+		if (options.bindingsByAgentAndPrincipal !== undefined) {
+			if (
+				options.configuration !== undefined ||
+				options.profile !== undefined ||
+				options.approval !== undefined ||
+				options.bindingsByAgent !== undefined ||
+				!options.bindingsByAgentAndPrincipal ||
+				typeof options.bindingsByAgentAndPrincipal !== "object" ||
+				Array.isArray(options.bindingsByAgentAndPrincipal)
+			)
+				throw new ConnectionInstallationErrorV1("unavailable");
+			const configurations: Record<
+				string,
+				Record<string, RuntimeOAuthConfigurationV1>
+			> = {};
+			const bindings = new Map<
+				string,
+				ReadonlyMap<string, InstallationBinding>
+			>();
+			for (const [agentId, users] of Object.entries(
+				options.bindingsByAgentAndPrincipal,
+			)) {
+				if (!users || typeof users !== "object" || Array.isArray(users))
+					throw new ConnectionInstallationErrorV1("unavailable");
+				const entries = Object.entries(users).map(
+					([userId, value]) =>
+						[userId, captureInstallationBinding(value)] as const,
+				);
+				bindings.set(agentId, new Map(entries));
+				Object.defineProperty(configurations, agentId, {
+					value: Object.fromEntries(
+						entries.map(([id, binding]) => [id, binding.configuration]),
+					),
+					enumerable: true,
+				});
+			}
+			parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1(configurations);
+			this.#bindingsByAgentAndPrincipal = bindings;
+		} else if (options.bindingsByAgent !== undefined) {
 			if (
 				options.configuration !== undefined ||
 				options.profile !== undefined ||
@@ -178,13 +226,17 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				approval: options.approval,
 			});
 		}
-		const bindings = this.#bindingsByAgent
-			? [...this.#bindingsByAgent.values()].filter(
-					(binding): binding is InstallationBinding => binding !== null,
-				)
-			: this.#sharedBinding
-				? [this.#sharedBinding]
-				: [];
+		const bindings = this.#bindingsByAgentAndPrincipal
+			? [...this.#bindingsByAgentAndPrincipal.values()].flatMap((users) => [
+					...users.values(),
+				])
+			: this.#bindingsByAgent
+				? [...this.#bindingsByAgent.values()].filter(
+						(binding): binding is InstallationBinding => binding !== null,
+					)
+				: this.#sharedBinding
+					? [this.#sharedBinding]
+					: [];
 		const first = bindings[0]?.configuration;
 		if (
 			first &&
@@ -205,7 +257,14 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 			? structuredClone(this.#callbackConfiguration)
 			: undefined;
 	}
-	#bindingForAgent(agentId: string): InstallationBinding | null {
+	#bindingForAgent(
+		agentId: string,
+		userId: string,
+	): InstallationBinding | null {
+		if (this.#bindingsByAgentAndPrincipal !== undefined)
+			return (
+				this.#bindingsByAgentAndPrincipal.get(agentId)?.get(userId) ?? null
+			);
 		return this.#bindingsByAgent === undefined
 			? (this.#sharedBinding ?? null)
 			: (this.#bindingsByAgent.get(agentId) ?? null);
@@ -277,7 +336,10 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						expiresAt: new Date(row.expires_at as string).getTime(),
 					},
 				);
-				const selected = this.#bindingForAgent(authorization.reference.agentId);
+				const selected = this.#bindingForAgent(
+					authorization.reference.agentId,
+					authorization.principal.id,
+				);
 				if (!selected) return null;
 				const current = await this.#operations(tx).current(
 					authorization.principal.id,
@@ -448,7 +510,10 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					row.agent_id as string,
 				);
 				if (!agent) return null;
-				const selected = this.#bindingForAgent(row.agent_id as string);
+				const selected = this.#bindingForAgent(
+					row.agent_id as string,
+					user.userId,
+				);
 				if (!selected) return null;
 				const reference = {
 					agentId: row.agent_id as string,
@@ -706,9 +771,14 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				const reference = binding.reference as
 					| Record<string, unknown>
 					| undefined;
+				const principal = binding.principal as
+					| Record<string, unknown>
+					| undefined;
 				const selected =
-					typeof reference?.agentId === "string"
-						? this.#bindingForAgent(reference.agentId)
+					typeof reference?.agentId === "string" &&
+					principal?.kind === "user" &&
+					typeof principal.id === "string"
+						? this.#bindingForAgent(reference.agentId, principal.id)
 						: null;
 				if (!selected || scope?.agentId !== reference?.agentId)
 					throw new ConnectionInstallationErrorV1("invalid_input");

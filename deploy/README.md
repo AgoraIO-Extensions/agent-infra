@@ -252,6 +252,12 @@ exact JSON tuple `[ref, revision]`；供应引用与 Consumer 的 `source` 分�
 [受保护安装交付](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)
 及 [Host 安装说明](../apps/agent-runtime-host/README.md)。
 
+同一受信 `configuration.mjs` 还可导出单个 Session 的非敏感 `connectionOAuthProvisioning` bundle；
+Worker 仅把它交给原 Session receiver，按原 user、Agent、Sandbox/generation 和精确 Service
+origin 选择，其他 Session/主体不继承。bundle 只包含标准 OAuth configuration、TLS/callback-only
+SecretRef 与 API selector，不包含 Secret 内容、Token、授权码、PKCE 或实际 Connection mapping
+receipt；默认未导出即关闭，实际 receipt 仍由 Host 的既有受控供应合同处理。
+
 同一受信 `configuration.mjs` 可选导出 `connectionInstallation`，为 Worker 提供非敏感的
 `RuntimeOAuthConfigurationV1` 和 `authorize(input, signal, finalCheck)` 函数。函数必须使用当前
 认证用户与 Agent 的独立确认，调用并等待 `finalCheck`，然后返回与 `input` 完全一致且带有非空
@@ -265,6 +271,16 @@ exact JSON tuple `[ref, revision]`；供应引用与 Consumer 的 `source` 分�
 未选择该开关、PAT binding 或缺少 supply 时保持原路径。`workloadInput.policy` 与 Agent env
 不能覆盖生成值；该标记只选择受保护 OAuth publication，不代表 receipt、ConsumerInstance、
 Token 或真实 MCP 已获批。
+
+已部署并批准 EP-1060 时，`connectionOAuthProvisioning.bindingRead` 可提供严格非秘密
+`descriptor` 与 `serviceAuthSecretRef: { name, key }`。描述符包含登记稳定键、实际 client/DEVICE
+实例、名称、完整配置 fingerprint 及同版本 MCP 合同；fingerprint 使用 Node 专用的
+`runtimeOAuthConfigurationFingerprintV1` 对 strict 解析后的完整配置计算。
+Secret 仅挂 initializer，复制为 Host 私有 `tls/registration.auth`；描述符写入
+`bootstrap/registration.json`，仅该组合投射 `BINDING_READ=ep1060-v1`。Host 在读取 code 前
+精确回读并核对实际 Principal 与原签名主体映射，随后只兑换一次，按实际 expiry 发布原事务。
+UNKNOWN、错主体或实例、供应漂移均不回退；该路径不自动登记 Consumer、创建 Grant 或签收
+真实 MCP。完整环境变量名和保护条件见 [Host 说明](../apps/agent-runtime-host/README.md)。
 
 部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
 绑定；当标准模板分布在多个 OCI repository 时，绑定还必须提供对应的固定 `imageRepository`，

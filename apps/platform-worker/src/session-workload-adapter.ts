@@ -9,10 +9,15 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeModelConfigurationV4Schema,
+	type RuntimeOAuthBindingReadDescriptorV1,
+	RuntimeOAuthBindingReadDescriptorV1Schema,
+	type RuntimeOAuthConfigurationV1,
+	RuntimeOAuthConfigurationV1Schema,
 	type RuntimeSkillHubBindingV1,
 	RuntimeSkillHubBindingV1Schema,
 	runtimeSkillHubBindingEnvironmentNameV1,
 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -219,6 +224,33 @@ const runtimeTmpVolume = {
 } as const;
 
 /** Typed handoff for the #1250 Store allocation authority. */
+export interface SessionSandboxOAuthProvisioningV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sandboxId: string;
+	readonly sessionGeneration: number;
+	readonly principal: { readonly kind: "user"; readonly id: string };
+	readonly configuration: RuntimeOAuthConfigurationV1;
+	readonly tlsSecretRef: {
+		readonly name: string;
+		readonly certKey: string;
+		readonly keyKey: string;
+	};
+	readonly callbackAuthSecretRef: {
+		readonly name: string;
+		readonly key: string;
+	};
+	readonly bindingRead?: {
+		readonly descriptor: RuntimeOAuthBindingReadDescriptorV1;
+		readonly serviceAuthSecretRef: {
+			readonly name: string;
+			readonly key: string;
+		};
+	};
+	readonly apiSelector: Readonly<Record<string, string>>;
+}
+
 export interface SessionSandboxAllocationV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;
@@ -262,6 +294,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly connectionInstallationOAuthPublication?: boolean;
+	readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
 	readonly resources: {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
@@ -439,7 +472,136 @@ function metadata(
 	};
 }
 
+function oauthProvisioning(value: SessionSandboxResourceInputV1) {
+	try {
+		const input = value.oauthProvisioning;
+		if (input === undefined || value.desiredState === "stopped")
+			return undefined;
+		const fail = () => {
+			throw new WorkloadKubernetesError("policy");
+		};
+		if (
+			!input ||
+			typeof input !== "object" ||
+			Object.keys(input).sort().join(",") !==
+				[
+					"agentId",
+					"apiSelector",
+					"callbackAuthSecretRef",
+					"configuration",
+					"principal",
+					"sandboxId",
+					"schemaVersion",
+					"sessionGeneration",
+					"sessionId",
+					"tlsSecretRef",
+					...(input.bindingRead === undefined ? [] : ["bindingRead"]),
+				]
+					.sort()
+					.join(",")
+		)
+			fail();
+		const configuration = RuntimeOAuthConfigurationV1Schema.safeParse(
+			input.configuration,
+		);
+		if (!configuration.success) return fail();
+		const config = configuration.data;
+		if (Buffer.byteLength(JSON.stringify(config), "utf8") > 8192) return fail();
+		if (input.bindingRead !== undefined) {
+			if (
+				!input.bindingRead ||
+				Object.keys(input.bindingRead).sort().join(",") !==
+					"descriptor,serviceAuthSecretRef"
+			)
+				fail();
+			const descriptor = RuntimeOAuthBindingReadDescriptorV1Schema.parse(
+				input.bindingRead.descriptor,
+			);
+			if (
+				Buffer.byteLength(JSON.stringify(descriptor)) > 65_536 ||
+				descriptor.clientId !== config.clientId ||
+				descriptor.configurationFingerprint !==
+					runtimeOAuthConfigurationFingerprintV1(config)
+			)
+				fail();
+		}
+		const actualPrincipal =
+			(value as Partial<SessionSandboxAllocationV1>).principal ??
+			input.principal;
+		if (
+			input.schemaVersion !== 1 ||
+			input.agentId !== value.agentId ||
+			input.sessionId !== value.sessionId ||
+			input.sandboxId !== value.sandboxId ||
+			input.sessionGeneration !== value.generation ||
+			!actualPrincipal ||
+			actualPrincipal.kind !== "user" ||
+			stableJson(input.principal) !== stableJson(actualPrincipal) ||
+			!value.runtime ||
+			value.runtime.custom ||
+			value.desiredState !== "running" ||
+			config.patBinding !== undefined ||
+			"clientRegistration" in config ||
+			!value.connectionConsumerSnapshot ||
+			!value.connectionInstallationRevision ||
+			value.connectionInstallationOAuthPublication !== true
+		)
+			fail();
+		const origin = new URL(config.runtimeOrigin);
+		if (
+			origin.hostname !== `${value.serviceName}.${value.namespace}.svc` ||
+			origin.pathname !== "/" ||
+			!origin.port ||
+			Number(origin.port) < 1024 ||
+			Number(origin.port) === value.containerPort
+		)
+			fail();
+		const snapshot = JSON.parse(value.connectionConsumerSnapshot ?? "null");
+		if (
+			config.configFingerprint !== snapshot.approval?.configFingerprint ||
+			stableJson(config.source) !== stableJson(snapshot.approval?.source) ||
+			config.resource !==
+				snapshot.profile?.publicOrigin + snapshot.profile?.mcpPath ||
+			new URL(config.issuer).origin !== snapshot.profile?.publicOrigin
+		)
+			fail();
+		for (const [ref, keys] of [
+			[input.tlsSecretRef, ["certKey", "keyKey", "name"]],
+			[input.callbackAuthSecretRef, ["key", "name"]],
+			...(input.bindingRead
+				? [[input.bindingRead.serviceAuthSecretRef, ["key", "name"]] as const]
+				: []),
+		] as const) {
+			if (
+				!ref ||
+				Object.keys(ref).sort().join(",") !== keys.join(",") ||
+				!/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(ref.name) ||
+				Object.values(ref).some(
+					(v) => typeof v !== "string" || !/^[A-Za-z0-9._-]{1,253}$/.test(v),
+				)
+			)
+				fail();
+		}
+		if (
+			!input.apiSelector ||
+			Object.getPrototypeOf(input.apiSelector) !== Object.prototype ||
+			Object.keys(input.apiSelector).length === 0 ||
+			Object.entries(input.apiSelector).some(
+				([k, v]) =>
+					!/^[A-Za-z0-9./_-]{1,253}$/.test(k) ||
+					!/^[A-Za-z0-9._-]{1,63}$/.test(v),
+			)
+		)
+			fail();
+		return { input, configuration: config, port: Number(origin.port) };
+	} catch {
+		// A malformed trusted installation disables OAuth, not ordinary Session work.
+		return undefined;
+	}
+}
+
 function validateResourceInput(value: SessionSandboxResourceInputV1) {
+	oauthProvisioning(value);
 	skillHubDeliveryProjectionV1(value.skillHub, value.skillDeliveryImage);
 	workloadImagePullSpecV1(value.imagePullSecretName);
 	if (value.skillHub !== undefined) {
@@ -1136,6 +1298,186 @@ function renderSessionSandboxResourcesV1(
 		pod.spec.containers.push(projection.executor);
 		pod.spec.volumes?.push(projection.volume);
 	}
+	const oauth = oauthProvisioning(allocation);
+	if (oauth && pod.spec) {
+		const base = `${allocation.workspaceMountPath}/runtime/codex-driver.json.native/conversations/standard-mcp-oauth`;
+		const runtime = pod.spec.containers[0];
+		if (!runtime) throw new WorkloadKubernetesError("policy");
+		runtime.env?.push(
+			{ name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PROVISIONED", value: "v1" },
+			...(oauth.input.bindingRead
+				? [
+						{
+							name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ",
+							value: "ep1060-v1",
+						},
+					]
+				: []),
+			{
+				name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
+				value: `${base}/bootstrap/configuration.json`,
+			},
+			{
+				name: "AGENT_INFRA_RUNTIME_PRINCIPAL",
+				value: JSON.stringify(oauth.input.principal),
+			},
+			{ name: "AGENT_INFRA_RUNTIME_SANDBOX_ID", value: allocation.sandboxId },
+			{ name: "AGENT_INFRA_RUNTIME_SESSION_ID", value: allocation.sessionId },
+			{
+				name: "AGENT_INFRA_RUNTIME_SESSION_GENERATION",
+				value: String(allocation.generation),
+			},
+			...(runtime.env?.some((e) => e.name === "AGENT_INFRA_RUNTIME_POD_UID")
+				? []
+				: [
+						{
+							name: "AGENT_INFRA_RUNTIME_POD_UID",
+							valueFrom: {
+								fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" },
+							},
+						},
+					]),
+		);
+		runtime.ports?.push({ name: "oauth", containerPort: oauth.port });
+		runtime.volumeMounts?.push(
+			{
+				name: "runtime-oauth-private",
+				mountPath: `${base}/bootstrap`,
+				subPath: "bootstrap",
+				readOnly: true,
+			},
+			{
+				name: "runtime-oauth-private",
+				mountPath: `${base}/tls`,
+				subPath: "tls",
+				readOnly: true,
+			},
+		);
+		pod.spec.volumes?.push(
+			{
+				name: "runtime-oauth-private",
+				emptyDir: { medium: "Memory", sizeLimit: "128Ki" },
+			},
+			{
+				name: "runtime-oauth-tls-source",
+				secret: {
+					secretName: oauth.input.tlsSecretRef.name,
+					optional: true,
+					defaultMode: 0o440,
+					items: [
+						{ key: oauth.input.tlsSecretRef.certKey, path: "server.crt" },
+						{ key: oauth.input.tlsSecretRef.keyKey, path: "server.key" },
+					],
+				},
+			},
+			{
+				name: "runtime-oauth-callback-source",
+				secret: {
+					secretName: oauth.input.callbackAuthSecretRef.name,
+					optional: true,
+					defaultMode: 0o440,
+					items: [
+						{
+							key: oauth.input.callbackAuthSecretRef.key,
+							path: "callback.auth",
+						},
+					],
+				},
+			},
+		);
+		pod.spec.initContainers = [
+			...(pod.spec.initContainers ?? []),
+			{
+				name: "runtime-oauth-provision",
+				image: allocation.imageDigest,
+				imagePullPolicy: "IfNotPresent",
+				command: ["/bin/sh", "-ec"],
+				args: [
+					"ulimit -S -c 0\nulimit -H -c 0\nexec /usr/local/bin/node --disable-sigusr1 /app/dist/runtime-oauth-provisioning-cli.mjs",
+				],
+				env: [
+					...(oauth.input.bindingRead
+						? [
+								{
+									name: "AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION",
+									value: JSON.stringify(oauth.input.bindingRead.descriptor),
+								},
+							]
+						: []),
+					{
+						name: "AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING",
+						value: JSON.stringify({
+							schemaVersion: 1,
+							agentId: allocation.agentId,
+							sessionId: allocation.sessionId,
+							principal: oauth.input.principal,
+							sandboxId: allocation.sandboxId,
+							sessionGeneration: allocation.generation,
+							configuration: oauth.configuration,
+						}),
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_DATA_DIR",
+						value: `${allocation.workspaceMountPath}/runtime`,
+					},
+				],
+				resources: structuredClone(allocation.resources),
+				securityContext: agentContainerSecurityContext(),
+				volumeMounts: [
+					...(oauth.input.bindingRead
+						? [
+								{
+									name: "runtime-oauth-registration-source",
+									mountPath: "/oauth-source-registration",
+									readOnly: true,
+								},
+							]
+						: []),
+					{ name: "workspace", mountPath: allocation.workspaceMountPath },
+					{ name: "runtime-oauth-private", mountPath: "/oauth-private" },
+					{
+						name: "runtime-oauth-tls-source",
+						mountPath: "/oauth-source-tls",
+						readOnly: true,
+					},
+					{
+						name: "runtime-oauth-callback-source",
+						mountPath: "/oauth-source-callback",
+						readOnly: true,
+					},
+				],
+			},
+		];
+		if (oauth.input.bindingRead)
+			pod.spec.volumes?.push({
+				name: "runtime-oauth-registration-source",
+				secret: {
+					secretName: oauth.input.bindingRead.serviceAuthSecretRef.name,
+					optional: true,
+					defaultMode: 0o440,
+					items: [
+						{
+							key: oauth.input.bindingRead.serviceAuthSecretRef.key,
+							path: "registration.auth",
+						},
+					],
+				},
+			});
+		policy.spec?.ingress?.push(
+			{
+				_from: [
+					{
+						podSelector: { matchLabels: allocation.authorizedIngressSelector },
+					},
+				],
+				ports: [{ protocol: "TCP", port: oauth.port }],
+			},
+			{
+				_from: [{ podSelector: { matchLabels: oauth.input.apiSelector } }],
+				ports: [{ protocol: "TCP", port: oauth.port }],
+			},
+		);
+	}
 	const secret: V1Secret = {
 		apiVersion: "v1",
 		kind: "Secret",
@@ -1211,6 +1553,12 @@ function renderSessionSandboxResourcesV1(
 			],
 		},
 	};
+	if (oauth)
+		service.spec?.ports?.push({
+			name: "oauth",
+			port: oauth.port,
+			targetPort: oauth.port,
+		});
 	// The Secret precedes the Pod that references it; cleanup runs in reverse.
 	return [account, pvc, policy, service, secret, pod];
 }
@@ -1228,6 +1576,7 @@ export function sessionSandboxReserveResourcesV1(
 ): SessionSandboxResourceSetV1 {
 	if (
 		"principal" in input ||
+		input.oauthProvisioning !== undefined ||
 		"channelId" in input ||
 		input.generation !== 1 ||
 		input.resourceFence !== 1 ||
@@ -1702,6 +2051,55 @@ function resourceSpecMatches(
 	}
 }
 
+function withoutOAuthProvisioning<T extends KubernetesObject>(
+	object: T,
+	allocation: SessionSandboxResourceInputV1,
+): T {
+	const copy = structuredClone(object);
+	if (copy.kind === "Pod") {
+		const spec = (copy as V1Pod).spec;
+		if (spec) {
+			spec.initContainers = spec.initContainers?.filter(
+				(c) => c.name !== "runtime-oauth-provision",
+			);
+			spec.volumes = spec.volumes?.filter(
+				(v) => !v.name.startsWith("runtime-oauth-"),
+			);
+			for (const c of spec.containers) {
+				c.volumeMounts = c.volumeMounts?.filter(
+					(v) => !v.name.startsWith("runtime-oauth-"),
+				);
+				c.ports = c.ports?.filter((p) => p.name !== "oauth");
+				c.env = c.env?.filter(
+					(e) =>
+						![
+							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
+							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PROVISIONED",
+							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ",
+							"AGENT_INFRA_RUNTIME_PRINCIPAL",
+							"AGENT_INFRA_RUNTIME_SANDBOX_ID",
+							"AGENT_INFRA_RUNTIME_SESSION_ID",
+							"AGENT_INFRA_RUNTIME_SESSION_GENERATION",
+							...(allocation.runtime?.sessionExecutor
+								? []
+								: ["AGENT_INFRA_RUNTIME_POD_UID"]),
+						].includes(e.name),
+				);
+			}
+		}
+	} else if (copy.kind === "Service") {
+		const spec = (copy as V1Service).spec;
+		if (spec) spec.ports = spec.ports?.filter((p) => p.name !== "oauth");
+	} else if (copy.kind === "NetworkPolicy") {
+		const spec = (copy as V1NetworkPolicy).spec;
+		if (spec)
+			spec.ingress = spec.ingress?.filter((rule) =>
+				rule.ports?.some((p) => p.port === allocation.containerPort),
+			);
+	}
+	return copy;
+}
+
 function normalizeNetworkPolicySpec(spec: V1NetworkPolicy["spec"]) {
 	return {
 		...spec,
@@ -2148,7 +2546,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		): Promise<SessionSandboxObservationV1> {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
-			validateAllocation(allocation);
+			validateAllocation(
+				purpose === "control"
+					? { ...allocation, desiredState: "stopped" }
+					: allocation,
+			);
 			if (purpose === "business") await validateSkillSource(allocation);
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
@@ -2232,10 +2634,21 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					preparedBeforeRuntimeInputs ||
 					(purpose === "control" && kind === "Pod"
 						? podSpecMatches(
-								runtimeConnectionConsumerControlPodV1(current as V1Pod),
-								runtimeConnectionConsumerControlPodV1(expected as V1Pod),
+								runtimeConnectionConsumerControlPodV1(
+									withoutOAuthProvisioning(current as V1Pod, allocation),
+								),
+								runtimeConnectionConsumerControlPodV1(
+									withoutOAuthProvisioning(expected as V1Pod, allocation),
+								),
 							)
-						: resourceSpecMatches(current, expected));
+						: resourceSpecMatches(
+								purpose === "control"
+									? withoutOAuthProvisioning(current, allocation)
+									: current,
+								purpose === "control"
+									? withoutOAuthProvisioning(expected, allocation)
+									: expected,
+							));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;

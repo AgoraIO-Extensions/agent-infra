@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
@@ -100,6 +101,14 @@ beforeAll(async () => {
 	await client`insert into platform.task_authorization_records(id,execution_id,boundary) values ('task-b','execution-b',${client.json({ schemaVersion: 1, principal: { kind: "user", id: "alice" }, agentId: "agent-b", channelId: "web", identityRevision: "identity-r1", agentAuthorizationRevision: "agent-r1", accessSources: [{ kind: "user", userId: "alice" }] })})`;
 	await seedSessionSandboxFixture(client, "conversation-b");
 	await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,status,lease_owner,lease_expires_at,trace_id) values ('item-b','conversation','conversation-b','conversation.turn.submit.v1',${client.json({ executionId: "execution-b" })},'processing','worker-a',now()+interval '1 hour','trace-a')`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values ('agent-a','user','bob')`;
+	await client`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values ('personal','bob',1,1)`;
+	await client`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values ('personal','bob',1,'fixture-key-bob',${client.json({ purpose: "personal", subjectId: "bob", keyId: "fixture-key-bob", keyVersion: 1 })})`;
+	await client`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,host_session_ref) values ('conversation-bob','agent-a','bob','web','active',1,'agent-r1','host-bob')`;
+	await client`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version) values ('execution-bob','conversation-bob','agent-a','bob','web','turn-bob','processing',1,'agent-r1',now(),'v4',${"a".repeat(43)},'host-bob','web','personal','bob','fixture-key-bob',1)`;
+	await client`insert into platform.task_authorization_records(id,execution_id,boundary) values ('task-bob','execution-bob',${client.json({ schemaVersion: 1, principal: { kind: "user", id: "bob" }, agentId: "agent-a", channelId: "web", identityRevision: "identity-r1", agentAuthorizationRevision: "agent-r1", accessSources: [{ kind: "user", userId: "bob" }] })})`;
+	await seedSessionSandboxFixture(client, "conversation-bob");
+	await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,status,lease_owner,lease_expires_at,trace_id) values ('item-bob','conversation','conversation-bob','conversation.turn.submit.v1',${client.json({ executionId: "execution-bob" })},'processing','worker-bob',now()+interval '1 hour','trace-bob')`;
 }, 30000);
 beforeEach(async () => {
 	userActive = true;
@@ -829,5 +838,230 @@ it.each(["revision", "source"] as const)(
 			await originalStore.close();
 			await restarted?.close();
 		}
+	},
+);
+
+const userConfiguration = (userId: string) => {
+	const c = {
+		...configuration,
+		ref: `oauth-${userId}`,
+		clientId: `client-${userId}`,
+	};
+	return { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) };
+};
+const principalStore = (
+	bindingsByAgentAndPrincipal: Record<
+		string,
+		Record<string, ConnectionInstallationBindingInputV1>
+	>,
+) =>
+	new PostgresConnectionInstallationAuthorizationTransactionV1({
+		databaseUrl: database.databaseUrl,
+		directory: {
+			resolveUser: async (userId) => ({
+				schemaVersion: 1,
+				userId,
+				accountStatus: "active",
+				organizationIds: ["eng"],
+				authorizationRevision: "identity-r1",
+			}),
+		},
+		bindingsByAgentAndPrincipal,
+	});
+it("keeps two users of the same Agent on independent client/configuration and callback bindings", async () => {
+	const alice = userConfiguration("alice");
+	const bob = userConfiguration("bob");
+	const index = {
+		"agent-a": {
+			alice: { profile, approval, configuration: alice },
+			bob: { profile, approval, configuration: bob },
+		},
+	};
+	const selected = principalStore(index);
+	const producer = createConnectionInstallationAuthorizationV1({
+		store: selected,
+	});
+	try {
+		index["agent-a"].alice.configuration.clientId = "mutated-after-capture";
+		for (const [id, config, executionId, state] of [
+			["alice", { ...alice, clientId: "client-alice" }, "execution-a", "c"],
+			["bob", bob, "execution-bob", "d"],
+		] as const) {
+			const current = await selected.transaction((tx) =>
+				tx.current(id, executionId),
+			);
+			expect(current?.scope.oauthConfiguration).toEqual({
+				ref: config.ref,
+				revision: config.revision,
+			});
+			expect(
+				await selected.transaction((tx) =>
+					tx.current(id === "alice" ? "bob" : "alice", executionId),
+				),
+			).toBeNull();
+			const started = await producer.execute({
+				...request,
+				userId: id,
+				idempotencyKey: `principal-${id}`,
+				command: "begin",
+				executionId,
+			});
+			const [pending] = await selected.listPending(10, [executionId]);
+			if (!pending) throw Error("missing begin");
+			await selected.claimPending({
+				commandId: pending.command.commandId,
+				attemptId: `attempt-${id}`,
+				attemptOwner: "worker",
+			});
+			const url = new URL(authorizationUrl);
+			url.searchParams.set("client_id", config.clientId);
+			url.searchParams.set("state", state.repeat(64));
+			const replaced = new URL(url);
+			replaced.searchParams.set(
+				"client_id",
+				id === "alice" ? bob.clientId : "client-alice",
+			);
+			await expect(
+				selected.settle({
+					commandId: pending.command.commandId,
+					attemptId: `attempt-${id}`,
+					attemptOwner: "worker",
+					status: "completed",
+					authorizationUrl: replaced.toString(),
+					authorizationExpiresAt: Date.now() + 60000,
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(
+				await selected.settle({
+					commandId: pending.command.commandId,
+					attemptId: `attempt-${id}`,
+					attemptOwner: "worker",
+					status: "completed",
+					authorizationUrl: url.toString(),
+					authorizationExpiresAt: Date.now() + 60000,
+				}),
+			).toBe(true);
+			const callback = await producer.callback.claim({
+				stateHash: createHash("sha256").update(state.repeat(64)).digest("hex"),
+				now: Date.now(),
+			});
+			expect(callback).toMatchObject({
+				authorizationId: started.authorizationId,
+				runtimeOrigin: config.runtimeOrigin,
+			});
+		}
+	} finally {
+		await selected.close();
+	}
+});
+
+it("does not fall back when a principal entry is absent, and rejects drift from an original authorization", async () => {
+	const alice = userConfiguration("alice");
+	const selected = principalStore({
+		"agent-a": { alice: { profile, approval, configuration: alice } },
+	});
+	const changed = userConfiguration("changed-alice");
+	const drifted = principalStore({
+		"agent-a": { alice: { profile, approval, configuration: changed } },
+	});
+	try {
+		expect(
+			await selected.transaction((tx) => tx.current("bob", "execution-bob")),
+		).toBeNull();
+		const producer = createConnectionInstallationAuthorizationV1({
+			store: selected,
+		});
+		const started = await producer.execute({
+			...request,
+			command: "begin",
+			executionId: "execution-a",
+		});
+		const [pending] = await selected.listPending(10, ["execution-a"]);
+		if (!pending) throw Error("missing begin");
+		await selected.claimPending({
+			commandId: pending.command.commandId,
+			attemptId: "attempt-drift",
+			attemptOwner: "worker",
+		});
+		const url = new URL(authorizationUrl);
+		url.searchParams.set("client_id", alice.clientId);
+		await expect(
+			drifted.settle({
+				commandId: pending.command.commandId,
+				attemptId: "attempt-drift",
+				attemptOwner: "worker",
+				status: "completed",
+				authorizationUrl: url.toString(),
+				authorizationExpiresAt: Date.now() + 60000,
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(
+			await selected.settle({
+				commandId: pending.command.commandId,
+				attemptId: "attempt-drift",
+				attemptOwner: "worker",
+				status: "completed",
+				authorizationUrl: url.toString(),
+				authorizationExpiresAt: Date.now() + 60000,
+			}),
+		).toBe(true);
+		const driftProducer = createConnectionInstallationAuthorizationV1({
+			store: drifted,
+		});
+		const current = await selected.transaction((tx) =>
+			tx.current("alice", "execution-a"),
+		);
+		if (!current) throw Error("missing original execution");
+		expect(
+			await driftProducer.callback.claim({
+				stateHash: createHash("sha256").update("a".repeat(64)).digest("hex"),
+				now: Date.now(),
+			}),
+		).toBeNull();
+		expect(
+			await driftProducer.authorize(
+				{
+					authorizationId: started.authorizationId,
+					command: "status",
+					principal: { kind: "user", id: "alice" },
+					reference: {
+						agentId: "agent-a",
+						conversationId: "conversation-a",
+						executionId: "execution-a",
+						sessionGeneration: 1,
+					},
+					scope: current.scope,
+				},
+				new AbortController().signal,
+				async () => {},
+			),
+		).toBeNull();
+	} finally {
+		await selected.close();
+		await drifted.close();
+	}
+});
+
+it.each(["shared", "per-Agent"])(
+	"rejects mixed %s and per-user configuration sources",
+	(mode) => {
+		const alice = userConfiguration("alice");
+		expect(
+			() =>
+				new PostgresConnectionInstallationAuthorizationTransactionV1({
+					databaseUrl: database.databaseUrl,
+					directory: { resolveUser: async () => null },
+					bindingsByAgentAndPrincipal: {
+						"agent-a": { alice: { profile, approval, configuration: alice } },
+					},
+					...(mode === "shared"
+						? { configuration, profile, approval }
+						: {
+								bindingsByAgent: {
+									"agent-a": { configuration, profile, approval },
+								},
+							}),
+				}),
+		).toThrow();
 	},
 );

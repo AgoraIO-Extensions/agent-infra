@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
@@ -406,7 +407,7 @@ export const createWorkloadReadinessLedgerV1 = () => ({});`,
 		join(directory, "conversation-deployment.js"),
 		`
 export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; return async () => 'original-control'; };
-export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls.push('sandbox'); return async () => ({ status: 'observed', resources: [] }); };
+export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
 	await writeFile(
@@ -463,6 +464,12 @@ try {
    console.log(JSON.stringify(globalThis.fileExchange));
    process.exit(0);
  }
+	if (process.env.RUN_OAUTH_PROVISIONING === 'true') {
+   const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+   console.log(JSON.stringify({ provisioning: globalThis.oauthProvisioning ?? null, calls: globalThis.calls }));
+   await conversation.closeDeployment?.();
+   process.exit(0);
+ }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
 	if (process.env.RUN_INSTALLATION_APPROVAL) {
 	 const mode = process.env.RUN_INSTALLATION_APPROVAL;
@@ -504,6 +511,10 @@ try {
 	 process.exit(0);
 	}
  if (process.env.RUN_CLOSE_INSTALLATION === "true") await conversation.closeDeployment?.();
+ if (process.env.RUN_PRINCIPAL_INSTALLATION_MAP === "true") {
+   console.log(JSON.stringify({hasCommandStore:!!conversation.connectionInstallation?.commandStore,configurations:conversation.connectionInstallation?.configurationsByAgentAndPrincipal ?? null,workloadReady:!!workload,shared:conversation.connectionInstallation?.configuration ?? null}));
+   process.exit(0);
+ }
  if (process.env.RUN_INSTALLATION_MAP === "true") {
    console.log(JSON.stringify({hasCommandStore:!!conversation.connectionInstallation?.commandStore,configurations:conversation.connectionInstallation?.configurationsByAgent ?? null,workloadReady:!!workload,shared:conversation.connectionInstallation?.configuration ?? null}));
    process.exit(0);
@@ -1154,6 +1165,55 @@ export const connectionInstallation = {
 connectionInstallation.authorize = undefined;
 `;
 
+it("passes only the trusted configuration-module Session OAuth provisioning bundle to the receiver", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const bundle = JSON.stringify({
+		schemaVersion: 1,
+		agentId: "agent-a",
+		sessionId: "session-a",
+		sandboxId: "sandbox-a",
+		sessionGeneration: 1,
+		principal: { kind: "user", id: "alice" },
+		configuration: {
+			schemaVersion: 1,
+			ref: "oauth",
+			revision: "r1",
+			clientId: "client-a",
+			issuer: "https://connection.example.test/",
+			authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+			tokenEndpoint: "https://connection.example.test/oauth/token",
+			revocationEndpoint: "https://connection.example.test/oauth/revoke",
+			callbackUrl: "https://platform.example.test/callback",
+			runtimeOrigin: "https://sandbox-a.worker-binding.svc:3443/",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp",
+			configFingerprint: "a".repeat(64),
+			source: { ref: "approved", revision: "r1" },
+		},
+		tlsSecretRef: { name: "tls", certKey: "tls.crt", keyKey: "tls.key" },
+		callbackAuthSecretRef: { name: "callback", key: "callback.auth" },
+		apiSelector: { component: "platform-api" },
+	});
+	await writeFile(
+		path,
+		`${original}\nexport const connectionOAuthProvisioning = ${bundle};`,
+	);
+	try {
+		const result = run({ RUN_OAUTH_PROVISIONING: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		const value = JSON.parse(result.stdout);
+		expect(value.provisioning).toMatchObject({
+			agentId: "agent-a",
+			sessionId: "session-a",
+			principal: { id: "alice" },
+			configuration: { clientId: "client-a" },
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
 it.each([
 	["legacy OAuth", false, true, false],
 	["approved OAuth", true, true, true],
@@ -1675,3 +1735,82 @@ it("accepts explicit disabled policy for draining but rejects a different namesp
 		await writeFile(path, original);
 	}
 });
+
+it.each([
+	"valid",
+	"bad configuration",
+	"shared fallback",
+	"per-Agent fallback",
+	"missing profiles",
+])(
+	"assembles the explicit user installation index only for %s",
+	async (mode) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const configFor = (userId: string) => {
+			const c = {
+				schemaVersion: 1 as const,
+				ref: `oauth-${userId}`,
+				revision: "pending",
+				clientId: `client-${userId}`,
+				callbackUrl: "https://platform.example.test/connection/callback",
+				issuer: "https://connection.example.test/",
+				authorizationEndpoint:
+					"https://connection.example.test/oauth/authorize",
+				tokenEndpoint: "https://connection.example.test/oauth/token",
+				revocationEndpoint: "https://connection.example.test/oauth/revoke",
+				resource: "https://connection.example.test/mcp/v1",
+				scope: "mcp" as const,
+				configFingerprint: connectionConsumerApproval.configFingerprint,
+				source: connectionConsumerApproval.source,
+				runtimeOrigin: "https://runtime.example.test:3443/",
+			};
+			return { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) };
+		};
+		const alice = configFor("alice");
+		const bob = configFor("bob");
+		const configurationsByAgentAndPrincipal = { "agent-a": { alice, bob } };
+		const principalBindingsByAgentAndPrincipal = {
+			"agent-a": Object.fromEntries(
+				Object.entries({ alice, bob }).map(([userId, c]) => [
+					userId,
+					{
+						issuer: c.issuer,
+						configuration: { ref: c.ref, revision: c.revision },
+						connectionPrincipalId: `connection-${userId}`,
+					},
+				]),
+			),
+		};
+		const installation = {
+			configurationsByAgentAndPrincipal,
+			principalBindingsByAgentAndPrincipal,
+			...(mode === "shared fallback" ? { configuration: alice } : {}),
+			...(mode === "per-Agent fallback"
+				? { configurationsByAgent: { "agent-a": alice } }
+				: {}),
+		};
+		if (mode === "bad configuration")
+			bob.clientId = "replaced-without-revision";
+		try {
+			await writeFile(
+				path,
+				`${original}\n${mode === "missing profiles" ? "" : `export const connectionConsumerProfilesByAgent=${JSON.stringify({ "agent-a": { profile: connectionConsumerProfile, approval: connectionConsumerApproval } })};`}\n${mode === "missing profiles" ? "" : 'export const connectionInstallationSuppliesByAgent={"agent-a":{ref:"supply-a",revision:"r1"}};'}\nexport const connectionInstallation=${JSON.stringify(installation)};\n`,
+			);
+			const result = run({
+				RUN_CLOSE_INSTALLATION: "true",
+				RUN_PRINCIPAL_INSTALLATION_MAP: "true",
+			});
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({
+				hasCommandStore: mode === "valid",
+				configurations:
+					mode === "valid" ? configurationsByAgentAndPrincipal : null,
+				workloadReady: true,
+				shared: null,
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);

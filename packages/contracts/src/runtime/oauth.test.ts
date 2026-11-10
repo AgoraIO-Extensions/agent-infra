@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { RuntimeOAuthConfigurationV1Schema } from "./oauth.js";
+import {
+	parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1,
+	runtimeOAuthConfigurationRevisionV1,
+} from "./oauth-installation-node.js";
 
 const base = {
 	schemaVersion: 1 as const,
@@ -52,6 +56,140 @@ describe("Runtime OAuth configuration", () => {
 				registrationEndpoint: "https://connection.example.test/oauth/register",
 				callbackUrl: "http://runtime.example.test/callback",
 			}),
+		).toThrow();
+	});
+});
+
+const principalConfiguration = (id: string) => {
+	const c = { ...base, ref: `oauth-${id}`, clientId: `client-${id}` };
+	return { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) };
+};
+describe("pre-registered OAuth configurations by Agent and user", () => {
+	it("captures independent clients and content revisions without depending on property order", () => {
+		const alice = principalConfiguration("alice");
+		const bob = principalConfiguration("bob");
+		const input = { agent: { alice, bob } };
+		const parsed = parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1(input);
+		input.agent.alice.clientId = "mutated";
+		expect(parsed.agent?.alice?.clientId).toBe("client-alice");
+		expect(
+			runtimeOAuthConfigurationRevisionV1({ ...bob, revision: "ignored" }),
+		).toBe(bob.revision);
+		expect(
+			runtimeOAuthConfigurationRevisionV1(
+				Object.fromEntries(Object.entries(bob).reverse()) as typeof bob,
+			),
+		).toBe(bob.revision);
+	});
+	it.each([
+		[
+			"stale content revision",
+			() => ({
+				agent: {
+					alice: { ...principalConfiguration("alice"), clientId: "different" },
+				},
+			}),
+		],
+		[
+			"shared client across users",
+			() => ({
+				agent: {
+					alice: principalConfiguration("alice"),
+					bob: principalConfiguration("alice"),
+				},
+			}),
+		],
+		[
+			"shared client across Agents",
+			() => ({
+				a: { alice: principalConfiguration("alice") },
+				b: { alice: principalConfiguration("alice") },
+			}),
+		],
+		[
+			"PAT",
+			() => {
+				const c = {
+					...principalConfiguration("alice"),
+					patBinding: {
+						consumerId: "c",
+						bindingEndpoint:
+							"https://connection.example.test/api/v1/connection/pat-bindings",
+					},
+				};
+				return {
+					agent: {
+						alice: { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) },
+					},
+				};
+			},
+		],
+		[
+			"DCR",
+			() => {
+				const c = {
+					...principalConfiguration("alice"),
+					clientId: "dcr" as const,
+					clientRegistration: "dcr" as const,
+					registrationEndpoint:
+						"https://connection.example.test/oauth/register",
+				};
+				return {
+					agent: {
+						alice: { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) },
+					},
+				};
+			},
+		],
+		[
+			"HTTP callback",
+			() => {
+				const c = {
+					...principalConfiguration("alice"),
+					callbackUrl: "http://127.0.0.1:3443/callback",
+				};
+				return {
+					agent: {
+						alice: { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) },
+					},
+				};
+			},
+		],
+		[
+			"mixed callback",
+			() => {
+				const c = {
+					...principalConfiguration("bob"),
+					callbackUrl: "https://platform.example.test/other",
+				};
+				return {
+					agent: {
+						alice: principalConfiguration("alice"),
+						bob: { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) },
+					},
+				};
+			},
+		],
+		[
+			"unknown configuration field",
+			() => ({
+				agent: {
+					alice: {
+						...principalConfiguration("alice"),
+						token: "never-accepted",
+					},
+				},
+			}),
+		],
+		[
+			"invalid user key",
+			() => ({ agent: { "": principalConfiguration("alice") } }),
+		],
+		["array", () => []],
+		["null user map", () => ({ agent: null })],
+	] as const)("rejects the whole explicit index for %s", (_label, make) => {
+		expect(() =>
+			parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1(make()),
 		).toThrow();
 	});
 });

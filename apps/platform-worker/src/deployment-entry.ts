@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,
@@ -115,6 +116,8 @@ type DeploymentConfiguration = {
 			>
 		>
 	>;
+	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
+	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
 	readonly connectionInstallationSupply?: unknown;
 	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
@@ -124,6 +127,10 @@ type DeploymentConfiguration = {
 		readonly configurationsByAgent?: NonNullable<
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["configurationsByAgent"];
+		readonly configurationsByAgentAndPrincipal?: NonNullable<
+			ConversationRuntimeOptionsV2["connectionInstallation"]
+		>["configurationsByAgentAndPrincipal"];
+		readonly principalBindingsByAgentAndPrincipal?: unknown;
 		readonly authorize?: NonNullable<
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["authorize"];
@@ -172,59 +179,82 @@ function resolveConnectionInstallation(
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	if (
 		candidate.authorize !== undefined &&
-		candidate.principalBindingsByAgent !== undefined
+		(candidate.principalBindingsByAgent !== undefined ||
+			candidate.principalBindingsByAgentAndPrincipal !== undefined)
 	)
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
-	if (Object.hasOwn(candidate, "configurationsByAgent")) {
+	if (
+		Object.hasOwn(candidate, "configurationsByAgent") ||
+		Object.hasOwn(candidate, "configurationsByAgentAndPrincipal")
+	) {
+		const perPrincipal = Object.hasOwn(
+			candidate,
+			"configurationsByAgentAndPrincipal",
+		);
+		const configurationKey = perPrincipal
+			? "configurationsByAgentAndPrincipal"
+			: "configurationsByAgent";
+		const principalKey = perPrincipal
+			? "principalBindingsByAgentAndPrincipal"
+			: "principalBindingsByAgent";
 		if (
 			Object.keys(candidate).some(
 				(key) =>
 					![
-						"configurationsByAgent",
+						configurationKey,
 						"authorize",
-						"principalBindingsByAgent",
+						principalKey,
 						"publishOAuth",
 					].includes(key),
 			) ||
 			(candidate.authorize !== undefined &&
-				typeof candidate.authorize !== "function") ||
+				typeof candidate.authorize !== "function")
+		)
+			throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+		if (perPrincipal) {
+			const configurationsByAgentAndPrincipal =
+				parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1(
+					candidate.configurationsByAgentAndPrincipal,
+				);
+			return {
+				publishOAuth: candidate.publishOAuth === true,
+				configurationsByAgentAndPrincipal,
+				authorize: candidate.authorize as NonNullable<
+					ConversationRuntimeOptionsV2["connectionInstallation"]
+				>["authorize"],
+				bindPrincipal: createConnectionInstallationPrincipalBindingsV1({
+					configurationsByAgentAndPrincipal,
+					principalBindingsByAgentAndPrincipal:
+						candidate.principalBindingsByAgentAndPrincipal,
+				}),
+			};
+		}
+		if (
 			!candidate.configurationsByAgent ||
 			typeof candidate.configurationsByAgent !== "object" ||
 			Array.isArray(candidate.configurationsByAgent)
 		)
-			return undefined;
-		const configurationsByAgent: Record<
-			string,
-			NonNullable<
-				DeploymentConfiguration["connectionInstallation"]
-			>["configuration"]
-		> = {};
-		for (const [agentId, configuration] of Object.entries(
-			candidate.configurationsByAgent,
-		)) {
-			if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
-				throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
-			const parsed = RuntimeOAuthConfigurationV1Schema.safeParse(configuration);
-			if (!parsed.success)
-				throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
-			Object.defineProperty(configurationsByAgent, agentId, {
-				value: parsed.data,
-				enumerable: true,
-			});
-		}
+			throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+		const configurationsByAgent = Object.fromEntries(
+			Object.entries(candidate.configurationsByAgent).map(
+				([agentId, configuration]) => {
+					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+						throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+					return [
+						agentId,
+						RuntimeOAuthConfigurationV1Schema.parse(configuration),
+					];
+				},
+			),
+		);
 		return {
 			publishOAuth: candidate.publishOAuth === true,
-			configurationsByAgent: configurationsByAgent as NonNullable<
-				DeploymentConfiguration["connectionInstallation"]
-			>["configurationsByAgent"],
+			configurationsByAgent,
 			authorize: candidate.authorize as NonNullable<
-				DeploymentConfiguration["connectionInstallation"]
+				ConversationRuntimeOptionsV2["connectionInstallation"]
 			>["authorize"],
 			bindPrincipal: createConnectionInstallationPrincipalBindingsV1({
-				configurationsByAgent: configurationsByAgent as Record<
-					string,
-					import("@agent-infra/contracts/runtime").RuntimeOAuthConfigurationV1
-				>,
+				configurationsByAgent,
 				principalBindingsByAgent: candidate.principalBindingsByAgent,
 			}),
 		};
@@ -282,6 +312,7 @@ const {
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
+	connectionOAuthProvisioning: configuredConnectionOAuthProvisioning,
 	createSkillMaterializer,
 	skillMaterialization,
 	nativeMetadataGateway: configuredNativeMetadataGateway,
@@ -625,20 +656,31 @@ async function createPrepared(signal: AbortSignal) {
 				]),
 			)
 		: undefined;
-	const connectionInstallationOAuthPublicationsByAgent =
+	const publicationConfigurations =
 		connectionInstallation?.configurationsByAgent !== undefined
-			? Object.fromEntries(
-					Object.entries(connectionInstallation.configurationsByAgent).map(
-						([agentId, configuration]) => [
-							agentId,
-							connectionInstallation.publishOAuth === true &&
-								configuration.patBinding === undefined &&
-								typeof resolvedInstallationRevisionsByAgent?.[agentId] ===
-									"string",
-						],
-					),
+			? Object.entries(connectionInstallation.configurationsByAgent).map(
+					([agentId, configuration]) => [agentId, [configuration]] as const,
 				)
-			: undefined;
+			: connectionInstallation?.configurationsByAgentAndPrincipal !== undefined
+				? Object.entries(
+						connectionInstallation.configurationsByAgentAndPrincipal,
+					).map(([agentId, users]) => [agentId, Object.values(users)] as const)
+				: undefined;
+	const connectionInstallationOAuthPublicationsByAgent =
+		publicationConfigurations === undefined
+			? undefined
+			: Object.fromEntries(
+					publicationConfigurations.map(([agentId, configurations]) => [
+						agentId,
+						connectionInstallation?.publishOAuth === true &&
+							configurations.length > 0 &&
+							configurations.every(
+								(configuration) => configuration.patBinding === undefined,
+							) &&
+							typeof resolvedInstallationRevisionsByAgent?.[agentId] ===
+								"string",
+					]),
+				);
 	const connectionInstallationOAuthPublication =
 		connectionInstallation?.publishOAuth === true &&
 		connectionInstallation.configuration !== undefined &&
@@ -773,48 +815,67 @@ async function createPrepared(signal: AbortSignal) {
 		| import("@agent-infra/platform-store").PostgresConnectionInstallationAuthorizationTransactionV1
 		| undefined;
 	let authorizedInstallation: ConversationRuntimeOptionsV2["connectionInstallation"];
+	const perAgentInstallation =
+		connectionInstallation?.configurationsByAgent !== undefined ||
+		connectionInstallation?.configurationsByAgentAndPrincipal !== undefined;
 	if (
 		connectionInstallation &&
-		(connectionInstallation.configurationsByAgent === undefined ||
-			resolvedProfilesByAgent !== undefined)
+		(!perAgentInstallation || resolvedProfilesByAgent !== undefined)
 	) {
 		let authorize = connectionInstallation.authorize;
-		if (
-			connectionConsumer ||
-			connectionInstallation.configurationsByAgent !== undefined
-		) {
+		if (connectionConsumer || perAgentInstallation) {
 			const { PostgresConnectionInstallationAuthorizationTransactionV1 } =
 				await import("@agent-infra/platform-store");
+			const bindingFor = (
+				agentId: string,
+				configuration: import("@agent-infra/contracts/runtime").RuntimeOAuthConfigurationV1,
+			) => ({
+				configuration,
+				profile: resolvedProfilesByAgent?.[agentId]?.profile,
+				approval: resolvedProfilesByAgent?.[agentId]?.approval,
+			});
 			try {
 				installationStore =
 					new PostgresConnectionInstallationAuthorizationTransactionV1({
 						databaseUrl: workload.databaseUrl,
 						directory,
-						...(connectionInstallation.configurationsByAgent !== undefined
+						...(connectionInstallation.configurationsByAgentAndPrincipal !==
+						undefined
 							? {
-									bindingsByAgent: Object.fromEntries(
+									bindingsByAgentAndPrincipal: Object.fromEntries(
 										Object.entries(
-											connectionInstallation.configurationsByAgent,
-										).map(([agentId, configuration]) => [
+											connectionInstallation.configurationsByAgentAndPrincipal,
+										).map(([agentId, users]) => [
 											agentId,
-											{
-												configuration,
-												profile: resolvedProfilesByAgent?.[agentId]?.profile,
-												approval: resolvedProfilesByAgent?.[agentId]?.approval,
-											},
+											Object.fromEntries(
+												Object.entries(users).map(([userId, configuration]) => [
+													userId,
+													bindingFor(agentId, configuration),
+												]),
+											),
 										]),
 									),
 								}
-							: {
-									configuration: connectionInstallation.configuration,
-									profile: connectionConsumer?.profile,
-									approval: connectionConsumer?.approval,
-								}),
+							: connectionInstallation.configurationsByAgent !== undefined
+								? {
+										bindingsByAgent: Object.fromEntries(
+											Object.entries(
+												connectionInstallation.configurationsByAgent,
+											).map(([agentId, configuration]) => [
+												agentId,
+												bindingFor(agentId, configuration),
+											]),
+										),
+									}
+								: {
+										configuration: connectionInstallation.configuration,
+										profile: connectionConsumer?.profile,
+										approval: connectionConsumer?.approval,
+									}),
 					});
 			} catch {
 				installationStore = undefined;
-				if (connectionInstallation.configurationsByAgent !== undefined)
-					authorize = undefined;
+				if (perAgentInstallation) authorize = undefined;
 			}
 			if (!authorize && installationStore) {
 				const { createConnectionInstallationAuthorizationV1 } = await import(
@@ -831,6 +892,8 @@ async function createPrepared(signal: AbortSignal) {
 		authorizedInstallation = {
 			configuration: connectionInstallation.configuration,
 			configurationsByAgent: connectionInstallation.configurationsByAgent,
+			configurationsByAgentAndPrincipal:
+				connectionInstallation.configurationsByAgentAndPrincipal,
 			authorize: authorize ?? (async () => null),
 			...(installationStore ? { commandStore: installationStore } : {}),
 		};
@@ -884,7 +947,10 @@ async function createPrepared(signal: AbortSignal) {
 						...workload,
 						workerId: signing.workerId,
 					},
-					{ serviceToken },
+					{
+						serviceToken,
+						oauthProvisioning: configuredConnectionOAuthProvisioning,
+					},
 				),
 			resolveRuntimeHost: async (
 				request: Parameters<typeof resolveRuntimeHost>[0],

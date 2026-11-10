@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
@@ -2186,7 +2187,9 @@ function installationHarness(
 		configuration: RuntimeOAuthConfigurationV1,
 	) => Pick<
 		NonNullable<ConversationRuntimeOptionsV2["connectionInstallation"]>,
-		"configuration" | "configurationsByAgent"
+		| "configuration"
+		| "configurationsByAgent"
+		| "configurationsByAgentAndPrincipal"
 	> = (configuration) => ({ configuration }),
 	agentId = "agent",
 ) {
@@ -2990,6 +2993,131 @@ it.each(["agent-a", "agent-b"])(
 		}
 	},
 );
+
+it.each(["alice", "bob"])(
+	"selects only the verified %s client for the same Agent",
+	async (userId) => {
+		let selected: RuntimeOAuthConfigurationV1 | undefined;
+		const h = installationHarness(
+			"https://runtime.test:3443/",
+			false,
+			(base) => {
+				const configFor = (id: string) => {
+					const c = { ...base, ref: `oauth-${id}`, clientId: `client-${id}` };
+					return { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) };
+				};
+				const configurations = {
+					alice: configFor("alice"),
+					bob: configFor("bob"),
+				};
+				selected = configurations[userId as "alice" | "bob"];
+				return { configurationsByAgentAndPrincipal: { agent: configurations } };
+			},
+		);
+		try {
+			if (!selected) throw Error("missing configuration");
+			Object.assign(h.claim, { actorId: userId });
+			const record = h.record();
+			if (!record) throw Error("missing authorization");
+			Object.assign(record.boundary, {
+				principal: { kind: "user", id: userId },
+			});
+			h.setUser({
+				schemaVersion: 1,
+				userId,
+				accountStatus: "active",
+				organizationIds: ["team"],
+				authorizationRevision: "identity-8",
+			});
+			if (!h.state.sandboxResource) throw Error("missing Sandbox");
+			Object.assign(h.state.sandboxResource.sandbox, {
+				principal: { kind: "user", id: userId },
+			});
+			const url = new URL("https://connection.test/oauth/authorize");
+			url.search = new URLSearchParams({
+				response_type: "code",
+				client_id: selected.clientId,
+				redirect_uri: selected.callbackUrl,
+				resource: selected.resource,
+				scope: "mcp",
+				code_challenge_method: "S256",
+				state: "a".repeat(64),
+				code_challenge: "a".repeat(43),
+			}).toString();
+			h.fetcher.mockResolvedValue(
+				Response.json({
+					schemaVersion: 1,
+					authorizationId: "authorization-a",
+					phase: "awaiting_callback",
+					expiresAt: now + 600000,
+					authorizationUrl: url.toString(),
+				}),
+			);
+			const runtimeGrant = await h.authorize();
+			await h.runtime.connectionInstallation.request({
+				execution: h.events(runtimeGrant),
+				authorizationId: "authorization-a",
+				command: "begin",
+			});
+			const scope = { ref: selected.ref, revision: selected.revision };
+			expect(h.installationAuthorize).toHaveBeenCalledWith(
+				expect.objectContaining({
+					principal: { kind: "user", id: userId },
+					scope: expect.objectContaining({ oauthConfiguration: scope }),
+				}),
+				expect.any(AbortSignal),
+				expect.any(Function),
+			);
+			const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+			expect(body.oauthConfiguration).toEqual(scope);
+			const claims = JSON.parse(
+				Buffer.from(body.grant.token.split(".")[1], "base64url").toString(),
+			);
+			expect(claims.principal).toEqual({ kind: "user", id: userId });
+			expect(claims.oauthConfiguration).toEqual(scope);
+		} finally {
+			await h.runtime.close();
+		}
+	},
+);
+
+it.each([
+	"missing user",
+	"missing Agent",
+	"shared fallback",
+	"per-Agent fallback",
+	"stale client",
+])("refuses a per-user installation for %s", async (mode) => {
+	const h = installationHarness("https://runtime.test:3443/", false, (base) => {
+		const c = { ...base, revision: runtimeOAuthConfigurationRevisionV1(base) };
+		return {
+			...(mode === "shared fallback" ? { configuration: base } : {}),
+			...(mode === "per-Agent fallback"
+				? { configurationsByAgent: { agent: base } }
+				: {}),
+			configurationsByAgentAndPrincipal: {
+				[mode === "missing Agent" ? "other" : "agent"]: {
+					[mode === "missing user" ? "other" : "user"]:
+						mode === "stale client" ? { ...c, clientId: "replaced" } : c,
+				},
+			},
+		};
+	});
+	try {
+		const runtimeGrant = await h.authorize();
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(runtimeGrant),
+				authorizationId: "authorization-a",
+				command: "begin",
+			}),
+		).rejects.toMatchObject({ code: "CONNECTION_INSTALLATION_UNAVAILABLE" });
+		expect(h.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await h.runtime.close();
+	}
+});
+
 it("rejects missing per-Agent configuration instead of using another Agent or a shared configuration", async () => {
 	for (const mixed of [false, true]) {
 		const h = installationHarness("https://runtime.test:3443/", false, (c) => ({

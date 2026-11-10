@@ -53,6 +53,7 @@ import {
 	isNativeMetadataWorkerOriginV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
+	type SessionSandboxOAuthProvisioningV1,
 	type SessionSandboxResourceInputV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxContainerBoundaryAttestationSecretKey,
@@ -587,7 +588,10 @@ function sessionSandboxEgressPolicyV1(
 /** Shared immutable resource inputs for real Sessions and unclaimed reserves. */
 export function createSessionSandboxResourceInputResolverV1(
 	workload: Pick<WorkloadRuntimeOptionsV1, "policy" | "templateModelBindings">,
-	options: { readonly serviceToken: string },
+	options: {
+		readonly serviceToken: string;
+		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	},
 ) {
 	const egressPolicy = structuredClone(workload.policy);
 	if (workload.policy.codexSessionExecutor !== undefined)
@@ -1056,8 +1060,15 @@ async function sessionOwnerSecretMaterializationV1(
 
 function createSessionSandboxAllocationResolverV1(
 	workload: WorkloadRuntimeOptionsV1,
-	options: { readonly serviceToken: string },
+	options: {
+		readonly serviceToken: string;
+		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	},
 ) {
+	const provisioning =
+		options.oauthProvisioning === undefined
+			? undefined
+			: structuredClone(options.oauthProvisioning);
 	const resourceFor = createSessionSandboxResourceInputResolverV1(
 		workload,
 		options,
@@ -1158,7 +1169,29 @@ function createSessionSandboxAllocationResolverV1(
 			};
 		}
 
+		let selectedProvisioning: SessionSandboxOAuthProvisioningV1 | undefined;
+		try {
+			if (
+				provisioning &&
+				desiredState === "running" &&
+				binding.agentId === provisioning.agentId &&
+				binding.sessionId === provisioning.sessionId &&
+				binding.sandboxId === provisioning.sandboxId &&
+				binding.generation === provisioning.sessionGeneration &&
+				binding.principal.kind === "user" &&
+				provisioning.principal.kind === "user" &&
+				binding.principal.id === provisioning.principal.id &&
+				new URL(provisioning.configuration.runtimeOrigin).hostname ===
+					`${binding.resourceName}.${policy.namespace}.svc`
+			)
+				selectedProvisioning = provisioning;
+		} catch {
+			// Invalid trusted delivery leaves this Session's ordinary work available.
+		}
 		const allocation: SessionSandboxAllocationV1 = {
+			...(selectedProvisioning
+				? { oauthProvisioning: structuredClone(selectedProvisioning) }
+				: {}),
 			...(snapshotProjection
 				? { workspaceSnapshotProjection: snapshotProjection }
 				: {}),
@@ -1203,7 +1236,10 @@ function retainedResources(receipt: SessionSandboxStopReceiptV1) {
 /** Production resource receiver; invoked only under the original Store lease. */
 export function createProductionSessionSandboxReceiverV1(
 	workload: WorkloadRuntimeOptionsV1,
-	options: { readonly serviceToken: string },
+	options: {
+		readonly serviceToken: string;
+		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	},
 ) {
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,

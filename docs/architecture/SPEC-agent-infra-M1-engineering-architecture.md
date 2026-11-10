@@ -2324,6 +2324,22 @@ PKCE（S256）；既有获准 PAT/export 路线继续遵循 §13.5.3/§13.5.5，
 创建时的 Consumer 登记与定向 OAuth 安装准备另见 §13.5.7；登记命令不复用本节的业务执行
 安装命令，也不要求先取得用户 Token。
 
+**实际安装绑定回读。** 对已预注册的 HTTPS public client，部署可显式选择 Connection
+[EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
+部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
+完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 不取得。
+Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的精确 HTTPS 路径回读，
+不用 Cookie、不跟随重定向、不隐式重试；UNKNOWN、未绑定、错 client/instance/Consumer、
+资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
+注册元数据或 Owner 不替代用户实际 OAuth 确认。
+
+核实成功后只兑换一次原 code，并以该响应的实际 expiry、原授权/scope/reference、已核实实例
+及部署批准的同版本 MCP 合同生成既有私有 publication 回执。credentialRef/revision 是 Host
+本次材料的不可变引用，不冒充 Connection token ID、Grant 或权限修订。沿用原发布锁、事务提交、
+reader 核对及受保护 export；失败或未知不重兑 code，不自动回退到静态回执或 PAT。未选择此 READ
+供应时保留既有外部批准回执路径；两条供应不能同时覆盖同一安装。回读成功、发布或 token 可用
+都不代签 MCP/Provider、最终镜像隔离或双主体验收。
+
 **批准与入口。** 部署固定获准 Connection issuer、authorization/token/revocation endpoint、
 resource、scope 和合同修订；这些输入与完整 profile/source 一起校验，不能由请求或 OAuth
 discovery 动态扩大目标。部署若选择标准 OAuth Dynamic Client Registration（DCR），还必须把
@@ -2339,7 +2355,13 @@ Consumer profile、approval 和 `RuntimeOAuthConfigurationV1`；复用现有 sch
 source 校验，不创建另一种身份或凭据权威。API、Worker 与安装 Store 捕获同一批准修订。
 显式配置逐 Agent 绑定时，该映射是安装能力的唯一来源：缺少 Agent、条目无效、profile 与
 OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配置、Owner 或其他 Agent。
-原单份配置部署继续使用原路径；两种安装配置来源同时提供时拒绝安装能力装配。
+原单份配置部署继续使用原路径。预注册 HTTPS OAuth client 可另按原用户＋Agent 提供
+`bindingsByAgentAndPrincipal`（API/Store）与 `configurationsByAgentAndPrincipal`（Worker）
+的受信两层索引；键只能由服务端已认证用户和原 Execution 的 Agent 解析。三种配置来源
+互斥；显式用户索引缺项或非法时拒绝安装，不回退逐 Agent、共享、Owner 或其他用户。
+用户索引只接受非 PAT、非 DCR 的预注册 client，每个安装的 issuer＋clientId 必须独立。
+每项 revision 必须等于已 strict 解析的完整配置去除 revision 后，以固定字段顺序序列化的
+UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/revision 替换 client。
 安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
 
 API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择绑定。confirm、status、
@@ -2351,7 +2373,11 @@ profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker �
 一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
 callback 格式（标准 OAuth 或既有 PAT binding）；逐 Agent 配置必须与该入口一致，拒绝混用。
 回调中的 state/binding ID 只定位原持久记录，不能选择 Agent、Runtime 地址或凭据。
-Store 从原记录的 Agent 重新选择当前绑定；跨 Agent、配置漂移、过期或来源缺失均拒绝转交。
+Store 从原记录的 principal＋Agent 重新选择当前绑定；用户索引的 ref/revision 固定到现有
+授权 scope，callback、命令回读及最终发送均复核同一配置。跨用户/Agent、配置漂移、过期
+或来源缺失均拒绝转交。用户索引下的部署主体映射使用
+`principalBindingsByAgentAndPrincipal[agentId][userId]`，每项固定 issuer、配置 ref/revision
+和 Connection principalId；它与旧主体映射互斥，不能把计划用户映射当实际 OAuth 绑定证明。
 既有一次性领取、callback-only 服务认证和 unknown 不重放规则保持不变。
 
 上述安装选择不创建 Consumer、不执行管理员注册，也不表示外部授权已成立。API/Worker
@@ -2528,6 +2554,29 @@ refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确
 发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。初版仍采用受控
 重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
 热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
+
+**Session Host 启动供应。** `createProductionSessionSandboxReceiverV1` 可选择部署批准的
+`oauthProvisioning`，第一版限定一个原用户与 Agent、预注册 HTTPS client 和已签发的精确
+Session 证书。该非秘密 bundle 固定原主体、Agent、完整 OAuth 配置、TLS/callback-only
+SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env、Store claim 或请求覆盖。
+`runtimeOrigin` 必须匹配原 Sandbox Service 的 `<service>.<namespace>.svc`，使用独立且不低于
+1024 的 HTTPS 端口；该版本不对静态配置插值，也不为证书或 Consumer 建立新签发服务。
+
+Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
+保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
+`0700`，文件为 `0600`，仅 Host 挂载既有拒绝树下的 `bootstrap` 与 `tls` 子目录；源 Secret
+只挂 initializer，native/executor 不挂上述私有卷。Host 启动时再核对 bundle 与原主体、Agent、
+Sandbox/generation、实际配置及证书。未认领 reserve 不接收此用户供应；原控制继续排除
+新增交付断言，保留资源归属和 UID 检查。
+
+源 Secret 引用为 optional，只表示缺少时不阻断普通 Session；不表示凭据或 TLS 可选。
+坏非秘密供应只关闭 OAuth 投射，initializer 材料或保护校验失败输出固定不可用结果后退出，
+不留下可用提交绑定；Host 继续拒绝不完整或错误的 OAuth 输入，普通模型及原控制保持。
+
+Service 为该 HTTPS listener 增加独立端口，NetworkPolicy 仅允许声明的 Worker/API selector
+访问；业务端口与出站规则保持原合同，callback-only 认证仍隔离 callback 和安装命令。
+本供应不创建实际 OAuth 绑定回执、Token 或 Grant；实际回执仍须按本节核实并单独供应。
+缺少实际回执继续 `awaiting_verification`，不得以 initializer 成功代签真实安装或外部验收。
 
 **失败、刷新与撤销。** 兑换或轮换响应丢失、崩溃及持久确认失败均保留该安装的不确定状态，
 不自动重发授权码、refresh 或业务调用；只按实际已发布的恢复合同核实，否则由原主体重新
