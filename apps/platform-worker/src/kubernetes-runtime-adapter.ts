@@ -38,6 +38,9 @@ import type { CodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
 	type RuntimeConnectionConsumerSnapshotsByAgentV1,
 	runtimeConnectionConsumerProjectionV1,
+	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationOAuthPublicationForAgentV1,
+	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
 import {
 	type WorkerKubernetesClientV1,
@@ -270,18 +273,40 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	);
 	const imageRepository =
 		templateBinding?.imageRepository ?? policy.imageRepository;
-	const connection = runtimeConnectionConsumerProjectionV1(
-		options.connectionConsumerControl
-			? undefined
-			: policy.connectionConsumerSnapshot,
-		options.connectionConsumerControl
-			? undefined
-			: policy.connectionInstallationRevision,
-		templateBinding,
-		options.connectionConsumerControl
-			? undefined
-			: policy.connectionInstallationOAuthPublication,
-	);
+	const connectionFor = (agentId?: string) =>
+		runtimeConnectionConsumerProjectionV1(
+			options.connectionConsumerControl
+				? undefined
+				: agentId === undefined
+					? policy.connectionConsumerSnapshot
+					: runtimeConnectionConsumerSnapshotForAgentV1(
+							policy.connectionConsumerSnapshot,
+							policy.connectionConsumerSnapshotsByAgent,
+							agentId,
+						),
+			options.connectionConsumerControl
+				? undefined
+				: agentId === undefined
+					? policy.connectionInstallationRevision
+					: runtimeConnectionInstallationRevisionForAgentV1(
+							policy.connectionInstallationRevision,
+							policy.connectionInstallationRevisionsByAgent,
+							agentId,
+						),
+			templateBinding,
+			options.connectionConsumerControl
+				? undefined
+				: agentId === undefined
+					? policy.connectionInstallationOAuthPublication
+					: runtimeConnectionInstallationOAuthPublicationForAgentV1(
+							policy.connectionInstallationOAuthPublication,
+							policy.connectionInstallationOAuthPublicationsByAgent,
+							agentId,
+						),
+		);
+	// Validate shared deployment inputs before any resource operation.
+	connectionFor();
+
 	if (
 		standardTemplateBinding !== undefined &&
 		(!modelProjection ||
@@ -1413,6 +1438,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			const connection = connectionFor(value.agentId);
 			const skillBinding = skillHubRuntimeBindingV1(value);
 			if (
 				skillBinding &&
@@ -1430,8 +1456,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				throw new WorkloadKubernetesError("policy");
 			if (
 				value.replicas !== 0 &&
-				(policy.connectionConsumerSnapshot === null ||
-					connectionInstallationRevision === null)
+				(runtimeConnectionConsumerSnapshotForAgentV1(
+					policy.connectionConsumerSnapshot,
+					policy.connectionConsumerSnapshotsByAgent,
+					value.agentId,
+				) === null ||
+					runtimeConnectionInstallationRevisionForAgentV1(
+						connectionInstallationRevision,
+						policy.connectionInstallationRevisionsByAgent,
+						value.agentId,
+					) === null)
 			)
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
@@ -1753,7 +1787,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					template: {
 						metadata: {
 							labels: podLabels,
-							...(policy.connectionConsumerSnapshot === undefined
+							...(Object.keys(connection.annotations).length === 0
 								? {}
 								: { annotations: connection.annotations }),
 						},
