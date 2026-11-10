@@ -10,6 +10,7 @@ import {
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerRevisionEnvironment,
 	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationOAuthPublicationForAgentV1,
 	runtimeConnectionInstallationRevisionEnvironment,
 	runtimeConnectionOAuthPublicationEnvironment,
 	runtimeConnectionPiMcpBridgeEnvironment,
@@ -302,6 +303,62 @@ describe("runtime Connection snapshot projection", () => {
 			).env,
 		).not.toContainEqual(publication);
 	});
+	it("observes the approved publication flag and rejects live StatefulSet flag drift", async () => {
+		const api = fakeKubernetesApi();
+		const desired = workloadDesiredFixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: api.client,
+			policy: {
+				...workloadTestPolicy,
+				connectionConsumerSnapshot: snapshot(),
+				connectionInstallationRevision: '["approved-supply","r1"]',
+				connectionInstallationOAuthPublication: true,
+			},
+			probe: async () => true,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw Error("Missing workload");
+		const workload = await api.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		const publication = workload?.spec?.template.spec?.containers[0]?.env?.find(
+			(x) => x.name === runtimeConnectionOAuthPublicationEnvironment,
+		);
+		expect(publication?.value).toBe("true");
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		if (!publication) throw Error("Missing publication flag");
+		publication.value = "false";
+		if (!workload) throw Error("Missing workload");
+		await api.client.replace(workload);
+		expect(await adapter.observe(desired, identity)).not.toBe("healthy");
+	});
+
+	it("requires a complete installation for explicit publication and does not inherit missing per-Agent approval", () => {
+		expect(() =>
+			runtimeConnectionConsumerProjectionV1(
+				snapshot(),
+				undefined,
+				undefined,
+				true,
+			),
+		).toThrow();
+		expect(
+			runtimeConnectionInstallationOAuthPublicationForAgentV1(
+				true,
+				{},
+				"other-agent",
+			),
+		).toBeUndefined();
+		expect(
+			runtimeConnectionInstallationOAuthPublicationForAgentV1(
+				true,
+				{ "agent-a": false },
+				"agent-a",
+			),
+		).toBe(false);
+	});
+
 	it("projects the protected Pi bridge only for the pinned Pi template", () => {
 		const revision = createRuntimeConnectionInstallationRevisionV1(
 			{ ref: "approved-installation", revision: "r1" },

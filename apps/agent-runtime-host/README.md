@@ -47,9 +47,9 @@ Host 启动时可消费部署批准的私有文件 export，随后使用已有�
 
 发布信任边界见
 [工程 Spec §13.5.6](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
-Worker 只会在同源标准 OAuth 配置和批准 installation supply 同时通过校验时投射
-`AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`；PAT binding、缺 supply 或
-部署模块自设该变量都不会开启该路径。Host 在收到这个受控标记时，
+Worker 在部署显式设置 `connectionInstallation.publishOAuth=true` 且同源标准 OAuth
+配置和批准 installation supply 都有效时，投射 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`。
+未选择该开关、PAT binding 或缺 supply 时保留既有路径。Host 收到这个受控标记后，
 复用已配置的 `AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION` 选择单次发布回执，
 路径固定为 `codex-driver.json.native/conversations/standard-mcp-oauth/publications/<exportKey>.json`。
 `exportKey` 使用上文同一 supply ref/revision 的算法，不从登录请求或 callback 选择来源。

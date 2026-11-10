@@ -191,6 +191,10 @@ export function runtimeConnectionConsumerProjectionV1(
 	volumeMounts: V1VolumeMount[];
 	volumes: V1Volume[];
 } {
+	if (oauthPublication !== undefined && typeof oauthPublication !== "boolean")
+		throw new WorkloadKubernetesError("policy");
+	if (oauthPublication === true && (!snapshot || installationRevision == null))
+		throw new WorkloadKubernetesError("policy");
 	if (installationRevision != null && !snapshot)
 		throw new WorkloadKubernetesError("policy");
 	if (snapshot === undefined || snapshot === null)

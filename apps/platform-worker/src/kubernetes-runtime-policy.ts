@@ -133,11 +133,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 						agentId,
 					),
 			templateBinding,
-			runtimeConnectionInstallationOAuthPublicationForAgentV1(
-				policy.connectionInstallationOAuthPublication,
-				policy.connectionInstallationOAuthPublicationsByAgent,
-				agentId,
-			),
+			dependencies.connectionConsumerControl
+				? undefined
+				: runtimeConnectionInstallationOAuthPublicationForAgentV1(
+						policy.connectionInstallationOAuthPublication,
+						policy.connectionInstallationOAuthPublicationsByAgent,
+						agentId,
+					),
 		);
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;

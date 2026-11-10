@@ -2498,7 +2498,11 @@ refresh Token/verifier 只保留在同一受保护客户端的专用材料中，
 安装/凭据引用区分本地事务引用与 Connection 已确认引用，不以本地随机 ID 冒充服务端实例。
 
 Host 的 `prepareRuntimeOAuth` 仅在部署显式选择 OAuth 发布时消费批准的非秘密安装发布
-回执文件；缺失实际回执或提交证明不能降级到旧 export 来源。该回执须绑定原
+回执文件。Worker 配置使用显式 `connectionInstallation.publishOAuth=true`，仅当相同
+Agent 的标准 OAuth 配置、完整 profile/approval 和安装 supply 均有效时，生成
+`AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`；未选择、PAT 或缺 supply 保留
+既有路径。逐 Agent 配置缺条目不回退共享批准，Owner/请求与内部 policy 不能覆盖生成值。
+缺失实际回执或提交证明不能降级到旧 export 来源。该回执须绑定原
 `authorizationId`、`confirmationRevision`、精确 OAuth client 与配置指纹、供应引用/修订，
 并显式包含 Connection 已确认实际绑定的 `connectionPrincipalId`、原平台主体，以及该
 client/实例对应的 §13.5.5 版本 1 metadata，并与原签名授权中的 Connection 主体一致。

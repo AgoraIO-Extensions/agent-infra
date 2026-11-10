@@ -394,7 +394,7 @@ export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApp
 		join(directory, "workload-deployment.js"),
 		`
 export const createWorkloadReadinessAuthorizationV1 = () => { globalThis.calls.push('readiness'); };
-export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.fileExchange = { origin: input.policy.runtimeAuth?.fileExchangeOrigin ?? null, egress: input.policy.fileExchangeEgress ?? null }; globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; globalThis.snapshots = input.policy.connectionConsumerSnapshotsByAgent; globalThis.installations = input.policy.connectionInstallationRevisionsByAgent; return input; };
+export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.fileExchange = { origin: input.policy.runtimeAuth?.fileExchangeOrigin ?? null, egress: input.policy.fileExchangeEgress ?? null }; globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; globalThis.snapshots = input.policy.connectionConsumerSnapshotsByAgent; globalThis.installations = input.policy.connectionInstallationRevisionsByAgent; globalThis.publication = input.policy.connectionInstallationOAuthPublication; globalThis.publications = input.policy.connectionInstallationOAuthPublicationsByAgent; return input; };
 `,
 	);
 	await writeFile(
@@ -449,6 +449,10 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_PUBLICATION === 'true') {
+   console.log(JSON.stringify({ publication:globalThis.publication ?? null, publications:globalThis.publications ?? null }));process.exit(0);
+ }
+
  if (process.env.RUN_EVALUATION === 'true') {
    const storage = await import(${JSON.stringify(new URL("../../../packages/object-storage/dist/index.mjs", import.meta.url).href)});
    storage.requireEvaluationObjectStorageV1(workload.evaluation.storage);
@@ -1149,6 +1153,72 @@ export const connectionInstallation = {
 };
 connectionInstallation.authorize = undefined;
 `;
+
+it.each([
+	["legacy OAuth", false, true, false],
+	["approved OAuth", true, true, true],
+	["OAuth without supply", true, false, false],
+	["PAT", true, true, false],
+] as const)(
+	"projects publication from explicit %s deployment approval",
+	async (route, publishOAuth, supply, expected) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		await writeFile(
+			path,
+			`${original}\n${approvedPatInstallationModule}\n${route === "PAT" ? "" : "delete connectionInstallation.configuration.patBinding;"}\n${publishOAuth ? "connectionInstallation.publishOAuth=true;" : ""}\n${supply ? 'export const connectionInstallationSupply={ref:"approved-publication",revision:"r1"};' : ""}\n`,
+		);
+		try {
+			const result = run({ RUN_PUBLICATION: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout).publication).toBe(expected);
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
+it("selects publication only for opted-in OAuth entries with valid per-Agent supplies", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const setup = `${original}\n${approvedPatInstallationModule}\nconst oauth={...connectionInstallation.configuration};delete oauth.patBinding;connectionInstallation.configuration=undefined;delete connectionInstallation.configuration;connectionInstallation.configurationsByAgent={"agent-a":oauth,"agent-b":{...oauth,patBinding:{consumerId:"platform-worker",bindingEndpoint:"https://connection.example.test/api/v1/connection/pat-bindings"}},"agent-c":oauth};connectionInstallation.publishOAuth=true;\nexport const connectionConsumerProfilesByAgent={"agent-a":{profile:connectionConsumerProfile,approval:connectionConsumerApproval},"agent-b":{profile:connectionConsumerProfile,approval:connectionConsumerApproval},"agent-c":{profile:connectionConsumerProfile,approval:connectionConsumerApproval}};\nexport const connectionInstallationSuppliesByAgent={"agent-a":{ref:"supply-a",revision:"r1"},"agent-b":{ref:"supply-b",revision:"r1"}};\n`;
+	await writeFile(path, setup);
+	try {
+		const result = run({ RUN_PUBLICATION: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			publication: false,
+			publications: { "agent-a": true, "agent-b": false, "agent-c": false },
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it.each([
+	"connectionInstallationOAuthPublication",
+	"connectionInstallationOAuthPublicationsByAgent",
+])(
+	"rejects direct publication policy override %s before preparation",
+	async (key) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		await writeFile(
+			path,
+			`${original}\nworkloadInput.policy[${JSON.stringify(key)}]=true;\n`,
+		);
+		try {
+			const result = run();
+			expect(result.status).toBe(1);
+			expect(JSON.parse(result.stdout)).toEqual({
+				error: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
+				calls: [],
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it.each(
 	["PAT", "OAuth"].flatMap((route) =>

@@ -128,6 +128,8 @@ type DeploymentConfiguration = {
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["authorize"];
 		readonly principalBindingsByAgent?: unknown;
+		/** Explicit deployment choice; existing OAuth/PAT exports remain unchanged. */
+		readonly publishOAuth?: boolean;
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
 	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
@@ -164,6 +166,11 @@ function resolveConnectionInstallation(
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	const candidate = value as Record<string, unknown>;
 	if (
+		candidate.publishOAuth !== undefined &&
+		typeof candidate.publishOAuth !== "boolean"
+	)
+		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+	if (
 		candidate.authorize !== undefined &&
 		candidate.principalBindingsByAgent !== undefined
 	)
@@ -176,6 +183,7 @@ function resolveConnectionInstallation(
 						"configurationsByAgent",
 						"authorize",
 						"principalBindingsByAgent",
+						"publishOAuth",
 					].includes(key),
 			) ||
 			(candidate.authorize !== undefined &&
@@ -205,6 +213,7 @@ function resolveConnectionInstallation(
 			});
 		}
 		return {
+			publishOAuth: candidate.publishOAuth === true,
 			configurationsByAgent: configurationsByAgent as NonNullable<
 				DeploymentConfiguration["connectionInstallation"]
 			>["configurationsByAgent"],
@@ -224,9 +233,12 @@ function resolveConnectionInstallation(
 		!Object.hasOwn(candidate, "configuration") ||
 		Object.keys(candidate).some(
 			(key) =>
-				!["configuration", "authorize", "principalBindingsByAgent"].includes(
-					key,
-				),
+				![
+					"configuration",
+					"authorize",
+					"principalBindingsByAgent",
+					"publishOAuth",
+				].includes(key),
 		) ||
 		(candidate.authorize !== undefined &&
 			typeof candidate.authorize !== "function")
@@ -237,6 +249,7 @@ function resolveConnectionInstallation(
 			structuredClone(candidate.configuration),
 		);
 		return {
+			publishOAuth: candidate.publishOAuth === true,
 			configuration,
 			authorize: candidate.authorize as NonNullable<
 				ConversationRuntimeOptionsV2["connectionInstallation"]
@@ -515,6 +528,13 @@ const connectionConsumerSnapshot = perAgentConsumerSelection
 		);
 if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+if (
+	[
+		"connectionInstallationOAuthPublication",
+		"connectionInstallationOAuthPublicationsByAgent",
+	].some((key) => Object.hasOwn(workloadInput.policy, key))
+)
+	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
 if (
@@ -574,23 +594,6 @@ async function createPrepared(signal: AbortSignal) {
 				]),
 			)
 		: connectionInstallationSuppliesByAgent;
-	const connectionInstallationOAuthPublicationsByAgent =
-		connectionInstallation?.configurationsByAgent !== undefined &&
-		resolvedInstallationSuppliesByAgent !== undefined
-			? Object.fromEntries(
-					Object.entries(connectionInstallation.configurationsByAgent).map(
-						([agentId, configuration]) => [
-							agentId,
-							configuration.patBinding === undefined &&
-								resolvedInstallationSuppliesByAgent[agentId] !== undefined,
-						],
-					),
-				)
-			: undefined;
-	const connectionInstallationOAuthPublication =
-		connectionInstallation?.configuration !== undefined &&
-		connectionInstallationSupply !== undefined &&
-		connectionInstallation.configuration.patBinding === undefined;
 	if (
 		resolvedProfilesByAgent !== undefined &&
 		resolvedInstallationSuppliesByAgent === undefined
@@ -622,6 +625,25 @@ async function createPrepared(signal: AbortSignal) {
 				]),
 			)
 		: undefined;
+	const connectionInstallationOAuthPublicationsByAgent =
+		connectionInstallation?.configurationsByAgent !== undefined
+			? Object.fromEntries(
+					Object.entries(connectionInstallation.configurationsByAgent).map(
+						([agentId, configuration]) => [
+							agentId,
+							connectionInstallation.publishOAuth === true &&
+								configuration.patBinding === undefined &&
+								typeof resolvedInstallationRevisionsByAgent?.[agentId] ===
+									"string",
+						],
+					),
+				)
+			: undefined;
+	const connectionInstallationOAuthPublication =
+		connectionInstallation?.publishOAuth === true &&
+		connectionInstallation.configuration !== undefined &&
+		connectionInstallation.configuration.patBinding === undefined &&
+		typeof connectionInstallationRevision === "string";
 	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 	try {
 		if (!databaseUrl) throw new Error();

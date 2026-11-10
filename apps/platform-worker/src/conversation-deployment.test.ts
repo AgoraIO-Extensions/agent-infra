@@ -14,7 +14,9 @@ import {
 	createAppliedRuntimeSkillDirectoryV1,
 	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -45,6 +47,7 @@ import {
 import {
 	createProductionConversationRuntimeResolverV2,
 	createProductionSessionSandboxReceiverV1,
+	createSessionSandboxResourceInputResolverV1,
 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
@@ -1350,6 +1353,108 @@ describe("production SessionSandbox resource receiver", () => {
 			),
 		).toBe(true);
 	});
+	it("selects each Session's approved publication, snapshot and supply without shared fallback or later mutation", async () => {
+		const f = fixture();
+		const deployment = validateAgentWorkloadDesiredV1(f.claim.deployment);
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "consumer-a",
+			audience: "mcp",
+			egressProfile: { ref: "egress", revision: "r1" },
+		};
+		const snapshotA = createRuntimeConnectionConsumerSnapshotV1(profile, {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "approved", revision: "r1" },
+		});
+		const profileB = { ...profile, consumerId: "consumer-b" };
+		const snapshotB = createRuntimeConnectionConsumerSnapshotV1(profileB, {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profileB),
+			egressEnforced: true,
+			source: { ref: "approved", revision: "r2" },
+		});
+		if (!snapshotA || !snapshotB) throw Error("Missing approved snapshot");
+		const policy = {
+			...f.options.policy,
+			connectionConsumerSnapshot: snapshotA,
+			connectionInstallationRevision: '["shared","r0"]',
+			connectionInstallationOAuthPublication: true,
+			connectionConsumerSnapshotsByAgent: {
+				"agent-a": snapshotA,
+				"agent-b": snapshotB,
+			},
+			connectionInstallationRevisionsByAgent: {
+				"agent-a": '["supply-a","r1"]',
+				"agent-b": '["supply-b","r2"]',
+			},
+			connectionInstallationOAuthPublicationsByAgent: {
+				"agent-a": true,
+				"agent-b": false,
+			},
+		};
+		const resourceFor = createSessionSandboxResourceInputResolverV1(
+			{ ...f.options, policy },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		policy.connectionInstallationOAuthPublicationsByAgent["agent-a"] = false;
+		policy.connectionInstallationRevisionsByAgent["agent-a"] =
+			'["changed","r9"]';
+		const a = resourceFor(
+			f.claim.sandbox,
+			f.claim.policy,
+			deployment,
+			f.claim.modelProjection,
+			"running",
+			f.claim.sandbox.generation,
+			f.claim.resourceFence,
+		);
+		expect(a).toMatchObject({
+			connectionConsumerSnapshot: snapshotA,
+			connectionInstallationRevision: '["supply-a","r1"]',
+			connectionInstallationOAuthPublication: true,
+		});
+		const b = resourceFor(
+			{ ...f.claim.sandbox, agentId: "agent-b" },
+			f.claim.policy,
+			{ ...deployment, agentId: "agent-b" },
+			sessionSandboxModelProjectionFixture({
+				agentId: "agent-b",
+				configurationRevision: deployment.configRevision,
+				imageDigest: deployment.imageDigest,
+			}),
+			"running",
+			f.claim.sandbox.generation,
+			f.claim.resourceFence,
+		);
+		expect(b).toMatchObject({
+			connectionConsumerSnapshot: snapshotB,
+			connectionInstallationRevision: '["supply-b","r2"]',
+			connectionInstallationOAuthPublication: false,
+		});
+		const missing = resourceFor(
+			{ ...f.claim.sandbox, agentId: "agent-c" },
+			f.claim.policy,
+			{ ...deployment, agentId: "agent-c" },
+			sessionSandboxModelProjectionFixture({
+				agentId: "agent-c",
+				configurationRevision: deployment.configRevision,
+				imageDigest: deployment.imageDigest,
+			}),
+			"running",
+			f.claim.sandbox.generation,
+			f.claim.resourceFence,
+		);
+		expect(missing).toMatchObject({
+			connectionConsumerSnapshot: null,
+			connectionInstallationRevision: null,
+		});
+		expect(missing.connectionInstallationOAuthPublication).toBeUndefined();
+	});
+
 	it("preserves the approved Connection snapshot through the production control resolver", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;

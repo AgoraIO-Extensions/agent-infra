@@ -36,6 +36,11 @@ import {
 	sessionExecutorBindingSecretKeyV1,
 	validateCodexSessionExecutorPolicyV1,
 } from "./codex-session-executor.js";
+import {
+	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationOAuthPublicationForAgentV1,
+	runtimeConnectionInstallationRevisionForAgentV1,
+} from "./connection-consumer-projection.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -588,13 +593,15 @@ export function createSessionSandboxResourceInputResolverV1(
 	if (workload.policy.codexSessionExecutor !== undefined)
 		validateCodexSessionExecutorPolicyV1(workload.policy.codexSessionExecutor);
 	workloadEgressRulesV1(egressPolicy);
-	const connectionConsumerSnapshot = workload.policy.connectionConsumerSnapshot;
-	const connectionInstallationRevision =
-		workload.policy.connectionInstallationRevision;
-	const connectionInstallationOAuthPublication =
-		workload.policy.connectionInstallationOAuthPublication;
-	const connectionInstallationOAuthPublicationsByAgent =
-		workload.policy.connectionInstallationOAuthPublicationsByAgent;
+	const connection = structuredClone({
+		snapshot: workload.policy.connectionConsumerSnapshot,
+		snapshotsByAgent: workload.policy.connectionConsumerSnapshotsByAgent,
+		revision: workload.policy.connectionInstallationRevision,
+		revisionsByAgent: workload.policy.connectionInstallationRevisionsByAgent,
+		publication: workload.policy.connectionInstallationOAuthPublication,
+		publicationsByAgent:
+			workload.policy.connectionInstallationOAuthPublicationsByAgent,
+	});
 	/**
 	 * Session Runtime inputs come only from the Store-verified V4 projection and
 	 * the Worker's runtime auth (#1466). Anything else fails before any write.
@@ -856,11 +863,23 @@ export function createSessionSandboxResourceInputResolverV1(
 			env: deployment.env,
 			// V4-only: a static-key or missing projection fails before any write.
 			runtime,
-			connectionConsumerSnapshot,
-			connectionInstallationRevision,
+			connectionConsumerSnapshot: runtimeConnectionConsumerSnapshotForAgentV1(
+				connection.snapshot,
+				connection.snapshotsByAgent,
+				binding.agentId,
+			),
+			connectionInstallationRevision:
+				runtimeConnectionInstallationRevisionForAgentV1(
+					connection.revision,
+					connection.revisionsByAgent,
+					binding.agentId,
+				),
 			connectionInstallationOAuthPublication:
-				connectionInstallationOAuthPublicationsByAgent?.[binding.agentId] ??
-				connectionInstallationOAuthPublication,
+				runtimeConnectionInstallationOAuthPublicationForAgentV1(
+					connection.publication,
+					connection.publicationsByAgent,
+					binding.agentId,
+				),
 			authorizedIngressSelector: workload.policy.workerSelector,
 			resources: workload.policy.resources,
 			storageSize: workload.policy.storageSize,

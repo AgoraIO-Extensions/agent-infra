@@ -258,11 +258,13 @@ exact JSON tuple `[ref, revision]`；供应引用与 Consumer 的 `source` 分�
 `revision` 的批准结果。不得从该导出传入 Token、授权码、PKCE verifier、Consumer secret 或
 普通文件路径；配置校验失败时安装保持不可用。
 
-当 `connectionInstallation` 使用标准 OAuth（没有 `patBinding`）且同时提供完整批准的
-`connectionInstallationSupply` 时，Worker 自动投射
-`AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`。PAT binding、缺少 supply 或
-部署模块/Agent 自设该变量都不会开启该路径；该标记只选择受保护 OAuth publication，
-不代表 receipt、ConsumerInstance、Token 或真实 MCP 已获批。
+部署显式设置 `connectionInstallation.publishOAuth=true`，同时配置标准 OAuth（没有
+`patBinding`）和完整批准的 `connectionInstallationSupply` 时，Worker 投射
+`AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`。逐 Agent 配置使用同一开关，
+每项仍须有对应的有效 profile、OAuth 配置和 supply；缺失条目不回退共享开关。
+未选择该开关、PAT binding 或缺少 supply 时保持原路径。`workloadInput.policy` 与 Agent env
+不能覆盖生成值；该标记只选择受保护 OAuth publication，不代表 receipt、ConsumerInstance、
+Token 或真实 MCP 已获批。
 
 部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
 绑定；当标准模板分布在多个 OCI repository 时，绑定还必须提供对应的固定 `imageRepository`，
