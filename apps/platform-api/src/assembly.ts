@@ -190,6 +190,17 @@ export interface PlatformApiAssemblyInput {
 				import("@agent-infra/platform-store").ConnectionInstallationBindingInputV1
 			>
 		>;
+		readonly bindingsByAgentAndPrincipal?: Readonly<
+			Record<
+				string,
+				Readonly<
+					Record<
+						string,
+						import("@agent-infra/platform-store").ConnectionInstallationBindingInputV1
+					>
+				>
+			>
+		>;
 	};
 	readonly connectionInstallationCallback?: {
 		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];

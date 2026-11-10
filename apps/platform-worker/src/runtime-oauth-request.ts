@@ -3,6 +3,7 @@ import {
 	canonicalRuntimeRequestSigningPayload,
 	type RuntimeOAuthAuthorizedRequestV1,
 	RuntimeOAuthAuthorizedRequestV1Schema,
+	type RuntimeOAuthConfigurationsByAgentAndPrincipalV1,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
 	type RuntimeOAuthGrantClaimsV1,
@@ -47,6 +48,8 @@ export interface WorkerConnectionInstallationOptions {
 	readonly configurationsByAgent?: Readonly<
 		Record<string, RuntimeOAuthConfigurationV1>
 	>;
+	/** Only the verified original user and Agent select this trusted deployment index. */
+	readonly configurationsByAgentAndPrincipal?: RuntimeOAuthConfigurationsByAgentAndPrincipalV1;
 	/** Platform's independent current browser confirmation, never business authorization alone. */
 	readonly authorize: (
 		input: Omit<WorkerInstallationAuthorization, "revision">,

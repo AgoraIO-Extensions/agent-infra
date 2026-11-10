@@ -1,4 +1,7 @@
-import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
+import {
+	type RuntimeOAuthConfigurationV1,
+	runtimeOAuthConfigurationRevisionV1,
+} from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 
@@ -220,4 +223,100 @@ describe("deployment-approved Connection principal bindings", () => {
 			).toThrow("CONNECTION_INSTALLATION_UNAVAILABLE");
 		},
 	);
+});
+
+describe("per-user OAuth identity bindings", () => {
+	const configFor = (id: string) => {
+		const { patBinding: _pat, ...oauth } = configuration;
+		const c = { ...oauth, ref: `oauth-${id}`, clientId: `client-${id}` };
+		return { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) };
+	};
+	const alice = configFor("alice");
+	const bob = configFor("bob");
+	const scopeFor = (c: RuntimeOAuthConfigurationV1) => ({
+		ref: c.ref,
+		revision: c.revision,
+	});
+	const options = () => ({
+		configurationsByAgentAndPrincipal: { "agent-a": { alice, bob } },
+		principalBindingsByAgentAndPrincipal: {
+			"agent-a": {
+				alice: {
+					issuer: alice.issuer,
+					configuration: scopeFor(alice),
+					connectionPrincipalId: "connection-alice",
+				},
+				bob: {
+					issuer: bob.issuer,
+					configuration: scopeFor(bob),
+					connectionPrincipalId: "connection-bob",
+				},
+			},
+		},
+	});
+	it("binds each original user to their own configuration and Connection principal", () => {
+		const bind = createConnectionInstallationPrincipalBindingsV1(options());
+		for (const [id, c] of [
+			["alice", alice],
+			["bob", bob],
+		] as const) {
+			expect(
+				bind({
+					...approval,
+					principal: { kind: "user", id },
+					scope: { ...approval.scope, oauthConfiguration: scopeFor(c) },
+				})?.connectionPrincipalId,
+			).toBe(`connection-${id}`);
+		}
+		expect(
+			bind({
+				...approval,
+				scope: { ...approval.scope, oauthConfiguration: scopeFor(bob) },
+			}),
+		).toBeNull();
+		expect(
+			createConnectionInstallationPrincipalBindingsV1({
+				configurationsByAgentAndPrincipal:
+					options().configurationsByAgentAndPrincipal,
+			})({
+				...approval,
+				principal: { kind: "application", id: "alice" },
+				scope: { ...approval.scope, oauthConfiguration: scopeFor(alice) },
+			}),
+		).toBeNull();
+		expect(
+			bind({
+				...approval,
+				principal: { kind: "user", id: "missing" },
+				scope: { ...approval.scope, oauthConfiguration: scopeFor(alice) },
+			}),
+		).toBeNull();
+	});
+	it.each([
+		"mixed source",
+		"old revision",
+		"shared principal",
+		"unknown field",
+	])("rejects %s", (mode) => {
+		const input = options();
+		if (mode === "old revision")
+			input.principalBindingsByAgentAndPrincipal[
+				"agent-a"
+			].alice.configuration.revision = "old";
+		if (mode === "shared principal")
+			input.principalBindingsByAgentAndPrincipal[
+				"agent-a"
+			].bob.connectionPrincipalId = "connection-alice";
+		if (mode === "unknown field")
+			Object.assign(
+				input.principalBindingsByAgentAndPrincipal["agent-a"].alice,
+				{ userId: "chosen-user" },
+			);
+		expect(() =>
+			createConnectionInstallationPrincipalBindingsV1({
+				...input,
+				...(mode === "mixed source" ? { configuration: alice } : {}),
+			}),
+		).toThrow("CONNECTION_INSTALLATION_UNAVAILABLE");
+	});
 });

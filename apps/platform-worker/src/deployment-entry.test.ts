@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime";
 import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
@@ -504,6 +505,10 @@ try {
 	 process.exit(0);
 	}
  if (process.env.RUN_CLOSE_INSTALLATION === "true") await conversation.closeDeployment?.();
+ if (process.env.RUN_PRINCIPAL_INSTALLATION_MAP === "true") {
+   console.log(JSON.stringify({hasCommandStore:!!conversation.connectionInstallation?.commandStore,configurations:conversation.connectionInstallation?.configurationsByAgentAndPrincipal ?? null,workloadReady:!!workload,shared:conversation.connectionInstallation?.configuration ?? null}));
+   process.exit(0);
+ }
  if (process.env.RUN_INSTALLATION_MAP === "true") {
    console.log(JSON.stringify({hasCommandStore:!!conversation.connectionInstallation?.commandStore,configurations:conversation.connectionInstallation?.configurationsByAgent ?? null,workloadReady:!!workload,shared:conversation.connectionInstallation?.configuration ?? null}));
    process.exit(0);
@@ -1675,3 +1680,82 @@ it("accepts explicit disabled policy for draining but rejects a different namesp
 		await writeFile(path, original);
 	}
 });
+
+it.each([
+	"valid",
+	"bad configuration",
+	"shared fallback",
+	"per-Agent fallback",
+	"missing profiles",
+])(
+	"assembles the explicit user installation index only for %s",
+	async (mode) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const configFor = (userId: string) => {
+			const c = {
+				schemaVersion: 1 as const,
+				ref: `oauth-${userId}`,
+				revision: "pending",
+				clientId: `client-${userId}`,
+				callbackUrl: "https://platform.example.test/connection/callback",
+				issuer: "https://connection.example.test/",
+				authorizationEndpoint:
+					"https://connection.example.test/oauth/authorize",
+				tokenEndpoint: "https://connection.example.test/oauth/token",
+				revocationEndpoint: "https://connection.example.test/oauth/revoke",
+				resource: "https://connection.example.test/mcp/v1",
+				scope: "mcp" as const,
+				configFingerprint: connectionConsumerApproval.configFingerprint,
+				source: connectionConsumerApproval.source,
+				runtimeOrigin: "https://runtime.example.test:3443/",
+			};
+			return { ...c, revision: runtimeOAuthConfigurationRevisionV1(c) };
+		};
+		const alice = configFor("alice");
+		const bob = configFor("bob");
+		const configurationsByAgentAndPrincipal = { "agent-a": { alice, bob } };
+		const principalBindingsByAgentAndPrincipal = {
+			"agent-a": Object.fromEntries(
+				Object.entries({ alice, bob }).map(([userId, c]) => [
+					userId,
+					{
+						issuer: c.issuer,
+						configuration: { ref: c.ref, revision: c.revision },
+						connectionPrincipalId: `connection-${userId}`,
+					},
+				]),
+			),
+		};
+		const installation = {
+			configurationsByAgentAndPrincipal,
+			principalBindingsByAgentAndPrincipal,
+			...(mode === "shared fallback" ? { configuration: alice } : {}),
+			...(mode === "per-Agent fallback"
+				? { configurationsByAgent: { "agent-a": alice } }
+				: {}),
+		};
+		if (mode === "bad configuration")
+			bob.clientId = "replaced-without-revision";
+		try {
+			await writeFile(
+				path,
+				`${original}\n${mode === "missing profiles" ? "" : `export const connectionConsumerProfilesByAgent=${JSON.stringify({ "agent-a": { profile: connectionConsumerProfile, approval: connectionConsumerApproval } })};`}\n${mode === "missing profiles" ? "" : 'export const connectionInstallationSuppliesByAgent={"agent-a":{ref:"supply-a",revision:"r1"}};'}\nexport const connectionInstallation=${JSON.stringify(installation)};\n`,
+			);
+			const result = run({
+				RUN_CLOSE_INSTALLATION: "true",
+				RUN_PRINCIPAL_INSTALLATION_MAP: "true",
+			});
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({
+				hasCommandStore: mode === "valid",
+				configurations:
+					mode === "valid" ? configurationsByAgentAndPrincipal : null,
+				workloadReady: true,
+				shared: null,
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);

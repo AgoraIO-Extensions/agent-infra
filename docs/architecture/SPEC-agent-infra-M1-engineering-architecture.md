@@ -2339,7 +2339,13 @@ Consumer profile、approval 和 `RuntimeOAuthConfigurationV1`；复用现有 sch
 source 校验，不创建另一种身份或凭据权威。API、Worker 与安装 Store 捕获同一批准修订。
 显式配置逐 Agent 绑定时，该映射是安装能力的唯一来源：缺少 Agent、条目无效、profile 与
 OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配置、Owner 或其他 Agent。
-原单份配置部署继续使用原路径；两种安装配置来源同时提供时拒绝安装能力装配。
+原单份配置部署继续使用原路径。预注册 HTTPS OAuth client 可另按原用户＋Agent 提供
+`bindingsByAgentAndPrincipal`（API/Store）与 `configurationsByAgentAndPrincipal`（Worker）
+的受信两层索引；键只能由服务端已认证用户和原 Execution 的 Agent 解析。三种配置来源
+互斥；显式用户索引缺项或非法时拒绝安装，不回退逐 Agent、共享、Owner 或其他用户。
+用户索引只接受非 PAT、非 DCR 的预注册 client，每个安装的 issuer＋clientId 必须独立。
+每项 revision 必须等于已 strict 解析的完整配置去除 revision 后，以固定字段顺序序列化的
+UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/revision 替换 client。
 安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
 
 API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择绑定。confirm、status、
@@ -2351,7 +2357,11 @@ profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker �
 一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
 callback 格式（标准 OAuth 或既有 PAT binding）；逐 Agent 配置必须与该入口一致，拒绝混用。
 回调中的 state/binding ID 只定位原持久记录，不能选择 Agent、Runtime 地址或凭据。
-Store 从原记录的 Agent 重新选择当前绑定；跨 Agent、配置漂移、过期或来源缺失均拒绝转交。
+Store 从原记录的 principal＋Agent 重新选择当前绑定；用户索引的 ref/revision 固定到现有
+授权 scope，callback、命令回读及最终发送均复核同一配置。跨用户/Agent、配置漂移、过期
+或来源缺失均拒绝转交。用户索引下的部署主体映射使用
+`principalBindingsByAgentAndPrincipal[agentId][userId]`，每项固定 issuer、配置 ref/revision
+和 Connection principalId；它与旧主体映射互斥，不能把计划用户映射当实际 OAuth 绑定证明。
 既有一次性领取、callback-only 服务认证和 unknown 不重放规则保持不变。
 
 上述安装选择不创建 Consumer、不执行管理员注册，也不表示外部授权已成立。API/Worker
