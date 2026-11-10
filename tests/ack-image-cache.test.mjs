@@ -43,10 +43,27 @@ test("cache plans reject mutable, foreign and wrong-architecture inputs", () => 
 	]);
 });
 
-test("cache plans retain the current cache inventory while preparing one new release", () => {
+test("cache plans retain the current cache inventory while preparing one new release", async () => {
 	const groups = Array.from({ length: 48 }, (_, index) => [
 		`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${String(index).padStart(2, "0")}${"b".repeat(62)}`,
 	]);
+	const current = groups.slice(0, 20);
+	const release = groups.slice(20, 26);
+	const receipt = await ensureCaches(
+		{ ...plan, groups: [...current, ...release] },
+		{
+			async get(name) {
+				const images = groups.find((group) => cacheName(group) === name);
+				return images ? { ...ready, name, images } : undefined;
+			},
+			async create() {
+				assert.fail("a check must reuse the existing Ready caches");
+			},
+		},
+		{ checkOnly: true },
+	);
+	assert.equal(receipt.status, "ready");
+	assert.equal(receipt.caches.length, 26);
 	assert.equal(parseCachePlan({ ...plan, groups }).groups.length, 48);
 	assert.throws(
 		() => parseCachePlan({ ...plan, groups: [...groups, [ref]] }),
