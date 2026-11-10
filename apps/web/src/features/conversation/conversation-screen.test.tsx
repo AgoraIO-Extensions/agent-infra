@@ -2142,7 +2142,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		unavailable = true;
 		act(() => streams.at(-1)?.send(reload()));
-		await screen.findByText(/恢复后会自动继续读取/);
+		await screen.findByText(/点击「重新连接」恢复读取/);
 		expect(input.disabled).toBe(false);
 		fireEvent.change(input, { target: { value: "断线期间的草稿" } });
 		expect(input.value).toBe("断线期间的草稿");
@@ -2172,10 +2172,10 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		failRefresh = true;
 		act(() => streams.at(-1)?.send(reload()));
-		await screen.findByText(/恢复后会自动继续读取/);
+		await screen.findByText(/点击「重新连接」恢复读取/);
 		// B-10：连接中断是读取失败，用 warn notice 并以 role="alert" 播报。
 		const interrupted = screen
-			.getByText(/恢复后会自动继续读取/)
+			.getByText(/点击「重新连接」恢复读取/)
 			.closest('[data-slot="alert"]');
 		expect(interrupted?.getAttribute("role")).toBe("alert");
 		expect(interrupted?.getAttribute("data-tone")).toBe("warn");
