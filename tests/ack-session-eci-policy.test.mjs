@@ -279,19 +279,27 @@ test("required cache admission renders the full cache budget and rejects overflo
 	for (const count of [26, 48]) {
 		const result = withEntries(count);
 		assert.equal(result.status, 0, result.stderr);
-		const policy = parseAllDocuments(result.stdout)
+		const policies = parseAllDocuments(result.stdout)
 			.map((document) => document.toJSON())
-			.find((resource) => resource?.kind === "ValidatingAdmissionPolicy");
-		const caches = JSON.parse(
-			policy.spec.variables.find((variable) => variable.name === "caches")
-				.expression,
-		);
-		assert.deepEqual(
-			caches,
-			Object.fromEntries(
-				entries.slice(0, count).map((entry) => [entry.cacheId, entry.images]),
-			),
-		);
+			.filter(
+				(resource) =>
+					["MutatingAdmissionPolicy", "ValidatingAdmissionPolicy"].includes(
+						resource?.kind,
+					) && resource.metadata.name.endsWith("-session-image-cache"),
+			);
+		assert.equal(policies.length, 2);
+		for (const policy of policies) {
+			const caches = JSON.parse(
+				policy.spec.variables.find((variable) => variable.name === "caches")
+					.expression,
+			);
+			assert.deepEqual(
+				caches,
+				Object.fromEntries(
+					entries.slice(0, count).map((entry) => [entry.cacheId, entry.images]),
+				),
+			);
+		}
 	}
 	const overflow = withEntries(49);
 	assert.notEqual(overflow.status, 0);
