@@ -173,6 +173,37 @@ Worker 按它注入容器资源并在调谐时再次校验。
 该项为空时，Worker 在 preflight 开始、Registry 准入和任何 Kubernetes 写入之前，以
 `kubernetes_policy` 让这类 Agent 立即创建失败，不消耗重试预算。
 
+## 自定义 Agent 固定域名路径入口
+
+自有身份入口可通过 `workloadInput.policy.pathRoutes` 为指定 Agent 选择精确域名，
+规则见[工程 Spec §14.3](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#143-自有交互入口)。
+先验证应用支持子路径，再在部署私有配置中指定 Agent ID：
+
+```typescript
+pathRoutes: {
+  origin: "https://apps.example.test",
+  platformOrigin: "https://platform.example.test",
+  tlsSecretName: "custom-apps-tls",
+  agentIds: ["agent_example"],
+}
+```
+
+DNS 仅需把 `apps.example.test` 精确解析到获批入口，证书须覆盖该主机名并交付到目标
+namespace。Worker 发布 `/a/agent-<hash>/` Prefix 路由，保留完整请求路径，不使用 rewrite
+或通配 Host；应用读取 `AGENT_INFRA_PUBLIC_BASE_PATH` 处理自己的资源、跳转和 Cookie。
+健康检查仍使用镜像原健康路径。镜像沿用既有 Registry/Digest 准入，不新增审批。
+
+这个 origin 必须与平台管理页面使用不同主机名，且其中应用互相信任；路径和 Cookie Path
+不是浏览器隔离边界。应用继续负责服务端身份与权限，不能接受平台 Cookie 作为授权。
+未选中 Agent 保持原 Host 模式。迁移现有 Host 路由时，先沿原生命周期停止目标 Agent，
+确认入口关闭，再发布路径配置，
+通过原升级或启动流程重新 preflight 并核验详情页的 `interactionUrl`。切换路由策略或回滚前同样先停止目标。不要修改运行中数据库或手改
+Worker 管理的 Ingress。迁移后核对唯一 Ingress 的 Host、Prefix、TLS、真实登录和刷新，
+确认旧 Host 不再路由；停止后的入口关闭沿原生命周期验证。DNS、源码发布与真实应用验收
+分别记录，配置示例不代表已部署。现有 `deploy/ack/self-managed-entry.ts` 验收输入可设置
+`pathOrigin`，以该 origin 和当前 Agent ID 派生路径，回读唯一 Ingress 并执行应用身份及
+浏览器登录、后端调用和刷新检查。
+
 ## 调谐失败日志
 
 Workload 调谐的步骤抛出异常时，调谐只会让 `attempts` 加一后重试，预算耗尽后进入清理，原因不进入

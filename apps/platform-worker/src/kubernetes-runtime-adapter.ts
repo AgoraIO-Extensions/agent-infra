@@ -184,6 +184,7 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly routeSelector: Readonly<Record<string, string>>;
 	readonly ingressClassName: string;
 	readonly routeHostSuffix: string;
+	readonly pathRoutes?: import("./workload-public-route.js").WorkloadPathRoutesV1;
 	readonly tlsSecretName: string;
 	/** Deployment-owned profiles used only by multi-service workloads. */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];

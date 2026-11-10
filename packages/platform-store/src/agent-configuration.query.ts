@@ -720,6 +720,12 @@ export class PostgresAgentConfigurationQueryV1 {
 													? {
 															interactionOrigin:
 																deployment.route.interactionOrigin.origin,
+															...(deployment.route.interactionPath
+																? {
+																		interactionPath:
+																			deployment.route.interactionPath,
+																	}
+																: {}),
 														}
 													: {}),
 											},

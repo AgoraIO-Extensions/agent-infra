@@ -30,6 +30,10 @@ import {
 	type MultiServiceRuntimePolicyV1,
 	resolveMultiServiceResourceConfigurationV1,
 } from "./multi-service-runtime.js";
+import {
+	publicBasePathEnvironmentV1,
+	workloadInteractionRouteV1,
+} from "./workload-public-route.js";
 import { projectWorkspaceSnapshotMaterializerV1 } from "./workspace-snapshot-materializer.js";
 
 const manifest = MultiServiceManifestDocumentV1Schema.parse({
@@ -2334,4 +2338,65 @@ it("returns the server generation after writing the member snapshot", async () =
 	const repeated = await operations.apply(value);
 	expect(repeated).toEqual(identity);
 	await expect(operations.observe(value, repeated)).resolves.toBe("healthy");
+});
+
+it("publishes a selected multi-service system under one path and rejects manifest prefix overrides", async () => {
+	const original = desired();
+
+	const policy = {
+		...basePolicy,
+		pathRoutes: {
+			origin: "https://apps.example.test",
+			platformOrigin: "https://platform.example.test",
+			tlsSecretName: "apps-tls",
+			agentIds: [original.agentId],
+		},
+	};
+	const route = workloadInteractionRouteV1(policy, original.agentId);
+	const value = validateAgentWorkloadDesiredV1({
+		...original,
+		route: {
+			...original.route,
+			name: workloadResourceNameV1(original.agentId),
+			...route,
+		},
+	});
+	if (!isMultiService(value)) throw new Error("Expected multi-service fixture");
+	const fake = fakeClient();
+	const operations = createMultiServiceRuntimeOperations({
+		client: fake.client,
+		policy,
+	});
+	await operations.apply(value);
+	await operations.promote(value);
+	const ingress = await fake.client.read<
+		import("@kubernetes/client-node").V1Ingress
+	>("Ingress", workloadResourceNameV1(value.agentId));
+	expect(ingress?.spec?.rules?.[0]?.host).toBe("apps.example.test");
+	expect(ingress?.spec?.rules?.[0]?.http?.paths[0]?.path).toBe(
+		route.interactionPath,
+	);
+	expect(ingress?.spec?.tls?.[0]?.secretName).toBe("apps-tls");
+	const workloads = [...fake.resources.values()].filter(
+		(x) => x.kind === "Deployment",
+	) as V1Deployment[];
+	expect(workloads.length).toBeGreaterThan(0);
+	for (const workload of workloads)
+		for (const container of workload.spec?.template.spec?.containers ?? [])
+			expect(container.env).toContainEqual({
+				name: publicBasePathEnvironmentV1,
+				value: route.interactionPath,
+			});
+	const rejected = fakeClient();
+	const contaminated = structuredClone(value);
+	for (const resource of contaminated.multiService.resources)
+		if (resource.kind === "Deployment")
+			for (const container of resource.spec.template.spec.containers)
+				container.env = [{ name: publicBasePathEnvironmentV1, value: "/" }];
+	const restricted = createMultiServiceRuntimeOperations({
+		client: rejected.client,
+		policy,
+	});
+	await expect(restricted.apply(contaminated)).rejects.toThrow();
+	expect(rejected.resources.size).toBe(0);
 });

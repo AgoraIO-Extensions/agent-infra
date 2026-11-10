@@ -29,11 +29,27 @@ type Configuration = {
 	backend?: string;
 	/** An in-process test may supply an isolated mounted-root substitute. */
 	snapshotRoot?: string;
+	basePath?: string;
 };
 type Identity = { status: 200 | 401 | 403; token?: string };
-const cookieName = "__Host-custom-entry";
 
 export function createOwnEntryServer(configuration: Configuration) {
+	const configuredBasePath = configuration.basePath ?? "/";
+	const basePath = configuration.role === "api" ? "/" : configuredBasePath;
+	if (basePath !== "/" && !/^\/a\/agent-[a-f0-9]{32}\/$/.test(basePath))
+		throw new Error("OWN_ENTRY_BASE_PATH_INVALID");
+	const cookieName =
+		basePath === "/"
+			? "__Host-custom-entry"
+			: `__Secure-custom-entry-${basePath.split("/")[2]}`;
+	const pageAt = (html: string) =>
+		basePath === "/"
+			? html
+			: html
+					.replaceAll("'/auth/login'", JSON.stringify(`${basePath}auth/login`))
+					.replaceAll("'/app'", JSON.stringify(`${basePath}app`))
+					.replaceAll("'/api/check'", JSON.stringify(`${basePath}api/check`));
+
 	const key = createPublicKey(configuration.publicKey);
 	if (
 		key.asymmetricKeyType !== "ed25519" ||
@@ -124,7 +140,14 @@ export function createOwnEntryServer(configuration: Configuration) {
 	}
 	async function handle(request: IncomingMessage, response: ServerResponse) {
 		const url = new URL(request.url ?? "/", "http://application");
-		const pathname = url.pathname;
+		let pathname = url.pathname;
+		if (basePath !== "/" && pathname !== "/healthz") {
+			if (!pathname.startsWith(basePath)) {
+				send(response, 404);
+				return;
+			}
+			pathname = `/${pathname.slice(basePath.length)}`;
+		}
 		if (request.method === "GET" && pathname === "/healthz") {
 			send(response, 200, '{"status":"ready"}', "application/json");
 			return;
@@ -134,7 +157,7 @@ export function createOwnEntryServer(configuration: Configuration) {
 			pathname === "/" &&
 			configuration.role !== "api"
 		) {
-			send(response, 200, loginPage, "text/html; charset=utf-8");
+			send(response, 200, pageAt(loginPage), "text/html; charset=utf-8");
 			return;
 		}
 		if (
@@ -169,7 +192,7 @@ export function createOwnEntryServer(configuration: Configuration) {
 			}
 			response.setHeader(
 				"set-cookie",
-				`${cookieName}=${authenticated.token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600`,
+				`${cookieName}=${authenticated.token}; Path=${basePath}; HttpOnly; Secure; SameSite=Strict; Max-Age=3600`,
 			);
 			send(response, 204);
 			return;
@@ -184,7 +207,7 @@ export function createOwnEntryServer(configuration: Configuration) {
 			return;
 		}
 		if (pathname === "/app" && configuration.role !== "api") {
-			send(response, 200, ownEntryPage, "text/html; charset=utf-8");
+			send(response, 200, pageAt(ownEntryPage), "text/html; charset=utf-8");
 			return;
 		}
 		if (pathname === "/api/snapshot-check") {
@@ -271,6 +294,7 @@ if (
 			audience: process.env.CUSTOM_ENTRY_AUDIENCE ?? "",
 			publicKey: process.env.CUSTOM_ENTRY_PUBLIC_KEY ?? "",
 			role: role as Configuration["role"],
+			basePath: process.env.AGENT_INFRA_PUBLIC_BASE_PATH,
 			backend: prefix ? `http://${prefix}-api:3003` : undefined,
 		});
 		server.listen(3003, "0.0.0.0");

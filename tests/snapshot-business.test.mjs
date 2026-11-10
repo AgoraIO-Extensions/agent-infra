@@ -53,12 +53,14 @@ function signedIdentity() {
 
 test("the HTTP entry executes both repo versions using the separate env dependency", async (t) => {
 	const identity = signedIdentity();
+	const basePath = `/a/agent-${"a".repeat(32)}/`;
 	const firstRoot = await snapshots(t);
 	const secondRoot = await snapshots(t, 2);
 	const first = await listen(t, {
 		...identity.configuration,
 		role: "api",
 		snapshotRoot: firstRoot,
+		basePath,
 	});
 	const second = await listen(t, {
 		...identity.configuration,
@@ -85,11 +87,15 @@ test("the HTTP entry executes both repo versions using the separate env dependen
 	const web = await listen(t, {
 		...identity.configuration,
 		role: "web",
+		basePath,
 		backend,
 	});
-	const response = await originalFetch(`${web}/api/snapshot-check?input=7`, {
-		headers,
-	});
+	const response = await originalFetch(
+		`${web}${basePath}api/snapshot-check?input=7`,
+		{
+			headers,
+		},
+	);
 	assert.equal(response.status, 200);
 	assert.equal(response.headers.get("cache-control"), "no-store");
 	assert.deepEqual(await response.json(), expected);
@@ -117,7 +123,7 @@ test("the HTTP entry executes both repo versions using the separate env dependen
 		[identity.token({ aud: "agent-b" }), 401],
 		[identity.token({ sub: "viewer", permissions: [] }), 403],
 	]) {
-		const denied = await originalFetch(`${web}/api/snapshot-check`, {
+		const denied = await originalFetch(`${web}${basePath}api/snapshot-check`, {
 			headers: {
 				"x-user-id": "owner",
 				"x-agent-infra-platform-context": "forged",
@@ -154,9 +160,12 @@ test("the HTTP entry executes both repo versions using the separate env dependen
 	});
 	assert.equal(missing.status, 503);
 	assert.equal(await missing.text(), "");
-	const missingThroughWeb = await originalFetch(`${web}/api/snapshot-check`, {
-		headers,
-	});
+	const missingThroughWeb = await originalFetch(
+		`${web}${basePath}api/snapshot-check`,
+		{
+			headers,
+		},
+	);
 	assert.equal(missingThroughWeb.status, 502);
 	assert.equal(await missingThroughWeb.text(), "");
 });

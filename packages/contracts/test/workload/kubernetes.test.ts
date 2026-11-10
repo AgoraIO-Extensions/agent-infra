@@ -17,6 +17,7 @@ import {
 	WorkloadRouteOriginV1Schema,
 	WorkloadRouteSwitchRequestV1Schema,
 	WorkloadRouteSwitchResultV1Schema,
+	WorkloadRouteV1Schema,
 } from "../../src/workload/kubernetes.js";
 
 const runtimeManifest = {
@@ -890,4 +891,31 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 			}),
 		).toThrow("Workload cleanup correlation mismatch");
 	});
+});
+
+it("binds public paths to self-managed routes with a canonical origin and matching resource", () => {
+	const name = `agent-${"a".repeat(32)}`;
+	const route = {
+		name,
+		exposure: "self-managed",
+		tlsRequired: true,
+		interactionOrigin: {
+			schemaVersion: 1,
+			origin: "https://apps.example.test",
+		},
+		interactionPath: `/a/${name}/`,
+	};
+	expect(WorkloadRouteV1Schema.safeParse(route).success).toBe(true);
+	for (const change of [
+		{ interactionOrigin: undefined },
+		{ name: "other" },
+		{ interactionPath: "/a/../" },
+		{ interactionPath: "/a/%2f/" },
+		{ interactionPath: `/a/agent-${"b".repeat(32)}/` },
+		{ exposure: "internal-only" },
+		{ exposure: "platform-auth" },
+	])
+		expect(
+			WorkloadRouteV1Schema.safeParse({ ...route, ...change }).success,
+		).toBe(false);
 });

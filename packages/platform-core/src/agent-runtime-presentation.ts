@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
@@ -96,6 +97,7 @@ export interface AgentRuntimePresentationDeploymentV1 {
 		readonly exposure: "internal-only" | "platform-auth" | "self-managed";
 		/** Store-projected deployment origin; never a Service, Pod or caller URL. */
 		readonly interactionOrigin?: string;
+		readonly interactionPath?: string;
 	};
 }
 
@@ -318,12 +320,18 @@ export function decideAgentRuntimePresentationV1(input: {
 			: foundWithoutRuntimeProjection;
 	if (browserDeclared && !state.capabilities.browser)
 		return { outcome: "unavailable" };
+	const path = deployment.route.interactionPath;
+	const pathMatchesAgent =
+		path === undefined ||
+		path ===
+			`/a/agent-${createHash("sha256").update(input.agentId).digest("hex").slice(0, 32)}/`;
 	const interactionUrl =
 		mode === "self-managed" &&
 		configuration.source.kind === "custom" &&
 		configuration.source.identityResponsibility === "self-managed" &&
-		isCanonicalHttpsOriginV1(deployment.route.interactionOrigin)
-			? deployment.route.interactionOrigin
+		isCanonicalHttpsOriginV1(deployment.route.interactionOrigin) &&
+		pathMatchesAgent
+			? `${deployment.route.interactionOrigin}${path ?? ""}`
 			: null;
 	return {
 		outcome: "found",

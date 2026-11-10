@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.js";
@@ -524,6 +525,32 @@ describe("Agent runtime presentation policy", () => {
 				interactionUrl: "https://agent.example.test",
 			},
 		);
+
+		const path = `/a/agent-${createHash("sha256").update(input.agentId).digest("hex").slice(0, 32)}/`;
+		for (const interactionPath of [
+			path,
+			"/a/another/",
+			"/",
+			`${path}?token=x`,
+		]) {
+			const pathFacts = {
+				...facts,
+				runtime: {
+					...facts.runtime,
+					deployment: {
+						...deployment,
+						route: { ...deployment.route, interactionPath },
+					},
+				},
+			};
+			expect(
+				decideAgentRuntimePresentationV1({ ...input, facts: pathFacts }),
+			).toMatchObject({
+				outcome: "found",
+				interactionUrl:
+					interactionPath === path ? `https://agent.example.test${path}` : null,
+			});
+		}
 		for (const interactionOrigin of [
 			"http://agent.example.test",
 			"https://agent.example.test/entry",

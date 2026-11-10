@@ -2826,6 +2826,9 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 ### 14.3 自有交互入口
 
 - 自有交互入口的流量、协议、Session 和历史由自定义 Agent 负责，不经过 Runtime Adapter。
+- 自有身份入口可由部署为指定 Agent 选择固定 HTTPS 域名下的路径入口。域名必须与平台管理页面使用不同主机名；路径固定为 `/a/agent-<Agent ID 的 SHA-256 前 32 位>/`，不使用通配 DNS。部署选择只控制入口位置，不替代 Platform DB 的身份责任、可用范围或生命周期；镜像继续使用既有 Digest 准入，不新增镜像审批。未选择的 Agent 沿原独立 Host 发布。
+- 路径入口只承载同一部署信任范围内的应用；不同路径仍然同源，不提供不同 Owner 网页脚本之间的浏览器隔离，也不能与平台管理页面同源。应用必须支持传入的路径前缀，保留静态资源、跳转、Cookie、流式请求及 WebSocket 的路径语义；网关不通用改写应用 HTML 或 JavaScript。Worker 为应用注入只读部署输入 `AGENT_INFRA_PUBLIC_BASE_PATH`，禁止 env、Secret 或多服务 Manifest 覆盖。内部健康检查仍使用原路径。
+- Workload 的 `interactionOrigin` 继续只保存 canonical HTTPS origin；路径模式增加可选 `interactionPath`，且必须与当前 Agent 派生的资源名一致。Ingress、应用前缀、已验证 Workload 和 Store/Core 发布地址使用同一绑定。只有已验证的运行修订可以把 origin 和路径组合为用户链接；不能从页面当前域名、Service 地址或调用方 URL 推断。路径模式首版仅适用于自有身份入口，不改变平台身份入口的门禁。
 - `platform-worker` 根据 Platform DB 中保存的 Owner 身份责任选择只发布对应的一条用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
 - 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信 IdentityContext、Execution Grant 或平台撤权上下文；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。账号生命周期、停用、撤权和会话终止由 Owner 的身份体系负责；需要部署身份状态或 Agent 可用范围变化立即生效时必须选择平台身份入口。
 - 选择平台身份入口时，路由必须经过 Auth Gateway。Gateway 每次请求校验公司账号和 Agent 可用范围，移除或覆盖调用方提交的身份 Header，并传递绑定公司用户、受众、Agent 与有效期的短期签名上下文；自定义 Agent 服务端必须校验签名、签发者、受众、有效期和 Agent 绑定，不能信任浏览器字段。权限撤销后新请求立即失败，长连接按短期凭证到期或服务端主动关闭。

@@ -60,7 +60,6 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
-import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 import { frozenSkillHubDeliveryImageV1 } from "./kubernetes-runtime-skill-mount.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
@@ -79,6 +78,11 @@ import {
 	WorkloadProbeIncompleteErrorV1,
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
+import {
+	assertWorkloadPublicRouteV1,
+	publicBasePathEnvironmentV1,
+	workloadInteractionRouteV1,
+} from "./workload-public-route.js";
 import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
 import type {
 	WorkspaceSnapshotMaterializerInputV1,
@@ -1475,6 +1479,13 @@ export function createWorkloadRuntimeV1(
 		async preflight(input, state) {
 			snapshotProjections.delete(state);
 			const configuration = state.candidate.configuration;
+			if (
+				options.policy.pathRoutes?.agentIds.includes(state.agentId) &&
+				[...configuration.environment, ...configuration.secrets].some(
+					({ name }) => name === publicBasePathEnvironmentV1,
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
 			const snapshotBindings =
 				configuration.source.kind === "custom"
 					? (configuration.source.workspaceSnapshots ?? [])
@@ -1618,10 +1629,7 @@ export function createWorkloadRuntimeV1(
 							name: workloadResourceNameV1(state.agentId),
 							exposure: "self-managed",
 							tlsRequired: true,
-							interactionOrigin: createWorkloadInteractionOriginV1({
-								routeHostSuffix: options.policy.routeHostSuffix,
-								agentId: state.agentId,
-							}),
+							...workloadInteractionRouteV1(options.policy, state.agentId),
 						},
 						secretRefs: secretBindings.map(({ record }) =>
 							recordReference(record),
@@ -1644,6 +1652,7 @@ export function createWorkloadRuntimeV1(
 								}
 							: {}),
 					});
+					assertWorkloadPublicRouteV1(options.policy, deployment);
 					return { configuration, deployment };
 				} catch {
 					throw new WorkloadPreflightRejectedErrorV1();
@@ -1900,10 +1909,7 @@ export function createWorkloadRuntimeV1(
 						tlsRequired: true,
 						...(exposure === "self-managed"
 							? {
-									interactionOrigin: createWorkloadInteractionOriginV1({
-										routeHostSuffix: options.policy.routeHostSuffix,
-										agentId: state.agentId,
-									}),
+									...workloadInteractionRouteV1(options.policy, state.agentId),
 								}
 							: {}),
 					},
@@ -1940,6 +1946,7 @@ export function createWorkloadRuntimeV1(
 					desiredState: "running",
 					replicas: 1,
 				});
+				assertWorkloadPublicRouteV1(options.policy, deployment);
 				const executionCapacity = resolveWorkloadExecutionCapacityV1(
 					options,
 					configuration.source.imageDigest,
