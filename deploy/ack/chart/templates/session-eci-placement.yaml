@@ -45,7 +45,8 @@ spec:
             {{- if eq $runtimeClassName "" }}
             JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},
             {{- end }}
-            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:{{ .Values.sessionRuntimeScheduling.architecture | quote }}{{- if and (eq $runtimeClassName "") .Values.sessionRuntimeScheduling.protectedRuntime.enabled }},
+            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:{{ .Values.sessionRuntimeScheduling.architecture | quote }}}
+            {{- if and (eq $runtimeClassName "") .Values.sessionRuntimeScheduling.protectedRuntime.enabled }},
             JSONPatch{op:"add",path:"/metadata/annotations",value:has(object.metadata.annotations)?object.metadata.annotations:{}},
             JSONPatch{op:"add",path:"/metadata/annotations/k8s.aliyun.com~1eci-host-sysctls",value:"kernel.yama.ptrace_scope={{ .Values.sessionRuntimeScheduling.protectedRuntime.yamaPtraceScope }}"}
             {{- end }}
