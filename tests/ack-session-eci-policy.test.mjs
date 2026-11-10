@@ -259,6 +259,53 @@ test("ACK can keep the control Worker on ordinary nodes while Sessions use ECI",
 	assert.equal(policies(result).length, 2);
 });
 
+test("required cache admission renders the full cache budget and rejects overflow (#4087)", () => {
+	const entries = Array.from({ length: 49 }, (_, index) => ({
+		images: [
+			`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${index.toString(16).padStart(64, "0")}`,
+		],
+		cacheId: `imc-test${index}`,
+	}));
+	const withEntries = (count) =>
+		render(
+			"1.36.1",
+			"--set",
+			"sessionRuntimeScheduling.enabled=true",
+			"--set",
+			"sessionRuntimeScheduling.imageCache.required=true",
+			"--set-json",
+			`sessionRuntimeScheduling.imageCache.entries=${JSON.stringify(entries.slice(0, count))}`,
+		);
+	for (const count of [26, 48]) {
+		const result = withEntries(count);
+		assert.equal(result.status, 0, result.stderr);
+		const policies = parseAllDocuments(result.stdout)
+			.map((document) => document.toJSON())
+			.filter(
+				(resource) =>
+					["MutatingAdmissionPolicy", "ValidatingAdmissionPolicy"].includes(
+						resource?.kind,
+					) && resource.metadata.name.endsWith("-session-image-cache"),
+			);
+		assert.equal(policies.length, 2);
+		for (const policy of policies) {
+			const caches = JSON.parse(
+				policy.spec.variables.find((variable) => variable.name === "caches")
+					.expression,
+			);
+			assert.deepEqual(
+				caches,
+				Object.fromEntries(
+					entries.slice(0, count).map((entry) => [entry.cacheId, entry.images]),
+				),
+			);
+		}
+	}
+	const overflow = withEntries(49);
+	assert.notEqual(overflow.status, 0);
+	assert.match(overflow.stderr, /maxItems: got 49, want 48/);
+});
+
 test("required cache admission covers every container and denies unknown image groups only on Session CREATE", () => {
 	const entry = {
 		images: [
