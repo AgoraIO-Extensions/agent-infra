@@ -188,14 +188,65 @@ export async function initializeCodexSessionExecutorWorkspaceV1(
 			await parent.close();
 		}
 	}
+	let newGeneration = false;
+	if (state) {
+		const file = await open(
+			statePath,
+			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		);
+		try {
+			const info = await file.stat();
+			if (
+				!info.isFile() ||
+				info.nlink !== 1 ||
+				info.ino !== state.ino ||
+				info.dev !== state.dev ||
+				info.uid !== process.getuid?.() ||
+				(info.mode & 0o077) !== 0
+			)
+				invalid();
+			const saved = z
+				.object({
+					schemaVersion: z.literal(2),
+					sessions: z.record(
+						z.string(),
+						z.object({
+							agentId: id,
+							conversationId: id,
+							sessionGeneration: revision,
+						}),
+					),
+				})
+				.parse(JSON.parse(await file.readFile("utf8")));
+			const after = await file.stat();
+			if (
+				after.size !== info.size ||
+				after.mtimeMs !== info.mtimeMs ||
+				after.ctimeMs !== info.ctimeMs
+			)
+				invalid();
+			const sessions = Object.values(saved.sessions);
+			newGeneration =
+				sessions.length > 0 &&
+				sessions.every(
+					(session) =>
+						session.agentId === binding.agentId &&
+						session.conversationId === binding.conversationId &&
+						session.sessionGeneration < binding.sessionGeneration,
+				);
+		} finally {
+			await file.close();
+		}
+	}
 	let current = root;
-	for (const part of binding.workspaceSubPath.split("/")) {
+	for (const [index, part] of binding.workspaceSubPath.split("/").entries()) {
 		current = posix.join(current, part);
-		await directory(current, !state);
+		// Only the new generation's own directories may be created; retained native parents must survive.
+		await directory(current, !state || (newGeneration && index >= 3));
 	}
 	await directory(
 		posix.join(posix.dirname(binding.workspaceRoot), "home"),
-		!state,
+		!state || newGeneration,
 	);
 }
 

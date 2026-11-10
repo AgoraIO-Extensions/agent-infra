@@ -80,6 +80,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 		...calls,
 		rename: (source: string, target: string) =>
 			actual.rename(mapped(source), mapped(target)),
+		symlink: (
+			source: string,
+			target: string,
+			type?: Parameters<typeof actual.symlink>[2],
+		) => actual.symlink(mapped(source), mapped(target), type),
 		realpath: async (path: string) => {
 			const result = await actual.realpath(mapped(path));
 			return mapped(path) === path ? result : path;
@@ -14224,6 +14229,7 @@ describe("Codex verified Session executor", () => {
 						resourceFence: initialFence,
 						sessionGeneration: initialGeneration,
 					});
+		await initializeCodexSessionExecutorWorkspaceV1(admission.binding);
 		const driver = await f.start({ sessionExecutor: admission });
 		const accepted = await driver.execute(
 			submitCommandV2({ sessionGeneration: initialGeneration }),
@@ -14344,6 +14350,30 @@ describe("Codex verified Session executor", () => {
 		const f = await settledFixture(true);
 		const before = await readFile(f.path, "utf8");
 		const next = replacementAdmission(f.admission, { sessionGeneration: 2 });
+		const oldWorkspace = join(
+			f.admission.binding.workspaceRoot,
+			"retained-marker",
+		);
+		const oldHome = join(
+			dirname(f.admission.binding.workspaceRoot),
+			"home",
+			"retained-marker",
+		);
+		await writeFile(oldWorkspace, "original workspace", { mode: 0o600 });
+		await writeFile(oldHome, "original native home", { mode: 0o600 });
+		await initializeCodexSessionExecutorWorkspaceV1(next.binding);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		expect(await readFile(oldWorkspace, "utf8")).toBe("original workspace");
+		expect(await readFile(oldHome, "utf8")).toBe("original native home");
+		const admitted = await CodexRuntimeDriver.open({
+			...f.options,
+			sessionExecutor: next,
+		});
+		drivers.push(admitted);
+		await expect(admitted.getCapabilities()).resolves.toMatchObject({
+			modelSelection: true,
+		});
+		await admitted.close();
 		const bridge = new TestCodexBridge(
 			"generation-2-thread",
 			"generation-2-turn",
@@ -14391,6 +14421,76 @@ describe("Codex verified Session executor", () => {
 		);
 		for (const [key, operation] of Object.entries(saved.operations))
 			expect(after.operations[key]).toEqual(operation);
+	});
+
+	it.each(["workspace", "home", "retained parent"] as const)(
+		"does not recreate a missing %s for retained executor storage",
+		async (missing) => {
+			const f = await settledFixture();
+			const next =
+				missing === "retained parent"
+					? replacementAdmission(f.admission, { sessionGeneration: 2 })
+					: f.admission;
+			const path =
+				missing === "retained parent"
+					? join(`${f.path}.native`, "conversations")
+					: missing === "home"
+						? join(dirname(f.admission.binding.workspaceRoot), "home")
+						: f.admission.binding.workspaceRoot;
+			const before = await readFile(f.path, "utf8");
+			await rm(path, { recursive: true, force: true });
+			await expect(
+				initializeCodexSessionExecutorWorkspaceV1(next.binding),
+			).rejects.toThrow();
+			await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+			expect(await readFile(f.path, "utf8")).toBe(before);
+		},
+	);
+
+	it.each([
+		["foreign Agent", { agentId: "foreign-agent" }],
+		["foreign Conversation", { conversationId: "foreign-conversation" }],
+		["current generation", { sessionGeneration: 2 }],
+		["future generation", { sessionGeneration: 3 }],
+		["invalid generation", { sessionGeneration: 0 }],
+	] as const)(
+		"does not initialize a new generation from retained %s metadata",
+		async (_name, change) => {
+			const f = await settledFixture();
+			const saved = JSON.parse(
+				await readFile(f.path, "utf8"),
+			) as StoredCodexDriverState;
+			const session = saved.sessions[f.accepted.nativeSessionRef];
+			if (!session) throw new Error("missing retained Session");
+			Object.assign(session, change);
+			const before = `${JSON.stringify(saved)}\n`;
+			await writeFile(f.path, before);
+			const next = replacementAdmission(f.admission, { sessionGeneration: 2 });
+			await expect(
+				initializeCodexSessionExecutorWorkspaceV1(next.binding),
+			).rejects.toThrow();
+			await expect(
+				lstat(dirname(next.binding.workspaceRoot)),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			expect(await readFile(f.path, "utf8")).toBe(before);
+		},
+	);
+
+	it("rejects a new generation's symlink without modifying retained history", async () => {
+		const f = await settledFixture();
+		const before = await readFile(f.path, "utf8");
+		const next = replacementAdmission(f.admission, { sessionGeneration: 2 });
+		await symlink(
+			dirname(f.admission.binding.workspaceRoot),
+			dirname(next.binding.workspaceRoot),
+		);
+		await expect(
+			initializeCodexSessionExecutorWorkspaceV1(next.binding),
+		).rejects.toThrow();
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		expect(
+			(await lstat(dirname(next.binding.workspaceRoot))).isSymbolicLink(),
+		).toBe(true);
 	});
 
 	it("rejects restoring an earlier generation over newer saved executor work", async () => {
