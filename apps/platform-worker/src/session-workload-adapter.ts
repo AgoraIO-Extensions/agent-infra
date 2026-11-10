@@ -1409,6 +1409,7 @@ function renderSessionSandboxResourcesV1(
 						value: JSON.stringify({
 							schemaVersion: 1,
 							agentId: allocation.agentId,
+							sessionId: allocation.sessionId,
 							principal: oauth.input.principal,
 							sandboxId: allocation.sandboxId,
 							sessionGeneration: allocation.generation,

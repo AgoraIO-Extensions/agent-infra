@@ -1,3 +1,13 @@
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	codexSessionExecutorAttestationV1,
@@ -20,7 +30,14 @@ import type {
 	V1Secret,
 	V1Service,
 } from "@kubernetes/client-node";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { provisionRuntimeOAuthFiles } from "../../agent-runtime-host/src/runtime-oauth-provisioning.js";
+
+vi.mock("../../agent-runtime-host/src/standard-mcp-protection.js", () => ({
+	assertStandardMcpProcessProtection: () => undefined,
+}));
+
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	runtimeConnectionConsumerAnnotation,
@@ -215,6 +232,56 @@ function oauthAllocation() {
 }
 
 describe("Session Host OAuth provisioning", () => {
+	it("passes the actual initializer JSON through the strict Host bootstrap consumer", async () => {
+		const selected = oauthAllocation();
+		const pod = sessionSandboxResourcesV1(selected)[5];
+		const json = pod.spec?.initContainers
+			?.find((c) => c.name === "runtime-oauth-provision")
+			?.env?.find(
+				(e) => e.name === "AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING",
+			)?.value;
+		if (!json) throw Error("Missing initializer bundle");
+		const tls = await runtimeTlsFixture({
+			dnsNames: [`${selected.serviceName}.${selected.namespace}.svc`],
+		});
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "session-oauth-producer-")),
+		);
+		try {
+			const source = join(root, "source");
+			const memory = join(root, "memory");
+			await mkdir(source, { mode: 0o700 });
+			await mkdir(memory, { mode: 0o700 });
+			await writeFile(join(source, "server.crt"), tls.cert, { mode: 0o440 });
+			await writeFile(join(source, "server.key"), tls.key, { mode: 0o440 });
+			await writeFile(
+				join(source, "callback.auth"),
+				"synthetic-callback-only-material",
+				{ mode: 0o440 },
+			);
+			await provisionRuntimeOAuthFiles({
+				dataDirectory: join(root, "runtime"),
+				privateDirectory: memory,
+				tlsSource: source,
+				callbackSource: source,
+				configurationBundle: JSON.parse(json),
+			});
+			expect(
+				JSON.parse(
+					await readFile(join(memory, "bootstrap", "binding.json"), "utf8"),
+				),
+			).toMatchObject({
+				sessionId: selected.sessionId,
+				sandboxId: selected.sandboxId,
+				agentId: selected.agentId,
+				sessionGeneration: selected.generation,
+				principal: selected.principal,
+			});
+		} finally {
+			await tls.cleanup();
+			await rm(root, { recursive: true, force: true });
+		}
+	});
 	it("projects binding lookup only with the approved descriptor and initializer-only credential reference", () => {
 		const selected = oauthAllocation();
 		const descriptor = {

@@ -161,6 +161,17 @@ it("copies an approved registration descriptor and its independent machine crede
 	await expect(provisionRuntimeOAuthFiles(options)).rejects.toBeDefined();
 });
 
+it("keeps empty private mount targets when source material is unavailable", async () => {
+	const f = await fixture();
+	await rm(join(f.source, "server.crt"));
+	await expect(provisionRuntimeOAuthFiles(f.options)).rejects.toBeDefined();
+	for (const part of ["tls", "bootstrap"])
+		expect((await stat(join(f.memory, part))).mode & 0o777).toBe(0o700);
+	await expect(
+		stat(join(f.memory, "bootstrap", "binding.json")),
+	).rejects.toBeDefined();
+});
+
 it("copies only approved local TLS/callback files as immutable owner-only bootstrap material", async () => {
 	const f = await fixture();
 	await provisionRuntimeOAuthFiles(f.options);

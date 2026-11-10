@@ -1,7 +1,7 @@
 import { createPrivateKey, X509Certificate } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	standardOAuthUnavailable as unavailable,
@@ -172,6 +172,42 @@ async function writePrivate(
 	}
 }
 
+/** Empty mount targets contain no credential and must exist even when OAuth is disabled. */
+export async function prepareRuntimeOAuthProvisioningDirectories(options: {
+	dataDirectory: string;
+	privateDirectory: string;
+}) {
+	for (const path of [options.dataDirectory, options.privateDirectory])
+		if (!isAbsolute(path) || resolve(path) !== path || path === "/")
+			unavailable();
+	const paths = [
+		options.dataDirectory,
+		join(options.dataDirectory, "codex-driver.json.native"),
+		join(options.dataDirectory, "codex-driver.json.native", "conversations"),
+		join(
+			options.dataDirectory,
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-oauth",
+		),
+		join(options.privateDirectory, "tls"),
+		join(options.privateDirectory, "bootstrap"),
+	];
+	for (const path of paths) {
+		await mkdir(path, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "EEXIST") throw error;
+		});
+		const value = await lstat(path);
+		if (
+			!value.isDirectory() ||
+			value.uid !== process.getuid?.() ||
+			(value.mode & 0o777) !== 0o700 ||
+			(await realpath(path)) !== path
+		)
+			unavailable();
+	}
+}
+
 /** One-shot init; no Connection request, credential issuance or authorization. */
 export async function provisionRuntimeOAuthFiles(options: {
 	dataDirectory: string;
@@ -182,6 +218,7 @@ export async function provisionRuntimeOAuthFiles(options: {
 	registrationDescriptor?: unknown;
 	registrationSource?: string;
 }) {
+	await prepareRuntimeOAuthProvisioningDirectories(options);
 	assertStandardMcpProcessProtection();
 	const input = bundle(options.configurationBundle);
 	if (
@@ -234,31 +271,6 @@ export async function provisionRuntimeOAuthFiles(options: {
 		Date.parse(certificate.validTo) <= Date.now()
 	)
 		unavailable();
-	// Prepare only the fixed Host deny-tree parents on the Session's own PVC.
-	let path = dirname(options.dataDirectory);
-	for (const part of [
-		options.dataDirectory.slice(path.length + 1),
-		"codex-driver.json.native",
-		"conversations",
-		"standard-mcp-oauth",
-	]) {
-		path = join(path, part);
-		await mkdir(path, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
-			if (error.code !== "EEXIST") throw error;
-		});
-		const opened = await openProtectedStandardMcpDirectory(path);
-		await opened.close();
-	}
-	for (const name of ["tls", "bootstrap"]) {
-		const directory = join(options.privateDirectory, name);
-		await mkdir(directory, { mode: 0o700 }).catch(
-			(error: NodeJS.ErrnoException) => {
-				if (error.code !== "EEXIST") throw error;
-			},
-		);
-		const opened = await openProtectedStandardMcpDirectory(directory);
-		await opened.close();
-	}
 	const tls = join(options.privateDirectory, "tls");
 	await writePrivate(tls, "server.crt", cert, 16384);
 	await writePrivate(tls, "server.key", key, 16384);

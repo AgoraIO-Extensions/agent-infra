@@ -1,6 +1,13 @@
-import { provisionRuntimeOAuthFiles } from "./runtime-oauth-provisioning.js";
+import {
+	prepareRuntimeOAuthProvisioningDirectories,
+	provisionRuntimeOAuthFiles,
+} from "./runtime-oauth-provisioning.js";
 
 try {
+	await prepareRuntimeOAuthProvisioningDirectories({
+		dataDirectory: process.env.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
+		privateDirectory: "/oauth-private",
+	});
 	await provisionRuntimeOAuthFiles({
 		dataDirectory: process.env.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
 		privateDirectory: "/oauth-private",
