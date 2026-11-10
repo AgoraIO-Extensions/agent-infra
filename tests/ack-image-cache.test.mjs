@@ -43,6 +43,17 @@ test("cache plans reject mutable, foreign and wrong-architecture inputs", () => 
 	]);
 });
 
+test("cache plans retain the current cache inventory while preparing one new release", () => {
+	const groups = Array.from({ length: 48 }, (_, index) => [
+		`ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex@sha256:${String(index).padStart(2, "0")}${"b".repeat(62)}`,
+	]);
+	assert.equal(parseCachePlan({ ...plan, groups }).groups.length, 48);
+	assert.throws(
+		() => parseCachePlan({ ...plan, groups: [...groups, [ref]] }),
+		/CACHE_(?:GROUP_BUDGET_EXCEEDED|PLAN_INVALID)/u,
+	);
+});
+
 test("release catalog accepts only the complete source-bound architecture receipts", () => {
 	const names = [
 		"agent-runtime-host",
