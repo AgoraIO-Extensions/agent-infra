@@ -450,6 +450,9 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_REGISTRATION === 'true') {
+   console.log(JSON.stringify({ policy:workload.connectionConsumerRegistration?.policy ?? null, hasAdapter:typeof workload.connectionConsumerRegistration?.adapter?.register==='function' }));process.exit(0);
+ }
  if (process.env.RUN_PUBLICATION === 'true') {
    console.log(JSON.stringify({ publication:globalThis.publication ?? null, publications:globalThis.publications ?? null }));process.exit(0);
  }
@@ -555,6 +558,35 @@ function run(overrides: Record<string, string | undefined> = {}) {
 		},
 	});
 }
+
+it("keeps registration default off and passes explicit policy/adapter from the existing Worker module", async () => {
+	const original = await readFile(join(directory, "configuration.mjs"), "utf8");
+	const absent = run({ RUN_REGISTRATION: "true" });
+	expect(absent.status, absent.stderr).toBe(0);
+	expect(JSON.parse(absent.stdout)).toEqual({
+		policy: null,
+		hasAdapter: false,
+	});
+	const policy = {
+		schemaVersion: 1,
+		sourceNamespace: "worker-entry-test",
+		revision: "policy-1",
+		callbackUrl: "https://platform.example.test/connection/callback",
+		resource: "https://connection.example.test/mcp",
+		scope: "mcp:tools",
+	};
+	try {
+		await writeFile(
+			join(directory, "configuration.mjs"),
+			`${original}\nworkloadInput.connectionConsumerRegistration={policy:${JSON.stringify(policy)},adapter:{register:async()=>({outcome:'unknown',failureCode:'UNCONFIGURED'}),reconcile:async()=>({outcome:'unknown',failureCode:'UNCONFIGURED'})}};\n`,
+		);
+		const configured = run({ RUN_REGISTRATION: "true" });
+		expect(configured.status, configured.stderr).toBe(0);
+		expect(JSON.parse(configured.stdout)).toEqual({ policy, hasAdapter: true });
+	} finally {
+		await writeFile(join(directory, "configuration.mjs"), original);
+	}
+});
 
 it("uses the selected deployment database for all Worker consumers and prepares once", () => {
 	const result = run();

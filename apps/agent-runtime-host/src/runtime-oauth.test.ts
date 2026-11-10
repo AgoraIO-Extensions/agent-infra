@@ -663,7 +663,7 @@ async function publicationFixture() {
 	const url = new URL(String(begun.authorizationUrl));
 	await assembly.client.callback({
 		schemaVersion: 1,
-		state: url.searchParams.get("state")!,
+		state: url.searchParams.get("state") ?? "",
 		issuer: f.configuration.issuer,
 		code: "synthetic-authorization-code",
 	});

@@ -18,6 +18,8 @@ import {
 	type AgentUserUseGrantResultV1,
 	type AgentUserUseRevokeCommandV1,
 	type AgentUserUseRevokeResultV1,
+	type ConnectionConsumerRegistrationPolicyV1,
+	captureConnectionConsumerRegistrationPolicyV1,
 	PersonalApiCredentialErrorV1,
 	parseAgentApiLifecycleCommandV1,
 	parseAgentApplicationGrantCommandV1,
@@ -40,6 +42,7 @@ import {
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
 import postgres from "./observed-postgres.js";
 import {
 	agentManagementStateUpdate,
@@ -66,6 +69,7 @@ import {
 export interface PostgresAgentManagementOptionsV1 {
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
+	readonly connectionConsumerRegistration?: ConnectionConsumerRegistrationPolicyV1;
 }
 
 interface IdempotencyRow {
@@ -391,6 +395,7 @@ export async function persistAcceptedAgentManagement(
 	request: AgentManagementTransactionRequestV1,
 	current: AgentManagementStateV1,
 	decision: AcceptedDecision,
+	connectionConsumerRegistration?: ConnectionConsumerRegistrationPolicyV1,
 ): Promise<AgentManagementDecisionV1> {
 	const validated = requireAcceptedEnvelope(request, current, decision);
 	const { result, writePlan } = validated;
@@ -421,6 +426,28 @@ export async function persistAcceptedAgentManagement(
 
 	await insertAgentManagementHistory(transaction, writePlan);
 	await insertAgentManagementEffects(transaction, writePlan);
+	if (connectionConsumerRegistration) {
+		const [application] = await transaction
+			.select({ name: agentApplications.name })
+			.from(agentApplications)
+			.where(eq(agentApplications.id, writePlan.state.applicationId));
+		if (!application) throw new AgentManagementError("unavailable");
+		await insertConnectionConsumerRegistrationV1(transaction, {
+			policy: connectionConsumerRegistration,
+			platformAgentId: writePlan.state.agentId,
+			platformOwnerId: writePlan.state.applicantId,
+			consumerName: application.name,
+			transition: {
+				operation: writePlan.operation,
+				creationChannel: current.creationChannel ?? "web",
+				from: writePlan.transition.from,
+				to: writePlan.transition.to,
+			},
+			traceId: writePlan.auditEvent.traceId,
+			requestId: writePlan.auditEvent.requestId,
+			occurredAt: writePlan.transition.occurredAt,
+		});
+	}
 	await transaction.insert(idempotencyRecords).values({
 		id: randomUUID(),
 		scopeType: request.subjectType,
@@ -444,8 +471,15 @@ export class PostgresAgentManagementTransactionV1
 	readonly #revokeClient;
 	readonly #database;
 	readonly #userDirectory;
+	readonly #connectionConsumerRegistration;
 
 	constructor(options: PostgresAgentManagementOptionsV1) {
+		this.#connectionConsumerRegistration =
+			options.connectionConsumerRegistration === undefined
+				? undefined
+				: captureConnectionConsumerRegistrationPolicyV1(
+						options.connectionConsumerRegistration,
+					);
 		this.#userDirectory = options.userDirectory;
 		this.#client = postgres(options.databaseUrl, { max: 1 });
 		this.#database = drizzle(this.#client);
@@ -483,6 +517,7 @@ export class PostgresAgentManagementTransactionV1
 						request,
 						state,
 						decision,
+						this.#connectionConsumerRegistration,
 					);
 				}),
 			);

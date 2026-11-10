@@ -4,7 +4,10 @@ import {
 	ScopedPlatformAuditPageV1Schema,
 	ScopedPlatformAuditProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import type { AgentDefaultRelayKeyBindingV1 } from "@agent-infra/platform-core";
+import type {
+	AgentDefaultRelayKeyBindingV1,
+	ConnectionConsumerRegistrationPolicyV1,
+} from "@agent-infra/platform-core";
 import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { serve } from "@hono/node-server";
 import postgres from "postgres";
@@ -84,9 +87,12 @@ const unused = async (): Promise<never> => {
 	throw new Error("Unused browser dependency");
 };
 
-async function start() {
+async function start(
+	connectionConsumerRegistration?: ConnectionConsumerRegistrationPolicyV1,
+) {
 	assembly = assemblePlatformApi({
 		databaseUrl: database.databaseUrl,
+		connectionConsumerRegistration,
 		taskAdmissionPolicy: {
 			maximumWaitingTasksPerAgent: 2,
 			waitingTimeoutMs: 30_000,
@@ -230,6 +236,59 @@ async function effects() {
 }
 
 describe("Agent creation through formal HTTP/Core/PostgreSQL with controlled admission", () => {
+	it("atomically registers a separate nonsecret intent for each API-created Agent with the server-resolved Owner", async () => {
+		await stop();
+		const policy = {
+			schemaVersion: 1 as const,
+			sourceNamespace: "controlled-api-platform",
+			revision: "policy-1",
+			callbackUrl: "https://platform.example.test/connection/callback",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp:tools",
+		};
+		await start(policy);
+		try {
+			const first = await request("dynamic-a");
+			expect(first.status).toBe(201);
+			const result = AgentApiCreationResponseV1Schema.parse(await first.json());
+			expect((await request("dynamic-a")).status).toBe(200);
+			expect(
+				(
+					await request("dynamic-a", material.application, {
+						...body,
+						name: "Changed",
+					})
+				).status,
+			).toBe(409);
+			expect((await request("dynamic-b")).status).toBe(201);
+			const rows =
+				await sql`select agent_id, source_namespace, source_key, status, request, receipt from platform.connection_consumer_registrations order by source_key`;
+			expect(rows).toHaveLength(2);
+			expect(new Set(rows.map((row) => row.source_key)).size).toBe(2);
+			for (const row of rows) {
+				expect(row).toMatchObject({
+					source_namespace: policy.sourceNamespace,
+					source_key: row.agent_id,
+					status: "pending",
+					receipt: null,
+				});
+				expect(row.request).toMatchObject({ platformOwnerId: "human-owner" });
+			}
+			expect(rows.some((row) => row.agent_id === result.agentId)).toBe(true);
+			expect(
+				await sql`select operation, count(*)::int count from platform.outbox_items group by operation order by operation`,
+			).toEqual([
+				{ operation: "agent.connection.consumer.register.v1", count: 2 },
+				{ operation: "agent.workload.reconcile.v1", count: 2 },
+			]);
+			const serialized = JSON.stringify(rows);
+			expect(serialized).not.toContain(material.application);
+			expect(serialized).not.toContain(body.defaultRelayKey);
+		} finally {
+			await stop();
+			await start();
+		}
+	});
 	it("reads real creation, replay, refusal and default Key facts through existing administrator audit routes", async () => {
 		const first = await request();
 		expect(first.status).toBe(201);

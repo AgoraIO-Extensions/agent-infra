@@ -6,6 +6,7 @@ import {
 	type WorkloadReconciliationStorePortV1,
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
+import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
 import {
 	createEvaluationScoringWorkerV1,
@@ -23,6 +24,10 @@ import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observat
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly connectionConsumerRegistration?: Omit<
+		Parameters<typeof createConnectionConsumerRegistrationWorkerV1>[0],
+		"databaseUrl"
+	>;
 	readonly evaluationScoring?: Omit<
 		EvaluationScoringWorkerOptionsV1,
 		"databaseUrl"
@@ -166,12 +171,20 @@ export function createPlatformWorkloadWorkerV1(
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
 		| undefined;
 	let evaluation: ReturnType<typeof createEvaluationDataWorkerV1> | undefined;
+	let connectionRegistration:
+		| ReturnType<typeof createConnectionConsumerRegistrationWorkerV1>
+		| undefined;
 	let evaluationScoring:
 		| ReturnType<typeof createEvaluationScoringWorkerV1>
 		| undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	let monitorReconciliation: typeof reconciliation;
 	try {
+		if (options.connectionConsumerRegistration)
+			connectionRegistration = createConnectionConsumerRegistrationWorkerV1({
+				...options.connectionConsumerRegistration,
+				databaseUrl: options.databaseUrl,
+			});
 		monitorStore = openPostgresWorkloadReconciliationStoreV1({
 			databaseUrl: options.databaseUrl,
 			runtimeModelVersion: options.runtimeModelVersion,
@@ -246,6 +259,7 @@ export function createPlatformWorkloadWorkerV1(
 			files?.close(),
 			evaluation?.close(),
 			evaluationScoring?.close(),
+			connectionRegistration?.close(),
 		]);
 		throw error;
 	}
@@ -301,6 +315,7 @@ export function createPlatformWorkloadWorkerV1(
 					if (maintenance && !draining) {
 						await files?.runOnce();
 						await evaluation?.runOnce();
+						await connectionRegistration?.runOnce();
 					}
 				}
 			});
@@ -382,6 +397,7 @@ export function createPlatformWorkloadWorkerV1(
 		stop() {
 			if (closing) return closing;
 			stopped = true;
+			connectionRegistration?.stop();
 			clearTimeout(scorerTimer);
 			const drained = Promise.allSettled([
 				evaluationScoring?.close(),
@@ -397,6 +413,7 @@ export function createPlatformWorkloadWorkerV1(
 					monitorStore?.close(),
 					files?.close(),
 					evaluation?.close(),
+					connectionRegistration?.close(),
 				]);
 				const failed = [...outcomes, ...cleanup].find(
 					(result) => result.status === "rejected",

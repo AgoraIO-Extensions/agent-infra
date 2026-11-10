@@ -740,6 +740,8 @@ async function createPrepared(signal: AbortSignal) {
 		{
 			...workloadInput,
 			serviceToken,
+			connectionConsumerRegistration:
+				workloadInput.connectionConsumerRegistration,
 			...(skillMaterializer ? { skillMaterializer } : {}),
 			policy: {
 				...workloadInput.policy,

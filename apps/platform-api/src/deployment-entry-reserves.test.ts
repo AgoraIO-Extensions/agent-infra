@@ -133,7 +133,7 @@ afterEach(async () => {
 	await rm(directory, { recursive: true, force: true });
 });
 
-async function load(modulePolicy?: unknown) {
+async function load(modulePolicy?: unknown, registrationPolicy?: unknown) {
 	const configuration = join(directory, "configuration.mjs");
 	await writeFile(
 		configuration,
@@ -151,6 +151,7 @@ export const apiInput = {
   channelPolicy: {revision: "fixture", bindings: []}, encryptionKeys: ${JSON.stringify(encryptionKeys)},
   resourceProfile: {profileId: "small", displayName: "Small", estimatedResources: {cpuMillicores: 1000, memoryMiB: 2048, storageGiB: 20}},
   ${modulePolicy === undefined ? "" : `sessionSandboxReserves: ${JSON.stringify(modulePolicy)},`}
+  ${registrationPolicy === undefined ? "" : `connectionConsumerRegistration: ${JSON.stringify(registrationPolicy)},`}
 };
 `,
 	);
@@ -172,6 +173,34 @@ async function reserveFile(value: unknown, explicit = true) {
 	else mountedFile.path = file;
 	return file;
 }
+
+it("reads explicit dynamic Consumer registration policy from the production module", async () => {
+	const registration = {
+		schemaVersion: 1,
+		sourceNamespace: "api-entry-test",
+		revision: "policy-1",
+		callbackUrl: "https://platform.example.test/connection/callback",
+		resource: "https://connection.example.test/mcp",
+		scope: "mcp:tools",
+	};
+	const entry = await load(undefined, registration);
+	expect(
+		entry.createPlatformApiAssemblyInput().connectionConsumerRegistration,
+	).toEqual(registration);
+});
+
+it("keeps registration disabled when its production module policy is absent", async () => {
+	const entry = await load();
+	expect(
+		entry.createPlatformApiAssemblyInput().connectionConsumerRegistration,
+	).toBeUndefined();
+});
+
+it("rejects an incomplete production registration source before creating an API assembly", async () => {
+	await expect(
+		load(undefined, { schemaVersion: 1, sourceNamespace: "" }),
+	).rejects.toThrow("CONNECTION_CONSUMER_REGISTRATION_INVALID");
+});
 
 it.each([true, false])(
 	"loads mounted reserve enabled=%s through the real API assembly",

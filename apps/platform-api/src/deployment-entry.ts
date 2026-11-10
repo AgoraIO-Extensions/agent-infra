@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
-import { parseEvaluationAnalysisPolicyV1 } from "@agent-infra/platform-core";
+import {
+	captureConnectionConsumerRegistrationPolicyV1,
+	parseEvaluationAnalysisPolicyV1,
+} from "@agent-infra/platform-core";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
@@ -69,6 +72,13 @@ const {
 	directorySearch,
 	standardTemplateReleaseInput,
 } = await import(configurationModule);
+
+const connectionConsumerRegistration =
+	apiInput?.connectionConsumerRegistration === undefined
+		? undefined
+		: captureConnectionConsumerRegistrationPolicyV1(
+				apiInput.connectionConsumerRegistration,
+			);
 
 const sessionReserveDeployment =
 	await loadPlatformApiSessionReserveDeploymentV1(
@@ -340,6 +350,7 @@ export function createPlatformApiAssemblyInput() {
 		connectionConsumerProfileApproval:
 			resolvedConnectionConsumerProfileApproval,
 		connectionWebPath: resolvedConnectionWebPath,
+		connectionConsumerRegistration,
 		...(connectionInstallationConfiguration ||
 		connectionInstallationsByAgent ||
 		connectionInstallationsByAgentAndPrincipal

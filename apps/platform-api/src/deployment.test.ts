@@ -159,6 +159,33 @@ describe("explicit custom Agent deployment ports", () => {
 		).toBe(reserve);
 	});
 
+	it("keeps dynamic Consumer registration off unless its deployment policy is explicit and valid", () => {
+		expect(
+			createProductionPlatformApiAssemblyInputV1(fixture.input)
+				.connectionConsumerRegistration,
+		).toBeUndefined();
+		const policy = {
+			schemaVersion: 1 as const,
+			sourceNamespace: "controlled-production-api",
+			revision: "policy-1",
+			callbackUrl: "https://platform.example.test/connection/callback",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp:tools",
+		};
+		expect(
+			createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				connectionConsumerRegistration: policy,
+			}).connectionConsumerRegistration,
+		).toEqual(policy);
+		expect(() =>
+			createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				connectionConsumerRegistration: { ...policy, sourceNamespace: "" },
+			}),
+		).toThrow();
+	});
+
 	it("rejects a duplicate file data plane authority", () => {
 		const files = {} as ProductionPlatformApiInputV1["files"];
 		expect(() =>
