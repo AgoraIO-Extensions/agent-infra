@@ -58,6 +58,12 @@ import {
 	workloadEgressRulesV1,
 } from "./workload-network.js";
 import {
+	assertWorkloadPublicRouteV1,
+	type WorkloadPathRoutesV1,
+	workloadPublicRouteEnvironmentV1,
+	workloadPublicRouteV1,
+} from "./workload-public-route.js";
+import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
 	workspaceSnapshotPodSpecMatchesV1,
@@ -81,6 +87,7 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly storageSize?: string;
 	readonly storageClassName?: string;
 	readonly routeHostSuffix: string;
+	readonly pathRoutes?: WorkloadPathRoutesV1;
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
 	/** Optional namespace of the ingress controller; omitted keeps same-namespace behavior. */
@@ -211,6 +218,7 @@ function configuredEnvironment(
 	return [
 		...(declared ?? []).filter(({ name }) => !Object.hasOwn(value.env, name)),
 		...Object.entries(value.env).map(([name, value]) => ({ name, value })),
+		...workloadPublicRouteEnvironmentV1(value),
 	].filter(({ name }) => name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER");
 }
 
@@ -1078,21 +1086,22 @@ function ingress(
 	if (resource?.kind !== "Service" || resource.spec.ports[0] === undefined)
 		throw new Error("Multi-service entry Service is invalid");
 	const name = workloadResourceNameV1(value.agentId);
-	const host = `${name}.${policy.routeHostSuffix}`;
+	const location = workloadPublicRouteV1(policy, value.agentId);
+	const host = location.host;
 	return {
 		apiVersion: "networking.k8s.io/v1",
 		kind: "Ingress",
 		metadata: metadata(value, name),
 		spec: {
 			ingressClassName: policy.ingressClassName,
-			tls: [{ hosts: [host], secretName: policy.tlsSecretName }],
+			tls: [{ hosts: [host], secretName: location.tlsSecretName }],
 			rules: [
 				{
 					host,
 					http: {
 						paths: [
 							{
-								path: "/",
+								path: location.path,
 								pathType: "Prefix",
 								backend: {
 									service: {
@@ -1650,6 +1659,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			ownership: MultiServiceOwnershipOptionsV1 = {},
 		) {
+			assertWorkloadPublicRouteV1(options.policy, value);
 			// 总量上限必须在任何 Kubernetes 写入（含清理旧版本资源）之前校验，
 			// 被拒绝的 Agent 不能留下半安装或被部分清理的多服务资源。
 			validateMultiServiceResourceCapacityV1(value, resources);
@@ -1940,6 +1950,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			return "healthy" as const;
 		},
 		async promote(value: MultiServiceDesired) {
+			assertWorkloadPublicRouteV1(options.policy, value);
 			await put(ingress(value, options.policy), value);
 		},
 		async materializeSecret(

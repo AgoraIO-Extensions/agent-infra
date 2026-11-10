@@ -22,11 +22,13 @@ import {
 	verifyOwnEntryWorkloads,
 } from "../deploy/ack/self-managed-entry.ts";
 
-function fixture() {
+function fixture(pathMode = false) {
 	const agentId = "current-private-agent";
 	const prefix = `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
 	const image = `sha256:${"a".repeat(64)}`;
-	const origin = `https://${prefix}.apps.example.test`;
+	const origin = pathMode
+		? `https://apps.example.test/a/${prefix}/`
+		: `https://${prefix}.apps.example.test`;
 	const inventory = {
 		Deployment: [],
 		StatefulSet: [],
@@ -159,7 +161,11 @@ function fixture() {
 					host: new URL(origin).hostname,
 					http: {
 						paths: [
-							{ path: "/", backend: { service: { name: `${prefix}-web` } } },
+							{
+								path: new URL(origin).pathname,
+								pathType: "Prefix",
+								backend: { service: { name: `${prefix}-web` } },
+							},
 						],
 					},
 				},
@@ -194,6 +200,13 @@ test("own-entry evidence binds all services, endpoint Pod identities and exact i
 	assert.equal(result.resources.length, 11);
 	assert.equal(JSON.stringify(result).includes(f.agentId), false);
 	assert.equal(result.configurationRevision, "workload-1");
+});
+
+test("path entry evidence binds the exact Agent prefix", () => {
+	const f = fixture(true);
+	assert.equal(f.run().serviceCount, 2);
+	f.inventory.Ingress[0].spec.rules[0].http.paths[0].path = "/";
+	assert.throws(f.run);
 });
 
 for (const scenario of [

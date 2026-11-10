@@ -322,6 +322,11 @@ describe("AgentDetailScreen", () => {
 	it.each([
 		["self-managed", null, "自有交互入口尚未就绪。"],
 		["self-managed", "https://agent.example.test", "自有交互入口已就绪。"],
+		[
+			"self-managed",
+			"https://apps.example.test/a/agent-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
+			"自有交互入口已就绪。",
+		],
 		["platform-managed", null, "平台身份入口尚未就绪。"],
 		["platform-managed", "https://agent.example.test", "平台身份入口已就绪。"],
 	] as const)(
@@ -351,7 +356,7 @@ describe("AgentDetailScreen", () => {
 			if (interactionUrl) {
 				expect(
 					screen.getByRole("link", { name: "打开 Agent" }).getAttribute("href"),
-				).toBe(`${interactionUrl}/`);
+				).toBe(new URL(interactionUrl).href);
 			} else {
 				expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
 			}

@@ -184,12 +184,24 @@ const platformAuthWorkloadRouteV1Schema = z.strictObject({
 	tlsRequired: z.literal(true),
 });
 
-const ownerAuthWorkloadRouteV1Schema = z.strictObject({
-	name: z.string().min(1),
-	exposure: z.literal("self-managed"),
-	tlsRequired: z.literal(true),
-	interactionOrigin: WorkloadRouteOriginV1Schema.optional(),
-});
+const ownerAuthWorkloadRouteV1Schema = z
+	.strictObject({
+		name: z.string().min(1),
+		exposure: z.literal("self-managed"),
+		tlsRequired: z.literal(true),
+		interactionOrigin: WorkloadRouteOriginV1Schema.optional(),
+		interactionPath: z
+			.string()
+			.regex(/^\/a\/agent-[a-f0-9]{32}\/$/)
+			.optional(),
+	})
+	.refine(
+		(route) =>
+			route.interactionPath === undefined ||
+			(route.interactionOrigin !== undefined &&
+				route.interactionPath === `/a/${route.name}/`),
+		{ message: "Path route must bind its origin and resource name" },
+	);
 
 export const WorkloadRouteV1Schema = z.union([
 	internalWorkloadRouteV1Schema,

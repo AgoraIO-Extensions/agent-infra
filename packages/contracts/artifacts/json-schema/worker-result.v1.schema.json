@@ -17838,6 +17838,10 @@
                           ],
                           "type": "object"
                         },
+                        "interactionPath": {
+                          "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                          "type": "string"
+                        },
                         "name": {
                           "minLength": 1,
                           "type": "string"
@@ -20454,6 +20458,10 @@
                           ],
                           "type": "object"
                         },
+                        "interactionPath": {
+                          "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                          "type": "string"
+                        },
                         "name": {
                           "minLength": 1,
                           "type": "string"
@@ -23069,6 +23077,10 @@
                             "origin"
                           ],
                           "type": "object"
+                        },
+                        "interactionPath": {
+                          "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                          "type": "string"
                         },
                         "name": {
                           "minLength": 1,
@@ -26133,6 +26145,10 @@
                                       ],
                                       "type": "object"
                                     },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -26828,6 +26844,10 @@
                                         "origin"
                                       ],
                                       "type": "object"
+                                    },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
                                     },
                                     "name": {
                                       "minLength": 1,
@@ -27768,6 +27788,10 @@
                                       ],
                                       "type": "object"
                                     },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -28441,6 +28465,10 @@
                                         "origin"
                                       ],
                                       "type": "object"
+                                    },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
                                     },
                                     "name": {
                                       "minLength": 1,
@@ -29987,6 +30015,10 @@
                                       ],
                                       "type": "object"
                                     },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -30682,6 +30714,10 @@
                                         "origin"
                                       ],
                                       "type": "object"
+                                    },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
                                     },
                                     "name": {
                                       "minLength": 1,
@@ -31622,6 +31658,10 @@
                                       ],
                                       "type": "object"
                                     },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -32295,6 +32335,10 @@
                                         "origin"
                                       ],
                                       "type": "object"
+                                    },
+                                    "interactionPath": {
+                                      "pattern": "^\\/a\\/agent-[a-f0-9]{32}\\/$",
+                                      "type": "string"
                                     },
                                     "name": {
                                       "minLength": 1,

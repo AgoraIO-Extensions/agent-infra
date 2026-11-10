@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
 	AgentConfigurationAccessAuthorityV1,
@@ -2309,6 +2310,53 @@ describe("PostgreSQL Agent configuration query", () => {
 			).toMatchObject([{ action: "agent.access.updated" }]);
 		},
 	);
+
+	it("projects a verified self-managed path binding through the persistent reader", async () => {
+		const workload = {
+			...workloadDesiredFixture(1, "agent_01", "self-managed"),
+			configRevision: 7,
+		};
+		const configuration = {
+			...agentConfigurationConformanceRecordV1,
+			source: {
+				kind: "custom" as const,
+				imageDigest: workload.imageDigest,
+				admissionRevision: "verified-image",
+				interactionMode: "self-managed" as const,
+				identityResponsibility: "self-managed" as const,
+				connectionEnabled: false,
+			},
+			modelConfiguration: null,
+		} as unknown as AgentConfigurationRecordV2;
+		const { query, input, version, state, persist } =
+			await runtimePresentationFixture(configuration);
+		const prefix = `agent-${createHash("sha256").update("agent_01").digest("hex").slice(0, 32)}`;
+		const path = `/a/${prefix}/`;
+		const verified = {
+			...version,
+			deployment: {
+				...workload,
+				route: {
+					...workload.route,
+					name: prefix,
+					exposure: "self-managed",
+					interactionOrigin: {
+						schemaVersion: 1,
+						origin: "https://apps.example.test",
+					},
+					interactionPath: path,
+				},
+			},
+		};
+		await persist({ ...state, candidate: verified, verified });
+		await expect(query.readRuntimePresentation(input)).resolves.toMatchObject({
+			outcome: "found",
+			interactionUrl: `https://apps.example.test${path}`,
+		});
+		await expect(
+			query.readRuntimePresentation({ ...input, actorId: "unrelated" }),
+		).resolves.toEqual({ outcome: "unavailable" });
+	});
 
 	it("presents only current subject-scoped verified runtime capabilities and never invents an interaction URL", async () => {
 		const { query, input, configuration, deployment, version, state, persist } =

@@ -51,31 +51,17 @@ import {
 	type workloadEgressRulesV1,
 } from "./workload-network.js";
 import {
+	assertWorkloadPublicRouteV1,
+	workloadPublicRouteEnvironmentV1,
+	workloadPublicRouteV1,
+} from "./workload-public-route.js";
+import {
 	codexContainerBoundaryEnvironmentV1,
 	workloadRuntimeAuthEnvironmentV1,
 } from "./workload-runtime-auth.js";
 import type { WorkspaceSnapshotPodProjectionV1 } from "./workspace-snapshot-materializer.js";
 
-const routeHostSuffixPattern =
-	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
-
-/** Build the only public route origin accepted by the Workload contract. */
-export function createWorkloadInteractionOriginV1(input: {
-	readonly routeHostSuffix: string;
-	readonly agentId: string;
-}) {
-	if (!routeHostSuffixPattern.test(input.routeHostSuffix))
-		throw new WorkloadKubernetesError("policy");
-	const origin = `https://${workloadResourceNameV1(input.agentId)}.${input.routeHostSuffix}`;
-	try {
-		const url = new URL(origin);
-		if (url.origin !== origin || url.protocol !== "https:")
-			throw new Error("invalid route origin");
-	} catch {
-		throw new WorkloadKubernetesError("policy");
-	}
-	return { schemaVersion: 1 as const, origin };
-}
+export { createWorkloadInteractionOriginV1 } from "./workload-public-route.js";
 
 function skillHubRuntimeEnvironmentV1(value: AgentWorkloadDesiredV1) {
 	const binding = skillHubRuntimeBindingV1(value);
@@ -235,6 +221,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			}),
 			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,
+			...workloadPublicRouteEnvironmentV1(value),
 			...connection.env,
 		];
 	}
@@ -322,6 +309,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		secret.type === "Opaque";
 	function desired(input: unknown) {
 		const value = validateAgentWorkloadDesiredV1(input);
+		assertWorkloadPublicRouteV1(policy, value);
 		if (
 			!dependencies.connectionConsumerControl &&
 			value.replicas !== 0 &&
@@ -345,12 +333,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			(value.route.exposure === "platform-auth" &&
 				!Object.keys(policy.platformAuthAnnotations).length) ||
 			(value.route.exposure === "self-managed" &&
-				(!interactionOrigin ||
-					interactionOrigin.origin !==
-						createWorkloadInteractionOriginV1({
-							routeHostSuffix: policy.routeHostSuffix,
-							agentId: value.agentId,
-						}).origin))
+				interactionOrigin?.origin !==
+					workloadPublicRouteV1(policy, value.agentId).interactionOrigin.origin)
 		)
 			throw new WorkloadKubernetesError("policy");
 		return value;
@@ -592,7 +576,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	}
 	function ingress(value: AgentWorkloadDesiredV1): V1Ingress {
 		const name = workloadResourceNameV1(value.agentId);
-		const host = `${name}.${policy.routeHostSuffix}`;
+		const location = workloadPublicRouteV1(policy, value.agentId);
+		const host = location.host;
 		return {
 			apiVersion: "networking.k8s.io/v1",
 			kind: "Ingress",
@@ -607,14 +592,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			},
 			spec: {
 				ingressClassName: policy.ingressClassName,
-				tls: [{ hosts: [host], secretName: policy.tlsSecretName }],
+				tls: [{ hosts: [host], secretName: location.tlsSecretName }],
 				rules: [
 					{
 						host,
 						http: {
 							paths: [
 								{
-									path: "/",
+									path: location.path,
 									pathType: "Prefix",
 									backend: {
 										service: {

@@ -15,7 +15,7 @@ import {
 	ownEntryResult,
 } from "./fixtures/custom-agent-web/signed-server.ts";
 
-test("the own-entry browser logs in, invokes the application and preserves the protected session", async (t) => {
+async function checkOwnEntryBrowser(t, basePath) {
 	const require = createRequire(
 		new URL("../apps/web/package.json", import.meta.url),
 	);
@@ -32,6 +32,7 @@ test("the own-entry browser logs in, invokes the application and preserves the p
 		audience: "application-test",
 		publicKey: publicKey.export({ type: "spki", format: "pem" }),
 		role: "single",
+		basePath,
 	};
 	const application = createOwnEntryServer(configuration);
 	let proxy;
@@ -94,7 +95,7 @@ test("the own-entry browser logs in, invokes the application and preserves the p
 			return `Bearer ${data}.${sign(null, Buffer.from(data), privateKey).toString("base64url")}`;
 		};
 		const result = await browserEntry(
-			`https://127.0.0.1:${proxy.address().port}`,
+			`https://127.0.0.1:${proxy.address().port}${basePath}`,
 			token(["web:read"]),
 			token([]),
 			cert,
@@ -117,4 +118,9 @@ test("the own-entry browser logs in, invokes the application and preserves the p
 		}
 		await rm(directory, { recursive: true, force: true });
 	}
-});
+}
+
+for (const basePath of ["/", `/a/agent-${"a".repeat(32)}/`]) {
+	test(`the own-entry browser logs in, invokes the application and preserves the protected session at ${basePath}`, (t) =>
+		checkOwnEntryBrowser(t, basePath));
+}

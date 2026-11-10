@@ -80,11 +80,11 @@ export function verifyOwnEntryWorkloads(agentId: string, source: Item, origin: s
 		for (const endpoint of endpoints) capture(endpoint);
 	}
 	const ingressMatches = all.Ingress.filter(object => object.metadata.name === prefix && owned(object)); assert.equal(ingressMatches.length, 1);
-	const ingress = ingressMatches[0]; const hostname = new URL(origin).hostname;
+	const ingress = ingressMatches[0]; const entryUrl = new URL(origin); const hostname = entryUrl.hostname;
 	const entry = services.find(service => service.entry)!;
 	assert(ingress.spec.tls?.some((tls: Item) => tls.hosts.includes(hostname)));
 	const rule = ingress.spec.rules.filter((item: Item) => item.host === hostname); assert.equal(rule.length, 1);
-	assert(rule[0].http.paths.some((item: Item) => item.path === "/" && item.backend.service.name === entry.name));
+	assert(rule[0].http.paths.some((item: Item) => item.path === entryUrl.pathname && item.pathType === "Prefix" && item.backend.service.name === entry.name));
 	capture(ingress);
 	const revisions = new Set([...all.Deployment, ...all.StatefulSet, ...all.Service, ingress].filter(owned).map(object => object.metadata.labels?.[revisionLabel]));
 	assert(revisions.size === 1 && [...revisions].every(value => /^[1-9][0-9]*$/u.test(value)), "OWN_ENTRY_CONFIGURATION_REVISION_DRIFT");
@@ -94,6 +94,10 @@ export function verifyOwnEntryWorkloads(agentId: string, source: Item, origin: s
 }
 
 export async function browserEntry(origin: string, allowed: string, denied: string, certificateFile: string, expectedReply: string, directory: string) {
+ const entry = new URL(origin.endsWith("/") ? origin : `${origin}/`);
+ const at = (path: string) => new URL(path, entry).href;
+ const cookieName = entry.pathname === "/" ? "__Host-custom-entry" : `__Secure-custom-entry-${entry.pathname.split("/")[2]}`;
+
 	const require = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 	const { chromium } = require("@playwright/test");
 	// Node verifies the CA, hostname and content first; Chromium pins this exact reviewed leaf public key.
@@ -106,11 +110,11 @@ export async function browserEntry(origin: string, allowed: string, denied: stri
 		const page = await context.newPage();
 		await page.goto(origin, { waitUntil: "domcontentloaded" });
 		await page.getByLabel("应用访问凭证").fill(allowed.replace(/^Bearer /u, ""));
-		await Promise.all([page.waitForURL(`${origin}/app`), page.getByRole("button", { name: "登录", exact: true }).click()]);
-		const cookie = (await context.cookies()).find((item: Item) => item.name === "__Host-custom-entry");
-		assert(cookie?.secure && cookie.httpOnly && cookie.sameSite === "Strict" && cookie.path === "/");
+		await Promise.all([page.waitForURL(at("app")), page.getByRole("button", { name: "登录", exact: true }).click()]);
+		const cookie = (await context.cookies()).find((item: Item) => item.name === cookieName);
+		assert(cookie?.secure && cookie.httpOnly && cookie.sameSite === "Strict" && cookie.path === entry.pathname);
 		await page.getByRole("heading", { name: "自定义应用", exact: true }).waitFor();
-		const response = page.waitForResponse((item: any) => item.url() === `${origin}/api/check` && item.request().method() === "GET");
+		const response = page.waitForResponse((item: any) => item.url() === at("api/check") && item.request().method() === "GET");
 		await page.getByRole("button", { name: "读取服务状态", exact: true }).click();
 		assert.equal((await response).status(), 200);
 		await page.waitForFunction((text: string) => document.getElementById("result")?.textContent === text, expectedReply);
@@ -119,9 +123,9 @@ export async function browserEntry(origin: string, allowed: string, denied: stri
 		const other = await browser.newContext({ ignoreHTTPSErrors: false }); const otherPage = await other.newPage();
 		other.setDefaultTimeout(30_000); other.setDefaultNavigationTimeout(30_000);
 		await otherPage.goto(origin, { waitUntil: "domcontentloaded" }); await otherPage.getByLabel("应用访问凭证").fill(denied.replace(/^Bearer /u, ""));
-		const rejected = otherPage.waitForResponse((item: any) => item.url() === `${origin}/auth/login`);
+		const rejected = otherPage.waitForResponse((item: any) => item.url() === at("auth/login"));
 		await otherPage.getByRole("button", { name: "登录", exact: true }).click(); assert.equal((await rejected).status(), 403);
-		assert.equal((await other.cookies()).some((item: Item) => item.name === "__Host-custom-entry"), false);
+		assert.equal((await other.cookies()).some((item: Item) => item.name === cookieName), false);
 		return { loginVerified: true, renderedApplication: true, backendInteraction: true, reloadVerified: true, deniedLoginVerified: true, tlsLeafPinned: true };
 	} finally { await browser.close(); }
 }
@@ -133,7 +137,7 @@ export function assertOwnEntryUnchanged(before: { resourceIdentityHash: string; 
 
 export async function validateOwnEntry(configFile: string, requestsFile: string, stateDirectory: string, evidenceDirectory: string, sourceSha: string, read: Read) {
 	const config = await privateJson(configFile), requests = await privateJson(requestsFile);
-	assert(Object.keys(config).every(key => ["schemaVersion", "requestName", "sourceSha", "routeHostSuffix", "imageSourceSha", "contentSha256", "issuer", "audience", "signingKeyFile", "browserCertificateFile", "expectedReply"].includes(key)));
+	assert(Object.keys(config).every(key => ["schemaVersion", "requestName", "sourceSha", "routeHostSuffix", "pathOrigin", "imageSourceSha", "contentSha256", "issuer", "audience", "signingKeyFile", "browserCertificateFile", "expectedReply"].includes(key)));
 	assert(config.schemaVersion === 1 && config.sourceSha === sourceSha && /^[a-f0-9]{40}$/u.test(config.imageSourceSha) && /^[a-f0-9]{64}$/u.test(config.contentSha256));
 	assert(/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(config.requestName) && [config.issuer, config.audience].every(value => typeof value === "string" && value.length > 0 && value.length <= 256));
 	assert(/^[a-z0-9][a-z0-9.-]+$/u.test(config.routeHostSuffix) && typeof config.expectedReply === "string" && config.expectedReply.length <= 256);
@@ -149,8 +153,12 @@ export async function validateOwnEntry(configFile: string, requestsFile: string,
 	assert.equal(response.status, 200); const agent = await response.json();
 	assert(agent.agentId === agentId && agent.managementStatus === "available" && agent.serviceAvailability === "ready" && agent.source?.interactionMode === "self-managed" && agent.source.identityResponsibility === "self-managed");
 	const prefix = `agent-${hash(agentId).slice(0, 32)}`;
-	const origin = `https://${prefix}.${config.routeHostSuffix}`;
-	assert([origin, `${origin}/`].includes(agent.interactionUrl), "OWN_ENTRY_URL_BINDING_INVALID");
+	if (config.pathOrigin !== undefined) {
+ const target = new URL(config.pathOrigin);
+ assert(target.origin === config.pathOrigin && target.protocol === "https:" && target.hostname !== new URL(requests.origin).hostname, "OWN_ENTRY_PATH_ORIGIN_INVALID");
+ }
+ const origin = config.pathOrigin ? `${config.pathOrigin}/a/${prefix}/` : `https://${prefix}.${config.routeHostSuffix}`;
+	assert([origin, origin.endsWith("/") ? origin : `${origin}/`].includes(agent.interactionUrl), "OWN_ENTRY_URL_BINDING_INVALID");
 	if (body.source.manifest !== undefined) assert.equal(agent.source.manifest, body.source.manifest);
 	else assert.equal(agent.source.imageReference.split("@")[1], body.source.imageReference.split("@")[1]);
 	const workload = verifyOwnEntryWorkloads(agentId, body.source, origin, read, body.environment);
@@ -164,7 +172,7 @@ export async function validateOwnEntry(configFile: string, requestsFile: string,
 	const allowed = jwt("owner", ["web:read"]), denied = jwt("viewer", []);
 	const allowedFile = join(directory, "allowed.private"), deniedFile = join(directory, "denied.private");
 	await writeFile(allowedFile, allowed, { mode: 0o600 }); await writeFile(deniedFile, denied, { mode: 0o600 });
-	const boundary = await verifyCustomAgentWeb({ url: `${origin}/app`, sourceSha: config.imageSourceSha, imageDigest: workload.entryDigest,
+	const boundary = await verifyCustomAgentWeb({ url: new URL("app", origin.endsWith("/") ? origin : `${origin}/`).href, sourceSha: config.imageSourceSha, imageDigest: workload.entryDigest,
 		configurationRevision: workload.configurationRevision, contentSha256: config.contentSha256, allowedAuthorizationFile: allowedFile, deniedAuthorizationFile: deniedFile }, { transportRetryTimeoutMs: 120_000 });
 	await writeFile(join(directory, "boundary.json"), `${JSON.stringify({ schemaVersion: 1, kind: "ack-own-entry-boundary", sourceSha, agentHash: hash(agentId), boundary }, null, 2)}\n`, { mode: 0o600 });
 	assert(boundary.pass, "OWN_ENTRY_BOUNDARY_FAILED");
