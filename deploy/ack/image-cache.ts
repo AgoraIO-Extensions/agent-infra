@@ -7,6 +7,10 @@ import { pathToFileURL } from "node:url";
 export const cacheOwner = "agent-infra-release-cache-v1";
 const digest = /^sha256:[a-f0-9]{64}$/u;
 const image = /^ghcr\.io\/agoraio-extensions\/agent-infra\/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$/u;
+// The cluster ImageCache inventory allows one release to retain up to 48 distinct
+// image groups. Keep the parser aligned with that object budget so an upgrade can
+// retain older caches while preparing the new source-bound set.
+const cachePlanGroupBudget = 48;
 export type CachePlan = { schemaVersion: 1; sourceSha: string; platform: "linux/amd64"; groups: string[][] };
 export type CacheState = { name: string; id?: string; phase?: string; images: string[]; owner?: string; expiresAt?: string; deleting?: boolean };
 export type CacheBackend = { namePrefix?: string; get(name: string): Promise<CacheState | undefined>; create(name: string, images: string[]): Promise<void> };
@@ -20,7 +24,7 @@ export function parseCachePlan(value: any): CachePlan {
 		return [...new Set(group)].sort();
 	});
 	const uniqueGroups = [...new Map(groups.map((g: string[]) => [hash(g), g])).values()] as string[][];
-	assert(uniqueGroups.length <= 24, "CACHE_GROUP_BUDGET_EXCEEDED");
+	assert(uniqueGroups.length <= cachePlanGroupBudget, "CACHE_GROUP_BUDGET_EXCEEDED");
 	return { schemaVersion: 1, sourceSha: value.sourceSha, platform: "linux/amd64", groups: uniqueGroups };
 }
 
