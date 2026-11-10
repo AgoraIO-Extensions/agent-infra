@@ -9,6 +9,10 @@ import {
 	checkWorkloadCapacity,
 	validateCapacityBindings,
 } from "../deploy/ack/workload-capacity.ts";
+import {
+	sessionSandboxResourceCostsV1,
+	workloadResourceConfigurationHashV1,
+} from "../packages/platform-core/src/workload-resource-configuration.ts";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const imageDigest = `sha256:${"a".repeat(64)}`;
@@ -66,6 +70,252 @@ const check = (profiles, other = {}) =>
 
 test("one current measured binding covers a selected standard and custom digest", () => {
 	assert.equal(check([profile]).imageCount, 1);
+});
+
+function executorFixture(templateId = "codex") {
+	const executorPolicy = {
+		resources: {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+		tmpSizeLimit: "128Mi",
+		placement: { architecture: "amd64" },
+	};
+	const input = {
+		...policy,
+		storageSize: "20Gi",
+		storageClassName: "test-storage",
+		codexSessionExecutor: executorPolicy,
+	};
+	const measured = {
+		...measurement,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(input),
+		codexSessionExecutor: executorPolicy,
+		...(templateId === "codex"
+			? {
+					observedExecutorResources: executorPolicy.resources,
+					observedInitResources: executorPolicy.resources,
+				}
+			: {}),
+		storageSize: input.storageSize,
+		...(templateId === "codex"
+			? { storageClassName: input.storageClassName }
+			: {}),
+		resourceCosts: sessionSandboxResourceCostsV1({
+			...input,
+			codexSessionExecutor:
+				templateId === "codex" ? input.codexSessionExecutor : undefined,
+		}),
+	};
+	const checkReceipt = (
+		receipt = measured,
+		requestList = [{ source: { kind: "standard", templateId } }],
+	) => {
+		const bytes = Buffer.from(JSON.stringify(receipt));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: workloadResourceConfigurationHashV1(input),
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				requests: requestList,
+				templates: [{ templateId, imageDigest }],
+				policy: input,
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	return { input, measured, checkReceipt };
+}
+
+test("Codex executor capacity binds both containers to the canonical policy and measured costs", () => {
+	const f = executorFixture();
+	assert.equal(f.checkReceipt().imageCount, 1);
+});
+
+test("measured Kubernetes quantity aliases preserve the approved raw policy hash", () => {
+	const f = executorFixture();
+	f.input.resources = {
+		requests: { cpu: "0.1", memory: "0.125Gi" },
+		limits: { cpu: "1000m", memory: "2048Mi" },
+	};
+	f.input.codexSessionExecutor.resources = {
+		requests: { cpu: "0.25", memory: "0.25Gi" },
+		limits: { cpu: "1000m", memory: "0.5Gi" },
+	};
+	const receipt = {
+		...f.measured,
+		codexSessionExecutor: f.input.codexSessionExecutor,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(f.input),
+		resourceCosts: sessionSandboxResourceCostsV1(f.input),
+		observedResources: {
+			requests: { cpu: "100m", memory: "128Mi" },
+			limits: { cpu: "1", memory: "2Gi" },
+		},
+		observedExecutorResources: {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+		observedInitResources: {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+	};
+	assert.equal(f.checkReceipt(receipt).imageCount, 1);
+});
+
+for (const field of [
+	"observedResources",
+	"observedExecutorResources",
+	"observedInitResources",
+])
+	test(`measured ${field} rejects undeclared resource keys`, () => {
+		const f = executorFixture();
+		const receipt = structuredClone(f.measured);
+		receipt[field] = structuredClone(receipt[field]);
+		receipt[field].limits.gpu = "1";
+		assert.throws(() => f.checkReceipt(receipt));
+		delete receipt[field].limits.gpu;
+		receipt[field].extra = {};
+		assert.throws(() => f.checkReceipt(receipt));
+	});
+
+for (const field of [
+	"observedResources",
+	"observedExecutorResources",
+	"observedInitResources",
+])
+	test(`measured ${field} rejects changed quantity amounts`, () => {
+		const f = executorFixture();
+		const receipt = structuredClone(f.measured);
+		receipt[field] = structuredClone(receipt[field]);
+		receipt[field].limits.memory =
+			field === "observedResources" ? "2049Mi" : "513Mi";
+		assert.throws(() => f.checkReceipt(receipt));
+	});
+
+test("Codex executor rejects a legacy single-container receipt", () => {
+	assert.throws(
+		() => executorFixture().checkReceipt(measurement),
+		/CAPACITY_RESOURCE_HASH_MISMATCH/,
+	);
+});
+
+test("snapshot egress requires its canonical measured policy hash", () => {
+	const input = {
+		...policy,
+		workspaceSnapshotEgress: [
+			{
+				destination: {
+					namespace: "test",
+					podLabels: { app: "snapshot-storage" },
+				},
+				port: 9000,
+			},
+		],
+	};
+	const canonicalHash = workloadResourceConfigurationHashV1(input);
+	const verify = (receipt) => {
+		const bytes = Buffer.from(JSON.stringify(receipt));
+		return check(
+			[
+				{
+					...profile,
+					resourceConfigurationHash: canonicalHash,
+					conformanceEvidenceHash: hash(bytes),
+				},
+			],
+			{
+				requests: [standard],
+				policy: input,
+				evidence: new Map([[imageDigest, bytes]]),
+			},
+		);
+	};
+	assert.throws(() => verify(measurement), /CAPACITY_RESOURCE_HASH_MISMATCH/);
+	assert.equal(
+		verify({ ...measurement, resourceConfigurationHash: canonicalHash })
+			.imageCount,
+		1,
+	);
+});
+
+for (const missing of [
+	"observedExecutorResources",
+	"observedInitResources",
+	"codexSessionExecutor",
+	"resourceCosts",
+	"storageSize",
+	"storageClassName",
+])
+	test(`Codex executor rejects missing ${missing} evidence`, () => {
+		const f = executorFixture();
+		const receipt = structuredClone(f.measured);
+		delete receipt[missing];
+		assert.throws(() => f.checkReceipt(receipt));
+	});
+
+for (const changed of [
+	"resourceConfigurationHash",
+	"observedExecutorResources",
+	"observedInitResources",
+	"tmpSizeLimit",
+	"placement",
+	"resourceCosts",
+	"storageSize",
+	"storageClassName",
+])
+	test(`Codex executor rejects drifted ${changed} evidence`, () => {
+		const f = executorFixture();
+		const receipt = structuredClone(f.measured);
+		if (changed === "resourceConfigurationHash")
+			receipt[changed] = "f".repeat(64);
+		else if (changed === "tmpSizeLimit")
+			receipt.codexSessionExecutor.tmpSizeLimit = "256Mi";
+		else if (changed === "placement")
+			receipt.codexSessionExecutor.placement.architecture = "arm64";
+		else if (changed === "resourceCosts")
+			receipt.resourceCosts.memoryBytes -= 1;
+		else if (changed === "storageSize") receipt.storageSize = "10Gi";
+		else if (changed === "storageClassName")
+			receipt.storageClassName = "other-storage";
+		else receipt[changed].limits.cpu = "2";
+		assert.throws(() => f.checkReceipt(receipt));
+	});
+
+test("a non-Codex measurement binds the global policy without claiming a second container", () => {
+	const f = executorFixture("claude");
+	assert.equal(f.checkReceipt().imageCount, 1);
+	assert.throws(
+		() =>
+			f.checkReceipt({
+				...f.measured,
+				observedExecutorResources: f.input.codexSessionExecutor.resources,
+			}),
+		/CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED/,
+	);
+});
+
+test("a duplicate image under a preceding custom request cannot skip Codex executor layout checks", () => {
+	const f = executorFixture();
+	const receipt = structuredClone(f.measured);
+	delete receipt.observedExecutorResources;
+	delete receipt.observedInitResources;
+	assert.throws(() => f.checkReceipt(receipt, [custom, standard]));
+});
+
+test("a custom source cannot select executor evidence by supplying templateId", () => {
+	const f = executorFixture();
+	assert.throws(
+		() =>
+			f.checkReceipt(f.measured, [
+				{ source: { ...custom.source, templateId: "codex" } },
+			]),
+		/CAPACITY_RESOURCE_COST_DRIFT/,
+	);
 });
 
 test("current templates without matching capacity fail instead of passing Agent readiness", () => {
@@ -253,6 +503,8 @@ test("private input checks fail before cluster read when invalid and reject stal
 			reads++;
 			return {
 				...policy,
+				storageSize: "20Gi",
+				storageClassName: "legacy-worker-storage",
 				profiles: [profile],
 				secretRef: { name: "worker-config", key: "capacity.json" },
 				bytes: Buffer.from(

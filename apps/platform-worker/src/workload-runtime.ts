@@ -39,6 +39,7 @@ import {
 	parseWorkloadExecutionCapacityV1,
 	type SecretActivationDecryptorPortV1,
 	type SecretActivationReferenceV1,
+	workloadResourceConfigurationHashV1 as sharedWorkloadResourceConfigurationHashV1,
 	type WorkloadCapabilitiesV1,
 	type WorkloadExecutionCapacityV1,
 	WorkloadPreflightRejectedErrorV1,
@@ -290,54 +291,7 @@ export function workloadResourceConfigurationHashV1(
 ): string {
 	if (policy.codexSessionExecutor !== undefined)
 		validateCodexSessionExecutorPolicyV1(policy.codexSessionExecutor);
-	return createHash("sha256")
-		.update(
-			JSON.stringify({
-				resourceProfileRef: policy.resourceProfileRef,
-				requests: {
-					cpu: policy.resources.requests.cpu,
-					memory: policy.resources.requests.memory,
-				},
-				limits: {
-					cpu: policy.resources.limits.cpu,
-					memory: policy.resources.limits.memory,
-				},
-				...(policy.codexSessionExecutor === undefined
-					? {}
-					: {
-							codexSessionExecutor: {
-								resources: {
-									requests: {
-										cpu: policy.codexSessionExecutor.resources.requests.cpu,
-										memory:
-											policy.codexSessionExecutor.resources.requests.memory,
-									},
-									limits: {
-										cpu: policy.codexSessionExecutor.resources.limits.cpu,
-										memory: policy.codexSessionExecutor.resources.limits.memory,
-									},
-								},
-								tmpSizeLimit:
-									policy.codexSessionExecutor.tmpSizeLimit ?? "128Mi",
-								...(policy.codexSessionExecutor.placement === undefined
-									? {}
-									: {
-											placement: {
-												architecture:
-													policy.codexSessionExecutor.placement.architecture,
-												runtimeClassName:
-													policy.codexSessionExecutor.placement
-														.runtimeClassName ?? "",
-											},
-										}),
-							},
-						}),
-				...(policy.workspaceSnapshotEgress === undefined
-					? {}
-					: { workspaceSnapshotEgress: policy.workspaceSnapshotEgress }),
-			}),
-		)
-		.digest("hex");
+	return sharedWorkloadResourceConfigurationHashV1(policy);
 }
 
 export function resolveWorkloadExecutionCapacityV1(

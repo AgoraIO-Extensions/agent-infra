@@ -227,6 +227,14 @@ export type {
 export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";
+export {
+	type CodexSessionExecutorResourcePolicyV1,
+	quantityRatioV1,
+	sessionSandboxResourceCostsV1,
+	validateCodexSessionExecutorResourcePolicyV1,
+	type WorkloadResourceConfigurationV1,
+	workloadResourceConfigurationHashV1,
+} from "./workload-resource-configuration.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";
 export * from "./workspace-snapshot.js";
 export * from "./workspace-snapshot-archive.js";

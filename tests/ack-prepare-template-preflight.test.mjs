@@ -215,3 +215,94 @@ test("preflight CLI errors do not expose malformed private input", async (t) => 
 	assert.equal(result.stdout, "");
 	assert.equal(result.stderr.trim(), "ACK_PREFLIGHT_PREPARATION_FAILED");
 });
+
+async function executorJobs(f) {
+	const codex = f.manifest.images.codex;
+	codex.repository =
+		"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+	await f.save(f.manifestFile, f.manifest);
+	for (const file of f.jobs) {
+		const job = JSON.parse(await readFile(file));
+		if (job.templateId === "codex")
+			job.imageReference = `${codex.repository}@${codex.digest}`;
+		Object.assign(job, {
+			resourceProfileRef: "small",
+			modelEgress: [{ destination: { ip: "192.0.2.1" }, port: 443 }],
+			dnsEgress: [
+				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+			],
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: job.expectedResourceLimits,
+			},
+			storageSize: "20Gi",
+			storageClassName: "test-essd",
+			codexSessionExecutor: {
+				resources: {
+					requests: { cpu: "250m", memory: "256Mi" },
+					limits: { cpu: "1", memory: "512Mi" },
+				},
+				placement: { architecture: "amd64" },
+			},
+			placement: {
+				nodeSelector: {
+					type: "virtual-kubelet",
+					"kubernetes.io/arch": "amd64",
+				},
+				tolerations: [
+					{
+						key: "virtual-kubelet.io/provider",
+						operator: "Equal",
+						value: "alibabacloud",
+						effect: "NoSchedule",
+					},
+				],
+			},
+		});
+		await f.save(file, job);
+	}
+}
+
+test("preparation preserves one shared executor deployment policy across all template jobs", async (t) => {
+	const f = await fixture(t);
+	await executorJobs(f);
+	const files = await f.run();
+	assert.equal(files.length, 4);
+	for (const file of files) {
+		const job = JSON.parse(await readFile(file));
+		assert.equal(job.resourceProfileRef, "small");
+		assert.equal(job.storageClassName, "test-essd");
+		assert.equal(job.codexSessionExecutor.placement.architecture, "amd64");
+	}
+});
+for (const change of [
+	"resources",
+	"executor",
+	"storage",
+	"class",
+	"missing policy",
+])
+	test(`preparation rejects mixed template capacity ${change} before creating run files`, async (t) => {
+		const f = await fixture(t);
+		await executorJobs(f);
+		const job = JSON.parse(await readFile(f.jobs[1]));
+		if (change === "resources") job.resources.requests.cpu = "200m";
+		if (change === "executor") job.codexSessionExecutor.tmpSizeLimit = "64Mi";
+		if (change === "storage") job.storageSize = "40Gi";
+		if (change === "class") job.storageClassName = "foreign";
+		if (change === "missing policy") {
+			for (const key of [
+				"resourceProfileRef",
+				"resources",
+				"codexSessionExecutor",
+				"storageSize",
+				"storageClassName",
+				"modelEgress",
+				"dnsEgress",
+			])
+				delete job[key];
+		}
+		await f.save(f.jobs[1], job);
+		await assert.rejects(f.run(), /PREFLIGHT_CAPACITY_POLICY_DRIFT/u);
+		assert.deepEqual(await readdir(f.evidence), []);
+	});

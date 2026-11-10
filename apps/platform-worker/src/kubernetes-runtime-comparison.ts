@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { quantityRatioV1 as quantityRatio } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1Ingress,
@@ -78,44 +79,7 @@ export function hasSameStructure(actual: unknown, expected: unknown): boolean {
 	);
 }
 
-// Compare quantities without float rounding or rejecting API-server canonical units.
-export function quantityRatio(
-	value: string,
-): readonly [bigint, bigint] | undefined {
-	if (value.length > 128) return undefined;
-	const match =
-		/^([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(n|u|m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei|[eE][+-]?[0-9]+)?$/.exec(
-			value,
-		);
-	if (!match?.[1]) return undefined;
-	const [integer, fraction = ""] = match[1].replace(/^\+/, "").split(".");
-	let numerator = BigInt(`${integer || "0"}${fraction}`);
-	let denominator = 10n ** BigInt(fraction.length);
-	const suffix = match[2] ?? "";
-	if (suffix.endsWith("i")) {
-		numerator *=
-			1024n ** BigInt(["Ki", "Mi", "Gi", "Ti", "Pi", "Ei"].indexOf(suffix) + 1);
-	} else {
-		const powers: Readonly<Record<string, number>> = {
-			"": 0,
-			n: -9,
-			u: -6,
-			m: -3,
-			k: 3,
-			M: 6,
-			G: 9,
-			T: 12,
-			P: 15,
-			E: 18,
-		};
-		const exponent = powers[suffix] ?? Number(suffix.slice(1));
-		if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 30)
-			return undefined;
-		if (exponent < 0) denominator *= 10n ** BigInt(-exponent);
-		else numerator *= 10n ** BigInt(exponent);
-	}
-	return [numerator, denominator];
-}
+export { quantityRatio };
 
 export function matchesResources(
 	actual: V1PodSpec["containers"][number]["resources"],

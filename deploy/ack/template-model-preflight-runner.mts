@@ -5,6 +5,7 @@ import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
 import {createWorkerRuntimeGrantSignerV4} from "../../apps/platform-worker/src/runtime-grant-signer-v4.ts";
 import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts";
@@ -29,7 +30,7 @@ async function run() {
 	if (c.schemaVersion !== 1 || typeof c.kubeconfig !== "string" || !isAbsolute(c.kubeconfig) || typeof c.namespace !== "string" || c.scope !== "isolated-template-real-model" ||
 		!['codex','claude','opencode','pi'].includes(c.templateId) || !c.operatorApprovalRef ||
 		!isAbsolute(c.worktree) || !isAbsolute(c.outputDirectory) ||
-		!/^ack-preflight-[a-z0-9-]+$/.test(c.containerName) ||
+		!/^(?:ack-preflight-|sandbox-preflight-)[a-z0-9-]+$/.test(c.containerName) ||
 		!/^sha256:[a-f0-9]{64}$/.test(c.imageDigest) ||
 		!c.imageReference.endsWith(`@${c.imageDigest}`) ||
 		!/^([a-f0-9]{40})$/.test(c.sourceCommit) ||
@@ -46,7 +47,7 @@ async function run() {
 		["localhost", "127.0.0.1", "::1"].includes(relay.hostname) ||
 		relay.hostname.endsWith(".invalid")) fail();
 	stage = "ack-pod-image-source-check";
- const kube=(...args: string[])=>execFileSync("kubectl",["--kubeconfig",c.kubeconfig,"-n",c.namespace,...args],{encoding:"utf8"}).trim();
+ const kube=(...args: string[])=>execFileSync("kubectl",["--kubeconfig",c.kubeconfig,"-n",c.namespace,...(args[0] === "exec" ? [args[0], args[1], "-c", "runtime", ...args.slice(2)] : args)],{encoding:"utf8"}).trim();
  const pod=JSON.parse(kube("get","pod",c.containerName,"-o","json"));
  if(pod.metadata.labels["agent-infra.validation-scope"]!==c.scope || pod.spec.containers[0].image!==c.imageReference || pod.status.phase!=="Running" || !pod.spec.nodeName.startsWith(c.expectedNodePrefix ?? "virtual-kubelet-")) fail();
  const source=c.sourceCommit;
@@ -72,7 +73,7 @@ async function run() {
  if(!/^[a-f0-9]{64}$/.test(c.runtimeModuleSha256??"")) fail();
  const actualModuleHash=kube("exec",c.containerName,"--","node","-e","console.log(require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs')).digest('hex'))");
  if(actualModuleHash!==c.runtimeModuleSha256) fail();
- const image=pod.status.containerStatuses[0].imageID;
+ const image=pod.status.containerStatuses.find((container:any)=>container.name==="runtime")?.imageID;
  const command="/bin/sh",commandArgs=["./start-runtime-host.sh"];
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
  if(observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory) fail();
@@ -89,6 +90,12 @@ async function run() {
 	if (actualConfiguration.configVersion !== c.runtimeConfigVersion || !selected ||
 		selected.model !== c.modelId || new URL(selected.endpoint).origin !== relay.origin ||
 		!selected.reasoningLevels.includes(c.reasoningLevel) || selected.protocol !== c.protocol) fail();
+	const executorBinding = c.sessionExecutorBinding === undefined ? undefined : parseCodexSessionExecutorBindingV1(c.sessionExecutorBinding);
+	if (executorBinding) {
+		if (c.driver !== "codex" || executorBinding.podName !== c.containerName || executorBinding.namespace !== c.namespace || executorBinding.agentId !== c.agentId || executorBinding.imageDigest !== c.imageReference || c.runtimeDataDirectory !== "/workspace/runtime") fail();
+		const actualBinding = pod.spec.containers[0].env.find((entry:any)=>entry.name === CODEX_SESSION_EXECUTOR_BINDING_ENV)?.value;
+		if (actualBinding !== JSON.stringify(executorBinding) || pod.spec.containers[0].env.find((entry:any)=>entry.name === "AGENT_INFRA_RUNTIME_ISOLATION_MODE")?.value !== "session-executor") fail();
+	} else if (c.runtimeDataDirectory !== undefined || c.containerName.startsWith("sandbox-")) fail();
 	stage = "signer-load";
 
 	const signing = {
@@ -112,13 +119,14 @@ async function run() {
 	const frozen = resume?.frozen ?? {
 		requestId: randomUUID(), traceId: randomUUID(), principal,
 		executionSource: "eval", channelId: "isolated-template-validation",
-		agentId, conversationId: `validation-conversation-${randomUUID()}`,
+		agentId, conversationId: executorBinding?.conversationId ?? `validation-conversation-${randomUUID()}`,
 		executionId: id, turnId: `validation-turn-${randomUUID()}`,
 		sessionGeneration: 1, hostSessionRef: null,
 		operation: { kind: "execution", id, deliveryFence: 1, executionDeliveryFence: 1 },
 		keyBinding: { purpose: "agent-default", subjectId: agentId,
 			ciphertextRef: `validation-key-${randomUUID()}`, version: 1 },
 	};
+	if (executorBinding && (frozen.agentId !== executorBinding.agentId || frozen.conversationId !== executorBinding.conversationId || frozen.sessionGeneration !== executorBinding.sessionGeneration)) fail();
 	stage = "turn-request-schema";
 	const unsigned = contracts.RuntimeSubmitTurnRequestV4Schema.parse({
 		schemaVersion: 4, ...frozen,

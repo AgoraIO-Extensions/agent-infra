@@ -3,6 +3,12 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { privateBytes, privateJson } from "./private-input.ts";
+import {
+	sessionSandboxResourceCostsV1,
+	validateCodexSessionExecutorResourcePolicyV1,
+	workloadResourceConfigurationHashV1,
+	workloadResourcesEqualV1,
+} from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 const digest = /^sha256:[a-f0-9]{64}$/u;
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -16,8 +22,38 @@ const resources = (value: any) => {
 	};
 };
 
+const policyTuple = (value: any) => ({
+	resourceProfileRef: value.resourceProfileRef,
+	resources: resources(value.resources),
+	...(value.codexSessionExecutor === undefined
+		? {}
+		: { codexSessionExecutor: value.codexSessionExecutor }),
+	...(value.workspaceSnapshotEgress === undefined
+		? {}
+		: { workspaceSnapshotEgress: value.workspaceSnapshotEgress }),
+});
+
+const resourceHash = (value: any) =>
+	workloadResourceConfigurationHashV1(policyTuple(value));
+
+function expectedCosts(policy: any, templateId: string) {
+	return sessionSandboxResourceCostsV1({
+		resources: policy.resources,
+		storageSize: policy.storageSize,
+		...(policy.codexSessionExecutor === undefined || templateId !== "codex"
+			? {}
+			: { codexSessionExecutor: policy.codexSessionExecutor }),
+	});
+}
+
 /** Only the measured single-execution receipts used by this workflow are supported. */
-function verifyMeasurement(bytes: Uint8Array, imageDigest: string, policy: any, capacity: number) {
+function verifyMeasurement(
+	bytes: Uint8Array,
+	imageDigest: string,
+	policy: any,
+	capacity: number,
+	templateId: string,
+) {
 	const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 	const value = input.receipt ?? input;
 	assert(value?.schemaVersion === 1 &&
@@ -33,7 +69,24 @@ function verifyMeasurement(bytes: Uint8Array, imageDigest: string, policy: any, 
 		: Array.isArray(facts) && facts.some((fact: any) => fact.phase === "completed") &&
 			!facts.some((fact: any) => ["failed", "unknown"].includes(fact.phase)),
 		"CAPACITY_MODEL_FACT_MISSING");
-	assert.deepEqual(resources(value.observedResources), resources(policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+	assert(workloadResourcesEqualV1(value.observedResources, policy.resources), "CAPACITY_MEASURED_RESOURCES_DRIFT");
+	const executorMode = templateId === "codex" && policy.codexSessionExecutor !== undefined;
+	if (value.resourceConfigurationHash !== undefined || policy.codexSessionExecutor !== undefined || policy.workspaceSnapshotEgress !== undefined)
+		assert.equal(value.resourceConfigurationHash, resourceHash(policy), "CAPACITY_RESOURCE_HASH_MISMATCH");
+	if (policy.codexSessionExecutor !== undefined) {
+		validateCodexSessionExecutorResourcePolicyV1(policy.codexSessionExecutor);
+		assert.deepEqual(value.codexSessionExecutor, policy.codexSessionExecutor, "CAPACITY_EXECUTOR_POLICY_DRIFT");
+		assert.equal(value.storageSize, policy.storageSize, "CAPACITY_STORAGE_SIZE_DRIFT");
+		assert.deepEqual(value.resourceCosts, expectedCosts(policy, templateId), "CAPACITY_RESOURCE_COST_DRIFT");
+		if (executorMode) {
+			assert(typeof policy.storageClassName === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(policy.storageClassName), "CAPACITY_STORAGE_CLASS_MISSING");
+			assert.equal(value.storageClassName, policy.storageClassName, "CAPACITY_STORAGE_CLASS_DRIFT");
+			assert(workloadResourcesEqualV1(value.observedExecutorResources, policy.codexSessionExecutor.resources), "CAPACITY_EXECUTOR_RESOURCES_DRIFT");
+			assert(workloadResourcesEqualV1(value.observedInitResources, policy.codexSessionExecutor.resources), "CAPACITY_INIT_RESOURCES_DRIFT");
+		} else {
+			assert(value.observedExecutorResources === undefined && value.observedInitResources === undefined, "CAPACITY_EXECUTOR_LAYOUT_UNEXPECTED");
+		}
+	}
 }
 
 /** Read-only gate: Agent readiness does not prove that a Session can be allocated. */
@@ -41,7 +94,11 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 	assert(Array.isArray(requests) && requests.length > 0 && requests.length <= 20);
 	assert(Array.isArray(templates) && Array.isArray(profiles));
 	assert(typeof policy.resourceProfileRef === "string" && policy.resourceProfileRef);
-	const resourcesHash = hash(JSON.stringify({ resourceProfileRef: policy.resourceProfileRef, ...resources(policy.resources) }));
+	if (policy.codexSessionExecutor !== undefined) {
+		assert(typeof policy.storageSize === "string" && policy.storageSize, "CAPACITY_STORAGE_SIZE_MISSING");
+		validateCodexSessionExecutorResourcePolicyV1(policy.codexSessionExecutor);
+	}
+	const resourcesHash = resourceHash(policy);
 	const checked = new Set<string>();
 	for (const request of requests) {
 		const source = request.source;
@@ -51,7 +108,6 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		if (source.kind === "standard") assert(matches.length === 1);
 		const imageDigest = source.kind === "standard" ? matches[0].imageDigest : source.imageReference?.split("@")[1];
 		assert(typeof imageDigest === "string" && digest.test(imageDigest));
-		if (checked.has(imageDigest)) continue;
 		const matchesCapacity = profiles.filter((p) => p.imageDigest === imageDigest && p.resourceProfileRef === policy.resourceProfileRef && p.resourceConfigurationHash === resourcesHash);
 		assert(matchesCapacity.length === 1, "CAPACITY_BINDING_MISSING_OR_AMBIGUOUS");
 		const profile = matchesCapacity[0];
@@ -60,13 +116,23 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		assert(profile.schemaVersion === 1 && profile.maximumConcurrentExecutions === 1 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash), "CAPACITY_PROFILE_UNMEASURED");
 		const bytes = evidence.get(imageDigest);
 		assert(bytes && hash(bytes) === profile.conformanceEvidenceHash, "CAPACITY_EVIDENCE_MISMATCH");
-		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions);
+		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions, source.kind === "standard" ? source.templateId : "custom");
 		checked.add(imageDigest);
 	}
 	return { schemaVersion: 1, kind: "ack-workload-capacity", imageCount: checked.size, resourceConfigurationHash: resourcesHash, businessVerified: false };
 }
 
-type WorkerInput = { bytes: Uint8Array; resourceProfileRef: string; resources: unknown; profiles: unknown; secretRef: SecretRef };
+type WorkerInput = {
+	bytes: Uint8Array;
+	resourceProfileRef: string;
+	resources: unknown;
+	profiles: unknown;
+	codexSessionExecutor?: unknown;
+	workspaceSnapshotEgress?: unknown;
+	storageSize?: string;
+	storageClassName?: string;
+	secretRef: SecretRef;
+};
 type SecretRef = { name: string; key: string };
 
 export async function checkWorkloadCapacity(configFile: string, requestsFile: string, templatesFile: string, sourceSha: string, readWorker: (ref: SecretRef) => WorkerInput) {
@@ -93,6 +159,13 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	assert.deepEqual(Buffer.from(actual.bytes), bytes, "CAPACITY_SECRET_DRIFT");
 	assert.equal(actual.resourceProfileRef, input.resourceProfileRef, "CAPACITY_WORKER_POLICY_DRIFT");
 	assert.deepEqual(resources(actual.resources), resources(input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
+	assert.deepEqual(actual.codexSessionExecutor, input.codexSessionExecutor, "CAPACITY_WORKER_EXECUTOR_POLICY_DRIFT");
+	assert.deepEqual(actual.workspaceSnapshotEgress, input.workspaceSnapshotEgress, "CAPACITY_WORKER_SNAPSHOT_POLICY_DRIFT");
+	if (input.codexSessionExecutor !== undefined || input.storageSize !== undefined)
+		assert.equal(actual.storageSize, input.storageSize, "CAPACITY_WORKER_STORAGE_SIZE_DRIFT");
+	if (input.codexSessionExecutor !== undefined || input.storageClassName !== undefined)
+		assert.equal(actual.storageClassName, input.storageClassName, "CAPACITY_WORKER_STORAGE_CLASS_DRIFT");
+	assert.equal(resourceHash(actual), receipt.resourceConfigurationHash, "CAPACITY_WORKER_POLICY_DRIFT");
 	assert.deepEqual(actual.profiles, profiles.profiles, "CAPACITY_WORKER_PROFILES_DRIFT");
 	return { ...receipt, profilesHash: hash(bytes), mountedInputVerified: true };
 }
@@ -133,7 +206,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((r: any) => r.kind === "Deployment" && r.controller && r.uid === deployment.metadata.uid));
 			const secret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json", "--show-managed-fields=true"]));
 			const mount = assertWorkerMount(pod, secret, ref);
-			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,profiles:w.executionCapacityProfiles}));process.exit(0);`;
+			const script = `const {workloadInput:w}=await import(${JSON.stringify(pathToFileURL(mount.configPath).href)}); console.log(JSON.stringify({namespace:w.policy.namespace,resourceProfileRef:w.policy.resourceProfileRef,resources:w.policy.resources,codexSessionExecutor:w.policy.codexSessionExecutor,workspaceSnapshotEgress:w.policy.workspaceSnapshotEgress,storageSize:w.policy.storageSize,storageClassName:w.policy.storageClassName,profiles:w.executionCapacityProfiles}));process.exit(0);`;
 			const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
 			assert(actual.namespace === namespace);
 			const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));

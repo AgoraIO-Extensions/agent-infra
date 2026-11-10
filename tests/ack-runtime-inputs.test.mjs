@@ -19,6 +19,10 @@ import { bootstrapLogin } from "../deploy/ack/bootstrap-login.ts";
 import { publishRuntimeInputs } from "../deploy/ack/runtime-inputs.ts";
 import { templatePreflightValidationReceipt } from "../deploy/ack/template-validation.mjs";
 import { checkWorkloadCapacity } from "../deploy/ack/workload-capacity.ts";
+import {
+	sessionSandboxResourceCostsV1,
+	workloadResourceConfigurationHashV1,
+} from "../packages/platform-core/src/workload-resource-configuration.ts";
 
 const source = "a".repeat(40);
 const owner = "11111111-1111-4111-8111-111111111111";
@@ -496,6 +500,127 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 	assert.equal(repeated.mutationStatus, "not-applied");
 	assert.equal(repeated.loginVerified, true);
 	assert.equal(f.mutations.length, mutationCount);
+});
+
+test("executor policy rejects legacy single-container measurements before any publication", async (t) => {
+	const f = await fixture(t);
+	f.capacity.storageSize = "20Gi";
+	f.capacity.codexSessionExecutor = {
+		resources: {
+			requests: { cpu: "250m", memory: "256Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+		tmpSizeLimit: "128Mi",
+		placement: { architecture: "amd64" },
+	};
+	await f.save(f.files.capacity, f.capacity);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+		/RUNTIME_INPUTS_INVALID/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("executor measurements publish canonical capacity and verify the full mounted Worker policy", async (t) => {
+	const f = await fixture(t);
+	Object.assign(f.capacity, {
+		storageSize: "20Gi",
+		storageClassName: "test-storage",
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "250m", memory: "256Mi" },
+				limits: { cpu: "1", memory: "512Mi" },
+			},
+			tmpSizeLimit: "128Mi",
+			placement: { architecture: "amd64" },
+		},
+	});
+	const resourceConfigurationHash = workloadResourceConfigurationHashV1(
+		f.capacity,
+	);
+	for (const expected of f.templates) {
+		const file = join(
+			dirname(expected.validationFile),
+			"runtime-capacity.receipt.json",
+		);
+		const measured = JSON.parse(await readFile(file));
+		await f.save(file, {
+			...measured,
+			resourceConfigurationHash,
+			codexSessionExecutor: f.capacity.codexSessionExecutor,
+			storageSize: f.capacity.storageSize,
+			...(expected.templateId === "codex"
+				? { storageClassName: f.capacity.storageClassName }
+				: {}),
+			resourceCosts: sessionSandboxResourceCostsV1({
+				...f.capacity,
+				codexSessionExecutor:
+					expected.templateId === "codex"
+						? f.capacity.codexSessionExecutor
+						: undefined,
+			}),
+			...(expected.templateId === "codex"
+				? {
+						observedExecutorResources:
+							f.capacity.codexSessionExecutor.resources,
+						observedInitResources: f.capacity.codexSessionExecutor.resources,
+					}
+				: {}),
+		});
+	}
+	await f.save(f.files.capacity, f.capacity);
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	const readWorker = (secretRef) => {
+		const bytes = Buffer.from(
+			f.cluster.get(`secret/${secretRef.name}`).data[secretRef.key],
+			"base64",
+		);
+		const profiles = JSON.parse(bytes).profiles;
+		assert.equal(profiles.length, 4);
+		assert(
+			profiles.every(
+				(profile) =>
+					profile.resourceConfigurationHash === resourceConfigurationHash,
+			),
+		);
+		return { ...f.capacity, bytes, profiles, secretRef };
+	};
+	const checked = await checkWorkloadCapacity(
+		f.files.capacity,
+		f.files.requests,
+		f.files.templates,
+		source,
+		readWorker,
+	);
+	assert.equal(checked.resourceConfigurationHash, resourceConfigurationHash);
+	assert.equal(checked.imageCount, 4);
+	for (const [key, value] of [
+		["codexSessionExecutor", undefined],
+		[
+			"codexSessionExecutor",
+			{ ...f.capacity.codexSessionExecutor, tmpSizeLimit: "256Mi" },
+		],
+		["workspaceSnapshotEgress", { changed: true }],
+		["storageSize", "40Gi"],
+		["storageClassName", "other-storage"],
+	])
+		await assert.rejects(
+			checkWorkloadCapacity(
+				f.files.capacity,
+				f.files.requests,
+				f.files.templates,
+				source,
+				(ref) => ({ ...readWorker(ref), [key]: value }),
+			),
+			/CAPACITY_WORKER_.*DRIFT/,
+		);
 });
 
 async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {
