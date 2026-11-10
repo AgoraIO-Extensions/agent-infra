@@ -358,22 +358,14 @@ export function projectConversationMessagesV1(
 			if (text.length === 0 && !isTerminalStatus(status)) {
 				return [];
 			}
-			// A Runtime status response can mark the Execution terminal before the
-			// journal drain commits its terminal event. Do not expose a completed
-			// empty answer during that window; the next read will project the real
-			// answer once the event is durable. An explicitly persisted terminal
-			// event still permits a legitimate empty completed answer.
+			// Host completion can precede the journal drain; only its persisted terminal event completes the answer.
 			const terminalEventPersisted = events.some((event) => {
-				if (
-					event.eventType !== "execution.status" ||
-					event.executionId !== item.executionId
-				)
-					return false;
+				if (event.eventType !== "execution.status") return false;
 				const payload = eventPayload(event);
 				return payload.type === "execution.status" && payload.status === status;
 			});
 			const projectedStatus =
-				status === "completed" && text.length === 0 && !terminalEventPersisted
+				status === "completed" && !terminalEventPersisted
 					? ("processing" as const)
 					: messageStatus(status);
 			return [
