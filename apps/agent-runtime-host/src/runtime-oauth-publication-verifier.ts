@@ -70,6 +70,7 @@ export async function createProtectedRuntimeOAuthPublicationVerifier(options: {
 	publicationRevision: string | undefined;
 	target: ApprovedConnectionConsumerTargetV1;
 	principal: RuntimePrincipalV1;
+	serviceToken: string;
 	fetch?: typeof fetch;
 }) {
 	const configuration = structuredClone(options.configuration);
@@ -133,6 +134,15 @@ export async function createProtectedRuntimeOAuthPublicationVerifier(options: {
 	const secret = validateStandardMcpToken(
 		await readProtectedStandardMcpBytes(tls, "registration.auth", 4096),
 	);
+	const callbackToken = validateStandardMcpToken(
+		await readProtectedStandardMcpBytes(tls, "callback.auth", 4096),
+	);
+	if (
+		!options.serviceToken ||
+		secret === options.serviceToken ||
+		secret === callbackToken
+	)
+		unavailable();
 	const endpoint = new URL(
 		`/connection/v1/agents/${encodeURIComponent(target.profile.consumerId)}/oauth-clients/${encodeURIComponent(descriptor.registrationKey)}`,
 		configuration.issuer,

@@ -2339,6 +2339,7 @@ async function bindingReadFixture(
 		publicationRevision: f.revision,
 		target: f.target,
 		principal: f.principal,
+		serviceToken: "fixture-service",
 		fetch: fetcher,
 	});
 	const client = await createProtectedRuntimeOAuthClient({
@@ -2468,6 +2469,44 @@ it.each(["descriptor", "service credential"])(
 		expect(f.bindingReads).toHaveLength(0);
 		expect(f.calls).toHaveLength(0);
 		expect(protection.secretReads).toBe(before);
+	},
+);
+
+it("rejects missing publication approval before loading a binding-read client", async () => {
+	const f = await bindingReadFixture();
+	const before = protection.secretReads;
+	await expect(
+		createProtectedRuntimeOAuthPublicationVerifier({
+			dataDirectory: f.directory,
+			configuration: f.configuration,
+			publicationRevision: undefined,
+			target: f.target,
+			principal: f.principal,
+			serviceToken: "fixture-service",
+		}),
+	).rejects.toBeDefined();
+	expect(protection.secretReads).toBe(before);
+	expect(f.calls).toHaveLength(0);
+	expect(f.bindingReads).toHaveLength(0);
+});
+
+it.each(["fixture-service", callbackServiceToken])(
+	"rejects reusing an internal credential for Connection registration",
+	async (credential) => {
+		const f = await bindingReadFixture();
+		await writeFile(join(f.root, "tls", "registration.auth"), credential);
+		await expect(
+			createProtectedRuntimeOAuthPublicationVerifier({
+				dataDirectory: f.directory,
+				configuration: f.configuration,
+				publicationRevision: f.revision,
+				target: f.target,
+				principal: f.principal,
+				serviceToken: "fixture-service",
+			}),
+		).rejects.toBeDefined();
+		expect(f.calls).toHaveLength(0);
+		expect(f.bindingReads).toHaveLength(0);
 	},
 );
 

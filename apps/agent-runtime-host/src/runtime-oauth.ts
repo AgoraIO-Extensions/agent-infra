@@ -221,6 +221,7 @@ export async function prepareRuntimeOAuth(options: {
 								: undefined,
 						target,
 						principal,
+						serviceToken,
 					});
 		const client = await createProtectedRuntimeOAuthClient({
 			dataDirectory: options.dataDirectory,
