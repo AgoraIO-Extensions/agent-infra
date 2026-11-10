@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+	codexSessionExecutorAttestationV1,
+	createCodexSessionExecutorBindingV1,
+} from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	SessionSandboxDeletionProgressV1,
@@ -146,6 +150,222 @@ const allocation: SessionSandboxAllocationV1 = {
 	}),
 	desiredState: "running",
 };
+
+function oauthAllocation() {
+	const profile = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		consumerId: "session-consumer",
+		audience: "mcp",
+		egressProfile: { ref: "egress", revision: "r1" },
+	};
+	const fingerprint = connectionConsumerProfileFingerprintV1(profile);
+	const source = { ref: "deployment", revision: "r1" };
+	return {
+		...allocation,
+		connectionConsumerSnapshot: createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			{
+				schemaVersion: 1,
+				configFingerprint: fingerprint,
+				egressEnforced: true,
+				source,
+			},
+		),
+		connectionInstallationRevision: '["oauth-supply","r1"]',
+		connectionInstallationOAuthPublication: true,
+		oauthProvisioning: {
+			schemaVersion: 1 as const,
+			agentId: allocation.agentId,
+			principal: { kind: "user" as const, id: allocation.principal.id },
+			configuration: {
+				schemaVersion: 1 as const,
+				ref: "oauth",
+				revision: "r1",
+				clientId: "approved-client",
+				issuer: "https://connection.example.test/",
+				authorizationEndpoint:
+					"https://connection.example.test/oauth/authorize",
+				tokenEndpoint: "https://connection.example.test/oauth/token",
+				revocationEndpoint: "https://connection.example.test/oauth/revoke",
+				callbackUrl: "https://platform.example.test/connection/callback",
+				runtimeOrigin: `https://${allocation.serviceName}.${allocation.namespace}.svc:3443/`,
+				resource: "https://connection.example.test/mcp",
+				scope: "mcp" as const,
+				configFingerprint: fingerprint,
+				source,
+			},
+			tlsSecretRef: {
+				name: "approved-session-tls",
+				certKey: "tls.crt",
+				keyKey: "tls.key",
+			},
+			callbackAuthSecretRef: {
+				name: "approved-callback-auth",
+				key: "callback.auth",
+			},
+			apiSelector: { component: "platform-api" },
+		},
+	};
+}
+
+describe("Session Host OAuth provisioning", () => {
+	it("projects a non-root initializer, private memory files and narrow OAuth ingress", () => {
+		const selected = oauthAllocation();
+		const resources = sessionSandboxResourcesV1(selected);
+		const pod = resources.find((r) => r.kind === "Pod") as V1Pod;
+		const init = pod.spec?.initContainers?.find(
+			(c) => c.name === "runtime-oauth-provision",
+		);
+		expect(init).toBeDefined();
+		expect(init?.securityContext?.allowPrivilegeEscalation).toBe(false);
+		expect(init?.args?.[0]).toContain("ulimit -H -c 0");
+		expect(init?.args?.[0]).toContain("--disable-sigusr1");
+		expect(
+			pod.spec?.volumes?.find((v) => v.name === "runtime-oauth-private")
+				?.emptyDir?.medium,
+		).toBe("Memory");
+		expect(pod.spec?.containers[0]?.env).toContainEqual({
+			name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
+			value:
+				"/workspace/runtime/codex-driver.json.native/conversations/standard-mcp-oauth/bootstrap/configuration.json",
+		});
+		for (const name of [
+			"runtime-oauth-tls-source",
+			"runtime-oauth-callback-source",
+		])
+			expect(
+				pod.spec?.containers.every(
+					(c) => !c.volumeMounts?.some((m) => m.name === name),
+				),
+			).toBe(true);
+		const service = resources.find((r) => r.kind === "Service") as V1Service;
+		expect(service.spec?.ports).toContainEqual({
+			name: "oauth",
+			port: 3443,
+			targetPort: 3443,
+		});
+		const network = resources.find(
+			(r) => r.kind === "NetworkPolicy",
+		) as V1NetworkPolicy;
+		expect(network.spec?.ingress).toContainEqual({
+			_from: [
+				{
+					podSelector: { matchLabels: selected.oauthProvisioning.apiSelector },
+				},
+			],
+			ports: [{ protocol: "TCP", port: 3443 }],
+		});
+		expect(network.spec?.ingress?.[0]?.ports).toEqual([
+			{ protocol: "TCP", port: allocation.containerPort },
+		]);
+	});
+	it("never mounts OAuth source or private volumes into the native Session executor", () => {
+		const selected = oauthAllocation();
+		if (!selected.runtime) throw Error("Missing runtime");
+		const binding = createCodexSessionExecutorBindingV1({
+			namespace: selected.namespace,
+			podName: selected.podName,
+			agentId: selected.agentId,
+			conversationId: selected.sessionId,
+			sessionGeneration: selected.generation,
+			sandboxId: selected.sandboxId,
+			resourceFence: selected.resourceFence,
+			imageDigest: selected.imageDigest,
+		});
+		const resources = sessionSandboxResourcesV1({
+			...selected,
+			codexSessionExecutor: {
+				resources: {
+					requests: { cpu: "100m", memory: "64Mi" },
+					limits: { cpu: "500m", memory: "256Mi" },
+				},
+			},
+			runtime: {
+				...selected.runtime,
+				codexContainerBoundaryEnabled: false,
+				codexContainerBoundaryAttestation: undefined,
+				sessionExecutor: {
+					binding,
+					attestation: codexSessionExecutorAttestationV1(
+						binding,
+						selected.runtime.serviceToken,
+					),
+				},
+			},
+		});
+		const executor = resources[5].spec?.containers.find(
+			(c) => c.name === "codex-session-executor",
+		);
+		expect(executor).toBeDefined();
+		expect(
+			executor?.volumeMounts?.some((v) => v.name.startsWith("runtime-oauth-")),
+		).toBe(false);
+		expect(executor?.env?.some((e) => e.name.includes("OAUTH"))).toBe(false);
+	});
+	it("observes provisioning drift while retaining original control and cleanup", async () => {
+		const selected = oauthAllocation();
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(selected);
+		const pod = await client.read<V1Pod>("Pod", selected.podName);
+		if (!pod) throw Error("Missing Pod");
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		const original = await adapter.observe(selected);
+		expect(original.status).toBe("ready");
+		const source = pod.spec?.volumes?.find(
+			(v) => v.name === "runtime-oauth-tls-source",
+		);
+		if (!source?.secret) throw Error("Missing source");
+		source.secret.secretName = "another-tls";
+		expect((await adapter.observe(selected)).status).toBe("unknown");
+		expect(
+			(await adapter.observe(selected, original.resources, "control")).status,
+		).toBe("observed");
+	});
+	it("keeps provisioning off for unclaimed reserves", () => {
+		const selected = oauthAllocation();
+		const { principal: _principal, channelId: _channel, ...reserve } = selected;
+		expect(() =>
+			sessionSandboxResourcesV1(
+				reserve as unknown as SessionSandboxAllocationV1,
+			),
+		).toThrow();
+	});
+	it.each([
+		"principal",
+		"Agent",
+		"origin",
+		"supply",
+		"PAT",
+		"malformed snapshot",
+	])("rejects mismatched %s before rendering", (field) => {
+		const selected = oauthAllocation();
+		if (field === "malformed snapshot")
+			selected.connectionConsumerSnapshot = "{";
+		if (field === "principal")
+			selected.oauthProvisioning.principal.id = "another-user";
+		if (field === "Agent") selected.oauthProvisioning.agentId = "another-agent";
+		if (field === "origin")
+			selected.oauthProvisioning.configuration.runtimeOrigin =
+				"https://another-sandbox.workload-test.svc:3443/";
+		if (field === "supply")
+			selected.connectionInstallationRevision = undefined as unknown as string;
+		if (field === "PAT")
+			Object.assign(selected.oauthProvisioning.configuration, {
+				patBinding: {
+					consumerId: "session-consumer",
+					bindingEndpoint:
+						"https://connection.example.test/api/v1/connection/pat-bindings",
+				},
+			});
+		expect(() => sessionSandboxResourcesV1(selected)).toThrow();
+	});
+});
 
 describe("Sandbox identity for resources created before the managed label (#2691)", () => {
 	const managedLabel = "agent-infra.agora.io/managed";

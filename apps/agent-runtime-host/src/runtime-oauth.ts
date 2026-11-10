@@ -28,6 +28,7 @@ import {
 	type ProtectedRuntimeOAuthClient,
 } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
+import { validateRuntimeOAuthProvisioning } from "./runtime-oauth-provisioning.js";
 import { readProtectedStandardMcpBytes } from "./standard-mcp-files.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
@@ -67,6 +68,7 @@ export async function prepareRuntimeOAuth(options: {
 	const file = environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE;
 	if (file === undefined) return undefined;
 	try {
+		await validateRuntimeOAuthProvisioning(environment, options.dataDirectory);
 		if (
 			environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION !==
 				undefined &&

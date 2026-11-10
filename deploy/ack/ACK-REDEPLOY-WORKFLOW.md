@@ -86,6 +86,22 @@ PAT 或 Worker 业务认证凭据，也不代替 Host callback HTTPS、安装绑
 既有验收范围覆盖其他主体、Agent、模板、撤销和 unknown WRITE 不重放；配置或单测通过
 不能作为真实 MCP/Provider 验收。
 
+### Session OAuth 私有启动供应
+
+受信 Session receiver 可显式选择 `oauthProvisioning`，包含一个原用户与 Agent 的非秘密
+预注册 HTTPS OAuth 配置、精确 Session Service origin、TLS/callback-only SecretRef 和
+同 namespace 的 API selector。该入口默认关闭，不把配置放入 Owner env，也不在 Worker
+读取 Secret。只消费已批准证书与现有 Secret，不增加 CA/controller 或凭据权限。
+
+Session Adapter 通过同镜像非 root initializer 将材料复制至 Host 独占内存卷，并增加独立
+OAuth Service/NetworkPolicy 端口；Host 和 initializer 必须分别通过真实进程保护。源 Secret
+不得挂给 Runtime/native/executor；Host 仅挂复制后的受保护子目录。API callback-only Secret
+仍按前节配置，必须与 Host 复制的 callback-only 材料对应，不与 Worker 凭据共用。
+
+该供应只证明启动材料接线，不能生成实际 Principal/ConsumerInstance 回执或用户授权。
+实际回执及用户确认仍按工程 Spec §13.5.6 交付，缺失时保留未核实。更新配置走本工作流的
+版本化私有输入与正式部署、生命周期和回读流程，不手工修改运行 Pod、Secret 或数据库。
+
 ## 搬迁私有输入包
 
 在另一台机器检出已发布镜像对应的源码 commit，保持 checkout 干净，并安装 Node 24、pnpm、

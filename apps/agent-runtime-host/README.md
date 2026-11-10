@@ -109,6 +109,18 @@ Connection `account.id` 还必须等于 Worker 审批签入的稳定 Connection 
 该路线没有 refresh-token fallback，
 过期后重新进行用户确认；显式撤销仍调用 Connection 的 revoke endpoint。
 
+## Session OAuth bootstrap
+
+部署可通过 Session receiver 的 `oauthProvisioning` 提供单个批准的非秘密 configuration
+bundle、TLS SecretRef 与 callback-only SecretRef。Secret 仅挂同镜像非 root initializer，
+`runtime-oauth-provisioning-cli.mjs` 在真实保护检查后复制至 Host 独占 Memory volume；Worker 不读取
+秘密，native/executor 不挂源或私有卷。Host 使用固定 `bootstrap/configuration.json` 并核对
+同目录绑定与原主体、Agent、Sandbox/generation；`tls` 文件仍按前述边界读取。
+
+第一版仅支持已批准的精确 Session Service HTTPS origin、独立端口与预签发证书，不为动态
+Sandbox 自动签证书，不在未认领 reserve 供应用户材料。实际 OAuth 绑定回执不由 initializer
+生成；缺失时仍保持未核实。完整合同见工程 Spec §13.5.6。
+
 ## MCP schema 版本
 
 工具输入和获准结果 schema 未声明 `$schema` 时，按 JSON Schema 2020-12 校验；显式

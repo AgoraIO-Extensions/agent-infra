@@ -180,6 +180,81 @@ function fixture() {
 	};
 }
 
+it("captures approved OAuth provisioning through the production Session receiver", async () => {
+	const f = fixture();
+	const profile = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		consumerId: "consumer-a",
+		audience: "mcp",
+		egressProfile: { ref: "egress", revision: "r1" },
+	};
+	const fingerprint = connectionConsumerProfileFingerprintV1(profile);
+	const source = { ref: "approved", revision: "r1" };
+	const provisioning = {
+		schemaVersion: 1 as const,
+		agentId: f.claim.sandbox.agentId,
+		principal: { kind: "user" as const, id: f.claim.sandbox.principal.id },
+		configuration: {
+			schemaVersion: 1 as const,
+			ref: "oauth",
+			revision: "r1",
+			clientId: "client-a",
+			issuer: "https://connection.example.test/",
+			authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+			tokenEndpoint: "https://connection.example.test/oauth/token",
+			revocationEndpoint: "https://connection.example.test/oauth/revoke",
+			callbackUrl: "https://platform.example.test/callback",
+			runtimeOrigin: `https://${f.claim.sandbox.resourceName}.${f.claim.policy.namespace}.svc:3443/`,
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp" as const,
+			configFingerprint: fingerprint,
+			source,
+		},
+		tlsSecretRef: {
+			name: "approved-tls",
+			certKey: "tls.crt",
+			keyKey: "tls.key",
+		},
+		callbackAuthSecretRef: { name: "approved-callback", key: "callback.auth" },
+		apiSelector: { component: "platform-api" },
+	};
+	const receive = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			policy: {
+				...f.options.policy,
+				connectionConsumerSnapshot: createRuntimeConnectionConsumerSnapshotV1(
+					profile,
+					{
+						schemaVersion: 1,
+						configFingerprint: fingerprint,
+						source,
+						egressEnforced: true,
+					},
+				),
+				connectionInstallationRevision: '["approved-supply","r1"]',
+				connectionInstallationOAuthPublication: true,
+			},
+		},
+		{
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+			oauthProvisioning: provisioning,
+		},
+	);
+	provisioning.tlsSecretRef.name = "later-mutation";
+	await receive(f.claim, new AbortController().signal);
+	const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as V1Pod;
+	expect(
+		pod.spec?.initContainers?.some((c) => c.name === "runtime-oauth-provision"),
+	).toBe(true);
+	expect(
+		pod.spec?.volumes?.find((v) => v.name === "runtime-oauth-tls-source")
+			?.secret?.secretName,
+	).toBe("approved-tls");
+});
+
 it("derives the executor only from independent Worker policy and authoritative Conversation/fence", async () => {
 	const f = fixture();
 	const policy = {

@@ -2539,6 +2539,25 @@ refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确
 重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
 热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
 
+**Session Host 启动供应。** `createProductionSessionSandboxReceiverV1` 可选择部署批准的
+`oauthProvisioning`，第一版限定一个原用户与 Agent、预注册 HTTPS client 和已签发的精确
+Session 证书。该非秘密 bundle 固定原主体、Agent、完整 OAuth 配置、TLS/callback-only
+SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env、Store claim 或请求覆盖。
+`runtimeOrigin` 必须匹配原 Sandbox Service 的 `<service>.<namespace>.svc`，使用独立且不低于
+1024 的 HTTPS 端口；该版本不对静态配置插值，也不为证书或 Consumer 建立新签发服务。
+
+Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
+保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
+`0700`，文件为 `0600`，仅 Host 挂载既有拒绝树下的 `bootstrap` 与 `tls` 子目录；源 Secret
+只挂 initializer，native/executor 不挂上述私有卷。Host 启动时再核对 bundle 与原主体、Agent、
+Sandbox/generation、实际配置及证书。未认领 reserve 不接收此用户供应；原控制继续排除
+新增交付断言，保留资源归属和 UID 检查。
+
+Service 为该 HTTPS listener 增加独立端口，NetworkPolicy 仅允许声明的 Worker/API selector
+访问；业务端口与出站规则保持原合同，callback-only 认证仍隔离 callback 和安装命令。
+本供应不创建实际 OAuth 绑定回执、Token 或 Grant；实际回执仍须按本节核实并单独供应。
+缺少实际回执继续 `awaiting_verification`，不得以 initializer 成功代签真实安装或外部验收。
+
 **失败、刷新与撤销。** 兑换或轮换响应丢失、崩溃及持久确认失败均保留该安装的不确定状态，
 不自动重发授权码、refresh 或业务调用；只按实际已发布的恢复合同核实，否则由原主体重新
 确认新的安装，旧事务不变为已成功。过期/撤销/保护失效时封闭新 MCP 发送，原控制、持久

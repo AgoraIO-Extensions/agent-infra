@@ -53,6 +53,7 @@ import {
 	isNativeMetadataWorkerOriginV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
+	type SessionSandboxOAuthProvisioningV1,
 	type SessionSandboxResourceInputV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxContainerBoundaryAttestationSecretKey,
@@ -1056,8 +1057,15 @@ async function sessionOwnerSecretMaterializationV1(
 
 function createSessionSandboxAllocationResolverV1(
 	workload: WorkloadRuntimeOptionsV1,
-	options: { readonly serviceToken: string },
+	options: {
+		readonly serviceToken: string;
+		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	},
 ) {
+	const provisioning =
+		options.oauthProvisioning === undefined
+			? undefined
+			: structuredClone(options.oauthProvisioning);
 	const resourceFor = createSessionSandboxResourceInputResolverV1(
 		workload,
 		options,
@@ -1159,6 +1167,9 @@ function createSessionSandboxAllocationResolverV1(
 		}
 
 		const allocation: SessionSandboxAllocationV1 = {
+			...(provisioning && desiredState === "running"
+				? { oauthProvisioning: structuredClone(provisioning) }
+				: {}),
 			...(snapshotProjection
 				? { workspaceSnapshotProjection: snapshotProjection }
 				: {}),
@@ -1203,7 +1214,10 @@ function retainedResources(receipt: SessionSandboxStopReceiptV1) {
 /** Production resource receiver; invoked only under the original Store lease. */
 export function createProductionSessionSandboxReceiverV1(
 	workload: WorkloadRuntimeOptionsV1,
-	options: { readonly serviceToken: string },
+	options: {
+		readonly serviceToken: string;
+		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	},
 ) {
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
