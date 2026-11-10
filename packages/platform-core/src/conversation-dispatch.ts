@@ -722,7 +722,9 @@ export function createConversationDispatchUseCaseV1(
 					{},
 				);
 			const failure = runtimeFailure(error);
-			return failure.retryable
+			// A refused event read/ACK does not prove the accepted Turn failed.
+			// Re-claim with fresh authority and resume only its committed cursor.
+			return failure.retryable || failure.code === "RUNTIME_GRANT_INVALID"
 				? retry(
 						dependencies.store,
 						claim,
