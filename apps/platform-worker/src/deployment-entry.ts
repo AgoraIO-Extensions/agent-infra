@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import {
-	parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1,
-	RuntimeOAuthConfigurationV1Schema,
-} from "@agent-infra/contracts/runtime";
+import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,

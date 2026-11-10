@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { NativeCapabilityInvocationRequestV1 } from "@agent-infra/contracts/pilot";
-import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import * as telemetryModule from "@agent-infra/observability";
 import {
 	PostgresAgentManagementQueryV1,

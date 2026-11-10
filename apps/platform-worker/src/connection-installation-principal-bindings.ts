@@ -1,10 +1,10 @@
 import { OpaqueIdV1Schema } from "@agent-infra/contracts";
 import {
-	parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1,
 	type RuntimeOAuthConfigurationsByAgentAndPrincipalV1,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthScopeV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
 
 type Approved = NonNullable<

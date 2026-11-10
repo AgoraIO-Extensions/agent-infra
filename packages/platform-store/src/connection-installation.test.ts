@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";

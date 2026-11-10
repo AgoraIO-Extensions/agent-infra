@@ -6,10 +6,8 @@ import {
 import type { AddressInfo } from "node:net";
 import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import {
-	type RuntimeOAuthConfigurationV1,
-	runtimeOAuthConfigurationRevisionV1,
-} from "@agent-infra/contracts/runtime";
+import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,

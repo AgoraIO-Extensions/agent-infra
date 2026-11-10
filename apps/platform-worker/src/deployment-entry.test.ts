@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 

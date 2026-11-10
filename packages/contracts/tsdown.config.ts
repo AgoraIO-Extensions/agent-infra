@@ -10,6 +10,7 @@ export default defineConfig({
 		"./src/connection-consumer-profile.ts",
 		"./src/pilot/index.ts",
 		"./src/runtime/index.ts",
+		"./src/runtime/oauth-installation-node.ts",
 		"./src/workload/index.ts",
 	],
 	format: "esm",

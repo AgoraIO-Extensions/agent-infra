@@ -8,10 +8,10 @@ import {
 	ConnectionInstallationAuthorizationV1Schema,
 	ConnectionInstallationCallbackV1Schema,
 	ConnectionInstallationCommandV1Schema,
-	parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
 	type ConnectionInstallationCommandDrainStoreV1,
 	ConnectionInstallationErrorV1,

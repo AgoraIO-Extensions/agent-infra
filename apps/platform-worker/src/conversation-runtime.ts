@@ -18,7 +18,6 @@ import type {
 	RuntimeRestoreExecutionKeyRequestV4,
 } from "@agent-infra/contracts/runtime";
 import {
-	parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1,
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
 	type RuntimeOAuthAuthorizedRequestV1,
@@ -27,6 +26,7 @@ import {
 	RuntimeOAuthGrantClaimsV1Schema,
 	type RuntimeOAuthResponseV1,
 } from "@agent-infra/contracts/runtime";
+import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
 	type ConversationDispatchAuthorizationPortV1,

@@ -1,7 +1,5 @@
-import {
-	type RuntimeOAuthConfigurationV1,
-	runtimeOAuthConfigurationRevisionV1,
-} from "@agent-infra/contracts/runtime";
+import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { describe, expect, it } from "vitest";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 

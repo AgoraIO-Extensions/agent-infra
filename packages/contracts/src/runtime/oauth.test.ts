@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { RuntimeOAuthConfigurationV1Schema } from "./oauth.js";
 import {
 	parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1,
-	RuntimeOAuthConfigurationV1Schema,
 	runtimeOAuthConfigurationRevisionV1,
-} from "./oauth.js";
+} from "./oauth-installation-node.js";
 
 const base = {
 	schemaVersion: 1 as const,
