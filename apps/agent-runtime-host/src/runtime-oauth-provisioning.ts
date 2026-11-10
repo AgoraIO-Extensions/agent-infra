@@ -9,9 +9,11 @@ import {
 } from "@agent-infra/agent-runtime";
 import { OpaqueIdV1Schema } from "@agent-infra/contracts";
 import {
+	RuntimeOAuthBindingReadDescriptorV1Schema,
 	RuntimeOAuthConfigurationV1Schema,
 	RuntimePrincipalV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
 	assertProtectedStandardMcpDirectoryCurrent,
 	openProtectedStandardMcpDirectory,
@@ -177,9 +179,30 @@ export async function provisionRuntimeOAuthFiles(options: {
 	tlsSource: string;
 	callbackSource: string;
 	configurationBundle: unknown;
+	registrationDescriptor?: unknown;
+	registrationSource?: string;
 }) {
 	assertStandardMcpProcessProtection();
 	const input = bundle(options.configurationBundle);
+	if (
+		(options.registrationDescriptor === undefined) !==
+		(options.registrationSource === undefined)
+	)
+		unavailable();
+	const registration =
+		options.registrationDescriptor === undefined
+			? undefined
+			: RuntimeOAuthBindingReadDescriptorV1Schema.parse(
+					options.registrationDescriptor,
+				);
+	if (
+		registration &&
+		(registration.clientId !== input.configuration.clientId ||
+			registration.configurationFingerprint !==
+				runtimeOAuthConfigurationFingerprintV1(input.configuration) ||
+			Buffer.byteLength(JSON.stringify(registration)) > 65_536)
+	)
+		unavailable();
 	if (
 		!isAbsolute(options.dataDirectory) ||
 		resolve(options.dataDirectory) !== options.dataDirectory ||
@@ -191,6 +214,17 @@ export async function provisionRuntimeOAuthFiles(options: {
 	const callback = validateStandardMcpToken(
 		await readSource(options.callbackSource, "callback.auth", 4096),
 	);
+	const registrationAuth =
+		registration && options.registrationSource
+			? validateStandardMcpToken(
+					await readSource(
+						options.registrationSource,
+						"registration.auth",
+						4096,
+					),
+				)
+			: undefined;
+	if (registrationAuth === callback) unavailable();
 	const certificate = new X509Certificate(cert);
 	const hostname = new URL(input.configuration.runtimeOrigin).hostname;
 	if (
@@ -229,10 +263,16 @@ export async function provisionRuntimeOAuthFiles(options: {
 	await writePrivate(tls, "server.crt", cert, 16384);
 	await writePrivate(tls, "server.key", key, 16384);
 	await writePrivate(tls, "callback.auth", callback, 4096);
+	if (registrationAuth)
+		await writePrivate(tls, "registration.auth", registrationAuth, 4096);
 	const bootstrap = join(options.privateDirectory, "bootstrap");
 	await publishMetadata(bootstrap, "configuration.json", input.configuration, {
 		immutable: true,
 	});
+	if (registration)
+		await publishMetadata(bootstrap, "registration.json", registration, {
+			immutable: true,
+		});
 	await publishMetadata(bootstrap, "binding.json", input, { immutable: true });
 	assertStandardMcpProcessProtection();
 }

@@ -4,6 +4,7 @@ import {
 	createCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	SessionSandboxDeletionProgressV1,
 	SessionSandboxLifecycleV1,
@@ -214,6 +215,94 @@ function oauthAllocation() {
 }
 
 describe("Session Host OAuth provisioning", () => {
+	it("projects binding lookup only with the approved descriptor and initializer-only credential reference", () => {
+		const selected = oauthAllocation();
+		const descriptor = {
+			schemaVersion: 1 as const,
+			registrationKey: "original-installation-key",
+			clientName: "Platform installation",
+			clientId: selected.oauthProvisioning.configuration.clientId,
+			instanceId: "actual-device-instance",
+			configurationFingerprint: runtimeOAuthConfigurationFingerprintV1(
+				selected.oauthProvisioning.configuration,
+			),
+			serviceRef: "connection",
+			contract: {
+				ref: "actual-mcp-contract",
+				revision: "r1",
+				serverInfo: { name: "connection", version: "0.1.0" },
+				tools: [
+					{ name: "search_actions", succeededResultSchema: { type: "object" } },
+				],
+			},
+		};
+		const bindingRead = {
+			descriptor,
+			serviceAuthSecretRef: {
+				name: "approved-registration-auth",
+				key: "secret",
+			},
+		};
+		const input = {
+			...selected,
+			oauthProvisioning: { ...selected.oauthProvisioning, bindingRead },
+		};
+		const pod = sessionSandboxResourcesV1(input).find(
+			(r) => r.kind === "Pod",
+		) as V1Pod;
+		const init = pod.spec?.initContainers?.find(
+			(c) => c.name === "runtime-oauth-provision",
+		);
+		expect(pod.spec?.containers[0]?.env).toContainEqual({
+			name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ",
+			value: "ep1060-v1",
+		});
+		expect(init?.env).toContainEqual({
+			name: "AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION",
+			value: JSON.stringify(descriptor),
+		});
+		expect(init?.volumeMounts).toContainEqual({
+			name: "runtime-oauth-registration-source",
+			mountPath: "/oauth-source-registration",
+			readOnly: true,
+		});
+		expect(
+			pod.spec?.containers.every(
+				(c) =>
+					!c.volumeMounts?.some(
+						(m) => m.name === "runtime-oauth-registration-source",
+					),
+			),
+		).toBe(true);
+		expect(pod.spec?.volumes).toContainEqual({
+			name: "runtime-oauth-registration-source",
+			secret: {
+				secretName: "approved-registration-auth",
+				defaultMode: 0o440,
+				optional: true,
+				items: [{ key: "secret", path: "registration.auth" }],
+			},
+		});
+		for (const change of [
+			{ clientId: "another-client" },
+			{ configurationFingerprint: "0".repeat(64) },
+			{ token: "not-allowed" },
+		])
+			expect(
+				sessionSandboxResourcesV1({
+					...input,
+					oauthProvisioning: {
+						...input.oauthProvisioning,
+						bindingRead: {
+							...bindingRead,
+							descriptor: { ...descriptor, ...change },
+						},
+					},
+				})[5].spec?.initContainers?.some(
+					(c) => c.name === "runtime-oauth-provision",
+				) ?? false,
+			).toBe(false);
+	});
 	it("projects a non-root initializer, private memory files and narrow OAuth ingress", () => {
 		const selected = oauthAllocation();
 		const resources = sessionSandboxResourcesV1(selected);
@@ -346,28 +435,48 @@ describe("Session Host OAuth provisioning", () => {
 		"supply",
 		"PAT",
 		"malformed snapshot",
-	])("rejects mismatched %s before rendering", (field) => {
-		const selected = oauthAllocation();
-		if (field === "malformed snapshot")
-			selected.connectionConsumerSnapshot = "{";
-		if (field === "principal")
-			selected.oauthProvisioning.principal.id = "another-user";
-		if (field === "Agent") selected.oauthProvisioning.agentId = "another-agent";
-		if (field === "origin")
-			selected.oauthProvisioning.configuration.runtimeOrigin =
-				"https://another-sandbox.workload-test.svc:3443/";
-		if (field === "supply")
-			selected.connectionInstallationRevision = undefined as unknown as string;
-		if (field === "PAT")
-			Object.assign(selected.oauthProvisioning.configuration, {
-				patBinding: {
-					consumerId: "session-consumer",
-					bindingEndpoint:
-						"https://connection.example.test/api/v1/connection/pat-bindings",
-				},
-			});
-		expect(() => sessionSandboxResourcesV1(selected)).toThrow();
-	});
+	])(
+		"keeps ordinary work while disabling mismatched %s provisioning",
+		(field) => {
+			const selected = oauthAllocation();
+			if (field === "malformed snapshot")
+				selected.connectionConsumerSnapshot = "{";
+			if (field === "principal")
+				selected.oauthProvisioning.principal.id = "another-user";
+			if (field === "Agent")
+				selected.oauthProvisioning.agentId = "another-agent";
+			if (field === "origin")
+				selected.oauthProvisioning.configuration.runtimeOrigin =
+					"https://another-sandbox.workload-test.svc:3443/";
+			if (field === "supply")
+				selected.connectionInstallationRevision =
+					undefined as unknown as string;
+			if (field === "PAT")
+				Object.assign(selected.oauthProvisioning.configuration, {
+					patBinding: {
+						consumerId: "session-consumer",
+						bindingEndpoint:
+							"https://connection.example.test/api/v1/connection/pat-bindings",
+					},
+				});
+			if (field === "supply" || field === "malformed snapshot") {
+				// Existing Consumer/supply admission remains independent of OAuth bootstrap.
+				expect(() => sessionSandboxResourcesV1(selected)).toThrow();
+				return;
+			}
+			const pod = sessionSandboxResourcesV1(selected)[5];
+			expect(
+				pod.spec?.initContainers?.some(
+					(c) => c.name === "runtime-oauth-provision",
+				) ?? false,
+			).toBe(false);
+			expect(
+				pod.spec?.containers[0]?.env?.some(
+					(e) => e.name === "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
+				) ?? false,
+			).toBe(false);
+		},
+	);
 });
 
 describe("Sandbox identity for resources created before the managed label (#2691)", () => {

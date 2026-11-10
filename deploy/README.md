@@ -272,6 +272,16 @@ receipt；默认未导出即关闭，实际 receipt 仍由 Host 的既有受控�
 不能覆盖生成值；该标记只选择受保护 OAuth publication，不代表 receipt、ConsumerInstance、
 Token 或真实 MCP 已获批。
 
+已部署并批准 EP-1060 时，`connectionOAuthProvisioning.bindingRead` 可提供严格非秘密
+`descriptor` 与 `serviceAuthSecretRef: { name, key }`。描述符包含登记稳定键、实际 client/DEVICE
+实例、名称、完整配置 fingerprint 及同版本 MCP 合同；fingerprint 使用 Node 专用的
+`runtimeOAuthConfigurationFingerprintV1` 对 strict 解析后的完整配置计算。
+Secret 仅挂 initializer，复制为 Host 私有 `tls/registration.auth`；描述符写入
+`bootstrap/registration.json`，仅该组合投射 `BINDING_READ=ep1060-v1`。Host 在读取 code 前
+精确回读并核对实际 Principal 与原签名主体映射，随后只兑换一次，按实际 expiry 发布原事务。
+UNKNOWN、错主体或实例、供应漂移均不回退；该路径不自动登记 Consumer、创建 Grant 或签收
+真实 MCP。完整环境变量名和保护条件见 [Host 说明](../apps/agent-runtime-host/README.md)。
+
 部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
 绑定；当标准模板分布在多个 OCI repository 时，绑定还必须提供对应的固定 `imageRepository`，
 省略该字段时沿用全局 `policy.imageRepository` 以兼容旧部署。支持标准 Agent 时还须装配 `modelCatalog` 和 `modelAccess`。升级已有部署包时需一起

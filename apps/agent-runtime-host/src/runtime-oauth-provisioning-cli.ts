@@ -9,8 +9,16 @@ try {
 		configurationBundle: JSON.parse(
 			process.env.AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING ?? "null",
 		),
+		...(process.env.AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION === undefined
+			? {}
+			: {
+					registrationDescriptor: JSON.parse(
+						process.env.AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION,
+					),
+					registrationSource: "/oauth-source-registration",
+				}),
 	});
 } catch {
 	process.stderr.write('{"code":"RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE"}\n');
-	process.exitCode = 1;
+	// The Host rejects incomplete bootstrap; ordinary model/control startup continues.
 }

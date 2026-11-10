@@ -121,6 +121,15 @@ bundle、TLS SecretRef 与 callback-only SecretRef。Secret 仅挂同镜像非 r
 Sandbox 自动签证书，不在未认领 reserve 供应用户材料。实际 OAuth 绑定回执不由 initializer
 生成；缺失时仍保持未核实。完整合同见工程 Spec §13.5.6。
 
+显式选择 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ=ep1060-v1` 时，Host 从该私有
+`bootstrap/registration.json` 读取获准 descriptor，从 `tls/registration.auth` 读取独立的
+Connection 登记服务凭据；不得复用 callback 或 Worker 凭据。此模式要求显式 OAuth publication
+及 supply 修订。Host 先精确回读本人确认后的 client/Principal/DEVICE 绑定，再读取 code 并兑换
+一次，按真实 token 期限生成既有 publication 回执。UNKNOWN、任何错配或供应变化拒绝兑换，
+失败不自动重试或回退静态回执。initializer 只复制这些输入，不生成未来用户绑定或授权。
+缺少源 Secret、坏配置或保护不满足时只关闭 OAuth；initializer 退出不代表安装成功，Host
+仍须核对完整私有启动绑定，普通模型与原控制不因安装供应失败而被阻断。
+
 ## MCP schema 版本
 
 工具输入和获准结果 schema 未声明 `$schema` 时，按 JSON Schema 2020-12 校验；显式

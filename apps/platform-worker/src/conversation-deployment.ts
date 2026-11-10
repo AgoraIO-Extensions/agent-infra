@@ -1069,11 +1069,10 @@ function createSessionSandboxAllocationResolverV1(
 		options.oauthProvisioning === undefined
 			? undefined
 			: structuredClone(options.oauthProvisioning);
-	const resourceFor = (selected?: SessionSandboxOAuthProvisioningV1) =>
-		createSessionSandboxResourceInputResolverV1(workload, {
-			...options,
-			oauthProvisioning: selected,
-		});
+	const resourceFor = createSessionSandboxResourceInputResolverV1(
+		workload,
+		options,
+	);
 	return async (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
@@ -1170,16 +1169,25 @@ function createSessionSandboxAllocationResolverV1(
 			};
 		}
 
-		const selectedProvisioning =
-			provisioning &&
-			desiredState === "running" &&
-			binding.agentId === provisioning.agentId &&
-			binding.sessionId === provisioning.sessionId &&
-			binding.generation === provisioning.sessionGeneration &&
-			binding.principal.kind === "user" &&
-			binding.principal.id === provisioning.principal.id
-				? provisioning
-				: undefined;
+		let selectedProvisioning: SessionSandboxOAuthProvisioningV1 | undefined;
+		try {
+			if (
+				provisioning &&
+				desiredState === "running" &&
+				binding.agentId === provisioning.agentId &&
+				binding.sessionId === provisioning.sessionId &&
+				binding.sandboxId === provisioning.sandboxId &&
+				binding.generation === provisioning.sessionGeneration &&
+				binding.principal.kind === "user" &&
+				provisioning.principal.kind === "user" &&
+				binding.principal.id === provisioning.principal.id &&
+				new URL(provisioning.configuration.runtimeOrigin).hostname ===
+					`${binding.resourceName}.${policy.namespace}.svc`
+			)
+				selectedProvisioning = provisioning;
+		} catch {
+			// Invalid trusted delivery leaves this Session's ordinary work available.
+		}
 		const allocation: SessionSandboxAllocationV1 = {
 			...(selectedProvisioning
 				? { oauthProvisioning: structuredClone(selectedProvisioning) }
@@ -1187,7 +1195,7 @@ function createSessionSandboxAllocationResolverV1(
 			...(snapshotProjection
 				? { workspaceSnapshotProjection: snapshotProjection }
 				: {}),
-			...resourceFor(selectedProvisioning)(
+			...resourceFor(
 				binding,
 				policy,
 				deployment,

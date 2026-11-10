@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as requireFs from "node:fs";
 import {
 	chmod,
@@ -13,6 +14,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { afterEach, expect, it, vi } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import {
@@ -25,6 +28,20 @@ vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
 }));
 const cleanup: (() => Promise<void>)[] = [];
+it("reports unavailable bootstrap without blocking ordinary Host startup", () => {
+	const result = spawnSync(
+		process.execPath,
+		["--import", "tsx", "src/runtime-oauth-provisioning-cli.ts"],
+		{
+			cwd: process.cwd(),
+			env: { ...process.env, AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING: "null" },
+			encoding: "utf8",
+			timeout: 15_000,
+		},
+	);
+	expect(result.status).toBe(0);
+	expect(result.stderr).toContain('"RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE"');
+});
 afterEach(async () => {
 	protection.check.mockReset();
 	for (const f of cleanup.splice(0).reverse()) await f();
@@ -81,6 +98,69 @@ async function fixture() {
 	};
 	return { root, source, memory, input, options };
 }
+it("copies an approved registration descriptor and its independent machine credential to Host-only files", async () => {
+	const f = await fixture();
+	const descriptor = {
+		schemaVersion: 1,
+		registrationKey: "original-installation-key",
+		clientName: "Platform installation",
+		clientId: f.input.configuration.clientId,
+		instanceId: "actual-device-instance",
+		configurationFingerprint: runtimeOAuthConfigurationFingerprintV1(
+			RuntimeOAuthConfigurationV1Schema.parse(f.input.configuration),
+		),
+		serviceRef: "connection",
+		contract: {
+			ref: "actual-mcp-contract",
+			revision: "r1",
+			serverInfo: { name: "connection", version: "0.1.0" },
+			tools: [
+				{ name: "search_actions", succeededResultSchema: { type: "object" } },
+			],
+		},
+	};
+	await writeFile(
+		join(f.source, "registration.auth"),
+		"synthetic-registration-service-secret",
+		{ mode: 0o440 },
+	);
+	const options = {
+		...f.options,
+		registrationDescriptor: descriptor,
+		registrationSource: f.source,
+	};
+	await provisionRuntimeOAuthFiles(options);
+	expect(
+		JSON.parse(
+			await readFile(join(f.memory, "bootstrap", "registration.json"), "utf8"),
+		),
+	).toEqual(descriptor);
+	expect(
+		await readFile(join(f.memory, "tls", "registration.auth"), "utf8"),
+	).toBe("synthetic-registration-service-secret");
+	expect(
+		(await stat(join(f.memory, "tls", "registration.auth"))).mode & 0o777,
+	).toBe(0o600);
+	expect(
+		await readFile(join(f.memory, "bootstrap", "binding.json"), "utf8"),
+	).not.toContain("registration");
+	await expect(
+		provisionRuntimeOAuthFiles({
+			...options,
+			registrationDescriptor: { ...descriptor, clientId: "other-client" },
+		}),
+	).rejects.toBeDefined();
+	await expect(
+		provisionRuntimeOAuthFiles({ ...options, registrationSource: undefined }),
+	).rejects.toBeDefined();
+	await chmod(join(f.source, "registration.auth"), 0o640);
+	await writeFile(
+		join(f.source, "registration.auth"),
+		"synthetic-callback-only-material",
+	);
+	await expect(provisionRuntimeOAuthFiles(options)).rejects.toBeDefined();
+});
+
 it("copies only approved local TLS/callback files as immutable owner-only bootstrap material", async () => {
 	const f = await fixture();
 	await provisionRuntimeOAuthFiles(f.options);

@@ -7,6 +7,15 @@ import {
 	RuntimeOAuthConfigurationV1Schema,
 } from "./oauth.ts";
 
+/** Exact parsed configuration bytes used by the protected Host publication receipt. */
+export function runtimeOAuthConfigurationFingerprintV1(
+	value: RuntimeOAuthConfigurationV1,
+): string {
+	return createHash("sha256")
+		.update(JSON.stringify(RuntimeOAuthConfigurationV1Schema.parse(value)))
+		.digest("hex");
+}
+
 /** Content-bound revisions are required only by the explicit per-user installation index. */
 export function runtimeOAuthConfigurationRevisionV1(
 	value: RuntimeOAuthConfigurationV1,

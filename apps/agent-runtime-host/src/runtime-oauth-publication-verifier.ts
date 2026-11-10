@@ -7,12 +7,15 @@ import {
 	validateStandardMcpToken,
 } from "@agent-infra/agent-runtime";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import type {
-	RuntimeOAuthAuthorizedRequestV1,
-	RuntimeOAuthConfigurationV1,
-	RuntimeOAuthScopeV1,
-	RuntimePrincipalV1,
+import {
+	type RuntimeOAuthAuthorizedRequestV1,
+	type RuntimeOAuthBindingReadDescriptorV1,
+	RuntimeOAuthBindingReadDescriptorV1Schema,
+	type RuntimeOAuthConfigurationV1,
+	type RuntimeOAuthScopeV1,
+	type RuntimePrincipalV1,
 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import { readProtectedRuntimeOAuthPublication } from "./runtime-oauth-publication.js";
 import { readProtectedStandardMcpBytes } from "./standard-mcp-files.js";
 import {
@@ -108,25 +111,12 @@ export async function createProtectedRuntimeOAuthPublicationVerifier(options: {
 		"registration.json",
 		65_536,
 	);
-	const descriptor: unknown = JSON.parse(text);
-	const configurationFingerprint = createHash("sha256")
-		.update(JSON.stringify(configuration))
-		.digest("hex");
+	const descriptor: RuntimeOAuthBindingReadDescriptorV1 =
+		RuntimeOAuthBindingReadDescriptorV1Schema.parse(JSON.parse(text));
+	const configurationFingerprint =
+		runtimeOAuthConfigurationFingerprintV1(configuration);
 	if (
-		!object(descriptor) ||
-		!exact(
-			descriptor,
-			"clientId,clientName,configurationFingerprint,contract,instanceId,registrationKey,schemaVersion,serviceRef",
-		) ||
-		descriptor.schemaVersion !== 1 ||
 		descriptor.clientId !== configuration.clientId ||
-		typeof descriptor.clientName !== "string" ||
-		descriptor.clientName.length < 1 ||
-		descriptor.clientName.length > 100 ||
-		typeof descriptor.registrationKey !== "string" ||
-		!/^[A-Za-z0-9][A-Za-z0-9._~-]{7,127}$/.test(descriptor.registrationKey) ||
-		typeof descriptor.instanceId !== "string" ||
-		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(descriptor.instanceId) ||
 		descriptor.configurationFingerprint !== configurationFingerprint
 	)
 		unavailable();

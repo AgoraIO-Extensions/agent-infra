@@ -2569,6 +2569,10 @@ Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的
 Sandbox/generation、实际配置及证书。未认领 reserve 不接收此用户供应；原控制继续排除
 新增交付断言，保留资源归属和 UID 检查。
 
+源 Secret 引用为 optional，只表示缺少时不阻断普通 Session；不表示凭据或 TLS 可选。
+坏非秘密供应只关闭 OAuth 投射，initializer 材料或保护校验失败输出固定不可用结果后退出，
+不留下可用提交绑定；Host 继续拒绝不完整或错误的 OAuth 输入，普通模型及原控制保持。
+
 Service 为该 HTTPS listener 增加独立端口，NetworkPolicy 仅允许声明的 Worker/API selector
 访问；业务端口与出站规则保持原合同，callback-only 认证仍隔离 callback 和安装命令。
 本供应不创建实际 OAuth 绑定回执、Token 或 Grant；实际回执仍须按本节核实并单独供应。

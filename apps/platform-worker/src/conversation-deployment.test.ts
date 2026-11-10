@@ -263,11 +263,22 @@ it("captures approved OAuth provisioning through the production Session receiver
 	).toBe("approved-tls");
 });
 
-it.each(["another Agent", "another user", "another Session"])(
+it.each([
+	"another Agent",
+	"another user",
+	"another Session",
+	"another Sandbox",
+	"wrong hostname",
+])(
 	"keeps ordinary business resources for %s outside provisioning selection",
 	async (other) => {
 		const f = fixture();
 		const { provisioning, options } = oauthProvisioningFixture(f);
+		if (other === "another Sandbox")
+			provisioning.sandboxId = "another-allocation";
+		if (other === "wrong hostname")
+			provisioning.configuration.runtimeOrigin =
+				"https://other.workload-test.svc:3443/";
 		let claim = structuredClone(f.claim);
 		if (other === "another Agent") {
 			const deployment = workloadDesiredFixture(1, "agent-b", "internal-only");

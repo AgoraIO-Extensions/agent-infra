@@ -9,12 +9,15 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeModelConfigurationV4Schema,
+	type RuntimeOAuthBindingReadDescriptorV1,
+	RuntimeOAuthBindingReadDescriptorV1Schema,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
 	type RuntimeSkillHubBindingV1,
 	RuntimeSkillHubBindingV1Schema,
 	runtimeSkillHubBindingEnvironmentNameV1,
 } from "@agent-infra/contracts/runtime";
+import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -237,6 +240,13 @@ export interface SessionSandboxOAuthProvisioningV1 {
 	readonly callbackAuthSecretRef: {
 		readonly name: string;
 		readonly key: string;
+	};
+	readonly bindingRead?: {
+		readonly descriptor: RuntimeOAuthBindingReadDescriptorV1;
+		readonly serviceAuthSecretRef: {
+			readonly name: string;
+			readonly key: string;
+		};
 	};
 	readonly apiSelector: Readonly<Record<string, string>>;
 }
@@ -474,7 +484,21 @@ function oauthProvisioning(value: SessionSandboxResourceInputV1) {
 			!input ||
 			typeof input !== "object" ||
 			Object.keys(input).sort().join(",") !==
-				"agentId,apiSelector,callbackAuthSecretRef,configuration,principal,sandboxId,schemaVersion,sessionGeneration,sessionId,tlsSecretRef"
+				[
+					"agentId",
+					"apiSelector",
+					"callbackAuthSecretRef",
+					"configuration",
+					"principal",
+					"sandboxId",
+					"schemaVersion",
+					"sessionGeneration",
+					"sessionId",
+					"tlsSecretRef",
+					...(input.bindingRead === undefined ? [] : ["bindingRead"]),
+				]
+					.sort()
+					.join(",")
 		)
 			fail();
 		const configuration = RuntimeOAuthConfigurationV1Schema.safeParse(
@@ -483,6 +507,24 @@ function oauthProvisioning(value: SessionSandboxResourceInputV1) {
 		if (!configuration.success) return fail();
 		const config = configuration.data;
 		if (Buffer.byteLength(JSON.stringify(config), "utf8") > 8192) return fail();
+		if (input.bindingRead !== undefined) {
+			if (
+				!input.bindingRead ||
+				Object.keys(input.bindingRead).sort().join(",") !==
+					"descriptor,serviceAuthSecretRef"
+			)
+				fail();
+			const descriptor = RuntimeOAuthBindingReadDescriptorV1Schema.parse(
+				input.bindingRead.descriptor,
+			);
+			if (
+				Buffer.byteLength(JSON.stringify(descriptor)) > 65_536 ||
+				descriptor.clientId !== config.clientId ||
+				descriptor.configurationFingerprint !==
+					runtimeOAuthConfigurationFingerprintV1(config)
+			)
+				fail();
+		}
 		const actualPrincipal =
 			(value as Partial<SessionSandboxAllocationV1>).principal ??
 			input.principal;
@@ -526,6 +568,9 @@ function oauthProvisioning(value: SessionSandboxResourceInputV1) {
 		for (const [ref, keys] of [
 			[input.tlsSecretRef, ["certKey", "keyKey", "name"]],
 			[input.callbackAuthSecretRef, ["key", "name"]],
+			...(input.bindingRead
+				? [[input.bindingRead.serviceAuthSecretRef, ["key", "name"]] as const]
+				: []),
 		] as const) {
 			if (
 				!ref ||
@@ -550,7 +595,8 @@ function oauthProvisioning(value: SessionSandboxResourceInputV1) {
 			fail();
 		return { input, configuration: config, port: Number(origin.port) };
 	} catch {
-		throw new WorkloadKubernetesError("policy");
+		// A malformed trusted installation disables OAuth, not ordinary Session work.
+		return undefined;
 	}
 }
 
@@ -1259,6 +1305,14 @@ function renderSessionSandboxResourcesV1(
 		if (!runtime) throw new WorkloadKubernetesError("policy");
 		runtime.env?.push(
 			{ name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PROVISIONED", value: "v1" },
+			...(oauth.input.bindingRead
+				? [
+						{
+							name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ",
+							value: "ep1060-v1",
+						},
+					]
+				: []),
 			{
 				name: "AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
 				value: `${base}/bootstrap/configuration.json`,
@@ -1308,6 +1362,7 @@ function renderSessionSandboxResourcesV1(
 				name: "runtime-oauth-tls-source",
 				secret: {
 					secretName: oauth.input.tlsSecretRef.name,
+					optional: true,
 					defaultMode: 0o440,
 					items: [
 						{ key: oauth.input.tlsSecretRef.certKey, path: "server.crt" },
@@ -1319,6 +1374,7 @@ function renderSessionSandboxResourcesV1(
 				name: "runtime-oauth-callback-source",
 				secret: {
 					secretName: oauth.input.callbackAuthSecretRef.name,
+					optional: true,
 					defaultMode: 0o440,
 					items: [
 						{
@@ -1340,6 +1396,14 @@ function renderSessionSandboxResourcesV1(
 					"ulimit -S -c 0\nulimit -H -c 0\nexec /usr/local/bin/node --disable-sigusr1 /app/dist/runtime-oauth-provisioning-cli.mjs",
 				],
 				env: [
+					...(oauth.input.bindingRead
+						? [
+								{
+									name: "AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION",
+									value: JSON.stringify(oauth.input.bindingRead.descriptor),
+								},
+							]
+						: []),
 					{
 						name: "AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING",
 						value: JSON.stringify({
@@ -1359,6 +1423,15 @@ function renderSessionSandboxResourcesV1(
 				resources: structuredClone(allocation.resources),
 				securityContext: agentContainerSecurityContext(),
 				volumeMounts: [
+					...(oauth.input.bindingRead
+						? [
+								{
+									name: "runtime-oauth-registration-source",
+									mountPath: "/oauth-source-registration",
+									readOnly: true,
+								},
+							]
+						: []),
 					{ name: "workspace", mountPath: allocation.workspaceMountPath },
 					{ name: "runtime-oauth-private", mountPath: "/oauth-private" },
 					{
@@ -1374,6 +1447,21 @@ function renderSessionSandboxResourcesV1(
 				],
 			},
 		];
+		if (oauth.input.bindingRead)
+			pod.spec.volumes?.push({
+				name: "runtime-oauth-registration-source",
+				secret: {
+					secretName: oauth.input.bindingRead.serviceAuthSecretRef.name,
+					optional: true,
+					defaultMode: 0o440,
+					items: [
+						{
+							key: oauth.input.bindingRead.serviceAuthSecretRef.key,
+							path: "registration.auth",
+						},
+					],
+				},
+			});
 		policy.spec?.ingress?.push(
 			{
 				_from: [
@@ -1986,6 +2074,7 @@ function withoutOAuthProvisioning<T extends KubernetesObject>(
 						![
 							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
 							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PROVISIONED",
+							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ",
 							"AGENT_INFRA_RUNTIME_PRINCIPAL",
 							"AGENT_INFRA_RUNTIME_SANDBOX_ID",
 							"AGENT_INFRA_RUNTIME_SESSION_ID",
