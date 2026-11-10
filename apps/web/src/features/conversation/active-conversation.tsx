@@ -969,9 +969,7 @@ export function ActiveConversation({
 					timeline.status === "unavailable") && (
 					<Alert tone="warn" role="alert">
 						<AlertDescription>
-							{readLocked
-								? "会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。"
-								: "会话连接暂时中断，草稿已保留，恢复后会自动继续读取；也可手动重新连接。重新连接只恢复读取，不重新发送任务。"}
+							会话连接暂时中断，草稿已保留。点击「重新连接」恢复读取，不会重新发送任务。
 						</AlertDescription>
 						<AlertAction>
 							{/* 重连开始即换成「正在自动重新连接」状态行、按钮卸载：焦点交给页面 h1，仍断开时

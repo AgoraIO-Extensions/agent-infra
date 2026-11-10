@@ -1280,7 +1280,7 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 	);
 	await expect(
 		page.getByText(
-			"会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。",
+			"会话连接暂时中断，草稿已保留。点击「重新连接」恢复读取，不会重新发送任务。",
 		),
 	).toBeVisible();
 	await expect(

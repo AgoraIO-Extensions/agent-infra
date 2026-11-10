@@ -611,7 +611,7 @@ for (const status of [401, 404] as const)
 			await expect(
 				page.getByRole("alert").filter({
 					hasText:
-						"会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。",
+						"会话连接暂时中断，草稿已保留。点击「重新连接」恢复读取，不会重新发送任务。",
 				}),
 			).toBeVisible();
 		await expect(
