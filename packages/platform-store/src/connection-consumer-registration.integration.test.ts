@@ -172,11 +172,15 @@ it("only lists registrations from the worker's configured source namespace", asy
 		const foreignIds = await foreign.pending();
 		expect(local).toHaveLength(1);
 		expect(foreignIds).toHaveLength(1);
-		expect(local[0]).not.toBe(foreignIds[0]);
+		const localId = local[0];
+		const foreignId = foreignIds[0];
+		if (!localId || !foreignId)
+			throw new Error("Missing registration outbox");
+		expect(localId).not.toBe(foreignId);
 		expect(
 			await sql`
 				select agent_id, source_namespace from platform.connection_consumer_registrations
-				where operation_id in (${local[0]}, ${foreignIds[0]}) order by agent_id
+				where operation_id in (${localId}, ${foreignId}) order by agent_id
 			`,
 		).toEqual([
 			{ agent_id: "agent-a", source_namespace: policy.sourceNamespace },
