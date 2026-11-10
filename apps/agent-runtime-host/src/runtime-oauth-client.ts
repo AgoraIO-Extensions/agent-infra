@@ -37,6 +37,7 @@ import {
 	publishProtectedRuntimeOAuthInstallation,
 	readProtectedRuntimeOAuthPublication,
 } from "./runtime-oauth-publication.js";
+import type { createProtectedRuntimeOAuthPublicationVerifier } from "./runtime-oauth-publication-verifier.js";
 import {
 	assertProtectedStandardMcpDirectoryCurrent,
 	openProtectedStandardMcpDirectory,
@@ -311,6 +312,9 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
 	publicationRevision?: string;
+	publicationVerifier?: Awaited<
+		ReturnType<typeof createProtectedRuntimeOAuthPublicationVerifier>
+	>;
 	patBindingSecret?: string;
 	target: ApprovedConnectionConsumerTargetV1 & {
 		readonly oauthClientId?: string;
@@ -1010,15 +1014,24 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					}
 					return response(record);
 				}
-				const publication = await readProtectedRuntimeOAuthPublication({
-					dataDirectory: options.dataDirectory,
-					revision: options.publicationRevision,
-					target,
-					clientId: configuration.clientId,
-					configurationFingerprint,
-					transaction: record,
-					assertCurrent: () => check(snapshot, record, true),
-				});
+				const verifiedBinding = options.publicationVerifier
+					? await options.publicationVerifier({
+							transaction: record,
+							signal: abort.signal,
+							assertCurrent: () => check(snapshot, record, true),
+						})
+					: undefined;
+				let publication = options.publicationVerifier
+					? undefined
+					: await readProtectedRuntimeOAuthPublication({
+							dataDirectory: options.dataDirectory,
+							revision: options.publicationRevision,
+							target,
+							clientId: configuration.clientId,
+							configurationFingerprint,
+							transaction: record,
+							assertCurrent: () => check(snapshot, record, true),
+						});
 				check(snapshot, record, true);
 				const code = await readProtectedStandardMcpBytes(
 					materials,
@@ -1072,6 +1085,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							},
 						);
 						check(snapshot, record);
+					}
+					if (verifiedBinding) {
+						publication = await verifiedBinding(tokens.expiresAt);
+						check(snapshot, record, true);
+						if (!publication) unavailable();
 					}
 					record.phase = "awaiting_verification";
 					record.tokenExpiresAt = tokens.expiresAt;

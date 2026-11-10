@@ -48,6 +48,7 @@ import {
 } from "./runtime-oauth.js";
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
+import { createProtectedRuntimeOAuthPublicationVerifier } from "./runtime-oauth-publication-verifier.js";
 import {
 	createProtectedStandardMcpInput,
 	standardMcpInstallationKey,
@@ -2268,6 +2269,207 @@ it("rejects an OAuth port conflict while the real business listener remains avai
 		await closeRuntimeHost(server, async () => undefined);
 	}
 });
+
+async function bindingReadFixture(
+	change?: (registration: Record<string, unknown>) => void,
+	readResponse?: () => Response,
+) {
+	const f = await publicationFixture();
+	await f.client.close();
+	await rm(f.publicationFile);
+	const bootstrap = join(f.root, "bootstrap");
+	await mkdir(bootstrap, { mode: 0o700 });
+	const registration = {
+		clientId: f.configuration.clientId,
+		clientName: "Platform installation",
+		instanceId: f.metadata.instanceRef,
+		principalId: f.publication.connectionPrincipalId,
+		consumerId: f.target.profile.consumerId,
+		registrationKey: "original-installation-key",
+		redirectUri: f.configuration.callbackUrl,
+		resource: f.configuration.resource,
+		scope: f.configuration.scope,
+		source: f.configuration.source,
+		configFingerprint: f.configuration.configFingerprint,
+		status: "ACTIVE",
+		instanceStatus: "ACTIVE",
+		clientStatus: "ACTIVE",
+		createdAt: new Date().toISOString(),
+	};
+	change?.(registration);
+	await writeFile(
+		join(bootstrap, "registration.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			registrationKey: "original-installation-key",
+			clientName: "Platform installation",
+			clientId: f.configuration.clientId,
+			instanceId: f.metadata.instanceRef,
+			configurationFingerprint: f.publication.configurationFingerprint,
+			serviceRef: f.metadata.serviceRef,
+			contract: f.metadata.contract,
+		}),
+		{ mode: 0o600 },
+	);
+	await writeFile(
+		join(f.root, "tls", "registration.auth"),
+		"synthetic-registration-service-secret",
+		{ mode: 0o600 },
+	);
+	const bindingReads: URL[] = [];
+	const fetcher: typeof fetch = async (url, init) => {
+		if (init?.method !== "GET")
+			return f.fetch(url instanceof Request ? url.url : url, init);
+		bindingReads.push(new URL(String(url)));
+		expect(init.redirect).toBe("error");
+		expect(init.credentials).toBe("omit");
+		expect(new Headers(init.headers).get("authorization")).toBe(
+			"Bearer synthetic-registration-service-secret",
+		);
+		if (readResponse) return readResponse();
+		return Response.json({
+			registrationVersion: 1,
+			outcome: "KNOWN",
+			registration,
+		});
+	};
+	const verifier = await createProtectedRuntimeOAuthPublicationVerifier({
+		dataDirectory: f.directory,
+		configuration: f.configuration,
+		publicationRevision: f.revision,
+		target: f.target,
+		principal: f.principal,
+		fetch: fetcher,
+	});
+	const client = await createProtectedRuntimeOAuthClient({
+		dataDirectory: f.directory,
+		configuration: f.configuration,
+		publicationRevision: f.revision,
+		publicationVerifier: verifier,
+		target: f.target,
+		principal: f.principal,
+		scope: f.scope,
+		verifyGrant: f.verifyGrant,
+		store: f.store,
+		fetch: fetcher,
+	});
+	closes.push(client.close);
+	return { ...f, client, bindingReads };
+}
+
+it("verifies the actual EP-1060 Principal before one code exchange and publishes its actual lifetime", async () => {
+	const f = await bindingReadFixture();
+	expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+		"awaiting_verification",
+	);
+	expect(f.bindingReads).toHaveLength(1);
+	expect(f.bindingReads[0]?.pathname).toBe(
+		`/connection/v1/agents/${f.target.profile.consumerId}/oauth-clients/original-installation-key`,
+	);
+	expect(f.calls).toHaveLength(1);
+	const publication = JSON.parse(await readFile(f.publicationFile, "utf8"));
+	expect(publication.connectionPrincipalId).toBe(
+		f.publication.connectionPrincipalId,
+	);
+	expect(publication.metadata.instanceRef).toBe(f.metadata.instanceRef);
+	expect(publication.metadata.expiresAt).toBeGreaterThan(Date.now());
+	expect(publication.metadata.expiresAt).toBeLessThanOrEqual(
+		Date.now() + 3_600_000,
+	);
+	expect(JSON.stringify(publication)).not.toContain(
+		"synthetic-registration-service-secret",
+	);
+	expect((await f.receive())?.status).toBe("available");
+	await f.client.authorized(f.signed("confirm"));
+	expect(f.calls).toHaveLength(1);
+	expect(f.bindingReads).toHaveLength(1);
+});
+
+it.each([
+	"principalId",
+	"consumerId",
+	"instanceId",
+	"clientId",
+	"resource",
+	"redirectUri",
+	"status",
+	"scope",
+	"source",
+	"extra",
+])("rejects substituted registration %s before code access", async (field) => {
+	const f = await bindingReadFixture((registration) => {
+		registration[field] =
+			field === "source" ? { ref: "other", revision: "other" } : "other";
+	});
+	const before = protection.secretReads;
+	await expect(f.client.authorized(f.signed("confirm"))).rejects.toBeDefined();
+	expect(protection.secretReads).toBe(before);
+	expect(f.calls).toHaveLength(0);
+	await expect(readFile(f.publicationFile)).rejects.toBeDefined();
+});
+
+it("keeps a lost token response unknown without retrying binding lookup or code", async () => {
+	const f = await bindingReadFixture();
+	f.setBehavior("lost");
+	expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+		"unknown",
+	);
+	expect((await f.client.authorized(f.signed("confirm"))).phase).toBe(
+		"unknown",
+	);
+	expect(f.calls).toHaveLength(1);
+	expect(f.bindingReads).toHaveLength(1);
+	await expect(readFile(f.publicationFile)).rejects.toBeDefined();
+});
+
+it.each(["UNKNOWN", "unauthorized", "redirect", "oversized"])(
+	"refuses %s binding replies without code access or retries",
+	async (kind) => {
+		const f = await bindingReadFixture(undefined, () => {
+			if (kind === "unauthorized") return new Response(null, { status: 401 });
+			if (kind === "redirect")
+				return new Response(null, {
+					status: 302,
+					headers: { location: "https://other.example/" },
+				});
+			if (kind === "oversized") return new Response("x".repeat(65_537));
+			return Response.json({
+				registrationVersion: 1,
+				outcome: "UNKNOWN",
+				registration: null,
+			});
+		});
+		const before = protection.secretReads;
+		await expect(
+			f.client.authorized(f.signed("confirm")),
+		).rejects.toBeDefined();
+		expect(f.bindingReads).toHaveLength(1);
+		expect(f.calls).toHaveLength(0);
+		expect(protection.secretReads).toBe(before);
+	},
+);
+
+it.each(["descriptor", "service credential"])(
+	"refuses changed %s before requesting the binding",
+	async (kind) => {
+		const f = await bindingReadFixture();
+		const path =
+			kind === "descriptor"
+				? join(f.root, "bootstrap", "registration.json")
+				: join(f.root, "tls", "registration.auth");
+		await writeFile(
+			path,
+			kind === "descriptor" ? "{}" : "changed-registration-service-secret",
+		);
+		const before = protection.secretReads;
+		await expect(
+			f.client.authorized(f.signed("confirm")),
+		).rejects.toBeDefined();
+		expect(f.bindingReads).toHaveLength(0);
+		expect(f.calls).toHaveLength(0);
+		expect(protection.secretReads).toBe(before);
+	},
+);
 
 it("rechecks original revocation after a real token response before publishing credentials", async () => {
 	const f = await fixture();

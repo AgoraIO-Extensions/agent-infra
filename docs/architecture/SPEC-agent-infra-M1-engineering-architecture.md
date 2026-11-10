@@ -2324,6 +2324,22 @@ PKCE（S256）；既有获准 PAT/export 路线继续遵循 §13.5.3/§13.5.5，
 创建时的 Consumer 登记与定向 OAuth 安装准备另见 §13.5.7；登记命令不复用本节的业务执行
 安装命令，也不要求先取得用户 Token。
 
+**实际安装绑定回读。** 对已预注册的 HTTPS public client，部署可显式选择 Connection
+[EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
+部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
+完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 不取得。
+Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的精确 HTTPS 路径回读，
+不用 Cookie、不跟随重定向、不隐式重试；UNKNOWN、未绑定、错 client/instance/Consumer、
+资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
+注册元数据或 Owner 不替代用户实际 OAuth 确认。
+
+核实成功后只兑换一次原 code，并以该响应的实际 expiry、原授权/scope/reference、已核实实例
+及部署批准的同版本 MCP 合同生成既有私有 publication 回执。credentialRef/revision 是 Host
+本次材料的不可变引用，不冒充 Connection token ID、Grant 或权限修订。沿用原发布锁、事务提交、
+reader 核对及受保护 export；失败或未知不重兑 code，不自动回退到静态回执或 PAT。未选择此 READ
+供应时保留既有外部批准回执路径；两条供应不能同时覆盖同一安装。回读成功、发布或 token 可用
+都不代签 MCP/Provider、最终镜像隔离或双主体验收。
+
 **批准与入口。** 部署固定获准 Connection issuer、authorization/token/revocation endpoint、
 resource、scope 和合同修订；这些输入与完整 profile/source 一起校验，不能由请求或 OAuth
 discovery 动态扩大目标。部署若选择标准 OAuth Dynamic Client Registration（DCR），还必须把

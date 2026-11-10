@@ -29,6 +29,7 @@ import {
 } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
 import { validateRuntimeOAuthProvisioning } from "./runtime-oauth-provisioning.js";
+import { createProtectedRuntimeOAuthPublicationVerifier } from "./runtime-oauth-publication-verifier.js";
 import { readProtectedStandardMcpBytes } from "./standard-mcp-files.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
@@ -204,10 +205,28 @@ export async function prepareRuntimeOAuth(options: {
 			JSON.parse(environment.AGENT_INFRA_RUNTIME_PRINCIPAL ?? "null"),
 		);
 		if (principal.kind !== "user") unavailable();
+		const bindingRead =
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_BINDING_READ;
+		if (bindingRead !== undefined && bindingRead !== "ep1060-v1") unavailable();
+		const publicationVerifier =
+			bindingRead === undefined
+				? undefined
+				: await createProtectedRuntimeOAuthPublicationVerifier({
+						dataDirectory: options.dataDirectory,
+						configuration,
+						publicationRevision:
+							environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION ===
+							"true"
+								? environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION
+								: undefined,
+						target,
+						principal,
+					});
 		const client = await createProtectedRuntimeOAuthClient({
 			dataDirectory: options.dataDirectory,
 			store: options.store,
 			configuration,
+			...(publicationVerifier ? { publicationVerifier } : {}),
 			...(environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION !==
 			"true"
 				? {}
