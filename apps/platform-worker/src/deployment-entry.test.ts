@@ -407,7 +407,7 @@ export const createWorkloadReadinessLedgerV1 = () => ({});`,
 		join(directory, "conversation-deployment.js"),
 		`
 export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; return async () => 'original-control'; };
-export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls.push('sandbox'); return async () => ({ status: 'observed', resources: [] }); };
+export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
 	await writeFile(
@@ -462,6 +462,12 @@ try {
  }
  if (process.env.RUN_FILE_EXCHANGE === 'true') {
    console.log(JSON.stringify(globalThis.fileExchange));
+   process.exit(0);
+ }
+	if (process.env.RUN_OAUTH_PROVISIONING === 'true') {
+   const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+   console.log(JSON.stringify({ provisioning: globalThis.oauthProvisioning ?? null, calls: globalThis.calls }));
+   await conversation.closeDeployment?.();
    process.exit(0);
  }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
@@ -1158,6 +1164,55 @@ export const connectionInstallation = {
 };
 connectionInstallation.authorize = undefined;
 `;
+
+it("passes only the trusted configuration-module Session OAuth provisioning bundle to the receiver", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const bundle = JSON.stringify({
+		schemaVersion: 1,
+		agentId: "agent-a",
+		sessionId: "session-a",
+		sandboxId: "sandbox-a",
+		sessionGeneration: 1,
+		principal: { kind: "user", id: "alice" },
+		configuration: {
+			schemaVersion: 1,
+			ref: "oauth",
+			revision: "r1",
+			clientId: "client-a",
+			issuer: "https://connection.example.test/",
+			authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+			tokenEndpoint: "https://connection.example.test/oauth/token",
+			revocationEndpoint: "https://connection.example.test/oauth/revoke",
+			callbackUrl: "https://platform.example.test/callback",
+			runtimeOrigin: "https://sandbox-a.worker-binding.svc:3443/",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp",
+			configFingerprint: "a".repeat(64),
+			source: { ref: "approved", revision: "r1" },
+		},
+		tlsSecretRef: { name: "tls", certKey: "tls.crt", keyKey: "tls.key" },
+		callbackAuthSecretRef: { name: "callback", key: "callback.auth" },
+		apiSelector: { component: "platform-api" },
+	});
+	await writeFile(
+		path,
+		`${original}\nexport const connectionOAuthProvisioning = ${bundle};`,
+	);
+	try {
+		const result = run({ RUN_OAUTH_PROVISIONING: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		const value = JSON.parse(result.stdout);
+		expect(value.provisioning).toMatchObject({
+			agentId: "agent-a",
+			sessionId: "session-a",
+			principal: { id: "alice" },
+			configuration: { clientId: "client-a" },
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
 
 it.each([
 	["legacy OAuth", false, true, false],

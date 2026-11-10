@@ -116,6 +116,8 @@ type DeploymentConfiguration = {
 			>
 		>
 	>;
+	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
+	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
 	readonly connectionInstallationSupply?: unknown;
 	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
@@ -310,6 +312,7 @@ const {
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
+	connectionOAuthProvisioning: configuredConnectionOAuthProvisioning,
 	createSkillMaterializer,
 	skillMaterialization,
 	nativeMetadataGateway: configuredNativeMetadataGateway,
@@ -944,7 +947,10 @@ async function createPrepared(signal: AbortSignal) {
 						...workload,
 						workerId: signing.workerId,
 					},
-					{ serviceToken },
+					{
+						serviceToken,
+						oauthProvisioning: configuredConnectionOAuthProvisioning,
+					},
 				),
 			resolveRuntimeHost: async (
 				request: Parameters<typeof resolveRuntimeHost>[0],
