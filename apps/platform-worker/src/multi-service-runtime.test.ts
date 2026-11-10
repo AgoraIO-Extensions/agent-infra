@@ -2391,7 +2391,7 @@ it("publishes a selected multi-service system under one path and rejects manifes
 	const contaminated = structuredClone(value);
 	for (const resource of contaminated.multiService.resources)
 		if (resource.kind === "Deployment")
-			for (const container of resource.spec.template.spec.containers)
+				for (const container of resource.spec.template?.spec?.containers ?? [])
 				container.env = [{ name: publicBasePathEnvironmentV1, value: "/" }];
 	const restricted = createMultiServiceRuntimeOperations({
 		client: rejected.client,
