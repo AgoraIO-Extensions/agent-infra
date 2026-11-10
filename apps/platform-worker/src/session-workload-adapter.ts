@@ -224,6 +224,9 @@ const runtimeTmpVolume = {
 export interface SessionSandboxOAuthProvisioningV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sandboxId: string;
+	readonly sessionGeneration: number;
 	readonly principal: { readonly kind: "user"; readonly id: string };
 	readonly configuration: RuntimeOAuthConfigurationV1;
 	readonly tlsSecretRef: {
@@ -471,7 +474,7 @@ function oauthProvisioning(value: SessionSandboxResourceInputV1) {
 			!input ||
 			typeof input !== "object" ||
 			Object.keys(input).sort().join(",") !==
-				"agentId,apiSelector,callbackAuthSecretRef,configuration,principal,schemaVersion,tlsSecretRef"
+				"agentId,apiSelector,callbackAuthSecretRef,configuration,principal,sandboxId,schemaVersion,sessionGeneration,sessionId,tlsSecretRef"
 		)
 			fail();
 		const configuration = RuntimeOAuthConfigurationV1Schema.safeParse(
@@ -480,11 +483,15 @@ function oauthProvisioning(value: SessionSandboxResourceInputV1) {
 		if (!configuration.success) return fail();
 		const config = configuration.data;
 		if (Buffer.byteLength(JSON.stringify(config), "utf8") > 8192) return fail();
-		const actualPrincipal = (value as Partial<SessionSandboxAllocationV1>)
-			.principal;
+		const actualPrincipal =
+			(value as Partial<SessionSandboxAllocationV1>).principal ??
+			input.principal;
 		if (
 			input.schemaVersion !== 1 ||
 			input.agentId !== value.agentId ||
+			input.sessionId !== value.sessionId ||
+			input.sandboxId !== value.sandboxId ||
+			input.sessionGeneration !== value.generation ||
 			!actualPrincipal ||
 			actualPrincipal.kind !== "user" ||
 			stableJson(input.principal) !== stableJson(actualPrincipal) ||
@@ -1261,6 +1268,7 @@ function renderSessionSandboxResourcesV1(
 				value: JSON.stringify(oauth.input.principal),
 			},
 			{ name: "AGENT_INFRA_RUNTIME_SANDBOX_ID", value: allocation.sandboxId },
+			{ name: "AGENT_INFRA_RUNTIME_SESSION_ID", value: allocation.sessionId },
 			{
 				name: "AGENT_INFRA_RUNTIME_SESSION_GENERATION",
 				value: String(allocation.generation),
@@ -1980,6 +1988,7 @@ function withoutOAuthProvisioning<T extends KubernetesObject>(
 							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PROVISIONED",
 							"AGENT_INFRA_RUNTIME_PRINCIPAL",
 							"AGENT_INFRA_RUNTIME_SANDBOX_ID",
+							"AGENT_INFRA_RUNTIME_SESSION_ID",
 							"AGENT_INFRA_RUNTIME_SESSION_GENERATION",
 							...(allocation.runtime?.sessionExecutor
 								? []

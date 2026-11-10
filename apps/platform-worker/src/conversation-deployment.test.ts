@@ -180,8 +180,7 @@ function fixture() {
 	};
 }
 
-it("captures approved OAuth provisioning through the production Session receiver", async () => {
-	const f = fixture();
+function oauthProvisioningFixture(f: ReturnType<typeof fixture>) {
 	const profile = {
 		schemaVersion: 1 as const,
 		publicOrigin: "https://connection.example.test",
@@ -195,6 +194,9 @@ it("captures approved OAuth provisioning through the production Session receiver
 	const provisioning = {
 		schemaVersion: 1 as const,
 		agentId: f.claim.sandbox.agentId,
+		sessionId: f.claim.sandbox.sessionId,
+		sandboxId: f.claim.sandbox.sandboxId,
+		sessionGeneration: f.claim.sandbox.generation,
 		principal: { kind: "user" as const, id: f.claim.sandbox.principal.id },
 		configuration: {
 			schemaVersion: 1 as const,
@@ -220,8 +222,9 @@ it("captures approved OAuth provisioning through the production Session receiver
 		callbackAuthSecretRef: { name: "approved-callback", key: "callback.auth" },
 		apiSelector: { component: "platform-api" },
 	};
-	const receive = createProductionSessionSandboxReceiverV1(
-		{
+	return {
+		provisioning,
+		options: {
 			...f.options,
 			policy: {
 				...f.options.policy,
@@ -238,11 +241,16 @@ it("captures approved OAuth provisioning through the production Session receiver
 				connectionInstallationOAuthPublication: true,
 			},
 		},
-		{
-			serviceToken: sessionSandboxDeploymentTokenFixture,
-			oauthProvisioning: provisioning,
-		},
-	);
+	};
+}
+
+it("captures approved OAuth provisioning through the production Session receiver", async () => {
+	const f = fixture();
+	const { provisioning, options } = oauthProvisioningFixture(f);
+	const receive = createProductionSessionSandboxReceiverV1(options, {
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+		oauthProvisioning: provisioning,
+	});
 	provisioning.tlsSecretRef.name = "later-mutation";
 	await receive(f.claim, new AbortController().signal);
 	const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as V1Pod;
@@ -254,6 +262,73 @@ it("captures approved OAuth provisioning through the production Session receiver
 			?.secret?.secretName,
 	).toBe("approved-tls");
 });
+
+it.each(["another Agent", "another user", "another Session"])(
+	"keeps ordinary business resources for %s outside provisioning selection",
+	async (other) => {
+		const f = fixture();
+		const { provisioning, options } = oauthProvisioningFixture(f);
+		let claim = structuredClone(f.claim);
+		if (other === "another Agent") {
+			const deployment = workloadDesiredFixture(1, "agent-b", "internal-only");
+			claim = {
+				...claim,
+				sandbox: { ...claim.sandbox, agentId: "agent-b" },
+				policy: { ...claim.policy, imageDigest: deployment.imageDigest },
+				deployment,
+				modelProjection: sessionSandboxModelProjectionFixture({
+					agentId: "agent-b",
+					configurationRevision: deployment.configRevision,
+					imageDigest: deployment.imageDigest,
+				}),
+			};
+		}
+		if (other === "another user")
+			claim = {
+				...claim,
+				sandbox: {
+					...claim.sandbox,
+					principal: { kind: "user", id: "actor-b" },
+				},
+			};
+		if (other === "another Session") {
+			claim = {
+				...claim,
+				sandbox: {
+					...claim.sandbox,
+					sessionId: "conversation-b",
+					sandboxId: "allocation-b",
+					resourceName: "sandbox-allocation-b",
+					workspaceScope: "allocation-b",
+				},
+			};
+		}
+		const receive = createProductionSessionSandboxReceiverV1(options, {
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+			oauthProvisioning: provisioning,
+		});
+		await receive(claim, new AbortController().signal);
+		const pod = f.resources.get(`Pod/${claim.sandbox.resourceName}`) as V1Pod;
+		expect(
+			pod.spec?.containers[0]?.env?.some(
+				(e) => e.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+			),
+		).toBe(true);
+		expect(
+			pod.spec?.initContainers?.some(
+				(c) => c.name === "runtime-oauth-provision",
+			) ?? false,
+		).toBe(false);
+		expect(
+			pod.spec?.volumes?.some((v) => v.name.startsWith("runtime-oauth-")) ??
+				false,
+		).toBe(false);
+		const service = f.resources.get(
+			`Service/${claim.sandbox.resourceName}`,
+		) as V1Service;
+		expect(service.spec?.ports?.some((p) => p.name === "oauth")).toBe(false);
+	},
+);
 
 it("derives the executor only from independent Worker policy and authoritative Conversation/fence", async () => {
 	const f = fixture();

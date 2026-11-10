@@ -27,10 +27,11 @@ function bundle(value: unknown) {
 	const v = value as Record<string, unknown>;
 	if (
 		Object.keys(v).sort().join(",") !==
-			"agentId,configuration,principal,sandboxId,schemaVersion,sessionGeneration" ||
+			"agentId,configuration,principal,sandboxId,schemaVersion,sessionGeneration,sessionId" ||
 		v.schemaVersion !== 1 ||
 		!OpaqueIdV1Schema.safeParse(v.agentId).success ||
 		!OpaqueIdV1Schema.safeParse(v.sandboxId).success ||
+		!OpaqueIdV1Schema.safeParse(v.sessionId).success ||
 		!Number.isSafeInteger(v.sessionGeneration) ||
 		Number(v.sessionGeneration) < 1
 	)
@@ -48,6 +49,7 @@ function bundle(value: unknown) {
 	return {
 		schemaVersion: 1,
 		agentId: v.agentId as string,
+		sessionId: v.sessionId as string,
 		principal,
 		sandboxId: v.sandboxId as string,
 		sessionGeneration: v.sessionGeneration as number,
@@ -268,6 +270,7 @@ export async function validateRuntimeOAuthProvisioning(
 	if (
 		!isDeepStrictEqual(JSON.parse(configuration), input.configuration) ||
 		input.agentId !== environment.AGENT_INFRA_RUNTIME_AGENT_ID ||
+		input.sessionId !== environment.AGENT_INFRA_RUNTIME_SESSION_ID ||
 		!isDeepStrictEqual(
 			input.principal,
 			JSON.parse(environment.AGENT_INFRA_RUNTIME_PRINCIPAL ?? "null"),

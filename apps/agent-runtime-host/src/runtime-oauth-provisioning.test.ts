@@ -51,6 +51,7 @@ async function fixture() {
 	const input = {
 		schemaVersion: 1,
 		agentId: "agent-a",
+		sessionId: "session-a",
 		principal: { kind: "user", id: "alice" },
 		sandboxId: "a",
 		sessionGeneration: 1,
@@ -193,6 +194,7 @@ it("validates the original Session bundle before the Host reads OAuth configurat
 		AGENT_INFRA_RUNTIME_AGENT_ID: "agent-a",
 		AGENT_INFRA_RUNTIME_PRINCIPAL: JSON.stringify(f.input.principal),
 		AGENT_INFRA_RUNTIME_SANDBOX_ID: "a",
+		AGENT_INFRA_RUNTIME_SESSION_ID: "session-a",
 		AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
 	};
 	await validateRuntimeOAuthProvisioning(environment, f.options.dataDirectory);
@@ -204,6 +206,7 @@ it("validates the original Session bundle before the Host reads OAuth configurat
 			}),
 		},
 		{ AGENT_INFRA_RUNTIME_SANDBOX_ID: "b" },
+		{ AGENT_INFRA_RUNTIME_SESSION_ID: "session-b" },
 		{ AGENT_INFRA_RUNTIME_SESSION_GENERATION: "2" },
 		{ AGENT_INFRA_RUNTIME_AGENT_ID: "agent-b" },
 	])

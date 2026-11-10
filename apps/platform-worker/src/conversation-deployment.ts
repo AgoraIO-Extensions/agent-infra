@@ -588,7 +588,10 @@ function sessionSandboxEgressPolicyV1(
 /** Shared immutable resource inputs for real Sessions and unclaimed reserves. */
 export function createSessionSandboxResourceInputResolverV1(
 	workload: Pick<WorkloadRuntimeOptionsV1, "policy" | "templateModelBindings">,
-	options: { readonly serviceToken: string },
+	options: {
+		readonly serviceToken: string;
+		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	},
 ) {
 	const egressPolicy = structuredClone(workload.policy);
 	if (workload.policy.codexSessionExecutor !== undefined)
@@ -1066,10 +1069,11 @@ function createSessionSandboxAllocationResolverV1(
 		options.oauthProvisioning === undefined
 			? undefined
 			: structuredClone(options.oauthProvisioning);
-	const resourceFor = createSessionSandboxResourceInputResolverV1(
-		workload,
-		options,
-	);
+	const resourceFor = (selected?: SessionSandboxOAuthProvisioningV1) =>
+		createSessionSandboxResourceInputResolverV1(workload, {
+			...options,
+			oauthProvisioning: selected,
+		});
 	return async (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
@@ -1166,14 +1170,24 @@ function createSessionSandboxAllocationResolverV1(
 			};
 		}
 
+		const selectedProvisioning =
+			provisioning &&
+			desiredState === "running" &&
+			binding.agentId === provisioning.agentId &&
+			binding.sessionId === provisioning.sessionId &&
+			binding.generation === provisioning.sessionGeneration &&
+			binding.principal.kind === "user" &&
+			binding.principal.id === provisioning.principal.id
+				? provisioning
+				: undefined;
 		const allocation: SessionSandboxAllocationV1 = {
-			...(provisioning && desiredState === "running"
-				? { oauthProvisioning: structuredClone(provisioning) }
+			...(selectedProvisioning
+				? { oauthProvisioning: structuredClone(selectedProvisioning) }
 				: {}),
 			...(snapshotProjection
 				? { workspaceSnapshotProjection: snapshotProjection }
 				: {}),
-			...resourceFor(
+			...resourceFor(selectedProvisioning)(
 				binding,
 				policy,
 				deployment,

@@ -178,6 +178,9 @@ function oauthAllocation() {
 		oauthProvisioning: {
 			schemaVersion: 1 as const,
 			agentId: allocation.agentId,
+			sessionId: allocation.sessionId,
+			sandboxId: allocation.sandboxId,
+			sessionGeneration: allocation.generation,
 			principal: { kind: "user" as const, id: allocation.principal.id },
 			configuration: {
 				schemaVersion: 1 as const,
