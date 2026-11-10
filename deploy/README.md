@@ -252,6 +252,12 @@ exact JSON tuple `[ref, revision]`；供应引用与 Consumer 的 `source` 分�
 [受保护安装交付](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)
 及 [Host 安装说明](../apps/agent-runtime-host/README.md)。
 
+同一受信 `configuration.mjs` 还可导出单个 Session 的非敏感 `connectionOAuthProvisioning` bundle；
+Worker 仅把它交给原 Session receiver，按原 user、Agent、Sandbox/generation 和精确 Service
+origin 选择，其他 Session/主体不继承。bundle 只包含标准 OAuth configuration、TLS/callback-only
+SecretRef 与 API selector，不包含 Secret 内容、Token、授权码、PKCE 或实际 Connection mapping
+receipt；默认未导出即关闭，实际 receipt 仍由 Host 的既有受控供应合同处理。
+
 同一受信 `configuration.mjs` 可选导出 `connectionInstallation`，为 Worker 提供非敏感的
 `RuntimeOAuthConfigurationV1` 和 `authorize(input, signal, finalCheck)` 函数。函数必须使用当前
 认证用户与 Agent 的独立确认，调用并等待 `finalCheck`，然后返回与 `input` 完全一致且带有非空
