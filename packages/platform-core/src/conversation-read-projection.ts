@@ -358,12 +358,22 @@ export function projectConversationMessagesV1(
 			if (text.length === 0 && !isTerminalStatus(status)) {
 				return [];
 			}
+			// Host completion can precede the journal drain; only its persisted terminal event completes the answer.
+			const terminalEventPersisted = events.some((event) => {
+				if (event.eventType !== "execution.status") return false;
+				const payload = eventPayload(event);
+				return payload.type === "execution.status" && payload.status === status;
+			});
+			const projectedStatus =
+				status === "completed" && !terminalEventPersisted
+					? ("processing" as const)
+					: messageStatus(status);
 			return [
 				{
 					messageId: `assistant:${item.executionId}`,
 					role: "assistant" as const,
 					text,
-					status: messageStatus(status),
+					status: projectedStatus,
 					executionId: item.executionId,
 					replyToMessageId: sourceMessageId,
 					answerVersion: index + 1,
