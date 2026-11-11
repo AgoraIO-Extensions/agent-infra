@@ -401,8 +401,17 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	if (apply) {
 		await assertCandidateFiles();
 		for (const [file, bytes] of plan.writes) assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
-		progress.phase = "secret-write";
+		assertNamespace();
 		for (const secret of secrets) {
+			const current = readSecret(secret.current.metadata.name);
+			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion &&
+				current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
+		}
+		const apiSecretName = consumers.find((consumer) => consumer.component === "api")!.secretName;
+		// Publish directory adoption last, after the Worker's matching evidence is present.
+		const writeOrder = [...secrets.filter((s) => s.current.metadata.name !== apiSecretName), ...secrets.filter((s) => s.current.metadata.name === apiSecretName)];
+		progress.phase = "secret-write";
+		for (const secret of writeOrder) {
 			assertNamespace();
 			const current = readSecret(secret.current.metadata.name);
 			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion &&

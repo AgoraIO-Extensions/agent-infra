@@ -1001,8 +1001,9 @@ test("partial or unknown publication is not completed with a new adoption time a
 		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
 	);
 	assert.equal(f.mutations.length, 1);
-	const bytes =
-		f.cluster.get("secret/api-config").data["template-validation-codex.json"];
+	const bytes = f.cluster.get("secret/worker-config").data[
+		"template-validation-codex.json"
+	];
 	assert.equal(JSON.parse(Buffer.from(bytes, "base64")).schemaVersion, 2);
 	now += 3_600_001;
 	f.afterReplace(() => {});
@@ -1013,13 +1014,48 @@ test("partial or unknown publication is not completed with a new adoption time a
 	);
 	assert.equal(f.mutations.length, 1);
 	assert.equal(
-		f.cluster.get("secret/api-config").data["template-validation-codex.json"],
+		f.cluster.get("secret/worker-config").data[
+			"template-validation-codex.json"
+		],
 		bytes,
 	);
 	assert.equal(
 		JSON.parse(
 			Buffer.from(
+				f.cluster.get("secret/api-config").data[
+					"template-validation-codex.json"
+				],
+				"base64",
+			),
+		).status,
+		"not-yet-measured",
+	);
+});
+
+test("directory adoption is not published before the Worker receives its matching evidence", async (t) => {
+	const f = await fixture(t);
+	f.afterReplace(() => {
+		throw Error("synthetic response lost at the first consumer write");
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+	);
+	assert.deepEqual(f.mutations, ["replace:worker-config"]);
+	assert.equal(
+		JSON.parse(
+			Buffer.from(
 				f.cluster.get("secret/worker-config").data[
+					"template-validation-codex.json"
+				],
+				"base64",
+			),
+		).schemaVersion,
+		2,
+	);
+	assert.equal(
+		JSON.parse(
+			Buffer.from(
+				f.cluster.get("secret/api-config").data[
 					"template-validation-codex.json"
 				],
 				"base64",
@@ -1037,8 +1073,9 @@ test("a still-fresh original attempt resumes with its frozen bytes rather than m
 	await assert.rejects(
 		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
 	);
-	const original =
-		f.cluster.get("secret/api-config").data["template-validation-codex.json"];
+	const original = f.cluster.get("secret/worker-config").data[
+		"template-validation-codex.json"
+	];
 	f.afterReplace(() => {});
 	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
 	assert.equal(
