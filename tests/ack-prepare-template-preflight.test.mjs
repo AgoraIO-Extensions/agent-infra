@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { prepareTemplatePreflight } from "../deploy/ack/prepare-template-preflight.ts";
+import { workloadResourceConfigurationHashV1 } from "../packages/platform-core/src/workload-resource-configuration.ts";
 
 const sourceSha = "a".repeat(40);
 const namespace = "test-ack";
@@ -262,6 +263,61 @@ async function executorJobs(f) {
 		await f.save(file, job);
 	}
 }
+
+async function inheritedJobs(f) {
+	await executorJobs(f);
+	for (const file of f.jobs) {
+		const job = JSON.parse(await readFile(file));
+		job.resources.requests["ephemeral-storage"] = "256Mi";
+		job.resources.limits["ephemeral-storage"] = "1Gi";
+		job.expectedResourceLimits = job.resources.limits;
+		delete job.placement;
+		delete job.codexSessionExecutor.placement;
+		job.expectedNodePrefix = "cn-hangzhou.10.0.1.219";
+		await f.save(file, job);
+	}
+}
+
+test("preparation retains complete control resources and inherited scheduling for all four templates", async (t) => {
+	const f = await fixture(t);
+	await inheritedJobs(f);
+	for (const file of await f.run()) {
+		const job = JSON.parse(await readFile(file));
+		assert.equal(job.resources.requests["ephemeral-storage"], "256Mi");
+		assert.equal(job.resources.limits["ephemeral-storage"], "1Gi");
+		assert.deepEqual(job.expectedResourceLimits, job.resources.limits);
+		assert.equal(job.placement, undefined);
+		assert.equal(job.codexSessionExecutor.placement, undefined);
+	}
+});
+
+test("preparation rejects an ECI job in the inherited target tuple", async (t) => {
+	const f = await fixture(t);
+	await inheritedJobs(f);
+	const job = JSON.parse(await readFile(f.jobs[1]));
+	job.placement = { nodeSelector: { type: "virtual-kubelet" } };
+	await f.save(f.jobs[1], job);
+	await assert.rejects(f.run(), /PREFLIGHT_CAPACITY_POLICY_DRIFT/u);
+	assert.deepEqual(await readdir(f.evidence), []);
+});
+
+for (const level of ["requests", "limits"])
+	test(`preparation rejects ${level} ephemeral drift even under the same portable hash`, async (t) => {
+		const f = await fixture(t);
+		await inheritedJobs(f);
+		const baseline = JSON.parse(await readFile(f.jobs[0]));
+		const job = JSON.parse(await readFile(f.jobs[1]));
+		job.resources[level]["ephemeral-storage"] =
+			level === "requests" ? "512Mi" : "2Gi";
+		job.expectedResourceLimits = job.resources.limits;
+		assert.equal(
+			workloadResourceConfigurationHashV1(job),
+			workloadResourceConfigurationHashV1(baseline),
+		);
+		await f.save(f.jobs[1], job);
+		await assert.rejects(f.run(), /PREFLIGHT_CAPACITY_POLICY_DRIFT/u);
+		assert.deepEqual(await readdir(f.evidence), []);
+	});
 
 test("preparation preserves one shared executor deployment policy across all template jobs", async (t) => {
 	const f = await fixture(t);

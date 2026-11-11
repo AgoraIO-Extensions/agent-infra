@@ -34,10 +34,21 @@ ECI 使用精确架构/virtual-kubelet selector 与 provider toleration，Runtim
 首版不接受该模式的预留 reserve，须使用正式分配的新 Session；旧 reserves 不被升级或冒名采用。
 API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs 流程交付。
 
+保持普通节点继承调度时，四个预检 job 与 executor policy 均省略 `placement`，不临时增加
+selector、toleration 或 RuntimeClass。沿既有 `expectedNodePrefix` 字段填写本次可信目标的
+完整节点名；该分支要求实际调度节点精确匹配，并回读其 UID、Linux/amd64 架构。调度到其他
+节点或被注入 ECI 字段均拒绝；显式 ECI 分支保持原 selector、provider toleration 和缓存门禁。
+
 正式 `template-preflight` 的四个 job 与容量输入必须声明相同的 `resourceProfileRef`、
 `resources`、`codexSessionExecutor`、`storageSize` 和 `storageClassName`；已有
 `workspaceSnapshotEgress` 也属于资源摘要，不能在发布时省略。未声明 executor 的旧 job
 继续沿原单容器路径，不得拿它的测量回执启用新模式。
+
+控制容器的 `resources` 和 `expectedResourceLimits` 保留完整 CPU、memory 及已声明的
+`ephemeral-storage`，四 job 不得混用不同声明。executor/init 仍只接受原 CPU/memory 资源。
+原 portable 资源摘要和费用公式不变；新模式另逐项比较控制资源的完整键集与等值数量，
+容量回执字节摘要和 mounted Worker 检查共同绑定声明。缺失、额外键或数量漂移均拒绝，
+不能用相同 portable 摘要掩盖 ephemeral-storage 差异。
 
 启用新模式的 Codex job 创建独立、带 ownership 的临时 PVC、初始化容器、控制容器和 executor，
 绑定固定的合成 Conversation 与代次。模型凭据只在控制侧；实际 Pod/PVC、初始化终态、
@@ -54,6 +65,10 @@ API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs �
 采用；既有数据库使用 `initializeDatabase=false`。发布门禁与部署后 mounted-capacity 检查
 使用同一资源摘要，并核对 Worker 实际加载的 executor、快照出口和存储策略。不能手工改摘要、
 补造测量或覆盖旧状态绕过资源不足与配置漂移。
+
+首次采用 executor 使用既有空 reserve `profiles: []` 冷分配路径，保留历史成本与 charge，
+追加新布局的足额成本。已有 reserve 由 Worker 正式退休并回读；活动或 unknown 未收敛时
+停止采用。非空旧 reserve profiles 与混合资源摘要仍拒绝，不删旧成本或手工改 Pod/PVC。
 
 Worker 创建精确工作区 `subPath`，只向控制容器注入签名绑定及派生服务 token；executor 不拿
 Host Secret/PVC 根/历史或模型凭据，不共享 PID，只有固定 loopback 执行端点。

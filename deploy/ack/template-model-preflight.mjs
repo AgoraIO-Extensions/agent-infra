@@ -8,7 +8,7 @@ import { isIP } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
-import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
+import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
@@ -18,6 +18,8 @@ const sourcePattern = /^[a-f0-9]{40}$/u;
 const namePattern = /^(?:ack-preflight-|sandbox-preflight-)[a-z0-9-]+$/u;
 const controlResources = (job) => job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits };
 const usesExecutor = (job) => job.templateId === "codex" && job.codexSessionExecutor !== undefined;
+const inheritsPlacement = (job) => job.codexSessionExecutor !== undefined && job.codexSessionExecutor.placement === undefined && job.placement === undefined;
+const isDefaultNodeToleration = (entry) => ["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && (entry.tolerationSeconds === undefined || entry.tolerationSeconds === 300) && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key));
 const startupEventReasons = new Set([
 	"Pulling", "Pulled", "SuccessfulHitImageCache", "ImageCacheNotFullMatch",
 	"ImageCacheAutoCreated", "ImageCacheAutoEliminated",
@@ -161,8 +163,8 @@ export function validateTemplatePreflightJob(value) {
 	if (value.resourceProfileRef !== undefined) {
 		if (typeof value.resourceProfileRef !== "string" || !value.resourceProfileRef || typeof value.storageSize !== "string" || typeof value.storageClassName !== "string" || !/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(value.storageClassName)) throw new Error("CAPACITY_INPUT_INVALID");
 		const resources = controlResources(value);
-		if (Object.keys(resources).sort().join(",") !== "limits,requests" || ["requests", "limits"].some((level) => !resources[level] || Object.keys(resources[level]).sort().join(",") !== "cpu,memory" || ["cpu", "memory"].some((key) => typeof resources[level][key] !== "string"))) throw new Error("CAPACITY_INPUT_INVALID");
-		validateCodexSessionExecutorResourcePolicyV1({ resources });
+		if (value.codexSessionExecutor === undefined) validateCodexSessionExecutorResourcePolicyV1({ resources });
+		else validateWorkloadControlResourcesV1(resources);
 		assert.deepEqual(resources.limits, value.expectedResourceLimits);
 		preflightNetworkEgress(value);
 		const topology = value.allowedPodTopologyLabelValues ?? {};
@@ -179,9 +181,12 @@ export function validateTemplatePreflightJob(value) {
 		nodeSelector?.["kubernetes.io/os"] === "linux" &&
 		typeof hostname === "string" && /^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(hostname) &&
 		!hostname.startsWith("virtual-kubelet-") && value.expectedNodePrefix === hostname;
-	if (!nodeSelector || (nodeSelector.type !== "virtual-kubelet" && !pinnedEcs))
+	const inherited = inheritsPlacement(value);
+	if (inherited && (typeof value.expectedNodePrefix !== "string" || !/^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/.test(value.expectedNodePrefix) || value.expectedNodePrefix.startsWith("virtual-kubelet-")))
 		throw new Error("TEMPLATE_PLACEMENT_INVALID");
-	if (usesExecutor(value)) {
+	if (!inherited && (!nodeSelector || (nodeSelector.type !== "virtual-kubelet" && !pinnedEcs)))
+		throw new Error("TEMPLATE_PLACEMENT_INVALID");
+	if (usesExecutor(value) && !inherited) {
 		const placement = value.codexSessionExecutor.placement;
 		if (!placement || placement.architecture !== "amd64" || placement.runtimeClassName || nodeSelector.type !== "virtual-kubelet" ||
 			Object.keys(nodeSelector).some((key) => key !== "type" && key !== "kubernetes.io/arch") || nodeSelector["kubernetes.io/arch"] !== "amd64")
@@ -192,6 +197,22 @@ export function validateTemplatePreflightJob(value) {
 	if (!Number.isSafeInteger(podReadyTimeoutSeconds) || podReadyTimeoutSeconds < 60 || podReadyTimeoutSeconds > 1800 || value.podReadyTimeoutSeconds === null)
 		throw new Error("POD_READY_TIMEOUT_INVALID");
 	return { ...value, podReadyTimeoutSeconds };
+}
+
+/** An inherited job observes an approved ordinary node without pinning the Pod to it. */
+export function assertTemplatePreflightPlacement(job, pod, node) {
+	if (!inheritsPlacement(job)) {
+		assert(pod.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
+		return {};
+	}
+	assert.deepEqual(pod.spec.nodeSelector ?? {}, {}, "EXECUTOR_LAYOUT_DRIFT");
+	assert.equal(pod.spec.runtimeClassName, undefined, "EXECUTOR_LAYOUT_DRIFT");
+	assert.deepEqual((pod.spec.tolerations ?? []).filter((entry) => !isDefaultNodeToleration(entry)), [], "EXECUTOR_LAYOUT_DRIFT");
+	assert.equal(pod.spec.nodeName, job.expectedNodePrefix, "EXECUTOR_LAYOUT_NODE_DRIFT");
+	assert.equal(node?.metadata?.name, pod.spec.nodeName, "EXECUTOR_LAYOUT_NODE_DRIFT");
+	assert(typeof node?.metadata?.uid === "string" && node.metadata.uid && !node.metadata.deletionTimestamp, "EXECUTOR_LAYOUT_NODE_DRIFT");
+	assert(node.metadata.labels?.["kubernetes.io/arch"] === "amd64" && node.metadata.labels?.["kubernetes.io/os"] === "linux" && node.metadata.labels?.type !== "virtual-kubelet", "EXECUTOR_LAYOUT_NODE_DRIFT");
+	return { nodeUidSha256: createHash("sha256").update(node.metadata.uid).digest("hex"), nodeArchitecture: "amd64" };
 }
 
 /** Bounded subset of the reviewed Worker model/DNS destinations; no CIDR or resolver fallback. */
@@ -250,8 +271,7 @@ export function renderTemplatePreflightPod({ job: input, owner, publicKey, model
 			automountServiceAccountToken: false,
 			restartPolicy: "Never",
 			imagePullSecrets: job.imagePullSecret ? [{ name: job.imagePullSecret }] : [],
-			nodeSelector: job.placement.nodeSelector,
-			tolerations: job.placement.tolerations ?? [],
+			...(job.placement === undefined ? {} : { nodeSelector: job.placement.nodeSelector, tolerations: job.placement.tolerations ?? [] }),
 			securityContext: { fsGroup: 1000, runAsGroup: 1000, runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: "RuntimeDefault" } },
 			containers: [{
 				name: "runtime",
@@ -348,7 +368,7 @@ function assertProjection(actual, expected) {
 }
 
 /** Only live readback of the declared executor layout can produce new-mode capacity evidence. */
-export function observeTemplatePreflightLayout(job, expected, observed, pvc, serviceAccount, networkPolicy) {
+export function observeTemplatePreflightLayout(job, expected, observed, pvc, serviceAccount, networkPolicy, node) {
 	if (job.resourceProfileRef === undefined) return {};
 	assert.equal(observed.metadata?.name, expected.pod.metadata.name, "EXECUTOR_LAYOUT_DRIFT");
 	assert.equal(observed.metadata?.namespace, job.namespace, "EXECUTOR_LAYOUT_DRIFT");
@@ -366,7 +386,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		if (wanted === undefined) continue;
 		assert(Array.isArray(comparison[key]) && comparison[key].length === wanted.length, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [index, container] of comparison[key].entries()) {
-			assert(workloadResourcesEqualV1(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
+			assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted[index].resources), "EXECUTOR_LAYOUT_DRIFT");
 			container.resources = structuredClone(wanted[index].resources);
 		}
 	}
@@ -377,10 +397,10 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		assert(resourceQuantityEqualsV1(volume.emptyDir?.sizeLimit, size), "EXECUTOR_LAYOUT_DRIFT");
 		volume.emptyDir.sizeLimit = size;
 	}
-	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && (entry.tolerationSeconds === undefined || entry.tolerationSeconds === 300) && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key))));
+	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !isDefaultNodeToleration(entry));
 	for (const key of ["hostPID", "hostIPC", "hostNetwork", "shareProcessNamespace"]) comparison[key] ??= false;
 	assertProjection(comparison, expected.pod.spec);
-	assert(observed.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
+	const placement = assertTemplatePreflightPlacement(job, observed, node);
 	assert(!observed.spec.hostPID && !observed.spec.hostIPC && !observed.spec.hostNetwork && !observed.spec.ephemeralContainers?.length && observed.spec.runtimeClassName === undefined, "EXECUTOR_LAYOUT_DRIFT");
 	assert.deepEqual(observed.spec.securityContext, expected.pod.spec.securityContext, "EXECUTOR_LAYOUT_DRIFT");
 	const expectedSpec = expected.pod.spec;
@@ -398,7 +418,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		}
 		assert.equal(container.securityContext.privileged ?? false, false, "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.procMount ?? "Default", "Default", "EXECUTOR_LAYOUT_DRIFT");
-		assert(workloadResourcesEqualV1(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
+		assert((container.name === "runtime" ? workloadControlResourcesEqualV1 : workloadResourcesEqualV1)(container.resources, wanted.resources), "EXECUTOR_LAYOUT_DRIFT");
 		assert.equal(container.securityContext.capabilities.add?.length ?? 0, 0, "EXECUTOR_LAYOUT_DRIFT");
 		for (const [key, value] of Object.entries(container.securityContext)) {
 			if (key in wanted.securityContext) continue;
@@ -425,7 +445,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 	assert(!serviceAccount.secrets?.length, "PREFLIGHT_NETWORK_DRIFT");
 	const actualNetwork = { ...networkPolicy.spec, ingress: networkPolicy.spec?.ingress ?? [] };
 	assert.deepEqual(actualNetwork, expected.networkPolicy.spec, "PREFLIGHT_NETWORK_DRIFT");
-	const network = { serviceAccountUidSha256: createHash("sha256").update(serviceAccount.metadata.uid).digest("hex"), networkPolicyUidSha256: createHash("sha256").update(networkPolicy.metadata.uid).digest("hex"), networkPolicySpecSha256: createHash("sha256").update(JSON.stringify(actualNetwork)).digest("hex"), networkDataplaneVerified: false };
+	const network = { ...placement, serviceAccountUidSha256: createHash("sha256").update(serviceAccount.metadata.uid).digest("hex"), networkPolicyUidSha256: createHash("sha256").update(networkPolicy.metadata.uid).digest("hex"), networkPolicySpecSha256: createHash("sha256").update(JSON.stringify(actualNetwork)).digest("hex"), networkDataplaneVerified: false };
 	assert.equal(pvc?.metadata?.name, expected.pvc.metadata.name, "EXECUTOR_PVC_DRIFT");
 	assert.equal(pvc?.metadata?.namespace, job.namespace, "EXECUTOR_PVC_DRIFT");
 	assert(!pvc?.metadata?.deletionTimestamp, "EXECUTOR_PVC_DRIFT");
@@ -551,10 +571,12 @@ async function main(inputPath) {
 			throw new Error("TEMPLATE_POD_READINESS_FAILED");
 		}
 		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
+		const readNode = (pod) => inheritsPlacement(job) ? JSON.parse(run([...kubeArgs, "get", "node", pod.spec.nodeName, "-o", "json"])) : undefined;
+		const measurementNode = readNode(measurementPod);
 		await writePodStartupReceipt(job, { name, owner }, measurementPod);
 		if (pvc) {
 			assert.equal(measurementPod.metadata.uid, owned.get("Pod"), "EXECUTOR_LAYOUT_DRIFT");
-			observeTemplatePreflightLayout(job, rendered, measurementPod, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])));
+			observeTemplatePreflightLayout(job, rendered, measurementPod, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), measurementNode);
 		}
 		const port = 35000 + Math.floor(Math.random() * 1000);
 		portForward = spawn("kubectl", [...kubeArgs, "port-forward", `pod/${name}`, `${port}:3003`], { stdio: ["ignore", "pipe", "pipe"] });
@@ -573,6 +595,8 @@ async function main(inputPath) {
 			grantPrivateKeyFile: job.grantPrivateKeyFile, runtimeServiceTokenFile: job.runtimeServiceTokenFile,
 			relayKeyFile: job.relayKeyFile, outputDirectory: job.outputDirectory,
 			expectedResourceLimits: job.expectedResourceLimits, expectedNodePrefix: job.expectedNodePrefix ?? "virtual-kubelet-",
+			placement: job.placement, codexSessionExecutor: job.codexSessionExecutor,
+			...(job.resourceProfileRef === undefined ? {} : { resources: controlResources(job) }),
 			expectedReply: job.expectedReply ?? "READY", runtimeModuleSha256: actualModuleHash,
 			...(binding ? { sessionExecutorBinding: binding, runtimeDataDirectory: "/workspace/runtime" } : {}),
 		};
@@ -602,7 +626,9 @@ async function main(inputPath) {
 			const instances = (value) => value.status.containerStatuses.map((item) => [item.name, item.containerID]).sort();
 			assert.deepEqual(instances(observed), instances(measurementPod), "EXECUTOR_INSTANCE_DRIFT");
 		}
-		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"]))) : {};
+		const observedNode = readNode(observed);
+		if (measurementNode) assert.equal(observedNode?.metadata.uid, measurementNode.metadata.uid, "EXECUTOR_LAYOUT_NODE_DRIFT");
+		const layout = pvc ? observeTemplatePreflightLayout(job, rendered, observed, JSON.parse(run([...kubeArgs, "get", "pvc", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "serviceaccount", name, "-o", "json"])), JSON.parse(run([...kubeArgs, "get", "networkpolicy", name, "-o", "json"])), observedNode) : {};
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
 			imageDigest: job.imageDigest, observedResources: observed.spec.containers[0].resources,

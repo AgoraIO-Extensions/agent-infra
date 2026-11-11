@@ -9,6 +9,8 @@ import { CODEX_SESSION_EXECUTOR_BINDING_ENV, parseCodexSessionExecutorBindingV1 
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
 import {createWorkerRuntimeGrantSignerV4} from "../../apps/platform-worker/src/runtime-grant-signer-v4.ts";
 import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts";
+import { assertTemplatePreflightPlacement } from "./template-model-preflight.mjs";
+import { workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 
 let stage = "configuration";
 let lastHttpStatus: number | undefined;
@@ -49,7 +51,9 @@ async function run() {
 	stage = "ack-pod-image-source-check";
  const kube=(...args: string[])=>execFileSync("kubectl",["--kubeconfig",c.kubeconfig,"-n",c.namespace,...(args[0] === "exec" ? [args[0], args[1], "-c", "runtime", ...args.slice(2)] : args)],{encoding:"utf8"}).trim();
  const pod=JSON.parse(kube("get","pod",c.containerName,"-o","json"));
- if(pod.metadata.labels["agent-infra.validation-scope"]!==c.scope || pod.spec.containers[0].image!==c.imageReference || pod.status.phase!=="Running" || !pod.spec.nodeName.startsWith(c.expectedNodePrefix ?? "virtual-kubelet-")) fail();
+ if(pod.metadata.labels["agent-infra.validation-scope"]!==c.scope || pod.spec.containers[0].image!==c.imageReference || pod.status.phase!=="Running") fail();
+ const inherited = c.codexSessionExecutor !== undefined && c.codexSessionExecutor.placement === undefined && c.placement === undefined;
+ assertTemplatePreflightPlacement(c, pod, inherited ? JSON.parse(kube("get", "node", pod.spec.nodeName, "-o", "json")) : undefined);
  const source=c.sourceCommit;
  async function waitForHostGrant(grant: {token:string}, signal?: AbortSignal) {
   const claim=JSON.parse(Buffer.from(grant.token.split('.')[1], 'base64url').toString('utf8'));
@@ -76,7 +80,7 @@ async function run() {
  const image=pod.status.containerStatuses.find((container:any)=>container.name==="runtime")?.imageID;
  const command="/bin/sh",commandArgs=["./start-runtime-host.sh"];
  const observedResourceLimits=pod.spec.containers[0].resources.limits;
- if(observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory) fail();
+ if(c.resources !== undefined ? !workloadControlResourcesEqualV1(pod.spec.containers[0].resources, c.resources) : observedResourceLimits.cpu!==c.expectedResourceLimits.cpu || observedResourceLimits.memory!==c.expectedResourceLimits.memory) fail();
 
  const nonSecretEnvironment=(name:string)=>{
   if(!["AGENT_INFRA_RUNTIME_MODEL_CONFIG","AGENT_INFRA_RUNTIME_AGENT_ID","AGENT_INFRA_RUNTIME_DRIVER"].includes(name)) fail();
