@@ -9,6 +9,8 @@ import { PostgresConnectionConsumerRegistrationStoreV1 } from "@agent-infra/plat
 import type { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import type { WorkerConnectionInstallationOptions } from "./runtime-oauth-request.js";
 
+export { readConnectionConsumerSourceSelectionV1 } from "@agent-infra/platform-store";
+
 export interface ConnectionConsumerDeploymentBindingV1 {
 	readonly profile: unknown;
 	readonly approval: unknown;

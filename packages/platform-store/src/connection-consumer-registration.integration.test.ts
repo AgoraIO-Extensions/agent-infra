@@ -16,6 +16,7 @@ import { PostgresApplicationFoundationTransactionV1 } from "./application-founda
 import {
 	insertConnectionConsumerRegistrationV1,
 	PostgresConnectionConsumerRegistrationStoreV1,
+	readConnectionConsumerSourceSelectionV1,
 } from "./connection-consumer-registration.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import { createPostgresOutboxStore } from "./outbox.js";
@@ -380,6 +381,13 @@ async function registeredAgent(id: string) {
 it("reads two durable verified Consumer associations without a hand-maintained Agent/Consumer map", async () => {
 	const a = await registeredAgent("agent-a");
 	const b = await registeredAgent("agent-b");
+	await sql`insert into platform.agents(id) values ('legacy-agent')`;
+	expect(
+		await readConnectionConsumerSourceSelectionV1(database.databaseUrl),
+	).toEqual({
+		automaticAgentIds: ["agent-a", "agent-b"],
+		legacyAgentIds: ["legacy-agent"],
+	});
 	const bindings = await registrations.registered();
 	expect(bindings).toMatchObject({
 		"agent-a": {

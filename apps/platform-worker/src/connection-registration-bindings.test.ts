@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
 	construct: vi.fn(),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
+	readConnectionConsumerSourceSelectionV1: vi.fn(async () => ({
+		automaticAgentIds: [],
+		legacyAgentIds: [],
+	})),
 	PostgresConnectionConsumerRegistrationStoreV1: class {
 		constructor(input: unknown) {
 			mocks.construct(input);

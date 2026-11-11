@@ -72,6 +72,7 @@ export {
 } from "./commit-wakeups.ts";
 export {
 	PostgresConnectionConsumerRegistrationStoreV1,
+	readConnectionConsumerSourceSelectionV1,
 	readRegisteredConnectionConsumerBindingsV1,
 } from "./connection-consumer-registration.js";
 export {

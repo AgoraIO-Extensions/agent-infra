@@ -101,6 +101,35 @@ type RegistrationRow = {
 
 const registrationReadDialect = new PgDialect();
 
+/** Persisted source selection survives removal of the deployment registration policy. */
+export async function readConnectionConsumerSourceSelectionV1(
+	databaseUrl: string,
+) {
+	const client = postgres(databaseUrl, { max: 1, connect_timeout: 5 });
+	try {
+		return await client.begin(async (transaction) => {
+			await transaction`set local statement_timeout = '15s'`;
+			const rows = await transaction<
+				{ agent_id: string; automatic: boolean }[]
+			>`
+				select a.id as agent_id, exists(
+					select 1 from platform.connection_consumer_registrations r where r.agent_id = a.id
+				) as automatic from platform.agents a order by a.id
+			`;
+			return {
+				automaticAgentIds: rows
+					.filter((row) => row.automatic)
+					.map((row) => row.agent_id),
+				legacyAgentIds: rows
+					.filter((row) => !row.automatic)
+					.map((row) => row.agent_id),
+			};
+		});
+	} finally {
+		await client.end();
+	}
+}
+
 /** Same Platform transaction as the installation authority; never reads Connection's database. */
 export async function readRegisteredConnectionConsumerBindingsV1(
 	transaction: {

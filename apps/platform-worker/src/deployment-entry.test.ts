@@ -398,6 +398,10 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
  async registered() { globalThis.registrationReads = (globalThis.registrationReads ?? 0) + 1; return globalThis.registrations ?? {}; }
  async close() { globalThis.registrationCloses = (globalThis.registrationCloses ?? 0) + 1; }
 }
+export async function readConnectionConsumerSourceSelectionV1() {
+ if(globalThis.sourceSelectionFailed) throw Error('controlled source unavailable');
+ return globalThis.sourceSelection ?? {automaticAgentIds:[],legacyAgentIds:[]};
+}
 `,
 						}),
 					);
@@ -739,6 +743,36 @@ export const resolveConnectionConsumerBindingsByAgent=async(signal,registrations
 					expect.stringContaining(`"ref":"${registrations[id]?.source.ref}"`),
 				);
 			}
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
+it.each([false, true])(
+	"does not project shared profiles after removal of an associated Agent's automatic policy (sourceUnavailable=%s)",
+	async (sourceUnavailable) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		try {
+			await writeFile(
+				path,
+				`${original}
+globalThis.sourceSelection={automaticAgentIds:['agent-a'],legacyAgentIds:['agent-b']};
+globalThis.sourceSelectionFailed=${sourceUnavailable};
+`,
+			);
+			const result = run({ RUN_REGISTERED_BINDINGS: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			const projected = JSON.parse(result.stdout);
+			expect(projected.snapshot).toBeNull();
+			expect(Object.keys(projected.snapshots)).toEqual(
+				sourceUnavailable ? [] : ["agent-b"],
+			);
+			if (!sourceUnavailable)
+				expect(projected.snapshots["agent-b"]).toContain(
+					'"consumerId":"platform-worker"',
+				);
 		} finally {
 			await writeFile(path, original);
 		}

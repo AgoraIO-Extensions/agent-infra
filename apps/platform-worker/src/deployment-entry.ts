@@ -28,6 +28,7 @@ import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-in
 import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
+	readConnectionConsumerSourceSelectionV1,
 	resolveRegisteredConnectionConsumerBindingsV1,
 } from "./connection-registration-bindings.js";
 import * as conversationDeployment from "./conversation-deployment.js";
@@ -611,6 +612,28 @@ async function createPrepared(signal: AbortSignal) {
 	} catch {
 		throw new Error("PLATFORM_DATABASE_URL must name a PostgreSQL database");
 	}
+	const legacySelectionRequired =
+		!automaticRegistrationPolicy &&
+		Boolean(
+			connectionConsumerSnapshot ||
+				connectionConsumerProfilesByAgent ||
+				resolveConnectionConsumerBindingsByAgent,
+		);
+	const legacySelection = legacySelectionRequired
+		? await readConnectionConsumerSourceSelectionV1(databaseUrl).catch(
+				() => undefined,
+			)
+		: undefined;
+	signal.throwIfAborted();
+	const persistentAutomaticSource =
+		legacySelectionRequired &&
+		(!legacySelection || legacySelection.automaticAgentIds.length > 0);
+	const selectedSharedSnapshot = persistentAutomaticSource
+		? undefined
+		: connectionConsumerSnapshot;
+	const selectedSharedConsumer = persistentAutomaticSource
+		? undefined
+		: connectionConsumer;
 	const resolvedBindings:
 		| Awaited<ReturnType<ConnectionConsumerBindingsResolverV1>>
 		| undefined = automaticRegistrationPolicy
@@ -623,14 +646,16 @@ async function createPrepared(signal: AbortSignal) {
 				signal.throwIfAborted();
 				return {};
 			})
-		: await resolveConnectionConsumerBindingsByAgent?.(signal);
+		: persistentAutomaticSource
+			? undefined
+			: await resolveConnectionConsumerBindingsByAgent?.(signal);
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
 			connectionInstallationSuppliesByAgent !== undefined)
 	)
 		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-	const resolvedProfilesByAgent = resolvedBindings
+	let resolvedProfilesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
 					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
@@ -639,7 +664,7 @@ async function createPrepared(signal: AbortSignal) {
 				}),
 			)
 		: connectionConsumerProfilesByAgent;
-	const resolvedInstallationSuppliesByAgent = resolvedBindings
+	let resolvedInstallationSuppliesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => [
 					agentId,
@@ -655,6 +680,28 @@ async function createPrepared(signal: AbortSignal) {
 	for (const agentId of Object.keys(resolvedProfilesByAgent ?? {}))
 		if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
 			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	if (persistentAutomaticSource) {
+		const profiles = resolvedProfilesByAgent;
+		const supplies = resolvedInstallationSuppliesByAgent;
+		resolvedProfilesByAgent = Object.fromEntries(
+			(legacySelection?.legacyAgentIds ?? []).flatMap((agentId) => {
+				const binding = resolveConnectionConsumerBindingsByAgent
+					? undefined
+					: profiles === undefined
+						? connectionConsumer
+						: profiles[agentId];
+				return binding ? [[agentId, binding]] : [];
+			}),
+		);
+		resolvedInstallationSuppliesByAgent = Object.fromEntries(
+			Object.keys(resolvedProfilesByAgent).map((agentId) => [
+				agentId,
+				supplies === undefined
+					? connectionInstallationSupply
+					: supplies[agentId],
+			]),
+		);
+	}
 	const resolvedSnapshotsByAgent = resolvedProfilesByAgent
 		? Object.fromEntries(
 				Object.entries(resolvedProfilesByAgent).map(([agentId, value]) => [
@@ -754,7 +801,7 @@ async function createPrepared(signal: AbortSignal) {
 			...(skillMaterializer ? { skillMaterializer } : {}),
 			policy: {
 				...workloadInput.policy,
-				connectionConsumerSnapshot,
+				connectionConsumerSnapshot: selectedSharedSnapshot,
 				...(resolvedSnapshotsByAgent
 					? { connectionConsumerSnapshotsByAgent: resolvedSnapshotsByAgent }
 					: {}),
@@ -816,8 +863,8 @@ async function createPrepared(signal: AbortSignal) {
 			workload: { ...workload, workerId: signing.workerId },
 			signing,
 			serviceToken,
-			connectionConsumerProfile: connectionConsumer?.profile,
-			connectionConsumerApproval: connectionConsumer?.approval,
+			connectionConsumerProfile: selectedSharedConsumer?.profile,
+			connectionConsumerApproval: selectedSharedConsumer?.approval,
 			...(resolvedProfilesByAgent
 				? { connectionConsumerProfilesByAgent: resolvedProfilesByAgent }
 				: {}),
