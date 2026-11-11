@@ -4,6 +4,9 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
+import {
+	templateValidationContextV1Schema,
+} from "../../packages/model-catalog/dist/index.mjs";
 
 const templates = ["codex", "claude", "opencode", "pi"];
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
@@ -24,14 +27,19 @@ const preflightFields = [
 ];
 
 export function templatePreflightValidationReceipt(measurement) {
-	return Object.fromEntries(preflightFields.map((field) => [field, measurement[field]]));
+	const projection = Object.fromEntries(preflightFields.map((field) => [field, measurement[field]]));
+	return measurement.validationTarget === undefined ? projection : {
+		...projection, schemaVersion: 2,
+		executionId: measurement.executionId,
+		validationTarget: templateValidationContextV1Schema.parse(measurement.validationTarget),
+	};
 }
 
 function fail(message) {
 	throw new Error(message);
 }
 
-async function privateJson(path, label) {
+async function privateFile(path, label) {
 	if (!isAbsolute(path)) fail(`${label}_PATH_INVALID`);
 	const stat = await lstat(path);
 	if (
@@ -42,10 +50,14 @@ async function privateJson(path, label) {
 		stat.size > 1024 * 1024
 	)
 		fail(`${label}_FILE_INVALID`);
-	try {
-		return JSON.parse(await readFile(path, "utf8"));
-	} catch {
-		fail(`${label}_JSON_INVALID`);
+	return readFile(path);
+}
+
+async function privateJson(path, label) {
+	try { return JSON.parse(await privateFile(path, label)); }
+	catch (error) {
+		if (error instanceof SyntaxError) fail(`${label}_JSON_INVALID`);
+		throw error;
 	}
 }
 
@@ -149,9 +161,10 @@ function parseValidation(value, expected, sourceSha) {
 }
 
 function parsePreflight(value, expected, sourceSha) {
-	const item = exactRecord(value, preflightFields, "PREFLIGHT");
+	const version2 = value?.schemaVersion === 2;
+	const item = exactRecord(value, version2 ? [...preflightFields, "validationTarget", "executionId"] : preflightFields, "PREFLIGHT");
 	if (
-		item.schemaVersion !== 1 ||
+		(!version2 && item.schemaVersion !== 1) ||
 		item.scope !== "isolated-template-real-model" ||
 		item.templateId !== expected.templateId ||
 		item.sourceCommit !== sourceSha ||
@@ -165,7 +178,28 @@ function parsePreflight(value, expected, sourceSha) {
 		!Number.isSafeInteger(item.validatedAt)
 	)
 		fail("PREFLIGHT_TUPLE_INVALID");
+	if (version2) {
+		const target = templateValidationContextV1Schema.parse(item.validationTarget);
+		if (target.sourceCommit !== sourceSha || typeof item.executionId !== "string" || !item.executionId) fail("PREFLIGHT_TARGET_INVALID");
+	}
 	return item;
+}
+
+/** Source bytes and target proof used by the existing formal publisher, never an adoption result. */
+export async function readTemplateValidationAdoptionInputs(input, expectedContext) {
+	const expectations = parseExpectations(input);
+	const context = templateValidationContextV1Schema.parse(expectedContext);
+	if (context.sourceCommit !== expectations.sourceSha) fail("PREFLIGHT_TARGET_INVALID");
+	return Promise.all(expectations.templates.map(async (expected) => {
+		const candidateBytes = await privateFile(expected.validationFile, "VALIDATION");
+		const preflightBytes = await privateFile(expected.preflightFile, "PREFLIGHT");
+		const candidate = parseValidation(JSON.parse(candidateBytes), expected, expectations.sourceSha);
+		const preflight = parsePreflight(JSON.parse(preflightBytes), expected, expectations.sourceSha);
+		if (preflight.schemaVersion !== 2 || preflight.executionId !== candidate.executionId || preflight.validatedAt !== candidate.validatedAt || JSON.stringify(templateValidationContextV1Schema.parse(preflight.validationTarget)) !== JSON.stringify(context)) fail("PREFLIGHT_TARGET_INVALID");
+		return { templateId: expected.templateId, candidate, candidateBytes, preflightBytes,
+			candidateFileSha256: hash(candidateBytes), preflightFileSha256: hash(preflightBytes),
+			validationFile: expected.validationFile, preflightFile: expected.preflightFile };
+	}));
 }
 
 export async function validateTemplateValidationExpectations(

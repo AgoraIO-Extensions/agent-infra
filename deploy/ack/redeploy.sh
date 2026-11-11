@@ -286,6 +286,7 @@ runtime_inputs() {
 
 template_preflight() {
 	require_source_tuple
+	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
 	local jobs=${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}
 	require_file ACK_TEMPLATE_PREFLIGHT_JOBS_FILE "$jobs"
 	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
@@ -294,7 +295,7 @@ template_preflight() {
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
-	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" >"$list_file"; then
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" "$ACK_BOOTSTRAP_INPUTS_FILE" >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
 	local job template run_directory index=0

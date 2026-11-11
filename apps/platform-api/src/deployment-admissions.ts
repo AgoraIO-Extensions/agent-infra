@@ -27,6 +27,7 @@ import {
 	standardTemplateDefinitionsV1,
 	standardTemplateReadinessV1,
 	standardTemplateReasoningLevelsV1,
+	type TemplateValidationContextV1,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import {
@@ -86,6 +87,7 @@ export interface DeploymentAdmissionInputV1 {
 		 */
 		readonly codexModelProfiles?: unknown;
 		readonly configurationRevision?: string;
+		readonly validationContext?: TemplateValidationContextV1;
 		readonly loadValidation?: (signal: AbortSignal) => Promise<unknown>;
 	})[];
 	readonly modelCatalog: {
@@ -155,6 +157,7 @@ async function readTemplateReadiness(template: Template) {
 			imageDigest: template.imageDigest,
 			binding: template.modelBinding,
 			configurationRevision: template.configurationRevision,
+			validationContext: template.validationContext,
 			validation,
 			now: Date.now(),
 		});

@@ -62,6 +62,68 @@ const baseJob = {
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
 
+test("preflight target provenance binds the real cluster, namespace UID and installation before and after execution", () => {
+	const target = {
+		sourceCommit: baseJob.sourceCommit,
+		clusterUid: "cluster-a",
+		namespace: baseJob.namespace,
+		namespaceUid: "namespace-a",
+		installationId: "installation-a",
+	};
+	const job = { ...baseJob, validationContext: target };
+	const cluster = { metadata: { uid: target.clusterUid } };
+	const namespace = {
+		metadata: {
+			name: target.namespace,
+			uid: target.namespaceUid,
+			labels: { "agent-infra.agora.io/bootstrap-id": target.installationId },
+		},
+	};
+	assert.deepEqual(
+		preflight.assertTemplatePreflightTarget(job, cluster, namespace),
+		target,
+	);
+	for (const actual of [
+		{ ...namespace, metadata: { ...namespace.metadata, uid: "replaced" } },
+		{
+			...namespace,
+			metadata: {
+				...namespace.metadata,
+				labels: { "agent-infra.agora.io/bootstrap-id": "foreign" },
+			},
+		},
+		{
+			...namespace,
+			metadata: {
+				...namespace.metadata,
+				deletionTimestamp: "2026-11-11T00:00:00Z",
+			},
+		},
+	])
+		assert.throws(
+			() => preflight.assertTemplatePreflightTarget(job, cluster, actual),
+			/PREFLIGHT_TARGET_INVALID/,
+		);
+	assert.throws(
+		() =>
+			preflight.assertTemplatePreflightTarget(
+				job,
+				{ metadata: { uid: "other-cluster" } },
+				namespace,
+			),
+		/PREFLIGHT_TARGET_INVALID/,
+	);
+	assert.throws(
+		() =>
+			preflight.assertTemplatePreflightTarget(
+				{ ...job, sourceCommit: "f".repeat(40) },
+				cluster,
+				namespace,
+			),
+		/PREFLIGHT_TARGET_INVALID/,
+	);
+});
+
 const ecsJob = {
 	...baseJob,
 	expectedNodePrefix: "cn-hangzhou.10.0.1.219",
