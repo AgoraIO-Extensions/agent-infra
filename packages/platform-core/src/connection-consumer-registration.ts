@@ -82,7 +82,13 @@ function exact(input: unknown, keys: readonly string[]) {
 }
 
 function https(input: unknown): input is string {
-	if (!isAgentManagementText(input, 2048)) return false;
+	if (
+		!isAgentManagementText(input, 2048) ||
+		!/^[\x21-\x7e]+$/.test(input) ||
+		/[\\?#]/.test(input) ||
+		/%(?![0-9A-F]{2})/.test(input)
+	)
+		return false;
 	try {
 		const url = new URL(input);
 		return (
@@ -112,13 +118,16 @@ export function captureConnectionConsumerRegistrationPolicyV1(
 		if (
 			value.schemaVersion !== 1 ||
 			typeof value.sourceNamespace !== "string" ||
-			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.sourceNamespace) ||
-			!isAgentManagementText(value.revision, 128) ||
+			// Keep the existing Store alphabet while rejecting nonportable path keys.
+			!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.sourceNamespace) ||
+			typeof value.revision !== "string" ||
+			!/^[A-Za-z0-9._~-]{1,128}$/.test(value.revision) ||
 			!https(value.callbackUrl) ||
 			!https(value.resource) ||
 			typeof value.scope !== "string" ||
-			!/^[-A-Za-z0-9._:/]+(?: [-A-Za-z0-9._:/]+)*$/.test(value.scope) ||
-			value.scope.length > 1024 ||
+			!/^[A-Za-z0-9._:-]{1,100}(?: [A-Za-z0-9._:-]{1,100}){0,31}$/.test(
+				value.scope,
+			) ||
 			new Set(value.scope.split(" ")).size !== value.scope.split(" ").length
 		)
 			throw new Error();
