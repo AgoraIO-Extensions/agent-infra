@@ -61,6 +61,7 @@ beforeAll(async () => {
 }, 120_000);
 beforeEach(async () => {
 	await sql`truncate platform.agents, platform.outbox_items, platform.persisted_events, platform.audit_events, platform.idempotency_records cascade`;
+	await sql`truncate platform.platform_user_disables`;
 });
 afterAll(async () => {
 	await Promise.all([
@@ -109,6 +110,9 @@ async function approve(id = "agent-a", key = `approve-${id}`) {
 	);
 }
 async function claim() {
+	// These cases exercise delivery, not wall-clock skew between the host and test PostgreSQL.
+	await sql`update platform.outbox_items set available_at=clock_timestamp()
+		where operation='agent.connection.consumer.register.v1' and status='pending'`;
 	const [itemId] = await registrations.pending();
 	expect(itemId).toBeTruthy();
 	const lease = await outbox.claim({
@@ -349,3 +353,97 @@ it("the schema rejects secret-shaped extra fields and incomplete registered clai
 		await sql`select status, consumer_id from platform.connection_consumer_registrations`,
 	).toEqual([{ status: "pending", consumer_id: null }]);
 });
+
+async function registeredAgent(id: string) {
+	await submit(id);
+	await approve(id);
+	const lease = await claim();
+	const attempt = await registrations.beginAttempt(lease, true);
+	if (attempt?.outcome !== "deliver") throw Error("Missing original intent");
+	const { intent } = attempt;
+	const receipt = {
+		schemaVersion: 1 as const,
+		operationId: intent.operationId,
+		sourceNamespace: intent.sourceNamespace,
+		sourceKey: intent.sourceKey,
+		requestDigest: intent.requestDigest,
+		consumerId: `random-consumer-${id}`,
+		consumerRevision: "5",
+		registrationId: `registration-${id}`,
+	};
+	expect(
+		await registrations.complete(lease, { outcome: "registered", receipt }),
+	).toBe(true);
+	return { intent, receipt };
+}
+
+it("reads two durable verified Consumer associations without a hand-maintained Agent/Consumer map", async () => {
+	const a = await registeredAgent("agent-a");
+	const b = await registeredAgent("agent-b");
+	const bindings = await registrations.registered();
+	expect(bindings).toMatchObject({
+		"agent-a": {
+			...a,
+			associationRevision: 1,
+			source: { ref: a.intent.operationId, revision: "1" },
+		},
+		"agent-b": {
+			...b,
+			associationRevision: 1,
+			source: { ref: b.intent.operationId, revision: "1" },
+		},
+	});
+	expect(bindings["agent-a"]?.receipt.consumerId).not.toBe(
+		bindings["agent-b"]?.receipt.consumerId,
+	);
+	await sql`update platform.connection_consumer_registrations set association_revision=2 where agent_id='agent-a'`;
+	expect((await registrations.registered())["agent-a"]?.source.revision).toBe(
+		"2",
+	);
+});
+
+it.each([
+	"Owner removed",
+	"Owner disabled",
+	"Agent disabled",
+	"policy changed",
+])(
+	"does not project a previously verified binding with changed authority: %s",
+	async (reason) => {
+		await registeredAgent("agent-a");
+		if (reason === "Owner removed")
+			await sql`delete from platform.agent_owners where agent_id='agent-a'`;
+		if (reason === "Owner disabled")
+			await sql`insert into platform.platform_user_disables(user_id) values (${applicationFoundationActorContextV1.userId})`;
+		if (reason === "Agent disabled")
+			await sql`update platform.agent_applications set status='disabled', desired_state='stopped', service_availability=null where agent_id='agent-a'`;
+		if (reason === "policy changed") {
+			const other = new PostgresConnectionConsumerRegistrationStoreV1({
+				databaseUrl: database.databaseUrl,
+				policy: { ...policy, revision: "policy-2" },
+			});
+			try {
+				expect(await other.registered()).toEqual({});
+			} finally {
+				await other.close();
+			}
+		} else expect(await registrations.registered()).toEqual({});
+	},
+);
+
+it.each(["pending", "unknown", "failed"])(
+	"does not supply a Consumer from a %s operation",
+	async (status) => {
+		await submit();
+		await approve();
+		if (status !== "pending") {
+			const lease = await claim();
+			await registrations.beginAttempt(lease, true);
+			await registrations.complete(lease, {
+				outcome: status as "unknown" | "failed",
+				failureCode: "CONTROLLED_UNCONFIRMED",
+			});
+		}
+		expect(await registrations.registered()).toEqual({});
+	},
+);

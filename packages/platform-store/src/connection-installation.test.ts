@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
-import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
+import {
+	type ConnectionConsumerRegistrationPolicyV1,
+	captureConnectionConsumerRegisteredBindingV1,
+	createConnectionInstallationAuthorizationV1,
+	planConnectionConsumerRegistrationV1,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { decodePlatformAuditRowV1 } from "./audit.js";
@@ -112,6 +117,7 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
 	userActive = true;
+	await client`delete from platform.connection_consumer_registrations`;
 	await client`delete from platform.connection_installation_commands`;
 	await client`delete from platform.connection_installation_authorizations`;
 	await client`delete from platform.idempotency_records where scope_type='connection_installation'`;
@@ -854,6 +860,7 @@ const principalStore = (
 		string,
 		Record<string, ConnectionInstallationBindingInputV1>
 	>,
+	connectionConsumerRegistration?: ConnectionConsumerRegistrationPolicyV1,
 ) =>
 	new PostgresConnectionInstallationAuthorizationTransactionV1({
 		databaseUrl: database.databaseUrl,
@@ -867,6 +874,7 @@ const principalStore = (
 			}),
 		},
 		bindingsByAgentAndPrincipal,
+		connectionConsumerRegistration,
 	});
 it("keeps two users of the same Agent on independent client/configuration and callback bindings", async () => {
 	const alice = userConfiguration("alice");
@@ -1054,6 +1062,220 @@ it.each(["shared", "per-Agent"])(
 					bindingsByAgentAndPrincipal: {
 						"agent-a": { alice: { profile, approval, configuration: alice } },
 					},
+					...(mode === "shared"
+						? { configuration, profile, approval }
+						: {
+								bindingsByAgent: {
+									"agent-a": { configuration, profile, approval },
+								},
+							}),
+				}),
+		).toThrow();
+	},
+);
+
+const registrationPolicy = {
+	schemaVersion: 1 as const,
+	sourceNamespace: "controlled-installation-registration",
+	revision: "registration-policy-1",
+	callbackUrl: configuration.callbackUrl,
+	resource: configuration.resource,
+	scope: "mcp",
+};
+
+async function automaticBinding(agentId: string) {
+	const intent = planConnectionConsumerRegistrationV1({
+		policy: registrationPolicy,
+		platformAgentId: agentId,
+		platformOwnerId: "owner",
+		consumerName: agentId,
+	});
+	const receipt = {
+		schemaVersion: 1 as const,
+		operationId: intent.operationId,
+		sourceNamespace: intent.sourceNamespace,
+		sourceKey: intent.sourceKey,
+		requestDigest: intent.requestDigest,
+		consumerId: `random-consumer-${agentId}`,
+		consumerRevision: "3",
+		registrationId: `registration-${agentId}`,
+	};
+	const binding = captureConnectionConsumerRegisteredBindingV1({
+		intent,
+		receipt,
+		associationRevision: 1,
+	});
+	await client`insert into platform.connection_consumer_registrations(operation_id,agent_id,source_namespace,source_key,request_digest,idempotency_key,request,status,consumer_id,receipt,consumer_revision,association_revision,registered_at) values (${intent.operationId},${agentId},${intent.sourceNamespace},${intent.sourceKey},${intent.requestDigest},${intent.idempotencyKey},${client.json({ ...intent })},'registered',${receipt.consumerId},${client.json(receipt)},${receipt.consumerRevision},1,now())`;
+	return (userId: string, consumerId = receipt.consumerId) => {
+		const selectedProfile = { ...profile, consumerId };
+		const selectedApproval = {
+			...approval,
+			configFingerprint:
+				connectionConsumerProfileFingerprintV1(selectedProfile),
+			source: binding.source,
+		};
+		const selectedConfiguration = {
+			...configuration,
+			ref: `oauth-${agentId}-${userId}`,
+			clientId: `client-${agentId}-${userId}`,
+			configFingerprint: selectedApproval.configFingerprint,
+			source: selectedApproval.source,
+		};
+		return {
+			profile: selectedProfile,
+			approval: selectedApproval,
+			configuration: {
+				...selectedConfiguration,
+				revision: runtimeOAuthConfigurationRevisionV1(selectedConfiguration),
+			},
+		};
+	};
+}
+
+it("uses durable independent Consumers for two Agents and separate original-user installations", async () => {
+	const a = await automaticBinding("agent-a");
+	const b = await automaticBinding("agent-b");
+	const aliceA = a("alice");
+	const bobA = a("bob");
+	const aliceB = b("alice");
+	const selected = principalStore(
+		{
+			"agent-a": { alice: aliceA, bob: bobA },
+			"agent-b": { alice: aliceB },
+		},
+		registrationPolicy,
+	);
+	try {
+		for (const [userId, executionId, expected] of [
+			["alice", "execution-a", aliceA],
+			["bob", "execution-bob", bobA],
+			["alice", "execution-b", aliceB],
+		] as const) {
+			const current = await selected.transaction((tx) =>
+				tx.current(userId, executionId),
+			);
+			expect(current?.scope.source).toEqual(expected.approval.source);
+			expect(current?.scope.oauthConfiguration).toEqual({
+				ref: expected.configuration.ref,
+				revision: expected.configuration.revision,
+			});
+		}
+		expect(
+			await selected.transaction((tx) => tx.current("bob", "execution-a")),
+		).toBeNull();
+		expect(
+			await selected.transaction((tx) => tx.current("bob", "execution-b")),
+		).toBeNull();
+		const producer = createConnectionInstallationAuthorizationV1({
+			store: selected,
+		});
+		const started = await producer.execute({
+			...request,
+			command: "begin",
+			executionId: "execution-a",
+		});
+		await expect(
+			producer.execute({
+				...request,
+				userId: "bob",
+				idempotencyKey: "cross-user",
+				command: "confirm",
+				authorizationId: started.authorizationId,
+			}),
+		).rejects.toThrow();
+	} finally {
+		await selected.close();
+	}
+});
+
+it.each([
+	"missing",
+	"unknown",
+	"changed Owner",
+	"disabled Owner",
+	"old association",
+	"wrong Consumer",
+	"changed policy",
+])(
+	"rejects installation from an unverified or obsolete registration: %s",
+	async (reason) => {
+		const binding = (await automaticBinding("agent-a"))(
+			"alice",
+			reason === "wrong Consumer" ? "other-agent-consumer" : undefined,
+		);
+		const selected = principalStore(
+			{ "agent-a": { alice: binding } },
+			reason === "changed policy"
+				? { ...registrationPolicy, revision: "policy-2" }
+				: registrationPolicy,
+		);
+		try {
+			if (reason === "missing")
+				await client`delete from platform.connection_consumer_registrations`;
+			if (reason === "unknown")
+				await client`update platform.connection_consumer_registrations set status='unknown', consumer_id=null, receipt=null, consumer_revision=null, association_revision=0, registered_at=null`;
+			if (reason === "changed Owner")
+				await client`delete from platform.agent_owners where agent_id='agent-a'`;
+			if (reason === "disabled Owner")
+				await client`insert into platform.platform_user_disables(user_id) values ('owner')`;
+			if (reason === "old association")
+				await client`update platform.connection_consumer_registrations set association_revision=2`;
+			expect(
+				await selected.transaction((tx) => tx.current("alice", "execution-a")),
+			).toBeNull();
+		} finally {
+			await selected.close();
+			await client`delete from platform.platform_user_disables where user_id='owner'`;
+			await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('agent-a','owner',now()) on conflict do nothing`;
+		}
+	},
+);
+
+it("does not finish an old installation after its durable Consumer association changed", async () => {
+	const binding = (await automaticBinding("agent-a"))("alice");
+	const selected = principalStore(
+		{ "agent-a": { alice: binding } },
+		registrationPolicy,
+	);
+	try {
+		const producer = createConnectionInstallationAuthorizationV1({
+			store: selected,
+		});
+		const started = await producer.execute({
+			...request,
+			command: "begin",
+			executionId: "execution-a",
+		});
+		await client`update platform.connection_consumer_registrations set association_revision=2`;
+		await expect(
+			producer.execute({
+				...request,
+				idempotencyKey: "old-binding-confirm",
+				command: "confirm",
+				authorizationId: started.authorizationId,
+			}),
+		).rejects.toThrow();
+	} finally {
+		await selected.close();
+	}
+});
+
+it("does not fall back to a shared Consumer when an associated Agent's registration policy is removed", async () => {
+	await automaticBinding("agent-a");
+	expect(
+		await store.transaction((tx) => tx.current("alice", "execution-a")),
+	).toBeNull();
+});
+
+it.each(["shared", "per-Agent"])(
+	"does not enable %s OAuth clients under the selected automatic registration source",
+	(mode) => {
+		expect(
+			() =>
+				new PostgresConnectionInstallationAuthorizationTransactionV1({
+					databaseUrl: database.databaseUrl,
+					directory: { resolveUser: async () => null },
+					connectionConsumerRegistration: registrationPolicy,
 					...(mode === "shared"
 						? { configuration, profile, approval }
 						: {

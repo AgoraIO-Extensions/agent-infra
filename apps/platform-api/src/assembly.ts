@@ -506,6 +506,7 @@ export function assemblePlatformApi(
 				databaseUrl: input.databaseUrl,
 				directory: userDirectory,
 				...input.connectionInstallation,
+				connectionConsumerRegistration: input.connectionConsumerRegistration,
 			});
 		} catch {
 			return undefined;

@@ -981,11 +981,15 @@ describe("Platform API production assembly", () => {
 
 it.each(
 	[false, true].flatMap((mismatch) =>
-		[false, true].map((perPrincipal) => [mismatch, perPrincipal] as const),
+		[false, true].flatMap((perPrincipal) =>
+			[false, true].map(
+				(automatic) => [mismatch, perPrincipal, automatic] as const,
+			),
+		),
 	),
 )(
-	"assembles only a consistent installation callback (mismatch=%s, perPrincipal=%s)",
-	async (mismatch, perPrincipal) => {
+	"assembles only a consistent installation callback (mismatch=%s, perPrincipal=%s, automatic=%s)",
+	async (mismatch, perPrincipal, automatic) => {
 		const unavailable = async () => {
 			throw Error("unused test adapter");
 		};
@@ -1055,6 +1059,18 @@ it.each(
 			prepareApplicationSecrets: unavailable,
 			prepareConfigurationSecrets: unavailable,
 			presentAgent: unavailable,
+			...(automatic
+				? {
+						connectionConsumerRegistration: {
+							schemaVersion: 1 as const,
+							sourceNamespace: "controlled-assembly",
+							revision: "policy-1",
+							callbackUrl: "https://platform.test/callback",
+							resource: "https://connection.test/mcp",
+							scope: "mcp",
+						},
+					}
+				: {}),
 			connectionInstallation: {
 				publicOrigin: "https://platform.test",
 				...(perPrincipal
@@ -1070,7 +1086,7 @@ it.each(
 		});
 		try {
 			expect(assembly.dependencies.conversation).toBeDefined();
-			if (mismatch) {
+			if (mismatch || (automatic && !perPrincipal)) {
 				expect(assembly.dependencies.connectionInstallations).toBeUndefined();
 				expect(
 					assembly.dependencies.connectionInstallationCallback,

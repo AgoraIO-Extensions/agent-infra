@@ -54,6 +54,14 @@ export interface ConnectionConsumerRegistrationReceiptV1 {
 	readonly requestDigest: string;
 }
 
+/** Verified Platform association; source identifies its original operation and revision. */
+export interface ConnectionConsumerRegisteredBindingV1 {
+	readonly intent: ConnectionConsumerRegistrationIntentV1;
+	readonly receipt: ConnectionConsumerRegistrationReceiptV1;
+	readonly associationRevision: number;
+	readonly source: { readonly ref: string; readonly revision: string };
+}
+
 export type ConnectionConsumerRegistrationDeliveryV1 =
 	| {
 			readonly outcome: "registered";
@@ -294,4 +302,54 @@ export function parseConnectionConsumerRegistrationDeliveryV1(
 	} catch {
 		throw new ConnectionConsumerRegistrationErrorV1();
 	}
+}
+
+export function isConnectionConsumerRegistrationCurrentV1(input: {
+	readonly intent: ConnectionConsumerRegistrationIntentV1;
+	readonly policy: ConnectionConsumerRegistrationPolicyV1;
+	readonly ownerId: string | null;
+	readonly ownerCurrent: boolean;
+	readonly agentStatus: string | null;
+}): boolean {
+	const { intent, policy } = input;
+	return (
+		intent.sourceNamespace === policy.sourceNamespace &&
+		intent.policyRevision === policy.revision &&
+		intent.callbackUrl === policy.callbackUrl &&
+		intent.resource === policy.resource &&
+		intent.scope === policy.scope &&
+		input.ownerId === intent.platformOwnerId &&
+		input.ownerCurrent &&
+		["creating", "available", "stopped", "creation_failed"].includes(
+			input.agentStatus ?? "",
+		)
+	);
+}
+
+export function captureConnectionConsumerRegisteredBindingV1(input: {
+	readonly intent: unknown;
+	readonly receipt: unknown;
+	readonly associationRevision: number;
+}): ConnectionConsumerRegisteredBindingV1 {
+	if (
+		!Number.isSafeInteger(input.associationRevision) ||
+		input.associationRevision < 1
+	)
+		throw new ConnectionConsumerRegistrationErrorV1();
+	const intent = parseConnectionConsumerRegistrationIntentV1(input.intent);
+	const delivery = parseConnectionConsumerRegistrationDeliveryV1(
+		{ outcome: "registered", receipt: input.receipt },
+		intent,
+	);
+	if (delivery.outcome !== "registered")
+		throw new ConnectionConsumerRegistrationErrorV1();
+	return Object.freeze({
+		intent: Object.freeze(intent),
+		receipt: Object.freeze(delivery.receipt),
+		associationRevision: input.associationRevision,
+		source: Object.freeze({
+			ref: intent.operationId,
+			revision: String(input.associationRevision),
+		}),
+	});
 }
