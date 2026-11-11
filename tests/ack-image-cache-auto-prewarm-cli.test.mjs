@@ -51,6 +51,8 @@ const fs=require('node:fs');const a=process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS,JSON.stringify(['kubectl',...a])+'\\n');
 if(process.env.KUBE_FAIL){console.error('private credential must not escape');process.exit(1)}
 const state=JSON.parse(fs.readFileSync(process.env.CLUSTER,'utf8'));
+if(a.includes('namespace')) {console.log(JSON.stringify({metadata:{name:'fixture',uid:'namespace-uid'}}));process.exit(0)}
+if(a.includes('secret')) {console.log('ack-ghcr-pull|fixture|secret-uid|kubernetes.io/dockerconfigjson|');process.exit(0)}
 if(a.includes('create')) {const cr=JSON.parse(fs.readFileSync(0,'utf8')); if(state.items.some(x=>x.metadata.name===cr.metadata.name))process.exit(2);state.items.push({...cr,status:{phase:'Ready',imageCacheId:'imc-test123'}});fs.writeFileSync(process.env.CLUSTER,JSON.stringify(state));}
 else if(a.includes('-l')) console.log(JSON.stringify(state));
 else {const name=a[a.indexOf('imagecache')+3];const cr=state.items.find(x=>x.metadata.name===name);if(cr)console.log(JSON.stringify(cr));}
