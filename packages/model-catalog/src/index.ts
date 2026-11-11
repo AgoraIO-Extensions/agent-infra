@@ -64,4 +64,12 @@ export {
 } from "./projection.js";
 export { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 export { standardTemplateDefinitionsV1 } from "./standard-templates.js";
-export { standardTemplateReadinessV1 } from "./template-readiness.js";
+export {
+	type AdoptedTemplateValidationV2,
+	adoptTemplateValidationV2,
+	parseAdoptedTemplateValidationV2,
+	standardTemplateReadinessV1,
+	type TemplateValidationContextV1,
+	templateValidationContextV1Schema,
+	templateValidationPayloadHashV1,
+} from "./template-readiness.js";

@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { MultiServiceResourceProfileAnnotationV1 } from "@agent-infra/contracts/pilot";
-import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
+import {
+	adoptTemplateValidationV2,
+	standardTemplateReadinessV1,
+	templateValidationPayloadHashV1,
+} from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationModelInputV1,
 	type AgentConfigurationModelV1,
@@ -391,6 +395,101 @@ function multiServiceRequest(manifest: string) {
 }
 
 describe("production deployment admissions", () => {
+	it("keeps the catalog and both server admission checks on the same adopted registration across the old TTL", async () => {
+		let now = Date.now();
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		try {
+			const f = fixture();
+			const registration = f.input.templates[0];
+			if (!registration?.loadValidation)
+				throw new Error("Expected validation fixture");
+			const context = {
+				sourceCommit: "a".repeat(40),
+				clusterUid: "cluster-a",
+				namespace: "ack-test",
+				namespaceUid: "namespace-a",
+				installationId: "installation-a",
+			};
+			const candidate = {
+				...((await registration.loadValidation(
+					AbortSignal.timeout(1000),
+				)) as object),
+				sourceCommit: context.sourceCommit,
+			};
+			const adopted = adoptTemplateValidationV2({
+				candidate,
+				context,
+				adoptedAt: now,
+				candidateFileSha256: "b".repeat(64),
+				preflightFileSha256: "c".repeat(64),
+			});
+			let currentValidation: unknown = adopted;
+			const input = {
+				...f.input,
+				templates: [
+					{
+						...registration,
+						validationContext: context,
+						loadValidation: async () => currentValidation,
+					},
+				],
+			};
+			const projection = createDeploymentConfigurationProjectionV2(input);
+			const before = (await projection()).templates.find(
+				(t) => t.templateId === "codex",
+			)?.readiness;
+			expect(before?.state).toBe("ready");
+			if (!before?.revision) throw new Error("Expected ready fixture");
+			const templateRevision = before.revision;
+			now += 3_600_001;
+			f.catalog.validUntil = now + 60_000;
+			const after = (await projection()).templates.find(
+				(t) => t.templateId === "codex",
+			)?.readiness;
+			expect(after).toEqual(before);
+			const admissions = createDeploymentAdmissionsV1(input);
+			const apply = () =>
+				admissions.imageAdmission.admitImage({
+					...request,
+					requested: {
+						kind: "standard",
+						templateId: "codex",
+						templateRevision,
+					},
+				});
+			expect((await apply()).status).toBe("admitted");
+			f.authorize.mockImplementationOnce(async () => {
+				const disabled = {
+					...adopted,
+					candidate: { ...adopted.candidate, status: "disabled" as const },
+					adoption: { ...adopted.adoption },
+				};
+				disabled.adoption.candidatePayloadSha256 =
+					templateValidationPayloadHashV1(disabled.candidate);
+				currentValidation = disabled;
+				return {
+					status: "admitted",
+					decisionRef: "decision-after-revocation",
+					evaluatedAt: "2026-09-14T00:00:00Z",
+				};
+			});
+			expect((await apply()).status).toBe("rejected");
+			expect(
+				(await projection()).templates.find((t) => t.templateId === "codex")
+					?.readiness?.state,
+			).toBe("disabled");
+			currentValidation = {
+				...adopted,
+				adoption: {
+					...adopted.adoption,
+					target: { ...context, namespaceUid: "other-target" },
+				},
+			};
+			expect((await apply()).status).toBe("rejected");
+		} finally {
+			clock.mockRestore();
+		}
+	});
 	it("rejects a manifest over the resource cap with its reason before any registry call", async () => {
 		const f = fixture("self-managed");
 		// 默认档位每个工作负载 100m；web + worker 恰为 200m，迁移 Job 使总量超限。

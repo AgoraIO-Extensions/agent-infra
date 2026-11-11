@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { CODEX_SESSION_EXECUTOR_ATTESTATION_ENV, CODEX_SESSION_EXECUTOR_BINDING_ENV, codexSessionExecutorAttestationV1, createCodexSessionExecutorBindingV1 } from "../../packages/agent-runtime/src/codex-session-executor-binding.ts";
 import { workloadResourceConfigurationHashV1, validateCodexSessionExecutorResourcePolicyV1, validateWorkloadControlResourcesV1, sessionSandboxResourceCostsV1, resourceQuantityEqualsV1, workloadResourcesEqualV1, workloadControlResourcesEqualV1 } from "../../packages/platform-core/src/workload-resource-configuration.ts";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
+import { templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
 const templates = new Set(["codex", "claude", "opencode", "pi"]);
@@ -130,9 +131,13 @@ export function validateTemplatePreflightJob(value) {
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
 		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
-		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues",
+		"podReadyTimeoutSeconds", "resourceProfileRef", "resources", "codexSessionExecutor", "workspaceSnapshotEgress", "storageSize", "storageClassName", "modelEgress", "dnsEgress", "allowedPodTopologyLabelValues", "validationContext",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
+	if (value.validationContext !== undefined) {
+		const target = templateValidationContextV1Schema.parse(value.validationContext);
+		if (target.sourceCommit !== value.sourceCommit || target.namespace !== value.namespace) throw new Error("PREFLIGHT_TARGET_INVALID");
+	}
 	if (
 		value.schemaVersion !== 1 || value.scope !== "isolated-template-real-model" ||
 		!isAbsolute(value.kubeconfig) || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value.namespace) ||
@@ -213,6 +218,20 @@ export function assertTemplatePreflightPlacement(job, pod, node) {
 	assert(typeof node?.metadata?.uid === "string" && node.metadata.uid && !node.metadata.deletionTimestamp, "EXECUTOR_LAYOUT_NODE_DRIFT");
 	assert(node.metadata.labels?.["kubernetes.io/arch"] === "amd64" && node.metadata.labels?.["kubernetes.io/os"] === "linux" && node.metadata.labels?.type !== "virtual-kubelet", "EXECUTOR_LAYOUT_NODE_DRIFT");
 	return { nodeUidSha256: createHash("sha256").update(node.metadata.uid).digest("hex"), nodeArchitecture: "amd64" };
+}
+
+/** Preserve the actual preflight target; adoption cannot attach a new target to old evidence. */
+export function assertTemplatePreflightTarget(job, clusterNamespace, namespace) {
+	const target = templateValidationContextV1Schema.parse(job.validationContext);
+	assert.equal(target.sourceCommit, job.sourceCommit, "PREFLIGHT_TARGET_INVALID");
+	assert.equal(target.namespace, job.namespace, "PREFLIGHT_TARGET_INVALID");
+	assert.equal(clusterNamespace?.metadata?.uid, target.clusterUid, "PREFLIGHT_TARGET_INVALID");
+	assert(!clusterNamespace.metadata.deletionTimestamp, "PREFLIGHT_TARGET_INVALID");
+	assert.equal(namespace?.metadata?.name, target.namespace, "PREFLIGHT_TARGET_INVALID");
+	assert.equal(namespace?.metadata?.uid, target.namespaceUid, "PREFLIGHT_TARGET_INVALID");
+	assert.equal(namespace?.metadata?.labels?.["agent-infra.agora.io/bootstrap-id"], target.installationId, "PREFLIGHT_TARGET_INVALID");
+	assert(!namespace.metadata.deletionTimestamp, "PREFLIGHT_TARGET_INVALID");
+	return target;
 }
 
 /** Bounded subset of the reviewed Worker model/DNS destinations; no CIDR or resolver fallback. */
@@ -480,6 +499,10 @@ async function main(inputPath) {
 	const owned = new Map();
 	const identities = new Map();
 	const kubeArgs = ["--kubeconfig", job.kubeconfig, "-n", job.namespace];
+	const readValidationTarget = () => job.validationContext === undefined ? undefined : assertTemplatePreflightTarget(job,
+		JSON.parse(run([...kubeArgs, "get", "namespace", "kube-system", "-o", "json"])),
+		JSON.parse(run([...kubeArgs, "get", "namespace", job.namespace, "-o", "json"])));
+	const validationTarget = readValidationTarget();
 	const privateKey = createPrivateKey(await privateFile(job.grantPrivateKeyFile, "GRANT_KEY"));
 	const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 	const serviceToken = (await privateFile(job.runtimeServiceTokenFile, "SERVICE_TOKEN")).toString().trim();
@@ -571,6 +594,7 @@ async function main(inputPath) {
 			throw new Error("TEMPLATE_POD_READINESS_FAILED");
 		}
 		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
+		readValidationTarget();
 		const readNode = (pod) => inheritsPlacement(job) ? JSON.parse(run([...kubeArgs, "get", "node", pod.spec.nodeName, "-o", "json"])) : undefined;
 		const measurementNode = readNode(measurementPod);
 		await writePodStartupReceipt(job, { name, owner }, measurementPod);
@@ -609,6 +633,7 @@ async function main(inputPath) {
 		if (code !== 0) throw new Error("TEMPLATE_PREFLIGHT_FAILED");
 		const measured = JSON.parse(await privateFile(join(job.outputDirectory, "template-model-preflight.receipt.json"), "MEASUREMENT"));
 		const observed = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
+		readValidationTarget();
 		if (observed.metadata.uid !== measurementPod.metadata.uid ||
 			observed.metadata.labels["agent-infra.validation-owner"] !== owner ||
 			observed.spec.containers[0].image !== job.imageReference ||
@@ -620,7 +645,7 @@ async function main(inputPath) {
 			!Number.isSafeInteger(measured.modelOperationCount) || measured.modelOperationCount < 1)
 			throw new Error("CAPACITY_MEASUREMENT_INVALID");
 		await writeFile(join(job.outputDirectory, "template-model-validation.receipt.json"),
-			JSON.stringify(templatePreflightValidationReceipt(measured)) + "\n",
+			JSON.stringify(templatePreflightValidationReceipt({ ...measured, ...(validationTarget ? { validationTarget } : {}) })) + "\n",
 			{ mode: 0o600, flag: "wx" });
 		if (pvc) {
 			const instances = (value) => value.status.containerStatuses.map((item) => [item.name, item.containerID]).sort();

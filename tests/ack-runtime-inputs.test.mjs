@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { writeFileSync } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
@@ -20,6 +21,7 @@ import { publishRuntimeInputs } from "../deploy/ack/runtime-inputs.ts";
 import { prepareReserveInput } from "../deploy/ack/session-reserve-inputs.ts";
 import { templatePreflightValidationReceipt } from "../deploy/ack/template-validation.mjs";
 import { checkWorkloadCapacity } from "../deploy/ack/workload-capacity.ts";
+import { standardTemplateReadinessV1 } from "../packages/model-catalog/dist/index.mjs";
 import {
 	sessionSandboxResourceCostsV1,
 	workloadResourceConfigurationHashV1,
@@ -30,6 +32,13 @@ const owner = "11111111-1111-4111-8111-111111111111";
 const clusterUid = "22222222-2222-4222-8222-222222222222";
 const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const namespace = "ack-test";
+const validationTarget = {
+	sourceCommit: source,
+	clusterUid,
+	namespace,
+	namespaceUid: "namespace-uid",
+	installationId: owner,
+};
 const resources = {
 	requests: { cpu: "100m", memory: "128Mi" },
 	limits: { cpu: "1", memory: "2Gi" },
@@ -80,6 +89,7 @@ async function fixture(t, apiReplicas = 1) {
 		};
 		const measured = {
 			...validation,
+			validationTarget,
 			scope: "isolated-template-real-model",
 			terminalStatus: "completed",
 			modelFactSource: "protected-driver-journal",
@@ -455,14 +465,34 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 			Buffer.from(data["private-input"], "base64").toString(),
 			"private-config-sentinel",
 		);
-		for (const expected of f.templates)
-			assert.deepEqual(
-				Buffer.from(
-					data[`template-validation-${expected.templateId}.json`],
-					"base64",
-				),
-				await readFile(expected.validationFile),
+		for (const expected of f.templates) {
+			const bytes = Buffer.from(
+				data[`template-validation-${expected.templateId}.json`],
+				"base64",
 			);
+			const record = JSON.parse(bytes);
+			assert.equal(record.schemaVersion, 2);
+			assert.equal(record.kind, "adopted-template-validation");
+			assert.deepEqual(
+				record.candidate,
+				JSON.parse(await readFile(expected.validationFile)),
+			);
+			assert.deepEqual(record.adoption.target, validationTarget);
+			assert.deepEqual(
+				bytes,
+				await readFile(
+					f.bootstrap.objects.find((o) => o.name === name).files[
+						`template-validation-${expected.templateId}.json`
+					],
+				),
+			);
+			assert.equal(
+				data[`template-validation-${expected.templateId}.json`],
+				f.cluster.get("secret/api-config").data[
+					`template-validation-${expected.templateId}.json`
+				],
+			);
+		}
 	}
 	const readWorker = (secretRef) => {
 		const bytes = Buffer.from(
@@ -833,6 +863,7 @@ async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {
 			join(output, "validation.json"),
 			templatePreflightValidationReceipt({
 				...validation,
+				validationTarget: { ...validationTarget, sourceCommit: sourceSha },
 				scope: "isolated-template-real-model",
 				terminalStatus: "completed",
 				modelFactSource: "protected-driver-journal",
@@ -862,6 +893,229 @@ async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {
 	return templates;
 }
 
+test("only actual apply adopts; all consumers retain the exact adopted bytes after the candidate TTL", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl);
+	for (const name of ["api-config", "worker-config"])
+		assert.equal(
+			JSON.parse(
+				Buffer.from(
+					f.cluster.get(`secret/${name}`).data[
+						"template-validation-codex.json"
+					],
+					"base64",
+				),
+			).status,
+			"not-yet-measured",
+		);
+	assert(
+		!(await readdir(dirname(f.files.templates))).some((n) =>
+			n.startsWith(".template-adoption-"),
+		),
+	);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const adoptedBytes = Object.fromEntries(
+		f.templates.map((expected) => [
+			expected.templateId,
+			f.cluster.get("secret/api-config").data[
+				`template-validation-${expected.templateId}.json`
+			],
+		]),
+	);
+	now += 3_600_001;
+	for (const expected of f.templates) {
+		const record = JSON.parse(
+			Buffer.from(adoptedBytes[expected.templateId], "base64"),
+		);
+		assert.equal(
+			standardTemplateReadinessV1({
+				templateId: expected.templateId,
+				imageDigest: expected.imageDigest,
+				binding: {
+					templateId: expected.templateId,
+					imageDigest: expected.imageDigest,
+					driver: expected.driver,
+					protocol:
+						expected.templateId === "codex"
+							? "openai-responses-v1"
+							: "anthropic-messages-v1",
+				},
+				configurationRevision: expected.configurationRevision,
+				validationContext: validationTarget,
+				validation: record,
+				now,
+			}).state,
+			"ready",
+		);
+	}
+	await bootstrapLogin(f.files.login, source, f.loginConfig.origin);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	for (const name of ["api-config", "worker-config"])
+		for (const expected of f.templates)
+			assert.equal(
+				f.cluster.get(`secret/${name}`).data[
+					`template-validation-${expected.templateId}.json`
+				],
+				adoptedBytes[expected.templateId],
+			);
+});
+
+test("an expired candidate cannot be adopted and expiry at the first write boundary mutates no Secret", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t);
+	let reads = 0;
+	f.beforeCall((args) => {
+		if (
+			args.includes("get") &&
+			args.includes("secret") &&
+			args.includes("api-config") &&
+			++reads === 2
+		)
+			now += 3_600_001;
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/,
+	);
+	assert.equal(f.mutations.length, 0);
+	f.beforeCall(() => {});
+	await bootstrapLogin(f.files.login, source, f.loginConfig.origin);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("partial or unknown publication is not completed with a new adoption time after expiry", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t);
+	f.afterReplace(() => {
+		throw Error("synthetic unknown response after original replace");
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+	);
+	assert.equal(f.mutations.length, 1);
+	const bytes =
+		f.cluster.get("secret/api-config").data["template-validation-codex.json"];
+	assert.equal(JSON.parse(Buffer.from(bytes, "base64")).schemaVersion, 2);
+	now += 3_600_001;
+	f.afterReplace(() => {});
+	await bootstrapLogin(f.files.login, source, f.loginConfig.origin);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/,
+	);
+	assert.equal(f.mutations.length, 1);
+	assert.equal(
+		f.cluster.get("secret/api-config").data["template-validation-codex.json"],
+		bytes,
+	);
+	assert.equal(
+		JSON.parse(
+			Buffer.from(
+				f.cluster.get("secret/worker-config").data[
+					"template-validation-codex.json"
+				],
+				"base64",
+			),
+		).status,
+		"not-yet-measured",
+	);
+});
+
+test("a still-fresh original attempt resumes with its frozen bytes rather than minting another adoption", async (t) => {
+	const f = await fixture(t);
+	f.afterReplace(() => {
+		throw Error("synthetic response lost after the first replace");
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+	);
+	const original =
+		f.cluster.get("secret/api-config").data["template-validation-codex.json"];
+	f.afterReplace(() => {});
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	assert.equal(
+		f.cluster.get("secret/api-config").data["template-validation-codex.json"],
+		original,
+	);
+	assert.equal(
+		f.cluster.get("secret/worker-config").data[
+			"template-validation-codex.json"
+		],
+		original,
+	);
+});
+
+test("target provenance drift, source input bytes drift and a deleting namespace cannot authorize adoption", async (t) => {
+	const f = await fixture(t);
+	const expected = f.templates[0];
+	const originalPreflight = await readFile(expected.preflightFile);
+	const preflight = JSON.parse(originalPreflight);
+	preflight.validationTarget.namespaceUid = "foreign-namespace";
+	await f.save(expected.preflightFile, preflight);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+	);
+	assert.equal(f.mutations.length, 0);
+	await writeFile(expected.preflightFile, originalPreflight, { mode: 0o600 });
+	const originalCandidate = await readFile(expected.validationFile);
+	let changed = false;
+	f.beforeCall((args) => {
+		if (!changed && args.includes("get") && args.includes("secret")) {
+			changed = true;
+			// The exact input changes after its preflight was read; the payload remains equal.
+			writeFileSync(
+				expected.validationFile,
+				JSON.stringify(JSON.parse(originalCandidate), null, 4),
+				{ mode: 0o600 },
+			);
+		}
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_LOCAL_DRIFT/,
+	);
+	assert.equal(f.mutations.length, 0);
+	f.beforeCall(() => {});
+	await writeFile(expected.validationFile, originalCandidate, { mode: 0o600 });
+	f.cluster.get(`namespace/${namespace}`).metadata.deletionTimestamp =
+		"2026-11-11T00:00:00Z";
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_NAMESPACE_OWNER_INVALID/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("the formal adoption attempt is never written into a Git worktree", async (t) => {
+	const f = await fixture(t);
+	const controlDirectory = join(dirname(f.files.templates), "git-controls");
+	await mkdir(controlDirectory, { mode: 0o700 });
+	execFileSync("git", ["init", "-q", controlDirectory]);
+	const original = JSON.parse(await readFile(f.files.templates));
+	f.files.templates = await f.save(
+		join(controlDirectory, "templates.json"),
+		original,
+	);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_FILE_INSIDE_WORKTREE/,
+	);
+	assert.equal(f.mutations.length, 0);
+	assert(
+		!(await readdir(controlDirectory)).some((name) =>
+			name.startsWith(".template-adoption-"),
+		),
+	);
+});
+
 test("a new template validation preserves the approved capacity bytes and evidence references", async (t) => {
 	const f = await fixture(t);
 	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
@@ -886,16 +1140,23 @@ test("a new template validation preserves the approved capacity bytes and eviden
 		approved,
 	);
 	for (const template of templates) {
-		for (const component of ["api", "worker"])
+		for (const component of ["api", "worker"]) {
+			const bytes = f.cluster.get(`secret/${component}-config`).data[
+				`template-validation-${template.templateId}.json`
+			];
+			const record = JSON.parse(Buffer.from(bytes, "base64"));
+			assert.equal(record.schemaVersion, 2);
 			assert.deepEqual(
-				Buffer.from(
-					f.cluster.get(`secret/${component}-config`).data[
-						`template-validation-${template.templateId}.json`
-					],
-					"base64",
-				),
-				await readFile(template.validationFile),
+				record.candidate,
+				JSON.parse(await readFile(template.validationFile)),
 			);
+			assert.equal(
+				bytes,
+				f.cluster.get("secret/api-config").data[
+					`template-validation-${template.templateId}.json`
+				],
+			);
+		}
 	}
 });
 

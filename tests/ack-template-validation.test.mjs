@@ -4,12 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+	readTemplateValidationAdoptionInputs,
 	templatePreflightValidationReceipt,
 	validateTemplateValidationExpectations,
 } from "../deploy/ack/template-validation.mjs";
 
 const sourceSha = "a".repeat(40);
 const imageDigest = `sha256:${"b".repeat(64)}`;
+const validationContext = {
+	sourceCommit: sourceSha,
+	clusterUid: "cluster-a",
+	namespace: "ack-test",
+	namespaceUid: "namespace-a",
+	installationId: "installation-a",
+};
 
 async function fixture({ expired = false, drift = false } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "ack-template-validation-"));
@@ -96,6 +104,80 @@ test("accepts four current real-runtime validation tuples", async () => {
 	assert.equal(result.pass, true);
 	assert.equal(result.results.length, 4);
 	assert(result.results.every((entry) => entry.status === "passed"));
+});
+
+test("formal adoption reads the exact real preflight bytes and original target, not a target attached to legacy evidence", async () => {
+	const f = await fixture();
+	await assert.rejects(
+		readTemplateValidationAdoptionInputs(f.expectations, validationContext),
+		/PREFLIGHT_TARGET_INVALID/,
+	);
+	for (const expected of f.expectations.templates) {
+		const candidate = JSON.parse(await readFile(expected.validationFile));
+		const preflight = JSON.parse(await readFile(expected.preflightFile));
+		await writeFile(
+			expected.preflightFile,
+			JSON.stringify(
+				templatePreflightValidationReceipt({
+					...preflight,
+					executionId: candidate.executionId,
+					validationTarget: validationContext,
+				}),
+			),
+			{ mode: 0o600 },
+		);
+	}
+	const inputs = await readTemplateValidationAdoptionInputs(
+		f.expectations,
+		validationContext,
+	);
+	assert.equal(inputs.length, 4);
+	assert.equal(
+		(await validateTemplateValidationExpectations(f.expectations)).pass,
+		true,
+	);
+	for (const entry of inputs) {
+		assert.equal(entry.candidateFileSha256.length, 64);
+		assert.deepEqual(
+			entry.candidateBytes,
+			await readFile(entry.validationFile),
+		);
+		assert.deepEqual(entry.preflightBytes, await readFile(entry.preflightFile));
+	}
+	await assert.rejects(
+		readTemplateValidationAdoptionInputs(f.expectations, {
+			...validationContext,
+			namespaceUid: "different",
+		}),
+		/PREFLIGHT_TARGET_INVALID/,
+	);
+	const originalCandidate = await readFile(
+		f.expectations.templates[0].validationFile,
+	);
+	const shiftedCandidate = JSON.parse(originalCandidate);
+	shiftedCandidate.validatedAt += 1;
+	await writeFile(
+		f.expectations.templates[0].validationFile,
+		JSON.stringify(shiftedCandidate),
+		{ mode: 0o600 },
+	);
+	await assert.rejects(
+		readTemplateValidationAdoptionInputs(f.expectations, validationContext),
+		/PREFLIGHT_TARGET_INVALID/,
+	);
+	await writeFile(
+		f.expectations.templates[0].validationFile,
+		originalCandidate,
+		{ mode: 0o600 },
+	);
+	const file = f.expectations.templates[0].preflightFile;
+	const value = JSON.parse(await readFile(file));
+	value.executionId = "unrelated-execution";
+	await writeFile(file, JSON.stringify(value), { mode: 0o600 });
+	await assert.rejects(
+		readTemplateValidationAdoptionInputs(f.expectations, validationContext),
+		/PREFLIGHT_TARGET_INVALID/,
+	);
 });
 
 test("projects Runtime diagnostics into the deployment receipt without losing required evidence", async () => {

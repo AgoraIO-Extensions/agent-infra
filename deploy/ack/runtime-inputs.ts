@@ -8,7 +8,8 @@ import { isDeepStrictEqual } from "node:util";
 import { parseAllDocuments } from "yaml";
 import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
-import { validateTemplateValidationExpectations } from "./template-validation.mjs";
+import { readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
+import { adoptTemplateValidationV2, parseAdoptedTemplateValidationV2, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
 import { validateCapacityBindings } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
 import { prepareReserveInput, readReserveApi, readReserveWorker } from "./session-reserve-inputs.ts";
@@ -87,7 +88,8 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const capacity = await privateJson(files.capacity);
 	const requests = await privateJson(files.requests);
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && templates.sourceSha === sourceSha && capacity.sourceSha === sourceSha);
-	assert((await validateTemplateValidationExpectations(templates)).pass, "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
+	const validationGate = await validateTemplateValidationExpectations(templates);
+	assert(validationGate.pass || validationGate.results.every((r: any) => r.status === "passed" || r.reason === "VALIDATION_EXPIRED_OR_CLOCK_INVALID"), "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
 	const objects = await prepareBootstrapInputs(bootstrap, rendered);
 	const documents = parseAllDocuments(rendered).map((d) => {
 		assert.equal(d.errors.length, 0);
@@ -169,12 +171,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		evidenceFiles.set(entry.imageDigest, entry.file);
 	}
 	for (const expected of templates.templates) {
-		const candidate = await privateBytes(expected.validationFile);
 		const key = `template-validation-${expected.templateId}.json`;
 		for (const secret of secrets) {
 			assert(typeof secret.files[key] === "string", "RUNTIME_INPUT_TEMPLATE_TARGET_MISSING");
-			await stageFile(secret.files[key], candidate);
-			secret.desired.data[key] = candidate.toString("base64");
 		}
 		const file = join(dirname(expected.validationFile), "runtime-capacity.receipt.json");
 		const measuredBytes = await privateBytes(file);
@@ -248,7 +247,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate };
 }
 
 export async function publishRuntimeInputs(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply = false, timeout = "300s") {
@@ -270,10 +269,20 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	]));
 	assert(read("namespace", "kube-system", false).metadata?.uid === clusterUid, "RUNTIME_INPUT_CLUSTER_DRIFT");
 	const ns = read("namespace", namespace, false);
-	assert(ns.metadata?.uid && ns.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_OWNER_INVALID");
+	assert(ns.metadata?.uid && !ns.metadata.deletionTimestamp && ns.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_OWNER_INVALID");
 	const assertNamespace = () => {
 		const current = read("namespace", namespace, false);
-		assert(current.metadata?.uid === ns.metadata.uid && current.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_DRIFT");
+		assert(current.metadata?.uid === ns.metadata.uid && !current.metadata.deletionTimestamp && current.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_DRIFT");
+	};
+	const validationContext = templateValidationContextV1Schema.parse({
+		sourceCommit: sourceSha, clusterUid, namespace, namespaceUid: ns.metadata.uid, installationId,
+	});
+	const adoptionInputs = await readTemplateValidationAdoptionInputs(plan.templates, validationContext);
+	const assertCandidateFiles = async () => {
+		for (const input of adoptionInputs) {
+			assert.deepEqual(await privateBytes(input.validationFile), input.candidateBytes, "RUNTIME_INPUT_LOCAL_DRIFT");
+			assert.deepEqual(await privateBytes(input.preflightFile), input.preflightBytes, "RUNTIME_INPUT_LOCAL_DRIFT");
+		}
 	};
 	const readSecret = (name: string) => {
 		let raw: string;
@@ -286,12 +295,90 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		try { return JSON.parse(raw); }
 		catch { throw new Error("RUNTIME_INPUT_SECRET_UNAVAILABLE"); }
 	};
-	const secrets = plan.secrets.map((entry) => {
+	const readSecrets = plan.secrets.map((entry) => {
 		const current = readSecret(entry.desired.metadata.name);
 		assert(current.kind === "Secret" && current.metadata?.name === entry.desired.metadata.name && current.metadata.namespace === namespace && current.metadata.uid && current.metadata.resourceVersion &&
 			current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp && current.type === "Opaque" && !current.immutable, "RUNTIME_INPUT_SECRET_OWNER_INVALID");
-		assert(isDeepStrictEqual(current.data, entry.before.data) || isDeepStrictEqual(current.data, entry.desired.data), "RUNTIME_INPUT_SECRET_DRIFT");
-		return { ...entry, current, verifiedVersion: current.metadata.resourceVersion, changed: !isDeepStrictEqual(current.data, entry.desired.data) };
+		return { ...entry, current };
+	});
+	const existingAdoptionBytes = new Map<string, Buffer>();
+	let fullyAdopted = true;
+	for (const input of adoptionInputs) {
+		const key = `template-validation-${input.templateId}.json`;
+		let bytes: Buffer | undefined;
+		try {
+			for (const secret of readSecrets) {
+				const current = Buffer.from(secret.current.data[key], "base64");
+				const record = parseAdoptedTemplateValidationV2(JSON.parse(current.toString("utf8")), validationContext, Date.now());
+				assert.deepEqual(record.candidate, input.candidate);
+				assert.equal(record.adoption.provenance.candidateFileSha256, input.candidateFileSha256);
+				assert.equal(record.adoption.provenance.preflightFileSha256, input.preflightFileSha256);
+				if (bytes) assert.deepEqual(current, bytes);
+				bytes = current;
+			}
+			assert(bytes);
+			existingAdoptionBytes.set(input.templateId, bytes);
+		} catch {
+			fullyAdopted = false;
+		}
+	}
+	const stillFresh = async () => {
+		await assertCandidateFiles();
+		const now = Date.now();
+		// Recheck the pinned evidence, never a newly replaced file's time window.
+		assert(adoptionInputs.every((input: any) => input.candidate.validatedAt <= now &&
+			input.candidate.validUntil > now + plan.templates.minValidityMs && input.candidate.validUntil > input.candidate.validatedAt),
+			"RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
+	};
+	if (!fullyAdopted) await stillFresh();
+	const adoptionBytes = new Map<string, Buffer>();
+	if (apply) {
+		const identities = adoptionInputs.map((i: any) => [i.templateId, i.candidateFileSha256, i.preflightFileSha256]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+		const attemptKey = hash(JSON.stringify([validationContext, identities]));
+		const attemptFile = join(dirname(files.templates), `.template-adoption-${attemptKey}.json`);
+		let attemptInsideGit = false;
+		try { attemptInsideGit = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: dirname(attemptFile), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim() === "true"; } catch {}
+		assert(!attemptInsideGit, "RUNTIME_INPUT_FILE_INSIDE_WORKTREE");
+		let frozen: any;
+		if (!fullyAdopted) {
+			try { frozen = await privateJson(attemptFile); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+			if (frozen) assert(frozen.schemaVersion === 1 && frozen.kind === "template-adoption-attempt" && Array.isArray(frozen.records) && frozen.records.length === adoptionInputs.length, "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
+		}
+		const adoptedAt = Date.now();
+		for (const input of adoptionInputs) {
+			let bytes: Buffer;
+			if (fullyAdopted) bytes = existingAdoptionBytes.get(input.templateId)!;
+			else if (frozen) {
+				const records = frozen.records.filter((r: any) => r.templateId === input.templateId);
+				assert(records.length === 1 && typeof records[0].bytes === "string", "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
+				bytes = Buffer.from(records[0].bytes, "base64");
+				const record = parseAdoptedTemplateValidationV2(JSON.parse(bytes.toString("utf8")), validationContext, adoptedAt);
+				assert.deepEqual(record.candidate, input.candidate);
+				assert.equal(record.adoption.provenance.candidateFileSha256, input.candidateFileSha256);
+				assert.equal(record.adoption.provenance.preflightFileSha256, input.preflightFileSha256);
+			} else bytes = jsonBytes(adoptTemplateValidationV2({ ...input, context: validationContext, adoptedAt }));
+			adoptionBytes.set(input.templateId, bytes);
+		}
+		if (!fullyAdopted && !frozen) {
+			await stillFresh();
+			await writeFile(attemptFile, jsonBytes({ schemaVersion: 1, kind: "template-adoption-attempt", records: [...adoptionBytes].map(([templateId, bytes]) => ({ templateId, bytes: bytes.toString("base64") })) }), { mode: 0o600, flag: "wx" });
+		}
+	}
+	for (const input of adoptionInputs) {
+		const bytes = apply ? adoptionBytes.get(input.templateId)! : fullyAdopted ? existingAdoptionBytes.get(input.templateId)! : input.candidateBytes;
+		const key = `template-validation-${input.templateId}.json`;
+		for (const secret of plan.secrets) {
+			await plan.stageFile(secret.files[key], bytes);
+			secret.desired.data[key] = bytes.toString("base64");
+		}
+	}
+	const secrets = readSecrets.map((entry) => {
+		const before = { ...entry.before.data };
+		if (adoptionInputs.every((input: any) => entry.current.data[`template-validation-${input.templateId}.json`] === entry.desired.data[`template-validation-${input.templateId}.json`]))
+			for (const input of adoptionInputs) before[`template-validation-${input.templateId}.json`] = entry.desired.data[`template-validation-${input.templateId}.json`];
+		assert(isDeepStrictEqual(entry.current.data, before) || isDeepStrictEqual(entry.current.data, entry.desired.data), "RUNTIME_INPUT_SECRET_DRIFT");
+		return { ...entry, verifiedVersion: entry.current.metadata.resourceVersion, changed: !isDeepStrictEqual(entry.current.data, entry.desired.data) };
 	});
 	const consumers = plan.consumers.map((entry) => {
 		const current = read("deployment", entry.name);
@@ -312,6 +399,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		}
 	};
 	if (apply) {
+		await assertCandidateFiles();
 		for (const [file, bytes] of plan.writes) assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
 		progress.phase = "secret-write";
 		for (const secret of secrets) {
@@ -320,6 +408,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion &&
 				current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
 			if (secret.changed) {
+				if (!fullyAdopted) await stillFresh();
 				progress.mutationStatus = "attempted";
 				kubectl(["-n", namespace, "replace", "--field-manager=agent-infra-runtime-inputs", "-f", "-"],
 					JSON.stringify({ ...current, data: secret.desired.data }));
