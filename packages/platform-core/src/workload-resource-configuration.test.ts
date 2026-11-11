@@ -4,6 +4,8 @@ import {
 	resourceQuantityEqualsV1,
 	sessionSandboxResourceCostsV1,
 	validateCodexSessionExecutorResourcePolicyV1,
+	validateWorkloadControlResourcesV1,
+	workloadControlResourcesEqualV1,
 	workloadResourceConfigurationHashV1,
 	workloadResourcesEqualV1,
 } from "./workload-resource-configuration.js";
@@ -24,6 +26,45 @@ const executor: CodexSessionExecutorResourcePolicyV1 = {
 };
 
 describe("shared workload resource contract", () => {
+	it("compares the full control envelope without changing portable hashes or executor resources", () => {
+		const declared = {
+			requests: { ...legacy.resources.requests, "ephemeral-storage": "256Mi" },
+			limits: { ...legacy.resources.limits, "ephemeral-storage": "1Gi" },
+		};
+		const actual = {
+			requests: {
+				cpu: "0.1",
+				memory: "0.125Gi",
+				"ephemeral-storage": "0.25Gi",
+			},
+			limits: { cpu: "1000m", memory: "2048Mi", "ephemeral-storage": "1024Mi" },
+		};
+		expect(() => validateWorkloadControlResourcesV1(declared)).not.toThrow();
+		expect(workloadControlResourcesEqualV1(actual, declared)).toBe(true);
+		expect(workloadResourcesEqualV1(actual, declared)).toBe(false);
+		expect(() =>
+			validateCodexSessionExecutorResourcePolicyV1({ resources: declared }),
+		).toThrow();
+		expect(
+			workloadResourceConfigurationHashV1({ ...legacy, resources: declared }),
+		).toBe(workloadResourceConfigurationHashV1(legacy));
+		for (const limits of [
+			legacy.resources.limits,
+			{ ...declared.limits, "ephemeral-storage": "1025Mi" },
+			{ ...declared.limits, gpu: "1" },
+			{ ...declared.limits, "ephemeral-storage": "invalid" },
+			{ ...declared.limits, "ephemeral-storage": "0" },
+			{ ...declared.limits, "ephemeral-storage": "128Mi" },
+		])
+			expect(
+				workloadControlResourcesEqualV1({ ...actual, limits }, declared),
+			).toBe(false);
+		expect(workloadControlResourcesEqualV1(undefined, declared)).toBe(false);
+		expect(
+			workloadControlResourcesEqualV1({ ...actual, extra: {} }, declared),
+		).toBe(false);
+	});
+
 	it("accepts Kubernetes quantity canonicalization while retaining exact resource keys", () => {
 		const declared = {
 			requests: { cpu: "0.25", memory: "0.25Gi" },

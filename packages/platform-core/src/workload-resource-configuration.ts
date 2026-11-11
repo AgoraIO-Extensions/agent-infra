@@ -19,6 +19,15 @@ export interface WorkloadResourceConfigurationV1 {
 	readonly workspaceSnapshotEgress?: unknown;
 }
 
+export interface WorkloadControlResourcesV1 {
+	readonly requests: {
+		readonly cpu: string;
+		readonly memory: string;
+		readonly "ephemeral-storage"?: string;
+	};
+	readonly limits: WorkloadControlResourcesV1["requests"];
+}
+
 /** Compare Kubernetes quantities without floating point rounding. */
 export function quantityRatioV1(
 	value: string,
@@ -107,6 +116,62 @@ function resourceValue(value: unknown): string {
 	if (!ratio || ratio[0] <= 0n)
 		throw new TypeError("WORKLOAD_RESOURCE_INVALID");
 	return value;
+}
+
+/** Full control envelope; the portable CPU/memory hash remains unchanged. */
+export function validateWorkloadControlResourcesV1(
+	value: unknown,
+): asserts value is WorkloadControlResourcesV1 {
+	const resources = value as WorkloadControlResourcesV1 | undefined;
+	if (
+		!resources ||
+		Object.keys(resources).sort().join(",") !== "limits,requests"
+	)
+		throw new TypeError("WORKLOAD_RESOURCE_INVALID");
+	for (const level of ["requests", "limits"] as const) {
+		const values = resources[level];
+		if (
+			!values ||
+			!["cpu,memory", "cpu,ephemeral-storage,memory"].includes(
+				Object.keys(values).sort().join(","),
+			)
+		)
+			throw new TypeError("WORKLOAD_RESOURCE_INVALID");
+		for (const value of Object.values(values)) resourceValue(value);
+	}
+	for (const key of ["cpu", "memory", "ephemeral-storage"] as const) {
+		const request = resources.requests[key];
+		const limit = resources.limits[key];
+		if (request === undefined || limit === undefined) continue;
+		const a = quantityRatioV1(request);
+		const b = quantityRatioV1(limit);
+		if (!a || !b || a[0] * b[1] > b[0] * a[1])
+			throw new TypeError("WORKLOAD_RESOURCE_INVALID");
+	}
+}
+
+export function workloadControlResourcesEqualV1(
+	actual: unknown,
+	expected: unknown,
+): boolean {
+	try {
+		validateWorkloadControlResourcesV1(actual);
+		validateWorkloadControlResourcesV1(expected);
+	} catch {
+		return false;
+	}
+	return (["requests", "limits"] as const).every(
+		(level) =>
+			Object.keys(actual[level]).sort().join(",") ===
+				Object.keys(expected[level]).sort().join(",") &&
+			(
+				Object.keys(
+					expected[level],
+				) as (keyof WorkloadControlResourcesV1["requests"])[]
+			).every((key) =>
+				resourceQuantityEqualsV1(actual[level][key], expected[level][key]),
+			),
+	);
 }
 
 export function validateCodexSessionExecutorResourcePolicyV1(

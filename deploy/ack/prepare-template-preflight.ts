@@ -36,11 +36,13 @@ export async function prepareTemplatePreflight(listFile: string, manifestFile: s
 		jobs.push(job);
 	}
 	assert.equal(seen.size, 4);
-	const capacity = jobs.map((job) => job.resourceProfileRef === undefined ? null : JSON.stringify({
+	const capacity = jobs.map((job) => job.resourceProfileRef === undefined ? null : ({
 		resourceConfigurationHash: workloadResourceConfigurationHashV1({ ...job, resources: job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits } }),
+		resources: job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits },
+		placement: job.placement, expectedNodePrefix: job.expectedNodePrefix,
 		storageSize: job.storageSize, storageClassName: job.storageClassName, modelEgress: job.modelEgress, dnsEgress: job.dnsEgress, allowedPodTopologyLabelValues: job.allowedPodTopologyLabelValues,
 	}));
-	assert(capacity.every((tuple) => tuple === capacity[0]), "PREFLIGHT_CAPACITY_POLICY_DRIFT");
+	for (const tuple of capacity) assert.deepEqual(tuple, capacity[0], "PREFLIGHT_CAPACITY_POLICY_DRIFT");
 	const runDirectory = await mkdtemp(join(directory, "template-run-"));
 	const files = [];
 	for (const job of jobs) {

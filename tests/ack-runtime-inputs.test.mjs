@@ -17,6 +17,7 @@ import test from "node:test";
 import { prepareBootstrapInputs } from "../deploy/ack/bootstrap-inputs.ts";
 import { bootstrapLogin } from "../deploy/ack/bootstrap-login.ts";
 import { publishRuntimeInputs } from "../deploy/ack/runtime-inputs.ts";
+import { prepareReserveInput } from "../deploy/ack/session-reserve-inputs.ts";
 import { templatePreflightValidationReceipt } from "../deploy/ack/template-validation.mjs";
 import { checkWorkloadCapacity } from "../deploy/ack/workload-capacity.ts";
 import {
@@ -521,9 +522,12 @@ test("executor policy rejects legacy single-container measurements before any pu
 	assert.equal(f.mutations.length, 0);
 });
 
-test("executor measurements publish canonical capacity and verify the full mounted Worker policy", async (t) => {
-	const f = await fixture(t);
+async function executorMeasurements(f) {
 	Object.assign(f.capacity, {
+		resources: {
+			requests: { ...resources.requests, "ephemeral-storage": "256Mi" },
+			limits: { ...resources.limits, "ephemeral-storage": "1Gi" },
+		},
 		storageSize: "20Gi",
 		storageClassName: "test-storage",
 		codexSessionExecutor: {
@@ -532,7 +536,6 @@ test("executor measurements publish canonical capacity and verify the full mount
 				limits: { cpu: "1", memory: "512Mi" },
 			},
 			tmpSizeLimit: "128Mi",
-			placement: { architecture: "amd64" },
 		},
 	});
 	const resourceConfigurationHash = workloadResourceConfigurationHashV1(
@@ -546,6 +549,7 @@ test("executor measurements publish canonical capacity and verify the full mount
 		const measured = JSON.parse(await readFile(file));
 		await f.save(file, {
 			...measured,
+			observedResources: f.capacity.resources,
 			resourceConfigurationHash,
 			codexSessionExecutor: f.capacity.codexSessionExecutor,
 			storageSize: f.capacity.storageSize,
@@ -569,6 +573,12 @@ test("executor measurements publish canonical capacity and verify the full mount
 		});
 	}
 	await f.save(f.files.capacity, f.capacity);
+	return resourceConfigurationHash;
+}
+
+test("executor measurements publish canonical capacity and verify the full mounted Worker policy", async (t) => {
+	const f = await fixture(t);
+	const resourceConfigurationHash = await executorMeasurements(f);
 	const result = await publishRuntimeInputs(
 		f.files,
 		f.rendered,
@@ -601,6 +611,54 @@ test("executor measurements publish canonical capacity and verify the full mount
 	);
 	assert.equal(checked.resourceConfigurationHash, resourceConfigurationHash);
 	assert.equal(checked.imageCount, 4);
+	for (const limits of [
+		resources.limits,
+		{ ...f.capacity.resources.limits, "ephemeral-storage": "1025Mi" },
+		{ ...f.capacity.resources.limits, gpu: "1" },
+	]) {
+		const changed = { ...f.capacity.resources, limits };
+		assert.equal(
+			workloadResourceConfigurationHashV1({
+				...f.capacity,
+				resources: changed,
+			}),
+			resourceConfigurationHash,
+		);
+		await assert.rejects(
+			checkWorkloadCapacity(
+				f.files.capacity,
+				f.files.requests,
+				f.files.templates,
+				source,
+				(ref) => ({ ...readWorker(ref), resources: changed }),
+			),
+			/CAPACITY_WORKER_POLICY_DRIFT/u,
+		);
+	}
+	assert.equal(
+		(
+			await checkWorkloadCapacity(
+				f.files.capacity,
+				f.files.requests,
+				f.files.templates,
+				source,
+				(ref) => ({
+					...readWorker(ref),
+					resources: {
+						requests: {
+							...f.capacity.resources.requests,
+							"ephemeral-storage": "0.25Gi",
+						},
+						limits: {
+							...f.capacity.resources.limits,
+							"ephemeral-storage": "1024Mi",
+						},
+					},
+				}),
+			)
+		).mountedInputVerified,
+		true,
+	);
 	for (const [key, value] of [
 		["codexSessionExecutor", undefined],
 		[
@@ -621,6 +679,130 @@ test("executor measurements publish canonical capacity and verify the full mount
 			),
 			/CAPACITY_WORKER_.*DRIFT/,
 		);
+});
+
+for (const templateId of ["codex", "claude", "opencode", "pi"])
+	test(`runtime-inputs rejects ${templateId} ephemeral drift before publishing`, async (t) => {
+		const f = await fixture(t);
+		const approvedHash = await executorMeasurements(f);
+		const expected = f.templates.find(
+			(entry) => entry.templateId === templateId,
+		);
+		const file = join(
+			dirname(expected.validationFile),
+			"runtime-capacity.receipt.json",
+		);
+		const measured = JSON.parse(await readFile(file));
+		measured.observedResources.limits["ephemeral-storage"] = "1025Mi";
+		assert.equal(measured.resourceConfigurationHash, approvedHash);
+		await f.save(file, measured);
+		await assert.rejects(
+			publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+			/RUNTIME_INPUTS_INVALID/u,
+		);
+		assert.equal(f.mutations.length, 0);
+	});
+
+test("first executor adoption keeps historical costs with cold allocation and rejects mixed warm profiles", async (t) => {
+	const f = await fixture(t);
+	const resourceConfigurationHash = await executorMeasurements(f);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const costs = sessionSandboxResourceCostsV1(f.capacity);
+	const historicalCost = {
+		resourceConfigurationHash: "e".repeat(64),
+		resources: sessionSandboxResourceCostsV1({
+			resources,
+			storageSize: "20Gi",
+		}),
+	};
+	const input = {
+		schemaVersion: 1,
+		sourceSha: source,
+		enabled: true,
+		revision: 2,
+		namespace,
+		totalBudget: {
+			cpuMillis: 4000,
+			memoryBytes: 8 * 1024 ** 3,
+			storageBytes: 40 * 1024 ** 3,
+		},
+		resourceCosts: [
+			historicalCost,
+			{ resourceConfigurationHash, resources: costs },
+		],
+		maximumReserves: 1,
+		maximumConcurrentCreates: 1,
+		ttlMs: 1000,
+		cooldownMs: 1000,
+		failureBackoffMs: 1000,
+		profiles: [],
+	};
+	const actual = {
+		sourceSha: source,
+		configuration: structuredClone({
+			...input,
+			revision: 1,
+			resourceCosts: [historicalCost],
+		}),
+		policy: {
+			namespace,
+			resourceProfileRef: f.capacity.resourceProfileRef,
+			resources,
+			storageSize: "20Gi",
+		},
+		resourceCosts: historicalCost.resources,
+	};
+	const original = structuredClone(actual);
+	const environment = {
+		ACK_NAMESPACE: namespace,
+		ACK_SESSION_RESERVES_FILE: "candidate-reserves",
+		ACK_BOOTSTRAP_INPUTS_FILE: "bootstrap-reserves",
+		ACK_WORKLOAD_CAPACITY_FILE: f.files.capacity,
+		ACK_TEMPLATE_VALIDATIONS_FILE: f.files.templates,
+	};
+	const options = {
+		readJson: async (file) =>
+			file === "candidate-reserves"
+				? input
+				: file === "bootstrap-reserves"
+					? {
+							namespace,
+							objects: ["worker", "api"].map((component) => ({
+								kind: "Secret",
+								name: `test-${component}-configuration`,
+								files: {},
+							})),
+						}
+					: JSON.parse(await readFile(file)),
+		readWorker: () => actual,
+	};
+	const cold = await prepareReserveInput(environment, source, options);
+	assert.equal(cold.receipt.enabled, true);
+	assert.equal(cold.receipt.revision, 2);
+	assert.deepEqual(input.resourceCosts, [
+		historicalCost,
+		{ resourceConfigurationHash, resources: costs },
+	]);
+	assert.deepEqual(actual, original);
+	input.profiles.push({
+		agentId: "fixture-agent",
+		templateId: "codex",
+		imageDigest: f.templates[0].imageDigest,
+		resourceConfigurationHash,
+		resources: costs,
+		storageConfigurationVersion: "v1",
+		networkPolicyVersion: "v1",
+		signingConfigurationVersion: "v1",
+		transportConfigurationVersion: "v1",
+		connectionConfigurationVersion: "v1",
+		minimum: 1,
+		maximum: 1,
+	});
+	await assert.rejects(
+		prepareReserveInput(environment, source, options),
+		/CAPSULE_RESERVE_RESOURCE_HASH_MISMATCH/u,
+	);
+	assert.deepEqual(actual, original);
 });
 
 async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {

@@ -575,7 +575,14 @@ function executorFixture(job = executorJob) {
 	rendered.serviceAccount.metadata.uid = "owned-service-account";
 	rendered.networkPolicy.metadata.uid = "owned-network-policy";
 	const observed = structuredClone(rendered.pod);
-	observed.spec.nodeName = "virtual-kubelet-test";
+	observed.spec.nodeName = job.expectedNodePrefix ?? "virtual-kubelet-test";
+	const node = {
+		metadata: {
+			name: observed.spec.nodeName,
+			uid: "approved-node-uid",
+			labels: { "kubernetes.io/arch": "amd64", "kubernetes.io/os": "linux" },
+		},
+	};
 	observed.status = {
 		phase: "Running",
 		containerStatuses: observed.spec.containers.map((container) => ({
@@ -609,6 +616,7 @@ function executorFixture(job = executorJob) {
 		pvc,
 		serviceAccount,
 		networkPolicy,
+		node,
 		observe: () =>
 			observeTemplatePreflightLayout(
 				job,
@@ -617,9 +625,146 @@ function executorFixture(job = executorJob) {
 				pvc,
 				serviceAccount,
 				networkPolicy,
+				node,
 			),
 	};
 }
+
+const inheritedExecutorJob = {
+	...executorJob,
+	placement: undefined,
+	expectedNodePrefix: "cn-hangzhou.10.0.1.219",
+	codexSessionExecutor: {
+		resources: executorPolicy.resources,
+		tmpSizeLimit: "128Mi",
+	},
+	resources: {
+		requests: {
+			...executorJob.resources.requests,
+			"ephemeral-storage": "256Mi",
+		},
+		limits: { ...executorJob.resources.limits, "ephemeral-storage": "1Gi" },
+	},
+	expectedResourceLimits: {
+		...executorJob.expectedResourceLimits,
+		"ephemeral-storage": "1Gi",
+	},
+};
+
+test("inherited executor placement adds no scheduling fields and observes full control resources on the approved node", () => {
+	const fixture = executorFixture(inheritedExecutorJob);
+	for (const key of ["nodeSelector", "tolerations", "runtimeClassName"])
+		assert.equal(Object.hasOwn(fixture.rendered.pod.spec, key), false);
+	assert.deepEqual(
+		fixture.rendered.pod.spec.containers[0].resources,
+		inheritedExecutorJob.resources,
+	);
+	const control = fixture.observed.spec.containers[0];
+	control.resources.requests["ephemeral-storage"] = "0.25Gi";
+	control.resources.limits["ephemeral-storage"] = "1024Mi";
+	const receipt = fixture.observe();
+	assert.equal(receipt.nodeUidSha256, preflightHash("approved-node-uid"));
+	assert.equal(receipt.nodeArchitecture, "amd64");
+	assert.equal(control.resources.limits["ephemeral-storage"], "1024Mi");
+});
+
+for (const [name, change] of [
+	[
+		"node suffix",
+		(f) => {
+			f.observed.spec.nodeName += "-other";
+		},
+	],
+	[
+		"node identity",
+		(f) => {
+			f.node.metadata.name = "foreign-node";
+		},
+	],
+	[
+		"missing node UID",
+		(f) => {
+			delete f.node.metadata.uid;
+		},
+	],
+	[
+		"architecture",
+		(f) => {
+			f.node.metadata.labels["kubernetes.io/arch"] = "arm64";
+		},
+	],
+	[
+		"provider",
+		(f) => {
+			f.node.metadata.labels.type = "virtual-kubelet";
+		},
+	],
+	[
+		"injected selector",
+		(f) => {
+			f.observed.spec.nodeSelector = { type: "virtual-kubelet" };
+		},
+	],
+	[
+		"injected toleration",
+		(f) => {
+			f.observed.spec.tolerations = executorJob.placement.tolerations;
+		},
+	],
+	[
+		"RuntimeClass",
+		(f) => {
+			f.observed.spec.runtimeClassName = "foreign";
+		},
+	],
+	[
+		"missing ephemeral",
+		(f) => {
+			delete f.observed.spec.containers[0].resources.limits[
+				"ephemeral-storage"
+			];
+		},
+	],
+	[
+		"ephemeral amount",
+		(f) => {
+			f.observed.spec.containers[0].resources.limits["ephemeral-storage"] =
+				"1025Mi";
+		},
+	],
+	[
+		"undeclared resource",
+		(f) => {
+			f.observed.spec.containers[0].resources.requests.gpu = "1";
+		},
+	],
+])
+	test(`inherited executor observation rejects ${name}`, () => {
+		const fixture = executorFixture(inheritedExecutorJob);
+		change(fixture);
+		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_.*DRIFT/u);
+	});
+
+for (const expectedNodePrefix of [undefined, "", "virtual-kubelet-test", "*"])
+	test(`inherited executor requires an explicit ordinary node target: ${expectedNodePrefix}`, () => {
+		assert.throws(
+			() =>
+				validateTemplatePreflightJob({
+					...inheritedExecutorJob,
+					expectedNodePrefix,
+				}),
+			/TEMPLATE_PLACEMENT_INVALID/u,
+		);
+	});
+
+test("a complete control envelope must also be declared in expected limits", () => {
+	assert.throws(() =>
+		validateTemplatePreflightJob({
+			...inheritedExecutorJob,
+			expectedResourceLimits: baseJob.expectedResourceLimits,
+		}),
+	);
+});
 
 test("executor capacity job requires the official image and bounded matching ECI policy", () => {
 	assert.equal(

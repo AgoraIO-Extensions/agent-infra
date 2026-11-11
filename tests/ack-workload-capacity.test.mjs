@@ -72,7 +72,10 @@ test("one current measured binding covers a selected standard and custom digest"
 	assert.equal(check([profile]).imageCount, 1);
 });
 
-function executorFixture(templateId = "codex") {
+function executorFixture(
+	templateId = "codex",
+	controlResources = policy.resources,
+) {
 	const executorPolicy = {
 		resources: {
 			requests: { cpu: "250m", memory: "256Mi" },
@@ -83,12 +86,14 @@ function executorFixture(templateId = "codex") {
 	};
 	const input = {
 		...policy,
+		resources: controlResources,
 		storageSize: "20Gi",
 		storageClassName: "test-storage",
 		codexSessionExecutor: executorPolicy,
 	};
 	const measured = {
 		...measurement,
+		observedResources: controlResources,
 		resourceConfigurationHash: workloadResourceConfigurationHashV1(input),
 		codexSessionExecutor: executorPolicy,
 		...(templateId === "codex"
@@ -135,6 +140,37 @@ test("Codex executor capacity binds both containers to the canonical policy and 
 	const f = executorFixture();
 	assert.equal(f.checkReceipt().imageCount, 1);
 });
+
+const completeControlResources = {
+	requests: { ...policy.resources.requests, "ephemeral-storage": "256Mi" },
+	limits: { ...policy.resources.limits, "ephemeral-storage": "1Gi" },
+};
+
+for (const templateId of ["codex", "claude", "opencode", "pi"])
+	test(`${templateId} capacity checks full control resources under the unchanged portable hash`, () => {
+		const f = executorFixture(templateId, completeControlResources);
+		assert.equal(
+			workloadResourceConfigurationHashV1(f.input),
+			workloadResourceConfigurationHashV1(executorFixture(templateId).input),
+		);
+		const receipt = structuredClone(f.measured);
+		receipt.observedResources.requests["ephemeral-storage"] = "0.25Gi";
+		receipt.observedResources.limits["ephemeral-storage"] = "1024Mi";
+		assert.equal(f.checkReceipt(receipt).imageCount, 1);
+		for (const changed of [
+			{ ...completeControlResources.limits, "ephemeral-storage": "1025Mi" },
+			policy.resources.limits,
+			{ ...completeControlResources.limits, gpu: "1" },
+		])
+			assert.throws(
+				() =>
+					f.checkReceipt({
+						...receipt,
+						observedResources: { ...completeControlResources, limits: changed },
+					}),
+				/CAPACITY_MEASURED_RESOURCES_DRIFT/u,
+			);
+	});
 
 test("measured Kubernetes quantity aliases preserve the approved raw policy hash", () => {
 	const f = executorFixture();
