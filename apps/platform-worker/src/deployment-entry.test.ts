@@ -11,6 +11,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
+import {
+	captureConnectionConsumerRegisteredBindingV1,
+	planConnectionConsumerRegistrationV1,
+} from "@agent-infra/platform-core";
 import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
@@ -366,6 +370,47 @@ export const isNativeMetadataWorkerOriginV1 = (value) => {
 	});
 	await build({
 		entryPoints: [
+			new URL("./connection-registration-bindings.ts", import.meta.url)
+				.pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "connection-registration-bindings.js"),
+		plugins: [
+			{
+				name: "owned-registration-read-fixture",
+				setup(builder) {
+					builder.onResolve(
+						{ filter: /^@agent-infra\/platform-store$/ },
+						() => ({
+							path: "registration-reader",
+							namespace: "registration-fixture",
+						}),
+					);
+					builder.onLoad(
+						{ filter: /.*/, namespace: "registration-fixture" },
+						() => ({
+							contents: `
+export class PostgresConnectionConsumerRegistrationStoreV1 {
+ constructor(input) { globalThis.registrationDatabase = input.databaseUrl; }
+ async registered() { globalThis.registrationReads = (globalThis.registrationReads ?? 0) + 1; return globalThis.registrations ?? {}; }
+ async close() { globalThis.registrationCloses = (globalThis.registrationCloses ?? 0) + 1; }
+}
+export async function readConnectionConsumerSourceSelectionV1() {
+ if(globalThis.sourceSelectionFailed) throw Error('controlled source unavailable');
+ return structuredClone(globalThis.sourceSelection ?? {automaticAgentIds:[],legacyAgentIds:[]});
+}
+`,
+						}),
+					);
+				},
+			},
+		],
+	});
+	await build({
+		entryPoints: [
 			new URL(
 				"./connection-installation-principal-bindings.ts",
 				import.meta.url,
@@ -450,6 +495,9 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_REGISTERED_BINDINGS === 'true') {
+   console.log(JSON.stringify({snapshot:globalThis.snapshot ?? null,snapshots:globalThis.snapshots ?? {},installations:globalThis.installations ?? {},reads:globalThis.registrationReads ?? 0,closes:globalThis.registrationCloses ?? 0,database:globalThis.registrationDatabase ?? null,resolverCalls:globalThis.legacyResolverCalls ?? 0}));process.exit(0);
+ }
  if (process.env.RUN_REGISTRATION === 'true') {
    console.log(JSON.stringify({ policy:workload.connectionConsumerRegistration?.policy ?? null, hasAdapter:typeof workload.connectionConsumerRegistration?.adapter?.register==='function' }));process.exit(0);
  }
@@ -587,6 +635,188 @@ it("keeps registration default off and passes explicit policy/adapter from the e
 		await writeFile(join(directory, "configuration.mjs"), original);
 	}
 });
+
+it("does not use a shared Consumer when the automatic registration source has no binding resolver", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const policy = {
+		schemaVersion: 1,
+		sourceNamespace: "worker-entry-test",
+		revision: "policy-1",
+		callbackUrl: "https://platform.example.test/connection/callback",
+		resource: "https://connection.example.test/mcp",
+		scope: "mcp",
+	};
+	try {
+		await writeFile(
+			path,
+			`${original}\nworkloadInput.connectionConsumerRegistration={policy:${JSON.stringify(policy)}};\n`,
+		);
+		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			snapshot: null,
+			snapshots: {},
+			installationConfigured: false,
+			calls: ["readiness", "workload", "wecom", "conversation", "sandbox"],
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it.each([false, true])(
+	"assembles independent Consumer snapshots from persistent registrations and rechecks late changes (%s)",
+	async (changed) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const policy = {
+			schemaVersion: 1 as const,
+			sourceNamespace: "worker-registration-projection",
+			revision: "policy-1",
+			callbackUrl: "https://platform.example.test/connection/callback",
+			resource: "https://connection.example.test/mcp/v1",
+			scope: "mcp",
+		};
+		const registrations = Object.fromEntries(
+			["agent-a", "agent-b"].map((agentId) => {
+				const intent = planConnectionConsumerRegistrationV1({
+					policy,
+					platformAgentId: agentId,
+					platformOwnerId: `owner-${agentId}`,
+					consumerName: agentId,
+				});
+				return [
+					agentId,
+					captureConnectionConsumerRegisteredBindingV1({
+						intent,
+						receipt: {
+							schemaVersion: 1,
+							operationId: intent.operationId,
+							sourceNamespace: intent.sourceNamespace,
+							sourceKey: intent.sourceKey,
+							requestDigest: intent.requestDigest,
+							consumerId: `random-${agentId}`,
+							consumerRevision: "4",
+							registrationId: `registration-${agentId}`,
+						},
+						associationRevision: 1,
+					}),
+				];
+			}),
+		);
+		try {
+			await writeFile(
+				path,
+				`${original}
+import { connectionConsumerProfileFingerprintV1 } from '@agent-infra/contracts/connection-consumer-profile';
+workloadInput.connectionConsumerRegistration={policy:${JSON.stringify(policy)}};
+globalThis.registrations=${JSON.stringify(registrations)};
+export const resolveConnectionConsumerBindingsByAgent=async(signal,registrations)=>{
+ signal.throwIfAborted();
+ const values=Object.fromEntries(Object.entries(registrations).map(([agentId,binding])=>{
+  const profile={...connectionConsumerProfile,consumerId:binding.receipt.consumerId};
+  return [agentId,{profile,approval:{schemaVersion:1,egressEnforced:true,configFingerprint:connectionConsumerProfileFingerprintV1(profile),source:binding.source},installationSupply:{ref:'protected-'+agentId,revision:'r1'}}];
+ }));
+ ${changed ? "delete globalThis.registrations['agent-a'];" : ""}
+ return values;
+};
+`,
+			);
+			const result = run({ RUN_REGISTERED_BINDINGS: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			const value = JSON.parse(result.stdout);
+			expect(value).toMatchObject({
+				snapshot: null,
+				reads: 2,
+				closes: 1,
+				database,
+			});
+			expect(Object.keys(value.snapshots)).toEqual(
+				changed ? ["agent-b"] : ["agent-a", "agent-b"],
+			);
+			for (const [id, snapshot] of Object.entries(value.snapshots)) {
+				expect(snapshot).toEqual(
+					expect.stringContaining(`"consumerId":"random-${id}"`),
+				);
+				expect(snapshot).toEqual(
+					expect.stringContaining(`"ref":"${registrations[id]?.source.ref}"`),
+				);
+			}
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
+it.each([false, true])(
+	"does not project shared profiles after removal of an associated Agent's automatic policy (sourceUnavailable=%s)",
+	async (sourceUnavailable) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		try {
+			await writeFile(
+				path,
+				`${original}
+globalThis.sourceSelection={automaticAgentIds:['agent-a'],legacyAgentIds:['agent-b']};
+globalThis.sourceSelectionFailed=${sourceUnavailable};
+`,
+			);
+			const result = run({ RUN_REGISTERED_BINDINGS: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			const projected = JSON.parse(result.stdout);
+			expect(projected.snapshot).toBeNull();
+			expect(Object.keys(projected.snapshots)).toEqual(
+				sourceUnavailable ? [] : ["agent-b"],
+			);
+			if (!sourceUnavailable)
+				expect(projected.snapshots["agent-b"]).toContain(
+					'"consumerId":"platform-worker"',
+				);
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
+it.each([false, true])(
+	"preserves a resolver-backed legacy Agent while excluding automatic sources and late source changes (%s)",
+	async (changed) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		try {
+			await writeFile(
+				path,
+				`${original}
+import { connectionConsumerProfileFingerprintV1 } from '@agent-infra/contracts/connection-consumer-profile';
+globalThis.sourceSelection={automaticAgentIds:['agent-a'],legacyAgentIds:['agent-b']};
+export const resolveConnectionConsumerBindingsByAgent=async(signal)=>{
+ signal.throwIfAborted();
+ globalThis.legacyResolverCalls=(globalThis.legacyResolverCalls ?? 0)+1;
+ const profile={...connectionConsumerProfile,consumerId:'legacy-consumer-b'};
+ const legacy={profile,approval:{...connectionConsumerApproval,configFingerprint:connectionConsumerProfileFingerprintV1(profile)},installationSupply:{ref:'legacy-b-supply',revision:'r1'}};
+ ${changed ? "globalThis.sourceSelection={automaticAgentIds:['agent-a','agent-b'],legacyAgentIds:[]};" : ""}
+ return {'agent-a':legacy,'agent-b':legacy};
+};
+`,
+			);
+			const result = run({ RUN_REGISTERED_BINDINGS: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			const projected = JSON.parse(result.stdout);
+			expect(projected.snapshot).toBeNull();
+			expect(projected.resolverCalls).toBe(1);
+			expect(Object.keys(projected.snapshots)).toEqual(
+				changed ? [] : ["agent-b"],
+			);
+			if (!changed)
+				expect(projected.snapshots["agent-b"]).toContain(
+					'"consumerId":"legacy-consumer-b"',
+				);
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it("uses the selected deployment database for all Worker consumers and prepares once", () => {
 	const result = run();

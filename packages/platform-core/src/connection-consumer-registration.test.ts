@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	captureConnectionConsumerRegisteredBindingV1,
 	captureConnectionConsumerRegistrationPolicyV1,
+	isConnectionConsumerRegistrationCurrentV1,
 	parseConnectionConsumerRegistrationDeliveryV1,
 	parseConnectionConsumerRegistrationIntentV1,
 	planConnectionConsumerRegistrationForTransitionV1,
@@ -21,6 +23,79 @@ const request = {
 	platformOwnerId: "owner-a",
 	consumerName: "Agent A",
 };
+
+describe("registered Consumer association source", () => {
+	const intent = planConnectionConsumerRegistrationV1(request);
+	const receipt = {
+		schemaVersion: 1 as const,
+		operationId: intent.operationId,
+		sourceNamespace: intent.sourceNamespace,
+		sourceKey: intent.sourceKey,
+		consumerId: "random-connection-consumer",
+		consumerRevision: "7",
+		registrationId: "random-registration",
+		requestDigest: intent.requestDigest,
+	};
+	it("captures the original verified receipt and association revision without inventing an identity", () => {
+		const binding = captureConnectionConsumerRegisteredBindingV1({
+			intent,
+			receipt,
+			associationRevision: 3,
+		});
+		expect(binding.source).toEqual({ ref: intent.operationId, revision: "3" });
+		expect(binding.receipt.consumerId).not.toBe(intent.platformAgentId);
+		expect(Object.isFrozen(binding.intent)).toBe(true);
+		expect(Object.isFrozen(binding.receipt)).toBe(true);
+		expect(binding.receipt).not.toBe(receipt);
+	});
+	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN])(
+		"rejects an invalid association revision %s",
+		(associationRevision) => {
+			expect(() =>
+				captureConnectionConsumerRegisteredBindingV1({
+					intent,
+					receipt,
+					associationRevision,
+				}),
+			).toThrow("CONNECTION_CONSUMER_REGISTRATION_INVALID");
+		},
+	);
+	it("rejects another Agent's receipt even when the Consumer ID is plausible", () => {
+		expect(() =>
+			captureConnectionConsumerRegisteredBindingV1({
+				intent,
+				receipt: { ...receipt, sourceKey: "agent-b" },
+				associationRevision: 1,
+			}),
+		).toThrow("CONNECTION_CONSUMER_REGISTRATION_INVALID");
+	});
+	it.each([
+		{ ownerId: "other-owner" },
+		{ ownerCurrent: false },
+		{ agentStatus: "disabled" },
+		{ agentStatus: "pending_approval" },
+		{ policy: { ...policy, sourceNamespace: "foreign-source" } },
+		{ policy: { ...policy, revision: "new-policy" } },
+		{
+			policy: { ...policy, callbackUrl: "https://platform.example.test/other" },
+		},
+		{
+			policy: { ...policy, resource: "https://connection.example.test/other" },
+		},
+		{ policy: { ...policy, scope: "other" } },
+	])("rejects stale authority %j", (changed) => {
+		expect(
+			isConnectionConsumerRegistrationCurrentV1({
+				intent,
+				policy,
+				ownerId: intent.platformOwnerId,
+				ownerCurrent: true,
+				agentStatus: "available",
+				...changed,
+			}),
+		).toBe(false);
+	});
+});
 
 describe("durable Connection Consumer registration intent", () => {
 	it("uses the same formal creating rule for approved Web and direct API creation", () => {

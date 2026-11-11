@@ -7,6 +7,7 @@ import type {
 	StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
 import {
+	captureConnectionConsumerRegistrationPolicyV1,
 	parseSessionSandboxReserveConfigurationV1,
 	type SessionSandboxReserveConfigurationV1,
 	sessionSandboxReserveDigestV1,
@@ -24,6 +25,12 @@ import {
 	createRuntimeConnectionInstallationRevisionV1,
 } from "./connection-consumer-projection.js";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
+import {
+	bindCurrentConnectionInstallationAuthorizationV1,
+	type ConnectionConsumerBindingsResolverV1,
+	readConnectionConsumerSourceSelectionV1,
+	resolveRegisteredConnectionConsumerBindingsV1,
+} from "./connection-registration-bindings.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import {
@@ -95,27 +102,13 @@ type DeploymentConfiguration = {
 		}
 	>;
 	/**
-	 * Deployment adapter hook for the real per-Agent Connection registration
-	 * path. The adapter owns the authenticated API call and returns only the
-	 * approved non-secret binding; the Worker never receives a service secret
-	 * or PAT. A returned entry is atomic: profile, approval and installation
-	 * supply must use the same Agent key.
+	 * Deployment-owned nonsecret profile and protected installation-supply input.
+	 * The automatic source passes verified persistent associations as the second
+	 * argument for readonly resolution, without Consumer/client mutations. Consumer secrets
+	 * and user tokens stay in the protected Host boundary. Each returned entry
+	 * uses the same Agent key for its profile, approval and installation supply.
 	 */
-	readonly resolveConnectionConsumerBindingsByAgent?: (
-		signal: AbortSignal,
-	) => Promise<
-		Readonly<
-			Record<
-				string,
-				{
-					readonly profile: unknown;
-					readonly approval: unknown;
-					readonly oauthClientBinding?: unknown;
-					readonly installationSupply: unknown;
-				}
-			>
-		>
-	>;
+	readonly resolveConnectionConsumerBindingsByAgent?: ConnectionConsumerBindingsResolverV1;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
 	readonly connectionInstallationSupply?: unknown;
@@ -548,7 +541,14 @@ const workloadInput = {
 };
 
 // Both the Pod file and Runtime HTTP assertion consume this captured source.
+const automaticRegistrationPolicy =
+	workloadInput.connectionConsumerRegistration === undefined
+		? undefined
+		: captureConnectionConsumerRegistrationPolicyV1(
+				workloadInput.connectionConsumerRegistration.policy,
+			);
 const perAgentConsumerSelection =
+	automaticRegistrationPolicy !== undefined ||
 	connectionConsumerProfilesByAgent !== undefined ||
 	resolveConnectionConsumerBindingsByAgent !== undefined;
 const connectionConsumerSnapshot = perAgentConsumerSelection
@@ -599,16 +599,69 @@ let conversationPrepared:
 	| undefined;
 
 async function createPrepared(signal: AbortSignal) {
-	const resolvedBindings = resolveConnectionConsumerBindingsByAgent
-		? await resolveConnectionConsumerBindingsByAgent(signal)
+	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
+	try {
+		if (!databaseUrl) throw new Error();
+		const parsed = new URL(databaseUrl);
+		if (
+			!["postgres:", "postgresql:"].includes(parsed.protocol) ||
+			!parsed.hostname ||
+			parsed.pathname.length < 2
+		)
+			throw new Error();
+	} catch {
+		throw new Error("PLATFORM_DATABASE_URL must name a PostgreSQL database");
+	}
+	const legacySelectionRequired =
+		!automaticRegistrationPolicy &&
+		Boolean(
+			connectionConsumerSnapshot ||
+				connectionConsumerProfilesByAgent ||
+				resolveConnectionConsumerBindingsByAgent,
+		);
+	const readLegacySelection = () =>
+		readConnectionConsumerSourceSelectionV1(databaseUrl).catch(() => undefined);
+	let legacySelection = legacySelectionRequired
+		? await readLegacySelection()
 		: undefined;
+	signal.throwIfAborted();
+	const resolvedBindings:
+		| Awaited<ReturnType<ConnectionConsumerBindingsResolverV1>>
+		| undefined = automaticRegistrationPolicy
+		? await resolveRegisteredConnectionConsumerBindingsV1({
+				databaseUrl,
+				policy: automaticRegistrationPolicy,
+				resolve: resolveConnectionConsumerBindingsByAgent,
+				signal,
+			}).catch(() => {
+				signal.throwIfAborted();
+				return {};
+			})
+		: legacySelectionRequired &&
+				(!legacySelection ||
+					(!legacySelection.legacyAgentIds.length &&
+						legacySelection.automaticAgentIds.length > 0))
+			? {}
+			: await resolveConnectionConsumerBindingsByAgent?.(signal);
+	if (legacySelectionRequired && resolveConnectionConsumerBindingsByAgent)
+		legacySelection = await readLegacySelection();
+	signal.throwIfAborted();
+	const persistentAutomaticSource =
+		legacySelectionRequired &&
+		(!legacySelection || legacySelection.automaticAgentIds.length > 0);
+	const selectedSharedSnapshot = persistentAutomaticSource
+		? undefined
+		: connectionConsumerSnapshot;
+	const selectedSharedConsumer = persistentAutomaticSource
+		? undefined
+		: connectionConsumer;
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
 			connectionInstallationSuppliesByAgent !== undefined)
 	)
 		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-	const resolvedProfilesByAgent = resolvedBindings
+	let resolvedProfilesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
 					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
@@ -617,7 +670,7 @@ async function createPrepared(signal: AbortSignal) {
 				}),
 			)
 		: connectionConsumerProfilesByAgent;
-	const resolvedInstallationSuppliesByAgent = resolvedBindings
+	let resolvedInstallationSuppliesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => [
 					agentId,
@@ -633,6 +686,25 @@ async function createPrepared(signal: AbortSignal) {
 	for (const agentId of Object.keys(resolvedProfilesByAgent ?? {}))
 		if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
 			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	if (persistentAutomaticSource) {
+		const profiles = resolvedProfilesByAgent;
+		const supplies = resolvedInstallationSuppliesByAgent;
+		resolvedProfilesByAgent = Object.fromEntries(
+			(legacySelection?.legacyAgentIds ?? []).flatMap((agentId) => {
+				const binding =
+					profiles === undefined ? connectionConsumer : profiles[agentId];
+				return binding ? [[agentId, binding]] : [];
+			}),
+		);
+		resolvedInstallationSuppliesByAgent = Object.fromEntries(
+			Object.keys(resolvedProfilesByAgent).map((agentId) => [
+				agentId,
+				supplies === undefined
+					? connectionInstallationSupply
+					: supplies[agentId],
+			]),
+		);
+	}
 	const resolvedSnapshotsByAgent = resolvedProfilesByAgent
 		? Object.fromEntries(
 				Object.entries(resolvedProfilesByAgent).map(([agentId, value]) => [
@@ -686,19 +758,6 @@ async function createPrepared(signal: AbortSignal) {
 		connectionInstallation.configuration !== undefined &&
 		connectionInstallation.configuration.patBinding === undefined &&
 		typeof connectionInstallationRevision === "string";
-	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
-	try {
-		if (!databaseUrl) throw new Error();
-		const parsed = new URL(databaseUrl);
-		if (
-			!["postgres:", "postgresql:"].includes(parsed.protocol) ||
-			!parsed.hostname ||
-			parsed.pathname.length < 2
-		)
-			throw new Error();
-	} catch {
-		throw new Error("PLATFORM_DATABASE_URL must name a PostgreSQL database");
-	}
 	const namespace = process.env.PLATFORM_WORKER_NAMESPACE;
 	if (
 		!namespace ||
@@ -745,7 +804,7 @@ async function createPrepared(signal: AbortSignal) {
 			...(skillMaterializer ? { skillMaterializer } : {}),
 			policy: {
 				...workloadInput.policy,
-				connectionConsumerSnapshot,
+				connectionConsumerSnapshot: selectedSharedSnapshot,
 				...(resolvedSnapshotsByAgent
 					? { connectionConsumerSnapshotsByAgent: resolvedSnapshotsByAgent }
 					: {}),
@@ -807,8 +866,8 @@ async function createPrepared(signal: AbortSignal) {
 			workload: { ...workload, workerId: signing.workerId },
 			signing,
 			serviceToken,
-			connectionConsumerProfile: connectionConsumer?.profile,
-			connectionConsumerApproval: connectionConsumer?.approval,
+			connectionConsumerProfile: selectedSharedConsumer?.profile,
+			connectionConsumerApproval: selectedSharedConsumer?.approval,
 			...(resolvedProfilesByAgent
 				? { connectionConsumerProfilesByAgent: resolvedProfilesByAgent }
 				: {}),
@@ -824,7 +883,10 @@ async function createPrepared(signal: AbortSignal) {
 		connectionInstallation &&
 		(!perAgentInstallation || resolvedProfilesByAgent !== undefined)
 	) {
-		let authorize = connectionInstallation.authorize;
+		const additionalAuthorize = connectionInstallation.authorize;
+		let authorize = automaticRegistrationPolicy
+			? undefined
+			: additionalAuthorize;
 		if (connectionConsumer || perAgentInstallation) {
 			const { PostgresConnectionInstallationAuthorizationTransactionV1 } =
 				await import("@agent-infra/platform-store");
@@ -841,6 +903,7 @@ async function createPrepared(signal: AbortSignal) {
 					new PostgresConnectionInstallationAuthorizationTransactionV1({
 						databaseUrl: workload.databaseUrl,
 						directory,
+						connectionConsumerRegistration: automaticRegistrationPolicy,
 						...(connectionInstallation.configurationsByAgentAndPrincipal !==
 						undefined
 							? {
@@ -879,16 +942,18 @@ async function createPrepared(signal: AbortSignal) {
 				installationStore = undefined;
 				if (perAgentInstallation) authorize = undefined;
 			}
-			if (!authorize && installationStore) {
+			if (installationStore) {
 				const { createConnectionInstallationAuthorizationV1 } = await import(
 					"@agent-infra/platform-core"
 				);
 				const authorizeCurrent = createConnectionInstallationAuthorizationV1({
 					store: installationStore,
 				}).authorize;
-				const bindPrincipal = connectionInstallation.bindPrincipal;
-				authorize = async (...args) =>
-					bindPrincipal(await authorizeCurrent(...args));
+				authorize = bindCurrentConnectionInstallationAuthorizationV1({
+					current: authorizeCurrent,
+					additional: additionalAuthorize,
+					bindPrincipal: connectionInstallation.bindPrincipal,
+				});
 			}
 		}
 		authorizedInstallation = {

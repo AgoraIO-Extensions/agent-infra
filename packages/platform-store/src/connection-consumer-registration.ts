@@ -1,14 +1,18 @@
 import {
+	type ConnectionConsumerRegisteredBindingV1,
 	type ConnectionConsumerRegistrationDeliveryV1,
 	type ConnectionConsumerRegistrationIntentV1,
 	type ConnectionConsumerRegistrationPolicyV1,
+	captureConnectionConsumerRegisteredBindingV1,
 	captureConnectionConsumerRegistrationPolicyV1,
 	connectionConsumerRegistrationOperationV1,
+	isConnectionConsumerRegistrationCurrentV1,
 	parseConnectionConsumerRegistrationDeliveryV1,
 	parseConnectionConsumerRegistrationIntentV1,
 	planConnectionConsumerRegistrationForTransitionV1,
 } from "@agent-infra/platform-core";
-import { eq } from "drizzle-orm";
+import { eq, type SQL, sql } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import type { ClaimedOutboxItem } from "./outbox.js";
@@ -95,6 +99,94 @@ type RegistrationRow = {
 	owner_current: boolean;
 };
 
+const registrationReadDialect = new PgDialect();
+
+/** Persisted source selection survives removal of the deployment registration policy. */
+export async function readConnectionConsumerSourceSelectionV1(
+	databaseUrl: string,
+) {
+	const client = postgres(databaseUrl, { max: 1, connect_timeout: 5 });
+	try {
+		return await client.begin(async (transaction) => {
+			await transaction`set local statement_timeout = '15s'`;
+			const rows = await transaction<
+				{ agent_id: string; automatic: boolean }[]
+			>`
+				select a.id as agent_id, exists(
+					select 1 from platform.connection_consumer_registrations r where r.agent_id = a.id
+				) as automatic from platform.agents a order by a.id
+			`;
+			return {
+				automaticAgentIds: rows
+					.filter((row) => row.automatic)
+					.map((row) => row.agent_id),
+				legacyAgentIds: rows
+					.filter((row) => !row.automatic)
+					.map((row) => row.agent_id),
+			};
+		});
+	} finally {
+		await client.end();
+	}
+}
+
+/** Same Platform transaction as the installation authority; never reads Connection's database. */
+export async function readRegisteredConnectionConsumerBindingsV1(
+	transaction: {
+		execute(query: SQL): PromiseLike<readonly Record<string, unknown>[]>;
+	},
+	policy: ConnectionConsumerRegistrationPolicyV1,
+	agentId?: string,
+): Promise<Readonly<Record<string, ConnectionConsumerRegisteredBindingV1>>> {
+	await transaction.execute(
+		sql`lock table platform.platform_user_disables in share mode`,
+	);
+	const rows = await transaction.execute(sql`
+		select r.agent_id, r.request, r.receipt, r.consumer_id, r.consumer_revision,
+			r.association_revision, a.applicant_id as current_owner_id,
+			a.status as current_status
+		from platform.connection_consumer_registrations r
+		join platform.agent_applications a on a.agent_id = r.agent_id
+		join platform.agent_owners own on own.agent_id = r.agent_id
+			and own.owner_id = r.request->>'platformOwnerId'
+		where r.source_namespace = ${policy.sourceNamespace} and r.status = 'registered'
+			and ${agentId === undefined ? sql`true` : sql`r.agent_id = ${agentId}`}
+			and not exists(select 1 from platform.platform_user_disables disabled
+				where disabled.user_id = own.owner_id)
+		order by r.agent_id for share of r, a, own
+	`);
+	const result: Record<string, ConnectionConsumerRegisteredBindingV1> = {};
+	for (const row of rows) {
+		const binding = captureConnectionConsumerRegisteredBindingV1({
+			intent: row.request,
+			receipt: row.receipt,
+			associationRevision: Number(row.association_revision),
+		});
+		if (
+			row.agent_id !== binding.intent.platformAgentId ||
+			row.consumer_id !== binding.receipt.consumerId ||
+			row.consumer_revision !== binding.receipt.consumerRevision ||
+			!isConnectionConsumerRegistrationCurrentV1({
+				intent: binding.intent,
+				policy,
+				ownerId:
+					typeof row.current_owner_id === "string"
+						? row.current_owner_id
+						: null,
+				ownerCurrent: true,
+				agentStatus:
+					typeof row.current_status === "string" ? row.current_status : null,
+			})
+		)
+			continue;
+		Object.defineProperty(result, binding.intent.platformAgentId, {
+			value: binding,
+			enumerable: true,
+		});
+	}
+	return Object.freeze(result);
+}
+
 /** Reuses the outbox lease and fence; the table has no independent claim or scheduler. */
 export class PostgresConnectionConsumerRegistrationStoreV1 {
 	readonly #client;
@@ -105,6 +197,28 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 	}) {
 		this.#policy = captureConnectionConsumerRegistrationPolicyV1(input.policy);
 		this.#client = postgres(input.databaseUrl, { max: 2 });
+	}
+
+	async registered(): Promise<
+		Readonly<Record<string, ConnectionConsumerRegisteredBindingV1>>
+	> {
+		return this.#client.begin(async (transaction) => {
+			// Compile the same query without letting Drizzle change this writer's JSON serializers.
+			const query = {
+				execute: (statement: SQL) => {
+					const compiled = registrationReadDialect.sqlToQuery(statement);
+					const parameters = compiled.params.map((value) => {
+						if (typeof value !== "string")
+							throw new Error("CONNECTION_CONSUMER_REGISTRATION_INVALID");
+						return value;
+					});
+					return transaction.unsafe(compiled.sql, parameters);
+				},
+			};
+			await query.execute(sql`set local lock_timeout = '5s'`);
+			await query.execute(sql`set local statement_timeout = '15s'`);
+			return readRegisteredConnectionConsumerBindingsV1(query, this.#policy);
+		});
 	}
 
 	async pending(limit = 20): Promise<readonly string[]> {
@@ -166,18 +280,13 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 		row: RegistrationRow,
 		intent: ConnectionConsumerRegistrationIntentV1,
 	) {
-		return (
-			intent.sourceNamespace === this.#policy.sourceNamespace &&
-			intent.policyRevision === this.#policy.revision &&
-			intent.callbackUrl === this.#policy.callbackUrl &&
-			intent.resource === this.#policy.resource &&
-			intent.scope === this.#policy.scope &&
-			row.current_owner_id === intent.platformOwnerId &&
-			row.owner_current &&
-			["creating", "available", "stopped", "creation_failed"].includes(
-				row.current_status ?? "",
-			)
-		);
+		return isConnectionConsumerRegistrationCurrentV1({
+			intent,
+			policy: this.#policy,
+			ownerId: row.current_owner_id,
+			ownerCurrent: row.owner_current,
+			agentStatus: row.current_status,
+		});
 	}
 
 	async beginAttempt(claim: ClaimedOutboxItem, adapterAvailable: boolean) {

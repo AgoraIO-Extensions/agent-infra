@@ -13,12 +13,14 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
+	type ConnectionConsumerRegistrationPolicyV1,
 	type ConnectionInstallationCommandDrainStoreV1,
 	ConnectionInstallationErrorV1,
 	type ConnectionInstallationPendingCommandV1,
 	type ConnectionInstallationSavedV1,
 	type ConnectionInstallationStoreV1,
 	type ConnectionInstallationTransactionV1,
+	captureConnectionConsumerRegistrationPolicyV1,
 	isAgentAccessAllowedV1,
 	isTaskAuthorizationCurrentV1,
 	parseCurrentTaskUserV1,
@@ -28,11 +30,13 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { readAgentManagementState } from "./agent-management.js";
+import { readRegisteredConnectionConsumerBindingsV1 } from "./connection-consumer-registration.js";
 import postgres from "./observed-postgres.js";
 import {
 	connectionInstallationAuthorizations as authorizations,
 	connectionInstallationCommands as commands,
 } from "./schema-connection-installation.js";
+import { connectionConsumerRegistrations } from "./schema-connection-registration.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -133,6 +137,9 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #database: ReturnType<typeof drizzle>;
 	readonly #directory: TaskUserDirectoryV1;
+	readonly #registrationPolicy:
+		| ConnectionConsumerRegistrationPolicyV1
+		| undefined;
 	readonly #callbackConfiguration: RuntimeOAuthConfigurationV1 | undefined;
 	readonly #sharedBinding: InstallationBinding | undefined;
 	readonly #bindingsByAgentAndPrincipal:
@@ -147,6 +154,8 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		configuration?: RuntimeOAuthConfigurationV1;
 		profile?: unknown;
 		approval?: unknown;
+		/** Selected automatic source; every installation must match its persistent association. */
+		connectionConsumerRegistration?: ConnectionConsumerRegistrationPolicyV1;
 		bindingsByAgent?: Readonly<
 			Record<string, ConnectionInstallationBindingInputV1>
 		>;
@@ -158,6 +167,17 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		>;
 	}) {
 		this.#directory = options.directory;
+		this.#registrationPolicy =
+			options.connectionConsumerRegistration === undefined
+				? undefined
+				: captureConnectionConsumerRegistrationPolicyV1(
+						options.connectionConsumerRegistration,
+					);
+		if (
+			this.#registrationPolicy &&
+			options.bindingsByAgentAndPrincipal === undefined
+		)
+			throw new ConnectionInstallationErrorV1("unavailable");
 		if (options.bindingsByAgentAndPrincipal !== undefined) {
 			if (
 				options.configuration !== undefined ||
@@ -515,6 +535,42 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					user.userId,
 				);
 				if (!selected) return null;
+				if (!this.#registrationPolicy) {
+					const [association] = await tx
+						.select({
+							operationId: connectionConsumerRegistrations.operationId,
+						})
+						.from(connectionConsumerRegistrations)
+						.where(
+							eq(
+								connectionConsumerRegistrations.agentId,
+								row.agent_id as string,
+							),
+						)
+						.limit(1)
+						.for("share");
+					if (association) return null;
+				}
+				if (this.#registrationPolicy) {
+					const bindings = await readRegisteredConnectionConsumerBindingsV1(
+						tx,
+						this.#registrationPolicy,
+						row.agent_id as string,
+					);
+					const registered = bindings[row.agent_id as string];
+					if (
+						!registered ||
+						selected.target.profile.consumerId !==
+							registered.receipt.consumerId ||
+						!isDeepStrictEqual(selected.target.source, registered.source) ||
+						selected.configuration.callbackUrl !==
+							registered.intent.callbackUrl ||
+						selected.configuration.resource !== registered.intent.resource ||
+						selected.configuration.scope !== registered.intent.scope ||
+						selected.configuration.patBinding !== undefined
+					)
+						return null;
+				}
 				const reference = {
 					agentId: row.agent_id as string,
 					conversationId: row.conversation_id as string,

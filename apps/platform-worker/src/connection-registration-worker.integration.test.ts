@@ -1,3 +1,4 @@
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	type ConnectionConsumerRegistrationIntentV1,
 	planConnectionConsumerRegistrationV1,
@@ -9,6 +10,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { resolveRegisteredConnectionConsumerBindingsV1 } from "./connection-registration-bindings.js";
 import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 
 const policy = {
@@ -141,6 +143,100 @@ it("keeps the original delivery unknown if the Platform Owner is disabled during
 		expect(
 			await sql`select status from platform.outbox_items where operation = 'agent.connection.consumer.register.v1'`,
 		).toEqual([{ status: "retry_scheduled" }]);
+	} finally {
+		await worker.close();
+	}
+});
+
+it.each([false, true])(
+	"consumes the original worker's persisted Consumer binding and rejects a late Owner change (%s)",
+	async (changed) => {
+		const worker = createConnectionConsumerRegistrationWorkerV1({
+			databaseUrl: database.databaseUrl,
+			policy,
+			adapter: {
+				register: async (intent) => receipt(intent),
+				reconcile: async (intent) => receipt(intent),
+			},
+		});
+		try {
+			await worker.runOnce();
+			const resolve = vi.fn(async (signal: AbortSignal, registrations) => {
+				signal.throwIfAborted();
+				const binding = registrations?.["agent-a"];
+				if (!binding) throw Error("Expected original persisted binding");
+				expect(binding.receipt.consumerId).toBe("actual-consumer-a");
+				expect(binding.source).toEqual({
+					ref: binding.intent.operationId,
+					revision: "1",
+				});
+				const profile = {
+					schemaVersion: 1 as const,
+					publicOrigin: "https://connection.example.test",
+					mcpPath: "/mcp",
+					consumerId: binding.receipt.consumerId,
+					audience: "mcp",
+					egressProfile: { ref: "controlled-egress", revision: "r1" },
+				};
+				if (changed)
+					await sql`insert into platform.platform_user_disables(user_id) values ('owner-a')`;
+				return {
+					"agent-a": {
+						profile,
+						approval: {
+							schemaVersion: 1,
+							configFingerprint:
+								connectionConsumerProfileFingerprintV1(profile),
+							egressEnforced: true,
+							source: binding.source,
+						},
+						installationSupply: {
+							ref: "controlled-host-supply",
+							revision: "r1",
+						},
+					},
+				};
+			});
+			const bindings = await resolveRegisteredConnectionConsumerBindingsV1({
+				databaseUrl: database.databaseUrl,
+				policy,
+				resolve,
+				signal: new AbortController().signal,
+			});
+			expect(resolve).toHaveBeenCalledOnce();
+			expect(Object.keys(bindings)).toEqual(changed ? [] : ["agent-a"]);
+			if (!changed)
+				expect(bindings["agent-a"]?.profile).toMatchObject({
+					consumerId: "actual-consumer-a",
+				});
+		} finally {
+			await worker.close();
+		}
+	},
+);
+
+it("never prepares an installation from an original unknown worker delivery", async () => {
+	const unknown = async () => ({
+		outcome: "unknown" as const,
+		failureCode: "CONTROLLED_UNKNOWN",
+	});
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter: { register: unknown, reconcile: unknown },
+	});
+	try {
+		await worker.runOnce();
+		const resolve = vi.fn(async () => ({}));
+		expect(
+			await resolveRegisteredConnectionConsumerBindingsV1({
+				databaseUrl: database.databaseUrl,
+				policy,
+				resolve,
+				signal: new AbortController().signal,
+			}),
+		).toEqual({});
+		expect(resolve).not.toHaveBeenCalled();
 	} finally {
 		await worker.close();
 	}
