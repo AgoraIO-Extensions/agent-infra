@@ -82,6 +82,13 @@ function configurationSecret(deployment: ObjectRecord, component: "api" | "worke
 	return volume.secret.secretName as string;
 }
 
+function consumerRolledOut(deployment: ObjectRecord, revision: string, replicas: number) {
+	return !deployment.metadata?.deletionTimestamp && Number.isSafeInteger(deployment.metadata?.generation) &&
+		(deployment.spec?.replicas ?? 1) === replicas && deployment.spec?.template?.metadata?.annotations?.[revisionAnnotation] === revision &&
+		deployment.status?.observedGeneration === deployment.metadata.generation && deployment.status.replicas === replicas &&
+		deployment.status.updatedReplicas === replicas && deployment.status.availableReplicas === replicas && deployment.status.readyReplicas === replicas;
+}
+
 async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
@@ -322,6 +329,31 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			fullyAdopted = false;
 		}
 	}
+	const matchingAdoptionRecords = fullyAdopted;
+	if (matchingAdoptionRecords) {
+		for (const input of adoptionInputs) {
+			const bytes = existingAdoptionBytes.get(input.templateId)!;
+			const key = `template-validation-${input.templateId}.json`;
+			for (const secret of plan.secrets) {
+				await plan.stageFile(secret.files[key], bytes);
+				secret.desired.data[key] = bytes.toString("base64");
+			}
+		}
+		// Matching Secret records alone cannot complete an interrupted publication after expiry.
+		const api = plan.consumers.find((consumer) => consumer.component === "api")!;
+		const loginTarget = plan.secrets.find((secret) => secret.desired.metadata.name === api.secretName)!.files["deployment-identities.json"];
+		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after)) &&
+			readSecrets.every((secret) => isDeepStrictEqual(secret.current.data, secret.before.data)) &&
+			plan.consumers.every((consumer) => {
+				const current = read("deployment", consumer.name);
+				// Check the completed published generation before any independent login refresh.
+				const data = readSecrets.find((secret) => secret.desired.metadata.name === consumer.secretName)!.current.data;
+				const revision = hash(JSON.stringify(Object.entries(data).sort(([a], [b]) => a.localeCompare(b))));
+				return current.kind === "Deployment" && current.metadata?.name === consumer.name && current.metadata.namespace === namespace &&
+					current.metadata.uid && current.metadata.resourceVersion && configurationSecret(current, consumer.component) === consumer.secretName &&
+					consumerRolledOut(current, revision, consumer.replicas);
+			});
+	}
 	const stillFresh = async () => {
 		await assertCandidateFiles();
 		const now = Date.now();
@@ -348,7 +380,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		const adoptedAt = Date.now();
 		for (const input of adoptionInputs) {
 			let bytes: Buffer;
-			if (fullyAdopted) bytes = existingAdoptionBytes.get(input.templateId)!;
+			if (matchingAdoptionRecords) bytes = existingAdoptionBytes.get(input.templateId)!;
 			else if (frozen) {
 				const records = frozen.records.filter((r: any) => r.templateId === input.templateId);
 				assert(records.length === 1 && typeof records[0].bytes === "string", "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
@@ -366,7 +398,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		}
 	}
 	for (const input of adoptionInputs) {
-		const bytes = apply ? adoptionBytes.get(input.templateId)! : fullyAdopted ? existingAdoptionBytes.get(input.templateId)! : input.candidateBytes;
+		const bytes = apply ? adoptionBytes.get(input.templateId)! : matchingAdoptionRecords ? existingAdoptionBytes.get(input.templateId)! : input.candidateBytes;
 		const key = `template-validation-${input.templateId}.json`;
 		for (const secret of plan.secrets) {
 			await plan.stageFile(secret.files[key], bytes);
@@ -459,9 +491,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			}
 			kubectl(["-n", namespace, "rollout", "status", `deployment/${consumer.name}`, `--timeout=${timeout}`]);
 			const observed = read("deployment", consumer.name);
-			assert(observed.metadata.uid === current.metadata.uid && observed.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision &&
-				(observed.spec?.replicas ?? 1) === consumer.replicas && observed.status?.observedGeneration === observed.metadata.generation &&
-				observed.status.updatedReplicas === consumer.replicas && observed.status.availableReplicas === consumer.replicas && observed.status.readyReplicas === consumer.replicas,
+			assert(observed.metadata.uid === current.metadata.uid && consumerRolledOut(observed, consumer.revision, consumer.replicas),
 				"RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
 			consumer.observed = observed;
 			assertPublishedSecrets();
@@ -475,7 +505,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		for (const consumer of consumers) {
 			const current = read("deployment", consumer.name);
 			assert(current.metadata.uid === consumer.current.metadata.uid && (current.spec?.replicas ?? 1) === consumer.replicas && current.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision, "RUNTIME_INPUT_REPLICA_DRIFT");
-			assert(current.status?.observedGeneration === current.metadata.generation && current.status.updatedReplicas === consumer.replicas && current.status.availableReplicas === consumer.replicas && current.status.readyReplicas === consumer.replicas, "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
+			assert(consumerRolledOut(current, consumer.revision, consumer.replicas), "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
 			consumer.observed = current;
 		}
 	}

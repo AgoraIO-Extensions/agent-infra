@@ -1065,6 +1065,64 @@ test("directory adoption is not published before the Worker receives its matchin
 	);
 });
 
+for (const failurePoint of [
+	"after-both-secret-writes",
+	"first-consumer-patch",
+	"worker-rollout",
+]) {
+	test(`an incomplete publication cannot finish after expiry (${failurePoint})`, async (t) => {
+		let now = Date.now();
+		t.mock.method(Date, "now", () => now);
+		const f = await fixture(t);
+		if (failurePoint === "after-both-secret-writes")
+			f.afterReplace((object) => {
+				if (object.metadata.name === "api-config")
+					throw Error("synthetic response lost after both Secret writes");
+			});
+		else
+			f.beforeCall((args) => {
+				if (failurePoint === "first-consumer-patch" && args.includes("patch"))
+					throw Error("synthetic failure at the first consumer patch");
+				if (
+					failurePoint === "worker-rollout" &&
+					args.includes("rollout") &&
+					args.includes("deployment/agent-infra-worker")
+				) {
+					const worker = f.cluster.get("deployment/agent-infra-worker");
+					worker.status.readyReplicas = 0;
+					worker.status.availableReplicas = 0;
+					throw Error("synthetic incomplete Worker rollout");
+				}
+			});
+		await assert.rejects(
+			publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		);
+		assert.deepEqual(f.mutations.slice(0, 2), [
+			"replace:worker-config",
+			"replace:api-config",
+		]);
+		const before = [...f.mutations];
+		const records = ["api-config", "worker-config"].map((name) =>
+			structuredClone(f.cluster.get(`secret/${name}`).data),
+		);
+		now += 3_600_001;
+		f.beforeCall(() => {});
+		f.afterReplace(() => {});
+		await bootstrapLogin(f.files.login, source, f.loginConfig.origin);
+		await assert.rejects(
+			publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+			/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/,
+		);
+		assert.deepEqual(f.mutations, before);
+		assert.deepEqual(
+			["api-config", "worker-config"].map(
+				(name) => f.cluster.get(`secret/${name}`).data,
+			),
+			records,
+		);
+	});
+}
+
 test("a still-fresh original attempt resumes with its frozen bytes rather than minting another adoption", async (t) => {
 	const f = await fixture(t);
 	f.afterReplace(() => {
