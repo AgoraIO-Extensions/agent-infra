@@ -19,6 +19,7 @@ const namePattern = /^(?:ack-preflight-|sandbox-preflight-)[a-z0-9-]+$/u;
 const controlResources = (job) => job.resources ?? { requests: { cpu: "100m", memory: "128Mi" }, limits: job.expectedResourceLimits };
 const usesExecutor = (job) => job.templateId === "codex" && job.codexSessionExecutor !== undefined;
 const inheritsPlacement = (job) => job.codexSessionExecutor !== undefined && job.codexSessionExecutor.placement === undefined && job.placement === undefined;
+const isDefaultNodeToleration = (entry) => ["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && (entry.tolerationSeconds === undefined || entry.tolerationSeconds === 300) && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key));
 const startupEventReasons = new Set([
 	"Pulling", "Pulled", "SuccessfulHitImageCache", "ImageCacheNotFullMatch",
 	"ImageCacheAutoCreated", "ImageCacheAutoEliminated",
@@ -204,6 +205,9 @@ export function assertTemplatePreflightPlacement(job, pod, node) {
 		assert(pod.spec.nodeName?.startsWith(job.expectedNodePrefix ?? "virtual-kubelet-"), "EXECUTOR_LAYOUT_NODE_DRIFT");
 		return {};
 	}
+	assert.deepEqual(pod.spec.nodeSelector ?? {}, {}, "EXECUTOR_LAYOUT_DRIFT");
+	assert.equal(pod.spec.runtimeClassName, undefined, "EXECUTOR_LAYOUT_DRIFT");
+	assert.deepEqual((pod.spec.tolerations ?? []).filter((entry) => !isDefaultNodeToleration(entry)), [], "EXECUTOR_LAYOUT_DRIFT");
 	assert.equal(pod.spec.nodeName, job.expectedNodePrefix, "EXECUTOR_LAYOUT_NODE_DRIFT");
 	assert.equal(node?.metadata?.name, pod.spec.nodeName, "EXECUTOR_LAYOUT_NODE_DRIFT");
 	assert(typeof node?.metadata?.uid === "string" && node.metadata.uid && !node.metadata.deletionTimestamp, "EXECUTOR_LAYOUT_NODE_DRIFT");
@@ -393,11 +397,7 @@ export function observeTemplatePreflightLayout(job, expected, observed, pvc, ser
 		assert(resourceQuantityEqualsV1(volume.emptyDir?.sizeLimit, size), "EXECUTOR_LAYOUT_DRIFT");
 		volume.emptyDir.sizeLimit = size;
 	}
-	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"].includes(entry.key) && entry.operator === "Exists" && entry.effect === "NoExecute" && (entry.tolerationSeconds === undefined || entry.tolerationSeconds === 300) && Object.keys(entry).every((key) => ["key", "operator", "effect", "tolerationSeconds"].includes(key))));
-	if (inheritsPlacement(job)) {
-		assert.deepEqual(comparison.nodeSelector ?? {}, {}, "EXECUTOR_LAYOUT_DRIFT");
-		assert.deepEqual(comparison.tolerations, [], "EXECUTOR_LAYOUT_DRIFT");
-	}
+	comparison.tolerations = (comparison.tolerations ?? []).filter((entry) => !isDefaultNodeToleration(entry));
 	for (const key of ["hostPID", "hostIPC", "hostNetwork", "shareProcessNamespace"]) comparison[key] ??= false;
 	assertProjection(comparison, expected.pod.spec);
 	const placement = assertTemplatePreflightPlacement(job, observed, node);

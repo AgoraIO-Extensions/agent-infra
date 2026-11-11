@@ -651,6 +651,65 @@ const inheritedExecutorJob = {
 	},
 };
 
+for (const [templateId, driver] of [
+	["codex", "codex"],
+	["claude", "claude"],
+	["opencode", "acp"],
+	["pi", "pi"],
+])
+	test(`${templateId} runner placement gate rejects inherited scheduling injections before model execution`, () => {
+		const job = {
+			...inheritedExecutorJob,
+			templateId,
+			driver,
+			protocol:
+				templateId === "codex"
+					? "openai-responses-v1"
+					: "anthropic-messages-v1",
+		};
+		const fixture = executorFixture(job);
+		const check = (pod) =>
+			preflight.assertTemplatePreflightPlacement(job, pod, fixture.node);
+		fixture.observed.spec.tolerations = [
+			"node.kubernetes.io/not-ready",
+			"node.kubernetes.io/unreachable",
+		].map((key) => ({
+			key,
+			operator: "Exists",
+			effect: "NoExecute",
+			tolerationSeconds: 300,
+		}));
+		assert.equal(check(fixture.observed).nodeArchitecture, "amd64");
+		for (const change of [
+			{ nodeSelector: { type: "virtual-kubelet" } },
+			{ runtimeClassName: "foreign" },
+			{ tolerations: executorJob.placement.tolerations },
+			{
+				tolerations: [
+					{
+						key: "node.kubernetes.io/not-ready",
+						operator: "Exists",
+						effect: "NoSchedule",
+					},
+				],
+			},
+			{
+				tolerations: [
+					{
+						key: "node.kubernetes.io/not-ready",
+						operator: "Exists",
+						effect: "NoExecute",
+						tolerationSeconds: 600,
+					},
+				],
+			},
+		]) {
+			const pod = structuredClone(fixture.observed);
+			Object.assign(pod.spec, change);
+			assert.throws(() => check(pod), /EXECUTOR_LAYOUT_DRIFT/u);
+		}
+	});
+
 test("inherited executor placement adds no scheduling fields and observes full control resources on the approved node", () => {
 	const fixture = executorFixture(inheritedExecutorJob);
 	for (const key of ["nodeSelector", "tolerations", "runtimeClassName"])
