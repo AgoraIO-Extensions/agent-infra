@@ -96,12 +96,74 @@ describe("durable Connection Consumer registration intent", () => {
 	it.each([
 		undefined,
 		{ ...policy, sourceNamespace: "" },
+		{ ...policy, sourceNamespace: "controlled:platform" },
+		{ ...policy, revision: "policy 1" },
+		{ ...policy, scope: "mcp/tools" },
+		{ ...policy, scope: "a".repeat(101) },
+		{
+			...policy,
+			scope: Array.from({ length: 33 }, (_, i) => `s${i}`).join(" "),
+		},
+		{ ...policy, scope: "mcp mcp" },
 		{ ...policy, callbackUrl: "http://platform.example.test/callback" },
 		{ ...policy, token: "not-allowed" },
 	])("rejects missing or invalid deployment policy", (input) => {
 		expect(() =>
 			captureConnectionConsumerRegistrationPolicyV1(input),
 		).toThrow();
+	});
+
+	it("accepts the full bounded scope list without changing original policy bytes", () => {
+		const scopes = Array.from({ length: 32 }, (_, index) =>
+			`scope${index}`.padEnd(100, "x"),
+		).join(" ");
+		const configured = { ...policy, revision: "policy~1", scope: scopes };
+		expect(captureConnectionConsumerRegistrationPolicyV1(configured)).toEqual(
+			configured,
+		);
+	});
+
+	it.each([
+		"https://platform.example.test/connection/%c3%a9",
+		"https://platform.example.test/connection/%GG",
+		"https://platform.example.test/connection/callback?",
+		"https://platform.example.test/connection/callback?mode=oauth",
+		"https://platform.example.test/connection/callback#",
+		"https://platform.example.test/connection/callback#oauth",
+	])(
+		"rejects Connection-incompatible URL %s before creating an intent",
+		(url) => {
+			for (const field of ["callbackUrl", "resource"] as const) {
+				const invalidPolicy = { ...policy, [field]: url };
+				expect(() =>
+					captureConnectionConsumerRegistrationPolicyV1(invalidPolicy),
+				).toThrow();
+				expect(() =>
+					planConnectionConsumerRegistrationV1({
+						...request,
+						policy: invalidPolicy,
+					}),
+				).toThrow();
+			}
+		},
+	);
+
+	it.each([
+		"https://platform.example.test/connection/%C3%A9",
+		"https://platform.example.test/connection/callback/",
+		"https://platform.example.test/",
+	])("preserves canonical URL bytes in the original intent: %s", (url) => {
+		const configured = { ...policy, callbackUrl: url, resource: url };
+		expect(captureConnectionConsumerRegistrationPolicyV1(configured)).toEqual(
+			configured,
+		);
+		const intent = planConnectionConsumerRegistrationV1({
+			...request,
+			policy: configured,
+		});
+		expect(intent.callbackUrl).toBe(url);
+		expect(intent.resource).toBe(url);
+		expect(parseConnectionConsumerRegistrationIntentV1(intent)).toEqual(intent);
 	});
 
 	it("rejects extra secret fields and tampered identity/digest before persistence", () => {
