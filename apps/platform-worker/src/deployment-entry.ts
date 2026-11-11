@@ -619,21 +619,12 @@ async function createPrepared(signal: AbortSignal) {
 				connectionConsumerProfilesByAgent ||
 				resolveConnectionConsumerBindingsByAgent,
 		);
-	const legacySelection = legacySelectionRequired
-		? await readConnectionConsumerSourceSelectionV1(databaseUrl).catch(
-				() => undefined,
-			)
+	const readLegacySelection = () =>
+		readConnectionConsumerSourceSelectionV1(databaseUrl).catch(() => undefined);
+	let legacySelection = legacySelectionRequired
+		? await readLegacySelection()
 		: undefined;
 	signal.throwIfAborted();
-	const persistentAutomaticSource =
-		legacySelectionRequired &&
-		(!legacySelection || legacySelection.automaticAgentIds.length > 0);
-	const selectedSharedSnapshot = persistentAutomaticSource
-		? undefined
-		: connectionConsumerSnapshot;
-	const selectedSharedConsumer = persistentAutomaticSource
-		? undefined
-		: connectionConsumer;
 	const resolvedBindings:
 		| Awaited<ReturnType<ConnectionConsumerBindingsResolverV1>>
 		| undefined = automaticRegistrationPolicy
@@ -646,9 +637,24 @@ async function createPrepared(signal: AbortSignal) {
 				signal.throwIfAborted();
 				return {};
 			})
-		: persistentAutomaticSource
-			? undefined
+		: legacySelectionRequired &&
+				(!legacySelection ||
+					(!legacySelection.legacyAgentIds.length &&
+						legacySelection.automaticAgentIds.length > 0))
+			? {}
 			: await resolveConnectionConsumerBindingsByAgent?.(signal);
+	if (legacySelectionRequired && resolveConnectionConsumerBindingsByAgent)
+		legacySelection = await readLegacySelection();
+	signal.throwIfAborted();
+	const persistentAutomaticSource =
+		legacySelectionRequired &&
+		(!legacySelection || legacySelection.automaticAgentIds.length > 0);
+	const selectedSharedSnapshot = persistentAutomaticSource
+		? undefined
+		: connectionConsumerSnapshot;
+	const selectedSharedConsumer = persistentAutomaticSource
+		? undefined
+		: connectionConsumer;
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
@@ -685,11 +691,8 @@ async function createPrepared(signal: AbortSignal) {
 		const supplies = resolvedInstallationSuppliesByAgent;
 		resolvedProfilesByAgent = Object.fromEntries(
 			(legacySelection?.legacyAgentIds ?? []).flatMap((agentId) => {
-				const binding = resolveConnectionConsumerBindingsByAgent
-					? undefined
-					: profiles === undefined
-						? connectionConsumer
-						: profiles[agentId];
+				const binding =
+					profiles === undefined ? connectionConsumer : profiles[agentId];
 				return binding ? [[agentId, binding]] : [];
 			}),
 		);

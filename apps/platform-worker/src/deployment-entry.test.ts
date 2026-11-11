@@ -400,7 +400,7 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 }
 export async function readConnectionConsumerSourceSelectionV1() {
  if(globalThis.sourceSelectionFailed) throw Error('controlled source unavailable');
- return globalThis.sourceSelection ?? {automaticAgentIds:[],legacyAgentIds:[]};
+ return structuredClone(globalThis.sourceSelection ?? {automaticAgentIds:[],legacyAgentIds:[]});
 }
 `,
 						}),
@@ -496,7 +496,7 @@ try {
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
  if (process.env.RUN_REGISTERED_BINDINGS === 'true') {
-   console.log(JSON.stringify({snapshot:globalThis.snapshot ?? null,snapshots:globalThis.snapshots ?? {},installations:globalThis.installations ?? {},reads:globalThis.registrationReads ?? 0,closes:globalThis.registrationCloses ?? 0,database:globalThis.registrationDatabase ?? null}));process.exit(0);
+   console.log(JSON.stringify({snapshot:globalThis.snapshot ?? null,snapshots:globalThis.snapshots ?? {},installations:globalThis.installations ?? {},reads:globalThis.registrationReads ?? 0,closes:globalThis.registrationCloses ?? 0,database:globalThis.registrationDatabase ?? null,resolverCalls:globalThis.legacyResolverCalls ?? 0}));process.exit(0);
  }
  if (process.env.RUN_REGISTRATION === 'true') {
    console.log(JSON.stringify({ policy:workload.connectionConsumerRegistration?.policy ?? null, hasAdapter:typeof workload.connectionConsumerRegistration?.adapter?.register==='function' }));process.exit(0);
@@ -772,6 +772,45 @@ globalThis.sourceSelectionFailed=${sourceUnavailable};
 			if (!sourceUnavailable)
 				expect(projected.snapshots["agent-b"]).toContain(
 					'"consumerId":"platform-worker"',
+				);
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
+it.each([false, true])(
+	"preserves a resolver-backed legacy Agent while excluding automatic sources and late source changes (%s)",
+	async (changed) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		try {
+			await writeFile(
+				path,
+				`${original}
+import { connectionConsumerProfileFingerprintV1 } from '@agent-infra/contracts/connection-consumer-profile';
+globalThis.sourceSelection={automaticAgentIds:['agent-a'],legacyAgentIds:['agent-b']};
+export const resolveConnectionConsumerBindingsByAgent=async(signal)=>{
+ signal.throwIfAborted();
+ globalThis.legacyResolverCalls=(globalThis.legacyResolverCalls ?? 0)+1;
+ const profile={...connectionConsumerProfile,consumerId:'legacy-consumer-b'};
+ const legacy={profile,approval:{...connectionConsumerApproval,configFingerprint:connectionConsumerProfileFingerprintV1(profile)},installationSupply:{ref:'legacy-b-supply',revision:'r1'}};
+ ${changed ? "globalThis.sourceSelection={automaticAgentIds:['agent-a','agent-b'],legacyAgentIds:[]};" : ""}
+ return {'agent-a':legacy,'agent-b':legacy};
+};
+`,
+			);
+			const result = run({ RUN_REGISTERED_BINDINGS: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			const projected = JSON.parse(result.stdout);
+			expect(projected.snapshot).toBeNull();
+			expect(projected.resolverCalls).toBe(1);
+			expect(Object.keys(projected.snapshots)).toEqual(
+				changed ? [] : ["agent-b"],
+			);
+			if (!changed)
+				expect(projected.snapshots["agent-b"]).toContain(
+					'"consumerId":"legacy-consumer-b"',
 				);
 		} finally {
 			await writeFile(path, original);
