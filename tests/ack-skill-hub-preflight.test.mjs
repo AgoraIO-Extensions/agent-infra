@@ -27,6 +27,17 @@ test("Skill Hub projection accepts complete deployment-owned wiring", () => {
 	});
 });
 
+test("Skill Hub projection requires a boolean enabled flag", () => {
+	assert.equal(
+		validateSkillHubDeploymentProjection({}).code,
+		"SKILL_HUB_PROJECTION_INVALID",
+	);
+	assert.equal(
+		validateSkillHubDeploymentProjection({ enabled: "false" }).code,
+		"SKILL_HUB_PROJECTION_INVALID",
+	);
+});
+
 test("Skill Hub projection catches the live unmounted scanner path", () => {
 	const live = structuredClone(good);
 	live.api.scanner.executable = "/usr/bin/clamscan";

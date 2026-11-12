@@ -9,6 +9,8 @@ export function validateSkillHubDeploymentProjection(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		return error("SKILL_HUB_PROJECTION_INVALID");
 	const { enabled, agentVersion, api, worker, objectStorage } = value;
+	if (typeof enabled !== "boolean")
+		return error("SKILL_HUB_PROJECTION_INVALID");
 	if (!enabled) return { status: "disabled", code: "SKILL_HUB_DISABLED" };
 	if (typeof agentVersion !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentVersion))
 		return error("SKILL_HUB_AGENT_VERSION_MISSING");
