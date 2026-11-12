@@ -97,14 +97,56 @@ test("rejects a stale source tuple", () => {
 
 test("rejects secret-shaped fields without revealing their values", () => {
 	const packet = completePacket();
-	packet.D3_protectedSupply.token = "synthetic-token-value";
+	packet.D3_protectedSupply.client_secret = "synthetic-secret-value";
 	const result = validateConnectionProductionInputsV1(packet, {
 		expectedPlatformSource: sourceTuple.platformSourceCommit,
 		expectedConnectionSource: sourceTuple.connectionSourceCommit,
 	});
 	assert.equal(result.status, "REJECT_SECRET_SHAPED_INPUT");
-	assert.deepEqual(result.secretShapedFields, ["D3_protectedSupply.token"]);
-	assert.equal(JSON.stringify(result).includes("synthetic-token-value"), false);
+	assert.deepEqual(result.secretShapedFields, [
+		"D3_protectedSupply.client_secret",
+	]);
+	assert.equal(
+		JSON.stringify(result).includes("synthetic-secret-value"),
+		false,
+	);
+});
+
+test("rejects common auth-key spellings without printing values", () => {
+	for (const key of [
+		"apiKey",
+		"api_key",
+		"authorization",
+		"bearerToken",
+		"secretRef",
+	]) {
+		const packet = completePacket();
+		packet.D1_machineAuthority[key] = "synthetic-secret-value";
+		const result = validateConnectionProductionInputsV1(packet, {
+			expectedPlatformSource: sourceTuple.platformSourceCommit,
+			expectedConnectionSource: sourceTuple.connectionSourceCommit,
+		});
+		assert.equal(result.status, "REJECT_SECRET_SHAPED_INPUT", key);
+		assert.deepEqual(result.secretShapedFields, [`D1_machineAuthority.${key}`]);
+		assert.equal(
+			JSON.stringify(result).includes("synthetic-secret-value"),
+			false,
+		);
+	}
+});
+
+test("does not echo an unsafe request id", () => {
+	const packet = completePacket();
+	packet.requestId = "Bearer synthetic-secret-value";
+	const result = validateConnectionProductionInputsV1(packet, {
+		expectedPlatformSource: sourceTuple.platformSourceCommit,
+		expectedConnectionSource: sourceTuple.connectionSourceCommit,
+	});
+	assert.equal(result.requestId, "CONNECTION-851-PRODUCTION-INPUTS");
+	assert.equal(
+		JSON.stringify(result).includes("synthetic-secret-value"),
+		false,
+	);
 });
 
 test("requires every approval identity and revision", () => {

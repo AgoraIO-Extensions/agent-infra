@@ -52,19 +52,32 @@ const topLevelFields = [
 	"rotationOrRevocationRef",
 ];
 const sourceTupleFields = ["platformSourceCommit", "connectionSourceCommit"];
-const secretKeys = new Set([
-	"token",
-	"accessToken",
-	"refreshToken",
-	"secret",
-	"secretValue",
-	"cookie",
-	"pat",
-	"password",
-	"privateKey",
-	"consumerSecret",
-	"clientSecret",
-]);
+function isSecretShapedKey(key) {
+	const normalized = key.replace(/[-_]/g, "").toLowerCase();
+	return [
+		"token",
+		"accesstoken",
+		"refreshtoken",
+		"secret",
+		"secretvalue",
+		"cookie",
+		"pat",
+		"password",
+		"privatekey",
+		"consumersecret",
+		"clientsecret",
+		"apikey",
+		"authorization",
+		"bearertoken",
+		"secretref",
+	].includes(normalized);
+}
+
+function safeRequestId(value) {
+	return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value)
+		? value
+		: "CONNECTION-851-PRODUCTION-INPUTS";
+}
 
 function addRequiredFields(value, path, fields, present, missing) {
 	const section =
@@ -81,7 +94,7 @@ function findSecretShapedFields(value, path = "", result = []) {
 	if (!value || typeof value !== "object") return result;
 	for (const [key, child] of Object.entries(value)) {
 		const current = path ? `${path}.${key}` : key;
-		if (secretKeys.has(key)) result.push(current);
+		if (isSecretShapedKey(key)) result.push(current);
 		findSecretShapedFields(child, current, result);
 	}
 	return result;
@@ -137,7 +150,7 @@ export function validateConnectionProductionInputsV1(
 				: missing.length
 					? "BLOCKED_MISSING_NONSECRET_INPUTS"
 					: "READY_FOR_OWNER_APPROVAL_REVIEW",
-		requestId: value?.requestId ?? "CONNECTION-851-PRODUCTION-INPUTS",
+		requestId: safeRequestId(value?.requestId),
 		presentNonSecretFields: present,
 		missingNonSecretFields: missing,
 		secretShapedFields,
