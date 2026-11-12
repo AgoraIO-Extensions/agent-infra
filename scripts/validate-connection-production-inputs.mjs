@@ -79,6 +79,14 @@ function safeRequestId(value) {
 		: "CONNECTION-851-PRODUCTION-INPUTS";
 }
 
+function isExpectedSource(value) {
+	return (
+		typeof value === "string" &&
+		value === value.trim() &&
+		/^[0-9a-f]{40}$/i.test(value)
+	);
+}
+
 function addRequiredFields(value, path, fields, present, missing) {
 	const section =
 		path.split(".").reduce((current, key) => current?.[key], value) ?? {};
@@ -116,6 +124,8 @@ export function validateConnectionProductionInputsV1(
 			present,
 			missing,
 		);
+	if (value?.schemaVersion === 1) present.push("schemaVersion");
+	else missing.push("schemaVersion");
 	for (const field of topLevelFields)
 		if (typeof value?.[field] === "string" && value[field].length > 0)
 			present.push(field);
@@ -131,12 +141,12 @@ export function validateConnectionProductionInputsV1(
 	const secretShapedFields = findSecretShapedFields(value);
 	const staleSourceTuple = [];
 	if (
-		expectedPlatformSource !== undefined &&
+		!isExpectedSource(expectedPlatformSource) ||
 		value?.sourceTuple?.platformSourceCommit !== expectedPlatformSource
 	)
 		staleSourceTuple.push("sourceTuple.platformSourceCommit");
 	if (
-		expectedConnectionSource !== undefined &&
+		!isExpectedSource(expectedConnectionSource) ||
 		value?.sourceTuple?.connectionSourceCommit !== expectedConnectionSource
 	)
 		staleSourceTuple.push("sourceTuple.connectionSourceCommit");
@@ -162,16 +172,22 @@ export function validateConnectionProductionInputsV1(
 
 if (import.meta.url === `file://${process.argv[1]}`) {
 	const inputPath = process.argv[2];
-	if (!inputPath) {
+	const expectedPlatformSource = process.argv[3];
+	const expectedConnectionSource = process.argv[4];
+	if (
+		!inputPath ||
+		!isExpectedSource(expectedPlatformSource) ||
+		!isExpectedSource(expectedConnectionSource)
+	) {
 		console.error(
-			"usage: validate-connection-production-inputs.mjs <packet.json> [platformSourceCommit] [connectionSourceCommit]",
+			"usage: validate-connection-production-inputs.mjs <packet.json> <platformSourceCommit> <connectionSourceCommit>",
 		);
 		process.exit(2);
 	}
 	const value = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 	const result = validateConnectionProductionInputsV1(value, {
-		expectedPlatformSource: process.argv[3],
-		expectedConnectionSource: process.argv[4],
+		expectedPlatformSource,
+		expectedConnectionSource,
 	});
 	console.log(JSON.stringify(result, null, 2));
 	process.exitCode =

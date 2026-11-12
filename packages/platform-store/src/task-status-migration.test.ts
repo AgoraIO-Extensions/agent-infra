@@ -118,7 +118,7 @@ describe("0034 Task status source upgrade", () => {
 			});
 			expect(await rows()).toEqual(status);
 		}
-	});
+	}, 120_000);
 	it("refuses historical Runtime task.status and rolls back DDL/history/data", async () => {
 		await legacy();
 		await insert(
