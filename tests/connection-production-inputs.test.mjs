@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { validateConnectionProductionInputsV1 } from "../scripts/validate-connection-production-inputs.mjs";
 
 const sourceTuple = {
@@ -95,6 +97,57 @@ test("rejects a stale source tuple", () => {
 	]);
 });
 
+test("rejects a packet when source expectations are omitted", () => {
+	const result = validateConnectionProductionInputsV1(completePacket());
+	assert.equal(result.status, "REJECT_STALE_SOURCE_TUPLE");
+	assert.deepEqual(result.staleSourceTuple, [
+		"sourceTuple.platformSourceCommit",
+		"sourceTuple.connectionSourceCommit",
+	]);
+});
+
+test("rejects a packet when either source expectation is empty", () => {
+	const result = validateConnectionProductionInputsV1(completePacket(), {
+		expectedPlatformSource: sourceTuple.platformSourceCommit,
+		expectedConnectionSource: "",
+	});
+	assert.equal(result.status, "REJECT_STALE_SOURCE_TUPLE");
+	assert.deepEqual(result.staleSourceTuple, [
+		"sourceTuple.connectionSourceCommit",
+	]);
+});
+
+test("requires both source expectations in the CLI", () => {
+	const script = fileURLToPath(
+		new URL(
+			"../scripts/validate-connection-production-inputs.mjs",
+			import.meta.url,
+		),
+	);
+	const result = spawnSync(process.execPath, [script, "packet.json"], {
+		encoding: "utf8",
+	});
+	assert.equal(result.status, 2);
+	assert.match(
+		result.stderr,
+		/<platformSourceCommit> <connectionSourceCommit>/,
+	);
+});
+
+test("requires schema version 1", () => {
+	for (const schemaVersion of [undefined, 0, 2, "1"]) {
+		const packet = completePacket();
+		if (schemaVersion === undefined) delete packet.schemaVersion;
+		else packet.schemaVersion = schemaVersion;
+		const result = validateConnectionProductionInputsV1(packet, {
+			expectedPlatformSource: sourceTuple.platformSourceCommit,
+			expectedConnectionSource: sourceTuple.connectionSourceCommit,
+		});
+		assert.equal(result.status, "BLOCKED_MISSING_NONSECRET_INPUTS");
+		assert.ok(result.missingNonSecretFields.includes("schemaVersion"));
+	}
+});
+
 test("rejects secret-shaped fields without revealing their values", () => {
 	const packet = completePacket();
 	packet.D3_protectedSupply.client_secret = "synthetic-secret-value";
@@ -152,7 +205,10 @@ test("does not echo an unsafe request id", () => {
 test("requires every approval identity and revision", () => {
 	const packet = completePacket();
 	delete packet.approvals.D4.approvalRevision;
-	const result = validateConnectionProductionInputsV1(packet, sourceTuple);
+	const result = validateConnectionProductionInputsV1(packet, {
+		expectedPlatformSource: sourceTuple.platformSourceCommit,
+		expectedConnectionSource: sourceTuple.connectionSourceCommit,
+	});
 	assert.equal(result.status, "BLOCKED_MISSING_NONSECRET_INPUTS");
 	assert.ok(
 		result.missingNonSecretFields.includes("approvals.D4.approvalRevision"),
@@ -164,8 +220,11 @@ test("does not treat legacy packet source fields as current tuple", () => {
 	delete packet.sourceTuple;
 	packet.platformSourceCommit = sourceTuple.platformSourceCommit;
 	packet.connectionSourceCommit = sourceTuple.connectionSourceCommit;
-	const result = validateConnectionProductionInputsV1(packet, sourceTuple);
-	assert.equal(result.status, "BLOCKED_MISSING_NONSECRET_INPUTS");
+	const result = validateConnectionProductionInputsV1(packet, {
+		expectedPlatformSource: sourceTuple.platformSourceCommit,
+		expectedConnectionSource: sourceTuple.connectionSourceCommit,
+	});
+	assert.equal(result.status, "REJECT_STALE_SOURCE_TUPLE");
 	assert.ok(
 		result.missingNonSecretFields.includes("sourceTuple.platformSourceCommit"),
 	);
