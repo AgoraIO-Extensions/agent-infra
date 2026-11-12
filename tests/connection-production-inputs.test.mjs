@@ -117,6 +117,31 @@ test("rejects a packet when either source expectation is empty", () => {
 	]);
 });
 
+test("rejects arbitrary, malformed, or untrimmed source expectations", () => {
+	for (const [field, expectedValue] of [
+		["expectedPlatformSource", "synthetic-platform-source"],
+		["expectedConnectionSource", "synthetic-connection-source"],
+		["expectedPlatformSource", `${sourceTuple.platformSourceCommit} `],
+		["expectedConnectionSource", ` ${sourceTuple.connectionSourceCommit}`],
+		["expectedPlatformSource", "z".repeat(40)],
+		["expectedConnectionSource", "1".repeat(39)],
+	]) {
+		const result = validateConnectionProductionInputsV1(completePacket(), {
+			expectedPlatformSource: sourceTuple.platformSourceCommit,
+			expectedConnectionSource: sourceTuple.connectionSourceCommit,
+			[field]: expectedValue,
+		});
+		assert.equal(result.status, "REJECT_STALE_SOURCE_TUPLE", field);
+		assert.ok(
+			result.staleSourceTuple.includes(
+				field === "expectedPlatformSource"
+					? "sourceTuple.platformSourceCommit"
+					: "sourceTuple.connectionSourceCommit",
+			),
+		);
+	}
+});
+
 test("requires both source expectations in the CLI", () => {
 	const script = fileURLToPath(
 		new URL(
@@ -127,6 +152,30 @@ test("requires both source expectations in the CLI", () => {
 	const result = spawnSync(process.execPath, [script, "packet.json"], {
 		encoding: "utf8",
 	});
+	assert.equal(result.status, 2);
+	assert.match(
+		result.stderr,
+		/<platformSourceCommit> <connectionSourceCommit>/,
+	);
+});
+
+test("rejects malformed source expectations in the CLI", () => {
+	const script = fileURLToPath(
+		new URL(
+			"../scripts/validate-connection-production-inputs.mjs",
+			import.meta.url,
+		),
+	);
+	const result = spawnSync(
+		process.execPath,
+		[
+			script,
+			"packet.json",
+			sourceTuple.platformSourceCommit,
+			"synthetic-connection-source",
+		],
+		{ encoding: "utf8" },
+	);
 	assert.equal(result.status, 2);
 	assert.match(
 		result.stderr,

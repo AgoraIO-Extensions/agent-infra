@@ -79,6 +79,14 @@ function safeRequestId(value) {
 		: "CONNECTION-851-PRODUCTION-INPUTS";
 }
 
+function isExpectedSource(value) {
+	return (
+		typeof value === "string" &&
+		value === value.trim() &&
+		/^[0-9a-f]{40}$/i.test(value)
+	);
+}
+
 function addRequiredFields(value, path, fields, present, missing) {
 	const section =
 		path.split(".").reduce((current, key) => current?.[key], value) ?? {};
@@ -133,14 +141,12 @@ export function validateConnectionProductionInputsV1(
 	const secretShapedFields = findSecretShapedFields(value);
 	const staleSourceTuple = [];
 	if (
-		typeof expectedPlatformSource !== "string" ||
-		expectedPlatformSource.length === 0 ||
+		!isExpectedSource(expectedPlatformSource) ||
 		value?.sourceTuple?.platformSourceCommit !== expectedPlatformSource
 	)
 		staleSourceTuple.push("sourceTuple.platformSourceCommit");
 	if (
-		typeof expectedConnectionSource !== "string" ||
-		expectedConnectionSource.length === 0 ||
+		!isExpectedSource(expectedConnectionSource) ||
 		value?.sourceTuple?.connectionSourceCommit !== expectedConnectionSource
 	)
 		staleSourceTuple.push("sourceTuple.connectionSourceCommit");
@@ -170,10 +176,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 	const expectedConnectionSource = process.argv[4];
 	if (
 		!inputPath ||
-		typeof expectedPlatformSource !== "string" ||
-		expectedPlatformSource.length === 0 ||
-		typeof expectedConnectionSource !== "string" ||
-		expectedConnectionSource.length === 0
+		!isExpectedSource(expectedPlatformSource) ||
+		!isExpectedSource(expectedConnectionSource)
 	) {
 		console.error(
 			"usage: validate-connection-production-inputs.mjs <packet.json> <platformSourceCommit> <connectionSourceCommit>",
