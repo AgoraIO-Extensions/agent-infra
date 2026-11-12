@@ -395,7 +395,9 @@ Idempotency-Key 和 JSON 字节不变。不能因客户端中断就认定服务�
 simulation、失败、来源 SHA 漂移或 tuple 漂移。validation candidate 只能放入 API/Worker
 Secret，清单和 preflight receipt 仍留在仓库外。
 
-若需要由 `all` 自动生成四份 receipt，`ACK_TEMPLATE_PREFLIGHT_JOBS_FILE` 使用以下私有清单；
+`all` 必须提供可读的 `ACK_TEMPLATE_PREFLIGHT_JOBS_FILE`，在 source/集群检查、bootstrap 或
+部署前缺失或不可读即失败；已有 `ACK_TEMPLATE_VALIDATIONS_FILE` 不能代替 jobs 跳过真实预检。
+`ACK_TEMPLATE_PREFLIGHT_JOBS_FILE` 使用以下私有清单；
 每个 job 文件声明一个当前 source SHA、不可变 Runtime image、template/config/model tuple、
 ECI placement，以及 grant private key、Runtime service token 和 Relay key 的私有文件路径。
 
@@ -429,8 +431,11 @@ attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate
 模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
 `template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
-`all` 在生成新 preflight receipts 或读取已有 `ACK_TEMPLATE_VALIDATIONS_FILE` 后，均执行
-`runtime-inputs`，并在部署前要求 bootstrap 与 capacity 私有输入。该阶段复用
+`all` 每次执行 `template-preflight` 生成当前 source/image/config tuple 的四份新 receipts，
+随后执行 `runtime-inputs`，并在部署前要求 bootstrap 与 capacity 私有输入。
+`ACK_TEMPLATE_VALIDATIONS_FILE` 指定本次生成的清单，不提供 receipt-only 复用分支。
+候选 TTL、剩余有效期及 source/image/config/目标绑定校验保持不变，过期或漂移仍失败。
+该阶段复用
 `ACK_BOOTSTRAP_INPUTS_FILE`，要求 API、Worker 的 configuration Secret 文件清单都声明
 `template-validation-<templateId>.json` 四个键。Worker capacity key 必须与
 `ACK_WORKLOAD_CAPACITY_FILE` 的 `workerSecretRef` 和 `profilesFile` 对应；候选文件同目录必须有
