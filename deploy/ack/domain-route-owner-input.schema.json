@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-infra.agoralab.co/schemas/domain-route-owner-input.v1.json",
+  "title": "ACK domain route owner input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "pki", "capsule", "agent"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "ack-domain-route-owner-input" },
+    "pki": { "$ref": "#/$defs/pki" },
+    "capsule": { "$ref": "#/$defs/capsule" },
+    "agent": { "$ref": "#/$defs/agent" }
+  },
+  "$defs": {
+    "pki": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "hostname", "san", "secretName", "deliveryRef", "fullchainScope", "publicFingerprint", "expiresAt", "renewalOwner", "renewalMechanism", "issuerType", "wildcard", "privateKeyIncluded"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "ack-domain-route-pki" },
+        "hostname": { "const": "apps.agent-infra.agoralab.co" },
+        "san": { "const": "apps.agent-infra.agoralab.co" },
+        "secretName": { "const": "agent-infra-apps-tls" },
+        "deliveryRef": { "type": "string", "minLength": 1 },
+        "fullchainScope": { "type": "string", "minLength": 1 },
+        "publicFingerprint": { "type": "string", "minLength": 1 },
+        "expiresAt": { "type": "string", "minLength": 1 },
+        "renewalOwner": { "type": "string", "minLength": 1 },
+        "renewalMechanism": { "type": "string", "minLength": 1 },
+        "issuerType": { "enum": ["external-pki", "cert-manager"] },
+        "acmeAuthorizationRef": { "type": "string", "minLength": 1 },
+        "wildcard": { "const": false },
+        "privateKeyIncluded": { "const": false }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "issuerType": { "const": "cert-manager" } } },
+          "then": { "required": ["acmeAuthorizationRef"] }
+        }
+      ]
+    },
+    "cas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespaceUid", "releaseRevision", "workerSecretUid", "workerSecretResourceVersion", "configurationSha256", "workerImage"],
+      "properties": {
+        "namespaceUid": { "type": "string", "minLength": 1 },
+        "releaseRevision": { "type": "string", "minLength": 1 },
+        "workerSecretUid": { "type": "string", "minLength": 1 },
+        "workerSecretResourceVersion": { "type": "string", "minLength": 1 },
+        "configurationSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "workerImage": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capsule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "sourceSha", "origin", "platformOrigin", "tlsSecretName", "agentIds", "path", "certificateDeliveryRef", "selectedAgentMetadataRef", "prefixCompatibilityRef", "freshCas", "status", "wildcard", "sameHostSubstitute", "directApply", "postrendererBypass"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "ack-domain-route-capsule" },
+        "sourceSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "origin": { "const": "https://apps.agent-infra.agoralab.co" },
+        "platformOrigin": { "const": "https://agent-infra.agoralab.co" },
+        "tlsSecretName": { "const": "agent-infra-apps-tls" },
+        "agentIds": { "type": "array", "prefixItems": [{ "const": "agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d" }], "items": false, "minItems": 1, "maxItems": 1 },
+        "path": { "const": "/a/agent-c464d78c23e92e9fdd623d6ebdb664ce/" },
+        "certificateDeliveryRef": { "type": "string", "minLength": 1 },
+        "selectedAgentMetadataRef": { "type": "string", "minLength": 1 },
+        "prefixCompatibilityRef": { "type": "string", "minLength": 1 },
+        "freshCas": { "$ref": "#/$defs/cas" },
+        "status": { "enum": ["proposal", "accepted"] },
+        "fieldWindowRef": { "type": "string", "minLength": 1 },
+        "wildcard": { "const": false },
+        "sameHostSubstitute": { "const": false },
+        "directApply": { "const": false },
+        "postrendererBypass": { "const": false }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "accepted" } } },
+          "then": { "required": ["fieldWindowRef"] }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "interactionMode", "identityResponsibility"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "interactionMode": { "const": "self-managed" },
+        "identityResponsibility": { "const": "self-managed" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "agentId", "managementStatus", "managementRevision", "serviceAvailability", "configurationRevision", "source", "imageReference", "interactionUrl", "prefixCompatible", "readReceiptRef"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "ack-domain-route-agent-metadata" },
+        "agentId": { "const": "agent_api_c54968af289033573b0a25f29a2cae88ff182518286bc7c7b162aad5791b1e4d" },
+        "managementStatus": { "type": "string", "minLength": 1 },
+        "managementRevision": {
+          "anyOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          ]
+        },
+        "serviceAvailability": { "type": "string", "minLength": 1 },
+        "configurationRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "source": { "$ref": "#/$defs/source" },
+        "imageReference": { "type": "string", "minLength": 1 },
+        "interactionUrl": {
+          "type": "string",
+          "pattern": "^https://apps\\.agent-infra\\.agoralab\\.co/a/agent-c464d78c23e92e9fdd623d6ebdb664ce/(?!\\.{1,2}(?:/|$))(?![^?#]*/\\.{1,2}(?:/|$))(?![^?#]*%)[^?#]*(?:\\?[^#]*)?(?:#.*)?$"
+        },
+        "prefixCompatible": { "const": true },
+        "readReceiptRef": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
