@@ -38,6 +38,9 @@ Required for plan/deploy/validate:
   ACK_RUNTIME_IMAGE_MANIFEST private amd64 RuntimeHost manifest JSON for that commit
                            (also accepts published runtime-host.json images.runtimeHost shape)
 
+Required for all:
+  ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four current-source preflight jobs
+
 Optional validation inputs:
   ACK_TEMPLATE_CONFIG_DIR  directory containing codex.json, claude.json,
                            opencode.json and pi.json for conversation-browser
@@ -49,7 +52,6 @@ Optional validation inputs:
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
   ACK_TEMPLATE_VALIDATIONS_FILE private four-template validation expectation bundle
   ACK_WORKLOAD_CAPACITY_FILE private capacity profile/evidence and mounted Secret binding
-  ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
   ACK_CUSTOM_CAPACITY_JOB_FILE private custom ACP capacity job; optional for all
   ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
   ACK_IMAGE_CACHE_REQUIRED   true enables strict prewarming and Session cache admission
@@ -703,6 +705,7 @@ case "$command" in
 	destroy) destroy ;;
 	provision) provision ;;
 	all)
+		require_file ACK_TEMPLATE_PREFLIGHT_JOBS_FILE "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}"
 		require_source_tuple
 		require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
 		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
@@ -723,11 +726,7 @@ case "$command" in
 			bootstrap_database
 		fi
 		deploy
-		if [[ -n "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}" ]]; then
-			template_preflight
-		else
-			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
-		fi
+		template_preflight
 		if [[ -n "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}" ]]; then
 			custom_preflight
 		fi

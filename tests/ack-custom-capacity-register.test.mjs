@@ -622,6 +622,7 @@ preflight_agent_requests() { :; }
 bootstrap_database() { :; }
 bootstrap_inputs() { :; }
 deploy() { :; }
+template_preflight() { :; }
 bootstrap_login() { :; }
 provision() { :; }
 validate() { :; }

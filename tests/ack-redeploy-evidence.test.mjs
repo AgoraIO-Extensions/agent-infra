@@ -544,6 +544,7 @@ esac
 		const rejectedAll = run(
 			{
 				ACK_BOOTSTRAP_INPUTS_FILE: bootstrap,
+				ACK_TEMPLATE_PREFLIGHT_JOBS_FILE: bootstrap,
 				ACK_TEMPLATE_IMAGE_MANIFEST: templatesFile,
 				ACK_LOGIN_BOOTSTRAP_FILE: bootstrap,
 				ACK_WORKLOAD_CAPACITY_FILE: bootstrap,

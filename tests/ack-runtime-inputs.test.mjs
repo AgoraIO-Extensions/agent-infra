@@ -2099,8 +2099,8 @@ test("failed Secret readback prevents consumer rollout and local input promotion
 });
 
 for (const fresh of [false, true]) {
-	for (const failPublication of [false, true]) {
-		test(`all publishes ${fresh ? "fresh" : "supplied"} receipts before provisioning (failure=${failPublication})`, async () => {
+	for (const failPublication of fresh ? [false, true] : [false]) {
+		test(`all ${fresh ? "publishes fresh receipts before provisioning" : "rejects supplied receipts without preflight jobs"} (failure=${failPublication})`, async () => {
 			const script = await readFile(
 				new URL("../deploy/ack/redeploy.sh", import.meta.url),
 				"utf8",
@@ -2114,7 +2114,7 @@ for (const fresh of [false, true]) {
 					`
 set -euo pipefail
 require_source_tuple() { echo source; }
-require_file() { [[ -n "$2" ]]; }
+require_file() { [[ -n "$2" ]] || { echo "$1 is required" >&2; exit 2; }; }
 prepare_evidence() { :; }
 render_manifest() { :; }
 configuration_source_preflight() { echo config-preflight; }
@@ -2153,12 +2153,22 @@ ${dispatch}
 					},
 				},
 			);
+			if (!fresh) {
+				assert.equal(result.status, 2, result.stderr);
+				assert.match(
+					result.stderr,
+					/ACK_TEMPLATE_PREFLIGHT_JOBS_FILE is required/,
+				);
+				assert.equal(result.stdout, "");
+				return;
+			}
 			assert.equal(result.status, failPublication ? 1 : 0, result.stderr);
 			const stages = result.stdout.trim().split("\n");
 			assert(stages.includes("publish"));
 			assert(stages.indexOf("config-preflight") < stages.indexOf("bootstrap"));
 			assert(stages.indexOf("login") < stages.indexOf("publish"));
 			assert.equal(stages.includes("preflight"), fresh);
+			assert(stages.indexOf("preflight") < stages.indexOf("publish"));
 			if (failPublication) {
 				assert(!stages.includes("check-bindings"));
 				assert(!stages.includes("provision"));
