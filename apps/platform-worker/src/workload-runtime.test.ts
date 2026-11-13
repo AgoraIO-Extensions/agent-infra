@@ -85,6 +85,7 @@ import {
 	createKubernetesRuntimeAdapterV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { secretUidAnnotation } from "./kubernetes-runtime-comparison.js";
 import {
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsV1,
@@ -789,6 +790,219 @@ async function readySecretRecoveryFixture(model = false, keyless = false) {
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("retains a verified recovery Secret UID repair across a management-fence interruption", async () => {
+		const f = await readySecretRecoveryFixture();
+		f.removeWorkload();
+		await f.tick(10);
+		expect(f.state?.phase).toBe("ready");
+		const before = f.state;
+		assert(
+			before?.identity && before.candidate.secretRecoveries?.[0]?.secretUid,
+		);
+		const workloadUid = before.identity.uid;
+		const old = before.candidate.secretRecoveries[0];
+		const u1 = old.secretUid;
+		f.resources.delete(`Secret/${old.reference.name}`);
+		await f.tick(1); // Ready detects Secret drift.
+		expect(f.state?.phase).toBe("applying");
+		await f.tick(1); // Actual trusted fake-port repair commits a U2 candidate receipt.
+		const repaired = f.state;
+		assert(repaired?.candidate.secretRecoveries?.[0]?.secretUid);
+		const u2 = repaired.candidate.secretRecoveries[0].secretUid;
+		expect(u2).not.toBe(u1);
+		expect(repaired.verified?.secretRecoveries?.[0]?.secretUid).toBe(u2);
+		expect(repaired.identity?.uid).toBe(workloadUid);
+		expect(repaired.phase).toBe("applying");
+		const decryptions = f.decrypt.mock.calls.length;
+		// The trusted UID receipt is committed with verified before the new intent.
+		f.setManagement({
+			...f.management,
+			fence: f.management.fence + 1,
+			workloadRevision: f.management.workloadRevision + 1,
+		});
+		for (let i = 0; i < 14; i++) {
+			await f.tick(1);
+			expect(f.state?.identity?.uid).toBe(workloadUid);
+			expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).toBe(u2);
+		}
+		expect(f.decrypt).toHaveBeenCalledTimes(decryptions);
+		const live = f.resources.get(`Secret/${old.reference.name}`);
+		expect(f.storage.record).toEqual(f.original);
+		expect(live?.metadata?.uid).toBe(u2);
+		expect(f.state?.candidate.secretRecoveries?.[0]?.reference).toEqual(
+			old.reference,
+		);
+		// Never weaken this comparison: U2 is a previously verified, persisted repair.
+		expect(f.state?.candidate.secretRecoveries?.[0]?.secretUid).toBe(u2);
+		expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).toBe(u2);
+		expect(f.state?.identity?.uid).toBe(workloadUid);
+		expect(f.state?.phase).toBe("ready");
+	});
+
+	it.each(["configuration", "health rollback"] as const)(
+		"retains a repaired verified UID through %s without promoting an unhealthy candidate",
+		async (change) => {
+			const f = await readySecretRecoveryFixture();
+			f.removeWorkload();
+			await f.tick(10);
+			const before = f.state;
+			assert(
+				before?.identity && before.candidate.secretRecoveries?.[0]?.secretUid,
+			);
+			const old = before.candidate.secretRecoveries[0];
+			f.resources.delete(`Secret/${old.reference.name}`);
+			await f.tick(2);
+			const uid = f.state?.candidate.secretRecoveries?.[0]?.secretUid;
+			expect(uid).not.toBe(old.secretUid);
+			expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).toBe(uid);
+			assert(before.candidate.configuration.schemaVersion === 2);
+			f.setConfiguration({
+				...before.candidate.configuration,
+				revision: 2,
+				environment: [{ name: "NEW", value: "unverified" }],
+			});
+			Object.defineProperty(f.secrets, "bindings", {
+				get: () => [
+					{
+						materialization:
+							(f.state?.candidate.configuration.revision ?? 1) > 1
+								? "active-origin"
+								: "current",
+						record: f.storage.record,
+					},
+				],
+			});
+			const probe = f.options.probeRuntime;
+			if (change === "health rollback") {
+				Object.assign(f.options, {
+					probeRuntime: async () => ({ core: "failed", capabilities: {} }),
+				});
+				for (let i = 0; i < 10 && f.state?.phase !== "cleaning"; i++)
+					await f.tick(1);
+				expect(f.state?.phase).toBe("cleaning");
+				expect(f.state?.verified?.configuration.revision).toBe(1);
+				Object.assign(f.options, { probeRuntime: probe });
+			}
+			await f.tick(14);
+			expect(f.state?.phase).toBe("ready");
+			expect(f.state?.identity?.uid).toBe(before.identity.uid);
+			expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).toBe(uid);
+			expect(f.state?.candidate.secretRecoveries?.[0]?.secretUid).toBe(uid);
+			expect(f.state?.verified?.configuration.revision).toBe(
+				change === "configuration" ? 2 : 1,
+			);
+			expect(f.storage.record).toEqual(f.original);
+		},
+	);
+	it("revalidates trusted bytes when a repair CAS commits but its prepared receipt is lost", async () => {
+		const f = await readySecretRecoveryFixture();
+		f.removeWorkload();
+		await f.tick(10);
+		const before = f.state;
+		assert(
+			before?.identity && before.candidate.secretRecoveries?.[0]?.secretUid,
+		);
+		const old = before.candidate.secretRecoveries[0];
+		f.resources.delete(`Secret/${old.reference.name}`);
+		await f.tick(1);
+		const state = f.state;
+		assert(state);
+		const lost = await createWorkloadRuntimeV1(f.options).apply(
+			state,
+			false,
+			f.input(state),
+		);
+		assert(lost && typeof lost === "object" && "status" in lost);
+		const uid = lost.candidate.secretRecoveries?.[0]?.secretUid;
+		expect(uid).not.toBe(old.secretUid);
+		expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).toBe(
+			old.secretUid,
+		);
+		const decryptions = f.decrypt.mock.calls.length;
+		const creates = vi.spyOn(f.client, "create");
+		f.setManagement({
+			...f.management,
+			fence: f.management.fence + 1,
+			workloadRevision: f.management.workloadRevision + 1,
+		});
+		await f.tick(14);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.identity?.uid).toBe(before.identity.uid);
+		expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).toBe(uid);
+		expect(f.state?.candidate.secretRecoveries?.[0]?.secretUid).toBe(uid);
+		expect(f.decrypt).toHaveBeenCalledTimes(decryptions + 1);
+		expect(
+			creates.mock.calls.filter(([value]) => value.kind === "Secret"),
+		).toHaveLength(0);
+		expect(f.resources.get(`Secret/${old.reference.name}`)?.metadata?.uid).toBe(
+			uid,
+		);
+		expect(f.storage.record).toEqual(f.original);
+	});
+
+	it("does not record a replacement UID from annotations when trusted byte verification fails", async () => {
+		const f = await readySecretRecoveryFixture();
+		f.removeWorkload();
+		await f.tick(10);
+		const before = f.state;
+		assert(before?.candidate.secretRecoveries?.[0]?.secretUid);
+		const old = before.candidate.secretRecoveries[0];
+		f.resources.delete(`Secret/${old.reference.name}`);
+		await f.tick(1);
+		const state = f.state;
+		assert(state);
+		await createWorkloadRuntimeV1(f.options).apply(
+			state,
+			false,
+			f.input(state),
+		);
+		const secret = f.resources.get(`Secret/${old.reference.name}`) as V1Secret;
+		const workload = f.resources.get(
+			`StatefulSet/${f.workloadName}`,
+		) as V1StatefulSet;
+		assert(secret.metadata && workload.metadata?.annotations);
+		const replacement: V1Secret = {
+			...secret,
+			metadata: {
+				...secret.metadata,
+				uid: "untrusted-uid",
+				resourceVersion: "untrusted-rv",
+			},
+			data: { BOT_TOKEN: Buffer.from("untrusted bytes").toString("base64") },
+		};
+		f.resources.set(`Secret/${old.reference.name}`, replacement);
+		workload.metadata.annotations[secretUidAnnotation(old.reference.name)] =
+			"untrusted-uid";
+		const decryptions = f.decrypt.mock.calls.length;
+		let previous = f.state;
+		for (let i = 0; i < 8 && f.state?.phase !== "failed"; i++) {
+			await f.tick(1);
+			const current = f.state;
+			assert(current);
+			expect(["applying", "cleaning", "failed"]).toContain(current.phase);
+			if (previous?.phase === "applying" && current.phase === "applying")
+				expect(current.attempts).toBeGreaterThan(previous.attempts);
+			expect(current.verified?.secretRecoveries?.[0]?.secretUid).toBe(
+				old.secretUid,
+			);
+			expect(current.candidate.secretRecoveries?.[0]?.secretUid).toBe(
+				old.secretUid,
+			);
+			previous = current;
+		}
+		expect(f.state?.phase).toBe("failed");
+		expect(f.state?.lastFailure).toMatchObject({
+			reason: "kubernetes_conflict",
+			attempts: 2,
+		});
+		expect(f.decrypt.mock.calls.length - decryptions).toBeGreaterThanOrEqual(2);
+		expect(f.decrypt.mock.calls.length - decryptions).toBeLessThanOrEqual(4);
+		expect(f.resources.get(`Secret/${old.reference.name}`)).toEqual(
+			replacement,
+		);
+		expect(f.storage.record).toEqual(f.original);
+	});
+
 	it.each(["observed", "absent"] as const)(
 		"guards a same-name replacement after an initially %s recovery observation",
 		async (initialObservation) => {

@@ -2463,7 +2463,14 @@ export function createWorkloadRuntimeV1(
 								reference,
 								activationFence,
 							);
-					if (active) continue;
+					// A prior CAS can commit before its UID receipt; revalidate bytes to recover it.
+					if (
+						active &&
+						(!recovery ||
+							(await options.client.read<V1Secret>("Secret", reference.name))
+								?.metadata?.uid === recovery.secretUid)
+					)
+						continue;
 				}
 				const decryption = await options.decryptor.decrypt({
 					encryptedRecord: record,
