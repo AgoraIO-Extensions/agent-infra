@@ -9,6 +9,7 @@ import {
 import type { SecretActivationStorePortV1 } from "./secret-activation.js";
 import {
 	hasUnverifiedWorkloadSecretRecoveryV1,
+	syncVerifiedWorkloadSecretUidReceiptsV1,
 	type WorkloadSecretRecoveryV1,
 } from "./workload-secret-recovery.js";
 
@@ -664,6 +665,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return advance("applying", {
 									candidate: identity.candidate,
 									identity: identity.identity,
+									verified: syncVerifiedWorkloadSecretUidReceiptsV1(
+										state,
+										identity,
+										management,
+									),
 								});
 							if (identity === "pending") {
 								if (!stopped && state.attempts + 1 >= maximumApplyAttempts)

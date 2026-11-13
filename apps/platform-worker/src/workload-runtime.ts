@@ -35,11 +35,16 @@ import {
 import {
 	cleanupUnactivatedSecretCandidateV1,
 	createSecretActivationUseCaseV1,
+	hasUnverifiedWorkloadSecretRecoveryV1,
 	immutableSecretNameV1,
+	inheritWorkloadSecretRecoveriesV1,
 	parseWorkloadExecutionCapacityV1,
+	parseWorkloadSecretRecoveriesV1,
+	planMissingWorkloadSecretRecoveryV1,
 	type SecretActivationDecryptorPortV1,
 	type SecretActivationReferenceV1,
 	workloadResourceConfigurationHashV1 as sharedWorkloadResourceConfigurationHashV1,
+	validateWorkloadSecretRecoverySourcesV1,
 	type WorkloadCapabilitiesV1,
 	type WorkloadExecutionCapacityV1,
 	WorkloadPreflightRejectedErrorV1,
@@ -47,8 +52,11 @@ import {
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
 	type WorkloadSecretBindingV1,
+	type WorkloadSecretRecoverySourceV1,
+	type WorkloadSecretRecoveryV1,
+	workloadSecretRecoveriesV1,
 } from "@agent-infra/platform-core";
-import type { V1StatefulSet } from "@kubernetes/client-node";
+import type { V1Secret, V1StatefulSet } from "@kubernetes/client-node";
 import { parseAllDocuments } from "yaml";
 import { validateCodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
@@ -385,6 +393,124 @@ function referencesMatch(
 	);
 }
 
+function recoverySourcesFor(
+	bindings: readonly ResolvedWorkloadSecretBindingV1[],
+): readonly WorkloadSecretRecoverySourceV1[] {
+	return bindings.map(({ record }) => ({
+		reference: recordReference(record),
+		lifecycleState: record.lifecycleState,
+		activationFence: activeSecretFence(record, recordReference(record)),
+	}));
+}
+
+const recoveriesFor = workloadSecretRecoveriesV1;
+
+function recoveryForReference(
+	recoveries: readonly WorkloadSecretRecoveryV1[],
+	reference: SecretActivationReferenceV1,
+) {
+	return recoveries.find((recovery) =>
+		referencesMatch(recovery.sourceReference, reference),
+	);
+}
+
+function pendingSecretRecoveries(state: WorkloadReconciliationStateV1) {
+	return recoveriesFor(state).filter(
+		(value) =>
+			!(state.verified?.secretRecoveries ?? []).some((verified) =>
+				referencesMatch(verified.reference, value.reference),
+			),
+	);
+}
+
+function recoveryActivationFence(recovery: WorkloadSecretRecoveryV1) {
+	return recovery.identity
+		? {
+				...recovery.sourceActivationFence,
+				kubernetesSecretName: recovery.reference.name,
+				workloadUid: recovery.identity.uid,
+				workloadGeneration: recovery.identity.generation,
+				fence: recovery.fence,
+			}
+		: null;
+}
+
+function candidateWithRecoveries(
+	candidate: WorkloadReconciliationStateV1["candidate"],
+	values: readonly WorkloadSecretRecoveryV1[],
+) {
+	const secretRecoveries = parseWorkloadSecretRecoveriesV1(
+		values,
+		candidate.configuration.agentId,
+	);
+	const replaceReference = <
+		T extends {
+			secretId: string;
+			secretVersion: number;
+			configRevision: number;
+			name: string;
+		},
+	>(
+		reference: T,
+	): T => {
+		const match = secretRecoveries.find(
+			({ sourceReference }) =>
+				sourceReference.secretId === reference.secretId &&
+				sourceReference.secretVersion === reference.secretVersion &&
+				sourceReference.configRevision === reference.configRevision,
+		);
+		return match ? { ...reference, name: match.reference.name } : reference;
+	};
+	const deployment = validateAgentWorkloadDesiredV1(candidate.deployment);
+	let modelProjection = candidate.modelProjection;
+	if (
+		modelProjection !== undefined &&
+		validateRuntimeModelProjectionVersion(modelProjection) === 1
+	) {
+		const { fingerprint: _, ...content } = validateRuntimeModelProjectionV1(
+			modelProjection,
+			candidate.configuration.schemaVersion === 2
+				? candidate.configuration
+				: undefined,
+		);
+		const next = {
+			...content,
+			options: content.options.map((option) => ({
+				...option,
+				secretRef: replaceReference(option.secretRef),
+			})),
+		};
+		modelProjection = validateRuntimeModelProjectionV1(
+			{
+				...next,
+				fingerprint: createHash("sha256")
+					.update(JSON.stringify(next))
+					.digest("hex"),
+			},
+			candidate.configuration.schemaVersion === 2
+				? candidate.configuration
+				: undefined,
+		);
+	}
+	return {
+		...candidate,
+		secretRecoveries,
+		deployment: validateAgentWorkloadDesiredV1({
+			...deployment,
+			secretRefs: deployment.secretRefs.map(replaceReference),
+		}),
+		...(modelProjection !== undefined ? { modelProjection } : {}),
+	};
+}
+
+function validateRuntimeModelProjectionVersion(projection: unknown) {
+	return projection &&
+		typeof projection === "object" &&
+		"schemaVersion" in projection
+		? projection.schemaVersion
+		: undefined;
+}
+
 function cleanupActivationFence(
 	record: PlatformSecretRecordV1,
 	reference: SecretActivationReferenceV1,
@@ -522,7 +648,7 @@ function bindingsFor(
 			record: validatePlatformSecretRecordV1(record),
 		}),
 	);
-	return [
+	const resolved = [
 		...new Map(
 			expected.map((secret) => {
 				const matches = bindings.filter(
@@ -552,6 +678,12 @@ function bindingsFor(
 			}),
 		).values(),
 	];
+	validateWorkloadSecretRecoverySourcesV1(
+		state,
+		input.management,
+		recoverySourcesFor(resolved),
+	);
+	return resolved;
 }
 
 /**
@@ -1080,8 +1212,13 @@ export function createWorkloadRuntimeV1(
 		if (
 			state.candidate.configuration.source.kind !== "standard" ||
 			state.candidate.deployment === null ||
-			state.candidate.configuration.revision ===
-				state.verified?.configuration.revision
+			(state.candidate.configuration.revision ===
+				state.verified?.configuration.revision &&
+				(pendingSecretRecoveries(state).length === 0 ||
+					isDeepStrictEqual(
+						state.candidate.modelProjection,
+						state.verified?.modelProjection,
+					)))
 		)
 			return true;
 		return createAdapter(undefined, state, "cleanup").removeModelConfiguration(
@@ -1214,6 +1351,188 @@ export function createWorkloadRuntimeV1(
 		}
 		return true;
 	}
+	function prepared(
+		state: WorkloadReconciliationStateV1,
+		values: readonly WorkloadSecretRecoveryV1[],
+		identity = state.identity,
+	) {
+		return {
+			status: "prepared" as const,
+			candidate: candidateWithRecoveries(state.candidate, values),
+			identity,
+		};
+	}
+	function desiredForRecovery(state: WorkloadReconciliationStateV1) {
+		const workload = desired(state);
+		const first = pendingSecretRecoveries(state)[0];
+		if (!first) return workload;
+		return validateAgentWorkloadDesiredV1({
+			...workload,
+			workloadRevision: first.workloadRevision,
+			fence: first.fence,
+			expectedWorkload: first.identity
+				? {
+						state: "present",
+						workloadUid: first.identity.uid,
+						workloadGeneration: first.identity.generation,
+					}
+				: { state: "absent" },
+		});
+	}
+	async function cleanupSecretRecoveries(
+		state: WorkloadReconciliationStateV1,
+		input: WorkloadReconciliationInputV1,
+	) {
+		if (!hasUnverifiedWorkloadSecretRecoveryV1(state.candidate, state.verified))
+			return true;
+		const bindings = bindingsFor(state, input, candidateKeyless(state));
+		const values = recoveriesFor(state);
+		const pending = pendingSecretRecoveries(state);
+		if (!pending.length) return true;
+		const first = pending[0];
+		if (
+			!first ||
+			pending.some(
+				(value) =>
+					value.workloadRevision !== first.workloadRevision ||
+					value.fence !== first.fence ||
+					!isDeepStrictEqual(value.identity, first.identity),
+			)
+		)
+			return false;
+		const currentAdapter = createAdapter(undefined, state, "cleanup");
+		const workload = desired(state);
+		if (
+			!(await currentAdapter.closeAgent(
+				state.agentId,
+				state.revision,
+				state.fence,
+			))
+		)
+			return false;
+		const creation = {
+			...workload,
+			workloadRevision: first.workloadRevision,
+			fence: first.fence,
+			expectedWorkload: first.identity
+				? {
+						state: "present" as const,
+						workloadUid: first.identity.uid,
+						workloadGeneration: first.identity.generation,
+					}
+				: { state: "absent" as const },
+		};
+
+		// A creation can succeed before the Secret UID receipt commits. Recover that
+		// receipt by authenticated value verification, never by its name alone.
+		for (const recovery of pending) {
+			if (recovery.secretUid) continue;
+			if (
+				!(await options.client.read<V1Secret>(
+					"Secret",
+					recovery.reference.name,
+				))
+			)
+				continue;
+			const binding = bindings.find(({ record }) =>
+				referencesMatch(recordReference(record), recovery.sourceReference),
+			);
+			if (!binding) return false;
+			const decrypted = await options.decryptor.decrypt({
+				encryptedRecord: binding.record,
+				traceId: input.traceId,
+			});
+			if (decrypted.outcome !== "decrypted") {
+				await input.secrets?.auditDecryption(
+					binding.record.secretId,
+					binding.record.crypto.wrappingKeyVersion,
+					"rejected",
+				);
+				return false;
+			}
+			try {
+				await input.secrets?.auditDecryption(
+					binding.record.secretId,
+					binding.record.crypto.wrappingKeyVersion,
+					"succeeded",
+				);
+				const secretUid = await currentAdapter.applyImmutableSecret(
+					creation,
+					recovery.reference.name,
+					secretDataKey(binding.record.name),
+					decrypted.plaintext,
+				);
+				return prepared(
+					state,
+					values.map((value) =>
+						value === recovery ? { ...value, secretUid } : value,
+					),
+				);
+			} finally {
+				decrypted.plaintext.fill(0);
+			}
+		}
+		if (!first.identity) {
+			const live = await currentAdapter.observeRecoveryWorkload(
+				creation,
+				null,
+				{ revision: state.revision, fence: state.fence },
+			);
+			if (live)
+				return prepared(
+					state,
+					values.map((value) =>
+						pending.includes(value) ? { ...value, identity: live } : value,
+					),
+					live,
+				);
+		}
+		if (
+			!(await currentAdapter.removeRecoveryWorkload(workload, first.identity, {
+				revision: first.workloadRevision,
+				fence: first.fence,
+			}))
+		)
+			return false;
+		for (const recovery of pending) {
+			if (
+				recovery.secretUid &&
+				!(await currentAdapter.removeRecoverySecret(
+					workload,
+					recovery.reference,
+					recovery.secretUid,
+					{ revision: recovery.workloadRevision, fence: recovery.fence },
+				))
+			)
+				return false;
+		}
+		return true;
+	}
+	async function observeRecoveryBindings(state: WorkloadReconciliationStateV1) {
+		const values = recoveriesFor(state);
+		if (!values.length) return true;
+		const workload = desiredForRecovery(state);
+		const currentAdapter = createAdapter(undefined, state);
+		for (const recovery of values) {
+			const activationFence = recoveryActivationFence(recovery);
+			if (
+				!activationFence ||
+				!state.identity ||
+				recovery.identity?.uid !== state.identity.uid ||
+				state.identity.generation < recovery.identity.generation ||
+				(await options.client.read<V1Secret>("Secret", recovery.reference.name))
+					?.metadata?.uid !== recovery.secretUid ||
+				!(await currentAdapter.observeActiveImmutableSecret(
+					workload,
+					recovery.reference,
+					activationFence,
+				))
+			)
+				return false;
+		}
+		return true;
+	}
+
 	async function observe(
 		state: WorkloadReconciliationStateV1,
 		browserBinding?: BrowserCapabilityBindingV1,
@@ -1233,6 +1552,7 @@ export function createWorkloadRuntimeV1(
 			observedCapabilities.delete(state);
 			if (!state.identity) return "pending" as const;
 			await restoreSnapshotProjection(state);
+			if (!(await observeRecoveryBindings(state))) return "drifted" as const;
 			const snapshotProjection = snapshotProjections.get(state);
 			if (
 				reconciliationObservation &&
@@ -1244,7 +1564,7 @@ export function createWorkloadRuntimeV1(
 					snapshotProjection,
 					{ annotations: { "agent-infra.agora.io/agent-id": state.agentId } },
 				);
-			const observedWorkload = desired(state);
+			const observedWorkload = desiredForRecovery(state);
 			if (isMultiService(observedWorkload)) {
 				const health = await multiServiceFor(state).observe(
 					observedWorkload,
@@ -1292,7 +1612,7 @@ export function createWorkloadRuntimeV1(
 				},
 			);
 			const health = await observation.observe(
-				desired(state),
+				desiredForRecovery(state),
 				state.identity,
 				routeSelectorMode(state),
 				state.phase === "observing" ? "activation" : "required",
@@ -1535,6 +1855,13 @@ export function createWorkloadRuntimeV1(
 				if (error instanceof WorkloadPreflightRejectedErrorV1) throw error;
 				throw new WorkloadPreflightRejectedErrorV1("secret-bindings");
 			}
+			const secretRecoverySources = recoverySourcesFor(secretBindings);
+			const inheritedSecretRecoveries =
+				state.candidate.secretRecoveries !== undefined
+					? recoveriesFor(state)
+					: state.verified
+						? inheritWorkloadSecretRecoveriesV1(state, secretRecoverySources)
+						: [];
 			if ("manifest" in configuration.source) {
 				try {
 					const multiServiceManifest = parseMultiServiceManifest(
@@ -1653,7 +1980,12 @@ export function createWorkloadRuntimeV1(
 							: {}),
 					});
 					assertWorkloadPublicRouteV1(options.policy, deployment);
-					return { configuration, deployment };
+					return inheritedSecretRecoveries.length
+						? candidateWithRecoveries(
+								{ configuration, deployment },
+								inheritedSecretRecoveries,
+							)
+						: { configuration, deployment };
 				} catch {
 					throw new WorkloadPreflightRejectedErrorV1();
 				}
@@ -1951,12 +2283,15 @@ export function createWorkloadRuntimeV1(
 					options,
 					configuration.source.imageDigest,
 				);
-				return {
+				const candidate = {
 					configuration,
 					deployment,
 					...(executionCapacity ? { executionCapacity } : {}),
 					...(modelProjection ? { modelProjection } : {}),
 				};
+				return inheritedSecretRecoveries.length
+					? candidateWithRecoveries(candidate, inheritedSecretRecoveries)
+					: candidate;
 			} catch {
 				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 			}
@@ -1983,6 +2318,8 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is closing");
 		},
 		async discardUnactivatedSecrets(state, input) {
+			const recovered = await cleanupSecretRecoveries(state, input);
+			if (recovered !== true) return recovered;
 			if (!(await cleanupUnactivatedSecrets(state, input))) return false;
 			if (!(await cleanupModelConfiguration(state))) return false;
 			if ("manifest" in state.candidate.configuration.source) {
@@ -2013,7 +2350,76 @@ export function createWorkloadRuntimeV1(
 			await restoreSnapshotProjection(state);
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
-			const workload = desired(state);
+			const bindings = bindingsFor(state, input, candidateKeyless(state));
+			const sources = recoverySourcesFor(bindings);
+			const recoveries = recoveriesFor(state);
+			const pendingRecovery = pendingSecretRecoveries(state).length > 0;
+			if (
+				!pendingRecovery &&
+				state.verified &&
+				sources.some((source) => source.lifecycleState === "active") &&
+				!("manifest" in state.candidate.configuration.source)
+			) {
+				const current = await options.client.read<V1StatefulSet>(
+					"StatefulSet",
+					workloadResourceNameV1(state.agentId),
+				);
+				if (!current) {
+					if (
+						!(await adapter.closeAgent(
+							state.agentId,
+							state.revision,
+							state.fence,
+						)) ||
+						(await adapter.observeRecoveryWorkload(desired(state), null)) !==
+							null
+					)
+						throw new WorkloadKubernetesError("conflict");
+					const values = planMissingWorkloadSecretRecoveryV1(
+						state,
+						input.management,
+						sources,
+					);
+					if (values?.length) return prepared(state, values, null);
+				}
+			}
+			const workload = desiredForRecovery(state);
+			if (pendingRecovery) {
+				const first = recoveries[0];
+				if (
+					!first ||
+					isMultiService(workload) ||
+					first.fence !== state.fence ||
+					input.management.agentId !== state.agentId ||
+					input.management.fence !== state.fence ||
+					input.management.desiredState !== "running" ||
+					input.management.status === "disabled" ||
+					recoveries.some(
+						(value) =>
+							value.workloadRevision !== first.workloadRevision ||
+							value.fence !== first.fence ||
+							!isDeepStrictEqual(value.identity, first.identity),
+					)
+				)
+					throw new WorkloadKubernetesError("conflict");
+				const live = await adapter.observeRecoveryWorkload(
+					workload,
+					first.identity,
+					{ revision: state.revision, fence: state.fence },
+				);
+				if (first.identity && !live)
+					throw new WorkloadKubernetesError("conflict");
+				if (!first.identity && live) {
+					if (recoveries.some((value) => !value.secretUid))
+						throw new WorkloadKubernetesError("conflict");
+					return prepared(
+						state,
+						recoveries.map((value) => ({ ...value, identity: live })),
+						live,
+					);
+				}
+			}
+			const nextRecoveries = [...recoveries];
 			const multiServiceRuntime = isMultiService(workload)
 				? multiServiceFor(state)
 				: undefined;
@@ -2034,16 +2440,18 @@ export function createWorkloadRuntimeV1(
 				>;
 				readonly secretUid: string;
 			}[] = [];
-			for (const { record } of bindingsFor(
-				state,
-				input,
-				candidateKeyless(state),
-			)) {
-				const reference = recordReference(record);
-				const activationFence = activeSecretFence(record, reference);
-				if (record.lifecycleState === "active" && !activationFence)
+			for (const { record } of bindings) {
+				const recovery = recoveryForReference(
+					recoveries,
+					recordReference(record),
+				);
+				const reference = recovery?.reference ?? recordReference(record);
+				const activationFence = recovery
+					? recoveryActivationFence(recovery)
+					: activeSecretFence(record, reference);
+				if (record.lifecycleState === "active" && !activationFence && !recovery)
 					throw new Error("Active Workload Secret fence is unavailable");
-				if (activationFence) {
+				if (activationFence && !pendingRecovery) {
 					const active = multiServiceRuntime
 						? await multiServiceRuntime.observeActiveImmutableSecret(
 								requireMultiWorkload(),
@@ -2055,7 +2463,14 @@ export function createWorkloadRuntimeV1(
 								reference,
 								activationFence,
 							);
-					if (active) continue;
+					// A prior CAS can commit before its UID receipt; revalidate bytes to recover it.
+					if (
+						active &&
+						(!recovery ||
+							(await options.client.read<V1Secret>("Secret", reference.name))
+								?.metadata?.uid === recovery.secretUid)
+					)
+						continue;
 				}
 				const decryption = await options.decryptor.decrypt({
 					encryptedRecord: record,
@@ -2087,8 +2502,22 @@ export function createWorkloadRuntimeV1(
 								reference.name,
 								secretDataKey(record.name),
 								decryption.plaintext,
-								activationFence ?? undefined,
+								pendingRecovery && recovery
+									? undefined
+									: (activationFence ?? undefined),
 							);
+					if (recovery) {
+						if (
+							pendingRecovery &&
+							recovery.secretUid &&
+							recovery.secretUid !== secretUid
+						)
+							throw new WorkloadKubernetesError("conflict");
+						nextRecoveries[recoveries.indexOf(recovery)] = {
+							...recovery,
+							secretUid,
+						};
+					}
 					if (activationFence)
 						activeBindingsToRepair.push({
 							reference,
@@ -2099,6 +2528,8 @@ export function createWorkloadRuntimeV1(
 					decryption.plaintext.fill(0);
 				}
 			}
+			if (!isDeepStrictEqual(nextRecoveries, recoveries))
+				return prepared(state, nextRecoveries);
 			let identity: { uid: string; generation: number };
 			if (isMultiService(workload)) {
 				const applied = await multiServiceFor(state).apply(workload, {
@@ -2110,13 +2541,38 @@ export function createWorkloadRuntimeV1(
 					generation: applied.generation as number,
 				};
 			} else {
-				const result = await adapter.reconcile(workload);
+				const result = await adapter.reconcile(workload, pendingRecovery);
 				if (result.status !== "applied") return "pending";
 				identity = {
 					uid: result.workloadUid,
 					generation: result.workloadGeneration,
 				};
 			}
+			if (
+				pendingRecovery &&
+				recoveries.some((value) => value.identity === null)
+			)
+				return prepared(
+					state,
+					recoveries.map((value) => ({ ...value, identity })),
+					identity,
+				);
+			if (pendingRecovery)
+				for (const recovery of recoveries) {
+					if (
+						recovery.identity?.uid !== identity.uid ||
+						identity.generation < recovery.identity.generation ||
+						!recovery.secretUid
+					)
+						throw new WorkloadKubernetesError("conflict");
+					await adapter.bindSecretFence(
+						workload,
+						identity,
+						recovery.reference.name,
+						recovery.fence,
+						recovery.secretUid,
+					);
+				}
 			for (const repaired of activeBindingsToRepair) {
 				if (
 					repaired.activationFence.workloadUid !== identity.uid ||
@@ -2170,6 +2626,7 @@ export function createWorkloadRuntimeV1(
 			const bindings = bindingsFor(state, input, candidateKeyless(state));
 			if (!bindings.length) return "active";
 			if (!input.secrets || !state.identity) return "failed";
+			if (!(await observeRecoveryBindings(state))) return "pending";
 			if (state.rollback)
 				return bindings.every(
 					({ record }) => record.lifecycleState === "active",
@@ -2183,7 +2640,7 @@ export function createWorkloadRuntimeV1(
 				)
 				.map(({ record }) => record);
 			if (!pending.length) return "active";
-			const workload = desired(state);
+			const workload = desiredForRecovery(state);
 			const multiServiceRuntime = isMultiService(workload)
 				? multiServiceFor(state)
 				: undefined;
@@ -2304,7 +2761,7 @@ export function createWorkloadRuntimeV1(
 			}
 			assertCandidateMaterializationAllowed(state);
 			if ("manifest" in state.candidate.configuration.source) {
-				const workload = desired(state);
+				const workload = desiredForRecovery(state);
 				if (isMultiService(workload))
 					await multiServiceFor(state).promote(workload);
 				return;
@@ -2340,13 +2797,14 @@ export function createWorkloadRuntimeV1(
 				},
 			);
 			await revalidateCandidateCatalog(state);
-			if (!state.identity) throw new Error();
+			if (!state.identity || !(await observeRecoveryBindings(state)))
+				throw new WorkloadKubernetesError("conflict");
 			if (
 				state.phase === "promoting" &&
 				!(await adapter.closeAgent(state.agentId, state.revision, state.fence))
 			)
 				throw new Error("Workload route is closing");
-			const workload = desired(state);
+			const workload = desiredForRecovery(state);
 			const result = await adapter.switchRoute(
 				{
 					schemaVersion: 1,
@@ -2370,6 +2828,14 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is unavailable");
 		},
 		async cleanup(state, deleteNewVolume, input) {
+			if (
+				hasUnverifiedWorkloadSecretRecoveryV1(state.candidate, state.verified)
+			) {
+				const recovered = await cleanupSecretRecoveries(state, input);
+				return recovered === true
+					? cleanupModelConfiguration(state)
+					: recovered;
+			}
 			// Unactivated Secrets cannot be removed while their initial consumers exist.
 			if (
 				deleteNewVolume &&

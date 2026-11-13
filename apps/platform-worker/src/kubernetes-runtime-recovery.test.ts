@@ -64,6 +64,83 @@ describe("persisted recovery candidate Kubernetes operations", () => {
 			creation,
 		};
 	}
+	it.each(["changed spec", "replaced witnessed UID"] as const)(
+		"rejects %s at the last recovery write boundary without modifying or adopting the replacement",
+		async (condition) => {
+			const f = await recoveryFixture();
+			const desired =
+				condition === "replaced witnessed UID"
+					? {
+							...f.desired,
+							expectedWorkload: {
+								state: "present" as const,
+								workloadUid: f.identity.uid,
+								workloadGeneration: f.identity.generation,
+							},
+						}
+					: f.desired;
+			const replacement = structuredClone(f.workload);
+			replacement.metadata.uid = "unwitnessed-at-put";
+			replacement.metadata.resourceVersion = "replacement-rv";
+			if (condition === "changed spec") {
+				if (!replacement.spec.template.spec?.containers[0]) throw new Error();
+				replacement.spec.template.spec.containers[0].env = [
+					{ name: "CHANGED", value: "unapproved" },
+				];
+			}
+			let reads = 0;
+			const read = f.client.read.bind(f.client);
+			vi.spyOn(f.client, "read").mockImplementation(async (kind, name) => {
+				if (
+					kind === "StatefulSet" &&
+					name === f.desired.service.name &&
+					++reads === 2
+				) {
+					f.resources.set(`StatefulSet/${name}`, replacement);
+					f.resources.delete(`Pod/${name}-0`);
+				}
+				return read(kind, name);
+			});
+			const replace = vi.spyOn(f.client, "replace");
+			await expect(f.adapter.apply(desired, true)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			expect(reads).toBe(2);
+			expect(
+				replace.mock.calls.filter(([value]) => value.kind === "StatefulSet"),
+			).toHaveLength(0);
+			expect(f.resources.get(`StatefulSet/${f.desired.service.name}`)).toEqual(
+				replacement,
+			);
+		},
+	);
+	it("rejects a recovery create collision without modifying or adopting the concurrent object", async () => {
+		const f = await recoveryFixture();
+		const key = `StatefulSet/${f.desired.service.name}`;
+		f.resources.delete(key);
+		f.resources.delete(`Pod/${f.desired.service.name}-0`);
+		const replacement = structuredClone(f.workload);
+		replacement.metadata.uid = "concurrent-create";
+		replacement.metadata.resourceVersion = "replacement-rv";
+		const create = f.client.create.bind(f.client);
+		let collided = false;
+		vi.spyOn(f.client, "create").mockImplementation(async (object) => {
+			if (object.kind === "StatefulSet") {
+				collided = true;
+				f.resources.set(key, replacement);
+			}
+			return create(object);
+		});
+		const replace = vi.spyOn(f.client, "replace");
+		await expect(f.adapter.apply(f.desired, true)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(collided).toBe(true);
+		expect(
+			replace.mock.calls.filter(([value]) => value.kind === "StatefulSet"),
+		).toHaveLength(0);
+		expect(f.resources.get(key)).toEqual(replacement);
+	});
 	it.each(["unhealthy", "no Pod", "increased generation"] as const)(
 		"adopts the exact persisted creation with %s without treating it as healthy",
 		async (condition) => {

@@ -5,7 +5,10 @@ import type {
 	SecretActivationLifecycleStateV1,
 	SecretActivationReferenceV1,
 } from "./secret-activation.js";
-import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
+import type {
+	WorkloadPreparationV1,
+	WorkloadReconciliationStateV1,
+} from "./workload-reconciliation.js";
 
 /** A Workload-owned materialization; the source Secret's activation never changes. */
 export interface WorkloadSecretRecoveryV1 {
@@ -179,6 +182,59 @@ export function hasUnverifiedWorkloadSecretRecoveryV1(
 				isDeepStrictEqual(previous, candidate),
 			),
 	);
+}
+
+/** Preserve only a trusted apply's UID receipt for an already verified creation. */
+export function syncVerifiedWorkloadSecretUidReceiptsV1(
+	state: WorkloadReconciliationStateV1,
+	prepared: WorkloadPreparationV1,
+	management: AgentManagementStateV1,
+): WorkloadReconciliationStateV1["verified"] {
+	const verified = state.verified;
+	const identity = prepared.identity;
+	if (
+		!verified?.secretRecoveries?.length ||
+		!identity ||
+		!isDeepStrictEqual(identity, state.identity) ||
+		management.agentId !== state.agentId ||
+		management.fence !== state.fence ||
+		management.workloadRevision !== state.sourceLifecycleRevision ||
+		management.desiredState !== "running" ||
+		management.status === "disabled" ||
+		!Array.isArray(management.ownerIds) ||
+		prepared.candidate.configuration.agentId !== state.agentId ||
+		prepared.candidate.configuration.revision !==
+			state.candidate.configuration.revision
+	)
+		return verified;
+	const current = workloadSecretRecoveriesV1(state);
+	const next = workloadSecretRecoveriesV1({
+		...state,
+		candidate: prepared.candidate,
+	});
+	let changed = false;
+	const secretRecoveries = verifiedRecoveries(state).map((previous) => {
+		const sameCreation = (value: WorkloadSecretRecoveryV1) =>
+			isDeepStrictEqual({ ...value, secretUid: previous.secretUid }, previous);
+		if (
+			!previous.secretUid ||
+			!previous.identity ||
+			previous.identity.uid !== identity.uid ||
+			previous.identity.generation > identity.generation ||
+			state.verifiedRevision === null ||
+			previous.workloadRevision > state.verifiedRevision ||
+			previous.sourceReference.ownerType !== "agent-owner" ||
+			!management.ownerIds.includes(previous.sourceReference.ownerId) ||
+			!current.some(sameCreation)
+		)
+			return previous;
+		const repaired = next.find(sameCreation);
+		if (!repaired?.secretUid || repaired.secretUid === previous.secretUid)
+			return previous;
+		changed = true;
+		return { ...previous, secretUid: repaired.secretUid };
+	});
+	return changed ? { ...verified, secretRecoveries } : verified;
 }
 
 /** Validated Store binding metadata; contains no encrypted or plaintext value. */

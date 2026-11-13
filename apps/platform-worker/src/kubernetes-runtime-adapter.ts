@@ -433,9 +433,31 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		return pvc;
 	}
 
+	function assertRecoveryWorkload(
+		current: V1StatefulSet,
+		value: AgentWorkloadDesiredV1,
+	) {
+		own(current, value.agentId, value.workloadRevision, value.fence);
+		if (
+			!current.metadata?.uid ||
+			!current.metadata.resourceVersion ||
+			current.metadata.deletionTimestamp ||
+			!Number.isSafeInteger(current.metadata.generation) ||
+			(current.metadata.generation ?? 0) < 1 ||
+			!hasCurrentMetadata(current, value) ||
+			hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
+			hasDriftedStatefulSetSpec(value, current.spec) ||
+			(value.expectedWorkload.state === "present" &&
+				(current.metadata.uid !== value.expectedWorkload.workloadUid ||
+					(current.metadata.generation ?? 0) <
+						value.expectedWorkload.workloadGeneration))
+		)
+			throw new WorkloadKubernetesError("conflict");
+	}
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: AgentWorkloadDesiredV1,
+		recovery = false,
 	): Promise<T> {
 		const kind = object.kind as WorkloadResourceKind;
 		const current = await client.read<T>(kind, object.metadata?.name ?? "");
@@ -450,6 +472,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			hasDriftedImmutableStatefulSetSpec(value, (current as V1StatefulSet).spec)
 		)
 			throw new WorkloadKubernetesError("conflict");
+		if (recovery) {
+			if (kind !== "StatefulSet") throw new WorkloadKubernetesError("policy");
+			if (current) {
+				assertRecoveryWorkload(current as V1StatefulSet, value);
+				return current;
+			}
+			if (value.expectedWorkload.state === "present")
+				throw new WorkloadKubernetesError("conflict");
+		}
 		const hash = resourceFingerprint(object);
 		object.metadata = {
 			...object.metadata,
@@ -1437,8 +1468,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 		async apply(
 			input: unknown,
+			recovery = false,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (recovery && (isMultiService(value) || value.replicas !== 1))
+				throw new WorkloadKubernetesError("policy");
 			const connection = connectionFor(value.agentId);
 			const skillBinding = skillHubRuntimeBindingV1(value);
 			if (
@@ -1481,6 +1515,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				throw new WorkloadKubernetesError("policy");
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
+			if (recovery && current) assertRecoveryWorkload(current, value);
 			// Reject stale work before any partial creation or scale-down. Per-write
 			// ownership and resourceVersion checks still protect subsequent races.
 			const existingPvc = await client.read<V1PersistentVolumeClaim>(
@@ -1606,6 +1641,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				current.spec?.template.metadata?.labels?.[revisionLabel] !==
 					String(value.workloadRevision);
 			if (
+				!recovery &&
 				current &&
 				(changing || driftedOwnedPod || value.replicas === 0) &&
 				(current.spec?.replicas !== 0 || ownedPods.length > 0)
@@ -1897,7 +1933,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					projection,
 				);
 			}
-			const applied = await put(workload, value);
+			// Recovery can create or adopt an exact object; it never repairs an unbound UID.
+			const applied = await put(workload, value, recovery);
 			if (!applied.metadata?.uid || !applied.metadata.generation)
 				throw new WorkloadKubernetesError("unavailable");
 			return {
@@ -2069,7 +2106,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	};
 	return {
 		...adapter,
-		async reconcile(input: unknown) {
+		async reconcile(input: unknown, recovery = false) {
 			const value = desired(input);
 			const correlation = {
 				schemaVersion: 1,
@@ -2083,7 +2120,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			try {
 				if (value.replicas === 0 && !(await closeRoute(value)))
 					throw new WorkloadKubernetesError("unavailable");
-				const identity = await adapter.apply(value);
+				const identity = await adapter.apply(value, recovery);
 				if (
 					identity === null &&
 					value.desiredState === "stopped" &&
