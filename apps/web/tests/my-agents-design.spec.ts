@@ -2703,9 +2703,13 @@ test("an edited platform identity application that the deployment cannot serve p
 	await page.keyboard.press("Enter");
 	const main = page.locator("#main-content");
 	const alert = main.locator(".application-form-alert");
-	await expect(alert).toHaveText(
-		"当前部署不支持此申请的入口身份校验，请新建申请。",
-	);
+	await expect
+		.poll(async () => (await alert.textContent())?.split(" 追踪编号："))
+		.toEqual([
+			"当前部署不支持此申请的入口身份校验，请新建申请。",
+			"trace-identity-entry",
+		]);
+	await expect(alert).not.toContainText("Controlled identity entry rejection");
 	await expect(alert).toHaveAttribute("role", "alert");
 	await expect(main.getByText(/检查字段后重试/)).toHaveCount(0);
 	await expectFocusSettled(alert, "修改申请入口身份不可用");
@@ -3117,7 +3121,15 @@ for (const failure of submissionFailures)
 		submitting.release();
 
 		const alert = main.locator(".application-form-alert");
-		await expect(alert).toHaveText(failure.text);
+		if ("traceId" in failure.body) {
+			await expect
+				.poll(async () => (await alert.textContent())?.split(" 追踪编号："))
+				.toEqual([failure.text, failure.body.traceId]);
+			await expect(alert).not.toContainText(failure.body.message);
+		} else {
+			await expect(alert).toHaveText(failure.text);
+			await expect(alert).not.toContainText("追踪编号：");
+		}
 		await expect(alert).toHaveAttribute("role", "alert");
 		await expect(alert).toHaveAttribute("tabindex", "-1");
 		await expectFocusSettled(

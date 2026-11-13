@@ -1139,9 +1139,14 @@ test("a missing platform identity entry is explained at the identity field and t
 	const submit = page.getByRole("button", { name: "提交审批", exact: true });
 	api.rejectNextApplication("ACTION_UNAVAILABLE");
 	await submit.click();
-	await expect(page.locator(".application-form-alert")).toHaveText(
-		"申请内容未通过服务端校验，请检查字段后重试。",
-	);
+	const alert = page.locator(".application-form-alert");
+	await expect
+		.poll(async () => (await alert.textContent())?.split(" 追踪编号："))
+		.toEqual([
+			"申请内容未通过服务端校验，请检查字段后重试。",
+			"trace-application-retry",
+		]);
+	await expect(alert).not.toContainText("Controlled application rejection");
 	await expect(
 		page.locator("#application-identity-responsibility-error"),
 	).toHaveText(
@@ -7546,9 +7551,13 @@ test("a server invalid-request rejection is explained once and focuses that aler
 	await page.keyboard.press("Enter");
 	const main = page.locator("#main-content");
 	const alert = main.getByRole("alert");
-	await expect(alert).toHaveText(
-		"申请内容未通过服务端校验，请检查字段后重试。",
-	);
+	await expect
+		.poll(async () => (await alert.textContent())?.split(" 追踪编号："))
+		.toEqual([
+			"申请内容未通过服务端校验，请检查字段后重试。",
+			"trace-invalid-request",
+		]);
+	await expect(alert).not.toContainText("Controlled invalid request");
 	await expect(main.getByText(/未通过服务端校验/)).toHaveCount(1);
 	await expectFocusSettled(alert, "整表校验失败");
 	const form = main.locator("form.application-form");
