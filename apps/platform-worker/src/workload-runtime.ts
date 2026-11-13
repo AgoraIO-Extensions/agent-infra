@@ -2409,6 +2409,15 @@ export function createWorkloadRuntimeV1(
 				);
 				if (first.identity && !live)
 					throw new WorkloadKubernetesError("conflict");
+				if (!first.identity && live) {
+					if (recoveries.some((value) => !value.secretUid))
+						throw new WorkloadKubernetesError("conflict");
+					return prepared(
+						state,
+						recoveries.map((value) => ({ ...value, identity: live })),
+						live,
+					);
+				}
 			}
 			const nextRecoveries = [...recoveries];
 			const multiServiceRuntime = isMultiService(workload)
@@ -2525,7 +2534,7 @@ export function createWorkloadRuntimeV1(
 					generation: applied.generation as number,
 				};
 			} else {
-				const result = await adapter.reconcile(workload);
+				const result = await adapter.reconcile(workload, pendingRecovery);
 				if (result.status !== "applied") return "pending";
 				identity = {
 					uid: result.workloadUid,

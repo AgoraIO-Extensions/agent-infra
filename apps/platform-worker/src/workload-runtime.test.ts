@@ -789,6 +789,116 @@ async function readySecretRecoveryFixture(model = false, keyless = false) {
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it.each(["observed", "absent"] as const)(
+		"guards a same-name replacement after an initially %s recovery observation",
+		async (initialObservation) => {
+			const f = await readySecretRecoveryFixture();
+			f.removeWorkload();
+			await f.tick(3); // drift -> durable plan -> durable Secret UID receipt.
+			const state = f.state;
+			assert(state?.candidate.secretRecoveries?.[0]?.secretUid);
+			expect(state.candidate.secretRecoveries[0].identity).toBeNull();
+			// Actual create succeeds, but its prepared identity receipt does not commit.
+			const lostReceipt = await createWorkloadRuntimeV1(f.options).apply(
+				state,
+				false,
+				f.input(state),
+			);
+			expect(lostReceipt).toMatchObject({
+				status: "prepared",
+				identity: { uid: expect.any(String) },
+			});
+			const key = `StatefulSet/${f.workloadName}`;
+			const original = structuredClone(f.resources.get(key)) as V1StatefulSet;
+			assert(
+				original.metadata?.uid && original.spec?.template.spec?.containers[0],
+			);
+			const originalUid = original.metadata.uid;
+			if (initialObservation === "absent") {
+				f.resources.delete(key);
+				f.resources.delete(`Pod/${f.workloadName}-0`);
+			}
+			let stsReads = 0;
+			let substituted = false;
+			const read = f.client.read.bind(f.client);
+			vi.spyOn(f.client, "read").mockImplementation(async (kind, name) => {
+				if (
+					kind === "StatefulSet" &&
+					name === f.workloadName &&
+					++stsReads === 2
+				) {
+					// The first exact adoption observation saw the real created object.
+					// Replace it before ordinary reconcile rereads the canonical name.
+					const other = structuredClone(original);
+					assert(other.metadata && other.spec?.template.spec?.containers[0]);
+					other.metadata.uid = "same-name-unverified-replacement";
+					other.metadata.resourceVersion = "replacement-rv";
+					other.spec.template.spec.containers[0].env = [
+						{ name: "CHANGED", value: "unapproved" },
+					];
+					f.resources.set(key, other);
+					f.resources.delete(`Pod/${f.workloadName}-0`);
+					substituted = true;
+				}
+				return read(kind, name);
+			});
+			const replace = vi.spyOn(f.client, "replace");
+			const adopted = await createWorkloadRuntimeV1(f.options).apply(
+				state,
+				false,
+				f.input(state),
+			);
+			const returnedIdentity =
+				adopted && typeof adopted === "object" && "identity" in adopted
+					? adopted.identity
+					: adopted;
+			expect(returnedIdentity).not.toEqual(
+				expect.objectContaining({ uid: "same-name-unverified-replacement" }),
+			);
+			const persisted =
+				adopted && typeof adopted === "object" && "status" in adopted
+					? {
+							...state,
+							candidate: adopted.candidate,
+							identity: adopted.identity,
+						}
+					: state;
+			expect(persisted.identity?.uid).not.toBe(
+				"same-name-unverified-replacement",
+			);
+			expect(
+				persisted.candidate.secretRecoveries?.some(
+					(value) => value.identity?.uid === "same-name-unverified-replacement",
+				),
+			).toBe(false);
+			if (initialObservation === "observed") {
+				expect(adopted).toMatchObject({
+					status: "prepared",
+					identity: { uid: originalUid },
+				});
+				expect(substituted).toBe(false);
+				await expect(
+					createWorkloadRuntimeV1(f.options).apply(
+						persisted,
+						false,
+						f.input(persisted),
+					),
+				).rejects.toMatchObject({ code: "conflict" });
+				expect(persisted.identity?.uid).toBe(originalUid);
+			} else expect(adopted).toBe("pending");
+			expect(substituted).toBe(true);
+			expect(
+				replace.mock.calls
+					.filter(([value]) => value.kind === "StatefulSet")
+					.map(([value]) => value.metadata?.uid),
+			).not.toContain("same-name-unverified-replacement");
+			expect(
+				(f.resources.get(key) as V1StatefulSet).spec?.template.spec
+					?.containers[0]?.env,
+			).toEqual([{ name: "CHANGED", value: "unapproved" }]);
+		},
+	);
+
 	it.each([false, true])(
 		"recovers the missing Workload through Runtime/core with the original Secret and PVC retained (model=%s)",
 		async (model) => {
