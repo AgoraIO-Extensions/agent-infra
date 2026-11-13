@@ -973,17 +973,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		useState<AgentApplicationFieldErrors>({});
 	const [serverValidationDismissed, setServerValidationDismissed] =
 		useState(false);
-	const serverErrorCodeRef = useRef<string | undefined>(
-		props.serverError?.code,
-	);
+	const serverErrorRef = useRef(props.serverError);
 	useEffect(() => {
-		if (
-			props.submitting ||
-			props.serverError?.code !== serverErrorCodeRef.current
-		)
+		if (props.submitting || props.serverError !== serverErrorRef.current)
 			setServerValidationDismissed(false);
-		serverErrorCodeRef.current = props.serverError?.code;
-	}, [props.serverError?.code, props.submitting]);
+		serverErrorRef.current = props.serverError;
+	}, [props.serverError, props.submitting]);
 	function dismissServerValidation() {
 		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
 			setServerValidationDismissed(true);
@@ -1053,6 +1048,27 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		`${sourceKind}/${templateId}/${templateRevision}`,
 		props.mode === "create" ? props.onCheckApplicationModels : undefined,
 	);
+	// 比较配置内容，避免选择器重渲染或服务端返回同一错误时自行解除校验。
+	const managedModelState = JSON.stringify(
+		managedModelCreate
+			? { checked: creationCheck.checked, selection: creationCheck.selection }
+			: managedModelEdit
+				? {
+						checked: keyCheck.checked,
+						selection: keyCheck.replacement?.modelConfiguration,
+					}
+				: null,
+	);
+	const previousManagedModelState = useRef(managedModelState);
+	useEffect(() => {
+		if (previousManagedModelState.current === managedModelState) return;
+		previousManagedModelState.current = managedModelState;
+		if (
+			props.serverError?.code === "INVALID_REQUEST" ||
+			props.serverError?.code === "MODEL_SELECTION_INVALID"
+		)
+			setServerValidationDismissed(true);
+	}, [managedModelState, props.serverError?.code]);
 	const modelConfigurationVisible =
 		showsModelConfiguration(props.mode, sourceKind, configureModels) &&
 		!managedModelEdit &&

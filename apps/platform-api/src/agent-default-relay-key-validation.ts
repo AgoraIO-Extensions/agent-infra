@@ -4,6 +4,7 @@ import {
 	createAgentDefaultRelayKeyModelVerifierV1,
 	type StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import {
 	type AgentDefaultRelayKeyDependenciesV1,
 	AgentDefaultRelayKeyErrorV1,
@@ -53,7 +54,15 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 					);
 				return await read(keyValue, configuration, signal);
 			} catch (error) {
-				if (error instanceof AgentDefaultRelayKeyErrorV1) throw error;
+				if (error instanceof AgentDefaultRelayKeyErrorV1) {
+					recordHttpFailureContext({
+						failureStep: `model.candidates.${error.code}`,
+					});
+					throw error;
+				}
+				recordHttpFailureContext({
+					failureStep: "model.candidates.unavailable",
+				});
 				throw new AgentDefaultRelayKeyErrorV1("unavailable");
 			}
 		},
@@ -65,6 +74,7 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 				AbortSignal.timeout(verificationTimeoutMs),
 			).catch(() => "unavailable" as const);
 			if (outcome === "verified") return;
+			recordHttpFailureContext({ failureStep: `model.validation.${outcome}` });
 			throw new AgentDefaultRelayKeyErrorV1(
 				outcome === "key_invalid"
 					? "invalid_input"

@@ -16,7 +16,10 @@ import {
 	ImmutableOciDigestV1Schema,
 	OciImageReferenceV1Schema,
 } from "@agent-infra/contracts/workload";
-import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
+import {
+	createOciImageRegistryAdapterV1,
+	type ImageRegistryAdmissionRejectedResultV1,
+} from "@agent-infra/image-registry";
 import {
 	createDeploymentModelCatalogAdapterV1,
 	ModelCatalogSnapshotV1Schema,
@@ -30,6 +33,7 @@ import {
 	type TemplateValidationContextV1,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import {
 	type AgentConfigurationModelAdmissionPortV2,
 	type AgentConfigurationModelV2,
@@ -178,6 +182,40 @@ async function readTemplateReadiness(template: Template) {
 	} catch {
 		return { state: "unavailable" as const, revision: null };
 	}
+}
+
+function templateReadinessMatches(
+	readiness: Awaited<ReturnType<typeof readTemplateReadiness>> | undefined,
+	expectedRevision?: string | null,
+): boolean {
+	if (readiness?.state === "unavailable") {
+		recordHttpFailureContext({
+			failureStep: "application.template.unavailable",
+		});
+		throw new Error("PLATFORM_DEPLOYMENT_TEMPLATE_VALIDATION_UNAVAILABLE");
+	}
+	if (readiness?.state !== "ready") {
+		recordHttpFailureContext({ failureStep: "application.template.not_ready" });
+		return false;
+	}
+	if (
+		expectedRevision !== undefined &&
+		expectedRevision !== readiness.revision
+	) {
+		recordHttpFailureContext({ failureStep: "application.template.changed" });
+		return false;
+	}
+	return true;
+}
+
+function recordImageRejection(
+	result: ImageRegistryAdmissionRejectedResultV1,
+): void {
+	recordHttpFailureContext({
+		failureStep: `application.image.${result.error.code.toLowerCase()}`,
+	});
+	if (result.error.retryable)
+		throw new Error("PLATFORM_DEPLOYMENT_IMAGE_ADMISSION_UNAVAILABLE");
 }
 
 /**
@@ -537,10 +575,19 @@ export function createDeploymentAdmissionsV1(
 				if (
 					snapshot.revision !== modelCatalogRevision ||
 					snapshot.validUntil <= Date.now()
-				)
+				) {
+					recordHttpFailureContext({
+						failureStep: "application.model.catalog_stale",
+					});
 					return null;
+				}
 				// 标准 Codex 来源必须对应一份受信的模板/镜像绑定，否则失败关闭。
-				if (!hasTrustedCodexBinding(request.source)) return null;
+				if (!hasTrustedCodexBinding(request.source)) {
+					recordHttpFailureContext({
+						failureStep: "application.model.selection_invalid",
+					});
+					return null;
+				}
 				// 模型与档位由默认 Key 的 `/models` 和保存时真实请求判定（ADR-0029），
 				// 这里只保留端点可用与部署可选的 `allowedModels` 收窄。
 				const options: AgentConfigurationModelV2["options"][number][] = [];
@@ -552,8 +599,12 @@ export function createDeploymentAdmissionsV1(
 						!endpoint?.available ||
 						(endpoint.allowedModels !== null &&
 							!endpoint.allowedModels.includes(option.modelId))
-					)
+					) {
+						recordHttpFailureContext({
+							failureStep: "application.model.selection_invalid",
+						});
 						return null;
+					}
 					options.push({
 						optionId: option.optionId,
 						endpointId: option.endpointId,
@@ -568,7 +619,10 @@ export function createDeploymentAdmissionsV1(
 					defaultReasoningLevel: request.requested.defaultReasoningLevel,
 				};
 			} catch {
-				return null;
+				recordHttpFailureContext({
+					failureStep: "application.model.catalog_unavailable",
+				});
+				throw new Error("PLATFORM_DEPLOYMENT_MODEL_ADMISSION_UNAVAILABLE");
 			}
 		},
 	};
@@ -634,7 +688,10 @@ export function createDeploymentAdmissionsV1(
 								},
 								{ signal: AbortSignal.timeout(30_000) },
 							);
-							if (result.status !== "admitted") return null;
+							if (result.status !== "admitted") {
+								recordImageRejection(result);
+								return null;
+							}
 							return result.policyEvidence;
 						}),
 					);
@@ -699,9 +756,12 @@ export function createDeploymentAdmissionsV1(
 					: undefined;
 				if (
 					readinessRequired &&
-					(readiness?.state !== "ready" ||
-						(selection.templateRevision !== undefined &&
-							selection.templateRevision !== readiness.revision))
+					!templateReadinessMatches(
+						readiness,
+						selection.kind === "standard"
+							? selection.templateRevision
+							: undefined,
+					)
 				)
 					return denied;
 				const imageReference =
@@ -732,15 +792,20 @@ export function createDeploymentAdmissionsV1(
 					},
 					{ signal: AbortSignal.timeout(30_000) },
 				);
-				if (result.status !== "admitted") return denied;
+				if (result.status !== "admitted") {
+					recordImageRejection(result);
+					return denied;
+				}
 				const manifest = result.runtimeManifest;
 				if (selection.kind === "standard") {
 					if (!template) return denied;
 					const currentReadiness = await readTemplateReadiness(template);
 					if (
 						(readinessRequired &&
-							(currentReadiness.state !== "ready" ||
-								currentReadiness.revision !== readiness?.revision)) ||
+							!templateReadinessMatches(
+								currentReadiness,
+								readiness?.revision,
+							)) ||
 						result.immutableDigest !== template.imageDigest ||
 						manifest.interactionMode !== "platform-adapter" ||
 						(template.connectionEnabled &&

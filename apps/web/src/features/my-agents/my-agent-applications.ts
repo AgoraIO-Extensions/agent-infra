@@ -139,10 +139,19 @@ export function applicationProgressSteps(
 	];
 }
 
-function requestError(input: { retryable?: boolean; code?: string } = {}) {
+function requestError(
+	input: {
+		retryable?: boolean;
+		code?: string;
+		status?: number;
+		traceId?: string;
+	} = {},
+) {
 	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
 		code: input.code,
 		retryable: input.retryable !== false,
+		status: input.status,
+		traceId: input.traceId,
 	});
 }
 
@@ -267,6 +276,8 @@ export async function createMyAgentApplication(
 		throw requestError({
 			code: result.error?.code,
 			retryable: result.error?.retryable,
+			status: result.response?.status,
+			traceId: result.error?.traceId,
 		});
 	}
 
@@ -297,6 +308,8 @@ export async function updateMyAgentApplication(
 		throw requestError({
 			code: result.error?.code,
 			retryable: result.error?.retryable,
+			status: result.response?.status,
+			traceId: result.error?.traceId,
 		});
 	}
 	if (result.data.applicationId !== applicationId)

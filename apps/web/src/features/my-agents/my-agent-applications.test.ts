@@ -260,6 +260,55 @@ describe("My Agents generated-client consumer", () => {
 		).rejects.toMatchObject({ retryable: false });
 	});
 
+	it.each(["create", "update"] as const)(
+		"preserves status and trace for %s failures without copying private error details",
+		async (operation) => {
+			const traceId = "1a119f6c-4be8-4fff-bbf2-5d01559659e4";
+			const server = createApplicationServer({
+				[operation === "create"
+					? "createAgentApplication"
+					: "updateAgentApplication"]: {
+					status: 409,
+					body: {
+						schemaVersion: 1,
+						code: "INVALID_REQUEST",
+						retryable: false,
+						traceId,
+						message: "PRIVATE_RESPONSE_BODY",
+					},
+				},
+			});
+			const body = {
+				schemaVersion: 2 as const,
+				name: "Retry",
+				description: "Synthetic",
+				source: pendingApplication.source,
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [],
+			};
+			const client = createApplicationClient(server);
+			const result =
+				operation === "create"
+					? createMyAgentApplication(body, "retry-create", client)
+					: updateMyAgentApplication(
+							pendingApplication.applicationId,
+							body,
+							"retry-update",
+							client,
+						);
+			const error = await result.catch((error: unknown) => error);
+			expect(error).toMatchObject({
+				code: "INVALID_REQUEST",
+				retryable: false,
+				status: 409,
+				traceId,
+			});
+			expect(JSON.stringify(error)).not.toContain("PRIVATE_RESPONSE_BODY");
+		},
+	);
+
 	it("uses schema-validated Pilot responses for current applicant list, detail, and withdrawal", async () => {
 		const server = createApplicationServer({
 			listAgentApplications: {

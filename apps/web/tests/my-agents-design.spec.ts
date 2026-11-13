@@ -2703,9 +2703,13 @@ test("an edited platform identity application that the deployment cannot serve p
 	await page.keyboard.press("Enter");
 	const main = page.locator("#main-content");
 	const alert = main.locator(".application-form-alert");
-	await expect(alert).toHaveText(
-		"当前部署不支持此申请的入口身份校验，请新建申请。",
-	);
+	await expect
+		.poll(async () => (await alert.textContent())?.split(" 追踪编号："))
+		.toEqual([
+			"当前部署不支持此申请的入口身份校验，请新建申请。",
+			"trace-identity-entry",
+		]);
+	await expect(alert).not.toContainText("Controlled identity entry rejection");
 	await expect(alert).toHaveAttribute("role", "alert");
 	await expect(main.getByText(/检查字段后重试/)).toHaveCount(0);
 	await expectFocusSettled(alert, "修改申请入口身份不可用");
@@ -3117,7 +3121,15 @@ for (const failure of submissionFailures)
 		submitting.release();
 
 		const alert = main.locator(".application-form-alert");
-		await expect(alert).toHaveText(failure.text);
+		if ("traceId" in failure.body) {
+			await expect
+				.poll(async () => (await alert.textContent())?.split(" 追踪编号："))
+				.toEqual([failure.text, failure.body.traceId]);
+			await expect(alert).not.toContainText(failure.body.message);
+		} else {
+			await expect(alert).toHaveText(failure.text);
+			await expect(alert).not.toContainText("追踪编号：");
+		}
 		await expect(alert).toHaveAttribute("role", "alert");
 		await expect(alert).toHaveAttribute("tabindex", "-1");
 		await expectFocusSettled(
@@ -4307,3 +4319,61 @@ test("invalid default Key leaves new application without selectable models (#314
 	await page.getByRole("button", { name: "提交审批", exact: true }).click();
 	expect(commands).toEqual([]);
 });
+
+for (const code of ["INVALID_REQUEST", "MODEL_SELECTION_INVALID"] as const) {
+	test(`a reasoning-only correction sends a second application POST after ${code} (#4119)`, async ({
+		page,
+	}) => {
+		const pageErrors = trackPageErrors(page);
+		await fixture(page);
+		let submissions = 0;
+		await page.route("**/api/v2/agent-applications", async (route) => {
+			if (route.request().method() !== "POST") return route.fallback();
+			submissions += 1;
+			if (submissions === 1)
+				return route.fulfill({
+					status: 409,
+					json: {
+						schemaVersion: 1,
+						code,
+						message: "Synthetic application rejection",
+						retryable: false,
+						traceId: "trace-application-retry-4119",
+					},
+				});
+			expect(
+				route.request().postDataJSON().modelConfiguration.options[0]
+					.reasoningLevels,
+			).toEqual(["medium"]);
+			return route.fulfill({ status: 201, json: application() });
+		});
+		await page.goto("/my-agents/new");
+		await pick(page, "标准模板", "Codex");
+		await page
+			.getByLabel("Agent 名称", { exact: true })
+			.fill("Application retry fixture");
+		await page
+			.getByLabel("用途说明", { exact: true })
+			.fill("Synthetic reasoning correction");
+		await selectCreateModel(page);
+		const submit = page.getByRole("button", { name: "提交审批", exact: true });
+		await submit.click();
+		await expect(page.getByRole("alert")).toContainText(
+			"追踪编号：trace-application-retry-4119",
+		);
+		await submit.click();
+		expect(submissions).toBe(1);
+		await page
+			.getByRole("checkbox", {
+				name: "高：Primary endpoint · gpt-5",
+				exact: true,
+			})
+			.uncheck();
+		await submit.click();
+		await expect(
+			page.getByText("申请已提交：待审批。", { exact: true }),
+		).toBeVisible();
+		expect(submissions).toBe(2);
+		await expectCleanPage(page, pageErrors);
+	});
+}

@@ -25,6 +25,8 @@ import type { loadApplicationModelCandidates } from "./use-application-model-can
 type RequestError = Error & {
 	readonly code?: string;
 	readonly retryable?: boolean;
+	readonly status?: number;
+	readonly traceId?: string;
 };
 
 type AgentApplicationSubmissionScreenProps =
@@ -142,11 +144,15 @@ export function AgentApplicationSubmissionScreen(
 	const submissionErrorMessage = props.error
 		? identityEntryUnavailable
 			? "当前部署不支持此申请的入口身份校验，请新建申请。"
-			: validationError
-				? "申请内容未通过服务端校验，请检查字段后重试。"
-				: props.error.retryable === false
-					? "申请已变更或当前不可用，请刷新页面后核对。"
-					: submissionFailureMessage
+			: props.error.code === "MODEL_SELECTION_INVALID"
+				? "所选模型或推理档位未通过验证，请调整选择后重新提交。"
+				: props.error.code === "INVALID_REQUEST" && props.error.status === 409
+					? "申请与当前状态冲突，请刷新页面后核对模板和申请状态。"
+					: validationError
+						? "申请内容未通过服务端校验，请检查字段后重试。"
+						: props.error.retryable === false
+							? "申请已变更或当前不可用，请刷新页面后核对。"
+							: submissionFailureMessage
 		: undefined;
 
 	return (
@@ -217,7 +223,11 @@ export function AgentApplicationSubmissionScreen(
 							cancelAction={cancelAction}
 							serverError={props.error}
 							showDeploymentStatus={false}
-							submissionErrorMessage={submissionErrorMessage}
+							submissionErrorMessage={
+								submissionErrorMessage && props.error?.traceId
+									? `${submissionErrorMessage} 追踪编号：${props.error.traceId}`
+									: submissionErrorMessage
+							}
 						/>
 					)}
 					{props.result ? (
