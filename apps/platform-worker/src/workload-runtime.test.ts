@@ -27,7 +27,9 @@ import {
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
 	runtimeModelInjectionV1,
+	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
 import type {
 	SessionSandboxDeletionProgressV1,
@@ -40,6 +42,7 @@ import {
 	createWorkloadReconciliationV1,
 	decideSessionSandboxDrainObservationV1,
 	decodeAgentConfigurationRecordV3,
+	immutableSecretNameV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
 	type WorkloadReconciliationInputV1,
@@ -688,7 +691,546 @@ function cleanupSecrets(
 	};
 }
 
+async function readySecretRecoveryFixture(model = false, keyless = false) {
+	const record = pendingSecretRecord(
+		model && !keyless
+			? { name: "model:primary", secretId: "model-secret-a" }
+			: {},
+	);
+	const storage = secretCleanupStore(record, { activation: true });
+	const secrets = cleanupSecrets(storage);
+	const decrypt = vi.fn(async () => ({
+		outcome: "decrypted" as const,
+		plaintext: new TextEncoder().encode("recovery-credential"),
+	}));
+	const audit = vi.spyOn(secrets, "auditDecryption");
+	const configured = standardModelConfiguration({
+		secrets: keyless ? secretConfiguration().secrets : [],
+	});
+	const keylessConfiguration = keyless
+		? decodeAgentConfigurationRecordV3({
+				...configured,
+				schemaVersion: 3,
+				source: { ...configured.source, allowedSecretKeys: ["BOT_TOKEN"] },
+				modelConfiguration: {
+					...configured.modelConfiguration,
+					options: configured.modelConfiguration?.options.map(
+						({ credential: _, ...option }) => option,
+					),
+				},
+			})
+		: undefined;
+	const f = fixture(
+		{
+			decryptor: { decrypt },
+			...(keyless ? { runtimeModelVersion: 4 as const } : {}),
+			...(model
+				? {
+						modelCatalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+						modelAccess: createFakeModelAccessValidatorV1([
+							{
+								endpointId: "endpoint-a",
+								modelId: "model-a",
+								reasoningLevels: ["medium"],
+								credential: "recovery-credential",
+							},
+						]),
+					}
+				: {}),
+		},
+		{
+			configuration:
+				keylessConfiguration ?? (model ? configured : secretConfiguration()),
+			secrets,
+		},
+	);
+	await f.tick(10);
+	expect(f.state?.phase).toBe("ready");
+	const original = structuredClone(storage.record);
+	const workloadName = workloadResourceNameV1("agent-a");
+	const originalSecret = [...f.resources.values()].find(
+		(value) =>
+			value.kind === "Secret" &&
+			value.metadata?.name ===
+				(original as ActiveSecretRecordV1).kubernetesSecretRef.name,
+	);
+	assert(originalSecret);
+	const pvc = structuredClone(
+		f.resources.get(`PersistentVolumeClaim/${workloadName}-data`),
+	);
+	const removeWorkload = () => {
+		f.resources.delete(`StatefulSet/${workloadName}`);
+		f.resources.delete(`Pod/${workloadName}-0`);
+	};
+	const input = (
+		state: WorkloadReconciliationStateV1,
+		overrides: Partial<WorkloadReconciliationInputV1> = {},
+	): WorkloadReconciliationInputV1 => ({
+		state,
+		management: f.management,
+		configuration: state.candidate.configuration,
+		secrets,
+		requestId: "recovery-request",
+		traceId: "recovery-trace",
+		...overrides,
+	});
+	return Object.assign(f, {
+		storage,
+		secrets,
+		decrypt,
+		audit,
+		original,
+		originalSecret: structuredClone(originalSecret),
+		pvc,
+		workloadName,
+		removeWorkload,
+		input,
+	});
+}
+
 describe("assembled Workload Runtime contracts", () => {
+	it.each([false, true])(
+		"recovers the missing Workload through Runtime/core with the original Secret and PVC retained (model=%s)",
+		async (model) => {
+			const f = await readySecretRecoveryFixture(model);
+			const originalUid = f.state?.identity?.uid;
+			f.removeWorkload();
+			await f.tick(1);
+			expect(f.state?.phase).toBe("applying");
+			const decryptions = f.decrypt.mock.calls.length;
+			const audits = f.audit.mock.calls.length;
+			const writes = f.writes.length;
+			const creates = vi.spyOn(f.client, "create");
+			await f.tick(1);
+			expect(f.state).toMatchObject({ phase: "applying", identity: null });
+			expect(f.decrypt).toHaveBeenCalledTimes(decryptions);
+			expect(f.audit).toHaveBeenCalledTimes(audits);
+			expect(creates).not.toHaveBeenCalled();
+			expect(
+				f.writes
+					.slice(writes)
+					.every(
+						(value) =>
+							value.kind === "Service" &&
+							(value as V1Service).spec?.selector?.[
+								"agent-infra.agora.io/revision"
+							] === "closed",
+					),
+			).toBe(true);
+			const recovery = f.state?.candidate.secretRecoveries?.[0];
+			assert(recovery);
+			expect(
+				validateAgentWorkloadDesiredV1(f.state?.candidate.deployment)
+					.secretRefs,
+			).toEqual([recovery.reference]);
+			await f.tick(8);
+			expect(f.state?.phase).toBe("ready");
+			expect(f.state?.identity?.uid).not.toBe(originalUid);
+			expect(f.storage.record).toEqual(f.original);
+			expect(
+				f.resources.get(`Secret/${recovery.sourceReference.name}`),
+			).toEqual(f.originalSecret);
+			expect(
+				f.resources.get(`PersistentVolumeClaim/${f.workloadName}-data`)
+					?.metadata?.uid,
+			).toBe(f.pvc?.metadata?.uid);
+			const workload = f.resources.get(
+				`StatefulSet/${f.workloadName}`,
+			) as V1StatefulSet;
+			expect(JSON.stringify(workload.spec)).toContain(recovery.reference.name);
+			expect(JSON.stringify(workload.spec)).not.toContain(
+				`"${recovery.sourceReference.name}"`,
+			);
+		},
+	);
+	it.each([
+		"owner",
+		"management fence",
+		"source fence",
+		"source record",
+	] as const)(
+		"rejects persisted recovery %s drift before decrypting or creating",
+		async (change) => {
+			const f = await readySecretRecoveryFixture();
+			f.removeWorkload();
+			await f.tick(2);
+			const state = f.state;
+			assert(state?.candidate.secretRecoveries?.length);
+			const original = validateActiveSecretRecordV1(f.storage.record);
+			const overrides: Partial<WorkloadReconciliationInputV1> =
+				change === "owner"
+					? { management: { ...f.management, ownerIds: ["other-owner"] } }
+					: change === "management fence"
+						? { management: { ...f.management, fence: state.fence + 1 } }
+						: {
+								secrets: {
+									...f.secrets,
+									bindings: [
+										{
+											materialization: "current",
+											record:
+												change === "source record"
+													? pendingSecretRecord()
+													: validateActiveSecretRecordV1({
+															...original,
+															activationFence: {
+																...original.activationFence,
+																fence: original.activationFence.fence + 1,
+															},
+														}),
+										},
+									],
+								},
+							};
+			const decryptions = f.decrypt.mock.calls.length;
+			const writes = f.writes.length;
+			await expect(
+				createWorkloadRuntimeV1(f.options).apply(
+					state,
+					false,
+					f.input(state, overrides),
+				),
+			).rejects.toThrow();
+			expect(f.decrypt).toHaveBeenCalledTimes(decryptions);
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
+	it.each(["Secret", "StatefulSet"] as const)(
+		"reuses the same recovery after a lost %s creation response",
+		async (kind) => {
+			const f = await readySecretRecoveryFixture();
+			f.removeWorkload();
+			await f.tick(2);
+			const name = f.state?.candidate.secretRecoveries?.[0]?.reference.name;
+			assert(name);
+			if (kind === "StatefulSet") await f.tick(1);
+			const create = f.client.create.bind(f.client);
+			let lost = false;
+			const creates = vi
+				.spyOn(f.client, "create")
+				.mockImplementation(async (object) => {
+					const result = await create(object);
+					if (!lost && object.kind === kind) {
+						lost = true;
+						throw new WorkloadKubernetesError("unavailable");
+					}
+					return result;
+				});
+			await f.tick(1);
+			expect(lost).toBe(true);
+			expect(f.state?.phase).toBe("applying");
+			expect(f.state?.candidate.secretRecoveries?.[0]?.reference.name).toBe(
+				name,
+			);
+			await f.tick(8);
+			expect(f.state?.phase).toBe("ready");
+			expect(
+				creates.mock.calls.filter(([object]) => object.kind === kind),
+			).toHaveLength(1);
+			expect(f.storage.record).toEqual(f.original);
+		},
+	);
+	it.each(["UID", "spec"] as const)(
+		"rejects a recovery Workload with a changed %s",
+		async (change) => {
+			const f = await readySecretRecoveryFixture();
+			f.removeWorkload();
+			await f.tick(4);
+			const state = f.state;
+			assert(state?.identity);
+			const workload = f.resources.get(
+				`StatefulSet/${f.workloadName}`,
+			) as V1StatefulSet;
+			assert(workload.metadata && workload.spec?.template.spec?.containers[0]);
+			if (change === "UID") workload.metadata.uid = "replacement-uid";
+			else
+				workload.spec.template.spec.containers[0].env = [
+					{ name: "CHANGED", value: "unsafe" },
+				];
+			const decryptions = f.decrypt.mock.calls.length;
+			const writes = f.writes.length;
+			await expect(
+				createWorkloadRuntimeV1(f.options).apply(state, false, f.input(state)),
+			).rejects.toThrow();
+			expect(f.decrypt).toHaveBeenCalledTimes(decryptions);
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
+	it("inherits verified materializations through restart and creates a new intention after another loss", async () => {
+		const f = await readySecretRecoveryFixture();
+		f.removeWorkload();
+		await f.tick(10);
+		expect(f.state?.phase).toBe("ready");
+		const recovered = f.state?.candidate.secretRecoveries?.[0];
+		assert(recovered);
+		f.setManagement({ ...f.management, fence: 2, workloadRevision: 2 });
+		await f.tick(9);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.candidate.secretRecoveries?.[0]).toEqual(recovered);
+		f.removeWorkload();
+		await f.tick(2);
+		const next = f.state?.candidate.secretRecoveries?.[0];
+		expect(next?.reference.name).not.toBe(recovered.reference.name);
+		expect(next?.sourceReference).toEqual(recovered.sourceReference);
+		expect(next?.sourceActivationFence).toEqual(
+			recovered.sourceActivationFence,
+		);
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.storage.record).toEqual(f.original);
+	});
+	it.each(["planned", "secret", "workload"] as const)(
+		"cleans only the unverified recovery at the %s boundary under a newer stop fence",
+		async (boundary) => {
+			const f = await readySecretRecoveryFixture();
+			f.removeWorkload();
+			await f.tick(
+				2 + (boundary === "planned" ? 0 : boundary === "secret" ? 1 : 2),
+			);
+			const recovery = f.state?.candidate.secretRecoveries?.[0];
+			assert(recovery);
+			f.setManagement({
+				...f.management,
+				fence: 2,
+				workloadRevision: 2,
+				desiredState: "stopped",
+				status: "stopped",
+			});
+			await f.tick(5);
+			expect(f.state?.phase).toBe("stopped");
+			expect(f.resources.has(`StatefulSet/${f.workloadName}`)).toBe(false);
+			expect(f.resources.has(`Secret/${recovery.reference.name}`)).toBe(false);
+			expect(
+				f.resources.get(`Secret/${recovery.sourceReference.name}`),
+			).toEqual(f.originalSecret);
+			expect(
+				f.resources.get(`PersistentVolumeClaim/${f.workloadName}-data`)
+					?.metadata?.uid,
+			).toBe(f.pvc?.metadata?.uid);
+			expect(f.storage.record).toEqual(f.original);
+		},
+	);
+	it("repairs a verified recovery Secret UID from trusted bytes after a later restart", async () => {
+		const f = await readySecretRecoveryFixture();
+		f.removeWorkload();
+		await f.tick(10);
+		f.setManagement({ ...f.management, fence: 2, workloadRevision: 2 });
+		await f.tick(9);
+		expect(f.state?.phase).toBe("ready");
+		const old = f.state?.candidate.secretRecoveries?.[0];
+		assert(old?.secretUid);
+		f.resources.delete(`Secret/${old.reference.name}`);
+		await f.tick(10);
+		expect(f.state?.phase).toBe("ready");
+		const repaired = f.state?.candidate.secretRecoveries?.[0];
+		expect(repaired?.reference).toEqual(old.reference);
+		expect(repaired?.identity?.uid).toBe(old.identity?.uid);
+		expect(repaired?.secretUid).not.toBe(old.secretUid);
+		expect(f.storage.record).toEqual(f.original);
+	});
+	it("cleans the failed recovery model projection while retaining the verified projection", async () => {
+		const f = await readySecretRecoveryFixture(true);
+		assert(f.state?.verified);
+		const originalProjection = runtimeModelInjectionV1(
+			validateRuntimeModelProjectionV1(f.state.verified.modelProjection),
+		);
+		f.removeWorkload();
+		await f.tick(4);
+		assert(f.state?.identity);
+		const candidateProjection = runtimeModelInjectionV1(
+			validateRuntimeModelProjectionV1(f.state.candidate.modelProjection),
+		);
+		expect(candidateProjection.secretName).not.toBe(
+			originalProjection.secretName,
+		);
+		Object.assign(f.options, {
+			probeRuntime: async () => ({ core: "failed", capabilities: {} }),
+		});
+		await f.tick(3);
+		expect(f.state?.rollback).toBe(true);
+		expect(f.resources.has(`Secret/${candidateProjection.secretName}`)).toBe(
+			false,
+		);
+		expect(f.resources.has(`Secret/${originalProjection.secretName}`)).toBe(
+			true,
+		);
+		expect(f.storage.record).toEqual(f.original);
+	});
+	it("retains the shared verified V4 model Secret while cleaning an env recovery", async () => {
+		const f = await readySecretRecoveryFixture(true, true);
+		assert(f.state?.verified);
+		const original = runtimeModelInjectionV4(
+			validateRuntimeModelProjectionV4(f.state.verified.modelProjection),
+		);
+		const before = structuredClone(
+			f.resources.get(`Secret/${original.secretName}`),
+		);
+		f.removeWorkload();
+		await f.tick(4);
+		Object.assign(f.options, {
+			probeRuntime: async () => ({ core: "failed", capabilities: {} }),
+		});
+		await f.tick(3);
+		expect(f.state?.rollback).toBe(true);
+		const retained = f.resources.get(
+			`Secret/${original.secretName}`,
+		) as V1Secret;
+		expect(retained.metadata?.uid).toBe(before?.metadata?.uid);
+		expect(retained.data).toEqual((before as V1Secret)?.data);
+		expect(retained.immutable).toBe(true);
+	});
+	it.each([false, true])(
+		"prepares missing-workload Secret recovery before decrypting, then reuses the persisted target (rollback=%s)",
+		async (rollback) => {
+			const decrypt = vi.fn(async () => ({
+				outcome: "decrypted" as const,
+				plaintext: new TextEncoder().encode("recovery-credential"),
+			}));
+			const originalRecord = activeSecretRecord();
+			const materializedName = immutableSecretNameV1({
+				schemaVersion: 1,
+				agentId: originalRecord.agentId,
+				secretId: originalRecord.secretId,
+				secretVersion: originalRecord.secretVersion,
+				configRevision: originalRecord.configRevision,
+				ownerType: originalRecord.ownerType,
+				ownerId: originalRecord.ownerId,
+				name: originalRecord.name,
+				wrappingKeyVersion: originalRecord.crypto.wrappingKeyVersion,
+				lifecycleState: "active",
+				encryptedRecord: originalRecord,
+				failureRetryable: null,
+			});
+			const record = validateActiveSecretRecordV1({
+				...originalRecord,
+				kubernetesSecretRef: {
+					...originalRecord.kubernetesSecretRef,
+					name: materializedName,
+				},
+				activationFence: {
+					...originalRecord.activationFence,
+					kubernetesSecretName: materializedName,
+				},
+			});
+			const secrets = cleanupSecrets(secretCleanupStore(record));
+			const audit = vi.spyOn(secrets, "auditDecryption");
+			const f = fixture(
+				{ decryptor: { decrypt } },
+				{ configuration: secretConfiguration(), secrets },
+			);
+			await f.tick(2);
+			assert(f.state?.candidate.deployment);
+			const base = f.state;
+			assert(base);
+			const state: WorkloadReconciliationStateV1 = {
+				...base,
+				phase: "applying",
+				verified: base.candidate,
+				verifiedRevision: base.revision,
+				identity: null,
+				rollback,
+			};
+			const runtime = createWorkloadRuntimeV1(f.options);
+			const input = {
+				configuration: state.candidate.configuration,
+				management: f.management,
+				state,
+				secrets,
+				requestId: "request-recovery",
+				traceId: "trace-recovery",
+			};
+			const writesBefore = f.writes.length;
+			const creates = vi.spyOn(f.client, "create");
+			const prepared = await runtime.apply(state, false, input);
+			expect(prepared).toMatchObject({ status: "prepared", identity: null });
+			expect(decrypt).not.toHaveBeenCalled();
+			expect(audit).not.toHaveBeenCalled();
+			expect(creates).not.toHaveBeenCalled();
+			expect(f.writes).toHaveLength(writesBefore);
+			if (
+				!prepared ||
+				typeof prepared !== "object" ||
+				!("status" in prepared) ||
+				prepared.status !== "prepared"
+			)
+				throw new Error("Expected a persisted recovery candidate");
+			const recovery = prepared.candidate.secretRecoveries?.[0];
+			assert(recovery);
+			expect(recovery.reference.name).toBe(
+				`${recovery.sourceReference.name}-w${state.revision}-f${state.fence}`,
+			);
+
+			const persisted: WorkloadReconciliationStateV1 = {
+				...state,
+				candidate: prepared.candidate,
+				identity: prepared.identity,
+			};
+			const storeModule = new URL(
+				"../../../packages/platform-store/src/workload-reconciliation.ts",
+				import.meta.url,
+			).href;
+			const { decodePersistedWorkloadStateV1 } = await import(storeModule);
+			const persistedJson = JSON.parse(JSON.stringify(persisted));
+			expect(
+				decodePersistedWorkloadStateV1(persistedJson, state.agentId)?.state,
+			).toEqual(persistedJson);
+			const invalid = {
+				...persistedJson,
+				candidate: {
+					...persistedJson.candidate,
+					deployment: state.candidate.deployment,
+				},
+			};
+			expect(() =>
+				decodePersistedWorkloadStateV1(invalid, state.agentId),
+			).toThrow("Invalid persisted Workload recovery binding");
+			const applied = await runtime.apply(persisted, false, {
+				...input,
+				state: persisted,
+			});
+			expect(applied).toMatchObject({ status: "prepared", identity: null });
+			expect(decrypt).toHaveBeenCalledTimes(1);
+			expect(f.resources.has(`Secret/${recovery.reference.name}`)).toBe(true);
+			expect(
+				f.resources.has(`StatefulSet/${workloadResourceNameV1(state.agentId)}`),
+			).toBe(false);
+			if (!applied || typeof applied !== "object" || !("status" in applied))
+				throw new Error();
+			expect(applied.candidate.secretRecoveries?.[0]?.secretUid).toEqual(
+				expect.any(String),
+			);
+			expect(
+				validateAgentWorkloadDesiredV1(applied.candidate.deployment).secretRefs,
+			).toEqual([recovery.reference]);
+			const materialized = { ...persisted, candidate: applied.candidate };
+			const created = await createWorkloadRuntimeV1(f.options).apply(
+				materialized,
+				false,
+				{ ...input, state: materialized },
+			);
+			if (!created || typeof created !== "object" || !("status" in created))
+				throw new Error();
+			expect(created).toMatchObject({
+				status: "prepared",
+				identity: { uid: expect.any(String) },
+			});
+			expect(created.candidate.secretRecoveries?.[0]?.reference).toEqual(
+				recovery.reference,
+			);
+			const withIdentity = {
+				...materialized,
+				candidate: created.candidate,
+				identity: created.identity,
+			};
+			expect(
+				await createWorkloadRuntimeV1(f.options).apply(withIdentity, false, {
+					...input,
+					state: withIdentity,
+				}),
+			).toEqual(created.identity);
+		},
+	);
+
 	it.each(["allowedModels", "reasoningLevels"] as const)(
 		"keeps the saved V4 candidate through activation after a compatible %s change",
 		async (change) => {

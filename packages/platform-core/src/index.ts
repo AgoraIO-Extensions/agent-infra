@@ -236,7 +236,16 @@ export {
 	type WorkloadResourceConfigurationV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-resource-configuration.js";
-export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";
+export {
+	hasUnverifiedWorkloadSecretRecoveryV1,
+	inheritWorkloadSecretRecoveriesV1,
+	parseWorkloadSecretRecoveriesV1,
+	planMissingWorkloadSecretRecoveryV1,
+	validateWorkloadSecretRecoverySourcesV1,
+	type WorkloadSecretRecoverySourceV1,
+	type WorkloadSecretRecoveryV1,
+	workloadSecretRecoveriesV1,
+} from "./workload-secret-recovery.js";
 export * from "./workspace-snapshot.js";
 export * from "./workspace-snapshot-archive.js";
 export * from "./workspace-snapshot-gc.js";
