@@ -163,6 +163,53 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expectSingleFooterCancel("/my-agents");
 	});
 
+	it.each([
+		[
+			409,
+			"INVALID_REQUEST",
+			"申请与当前状态冲突，请刷新页面后核对模板和申请状态。",
+		],
+		[
+			409,
+			"MODEL_SELECTION_INVALID",
+			"所选模型或推理档位未通过验证，请调整选择后重新提交。",
+		],
+		[
+			503,
+			"DEPENDENCY_UNAVAILABLE",
+			"申请提交失败，部署依赖暂不可用，请稍后重试。",
+		],
+	] as const)(
+		"shows the recovery and trace for %s / %s",
+		async (status, code, message) => {
+			const traceId = "1a119f6c-4be8-4fff-bbf2-5d01559659e4";
+			await renderWithMyAgentsRouter(
+				<AgentApplicationSubmissionScreen
+					mode="create"
+					onSubmit={vi.fn()}
+					submitting={false}
+					error={Object.assign(new Error("PRIVATE_ERROR_DETAIL"), {
+						status,
+						code,
+						retryable: status === 503,
+						traceId,
+					})}
+				/>,
+			);
+			const alert = screen.getByRole("alert");
+			expect(alert.textContent).toContain(message);
+			expect(alert.textContent).toContain(`追踪编号：${traceId}`);
+			expect(alert.textContent).not.toContain("PRIVATE_ERROR_DETAIL");
+			await waitFor(() =>
+				expect(document.activeElement).toBe(
+					code === "MODEL_SELECTION_INVALID"
+						? screen.getByLabelText("默认模型")
+						: alert,
+				),
+			);
+		},
+	);
+
 	// #3268 N8-2-03：服务端整表校验失败只说明一次（页面顶部的 role=alert），焦点移到这条提示，
 	// 不再落到整张表单，表单内也没有第二条措辞相近的提示。
 	it("focuses the single submission alert for a server invalid-request error", async () => {

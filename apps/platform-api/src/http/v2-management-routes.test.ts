@@ -8,6 +8,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import type { OperationalEvent } from "@agent-infra/observability";
 import {
+	ApplicationFoundationError,
 	ApplicationRevisionError,
 	createPersonalApiAgentReadUseCaseV1,
 	type PersonalApiAgentReadAuditV1,
@@ -826,6 +827,42 @@ describe("V2 management routes", () => {
 			undefined,
 		);
 	});
+
+	it.each([
+		"not_admitted",
+		"conflict",
+		"idempotency_conflict",
+		"model_profile_unsupported",
+		"dependency_unavailable",
+	] as const)(
+		"records the internal application %s reason against the public trace",
+		async (code) => {
+			const telemetry: OperationalEvent[] = [];
+			const f = createApp({ telemetry });
+			f.submit.mockRejectedValueOnce(
+				Object.assign(new ApplicationFoundationError(code), {
+					privateDetail: "PRIVATE_SUBMISSION_KEY",
+				}),
+			);
+			const response = await f.app.request("/api/v2/agent-applications", {
+				method: "POST",
+				headers,
+				body: JSON.stringify(applicationBody),
+			});
+			const body = PilotProtocolErrorV1Schema.parse(await response.json());
+			expect(response.status).toBe(
+				code === "dependency_unavailable" ? 503 : 409,
+			);
+			expect(telemetry[0]).toMatchObject({
+				failureStep: `application.submit.${code}`,
+				traceId: body.traceId,
+				errorClass: "ApplicationFoundationError",
+			});
+			expect(JSON.stringify([telemetry, body])).not.toContain(
+				"PRIVATE_SUBMISSION_KEY",
+			);
+		},
+	);
 
 	it("rejects a standard application that omits the Agent default Relay Key", async () => {
 		const { app, submit } = createApp();

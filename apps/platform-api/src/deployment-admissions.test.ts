@@ -5,6 +5,8 @@ import {
 	standardTemplateReadinessV1,
 	templateValidationPayloadHashV1,
 } from "@agent-infra/model-catalog";
+import type { OperationalEvent } from "@agent-infra/observability";
+import { createHttpObservability } from "@agent-infra/observability/http";
 import {
 	type AgentConfigurationModelInputV1,
 	type AgentConfigurationModelV1,
@@ -12,6 +14,7 @@ import {
 	createAgentConfigurationUseCaseV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationTransactionV1 } from "@agent-infra/platform-core/testing";
+import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import {
@@ -1802,6 +1805,95 @@ describe("production deployment admissions", () => {
 			}),
 		).toBeNull();
 	});
+
+	it.each(["registry", "policy"] as const)(
+		"keeps a temporary image %s failure retryable and observable",
+		async (kind) => {
+			const f = fixture();
+			if (kind === "registry")
+				f.fetch.mockRejectedValue(new Error("PRIVATE_REGISTRY_CREDENTIAL"));
+			else
+				f.authorize.mockRejectedValue(new Error("PRIVATE_POLICY_CREDENTIAL"));
+			const a = createDeploymentAdmissionsV1(f.input);
+			const events: OperationalEvent[] = [];
+			const app = new Hono();
+			app.use(
+				"*",
+				createHttpObservability({ record: (event) => events.push(event) }),
+			);
+			app.get("/admission", async (context) => {
+				try {
+					await a.imageAdmission.admitImage({
+						...request,
+						requested: { kind: "standard", templateId: "codex" },
+					});
+					return context.text("rejected", 409);
+				} catch {
+					return context.text("unavailable", 503);
+				}
+			});
+			expect((await app.request("/admission")).status).toBe(503);
+			expect(events[0]).toMatchObject({
+				failureStep:
+					kind === "registry"
+						? "application.image.image_registry_unavailable"
+						: "application.image.image_admission_policy_unavailable",
+			});
+			expect(JSON.stringify(events)).not.toMatch(
+				/PRIVATE_|credential|models\.example/,
+			);
+		},
+	);
+
+	it("does not turn a keyless catalog dependency failure into a terminal selection rejection", async () => {
+		const f = fixture();
+		f.load.mockRejectedValue(new Error("PRIVATE_CATALOG_CREDENTIAL"));
+		await expect(
+			createDeploymentAdmissionsV1(f.input).keylessModelAdmission.admitModels({
+				...request,
+				source: {
+					kind: "standard",
+					templateId: "codex",
+					imageDigest: f.imageDigest,
+				} as AgentConfigurationSourceV1,
+				requested: {
+					...modelInput(),
+					options: modelInput().options.map(
+						({ replaceCredential: _replaceCredential, ...option }) => option,
+					),
+				},
+			}),
+		).rejects.toThrow(/^PLATFORM_DEPLOYMENT_MODEL_ADMISSION_UNAVAILABLE$/);
+	});
+
+	it.each(["before", "after"] as const)(
+		"keeps a template loader failure %s the Registry read retryable",
+		async (when) => {
+			const f = fixture();
+			const template = f.input.templates[0];
+			if (!template?.loadValidation)
+				throw new Error("missing validation fixture");
+			const validation = await template.loadValidation(
+				AbortSignal.timeout(1_000),
+			);
+			const loadValidation = vi
+				.fn()
+				.mockRejectedValue(new Error("PRIVATE_VALIDATION_FILE"));
+			if (when === "after") loadValidation.mockResolvedValueOnce(validation);
+			const input = {
+				...f.input,
+				templates: [{ ...template, loadValidation }],
+			};
+			await expect(
+				createDeploymentAdmissionsV1(input).imageAdmission.admitImage({
+					...request,
+					requested: { kind: "standard", templateId: "codex" },
+				}),
+			).rejects.toThrow(
+				/^PLATFORM_DEPLOYMENT_TEMPLATE_VALIDATION_UNAVAILABLE$/,
+			);
+		},
+	);
 
 	it("reports unavailable catalog loading without leaking source errors", async () => {
 		const f = fixture();

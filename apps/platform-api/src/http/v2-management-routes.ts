@@ -32,6 +32,7 @@ import type {
 	WorkloadFailureReasonCodeV1,
 } from "@agent-infra/platform-core";
 import {
+	ApplicationFoundationError,
 	agentCreationFailureCategoryV1,
 	isAdministratorAgentReadAllowedV1,
 	isAgentCreationFailureReadAllowedV1,
@@ -337,6 +338,11 @@ async function boundary(
 	try {
 		return await task(metadata);
 	} catch (error) {
+		if (error instanceof ApplicationFoundationError)
+			recordHttpFailureContext({
+				failureStep: `application.submit.${error.code}`,
+				error,
+			});
 		const protocol = mapCoreError(error, metadata.traceId);
 		return context.json(protocol.body, protocol.status);
 	}
