@@ -154,15 +154,20 @@ it.each(["model", "default"])(
 	},
 );
 
-it.each(["INVALID_REQUEST", "MODEL_SELECTION_INVALID"])(
-	"recovers %s after successfully checking the same Key again",
-	async (code) => {
+it.each([
+	["INVALID_REQUEST", 7, 2],
+	["MODEL_SELECTION_INVALID", 7, 2],
+	["INVALID_REQUEST", 8, 3],
+	["MODEL_SELECTION_INVALID", 8, 3],
+] as const)(
+	"recovers %s after checking the same Key again at revision %s / Key version %s",
+	async (code, configurationRevision, keyVersion) => {
 		const f = await prepare("update");
 		f.reject(code);
 		f.check.mockResolvedValueOnce({
 			candidates,
-			configurationRevision: 8,
-			keyVersion: 3,
+			configurationRevision,
+			keyVersion,
 		});
 		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
 		await screen.findByRole("checkbox", {
@@ -171,8 +176,8 @@ it.each(["INVALID_REQUEST", "MODEL_SELECTION_INVALID"])(
 		f.submit();
 		await waitFor(() => expect(f.onSubmit).toHaveBeenCalledTimes(2));
 		expect(f.onSubmit.mock.calls[1]?.[0]).toMatchObject({
-			expectedConfigurationRevision: 8,
-			expectedKeyVersion: 3,
+			expectedConfigurationRevision: configurationRevision,
+			expectedKeyVersion: keyVersion,
 		});
 	},
 );

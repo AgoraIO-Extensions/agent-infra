@@ -973,17 +973,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		useState<AgentApplicationFieldErrors>({});
 	const [serverValidationDismissed, setServerValidationDismissed] =
 		useState(false);
-	const serverErrorCodeRef = useRef<string | undefined>(
-		props.serverError?.code,
-	);
+	const serverErrorRef = useRef(props.serverError);
 	useEffect(() => {
-		if (
-			props.submitting ||
-			props.serverError?.code !== serverErrorCodeRef.current
-		)
+		if (props.submitting || props.serverError !== serverErrorRef.current)
 			setServerValidationDismissed(false);
-		serverErrorCodeRef.current = props.serverError?.code;
-	}, [props.serverError?.code, props.submitting]);
+		serverErrorRef.current = props.serverError;
+	}, [props.serverError, props.submitting]);
 	function dismissServerValidation() {
 		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
 			setServerValidationDismissed(true);
