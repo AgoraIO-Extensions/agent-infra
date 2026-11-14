@@ -3,6 +3,8 @@ import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
 } from "@agent-infra/identity";
+import { createHttpObservability } from "@agent-infra/observability/http";
+import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createLdapBrowserAdapter,
@@ -144,6 +146,25 @@ function fixture(
 			now = value;
 		},
 	};
+}
+
+function observedLogin(state: ReturnType<typeof fixture>) {
+	const events: Array<Record<string, unknown>> = [];
+	const app = new Hono();
+	app.use(
+		"*",
+		createHttpObservability({
+			record: (event) =>
+				events.push(event as unknown as Record<string, unknown>),
+		}),
+	);
+	app.post(
+		"/auth/login",
+		async (context) =>
+			(await state.adapter.handleRequest(context.req.raw)) ??
+			new Response(null, { status: 404 }),
+	);
+	return { app, events };
 }
 
 describe("LDAP browser adapter", () => {
@@ -433,6 +454,56 @@ describe("LDAP browser adapter", () => {
 		expect(await unavailable?.text()).not.toContain("private authority detail");
 		expect(create).not.toHaveBeenCalled();
 	});
+
+	it.each([
+		["ldap_authenticate", "ldap_authenticate"] as const,
+		["directory_principal", "directory_principal"] as const,
+		["session_store_create", "session_store_create"] as const,
+	])(
+		"records the bounded %s login failure stage without exposing dependency details",
+		async (_label, stage) => {
+			const sessions = memorySessions();
+			const state = fixture(sessions);
+			if (stage === "ldap_authenticate") {
+				vi.mocked(state.directory.authenticate).mockRejectedValueOnce(
+					new Error("private LDAP password and Cookie=session-secret"),
+				);
+			} else if (stage === "directory_principal") {
+				vi.mocked(state.isPlatformDisabled).mockRejectedValueOnce(
+					new Error("private principal detail and Cookie=session-secret"),
+				);
+			} else {
+				sessions.create = vi.fn(async () => {
+					throw new Error("private database detail and Cookie=session-secret");
+				});
+			}
+			const observed = observedLogin(state);
+			const response = await observed.app.request(`${origin}/auth/login`, {
+				method: "POST",
+				headers: { origin, "content-type": "application/json" },
+				body: JSON.stringify({
+					login: "login-a",
+					password: "correct-password",
+				}),
+			});
+			expect(response.status).toBe(503);
+			expect(await response.text()).toBe("");
+			expect(observed.events).toEqual([
+				expect.objectContaining({
+					stage: "http",
+					outcome: "failed",
+					status: 503,
+					failureStep: `auth.login.${stage}`,
+					errorClass: "Error",
+					durationMs: expect.any(Number),
+				}),
+			]);
+			expect(JSON.stringify(observed.events)).not.toContain(
+				"private LDAP password",
+			);
+			expect(JSON.stringify(observed.events)).not.toContain("session-secret");
+		},
+	);
 
 	it("rejects cross-origin cookie writes and does not revive a revoked session", async () => {
 		const state = fixture();

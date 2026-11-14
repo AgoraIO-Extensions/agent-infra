@@ -176,6 +176,19 @@ export function startPlatformApi(options: StartOptions) {
 	);
 	const browserAuth = options.browserAuth;
 	const standardTemplateReleaseApp = options.standardTemplateReleaseApp;
+	if (browserAuth) {
+		for (const path of ["/auth/login", "/auth/logout"] as const) {
+			app.all(path, async (context) => {
+				try {
+					const response = await browserAuth.handleRequest(context.req.raw);
+					if (response instanceof Response) return response;
+					return authUnavailable();
+				} catch {
+					return authUnavailable();
+				}
+			});
+		}
+	}
 	// 保留的 release 命名空间不能回落到普通 API：未装配 release app 时显式 404，
 	// 避免部署漏装后被普通路由意外承接（fail closed，契约见 #3234）。
 	const releaseNamespace = "/internal/ops/standard-template-releases";
@@ -189,14 +202,6 @@ export function startPlatformApi(options: StartOptions) {
 				status: 404,
 				headers: { "Cache-Control": "no-store" },
 			});
-		}
-		if (browserAuth && (path === "/auth/login" || path === "/auth/logout")) {
-			try {
-				const response = await browserAuth.handleRequest(request);
-				return response instanceof Response ? response : authUnavailable();
-			} catch {
-				return authUnavailable();
-			}
 		}
 		return app.fetch(request);
 	};

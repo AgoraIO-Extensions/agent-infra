@@ -5,6 +5,7 @@ import type {
 	LdapAccount,
 } from "@agent-infra/identity";
 import { resolveLdapPrincipal } from "@agent-infra/identity";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
@@ -326,13 +327,25 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			const body = await loginBody(request);
 			if (!body) return response(400);
 			let account: LdapAccount | null;
-			let principal: Awaited<ReturnType<typeof current>>;
 			try {
 				account = await input.directory.authenticate(body.login, body.password);
-				if (!account) return response(401);
+			} catch (error) {
+				recordHttpFailureContext({
+					failureStep: "auth.login.ldap_authenticate",
+					error,
+				});
+				return response(503);
+			}
+			if (!account) return response(401);
+			let principal: Awaited<ReturnType<typeof current>>;
+			try {
 				principal = await current(account);
 				if (principal.accountStatus !== "active") return response(401);
-			} catch {
+			} catch (error) {
+				recordHttpFailureContext({
+					failureStep: "auth.login.directory_principal",
+					error,
+				});
 				return response(503);
 			}
 			const token = randomBytes(32).toString("base64url");
@@ -345,7 +358,11 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 					loginNow + SESSION_ABSOLUTE_MS,
 					principal,
 				);
-			} catch {
+			} catch (error) {
+				recordHttpFailureContext({
+					failureStep: "auth.login.session_store_create",
+					error,
+				});
 				return response(503);
 			}
 			const result = response(204);

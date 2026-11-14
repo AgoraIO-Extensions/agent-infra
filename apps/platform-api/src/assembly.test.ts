@@ -539,6 +539,10 @@ describe("Platform API production assembly", () => {
 		const browserAuth = {
 			handleRequest: vi.fn(async () => new Response(null, { status: 204 })),
 		};
+		const httpEvents: unknown[] = [];
+		const observability = {
+			record: (event: unknown) => httpEvents.push(event),
+		} as unknown as ReturnType<typeof telemetryModule.startObservability>;
 		const standardTemplateReleaseApp = {
 			fetch: vi.fn(
 				async () =>
@@ -551,6 +555,7 @@ describe("Platform API production assembly", () => {
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth,
+			observability,
 			standardTemplateReleaseApp,
 			log: () => {},
 			port: 0,
@@ -606,6 +611,17 @@ describe("Platform API production assembly", () => {
 			);
 			expect(failedLogout.status).toBe(503);
 			expect(await failedLogout.text()).toBe("");
+			expect(httpEvents).toContainEqual(
+				expect.objectContaining({
+					stage: "http",
+					outcome: "failed",
+					status: 503,
+					durationMs: expect.any(Number),
+				}),
+			);
+			expect(JSON.stringify(httpEvents)).not.toContain(
+				"private directory failure",
+			);
 			for (const serviceAvailability of [
 				"starting",
 				"updating",
