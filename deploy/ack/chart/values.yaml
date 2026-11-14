@@ -37,6 +37,25 @@ platformApi:
   connectionWebPath: ""
   # Optional existing callback-only Secret; never a Connection PAT/service secret.
   # connectionCallbackAuthSecretRef: {name: approved-callback-auth, key: callback.auth}
+certManager:
+  # Keep exact-host ACME resources opt-in. This chart never creates an account key.
+  enabled: false
+  renewalOwner: ""
+  renewalMechanism: cert-manager
+  issuer:
+    name: agent-infra-apps-letsencrypt-prod
+    acmeServer: https://acme-v02.api.letsencrypt.org/directory
+    # Existing namespace Secret containing the already-authorized ACME account key.
+    accountSecretName: ""
+    # Non-secret owner/ticket reference proving authorization for this hostname.
+    acmeAuthorizationRef: ""
+    ingressClassName: new-magic-nginx
+    nodeSelector: {}
+  certificate:
+    name: agent-infra-apps-tls
+    secretName: agent-infra-apps-tls
+    # Supply exactly one DNS name when certManager.enabled=true.
+    dnsNames: [apps.agent-infra.agoralab.co]
 files:
   enabled: false
   configurationFile: /app/deployment/file-deployment.json

@@ -583,7 +583,7 @@ env -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR \
   --output /dev/null --write-out '%{http_code}\n' "${ACK_PUBLIC_ORIGIN%/}/"
 ```
 
-证书通过私有 values 的 `ingress.tlsSecret` 引用；`ACK_BOOTSTRAP_INPUTS_FILE` 中对应对象使用
+证书通过私有 values 的 `ingress.tlsSecret` 引用；当选择外部 CERT-A 交付时，`ACK_BOOTSTRAP_INPUTS_FILE` 中对应对象使用
 相同 Secret 名、`secretType: "kubernetes.io/tls"`，`files` 的 `tls.crt` 指向 leaf 与所需中间链，
 `tls.key` 指向匹配私钥。路径使用 `@CAPSULE_ROOT@`，材料留在仓库外的 `0700` 目录和 `0600`
 文件中。采集 capsule 只保留当时的证书快照，不会签发或续期；每次移植/重部署前重新检查
@@ -592,8 +592,22 @@ env -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR \
 受控客户端包只含公共 CA、允许的 origin、摘要/指纹、有效期与导入说明，不含私钥。CA 使用
 capsule 内显式文件引用。每次移植或轮换后在新隔离信任库导入，并重复正反例与真实登录。
 
+ACK chart 也提供 default-off 的 `certManager` CERT-B 接缝，固定服务于
+`apps.agent-infra.agoralab.co` / `agent-infra-apps-tls` 这条精确路径。只有在已有 account Secret、非私密
+`acmeAuthorizationRef`、exact-host DNS/SAN、具名 `renewalOwner` 和正式 source-lock 评审都具备时，
+才可在私有 values 中将 `certManager.enabled` 打开；模板固定
+`disableAccountKeyGeneration: true`，只引用已有 ACME account Secret，不生成或读取新的 account 私钥；
+cert-manager 仍可能按 Certificate 语义在目标 TLS Secret 中生成/续期应用证书私钥。默认值不渲染
+Issuer/Certificate，CERT-B 的 Ready、fullchain、fingerprint、expiry 和公网信任仍需独立验收。
+
+该接缝不安装 cert-manager CRD/controller，也不创建固定路径 Ingress、Worker `pathRoutes` 或 Store/Core
+访问地址。启用前必须由环境 owner 证明 cert-manager `cert-manager.io/v1` CRD/controller、已有 account
+Secret 和 account authorization 已就绪；source lock、selected Agent metadata、fresh CAS、field window
+仍由正式 Helm owner/Ho 校验。Certificate Ready 本身不能签收 #4095 AC-1；固定 Host/Prefix、Workload、
+页面/登录/资源/流式验收仍需沿现有 pathRoutes 正式流程完成。
+
 ACK 环境 owner 在私有交接记录中明确证书供应/续期执行方、到期告警阈值、检查频率和轮换
-窗口；不能假定 chart 自带 ACME 或自动续期。续期后按已授权的 Secret 更新流程发布，核对
+窗口；不能把 default-off 接缝当作已签发证书。续期后按已授权的 Secret 更新流程发布，核对
 实际入口的新证书，再重复所选信任模式的 TLS 正反例和新登录验证，并更新可移植包，防止下一轮部署恢复旧证书。
 仅清理本次创建的 ACME challenge 资源；自有入口、Directory 信任和其他 namespace 保持原 owner。
 公开回执只保留必要的脱敏校验结果，不包含私钥、ACME 账号材料、密码、Cookie 值或会话正文。
