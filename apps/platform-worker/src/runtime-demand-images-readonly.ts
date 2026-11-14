@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
 	openPostgresSessionSandboxImageReaderV1,
 	openPostgresWorkloadStateReaderV1,
+	openPostgresWorkspaceSnapshotMaterializationReaderV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentManagementQueryV1,
 } from "@agent-infra/platform-store";
@@ -13,6 +14,12 @@ import {
 	type RuntimeDemandImageContextV1,
 	type RuntimeDemandImageProjectionV1,
 } from "./runtime-demand-images.js";
+import { projectSessionDemandImagesV1 } from "./session-demand-images.js";
+
+type SessionImageInputs = Pick<
+	Parameters<typeof projectSessionDemandImagesV1>[0],
+	"authorities" | "bindings"
+>;
 
 async function privateBytes(path: string) {
 	const handle = await open(
@@ -57,6 +64,8 @@ export async function readRuntimeDemandImages(
 		};
 	},
 	databaseUrl: string | undefined,
+	/** Normal Worker authority stays in process; it is never parsed from the CLI JSON. */
+	sessionImageInputs?: SessionImageInputs,
 ) {
 	try {
 		if (
@@ -90,6 +99,9 @@ export async function readRuntimeDemandImages(
 		const configuration = new PostgresAgentConfigurationQueryV1(options);
 		const workloads = openPostgresWorkloadStateReaderV1(options);
 		const sessionReader = openPostgresSessionSandboxImageReaderV1(options);
+		let snapshots:
+			| ReturnType<typeof openPostgresWorkspaceSnapshotMaterializationReaderV1>
+			| undefined;
 		try {
 			const receipt = await collectRuntimeDemandImagesV1(
 				{
@@ -122,6 +134,20 @@ export async function readRuntimeDemandImages(
 				input,
 			);
 			const sessions = await sessionReader.read(input.context.namespace);
+			const sessionImages = await projectSessionDemandImagesV1({
+				readback: sessions,
+				contextHash: receipt.context.contextHash,
+				authorities: sessionImageInputs?.authorities ?? [],
+				bindings: sessionImageInputs?.bindings ?? [],
+				snapshots: {
+					read: (snapshotInput) => {
+						snapshots ??= openPostgresWorkspaceSnapshotMaterializationReaderV1(
+							url.toString(),
+						);
+						return snapshots.read(snapshotInput);
+					},
+				},
+			});
 			const casByKey = Object.fromEntries(
 				receipt.rows
 					.filter((row) => row.contextStable)
@@ -161,6 +187,7 @@ export async function readRuntimeDemandImages(
 					scope: sessions.scope,
 					rows: sessions.items.map((item) => item.metadata),
 				},
+				sessionImages,
 				snapshotScope:
 					"per-Agent double-read and independent Session MVCC snapshot; no single global snapshot claim",
 				declared:
@@ -182,6 +209,7 @@ export async function readRuntimeDemandImages(
 				configuration.close(),
 				workloads.close(),
 				sessionReader.close(),
+				...(snapshots ? [snapshots.close()] : []),
 			]);
 		}
 	} catch {

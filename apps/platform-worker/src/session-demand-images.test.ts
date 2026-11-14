@@ -1,8 +1,39 @@
 import { expect, it, vi } from "vitest";
+
+const aggregateStore = vi.hoisted(() => ({
+	close: vi.fn(async () => undefined),
+	sessionRead: vi.fn(),
+	snapshotOpen: vi.fn(),
+	snapshotRead: vi.fn(),
+}));
+
+vi.mock("@agent-infra/platform-store", () => ({
+	PostgresAgentManagementQueryV1: class {
+		listAgents = async () => ({ items: [], nextAfterId: null });
+		close = aggregateStore.close;
+	},
+	PostgresAgentConfigurationQueryV1: class {
+		close = aggregateStore.close;
+	},
+	openPostgresWorkloadStateReaderV1: () => ({ close: aggregateStore.close }),
+	openPostgresSessionSandboxImageReaderV1: () => ({
+		read: aggregateStore.sessionRead,
+		close: aggregateStore.close,
+	}),
+	openPostgresWorkspaceSnapshotMaterializationReaderV1: (
+		databaseUrl: string,
+	) => {
+		aggregateStore.snapshotOpen(databaseUrl);
+		return { read: aggregateStore.snapshotRead, close: aggregateStore.close };
+	},
+}));
+
 import {
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { runtimeDemandImageContextV1 } from "./runtime-demand-images.js";
+import { readRuntimeDemandImages } from "./runtime-demand-images-readonly.js";
 import { projectSessionDemandImagesV1 } from "./session-demand-images.js";
 import {
 	sessionSandboxDeploymentTokenFixture,
@@ -128,6 +159,81 @@ function fixture(): Input {
 		snapshots: { read: vi.fn(async () => []) },
 	};
 }
+
+async function aggregate(input: Input, authorityAvailable = true) {
+	const context = {
+		platformSource: "2".repeat(40),
+		runtimeAuthority: "4".repeat(40),
+		planHash: "a".repeat(64),
+		clusterUid: "cluster",
+		namespace: input.readback.namespace,
+		namespaceUid: "namespace",
+		release: "release",
+		helmRevision: 36,
+		installationId: "installation",
+		directoryBindingHash: "b".repeat(64),
+		directorySnapshotHash: "c".repeat(64),
+	};
+	const { contextHash } = runtimeDemandImageContextV1(context);
+	aggregateStore.sessionRead.mockResolvedValueOnce(input.readback);
+	return readRuntimeDemandImages(
+		{ actorId: "actor-a", context, projections: [] },
+		"postgresql://localhost/platform",
+		authorityAvailable
+			? {
+					authorities: input.authorities.map((authority) => ({
+						...authority,
+						contextHash,
+					})),
+					bindings: input.bindings,
+				}
+			: undefined,
+	);
+}
+
+it("aggregates images from the same Session Store snapshot and keeps missing authority local", async () => {
+	const input = fixture();
+	vi.clearAllMocks();
+	const receipt = await aggregate(input);
+	expect(aggregateStore.sessionRead).toHaveBeenCalledExactlyOnceWith(
+		input.readback.namespace,
+	);
+	expect(receipt.sessionImages.storeSnapshot).toBe(
+		input.readback.storeSnapshot,
+	);
+	expect(receipt.sessionImages.rows[0]?.groups[0]).toMatchObject({
+		status: "PROJECTED_IMAGES",
+		snapshotStatus: "NOT_APPLICABLE_EMPTY_BINDINGS",
+		images: [
+			{
+				kind: "main",
+				image: `registry.example.test/agent@sha256:${"1".repeat(64)}`,
+			},
+		],
+	});
+	expect(aggregateStore.snapshotOpen).not.toHaveBeenCalled();
+	expect(aggregateStore.close).toHaveBeenCalledTimes(4);
+	expect(JSON.stringify(receipt)).not.toMatch(
+		/"env"|"deployment"|"modelProjection"|"serviceToken"/,
+	);
+	expect(JSON.stringify(receipt)).not.toContain(
+		sessionSandboxDeploymentTokenFixture,
+	);
+
+	const unknown = await aggregate(input, false);
+	expect(unknown.sessionImages.rows[0]?.groups[0]).toMatchObject({
+		status: "UNKNOWN_MISSING_TRUSTED_FIELD",
+		images: [],
+		// This binding has no repository; it cannot borrow the unbound Worker policy.
+		knownMain: null,
+	});
+	expect(unknown.sessionImages.enumerationComplete).toBe(true);
+	expect(unknown.sessionImages.projectionScopeStatus).toBe(
+		"ENUMERATED_WITH_UNKNOWN_ROWS",
+	);
+	expect(unknown.globalAbsenceProven).toBe(false);
+	expect(aggregateStore.snapshotOpen).not.toHaveBeenCalled();
+});
 
 it("uses the real resource-input resolver and image-only renderer for an existing bound Session", async () => {
 	const input = fixture();
@@ -295,6 +401,40 @@ it("reads real nonempty snapshot metadata then calls only the unsigned normal pr
 		}),
 	);
 	expect(JSON.stringify(receipt)).not.toContain(record.objectRef);
+
+	vi.clearAllMocks();
+	aggregateStore.snapshotRead.mockResolvedValueOnce([record]);
+	const aggregated = await aggregate(projectedInput);
+	expect(aggregated.sessionImages.rows[0]?.groups[0]).toMatchObject({
+		status: "PROJECTED_IMAGES",
+		snapshotStatus: "BOUND_METADATA_UNSIGNED_PROJECTION",
+		snapshotAuthority: {
+			configurationSourceSha: authority.sourceSha,
+			configurationHash: authority.configurationHash,
+			policyField: "policy.imageDigest",
+		},
+	});
+	expect(
+		aggregated.sessionImages.rows[0]?.groups[0]?.images.map(
+			(image) => image.image,
+		),
+	).toContain(materializer);
+	expect(aggregateStore.sessionRead).toHaveBeenCalledTimes(1);
+	expect(aggregateStore.snapshotRead).toHaveBeenCalledExactlyOnceWith(
+		expect.objectContaining({
+			workloadRevision: 1,
+			fence: 1,
+			bindings: [{ snapshotId: record.snapshotId, name: record.name }],
+		}),
+	);
+	expect(aggregateStore.close).toHaveBeenCalledTimes(5);
+	const databaseUrl = new URL(aggregateStore.snapshotOpen.mock.calls[0]?.[0]);
+	expect(databaseUrl.searchParams.get("options")).toContain(
+		"default_transaction_read_only=on",
+	);
+	expect(JSON.stringify(aggregated)).not.toContain(record.objectRef);
+	expect(forbiddenRead).not.toHaveBeenCalled();
+	expect(forbiddenUrl).not.toHaveBeenCalled();
 	const borrowedProject = Object.assign(forbiddenRead, {
 		project: resolver.project.bind(resolver),
 	});
