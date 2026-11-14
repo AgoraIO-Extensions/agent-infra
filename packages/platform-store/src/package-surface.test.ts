@@ -116,6 +116,7 @@ describe("platform-store package surface", () => {
 			"openPostgresPlatformIdempotencyStore",
 			"openPostgresSecretActivationStoreV1",
 			"openPostgresSecretKeyRotationStoreV1",
+			"openPostgresSessionSandboxImageReaderV1",
 			"openPostgresWorkloadReconciliationStoreV1",
 			"openPostgresWorkloadStateReaderV1",
 			"openPostgresWorkspaceSnapshotMaterializationReaderV1",
