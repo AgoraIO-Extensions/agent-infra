@@ -110,6 +110,44 @@ describe("persisted Workload recovery state", () => {
 				decodePersistedWorkloadStateV1(invalid, "agent_01"),
 			).toThrow();
 	});
+	it("round-trips exact execution capacity for both candidate and verified", () => {
+		const original = fixture();
+		const capacity = {
+			schemaVersion: 1,
+			imageDigest: original.candidate.configuration.source.imageDigest,
+			resourceProfileRef: original.candidate.deployment.resourceProfileRef,
+			resourceConfigurationHash: "a".repeat(64),
+			conformanceEvidenceHash: "b".repeat(64),
+			maximumConcurrentExecutions: 1,
+		};
+		const state = {
+			...original,
+			candidate: { ...original.candidate, executionCapacity: capacity },
+			verified: { ...original.verified, executionCapacity: capacity },
+		};
+		expect(
+			decodePersistedWorkloadStateV1(
+				JSON.parse(JSON.stringify(state)),
+				state.agentId,
+			),
+		).toEqual({ state, legacy: false });
+		for (const field of ["candidate", "verified"] as const)
+			expect(() =>
+				decodePersistedWorkloadStateV1(
+					{
+						...state,
+						[field]: {
+							...state[field],
+							executionCapacity: {
+								...capacity,
+								maximumConcurrentExecutions: 0,
+							},
+						},
+					},
+					state.agentId,
+				),
+			).toThrow();
+	});
 	it("round-trips verified Skill capabilities and rejects malformed entries", () => {
 		const secondSkill = {
 			schemaVersion: 1,
