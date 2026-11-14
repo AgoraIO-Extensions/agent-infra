@@ -15,6 +15,24 @@ export interface WorkspaceSnapshotResolverRecordV1 {
 	readonly objectVersion: string;
 }
 
+const imagePolicies = new WeakMap<
+	object,
+	Readonly<{
+		image: string;
+		digest: string;
+		policyHash: string;
+		producerModule: string;
+		policyField: string;
+	}>
+>();
+
+/** Metadata from this normal resolver's captured policy, never from a caller-supplied Pod. */
+export function workspaceSnapshotResolverImagePolicyV1(resolver: unknown) {
+	if (typeof resolver !== "function") return undefined;
+	const project = Object.getOwnPropertyDescriptor(resolver, "project")?.value;
+	return typeof project === "function" ? imagePolicies.get(project) : undefined;
+}
+
 /**
  * Builds the Worker resolver from deployment-owned Store and object-storage
  * adapters. The caller supplies only persisted binding names and revisions.
@@ -35,13 +53,14 @@ export function createWorkspaceSnapshotResolverV1(input: {
 	readonly policy: WorkspaceSnapshotMaterializerPolicyV1;
 	readonly allowedOrigins: readonly string[];
 }) {
-	projectWorkspaceSnapshotPodShapeV1([], input.policy);
+	const policy = structuredClone(input.policy);
+	projectWorkspaceSnapshotPodShapeV1([], policy);
 	const scopedPolicy = (value: {
 		agentId: string;
 		configurationRevision: number;
 	}) => ({
-		...input.policy,
-		credentialSecretName: `${input.policy.credentialSecretName.slice(0, 40)}-${createHash(
+		...policy,
+		credentialSecretName: `${policy.credentialSecretName.slice(0, 40)}-${createHash(
 			"sha256",
 		)
 			.update(JSON.stringify([value.agentId, value.configurationRevision]))
@@ -92,7 +111,7 @@ export function createWorkspaceSnapshotResolverV1(input: {
 			),
 		};
 	};
-	return Object.assign(resolve, {
+	const resolver = Object.assign(resolve, {
 		project: (
 			snapshots: readonly Omit<
 				WorkspaceSnapshotMaterializerInputV1,
@@ -104,4 +123,17 @@ export function createWorkspaceSnapshotResolverV1(input: {
 			manifest: "",
 		}),
 	});
+	imagePolicies.set(
+		resolver.project,
+		Object.freeze({
+			image: policy.imageDigest,
+			digest: policy.imageDigest.slice(policy.imageDigest.lastIndexOf("@") + 1),
+			policyHash: createHash("sha256")
+				.update(JSON.stringify(policy))
+				.digest("hex"),
+			producerModule: "apps/platform-worker/src/workspace-snapshot-resolver.ts",
+			policyField: "policy.imageDigest",
+		}),
+	);
+	return resolver;
 }

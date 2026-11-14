@@ -57,6 +57,7 @@ export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
 export * from "./workload-runtime.js";
 export * from "./workload-worker.js";
+export { projectWorkspaceSnapshotDemandImagesV1 } from "./workspace-snapshot-demand-images.js";
 export * from "./workspace-snapshot-materializer.js";
 export * from "./workspace-snapshot-resolver.js";
 export * from "./workspace-snapshot-store-resolver.js";
