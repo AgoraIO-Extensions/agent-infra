@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
-import { workloadDesiredFixture } from "./kubernetes.fixture.js";
+import {
+	workloadDesiredFixture,
+	workloadTestPolicy,
+} from "./kubernetes.fixture.js";
 import { projectWorkspaceSnapshotDemandImagesV1 } from "./workspace-snapshot-demand-images.js";
 import {
 	createWorkspaceSnapshotResolverV1,
@@ -175,6 +178,90 @@ it("captures normal policy immutably and refuses a replaced projector", async ()
 
 it("keeps normal bundled resolver provenance through shared-program stdout", () => {
 	const f = fixture();
+	const agentId = f.input.desired.agentId;
+	const agentVersion = "agent-version-1";
+	const generationId = "e".repeat(64);
+	const version = {
+		schemaVersion: 1,
+		skillId: "skill-a",
+		skillVersionId: "skill-version-a",
+		provider: "system",
+		version: "1.0.0",
+		packageObjectVersion: "object-a",
+		packageDigest: "a".repeat(64),
+		manifestDigest: "b".repeat(64),
+		signatureDigest: "c".repeat(64),
+	};
+	const grant = {
+		schemaVersion: 1,
+		tools: [],
+		connections: [],
+		fileRoots: [],
+		networkOrigins: [],
+		scripts: false,
+	};
+	const targetPath = ".agents/skills/workspace-summary";
+	const applied = {
+		schemaVersion: 1,
+		agentId,
+		agentVersion,
+		skillName: "workspace-summary",
+		skillVersion: version,
+		grant,
+		configurationRevision: f.input.desired.configRevision,
+		syncRevision: 1,
+		state: "synced",
+		failureReason: null,
+		appliedReceipt: {
+			schemaVersion: 1,
+			agentId,
+			agentVersion,
+			skillName: "workspace-summary",
+			configurationRevision: f.input.desired.configRevision,
+			syncRevision: 1,
+			skillVersionId: version.skillVersionId,
+			generationId,
+			packageDigest: version.packageDigest,
+			manifestDigest: version.manifestDigest,
+			targetPath,
+			readOnly: true,
+		},
+	};
+	const deliveryImage = `registry.example.test/delivery@sha256:${"d".repeat(64)}`;
+	const desired = {
+		...f.input.desired,
+		skillDeliveryImage: deliveryImage,
+		skillGenerationId: generationId,
+		skillAppliedBindings: JSON.stringify([applied]),
+		skills: [
+			{
+				schemaVersion: 1,
+				agentId,
+				agentVersion,
+				skillVersion: version,
+				targetPath,
+				readOnly: true,
+				grant,
+				manifest: {
+					schemaVersion: 1,
+					name: "workspace-summary",
+					version: "1.0.0",
+					entryPath: "SKILL.md",
+					files: [{ path: "SKILL.md", sizeBytes: 1, sha256: "a".repeat(64) }],
+					packageDigest: version.packageDigest,
+				},
+			},
+		],
+	};
+	const parentPolicy = {
+		...workloadTestPolicy,
+		workspaceSnapshotEgress: [
+			{
+				destination: { namespace: "storage", podLabels: { app: "storage" } },
+				port: 9000,
+			},
+		],
+	};
 	const child = spawnSync(
 		process.execPath,
 		[
@@ -194,20 +281,32 @@ const result = await consumer.projectWorkspaceSnapshotDemandImagesV1({
   ...value.input, authority: { ...value.input.authority, resolver },
   snapshots,
 });
+if (result.status !== 'PROJECTED_IMAGES') throw new Error('SNAPSHOT_PROJECTION_REQUIRED');
+const parent = consumer.parentWorkloadImageProjectionV1({
+  desired: value.input.desired, sourceKind: 'custom', policy: value.parentPolicy,
+  workspaceSnapshotProjection: result.projection(),
+});
+let parentRejected = false;
+try {
+  consumer.parentWorkloadImageProjectionV1({ desired: value.input.desired, sourceKind: 'custom', policy: value.parentPolicy });
+} catch (error) {
+  parentRejected = error.message === 'WORKLOAD_SNAPSHOT_PROJECTION_REQUIRED';
+}
 const rejected = await consumer.projectWorkspaceSnapshotDemandImagesV1({
   ...value.input,
   authority: { ...value.input.authority, resolver: Object.assign(forbidden, { project: resolver.project.bind(resolver) }) },
   snapshots,
 });
-process.stdout.write(JSON.stringify({ result, rejected, reads }));`,
+process.stdout.write(JSON.stringify({ result, parent, parentRejected, rejected, reads }));`,
 			new URL("../dist/index.mjs", import.meta.url).href,
 			new URL("../dist/workspaceSnapshot.mjs", import.meta.url).href,
 		],
 		{
 			input: JSON.stringify({
-				input: f.input,
+				input: { ...f.input, desired },
 				policy: f.policy,
 				record: f.record,
+				parentPolicy,
 			}),
 			encoding: "utf8",
 			timeout: 10_000,
@@ -230,6 +329,17 @@ process.stdout.write(JSON.stringify({ result, rejected, reads }));`,
 	expect(decoded.rejected).toMatchObject({ status: "UNKNOWN", images: [] });
 	expect(decoded.rejected.missing[0]).toContain("captured policy.imageDigest");
 	expect(decoded.reads).toBe(1);
+	expect(decoded.parentRejected).toBe(true);
+	expect(
+		decoded.parent[0].images.map((image: { image: string }) => image.image),
+	).toEqual([
+		`${workloadTestPolicy.imageRepository}@${desired.imageDigest}`,
+		deliveryImage,
+		f.policy.imageDigest,
+	]);
+	expect(
+		decoded.parent[0].images.map((image: { kind: string }) => image.kind),
+	).toEqual(["main", "init", "init"]);
 	expect(child.stdout).not.toMatch(
 		/PRIVATE_OBJECT|private-credential|private-storage|"volumes"/,
 	);
