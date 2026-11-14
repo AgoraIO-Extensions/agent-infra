@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { workloadDesiredFixture } from "./kubernetes.fixture.js";
 import { projectWorkspaceSnapshotDemandImagesV1 } from "./workspace-snapshot-demand-images.js";
@@ -170,4 +171,66 @@ it("captures normal policy immutably and refuses a replaced projector", async ()
 		status: "UNKNOWN",
 		images: [],
 	});
+});
+
+it("keeps normal bundled resolver provenance through shared-program stdout", () => {
+	const f = fixture();
+	const child = spawnSync(
+		process.execPath,
+		[
+			"--input-type=module",
+			"-e",
+			`import { readFileSync } from 'node:fs';
+const consumer = await import(process.argv[1]);
+const producer = await import(process.argv[2]);
+const value = JSON.parse(readFileSync(0, 'utf8'));
+const forbidden = async () => { throw new Error('SIDE_EFFECT_FORBIDDEN'); };
+const resolver = producer.createWorkspaceSnapshotResolverV1({
+  policy: value.policy, read: forbidden, createReadUrl: forbidden, allowedOrigins: [],
+});
+let reads = 0;
+const snapshots = { read: async () => { reads++; return [value.record]; } };
+const result = await consumer.projectWorkspaceSnapshotDemandImagesV1({
+  ...value.input, authority: { ...value.input.authority, resolver },
+  snapshots,
+});
+const rejected = await consumer.projectWorkspaceSnapshotDemandImagesV1({
+  ...value.input,
+  authority: { ...value.input.authority, resolver: Object.assign(forbidden, { project: resolver.project.bind(resolver) }) },
+  snapshots,
+});
+process.stdout.write(JSON.stringify({ result, rejected, reads }));`,
+			new URL("../dist/index.mjs", import.meta.url).href,
+			new URL("../dist/workspaceSnapshot.mjs", import.meta.url).href,
+		],
+		{
+			input: JSON.stringify({
+				input: f.input,
+				policy: f.policy,
+				record: f.record,
+			}),
+			encoding: "utf8",
+			timeout: 10_000,
+		},
+	);
+	expect(child.status).toBe(0);
+	const decoded = JSON.parse(child.stdout);
+	const result = decoded.result;
+	expect(result).toMatchObject({
+		status: "PROJECTED_IMAGES",
+		images: [{ kind: "init", image: f.policy.imageDigest }],
+		provenance: {
+			configurationSourceSha: f.input.authority.sourceSha,
+			configurationHash: f.input.authority.configurationHash,
+			casHash: f.input.casHash,
+			policyField: "policy.imageDigest",
+		},
+	});
+	expect(result).not.toHaveProperty("projection");
+	expect(decoded.rejected).toMatchObject({ status: "UNKNOWN", images: [] });
+	expect(decoded.rejected.missing[0]).toContain("captured policy.imageDigest");
+	expect(decoded.reads).toBe(1);
+	expect(child.stdout).not.toMatch(
+		/PRIVATE_OBJECT|private-credential|private-storage|"volumes"/,
+	);
 });
