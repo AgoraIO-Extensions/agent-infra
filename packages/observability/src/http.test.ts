@@ -307,6 +307,33 @@ it("accepts the bounded directory.search failure step (#3035)", async () => {
 	expect(JSON.stringify(events)).not.toContain("PRIVATE_DIRECTORY_MEMBER");
 });
 
+it.each([
+	["auth.login.ldap_authenticate", "private LDAP detail"],
+	["auth.login.directory_principal", "private principal detail"],
+	["auth.login.session_store_create", "private session detail"],
+])(
+	"accepts the bounded %s failure step without raw error details",
+	async (failureStep, detail) => {
+		const { app, events } = observed();
+		app.post("/auth/login", (context) => {
+			recordHttpFailureContext({
+				failureStep,
+				error: new Error(detail),
+			});
+			return context.body(null, 503);
+		});
+		const response = await app.request("/auth/login", { method: "POST" });
+		expect(response.status).toBe(503);
+		expect(events[0]).toMatchObject({
+			failureStep,
+			errorClass: "Error",
+			status: 503,
+			durationMs: expect.any(Number),
+		});
+		expect(JSON.stringify(events)).not.toContain(detail);
+	},
+);
+
 it("records the route template, status and protocol code of a failed request without identifiers (#2569)", async () => {
 	const { app, events } = observed();
 	app.post("/api/v2/agents/:agentId/lifecycle", (context) =>

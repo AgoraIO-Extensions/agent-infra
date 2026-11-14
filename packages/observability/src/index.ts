@@ -164,6 +164,11 @@ export interface OperationalEvent {
 }
 
 const operationalFailureSteps = new Set([
+	// Browser login dependency boundaries: keep the public 503 contract while
+	// recording only a bounded stage/error class/SQLSTATE in server telemetry.
+	"auth.login.ldap_authenticate",
+	"auth.login.directory_principal",
+	"auth.login.session_store_create",
 	"identity.resolve",
 	"identity.parse",
 	"identity.hydrate",
