@@ -264,6 +264,10 @@ function projectRow(row: Row, namespace: string) {
 	return {
 		metadata: {
 			binding,
+			bindingKey: `session:${binding.sandboxId}`,
+			bindingStatus: row.conversation_matches
+				? "VERIFIED_STORE_COMPOSITE"
+				: "UNKNOWN_COMPOSITE_MISMATCH",
 			resourceFence: fence,
 			status: row.status,
 			desiredState: row.desired_state,

@@ -43,6 +43,8 @@ function fixture(): Input {
 	const source = {
 		source: "allocation" as const,
 		binding,
+		bindingKey: `session:${binding.sandboxId}`,
+		bindingStatus: "VERIFIED_STORE_COMPOSITE",
 		resourceFence: 3,
 		policy: p,
 		deployment: desired,

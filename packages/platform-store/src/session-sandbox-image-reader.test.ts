@@ -114,6 +114,8 @@ it("reads stored current inputs and UID/RV metadata in an enforced read-only sna
 	expect(result.emptyAfterCompleteEnumeration).toBe(false);
 	expect(result.items[0]?.metadata).toMatchObject({
 		allocationRowVersion: "123",
+		bindingKey: `session:${sandboxId()}`,
+		bindingStatus: "VERIFIED_STORE_COMPOSITE",
 		configurationRevision: 1,
 		managementRevision: 7,
 		policy: p,
