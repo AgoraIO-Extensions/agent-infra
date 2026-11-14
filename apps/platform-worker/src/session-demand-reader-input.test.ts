@@ -27,6 +27,10 @@ it("rejects missing/type/length input errors before any DB reader is constructed
 		{ contextHash: null },
 		{ authorities: null },
 		{ bindings: null },
+		{ namespace: "" },
+		{ namespace: "foreign/namespace" },
+		{ namespace: "UPPERCASE" },
+		{ namespace: "a".repeat(64) },
 	]) {
 		await expect(
 			readSessionDemandImagesV1({

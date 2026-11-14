@@ -259,6 +259,7 @@ export async function readSessionDemandImagesV1(input: {
 			input.databaseUrl.length === 0 ||
 			input.databaseUrl.length > 8192 ||
 			typeof input.namespace !== "string" ||
+			!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(input.namespace) ||
 			!Array.isArray(input.authorities) ||
 			!Array.isArray(input.bindings)
 		)
