@@ -2,17 +2,19 @@ import { constants } from "node:fs";
 import { open, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
+	openPostgresSessionSandboxImageReaderV1,
 	openPostgresWorkloadStateReaderV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentManagementQueryV1,
 } from "@agent-infra/platform-store";
+import { projectApprovedDeclaredDemandImagesV1 } from "./declared-demand-images.js";
 import {
 	collectRuntimeDemandImagesV1,
 	type RuntimeDemandImageContextV1,
 	type RuntimeDemandImageProjectionV1,
 } from "./runtime-demand-images.js";
 
-async function privateJson(path: string) {
+async function privateBytes(path: string) {
 	const handle = await open(
 		path,
 		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -30,14 +32,16 @@ async function privateJson(path: string) {
 		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
 		if (bytesRead !== stat.size)
 			throw new Error("RUNTIME_DEMAND_IMAGE_INPUT_INVALID");
-		return JSON.parse(
-			new TextDecoder("utf-8", { fatal: true }).decode(
-				buffer.subarray(0, bytesRead),
-			),
-		);
+		return buffer.subarray(0, bytesRead);
 	} finally {
 		await handle.close();
 	}
+}
+
+async function privateJson(path: string) {
+	return JSON.parse(
+		new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(path)),
+	);
 }
 
 /** Run only inside the already approved API/Store identity; never obtain credentials. */
@@ -46,6 +50,11 @@ export async function readRuntimeDemandImages(
 		readonly actorId: string;
 		readonly context: RuntimeDemandImageContextV1;
 		readonly projections: readonly RuntimeDemandImageProjectionV1[];
+		readonly declared?: {
+			readonly path: string;
+			readonly sha256: string;
+			readonly producerSourceSha: string;
+		};
 	},
 	databaseUrl: string | undefined,
 ) {
@@ -55,7 +64,9 @@ export async function readRuntimeDemandImages(
 			databaseUrl.length === 0 ||
 			databaseUrl.length > 8192 ||
 			typeof input.actorId !== "string" ||
-			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(input.actorId)
+			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(input.actorId) ||
+			typeof input.context?.namespace !== "string" ||
+			!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(input.context.namespace)
 		)
 			throw new Error("RUNTIME_DEMAND_IMAGE_INPUT_INVALID");
 		const url = new URL(databaseUrl);
@@ -65,12 +76,22 @@ export async function readRuntimeDemandImages(
 			"options",
 			`${url.searchParams.get("options") ?? ""} -c default_transaction_read_only=on -c statement_timeout=5000`,
 		);
+		const declared = input.declared
+			? await privateBytes(input.declared.path)
+			: null;
+		if (declared && input.declared)
+			projectApprovedDeclaredDemandImagesV1(declared, {
+				...input.declared,
+				context: input.context,
+				casByKey: {},
+			});
 		const options = { databaseUrl: url.toString() };
 		const management = new PostgresAgentManagementQueryV1(options);
 		const configuration = new PostgresAgentConfigurationQueryV1(options);
 		const workloads = openPostgresWorkloadStateReaderV1(options);
+		const sessionReader = openPostgresSessionSandboxImageReaderV1(options);
 		try {
-			return await collectRuntimeDemandImagesV1(
+			const receipt = await collectRuntimeDemandImagesV1(
 				{
 					list: (afterId) =>
 						management.listAgents(
@@ -100,11 +121,67 @@ export async function readRuntimeDemandImages(
 				},
 				input,
 			);
+			const sessions = await sessionReader.read(input.context.namespace);
+			const casByKey = Object.fromEntries(
+				receipt.rows
+					.filter((row) => row.contextStable)
+					.map((row) => [row.bindingKey, row.casHash]),
+			);
+			const eligibleSessions = sessions.items
+				.map((item) => item.metadata)
+				.filter(
+					(row) =>
+						row.bindingStatus === "VERIFIED_STORE_COMPOSITE" &&
+						row.bindingKey === `session:${row.binding.sandboxId}` &&
+						(row.namespace === input.context.namespace ||
+							row.retained?.policy.namespace === input.context.namespace),
+				);
+			for (const row of eligibleSessions) {
+				if (Object.hasOwn(casByKey, row.bindingKey))
+					throw new Error("RUNTIME_DEMAND_IMAGE_CAS_AMBIGUOUS");
+				casByKey[row.bindingKey] = row.casHash;
+			}
+			return {
+				...receipt,
+				coverage: {
+					...receipt.coverage,
+					session: "STORE_METADATA_ENUMERATED_IMAGE_GROUPS_PARTIAL",
+					declared: declared
+						? "APPROVED_FILE_GROUPS_ONLY"
+						: "UNKNOWN_NO_APPROVED_FILE",
+				},
+				bindingKeys: Object.keys(casByKey).sort(),
+				sessionInventory: {
+					namespace: sessions.namespace,
+					observedAtDatabase: sessions.observedAtDatabase,
+					storeSnapshot: sessions.storeSnapshot,
+					pageCount: sessions.pageCount,
+					enumerationComplete: sessions.enumerationComplete,
+					emptyAfterCompleteEnumeration: sessions.emptyAfterCompleteEnumeration,
+					scope: sessions.scope,
+					rows: sessions.items.map((item) => item.metadata),
+				},
+				snapshotScope:
+					"per-Agent double-read and independent Session MVCC snapshot; no single global snapshot claim",
+				declared:
+					declared && input.declared
+						? projectApprovedDeclaredDemandImagesV1(declared, {
+								...input.declared,
+								context: input.context,
+								casByKey,
+							})
+						: {
+								scope: "declared-approved-file",
+								status: "UNKNOWN_NO_APPROVED_FILE",
+								groups: [],
+							},
+			};
 		} finally {
 			await Promise.allSettled([
 				management.close(),
 				configuration.close(),
 				workloads.close(),
+				sessionReader.close(),
 			]);
 		}
 	} catch {
