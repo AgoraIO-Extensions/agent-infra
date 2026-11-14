@@ -139,6 +139,8 @@ export interface OperationalEvent {
 	readonly failureStep?: string;
 	/** Bounded error class name, without message or stack. */
 	readonly errorClass?: string;
+	/** Only the bounded first LDAP identity failure, never the source error. */
+	readonly identityFailure?: unknown;
 	/** PostgreSQL SQLSTATE, when a Store dependency exposes one. */
 	readonly sqlState?: string;
 	readonly requestId?: string;
@@ -161,6 +163,56 @@ export interface OperationalEvent {
 	/** A W3C parent retained only for a durable asynchronous operation. */
 	readonly traceParent?: string;
 	readonly browserCategory?: OperationalBrowserCategory;
+}
+
+/** Revalidate the complete diagnostic at the output boundary; extra properties are discarded. */
+export function projectIdentityFailure(value: unknown) {
+	if (!value || typeof value !== "object") return undefined;
+	const { stage, reason, deadlineExpired, elapsedMs, causeCode } =
+		value as Record<string, unknown>;
+	if (
+		typeof stage !== "string" ||
+		![
+			"current_status",
+			"service_bind",
+			"service_search",
+			"resolve_account",
+			"identity_id",
+		].includes(stage) ||
+		typeof reason !== "string" ||
+		!["deadline_expired", "dependency_rejected", "invalid_result"].includes(
+			reason,
+		) ||
+		typeof deadlineExpired !== "boolean" ||
+		deadlineExpired !== (reason === "deadline_expired") ||
+		typeof elapsedMs !== "number" ||
+		!Number.isSafeInteger(elapsedMs) ||
+		elapsedMs < 0
+	)
+		return undefined;
+	return {
+		stage,
+		reason,
+		deadlineExpired,
+		elapsedMs,
+		...(typeof causeCode === "string" &&
+		[
+			"ECONNRESET",
+			"ECONNREFUSED",
+			"ETIMEDOUT",
+			"ENOTFOUND",
+			"EAI_AGAIN",
+			"CERT_HAS_EXPIRED",
+			"ERR_TLS_CERT_ALTNAME_INVALID",
+			"UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+			"08001",
+			"08006",
+			"53300",
+			"57P03",
+		].includes(causeCode)
+			? { causeCode }
+			: {}),
+	};
 }
 
 const operationalFailureSteps = new Set([
@@ -654,6 +706,7 @@ export function startObservability(options: ObservabilityOptions) {
 					protocolCode,
 					failureStep,
 					errorClass,
+					identityFailure,
 					sqlState,
 					requestId,
 					traceId,
@@ -674,6 +727,10 @@ export function startObservability(options: ObservabilityOptions) {
 					browserCategory,
 				} = event;
 				const eventTraceParent = traceParent ?? traceParentStorage.getStore();
+				const safeIdentityFailure =
+					stage === "http"
+						? projectIdentityFailure(identityFailure)
+						: undefined;
 				if (
 					!stages.has(stage) ||
 					!outcomes.has(outcome) ||
@@ -759,6 +816,18 @@ export function startObservability(options: ObservabilityOptions) {
 					...(errorClass !== undefined &&
 					/^[A-Za-z][A-Za-z0-9_$.-]{0,63}$/.test(errorClass)
 						? { errorClass }
+						: {}),
+					...(safeIdentityFailure
+						? {
+								identityFailureStage: safeIdentityFailure.stage,
+								identityFailureReason: safeIdentityFailure.reason,
+								identityFailureDeadlineExpired:
+									safeIdentityFailure.deadlineExpired,
+								identityFailureElapsedMs: safeIdentityFailure.elapsedMs,
+								...(safeIdentityFailure.causeCode
+									? { identityFailureCauseCode: safeIdentityFailure.causeCode }
+									: {}),
+							}
 						: {}),
 					...(sqlState !== undefined && /^[0-9A-Z]{5}$/.test(sqlState)
 						? { sqlState }

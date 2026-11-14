@@ -58,10 +58,79 @@ export interface LdapAccount {
 	readonly authorizationRevision: string;
 }
 
+export interface LdapIdentityFailure {
+	readonly stage:
+		| "current_status"
+		| "service_bind"
+		| "service_search"
+		| "resolve_account"
+		| "identity_id";
+	readonly reason:
+		| "deadline_expired"
+		| "dependency_rejected"
+		| "invalid_result";
+	readonly deadlineExpired: boolean;
+	readonly causeCode?: string;
+	readonly elapsedMs: number;
+}
+
 export class LdapIdentityUnavailableError extends Error {
-	constructor() {
+	readonly failure?: Readonly<LdapIdentityFailure>;
+	constructor(failure?: LdapIdentityFailure) {
 		super("LDAP_IDENTITY_UNAVAILABLE");
+		if (failure)
+			this.failure = Object.freeze({
+				stage: failure.stage,
+				reason: failure.reason,
+				deadlineExpired: failure.deadlineExpired,
+				elapsedMs: failure.elapsedMs,
+				...(failure.causeCode ? { causeCode: failure.causeCode } : {}),
+			});
 	}
+}
+
+const causeCodes = new Set([
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+	"CERT_HAS_EXPIRED",
+	"ERR_TLS_CERT_ALTNAME_INVALID",
+	"UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+	"08001",
+	"08006",
+	"53300",
+	"57P03",
+]);
+
+function failureAt(
+	error: unknown,
+	stage: LdapIdentityFailure["stage"],
+	began: number,
+	reason?: LdapIdentityFailure["reason"],
+) {
+	if (error instanceof LdapIdentityUnavailableError && error.failure)
+		return error;
+	let causeCode: string | undefined;
+	try {
+		const code = (error as { code?: unknown } | null)?.code;
+		if (typeof code === "string" && causeCodes.has(code)) causeCode = code;
+	} catch {
+		/* Diagnostic fields cannot replace the original failure. */
+	}
+	const classifiedReason =
+		reason ??
+		(error instanceof LdapIdentityUnavailableError
+			? "invalid_result"
+			: "dependency_rejected");
+	return new LdapIdentityUnavailableError({
+		stage,
+		reason: classifiedReason,
+		deadlineExpired: classifiedReason === "deadline_expired",
+		elapsedMs: Math.max(0, Date.now() - began),
+		...(causeCode ? { causeCode } : {}),
+	});
 }
 
 function requiredText(value: unknown, maximum = 1024): string {
@@ -205,11 +274,15 @@ export function createLdapIdentityDirectory(
 		lookup: (client: LdapClient) => Promise<T>,
 	): Promise<T> {
 		const client = createClient(clientOptions);
+		let began = Date.now();
+		let stage: LdapIdentityFailure["stage"] = "service_bind";
 		try {
 			await client.bind(config.serviceBindDn, config.serviceBindPassword);
+			stage = "resolve_account";
+			began = Date.now();
 			return await lookup(client);
-		} catch {
-			throw new LdapIdentityUnavailableError();
+		} catch (error) {
+			throw failureAt(error, stage, began);
 		} finally {
 			await client.unbind().catch(() => undefined);
 		}
@@ -219,21 +292,26 @@ export function createLdapIdentityDirectory(
 		attributeNameToSearch: string,
 		value: string,
 	): Promise<LdapEntry | null> {
-		const result = await client.search(config.baseDn, {
-			filter: new EqualityFilter({ attribute: attributeNameToSearch, value }),
-			scope: "sub",
-			derefAliases: "never",
-			sizeLimit: 2,
-			timeLimit: Math.ceil(timeoutMs / 1000),
-			attributes: [
-				config.uidAttribute,
-				config.emailAttribute,
-				config.displayNameAttribute,
-			],
-		});
-		if (result.searchReferences.length || result.searchEntries.length > 1)
-			throw new LdapIdentityUnavailableError();
-		return result.searchEntries[0] ?? null;
+		const began = Date.now();
+		try {
+			const result = await client.search(config.baseDn, {
+				filter: new EqualityFilter({ attribute: attributeNameToSearch, value }),
+				scope: "sub",
+				derefAliases: "never",
+				sizeLimit: 2,
+				timeLimit: Math.ceil(timeoutMs / 1000),
+				attributes: [
+					config.uidAttribute,
+					config.emailAttribute,
+					config.displayNameAttribute,
+				],
+			});
+			if (result.searchReferences.length || result.searchEntries.length > 1)
+				throw new LdapIdentityUnavailableError();
+			return result.searchEntries[0] ?? null;
+		} catch (error) {
+			throw failureAt(error, "service_search", began);
+		}
 	}
 	function find(attributeNameToSearch: string, value: string) {
 		return withServiceClient((client) =>
@@ -292,6 +370,8 @@ export function createLdapIdentityDirectory(
 		createIdentity = false,
 		expectedEmail?: string,
 	): Promise<LdapAccount | null> {
+		let began = Date.now();
+		let stage: LdapIdentityFailure["stage"] = "resolve_account";
 		try {
 			requiredText(uid, 256);
 			const parsed = await withServiceClient(async (client) => {
@@ -304,18 +384,21 @@ export function createLdapIdentityDirectory(
 			});
 			if (!parsed) return null;
 			if (createIdentity && parsed.email !== expectedEmail) return null;
+			stage = "identity_id";
+			began = Date.now();
 			const storedId = createIdentity
 				? await config.identityIds.getOrCreate(config.issuer, uid, randomUUID())
 				: await config.identityIds.findByUid(config.issuer, uid);
 			return storedId
 				? { ...account(parsed, status), userId: opaqueUserId(storedId) }
 				: null;
-		} catch {
-			throw new LdapIdentityUnavailableError();
+		} catch (error) {
+			throw failureAt(error, stage, began);
 		}
 	}
 
 	async function current(uid: string): Promise<LdapAccount | null> {
+		const began = Date.now();
 		try {
 			requiredText(uid, 256);
 			const verifier = config.verifyCurrentStatus;
@@ -323,7 +406,10 @@ export function createLdapIdentityDirectory(
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const deadline = new Promise<never>((_, reject) => {
 				timer = setTimeout(
-					() => reject(new LdapIdentityUnavailableError()),
+					() =>
+						reject(
+							failureAt(undefined, "current_status", began, "deadline_expired"),
+						),
 					timeoutMs,
 				);
 			});
@@ -339,25 +425,27 @@ export function createLdapIdentityDirectory(
 			if (status !== "active" && status !== "disabled")
 				throw new LdapIdentityUnavailableError();
 			return await resolveAccount(uid, status);
-		} catch {
-			throw new LdapIdentityUnavailableError();
+		} catch (error) {
+			throw failureAt(error, "current_status", began);
 		}
 	}
 
 	return {
 		async userIdForUid(uid: string) {
+			const began = Date.now();
 			try {
 				const id = await config.identityIds.findByUid(
 					config.issuer,
 					requiredText(uid, 256),
 				);
 				return opaqueUserId(id);
-			} catch {
-				throw new LdapIdentityUnavailableError();
+			} catch (error) {
+				throw failureAt(error, "identity_id", began);
 			}
 		},
 		current,
 		async currentByUserId(id: string) {
+			const began = Date.now();
 			try {
 				const uid = await config.identityIds.findUidByUserId(
 					config.issuer,
@@ -368,8 +456,8 @@ export function createLdapIdentityDirectory(
 				if (found && found.userId !== id)
 					throw new LdapIdentityUnavailableError();
 				return found;
-			} catch {
-				throw new LdapIdentityUnavailableError();
+			} catch (error) {
+				throw failureAt(error, "identity_id", began);
 			}
 		},
 		async authenticate(
@@ -400,8 +488,10 @@ export function createLdapIdentityDirectory(
 				)
 					return null;
 				return await resolveAccount(first.uid, "active", true, first.email);
-			} catch {
-				throw new LdapIdentityUnavailableError();
+			} catch (error) {
+				throw error instanceof LdapIdentityUnavailableError
+					? error
+					: new LdapIdentityUnavailableError();
 			}
 		},
 	};
