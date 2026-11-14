@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import {
+	openPostgresSessionSandboxImageReaderV1,
 	openPostgresWorkloadStateReaderV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentManagementQueryV1,
@@ -63,7 +64,9 @@ export async function readRuntimeDemandImages(
 			databaseUrl.length === 0 ||
 			databaseUrl.length > 8192 ||
 			typeof input.actorId !== "string" ||
-			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(input.actorId)
+			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(input.actorId) ||
+			typeof input.context?.namespace !== "string" ||
+			!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(input.context.namespace)
 		)
 			throw new Error("RUNTIME_DEMAND_IMAGE_INPUT_INVALID");
 		const url = new URL(databaseUrl);
@@ -86,6 +89,7 @@ export async function readRuntimeDemandImages(
 		const management = new PostgresAgentManagementQueryV1(options);
 		const configuration = new PostgresAgentConfigurationQueryV1(options);
 		const workloads = openPostgresWorkloadStateReaderV1(options);
+		const sessionReader = openPostgresSessionSandboxImageReaderV1(options);
 		try {
 			const receipt = await collectRuntimeDemandImagesV1(
 				{
@@ -117,21 +121,54 @@ export async function readRuntimeDemandImages(
 				},
 				input,
 			);
+			const sessions = await sessionReader.read(input.context.namespace);
+			const casByKey = Object.fromEntries(
+				receipt.rows
+					.filter((row) => row.contextStable)
+					.map((row) => [row.bindingKey, row.casHash]),
+			);
+			const eligibleSessions = sessions.items
+				.map((item) => item.metadata)
+				.filter(
+					(row) =>
+						row.bindingStatus === "VERIFIED_STORE_COMPOSITE" &&
+						row.bindingKey === `session:${row.binding.sandboxId}` &&
+						(row.namespace === input.context.namespace ||
+							row.retained?.policy.namespace === input.context.namespace),
+				);
+			for (const row of eligibleSessions) {
+				if (Object.hasOwn(casByKey, row.bindingKey))
+					throw new Error("RUNTIME_DEMAND_IMAGE_CAS_AMBIGUOUS");
+				casByKey[row.bindingKey] = row.casHash;
+			}
 			return {
 				...receipt,
+				coverage: {
+					...receipt.coverage,
+					session: "STORE_METADATA_ENUMERATED_IMAGE_GROUPS_PARTIAL",
+					declared: declared
+						? "APPROVED_FILE_GROUPS_ONLY"
+						: "UNKNOWN_NO_APPROVED_FILE",
+				},
+				bindingKeys: Object.keys(casByKey).sort(),
+				sessionInventory: {
+					namespace: sessions.namespace,
+					observedAtDatabase: sessions.observedAtDatabase,
+					storeSnapshot: sessions.storeSnapshot,
+					pageCount: sessions.pageCount,
+					enumerationComplete: sessions.enumerationComplete,
+					emptyAfterCompleteEnumeration: sessions.emptyAfterCompleteEnumeration,
+					scope: sessions.scope,
+					rows: sessions.items.map((item) => item.metadata),
+				},
+				snapshotScope:
+					"per-Agent double-read and independent Session MVCC snapshot; no single global snapshot claim",
 				declared:
 					declared && input.declared
 						? projectApprovedDeclaredDemandImagesV1(declared, {
 								...input.declared,
 								context: input.context,
-								casByKey: Object.fromEntries(
-									receipt.rows
-										.filter((row) => row.contextStable)
-										.map((row) => [
-											`parent-workload:${row.agentId}`,
-											row.casHash,
-										]),
-								),
+								casByKey,
 							})
 						: {
 								scope: "declared-approved-file",
@@ -144,6 +181,7 @@ export async function readRuntimeDemandImages(
 				management.close(),
 				configuration.close(),
 				workloads.close(),
+				sessionReader.close(),
 			]);
 		}
 	} catch {

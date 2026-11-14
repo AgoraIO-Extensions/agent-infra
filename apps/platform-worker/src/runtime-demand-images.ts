@@ -170,7 +170,11 @@ function safeCas(
 			: null,
 	};
 	requireValue(cas.desiredState !== null);
-	return { ...cas, casHash: hash(cas) };
+	return {
+		...cas,
+		bindingKey: `parent-workload:${agentId}`,
+		casHash: hash(cas),
+	};
 }
 
 function knownMainImages(
