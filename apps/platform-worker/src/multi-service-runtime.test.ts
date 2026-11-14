@@ -19,6 +19,7 @@ import type {
 } from "@kubernetes/client-node";
 import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
 import { describe, expect, it } from "vitest";
+import { workloadTestPolicy } from "./kubernetes.fixture.js";
 import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
@@ -32,6 +33,8 @@ import {
 	resolveMultiServiceResourceConfigurationV1,
 } from "./multi-service-runtime.js";
 import { parentWorkloadImageProjectionV1 } from "./parent-workload-image-projection.js";
+import { projectStandardParentDemandImagesV1 } from "./standard-parent-demand-images.js";
+import { sessionSandboxTemplateBindingFixture } from "./test-support/session-sandbox-v4.js";
 import {
 	publicBasePathEnvironmentV1,
 	workloadInteractionRouteV1,
@@ -382,6 +385,22 @@ const basePolicy = {
 		},
 	],
 } satisfies MultiServiceRuntimePolicyV1;
+
+it("rejects a complete standard projection when normal multi-service images omit the authenticated main", () => {
+	const value = desired();
+	const policy = {
+		...workloadTestPolicy,
+		...basePolicy,
+		imageRepository: "registry.example.test/multi",
+	};
+	const binding = {
+		...sessionSandboxTemplateBindingFixture(value.imageDigest),
+		imageRepository: policy.imageRepository,
+	};
+	expect(() =>
+		projectStandardParentDemandImagesV1(value, binding, { policy }),
+	).toThrow("PARENT_DEMAND_MAIN_IMAGE_MISSING");
+});
 
 it("image-only projection reuses normal multi-service workloads and migration with no client calls", async () => {
 	const policy = {

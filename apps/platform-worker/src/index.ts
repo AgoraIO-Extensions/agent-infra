@@ -53,6 +53,7 @@ export * from "./skill-hub-delivery.js";
 export * from "./skill-materialization.js";
 export * from "./skill-materializer-production-assembly.js";
 export * from "./skill-materializer-store-adapter.js";
+export { projectStandardParentDemandImagesV1 } from "./standard-parent-demand-images.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
