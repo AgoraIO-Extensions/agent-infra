@@ -53,6 +53,8 @@ export function projectStandardParentDemandImagesV1(
 			groups.flatMap((group) => group.images.map((image) => image.image)),
 		),
 	];
+	if (!images.includes(mainImage))
+		throw new Error("PARENT_DEMAND_MAIN_IMAGE_MISSING");
 	return {
 		source: "AgentWorkloadDesiredV1" as const,
 		completeness: "COMPLETE" as const,
