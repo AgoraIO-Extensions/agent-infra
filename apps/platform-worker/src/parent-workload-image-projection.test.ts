@@ -97,6 +97,30 @@ describe("trusted parent image-only projection", () => {
 		expect(create).not.toHaveBeenCalled();
 	});
 
+	it("keeps custom images on the approved policy repository despite a matching standard binding", () => {
+		const desired = workloadDesiredFixture();
+		const binding = {
+			...sessionSandboxTemplateBindingFixture(desired.imageDigest),
+			imageRepository: "registry.example.test/other-standard",
+		};
+		const result = parentWorkloadImageProjectionV1({
+			desired,
+			sourceKind: "custom",
+			policy: workloadTestPolicy,
+			standardTemplateBinding: binding,
+		});
+		expect(result[0]?.images[0]?.image).toBe(
+			`${workloadTestPolicy.imageRepository}@${desired.imageDigest}`,
+		);
+		expect(() =>
+			parentWorkloadImageProjectionV1({
+				desired,
+				sourceKind: "custom",
+				standardTemplateBinding: binding,
+			}),
+		).toThrow("WORKLOAD_IMAGE_REPOSITORY_REQUIRED");
+	});
+
 	it("fails closed on missing standard trust and mismatched digest/Agent/configuration", () => {
 		const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
 		expect(() =>

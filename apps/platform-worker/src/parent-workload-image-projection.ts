@@ -77,7 +77,10 @@ export function parentWorkloadImageProjectionV1(input: {
 			workspaceSnapshotProjection: input.workspaceSnapshotProjection,
 		});
 	}
-	const repository = binding?.imageRepository ?? input.policy?.imageRepository;
+	const repository =
+		input.sourceKind === "standard"
+			? (binding?.imageRepository ?? input.policy?.imageRepository)
+			: input.policy?.imageRepository;
 	if (!repository) throw new Error("WORKLOAD_IMAGE_REPOSITORY_REQUIRED");
 	const image = `${repository}@${value.imageDigest}`;
 	let spec: V1PodSpec = { containers: [{ name: "agent", image }] };
