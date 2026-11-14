@@ -49,13 +49,6 @@ export function parentWorkloadImageProjectionV1(input: {
 		throw new Error("WORKLOAD_SNAPSHOT_PROJECTION_REQUIRED");
 	if (input.workspaceSnapshotProjection)
 		requireWorkspaceSnapshotEgressV1(input.policy?.workspaceSnapshotEgress);
-	if (isMultiService(value)) {
-		if (!input.policy) throw new Error("WORKLOAD_IMAGE_POLICY_REQUIRED");
-		return multiServiceWorkloadImageProjectionV1(value, {
-			...input.policy,
-			workspaceSnapshotProjection: input.workspaceSnapshotProjection,
-		});
-	}
 	const projection =
 		input.modelProjection == null
 			? undefined
@@ -77,6 +70,13 @@ export function parentWorkloadImageProjectionV1(input: {
 					!isDeepStrictEqual(projection.standardTemplateBinding, binding))))
 	)
 		throw new Error("WORKLOAD_IMAGE_BINDING_MISMATCH");
+	if (isMultiService(value)) {
+		if (!input.policy) throw new Error("WORKLOAD_IMAGE_POLICY_REQUIRED");
+		return multiServiceWorkloadImageProjectionV1(value, {
+			...input.policy,
+			workspaceSnapshotProjection: input.workspaceSnapshotProjection,
+		});
+	}
 	const repository = binding?.imageRepository ?? input.policy?.imageRepository;
 	if (!repository) throw new Error("WORKLOAD_IMAGE_REPOSITORY_REQUIRED");
 	const image = `${repository}@${value.imageDigest}`;

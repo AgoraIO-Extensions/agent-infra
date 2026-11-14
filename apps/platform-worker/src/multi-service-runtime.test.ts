@@ -31,6 +31,7 @@ import {
 	multiServiceWorkloadImageProjectionV1,
 	resolveMultiServiceResourceConfigurationV1,
 } from "./multi-service-runtime.js";
+import { parentWorkloadImageProjectionV1 } from "./parent-workload-image-projection.js";
 import {
 	publicBasePathEnvironmentV1,
 	workloadInteractionRouteV1,
@@ -390,6 +391,12 @@ it("image-only projection reuses normal multi-service workloads and migration wi
 	const fake = fakeClient();
 	const value = desired();
 	if (!isMultiService(value)) throw new Error("missing multi-service fixture");
+	expect(() =>
+		parentWorkloadImageProjectionV1({
+			desired: value,
+			sourceKind: "standard",
+		}),
+	).toThrow("WORKLOAD_IMAGE_BINDING_MISMATCH");
 	const operations = createMultiServiceRuntimeOperations({
 		client: fake.client,
 		policy,
