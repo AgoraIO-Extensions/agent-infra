@@ -1,0 +1,58 @@
+{{- $certManager := .Values.certManager | default dict }}
+{{- if and $certManager.enabled (not .Values.bootstrap.databaseOnly) }}
+{{- $issuer := $certManager.issuer }}
+{{- $certificate := $certManager.certificate }}
+{{- $dnsName := required "certManager.certificate.dnsNames is required when certManager.enabled=true" (index $certificate.dnsNames 0) }}
+{{- if ne $issuer.name "agent-infra-apps-letsencrypt-prod" }}{{ fail "certManager.issuer.name is fixed for the selected apps host" }}{{- end }}
+{{- if ne $issuer.acmeServer "https://acme-v02.api.letsencrypt.org/directory" }}{{ fail "certManager.issuer.acmeServer is fixed for the selected apps host" }}{{- end }}
+{{- if ne $issuer.ingressClassName "new-magic-nginx" }}{{ fail "certManager.issuer.ingressClassName is fixed for the selected apps host" }}{{- end }}
+{{- if ne $certificate.name "agent-infra-apps-tls" }}{{ fail "certManager.certificate.name is fixed for the selected apps host" }}{{- end }}
+{{- if ne $certificate.secretName "agent-infra-apps-tls" }}{{ fail "certManager.certificate.secretName is fixed for the selected apps host" }}{{- end }}
+{{- if ne $dnsName "apps.agent-infra.agoralab.co" }}{{ fail "certManager.certificate.dnsNames is fixed for the selected apps host" }}{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ required "certManager.issuer.name is required when certManager.enabled=true" $issuer.name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    agent-infra.agora.io/acme-authorization-ref: {{ required "certManager.issuer.acmeAuthorizationRef is required when certManager.enabled=true" $issuer.acmeAuthorizationRef | quote }}
+    agent-infra.agora.io/renewal-owner: {{ required "certManager.renewalOwner is required when certManager.enabled=true" $certManager.renewalOwner | quote }}
+spec:
+  acme:
+    server: {{ $issuer.acmeServer | quote }}
+    # The account Secret is an existing owner-supplied object; cert-manager must not generate a key.
+    disableAccountKeyGeneration: true
+    privateKeySecretRef:
+      name: {{ required "certManager.issuer.accountSecretName is required when certManager.enabled=true" $issuer.accountSecretName }}
+    solvers:
+      - selector:
+          dnsNames: [{{ $dnsName | quote }}]
+        http01:
+          ingress:
+            ingressClassName: {{ $issuer.ingressClassName | quote }}
+            serviceType: ClusterIP
+            {{- with $issuer.nodeSelector }}
+            podTemplate:
+              spec:
+                nodeSelector:
+{{ toYaml . | nindent 18 }}
+            {{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ required "certManager.certificate.name is required when certManager.enabled=true" $certificate.name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+  annotations:
+    agent-infra.agora.io/acme-authorization-ref: {{ $issuer.acmeAuthorizationRef | quote }}
+    agent-infra.agora.io/renewal-owner: {{ $certManager.renewalOwner | quote }}
+spec:
+  secretName: {{ required "certManager.certificate.secretName is required when certManager.enabled=true" $certificate.secretName }}
+  dnsNames: [{{ $dnsName | quote }}]
+  issuerRef:
+    name: {{ $issuer.name }}
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}

@@ -35,6 +35,70 @@
         }
       }
     },
+    "certManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "renewalOwner", "renewalMechanism", "issuer", "certificate"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "renewalOwner": {"type": "string", "maxLength": 256},
+        "renewalMechanism": {"const": "cert-manager"},
+        "issuer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName", "nodeSelector"],
+          "properties": {
+            "name": {"const": "agent-infra-apps-letsencrypt-prod"},
+            "acmeServer": {"const": "https://acme-v02.api.letsencrypt.org/directory"},
+            "accountSecretName": {"type": "string", "maxLength": 253, "pattern": "^(?:|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"},
+            "acmeAuthorizationRef": {"type": "string", "maxLength": 512},
+            "ingressClassName": {"const": "new-magic-nginx"},
+            "nodeSelector": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
+          }
+        },
+        "certificate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "secretName", "dnsNames"],
+          "properties": {
+            "name": {"const": "agent-infra-apps-tls"},
+            "secretName": {"const": "agent-infra-apps-tls"},
+            "dnsNames": {
+              "type": "array",
+              "maxItems": 1,
+              "items": {"const": "apps.agent-infra.agoralab.co"}
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+          "then": {
+            "required": ["renewalOwner"],
+            "properties": {
+              "renewalOwner": {"minLength": 1},
+              "issuer": {
+                "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName"],
+                "properties": {
+                  "name": {"minLength": 1},
+                  "accountSecretName": {"minLength": 1},
+                  "acmeAuthorizationRef": {"minLength": 1}
+                }
+              },
+              "certificate": {
+                "required": ["name", "secretName", "dnsNames"],
+                "properties": {
+                  "name": {"minLength": 1},
+                  "secretName": {"minLength": 1},
+                  "dnsNames": {"minItems": 1, "maxItems": 1}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "files": {
       "type": "object",
       "additionalProperties": false,
