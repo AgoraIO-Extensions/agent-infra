@@ -8,6 +8,7 @@ export default defineConfig({
 		workspaceSnapshot: "./src/workspace-snapshot-resolver.ts",
 		skillHubInit: "./src/skill-hub-init.ts",
 		kubernetesClient: "./src/kubernetes-client.ts",
+		runtimeDemandImages: "./src/runtime-demand-images-readonly.ts",
 	},
 	format: "esm",
 	outDir: "./dist",
