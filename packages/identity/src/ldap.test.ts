@@ -3,7 +3,7 @@ import {
 	type ClientOptions,
 	InvalidCredentialsError,
 } from "ldapts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	createLdapIdentityDirectory,
 	type LdapIdentityConfiguration,
@@ -145,6 +145,171 @@ function fixture() {
 }
 
 describe("first-party LDAP identity directory", () => {
+	it("preserves the verifier deadline through currentByUserId without private details", async () => {
+		vi.useFakeTimers();
+		try {
+			const state = fixture();
+			const id = "123e4567-e89b-42d3-a456-426614174000";
+			state.ids.set(JSON.stringify([state.config.issuer, "stable-a"]), id);
+			const directory = createLdapIdentityDirectory({
+				...state.config,
+				timeoutMs: 5000,
+				verifyCurrentStatus: () => new Promise(() => {}),
+			});
+			const pending = directory.currentByUserId(id).catch((error) => error);
+			await vi.advanceTimersByTimeAsync(5000);
+			const error = await pending;
+			expect(error).toBeInstanceOf(LdapIdentityUnavailableError);
+			expect(error.failure).toEqual({
+				stage: "current_status",
+				reason: "deadline_expired",
+				deadlineExpired: true,
+				elapsedMs: 5000,
+			});
+			expect(JSON.stringify(error)).not.toMatch(
+				/stable-a|company-ldap|123e4567/,
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["ECONNRESET", "PRIVATE_CODE_CANARY"])(
+		"classifies verifier rejection with bounded cause %s",
+		async (code) => {
+			vi.useFakeTimers();
+			try {
+				const state = fixture();
+				const directory = createLdapIdentityDirectory({
+					...state.config,
+					async verifyCurrentStatus() {
+						await new Promise((resolve) => setTimeout(resolve, 25));
+						throw Object.assign(new Error("PRIVATE_MESSAGE_CANARY"), { code });
+					},
+				});
+				const pending = directory.current("stable-a").catch((error) => error);
+				await vi.advanceTimersByTimeAsync(25);
+				const error = await pending;
+				expect(error.failure).toEqual({
+					stage: "current_status",
+					reason: "dependency_rejected",
+					deadlineExpired: false,
+					elapsedMs: 25,
+					...(code === "ECONNRESET" ? { causeCode: code } : {}),
+				});
+				expect(`${error}${JSON.stringify(error)}`).not.toContain("PRIVATE_");
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each(["bind", "search"] as const)(
+		"keeps the first service %s failure across account/current wrapping",
+		async (operation) => {
+			vi.useFakeTimers();
+			try {
+				const state = fixture();
+				const directory = createLdapIdentityDirectory({
+					...state.config,
+					createClient(options) {
+						const client = state.config.createClient?.(options);
+						if (!client) throw new Error("missing fixture client");
+						return {
+							...client,
+							[operation]: async () => {
+								await new Promise((resolve) => setTimeout(resolve, 20));
+								throw Object.assign(
+									new Error("PRIVATE_DN_FILTER_CREDENTIAL_CANARY"),
+									{ code: "ETIMEDOUT" },
+								);
+							},
+						};
+					},
+				});
+				const pending = directory.current("stable-a").catch((error) => error);
+				await vi.advanceTimersByTimeAsync(20);
+				const error = await pending;
+				expect(error.failure).toEqual({
+					stage: `service_${operation}`,
+					reason: "dependency_rejected",
+					deadlineExpired: false,
+					causeCode: "ETIMEDOUT",
+					elapsedMs: 20,
+				});
+				expect(`${error}${JSON.stringify(error)}`).not.toMatch(
+					/PRIVATE_|stable-a|service-password/,
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each(["userIdForUid", "current"] as const)(
+		"keeps mapping failure classification through %s",
+		async (operation) => {
+			vi.useFakeTimers();
+			try {
+				const state = fixture();
+				const directory = createLdapIdentityDirectory({
+					...state.config,
+					createClient(options) {
+						const client = state.config.createClient?.(options);
+						if (!client) throw new Error("missing fixture client");
+						return {
+							...client,
+							async bind(...args: Parameters<Client["bind"]>) {
+								await new Promise((resolve) => setTimeout(resolve, 10));
+								return client.bind(...args);
+							},
+						};
+					},
+					identityIds: {
+						...state.config.identityIds,
+						async findByUid() {
+							await new Promise((resolve) => setTimeout(resolve, 15));
+							throw Object.assign(new Error("PRIVATE_DATABASE_CANARY"), {
+								code: "08006",
+							});
+						},
+					},
+				});
+				const pending = directory[operation]("stable-a").catch(
+					(error) => error,
+				);
+				await vi.advanceTimersByTimeAsync(operation === "current" ? 25 : 15);
+				const error = await pending;
+				expect(error.failure).toEqual({
+					stage: "identity_id",
+					reason: "dependency_rejected",
+					deadlineExpired: false,
+					causeCode: "08006",
+					elapsedMs: 15,
+				});
+				expect(`${error}${JSON.stringify(error)}`).not.toContain(
+					"PRIVATE_DATABASE_CANARY",
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it("distinguishes an invalid identity mapping from a transport failure", async () => {
+		const state = fixture();
+		const directory = createLdapIdentityDirectory(state.config);
+		const error = await directory
+			.userIdForUid("stable-a")
+			.catch((error) => error);
+		expect(error.failure).toMatchObject({
+			stage: "identity_id",
+			reason: "invalid_result",
+			deadlineExpired: false,
+		});
+		expect(error.failure).not.toHaveProperty("causeCode");
+	});
+
 	it("uses one fresh service client for both current-account searches (#2940)", async () => {
 		const state = fixture();
 		const directory = createLdapIdentityDirectory(state.config);

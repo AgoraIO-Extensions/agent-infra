@@ -5,7 +5,10 @@ import {
 	AgentOwnerProjectionV1Schema,
 	BrowserUserProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
+import {
+	LdapIdentityUnavailableError,
+	resolveCurrentTaskUserV1,
+} from "@agent-infra/identity";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
 	ApplicationMaterialGrantActorV1,
@@ -253,7 +256,14 @@ export async function resolveIdentity(
 	try {
 		value = await adapter.resolve(request);
 	} catch (error) {
-		recordHttpFailureContext({ failureStep: "identity.resolve", error });
+		recordHttpFailureContext({
+			failureStep: "identity.resolve",
+			error,
+			identityFailure:
+				error instanceof LdapIdentityUnavailableError
+					? error.failure
+					: undefined,
+		});
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	if (value === null) {

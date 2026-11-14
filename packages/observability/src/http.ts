@@ -7,6 +7,7 @@ import {
 	createTraceParent,
 	isOperationalFailureStep,
 	type ObservabilitySpan,
+	projectIdentityFailure,
 	type startObservability,
 } from "./index.js";
 
@@ -22,6 +23,7 @@ const requests = new AsyncLocalStorage<{
 	active: boolean;
 	failureStep?: string;
 	errorClass?: string;
+	identityFailure?: ReturnType<typeof projectIdentityFailure>;
 	sqlState?: string;
 }>();
 
@@ -33,11 +35,13 @@ export function currentRequestMetadata(): RequestMetadata | undefined {
 export function recordHttpFailureContext(input: {
 	readonly failureStep: string;
 	readonly error?: unknown;
+	readonly identityFailure?: unknown;
 	readonly sqlState?: string;
 }): void {
 	const request = requests.getStore();
 	if (!request?.active || !isOperationalFailureStep(input.failureStep)) return;
 	request.failureStep ??= input.failureStep;
+	request.identityFailure ??= projectIdentityFailure(input.identityFailure);
 	if (input.sqlState && /^[0-9A-Z]{5}$/.test(input.sqlState))
 		request.sqlState = input.sqlState;
 	let current = input.error;
@@ -192,6 +196,7 @@ export function createHttpObservability(
 			active: boolean;
 			failureStep?: string;
 			errorClass?: string;
+			identityFailure?: ReturnType<typeof projectIdentityFailure>;
 			sqlState?: string;
 		} = {
 			metadata: Object.freeze(metadata) as RequestMetadata,
@@ -232,6 +237,9 @@ export function createHttpObservability(
 						...(request.errorClass === undefined
 							? {}
 							: { errorClass: request.errorClass }),
+						...(request.identityFailure === undefined
+							? {}
+							: { identityFailure: request.identityFailure }),
 						...(request.sqlState === undefined
 							? {}
 							: { sqlState: request.sqlState }),

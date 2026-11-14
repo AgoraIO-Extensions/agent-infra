@@ -9,6 +9,7 @@ import {
 import {
 	isTraceParent,
 	type OperationalEvent,
+	projectIdentityFailure,
 	startObservability,
 } from "./index.js";
 
@@ -269,6 +270,97 @@ it("records a bounded failure step and SQLSTATE without private error details", 
 		sqlState: "40P01",
 	});
 	expect(JSON.stringify(events)).not.toContain("PRIVATE_SQL_AND_PARAMS");
+});
+
+it("preserves the first safe identity classification and strips extra private fields", async () => {
+	const { app, events } = observed();
+	const failure = {
+		stage: "service_search",
+		reason: "dependency_rejected",
+		deadlineExpired: false,
+		elapsedMs: 20,
+		causeCode: "ETIMEDOUT",
+	};
+	app.get("/identity-failure", (context) => {
+		recordHttpFailureContext({
+			failureStep: "identity.resolve",
+			error: new Error("PRIVATE_ERROR_CANARY"),
+			identityFailure: {
+				...failure,
+				uid: "PRIVATE_UID_CANARY",
+				body: "PRIVATE_COOKIE_CANARY",
+			},
+		});
+		recordHttpFailureContext({
+			failureStep: "identity.resolve",
+			identityFailure: { ...failure, stage: "current_status", elapsedMs: 5000 },
+		});
+		return context.json(failureBody("DEPENDENCY_UNAVAILABLE"), 503);
+	});
+	expect((await app.request("/identity-failure")).status).toBe(503);
+	expect(events[0]?.identityFailure).toEqual(failure);
+	expect(JSON.stringify(events)).not.toContain("PRIVATE_");
+});
+
+it("validates identity metadata again at the actual logger boundary", async () => {
+	const chunks: string[] = [];
+	const output = new Writable({
+		write(chunk, _encoding, done) {
+			chunks.push(chunk.toString());
+			done();
+		},
+	});
+	const telemetry = startObservability({
+		service: "platform-api",
+		output,
+	});
+	const failure = {
+		stage: "current_status",
+		reason: "deadline_expired",
+		deadlineExpired: true,
+		elapsedMs: 5000,
+	};
+	telemetry.record({
+		stage: "http",
+		outcome: "failed",
+		identityFailure: {
+			...failure,
+			causeCode: "PRIVATE_CODE_CANARY",
+			message: "PRIVATE_MESSAGE_CANARY",
+		},
+	});
+	for (const invalid of [
+		{ stage: "PRIVATE_STAGE_CANARY" },
+		{ reason: "PRIVATE_REASON_CANARY" },
+		{ deadlineExpired: false },
+		{ elapsedMs: -1 },
+		{ elapsedMs: Number.NaN },
+		{ elapsedMs: 1.5 },
+	]) {
+		expect(projectIdentityFailure({ ...failure, ...invalid })).toBeUndefined();
+		telemetry.record({
+			stage: "http",
+			outcome: "failed",
+			identityFailure: { ...failure, ...invalid },
+		});
+	}
+	await telemetry.close();
+	const lines = chunks
+		.join("")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	expect(lines[0]).toMatchObject({
+		identityFailureStage: "current_status",
+		identityFailureReason: "deadline_expired",
+		identityFailureDeadlineExpired: true,
+		identityFailureElapsedMs: 5000,
+	});
+	expect(lines[0]).not.toHaveProperty("identityFailureCauseCode");
+	expect(
+		lines.slice(1).every((line) => line.identityFailureStage === undefined),
+	).toBe(true);
+	expect(chunks.join("")).not.toContain("PRIVATE_");
 });
 
 it("accepts the bounded authority.load failure step (#2696)", async () => {

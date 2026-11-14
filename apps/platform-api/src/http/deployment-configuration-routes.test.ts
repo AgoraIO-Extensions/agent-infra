@@ -1,4 +1,7 @@
 import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import { LdapIdentityUnavailableError } from "@agent-infra/identity";
+import type { OperationalEvent } from "@agent-infra/observability";
+import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { createDeploymentConfigurationProjectionV2 } from "../deployment-admissions.js";
@@ -69,6 +72,55 @@ function createApp(read: () => Promise<unknown>) {
 }
 
 describe("deployment configuration projection", () => {
+	it.each(["current_status", "service_bind", "identity_id"] as const)(
+		"keeps identity %s failure closed before the configuration reader",
+		async (stage) => {
+			const events: OperationalEvent[] = [];
+			const read = vi.fn();
+			const failure = {
+				stage,
+				reason: "dependency_rejected" as const,
+				deadlineExpired: false,
+				causeCode: "ECONNRESET",
+				elapsedMs: 25,
+			};
+			const error = Object.assign(new LdapIdentityUnavailableError(failure), {
+				privateDetail: "PRIVATE_COOKIE_UID_DN_CANARY",
+			});
+			const app = new Hono();
+			app.use(
+				"*",
+				createHttpObservability({ record: (event) => events.push(event) }),
+			);
+			app.onError((error, context) =>
+				error instanceof HttpProtocolError
+					? context.json(error.body, error.status)
+					: context.json({}, 500),
+			);
+			registerDeploymentConfigurationRoutes(app, {
+				identity: {
+					resolve: vi.fn().mockRejectedValue(error),
+					hydrateUsers: vi.fn(),
+				},
+				read,
+			});
+			const response = await app.request("/api/v2/deployment/configuration");
+			expect(response.status).toBe(503);
+			expect(await response.json()).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+			});
+			expect(read).not.toHaveBeenCalled();
+			expect(events[0]).toMatchObject({
+				failureStep: "identity.resolve",
+				errorClass: "LdapIdentityUnavailableError",
+				identityFailure: failure,
+			});
+			expect(JSON.stringify(events)).not.toContain(
+				"PRIVATE_COOKIE_UID_DN_CANARY",
+			);
+		},
+	);
+
 	it("projects choices without endpoint or image sensitive material", async () => {
 		const read = createDeploymentConfigurationProjectionV2({
 			templates: [{ ...template, templateId: "codex", displayName: "Codex" }],
