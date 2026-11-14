@@ -185,6 +185,7 @@ it("binds an existing direct Session using its real Store row CAS, not its paren
 		namespace: "runtime",
 		casHash,
 		retained: null,
+		missing: [],
 	};
 	try {
 		const image = `ghcr.io/example/codex@sha256:${"1".repeat(64)}`;
@@ -253,7 +254,7 @@ it("binds an existing direct Session using its real Store row CAS, not its paren
 			enumerationComplete: true,
 			emptyAfterCompleteEnumeration: false,
 			scope: "namespace-and-unattributed-allocations",
-			items: [{ metadata }],
+			items: [{ metadata, workerProjectionInputs: () => [] }],
 		};
 		store.sessionRead.mockResolvedValueOnce(snapshot);
 		const receipt = await readRuntimeDemandImages(
@@ -278,7 +279,7 @@ it("binds an existing direct Session using its real Store row CAS, not its paren
 		]) {
 			store.sessionRead.mockResolvedValueOnce({
 				...snapshot,
-				items: [{ metadata: changed }],
+				items: [{ metadata: changed, workerProjectionInputs: () => [] }],
 			});
 			const rejected = await readRuntimeDemandImages(
 				fileInput,
