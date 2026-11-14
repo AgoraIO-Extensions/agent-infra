@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
 import {
@@ -17,6 +16,7 @@ import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
+import { projectWorkspaceSnapshotDemandImagesV1 } from "./workspace-snapshot-demand-images.js";
 
 type StoreRead = Awaited<
 	ReturnType<ReturnType<typeof openPostgresSessionSandboxImageReaderV1>["read"]>
@@ -130,48 +130,30 @@ export async function projectSessionDemandImagesV1(input: {
 					principal: source.binding.principal,
 					channelId: source.binding.channelId,
 				};
-				let snapshotStatus = "NOT_APPLICABLE_EMPTY_BINDINGS";
-				if (desired.workspaceSnapshots?.length) {
-					missing =
-						"workload Store revision/fence and normal workspaceSnapshotResolver.project";
-					const cas = item.metadata.snapshotReadCas;
-					const project = authority.workload.workspaceSnapshotResolver?.project;
-					if (!cas || !project) throw new Error();
-					missing =
-						"materialization reader metadata matching real nonempty Desired bindings";
-					const records = await input.snapshots.read({
-						agentId: desired.agentId,
-						configurationRevision: desired.configRevision,
-						workloadRevision: cas.workloadRevision,
-						fence: cas.fence,
-						bindings: desired.workspaceSnapshots.map((value) => ({
-							snapshotId: value.snapshotId,
-							name: value.name,
-						})),
-					});
-					const metadata = records.map((value) => ({
-						snapshotId: value.snapshotId,
-						name: value.name,
-						digest: value.digest,
-						sizeBytes: value.sizeBytes,
-						objectRef: value.objectRef,
-						mountPath: `/opt/agent/workspaces/${value.name}`,
-					}));
-					const sort = <T extends { name: string }>(values: readonly T[]) =>
-						[...values].sort((a, b) => a.name.localeCompare(b.name));
-					if (
-						!isDeepStrictEqual(sort(metadata), sort(desired.workspaceSnapshots))
-					)
-						throw new Error();
+				const cas = item.metadata.snapshotReadCas;
+				const snapshot = await projectWorkspaceSnapshotDemandImagesV1({
+					desired,
+					contextHash: input.contextHash,
+					casHash: item.metadata.casHash,
+					workloadRevision: cas?.workloadRevision ?? 0,
+					fence: cas?.fence ?? 0,
+					authority: {
+						sourceSha: authority.sourceSha,
+						configurationHash: authority.configurationHash,
+						contextHash: authority.contextHash,
+						resolver: authority.workload.workspaceSnapshotResolver,
+					},
+					snapshots: input.snapshots,
+				});
+				if (snapshot.status === "UNKNOWN") {
+					missing = snapshot.missing.join("; ");
+					throw new Error();
+				}
+				if (snapshot.projection)
 					allocation = {
 						...allocation,
-						workspaceSnapshotProjection: project(records, {
-							agentId: desired.agentId,
-							configurationRevision: desired.configRevision,
-						}),
+						workspaceSnapshotProjection: snapshot.projection(),
 					};
-					snapshotStatus = "BOUND_METADATA_UNSIGNED_PROJECTION";
-				}
 				const oauth = selectSessionOAuthProvisioningV1(
 					source.binding,
 					source.policy.namespace,
@@ -188,7 +170,11 @@ export async function projectSessionDemandImagesV1(input: {
 						sourceSha: authority.sourceSha,
 						configurationHash: authority.configurationHash,
 					},
-					snapshotStatus,
+					snapshotStatus:
+						snapshot.status === "PROJECTED_IMAGES"
+							? "BOUND_METADATA_UNSIGNED_PROJECTION"
+							: snapshot.status,
+					snapshotAuthority: snapshot.provenance,
 					images: sessionSandboxImageProjectionV1(allocation),
 					missing: [],
 				});

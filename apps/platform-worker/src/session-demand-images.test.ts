@@ -274,6 +274,13 @@ it("reads real nonempty snapshot metadata then calls only the unsigned normal pr
 	expect(receipt.rows[0]?.groups[0]).toMatchObject({
 		status: "PROJECTED_IMAGES",
 		snapshotStatus: "BOUND_METADATA_UNSIGNED_PROJECTION",
+		snapshotAuthority: {
+			configurationSourceSha: authority.sourceSha,
+			configurationHash: authority.configurationHash,
+			casHash: input.readback.items[0]?.metadata.casHash,
+			policyField: "policy.imageDigest",
+			policyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+		},
 	});
 	expect(
 		receipt.rows[0]?.groups[0]?.images.map((value) => value.image),
@@ -288,4 +295,29 @@ it("reads real nonempty snapshot metadata then calls only the unsigned normal pr
 		}),
 	);
 	expect(JSON.stringify(receipt)).not.toContain(record.objectRef);
+	const borrowedProject = Object.assign(forbiddenRead, {
+		project: resolver.project.bind(resolver),
+	});
+	projectedInput.snapshots.read = vi.fn(async () => [record]);
+	const unbound = await projectSessionDemandImagesV1({
+		...projectedInput,
+		authorities: projectedInput.authorities.map((value) => ({
+			...value,
+			workload: {
+				...value.workload,
+				workspaceSnapshotResolver: borrowedProject,
+			},
+		})),
+	});
+	expect(unbound.rows[0]?.groups[0]).toMatchObject({
+		status: "UNKNOWN_MISSING_TRUSTED_FIELD",
+		images: [],
+		knownMain: null,
+	});
+	expect(unbound.rows[0]?.groups[0]?.missing[0]).toContain(
+		"captured policy.imageDigest",
+	);
+	expect(projectedInput.snapshots.read).not.toHaveBeenCalled();
+	expect(forbiddenRead).not.toHaveBeenCalled();
+	expect(forbiddenUrl).not.toHaveBeenCalled();
 });

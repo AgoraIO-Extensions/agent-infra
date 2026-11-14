@@ -1,0 +1,346 @@
+import { spawnSync } from "node:child_process";
+import { expect, it, vi } from "vitest";
+import {
+	workloadDesiredFixture,
+	workloadTestPolicy,
+} from "./kubernetes.fixture.js";
+import { projectWorkspaceSnapshotDemandImagesV1 } from "./workspace-snapshot-demand-images.js";
+import {
+	createWorkspaceSnapshotResolverV1,
+	workspaceSnapshotResolverImagePolicyV1,
+} from "./workspace-snapshot-resolver.js";
+
+function fixture() {
+	const record = {
+		snapshotId: "snapshot-a",
+		name: "repo",
+		digest: `sha256:${"a".repeat(64)}`,
+		sizeBytes: 10,
+		objectRef: "PRIVATE_OBJECT_REFERENCE",
+		objectVersion: "private-version",
+	};
+	const policy = {
+		imageDigest: `registry.example.test/materializer@sha256:${"c".repeat(64)}`,
+		allowedOrigins: ["https://private-storage.example.test"],
+		cacheSizeLimit: "2Gi",
+		credentialSecretName: "private-credential-reference",
+		resources: {
+			requests: { cpu: "100m", memory: "128Mi" },
+			limits: { cpu: "1", memory: "512Mi" },
+		},
+	};
+	const resolverRead = vi.fn(async () => [record]);
+	const sign = vi.fn(async () => {
+		throw new Error("signing forbidden in image-only projection");
+	});
+	const resolver = createWorkspaceSnapshotResolverV1({
+		read: resolverRead,
+		createReadUrl: sign,
+		policy,
+		allowedOrigins: policy.allowedOrigins,
+	});
+	const { objectVersion: _, ...binding } = record;
+	const input = {
+		desired: {
+			...workloadDesiredFixture(),
+			workspaceSnapshots: [
+				{ ...binding, mountPath: "/opt/agent/workspaces/repo" },
+			],
+		},
+		contextHash: "d".repeat(64),
+		casHash: "e".repeat(64),
+		workloadRevision: 12,
+		fence: 6,
+		authority: {
+			sourceSha: "4".repeat(40),
+			configurationHash: "f".repeat(64),
+			contextHash: "d".repeat(64),
+			resolver,
+		},
+		snapshots: { read: vi.fn(async () => [record]) },
+	};
+	return { input, record, policy, resolver, resolverRead, sign };
+}
+
+it("binds the actual normal materializer policy image to Store CAS without signing or serializing private shape", async () => {
+	const f = fixture();
+	const result = await projectWorkspaceSnapshotDemandImagesV1(f.input);
+	expect(result.status).toBe("PROJECTED_IMAGES");
+	expect(result.images).toEqual([
+		{
+			name: "workspace-snapshot-materializer",
+			kind: "init",
+			image: f.policy.imageDigest,
+			digest: `sha256:${"c".repeat(64)}`,
+			entrypointSource: "pod-override",
+			entrypointShapeHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+		},
+	]);
+	expect(result.provenance).toMatchObject({
+		configurationSourceSha: f.input.authority.sourceSha,
+		configurationHash: f.input.authority.configurationHash,
+		casHash: f.input.casHash,
+		policyHash: workspaceSnapshotResolverImagePolicyV1(f.resolver)?.policyHash,
+		producerModule: "apps/platform-worker/src/workspace-snapshot-resolver.ts",
+		policyField: "policy.imageDigest",
+	});
+	expect(f.input.snapshots.read).toHaveBeenCalledWith({
+		agentId: f.input.desired.agentId,
+		configurationRevision: f.input.desired.configRevision,
+		workloadRevision: 12,
+		fence: 6,
+		bindings: [{ snapshotId: f.record.snapshotId, name: f.record.name }],
+	});
+	expect(result.projection?.().initContainers[0]?.image).toBe(
+		f.policy.imageDigest,
+	);
+	expect(f.resolverRead).not.toHaveBeenCalled();
+	expect(f.sign).not.toHaveBeenCalled();
+	expect(JSON.stringify(result)).not.toMatch(
+		/PRIVATE_OBJECT|private-version|private-credential|private-storage|"volumes"|"manifest"|"command"|"args"/,
+	);
+});
+
+it("treats genuinely empty bindings as not applicable without demanding policy or inventing an init", async () => {
+	const f = fixture();
+	const result = await projectWorkspaceSnapshotDemandImagesV1({
+		...f.input,
+		desired: workloadDesiredFixture(),
+		authority: undefined,
+	});
+	expect(result).toMatchObject({
+		status: "NOT_APPLICABLE_EMPTY_BINDINGS",
+		images: [],
+		missing: [],
+	});
+	expect(f.input.snapshots.read).not.toHaveBeenCalled();
+});
+
+it("holds nonempty bindings with missing policy or a caller-written projection despite a matching image", async () => {
+	const f = fixture();
+	const fabricated = Object.assign(async () => ({ inputs: [] }), {
+		project: () =>
+			f.resolver.project([f.record], {
+				agentId: f.input.desired.agentId,
+				configurationRevision: f.input.desired.configRevision,
+			}),
+	});
+	for (const resolver of [undefined, fabricated]) {
+		const result = await projectWorkspaceSnapshotDemandImagesV1({
+			...f.input,
+			authority: { ...f.input.authority, resolver },
+		});
+		expect(result).toMatchObject({ status: "UNKNOWN", images: [] });
+		expect(result.missing[0]).toContain("captured policy.imageDigest");
+	}
+	expect(f.input.snapshots.read).not.toHaveBeenCalled();
+});
+
+it("rejects source/context/CAS or metadata drift within only this snapshot group", async () => {
+	const f = fixture();
+	for (const change of [
+		{ casHash: "bad" },
+		{ fence: 0 },
+		{ contextHash: "0".repeat(64) },
+		{ authority: { ...f.input.authority, sourceSha: "bad" } },
+	]) {
+		const result = await projectWorkspaceSnapshotDemandImagesV1({
+			...f.input,
+			...change,
+		});
+		expect(result).toMatchObject({ status: "UNKNOWN", images: [] });
+	}
+	expect(f.input.snapshots.read).not.toHaveBeenCalled();
+	f.input.snapshots.read.mockResolvedValue([
+		{ ...f.record, digest: `sha256:${"b".repeat(64)}` },
+	]);
+	const result = await projectWorkspaceSnapshotDemandImagesV1(f.input);
+	expect(result).toMatchObject({ status: "UNKNOWN", images: [] });
+	expect(result.missing[0]).toContain("exact Desired bindings/revision/fence");
+	expect(f.sign).not.toHaveBeenCalled();
+});
+
+it("captures normal policy immutably and refuses a replaced projector", async () => {
+	const f = fixture();
+	const before = workspaceSnapshotResolverImagePolicyV1(f.resolver);
+	f.policy.imageDigest = `registry.example.test/changed@sha256:${"b".repeat(64)}`;
+	const result = await projectWorkspaceSnapshotDemandImagesV1(f.input);
+	expect(result.images[0]?.image).toBe(before?.image);
+	f.resolver.project = () => {
+		throw new Error("replacement must not run");
+	};
+	expect(workspaceSnapshotResolverImagePolicyV1(f.resolver)).toBeUndefined();
+	expect(await projectWorkspaceSnapshotDemandImagesV1(f.input)).toMatchObject({
+		status: "UNKNOWN",
+		images: [],
+	});
+});
+
+it("keeps normal bundled resolver provenance through shared-program stdout", () => {
+	const f = fixture();
+	const agentId = f.input.desired.agentId;
+	const agentVersion = "agent-version-1";
+	const generationId = "e".repeat(64);
+	const version = {
+		schemaVersion: 1,
+		skillId: "skill-a",
+		skillVersionId: "skill-version-a",
+		provider: "system",
+		version: "1.0.0",
+		packageObjectVersion: "object-a",
+		packageDigest: "a".repeat(64),
+		manifestDigest: "b".repeat(64),
+		signatureDigest: "c".repeat(64),
+	};
+	const grant = {
+		schemaVersion: 1,
+		tools: [],
+		connections: [],
+		fileRoots: [],
+		networkOrigins: [],
+		scripts: false,
+	};
+	const targetPath = ".agents/skills/workspace-summary";
+	const applied = {
+		schemaVersion: 1,
+		agentId,
+		agentVersion,
+		skillName: "workspace-summary",
+		skillVersion: version,
+		grant,
+		configurationRevision: f.input.desired.configRevision,
+		syncRevision: 1,
+		state: "synced",
+		failureReason: null,
+		appliedReceipt: {
+			schemaVersion: 1,
+			agentId,
+			agentVersion,
+			skillName: "workspace-summary",
+			configurationRevision: f.input.desired.configRevision,
+			syncRevision: 1,
+			skillVersionId: version.skillVersionId,
+			generationId,
+			packageDigest: version.packageDigest,
+			manifestDigest: version.manifestDigest,
+			targetPath,
+			readOnly: true,
+		},
+	};
+	const deliveryImage = `registry.example.test/delivery@sha256:${"d".repeat(64)}`;
+	const desired = {
+		...f.input.desired,
+		skillDeliveryImage: deliveryImage,
+		skillGenerationId: generationId,
+		skillAppliedBindings: JSON.stringify([applied]),
+		skills: [
+			{
+				schemaVersion: 1,
+				agentId,
+				agentVersion,
+				skillVersion: version,
+				targetPath,
+				readOnly: true,
+				grant,
+				manifest: {
+					schemaVersion: 1,
+					name: "workspace-summary",
+					version: "1.0.0",
+					entryPath: "SKILL.md",
+					files: [{ path: "SKILL.md", sizeBytes: 1, sha256: "a".repeat(64) }],
+					packageDigest: version.packageDigest,
+				},
+			},
+		],
+	};
+	const parentPolicy = {
+		...workloadTestPolicy,
+		workspaceSnapshotEgress: [
+			{
+				destination: { namespace: "storage", podLabels: { app: "storage" } },
+				port: 9000,
+			},
+		],
+	};
+	const child = spawnSync(
+		process.execPath,
+		[
+			"--input-type=module",
+			"-e",
+			`import { readFileSync } from 'node:fs';
+const consumer = await import(process.argv[1]);
+const producer = await import(process.argv[2]);
+const value = JSON.parse(readFileSync(0, 'utf8'));
+const forbidden = async () => { throw new Error('SIDE_EFFECT_FORBIDDEN'); };
+const resolver = producer.createWorkspaceSnapshotResolverV1({
+  policy: value.policy, read: forbidden, createReadUrl: forbidden, allowedOrigins: [],
+});
+let reads = 0;
+const snapshots = { read: async () => { reads++; return [value.record]; } };
+const result = await consumer.projectWorkspaceSnapshotDemandImagesV1({
+  ...value.input, authority: { ...value.input.authority, resolver },
+  snapshots,
+});
+if (result.status !== 'PROJECTED_IMAGES') throw new Error('SNAPSHOT_PROJECTION_REQUIRED');
+const parent = consumer.parentWorkloadImageProjectionV1({
+  desired: value.input.desired, sourceKind: 'custom', policy: value.parentPolicy,
+  workspaceSnapshotProjection: result.projection(),
+});
+let parentRejected = false;
+try {
+  consumer.parentWorkloadImageProjectionV1({ desired: value.input.desired, sourceKind: 'custom', policy: value.parentPolicy });
+} catch (error) {
+  parentRejected = error.message === 'WORKLOAD_SNAPSHOT_PROJECTION_REQUIRED';
+}
+const rejected = await consumer.projectWorkspaceSnapshotDemandImagesV1({
+  ...value.input,
+  authority: { ...value.input.authority, resolver: Object.assign(forbidden, { project: resolver.project.bind(resolver) }) },
+  snapshots,
+});
+process.stdout.write(JSON.stringify({ result, parent, parentRejected, rejected, reads }));`,
+			new URL("../dist/index.mjs", import.meta.url).href,
+			new URL("../dist/workspaceSnapshot.mjs", import.meta.url).href,
+		],
+		{
+			input: JSON.stringify({
+				input: { ...f.input, desired },
+				policy: f.policy,
+				record: f.record,
+				parentPolicy,
+			}),
+			encoding: "utf8",
+			timeout: 10_000,
+		},
+	);
+	expect(child.status).toBe(0);
+	const decoded = JSON.parse(child.stdout);
+	const result = decoded.result;
+	expect(result).toMatchObject({
+		status: "PROJECTED_IMAGES",
+		images: [{ kind: "init", image: f.policy.imageDigest }],
+		provenance: {
+			configurationSourceSha: f.input.authority.sourceSha,
+			configurationHash: f.input.authority.configurationHash,
+			casHash: f.input.casHash,
+			policyField: "policy.imageDigest",
+		},
+	});
+	expect(result).not.toHaveProperty("projection");
+	expect(decoded.rejected).toMatchObject({ status: "UNKNOWN", images: [] });
+	expect(decoded.rejected.missing[0]).toContain("captured policy.imageDigest");
+	expect(decoded.reads).toBe(1);
+	expect(decoded.parentRejected).toBe(true);
+	expect(
+		decoded.parent[0].images.map((image: { image: string }) => image.image),
+	).toEqual([
+		`${workloadTestPolicy.imageRepository}@${desired.imageDigest}`,
+		deliveryImage,
+		f.policy.imageDigest,
+	]);
+	expect(
+		decoded.parent[0].images.map((image: { kind: string }) => image.kind),
+	).toEqual(["main", "init", "init"]);
+	expect(child.stdout).not.toMatch(
+		/PRIVATE_OBJECT|private-credential|private-storage|"volumes"/,
+	);
+});
