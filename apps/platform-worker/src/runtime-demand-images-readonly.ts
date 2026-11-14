@@ -6,13 +6,14 @@ import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentManagementQueryV1,
 } from "@agent-infra/platform-store";
+import { projectApprovedDeclaredDemandImagesV1 } from "./declared-demand-images.js";
 import {
 	collectRuntimeDemandImagesV1,
 	type RuntimeDemandImageContextV1,
 	type RuntimeDemandImageProjectionV1,
 } from "./runtime-demand-images.js";
 
-async function privateJson(path: string) {
+async function privateBytes(path: string) {
 	const handle = await open(
 		path,
 		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -30,14 +31,16 @@ async function privateJson(path: string) {
 		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
 		if (bytesRead !== stat.size)
 			throw new Error("RUNTIME_DEMAND_IMAGE_INPUT_INVALID");
-		return JSON.parse(
-			new TextDecoder("utf-8", { fatal: true }).decode(
-				buffer.subarray(0, bytesRead),
-			),
-		);
+		return buffer.subarray(0, bytesRead);
 	} finally {
 		await handle.close();
 	}
+}
+
+async function privateJson(path: string) {
+	return JSON.parse(
+		new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(path)),
+	);
 }
 
 /** Run only inside the already approved API/Store identity; never obtain credentials. */
@@ -46,6 +49,11 @@ export async function readRuntimeDemandImages(
 		readonly actorId: string;
 		readonly context: RuntimeDemandImageContextV1;
 		readonly projections: readonly RuntimeDemandImageProjectionV1[];
+		readonly declared?: {
+			readonly path: string;
+			readonly sha256: string;
+			readonly producerSourceSha: string;
+		};
 	},
 	databaseUrl: string | undefined,
 ) {
@@ -65,12 +73,21 @@ export async function readRuntimeDemandImages(
 			"options",
 			`${url.searchParams.get("options") ?? ""} -c default_transaction_read_only=on -c statement_timeout=5000`,
 		);
+		const declared = input.declared
+			? await privateBytes(input.declared.path)
+			: null;
+		if (declared && input.declared)
+			projectApprovedDeclaredDemandImagesV1(declared, {
+				...input.declared,
+				context: input.context,
+				casByKey: {},
+			});
 		const options = { databaseUrl: url.toString() };
 		const management = new PostgresAgentManagementQueryV1(options);
 		const configuration = new PostgresAgentConfigurationQueryV1(options);
 		const workloads = openPostgresWorkloadStateReaderV1(options);
 		try {
-			return await collectRuntimeDemandImagesV1(
+			const receipt = await collectRuntimeDemandImagesV1(
 				{
 					list: (afterId) =>
 						management.listAgents(
@@ -100,6 +117,28 @@ export async function readRuntimeDemandImages(
 				},
 				input,
 			);
+			return {
+				...receipt,
+				declared:
+					declared && input.declared
+						? projectApprovedDeclaredDemandImagesV1(declared, {
+								...input.declared,
+								context: input.context,
+								casByKey: Object.fromEntries(
+									receipt.rows
+										.filter((row) => row.contextStable)
+										.map((row) => [
+											`parent-workload:${row.agentId}`,
+											row.casHash,
+										]),
+								),
+							})
+						: {
+								scope: "declared-approved-file",
+								status: "UNKNOWN_NO_APPROVED_FILE",
+								groups: [],
+							},
+			};
 		} finally {
 			await Promise.allSettled([
 				management.close(),

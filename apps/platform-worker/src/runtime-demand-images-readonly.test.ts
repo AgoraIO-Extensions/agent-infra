@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({
@@ -66,6 +70,108 @@ const input = {
 };
 
 beforeEach(() => vi.clearAllMocks());
+
+it("aggregates an approved declared group against the fresh normal Store CAS", async () => {
+	const before = await readRuntimeDemandImages(
+		input,
+		"postgresql://localhost/platform",
+	);
+	const cas = before.rows[0]?.casHash;
+	if (!cas) throw new Error("missing fixture CAS");
+	const directory = await mkdtemp(join(tmpdir(), "declared-images-"));
+	try {
+		const image = `ghcr.io/example/custom@sha256:${"1".repeat(64)}`;
+		const path = join(directory, "approved.json");
+		const bytes = Buffer.from(
+			JSON.stringify({
+				schemaVersion: 1,
+				context: input.context,
+				producerSourceSha: "e".repeat(40),
+				producerInputHash: "e".repeat(64),
+				publications: [
+					{
+						image,
+						role: "custom",
+						sourceSha: "4".repeat(40),
+						manifestHash: "4".repeat(64),
+					},
+				],
+				groups: [
+					{
+						role: "custom/actual",
+						kind: "parent-workload",
+						sourceKind: "custom",
+						state: "current",
+						namespace: "runtime",
+						identityScope: "consumer",
+						replicas: 1,
+						images: [image],
+						spec: {
+							containers: [
+								{
+									name: "main",
+									image,
+									entrypointShapeHash: "a".repeat(64),
+									entrypointSource: "image-default-unverified",
+								},
+							],
+							initContainers: [],
+						},
+						binding: { key: "parent-workload:custom", hash: cas },
+						reference: null,
+					},
+				],
+			}),
+		);
+		await writeFile(path, bytes, { mode: 0o600 });
+		const receipt = await readRuntimeDemandImages(
+			{
+				...input,
+				declared: {
+					path,
+					sha256: createHash("sha256").update(bytes).digest("hex"),
+					producerSourceSha: "e".repeat(40),
+				},
+			},
+			"postgresql://localhost/platform",
+		);
+		expect(receipt.declared.groups[0]).toMatchObject({
+			status: "BOUND_APPROVED_IMAGE_GROUP",
+			images: [{ image }],
+			identityEvidence: "NO_ACTUAL_RESOURCE_PROOF",
+		});
+		expect(JSON.stringify(receipt)).not.toContain("PRIVATE_VALUE");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("rejects an approved-file schema/raw-field defect before constructing any Store reader", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "declared-images-"));
+	try {
+		const path = join(directory, "image-only.json");
+		const bytes = Buffer.from(
+			JSON.stringify({ env: { PRIVATE: "NEVER_IN_ERROR" } }),
+		);
+		await writeFile(path, bytes, { mode: 0o600 });
+		await expect(
+			readRuntimeDemandImages(
+				{
+					...input,
+					declared: {
+						path,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+						producerSourceSha: "e".repeat(40),
+					},
+				},
+				"postgresql://localhost/platform",
+			),
+		).rejects.toThrow("RUNTIME_DEMAND_IMAGE_READ_FAILED");
+		expect(store.options).not.toHaveBeenCalled();
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 it("uses only normal Store reads with database-enforced read-only options and releases all clients", async () => {
 	const receipt = await readRuntimeDemandImages(
