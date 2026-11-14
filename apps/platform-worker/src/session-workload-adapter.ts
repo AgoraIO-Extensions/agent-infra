@@ -1570,6 +1570,99 @@ export function sessionSandboxResourcesV1(
 	return renderSessionSandboxResourcesV1(allocation);
 }
 
+/** Image-only layout, including custom Sessions, without constructing or materializing a Secret. */
+export function sessionSandboxImageProjectionV1(
+	allocation: SessionSandboxAllocationV1,
+) {
+	validateAllocation(allocation);
+	const containers: {
+		kind: "main" | "init" | "sidecar";
+		value: Pick<V1Container, "name" | "image" | "command" | "args">;
+		sourceField: string;
+	}[] = [
+		{
+			kind: "main",
+			value: {
+				name: sessionSandboxRuntimeContainerName,
+				image: allocation.imageDigest,
+			},
+			sourceField: "imageDigest",
+		},
+	];
+	for (const [projection, sourceField] of [
+		[
+			skillHubDeliveryProjectionV1(
+				allocation.skillHub,
+				allocation.skillDeliveryImage,
+			),
+			"skillDeliveryImage",
+		],
+		[
+			allocation.workspaceSnapshotProjection,
+			"workspaceSnapshotResolver.project.policy.imageDigest",
+		],
+	] as const) {
+		if (projection && projection.containerMounts.size > 0)
+			for (const value of projection.initContainers)
+				containers.push({ kind: "init", value, sourceField });
+	}
+	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {
+		const projection = sessionExecutorPodProjectionV1({
+			binding: allocation.runtime.sessionExecutor.binding,
+			policy: allocation.codexSessionExecutor,
+		});
+		containers.push(
+			{
+				kind: "init",
+				value: projection.init,
+				sourceField: "runtime.sessionExecutor.binding.imageDigest",
+			},
+			{
+				kind: "sidecar",
+				value: projection.executor,
+				sourceField: "runtime.sessionExecutor.binding.imageDigest",
+			},
+		);
+	}
+	if (oauthProvisioning(allocation))
+		containers.push({
+			kind: "init",
+			value: {
+				name: "runtime-oauth-provision",
+				image: allocation.imageDigest,
+				command: ["/bin/sh", "-ec"],
+				args: [
+					"ulimit -S -c 0\nulimit -H -c 0\nexec /usr/local/bin/node --disable-sigusr1 /app/dist/runtime-oauth-provisioning-cli.mjs",
+				],
+			},
+			sourceField: "imageDigest (validated oauthProvisioning)",
+		});
+	const names = new Set<string>();
+	return containers.map(({ kind, value, sourceField }) => {
+		if (
+			names.has(value.name) ||
+			typeof value.image !== "string" ||
+			!/^[^\s@]+@(sha256:[a-f0-9]{64})$/.test(value.image)
+		)
+			throw new WorkloadKubernetesError("policy");
+		names.add(value.name);
+		return {
+			kind,
+			name: value.name,
+			image: value.image,
+			digest: value.image.slice(value.image.lastIndexOf("@") + 1),
+			sourceField,
+			entrypointSource:
+				value.command === undefined && value.args === undefined
+					? "image-default-unverified"
+					: "pod-override",
+			entrypointShapeHash: createHash("sha256")
+				.update(JSON.stringify([value.command ?? null, value.args ?? null]))
+				.digest("hex"),
+		};
+	});
+}
+
 /** Render the same six resource contract for an unclaimed reserve. */
 export function sessionSandboxReserveResourcesV1(
 	input: SessionSandboxResourceInputV1,

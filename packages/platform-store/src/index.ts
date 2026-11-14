@@ -212,6 +212,10 @@ export {
 	type SessionOwnerSecretReferenceV1,
 } from "./session-owner-secrets.ts";
 export { requestSessionSandboxResume } from "./session-sandbox.js";
+export {
+	openPostgresSessionSandboxImageReaderV1,
+	type SessionSandboxImageProjectionInputV1,
+} from "./session-sandbox-image-reader.js";
 export type { SessionSandboxClaimWaitReasonV1 } from "./session-sandbox-reconciliation.js";
 export {
 	PostgresSessionSandboxReserveStoreV1,

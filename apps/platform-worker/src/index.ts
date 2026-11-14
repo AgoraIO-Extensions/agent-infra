@@ -42,6 +42,10 @@ export * from "./runtime-native-metadata-server.js";
 export * from "./saved-key-candidates-deployment.js";
 export * from "./saved-key-candidates-production.js";
 export * from "./saved-key-candidates-service.js";
+export {
+	readSessionDemandImagesV1,
+	type SessionDemandImageAuthorityV1,
+} from "./session-demand-images.js";
 export * from "./session-reserve-deployment.js";
 export * from "./session-reserve-worker.js";
 export * from "./skill-hub-delivery.js";

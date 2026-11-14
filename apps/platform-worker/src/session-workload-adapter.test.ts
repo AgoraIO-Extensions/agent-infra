@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	mkdir,
 	mkdtemp,
@@ -57,6 +58,7 @@ import {
 	type SessionSandboxAllocationV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxImageProjectionV1,
 	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
 	sessionSandboxResourcesV1,
@@ -168,6 +170,94 @@ const allocation: SessionSandboxAllocationV1 = {
 	}),
 	desiredState: "running",
 };
+
+describe("image-only Session layout", () => {
+	it("projects a custom ACP Session without materializing its Owner Secret", () => {
+		const custom = customAllocation();
+		expect(() => sessionSandboxResourcesV1(custom)).toThrow();
+		expect(
+			sessionSandboxImageProjectionV1(custom).map((row) => [
+				row.kind,
+				row.image,
+			]),
+		).toEqual([["main", custom.imageDigest]]);
+		expect(() => sessionSandboxResourcesV1(custom)).toThrow();
+	});
+	it("matches the real pure Pod renderer for ordinary and OAuth layouts without serializing private inputs", () => {
+		for (const selected of [allocation, oauthAllocation()]) {
+			const pod = sessionSandboxResourcesV1(selected)[5];
+			const actual = [
+				...(pod.spec?.containers ?? []),
+				...(pod.spec?.initContainers ?? []),
+			]
+				.map((container) => [
+					container.name,
+					container.image,
+					createHash("sha256")
+						.update(
+							JSON.stringify([
+								container.command ?? null,
+								container.args ?? null,
+							]),
+						)
+						.digest("hex"),
+				])
+				.sort();
+			const projection = sessionSandboxImageProjectionV1(selected);
+			expect(
+				projection
+					.map((container) => [
+						container.name,
+						container.image,
+						container.entrypointShapeHash,
+					])
+					.sort(),
+			).toEqual(actual);
+			expect(JSON.stringify(projection)).not.toContain(
+				selected.runtime?.serviceToken,
+			);
+			expect(JSON.stringify(projection)).not.toMatch(
+				/"env"|"data"|"configuration"/,
+			);
+		}
+	});
+	it("omits an empty snapshot shape and keeps a real snapshot init on its own policy image", () => {
+		const selected = {
+			...allocation,
+			egress: {
+				workspaceSnapshotEgress: [
+					{
+						destination: {
+							namespace: "workload-test",
+							podLabels: { app: "storage" },
+						},
+						port: 9000,
+					},
+				],
+			},
+		};
+		const image = `registry.example.test/materializer@sha256:${"b".repeat(64)}`;
+		const shape = {
+			manifest: "",
+			volumes: [],
+			initContainers: [{ name: "snapshot-init", image }],
+			containerMounts: new Map<string, never[]>(),
+		};
+		expect(
+			sessionSandboxImageProjectionV1({
+				...selected,
+				workspaceSnapshotProjection: shape,
+			}).map((row) => row.image),
+		).toEqual([allocation.imageDigest]);
+		shape.containerMounts.set("snapshot", []);
+		expect(
+			sessionSandboxImageProjectionV1({
+				...selected,
+				workspaceSnapshotProjection: shape,
+			}).map((row) => row.image),
+		).toEqual([allocation.imageDigest, image]);
+	});
+});
 
 function oauthAllocation() {
 	const profile = {
