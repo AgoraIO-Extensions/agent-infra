@@ -252,7 +252,17 @@ export async function readSessionDemandImagesV1(input: {
 	}[];
 }) {
 	try {
-		if (!/^[a-f0-9]{64}$/.test(input.contextHash)) throw new Error();
+		if (
+			typeof input.contextHash !== "string" ||
+			!/^[a-f0-9]{64}$/.test(input.contextHash) ||
+			typeof input.databaseUrl !== "string" ||
+			input.databaseUrl.length === 0 ||
+			input.databaseUrl.length > 8192 ||
+			typeof input.namespace !== "string" ||
+			!Array.isArray(input.authorities) ||
+			!Array.isArray(input.bindings)
+		)
+			throw new Error();
 		const url = new URL(input.databaseUrl);
 		if (!["postgres:", "postgresql:"].includes(url.protocol)) throw new Error();
 		url.searchParams.set(
