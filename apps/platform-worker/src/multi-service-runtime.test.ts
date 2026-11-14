@@ -28,6 +28,7 @@ import {
 	createMultiServiceRuntimeOperations,
 	isMultiService,
 	type MultiServiceRuntimePolicyV1,
+	multiServiceWorkloadImageProjectionV1,
 	resolveMultiServiceResourceConfigurationV1,
 } from "./multi-service-runtime.js";
 import {
@@ -380,6 +381,52 @@ const basePolicy = {
 		},
 	],
 } satisfies MultiServiceRuntimePolicyV1;
+
+it("image-only projection reuses normal multi-service workloads and migration with no client calls", async () => {
+	const policy = {
+		...basePolicy,
+		imageRepository: "registry.example.test/multi",
+	};
+	const fake = fakeClient();
+	const value = desired();
+	if (!isMultiService(value)) throw new Error("missing multi-service fixture");
+	const operations = createMultiServiceRuntimeOperations({
+		client: fake.client,
+		policy,
+	});
+	await operations.apply(value);
+	const actual = [...fake.resources.values()].filter((resource) =>
+		["Deployment", "StatefulSet"].includes(resource.kind ?? ""),
+	);
+	const projected = multiServiceWorkloadImageProjectionV1(value, policy);
+	expect(projected.map((group) => group.resourceName).sort()).toEqual(
+		actual.map((resource) => resource.metadata?.name).sort(),
+	);
+	expect(
+		projected
+			.flatMap((group) => group.images.map((image) => image.image))
+			.sort(),
+	).toEqual([
+		`registry.example.test/multi@sha256:${"a".repeat(64)}`,
+		`registry.example.test/multi@sha256:${"b".repeat(64)}`,
+	]);
+	const migrationValue = desired(migrationManifest);
+	if (!isMultiService(migrationValue))
+		throw new Error("missing multi-service fixture");
+	const migration = multiServiceWorkloadImageProjectionV1(
+		migrationValue,
+		policy,
+	);
+	expect(
+		migration.some(
+			(group) =>
+				group.resourceKind === "Job" &&
+				group.images.some((image) =>
+					image.image.endsWith(`sha256:${"d".repeat(64)}`),
+				),
+		),
+	).toBe(true);
+});
 
 const snapshotStorageEgress = [
 	{
