@@ -481,6 +481,9 @@ function fixture(
 		get management() {
 			return structuredClone(management);
 		},
+		roundTripState() {
+			state = JSON.parse(JSON.stringify(state));
+		},
 		setConfiguration(next: AgentConfigurationRecordV2) {
 			configuration = structuredClone(next);
 		},
@@ -5044,6 +5047,105 @@ it.each([
 		await expect(runtime.promote(ready)).rejects.toThrow();
 	},
 );
+
+describe("full-key execution capacity", () => {
+	const policy = {
+		...workloadTestPolicy,
+		resourceProfileRef: "executor-small-v1",
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "250m", memory: "256Mi" },
+				limits: { cpu: "1", memory: "512Mi" },
+			},
+			tmpSizeLimit: "128Mi",
+			placement: { architecture: "amd64" as const },
+		},
+	};
+	const capacity = {
+		schemaVersion: 1 as const,
+		imageDigest: `sha256:${"a".repeat(64)}`,
+		resourceProfileRef: policy.resourceProfileRef,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		conformanceEvidenceHash: "c".repeat(64),
+		maximumConcurrentExecutions: 1,
+	};
+
+	it("retains the exact full key through candidate and verified JSON persistence", async () => {
+		const f = fixture({ policy, executionCapacityProfiles: [capacity] });
+		await f.tick(2);
+		f.roundTripState();
+		expect(f.state?.candidate.executionCapacity).toEqual(capacity);
+		expect(f.state?.verified).toBeNull();
+		await f.tick(6);
+		f.roundTripState();
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.verified?.executionCapacity).toEqual(capacity);
+		if (!f.state) throw Error("Expected persisted Workload");
+		expect(isWorkloadExecutionCapacityCurrentV1(f.options, f.state)).toBe(true);
+
+		for (const profiles of [
+			[],
+			[{ ...capacity, imageDigest: `sha256:${"b".repeat(64)}` }],
+			[{ ...capacity, resourceProfileRef: "another-profile" }],
+			[{ ...capacity, resourceConfigurationHash: "d".repeat(64) }],
+		])
+			expect(
+				isWorkloadExecutionCapacityCurrentV1(
+					{ policy, executionCapacityProfiles: profiles },
+					f.state,
+				),
+			).toBe(false);
+	});
+
+	it.each([
+		["image drift", [{ ...capacity, imageDigest: `sha256:${"b".repeat(64)}` }]],
+		["profile drift", [{ ...capacity, resourceProfileRef: "another-profile" }]],
+		[
+			"control-only hash",
+			[
+				{
+					...capacity,
+					resourceConfigurationHash: workloadResourceConfigurationHashV1({
+						...policy,
+						codexSessionExecutor: undefined,
+					}),
+				},
+			],
+		],
+		["zero profiles", []],
+	] as const)(
+		"does not persist or authorize capacity with %s",
+		async (_name, profiles) => {
+			const f = fixture({ policy, executionCapacityProfiles: profiles });
+			await f.tick(2);
+			f.roundTripState();
+			expect(f.state?.candidate.executionCapacity).toBeUndefined();
+			await f.tick(6);
+			f.roundTripState();
+			expect(f.state?.phase).toBe("ready");
+			expect(f.state?.verified?.executionCapacity).toBeUndefined();
+			if (!f.state) throw Error("Expected persisted Workload");
+			expect(isWorkloadExecutionCapacityCurrentV1(f.options, f.state)).toBe(
+				false,
+			);
+		},
+	);
+
+	it("rejects multiple exact profiles before applying a candidate", async () => {
+		const f = fixture({
+			policy,
+			executionCapacityProfiles: [capacity, capacity],
+		});
+		expect(() =>
+			resolveWorkloadExecutionCapacityV1(f.options, capacity.imageDigest),
+		).toThrow("ambiguous");
+		await f.tick(4);
+		expect(f.state?.phase).toBe("failed");
+		expect(f.state?.candidate.executionCapacity).toBeUndefined();
+		expect(f.state?.verified?.executionCapacity).toBeUndefined();
+		expect(f.writes).toHaveLength(0);
+	});
+});
 
 it("persists exact capacity and binds readiness to fence/image while preserving original controls after capacity withdrawal", async () => {
 	const keys = generateKeyPairSync("ed25519");
