@@ -30,6 +30,7 @@ export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
 export * from "./native-metadata-deployment.js";
 export * from "./native-metadata-deployment-assembly.js";
+export { parentWorkloadImageProjectionV1 } from "./parent-workload-image-projection.js";
 export * from "./runtime-grant-signer.js";
 export * from "./runtime-model-directory-client.js";
 export * from "./runtime-model-directory-deployment.js";

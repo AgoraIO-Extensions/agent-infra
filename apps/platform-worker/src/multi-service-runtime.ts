@@ -51,6 +51,7 @@ import {
 	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import { workloadPodImagesV1 } from "./workload-image-projection.js";
 import {
 	hasAdditionalEgressPolicyV1,
 	requireWorkspaceSnapshotEgressV1,
@@ -1116,6 +1117,53 @@ function ingress(
 			],
 		},
 	};
+}
+
+/** Same pure workload constructors used by apply; no client, writes or snapshot signing. */
+export function multiServiceWorkloadImageProjectionV1(
+	value: MultiServiceDesired,
+	policy: MultiServiceRuntimePolicyV1,
+) {
+	const resources = resolveMultiServiceResourceConfigurationV1(policy);
+	validateMultiServiceResourceCapacityV1(value, resources);
+	if (value.workspaceSnapshots?.length && !policy.workspaceSnapshotProjection)
+		throw new Error("WORKLOAD_SNAPSHOT_PROJECTION_REQUIRED");
+	const controllers: (V1Deployment | V1StatefulSet | V1Job)[] = [];
+	for (const resource of value.multiService.resources) {
+		if (resource.kind === "Deployment")
+			controllers.push(deployment(value, resource, policy, resources));
+		if (resource.kind === "StatefulSet") {
+			const pvc = value.multiService.resources.find(
+				(candidate) =>
+					candidate.kind === "PersistentVolumeClaim" &&
+					candidate.metadata.name === `${resource.metadata.name}-data`,
+			);
+			if (pvc?.kind !== "PersistentVolumeClaim")
+				throw new Error("multi-service StatefulSet PVC is missing");
+			controllers.push(
+				statefulSet(
+					value,
+					resource,
+					policy,
+					resources,
+					persistentVolumeClaim(value, pvc, policy, resources),
+				),
+			);
+		}
+	}
+	const migration = migrationResource(value);
+	if (migration?.kind === "Job")
+		controllers.push(migrationJob(value, migration, resources, policy));
+	return controllers.map((controller) => {
+		const spec = controller.spec?.template.spec;
+		if (!spec || !controller.metadata?.name || !controller.kind)
+			throw new Error("WORKLOAD_IMAGE_PROJECTION_INVALID");
+		return {
+			resourceKind: controller.kind,
+			resourceName: controller.metadata.name,
+			images: workloadPodImagesV1(spec),
+		};
+	});
 }
 
 export function createMultiServiceRuntimeOperations(options: {
