@@ -18,6 +18,7 @@ import {
 import { workloadTestPolicy } from "./kubernetes.fixture.js";
 import {
 	type SessionSandboxAllocationV1,
+	sessionSandboxImageProjectionV1,
 	sessionSandboxResourceMatchesV1,
 	sessionSandboxResourcesV1,
 } from "./session-workload-adapter.js";
@@ -105,6 +106,36 @@ function observed(pod: V1Pod): V1Pod {
 }
 
 describe("credential-free Codex Session executor", () => {
+	it("image-only layout preserves the actual control/executor/init image roles", () => {
+		const selected = allocation();
+		const pod = sessionSandboxResourcesV1(selected)[5];
+		const expected = [
+			...(pod.spec?.containers ?? []),
+			...(pod.spec?.initContainers ?? []),
+		]
+			.map((value) => [
+				value.name,
+				value.image,
+				createHash("sha256")
+					.update(JSON.stringify([value.command ?? null, value.args ?? null]))
+					.digest("hex"),
+			])
+			.sort();
+		const projection = sessionSandboxImageProjectionV1(selected);
+		expect(
+			projection
+				.map((value) => [value.name, value.image, value.entrypointShapeHash])
+				.sort(),
+		).toEqual(expected);
+		expect(projection.map((value) => value.kind).sort()).toEqual([
+			"init",
+			"main",
+			"sidecar",
+		]);
+		expect(JSON.stringify(projection)).not.toContain(
+			selected.runtime?.serviceToken,
+		);
+	});
 	it("leaves the default single-container layout and env unchanged", () => {
 		const resources = sessionSandboxResourcesV1(allocation(false));
 		const pod = resources[5];

@@ -46,6 +46,7 @@ import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
 	createSessionSandboxWorkloadAdapterV1,
@@ -1169,25 +1170,12 @@ function createSessionSandboxAllocationResolverV1(
 			};
 		}
 
-		let selectedProvisioning: SessionSandboxOAuthProvisioningV1 | undefined;
-		try {
-			if (
-				provisioning &&
-				desiredState === "running" &&
-				binding.agentId === provisioning.agentId &&
-				binding.sessionId === provisioning.sessionId &&
-				binding.sandboxId === provisioning.sandboxId &&
-				binding.generation === provisioning.sessionGeneration &&
-				binding.principal.kind === "user" &&
-				provisioning.principal.kind === "user" &&
-				binding.principal.id === provisioning.principal.id &&
-				new URL(provisioning.configuration.runtimeOrigin).hostname ===
-					`${binding.resourceName}.${policy.namespace}.svc`
-			)
-				selectedProvisioning = provisioning;
-		} catch {
-			// Invalid trusted delivery leaves this Session's ordinary work available.
-		}
+		const selectedProvisioning = selectSessionOAuthProvisioningV1(
+			binding,
+			policy.namespace,
+			desiredState,
+			provisioning,
+		);
 		const allocation: SessionSandboxAllocationV1 = {
 			...(selectedProvisioning
 				? { oauthProvisioning: structuredClone(selectedProvisioning) }
