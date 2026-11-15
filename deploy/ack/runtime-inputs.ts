@@ -89,6 +89,27 @@ function consumerRolledOut(deployment: ObjectRecord, revision: string, replicas:
 		deployment.status.updatedReplicas === replicas && deployment.status.availableReplicas === replicas && deployment.status.readyReplicas === replicas;
 }
 
+const budgetDimensions = ["cpuMillis", "memoryBytes", "storageBytes"] as const;
+/**
+ * An approved enabled reserve policy whose next revision only raises the declared total budget
+ * (ADR-0036). It is not a template change, so it must not force re-adoption of retained records.
+ */
+export function reserveBudgetIncreaseOnly(before: Uint8Array, after: Uint8Array) {
+	let old: any, next: any;
+	try {
+		old = JSON.parse(Buffer.from(before).toString("utf8"));
+		next = JSON.parse(Buffer.from(after).toString("utf8"));
+	} catch { return false; }
+	const budget = (value: any) => value?.totalBudget && typeof value.totalBudget === "object" && !Array.isArray(value.totalBudget) &&
+		Object.keys(value.totalBudget).sort().join() === [...budgetDimensions].sort().join() &&
+		budgetDimensions.every((key) => Number.isSafeInteger(value.totalBudget[key]) && value.totalBudget[key] >= 0);
+	return Boolean(old && next) && old.enabled === true && next.enabled === true && budget(old) && budget(next) &&
+		Number.isSafeInteger(old.revision) && Number.isSafeInteger(next.revision) && next.revision === old.revision + 1 &&
+		budgetDimensions.every((key) => next.totalBudget[key] >= old.totalBudget[key]) &&
+		budgetDimensions.some((key) => next.totalBudget[key] > old.totalBudget[key]) &&
+		isDeepStrictEqual({ ...next, revision: old.revision, totalBudget: old.totalBudget }, old);
+}
+
 async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
@@ -117,6 +138,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		return { before: object, desired: structuredClone(object), files: binding.files };
 	});
 	const writes = new Map<string, { before: Buffer; after: Buffer }>();
+	const reserveTargets = new Set<string>();
 	const stageFile = async (file: string, after: Buffer) => {
 		const before = await privateBytes(file);
 		if (writes.has(file)) assert.deepEqual(writes.get(file)!.after, after, "RUNTIME_INPUT_FILE_BINDING_CONFLICT");
@@ -285,6 +307,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		for (const consumer of consumers) {
 			const secret = secrets.find((s) => s.desired.metadata.name === consumer.secretName)!;
 			const target = secret.files["session-reserves.json"] ?? files.reserves;
+			reserveTargets.add(target);
 			await stageFile(target, bytes);
 			secret.desired.data["session-reserves.json"] = bytes.toString("base64");
 			if (!secret.files["session-reserves.json"]) {
@@ -294,7 +317,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -390,7 +413,11 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		// Matching Secret records alone cannot complete an interrupted publication after expiry.
 		const api = plan.consumers.find((consumer) => consumer.component === "api")!;
 		const loginTarget = plan.secrets.find((secret) => secret.desired.metadata.name === api.secretName)!.files["deployment-identities.json"];
-		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after)) &&
+		// An approved budget-only reserve revision keeps the retained adoption bytes; any other change re-adopts.
+		// Only the immutable successor path (new Secrets, Helm-owned rebind) may carry it.
+		const budgetOnly = (file: string, bytes: { before: Buffer; after: Buffer }) =>
+			successor && plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after);
+		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after) || budgetOnly(file, bytes)) &&
 			readSecrets.every((secret) => isDeepStrictEqual(secret.current.data, secret.before.data)) &&
 			plan.consumers.every((consumer) => {
 				const current = read("deployment", consumer.name);
