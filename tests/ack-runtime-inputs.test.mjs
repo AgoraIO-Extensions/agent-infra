@@ -17,7 +17,10 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { prepareBootstrapInputs } from "../deploy/ack/bootstrap-inputs.ts";
 import { bootstrapLogin } from "../deploy/ack/bootstrap-login.ts";
-import { capacityOnlyWriteAllowed, publishRuntimeInputs } from "../deploy/ack/runtime-inputs.ts";
+import {
+	capacityOnlyWriteAllowed,
+	publishRuntimeInputs,
+} from "../deploy/ack/runtime-inputs.ts";
 import { prepareReserveInput } from "../deploy/ack/session-reserve-inputs.ts";
 import { templatePreflightValidationReceipt } from "../deploy/ack/template-validation.mjs";
 import { checkWorkloadCapacity } from "../deploy/ack/workload-capacity.ts";
@@ -2406,30 +2409,108 @@ test("capacity-only append preserves adopted template bytes and all prior eviden
 		maximumConcurrentExecutions: 1,
 		conformanceEvidenceHash: "3".repeat(64),
 	};
-	const oldEvidence = { imageDigest: oldProfile.imageDigest, file: join(directory, "old.receipt.json") };
-	const measured = Buffer.from(JSON.stringify({ scope: "ack-runtime-capacity", sourceCommit: source }));
+	const oldEvidence = {
+		imageDigest: oldProfile.imageDigest,
+		file: join(directory, "old.receipt.json"),
+	};
+	const measured = Buffer.from(
+		JSON.stringify({ scope: "ack-runtime-capacity", sourceCommit: source }),
+	);
 	await writeFile(evidenceFile, measured, { mode: 0o600 });
-	const beforeProfiles = Buffer.from(`${JSON.stringify({ schemaVersion: 1, profiles: [oldProfile] })}\n`);
-	const afterProfiles = Buffer.from(`${JSON.stringify({ schemaVersion: 1, profiles: [oldProfile, {
-		schemaVersion: 1,
-		imageDigest: `sha256:${"4".repeat(64)}`,
-		resourceProfileRef: oldProfile.resourceProfileRef,
-		resourceConfigurationHash: oldProfile.resourceConfigurationHash,
-		maximumConcurrentExecutions: 1,
-		conformanceEvidenceHash: "5".repeat(64),
-	}] })}\n`);
-	const beforeCapacity = Buffer.from(`${JSON.stringify({ schemaVersion: 1, sourceSha: source, resourceProfileRef: oldProfile.resourceProfileRef,
-		resources, evidence: [oldEvidence], unrelated: "preserve" })}\n`);
-	const afterCapacity = Buffer.from(`${JSON.stringify({ schemaVersion: 1, sourceSha: source, resourceProfileRef: oldProfile.resourceProfileRef,
-		resources, evidence: [oldEvidence, { imageDigest: `sha256:${"4".repeat(64)}`, file: evidenceFile }], unrelated: "preserve" })}\n`);
-	assert.equal(capacityOnlyWriteAllowed(profilesFile, beforeProfiles, afterProfiles, capacityFile, profilesFile, source,
-		oldProfile.resourceProfileRef, oldProfile.resourceConfigurationHash), true);
-	assert.equal(capacityOnlyWriteAllowed(capacityFile, beforeCapacity, afterCapacity, capacityFile, profilesFile, source,
-		oldProfile.resourceProfileRef, oldProfile.resourceConfigurationHash), true);
-	const changedNonCapacity = Buffer.from(`${JSON.stringify({ schemaVersion: 1, sourceSha: source, resourceProfileRef: "changed",
-		resources, evidence: [oldEvidence, { imageDigest: `sha256:${"4".repeat(64)}`, file: evidenceFile }], unrelated: "preserve" })}\n`);
-	assert.equal(capacityOnlyWriteAllowed(capacityFile, beforeCapacity, changedNonCapacity, capacityFile, profilesFile, source,
-		oldProfile.resourceProfileRef, oldProfile.resourceConfigurationHash), false);
+	const beforeProfiles = Buffer.from(
+		`${JSON.stringify({ schemaVersion: 1, profiles: [oldProfile] })}\n`,
+	);
+	const afterProfiles = Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			profiles: [
+				oldProfile,
+				{
+					schemaVersion: 1,
+					imageDigest: `sha256:${"4".repeat(64)}`,
+					resourceProfileRef: oldProfile.resourceProfileRef,
+					resourceConfigurationHash: oldProfile.resourceConfigurationHash,
+					maximumConcurrentExecutions: 1,
+					conformanceEvidenceHash: "5".repeat(64),
+				},
+			],
+		})}\n`,
+	);
+	const beforeCapacity = Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			sourceSha: source,
+			resourceProfileRef: oldProfile.resourceProfileRef,
+			resources,
+			evidence: [oldEvidence],
+			unrelated: "preserve",
+		})}\n`,
+	);
+	const afterCapacity = Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			sourceSha: source,
+			resourceProfileRef: oldProfile.resourceProfileRef,
+			resources,
+			evidence: [
+				oldEvidence,
+				{ imageDigest: `sha256:${"4".repeat(64)}`, file: evidenceFile },
+			],
+			unrelated: "preserve",
+		})}\n`,
+	);
+	assert.equal(
+		capacityOnlyWriteAllowed(
+			profilesFile,
+			beforeProfiles,
+			afterProfiles,
+			capacityFile,
+			profilesFile,
+			source,
+			oldProfile.resourceProfileRef,
+			oldProfile.resourceConfigurationHash,
+		),
+		true,
+	);
+	assert.equal(
+		capacityOnlyWriteAllowed(
+			capacityFile,
+			beforeCapacity,
+			afterCapacity,
+			capacityFile,
+			profilesFile,
+			source,
+			oldProfile.resourceProfileRef,
+			oldProfile.resourceConfigurationHash,
+		),
+		true,
+	);
+	const changedNonCapacity = Buffer.from(
+		`${JSON.stringify({
+			schemaVersion: 1,
+			sourceSha: source,
+			resourceProfileRef: "changed",
+			resources,
+			evidence: [
+				oldEvidence,
+				{ imageDigest: `sha256:${"4".repeat(64)}`, file: evidenceFile },
+			],
+			unrelated: "preserve",
+		})}\n`,
+	);
+	assert.equal(
+		capacityOnlyWriteAllowed(
+			capacityFile,
+			beforeCapacity,
+			changedNonCapacity,
+			capacityFile,
+			profilesFile,
+			source,
+			oldProfile.resourceProfileRef,
+			oldProfile.resourceConfigurationHash,
+		),
+		false,
+	);
 });
 
 const retainedDigest = `sha256:${"9".repeat(64)}`;
