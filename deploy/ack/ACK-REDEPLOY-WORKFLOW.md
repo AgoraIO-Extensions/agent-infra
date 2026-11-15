@@ -766,6 +766,13 @@ sourceCommit、imageDigest、完成时间、模型操作数和实际目标一致
 多匹配以及已有批准的证据变化，都在写入前失败；已有批准不会被新测量替换。部署后的
 mounted-capacity gate 同样复核这些 digest。
 
+旧版 `template-model-preflight.mjs` 写出的台账没有 `templateId` 字段。只有字段集合与该旧格式完全
+一致、五个对象都使用该模板派生的 `ack-preflight-<templateId>-<owner 前 8 位>` 名称，且同目录
+`pod-startup.receipt.json` 记录相同 templateId、sourceCommit、imageDigest 和台账 Pod UID 的
+SHA-256，`runtime-capacity.receipt.json` 的 ServiceAccount、NetworkPolicy、PVC UID 摘要也与
+台账一致时，才把它视为该模板这一次运行的台账。显式写出其他值或 `null` 的 `templateId`、多余
+字段、Codex executor 的 `sandbox-preflight-` 名称以及任一摘要不符仍然拒绝；不要给旧台账补字段。
+
 该步骤只登记容量，不升级或切换 Agent 镜像。已有 Agent 仍须经正式 lifecycle 重新生成
 verified capacity；真实业务、原生文件和恢复验收另行完成。
 

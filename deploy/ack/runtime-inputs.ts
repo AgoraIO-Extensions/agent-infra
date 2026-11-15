@@ -127,6 +127,30 @@ export function reserveModuleLiteralSuccessor(module: Uint8Array, before: Uint8A
 	return Buffer.from(text.replace(old, () => literal(after)));
 }
 
+// template-model-preflight wrote owned-resource ledgers with exactly these keys before it recorded templateId.
+const legacyOwnedLedgerKeys = "imageDigest,kind,namespace,owner,resources,schemaVersion,sourceCommit";
+/**
+ * A legacy ledger names no template, so it must be proven to be this run's ledger: the run's Pod startup
+ * receipt names the template, source and image and hashes the ledger's Pod UID, and the measured capacity
+ * receipt hashes its ServiceAccount, NetworkPolicy and PVC UIDs. The Secret has no receipt hash; it is bound
+ * only through the same ledger and object name.
+ */
+function legacyOwnedLedgerBound(owned: ObjectRecord, startup: any, measured: any, entry: { templateId: string; imageDigest: string }, sourceSha: string) {
+	if (!Array.isArray(owned.resources)) return false;
+	const uidHash = (kind: string) => {
+		const matches = owned.resources.filter((resource: any) => resource?.kind === kind);
+		return matches.length === 1 && typeof matches[0].uid === "string" && matches[0].uid ? hash(matches[0].uid) : undefined;
+	};
+	const pod = uidHash("Pod");
+	return pod !== undefined && startup?.schemaVersion === 1 && startup.kind === "ack-template-pod-startup" &&
+		startup.templateId === entry.templateId && startup.sourceCommit === sourceSha && startup.imageDigest === entry.imageDigest &&
+		startup.podUidSha256 === pod && ([["serviceAccountUidSha256", "ServiceAccount"], ["networkPolicyUidSha256", "NetworkPolicy"],
+			["pvcUidSha256", "PersistentVolumeClaim"]] as const).every(([field, kind]) => {
+			const uid = uidHash(kind);
+			return uid !== undefined && measured[field] === uid;
+		});
+}
+
 async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
@@ -278,11 +302,17 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		// A standalone run is usable only after every temporary object it created was retired by UID.
 		// The ledger's templateId and object names bind it to this template run and owner, as template-model-preflight writes them.
 		const ownedKinds = ["Pod", "Secret", "PersistentVolumeClaim", "NetworkPolicy", "ServiceAccount"];
+		const executorNamed = entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined;
 		const ownedName = typeof owned.owner !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(owned.owner) ? undefined
-			: entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined ? `sandbox-preflight-${owned.owner}`
+			: executorNamed ? `sandbox-preflight-${owned.owner}`
 				: `ack-preflight-${entry.templateId}-${owned.owner.slice(0, 8)}`;
+		// A ledger in the exact pre-templateId shape carries the template only in its object names,
+		// so the same run's startup and capacity receipts must also bind its UIDs.
+		const legacyOwned = !executorNamed && Object.keys(owned).sort().join() === legacyOwnedLedgerKeys;
+		const startup = legacyOwned ? await privateJson(join(entry.measurementDirectory, "pod-startup.receipt.json")) : undefined;
 		assert(ownedName && owned.schemaVersion === 1 && owned.kind === "ack-template-owned-resources" &&
-			owned.templateId === entry.templateId && owned.sourceCommit === sourceSha &&
+			(legacyOwned ? legacyOwnedLedgerBound(owned, startup, measured, entry, sourceSha) : owned.templateId === entry.templateId) &&
+			owned.sourceCommit === sourceSha &&
 			owned.imageDigest === entry.imageDigest && owned.namespace === bootstrap.namespace && Array.isArray(owned.resources) &&
 			owned.resources.length === ownedKinds.length && ownedKinds.every((kind) => owned.resources.filter((resource: any) =>
 				resource?.kind === kind && resource.name === ownedName && typeof resource.uid === "string" && resource.uid.length > 0 &&
