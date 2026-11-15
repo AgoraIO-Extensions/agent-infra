@@ -104,7 +104,7 @@ export function reserveBudgetIncreaseOnly(before: Uint8Array, after: Uint8Array)
 		Object.keys(value.totalBudget).sort().join() === [...budgetDimensions].sort().join() &&
 		budgetDimensions.every((key) => Number.isSafeInteger(value.totalBudget[key]) && value.totalBudget[key] >= 0);
 	return Boolean(old && next) && old.enabled === true && next.enabled === true && budget(old) && budget(next) &&
-		Number.isSafeInteger(old.revision) && next.revision === old.revision + 1 &&
+		Number.isSafeInteger(old.revision) && Number.isSafeInteger(next.revision) && next.revision === old.revision + 1 &&
 		budgetDimensions.every((key) => next.totalBudget[key] >= old.totalBudget[key]) &&
 		budgetDimensions.some((key) => next.totalBudget[key] > old.totalBudget[key]) &&
 		isDeepStrictEqual({ ...next, revision: old.revision, totalBudget: old.totalBudget }, old);
