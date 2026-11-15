@@ -40,6 +40,11 @@ export interface WorkerSessionDemandImageDeploymentV1 {
 	readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
 	/** The deployment configuration module this process evaluated. */
 	readonly configurationModule: URL;
+	/**
+	 * Source that produced the mounted deployment configuration, as declared in
+	 * its Session reserve file; the caller's context cannot supply it.
+	 */
+	readonly configurationSourceSha: unknown;
 }
 
 const authorityId = "worker-deployment";
@@ -59,6 +64,7 @@ const contextKeys = [
 ].join(",");
 const namespacePattern = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const sandboxPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const sourcePattern = /^[a-f0-9]{40}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
 
 type Target = {
@@ -124,6 +130,7 @@ async function deploymentAuthority(
 ) {
 	try {
 		const { policy } = deployment.workload;
+		const sourceSha = deployment.configurationSourceSha;
 		if (
 			typeof deployment.namespace !== "string" ||
 			!namespacePattern.test(deployment.namespace) ||
@@ -132,7 +139,11 @@ async function deploymentAuthority(
 			typeof deployment.serviceToken !== "string" ||
 			deployment.serviceToken.length === 0 ||
 			typeof deployment.workerId !== "string" ||
-			policy.runtimeAuth?.workerId !== deployment.workerId
+			policy.runtimeAuth?.workerId !== deployment.workerId ||
+			// The plan's Runtime/config authority must be the one actually mounted.
+			typeof sourceSha !== "string" ||
+			!sourcePattern.test(sourceSha) ||
+			sourceSha !== context.runtimeAuthority
 		)
 			throw new Error();
 		// The same validated bindings the production Workload options carry.
@@ -147,8 +158,7 @@ async function deploymentAuthority(
 		const resolver = deployment.workload.workspaceSnapshotResolver;
 		const authority: SessionDemandImageAuthorityV1 = {
 			id: authorityId,
-			// The Worker cannot read its own source; the bound context names it.
-			sourceSha: context.platformSource,
+			sourceSha,
 			configurationHash,
 			contextHash: context.contextHash,
 			workload: {
@@ -166,8 +176,9 @@ async function deploymentAuthority(
 			summary: {
 				id: authorityId,
 				entry: "deployment readPlatformSessionDemandImagesV1",
-				sourceSha: context.platformSource,
-				sourceShaBinding: "context.platformSource",
+				sourceSha,
+				sourceShaBinding:
+					"mounted session-reserves.json sourceSha; equals context.runtimeAuthority",
 				configurationHash,
 				configurationHashScope:
 					"sha256 of the deployment configuration.mjs bytes this process loaded",

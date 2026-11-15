@@ -1294,6 +1294,12 @@ export async function readPlatformSessionDemandImagesV1(request: unknown) {
 			serviceToken,
 			oauthProvisioning: configuredConnectionOAuthProvisioning,
 			configurationModule: new URL("./configuration.mjs", import.meta.url),
+			// The same mounted reserve file field the reserve deployment readback reports.
+			configurationSourceSha: (
+				configuredSessionSandboxReservesFromFile as
+					| (SessionSandboxReserveConfigurationV1 & { sourceSha?: string })
+					| undefined
+			)?.sourceSha,
 		},
 		request,
 		process.env.PLATFORM_DATABASE_URL,

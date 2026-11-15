@@ -2236,9 +2236,32 @@ it("reads Session images with this module's own receiver authority and prepares 
 export const signing = { workerId: ${JSON.stringify(sessionSandboxRuntimeAuthFixture.workerId)} };
 export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixture)};
 `;
+	const reserves = (sourceSha?: string) => ({
+		schemaVersion: 1,
+		enabled: false,
+		revision: 6,
+		namespace,
+		totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+		resourceCosts: [],
+		maximumReserves: 0,
+		maximumConcurrentCreates: 0,
+		ttlMs: 0,
+		cooldownMs: 0,
+		failureBackoffMs: 0,
+		profiles: [],
+		...(sourceSha ? { sourceSha } : {}),
+	});
+	const declared = join(directory, "session-image-reserves.json");
+	const undeclared = join(directory, "session-image-reserves-unsourced.json");
 	try {
 		await writeFile(path, configuration);
+		await writeFile(
+			declared,
+			JSON.stringify(reserves(context.runtimeAuthority)),
+		);
+		await writeFile(undeclared, JSON.stringify(reserves()));
 		const result = run({
+			PLATFORM_WORKER_SESSION_RESERVES_FILE: declared,
 			RUN_SESSION_IMAGES: JSON.stringify({ request, readback }),
 		});
 		expect(result.status, result.stderr).toBe(0);
@@ -2254,7 +2277,7 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		);
 		expect(output.receipt.targetScopeStatus).toBe("ALL_TARGETS_PROJECTED");
 		expect(output.receipt.authority).toMatchObject({
-			sourceSha: context.platformSource,
+			sourceSha: context.runtimeAuthority,
 			configurationHash: createHash("sha256")
 				.update(configuration)
 				.digest("hex"),
@@ -2277,8 +2300,20 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		expect(result.stdout).not.toContain("owner-a");
 
 		for (const [change, environment] of [
-			[{ ...request, context: { ...context, namespace: "other" } }, {}],
-			[request, { PLATFORM_WORKER_NAMESPACE: "other" }],
+			[
+				{ ...request, context: { ...context, namespace: "other" } },
+				{ PLATFORM_WORKER_SESSION_RESERVES_FILE: declared },
+			],
+			[
+				request,
+				{
+					PLATFORM_WORKER_NAMESPACE: "other",
+					PLATFORM_WORKER_SESSION_RESERVES_FILE: declared,
+				},
+			],
+			// No deployment-declared configuration source: the caller cannot name one.
+			[request, { PLATFORM_WORKER_SESSION_RESERVES_FILE: undeclared }],
+			[request, {}],
 		] as const) {
 			const rejected = run({
 				...environment,
@@ -2296,5 +2331,7 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		}
 	} finally {
 		await writeFile(path, original);
+		await rm(declared, { force: true });
+		await rm(undeclared, { force: true });
 	}
 });

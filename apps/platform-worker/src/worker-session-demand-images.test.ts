@@ -212,6 +212,7 @@ function scenario(
 		},
 		serviceToken: sessionSandboxDeploymentTokenFixture,
 		configurationModule,
+		configurationSourceSha: context.runtimeAuthority,
 	};
 	const request = {
 		schemaVersion: 1,
@@ -279,7 +280,7 @@ it("projects only the requested Session with this Worker's own authority and a s
 	expect(receipt.rows[0]?.groups[0]).toMatchObject({
 		status: "PROJECTED_IMAGES",
 		workerConfigurationAuthority: {
-			sourceSha: context.platformSource,
+			sourceSha: context.runtimeAuthority,
 			configurationHash,
 		},
 		images: [
@@ -299,8 +300,9 @@ it("projects only the requested Session with this Worker's own authority and a s
 		},
 	});
 	expect(receipt.authority).toMatchObject({
-		sourceSha: context.platformSource,
-		sourceShaBinding: "context.platformSource",
+		sourceSha: context.runtimeAuthority,
+		sourceShaBinding:
+			"mounted session-reserves.json sourceSha; equals context.runtimeAuthority",
 		configurationHash,
 		namespace,
 		resourceConfigurationHash: workloadResourceConfigurationHashV1(s.policy),
@@ -667,6 +669,9 @@ it("rejects request and authority defects before opening any Store reader", asyn
 			...s.deployment,
 			configurationModule: pathToFileURL(join(directory, "missing.mjs")),
 		},
+		// The mounted configuration's own source must exist and match the plan.
+		{ ...s.deployment, configurationSourceSha: undefined },
+		{ ...s.deployment, configurationSourceSha: context.platformSource },
 	] as WorkerSessionDemandImageDeploymentV1[]) {
 		await expect(
 			readWorkerSessionDemandImagesV1(deployment, s.request, databaseUrl),
