@@ -7,7 +7,10 @@ import {
 } from "@agent-infra/model-catalog";
 import type { V1PodSpec } from "@kubernetes/client-node";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
-import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
+import {
+	workloadImagePullSpecV1,
+	workloadResourceNameV1,
+} from "./kubernetes-runtime-comparison.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
 	isMultiService,
@@ -82,8 +85,57 @@ export function parentWorkloadImageProjectionV1(input: {
 			? (binding?.imageRepository ?? input.policy?.imageRepository)
 			: input.policy?.imageRepository;
 	if (!repository) throw new Error("WORKLOAD_IMAGE_REPOSITORY_REQUIRED");
-	const image = `${repository}@${value.imageDigest}`;
-	let spec: V1PodSpec = { containers: [{ name: "agent", image }] };
+	return [
+		{
+			resourceKind: "StatefulSet",
+			resourceName: workloadResourceNameV1(value.agentId),
+			images: workloadPodImagesV1(
+				singleImageParentPodSpec(value, repository, input),
+			),
+		},
+	];
+}
+
+/**
+ * Image, pull and placement fields of the single-image parent Pod the adapter
+ * renders: containers/initContainers, imagePullSecrets and scheduling. Same
+ * trust checks as parentWorkloadImageProjectionV1; never env, volumes or Secrets.
+ */
+export function parentWorkloadPodImageSpecV1(
+	input: Parameters<typeof parentWorkloadImageProjectionV1>[0],
+) {
+	const [group] = parentWorkloadImageProjectionV1(input);
+	const value = validateAgentWorkloadDesiredV1(input.desired);
+	if (!group || isMultiService(value) || input.sourceKind !== "custom")
+		throw new Error("WORKLOAD_IMAGE_RESOURCE_FAMILY_UNSUPPORTED");
+	const repository = input.policy?.imageRepository;
+	if (!repository) throw new Error("WORKLOAD_IMAGE_REPOSITORY_REQUIRED");
+	const spec = singleImageParentPodSpec(value, repository, input);
+	const podSpec: V1PodSpec = {
+		...workloadImagePullSpecV1(input.policy?.imagePullSecretName),
+		containers: spec.containers,
+		...(spec.initContainers ? { initContainers: spec.initContainers } : {}),
+	};
+	return {
+		resourceKind: group.resourceKind,
+		resourceName: group.resourceName,
+		spec: podSpec,
+	};
+}
+
+function singleImageParentPodSpec(
+	value: ReturnType<typeof validateAgentWorkloadDesiredV1>,
+	repository: string,
+	input: Pick<
+		Parameters<typeof parentWorkloadImageProjectionV1>[0],
+		"workspaceSnapshotProjection"
+	>,
+) {
+	let spec: V1PodSpec = {
+		containers: [
+			{ name: "agent", image: `${repository}@${value.imageDigest}` },
+		],
+	};
 	const delivery = skillHubDeliveryProjectionV1(
 		skillHubRuntimeBindingV1(value),
 		value.skillDeliveryImage,
@@ -94,11 +146,5 @@ export function parentWorkloadImageProjectionV1(input: {
 		input.workspaceSnapshotProjection,
 	);
 	if (snapshot) spec = applyWorkspaceSnapshotProjectionV1(spec, snapshot);
-	return [
-		{
-			resourceKind: "StatefulSet",
-			resourceName: workloadResourceNameV1(value.agentId),
-			images: workloadPodImagesV1(spec),
-		},
-	];
+	return spec;
 }

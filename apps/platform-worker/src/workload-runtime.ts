@@ -58,6 +58,7 @@ import {
 } from "@agent-infra/platform-core";
 import type { V1Secret, V1StatefulSet } from "@kubernetes/client-node";
 import { parseAllDocuments } from "yaml";
+import { composeSingleImageAgentWorkloadDesiredV1 } from "./agent-workload-desired.js";
 import { validateCodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
 	type WorkerKubernetesClientV1,
@@ -2139,14 +2140,6 @@ export function createWorkloadRuntimeV1(
 					throw new WorkloadPreflightRejectedErrorV1("model-projection");
 				}
 			}
-			const name = workloadResourceNameV1(state.agentId);
-			const exposure =
-				mode === "platform-adapter"
-					? "internal-only"
-					: configuration.source.kind === "custom" &&
-							configuration.source.identityResponsibility === "platform-managed"
-						? "platform-auth"
-						: "self-managed";
 			let materializedSkills: WorkloadSkillMaterializationResultV1 | undefined;
 			if (options.skillMaterializer) {
 				materializedSkills = validateWorkloadSkillMaterializationV1(
@@ -2178,107 +2171,25 @@ export function createWorkloadRuntimeV1(
 				workloadExists: state.identity !== null,
 			});
 			try {
-				const deployment = validateAgentWorkloadDesiredV1({
-					schemaVersion: 1,
+				const deployment = composeSingleImageAgentWorkloadDesiredV1({
 					requestId: input.requestId,
 					traceId: input.traceId,
 					agentId: state.agentId,
-					configRevision: configuration.revision,
 					workloadRevision: state.revision,
 					fence: state.fence,
-					expectedWorkload: state.identity
-						? {
-								state: "present",
-								workloadUid: state.identity.uid,
-								workloadGeneration: state.identity.generation,
-							}
-						: { state: "absent" },
-					namespaceRef: options.policy.namespaceRef,
-					imageDigest: configuration.source.imageDigest,
-					registryAdmission: {
-						schemaVersion: 1,
-						immutableDigest: admission.immutableDigest,
-						runtimeManifest: admission.runtimeManifest,
-						policyEvidence: admission.policyEvidence,
-						runtimeManifestParsingEvidence:
-							admission.runtimeManifestParsingEvidence,
-					},
-					runtimeManifest: admission.runtimeManifest,
-					resourceProfileRef: options.policy.resourceProfileRef,
-					env: Object.fromEntries(
-						configuration.environment.map((entry) => [entry.name, entry.value]),
-					),
-					service: { name, port: admission.runtimeManifest.service.port },
-					health: {
-						path: admission.runtimeManifest.health.path,
-						timeoutSeconds: 5,
-						failureThreshold: 3,
-					},
-					persistentVolume: {
-						name: `${name}-data`,
-						mountPath: "/workspace",
-						storageProfileRef: options.policy.storageProfileRef,
-						accessMode: "ReadWriteOnce",
-						retention: "retain",
-					},
-					serviceAccount: { name, kubernetesApiAccess: false },
-					networkPolicy: {
-						deploymentPolicyRef: options.policy.networkPolicyRef,
-						ingressMode:
-							exposure === "internal-only"
-								? "runtime-host-client-only"
-								: exposure === "platform-auth"
-									? "platform-auth-route"
-									: "self-managed-route",
-						kubernetesApiAccess: false,
-						platformDatabaseAccess: false,
-						connectionDatabaseAccess: false,
-						decryptionKeyringAccess: false,
-					},
-					route: {
-						name,
-						exposure,
-						tlsRequired: true,
-						...(exposure === "self-managed"
-							? {
-									...workloadInteractionRouteV1(options.policy, state.agentId),
-								}
-							: {}),
-					},
+					identity: state.identity,
+					configuration,
+					policy: options.policy,
+					admission,
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),
-					...(materializedSkills &&
-					(!frozenSkillDeliveryImage || materializedSkills.skills.length > 0)
-						? {
-								...(frozenSkillDeliveryImage
-									? { skillDeliveryImage: frozenSkillDeliveryImage }
-									: {}),
-								skills: materializedSkills.skills,
-								skillAppliedBindings: materializedSkills.appliedBindings?.length
-									? JSON.stringify(materializedSkills.appliedBindings)
-									: undefined,
-								skillGenerationId: materializedSkills.generationId,
-							}
-						: {}),
+					...(materializedSkills ? { materializedSkills } : {}),
+					...(frozenSkillDeliveryImage ? { frozenSkillDeliveryImage } : {}),
 					...(snapshotMaterialization
-						? {
-								workspaceSnapshots: snapshotMaterialization.inputs.map(
-									(input) => ({
-										snapshotId: input.snapshotId,
-										name: input.name,
-										digest: input.digest,
-										sizeBytes: input.sizeBytes,
-										objectRef: input.objectRef,
-										mountPath: `/opt/agent/workspaces/${input.name}`,
-									}),
-								),
-							}
+						? { workspaceSnapshots: snapshotMaterialization.inputs }
 						: {}),
-					desiredState: "running",
-					replicas: 1,
 				});
-				assertWorkloadPublicRouteV1(options.policy, deployment);
 				const executionCapacity = resolveWorkloadExecutionCapacityV1(
 					options,
 					configuration.source.imageDigest,
