@@ -2591,6 +2591,46 @@ test("retained template measurements fail closed before any Secret write", async
 			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
 		],
 		[
+			"a target naming another template",
+			{
+				validation: {
+					validationTarget: { ...validationTarget, templateId: "claude" },
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a target naming another image",
+			{
+				validation: {
+					validationTarget: {
+						...validationTarget,
+						imageDigest: `sha256:${"8".repeat(64)}`,
+					},
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a target without its namespace UID",
+			{
+				validation: {
+					validationTarget: { ...validationTarget, namespaceUid: undefined },
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"another cluster",
+			{ target: { clusterUid: "other-cluster-uid" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"another installation",
+			{ target: { installationId: "other-installation" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
 			"a replaced namespace",
 			{ target: { namespaceUid: "other-namespace-uid" } },
 			/RUNTIME_INPUT_CAPACITY_TARGET_INVALID/u,

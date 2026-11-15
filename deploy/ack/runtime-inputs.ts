@@ -224,7 +224,11 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const measured = JSON.parse(measuredBytes.toString("utf8"));
 		const preflight = await privateJson(join(entry.measurementDirectory, "template-model-validation.receipt.json"));
 		const owned = await privateJson(join(entry.measurementDirectory, "owned-resource-identities.json"));
-		const target = preflight.validationTarget;
+		// The V2 target schema carries only the deployment identity; template and image bind through the same receipt.
+		// Strict parsing rejects any extra identity claim on the target, so it cannot name another template or image.
+		const parsedTarget = templateValidationContextV1Schema.safeParse(preflight.validationTarget);
+		assert(parsedTarget.success && isDeepStrictEqual(parsedTarget.data, preflight.validationTarget), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+		const target = parsedTarget.data;
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
 			preflight.schemaVersion === 2 && preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
 			preflight.sourceCommit === sourceSha && preflight.imageDigest === entry.imageDigest && preflight.terminalStatus === "completed" &&
