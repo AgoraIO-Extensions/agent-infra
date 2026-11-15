@@ -14,6 +14,7 @@ import {
 	S3Client,
 	type S3ClientConfig,
 } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
 	type ObjectDownloadV1,
@@ -27,6 +28,8 @@ export interface S3ObjectStorageOptionsV1 {
 	/** Server-only package evidence storage; requires the separate skill-packages/ prefix. */
 	readonly contentPolicy?: ObjectContentPolicyV1;
 	readonly endpoint?: string;
+	/** Optional deployment-owned CA bundle for a private HTTPS object-storage endpoint. */
+	readonly ca?: string | Uint8Array;
 	readonly region: string;
 	readonly credentials?: S3ClientConfig["credentials"];
 	readonly bucket: string;
@@ -87,6 +90,19 @@ export function createS3ObjectStorageV1(
 		region: options.region,
 		endpoint: options.endpoint,
 		credentials: options.credentials,
+		...(options.ca === undefined
+			? {}
+			: {
+					requestHandler: new NodeHttpHandler({
+						httpsAgent: {
+						ca:
+							typeof options.ca === "string"
+								? options.ca
+								: Buffer.from(options.ca),
+						rejectUnauthorized: true,
+					},
+					}),
+				}),
 		forcePathStyle: true,
 		maxAttempts: 1,
 		requestChecksumCalculation: "WHEN_REQUIRED",

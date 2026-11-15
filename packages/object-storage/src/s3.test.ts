@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { expect, it } from "vitest";
 import {
@@ -11,6 +12,65 @@ import {
 } from "./conformance.ts";
 import { startMinioFileFixtureV1 } from "./minio.test-support.ts";
 import { createS3ObjectStorageV1 } from "./s3.ts";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.ts";
+
+it("uses an explicit deployment CA while keeping HTTPS verification enabled", async () => {
+	const tls = await runtimeTlsFixture({ dnsNames: ["localhost"] });
+	const server = createHttpsServer(
+		{ cert: tls.cert, key: tls.key },
+		(request, response) => {
+			response.writeHead(200, {
+				"content-length": "5",
+				"content-type": "text/plain",
+				etag: '"test-etag"',
+				"x-amz-version-id": "v1",
+			});
+			if (request.method === "GET") response.end("hello");
+			else response.end();
+		},
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Missing port");
+	const endpoint = `https://localhost:${address.port}`;
+	const defaultTlsStorage = createS3ObjectStorageV1({
+		endpoint,
+		region: "us-east-1",
+		credentials: { accessKeyId: "test", secretAccessKey: "test" },
+		bucket: "file-contract",
+		prefix: "files/",
+		maxObjectBytes: 1024,
+		timeoutMs: 1000,
+	});
+	const storage = createS3ObjectStorageV1({
+		endpoint,
+		ca: tls.ca,
+		region: "us-east-1",
+		credentials: { accessKeyId: "test", secretAccessKey: "test" },
+		bucket: "file-contract",
+		prefix: "files/",
+		maxObjectBytes: 1024,
+		timeoutMs: 1000,
+	});
+	try {
+		await expect(defaultTlsStorage.inspect(randomUUID())).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		await expect(storage.inspect(randomUUID())).resolves.toMatchObject({
+			version: "v1",
+			etag: '"test-etag"',
+		});
+	} finally {
+		defaultTlsStorage.close();
+		storage.close();
+		server.closeAllConnections();
+		await new Promise<void>((resolve, reject) =>
+			server.close((error) => (error ? reject(error) : resolve())),
+		);
+		await tls.cleanup();
+	}
+});
 
 it("keeps S3 service failures unavailable", async () => {
 	const server = createServer((_request, response) => {
