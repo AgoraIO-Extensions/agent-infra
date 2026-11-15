@@ -204,6 +204,41 @@ CI 的镜像构建步骤生成 `.ci-images/build.json`，并以本次生成的
 匹配当前 commit，并直接运行 `agent-runtime-host` 记录的 `imageId`。对应
 `imageId` 必须相同；缺失或不匹配的构建记录不能回退到 Compose Tag。
 
+### FileBridge origin 资格
+
+同一 probe 还以镜像自己的正常入口验证 Runtime 文件交换（#3230）。容器没有网络：部署推导的集群内
+origin `http://agent-infra-api.<namespace>.svc:3000` 经 `--add-host` 解析到容器 loopback，由隔离的
+Platform 文件 fixture 按 Platform API 合同核对路径、认证与请求形状；模型是同一容器内的本地替身，
+不访问外部模型。每个 Driver 验证：
+
+- 启动期拒绝半配置、带路径、凭据、查询、片段或尾斜杠的 origin，明文 IP、非 HTTP、显式默认端口与
+  大写主机，以及过短或含空白的 token，拒绝前不联系 origin。
+- 会话 Sandbox 装配（Worker 按分配派生的文件交换 token；Codex 另以真实 init 与 executor 进程运行
+  session executor 隔离）与 Agent Workload 装配（runtime-auth token；Codex 为容器边界隔离）各完成
+  一次附件读取和 `sandbox:` 结果写回；交换只携带原始 V4 Grant 与该装配的精确凭据。
+- 平台拒绝、交换重定向、数据面重定向、超长与摘要不符的附件都在模型调用前失败，重定向不被跟随，
+  Host 输出不含凭据；Codex executor 收到 FileBridge 变量时拒绝启动。
+
+角色只取镜像标签：标准模板按 Worker 模板绑定选择 Driver（`opencode` 为 `acp`），共享 RuntimeHost
+镜像依次验证四个 Driver。evidence 的 `fileBridgeOrigin` 记录角色、origin、各 Driver 的检查，以及
+镜像内 Codex release pin 与 RuntimeHost 入口摘要。
+
+已发布的不可变镜像可以不重建而单独取得资格，工具来源与镜像来源分别证明：
+
+```bash
+docker pull --platform linux/amd64 <repository>@sha256:<digest>
+node deploy/release/runtime-probe.mjs --file-bridge-qualification \
+  --role <runtimeHost|codex|claude|opencode|pi> --image-source <镜像 OCI revision> \
+  --platform linux/amd64 --namespace <目标 namespace> \
+  <repository>@sha256:<digest> /private/file-bridge-evidence.json
+```
+
+checkout 必须干净；镜像来源必须在该 checkout 的历史中，镜像内 Codex release pin 必须等于镜像来源提交
+中的 pin；Docker 回读的 digest、平台、OCI revision/source 标签与角色必须等于输入。probe 不拉取或发布
+镜像，不创建集群 Workload，也不读取 Secret。Docker 无法执行该平台时以
+`cannot execute <arch> on this Docker daemon` 失败。资格只证明该 digest 的 FileBridge 文件交换行为，
+不代替现场启用、业务文件验收或原生 shell 能力。
+
 本验证不代表 #404 多人隔离验收、#194 完整 Pilot 或生产上线，也不执行镜像发布与共享环境部署。
 
 ## Claude Native 核心验收

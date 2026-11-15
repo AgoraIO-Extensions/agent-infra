@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { writeOciArchive } from "./support/oci-archive.mjs";
 
@@ -92,7 +93,10 @@ if (args[0] === "buildx" && args[1] === "build") {
 }
 if (args[0] === "image" && args[1] === "inspect") {
   if (args.includes("{{json .}}")) {
-    const inspection = { Id: "sha256:" + "a".repeat(64), Architecture: process.env.PLATFORM.split("/")[1], Os: "linux", Config: { Labels: { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}" } } };
+    const template = /\\/agent-runtime-(codex|claude|opencode|pi):/.exec(args.at(-1))?.[1];
+    const labels = { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}", "io.agora.agent.runtime.manifest": JSON.stringify({ schemaVersion: 1, interactionMode: "platform-adapter", protocol: "acp", service: { port: 3003 }, health: { path: "/healthz" }, capabilities: { modelSelection: true, attachments: true, resultFiles: true, connection: false, supplementaryInstruction: template === "codex" } }) };
+    if (template) labels["io.agora.agent.standard-template"] = template;
+    const inspection = { Id: "sha256:" + "a".repeat(64), Architecture: process.env.PLATFORM.split("/")[1], Os: "linux", Config: { Labels: labels } };
     if (!process.env.FAKE_RUNTIME_DIGEST_MISSING) inspection.Descriptor = { digest: "sha256:" + createHash("sha256").update(args.at(-1) + ":stable").digest("hex") };
     console.log(JSON.stringify(inspection));
     process.exit(0);
@@ -127,9 +131,13 @@ if (args[0] === "run") {
   }
   if (args.includes("/probe/runtime-image-probe.mjs")) {
     if (process.env.FAKE_RUNTIME_PROBE_FAIL) { console.error(process.env.FAKE_RUNTIME_PROBE_STDERR ?? "synthetic-credential-do-not-log"); process.exit(42); }
-    if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
+    const context = args.find((arg) => arg.endsWith("dst=/probe/runtime-image-probe.mjs,readonly")).split("src=")[1].split(",dst=")[0].slice(0, -"tests/runtime-image-probe.mjs".length);
+    if (args.includes("--file-bridge-origin")) {
+      const { syntheticFileBridgeResult } = await import(${JSON.stringify(pathToFileURL(resolve(repositoryRoot, "tests/support/runtime-file-bridge-evidence.mjs")).href)});
+      const driver = args[args.indexOf("--file-bridge-origin") + 1];
+      console.log(JSON.stringify(syntheticFileBridgeResult(driver, { architecture: process.env.PLATFORM.split("/")[1], releaseBytes: readFileSync(join(context, "packages/agent-runtime/src/codex-release.json")) })));
+    } else if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
     else {
-      const context = args.find((arg) => arg.endsWith("dst=/probe/runtime-image-probe.mjs,readonly")).split("src=")[1].split(",dst=")[0].slice(0, -"tests/runtime-image-probe.mjs".length);
       const bytes = readFileSync(join(context, "packages/agent-runtime/src/codex-release.json"));
       const release = JSON.parse(bytes);
       const architecture = process.env.PLATFORM.split("/")[1];
@@ -309,7 +317,15 @@ test("image build validates reproducibility and read-only non-root execution", a
 			(args) =>
 				args[0] === "run" && args.includes("/probe/runtime-image-probe.mjs"),
 		);
-		assert.equal(nativeProbes.length, 2);
+		// The shared RuntimeHost image is probed once for Codex, once for
+		// provenance rejection, then once per Driver for FileBridge origin.
+		assert.equal(nativeProbes.length, 6);
+		assert.deepEqual(
+			nativeProbes
+				.filter((args) => args.includes("--file-bridge-origin"))
+				.map((args) => args[args.indexOf("--file-bridge-origin") + 1]),
+			["codex", "claude", "acp", "pi"],
+		);
 		for (const args of nativeProbes) {
 			assert.ok(
 				args.some((arg) =>
@@ -715,6 +731,18 @@ test("standard template publication uses stable architecture tags and preserves 
 		}
 		assert.ok(
 			calls.some((args) => args.includes("/probe/runtime-image-probe.mjs")),
+		);
+		// Only the Codex template is probed here; its FileBridge role is Codex.
+		assert.deepEqual(
+			calls
+				.filter((args) => args.includes("--file-bridge-origin"))
+				.map((args) => args[args.indexOf("--file-bridge-origin") + 1]),
+			["codex"],
+		);
+		assert.equal(
+			JSON.parse(await readFile(`${manifestPath}.runtime-probe.json`, "utf8"))
+				.fileBridgeOrigin.role,
+			"codex",
 		);
 		assert.equal(
 			JSON.parse(await readFile(`${manifestPath}.runtime-probe.json`, "utf8"))
