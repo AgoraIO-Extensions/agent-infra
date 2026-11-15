@@ -5,7 +5,9 @@ import {
 	openPostgresWorkspaceSnapshotMaterializationReaderV1,
 	type SessionSandboxImageProjectionInputV1,
 } from "@agent-infra/platform-store";
+import { sessionExecutorPodProjectionV1 } from "./codex-session-executor.js";
 import { createSessionSandboxResourceInputResolverV1 } from "./conversation-deployment.js";
+import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
 import {
 	type SessionSandboxAllocationV1,
@@ -47,6 +49,31 @@ function knownStoredMain(source: SessionSandboxImageProjectionInputV1) {
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Pull identity and placement of the Pod the Session adapter renders for this
+ * allocation: the same helpers and fields, names only, no Secret constructed.
+ */
+function sessionPodIdentity(allocation: SessionSandboxAllocationV1) {
+	const placement =
+		allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor
+			? sessionExecutorPodProjectionV1({
+					binding: allocation.runtime.sessionExecutor.binding,
+					policy: allocation.codexSessionExecutor,
+				}).placement
+			: {};
+	return {
+		namespace: allocation.namespace,
+		serviceAccountName: allocation.serviceAccountName,
+		imagePullSecrets: (
+			workloadImagePullSpecV1(allocation.imagePullSecretName)
+				.imagePullSecrets ?? []
+		).map((secret) => secret.name),
+		nodeSelector: { ...(placement.nodeSelector ?? {}) },
+		tolerations: structuredClone(placement.tolerations ?? []),
+		runtimeClassName: placement.runtimeClassName ?? null,
+	};
 }
 
 /** Existing approved Worker configuration, kept in memory; never serialized into the receipt. */
@@ -162,6 +189,9 @@ export async function projectSessionDemandImagesV1(input: {
 				);
 				if (oauth) allocation = { ...allocation, oauthProvisioning: oauth };
 				missing = "validated pure Session image layout";
+				const images = sessionSandboxImageProjectionV1(allocation);
+				missing = "validated Session Pod pull identity and placement";
+				const podIdentity = sessionPodIdentity(allocation);
 				groups.push({
 					source: source.source,
 					inputHash: source.inputHash,
@@ -175,7 +205,8 @@ export async function projectSessionDemandImagesV1(input: {
 							? "BOUND_METADATA_UNSIGNED_PROJECTION"
 							: snapshot.status,
 					snapshotAuthority: snapshot.provenance,
-					images: sessionSandboxImageProjectionV1(allocation),
+					images,
+					podIdentity,
 					missing: [],
 				});
 			} catch {
@@ -225,6 +256,24 @@ export async function projectSessionDemandImagesV1(input: {
 	};
 }
 
+/** Database-enforced read-only, bounded options for every Session image Store reader. */
+export function readOnlySessionImageDatabaseUrlV1(databaseUrl: unknown) {
+	if (
+		typeof databaseUrl !== "string" ||
+		databaseUrl.length === 0 ||
+		databaseUrl.length > 8192
+	)
+		throw new Error("SESSION_IMAGE_READ_FAILED");
+	const url = new URL(databaseUrl);
+	if (!["postgres:", "postgresql:"].includes(url.protocol))
+		throw new Error("SESSION_IMAGE_READ_FAILED");
+	url.searchParams.set(
+		"options",
+		`${url.searchParams.get("options") ?? ""} -c default_transaction_read_only=on -c statement_timeout=5000`,
+	);
+	return url.toString();
+}
+
 /** Normal Store-only entry; credentials stay in the approved process, never in output or errors. */
 export async function readSessionDemandImagesV1(input: {
 	readonly databaseUrl: string;
@@ -241,27 +290,16 @@ export async function readSessionDemandImagesV1(input: {
 		if (
 			typeof input.contextHash !== "string" ||
 			!/^[a-f0-9]{64}$/.test(input.contextHash) ||
-			typeof input.databaseUrl !== "string" ||
-			input.databaseUrl.length === 0 ||
-			input.databaseUrl.length > 8192 ||
 			typeof input.namespace !== "string" ||
 			!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(input.namespace) ||
 			!Array.isArray(input.authorities) ||
 			!Array.isArray(input.bindings)
 		)
 			throw new Error();
-		const url = new URL(input.databaseUrl);
-		if (!["postgres:", "postgresql:"].includes(url.protocol)) throw new Error();
-		url.searchParams.set(
-			"options",
-			`${url.searchParams.get("options") ?? ""} -c default_transaction_read_only=on -c statement_timeout=5000`,
-		);
-		const reader = openPostgresSessionSandboxImageReaderV1({
-			databaseUrl: url.toString(),
-		});
-		const snapshots = openPostgresWorkspaceSnapshotMaterializationReaderV1(
-			url.toString(),
-		);
+		const databaseUrl = readOnlySessionImageDatabaseUrlV1(input.databaseUrl);
+		const reader = openPostgresSessionSandboxImageReaderV1({ databaseUrl });
+		const snapshots =
+			openPostgresWorkspaceSnapshotMaterializationReaderV1(databaseUrl);
 		try {
 			return await projectSessionDemandImagesV1({
 				...input,

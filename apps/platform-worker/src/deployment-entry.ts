@@ -1271,3 +1271,37 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 		close: reader.close,
 	};
 }
+
+/**
+ * Read-only Session image receipt with the same policy, template bindings,
+ * snapshot resolver, service token and OAuth provisioning as this module's
+ * Session receiver. It does not prepare adapters, claim, apply or sign; the
+ * Store is read in a database-enforced read-only transaction.
+ */
+export async function readPlatformSessionDemandImagesV1(request: unknown) {
+	const { readWorkerSessionDemandImagesV1 } = await import(
+		"./worker-session-demand-images.js"
+	);
+	return readWorkerSessionDemandImagesV1(
+		{
+			namespace: process.env.PLATFORM_WORKER_NAMESPACE,
+			workerId: signing?.workerId,
+			workload: {
+				policy: workloadInput.policy,
+				templateModelBindings: workloadInput.templateModelBindings,
+				workspaceSnapshotResolver: workloadInput.workspaceSnapshotResolver,
+			},
+			serviceToken,
+			oauthProvisioning: configuredConnectionOAuthProvisioning,
+			configurationModule: new URL("./configuration.mjs", import.meta.url),
+			// The same mounted reserve file field the reserve deployment readback reports.
+			configurationSourceSha: (
+				configuredSessionSandboxReservesFromFile as
+					| (SessionSandboxReserveConfigurationV1 & { sourceSha?: string })
+					| undefined
+			)?.sourceSha,
+		},
+		request,
+		process.env.PLATFORM_DATABASE_URL,
+	);
+}
