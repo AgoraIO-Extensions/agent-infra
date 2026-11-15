@@ -12,10 +12,13 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
 	assertCleanRuntimeProbeSource,
+	fileBridgeQualificationArguments,
 	probeRuntimeImage,
+	qualifyRuntimeImageFileBridge,
 	runtimeImageFromBuildManifest,
 	validateRuntimeProbe,
 } from "../deploy/release/runtime-probe.mjs";
@@ -24,6 +27,23 @@ const root = resolve(import.meta.dirname, "..");
 const releasePath = "packages/agent-runtime/src/codex-release.json";
 const releaseBytes = await readFile(join(root, releasePath));
 const release = JSON.parse(releaseBytes);
+const evidenceSupport = pathToFileURL(
+	join(root, "tests/support/runtime-file-bridge-evidence.mjs"),
+).href;
+const runtimeManifest = JSON.stringify({
+	schemaVersion: 1,
+	interactionMode: "platform-adapter",
+	protocol: "acp",
+	service: { port: 3003 },
+	health: { path: "/healthz" },
+	capabilities: {
+		modelSelection: true,
+		attachments: true,
+		resultFiles: true,
+		connection: false,
+		supplementaryInstruction: false,
+	},
+});
 const sha256 = (value) =>
 	`sha256:${createHash("sha256").update(value).digest("hex")}`;
 const installation = (architecture) => ({
@@ -283,9 +303,10 @@ async function fixture(t, mutation = "none") {
 		docker,
 		`#!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const { syntheticFileBridgeResult } = await import(${JSON.stringify(evidenceSupport)});
 const args = process.argv.slice(2);
 const mutation = ${JSON.stringify(mutation)};
-const inspection = ${JSON.stringify({ Id: imageId, Architecture: "amd64", Os: "linux", Config: { Labels: { "org.opencontainers.image.revision": commitSha } }, Descriptor: { digest: imageDigest } })};
+const inspection = ${JSON.stringify({ Id: imageId, Architecture: "amd64", Os: "linux", Config: { Labels: { "org.opencontainers.image.revision": commitSha, "io.agora.agent.runtime.manifest": runtimeManifest } }, Descriptor: { digest: imageDigest } })};
 const marker = ${JSON.stringify(join(directory, "probed"))};
 if (args[0] === "image") {
  if (mutation === "wrong-arch") inspection.Architecture = "arm64";
@@ -298,7 +319,11 @@ if (args[0] === "image") {
  appendFileSync(${JSON.stringify(join(directory, "calls.jsonl"))}, JSON.stringify(args) + "\\n");
  writeFileSync(marker, "done");
  if (mutation === "pin-drift") appendFileSync(${JSON.stringify(join(directory, releasePath))}, " ");
- if (args.includes("--provenance-rejection")) console.log(JSON.stringify({status:"passed",check:"provenance-fail-closed"}));
+ if (args.includes("--file-bridge-origin")) {
+  const driver = args[args.indexOf("--file-bridge-origin") + 1];
+  if (mutation === "file-bridge-failure") { console.error(JSON.stringify({ status: "failed", stage: "file-bridge-session-round-trip", httpStatus: 503, fileBridgeRequests: 2, startupCode: "synthetic-credential-do-not-log" })); process.exit(1); }
+  console.log(JSON.stringify(syntheticFileBridgeResult(driver, { architecture: inspection.Architecture })));
+ } else if (args.includes("--provenance-rejection")) console.log(JSON.stringify({status:"passed",check:"provenance-fail-closed"}));
  else console.log(JSON.stringify(${JSON.stringify(evidence)}));
 } else process.exit(1);
 `,
@@ -336,13 +361,64 @@ test("probe retains inspected image and Git tree identity with the complete offi
 		.trim()
 		.split("\n")
 		.map(JSON.parse);
-	assert.equal(calls.length, 2);
+	// Codex model-only probe, provenance rejection, then one FileBridge origin
+	// qualification per Driver the shared RuntimeHost image carries.
+	assert.equal(calls.length, 6);
 	assert.ok(calls[1].includes("--provenance-rejection"));
 	for (const args of calls) {
 		assert.ok(args.includes("--read-only"));
 		assert.ok(args.includes("--network=none"));
+		assert.ok(args.includes("--cap-drop=ALL"));
+		assert.ok(args.includes("--security-opt=no-new-privileges"));
+		assert.ok(args.includes("--pull=never"));
+		assert.ok(!args.some((arg) => /privileged|seccomp|apparmor/.test(arg)));
 		assert.ok(args.includes(f.imageId));
+		assert.ok(
+			args.some((arg) =>
+				arg.endsWith(
+					"dst=/probe/support/runtime-file-bridge-probe.mjs,readonly",
+				),
+			),
+		);
 	}
+	const bridges = calls.slice(2);
+	assert.deepEqual(
+		bridges.map((args) => args[args.indexOf("--file-bridge-origin") + 1]),
+		["codex", "claude", "acp", "pi"],
+	);
+	for (const args of bridges) {
+		assert.equal(
+			args[args.indexOf("--add-host") + 1],
+			"agent-infra-api.agent-infra-probe.svc:127.0.0.1",
+		);
+		assert.equal(
+			args.at(-1),
+			`localhost/agent-runtime-release-candidate@${f.imageDigest}`,
+		);
+	}
+	assert.equal(result.fileBridgeOrigin.role, "runtimeHost");
+	assert.equal(
+		result.fileBridgeOrigin.origin,
+		"http://agent-infra-api.agent-infra-probe.svc:3000",
+	);
+	assert.deepEqual(result.fileBridgeOrigin.nonConsumers, [
+		"codex-session-workspace-init",
+		"codex-session-executor",
+	]);
+	assert.deepEqual(
+		result.fileBridgeOrigin.drivers.map(({ driver }) => driver),
+		["codex", "claude", "acp", "pi"],
+	);
+});
+test("a FileBridge origin failure blocks the evidence with a bounded diagnostic", async (t) => {
+	const f = await fixture(t, "file-bridge-failure");
+	await assert.rejects(probeRuntimeImage(f.options), (error) => {
+		assert.match(error.message, /FileBridge origin codex image probe failed/);
+		assert.match(error.message, /"stage":"file-bridge-session-round-trip"/);
+		assert.match(error.message, /"fileBridgeRequests":2/);
+		assert.ok(!error.message.includes("synthetic-credential-do-not-log"));
+		return true;
+	});
 });
 for (const [mutation, expected] of [
 	["wrong-arch", /HTTP\/SSE image probe failed/],
@@ -369,4 +445,237 @@ test("probe refuses a context pin that differs from the inspected source commit"
 	await assert.rejects(readFile(join(f.directory, "calls.jsonl")), {
 		code: "ENOENT",
 	});
+});
+
+// #3230：已发布不可变镜像的 FileBridge origin 资格（工具来源与镜像来源分别证明）。
+const fieldRepository =
+	"ghcr.io/agoraio-extensions/agent-infra/agent-runtime-codex";
+const fieldDigest = `sha256:${"e".repeat(64)}`;
+
+async function retainedFixture(t, mutation = "none") {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-file-bridge-3230-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const commitSha = execFileSync("git", ["rev-parse", "HEAD"], {
+		cwd: root,
+		encoding: "utf8",
+	}).trim();
+	const labels = {
+		"org.opencontainers.image.revision":
+			mutation === "source-label" ? "3".repeat(40) : commitSha,
+		"org.opencontainers.image.source":
+			"https://github.com/AgoraIO-Extensions/agent-infra",
+		"io.agora.agent.runtime.manifest":
+			mutation === "self-managed"
+				? runtimeManifest.replace("platform-adapter", "self-managed")
+				: runtimeManifest,
+		"io.agora.agent.standard-template":
+			mutation === "role-label" ? "claude" : "codex",
+	};
+	const inspection = {
+		Id: `sha256:${"a".repeat(64)}`,
+		Os: "linux",
+		Architecture: mutation === "platform" ? "arm64" : "amd64",
+		RepoDigests: [
+			`${fieldRepository}@${mutation === "digest" ? `sha256:${"f".repeat(64)}` : fieldDigest}`,
+		],
+		Config: { Labels: labels },
+	};
+	const docker = join(directory, "docker.mjs");
+	await writeFile(
+		docker,
+		`#!/usr/bin/env node
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+const { syntheticFileBridgeResult } = await import(${JSON.stringify(evidenceSupport)});
+const args = process.argv.slice(2);
+const mutation = ${JSON.stringify(mutation)};
+const inspection = ${JSON.stringify(inspection)};
+const marker = ${JSON.stringify(join(directory, "probed"))};
+if (args[0] === "image" && args[1] === "inspect") {
+ if (args.at(-1) !== ${JSON.stringify(`${fieldRepository}@${fieldDigest}`)}) process.exit(1);
+ if (mutation === "identity-drift" && existsSync(marker)) inspection.Id = "sha256:" + "c".repeat(64);
+ console.log(JSON.stringify(inspection));
+} else if (args[0] === "run") {
+ appendFileSync(${JSON.stringify(join(directory, "calls.jsonl"))}, JSON.stringify(args) + "\\n");
+ writeFileSync(marker, "done");
+ if (mutation === "exec-format") { console.error("exec /usr/local/bin/docker-entrypoint.sh: exec format error"); process.exit(255); }
+ const driver = args[args.indexOf("--file-bridge-origin") + 1];
+ const result = syntheticFileBridgeResult(driver, { architecture: "amd64", namespace: args[args.indexOf("--file-bridge-origin") + 2] });
+ if (mutation === "release") result.installation.codexReleaseSha256 = "sha256:" + "d".repeat(64);
+ console.log(JSON.stringify(result));
+} else process.exit(1);
+`,
+	);
+	await chmod(docker, 0o755);
+	const environment = process.env;
+	const previous = environment.DOCKER_BIN;
+	environment.DOCKER_BIN = docker;
+	t.after(() => {
+		if (previous === undefined) delete environment.DOCKER_BIN;
+		else environment.DOCKER_BIN = previous;
+	});
+	return {
+		directory,
+		commitSha,
+		options: {
+			reference: `${fieldRepository}@${fieldDigest}`,
+			role: "codex",
+			imageSource: commitSha,
+			platform: "linux/amd64",
+			namespace: "agent-infra-d-ws-1103",
+			source: { commitSha, sourceDirty: false },
+		},
+	};
+}
+
+test("an immutable image qualifies its own role, source and digest without pulling", async (t) => {
+	const f = await retainedFixture(t);
+	const evidence = await qualifyRuntimeImageFileBridge(f.options);
+	assert.equal(evidence.kind, "runtime-image-file-bridge-qualification");
+	assert.equal(evidence.status, "passed");
+	assert.deepEqual(evidence.image, {
+		reference: f.options.reference,
+		repository: fieldRepository,
+		digest: fieldDigest,
+		imageId: `sha256:${"a".repeat(64)}`,
+		platform: "linux/amd64",
+		role: "codex",
+		sourceCommit: f.commitSha,
+		sourceRepository: "https://github.com/AgoraIO-Extensions/agent-infra",
+		codexReleaseSha256: `sha256:${createHash("sha256").update(releaseBytes).digest("hex")}`,
+	});
+	assert.equal(evidence.tool.commitSha, f.commitSha);
+	assert.match(evidence.tool.sourceTree, /^[a-f0-9]{40}$/);
+	assert.deepEqual(evidence.sourceRelation, {
+		imageSourceInToolHistory: true,
+		sameSource: true,
+	});
+	assert.equal(
+		evidence.fileBridgeOrigin.origin,
+		"http://agent-infra-api.agent-infra-d-ws-1103.svc:3000",
+	);
+	assert.deepEqual(
+		evidence.fileBridgeOrigin.drivers.map(({ driver }) => driver),
+		["codex"],
+	);
+	assert.deepEqual(evidence.boundary, {
+		network: "none",
+		imagePulled: false,
+		externalModelRequests: 0,
+		registryWrites: 0,
+		clusterWorkloads: 0,
+	});
+	const calls = (await readFile(join(f.directory, "calls.jsonl"), "utf8"))
+		.trim()
+		.split("\n")
+		.map(JSON.parse);
+	assert.equal(calls.length, 1);
+	const [args] = calls;
+	assert.equal(args[args.indexOf("--platform") + 1], "linux/amd64");
+	assert.equal(
+		args[args.indexOf("--add-host") + 1],
+		"agent-infra-api.agent-infra-d-ws-1103.svc:127.0.0.1",
+	);
+	for (const flag of [
+		"--pull=never",
+		"--network=none",
+		"--read-only",
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges",
+	])
+		assert.ok(args.includes(flag), flag);
+	assert.ok(!args.some((arg) => /privileged|seccomp|apparmor/.test(arg)));
+	// The container runs the inspected content ID; the exact reference only
+	// feeds the executor binding inside it.
+	assert.equal(args[args.indexOf("node") - 1], `sha256:${"a".repeat(64)}`);
+	assert.equal(args.at(-1), f.options.reference);
+});
+
+for (const [mutation, expected] of [
+	["digest", /digest does not match the input/],
+	["platform", /platform does not match the input/],
+	["source-label", /source does not match the input/],
+	["role-label", /role does not match the input/],
+	["self-managed", /not a platform FileBridge consumer/],
+	["exec-format", /cannot execute amd64 on this Docker daemon/],
+	["release", /release does not match its source/],
+	["identity-drift", /changed during qualification/],
+])
+	test(`immutable FileBridge qualification rejects ${mutation}`, async (t) => {
+		const f = await retainedFixture(t, mutation);
+		await assert.rejects(qualifyRuntimeImageFileBridge(f.options), expected);
+	});
+
+test("immutable FileBridge qualification refuses ambiguous or unproven inputs", async (t) => {
+	const f = await retainedFixture(t);
+	for (const options of [
+		{ ...f.options, reference: `${fieldRepository}:release-latest` },
+		{ ...f.options, reference: `${fieldRepository}@sha256:${"E".repeat(64)}` },
+		{ ...f.options, platform: "linux/386" },
+		{ ...f.options, role: "agent-runtime-codex" },
+		{ ...f.options, imageSource: "main" },
+		{ ...f.options, namespace: "Bad_Namespace" },
+		{ ...f.options, source: { commitSha: f.commitSha, sourceDirty: true } },
+	])
+		await assert.rejects(
+			qualifyRuntimeImageFileBridge(options),
+			/qualification input is invalid/,
+		);
+	await assert.rejects(
+		qualifyRuntimeImageFileBridge({
+			...f.options,
+			imageSource: "f".repeat(40),
+		}),
+		/not in the probe source history/,
+	);
+	await assert.rejects(readFile(join(f.directory, "calls.jsonl")), {
+		code: "ENOENT",
+	});
+});
+
+test("the immutable qualification CLI takes approved role, source and platform explicitly", () => {
+	assert.deepEqual(
+		fileBridgeQualificationArguments([
+			"--role",
+			"codex",
+			"--image-source",
+			"a".repeat(40),
+			"--platform",
+			"linux/amd64",
+			"--namespace",
+			"agent-infra-d-ws-1103",
+			`${fieldRepository}@${fieldDigest}`,
+			"/private/evidence.json",
+		]),
+		{
+			role: "codex",
+			imageSource: "a".repeat(40),
+			platform: "linux/amd64",
+			namespace: "agent-infra-d-ws-1103",
+			reference: `${fieldRepository}@${fieldDigest}`,
+			output: "/private/evidence.json",
+		},
+	);
+	assert.equal(
+		fileBridgeQualificationArguments([
+			"--role",
+			"pi",
+			"--image-source",
+			"a".repeat(40),
+			"--platform",
+			"linux/amd64",
+			"repository@sha256:x",
+			"out.json",
+		]).namespace,
+		"agent-infra-probe",
+	);
+	for (const argv of [
+		["--role", "codex", "only-one-positional"],
+		["--role", "codex", "--role", "pi", "a", "b"],
+		["--unknown", "x", "a", "b"],
+		["--role"],
+	])
+		assert.throws(
+			() => fileBridgeQualificationArguments(argv),
+			/arguments are invalid|usage:/,
+		);
 });
