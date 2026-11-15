@@ -478,6 +478,57 @@ export function openPostgresWorkspaceSnapshotMaterializationReaderV1() {
 			},
 		],
 	});
+	// The real Agent Workload image producer graph; only its Store readers are a
+	// recording fixture, so no database is contacted.
+	await build({
+		entryPoints: [
+			new URL("./worker-agent-workload-demand-images.ts", import.meta.url)
+				.pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "worker-agent-workload-demand-images.js"),
+		plugins: [
+			{
+				name: "agent-workload-image-store-fixture",
+				setup(builder) {
+					builder.onResolve(
+						{ filter: /^@agent-infra\/platform-store$/ },
+						(args) =>
+							args.importer.endsWith("worker-agent-workload-demand-images.ts")
+								? { path: "agent-image-store", namespace: "agent-store" }
+								: undefined,
+					);
+					builder.onLoad({ filter: /.*/, namespace: "agent-store" }, () => ({
+						contents: `
+const opened = (url) => (globalThis.agentImageReaderUrls ??= []).push(url);
+const closed = async () => { globalThis.agentImageCloses = (globalThis.agentImageCloses ?? 0) + 1; };
+const observed = () => globalThis.agentImageObservation;
+export class PostgresAgentManagementQueryV1 {
+ constructor(options) { opened(options.databaseUrl); }
+ async getAgent(scope, agentId) { (globalThis.agentImageReads ??= []).push(agentId); return { management: observed().management }; }
+ close() { return closed(); }
+}
+export class PostgresAgentConfigurationQueryV1 {
+ constructor(options) { opened(options.databaseUrl); }
+ async read(input) { (globalThis.agentImageActors ??= []).push(input.actorId); return { outcome: 'found', configuration: observed().configuration }; }
+ close() { return closed(); }
+}
+export function openPostgresWorkloadStateReaderV1(options) {
+ opened(options.databaseUrl);
+ return { async readCurrentState() { return observed().state; }, close: closed };
+}
+export function openPostgresWorkspaceSnapshotMaterializationReaderV1() {
+ return { async read() { throw new Error('snapshot metadata is not part of this fixture'); }, close: closed };
+}
+`,
+					}));
+				},
+			},
+		],
+	});
 	await symlink(
 		new URL("../node_modules", import.meta.url).pathname,
 		join(directory, "node_modules"),
@@ -540,6 +591,15 @@ try {
    configuration.connectionInstallationSupply.revision = 'r99';
  }
  const signal = new AbortController().signal;
+ if (process.env.RUN_AGENT_WORKLOAD_IMAGES) {
+   const fixture = JSON.parse(process.env.RUN_AGENT_WORKLOAD_IMAGES);
+   globalThis.agentImageObservation = fixture.observed;
+   let result;
+   try { result = { receipt: await entry.readPlatformAgentWorkloadDemandImagesV1(fixture.request) }; }
+   catch (error) { result = { error: error.message }; }
+   console.log(JSON.stringify({ ...result, calls: globalThis.calls, readerUrls: globalThis.agentImageReaderUrls ?? [], reads: globalThis.agentImageReads ?? [], actors: globalThis.agentImageActors ?? [], closes: globalThis.agentImageCloses ?? 0 }));
+   process.exit(0);
+ }
  if (process.env.RUN_SESSION_IMAGES) {
    const fixture = JSON.parse(process.env.RUN_SESSION_IMAGES);
    globalThis.sessionImageReadback = fixture.readback;
@@ -2333,5 +2393,165 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		await writeFile(path, original);
 		await rm(declared, { force: true });
 		await rm(undeclared, { force: true });
+	}
+});
+
+it("reads Agent Workload images with this module's own Workload authority and prepares nothing", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const namespace = "worker-binding";
+	const policy = {
+		...workloadTestPolicy,
+		namespace,
+		runtimeAuth: sessionSandboxRuntimeAuthFixture,
+	};
+	const context = {
+		platformSource: "2".repeat(40),
+		runtimeAuthority: "4".repeat(40),
+		planHash: "a".repeat(64),
+		clusterUid: "cluster",
+		namespace,
+		namespaceUid: "namespace-uid",
+		release: "release",
+		helmRevision: 46,
+		installationId: "installation",
+		directoryBindingHash: "b".repeat(64),
+		directorySnapshotHash: "c".repeat(64),
+	};
+	const request = {
+		schemaVersion: 1,
+		context,
+		target: {
+			agentId: "agent-a",
+			proposal: {
+				schemaVersion: 1,
+				command: "upgrade_custom_image",
+				imageReference: `${policy.imageRepository}@sha256:${"4".repeat(64)}`,
+			},
+		},
+	};
+	// A standard Agent: the receipt is stable UNKNOWN before any Registry call.
+	const observed = {
+		management: { revision: 3, workloadRevision: 1, desiredState: "running" },
+		configuration: {
+			agentId: "agent-a",
+			revision: 2,
+			source: { kind: "standard", templateId: "template-a" },
+			ownerIds: ["owner-a"],
+		},
+		state: null,
+	};
+	const configuration = (admission = true) =>
+		`export const workloadInput = { databaseUrl: 'postgresql://stale.example.test/stale', policy: ${JSON.stringify(policy)}${admission ? ", admissionPolicyRef: 'policy-a', registrySubjectRef: 'subject-a'" : ""} };
+export const signing = { workerId: ${JSON.stringify(sessionSandboxRuntimeAuthFixture.workerId)} };
+export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixture)};
+`;
+	const reserves = (sourceSha?: string) => ({
+		schemaVersion: 1,
+		enabled: false,
+		revision: 6,
+		namespace,
+		totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+		resourceCosts: [],
+		maximumReserves: 0,
+		maximumConcurrentCreates: 0,
+		ttlMs: 0,
+		cooldownMs: 0,
+		failureBackoffMs: 0,
+		profiles: [],
+		...(sourceSha ? { sourceSha } : {}),
+	});
+	const declared = join(directory, "agent-image-reserves.json");
+	try {
+		await writeFile(path, configuration());
+		await writeFile(
+			declared,
+			JSON.stringify(reserves(context.runtimeAuthority)),
+		);
+		const result = run({
+			PLATFORM_WORKER_SESSION_RESERVES_FILE: declared,
+			RUN_AGENT_WORKLOAD_IMAGES: JSON.stringify({ request, observed }),
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const output = JSON.parse(result.stdout);
+		expect(output.calls).toEqual([]);
+		expect(output.reads).toEqual(["agent-a", "agent-a"]);
+		expect(output.actors).toEqual([
+			"platform-worker-agent-workload-image-preview",
+			"platform-worker-agent-workload-image-preview",
+		]);
+		expect(output.readerUrls).toHaveLength(3);
+		expect(output.closes).toBe(3);
+		for (const value of output.readerUrls) {
+			const url = new URL(value);
+			expect(url.host).toBe("database.example.test");
+			expect(url.searchParams.get("options")).toContain(
+				"default_transaction_read_only=on",
+			);
+		}
+		expect(output.receipt).toMatchObject({
+			kind: "worker-agent-workload-demand-images",
+			authority: {
+				sourceSha: context.runtimeAuthority,
+				configurationHash: createHash("sha256")
+					.update(configuration())
+					.digest("hex"),
+				namespace,
+				imageRepository: policy.imageRepository,
+			},
+			target: {
+				status: "UNKNOWN",
+				reason: "WRONG_RESOURCE_FAMILY",
+				images: [],
+			},
+			storeReads: { contextStable: true, readCount: 2 },
+		});
+		expect(result.stdout).not.toContain(sessionSandboxDeploymentTokenFixture);
+		expect(result.stdout).not.toContain("owner-a");
+
+		for (const [change, environment, module] of [
+			[
+				{ ...request, context: { ...context, namespace: "other" } },
+				{ PLATFORM_WORKER_SESSION_RESERVES_FILE: declared },
+				configuration(),
+			],
+			[
+				request,
+				{
+					PLATFORM_WORKER_NAMESPACE: "other",
+					PLATFORM_WORKER_SESSION_RESERVES_FILE: declared,
+				},
+				configuration(),
+			],
+			// No deployment-declared configuration source: the caller cannot name one.
+			[request, {}, configuration()],
+			// The Workload admission references are part of the authority.
+			[
+				request,
+				{ PLATFORM_WORKER_SESSION_RESERVES_FILE: declared },
+				configuration(false),
+			],
+		] as const) {
+			await writeFile(path, module);
+			const rejected = run({
+				...environment,
+				RUN_AGENT_WORKLOAD_IMAGES: JSON.stringify({
+					request: change,
+					observed,
+				}),
+			});
+			expect(rejected.status, rejected.stderr).toBe(0);
+			expect(JSON.parse(rejected.stdout)).toEqual({
+				error: "WORKER_AGENT_WORKLOAD_IMAGE_AUTHORITY_UNAVAILABLE",
+				calls: [],
+				readerUrls: [],
+				reads: [],
+				actors: [],
+				closes: 0,
+			});
+		}
+	} finally {
+		await writeFile(path, original);
+		await rm(declared, { force: true });
 	}
 });
