@@ -33,6 +33,13 @@ import type {
 } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+
+function required<T>(value: T | null | undefined): T {
+	if (value === undefined || value === null)
+		throw new Error("missing fixture value");
+	return value;
+}
+
 import { provisionRuntimeOAuthFiles } from "../../agent-runtime-host/src/runtime-oauth-provisioning.js";
 
 vi.mock("../../agent-runtime-host/src/standard-mcp-protection.js", () => ({
@@ -2642,7 +2649,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		const podJson = JSON.stringify(pod);
 		expect(podJson).not.toContain("MODEL_CREDENTIAL");
 		expect(podJson).not.toContain(sessionSandboxDeploymentTokenFixture);
-		expect(podJson).not.toContain(allocation.runtime!.serviceToken);
+		expect(podJson).not.toContain(required(allocation.runtime).serviceToken);
 		expect(container?.envFrom).toBeUndefined();
 		expect(secret).toMatchObject({
 			kind: "Secret",
@@ -2706,7 +2713,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			"a static-key model configuration",
 			{
 				modelConfiguration: JSON.stringify({
-					...JSON.parse(allocation.runtime!.modelConfiguration),
+					...JSON.parse(required(allocation.runtime).modelConfiguration),
 					schemaVersion: 3,
 				}),
 			},
@@ -2717,9 +2724,9 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			"Messages configuration with the Codex Driver",
 			{
 				modelConfiguration: JSON.stringify({
-					...JSON.parse(allocation.runtime!.modelConfiguration),
+					...JSON.parse(required(allocation.runtime).modelConfiguration),
 					modelOptions: JSON.parse(
-						allocation.runtime!.modelConfiguration,
+						required(allocation.runtime).modelConfiguration,
 					).modelOptions.map((option: object) => ({
 						...option,
 						protocol: "anthropic-messages-v1",

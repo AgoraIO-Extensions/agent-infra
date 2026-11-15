@@ -1,5 +1,12 @@
 import { open } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+
+function required<T>(value: T | null | undefined): T {
+	if (value === undefined || value === null)
+		throw new Error("missing fixture value");
+	return value;
+}
+
 import {
 	materializeWorkspaceSnapshotV1,
 	pruneWorkspaceSnapshotCacheV1,
@@ -55,11 +62,14 @@ it("clears interrupted cache stages before starting the next download", async ()
 		.mocked(materializeWorkspaceSnapshotV1)
 		.mockImplementation(async () => {
 			expect(pruned).toHaveBeenCalledWith("/materialized", ["repo"]);
-			return { status: "materialized", digest: input.snapshots[0]!.digest };
+			return {
+				status: "materialized",
+				digest: required(input.snapshots[0]).digest,
+			};
 		});
 	await runWorkspaceSnapshotInitV1();
 	expect(pruned.mock.invocationCallOrder[0]).toBeLessThan(
-		downloaded.mock.invocationCallOrder[0]!,
+		required(downloaded.mock.invocationCallOrder[0]),
 	);
 	expect(pruned).toHaveBeenCalledTimes(2);
 });
