@@ -10,7 +10,6 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	check,
-	foreignKey,
 	index,
 	jsonb,
 	text,
@@ -117,7 +116,9 @@ export const connectionConsumerRegistrations = platformSchema.table(
 
 /**
  * Spec §13.5.7 Consumer disable: one row per disabled Agent, selected only from that Agent's own
- * registration. The request exists only once it is about to be or has been sent.
+ * registration. The request exists only once it is about to be or has been sent. There is
+ * deliberately no foreign key to the registration row: its FOR KEY SHARE would invert the
+ * registration worker's registration→Agent lock order. Readers join on operation and Agent.
  */
 export const connectionConsumerDisables = platformSchema.table(
 	"connection_consumer_disables",
@@ -148,11 +149,6 @@ export const connectionConsumerDisables = platformSchema.table(
 		disabledAt: timestamp("disabled_at", { withTimezone: true }),
 	},
 	(table) => [
-		foreignKey({
-			columns: [table.registrationOperationId],
-			foreignColumns: [connectionConsumerRegistrations.operationId],
-			name: "connection_consumer_disable_registration_fk",
-		}),
 		uniqueIndex("connection_consumer_disable_agent_unique").on(table.agentId),
 		uniqueIndex("connection_consumer_disable_registration_unique").on(
 			table.registrationOperationId,

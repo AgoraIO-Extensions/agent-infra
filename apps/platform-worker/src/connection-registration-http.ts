@@ -10,7 +10,10 @@ import {
 	parseConnectionConsumerDisableIntentV1,
 	parseConnectionConsumerRegistrationIntentV1,
 } from "@agent-infra/platform-core";
-import type { ConnectionConsumerRegistrationAdapterV1 } from "./connection-registration-worker.js";
+import {
+	type ConnectionConsumerRegistrationAdapterV1,
+	connectionConsumerDisableNotSentV1,
+} from "./connection-registration-worker.js";
 
 export interface ConnectionRegistrationOwnerBindingV1 {
 	readonly sourceNamespace: string;
@@ -418,12 +421,14 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 		signal: AbortSignal,
 		mode: "disable" | "reconcile",
 	): Promise<ConnectionConsumerDisableDeliveryV1> {
+		let requested = false;
 		try {
 			signal.throwIfAborted();
 			const intent = parseConnectionConsumerDisableIntentV1(input);
+			// Connection checks the POST body against its current policy; a readback is not revalidated.
 			if (
 				intent.sourceNamespace !== policy.sourceNamespace ||
-				intent.policyRevision !== policy.revision ||
+				(mode === "disable" && intent.policyRevision !== policy.revision) ||
 				!component.test(intent.platformAgentId)
 			)
 				throw invalid();
@@ -455,6 +460,7 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 				redirect: "error",
 				signal,
 			});
+			requested = true;
 			const response = await request(httpRequest);
 			if (
 				signal.aborted ||
@@ -536,6 +542,9 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 				},
 			};
 		} catch {
+			// Only a POST that was certainly never started may return to the unsent state.
+			if (!requested && mode === "disable" && !signal.aborted)
+				throw new Error(connectionConsumerDisableNotSentV1);
 			return disableUnknown();
 		}
 	}

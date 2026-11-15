@@ -14,6 +14,9 @@ import {
 	PostgresConnectionConsumerRegistrationStoreV1,
 } from "@agent-infra/platform-store";
 
+/** A lifecycle adapter throws this only when the disable POST was certainly never started. */
+export const connectionConsumerDisableNotSentV1 = "CONNECTION_DISABLE_NOT_SENT";
+
 /** An approved machine adapter must verify the published receipt; this seam has no HTTP default. */
 export interface ConnectionConsumerRegistrationAdapterV1 {
 	register(
@@ -125,6 +128,7 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 				| "disabled"
 				| "failed"
 				| "not_required" = "unknown";
+			let mode: "disable" | "reconcile" | undefined;
 			try {
 				const attempt = await disables.beginAttempt(
 					claim,
@@ -133,6 +137,7 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 				if (!attempt) continue;
 				if (attempt.outcome !== "deliver") outcome = attempt.outcome;
 				else if (lifecycle) {
+					mode = attempt.mode;
 					if (
 						!(await outbox.renew({ ...owned, leaseDurationMs })) ||
 						!(await disables.current(claim, attempt.mode)) ||
@@ -153,12 +158,21 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 							outcome = delivery.outcome;
 					}
 				}
-			} catch {
-				// An exception after sending cannot establish a deterministic rejection.
-				await disables.complete(claim, {
-					outcome: "unknown",
-					failureCode: "CONNECTION_DISABLE_UNAVAILABLE",
-				});
+			} catch (error) {
+				if (
+					mode === "disable" &&
+					error instanceof Error &&
+					error.message === connectionConsumerDisableNotSentV1
+				) {
+					await disables.deferBeforeSend(claim, "disable");
+					outcome = "pending";
+				}
+				// Any other exception after sending cannot establish a deterministic rejection.
+				else
+					await disables.complete(claim, {
+						outcome: "unknown",
+						failureCode: "CONNECTION_DISABLE_UNAVAILABLE",
+					});
 			}
 			if (outcome === "disabled" || outcome === "not_required")
 				await outbox.markSucceeded(owned);

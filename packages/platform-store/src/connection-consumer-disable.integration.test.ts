@@ -481,6 +481,30 @@ it("never sends without the adapter or under another policy source", async () =>
 	}
 });
 
+it("the disable transaction never waits on a registration row held by the registration worker", async () => {
+	await registered("agent-a");
+	// The registration worker locks the registration row before the Agent row (`for update of r, a`).
+	const worker = await sql.reserve();
+	try {
+		await worker`begin`;
+		await worker`select 1 from platform.connection_consumer_registrations where agent_id='agent-a' for update`;
+		const disabled = command("agent-a", "disable_agent");
+		const outcome = await Promise.race([
+			disabled.then((result) => result.outcome),
+			new Promise((resolve) => setTimeout(() => resolve("blocked"), 5_000)),
+		]);
+		expect(outcome).toBe("accepted");
+		await worker`select 1 from platform.agent_applications where agent_id='agent-a' for update`;
+		await worker`commit`;
+	} finally {
+		await worker`rollback`.catch(() => {});
+		worker.release();
+	}
+	expect(await disableRows()).toEqual([
+		{ agent_id: "agent-a", status: "waiting", unsent: true },
+	]);
+});
+
 it("the schema rejects extra request fields and an unconfirmed disabled claim", async () => {
 	await registered("agent-a");
 	expect((await command("agent-a", "disable_agent")).outcome).toBe("accepted");

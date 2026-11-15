@@ -801,9 +801,33 @@ describe("Connection Consumer disable over the fixed v1 lifecycle contract (#851
 				},
 			},
 		});
-		expect((await f.adapter.disable?.(stale, signal()))?.outcome).toBe(
-			"unknown",
+		// Certainly not started: the worker may return the command to the unsent state.
+		await expect(f.adapter.disable?.(stale, signal())).rejects.toThrow(
+			"CONNECTION_DISABLE_NOT_SENT",
 		);
 		expect(f.authenticatedRequest).not.toHaveBeenCalled();
+		// A readback of an already-sent command is not blocked by a later revision rotation.
+		const value = disabled();
+		value.operation.requestDigest =
+			"connection-json-v2:" +
+			createHash("sha256")
+				.update(
+					`connection-json-v2:${JSON.stringify({
+						consumerId: "consumer-a",
+						expectedRevision: "1",
+						kind: "disable",
+						platformAgentId: "agent-a",
+						policyRevision: "synthetic-0",
+						schemaVersion: 1,
+						sourceNamespace: policy.sourceNamespace,
+						version: "platform-agent-consumer-lifecycle-v1",
+					})}`,
+				)
+				.digest("hex");
+		const readback = fixture(() => response(value));
+		expect(
+			(await readback.adapter.reconcileDisable?.(stale, signal()))?.outcome,
+		).toBe("disabled");
+		expect(readback.authenticatedRequest.mock.calls[0]?.[0].method).toBe("GET");
 	});
 });

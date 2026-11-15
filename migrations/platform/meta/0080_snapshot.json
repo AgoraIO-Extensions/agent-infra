@@ -1,5 +1,5 @@
 {
-  "id": "2674c871-2754-463e-9725-285d2c497c17",
+  "id": "34c6df2d-ffef-44ba-9d1e-adf730d581f6",
   "prevId": "90517ec1-83f6-460a-969c-f44c46d2d68a",
   "version": "7",
   "dialect": "postgresql",
@@ -1421,20 +1421,6 @@
           ],
           "columnsTo": [
             "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "connection_consumer_disable_registration_fk": {
-          "name": "connection_consumer_disable_registration_fk",
-          "tableFrom": "connection_consumer_disables",
-          "tableTo": "connection_consumer_registrations",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "registration_operation_id"
-          ],
-          "columnsTo": [
-            "operation_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"

@@ -39,7 +39,6 @@ CREATE TABLE "platform"."connection_consumer_disables" (
 );
 --> statement-breakpoint
 ALTER TABLE "platform"."connection_consumer_disables" ADD CONSTRAINT "connection_consumer_disables_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "platform"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "platform"."connection_consumer_disables" ADD CONSTRAINT "connection_consumer_disable_registration_fk" FOREIGN KEY ("registration_operation_id") REFERENCES "platform"."connection_consumer_registrations"("operation_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "connection_consumer_disable_agent_unique" ON "platform"."connection_consumer_disables" USING btree ("agent_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "connection_consumer_disable_registration_unique" ON "platform"."connection_consumer_disables" USING btree ("registration_operation_id");--> statement-breakpoint
 CREATE INDEX "connection_consumer_disable_status_idx" ON "platform"."connection_consumer_disables" USING btree ("status","updated_at");

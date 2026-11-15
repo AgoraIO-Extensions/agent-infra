@@ -278,6 +278,32 @@ describe("Consumer disable in the same outbox loop (#851)", () => {
 		await worker.close();
 	});
 
+	it("returns a certainly-unsent POST to pending instead of unknown", async () => {
+		mocks.disableBeginAttempt.mockResolvedValue({
+			outcome: "deliver",
+			mode: "disable",
+			intent: disableIntent,
+		});
+		const disable = vi.fn(async () => {
+			throw new Error("CONNECTION_DISABLE_NOT_SENT");
+		});
+		const worker = createConnectionConsumerRegistrationWorkerV1({
+			databaseUrl: "unused",
+			policy,
+			adapter: { register, reconcile, disable, reconcileDisable: disable },
+		});
+		await worker.runOnce();
+		expect(mocks.disableDeferBeforeSend).toHaveBeenCalledWith(
+			expect.anything(),
+			"disable",
+		);
+		expect(mocks.disableComplete).not.toHaveBeenCalled();
+		expect(mocks.scheduleRetry).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: "CONNECTION_DISABLE_PENDING" }),
+		);
+		await worker.close();
+	});
+
 	it("records a thrown send as unknown and only marks terminal outcomes", async () => {
 		mocks.disableBeginAttempt.mockResolvedValue({
 			outcome: "deliver",
