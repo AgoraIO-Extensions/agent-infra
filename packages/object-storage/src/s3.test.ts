@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { expect, it } from "vitest";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.ts";
 import {
 	objectCleanupConformanceV1,
 	objectStorageConformanceV1,
@@ -12,7 +13,6 @@ import {
 } from "./conformance.ts";
 import { startMinioFileFixtureV1 } from "./minio.test-support.ts";
 import { createS3ObjectStorageV1 } from "./s3.ts";
-import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.ts";
 
 it("uses an explicit deployment CA while keeping HTTPS verification enabled", async () => {
 	const tls = await runtimeTlsFixture({ dnsNames: ["localhost"] });
@@ -54,9 +54,11 @@ it("uses an explicit deployment CA while keeping HTTPS verification enabled", as
 		timeoutMs: 1000,
 	});
 	try {
-		await expect(defaultTlsStorage.inspect(randomUUID())).rejects.toMatchObject({
-			code: "unavailable",
-		});
+		await expect(defaultTlsStorage.inspect(randomUUID())).rejects.toMatchObject(
+			{
+				code: "unavailable",
+			},
+		);
 		await expect(storage.inspect(randomUUID())).resolves.toMatchObject({
 			version: "v1",
 			etag: '"test-etag"',
