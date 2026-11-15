@@ -78,4 +78,3 @@ jobs:
           if-no-files-found: error
           name: signed-own-entry-amd64-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/signed-own-entry.json
-
