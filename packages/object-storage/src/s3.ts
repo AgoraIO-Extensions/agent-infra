@@ -1,3 +1,4 @@
+import { Agent } from "node:https";
 import {
 	createContentProbe,
 	type ObjectContentPolicyV1,
@@ -94,13 +95,13 @@ export function createS3ObjectStorageV1(
 			? {}
 			: {
 					requestHandler: new NodeHttpHandler({
-						httpsAgent: {
-						ca:
-							typeof options.ca === "string"
-								? options.ca
-								: Buffer.from(options.ca),
-						rejectUnauthorized: true,
-					},
+						httpsAgent: new Agent({
+							ca:
+								typeof options.ca === "string"
+									? options.ca
+									: Buffer.from(options.ca),
+							rejectUnauthorized: true,
+						}),
 					}),
 				}),
 		forcePathStyle: true,
