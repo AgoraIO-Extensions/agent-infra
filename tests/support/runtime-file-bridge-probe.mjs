@@ -26,7 +26,9 @@ import {
 	sign,
 } from "node:crypto";
 import { lookup } from "node:dns/promises";
+import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { connect } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
@@ -1021,6 +1023,180 @@ export async function signedEventReadV4({
 	return contracts.RuntimeEventReadRequestV4Schema.parse(request);
 }
 
+/** Session executor gateway and native backend (codex-session-executor-binding.ts). */
+export const sessionExecutorPorts = Object.freeze([8068, 8070]);
+
+/** Linux 进程表。pid 与启动时间一起标识进程，pid 被复用时不会误判。 */
+function processTable() {
+	const table = new Map();
+	for (const name of readdirSync("/proc")) {
+		if (!/^[0-9]+$/.test(name)) continue;
+		let stat;
+		try {
+			stat = readFileSync(`/proc/${name}/stat`, "utf8");
+		} catch {
+			continue; // The process exited while the table was read.
+		}
+		// The command name may contain spaces and ")"; the fields follow the last ")".
+		const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+		table.set(Number(name), {
+			state: fields[0],
+			ppid: Number(fields[1]),
+			pgrp: Number(fields[2]),
+			start: fields[19],
+		});
+	}
+	return table;
+}
+
+function portRefused(port) {
+	return new Promise((resolve) => {
+		const socket = connect({ host: "127.0.0.1", port });
+		const done = (refused) => {
+			socket.destroy();
+			resolve(refused);
+		};
+		socket.setTimeout(1000, () => done(false));
+		socket.once("connect", () => done(false));
+		socket.once("error", (error) => done(error.code === "ECONNREFUSED"));
+	});
+}
+
+/**
+ * 探针阶段入口的进程生命周期。阶段结束必须证明真正终止：入口进程及其全部后代都已退出，
+ * 入口的 stdio 已关闭，阶段服务端口拒绝连接。原生 Runtime 运行在自己的进程组中，入口进程组
+ * 的负 PID 覆盖不到它们，所以后代按 /proc 父子关系在阶段运行期间持续登记。
+ * - 正常路径只发送 SIGTERM，保留 tini、Host 与 runner 自己的清理，然后核对实际终止。
+ * - 超时后有界地强制清理全部登记进程并确认退出，但该阶段仍然失败。
+ * - 任一阶段未被证明终止，之后的阶段不再启动。
+ */
+export function createProbeProcesses({
+	command = "/bin/sh",
+	entry = "/app/start-runtime-host.sh",
+	cwd = "/app",
+	sampleMs = 200,
+} = {}) {
+	const outputs = [];
+	const running = new Set();
+	let unproven;
+	const living = (phase, table = processTable()) =>
+		[...phase.tree].flatMap(([pid, start]) => {
+			const current = table.get(pid);
+			return current?.start === start &&
+				current.state !== "Z" &&
+				current.state !== "X"
+				? [{ pid, pgrp: current.pgrp }]
+				: [];
+		});
+	// Every child of a living tracked process joins the tree, wherever its
+	// process group or session is; an orphan stays tracked after reparenting.
+	function observe(phase) {
+		const table = processTable();
+		const children = new Map();
+		for (const [pid, { ppid }] of table)
+			children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+		const queue = living(phase, table).map(({ pid }) => pid);
+		while (queue.length > 0)
+			for (const pid of children.get(queue.pop()) ?? [])
+				if (phase.tree.get(pid) !== table.get(pid).start) {
+					phase.tree.set(pid, table.get(pid).start);
+					queue.push(pid);
+				}
+		return table;
+	}
+	function force(phase) {
+		const own = processTable().get(process.pid)?.pgrp;
+		const kill = (target) => {
+			try {
+				process.kill(target, "SIGKILL");
+			} catch {
+				// Already gone.
+			}
+		};
+		const groups = new Set([phase.child.pid]);
+		for (const { pid, pgrp } of living(phase)) {
+			if (pid > 1 && pid !== process.pid) kill(pid);
+			groups.add(pgrp);
+		}
+		for (const group of groups)
+			if (group > 1 && group !== own && group !== process.pid) kill(-group);
+	}
+	function spawnEntry(args, environment) {
+		if (unproven) throw unproven;
+		// Its own process group: forced cleanup also reaches the entry's direct
+		// children, and leftover stdio cannot hang the probe.
+		const child = spawn(command, [entry, ...args], {
+			cwd,
+			env: environment,
+			stdio: ["ignore", "pipe", "pipe"],
+			detached: true,
+		});
+		const record = { output: "" };
+		outputs.push(record);
+		for (const stream of [child.stdout, child.stderr])
+			stream.on("data", (chunk) => {
+				record.output += chunk.toString("utf8");
+			});
+		const phase = { child, record, closed: false, code: undefined };
+		phase.tree = new Map([[child.pid, processTable().get(child.pid)?.start]]);
+		// "close" follows the exit and the end of every holder of the entry's stdio.
+		child.once("close", (code) => {
+			phase.closed = true;
+			phase.code = code;
+		});
+		phase.sampler = setInterval(() => observe(phase), sampleMs);
+		phase.sampler.unref();
+		running.add(phase);
+		return phase;
+	}
+	/**
+	 * Ends a phase: with `signal` it stops the entry, otherwise the entry must
+	 * exit by itself. Resolves with the entry's exit code only after the proof;
+	 * a timeout never passes.
+	 */
+	async function settle(
+		phase,
+		{ name, signal, ports = [], graceMs = 15_000, forceMs = 5_000 },
+	) {
+		observe(phase);
+		if (signal) phase.child.kill(signal);
+		const terminal = async (ms) => {
+			const deadline = Date.now() + ms;
+			for (;;) {
+				observe(phase);
+				if (phase.closed && living(phase).length === 0) return true;
+				if (Date.now() >= deadline) return false;
+				await delay(50);
+			}
+		};
+		let failure;
+		if (!(await terminal(graceMs))) {
+			force(phase);
+			failure = (await terminal(forceMs))
+				? `did not terminate within ${graceMs} ms; forced cleanup confirmed`
+				: "termination could not be confirmed after forced cleanup";
+		} else
+			for (const port of ports)
+				if (!(await portRefused(port)))
+					failure ??= `port ${port} still accepts connections`;
+		if (!failure) {
+			clearInterval(phase.sampler);
+			running.delete(phase);
+			return phase.code;
+		}
+		const error = new Error(`${name} ${failure}`);
+		unproven ??= error;
+		throw error;
+	}
+	function killAll() {
+		for (const phase of running) {
+			clearInterval(phase.sampler);
+			force(phase);
+		}
+	}
+	return { outputs, spawn: spawnEntry, settle, killAll };
+}
+
 export async function runFileBridgeOriginProbe({
 	driver,
 	namespace,
@@ -1044,8 +1220,8 @@ export async function runFileBridgeOriginProbe({
 	const hostHeader = new URL(origin).host;
 	const isolation = fileBridgeProbeIsolation(driver);
 	const checks = [];
-	const outputs = [];
-	const processes = new Set();
+	const processes = createProbeProcesses();
+	const { outputs } = processes;
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const grantPublicKey = publicKey.export({ type: "spki", format: "pem" });
 	const deploymentServiceToken = `synthetic-deployment-${randomHex(24)}`;
@@ -1152,36 +1328,15 @@ export async function runFileBridgeOriginProbe({
 			...extra,
 		});
 		function spawnEntry(args, environment) {
-			// 独立进程组：失败清理时连同 Host 与其原生子进程一起结束，探针不会因遗留的
-			// stdio 管道而挂起。
-			const child = spawn("/bin/sh", ["/app/start-runtime-host.sh", ...args], {
-				cwd: "/app",
-				env: environment,
-				stdio: ["ignore", "pipe", "pipe"],
-				detached: true,
-			});
-			processes.add(child);
-			const record = { output: "" };
-			outputs.push(record);
-			for (const stream of [child.stdout, child.stderr])
-				stream.on("data", (chunk) => {
-					record.output += chunk.toString("utf8");
-				});
-			const exited = new Promise((resolve) =>
-				child.once("close", (code) => {
-					processes.delete(child);
-					resolve(code);
-				}),
-			);
-			return { child, record, exited };
+			return processes.spawn(args, environment);
 		}
 
 		async function launch(environment, rejection) {
-			const { child, record, exited } = spawnEntry([], environment);
+			const phase = spawnEntry([], environment);
+			const { child, record } = phase;
 			const deadline = Date.now() + (rejection ? 30_000 : 120_000);
-			while (Date.now() < deadline) {
-				assert.ok(record.output.length < 1_048_576);
-				const lines = record.output
+			const jsonLines = () =>
+				record.output
 					.split(/\r?\n/)
 					.filter(Boolean)
 					.flatMap((line) => {
@@ -1191,11 +1346,19 @@ export async function runFileBridgeOriginProbe({
 							return [];
 						}
 					});
+			while (Date.now() < deadline) {
+				assert.ok(record.output.length < 1_048_576);
+				const lines = jsonLines();
 				if (child.exitCode !== null || child.signalCode !== null) {
-					const code = await exited;
 					assert.ok(rejection, "runtime exited before ready");
+					// The rejected Host and every descendant are gone before the next
+					// launch, and nothing serves its port.
+					const code = await processes.settle(phase, {
+						name: "rejected runtime",
+						ports: [runtimePort],
+					});
 					assert.notEqual(code, 0);
-					const failure = lines.find(
+					const failure = jsonLines().find(
 						(line) => line?.service === "agent-runtime-host" && line.code,
 					);
 					diagnostics.current = { startupCode: failure?.code };
@@ -1209,11 +1372,11 @@ export async function runFileBridgeOriginProbe({
 					return {
 						record,
 						async stop() {
-							child.kill("SIGTERM");
-							const code = await Promise.race([
-								exited,
-								delay(15_000).then(() => "timeout"),
-							]);
+							const code = await processes.settle(phase, {
+								name: "runtime",
+								signal: "SIGTERM",
+								ports: [runtimePort],
+							});
 							// 0 is a graceful Host close; 143 is the SIGTERM status some
 							// native runtimes return after the Host already confirmed every
 							// result. Both are recorded in the evidence, never hidden.
@@ -1453,11 +1616,12 @@ export async function runFileBridgeOriginProbe({
 					["--session-executor", "init"],
 					executorEnvironment({}),
 				);
+				// The init container exits by itself; its whole tree must be gone.
 				assert.equal(
-					await Promise.race([
-						init.exited,
-						delay(30_000).then(() => "timeout"),
-					]),
+					await processes.settle(init, {
+						name: "session workspace init",
+						graceMs: 30_000,
+					}),
 					0,
 				);
 				const before = fixture.counts.total;
@@ -1470,10 +1634,11 @@ export async function runFileBridgeOriginProbe({
 							session.fileExchangeToken,
 					}),
 				);
-				const code = await Promise.race([
-					rejected.exited,
-					delay(30_000).then(() => "timeout"),
-				]);
+				const code = await processes.settle(rejected, {
+					name: "rejected session executor",
+					graceMs: 30_000,
+					ports: sessionExecutorPorts,
+				});
 				assert.ok(Number.isInteger(code) && code !== 0);
 				assert.ok(
 					rejected.record.output.includes("CODEX_EXECUTOR_STARTUP_FAILED"),
@@ -1538,10 +1703,16 @@ export async function runFileBridgeOriginProbe({
 		const sessionStop = await probeStep("file-bridge-session-stop", () =>
 			hostProcess.stop(),
 		);
-		if (executor) {
-			executor.child.kill("SIGTERM");
-			await Promise.race([executor.exited, delay(15_000)]);
-		}
+		// The Agent Workload phase starts only after the whole Session Sandbox,
+		// including the executor and its native backend, is proven gone.
+		if (executor)
+			await probeStep("file-bridge-session-stop", () =>
+				processes.settle(executor, {
+					name: "session executor",
+					signal: "SIGTERM",
+					ports: sessionExecutorPorts,
+				}),
+			);
 
 		// An Agent Workload serves many Conversations; each rejected input uses
 		// its own Conversation, so one failure cannot mask the next.
@@ -1616,13 +1787,7 @@ export async function runFileBridgeOriginProbe({
 		);
 		throw error;
 	} finally {
-		for (const child of processes) {
-			try {
-				process.kill(-child.pid, "SIGKILL");
-			} catch {
-				child.kill("SIGKILL");
-			}
-		}
+		processes.killAll();
 		await Promise.all([fixture.server, trap, model.server].map(close));
 	}
 }

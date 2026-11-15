@@ -183,12 +183,16 @@ jobs:
             evidence.tool?.commitSha === inputs.toolSourceSha &&
             evidence.tool?.sourceDirty === false &&
             evidence.image?.reference === inputs.image &&
+            evidence.image?.digest === inputs.image.split("@")[1] &&
             evidence.image?.sourceCommit === inputs.imageSourceSha &&
+            evidence.image?.sourceRepository === "https://github.com/AgoraIO-Extensions/agent-infra" &&
             evidence.image?.role === inputs.role &&
             evidence.image?.platform === inputs.platform &&
             evidence.sourceRelation?.imageSourceInToolHistory === true &&
             evidence.fileBridgeOrigin?.role === inputs.role &&
-            evidence.fileBridgeOrigin?.namespace === inputs.namespace;
+            evidence.fileBridgeOrigin?.namespace === inputs.namespace &&
+            evidence.fileBridgeOrigin?.imageReference === inputs.image &&
+            evidence.fileBridgeOrigin?.origin === `http://agent-infra-api.${inputs.namespace}.svc:3000`;
           const image = parse(
             output("docker", ["image", "inspect", "--format", "{{json .}}", inputs.image]),
           );

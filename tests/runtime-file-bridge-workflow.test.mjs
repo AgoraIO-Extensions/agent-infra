@@ -27,6 +27,7 @@ import {
 	fileBridgeDriversForRole,
 	fileBridgeQualificationArguments,
 } from "../deploy/release/runtime-probe.mjs";
+import { fileBridgeProbeOrigin } from "./support/runtime-file-bridge-probe.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const workflowDirectory = join(root, ".github/workflows");
@@ -552,11 +553,14 @@ test("the receipt binds evidence, hashes, tool source, run and attempt, and fail
 			platform: "linux/amd64",
 			role: valid.IMAGE_ROLE,
 			sourceCommit: valid.IMAGE_SOURCE_SHA,
+			sourceRepository: "https://github.com/AgoraIO-Extensions/agent-infra",
 		},
 		sourceRelation: { imageSourceInToolHistory: true, sameSource: false },
 		fileBridgeOrigin: {
 			role: valid.IMAGE_ROLE,
 			namespace: valid.TARGET_NAMESPACE,
+			origin: fileBridgeProbeOrigin(valid.TARGET_NAMESPACE),
+			imageReference: image,
 		},
 		...overrides,
 	});
@@ -681,15 +685,40 @@ test("the receipt binds evidence, hashes, tool source, run and attempt, and fail
 		["qualification.log", "receipt.json"],
 	);
 
-	// Passed evidence for another role, namespace, platform or tool source does
-	// not qualify the dispatched tuple.
+	// Passed evidence that differs from the dispatched tuple in any one bound
+	// field, or omits it, does not qualify that tuple.
+	const without = (object, key) =>
+		Object.fromEntries(Object.entries(object).filter(([name]) => name !== key));
+	const { image: base, fileBridgeOrigin: nested } = evidence();
+	const otherImage = image.replace("codex", "pi");
 	for (const overrides of [
-		{ image: { ...evidence().image, role: "claude" } },
-		{ image: { ...evidence().image, platform: "linux/arm64" } },
-		{ image: { ...evidence().image, reference: image.replace("codex", "pi") } },
-		{ image: { ...evidence().image, sourceCommit: "f".repeat(40) } },
+		{ image: { ...base, role: "claude" } },
+		{ image: { ...base, platform: "linux/arm64" } },
+		{ image: { ...base, reference: otherImage } },
+		{ image: { ...base, digest: `sha256:${"f".repeat(64)}` } },
+		{ image: { ...base, digest: imageDigest.toUpperCase() } },
+		{ image: without(base, "digest") },
+		{ image: { ...base, sourceCommit: "f".repeat(40) } },
+		{
+			image: {
+				...base,
+				sourceRepository: "https://github.com/other/agent-infra",
+			},
+		},
+		{ image: without(base, "sourceRepository") },
 		{ tool: { ...evidence().tool, commitSha: "f".repeat(40) } },
-		{ fileBridgeOrigin: { role: "codex", namespace: "agent-infra-other" } },
+		{ fileBridgeOrigin: { ...nested, role: "claude" } },
+		{ fileBridgeOrigin: { ...nested, namespace: "agent-infra-other" } },
+		{ fileBridgeOrigin: { ...nested, imageReference: otherImage } },
+		{ fileBridgeOrigin: without(nested, "imageReference") },
+		{
+			fileBridgeOrigin: {
+				...nested,
+				origin: fileBridgeProbeOrigin("agent-infra-other"),
+			},
+		},
+		{ fileBridgeOrigin: { ...nested, origin: `${nested.origin}/` } },
+		{ fileBridgeOrigin: without(nested, "origin") },
 		{ sourceRelation: { imageSourceInToolHistory: false, sameSource: false } },
 		{ status: "failed" },
 	]) {

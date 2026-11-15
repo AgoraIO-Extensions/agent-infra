@@ -218,6 +218,9 @@ Platform 文件 fixture 按 Platform API 合同核对路径、认证与请求形
   一次附件读取和 `sandbox:` 结果写回；交换只携带原始 V4 Grant 与该装配的精确凭据。
 - 平台拒绝、交换重定向、数据面重定向、超长与摘要不符的附件都在模型调用前失败，重定向不被跟随，
   Host 输出不含凭据；Codex executor 收到 FileBridge 变量时拒绝启动。
+- 每个阶段（被拒绝的启动、Session init 与 executor、两种 Host 装配）结束时，入口及其全部后代进程
+  （含各自进程组中的原生 Runtime）都已退出、阶段端口拒绝连接，下一阶段才启动。正常路径只发送
+  SIGTERM；有界等待内不能证明时强制清理并确认退出，资格仍失败，后续阶段不再启动。
 
 角色只取镜像标签：标准模板按 Worker 模板绑定选择 Driver（`opencode` 为 `acp`），共享 RuntimeHost
 镜像依次验证四个 Driver。evidence 的 `fileBridgeOrigin` 记录角色、origin、各 Driver 的检查，以及
@@ -260,7 +263,9 @@ gh workflow run qualify-runtime-file-bridge.yml --ref main \
 - artifact `runtime-file-bridge-qualification-<run_id>-<run_attempt>` 包含 CLI 的 `evidence.json`、
   `qualification.log`、`receipt.json` 与 `SHA256SUMS`。receipt 记录 run、attempt、workflow 提交、
   输入、各步骤结果、工具来源 commit/tree、Docker daemon 与镜像身份；只有 CLI 成功且 evidence 的工具来源、
-  镜像引用与来源、角色、平台与 namespace 都等于本次输入时为 `passed`，否则 job 失败并仍上传 receipt。
+  镜像引用、digest、来源提交与来源仓库、角色、平台、namespace，以及 `fileBridgeOrigin` 的镜像引用与
+  origin（`http://agent-infra-api.<namespace>.svc:3000`）都等于本次输入时为 `passed`，否则 job 失败并仍
+  上传 receipt。
 
 本验证不代表 #404 多人隔离验收、#194 完整 Pilot 或生产上线，也不执行镜像发布与共享环境部署。
 
