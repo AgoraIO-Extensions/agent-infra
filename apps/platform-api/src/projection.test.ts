@@ -49,7 +49,13 @@ const management = {
 	failureCode: null,
 };
 
-function readers() {
+function readers(
+	connectionAssociation?: (
+		agentId: string,
+	) =>
+		| { status: "processing" | "associated" | "failed" | "unverified" }
+		| undefined,
+) {
 	const hydrateUsers = vi.fn(async (ids: readonly string[]) =>
 		ids.map((userId) => ({
 			userId,
@@ -72,7 +78,10 @@ function readers() {
 				},
 			})),
 		} as never,
-		presentAgent: vi.fn(async () => ({
+		presentAgent: vi.fn(async ({ agentId }: { agentId: string }) => ({
+			...(connectionAssociation?.(agentId)
+				? { connectionAssociation: connectionAssociation(agentId) }
+				: {}),
 			source: { kind: "standard" as const, templateId: "codex" },
 			resourceProfile: {
 				profileId: "profile_01",
@@ -364,5 +373,40 @@ describe("Agent projection owners (#2632)", () => {
 			}),
 		).resolves.toMatchObject({ agentId: "agent_00" });
 		expect(hydrateUsers).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("Agent Connection association projection (#851)", () => {
+	it("returns each Agent's own optional status on V2 and detail projections only", async () => {
+		const { projections } = readers((agentId) =>
+			agentId === "agent_02" ? { status: "unverified" } : undefined,
+		);
+		const metadata = {
+			identity,
+			requestId: "association-request",
+			traceId: "association-trace",
+			requestScope: {},
+		};
+		const [plain, associated] = await Promise.all(
+			["agent_01", "agent_02"].map((agentId) =>
+				projections.readManagementAgentProjectionV2({
+					...metadata,
+					agent: agent(agentId),
+				}),
+			),
+		);
+		expect(plain).not.toHaveProperty("connectionAssociation");
+		expect(associated?.connectionAssociation).toEqual({ status: "unverified" });
+		const detail = await projections.readAgentDetailProjection({
+			...metadata,
+			agent: agent("agent_02"),
+		});
+		expect(detail.connectionAssociation).toEqual({ status: "unverified" });
+		// 已退役的 V1 投影保持原 schema，不出现新字段。
+		const legacy = await projections.readManagementAgentProjection({
+			...metadata,
+			agent: agent("agent_02"),
+		});
+		expect(legacy).not.toHaveProperty("connectionAssociation");
 	});
 });

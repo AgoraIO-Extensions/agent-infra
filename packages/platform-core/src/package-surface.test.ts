@@ -371,6 +371,7 @@ describe("platform-core package surface", () => {
 			"platformAuditQueryDenialReasonsV1",
 			"platformAuditQueryResultsV1",
 			"platformIdempotencyV1",
+			"presentAgentConnectionAssociationV1",
 			"projectConversationExecutionV1",
 			"projectConversationMessagesV1",
 			"projectEvaluationBusinessFailureV1",

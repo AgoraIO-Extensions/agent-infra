@@ -207,6 +207,9 @@ export function createDeploymentPresentation(input: {
 			],
 			capabilities,
 			interactionUrl,
+			...(runtime.connectionAssociation
+				? { connectionAssociation: { ...runtime.connectionAssociation } }
+				: {}),
 		};
 	};
 }

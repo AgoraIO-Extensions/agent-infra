@@ -158,6 +158,48 @@ it("presents WeCom channel status from the runtime snapshot instead of the confi
 		{ kind: "wecom_app", status: "failed" },
 		{ kind: "wecom_bot", status: "bound" },
 	]);
+	expect(result).not.toHaveProperty("connectionAssociation");
+});
+
+// #851：Connection 关联状态取自同一快照，原样转交且不附带其他登记字段。
+it("passes the snapshot Connection association status through unchanged", async () => {
+	const request = new Request("https://platform.test/agents/agent_01");
+	const present = createDeploymentPresentation({
+		identityScope: {
+			currentRequest: () => request,
+			currentIdentity: async () => identity,
+			requestIdentity: async () => identity,
+		} as never,
+		configurationQuery: {
+			readRuntimePresentation: async () => ({
+				outcome: "found",
+				sourceReference: "controlled-source",
+				channels: [],
+				connectionAssociation: { status: "processing" },
+				capabilities: null,
+				interactionUrl: null,
+			}),
+		},
+		resourceProfile: {
+			profileId: "small",
+			displayName: "Small",
+			estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+		},
+		imageRepository: "registry.example.test/agents",
+	});
+	const result = await present({
+		agentId: "agent_01",
+		configuration: {
+			...configuration,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
+		},
+		management,
+	});
+	expect(result.connectionAssociation).toEqual({ status: "processing" });
 });
 
 /** 以持久化的多服务清单调用展示函数；单 Agent 档位刻意设为 profile_01 以区分多服务默认档位。 */

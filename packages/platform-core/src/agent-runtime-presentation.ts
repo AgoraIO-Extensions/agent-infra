@@ -63,12 +63,41 @@ export interface AgentChannelPresentationV1 {
 	readonly status: "binding" | "bound" | "failed";
 }
 
+/**
+ * Agent 与 Connection USER Consumer 的本地关联状态（PRD §9.1、Spec §13.5.7）。
+ * 只表示 Platform 本地登记交付是否得到核实，不表示用户已授权或 MCP 可调用。
+ */
+export type AgentConnectionAssociationStatusV1 =
+	| "processing"
+	| "associated"
+	| "failed"
+	| "unverified";
+
+/**
+ * 本地登记操作状态到展示状态的映射：pending/sending 为处理中，registered 为已关联，
+ * failed 为失败，unknown 为待核实。没有登记行时不展示；约束之外的取值不推断为已关联。
+ */
+export function presentAgentConnectionAssociationV1(
+	status: string | null | undefined,
+): { readonly status: AgentConnectionAssociationStatusV1 } | undefined {
+	if (status === null || status === undefined) return undefined;
+	if (status === "pending" || status === "sending")
+		return { status: "processing" };
+	if (status === "registered") return { status: "associated" };
+	if (status === "failed") return { status: "failed" };
+	return { status: "unverified" };
+}
+
 export type AgentRuntimePresentationDecisionV1 =
 	| {
 			readonly outcome: "found";
 			readonly sourceReference: string;
 			/** 当前修订已配置的企微渠道，顺序与配置相同；未配置的渠道不列出。 */
 			readonly channels: readonly AgentChannelPresentationV1[];
+			/** 仅在该 Agent 有自动登记记录时出现。 */
+			readonly connectionAssociation?: {
+				readonly status: AgentConnectionAssociationStatusV1;
+			};
 			readonly capabilities:
 				| (Readonly<Record<string, boolean>> & {
 						readonly browser?: WorkloadBrowserCapabilityProjectionV1;
@@ -113,6 +142,8 @@ export interface AgentRuntimePresentationFactsV1 {
 	readonly sourceReference: string;
 	/** 当前修订各企微渠道的连接事实；缺少某个渠道的事实时该渠道按未证实处理。 */
 	readonly channels: readonly AgentChannelConnectionFactV1[];
+	/** 同一快照内该 Agent 的自动登记操作状态；没有登记行为 null 或省略。 */
+	readonly connectionConsumerRegistrationStatus?: string | null;
 	readonly runtime: null | {
 		readonly revision: number;
 		readonly state: WorkloadReconciliationStateV1;
@@ -250,10 +281,16 @@ export function decideAgentRuntimePresentationV1(input: {
 		kind: channel.kind,
 		status: presentAgentChannelStatusV1(input.agentId, channel, facts.channels),
 	}));
+	const association = presentAgentConnectionAssociationV1(
+		facts.connectionConsumerRegistrationStatus,
+	);
+	const connectionAssociation =
+		association === undefined ? {} : { connectionAssociation: association };
 	const foundWithoutRuntimeProjection: AgentRuntimePresentationDecisionV1 = {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
 		channels,
+		...connectionAssociation,
 		capabilities: null,
 		interactionUrl: null,
 	};
@@ -337,6 +374,7 @@ export function decideAgentRuntimePresentationV1(input: {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
 		channels,
+		...connectionAssociation,
 		capabilities: state.capabilities
 			? ({
 					...Object.fromEntries(

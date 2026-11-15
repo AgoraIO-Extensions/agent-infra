@@ -2683,6 +2683,14 @@ Owner/mode/callback、登记政策及适用修订。允许复用现有 `GET /api
 近似匹配不能确认登记。关联查询沿当前 Platform Agent 权限，不能泄露其他 Agent
 或原用户的安装信息。已登记只表示本地交付得到核实，不代表远端当前授权或 MCP 可用。
 
+**关联状态投影。** Agent 详情（`GET /api/v2/agents/{agentId}/detail`）与 V2 Agent 投影的可选字段
+`connectionAssociation.status` 只展示上表本地状态：`pending`/`sending` 为 `processing`，
+`registered` 为 `associated`，`failed` 为 `failed`，`unknown` 为 `unverified`；约束之外的取值
+同样为 `unverified`，不推断为已关联。Store 在判定 Agent 可见性的同一只读快照内读取该 Agent
+自己的登记行，可见性与 Agent 投影相同，不新增路由或权限；没有登记行（未配置自动登记或既有
+Agent）时省略字段，不回退为某种状态。投影不含 Consumer ID、回执、摘要、幂等键或失败码，
+`associated` 也不表示本人已授权、具体 Grant 或工具可调用。
+
 | 本地登记操作状态 | 含义与恢复 |
 | --- | --- |
 | `pending` | 意图已持久保存，尚未开始实际发送 |

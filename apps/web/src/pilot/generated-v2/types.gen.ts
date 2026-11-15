@@ -525,6 +525,9 @@ export type AgentDetailProjectionV1 = {
         supplementaryInstruction: boolean;
     };
     configuration: AgentDetailConfigurationProjectionV1;
+    connectionAssociation?: {
+        status: 'processing' | 'associated' | 'failed' | 'unverified';
+    };
     description: string;
     interactionUrl: string | null;
     managementRevision?: number;
@@ -645,6 +648,9 @@ export type AgentProjectionV2 = {
         supplementaryInstruction: boolean;
     };
     configuration: AgentConfigurationProjectionV2;
+    connectionAssociation?: {
+        status: 'processing' | 'associated' | 'failed' | 'unverified';
+    };
     description: string;
     interactionUrl: string | null;
     managementRevision?: number;

@@ -3565,6 +3565,42 @@ function isAgentManagementRevisionOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+// #851 Agent 投影增加可选的 Connection 关联状态（PRD §9.1、工程 Spec §13.5.7）。字段必须可选，
+// 取值只限四个展示状态；去掉该字段后两个 schema 与基线逐字节一致，其他路径与 schema 不变。
+const agentConnectionAssociationProjection = {
+	additionalProperties: false,
+	properties: {
+		status: {
+			enum: ["processing", "associated", "failed", "unverified"],
+			type: "string",
+		},
+	},
+	required: ["status"],
+	type: "object",
+};
+function isAgentConnectionAssociationOpenApiAddition(previous, current) {
+	const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
+	const normalized = structuredClone(current);
+	let changed = false;
+	for (const name of names) {
+		const before = previous.components?.schemas?.[name];
+		const schema = normalized.components?.schemas?.[name];
+		if (!before || !schema?.properties?.connectionAssociation) continue;
+		if (
+			before.properties?.connectionAssociation !== undefined ||
+			schema.required?.includes("connectionAssociation") ||
+			!sameValue(
+				schema.properties.connectionAssociation,
+				agentConnectionAssociationProjection,
+			)
+		)
+			return false;
+		delete schema.properties.connectionAssociation;
+		changed = true;
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #3377：V2 会话读取中失败的回答新增可选的用户可见失败分类 `failure`（工程 Spec §16.1.1），
 // 同时发布分类枚举与 strict 投影。去掉该可选字段与两个新组件后须与基线逐字节一致。
 const executionFailureProjectionAddition = {
@@ -7676,7 +7712,8 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV3OpenApiAddition(previous, current) &&
-			!isAgentManagementRevisionOpenApiAddition(previous, current)
+			!isAgentManagementRevisionOpenApiAddition(previous, current) &&
+			!isAgentConnectionAssociationOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

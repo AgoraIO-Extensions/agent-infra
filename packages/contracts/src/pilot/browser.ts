@@ -552,6 +552,9 @@ export const AgentApplicationProjectionV2Schema =
 		source: AgentSourceInputV2Schema,
 		configuration: AgentConfigurationProjectionV2Schema,
 	});
+export const AgentConnectionAssociationProjectionV1Schema = z.strictObject({
+	status: z.enum(["processing", "associated", "failed", "unverified"]),
+});
 export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 	schemaVersion: z.literal(2),
 	source: AgentSourceInputV2Schema,
@@ -567,6 +570,12 @@ export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 		.min(0)
 		.max(Number.MAX_SAFE_INTEGER)
 		.optional(),
+	/**
+	 * Agent 与 Connection USER Consumer 的本地关联状态（PRD §9.1、Spec §13.5.7），
+	 * 只在该 Agent 有自动登记记录时出现；不表示用户已授权或 MCP 可调用。
+	 */
+	connectionAssociation:
+		AgentConnectionAssociationProjectionV1Schema.optional(),
 });
 
 export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(

@@ -3082,6 +3082,24 @@
           "configuration": {
             "$ref": "#/components/schemas/AgentDetailConfigurationProjectionV1"
           },
+          "connectionAssociation": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "processing",
+                  "associated",
+                  "failed",
+                  "unverified"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
           "description": {
             "minLength": 1,
             "type": "string"
@@ -3796,6 +3814,24 @@
           },
           "configuration": {
             "$ref": "#/components/schemas/AgentConfigurationProjectionV2"
+          },
+          "connectionAssociation": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "processing",
+                  "associated",
+                  "failed",
+                  "unverified"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
           },
           "description": {
             "minLength": 1,
