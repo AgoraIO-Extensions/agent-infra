@@ -43,7 +43,10 @@ API 自动读取 `AGENT_INFRA_AGENT_VERSION`；模块若显式声明 `apiInput.a
 配置模块仍须导出完整的 `skillMaterialization`：
 
 - `assemblyRoot` 取 `PLATFORM_WORKER_SKILL_ASSEMBLY_ROOT`；`runtimeUid` 为标准 Runtime 的 UID。
-- `delivery.client` 使用当前 namespace 的 `createWorkerKubernetesClientV1`。
+- `delivery.client` 使用当前 namespace 的 `createWorkerKubernetesClientV1`，从镜像内独立入口
+  `file:///app/dist/kubernetesClient.mjs` 导入。挂载在 `/app` 下的模块若从包名
+  `@agent-infra/platform-worker` 导入，会自引用回正在等待 deployment entry 的 Worker 主入口，
+  形成 top-level await 循环，进程只打印 unsettled top-level await 警告并以退出码 13 结束。
 - `workloadInput.policy.skillDeliveryImage` 使用 Chart 注入的 `PLATFORM_WORKER_SKILL_INIT_IMAGE`；
   未显式配置时 deployment entry 使用该环境值，显式值与环境值不一致时拒绝启动。
 - `store` 复用 `PostgresSkillHubAgentBindingAdmissionV1` 的原发布、同步与 Applied 方法。
@@ -69,7 +72,7 @@ MinIO 默认使用同一固定 API 镜像中的二进制，bucket hook 使用 AP
 
 ```typescript
 import { PostgresSkillHubAgentBindingAdmissionV1 } from "@agent-infra/platform-store";
-import { createWorkerKubernetesClientV1 } from "@agent-infra/platform-worker";
+import { createWorkerKubernetesClientV1 } from "file:///app/dist/kubernetesClient.mjs";
 
 const skillAdmission = new PostgresSkillHubAgentBindingAdmissionV1({
   databaseUrl: process.env.PLATFORM_DATABASE_URL,
