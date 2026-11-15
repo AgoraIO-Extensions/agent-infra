@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { privateBytes, privateJson } from "./private-input.ts";
 import {
@@ -125,6 +126,38 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 	return { schemaVersion: 1, kind: "ack-workload-capacity", imageCount: checked.size, resourceConfigurationHash: resourcesHash, businessVerified: false };
 }
 
+export type RetainedTemplateMeasurement = { templateId: string; imageDigest: string; measurementDirectory: string };
+
+/**
+ * Standard images still bound by existing Agents need their own measured
+ * approval under the current policy. Current template images stay on the
+ * template validation path; this does not prove which Agents use an image.
+ */
+export function parseRetainedTemplateMeasurements(value: unknown, templates: any[]): RetainedTemplateMeasurement[] {
+	if (value === undefined) return [];
+	assert(Array.isArray(value) && value.length > 0 && value.length <= 16 && Array.isArray(templates), "CAPACITY_RETAINED_TEMPLATE_INVALID");
+	const seen = new Set<string>();
+	return value.map((entry: any) => {
+		assert(entry && typeof entry === "object" && !Array.isArray(entry) &&
+			Object.keys(entry).sort().join() === "imageDigest,measurementDirectory,templateId" &&
+			["codex", "claude", "opencode", "pi"].includes(entry.templateId) &&
+			templates.filter((template) => template.templateId === entry.templateId).length === 1 &&
+			typeof entry.imageDigest === "string" && digest.test(entry.imageDigest) && !seen.has(entry.imageDigest) &&
+			typeof entry.measurementDirectory === "string" && isAbsolute(entry.measurementDirectory) &&
+			!/[\r\n\0]/u.test(entry.measurementDirectory), "CAPACITY_RETAINED_TEMPLATE_INVALID");
+		assert(!templates.some((template) => template.imageDigest === entry.imageDigest), "CAPACITY_RETAINED_TEMPLATE_CURRENT");
+		seen.add(entry.imageDigest);
+		return { templateId: entry.templateId, imageDigest: entry.imageDigest, measurementDirectory: entry.measurementDirectory };
+	});
+}
+
+/** Each retained image needs exactly one full-key profile backed by its measured receipt bytes. */
+export function validateRetainedTemplateCapacity(retained: readonly RetainedTemplateMeasurement[], policy: any, profiles: any[], evidence: Map<string, Uint8Array>) {
+	for (const { templateId, imageDigest } of retained)
+		validateCapacityBindings([{ source: { kind: "standard", templateId } }], [{ templateId, imageDigest }], policy, profiles, evidence);
+	return retained.length;
+}
+
 type WorkerInput = {
 	bytes: Uint8Array;
 	resourceProfileRef: string;
@@ -155,6 +188,8 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	}
 	const bodies = await Promise.all(requests.requests.map((request: { bodyFile: string }) => privateJson(request.bodyFile)));
 	const receipt = validateCapacityBindings(bodies, templates.templates, input, profiles.profiles, evidence);
+	const retainedImageCount = validateRetainedTemplateCapacity(
+		parseRetainedTemplateMeasurements(input.retainedTemplateMeasurements, templates.templates), input, profiles.profiles, evidence);
 	const ref = input.workerSecretRef;
 	assert(ref && /^[a-z0-9][a-z0-9.-]{0,252}$/u.test(ref.name) && /^[A-Za-z0-9._-]{1,253}$/u.test(ref.key));
 	const actual = readWorker(ref);
@@ -172,7 +207,7 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 		assert.equal(actual.storageClassName, input.storageClassName, "CAPACITY_WORKER_STORAGE_CLASS_DRIFT");
 	assert.equal(resourceHash(actual), receipt.resourceConfigurationHash, "CAPACITY_WORKER_POLICY_DRIFT");
 	assert.deepEqual(actual.profiles, profiles.profiles, "CAPACITY_WORKER_PROFILES_DRIFT");
-	return { ...receipt, profilesHash: hash(bytes), mountedInputVerified: true };
+	return { ...receipt, retainedImageCount, profilesHash: hash(bytes), mountedInputVerified: true };
 }
 
 export function assertWorkerMount(pod: any, secret: any, ref: SecretRef) {

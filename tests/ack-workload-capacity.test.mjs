@@ -7,7 +7,9 @@ import test from "node:test";
 import {
 	assertWorkerMount,
 	checkWorkloadCapacity,
+	parseRetainedTemplateMeasurements,
 	validateCapacityBindings,
+	validateRetainedTemplateCapacity,
 } from "../deploy/ack/workload-capacity.ts";
 import {
 	sessionSandboxResourceCostsV1,
@@ -448,6 +450,121 @@ test("unmeasured files and evidence for another image/resources cannot authorize
 	);
 });
 
+const retainedDigest = `sha256:${"c".repeat(64)}`;
+const retainedEntry = {
+	templateId: "codex",
+	imageDigest: retainedDigest,
+	measurementDirectory: "/private/ack/retained-codex",
+};
+
+function retainedFixture(receiptChanges = {}) {
+	const f = executorFixture("codex", completeControlResources);
+	const receipt = {
+		...structuredClone(f.measured),
+		imageDigest: retainedDigest,
+		...receiptChanges,
+	};
+	const bytes = Buffer.from(JSON.stringify(receipt));
+	const retainedProfile = {
+		...profile,
+		imageDigest: retainedDigest,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(f.input),
+		conformanceEvidenceHash: hash(bytes),
+	};
+	const entries = parseRetainedTemplateMeasurements([retainedEntry], templates);
+	return {
+		...f,
+		receipt,
+		bytes,
+		retainedProfile,
+		verify: (profiles = [retainedProfile], evidenceBytes = bytes) =>
+			validateRetainedTemplateCapacity(
+				entries,
+				f.input,
+				profiles,
+				new Map([[retainedDigest, evidenceBytes]]),
+			),
+	};
+}
+
+test("a retained Codex image keeps its own full-key measured approval", () => {
+	const f = retainedFixture();
+	assert.equal(f.verify(), 1);
+	assert.equal(
+		validateRetainedTemplateCapacity([], f.input, [], new Map()),
+		0,
+		"no declared retained image adds no requirement",
+	);
+});
+
+test("a retained image cannot reuse a legacy profile, another image or changed evidence", () => {
+	const f = retainedFixture();
+	const legacyHash = workloadResourceConfigurationHashV1({
+		resourceProfileRef: f.input.resourceProfileRef,
+		resources: f.input.resources,
+	});
+	assert.notEqual(legacyHash, f.retainedProfile.resourceConfigurationHash);
+	for (const profiles of [
+		[],
+		[{ ...f.retainedProfile, resourceConfigurationHash: legacyHash }],
+		[{ ...f.retainedProfile, resourceProfileRef: "legacy-small" }],
+		[{ ...f.retainedProfile, imageDigest }],
+		[f.retainedProfile, f.retainedProfile],
+	])
+		assert.throws(
+			() => f.verify(profiles),
+			/CAPACITY_BINDING_MISSING_OR_AMBIGUOUS/u,
+		);
+	assert.throws(
+		() => f.verify([f.retainedProfile], Buffer.from("{}")),
+		/CAPACITY_EVIDENCE_MISMATCH/u,
+	);
+	for (const [changes, code] of [
+		[
+			{ observedExecutorResources: undefined },
+			/CAPACITY_EXECUTOR_RESOURCES_DRIFT/u,
+		],
+		[{ observedInitResources: undefined }, /CAPACITY_INIT_RESOURCES_DRIFT/u],
+		[
+			{ resourceConfigurationHash: legacyHash },
+			/CAPACITY_RESOURCE_HASH_MISMATCH/u,
+		],
+		[{ imageDigest }, /CAPACITY_EVIDENCE_NOT_MEASURED/u],
+		[{ modelOperationCount: 0 }, /CAPACITY_MODEL_FACT_MISSING/u],
+	])
+		assert.throws(() => retainedFixture(changes).verify(), code);
+});
+
+test("retained entries reject current template images, unknown templates and loose inputs", () => {
+	const parse = (value, list = templates) =>
+		parseRetainedTemplateMeasurements(value, list);
+	assert.deepEqual(parse(undefined), []);
+	assert.throws(
+		() => parse([{ ...retainedEntry, imageDigest }]),
+		/CAPACITY_RETAINED_TEMPLATE_CURRENT/u,
+	);
+	for (const value of [
+		[],
+		{},
+		[{ ...retainedEntry, templateId: "custom" }],
+		[{ ...retainedEntry, templateId: "claude" }],
+		[{ ...retainedEntry, imageDigest: "sha256:abc" }],
+		[{ ...retainedEntry, measurementDirectory: "relative/dir" }],
+		[{ ...retainedEntry, measurementDirectory: "/private/dir\nother" }],
+		[{ ...retainedEntry, extra: true }],
+		[retainedEntry, retainedEntry],
+		Array.from({ length: 17 }, (_, index) => ({
+			...retainedEntry,
+			imageDigest: `sha256:${index.toString(16).padStart(64, "d")}`,
+		})),
+	])
+		assert.throws(() => parse(value), /CAPACITY_RETAINED_TEMPLATE_INVALID/u);
+	assert.throws(
+		() => parse([retainedEntry], [...templates, ...templates]),
+		/CAPACITY_RETAINED_TEMPLATE_INVALID/u,
+	);
+});
+
 test("Worker binding requires the actual configuration mount and a restart after Secret changes", () => {
 	const ref = { name: "worker-config", key: "capacity.json" };
 	const secret = {
@@ -621,6 +738,96 @@ test("private input checks fail before cluster read when invalid and reject stal
 			),
 			/CAPACITY_WORKER_PROFILES_DRIFT/,
 		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the mounted gate requires each retained image's measured profile in the actual Worker input", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "ack-retained-capacity-"));
+	const sourceSha = "a".repeat(40);
+	const paths = Object.fromEntries(
+		[
+			"config",
+			"requests",
+			"templates",
+			"body",
+			"profiles",
+			"evidence",
+			"retained",
+		].map((name) => [name, join(dir, `${name}.json`)]),
+	);
+	const write = (name, value) =>
+		writeFile(paths[name], JSON.stringify(value), { mode: 0o600 });
+	const retainedBytes = Buffer.from(
+		JSON.stringify({ ...measurement, imageDigest: retainedDigest }),
+	);
+	const retainedProfile = {
+		...profile,
+		imageDigest: retainedDigest,
+		conformanceEvidenceHash: hash(retainedBytes),
+	};
+	const document = { schemaVersion: 1, profiles: [profile, retainedProfile] };
+	const secretRef = { name: "worker-config", key: "capacity.json" };
+	let reads = 0;
+	const read =
+		(profiles = document.profiles) =>
+		() => {
+			reads++;
+			return {
+				...policy,
+				profiles,
+				secretRef,
+				bytes: Buffer.from(JSON.stringify(document)),
+			};
+		};
+	const gate = (reader) =>
+		checkWorkloadCapacity(
+			paths.config,
+			paths.requests,
+			paths.templates,
+			sourceSha,
+			reader,
+		);
+	try {
+		await write("config", {
+			schemaVersion: 1,
+			sourceSha,
+			...policy,
+			profilesFile: paths.profiles,
+			evidence: [
+				{ imageDigest, file: paths.evidence },
+				{ imageDigest: retainedDigest, file: paths.retained },
+			],
+			retainedTemplateMeasurements: [
+				{ ...retainedEntry, measurementDirectory: dir },
+			],
+			workerSecretRef: secretRef,
+		});
+		await write("requests", {
+			schemaVersion: 1,
+			requests: [{ bodyFile: paths.body }],
+		});
+		await write("templates", { schemaVersion: 1, sourceSha, templates });
+		await write("body", standard);
+		await writeFile(paths.evidence, evidenceBytes, { mode: 0o600 });
+		await writeFile(paths.retained, retainedBytes, { mode: 0o600 });
+		await write("profiles", document);
+		const passed = await gate(read());
+		assert.equal(passed.imageCount, 1);
+		assert.equal(passed.retainedImageCount, 1);
+		assert.equal(passed.mountedInputVerified, true);
+		await assert.rejects(
+			gate(read([profile])),
+			/CAPACITY_WORKER_PROFILES_DRIFT/,
+		);
+		reads = 0;
+		await write("profiles", { schemaVersion: 1, profiles: [profile] });
+		await assert.rejects(gate(read()), /CAPACITY_BINDING_MISSING_OR_AMBIGUOUS/);
+		await write("profiles", document);
+		await writeFile(paths.retained, Buffer.from("{}"), { mode: 0o600 });
+		await assert.rejects(gate(read()), /CAPACITY_EVIDENCE_MISMATCH/);
+		assert.equal(reads, 0, "local evidence failures stop before cluster reads");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
