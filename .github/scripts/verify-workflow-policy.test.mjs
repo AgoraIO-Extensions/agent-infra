@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 9);
+  assert.equal(Object.keys(workflows).length, 10);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -478,5 +478,34 @@ test("cache deployment rejects widened event, code and cloud identity boundaries
     const workflows = await actualWorkflows();
     mutate(workflows["ack-image-cache.yml"]);
     assert(validateWorkflowDocuments(workflows).some(error => error.startsWith("ACK cache") || error.startsWith("ack-image-cache.yml")));
+  }
+});
+
+
+test("signed entry dispatch rejects publication scope and source guard mutations", async () => {
+  const mutations = [
+    ["extra publish job", (workflow) => { workflow.jobs.platform = structuredClone(workflow.jobs["own-entry-fixture"]); }],
+    ["automatic trigger", (workflow) => { workflow.on.push = { branches: ["main"] }; }],
+    ["optional source", (workflow) => { workflow.on.workflow_dispatch.inputs.source_sha.required = false; }],
+    ["expanded permissions", (workflow) => { workflow.permissions.actions = "write"; }],
+    ["job permissions", (workflow) => { workflow.jobs["own-entry-fixture"].permissions = { contents: "write" }; }],
+    ["expanded platform", (workflow) => { workflow.jobs["own-entry-fixture"].steps[8].env.PLATFORM = "linux/arm64"; }],
+    ["broader images", (workflow) => { workflow.jobs["own-entry-fixture"].steps[8].run += "node deploy/release/build-images.mjs other.json --images=web\n"; }],
+    ["missing SHA guard", (workflow) => { workflow.jobs["own-entry-fixture"].steps.shift(); }],
+    ["late SHA guard", (workflow) => { const steps = workflow.jobs["own-entry-fixture"].steps; [steps[0], steps[1]] = [steps[1], steps[0]]; }],
+    ["missing ancestor guard", (workflow) => { workflow.jobs["own-entry-fixture"].steps[2].run = 'test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"\n'; }],
+    ["floating checkout", (workflow) => { workflow.jobs["own-entry-fixture"].steps[1].with.ref = "main"; }],
+    ["custom registry", (workflow) => { workflow.env.IMAGE_REPOSITORY_PREFIX = "ghcr.io/example/agent-infra"; }],
+    ["full release input", (workflow) => { workflow.on.workflow_dispatch.inputs.full_release = { type: "boolean" }; }],
+    ["skipped fixture tests", (workflow) => { workflow.jobs["own-entry-fixture"].steps[4].if = "false"; }],
+    ["cancel active publication", (workflow) => { workflow.concurrency["cancel-in-progress"] = true; }],
+  ];
+  for (const [name, mutate] of mutations) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["publish-signed-own-entry.yml"]);
+    assert.ok(
+      validateWorkflowDocuments(workflows).some((error) => error.includes("Signed own entry")),
+      name,
+    );
   }
 });
