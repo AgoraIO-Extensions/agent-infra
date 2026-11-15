@@ -3565,6 +3565,42 @@ function isAgentManagementRevisionOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+// #851 Agent 投影增加可选的 Connection 关联状态（PRD §9.1、工程 Spec §13.5.7）。字段必须可选，
+// 取值只限四个展示状态；去掉该字段后两个 schema 与基线逐字节一致，其他路径与 schema 不变。
+const agentConnectionAssociationProjection = {
+	additionalProperties: false,
+	properties: {
+		status: {
+			enum: ["processing", "associated", "failed", "unverified"],
+			type: "string",
+		},
+	},
+	required: ["status"],
+	type: "object",
+};
+function normalizeAgentConnectionAssociationOpenApiAddition(previous, current) {
+	const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
+	let normalized;
+	for (const name of names) {
+		const before = previous.components?.schemas?.[name];
+		const schema = current.components?.schemas?.[name];
+		if (
+			!before?.properties ||
+			before.properties.connectionAssociation !== undefined ||
+			!schema?.properties?.connectionAssociation ||
+			schema.required?.includes("connectionAssociation") ||
+			!sameValue(
+				schema.properties.connectionAssociation,
+				agentConnectionAssociationProjection,
+			)
+		)
+			continue;
+		normalized ??= structuredClone(current);
+		delete normalized.components.schemas[name].properties.connectionAssociation;
+	}
+	return normalized ?? current;
+}
+
 // #3377：V2 会话读取中失败的回答新增可选的用户可见失败分类 `failure`（工程 Spec §16.1.1），
 // 同时发布分类枚举与 strict 投影。去掉该可选字段与两个新组件后须与基线逐字节一致。
 const executionFailureProjectionAddition = {
@@ -7501,6 +7537,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
+		current = normalizeAgentConnectionAssociationOpenApiAddition(
+			previous,
+			current,
+		);
 		current = normalizeMultiServiceResourceCapErrorCodeAddition(
 			previous,
 			current,

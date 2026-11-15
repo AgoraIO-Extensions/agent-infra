@@ -277,6 +277,16 @@ function restorePreManagementRevisionContract(value: {
 		delete value.components.schemas[name]?.properties?.managementRevision;
 }
 
+// #851：Agent 投影新增可选 Connection 关联状态；还原历史契约时属于后加内容。
+function restorePreConnectionAssociationContract(value: {
+	components: {
+		schemas: Record<string, { properties?: Record<string, unknown> }>;
+	};
+}) {
+	for (const name of ["AgentProjectionV2", "AgentDetailProjectionV1"])
+		delete value.components.schemas[name]?.properties?.connectionAssociation;
+}
+
 function restoreOldApiReadActions(input: unknown) {
 	if (!input || typeof input !== "object") return;
 	const value = input as Record<string, unknown>;
@@ -1380,6 +1390,67 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the exact optional Connection association status (#851)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
+		const previous = structuredClone(current);
+		for (const name of names)
+			delete previous.components.schemas[name].properties.connectionAssociation;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-connection-association-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const field = (value: typeof current, name: string) =>
+				value.components.schemas[name].properties.connectionAssociation;
+			for (const mutate of [
+				// 必须可选：没有自动登记的部署不返回该字段。
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV2.required.push(
+						"connectionAssociation",
+					);
+				},
+				// 只允许四个展示状态，不能借此暴露 Consumer ID 等额外字段。
+				(value: typeof current) => {
+					field(value, "AgentDetailProjectionV1").properties.status.enum.push(
+						"registered",
+					);
+				},
+				(value: typeof current) => {
+					field(value, "AgentProjectionV2").properties.consumerId = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					delete field(value, "AgentProjectionV2").additionalProperties;
+				},
+				// 其他既有字段不能借这次改动变化。
+				(value: typeof current) => {
+					delete value.components.schemas.AgentDetailProjectionV1.properties
+						.name;
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 
 	it("admits only the pinned Agent creation failure category read (#3034)", async () => {
 		const current = JSON.parse(
@@ -1456,6 +1527,7 @@ describe("contract compatibility command", () => {
 			),
 		);
 		restorePreManagementRevisionContract(current);
+		restorePreConnectionAssociationContract(current);
 		const detailPath = "/api/v2/agents/{agentId}/detail";
 		const previous = structuredClone(current);
 		delete previous.paths[detailPath];
@@ -5101,6 +5173,7 @@ describe("contract compatibility command", () => {
 		restorePreApplicationCredentialGovernanceContract(current);
 		restorePreAgentApiManagementContract(current);
 		restorePreManagementRevisionContract(current);
+		restorePreConnectionAssociationContract(current);
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];

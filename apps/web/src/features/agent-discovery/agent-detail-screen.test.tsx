@@ -220,6 +220,50 @@ describe("AgentDetailScreen", () => {
 		}
 	});
 
+	it("shows the projected Connection association without claiming authorization (#851)", async () => {
+		await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent: readyAgent }} />,
+		);
+		expect(screen.queryByTestId("agent-connection-association")).toBeNull();
+		cleanup();
+		for (const [status, label, tone] of [
+			["processing", "关联处理中", "amber"],
+			["associated", "已关联", "green"],
+			["failed", "关联失败", "red"],
+			["unverified", "待核实", "amber"],
+		] as const) {
+			const agent = AgentDetailProjectionV1Schema.parse({
+				...readyAgent,
+				connectionAssociation: { status },
+			});
+			await renderWithAgentRouter(
+				<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			);
+			const row = screen.getByTestId("agent-connection-association");
+			expect(row.textContent).toBe(
+				`Connection 关联${label}关联不代表本人已授权或工具可调用。`,
+			);
+			expect(
+				row
+					.querySelector('[data-slot="badge"][data-variant="chip"]')
+					?.getAttribute("data-tone"),
+			).toBe(tone);
+			cleanup();
+		}
+		expect(
+			AgentDetailProjectionV1Schema.safeParse({
+				...readyAgent,
+				connectionAssociation: { status: "registered" },
+			}).success,
+		).toBe(false);
+		expect(
+			AgentDetailProjectionV1Schema.safeParse({
+				...readyAgent,
+				connectionAssociation: { status: "associated", consumerId: "c" },
+			}).success,
+		).toBe(false);
+	});
+
 	it("links the Owner to the Agent Skill page with a ghost「可用 Skill」(D-03)", async () => {
 		await renderWithAgentRouter(
 			<AgentDetailScreen

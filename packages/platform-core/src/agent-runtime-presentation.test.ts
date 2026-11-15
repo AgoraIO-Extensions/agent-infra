@@ -10,6 +10,7 @@ import {
 import {
 	type AgentRuntimePresentationFactsV1,
 	decideAgentRuntimePresentationV1,
+	presentAgentConnectionAssociationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
 import {
@@ -1151,6 +1152,78 @@ describe("Agent channel presentation status", () => {
 				facts: {
 					...input.facts,
 					channels: [{ ...bot, session: null, connections: ["connected"] }],
+				},
+			}),
+		).toEqual({ outcome: "unavailable" });
+	});
+});
+
+describe("Agent Connection association presentation (#851)", () => {
+	it("maps local registration states without inferring an association", () => {
+		expect(presentAgentConnectionAssociationV1(undefined)).toBeUndefined();
+		expect(presentAgentConnectionAssociationV1(null)).toBeUndefined();
+		expect(
+			[
+				"pending",
+				"sending",
+				"registered",
+				"failed",
+				"unknown",
+				"REGISTERED",
+				"",
+			].map((status) => presentAgentConnectionAssociationV1(status)?.status),
+		).toEqual([
+			"processing",
+			"processing",
+			"associated",
+			"failed",
+			"unverified",
+			"unverified",
+			"unverified",
+		]);
+	});
+
+	it("adds the association only when a registration fact exists", () => {
+		const input = fixture();
+		const without = decideAgentRuntimePresentationV1(input);
+		expect(without.outcome).toBe("found");
+		expect(without).not.toHaveProperty("connectionAssociation");
+		const ready = decideAgentRuntimePresentationV1({
+			...input,
+			facts: {
+				...input.facts,
+				connectionConsumerRegistrationStatus: "registered",
+			},
+		});
+		expect(ready).toMatchObject({
+			outcome: "found",
+			connectionAssociation: { status: "associated" },
+		});
+		// 没有已验证 Runtime 投影时仍按同一快照展示关联状态。
+		const stopped = decideAgentRuntimePresentationV1({
+			...input,
+			facts: {
+				...input.facts,
+				runtime: null,
+				connectionConsumerRegistrationStatus: "unknown",
+			},
+		});
+		expect(stopped).toMatchObject({
+			outcome: "found",
+			capabilities: null,
+			connectionAssociation: { status: "unverified" },
+		});
+	});
+
+	it("does not project an association to an unauthorized subject", () => {
+		const input = fixture();
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				actor: { ...actor, userId: "someone_else" },
+				facts: {
+					...input.facts,
+					connectionConsumerRegistrationStatus: "registered",
 				},
 			}),
 		).toEqual({ outcome: "unavailable" });

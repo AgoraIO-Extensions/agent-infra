@@ -442,6 +442,29 @@ test("keyboard recovery on the Agent detail moves focus to the Agent h1, not bod
 	}
 });
 
+// #851：详情只按服务端投影显示 Connection 关联状态；没有字段时不出现该行。
+test("shows the projected Connection association only when the detail carries it", async ({
+	page,
+}) => {
+	let body: unknown = agentDetail;
+	await platform(page, { agent: () => ({ status: 200, body }) });
+	const heading = page.getByRole("heading", { level: 1, name: agent.name });
+	const association = page.getByTestId("agent-connection-association");
+	await page.goto(`/agents/${agent.agentId}`);
+	await expect(heading).toBeVisible();
+	await expect(association).toHaveCount(0);
+	body = AgentDetailProjectionV1Schema.parse({
+		...agentDetail,
+		connectionAssociation: { status: "unverified" },
+	});
+	await page.reload();
+	await expect(heading).toBeVisible();
+	await expect(association).toHaveText(
+		"Connection 关联待核实关联不代表本人已授权或工具可调用。",
+	);
+	await expect(page.locator("main")).not.toContainText("已关联");
+});
+
 // FIX3-7：恢复焦点在公共状态卡层统一处理，所有使用 ReadFailureCard 的页面都落到页面 h1。
 const recoveryPages = [
 	...detailPages.map((detail) => ({

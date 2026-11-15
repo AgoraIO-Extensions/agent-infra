@@ -11,6 +11,7 @@ import {
 	applicationFoundationAdmissionDependenciesV1,
 	applicationFoundationCommandV1,
 } from "../../platform-core/src/application-foundation.conformance.js";
+import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.query.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresApplicationFoundationTransactionV1 } from "./application-foundation.js";
 import {
@@ -455,3 +456,69 @@ it.each(["pending", "unknown", "failed"])(
 		expect(await registrations.registered()).toEqual({});
 	},
 );
+
+it("presents each Agent's own association status in the visibility snapshot (#851)", async () => {
+	const query = new PostgresAgentConfigurationQueryV1({
+		databaseUrl: database.databaseUrl,
+	});
+	try {
+		await registeredAgent("agent-a");
+		await submit("agent-c");
+		await approve("agent-c");
+		const lease = await claim();
+		await registrations.beginAttempt(lease, true);
+		await registrations.complete(lease, {
+			outcome: "unknown",
+			failureCode: "CONTROLLED_UNCONFIRMED",
+		});
+		await submit("agent-b");
+		await approve("agent-b");
+		await submit("agent-d");
+		await approve("agent-d");
+		// 没有自动登记行的 Agent（未配置策略的部署或既有 Agent）不展示关联状态。
+		await sql`delete from platform.connection_consumer_registrations where agent_id='agent-d'`;
+		const owner = applicationFoundationActorContextV1.userId;
+		const present = async (agentId: string, actorId = owner) => {
+			const authority = await query.readAuthority({
+				agentId,
+				actorId: owner,
+				organizationIds: [],
+				isAdministrator: false,
+			});
+			if (authority.outcome !== "found") throw new Error("Missing authority");
+			return query.readRuntimePresentation({
+				agentId,
+				actorId,
+				accountStatus: "active",
+				organizationIds: [],
+				isAdministrator: false,
+				expected: {
+					configurationRevision: authority.configuration.revision,
+					management: authority.management,
+				},
+			});
+		};
+		const statuses = await Promise.all(
+			["agent-a", "agent-b", "agent-c"].map(async (agentId) => {
+				const result = await present(agentId);
+				return result.outcome === "found"
+					? result.connectionAssociation
+					: result.outcome;
+			}),
+		);
+		expect(statuses).toEqual([
+			{ status: "associated" },
+			{ status: "processing" },
+			{ status: "unverified" },
+		]);
+		const legacy = await present("agent-d");
+		expect(legacy.outcome).toBe("found");
+		expect(legacy).not.toHaveProperty("connectionAssociation");
+		// 不可见的主体既看不到 Agent，也看不到关联状态。
+		await expect(present("agent-a", "unrelated-user")).resolves.toEqual({
+			outcome: "unavailable",
+		});
+	} finally {
+		await query.close();
+	}
+});

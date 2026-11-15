@@ -47,6 +47,8 @@ export type PresentPlatformAgent = (input: {
 	readonly channels: AgentProjection["configuration"]["channels"];
 	readonly capabilities: AgentProjection["capabilities"];
 	readonly interactionUrl: AgentProjection["interactionUrl"];
+	/** 仅在该 Agent 有自动登记记录时出现（PRD §9.1）。 */
+	readonly connectionAssociation?: AgentProjectionV2["connectionAssociation"];
 }>;
 
 interface ProjectionReaderDependencies {
@@ -176,6 +178,9 @@ export function createPlatformProjectionReaders(
 					nativeMetadata: dependencies.nativeMetadataAvailable === true,
 				},
 				interactionUrl: presentation.interactionUrl,
+				...(version === 2 && presentation.connectionAssociation
+					? { connectionAssociation: presentation.connectionAssociation }
+					: {}),
 			};
 			return version === 2
 				? AgentProjectionV2Schema.parse(value)
@@ -344,6 +349,9 @@ export function createPlatformProjectionReaders(
 						nativeMetadata: dependencies.nativeMetadataAvailable === true,
 					},
 					interactionUrl: presentation.interactionUrl,
+					...(presentation.connectionAssociation
+						? { connectionAssociation: presentation.connectionAssociation }
+						: {}),
 				});
 			} catch (error) {
 				recordHttpFailureContext({ failureStep: "projection.read", error });

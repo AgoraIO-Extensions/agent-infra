@@ -35,6 +35,7 @@ import {
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
+	connectionConsumerRegistrations,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
@@ -737,6 +738,12 @@ export class PostgresAgentConfigurationQueryV1 {
 							}
 						}
 					}
+					// 自动登记状态与可见性检查同一快照（PRD §9.1、Spec §13.5.7），只取状态。
+					const [registration] = await transaction
+						.select({ status: connectionConsumerRegistrations.status })
+						.from(connectionConsumerRegistrations)
+						.where(eq(connectionConsumerRegistrations.agentId, input.agentId))
+						.limit(1);
 					return decideAgentRuntimePresentationV1({
 						agentId: input.agentId,
 						actor,
@@ -752,6 +759,8 @@ export class PostgresAgentConfigurationQueryV1 {
 								input.agentId,
 								configuration.channels,
 							),
+							connectionConsumerRegistrationStatus:
+								registration?.status ?? null,
 							runtime,
 						},
 					});

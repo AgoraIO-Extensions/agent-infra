@@ -85,6 +85,20 @@ const channelStatusTones = {
 	ChipTone
 >;
 
+/**
+ * Connection 关联状态（PRD §9.1）：只表示 Agent 的独立 Consumer 本地登记是否得到核实，
+ * 不表示当前用户已授权或工具可调用；服务端没有登记记录时不显示。
+ */
+const connectionAssociationChips = {
+	processing: { label: "关联处理中", tone: "amber" },
+	associated: { label: "已关联", tone: "green" },
+	failed: { label: "关联失败", tone: "red" },
+	unverified: { label: "待核实", tone: "amber" },
+} satisfies Record<
+	NonNullable<AgentDetail["connectionAssociation"]>["status"],
+	{ label: string; tone: ChipTone }
+>;
+
 function safeInteractionUrl(input: string | null) {
 	if (!input) return undefined;
 	try {
@@ -495,6 +509,31 @@ export function AgentDetailScreen({
 								? "此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。"
 								: "当前 Agent 未提供 Connection 能力。"}
 						</p>
+						{agent.connectionAssociation && (
+							<div
+								className="flex flex-wrap items-center gap-2"
+								data-testid="agent-connection-association"
+							>
+								<span className="font-medium text-sm">Connection 关联</span>
+								<Badge
+									variant="chip"
+									tone={
+										connectionAssociationChips[
+											agent.connectionAssociation.status
+										].tone
+									}
+								>
+									{
+										connectionAssociationChips[
+											agent.connectionAssociation.status
+										].label
+									}
+								</Badge>
+								<small className="text-muted-foreground">
+									关联不代表本人已授权或工具可调用。
+								</small>
+							</div>
+						)}
 						{agent.capabilities.connection && (
 							<ConnectionNotice href={connectionUrl} />
 						)}
