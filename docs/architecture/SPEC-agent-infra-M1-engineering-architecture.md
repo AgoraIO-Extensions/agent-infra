@@ -2745,9 +2745,10 @@ Consumer 停用意图；只有 Connection 的确定回执才能确认远端停�
 **Consumer 停用。** 只有管理员 `disable_agent` 的已接受事务写入停用意图；停止、重启、创建失败、
 Workload 观测、空闲 Session Sandbox 回收与普通工作负载重启都不写。选择只依据该 Agent 自己已持久的
 登记行，与当前部署是否仍配置登记策略无关，没有登记行或登记已 `failed` 时不写；因此 Connection
-未配置的部署行为不变。该事务（READ COMMITTED）先更新 Agent 行，再用独立语句读登记行；登记表的
-任何状态写入方都必须先 `FOR UPDATE` 锁定同一 Agent 行，所以读到的登记状态在停用提交前不会被改变。
-停用事务对登记行既不加锁也不设外键，避免与登记 Worker 先锁登记行、再锁 Agent 行的顺序相反而死锁。
+未配置的部署行为不变。该事务（READ COMMITTED）先更新 Agent 的 `platform.agent_applications` 行，
+再用独立语句读登记行；登记表的任何状态写入方都必须 `FOR UPDATE` 锁定同一 `agent_applications` 行，
+所以读到的登记状态在停用提交前不会被改变。停用事务对登记行既不加锁也不设外键，避免与登记 Worker
+先锁登记行、再锁 `agent_applications` 行的顺序相反而死锁。
 同一事务以 Agent 派生的固定操作 ID 写入一行
 `platform.connection_consumer_disables` 和同 ID 的 outbox 项，每个 Agent 至多一行（平台没有重新启用），
 初始为 `waiting`，使用独立的停用 Idempotency-Key，不复用登记键。Worker 在登记所用的同一 outbox

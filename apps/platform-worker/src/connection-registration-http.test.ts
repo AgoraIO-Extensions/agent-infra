@@ -806,6 +806,17 @@ describe("Connection Consumer disable over the fixed v1 lifecycle contract (#851
 			"CONNECTION_DISABLE_NOT_SENT",
 		);
 		expect(f.authenticatedRequest).not.toHaveBeenCalled();
+		// A readback never claims "not sent": a pre-request failure stays unknown.
+		await expect(
+			f.adapter.reconcileDisable?.(
+				{ ...stale, sourceNamespace: "other.source" },
+				signal(),
+			),
+		).resolves.toEqual({
+			outcome: "unknown",
+			failureCode: "CONNECTION_DISABLE_UNCONFIRMED",
+		});
+		expect(f.authenticatedRequest).not.toHaveBeenCalled();
 		// A readback of an already-sent command is not blocked by a later revision rotation.
 		const value = disabled();
 		value.operation.requestDigest =
