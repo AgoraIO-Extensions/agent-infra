@@ -2690,164 +2690,199 @@ test("a successor plan validates immutable mounted Secrets and mints final bytes
 	assert.equal(f.mutations.length, 0);
 });
 
-test("a budget-only reserve revision keeps retained adoptions in a successor plan after candidate expiry", async (t) => {
-	const f = await fixture(t);
-	const policy = {
-		schemaVersion: 1,
-		sourceSha: source,
-		namespace,
-		enabled: true,
-		revision: 4,
-		totalBudget: {
-			cpuMillis: 8000,
-			memoryBytes: 17179869184,
-			storageBytes: 343597383680,
-		},
-		resourceCosts: [
-			{
-				resourceConfigurationHash: "c".repeat(64),
-				resources: {
-					cpuMillis: 2000,
-					memoryBytes: 3221225472,
-					storageBytes: 21474836480,
-				},
-			},
-		],
-		profiles: [],
-		maximumReserves: 1,
-		maximumConcurrentCreates: 1,
-		ttlMs: 900000,
-		cooldownMs: 120000,
-		failureBackoffMs: 30000,
-	};
-	f.files.reserves = await f.save(
-		join(f.files.bootstrap, "../reserves-r4.json"),
-		policy,
-	);
-	const deployment = f.cluster.get("deployment/agent-infra-worker");
-	const pod = {
-		metadata: {
-			name: "worker-pod",
-			uid: "pod-uid",
+for (const withModule of [false, true])
+	test(`a budget-only reserve revision keeps retained adoptions in a successor plan after candidate expiry (module literal=${withModule})`, async (t) => {
+		const f = await fixture(t);
+		const policy = {
+			schemaVersion: 1,
+			sourceSha: source,
 			namespace,
-			ownerReferences: [
-				{
-					kind: "ReplicaSet",
-					name: "worker-rs",
-					uid: "rs-uid",
-					controller: true,
-				},
-			],
-		},
-		spec: structuredClone(deployment.spec.template.spec),
-	};
-	pod.spec.containers[0].volumeMounts.push({
-		name: "configuration",
-		readOnly: true,
-		mountPath: "/var/run/agent-infra/deployment",
-	});
-	f.cluster.set("replicaset/worker-rs", {
-		metadata: {
-			uid: "rs-uid",
-			ownerReferences: [
-				{ kind: "Deployment", controller: true, uid: deployment.metadata.uid },
-			],
-		},
-	});
-	let mountedPolicy = null;
-	const kubectl = (args, input) => {
-		if (args.includes("pods")) return JSON.stringify({ items: [pod] });
-		if (args.includes("exec")) {
-			const { sourceSha: _source, ...configuration } = mountedPolicy ?? {};
-			return JSON.stringify({
-				sourceSha: source,
-				configuration: mountedPolicy ? configuration : null,
-				configurationHash: null,
-				policy: { namespace, resources },
-				resourceCosts: {},
-			});
-		}
-		return f.kubectl(args, input);
-	};
-	assert.equal(
-		(await publishRuntimeInputs(f.files, f.rendered, source, kubectl, true))
-			.status,
-		"passed",
-	);
-	mountedPolicy = policy;
-	for (const name of ["api-config", "worker-config"])
-		f.cluster.get(`secret/${name}`).immutable = true;
-	const before = Object.fromEntries(
-		["api-config", "worker-config"].map((name) => [
-			name,
-			structuredClone(f.cluster.get(`secret/${name}`).data),
-		]),
-	);
-	// Every original candidate is now past validUntil; only the retained adoptions stay valid.
-	t.mock.timers.enable({
-		apis: ["Date"],
-		now: Date.now() + 24 * 60 * 60 * 1000,
-	});
-	const next = {
-		...policy,
-		revision: 5,
-		totalBudget: { ...policy.totalBudget, storageBytes: 515396075520 },
-	};
-	const plan = async (value) => {
-		// The successor plan writes nothing and does not refresh the login identity.
-		f.files.login = undefined;
-		f.files.reserves = await f.save(
-			join(
-				f.files.bootstrap,
-				`../reserves-candidate-${randomUUIDForTest()}.json`,
-			),
-			value,
-		);
-		return publishRuntimeInputs(
-			f.files,
-			f.rendered,
-			source,
-			kubectl,
-			false,
-			undefined,
-			{ successor: true },
-		);
-	};
-	const result = await plan(next);
-	assert.equal(result.mode, "successor-plan");
-	for (const entry of result.successor.secrets) {
-		assert.deepEqual(entry.changedKeys, ["session-reserves.json"]);
-		for (const key of Object.keys(before[entry.name]))
-			if (key !== "session-reserves.json")
-				assert.equal(entry.data[key], before[entry.name][key], key);
-		assert.equal(
-			JSON.parse(Buffer.from(entry.data["session-reserves.json"], "base64"))
-				.revision,
-			5,
-		);
-	}
-	for (const name of Object.keys(before))
-		assert.deepEqual(f.cluster.get(`secret/${name}`).data, before[name]);
-	for (const changed of [
-		{ ...next, totalBudget: { ...next.totalBudget, cpuMillis: 7999 } },
-		{ ...next, totalBudget: policy.totalBudget },
-		{ ...next, revision: 6 },
-		{ ...next, maximumReserves: 2 },
-		{
-			...next,
+			enabled: true,
+			revision: 4,
+			totalBudget: {
+				cpuMillis: 8000,
+				memoryBytes: 17179869184,
+				storageBytes: 343597383680,
+			},
 			resourceCosts: [
 				{
-					...policy.resourceCosts[0],
-					resources: { ...policy.resourceCosts[0].resources, cpuMillis: 1000 },
+					resourceConfigurationHash: "c".repeat(64),
+					resources: {
+						cpuMillis: 2000,
+						memoryBytes: 3221225472,
+						storageBytes: 21474836480,
+					},
 				},
 			],
-		},
-	])
-		await assert.rejects(
-			plan(changed),
-			/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/u,
+			profiles: [],
+			maximumReserves: 1,
+			maximumConcurrentCreates: 1,
+			ttlMs: 900000,
+			cooldownMs: 120000,
+			failureBackoffMs: 30000,
+		};
+		f.files.reserves = await f.save(
+			join(f.files.bootstrap, "../reserves-r4.json"),
+			policy,
 		);
-});
+		const literal = ({ sourceSha: _source, ...value }) =>
+			`export const sessionSandboxReserves=${JSON.stringify(value)};`;
+		const bootstrap = JSON.parse(await readFile(f.files.bootstrap));
+		const moduleFile = bootstrap.objects.find((o) => o.name === "worker-config")
+			.files["configuration.mjs"];
+		const originalModule = await readFile(moduleFile, "utf8");
+		if (withModule) {
+			await writeFile(moduleFile, `${originalModule}${literal(policy)}\n`);
+			f.cluster.get("secret/worker-config").data["configuration.mjs"] = (
+				await readFile(moduleFile)
+			).toString("base64");
+		}
+		const deployment = f.cluster.get("deployment/agent-infra-worker");
+		const pod = {
+			metadata: {
+				name: "worker-pod",
+				uid: "pod-uid",
+				namespace,
+				ownerReferences: [
+					{
+						kind: "ReplicaSet",
+						name: "worker-rs",
+						uid: "rs-uid",
+						controller: true,
+					},
+				],
+			},
+			spec: structuredClone(deployment.spec.template.spec),
+		};
+		pod.spec.containers[0].volumeMounts.push({
+			name: "configuration",
+			readOnly: true,
+			mountPath: "/var/run/agent-infra/deployment",
+		});
+		f.cluster.set("replicaset/worker-rs", {
+			metadata: {
+				uid: "rs-uid",
+				ownerReferences: [
+					{
+						kind: "Deployment",
+						controller: true,
+						uid: deployment.metadata.uid,
+					},
+				],
+			},
+		});
+		let mountedPolicy = null;
+		const kubectl = (args, input) => {
+			if (args.includes("pods")) return JSON.stringify({ items: [pod] });
+			if (args.includes("exec")) {
+				const { sourceSha: _source, ...configuration } = mountedPolicy ?? {};
+				return JSON.stringify({
+					sourceSha: source,
+					configuration: mountedPolicy ? configuration : null,
+					configurationHash: null,
+					policy: { namespace, resources },
+					resourceCosts: {},
+				});
+			}
+			return f.kubectl(args, input);
+		};
+		assert.equal(
+			(await publishRuntimeInputs(f.files, f.rendered, source, kubectl, true))
+				.status,
+			"passed",
+		);
+		mountedPolicy = policy;
+		for (const name of ["api-config", "worker-config"])
+			f.cluster.get(`secret/${name}`).immutable = true;
+		const before = Object.fromEntries(
+			["api-config", "worker-config"].map((name) => [
+				name,
+				structuredClone(f.cluster.get(`secret/${name}`).data),
+			]),
+		);
+		// Every original candidate is now past validUntil; only the retained adoptions stay valid.
+		t.mock.timers.enable({
+			apis: ["Date"],
+			now: Date.now() + 24 * 60 * 60 * 1000,
+		});
+		const next = {
+			...policy,
+			revision: 5,
+			totalBudget: { ...policy.totalBudget, storageBytes: 515396075520 },
+		};
+		const plan = async (value) => {
+			// The successor plan writes nothing and does not refresh the login identity.
+			f.files.login = undefined;
+			f.files.reserves = await f.save(
+				join(
+					f.files.bootstrap,
+					`../reserves-candidate-${randomUUIDForTest()}.json`,
+				),
+				value,
+			);
+			return publishRuntimeInputs(
+				f.files,
+				f.rendered,
+				source,
+				kubectl,
+				false,
+				undefined,
+				{ successor: true },
+			);
+		};
+		const result = await plan(next);
+		assert.equal(result.mode, "successor-plan");
+		for (const entry of result.successor.secrets) {
+			const moduleChanged = withModule && entry.name === "worker-config";
+			assert.deepEqual(
+				entry.changedKeys,
+				moduleChanged
+					? ["configuration.mjs", "session-reserves.json"]
+					: ["session-reserves.json"],
+			);
+			if (moduleChanged)
+				assert.equal(
+					Buffer.from(entry.data["configuration.mjs"], "base64").toString(),
+					`${originalModule}${literal(next)}\n`,
+					"only the reserve literal moves to the next revision",
+				);
+			for (const key of Object.keys(before[entry.name]))
+				if (
+					key !== "session-reserves.json" &&
+					!(moduleChanged && key === "configuration.mjs")
+				)
+					assert.equal(entry.data[key], before[entry.name][key], key);
+			assert.equal(
+				JSON.parse(Buffer.from(entry.data["session-reserves.json"], "base64"))
+					.revision,
+				5,
+			);
+		}
+		for (const name of Object.keys(before))
+			assert.deepEqual(f.cluster.get(`secret/${name}`).data, before[name]);
+		for (const changed of [
+			{ ...next, totalBudget: { ...next.totalBudget, cpuMillis: 7999 } },
+			{ ...next, totalBudget: policy.totalBudget },
+			{ ...next, revision: 6 },
+			{ ...next, maximumReserves: 2 },
+			{
+				...next,
+				resourceCosts: [
+					{
+						...policy.resourceCosts[0],
+						resources: {
+							...policy.resourceCosts[0].resources,
+							cpuMillis: 1000,
+						},
+					},
+				],
+			},
+		])
+			await assert.rejects(
+				plan(changed),
+				/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/u,
+			);
+	});
 
 let testFileCounter = 0;
 function randomUUIDForTest() {
