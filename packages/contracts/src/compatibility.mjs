@@ -3578,27 +3578,27 @@ const agentConnectionAssociationProjection = {
 	required: ["status"],
 	type: "object",
 };
-function isAgentConnectionAssociationOpenApiAddition(previous, current) {
+function normalizeAgentConnectionAssociationOpenApiAddition(previous, current) {
 	const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
-	const normalized = structuredClone(current);
-	let changed = false;
+	let normalized;
 	for (const name of names) {
 		const before = previous.components?.schemas?.[name];
-		const schema = normalized.components?.schemas?.[name];
-		if (!before || !schema?.properties?.connectionAssociation) continue;
+		const schema = current.components?.schemas?.[name];
 		if (
-			before.properties?.connectionAssociation !== undefined ||
+			!before?.properties ||
+			before.properties.connectionAssociation !== undefined ||
+			!schema?.properties?.connectionAssociation ||
 			schema.required?.includes("connectionAssociation") ||
 			!sameValue(
 				schema.properties.connectionAssociation,
 				agentConnectionAssociationProjection,
 			)
 		)
-			return false;
-		delete schema.properties.connectionAssociation;
-		changed = true;
+			continue;
+		normalized ??= structuredClone(current);
+		delete normalized.components.schemas[name].properties.connectionAssociation;
 	}
-	return changed && sameValue(previous, normalized);
+	return normalized ?? current;
 }
 
 // #3377：V2 会话读取中失败的回答新增可选的用户可见失败分类 `failure`（工程 Spec §16.1.1），
@@ -7537,6 +7537,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
+		current = normalizeAgentConnectionAssociationOpenApiAddition(
+			previous,
+			current,
+		);
 		current = normalizeMultiServiceResourceCapErrorCodeAddition(
 			previous,
 			current,
@@ -7712,8 +7716,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV3OpenApiAddition(previous, current) &&
-			!isAgentManagementRevisionOpenApiAddition(previous, current) &&
-			!isAgentConnectionAssociationOpenApiAddition(previous, current)
+			!isAgentManagementRevisionOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}
