@@ -571,6 +571,73 @@ it("holds the result on Store CAS, owner, configuration and policy drift", async
 		});
 });
 
+it("binds complete platform-auth annotation entries into the image policy hash", async () => {
+	const { observed } = await currentObservation();
+	const registry = workloadRegistryFixture(manifest);
+	const snapshotResolver = resolver();
+	const hashFor = (value: typeof policy) =>
+		agentWorkloadImagePolicyHashV1({
+			policy: value,
+			workspaceSnapshotResolver: snapshotResolver,
+			admissionPolicyRef: "policy-a",
+			registrySubjectRef: "subject-a",
+		});
+	const authUrl = "nginx.ingress.kubernetes.io/auth-url";
+	const signIn = "nginx.ingress.kubernetes.io/auth-signin";
+	const bound = {
+		...policy,
+		platformAuthAnnotations: {
+			[authUrl]: "https://auth.example.test/verify",
+			[signIn]: "https://auth.example.test/sign-in",
+		},
+	};
+	const imagePolicyHash = hashFor(bound);
+	const project = (value: typeof policy) =>
+		projectAgentWorkloadUpgradeImagesV1({
+			authority: {
+				...authority(snapshotResolver),
+				policy: value,
+				imagePolicyHash: hashFor(value),
+			},
+			target: { agentId, proposal, imagePolicyHash },
+			observed,
+			registry: () => registry,
+			snapshots: snapshotReader(),
+		});
+	expect(await project(bound)).toMatchObject({ status: "PROJECTED_IMAGES" });
+	// Insertion order alone keeps the bound hash.
+	const reordered = {
+		...policy,
+		platformAuthAnnotations: {
+			[signIn]: "https://auth.example.test/sign-in",
+			[authUrl]: "https://auth.example.test/verify",
+		},
+	};
+	expect(hashFor(reordered)).toBe(imagePolicyHash);
+	expect(await project(reordered)).toMatchObject({
+		status: "PROJECTED_IMAGES",
+	});
+	// The same keys with another value change the platform-auth Ingress.
+	const changed = {
+		...policy,
+		platformAuthAnnotations: {
+			[authUrl]: "https://PRIVATE_AUTH.example.test/verify",
+			[signIn]: "https://auth.example.test/sign-in",
+		},
+	};
+	expect(Object.keys(changed.platformAuthAnnotations).sort()).toEqual(
+		Object.keys(bound.platformAuthAnnotations).sort(),
+	);
+	expect(hashFor(changed)).not.toBe(imagePolicyHash);
+	const result = await project(changed);
+	expect(result).toMatchObject({
+		status: "UNKNOWN",
+		reason: "POLICY_CHANGED",
+		images: [],
+	});
+	expect(JSON.stringify(result)).not.toContain("PRIVATE_AUTH");
+});
+
 it("rejects upgrade drift outside normal repository, Registry and policy admission", async () => {
 	const { observed } = await currentObservation();
 	const base = {
@@ -879,8 +946,9 @@ it("reads the Store twice in read-only sessions and keeps the three source roles
 			"default_transaction_read_only=on -c statement_timeout=5000",
 		);
 	expect(store.closes).toBe(store.urls.length);
+	// Includes the platform-auth annotation value that the policy hash binds.
 	expect(JSON.stringify(receipt)).not.toMatch(
-		/PRIVATE_|private-version|synthetic:synthetic|grant-key|BEGIN PUBLIC/,
+		/PRIVATE_|private-version|synthetic:synthetic|grant-key|BEGIN PUBLIC|auth\.example\.test/,
 	);
 });
 

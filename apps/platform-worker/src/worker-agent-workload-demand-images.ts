@@ -305,9 +305,10 @@ export function agentWorkloadImagePolicyHashV1(input: {
 		resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
 		routeHostSuffix: policy.routeHostSuffix,
 		pathRoutes: policy.pathRoutes ?? null,
-		platformAuthAnnotationKeys: Object.keys(
-			policy.platformAuthAnnotations,
-		).sort(),
+		// Complete entries: the platform-auth Ingress consumes every value.
+		platformAuthAnnotations: Object.keys(policy.platformAuthAnnotations)
+			.sort()
+			.map((key) => [key, policy.platformAuthAnnotations[key]]),
 		workspaceSnapshotEgress: policy.workspaceSnapshotEgress ?? null,
 		workspaceSnapshotPolicyHash:
 			workspaceSnapshotResolverImagePolicyV1(input.workspaceSnapshotResolver)
