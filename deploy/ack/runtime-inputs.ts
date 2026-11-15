@@ -66,6 +66,50 @@ const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const jsonBytes = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 
+/** Allow one measured capacity append while retaining adopted template bytes. */
+export function capacityOnlyWriteAllowed(...args: Parameters<typeof capacityOnlyWriteAllowedUnsafe>) {
+	try { return capacityOnlyWriteAllowedUnsafe(...args); }
+	catch { return false; }
+}
+function capacityOnlyWriteAllowedUnsafe(
+	file: string, before: Uint8Array, after: Uint8Array, capacityFile: string, profilesFile: string,
+	sourceSha: string, resourceProfileRef: string, resourceConfigurationHash: string,
+) {
+	if (file === profilesFile) {
+		let previous: any, next: any;
+		try { previous = JSON.parse(Buffer.from(before).toString("utf8")); next = JSON.parse(Buffer.from(after).toString("utf8")); } catch { return false; }
+		if (previous.schemaVersion !== 1 || next.schemaVersion !== 1 || !Array.isArray(previous.profiles) || !Array.isArray(next.profiles)) return false;
+		const key = (profile: any) => `${profile.imageDigest}\0${profile.resourceProfileRef}\0${profile.resourceConfigurationHash}`;
+		const old = new Map(previous.profiles.map((profile: any) => [key(profile), profile]));
+		if (old.size !== previous.profiles.length || next.profiles.length < previous.profiles.length) return false;
+		for (const [profileKey, profile] of old) {
+			const retained = next.profiles.filter((candidate: any) => key(candidate) === profileKey);
+			if (retained.length !== 1 || !isDeepStrictEqual(retained[0], profile)) return false;
+		}
+		return next.profiles.every((profile: any) => old.has(key(profile)) ||
+			(profile.schemaVersion === 1 && profile.resourceProfileRef === resourceProfileRef && profile.resourceConfigurationHash === resourceConfigurationHash
+				&& profile.maximumConcurrentExecutions === 1 && /^sha256:[a-f0-9]{64}$/.test(profile.imageDigest ?? "")
+				&& /^[a-f0-9]{64}$/.test(profile.conformanceEvidenceHash) && !/^0+$/.test(profile.conformanceEvidenceHash)));
+	}
+	if (file !== capacityFile) return false;
+	let previous: any, next: any;
+	try { previous = JSON.parse(Buffer.from(before).toString("utf8")); next = JSON.parse(Buffer.from(after).toString("utf8")); } catch { return false; }
+	if (previous.schemaVersion !== next.schemaVersion || previous.sourceSha !== sourceSha || next.sourceSha !== sourceSha
+		|| previous.resourceProfileRef !== resourceProfileRef || next.resourceProfileRef !== resourceProfileRef) return false;
+	const beforeEvidence = Array.isArray(previous.evidence) ? previous.evidence : [];
+	const afterEvidence = Array.isArray(next.evidence) ? next.evidence : [];
+	const evidenceKey = (entry: any) => `${entry.imageDigest}\0${entry.file}`;
+	const oldEvidence = new Map(beforeEvidence.map((entry: any) => [evidenceKey(entry), entry]));
+	if (oldEvidence.size !== beforeEvidence.length || afterEvidence.length < beforeEvidence.length) return false;
+	for (const [entryKey, entry] of oldEvidence) {
+		const retained = afterEvidence.filter((candidate: any) => evidenceKey(candidate) === entryKey);
+		if (retained.length !== 1 || !isDeepStrictEqual(retained[0], entry)) return false;
+	}
+	if (!isDeepStrictEqual({ ...previous, evidence: undefined }, { ...next, evidence: undefined })) return false;
+	return afterEvidence.every((entry: any) => typeof entry.imageDigest === "string" && /^sha256:[a-f0-9]{64}$/.test(entry.imageDigest)
+		&& typeof entry.file === "string" && entry.file.startsWith("/"));
+}
+
 function configurationSecret(deployment: ObjectRecord, component: "api" | "worker") {
 	const spec = deployment.spec?.template?.spec;
 	const container = spec?.containers?.find((c: any) => c.name === `platform-${component}`);
@@ -375,7 +419,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, capacity, resourceConfigurationHash, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -476,7 +520,11 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		const budgetOnly = (file: string, bytes: { before: Buffer; after: Buffer }) =>
 			successor && ((plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after)) ||
 				(plan.reserveModules.get(file)?.equals(bytes.after) === true));
-		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after) || budgetOnly(file, bytes)) &&
+	const capacityOnly = (file: string, bytes: { before: Buffer; after: Buffer }) => successor &&
+		capacityOnlyWriteAllowed(file, bytes.before, bytes.after, files.capacity, plan.capacity.profilesFile,
+			sourceSha, plan.capacity.resourceProfileRef, plan.resourceConfigurationHash);
+	fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after)
+		|| budgetOnly(file, bytes) || capacityOnly(file, bytes)) &&
 			readSecrets.every((secret) => isDeepStrictEqual(secret.current.data, secret.before.data)) &&
 			plan.consumers.every((consumer) => {
 				const current = read("deployment", consumer.name);
