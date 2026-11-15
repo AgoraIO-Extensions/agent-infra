@@ -10,7 +10,7 @@ import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
 import { adoptTemplateValidationV2, parseAdoptedTemplateValidationV2, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
-import { validateCapacityBindings } from "./workload-capacity.ts";
+import { parseRetainedTemplateMeasurements, validateCapacityBindings, validateRetainedTemplateCapacity } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
 import { prepareReserveInput, readReserveApi, readReserveWorker } from "./session-reserve-inputs.ts";
 import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
@@ -177,6 +177,29 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert(!evidenceFiles.has(entry.imageDigest));
 		evidenceFiles.set(entry.imageDigest, entry.file);
 	}
+	// One measured receipt either becomes the first full-key approval or re-verifies the existing one.
+	const adoptMeasuredProfile = async (request: any, template: { templateId: string; imageDigest: string }, file: string, measuredBytes: Buffer) => {
+		const freshProfile = {
+			schemaVersion: 1, imageDigest: template.imageDigest, resourceProfileRef: capacity.resourceProfileRef,
+			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
+		};
+		validateCapacityBindings([request], [template], capacity, [freshProfile], new Map([[template.imageDigest, measuredBytes]]));
+		const matches = (p: any) => p.imageDigest === template.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
+		const approved = profiles.filter(matches);
+		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
+		if (approved.length === 0) {
+			profiles = [...profiles, freshProfile];
+			evidenceFiles.set(template.imageDigest, file);
+		} else {
+			// Workload dispatch binds the full approval; refreshing validation must not revoke it.
+			const previousFile = evidenceFiles.get(template.imageDigest);
+			assert(typeof previousFile === "string", "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+			const previousBytes = await privateBytes(previousFile);
+			const previous = JSON.parse(previousBytes.toString("utf8"));
+			assert(previous.scope === "ack-runtime-capacity" && previous.sourceCommit === sourceSha, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+			validateCapacityBindings([request], [template], capacity, approved, new Map([[template.imageDigest, previousBytes]]));
+		}
+	};
 	for (const expected of templates.templates) {
 		const key = `template-validation-${expected.templateId}.json`;
 		for (const secret of secrets) {
@@ -190,31 +213,48 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
 			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);
-		const freshProfile = {
-			schemaVersion: 1, imageDigest: expected.imageDigest, resourceProfileRef: capacity.resourceProfileRef,
-			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
-		};
-		validateCapacityBindings([request], [expected], capacity, [freshProfile], new Map([[expected.imageDigest, measuredBytes]]));
-		const matches = (p: any) => p.imageDigest === expected.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
-		const approved = profiles.filter(matches);
-		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
-		if (approved.length === 0) {
-			profiles = [...profiles, freshProfile];
-			evidenceFiles.set(expected.imageDigest, file);
-		} else {
-			// Workload dispatch binds the full approval; refreshing validation must not revoke it.
-			const previousFile = evidenceFiles.get(expected.imageDigest);
-			assert(typeof previousFile === "string", "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
-			const previousBytes = await privateBytes(previousFile);
-			const previous = JSON.parse(previousBytes.toString("utf8"));
-			assert(previous.scope === "ack-runtime-capacity" && previous.sourceCommit === sourceSha, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
-			validateCapacityBindings([request], [expected], capacity, approved, new Map([[expected.imageDigest, previousBytes]]));
-		}
+		await adoptMeasuredProfile(request, expected, file, measuredBytes);
+	}
+	// Active standard Agents may stay on a retained image; their capacity needs that image's own measurement.
+	const retained = parseRetainedTemplateMeasurements(capacity.retainedTemplateMeasurements, templates.templates);
+	const retainedTargets: unknown[] = [];
+	for (const entry of retained) {
+		const file = join(entry.measurementDirectory, "runtime-capacity.receipt.json");
+		const measuredBytes = await privateBytes(file);
+		const measured = JSON.parse(measuredBytes.toString("utf8"));
+		const preflight = await privateJson(join(entry.measurementDirectory, "template-model-validation.receipt.json"));
+		const owned = await privateJson(join(entry.measurementDirectory, "owned-resource-identities.json"));
+		// The V2 target schema carries only the deployment identity; template and image bind through the same receipt.
+		// Strict parsing rejects any extra identity claim on the target, so it cannot name another template or image.
+		const parsedTarget = templateValidationContextV1Schema.safeParse(preflight.validationTarget);
+		assert(parsedTarget.success && isDeepStrictEqual(parsedTarget.data, preflight.validationTarget), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+		const target = parsedTarget.data;
+		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha && measured.imageDigest === entry.imageDigest &&
+			preflight.schemaVersion === 2 && preflight.scope === "isolated-template-real-model" && preflight.templateId === entry.templateId &&
+			preflight.sourceCommit === sourceSha && preflight.imageDigest === entry.imageDigest && preflight.terminalStatus === "completed" &&
+			measured.completedAt === preflight.validatedAt && measured.modelOperationCount === preflight.modelOperationCount &&
+			target?.sourceCommit === sourceSha && target.namespace === bootstrap.namespace && target.clusterUid === bootstrap.clusterUid &&
+			target.installationId === bootstrap.installationId, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+		// A standalone run is usable only after every temporary object it created was retired by UID.
+		// The ledger's templateId and object names bind it to this template run and owner, as template-model-preflight writes them.
+		const ownedKinds = ["Pod", "Secret", "PersistentVolumeClaim", "NetworkPolicy", "ServiceAccount"];
+		const ownedName = typeof owned.owner !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(owned.owner) ? undefined
+			: entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined ? `sandbox-preflight-${owned.owner}`
+				: `ack-preflight-${entry.templateId}-${owned.owner.slice(0, 8)}`;
+		assert(ownedName && owned.schemaVersion === 1 && owned.kind === "ack-template-owned-resources" &&
+			owned.templateId === entry.templateId && owned.sourceCommit === sourceSha &&
+			owned.imageDigest === entry.imageDigest && owned.namespace === bootstrap.namespace && Array.isArray(owned.resources) &&
+			owned.resources.length === ownedKinds.length && ownedKinds.every((kind) => owned.resources.filter((resource: any) =>
+				resource?.kind === kind && resource.name === ownedName && typeof resource.uid === "string" && resource.uid.length > 0 &&
+				["deleted", "absent"].includes(resource.state)).length === 1), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+		retainedTargets.push(target);
+		await adoptMeasuredProfile({ source: { kind: "standard", templateId: entry.templateId } }, entry, file, measuredBytes);
 	}
 	assert(evidenceFiles.size <= 64 && profiles.length <= 64);
 	const evidence = new Map<string, Uint8Array>();
 	for (const [digest, file] of evidenceFiles) evidence.set(digest, await privateBytes(file));
 	validateCapacityBindings(bodies, templates.templates, capacity, profiles, evidence);
+	validateRetainedTemplateCapacity(retained, capacity, profiles, evidence);
 	const worker = consumers.find((c) => c.component === "worker")!;
 	assert(capacity.workerSecretRef?.name === worker.secretName);
 	const workerSecret = secrets.find((s) => s.desired.metadata.name === worker.secretName)!;
@@ -254,7 +294,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets };
 }
 
 export async function publishRuntimeInputs(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply = false, timeout = "300s") {
@@ -284,6 +324,8 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	const validationContext = templateValidationContextV1Schema.parse({
 		sourceCommit: sourceSha, clusterUid, namespace, namespaceUid: ns.metadata.uid, installationId,
 	});
+	for (const target of plan.retainedTargets)
+		assert(isDeepStrictEqual(templateValidationContextV1Schema.safeParse(target).data, validationContext), "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
 	const adoptionInputs = await readTemplateValidationAdoptionInputs(plan.templates, validationContext);
 	const assertCandidateFiles = async () => {
 		for (const input of adoptionInputs) {

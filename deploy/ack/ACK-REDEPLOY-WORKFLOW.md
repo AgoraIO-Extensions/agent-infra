@@ -733,6 +733,42 @@ bootstrap 的 `profilesFile`。custom producer 只写候选文件；`runtime-inp
 custom job 的 OCI manifest/config 与测量收据须保留原始字节，通过包内文件引用读取，不能列入
 会重新序列化 JSON 的 `inputs`；只有需要解析路径的 JSON 模板进入该列表。
 
+### 保留标准镜像的容量测量
+
+仍有运行需求的标准 Agent 可能继续绑定旧模板 digest。Worker 资源策略变化后，它的完整容量
+key 是“该 digest + 当前 `resourceProfileRef` + 当前完整资源摘要”。旧策略 profile 不能改名、
+重算 hash 或复制给新 key；零匹配时 Worker 不携带 `executionCapacity`，Session 停在
+`capacity_mismatch`。
+
+为该 digest 单独运行一次 `template-model-preflight.mjs`。job 沿用同一模板已获准的 driver、
+protocol、模型、配置和完整资源、executor、存储、出口、placement 字段，只把
+`imageReference`/`imageDigest` 换成该 digest；`operatorApprovalRef`、私有 `outputDirectory`
+必须是新的，`sourceCommit` 与 `validationContext` 绑定本次发布 source 和目标。然后在
+`ACK_WORKLOAD_CAPACITY_FILE` 中声明该次输出：
+
+```json
+{
+  "retainedTemplateMeasurements": [
+    {
+      "templateId": "codex",
+      "imageDigest": "sha256:<retained digest>",
+      "measurementDirectory": "/private/ack/retained-codex"
+    }
+  ]
+}
+```
+
+`runtime-inputs` 读取目录中的 `runtime-capacity.receipt.json`、同次
+`template-model-validation.receipt.json` 和 `owned-resource-identities.json`，要求 templateId、
+sourceCommit、imageDigest、完成时间、模型操作数和实际目标一致，且台账属于该模板这一次运行、
+五类临时对象都已按 UID 删除或确认不存在；再按模板容量的同一规则生成或复核 profile，并把收据加入 `evidence`。
+当前四模板 digest、重复项、旧或漂移的 hash、缺少 executor/init 布局、清理未确认、缺证据、
+多匹配以及已有批准的证据变化，都在写入前失败；已有批准不会被新测量替换。部署后的
+mounted-capacity gate 同样复核这些 digest。
+
+该步骤只登记容量，不升级或切换 Agent 镜像。已有 Agent 仍须经正式 lifecycle 重新生成
+verified capacity；真实业务、原生文件和恢复验收另行完成。
+
 ### 隔离 custom 容量测量
 
 该入口只测量 `platform-adapter` / ACP 的 `linux/amd64` child image；`self-managed` 不适用。

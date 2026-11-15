@@ -1311,6 +1311,7 @@ process.exit(5);
 		);
 		assert.equal(identity.resources.length, 5);
 		assert.equal(identity.sourceCommit, executorJob.sourceCommit);
+		assert.equal(identity.templateId, executorJob.templateId);
 		assert.equal(
 			identity.resources.every((resource) =>
 				resource.uid.endsWith("-owned-uid"),

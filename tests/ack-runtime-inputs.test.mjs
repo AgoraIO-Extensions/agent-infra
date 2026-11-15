@@ -2391,3 +2391,371 @@ test("a candidate cannot replace an already approved capacity profile", async (t
 	assert.equal(f.mutations.length, mutations);
 	assert.deepEqual(await readFile(f.capacity.profilesFile), baseline);
 });
+
+const retainedDigest = `sha256:${"9".repeat(64)}`;
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+const retainedOwner = "33333333-3333-4333-8333-333333333333";
+// template-model-preflight names every executor-run object after its owner UUID.
+const retainedLedger = (
+	name = `sandbox-preflight-${retainedOwner}`,
+	state = () => "deleted",
+) =>
+	[
+		"Secret",
+		"ServiceAccount",
+		"NetworkPolicy",
+		"PersistentVolumeClaim",
+		"Pod",
+	].map((kind) => ({
+		kind,
+		name,
+		uid: `${kind.toLowerCase()}-uid`,
+		state: state(kind),
+	}));
+
+/** A retained-image run reuses the normal template-preflight output shape. */
+async function retainedMeasurement(
+	f,
+	{
+		receipt: receiptChanges = {},
+		validation: validationChanges = {},
+		target: targetChanges = {},
+		owned: ownedChanges = {},
+		directoryName = "codex-retained",
+	} = {},
+) {
+	const codex = f.templates.find((entry) => entry.templateId === "codex");
+	const measured = JSON.parse(
+		await readFile(
+			join(dirname(codex.validationFile), "runtime-capacity.receipt.json"),
+		),
+	);
+	const directory = join(dirname(f.files.capacity), "retained", directoryName);
+	const receipt = {
+		...measured,
+		imageDigest: retainedDigest,
+		...receiptChanges,
+	};
+	const receiptFile = await f.save(
+		join(directory, "runtime-capacity.receipt.json"),
+		receipt,
+	);
+	await f.save(join(directory, "template-model-validation.receipt.json"), {
+		...templatePreflightValidationReceipt({
+			schemaVersion: 1,
+			scope: "isolated-template-real-model",
+			templateId: "codex",
+			sourceCommit: source,
+			imageDigest: retainedDigest,
+			configurationRevision: "revision-codex",
+			modelId: "model-codex",
+			terminalStatus: "completed",
+			modelFactSource: "protected-driver-journal",
+			modelOperationCount: measured.modelOperationCount,
+			validatedAt: measured.completedAt,
+			executionId: "execution-retained",
+			validationTarget: { ...validationTarget, ...targetChanges },
+		}),
+		...validationChanges,
+	});
+	await f.save(join(directory, "owned-resource-identities.json"), {
+		schemaVersion: 1,
+		kind: "ack-template-owned-resources",
+		templateId: "codex",
+		sourceCommit: source,
+		imageDigest: retainedDigest,
+		namespace,
+		owner: retainedOwner,
+		resources: retainedLedger(),
+		...ownedChanges,
+	});
+	f.capacity.retainedTemplateMeasurements = [
+		{
+			templateId: "codex",
+			imageDigest: retainedDigest,
+			measurementDirectory: directory,
+		},
+	];
+	await f.save(f.files.capacity, f.capacity);
+	return {
+		directory,
+		receipt,
+		receiptFile,
+		bytes: await readFile(receiptFile),
+	};
+}
+
+test("a retained template image publishes its own full-key capacity beside the current templates", async (t) => {
+	const f = await fixture(t);
+	const resourceConfigurationHash = await executorMeasurements(f);
+	const retained = await retainedMeasurement(f);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl);
+	assert.equal(f.mutations.length, 0, "plan mode writes nothing");
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	const published = JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/worker-config").data["capacity.json"],
+			"base64",
+		),
+	).profiles;
+	assert.equal(published.length, 5);
+	assert.deepEqual(
+		published.filter((entry) => entry.imageDigest === retainedDigest),
+		[
+			{
+				schemaVersion: 1,
+				imageDigest: retainedDigest,
+				resourceProfileRef: f.capacity.resourceProfileRef,
+				resourceConfigurationHash,
+				maximumConcurrentExecutions: 1,
+				conformanceEvidenceHash: sha256(retained.bytes),
+			},
+		],
+	);
+	assert.deepEqual(
+		JSON.parse(await readFile(f.capacity.profilesFile)).profiles,
+		published,
+	);
+	const capacity = JSON.parse(await readFile(f.files.capacity));
+	assert.deepEqual(
+		capacity.retainedTemplateMeasurements,
+		f.capacity.retainedTemplateMeasurements,
+	);
+	assert.deepEqual(
+		capacity.evidence.filter((entry) => entry.imageDigest === retainedDigest),
+		[{ imageDigest: retainedDigest, file: retained.receiptFile }],
+	);
+	const readWorker = (secretRef) => {
+		const bytes = Buffer.from(
+			f.cluster.get(`secret/${secretRef.name}`).data[secretRef.key],
+			"base64",
+		);
+		return {
+			...capacity,
+			bytes,
+			profiles: JSON.parse(bytes).profiles,
+			secretRef,
+		};
+	};
+	const checked = await checkWorkloadCapacity(
+		f.files.capacity,
+		f.files.requests,
+		f.files.templates,
+		source,
+		readWorker,
+	);
+	assert.equal(checked.imageCount, 4);
+	assert.equal(checked.retainedImageCount, 1);
+	const mutations = f.mutations.length;
+	const repeated = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(repeated.changedSecretCount, 0);
+	assert.equal(repeated.rolloutCount, 0);
+	assert.equal(f.mutations.length, mutations);
+});
+
+test("retained template measurements fail closed before any Secret write", async (t) => {
+	for (const [name, options, code] of [
+		[
+			"validation for another template",
+			{ validation: { templateId: "claude" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"receipt from another source",
+			{ receipt: { sourceCommit: "b".repeat(40) } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"receipt for another image",
+			{ receipt: { imageDigest: `sha256:${"8".repeat(64)}` } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"validation from another run",
+			{ validation: { validatedAt: 1 } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"validation without a target",
+			{ validation: { schemaVersion: 1, validationTarget: undefined } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"another namespace",
+			{ target: { namespace: "other-namespace" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a target naming another template",
+			{
+				validation: {
+					validationTarget: { ...validationTarget, templateId: "claude" },
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a target naming another image",
+			{
+				validation: {
+					validationTarget: {
+						...validationTarget,
+						imageDigest: `sha256:${"8".repeat(64)}`,
+					},
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a target without its namespace UID",
+			{
+				validation: {
+					validationTarget: { ...validationTarget, namespaceUid: undefined },
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"another cluster",
+			{ target: { clusterUid: "other-cluster-uid" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"another installation",
+			{ target: { installationId: "other-installation" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a replaced namespace",
+			{ target: { namespaceUid: "other-namespace-uid" } },
+			/RUNTIME_INPUT_CAPACITY_TARGET_INVALID/u,
+		],
+		[
+			"a legacy resource hash",
+			{ receipt: { resourceConfigurationHash: "f".repeat(64) } },
+			/RUNTIME_INPUTS_INVALID/u,
+		],
+		[
+			"a missing executor layout",
+			{ receipt: { observedExecutorResources: undefined } },
+			/RUNTIME_INPUTS_INVALID/u,
+		],
+		[
+			"an unverified temporary object cleanup",
+			{
+				owned: {
+					resources: retainedLedger(undefined, (kind) =>
+						kind === "Pod" ? "cleanup-unverified" : "deleted",
+					),
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger from another template run",
+			{
+				owned: {
+					resources: retainedLedger(
+						`ack-preflight-claude-${retainedOwner.slice(0, 8)}`,
+					),
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger that names another template",
+			{ owned: { templateId: "claude" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger without a templateId",
+			{ owned: { templateId: undefined } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger from another owner",
+			{ owned: { owner: "44444444-4444-4444-8444-444444444444" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger for another image",
+			{ owned: { imageDigest: `sha256:${"8".repeat(64)}` } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+	])
+		await t.test(name, async (t) => {
+			const f = await fixture(t);
+			await executorMeasurements(f);
+			await retainedMeasurement(f, options);
+			await assert.rejects(
+				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+				code,
+			);
+			assert.equal(f.mutations.length, 0);
+		});
+	await t.test("a current template image", async (t) => {
+		const f = await fixture(t);
+		await executorMeasurements(f);
+		await retainedMeasurement(f);
+		f.capacity.retainedTemplateMeasurements[0].imageDigest =
+			f.templates[0].imageDigest;
+		await f.save(f.files.capacity, f.capacity);
+		await assert.rejects(
+			publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+			/RUNTIME_INPUTS_INVALID/u,
+		);
+		assert.equal(f.mutations.length, 0);
+	});
+});
+
+test("an approved retained profile keeps its original evidence and is never replaced", async (t) => {
+	const f = await fixture(t);
+	await executorMeasurements(f);
+	const first = await retainedMeasurement(f);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const approved = await readFile(f.capacity.profilesFile);
+	f.capacity = JSON.parse(await readFile(f.files.capacity));
+	await retainedMeasurement(f, {
+		receipt: { submittedAt: first.receipt.submittedAt - 1 },
+		directoryName: "codex-retained-later",
+	});
+	const mutations = f.mutations.length;
+	const repeated = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(repeated.changedSecretCount, 0);
+	assert.equal(f.mutations.length, mutations);
+	assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
+	assert.deepEqual(
+		JSON.parse(await readFile(f.files.capacity)).evidence.find(
+			(entry) => entry.imageDigest === retainedDigest,
+		),
+		{ imageDigest: retainedDigest, file: first.receiptFile },
+	);
+	await writeFile(first.receiptFile, JSON.stringify(first.receipt, null, 2), {
+		mode: 0o600,
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUTS_INVALID/u,
+	);
+	assert.equal(f.mutations.length, mutations);
+	assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
+});
