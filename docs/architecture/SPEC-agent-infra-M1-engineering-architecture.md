@@ -2686,10 +2686,13 @@ Owner/mode/callback、登记政策及适用修订。允许复用现有 `GET /api
 **关联状态投影。** Agent 详情（`GET /api/v2/agents/{agentId}/detail`）与 V2 Agent 投影的可选字段
 `connectionAssociation.status` 只展示下表的本地登记状态：`pending`/`sending` 为 `processing`，
 `registered` 为 `associated`，`failed` 为 `failed`，`unknown` 为 `unverified`；约束之外的取值
-同样为 `unverified`，不推断为已关联。Store 在判定 Agent 可见性的同一只读快照内读取该 Agent
-自己的登记行，可见性与 Agent 投影相同，不新增路由或权限；没有登记行（未配置自动登记或既有
-Agent）时省略字段，不回退为某种状态。投影不含 Consumer ID、回执、摘要、幂等键或失败码，
-`associated` 也不表示本人已授权、具体 Grant 或工具可调用。
+同样为 `unverified`，不推断为已关联。该 Agent 有下文的 Consumer 停用行且状态不是 `not_required`
+时，停用状态覆盖登记状态：`disabled` 显示为 `disabled`，其余停用状态显示为 `disabling`（外部停用
+待处理）。Store 在判定 Agent 可见性的同一只读快照内读取该 Agent 自己的登记行与停用行，可见性与
+Agent 投影相同，不新增路由或权限；没有登记行（未配置自动登记或既有 Agent）时省略字段，不回退为
+某种状态。投影不含 Consumer ID、回执、摘要、幂等键或失败码，`associated` 也不表示本人已授权、
+具体 Grant 或工具可调用；`disabled` 只表示 Connection 确认原停用命令已在该 Consumer 层生效，
+不表示已发 Token 均已撤销。
 
 | 本地登记操作状态 | 含义与恢复 |
 | --- | --- |
@@ -2738,6 +2741,50 @@ Runtime 仍经原安装接收器和受控重新装配消费；不热改 Thread �
 Consumer 停用意图；只有 Connection 的确定回执才能确认远端停用，不以本地停用、删文件或
 请求超时宣称凭据已撤销。重新安装或恢复不自动扩大 Grant，不用新 Consumer 代替未知旧状态。
 既有已批准绑定的迁移须单独核实，不在服务启动时扫描重建所有 Consumer。
+
+**Consumer 停用。** 只有管理员 `disable_agent` 的已接受事务写入停用意图；停止、重启、创建失败、
+Workload 观测、空闲 Session Sandbox 回收与普通工作负载重启都不写。选择只依据该 Agent 自己已持久的
+登记行，与当前部署是否仍配置登记策略无关，没有登记行或登记已 `failed` 时不写；因此 Connection
+未配置的部署行为不变。该事务（READ COMMITTED）先更新 Agent 行，再用独立语句读登记行；登记表的
+任何状态写入方都必须先 `FOR UPDATE` 锁定同一 Agent 行，所以读到的登记状态在停用提交前不会被改变。
+同一事务以 Agent 派生的固定操作 ID 写入一行
+`platform.connection_consumer_disables` 和同 ID 的 outbox 项，每个 Agent 至多一行（平台没有重新启用），
+初始为 `waiting`，使用独立的停用 Idempotency-Key，不复用登记键。Worker 在登记所用的同一 outbox
+循环处理，每次处理时按当前登记行推进 `waiting`，不增加调度器；未到终态（`disabled`、`failed`、
+`not_required`）时只安排重试，不确认 outbox 项：
+
+| 停用状态 | 含义与恢复 |
+| --- | --- |
+| `waiting` | 初始状态；Worker 见到登记 `registered` 时转 `pending`，见到登记确定 `failed` 时转 `not_required`，否则继续等待 |
+| `pending` | 登记已 `registered`，停用尚未发送 |
+| `sending` | 已在实际发送前持久提交完整请求；崩溃或租约过期后按 `unknown` 处理，不再 POST |
+| `disabled` | 原停用命令的确定回执已核实并保存 |
+| `failed` | 原命令被 Connection 确定拒绝；不换键、不自动重发，须由 Connection 侧处理 |
+| `unknown` | 发送、响应或结果保存不确定；只读回原停用 operation |
+| `not_required` | 本地登记确定未生效，没有已确认的 Consumer 需要 Platform 停用 |
+
+请求沿 Connection 登记合同的 `POST R/disable`，路径中的 `sourceNamespace` 与 `platformAgentId` 取自
+登记行，正文为 `schemaVersion: 1`、当前批准登记策略的 `policyRevision`，以及登记回执的 `revision`
+（本地 `consumer_revision`）。`pending` 从未发送，因此每次发送前都按当前批准策略与登记回执重新生成
+请求，并在转 `sending` 的同一提交中持久保存；进入 `sending` 后请求不再改变。当前策略的来源与登记行
+不一致时不发送。只有 200 且正文与原命令精确匹配才定论：operation 的 `kind=disable`、来源、Agent、
+Consumer、registrationId、停用键 hash、lifecycle 摘要版本与摘要、`expectedRevision` 均匹配，receipt 的
+来源、Agent、Consumer、registrationId、原 create 键 hash 与 create 摘要版本与原登记一致。receipt 是
+Connection 当前资源，之后的删除等变更会改变其状态，因此不以 receipt `status` 定论：operation `APPLIED`
+且 `resultRevision` 不大于 receipt `revision` 时转 `disabled`，operation `FAILED` 时转 `failed`。
+202、错误 envelope（含 400/404/409/503）、超时与任何不匹配都转 `unknown`；发送前确定未发出时保持
+`pending`。`unknown` 只用 `GET R/operations/disable/{hash}` 核实并适用同一判定，不再次 POST、
+不换键，404 不证明未生效。
+停用使用与登记相同的机器 Adapter，不读取或发送秘密；Adapter 未配置时保持 `waiting`/`pending` 且不发送。
+Platform 发送停用不要求原 Owner 仍有效，但 Connection 在 Owner 失效时按合同返回 404。两侧批准策略
+修订须同步切换，窗口内发出的请求被拒绝后同样保持 `unknown`。Owner 失效、修订不一致、Connection 侧
+修订已推进或原 POST 丢失时，停用行可能长期停在 `unknown`，登记无法核实时也可能长期停在 `waiting`；
+这些行持续显示 `disabling`，按既有 outbox 重试间隔只做只读核实，由 Connection 管理员依停用行
+`failure_code` 与 outbox 记录处理，不由 Platform 换键或重发。
+
+Agent 已停用时，登记 Worker 不再发送登记：从未发送的 `pending` 登记确定转 `failed`；已发送的
+`sending`/`unknown` 仍可按原登记操作只读核实，这条只读路径不要求 Agent 仍处于可用状态，但仍核对
+原 Owner 与当前登记策略。核实得到 `registered` 后不进入安装绑定，只用于推进停用行。
 
 自动登记不改变标准模板、platform-adapter 与 self-managed 的原 Runtime 准入范围。登记可先于
 用户授权与 Runtime 实例准备完成，但真实领取和工具调用必须先满足 §13.5.4 的保护、当前
