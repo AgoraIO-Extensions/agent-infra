@@ -486,6 +486,13 @@ test("signed entry dispatch rejects publication scope and source guard mutations
   const mutations = [
     ["missing main ref guard", (workflow) => { delete workflow.jobs["own-entry-fixture"].if; }],
     ["non-main ref guard", (workflow) => { workflow.jobs["own-entry-fixture"].if = "github.ref == 'refs/heads/feature'"; }],
+    ["promotion enabled by default", (workflow) => { workflow.on.workflow_dispatch.inputs.promote_existing.default = true; }],
+    ["promotion missing main guard", (workflow) => { delete workflow.jobs["promote-existing"].if; }],
+    ["build executes during promotion", (workflow) => { workflow.jobs["own-entry-fixture"].if = "github.ref == 'refs/heads/main'"; }],
+    ["promotion extra permissions", (workflow) => { workflow.jobs["promote-existing"].permissions.contents = "write"; }],
+    ["unbound origin artifact", (workflow) => { workflow.jobs["promote-existing"].steps[5].run = "echo bypass"; }],
+    ["promotion selectable target", (workflow) => { workflow.on.workflow_dispatch.inputs.target = {type: "string"}; }],
+    ["promotion source from caller checkout", (workflow) => { workflow.jobs["promote-existing"].steps[1].with.ref = "${{ inputs.source_sha }}"; }],
     ["extra publish job", (workflow) => { workflow.jobs.platform = structuredClone(workflow.jobs["own-entry-fixture"]); }],
     ["automatic trigger", (workflow) => { workflow.on.push = { branches: ["main"] }; }],
     ["optional source", (workflow) => { workflow.on.workflow_dispatch.inputs.source_sha.required = false; }],

@@ -9,6 +9,11 @@ on:
         description: Exact merged 40-hex commit to publish
         required: true
         type: string
+      promote_existing:
+        description: Promote the verified c549 fixture to its existing admitted repository
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,7 +30,7 @@ env:
 
 jobs:
   own-entry-fixture:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && !inputs.promote_existing
     name: Signed own-entry fixture (linux/amd64)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -79,3 +84,58 @@ jobs:
           if-no-files-found: error
           name: signed-own-entry-amd64-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/signed-own-entry.json
+
+  promote-existing:
+    if: github.ref == 'refs/heads/main' && inputs.promote_existing
+    name: Promote verified signed entry (linux/amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    steps:
+      - name: Validate fixed promotion source
+        run: test "$RELEASE_SOURCE_SHA" = "4a3c2840e0d918dfc6fef77ce1cb1b7fffc46c60"
+      - name: Checkout workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify merged workflow and fixture sources
+        env:
+          WORKFLOW_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SOURCE_SHA"
+          git merge-base --is-ancestor "$WORKFLOW_SOURCE_SHA" origin/main
+          git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Verify promotion guards
+        run: node --test tests/signed-own-entry-promotion.test.mjs
+      - name: Read official origin evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 43741080676 --repo AgoraIO-Extensions/agent-infra --name signed-own-entry-amd64-4a3c2840e0d918dfc6fef77ce1cb1b7fffc46c60-1 --dir "$RUNNER_TEMP/ownentry-origin"
+          gh run view 43741080676 --repo AgoraIO-Extensions/agent-infra --json databaseId,headSha,status,conclusion,attempt > "$RUNNER_TEMP/ownentry-origin-run.json"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.11.1
+        with:
+          driver: docker
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Promote unchanged artifact
+        run: node deploy/release/promote-signed-own-entry.ts "$RUNNER_TEMP/ownentry-origin/signed-own-entry.json" "$RUNNER_TEMP/ownentry-origin-run.json" "$RUNNER_TEMP/ownentry-promotion.json"
+      - name: Preserve promotion receipt or unknown-copy intent
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: warn
+          name: signed-own-entry-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ownentry-promotion.json
