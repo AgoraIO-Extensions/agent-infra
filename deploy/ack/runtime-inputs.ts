@@ -110,6 +110,23 @@ export function reserveBudgetIncreaseOnly(before: Uint8Array, after: Uint8Array)
 		isDeepStrictEqual({ ...next, revision: old.revision, totalBudget: old.totalBudget }, old);
 }
 
+const reserveLiteralPrefix = "export const sessionSandboxReserves=";
+/**
+ * A configuration module may also export the reserve policy; the Worker rejects a module/file mismatch.
+ * For a budget-only revision, replace exactly the one literal that equals the previous file policy.
+ */
+export function reserveModuleLiteralSuccessor(module: Uint8Array, before: Uint8Array, after: Uint8Array) {
+	const text = Buffer.from(module).toString("utf8");
+	const literal = (bytes: Uint8Array) => {
+		const { sourceSha: _source, ...policy } = JSON.parse(Buffer.from(bytes).toString("utf8"));
+		return `${reserveLiteralPrefix}${JSON.stringify(policy)};`;
+	};
+	if (text.split("sessionSandboxReserves").length === 1) return undefined;
+	const old = literal(before);
+	assert(text.split("sessionSandboxReserves").length === 2 && text.split(old).length === 2, "RUNTIME_INPUT_RESERVE_MODULE_CONFLICT");
+	return Buffer.from(text.replace(old, () => literal(after)));
+}
+
 async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
@@ -139,6 +156,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	});
 	const writes = new Map<string, { before: Buffer; after: Buffer }>();
 	const reserveTargets = new Set<string>();
+	const reserveModules = new Map<string, Buffer>();
 	const stageFile = async (file: string, after: Buffer) => {
 		const before = await privateBytes(file);
 		if (writes.has(file)) assert.deepEqual(writes.get(file)!.after, after, "RUNTIME_INPUT_FILE_BINDING_CONFLICT");
@@ -310,6 +328,16 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			reserveTargets.add(target);
 			await stageFile(target, bytes);
 			secret.desired.data["session-reserves.json"] = bytes.toString("base64");
+			const previous = writes.get(target)!.before;
+			const moduleFile = secret.files["configuration.mjs"];
+			if (typeof moduleFile === "string" && reserveBudgetIncreaseOnly(previous, bytes)) {
+				const next = reserveModuleLiteralSuccessor(await privateBytes(moduleFile), previous, bytes);
+				if (next) {
+					await stageFile(moduleFile, next);
+					reserveModules.set(moduleFile, next);
+					secret.desired.data["configuration.mjs"] = next.toString("base64");
+				}
+			}
 			if (!secret.files["session-reserves.json"]) {
 				publishedBootstrap.objects.find((object: any) => object.kind === "Secret" && object.name === consumer.secretName).files["session-reserves.json"] = target;
 				changedBindings = true;
@@ -317,7 +345,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -416,7 +444,8 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		// An approved budget-only reserve revision keeps the retained adoption bytes; any other change re-adopts.
 		// Only the immutable successor path (new Secrets, Helm-owned rebind) may carry it.
 		const budgetOnly = (file: string, bytes: { before: Buffer; after: Buffer }) =>
-			successor && plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after);
+			successor && ((plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after)) ||
+				(plan.reserveModules.get(file)?.equals(bytes.after) === true));
 		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after) || budgetOnly(file, bytes)) &&
 			readSecrets.every((secret) => isDeepStrictEqual(secret.current.data, secret.before.data)) &&
 			plan.consumers.every((consumer) => {
