@@ -20,6 +20,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
+import { runFileBridgeOriginProbe } from "./support/runtime-file-bridge-probe.mjs";
 import {
 	ProbeStepFailure,
 	probeStep as runProbeStep,
@@ -643,10 +644,12 @@ function deployment(origin, directory) {
 }
 
 async function launch(environment, rejection) {
+	// Own process group, so failure cleanup also ends the Host's native children.
 	const child = spawn("/bin/sh", ["/app/start-runtime-host.sh"], {
 		cwd: "/app",
 		env: environment,
 		stdio: ["ignore", "pipe", "pipe"],
+		detached: true,
 	});
 	processes.add(child);
 	let output = "";
@@ -1583,10 +1586,60 @@ async function runImageProbe() {
 	}
 }
 
+/**
+ * #3230：FileBridge origin 资格。只依赖镜像自身的 Runtime 合同与正常入口；镜像内的
+ * Codex release pin 与 RuntimeHost 入口摘要随结果返回，供宿主侧绑定被检镜像的来源。
+ */
+async function runFileBridgeImageProbe() {
+	stage = "file-bridge-origin";
+	const [driver, namespace, imageReference, ...extra] = process.argv.slice(3);
+	assert.equal(extra.length, 0);
+	// The image's own deployed contracts and Runtime helpers, never a checkout.
+	const contracts = await import(
+		"/app/node_modules/@agent-infra/contracts/dist/runtime/index.mjs"
+	);
+	const runtime = await import(
+		"/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs"
+	);
+	const result = await runFileBridgeOriginProbe({
+		driver,
+		namespace,
+		imageReference,
+		contracts,
+		runtime,
+	});
+	const architecture =
+		process.arch === "x64"
+			? "amd64"
+			: process.arch === "arm64"
+				? "arm64"
+				: undefined;
+	assert.equal(process.platform, "linux");
+	assert.ok(architecture);
+	const digest = async (path) =>
+		`sha256:${createHash("sha256")
+			.update(await readFile(path))
+			.digest("hex")}`;
+	console.info(
+		JSON.stringify({
+			...result,
+			installation: {
+				platform: process.platform,
+				architecture,
+				codexReleaseSha256: await digest("/opt/codex/share/release.json"),
+				runtimeHostEntrySha256: await digest("/app/dist/index.mjs"),
+				startScriptSha256: await digest("/app/start-runtime-host.sh"),
+			},
+		}),
+	);
+}
+
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	try {
-		await runImageProbe();
+		if (process.argv[2] === "--file-bridge-origin")
+			await runFileBridgeImageProbe();
+		else await runImageProbe();
 	} catch (error) {
 		console.error(
 			JSON.stringify(
@@ -1606,8 +1659,16 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		);
 		process.exitCode = 1;
 	} finally {
-		for (const child of processes) child.kill("SIGKILL");
+		for (const child of processes) {
+			try {
+				process.kill(-child.pid, "SIGKILL");
+			} catch {
+				child.kill("SIGKILL");
+			}
+		}
 		model.closeAllConnections();
 		await new Promise((resolve) => model.close(resolve));
+		// Every child process group is gone; do not wait on any inherited handle.
+		if (process.argv[2] === "--file-bridge-origin") process.exit();
 	}
 }

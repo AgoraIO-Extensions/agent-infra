@@ -17,7 +17,15 @@ import {
 	createRuntimeProbeTransport,
 	runtimeProbeWorkerId,
 } from "../../../tests/runtime-image-probe.mjs";
+import {
+	createFileBridgeFixture,
+	fileBridgeProbeEnvironment,
+	fileBridgeProbeModelConfiguration,
+	fileExchangeStartupRejections,
+} from "../../../tests/support/runtime-file-bridge-probe.mjs";
 import { createRuntimeHostApp } from "./app.ts";
+import { readRuntimeFileExchangeOptions } from "./configuration.ts";
+import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.ts";
 
 const cleanups = [];
 afterEach(async () => {
@@ -461,4 +469,183 @@ it("the image probe rejects redirects before forwarding credentials", async () =
 	}
 	expect(requests).toBe(5);
 	expect(forwarded).toBe(0);
+});
+
+// #3230：FileBridge origin 资格探针的负例与 fixture 必须对应生产 RuntimeHost 的规则。
+function fileBridgeAssemblies() {
+	const grantPublicKey = generateKeyPairSync("ed25519")
+		.publicKey.export({ type: "spki", format: "pem" })
+		.toString();
+	const common = {
+		namespace: "agent-infra-probe",
+		deploymentServiceToken: "d".repeat(48),
+		grantPublicKey,
+		imageDigest: `sha256:${"a".repeat(64)}`,
+	};
+	return ["codex", "claude", "acp", "pi"].flatMap((driver) =>
+		["session-sandbox", "agent-workload"].map((assembly) =>
+			fileBridgeProbeEnvironment({
+				...common,
+				assembly,
+				driver,
+				modelConfiguration: fileBridgeProbeModelConfiguration(
+					driver,
+					"http://127.0.0.1:1",
+				),
+				dataDirectory: "/workspace/runtime",
+			}),
+		),
+	);
+}
+
+it("the FileBridge probe assemblies parse with the production RuntimeHost rules", () => {
+	for (const assembly of fileBridgeAssemblies()) {
+		const options = readRuntimeFileExchangeOptions(assembly.environment);
+		expect(options).toEqual({
+			origin: "http://agent-infra-api.agent-infra-probe.svc:3000",
+			serviceToken: assembly.fileExchangeToken,
+		});
+		expect(() => createRuntimeFileBridgeFactoryV1(options)).not.toThrow();
+		const { environment } = assembly;
+		const withoutBridge = Object.fromEntries(
+			Object.entries(environment).filter(
+				([name]) => !name.startsWith("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_"),
+			),
+		);
+		expect(readRuntimeFileExchangeOptions(withoutBridge)).toBeUndefined();
+		for (const [name, patch] of fileExchangeStartupRejections(
+			"agent-infra-probe",
+			assembly.fileExchangeToken,
+		))
+			expect(
+				() => readRuntimeFileExchangeOptions({ ...withoutBridge, ...patch }),
+				name,
+			).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	}
+});
+
+it("the FileBridge fixture accepts exactly what the production client sends", async () => {
+	const conversationId = "conversation-1";
+	const fileId = "input-1";
+	const bytes = Buffer.from("marker,value\nprobe,1\n");
+	const { createHash } = await import("node:crypto");
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	const descriptor = {
+		name: "probe-input.csv",
+		mediaType: "text/csv",
+		sizeBytes: bytes.length,
+		sha256,
+	};
+	const workspaceReference =
+		".agent-infra/attachments/0123456789abcdef/probe-input.csv";
+	const trapHits = [];
+	const trap = createServer((request, response) => {
+		trapHits.push(request.url);
+		response.end("trap");
+	});
+	await new Promise((resolve) => trap.listen(0, "127.0.0.1", resolve));
+	const trapOrigin = `http://127.0.0.1:${trap.address().port}`;
+	let hostHeader;
+	const fixture = createFileBridgeFixture({
+		hostHeader: () => hostHeader,
+		trapOrigin,
+	});
+	await new Promise((resolve) =>
+		fixture.server.listen(0, "127.0.0.1", resolve),
+	);
+	const port = fixture.server.address().port;
+	hostHeader = `127.0.0.1:${port}`;
+	cleanups.unshift(async () => {
+		for (const server of [fixture.server, trap])
+			await new Promise((resolve) => {
+				server.closeAllConnections();
+				server.close(resolve);
+			});
+	});
+	// The production client addresses the formal Service DNS origin; this test
+	// reaches the fixture on loopback, and the fixture checks the Host header.
+	const fetchOverLoopback = (input, init) => {
+		const url = new URL(String(input));
+		url.hostname = "127.0.0.1";
+		url.port = String(port);
+		return fetch(url, init);
+	};
+	const token = "t".repeat(43);
+	const grantToken = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhY3Rvci0xIn0.c2ln";
+	const binding = {
+		actorId: "actor-1",
+		channelId: "web",
+		agentId: "agent-1",
+		conversationId,
+		executionId: "execution-1",
+		sessionGeneration: 1,
+		grantId: "grant-1",
+		expiresAt: Date.now() + 60_000,
+		inputFileIds: [fileId],
+	};
+	const evidence = {
+		executionGrant: {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: grantToken,
+		},
+	};
+	const bridge = (serviceToken) =>
+		createRuntimeFileBridgeFactoryV1({
+			origin: "http://agent-infra-api.agent-infra-probe.svc:3000",
+			serviceToken,
+			fetch: fetchOverLoopback,
+			logDiagnostic: () => {},
+		})(binding, evidence);
+	const begin = (mode, scenarioToken = token) =>
+		fixture.begin({
+			mode,
+			token: scenarioToken,
+			conversationId,
+			grantToken,
+			input: { fileId, descriptor, bytes },
+			workspaceReference,
+		});
+	begin("ok");
+	const input = await bridge(token).readInput(fileId);
+	expect(Buffer.from(await new Response(input.body).arrayBuffer())).toEqual(
+		bytes,
+	);
+	const result = await bridge(token).writeResult(
+		descriptor,
+		new Response(bytes).body,
+		{ workspaceReference },
+	);
+	expect(JSON.stringify(result)).toContain('"status":"available"');
+	expect(JSON.stringify(result)).toContain(fixture.scenario.result.fileId);
+	expect(fixture.snapshot()).toMatchObject({
+		exchangeRead: 1,
+		contentRead: 1,
+		exchangeResult: 1,
+		contentWrite: 1,
+		complete: 1,
+		violations: 0,
+		unexpected: 0,
+	});
+	// A different credential is a violation the fixture refuses like Platform API.
+	begin("ok", "o".repeat(43));
+	await expect(bridge(token).readInput(fileId)).rejects.toThrow();
+	expect(fixture.violations).toContain("service-credential");
+	for (const mode of ["exchange-redirect", "content-redirect"]) {
+		begin(mode);
+		await expect(bridge(token).readInput(fileId)).rejects.toThrow();
+	}
+	expect(trapHits).toEqual([]);
+	begin("exchange-rejected");
+	await expect(bridge(token).readInput(fileId)).rejects.toThrow();
+	for (const mode of ["content-oversize", "content-digest"]) {
+		begin(mode);
+		const read = await bridge(token).readInput(fileId);
+		const received = Buffer.from(
+			await new Response(read.body)
+				.arrayBuffer()
+				.catch(() => new ArrayBuffer(0)),
+		);
+		expect(received.equals(bytes)).toBe(false);
+	}
 });

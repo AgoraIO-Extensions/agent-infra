@@ -3082,3 +3082,708 @@ test("an approved retained profile keeps its original evidence and is never repl
 	assert.equal(f.mutations.length, mutations);
 	assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
 });
+
+const legacyDigest = `sha256:${"7".repeat(64)}`;
+const legacyOwner = "55555555-5555-4555-8555-555555555555";
+const legacyUid = (kind) => `${kind.toLowerCase()}-legacy-uid`;
+const capacityUidHashes = [
+	["serviceAccountUidSha256", "ServiceAccount"],
+	["networkPolicyUidSha256", "NetworkPolicy"],
+	["pvcUidSha256", "PersistentVolumeClaim"],
+];
+
+/**
+ * template-model-preflight wrote the owned-resource ledger without templateId before #4134.
+ * The run's other outputs are the current ones: the Pod startup receipt names the template
+ * and hashes the Pod UID, and the capacity receipt hashes the network and storage UIDs.
+ */
+async function legacyRetainedMeasurement(
+	f,
+	{
+		receipt: receiptChanges = {},
+		startup: startupChanges = {},
+		owned: ownedChanges = {},
+		name = `ack-preflight-claude-${legacyOwner.slice(0, 8)}`,
+		uid = legacyUid,
+		state = () => "deleted",
+	} = {},
+) {
+	const claude = f.templates.find((entry) => entry.templateId === "claude");
+	const measured = JSON.parse(
+		await readFile(
+			join(dirname(claude.validationFile), "runtime-capacity.receipt.json"),
+		),
+	);
+	const directory = join(
+		dirname(f.files.capacity),
+		"retained",
+		"claude-legacy",
+	);
+	const receiptFile = await f.save(
+		join(directory, "runtime-capacity.receipt.json"),
+		{
+			...measured,
+			imageDigest: legacyDigest,
+			...Object.fromEntries(
+				capacityUidHashes.map(([field, kind]) => [
+					field,
+					sha256(legacyUid(kind)),
+				]),
+			),
+			networkPolicySpecSha256: sha256("network-policy-spec"),
+			networkDataplaneVerified: false,
+			storageClassName: f.capacity.storageClassName,
+			...receiptChanges,
+		},
+	);
+	await f.save(
+		join(directory, "template-model-validation.receipt.json"),
+		templatePreflightValidationReceipt({
+			schemaVersion: 1,
+			scope: "isolated-template-real-model",
+			templateId: "claude",
+			sourceCommit: source,
+			imageDigest: legacyDigest,
+			configurationRevision: "revision-claude",
+			modelId: "model-claude",
+			terminalStatus: "completed",
+			modelFactSource: "protected-driver-journal",
+			modelOperationCount: measured.modelOperationCount,
+			validatedAt: measured.completedAt,
+			executionId: "execution-claude-legacy",
+			validationTarget,
+		}),
+	);
+	if (startupChanges !== null)
+		await f.save(join(directory, "pod-startup.receipt.json"), {
+			schemaVersion: 1,
+			kind: "ack-template-pod-startup",
+			sourceCommit: source,
+			templateId: "claude",
+			imageDigest: legacyDigest,
+			podUidSha256: sha256(legacyUid("Pod")),
+			timingReadback: "unknown",
+			eventRead: "unavailable",
+			events: [],
+			...startupChanges,
+		});
+	// Same field order as that producer; there is no templateId field at all.
+	await f.save(join(directory, "owned-resource-identities.json"), {
+		schemaVersion: 1,
+		kind: "ack-template-owned-resources",
+		sourceCommit: source,
+		imageDigest: legacyDigest,
+		namespace,
+		owner: legacyOwner,
+		resources: [
+			"Secret",
+			"ServiceAccount",
+			"NetworkPolicy",
+			"PersistentVolumeClaim",
+			"Pod",
+		].map((kind) => ({ kind, name, uid: uid(kind), state: state(kind) })),
+		...ownedChanges,
+	});
+	f.capacity.retainedTemplateMeasurements = [
+		...(f.capacity.retainedTemplateMeasurements ?? []),
+		{
+			templateId: "claude",
+			imageDigest: legacyDigest,
+			measurementDirectory: directory,
+		},
+	];
+	await f.save(f.files.capacity, f.capacity);
+	return { receiptFile, bytes: await readFile(receiptFile) };
+}
+
+test("a legacy owned-resource ledger without templateId is adopted through its own run receipts", async (t) => {
+	await t.test(
+		"beside a current-format retained ledger, through the mounted capacity gate",
+		async (t) => {
+			const f = await fixture(t);
+			const resourceConfigurationHash = await executorMeasurements(f);
+			const current = await retainedMeasurement(f);
+			const legacy = await legacyRetainedMeasurement(f);
+			await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl);
+			assert.equal(f.mutations.length, 0, "plan mode writes nothing");
+			const result = await publishRuntimeInputs(
+				f.files,
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
+			assert.equal(result.status, "passed");
+			const published = JSON.parse(
+				Buffer.from(
+					f.cluster.get("secret/worker-config").data["capacity.json"],
+					"base64",
+				),
+			).profiles;
+			assert.equal(published.length, 6);
+			for (const [imageDigest, retained] of [
+				[retainedDigest, current],
+				[legacyDigest, legacy],
+			])
+				assert.deepEqual(
+					published.filter((entry) => entry.imageDigest === imageDigest),
+					[
+						{
+							schemaVersion: 1,
+							imageDigest,
+							resourceProfileRef: f.capacity.resourceProfileRef,
+							resourceConfigurationHash,
+							maximumConcurrentExecutions: 1,
+							conformanceEvidenceHash: sha256(retained.bytes),
+						},
+					],
+				);
+			const capacity = JSON.parse(await readFile(f.files.capacity));
+			assert.deepEqual(
+				capacity.evidence.filter((entry) => entry.imageDigest === legacyDigest),
+				[{ imageDigest: legacyDigest, file: legacy.receiptFile }],
+			);
+			const checked = await checkWorkloadCapacity(
+				f.files.capacity,
+				f.files.requests,
+				f.files.templates,
+				source,
+				(secretRef) => {
+					const bytes = Buffer.from(
+						f.cluster.get(`secret/${secretRef.name}`).data[secretRef.key],
+						"base64",
+					);
+					return {
+						...capacity,
+						bytes,
+						profiles: JSON.parse(bytes).profiles,
+						secretRef,
+					};
+				},
+			);
+			assert.equal(checked.retainedImageCount, 2);
+		},
+	);
+	await t.test(
+		"in a successor plan for immutable Secrets, without any write",
+		async (t) => {
+			const f = await fixture(t);
+			await executorMeasurements(f);
+			const legacy = await legacyRetainedMeasurement(f);
+			for (const name of ["api-config", "worker-config"])
+				f.cluster.get(`secret/${name}`).immutable = true;
+			const result = await publishRuntimeInputs(
+				f.files,
+				f.rendered,
+				source,
+				f.kubectl,
+				false,
+				undefined,
+				{ successor: true },
+			);
+			assert.equal(result.mode, "successor-plan");
+			assert.equal(f.mutations.length, 0);
+			const worker = result.successor.secrets.find(
+				(entry) => entry.name === "worker-config",
+			);
+			assert.deepEqual(
+				JSON.parse(Buffer.from(worker.data["capacity.json"], "base64"))
+					.profiles.filter((entry) => entry.imageDigest === legacyDigest)
+					.map((entry) => entry.conformanceEvidenceHash),
+				[sha256(legacy.bytes)],
+			);
+		},
+	);
+	await t.test(
+		"a current-format ledger naming the template still needs no startup receipt",
+		async (t) => {
+			const f = await fixture(t);
+			await executorMeasurements(f);
+			await legacyRetainedMeasurement(f, {
+				owned: { templateId: "claude" },
+				startup: null,
+			});
+			const result = await publishRuntimeInputs(
+				f.files,
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
+			assert.equal(result.status, "passed");
+		},
+	);
+});
+
+test("a legacy owned-resource ledger fails closed unless its own run binds every claim", async (t) => {
+	const tuple = /RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u;
+	const otherRun = (target) => (kind) =>
+		kind === target ? "other-run-uid" : legacyUid(kind);
+	const opencodeName = `ack-preflight-opencode-${legacyOwner.slice(0, 8)}`;
+	for (const [name, options, code] of [
+		["an explicit other templateId", { owned: { templateId: "codex" } }, tuple],
+		["an explicit null templateId", { owned: { templateId: null } }, tuple],
+		["an extra ledger field", { owned: { note: "legacy" } }, tuple],
+		["another source", { owned: { sourceCommit: "b".repeat(40) } }, tuple],
+		[
+			"another image",
+			{ owned: { imageDigest: `sha256:${"8".repeat(64)}` } },
+			tuple,
+		],
+		["another namespace", { owned: { namespace: "other-namespace" } }, tuple],
+		[
+			"another owner",
+			{ owned: { owner: "44444444-4444-4444-8444-444444444444" } },
+			tuple,
+		],
+		["object names of another template", { name: opencodeName }, tuple],
+		["a Pod UID from another run", { uid: otherRun("Pod") }, tuple],
+		[
+			"a ServiceAccount UID from another run",
+			{ uid: otherRun("ServiceAccount") },
+			tuple,
+		],
+		[
+			"a NetworkPolicy UID from another run",
+			{ uid: otherRun("NetworkPolicy") },
+			tuple,
+		],
+		[
+			"a PVC UID from another run",
+			{ uid: otherRun("PersistentVolumeClaim") },
+			tuple,
+		],
+		[
+			"an unverified cleanup",
+			{
+				state: (kind) => (kind === "Secret" ? "cleanup-unverified" : "deleted"),
+			},
+			tuple,
+		],
+		[
+			"a second Pod in place of the Secret",
+			{
+				owned: {
+					resources: [
+						"Pod",
+						"ServiceAccount",
+						"NetworkPolicy",
+						"PersistentVolumeClaim",
+						"Pod",
+					].map((kind) => ({
+						kind,
+						name: `ack-preflight-claude-${legacyOwner.slice(0, 8)}`,
+						uid: legacyUid(kind),
+						state: "deleted",
+					})),
+				},
+			},
+			tuple,
+		],
+		[
+			"a startup receipt for another template",
+			{ startup: { templateId: "opencode" } },
+			tuple,
+		],
+		[
+			"a startup receipt from another source",
+			{ startup: { sourceCommit: "b".repeat(40) } },
+			tuple,
+		],
+		[
+			"a startup receipt for another image",
+			{ startup: { imageDigest: `sha256:${"8".repeat(64)}` } },
+			tuple,
+		],
+		[
+			"a startup receipt of another kind",
+			{ startup: { kind: "ack-template-preflight-failure" } },
+			tuple,
+		],
+		[
+			"a capacity receipt without UID hashes",
+			{
+				receipt: Object.fromEntries(
+					capacityUidHashes.map(([field]) => [field, undefined]),
+				),
+			},
+			tuple,
+		],
+		[
+			"a sample from another template's run",
+			{ name: opencodeName, startup: { templateId: "opencode" } },
+			tuple,
+		],
+		["a missing startup receipt", { startup: null }, /RUNTIME_INPUTS_INVALID/u],
+	])
+		await t.test(name, async (t) => {
+			const f = await fixture(t);
+			await executorMeasurements(f);
+			await legacyRetainedMeasurement(f, options);
+			await assert.rejects(
+				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+				code,
+			);
+			assert.equal(f.mutations.length, 0);
+		});
+	await t.test(
+		"a legacy-shaped executor ledger, whose names carry no template",
+		async (t) => {
+			const f = await fixture(t);
+			await executorMeasurements(f);
+			const retained = await retainedMeasurement(f, {
+				owned: { templateId: undefined },
+				receipt: Object.fromEntries(
+					capacityUidHashes.map(([field, kind]) => [
+						field,
+						sha256(`${kind.toLowerCase()}-uid`),
+					]),
+				),
+			});
+			await f.save(join(retained.directory, "pod-startup.receipt.json"), {
+				schemaVersion: 1,
+				kind: "ack-template-pod-startup",
+				sourceCommit: source,
+				templateId: "codex",
+				imageDigest: retainedDigest,
+				podUidSha256: sha256("pod-uid"),
+			});
+			await assert.rejects(
+				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+				tuple,
+			);
+			assert.equal(f.mutations.length, 0);
+		},
+	);
+});
+
+/**
+ * Publishes once with fresh candidates, then mounts the same Secrets as immutable and moves the clock a
+ * day ahead: every original candidate has expired and only the adopted records are still valid.
+ */
+async function adoptedThenExpired(t) {
+	const f = await fixture(t);
+	const resourceConfigurationHash = await executorMeasurements(f);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	for (const name of ["api-config", "worker-config"])
+		f.cluster.get(`secret/${name}`).immutable = true;
+	f.capacity = JSON.parse(await readFile(f.files.capacity));
+	// The successor plan writes nothing and does not refresh the login identity.
+	f.files.login = undefined;
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.now() + 24 * 60 * 60 * 1000,
+	});
+	return { f, resourceConfigurationHash };
+}
+
+const successorPlan = (f) =>
+	publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		false,
+		undefined,
+		{
+			successor: true,
+		},
+	);
+const jsonText = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+const publishedProfiles = (f) =>
+	JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/worker-config").data["capacity.json"],
+			"base64",
+		),
+	);
+
+/** Changes one mounted key as a completed publication would: local input, live Secret and rollout hash. */
+async function republish(f, secretName, key, bytes) {
+	const bootstrap = JSON.parse(await readFile(f.files.bootstrap));
+	await writeFile(
+		bootstrap.objects.find((object) => object.name === secretName).files[key],
+		bytes,
+	);
+	const secret = f.cluster.get(`secret/${secretName}`);
+	secret.data = {
+		...secret.data,
+		[key]: Buffer.from(bytes).toString("base64"),
+	};
+	secret.metadata.resourceVersion = String(
+		Number(secret.metadata.resourceVersion) + 1,
+	);
+	f.cluster.get(
+		`deployment/agent-infra-${secretName.split("-")[0]}`,
+	).spec.template.metadata.annotations[
+		"agent-infra.agora.io/runtime-inputs-hash"
+	] = sha256(
+		JSON.stringify(
+			Object.entries(secret.data).sort(([a], [b]) => a.localeCompare(b)),
+		),
+	);
+}
+
+test("a successor plan appends a retained image's measured capacity after candidate expiry without re-adoption", async (t) => {
+	for (const [name, measure, imageDigest] of [
+		["a current-format retained ledger", retainedMeasurement, retainedDigest],
+		["the legacy Claude ledger shape", legacyRetainedMeasurement, legacyDigest],
+	])
+		await t.test(name, async (t) => {
+			const { f, resourceConfigurationHash } = await adoptedThenExpired(t);
+			const live = Object.fromEntries(
+				["api-config", "worker-config"].map((secret) => [
+					secret,
+					structuredClone(f.cluster.get(`secret/${secret}`)),
+				]),
+			);
+			const mutations = f.mutations.length;
+			const retained = await measure(f);
+			const attempts = await readdir(dirname(f.files.templates));
+			const result = await successorPlan(f);
+			assert.equal(result.mode, "successor-plan");
+			assert.equal(result.changedSecretCount, 1);
+			assert.equal(f.mutations.length, mutations);
+			assert.deepEqual(
+				await readdir(dirname(f.files.templates)),
+				attempts,
+				"no new adoption attempt is minted",
+			);
+			for (const entry of result.successor.secrets) {
+				const current = live[entry.name];
+				assert.deepEqual(f.cluster.get(`secret/${entry.name}`), current);
+				assert.equal(entry.uid, current.metadata.uid);
+				assert.equal(entry.resourceVersion, current.metadata.resourceVersion);
+				assert.deepEqual(
+					entry.changedKeys,
+					entry.name === "worker-config" ? ["capacity.json"] : [],
+				);
+				for (const key of Object.keys(current.data))
+					if (key !== "capacity.json")
+						assert.equal(entry.data[key], current.data[key], key);
+			}
+			const before = Buffer.from(
+				live["worker-config"].data["capacity.json"],
+				"base64",
+			);
+			const after = Buffer.from(
+				result.successor.secrets.find((entry) => entry.name === "worker-config")
+					.data["capacity.json"],
+				"base64",
+			);
+			// Every published byte keeps its place; the new profile is inserted at the end of the list.
+			const end = before.lastIndexOf("\n  ]");
+			assert(after.subarray(0, end).equals(before.subarray(0, end)));
+			assert(
+				after
+					.subarray(after.length - (before.length - end))
+					.equals(before.subarray(end)),
+			);
+			assert.deepEqual(
+				JSON.parse(after).profiles.slice(JSON.parse(before).profiles.length),
+				[
+					{
+						schemaVersion: 1,
+						imageDigest,
+						resourceProfileRef: f.capacity.resourceProfileRef,
+						resourceConfigurationHash,
+						maximumConcurrentExecutions: 1,
+						conformanceEvidenceHash: sha256(retained.bytes),
+					},
+				],
+			);
+			assert.deepEqual(
+				(await successorPlan(f)).successor,
+				result.successor,
+				"a rerun plans the same bytes",
+			);
+		});
+});
+
+test("a capacity append after candidate expiry fails closed unless it is the only difference", async (t) => {
+	const expired = /RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/u;
+	const otherDigest = `sha256:${"6".repeat(64)}`;
+	const rerunCodex = async (f, change) => {
+		const templates = JSON.parse(await readFile(f.files.templates));
+		await change(
+			templates.templates.find((entry) => entry.templateId === "codex"),
+		);
+		await f.save(f.files.templates, templates);
+	};
+	for (const [name, change, code = expired] of [
+		[
+			"an in-place plan of mutable Secrets",
+			async (f) => {
+				for (const secret of ["api-config", "worker-config"])
+					f.cluster.get(`secret/${secret}`).immutable = false;
+				return () =>
+					publishRuntimeInputs(f.files, f.rendered, source, f.kubectl);
+			},
+		],
+		[
+			"a rerun template candidate",
+			(f) =>
+				rerunCodex(f, async (codex) => {
+					for (const field of ["validationFile", "preflightFile"])
+						codex[field] = await f.save(
+							join(dirname(codex[field]), `rerun-${field}.json`),
+							{
+								...JSON.parse(await readFile(codex[field])),
+								executionId: "execution-codex-rerun",
+							},
+						);
+				}),
+		],
+		[
+			"another template model",
+			(f) =>
+				rerunCodex(f, (codex) => {
+					codex.modelId = "model-codex-next";
+				}),
+		],
+		[
+			"published profiles from another source",
+			(f) =>
+				republish(
+					f,
+					"worker-config",
+					"capacity.json",
+					jsonText({ ...publishedProfiles(f), sourceSha: "b".repeat(40) }),
+				),
+		],
+		[
+			"another resource profile policy",
+			async (f) => {
+				f.capacity.resourceProfileRef = "other-runtime";
+				await f.save(f.files.capacity, f.capacity);
+			},
+			/RUNTIME_INPUTS_INVALID/u,
+		],
+		[
+			"a current template approval removed by another writer",
+			(f) => {
+				const document = publishedProfiles(f);
+				return republish(
+					f,
+					"worker-config",
+					"capacity.json",
+					jsonText({
+						...document,
+						profiles: document.profiles.filter(
+							(profile) => profile.imageDigest !== f.templates[0].imageDigest,
+						),
+					}),
+				);
+			},
+		],
+		[
+			"published profiles re-serialized by another writer",
+			(f) =>
+				republish(
+					f,
+					"worker-config",
+					"capacity.json",
+					Buffer.from(`${JSON.stringify(publishedProfiles(f))}\n`),
+				),
+		],
+		[
+			"a non-capacity input that differs from the mounted Secret",
+			async (f) => {
+				const bootstrap = JSON.parse(await readFile(f.files.bootstrap));
+				await writeFile(
+					bootstrap.objects.find((object) => object.name === "worker-config")
+						.files["private-input"],
+					"private-config-changed",
+				);
+			},
+		],
+		[
+			"a live capacity key that differs from its local baseline",
+			(f) => {
+				const document = publishedProfiles(f);
+				const secret = f.cluster.get("secret/worker-config");
+				secret.data["capacity.json"] = jsonText({
+					...document,
+					profiles: [
+						...document.profiles,
+						{ ...document.profiles[0], imageDigest: otherDigest },
+					],
+				}).toString("base64");
+				secret.metadata.resourceVersion = String(
+					Number(secret.metadata.resourceVersion) + 1,
+				);
+			},
+		],
+		[
+			"a Secret of another owner",
+			(f) => {
+				f.cluster.get("secret/worker-config").metadata.labels[ownerLabel] =
+					"other-installation";
+			},
+			/RUNTIME_INPUT_SECRET_OWNER_INVALID/u,
+		],
+		[
+			"one record left as a candidate in one Secret",
+			async (f) =>
+				republish(
+					f,
+					"api-config",
+					"template-validation-codex.json",
+					await readFile(f.templates[0].validationFile),
+				),
+		],
+		[
+			"candidate-only records",
+			async (f) => {
+				for (const expected of f.templates)
+					for (const secret of ["api-config", "worker-config"])
+						await republish(
+							f,
+							secret,
+							`template-validation-${expected.templateId}.json`,
+							await readFile(expected.validationFile),
+						);
+			},
+		],
+		[
+			"a candidate capacity profile merge",
+			async (f) => {
+				f.capacity.candidateProfilesFile = await f.save(
+					join(dirname(f.files.capacity), "candidate-profiles.json"),
+					{
+						schemaVersion: 1,
+						profiles: [
+							{ ...publishedProfiles(f).profiles[0], imageDigest: otherDigest },
+						],
+					},
+				);
+				await f.save(f.files.capacity, f.capacity);
+			},
+		],
+		[
+			"a Worker rollout that has not converged",
+			(f) => {
+				f.cluster.get("deployment/agent-infra-worker").status.updatedReplicas =
+					0;
+			},
+		],
+		[
+			"an existing evidence entry replaced by the append",
+			async (f) => {
+				f.capacity.evidence = [
+					...f.capacity.evidence,
+					{ imageDigest: retainedDigest, file: f.capacity.evidence[0].file },
+				];
+				await f.save(f.files.capacity, f.capacity);
+			},
+		],
+	])
+		await t.test(name, async (t) => {
+			const { f } = await adoptedThenExpired(t);
+			await retainedMeasurement(f);
+			const run = (await change(f)) ?? (() => successorPlan(f));
+			const mutations = f.mutations.length;
+			await assert.rejects(run(), code);
+			assert.equal(f.mutations.length, mutations);
+		});
+});

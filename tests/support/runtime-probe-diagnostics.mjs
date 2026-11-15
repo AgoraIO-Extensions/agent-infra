@@ -23,6 +23,23 @@ const probeStages = new Set([
 	"model-cancellation-status",
 	"model-cancellation-restart",
 	"recursive-native-storage-redaction",
+	// #3230：FileBridge origin 资格的固定阶段名。
+	"file-bridge-origin",
+	"file-bridge-origin-resolution",
+	"file-bridge-startup-rejection",
+	"file-bridge-session-executor",
+	"file-bridge-session-startup",
+	"file-bridge-session-round-trip",
+	"file-bridge-exchange-rejected",
+	"file-bridge-exchange-redirect",
+	"file-bridge-content-redirect",
+	"file-bridge-content-oversize",
+	"file-bridge-content-digest",
+	"file-bridge-session-stop",
+	"file-bridge-agent-startup",
+	"file-bridge-agent-round-trip",
+	"file-bridge-agent-stop",
+	"file-bridge-redaction",
 	...[
 		"default",
 		"selected",
@@ -76,6 +93,10 @@ const probeCodes = new Set([
 	"RUNTIME_SESSION_UNAVAILABLE",
 	"RUNTIME_SESSION_REQUIRED",
 	"RUNTIME_TURN_NOT_ACTIVE",
+	"RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID",
+	"RUNTIME_FILE_INPUT_UNAVAILABLE",
+	"RUNTIME_FILE_INPUT_REJECTED",
+	"RUNTIME_TURN_NOT_SUBMITTED",
 ]);
 
 export function safeRuntimeProbeFailure(stderr) {
@@ -102,6 +123,7 @@ export function safeRuntimeProbeFailure(stderr) {
 					"resultStatus",
 					"isolationFileKind",
 					"modelRequests",
+					"fileBridgeRequests",
 					"authenticated",
 				].includes(key),
 		)
@@ -129,6 +151,12 @@ export function safeRuntimeProbeFailure(stderr) {
 		value.modelRequests <= 1000
 	)
 		safe.modelRequests = value.modelRequests;
+	if (
+		Number.isInteger(value.fileBridgeRequests) &&
+		value.fileBridgeRequests >= 0 &&
+		value.fileBridgeRequests <= 1000
+	)
+		safe.fileBridgeRequests = value.fileBridgeRequests;
 	if (
 		[
 			"native-history:rollout",

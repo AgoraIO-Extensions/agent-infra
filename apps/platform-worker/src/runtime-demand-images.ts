@@ -177,6 +177,9 @@ function safeCas(
 	};
 }
 
+/** The per-Agent parent-workload CAS this module's receipt reports, for other normal producers. */
+export const runtimeDemandImageAgentCasV1 = safeCas;
+
 function knownMainImages(
 	value: Awaited<ReturnType<RuntimeDemandImageReaderV1["read"]>>,
 ) {

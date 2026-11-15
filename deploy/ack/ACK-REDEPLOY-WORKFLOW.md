@@ -766,6 +766,13 @@ sourceCommit、imageDigest、完成时间、模型操作数和实际目标一致
 多匹配以及已有批准的证据变化，都在写入前失败；已有批准不会被新测量替换。部署后的
 mounted-capacity gate 同样复核这些 digest。
 
+旧版 `template-model-preflight.mjs` 写出的台账没有 `templateId` 字段。只有字段集合与该旧格式完全
+一致、五个对象都使用该模板派生的 `ack-preflight-<templateId>-<owner 前 8 位>` 名称，且同目录
+`pod-startup.receipt.json` 记录相同 templateId、sourceCommit、imageDigest 和台账 Pod UID 的
+SHA-256，`runtime-capacity.receipt.json` 的 ServiceAccount、NetworkPolicy、PVC UID 摘要也与
+台账一致时，才把它视为该模板这一次运行的台账。显式写出其他值或 `null` 的 `templateId`、多余
+字段、Codex executor 的 `sandbox-preflight-` 名称以及任一摘要不符仍然拒绝；不要给旧台账补字段。
+
 该步骤只登记容量，不升级或切换 Agent 镜像。已有 Agent 仍须经正式 lifecycle 重新生成
 verified capacity；真实业务、原生文件和恢复验收另行完成。
 
@@ -786,6 +793,14 @@ ACK_RUNTIME_INPUT_SUCCESSOR_FILE=/private/ack/attempt/successor.private.json \
 但不写 Secret、不改 Deployment、不提升本地文件。输出列出每个挂载 Secret 的名称、UID、
 resourceVersion、消费组件、变化键、Deployment revision 和完整最终数据。部署仓库的发布器据此
 创建新的不可变 Secret，通过 Helm 改绑并回读挂载字节；原 Secret 保持不变。
+
+原模板候选过期后，`successor-plan` 仍复用已采用记录的前提是：每个挂载 Secret 中的记录都与候选、
+preflight 字节及采用来源完全匹配，挂载数据与本地输入相同，Deployment 也已按当前数据完成 rollout。
+除只提高总预算的下一 reserve revision 外，它还接受为保留镜像追加新测量的容量 profile：已发布
+profile 文档的原有字节不变，只在列表末尾加入该镜像在当前完整 key 下的 profile；capacity 输入只在
+`evidence` 末尾加入对应测量收据；其他暂存文件（含登录身份和 reserve）全部不变。当前模板镜像缺少
+批准、合并 candidate profile、source 或其他字段漂移时仍要求新的候选；in-place `plan`/`apply`
+不使用这两类例外。
 
 ### 隔离 custom 容量测量
 

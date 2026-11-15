@@ -9,6 +9,8 @@ export default defineConfig({
 		skillHubInit: "./src/skill-hub-init.ts",
 		kubernetesClient: "./src/kubernetes-client.ts",
 		runtimeDemandImages: "./src/runtime-demand-images-readonly.ts",
+		sessionDemandImages: "./src/session-demand-images-cli.ts",
+		agentWorkloadDemandImages: "./src/agent-workload-demand-images-cli.ts",
 	},
 	format: "esm",
 	outDir: "./dist",

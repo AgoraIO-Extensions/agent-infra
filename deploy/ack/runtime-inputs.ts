@@ -127,6 +127,48 @@ export function reserveModuleLiteralSuccessor(module: Uint8Array, before: Uint8A
 	return Buffer.from(text.replace(old, () => literal(after)));
 }
 
+/** Profiles that prepare() added for retained template images, with their measured receipts. */
+type CapacityAppend = { profilesFile: string; capacityFile: string; profiles: ObjectRecord[]; evidence: { imageDigest: string; file: string }[] };
+/**
+ * A staged capacity write is the planned append only if the published profile document keeps every existing
+ * byte (the producer also rewrites its source, so another source differs), and the capacity input keeps every
+ * field and evidence entry; each is followed only by the appended profiles and receipts. Any other change,
+ * such as a new approval for a current template image or a merged candidate profile, makes the bytes differ.
+ */
+function capacityAppendWrite(append: CapacityAppend, file: string, { before, after }: { before: Buffer; after: Buffer }) {
+	let previous: any;
+	try { previous = JSON.parse(before.toString("utf8")); } catch { return false; }
+	if (file === append.profilesFile)
+		return Array.isArray(previous?.profiles) && jsonBytes(previous).equals(before) &&
+			jsonBytes({ ...previous, profiles: [...previous.profiles, ...append.profiles] }).equals(after);
+	return file === append.capacityFile && Array.isArray(previous?.evidence) &&
+		jsonBytes({ ...previous, evidence: [...previous.evidence, ...append.evidence] }).equals(after);
+}
+
+// template-model-preflight wrote owned-resource ledgers with exactly these keys before it recorded templateId.
+const legacyOwnedLedgerKeys = "imageDigest,kind,namespace,owner,resources,schemaVersion,sourceCommit";
+/**
+ * A legacy ledger names no template, so it must be proven to be this run's ledger: the run's Pod startup
+ * receipt names the template, source and image and hashes the ledger's Pod UID, and the measured capacity
+ * receipt hashes its ServiceAccount, NetworkPolicy and PVC UIDs. The Secret has no receipt hash; it is bound
+ * only through the same ledger and object name.
+ */
+function legacyOwnedLedgerBound(owned: ObjectRecord, startup: any, measured: any, entry: { templateId: string; imageDigest: string }, sourceSha: string) {
+	if (!Array.isArray(owned.resources)) return false;
+	const uidHash = (kind: string) => {
+		const matches = owned.resources.filter((resource: any) => resource?.kind === kind);
+		return matches.length === 1 && typeof matches[0].uid === "string" && matches[0].uid ? hash(matches[0].uid) : undefined;
+	};
+	const pod = uidHash("Pod");
+	return pod !== undefined && startup?.schemaVersion === 1 && startup.kind === "ack-template-pod-startup" &&
+		startup.templateId === entry.templateId && startup.sourceCommit === sourceSha && startup.imageDigest === entry.imageDigest &&
+		startup.podUidSha256 === pod && ([["serviceAccountUidSha256", "ServiceAccount"], ["networkPolicyUidSha256", "NetworkPolicy"],
+			["pvcUidSha256", "PersistentVolumeClaim"]] as const).every(([field, kind]) => {
+			const uid = uidHash(kind);
+			return uid !== undefined && measured[field] === uid;
+		});
+}
+
 async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
@@ -218,6 +260,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		evidenceFiles.set(entry.imageDigest, entry.file);
 	}
 	// One measured receipt either becomes the first full-key approval or re-verifies the existing one.
+	// Returns the new approval, if any.
 	const adoptMeasuredProfile = async (request: any, template: { templateId: string; imageDigest: string }, file: string, measuredBytes: Buffer) => {
 		const freshProfile = {
 			schemaVersion: 1, imageDigest: template.imageDigest, resourceProfileRef: capacity.resourceProfileRef,
@@ -230,6 +273,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		if (approved.length === 0) {
 			profiles = [...profiles, freshProfile];
 			evidenceFiles.set(template.imageDigest, file);
+			return freshProfile;
 		} else {
 			// Workload dispatch binds the full approval; refreshing validation must not revoke it.
 			const previousFile = evidenceFiles.get(template.imageDigest);
@@ -239,7 +283,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			assert(previous.scope === "ack-runtime-capacity" && previous.sourceCommit === sourceSha, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 			validateCapacityBindings([request], [template], capacity, approved, new Map([[template.imageDigest, previousBytes]]));
 		}
+		return undefined;
 	};
+	const retainedAppends: { profile: ObjectRecord; evidence: { imageDigest: string; file: string } }[] = [];
 	for (const expected of templates.templates) {
 		const key = `template-validation-${expected.templateId}.json`;
 		for (const secret of secrets) {
@@ -278,17 +324,24 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		// A standalone run is usable only after every temporary object it created was retired by UID.
 		// The ledger's templateId and object names bind it to this template run and owner, as template-model-preflight writes them.
 		const ownedKinds = ["Pod", "Secret", "PersistentVolumeClaim", "NetworkPolicy", "ServiceAccount"];
+		const executorNamed = entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined;
 		const ownedName = typeof owned.owner !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(owned.owner) ? undefined
-			: entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined ? `sandbox-preflight-${owned.owner}`
+			: executorNamed ? `sandbox-preflight-${owned.owner}`
 				: `ack-preflight-${entry.templateId}-${owned.owner.slice(0, 8)}`;
+		// A ledger in the exact pre-templateId shape carries the template only in its object names,
+		// so the same run's startup and capacity receipts must also bind its UIDs.
+		const legacyOwned = !executorNamed && Object.keys(owned).sort().join() === legacyOwnedLedgerKeys;
+		const startup = legacyOwned ? await privateJson(join(entry.measurementDirectory, "pod-startup.receipt.json")) : undefined;
 		assert(ownedName && owned.schemaVersion === 1 && owned.kind === "ack-template-owned-resources" &&
-			owned.templateId === entry.templateId && owned.sourceCommit === sourceSha &&
+			(legacyOwned ? legacyOwnedLedgerBound(owned, startup, measured, entry, sourceSha) : owned.templateId === entry.templateId) &&
+			owned.sourceCommit === sourceSha &&
 			owned.imageDigest === entry.imageDigest && owned.namespace === bootstrap.namespace && Array.isArray(owned.resources) &&
 			owned.resources.length === ownedKinds.length && ownedKinds.every((kind) => owned.resources.filter((resource: any) =>
 				resource?.kind === kind && resource.name === ownedName && typeof resource.uid === "string" && resource.uid.length > 0 &&
 				["deleted", "absent"].includes(resource.state)).length === 1), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		retainedTargets.push(target);
-		await adoptMeasuredProfile({ source: { kind: "standard", templateId: entry.templateId } }, entry, file, measuredBytes);
+		const added = await adoptMeasuredProfile({ source: { kind: "standard", templateId: entry.templateId } }, entry, file, measuredBytes);
+		if (added) retainedAppends.push({ profile: added, evidence: { imageDigest: entry.imageDigest, file } });
 	}
 	assert(evidenceFiles.size <= 64 && profiles.length <= 64);
 	const evidence = new Map<string, Uint8Array>();
@@ -304,6 +357,11 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	if (capacity.candidateProfilesFile !== undefined) await stageFile(capacity.candidateProfilesFile, profileBytes);
 	workerSecret.desired.data[capacity.workerSecretRef.key] = profileBytes.toString("base64");
 	await stageFile(files.capacity, jsonBytes({ ...capacity, evidence: [...evidenceFiles].map(([imageDigest, file]) => ({ imageDigest, file })) }));
+	// A successor may publish exactly this append without re-adopting templates (publishRuntimeInputsWithProgress).
+	const capacityAppend: CapacityAppend | undefined = retainedAppends.length === 0 ? undefined : {
+		profilesFile: capacity.profilesFile, capacityFile: files.capacity,
+		profiles: retainedAppends.map((entry) => entry.profile), evidence: retainedAppends.map((entry) => entry.evidence),
+	};
 	if (files.reserves) {
 		const apiConsumer = consumers.find((c) => c.component === "api");
 		assert(apiConsumer, "RUNTIME_INPUT_CONSUMER_MISSING");
@@ -345,7 +403,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -446,7 +504,12 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		const budgetOnly = (file: string, bytes: { before: Buffer; after: Buffer }) =>
 			successor && ((plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after)) ||
 				(plan.reserveModules.get(file)?.equals(bytes.after) === true));
-		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after) || budgetOnly(file, bytes)) &&
+		// The successor may instead carry exactly the planned capacity append, with every other staged byte unchanged.
+		const append = successor ? plan.capacityAppend : undefined;
+		const capacityAppendOnly = append !== undefined &&
+			[...plan.writes].every(([file, bytes]) => bytes.before.equals(bytes.after) || capacityAppendWrite(append, file, bytes));
+		fullyAdopted = ([...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after) || budgetOnly(file, bytes)) ||
+			capacityAppendOnly) &&
 			readSecrets.every((secret) => isDeepStrictEqual(secret.current.data, secret.before.data)) &&
 			plan.consumers.every((consumer) => {
 				const current = read("deployment", consumer.name);

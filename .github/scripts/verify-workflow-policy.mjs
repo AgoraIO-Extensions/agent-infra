@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
 
 // Label events must never start a CI run: a newer run without the required CI
 // check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip
@@ -319,6 +319,126 @@ export function validateWorkflowDocuments(workflows) {
       platformIndexUpload?.with?.["if-no-files-found"] !== "error" ||
       platformIndexUpload?.if !== undefined) {
     errors.push("Publish images must retain raw source validation and attempt-bound Platform receipts");
+  }
+  // This dispatch grants package write authority to exactly one source-bound producer.
+  const signedEntry = workflows["publish-signed-own-entry.yml"];
+  const signedJob = signedEntry?.jobs?.["own-entry-fixture"];
+  const expectedPromotionJob = {
+  "if": "github.ref == 'refs/heads/main' && inputs.promote_existing",
+  "name": "Promote verified signed entry (linux/amd64)",
+  "runs-on": "ubuntu-24.04",
+  "timeout-minutes": 15,
+  "permissions": {
+    "contents": "read",
+    "packages": "write",
+    "actions": "read"
+  },
+  "steps": [
+    {
+      "name": "Validate fixed promotion source",
+      "run": "test \"$RELEASE_SOURCE_SHA\" = \"4a3c2840e0d918dfc6fef77ce1cb1b7fffc46c60\""
+    },
+    {
+      "name": "Checkout workflow source",
+      "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "with": {
+        "fetch-depth": 0,
+        "persist-credentials": false,
+        "ref": "${{ github.sha }}"
+      }
+    },
+    {
+      "name": "Verify merged workflow and fixture sources",
+      "env": {
+        "WORKFLOW_SOURCE_SHA": "${{ github.sha }}"
+      },
+      "run": "test \"$(git rev-parse HEAD)\" = \"$WORKFLOW_SOURCE_SHA\"\ngit merge-base --is-ancestor \"$WORKFLOW_SOURCE_SHA\" origin/main\ngit merge-base --is-ancestor \"$RELEASE_SOURCE_SHA\" origin/main\n"
+    },
+    {
+      "name": "Set up Node.js",
+      "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      "with": {
+        "node-version": 24
+      }
+    },
+    {
+      "name": "Verify promotion guards",
+      "run": "node --test tests/signed-own-entry-promotion.test.mjs"
+    },
+    {
+      "name": "Read official origin evidence",
+      "env": {
+        "GH_TOKEN": "${{ github.token }}"
+      },
+      "run": "gh run download 43741080676 --repo AgoraIO-Extensions/agent-infra --name signed-own-entry-amd64-4a3c2840e0d918dfc6fef77ce1cb1b7fffc46c60-1 --dir \"$RUNNER_TEMP/ownentry-origin\"\ngh run view 43741080676 --repo AgoraIO-Extensions/agent-infra --json databaseId,headSha,status,conclusion,attempt > \"$RUNNER_TEMP/ownentry-origin-run.json\"\n"
+    },
+    {
+      "name": "Set up Buildx",
+      "uses": "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+      "with": {
+        "driver": "docker"
+      }
+    },
+    {
+      "name": "Log in to GHCR",
+      "env": {
+        "GHCR_TOKEN": "${{ github.token }}"
+      },
+      "run": "echo \"$GHCR_TOKEN\" | docker login ghcr.io --username github-actions --password-stdin"
+    },
+    {
+      "name": "Promote unchanged artifact",
+      "run": "node deploy/release/promote-signed-own-entry.ts \"$RUNNER_TEMP/ownentry-origin/signed-own-entry.json\" \"$RUNNER_TEMP/ownentry-origin-run.json\" \"$RUNNER_TEMP/ownentry-promotion.json\""
+    },
+    {
+      "name": "Preserve promotion receipt or unknown-copy intent",
+      "if": "always()",
+      "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "with": {
+        "if-no-files-found": "warn",
+        "name": "signed-own-entry-promotion-${{ github.run_id }}-${{ github.run_attempt }}",
+        "path": "${{ runner.temp }}/ownentry-promotion.json"
+      }
+    }
+  ]
+};
+  const signedSteps = [
+    {"name":"Validate release source","env":{"INPUT_SOURCE_SHA":"${{ inputs.source_sha }}"},"run":"if [[ ! \"$INPUT_SOURCE_SHA\" =~ ^[0-9a-f]{40}$ ]]; then\n  echo \"own-entry fixture requires a 40-hex source_sha\" >&2\n  exit 1\nfi\n"},
+    {"name":"Checkout source","uses":"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1","with":{"fetch-depth":0,"persist-credentials":false,"ref":"${{ inputs.source_sha }}"}},
+    {"name":"Verify merged source","run":"test \"$(git rev-parse HEAD)\" = \"$RELEASE_SOURCE_SHA\"\ngit merge-base --is-ancestor \"$RELEASE_SOURCE_SHA\" origin/main\n"},
+    {"name":"Set up Node.js","uses":"actions/setup-node@820762786026740c76f36085b0efc47a31fe5020","with":{"node-version":24}},
+    {"name":"Verify snapshot business fixture","run":"node --test tests/signed-own-entry.test.mjs tests/snapshot-business.test.mjs"},
+    {"name":"Set up Docker OCI image store","uses":"docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5","with":{"daemon-config":"{\"features\":{\"containerd-snapshotter\":true,\"cdi\":false}}\n"}},
+    {"name":"Set up Buildx","uses":"docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f","with":{"driver":"docker"}},
+    {"name":"Log in to GHCR","env":{"GHCR_TOKEN":"${{ github.token }}"},"run":"echo \"$GHCR_TOKEN\" | docker login ghcr.io --username github-actions --password-stdin"},
+    {"name":"Build and publish the signed entry","env":{"PLATFORM":"linux/amd64"},"run":"test \"$(git rev-parse HEAD)\" = \"$RELEASE_SOURCE_SHA\"\nnode deploy/release/build-images.mjs \"$RUNNER_TEMP/signed-own-entry.json\" --images=signedOwnEntry\n"},
+    {"name":"Upload signed entry receipt","uses":"actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a","with":{"if-no-files-found":"error","name":"signed-own-entry-amd64-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}","path":"${{ runner.temp }}/signed-own-entry.json"}},
+  ];
+  if (Object.keys(signedEntry ?? {}).sort().join() !== "concurrency,env,jobs,name,on,permissions,run-name" ||
+      signedEntry?.name !== "Publish signed own entry" ||
+      signedEntry?.["run-name"] !== "${{ github.event_name }} | publish-signed-own-entry | ${{ inputs.source_sha }}" ||
+      Object.keys(signedEntry?.on ?? {}).join() !== "workflow_dispatch" ||
+      Object.keys(signedEntry?.on?.workflow_dispatch ?? {}).join() !== "inputs" ||
+      Object.keys(signedEntry?.on?.workflow_dispatch?.inputs ?? {}).sort().join() !== "promote_existing,source_sha" ||
+      !sameObject(signedEntry?.on?.workflow_dispatch?.inputs?.source_sha, {
+        description: "Exact merged 40-hex commit to publish", required: true, type: "string",
+      }) ||
+      !sameObject(signedEntry?.on?.workflow_dispatch?.inputs?.promote_existing, {description: "Promote the verified c549 fixture to its existing admitted repository", required: false, type: "boolean", default: false}) ||
+      !sameObject(signedEntry?.jobs?.["promote-existing"], expectedPromotionJob) ||
+      !sameObject(signedEntry?.permissions, {contents: "read", packages: "write"}) ||
+      !sameObject(signedEntry?.concurrency, {group: "publish-images-${{ inputs.source_sha }}", "cancel-in-progress": false}) ||
+      !sameObject(signedEntry?.env, {
+        IMAGE_REPOSITORY_PREFIX: "ghcr.io/agoraio-extensions/agent-infra",
+        RELEASE_SOURCE_SHA: "${{ inputs.source_sha }}",
+        IMAGE_TAG: "${{ format('release-{0}', inputs.source_sha) }}",
+      }) ||
+      Object.keys(signedEntry?.jobs ?? {}).sort().join() !== "own-entry-fixture,promote-existing" ||
+      !sameObject(signedJob, {
+        name: "Signed own-entry fixture (linux/amd64)",
+        if: "github.ref == 'refs/heads/main' && !inputs.promote_existing",
+        "runs-on": "ubuntu-24.04", "timeout-minutes": 30, steps: signedSteps,
+      })) {
+    errors.push("Signed own entry must retain the single-image source-guarded dispatch and minimal permissions");
   }
   return errors;
 }
