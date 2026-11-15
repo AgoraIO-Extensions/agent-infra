@@ -193,6 +193,7 @@ async function uploadThroughRoutes(
 	mediaTypes: readonly string[],
 	mediaType: string,
 	bytes: Uint8Array,
+	includeDescriptor = false,
 ) {
 	const store = new FakeFileStoreV1();
 	const storage = new FakeObjectStorageV1();
@@ -285,6 +286,12 @@ async function uploadThroughRoutes(
 		written: written.status,
 		completed: completed.status,
 		record: record?.descriptor.mediaType,
+		...(includeDescriptor
+			? {
+					recordSizeBytes: record?.descriptor.sizeBytes,
+					recordSha256: record?.descriptor.sha256,
+				}
+			: {}),
 		status: record?.status,
 	};
 }
@@ -295,6 +302,9 @@ describe("text subtype declarations (#3257)", () => {
 		"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
 			"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
 		"hex",
+	);
+	const pdf = Buffer.from(
+		"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\n",
 	);
 
 	it("AC-1: records a CSV upload as text/csv when FileLimits allow text/csv", async () => {
@@ -308,6 +318,30 @@ describe("text subtype declarations (#3257)", () => {
 			status: "available",
 		});
 	});
+
+	it.each([
+		["image/png", png],
+		["application/pdf", pdf],
+	] as const)(
+		"AC-1: preserves native %s bytes metadata through upload and completion",
+		async (mediaType, bytes) => {
+			const result = await uploadThroughRoutes(
+				[mediaType],
+				mediaType,
+				bytes,
+				true,
+			);
+			expect(result).toMatchObject({
+				created: 201,
+				written: 204,
+				completed: 200,
+				record: mediaType,
+				recordSizeBytes: bytes.byteLength,
+				recordSha256: createHash("sha256").update(bytes).digest("hex"),
+				status: "available",
+			});
+		},
+	);
 
 	it("AC-1: rejects CSV content that is not valid UTF-8 text", async () => {
 		const result = await uploadThroughRoutes(
