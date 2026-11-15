@@ -2394,6 +2394,24 @@ test("a candidate cannot replace an already approved capacity profile", async (t
 
 const retainedDigest = `sha256:${"9".repeat(64)}`;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+const retainedOwner = "33333333-3333-4333-8333-333333333333";
+// template-model-preflight names every executor-run object after its owner UUID.
+const retainedLedger = (
+	name = `sandbox-preflight-${retainedOwner}`,
+	state = () => "deleted",
+) =>
+	[
+		"Secret",
+		"ServiceAccount",
+		"NetworkPolicy",
+		"PersistentVolumeClaim",
+		"Pod",
+	].map((kind) => ({
+		kind,
+		name,
+		uid: `${kind.toLowerCase()}-uid`,
+		state: state(kind),
+	}));
 
 /** A retained-image run reuses the normal template-preflight output shape. */
 async function retainedMeasurement(
@@ -2443,22 +2461,12 @@ async function retainedMeasurement(
 	await f.save(join(directory, "owned-resource-identities.json"), {
 		schemaVersion: 1,
 		kind: "ack-template-owned-resources",
+		templateId: "codex",
 		sourceCommit: source,
 		imageDigest: retainedDigest,
 		namespace,
-		owner: "33333333-3333-4333-8333-333333333333",
-		resources: [
-			"Secret",
-			"ServiceAccount",
-			"NetworkPolicy",
-			"PersistentVolumeClaim",
-			"Pod",
-		].map((kind) => ({
-			kind,
-			name: "sandbox-preflight-retained",
-			uid: `${kind.toLowerCase()}-uid`,
-			state: "deleted",
-		})),
+		owner: retainedOwner,
+		resources: retainedLedger(),
 		...ownedChanges,
 	});
 	f.capacity.retainedTemplateMeasurements = [
@@ -2649,20 +2657,37 @@ test("retained template measurements fail closed before any Secret write", async
 			"an unverified temporary object cleanup",
 			{
 				owned: {
-					resources: [
-						"Secret",
-						"ServiceAccount",
-						"NetworkPolicy",
-						"PersistentVolumeClaim",
-						"Pod",
-					].map((kind) => ({
-						kind,
-						name: "sandbox-preflight-retained",
-						uid: `${kind.toLowerCase()}-uid`,
-						state: kind === "Pod" ? "cleanup-unverified" : "deleted",
-					})),
+					resources: retainedLedger(undefined, (kind) =>
+						kind === "Pod" ? "cleanup-unverified" : "deleted",
+					),
 				},
 			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger from another template run",
+			{
+				owned: {
+					resources: retainedLedger(
+						`ack-preflight-claude-${retainedOwner.slice(0, 8)}`,
+					),
+				},
+			},
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger that names another template",
+			{ owned: { templateId: "claude" } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger without a templateId",
+			{ owned: { templateId: undefined } },
+			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
+		],
+		[
+			"a cleanup ledger from another owner",
+			{ owned: { owner: "44444444-4444-4444-8444-444444444444" } },
 			/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/u,
 		],
 		[

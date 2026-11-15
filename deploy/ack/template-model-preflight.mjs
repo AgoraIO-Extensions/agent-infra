@@ -537,7 +537,7 @@ async function main(inputPath) {
 	const identityFile = join(job.outputDirectory, "owned-resource-identities.json");
 	const persistIdentities = async () => {
 		const pending = `${identityFile}.${owner}.pending`;
-		await writeFile(pending, JSON.stringify({ schemaVersion: 1, kind: "ack-template-owned-resources", sourceCommit: job.sourceCommit, imageDigest: job.imageDigest, namespace: job.namespace, owner, resources: [...identities.values()] }) + "\n", { mode: 0o600, flag: "wx" });
+		await writeFile(pending, JSON.stringify({ schemaVersion: 1, kind: "ack-template-owned-resources", templateId: job.templateId, sourceCommit: job.sourceCommit, imageDigest: job.imageDigest, namespace: job.namespace, owner, resources: [...identities.values()] }) + "\n", { mode: 0o600, flag: "wx" });
 		await rename(pending, identityFile);
 	};
 	if (pvc) await writeFile(identityFile, "{}\n", { mode: 0o600, flag: "wx" });

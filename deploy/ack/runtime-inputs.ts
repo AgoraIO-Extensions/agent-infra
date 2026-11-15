@@ -236,11 +236,16 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			target?.sourceCommit === sourceSha && target.namespace === bootstrap.namespace && target.clusterUid === bootstrap.clusterUid &&
 			target.installationId === bootstrap.installationId, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		// A standalone run is usable only after every temporary object it created was retired by UID.
+		// The ledger's templateId and object names bind it to this template run and owner, as template-model-preflight writes them.
 		const ownedKinds = ["Pod", "Secret", "PersistentVolumeClaim", "NetworkPolicy", "ServiceAccount"];
-		assert(owned.schemaVersion === 1 && owned.kind === "ack-template-owned-resources" && owned.sourceCommit === sourceSha &&
+		const ownedName = typeof owned.owner !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(owned.owner) ? undefined
+			: entry.templateId === "codex" && capacity.codexSessionExecutor !== undefined ? `sandbox-preflight-${owned.owner}`
+				: `ack-preflight-${entry.templateId}-${owned.owner.slice(0, 8)}`;
+		assert(ownedName && owned.schemaVersion === 1 && owned.kind === "ack-template-owned-resources" &&
+			owned.templateId === entry.templateId && owned.sourceCommit === sourceSha &&
 			owned.imageDigest === entry.imageDigest && owned.namespace === bootstrap.namespace && Array.isArray(owned.resources) &&
 			owned.resources.length === ownedKinds.length && ownedKinds.every((kind) => owned.resources.filter((resource: any) =>
-				resource?.kind === kind && typeof resource.uid === "string" && resource.uid.length > 0 &&
+				resource?.kind === kind && resource.name === ownedName && typeof resource.uid === "string" && resource.uid.length > 0 &&
 				["deleted", "absent"].includes(resource.state)).length === 1), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
 		retainedTargets.push(target);
 		await adoptMeasuredProfile({ source: { kind: "standard", templateId: entry.templateId } }, entry, file, measuredBytes);

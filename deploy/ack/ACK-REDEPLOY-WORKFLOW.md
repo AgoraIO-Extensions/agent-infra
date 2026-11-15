@@ -760,8 +760,8 @@ protocol、模型、配置和完整资源、executor、存储、出口、placeme
 
 `runtime-inputs` 读取目录中的 `runtime-capacity.receipt.json`、同次
 `template-model-validation.receipt.json` 和 `owned-resource-identities.json`，要求 templateId、
-sourceCommit、imageDigest、完成时间、模型操作数和实际目标一致，且五类临时对象都已按 UID
-删除或确认不存在；再按模板容量的同一规则生成或复核 profile，并把收据加入 `evidence`。
+sourceCommit、imageDigest、完成时间、模型操作数和实际目标一致，且台账属于该模板这一次运行、
+五类临时对象都已按 UID 删除或确认不存在；再按模板容量的同一规则生成或复核 profile，并把收据加入 `evidence`。
 当前四模板 digest、重复项、旧或漂移的 hash、缺少 executor/init 布局、清理未确认、缺证据、
 多匹配以及已有批准的证据变化，都在写入前失败；已有批准不会被新测量替换。部署后的
 mounted-capacity gate 同样复核这些 digest。
