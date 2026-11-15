@@ -297,18 +297,23 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets };
 }
 
-export async function publishRuntimeInputs(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply = false, timeout = "300s") {
+// A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
+// bytes as apply, but writes no Secret or Deployment; the Helm-owned publisher must create new Secrets and rebind.
+export type PublicationOptions = { successor?: boolean };
+
+export async function publishRuntimeInputs(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply = false, timeout = "300s", options: PublicationOptions = {}) {
 	const progress: PublicationProgress = { phase: "preflight", mutationStatus: "not-applied" };
 	try {
 		assert(!apply || files.login, "RUNTIME_INPUT_LOGIN_REQUIRED");
-		const result = await publishRuntimeInputsWithProgress(files, rendered, sourceSha, kubectl, apply, timeout, progress);
+		assert(!apply || !options.successor, "RUNTIME_INPUTS_INVALID");
+		const result = await publishRuntimeInputsWithProgress(files, rendered, sourceSha, kubectl, apply, timeout, progress, options.successor === true);
 		return { ...result, mutationStatus: progress.mutationStatus };
 	} catch (error) {
 		throw new RuntimeInputPublicationError(error, progress);
 	}
 }
 
-async function publishRuntimeInputsWithProgress(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, progress: PublicationProgress) {
+async function publishRuntimeInputsWithProgress(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, progress: PublicationProgress, successor = false) {
 	const plan = await prepare(files, rendered, sourceSha, kubectl);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
@@ -347,7 +352,8 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	const readSecrets = plan.secrets.map((entry) => {
 		const current = readSecret(entry.desired.metadata.name);
 		assert(current.kind === "Secret" && current.metadata?.name === entry.desired.metadata.name && current.metadata.namespace === namespace && current.metadata.uid && current.metadata.resourceVersion &&
-			current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp && current.type === "Opaque" && !current.immutable, "RUNTIME_INPUT_SECRET_OWNER_INVALID");
+			current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp && current.type === "Opaque" &&
+			(successor ? current.immutable === true : !current.immutable), "RUNTIME_INPUT_SECRET_OWNER_INVALID");
 		return { ...entry, current };
 	});
 	const existingAdoptionBytes = new Map<string, Buffer>();
@@ -406,7 +412,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	};
 	if (!fullyAdopted) await stillFresh();
 	const adoptionBytes = new Map<string, Buffer>();
-	if (apply) {
+	if (apply || successor) {
 		const identities = adoptionInputs.map((i: any) => [i.templateId, i.candidateFileSha256, i.preflightFileSha256]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 		const attemptKey = hash(JSON.stringify([validationContext, identities]));
 		const attemptFile = join(dirname(files.templates), `.template-adoption-${attemptKey}.json`);
@@ -440,7 +446,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		}
 	}
 	for (const input of adoptionInputs) {
-		const bytes = apply ? adoptionBytes.get(input.templateId)! : matchingAdoptionRecords ? existingAdoptionBytes.get(input.templateId)! : input.candidateBytes;
+		const bytes = apply || successor ? adoptionBytes.get(input.templateId)! : matchingAdoptionRecords ? existingAdoptionBytes.get(input.templateId)! : input.candidateBytes;
 		const key = `template-validation-${input.templateId}.json`;
 		for (const secret of plan.secrets) {
 			await plan.stageFile(secret.files[key], bytes);
@@ -551,7 +557,16 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			consumer.observed = current;
 		}
 	}
-	return { schemaVersion: 1, kind: "ack-runtime-inputs", status: "passed", mode: apply ? "applied-and-read-back" : "read-only-plan", sourceSha,
+	const successors = successor ? secrets.map((secret) => ({
+		name: secret.current.metadata.name as string, uid: secret.current.metadata.uid as string, resourceVersion: secret.current.metadata.resourceVersion as string,
+		components: consumers.filter((c) => c.secretName === secret.current.metadata.name).map((c) => c.component),
+		changedKeys: Object.keys(secret.desired.data).filter((key) => secret.current.data[key] !== secret.desired.data[key]).sort(),
+		revision: hash(JSON.stringify(Object.entries(secret.desired.data).sort(([a], [b]) => a.localeCompare(b)))),
+		data: secret.desired.data as Record<string, string>,
+	})) : undefined;
+	if (successors) assert(successors.every((s) => Object.keys(secrets.find((x) => x.current.metadata.name === s.name)!.current.data).sort().join() === Object.keys(s.data).sort().join()), "RUNTIME_INPUT_SECRET_DRIFT");
+	return { schemaVersion: 1, kind: "ack-runtime-inputs", status: "passed", mode: apply ? "applied-and-read-back" : successor ? "successor-plan" : "read-only-plan", sourceSha,
+		...(successors ? { successor: { schemaVersion: 1, kind: "ack-runtime-input-successors", sourceSha, clusterUid, namespace, namespaceUid: ns.metadata.uid as string, installationId, secrets: successors } } : {}),
 		secretCount: secrets.length, changedSecretCount: secrets.filter((s) => s.changed).length,
 		consumers: consumers.map((c) => ({ component: c.component, desiredReplicas: c.replicas, declaredReplicas: c.observed.spec?.replicas ?? 1, updatedReplicas: c.observed.status?.updatedReplicas ?? null, availableReplicas: c.observed.status?.availableReplicas ?? null, readyReplicas: c.observed.status?.readyReplicas ?? null })),
 		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: 4, loginVerified: apply, businessVerified: false };
@@ -563,7 +578,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	try {
 		const [mode, bootstrap, templates, capacity, requests, rendered] = process.argv.slice(2);
 		const { ACK_SOURCE_SHA: source, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = process.env;
-		assert(["plan", "apply"].includes(mode) && source && kubeconfig && namespace);
+		assert(["plan", "apply", "successor-plan"].includes(mode) && source && kubeconfig && namespace);
+		const successorFile = process.env.ACK_RUNTIME_INPUT_SUCCESSOR_FILE;
+		if (mode === "successor-plan") {
+			assert(successorFile, "RUNTIME_INPUTS_INVALID");
+			let insideGit = false;
+			try { insideGit = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: dirname(successorFile), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim() === "true"; } catch {}
+			assert(!insideGit, "RUNTIME_INPUT_FILE_INSIDE_WORKTREE");
+		}
 		assert((await privateJson(bootstrap)).namespace === namespace);
 		const run: Kubectl = (args, input) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, ...args], {
 			input, encoding: "utf8", timeout: args.includes("rollout") ? 310_000 : args.includes("exec") ? 60_000 : 30_000,
@@ -572,14 +594,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const manifest = await readFile(rendered, "utf8");
 		const publish = async () => {
 			operationStarted = true;
-			return appliedResult = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply");
+			return appliedResult = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
 		};
 		if (mode === "apply") {
 			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
 			await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
-		const result = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();
+		let result: any = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();
+		if (mode === "successor-plan") {
+			const { successor: candidate, ...summary } = result;
+			assert(candidate, "RUNTIME_INPUTS_INVALID");
+			await writeFile(successorFile!, jsonBytes(candidate), { mode: 0o600, flag: "wx" });
+			result = { ...summary, successorSha256: hash(jsonBytes(candidate)),
+				successorSecrets: candidate.secrets.map(({ data: _data, ...entry }: any) => entry) };
+		}
 		let reserveConsumersVerified = false;
 		if (mode === "apply" && process.env.ACK_SESSION_RESERVES_FILE) {
 			const input = await privateJson(bootstrap);
