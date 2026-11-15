@@ -205,7 +205,7 @@ it("accepts API defaults and SDK objects but rejects mutated init credentials or
 				"untrusted";
 		},
 		(p: typeof spec) => {
-			required(p.volumes).push(structuredClone(required(p.volumes)[0]));
+		required(p.volumes).push(structuredClone(required(required(p.volumes)[0])));
 		},
 	]) {
 		const drift = structuredClone(spec);
