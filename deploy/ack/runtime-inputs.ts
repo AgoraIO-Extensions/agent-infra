@@ -414,8 +414,9 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		const api = plan.consumers.find((consumer) => consumer.component === "api")!;
 		const loginTarget = plan.secrets.find((secret) => secret.desired.metadata.name === api.secretName)!.files["deployment-identities.json"];
 		// An approved budget-only reserve revision keeps the retained adoption bytes; any other change re-adopts.
+		// Only the immutable successor path (new Secrets, Helm-owned rebind) may carry it.
 		const budgetOnly = (file: string, bytes: { before: Buffer; after: Buffer }) =>
-			plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after);
+			successor && plan.reserveTargets.has(file) && reserveBudgetIncreaseOnly(bytes.before, bytes.after);
 		fullyAdopted = [...plan.writes].every(([file, bytes]) => file === loginTarget || bytes.before.equals(bytes.after) || budgetOnly(file, bytes)) &&
 			readSecrets.every((secret) => isDeepStrictEqual(secret.current.data, secret.before.data)) &&
 			plan.consumers.every((consumer) => {

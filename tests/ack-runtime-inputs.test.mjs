@@ -2845,7 +2845,7 @@ test("a budget-only reserve revision keeps retained adoptions in a successor pla
 	])
 		await assert.rejects(
 			plan(changed),
-			/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED|CAPSULE_RESERVE_/u,
+			/RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/u,
 		);
 });
 
