@@ -1,5 +1,3 @@
-import { FileLimitsV1Schema } from "@agent-infra/contracts/files";
-
 /**
  * Read-only file limits fixture for the conversation file picker. The picker
  * reads the current limits per conversation before it enables an upload.

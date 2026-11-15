@@ -2508,7 +2508,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				.read()
 				.turns.find((turn) => turn.executionId === command.executionId);
 		const turn = current();
-		if (!turn || turn.status !== "running" || turn.unknownHold) return;
+		if (turn?.status !== "running" || turn.unknownHold) return;
 		const { plan } = planSandboxResultsV1({
 			text: sandboxResultAnswerText(turn.events),
 		});
@@ -2518,8 +2518,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				(entry) => entry.executionId === command.executionId,
 			);
 			if (
-				!draft ||
-				draft.status !== "running" ||
+				draft?.status !== "running" ||
 				draft.unknownHold ||
 				draft.resultPublication
 			)
