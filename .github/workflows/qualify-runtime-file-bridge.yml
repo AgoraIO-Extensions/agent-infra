@@ -1,0 +1,264 @@
+name: Qualify runtime FileBridge origin
+run-name: >-
+  ${{ github.event_name }} | qualify-runtime-file-bridge | ${{ inputs.role }} | ${{ inputs.image }}
+
+# #3230: qualifies one approved, already published Runtime image digest on a
+# GitHub-hosted linux/amd64 runner with the existing --file-bridge-qualification
+# CLI. The tool source is a merged main commit and may be newer than the image
+# source; the CLI proves each separately. Nothing is built or published.
+on:
+  workflow_dispatch:
+    inputs:
+      tool_source_sha:
+        description: Exact merged 40-hex main commit that provides the qualification tool
+        required: true
+        type: string
+      image:
+        description: Approved immutable ghcr.io/agoraio-extensions/agent-infra/<repository>@sha256:<digest>
+        required: true
+        type: string
+      image_source_sha:
+        description: Exact 40-hex OCI revision of the image
+        required: true
+        type: string
+      role:
+        description: Approved FileBridge role of the image
+        required: true
+        type: choice
+        options:
+          - runtimeHost
+          - codex
+          - claude
+          - opencode
+          - pi
+      namespace:
+        description: Target namespace, used only for the fixture Service DNS name
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: qualify-runtime-file-bridge-${{ inputs.tool_source_sha }}-${{ inputs.image }}-${{ inputs.image_source_sha }}-${{ inputs.role }}-${{ inputs.namespace }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: github.repository == 'AgoraIO-Extensions/agent-infra' && github.ref == 'refs/heads/main'
+    name: Qualify FileBridge origin (linux/amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    # Inputs reach scripts only as environment values, never as script text.
+    env:
+      TOOL_SOURCE_SHA: ${{ inputs.tool_source_sha }}
+      IMAGE_REFERENCE: ${{ inputs.image }}
+      IMAGE_SOURCE_SHA: ${{ inputs.image_source_sha }}
+      IMAGE_ROLE: ${{ inputs.role }}
+      TARGET_NAMESPACE: ${{ inputs.namespace }}
+      PLATFORM: linux/amd64
+    steps:
+      - name: Validate qualification inputs
+        id: validate
+        run: |
+          set -euo pipefail
+          sha='^[0-9a-f]{40}$'
+          image='^ghcr\.io/agoraio-extensions/agent-infra/[a-z0-9]+([._-][a-z0-9]+)*@sha256:[0-9a-f]{64}$'
+          namespace='^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'
+          fail() {
+            echo "$1" >&2
+            exit 1
+          }
+          [[ "$TOOL_SOURCE_SHA" =~ $sha ]] || fail "tool_source_sha must be a 40-hex commit"
+          [[ "$IMAGE_SOURCE_SHA" =~ $sha ]] || fail "image_source_sha must be a 40-hex commit"
+          [[ "$IMAGE_REFERENCE" =~ $image ]] || fail "image must be ghcr.io/agoraio-extensions/agent-infra/<repository>@sha256:<digest>"
+          case "$IMAGE_ROLE" in
+            runtimeHost | codex | claude | opencode | pi) ;;
+            *) fail "role must be runtimeHost, codex, claude, opencode or pi" ;;
+          esac
+          [[ "$TARGET_NAMESPACE" =~ $namespace ]] || fail "namespace must be a DNS label"
+          [[ "$PLATFORM" == linux/amd64 ]] || fail "platform must be linux/amd64"
+      - name: Checkout tool source
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.tool_source_sha }}
+      - name: Verify merged tool source
+        id: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TOOL_SOURCE_SHA"
+          git merge-base --is-ancestor "$TOOL_SOURCE_SHA" origin/main
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Pull the exact image
+        id: pull
+        timeout-minutes: 15
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          test "$(docker info --format '{{.OSType}}/{{.Architecture}}')" = linux/x86_64
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+          docker pull --platform "$PLATFORM" "$IMAGE_REFERENCE"
+      - name: Qualify FileBridge origin
+        id: qualify
+        timeout-minutes: 40
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TOOL_SOURCE_SHA"
+          directory="$RUNNER_TEMP/file-bridge-qualification"
+          mkdir -p "$directory"
+          node deploy/release/runtime-probe.mjs --file-bridge-qualification \
+            --role "$IMAGE_ROLE" --image-source "$IMAGE_SOURCE_SHA" \
+            --platform "$PLATFORM" --namespace "$TARGET_NAMESPACE" \
+            "$IMAGE_REFERENCE" "$directory/evidence.json" 2>&1 |
+            tee "$directory/qualification.log"
+      - name: Write qualification receipt
+        id: receipt
+        if: ${{ always() && steps.validate.outcome == 'success' }}
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          PULL_OUTCOME: ${{ steps.pull.outcome }}
+          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/file-bridge-qualification"
+          node --input-type=module <<'EOF'
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { existsSync, readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const env = process.env;
+          const directory = join(env.RUNNER_TEMP, "file-bridge-qualification");
+          const digest = (name) =>
+            existsSync(join(directory, name))
+              ? `sha256:${createHash("sha256").update(readFileSync(join(directory, name))).digest("hex")}`
+              : null;
+          const output = (command, args) => {
+            try {
+              return execFileSync(command, args, {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+                timeout: 30_000,
+              }).trim();
+            } catch {
+              return null;
+            }
+          };
+          const parse = (text) => {
+            try {
+              return JSON.parse(text);
+            } catch {
+              return null;
+            }
+          };
+          const evidence = existsSync(join(directory, "evidence.json"))
+            ? parse(readFileSync(join(directory, "evidence.json"), "utf8"))
+            : null;
+          const inputs = {
+            toolSourceSha: env.TOOL_SOURCE_SHA,
+            image: env.IMAGE_REFERENCE,
+            imageSourceSha: env.IMAGE_SOURCE_SHA,
+            role: env.IMAGE_ROLE,
+            namespace: env.TARGET_NAMESPACE,
+            platform: env.PLATFORM,
+          };
+          // The CLI already enforces these; the receipt only passes when the
+          // evidence it carries is bound to exactly the dispatched inputs.
+          const bound =
+            evidence?.kind === "runtime-image-file-bridge-qualification" &&
+            evidence.status === "passed" &&
+            evidence.tool?.commitSha === inputs.toolSourceSha &&
+            evidence.tool?.sourceDirty === false &&
+            evidence.image?.reference === inputs.image &&
+            evidence.image?.sourceCommit === inputs.imageSourceSha &&
+            evidence.image?.role === inputs.role &&
+            evidence.image?.platform === inputs.platform &&
+            evidence.sourceRelation?.imageSourceInToolHistory === true &&
+            evidence.fileBridgeOrigin?.role === inputs.role &&
+            evidence.fileBridgeOrigin?.namespace === inputs.namespace;
+          const image = parse(
+            output("docker", ["image", "inspect", "--format", "{{json .}}", inputs.image]),
+          );
+          const daemon = parse(output("docker", ["info", "--format", "{{json .}}"]));
+          const status = env.QUALIFY_OUTCOME === "success" && bound ? "passed" : "failed";
+          const receipt = {
+            schemaVersion: 1,
+            kind: "runtime-image-file-bridge-qualification-run",
+            status,
+            evidenceBoundToInputs: bound,
+            run: {
+              repository: env.GITHUB_REPOSITORY,
+              id: env.GITHUB_RUN_ID,
+              attempt: env.GITHUB_RUN_ATTEMPT,
+              event: env.GITHUB_EVENT_NAME,
+              ref: env.GITHUB_REF,
+              workflowRef: env.GITHUB_WORKFLOW_REF,
+              workflowSha: env.GITHUB_WORKFLOW_SHA,
+              triggeringActor: env.GITHUB_TRIGGERING_ACTOR,
+              runner: {
+                os: env.RUNNER_OS,
+                arch: env.RUNNER_ARCH,
+                machine: output("uname", ["-m"]),
+              },
+            },
+            inputs,
+            steps: {
+              checkout: env.CHECKOUT_OUTCOME,
+              source: env.SOURCE_OUTCOME,
+              pull: env.PULL_OUTCOME,
+              qualify: env.QUALIFY_OUTCOME,
+            },
+            toolSource: {
+              commit: output("git", ["rev-parse", "HEAD"]),
+              tree: output("git", ["rev-parse", "HEAD^{tree}"]),
+            },
+            daemon: daemon && {
+              serverVersion: daemon.ServerVersion ?? null,
+              osType: daemon.OSType ?? null,
+              architecture: daemon.Architecture ?? null,
+              kernelVersion: daemon.KernelVersion ?? null,
+              operatingSystem: daemon.OperatingSystem ?? null,
+              storageDriver: daemon.Driver ?? null,
+            },
+            image: image && {
+              id: image.Id ?? null,
+              repoDigests: image.RepoDigests ?? [],
+              os: image.Os ?? null,
+              architecture: image.Architecture ?? null,
+              revision: image.Config?.Labels?.["org.opencontainers.image.revision"] ?? null,
+              standardTemplate: image.Config?.Labels?.["io.agora.agent.standard-template"] ?? null,
+            },
+            files: {
+              "evidence.json": digest("evidence.json"),
+              "qualification.log": digest("qualification.log"),
+            },
+          };
+          writeFileSync(join(directory, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
+          const sums = ["evidence.json", "qualification.log", "receipt.json"]
+            .filter((name) => digest(name))
+            .map((name) => `${digest(name).slice("sha256:".length)}  ${name}\n`);
+          writeFileSync(join(directory, "SHA256SUMS"), sums.join(""));
+          console.info(`FileBridge origin qualification receipt: ${status}`);
+          if (status !== "passed") process.exitCode = 1;
+          EOF
+      - name: Upload qualification receipt
+        if: ${{ always() && steps.validate.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-file-bridge-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/file-bridge-qualification/
+          if-no-files-found: error
+          retention-days: 30

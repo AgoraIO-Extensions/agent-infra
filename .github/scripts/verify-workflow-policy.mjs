@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "secret-scan.yml"];
+const REQUIRED_WORKFLOWS = ["ack-image-cache.yml", "auto-merge.yml", "ci-waiver.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "publish-signed-own-entry.yml", "qualify-runtime-file-bridge.yml", "secret-scan.yml"];
 
 // Label events must never start a CI run: a newer run without the required CI
 // check hides the passing one and leaves the PR BLOCKED (#3935). ci:skip

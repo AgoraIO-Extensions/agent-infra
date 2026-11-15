@@ -239,6 +239,29 @@ checkout 必须干净；镜像来源必须在该 checkout 的历史中，镜像�
 `cannot execute <arch> on this Docker daemon` 失败。资格只证明该 digest 的 FileBridge 文件交换行为，
 不代替现场启用、业务文件验收或原生 shell 能力。
 
+现场 linux/amd64 digest 在 GitHub 托管的 `ubuntu-24.04` runner 上用手动触发的
+`Qualify runtime FileBridge origin` workflow（`.github/workflows/qualify-runtime-file-bridge.yml`）执行同一
+CLI，每次一个镜像与角色：
+
+```bash
+gh workflow run qualify-runtime-file-bridge.yml --ref main \
+  -f tool_source_sha=<已合入 main 的 40-hex 提交> \
+  -f image=ghcr.io/agoraio-extensions/agent-infra/<repository>@sha256:<digest> \
+  -f image_source_sha=<镜像 OCI revision> \
+  -f role=<runtimeHost|codex|claude|opencode|pi> -f namespace=<目标 namespace>
+```
+
+- workflow 只在 `main` 上运行。输入在 checkout 前按固定格式校验，只经环境变量进入脚本，错误信息不回显
+  输入；工具来源必须是 `origin/main` 的祖先，并以该提交的干净 checkout 运行。
+- job 只有 `contents: read` 与 `packages: read`：用 workflow token 经 stdin 登录 GHCR，在确认 runner 与
+  Docker 均为 linux/amd64 后只拉取输入的 digest，随即登出；不构建、不打 tag、不发布镜像。namespace
+  只用于 fixture 的 Service DNS 名称。
+- 同一输入组合同时只运行一次，job 60 分钟、拉取 15 分钟、资格 40 分钟后超时。
+- artifact `runtime-file-bridge-qualification-<run_id>-<run_attempt>` 包含 CLI 的 `evidence.json`、
+  `qualification.log`、`receipt.json` 与 `SHA256SUMS`。receipt 记录 run、attempt、workflow 提交、
+  输入、各步骤结果、工具来源 commit/tree、Docker daemon 与镜像身份；只有 CLI 成功且 evidence 的工具来源、
+  镜像引用与来源、角色、平台与 namespace 都等于本次输入时为 `passed`，否则 job 失败并仍上传 receipt。
+
 本验证不代表 #404 多人隔离验收、#194 完整 Pilot 或生产上线，也不执行镜像发布与共享环境部署。
 
 ## Claude Native 核心验收

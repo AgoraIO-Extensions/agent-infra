@@ -166,7 +166,8 @@ FileBridge 的交换、数据面读写或完成确认失败时，Runtime Host �
    替换时，可从仓库执行下面的祖先检查作为基线证据；非零结果或来源缺失必须继续人工
    核查。祖先检查不证明没有后续回退，也不能替代该 digest 的真实 Runtime 文件能力验证；
    该 digest 的 FileBridge origin 行为用
-   [不可变镜像资格](../../deploy/runtime/README.md#filebridge-origin-资格)单独证明。
+   [不可变镜像资格](../../deploy/runtime/README.md#filebridge-origin-资格)单独证明；现场
+   linux/amd64 digest 由该节的手动 workflow 在 GitHub 托管 runner 上执行。
 
    ```bash
    : "${FILE_RUNTIME_SOURCE_SHA:?设置已核实的 Runtime 源码提交}"
