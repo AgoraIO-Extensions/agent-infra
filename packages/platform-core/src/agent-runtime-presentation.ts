@@ -71,16 +71,27 @@ export type AgentConnectionAssociationStatusV1 =
 	| "processing"
 	| "associated"
 	| "failed"
-	| "unverified";
+	| "unverified"
+	| "disabling"
+	| "disabled";
 
 /**
  * 本地登记操作状态到展示状态的映射：pending/sending 为处理中，registered 为已关联，
  * failed 为失败，unknown 为待核实。没有登记行时不展示；约束之外的取值不推断为已关联。
+ * Agent 停用后的 Consumer 停用行（not_required 除外）覆盖登记状态：只有 disabled 显示为
+ * 已停用，其余都是外部停用待处理，不宣称远端凭据已撤销。
  */
 export function presentAgentConnectionAssociationV1(
 	status: string | null | undefined,
+	disableStatus?: string | null,
 ): { readonly status: AgentConnectionAssociationStatusV1 } | undefined {
 	if (status === null || status === undefined) return undefined;
+	if (
+		disableStatus !== null &&
+		disableStatus !== undefined &&
+		disableStatus !== "not_required"
+	)
+		return { status: disableStatus === "disabled" ? "disabled" : "disabling" };
 	if (status === "pending" || status === "sending")
 		return { status: "processing" };
 	if (status === "registered") return { status: "associated" };
@@ -144,6 +155,8 @@ export interface AgentRuntimePresentationFactsV1 {
 	readonly channels: readonly AgentChannelConnectionFactV1[];
 	/** 同一快照内该 Agent 的自动登记操作状态；没有登记行为 null 或省略。 */
 	readonly connectionConsumerRegistrationStatus?: string | null;
+	/** 同一快照内该 Agent 的 Consumer 停用状态；没有停用行为 null 或省略。 */
+	readonly connectionConsumerDisableStatus?: string | null;
 	readonly runtime: null | {
 		readonly revision: number;
 		readonly state: WorkloadReconciliationStateV1;
@@ -283,6 +296,7 @@ export function decideAgentRuntimePresentationV1(input: {
 	}));
 	const association = presentAgentConnectionAssociationV1(
 		facts.connectionConsumerRegistrationStatus,
+		facts.connectionConsumerDisableStatus,
 	);
 	const connectionAssociation =
 		association === undefined ? {} : { connectionAssociation: association };

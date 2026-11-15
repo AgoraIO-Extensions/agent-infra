@@ -1,6 +1,8 @@
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
+	type ConnectionConsumerDisableIntentV1,
 	type ConnectionConsumerRegistrationIntentV1,
+	planConnectionConsumerDisableIdentityV1,
 	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -237,6 +239,206 @@ it("never prepares an installation from an original unknown worker delivery", as
 			}),
 		).toEqual({});
 		expect(resolve).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});
+
+/** Rows the accepted administrator `disable_agent` transaction writes (Store-tested separately). */
+async function disableAgent() {
+	const [registration] =
+		await sql`select operation_id, source_namespace from platform.connection_consumer_registrations where agent_id='agent-a'`;
+	if (!registration) throw new Error("Expected registration");
+	const identity = planConnectionConsumerDisableIdentityV1({
+		registrationOperationId: registration.operation_id,
+		sourceNamespace: registration.source_namespace,
+		platformAgentId: "agent-a",
+	});
+	await sql.begin(async (transaction) => {
+		await transaction`update platform.agent_applications set status='disabled', desired_state='stopped', service_availability=null where agent_id='agent-a'`;
+		await transaction`insert into platform.connection_consumer_disables(operation_id,registration_operation_id,agent_id,source_namespace,idempotency_key) values (${identity.operationId},${identity.registrationOperationId},'agent-a',${identity.sourceNamespace},${identity.idempotencyKey})`;
+		await transaction`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id) values (${identity.operationId},'agent','agent-a','agent.connection.consumer.disable.v1',${transaction.json({ schemaVersion: 1, operationId: identity.operationId, platformAgentId: "agent-a", registrationOperationId: identity.registrationOperationId })},'trace')`;
+	});
+	await sql`update platform.outbox_items set available_at = now() where operation like 'agent.connection.consumer.%'`;
+}
+const disabledReceipt = (intent: ConnectionConsumerDisableIntentV1) => ({
+	outcome: "disabled" as const,
+	receipt: {
+		schemaVersion: 1 as const,
+		operationId: intent.operationId,
+		consumerId: intent.consumerId,
+		registrationId: intent.registrationId,
+		resultRevision: "2",
+		requestDigest: intent.requestDigest,
+	},
+});
+const consumerOutbox = () =>
+	sql`select operation, status from platform.outbox_items order by operation`;
+
+it("disables only the Agent's own registered Consumer once and confirms the exact receipt", async () => {
+	const disable = vi.fn(async (intent: ConnectionConsumerDisableIntentV1) =>
+		disabledReceipt(intent),
+	);
+	const reconcileDisable = vi.fn(
+		async (intent: ConnectionConsumerDisableIntentV1) =>
+			disabledReceipt(intent),
+	);
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter: {
+			register: async (intent) => receipt(intent),
+			reconcile: async (intent) => receipt(intent),
+			disable,
+			reconcileDisable,
+		},
+	});
+	try {
+		await worker.runOnce();
+		expect(disable).not.toHaveBeenCalled();
+		await disableAgent();
+		await worker.runOnce();
+		expect(disable).toHaveBeenCalledOnce();
+		expect(reconcileDisable).not.toHaveBeenCalled();
+		expect(disable.mock.calls[0]?.[0]).toMatchObject({
+			platformAgentId: "agent-a",
+			consumerId: "actual-consumer-a",
+			registrationId: "actual-registration-a",
+			expectedRevision: "1",
+			policyRevision: policy.revision,
+		});
+		expect(
+			await sql`select status, result_revision from platform.connection_consumer_disables`,
+		).toEqual([{ status: "disabled", result_revision: "2" }]);
+		expect(await consumerOutbox()).toEqual([
+			{
+				operation: "agent.connection.consumer.disable.v1",
+				status: "succeeded",
+			},
+			{
+				operation: "agent.connection.consumer.register.v1",
+				status: "succeeded",
+			},
+			{ operation: "agent.workload.reconcile.v1", status: "pending" },
+		]);
+	} finally {
+		await worker.close();
+	}
+});
+
+it("a lost disable response only reads back the original command", async () => {
+	const disable = vi.fn(async (_intent: ConnectionConsumerDisableIntentV1) => {
+		throw new Error("Controlled lost response");
+	});
+	const reconcileDisable = vi.fn(
+		async (intent: ConnectionConsumerDisableIntentV1) =>
+			disabledReceipt(intent),
+	);
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter: {
+			register: async (intent) => receipt(intent),
+			reconcile: async (intent) => receipt(intent),
+			disable,
+			reconcileDisable,
+		},
+	});
+	try {
+		await worker.runOnce();
+		await disableAgent();
+		await worker.runOnce();
+		expect(
+			await sql`select status, request is not null as sent from platform.connection_consumer_disables`,
+		).toEqual([{ status: "unknown", sent: true }]);
+		await sql`update platform.outbox_items set available_at = now() where operation = 'agent.connection.consumer.disable.v1'`;
+		await worker.runOnce();
+		expect(disable).toHaveBeenCalledOnce();
+		expect(reconcileDisable).toHaveBeenCalledOnce();
+		expect(reconcileDisable.mock.calls[0]?.[0]).toEqual(
+			disable.mock.calls[0]?.[0],
+		);
+		expect(
+			await sql`select status from platform.connection_consumer_disables`,
+		).toEqual([{ status: "disabled" }]);
+	} finally {
+		await worker.close();
+	}
+});
+
+it("an adapter without the lifecycle seam never sends a disable", async () => {
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter: {
+			register: async (intent) => receipt(intent),
+			reconcile: async (intent) => receipt(intent),
+		},
+	});
+	try {
+		await worker.runOnce();
+		await disableAgent();
+		await worker.runOnce();
+		expect(
+			await sql`select status, failure_code, request is null as unsent from platform.connection_consumer_disables`,
+		).toEqual([
+			{
+				status: "pending",
+				failure_code: "CONNECTION_DISABLE_ADAPTER_UNAVAILABLE",
+				unsent: true,
+			},
+		]);
+		expect(
+			await sql`select status from platform.outbox_items where operation = 'agent.connection.consumer.disable.v1'`,
+		).toEqual([{ status: "retry_scheduled" }]);
+	} finally {
+		await worker.close();
+	}
+});
+
+it("an Agent disabled before registration was sent never registers or disables", async () => {
+	const register = vi.fn(
+		async (intent: ConnectionConsumerRegistrationIntentV1) => receipt(intent),
+	);
+	const disable = vi.fn(async (intent: ConnectionConsumerDisableIntentV1) =>
+		disabledReceipt(intent),
+	);
+	const worker = createConnectionConsumerRegistrationWorkerV1({
+		databaseUrl: database.databaseUrl,
+		policy,
+		adapter: {
+			register,
+			reconcile: register,
+			disable,
+			reconcileDisable: disable,
+		},
+	});
+	try {
+		await disableAgent();
+		await worker.runOnce();
+		await sql`update platform.outbox_items set available_at = now() where operation = 'agent.connection.consumer.disable.v1'`;
+		await worker.runOnce();
+		expect(register).not.toHaveBeenCalled();
+		expect(disable).not.toHaveBeenCalled();
+		expect(
+			await sql`select status, failure_code from platform.connection_consumer_registrations`,
+		).toEqual([
+			{
+				status: "failed",
+				failure_code: "CONNECTION_REGISTRATION_AGENT_DISABLED",
+			},
+		]);
+		expect(
+			await sql`select status from platform.connection_consumer_disables`,
+		).toEqual([{ status: "not_required" }]);
+		expect(await consumerOutbox()).toEqual([
+			{
+				operation: "agent.connection.consumer.disable.v1",
+				status: "succeeded",
+			},
+			{ operation: "agent.connection.consumer.register.v1", status: "failed" },
+			{ operation: "agent.workload.reconcile.v1", status: "pending" },
+		]);
 	} finally {
 		await worker.close();
 	}

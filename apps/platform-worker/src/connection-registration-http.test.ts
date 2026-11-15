@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { planConnectionConsumerRegistrationV1 } from "@agent-infra/platform-core";
+import {
+	planConnectionConsumerDisableV1,
+	planConnectionConsumerRegistrationV1,
+} from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import { createConnectionConsumerRegistrationHttpAdapterV1 } from "./connection-registration-http.js";
 
@@ -578,4 +581,264 @@ describe("Connection registration HTTP consumer of the fixed v1 contract", () =>
 			).toBe("unknown");
 		},
 	);
+});
+
+describe("Connection Consumer disable over the fixed v1 lifecycle contract (#851)", () => {
+	const disableIntent = planConnectionConsumerDisableV1({
+		policy,
+		registration: {
+			intent,
+			receipt: {
+				schemaVersion: 1,
+				operationId: intent.operationId,
+				sourceNamespace: intent.sourceNamespace,
+				sourceKey: intent.sourceKey,
+				consumerId: "consumer-a",
+				consumerRevision: "1",
+				registrationId: "registration-a",
+				requestDigest: intent.requestDigest,
+			},
+		},
+	});
+	// Computed with an independent copy of connection-core canonicalJson v2 at connection-v0.0.329.
+	const lifecycleDigest =
+		"connection-json-v2:69c0bfde69fa97af5e85a7a016c49509ad12eae5d52065309e0df101c3685400";
+	const disableKeyHash = createHash("sha256")
+		.update(disableIntent.idempotencyKey)
+		.digest("hex");
+	function disabled(): {
+		receipt: Record<string, unknown>;
+		operation: Record<string, unknown>;
+	} {
+		const value = result();
+		value.receipt.status = "DISABLED";
+		value.receipt.revision = "2";
+		value.operation = {
+			...value.operation,
+			kind: "disable",
+			requestKeyHash: disableKeyHash,
+			requestDigestVersion:
+				"platform-agent-consumer-lifecycle-v1/connection-json-v2",
+			requestDigest: lifecycleDigest,
+			expectedRevision: "1",
+			resultRevision: "2",
+		};
+		return value;
+	}
+
+	it("posts only the lifecycle body with its own key to the same Agent's path", async () => {
+		const f = fixture(() => response(disabled()));
+		const disable = f.adapter.disable;
+		if (!disable) throw new Error("Expected lifecycle support");
+		expect(await disable(disableIntent, signal())).toEqual({
+			outcome: "disabled",
+			receipt: {
+				schemaVersion: 1,
+				operationId: disableIntent.operationId,
+				consumerId: "consumer-a",
+				registrationId: "registration-a",
+				resultRevision: "2",
+				requestDigest: disableIntent.requestDigest,
+			},
+		});
+		const request = f.authenticatedRequest.mock.calls[0]?.[0];
+		if (!request) throw new Error("Expected the original request");
+		expect(request.url).toBe(`${root}/disable`);
+		expect(request.method).toBe("POST");
+		expect(request.headers.get("idempotency-key")).toBe(
+			disableIntent.idempotencyKey,
+		);
+		expect(disableIntent.idempotencyKey).not.toBe(intent.idempotencyKey);
+		expect(request.headers.has("cookie")).toBe(false);
+		expect(request.headers.has("authorization")).toBe(false);
+		expect(request.credentials).toBe("omit");
+		expect(request.redirect).toBe("error");
+		expect(await request.json()).toEqual({
+			schemaVersion: 1,
+			policyRevision: policy.revision,
+			revision: "1",
+		});
+		// Disable needs no Owner/Principal resolution on the Platform side.
+		expect(f.resolveOwnerBinding).not.toHaveBeenCalled();
+		expect(f.authenticatedRequest).toHaveBeenCalledOnce();
+	});
+
+	it("reads back only the original disable operation and judges by the operation", async () => {
+		const value = disabled();
+		// The receipt is the current resource; a later delete must not hide the applied disable.
+		value.receipt.status = "DELETED";
+		value.receipt.revision = "3";
+		const f = fixture(() => response(value));
+		const reconcile = f.adapter.reconcileDisable;
+		if (!reconcile) throw new Error("Expected lifecycle support");
+		expect((await reconcile(disableIntent, signal())).outcome).toBe("disabled");
+		const request = f.authenticatedRequest.mock.calls[0]?.[0];
+		expect(request?.method).toBe("GET");
+		expect(request?.url).toBe(`${root}/operations/disable/${disableKeyHash}`);
+		expect(request?.headers.has("idempotency-key")).toBe(false);
+	});
+
+	it("maps a definitive FAILED operation to failed and every uncertain reply to unknown", async () => {
+		const value = disabled();
+		value.receipt.status = "ACTIVE";
+		value.receipt.revision = "1";
+		value.operation.status = "FAILED";
+		value.operation.resultRevision = null;
+		value.operation.failureCode = "REVISION_CHANGED";
+		const failed = fixture(() => response(value));
+		expect(await failed.adapter.disable?.(disableIntent, signal())).toEqual({
+			outcome: "failed",
+			failureCode: "CONNECTION_DISABLE_REJECTED",
+		});
+		const pending = disabled();
+		pending.operation.status = "PENDING";
+		pending.operation.resultRevision = null;
+		for (const reply of [
+			() => response(pending, 202),
+			() =>
+				response(
+					{
+						error: {
+							code: "IDEMPOTENCY_CONFLICT",
+							messageKey: "connection.error.idempotency_conflict",
+							message: "conflict",
+							retryable: false,
+							traceId: "trace",
+						},
+					},
+					409,
+				),
+			() => response(disabled(), 404),
+			() => {
+				throw new Error("response-lost");
+			},
+		])
+			expect(
+				(await fixture(reply).adapter.disable?.(disableIntent, signal()))
+					?.outcome,
+			).toBe("unknown");
+	});
+
+	it.each([
+		[
+			"another Agent",
+			(v: ReturnType<typeof disabled>) => {
+				v.receipt.platformAgentId = "agent-b";
+				v.operation.platformAgentId = "agent-b";
+			},
+		],
+		[
+			"another Consumer",
+			(v: ReturnType<typeof disabled>) => {
+				v.receipt.consumerId = "consumer-b";
+				v.operation.consumerId = "consumer-b";
+			},
+		],
+		[
+			"another create key",
+			(v: ReturnType<typeof disabled>) => {
+				v.receipt.requestKeyHash = "0".repeat(64);
+			},
+		],
+		[
+			"another lifecycle digest",
+			(v: ReturnType<typeof disabled>) => {
+				v.operation.requestDigest = `connection-json-v2:${"0".repeat(64)}`;
+			},
+		],
+		[
+			"the create operation",
+			(v: ReturnType<typeof disabled>) => {
+				v.operation.kind = "create";
+			},
+		],
+		[
+			"a stale expected revision",
+			(v: ReturnType<typeof disabled>) => {
+				v.operation.expectedRevision = "2";
+			},
+		],
+		[
+			"a non-advancing result",
+			(v: ReturnType<typeof disabled>) => {
+				v.operation.resultRevision = "1";
+			},
+		],
+		[
+			"an undeclared secret field",
+			(v: ReturnType<typeof disabled>) => {
+				v.receipt.consumerSecret = "forbidden";
+			},
+		],
+	])("does not confirm a receipt for %s", async (_reason, mutate) => {
+		const value = disabled();
+		mutate(value);
+		expect(
+			(
+				await fixture(() => response(value)).adapter.disable?.(
+					disableIntent,
+					signal(),
+				)
+			)?.outcome,
+		).toBe("unknown");
+	});
+
+	it("does not send under a different approved policy revision", async () => {
+		const f = fixture(() => response(disabled()));
+		const stale = planConnectionConsumerDisableV1({
+			policy: { ...policy, revision: "synthetic-0" },
+			registration: {
+				intent,
+				receipt: {
+					schemaVersion: 1,
+					operationId: intent.operationId,
+					sourceNamespace: intent.sourceNamespace,
+					sourceKey: intent.sourceKey,
+					consumerId: "consumer-a",
+					consumerRevision: "1",
+					registrationId: "registration-a",
+					requestDigest: intent.requestDigest,
+				},
+			},
+		});
+		// Certainly not started: the worker may return the command to the unsent state.
+		await expect(f.adapter.disable?.(stale, signal())).rejects.toThrow(
+			"CONNECTION_DISABLE_NOT_SENT",
+		);
+		expect(f.authenticatedRequest).not.toHaveBeenCalled();
+		// A readback never claims "not sent": a pre-request failure stays unknown.
+		await expect(
+			f.adapter.reconcileDisable?.(
+				{ ...stale, sourceNamespace: "other.source" },
+				signal(),
+			),
+		).resolves.toEqual({
+			outcome: "unknown",
+			failureCode: "CONNECTION_DISABLE_UNCONFIRMED",
+		});
+		expect(f.authenticatedRequest).not.toHaveBeenCalled();
+		// A readback of an already-sent command is not blocked by a later revision rotation.
+		const value = disabled();
+		value.operation.requestDigest =
+			"connection-json-v2:" +
+			createHash("sha256")
+				.update(
+					`connection-json-v2:${JSON.stringify({
+						consumerId: "consumer-a",
+						expectedRevision: "1",
+						kind: "disable",
+						platformAgentId: "agent-a",
+						policyRevision: "synthetic-0",
+						schemaVersion: 1,
+						sourceNamespace: policy.sourceNamespace,
+						version: "platform-agent-consumer-lifecycle-v1",
+					})}`,
+				)
+				.digest("hex");
+		const readback = fixture(() => response(value));
+		expect(
+			(await readback.adapter.reconcileDisable?.(stale, signal()))?.outcome,
+		).toBe("disabled");
+		expect(readback.authenticatedRequest.mock.calls[0]?.[0].method).toBe("GET");
+	});
 });

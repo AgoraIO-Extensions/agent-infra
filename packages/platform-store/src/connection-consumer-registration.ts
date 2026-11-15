@@ -94,6 +94,7 @@ export async function insertConnectionConsumerRegistrationV1(
 type RegistrationRow = {
 	request: unknown;
 	status: string;
+	never_sent: boolean;
 	current_owner_id: string | null;
 	current_status: string | null;
 	owner_current: boolean;
@@ -250,7 +251,8 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 		`;
 		if (!outbox) return undefined;
 		const [row] = await transaction<RegistrationRow[]>`
-			select r.request, r.status, a.applicant_id as current_owner_id,
+			select r.request, r.status, r.sending_at is null as never_sent,
+				a.applicant_id as current_owner_id,
 				a.status as current_status,
 				exists(select 1 from platform.agent_owners own where own.agent_id = r.agent_id
 					and own.owner_id = r.request->>'platformOwnerId')
@@ -276,6 +278,7 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 		return row;
 	}
 
+	/** Only read-only recovery of an already-sent `unknown` operation may continue after Agent disable. */
 	#eligible(
 		row: RegistrationRow,
 		intent: ConnectionConsumerRegistrationIntentV1,
@@ -286,6 +289,7 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 			ownerId: row.current_owner_id,
 			ownerCurrent: row.owner_current,
 			agentStatus: row.current_status,
+			readOnly: row.status === "unknown",
 		});
 	}
 
@@ -296,7 +300,28 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 			const intent = parseConnectionConsumerRegistrationIntentV1(row.request);
 			if (row.status === "registered" || row.status === "failed")
 				return { outcome: row.status as "registered" | "failed" };
-			if (!adapterAvailable || !this.#eligible(row, intent)) {
+			// A disabled Agent never registers: a never-sent operation is definitively not in effect.
+			if (
+				row.current_status === "disabled" &&
+				row.status === "pending" &&
+				row.never_sent
+			) {
+				await transaction`
+					update platform.connection_consumer_registrations set status = 'failed',
+						failure_code = 'CONNECTION_REGISTRATION_AGENT_DISABLED', updated_at = clock_timestamp()
+					where operation_id = ${claim.itemId}
+				`;
+				return { outcome: "failed" as const };
+			}
+			// An interrupted `sending` is reconciled read-only, never sent again.
+			const reconciling = row.status !== "pending";
+			if (
+				!adapterAvailable ||
+				!this.#eligible(
+					{ ...row, status: reconciling ? "unknown" : row.status },
+					intent,
+				)
+			) {
 				const status = row.status === "pending" ? "pending" : "unknown";
 				await transaction`
 					update platform.connection_consumer_registrations set status = ${status},

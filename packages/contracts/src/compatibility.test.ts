@@ -1452,6 +1452,60 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the appended Consumer disable association states (#851)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
+		const status = (value: typeof current, name: string) =>
+			value.components.schemas[name].properties.connectionAssociation.properties
+				.status;
+		const previous = structuredClone(current);
+		for (const name of names)
+			status(previous, name).enum = [
+				"processing",
+				"associated",
+				"failed",
+				"unverified",
+			];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-connection-disable-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 只能追加 disabling/disabled，不能再借此增加其他状态。
+				(value: typeof current) => {
+					status(value, "AgentProjectionV2").enum.push("revoked");
+				},
+				(value: typeof current) => {
+					status(value, "AgentDetailProjectionV1").enum.reverse();
+				},
+				// 去掉既有状态仍是破坏性变化。
+				(value: typeof current) => {
+					status(value, "AgentProjectionV2").enum = ["disabling", "disabled"];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the pinned Agent creation failure category read (#3034)", async () => {
 		const current = JSON.parse(
 			await readFile(

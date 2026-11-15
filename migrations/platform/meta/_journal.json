@@ -533,6 +533,13 @@
       "when": 1794318956418,
       "tag": "0079_connection_consumer_registrations",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1794741469810,
+      "tag": "0080_connection_consumer_disables",
+      "breakpoints": true
     }
   ]
 }

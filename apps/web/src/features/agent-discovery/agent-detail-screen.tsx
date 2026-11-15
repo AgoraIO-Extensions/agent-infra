@@ -94,6 +94,8 @@ const connectionAssociationChips = {
 	associated: { label: "已关联", tone: "green" },
 	failed: { label: "关联失败", tone: "red" },
 	unverified: { label: "待核实", tone: "amber" },
+	disabling: { label: "停用待处理", tone: "amber" },
+	disabled: { label: "已停用", tone: "gray" },
 } satisfies Record<
 	NonNullable<AgentDetail["connectionAssociation"]>["status"],
 	{ label: string; tone: ChipTone }
@@ -530,7 +532,10 @@ export function AgentDetailScreen({
 									}
 								</Badge>
 								<small className="text-muted-foreground">
-									关联不代表本人已授权或工具可调用。
+									{agent.connectionAssociation.status === "disabling" ||
+									agent.connectionAssociation.status === "disabled"
+										? "Consumer 停用不代表已发出的凭据均已撤销。"
+										: "关联不代表本人已授权或工具可调用。"}
 								</small>
 							</div>
 						)}

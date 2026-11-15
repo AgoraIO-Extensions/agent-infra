@@ -71,6 +71,10 @@ export {
 	PostgresCommitWakeupListenerV1,
 } from "./commit-wakeups.ts";
 export {
+	type ConnectionConsumerDisableAttemptV1,
+	PostgresConnectionConsumerDisableStoreV1,
+} from "./connection-consumer-disable.js";
+export {
 	PostgresConnectionConsumerRegistrationStoreV1,
 	readConnectionConsumerSourceSelectionV1,
 	readRegisteredConnectionConsumerBindingsV1,

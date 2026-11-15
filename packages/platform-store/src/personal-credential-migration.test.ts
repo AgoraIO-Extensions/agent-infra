@@ -175,6 +175,7 @@ beforeAll(async () => {
 		{ idx: 77, tag: "0077_snapshot_upload_admission" },
 		{ idx: 78, tag: "0078_workspace_snapshot_upload_objects" },
 		{ idx: 79, tag: "0079_connection_consumer_registrations" },
+		{ idx: 80, tag: "0080_connection_consumer_disables" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

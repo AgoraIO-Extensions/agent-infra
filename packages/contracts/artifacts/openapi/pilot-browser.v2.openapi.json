@@ -3090,7 +3090,9 @@
                   "processing",
                   "associated",
                   "failed",
-                  "unverified"
+                  "unverified",
+                  "disabling",
+                  "disabled"
                 ],
                 "type": "string"
               }
@@ -3823,7 +3825,9 @@
                   "processing",
                   "associated",
                   "failed",
-                  "unverified"
+                  "unverified",
+                  "disabling",
+                  "disabled"
                 ],
                 "type": "string"
               }
