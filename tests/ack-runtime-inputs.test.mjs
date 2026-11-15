@@ -3456,3 +3456,334 @@ test("a legacy owned-resource ledger fails closed unless its own run binds every
 		},
 	);
 });
+
+/**
+ * Publishes once with fresh candidates, then mounts the same Secrets as immutable and moves the clock a
+ * day ahead: every original candidate has expired and only the adopted records are still valid.
+ */
+async function adoptedThenExpired(t) {
+	const f = await fixture(t);
+	const resourceConfigurationHash = await executorMeasurements(f);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	for (const name of ["api-config", "worker-config"])
+		f.cluster.get(`secret/${name}`).immutable = true;
+	f.capacity = JSON.parse(await readFile(f.files.capacity));
+	// The successor plan writes nothing and does not refresh the login identity.
+	f.files.login = undefined;
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.now() + 24 * 60 * 60 * 1000,
+	});
+	return { f, resourceConfigurationHash };
+}
+
+const successorPlan = (f) =>
+	publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		false,
+		undefined,
+		{
+			successor: true,
+		},
+	);
+const jsonText = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+const publishedProfiles = (f) =>
+	JSON.parse(
+		Buffer.from(
+			f.cluster.get("secret/worker-config").data["capacity.json"],
+			"base64",
+		),
+	);
+
+/** Changes one mounted key as a completed publication would: local input, live Secret and rollout hash. */
+async function republish(f, secretName, key, bytes) {
+	const bootstrap = JSON.parse(await readFile(f.files.bootstrap));
+	await writeFile(
+		bootstrap.objects.find((object) => object.name === secretName).files[key],
+		bytes,
+	);
+	const secret = f.cluster.get(`secret/${secretName}`);
+	secret.data = {
+		...secret.data,
+		[key]: Buffer.from(bytes).toString("base64"),
+	};
+	secret.metadata.resourceVersion = String(
+		Number(secret.metadata.resourceVersion) + 1,
+	);
+	f.cluster.get(
+		`deployment/agent-infra-${secretName.split("-")[0]}`,
+	).spec.template.metadata.annotations[
+		"agent-infra.agora.io/runtime-inputs-hash"
+	] = sha256(
+		JSON.stringify(
+			Object.entries(secret.data).sort(([a], [b]) => a.localeCompare(b)),
+		),
+	);
+}
+
+test("a successor plan appends a retained image's measured capacity after candidate expiry without re-adoption", async (t) => {
+	for (const [name, measure, imageDigest] of [
+		["a current-format retained ledger", retainedMeasurement, retainedDigest],
+		["the legacy Claude ledger shape", legacyRetainedMeasurement, legacyDigest],
+	])
+		await t.test(name, async (t) => {
+			const { f, resourceConfigurationHash } = await adoptedThenExpired(t);
+			const live = Object.fromEntries(
+				["api-config", "worker-config"].map((secret) => [
+					secret,
+					structuredClone(f.cluster.get(`secret/${secret}`)),
+				]),
+			);
+			const mutations = f.mutations.length;
+			const retained = await measure(f);
+			const attempts = await readdir(dirname(f.files.templates));
+			const result = await successorPlan(f);
+			assert.equal(result.mode, "successor-plan");
+			assert.equal(result.changedSecretCount, 1);
+			assert.equal(f.mutations.length, mutations);
+			assert.deepEqual(
+				await readdir(dirname(f.files.templates)),
+				attempts,
+				"no new adoption attempt is minted",
+			);
+			for (const entry of result.successor.secrets) {
+				const current = live[entry.name];
+				assert.deepEqual(f.cluster.get(`secret/${entry.name}`), current);
+				assert.equal(entry.uid, current.metadata.uid);
+				assert.equal(entry.resourceVersion, current.metadata.resourceVersion);
+				assert.deepEqual(
+					entry.changedKeys,
+					entry.name === "worker-config" ? ["capacity.json"] : [],
+				);
+				for (const key of Object.keys(current.data))
+					if (key !== "capacity.json")
+						assert.equal(entry.data[key], current.data[key], key);
+			}
+			const before = Buffer.from(
+				live["worker-config"].data["capacity.json"],
+				"base64",
+			);
+			const after = Buffer.from(
+				result.successor.secrets.find((entry) => entry.name === "worker-config")
+					.data["capacity.json"],
+				"base64",
+			);
+			// Every published byte keeps its place; the new profile is inserted at the end of the list.
+			const end = before.lastIndexOf("\n  ]");
+			assert(after.subarray(0, end).equals(before.subarray(0, end)));
+			assert(
+				after
+					.subarray(after.length - (before.length - end))
+					.equals(before.subarray(end)),
+			);
+			assert.deepEqual(
+				JSON.parse(after).profiles.slice(JSON.parse(before).profiles.length),
+				[
+					{
+						schemaVersion: 1,
+						imageDigest,
+						resourceProfileRef: f.capacity.resourceProfileRef,
+						resourceConfigurationHash,
+						maximumConcurrentExecutions: 1,
+						conformanceEvidenceHash: sha256(retained.bytes),
+					},
+				],
+			);
+			assert.deepEqual(
+				(await successorPlan(f)).successor,
+				result.successor,
+				"a rerun plans the same bytes",
+			);
+		});
+});
+
+test("a capacity append after candidate expiry fails closed unless it is the only difference", async (t) => {
+	const expired = /RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED/u;
+	const otherDigest = `sha256:${"6".repeat(64)}`;
+	const rerunCodex = async (f, change) => {
+		const templates = JSON.parse(await readFile(f.files.templates));
+		await change(
+			templates.templates.find((entry) => entry.templateId === "codex"),
+		);
+		await f.save(f.files.templates, templates);
+	};
+	for (const [name, change, code = expired] of [
+		[
+			"an in-place plan of mutable Secrets",
+			async (f) => {
+				for (const secret of ["api-config", "worker-config"])
+					f.cluster.get(`secret/${secret}`).immutable = false;
+				return () =>
+					publishRuntimeInputs(f.files, f.rendered, source, f.kubectl);
+			},
+		],
+		[
+			"a rerun template candidate",
+			(f) =>
+				rerunCodex(f, async (codex) => {
+					for (const field of ["validationFile", "preflightFile"])
+						codex[field] = await f.save(
+							join(dirname(codex[field]), `rerun-${field}.json`),
+							{
+								...JSON.parse(await readFile(codex[field])),
+								executionId: "execution-codex-rerun",
+							},
+						);
+				}),
+		],
+		[
+			"another template model",
+			(f) =>
+				rerunCodex(f, (codex) => {
+					codex.modelId = "model-codex-next";
+				}),
+		],
+		[
+			"published profiles from another source",
+			(f) =>
+				republish(
+					f,
+					"worker-config",
+					"capacity.json",
+					jsonText({ ...publishedProfiles(f), sourceSha: "b".repeat(40) }),
+				),
+		],
+		[
+			"another resource profile policy",
+			async (f) => {
+				f.capacity.resourceProfileRef = "other-runtime";
+				await f.save(f.files.capacity, f.capacity);
+			},
+			/RUNTIME_INPUTS_INVALID/u,
+		],
+		[
+			"a current template approval removed by another writer",
+			(f) => {
+				const document = publishedProfiles(f);
+				return republish(
+					f,
+					"worker-config",
+					"capacity.json",
+					jsonText({
+						...document,
+						profiles: document.profiles.filter(
+							(profile) => profile.imageDigest !== f.templates[0].imageDigest,
+						),
+					}),
+				);
+			},
+		],
+		[
+			"published profiles re-serialized by another writer",
+			(f) =>
+				republish(
+					f,
+					"worker-config",
+					"capacity.json",
+					Buffer.from(`${JSON.stringify(publishedProfiles(f))}\n`),
+				),
+		],
+		[
+			"a non-capacity input that differs from the mounted Secret",
+			async (f) => {
+				const bootstrap = JSON.parse(await readFile(f.files.bootstrap));
+				await writeFile(
+					bootstrap.objects.find((object) => object.name === "worker-config")
+						.files["private-input"],
+					"private-config-changed",
+				);
+			},
+		],
+		[
+			"a live capacity key that differs from its local baseline",
+			(f) => {
+				const document = publishedProfiles(f);
+				const secret = f.cluster.get("secret/worker-config");
+				secret.data["capacity.json"] = jsonText({
+					...document,
+					profiles: [
+						...document.profiles,
+						{ ...document.profiles[0], imageDigest: otherDigest },
+					],
+				}).toString("base64");
+				secret.metadata.resourceVersion = String(
+					Number(secret.metadata.resourceVersion) + 1,
+				);
+			},
+		],
+		[
+			"a Secret of another owner",
+			(f) => {
+				f.cluster.get("secret/worker-config").metadata.labels[ownerLabel] =
+					"other-installation";
+			},
+			/RUNTIME_INPUT_SECRET_OWNER_INVALID/u,
+		],
+		[
+			"one record left as a candidate in one Secret",
+			async (f) =>
+				republish(
+					f,
+					"api-config",
+					"template-validation-codex.json",
+					await readFile(f.templates[0].validationFile),
+				),
+		],
+		[
+			"candidate-only records",
+			async (f) => {
+				for (const expected of f.templates)
+					for (const secret of ["api-config", "worker-config"])
+						await republish(
+							f,
+							secret,
+							`template-validation-${expected.templateId}.json`,
+							await readFile(expected.validationFile),
+						);
+			},
+		],
+		[
+			"a candidate capacity profile merge",
+			async (f) => {
+				f.capacity.candidateProfilesFile = await f.save(
+					join(dirname(f.files.capacity), "candidate-profiles.json"),
+					{
+						schemaVersion: 1,
+						profiles: [
+							{ ...publishedProfiles(f).profiles[0], imageDigest: otherDigest },
+						],
+					},
+				);
+				await f.save(f.files.capacity, f.capacity);
+			},
+		],
+		[
+			"a Worker rollout that has not converged",
+			(f) => {
+				f.cluster.get("deployment/agent-infra-worker").status.updatedReplicas =
+					0;
+			},
+		],
+		[
+			"an existing evidence entry replaced by the append",
+			async (f) => {
+				f.capacity.evidence = [
+					...f.capacity.evidence,
+					{ imageDigest: retainedDigest, file: f.capacity.evidence[0].file },
+				];
+				await f.save(f.files.capacity, f.capacity);
+			},
+		],
+	])
+		await t.test(name, async (t) => {
+			const { f } = await adoptedThenExpired(t);
+			await retainedMeasurement(f);
+			const run = (await change(f)) ?? (() => successorPlan(f));
+			const mutations = f.mutations.length;
+			await assert.rejects(run(), code);
+			assert.equal(f.mutations.length, mutations);
+		});
+});

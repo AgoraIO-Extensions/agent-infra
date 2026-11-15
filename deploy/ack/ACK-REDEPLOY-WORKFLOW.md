@@ -794,6 +794,14 @@ ACK_RUNTIME_INPUT_SUCCESSOR_FILE=/private/ack/attempt/successor.private.json \
 resourceVersion、消费组件、变化键、Deployment revision 和完整最终数据。部署仓库的发布器据此
 创建新的不可变 Secret，通过 Helm 改绑并回读挂载字节；原 Secret 保持不变。
 
+原模板候选过期后，`successor-plan` 仍复用已采用记录的前提是：每个挂载 Secret 中的记录都与候选、
+preflight 字节及采用来源完全匹配，挂载数据与本地输入相同，Deployment 也已按当前数据完成 rollout。
+除只提高总预算的下一 reserve revision 外，它还接受为保留镜像追加新测量的容量 profile：已发布
+profile 文档的原有字节不变，只在列表末尾加入该镜像在当前完整 key 下的 profile；capacity 输入只在
+`evidence` 末尾加入对应测量收据；其他暂存文件（含登录身份和 reserve）全部不变。当前模板镜像缺少
+批准、合并 candidate profile、source 或其他字段漂移时仍要求新的候选；in-place `plan`/`apply`
+不使用这两类例外。
+
 ### 隔离 custom 容量测量
 
 该入口只测量 `platform-adapter` / ACP 的 `linux/amd64` child image；`self-managed` 不适用。
