@@ -1,10 +1,13 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
+	type ConnectionConsumerDisableDeliveryV1,
+	type ConnectionConsumerDisableIntentV1,
 	type ConnectionConsumerRegistrationDeliveryV1,
 	type ConnectionConsumerRegistrationIntentV1,
 	type ConnectionConsumerRegistrationPolicyV1,
 	captureConnectionConsumerRegistrationPolicyV1,
+	parseConnectionConsumerDisableIntentV1,
 	parseConnectionConsumerRegistrationIntentV1,
 } from "@agent-infra/platform-core";
 import type { ConnectionConsumerRegistrationAdapterV1 } from "./connection-registration-worker.js";
@@ -30,6 +33,8 @@ export interface ConnectionRegistrationHttpOptionsV1 {
 }
 
 const digestVersion = "platform-agent-consumer-v1/connection-json-v2";
+const lifecycleDigestVersion =
+	"platform-agent-consumer-lifecycle-v1/connection-json-v2";
 const component = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/;
 const receiptKeys = [
 	"schemaVersion",
@@ -70,6 +75,10 @@ const operationKeys = [
 const unknown = (): ConnectionConsumerRegistrationDeliveryV1 => ({
 	outcome: "unknown",
 	failureCode: "CONNECTION_REGISTRATION_UNCONFIRMED",
+});
+const disableUnknown = (): ConnectionConsumerDisableDeliveryV1 => ({
+	outcome: "unknown",
+	failureCode: "CONNECTION_DISABLE_UNCONFIRMED",
 });
 const invalid = () => new Error("CONNECTION_REGISTRATION_RESPONSE_INVALID");
 
@@ -138,6 +147,21 @@ function remoteDigest(
 	return `connection-json-v2:${hash(`connection-json-v2:${json}`)}`;
 }
 
+/** Connection lifecycle digest (registration Spec §4); keys are in canonical ASCII order. */
+function lifecycleDigest(intent: ConnectionConsumerDisableIntentV1) {
+	const json = JSON.stringify({
+		consumerId: intent.consumerId.normalize("NFC"),
+		expectedRevision: intent.expectedRevision,
+		kind: "disable",
+		platformAgentId: intent.platformAgentId,
+		policyRevision: intent.policyRevision,
+		schemaVersion: 1,
+		sourceNamespace: intent.sourceNamespace,
+		version: "platform-agent-consumer-lifecycle-v1",
+	});
+	return `connection-json-v2:${hash(`connection-json-v2:${json}`)}`;
+}
+
 async function readJson(
 	response: Response,
 	signal: AbortSignal,
@@ -188,7 +212,7 @@ async function readJson(
 	}
 }
 
-/** Supplies only the existing register/reconcile seam; no production route is enabled here. */
+/** Supplies only the existing register/reconcile/disable seam; no production route is enabled here. */
 export function createConnectionConsumerRegistrationHttpAdapterV1(
 	options: ConnectionRegistrationHttpOptionsV1,
 ): ConnectionConsumerRegistrationAdapterV1 | undefined {
@@ -388,8 +412,138 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 			return unknown();
 		}
 	}
+	/** `POST R/disable` once; unknown results only read back `GET R/operations/disable/{hash}`. */
+	async function lifecycle(
+		input: ConnectionConsumerDisableIntentV1,
+		signal: AbortSignal,
+		mode: "disable" | "reconcile",
+	): Promise<ConnectionConsumerDisableDeliveryV1> {
+		try {
+			signal.throwIfAborted();
+			const intent = parseConnectionConsumerDisableIntentV1(input);
+			if (
+				intent.sourceNamespace !== policy.sourceNamespace ||
+				intent.policyRevision !== policy.revision ||
+				!component.test(intent.platformAgentId)
+			)
+				throw invalid();
+			const keyHash = hash(intent.idempotencyKey);
+			const digest = lifecycleDigest(intent);
+			const root = `${origin.origin}/connection/internal/v1/platform-agent-consumer-registrations/${encodeURIComponent(intent.sourceNamespace)}/${encodeURIComponent(intent.platformAgentId)}`;
+			const target =
+				mode === "disable"
+					? `${root}/disable`
+					: `${root}/operations/disable/${keyHash}`;
+			const headers: Record<string, string> = { accept: "application/json" };
+			if (mode === "disable") {
+				headers["content-type"] = "application/json";
+				headers["idempotency-key"] = intent.idempotencyKey;
+			}
+			const httpRequest = new Request(target, {
+				method: mode === "disable" ? "POST" : "GET",
+				headers,
+				...(mode === "disable"
+					? {
+							body: JSON.stringify({
+								schemaVersion: 1,
+								policyRevision: intent.policyRevision,
+								revision: intent.expectedRevision,
+							}),
+						}
+					: {}),
+				credentials: "omit",
+				redirect: "error",
+				signal,
+			});
+			const response = await request(httpRequest);
+			if (
+				signal.aborted ||
+				response.redirected ||
+				(response.url && response.url !== target) ||
+				response.status !== 200
+			) {
+				// 202, error envelopes and transport surprises cannot be bound to the original command.
+				void response.body?.cancel().catch(() => {});
+				return disableUnknown();
+			}
+			const value = exact(await readJson(response, signal), [
+				"receipt",
+				"operation",
+			]);
+			const receipt = exact(value.receipt, receiptKeys, [
+				"protectedHandoffRef",
+			]);
+			const operation = exact(value.operation, operationKeys);
+			if (
+				receipt.schemaVersion !== 1 ||
+				receipt.sourceNamespace !== intent.sourceNamespace ||
+				receipt.platformAgentId !== intent.platformAgentId ||
+				receipt.consumerId !== intent.consumerId ||
+				receipt.registrationId !== intent.registrationId ||
+				receipt.executionMode !== "USER" ||
+				receipt.requestKeyHash !== intent.registrationKeyHash ||
+				receipt.requestDigestVersion !== digestVersion ||
+				typeof receipt.requestDigest !== "string" ||
+				!/^connection-json-v2:[a-f0-9]{64}$/.test(receipt.requestDigest) ||
+				!revision(receipt.revision) ||
+				!["PENDING", "ACTIVE", "DISABLED", "DELETED", "UNKNOWN"].includes(
+					String(receipt.status),
+				)
+			)
+				throw invalid();
+			if (
+				operation.schemaVersion !== 1 ||
+				operation.kind !== "disable" ||
+				operation.sourceNamespace !== intent.sourceNamespace ||
+				operation.platformAgentId !== intent.platformAgentId ||
+				operation.consumerId !== intent.consumerId ||
+				operation.registrationId !== intent.registrationId ||
+				operation.requestKeyHash !== keyHash ||
+				operation.requestDigestVersion !== lifecycleDigestVersion ||
+				operation.requestDigest !== digest ||
+				operation.expectedRevision !== intent.expectedRevision ||
+				!["PENDING", "UNKNOWN", "APPLIED", "FAILED"].includes(
+					String(operation.status),
+				) ||
+				(operation.status === "FAILED"
+					? typeof operation.failureCode !== "string" ||
+						!/^[A-Z][A-Z0-9_]{0,63}$/.test(operation.failureCode)
+					: operation.failureCode !== null) ||
+				(operation.status === "APPLIED"
+					? !revision(operation.resultRevision) ||
+						BigInt(operation.resultRevision) <=
+							BigInt(intent.expectedRevision) ||
+						BigInt(operation.resultRevision) >
+							BigInt(receipt.revision as string)
+					: operation.resultRevision !== null)
+			)
+				throw invalid();
+			if (operation.status === "FAILED")
+				return {
+					outcome: "failed",
+					failureCode: "CONNECTION_DISABLE_REJECTED",
+				};
+			if (operation.status !== "APPLIED") return disableUnknown();
+			return {
+				outcome: "disabled",
+				receipt: {
+					schemaVersion: 1,
+					operationId: intent.operationId,
+					consumerId: intent.consumerId,
+					registrationId: intent.registrationId,
+					resultRevision: operation.resultRevision as string,
+					requestDigest: intent.requestDigest,
+				},
+			};
+		} catch {
+			return disableUnknown();
+		}
+	}
 	return {
 		register: (intent, signal) => execute(intent, signal, "register"),
 		reconcile: (intent, signal) => execute(intent, signal, "reconcile"),
+		disable: (intent, signal) => lifecycle(intent, signal, "disable"),
+		reconcileDisable: (intent, signal) =>
+			lifecycle(intent, signal, "reconcile"),
 	};
 }

@@ -1228,4 +1228,51 @@ describe("Agent Connection association presentation (#851)", () => {
 			}),
 		).toEqual({ outcome: "unavailable" });
 	});
+
+	it("overrides the association with the Consumer disable state after Agent disable", () => {
+		expect(
+			[
+				"waiting",
+				"pending",
+				"sending",
+				"unknown",
+				"failed",
+				"disabled",
+				"not_required",
+				null,
+				undefined,
+			].map(
+				(disable) =>
+					presentAgentConnectionAssociationV1("registered", disable)?.status,
+			),
+		).toEqual([
+			"disabling",
+			"disabling",
+			"disabling",
+			"disabling",
+			"disabling",
+			"disabled",
+			"associated",
+			"associated",
+			"associated",
+		]);
+		// 没有登记行时停用行不会单独产生字段。
+		expect(presentAgentConnectionAssociationV1(null, "disabled")).toBe(
+			undefined,
+		);
+		const input = fixture();
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				facts: {
+					...input.facts,
+					connectionConsumerRegistrationStatus: "registered",
+					connectionConsumerDisableStatus: "unknown",
+				},
+			}),
+		).toMatchObject({
+			outcome: "found",
+			connectionAssociation: { status: "disabling" },
+		});
+	});
 });

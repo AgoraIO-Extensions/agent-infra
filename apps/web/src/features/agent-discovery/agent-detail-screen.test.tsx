@@ -264,6 +264,31 @@ describe("AgentDetailScreen", () => {
 		).toBe(false);
 	});
 
+	it("shows Consumer disable as pending or confirmed without claiming token revocation (#851)", async () => {
+		for (const [status, label, tone] of [
+			["disabling", "停用待处理", "amber"],
+			["disabled", "已停用", "gray"],
+		] as const) {
+			const agent = AgentDetailProjectionV1Schema.parse({
+				...readyAgent,
+				connectionAssociation: { status },
+			});
+			await renderWithAgentRouter(
+				<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			);
+			const row = screen.getByTestId("agent-connection-association");
+			expect(row.textContent).toBe(
+				`Connection 关联${label}Consumer 停用不代表已发出的凭据均已撤销。`,
+			);
+			expect(
+				row
+					.querySelector('[data-slot="badge"][data-variant="chip"]')
+					?.getAttribute("data-tone"),
+			).toBe(tone);
+			cleanup();
+		}
+	});
+
 	it("links the Owner to the Agent Skill page with a ghost「可用 Skill」(D-03)", async () => {
 		await renderWithAgentRouter(
 			<AgentDetailScreen

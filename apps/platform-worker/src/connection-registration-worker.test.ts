@@ -1,5 +1,5 @@
 import { planConnectionConsumerRegistrationV1 } from "@agent-infra/platform-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	pending: vi.fn(),
@@ -12,6 +12,11 @@ const mocks = vi.hoisted(() => ({
 	markSucceeded: vi.fn(),
 	markFailed: vi.fn(),
 	scheduleRetry: vi.fn(),
+	disablePending: vi.fn(),
+	disableBeginAttempt: vi.fn(),
+	disableCurrent: vi.fn(),
+	disableComplete: vi.fn(),
+	disableDeferBeforeSend: vi.fn(),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresConnectionConsumerRegistrationStoreV1: class {
@@ -20,6 +25,14 @@ vi.mock("@agent-infra/platform-store", () => ({
 		current = mocks.current;
 		complete = mocks.complete;
 		deferBeforeSend = mocks.deferBeforeSend;
+		close = async () => {};
+	},
+	PostgresConnectionConsumerDisableStoreV1: class {
+		pending = mocks.disablePending;
+		beginAttempt = mocks.disableBeginAttempt;
+		current = mocks.disableCurrent;
+		complete = mocks.disableComplete;
+		deferBeforeSend = mocks.disableDeferBeforeSend;
 		close = async () => {};
 	},
 	createPostgresOutboxStore: () => ({
@@ -53,6 +66,7 @@ const reconcile = vi.fn();
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.pending.mockResolvedValue([intent.operationId]);
+	mocks.disablePending.mockResolvedValue([]);
 	mocks.claim.mockImplementation(async (input) => ({
 		...input,
 		scopeId: "agent-a",
@@ -210,4 +224,101 @@ it("stop aborts an in-flight adapter without blocking maintenance shutdown", asy
 	expect(register.mock.calls[0]?.[1].aborted).toBe(true);
 	expect(mocks.markSucceeded).not.toHaveBeenCalled();
 	await worker.close();
+});
+
+describe("Consumer disable in the same outbox loop (#851)", () => {
+	const disableIntent = { operationId: "connection-consumer-disable:x" };
+	beforeEach(() => {
+		mocks.pending.mockResolvedValue([]);
+		mocks.disablePending.mockResolvedValue([disableIntent.operationId]);
+		mocks.disableCurrent.mockResolvedValue(true);
+		mocks.disableComplete.mockResolvedValue(true);
+	});
+
+	it("reports no lifecycle seam unless both disable methods exist", async () => {
+		mocks.disableBeginAttempt.mockResolvedValue({ outcome: "pending" });
+		const disable = vi.fn();
+		const worker = createConnectionConsumerRegistrationWorkerV1({
+			databaseUrl: "unused",
+			policy,
+			adapter: { register, reconcile, disable },
+		});
+		await worker.runOnce();
+		expect(mocks.disableBeginAttempt).toHaveBeenCalledWith(
+			expect.anything(),
+			false,
+		);
+		expect(disable).not.toHaveBeenCalled();
+		expect(mocks.scheduleRetry).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: "CONNECTION_DISABLE_PENDING" }),
+		);
+		await worker.close();
+	});
+
+	it("does not send after the lease or original state is lost", async () => {
+		mocks.disableBeginAttempt.mockResolvedValue({
+			outcome: "deliver",
+			mode: "disable",
+			intent: disableIntent,
+		});
+		mocks.disableCurrent.mockResolvedValue(false);
+		const disable = vi.fn();
+		const reconcileDisable = vi.fn();
+		const worker = createConnectionConsumerRegistrationWorkerV1({
+			databaseUrl: "unused",
+			policy,
+			adapter: { register, reconcile, disable, reconcileDisable },
+		});
+		await worker.runOnce();
+		expect(disable).not.toHaveBeenCalled();
+		expect(mocks.disableDeferBeforeSend).toHaveBeenCalledWith(
+			expect.anything(),
+			"disable",
+		);
+		await worker.close();
+	});
+
+	it("records a thrown send as unknown and only marks terminal outcomes", async () => {
+		mocks.disableBeginAttempt.mockResolvedValue({
+			outcome: "deliver",
+			mode: "disable",
+			intent: disableIntent,
+		});
+		const disable = vi.fn(async () => {
+			throw new Error("Controlled lost response");
+		});
+		const worker = createConnectionConsumerRegistrationWorkerV1({
+			databaseUrl: "unused",
+			policy,
+			adapter: { register, reconcile, disable, reconcileDisable: disable },
+		});
+		await worker.runOnce();
+		expect(mocks.disableComplete).toHaveBeenCalledWith(expect.anything(), {
+			outcome: "unknown",
+			failureCode: "CONNECTION_DISABLE_UNAVAILABLE",
+		});
+		expect(mocks.markSucceeded).not.toHaveBeenCalled();
+		expect(mocks.scheduleRetry).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: "CONNECTION_DISABLE_UNKNOWN" }),
+		);
+		for (const [outcome, mark] of [
+			["not_required", mocks.markSucceeded],
+			["disabled", mocks.markSucceeded],
+			["failed", mocks.markFailed],
+		] as const) {
+			vi.clearAllMocks();
+			mocks.pending.mockResolvedValue([]);
+			mocks.disablePending.mockResolvedValue([disableIntent.operationId]);
+			mocks.claim.mockImplementation(async (input) => ({
+				...input,
+				scopeId: "agent-a",
+				deliveryFence: 1n,
+			}));
+			mocks.disableBeginAttempt.mockResolvedValue({ outcome });
+			await worker.runOnce();
+			expect(mark).toHaveBeenCalledOnce();
+			expect(mocks.scheduleRetry).not.toHaveBeenCalled();
+		}
+		await worker.close();
+	});
 });

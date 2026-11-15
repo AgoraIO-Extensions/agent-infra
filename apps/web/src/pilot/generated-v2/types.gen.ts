@@ -526,7 +526,7 @@ export type AgentDetailProjectionV1 = {
     };
     configuration: AgentDetailConfigurationProjectionV1;
     connectionAssociation?: {
-        status: 'processing' | 'associated' | 'failed' | 'unverified';
+        status: 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
     };
     description: string;
     interactionUrl: string | null;
@@ -649,7 +649,7 @@ export type AgentProjectionV2 = {
     };
     configuration: AgentConfigurationProjectionV2;
     connectionAssociation?: {
-        status: 'processing' | 'associated' | 'failed' | 'unverified';
+        status: 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
     };
     description: string;
     interactionUrl: string | null;

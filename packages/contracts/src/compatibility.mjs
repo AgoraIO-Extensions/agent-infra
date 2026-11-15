@@ -3578,25 +3578,51 @@ const agentConnectionAssociationProjection = {
 	required: ["status"],
 	type: "object",
 };
+// #851 Agent 停用后的 Consumer 停用状态（工程 Spec §13.5.7）：只在四值枚举末尾追加
+// disabling/disabled。基线已有四值字段时把当前字段还原为四值；基线没有该字段时整体去掉。
+const agentConnectionAssociationDisableProjection = {
+	...agentConnectionAssociationProjection,
+	properties: {
+		status: {
+			enum: [
+				...agentConnectionAssociationProjection.properties.status.enum,
+				"disabling",
+				"disabled",
+			],
+			type: "string",
+		},
+	},
+};
 function normalizeAgentConnectionAssociationOpenApiAddition(previous, current) {
 	const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
 	let normalized;
 	for (const name of names) {
 		const before = previous.components?.schemas?.[name];
 		const schema = current.components?.schemas?.[name];
+		const field = schema?.properties?.connectionAssociation;
 		if (
 			!before?.properties ||
-			before.properties.connectionAssociation !== undefined ||
-			!schema?.properties?.connectionAssociation ||
+			!field ||
 			schema.required?.includes("connectionAssociation") ||
-			!sameValue(
-				schema.properties.connectionAssociation,
-				agentConnectionAssociationProjection,
+			!(
+				sameValue(field, agentConnectionAssociationProjection) ||
+				sameValue(field, agentConnectionAssociationDisableProjection)
 			)
 		)
 			continue;
-		normalized ??= structuredClone(current);
-		delete normalized.components.schemas[name].properties.connectionAssociation;
+		const previousField = before.properties.connectionAssociation;
+		if (previousField === undefined) {
+			normalized ??= structuredClone(current);
+			delete normalized.components.schemas[name].properties
+				.connectionAssociation;
+		} else if (
+			sameValue(previousField, agentConnectionAssociationProjection) &&
+			sameValue(field, agentConnectionAssociationDisableProjection)
+		) {
+			normalized ??= structuredClone(current);
+			normalized.components.schemas[name].properties.connectionAssociation =
+				structuredClone(agentConnectionAssociationProjection);
+		}
 	}
 	return normalized ?? current;
 }

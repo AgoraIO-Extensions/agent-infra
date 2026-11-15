@@ -310,6 +310,8 @@ export function isConnectionConsumerRegistrationCurrentV1(input: {
 	readonly ownerId: string | null;
 	readonly ownerCurrent: boolean;
 	readonly agentStatus: string | null;
+	/** Read-only recovery of an already-sent registration may continue after the Agent is disabled. */
+	readonly readOnly?: boolean;
 }): boolean {
 	const { intent, policy } = input;
 	return (
@@ -320,9 +322,10 @@ export function isConnectionConsumerRegistrationCurrentV1(input: {
 		intent.scope === policy.scope &&
 		input.ownerId === intent.platformOwnerId &&
 		input.ownerCurrent &&
-		["creating", "available", "stopped", "creation_failed"].includes(
+		(["creating", "available", "stopped", "creation_failed"].includes(
 			input.agentStatus ?? "",
-		)
+		) ||
+			(input.readOnly === true && input.agentStatus === "disabled"))
 	);
 }
 

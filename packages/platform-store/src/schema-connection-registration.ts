@@ -1,4 +1,7 @@
 import type {
+	ConnectionConsumerDisableIntentV1,
+	ConnectionConsumerDisableReceiptV1,
+	ConnectionConsumerDisableStatusV1,
 	ConnectionConsumerRegistrationIntentV1,
 	ConnectionConsumerRegistrationReceiptV1,
 	ConnectionConsumerRegistrationStatusV1,
@@ -7,6 +10,7 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	check,
+	foreignKey,
 	index,
 	jsonb,
 	text,
@@ -105,6 +109,92 @@ export const connectionConsumerRegistrations = platformSchema.table(
 			sql`${table.failureCode} is null or ${table.failureCode} ~ '^[A-Z][A-Z0-9_]{0,63}$'`,
 		),
 		index("connection_consumer_registration_status_idx").on(
+			table.status,
+			table.updatedAt,
+		),
+	],
+);
+
+/**
+ * Spec §13.5.7 Consumer disable: one row per disabled Agent, selected only from that Agent's own
+ * registration. The request exists only once it is about to be or has been sent.
+ */
+export const connectionConsumerDisables = platformSchema.table(
+	"connection_consumer_disables",
+	{
+		operationId: text("operation_id").primaryKey(),
+		registrationOperationId: text("registration_operation_id").notNull(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		sourceNamespace: varchar("source_namespace", { length: 128 }).notNull(),
+		idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+		status: varchar("status", { length: 16 })
+			.$type<ConnectionConsumerDisableStatusV1>()
+			.default("waiting")
+			.notNull(),
+		request: jsonb("request").$type<ConnectionConsumerDisableIntentV1>(),
+		requestDigest: varchar("request_digest", { length: 64 }),
+		receipt: jsonb("receipt").$type<ConnectionConsumerDisableReceiptV1>(),
+		resultRevision: text("result_revision"),
+		failureCode: varchar("failure_code", { length: 64 }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		sendingAt: timestamp("sending_at", { withTimezone: true }),
+		disabledAt: timestamp("disabled_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.registrationOperationId],
+			foreignColumns: [connectionConsumerRegistrations.operationId],
+			name: "connection_consumer_disable_registration_fk",
+		}),
+		uniqueIndex("connection_consumer_disable_agent_unique").on(table.agentId),
+		uniqueIndex("connection_consumer_disable_registration_unique").on(
+			table.registrationOperationId,
+		),
+		check(
+			"connection_consumer_disable_identity",
+			sql`${table.sourceNamespace} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+				and ${table.idempotencyKey} ~ '^ccd-v1[.][a-f0-9]{64}$'
+				and ${table.operationId} = 'connection-consumer-disable:' || substr(${table.idempotencyKey}, 8)`,
+		),
+		check(
+			"connection_consumer_disable_status",
+			sql`${table.status} in ('waiting','pending','sending','disabled','failed','unknown','not_required')`,
+		),
+		check(
+			"connection_consumer_disable_request",
+			sql`(${table.request} is null) = (${table.status} in ('waiting','pending','not_required'))
+				and (${table.request} is null) = (${table.requestDigest} is null)
+				and (${table.request} is null or (jsonb_typeof(${table.request}) = 'object'
+					and ${table.requestDigest} ~ '^[a-f0-9]{64}$'
+					and ${table.request} @> jsonb_build_object('schemaVersion', 1,
+						'operationId', ${table.operationId}, 'registrationOperationId', ${table.registrationOperationId},
+						'platformAgentId', ${table.agentId}, 'sourceNamespace', ${table.sourceNamespace},
+						'idempotencyKey', ${table.idempotencyKey}, 'requestDigest', ${table.requestDigest})
+					and ${table.request} ?& array['consumerId','registrationId','registrationKeyHash','policyRevision','expectedRevision']
+					and (${table.request} - array['schemaVersion','operationId','registrationOperationId','sourceNamespace','platformAgentId','consumerId','registrationId','registrationKeyHash','policyRevision','expectedRevision','idempotencyKey','requestDigest']) = '{}'::jsonb))`,
+		),
+		check(
+			"connection_consumer_disable_receipt",
+			sql`(${table.status} = 'disabled') = (${table.receipt} is not null and ${table.resultRevision} is not null and ${table.disabledAt} is not null)
+				and (${table.receipt} is null or (jsonb_typeof(${table.receipt}) = 'object'
+					and ${table.receipt} @> jsonb_build_object('schemaVersion', 1,
+						'operationId', ${table.operationId}, 'resultRevision', ${table.resultRevision},
+						'requestDigest', ${table.requestDigest})
+					and ${table.receipt} ?& array['consumerId','registrationId']
+					and (${table.receipt} - array['schemaVersion','operationId','consumerId','registrationId','resultRevision','requestDigest']) = '{}'::jsonb))`,
+		),
+		check(
+			"connection_consumer_disable_failure",
+			sql`${table.failureCode} is null or ${table.failureCode} ~ '^[A-Z][A-Z0-9_]{0,63}$'`,
+		),
+		index("connection_consumer_disable_status_idx").on(
 			table.status,
 			table.updatedAt,
 		),

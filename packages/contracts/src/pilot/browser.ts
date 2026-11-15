@@ -553,7 +553,15 @@ export const AgentApplicationProjectionV2Schema =
 		configuration: AgentConfigurationProjectionV2Schema,
 	});
 export const AgentConnectionAssociationProjectionV1Schema = z.strictObject({
-	status: z.enum(["processing", "associated", "failed", "unverified"]),
+	/** disabling/disabled 只出现在 Agent 停用后（Spec §13.5.7 Consumer 停用）。 */
+	status: z.enum([
+		"processing",
+		"associated",
+		"failed",
+		"unverified",
+		"disabling",
+		"disabled",
+	]),
 });
 export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 	schemaVersion: z.literal(2),

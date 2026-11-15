@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
 import {
+	type ConnectionConsumerDisableDeliveryV1,
+	type ConnectionConsumerDisableIntentV1,
 	type ConnectionConsumerRegistrationDeliveryV1,
 	type ConnectionConsumerRegistrationIntentV1,
 	type ConnectionConsumerRegistrationPolicyV1,
+	parseConnectionConsumerDisableDeliveryV1,
 	parseConnectionConsumerRegistrationDeliveryV1,
 } from "@agent-infra/platform-core";
 import {
 	createPostgresOutboxStore,
+	PostgresConnectionConsumerDisableStoreV1,
 	PostgresConnectionConsumerRegistrationStoreV1,
 } from "@agent-infra/platform-store";
 
@@ -21,6 +25,16 @@ export interface ConnectionConsumerRegistrationAdapterV1 {
 		intent: ConnectionConsumerRegistrationIntentV1,
 		signal: AbortSignal,
 	): Promise<ConnectionConsumerRegistrationDeliveryV1>;
+	/** Spec §13.5.7 lifecycle `POST R/disable`; absent means disable intents stay unsent. */
+	disable?(
+		intent: ConnectionConsumerDisableIntentV1,
+		signal: AbortSignal,
+	): Promise<ConnectionConsumerDisableDeliveryV1>;
+	/** Reads back only the original disable operation; never posts again. */
+	reconcileDisable?(
+		intent: ConnectionConsumerDisableIntentV1,
+		signal: AbortSignal,
+	): Promise<ConnectionConsumerDisableDeliveryV1>;
 }
 
 export function createConnectionConsumerRegistrationWorkerV1(input: {
@@ -52,7 +66,16 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 	)
 		throw new Error("CONNECTION_CONSUMER_REGISTRATION_INVALID");
 	const store = new PostgresConnectionConsumerRegistrationStoreV1(input);
+	const disables = new PostgresConnectionConsumerDisableStoreV1(input);
 	const outbox = createPostgresOutboxStore(input);
+	const lifecycle =
+		typeof input.adapter?.disable === "function" &&
+		typeof input.adapter.reconcileDisable === "function"
+			? {
+					disable: input.adapter.disable.bind(input.adapter),
+					reconcile: input.adapter.reconcileDisable.bind(input.adapter),
+				}
+			: undefined;
 	const leaseOwner = `connection-registration:${randomUUID()}`;
 	const active = new Set<AbortController>();
 	const runs = new Set<Promise<void>>();
@@ -61,8 +84,107 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 		stopped = true;
 		for (const controller of active) controller.abort();
 	}
+	async function bounded<T>(
+		call: (signal: AbortSignal) => Promise<T>,
+	): Promise<T> {
+		const controller = new AbortController();
+		active.add(controller);
+		const timeout = setTimeout(() => controller.abort(), timeoutMs);
+		let cancel: (() => void) | undefined;
+		try {
+			const aborted = new Promise<never>((_resolve, reject) => {
+				cancel = () => reject(new Error("CONNECTION_REGISTRATION_INTERRUPTED"));
+				controller.signal.addEventListener("abort", cancel, { once: true });
+			});
+			return await Promise.race([call(controller.signal), aborted]);
+		} finally {
+			clearTimeout(timeout);
+			if (cancel) controller.signal.removeEventListener("abort", cancel);
+			active.delete(controller);
+		}
+	}
+	/** Same outbox loop and lease rules as registration (Spec §13.5.7 Consumer 停用). */
+	async function runDisables() {
+		for (const itemId of await disables.pending(batchSize)) {
+			if (stopped) return;
+			const claim = await outbox.claim({
+				itemId,
+				leaseOwner,
+				leaseDurationMs,
+			});
+			if (!claim) continue;
+			const owned = {
+				itemId,
+				leaseOwner,
+				deliveryFence: claim.deliveryFence,
+			};
+			let outcome:
+				| "waiting"
+				| "pending"
+				| "unknown"
+				| "disabled"
+				| "failed"
+				| "not_required" = "unknown";
+			try {
+				const attempt = await disables.beginAttempt(
+					claim,
+					lifecycle !== undefined,
+				);
+				if (!attempt) continue;
+				if (attempt.outcome !== "deliver") outcome = attempt.outcome;
+				else if (lifecycle) {
+					if (
+						!(await outbox.renew({ ...owned, leaseDurationMs })) ||
+						!(await disables.current(claim, attempt.mode)) ||
+						stopped
+					) {
+						await disables.deferBeforeSend(claim, attempt.mode);
+						outcome = attempt.mode === "disable" ? "pending" : "unknown";
+					} else {
+						const delivery = parseConnectionConsumerDisableDeliveryV1(
+							await bounded((signal) =>
+								attempt.mode === "disable"
+									? lifecycle.disable(attempt.intent, signal)
+									: lifecycle.reconcile(attempt.intent, signal),
+							),
+							attempt.intent,
+						);
+						if (await disables.complete(claim, delivery))
+							outcome = delivery.outcome;
+					}
+				}
+			} catch {
+				// An exception after sending cannot establish a deterministic rejection.
+				await disables.complete(claim, {
+					outcome: "unknown",
+					failureCode: "CONNECTION_DISABLE_UNAVAILABLE",
+				});
+			}
+			if (outcome === "disabled" || outcome === "not_required")
+				await outbox.markSucceeded(owned);
+			else if (outcome === "failed")
+				await outbox.markFailed({
+					...owned,
+					errorCode: "CONNECTION_DISABLE_REJECTED",
+				});
+			else
+				await outbox.scheduleRetry({
+					...owned,
+					retryDelayMs,
+					errorCode:
+						outcome === "unknown"
+							? "CONNECTION_DISABLE_UNKNOWN"
+							: "CONNECTION_DISABLE_PENDING",
+				});
+		}
+	}
 	async function runOnce() {
 		if (stopped) return;
+		await runRegistrations();
+		if (stopped) return;
+		await runDisables();
+	}
+	async function runRegistrations() {
 		for (const itemId of await store.pending(batchSize)) {
 			if (stopped) return;
 			const claim = await outbox.claim({
@@ -165,7 +287,7 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 		async close() {
 			stop();
 			await Promise.allSettled([...runs]);
-			await Promise.all([store.close(), outbox.close()]);
+			await Promise.all([store.close(), disables.close(), outbox.close()]);
 		},
 	};
 }

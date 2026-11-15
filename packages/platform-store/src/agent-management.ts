@@ -42,6 +42,7 @@ import {
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import { insertConnectionConsumerDisableV1 } from "./connection-consumer-disable.js";
 import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
 import postgres from "./observed-postgres.js";
 import {
@@ -426,6 +427,17 @@ export async function persistAcceptedAgentManagement(
 
 	await insertAgentManagementHistory(transaction, writePlan);
 	await insertAgentManagementEffects(transaction, writePlan);
+	// Spec §13.5.7: only an accepted administrator disable requests the Agent's own Consumer disable.
+	if (
+		writePlan.operation === "disable_agent" &&
+		writePlan.transition.to === "disabled"
+	)
+		await insertConnectionConsumerDisableV1(transaction, {
+			agentId: writePlan.state.agentId,
+			traceId: writePlan.auditEvent.traceId,
+			requestId: writePlan.auditEvent.requestId,
+			occurredAt: writePlan.transition.occurredAt,
+		});
 	if (connectionConsumerRegistration) {
 		const [application] = await transaction
 			.select({ name: agentApplications.name })
