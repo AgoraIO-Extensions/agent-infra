@@ -2566,6 +2566,130 @@ test("a retained template image publishes its own full-key capacity beside the c
 	assert.equal(f.mutations.length, mutations);
 });
 
+test("a successor plan validates immutable mounted Secrets and mints final bytes without any write", async (t) => {
+	const f = await fixture(t);
+	const resourceConfigurationHash = await executorMeasurements(f);
+	const retained = await retainedMeasurement(f);
+	await assert.rejects(
+		publishRuntimeInputs(
+			f.files,
+			f.rendered,
+			source,
+			f.kubectl,
+			false,
+			undefined,
+			{ successor: true },
+		),
+		/RUNTIME_INPUT_SECRET_OWNER_INVALID/,
+		"a mutable Secret keeps the in-place publisher",
+	);
+	for (const name of ["api-config", "worker-config"])
+		f.cluster.get(`secret/${name}`).immutable = true;
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+		/RUNTIME_INPUT_SECRET_OWNER_INVALID/,
+		"the in-place publisher never targets an immutable Secret",
+	);
+	await assert.rejects(
+		publishRuntimeInputs(
+			f.files,
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+			undefined,
+			{ successor: true },
+		),
+		/RUNTIME_INPUT_LOGIN_REQUIRED|RUNTIME_INPUTS_INVALID/,
+	);
+	const before = Object.fromEntries(
+		["api-config", "worker-config"].map((name) => [
+			name,
+			structuredClone(f.cluster.get(`secret/${name}`)),
+		]),
+	);
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		false,
+		undefined,
+		{ successor: true },
+	);
+	assert.equal(result.mode, "successor-plan");
+	assert.equal(
+		f.mutations.length,
+		0,
+		"a successor plan writes no Secret or Deployment",
+	);
+	for (const name of Object.keys(before))
+		assert.deepEqual(f.cluster.get(`secret/${name}`), before[name]);
+	const { successor } = result;
+	assert.equal(successor.kind, "ack-runtime-input-successors");
+	assert.equal(successor.installationId, owner);
+	const worker = successor.secrets.find(
+		(entry) => entry.name === "worker-config",
+	);
+	assert.deepEqual(worker.components, ["worker"]);
+	assert.equal(worker.uid, before["worker-config"].metadata.uid);
+	assert.equal(
+		worker.resourceVersion,
+		before["worker-config"].metadata.resourceVersion,
+	);
+	assert(worker.changedKeys.includes("capacity.json"));
+	assert.deepEqual(
+		Object.keys(worker.data).sort(),
+		Object.keys(before["worker-config"].data).sort(),
+	);
+	const profiles = JSON.parse(
+		Buffer.from(worker.data["capacity.json"], "base64"),
+	).profiles;
+	assert.deepEqual(
+		profiles.filter((entry) => entry.imageDigest === retainedDigest),
+		[
+			{
+				schemaVersion: 1,
+				imageDigest: retainedDigest,
+				resourceProfileRef: f.capacity.resourceProfileRef,
+				resourceConfigurationHash,
+				maximumConcurrentExecutions: 1,
+				conformanceEvidenceHash: sha256(retained.bytes),
+			},
+		],
+	);
+	assert.equal(
+		worker.revision,
+		sha256(
+			JSON.stringify(
+				Object.entries(worker.data).sort(([a], [b]) => a.localeCompare(b)),
+			),
+		),
+	);
+	// Template evidence is adopted once; every successor carries the same adopted bytes.
+	for (const templateId of ["codex", "claude", "opencode", "pi"]) {
+		const key = `template-validation-${templateId}.json`;
+		const values = successor.secrets.map((entry) => entry.data[key]);
+		assert.equal(new Set(values).size, 1);
+		assert.equal(JSON.parse(Buffer.from(values[0], "base64")).schemaVersion, 2);
+	}
+	const again = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		false,
+		undefined,
+		{ successor: true },
+	);
+	assert.deepEqual(
+		again.successor,
+		successor,
+		"a rerun reuses the frozen adoption bytes",
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
 test("retained template measurements fail closed before any Secret write", async (t) => {
 	for (const [name, options, code] of [
 		[

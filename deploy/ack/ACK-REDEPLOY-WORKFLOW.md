@@ -769,6 +769,24 @@ mounted-capacity gate 同样复核这些 digest。
 该步骤只登记容量，不升级或切换 Agent 镜像。已有 Agent 仍须经正式 lifecycle 重新生成
 verified capacity；真实业务、原生文件和恢复验收另行完成。
 
+### 不可变配置 Secret 的后继计划
+
+`runtime-inputs` 的 `plan`/`apply` 只原地更新可变配置 Secret，遇到 `immutable: true` 的挂载
+Secret 会以 `RUNTIME_INPUT_SECRET_OWNER_INVALID` 停止。挂载对象已是不可变 Secret 时，使用
+`successor-plan`，并以 `ACK_RUNTIME_INPUT_SUCCESSOR_FILE` 指定仓库外、尚不存在的私有输出：
+
+```bash
+ACK_RUNTIME_INPUT_SUCCESSOR_FILE=/private/ack/attempt/successor.private.json \
+  node deploy/ack/runtime-inputs.ts successor-plan \
+  "$ACK_BOOTSTRAP_INPUTS_FILE" "$ACK_TEMPLATE_VALIDATIONS_FILE" \
+  "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" rendered.yaml
+```
+
+它执行与 `apply` 相同的模板采用、容量和 owner/UID/namespace 校验，并复用冻结的采用记录，
+但不写 Secret、不改 Deployment、不提升本地文件。输出列出每个挂载 Secret 的名称、UID、
+resourceVersion、消费组件、变化键、Deployment revision 和完整最终数据。部署仓库的发布器据此
+创建新的不可变 Secret，通过 Helm 改绑并回读挂载字节；原 Secret 保持不变。
+
 ### 隔离 custom 容量测量
 
 该入口只测量 `platform-adapter` / ACP 的 `linux/amd64` child image；`self-managed` 不适用。
