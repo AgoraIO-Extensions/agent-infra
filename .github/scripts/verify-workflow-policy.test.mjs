@@ -484,6 +484,8 @@ test("cache deployment rejects widened event, code and cloud identity boundaries
 
 test("signed entry dispatch rejects publication scope and source guard mutations", async () => {
   const mutations = [
+    ["missing main ref guard", (workflow) => { delete workflow.jobs["own-entry-fixture"].if; }],
+    ["non-main ref guard", (workflow) => { workflow.jobs["own-entry-fixture"].if = "github.ref == 'refs/heads/feature'"; }],
     ["extra publish job", (workflow) => { workflow.jobs.platform = structuredClone(workflow.jobs["own-entry-fixture"]); }],
     ["automatic trigger", (workflow) => { workflow.on.push = { branches: ["main"] }; }],
     ["optional source", (workflow) => { workflow.on.workflow_dispatch.inputs.source_sha.required = false; }],

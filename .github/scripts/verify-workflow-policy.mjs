@@ -354,6 +354,7 @@ export function validateWorkflowDocuments(workflows) {
       Object.keys(signedEntry?.jobs ?? {}).join() !== "own-entry-fixture" ||
       !sameObject(signedJob, {
         name: "Signed own-entry fixture (linux/amd64)",
+        if: "github.ref == 'refs/heads/main'",
         "runs-on": "ubuntu-24.04", "timeout-minutes": 30, steps: signedSteps,
       })) {
     errors.push("Signed own entry must retain the single-image source-guarded dispatch and minimal permissions");

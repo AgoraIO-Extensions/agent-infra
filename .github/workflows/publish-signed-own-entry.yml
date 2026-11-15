@@ -25,6 +25,7 @@ env:
 
 jobs:
   own-entry-fixture:
+    if: github.ref == 'refs/heads/main'
     name: Signed own-entry fixture (linux/amd64)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
