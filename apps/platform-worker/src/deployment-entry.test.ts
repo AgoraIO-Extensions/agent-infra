@@ -1105,14 +1105,22 @@ it.each([
 			if (profilesByAgent)
 				await writeFile(
 					configurationPath,
-					`${original}\nexport const connectionConsumerProfilesByAgent = ${JSON.stringify(profilesByAgent)};\nexport const connectionInstallationSuppliesByAgent = ${JSON.stringify(
+					// Per-Agent startup Consumers come from the deployment resolver; static
+					// per-Agent maps are no longer accepted.
+					`${original}\nexport const resolveConnectionConsumerBindingsByAgent = async (signal) => { signal.throwIfAborted(); return ${JSON.stringify(
 						Object.fromEntries(
-							Object.keys(profilesByAgent).map((agentId) => [
+							Object.entries(profilesByAgent).map(([agentId, binding]) => [
 								agentId,
-								{ ref: `installation-${agentId}`, revision: "r1" },
+								{
+									...binding,
+									installationSupply: {
+										ref: `installation-${agentId}`,
+										revision: "r1",
+									},
+								},
 							]),
 						),
-					)};\n`,
+					)}; };\n`,
 				);
 			const result = run({
 				RUN_RESERVE_DELIVERY: JSON.stringify({ selection, agents }),
