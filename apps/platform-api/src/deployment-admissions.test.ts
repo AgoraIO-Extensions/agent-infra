@@ -493,6 +493,192 @@ describe("production deployment admissions", () => {
 			clock.mockRestore();
 		}
 	});
+	it.each([
+		"source",
+		"image",
+		"driver",
+		"configuration",
+		"target",
+		"failed",
+		"disabled",
+		"revoked",
+		"throws",
+		"timeout",
+	] as const)(
+		"rejects %s after an adopted consumer was ready (#4070 AC-16)",
+		async (failure) => {
+			const f = fixture();
+			const registration = f.input.templates[0];
+			if (!registration?.loadValidation)
+				throw new Error("Missing validation fixture");
+			const context = {
+				sourceCommit: "a".repeat(40),
+				clusterUid: "cluster-a",
+				namespace: "ack-test",
+				namespaceUid: "namespace-a",
+				installationId: "installation-a",
+			};
+			const candidate = {
+				...((await registration.loadValidation(
+					AbortSignal.timeout(1000),
+				)) as object),
+				sourceCommit: context.sourceCommit,
+			};
+			const adopted = adoptTemplateValidationV2({
+				candidate,
+				context,
+				adoptedAt: Date.now(),
+				candidateFileSha256: "b".repeat(64),
+				preflightFileSha256: "c".repeat(64),
+			});
+			let broken = false;
+			const loadValidation = async (signal: AbortSignal): Promise<unknown> => {
+				if (!broken) return adopted;
+				if (failure === "throws")
+					throw new Error("validation storage unavailable");
+				if (failure === "timeout")
+					return new Promise(() => {
+						// The loader intentionally ignores cancellation; the production operation must bound it.
+						void signal;
+					});
+				// The publisher's existing revocation contract removes the adopted report.
+				if (failure === "revoked") return {};
+				const changed = structuredClone(adopted);
+				if (failure === "source")
+					changed.candidate.sourceCommit = "d".repeat(40);
+				if (failure === "image")
+					changed.candidate.imageDigest = `sha256:${"d".repeat(64)}`;
+				if (failure === "driver") changed.candidate.driver = "claude";
+				if (failure === "configuration")
+					changed.candidate.configurationRevision = "changed";
+				if (failure === "target")
+					changed.adoption.target.namespaceUid = "changed";
+				if (failure === "failed" || failure === "disabled")
+					changed.candidate.status = failure;
+				// Preserve a valid payload hash so mismatches exercise binding/status guards.
+				changed.adoption.candidatePayloadSha256 =
+					templateValidationPayloadHashV1(changed.candidate);
+				return changed;
+			};
+			const input = {
+				...f.input,
+				templates: [
+					{ ...registration, validationContext: context, loadValidation },
+				],
+			};
+			const project = createDeploymentConfigurationProjectionV2(input);
+			const admissions = createDeploymentAdmissionsV1(input);
+			const readiness = (await project()).templates.find(
+				(t) => t.templateId === "codex",
+			)?.readiness;
+			expect(readiness?.state).toBe("ready");
+			if (!readiness?.revision) throw new Error("Missing ready revision");
+			const templateRevision = readiness.revision;
+			const apply = () =>
+				admissions.imageAdmission.admitImage({
+					...request,
+					requested: {
+						kind: "standard",
+						templateId: "codex",
+						templateRevision,
+					},
+				});
+			expect((await apply()).status).toBe("admitted");
+			broken = true;
+			// Shorten only the timer duration; exercise real asynchronous cancellation.
+			const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+			const timeout = vi.spyOn(AbortSignal, "timeout");
+			if (failure === "timeout")
+				timeout.mockImplementation(() => realTimeout(10));
+			try {
+				expect(
+					(await project()).templates.find((t) => t.templateId === "codex")
+						?.readiness,
+				).toMatchObject({
+					state:
+						failure === "throws" || failure === "timeout"
+							? "unavailable"
+							: failure === "failed" || failure === "disabled"
+								? failure
+								: failure === "revoked" ||
+										failure === "source" ||
+										failure === "target"
+									? "unverified"
+									: "stale",
+					revision: null,
+				});
+				if (failure === "throws" || failure === "timeout")
+					await expect(apply()).rejects.toThrow(
+						"PLATFORM_DEPLOYMENT_TEMPLATE_VALIDATION_UNAVAILABLE",
+					);
+				else expect((await apply()).status).toBe("rejected");
+				if (failure === "timeout") expect(timeout).toHaveBeenCalledWith(10_000);
+			} finally {
+				timeout.mockRestore();
+			}
+		},
+	);
+	it("keeps ModelCatalog expiry independent of adopted template readiness (#4070 AC-16)", async () => {
+		const f = fixture();
+		const registration = f.input.templates[0];
+		if (!registration?.loadValidation)
+			throw new Error("Missing validation fixture");
+		const context = {
+			sourceCommit: "a".repeat(40),
+			clusterUid: "cluster-a",
+			namespace: "ack-test",
+			namespaceUid: "namespace-a",
+			installationId: "installation-a",
+		};
+		const adopted = adoptTemplateValidationV2({
+			candidate: {
+				...((await registration.loadValidation(
+					AbortSignal.timeout(1000),
+				)) as object),
+				sourceCommit: context.sourceCommit,
+			},
+			context,
+			adoptedAt: Date.now(),
+			candidateFileSha256: "b".repeat(64),
+			preflightFileSha256: "c".repeat(64),
+		});
+		const input = {
+			...f.input,
+			templates: [
+				{
+					...registration,
+					validationContext: context,
+					loadValidation: async () => adopted,
+				},
+			],
+		};
+		const admissions = createDeploymentAdmissionsV1(input);
+		expect(
+			(
+				await admissions.modelAdmission.admitModels({
+					...request,
+					current: null,
+					requested: modelInput(),
+				})
+			).status,
+		).toBe("admitted");
+		f.catalog.validUntil = Date.now() - 1;
+		expect(
+			(await createDeploymentConfigurationProjectionV2(input)()).templates.find(
+				(t) => t.templateId === "codex",
+			)?.readiness?.state,
+		).toBe("ready");
+		expect(
+			(
+				await admissions.modelAdmission.admitModels({
+					...request,
+					current: null,
+					requested: modelInput(),
+				})
+			).status,
+		).toBe("rejected");
+	});
+
 	it("rejects a manifest over the resource cap with its reason before any registry call", async () => {
 		const f = fixture("self-managed");
 		// 默认档位每个工作负载 100m；web + worker 恰为 200m，迁移 Job 使总量超限。
