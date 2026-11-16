@@ -599,7 +599,28 @@ let conversationPrepared:
 	| ReturnType<typeof createConversationPrepared>
 	| undefined;
 
+/**
+ * Resources opened during preparation stay owned here until the prepared deployment is
+ * returned; a later preparation failure closes them once and keeps the original error.
+ */
 async function createPrepared(signal: AbortSignal) {
+	const owned: { close?: () => Promise<void> } = {};
+	try {
+		return await createPreparedOwning(signal, owned);
+	} catch (error) {
+		try {
+			await owned.close?.();
+		} catch {
+			/* The preparation failure stays the reported error. */
+		}
+		throw error;
+	}
+}
+
+async function createPreparedOwning(
+	signal: AbortSignal,
+	owned: { close?: () => Promise<void> },
+) {
 	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 	try {
 		if (!databaseUrl) throw new Error();
@@ -668,6 +689,7 @@ async function createPrepared(signal: AbortSignal) {
 				...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
 			})
 		: undefined;
+	if (connectionDelivery) owned.close = () => connectionDelivery.close();
 	const connectionDeliveryCurrent = async (agentId: string) =>
 		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	if (

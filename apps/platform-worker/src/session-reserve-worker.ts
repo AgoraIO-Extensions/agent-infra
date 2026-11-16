@@ -377,6 +377,14 @@ export function createPlatformSessionReserveWorkerV1(options: {
 				throw new LeaseLost();
 		}
 		await guard();
+		// The readiness reads above await; recheck the current source last so an association
+		// written during them never readies the reserve. A source error leaves it not ready.
+		if (adapter.deliverable && !(await adapter.deliverable(claim))) {
+			defer(claim.agentId);
+			await retire(claim);
+			return;
+		}
+		await guard();
 		if (await store.markReady(claim, evidence)) result.ready++;
 	}
 	async function observeUnknown(claim: Claim, guard: () => Promise<void>) {
@@ -436,6 +444,12 @@ export function createPlatformSessionReserveWorkerV1(options: {
 						if (await store.retire(row.sandboxId)) result.retired++;
 						return;
 					}
+				}
+				// Recheck after the awaited reads, immediately before extending readiness.
+				if (adapter.deliverable && !(await adapter.deliverable(inspection))) {
+					defer(row.agentId);
+					if (await store.retire(row.sandboxId)) result.retired++;
+					return;
 				}
 				if (!(await store.refreshReady(row.sandboxId, configuration.ttlMs))) {
 					if (await store.retire(row.sandboxId)) result.retired++;

@@ -855,6 +855,60 @@ describe("Session reserve Worker Connection delivery (#4157)", () => {
 		expect(f.store.reconcileCapacity).toHaveBeenCalledOnce();
 	});
 
+	it.each(["associated", "source error"] as const)(
+		"never readies a reserve when the Agent is %s during the final readiness reads",
+		async (label) => {
+			const f = fixture();
+			let associated = false;
+			const deliverable = withDeliverable(f, async () => {
+				if (!associated) return true;
+				if (label === "source error") throw new Error("source down");
+				return false;
+			});
+			// Bootstrap succeeds; the association lands during a post-bootstrap GET.
+			const read = f.adapter.read.getMockImplementation();
+			let bootstrapped = false;
+			f.adapter.bootstrap.mockImplementation(async () => {
+				bootstrapped = true;
+				return { bootstrapReady: true, businessStateAbsent: true };
+			});
+			f.adapter.read.mockImplementation(async (claim, kind) => {
+				if (bootstrapped && kind === "Pod") associated = true;
+				return (await read?.(claim, kind)) ?? null;
+			});
+			const result = await f.worker.reconcile();
+			expect(f.adapter.bootstrap).toHaveBeenCalledOnce();
+			expect(f.store.markReady).not.toHaveBeenCalled();
+			// Once before any write, once after the final readiness reads.
+			expect(deliverable).toHaveBeenCalledTimes(2);
+			if (label === "associated") {
+				expect(f.store.retire).toHaveBeenCalledWith(f.claim.sandboxId);
+				f.store.list.mockResolvedValue([]);
+				await f.worker.reconcile();
+				expect(f.store.reconcileCapacity).not.toHaveBeenCalled();
+			} else expect(result).toMatchObject({ unavailable: 1 });
+		},
+	);
+
+	it("does not refresh a ready reserve associated during its awaited reads", async () => {
+		const f = fixture({ status: "ready" });
+		confirmed(f);
+		f.store.inspect.mockResolvedValue({
+			...f.claim,
+			currentProfileDigest: f.claim.profile.digest,
+		});
+		let associated = false;
+		withDeliverable(f, async () => !associated);
+		const read = f.adapter.read.getMockImplementation();
+		f.adapter.read.mockImplementation(async (claim, kind) => {
+			if (kind === "Pod") associated = true;
+			return (await read?.(claim, kind)) ?? null;
+		});
+		await f.worker.reconcile();
+		expect(f.store.refreshReady).not.toHaveBeenCalled();
+		expect(f.store.retire).toHaveBeenCalledWith(f.row.sandboxId);
+	});
+
 	it("still removes a retiring reserve without consulting the current source", async () => {
 		const f = fixture({ status: "retiring" });
 		confirmed(f);

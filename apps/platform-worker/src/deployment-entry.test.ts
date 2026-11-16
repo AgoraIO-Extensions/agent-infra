@@ -421,7 +421,7 @@ export class PostgresConnectionAssociationSourceV1 {
   if (globalThis.associationSourceFailed) throw Error('controlled association source unavailable');
   return (globalThis.persistentConnectionAgents ?? []).includes(agentId);
  }
- async close() { globalThis.associationSourceCloses = (globalThis.associationSourceCloses ?? 0) + 1; }
+ async close() { globalThis.associationSourceCloses = (globalThis.associationSourceCloses ?? 0) + 1; if (process.env.ASSOCIATION_CLOSE_FAILS) throw Error('controlled association close failure'); }
 }
 `,
 						}),
@@ -733,9 +733,9 @@ try {
 	 console.log(JSON.stringify({ control, business, snapshot: globalThis.snapshot, installation: globalThis.installation }));
 	 process.exit(0);
 	}
- console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: globalThis.snapshot ? JSON.parse(globalThis.snapshot) : null, installation: globalThis.installation, snapshots: globalThis.snapshots, installations: globalThis.installations, installationConfigured: typeof conversation.connectionInstallation?.authorize === 'function' }));
+ console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: globalThis.snapshot ? JSON.parse(globalThis.snapshot) : null, installation: globalThis.installation, snapshots: globalThis.snapshots, installations: globalThis.installations, installationConfigured: typeof conversation.connectionInstallation?.authorize === 'function', ...(process.env.REPORT_ASSOCIATION ? { associationOpens: globalThis.associationSourceOpens, associationCloses: globalThis.associationSourceCloses ?? 0 } : {}) }));
 } catch (error) {
- console.log(JSON.stringify({ error: error.message, calls: globalThis.calls }));
+ console.log(JSON.stringify({ error: error.message, calls: globalThis.calls, ...(process.env.REPORT_ASSOCIATION ? { associationOpens: globalThis.associationSourceOpens, associationCloses: globalThis.associationSourceCloses ?? 0 } : {}) }));
  process.exitCode = 1;
 }
 `,
@@ -1572,6 +1572,41 @@ it("rejects explicitly enabled Skill materialization when its configuration is a
 	});
 	expect(result.status).not.toBe(0);
 	expect(result.stdout).toContain("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
+});
+
+it.each([
+	["close succeeds", undefined],
+	["close fails and the preparation error is kept", "true"],
+] as const)(
+	"a preparation failure after the startup source guard opened closes it once: %s (#4157)",
+	(_label, closeFails) => {
+		const result = run({
+			PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED: "true",
+			ASSOCIATION_CLOSE_FAILS: closeFails,
+			REPORT_ASSOCIATION: "true",
+		});
+		expect(result.status).not.toBe(0);
+		const value = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}");
+		expect(value).toMatchObject({
+			error: "SKILL_MATERIALIZER_CONFIGURATION_INVALID",
+			associationOpens: 1,
+			associationCloses: 1,
+		});
+	},
+);
+
+it.each([
+	["keeps the startup source guard open until shutdown", undefined, 0],
+	["closes the startup source guard once at shutdown", "true", 1],
+] as const)("a prepared deployment %s (#4157)", (_label, close, closes) => {
+	const result = run({
+		RUN_CLOSE_INSTALLATION: close,
+		REPORT_ASSOCIATION: "true",
+	});
+	expect(result.status, result.stderr).toBe(0);
+	expect(
+		JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}"),
+	).toMatchObject({ associationOpens: 1, associationCloses: closes });
 });
 
 it("passes the deployment-owned nonsecret installation producer to the Conversation Worker", async () => {
