@@ -174,7 +174,8 @@ API 配置模块不再接受 `connectionInstallationsByAgent` /
 `connectionConsumerProfilesByAgent`、`connectionInstallationSuppliesByAgent`、
 `connectionInstallation.configurationsByAgent`、`configurationsByAgentAndPrincipal` 与
 `principalBindingsByAgentAndPrincipal`。导出其中任一项时，该进程的 Connection 安装整体
-关闭，也不使用部署级共享 Consumer。系统接入与旧的部署级 Consumer profile 不能同时配置。
+关闭；Worker 也不向任何 Agent 交付部署级共享 Consumer，普通业务请求不受影响。系统接入与旧的
+部署级 Consumer profile 不能同时配置。
 
 Platform API 的受信 `configuration.mjs` 可导出非敏感 `connectionInstallationConfiguration`
 （现有 `RuntimeOAuthConfigurationV1`），与相同模块的完整 Consumer profile/approval 和

@@ -292,6 +292,8 @@ export function deriveConnectionConsumerProfileV1(
 	readonly profile: ConnectionConsumerProfileV1;
 	readonly approval: ConnectionConsumerApprovalV1;
 } {
+	// Only an approved, fingerprint-checked system access may yield a profile.
+	if (access?.status !== "available") throw unavailable();
 	const profile = profileSchema.parse({
 		schemaVersion: 1,
 		publicOrigin: access.system.publicOrigin,

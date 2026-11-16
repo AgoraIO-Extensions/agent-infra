@@ -1125,6 +1125,12 @@ it("closes Connection when deployment supplies static per-Agent Consumer maps (#
 		expect(value.snapshot).toBeNull();
 		expect(value.snapshots).toBeUndefined();
 		expect(value.installations).toBeUndefined();
+		// Only Connection closes: business work for Agents without Connection keeps running.
+		const business = run({ RUN_INVALID_PROFILE: "true" });
+		expect(business.status, business.stderr).toBe(0);
+		const resolved = JSON.parse(business.stdout);
+		expect(resolved.business).toBeUndefined();
+		expect(resolved.snapshot ?? null).toBeNull();
 	} finally {
 		await writeFile(configurationPath, original);
 	}

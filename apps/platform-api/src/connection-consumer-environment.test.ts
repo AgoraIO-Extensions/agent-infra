@@ -182,6 +182,17 @@ describe("one-time Connection system access environment (#4157)", () => {
 		},
 	);
 
+	it("accepts separately projected fingerprint and source that agree with the approval", () => {
+		expect(
+			resolve({
+				...environment(),
+				AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: fingerprint,
+				AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "platform-deployment",
+				AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r1",
+			}),
+		).toMatchObject({ status: "available" });
+	});
+
 	it("does not infer an approval from fingerprint and source metadata alone", () => {
 		const result = resolve({
 			...environment(absent),
@@ -192,10 +203,12 @@ describe("one-time Connection system access environment (#4157)", () => {
 		expect(result).toMatchObject({ status: "unavailable" });
 	});
 
-	it("closes on a version mismatch, a disagreeing fingerprint or a legacy Consumer profile beside it", () => {
+	it("closes on a version mismatch, a disagreeing fingerprint or source, or a legacy Consumer profile beside it", () => {
 		for (const extra of [
 			{ AGENT_INFRA_CONNECTION_CONFIG_VERSION: "1-other" },
 			{ AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: "b".repeat(64) },
+			{ AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "other-deployment" },
+			{ AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r2" },
 			{ AGENT_INFRA_CONNECTION_PROFILE: JSON.stringify({ consumerId: "x" }) },
 		]) {
 			const value = { ...environment(), ...extra };

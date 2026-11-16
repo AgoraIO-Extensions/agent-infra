@@ -104,6 +104,20 @@ export function readConnectionSystemAccessEnvironmentConfigurationV1(
 			? (approval as { configFingerprint: string }).configFingerprint
 			: undefined;
 	const separateFingerprint = environment[fingerprintEnvironment];
+	const approvedSource =
+		approval !== null && typeof approval === "object"
+			? (approval as { source?: { ref?: unknown; revision?: unknown } }).source
+			: undefined;
+	// Separately projected source variables, when present, must name the same approval.
+	const sourceDisagrees = (
+		[
+			[sourceRefEnvironment, approvedSource?.ref],
+			[sourceRevisionEnvironment, approvedSource?.revision],
+		] as const
+	).some(
+		([name, approved]) =>
+			(environment[name] ?? "") !== "" && environment[name] !== approved,
+	);
 	let system = parseJson(raw);
 	if (
 		approvedFingerprint === undefined ||
@@ -112,6 +126,7 @@ export function readConnectionSystemAccessEnvironmentConfigurationV1(
 		(separateFingerprint !== undefined &&
 			separateFingerprint !== "" &&
 			separateFingerprint !== approvedFingerprint) ||
+		sourceDisagrees ||
 		// A legacy Consumer profile in the same environment is ambiguous; close Connection.
 		(environment[profileEnvironment] ?? "") !== ""
 	)

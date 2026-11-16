@@ -70,6 +70,25 @@ describe("one-time Connection system access", () => {
 		).toBe("unavailable");
 	});
 
+	it("derives no profile from unapproved system access", () => {
+		for (const access of [
+			resolveApprovedConnectionSystemAccessV1(system, undefined),
+			resolveApprovedConnectionSystemAccessV1(system, {
+				...approval,
+				egressEnforced: false,
+			}),
+		])
+			expect(() =>
+				deriveConnectionConsumerProfileV1(
+					access as Parameters<typeof deriveConnectionConsumerProfileV1>[0],
+					{
+						consumerId: "connection-agent-a",
+						source: { ref: "connection-association:agent-a", revision: "3" },
+					},
+				),
+			).toThrow("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	});
+
 	it("rejects an approval fingerprint for other fields or no egress enforcement", () => {
 		expect(
 			resolveApprovedConnectionSystemAccessV1(

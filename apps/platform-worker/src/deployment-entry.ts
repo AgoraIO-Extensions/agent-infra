@@ -500,14 +500,19 @@ const staticPerAgentConnectionBindings =
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
 	resolveConnectionConsumerBindingsByAgent !== undefined;
-const connectionConsumerSnapshot = staticPerAgentConnectionBindings
-	? null
-	: perAgentConsumerSelection
+const configuredSharedSnapshot = perAgentConsumerSelection
+	? undefined
+	: createRuntimeConnectionConsumerSnapshotV1(
+			connectionConsumerProfile,
+			connectionConsumerApproval,
+		);
+// Static per-Agent keys withhold even a valid shared Consumer (undefined), so only
+// Connection closes and business work on Agents without Connection keeps running. An
+// invalid configured profile still closes business work (null), as without those keys.
+const connectionConsumerSnapshot =
+	staticPerAgentConnectionBindings && configuredSharedSnapshot !== null
 		? undefined
-		: createRuntimeConnectionConsumerSnapshotV1(
-				connectionConsumerProfile,
-				connectionConsumerApproval,
-			);
+		: configuredSharedSnapshot;
 if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 if (
@@ -520,7 +525,9 @@ if (
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
 const connectionInstallationRevision = staticPerAgentConnectionBindings
-	? null
+	? connectionConsumerSnapshot === null
+		? null
+		: undefined
 	: perAgentConsumerSelection
 		? undefined
 		: createRuntimeConnectionInstallationRevisionV1(
