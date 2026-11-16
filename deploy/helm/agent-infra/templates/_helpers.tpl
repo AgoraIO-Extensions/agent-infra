@@ -83,12 +83,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not $inline.egressProfile.revision -}}{{- fail "connectionConsumer.inline.egressProfile.revision is required" -}}{{- end -}}
 {{- if not $inline.approval -}}{{- fail "connectionConsumer.inline.approval is required" -}}{{- end -}}
 {{- if ne $inline.approval.egressEnforced true -}}{{- fail "connectionConsumer.inline.approval.egressEnforced must be true" -}}{{- end -}}
+{{- if not (regexMatch `^[a-f0-9]{64}$` ($inline.approval.configFingerprint | default "")) -}}{{- fail "connectionConsumer.inline.approval.configFingerprint must be the approved sha256" -}}{{- end -}}
+{{- if ne $inline.approval.configFingerprint (include "agent-infra.connectionFingerprint" $) -}}{{- fail "connectionConsumer.inline.approval.configFingerprint does not match the system access fields" -}}{{- end -}}
 {{- if not $inline.approval.source.ref -}}{{- fail "connectionConsumer.inline.approval.source.ref is required" -}}{{- end -}}
 {{- if not $inline.approval.source.revision -}}{{- fail "connectionConsumer.inline.approval.source.revision is required" -}}{{- end -}}
 {{- else -}}
 {{- if not $consumer.external -}}{{- fail "connectionConsumer.external is required for external source" -}}{{- end -}}
 {{- if gt (len $inline) 0 -}}{{- fail "connectionConsumer.inline and external sources conflict" -}}{{- end -}}
-{{- range $key := list "configMapName" "configMapKey" "configVersion" "configFingerprint" "sourceRef" "sourceRevision" -}}{{- if not (index $external $key) -}}{{- fail (printf "connectionConsumer.external.%s is required" $key) -}}{{- end -}}{{- end -}}
+{{- range $key := list "configMapName" "configMapKey" "approvalConfigMapKey" "configVersion" "configFingerprint" "sourceRef" "sourceRevision" -}}{{- if not (index $external $key) -}}{{- fail (printf "connectionConsumer.external.%s is required" $key) -}}{{- end -}}{{- end -}}
 {{- if not (regexMatch `^1-[a-f0-9]{64}$` $external.configVersion) -}}{{- fail "connectionConsumer.external.configVersion must be 1-<sha256>" -}}{{- end -}}
 {{- if not (regexMatch `^[a-f0-9]{64}$` $external.configFingerprint) -}}{{- fail "connectionConsumer.external.configFingerprint must be a sha256" -}}{{- end -}}
 {{- if ne (trimPrefix "1-" $external.configVersion) $external.configFingerprint -}}{{- fail "connectionConsumer.external.configVersion and configFingerprint must agree" -}}{{- end -}}
@@ -119,6 +121,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
     configMapKeyRef:
       name: {{ .Values.connectionConsumer.external.configMapName }}
       key: {{ .Values.connectionConsumer.external.configMapKey }}
+      optional: false
+- name: AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL
+  valueFrom:
+    configMapKeyRef:
+      name: {{ .Values.connectionConsumer.external.configMapName }}
+      key: {{ .Values.connectionConsumer.external.approvalConfigMapKey }}
       optional: false
 - name: AGENT_INFRA_CONNECTION_CONFIG_VERSION
   value: {{ .Values.connectionConsumer.external.configVersion | quote }}

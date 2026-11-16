@@ -61,6 +61,8 @@ export function readConnectionConsumerEnvironmentConfigurationV1(
 }
 
 const systemAccessEnvironment = "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS";
+const systemAccessApprovalEnvironment =
+	"AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL";
 
 export interface ConnectionSystemAccessEnvironmentConfigurationV1 {
 	readonly system: unknown;
@@ -69,9 +71,23 @@ export interface ConnectionSystemAccessEnvironmentConfigurationV1 {
 	readonly webPath: string | undefined;
 }
 
+function parseJson(value: string | undefined): unknown {
+	try {
+		return JSON.parse(value ?? "");
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Read the one-time system access projected by Helm (Spec §13.5.7). It names no
  * Consumer; per-Agent Consumers come only from associations in the Platform DB.
+ *
+ * The approval is the deployment's explicit, fingerprint-bound attestation
+ * (`AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL`), passed through unchanged so the
+ * contract check decides it. Nothing is inferred from metadata: an absent approval, an
+ * `egressEnforced` that is not literally true, or a fingerprint that does not match the
+ * fields keeps Connection unavailable (Spec §13.5.2).
  */
 export function readConnectionSystemAccessEnvironmentConfigurationV1(
 	environment: NodeJS.ProcessEnv,
@@ -79,32 +95,30 @@ export function readConnectionSystemAccessEnvironmentConfigurationV1(
 	const raw = environment[systemAccessEnvironment];
 	if (raw === undefined || raw === "") return undefined;
 	const configVersion = environment[versionEnvironment];
-	const fingerprint = environment[fingerprintEnvironment];
-	const sourceRef = environment[sourceRefEnvironment];
-	const sourceRevision = environment[sourceRevisionEnvironment];
-	let system: unknown;
-	try {
-		system = JSON.parse(raw);
-	} catch {
-		system = undefined;
-	}
+	const approval = parseJson(environment[systemAccessApprovalEnvironment]);
+	const approvedFingerprint =
+		approval !== null &&
+		typeof approval === "object" &&
+		typeof (approval as { configFingerprint?: unknown }).configFingerprint ===
+			"string"
+			? (approval as { configFingerprint: string }).configFingerprint
+			: undefined;
+	const separateFingerprint = environment[fingerprintEnvironment];
+	let system = parseJson(raw);
 	if (
-		![configVersion, fingerprint, sourceRef, sourceRevision].every(
-			(value) => typeof value === "string" && value.length > 0,
-		) ||
-		configVersion !== `1-${String(fingerprint ?? "")}` ||
+		approvedFingerprint === undefined ||
+		configVersion !== `1-${approvedFingerprint}` ||
+		// A separately projected fingerprint must name the same approval.
+		(separateFingerprint !== undefined &&
+			separateFingerprint !== "" &&
+			separateFingerprint !== approvedFingerprint) ||
 		// A legacy Consumer profile in the same environment is ambiguous; close Connection.
 		(environment[profileEnvironment] ?? "") !== ""
 	)
 		system = null;
 	return {
 		system,
-		approval: {
-			schemaVersion: 1,
-			configFingerprint: fingerprint ?? "",
-			egressEnforced: true,
-			source: { ref: sourceRef ?? "", revision: sourceRevision ?? "" },
-		},
+		approval,
 		configVersion,
 		webPath: environment[webPathEnvironment],
 	};

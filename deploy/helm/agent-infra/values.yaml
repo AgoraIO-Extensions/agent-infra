@@ -65,7 +65,10 @@ connectionConsumer:
     egressProfile:
       ref: platform-egress
       revision: r1
+    # Explicit approval bound to the fingerprint of the fields above. egressEnforced is
+    # the deployer's attestation that egressProfile is enforced; the chart cannot prove it.
     approval:
+      configFingerprint: c181296b8d5b65527c6b94f20da7df071e2f4cc7f1ae4cf40477eca9a0992c59
       egressEnforced: true
       source:
         ref: platform-deployment

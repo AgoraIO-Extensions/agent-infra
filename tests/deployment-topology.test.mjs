@@ -202,6 +202,16 @@ test("renders only one-time system Connection access and the same fingerprint to
 		profile.data.AGENT_INFRA_CONNECTION_CONFIG_VERSION,
 		`1-${fingerprint}`,
 	);
+	// The explicit approval is rendered as supplied and bound to the same fingerprint.
+	assert.deepEqual(
+		JSON.parse(profile.data.AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL),
+		{
+			schemaVersion: 1,
+			configFingerprint: fingerprint,
+			egressEnforced: true,
+			source: { ref: "platform-deployment", revision: "r1" },
+		},
+	);
 	for (const name of [
 		"topology-agent-infra-platform-worker",
 		"topology-agent-infra-workload",
@@ -299,6 +309,56 @@ test("fails closed for incomplete, unsafe, and conflicting Connection Consumer v
 	}
 });
 
+test("refuses system access without an explicit approval bound to its fingerprint (#4157)", () => {
+	for (const [label, args, message] of [
+		[
+			"absent fingerprint",
+			[
+				"--set-json",
+				"connectionConsumer.inline.approval.configFingerprint=null",
+			],
+			/configFingerprint/,
+		],
+		[
+			"fingerprint of other fields",
+			[
+				"--set-string",
+				`connectionConsumer.inline.approval.configFingerprint=${"a".repeat(64)}`,
+			],
+			/does not match the system access fields/,
+		],
+		[
+			"fields changed after approval",
+			["--set-string", "connectionConsumer.inline.audience=other-audience"],
+			/does not match the system access fields/,
+		],
+		[
+			"egress not attested",
+			["--set-json", "connectionConsumer.inline.approval.egressEnforced=null"],
+			/egressEnforced|approval/,
+		],
+		[
+			"egress false",
+			["--set-json", "connectionConsumer.inline.approval.egressEnforced=false"],
+			/egressEnforced|approval/,
+		],
+	]) {
+		const result = render(...args);
+		assert.notEqual(result.status, 0, label);
+		assert.match(result.stderr, message, label);
+	}
+	const external = render(
+		"--set",
+		"connectionConsumer.source=external",
+		"--set-json",
+		"connectionConsumer.inline=null",
+		"--set-json",
+		`connectionConsumer.external=${JSON.stringify({ configMapName: "approved-connection-profile", configMapKey: "profile.json", configVersion: `1-${"a".repeat(64)}`, configFingerprint: "a".repeat(64), sourceRef: "approved-deployment", sourceRevision: "r7" })}`,
+	);
+	assert.notEqual(external.status, 0);
+	assert.match(external.stderr, /approvalConfigMapKey/);
+});
+
 test("supports an approved external snapshot without rendering an inline fallback", () => {
 	const fingerprint = "a".repeat(64);
 	const result = render(
@@ -310,6 +370,8 @@ test("supports an approved external snapshot without rendering an inline fallbac
 		"connectionConsumer.external.configMapName=approved-connection-profile",
 		"--set-string",
 		"connectionConsumer.external.configMapKey=profile.json",
+		"--set-string",
+		"connectionConsumer.external.approvalConfigMapKey=approval.json",
 		"--set-string",
 		`connectionConsumer.external.configVersion=1-${fingerprint}`,
 		"--set-string",
@@ -352,6 +414,18 @@ test("supports an approved external snapshot without rendering an inline fallbac
 			optional: false,
 		},
 	});
+	assert.deepEqual(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL",
+		)?.valueFrom,
+		{
+			configMapKeyRef: {
+				name: "approved-connection-profile",
+				key: "approval.json",
+				optional: false,
+			},
+		},
+	);
 	assert.equal(
 		worker.spec.template.spec.containers[0].env.find(
 			(entry) => entry.name === "AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT",
@@ -424,9 +498,16 @@ test("profile changes roll every consuming Pod template", () => {
 });
 
 test("fingerprint uses raw JSON serialization for HTML characters", () => {
+	const base = objects(render().stdout);
+	const defaults = JSON.parse(
+		resource(base, "ConfigMap", "topology-agent-infra-connection-consumer").data
+			.AGENT_INFRA_CONNECTION_SYSTEM_ACCESS,
+	);
 	const result = render(
 		"--set-string",
 		"connectionConsumer.inline.audience=id<&>",
+		"--set-string",
+		`connectionConsumer.inline.approval.configFingerprint=${systemAccessFingerprint({ ...defaults, audience: "id<&>" })}`,
 	);
 	assert.equal(result.status, 0, result.stderr);
 	const resources = objects(result.stdout);

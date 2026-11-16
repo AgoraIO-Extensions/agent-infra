@@ -162,6 +162,13 @@ ConfigMap，渲染为 `AGENT_INFRA_CONNECTION_SYSTEM_ACCESS`）：Connection ori
 `consumerId`、单个 Agent 的条目或任何凭据。逐 Agent 的 Consumer 只来自 Owner 在 Platform
 的关联（[工程 Spec §13.5.7](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)）。
 
+系统接入只有在同时提供显式审批时才启用：`AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL`
+（Helm inline 的 `approval`，external 时为 `approvalConfigMapKey` 指向的同一 ConfigMap 键）
+必须含与这些字段一致的 `configFingerprint`、`egressEnforced: true` 和审批来源。
+`egressEnforced` 是部署方对出站策略已落实的声明，chart 与 API 不据此证明网络隔离；
+审批缺失、`egressEnforced` 不为 `true` 或指纹不符时，Connection 保持不可用（工程 Spec §13.5.2），
+不会从指纹或来源变量推断审批。
+
 API 配置模块不再接受 `connectionInstallationsByAgent` /
 `connectionInstallationsByAgentAndPrincipal`；Worker 配置模块不再接受
 `connectionConsumerProfilesByAgent`、`connectionInstallationSuppliesByAgent`、

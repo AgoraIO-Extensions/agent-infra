@@ -34,6 +34,8 @@ services:
       # When the API module does not export one, the API validates this env
       # projection and exposes the approved entry to the Web Connection tab.
       AGENT_INFRA_CONNECTION_SYSTEM_ACCESS: ${AGENT_INFRA_CONNECTION_SYSTEM_ACCESS:-}
+      # Explicit approval bound to the fingerprint; never inferred from the other vars.
+      AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL: ${AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL:-}
       AGENT_INFRA_CONNECTION_CONFIG_VERSION: ${AGENT_INFRA_CONNECTION_CONFIG_VERSION:-}
       AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: ${AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT:-}
       AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: ${AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF:-}

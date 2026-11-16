@@ -208,6 +208,7 @@
               "required": [
                 "configMapName",
                 "configMapKey",
+                "approvalConfigMapKey",
                 "configVersion",
                 "configFingerprint",
                 "sourceRef",
@@ -278,6 +279,9 @@
               "$ref": "#/$defs/kubernetesName"
             },
             "configMapKey": {
+              "$ref": "#/$defs/secretKey"
+            },
+            "approvalConfigMapKey": {
               "$ref": "#/$defs/secretKey"
             },
             "configVersion": {
@@ -703,10 +707,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "configFingerprint",
         "egressEnforced",
         "source"
       ],
       "properties": {
+        "configFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
         "egressEnforced": {
           "const": true
         },
