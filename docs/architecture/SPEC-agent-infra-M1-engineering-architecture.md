@@ -2119,8 +2119,10 @@ URL，origin 必须等于 `publicOrigin`）和 Platform OAuth 回调地址 `oaut
 审批必须由部署显式提供并与该指纹绑定：`{ schemaVersion: 1, configFingerprint, egressEnforced: true,
 source: { ref, revision } }`。环境投影使用 `AGENT_INFRA_CONNECTION_SYSTEM_ACCESS`（字段 JSON）、
 `AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL`（审批 JSON）和
-`AGENT_INFRA_CONNECTION_CONFIG_VERSION`（`1-<configFingerprint>`）；另行投影的指纹或审批来源变量
-必须与审批一致。消费方原样校验审批，不从指纹、来源或其他元数据补出审批或 `egressEnforced`；
+`AGENT_INFRA_CONNECTION_CONFIG_VERSION`（`1-<configFingerprint>`），Web 授权入口路径仍为
+`AGENT_INFRA_CONNECTION_WEB_PATH`（`webPath`，不进入指纹，缺失时入口不可用）；另行投影的指纹或
+审批来源变量可省略，出现时必须与审批一致（上面第 3 条的“必须同时包含”只适用于旧 Consumer profile）。
+自动登记策略不在该对象内，仍由独立的登记策略配置提供（§13.5.7）。消费方原样校验审批，不从指纹、来源或其他元数据补出审批或 `egressEnforced`；
 审批缺失、`egressEnforced` 不为 `true`、指纹不符或版本不一致时，系统接入及其派生的 Connection
 能力不可用。`egressEnforced` 是部署方对出站策略已落实的声明，渲染与校验本身不证明网络隔离。
 每个已关联 Agent 的 Consumer 快照由该对象与其关联按上表字段生成，指纹仍按 §13.5.2 的 Consumer
