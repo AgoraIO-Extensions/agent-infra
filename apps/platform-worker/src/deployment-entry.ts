@@ -13,6 +13,7 @@ import {
 	sessionSandboxReserveDigestV1,
 } from "@agent-infra/platform-core";
 import {
+	PostgresConnectionAssociationSourceV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresSessionOwnerSecretStoreV1,
 } from "@agent-infra/platform-store";
@@ -28,6 +29,7 @@ import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-in
 import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
+	createStartupConnectionSelectionGuardV1,
 	readConnectionConsumerSourceSelectionV1,
 	resolveRegisteredConnectionConsumerBindingsV1,
 } from "./connection-registration-bindings.js";
@@ -655,6 +657,20 @@ async function createPrepared(signal: AbortSignal) {
 	const selectedSharedConsumer = persistentAutomaticSource
 		? undefined
 		: connectionConsumer;
+	// The startup selection is a snapshot. An Agent that gains an Owner association or a
+	// registration later must not keep receiving that static or shared Consumer: business
+	// requests recheck the current persistent source (Spec §13.5.7, no fallback).
+	const startupLegacyAgentIds = persistentAutomaticSource
+		? new Set(legacySelection?.legacyAgentIds ?? [])
+		: undefined;
+	const associationSource = legacySelectionRequired
+		? new PostgresConnectionAssociationSourceV1({ databaseUrl })
+		: undefined;
+	const assertStartupConnectionSelectionCurrent =
+		createStartupConnectionSelectionGuardV1({
+			source: associationSource,
+			startupLegacyAgentIds,
+		});
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
@@ -984,6 +1000,7 @@ async function createPrepared(signal: AbortSignal) {
 				? { connectionInstallation: authorizedInstallation }
 				: {}),
 			closeDeployment: async () => {
+				await associationSource?.close();
 				await installationStore?.close();
 				await evaluationAuthority?.close();
 				await sessionOwnerSecrets.close();
@@ -1032,6 +1049,8 @@ async function createPrepared(signal: AbortSignal) {
 					request.purpose !== "control"
 				)
 					throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+				if (request.purpose !== "control")
+					await assertStartupConnectionSelectionCurrent(request.agentId);
 				return resolveRuntimeHost(request);
 			},
 			fetch: workload.fetch,

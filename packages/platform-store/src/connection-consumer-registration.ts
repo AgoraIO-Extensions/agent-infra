@@ -474,3 +474,32 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 		return this.#client.end();
 	}
 }
+
+/**
+ * Current, per-request persistent-association check (Spec §13.5.7). A Worker that started
+ * with a static or shared Consumer selection uses this so an Agent associated later (or
+ * disconnected) never receives that Consumer before the Worker re-reads its selection.
+ */
+export class PostgresConnectionAssociationSourceV1 {
+	readonly #client;
+	constructor(input: { readonly databaseUrl: string }) {
+		this.#client = postgres(input.databaseUrl, { max: 2 });
+	}
+
+	async persistent(agentId: string): Promise<boolean> {
+		const [row] = await this.#client<{ persistent: boolean }[]>`
+			select exists(
+				select 1 from platform.connection_consumer_registrations r where r.agent_id = ${agentId}
+			) or exists(
+				select 1 from platform.connection_association_generations g where g.agent_id = ${agentId}
+			) as persistent
+		`;
+		if (typeof row?.persistent !== "boolean")
+			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+		return row.persistent;
+	}
+
+	close() {
+		return this.#client.end();
+	}
+}
