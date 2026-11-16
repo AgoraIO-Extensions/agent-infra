@@ -59,3 +59,53 @@ export function readConnectionConsumerEnvironmentConfigurationV1(
 		profile = undefined;
 	return { profile, approval, configVersion, webPath };
 }
+
+const systemAccessEnvironment = "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS";
+
+export interface ConnectionSystemAccessEnvironmentConfigurationV1 {
+	readonly system: unknown;
+	readonly approval: unknown;
+	readonly configVersion: string | undefined;
+	readonly webPath: string | undefined;
+}
+
+/**
+ * Read the one-time system access projected by Helm (Spec §13.5.7). It names no
+ * Consumer; per-Agent Consumers come only from associations in the Platform DB.
+ */
+export function readConnectionSystemAccessEnvironmentConfigurationV1(
+	environment: NodeJS.ProcessEnv,
+): ConnectionSystemAccessEnvironmentConfigurationV1 | undefined {
+	const raw = environment[systemAccessEnvironment];
+	if (raw === undefined || raw === "") return undefined;
+	const configVersion = environment[versionEnvironment];
+	const fingerprint = environment[fingerprintEnvironment];
+	const sourceRef = environment[sourceRefEnvironment];
+	const sourceRevision = environment[sourceRevisionEnvironment];
+	let system: unknown;
+	try {
+		system = JSON.parse(raw);
+	} catch {
+		system = undefined;
+	}
+	if (
+		![configVersion, fingerprint, sourceRef, sourceRevision].every(
+			(value) => typeof value === "string" && value.length > 0,
+		) ||
+		configVersion !== `1-${String(fingerprint ?? "")}` ||
+		// A legacy Consumer profile in the same environment is ambiguous; close Connection.
+		(environment[profileEnvironment] ?? "") !== ""
+	)
+		system = null;
+	return {
+		system,
+		approval: {
+			schemaVersion: 1,
+			configFingerprint: fingerprint ?? "",
+			egressEnforced: true,
+			source: { ref: sourceRef ?? "", revision: sourceRevision ?? "" },
+		},
+		configVersion,
+		webPath: environment[webPathEnvironment],
+	};
+}

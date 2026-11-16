@@ -19,56 +19,106 @@
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["web", "platformApi", "platformWorker", "enterpriseDirectorySync", "runtimeHost", "pullPolicy"],
+      "required": [
+        "web",
+        "platformApi",
+        "platformWorker",
+        "enterpriseDirectorySync",
+        "runtimeHost",
+        "pullPolicy"
+      ],
       "properties": {
-        "web": { "$ref": "#/$defs/image" },
-        "platformApi": { "$ref": "#/$defs/image" },
-        "platformWorker": { "$ref": "#/$defs/image" },
-        "enterpriseDirectorySync": { "$ref": "#/$defs/image" },
-        "runtimeHost": { "$ref": "#/$defs/image" },
+        "web": {
+          "$ref": "#/$defs/image"
+        },
+        "platformApi": {
+          "$ref": "#/$defs/image"
+        },
+        "platformWorker": {
+          "$ref": "#/$defs/image"
+        },
+        "enterpriseDirectorySync": {
+          "$ref": "#/$defs/image"
+        },
+        "runtimeHost": {
+          "$ref": "#/$defs/image"
+        },
         "pullPolicy": {
           "type": "string",
-          "enum": ["IfNotPresent", "Never"]
+          "enum": [
+            "IfNotPresent",
+            "Never"
+          ]
         }
       }
     },
     "database": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["engine", "majorVersion", "compatibility", "secretRef"],
+      "required": [
+        "engine",
+        "majorVersion",
+        "compatibility",
+        "secretRef"
+      ],
       "properties": {
-        "engine": { "const": "postgresql" },
-        "majorVersion": { "const": 16 },
-        "compatibility": { "const": "expand-contract-v1" },
-        "secretRef": { "$ref": "#/$defs/secretRef" }
+        "engine": {
+          "const": "postgresql"
+        },
+        "majorVersion": {
+          "const": 16
+        },
+        "compatibility": {
+          "const": "expand-contract-v1"
+        },
+        "secretRef": {
+          "$ref": "#/$defs/secretRef"
+        }
       }
     },
     "keys": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["encryptionPublicKey", "workerDecryptionKeyring"],
+      "required": [
+        "encryptionPublicKey",
+        "workerDecryptionKeyring"
+      ],
       "properties": {
         "encryptionPublicKey": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["version", "secretRef"],
+          "required": [
+            "version",
+            "secretRef"
+          ],
           "properties": {
-            "version": { "$ref": "#/$defs/binding" },
-            "secretRef": { "$ref": "#/$defs/secretRef" }
+            "version": {
+              "$ref": "#/$defs/binding"
+            },
+            "secretRef": {
+              "$ref": "#/$defs/secretRef"
+            }
           }
         },
         "workerDecryptionKeyring": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["versions", "secretRef"],
+          "required": [
+            "versions",
+            "secretRef"
+          ],
           "properties": {
             "versions": {
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
-              "items": { "$ref": "#/$defs/binding" }
+              "items": {
+                "$ref": "#/$defs/binding"
+              }
             },
-            "secretRef": { "$ref": "#/$defs/secretRef" }
+            "secretRef": {
+              "$ref": "#/$defs/secretRef"
+            }
           }
         }
       }
@@ -85,144 +135,340 @@
         "workloadRoute"
       ],
       "properties": {
-        "identity": { "$ref": "#/$defs/binding" },
-        "imageRegistry": { "$ref": "#/$defs/binding" },
-        "modelCatalog": { "$ref": "#/$defs/binding" },
-        "objectStorage": { "$ref": "#/$defs/binding" },
-        "kubernetesRuntime": { "const": "in-cluster" },
+        "identity": {
+          "$ref": "#/$defs/binding"
+        },
+        "imageRegistry": {
+          "$ref": "#/$defs/binding"
+        },
+        "modelCatalog": {
+          "$ref": "#/$defs/binding"
+        },
+        "objectStorage": {
+          "$ref": "#/$defs/binding"
+        },
+        "kubernetesRuntime": {
+          "const": "in-cluster"
+        },
         "workloadRoute": {
           "type": "string",
-          "enum": ["ingress", "deployment-adapter"]
+          "enum": [
+            "ingress",
+            "deployment-adapter"
+          ]
         }
       }
     },
     "connectionConsumer": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "webPath"],
+      "required": [
+        "source",
+        "webPath"
+      ],
       "oneOf": [
         {
           "properties": {
-            "source": { "const": "inline" },
+            "source": {
+              "const": "inline"
+            },
             "inline": {
               "type": "object",
-              "required": ["schemaVersion", "publicOrigin", "mcpPath", "consumerId", "audience", "egressProfile", "approval"]
+              "required": [
+                "schemaVersion",
+                "publicOrigin",
+                "mcpPath",
+                "issuer",
+                "audience",
+                "oauthCallbackUrl",
+                "egressProfile",
+                "approval"
+              ]
             },
-            "external": { "type": "object", "maxProperties": 0 }
+            "external": {
+              "type": "object",
+              "maxProperties": 0
+            }
           }
         },
         {
           "properties": {
-            "source": { "const": "external" },
-            "inline": { "type": ["object", "null"], "maxProperties": 0 },
+            "source": {
+              "const": "external"
+            },
+            "inline": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "maxProperties": 0
+            },
             "external": {
               "type": "object",
-              "required": ["configMapName", "configMapKey", "configVersion", "configFingerprint", "sourceRef", "sourceRevision"]
+              "required": [
+                "configMapName",
+                "configMapKey",
+                "configVersion",
+                "configFingerprint",
+                "sourceRef",
+                "sourceRevision"
+              ]
             }
           }
         }
       ],
       "properties": {
-        "source": { "type": "string", "enum": ["inline", "external"] },
-        "webPath": { "type": "string", "minLength": 1 },
+        "source": {
+          "type": "string",
+          "enum": [
+            "inline",
+            "external"
+          ]
+        },
+        "webPath": {
+          "type": "string",
+          "minLength": 1
+        },
         "inline": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "schemaVersion": { "const": 1 },
-            "publicOrigin": { "type": "string", "pattern": "^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\\[[0-9a-f:]+\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$" },
-            "mcpPath": { "type": "string", "minLength": 1 },
-            "consumerId": { "type": "string", "minLength": 1 },
-            "audience": { "type": "string", "minLength": 1 },
-            "egressProfile": { "$ref": "#/$defs/egressProfile" },
-            "approval": { "$ref": "#/$defs/connectionApproval" }
+            "schemaVersion": {
+              "const": 1
+            },
+            "publicOrigin": {
+              "type": "string",
+              "pattern": "^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\\[[0-9a-f:]+\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$"
+            },
+            "mcpPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "audience": {
+              "type": "string",
+              "minLength": 1
+            },
+            "issuer": {
+              "type": "string",
+              "pattern": "^https://[^?#\\s]+$"
+            },
+            "oauthCallbackUrl": {
+              "type": "string",
+              "pattern": "^https://[^?#\\s]+$"
+            },
+            "egressProfile": {
+              "$ref": "#/$defs/egressProfile"
+            },
+            "approval": {
+              "$ref": "#/$defs/connectionApproval"
+            }
           }
         },
         "external": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "configMapName": { "$ref": "#/$defs/kubernetesName" },
-            "configMapKey": { "$ref": "#/$defs/secretKey" },
-            "configVersion": { "type": "string", "pattern": "^1-[a-f0-9]{64}$" },
-            "configFingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-            "sourceRef": { "type": "string", "minLength": 1 },
-            "sourceRevision": { "type": "string", "minLength": 1 }
+            "configMapName": {
+              "$ref": "#/$defs/kubernetesName"
+            },
+            "configMapKey": {
+              "$ref": "#/$defs/secretKey"
+            },
+            "configVersion": {
+              "type": "string",
+              "pattern": "^1-[a-f0-9]{64}$"
+            },
+            "configFingerprint": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "sourceRef": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sourceRevision": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
     },
-    "web": { "$ref": "#/$defs/placement" },
-    "agentVersion": { "type": "string", "pattern": "^(?:|[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$" },
+    "web": {
+      "$ref": "#/$defs/placement"
+    },
+    "agentVersion": {
+      "type": "string",
+      "pattern": "^(?:|[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$"
+    },
     "platformApi": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["placement", "externalBaseUrl", "deploymentModule"],
+      "required": [
+        "placement",
+        "externalBaseUrl",
+        "deploymentModule"
+      ],
       "properties": {
         "placement": {
           "type": "string",
-          "enum": ["external", "in-cluster"]
+          "enum": [
+            "external",
+            "in-cluster"
+          ]
         },
         "externalBaseUrl": {
           "type": "string",
           "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[1-9][0-9]{0,4})?(?:/[^?#]*)?$"
         },
-        "deploymentModule": { "$ref": "#/$defs/module" },
-        "configurationModuleSecretRef": { "$ref": "#/$defs/secretRef" },
-        "proxyTokenSecretRef": { "$ref": "#/$defs/secretRef" },
-        "trustedCaSecretRef": { "$ref": "#/$defs/secretRef" },
-        "connectionCallbackAuthSecretRef": { "$ref": "#/$defs/secretRef" }
+        "deploymentModule": {
+          "$ref": "#/$defs/module"
+        },
+        "configurationModuleSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "proxyTokenSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "trustedCaSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "connectionCallbackAuthSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        }
       }
     },
     "platformWorker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replicas", "wecomEnabled", "nativeMetadataGateway"],
+      "required": [
+        "replicas",
+        "wecomEnabled",
+        "nativeMetadataGateway"
+      ],
       "properties": {
-        "configurationModuleSecretRef": { "$ref": "#/$defs/secretRef" },
-        "trustedCaSecretRef": { "$ref": "#/$defs/secretRef" },
-        "deploymentModule": { "type": "string", "maxLength": 256, "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$" },
-        "runtimeImageRepository": { "type": "string", "pattern": "^(?:$|(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)$" },
-        "runtimeImageDigest": { "type": "string", "pattern": "^(?:|sha256:[a-f0-9]{64})$" },
-        "wecomEnabled": { "type": "boolean" },
-        "fileExchangeOrigin": { "type": "string", "maxLength": 512, "pattern": "^(?:$|https?://[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?)$" },
+        "configurationModuleSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "trustedCaSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "deploymentModule": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^(?:$|(?:file:///|/)[^\\s]+)$"
+        },
+        "runtimeImageRepository": {
+          "type": "string",
+          "pattern": "^(?:$|(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)$"
+        },
+        "runtimeImageDigest": {
+          "type": "string",
+          "pattern": "^(?:|sha256:[a-f0-9]{64})$"
+        },
+        "wecomEnabled": {
+          "type": "boolean"
+        },
+        "fileExchangeOrigin": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^(?:$|https?://[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?)$"
+        },
         "fileExchangeEgress": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "ip": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9A-Fa-f:.]+$" },
-            "namespace": { "$ref": "#/$defs/kubernetesName" },
+            "ip": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 45,
+              "pattern": "^[0-9A-Fa-f:.]+$"
+            },
+            "namespace": {
+              "$ref": "#/$defs/kubernetesName"
+            },
             "podLabels": {
               "type": "object",
               "minProperties": 1,
               "maxProperties": 16,
-              "additionalProperties": { "type": "string", "maxLength": 63 }
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 63
+              }
             }
           },
           "oneOf": [
-            { "maxProperties": 0 },
-            { "required": ["ip"], "maxProperties": 1 },
-            { "required": ["namespace", "podLabels"], "maxProperties": 2 }
+            {
+              "maxProperties": 0
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "maxProperties": 1
+            },
+            {
+              "required": [
+                "namespace",
+                "podLabels"
+              ],
+              "maxProperties": 2
+            }
           ]
         },
         "nativeMetadataGateway": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled", "port"],
+          "required": [
+            "enabled",
+            "port"
+          ],
           "properties": {
-            "enabled": { "type": "boolean" },
-            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-            "platformApiOrigin": { "type": "string", "maxLength": 256, "pattern": "^(?:$|http://[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?/?)$" }
+            "enabled": {
+              "type": "boolean"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "platformApiOrigin": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^(?:$|http://[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?/?)$"
+            }
           }
         },
         "runtimeAuthSecretRef": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "privateKeyKey", "serviceTokenKey"],
+          "required": [
+            "name",
+            "privateKeyKey",
+            "serviceTokenKey"
+          ],
           "properties": {
-            "name": { "$ref": "#/$defs/kubernetesName" },
-            "privateKeyKey": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9._-]+$" },
-            "serviceTokenKey": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[A-Za-z0-9._-]+$" }
+            "name": {
+              "$ref": "#/$defs/kubernetesName"
+            },
+            "privateKeyKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "serviceTokenKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            }
           }
         },
         "replicas": {
@@ -234,8 +480,12 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "requests": { "$ref": "#/$defs/resourceList" },
-            "limits": { "$ref": "#/$defs/resourceList" }
+            "requests": {
+              "$ref": "#/$defs/resourceList"
+            },
+            "limits": {
+              "$ref": "#/$defs/resourceList"
+            }
           }
         }
       }
@@ -255,22 +505,54 @@
         "tlsSecretRef"
       ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "rootDepartmentId": { "type": "integer", "minimum": 1 },
-        "corpId": { "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9_-]*$" },
-        "runtimeDatabaseRole": { "type": "string", "pattern": "^(?:$|[a-z_][a-z0-9_]{0,62})$" },
-        "databaseSecretRef": { "$ref": "#/$defs/secretRef" },
-        "migrationDatabaseSecretRef": { "$ref": "#/$defs/secretRef" },
-        "corpSecretRef": { "$ref": "#/$defs/secretRef" },
-        "readTokenSecretRef": { "$ref": "#/$defs/secretRef" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "rootDepartmentId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "corpId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]*$"
+        },
+        "runtimeDatabaseRole": {
+          "type": "string",
+          "pattern": "^(?:$|[a-z_][a-z0-9_]{0,62})$"
+        },
+        "databaseSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "migrationDatabaseSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "corpSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "readTokenSecretRef": {
+          "$ref": "#/$defs/secretRef"
+        },
         "tlsSecretRef": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "certKey", "privateKeyKey"],
+          "required": [
+            "name",
+            "certKey",
+            "privateKeyKey"
+          ],
           "properties": {
-            "name": { "$ref": "#/$defs/kubernetesName" },
-            "certKey": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
-            "privateKeyKey": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+            "name": {
+              "$ref": "#/$defs/kubernetesName"
+            },
+            "certKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            },
+            "privateKeyKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            }
           }
         }
       }
@@ -278,9 +560,14 @@
     "migration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "backoffLimit"],
+      "required": [
+        "enabled",
+        "backoffLimit"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "backoffLimit": {
           "type": "integer",
           "minimum": 0,
@@ -291,9 +578,16 @@
     "workloadTopology": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "storageSize", "service", "route"],
+      "required": [
+        "enabled",
+        "storageSize",
+        "service",
+        "route"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean"
+        },
         "storageSize": {
           "type": "string",
           "pattern": "^[1-9][0-9]*(Mi|Gi)$"
@@ -301,10 +595,17 @@
         "service": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["runtimePort", "routePort"],
+          "required": [
+            "runtimePort",
+            "routePort"
+          ],
           "properties": {
-            "runtimePort": { "$ref": "#/$defs/port" },
-            "routePort": { "$ref": "#/$defs/port" }
+            "runtimePort": {
+              "$ref": "#/$defs/port"
+            },
+            "routePort": {
+              "$ref": "#/$defs/port"
+            }
           }
         },
         "route": {
@@ -318,14 +619,22 @@
             "tlsSecretName"
           ],
           "properties": {
-            "enabled": { "type": "boolean" },
-            "ingressClassName": { "$ref": "#/$defs/binding" },
-            "ingressNamespace": { "$ref": "#/$defs/kubernetesName" },
+            "enabled": {
+              "type": "boolean"
+            },
+            "ingressClassName": {
+              "$ref": "#/$defs/binding"
+            },
+            "ingressNamespace": {
+              "$ref": "#/$defs/kubernetesName"
+            },
             "host": {
               "type": "string",
               "format": "hostname"
             },
-            "tlsSecretName": { "$ref": "#/$defs/kubernetesName" }
+            "tlsSecretName": {
+              "$ref": "#/$defs/kubernetesName"
+            }
           }
         }
       }
@@ -350,9 +659,14 @@
     "secretRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "key"],
+      "required": [
+        "name",
+        "key"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/kubernetesName" },
+        "name": {
+          "$ref": "#/$defs/kubernetesName"
+        },
         "key": {
           "type": "string",
           "minLength": 1,
@@ -370,25 +684,48 @@
     "egressProfile": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ref", "revision"],
+      "required": [
+        "ref",
+        "revision"
+      ],
       "properties": {
-        "ref": { "type": "string", "minLength": 1 },
-        "revision": { "type": "string", "minLength": 1 }
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "connectionApproval": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["egressEnforced", "source"],
+      "required": [
+        "egressEnforced",
+        "source"
+      ],
       "properties": {
-        "egressEnforced": { "const": true },
+        "egressEnforced": {
+          "const": true
+        },
         "source": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["ref", "revision"],
+          "required": [
+            "ref",
+            "revision"
+          ],
           "properties": {
-            "ref": { "type": "string", "minLength": 1 },
-            "revision": { "type": "string", "minLength": 1 }
+            "ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
@@ -396,7 +733,10 @@
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository", "digest"],
+      "required": [
+        "repository",
+        "digest"
+      ],
       "properties": {
         "repository": {
           "type": "string",
@@ -412,11 +752,17 @@
     "placement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["placement", "externalBaseUrl"],
+      "required": [
+        "placement",
+        "externalBaseUrl"
+      ],
       "properties": {
         "placement": {
           "type": "string",
-          "enum": ["external", "in-cluster"]
+          "enum": [
+            "external",
+            "in-cluster"
+          ]
         },
         "externalBaseUrl": {
           "type": "string",
@@ -433,8 +779,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "memory": { "type": "string", "minLength": 1, "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|m|k|M|G|T|P|E)?$" },
-        "cpu": { "type": "string", "minLength": 1, "pattern": "^[0-9]+(\\.[0-9]+)?m?$" }
+        "memory": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|m|k|M|G|T|P|E)?$"
+        },
+        "cpu": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[0-9]+(\\.[0-9]+)?m?$"
+        }
       }
     }
   }

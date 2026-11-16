@@ -1,7 +1,10 @@
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { describe, expect, it } from "vitest";
 
-import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
+import {
+	readConnectionConsumerEnvironmentConfigurationV1,
+	readConnectionSystemAccessEnvironmentConfigurationV1,
+} from "./connection-consumer-environment.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
 
 const profile = {
@@ -90,5 +93,56 @@ describe("Connection Consumer environment configuration", () => {
 				AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "",
 			}),
 		).toBeUndefined();
+	});
+});
+
+describe("one-time Connection system access environment (#4157)", () => {
+	const system = {
+		schemaVersion: 1,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/callback",
+	};
+	const fingerprint = "a".repeat(64);
+	const environment = {
+		AGENT_INFRA_CONNECTION_SYSTEM_ACCESS: JSON.stringify(system),
+		AGENT_INFRA_CONNECTION_CONFIG_VERSION: `1-${fingerprint}`,
+		AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: fingerprint,
+		AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "platform-deployment",
+		AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r1",
+		AGENT_INFRA_CONNECTION_WEB_PATH: "/connection/connections",
+	};
+	it("reads system access without any Consumer field", () => {
+		expect(
+			readConnectionSystemAccessEnvironmentConfigurationV1(environment),
+		).toEqual({
+			system,
+			approval: {
+				schemaVersion: 1,
+				configFingerprint: fingerprint,
+				egressEnforced: true,
+				source: { ref: "platform-deployment", revision: "r1" },
+			},
+			configVersion: `1-${fingerprint}`,
+			webPath: "/connection/connections",
+		});
+		expect(readConnectionSystemAccessEnvironmentConfigurationV1({})).toBe(
+			undefined,
+		);
+	});
+	it("closes on a version mismatch or a legacy Consumer profile beside it", () => {
+		for (const extra of [
+			{ AGENT_INFRA_CONNECTION_CONFIG_VERSION: "1-other" },
+			{ AGENT_INFRA_CONNECTION_PROFILE: JSON.stringify({ consumerId: "x" }) },
+		])
+			expect(
+				readConnectionSystemAccessEnvironmentConfigurationV1({
+					...environment,
+					...extra,
+				})?.system,
+			).toBeNull();
 	});
 });

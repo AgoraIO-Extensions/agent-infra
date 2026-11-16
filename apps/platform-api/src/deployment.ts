@@ -22,7 +22,10 @@ import {
 import { createAgentDefaultRelayKeyCandidatesV1 } from "./agent-default-relay-key-validation.js";
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import { createConnectionAssociationVerifierV1 } from "./connection-association-verifier.js";
-import { createConnectionCapability } from "./connection-consumer-profile.js";
+import {
+	createConnectionCapability,
+	createConnectionSystemAccessCapability,
+} from "./connection-consumer-profile.js";
 import {
 	createDeploymentAdmissionsV1,
 	createDeploymentConfigurationProjectionV2,
@@ -105,6 +108,9 @@ export interface ProductionPlatformApiInputV1
 		>["verify"];
 	};
 	readonly connectionConsumerProfile?: unknown;
+	/** Approved one-time system access (Spec §13.5.7); exclusive with the legacy profile. */
+	readonly connectionSystemAccess?: unknown;
+	readonly connectionSystemAccessApproval?: unknown;
 	readonly connectionConsumerRegistration?: PlatformApiAssemblyInput["connectionConsumerRegistration"];
 	/** Server-resolved Connection Web console path; separate from the MCP endpoint. */
 	readonly connectionWebPath?: unknown;
@@ -501,11 +507,26 @@ export function createProductionPlatformApiAssemblyInputV1(
 		multiServiceResourceProfiles: input.multiServiceResourceProfiles,
 		multiServiceResourceCap: input.multiServiceResourceCap,
 	});
-	const connectionCapability = createConnectionCapability(
-		input.connectionConsumerProfile,
-		input.connectionConsumerProfileApproval,
-		input.connectionWebPath,
-	);
+	// Spec §13.5.7: approved one-time system access names no Consumer. It is exclusive with
+	// the legacy deployment-wide Consumer profile; supplying both closes Connection.
+	const systemAccessMode =
+		input.connectionSystemAccess !== undefined ||
+		input.connectionSystemAccessApproval !== undefined;
+	const connectionCapability: ReturnType<typeof createConnectionCapability> =
+		!systemAccessMode
+			? createConnectionCapability(
+					input.connectionConsumerProfile,
+					input.connectionConsumerProfileApproval,
+					input.connectionWebPath,
+				)
+			: input.connectionConsumerProfile !== undefined ||
+					input.connectionConsumerProfileApproval !== undefined
+				? { status: "unavailable", schemaVersion: 1, reason: "invalid" }
+				: createConnectionSystemAccessCapability(
+						input.connectionSystemAccess,
+						input.connectionSystemAccessApproval,
+						input.connectionWebPath,
+					);
 	const secretEncryptor = createSecretEncryptorV1({
 		encryptionKeys: input.encryptionKeys,
 	});
@@ -601,7 +622,8 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.sessionSandboxReserves
 			? { sessionSandboxReserves: input.sessionSandboxReserves }
 			: {}),
-		...(input.connectionInstallation
+		// System access never carries a static or shared Consumer installation.
+		...(input.connectionInstallation && !systemAccessMode
 			? {
 					connectionInstallation: {
 						...input.connectionInstallation,

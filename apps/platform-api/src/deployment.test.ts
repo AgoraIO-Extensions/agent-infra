@@ -1123,6 +1123,80 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			reason: "unapproved",
 		});
 	});
+	it("enables Owner association from one-time system access without any static Consumer or map (#4157)", async () => {
+		const { connectionSystemAccessFingerprintV1 } = await import(
+			"@agent-infra/contracts/connection-consumer-profile"
+		);
+		const system = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+			issuer: "https://connection.example.test/",
+			oauthCallbackUrl:
+				"https://platform.example.test/api/connection-installations/callback",
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionSystemAccessFingerprintV1(system),
+			source: { ref: "platform-deployment", revision: "r1" },
+			egressEnforced: true,
+		};
+		const input = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			connectionSystemAccess: system,
+			connectionSystemAccessApproval: approval,
+			connectionWebPath: "/connection/connections",
+		});
+		expect(input.connectionCapability).toEqual({
+			status: "available",
+			schemaVersion: 1,
+			publicOrigin: system.publicOrigin,
+			mcpPath: system.mcpPath,
+			webPath: "/connection/connections",
+			configFingerprint: approval.configFingerprint,
+		});
+		expect(input.connectionAssociation?.verify).toBeTypeOf("function");
+		expect(input.connectionAssociation?.encrypt).toBeTypeOf("function");
+		// Automatic registration stays off and no static or shared installation exists.
+		expect(input.connectionConsumerRegistration).toBeUndefined();
+		expect(input.connectionInstallation).toBeUndefined();
+		expect(JSON.stringify(input.connectionCapability)).not.toContain(
+			"consumerId",
+		);
+		// A shared installation supplied alongside system access is dropped.
+		expect(
+			createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				connectionSystemAccess: system,
+				connectionSystemAccessApproval: approval,
+				connectionWebPath: "/connection/connections",
+				connectionInstallation: {
+					publicOrigin: "https://platform.example.test",
+				} as never,
+			}).connectionInstallation,
+		).toBeUndefined();
+		for (const conflicting of [
+			// A legacy Consumer profile next to system access is ambiguous.
+			{ connectionConsumerProfile: { ...system, consumerId: "platform" } },
+			// A Consumer ID inside system access is rejected, not ignored.
+			{ connectionSystemAccess: { ...system, consumerId: "platform" } },
+			{
+				connectionSystemAccessApproval: { ...approval, egressEnforced: false },
+			},
+		]) {
+			const rejected = createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				connectionSystemAccess: system,
+				connectionSystemAccessApproval: approval,
+				connectionWebPath: "/connection/connections",
+				...conflicting,
+			});
+			expect(rejected.connectionCapability?.status).toBe("unavailable");
+			expect(rejected.connectionAssociation).toBeUndefined();
+		}
+	});
 	it("resolves historical model names within the original production request scope", async () => {
 		expect(
 			createProductionPlatformApiAssemblyInputV1(fixture.input)

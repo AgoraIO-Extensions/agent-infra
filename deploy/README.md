@@ -156,14 +156,18 @@ HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key�
 
 ### Platform Connection 安装确认
 
-逐 Agent 安装由同一受信部署提供两侧的完整绑定。API 配置模块导出
-`connectionInstallationsByAgent`，以平台 Agent ID 为键，每项为
-`{ configuration, profile, approval }`；省略原 `connectionInstallationConfiguration`。
-Worker 配置模块在 `connectionInstallation.configurationsByAgent` 提供相同键的 OAuth 配置，
-并通过既有逐 Agent profile 和 installation supply 映射提供对应快照与供应引用。
-两侧导出均为非秘密部署输入。配置选择、冲突处理和回调约束以
-[工程 Spec §13.5.6](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
-为准。
+部署只提供一次性的系统接入配置（Helm `connectionConsumer.inline` 或 external
+ConfigMap，渲染为 `AGENT_INFRA_CONNECTION_SYSTEM_ACCESS`）：Connection origin、
+`mcpPath`、`audience`、出站策略、OAuth `issuer` 与回调地址及其审批来源。它不包含
+`consumerId`、单个 Agent 的条目或任何凭据。逐 Agent 的 Consumer 只来自 Owner 在 Platform
+的关联（[工程 Spec §13.5.7](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)）。
+
+API 配置模块不再接受 `connectionInstallationsByAgent` /
+`connectionInstallationsByAgentAndPrincipal`；Worker 配置模块不再接受
+`connectionConsumerProfilesByAgent`、`connectionInstallationSuppliesByAgent`、
+`connectionInstallation.configurationsByAgent`、`configurationsByAgentAndPrincipal` 与
+`principalBindingsByAgentAndPrincipal`。导出其中任一项时，该进程的 Connection 安装整体
+关闭，也不使用部署级共享 Consumer。系统接入与旧的部署级 Consumer profile 不能同时配置。
 
 Platform API 的受信 `configuration.mjs` 可导出非敏感 `connectionInstallationConfiguration`
 （现有 `RuntimeOAuthConfigurationV1`），与相同模块的完整 Consumer profile/approval 和

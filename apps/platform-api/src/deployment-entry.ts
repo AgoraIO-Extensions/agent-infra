@@ -5,7 +5,10 @@ import {
 	parseEvaluationAnalysisPolicyV1,
 } from "@agent-infra/platform-core";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
-import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
+import {
+	readConnectionConsumerEnvironmentConfigurationV1,
+	readConnectionSystemAccessEnvironmentConfigurationV1,
+} from "./connection-consumer-environment.js";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
 	createProductionNativeMetadataReaderFromWorkerV1,
@@ -50,6 +53,8 @@ const {
 	connectionWebPath,
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
+	connectionSystemAccess,
+	connectionSystemAccessApproval,
 	connectionInstallationConfiguration,
 	connectionInstallationsByAgent,
 	connectionInstallationsByAgentAndPrincipal,
@@ -91,11 +96,27 @@ export function readPlatformSessionReserveDeploymentV1() {
 	return structuredClone(sessionReserveDeployment);
 }
 
+// Spec §13.5.7: per-Agent Consumers come only from associations. Static per-Agent
+// deployment bindings are no longer accepted; their presence closes installation.
+const staticPerAgentConnectionBindings =
+	connectionInstallationsByAgent !== undefined ||
+	connectionInstallationsByAgentAndPrincipal !== undefined;
+const moduleSystemAccess =
+	connectionSystemAccess !== undefined ||
+	connectionSystemAccessApproval !== undefined;
+const environmentSystemAccess =
+	moduleSystemAccess ||
+	connectionConsumerProfile !== undefined ||
+	connectionConsumerProfileApproval !== undefined
+		? undefined
+		: readConnectionSystemAccessEnvironmentConfigurationV1(process.env);
 const environmentConnectionConsumer =
-	connectionConsumerProfile === undefined &&
-	connectionConsumerProfileApproval === undefined
-		? readConnectionConsumerEnvironmentConfigurationV1(process.env)
-		: undefined;
+	moduleSystemAccess ||
+	environmentSystemAccess !== undefined ||
+	connectionConsumerProfile !== undefined ||
+	connectionConsumerProfileApproval !== undefined
+		? undefined
+		: readConnectionConsumerEnvironmentConfigurationV1(process.env);
 if (apiInput?.evaluation?.loadAnalysisPolicy)
 	parseEvaluationAnalysisPolicyV1(
 		await apiInput.evaluation.loadAnalysisPolicy(),
@@ -106,7 +127,17 @@ const resolvedConnectionConsumerProfile =
 const resolvedConnectionConsumerProfileApproval =
 	connectionConsumerProfileApproval ?? environmentConnectionConsumer?.approval;
 const resolvedConnectionWebPath =
-	connectionWebPath ?? environmentConnectionConsumer?.webPath;
+	connectionWebPath ??
+	environmentSystemAccess?.webPath ??
+	environmentConnectionConsumer?.webPath;
+const resolvedConnectionSystemAccess = moduleSystemAccess
+	? { system: connectionSystemAccess, approval: connectionSystemAccessApproval }
+	: environmentSystemAccess
+		? {
+				system: environmentSystemAccess.system,
+				approval: environmentSystemAccess.approval,
+			}
+		: undefined;
 
 async function nativeMetadataWorkerFromEnvironment() {
 	const baseUrl = process.env.PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN;
@@ -222,9 +253,8 @@ const browser = createPostgresLdapBrowserDeployment({
 });
 const callbackForwarder =
 	connectionInstallationCallback ??
-	((connectionInstallationConfiguration ||
-		connectionInstallationsByAgent ||
-		connectionInstallationsByAgentAndPrincipal) &&
+	(connectionInstallationConfiguration &&
+	!staticPerAgentConnectionBindings &&
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
 		? {
 				forward: createProtectedConnectionInstallationForwarder({
@@ -349,17 +379,19 @@ export function createPlatformApiAssemblyInput() {
 		connectionConsumerProfile: resolvedConnectionConsumerProfile,
 		connectionConsumerProfileApproval:
 			resolvedConnectionConsumerProfileApproval,
+		...(resolvedConnectionSystemAccess
+			? {
+					connectionSystemAccess: resolvedConnectionSystemAccess.system,
+					connectionSystemAccessApproval:
+						resolvedConnectionSystemAccess.approval,
+				}
+			: {}),
 		connectionWebPath: resolvedConnectionWebPath,
 		connectionConsumerRegistration,
-		...(connectionInstallationConfiguration ||
-		connectionInstallationsByAgent ||
-		connectionInstallationsByAgentAndPrincipal
+		...(connectionInstallationConfiguration && !staticPerAgentConnectionBindings
 			? {
 					connectionInstallation: {
 						configuration: connectionInstallationConfiguration,
-						bindingsByAgent: connectionInstallationsByAgent,
-						bindingsByAgentAndPrincipal:
-							connectionInstallationsByAgentAndPrincipal,
 						publicOrigin,
 					},
 				}

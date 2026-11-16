@@ -45,8 +45,10 @@ adapters:
   kubernetesRuntime: in-cluster
   workloadRoute: ingress
 
-# The non-sensitive snapshot consumed by every Platform component. Connection
-# resources and credentials are owned by the separate Connection deployment.
+# One-time system Connection access (Spec §13.5.7) consumed by every Platform
+# component. It names no Consumer, Agent or credential: each Agent's Consumer comes
+# only from its association in the Platform DB. Connection resources and credentials
+# are owned by the separate Connection deployment.
 connectionConsumer:
   source: inline
   # 用户授权控制台路径；与 MCP endpoint 的 mcpPath 分开管理。
@@ -55,8 +57,11 @@ connectionConsumer:
     schemaVersion: 1
     publicOrigin: https://connection.example.invalid
     mcpPath: /mcp
-    consumerId: platform
     audience: connection-api
+    # OAuth issuer; its origin must equal publicOrigin.
+    issuer: https://connection.example.invalid/
+    # Platform OAuth callback route served behind the callback-only forward.
+    oauthCallbackUrl: https://platform.example.invalid/api/connection-installations/callback
     egressProfile:
       ref: platform-egress
       revision: r1

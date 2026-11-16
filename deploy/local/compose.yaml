@@ -30,10 +30,10 @@ services:
       PLATFORM_API_CONFIGURATION_MODULE: file:///app/deployment/configuration.mjs
       PLATFORM_API_PROXY_TOKEN_FILE: /run/secrets/platform_proxy_token
       PLATFORM_PUBLIC_ORIGIN: ${PLATFORM_PUBLIC_ORIGIN:-https://localhost:3001}
-      # Optional deployment-owned non-secret Connection profile. When the API
-      # module does not export one, the API validates this env projection and
-      # exposes the approved target to the Web Connection tab.
-      AGENT_INFRA_CONNECTION_PROFILE: ${AGENT_INFRA_CONNECTION_PROFILE:-}
+      # Optional deployment-owned one-time Connection system access (no Consumer).
+      # When the API module does not export one, the API validates this env
+      # projection and exposes the approved entry to the Web Connection tab.
+      AGENT_INFRA_CONNECTION_SYSTEM_ACCESS: ${AGENT_INFRA_CONNECTION_SYSTEM_ACCESS:-}
       AGENT_INFRA_CONNECTION_CONFIG_VERSION: ${AGENT_INFRA_CONNECTION_CONFIG_VERSION:-}
       AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: ${AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT:-}
       AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: ${AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF:-}

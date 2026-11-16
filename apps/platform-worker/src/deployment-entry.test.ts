@@ -1089,7 +1089,7 @@ it("fails closed when an explicit reserve file is missing", () => {
 	);
 });
 
-it("projects distinct approved consumers and installations by Agent", async () => {
+it("closes Connection when deployment supplies static per-Agent Consumer maps (#4157)", async () => {
 	const configurationPath = join(directory, "configuration.mjs");
 	const original = await readFile(configurationPath, "utf8");
 	const agentBProfile = {
@@ -1120,19 +1120,11 @@ it("projects distinct approved consumers and installations by Agent", async () =
 		);
 		const result = run();
 		expect(result.status, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toMatchObject({
-			snapshot: null,
-			snapshots: {
-				"agent-a": expect.stringContaining('"consumerId":"platform-worker"'),
-				"agent-b": expect.stringContaining(
-					'"consumerId":"platform-worker-agent-b"',
-				),
-			},
-			installations: {
-				"agent-a": '["installation-a","r1"]',
-				"agent-b": '["installation-b","r2"]',
-			},
-		});
+		// Spec §13.5.7: no per-Agent entry from deployment, and no shared fallback either.
+		const value = JSON.parse(result.stdout);
+		expect(value.snapshot).toBeNull();
+		expect(value.snapshots).toBeUndefined();
+		expect(value.installations).toBeUndefined();
 	} finally {
 		await writeFile(configurationPath, original);
 	}
@@ -1168,32 +1160,6 @@ it("projects a persisted random OAuth client returned by the deployment resolver
 				"agent-a": expect.stringContaining('"clientId":"oauth-client-random"'),
 			},
 			installations: { "agent-a": '["installation-a","r1"]' },
-		});
-	} finally {
-		await writeFile(configurationPath, original);
-	}
-});
-
-it("rejects a per-Agent consumer map without a matching installation map", async () => {
-	const configurationPath = join(directory, "configuration.mjs");
-	const original = await readFile(configurationPath, "utf8");
-	try {
-		await writeFile(
-			configurationPath,
-			`${original}\nexport const connectionConsumerProfilesByAgent = ${JSON.stringify(
-				{
-					"agent-a": {
-						profile: connectionConsumerProfile,
-						approval: connectionConsumerApproval,
-					},
-				},
-			)};\n`,
-		);
-		const result = run();
-		expect(result.status).toBe(1);
-		expect(JSON.parse(result.stdout)).toEqual({
-			error: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
-			calls: [],
 		});
 	} finally {
 		await writeFile(configurationPath, original);
@@ -1625,7 +1591,7 @@ it.each([
 	},
 );
 
-it("selects publication only for opted-in OAuth entries with valid per-Agent supplies", async () => {
+it("never publishes OAuth from static per-Agent deployment entries (#4157)", async () => {
 	const path = join(directory, "configuration.mjs");
 	const original = await readFile(path, "utf8");
 	const setup = `${original}\n${approvedPatInstallationModule}\nconst oauth={...connectionInstallation.configuration};delete oauth.patBinding;connectionInstallation.configuration=undefined;delete connectionInstallation.configuration;connectionInstallation.configurationsByAgent={"agent-a":oauth,"agent-b":{...oauth,patBinding:{consumerId:"platform-worker",bindingEndpoint:"https://connection.example.test/api/v1/connection/pat-bindings"}},"agent-c":oauth};connectionInstallation.publishOAuth=true;\nexport const connectionConsumerProfilesByAgent={"agent-a":{profile:connectionConsumerProfile,approval:connectionConsumerApproval},"agent-b":{profile:connectionConsumerProfile,approval:connectionConsumerApproval},"agent-c":{profile:connectionConsumerProfile,approval:connectionConsumerApproval}};\nexport const connectionInstallationSuppliesByAgent={"agent-a":{ref:"supply-a",revision:"r1"},"agent-b":{ref:"supply-b",revision:"r1"}};\n`;
@@ -1635,7 +1601,7 @@ it("selects publication only for opted-in OAuth entries with valid per-Agent sup
 		expect(result.status, result.stderr).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual({
 			publication: false,
-			publications: { "agent-a": true, "agent-b": false, "agent-c": false },
+			publications: null,
 		});
 	} finally {
 		await writeFile(path, original);
@@ -1785,7 +1751,7 @@ it.each([
 			);
 			const control = run({ RUN_INVALID_PROFILE: "true" });
 			expect(control.status, control.stderr).toBe(0);
-			expect(JSON.parse(control.stdout)).toEqual({
+			expect(JSON.parse(control.stdout)).toMatchObject({
 				control: "original-control",
 				business: "CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
 				snapshot: null,
@@ -1945,7 +1911,7 @@ it("rejects the internal policy selector override before constructing dependenci
 });
 
 it.each(["valid", "bad configuration", "bad Agent ID", "shared fallback"])(
-	"assembles per-Agent installation only when the whole input is valid (%s)",
+	"never assembles a static per-Agent installation (%s, #4157)",
 	async (mode) => {
 		const path = join(directory, "configuration.mjs");
 		const original = await readFile(path, "utf8");
@@ -2009,8 +1975,8 @@ export const connectionInstallation=${JSON.stringify(installation)};
 			});
 			expect(result.status, result.stderr).toBe(0);
 			expect(JSON.parse(result.stdout)).toEqual({
-				hasCommandStore: mode === "valid",
-				configurations: mode === "valid" ? configurationsByAgent : null,
+				hasCommandStore: false,
+				configurations: null,
 				workloadReady: true,
 				shared: null,
 			});
@@ -2130,7 +2096,7 @@ it.each([
 	"per-Agent fallback",
 	"missing profiles",
 ])(
-	"assembles the explicit user installation index only for %s",
+	"never assembles a deployment-supplied user installation index (%s, #4157)",
 	async (mode) => {
 		const path = join(directory, "configuration.mjs");
 		const original = await readFile(path, "utf8");
@@ -2190,9 +2156,8 @@ it.each([
 			});
 			expect(result.status, result.stderr).toBe(0);
 			expect(JSON.parse(result.stdout)).toEqual({
-				hasCommandStore: mode === "valid",
-				configurations:
-					mode === "valid" ? configurationsByAgentAndPrincipal : null,
+				hasCommandStore: false,
+				configurations: null,
 				workloadReady: true,
 				shared: null,
 			});
