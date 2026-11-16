@@ -5,6 +5,7 @@ import {
 	planConnectionConsumerDisableIdentityV1,
 	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
+import { PostgresConnectionAssociationSourceV1 } from "@agent-infra/platform-store";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
@@ -12,7 +13,11 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
-import { resolveRegisteredConnectionConsumerBindingsV1 } from "./connection-registration-bindings.js";
+import {
+	createStartupConnectionSelectionGuardV1,
+	readConnectionConsumerSourceSelectionV1,
+	resolveRegisteredConnectionConsumerBindingsV1,
+} from "./connection-registration-bindings.js";
 import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 
 const policy = {
@@ -442,4 +447,48 @@ it("an Agent disabled before registration was sent never registers or disables",
 	} finally {
 		await worker.close();
 	}
+});
+
+it("closes a startup static or shared Consumer selection for an Agent associated after Worker start (#4157)", async () => {
+	await sql`delete from platform.outbox_items`;
+	await sql`delete from platform.connection_consumer_registrations`;
+	await sql`insert into platform.agents (id) values ('agent-b')`;
+	// Startup: no Agent has a persistent source, so every Agent was selected as legacy.
+	expect(
+		await readConnectionConsumerSourceSelectionV1(database.databaseUrl),
+	).toEqual({ automaticAgentIds: [], legacyAgentIds: ["agent-a", "agent-b"] });
+	const source = new PostgresConnectionAssociationSourceV1({
+		databaseUrl: database.databaseUrl,
+	});
+	try {
+		const shared = createStartupConnectionSelectionGuardV1({ source });
+		await expect(shared("agent-a")).resolves.toBe(true);
+		// The Owner associates agent-a while the Worker keeps its startup selection.
+		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-a',1)`;
+		await expect(shared("agent-a")).resolves.toBe(false);
+		// Disconnect keeps the durable generation: the shared Consumer stays closed.
+		await sql`update platform.connection_association_generations set last_revision=2`;
+		await expect(shared("agent-a")).resolves.toBe(false);
+		await expect(shared("agent-b")).resolves.toBe(true);
+		// With a startup legacy set, Agents outside it already fail closed elsewhere.
+		const legacy = createStartupConnectionSelectionGuardV1({
+			source,
+			startupLegacyAgentIds: new Set(["agent-b"]),
+		});
+		await expect(legacy("agent-a")).resolves.toBe(true);
+		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-b',1)`;
+		await expect(legacy("agent-b")).resolves.toBe(false);
+	} finally {
+		await source.close();
+	}
+	// An unavailable source throws; delivery callers fail closed on it.
+	const broken = createStartupConnectionSelectionGuardV1({
+		source: {
+			persistent: async () => {
+				throw new Error("down");
+			},
+		},
+	});
+	await expect(broken("agent-b")).rejects.toThrow("down");
+	await sql`delete from platform.connection_association_generations`;
 });

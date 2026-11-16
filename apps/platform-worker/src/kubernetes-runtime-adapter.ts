@@ -207,6 +207,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly connectionConsumerControl?: boolean;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
+	/**
+	 * Current persistent Connection source check (Spec §13.5.7). Called before a cached
+	 * static or shared Consumer snapshot is delivered to a running Pod; false or a
+	 * thrown error closes that delivery. Stop, drain, cleanup and control never call it.
+	 */
+	readonly connectionDeliveryCurrent?: (agentId: string) => Promise<boolean>;
 	/** Supplied from Worker persistent state, never restored from live annotations. */
 	readonly modelProjection?:
 		| RuntimeModelProjectionV1
@@ -1503,6 +1509,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					) === null)
 			)
 				throw new WorkloadKubernetesError("policy");
+			if (
+				value.replicas !== 0 &&
+				options.connectionDeliveryCurrent &&
+				typeof runtimeConnectionConsumerSnapshotForAgentV1(
+					policy.connectionConsumerSnapshot,
+					policy.connectionConsumerSnapshotsByAgent,
+					value.agentId,
+				) === "string"
+			) {
+				let current: boolean;
+				try {
+					current = await options.connectionDeliveryCurrent(value.agentId);
+				} catch {
+					throw new WorkloadKubernetesError("unavailable");
+				}
+				if (!current) throw new WorkloadKubernetesError("policy");
+			}
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			if (
 				(policy.nativeEgress || options.workspaceSnapshotProjection) &&

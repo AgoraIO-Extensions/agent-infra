@@ -34,6 +34,7 @@ async function audit(
 		id: randomUUID(),
 		traceId: event.traceId,
 		requestId: event.requestId,
+		// Only a resolved Owner is a user actor; an unresolved API credential stays anonymous.
 		actorType: event.actorId === null ? "api_credential" : "user",
 		actorId: event.actorId ?? "unresolved",
 		action: `connection.association.${event.operation}`,
@@ -44,6 +45,7 @@ async function audit(
 		// Never carries the Connection Agent ID, credential, fingerprint or ciphertext.
 		details: {
 			schemaVersion: 1,
+			entry: event.entry,
 			...(event.reason === undefined ? {} : { reason: event.reason }),
 			...(event.associationRevision === undefined
 				? {}

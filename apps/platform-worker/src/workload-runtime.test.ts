@@ -7859,3 +7859,56 @@ it("restores snapshot projection after runtime recreation and refreshes signing"
 		clock.mockRestore();
 	}
 });
+
+it.each([
+	["current", async (): Promise<boolean> => true, true],
+	["associated after start", async (): Promise<boolean> => false, false],
+	[
+		"source error",
+		async (): Promise<boolean> => {
+			throw new Error("source down");
+		},
+		false,
+	],
+] as const)(
+	"delivers a startup shared Consumer to an Agent Workload only while its source is current: %s (#4157)",
+	async (_label, current, delivered) => {
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "shared-platform-consumer",
+			audience: "resource-a",
+			egressProfile: { ref: "egress-a", revision: "r1" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(profile, {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "deployment-a", revision: "r1" },
+		});
+		const calls: string[] = [];
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				connectionConsumerSnapshot: snapshot,
+				connectionInstallationRevision: '["approved-export","r1"]',
+			},
+			connectionDeliveryCurrent: async (agentId: string): Promise<boolean> => {
+				calls.push(agentId);
+				return current();
+			},
+		});
+		await f.tick(8);
+		expect(calls.length).toBeGreaterThan(0);
+		const workloadWrites = f.writes.filter((item) =>
+			["Deployment", "StatefulSet"].includes(item.kind ?? ""),
+		);
+		expect(
+			workloadWrites.some((item) =>
+				JSON.stringify(item).includes("shared-platform-consumer"),
+			),
+		).toBe(delivered);
+		expect(Boolean(f.state?.verified)).toBe(delivered);
+	},
+);

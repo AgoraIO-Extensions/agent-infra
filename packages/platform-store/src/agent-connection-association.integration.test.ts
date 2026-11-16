@@ -390,6 +390,17 @@ describe("Owner manual Connection association", () => {
 				),
 			),
 		).toBe("already_associated");
+		// Reuse is not observable before Connection accepts the credential.
+		verification = "credential_rejected";
+		expect(
+			await rejection(
+				useCase().associate(
+					browser("agent-b"),
+					manual("connection-agent-a", credentialB),
+				),
+			),
+		).toBe("credential_rejected");
+		verification = "verified";
 		// A repeated first association does not create a second row or overwrite the first.
 		expect(
 			await rejection(
@@ -399,7 +410,8 @@ describe("Owner manual Connection association", () => {
 				),
 			),
 		).toBe("conflict");
-		expect(verified).toHaveLength(1);
+		// Connection is asked first; reuse is decided only after it accepts the credential.
+		expect(verified).toHaveLength(4);
 		expect(await rows()).toEqual([
 			{
 				agent_id: "agent-a",
@@ -492,6 +504,30 @@ describe("Owner manual Connection association", () => {
 				manual("connection-agent-a", credentialA),
 			),
 		).toMatchObject({ status: "associated", associationRevision: 1 });
+		// The audit names the entry and the resolved Owner, never the credential.
+		expect(
+			await sql`select actor_type, actor_id, outcome, details->>'entry' as entry from platform.audit_events where action like 'connection.association.%' order by occurred_at`,
+		).toEqual([
+			// A non-Owner credential is not resolved to an Owner actor.
+			{
+				actor_type: "api_credential",
+				actor_id: "unresolved",
+				outcome: "rejected",
+				entry: "api",
+			},
+			{
+				actor_type: "api_credential",
+				actor_id: "unresolved",
+				outcome: "rejected",
+				entry: "api",
+			},
+			{
+				actor_type: "user",
+				actor_id: owner,
+				outcome: "succeeded",
+				entry: "api",
+			},
+		]);
 		await noCredentialPersisted();
 	});
 });

@@ -63,6 +63,12 @@ export interface SessionReserveAdapterV1 {
 		resources: readonly KubernetesObject[],
 		signal?: AbortSignal,
 	): Promise<{ bootstrapReady: boolean; businessStateAbsent: boolean }>;
+	/**
+	 * False when the reserve would deliver a startup-selected Consumer snapshot to an Agent
+	 * that now has a persistent association (Spec §13.5.7). Throws when the source is
+	 * unavailable. Absent means the deployment selected no such Consumer.
+	 */
+	deliverable?(claim: SessionSandboxReserveObservationV1): Promise<boolean>;
 }
 export interface SessionReserveReconcileResultV1 {
 	prepared: number;
@@ -241,6 +247,13 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		result: SessionReserveReconcileResultV1,
 		guard: () => Promise<void>,
 	) {
+		// Retire before any write: nothing was created for this reserve with the old Consumer.
+		// Backing off the Agent stops capacity reconciliation from recreating it every poll.
+		if (adapter.deliverable && !(await adapter.deliverable(claim))) {
+			defer(claim.agentId);
+			await retire(claim);
+			return;
+		}
 		const rendered = await adapter.render(claim);
 		if (
 			rendered.length !== creationOrder.length ||
@@ -344,7 +357,14 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			abortController.signal,
 		);
 		await guard();
-		if (!evidence.bootstrapReady || !evidence.businessStateAbsent) return;
+		if (!evidence.bootstrapReady || !evidence.businessStateAbsent) {
+			// Association may arrive during preparation; such a reserve is removed, never readied.
+			if (adapter.deliverable && !(await adapter.deliverable(claim))) {
+				defer(claim.agentId);
+				await retire(claim);
+			}
+			return;
+		}
 		// Bind the accepted readiness receipt to current GET versions, including status changes after CREATE.
 		for (const kind of creationOrder) {
 			await guard();
@@ -355,6 +375,14 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			}
 			if (!(await store.recordObservation(claim, identity(claim, current))))
 				throw new LeaseLost();
+		}
+		await guard();
+		// The readiness reads above await; recheck the current source last so an association
+		// written during them never readies the reserve. A source error leaves it not ready.
+		if (adapter.deliverable && !(await adapter.deliverable(claim))) {
+			defer(claim.agentId);
+			await retire(claim);
+			return;
 		}
 		await guard();
 		if (await store.markReady(claim, evidence)) result.ready++;
@@ -399,6 +427,13 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			inspection.modelProjection
 		) {
 			try {
+				// A ready reserve carrying a startup-selected Consumer for an Agent that is now
+				// associated is retired, so no business Session adopts it.
+				if (adapter.deliverable && !(await adapter.deliverable(inspection))) {
+					defer(row.agentId);
+					if (await store.retire(row.sandboxId)) result.retired++;
+					return;
+				}
 				for (const kind of creationOrder) {
 					const current = await adapter.read(
 						inspection,
@@ -409,6 +444,12 @@ export function createPlatformSessionReserveWorkerV1(options: {
 						if (await store.retire(row.sandboxId)) result.retired++;
 						return;
 					}
+				}
+				// Recheck after the awaited reads, immediately before extending readiness.
+				if (adapter.deliverable && !(await adapter.deliverable(inspection))) {
+					defer(row.agentId);
+					if (await store.retire(row.sandboxId)) result.retired++;
+					return;
 				}
 				if (!(await store.refreshReady(row.sandboxId, configuration.ttlMs))) {
 					if (await store.retire(row.sandboxId)) result.retired++;

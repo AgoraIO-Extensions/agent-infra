@@ -3473,3 +3473,115 @@ it("native Session policy clones deployment input and detects protected-only pol
 	);
 	await expect(next(f.claim, new AbortController().signal)).rejects.toThrow();
 });
+
+it("never provisions a startup shared Consumer snapshot after the Agent is associated (#4157)", async () => {
+	const { startPostgresTestDatabase } = await import(
+		"../../../packages/platform-store/src/postgres-test.js"
+	);
+	const { migratePlatformDatabase } = await import(
+		"../../../packages/platform-store/src/migrate.js"
+	);
+	const { PostgresConnectionAssociationSourceV1 } = await import(
+		"@agent-infra/platform-store"
+	);
+	const { createStartupConnectionSelectionGuardV1 } = await import(
+		"./connection-registration-bindings.js"
+	);
+	const { default: postgres } = await import("postgres");
+	const database = await startPostgresTestDatabase("connection-delivery");
+	const sql = postgres(database.databaseUrl, { max: 1, onnotice: () => {} });
+	const source = new PostgresConnectionAssociationSourceV1({
+		databaseUrl: database.databaseUrl,
+	});
+	try {
+		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
+		await sql`insert into platform.agents (id) values ('agent-a')`;
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "shared-platform-consumer",
+			audience: "connection-api",
+			egressProfile: { ref: "egress", revision: "r1" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(profile, {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "platform-deployment", revision: "r1" },
+		});
+		if (!snapshot) throw new Error("Missing approved snapshot");
+		// Worker started with the shared selection: every Agent was legacy at startup.
+		const guard = createStartupConnectionSelectionGuardV1({ source });
+		const receiver = (f: ReturnType<typeof fixture>, current = guard) =>
+			createProductionSessionSandboxReceiverV1(
+				{
+					...f.options,
+					policy: {
+						...f.options.policy,
+						connectionConsumerSnapshot: snapshot,
+						connectionInstallationRevision: '["shared","r1"]',
+					},
+					connectionDeliveryCurrent: current,
+				},
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
+		const signal = new AbortController().signal;
+		const pod = (f: ReturnType<typeof fixture>) =>
+			f.client.read<V1Pod>("Pod", f.claim.sandbox.resourceName);
+
+		// Before association the shared Consumer is still delivered.
+		const before = fixture();
+		const receiveBefore = receiver(before);
+		const observed = await receiveBefore(before.claim, signal);
+		expect(
+			(await pod(before))?.metadata?.annotations?.[
+				runtimeConnectionConsumerAnnotation
+			],
+		).toBe(snapshot);
+
+		// The Owner associates agent-a after Worker start (generation row persists).
+		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-a',1)`;
+		const after = fixture();
+		await expect(receiver(after)(after.claim, signal)).rejects.toThrow();
+		expect(await pod(after)).toBeNull();
+		expect(
+			[...after.resources.values()].some((resource) =>
+				JSON.stringify(resource).includes("shared-platform-consumer"),
+			),
+		).toBe(false);
+
+		// Disconnect keeps the generation: the shared Consumer stays closed.
+		await sql`update platform.connection_association_generations set last_revision=2`;
+		const disconnected = fixture();
+		await expect(
+			receiver(disconnected)(disconnected.claim, signal),
+		).rejects.toThrow();
+		expect(await pod(disconnected)).toBeNull();
+
+		// A source error fails closed instead of delivering the startup Consumer.
+		const broken = fixture();
+		await expect(
+			receiver(broken, async () => {
+				throw new Error("source down");
+			})(broken.claim, signal),
+		).rejects.toThrow();
+		expect(await pod(broken)).toBeNull();
+
+		// Draining and stopping the earlier Sandbox still runs: stop renders never consult
+		// the source, so existing resources can always be removed after association.
+		// Re-preparing the same running claim after association is closed too.
+		await expect(receiveBefore(before.claim, signal)).rejects.toThrow();
+		const stopped = await receiveBefore(
+			drainClaim(before, observed),
+			signal,
+			async () => "committed",
+		);
+		expect(stopped.status).toBe("stopped");
+		expect(await pod(before)).toBeNull();
+	} finally {
+		await source.close();
+		await sql.end();
+		await database.stop();
+	}
+}, 180_000);

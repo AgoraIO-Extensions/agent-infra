@@ -33,7 +33,13 @@ import {
 import type { WorkloadRuntimeOptionsV1 } from "./workload-runtime.js";
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
-function fixture(driver: "codex" | "claude" | "acp" | "pi" = "codex") {
+function fixture(
+	driver: "codex" | "claude" | "acp" | "pi" = "codex",
+	overrides: {
+		readonly policy?: Partial<WorkloadRuntimeOptionsV1["policy"]>;
+		readonly connectionDeliveryCurrent?: WorkloadRuntimeOptionsV1["connectionDeliveryCurrent"];
+	} = {},
+) {
 	const deployment = workloadDesiredFixture(
 		1,
 		"reserve-agent",
@@ -62,6 +68,7 @@ function fixture(driver: "codex" | "claude" | "acp" | "pi" = "codex") {
 	const policy = {
 		...workloadTestPolicy,
 		runtimeAuth: sessionSandboxRuntimeAuthFixture,
+		...overrides.policy,
 	};
 	const objects = new Map<string, KubernetesObject>();
 	const key = (object: KubernetesObject) =>
@@ -103,6 +110,9 @@ function fixture(driver: "codex" | "claude" | "acp" | "pi" = "codex") {
 			policy,
 			client,
 			templateModelBindings: [projection.standardTemplateBinding],
+			...(overrides.connectionDeliveryCurrent
+				? { connectionDeliveryCurrent: overrides.connectionDeliveryCurrent }
+				: {}),
 		},
 		serviceToken: sessionSandboxDeploymentTokenFixture,
 		fetch: fetch as typeof globalThis.fetch,
@@ -663,3 +673,173 @@ function addSkill(f: ReturnType<typeof fixture>) {
 	});
 	return key;
 }
+
+describe("Session reserve Connection delivery (#4157)", () => {
+	it.each(["shared", "per-Agent"] as const)(
+		"never creates or readies a %s startup Consumer reserve after the Agent is associated",
+		async (mode) => {
+			const { startPostgresTestDatabase } = await import(
+				"../../../packages/platform-store/src/postgres-test.js"
+			);
+			const { migratePlatformDatabase } = await import(
+				"../../../packages/platform-store/src/migrate.js"
+			);
+			const { PostgresConnectionAssociationSourceV1 } = await import(
+				"@agent-infra/platform-store"
+			);
+			const { createStartupConnectionSelectionGuardV1 } = await import(
+				"./connection-registration-bindings.js"
+			);
+			const { connectionConsumerProfileFingerprintV1 } = await import(
+				"@agent-infra/contracts/connection-consumer-profile"
+			);
+			const {
+				createRuntimeConnectionConsumerSnapshotV1,
+				runtimeConnectionConsumerAnnotation,
+			} = await import("./connection-consumer-projection.js");
+			const { default: postgres } = await import("postgres");
+			const database = await startPostgresTestDatabase(
+				`reserve-connection-${mode === "shared" ? "shared" : "agent"}`,
+			);
+			const sql = postgres(database.databaseUrl, {
+				max: 1,
+				onnotice: () => {},
+			});
+			const source = new PostgresConnectionAssociationSourceV1({
+				databaseUrl: database.databaseUrl,
+			});
+			try {
+				await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
+				const agentId = "reserve-agent";
+				await sql`insert into platform.agents (id) values (${agentId})`;
+				const profile = {
+					schemaVersion: 1 as const,
+					publicOrigin: "https://connection.example.test",
+					mcpPath: "/mcp",
+					consumerId: "startup-platform-consumer",
+					audience: "connection-api",
+					egressProfile: { ref: "egress", revision: "r1" },
+				};
+				const snapshot = createRuntimeConnectionConsumerSnapshotV1(profile, {
+					schemaVersion: 1,
+					configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+					egressEnforced: true,
+					source: { ref: "platform-deployment", revision: "r1" },
+				});
+				if (!snapshot) throw new Error("Missing approved snapshot");
+				const policy =
+					mode === "shared"
+						? {
+								connectionConsumerSnapshot: snapshot,
+								connectionInstallationRevision: '["startup","r1"]',
+							}
+						: {
+								connectionConsumerSnapshotsByAgent: { [agentId]: snapshot },
+								connectionInstallationRevisionsByAgent: {
+									[agentId]: '["startup","r1"]',
+								},
+							};
+				// Same production guard as the Worker entry: shared startup selection checks every
+				// Agent, a per-Agent startup selection checks its legacy Agents.
+				const guard = createStartupConnectionSelectionGuardV1({
+					source,
+					...(mode === "per-Agent"
+						? { startupLegacyAgentIds: new Set([agentId]) }
+						: {}),
+				});
+				const make = (
+					current: WorkloadRuntimeOptionsV1["connectionDeliveryCurrent"] = guard,
+				) => {
+					const f = fixture("codex", {
+						policy,
+						connectionDeliveryCurrent: current,
+					});
+					return f;
+				};
+
+				// Before association the startup Consumer is still delivered and the reserve is ready.
+				const before = make();
+				const objects = await before.ready();
+				const pod = objects.find((object) => object.kind === "Pod") as V1Pod;
+				expect(
+					pod.metadata?.annotations?.[runtimeConnectionConsumerAnnotation],
+				).toBe(snapshot);
+				expect(await before.adapter.bootstrap(before.claim, objects)).toEqual({
+					bootstrapReady: true,
+					businessStateAbsent: true,
+				});
+
+				// The Owner associates the Agent after Worker start.
+				await sql`insert into platform.connection_association_generations(agent_id,last_revision) values (${agentId},1)`;
+				const after = make();
+				expect(await after.adapter.deliverable(after.claim)).toBe(false);
+				for (const object of await after.adapter.render(after.claim))
+					await expect(
+						after.adapter.create(after.claim, object),
+					).rejects.toThrow();
+				expect(after.create).not.toHaveBeenCalled();
+				expect(after.objects.size).toBe(0);
+				// The reserve prepared before association is no longer ready ...
+				expect(await before.adapter.deliverable(before.claim)).toBe(false);
+				expect(await before.adapter.bootstrap(before.claim, objects)).toEqual({
+					bootstrapReady: false,
+					businessStateAbsent: false,
+				});
+				// ... but its identity reads and removal keep working.
+				expect(await before.adapter.read(before.claim, "Pod")).not.toBeNull();
+				const retiring = {
+					...before.claim,
+					status: "retiring" as const,
+					deployment: null,
+					modelProjection: null,
+				};
+				for (const object of objects)
+					expect(
+						await before.adapter.remove(retiring, before.identity(object)),
+					).toBe("acknowledged");
+				expect(before.objects.size).toBe(1); // only the fixture Endpoints remain
+
+				// Disconnect keeps the generation row: the startup Consumer stays closed.
+				await sql`update platform.connection_association_generations set last_revision=2 where agent_id=${agentId}`;
+				const disconnected = make();
+				expect(await disconnected.adapter.deliverable(disconnected.claim)).toBe(
+					false,
+				);
+
+				// A source error fails closed: no write and no readiness.
+				const broken = make(async () => {
+					throw new Error("source down");
+				});
+				await expect(
+					broken.adapter.deliverable(broken.claim),
+				).rejects.toThrow();
+				const desired = await broken.adapter.render(broken.claim);
+				await expect(
+					broken.adapter.create(broken.claim, required(desired[0])),
+				).rejects.toThrow();
+				expect(broken.create).not.toHaveBeenCalled();
+				expect(
+					(await broken.adapter.bootstrap(broken.claim, objects))
+						.bootstrapReady,
+				).toBe(false);
+
+				// Agents without a startup-selected Consumer never consult the source.
+				const unselected = fixture("codex", {
+					connectionDeliveryCurrent: async () => {
+						throw new Error("must not be consulted");
+					},
+				});
+				expect(await unselected.adapter.deliverable(unselected.claim)).toBe(
+					true,
+				);
+				await unselected.ready();
+				expect(unselected.create).toHaveBeenCalledTimes(6);
+			} finally {
+				await source.close();
+				await sql.end();
+				await database.stop();
+			}
+		},
+		180_000,
+	);
+});
