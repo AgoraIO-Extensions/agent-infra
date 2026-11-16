@@ -251,3 +251,26 @@ export const connectionManualAssociations = platformSchema.table(
 		),
 	],
 );
+
+/**
+ * Durable per-Agent association generation (Spec §13.5.7). It survives disconnect so a
+ * reassociation never reuses an earlier association revision as its CAS identity.
+ */
+export const connectionAssociationGenerations = platformSchema.table(
+	"connection_association_generations",
+	{
+		agentId: text("agent_id")
+			.primaryKey()
+			.references(() => agents.id),
+		lastRevision: bigint("last_revision", { mode: "number" }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"connection_association_generation_revision",
+			sql`${table.lastRevision} between 1 and 9007199254740991`,
+		),
+	],
+);

@@ -424,6 +424,18 @@ it("reads two durable verified Consumer associations without a hand-maintained A
 	const a = await registeredAgent("agent-a");
 	const b = await registeredAgent("agent-b");
 	await sql`insert into platform.agents(id) values ('legacy-agent')`;
+	// A disconnected Owner manual association leaves only its durable generation row:
+	// that Agent is still never selected as a legacy static Agent.
+	await sql`insert into platform.agents(id) values ('manual-agent')`;
+	await sql`insert into platform.connection_association_generations(agent_id, last_revision) values ('manual-agent', 3)`;
+	expect(
+		await readConnectionConsumerSourceSelectionV1(database.databaseUrl),
+	).toEqual({
+		automaticAgentIds: ["agent-a", "agent-b", "manual-agent"],
+		legacyAgentIds: ["legacy-agent"],
+	});
+	await sql`delete from platform.connection_association_generations`;
+	await sql`delete from platform.agents where id = 'manual-agent'`;
 	expect(
 		await readConnectionConsumerSourceSelectionV1(database.databaseUrl),
 	).toEqual({

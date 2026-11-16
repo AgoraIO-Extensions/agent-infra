@@ -17,6 +17,7 @@ import postgres from "./observed-postgres.js";
 import { isPostgresError } from "./postgres-error.js";
 import {
 	auditEvents,
+	connectionAssociationGenerations,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
 	connectionManualAssociations,
@@ -171,8 +172,27 @@ function operations(
 			return automatic.length > 0;
 		},
 		async saveManual(input) {
-			const associationRevision =
-				input.expectedRevision === null ? 1 : input.expectedRevision + 1;
+			// The caller holds the Agent row lock. Every association, replacement and
+			// reassociation takes a fresh generation that is never reused after disconnect.
+			const [generation] = await transaction
+				.insert(connectionAssociationGenerations)
+				.values({ agentId: input.agentId, lastRevision: 1 })
+				.onConflictDoUpdate({
+					target: connectionAssociationGenerations.agentId,
+					set: {
+						lastRevision: sql`${connectionAssociationGenerations.lastRevision} + 1`,
+						updatedAt: sql`clock_timestamp()`,
+					},
+				})
+				.returning({ revision: connectionAssociationGenerations.lastRevision });
+			const associationRevision = Number(generation?.revision);
+			if (
+				!Number.isSafeInteger(associationRevision) ||
+				associationRevision < 1 ||
+				(input.expectedRevision !== null &&
+					associationRevision <= input.expectedRevision)
+			)
+				throw new AgentConnectionAssociationErrorV1("unavailable");
 			const ciphertext = input.encrypt({
 				agentId: input.agentId,
 				ownerId: input.ownerId,

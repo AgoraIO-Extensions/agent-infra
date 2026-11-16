@@ -1,3 +1,10 @@
+CREATE TABLE "platform"."connection_association_generations" (
+	"agent_id" text PRIMARY KEY NOT NULL,
+	"last_revision" bigint NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "connection_association_generation_revision" CHECK ("platform"."connection_association_generations"."last_revision" between 1 and 9007199254740991)
+);
+--> statement-breakpoint
 CREATE TABLE "platform"."connection_manual_associations" (
 	"agent_id" text PRIMARY KEY NOT NULL,
 	"connection_agent_id" varchar(80) NOT NULL,
@@ -18,6 +25,7 @@ CREATE TABLE "platform"."connection_manual_associations" (
 				and "platform"."connection_manual_associations"."credential_ciphertext"->'crypto'->>'dekFingerprint' ~ '^[a-f0-9]{64}$')
 );
 --> statement-breakpoint
+ALTER TABLE "platform"."connection_association_generations" ADD CONSTRAINT "connection_association_generations_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "platform"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "platform"."connection_manual_associations" ADD CONSTRAINT "connection_manual_associations_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "platform"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "connection_manual_association_agent_unique" ON "platform"."connection_manual_associations" USING btree ("connection_agent_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "connection_manual_association_credential_unique" ON "platform"."connection_manual_associations" USING btree ("credential_fingerprint");--> statement-breakpoint

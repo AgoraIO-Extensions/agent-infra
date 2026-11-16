@@ -251,6 +251,63 @@ describe("Owner manual Connection association", () => {
 		await noCredentialPersisted();
 	});
 
+	it("never reuses a CAS revision across disconnect and reassociation (ABA)", async () => {
+		const disconnect = (expectedRevision: number) =>
+			useCase().disconnect(browser("agent-a"), {
+				schemaVersion: 1,
+				expectedRevision,
+			});
+		const seen: number[] = [];
+		// A at rev1, disconnect, then the same Consumer again, then B; repeated over cycles.
+		for (const [cycle, connectionAgentId, serviceCredential] of [
+			[0, "connection-agent-a", credentialA],
+			[1, "connection-agent-a", credentialA],
+			[2, "connection-agent-b", credentialB],
+			[3, "connection-agent-a", credentialB],
+		] as const) {
+			const state = await useCase().associate(
+				browser("agent-a"),
+				manual(connectionAgentId, serviceCredential),
+			);
+			const revision = state.associationRevision;
+			if (revision === null) throw new Error("Missing revision");
+			expect(seen).not.toContain(revision);
+			for (const stale of seen) {
+				// An old revision can neither disconnect nor replace the newer association.
+				expect(await rejection(disconnect(stale))).toBe("conflict");
+				expect(
+					await rejection(
+						useCase().associate(
+							browser("agent-a"),
+							manual(connectionAgentId, serviceCredential, stale),
+						),
+					),
+				).toBe("conflict");
+			}
+			expect(await rows()).toEqual([
+				{
+					agent_id: "agent-a",
+					connection_agent_id: connectionAgentId,
+					association_revision: String(revision),
+				},
+			]);
+			seen.push(revision);
+			if (cycle < 3) await disconnect(revision);
+		}
+		// Replacing the current association also advances past every earlier revision.
+		const current = seen.at(-1) ?? 0;
+		const replaced = await useCase().associate(
+			browser("agent-a"),
+			manual("connection-agent-a", credentialA, current),
+		);
+		expect(replaced.associationRevision).toBeGreaterThan(Math.max(...seen));
+		expect(await rejection(disconnect(current))).toBe("conflict");
+		const [stored] =
+			await sql`select credential_ciphertext->>'secretVersion' as version from platform.connection_manual_associations`;
+		expect(Number(stored?.version)).toBe(replaced.associationRevision);
+		await noCredentialPersisted();
+	});
+
 	it("rejects non-Owners and cross-Agent changes before calling Connection", async () => {
 		await seedAgent("agent-other", other);
 		expect(

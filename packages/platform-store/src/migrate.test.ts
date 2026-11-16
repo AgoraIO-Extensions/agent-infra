@@ -750,6 +750,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 			// ciphertext plus a reuse fingerprint (Spec §13.5.3 exception), never Provider credentials.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
+				"connection_association_generations",
 				"connection_consumer_disables",
 				"connection_consumer_registrations",
 				"connection_installation_authorizations",
@@ -2653,6 +2654,17 @@ describe("published Relay authority migration", () => {
 				"connection_manual_associations:connection_manual_association_credential_unique",
 				"connection_manual_associations:connection_manual_association_dek_unique",
 				"connection_manual_associations:connection_manual_associations_pkey",
+			);
+			expectedDelta.columns.push(
+				...["agent_id", "last_revision", "updated_at"].map(
+					(name) => `connection_association_generations:${name}`,
+				),
+			);
+			expectedDelta.checks.push(
+				"connection_association_generations:connection_association_generation_revision",
+			);
+			expectedDelta.indexes.push(
+				"connection_association_generations:connection_association_generations_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

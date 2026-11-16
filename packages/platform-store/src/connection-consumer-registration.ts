@@ -165,6 +165,10 @@ export async function readConnectionConsumerSourceSelectionV1(
 			>`
 				select a.id as agent_id, exists(
 					select 1 from platform.connection_consumer_registrations r where r.agent_id = a.id
+				) or exists(
+					-- An Agent that ever had an Owner manual association (current or disconnected)
+					-- is never a legacy static Agent.
+					select 1 from platform.connection_association_generations g where g.agent_id = a.id
 				) as automatic from platform.agents a order by a.id
 			`;
 			return {
