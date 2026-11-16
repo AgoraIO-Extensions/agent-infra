@@ -333,6 +333,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/commands",
 			"/api/v2/agents/{agentId}/configuration",
 			"/api/v2/agents/{agentId}/configuration/saved-model",
+			"/api/v2/agents/{agentId}/connection-association",
 			"/api/v2/agents/{agentId}/creation-failure",
 			"/api/v2/agents/{agentId}/default-relay-key",
 			"/api/v2/agents/{agentId}/default-relay-key/candidates",

@@ -16,6 +16,7 @@ import {
 	workspaceSnapshotBindingError,
 } from "../agent-administration/workspace-snapshots.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { connectionEntryUrl } from "../connection-entry.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import {
 	type AgentConfigurationRequestError,
@@ -31,6 +32,7 @@ import {
 	configurationDraftFromAgent,
 	configurationKeyError,
 } from "./agent-configuration-draft.js";
+import { ConfigurationConnectionSection } from "./configuration-connection-section.js";
 import {
 	ConfigurationDefaultRelayKeySection,
 	type DefaultRelayKeyActions,
@@ -553,6 +555,18 @@ export function AgentConfigurationScreen({
 								agentId={agent.agentId}
 								disabled={isDisabled}
 								onUnbindChannel={onUnbindChannel}
+							/>
+						) : null}
+						{/* Connection 是按需能力（PRD §9.1）：只有当前 Owner 能关联、替换凭据或解除关联。 */}
+						{isOwner ? (
+							<ConfigurationConnectionSection
+								agentId={agent.agentId}
+								consoleUrl={
+									session.kind === "ready"
+										? connectionEntryUrl(session.connection)
+										: undefined
+								}
+								disabled={isDisabled}
 							/>
 						) : null}
 						{/* 自有交互入口的自定义 Agent 是否开放 Skill 待产品确认，确认前不显示（O-02 待确认 7）。 */}

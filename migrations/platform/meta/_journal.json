@@ -540,6 +540,13 @@
       "when": 1794741469810,
       "tag": "0080_connection_consumer_disables",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1794829940107,
+      "tag": "0081_connection_manual_associations",
+      "breakpoints": true
     }
   ]
 }

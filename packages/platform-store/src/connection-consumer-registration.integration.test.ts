@@ -1,4 +1,5 @@
 import {
+	createAgentConnectionAssociationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
 	planConnectionConsumerRegistrationV1,
@@ -12,6 +13,7 @@ import {
 	applicationFoundationCommandV1,
 } from "../../platform-core/src/application-foundation.conformance.js";
 import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.query.js";
+import { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresApplicationFoundationTransactionV1 } from "./application-foundation.js";
 import {
@@ -91,7 +93,7 @@ async function submit(id = "agent-a") {
 		createSecretRecordFixtureResolver(),
 	);
 }
-async function approve(id = "agent-a", key = `approve-${id}`) {
+async function approveOnly(id = "agent-a", key = `approve-${id}`) {
 	return createAgentManagementV1(management).executeManagementCommand(
 		{
 			schemaVersion: 1,
@@ -111,6 +113,36 @@ async function approve(id = "agent-a", key = `approve-${id}`) {
 		},
 	);
 }
+/** Connection is on demand (PRD §9.1): the Owner enables it after the Agent exists. */
+async function enableConnection(id = "agent-a") {
+	const store = new PostgresAgentConnectionAssociationStoreV1({
+		databaseUrl: database.databaseUrl,
+	});
+	try {
+		return await createAgentConnectionAssociationUseCaseV1({
+			transaction: store,
+			registrationPolicy: policy,
+		}).associate(
+			{
+				entry: {
+					kind: "browser",
+					userId: applicationFoundationActorContextV1.userId,
+				},
+				agentId: id,
+				traceId: `trace-enable-${id}`,
+				requestId: `request-enable-${id}`,
+			},
+			{ schemaVersion: 1, mode: "automatic" },
+		);
+	} finally {
+		await store.close();
+	}
+}
+async function approve(id = "agent-a", key = `approve-${id}`) {
+	const result = await approveOnly(id, key);
+	await enableConnection(id);
+	return result;
+}
 async function claim() {
 	// These cases exercise delivery, not wall-clock skew between the host and test PostgreSQL.
 	await sql`update platform.outbox_items set available_at=clock_timestamp()
@@ -126,7 +158,7 @@ async function claim() {
 	return lease;
 }
 
-it("does not register pending Web submissions; approval atomically adds one independent intent/outbox", async () => {
+it("does not register at submission or approval; only the Owner enable adds one independent intent/outbox", async () => {
 	await submit();
 	expect(
 		await sql`select * from platform.connection_consumer_registrations`,
@@ -136,8 +168,14 @@ it("does not register pending Web submissions; approval atomically adds one inde
 			(r) => r.operation,
 		),
 	).toEqual(["agent.application.submitted.v1"]);
-	expect((await approve()).outcome).toBe("accepted");
-	expect((await approve()).outcome).toBe("replayed");
+	expect((await approveOnly()).outcome).toBe("accepted");
+	expect(
+		await sql`select * from platform.connection_consumer_registrations`,
+	).toHaveLength(0);
+	expect((await enableConnection()).status).toBe("processing");
+	// A repeated enable replays the same state without a second intent.
+	expect((await enableConnection()).status).toBe("processing");
+	expect((await approveOnly()).outcome).toBe("replayed");
 	expect(
 		await sql`select source_key, status, request->>'platformOwnerId' as owner from platform.connection_consumer_registrations`,
 	).toEqual([
@@ -196,25 +234,27 @@ it("only lists registrations from the worker's configured source namespace", asy
 	}
 });
 
-it("rolls back the approval transition and workload outbox if registration persistence fails", async () => {
+it("rolls back the Owner enable and its outbox if registration persistence fails", async () => {
 	await submit();
+	expect((await approveOnly()).outcome).toBe("accepted");
 	await sql`create function platform.registration_fault() returns trigger language plpgsql as $$ begin raise exception 'controlled registration failure'; end $$`;
 	await sql`create trigger registration_fault before insert on platform.connection_consumer_registrations for each row execute function platform.registration_fault()`;
 	try {
-		await expect(approve()).rejects.toMatchObject({ code: "unavailable" });
+		await expect(enableConnection()).rejects.toMatchObject({
+			code: "unavailable",
+		});
 	} finally {
 		await sql`drop trigger registration_fault on platform.connection_consumer_registrations`;
 		await sql`drop function platform.registration_fault()`;
 	}
-	expect(await sql`select status from platform.agent_applications`).toEqual([
-		{ status: "pending_approval" },
-	]);
 	expect(
 		await sql`select * from platform.connection_consumer_registrations`,
 	).toHaveLength(0);
-	expect(await sql`select operation from platform.outbox_items`).toEqual([
-		{ operation: "agent.application.submitted.v1" },
-	]);
+	expect(
+		(
+			await sql`select operation from platform.outbox_items order by operation`
+		).map((r) => r.operation),
+	).toEqual(["agent.application.submitted.v1", "agent.workload.reconcile.v1"]);
 });
 
 it("two formal Agents have distinct source keys; same intent replays and changed input conflicts", async () => {
@@ -236,6 +276,7 @@ it("two formal Agents have distinct source keys; same intent replays and changed
 			creationChannel: "web" as const,
 			from: "pending_approval",
 			to: "creating",
+			connectionEnabled: true,
 		},
 		traceId: "retry",
 		requestId: "retry",
@@ -383,6 +424,18 @@ it("reads two durable verified Consumer associations without a hand-maintained A
 	const a = await registeredAgent("agent-a");
 	const b = await registeredAgent("agent-b");
 	await sql`insert into platform.agents(id) values ('legacy-agent')`;
+	// A disconnected Owner manual association leaves only its durable generation row:
+	// that Agent is still never selected as a legacy static Agent.
+	await sql`insert into platform.agents(id) values ('manual-agent')`;
+	await sql`insert into platform.connection_association_generations(agent_id, last_revision) values ('manual-agent', 3)`;
+	expect(
+		await readConnectionConsumerSourceSelectionV1(database.databaseUrl),
+	).toEqual({
+		automaticAgentIds: ["agent-a", "agent-b", "manual-agent"],
+		legacyAgentIds: ["legacy-agent"],
+	});
+	await sql`delete from platform.connection_association_generations`;
+	await sql`delete from platform.agents where id = 'manual-agent'`;
 	expect(
 		await readConnectionConsumerSourceSelectionV1(database.databaseUrl),
 	).toEqual({
@@ -514,6 +567,43 @@ it("presents each Agent's own association status in the visibility snapshot (#85
 		const legacy = await present("agent-d");
 		expect(legacy.outcome).toBe("found");
 		expect(legacy).not.toHaveProperty("connectionAssociation");
+		// An Owner manual association is written only after verification: it projects associated.
+		const store = new PostgresAgentConnectionAssociationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			await createAgentConnectionAssociationUseCaseV1({
+				transaction: store,
+				verify: async () => "verified",
+				encrypt: (binding) => ({
+					schemaVersion: 1,
+					agentId: binding.agentId,
+					ownerId: binding.ownerId,
+					secretVersion: binding.associationRevision,
+					crypto: { dekFingerprint: "a".repeat(64) },
+				}),
+			}).associate(
+				{
+					entry: { kind: "browser", userId: owner },
+					agentId: "agent-d",
+					traceId: "trace-manual",
+					requestId: "request-manual",
+				},
+				{
+					schemaVersion: 1,
+					mode: "manual",
+					connectionAgentId: "connection-agent-d",
+					serviceCredential: "controlled-service-credential-d",
+					expectedRevision: null,
+				},
+			);
+		} finally {
+			await store.close();
+		}
+		expect(await present("agent-d")).toMatchObject({
+			outcome: "found",
+			connectionAssociation: { status: "associated" },
+		});
 		// 不可见的主体既看不到 Agent，也看不到关联状态。
 		await expect(present("agent-a", "unrelated-user")).resolves.toEqual({
 			outcome: "unavailable",

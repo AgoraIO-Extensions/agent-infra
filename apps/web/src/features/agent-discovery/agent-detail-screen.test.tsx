@@ -224,6 +224,22 @@ describe("AgentDetailScreen", () => {
 		await renderWithAgentRouter(
 			<AgentDetailScreen state={{ kind: "ready", agent: readyAgent }} />,
 		);
+		// PRD §9.1：支持 Connection 但没有关联时显示「未启用」，不推断为其他状态。
+		expect(
+			screen.getByTestId("agent-connection-association").textContent,
+		).toContain("未启用");
+		cleanup();
+		await renderWithAgentRouter(
+			<AgentDetailScreen
+				state={{
+					kind: "ready",
+					agent: AgentDetailProjectionV1Schema.parse({
+						...readyAgent,
+						capabilities: { ...readyAgent.capabilities, connection: false },
+					}),
+				}}
+			/>,
+		);
 		expect(screen.queryByTestId("agent-connection-association")).toBeNull();
 		cleanup();
 		for (const [status, label, tone] of [

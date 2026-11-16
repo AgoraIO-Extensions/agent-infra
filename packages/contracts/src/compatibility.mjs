@@ -3593,6 +3593,28 @@ const agentConnectionAssociationDisableProjection = {
 		},
 	},
 };
+// #4157 Owner 手工关联 Connection（PRD §9.1、工程 Spec §13.5.7）：只新增一个 Owner 路径，
+// 内容按摘要固定；去掉该路径后其余契约必须与基线一致。
+const agentConnectionAssociationOwnerPath =
+	"/api/v2/agents/{agentId}/connection-association";
+const agentConnectionAssociationOwnerDigest =
+	"fc43c9667b3057794f9b0a4fb3f08320c05e0b7011f5760c6932a45249222f04";
+function normalizeAgentConnectionAssociationOwnerOpenApiAddition(
+	previous,
+	current,
+) {
+	const path = current.paths?.[agentConnectionAssociationOwnerPath];
+	if (
+		!path ||
+		previous.paths?.[agentConnectionAssociationOwnerPath] !== undefined ||
+		createHash("sha256").update(JSON.stringify(path)).digest("hex") !==
+			agentConnectionAssociationOwnerDigest
+	)
+		return current;
+	const normalized = structuredClone(current);
+	delete normalized.paths[agentConnectionAssociationOwnerPath];
+	return normalized;
+}
 function normalizeAgentConnectionAssociationOpenApiAddition(previous, current) {
 	const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
 	let normalized;
@@ -7612,6 +7634,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
 		current = normalizeAgentConnectionAssociationOpenApiAddition(
+			previous,
+			current,
+		);
+		current = normalizeAgentConnectionAssociationOwnerOpenApiAddition(
 			previous,
 			current,
 		);

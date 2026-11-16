@@ -36,7 +36,10 @@ import {
 	connectionInstallationAuthorizations as authorizations,
 	connectionInstallationCommands as commands,
 } from "./schema-connection-installation.js";
-import { connectionConsumerRegistrations } from "./schema-connection-registration.js";
+import {
+	connectionAssociationGenerations,
+	connectionConsumerRegistrations,
+} from "./schema-connection-registration.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -550,6 +553,20 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						.limit(1)
 						.for("share");
 					if (association) return null;
+					// An Agent that ever had an Owner manual association, including after
+					// disconnect, never uses a static or shared deployment Consumer.
+					const [manual] = await tx
+						.select({ agentId: connectionAssociationGenerations.agentId })
+						.from(connectionAssociationGenerations)
+						.where(
+							eq(
+								connectionAssociationGenerations.agentId,
+								row.agent_id as string,
+							),
+						)
+						.limit(1)
+						.for("share");
+					if (manual) return null;
 				}
 				if (this.#registrationPolicy) {
 					const bindings = await readRegisteredConnectionConsumerBindingsV1(

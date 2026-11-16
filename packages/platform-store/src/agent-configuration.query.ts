@@ -37,6 +37,7 @@ import {
 	agents,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionManualAssociations,
 	wecomConnections,
 	wecomSetupSessions,
 	workloadReconciliations,
@@ -740,12 +741,25 @@ export class PostgresAgentConfigurationQueryV1 {
 						}
 					}
 					// 自动登记与 Consumer 停用状态与可见性检查同一快照（PRD §9.1、Spec §13.5.7），只取状态。
-					const [registration] = await transaction
-						.select({ status: connectionConsumerRegistrations.status })
-						.from(connectionConsumerRegistrations)
-						.where(eq(connectionConsumerRegistrations.agentId, input.agentId))
+					// Owner 手工关联只在核实通过后写入，因此等同已登记（registered → associated）。
+					const [manualAssociation] = await transaction
+						.select({ agentId: connectionManualAssociations.agentId })
+						.from(connectionManualAssociations)
+						.where(eq(connectionManualAssociations.agentId, input.agentId))
 						.limit(1);
-					const [consumerDisable] = registration
+					const [automaticRegistration] = manualAssociation
+						? []
+						: await transaction
+								.select({ status: connectionConsumerRegistrations.status })
+								.from(connectionConsumerRegistrations)
+								.where(
+									eq(connectionConsumerRegistrations.agentId, input.agentId),
+								)
+								.limit(1);
+					const registration = manualAssociation
+						? { status: "registered" as const }
+						: automaticRegistration;
+					const [consumerDisable] = automaticRegistration
 						? await transaction
 								.select({ status: connectionConsumerDisables.status })
 								.from(connectionConsumerDisables)

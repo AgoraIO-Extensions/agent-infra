@@ -4936,6 +4936,189 @@ export type UpdateAgentSavedModelConfigurationV2Responses = {
 
 export type UpdateAgentSavedModelConfigurationV2Response = UpdateAgentSavedModelConfigurationV2Responses[keyof UpdateAgentSavedModelConfigurationV2Responses];
 
+export type DisconnectAgentConnectionV2Data = {
+    body: {
+        expectedRevision: number;
+        schemaVersion: 1;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/connection-association';
+};
+
+export type DisconnectAgentConnectionV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DisconnectAgentConnectionV2Error = DisconnectAgentConnectionV2Errors[keyof DisconnectAgentConnectionV2Errors];
+
+export type DisconnectAgentConnectionV2Responses = {
+    /**
+     * Association state after disconnect
+     */
+    200: {
+        associationRevision: number | null;
+        automaticRegistrationAvailable: boolean;
+        schemaVersion: 1;
+        source: 'manual' | 'automatic' | null;
+        status: 'not_enabled' | 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
+    };
+};
+
+export type DisconnectAgentConnectionV2Response = DisconnectAgentConnectionV2Responses[keyof DisconnectAgentConnectionV2Responses];
+
+export type GetAgentConnectionAssociationV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/connection-association';
+};
+
+export type GetAgentConnectionAssociationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentConnectionAssociationV2Error = GetAgentConnectionAssociationV2Errors[keyof GetAgentConnectionAssociationV2Errors];
+
+export type GetAgentConnectionAssociationV2Responses = {
+    /**
+     * Association state
+     */
+    200: {
+        associationRevision: number | null;
+        automaticRegistrationAvailable: boolean;
+        schemaVersion: 1;
+        source: 'manual' | 'automatic' | null;
+        status: 'not_enabled' | 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
+    };
+};
+
+export type GetAgentConnectionAssociationV2Response = GetAgentConnectionAssociationV2Responses[keyof GetAgentConnectionAssociationV2Responses];
+
+export type AssociateAgentConnectionV2Data = {
+    body: {
+        connectionAgentId: string;
+        expectedRevision: number | null;
+        mode: 'manual';
+        schemaVersion: 1;
+        serviceCredential: string;
+    } | {
+        mode: 'automatic';
+        schemaVersion: 1;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/connection-association';
+};
+
+export type AssociateAgentConnectionV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type AssociateAgentConnectionV2Error = AssociateAgentConnectionV2Errors[keyof AssociateAgentConnectionV2Errors];
+
+export type AssociateAgentConnectionV2Responses = {
+    /**
+     * Committed association state
+     */
+    200: {
+        associationRevision: number | null;
+        automaticRegistrationAvailable: boolean;
+        schemaVersion: 1;
+        source: 'manual' | 'automatic' | null;
+        status: 'not_enabled' | 'processing' | 'associated' | 'failed' | 'unverified' | 'disabling' | 'disabled';
+    };
+};
+
+export type AssociateAgentConnectionV2Response = AssociateAgentConnectionV2Responses[keyof AssociateAgentConnectionV2Responses];
+
 export type GetAgentCreationFailureV1Data = {
     body?: never;
     path: {

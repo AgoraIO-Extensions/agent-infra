@@ -59,6 +59,7 @@ export {
 	parseStandardTemplateReleaseTargetV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
+export * from "./agent-connection-association.js";
 export * from "./agent-creation-failure.js";
 export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";

@@ -25,6 +25,11 @@ import {
 	AgentApplicationManagerResponseV1Schema,
 } from "./agent-application-manager.ts";
 import {
+	AgentConnectionAssociationDisconnectRequestV1Schema,
+	AgentConnectionAssociationRequestV1Schema,
+	AgentConnectionAssociationStateV1Schema,
+} from "./agent-connection-association.ts";
+import {
 	AgentApplicationModelCandidatesRequestV2Schema,
 	AgentApplicationModelCandidatesResponseV2Schema,
 	AgentDefaultRelayKeyCandidatesRequestV1Schema,
@@ -2497,6 +2502,60 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 
+	"/api/v2/agents/{agentId}/connection-association": {
+		get: {
+			operationId: "getAgentConnectionAssociationV2",
+			summary: "Read the Owner-managed Connection association of an Agent",
+			description:
+				"Current Owner only, through the browser session or the Owner's own API credential. Returns status and revision only; never the Connection Agent ID, service credential or Consumer details. No-store.",
+			security: agentListSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Association state",
+					AgentConnectionAssociationStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "associateAgentConnectionV2",
+			summary:
+				"Associate, replace or enable the Agent's Connection association",
+			description:
+				"Current Owner only; browser and API entries run the same command. Manual mode verifies the write-only service credential with one read-only Connection call before saving it as application ciphertext; nothing is saved when verification fails or is uncertain. Automatic mode is available only when the one-time system access enables registration. No-store.",
+			security: agentListSecurity,
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(
+				AgentConnectionAssociationRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Committed association state",
+					AgentConnectionAssociationStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "disconnectAgentConnectionV2",
+			summary: "Remove the Owner's manual Connection association",
+			description:
+				"Current Owner only. Deletes the association and its ciphertext and closes new installations and calls; the Consumer stays managed in Connection. No-store.",
+			security: agentListSecurity,
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(
+				AgentConnectionAssociationDisconnectRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Association state after disconnect",
+					AgentConnectionAssociationStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/default-relay-key": {
 		get: {
 			operationId: "getAgentDefaultRelayKeyV2",

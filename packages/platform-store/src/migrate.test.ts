@@ -746,12 +746,19 @@ describe("Platform PostgreSQL migration foundation", () => {
 					and column_name ~ '(connection|kubernetes|credential|message_body)'
 				`;
 			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
+			// The Owner manual association holds only the Consumer service credential as ADR 0002
+			// ciphertext plus a reuse fingerprint (Spec §13.5.3 exception), never Provider credentials.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
+				"connection_association_generations",
 				"connection_consumer_disables",
 				"connection_consumer_registrations",
 				"connection_installation_authorizations",
 				"connection_installation_commands",
+				"connection_manual_associations",
+				"connection_manual_associations.connection_agent_id",
+				"connection_manual_associations.credential_ciphertext",
+				"connection_manual_associations.credential_fingerprint",
 				"platform_api_credentials",
 				"platform_api_credentials.credential_hash",
 				"wecom_connections",
@@ -2028,6 +2035,7 @@ describe("published Relay authority migration", () => {
 			78,
 			79,
 			80,
+			81,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2106,8 +2114,8 @@ describe("published Relay authority migration", () => {
 			tag: "0077_snapshot_upload_admission",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 80,
-			tag: "0080_connection_consumer_disables",
+			idx: 81,
+			tag: "0081_connection_manual_associations",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2621,6 +2629,42 @@ describe("published Relay authority migration", () => {
 				"connection_consumer_disables:connection_consumer_disable_registration_unique",
 				"connection_consumer_disables:connection_consumer_disable_status_idx",
 				"connection_consumer_disables:connection_consumer_disables_pkey",
+			);
+			expectedDelta.columns.push(
+				...[
+					"agent_id",
+					"association_revision",
+					"connection_agent_id",
+					"created_at",
+					"credential_ciphertext",
+					"credential_fingerprint",
+					"owner_id",
+					"updated_at",
+					"verified_at",
+				].map((name) => `connection_manual_associations:${name}`),
+			);
+			expectedDelta.checks.push(
+				...["ciphertext", "identity"].map(
+					(name) =>
+						`connection_manual_associations:connection_manual_association_${name}`,
+				),
+			);
+			expectedDelta.indexes.push(
+				"connection_manual_associations:connection_manual_association_agent_unique",
+				"connection_manual_associations:connection_manual_association_credential_unique",
+				"connection_manual_associations:connection_manual_association_dek_unique",
+				"connection_manual_associations:connection_manual_associations_pkey",
+			);
+			expectedDelta.columns.push(
+				...["agent_id", "last_revision", "updated_at"].map(
+					(name) => `connection_association_generations:${name}`,
+				),
+			);
+			expectedDelta.checks.push(
+				"connection_association_generations:connection_association_generation_revision",
+			);
+			expectedDelta.indexes.push(
+				"connection_association_generations:connection_association_generations_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

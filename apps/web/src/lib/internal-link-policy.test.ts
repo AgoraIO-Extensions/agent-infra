@@ -17,6 +17,10 @@ const allowedHrefs = new Map<string, string>([
 	// 「我的 Connection」：Connection 是独立部署单元，不是本 SPA 的路由，新窗口打开。
 	["features/agent-discovery/connection-notice.tsx#href", "Connection 入口"],
 	["features/application-shell.tsx#connectionUrl", "Connection 入口"],
+	[
+		"features/agent-configuration/configuration-connection-section.tsx#consoleUrl",
+		"Connection 入口",
+	],
 	["features/conversation/conversation-context-bar.tsx#url", "Connection 入口"],
 	[
 		"features/my-agents/agent-application-form.tsx#props.connectionUrl",

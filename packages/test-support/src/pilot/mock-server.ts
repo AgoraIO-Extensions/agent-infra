@@ -179,6 +179,10 @@ function createPilotAgentMockServer(
 		version === 2
 			? operation("/api/v2/agents/{agentId}/default-relay-key", "get")
 			: undefined;
+	const getAgentConnectionAssociationOperation =
+		version === 2
+			? operation("/api/v2/agents/{agentId}/connection-association", "get")
+			: undefined;
 	const getAgentCreationFailureOperation =
 		version === 2
 			? (agentCreationFailureOpenApiPathsV1[
@@ -603,6 +607,32 @@ function createPilotAgentMockServer(
 						},
 					};
 			validateResponse(getAgentDefaultRelayKeyOperation, response);
+			return jsonResponse(response);
+		}
+		// #4157：Agent 设置的 Connection 分区默认读到「未启用」，不关联任何外部 Consumer。
+		const connectionAssociationAgentIdPath =
+			/^\/api\/v1\/agents\/([^/]+)\/connection-association$/.exec(
+				routingPath,
+			)?.[1];
+		if (
+			request.method === "GET" &&
+			connectionAssociationAgentIdPath !== undefined &&
+			getAgentConnectionAssociationOperation !== undefined
+		) {
+			getAgentConnectionAssociationOperation.requestParams.path?.parse({
+				agentId: decodeURIComponent(connectionAssociationAgentIdPath),
+			});
+			const response = {
+				status: 200,
+				body: {
+					schemaVersion: 1,
+					status: "not_enabled",
+					source: null,
+					associationRevision: null,
+					automaticRegistrationAvailable: false,
+				},
+			};
+			validateResponse(getAgentConnectionAssociationOperation, response);
 			return jsonResponse(response);
 		}
 		const creationFailureAgentIdPath =

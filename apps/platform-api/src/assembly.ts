@@ -13,6 +13,7 @@ import {
 	createAgentApiCreationV1,
 	createAgentApiLifecycleV1,
 	createAgentConfigurationUseCaseV1,
+	createAgentConnectionAssociationUseCaseV1,
 	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
@@ -49,6 +50,7 @@ import {
 	conversationEventWakeChannelV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresAgentConnectionAssociationStoreV1,
 	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
@@ -246,6 +248,14 @@ export interface PlatformApiAssemblyInput {
 	readonly agentDefaultRelayKeys?: Omit<
 		Parameters<typeof createAgentDefaultRelayKeyUseCaseV1>[0],
 		"transaction"
+	>;
+	/**
+	 * Owner Connection association (Spec §13.5.7): read-only verifier from the one-time
+	 * system access and the ADR 0002 public-key encryptor. Absent keeps the routes off.
+	 */
+	readonly connectionAssociation?: Pick<
+		Parameters<typeof createAgentConnectionAssociationUseCaseV1>[0],
+		"verify" | "encrypt"
 	>;
 	readonly validateDefaultRelayKey?: (
 		keyValue: string,
@@ -581,6 +591,22 @@ export function assemblePlatformApi(
 			? createAgentDefaultRelayKeyUseCaseV1({
 					...input.agentDefaultRelayKeys,
 					transaction: agentDefaultRelayKeyStore,
+				})
+			: undefined;
+	const connectionAssociationStore = input.connectionAssociation
+		? new PostgresAgentConnectionAssociationStoreV1({
+				databaseUrl: input.databaseUrl,
+				directory: userDirectory,
+			})
+		: undefined;
+	const connectionAssociations =
+		connectionAssociationStore && input.connectionAssociation
+			? createAgentConnectionAssociationUseCaseV1({
+					...input.connectionAssociation,
+					transaction: connectionAssociationStore,
+					...(input.connectionConsumerRegistration
+						? { registrationPolicy: input.connectionConsumerRegistration }
+						: {}),
 				})
 			: undefined;
 	const agentDefaultRelayKeyPorts = input.agentDefaultRelayKeys
@@ -1426,6 +1452,14 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		...(connectionAssociations
+			? {
+					agentConnectionAssociations: {
+						identity: input.identity,
+						associations: connectionAssociations,
+					},
+				}
+			: {}),
 		...(agentDefaultRelayKeys
 			? {
 					agentDefaultRelayKeys: {
@@ -1757,6 +1791,7 @@ export function assemblePlatformApi(
 		...(installationStore ? [installationStore] : []),
 		...(browserCommandStore ? [browserCommandStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
+		...(connectionAssociationStore ? [connectionAssociationStore] : []),
 		...(input.userGovernance ? [input.userGovernance] : []),
 		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];

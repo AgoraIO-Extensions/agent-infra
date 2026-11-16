@@ -1,4 +1,5 @@
 import {
+	createAgentConnectionAssociationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
 	planConnectionConsumerDisableV1,
@@ -11,6 +12,7 @@ import {
 	applicationFoundationCommandV1,
 } from "../../platform-core/src/application-foundation.conformance.js";
 import { PostgresAgentConfigurationQueryV1 } from "./agent-configuration.query.js";
+import { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresApplicationFoundationTransactionV1 } from "./application-foundation.js";
 import { PostgresConnectionConsumerDisableStoreV1 } from "./connection-consumer-disable.js";
@@ -126,7 +128,9 @@ async function command(
 	transaction = management,
 ) {
 	const actor = name === "approve_application" || name === "disable_agent";
-	return createAgentManagementV1(transaction).executeManagementCommand(
+	const result = await createAgentManagementV1(
+		transaction,
+	).executeManagementCommand(
 		{
 			schemaVersion: 1,
 			command: name,
@@ -142,6 +146,29 @@ async function command(
 		>[0],
 		actor ? administrator : owner,
 	);
+	// Connection is on demand (PRD §9.1): the Owner enables it after approval.
+	if (name === "approve_application" && result.outcome === "accepted") {
+		const store = new PostgresAgentConnectionAssociationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			await createAgentConnectionAssociationUseCaseV1({
+				transaction: store,
+				registrationPolicy: policy,
+			}).associate(
+				{
+					entry: { kind: "browser", userId: owner.userId },
+					agentId: id,
+					traceId: `trace-enable-${id}`,
+					requestId: `request-enable-${id}`,
+				},
+				{ schemaVersion: 1, mode: "automatic" },
+			);
+		} finally {
+			await store.close();
+		}
+	}
+	return result;
 }
 async function available(id: string) {
 	await sql`update platform.agent_applications set status='available', service_availability='ready', desired_state='running' where agent_id=${id}`;
