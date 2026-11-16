@@ -7,6 +7,11 @@
 须经 Platform API/Web、Runtime 与 Connection 契约原 owner 共同评审，按既有门禁合入后再实施。
 文档不批准机器权限、真实 Token 启用或未发布服务接口，也不接管 Connection 原实现及 tickets。
 
+2026-11-16 修订（[#4157](https://github.com/AgoraIO-Extensions/agent-infra/issues/4157)）：
+负责人决定 Connection 改为 Owner 按需启用，登记从“每个 Agent 创建时”改为“Owner 启用时”，
+并增加 Owner 手工关联既有 Consumer 的入口；逐 Agent 关联不进入部署配置。下文的登记、回执、
+恢复与 OAuth 取舍对自动登记继续有效，手工关联的合同见工程 Spec §13.5.7。
+
 ## 问题
 
 Platform Agent 的长期 Consumer 关联与用户 OAuth 安装属于不同生命周期。只配置 MCP endpoint、
@@ -24,9 +29,9 @@ Consumer 登记、回执核实及持久关联。Connection 独立批准受限机
 优先复用现有 Agent/OAuth/查询能力与合法预注册输入；已有 Consumer 的 OAuth 接线不等待
 后台自动 Consumer 登记。是否扩展管理权限或接口由具体互操作缺口决定，不以修改 OAuth 核心为前提。
 
-产品行为只在 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-创建时自动关联与用户-oauth)
+产品行为只在 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)
 维护；完整登记、回执、OAuth 准备及失败合同只在工程 Spec
-[§13.5.7](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-自动登记与-oauth-安装准备)
+[§13.5.7](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
 维护。本 ADR 不单独覆盖两份 PRD、工程 Spec 或 HLD。
 
 ## 取舍与验证

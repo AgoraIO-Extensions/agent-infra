@@ -67,11 +67,13 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 Direct MCP Consumer 按获准客户端边界独立注册。Connection 为每次 OAuth client installation 或 PAT binding 创建独立 ConsumerInstance，并将签发的凭据绑定到该实例与当前 Principal；调用方不能选择已有的其他实例。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；服务端保存并在每次调用校验该 generation，generation 变化立即使旧 token 失效。定义 Actor 的 Consumer 还须由 token 或受信服务端 session 解析唯一 Actor；无法解析时拒绝，调用方不得自报 Actor。只有选用 sender constraint 的 profile 另验安装公钥持有证明，规则见第 3 节。
 
-Platform 按 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-创建时自动关联与用户-oauth)
-为每个正式 Agent 自动登记专用 Consumer。受限机器登记、真实回执、长期关联与逐用户/安装的
+Platform 按 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)
+为启用 Connection 的每个 Agent 使用专用 Consumer：由 Platform 自动登记，或由 Owner 在
+Connection 创建后手工关联。受限机器登记、手工关联核实、真实回执、长期关联与逐用户/安装的
 OAuth client 准备只在
-[工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-自动登记与-oauth-安装准备)
-定义；登记认证不成为 MCP 或用户 Grant 权限，Connection 的当前身份、实例与授权检查不变。
+[工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
+定义；登记认证和手工关联的服务凭据都不成为 MCP 或用户 Grant 权限，Connection 的当前身份、
+实例与授权检查不变。
 
 Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 

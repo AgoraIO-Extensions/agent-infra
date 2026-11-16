@@ -368,20 +368,28 @@ Agent 平台与 Connection 的边界如下：
 - M1 必须能从实际执行定位对应的直连调用，并同时核对本次任务实际发起的工具操作、Connection 确认的调用主体和原调用记录，再关联两侧审计。其他任务的真实调用记录即使属于同一主体和 Agent，也不能冒充本次调用；无法核实时明确显示关联未核实。两侧各自在授权入口查询，不在 Platform 复制 Connection 状态或审计；关联标识不授予访问权，也不能仅凭调用方提交的相同字符串认定关联成立。
 - 四个标准模板必须完成 Connection 接入；首个受监督 Connection Pilot 仅使用 Codex 标准模板、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库，验收读取、真实创建 PR、隔离、幂等、审计和撤权；Pilot 通过结论不能外推到其他模板、账号、Provider 或生产环境。
 
-### 9.1 创建时自动关联与用户 OAuth
+### 9.1 Owner 按需关联与用户 OAuth
 
-每个正式创建的 Platform Agent 自动在 Connection 登记专用的 Agent Consumer，并建立唯一、
-稳定的关联。WebUI 与 API 创建采用相同规则：Web 申请审批通过、进入创建时触发；API 请求
-通过平台准入、进入创建时触发。待审批、驳回或撤回的申请不登记外部 Agent。
+Connection 是 Agent 的按需能力。Agent 的创建者或 Owner 可以在创建时选择启用，也可以在
+创建后随时启用；未启用的 Agent 不关联 Connection。启用后，平台为该 Agent 建立唯一、稳定的
+专用 Agent Consumer 关联。WebUI 与 API 采用相同规则；创建时启用的，Web 申请审批通过或
+API 请求通过平台准入、进入创建后才开始关联，待审批、驳回或撤回的申请不关联外部 Agent。
 
-- 平台管理员一次性配置获准的系统接入；创建者不必逐个登记 Consumer，也不必提供 PAT。
-- Agent 详情与 API 明确显示关联处理中、已关联、失败或待核实。重复提交、重启或恢复不产生
-  第二个对应 Consumer；外部登记未确认时保留原 Agent 和待处理状态，不显示为已连接。
-- 新建 Agent 默认通过 Connection OAuth 授权。每位实际使用者独立确认自己的安装及账号、
-  操作权限；API 创建和自动关联不替用户确认，不复用创建者、Owner 或另一 Agent 的凭据。
-- 修改名称、重试创建不改变关联；停用 Agent 后封闭新的安装与调用，并请求停用对应 Consumer。
-  外部停用未确认时明确显示待处理，不宣称远端凭据已撤销。
-- 已关联、本人已授权、实际可调用分别确认；自动登记不改变 Agent 原有交互方式和能力范围，
+- 平台管理员一次性配置获准的系统接入；这项配置不包含任何单个 Agent 的关联。
+- 系统接入支持自动登记时，启用后由平台在 Connection 登记专用 Consumer；Owner 不必逐个
+  登记，也不必提供 PAT。
+- 自动登记不可用时，Owner 先在 Connection 为该 Agent 创建 Consumer，再在平台填入其
+  Agent ID 和服务凭据完成关联；在 Connection 创建时须选择按使用者身份执行。平台确认凭据与
+  填入的 Agent ID 一致、该 Consumer 可用后，才显示已关联。服务凭据仅用于本次提交，保存后
+  不可回读，不进入日志、浏览器持久存储、模型或 Agent；Owner 可以替换凭据或解除关联。
+- Agent 详情与 API 明确显示未启用、关联处理中、已关联、失败或待核实。重复提交、重启或恢复
+  不产生第二个对应 Consumer；外部登记未确认时保留原 Agent 和待处理状态，不显示为已连接。
+- 每位实际使用者默认通过 Connection OAuth 独立确认自己的安装及账号、操作权限；启用、
+  自动登记和手工关联都不替使用者确认，不复用创建者、Owner 或另一 Agent 的凭据。
+- 修改名称、重试创建不改变关联。停用 Agent 后封闭新的安装与调用，自动登记的 Consumer
+  同时请求停用；外部停用未确认时明确显示待处理，不宣称远端凭据已撤销。Owner 解除手工
+  关联后同样封闭新的安装与调用；Connection 中的 Consumer 不受影响，需要时在 Connection 停用。
+- 已关联、本人已授权、实际可调用分别确认；关联不改变 Agent 原有交互方式和能力范围，
   也不代替 Connection 的当前授权、凭据保护或真实工具验收。
 
 Connection 的身份与授权责任仍见 [Connection PRD §6](PRD-connection-M1.md#6-principalconsumer-与授权)。
