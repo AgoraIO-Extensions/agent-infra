@@ -781,3 +781,88 @@ describe("Session reserve Worker", () => {
 		expect(f.store.reconcileCapacity).toHaveBeenCalledTimes(2);
 	});
 });
+
+describe("Session reserve Worker Connection delivery (#4157)", () => {
+	const withDeliverable = (
+		f: ReturnType<typeof fixture>,
+		deliverable: () => Promise<boolean>,
+	) => {
+		const check = vi.fn(deliverable);
+		Object.assign(f.adapter, { deliverable: check });
+		return check;
+	};
+
+	it("retires a reserve before any write once its Agent is associated", async () => {
+		const f = fixture();
+		const deliverable = withDeliverable(f, async () => false);
+		await f.worker.reconcile();
+		expect(deliverable).toHaveBeenCalled();
+		expect(f.store.recordIntent).not.toHaveBeenCalled();
+		expect(f.adapter.create).not.toHaveBeenCalled();
+		expect(f.store.retire).toHaveBeenCalledWith(f.claim.sandboxId);
+		expect(f.store.markReady).not.toHaveBeenCalled();
+	});
+
+	it("fails closed without writes when the current source is unavailable", async () => {
+		const f = fixture();
+		withDeliverable(f, async () => {
+			throw new WorkloadKubernetesError("unavailable");
+		});
+		expect(await f.worker.reconcile()).toMatchObject({ unavailable: 1 });
+		expect(f.store.recordIntent).not.toHaveBeenCalled();
+		expect(f.adapter.create).not.toHaveBeenCalled();
+		expect(f.store.markReady).not.toHaveBeenCalled();
+	});
+
+	it("removes a reserve whose Agent is associated during preparation instead of readying it", async () => {
+		const f = fixture();
+		let current = true;
+		withDeliverable(f, async () => current);
+		f.adapter.bootstrap.mockImplementation(async () => {
+			current = false;
+			return { bootstrapReady: false, businessStateAbsent: false };
+		});
+		await f.worker.reconcile();
+		expect(f.adapter.create).toHaveBeenCalledTimes(6);
+		expect(f.store.markReady).not.toHaveBeenCalled();
+		expect(f.store.retire).toHaveBeenCalledWith(f.claim.sandboxId);
+	});
+
+	it("retires a ready reserve carrying the startup Consumer instead of refreshing it", async () => {
+		const f = fixture({ status: "ready" });
+		confirmed(f);
+		f.store.inspect.mockResolvedValue({
+			...f.claim,
+			currentProfileDigest: f.claim.profile.digest,
+		});
+		withDeliverable(f, async () => false);
+		await f.worker.reconcile();
+		expect(f.store.refreshReady).not.toHaveBeenCalled();
+		expect(f.store.retire).toHaveBeenCalledWith(f.row.sandboxId);
+	});
+
+	it("does not recreate reserves for an associated Agent on every poll", async () => {
+		const f = fixture();
+		withDeliverable(f, async () => false);
+		await f.worker.reconcile();
+		expect(f.store.retire).toHaveBeenCalledWith(f.claim.sandboxId);
+		expect(f.store.reconcileCapacity).not.toHaveBeenCalled();
+		f.store.list.mockResolvedValue([]);
+		await f.worker.reconcile();
+		expect(f.store.reconcileCapacity).not.toHaveBeenCalled();
+		f.setNow(11_001);
+		await f.worker.reconcile();
+		expect(f.store.reconcileCapacity).toHaveBeenCalledOnce();
+	});
+
+	it("still removes a retiring reserve without consulting the current source", async () => {
+		const f = fixture({ status: "retiring" });
+		confirmed(f);
+		const deliverable = withDeliverable(f, async () => {
+			throw new Error("must not be consulted");
+		});
+		await f.worker.reconcile();
+		expect(deliverable).not.toHaveBeenCalled();
+		expect(f.adapter.remove).toHaveBeenCalled();
+	});
+});

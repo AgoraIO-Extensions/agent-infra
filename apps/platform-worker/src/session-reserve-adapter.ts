@@ -47,7 +47,11 @@ import {
 export interface SessionSandboxReserveAdapterOptionsV1 {
 	readonly workload: Pick<
 		WorkloadRuntimeOptionsV1,
-		"client" | "policy" | "templateModelBindings" | "fetch"
+		| "client"
+		| "policy"
+		| "templateModelBindings"
+		| "fetch"
+		| "connectionDeliveryCurrent"
 	>;
 	readonly serviceToken: string;
 	readonly fetch?: typeof fetch;
@@ -250,6 +254,27 @@ export function createSessionSandboxReserveAdapterV1(
 		)
 			throw new WorkloadKubernetesError("policy");
 	}
+	/**
+	 * Spec §13.5.7: a startup-selected static or shared Consumer snapshot reaches a reserve
+	 * Pod only while its Agent still has no persistent association. Only actual delivery
+	 * (create and readiness) consults the current source; render, identity reads and
+	 * removal keep the original inputs so existing reserves can always be removed.
+	 * A source error throws and callers fail closed.
+	 */
+	const deliverable = async (
+		claim: SessionSandboxReserveObservationV1,
+	): Promise<boolean> => {
+		identityClaim(claim);
+		const current = options.workload.connectionDeliveryCurrent;
+		if (!current) return true;
+		const input = createSessionSandboxReserveResourceInputV1(options, claim);
+		if (typeof input.connectionConsumerSnapshot !== "string") return true;
+		try {
+			return await current(claim.agentId);
+		} catch {
+			throw new WorkloadKubernetesError("unavailable");
+		}
+	};
 	const render = async (
 		claim: SessionSandboxReserveObservationV1,
 		signal?: AbortSignal,
@@ -328,6 +353,7 @@ export function createSessionSandboxReserveAdapterV1(
 	return {
 		render,
 		read,
+		deliverable,
 		async create(
 			claim: SessionSandboxReserveWorkerClaimV1,
 			object: KubernetesObject,
@@ -351,6 +377,8 @@ export function createSessionSandboxReserveAdapterV1(
 					sessionSandboxReserveDigestV1(object)
 			)
 				throw new WorkloadKubernetesError("conflict");
+			if (!(await deliverable(claim)))
+				throw new WorkloadKubernetesError("policy");
 			const result = await client.create(expected);
 			// Keep the actual response available even if cancellation follows it;
 			// controller must commit the original write outcome before stopping.
@@ -409,6 +437,12 @@ export function createSessionSandboxReserveAdapterV1(
 			)
 				return unavailable;
 			const input = createSessionSandboxReserveResourceInputV1(options, claim);
+			// A reserve that would hand an old Consumer to a business Session is never ready.
+			try {
+				if (!(await deliverable(claim))) return unavailable;
+			} catch {
+				return unavailable;
+			}
 			const expected = await render(claim);
 			const observed: KubernetesObject[] = [];
 			for (const resource of expected) {

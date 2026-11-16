@@ -5,7 +5,10 @@ import type {
 	ConnectionConsumerRegistrationPolicyV1,
 	createConnectionInstallationAuthorizationV1,
 } from "@agent-infra/platform-core";
-import { PostgresConnectionConsumerRegistrationStoreV1 } from "@agent-infra/platform-store";
+import {
+	PostgresConnectionAssociationSourceV1,
+	PostgresConnectionConsumerRegistrationStoreV1,
+} from "@agent-infra/platform-store";
 import type { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import type { WorkerConnectionInstallationOptions } from "./runtime-oauth-request.js";
 
@@ -158,5 +161,31 @@ export function createStartupConnectionSelectionGuardV1(input: {
 		)
 			return true;
 		return !(await source.persistent(agentId));
+	};
+}
+
+/**
+ * Opens the current-source check used by every delivery of a startup-selected static or
+ * shared Consumer snapshot: business Runtime resolution, Agent Workload apply, Session
+ * Sandbox and reserve Pod provisioning (Spec §13.5.7). Close it with the deployment.
+ */
+export function openStartupConnectionDeliveryGuardV1(input: {
+	readonly databaseUrl: string;
+	readonly startupLegacyAgentIds?: ReadonlySet<string>;
+}): {
+	readonly current: (agentId: string) => Promise<boolean>;
+	readonly close: () => Promise<void>;
+} {
+	const source = new PostgresConnectionAssociationSourceV1({
+		databaseUrl: input.databaseUrl,
+	});
+	return {
+		current: createStartupConnectionSelectionGuardV1({
+			source,
+			...(input.startupLegacyAgentIds
+				? { startupLegacyAgentIds: input.startupLegacyAgentIds }
+				: {}),
+		}),
+		close: () => source.close(),
 	};
 }

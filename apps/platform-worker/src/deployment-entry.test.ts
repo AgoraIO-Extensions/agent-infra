@@ -414,6 +414,15 @@ export async function readConnectionConsumerSourceSelectionV1() {
  if(globalThis.sourceSelectionFailed) throw Error('controlled source unavailable');
  return structuredClone(globalThis.sourceSelection ?? {automaticAgentIds:[],legacyAgentIds:[]});
 }
+export class PostgresConnectionAssociationSourceV1 {
+ constructor(input) { globalThis.associationSourceDatabase = input.databaseUrl; globalThis.associationSourceOpens = (globalThis.associationSourceOpens ?? 0) + 1; }
+ async persistent(agentId) {
+  (globalThis.associationReads ??= []).push(agentId);
+  if (globalThis.associationSourceFailed) throw Error('controlled association source unavailable');
+  return (globalThis.persistentConnectionAgents ?? []).includes(agentId);
+ }
+ async close() { globalThis.associationSourceCloses = (globalThis.associationSourceCloses ?? 0) + 1; }
+}
 `,
 						}),
 					);
@@ -612,6 +621,28 @@ try {
  if (process.env.RUN_NATIVE_PORTS === 'true') {
    const options = await entry.createPlatformNativeMetadataGatewayOptionsV1(signal);
    console.log(JSON.stringify(options?.ports ?? null));
+   process.exit(0);
+ }
+ if (process.env.RUN_RESERVE_DELIVERY) {
+   // #4157: the reserve adapter receives the Worker workload with the current-source check.
+   const fixture = JSON.parse(process.env.RUN_RESERVE_DELIVERY);
+   if (fixture.selection) globalThis.sourceSelection = fixture.selection;
+   const reserves = await entry.createPlatformSessionReserveWorkerOptionsV1(signal);
+   const workload = reserves.adapter.input.workload;
+   const current = workload.connectionDeliveryCurrent;
+   const results = {};
+   const check = async (label, agentId) => {
+     try { results[label] = await current(agentId); } catch { results[label] = 'rejected'; }
+   };
+   if (typeof current === 'function') {
+     for (const agentId of fixture.agents) await check('before:' + agentId, agentId);
+     globalThis.persistentConnectionAgents = fixture.agents;
+     for (const agentId of fixture.agents) await check('associated:' + agentId, agentId);
+     globalThis.associationSourceFailed = true;
+     for (const agentId of fixture.agents) await check('failed:' + agentId, agentId);
+   }
+   const sameWorkload = workload === (await entry.createPlatformWorkloadWorkerOptionsV1(signal));
+   console.log(JSON.stringify({ guard: typeof current, results, reads: globalThis.associationReads ?? [], opens: globalThis.associationSourceOpens ?? 0, database: globalThis.associationSourceDatabase ?? null, sameWorkload }));
    process.exit(0);
  }
  if (process.env.RUN_RESERVE_OPTIONS === "true") {
@@ -1022,6 +1053,94 @@ it("loads reserve policy from a deployment file when the module omits it", async
 		enabled: false,
 	});
 });
+
+it.each([
+	["shared startup Consumer", undefined, undefined, ["agent-a"]],
+	[
+		"per-Agent startup Consumers",
+		{
+			"agent-a": {
+				profile: connectionConsumerProfile,
+				approval: connectionConsumerApproval,
+			},
+		},
+		undefined,
+		["agent-a"],
+	],
+	[
+		"startup legacy Agents beside persistent Agents",
+		{
+			"agent-a": {
+				profile: connectionConsumerProfile,
+				approval: connectionConsumerApproval,
+			},
+		},
+		{ automaticAgentIds: ["agent-auto"], legacyAgentIds: ["agent-a"] },
+		["agent-a", "agent-auto"],
+	],
+] as const)(
+	"hands the reserve adapter the Worker workload with the current Connection source check: %s (#4157)",
+	async (_label, profilesByAgent, selection, agents) => {
+		const configurationPath = join(directory, "configuration.mjs");
+		const original = await readFile(configurationPath, "utf8");
+		const reserveFile = join(directory, "session-reserves-delivery.json");
+		await writeFile(
+			reserveFile,
+			JSON.stringify({
+				schemaVersion: 1,
+				enabled: false,
+				revision: 3,
+				namespace: "worker-binding",
+				totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+				resourceCosts: [],
+				maximumReserves: 0,
+				maximumConcurrentCreates: 0,
+				ttlMs: 0,
+				cooldownMs: 0,
+				failureBackoffMs: 0,
+				profiles: [],
+			}),
+		);
+		try {
+			if (profilesByAgent)
+				await writeFile(
+					configurationPath,
+					`${original}\nexport const connectionConsumerProfilesByAgent = ${JSON.stringify(profilesByAgent)};\nexport const connectionInstallationSuppliesByAgent = ${JSON.stringify(
+						Object.fromEntries(
+							Object.keys(profilesByAgent).map((agentId) => [
+								agentId,
+								{ ref: `installation-${agentId}`, revision: "r1" },
+							]),
+						),
+					)};\n`,
+				);
+			const result = run({
+				RUN_RESERVE_DELIVERY: JSON.stringify({ selection, agents }),
+				PLATFORM_WORKER_SESSION_RESERVES_FILE: reserveFile,
+			});
+			expect(result.status, result.stderr).toBe(0);
+			const value = JSON.parse(result.stdout);
+			expect(value).toMatchObject({
+				guard: "function",
+				opens: 1,
+				database,
+				sameWorkload: true,
+			});
+			// Before association delivery continues; after a later association, and while
+			// the source is unavailable, delivery of the startup Consumer is closed.
+			expect(value.results["before:agent-a"]).toBe(true);
+			expect(value.results["associated:agent-a"]).toBe(false);
+			expect(value.results["failed:agent-a"]).toBe("rejected");
+			if (selection) {
+				// Agents outside the startup legacy set received no startup Consumer at all.
+				expect(value.results["associated:agent-auto"]).toBe(true);
+				expect(value.reads).not.toContain("agent-auto");
+			}
+		} finally {
+			await writeFile(configurationPath, original);
+		}
+	},
+);
 
 it("explicit reserve file rejects a conflicting module policy", async () => {
 	const configurationPath = join(directory, "configuration.mjs");

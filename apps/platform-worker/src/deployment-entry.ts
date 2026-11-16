@@ -13,7 +13,6 @@ import {
 	sessionSandboxReserveDigestV1,
 } from "@agent-infra/platform-core";
 import {
-	PostgresConnectionAssociationSourceV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresSessionOwnerSecretStoreV1,
 } from "@agent-infra/platform-store";
@@ -29,7 +28,7 @@ import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-in
 import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
-	createStartupConnectionSelectionGuardV1,
+	openStartupConnectionDeliveryGuardV1,
 	readConnectionConsumerSourceSelectionV1,
 	resolveRegisteredConnectionConsumerBindingsV1,
 } from "./connection-registration-bindings.js";
@@ -663,13 +662,14 @@ async function createPrepared(signal: AbortSignal) {
 	const startupLegacyAgentIds = persistentAutomaticSource
 		? new Set(legacySelection?.legacyAgentIds ?? [])
 		: undefined;
-	const associationSource = legacySelectionRequired
-		? new PostgresConnectionAssociationSourceV1({ databaseUrl })
+	const connectionDelivery = legacySelectionRequired
+		? openStartupConnectionDeliveryGuardV1({
+				databaseUrl,
+				...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
+			})
 		: undefined;
-	const connectionDeliveryCurrent = createStartupConnectionSelectionGuardV1({
-		source: associationSource,
-		startupLegacyAgentIds,
-	});
+	const connectionDeliveryCurrent = async (agentId: string) =>
+		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
@@ -856,7 +856,7 @@ async function createPrepared(signal: AbortSignal) {
 		readinessLedger: createWorkloadReadinessLedgerV1(),
 		sessionOwnerSecrets,
 		// Every Pod delivery of the startup-selected Consumer rechecks the current source.
-		...(associationSource ? { connectionDeliveryCurrent } : {}),
+		...(connectionDelivery ? { connectionDeliveryCurrent } : {}),
 	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {
@@ -1001,7 +1001,7 @@ async function createPrepared(signal: AbortSignal) {
 				? { connectionInstallation: authorizedInstallation }
 				: {}),
 			closeDeployment: async () => {
-				await associationSource?.close();
+				await connectionDelivery?.close();
 				await installationStore?.close();
 				await evaluationAuthority?.close();
 				await sessionOwnerSecrets.close();
