@@ -253,6 +253,18 @@ async function readBoundedBody(request: Request): Promise<Uint8Array> {
 	return bytes;
 }
 
+/** Node HTTP adapters can represent an empty POST as a non-null zero-byte stream. */
+export async function parseEmptyBody(
+	request: Request,
+	traceId: string,
+): Promise<void> {
+	try {
+		if ((await readBoundedBody(request)).byteLength !== 0) throw new Error();
+	} catch {
+		throw new HttpProtocolError("INVALID_REQUEST", traceId);
+	}
+}
+
 export async function parseJson<T>(
 	request: Request,
 	schema: JsonSchema<T>,

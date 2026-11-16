@@ -14,6 +14,7 @@ import {
 import type { Context, Hono } from "hono";
 import {
 	HttpProtocolError,
+	parseEmptyBody,
 	parseIdempotencyKey,
 	parseJson,
 	requestMetadata,
@@ -115,8 +116,7 @@ export function registerSkillHubProjectContentRoutesV1(
 				return context.json(result.data);
 			}
 			if (action === "recover") {
-				if (request.body !== null)
-					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				await parseEmptyBody(request, metadata.traceId);
 				if (!dependencies.recover)
 					throw new HttpProtocolError(
 						"DEPENDENCY_UNAVAILABLE",

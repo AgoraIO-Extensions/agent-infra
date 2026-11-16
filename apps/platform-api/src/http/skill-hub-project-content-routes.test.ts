@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import type { IdentityAdapter } from "./identity.js";
@@ -233,4 +235,76 @@ it("fails closed when the recovery supplier is not assembled", async () => {
 			)
 		).status,
 	).toBe(503);
+});
+
+it("accepts an empty recovery POST through the production Node/Hono HTTP adapter and rejects payloads", async () => {
+	const recover = vi.fn(async () => ({
+		replayed: true,
+		version,
+		artifacts: {},
+	}));
+	const { result } = app({ recover });
+	const server = serve({ fetch: result.fetch, port: 0, hostname: "127.0.0.1" });
+	if (!server.listening) await once(server, "listening");
+	try {
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("synthetic HTTP listener missing");
+		const path = `http://127.0.0.1:${address.port}/api/v2/skills/projects/project-a/publications/operation-a/recover`;
+		const empty = await fetch(path, { method: "POST" });
+		expect(empty.status).toBe(200);
+		expect(await empty.json()).toMatchObject({
+			version: { skillVersionId: "skill-version-a" },
+		});
+		const zero = await fetch(path, { method: "POST", body: "" });
+		expect(zero.status).toBe(200);
+		await zero.arrayBuffer();
+		expect(recover).toHaveBeenCalledTimes(2);
+		for (const body of [
+			" ",
+			JSON.stringify({ ownerId: "owner-b", idempotencyKey: "replacement" }),
+		]) {
+			const rejected = await fetch(path, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body,
+			});
+			expect(rejected.status).toBe(400);
+			await rejected.arrayBuffer();
+		}
+		expect(recover).toHaveBeenCalledTimes(2);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+});
+
+it("rejects over-limit, failed-read and misleading zero-length recovery payloads before work", async () => {
+	const recover = vi.fn();
+	const { result } = app({ recover });
+	const path =
+		"http://localhost/api/v2/skills/projects/project-a/publications/operation-a/recover";
+	const payload = await result.request(path, {
+		method: "POST",
+		headers: { "content-length": "0" },
+		body: JSON.stringify({ ownerId: "foreign" }),
+	});
+	expect(payload.status).toBe(400);
+	const oversized = await result.request(path, {
+		method: "POST",
+		body: "x".repeat(1_048_577),
+	});
+	expect(oversized.status).toBe(400);
+	const broken = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.error(new Error("synthetic stream failure"));
+		},
+	});
+	const failed = await result.request(path, {
+		method: "POST",
+		body: broken,
+		duplex: "half",
+	} as RequestInit & { duplex: "half" });
+	expect(failed.status).toBe(400);
+	expect(recover).not.toHaveBeenCalled();
 });
