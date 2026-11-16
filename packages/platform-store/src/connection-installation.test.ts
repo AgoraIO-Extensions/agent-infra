@@ -1260,6 +1260,38 @@ it("does not finish an old installation after its durable Consumer association c
 	}
 });
 
+it("does not finish a static installation begun before an Owner manual association or after its disconnect", async () => {
+	const producer = createConnectionInstallationAuthorizationV1({ store });
+	const started = await producer.execute({
+		...request,
+		idempotencyKey: "static-begin-before-manual",
+		command: "begin",
+		executionId: "execution-a",
+	});
+	// Association (and any later disconnect) leaves the durable generation row.
+	await client`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-a',1)`;
+	try {
+		await expect(
+			producer.execute({
+				...request,
+				idempotencyKey: "static-confirm-after-manual",
+				command: "confirm",
+				authorizationId: started.authorizationId,
+			}),
+		).rejects.toThrow();
+		await expect(
+			producer.execute({
+				...request,
+				idempotencyKey: "static-begin-after-manual",
+				command: "begin",
+				executionId: "execution-a",
+			}),
+		).rejects.toThrow();
+	} finally {
+		await client`delete from platform.connection_association_generations`;
+	}
+});
+
 it("does not fall back to a shared Consumer when an associated Agent's registration policy is removed", async () => {
 	await automaticBinding("agent-a");
 	expect(
