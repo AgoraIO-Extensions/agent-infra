@@ -390,6 +390,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/projects",
 			"/api/v2/skills/projects/{projectId}",
 			"/api/v2/skills/projects/{projectId}/content",
+			"/api/v2/skills/projects/{projectId}/publications/{operationId}/recover",
 			"/api/v2/skills/projects/{projectId}/versions",
 			"/api/v2/skills/reviews",
 			"/api/v2/skills/reviews/{skillVersionId}/content",
