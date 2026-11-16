@@ -183,6 +183,22 @@ export const skillHubProjectContentOpenApiPathsV1 = {
 			},
 		},
 	},
+	"/api/v2/skills/projects/{projectId}/publications/{operationId}/recover": {
+		post: {
+			operationId: "recoverSkillHubProjectPublicationV1",
+			security: [{ PlatformSession: [] }],
+			requestParams: {
+				path: projectPath.extend({ operationId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": response(
+					"Original Skill project publication recovered or replayed",
+					SkillHubPublicationResponseV1Schema,
+				),
+				...errors,
+			},
+		},
+	},
 	"/api/v2/skills/projects/{projectId}/versions": {
 		post: {
 			operationId: "publishSkillHubProjectVersionV1",

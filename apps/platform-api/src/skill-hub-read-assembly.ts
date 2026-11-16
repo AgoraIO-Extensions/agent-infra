@@ -286,6 +286,12 @@ export function assembleSkillHubReadApiV1(input: {
 	const projectPublication =
 		projectSupplier && input.providerImport
 			? createSkillHubProjectPublicationV1({
+					readRecovery: (context, projectId, operationId) =>
+						store.readProjectPublicationRecovery(
+							context,
+							projectId,
+							operationId,
+						),
 					readSource: (context, projectId, check) =>
 						store.readProjectPublicationSource(context, projectId, check),
 					pack: (files) =>
@@ -333,6 +339,15 @@ export function assembleSkillHubReadApiV1(input: {
 				),
 			...(projectPublication
 				? {
+						recover: (
+							request: Request,
+							trusted: SkillHubRequestV1,
+							projectId: string,
+							operationId: string,
+						) =>
+							scope.requestScope(request, () =>
+								projectPublication.recover(trusted, projectId, operationId),
+							),
 						publish: (
 							request: Request,
 							trusted: SkillHubRequestV1,

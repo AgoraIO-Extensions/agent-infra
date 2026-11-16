@@ -1,7 +1,15 @@
 import { execFile as callback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { mkdir, mkdtemp, open, readdir, rm, writeFile } from "node:fs/promises";
+import { type BigIntStats, constants } from "node:fs";
+import {
+	lstat,
+	mkdir,
+	mkdtemp,
+	open,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -46,6 +54,21 @@ export function createClamAvSkillPackageScannerV1(
 			maxBuffer: 2_000_000,
 			encoding: "utf8",
 		});
+	// Only deployment file identities are cached; current policy and engine checks remain live.
+	// Nanosecond ctime catches in-place rewrites even when size/mtime are restored.
+	const seal = (info: BigIntStats) =>
+		[
+			info.dev,
+			info.ino,
+			info.size,
+			info.mode,
+			info.nlink,
+			info.mtimeNs,
+			info.ctimeNs,
+		]
+			.map(String)
+			.join(":");
+	let cachedRuleset: { stamp: string; digest: string } | undefined;
 	const describe = async (snapshotDirectory?: string) => {
 		const engine = await run(["--version"]);
 		const engineVersion = engine.stdout.trim();
@@ -54,6 +77,10 @@ export function createClamAvSkillPackageScannerV1(
 			engine.stderr.length
 		)
 			failure();
+		const directoryBefore = await lstat(options.databaseDirectory, {
+			bigint: true,
+		});
+		if (!directoryBefore.isDirectory()) failure();
 		const directory = await readdir(options.databaseDirectory, {
 			withFileTypes: true,
 		});
@@ -70,41 +97,113 @@ export function createClamAvSkillPackageScannerV1(
 			)
 		)
 			failure();
-		const hash = createHash("sha256");
-		let total = 0;
-		for (const name of names) {
-			const file = await open(
-				join(options.databaseDirectory, name),
-				constants.O_RDONLY | constants.O_NOFOLLOW,
-			);
-			try {
-				const info = await file.stat();
+		const files: {
+			name: string;
+			file: Awaited<ReturnType<typeof open>>;
+			info: BigIntStats;
+		}[] = [];
+		try {
+			let total = 0n;
+			for (const name of names) {
+				const file = await open(
+					join(options.databaseDirectory, name),
+					constants.O_RDONLY | constants.O_NOFOLLOW,
+				);
+				// Register every descriptor before a check can throw.
+				let info: BigIntStats;
+				try {
+					info = await file.stat({ bigint: true });
+				} catch (error) {
+					await file.close();
+					throw error;
+				}
+				const entry = { name, file, info };
+				files.push(entry);
+				total += entry.info.size;
 				if (
-					!info.isFile() ||
-					info.size > 512_000_000 ||
-					total + info.size > 512_000_000
+					!entry.info.isFile() ||
+					entry.info.size > 512_000_000n ||
+					total > 512_000_000n
 				)
 					failure();
-				const content = await file.readFile();
-				total += content.byteLength;
-				if (content.byteLength !== info.size) failure();
-				hash.update(JSON.stringify([name, content.byteLength])).update(content);
-				if (snapshotDirectory)
-					await writeFile(join(snapshotDirectory, name), content, {
-						flag: "wx",
-						mode: 0o600,
-					});
-			} finally {
-				await file.close();
 			}
+			const stamp = JSON.stringify([
+				seal(directoryBefore),
+				...files.map((entry) => [entry.name, seal(entry.info)]),
+			]);
+			const now = BigInt(Date.now()) * 1_000_000n;
+			const settled = files.every(
+				({ info }) =>
+					now - info.mtimeNs >= 2_000_000_000n &&
+					now - info.ctimeNs >= 2_000_000_000n,
+			);
+			const verify = async () => {
+				if (
+					seal(await lstat(options.databaseDirectory, { bigint: true })) !==
+					seal(directoryBefore)
+				)
+					failure();
+				for (const entry of files) {
+					if (
+						seal(await entry.file.stat({ bigint: true })) !==
+							seal(entry.info) ||
+						seal(
+							await lstat(join(options.databaseDirectory, entry.name), {
+								bigint: true,
+							}),
+						) !== seal(entry.info)
+					)
+						failure();
+				}
+			};
+			let rulesetDigest: string;
+			if (!snapshotDirectory && settled && cachedRuleset?.stamp === stamp) {
+				await verify();
+				rulesetDigest = cachedRuleset.digest;
+			} else {
+				const hash = createHash("sha256");
+				const buffer = Buffer.alloc(65_536);
+				for (const entry of files) {
+					hash.update(JSON.stringify([entry.name, Number(entry.info.size)]));
+					const copy = snapshotDirectory
+						? await open(join(snapshotDirectory, entry.name), "wx", 0o600)
+						: undefined;
+					try {
+						let offset = 0;
+						while (true) {
+							const { bytesRead } = await entry.file.read(
+								buffer,
+								0,
+								buffer.byteLength,
+								offset,
+							);
+							if (!bytesRead) break;
+							offset += bytesRead;
+							if (BigInt(offset) > entry.info.size) failure();
+							const chunk = buffer.subarray(0, bytesRead);
+							hash.update(chunk);
+							if (copy) await copy.writeFile(chunk);
+						}
+						if (BigInt(offset) !== entry.info.size) failure();
+					} finally {
+						await copy?.close();
+					}
+				}
+				await verify();
+				rulesetDigest = hash.digest("hex");
+				// A just-written file is read again until timestamps have safely settled.
+				if (settled) cachedRuleset = { stamp, digest: rulesetDigest };
+			}
+			return Object.freeze({
+				scannerId: options.scannerId,
+				engineVersion,
+				rulesetDigest,
+				policyRevision: options.policyRevision,
+				maximumReceiptAgeMs: options.maximumReceiptAgeMs,
+			});
+		} finally {
+			await Promise.all(files.map((entry) => entry.file.close()));
 		}
-		return Object.freeze({
-			scannerId: options.scannerId,
-			engineVersion,
-			rulesetDigest: hash.digest("hex"),
-			policyRevision: options.policyRevision,
-			maximumReceiptAgeMs: options.maximumReceiptAgeMs,
-		});
 	};
 	const scanner: SkillPackageScannerV1 = {
 		async scan(input) {

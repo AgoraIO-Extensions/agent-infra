@@ -1029,6 +1029,89 @@ export class PostgresSkillHubLifecycleV1 {
 		});
 	}
 
+	/** 当前 Owner 读取原项目发布；原 key 只用于内部恢复供应，不进入 HTTP 投影。 */
+	async readProjectPublicationRecovery(
+		context: SkillHubRequestV1,
+		projectIdInput: string,
+		operationIdInput: string,
+	) {
+		const projectId = parseSkillHubIdV1(projectIdInput);
+		const operationId = parseSkillHubIdV1(operationIdInput);
+		return this.#transaction(context, async (tx, request) => {
+			const [parent] = await tx
+				.select()
+				.from(skillHubSkills)
+				.where(eq(skillHubSkills.id, projectId))
+				.for("update");
+			if (!parent || parent.ownerId !== request.userId)
+				throw new SkillHubOperationErrorV1("unavailable");
+			if (parent.status !== "active")
+				throw new SkillHubOperationErrorV1("forbidden");
+			const [original] = await tx
+				.select()
+				.from(idempotencyRecords)
+				.where(eq(idempotencyRecords.id, operationId));
+			const [item] = await tx
+				.select()
+				.from(outboxItems)
+				.where(eq(outboxItems.id, operationId));
+			if (
+				!original ||
+				!item ||
+				original.actorId !== request.userId ||
+				original.scopeType !== "skill_package" ||
+				original.commandType !== "skill.package.publish.v1" ||
+				item.scopeType !== "skill_package" ||
+				item.operation !== "skill.package.publish.v1" ||
+				original.scopeId !== item.scopeId ||
+				!["reserved", "completed"].includes(original.status) ||
+				!["pending", "retry_scheduled", "processing", "succeeded"].includes(
+					item.status,
+				)
+			)
+				throw new SkillHubOperationErrorV1("unavailable");
+			const state = parseSkillPackagePublicationStateV1(item.payload);
+			const selection = state.selection;
+			if (
+				state.operationId !== operationId ||
+				state.ownerId !== request.userId ||
+				selection.skillId !== projectId ||
+				selection.provider !== "my_library" ||
+				original.scopeId !== selection.skillVersionId ||
+				original.requestDigest !==
+					platformIdempotencyV1.canonicalRequestDigest({ ...selection }) ||
+				(original.status === "completed") !== (item.status === "succeeded")
+			)
+				throw new SkillHubOperationErrorV1("unavailable");
+			const key = parseSkillHubIdempotencyKeyV1(original.idempotencyKey);
+			if (original.status !== "completed")
+				return { key, selection, completed: null };
+			if (
+				!isDeepStrictEqual(original.result, {
+					operationId,
+					skillVersionId: selection.skillVersionId,
+				}) ||
+				!skillPackagePublicationStagesV1.every((stage) => state.objects[stage])
+			)
+				throw new SkillHubOperationErrorV1("unavailable");
+			const version = await this.#version(tx, selection.skillVersionId);
+			if (
+				version.ownerId !== request.userId ||
+				version.skillId !== projectId ||
+				version.packageObjectVersion !== state.objects.zip?.version ||
+				version.packageDigest !== selection.archiveDigest ||
+				version.manifestDigest !== state.objects.manifest?.sha256 ||
+				version.signatureDigest !== state.objects.signature?.sha256
+			)
+				throw new SkillHubOperationErrorV1("unavailable");
+			return {
+				key,
+				selection,
+				completed: { replayed: true, version, artifacts: state.objects },
+			};
+		});
+	}
+
 	/** Internal supplier boundary: durable intent and checkpoints in the original outbox. */
 	async publishPackage(
 		context: SkillHubRequestV1,
