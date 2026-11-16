@@ -1452,6 +1452,56 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the exact Owner Connection association path (#4157)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/agents/{agentId}/connection-association";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-connection-owner-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const body = (value: typeof current) =>
+				value.paths[path].put.requestBody.content["application/json"].schema;
+			for (const mutate of [
+				// 服务凭据只写：响应不能回显 Consumer 或凭据字段。
+				(value: typeof current) => {
+					value.paths[path].get.responses["200"].content[
+						"application/json"
+					].schema.properties.connectionAgentId = { type: "string" };
+				},
+				// 请求不能接受调用方提交的身份字段。
+				(value: typeof current) => {
+					body(value).oneOf[0].properties.userId = { type: "string" };
+				},
+				// 其他既有路径不能借这次改动变化。
+				(value: typeof current) => {
+					delete value.paths["/api/v2/agents/{agentId}/default-relay-key"].put;
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the appended Consumer disable association states (#851)", async () => {
 		const current = JSON.parse(
 			await readFile(

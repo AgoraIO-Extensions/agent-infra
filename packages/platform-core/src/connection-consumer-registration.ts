@@ -190,7 +190,11 @@ export function planConnectionConsumerRegistrationV1(input: {
 	});
 }
 
-/** Web applications become formal Agents on approval; API creation has no approval stage. */
+/**
+ * Web applications become formal Agents on approval; API creation has no approval stage.
+ * Connection is an on-demand capability (PRD §9.1): only a creation that explicitly
+ * enabled Connection produces an intent. Otherwise the Owner enables it later.
+ */
 export function planConnectionConsumerRegistrationForTransitionV1(input: {
 	readonly policy: ConnectionConsumerRegistrationPolicyV1;
 	readonly platformAgentId: string;
@@ -201,10 +205,13 @@ export function planConnectionConsumerRegistrationForTransitionV1(input: {
 		readonly creationChannel: "web" | "api";
 		readonly from: string | null;
 		readonly to: string;
+		/** The creator's explicit choice; absent means not enabled. */
+		readonly connectionEnabled?: boolean;
 	};
 }): ConnectionConsumerRegistrationIntentV1 | undefined {
 	const { transition } = input;
 	const formalCreate =
+		transition.connectionEnabled === true &&
 		transition.to === "creating" &&
 		((transition.creationChannel === "api" &&
 			transition.operation === "api_create" &&

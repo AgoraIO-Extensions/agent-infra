@@ -10,13 +10,18 @@ import {
 	parseConnectionConsumerRegistrationDeliveryV1,
 	parseConnectionConsumerRegistrationIntentV1,
 	planConnectionConsumerRegistrationForTransitionV1,
+	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
 import { eq, type SQL, sql } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import type { ClaimedOutboxItem } from "./outbox.js";
-import { connectionConsumerRegistrations, outboxItems } from "./schema.js";
+import {
+	connectionConsumerRegistrations,
+	connectionManualAssociations,
+	outboxItems,
+} from "./schema.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -40,6 +45,51 @@ export async function insertConnectionConsumerRegistrationV1(
 ): Promise<void> {
 	const intent = planConnectionConsumerRegistrationForTransitionV1(input);
 	if (!intent) return;
+	await insertConnectionConsumerRegistrationIntentV1(
+		transaction,
+		intent,
+		input,
+	);
+}
+
+/**
+ * Owner enable (Spec §13.5.7 启用边界): the caller holds the Owner transaction and the
+ * locked `agent_applications` row; a manually associated Agent never registers.
+ */
+export async function enableConnectionConsumerRegistrationV1(
+	transaction: Transaction,
+	input: {
+		readonly policy: ConnectionConsumerRegistrationPolicyV1;
+		readonly platformAgentId: string;
+		readonly platformOwnerId: string;
+		readonly consumerName: string;
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	},
+): Promise<void> {
+	const [manual] = await transaction
+		.select({ agentId: connectionManualAssociations.agentId })
+		.from(connectionManualAssociations)
+		.where(eq(connectionManualAssociations.agentId, input.platformAgentId))
+		.limit(1);
+	if (manual) throw new Error("CONNECTION_CONSUMER_REGISTRATION_CONFLICT");
+	await insertConnectionConsumerRegistrationIntentV1(
+		transaction,
+		planConnectionConsumerRegistrationV1(input),
+		input,
+	);
+}
+
+async function insertConnectionConsumerRegistrationIntentV1(
+	transaction: Transaction,
+	intent: ConnectionConsumerRegistrationIntentV1,
+	input: {
+		readonly traceId: string;
+		readonly requestId: string;
+		readonly occurredAt: Date;
+	},
+): Promise<void> {
 	const [inserted] = await transaction
 		.insert(connectionConsumerRegistrations)
 		.values({

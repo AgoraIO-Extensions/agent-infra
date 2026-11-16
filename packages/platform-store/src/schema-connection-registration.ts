@@ -196,3 +196,58 @@ export const connectionConsumerDisables = platformSchema.table(
 		),
 	],
 );
+
+/**
+ * Spec §13.5.7 Owner manual association: one row per Agent, written only after a
+ * read-only Connection verification. The service credential is stored only as
+ * ADR 0002 application ciphertext; the fingerprint only rejects reuse across Agents.
+ */
+export const connectionManualAssociations = platformSchema.table(
+	"connection_manual_associations",
+	{
+		agentId: text("agent_id")
+			.primaryKey()
+			.references(() => agents.id),
+		connectionAgentId: varchar("connection_agent_id", { length: 80 }).notNull(),
+		credentialFingerprint: varchar("credential_fingerprint", {
+			length: 64,
+		}).notNull(),
+		associationRevision: bigint("association_revision", {
+			mode: "number",
+		}).notNull(),
+		ownerId: text("owner_id").notNull(),
+		credentialCiphertext: jsonb("credential_ciphertext").notNull(),
+		verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("connection_manual_association_agent_unique").on(
+			table.connectionAgentId,
+		),
+		uniqueIndex("connection_manual_association_credential_unique").on(
+			table.credentialFingerprint,
+		),
+		uniqueIndex("connection_manual_association_dek_unique").on(
+			sql`(${table.credentialCiphertext}->'crypto'->>'dekFingerprint')`,
+		),
+		check(
+			"connection_manual_association_identity",
+			sql`${table.connectionAgentId} ~ '^[a-z0-9][a-z0-9-]{2,79}$'
+				and ${table.credentialFingerprint} ~ '^[a-f0-9]{64}$'
+				and ${table.associationRevision} between 1 and 9007199254740991`,
+		),
+		check(
+			"connection_manual_association_ciphertext",
+			sql`jsonb_typeof(${table.credentialCiphertext}) = 'object'
+				and ${table.credentialCiphertext} @> jsonb_build_object('schemaVersion', 1,
+					'agentId', ${table.agentId}, 'ownerId', ${table.ownerId},
+					'secretVersion', ${table.associationRevision})
+				and ${table.credentialCiphertext}->'crypto'->>'dekFingerprint' ~ '^[a-f0-9]{64}$'`,
+		),
+	],
+);

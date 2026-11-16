@@ -12,6 +12,7 @@ export {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
 } from "./agent-configuration.ts";
+export { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.js";
 export * from "./agent-default-relay-key.js";
 export {
 	type AgentManagementAgentProjectionV1,

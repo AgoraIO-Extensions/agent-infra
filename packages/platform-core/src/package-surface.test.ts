@@ -35,6 +35,7 @@ describe("platform-core package surface", () => {
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationError",
+			"AgentConnectionAssociationErrorV1",
 			"AgentDefaultRelayKeyErrorV1",
 			"AgentManagementError",
 			"ApplicationApiCredentialErrorV1",
@@ -112,6 +113,9 @@ describe("platform-core package surface", () => {
 			"composeWecomProgressTextV1",
 			"connectionConsumerDisableOperationV1",
 			"connectionConsumerRegistrationOperationV1",
+			"connectionServiceCredentialFingerprintV1",
+			"connectionServiceCredentialSecretInputV1",
+			"connectionServiceCredentialSecretNameV1",
 			"containsWorkspaceSnapshotCredentialPatternV1",
 			"conversationAttachmentMergeMaxCountV1",
 			"conversationAttachmentMergeWindowMsV1",
@@ -129,6 +133,7 @@ describe("platform-core package surface", () => {
 			"createAgentApiCreationV1",
 			"createAgentApiLifecycleV1",
 			"createAgentConfigurationUseCaseV1",
+			"createAgentConnectionAssociationUseCaseV1",
 			"createAgentDefaultRelayKeyUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationApiCredentialIssuerV1",
@@ -378,6 +383,7 @@ describe("platform-core package surface", () => {
 			"platformAuditQueryDenialReasonsV1",
 			"platformAuditQueryResultsV1",
 			"platformIdempotencyV1",
+			"presentAgentConnectionAssociationStateV1",
 			"presentAgentConnectionAssociationV1",
 			"projectConversationExecutionV1",
 			"projectConversationMessagesV1",

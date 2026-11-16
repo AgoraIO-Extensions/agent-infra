@@ -433,6 +433,8 @@ describe("AgentConfigurationScreen", () => {
 			"Agent 默认 Relay Key",
 			// W-17：设计 #owner-config 分区标题为「渠道」。
 			"渠道",
+			// PRD §9.1：Connection 按需关联分区只对当前 Owner 显示。
+			"Connection",
 			"Skill",
 			"环境变量与 Secret",
 		]);

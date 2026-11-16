@@ -45,6 +45,38 @@ const protocolErrors = {
 		false,
 	],
 	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
+	// Owner Connection 关联（Spec §13.5.7）：沿用既有线上错误码，用独立消息区分原因，
+	// 均不含所填 Agent ID 或服务凭据。
+	CONNECTION_ALREADY_ASSOCIATED: [
+		409,
+		"INVALID_REQUEST",
+		"The Connection Agent or service credential is already associated with another Agent.",
+		false,
+	],
+	CONNECTION_CREDENTIAL_REJECTED: [
+		409,
+		"PROVIDER_REJECTED",
+		"Connection did not accept the service credential for this Connection Agent ID.",
+		false,
+	],
+	CONNECTION_CONSUMER_UNAVAILABLE: [
+		409,
+		"ACTION_UNAVAILABLE",
+		"The Connection Agent is not currently enabled.",
+		false,
+	],
+	CONNECTION_AUTOMATIC_REGISTRATION_UNAVAILABLE: [
+		409,
+		"ACTION_UNAVAILABLE",
+		"Automatic Connection registration is not available in this deployment.",
+		false,
+	],
+	CONNECTION_VERIFICATION_UNAVAILABLE: [
+		503,
+		"CONNECTION_UNAVAILABLE",
+		"Connection could not confirm the association; nothing was saved.",
+		true,
+	],
 	UPLOAD_RATE_LIMITED: [
 		429,
 		"UPLOAD_RATE_LIMITED",
@@ -108,7 +140,12 @@ const protocolErrors = {
 		| "FORBIDDEN"
 		| "VERSION_RETIRED"
 		| "CODEX_MODEL_PROFILE_UNSUPPORTED"
-		| "PLATFORM_IDENTITY_ENTRY_UNAVAILABLE",
+		| "PLATFORM_IDENTITY_ENTRY_UNAVAILABLE"
+		| "CONNECTION_ALREADY_ASSOCIATED"
+		| "CONNECTION_CREDENTIAL_REJECTED"
+		| "CONNECTION_CONSUMER_UNAVAILABLE"
+		| "CONNECTION_AUTOMATIC_REGISTRATION_UNAVAILABLE"
+		| "CONNECTION_VERIFICATION_UNAVAILABLE",
 		readonly [HttpErrorStatus, ProtocolErrorCode, string, boolean]
 	>
 >;

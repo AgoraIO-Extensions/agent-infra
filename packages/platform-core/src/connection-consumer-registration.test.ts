@@ -98,7 +98,7 @@ describe("registered Consumer association source", () => {
 });
 
 describe("durable Connection Consumer registration intent", () => {
-	it("uses the same formal creating rule for approved Web and direct API creation", () => {
+	it("uses the same formal creating rule for approved Web and direct API creation that enabled Connection", () => {
 		for (const transition of [
 			{
 				operation: "approve_application",
@@ -112,31 +112,43 @@ describe("durable Connection Consumer registration intent", () => {
 				from: null,
 				to: "creating",
 			},
-		])
+		]) {
 			expect(
 				planConnectionConsumerRegistrationForTransitionV1({
 					...request,
-					transition,
+					transition: { ...transition, connectionEnabled: true },
 				}),
 			).toEqual(planConnectionConsumerRegistrationV1(request));
+			// Connection is on demand: a creation that did not enable it never registers.
+			for (const connectionEnabled of [undefined, false])
+				expect(
+					planConnectionConsumerRegistrationForTransitionV1({
+						...request,
+						transition: { ...transition, connectionEnabled },
+					}),
+				).toBeUndefined();
+		}
 		for (const transition of [
 			{
 				operation: "submit_application",
 				creationChannel: "web" as const,
 				from: null,
 				to: "pending_approval",
+				connectionEnabled: true,
 			},
 			{
 				operation: "reject_application",
 				creationChannel: "web" as const,
 				from: "pending_approval",
 				to: "rejected",
+				connectionEnabled: true,
 			},
 			{
 				operation: "retry_agent_creation",
 				creationChannel: "web" as const,
 				from: "creation_failed",
 				to: "creating",
+				connectionEnabled: true,
 			},
 		])
 			expect(

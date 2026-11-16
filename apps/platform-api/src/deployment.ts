@@ -10,6 +10,7 @@ import {
 	type AgentDefaultRelayKeyBindingV1,
 	captureAgentApiCreatePrincipalsV1,
 	captureConnectionConsumerRegistrationPolicyV1,
+	connectionServiceCredentialSecretInputV1,
 	isSkillHubAgentVersionV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
@@ -20,6 +21,7 @@ import {
 } from "@agent-infra/secret-store";
 import { createAgentDefaultRelayKeyCandidatesV1 } from "./agent-default-relay-key-validation.js";
 import type { PlatformApiAssemblyInput } from "./assembly.js";
+import { createConnectionAssociationVerifierV1 } from "./connection-association-verifier.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
 import {
 	createDeploymentAdmissionsV1,
@@ -504,9 +506,28 @@ export function createProductionPlatformApiAssemblyInputV1(
 		input.connectionConsumerProfileApproval,
 		input.connectionWebPath,
 	);
-	const secrets = createDeploymentSecretPreparation(
-		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
-	);
+	const secretEncryptor = createSecretEncryptorV1({
+		encryptionKeys: input.encryptionKeys,
+	});
+	const secrets = createDeploymentSecretPreparation(secretEncryptor);
+	// Spec §13.5.7: verification uses only the one-time system access origin; the
+	// credential is encrypted with the deployment public key and never decrypted here.
+	const connectionAssociation: PlatformApiAssemblyInput["connectionAssociation"] =
+		connectionCapability.status === "available"
+			? {
+					verify: createConnectionAssociationVerifierV1({
+						publicOrigin: connectionCapability.publicOrigin,
+					}),
+					encrypt: (binding, credential) =>
+						secretEncryptor.encrypt(
+							connectionServiceCredentialSecretInputV1(
+								binding,
+								credential,
+								new Date().toISOString(),
+							),
+						),
+				}
+			: undefined;
 	const validatePersonalRelayKey = input.personalRelayKeyValidation
 		? createPersonalRelayKeyValidatorV1(input.personalRelayKeyValidation)
 		: undefined;
@@ -707,6 +728,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 				}
 			: {}),
 		connectionCapability,
+		...(connectionAssociation ? { connectionAssociation } : {}),
 		allocateApplicationIds: allocateDeploymentApplicationIds,
 		prepareApplicationSecrets: secrets.prepareApplicationSecrets,
 		prepareConfigurationSecrets: secrets.prepareConfigurationSecrets,

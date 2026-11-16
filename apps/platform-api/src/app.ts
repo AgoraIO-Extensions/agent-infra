@@ -18,6 +18,10 @@ import {
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
 import {
+	type AgentConnectionAssociationRoutesDependencies,
+	registerAgentConnectionAssociationRoutes,
+} from "./http/agent-connection-association-routes.js";
+import {
 	type AgentDefaultRelayKeyRoutesDependencies,
 	registerAgentDefaultRelayKeyRoutes,
 } from "./http/agent-default-relay-key-routes.js";
@@ -226,6 +230,7 @@ export interface PlatformAppDependencies {
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly agentDefaultRelayKeys?: AgentDefaultRelayKeyRoutesDependencies;
+	readonly agentConnectionAssociations?: AgentConnectionAssociationRoutesDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly wecom?: WecomRoutesDependenciesV1;
@@ -328,6 +333,11 @@ export function createPlatformApp(
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	if (dependencies.agentDefaultRelayKeys)
 		registerAgentDefaultRelayKeyRoutes(app, dependencies.agentDefaultRelayKeys);
+	if (dependencies.agentConnectionAssociations)
+		registerAgentConnectionAssociationRoutes(
+			app,
+			dependencies.agentConnectionAssociations,
+		);
 	registerV2ManagementRoutes(app, dependencies.management);
 	if (dependencies.workspaceSnapshots)
 		registerWorkspaceSnapshotRoutesV1(app, dependencies.workspaceSnapshots);

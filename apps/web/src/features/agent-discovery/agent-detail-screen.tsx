@@ -86,10 +86,11 @@ const channelStatusTones = {
 >;
 
 /**
- * Connection 关联状态（PRD §9.1）：只表示 Agent 的独立 Consumer 本地登记是否得到核实，
- * 不表示当前用户已授权或工具可调用；服务端没有登记记录时不显示。
+ * Connection 关联状态（PRD §9.1）：只表示 Agent 的独立 Consumer 本地关联是否得到核实，
+ * 不表示当前用户已授权或工具可调用；支持 Connection 的 Agent 没有关联时显示「未启用」。
  */
 const connectionAssociationChips = {
+	not_enabled: { label: "未启用", tone: "gray" },
 	processing: { label: "关联处理中", tone: "amber" },
 	associated: { label: "已关联", tone: "green" },
 	failed: { label: "关联失败", tone: "red" },
@@ -97,7 +98,7 @@ const connectionAssociationChips = {
 	disabling: { label: "停用待处理", tone: "amber" },
 	disabled: { label: "已停用", tone: "gray" },
 } satisfies Record<
-	NonNullable<AgentDetail["connectionAssociation"]>["status"],
+	NonNullable<AgentDetail["connectionAssociation"]>["status"] | "not_enabled",
 	{ label: string; tone: ChipTone }
 >;
 
@@ -292,6 +293,9 @@ export function AgentDetailScreen({
 			</section>
 		);
 	const { agent } = state;
+	const connectionAssociationStatus =
+		agent.connectionAssociation?.status ??
+		(agent.capabilities.connection ? ("not_enabled" as const) : undefined);
 	const selfManaged =
 		agent.source.kind === "custom" &&
 		agent.source.interactionMode === "self-managed";
@@ -511,7 +515,7 @@ export function AgentDetailScreen({
 								? "此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。"
 								: "当前 Agent 未提供 Connection 能力。"}
 						</p>
-						{agent.connectionAssociation && (
+						{connectionAssociationStatus && (
 							<div
 								className="flex flex-wrap items-center gap-2"
 								data-testid="agent-connection-association"
@@ -520,22 +524,21 @@ export function AgentDetailScreen({
 								<Badge
 									variant="chip"
 									tone={
-										connectionAssociationChips[
-											agent.connectionAssociation.status
-										].tone
+										connectionAssociationChips[connectionAssociationStatus].tone
 									}
 								>
 									{
-										connectionAssociationChips[
-											agent.connectionAssociation.status
-										].label
+										connectionAssociationChips[connectionAssociationStatus]
+											.label
 									}
 								</Badge>
 								<small className="text-muted-foreground">
-									{agent.connectionAssociation.status === "disabling" ||
-									agent.connectionAssociation.status === "disabled"
-										? "Consumer 停用不代表已发出的凭据均已撤销。"
-										: "关联不代表本人已授权或工具可调用。"}
+									{connectionAssociationStatus === "not_enabled"
+										? "Owner 可以在 Agent 设置中关联 Connection。"
+										: connectionAssociationStatus === "disabling" ||
+												connectionAssociationStatus === "disabled"
+											? "Consumer 停用不代表已发出的凭据均已撤销。"
+											: "关联不代表本人已授权或工具可调用。"}
 								</small>
 							</div>
 						)}

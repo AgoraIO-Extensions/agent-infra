@@ -236,7 +236,7 @@ async function effects() {
 }
 
 describe("Agent creation through formal HTTP/Core/PostgreSQL with controlled admission", () => {
-	it("atomically registers a separate nonsecret intent for each API-created Agent with the server-resolved Owner", async () => {
+	it("does not register a Connection Consumer for API-created Agents until the Owner enables it (PRD §9.1)", async () => {
 		await stop();
 		const policy = {
 			schemaVersion: 1 as const,
@@ -250,40 +250,15 @@ describe("Agent creation through formal HTTP/Core/PostgreSQL with controlled adm
 		try {
 			const first = await request("dynamic-a");
 			expect(first.status).toBe(201);
-			const result = AgentApiCreationResponseV1Schema.parse(await first.json());
 			expect((await request("dynamic-a")).status).toBe(200);
-			expect(
-				(
-					await request("dynamic-a", material.application, {
-						...body,
-						name: "Changed",
-					})
-				).status,
-			).toBe(409);
 			expect((await request("dynamic-b")).status).toBe(201);
-			const rows =
-				await sql`select agent_id, source_namespace, source_key, status, request, receipt from platform.connection_consumer_registrations order by source_key`;
-			expect(rows).toHaveLength(2);
-			expect(new Set(rows.map((row) => row.source_key)).size).toBe(2);
-			for (const row of rows) {
-				expect(row).toMatchObject({
-					source_namespace: policy.sourceNamespace,
-					source_key: row.agent_id,
-					status: "pending",
-					receipt: null,
-				});
-				expect(row.request).toMatchObject({ platformOwnerId: "human-owner" });
-			}
-			expect(rows.some((row) => row.agent_id === result.agentId)).toBe(true);
+			// Connection is an on-demand capability: a configured policy alone creates no intent.
+			expect(
+				await sql`select agent_id from platform.connection_consumer_registrations`,
+			).toEqual([]);
 			expect(
 				await sql`select operation, count(*)::int count from platform.outbox_items group by operation order by operation`,
-			).toEqual([
-				{ operation: "agent.connection.consumer.register.v1", count: 2 },
-				{ operation: "agent.workload.reconcile.v1", count: 2 },
-			]);
-			const serialized = JSON.stringify(rows);
-			expect(serialized).not.toContain(material.application);
-			expect(serialized).not.toContain(body.defaultRelayKey);
+			).toEqual([{ operation: "agent.workload.reconcile.v1", count: 2 }]);
 		} finally {
 			await stop();
 			await start();

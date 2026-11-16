@@ -50,6 +50,7 @@ describe("platform-store package surface", () => {
 			"PlatformUserDisableError",
 			"PostgresAgentConfigurationQueryV1",
 			"PostgresAgentConfigurationTransactionV1",
+			"PostgresAgentConnectionAssociationStoreV1",
 			"PostgresAgentDefaultRelayKeyStoreV1",
 			"PostgresAgentManagementQueryV1",
 			"PostgresAgentManagementTransactionV1",

@@ -442,7 +442,7 @@ test("keyboard recovery on the Agent detail moves focus to the Agent h1, not bod
 	}
 });
 
-// #851：详情只按服务端投影显示 Connection 关联状态；没有字段时不出现该行。
+// #851 / #4157：详情按服务端投影显示 Connection 关联状态；支持 Connection 但没有字段时显示「未启用」。
 test("shows the projected Connection association only when the detail carries it", async ({
 	page,
 }) => {
@@ -452,7 +452,9 @@ test("shows the projected Connection association only when the detail carries it
 	const association = page.getByTestId("agent-connection-association");
 	await page.goto(`/agents/${agent.agentId}`);
 	await expect(heading).toBeVisible();
-	await expect(association).toHaveCount(0);
+	await expect(association).toHaveText(
+		"Connection 关联未启用Owner 可以在 Agent 设置中关联 Connection。",
+	);
 	body = AgentDetailProjectionV1Schema.parse({
 		...agentDetail,
 		connectionAssociation: { status: "unverified" },

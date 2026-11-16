@@ -28,6 +28,7 @@ import {
 import {
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionManualAssociations,
 } from "./schema-connection-registration.js";
 import {
 	conversationAuditEvents,
@@ -76,6 +77,7 @@ export {
 export {
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionManualAssociations,
 } from "./schema-connection-registration.js";
 
 import {
@@ -186,6 +188,7 @@ import {
 export const platformInfrastructureTables = [
 	connectionConsumerRegistrations,
 	connectionConsumerDisables,
+	connectionManualAssociations,
 	evaluationExperiments,
 	evaluationSampleTasks,
 	evaluationScoreIntents,
