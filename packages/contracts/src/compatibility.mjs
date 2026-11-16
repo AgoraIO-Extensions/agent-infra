@@ -7366,7 +7366,55 @@ function normalizeWorkspaceSnapshot3871(previous, current) {
 	return { previous: normalizedPrevious, current: normalizedCurrent };
 }
 
+// #4109: only the reviewed, bodyless, current-Owner recovery operation is additive.
+// Normalize it on both sides before older independent additions, without admitting
+// removal, changed published history, or any unrelated path/schema change.
+function normalizeSkillHubProjectRecovery4109(previous, current) {
+	const path =
+		"/api/v2/skills/projects/{projectId}/publications/{operationId}/recover";
+	const before = previous.paths?.[path];
+	const after = current.paths?.[path];
+	if (before === undefined && after === undefined) return { previous, current };
+	const pinned =
+		"1fd40cee56b6262b30948dd6f0129ec7a8a131e1eb05b99c906926181a7a5631";
+	const matches = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex") === pinned;
+	const family = (value) =>
+		value.openapi === "3.1.0" &&
+		value.info?.title === "Agent Infra Pilot Browser Audit API" &&
+		value.info?.version === "2.0.0";
+	if (
+		!family(previous) ||
+		!family(current) ||
+		after === undefined ||
+		!matches(after) ||
+		(before !== undefined && !matches(before))
+	)
+		return { invalid: true };
+	const strip = (value) => {
+		const normalized = { ...value, paths: { ...value.paths } };
+		delete normalized.paths[path];
+		return normalized;
+	};
+	return {
+		previous: before === undefined ? previous : strip(previous),
+		current: strip(current),
+	};
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const recovery4109 = normalizeSkillHubProjectRecovery4109(
+		previousValue,
+		currentValue,
+	);
+	if (recovery4109.invalid)
+		return ["removed or changed published Skill project recovery contract"];
+	if (
+		recovery4109.previous !== previousValue ||
+		recovery4109.current !== currentValue
+	)
+		return findBreakingChanges(recovery4109.previous, recovery4109.current);
+
 	const uploadRateLimit = normalizeUploadRateLimitErrorCodeAddition(
 		previousValue,
 		currentValue,

@@ -286,13 +286,26 @@ export function assembleSkillHubReadApiV1(input: {
 	const projectPublication =
 		projectSupplier && input.providerImport
 			? createSkillHubProjectPublicationV1({
+					readRecovery: (context, projectId, operationId) =>
+						store.readProjectPublicationRecovery(
+							context,
+							projectId,
+							operationId,
+						),
 					readSource: (context, projectId, check) =>
 						store.readProjectPublicationSource(context, projectId, check),
 					pack: (files) =>
 						packSkillProjectSnapshotV1(
 							files.map((file) => ({ path: file.path, bytes: file.bytes })),
 						),
-					admit: async ({ context, key, selection, source, archiveBytes }) => {
+					admit: async ({
+						context,
+						key,
+						selection,
+						source,
+						archiveBytes,
+						operationId,
+					}) => {
 						const policy = await readCurrentSkillAdmissionPolicyV1(
 							input.providerImport,
 						);
@@ -307,6 +320,7 @@ export function assembleSkillHubReadApiV1(input: {
 									archiveBytes,
 								},
 								key,
+								operationId,
 							);
 						} catch (error) {
 							throw projectAdmissionFailure(error);
@@ -333,6 +347,15 @@ export function assembleSkillHubReadApiV1(input: {
 				),
 			...(projectPublication
 				? {
+						recover: (
+							request: Request,
+							trusted: SkillHubRequestV1,
+							projectId: string,
+							operationId: string,
+						) =>
+							scope.requestScope(request, () =>
+								projectPublication.recover(trusted, projectId, operationId),
+							),
 						publish: (
 							request: Request,
 							trusted: SkillHubRequestV1,

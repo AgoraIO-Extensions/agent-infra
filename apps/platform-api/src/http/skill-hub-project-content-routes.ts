@@ -45,6 +45,12 @@ export interface SkillHubProjectContentRoutesDependenciesV1 {
 		key: string,
 		input: unknown,
 	) => Promise<SkillPackagePublicationResultV1>;
+	readonly recover?: (
+		request: Request,
+		trusted: SkillHubRequestV1,
+		projectId: string,
+		operationId: string,
+	) => Promise<SkillPackagePublicationResultV1>;
 	readonly recordRefusal: SkillHubReadRoutesDependenciesV1["recordRefusal"];
 }
 
@@ -68,7 +74,10 @@ export function registerSkillHubProjectContentRoutesV1(
 	app: Hono,
 	dependencies: SkillHubProjectContentRoutesDependenciesV1,
 ) {
-	async function handle(context: Context, action: "read" | "save" | "publish") {
+	async function handle(
+		context: Context,
+		action: "read" | "save" | "publish" | "recover",
+	) {
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
 		let userId: string | null = null;
@@ -104,6 +113,26 @@ export function registerSkillHubProjectContentRoutesV1(
 						metadata.traceId,
 					);
 				return context.json(result.data);
+			}
+			if (action === "recover") {
+				if (request.body !== null)
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				if (!dependencies.recover)
+					throw new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+				const operationId = parseSkillHubIdV1(context.req.param("operationId"));
+				submitted = true;
+				const result = publicPublication(
+					await dependencies.recover(request, trusted, projectId, operationId),
+				);
+				if (result.version.skillId !== projectId)
+					throw new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+				return context.json(result, 200);
 			}
 			const key = parseIdempotencyKey(request, metadata.traceId);
 			if (action === "save") {
@@ -167,6 +196,10 @@ export function registerSkillHubProjectContentRoutesV1(
 	);
 	app.put("/api/v2/skills/projects/:projectId/content", (context) =>
 		handle(context, "save"),
+	);
+	app.post(
+		"/api/v2/skills/projects/:projectId/publications/:operationId/recover",
+		(context) => handle(context, "recover"),
 	);
 	app.post("/api/v2/skills/projects/:projectId/versions", (context) =>
 		handle(context, "publish"),

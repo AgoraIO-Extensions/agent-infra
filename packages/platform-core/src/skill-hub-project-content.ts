@@ -17,7 +17,11 @@ import {
 	type SkillHubRequestV1,
 } from "./skill-hub-management.js";
 import type { SkillHubProjectV1 } from "./skill-hub-project.js";
-import type { SkillPackagePublicationResultV1 } from "./skill-package-publication.js";
+import {
+	parseSkillPackagePublicationSelectionV1,
+	type SkillPackagePublicationResultV1,
+	type SkillPackagePublicationSelectionV1,
+} from "./skill-package-publication.js";
 
 /**
  * 网页编辑的项目内容上限（工程 Spec §11.6）：低于 §11.6.1 的包上限，并受 1 MiB JSON
@@ -283,7 +287,18 @@ export type SkillHubProjectPublicationSelectionV1 = Readonly<{
 	organizationId?: string;
 }>;
 
+export type SkillHubProjectPublicationRecoveryV1 = Readonly<{
+	key: string;
+	selection: SkillPackagePublicationSelectionV1;
+	completed: SkillPackagePublicationResultV1 | null;
+}>;
+
 export interface SkillHubProjectPublicationPortV1 {
+	recover(
+		context: SkillHubRequestV1,
+		projectId: string,
+		operationId: string,
+	): Promise<SkillPackagePublicationResultV1>;
 	publish(
 		context: SkillHubRequestV1,
 		projectId: string,
@@ -293,6 +308,12 @@ export interface SkillHubProjectPublicationPortV1 {
 }
 
 export type SkillHubProjectPublicationDependenciesV1 = Readonly<{
+	/** 内部 Owner 授权读取，不向客户端暴露原幂等键或 selection。 */
+	readRecovery?: (
+		context: SkillHubRequestV1,
+		projectId: string,
+		operationId: string,
+	) => Promise<SkillHubProjectPublicationRecoveryV1>;
 	/** 在当前授权的读取事务内调用 check；check 抛出的拒绝由 Store 记入拒绝审计。 */
 	readSource: (
 		context: SkillHubRequestV1,
@@ -305,6 +326,8 @@ export type SkillHubProjectPublicationDependenciesV1 = Readonly<{
 	admit: (input: {
 		context: SkillHubRequestV1;
 		key: string;
+		/** Internal recovery binding, never accepted from the publication request body. */
+		operationId?: string;
 		selection: SkillHubProjectPublicationSelectionV1;
 		source: Readonly<{
 			sourceVersion: string;
@@ -330,7 +353,66 @@ export function skillHubProjectSourceVersionV1(
 export function createSkillHubProjectPublicationV1(
 	dependencies: SkillHubProjectPublicationDependenciesV1,
 ): SkillHubProjectPublicationPortV1 {
-	return {
+	const publication: SkillHubProjectPublicationPortV1 = {
+		async recover(context, projectIdInput, operationIdInput) {
+			const request = parseSkillHubRequestV1(context);
+			const projectId = parseSkillHubIdV1(projectIdInput);
+			const operationId = parseSkillHubIdV1(operationIdInput);
+			if (!dependencies.readRecovery)
+				throw new SkillHubOperationErrorV1("unavailable");
+			const original = await dependencies.readRecovery(
+				request,
+				projectId,
+				operationId,
+			);
+			let key: string;
+			let selection: SkillPackagePublicationSelectionV1;
+			try {
+				key = parseSkillHubIdempotencyKeyV1(original.key);
+				selection = parseSkillPackagePublicationSelectionV1(original.selection);
+			} catch {
+				throw new SkillHubOperationErrorV1("unavailable");
+			}
+			const prefix = `project:${projectId}:r`;
+			const revisionText = selection.sourceVersion.slice(prefix.length);
+			const revision = Number(revisionText);
+			const versionId = `skill-version-${createHash("sha256").update(`project:${projectId}:${request.userId}:${key}`).digest("hex").slice(0, 48)}`;
+			if (
+				selection.provider !== "my_library" ||
+				selection.skillId !== projectId ||
+				selection.skillVersionId !== versionId ||
+				selection.approvalRef !== null ||
+				selection.sourceDigest !== selection.archiveDigest ||
+				!selection.sourceVersion.startsWith(prefix) ||
+				!Number.isSafeInteger(revision) ||
+				revision < 1 ||
+				String(revision) !== revisionText
+			)
+				throw new SkillHubOperationErrorV1("unavailable");
+			if (original.completed) return original.completed;
+			// 内部重入原 fenced 供应，不重发原 HTTP 请求，也不创建新幂等记录。
+			const resumed = createSkillHubProjectPublicationV1({
+				...dependencies,
+				admit: async (candidate) => {
+					const expected = {
+						...candidate.selection,
+						...candidate.source,
+						archiveDigest: sha256(candidate.archiveBytes),
+					};
+					for (const [field, value] of Object.entries(expected)) {
+						if (selection[field as keyof typeof selection] !== value)
+							throw new SkillHubOperationErrorV1("unavailable");
+					}
+					return dependencies.admit({ ...candidate, operationId });
+				},
+			});
+			return resumed.publish(request, projectId, key, {
+				schemaVersion: 1,
+				contentRevision: revision,
+				version: selection.version,
+				visibility: selection.visibility,
+			});
+		},
 		async publish(context, projectIdInput, keyInput, input) {
 			const request = parseSkillHubRequestV1(context);
 			const projectId = parseSkillHubIdV1(projectIdInput);
@@ -401,4 +483,5 @@ export function createSkillHubProjectPublicationV1(
 			});
 		},
 	};
+	return publication;
 }

@@ -99,6 +99,18 @@ export type SkillPackagePublicationResultV1 = Readonly<{
 	artifacts: SkillPackagePublicationStateV1["objects"];
 }>;
 export interface SkillPackagePublicationPortV1 {
+	/** Recovery-only: an absent/replaced original operation must never reserve a new one. */
+	resumePackage?(
+		context: SkillHubRequestV1,
+		operationId: string,
+		key: string,
+		selection: unknown,
+		work: (
+			context: SkillPackagePublicationContextV1,
+		) => Promise<SkillHubRegistrationV1>,
+		revalidate: () => Promise<void>,
+	): Promise<SkillPackagePublicationResultV1>;
+
 	publishPackage(
 		context: SkillHubRequestV1,
 		key: string,

@@ -9097,6 +9097,54 @@ export type SaveSkillHubProjectContentV1Responses = {
 
 export type SaveSkillHubProjectContentV1Response = SaveSkillHubProjectContentV1Responses[keyof SaveSkillHubProjectContentV1Responses];
 
+export type RecoverSkillHubProjectPublicationV1Data = {
+    body?: never;
+    path: {
+        projectId: string;
+        operationId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/projects/{projectId}/publications/{operationId}/recover';
+};
+
+export type RecoverSkillHubProjectPublicationV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RecoverSkillHubProjectPublicationV1Error = RecoverSkillHubProjectPublicationV1Errors[keyof RecoverSkillHubProjectPublicationV1Errors];
+
+export type RecoverSkillHubProjectPublicationV1Responses = {
+    /**
+     * Original Skill project publication recovered or replayed
+     */
+    200: SkillHubPublicationResponseV1;
+};
+
+export type RecoverSkillHubProjectPublicationV1Response = RecoverSkillHubProjectPublicationV1Responses[keyof RecoverSkillHubProjectPublicationV1Responses];
+
 export type PublishSkillHubProjectVersionV1Data = {
     body: SkillHubProjectPublicationRequestV1;
     headers: {

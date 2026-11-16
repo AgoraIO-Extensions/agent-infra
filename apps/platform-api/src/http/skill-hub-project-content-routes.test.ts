@@ -166,3 +166,71 @@ it("rejects Bearer, missing keys, query strings and caller-supplied package fact
 		).toBe(400);
 	expect(publish).not.toHaveBeenCalled();
 });
+
+it("recovers only by the owned operation path without invoking the original publication POST", async () => {
+	const recover = vi.fn(async () => ({
+		replayed: true,
+		version,
+		artifacts: {},
+	}));
+	const publish = vi.fn();
+	const { result } = app({ recover, publish });
+	const response = await result.request(
+		"http://localhost/api/v2/skills/projects/project-a/publications/operation-a/recover",
+		{ method: "POST" },
+	);
+	expect(response.status).toBe(200);
+	expect(recover).toHaveBeenCalledWith(
+		expect.any(Request),
+		expect.objectContaining({ userId: "owner-a" }),
+		"project-a",
+		"operation-a",
+	);
+	expect(publish).not.toHaveBeenCalled();
+	const body = await response.json();
+	expect(body).toMatchObject({
+		replayed: true,
+		version: { skillVersionId: "skill-version-a" },
+	});
+	expect(JSON.stringify(body)).not.toMatch(
+		/ownerId|object-version-a|idempotencyKey|selection/,
+	);
+});
+it("rejects recovery bodies, query fields and Bearer before invoking recovery", async () => {
+	const recover = vi.fn();
+	const { result } = app({ recover });
+	const path =
+		"http://localhost/api/v2/skills/projects/project-a/publications/operation-a/recover";
+	expect(
+		(
+			await result.request(path, {
+				method: "POST",
+				body: JSON.stringify({ key: "replacement", ownerId: "owner-b" }),
+			})
+		).status,
+	).toBe(400);
+	expect(
+		(await result.request(path + "?key=replacement", { method: "POST" }))
+			.status,
+	).toBe(400);
+	expect(
+		(
+			await result.request(path, {
+				method: "POST",
+				headers: { authorization: "Bearer synthetic" },
+			})
+		).status,
+	).toBe(401);
+	expect(recover).not.toHaveBeenCalled();
+});
+it("fails closed when the recovery supplier is not assembled", async () => {
+	const { result } = app();
+	expect(
+		(
+			await result.request(
+				"http://localhost/api/v2/skills/projects/project-a/publications/operation-a/recover",
+				{ method: "POST" },
+			)
+		).status,
+	).toBe(503);
+});
