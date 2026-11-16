@@ -699,6 +699,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 3.1129.0
         version: 3.1129.0
+      '@smithy/node-http-handler':
+        specifier: 4.12.1
+        version: 4.12.1
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*

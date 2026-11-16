@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+
+function required<T>(value: T | null | undefined): T {
+	if (value === undefined || value === null)
+		throw new Error("missing fixture value");
+	return value;
+}
+
 import {
 	applyWorkspaceSnapshotProjectionV1,
 	projectWorkspaceSnapshotMaterializerV1,
@@ -173,28 +180,34 @@ it("accepts API defaults and SDK objects but rejects mutated init credentials or
 		projection,
 	);
 	const actual = structuredClone(spec);
-	const init = actual.initContainers![0]!;
+	const init = required(actual.initContainers?.[0]);
 	init.terminationMessagePath = "/dev/termination-log";
 	init.terminationMessagePolicy = "File";
 	init.resources = structuredClone(policy.resources);
 	Object.setPrototypeOf(init, { sdkObject: true });
-	actual.volumes!.find((v) => v.secret)!.secret!.defaultMode = 420;
+	required(required(actual.volumes).find((v) => v.secret)?.secret).defaultMode =
+		420;
 	expect(workspaceSnapshotPodSpecMatchesV1(actual, projection)).toBe(true);
 	for (const mutate of [
 		(p: typeof spec) => {
-			p.initContainers![0]!.image = `registry.example.test/other@${digest}`;
+			required(p.initContainers?.[0]).image =
+				`registry.example.test/other@${digest}`;
 		},
 		(p: typeof spec) => {
-			p.initContainers![0]!.command = ["sh", "-c", "untrusted"];
+			required(p.initContainers?.[0]).command = ["sh", "-c", "untrusted"];
 		},
 		(p: typeof spec) => {
-			p.volumes!.find((v) => v.secret)!.secret!.secretName = "other-agent";
+			required(required(p.volumes).find((v) => v.secret)?.secret).secretName =
+				"other-agent";
 		},
 		(p: typeof spec) => {
-			p.containers[0]!.volumeMounts![0]!.subPathExpr = "untrusted";
+			required(required(p.containers[0]).volumeMounts?.[0]).subPathExpr =
+				"untrusted";
 		},
 		(p: typeof spec) => {
-			p.volumes!.push(structuredClone(p.volumes![0]!));
+			required(p.volumes).push(
+				structuredClone(required(required(p.volumes)[0])),
+			);
 		},
 	]) {
 		const drift = structuredClone(spec);
