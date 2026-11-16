@@ -95,6 +95,7 @@ export class SkillPackageSupplierV1 {
 		context: SkillHubRequestV1,
 		input: SkillPackageSupplyInputV1,
 		key?: string,
+		originalOperationId?: string,
 	) {
 		const request = parseSkillHubRequestV1(context);
 		// Snapshot plain data and archive bytes before the first wait; reject caller policy/ownership claims.
@@ -249,8 +250,24 @@ export class SkillPackageSupplierV1 {
 			await validate();
 			await publication?.guard();
 		};
+		const lifecycle = this.#options.lifecycle;
+		const publish: SkillPackagePublicationPortV1["publishPackage"] =
+			originalOperationId === undefined
+				? lifecycle.publishPackage.bind(lifecycle)
+				: (context, key, selection, work, revalidate) => {
+						if (!lifecycle.resumePackage)
+							throw new SkillHubOperationErrorV1("unavailable");
+						return lifecycle.resumePackage(
+							context,
+							originalOperationId,
+							key,
+							selection,
+							work,
+							revalidate,
+						);
+					};
 		try {
-			const result = await this.#options.lifecycle.publishPackage(
+			const result = await publish(
 				request,
 				key ??
 					`supply-${sha256(

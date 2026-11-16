@@ -1054,7 +1054,18 @@ export class PostgresSkillHubLifecycleV1 {
 			const [item] = await tx
 				.select()
 				.from(outboxItems)
-				.where(eq(outboxItems.id, operationId));
+				.where(
+					and(
+						eq(outboxItems.id, operationId),
+						or(
+							ne(outboxItems.status, "processing"),
+							and(
+								isNotNull(outboxItems.leaseExpiresAt),
+								sql`${outboxItems.leaseExpiresAt} <= clock_timestamp()`,
+							),
+						),
+					),
+				);
 			if (
 				!original ||
 				!item ||
@@ -1112,8 +1123,40 @@ export class PostgresSkillHubLifecycleV1 {
 		});
 	}
 
+	async resumePackage(
+		context: SkillHubRequestV1,
+		operationId: string,
+		key: string,
+		input: unknown,
+		work: (
+			context: SkillPackagePublicationContextV1,
+		) => Promise<SkillHubRegistrationV1>,
+		revalidate: () => Promise<void>,
+	) {
+		return this.#publishPackage(
+			context,
+			key,
+			input,
+			work,
+			revalidate,
+			parseSkillHubIdV1(operationId),
+		);
+	}
+
 	/** Internal supplier boundary: durable intent and checkpoints in the original outbox. */
 	async publishPackage(
+		context: SkillHubRequestV1,
+		key: string,
+		input: unknown,
+		work: (
+			context: SkillPackagePublicationContextV1,
+		) => Promise<SkillHubRegistrationV1>,
+		revalidate: () => Promise<void>,
+	) {
+		return this.#publishPackage(context, key, input, work, revalidate);
+	}
+
+	async #publishPackage(
 		context: SkillHubRequestV1,
 		keyInput: string,
 		input: unknown,
@@ -1121,6 +1164,7 @@ export class PostgresSkillHubLifecycleV1 {
 			context: SkillPackagePublicationContextV1,
 		) => Promise<SkillHubRegistrationV1>,
 		revalidate: () => Promise<void>,
+		expectedOperationId?: string,
 	) {
 		const selection = parseSkillPackagePublicationSelectionV1(input);
 		const key = parseSkillHubIdempotencyKeyV1(keyInput);
@@ -1148,6 +1192,12 @@ export class PostgresSkillHubLifecycleV1 {
 						row.idempotencyKey === key &&
 						row.commandType === "skill.package.publish.v1",
 				);
+				// Checked under the same reservation lock: recovery cannot fall into new publication.
+				if (
+					expectedOperationId !== undefined &&
+					(!original || original.id !== expectedOperationId)
+				)
+					throw new SkillHubOperationErrorV1("unavailable");
 				const priorOutbox = await tx
 					.select({ id: outboxItems.id, status: outboxItems.status })
 					.from(outboxItems)

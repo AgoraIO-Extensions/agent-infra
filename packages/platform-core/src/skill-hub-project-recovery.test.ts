@@ -91,6 +91,7 @@ describe("original project publication recovery", () => {
 		expect(x.admit).toHaveBeenCalledOnce();
 		expect(x.admit.mock.calls[0]?.[0]).toMatchObject({
 			key: "original-key",
+			operationId: "operation-a",
 			selection: {
 				skillVersionId: x.original.selection.skillVersionId,
 				version: "1.0.0",

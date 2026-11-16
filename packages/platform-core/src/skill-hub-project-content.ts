@@ -326,6 +326,8 @@ export type SkillHubProjectPublicationDependenciesV1 = Readonly<{
 	admit: (input: {
 		context: SkillHubRequestV1;
 		key: string;
+		/** Internal recovery binding, never accepted from the publication request body. */
+		operationId?: string;
 		selection: SkillHubProjectPublicationSelectionV1;
 		source: Readonly<{
 			sourceVersion: string;
@@ -401,7 +403,7 @@ export function createSkillHubProjectPublicationV1(
 						if (selection[field as keyof typeof selection] !== value)
 							throw new SkillHubOperationErrorV1("unavailable");
 					}
-					return dependencies.admit(candidate);
+					return dependencies.admit({ ...candidate, operationId });
 				},
 			});
 			return resumed.publish(request, projectId, key, {

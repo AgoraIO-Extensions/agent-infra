@@ -298,7 +298,14 @@ export function assembleSkillHubReadApiV1(input: {
 						packSkillProjectSnapshotV1(
 							files.map((file) => ({ path: file.path, bytes: file.bytes })),
 						),
-					admit: async ({ context, key, selection, source, archiveBytes }) => {
+					admit: async ({
+						context,
+						key,
+						selection,
+						source,
+						archiveBytes,
+						operationId,
+					}) => {
 						const policy = await readCurrentSkillAdmissionPolicyV1(
 							input.providerImport,
 						);
@@ -313,6 +320,7 @@ export function assembleSkillHubReadApiV1(input: {
 									archiveBytes,
 								},
 								key,
+								operationId,
 							);
 						} catch (error) {
 							throw projectAdmissionFailure(error);
