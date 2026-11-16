@@ -2094,11 +2094,13 @@ Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provide
    新的配置来源或普通运行时覆盖入口。源码、镜像和前端包不内置 endpoint 或兜底值；请求体、
    Agent 配置、模型/工具参数和前端常量均不能覆盖快照。
 
-§13.5.7 的自动登记是额外具名来源：仅由已核实持久关联中的真实 Consumer 回执和预先批准的
-路由、出站与登记策略生成完整、不可变的逐 Agent 快照，连同来源/关联修订一起交付。它不要求
-随机 Consumer ID 预先存在于 Helm/ConfigMap，也不把登记响应作为运行时字段覆盖。对已选择该
-登记来源的 Agent，这一完整快照是唯一来源；缺失、待核实或策略不匹配时不可用，不回退到
-静态或其他 Agent 的 Consumer。既有静态部署仍遵循上面规则，消费方均执行相同完整校验。
+§13.5.7 的自动登记与 Owner 手工关联是额外具名来源：仅由已核实持久关联中的真实 Consumer
+（自动登记回执，或手工关联时以服务凭据核实的 Consumer）和预先批准的路由、出站与登记策略
+生成完整、不可变的逐 Agent 快照，连同来源/关联修订一起交付。它不要求 Consumer ID 预先存在于
+Helm/ConfigMap，也不把登记响应作为运行时字段覆盖。Platform Agent 的逐 Agent Consumer 只来自
+这两种关联，部署配置不提供逐 Agent 条目；对已关联的 Agent，这一完整快照是唯一来源；缺失、
+待核实或策略不匹配时不可用，不回退到静态或其他 Agent 的 Consumer。上面的静态部署规则只
+适用于一次性系统接入字段，消费方均执行相同完整校验。
 此来源不改变版本 `1` 的字段、规范化及指纹算法；回执/关联修订属于受信来源元数据，
 不能向 profile 塞入额外字段或放宽未知字段拒绝。
 
@@ -2143,12 +2145,15 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置、自�
 授权与审计权威。Platform API/Worker 不取得客户端凭据来代调用或查询 Connection。
 客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
 前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
+唯一例外是 §13.5.7 Owner 手工关联的 Consumer 服务凭据：它只以应用层密文保存在该关联下，
+明文只在 API 受理并核实关联、Worker 物化到受保护 Host 时短暂存在；API 只用它做一次只读
+核实，不用于 MCP、用户代理或其他查询，其余禁止位置不变。
 
 **标准 MCP 与 Agent token 消费。** 固定官方 Runtime 的标准 MCP 客户端优先使用 Connection
 签发的 OAuth token 或获准 PAT。每个原用户/独立应用与 Agent 组合使用独立 token；不同
 Platform Session 仍按所属 Sandbox 隔离客户端状态，不能由 token 共享合并会话、工作区或记忆。
-同一获准 Consumer 可管理多个独立 token/ConsumerInstance。Platform 按 §13.5.7 为每个正式
-创建的 Agent 登记专用 Consumer，其内部按原用户和安装隔离 token；其他客户端按各自已批准
+同一获准 Consumer 可管理多个独立 token/ConsumerInstance。Platform 按 §13.5.7 为启用
+Connection 的每个 Agent 使用专用 Consumer，其内部按原用户和安装隔离 token；其他客户端按各自已批准
 的 Consumer 粒度接入。Consumer/token 的隔离不自动授予外部账号或 Action 权限，仍由
 Connection 的 Consumer/Actor/Grant 合同表达并逐次验证。
 
@@ -2355,13 +2360,14 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 PKCE（S256）；既有获准 PAT/export 路线继续遵循 §13.5.3/§13.5.5，不自动迁移或共享 Token。
 本节只定义平台使用方，不注册 Consumer、不修改 Connection 服务、Provider 或 Grant。
 取舍见 [ADR 0022](../adr/0022-acquire-oauth-tokens-in-protected-runtime.md)。
-创建时的 Consumer 登记与定向 OAuth 安装准备另见 §13.5.7；登记命令不复用本节的业务执行
-安装命令，也不要求先取得用户 Token。
+Consumer 的自动登记、Owner 手工关联与定向 OAuth 安装准备另见 §13.5.7；登记命令不复用本节
+的业务执行安装命令，也不要求先取得用户 Token。
 
 **实际安装绑定回读。** 对已预注册的 HTTPS public client，部署可显式选择 Connection
 [EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
 部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
-完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 不取得。
+完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 除
+§13.5.7 手工关联的受理、核实与物化外不取得。
 Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的精确 HTTPS 路径回读，
 不用 Cookie、不跟随重定向、不隐式重试；UNKNOWN、未绑定、错 client/instance/Consumer、
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
@@ -2382,17 +2388,19 @@ native client metadata，并把每个 Agent 的返回 `client_id` 绑定到该 A
 只创建独立 OAuth client/Consumer 入口，不创建 Grant、不替代用户确认，也不能把多个 Agent
 折叠到一个部署 client。DCR 成功、Consumer 可见或本机登录本身不构成连接器授权；不得使用
 其他产品 Consumer 或 Portable PAT 作为自动 fallback。API/Worker/Web 不持有 Consumer
-secret、PKCE verifier、access/refresh Token，也不兑换授权码、刷新或代调用 MCP。
+secret（§13.5.7 手工关联的服务凭据按 §13.5.3 的例外处理）、PKCE verifier、access/refresh
+Token，也不兑换授权码、刷新或代调用 MCP。
 
-**逐 Agent 安装配置。** 部署可为不同 Agent 提供完整的非敏感安装绑定，每项包含已有
-Consumer profile、approval 和 `RuntimeOAuthConfigurationV1`；复用现有 schema、指纹及
-source 校验，不创建另一种身份或凭据权威。API、Worker 与安装 Store 捕获同一批准修订。
-显式配置逐 Agent 绑定时，该映射是安装能力的唯一来源：缺少 Agent、条目无效、profile 与
-OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配置、Owner 或其他 Agent。
-原单份配置部署继续使用原路径。预注册 HTTPS OAuth client 可另按原用户＋Agent 提供
-`bindingsByAgentAndPrincipal`（API/Store）与 `configurationsByAgentAndPrincipal`（Worker）
-的受信两层索引；键只能由服务端已认证用户和原 Execution 的 Agent 解析。三种配置来源
-互斥；显式用户索引缺项或非法时拒绝安装，不回退逐 Agent、共享、Owner 或其他用户。
+**逐 Agent 安装配置。** 每个已关联 Agent 的完整非敏感安装绑定由 §13.5.7 的关联与一次性
+系统接入配置生成，每项包含 Consumer profile、approval 和 `RuntimeOAuthConfigurationV1`；
+复用现有 schema、指纹及 source 校验，不创建另一种身份或凭据权威。API、Worker 与安装
+Store 捕获同一关联修订。该绑定是安装能力的唯一来源：未关联、条目无效、profile 与
+OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配置、Owner 或其他 Agent；
+部署配置不提供逐 Agent 绑定。按原用户＋Agent 的受信两层索引
+（`bindingsByAgentAndPrincipal`（API/Store）与 `configurationsByAgentAndPrincipal`（Worker））
+由 §13.5.7 的逐安装 client 登记回执生成，不由部署逐项提供；键只能由服务端已认证用户和
+原 Execution 的 Agent 解析。显式用户索引缺项或非法时拒绝安装，不回退逐 Agent、共享、
+Owner 或其他用户。
 用户索引只接受非 PAT、非 DCR 的预注册 client，每个安装的 issuer＋clientId 必须独立。
 每项 revision 必须等于已 strict 解析的完整配置去除 revision 后，以固定字段顺序序列化的
 UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/revision 替换 client。
@@ -2409,9 +2417,10 @@ callback 格式（标准 OAuth 或既有 PAT binding）；逐 Agent 配置必须
 回调中的 state/binding ID 只定位原持久记录，不能选择 Agent、Runtime 地址或凭据。
 Store 从原记录的 principal＋Agent 重新选择当前绑定；用户索引的 ref/revision 固定到现有
 授权 scope，callback、命令回读及最终发送均复核同一配置。跨用户/Agent、配置漂移、过期
-或来源缺失均拒绝转交。用户索引下的部署主体映射使用
+或来源缺失均拒绝转交。用户索引下的主体映射使用
 `principalBindingsByAgentAndPrincipal[agentId][userId]`，每项固定 issuer、配置 ref/revision
-和 Connection principalId；它与旧主体映射互斥，不能把计划用户映射当实际 OAuth 绑定证明。
+和 Connection principalId，按一次性系统接入批准的主体映射规则生成，部署不逐用户提供；
+它与旧主体映射互斥，不能把计划用户映射当实际 OAuth 绑定证明。
 既有一次性领取、callback-only 服务认证和 unknown 不重放规则保持不变。
 
 上述安装选择不创建 Consumer、不执行管理员注册，也不表示外部授权已成立。API/Worker
@@ -2626,25 +2635,52 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 两主体/两 Agent、跨 Session/代次、错 state/issuer/resource、重放/撤权、丢响应与最终 Linux
 秘密保护分别沿 #851 验证；登录、文档、export fixture 不代签这些结果。
 
-#### 13.5.7 Agent 自动登记与 OAuth 安装准备
+#### 13.5.7 Agent 关联与 OAuth 安装准备
 
-产品行为见 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-创建时自动关联与用户-oauth)。
-本节定义 Platform 创建 Agent 后自动登记对应 Connection USER Consumer 的控制面合同，
-用户 OAuth 及 MCP 仍分别沿 §13.5.6、§13.5.4；取舍见
-[ADR 0040](../adr/0040-auto-register-connection-agents-for-oauth.md)。
+产品行为见 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)。
+本节定义 Owner 为 Agent 启用 Connection 后，Platform 自动登记或接受 Owner 手工关联对应
+Connection USER Consumer 的控制面合同，用户 OAuth 及 MCP 仍分别沿 §13.5.6、§13.5.4；
+自动登记的取舍见 [ADR 0040](../adr/0040-auto-register-connection-agents-for-oauth.md)。
 
 优先复用 Connection 已发布的 Agent 管理、OAuth 和查询能力及获准部署配置，不以新增接口或
-修改 OAuth 核心为前提。已有批准 Consumer/client 的标准 OAuth 接线可沿 §13.5.6 独立推进，
-不等待本节的后台自动 Consumer 登记；两条交付分别验收，不能互相冒充完成。
+修改 OAuth 核心为前提。逐 Agent 的 Consumer、服务凭据和安装供应只来自本节的自动登记或
+Owner 手工关联；部署配置只提供一次性的系统接入（Connection origin 与路径、audience、出站
+策略、OAuth 回调路由、issuer 和登记策略），不包含单个 Agent 的条目。
 
-**创建边界。** Web 申请审批通过、API 创建请求通过平台准入并进入 `creating` 时，由 Core
-在各自原创建事务中产生同一登记规则下的意图。Store 原子保存 Agent、登记操作及既有 outbox
+**启用边界。** Owner 在 Agent 已存在时启用 Connection，由 Core 在启用命令的事务中产生
+登记意图；创建时选择启用的，Web 申请审批通过、API 创建请求通过平台准入并进入 `creating`
+时，由 Core 在各自原创建事务中产生同一登记规则下的意图。未启用的 Agent 不产生登记意图。
+Store 原子保存 Agent、登记操作及既有 outbox
 意图，不在 SQL Adapter 或 HTTP/UI 中作登记决策，也不在浏览器创建成功后补第二次请求。
 预留 ID、待审批、驳回或撤回不触发登记。Worker 在既有 outbox 循环处理具名登记操作，
 不增加第二个调度器；登记不依赖 processing Execution、Runtime claim 或用户已授权。
 实际发送前和每次 await 后复核原 Agent、当前 Owner/登记策略、目标修订、原 outbox 领取及
 操作仍有效。发送前资格失效则不发送；已开始发送后失去资格仍保留原交付事实与 unknown，
 封闭后续变更，不把取消或租约失效伪装成远端未生效，也不挂到另一 Agent 重发。
+系统接入未配置自动登记时，启用只开放下面的手工关联，不产生登记意图。
+
+**Owner 手工关联。** Owner 在 Connection 为该 Agent 创建 USER Consumer 后，经 Web 或 API
+提交 Connection Agent ID 与该 Consumer 的服务凭据；两条入口使用同一 Core 命令，浏览器请求
+沿既有 Owner 写操作的 CSRF 与 Origin 校验。只有当前 Owner 可以关联、替换凭据或解除关联；
+一个 Agent 至多一条关联，已有自动登记关联的 Agent 不接受手工关联，手工关联的 Agent 不再
+产生登记意图。接受前，API 用提交的服务凭据调用 Connection 以该凭据认证的只读接口
+（当前为 `GET /connection/v1/agents/{agentId}/actions`）一次，确认凭据认证的正是所填
+Agent ID 且该 Consumer 当前可用。认证失败、Agent ID 不符或结果不确定都整体拒绝并返回稳定
+错误码，不保存部分状态；同一服务凭据或 Consumer 已关联其他 Agent 时同样拒绝。Connection
+侧须以“按使用者身份执行”创建该 Consumer，Web 关联入口展示这一要求；Connection 对外提供
+可读的执行模式后再纳入核实。
+
+核实通过后，Store 在同一事务保存关联行（来源 `manual`、Agent ID、关联修订与核实时间）和
+服务凭据密文，状态即为 `registered`，并沿下文投影为 `associated`。服务凭据只按
+[ADR 0002](../adr/0002-store-platform-secrets-as-application-ciphertext.md) 以应用层密文保存
+在该关联下：API/Web 不回显，不进入日志、错误、审计正文、浏览器持久存储、模型或 Agent。
+替换凭据重新执行同一核实并产生新关联修订，旧密文随同一事务删除；解除关联删除关联行与
+密文，并封闭新的安装与业务调用。已签发的用户 token 仍由 Connection 管理，Platform 不宣称
+远端已撤销；手工关联的 Consumer 本身仍在 Connection 管理，Platform 不发送停用。
+手工关联以上述核实结果代替 Consumer 登记回执；逐 Agent profile、指纹、OAuth 准备、交付与
+用户授权和自动登记共用本节其余规则。Worker 只在把服务凭据物化到该 Agent 受保护 Host 的
+安装供应时解密，凭据不进入 env、argv 或工具进程；API/Worker 不用它调用 MCP、代理用户或
+做核实以外的查询。
 
 **三类绑定。** Consumer、OAuth client/实例与用户授权分别管理：
 
@@ -2689,8 +2725,9 @@ Owner/mode/callback、登记政策及适用修订。允许复用现有 `GET /api
 同样为 `unverified`，不推断为已关联。该 Agent 有下文的 Consumer 停用行且状态不是 `not_required`
 时，停用状态覆盖登记状态：`disabled` 显示为 `disabled`，其余停用状态显示为 `disabling`（外部停用
 待处理）。Store 在判定 Agent 可见性的同一只读快照内读取该 Agent 自己的登记行与停用行，可见性与
-Agent 投影相同，不新增路由或权限；没有登记行（未配置自动登记或既有 Agent）时省略字段，不回退为
-某种状态。投影不含 Consumer ID、回执、摘要、幂等键或失败码，`associated` 也不表示本人已授权、
+Agent 投影相同，不新增路由或权限；没有关联行（未启用 Connection、未配置自动登记或既有 Agent）
+时省略字段，Web 显示为未启用，不回退为其他状态。
+投影不含 Consumer ID、回执、摘要、幂等键或失败码，`associated` 也不表示本人已授权、
 具体 Grant 或工具可调用；`disabled` 只表示 Connection 确认原停用命令已在该 Consumer 层生效，
 不表示已发 Token 均已撤销。
 
@@ -2733,7 +2770,7 @@ API/Worker 不获取用户 Token、PKCE verifier 或 Consumer secret。Host 按 
 实际 Consumer 回执与预先批准的路由/出站/登记策略形成逐 Agent 的完整 profile、source 与指纹；
 逐安装的 client 登记回执核实后，再生成匹配该用户、Agent、安装及 Consumer 的完整 OAuth
 配置 ref/revision。API/Worker 从持久关联捕获同一修订，复用 §13.5.1–§13.5.3 的完整快照校验，
-不按请求或未核实回执更新，不跨用户供应 client 配置；有自动登记关联时，不回退到静态 Consumer。
+不按请求或未核实回执更新，不跨用户供应 client 配置；有关联时，不回退到静态 Consumer。
 Runtime 仍经原安装接收器和受控重新装配消费；不热改 Thread 工具快照或释放 unknown 占用。
 
 **生命周期与启用。** 创建重试复用原绑定；改名不改身份，展示信息更新使用原 Consumer 和
@@ -2744,8 +2781,9 @@ Consumer 停用意图；只有 Connection 的确定回执才能确认远端停�
 
 **Consumer 停用。** 只有管理员 `disable_agent` 的已接受事务写入停用意图；停止、重启、创建失败、
 Workload 观测、空闲 Session Sandbox 回收与普通工作负载重启都不写。选择只依据该 Agent 自己已持久的
-登记行，与当前部署是否仍配置登记策略无关，没有登记行或登记已 `failed` 时不写；因此 Connection
-未配置的部署行为不变。该事务（READ COMMITTED）先更新 Agent 的 `platform.agent_applications` 行，
+登记行，与当前部署是否仍配置登记策略无关，没有登记行、登记已 `failed` 或关联来源为 `manual`
+时不写；因此 Connection 未配置的部署行为不变，手工关联的 Consumer 仍在 Connection 管理。
+该事务（READ COMMITTED）先更新 Agent 的 `platform.agent_applications` 行，
 再用独立语句读登记行；登记表的任何状态写入方都必须 `FOR UPDATE` 锁定同一 `agent_applications` 行，
 所以读到的登记状态在停用提交前不会被改变。停用事务对登记行既不加锁也不设外键，避免与登记 Worker
 先锁登记行、再锁 `agent_applications` 行的顺序相反而死锁。
