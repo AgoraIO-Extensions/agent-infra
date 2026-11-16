@@ -909,6 +909,28 @@ describe("Session reserve Worker Connection delivery (#4157)", () => {
 		expect(f.store.retire).toHaveBeenCalledWith(f.row.sandboxId);
 	});
 
+	it("retires a ready reserve when the source fails after its awaited reads", async () => {
+		const f = fixture({ status: "ready" });
+		confirmed(f);
+		f.store.inspect.mockResolvedValue({
+			...f.claim,
+			currentProfileDigest: f.claim.profile.digest,
+		});
+		let read = false;
+		withDeliverable(f, async () => {
+			if (read) throw new Error("source down");
+			return true;
+		});
+		const original = f.adapter.read.getMockImplementation();
+		f.adapter.read.mockImplementation(async (claim, kind) => {
+			if (kind === "Pod") read = true;
+			return (await original?.(claim, kind)) ?? null;
+		});
+		await f.worker.reconcile();
+		expect(f.store.refreshReady).not.toHaveBeenCalled();
+		expect(f.store.retire).toHaveBeenCalledWith(f.row.sandboxId);
+	});
+
 	it("still removes a retiring reserve without consulting the current source", async () => {
 		const f = fixture({ status: "retiring" });
 		confirmed(f);

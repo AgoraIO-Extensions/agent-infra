@@ -384,7 +384,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			await retire(claim);
 			return;
 		}
-		await guard();
+		// markReady itself checks the lease, so the source check stays the last await before it.
 		if (await store.markReady(claim, evidence)) result.ready++;
 	}
 	async function observeUnknown(claim: Claim, guard: () => Promise<void>) {
