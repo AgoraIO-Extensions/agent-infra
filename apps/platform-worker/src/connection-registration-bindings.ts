@@ -139,15 +139,16 @@ export function bindCurrentConnectionInstallationAuthorizationV1(input: {
 }
 
 /**
- * Business-request guard for a Worker that started with a static or shared Consumer
- * selection (Spec §13.5.7). An Agent selected as legacy at startup that now has an Owner
- * association or registration (current or disconnected) fails closed instead of keeping
- * that Consumer. Without a startup legacy set, every Agent was selected as legacy.
+ * Current-source check for a Worker that started with a static or shared Consumer
+ * selection (Spec §13.5.7). It returns false for an Agent selected as legacy at startup
+ * that now has an Owner association or registration (current or disconnected), so the
+ * cached Consumer is not delivered. Without a startup legacy set, every Agent was
+ * selected as legacy. Source errors throw; callers fail closed.
  */
 export function createStartupConnectionSelectionGuardV1(input: {
 	readonly source?: { persistent(agentId: string): Promise<boolean> };
 	readonly startupLegacyAgentIds?: ReadonlySet<string>;
-}): (agentId: string) => Promise<void> {
+}): (agentId: string) => Promise<boolean> {
 	const { source, startupLegacyAgentIds } = input;
 	return async (agentId) => {
 		if (
@@ -155,13 +156,7 @@ export function createStartupConnectionSelectionGuardV1(input: {
 			(startupLegacyAgentIds !== undefined &&
 				!startupLegacyAgentIds.has(agentId))
 		)
-			return;
-		let persistent: boolean;
-		try {
-			persistent = await source.persistent(agentId);
-		} catch {
-			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-		}
-		if (persistent) throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			return true;
+		return !(await source.persistent(agentId));
 	};
 }

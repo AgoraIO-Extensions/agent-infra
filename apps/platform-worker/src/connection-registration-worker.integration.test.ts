@@ -462,32 +462,26 @@ it("closes a startup static or shared Consumer selection for an Agent associated
 	});
 	try {
 		const shared = createStartupConnectionSelectionGuardV1({ source });
-		await expect(shared("agent-a")).resolves.toBeUndefined();
+		await expect(shared("agent-a")).resolves.toBe(true);
 		// The Owner associates agent-a while the Worker keeps its startup selection.
 		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-a',1)`;
-		await expect(shared("agent-a")).rejects.toThrow(
-			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
-		);
+		await expect(shared("agent-a")).resolves.toBe(false);
 		// Disconnect keeps the durable generation: the shared Consumer stays closed.
 		await sql`update platform.connection_association_generations set last_revision=2`;
-		await expect(shared("agent-a")).rejects.toThrow(
-			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
-		);
-		await expect(shared("agent-b")).resolves.toBeUndefined();
+		await expect(shared("agent-a")).resolves.toBe(false);
+		await expect(shared("agent-b")).resolves.toBe(true);
 		// With a startup legacy set, Agents outside it already fail closed elsewhere.
 		const legacy = createStartupConnectionSelectionGuardV1({
 			source,
 			startupLegacyAgentIds: new Set(["agent-b"]),
 		});
-		await expect(legacy("agent-a")).resolves.toBeUndefined();
+		await expect(legacy("agent-a")).resolves.toBe(true);
 		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-b',1)`;
-		await expect(legacy("agent-b")).rejects.toThrow(
-			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
-		);
+		await expect(legacy("agent-b")).resolves.toBe(false);
 	} finally {
 		await source.close();
 	}
-	// An unavailable source fails closed rather than allowing the startup Consumer.
+	// An unavailable source throws; delivery callers fail closed on it.
 	const broken = createStartupConnectionSelectionGuardV1({
 		source: {
 			persistent: async () => {
@@ -495,8 +489,6 @@ it("closes a startup static or shared Consumer selection for an Agent associated
 			},
 		},
 	});
-	await expect(broken("agent-b")).rejects.toThrow(
-		"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
-	);
+	await expect(broken("agent-b")).rejects.toThrow("down");
 	await sql`delete from platform.connection_association_generations`;
 });

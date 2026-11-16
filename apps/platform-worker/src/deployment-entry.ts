@@ -666,11 +666,10 @@ async function createPrepared(signal: AbortSignal) {
 	const associationSource = legacySelectionRequired
 		? new PostgresConnectionAssociationSourceV1({ databaseUrl })
 		: undefined;
-	const assertStartupConnectionSelectionCurrent =
-		createStartupConnectionSelectionGuardV1({
-			source: associationSource,
-			startupLegacyAgentIds,
-		});
+	const connectionDeliveryCurrent = createStartupConnectionSelectionGuardV1({
+		source: associationSource,
+		startupLegacyAgentIds,
+	});
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
@@ -856,6 +855,8 @@ async function createPrepared(signal: AbortSignal) {
 		...productionWorkload,
 		readinessLedger: createWorkloadReadinessLedgerV1(),
 		sessionOwnerSecrets,
+		// Every Pod delivery of the startup-selected Consumer rechecks the current source.
+		...(associationSource ? { connectionDeliveryCurrent } : {}),
 	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {
@@ -1049,8 +1050,16 @@ async function createPrepared(signal: AbortSignal) {
 					request.purpose !== "control"
 				)
 					throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-				if (request.purpose !== "control")
-					await assertStartupConnectionSelectionCurrent(request.agentId);
+				if (request.purpose !== "control") {
+					let current: boolean;
+					try {
+						current = await connectionDeliveryCurrent(request.agentId);
+					} catch {
+						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+					}
+					if (!current)
+						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				}
 				return resolveRuntimeHost(request);
 			},
 			fetch: workload.fetch,
