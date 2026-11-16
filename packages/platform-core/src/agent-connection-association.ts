@@ -99,6 +99,8 @@ export interface AgentConnectionAssociationAuditV1 {
 		| "replace"
 		| "disconnect"
 		| "enable";
+	/** Which entry ran the shared command; never the credential material. */
+	readonly entry: AgentConnectionAssociationEntryV1["kind"];
 	readonly outcome: "succeeded" | "rejected" | "failed";
 	readonly reason?: AgentConnectionAssociationErrorV1["code"];
 	readonly associationRevision?: number;
@@ -373,6 +375,7 @@ export function createAgentConnectionAssociationUseCaseV1(
 					(request.entry.kind === "browser" ? request.entry.userId : null),
 				traceId: request.traceId,
 				requestId: request.requestId,
+				entry: request.entry.kind,
 				operation,
 				outcome:
 					failure.code === "unavailable" ||
@@ -443,8 +446,13 @@ export function createAgentConnectionAssociationUseCaseV1(
 		const credentialFingerprint = connectionServiceCredentialFingerprintV1(
 			command.serviceCredential,
 		);
-		const check = async (tx: AgentConnectionAssociationTransactionV1) => {
+		let actorId: string | null = null;
+		const check = async (
+			tx: AgentConnectionAssociationTransactionV1,
+			verified: boolean,
+		) => {
 			const owner = await owned(tx, request, true);
+			actorId = owner.userId;
 			const current = await tx.current(request.agentId);
 			if (current?.source === "automatic")
 				throw new AgentConnectionAssociationErrorV1("conflict");
@@ -452,20 +460,22 @@ export function createAgentConnectionAssociationUseCaseV1(
 				current?.source === "manual" ? current.associationRevision : null;
 			if (currentRevision !== command.expectedRevision)
 				throw new AgentConnectionAssociationErrorV1("conflict");
+			// Reuse is checked only after Connection accepted the credential, so an Owner
+			// cannot probe whether a Connection Agent ID is bound elsewhere with a guess.
 			if (
-				await tx.inUseElsewhere({
+				verified &&
+				(await tx.inUseElsewhere({
 					agentId: request.agentId,
 					connectionAgentId: command.connectionAgentId,
 					credentialFingerprint,
-				})
+				}))
 			)
 				throw new AgentConnectionAssociationErrorV1("already_associated");
 			return owner;
 		};
 		// Reject non-Owners and stale submissions before any Connection call.
-		let actorId: string | null = null;
 		try {
-			actorId = (await input.transaction.execute(check)).userId;
+			await input.transaction.execute((tx) => check(tx, false));
 		} catch (error) {
 			return refuse(
 				request,
@@ -477,7 +487,7 @@ export function createAgentConnectionAssociationUseCaseV1(
 		try {
 			await verify(command.connectionAgentId, command.serviceCredential);
 			return await input.transaction.execute(async (tx) => {
-				const owner = await check(tx);
+				const owner = await check(tx, true);
 				const saved = await tx.saveManual({
 					agentId: request.agentId,
 					ownerId: owner.userId,
@@ -501,6 +511,8 @@ export function createAgentConnectionAssociationUseCaseV1(
 					actorId: owner.userId,
 					traceId: request.traceId,
 					requestId: request.requestId,
+					entry: request.entry.kind,
+
 					operation:
 						command.expectedRevision === null ? "associate" : "replace",
 					outcome: "succeeded",
@@ -551,6 +563,8 @@ export function createAgentConnectionAssociationUseCaseV1(
 					actorId: owner.userId,
 					traceId: request.traceId,
 					requestId: request.requestId,
+					entry: request.entry.kind,
+
 					operation: "enable",
 					outcome: "succeeded",
 				});
@@ -617,6 +631,8 @@ export function createAgentConnectionAssociationUseCaseV1(
 						actorId: owner.userId,
 						traceId: request.traceId,
 						requestId: request.requestId,
+						entry: request.entry.kind,
+
 						operation: "disconnect",
 						outcome: "succeeded",
 						associationRevision: expectedRevision,

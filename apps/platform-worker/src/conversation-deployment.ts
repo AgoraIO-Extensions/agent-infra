@@ -1210,6 +1210,23 @@ function createSessionSandboxAllocationResolverV1(
 					recordedSecret,
 				),
 			);
+		// A cached static or shared Consumer snapshot reaches a new running Sandbox only while
+		// the Agent still has no persistent association (Spec §13.5.7). Drain, stop and
+		// cleanup renders keep their original inputs so existing resources can be removed.
+		if (
+			desiredState === "running" &&
+			requireCurrentTemplateTrust &&
+			typeof allocation.connectionConsumerSnapshot === "string" &&
+			workload.connectionDeliveryCurrent
+		) {
+			let current: boolean;
+			try {
+				current = await workload.connectionDeliveryCurrent(binding.agentId);
+			} catch {
+				throw new WorkloadKubernetesError("unavailable");
+			}
+			if (!current) throw new WorkloadKubernetesError("policy");
+		}
 		// Drain and stopped renders never carry Owner values: the Session Secret
 		// is an absent kind there and is deleted by recorded identity.
 		return allocation;

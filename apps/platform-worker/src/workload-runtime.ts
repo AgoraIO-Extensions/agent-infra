@@ -134,6 +134,12 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
+	/**
+	 * Current persistent Connection source check (Spec §13.5.7). Called before a cached
+	 * static or shared Consumer snapshot is delivered to a running Pod; false or a
+	 * thrown error closes that delivery. Stop, drain, cleanup and control never call it.
+	 */
+	readonly connectionDeliveryCurrent?: (agentId: string) => Promise<boolean>;
 	readonly registry: ImageRegistryAdapterV1;
 	readonly admissionPolicyRef: string;
 	readonly registrySubjectRef: string;
@@ -905,6 +911,9 @@ export function createWorkloadRuntimeV1(
 				purpose === "cleanup" || connectionConsumerControl,
 			client: options.client,
 			policy: options.policy,
+			...(options.connectionDeliveryCurrent
+				? { connectionDeliveryCurrent: options.connectionDeliveryCurrent }
+				: {}),
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			onWorkspaceSnapshot: options.onWorkspaceSnapshot,
 			modelProjection,

@@ -76,6 +76,7 @@ export {
 	PostgresConnectionConsumerDisableStoreV1,
 } from "./connection-consumer-disable.js";
 export {
+	PostgresConnectionAssociationSourceV1,
 	PostgresConnectionConsumerRegistrationStoreV1,
 	readConnectionConsumerSourceSelectionV1,
 	readRegisteredConnectionConsumerBindingsV1,

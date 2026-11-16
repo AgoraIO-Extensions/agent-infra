@@ -28,6 +28,7 @@ import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-in
 import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
+	openStartupConnectionDeliveryGuardV1,
 	readConnectionConsumerSourceSelectionV1,
 	resolveRegisteredConnectionConsumerBindingsV1,
 } from "./connection-registration-bindings.js";
@@ -598,7 +599,28 @@ let conversationPrepared:
 	| ReturnType<typeof createConversationPrepared>
 	| undefined;
 
+/**
+ * Resources opened during preparation stay owned here until the prepared deployment is
+ * returned; a later preparation failure closes them once and keeps the original error.
+ */
 async function createPrepared(signal: AbortSignal) {
+	const owned: { close?: () => Promise<void> } = {};
+	try {
+		return await createPreparedOwning(signal, owned);
+	} catch (error) {
+		try {
+			await owned.close?.();
+		} catch {
+			/* The preparation failure stays the reported error. */
+		}
+		throw error;
+	}
+}
+
+async function createPreparedOwning(
+	signal: AbortSignal,
+	owned: { close?: () => Promise<void> },
+) {
 	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 	try {
 		if (!databaseUrl) throw new Error();
@@ -655,6 +677,21 @@ async function createPrepared(signal: AbortSignal) {
 	const selectedSharedConsumer = persistentAutomaticSource
 		? undefined
 		: connectionConsumer;
+	// The startup selection is a snapshot. An Agent that gains an Owner association or a
+	// registration later must not keep receiving that static or shared Consumer: business
+	// requests recheck the current persistent source (Spec §13.5.7, no fallback).
+	const startupLegacyAgentIds = persistentAutomaticSource
+		? new Set(legacySelection?.legacyAgentIds ?? [])
+		: undefined;
+	const connectionDelivery = legacySelectionRequired
+		? openStartupConnectionDeliveryGuardV1({
+				databaseUrl,
+				...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
+			})
+		: undefined;
+	if (connectionDelivery) owned.close = () => connectionDelivery.close();
+	const connectionDeliveryCurrent = async (agentId: string) =>
+		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	if (
 		resolvedBindings &&
 		(connectionConsumerProfilesByAgent !== undefined ||
@@ -840,6 +877,8 @@ async function createPrepared(signal: AbortSignal) {
 		...productionWorkload,
 		readinessLedger: createWorkloadReadinessLedgerV1(),
 		sessionOwnerSecrets,
+		// Every Pod delivery of the startup-selected Consumer rechecks the current source.
+		...(connectionDelivery ? { connectionDeliveryCurrent } : {}),
 	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {
@@ -984,6 +1023,7 @@ async function createPrepared(signal: AbortSignal) {
 				? { connectionInstallation: authorizedInstallation }
 				: {}),
 			closeDeployment: async () => {
+				await connectionDelivery?.close();
 				await installationStore?.close();
 				await evaluationAuthority?.close();
 				await sessionOwnerSecrets.close();
@@ -1032,6 +1072,16 @@ async function createPrepared(signal: AbortSignal) {
 					request.purpose !== "control"
 				)
 					throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+				if (request.purpose !== "control") {
+					let current: boolean;
+					try {
+						current = await connectionDeliveryCurrent(request.agentId);
+					} catch {
+						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+					}
+					if (!current)
+						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				}
 				return resolveRuntimeHost(request);
 			},
 			fetch: workload.fetch,
