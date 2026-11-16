@@ -265,3 +265,57 @@ it("only marks matching, non-expired real runtime evidence ready", () => {
 		}),
 	).toMatchObject({ state: "stale" });
 });
+
+// Keep the adopted bytes fixed: consumer registration/context drift must revoke readiness.
+it.each([
+	"sourceCommit",
+	"image",
+	"driver",
+	"configurationRevision",
+	"namespaceUid",
+] as const)(
+	"rejects an adopted record when the consuming %s changes (#4070 AC-16)",
+	(field) => {
+		const record = adopt();
+		const input = {
+			templateId: "claude",
+			imageDigest: binding.imageDigest,
+			binding,
+			configurationRevision: "config-1",
+			validationContext: context,
+			validation: record,
+			now: 10_000,
+		};
+		expect(standardTemplateReadinessV1(input).state).toBe("ready");
+		const changed =
+			field === "image"
+				? {
+						...input,
+						imageDigest: `sha256:${"d".repeat(64)}`,
+						binding: { ...binding, imageDigest: `sha256:${"d".repeat(64)}` },
+					}
+				: field === "driver"
+					? {
+							...input,
+							binding: {
+								...binding,
+								driver: "acp" as const,
+								protocol: "anthropic-messages-v1" as const,
+							},
+						}
+					: field === "configurationRevision"
+						? { ...input, configurationRevision: "changed" }
+						: {
+								...input,
+								validationContext: {
+									...context,
+									[field]:
+										field === "sourceCommit" ? "d".repeat(40) : "changed",
+								},
+							};
+		expect(standardTemplateReadinessV1(changed)).toMatchObject({
+			revision: null,
+		});
+		expect(standardTemplateReadinessV1(changed).state).not.toBe("ready");
+	},
+);
