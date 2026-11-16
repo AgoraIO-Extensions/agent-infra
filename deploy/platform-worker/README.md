@@ -249,6 +249,48 @@ Worker 访问的 Runtime Host 或模型预检 Relay 使用私有 CA 时，在 He
 证书校验。使用公开受信 CA 时可省略此项。此挂载只影响 Worker；Agent Pod 执行期
 Relay 请求的 CA 信任须由 Workload 装配并在真实模型请求中独立验证。
 
+### 私有对象存储的 Worker CA 采用
+
+Workspace Snapshot 使用外部 HTTPS S3 endpoint 时，`NODE_EXTRA_CA_CERTS` 只覆盖 Node
+进程的默认 TLS 信任；它不会自动改变 AWS SDK 的 request handler。部署模块必须把同一份
+只读 CA bundle 显式传给已合入的 `createS3ObjectStorageV1` adapter：
+
+```js
+import { readFileSync } from "node:fs";
+import { createS3ObjectStorageV1 } from "@agent-infra/object-storage";
+
+const storageCa = readFileSync(
+  "/var/run/agent-infra/trusted-ca/ca.crt",
+  "utf8",
+);
+const workspaceSnapshotStorage = createS3ObjectStorageV1({
+  endpoint: "https://<approved-storage-host>",
+  ca: storageCa,
+  region: "us-east-1",
+  bucket: "<approved-bucket>",
+  prefix: "workspace-snapshots/",
+  maxObjectBytes: 100 * 1024 * 1024,
+  timeoutMs: 30_000,
+  credentials: JSON.parse(
+    readFileSync(
+      "/var/run/agent-infra/deployment/workspace-storage-credentials.json",
+      "utf8",
+    ),
+  ),
+});
+```
+
+`ca` 只接受部署提供的 bundle；adapter 仍使用严格 hostname 和 certificate verification，
+不会读取 `NODE_TLS_REJECT_UNAUTHORIZED=0` 或关闭 `rejectUnauthorized`。集群内明文 Service
+地址不能代替外部 HTTPS endpoint，因为它不能验证签名 URL 的实际消费者路径。
+
+Ho 的正常发布与 Coo 的只读回读必须绑定同一份 source/image/config tuple：读取 Worker
+configuration Secret 的 UID/RV 和 full-data hash，确认 Pod 使用包含 CA adapter 的不可变 Worker
+image，确认 `configuration.mjs` 传入 `ca` 且 endpoint 仍为批准的 HTTPS origin；随后在有界
+abort deadline 内执行一次 SDK `HEAD`/版本读取，记录 status、elapsed、AbortError 与证书错误分类，
+不记录 CA 内容、凭证或响应正文。只有这些字段与新 image/readback 一致时，才能把外部存储 TLS
+视为当前部署已采用；源码测试或旧 image 只证明实现能力。
+
 先从受信部署配置设置并导出 `PLATFORM_DATABASE_URL` 与
 `PLATFORM_WORKER_NAMESPACE`，随后执行：
 
