@@ -785,6 +785,10 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				select count(*) filter (where status <> 'claimed' and retired_at is null)::text as count,
 				count(*) filter (where status = 'claimed' and retired_at is null)::text as claimed
 				from platform.session_sandbox_reserves where namespace = ${this.#configuration.namespace}`;
+			const [unknown] = await tx<{ count: string }[]>`
+				select count(*)::text as count from platform.session_sandbox_allocations a
+				where not exists (select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id = a.sandbox_id)
+				and a.status not in ('stopped', 'unavailable')`;
 			return {
 				cpuMillis: Number(charges?.cpu ?? 0),
 				memoryBytes: Number(charges?.memory ?? 0),
@@ -792,6 +796,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				sessionCount: Number(sessions?.count ?? 0),
 				reserveCount: Number(reserves?.count ?? 0),
 				claimedReserveCount: Number(reserves?.claimed ?? 0),
+				usageUnknownAllocationCount: Number(unknown?.count ?? 0),
 			};
 		});
 	}
