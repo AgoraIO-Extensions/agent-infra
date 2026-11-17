@@ -1594,6 +1594,75 @@ describe("multi-service resource policy", () => {
 		expect(fake.calls).toEqual([]);
 	});
 
+	it("rejects a conflicting hostname Certificate before pruning stale multi-service resources", async () => {
+		const fake = fakeClient();
+		const recorded = recordingClient(fake.client);
+		const legacy = createMultiServiceRuntimeOperations({
+			client: recorded.client,
+			policy: basePolicy,
+		});
+		const previous = desired();
+		if (!isMultiService(previous))
+			throw new Error("multi-service fixture invalid");
+		await legacy.apply(previous);
+		const web = [...fake.resources.values()].find(
+			(resource) =>
+				resource.kind === "Deployment" &&
+				resource.metadata?.name?.endsWith("-web"),
+		);
+		if (!web) throw new Error("missing deployed web fixture");
+		const staleName = `${workloadResourceNameV1("agent-a")}-legacy`;
+		fake.resources.set(`Deployment/${staleName}`, {
+			...web,
+			metadata: { ...web.metadata, name: staleName },
+		});
+		const certificateName = `${workloadResourceNameV1("agent-a")}-tls`;
+		fake.resources.set(`Certificate/${certificateName}`, {
+			apiVersion: "cert-manager.io/v1",
+			kind: "Certificate",
+			metadata: {
+				namespace: "agents",
+				name: certificateName,
+				uid: "foreign-certificate",
+				resourceVersion: "1",
+			},
+			spec: { secretName: "foreign" },
+		} as KubernetesObject);
+		const selected = {
+			...basePolicy,
+			hostnameRoutes: {
+				hostSuffix: "agents.example.test",
+				platformOrigin: "https://platform.example.test",
+				clusterIssuerName: "letsencrypt-http01-staging",
+				agentIds: ["agent-a"],
+			},
+		};
+		const candidate = validateAgentWorkloadDesiredV1({
+			...previous,
+			route: {
+				...previous.route,
+				...workloadInteractionRouteV1(selected, "agent-a"),
+			},
+		});
+		if (!isMultiService(candidate))
+			throw new Error("multi-service candidate invalid");
+		const operations = createMultiServiceRuntimeOperations({
+			client: recorded.client,
+			policy: selected,
+		});
+		const before = structuredClone([...fake.resources.entries()]);
+		recorded.calls.length = 0;
+		await expect(
+			operations.apply(candidate, { allowOwnershipTransition: true }),
+		).rejects.toBeInstanceOf(WorkloadPreflightRejectedErrorV1);
+		expect(
+			recorded.calls.filter((call) => /^(create|replace|delete) /.test(call)),
+		).toEqual([]);
+		expect([...fake.resources.entries()]).toEqual(before);
+		// Positive control: these owned resources really are eligible for pruning.
+		await legacy.apply(previous, { allowOwnershipTransition: true });
+		expect(recorded.calls).toContain(`delete Deployment/${staleName}`);
+	});
 	it("rejects an over-cap Agent before any Kubernetes call, including stale-resource pruning", async () => {
 		const fake = fakeClient();
 		// small 档位每个工作负载 100m：两个服务 200m 在上限内，加迁移 Job 共 300m 超限。

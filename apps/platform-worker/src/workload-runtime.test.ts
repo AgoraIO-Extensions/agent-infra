@@ -8208,56 +8208,73 @@ it.each(["single", "multi"] as const)(
 	},
 );
 
-it("treats a conflicting hostname Secret as a permanent rejection without spending the retry budget", async () => {
-	const base = configurationFixture();
-	assert(base.source.kind === "custom");
-	const f = fixture(
-		{
-			registry: workloadRegistryFixture(),
-			policy: {
-				...workloadTestPolicy,
-				hostnameRoutes: {
-					hostSuffix: "apps.example.test",
-					platformOrigin: "https://platform.example.test",
-					clusterIssuerName: "letsencrypt-http01-staging",
-					agentIds: ["agent-a"],
+it.each([
+	{ kind: "single", afterPreflight: false },
+	{ kind: "multi", afterPreflight: false },
+	{ kind: "single", afterPreflight: true },
+	{ kind: "multi", afterPreflight: true },
+] as const)(
+	"rejects a conflicting hostname Secret before any writes or retries: %o",
+	async ({ kind, afterPreflight }) => {
+		const base =
+			kind === "multi"
+				? multiServiceConfigurationFixture()
+				: configurationFixture();
+		assert(base.source.kind === "custom");
+		const f = fixture(
+			{
+				registry: workloadRegistryFixture(),
+				policy: {
+					...workloadTestPolicy,
+					hostnameRoutes: {
+						hostSuffix: "apps.example.test",
+						platformOrigin: "https://platform.example.test",
+						clusterIssuerName: "letsencrypt-http01-staging",
+						agentIds: ["agent-a"],
+					},
 				},
 			},
-		},
-		{
-			configuration: {
-				...base,
-				source: {
-					...base.source,
-					interactionMode: "self-managed",
-					identityResponsibility: "self-managed",
+			{
+				configuration: {
+					...base,
+					source: {
+						...base.source,
+						interactionMode: "self-managed",
+						identityResponsibility: "self-managed",
+					},
 				},
 			},
-		},
-	);
-	const name = "agent-a51d7389ba2cb760d233154216317fce-tls";
-	f.seed({
-		apiVersion: "v1",
-		kind: "Secret",
-		metadata: {
-			namespace: "workload-test",
-			name,
-			uid: "foreign-secret",
-			resourceVersion: "1",
-		},
-	});
-	for (let step = 0; step < 10 && !f.state?.lastFailure; step++)
-		await f.tick(1);
-	expect(f.state?.lastFailure?.reason).toBe("preflight_rejected");
-	expect(f.state).toMatchObject({
-		phase: "cleaning",
-		lastFailure: { reason: "preflight_rejected", attempts: 1 },
-	});
-	expect(await f.client.read("Certificate", name)).toBeNull();
-	expect((await f.client.read("Secret", name))?.metadata?.uid).toBe(
-		"foreign-secret",
-	);
-});
+		);
+		const name = "agent-a51d7389ba2cb760d233154216317fce-tls";
+		if (afterPreflight) {
+			await f.tick(3);
+			expect(f.state?.phase).toBe("applying");
+			expect(f.writes).toHaveLength(0);
+		}
+		f.seed({
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: {
+				namespace: "workload-test",
+				name,
+				uid: "foreign-secret",
+				resourceVersion: "1",
+			},
+		});
+		for (let step = 0; step < 10 && !f.state?.lastFailure; step++)
+			await f.tick(1);
+		expect(f.writes).toHaveLength(0);
+		expect(f.state?.lastFailure?.reason).toBe("preflight_rejected");
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			lastFailure: { reason: "preflight_rejected", attempts: 1 },
+		});
+		expect(await f.client.read("Certificate", name)).toBeNull();
+		expect((await f.client.read("Secret", name))?.metadata?.uid).toBe(
+			"foreign-secret",
+		);
+	},
+);
 
 async function snapshotEgressReconciliationFixture(
 	policy: WorkloadRuntimeOptionsV1["policy"],

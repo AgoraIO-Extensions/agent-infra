@@ -1486,6 +1486,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			recovery = false,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (policy.hostnameRoutes?.agentIds.includes(value.agentId))
+				await hostnameCertificates.preflight(value);
 			if (recovery && (isMultiService(value) || value.replicas !== 1))
 				throw new WorkloadKubernetesError("policy");
 			const connection = connectionFor(value.agentId);

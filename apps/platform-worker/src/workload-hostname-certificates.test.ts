@@ -76,6 +76,7 @@ describe("Agent hostname certificate lifecycle", () => {
 			probe: f.probe,
 		});
 		await expect(adapter.apply(desired())).rejects.toThrow();
+		expect(f.writes).toHaveLength(0);
 		expect(await f.client.read("Certificate", certificateName)).toBeNull();
 		expect(await f.client.read("Secret", certificateName)).toEqual(secret);
 	});

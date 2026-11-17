@@ -88,7 +88,43 @@ export function createWorkloadHostnameCertificatesV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: WorkloadPublicRoutePolicyV1;
 }) {
+	async function preparation(
+		value: Pick<AgentWorkloadDesiredV1, "agentId" | "replicas">,
+	) {
+		const selected = options.policy.hostnameRoutes;
+		if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
+			return;
+		const route = workloadPublicRouteV1(options.policy, value.agentId);
+		const current = await options.client.read<WorkloadHostnameCertificateV1>(
+			"Certificate",
+			route.tlsSecretName,
+		);
+		if (current) {
+			if (
+				!matchesCertificate(current, {
+					namespace: options.client.namespace,
+					name: route.tlsSecretName,
+					host: route.host,
+					issuerName: selected.clusterIssuerName,
+					agentId: value.agentId,
+				})
+			)
+				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
+			return;
+		}
+		if (
+			!options.client.readMetadata ||
+			(await options.client.readMetadata("Secret", route.tlsSecretName))
+		)
+			throw new WorkloadPreflightRejectedErrorV1("desired-workload");
+		return { route, issuerName: selected.clusterIssuerName };
+	}
 	return {
+		async preflight(
+			value: Pick<AgentWorkloadDesiredV1, "agentId" | "replicas">,
+		) {
+			await preparation(value);
+		},
 		async ready(value: AgentWorkloadDesiredV1): Promise<boolean> {
 			const selected = options.policy.hostnameRoutes;
 			if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
@@ -150,32 +186,9 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			);
 		},
 		async prepare(value: AgentWorkloadDesiredV1) {
-			const selected = options.policy.hostnameRoutes;
-			if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
-				return;
-			const route = workloadPublicRouteV1(options.policy, value.agentId);
-			const current = await options.client.read<WorkloadHostnameCertificateV1>(
-				"Certificate",
-				route.tlsSecretName,
-			);
-			if (current) {
-				if (
-					!matchesCertificate(current, {
-						namespace: options.client.namespace,
-						name: route.tlsSecretName,
-						host: route.host,
-						issuerName: selected.clusterIssuerName,
-						agentId: value.agentId,
-					})
-				)
-					throw new WorkloadPreflightRejectedErrorV1("desired-workload");
-				return;
-			}
-			if (
-				!options.client.readMetadata ||
-				(await options.client.readMetadata("Secret", route.tlsSecretName))
-			)
-				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
+			const plan = await preparation(value);
+			if (!plan) return;
+			const { route, issuerName } = plan;
 			await options.client.create({
 				apiVersion: "cert-manager.io/v1",
 				kind: "Certificate",
@@ -195,7 +208,7 @@ export function createWorkloadHostnameCertificatesV1(options: {
 					issuerRef: {
 						group: "cert-manager.io",
 						kind: "ClusterIssuer",
-						name: selected.clusterIssuerName,
+						name: issuerName,
 					},
 				},
 			});

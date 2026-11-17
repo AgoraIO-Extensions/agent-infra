@@ -2,7 +2,11 @@ import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
-import type { V1Ingress, V1StatefulSet } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1Ingress,
+	V1StatefulSet,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
 	workloadDesiredFixture,
@@ -239,6 +243,107 @@ describe("selected public hostname routes", () => {
 				"agent-a",
 			),
 		).toThrow();
+	});
+	it("rejects Agent A borrowing selected Agent B's valid hostname before any writes", async () => {
+		const f = fixture();
+		const selectedPolicy = {
+			...workloadTestPolicy,
+			hostnameRoutes: {
+				hostSuffix: "apps.example.test",
+				platformOrigin: "https://platform.example.test",
+				clusterIssuerName: "letsencrypt-http01-staging",
+				agentIds: ["agent-a", "agent-b"],
+			},
+		};
+		const b = workloadDesiredFixture(1, "agent-b", "self-managed");
+		const bPublicRoute = workloadPublicRouteV1(selectedPolicy, b.agentId);
+		const bRoute = workloadInteractionRouteV1(selectedPolicy, b.agentId);
+		const legitimateB = validateAgentWorkloadDesiredV1({
+			...b,
+			route: { ...b.route, ...bRoute },
+		});
+		expect(() =>
+			assertWorkloadPublicRouteV1(selectedPolicy, legitimateB),
+		).not.toThrow();
+		const a = workloadDesiredFixture(1, "agent-a", "self-managed");
+		const forgedA = validateAgentWorkloadDesiredV1({
+			...a,
+			route: { ...a.route, ...bRoute },
+		});
+		expect(bRoute.interactionOrigin?.origin).not.toBe(
+			workloadInteractionRouteV1(selectedPolicy, a.agentId).interactionOrigin
+				?.origin,
+		);
+		const certificateB = {
+			apiVersion: "cert-manager.io/v1",
+			kind: "Certificate",
+			metadata: {
+				namespace: "workload-test",
+				name: bPublicRoute.tlsSecretName,
+				uid: "certificate-b",
+				resourceVersion: "7",
+			},
+			spec: {
+				dnsNames: [bPublicRoute.host],
+				secretName: bPublicRoute.tlsSecretName,
+				issuerRef: {
+					kind: "ClusterIssuer",
+					name: selectedPolicy.hostnameRoutes.clusterIssuerName,
+				},
+			},
+		} as KubernetesObject;
+		const ingressB: V1Ingress = {
+			apiVersion: "networking.k8s.io/v1",
+			kind: "Ingress",
+			metadata: {
+				namespace: "workload-test",
+				name: b.service.name,
+				uid: "ingress-b",
+				resourceVersion: "8",
+			},
+			spec: {
+				tls: [
+					{
+						hosts: [bPublicRoute.host],
+						secretName: bPublicRoute.tlsSecretName,
+					},
+				],
+				rules: [
+					{
+						host: bPublicRoute.host,
+						http: {
+							paths: [
+								{
+									path: "/",
+									pathType: "Prefix",
+									backend: {
+										service: {
+											name: b.service.name,
+											port: { number: b.service.port },
+										},
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		};
+		f.seed(certificateB);
+		f.seed(ingressB);
+		const before = structuredClone([...f.resources.entries()]);
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: selectedPolicy,
+			probe: f.probe,
+		});
+		await expect(adapter.apply(forgedA)).rejects.toThrow();
+		expect(f.writes).toHaveLength(0);
+		expect(
+			await f.client.read("Certificate", bPublicRoute.tlsSecretName),
+		).toEqual(certificateB);
+		expect(await f.client.read("Ingress", b.service.name)).toEqual(ingressB);
+		expect([...f.resources.entries()]).toEqual(before);
 	});
 	it("uses the deployment suffix, root path and a stable per-Agent TLS Secret", () => {
 		const selectedPolicy = {

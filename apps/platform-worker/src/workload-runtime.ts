@@ -82,6 +82,7 @@ import {
 	type WorkloadSkillMaterializationResultV1,
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
+import { createWorkloadHostnameCertificatesV1 } from "./workload-hostname-certificates.js";
 import { requireWorkspaceSnapshotEgressV1 } from "./workload-network.js";
 import {
 	isTransientProbeStatusV1,
@@ -754,6 +755,10 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			onWorkspaceSnapshot: options.onWorkspaceSnapshot,
 		});
+	const hostnameCertificates = createWorkloadHostnameCertificatesV1({
+		client: options.client,
+		policy: options.policy,
+	});
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const snapshotProjections = new WeakMap<
 		object,
@@ -1818,6 +1823,11 @@ export function createWorkloadRuntimeV1(
 			return capabilities;
 		},
 		async preflight(input, state) {
+			if (options.policy.hostnameRoutes?.agentIds.includes(state.agentId))
+				await hostnameCertificates.preflight({
+					agentId: state.agentId,
+					replicas: input.management.desiredState === "running" ? 1 : 0,
+				});
 			snapshotProjections.delete(state);
 			const configuration = state.candidate.configuration;
 			if (
@@ -2280,6 +2290,11 @@ export function createWorkloadRuntimeV1(
 					state.fence,
 				);
 			assertCandidateMaterializationAllowed(state);
+			if (options.policy.hostnameRoutes?.agentIds.includes(state.agentId))
+				await hostnameCertificates.preflight({
+					agentId: state.agentId,
+					replicas: 1,
+				});
 			await restoreSnapshotProjection(state);
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
