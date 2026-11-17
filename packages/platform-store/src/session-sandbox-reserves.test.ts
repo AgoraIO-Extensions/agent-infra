@@ -1017,7 +1017,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 				result: { conversationId: reserve.sessionId },
 			});
 	});
-	it("transfers claimed charges without freeing any CPU/memory/PVC and caps cold paths", async () => {
+	it("transfers claimed charges without freeing any CPU/memory/PVC while reserve preparation stays capped", async () => {
 		const bounded = { ...config, totalBudget: resources };
 		const reserve = await ready(reserves(bounded));
 		expect(await create(execution(bounded))).toMatchObject({
@@ -1025,11 +1025,13 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		});
 		await expect(
 			create(execution(bounded), "user-a", "web", "second"),
-		).rejects.toThrow();
-		await expect(reserves(bounded).prepare("agent")).rejects.toThrow();
+		).resolves.toMatchObject({ outcome: "accepted" });
+		await expect(reserves(bounded).prepare("agent")).resolves.toBeTypeOf(
+			"string",
+		);
 		expect(
 			await sql`select released,compute_released from platform.session_sandbox_resource_charges`,
-		).toEqual([{ released: false, compute_released: false }]);
+		).toHaveLength(2);
 	});
 	it("uses the sole approved cost for a legacy allocation without resource policy", async () => {
 		const legacy = execution(null);
@@ -1062,7 +1064,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			);
 			expect(
 				await sql`select 1 from platform.session_sandbox_resource_charges`,
-			).toHaveLength(count);
+			).toHaveLength(0);
 			expect(
 				await sql`select 1 from platform.idempotency_records`,
 			).toHaveLength(count);
@@ -1124,6 +1126,13 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 						directory,
 					),
 				);
+			if (
+				reason === "budget_exhausted" ||
+				reason === "budget_configuration_unavailable"
+			) {
+				expect(await claim()).toMatchObject({ purpose: "prepare" });
+				return;
+			}
 			expect(await claim()).toBeNull();
 			expect(reasons).toEqual([reason]);
 			expect(
@@ -1210,7 +1219,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					original.lease.profile.policy,
 				),
 			),
-		).rejects.toThrow();
+		).resolves.toBeUndefined();
 		await sql`update platform.session_sandbox_allocations set status = 'stopped', desired_state = 'stopped' where sandbox_id = ${replacementAllocation.sandbox_id}`;
 		await sql`update platform.outbox_items set payload = payload || ${sql.json({ lifecycle: { stopReceipt: { sandboxId: replacementAllocation.sandbox_id, sessionId: replacementId, targetGeneration: 1, targetResourceFence: Number(replacementAllocation.resource_fence) } } })} where scope_type = 'conversation' and scope_id = ${replacementId} and operation = 'conversation.sandbox.reconcile.v1'`;
 		await sql.begin((tx) =>
@@ -1234,7 +1243,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toHaveLength(2);
 		expect(
 			await sql`select compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${replacementAllocation.sandbox_id}`,
-		).toEqual([{ compute_released: true }]);
+		).toEqual([]);
 	});
 	it("rejects absence and stale generation/fence as compute-release authority", async () => {
 		const original = await ready();
@@ -1351,7 +1360,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		);
 		expect(
 			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${allocation.sandbox_id}`,
-		).toEqual([{ released: false }]);
+		).toEqual([]);
 	});
 	it.each([false, true])(
 		"prepares new cold Sessions after disabling reserves (zeroed input: %s)",
@@ -1388,8 +1397,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 				throw new Error("Expected original Sandbox intent");
 			const charges =
 				await sql`select * from platform.session_sandbox_resource_charges`;
-			expect(charges).toHaveLength(1);
-			expect(charges[0]?.sandbox_id).not.toBe(allocation.sandbox_id);
+			expect(charges).toHaveLength(0);
 			const claim = await sql.begin((tx) =>
 				claimSandboxReconciliation(
 					tx,
@@ -1452,7 +1460,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			await sql`select * from platform.session_sandbox_resource_charges`,
 		).toEqual(charges);
 	});
-	it("still rejects a missing charge while reserves are enabled", async () => {
+	it("allows preparation when an ordinary allocation has no charge", async () => {
 		const reserve = await ready();
 		await expect(
 			sql.begin((tx) =>
@@ -1462,7 +1470,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					reserve.lease.profile.policy,
 				),
 			),
-		).rejects.toThrow();
+		).resolves.toBeUndefined();
 	});
 	it("default-off keeps ready reserves unclaimed", async () => {
 		const reserve = await ready();
@@ -1677,7 +1685,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(await store.list()).toHaveLength(1);
 		expect(
 			await sql`select count(*)::int as count from platform.session_sandbox_resource_charges where not released`,
-		).toEqual([{ count: 2 }]);
+		).toEqual([{ count: 1 }]);
 	});
 	it("includes high-hit demand and the measured upper bound, then avoids concurrent overfill", async () => {
 		const store = reserves();
