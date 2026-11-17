@@ -3291,6 +3291,8 @@ Zod 和 Core 语义校验执行，不能以生成产物校验成功替代上述�
 
 资源观测的产品范围见 [PRD §14.2](../prd/PRD-agent-platform-M1.md#142-运维观测)，领域词义见 [Agent 专属资源与平台共享资源](../../CONTEXT.md#agent-专属资源)。首版接入部署批准的正式 ACK 环境及共享依赖；查询保留 cluster 和 namespace 维度，资源范围由部署配置限定。
 
+控制面采集仍由 Worker 承接，API 只读取受控投影，不持有 Kubernetes 凭证。默认复用获准指标后端与 namespace 内读取；需要直接读取集群元数据时，部署可以为 Worker 显式启用仅含 `get/list` 的独立 ClusterRole，资源白名单限于核心 API 的 `nodes`、`metrics.k8s.io` 的 `nodes` 和 `eci.alibabacloud.com` 的 `imagecaches`。该权限默认关闭，不包含跨 namespace 的 Pod、Secret、ConfigMap、日志或任何写权限，不授予 Web、API、Connection 或 Agent。集群级 `list` 会向该受信 Worker 暴露相应元数据，不能以应用层 owner 筛选声称 Kubernetes RBAC 已按 owner 隔离；对外投影只保留批准集群、namespace 和 cache-owner 的必要字段。namespace 内的 Pod/PVC/事件/ResourceQuota 与容器指标读取由独立的 namespaced 只读规则声明。部署是否启用额外权限与其现场验证单独记录，设计取舍见 [ADR-0043](../adr/0043-bounded-operations-cluster-reads.md)。
+
 资源数据分别表达：
 
 - **实际用量**：从获准指标源取得容器和节点的 CPU、内存、存储样本，保留来源、采样时间与窗口。PVC 声明容量不能充当实际已用字节，缺失指标不能填零。
