@@ -301,6 +301,8 @@ export interface PlatformQueueResourceSnapshot {
 	readonly taskWaiting: number;
 	/** All pending or retry-scheduled outbox rows, including non-task control work. */
 	readonly outboxPending: number;
+	/** Earliest submitted Execution in the same waiting set, when available. */
+	readonly oldestWaitingAt?: string | null;
 	/** Bounded duration of this read-only snapshot, in milliseconds. */
 	readonly queryDurationMs?: number;
 }
@@ -1221,10 +1223,14 @@ export async function readPlatformQueueResourceSnapshot(
 			await runQuery(transaction`set local statement_timeout = '2000ms'`);
 			if (operationSignal.aborted) throw unavailable();
 			const rows = await runQuery(transaction<
-				{ task_waiting: string; outbox_pending: string }[]
+				{
+					task_waiting: string;
+					outbox_pending: string;
+					oldest_waiting_at?: string | null;
+				}[]
 			>`
-		select
-			(select count(distinct e.execution_id)::text
+		with waiting as (
+			select distinct e.execution_id, e.created_at
 				from platform.conversation_executions e
 				join platform.conversations c
 					on c.id = e.conversation_id
@@ -1283,7 +1289,9 @@ export async function readPlatformQueueResourceSnapshot(
 							and t.conversation_id = e.conversation_id
 							and t.session_generation = e.session_generation
 							and t.status = 'pending'
-					)) as task_waiting,
+					))
+		select (select count(*)::text from waiting) as task_waiting,
+			(select min(created_at)::text from waiting) as oldest_waiting_at,
 			(select count(*)::text from platform.outbox_items
 				where status in ('pending', 'retry_scheduled')) as outbox_pending
 	`);
@@ -1292,6 +1300,9 @@ export async function readPlatformQueueResourceSnapshot(
 			return {
 				taskWaiting: countResource(rows[0]?.task_waiting),
 				outboxPending: countResource(rows[0]?.outbox_pending),
+				oldestWaitingAt: rows[0]?.oldest_waiting_at
+					? new Date(rows[0].oldest_waiting_at).toISOString()
+					: null,
 				queryDurationMs: boundedResourceSnapshotDuration(startedAt),
 			};
 		});

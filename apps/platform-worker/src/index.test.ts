@@ -562,6 +562,25 @@ describe("platform worker lifecycle", () => {
 });
 
 describe("Platform Worker production V2 lifecycle", () => {
+	it("keeps conversation processing available when operations collection cannot start", async () => {
+		let running = true;
+		const worker = await startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => ({ stop: async () => undefined }),
+			startWorkload: async () => ({ stop: async () => undefined }),
+			startConversation: async () => ({
+				status: () => (running ? "running" : "stopped"),
+				stop: async () => {
+					running = false;
+				},
+			}),
+			startOperations: async () => {
+				throw new Error("synthetic operations backend unavailable");
+			},
+		});
+		expect(worker.conversationStatus()).toBe("running");
+		await worker.stop();
+		expect(worker.conversationStatus()).toBe("stopped");
+	});
 	it("starts and stops workload and trusted conversation workers with the primary process", async () => {
 		const lines: string[] = [];
 		const stopOrder: string[] = [];

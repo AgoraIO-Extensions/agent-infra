@@ -176,7 +176,7 @@ export function isMultiService(
 	);
 }
 
-function serviceResourceName(agentId: string, name: string): string {
+export function serviceResourceName(agentId: string, name: string): string {
 	const prefix = `${workloadResourceNameV1(agentId)}-`;
 	const suffix = name.slice(0, Math.max(1, 63 - prefix.length));
 	return `${prefix}${suffix}`.replace(/[^a-z0-9-]/g, "-").replace(/-+$/g, "");

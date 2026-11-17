@@ -162,6 +162,7 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly operations?: import("@agent-infra/observability/operations").OperationsConfigurationV2;
 	/** Explicit deployment policy; absent keeps dynamic Consumer registration disabled. */
 	readonly connectionConsumerRegistration?: import("@agent-infra/platform-core").ConnectionConsumerRegistrationPolicyV1;
 	/**
@@ -1390,7 +1391,23 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	readFileLimits = files?.readLimits;
+	const operations = input.operations
+		? new PostgresOperationsResourceStoreV2({
+				databaseUrl: input.databaseUrl,
+				scope: input.operations.scope,
+				workloadNamespaceRef: input.operations.workloadNamespaceRef,
+				alertThresholds: input.operations.alerts,
+			})
+		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(operations && input.operations
+			? {
+					operations: createOperationsQueryV2({
+						store: operations,
+						configuration: input.operations,
+					}),
+				}
+			: {}),
 		...(input.workspaceSnapshots || workspaceSnapshotService
 			? {
 					workspaceSnapshots:
@@ -1804,6 +1821,7 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	if (snapshotGc) adapters.push(snapshotGc);
+	if (operations) adapters.push(operations);
 	return {
 		dependencies,
 		readResourceSnapshot: (signal) =>
@@ -1827,4 +1845,8 @@ export function assemblePlatformApi(
 
 import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
 import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
-import { PostgresConnectionInstallationAuthorizationTransactionV1 } from "@agent-infra/platform-store";
+import {
+	PostgresConnectionInstallationAuthorizationTransactionV1,
+	PostgresOperationsResourceStoreV2,
+} from "@agent-infra/platform-store";
+import { createOperationsQueryV2 } from "./operations-query.js";

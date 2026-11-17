@@ -1,50 +1,173 @@
 import {
-	ObservabilityStatusProjectionV1Schema,
-	PilotProtocolErrorV1Schema,
+	type OperationsResourcesV2,
+	OperationsResourcesV2Schema,
 } from "@agent-infra/contracts/pilot";
-import { expect, type Page, type TestInfo, test } from "@playwright/test";
-import { captureDesignContract, designViewports } from "./design-contract";
+import { expect, type Page, test } from "@playwright/test";
 import { recordApiRequests } from "./generated-client-paths";
-import { expectFocusHeld } from "./page-health";
-import {
-	computed,
-	expectCleanPage,
-	expectPageHeadTop,
-	resolved,
-	trackPageErrors,
-} from "./primitive-styles";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
-// 运维观测（F-12）：结构与状态以导出设计 #ops 与 docs/development/web-ui.md「运维观测页」为准；
-// 样式断言取设计 #my-agents 已创建卡（.grid-2 > .card：.card-head + .chip + dl.facts）与同类管理页页头的计算值。
-const observabilityPath = "/api/v1/ops/observability";
-const activeProjection = {
-	schemaVersion: 1,
-	service: "platform-api",
-	enabled: true,
-	state: "active",
-	captureFailures: 0,
-	exportFailures: 0,
-	droppedLogs: 0,
-	invalidRecords: 0,
+const resourcePath = "/api/v2/ops/resources";
+const empty = {
+	cpuCores: null,
+	memoryBytes: null,
+	storageBytes: null,
+	ephemeralStorageBytes: null,
 };
-const domainNames = ["平台健康", "Agent 与任务", "依赖", "告警"];
-
-type ObservabilityReply =
-	| { status: 200; body: Record<string, unknown> }
-	| { status: 403 | 404 | 503 };
-
-async function fixture(page: Page, { admin = true } = {}) {
-	let reply: ObservabilityReply = { status: 200, body: activeProjection };
-	let hold: Promise<void> | undefined;
-	let release: (() => void) | undefined;
+function sample(): OperationsResourcesV2 {
+	const now = new Date().toISOString();
+	return OperationsResourcesV2Schema.parse({
+		schemaVersion: 2,
+		scope: { clusterId: "cluster-fixture", namespace: "platform-fixture" },
+		generatedAt: now,
+		refreshSeconds: 30,
+		sources: [
+			{
+				kind: "platform",
+				state: "available",
+				observedAt: now,
+				windowSeconds: null,
+				reason: null,
+			},
+			{
+				kind: "pod-metrics",
+				state: "available",
+				observedAt: now,
+				windowSeconds: 30,
+				reason: null,
+			},
+			{
+				kind: "image-cache",
+				state: "unavailable",
+				observedAt: null,
+				windowSeconds: null,
+				reason: "QUERY_FAILED",
+			},
+			{
+				kind: "prometheus",
+				state: "available",
+				observedAt: now,
+				windowSeconds: 30,
+				reason: null,
+			},
+		],
+		nodes: [
+			{
+				uid: "node-uid",
+				name: "worker-node",
+				virtual: false,
+				ready: true,
+				pressures: [],
+				observedAt: now,
+				capacity: { ...empty, cpuCores: 4, memoryBytes: 8589934592 },
+				allocatable: { ...empty, cpuCores: 4, memoryBytes: 8589934592 },
+				usage: { ...empty, cpuCores: 1, memoryBytes: 8246337208 },
+				requests: empty,
+			},
+		],
+		resources: [
+			{
+				kind: "Pod",
+				uid: "pod-uid",
+				name: "sandbox-fixture",
+				namespace: "platform-fixture",
+				resourceVersion: "1",
+				ownerUid: null,
+				ownerGeneration: null,
+				agentId: "agent-fixture",
+				agentName: "分析助手",
+				sessionId: "session-fixture",
+				sandboxId: "sandbox-fixture",
+				generation: 1,
+				revision: 1,
+				resourceFence: 1,
+				ownership: "agent",
+				role: "sandbox",
+				nodeName: "worker-node",
+				phase: "Running",
+				ready: true,
+				restarts: 0,
+				reason: null,
+				observedAt: now,
+				usage: { ...empty, cpuCores: 0, memoryBytes: 1048576 },
+				requests: { ...empty, cpuCores: 0.5, memoryBytes: 268435456 },
+				limits: { ...empty, cpuCores: 1, memoryBytes: 536870912 },
+				containers: [],
+				images: [],
+				retainedStorage: false,
+			},
+		],
+		agents: [
+			{
+				agentId: "agent-fixture",
+				name: "分析助手",
+				sessions: 1,
+				pods: 1,
+				volumes: 0,
+				usage: { ...empty, cpuCores: 0, memoryBytes: 1048576 },
+				requests: empty,
+				limits: empty,
+			},
+		],
+		quotas: [],
+		budget: null,
+		imageCaches: [],
+		cacheEvidence: [
+			{
+				podUid: "pod-uid",
+				podName: "sandbox-fixture",
+				images: [],
+				cacheId: null,
+				coverage: "unknown",
+				hit: "unknown",
+				observedAt: now,
+			},
+		],
+		events: [],
+		alerts: [
+			{
+				id: "MEMORY_PRESSURE:node-uid",
+				objectUid: "node-uid",
+				objectName: "worker-node",
+				code: "MEMORY_PRESSURE",
+				severity: "critical",
+				state: "firing",
+				firstAt: now,
+				lastAt: now,
+				resolvedAt: null,
+				value: 0.96,
+				threshold: 0.9,
+			},
+		],
+		queue: { waiting: 0, outboxPending: 0 },
+		retention: {
+			target: {
+				detailDays: 7,
+				aggregateDays: 30,
+				aggregateStepSeconds: 300,
+				logDays: 7,
+				traceDays: 7,
+			},
+			effective: null,
+		},
+		links: [
+			{
+				kind: "logs",
+				url: "https://observability.example.test/logs?namespace=platform-fixture",
+			},
+		],
+		truncated: false,
+	});
+}
+async function fixture(page: Page, admin = true) {
+	let status = 200;
+	let historyStatus = 200;
+	let body: unknown = sample();
 	const requests: string[] = [];
-	// 页面发出的每个 /api/ 请求都必须能匹配生成 Client 的方法与路径模板（#3058）。
 	const generated = recordApiRequests(page);
 	await page.route("**/api/**", async (route) => {
-		const request = route.request();
-		const path = new URL(request.url()).pathname;
-		requests.push(`${request.method()} ${path}`);
-		if (path === "/api/v1/session")
+		const url = new URL(route.request().url());
+		requests.push(`${route.request().method()} ${url.pathname}`);
+		if (url.pathname === "/api/v1/session")
 			return route.fulfill({
 				json: {
 					schemaVersion: 1,
@@ -55,628 +178,287 @@ async function fixture(page: Page, { admin = true } = {}) {
 					},
 				},
 			});
-		if (path === observabilityPath) {
-			if (hold) await hold;
-			// 夹具按契约构造（#3058）：200 为 strict 投影，403 / 503 为协议错误；
-			// 部署未提供查询时的 404 没有协议正文。
-			if (reply.status === 200)
-				return route.fulfill({
-					json: ObservabilityStatusProjectionV1Schema.parse(reply.body),
-				});
-			if (reply.status === 404)
-				return route.fulfill({
-					status: 404,
-					contentType: "text/plain",
-					body: "404 Not Found",
-				});
+		if (url.pathname === resourcePath)
 			return route.fulfill({
-				status: reply.status,
-				json: PilotProtocolErrorV1Schema.parse({
+				status,
+				json:
+					status === 200
+						? body
+						: {
+								schemaVersion: 1,
+								code:
+									status === 403
+										? "RESOURCE_UNAVAILABLE"
+										: "DEPENDENCY_UNAVAILABLE",
+								message: "Controlled fixture",
+								retryable: status === 503,
+								traceId: "ops-fixture",
+							},
+			});
+		if (url.pathname === "/api/v2/ops/history" && historyStatus !== 200)
+			return route.fulfill({
+				status: historyStatus,
+				json: {
 					schemaVersion: 1,
 					code:
-						reply.status === 403
+						historyStatus === 403
 							? "RESOURCE_UNAVAILABLE"
 							: "DEPENDENCY_UNAVAILABLE",
-					message: "Controlled observability fixture",
-					retryable: reply.status === 503,
-					traceId: "trace-ops-fixture",
-				}),
+					message: "Controlled history failure",
+					retryable: historyStatus === 503,
+					traceId: "ops-history-fixture",
+				},
 			});
-		}
+		if (url.pathname === "/api/v2/ops/history")
+			return route.fulfill({
+				json: {
+					schemaVersion: 2,
+					scope: {
+						clusterId: "cluster-fixture",
+						namespace: "platform-fixture",
+					},
+					metric: url.searchParams.get("metric"),
+					state: "available",
+					start: url.searchParams.get("start"),
+					end: url.searchParams.get("end"),
+					stepSeconds: 30,
+					statistic: url.searchParams.get("statistic"),
+					series: [
+						{
+							name: "sandbox-fixture",
+							resourceUid: "pod-uid",
+							points: [
+								{ at: url.searchParams.get("start"), value: 0 },
+								{ at: url.searchParams.get("end"), value: 0.5 },
+							],
+						},
+					],
+					truncated: false,
+				},
+			});
 		return route.fulfill({
 			status: 404,
 			json: {
 				schemaVersion: 1,
 				code: "RESOURCE_UNAVAILABLE",
-				message: "Not part of ops fixture",
+				message: "Outside fixture",
 				retryable: false,
-				traceId: "trace-ops-fixture",
+				traceId: "ops-fixture",
 			},
 		});
 	});
 	return {
 		requests,
 		expectGenerated: generated.expectGenerated,
-		observabilityReads: () =>
-			requests.filter((entry) => entry === `GET ${observabilityPath}`).length,
-		writes: () => requests.filter((entry) => !entry.startsWith("GET ")),
-		reply(next: ObservabilityReply) {
-			reply = next;
+		historyReply(next: number) {
+			historyStatus = next;
 		},
-		pause() {
-			hold = new Promise<void>((resolve) => {
-				release = resolve;
-			});
-		},
-		resume() {
-			release?.();
-			hold = undefined;
+		reply(nextStatus: number, nextBody?: unknown) {
+			status = nextStatus;
+			if (nextBody !== undefined) body = nextBody;
 		},
 	};
 }
-
-async function capture(page: Page, info: TestInfo, name: string) {
-	await info.attach(`${name}-${info.project.name}`, {
-		body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-		contentType: "image/png",
-	});
-}
-
-function domain(page: Page, name: string) {
-	return page
-		.locator('main [data-slot="card"]')
-		.filter({ has: page.getByRole("heading", { level: 2, name }) });
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-	const overflow = await page.evaluate(() => {
-		const main = document.querySelector("main");
-		if (!main) throw new Error("Missing main");
-		const right = main.getBoundingClientRect().right;
-		return {
-			page:
+async function noOverflow(page: Page) {
+	expect(
+		await page.evaluate(
+			() =>
 				Math.max(
 					document.body.scrollWidth,
 					document.documentElement.scrollWidth,
 				) - innerWidth,
-			cards: [...main.querySelectorAll('[data-slot="card"]')].map(
-				(card) => card.getBoundingClientRect().right - right,
-			),
-		};
-	});
-	expect(overflow.page).toBeLessThanOrEqual(0);
-	for (const delta of overflow.cards) expect(delta).toBeLessThanOrEqual(0.5);
-}
-
-test("not-connected domains follow the design card, chip and facts at 1440×900 and 390×844", async ({
-	page,
-}, info) => {
-	const mobile = info.project.name === "mobile";
-	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
-	const pageErrors = trackPageErrors(page);
-	const api = await fixture(page);
-	await page.goto("/ops");
-	const main = page.locator("main");
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
-
-	// 页头：eyebrow / h1 / 副标题与同类管理页一致，h1 落在设计高度。
-	const header = main.locator("header.page-heading");
-	await expect(header.locator(".page-eyebrow")).toHaveText(
-		"系统管理 / 运维观测",
-	);
-	await expect(
-		header.getByRole("heading", {
-			level: 1,
-			name: "先确认平台状态，再定位故障。",
-		}),
-	).toBeVisible();
-	await expect(header.locator("p").nth(1)).toHaveText(
-		"只显示正式观测查询返回的状态；没有数据源的区块标为「未接入」，页面不生成指标或告警。",
-	);
-	// #3037 X-17：副标题与设计 .page-head-copy p 一样最宽 64ch，桌面折成两行。
-	const subtitle = await header
-		.locator("p")
-		.nth(1)
-		.evaluate((element) => {
-			const probe = document.createElement("span");
-			probe.style.cssText = "position:absolute;visibility:hidden;width:64ch";
-			element.append(probe);
-			const limit = probe.getBoundingClientRect().width;
-			probe.remove();
-			const box = element.getBoundingClientRect();
-			const lineHeight = Number.parseFloat(
-				getComputedStyle(element).lineHeight,
-			);
-			return {
-				maxWidth: Number.parseFloat(getComputedStyle(element).maxWidth),
-				limit,
-				width: box.width,
-				lines: Math.round(box.height / lineHeight),
-			};
-		});
-	expect(Math.abs(subtitle.maxWidth - subtitle.limit)).toBeLessThanOrEqual(0.5);
-	expect(subtitle.width).toBeLessThanOrEqual(subtitle.limit + 0.5);
-	if (!mobile) expect(subtitle.lines).toBe(2);
-	await expectCleanPage(page, pageErrors);
-	await expectPageHeadTop(page, mobile);
-	const refresh = header.getByRole("button", { name: "刷新运维状态" });
-	await expect(refresh).toBeEnabled();
-	expect(await refresh.boundingBox()).toMatchObject({ width: 44, height: 44 });
-
-	// 四个区块按顺序出现；没有数据源的三块写「未接入」，告警块的计数来自正式查询。
-	await expect(main.locator('[data-slot="card"] h2')).toHaveText(domainNames);
-	for (const name of domainNames) {
-		const card = domain(page, name);
-		await expect(card).toHaveAttribute("aria-labelledby", /.+/);
-		await expect(card.locator('[data-slot="badge"]')).toHaveText("未接入");
-		await expect(card.locator('[data-slot="badge"]')).toHaveAttribute(
-			"data-tone",
-			"gray",
-		);
-	}
-	for (const name of domainNames.slice(0, 3))
-		await expect(domain(page, name).locator("dl")).toContainText(
-			"数据来源未接入",
-		);
-	const alerts = domain(page, "告警");
-	await expect(alerts.locator("dt")).toHaveText([
-		"覆盖",
-		"告警出口",
-		"观测采集",
-		"采集失败",
-		"导出失败",
-		"丢弃日志",
-		"无效记录",
-		"最近导出失败",
-	]);
-	await expect(alerts.locator("dd")).toHaveText([
-		"服务不可用、持续积压与异常错误",
-		"未接入",
-		"Platform API · 正常",
-		"0 次",
-		"0 次",
-		"0 条",
-		"0 条",
-		"无",
-	]);
-
-	// 栅格：设计 .grid-2 两列、gap 16；≤767px 单列，四块依次纵向排列。
-	const grid = main.locator(".operations-grid");
-	const columns = await grid.evaluate(
-		(element) =>
-			getComputedStyle(element).gridTemplateColumns.split(" ").length,
-	);
-	expect(columns).toBe(mobile ? 1 : 2);
-	expect(await computed(grid, ["columnGap", "rowGap"])).toEqual({
-		columnGap: "16px",
-		rowGap: "16px",
-	});
-	const boxes = await main
-		.locator('[data-slot="card"]')
-		.evaluateAll((cards) =>
-			cards.map((card) => card.getBoundingClientRect().toJSON()),
-		);
-	if (mobile)
-		for (const [index, box] of boxes.entries()) {
-			if (index === 0) continue;
-			const previous = boxes[index - 1];
-			expect(box.x).toBe(previous.x);
-			expect(box.y).toBeGreaterThanOrEqual(previous.bottom + 15.5);
-		}
-	else {
-		expect(Math.abs(boxes[0].y - boxes[1].y)).toBeLessThanOrEqual(0.5);
-		expect(Math.abs(boxes[1].x - boxes[0].right - 16)).toBeLessThanOrEqual(0.5);
-		expect(boxes[2].y).toBeGreaterThan(boxes[0].y);
-	}
-
-	// 卡片：设计 .card padding 18、圆角 14、1px 边框、surface 底。
-	const card = domain(page, "平台健康");
-	expect(
-		await computed(card, [
-			"paddingTop",
-			"paddingLeft",
-			"borderTopLeftRadius",
-			"borderTopWidth",
-			"backgroundColor",
-			"borderTopColor",
-		]),
-	).toEqual({
-		paddingTop: "18px",
-		paddingLeft: "18px",
-		borderTopLeftRadius: "14px",
-		borderTopWidth: "1px",
-		backgroundColor: await resolved(page, "backgroundColor", "var(--surface)"),
-		borderTopColor: await resolved(page, "color", "var(--border)"),
-	});
-	// 卡头：设计 .card-head 两端对齐、gap 14；标题为 .card-title h3 的 17px / 650 正文字体。
-	expect(
-		await computed(card.locator(".operations-domain-head"), [
-			"display",
-			"justifyContent",
-			"alignItems",
-			"columnGap",
-		]),
-	).toEqual({
-		display: "flex",
-		justifyContent: "space-between",
-		alignItems: "flex-start",
-		columnGap: "14px",
-	});
-	const title = card.locator("h2");
-	const titleStyle = await computed(title, [
-		"fontSize",
-		"fontWeight",
-		"lineHeight",
-		"fontFamily",
-		"letterSpacing",
-	]);
-	const bodyFont = await page.evaluate(() =>
-		getComputedStyle(document.body).fontFamily.trim(),
-	);
-	expect(titleStyle).toEqual({
-		fontSize: "17px",
-		fontWeight: "650",
-		lineHeight: "23.8px",
-		fontFamily: bodyFont,
-		letterSpacing: "normal",
-	});
-	// chip：设计 .chip 11px、最小高 24、左右 9px、全圆角，gray 为 muted 文字。
-	const chip = card.locator('[data-slot="badge"]');
-	expect(
-		await computed(chip, [
-			"fontSize",
-			"minHeight",
-			"paddingLeft",
-			"borderTopLeftRadius",
-			"color",
-		]),
-	).toEqual({
-		fontSize: "11px",
-		minHeight: "24px",
-		paddingLeft: "9px",
-		borderTopLeftRadius: "999px",
-		color: await resolved(page, "color", "var(--muted-foreground)"),
-	});
-	const chipBox = await chip.boundingBox();
-	const cardBox = await card.boundingBox();
-	// chip 贴卡片右内边距（1px 边框 + 18px），不被标题挤到下一行。
-	expect(
-		Math.abs(
-			(cardBox?.x ?? 0) +
-				(cardBox?.width ?? 0) -
-				19 -
-				((chipBox?.x ?? 0) + (chipBox?.width ?? 0)),
 		),
-	).toBeLessThanOrEqual(0.5);
-	expect(
-		Math.abs((chipBox?.y ?? 0) - (cardBox?.y ?? 0) - 19),
-	).toBeLessThanOrEqual(0.5);
-	// 事实：设计 dl.facts 上距 15、13px；桌面 150px 标签列、gap 10/18；窄屏单列、dt 上距 8、dd 下距 4。
-	const facts = card.locator("dl");
-	const factStyle = await computed(facts, [
-		"gridTemplateColumns",
-		"columnGap",
-		"rowGap",
-		"marginTop",
-		"fontSize",
-	]);
-	expect(factStyle.marginTop).toBe("15px");
-	expect(factStyle.fontSize).toBe("13px");
-	const tracks = factStyle.gridTemplateColumns.split(" ");
-	if (mobile) {
-		expect(tracks).toHaveLength(1);
-		expect(factStyle.rowGap).toBe("3px");
-		expect(
-			await computed(facts.locator("dt").first(), ["marginTop", "color"]),
-		).toEqual({
-			marginTop: "8px",
-			color: await resolved(page, "color", "var(--muted-foreground)"),
-		});
-		expect(
-			(await computed(facts.locator("dd").first(), ["marginBottom"]))
-				.marginBottom,
-		).toBe("4px");
-	} else {
-		expect(tracks[0]).toBe("150px");
-		expect(tracks).toHaveLength(2);
-		expect(factStyle.columnGap).toBe("18px");
-		expect(factStyle.rowGap).toBe("10px");
-		expect(
-			await computed(facts.locator("dt").first(), ["marginTop", "color"]),
-		).toEqual({
-			marginTop: "0px",
-			color: await resolved(page, "color", "var(--muted-foreground)"),
-		});
-	}
-
-	await expectNoHorizontalOverflow(page);
-	await capture(page, info, "ops-not-connected");
-	expect(api.observabilityReads()).toBe(1);
-	expect(api.writes()).toEqual([]);
-	api.expectGenerated("运维观测页");
-});
-
-test("ops reads observability only through the generated client in every query state (#3058)", async ({
-	page,
-}) => {
-	const api = await fixture(page);
-	const main = page.locator("main");
-	// 每种契约响应各读取一次：页面状态不变，且全部 /api/ 请求都在生成 Client 中。
-	for (const [reply, expectState] of [
-		[
-			{ status: 200, body: activeProjection },
-			() => expect(main.locator('[data-slot="card"]')).toHaveCount(4),
-		],
-		[
-			{ status: 403 },
-			() =>
-				expect(main.locator('[data-slot="state-card"]')).toHaveAttribute(
-					"data-kind",
-					"unauthorized",
-				),
-		],
-		[
-			{ status: 404 },
-			() =>
-				expect(
-					main.locator('[data-slot="state-card"]').getByRole("heading", {
-						level: 2,
-					}),
-				).toHaveText("观测查询未接入"),
-		],
-		[
-			{ status: 503 },
-			() =>
-				expect(main.getByRole("alert")).toContainText("观测服务当前不可用。"),
-		],
-	] as const) {
-		api.reply(reply);
-		await page.goto("/ops");
-		await expectState();
-	}
-	expect(api.observabilityReads()).toBe(4);
-	expect(api.writes()).toEqual([]);
-	api.expectGenerated("运维观测页各查询状态");
-});
-
-test("a deployment without the observability query shows the not-connected state card", async ({
-	page,
-}, info) => {
-	const api = await fixture(page);
-	api.reply({ status: 404 });
-	await page.goto("/ops");
-	const main = page.locator("main");
-	const card = main.locator('[data-slot="state-card"]');
-	await expect(card).toHaveAttribute("data-kind", "unavailable");
-	await expect(card.getByRole("heading", { level: 2 })).toHaveText(
-		"观测查询未接入",
-	);
-	await expect(card).toContainText(
-		"当前部署没有提供运维观测查询，页面不显示指标或告警。",
-	);
-	// 没有可重试的操作，也没有区块或刷新。
-	await expect(main.getByRole("button")).toHaveCount(0);
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
-	await expectNoHorizontalOverflow(page);
-	await capture(page, info, "ops-query-not-connected");
-});
-
-test("loading shows the shared loading line, hides domains and keeps refresh disabled", async ({
-	page,
-}, info) => {
-	const api = await fixture(page);
-	api.pause();
-	await page.goto("/ops");
-	const main = page.locator("main");
-	const loading = main.locator('[data-slot="loading-line"]');
-	await expect(loading).toHaveText("正在读取观测状态…");
-	await expect(loading).toHaveAttribute("role", "status");
-	await expect(loading.locator('[data-slot="spinner"]')).toBeVisible();
-	await expect(
-		main.getByRole("button", { name: "刷新运维状态" }),
-	).toBeDisabled();
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
-	await expectNoHorizontalOverflow(page);
-	await capture(page, info, "ops-loading");
-	api.resume();
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
-	await expect(loading).toHaveCount(0);
-	await expect(
-		main.getByRole("button", { name: "刷新运维状态" }),
-	).toBeEnabled();
-
-	// 刷新再次进入读取中，返回后按新的查询结果显示。
-	api.pause();
-	api.reply({
-		status: 200,
-		body: {
-			...activeProjection,
-			exportFailures: 2,
-			droppedLogs: 1,
-			lastExportFailureAt: "2026-10-13T00:00:00.000Z",
-		},
-	});
-	await main.getByRole("button", { name: "刷新运维状态" }).click();
-	await expect(loading).toBeVisible();
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
-	api.resume();
-	const alerts = domain(page, "告警");
-	await expect(alerts.locator('[data-slot="badge"]')).toHaveText("降级");
-	await expect(alerts.locator('[data-slot="badge"]')).toHaveAttribute(
-		"data-tone",
-		"amber",
-	);
-	await expect(alerts.locator("dd").nth(2)).toHaveText("Platform API · 有失败");
-	await expect(alerts.locator("dd").nth(4)).toHaveText("2 次");
-	await expect(alerts.locator("dd").nth(5)).toHaveText("1 条");
-	await expect(alerts.locator("time")).toHaveAttribute(
-		"datetime",
-		"2026-10-13T00:00:00.000Z",
-	);
-	await expect(
-		domain(page, "平台健康").locator('[data-slot="badge"]'),
-	).toHaveText("未接入");
-	expect(api.observabilityReads()).toBe(2);
-	expect(api.writes()).toEqual([]);
-});
-
-test("unavailable uses the shared state card and retry returns focus as the read recovers", async ({
-	page,
-}, info) => {
-	const api = await fixture(page);
-	api.reply({ status: 503 });
-	await page.goto("/ops");
-	const main = page.locator("main");
-	const card = main.getByRole("alert");
-	await expect(card).toHaveAttribute("data-kind", "unavailable");
-	await expect(card.getByRole("heading", { level: 2 })).toHaveText(
-		"服务暂不可用",
-	);
-	await expect(card).toContainText("观测服务当前不可用。");
-	// 失败卡只有一个重试；页头不再重复刷新，也不显示区块。
-	await expect(main.getByRole("button")).toHaveText(["重新读取观测状态"]);
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
-	await expectNoHorizontalOverflow(page);
-	await capture(page, info, "ops-unavailable");
-
-	// 仍然失败：焦点回到同一个重试按钮。
-	const retry = main.getByRole("button", { name: "重新读取观测状态" });
-	await retry.focus();
-	await retry.press("Enter");
-	await expect(retry).toBeFocused();
-	expect(api.observabilityReads()).toBe(2);
-
-	// 恢复：区块出现，焦点移到页面 h1。
-	api.reply({ status: 200, body: activeProjection });
-	await retry.press("Enter");
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
-	await expect(
-		main.getByRole("heading", {
-			level: 1,
-			name: "先确认平台状态，再定位故障。",
-		}),
-	).toBeFocused();
-	expect(api.writes()).toEqual([]);
-});
-
-// #3235 I6-01：页头「刷新运维状态」读取中为可聚焦的禁用（aria-disabled），键盘与点击触发后焦点
-// 在读取中、读取后都留在按钮上；读取失败、刷新随之收起时焦点移到 h1，不落到 body（D2-59）。
-for (const mode of ["keyboard", "click"] as const) {
-	test(`page-head refresh keeps focus on the button while and after reading (${mode}, I6-01)`, async ({
-		page,
-	}, info) => {
-		const mobile = info.project.name === "mobile";
-		await page.setViewportSize(
-			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
-		);
-		const pageErrors = trackPageErrors(page);
-		const api = await fixture(page);
-		await page.goto("/ops");
-		const main = page.locator("main");
-		await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
-		const refresh = main
-			.locator("header.page-heading")
-			.getByRole("button", { name: "刷新运维状态" });
-		const trigger = async () => {
-			if (mode === "keyboard") {
-				await refresh.focus();
-				await page.keyboard.press("Enter");
-			} else {
-				// 先把焦点放到 h1，确认是点击本身把焦点交给按钮。
-				await main.getByRole("heading", { level: 1 }).focus();
-				await refresh.click();
-			}
-		};
-		api.pause();
-		await trigger();
-		await expect(main.locator('[data-slot="loading-line"]')).toBeVisible();
-		await expect(refresh).toHaveAttribute("aria-disabled", "true");
-		expect(
-			await refresh.evaluate((node) => (node as HTMLButtonElement).disabled),
-		).toBe(false);
-		await expectFocusHeld(refresh, [50, 300], `${mode} 读取中`);
-		// 读取中再按 Enter 被忽略，不发出第二次读取。
-		await page.keyboard.press("Enter");
-		api.resume();
-		await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
-		await expect(refresh).toBeEnabled();
-		await expectFocusHeld(refresh, [50, 300, 1000, 1500], `${mode} 读取后`);
-		expect(api.observabilityReads()).toBe(2);
-		await expectNoHorizontalOverflow(page);
-		await expectCleanPage(page, pageErrors);
-
-		// 读取失败：页头刷新收起、只剩失败卡的重试，焦点移到 h1。
-		api.reply({ status: 503 });
-		await trigger();
-		await expect(main.getByRole("alert")).toHaveAttribute(
-			"data-kind",
-			"unavailable",
-		);
-		const heading = main.getByRole("heading", {
-			level: 1,
-			name: "先确认平台状态，再定位故障。",
-		});
-		await expect(heading).toBeFocused();
-		await expectFocusHeld(heading, [50, 300, 1000], `${mode} 读取失败后`);
-		expect(api.writes()).toEqual([]);
-	});
+	).toBeLessThanOrEqual(0);
 }
 
-test("a non-administrator sees the unauthorized card and never requests observability", async ({
+test("resource data survives a missing cache source and supports Agent/session deep links", async ({
 	page,
 }, info) => {
-	const api = await fixture(page, { admin: false });
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
 	await page.goto("/ops");
-	const main = page.locator("main");
-	const card = main.locator('[data-slot="state-card"]');
-	await expect(card).toHaveAttribute("data-kind", "unauthorized");
-	await expect(card.getByRole("heading", { level: 2 })).toHaveText("未授权");
-	await expect(card).toContainText("你没有访问运维观测的权限。");
-	await expect(card.getByRole("link", { name: "返回工作台" })).toBeVisible();
-	// 无权限卡是静态边界，不播报；没有刷新、区块或观测事实。
-	await expect(main.getByRole("alert")).toHaveCount(0);
-	await expect(main.getByRole("button")).toHaveCount(0);
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
-	await expect(main).not.toContainText("告警出口");
-	await expect(page.getByRole("link", { name: "运维观测" })).toHaveCount(0);
-	await expectNoHorizontalOverflow(page);
-	await capture(page, info, "ops-unauthorized");
-	// 会话不含 system_admin 时路由直接显示无权限卡，不发出观测查询。
-	expect(api.observabilityReads()).toBe(0);
-	expect(api.requests.some((entry) => entry.includes("/ops/"))).toBe(false);
-	await card.getByRole("link", { name: "返回工作台" }).click();
-	await expect(page).toHaveURL(/\/$/);
-	expect(api.observabilityReads()).toBe(0);
-	api.expectGenerated("非系统管理员的运维观测页");
+	await expect(
+		page.getByRole("heading", { name: "资源与运行状态" }),
+	).toBeVisible();
+	await expect(page.locator("#ops-sources")).toContainText("暂不可用");
+	await expect(page.locator("#ops-agents")).toContainText("0 核");
+	await expect(page.locator("#ops-agents")).toContainText("未知");
+	await page.getByRole("button", { name: "分析助手", exact: true }).click();
+	await expect(page).toHaveURL(/agentId=agent-fixture/);
+	await page
+		.getByLabel("会话", { exact: true })
+		.selectOption("session-fixture");
+	await expect(page).toHaveURL(/sessionId=session-fixture/);
+	await page.reload();
+	await expect(page.getByLabel("会话", { exact: true })).toHaveValue(
+		"session-fixture",
+	);
+	await page
+		.locator("#ops-resources")
+		.getByRole("button", { name: /sandbox-fixture/ })
+		.click();
+	await expect(page.locator("#ops-resources")).toContainText("pod-uid");
+	await noOverflow(page);
+	await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+	await page.screenshot({
+		path: info.outputPath(`ops-${info.project.name}.png`),
+		fullPage: true,
+		animations: "disabled",
+	});
+	expect(api.requests.every((request) => request.startsWith("GET "))).toBe(
+		true,
+	);
+	api.expectGenerated("运维资源观测");
+	await expectCleanPage(page, errors);
 });
 
-test("a server denial for a stale administrator session shows the same unauthorized card", async ({
+test("history preserves the chosen scope and shows real zero points", async ({
 	page,
 }) => {
 	const api = await fixture(page);
-	api.reply({ status: 403 });
-	await page.goto("/ops");
-	const main = page.locator("main");
-	const card = main.locator('[data-slot="state-card"]');
-	await expect(card).toHaveAttribute("data-kind", "unauthorized");
-	await expect(card).toContainText("你没有访问运维观测的权限。");
-	await expect(main.getByRole("button")).toHaveCount(0);
-	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
-	expect(api.observabilityReads()).toBe(1);
-	api.expectGenerated("会话过期的系统管理员");
+	await page.goto("/ops?agentId=agent-fixture&sessionId=session-fixture");
+	await page.getByRole("button", { name: "查询历史", exact: true }).click();
+	await expect(page.locator("#ops-history")).toContainText("已有历史样本");
+	await expect(page.locator("#ops-history").getByRole("img")).toHaveCount(1);
+	await expect(page.locator("#ops-history")).toContainText("最低 0 核");
+	await expect(
+		page.locator("#ops-history").getByRole("link", { name: /打开日志/ }),
+	).toHaveAttribute("href", /from=.*to=/);
+	api.expectGenerated("资源历史查询");
 });
 
-test("exported design viewport matrix ops", async ({ page }, info) => {
-	test.skip(
-		info.project.name !== "desktop",
-		"The exported nine-viewport matrix runs once.",
+test("failed refresh preserves visible data but marks it stale", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	await page.goto("/ops");
+	await expect(
+		page.getByRole("button", { name: "分析助手", exact: true }),
+	).toBeVisible();
+	api.reply(503);
+	await page.getByRole("button", { name: "刷新", exact: true }).click();
+	await expect(page.getByRole("alert")).toContainText("刷新失败");
+	await expect(page.locator("#ops-sources")).toContainText("数据过期");
+	await expect(
+		page.getByRole("button", { name: "分析助手", exact: true }),
+	).toBeVisible();
+});
+
+test("server revocation removes previous administrator observations", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	await page.goto("/ops");
+	await expect(
+		page.getByRole("heading", { name: "资源与运行状态" }),
+	).toBeVisible();
+	api.reply(403);
+	await page.getByRole("button", { name: "刷新", exact: true }).click();
+	await expect(page.locator('[data-slot="state-card"]')).toHaveAttribute(
+		"data-kind",
+		"unauthorized",
 	);
+	await expect(page.getByRole("button", { name: "分析助手" })).toHaveCount(0);
+	await expect(page.locator("#ops-sources")).toHaveCount(0);
+});
+
+test("ordinary users never request resource observations", async ({ page }) => {
+	const api = await fixture(page, false);
+	await page.goto("/ops");
+	await expect(page.locator('[data-slot="state-card"]')).toHaveAttribute(
+		"data-kind",
+		"unauthorized",
+	);
+	expect(api.requests.some((request) => request.includes("/ops/"))).toBe(false);
+	await noOverflow(page);
+});
+
+test("malformed data never renders arbitrary fields and can recover", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	api.reply(200, { ...sample(), credential: "fixture-private-sentinel" });
+	await page.goto("/ops");
+	await expect(page.locator('[data-slot="state-card"]')).toHaveAttribute(
+		"data-kind",
+		"unavailable",
+	);
+	await expect(page.locator("main")).not.toContainText(
+		"fixture-private-sentinel",
+	);
+	api.reply(200, sample());
+	await page.getByRole("button", { name: "重新读取观测状态" }).click();
+	await expect(
+		page.getByRole("heading", { name: "资源与运行状态" }),
+	).toBeVisible();
+});
+
+test("320px layout preserves long identifiers and keyboard disclosure", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "desktop", "Narrow viewport checked once");
+	await page.setViewportSize({ width: 320, height: 740 });
+	const api = await fixture(page);
+	const data = sample();
+	data.resources[0].name = `sandbox-${"a".repeat(120)}`;
+	api.reply(200, data);
+	await page.goto("/ops");
+	const trigger = page
+		.locator("#ops-resources")
+		.getByRole("button", { name: /sandbox-/ });
+	await trigger.focus();
+	await page.keyboard.press("Enter");
+	await expect(trigger).toHaveAttribute("aria-expanded", "true");
+	await noOverflow(page);
+	await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+	await page.screenshot({
+		path: info.outputPath("ops-narrow.png"),
+		fullPage: true,
+		animations: "disabled",
+	});
+});
+
+test("resource dashboard preserves the established viewport matrix", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "desktop", "Viewport matrix checked once");
 	await fixture(page);
 	await page.goto("/ops");
-	await expect(page.locator('main [data-slot="card"]')).toHaveCount(4);
-	for (const viewport of designViewports) {
+	for (const viewport of [
+		{ width: 360, height: 800 },
+		{ width: 390, height: 844 },
+		{ width: 430, height: 932 },
+		{ width: 600, height: 960 },
+		{ width: 820, height: 1180 },
+		{ width: 1024, height: 768 },
+		{ width: 1366, height: 768 },
+		{ width: 1440, height: 900 },
+		{ width: 1920, height: 1080 },
+	]) {
 		await page.setViewportSize(viewport);
-		await expectNoHorizontalOverflow(page);
-		await captureDesignContract(page, info, "ops");
+		await expect(
+			page.getByRole("heading", { name: "资源与运行状态" }),
+		).toBeVisible();
+		await noOverflow(page);
 	}
+});
+
+test("the same history query can retry and a history authorization denial clears the page", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	await page.goto("/ops");
+	await page.getByRole("button", { name: "查询历史", exact: true }).click();
+	await expect(page.locator("#ops-history").getByRole("img")).toHaveCount(1);
+	api.historyReply(503);
+	await page.getByRole("button", { name: "查询历史", exact: true }).click();
+	await expect(page.locator("#ops-history").getByRole("alert")).toBeVisible();
+	api.historyReply(403);
+	await page.getByRole("button", { name: "查询历史", exact: true }).click();
+	await expect(page.locator('[data-slot="state-card"]')).toHaveAttribute(
+		"data-kind",
+		"unauthorized",
+	);
+	await expect(page.locator("#ops-agents")).toHaveCount(0);
+	await expect(page.locator("#ops-history")).toHaveCount(0);
 });

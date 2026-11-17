@@ -1,5 +1,7 @@
 # Platform 观测告警规则
 
+管理员资源总览、ImageCache 和历史查询的装配见 [资源观测接入](./RESOURCE-OBSERVABILITY.md)。
+
 `prometheus-rules.yaml` 提供 Platform API/Worker 共用的 Prometheus 告警规则。部署方将它挂载到 Prometheus 的 `rule_files`，并按实际容量调整规则中的默认阈值；仓库不预设生产并发或值班策略。
 
 规则只使用 `@agent-infra/observability` 输出的固定 stage/outcome/kind 标签：

@@ -115,7 +115,15 @@ spec:
             - {name: PLATFORM_WORKER_SKILL_INIT_IMAGE, value: {{ .Values.images.worker | quote }}}
             - {name: PLATFORM_WORKER_SKILL_ASSEMBLY_ROOT, value: /var/lib/agent-infra/skill-assembly}
             {{- end }}
+            {{- if .Values.operations.enabled }}
+            - {name: AGENT_INFRA_OPERATIONS_CONFIG_FILE, value: /var/run/agent-infra/operations/configuration.json}
+            - name: AGENT_INFRA_OPERATIONS_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- end }}
           volumeMounts:
+            {{- if .Values.operations.enabled }}
+            - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
+            {{- end }}
             - {name: worker-configuration, mountPath: /app/dist/configuration.mjs, subPath: configuration.mjs, readOnly: true}
             - {name: worker-configuration, mountPath: /var/run/agent-infra/deployment, readOnly: true}
             - {name: runtime-auth, mountPath: /var/run/agent-infra/runtime-auth, readOnly: true}
@@ -126,6 +134,9 @@ spec:
             - {name: skill-assembly, mountPath: /var/lib/agent-infra/skill-assembly}
             {{- end }}
       volumes:
+        {{- if .Values.operations.enabled }}
+        - {name: operations-configuration, secret: {secretName: {{ .Values.operations.configurationSecret | quote }}}}
+        {{- end }}
         {{- if $skillHub.enabled }}
         - {name: skill-assembly, emptyDir: {medium: Memory, sizeLimit: 128Mi}}
         {{- end }}

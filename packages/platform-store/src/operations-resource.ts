@@ -1,0 +1,563 @@
+import { createHash } from "node:crypto";
+import {
+	type OperationsHistoryQueryV2,
+	type OperationsResourceQueryV2,
+	type OperationsResourcesV2,
+	OperationsResourcesV2Schema,
+	OperationsScopeV2Schema,
+} from "@agent-infra/contracts/pilot";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import type { SessionSandboxResourceBudgetV1 } from "@agent-infra/platform-core";
+import {
+	aggregateOperationsAgentsV2,
+	bindOperationsResourcesV2,
+	emptyOperationsResourcesV2,
+	evaluateOperationsAlertsV2,
+	type OperationsAlertThresholdsV2,
+	type OperationsBindingV2,
+	OperationsScopeErrorV2,
+	projectOperationsBudgetV2,
+	projectOperationsStalenessV2,
+} from "@agent-infra/platform-core";
+import { readPlatformQueueResourceSnapshot } from "./observability-snapshot.js";
+import postgres from "./observed-postgres.js";
+import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+
+function budget(value: unknown): SessionSandboxResourceBudgetV1 | null {
+	if (!value || typeof value !== "object") return null;
+	const data = value as Record<string, unknown>;
+	if (
+		![data.cpuMillis, data.memoryBytes, data.storageBytes].every(
+			(item) => Number.isSafeInteger(item) && (item as number) >= 0,
+		)
+	)
+		return null;
+	return {
+		cpuMillis: data.cpuMillis as number,
+		memoryBytes: data.memoryBytes as number,
+		storageBytes: data.storageBytes as number,
+	};
+}
+
+export class PostgresOperationsResourceStoreV2 {
+	readonly #sql: ReturnType<typeof postgres>;
+	readonly #scope: OperationsResourcesV2["scope"];
+	readonly #workloadNamespaceRef: string | undefined;
+	readonly #alertThresholds: OperationsAlertThresholdsV2 | undefined;
+
+	constructor(options: {
+		databaseUrl: string;
+		scope: OperationsResourcesV2["scope"];
+		workloadNamespaceRef?: string;
+		alertThresholds?: OperationsAlertThresholdsV2;
+	}) {
+		this.#scope = OperationsScopeV2Schema.parse(options.scope);
+		this.#workloadNamespaceRef = options.workloadNamespaceRef;
+		this.#alertThresholds = options.alertThresholds;
+		this.#sql = postgres(options.databaseUrl, {
+			max: 2,
+			connect_timeout: 5,
+			connection: {
+				statement_timeout: 3000,
+				idle_in_transaction_session_timeout: 5000,
+			},
+		});
+	}
+
+	async close(): Promise<void> {
+		await this.#sql.end();
+	}
+
+	async write(value: unknown): Promise<void> {
+		const snapshot = OperationsResourcesV2Schema.parse(value);
+		if (
+			snapshot.scope.clusterId !== this.#scope.clusterId ||
+			snapshot.scope.namespace !== this.#scope.namespace
+		)
+			throw new OperationsScopeErrorV2();
+		if (
+			Date.parse(snapshot.generatedAt) > Date.now() + 5000 ||
+			Buffer.byteLength(JSON.stringify(snapshot)) > 8 * 1024 * 1024
+		)
+			throw new Error("Invalid operations observation");
+		const collectionStartedAt =
+			snapshot.collectionStartedAt ?? snapshot.generatedAt;
+		if (
+			Date.parse(collectionStartedAt) > Date.parse(snapshot.generatedAt) ||
+			Date.parse(snapshot.generatedAt) - Date.parse(collectionStartedAt) >
+				120_000
+		)
+			throw new Error("Invalid operations observation interval");
+		const verified = bindOperationsResourcesV2(
+			snapshot.resources,
+			await this.readBindings(),
+		);
+		// First confirmation ends at the metadata response; a later sample extends only to its read start.
+		// Before two real observations the interval can be empty; names alone never establish a historical UID.
+		const identities = [
+			...verified.flatMap((resource) =>
+				resource.ownership !== "unknown" &&
+				resource.identityObservedAt &&
+				Date.parse(resource.identityObservedAt) >=
+					Date.parse(collectionStartedAt) &&
+				Date.parse(resource.identityObservedAt) <= Date.now() + 5000
+					? [
+							{
+								uid: resource.uid,
+								kind: resource.kind,
+								name: resource.name,
+								agentId: resource.agentId,
+								sessionId: resource.sessionId,
+								observedAfter: resource.identityObservedAt,
+							},
+						]
+					: [],
+			),
+			...snapshot.nodes.flatMap((node) =>
+				!node.virtual &&
+				node.identityObservedAt &&
+				Date.parse(node.identityObservedAt) >=
+					Date.parse(collectionStartedAt) &&
+				Date.parse(node.identityObservedAt) <= Date.now() + 5000
+					? [
+							{
+								uid: node.uid,
+								kind: "Node",
+								name: node.name,
+								agentId: null,
+								sessionId: null,
+								observedAfter: node.identityObservedAt,
+							},
+						]
+					: [],
+			),
+		];
+		await this.#sql.begin(async (tx) => {
+			await tx`set local statement_timeout = '3000ms'`;
+			await tx`select pg_advisory_xact_lock(hashtextextended(${`operations:${this.#scope.clusterId}:${this.#scope.namespace}`}, 0))`;
+			const previous = await tx<
+				{ snapshot: unknown }[]
+			>`select snapshot from platform.operations_resource_snapshots
+				where cluster_id=${this.#scope.clusterId} and namespace=${this.#scope.namespace}`;
+			const old = previous[0]
+				? OperationsResourcesV2Schema.parse(previous[0].snapshot)
+				: undefined;
+			if (
+				old &&
+				Date.parse(old.collectionStartedAt ?? old.generatedAt) >=
+					Date.parse(collectionStartedAt)
+			)
+				return;
+			snapshot.alerts = evaluateOperationsAlertsV2(
+				snapshot,
+				old
+					? projectOperationsStalenessV2(old, snapshot.generatedAt).alerts
+					: [],
+				this.#alertThresholds,
+			);
+			await tx`insert into platform.operations_resource_snapshots
+			(cluster_id, namespace, observed_at, snapshot) values
+			(${this.#scope.clusterId}, ${this.#scope.namespace}, ${collectionStartedAt}, ${tx.json(snapshot)})
+			on conflict(cluster_id, namespace) do update set observed_at=excluded.observed_at, snapshot=excluded.snapshot
+			where platform.operations_resource_snapshots.observed_at < excluded.observed_at`;
+			if (identities.length)
+				await tx`insert into platform.operations_resource_identities
+				(cluster_id,namespace,uid,kind,name,agent_id,session_id,first_seen,last_seen)
+				select ${this.#scope.clusterId},${this.#scope.namespace},v.uid,v.kind,v.name,v."agentId",v."sessionId",v."observedAfter",${collectionStartedAt}
+				from jsonb_to_recordset(${tx.json(identities)}) as v(uid text,kind text,name text,"agentId" text,"sessionId" text,"observedAfter" timestamptz)
+				on conflict(cluster_id,namespace,uid) do update set last_seen=excluded.last_seen
+				where platform.operations_resource_identities.agent_id is not distinct from excluded.agent_id
+				and platform.operations_resource_identities.session_id is not distinct from excluded.session_id
+				and platform.operations_resource_identities.kind=excluded.kind and platform.operations_resource_identities.name=excluded.name`;
+			await tx`delete from platform.operations_resource_identities where cluster_id=${this.#scope.clusterId}
+				and namespace=${this.#scope.namespace} and last_seen < now() - interval '30 days'`;
+		});
+	}
+
+	async historyIdentities(input: OperationsHistoryQueryV2) {
+		const rows = await this.#sql<
+			{
+				uid: string;
+				kind: string;
+				name: string;
+				first_seen: Date;
+				last_seen: Date;
+			}[]
+		>`
+			select uid,kind,name,first_seen,last_seen from platform.operations_resource_identities
+			where cluster_id=${this.#scope.clusterId} and namespace=${this.#scope.namespace}
+			and (${input.agentId ?? null}::text is null or agent_id=${input.agentId ?? null})
+			and (${input.sessionId ?? null}::text is null or session_id=${input.sessionId ?? null})
+			and (${input.resourceUid ?? null}::text is null or uid=${input.resourceUid ?? null})
+			and first_seen <= last_seen and first_seen <= ${input.end} and last_seen >= ${input.start}
+			order by last_seen desc,uid limit 129`;
+		return {
+			identities: rows.slice(0, 128).map((row) => ({
+				uid: row.uid,
+				kind: row.kind,
+				name: row.name,
+				firstSeen: row.first_seen.toISOString(),
+				lastSeen: row.last_seen.toISOString(),
+			})),
+			truncated: rows.length > 128,
+		};
+	}
+
+	async readBindings(): Promise<OperationsBindingV2[]> {
+		const rows = await this.#sql<
+			{
+				agent_id: string;
+				name: string;
+				conversation_id: string;
+				sandbox_id: string;
+				session_generation: string;
+				resource_fence: string;
+				desired_state: string;
+				resource_policy: {
+					namespace?: string;
+					configurationRevision?: number;
+				} | null;
+				resource_observation: {
+					resources?: {
+						kind: string;
+						name: string;
+						namespace: string;
+						uid: string;
+					}[];
+				} | null;
+			}[]
+		>`select a.agent_id, coalesce(app.name, a.agent_id) as name, a.conversation_id, a.sandbox_id,
+			a.session_generation, a.resource_fence, a.desired_state, a.resource_policy, a.resource_observation
+			from platform.session_sandbox_allocations a
+			join platform.agents agent on agent.id=a.agent_id
+			join platform.conversations c on c.id=a.conversation_id and c.agent_id=a.agent_id
+			and c.actor_id=a.actor_id and c.principal_type=a.principal_type and c.channel_id=a.channel_id
+			and c.session_generation=a.session_generation
+			left join platform.agent_applications app on app.agent_id=a.agent_id
+			where a.resource_policy->>'namespace'=${this.#scope.namespace} limit 10001`;
+		if (rows.length > 10000) throw new Error("Operations bindings unavailable");
+		const bindings: OperationsBindingV2[] = rows.flatMap((row) => {
+			const identities = row.resource_observation?.resources;
+			if (!Array.isArray(identities)) return [];
+			return [
+				{
+					agentId: row.agent_id,
+					agentName: row.name,
+					sessionId: row.conversation_id,
+					sandboxId: row.sandbox_id,
+					namespace: this.#scope.namespace,
+					generation: Number(row.session_generation),
+					revision: row.resource_policy?.configurationRevision ?? null,
+					resourceFence: Number(row.resource_fence),
+					ownership: "agent" as const,
+					retainedStorage: row.desired_state === "stopped",
+					identities: identities.filter(
+						(identity) => identity.namespace === this.#scope.namespace,
+					),
+				},
+			];
+		});
+		const reserves = await this.#sql<
+			{
+				agent_id: string;
+				name: string;
+				session_id: string;
+				sandbox_id: string;
+				profile_digest: string;
+				profile: {
+					agentId?: string;
+					digest?: string;
+					policy?: { namespace?: string; configurationRevision?: number };
+				};
+				operations: {
+					operation: string;
+					status: string;
+					writeCompletion: string;
+					absent: boolean;
+					kind: string;
+					name: string;
+					resource?: {
+						kind: string;
+						name: string;
+						namespace: string;
+						uid: string;
+					};
+				}[];
+			}[]
+		>`select r.agent_id, coalesce(app.name, r.agent_id) as name, r.session_id, r.sandbox_id, r.profile_digest, r.profile, r.operations
+			from platform.session_sandbox_reserves r join platform.agents a on a.id=r.agent_id
+			left join platform.agent_applications app on app.agent_id=r.agent_id
+			where r.namespace=${this.#scope.namespace} and r.retired_at is null and r.status <> 'claimed'
+			and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=r.sandbox_id)
+			and not exists(select 1 from platform.conversations c where c.id=r.session_id) limit 10001`;
+		if (reserves.length > 10000)
+			throw new Error("Operations bindings unavailable");
+		for (const row of reserves) {
+			if (
+				row.profile.agentId !== row.agent_id ||
+				row.profile.digest !== row.profile_digest ||
+				row.profile.policy?.namespace !== this.#scope.namespace ||
+				!Array.isArray(row.operations)
+			)
+				continue;
+			bindings.push({
+				agentId: row.agent_id,
+				agentName: row.name,
+				sessionId: row.session_id,
+				sandboxId: row.sandbox_id,
+				namespace: this.#scope.namespace,
+				generation: 1,
+				revision: row.profile.policy.configurationRevision ?? null,
+				resourceFence: 1,
+				ownership: "reserve",
+				retainedStorage: false,
+				identities: row.operations.flatMap((operation) =>
+					operation.operation === "create" &&
+					operation.status === "confirmed" &&
+					operation.writeCompletion === "response" &&
+					!operation.absent &&
+					operation.resource?.namespace === this.#scope.namespace &&
+					operation.resource.kind === operation.kind &&
+					operation.resource.name === operation.name
+						? [operation.resource]
+						: [],
+				),
+			});
+		}
+		if (!this.#workloadNamespaceRef) return bindings;
+		const workloads = await this.#sql<
+			{ agent_id: string; name: string; revision: string; state: unknown }[]
+		>`
+			select w.agent_id, coalesce(app.name, w.agent_id) as name, w.revision, w.state
+			from platform.workload_reconciliations w join platform.agents a on a.id=w.agent_id
+			left join platform.agent_applications app on app.agent_id=w.agent_id limit 10001`;
+		if (workloads.length > 10000)
+			throw new Error("Operations bindings unavailable");
+		for (const row of workloads) {
+			try {
+				const decoded = decodePersistedWorkloadStateV1(row.state, row.agent_id);
+				if (
+					!decoded ||
+					decoded.legacy ||
+					!decoded.state.verified ||
+					!decoded.state.identity ||
+					decoded.state.revision !== Number(row.revision)
+				)
+					continue;
+				const deployment = validateAgentWorkloadDesiredV1(
+					decoded.state.verified.deployment,
+				);
+				if (
+					deployment.agentId !== row.agent_id ||
+					deployment.namespaceRef !== this.#workloadNamespaceRef
+				)
+					continue;
+				bindings.push({
+					agentId: row.agent_id,
+					agentName: row.name,
+					sessionId: null,
+					sandboxId: null,
+					namespace: this.#scope.namespace,
+					generation: decoded.state.identity.generation,
+					revision: deployment.configRevision,
+					resourceFence: deployment.fence,
+					ownership: "agent",
+					retainedStorage: false,
+					identities: [],
+					controllerUid: decoded.state.identity.uid,
+					workloadRevision: deployment.workloadRevision,
+					...(deployment.multiService
+						? {
+								manifestHash: createHash("sha256")
+									.update(JSON.stringify(deployment.multiService))
+									.digest("hex"),
+								members: deployment.multiService.resources
+									.filter(
+										(entry) =>
+											entry.kind === "Deployment" ||
+											entry.kind === "StatefulSet",
+									)
+									.map((entry) => ({
+										kind: entry.kind,
+										name: entry.metadata.name,
+									})),
+							}
+						: {}),
+				});
+			} catch {
+				/* Legacy or unverified bindings stay unknown in the read projection. */
+			}
+		}
+		return bindings;
+	}
+
+	async read(
+		input: OperationsResourceQueryV2,
+		signal = AbortSignal.timeout(5000),
+	): Promise<OperationsResourcesV2> {
+		signal.throwIfAborted();
+		if (input.namespace && input.namespace !== this.#scope.namespace)
+			throw new OperationsScopeErrorV2();
+		const namespace = this.#scope.namespace;
+		const [selection] = await this.#sql<
+			{ agent_exists: boolean; session_exists: boolean }[]
+		>`select
+            exists(select 1 from platform.agents where id=${input.agentId ?? null}) as agent_exists,
+            exists(select 1 from platform.conversations where id=${input.sessionId ?? null} and (${input.agentId ?? null}::text is null or agent_id=${input.agentId ?? null})) as session_exists`;
+		const savedSnapshots = await this.#sql<{ snapshot: unknown }[]>`
+			select snapshot from platform.operations_resource_snapshots where cluster_id=${this.#scope.clusterId} and namespace=${namespace}`;
+		const result = savedSnapshots[0]
+			? OperationsResourcesV2Schema.parse(savedSnapshots[0].snapshot)
+			: emptyOperationsResourcesV2(this.#scope, new Date().toISOString());
+		result.generatedAt = new Date().toISOString();
+		result.selection = {
+			agent: input.agentId
+				? selection?.agent_exists
+					? "present"
+					: "not-found"
+				: "not-requested",
+			session: input.sessionId
+				? selection?.session_exists
+					? "present"
+					: "not-found"
+				: "not-requested",
+		};
+
+		// Attribution is resolved again from authoritative business bindings at read time.
+		result.resources = bindOperationsResourcesV2(
+			result.resources,
+			await this.readBindings(),
+		).filter(
+			(resource) =>
+				(!input.agentId || input.agentId === resource.agentId) &&
+				(!input.sessionId || input.sessionId === resource.sessionId),
+		);
+		result.agents = aggregateOperationsAgentsV2(result.resources);
+		result.budget = await this.#sql.begin("read only", async (tx) => {
+			await tx`set local statement_timeout = '3000ms'`;
+			await tx`set local lock_timeout = '1000ms'`;
+			signal.throwIfAborted();
+			const configurations = await tx<
+				{
+					revision: string;
+					configuration: Record<string, unknown>;
+					updated_at: Date;
+				}[]
+			>`
+				select revision, configuration, updated_at from platform.session_sandbox_budgets where namespace = ${namespace}`;
+			const rows = await tx<
+				{
+					resources: unknown;
+					compute_released: boolean;
+					has_allocation: boolean;
+					has_reserve: boolean;
+					claimed: boolean;
+					has_conversation: boolean;
+				}[]
+			>`select ch.resources, ch.compute_released,
+				exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=ch.sandbox_id) as has_allocation,
+				exists(select 1 from platform.session_sandbox_reserves r where r.sandbox_id=ch.sandbox_id and r.retired_at is null) as has_reserve,
+				exists(select 1 from platform.session_sandbox_reserves r where r.sandbox_id=ch.sandbox_id and r.status='claimed') as claimed,
+				exists(select 1 from platform.session_sandbox_reserves r join platform.conversations c on c.id=r.session_id where r.sandbox_id=ch.sandbox_id) as has_conversation
+				from platform.session_sandbox_resource_charges ch where ch.namespace=${namespace} and not ch.released
+				limit 10001`;
+			if (rows.length > 10000)
+				throw new Error("Operations budget observation is unavailable");
+			const saved = configurations[0];
+			const missing = await tx<{ sessions: string; reserves: string }[]>`select
+				(select count(*) from platform.session_sandbox_allocations a where a.resource_policy->>'namespace'=${namespace}
+				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=a.sandbox_id)) as sessions,
+				(select count(*) from platform.session_sandbox_reserves r where r.namespace=${namespace} and r.retired_at is null and r.status <> 'claimed'
+				and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=r.sandbox_id)
+				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=r.sandbox_id)) as reserves`;
+			const unaccountedSessions = Number(missing[0]?.sessions ?? 0);
+			const unaccountedReserves = Number(missing[0]?.reserves ?? 0);
+			const configuration = saved?.configuration;
+			const accounting = configuration?.reserveAccounting as
+				| Record<string, unknown>
+				| undefined;
+			return projectOperationsBudgetV2({
+				namespace,
+				revision: saved ? Number(saved.revision) : null,
+				enabled:
+					typeof configuration?.enabled === "boolean"
+						? configuration.enabled
+						: null,
+				updatedAt: saved?.updated_at.toISOString() ?? null,
+				limits: budget(
+					configuration?.enabled
+						? configuration.totalBudget
+						: accounting?.totalBudget,
+				),
+				charges: rows.map((row) => ({
+					resources: budget(row.resources),
+					computeReleased: row.compute_released,
+					hasAllocation: row.has_allocation,
+					hasReserve: row.has_reserve,
+					claimed: row.claimed,
+					hasConversation: row.has_conversation,
+				})),
+				unaccountedCount: unaccountedSessions + unaccountedReserves,
+				unaccountedReserves,
+				unaccountedSessions,
+			});
+		});
+		signal.throwIfAborted();
+		const queue = await readPlatformQueueResourceSnapshot(this.#sql, signal);
+		result.queue = {
+			waiting: queue.taskWaiting,
+			outboxPending: queue.outboxPending,
+			oldestWaitingAt: queue.oldestWaitingAt ?? null,
+		};
+		let databaseAvailable = true;
+		try {
+			const [database] = await this.#sql<
+				{
+					connections: string;
+					active: string;
+					idle: string;
+					idle_in_transaction: string;
+					lock_waiting: string;
+					database_connections: string;
+					max_connections: string;
+					role_limit: number;
+				}[]
+			>`
+                select count(*) filter(where usename=current_user)::text as connections,
+                count(*) filter(where usename=current_user and state='active')::text as active,
+                count(*) filter(where usename=current_user and state='idle')::text as idle,
+                count(*) filter(where usename=current_user and state like 'idle in transaction%')::text as idle_in_transaction,
+                count(*) filter(where usename=current_user and wait_event_type='Lock')::text as lock_waiting,
+                count(*)::text as database_connections, current_setting('max_connections') as max_connections,
+                (select rolconnlimit from pg_roles where rolname=current_user) as role_limit
+                from pg_stat_activity where datname=current_database()`;
+			if (!database || database.role_limit === null) throw new Error();
+			result.database = {
+				scope: "current-role",
+				connections: Number(database.connections),
+				active: Number(database.active),
+				idle: Number(database.idle),
+				idleInTransaction: Number(database.idle_in_transaction),
+				lockWaiting: Number(database.lock_waiting),
+				databaseConnections: Number(database.database_connections),
+				maxConnections: Number(database.max_connections),
+				roleConnectionLimit:
+					database.role_limit < 0 ? null : database.role_limit,
+				observedAt: new Date().toISOString(),
+			};
+		} catch {
+			result.database = null;
+			databaseAvailable = false;
+		}
+		result.sources[0] = {
+			kind: "platform",
+			state: databaseAvailable ? "available" : "unavailable",
+			observedAt: result.generatedAt,
+			windowSeconds: null,
+			reason: databaseAvailable ? null : "QUERY_FAILED",
+		};
+		return OperationsResourcesV2Schema.parse(
+			projectOperationsStalenessV2(result, result.generatedAt),
+		);
+	}
+}

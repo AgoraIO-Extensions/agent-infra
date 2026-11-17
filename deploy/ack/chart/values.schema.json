@@ -3,6 +3,20 @@
   "type": "object",
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "quota", "postgres", "ingress", "migrations", "encryption", "worker"],
   "properties": {
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "clusterReads", "configurationSecret"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "clusterReads": {"type": "boolean"},
+        "configurationSecret": {"type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"}
+      },
+      "allOf": [
+        {"if": {"properties": {"enabled": {"const": true}}}, "then": {"properties": {"configurationSecret": {"minLength": 1}}}},
+        {"if": {"properties": {"clusterReads": {"const": true}}}, "then": {"properties": {"enabled": {"const": true}}}}
+      ]
+    },
     "images": {
       "type": "object",
       "additionalProperties": true,

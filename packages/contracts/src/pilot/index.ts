@@ -24,6 +24,7 @@ export * from "./native-capability.ts";
 export * from "./native-metadata.ts";
 export * from "./observability.ts";
 export * from "./operation-v2.ts";
+export * from "./operations-resource.ts";
 export * from "./personal-api-credentials.ts";
 export * from "./personal-relay-key.ts";
 export * from "./skill-hub-agent-binding.ts";

@@ -17,6 +17,10 @@
 		"./worker": {
 			"types": "./dist/worker.d.mts",
 			"import": "./dist/worker.mjs"
+		},
+		"./operations": {
+			"types": "./dist/operations.d.mts",
+			"import": "./dist/operations.mjs"
 		}
 	},
 	"files": [

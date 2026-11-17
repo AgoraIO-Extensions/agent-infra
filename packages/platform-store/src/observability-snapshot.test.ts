@@ -34,7 +34,6 @@ it("returns one bounded durable snapshot without inspecting business payloads", 
 	const query = statement?.join("");
 	expect(query).toContain("platform.conversation_executions");
 	expect(query).toContain("platform.outbox_items");
-	expect(query).toContain("count(distinct e.execution_id)");
 	expect(query).toContain("conversation.turn.submit.v1");
 	expect(query).toContain("conversation.turn.regenerate.v1");
 	expect(query).toContain("platform.conversation_messages");

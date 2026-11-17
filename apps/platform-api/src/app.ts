@@ -92,6 +92,10 @@ import {
 } from "./http/native-metadata-routes.js";
 import { registerObservabilityRoutes } from "./http/observability-routes.js";
 import {
+	type OperationsResourceRoutesDependenciesV2,
+	registerOperationsResourceRoutesV2,
+} from "./http/operations-resource-routes.js";
+import {
 	type PersonalApiCredentialRouteDependencies,
 	registerPersonalApiCredentialRoutes,
 } from "./http/personal-api-credential-routes.js";
@@ -192,6 +196,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly operations?: OperationsResourceRoutesDependenciesV2["operations"];
 	readonly evaluationAnalysis?: EvaluationAnalysisRoutesV1;
 	readonly evaluationExperiments?: Parameters<
 		typeof registerEvaluationExperimentRoutesV1
@@ -298,6 +303,10 @@ export function createPlatformApp(
 	registerObservabilityRoutes(app, {
 		identity: dependencies.sessionAudit.identity,
 		...(observability ? { observability } : {}),
+	});
+	registerOperationsResourceRoutesV2(app, {
+		identity: dependencies.sessionAudit.identity,
+		...(dependencies.operations ? { operations: dependencies.operations } : {}),
 	});
 	if (dependencies.customAgentGateway)
 		registerCustomAgentAuthGatewayRoutesV1(
