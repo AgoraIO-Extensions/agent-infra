@@ -787,8 +787,8 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				from platform.session_sandbox_reserves where namespace = ${this.#configuration.namespace}`;
 			const [unknown] = await tx<{ count: string }[]>`
 				select count(*)::text as count from platform.session_sandbox_allocations a
-				where not exists (select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id = a.sandbox_id)
-				and a.status not in ('stopped', 'unavailable')`;
+				where a.namespace = ${this.#configuration.namespace}
+				and not exists (select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id = a.sandbox_id)`;
 			return {
 				cpuMillis: Number(charges?.cpu ?? 0),
 				memoryBytes: Number(charges?.memory ?? 0),

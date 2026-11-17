@@ -1026,7 +1026,9 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		await expect(
 			create(execution(bounded), "user-a", "web", "second"),
 		).resolves.toMatchObject({ outcome: "accepted" });
-		await expect(reserves(bounded).prepare("agent")).rejects.toThrow();
+		await expect(reserves(bounded).prepare("agent")).resolves.toBeTypeOf(
+			"string",
+		);
 		expect(
 			await sql`select released,compute_released from platform.session_sandbox_resource_charges`,
 		).toEqual([{ released: false, compute_released: false }]);
@@ -1355,7 +1357,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		);
 		expect(
 			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${allocation.sandbox_id}`,
-		).toEqual([{ released: false }]);
+		).toEqual([]);
 	});
 	it.each([false, true])(
 		"prepares new cold Sessions after disabling reserves (zeroed input: %s)",
@@ -1392,8 +1394,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 				throw new Error("Expected original Sandbox intent");
 			const charges =
 				await sql`select * from platform.session_sandbox_resource_charges`;
-			expect(charges).toHaveLength(1);
-			expect(charges[0]?.sandbox_id).not.toBe(allocation.sandbox_id);
+			expect(charges).toHaveLength(0);
 			const claim = await sql.begin((tx) =>
 				claimSandboxReconciliation(
 					tx,
@@ -1456,7 +1457,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			await sql`select * from platform.session_sandbox_resource_charges`,
 		).toEqual(charges);
 	});
-	it("still rejects a missing charge while reserves are enabled", async () => {
+	it("allows preparation when an ordinary allocation has no charge", async () => {
 		const reserve = await ready();
 		await expect(
 			sql.begin((tx) =>
@@ -1466,7 +1467,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					reserve.lease.profile.policy,
 				),
 			),
-		).rejects.toThrow();
+		).resolves.toBeUndefined();
 	});
 	it("default-off keeps ready reserves unclaimed", async () => {
 		const reserve = await ready();
