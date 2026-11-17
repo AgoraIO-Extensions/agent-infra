@@ -209,6 +209,7 @@ describe("per-Agent Connection DCR resolver", () => {
 
 	it("uses EP-1060 bearer registration in the protected per-Agent resolver", async () => {
 		let seen: Request | undefined;
+		let persisted: ConnectionConsumerOAuthClientBindingV1 | undefined;
 		const resolve = createConnectionConsumerDcrResolverV1({
 			agentIds: ["agent-a"],
 			issuer: "https://connection.example.test/",
@@ -226,6 +227,10 @@ describe("per-Agent Connection DCR resolver", () => {
 				revision: "r1",
 			}),
 			consumerIdForAgent: () => "consumer-a",
+			loadOAuthClientBindingForAgent: async () => persisted,
+			persistOAuthClientBindingForAgent: async (_agentId, binding) => {
+				persisted = binding;
+			},
 			fetch: async (input, init) => {
 				seen = new Request(input, init);
 				return new Response(
