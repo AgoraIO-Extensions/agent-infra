@@ -82,6 +82,10 @@ beforeAll(async () => {
 		join(directory, "session-reserve-adapter.js"),
 		"export const createSessionSandboxReserveAdapterV1 = (options) => ({ input: options });\n",
 	);
+	await writeFile(
+		join(directory, "connection-manual-bindings.js"),
+		"export const createOwnerConnectionBindingsResolverV1 = () => undefined;\n",
+	);
 	const source = await readFile(
 		new URL("./deployment-entry.ts", import.meta.url),
 		"utf8",

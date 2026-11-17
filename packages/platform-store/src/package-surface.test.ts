@@ -65,6 +65,7 @@ describe("platform-store package surface", () => {
 			"PostgresConnectionConsumerDisableStoreV1",
 			"PostgresConnectionConsumerRegistrationStoreV1",
 			"PostgresConnectionInstallationAuthorizationTransactionV1",
+			"PostgresConnectionManualAssociationReaderV1",
 			"PostgresConversationDispatchStoreV1",
 			"PostgresConversationEventTransactionV1",
 			"PostgresConversationExecutionTransactionV1",
