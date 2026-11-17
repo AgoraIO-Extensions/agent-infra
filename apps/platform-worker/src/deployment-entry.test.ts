@@ -1243,7 +1243,7 @@ it("closes Connection when deployment supplies static per-Agent Consumer maps (#
 					"agent-a": { ref: "installation-a", revision: "r1" },
 					"agent-b": { ref: "installation-b", revision: "r2" },
 				},
-			)};\n`,
+			)};\nexport const connectionInstallation = { principalBindingsByAgent: { 'agent-a': { principal: 'user-a' } } };\n`,
 		);
 		const result = run();
 		expect(result.status, result.stderr).toBe(0);

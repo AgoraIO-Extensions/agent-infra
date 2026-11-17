@@ -496,6 +496,7 @@ const staticPerAgentConnectionBindings =
 		[
 			"configurationsByAgent",
 			"configurationsByAgentAndPrincipal",
+			"principalBindingsByAgent",
 			"principalBindingsByAgentAndPrincipal",
 		].some((key) => Object.hasOwn(configuredConnectionInstallation, key)));
 const perAgentConsumerSelection =
