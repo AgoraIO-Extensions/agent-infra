@@ -366,7 +366,12 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(await sql`select 1 from platform.conversations`).toHaveLength(0);
 		expect(
 			await sql`select 1 from platform.session_sandbox_allocations`,
-		).toHaveLength(0);
+		).toHaveLength(count);
+		// The existing cold allocation is retained without an aggregate charge.
+		if (full)
+			expect(
+				await sql`select 1 from platform.session_sandbox_allocations`,
+			).toHaveLength(1);
 		const store = execution();
 		const results = await Promise.all(
 			Array.from({ length: 8 }, () => create(store)),
@@ -1064,7 +1069,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			);
 			expect(
 				await sql`select 1 from platform.session_sandbox_resource_charges`,
-			).toHaveLength(count);
+			).toHaveLength(0);
 			expect(
 				await sql`select 1 from platform.idempotency_records`,
 			).toHaveLength(count);
@@ -1126,7 +1131,10 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 						directory,
 					),
 				);
-			if (reason === "budget_exhausted") {
+			if (
+				reason === "budget_exhausted" ||
+				reason === "budget_configuration_unavailable"
+			) {
 				expect(await claim()).toMatchObject({ purpose: "prepare" });
 				return;
 			}
