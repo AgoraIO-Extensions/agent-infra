@@ -117,6 +117,9 @@ async function lockedContext(
 		select ${transaction.unsafe(agentManagementStateJsonSql("a"))} as management
 		from platform.agent_applications a where a.agent_id = ${hint.agent_id}`;
 	const management = managementRow?.management;
+	const reclaimed =
+		await transaction`select 1 from platform.audit_events j join platform.outbox_items o on o.scope_id=j.target_id where o.id=${itemId} and j.target_type='conversation' and j.action='conversation.workspace.reclamation.started'`;
+	if (reclaimed.length) return waiting("intent_mismatch");
 	const outbox = await lockOutbox(transaction, itemId);
 	if (
 		outbox?.operation !== "conversation.sandbox.reconcile.v1" ||

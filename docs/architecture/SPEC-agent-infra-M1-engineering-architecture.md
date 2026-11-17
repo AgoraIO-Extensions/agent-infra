@@ -742,6 +742,20 @@ fence 下直接重建。没有执行占用该 Sandbox 时，Store 写入与空�
 Pod 记为 absent、保留 PVC，再在原 Sandbox 和 PVC 上按替换准备恢复。仍有活跃或待核实的执行时保持占用，不据资源缺失
 释放。同名但身份不同的 Pod 不算丢失，仍按冲突处理。
 
+**已停止 Session 的工作区回收。** 部署 owner 可按部署数据政策显式回收工作区；这不是用户删除会话功能，
+也不适用于 Agent 级 PVC、Postgres 或平台存储。正式入口先 dry-run 列候选，再按候选中的显式 Session/Sandbox ID
+及 PVC UID/resourceVersion 执行。资格必须同时满足：Sandbox 与期望状态均为 stopped，当前 generation/resourceFence
+的 stopReceipt 已确认，计算 charge 已释放，全部执行终态且没有 active、waiting、unknown 执行或未完成调谐，
+停止时间超过部署配置阈值，并且不在部署保留名单中。保留名单按 Agent、Session、Sandbox 精确身份配置，
+至少保护 #2857 AC-7/AC-8、#3054、#3230、#4109 当前验收样本；#3874 合成样本默认保留，单独确认后才能移出名单。
+
+执行先按 Agent → Conversation → Sandbox allocation → 调谐 outbox 的锁顺序重新核对资格，持久记录原 PVC 身份和
+回收意图，并将 Conversation 与 Sandbox 标为 unavailable、保持停止；之后在数据库事务外按原 UID/resourceVersion
+条件删除 PVC。只有回读确认 PVC 不存在后，才在同一事务记录完成审计并释放存储 charge；charge 写入必须取得
+`pg_advisory_xact_lock(hashtextextended('session-sandbox:deployment-budget', 0))`，且不得倒置上述实体锁顺序。
+失败、超时、对象替换或未知结果保留 charge 和回收意图，按同一身份幂等恢复，不重新选择 PVC。历史、消息、授权映射、
+Session/Sandbox ID 和审计均保留；后续消息明确返回会话不可用，不能恢复被删除的工作区、静默创建新实例或重放任务。
+
 历史 Agent 共享 PVC 不能直接标记为新 Sandbox 已隔离。迁移须先停止旧业务准入，核实并排空
 旧执行源；unknown 或归属不明时保持隔离维护，不自动复制共享历史、补造主体或新建 Session。
 只有逐 Session 证明原映射、数据归属和独占资源，才可在原事务/fence 下切换；原证据按政策保留。

@@ -3,6 +3,7 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
 	entry: {
 		index: "./src/index.ts",
+		sessionWorkspaceReclamation: "./src/session-workspace-reclamation-cli.ts",
 		deployment: "./src/deployment-entry.ts",
 		workspaceSnapshotInit: "./src/workspace-snapshot-init.ts",
 		workspaceSnapshot: "./src/workspace-snapshot-resolver.ts",

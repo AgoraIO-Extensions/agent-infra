@@ -22,7 +22,9 @@ export async function persistSessionSandboxManagementIntents(
 	// Lock Conversation before either allocation or its outbox; creation also
 	// holds Agent authority, so an admitted Session cannot escape this fanout.
 	const sessions = await transaction.execute<{ id: string }>(sql`
-		select id from platform.conversations where agent_id = ${plan.state.agentId} order by id for update`);
+		select id from platform.conversations where agent_id = ${plan.state.agentId}
+        and not exists(select 1 from platform.audit_events reclaimed where reclaimed.target_type = 'conversation' and reclaimed.target_id = platform.conversations.id and reclaimed.action = 'conversation.workspace.reclamation.started')
+        order by id for update`);
 	for (const { id } of sessions) {
 		const [row] = await transaction.execute<{
 			sandbox_id: string;
