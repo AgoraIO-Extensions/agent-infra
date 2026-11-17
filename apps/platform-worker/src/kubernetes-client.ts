@@ -1,4 +1,5 @@
 import {
+	CoreV1Api,
 	createConfiguration,
 	KubeConfig,
 	type KubernetesObject,
@@ -21,6 +22,7 @@ export const workloadApiVersions = {
 	Pod: "v1",
 	NetworkPolicy: "networking.k8s.io/v1",
 	Ingress: "networking.k8s.io/v1",
+	Certificate: "cert-manager.io/v1",
 } as const;
 export type WorkloadResourceKind = keyof typeof workloadApiVersions;
 
@@ -30,6 +32,11 @@ export interface WorkerKubernetesClientV1 {
 		kind: WorkloadResourceKind,
 		name: string,
 	): Promise<T | null>;
+	/** Strict PartialObjectMetadata negotiation; never requests Secret contents. */
+	readMetadata?(
+		kind: "Secret",
+		name: string,
+	): Promise<Pick<KubernetesObject, "metadata"> | null>;
 	list<T extends KubernetesObject>(
 		kind: WorkloadResourceKind,
 		selector: string,
@@ -118,7 +125,7 @@ export function createWorkerKubernetesClientV1(
 	if (!config) kubeConfig.loadFromCluster();
 	const cluster = kubeConfig.getCurrentCluster();
 	if (!cluster) throw new WorkloadKubernetesError("policy");
-	const api = new KubernetesObjectApi(
+	const configuration = (metadataOnly = false) =>
 		createConfiguration({
 			baseServer: new ServerConfiguration(cluster.server, {}),
 			authMethods: { default: kubeConfig },
@@ -126,6 +133,17 @@ export function createWorkerKubernetesClientV1(
 				{
 					async pre(context) {
 						context.setSignal(AbortSignal.timeout(10_000));
+						const path = new URL(context.getUrl()).pathname.split("/");
+						if (
+							metadataOnly &&
+							path.at(-4) === "namespaces" &&
+							path.at(-3) === namespace &&
+							path.at(-2) === "secrets"
+						)
+							context.setHeaderParam(
+								"Accept",
+								"application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1",
+							);
 						return context;
 					},
 					async post(context) {
@@ -133,17 +151,19 @@ export function createWorkerKubernetesClientV1(
 					},
 				},
 			],
-		}),
-	);
+		});
+	const api = new KubernetesObjectApi(configuration());
+	const metadataApi = new CoreV1Api(configuration(true));
 	const header = (kind: WorkloadResourceKind, name: string) => ({
 		apiVersion: workloadApiVersions[kind],
 		kind,
 		metadata: { namespace, name },
 	});
-	const check = (object: KubernetesObject) => {
+	const check = (object: KubernetesObject, verb: WorkloadKubernetesVerb) => {
 		if (
 			object.metadata?.namespace !== namespace ||
 			object.kind === "ReplicaSet" ||
+			(object.kind === "Certificate" && verb !== "create") ||
 			!Object.hasOwn(workloadApiVersions, object.kind ?? "") ||
 			object.apiVersion !==
 				workloadApiVersions[object.kind as WorkloadResourceKind]
@@ -165,6 +185,44 @@ export function createWorkerKubernetesClientV1(
 	}
 	return {
 		namespace,
+		async readMetadata(kind: "Secret", name: string) {
+			if (kind !== "Secret") throw new WorkloadKubernetesError("policy");
+			return operation(
+				async () => {
+					try {
+						// The typed core API can decode PartialObjectMetadata, whereas the
+						// generic Object API cannot identify that response model in SDK 2.
+						const object = await metadataApi.readNamespacedSecret({
+							namespace,
+							name,
+						});
+						if (
+							object.apiVersion !== "meta.k8s.io/v1" ||
+							object.kind !== "PartialObjectMetadata" ||
+							object.metadata?.namespace !== namespace ||
+							object.metadata.name !== name ||
+							object.data !== undefined ||
+							object.stringData !== undefined
+						)
+							throw new WorkloadKubernetesError("policy");
+						return {
+							metadata: {
+								name: object.metadata.name,
+								namespace: object.metadata.namespace,
+								uid: object.metadata.uid,
+								resourceVersion: object.metadata.resourceVersion,
+								deletionTimestamp: object.metadata.deletionTimestamp,
+								ownerReferences: object.metadata.ownerReferences,
+							},
+						};
+					} catch (error) {
+						if (status(error) === 404) return null;
+						throw error;
+					}
+				},
+				{ kind: "Secret", verb: "get" },
+			);
+		},
 		async read<T extends KubernetesObject>(
 			kind: WorkloadResourceKind,
 			name: string,
@@ -203,14 +261,14 @@ export function createWorkerKubernetesClientV1(
 			);
 		},
 		async create<T extends KubernetesObject>(object: T) {
-			check(object);
+			check(object, "create");
 			return operation(() => api.create(object), {
 				kind: object.kind as WorkloadResourceKind,
 				verb: "create",
 			});
 		},
 		async replace<T extends KubernetesObject>(object: T) {
-			check(object);
+			check(object, "update");
 			if (!object.metadata?.resourceVersion || !object.metadata.uid)
 				throw new WorkloadKubernetesError("policy");
 			return operation(() => api.replace(object), {
@@ -222,7 +280,7 @@ export function createWorkerKubernetesClientV1(
 			await this.deleteResult?.(object);
 		},
 		async deleteResult(object) {
-			check(object);
+			check(object, "delete");
 			if (!object.metadata?.uid || !object.metadata.resourceVersion)
 				throw new WorkloadKubernetesError("policy");
 			const options: V1DeleteOptions = {

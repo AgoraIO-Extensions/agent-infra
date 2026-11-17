@@ -51,6 +51,7 @@ import {
 	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import { createWorkloadHostnameCertificatesV1 } from "./workload-hostname-certificates.js";
 import { workloadPodImagesV1 } from "./workload-image-projection.js";
 import {
 	hasAdditionalEgressPolicyV1,
@@ -89,6 +90,7 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly storageClassName?: string;
 	readonly routeHostSuffix: string;
 	readonly pathRoutes?: WorkloadPathRoutesV1;
+	readonly hostnameRoutes?: import("./workload-public-route.js").WorkloadHostnameRoutesV1;
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
 	/** Optional namespace of the ingress controller; omitted keeps same-namespace behavior. */
@@ -1175,6 +1177,10 @@ export function createMultiServiceRuntimeOperations(options: {
 	readonly onWorkspaceSnapshot?: WorkspaceSnapshotObservationCallbackV1;
 }) {
 	const { client } = options;
+	const hostnameCertificates = createWorkloadHostnameCertificatesV1({
+		client,
+		policy: options.policy,
+	});
 	workloadEgressRulesV1(options.policy);
 	if (options.policy.workspaceSnapshotProjection)
 		requireWorkspaceSnapshotEgressV1(options.policy.workspaceSnapshotEgress);
@@ -1714,6 +1720,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			if (await hasAdditionalSnapshotEgress(value, false))
 				throw new WorkloadKubernetesError("policy");
 			await pruneStaleResources(value, ownership);
+			await hostnameCertificates.prepare(value);
 			const snapshotOwner = await put(serviceAccount(value), value, ownership);
 			if (options.policy.workspaceSnapshotProjection)
 				await writeWorkspaceSnapshotSecretV1(
@@ -1893,6 +1900,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			identity: { uid: string; generation: number } | "pending",
 		) {
+			if (!(await hostnameCertificates.ready(value))) return "pending" as const;
 			if (await hasAdditionalSnapshotEgress(value)) return "drifted" as const;
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
@@ -1999,6 +2007,8 @@ export function createMultiServiceRuntimeOperations(options: {
 		},
 		async promote(value: MultiServiceDesired) {
 			assertWorkloadPublicRouteV1(options.policy, value);
+			if (!(await hostnameCertificates.ready(value)))
+				throw new WorkloadKubernetesError("unavailable");
 			await put(ingress(value, options.policy), value);
 		},
 		async materializeSecret(

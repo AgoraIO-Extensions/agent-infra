@@ -547,6 +547,15 @@ it("holds the result on Store CAS, owner, configuration and policy drift", async
 		{ ...policy, imagePullSecretName: "other-pull" },
 		{ ...policy, skillDeliveryImage: materializerImage },
 		{ ...policy, workspaceSnapshotEgress: undefined },
+		{
+			...policy,
+			hostnameRoutes: {
+				hostSuffix: "apps.example.test",
+				platformOrigin: "https://platform.example.test",
+				clusterIssuerName: "letsencrypt-http01-staging",
+				agentIds: [agentId],
+			},
+		},
 	])
 		expect(
 			await projectAgentWorkloadUpgradeImagesV1({
@@ -1014,4 +1023,51 @@ it("fails closed before opening the Store on invalid requests or another authori
 		readWorkerAgentWorkloadDemandImagesV1(deployment(), request, undefined),
 	).rejects.toThrow("WORKER_AGENT_WORKLOAD_IMAGE_READ_FAILED");
 	expect(store.urls).toEqual([]);
+});
+
+it("binds the captured hostname declaration bytes without repurposing the module hash", async () => {
+	const { observed } = await currentObservation();
+	store.observations = [observed, observed];
+	const firstDeployment = {
+		...deployment(),
+		hostnameRouteConfigurationHash: "a".repeat(64),
+	};
+	const first = await readWorkerAgentWorkloadDemandImagesV1(
+		firstDeployment,
+		request,
+		databaseUrl,
+	);
+	expect(first.authority).toMatchObject({
+		hostnameRouteConfigurationHash: "a".repeat(64),
+	});
+	store.observations = [observed, observed];
+	const second = await readWorkerAgentWorkloadDemandImagesV1(
+		{ ...firstDeployment, hostnameRouteConfigurationHash: "b".repeat(64) },
+		request,
+		databaseUrl,
+	);
+	expect(second.authority).toMatchObject({
+		hostnameRouteConfigurationHash: "b".repeat(64),
+		configurationHash: first.authority?.configurationHash,
+	});
+	expect(second.authority?.imagePolicyHash).not.toBe(
+		first.authority?.imagePolicyHash,
+	);
+	store.observations = [observed, observed];
+	const stale = await readWorkerAgentWorkloadDemandImagesV1(
+		{ ...firstDeployment, hostnameRouteConfigurationHash: "b".repeat(64) },
+		{
+			...request,
+			target: {
+				...request.target,
+				imagePolicyHash: first.authority?.imagePolicyHash,
+			},
+		},
+		databaseUrl,
+	);
+	expect(stale.target).toMatchObject({
+		status: "UNKNOWN",
+		reason: "POLICY_CHANGED",
+		images: [],
+	});
 });

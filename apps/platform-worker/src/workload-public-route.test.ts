@@ -152,3 +152,112 @@ describe("selected public path routes", () => {
 		).toThrow();
 	});
 });
+
+describe("selected public hostname routes", () => {
+	it.each([
+		{ clusterIssuerName: "" },
+		{ hostSuffix: "192.0.2.1" },
+		{ agentIds: ["agent-a", "agent-a"] },
+		{ agentIds: [] },
+		{ accountSecretName: "caller-account" },
+	])("rejects invalid deployment certificate policy: %o", (change) => {
+		expect(() =>
+			workloadPublicRouteV1(
+				{
+					...workloadTestPolicy,
+					hostnameRoutes: {
+						hostSuffix: "apps.example.test",
+						platformOrigin: "https://platform.example.test",
+						clusterIssuerName: "letsencrypt-http01-staging",
+						agentIds: ["agent-a"],
+						...change,
+					},
+				},
+				"agent-a",
+			),
+		).toThrow();
+	});
+	it("rejects selecting a platform-auth Agent before any writes", async () => {
+		const f = fixture();
+		const selectedPolicy = {
+			...workloadTestPolicy,
+			hostnameRoutes: {
+				hostSuffix: "apps.example.test",
+				platformOrigin: "https://platform.example.test",
+				clusterIssuerName: "letsencrypt-http01-staging",
+				agentIds: ["agent-a"],
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: selectedPolicy,
+			probe: f.probe,
+		});
+		await expect(
+			adapter.apply(workloadDesiredFixture(1, "agent-a", "platform-auth")),
+		).rejects.toThrow();
+		expect(await f.client.read("StatefulSet", source.service.name)).toBeNull();
+	});
+	it("rejects the platform origin and conflicting path selection before resource writes", async () => {
+		const selectedPolicy = {
+			...workloadTestPolicy,
+			hostnameRoutes: {
+				hostSuffix: "apps.example.test",
+				platformOrigin:
+					"https://agent-a51d7389ba2cb760d233154216317fce.apps.example.test",
+				clusterIssuerName: "letsencrypt-http01-staging",
+				agentIds: ["agent-a"],
+			},
+		};
+		const f = fixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: f.client,
+			policy: selectedPolicy,
+			probe: f.probe,
+		});
+		const input = validateAgentWorkloadDesiredV1({
+			...source,
+			route: {
+				...source.route,
+				interactionOrigin: {
+					schemaVersion: 1,
+					origin: selectedPolicy.hostnameRoutes.platformOrigin,
+				},
+			},
+		});
+		await expect(adapter.apply(input)).rejects.toThrow();
+		expect(await f.client.read("StatefulSet", source.service.name)).toBeNull();
+		expect(() =>
+			workloadPublicRouteV1(
+				{
+					...policy,
+					hostnameRoutes: {
+						...selectedPolicy.hostnameRoutes,
+						platformOrigin: "https://platform.example.test",
+					},
+				},
+				"agent-a",
+			),
+		).toThrow();
+	});
+	it("uses the deployment suffix, root path and a stable per-Agent TLS Secret", () => {
+		const selectedPolicy = {
+			...workloadTestPolicy,
+			hostnameRoutes: {
+				hostSuffix: "apps.example.test",
+				platformOrigin: "https://platform.example.test",
+				clusterIssuerName: "letsencrypt-http01-staging",
+				agentIds: ["agent-a"],
+			},
+		};
+		const route = workloadPublicRouteV1(selectedPolicy, "agent-a");
+		expect(route.interactionOrigin.origin).toBe(
+			"https://agent-a51d7389ba2cb760d233154216317fce.apps.example.test",
+		);
+		expect(route.path).toBe("/");
+		expect(route.interactionPath).toBeUndefined();
+		expect(route.tlsSecretName).toBe(
+			"agent-a51d7389ba2cb760d233154216317fce-tls",
+		);
+	});
+});

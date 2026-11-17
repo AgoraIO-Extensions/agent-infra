@@ -56,6 +56,8 @@ export interface WorkerAgentWorkloadDemandImageDeploymentV1 {
 	readonly configurationModule: URL;
 	/** Source declared by the mounted deployment configuration; never the caller's. */
 	readonly configurationSourceSha: unknown;
+	/** Raw declaration digest captured by the same loader as the effective policy. */
+	readonly hostnameRouteConfigurationHash?: unknown;
 }
 
 const kind = "worker-agent-workload-demand-images";
@@ -119,6 +121,7 @@ export interface AgentWorkloadImageObservationV1 {
 export interface AgentWorkloadImageAuthorityV1 {
 	readonly sourceSha: string;
 	readonly configurationHash: string;
+	readonly hostnameRouteConfigurationHash?: string;
 	readonly resourceConfigurationHash: string;
 	/** Every Worker policy input that decides an Agent Workload image, pull or placement. */
 	readonly imagePolicyHash: string;
@@ -222,6 +225,8 @@ async function deploymentAuthority(
 		const { policy, admissionPolicyRef, registrySubjectRef } =
 			deployment.workload;
 		const sourceSha = deployment.configurationSourceSha;
+		const hostnameRouteConfigurationHash =
+			deployment.hostnameRouteConfigurationHash;
 		if (
 			typeof deployment.namespace !== "string" ||
 			!namespacePattern.test(deployment.namespace) ||
@@ -236,7 +241,10 @@ async function deploymentAuthority(
 			!opaquePattern.test(admissionPolicyRef) ||
 			typeof registrySubjectRef !== "string" ||
 			!opaquePattern.test(registrySubjectRef) ||
-			typeof deployment.registry !== "function"
+			typeof deployment.registry !== "function" ||
+			(hostnameRouteConfigurationHash !== undefined &&
+				(typeof hostnameRouteConfigurationHash !== "string" ||
+					!hashPattern.test(hostnameRouteConfigurationHash)))
 		)
 			throw new Error();
 		const configurationHash = createHash("sha256")
@@ -246,12 +254,24 @@ async function deploymentAuthority(
 		const authority: AgentWorkloadImageAuthorityV1 = {
 			sourceSha,
 			configurationHash,
+			...(hostnameRouteConfigurationHash !== undefined
+				? {
+						hostnameRouteConfigurationHash:
+							hostnameRouteConfigurationHash as string,
+					}
+				: {}),
 			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
 			imagePolicyHash: agentWorkloadImagePolicyHashV1({
 				policy,
 				workspaceSnapshotResolver: resolver,
 				admissionPolicyRef,
 				registrySubjectRef,
+				...(hostnameRouteConfigurationHash !== undefined
+					? {
+							hostnameRouteConfigurationHash:
+								hostnameRouteConfigurationHash as string,
+						}
+					: {}),
 			}),
 			contextHash: context.contextHash,
 			policy,
@@ -272,13 +292,19 @@ async function deploymentAuthority(
 				sourceShaBinding:
 					"mounted session-reserves.json sourceSha; equals context.runtimeAuthority",
 				configurationHash,
+				...(hostnameRouteConfigurationHash !== undefined
+					? { hostnameRouteConfigurationHash }
+					: {}),
+				...(policy.hostnameRoutes !== undefined
+					? { hostnameRoutes: policy.hostnameRoutes }
+					: {}),
 				configurationHashScope:
 					"sha256 of the deployment configuration.mjs bytes this process loaded",
 				namespace: deployment.namespace,
 				resourceConfigurationHash: authority.resourceConfigurationHash,
 				imagePolicyHash: authority.imagePolicyHash,
 				imagePolicyHashScope:
-					"namespace, image repository, pull Secret name, Skill delivery image, path/identity route policy, snapshot materializer policy and admission references",
+					"namespace, image repository, pull Secret name, Skill delivery image, path/identity/hostname route policy, captured hostname declaration bytes, snapshot materializer policy and admission references",
 				imageRepository: policy.imageRepository,
 				workspaceSnapshotResolver:
 					deployment.workload.workspaceSnapshotResolver !== undefined,
@@ -295,6 +321,7 @@ export function agentWorkloadImagePolicyHashV1(input: {
 	readonly workspaceSnapshotResolver?: unknown;
 	readonly admissionPolicyRef: string;
 	readonly registrySubjectRef: string;
+	readonly hostnameRouteConfigurationHash?: string;
 }) {
 	const { policy } = input;
 	return hash({
@@ -305,6 +332,14 @@ export function agentWorkloadImagePolicyHashV1(input: {
 		resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
 		routeHostSuffix: policy.routeHostSuffix,
 		pathRoutes: policy.pathRoutes ?? null,
+		...(policy.hostnameRoutes !== undefined ||
+		input.hostnameRouteConfigurationHash !== undefined
+			? {
+					hostnameRoutes: policy.hostnameRoutes ?? null,
+					hostnameRouteConfigurationHash:
+						input.hostnameRouteConfigurationHash ?? null,
+				}
+			: {}),
 		// Complete entries: the platform-auth Ingress consumes every value.
 		platformAuthAnnotations: Object.keys(policy.platformAuthAnnotations)
 			.sort()

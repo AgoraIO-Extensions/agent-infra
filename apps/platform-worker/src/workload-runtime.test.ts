@@ -410,12 +410,13 @@ function secretCleanupStore(
 function fixture(
 	overrides: Partial<WorkloadRuntimeOptionsV1> = {},
 	inputOverrides: Partial<
-		Pick<WorkloadReconciliationInputV1, "configuration" | "secrets">
+		Pick<WorkloadReconciliationInputV1, "configuration" | "secrets" | "state">
 	> = {},
 ) {
 	const api = fakeKubernetesApi();
 	let configuration = inputOverrides.configuration ?? configurationFixture();
-	let state: WorkloadReconciliationStateV1 | null = null;
+	let state: WorkloadReconciliationStateV1 | null =
+		inputOverrides.state ?? null;
 	let management: WorkloadReconciliationInputV1["management"] = {
 		schemaVersion: 1,
 		agentId: configuration.agentId,
@@ -7912,3 +7913,348 @@ it.each([
 		expect(Boolean(f.state?.verified)).toBe(delivered);
 	},
 );
+
+it.each(["failed", "stopped"] as const)(
+	"recomposes the approved profile and both snapshots after a normal Owner restart of %s",
+	async (phase) => {
+		const { projectWorkspaceSnapshotMaterializerV1 } = await import(
+			"./workspace-snapshot-materializer.js"
+		);
+		const base = configurationFixture();
+		assert(base.source.kind === "custom");
+		const snapshots = [
+			{
+				snapshotId: "snapshot-source",
+				name: "source",
+				digest: `sha256:${"b".repeat(64)}`,
+			},
+			{
+				snapshotId: "snapshot-environment",
+				name: "environment",
+				digest: `sha256:${"c".repeat(64)}`,
+			},
+		].map((snapshot) => ({
+			...snapshot,
+			sizeBytes: 128,
+			objectRef: `${snapshot.snapshotId}-object`,
+			signedUrl: `https://objects.example.test/${snapshot.snapshotId}?signature=synthetic`,
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+		}));
+		const configuration = {
+			...base,
+			source: {
+				...base.source,
+				interactionMode: "self-managed" as const,
+				identityResponsibility: "self-managed" as const,
+				workspaceSnapshots: snapshots.map(({ snapshotId, name }) => ({
+					snapshotId,
+					name,
+				})),
+			},
+		};
+		const resolver = async () => ({
+			inputs: snapshots,
+			projection: projectWorkspaceSnapshotMaterializerV1(snapshots, {
+				imageDigest: `registry.example.test/worker@sha256:${"d".repeat(64)}`,
+				allowedOrigins: ["https://objects.example.test"],
+				cacheSizeLimit: "2Gi",
+				resources: {
+					requests: { cpu: "100m", memory: "128Mi" },
+					limits: { cpu: "1", memory: "512Mi" },
+				},
+				credentialSecretName: "snapshot-credentials",
+			}),
+		});
+		const oldPolicy = {
+			...workloadTestPolicy,
+			resourceProfileRef: "ack-small",
+			workspaceSnapshotEgress: [
+				{
+					destination: {
+						namespace: "snapshot-storage",
+						podLabels: { app: "snapshots" },
+					},
+					port: 9000,
+				},
+			],
+		};
+		const options = {
+			policy: oldPolicy,
+			workspaceSnapshotResolver: resolver,
+			registry: workloadRegistryFixture(),
+		};
+		const original = fixture(options, { configuration });
+		await original.tick(10);
+		assert(original.state?.phase === "ready");
+		assert(original.state.verified);
+		const oldDesired = validateAgentWorkloadDesiredV1(
+			original.state.verified.deployment,
+		);
+		expect(oldDesired.resourceProfileRef).toBe("ack-small");
+		const originalPvc = await original.client.read(
+			"PersistentVolumeClaim",
+			oldDesired.persistentVolume.name,
+		);
+		assert(originalPvc);
+		const oldState: WorkloadReconciliationStateV1 = {
+			...structuredClone(original.state),
+			revision: original.state.revision + 1,
+			phase,
+			candidate: original.state.verified,
+			identity: null,
+			rollback: phase === "failed",
+			failureCode: phase === "failed" ? "reconciliation_failed" : null,
+			attempts: 0,
+			...(phase === "failed"
+				? {
+						lastFailure: {
+							schemaVersion: 1 as const,
+							reason: "kubernetes_policy" as const,
+							attempts: 600,
+						},
+					}
+				: {}),
+		};
+		const recovered = fixture(
+			{
+				...options,
+				policy: { ...oldPolicy, resourceProfileRef: "ack-small-e1-v1" },
+			},
+			{ configuration, state: oldState },
+		);
+		for (const retained of await original.client.list(
+			"PersistentVolumeClaim",
+			"agent-infra.agora.io/agent=" + oldDesired.service.name,
+		))
+			recovered.seed(retained);
+		const management = {
+			...recovered.management,
+			status:
+				phase === "failed" ? ("available" as const) : ("stopped" as const),
+			desiredState:
+				phase === "failed" ? ("running" as const) : ("stopped" as const),
+			serviceAvailability: phase === "failed" ? ("unavailable" as const) : null,
+			failureCode:
+				phase === "failed" ? ("reconciliation_failed" as const) : null,
+		};
+		recovered.setManagement(management);
+		await recovered.tick(1);
+		expect(
+			await recovered.client.read("StatefulSet", oldDesired.service.name),
+		).toBeNull();
+		expect(
+			validateAgentWorkloadDesiredV1(recovered.state?.candidate.deployment)
+				.resourceProfileRef,
+		).toBe("ack-small");
+		const lifecycle = new FakeAgentManagementV1({ states: [management] });
+		const restarted = await lifecycle.executeManagementCommand(
+			{
+				schemaVersion: 1,
+				command: "restart_agent",
+				agentId: management.agentId,
+				expectedRevision: management.revision,
+				idempotencyKey: `profile-restart-${phase}`,
+				requestId: `profile-restart-${phase}`,
+				traceId: "profile-restart",
+			},
+			{
+				schemaVersion: 1,
+				userId: "owner-a",
+				accountStatus: "active",
+				organizationIds: [],
+				isAdministrator: false,
+			},
+		);
+		assert(restarted.outcome === "accepted");
+		recovered.setManagement(restarted.writePlan.state);
+		await recovered.tick(2);
+		assert(recovered.state);
+		const candidate = validateAgentWorkloadDesiredV1(
+			recovered.state.candidate.deployment,
+		);
+		expect(candidate.resourceProfileRef).toBe("ack-small-e1-v1");
+		expect(candidate.workloadRevision).toBeGreaterThan(oldState.revision);
+		expect(candidate.fence).toBeGreaterThan(oldState.fence);
+		expect(candidate.agentId).toBe(oldDesired.agentId);
+		expect(candidate.configRevision).toBe(oldDesired.configRevision);
+		expect(candidate.imageDigest).toBe(oldDesired.imageDigest);
+		expect(candidate.workspaceSnapshots).toEqual(oldDesired.workspaceSnapshots);
+		expect(candidate.workspaceSnapshots).toHaveLength(2);
+		expect(candidate.persistentVolume).toEqual(oldDesired.persistentVolume);
+		await recovered.tick(10);
+		expect(recovered.state?.lastFailure).toBeUndefined();
+		expect({
+			phase: recovered.state?.phase,
+			lastFailure: recovered.state?.lastFailure,
+		}).toMatchObject({ phase: "ready" });
+		expect(
+			(
+				await recovered.client.read(
+					"PersistentVolumeClaim",
+					oldDesired.persistentVolume.name,
+				)
+			)?.metadata?.uid,
+		).toBe(originalPvc.metadata?.uid);
+		expect(JSON.stringify(recovered.state)).not.toContain("signature=");
+	},
+);
+
+it.each(["single", "multi"] as const)(
+	"publishes the normal %s self-managed hostname only after certificate readiness and closes it on expiry",
+	async (kind) => {
+		const base =
+			kind === "multi"
+				? multiServiceConfigurationFixture()
+				: configurationFixture();
+		assert(base.source.kind === "custom");
+		const f = fixture(
+			{
+				registry: workloadRegistryFixture(),
+				policy: {
+					...workloadTestPolicy,
+					hostnameRoutes: {
+						hostSuffix: "apps.example.test",
+						platformOrigin: "https://platform.example.test",
+						clusterIssuerName: "letsencrypt-http01-staging",
+						agentIds: ["agent-a"],
+					},
+				},
+			},
+			{
+				configuration: {
+					...base,
+					source: {
+						...base.source,
+						interactionMode: "self-managed",
+						identityResponsibility: "self-managed",
+					},
+				},
+			},
+		);
+		await f.tick(4);
+		const name = "agent-a51d7389ba2cb760d233154216317fce-tls";
+		const certificate = await f.client.read("Certificate", name);
+		assert(certificate);
+		expect(
+			await f.client.read("Ingress", "agent-a51d7389ba2cb760d233154216317fce"),
+		).toBeNull();
+		f.seed({
+			...certificate,
+			status: {
+				conditions: [
+					{
+						type: "Ready",
+						status: "True",
+						observedGeneration: certificate.metadata?.generation,
+					},
+				],
+				notAfter: "2030-01-01T00:00:00Z",
+			},
+		} as KubernetesObject);
+		f.seed({
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: {
+				namespace: "workload-test",
+				name,
+				uid: "cert-manager-secret",
+				resourceVersion: "1",
+			},
+		});
+		await f.tick(5);
+		expect(f.state?.phase).toBe("ready");
+		const verified = validateAgentWorkloadDesiredV1(
+			f.state?.verified?.deployment,
+		);
+		expect(
+			await f.client.list(
+				"Ingress",
+				"agent-infra.agora.io/agent=agent-a51d7389ba2cb760d233154216317fce",
+			),
+		).toHaveLength(1);
+		expect(verified.route).toMatchObject({
+			exposure: "self-managed",
+			interactionOrigin: {
+				origin:
+					"https://agent-a51d7389ba2cb760d233154216317fce.apps.example.test",
+			},
+		});
+		expect(
+			"interactionPath" in verified.route && verified.route.interactionPath,
+		).toBeFalsy();
+		const ready = await f.client.read("Certificate", name);
+		assert(ready);
+		f.seed({
+			...ready,
+			status: {
+				conditions: [
+					{
+						type: "Ready",
+						status: "True",
+						observedGeneration: ready.metadata?.generation,
+					},
+				],
+				notAfter: "2000-01-01T00:00:00Z",
+			},
+		} as KubernetesObject);
+		await f.tick(1);
+		expect(f.state?.phase).not.toBe("ready");
+		expect(
+			await f.client.read("Ingress", "agent-a51d7389ba2cb760d233154216317fce"),
+		).toBeNull();
+		expect((await f.client.read("Certificate", name))?.metadata?.uid).toBe(
+			certificate.metadata?.uid,
+		);
+	},
+);
+
+it("treats a conflicting hostname Secret as a permanent rejection without spending the retry budget", async () => {
+	const base = configurationFixture();
+	assert(base.source.kind === "custom");
+	const f = fixture(
+		{
+			registry: workloadRegistryFixture(),
+			policy: {
+				...workloadTestPolicy,
+				hostnameRoutes: {
+					hostSuffix: "apps.example.test",
+					platformOrigin: "https://platform.example.test",
+					clusterIssuerName: "letsencrypt-http01-staging",
+					agentIds: ["agent-a"],
+				},
+			},
+		},
+		{
+			configuration: {
+				...base,
+				source: {
+					...base.source,
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+				},
+			},
+		},
+	);
+	const name = "agent-a51d7389ba2cb760d233154216317fce-tls";
+	f.seed({
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: {
+			namespace: "workload-test",
+			name,
+			uid: "foreign-secret",
+			resourceVersion: "1",
+		},
+	});
+	for (let step = 0; step < 10 && !f.state?.lastFailure; step++)
+		await f.tick(1);
+	expect(f.state?.lastFailure?.reason).toBe("preflight_rejected");
+	expect(f.state).toMatchObject({
+		phase: "cleaning",
+		lastFailure: { reason: "preflight_rejected", attempts: 1 },
+	});
+	expect(await f.client.read("Certificate", name)).toBeNull();
+	expect((await f.client.read("Secret", name))?.metadata?.uid).toBe(
+		"foreign-secret",
+	);
+});

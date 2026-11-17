@@ -38,6 +38,10 @@ import {
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import {
+	bindHostnameRouteConfigurationV1,
+	readHostnameRouteConfigurationV1,
+} from "./hostname-route-configuration.js";
+import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
 } from "./native-metadata-deployment-assembly.js";
@@ -235,7 +239,7 @@ function resolveConnectionInstallation(
 const {
 	sessionSandboxReserves: configuredSessionSandboxReservesFromModule,
 	evaluationPolicy,
-	workloadInput: configuredWorkloadInput,
+	workloadInput: configuredWorkloadInputFromModule,
 	signing,
 	serviceToken,
 	directory,
@@ -260,6 +264,18 @@ const {
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
+
+// Capture one immutable declaration/byte digest for the Worker and normal RO entry.
+const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
+const configuredWorkloadInput = {
+	...configuredWorkloadInputFromModule,
+	policy: bindHostnameRouteConfigurationV1(
+		configuredWorkloadInputFromModule.policy,
+		hostnameRouteConfigurationSource?.configuration,
+		process.env.PLATFORM_WORKER_NAMESPACE ??
+			configuredWorkloadInputFromModule.policy.namespace,
+	),
+};
 
 function reserveConfigurationFromDeploymentFile():
 	| SessionSandboxReserveConfigurationV1
@@ -1345,6 +1361,12 @@ export async function readPlatformAgentWorkloadDemandImagesV1(
 				registryModule.createOciImageRegistryAdapterV1(workloadInput.registry),
 			configurationModule: new URL("./configuration.mjs", import.meta.url),
 			// The same mounted reserve file field the Session image receipt binds.
+			...(hostnameRouteConfigurationSource !== undefined
+				? {
+						hostnameRouteConfigurationHash:
+							hostnameRouteConfigurationSource.sha256,
+					}
+				: {}),
 			configurationSourceSha: (
 				configuredSessionSandboxReservesFromFile as
 					| (SessionSandboxReserveConfigurationV1 & { sourceSha?: string })
