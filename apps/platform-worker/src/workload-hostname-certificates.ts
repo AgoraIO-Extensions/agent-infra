@@ -83,6 +83,36 @@ function matchesCertificate(
 	);
 }
 
+function matchesSecretMetadata(
+	secret: Pick<KubernetesObject, "metadata">,
+	certificate: WorkloadHostnameCertificateV1,
+	namespace: string,
+	name: string,
+) {
+	const metadata = secret.metadata;
+	if (
+		!metadata ||
+		typeof metadata.uid !== "string" ||
+		!metadata.uid ||
+		typeof metadata.resourceVersion !== "string" ||
+		!metadata.resourceVersion ||
+		metadata.deletionTimestamp ||
+		metadata.namespace !== namespace ||
+		metadata.name !== name
+	)
+		return false;
+	const owners = metadata.ownerReferences ?? [];
+	return (
+		owners.length === 0 ||
+		(owners.length === 1 &&
+			owners[0]?.apiVersion === "cert-manager.io/v1" &&
+			owners[0].kind === "Certificate" &&
+			owners[0].name === name &&
+			typeof certificate.metadata?.uid === "string" &&
+			owners[0].uid === certificate.metadata.uid)
+	);
+}
+
 /** Stable declarations; cert-manager exclusively owns issuance and Secret contents. */
 export function createWorkloadHostnameCertificatesV1(options: {
 	readonly client: WorkerKubernetesClientV1;
@@ -108,6 +138,22 @@ export function createWorkloadHostnameCertificatesV1(options: {
 					issuerName: selected.clusterIssuerName,
 					agentId: value.agentId,
 				})
+			)
+				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
+			if (!options.client.readMetadata)
+				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
+			const secret = await options.client.readMetadata(
+				"Secret",
+				route.tlsSecretName,
+			);
+			if (
+				secret &&
+				!matchesSecretMetadata(
+					secret,
+					current,
+					options.client.namespace,
+					route.tlsSecretName,
+				)
 			)
 				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 			return;
@@ -167,22 +213,14 @@ export function createWorkloadHostnameCertificatesV1(options: {
 				"Secret",
 				route.tlsSecretName,
 			);
-			if (
-				!secret?.metadata?.uid ||
-				!secret.metadata.resourceVersion ||
-				secret.metadata.deletionTimestamp ||
-				secret.metadata.namespace !== options.client.namespace ||
-				secret.metadata.name !== route.tlsSecretName
-			)
-				return false;
-			const owners = secret.metadata.ownerReferences ?? [];
 			return (
-				owners.length === 0 ||
-				(owners.length === 1 &&
-					owners[0]?.apiVersion === "cert-manager.io/v1" &&
-					owners[0].kind === "Certificate" &&
-					owners[0].name === route.tlsSecretName &&
-					owners[0].uid === current.metadata.uid)
+				secret !== null &&
+				matchesSecretMetadata(
+					secret,
+					current,
+					options.client.namespace,
+					route.tlsSecretName,
+				)
 			);
 		},
 		async prepare(value: AgentWorkloadDesiredV1) {

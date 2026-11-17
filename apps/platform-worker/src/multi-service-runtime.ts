@@ -1721,8 +1721,9 @@ export function createMultiServiceRuntimeOperations(options: {
 				throw new WorkloadKubernetesError("policy");
 			if (options.policy.hostnameRoutes?.agentIds.includes(value.agentId))
 				await hostnameCertificates.preflight(value);
+			if (options.policy.hostnameRoutes?.agentIds.includes(value.agentId))
+				await hostnameCertificates.prepare(value);
 			await pruneStaleResources(value, ownership);
-			await hostnameCertificates.prepare(value);
 			const snapshotOwner = await put(serviceAccount(value), value, ownership);
 			if (options.policy.workspaceSnapshotProjection)
 				await writeWorkspaceSnapshotSecretV1(

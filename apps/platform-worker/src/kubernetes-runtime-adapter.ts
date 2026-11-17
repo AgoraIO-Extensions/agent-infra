@@ -1616,6 +1616,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						existingCache.metadata.uid)
 			)
 				throw new WorkloadKubernetesError("conflict");
+			if (policy.hostnameRoutes?.agentIds.includes(value.agentId))
+				await hostnameCertificates.prepare(value);
 			if (!current && value.replicas === 0) {
 				const pvc = await client.read<V1PersistentVolumeClaim>(
 					"PersistentVolumeClaim",
@@ -1971,7 +1973,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const applied = await put(workload, value, recovery);
 			if (!applied.metadata?.uid || !applied.metadata.generation)
 				throw new WorkloadKubernetesError("unavailable");
-			await hostnameCertificates.prepare(value);
 			return {
 				uid: applied.metadata.uid,
 				generation: applied.metadata.generation,

@@ -7,6 +7,7 @@ import {
 } from "./kubernetes.fixture.js";
 import { fixture } from "./kubernetes-runtime-adapter.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import { createWorkloadHostnameCertificatesV1 } from "./workload-hostname-certificates.js";
 import { workloadInteractionRouteV1 } from "./workload-public-route.js";
 
 const policy = {
@@ -79,6 +80,127 @@ describe("Agent hostname certificate lifecycle", () => {
 		expect(f.writes).toHaveLength(0);
 		expect(await f.client.read("Certificate", certificateName)).toBeNull();
 		expect(await f.client.read("Secret", certificateName)).toEqual(secret);
+	});
+	it.each(["foreign-owner", "deleting", "missing-uid"] as const)(
+		"rejects a matching Certificate with conflicting existing Secret metadata before writes: %s",
+		async (change) => {
+			const f = fixture();
+			const input = desired();
+			const certificates = createWorkloadHostnameCertificatesV1({
+				client: f.client,
+				policy,
+			});
+			await certificates.prepare(input);
+			const certificate = await f.client.read("Certificate", certificateName);
+			if (!certificate) throw new Error("Expected Certificate");
+			seedCertificateSecret(f, certificate);
+			const secret = await f.client.read("Secret", certificateName);
+			if (!secret) throw new Error("Expected Secret");
+			f.seed({
+				...secret,
+				metadata: {
+					...secret.metadata,
+					...(change === "foreign-owner"
+						? {
+								ownerReferences: [
+									{
+										apiVersion: "cert-manager.io/v1",
+										kind: "Certificate",
+										name: certificateName,
+										uid: "other-certificate-uid",
+									},
+								],
+							}
+						: change === "deleting"
+							? { deletionTimestamp: new Date("2026-01-01T00:00:00Z") }
+							: { uid: undefined }),
+				},
+			});
+			const before = structuredClone([...f.resources.entries()]);
+			f.writes.length = 0;
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy,
+				probe: f.probe,
+			});
+			await expect(adapter.apply(input)).rejects.toThrow();
+			expect(f.writes).toHaveLength(0);
+			expect([...f.resources.entries()]).toEqual(before);
+		},
+	);
+	it("rejects failed metadata reads for an existing Certificate without full-Secret fallback", async () => {
+		const f = fixture();
+		await createWorkloadHostnameCertificatesV1({
+			client: f.client,
+			policy,
+		}).prepare(desired());
+		f.writes.length = 0;
+		let fullSecretReads = 0;
+		const client: typeof f.client = {
+			...f.client,
+			async read(kind, name) {
+				if (kind === "Secret") fullSecretReads++;
+				return f.client.read(kind, name);
+			},
+			async readMetadata() {
+				throw new Error("METADATA_READER_UNAVAILABLE");
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client,
+			policy,
+			probe: f.probe,
+		});
+		await expect(adapter.apply(desired())).rejects.toThrow(
+			"METADATA_READER_UNAVAILABLE",
+		);
+		expect(fullSecretReads).toBe(0);
+		expect(f.writes).toHaveLength(0);
+	});
+	it("keeps an existing Certificate without a Secret as pending controller output", async () => {
+		const f = fixture();
+		const certificates = createWorkloadHostnameCertificatesV1({
+			client: f.client,
+			policy,
+		});
+		await certificates.prepare(desired());
+		const before = structuredClone([...f.resources.entries()]);
+		f.writes.length = 0;
+		await expect(certificates.preflight(desired())).resolves.toBeUndefined();
+		await expect(certificates.prepare(desired())).resolves.toBeUndefined();
+		expect(await certificates.ready(desired())).toBe(false);
+		expect(f.writes).toHaveLength(0);
+		expect([...f.resources.entries()]).toEqual(before);
+	});
+	it("rejects a Secret created between preflight and prepare before any workload write", async () => {
+		const f = fixture();
+		let reads = 0;
+		const client: typeof f.client = {
+			...f.client,
+			async read(kind, name) {
+				if (kind === "Certificate" && ++reads === 2)
+					f.seed({
+						apiVersion: "v1",
+						kind: "Secret",
+						metadata: {
+							namespace: "workload-test",
+							name: certificateName,
+							uid: "foreign-secret",
+							resourceVersion: "3",
+						},
+					});
+				return f.client.read(kind, name);
+			},
+		};
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client,
+			policy,
+			probe: f.probe,
+		});
+		await expect(adapter.apply(desired())).rejects.toThrow();
+		expect(reads).toBe(2);
+		expect(f.writes).toHaveLength(0);
+		expect([...f.resources.keys()]).toEqual([`Secret/${certificateName}`]);
 	});
 	it("does not trust stale Ready when the TLS Secret is absent", async () => {
 		const f = fixture();
