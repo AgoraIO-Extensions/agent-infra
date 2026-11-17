@@ -260,6 +260,11 @@ export function sessionSandboxBudgetFitsV1(
 			used[k] + added[k] <= limit[k],
 	);
 }
+/**
+ * Deployment budgets size the unclaimed reserve pool. Runtime usage is an
+ * observable signal and is intentionally not an admission predicate for an
+ * ordinary or already-owned Session.
+ */
 export function canReadySessionSandboxReserveV1(input: {
 	status: SessionSandboxReserveStatusV1;
 	operations: readonly SessionSandboxReserveOperationV1[];

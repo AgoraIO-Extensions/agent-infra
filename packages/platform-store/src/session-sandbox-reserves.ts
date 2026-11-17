@@ -508,21 +508,8 @@ export async function admitNewSessionSandboxV1(
 			};
 		}
 	}
-	if (configured?.enabled && config?.enabled) {
-		const [workload] = await tx<
-			{ resource_hash: string | null }[]
-		>`select state->'verified'->'executionCapacity'->>'resourceConfigurationHash' as resource_hash from platform.workload_reconciliations where agent_id = ${authority.agentId}`;
-		const cost = config.resourceCosts.find(
-			(c) => c.resourceConfigurationHash === workload?.resource_hash,
-		);
-		if (!cost) unavailable();
-		await charge(
-			tx,
-			config,
-			fallback.sandboxId,
-			current?.profile.resources ?? cost.resources,
-		);
-	}
+	// Ordinary cold-start Sessions are admitted independently of deployment-wide
+	// accounting. The reserve pool is the only path that calls charge().
 	return {
 		binding: fallback,
 		admissionProfileDigest: current?.profile.digest ?? null,
@@ -557,14 +544,7 @@ export async function reserveSessionSandboxResumeBudgetV1(
 		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
 	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
 	if (!row?.compute_released) return;
-	if (
-		!sessionSandboxBudgetFitsV1(
-			config.totalBudget,
-			await usedBudget(tx, config.namespace),
-			{ ...row.resources, storageBytes: 0 },
-		)
-	)
-		unavailable();
+	// An owned Session may resume even when aggregate deployment usage is high.
 	await tx`update platform.session_sandbox_resource_charges set compute_released = false where sandbox_id = ${sandboxId}`;
 }
 
@@ -619,26 +599,8 @@ export async function reserveSessionSandboxPreparationBudgetV1(
 			approved.resources.storageBytes,
 		),
 	};
-	const added = {
-		cpuMillis:
-			resources.cpuMillis -
-			(row.compute_released ? 0 : row.resources.cpuMillis),
-		memoryBytes:
-			resources.memoryBytes -
-			(row.compute_released ? 0 : row.resources.memoryBytes),
-		storageBytes: resources.storageBytes - row.resources.storageBytes,
-	};
-	if (
-		!sessionSandboxBudgetFitsV1(
-			config.totalBudget,
-			await usedBudget(tx, config.namespace),
-			added,
-		)
-	)
-		throw new SessionSandboxPreparationBudgetErrorV1(
-			"budget_exhausted",
-			config.failureBackoffMs,
-		);
+	// Preparation/recovery updates owned charge facts for observability; it does
+	// not apply the deployment-wide reserve admission budget.
 	await tx`update platform.session_sandbox_resource_charges set resources = ${tx.json(resources as unknown as Json)}, compute_released = false where sandbox_id = ${sandboxId}`;
 }
 /** Releases CPU/memory only after a durable stop receipt; retained PVC remains charged. */
@@ -821,6 +783,25 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				windowMs: input.windowMs,
 				profiles,
 			};
+		});
+	}
+	/** Bounded aggregate for monitoring; never used to reject ordinary Sessions. */
+	async usage() {
+		return this.#client.begin(async (tx) => {
+			const [charges] = await tx<{ cpu: string; memory: string; storage: string }[]>`
+				select coalesce(sum((resources->>'cpuMillis')::bigint), 0)::text as cpu,
+				coalesce(sum((resources->>'memoryBytes')::bigint), 0)::text as memory,
+				coalesce(sum((resources->>'storageBytes')::bigint), 0)::text as storage
+				from platform.session_sandbox_resource_charges where namespace = ${this.#configuration.namespace}`;
+			const [sessions] = await tx<{ count: string }[]>`
+				select count(*)::text as count from platform.session_sandbox_allocations
+				where namespace = ${this.#configuration.namespace}`;
+			const [reserves] = await tx<{ count: string; claimed: string }[]>`
+				select count(*) filter (where status <> 'claimed' and retired_at is null)::text as count,
+				count(*) filter (where status = 'claimed' and retired_at is null)::text as claimed
+				from platform.session_sandbox_reserves where namespace = ${this.#configuration.namespace}`;
+			return { cpuMillis: Number(charges?.cpu ?? 0), memoryBytes: Number(charges?.memory ?? 0), storageBytes: Number(charges?.storage ?? 0),
+				sessionCount: Number(sessions?.count ?? 0), reserveCount: Number(reserves?.count ?? 0), claimedReserveCount: Number(reserves?.claimed ?? 0) };
 		});
 	}
 	async renewLease(

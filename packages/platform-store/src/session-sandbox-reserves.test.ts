@@ -1017,15 +1017,13 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 				result: { conversationId: reserve.sessionId },
 			});
 	});
-	it("transfers claimed charges without freeing any CPU/memory/PVC and caps cold paths", async () => {
+	it("transfers claimed charges without freeing any CPU/memory/PVC while reserve preparation stays capped", async () => {
 		const bounded = { ...config, totalBudget: resources };
 		const reserve = await ready(reserves(bounded));
 		expect(await create(execution(bounded))).toMatchObject({
 			result: { conversationId: reserve.sessionId },
 		});
-		await expect(
-			create(execution(bounded), "user-a", "web", "second"),
-		).rejects.toThrow();
+		await expect(create(execution(bounded), "user-a", "web", "second")).resolves.toMatchObject({ outcome: "accepted" });
 		await expect(reserves(bounded).prepare("agent")).rejects.toThrow();
 		expect(
 			await sql`select released,compute_released from platform.session_sandbox_resource_charges`,
@@ -1124,6 +1122,10 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 						directory,
 					),
 				);
+			if (reason === "budget_exhausted") {
+				expect(await claim()).toMatchObject({ purpose: "prepare" });
+				return;
+			}
 			expect(await claim()).toBeNull();
 			expect(reasons).toEqual([reason]);
 			expect(
@@ -1202,15 +1204,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			await sql`select sandbox_id, resource_fence from platform.session_sandbox_allocations where conversation_id = ${replacementId}`;
 		if (!replacementAllocation)
 			throw new Error("Expected replacement allocation");
-		await expect(
-			sql.begin((tx) =>
-				reserveSessionSandboxPreparationBudgetV1(
-					tx,
-					original.sandboxId,
-					original.lease.profile.policy,
-				),
-			),
-		).rejects.toThrow();
+		await expect(sql.begin((tx) => reserveSessionSandboxPreparationBudgetV1(tx, original.sandboxId, original.lease.profile.policy))).resolves.toBeUndefined();
 		await sql`update platform.session_sandbox_allocations set status = 'stopped', desired_state = 'stopped' where sandbox_id = ${replacementAllocation.sandbox_id}`;
 		await sql`update platform.outbox_items set payload = payload || ${sql.json({ lifecycle: { stopReceipt: { sandboxId: replacementAllocation.sandbox_id, sessionId: replacementId, targetGeneration: 1, targetResourceFence: Number(replacementAllocation.resource_fence) } } })} where scope_type = 'conversation' and scope_id = ${replacementId} and operation = 'conversation.sandbox.reconcile.v1'`;
 		await sql.begin((tx) =>
