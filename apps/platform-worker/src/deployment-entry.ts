@@ -600,8 +600,9 @@ let conversationPrepared:
 	| undefined;
 
 /**
- * Resources opened during preparation stay owned here until the prepared deployment is
- * returned; a later preparation failure closes them once and keeps the original error.
+ * The startup source guard opened during preparation stays owned here until the prepared
+ * deployment is returned; a later preparation failure closes it once and keeps the
+ * original error. Other preparation resources keep their existing lifecycle.
  */
 async function createPrepared(signal: AbortSignal) {
 	const owned: { close?: () => Promise<void> } = {};
