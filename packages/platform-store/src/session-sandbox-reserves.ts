@@ -788,7 +788,9 @@ export class PostgresSessionSandboxReserveStoreV1 {
 	/** Bounded aggregate for monitoring; never used to reject ordinary Sessions. */
 	async usage() {
 		return this.#client.begin(async (tx) => {
-			const [charges] = await tx<{ cpu: string; memory: string; storage: string }[]>`
+			const [charges] = await tx<
+				{ cpu: string; memory: string; storage: string }[]
+			>`
 				select coalesce(sum((resources->>'cpuMillis')::bigint), 0)::text as cpu,
 				coalesce(sum((resources->>'memoryBytes')::bigint), 0)::text as memory,
 				coalesce(sum((resources->>'storageBytes')::bigint), 0)::text as storage
@@ -800,8 +802,14 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				select count(*) filter (where status <> 'claimed' and retired_at is null)::text as count,
 				count(*) filter (where status = 'claimed' and retired_at is null)::text as claimed
 				from platform.session_sandbox_reserves where namespace = ${this.#configuration.namespace}`;
-			return { cpuMillis: Number(charges?.cpu ?? 0), memoryBytes: Number(charges?.memory ?? 0), storageBytes: Number(charges?.storage ?? 0),
-				sessionCount: Number(sessions?.count ?? 0), reserveCount: Number(reserves?.count ?? 0), claimedReserveCount: Number(reserves?.claimed ?? 0) };
+			return {
+				cpuMillis: Number(charges?.cpu ?? 0),
+				memoryBytes: Number(charges?.memory ?? 0),
+				storageBytes: Number(charges?.storage ?? 0),
+				sessionCount: Number(sessions?.count ?? 0),
+				reserveCount: Number(reserves?.count ?? 0),
+				claimedReserveCount: Number(reserves?.claimed ?? 0),
+			};
 		});
 	}
 	async renewLease(
