@@ -73,3 +73,16 @@ node tests/platform-capacity-load.mjs --help
 `--help` 不读取凭证，也不触发网络请求。运行失败时保留 JSON 中的失败阶段、HTTP 状态、
 超时和版本元数据；不要把 token、普通会话正文、原始错误响应或 SSE 内容复制到 Issue、
 日志或共享聊天。
+
+## Session Sandbox 总量监控与告警
+
+`PostgresSessionSandboxReserveStoreV1.usage()` 提供当前 namespace 的 CPU、内存、PVC
+存储、Session 数、未领取 reserve 数和已领取 reserve 数，供 #4176 / Spec §18.2 的统一资源
+观测口径消费。指标名、预算/PVC 占用定义和告警语义以 #4176 为准，不在本文件另起一套。
+告警阈值由部署配置注入；告警只通知，不改变普通会话、已领取会话或续接恢复的准入结果。只有未领取 reserve
+池的 `maximumReserves`、profile maximum 和 `maximumConcurrentCreates` 仍是创建上限。
+
+全局上限审计：`apps/platform-worker/src/conversation-worker.ts` 的
+`maximumConcurrentDispatches` 默认值为 8，是单 Worker 进程的派发并发保护，不是 Session
+部署总资源预算；它应通过 Worker 副本/部署配置扩展并在监控中单独告警。文件传输并发、
+Agent 级容量、单 Agent 等待任务和 reserve 池上限仍分别保持各自边界，不被本规则移除。
