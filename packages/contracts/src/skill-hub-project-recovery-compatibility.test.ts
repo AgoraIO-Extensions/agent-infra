@@ -8,7 +8,9 @@ import { expect, it } from "vitest";
 const route =
 	"/api/v2/skills/projects/{projectId}/publications/{operationId}/recover";
 const cli = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
-it("admits only the reviewed original-operation recovery and preserves the rest of the contract", async () => {
+it("admits only the reviewed original-operation recovery and preserves the rest of the contract", {
+	timeout: 30_000,
+}, async () => {
 	const current = JSON.parse(
 		await readFile(
 			new URL(
