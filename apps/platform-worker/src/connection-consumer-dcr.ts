@@ -1,4 +1,8 @@
-import { registerStandardOAuthClient } from "@agent-infra/agent-runtime";
+import {
+	registerConnectionMachineOAuthClientV1,
+	registerStandardOAuthClient,
+	revokeConnectionMachineOAuthClientV1,
+} from "@agent-infra/agent-runtime";
 import {
 	type ConnectionConsumerProfileV1,
 	connectionConsumerProfileFingerprintV1,
@@ -11,6 +15,8 @@ export interface ConnectionConsumerOAuthClientBindingV1 {
 	readonly callbackUrl: string;
 	readonly profileFingerprint: string;
 	readonly source: { readonly ref: string; readonly revision: string };
+	/** Present only for EP-1060 registrations; never sent to Runtime. */
+	readonly registrationKey?: string;
 }
 
 type ConnectionConsumerOAuthClientBindingProjectionV1 = Omit<
@@ -45,6 +51,12 @@ export interface ConnectionConsumerDcrResolverOptionsV1 {
 	) => Promise<void>;
 	readonly installationSupplyForAgent: (agentId: string) => unknown;
 	readonly fetch?: typeof fetch;
+	/** EP-1060 machine registration. When set, service credentials stay in this
+	 * protected resolver boundary and are never placed in deployment config. */
+	readonly machineRegistrationEndpoint?: string;
+	readonly serviceCredentialForAgent?: (agentId: string) => string;
+	readonly machineRegistrationKeyForAgent?: (agentId: string) => string;
+	readonly machineClientName?: string;
 }
 
 export function createConnectionConsumerDcrResolverV1(
@@ -122,15 +134,57 @@ export function createConnectionConsumerDcrResolverV1(
 				)
 					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			} else {
-				const clientId = await registerStandardOAuthClient({
-					issuer: options.issuer,
-					registrationEndpoint: options.registrationEndpoint,
-					redirectUri: callbackUrl,
-					scope: "mcp",
-					signal,
-					assertCurrent: () => signal.throwIfAborted(),
-					...(options.fetch ? { fetch: options.fetch } : {}),
-				});
+				const machineMode =
+					options.machineRegistrationEndpoint !== undefined ||
+					options.serviceCredentialForAgent !== undefined ||
+					options.machineRegistrationKeyForAgent !== undefined;
+				if (
+					machineMode &&
+					(!options.machineRegistrationEndpoint ||
+						!options.serviceCredentialForAgent ||
+						!options.machineRegistrationKeyForAgent)
+				)
+					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				const machine = machineMode
+					? {
+							endpoint: options.machineRegistrationEndpoint as string,
+							serviceCredential: options.serviceCredentialForAgent as (
+								agentId: string,
+							) => string,
+							registrationKey: options.machineRegistrationKeyForAgent as (
+								agentId: string,
+							) => string,
+						}
+					: undefined;
+				const clientId = machineMode
+					? (
+							await registerConnectionMachineOAuthClientV1({
+								endpoint: machine?.endpoint as string,
+								serviceCredential: machine?.serviceCredential(
+									agentId,
+								) as string,
+								registrationKey: machine?.registrationKey(agentId) as string,
+								clientName:
+									options.machineClientName ?? `Platform Agent ${agentId}`,
+								redirectUri: callbackUrl,
+								resource: `${options.publicOrigin}${options.mcpPath}`,
+								scope: "mcp",
+								source: { ...options.approvalSource },
+								configFingerprint: profileFingerprint,
+								signal,
+								assertCurrent: () => signal.throwIfAborted(),
+								...(options.fetch ? { fetch: options.fetch } : {}),
+							})
+						).registration.clientId
+					: await registerStandardOAuthClient({
+							issuer: options.issuer,
+							registrationEndpoint: options.registrationEndpoint,
+							redirectUri: callbackUrl,
+							scope: "mcp",
+							signal,
+							assertCurrent: () => signal.throwIfAborted(),
+							...(options.fetch ? { fetch: options.fetch } : {}),
+						});
 				if (expectedClientId !== undefined && clientId !== expectedClientId)
 					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 				binding = {
@@ -138,6 +192,9 @@ export function createConnectionConsumerDcrResolverV1(
 					callbackUrl,
 					profileFingerprint,
 					source: { ...options.approvalSource },
+					...(machineMode
+						? { registrationKey: machine?.registrationKey(agentId) as string }
+						: {}),
 				};
 				await options.persistOAuthClientBindingForAgent?.(
 					agentId,
@@ -164,4 +221,28 @@ export function createConnectionConsumerDcrResolverV1(
 		}
 		return result;
 	};
+}
+
+/** Revocation hook used by Owner disconnect/replacement cleanup. It is deliberately
+ * explicit so a stale installation cannot be silently reused after association CAS. */
+export async function revokeConnectionConsumerMachineRegistrationV1(options: {
+	readonly endpoint: string;
+	readonly serviceCredential: string;
+	readonly binding: Pick<
+		ConnectionConsumerOAuthClientBindingV1,
+		"registrationKey"
+	>;
+	readonly signal: AbortSignal;
+	readonly fetch?: typeof fetch;
+}) {
+	if (!options.binding.registrationKey)
+		throw new Error("CONNECTION_OAUTH_REGISTRATION_UNAVAILABLE");
+	await revokeConnectionMachineOAuthClientV1({
+		endpoint: options.endpoint,
+		serviceCredential: options.serviceCredential,
+		registrationKey: options.binding.registrationKey,
+		signal: options.signal,
+		assertCurrent: () => options.signal.throwIfAborted(),
+		...(options.fetch ? { fetch: options.fetch } : {}),
+	});
 }

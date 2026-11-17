@@ -39,8 +39,11 @@ export * from "./standard-mcp-acp-bridge.js";
 export * from "./standard-mcp-client.js";
 export {
 	exchangeStandardOAuthCode,
+	readConnectionMachineOAuthClientV1,
 	refreshStandardOAuthToken,
+	registerConnectionMachineOAuthClientV1,
 	registerStandardOAuthClient,
+	revokeConnectionMachineOAuthClientV1,
 	revokeStandardOAuthToken,
 	standardOAuthUnavailable,
 } from "./standard-oauth.js";

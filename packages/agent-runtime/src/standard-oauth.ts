@@ -6,6 +6,210 @@ import { validateStandardMcpToken } from "./standard-mcp-client.js";
 
 const registrationId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+export interface ConnectionMachineOAuthClientRegistrationV1 {
+	readonly registrationVersion: 1;
+	readonly outcome: "KNOWN";
+	readonly registration: {
+		readonly registrationKey: string;
+		readonly clientId: string;
+		readonly [key: string]: unknown;
+	};
+}
+
+/** Register one Host-owned client with the EP-1060 machine-registration contract. */
+export async function registerConnectionMachineOAuthClientV1(options: {
+	endpoint: string;
+	serviceCredential: string;
+	registrationKey: string;
+	clientName: string;
+	redirectUri: string;
+	resource: string;
+	scope: "mcp";
+	source: { readonly ref: string; readonly revision: string };
+	configFingerprint: string;
+	signal: AbortSignal;
+	assertCurrent: () => void;
+	fetch?: FetchLike;
+}): Promise<ConnectionMachineOAuthClientRegistrationV1> {
+	const endpoint = new URL(options.endpoint);
+	if (
+		endpoint.protocol !== "https:" ||
+		!options.serviceCredential.startsWith("conn_consumer_") ||
+		options.registrationKey.length === 0 ||
+		options.clientName.length === 0 ||
+		options.redirectUri.length === 0 ||
+		options.resource.length === 0 ||
+		options.configFingerprint.length !== 64
+	)
+		standardOAuthUnavailable();
+	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
+	try {
+		if (signal.aborted) standardOAuthUnavailable();
+		options.assertCurrent();
+		const response = await (options.fetch ?? fetch)(endpoint, {
+			method: "POST",
+			headers: {
+				accept: "application/json",
+				"content-type": "application/json",
+				authorization: `Bearer ${options.serviceCredential}`,
+				"idempotency-key": options.registrationKey,
+			},
+			body: JSON.stringify({
+				clientName: options.clientName,
+				redirectUri: options.redirectUri,
+				resource: options.resource,
+				scope: options.scope,
+				source: options.source,
+				configFingerprint: options.configFingerprint,
+			}),
+			redirect: "error",
+			signal,
+		});
+		options.assertCurrent();
+		if (response.redirected || response.status < 200 || response.status >= 300)
+			standardOAuthUnavailable();
+		const text = await response.text();
+		options.assertCurrent();
+		if (text.length > 32_768) standardOAuthUnavailable();
+		const value: unknown = JSON.parse(text);
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			standardOAuthUnavailable();
+		const payload = value as Record<string, unknown>;
+		const registration = payload.registration;
+		if (
+			payload.registrationVersion !== 1 ||
+			payload.outcome !== "KNOWN" ||
+			!registration ||
+			typeof registration !== "object" ||
+			Array.isArray(registration)
+		)
+			standardOAuthUnavailable();
+		const record = registration as Record<string, unknown>;
+		if (
+			typeof record.registrationKey !== "string" ||
+			record.registrationKey !== options.registrationKey ||
+			typeof record.clientId !== "string" ||
+			!registrationId.test(record.clientId)
+		)
+			standardOAuthUnavailable();
+		return payload as unknown as ConnectionMachineOAuthClientRegistrationV1;
+	} catch {
+		standardOAuthUnavailable();
+	}
+}
+
+function machineRegistrationEndpoint(
+	endpoint: string,
+	registrationKey: string,
+) {
+	const base = new URL(endpoint);
+	if (base.protocol !== "https:" || base.search || base.hash)
+		standardOAuthUnavailable();
+	return new URL(
+		`${base.toString().replace(/\/$/, "")}/${encodeURIComponent(registrationKey)}`,
+	);
+}
+
+/** Read the current machine registration; stale or unknown keys fail closed. */
+export async function readConnectionMachineOAuthClientV1(options: {
+	readonly endpoint: string;
+	readonly serviceCredential: string;
+	readonly registrationKey: string;
+	readonly signal: AbortSignal;
+	readonly assertCurrent: () => void;
+	readonly fetch?: FetchLike;
+}): Promise<ConnectionMachineOAuthClientRegistrationV1> {
+	if (
+		!options.serviceCredential.startsWith("conn_consumer_") ||
+		!options.registrationKey
+	)
+		standardOAuthUnavailable();
+	const endpoint = machineRegistrationEndpoint(
+		options.endpoint,
+		options.registrationKey,
+	);
+	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
+	try {
+		options.assertCurrent();
+		const response = await (options.fetch ?? fetch)(endpoint, {
+			method: "GET",
+			headers: {
+				accept: "application/json",
+				authorization: `Bearer ${options.serviceCredential}`,
+			},
+			redirect: "error",
+			signal,
+		});
+		options.assertCurrent();
+		if (response.status !== 200 || response.redirected)
+			standardOAuthUnavailable();
+		const value: unknown = JSON.parse(await response.text());
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			standardOAuthUnavailable();
+		const payload = value as Record<string, unknown>;
+		const registration = payload.registration;
+		if (
+			payload.registrationVersion !== 1 ||
+			payload.outcome !== "KNOWN" ||
+			!registration ||
+			typeof registration !== "object" ||
+			Array.isArray(registration)
+		)
+			standardOAuthUnavailable();
+		const record = registration as Record<string, unknown>;
+		if (
+			record.registrationKey !== options.registrationKey ||
+			typeof record.clientId !== "string" ||
+			!registrationId.test(record.clientId)
+		)
+			standardOAuthUnavailable();
+		return payload as unknown as ConnectionMachineOAuthClientRegistrationV1;
+	} catch {
+		standardOAuthUnavailable();
+	}
+}
+
+/** Revoke a machine registration and dependent device/OAuth session state. */
+export async function revokeConnectionMachineOAuthClientV1(options: {
+	readonly endpoint: string;
+	readonly serviceCredential: string;
+	readonly registrationKey: string;
+	readonly signal: AbortSignal;
+	readonly assertCurrent: () => void;
+	readonly fetch?: FetchLike;
+}): Promise<void> {
+	if (
+		!options.serviceCredential.startsWith("conn_consumer_") ||
+		!options.registrationKey
+	)
+		standardOAuthUnavailable();
+	const endpoint = machineRegistrationEndpoint(
+		options.endpoint,
+		options.registrationKey,
+	);
+	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
+	try {
+		options.assertCurrent();
+		const response = await (options.fetch ?? fetch)(endpoint, {
+			method: "DELETE",
+			headers: {
+				accept: "application/json",
+				authorization: `Bearer ${options.serviceCredential}`,
+			},
+			redirect: "error",
+			signal,
+		});
+		options.assertCurrent();
+		if (
+			(response.status !== 200 && response.status !== 204) ||
+			response.redirected
+		)
+			standardOAuthUnavailable();
+	} catch {
+		standardOAuthUnavailable();
+	}
+}
+
 /** Register one protected native OAuth client for one Agent installation. */
 export async function registerStandardOAuthClient(options: {
 	issuer: string;
