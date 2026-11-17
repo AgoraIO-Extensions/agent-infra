@@ -2105,6 +2105,29 @@ Helm/ConfigMap，也不把登记响应作为运行时字段覆盖。Platform Age
 此来源不改变版本 `1` 的字段、规范化及指纹算法；回执/关联修订属于受信来源元数据，
 不能向 profile 塞入额外字段或放宽未知字段拒绝。
 
+**一次性系统接入。** 部署向 Platform 提供的不是上表的 Consumer 快照，而是独立的系统接入
+对象（`ConnectionSystemAccessV1`，其 `schemaVersion` `1` 与 Consumer 快照的版本互不相关）。它只含
+`publicOrigin`、`mcpPath`、`audience`、`egressProfile`（约束同上表）、OAuth `issuer`（规范 HTTPS
+URL，origin 必须等于 `publicOrigin`）和 Platform OAuth 回调地址 `oauthCallbackUrl`（规范 HTTPS URL，
+不含凭据、query 或 fragment），拒绝 `consumerId`、逐 Agent 条目、凭据及其他未知字段。其指纹算法
+与 §13.5.2 相同，数组为：
+
+```text
+["connection-system-access/v1", publicOrigin, mcpPath, audience, egressProfile.ref, egressProfile.revision, issuer, oauthCallbackUrl]
+```
+
+审批必须由部署显式提供并与该指纹绑定：`{ schemaVersion: 1, configFingerprint, egressEnforced: true,
+source: { ref, revision } }`。环境投影使用 `AGENT_INFRA_CONNECTION_SYSTEM_ACCESS`（字段 JSON）、
+`AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL`（审批 JSON）和
+`AGENT_INFRA_CONNECTION_CONFIG_VERSION`（`1-<configFingerprint>`），Web 授权入口路径仍为
+`AGENT_INFRA_CONNECTION_WEB_PATH`（`webPath`，不进入指纹，缺失时入口不可用）；另行投影的指纹或
+审批来源变量可省略，出现时必须与审批一致（上面第 3 条的“必须同时包含”只适用于旧 Consumer profile）。
+自动登记策略不在该对象内，仍由独立的登记策略配置提供（§13.5.7）。消费方原样校验审批，不从指纹、来源或其他元数据补出审批或 `egressEnforced`；
+审批缺失、`egressEnforced` 不为 `true`、指纹不符或版本不一致时，系统接入及其派生的 Connection
+能力不可用。`egressEnforced` 是部署方对出站策略已落实的声明，渲染与校验本身不证明网络隔离。
+每个已关联 Agent 的 Consumer 快照由该对象与其关联按上表字段生成，指纹仍按 §13.5.2 的 Consumer
+数组计算，来源为关联引用及修订。
+
 #### 13.5.2 版本、指纹与失败行为
 
 版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和

@@ -24,7 +24,7 @@ const imageKeys = [
 	"runtimeHost",
 ];
 
-test("release values carry a neutral, complete Connection Consumer source", async () => {
+test("release values carry neutral, complete one-time Connection system access (#4157)", async () => {
 	const values = parse(
 		await readFile(
 			resolve(repositoryRoot, "deploy/helm/agent-infra/values.yaml"),
@@ -34,7 +34,15 @@ test("release values carry a neutral, complete Connection Consumer source", asyn
 	const profile = values.connectionConsumer?.inline;
 	assert.equal(values.connectionConsumer?.source, "inline");
 	assert.equal(profile?.schemaVersion, 1);
-	for (const field of ["publicOrigin", "mcpPath", "consumerId", "audience"]) {
+	// System access names no Consumer: per-Agent Consumers come only from associations.
+	assert.equal(Object.hasOwn(profile ?? {}, "consumerId"), false);
+	for (const field of [
+		"publicOrigin",
+		"mcpPath",
+		"audience",
+		"issuer",
+		"oauthCallbackUrl",
+	]) {
 		assert.equal(typeof profile?.[field], "string");
 		assert.ok(profile[field].length > 0);
 	}
@@ -43,6 +51,7 @@ test("release values carry a neutral, complete Connection Consumer source", asyn
 	assert.match(profile.egressProfile?.ref, /.+/);
 	assert.match(profile.egressProfile?.revision, /.+/);
 	assert.equal(profile.approval?.egressEnforced, true);
+	assert.match(profile.approval?.configFingerprint, /^[a-f0-9]{64}$/);
 	assert.doesNotMatch(JSON.stringify(values), /gz3|la3/i);
 });
 

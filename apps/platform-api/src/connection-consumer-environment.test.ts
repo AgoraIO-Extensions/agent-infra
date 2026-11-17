@@ -1,7 +1,14 @@
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+	resolveApprovedConnectionSystemAccessV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import { describe, expect, it } from "vitest";
 
-import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
+import {
+	readConnectionConsumerEnvironmentConfigurationV1,
+	readConnectionSystemAccessEnvironmentConfigurationV1,
+} from "./connection-consumer-environment.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
 
 const profile = {
@@ -90,5 +97,125 @@ describe("Connection Consumer environment configuration", () => {
 				AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "",
 			}),
 		).toBeUndefined();
+	});
+});
+
+describe("one-time Connection system access environment (#4157)", () => {
+	const system = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/callback",
+	};
+	const fingerprint = connectionSystemAccessFingerprintV1(system);
+	const approval = {
+		schemaVersion: 1,
+		configFingerprint: fingerprint,
+		egressEnforced: true,
+		source: { ref: "platform-deployment", revision: "r1" },
+	};
+	const absent = Symbol("absent");
+	const environment = (value: unknown = approval) => ({
+		AGENT_INFRA_CONNECTION_SYSTEM_ACCESS: JSON.stringify(system),
+		...(value === absent
+			? {}
+			: {
+					AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL: JSON.stringify(value),
+				}),
+		// The version names whatever fingerprint the approval states.
+		AGENT_INFRA_CONNECTION_CONFIG_VERSION: `1-${(value as { configFingerprint?: string } | undefined)?.configFingerprint ?? fingerprint}`,
+		AGENT_INFRA_CONNECTION_WEB_PATH: "/connection/connections",
+	});
+	const resolve = (value: NodeJS.ProcessEnv) => {
+		const read = readConnectionSystemAccessEnvironmentConfigurationV1(value);
+		return resolveApprovedConnectionSystemAccessV1(
+			read?.system,
+			read?.approval,
+		);
+	};
+
+	it("passes the explicit fingerprint-bound approval through unchanged", () => {
+		expect(
+			readConnectionSystemAccessEnvironmentConfigurationV1(environment()),
+		).toEqual({
+			system,
+			approval,
+			configVersion: `1-${fingerprint}`,
+			webPath: "/connection/connections",
+		});
+		expect(resolve(environment())).toMatchObject({
+			status: "available",
+			configFingerprint: fingerprint,
+			source: approval.source,
+		});
+		expect(readConnectionSystemAccessEnvironmentConfigurationV1({})).toBe(
+			undefined,
+		);
+	});
+
+	it.each([
+		["absent", absent, "missing"],
+		[
+			"egress not attested",
+			{ ...approval, egressEnforced: undefined },
+			"unapproved",
+		],
+		["egress false", { ...approval, egressEnforced: false }, "unapproved"],
+		["egress a string", { ...approval, egressEnforced: "true" }, "unapproved"],
+		[
+			"fingerprint of other fields",
+			{ ...approval, configFingerprint: "a".repeat(64) },
+			"invalid",
+		],
+	] as const)(
+		"keeps Connection unavailable when the approval is %s",
+		(_label, value, reason) => {
+			// Without an approval the fields themselves are closed (reported as missing).
+			expect(resolve(environment(value))).toEqual({
+				status: "unavailable",
+				schemaVersion: 1,
+				reason,
+			});
+		},
+	);
+
+	it("accepts separately projected fingerprint and source that agree with the approval", () => {
+		expect(
+			resolve({
+				...environment(),
+				AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: fingerprint,
+				AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "platform-deployment",
+				AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r1",
+			}),
+		).toMatchObject({ status: "available" });
+	});
+
+	it("does not infer an approval from fingerprint and source metadata alone", () => {
+		const result = resolve({
+			...environment(absent),
+			AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: fingerprint,
+			AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "platform-deployment",
+			AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r1",
+		});
+		expect(result).toMatchObject({ status: "unavailable" });
+	});
+
+	it("closes on a version mismatch, a disagreeing fingerprint or source, or a legacy Consumer profile beside it", () => {
+		for (const extra of [
+			{ AGENT_INFRA_CONNECTION_CONFIG_VERSION: "1-other" },
+			{ AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: "b".repeat(64) },
+			{ AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "other-deployment" },
+			{ AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r2" },
+			{ AGENT_INFRA_CONNECTION_PROFILE: JSON.stringify({ consumerId: "x" }) },
+		]) {
+			const value = { ...environment(), ...extra };
+			expect(
+				readConnectionSystemAccessEnvironmentConfigurationV1(value)?.system,
+			).toBeNull();
+			expect(resolve(value)).toMatchObject({ status: "unavailable" });
+		}
 	});
 });

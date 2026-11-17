@@ -146,7 +146,24 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 	);
 });
 
-test("renders one Connection Consumer snapshot and the same fingerprint to every consumer", () => {
+function systemAccessFingerprint(content) {
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				"connection-system-access/v1",
+				content.publicOrigin,
+				content.mcpPath,
+				content.audience,
+				content.egressProfile.ref,
+				content.egressProfile.revision,
+				content.issuer,
+				content.oauthCallbackUrl,
+			]),
+		)
+		.digest("hex");
+}
+
+test("renders only one-time system Connection access and the same fingerprint to every consumer (#4157)", () => {
 	const result = render();
 	assert.equal(result.status, 0, result.stderr);
 	const resources = objects(result.stdout);
@@ -156,20 +173,23 @@ test("renders one Connection Consumer snapshot and the same fingerprint to every
 		"topology-agent-infra-connection-consumer",
 	);
 	assert.ok(profile);
-	const content = JSON.parse(profile.data.AGENT_INFRA_CONNECTION_PROFILE);
-	const fingerprint = createHash("sha256")
-		.update(
-			JSON.stringify([
-				content.schemaVersion,
-				content.publicOrigin,
-				content.mcpPath,
-				content.consumerId,
-				content.audience,
-				content.egressProfile.ref,
-				content.egressProfile.revision,
-			]),
-		)
-		.digest("hex");
+	const content = JSON.parse(profile.data.AGENT_INFRA_CONNECTION_SYSTEM_ACCESS);
+	assert.deepEqual(Object.keys(content).sort(), [
+		"audience",
+		"egressProfile",
+		"issuer",
+		"mcpPath",
+		"oauthCallbackUrl",
+		"publicOrigin",
+		"schemaVersion",
+	]);
+	// No per-Agent or shared Consumer, map or credential is rendered anywhere.
+	assert.equal(profile.data.AGENT_INFRA_CONNECTION_PROFILE, undefined);
+	assert.doesNotMatch(
+		result.stdout,
+		/consumerId|ConsumersByAgent|ProfilesByAgent|SuppliesByAgent|serviceCredential/,
+	);
+	const fingerprint = systemAccessFingerprint(content);
 	assert.equal(
 		profile.metadata.annotations["agent-infra.agora.io/config-fingerprint"],
 		fingerprint,
@@ -181,6 +201,16 @@ test("renders one Connection Consumer snapshot and the same fingerprint to every
 	assert.equal(
 		profile.data.AGENT_INFRA_CONNECTION_CONFIG_VERSION,
 		`1-${fingerprint}`,
+	);
+	// The explicit approval is rendered as supplied and bound to the same fingerprint.
+	assert.deepEqual(
+		JSON.parse(profile.data.AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL),
+		{
+			schemaVersion: 1,
+			configFingerprint: fingerprint,
+			egressEnforced: true,
+			source: { ref: "platform-deployment", revision: "r1" },
+		},
 	);
 	for (const name of [
 		"topology-agent-infra-platform-worker",
@@ -259,16 +289,74 @@ test("fails closed for incomplete, unsafe, and conflicting Connection Consumer v
 		["--set", "connectionConsumer.inline.mcpPath=/mcp/../admin"],
 		["--set", "connectionConsumer.inline.mcpPath=/mcp/%2Fadmin"],
 		["--set", "connectionConsumer.inline.mcpPath=/mcp/%2fadmin"],
-		["--set", "connectionConsumer.inline.consumerId="],
+		["--set", "connectionConsumer.inline.consumerId=platform"],
+		[
+			"--set",
+			"connectionConsumer.inline.issuer=https://foreign.example.invalid/",
+		],
+		[
+			"--set",
+			"connectionConsumer.inline.oauthCallbackUrl=https://platform.example.invalid/cb?x=1",
+		],
 		["--set", "connectionConsumer.source=external"],
 	]) {
 		const result = render(...args);
 		assert.notEqual(result.status, 0, args.join(" "));
 		assert.match(
 			result.stderr,
-			/connectionConsumer|publicOrigin|mcpPath|consumerId/,
+			/connectionConsumer|publicOrigin|mcpPath|consumerId|issuer|oauthCallbackUrl/,
 		);
 	}
+});
+
+test("refuses system access without an explicit approval bound to its fingerprint (#4157)", () => {
+	for (const [label, args, message] of [
+		[
+			"absent fingerprint",
+			[
+				"--set-json",
+				"connectionConsumer.inline.approval.configFingerprint=null",
+			],
+			/configFingerprint/,
+		],
+		[
+			"fingerprint of other fields",
+			[
+				"--set-string",
+				`connectionConsumer.inline.approval.configFingerprint=${"a".repeat(64)}`,
+			],
+			/does not match the system access fields/,
+		],
+		[
+			"fields changed after approval",
+			["--set-string", "connectionConsumer.inline.audience=other-audience"],
+			/does not match the system access fields/,
+		],
+		[
+			"egress not attested",
+			["--set-json", "connectionConsumer.inline.approval.egressEnforced=null"],
+			/egressEnforced|approval/,
+		],
+		[
+			"egress false",
+			["--set-json", "connectionConsumer.inline.approval.egressEnforced=false"],
+			/egressEnforced|approval/,
+		],
+	]) {
+		const result = render(...args);
+		assert.notEqual(result.status, 0, label);
+		assert.match(result.stderr, message, label);
+	}
+	const external = render(
+		"--set",
+		"connectionConsumer.source=external",
+		"--set-json",
+		"connectionConsumer.inline=null",
+		"--set-json",
+		`connectionConsumer.external=${JSON.stringify({ configMapName: "approved-connection-profile", configMapKey: "profile.json", configVersion: `1-${"a".repeat(64)}`, configFingerprint: "a".repeat(64), sourceRef: "approved-deployment", sourceRevision: "r7" })}`,
+	);
+	assert.notEqual(external.status, 0);
+	assert.match(external.stderr, /approvalConfigMapKey/);
 });
 
 test("supports an approved external snapshot without rendering an inline fallback", () => {
@@ -282,6 +370,8 @@ test("supports an approved external snapshot without rendering an inline fallbac
 		"connectionConsumer.external.configMapName=approved-connection-profile",
 		"--set-string",
 		"connectionConsumer.external.configMapKey=profile.json",
+		"--set-string",
+		"connectionConsumer.external.approvalConfigMapKey=approval.json",
 		"--set-string",
 		`connectionConsumer.external.configVersion=1-${fingerprint}`,
 		"--set-string",
@@ -315,7 +405,7 @@ test("supports an approved external snapshot without rendering an inline fallbac
 		"topology-agent-infra-platform-worker",
 	);
 	const profileEnv = worker.spec.template.spec.containers[0].env.find(
-		(entry) => entry.name === "AGENT_INFRA_CONNECTION_PROFILE",
+		(entry) => entry.name === "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS",
 	);
 	assert.deepEqual(profileEnv.valueFrom, {
 		configMapKeyRef: {
@@ -324,6 +414,18 @@ test("supports an approved external snapshot without rendering an inline fallbac
 			optional: false,
 		},
 	});
+	assert.deepEqual(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL",
+		)?.valueFrom,
+		{
+			configMapKeyRef: {
+				name: "approved-connection-profile",
+				key: "approval.json",
+				optional: false,
+			},
+		},
+	);
 	assert.equal(
 		worker.spec.template.spec.containers[0].env.find(
 			(entry) => entry.name === "AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT",
@@ -396,9 +498,16 @@ test("profile changes roll every consuming Pod template", () => {
 });
 
 test("fingerprint uses raw JSON serialization for HTML characters", () => {
+	const base = objects(render().stdout);
+	const defaults = JSON.parse(
+		resource(base, "ConfigMap", "topology-agent-infra-connection-consumer").data
+			.AGENT_INFRA_CONNECTION_SYSTEM_ACCESS,
+	);
 	const result = render(
 		"--set-string",
-		"connectionConsumer.inline.consumerId=id<&>",
+		"connectionConsumer.inline.audience=id<&>",
+		"--set-string",
+		`connectionConsumer.inline.approval.configFingerprint=${systemAccessFingerprint({ ...defaults, audience: "id<&>" })}`,
 	);
 	assert.equal(result.status, 0, result.stderr);
 	const resources = objects(result.stdout);
@@ -407,20 +516,8 @@ test("fingerprint uses raw JSON serialization for HTML characters", () => {
 		"ConfigMap",
 		"topology-agent-infra-connection-consumer",
 	);
-	const content = JSON.parse(profile.data.AGENT_INFRA_CONNECTION_PROFILE);
-	const expected = createHash("sha256")
-		.update(
-			JSON.stringify([
-				content.schemaVersion,
-				content.publicOrigin,
-				content.mcpPath,
-				content.consumerId,
-				content.audience,
-				content.egressProfile.ref,
-				content.egressProfile.revision,
-			]),
-		)
-		.digest("hex");
+	const content = JSON.parse(profile.data.AGENT_INFRA_CONNECTION_SYSTEM_ACCESS);
+	const expected = systemAccessFingerprint(content);
 	assert.equal(
 		profile.metadata.annotations["agent-infra.agora.io/config-fingerprint"],
 		expected,

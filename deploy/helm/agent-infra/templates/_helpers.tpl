@@ -72,19 +72,25 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if or (not (regexMatch `^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:]+\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$` $origin)) (regexMatch `^https://\[(?::+|[0-9a-f]+)\](?::[0-9]+)?$` $origin) (regexMatch `^https://\[[0-9a-f:]*::[0-9a-f:]*::[0-9a-f:]*\](?::[0-9]+)?$` $origin) (regexMatch `^https://\[(?:[0-9a-f]{1,4}:){8}[0-9a-f]{1,4}\](?::[0-9]+)?$` $origin) -}}{{- fail "connectionConsumer.inline.publicOrigin must be a canonical HTTPS origin without path, query, fragment, or credentials" -}}{{- end -}}
 {{- $path := required "connectionConsumer.inline.mcpPath is required" $inline.mcpPath -}}
 {{- if or (not (hasPrefix "/" $path)) (hasPrefix "//" $path) (regexMatch `[?#\\\s]` $path) (regexMatch `(^|/)\.\.?(/|$)` $path) (regexMatch `(?i)%(?:2f|2e|5c)` $path) -}}{{- fail "connectionConsumer.inline.mcpPath must be a safe absolute path" -}}{{- end -}}
-{{- if not ($inline.consumerId | default "") -}}{{- fail "connectionConsumer.inline.consumerId is required" -}}{{- end -}}
+{{- if hasKey $inline "consumerId" -}}{{- fail "connectionConsumer.inline must not name a Consumer: per-Agent Consumers come only from Platform associations" -}}{{- end -}}
+{{- $issuer := required "connectionConsumer.inline.issuer is required" $inline.issuer -}}
+{{- if or (not (hasPrefix (printf "%s/" $origin) $issuer)) (regexMatch `[?#\\\s]` $issuer) -}}{{- fail "connectionConsumer.inline.issuer must be an HTTPS URL on publicOrigin" -}}{{- end -}}
+{{- $callback := required "connectionConsumer.inline.oauthCallbackUrl is required" $inline.oauthCallbackUrl -}}
+{{- if or (not (hasPrefix "https://" $callback)) (regexMatch `[?#\\\s]` $callback) -}}{{- fail "connectionConsumer.inline.oauthCallbackUrl must be an HTTPS URL without query or fragment" -}}{{- end -}}
 {{- if not ($inline.audience | default "") -}}{{- fail "connectionConsumer.inline.audience is required" -}}{{- end -}}
 {{- if not $inline.egressProfile -}}{{- fail "connectionConsumer.inline.egressProfile is required" -}}{{- end -}}
 {{- if not $inline.egressProfile.ref -}}{{- fail "connectionConsumer.inline.egressProfile.ref is required" -}}{{- end -}}
 {{- if not $inline.egressProfile.revision -}}{{- fail "connectionConsumer.inline.egressProfile.revision is required" -}}{{- end -}}
 {{- if not $inline.approval -}}{{- fail "connectionConsumer.inline.approval is required" -}}{{- end -}}
 {{- if ne $inline.approval.egressEnforced true -}}{{- fail "connectionConsumer.inline.approval.egressEnforced must be true" -}}{{- end -}}
+{{- if not (regexMatch `^[a-f0-9]{64}$` ($inline.approval.configFingerprint | default "")) -}}{{- fail "connectionConsumer.inline.approval.configFingerprint must be the approved sha256" -}}{{- end -}}
+{{- if ne $inline.approval.configFingerprint (include "agent-infra.connectionFingerprint" $) -}}{{- fail "connectionConsumer.inline.approval.configFingerprint does not match the system access fields" -}}{{- end -}}
 {{- if not $inline.approval.source.ref -}}{{- fail "connectionConsumer.inline.approval.source.ref is required" -}}{{- end -}}
 {{- if not $inline.approval.source.revision -}}{{- fail "connectionConsumer.inline.approval.source.revision is required" -}}{{- end -}}
 {{- else -}}
 {{- if not $consumer.external -}}{{- fail "connectionConsumer.external is required for external source" -}}{{- end -}}
 {{- if gt (len $inline) 0 -}}{{- fail "connectionConsumer.inline and external sources conflict" -}}{{- end -}}
-{{- range $key := list "configMapName" "configMapKey" "configVersion" "configFingerprint" "sourceRef" "sourceRevision" -}}{{- if not (index $external $key) -}}{{- fail (printf "connectionConsumer.external.%s is required" $key) -}}{{- end -}}{{- end -}}
+{{- range $key := list "configMapName" "configMapKey" "approvalConfigMapKey" "configVersion" "configFingerprint" "sourceRef" "sourceRevision" -}}{{- if not (index $external $key) -}}{{- fail (printf "connectionConsumer.external.%s is required" $key) -}}{{- end -}}{{- end -}}
 {{- if not (regexMatch `^1-[a-f0-9]{64}$` $external.configVersion) -}}{{- fail "connectionConsumer.external.configVersion must be 1-<sha256>" -}}{{- end -}}
 {{- if not (regexMatch `^[a-f0-9]{64}$` $external.configFingerprint) -}}{{- fail "connectionConsumer.external.configFingerprint must be a sha256" -}}{{- end -}}
 {{- if ne (trimPrefix "1-" $external.configVersion) $external.configFingerprint -}}{{- fail "connectionConsumer.external.configVersion and configFingerprint must agree" -}}{{- end -}}
@@ -97,7 +103,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "agent-infra.connectionFingerprint" -}}
 {{- $profile := .Values.connectionConsumer.inline -}}
-{{- sha256sum (toRawJson (list $profile.schemaVersion $profile.publicOrigin $profile.mcpPath $profile.consumerId $profile.audience $profile.egressProfile.ref $profile.egressProfile.revision)) -}}
+{{- sha256sum (toRawJson (list "connection-system-access/v1" $profile.publicOrigin $profile.mcpPath $profile.audience $profile.egressProfile.ref $profile.egressProfile.revision $profile.issuer $profile.oauthCallbackUrl)) -}}
 {{- end -}}
 
 {{- define "agent-infra.connectionProfileVersion" -}}
@@ -110,11 +116,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "agent-infra.connectionEnv" -}}
 {{- if eq .Values.connectionConsumer.source "external" -}}
-- name: AGENT_INFRA_CONNECTION_PROFILE
+- name: AGENT_INFRA_CONNECTION_SYSTEM_ACCESS
   valueFrom:
     configMapKeyRef:
       name: {{ .Values.connectionConsumer.external.configMapName }}
       key: {{ .Values.connectionConsumer.external.configMapKey }}
+      optional: false
+- name: AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL
+  valueFrom:
+    configMapKeyRef:
+      name: {{ .Values.connectionConsumer.external.configMapName }}
+      key: {{ .Values.connectionConsumer.external.approvalConfigMapKey }}
       optional: false
 - name: AGENT_INFRA_CONNECTION_CONFIG_VERSION
   value: {{ .Values.connectionConsumer.external.configVersion | quote }}

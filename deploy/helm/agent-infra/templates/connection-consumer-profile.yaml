@@ -15,7 +15,10 @@ metadata:
     agent-infra.agora.io/config-source-revision: {{ $profile.approval.source.revision | quote }}
 data:
   AGENT_INFRA_CONNECTION_PROFILE_SCHEMA_VERSION: {{ $profile.schemaVersion | quote }}
-  AGENT_INFRA_CONNECTION_PROFILE: {{ toJson (dict "schemaVersion" $profile.schemaVersion "publicOrigin" $profile.publicOrigin "mcpPath" $profile.mcpPath "consumerId" $profile.consumerId "audience" $profile.audience "egressProfile" $profile.egressProfile) | quote }}
+  AGENT_INFRA_CONNECTION_SYSTEM_ACCESS: {{ toJson (dict "schemaVersion" $profile.schemaVersion "publicOrigin" $profile.publicOrigin "mcpPath" $profile.mcpPath "audience" $profile.audience "egressProfile" $profile.egressProfile "issuer" $profile.issuer "oauthCallbackUrl" $profile.oauthCallbackUrl) | quote }}
+  # The deployer's explicit, fingerprint-bound approval, rendered as supplied. The chart
+  # does not enforce egress; egressEnforced attests the approved policy is in place.
+  AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL: {{ toRawJson (dict "schemaVersion" 1 "configFingerprint" $profile.approval.configFingerprint "egressEnforced" $profile.approval.egressEnforced "source" $profile.approval.source) | quote }}
   AGENT_INFRA_CONNECTION_CONFIG_VERSION: {{ printf "%v-%s" $profile.schemaVersion $fingerprint | quote }}
   AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: {{ $fingerprint | quote }}
   AGENT_INFRA_CONNECTION_EGRESS_PROFILE_REF: {{ $profile.egressProfile.ref | quote }}

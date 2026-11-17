@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
-import { parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,
@@ -93,7 +92,10 @@ type DeploymentConfiguration = {
 	readonly wecom: unknown;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
-	/** Deployment-owned approved profile per Agent. Missing Agent IDs fail closed. */
+	/**
+	 * Removed (Spec §13.5.7): per-Agent Consumers come only from associations. Supplying
+	 * this or a per-Agent installation map closes Connection for this Worker.
+	 */
 	readonly connectionConsumerProfilesByAgent?: Record<
 		string,
 		{
@@ -177,82 +179,16 @@ function resolveConnectionInstallation(
 			candidate.principalBindingsByAgentAndPrincipal !== undefined)
 	)
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+	// Spec §13.5.7: per-Agent and per-user installation configuration is generated from
+	// associations and client registration receipts, never supplied by deployment.
 	if (
-		Object.hasOwn(candidate, "configurationsByAgent") ||
-		Object.hasOwn(candidate, "configurationsByAgentAndPrincipal")
-	) {
-		const perPrincipal = Object.hasOwn(
-			candidate,
+		[
+			"configurationsByAgent",
 			"configurationsByAgentAndPrincipal",
-		);
-		const configurationKey = perPrincipal
-			? "configurationsByAgentAndPrincipal"
-			: "configurationsByAgent";
-		const principalKey = perPrincipal
-			? "principalBindingsByAgentAndPrincipal"
-			: "principalBindingsByAgent";
-		if (
-			Object.keys(candidate).some(
-				(key) =>
-					![
-						configurationKey,
-						"authorize",
-						principalKey,
-						"publishOAuth",
-					].includes(key),
-			) ||
-			(candidate.authorize !== undefined &&
-				typeof candidate.authorize !== "function")
-		)
-			throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
-		if (perPrincipal) {
-			const configurationsByAgentAndPrincipal =
-				parseRuntimeOAuthConfigurationsByAgentAndPrincipalV1(
-					candidate.configurationsByAgentAndPrincipal,
-				);
-			return {
-				publishOAuth: candidate.publishOAuth === true,
-				configurationsByAgentAndPrincipal,
-				authorize: candidate.authorize as NonNullable<
-					ConversationRuntimeOptionsV2["connectionInstallation"]
-				>["authorize"],
-				bindPrincipal: createConnectionInstallationPrincipalBindingsV1({
-					configurationsByAgentAndPrincipal,
-					principalBindingsByAgentAndPrincipal:
-						candidate.principalBindingsByAgentAndPrincipal,
-				}),
-			};
-		}
-		if (
-			!candidate.configurationsByAgent ||
-			typeof candidate.configurationsByAgent !== "object" ||
-			Array.isArray(candidate.configurationsByAgent)
-		)
-			throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
-		const configurationsByAgent = Object.fromEntries(
-			Object.entries(candidate.configurationsByAgent).map(
-				([agentId, configuration]) => {
-					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
-						throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
-					return [
-						agentId,
-						RuntimeOAuthConfigurationV1Schema.parse(configuration),
-					];
-				},
-			),
-		);
-		return {
-			publishOAuth: candidate.publishOAuth === true,
-			configurationsByAgent,
-			authorize: candidate.authorize as NonNullable<
-				ConversationRuntimeOptionsV2["connectionInstallation"]
-			>["authorize"],
-			bindPrincipal: createConnectionInstallationPrincipalBindingsV1({
-				configurationsByAgent,
-				principalBindingsByAgent: candidate.principalBindingsByAgent,
-			}),
-		};
-	}
+			"principalBindingsByAgentAndPrincipal",
+		].some((key) => Object.hasOwn(candidate, key))
+	)
+		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	if (
 		!Object.hasOwn(candidate, "configuration") ||
 		Object.keys(candidate).some(
@@ -301,10 +237,11 @@ const {
 	wecom,
 	connectionConsumerProfile,
 	connectionConsumerApproval,
-	connectionConsumerProfilesByAgent,
+	connectionConsumerProfilesByAgent: removedConnectionConsumerProfilesByAgent,
 	resolveConnectionConsumerBindingsByAgent,
 	connectionInstallationSupply,
-	connectionInstallationSuppliesByAgent,
+	connectionInstallationSuppliesByAgent:
+		removedConnectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
 	connectionOAuthProvisioning: configuredConnectionOAuthProvisioning,
 	createSkillMaterializer,
@@ -548,16 +485,35 @@ const automaticRegistrationPolicy =
 		: captureConnectionConsumerRegistrationPolicyV1(
 				workloadInput.connectionConsumerRegistration.policy,
 			);
+// Spec §13.5.7: deployment configuration supplies no per-Agent Consumer or installation.
+// Static per-Agent maps are rejected as invalid Connection input: the shared Consumer is
+// then not used either, so no Agent falls back to it.
+const staticPerAgentConnectionBindings =
+	removedConnectionConsumerProfilesByAgent !== undefined ||
+	removedConnectionInstallationSuppliesByAgent !== undefined ||
+	(typeof configuredConnectionInstallation === "object" &&
+		configuredConnectionInstallation !== null &&
+		[
+			"configurationsByAgent",
+			"configurationsByAgentAndPrincipal",
+			"principalBindingsByAgentAndPrincipal",
+		].some((key) => Object.hasOwn(configuredConnectionInstallation, key)));
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
-	connectionConsumerProfilesByAgent !== undefined ||
 	resolveConnectionConsumerBindingsByAgent !== undefined;
-const connectionConsumerSnapshot = perAgentConsumerSelection
+const configuredSharedSnapshot = perAgentConsumerSelection
 	? undefined
 	: createRuntimeConnectionConsumerSnapshotV1(
 			connectionConsumerProfile,
 			connectionConsumerApproval,
 		);
+// Static per-Agent keys withhold even a valid shared Consumer (undefined), so only
+// Connection closes and business work on Agents without Connection keeps running. An
+// invalid configured profile still closes business work (null), as without those keys.
+const connectionConsumerSnapshot =
+	staticPerAgentConnectionBindings && configuredSharedSnapshot !== null
+		? undefined
+		: configuredSharedSnapshot;
 if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 if (
@@ -569,22 +525,21 @@ if (
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-if (
-	(connectionConsumerProfilesByAgent !== undefined) !==
-	(connectionInstallationSuppliesByAgent !== undefined)
-)
-	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-const connectionInstallationRevision = perAgentConsumerSelection
-	? undefined
-	: createRuntimeConnectionInstallationRevisionV1(
-			connectionInstallationSupply,
-			connectionConsumerSnapshot,
-		);
+const connectionInstallationRevision = staticPerAgentConnectionBindings
+	? connectionConsumerSnapshot === null
+		? null
+		: undefined
+	: perAgentConsumerSelection
+		? undefined
+		: createRuntimeConnectionInstallationRevisionV1(
+				connectionInstallationSupply,
+				connectionConsumerSnapshot,
+			);
 let connectionInstallation: ResolvedConnectionInstallation | undefined;
 try {
-	connectionInstallation = resolveConnectionInstallation(
-		configuredConnectionInstallation,
-	);
+	connectionInstallation = staticPerAgentConnectionBindings
+		? undefined
+		: resolveConnectionInstallation(configuredConnectionInstallation);
 } catch {
 	// Invalid installation input must not stop ordinary work or original control.
 	connectionInstallation = undefined;
@@ -638,9 +593,7 @@ async function createPreparedOwning(
 	const legacySelectionRequired =
 		!automaticRegistrationPolicy &&
 		Boolean(
-			connectionConsumerSnapshot ||
-				connectionConsumerProfilesByAgent ||
-				resolveConnectionConsumerBindingsByAgent,
+			connectionConsumerSnapshot || resolveConnectionConsumerBindingsByAgent,
 		);
 	const readLegacySelection = () =>
 		readConnectionConsumerSourceSelectionV1(databaseUrl).catch(() => undefined);
@@ -693,12 +646,6 @@ async function createPreparedOwning(
 	if (connectionDelivery) owned.close = () => connectionDelivery.close();
 	const connectionDeliveryCurrent = async (agentId: string) =>
 		connectionDelivery ? connectionDelivery.current(agentId) : true;
-	if (
-		resolvedBindings &&
-		(connectionConsumerProfilesByAgent !== undefined ||
-			connectionInstallationSuppliesByAgent !== undefined)
-	)
-		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 	let resolvedProfilesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
@@ -707,7 +654,7 @@ async function createPreparedOwning(
 					return [agentId, binding];
 				}),
 			)
-		: connectionConsumerProfilesByAgent;
+		: undefined;
 	let resolvedInstallationSuppliesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => [
@@ -715,7 +662,7 @@ async function createPreparedOwning(
 					binding.installationSupply,
 				]),
 			)
-		: connectionInstallationSuppliesByAgent;
+		: undefined;
 	if (
 		resolvedProfilesByAgent !== undefined &&
 		resolvedInstallationSuppliesByAgent === undefined
