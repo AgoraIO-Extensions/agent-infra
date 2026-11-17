@@ -86,6 +86,10 @@ export {
 	PostgresConnectionInstallationAuthorizationTransactionV1,
 } from "./connection-installation.js";
 export {
+	type ConnectionManualAssociationMaterialV1,
+	PostgresConnectionManualAssociationReaderV1,
+} from "./connection-manual-association-reader.js";
+export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
 	type PostgresConversationDispatchOptionsV1,

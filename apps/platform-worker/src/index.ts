@@ -541,6 +541,14 @@ export {
 	createBrowserResultFileEventAdapterV1,
 } from "./browser-result-file-event.js";
 export {
+	type ConnectionMachineClientBindingStoreV1,
+	createOwnerConnectionBindingsResolverV1,
+	type OwnerConnectionBindingsOptionsV1,
+	type ProtectedConnectionHostSupplyV1,
+	revokeOwnerConnectionBindingV1,
+	revokeOwnerConnectionMachineBindingV1,
+} from "./connection-manual-bindings.js";
+export {
 	createWorkerFileClientV1,
 	createWorkerRuntimeFileBridgeFactoryV1,
 	type WorkerRuntimeFileExchangeOptionsV1,

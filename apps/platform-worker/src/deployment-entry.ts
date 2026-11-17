@@ -25,6 +25,10 @@ import {
 } from "./connection-consumer-projection.js";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import {
+	createOwnerConnectionBindingsResolverV1,
+	type OwnerConnectionBindingsOptionsV1,
+} from "./connection-manual-bindings.js";
+import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
 	openStartupConnectionDeliveryGuardV1,
@@ -112,6 +116,8 @@ type DeploymentConfiguration = {
 	 * uses the same Agent key for its profile, approval and installation supply.
 	 */
 	readonly resolveConnectionConsumerBindingsByAgent?: ConnectionConsumerBindingsResolverV1;
+	/** Default Owner-association reader; credentials are decrypted only for protected Host supply. */
+	readonly ownerConnectionBindings?: OwnerConnectionBindingsOptionsV1;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
 	readonly connectionInstallationSupply?: unknown;
@@ -239,6 +245,7 @@ const {
 	connectionConsumerApproval,
 	connectionConsumerProfilesByAgent: removedConnectionConsumerProfilesByAgent,
 	resolveConnectionConsumerBindingsByAgent,
+	ownerConnectionBindings,
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent:
 		removedConnectionInstallationSuppliesByAgent,
@@ -498,9 +505,14 @@ const staticPerAgentConnectionBindings =
 			"configurationsByAgentAndPrincipal",
 			"principalBindingsByAgentAndPrincipal",
 		].some((key) => Object.hasOwn(configuredConnectionInstallation, key)));
+const ownerAssociationBindingsResolver = ownerConnectionBindings
+	? createOwnerConnectionBindingsResolverV1(ownerConnectionBindings)
+	: undefined;
+const effectiveConnectionConsumerBindingsResolver =
+	resolveConnectionConsumerBindingsByAgent ?? ownerAssociationBindingsResolver;
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
-	resolveConnectionConsumerBindingsByAgent !== undefined;
+	effectiveConnectionConsumerBindingsResolver !== undefined;
 const configuredSharedSnapshot = perAgentConsumerSelection
 	? undefined
 	: createRuntimeConnectionConsumerSnapshotV1(
@@ -593,7 +605,7 @@ async function createPreparedOwning(
 	const legacySelectionRequired =
 		!automaticRegistrationPolicy &&
 		Boolean(
-			connectionConsumerSnapshot || resolveConnectionConsumerBindingsByAgent,
+			connectionConsumerSnapshot || effectiveConnectionConsumerBindingsResolver,
 		);
 	const readLegacySelection = () =>
 		readConnectionConsumerSourceSelectionV1(databaseUrl).catch(() => undefined);
@@ -607,7 +619,7 @@ async function createPreparedOwning(
 		? await resolveRegisteredConnectionConsumerBindingsV1({
 				databaseUrl,
 				policy: automaticRegistrationPolicy,
-				resolve: resolveConnectionConsumerBindingsByAgent,
+				resolve: effectiveConnectionConsumerBindingsResolver,
 				signal,
 			}).catch(() => {
 				signal.throwIfAborted();
@@ -618,8 +630,8 @@ async function createPreparedOwning(
 					(!legacySelection.legacyAgentIds.length &&
 						legacySelection.automaticAgentIds.length > 0))
 			? {}
-			: await resolveConnectionConsumerBindingsByAgent?.(signal);
-	if (legacySelectionRequired && resolveConnectionConsumerBindingsByAgent)
+			: await effectiveConnectionConsumerBindingsResolver?.(signal);
+	if (legacySelectionRequired && effectiveConnectionConsumerBindingsResolver)
 		legacySelection = await readLegacySelection();
 	signal.throwIfAborted();
 	const persistentAutomaticSource =
