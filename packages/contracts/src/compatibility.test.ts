@@ -5357,6 +5357,8 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/channels/{channelId}/file-limits" &&
 				path !== "/api/v2/admin/deployment/file-limits" &&
 				path !== "/api/v2/me/conversations/recent" &&
+				path !== "/api/v2/ops/history" &&
+				path !== "/api/v2/ops/resources" &&
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
 				path !== "/api/v2/skills" &&

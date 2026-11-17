@@ -8,6 +8,7 @@ import {
 	startPlatformConversationWorkerFromDeploymentV2,
 } from "./conversation-worker.js";
 import { createPlatformNativeMetadataGatewayOptionsV1 } from "./native-metadata-deployment.js";
+import { startOperationsWorkerFromDeploymentV2 } from "./operations-worker.js";
 import { createPlatformRuntimeModelDirectoryOptionsV1 } from "./runtime-model-directory-deployment.js";
 import {
 	composePlatformWorkerInternalGatewayServerOptionsV1,
@@ -316,6 +317,9 @@ export async function startPlatformWorkerFromDeploymentV2(
 		readonly startReserves?: () => Promise<
 			{ stop(): Promise<void> } | undefined
 		>;
+		readonly startOperations?: () => Promise<
+			{ stop(): Promise<void> } | undefined
+		>;
 		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
 ) {
@@ -337,6 +341,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 		throw error;
 	}
 	let workload: { stop(): Promise<void> } | undefined;
+	let operations: { stop(): Promise<void> } | undefined;
 	let conversation:
 		| {
 				status(): PlatformConversationWorkerLifecycleStatusV1;
@@ -391,6 +396,14 @@ export async function startPlatformWorkerFromDeploymentV2(
 				))
 		)(observability);
 		let stopping: Promise<void> | undefined;
+		try {
+			operations = await (
+				options.startOperations ?? startOperationsWorkerFromDeploymentV2
+			)();
+		} catch {
+			// Observation startup must not stop already-running business workers.
+			operations = undefined;
+		}
 		return {
 			observabilityStatus: observability.status,
 			conversationStatus() {
@@ -399,6 +412,9 @@ export async function startPlatformWorkerFromDeploymentV2(
 			stop() {
 				stopping ??= (async () => {
 					const results: PromiseSettledResult<void>[] = [];
+					const operationsStopped = Promise.resolve()
+						.then(() => operations?.stop())
+						.catch(() => undefined);
 					try {
 						for (const stop of [
 							...(reserves ? [reserves.stop.bind(reserves)] : []),
@@ -416,6 +432,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 							results.push(...(await Promise.allSettled([result])));
 						}
 					} finally {
+						await operationsStopped;
 						await observability.close();
 					}
 					const failure = results.find(
@@ -434,6 +451,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			Promise.resolve().then(() => conversation?.stop()),
 			Promise.resolve().then(() => wecom?.stop()),
 			Promise.resolve().then(() => reserves?.stop()),
+			Promise.resolve().then(() => operations?.stop()),
 		]);
 		await observability.close();
 		throw error;

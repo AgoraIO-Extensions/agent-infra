@@ -6,6 +6,10 @@
 # outside Git; deploy.sh rejects a rendered manifest that still contains the
 # placeholders. Never commit real LB addresses, Corp IDs, Secret values or
 # environment-specific digests to this repository.
+operations:
+  enabled: false
+  clusterReads: false
+  configurationSecret: ""
 images:
   web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:0000000000000000000000000000000000000000000000000000000000000000
   api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:0000000000000000000000000000000000000000000000000000000000000000

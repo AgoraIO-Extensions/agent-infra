@@ -12,6 +12,35 @@ const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
  * 原生 <a> 只允许以下非 SPA 目标，href 必须是这里列出的表达式（逐个说明原因）：
  */
 const allowedHrefs = new Map<string, string>([
+	// 运维概览的诊断导航与具体资源定位均为当前页锚点。
+	[
+		'features/operations/resource-dashboard.tsx#"#ops-capacity"',
+		"运维页内锚点",
+	],
+	['features/operations/resource-dashboard.tsx#"#ops-cache"', "运维页内锚点"],
+	[
+		'features/operations/resource-dashboard.tsx#"#ops-resources"',
+		"运维页内锚点",
+	],
+	['features/operations/resource-dashboard.tsx#"#ops-history"', "运维页内锚点"],
+	['features/operations/resource-dashboard.tsx#"#ops-sources"', "运维页内锚点"],
+	[
+		"features/operations/resource-dashboard.tsx#alertTarget(alert)",
+		"告警目标仅返回页内锚点",
+	],
+	[
+		[
+			"features/operations/resource-dashboard.tsx#`#resource-",
+			"{encodeURIComponent(entry.podUid)}`",
+		].join("$"),
+		"资源 UID 页内锚点",
+	],
+	// 服务端契约校验为外部 HTTPS 观测查询入口，新窗口打开。
+	["features/operations/resource-dashboard.tsx#link.url", "外部观测后端"],
+	[
+		"features/operations/resource-history.tsx#url.href",
+		"携带筛选条件的外部观测后端",
+	],
 	// 自有交互入口：Agent 自己的外部 https 地址，新窗口打开。
 	["features/agent-discovery/agent-detail-screen.tsx#interactionUrl", "外链"],
 	// 「我的 Connection」：Connection 是独立部署单元，不是本 SPA 的路由，新窗口打开。

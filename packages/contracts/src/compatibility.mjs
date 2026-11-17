@@ -7424,7 +7424,59 @@ function normalizeSkillHubProjectRecovery4109(previous, current) {
 	};
 }
 
+// #4178: pin the two administrator reads and their bounded response contracts.
+// Strip only this reviewed addition before independent historical compatibility checks.
+function normalizeOperations4178(previous, current) {
+	const paths = ["/api/v2/ops/history", "/api/v2/ops/resources"];
+	const schemas = ["OperationsHistoryV2", "OperationsResourcesV2"];
+	const selected = (value) => ({
+		paths: paths.map((path) => value.paths?.[path]),
+		schemas: schemas.map((name) => value.components?.schemas?.[name]),
+	});
+	const present = (value) =>
+		[...selected(value).paths, ...selected(value).schemas].some(
+			(entry) => entry !== undefined,
+		);
+	if (!present(previous) && !present(current)) return { previous, current };
+	const matches = (value) =>
+		value.openapi === "3.1.0" &&
+		value.info?.title === "Agent Infra Pilot Browser Audit API" &&
+		value.info?.version === "2.0.0" &&
+		createHash("sha256")
+			.update(JSON.stringify(selected(value)))
+			.digest("hex") ===
+			"121322d89a2faea2ff2d59d468695c0af2e8cbf32942c77db5be00599faadb9c";
+	if (!matches(current) || (present(previous) && !matches(previous)))
+		return { invalid: true };
+	const strip = (value) => {
+		const result = {
+			...value,
+			paths: { ...value.paths },
+			components: {
+				...value.components,
+				schemas: { ...value.components.schemas },
+			},
+		};
+		for (const path of paths) delete result.paths[path];
+		for (const name of schemas) delete result.components.schemas[name];
+		return result;
+	};
+	return {
+		previous: present(previous) ? strip(previous) : previous,
+		current: strip(current),
+	};
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const operations4178 = normalizeOperations4178(previousValue, currentValue);
+	if (operations4178.invalid)
+		return ["removed or changed published operations contract"];
+	if (
+		operations4178.previous !== previousValue ||
+		operations4178.current !== currentValue
+	)
+		return findBreakingChanges(operations4178.previous, operations4178.current);
+
 	const recovery4109 = normalizeSkillHubProjectRecovery4109(
 		previousValue,
 		currentValue,

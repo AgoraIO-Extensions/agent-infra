@@ -1,0 +1,51 @@
+{{- if and .Values.operations.enabled (not .Values.bootstrap.databaseOnly) }}
+{{- if not .Values.operations.configurationSecret }}
+{{- fail "operations.enabled requires an existing versioned configurationSecret" }}
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-infra-operations
+rules:
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims, events, resourcequotas]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-infra-operations
+subjects: [{kind: ServiceAccount, name: agent-infra-worker, namespace: {{ .Release.Namespace | quote }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-infra-operations}
+{{- if .Values.operations.clusterReads }}
+{{- $name := printf "agent-infra-operations-%s" (sha256sum .Release.Namespace | trunc 12) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes]
+    verbs: [get, list]
+  - apiGroups: [eci.alibabacloud.com]
+    resources: [imagecaches]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+subjects: [{kind: ServiceAccount, name: agent-infra-worker, namespace: {{ .Release.Namespace | quote }}}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}}
+{{- end }}
+{{- end }}

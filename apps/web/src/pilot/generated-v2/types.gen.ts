@@ -1901,6 +1901,333 @@ export type NativeMetadataProjectionV1OrV2 = NativeMetadataProjectionV1 | {
     selector: 'commands';
 };
 
+export type OperationsHistoryV2 = {
+    coverage?: {
+        start: string;
+        state: 'within-policy' | 'partial' | 'outside-policy';
+    };
+    end: string;
+    metric: 'cpu' | 'memory' | 'storage' | 'http-requests' | 'http-errors' | 'http-latency' | 'waiting' | 'outbox' | 'dependency-latency' | 'runtime-latency' | 'model-latency' | 'tool-latency' | 'model-errors' | 'tool-errors' | 'runtime-errors' | 'sse-connections' | 'sse-pending';
+    schemaVersion: 2;
+    scope: {
+        clusterId: string;
+        namespace: string;
+    };
+    series: Array<{
+        name: string;
+        points: Array<{
+            at: string;
+            value: number | null;
+        }>;
+        resourceUid: string | null;
+    }>;
+    start: string;
+    state: 'available' | 'missing' | 'unavailable' | 'not-configured' | 'not-supported' | 'outside-retention';
+    statistic: 'average' | 'maximum';
+    stepSeconds: number;
+    truncated: boolean;
+};
+
+export type OperationsResourcesV2 = {
+    agents: Array<{
+        agentId: string;
+        limits: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        name: string;
+        pods: number;
+        requests: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        sessions: number;
+        usage: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        volumes: number;
+    }>;
+    alerts: Array<{
+        code: 'MEMORY_PRESSURE' | 'NODE_PRESSURE' | 'CPU_PRESSURE' | 'QUOTA_PRESSURE' | 'RESERVE_PRESSURE' | 'CACHE_INVENTORY' | 'CACHE_EXPIRED' | 'POD_UNAVAILABLE' | 'QUEUE_BACKLOG' | 'DATABASE_PRESSURE' | 'ERROR_RATE' | 'SOURCE_UNAVAILABLE';
+        firstAt: string;
+        id: string;
+        lastAt: string;
+        objectName: string;
+        objectUid: string | null;
+        resolvedAt: string | null;
+        severity: 'warning' | 'critical';
+        state: 'firing' | 'resolved';
+        threshold: number | null;
+        value: number | null;
+    }>;
+    budget: {
+        counts: {
+            retainedStorage: number;
+            sessions: number;
+            unclaimedReserves: number;
+        };
+        enabled: boolean | null;
+        limits: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        } | null;
+        namespace: string;
+        reserveUsage: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        revision: number | null;
+        scope: 'unclaimed-reserves';
+        sessionUsage: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        unaccountedCount: number;
+        unknownUsage: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        updatedAt: string | null;
+    } | null;
+    cacheEvidence: Array<{
+        cacheId: string | null;
+        coverage: 'covered' | 'partial' | 'missing' | 'unknown';
+        hit: 'confirmed' | 'pull-observed' | 'unknown' | 'not-applicable';
+        images: Array<string>;
+        observedAt: string;
+        podName: string;
+        podUid: string;
+    }>;
+    collectionStartedAt?: string;
+    database: {
+        active: number;
+        connections: number;
+        databaseConnections: number;
+        idle: number;
+        idleInTransaction: number;
+        lockWaiting: number;
+        maxConnections: number;
+        observedAt: string;
+        roleConnectionLimit: number | null;
+        scope: 'current-role';
+    } | null;
+    errorRates?: Array<{
+        observedAt: string | null;
+        ratio: number | null;
+        stage: 'http' | 'model' | 'runtime' | 'tool';
+        windowSeconds: number;
+    }>;
+    events: Array<{
+        category: 'capacity' | 'scheduling' | 'image' | 'runtime' | 'dependency' | 'observation';
+        count: number;
+        firstAt: string | null;
+        lastAt: string | null;
+        objectName: string;
+        objectUid: string;
+        reason: string;
+        severity: 'warning' | 'info';
+        source: 'kubernetes-event' | 'container-status';
+        uid: string;
+    }>;
+    generatedAt: string;
+    imageCaches: Array<{
+        cacheId: string | null;
+        deleting: boolean;
+        expiresAt: string | null;
+        images: Array<string>;
+        inventoryLimit: number | null;
+        name: string;
+        observedAt: string;
+        owner: string;
+        phase: string;
+        uid: string;
+    }>;
+    links: Array<{
+        kind: 'metrics' | 'logs' | 'traces';
+        url: string;
+    }>;
+    nodes: Array<{
+        allocatable: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        capacity: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        identityObservedAt?: string;
+        name: string;
+        observedAt: string;
+        pressures: Array<'MemoryPressure' | 'DiskPressure' | 'PIDPressure' | 'NetworkUnavailable'>;
+        ready: boolean | null;
+        requests: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        uid: string;
+        usage: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        virtual: boolean;
+    }>;
+    queue: {
+        oldestWaitingAt: string | null;
+        outboxPending: number;
+        waiting: number;
+    } | null;
+    quotas: Array<{
+        name: string;
+        namespace: string;
+        observedAt: string;
+        uid: string;
+        values: Array<{
+            hard: number;
+            resource: 'requests.cpu' | 'limits.cpu' | 'requests.memory' | 'limits.memory' | 'requests.storage' | 'requests.ephemeral-storage' | 'limits.ephemeral-storage' | 'pods' | 'persistentvolumeclaims' | 'services' | 'secrets';
+            unit: 'cores' | 'bytes' | 'count';
+            used: number | null;
+        }>;
+    }>;
+    refreshSeconds: number;
+    resources: Array<{
+        agentId: string | null;
+        agentName: string | null;
+        containers: Array<{
+            image: string;
+            imageId: string | null;
+            limits: {
+                cpuCores: number | null;
+                ephemeralStorageBytes: number | null;
+                memoryBytes: number | null;
+                storageBytes: number | null;
+            };
+            name: string;
+            ready: boolean;
+            reason: string | null;
+            requests: {
+                cpuCores: number | null;
+                ephemeralStorageBytes: number | null;
+                memoryBytes: number | null;
+                storageBytes: number | null;
+            };
+            restarts: number;
+            role: 'runtime' | 'executor' | 'init' | 'sidecar' | 'unknown';
+            state: 'running' | 'waiting' | 'terminated' | 'unknown';
+            usage: {
+                cpuCores: number | null;
+                ephemeralStorageBytes: number | null;
+                memoryBytes: number | null;
+                storageBytes: number | null;
+            };
+        }>;
+        generation: number | null;
+        identityObservedAt?: string;
+        images: Array<string>;
+        kind: 'Pod' | 'PersistentVolumeClaim';
+        limits: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        name: string;
+        namespace: string;
+        nodeName: string | null;
+        observedAt: string;
+        ownerGeneration: number | null;
+        ownerUid: string | null;
+        ownership: 'agent' | 'shared' | 'reserve' | 'unknown';
+        phase: string;
+        ready: boolean | null;
+        reason: string | null;
+        requests: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        resourceFence: number | null;
+        resourceVersion: string;
+        restarts: number;
+        retainedStorage: boolean;
+        revision: number | null;
+        role: 'sandbox' | 'workload' | 'api' | 'worker' | 'database' | 'web' | 'directory' | 'unknown';
+        sandboxId: string | null;
+        sessionId: string | null;
+        uid: string;
+        usage: {
+            cpuCores: number | null;
+            ephemeralStorageBytes: number | null;
+            memoryBytes: number | null;
+            storageBytes: number | null;
+        };
+        workloadRevision: number | null;
+    }>;
+    retention: {
+        configured?: {
+            aggregateDays: number | null;
+            aggregateStepSeconds: number | null;
+            detailDays: number | null;
+            logDays: number | null;
+            traceDays: number | null;
+        };
+        effective: {
+            aggregateDays: number;
+            aggregateStepSeconds: number;
+            detailDays: number;
+            logDays: number;
+            traceDays: number;
+        } | null;
+        target: {
+            aggregateDays: number;
+            aggregateStepSeconds: number;
+            detailDays: number;
+            logDays: number;
+            traceDays: number;
+        };
+    };
+    schemaVersion: 2;
+    scope: {
+        clusterId: string;
+        namespace: string;
+    };
+    selection?: {
+        agent: 'not-requested' | 'present' | 'not-found';
+        session: 'not-requested' | 'present' | 'not-found';
+    };
+    sources: Array<{
+        kind: 'platform' | 'kubernetes' | 'pod-metrics' | 'node-metrics' | 'image-cache' | 'prometheus' | 'logs' | 'traces';
+        observedAt: string | null;
+        reason: 'NOT_CONFIGURED' | 'ACCESS_DENIED' | 'QUERY_FAILED' | 'INVALID_DATA' | 'NO_SAMPLES' | 'STALE' | 'TRUNCATED' | 'NOT_SUPPORTED' | null;
+        state: 'available' | 'not-configured' | 'unavailable' | 'missing' | 'stale';
+        windowSeconds: number | null;
+    }>;
+    truncated: boolean;
+};
+
 export type PersistedConversationEventV1 = {
     conversationCursor: string;
     conversationId: string;
@@ -8718,6 +9045,100 @@ export type ListMyWorkspaceSnapshotsV1Responses = {
 };
 
 export type ListMyWorkspaceSnapshotsV1Response = ListMyWorkspaceSnapshotsV1Responses[keyof ListMyWorkspaceSnapshotsV1Responses];
+
+export type GetOperationsHistoryV2Data = {
+    body?: never;
+    path?: never;
+    query: {
+        metric: 'cpu' | 'memory' | 'storage' | 'http-requests' | 'http-errors' | 'http-latency' | 'waiting' | 'outbox' | 'dependency-latency' | 'runtime-latency' | 'model-latency' | 'tool-latency' | 'model-errors' | 'tool-errors' | 'runtime-errors' | 'sse-connections' | 'sse-pending';
+        start: string;
+        end: string;
+        agentId?: string;
+        sessionId?: string;
+        resourceUid?: string;
+        statistic?: 'average' | 'maximum';
+    };
+    url: '/api/v2/ops/history';
+};
+
+export type GetOperationsHistoryV2Errors = {
+    /**
+     * Invalid bounded query
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * This deployment does not provide the query
+     */
+    404: unknown;
+    /**
+     * Query unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOperationsHistoryV2Error = GetOperationsHistoryV2Errors[keyof GetOperationsHistoryV2Errors];
+
+export type GetOperationsHistoryV2Responses = {
+    /**
+     * Resource history or an explicit source gap
+     */
+    200: OperationsHistoryV2;
+};
+
+export type GetOperationsHistoryV2Response = GetOperationsHistoryV2Responses[keyof GetOperationsHistoryV2Responses];
+
+export type GetOperationsResourcesV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        namespace?: string;
+        agentId?: string;
+        sessionId?: string;
+    };
+    url: '/api/v2/ops/resources';
+};
+
+export type GetOperationsResourcesV2Errors = {
+    /**
+     * Invalid query
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * This deployment does not provide the query
+     */
+    404: unknown;
+    /**
+     * Query unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOperationsResourcesV2Error = GetOperationsResourcesV2Errors[keyof GetOperationsResourcesV2Errors];
+
+export type GetOperationsResourcesV2Responses = {
+    /**
+     * Resource observations and individual source health
+     */
+    200: OperationsResourcesV2;
+};
+
+export type GetOperationsResourcesV2Response = GetOperationsResourcesV2Responses[keyof GetOperationsResourcesV2Responses];
 
 export type ListSkillHubVersionsV1Data = {
     body?: never;

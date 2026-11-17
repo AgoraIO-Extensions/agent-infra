@@ -130,7 +130,15 @@ spec:
             {{- if .Values.files.enabled }}
             - {name: PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE, value: {{ .Values.files.configurationFile | quote }} }
             {{- end }}
+            {{- if .Values.operations.enabled }}
+            - {name: AGENT_INFRA_OPERATIONS_CONFIG_FILE, value: /var/run/agent-infra/operations/configuration.json}
+            - name: AGENT_INFRA_OPERATIONS_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- end }}
           volumeMounts:
+            {{- if .Values.operations.enabled }}
+            - {name: operations-configuration, mountPath: /var/run/agent-infra/operations, readOnly: true}
+            {{- end }}
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
             - {name: proxy-token, mountPath: /var/run/agent-infra/proxy-token, readOnly: true}
             - {name: encryption-public-key, mountPath: /var/run/agent-infra/encryption-public-key, readOnly: true}
@@ -143,6 +151,9 @@ spec:
             - {name: skill-scanner, mountPath: /opt/agent-infra/skill-scanner, readOnly: true}
             {{- end }}
       volumes:
+        {{- if .Values.operations.enabled }}
+        - {name: operations-configuration, secret: {secretName: {{ .Values.operations.configurationSecret | quote }}}}
+        {{- end }}
         - {name: api-configuration, secret: {secretName: {{ .Values.secrets.apiConfiguration }}}}
         - name: proxy-token
           secret: {secretName: {{ .Values.secrets.apiProxyToken }}, items: [{key: token, path: token}]}

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
 	parseEvaluationAnalysisPolicyV1,
@@ -199,6 +200,15 @@ const nativeMetadataWorker =
 		? await nativeMetadataWorkerFromEnvironment()
 		: undefined);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
+const operations = await readOperationsConfigurationV2().catch(() => {
+	console.warn(
+		JSON.stringify({
+			service: "platform-api",
+			code: "OPERATIONS_CONFIGURATION_UNAVAILABLE",
+		}),
+	);
+	return undefined;
+});
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
 const deploymentAgentVersion = resolveDeploymentSkillAgentVersionV1(
 	apiInput?.agentVersion,
@@ -363,6 +373,7 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+		...(operations ? { operations } : {}),
 		...(deploymentAgentVersion !== undefined
 			? { agentVersion: deploymentAgentVersion }
 			: {}),

@@ -56,7 +56,17 @@ import {
 	taskAuthorizationRecords,
 	taskControlRecords,
 } from "./schema-operations";
+import {
+	operationsResourceIdentities,
+	operationsResourceSnapshots,
+} from "./schema-operations-resources";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+
+export {
+	operationsResourceIdentities,
+	operationsResourceSnapshots,
+} from "./schema-operations-resources";
+
 import {
 	sessionSandboxBudgets,
 	sessionSandboxReserves,
@@ -230,6 +240,8 @@ export const platformInfrastructureTables = [
 	sessionSandboxReserves,
 	sessionSandboxResourceCharges,
 	taskAuthorizationRecords,
+	operationsResourceSnapshots,
+	operationsResourceIdentities,
 	taskControlRecords,
 	conversationGenerationTombstones,
 	conversationMessages,
