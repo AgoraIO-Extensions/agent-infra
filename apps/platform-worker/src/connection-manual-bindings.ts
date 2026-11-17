@@ -63,6 +63,7 @@ function decodeCredential(value: Uint8Array): string {
 		return credential;
 	} finally {
 		plaintext.fill(0);
+		value.fill(0);
 	}
 }
 
