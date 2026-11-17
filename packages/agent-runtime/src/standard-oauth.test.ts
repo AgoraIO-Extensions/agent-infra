@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { registerStandardOAuthClient } from "./standard-oauth.js";
+import {
+	registerConnectionMachineOAuthClientV1,
+	registerStandardOAuthClient,
+} from "./standard-oauth.js";
 
 const issuer = "https://connection.example.test/";
 const redirectUri = "http://127.0.0.1:3044/callback/install-a";
@@ -26,6 +29,49 @@ function valid() {
 }
 
 describe("per-install OAuth DCR", () => {
+	it("registers an EP-1060 machine client with bearer and idempotency headers", async () => {
+		const calls: Request[] = [];
+		const receipt = await registerConnectionMachineOAuthClientV1({
+			endpoint: `${issuer}connection/v1/agents/agent-a/oauth-clients`,
+			serviceCredential: "conn_consumer_test-credential",
+			registrationKey: "install-agent-a-r1",
+			clientName: "Codex",
+			redirectUri: "https://platform.example.test/callback/agent-a",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp",
+			source: { ref: "platform", revision: "r1" },
+			configFingerprint: "a".repeat(64),
+			signal: new AbortController().signal,
+			assertCurrent() {},
+			fetch: async (input, init) => {
+				calls.push(new Request(input, init));
+				return response({
+					registrationVersion: 1,
+					outcome: "KNOWN",
+					registration: {
+						registrationKey: "install-agent-a-r1",
+						clientId: "client-agent-a",
+					},
+				});
+			},
+		});
+		expect(receipt.registration.clientId).toBe("client-agent-a");
+		const request = calls[0];
+		if (!request) throw new Error("request missing");
+		expect(request.headers.get("authorization")).toBe(
+			"Bearer conn_consumer_test-credential",
+		);
+		expect(request.headers.get("idempotency-key")).toBe("install-agent-a-r1");
+		expect(await request.json()).toEqual({
+			clientName: "Codex",
+			redirectUri: "https://platform.example.test/callback/agent-a",
+			resource: "https://connection.example.test/mcp",
+			scope: "mcp",
+			source: { ref: "platform", revision: "r1" },
+			configFingerprint: "a".repeat(64),
+		});
+	});
+
 	it("registers and validates the fixed native metadata response", async () => {
 		const calls: Request[] = [];
 		const clientId = await registerStandardOAuthClient({
