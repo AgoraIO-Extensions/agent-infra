@@ -40,8 +40,8 @@ export * from "./standard-mcp-client.js";
 export {
 	exchangeStandardOAuthCode,
 	readConnectionMachineOAuthClientV1,
-	registerConnectionMachineOAuthClientV1,
 	refreshStandardOAuthToken,
+	registerConnectionMachineOAuthClientV1,
 	registerStandardOAuthClient,
 	revokeConnectionMachineOAuthClientV1,
 	revokeStandardOAuthToken,
