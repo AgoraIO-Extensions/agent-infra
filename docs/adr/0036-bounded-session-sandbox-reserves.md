@@ -2,6 +2,12 @@
 
 ## 状态与决策
 
+本 ADR 的预算边界修订为：部署总预算只约束**未领取的预留实例**（备用池规模、补充和并发创建）。
+普通冷启动、已领取会话以及原 Sandbox 的续接恢复不因该总量拒绝或等待；整体 CPU、内存、存储、
+会话数和备用池占用通过 Store 使用量指标和部署告警观察，告警不拦截业务。Agent 级授权、幂等、
+锁顺序、容量和预留池上限保持不变。
+资源口径与告警语义统一引用 #4176 / Spec §18.2，不在本 ADR 另定义指标名。
+
 提案，归属 [#3773](https://github.com/AgoraIO-Extensions/agent-infra/issues/3773)。
 产品范围以 [PRD §3](../prd/PRD-agent-platform-M1.md#3-agent-运行方式)为准，预留、领取、
 回收和预算的完整合同只在[工程 Spec §10.1.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)定义。

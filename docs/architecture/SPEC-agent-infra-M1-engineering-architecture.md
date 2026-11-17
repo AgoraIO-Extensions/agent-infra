@@ -750,6 +750,13 @@ Pod 记为 absent、保留 PVC，再在原 Sandbox 和 PVC 上按替换准备恢
 
 ##### 新会话预留实例
 
+部署总预算只约束未领取的预留实例：备用池的最大数量、补充和并发创建仍受
+`maximumReserves`、profile 上限、并发创建上限及预留容量规划约束。普通冷启动会话、已领取的
+Session/Sandbox 和原 Sandbox 的续接恢复不因部署总量 fail-closed；它们的 CPU、内存、PVC
+存储和会话数量由 Store 使用量指标与部署告警监控。告警只通知，不拦截业务准入。该规则不改变
+Agent 级授权、幂等、锁顺序、resourceFence、执行容量或预留池的资源上限。
+资源口径、预算/PVC 占用和告警语义统一引用 #4176 / Spec §18.2；本节不另定义指标名。
+
 预留实例只减少新 Session 的计算、镜像和 Host 准备等待。Platform DB 保存独立预留事实，
 现有 Worker 调谐原六类 Kubernetes 资源；不新增调度服务、CRD、Redis 权威或 Runtime 身份重绑接口。
 默认关闭。部署显式批准可用 Agent/模板、不可变配置和资源预算后，才允许准备未领取实例。
