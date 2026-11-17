@@ -48,7 +48,8 @@
           "additionalProperties": false,
           "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName", "nodeSelector"],
           "properties": {
-            "name": {"const": "agent-infra-apps-letsencrypt-prod"},
+            "create": {"type": "boolean"},
+            "name": {"enum": ["agent-infra-apps-letsencrypt-prod", "d-letsencrypt-prod"]},
             "acmeServer": {"const": "https://acme-v02.api.letsencrypt.org/directory"},
             "accountSecretName": {"type": "string", "maxLength": 253, "pattern": "^(?:|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"},
             "acmeAuthorizationRef": {"type": "string", "maxLength": 512},
@@ -73,6 +74,15 @@
       },
       "allOf": [
         {
+          "if": {"properties": {"issuer": {"properties": {"create": {"const": false}}, "required": ["create"]}}},
+          "then": {"properties": {"issuer": {"properties": {"name": {"const": "d-letsencrypt-prod"}}}}},
+          "else": {"properties": {"issuer": {"properties": {"name": {"const": "agent-infra-apps-letsencrypt-prod"}}}}}
+        },
+        {
+          "if": {"properties": {"enabled": {"const": true}, "issuer": {"not": {"properties": {"create": {"const": false}}, "required": ["create"]}}}},
+          "then": {"properties": {"issuer": {"properties": {"accountSecretName": {"minLength": 1}}}}}
+        },
+        {
           "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
           "then": {
             "required": ["renewalOwner"],
@@ -82,7 +92,6 @@
                 "required": ["name", "acmeServer", "accountSecretName", "acmeAuthorizationRef", "ingressClassName"],
                 "properties": {
                   "name": {"minLength": 1},
-                  "accountSecretName": {"minLength": 1},
                   "acmeAuthorizationRef": {"minLength": 1}
                 }
               },

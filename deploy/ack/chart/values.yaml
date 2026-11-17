@@ -43,6 +43,8 @@ certManager:
   renewalOwner: ""
   renewalMechanism: cert-manager
   issuer:
+    # false references only the existing D Issuer; never adopts or changes it.
+    create: true
     name: agent-infra-apps-letsencrypt-prod
     acmeServer: https://acme-v02.api.letsencrypt.org/directory
     # Existing namespace Secret containing the already-authorized ACME account key.
