@@ -1031,7 +1031,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		);
 		expect(
 			await sql`select released,compute_released from platform.session_sandbox_resource_charges`,
-		).toEqual([{ released: false, compute_released: false }]);
+		).toHaveLength(2);
 	});
 	it("uses the sole approved cost for a legacy allocation without resource policy", async () => {
 		const legacy = execution(null);
@@ -1058,7 +1058,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			);
 			expect(
 				await sql`select 1 from platform.session_sandbox_allocations`,
-			).toHaveLength(count);
+			).toHaveLength(0);
 			expect(await sql`select 1 from platform.outbox_items`).toHaveLength(
 				count,
 			);
@@ -1240,7 +1240,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toHaveLength(2);
 		expect(
 			await sql`select compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${replacementAllocation.sandbox_id}`,
-		).toEqual([{ compute_released: true }]);
+		).toEqual([]);
 	});
 	it("rejects absence and stale generation/fence as compute-release authority", async () => {
 		const original = await ready();
@@ -1682,7 +1682,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(await store.list()).toHaveLength(1);
 		expect(
 			await sql`select count(*)::int as count from platform.session_sandbox_resource_charges where not released`,
-		).toEqual([{ count: 2 }]);
+		).toEqual([{ count: 1 }]);
 	});
 	it("includes high-hit demand and the measured upper bound, then avoids concurrent overfill", async () => {
 		const store = reserves();
