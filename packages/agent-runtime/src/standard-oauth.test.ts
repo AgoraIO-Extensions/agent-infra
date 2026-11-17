@@ -76,13 +76,16 @@ describe("per-install OAuth DCR", () => {
 
 	it("reads and revokes only the keyed machine registration with bearer auth", async () => {
 		const calls: Request[] = [];
-		const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+		const fetch = async (input: Request | URL | string, init?: RequestInit) => {
 			calls.push(new Request(input, init));
 			return response(
 				{
 					registrationVersion: 1,
 					outcome: "KNOWN",
-					registration: { registrationKey: "install-agent-a-r1", clientId: "client-agent-a" },
+					registration: {
+						registrationKey: "install-agent-a-r1",
+						clientId: "client-agent-a",
+					},
 				},
 				200,
 			);
@@ -103,7 +106,9 @@ describe("per-install OAuth DCR", () => {
 		expect(calls[1]?.method).toBe("DELETE");
 		for (const request of calls) {
 			expect(request.url).toContain("/install-agent-a-r1");
-			expect(request.headers.get("authorization")).toBe("Bearer conn_consumer_test-credential");
+			expect(request.headers.get("authorization")).toBe(
+				"Bearer conn_consumer_test-credential",
+			);
 			expect(request.headers.get("cookie")).toBeNull();
 		}
 	});

@@ -213,31 +213,47 @@ describe("per-Agent Connection DCR resolver", () => {
 			agentIds: ["agent-a"],
 			issuer: "https://connection.example.test/",
 			registrationEndpoint: "https://connection.example.test/oauth/register",
-			machineRegistrationEndpoint: "https://connection.example.test/connection/v1/agents/consumer-a/oauth-clients",
+			machineRegistrationEndpoint:
+				"https://connection.example.test/connection/v1/agents/consumer-a/oauth-clients",
 			serviceCredentialForAgent: () => "conn_consumer_secret",
 			machineRegistrationKeyForAgent: () => "agent-a-install-r1",
 			...profile,
 			approvalSource: { ref: "association:agent-a", revision: "r1" },
-			callbackUrlForAgent: () => "https://platform.example.test/internal/runtime/oauth/v1/callback/agent-a",
-			installationSupplyForAgent: () => ({ ref: "protected-agent-a", revision: "r1" }),
+			callbackUrlForAgent: () =>
+				"https://platform.example.test/internal/runtime/oauth/v1/callback/agent-a",
+			installationSupplyForAgent: () => ({
+				ref: "protected-agent-a",
+				revision: "r1",
+			}),
 			consumerIdForAgent: () => "consumer-a",
 			fetch: async (input, init) => {
 				seen = new Request(input, init);
-				return new Response(JSON.stringify({
-					registrationVersion: 1,
-					outcome: "KNOWN",
-					registration: { registrationKey: "agent-a-install-r1", clientId: "machine-client-a" },
-				}), { status: 200 });
+				return new Response(
+					JSON.stringify({
+						registrationVersion: 1,
+						outcome: "KNOWN",
+						registration: {
+							registrationKey: "agent-a-install-r1",
+							clientId: "machine-client-a",
+						},
+					}),
+					{ status: 200 },
+				);
 			},
 		});
 		const result = await resolve(new AbortController().signal);
-		expect(result["agent-a"]?.oauthClientBinding.clientId).toBe("machine-client-a");
+		expect(result["agent-a"]?.oauthClientBinding.clientId).toBe(
+			"machine-client-a",
+		);
 		expect(seen?.method).toBe("POST");
-		expect(seen?.headers.get("authorization")).toBe("Bearer conn_consumer_secret");
+		expect(seen?.headers.get("authorization")).toBe(
+			"Bearer conn_consumer_secret",
+		);
 		expect(seen?.headers.get("idempotency-key")).toBe("agent-a-install-r1");
 		expect(await seen?.clone().json()).toMatchObject({
 			clientName: "Platform Agent agent-a",
-			redirectUri: "https://platform.example.test/internal/runtime/oauth/v1/callback/agent-a",
+			redirectUri:
+				"https://platform.example.test/internal/runtime/oauth/v1/callback/agent-a",
 			resource: "https://connection.example.test/mcp",
 			scope: "mcp",
 		});
