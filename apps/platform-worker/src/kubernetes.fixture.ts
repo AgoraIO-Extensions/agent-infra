@@ -302,6 +302,20 @@ export function fakeKubernetesApi() {
 	}
 	const client: WorkerKubernetesClientV1 = {
 		namespace: workloadTestPolicy.namespace,
+		async readMetadata(_kind, name) {
+			const object = resources.get(`Secret/${name}`);
+			if (!object) return null;
+			return structuredClone({
+				metadata: {
+					name: object.metadata?.name,
+					namespace: object.metadata?.namespace,
+					uid: object.metadata?.uid,
+					resourceVersion: object.metadata?.resourceVersion,
+					deletionTimestamp: object.metadata?.deletionTimestamp,
+					ownerReferences: object.metadata?.ownerReferences,
+				},
+			});
+		},
 		async read<T extends KubernetesObject>(
 			kind: WorkloadResourceKind,
 			name: string,

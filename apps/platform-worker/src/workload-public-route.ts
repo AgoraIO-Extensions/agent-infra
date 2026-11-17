@@ -1,7 +1,13 @@
-import { isIP } from "node:net";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import {
+	canonicalDeploymentOriginV1,
+	parseWorkloadHostnameRoutesV1,
+	type WorkloadHostnameRoutesV1,
+} from "./hostname-route-configuration.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
+
+export type { WorkloadHostnameRoutesV1 } from "./hostname-route-configuration.js";
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -38,21 +44,21 @@ export interface WorkloadPublicRoutePolicyV1 {
 	readonly routeHostSuffix: string;
 	readonly tlsSecretName: string;
 	readonly pathRoutes?: WorkloadPathRoutesV1;
+	readonly hostnameRoutes?: WorkloadHostnameRoutesV1;
 }
 
 function publicOrigin(value: string) {
 	try {
-		const url = new URL(value);
-		if (
-			url.origin !== value ||
-			url.protocol !== "https:" ||
-			url.port ||
-			isIP(url.hostname) ||
-			!url.hostname.includes(".") ||
-			!/^[a-z0-9.-]+$/.test(url.hostname)
-		)
-			throw new Error();
-		return url;
+		return canonicalDeploymentOriginV1(value);
+	} catch {
+		throw new WorkloadKubernetesError("policy");
+	}
+}
+
+function hostnamePolicy(policy: WorkloadPublicRoutePolicyV1) {
+	if (policy.hostnameRoutes === undefined) return undefined;
+	try {
+		return parseWorkloadHostnameRoutesV1(policy.hostnameRoutes);
 	} catch {
 		throw new WorkloadKubernetesError("policy");
 	}
@@ -63,6 +69,27 @@ export function workloadPublicRouteV1(
 	agentId: string,
 ) {
 	const name = workloadResourceNameV1(agentId);
+	const hostname = hostnamePolicy(policy);
+	if (hostname?.agentIds.includes(agentId)) {
+		const interactionOrigin = createWorkloadInteractionOriginV1({
+			routeHostSuffix: hostname.hostSuffix,
+			agentId,
+		});
+		const host = new URL(interactionOrigin.origin).hostname;
+		if (
+			host.length > 253 ||
+			host === publicOrigin(hostname.platformOrigin).hostname ||
+			policy.pathRoutes?.agentIds.includes(agentId)
+		)
+			throw new WorkloadKubernetesError("policy");
+		return {
+			interactionOrigin,
+			interactionPath: undefined,
+			host,
+			path: "/",
+			tlsSecretName: name + "-tls",
+		};
+	}
 	const selected = policy.pathRoutes;
 	if (selected?.agentIds.includes(agentId)) {
 		const origin = publicOrigin(selected.origin);
@@ -111,6 +138,17 @@ export function assertWorkloadPublicRouteV1(
 	policy: WorkloadPublicRoutePolicyV1,
 	value: AgentWorkloadDesiredV1,
 ) {
+	if (hostnamePolicy(policy)?.agentIds.includes(value.agentId)) {
+		const expected = workloadPublicRouteV1(policy, value.agentId);
+		if (
+			value.route.exposure !== "self-managed" ||
+			value.route.interactionOrigin?.origin !==
+				expected.interactionOrigin.origin ||
+			value.route.interactionPath !== undefined
+		)
+			throw new WorkloadKubernetesError("policy");
+		return;
+	}
 	if (
 		value.route.exposure !== "self-managed" &&
 		!policy.pathRoutes?.agentIds.includes(value.agentId)

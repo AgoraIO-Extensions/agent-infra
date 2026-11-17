@@ -114,3 +114,170 @@ it("reads ReplicaSet ownership in its namespace and rejects every mutation befor
 		read.mockRestore();
 	}
 });
+
+it("permits Certificate reads and creation but never updates or deletes it", async () => {
+	const config = new KubeConfig();
+	config.loadFromOptions({
+		clusters: [{ name: "test", server: "https://127.0.0.1:6443" }],
+		users: [{ name: "test" }],
+		contexts: [{ name: "test", cluster: "test", user: "test" }],
+		currentContext: "test",
+	});
+	const certificate = {
+		apiVersion: "cert-manager.io/v1",
+		kind: "Certificate",
+		metadata: {
+			namespace: "test",
+			name: "agent-certificate",
+			uid: "certificate-uid",
+			resourceVersion: "1",
+		},
+	};
+	const read = vi
+		.spyOn(KubernetesObjectApi.prototype, "read")
+		.mockResolvedValue(certificate);
+	const create = vi
+		.spyOn(KubernetesObjectApi.prototype, "create")
+		.mockResolvedValue(certificate);
+	const replace = vi
+		.spyOn(KubernetesObjectApi.prototype, "replace")
+		.mockResolvedValue(certificate);
+	const remove = vi
+		.spyOn(KubernetesObjectApi.prototype, "delete")
+		.mockResolvedValue({});
+	try {
+		const client = createWorkerKubernetesClientV1("test", config);
+		expect(await client.read("Certificate", "agent-certificate")).toEqual(
+			certificate,
+		);
+		expect(await client.create(certificate)).toEqual(certificate);
+		await expect(client.replace(certificate)).rejects.toMatchObject({
+			code: "policy",
+		});
+		await expect(client.delete(certificate)).rejects.toMatchObject({
+			code: "policy",
+		});
+		await expect(client.deleteResult?.(certificate)).rejects.toMatchObject({
+			code: "policy",
+		});
+		expect(create).toHaveBeenCalledOnce();
+		expect(replace).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+	} finally {
+		read.mockRestore();
+		create.mockRestore();
+		replace.mockRestore();
+		remove.mockRestore();
+	}
+});
+
+it("fetches Secret metadata with strict content negotiation and no full-object fallback", async () => {
+	const { createServer } = await import("node:https");
+	const { runtimeTlsFixture } = await import(
+		"../../../tests/runtime-tls-fixture.js"
+	);
+	const tls = await runtimeTlsFixture();
+	const requests: Array<{ url: string; accept?: string }> = [];
+	let returnFullSecret = false;
+	const server = createServer(
+		{ key: tls.key, cert: tls.cert },
+		(request, response) => {
+			requests.push({ url: request.url ?? "", accept: request.headers.accept });
+			response.setHeader("Content-Type", "application/json");
+			response.setHeader("Connection", "close");
+			if (request.url === "/api/v1") {
+				response.end(
+					JSON.stringify({
+						apiVersion: "v1",
+						kind: "APIResourceList",
+						groupVersion: "v1",
+						resources: [
+							{
+								name: "secrets",
+								singularName: "secret",
+								namespaced: true,
+								kind: "Secret",
+								verbs: ["get"],
+							},
+						],
+					}),
+				);
+			} else if (request.url === "/api/v1/namespaces/test/secrets/agent-tls") {
+				response.end(
+					JSON.stringify({
+						apiVersion: returnFullSecret ? "v1" : "meta.k8s.io/v1",
+						kind: returnFullSecret ? "Secret" : "PartialObjectMetadata",
+						metadata: {
+							name: "agent-tls",
+							namespace: "test",
+							uid: "secret-uid",
+							resourceVersion: "7",
+							annotations: {
+								"kubectl.kubernetes.io/last-applied-configuration":
+									"not-returned",
+							},
+						},
+						...(returnFullSecret
+							? { data: { value: "synthetic-not-returned" } }
+							: {}),
+					}),
+				);
+			} else {
+				response.statusCode = 404;
+				response.end(
+					JSON.stringify({ kind: "Status", apiVersion: "v1", code: 404 }),
+				);
+			}
+		},
+	);
+	await new Promise<void>((resolve) => server.listen(0, "localhost", resolve));
+	try {
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Expected local fixture address");
+		const config = new KubeConfig();
+		config.loadFromOptions({
+			clusters: [
+				{
+					name: "test",
+					server: `https://localhost:${address.port}`,
+					caData: Buffer.from(tls.ca).toString("base64"),
+				},
+			],
+			users: [{ name: "test" }],
+			contexts: [{ name: "test", cluster: "test", user: "test" }],
+			currentContext: "test",
+		});
+		const client = createWorkerKubernetesClientV1("test", config);
+		expect(client.readMetadata).toBeTypeOf("function");
+		const metadata = await client.readMetadata?.("Secret", "agent-tls");
+		expect(metadata).toMatchObject({
+			metadata: {
+				name: "agent-tls",
+				namespace: "test",
+				uid: "secret-uid",
+				resourceVersion: "7",
+			},
+		});
+		expect(metadata).not.toHaveProperty("data");
+		expect(metadata?.metadata).not.toHaveProperty("annotations");
+		expect(
+			requests.find((request) => request.url.includes("/secrets/"))?.accept,
+		).toBe("application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1");
+		expect(
+			requests.every(
+				(request) =>
+					request.url === "/api/v1/namespaces/test/secrets/agent-tls",
+			),
+		).toBe(true);
+		returnFullSecret = true;
+		await expect(
+			client.readMetadata?.("Secret", "agent-tls"),
+		).rejects.toMatchObject({ code: "policy" });
+	} finally {
+		await new Promise<void>((resolve, reject) =>
+			server.close((error) => (error ? reject(error) : resolve())),
+		);
+		await tls.cleanup();
+	}
+});

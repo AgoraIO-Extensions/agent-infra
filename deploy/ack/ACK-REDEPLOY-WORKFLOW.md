@@ -592,6 +592,66 @@ env -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR \
 受控客户端包只含公共 CA、允许的 origin、摘要/指纹、有效期与导入说明，不含私钥。CA 使用
 capsule 内显式文件引用。每次移植或轮换后在新隔离信任库导入，并重复正反例与真实登录。
 
+### 选定 Agent 的独立 hostname
+
+行为与证书归属见[工程 Spec §14.3](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#143-自有交互入口)。
+本模式复用部署指定的集群级 ClusterIssuer；chart 的
+`worker.hostnameCertificates.enabled` 默认 `false`，启用后只增加本 namespace 的 Certificate
+`get/create` 权限。该值不选择 Agent、不改全局后缀、不渲染 Issuer 或 Certificate。
+
+publisher 从与目标 Worker 镜像相同的 clean source 构建正式 producer：
+
+```bash
+pnpm --filter @agent-infra/platform-worker build
+node apps/platform-worker/dist/hostnameRouteConfiguration.mjs declaration.json generated-hostname
+```
+
+`declaration.json` 是部署方批准的非秘密输入，结构见
+[`hostname-route-configuration.schema.json`](./hostname-route-configuration.schema.json)：
+
+```json
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "namespace": "agent-platform",
+  "hostnameRoutes": {
+    "hostSuffix": "agents.example.com",
+    "platformOrigin": "https://platform.example.com",
+    "clusterIssuerName": "letsencrypt-http01-staging",
+    "agentIds": ["agent-example"]
+  }
+}
+```
+
+producer 只生成新的本地目录，其中 `hostname-routes.json` 是规范声明，
+`hostname-routes-plan.json` 给出每个 Agent 的唯一 root HTTPS origin、Certificate/TLS Secret 名称、
+ClusterIssuer 引用和声明摘要。它不加载部署模块、kubeconfig 或凭据，不产生现场资源。
+关闭声明只有 `{"schemaVersion":1,"enabled":false}`；不能用 Owner env 或生命周期请求选择 Issuer。
+
+正式 Helm publisher 将声明作为新版本 `secrets.workerConfiguration` 的 `hostname-routes.json`
+键，与原 `configuration.mjs` 和其余键一起保留；只读挂载目录为
+`/var/run/agent-infra/deployment`。不修改模块字节，也不复用旧 AgentWorkload 预览：正常 Worker
+与 `readPlatformAgentWorkloadDemandImagesV1` 都从同一加载入口消费声明。receipt 的
+`configurationHash` 仍是模块原字节，另记录 `hostnameRouteConfigurationHash`；实际合并策略和
+声明原字节进入 `imagePolicyHash`，声明变化后旧 policy/CAS 必须拒绝。
+显式设置 `PLATFORM_WORKER_HOSTNAME_ROUTES_FILE` 时文件必须存在；默认路径缺失则不启用。
+
+采用前核对当前 source/image/config、namespace UID、Helm revision、selected Agent 的真实 Owner
+与生命周期状态、完整镜像集合（含保留快照）、存储 UID 和部署 policy/CAS。测试使用 staging
+ClusterIssuer；共享生产额度不用于调试。Certificate 缺失可由正常 Worker 独立声明，只有 Ready、
+当前 generation、有效期和精确 Secret metadata 绑定通过后才开放业务 Ingress。普通健康检查不签 TLS。
+
+Ho 的正式步骤按现有发布队列执行：先 fresh 只读回读和渲染/dry-run，采用不可变 Worker 与声明，
+再按正常 Owner 生命周期产生选定 Agent 的新修订；回读唯一 root Ingress、Certificate/Secret
+UID/RV、issuer/SAN、Ready/有效期、原 PVC/快照和实际 HTTPS。完成正常登录、拒绝未登录与跨 Agent
+访问、资源路径、SSE/WebSocket 及 CSRF 负例后才签收。不得禁用 TLS 校验或用平台同 host 替代。
+回滚走 Helm 正式入口并保留稳定 Certificate/TLS Secret；撤回声明后由正常生命周期恢复原路由，
+不以删除证书、重签或直接修改 DB/Ingress 代替回滚。
+
+### 兼容的固定 apps 证书接缝
+
+以下 default-off 接缝保留给既有固定 apps 路径部署，不是独立 hostname 模式的前置：
+
 ACK chart 也提供 default-off 的 `certManager` CERT-B 接缝，固定服务于
 `apps.agent-infra.agoralab.co` / `agent-infra-apps-tls` 这条精确路径。只有在已有 account Secret、非私密
 `acmeAuthorizationRef`、exact-host DNS/SAN、具名 `renewalOwner` 和正式 source-lock 评审都具备时，

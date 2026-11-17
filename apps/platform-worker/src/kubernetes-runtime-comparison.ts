@@ -280,6 +280,4 @@ export function hasClosedSelectorCollision(
 	);
 }
 
-export function workloadResourceNameV1(agentId: string): string {
-	return `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
-}
+export { workloadResourceNameV1 } from "./workload-resource-name.js";

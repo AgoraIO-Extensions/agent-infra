@@ -22,6 +22,7 @@ import {
 	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
+import { WorkloadPreflightRejectedErrorV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1EnvVar,
@@ -89,6 +90,7 @@ import {
 	readSkillHubDeliveryV1,
 	skillHubDeliveryProjectionV1,
 } from "./skill-hub-delivery.js";
+import { createWorkloadHostnameCertificatesV1 } from "./workload-hostname-certificates.js";
 import {
 	applyWorkspaceSnapshotProjectionV1,
 	type WorkspaceSnapshotPodProjectionV1,
@@ -193,6 +195,7 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly ingressClassName: string;
 	readonly routeHostSuffix: string;
 	readonly pathRoutes?: import("./workload-public-route.js").WorkloadPathRoutesV1;
+	readonly hostnameRoutes?: import("./workload-public-route.js").WorkloadHostnameRoutesV1;
 	readonly tlsSecretName: string;
 	/** Deployment-owned profiles used only by multi-service workloads. */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
@@ -245,6 +248,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		client,
 		policy,
 		onHealthDiagnostic: options.onHealthDiagnostic,
+	});
+	const hostnameCertificates = createWorkloadHostnameCertificatesV1({
+		client,
+		policy,
 	});
 	const connectionInstallationRevision = policy.connectionInstallationRevision;
 	workloadEgressRulesV1(policy);
@@ -628,6 +635,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted"> {
 		const value = desired(input);
 		if (isMultiService(value)) return multiService.observe(value, identity);
+		if (!(await hostnameCertificates.ready(value)))
+			return routeMode === "open" ? "drifted" : "pending";
 		if (
 			!options.connectionConsumerControl &&
 			connectionInstallationRevision === null
@@ -1477,6 +1486,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			recovery = false,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (policy.hostnameRoutes?.agentIds.includes(value.agentId))
+				await hostnameCertificates.preflight(value);
 			if (recovery && (isMultiService(value) || value.replicas !== 1))
 				throw new WorkloadKubernetesError("policy");
 			const connection = connectionFor(value.agentId);
@@ -1605,6 +1616,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						existingCache.metadata.uid)
 			)
 				throw new WorkloadKubernetesError("conflict");
+			if (policy.hostnameRoutes?.agentIds.includes(value.agentId))
+				await hostnameCertificates.prepare(value);
 			if (!current && value.replicas === 0) {
 				const pvc = await client.read<V1PersistentVolumeClaim>(
 					"PersistentVolumeClaim",
@@ -1972,6 +1985,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		) {
 			const value = desired(input);
 			if (isMultiService(value)) return multiService.promote(value);
+			if (!(await hostnameCertificates.ready(value)))
+				throw new WorkloadKubernetesError("unavailable");
 			if ((await observe(value, identity, routeMode, "required")) !== "healthy")
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);
@@ -2202,7 +2217,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					workloadGeneration: identity.generation,
 					applied,
 				});
-			} catch {
+			} catch (error) {
+				if (error instanceof WorkloadPreflightRejectedErrorV1) throw error;
 				return validateKubernetesReconcileResultV1(value, {
 					...correlation,
 					status: "failed",

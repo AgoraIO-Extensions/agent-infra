@@ -1,5 +1,6 @@
 {{- if not .Values.bootstrap.databaseOnly }}
 {{- $skillHub := .Values.skillHub | default dict }}
+{{- $hostnameCertificates := .Values.worker.hostnameCertificates | default dict }}
 {{- if and $skillHub.enabled (not .Values.agentVersion) }}
 {{- fail "skillHub.enabled requires the fixed agentVersion" }}
 {{- end }}
@@ -33,6 +34,11 @@ rules:
   - apiGroups: [networking.k8s.io]
     resources: [ingresses, networkpolicies]
     verbs: [create, delete, get, list, patch, update, watch]
+  {{- if $hostnameCertificates.enabled }}
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, create]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

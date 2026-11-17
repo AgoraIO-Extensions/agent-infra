@@ -133,9 +133,10 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		throw new Error(
 			"configuration reload and template receipt gates are missing",
 		);
-	const chart = await readFile(
-		join(root, "deploy/ack/chart/templates/worker.yaml"),
-		"utf8",
+	const chart = execFileSync(
+		"helm",
+		["template", "ack-test", join(root, "deploy/ack/chart")],
+		{ encoding: "utf8" },
 	);
 	const role = parse(
 		chart.split("---").find((document) => /^kind: Role$/m.test(document)),

@@ -11,6 +11,7 @@ export default defineConfig({
 		runtimeDemandImages: "./src/runtime-demand-images-readonly.ts",
 		sessionDemandImages: "./src/session-demand-images-cli.ts",
 		agentWorkloadDemandImages: "./src/agent-workload-demand-images-cli.ts",
+		hostnameRouteConfiguration: "./src/hostname-route-configuration-cli.ts",
 	},
 	format: "esm",
 	outDir: "./dist",

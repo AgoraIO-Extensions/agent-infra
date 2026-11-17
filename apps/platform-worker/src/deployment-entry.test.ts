@@ -95,6 +95,16 @@ beforeAll(async () => {
 		format: "esm",
 		target: "node24",
 	});
+	for (const name of [
+		"hostname-route-configuration",
+		"workload-resource-name",
+	]) {
+		const compiled = await transform(
+			await readFile(new URL("./" + name + ".ts", import.meta.url), "utf8"),
+			{ loader: "ts", format: "esm", target: "node24" },
+		);
+		await writeFile(join(directory, name + ".js"), compiled.code);
+	}
 	const materializerAssembly = await transform(
 		await readFile(
 			new URL("./skill-materializer-assembly.ts", import.meta.url),
@@ -604,6 +614,11 @@ try {
    configuration.connectionInstallationSupply.revision = 'r99';
  }
  const signal = new AbortController().signal;
+ if (process.env.RUN_HOSTNAME_POLICY === 'true') {
+   const options = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+   console.log(JSON.stringify({ calls:globalThis.calls, namespace:options.policy.namespace, routeHostSuffix:options.policy.routeHostSuffix, tlsSecretName:options.policy.tlsSecretName, hostnameRoutes:options.policy.hostnameRoutes ?? null }));
+   process.exit(0);
+ }
  if (process.env.RUN_AGENT_WORKLOAD_IMAGES) {
    const fixture = JSON.parse(process.env.RUN_AGENT_WORKLOAD_IMAGES);
    globalThis.agentImageObservation = fixture.observed;
@@ -2599,6 +2614,7 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		...(sourceSha ? { sourceSha } : {}),
 	});
 	const declared = join(directory, "agent-image-reserves.json");
+	const hostnameFile = join(directory, "agent-hostname-routes.json");
 	try {
 		await writeFile(path, configuration());
 		await writeFile(
@@ -2646,6 +2662,44 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 		expect(result.stdout).not.toContain(sessionSandboxDeploymentTokenFixture);
 		expect(result.stdout).not.toContain("owner-a");
 
+		const hostnameRoutes = {
+			hostSuffix: "agents.example.test",
+			platformOrigin: "https://platform.example.test",
+			clusterIssuerName: "letsencrypt-http01-staging",
+			agentIds: ["agent-a"],
+		};
+		const hostnameBytes = JSON.stringify({
+			schemaVersion: 1,
+			enabled: true,
+			namespace,
+			hostnameRoutes,
+		});
+		await writeFile(hostnameFile, hostnameBytes);
+		const configured = run({
+			PLATFORM_WORKER_SESSION_RESERVES_FILE: declared,
+			PLATFORM_WORKER_HOSTNAME_ROUTES_FILE: hostnameFile,
+			RUN_AGENT_WORKLOAD_IMAGES: JSON.stringify({ request, observed }),
+		});
+		expect(configured.status, configured.stderr).toBe(0);
+		const configuredOutput = JSON.parse(configured.stdout);
+		expect(configuredOutput.calls).toEqual([]);
+		expect(configuredOutput.receipt.authority).toMatchObject({
+			hostnameRoutes,
+			hostnameRouteConfigurationHash: createHash("sha256")
+				.update(hostnameBytes)
+				.digest("hex"),
+			configurationHash: output.receipt.authority.configurationHash,
+		});
+		expect(configuredOutput.receipt.authority.imagePolicyHash).not.toBe(
+			output.receipt.authority.imagePolicyHash,
+		);
+		expect(configuredOutput.receipt.target).toMatchObject({
+			status: "UNKNOWN",
+			reason: "WRONG_RESOURCE_FAMILY",
+			images: [],
+		});
+		expect(await readFile(path, "utf8")).toBe(configuration());
+
 		for (const [change, environment, module] of [
 			[
 				{ ...request, context: { ...context, namespace: "other" } },
@@ -2690,5 +2744,67 @@ export const serviceToken = ${JSON.stringify(sessionSandboxDeploymentTokenFixtur
 	} finally {
 		await writeFile(path, original);
 		await rm(declared, { force: true });
+		await rm(hostnameFile, { force: true });
+	}
+});
+
+it("loads a scoped hostname declaration without rewriting legacy Worker configuration", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const file = join(directory, "hostname-routes.json");
+	const hostnameRoutes = {
+		hostSuffix: "apps.example.test",
+		platformOrigin: "https://platform.example.test",
+		clusterIssuerName: "letsencrypt-http01-staging",
+		agentIds: ["agent-a"],
+	};
+	try {
+		await writeFile(
+			path,
+			original +
+				'\nworkloadInput.policy={...workloadInput.policy,routeHostSuffix:"legacy.example.test",tlsSecretName:"legacy-tls"};\n',
+		);
+		const moduleBytes = await readFile(path, "utf8");
+		await writeFile(
+			file,
+			JSON.stringify({
+				schemaVersion: 1,
+				enabled: true,
+				namespace: "worker-binding",
+				hostnameRoutes,
+			}),
+		);
+		const configured = run({
+			RUN_HOSTNAME_POLICY: "true",
+			PLATFORM_WORKER_HOSTNAME_ROUTES_FILE: file,
+		});
+		expect(configured.status, configured.stderr + configured.stdout).toBe(0);
+		expect(JSON.parse(configured.stdout)).toMatchObject({
+			routeHostSuffix: "legacy.example.test",
+			tlsSecretName: "legacy-tls",
+			hostnameRoutes,
+		});
+		expect(await readFile(path, "utf8")).toBe(moduleBytes);
+		await writeFile(
+			file,
+			JSON.stringify({
+				schemaVersion: 1,
+				enabled: true,
+				namespace: "foreign",
+				hostnameRoutes,
+			}),
+		);
+		const rejected = run({
+			RUN_HOSTNAME_POLICY: "true",
+			PLATFORM_WORKER_HOSTNAME_ROUTES_FILE: file,
+		});
+		expect(rejected.status).not.toBe(0);
+		expect(JSON.parse(rejected.stdout)).toMatchObject({
+			error: "HOSTNAME_ROUTE_CONFIGURATION_SCOPE_MISMATCH",
+			calls: [],
+		});
+	} finally {
+		await writeFile(path, original);
+		await rm(file, { force: true });
 	}
 });
