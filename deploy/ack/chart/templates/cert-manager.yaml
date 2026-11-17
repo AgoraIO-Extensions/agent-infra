@@ -2,13 +2,20 @@
 {{- if and $certManager.enabled (not .Values.bootstrap.databaseOnly) }}
 {{- $issuer := $certManager.issuer }}
 {{- $certificate := $certManager.certificate }}
+{{- $createIssuer := true }}
+{{- if hasKey $issuer "create" }}{{- $createIssuer = $issuer.create }}{{- end }}
 {{- $dnsName := required "certManager.certificate.dnsNames is required when certManager.enabled=true" (index $certificate.dnsNames 0) }}
-{{- if ne $issuer.name "agent-infra-apps-letsencrypt-prod" }}{{ fail "certManager.issuer.name is fixed for the selected apps host" }}{{- end }}
+{{- if $createIssuer }}
+{{- if ne $issuer.name "agent-infra-apps-letsencrypt-prod" }}{{ fail "certManager.issuer.name is fixed for a new Issuer" }}{{- end }}
+{{- else }}
+{{- if or (ne $issuer.name "d-letsencrypt-prod") (ne .Release.Namespace "agent-infra-d-ws-1103") }}{{ fail "existing Issuer is fixed to agent-infra-d-ws-1103/d-letsencrypt-prod" }}{{- end }}
+{{- end }}
 {{- if ne $issuer.acmeServer "https://acme-v02.api.letsencrypt.org/directory" }}{{ fail "certManager.issuer.acmeServer is fixed for the selected apps host" }}{{- end }}
 {{- if ne $issuer.ingressClassName "new-magic-nginx" }}{{ fail "certManager.issuer.ingressClassName is fixed for the selected apps host" }}{{- end }}
 {{- if ne $certificate.name "agent-infra-apps-tls" }}{{ fail "certManager.certificate.name is fixed for the selected apps host" }}{{- end }}
 {{- if ne $certificate.secretName "agent-infra-apps-tls" }}{{ fail "certManager.certificate.secretName is fixed for the selected apps host" }}{{- end }}
 {{- if ne $dnsName "apps.agent-infra.agoralab.co" }}{{ fail "certManager.certificate.dnsNames is fixed for the selected apps host" }}{{- end }}
+{{- if $createIssuer }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -39,6 +46,7 @@ spec:
 {{ toYaml . | nindent 18 }}
             {{- end }}
 ---
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -46,8 +54,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "ack.labels" . | nindent 4 }}
   annotations:
-    agent-infra.agora.io/acme-authorization-ref: {{ $issuer.acmeAuthorizationRef | quote }}
-    agent-infra.agora.io/renewal-owner: {{ $certManager.renewalOwner | quote }}
+    agent-infra.agora.io/acme-authorization-ref: {{ required "certManager.issuer.acmeAuthorizationRef is required" $issuer.acmeAuthorizationRef | quote }}
+    agent-infra.agora.io/renewal-owner: {{ required "certManager.renewalOwner is required" $certManager.renewalOwner | quote }}
 spec:
   secretName: {{ required "certManager.certificate.secretName is required when certManager.enabled=true" $certificate.secretName }}
   dnsNames: [{{ $dnsName | quote }}]

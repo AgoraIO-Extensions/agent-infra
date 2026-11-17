@@ -600,6 +600,16 @@ ACK chart 也提供 default-off 的 `certManager` CERT-B 接缝，固定服务�
 cert-manager 仍可能按 Certificate 语义在目标 TLS Secret 中生成/续期应用证书私钥。默认值不渲染
 Issuer/Certificate，CERT-B 的 Ready、fullchain、fingerprint、expiry 和公网信任仍需独立验收。
 
+复用 D 环境现有 Issuer 时，显式设置 `certManager.issuer.create=false` 与
+`certManager.issuer.name=d-letsencrypt-prod`，namespace 必须为 `agent-infra-d-ws-1103`。
+此模式只渲染精确 Certificate，不渲染、更新、接管或删除既有 Issuer，也不需要提供 account Secret 名称；
+`acmeAuthorizationRef` 与 `renewalOwner` 仍必须具备。现有 Issuer 的 account、Ready 和 HTTP-01 solver
+由正常 owner 入口单独核实：如果 solver 尚未覆盖 apps，只可在保留平台域名及其余原配置的条件下增加该精确域名。
+模板不以 lookup 或本地渲染冒充现场授权、solver 就绪或证书已签发。原来的新 Issuer 模式保持兼容，
+`issuer.create` 默认 true；未启用 CERT-B 或 database-only 时两种模式均不产 cert-manager 资源。
+回滚 Certificate-only revision 不得接管或删除外部 Issuer；已有版本曾管理过 Issuer 的 release，
+必须由正式 publisher 证明切换和回滚不会删除原资源，再允许采用此模式。
+
 该接缝不安装 cert-manager CRD/controller，也不创建固定路径 Ingress、Worker `pathRoutes` 或 Store/Core
 访问地址。启用前必须由环境 owner 证明 cert-manager `cert-manager.io/v1` CRD/controller、已有 account
 Secret 和 account authorization 已就绪；source lock、selected Agent metadata、fresh CAS、field window

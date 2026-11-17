@@ -153,3 +153,99 @@ test("CERT-B rejects wildcard DNS names", () => {
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /dnsNames|certManager/);
 });
+
+test("existing D Issuer renders only the exact Certificate without account input or Issuer ownership", () => {
+	const resources = certManagerResources(
+		render(
+			"--namespace",
+			"agent-infra-d-ws-1103",
+			...certManagerArgs({ authorizationRef: "owner-decision" }),
+			"--set",
+			"certManager.issuer.create=false",
+			"--set",
+			"certManager.issuer.name=d-letsencrypt-prod",
+			"--set",
+			"certManager.issuer.accountSecretName=",
+		),
+	);
+	assert.equal(resources.length, 1);
+	assert.equal(resources[0]?.kind, "Certificate");
+	assert.equal(resources[0]?.spec?.issuerRef?.name, "d-letsencrypt-prod");
+	assert.deepEqual(resources[0]?.spec?.dnsNames, [exactHost]);
+	assert.equal(resources[0]?.spec?.secretName, "agent-infra-apps-tls");
+});
+for (const [label, args] of [
+	[
+		"wrong existing Issuer",
+		[
+			"--namespace",
+			"agent-infra-d-ws-1103",
+			"--set",
+			"certManager.issuer.name=other",
+		],
+	],
+	[
+		"wrong namespace",
+		[
+			"--namespace",
+			"other",
+			"--set",
+			"certManager.issuer.name=d-letsencrypt-prod",
+		],
+	],
+	[
+		"new Issuer identity in reference mode",
+		["--namespace", "agent-infra-d-ws-1103"],
+	],
+] as const)
+	test(`existing Issuer reference rejects ${label}`, () => {
+		const result = spawnSync(
+			"helm",
+			[
+				"template",
+				"cert-manager-test",
+				chart,
+				...certManagerArgs({ authorizationRef: "owner-decision" }),
+				"--set",
+				"certManager.issuer.create=false",
+				...args,
+			],
+			{ encoding: "utf8" },
+		);
+		assert.notEqual(result.status, 0);
+	});
+test("existing Issuer reference still requires authorization and remains disabled during bootstrap", () => {
+	const args = [
+		"--namespace",
+		"agent-infra-d-ws-1103",
+		...certManagerArgs(),
+		"--set",
+		"certManager.issuer.create=false",
+		"--set",
+		"certManager.issuer.name=d-letsencrypt-prod",
+	];
+	assert.notEqual(
+		spawnSync("helm", ["template", "cert-manager-test", chart, ...args], {
+			encoding: "utf8",
+		}).status,
+		0,
+	);
+	assert.deepEqual(
+		certManagerResources(
+			render(
+				...args,
+				"--set",
+				"certManager.issuer.acmeAuthorizationRef=owner-decision",
+				"--set",
+				"bootstrap.databaseOnly=true",
+				"--set",
+				"postgres.enabled=true",
+			),
+		),
+		[],
+	);
+	assert.deepEqual(
+		certManagerResources(render(...args, "--set", "certManager.enabled=false")),
+		[],
+	);
+});
