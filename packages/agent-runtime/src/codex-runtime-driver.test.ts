@@ -282,6 +282,7 @@ interface StoredEventJournal {
 	events: Record<string, unknown>[];
 	acknowledgedCursor?: string;
 	externalActionsBlocked?: true;
+	nativeCompletionStatus?: "completed" | "failed" | "cancelled";
 	nativeTurnId?: string;
 	connectionRecoveryCursor?: string;
 	resultPublication?: { schemaVersion: 1; entries: []; settled?: true };
@@ -14254,6 +14255,234 @@ describe("Codex verified Session executor", () => {
 		await driver.close();
 		return { ...f, accepted, admission, events };
 	}
+
+	async function failedModelFixture(archived = false) {
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((request) => {
+				upstreamCalls++;
+				request.socket.destroy();
+			}),
+		);
+		const authorizedExecutions: string[] = [];
+		const f = await fixture({
+			modelOptions: [
+				{
+					modelOptionId: "model-option-primary",
+					model: "gpt-5.3-codex",
+					reasoningLevels: ["high"],
+					endpoint,
+					authentication: "bearer",
+				},
+			],
+			authorizeExternalAction: async (action) => {
+				authorizedExecutions.push(action.executionId);
+				return {
+					relayKey: "synthetic-terminal-model-key",
+					revalidate: () => {},
+				};
+			},
+		});
+		await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);
+		const original = await f.start();
+		const accepted = await original.execute(submitCommandV2());
+		const access = f.open.mock.calls[0]?.[0].modelAccess;
+		if (!access) throw new Error("missing model transport");
+		const response = await modelRequest(access, f.bridge);
+		expect(response.status).toBe(502);
+		await response.text();
+		f.bridge.setTurnStatus("failed");
+		expect(
+			await original.getStatus(accepted.nativeSessionRef, "execution-codex"),
+		).toBe("failed");
+		const events = await original.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-codex",
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "operation",
+				payload: expect.objectContaining({
+					kind: "model",
+					phase: "unknown",
+					failureCode: "dependency_unavailable",
+				}),
+			}),
+		);
+		if (archived) {
+			const cursor = events.at(-1)?.cursor;
+			if (!cursor) throw new Error("missing failed cursor");
+			await original.acknowledgeEvents(
+				accepted.nativeSessionRef,
+				"execution-codex",
+				cursor,
+			);
+		}
+		await original.close();
+		const before = JSON.parse(
+			await readFile(f.path, "utf8"),
+		) as StoredCodexDriverState;
+		const archiveBytes = new Map<string, string>();
+		if (archived)
+			for (const name of await readdir(codexJournalArchiveRoot(f.path))) {
+				const path = join(codexJournalArchiveRoot(f.path), name);
+				archiveBytes.set(path, await readFile(path, "utf8"));
+			}
+		return {
+			...f,
+			accepted,
+			events,
+			before,
+			archiveBytes,
+			authorizedExecutions,
+			upstreamCalls: () => upstreamCalls,
+		};
+	}
+
+	it.each([false, true])(
+		"rebinds after a sealed failed model attempt without replaying it (archived=%s)",
+		async (archived) => {
+			const f = await failedModelFixture(archived);
+			const { accepted, events, before, authorizedExecutions } = f;
+			const next = replacementAdmission(f.admission);
+			const bridge = new TestCodexBridge(
+				f.bridge.nativeThreadId,
+				"replacement-native-turn",
+			);
+			const factory = vi.fn(async (launch: CodexAppServerBridgeOptions) => {
+				if (!launch.modelAccess) throw new Error("missing model access");
+				bridge.setConfigReadResult(
+					applyOfficialLaneConfig(
+						modelAccessConfigReadResult(launch.modelAccess) as {
+							config: Record<string, unknown>;
+							origins: Record<string, unknown>;
+						},
+					),
+				);
+				return bridge;
+			});
+			const driver = await RuntimeBindingDriver.openBound(
+				{ ...f.options, sessionExecutor: next },
+				factory,
+			).finally(() => {
+				expect(factory).not.toHaveBeenCalled();
+			});
+			drivers.push(driver);
+			await expect(driver.getCapabilities()).resolves.toMatchObject({
+				modelSelection: true,
+			});
+			expect(factory).not.toHaveBeenCalled();
+			expect(
+				await driver.replayEvents(accepted.nativeSessionRef, "execution-codex"),
+			).toEqual(events);
+			const after = JSON.parse(
+				await readFile(f.path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(after.operations).toEqual(before.operations);
+			expect(after.sessions[accepted.nativeSessionRef]?.executions).toEqual(
+				before.sessions[accepted.nativeSessionRef]?.executions,
+			);
+			expect(after.sessions[accepted.nativeSessionRef]?.journals).toEqual(
+				before.sessions[accepted.nativeSessionRef]?.journals,
+			);
+			expect(
+				after.sessions[accepted.nativeSessionRef]?.archivedJournals,
+			).toEqual(before.sessions[accepted.nativeSessionRef]?.archivedJournals);
+			for (const [path, bytes] of f.archiveBytes)
+				expect(await readFile(path, "utf8")).toBe(bytes);
+			await expect(
+				driver.execute(
+					submitCommandV2({
+						nativeSessionRef: accepted.nativeSessionRef,
+						operationId: "replacement-execution",
+						executionId: "replacement-execution",
+						turnId: "replacement-turn",
+					}),
+				),
+			).resolves.toMatchObject({
+				nativeSessionRef: accepted.nativeSessionRef,
+				result: { outcome: "accepted" },
+			});
+			expect(f.upstreamCalls()).toBe(1);
+			expect(authorizedExecutions).toEqual(["execution-codex"]);
+			expect(
+				bridge.requests.filter((request) => request.method === "thread/resume"),
+			).toHaveLength(1);
+			expect(
+				bridge.requests.some((request) => request.method === "thread/start"),
+			).toBe(false);
+		},
+	);
+
+	it.each([
+		"unsealed model",
+		"unconfirmed native failure",
+		"unknown tool",
+		"admission pending",
+		"admission recovery pending",
+		"prepared submit",
+		"unsettled result publication",
+	] as const)("keeps failed model history fenced with %s", async (guard) => {
+		const f = await failedModelFixture();
+		const state = f.before;
+		const session = state.sessions[f.accepted.nativeSessionRef];
+		const journal = Object.values(session?.journals ?? {})[0];
+		const operation = Object.values(state.operations)[0];
+		if (!session || !journal || !operation?.record?.result)
+			throw new Error("missing failed model history");
+		if (guard === "unsealed model") delete journal.externalActionsBlocked;
+		else if (guard === "unconfirmed native failure")
+			delete journal.nativeCompletionStatus;
+		else if (guard === "admission pending") operation.admissionPending = true;
+		else if (guard === "admission recovery pending")
+			operation.admissionRecoveryPending = true;
+		else if (guard === "prepared submit") {
+			const key = Object.keys(state.operations)[0];
+			if (!key) throw new Error("missing original operation key");
+			const identity = JSON.parse(key);
+			identity[4] = "prepared-replacement-submit";
+			const prepared = { ...operation, state: "prepared" };
+			delete prepared.record;
+			state.operations[JSON.stringify(identity)] = prepared;
+		} else if (guard === "unsettled result publication")
+			journal.resultPublication = { schemaVersion: 1, entries: [] };
+		else {
+			const terminal = journal.events.pop();
+			if (!terminal) throw new Error("missing failed completion");
+			for (const phase of ["intent", "unknown"] as const) {
+				const sequence = journal.events.length + 1;
+				journal.events.push({
+					type: "operation",
+					cursor: `codex-cursor-${sequence}`,
+					adapterEventKey: `codex-event-${sequence}`,
+					occurredAt: new Date().toISOString(),
+					payload: {
+						kind: "tool",
+						toolId: "connection.synthetic",
+						operationRef: "unknown-tool-operation",
+						attemptRef: "unknown-tool-attempt",
+						phase,
+					},
+				});
+			}
+			const sequence = journal.events.length + 1;
+			journal.events.push({
+				...terminal,
+				cursor: `codex-cursor-${sequence}`,
+				adapterEventKey: `codex-event-${sequence}`,
+			});
+			session.eventSequence = journal.events.length;
+		}
+		await writeFile(f.path, `${JSON.stringify(state)}\n`);
+		const before = await readFile(f.path, "utf8");
+		f.open.mockClear();
+		await expect(
+			f.start({ sessionExecutor: replacementAdmission(f.admission) }),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(f.open).not.toHaveBeenCalled();
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		expect(f.upstreamCalls()).toBe(1);
+	});
 
 	it.each([false, true])(
 		"durably rebinds only the boundary for a quiescent Session under a higher trusted Worker fence (archived=%s)",
