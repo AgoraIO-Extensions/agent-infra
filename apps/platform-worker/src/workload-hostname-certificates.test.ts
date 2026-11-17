@@ -108,6 +108,85 @@ describe("Agent hostname certificate lifecycle", () => {
 		expect(await adapter.observe(input, identity)).toBe("pending");
 		await expect(adapter.promote(input, identity)).rejects.toThrow();
 	});
+	it.each([{ usages: [] }, { usages: ["client auth"] }])(
+		"rejects a Ready certificate whose explicit usages cannot serve HTTPS: %o",
+		async ({ usages }) => {
+			const f = fixture();
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy,
+				probe: f.probe,
+			});
+			const input = desired();
+			const identity = await adapter.apply(input);
+			if (!identity || identity === "pending")
+				throw new Error("Expected workload");
+			const certificate = await f.client.read("Certificate", certificateName);
+			if (!certificate) throw new Error("Expected Certificate");
+			const unusable = {
+				...certificate,
+				spec: { ...(certificate as { spec: object }).spec, usages },
+				status: {
+					conditions: [
+						{
+							type: "Ready",
+							status: "True",
+							observedGeneration: certificate.metadata?.generation,
+						},
+					],
+					notAfter: "2030-01-01T00:00:00Z",
+				},
+			} as KubernetesObject;
+			f.seed(unusable);
+			seedCertificateSecret(f, certificate);
+			expect(await adapter.observe(input, identity)).toBe("pending");
+			await expect(adapter.promote(input, identity)).rejects.toThrow();
+			await expect(adapter.apply(input)).rejects.toThrow();
+			expect(await f.client.read("Ingress", input.service.name)).toBeNull();
+			expect(await f.client.read("Certificate", certificateName)).toEqual(
+				unusable,
+			);
+		},
+	);
+	it.each([{ usages: undefined }, { usages: ["server auth"] }])(
+		"reuses matching default or explicit HTTPS server usages: %o",
+		async ({ usages }) => {
+			const f = fixture();
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy,
+				probe: f.probe,
+			});
+			const input = desired();
+			await adapter.apply(input);
+			const certificate = await f.client.read("Certificate", certificateName);
+			if (!certificate) throw new Error("Expected Certificate");
+			const existing = {
+				...certificate,
+				spec: { ...(certificate as { spec: object }).spec, usages },
+				status: {
+					conditions: [
+						{
+							type: "Ready",
+							status: "True",
+							observedGeneration: certificate.metadata?.generation,
+						},
+					],
+					notAfter: "2030-01-01T00:00:00Z",
+				},
+			} as KubernetesObject;
+			f.seed(existing);
+			seedCertificateSecret(f, certificate);
+			const identity = await adapter.apply(input);
+			if (!identity || identity === "pending")
+				throw new Error("Expected workload");
+			expect(await adapter.observe(input, identity)).toBe("healthy");
+			await adapter.promote(input, identity);
+			expect(await f.client.read("Certificate", certificateName)).toEqual(
+				existing,
+			);
+		},
+	);
 	it("reuses the same certificate and Secret across stop, restart and revision change", async () => {
 		const f = fixture();
 		const adapter = createKubernetesRuntimeAdapterV1({

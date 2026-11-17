@@ -20,6 +20,7 @@ export interface WorkloadHostnameCertificateV1 extends KubernetesObject {
 		readonly uris?: readonly string[];
 		readonly emailAddresses?: readonly string[];
 		readonly isCA?: boolean;
+		readonly usages?: readonly string[];
 		readonly secretName?: string;
 		readonly issuerRef?: {
 			readonly group?: string;
@@ -72,6 +73,9 @@ function matchesCertificate(
 		(object.spec.emailAddresses === undefined ||
 			object.spec.emailAddresses.length === 0) &&
 		object.spec.isCA !== true &&
+		(object.spec.usages === undefined ||
+			(Array.isArray(object.spec.usages) &&
+				object.spec.usages.includes("server auth"))) &&
 		object.spec.issuerRef?.kind === "ClusterIssuer" &&
 		(object.spec.issuerRef.group === undefined ||
 			object.spec.issuerRef.group === "cert-manager.io") &&
@@ -186,6 +190,7 @@ export function createWorkloadHostnameCertificatesV1(options: {
 				},
 				spec: {
 					dnsNames: [route.host],
+					usages: ["digital signature", "key encipherment", "server auth"],
 					secretName: route.tlsSecretName,
 					issuerRef: {
 						group: "cert-manager.io",
