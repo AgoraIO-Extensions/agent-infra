@@ -573,13 +573,9 @@ export async function reserveSessionSandboxPreparationBudgetV1(
 	const [row] = await tx<
 		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
 	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
-	// Disabled admission leaves new cold Sessions uncharged; retained charges still enforce their budget.
-	if (!row && !config.enabled) return;
-	if (!row)
-		throw new SessionSandboxPreparationBudgetErrorV1(
-			"budget_configuration_unavailable",
-			config.failureBackoffMs,
-		);
+	// Ordinary cold Sessions have no reserve charge. Preparation must continue
+	// without creating an aggregate-budget admission record.
+	if (!row) return;
 	const approved = config.resourceCosts.find(
 		(c) => c.resourceConfigurationHash === policy.resourceConfigurationHash,
 	);
