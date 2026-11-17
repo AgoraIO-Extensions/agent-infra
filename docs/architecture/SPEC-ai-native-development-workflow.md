@@ -164,6 +164,10 @@ resolution 为准。
 ## 10. 安全与验证
 
 - `pull_request_target` 使用默认分支可信代码，不 checkout 或执行 PR head。
+- GitHub 对 public 仓库默认阻断 `pull_request_target`。本仓库用仓库级 Actions 事件策略，只为
+  `pr-gates.yml`、`auto-merge.yml`、`ci-waiver.yml` 和 `pr-agent-review.yml` 显式允许
+  `pull_request_target`、`pull_request_review`、`pull_request_review_comment` 与 `issue_comment`。
+  新增、改名或删除使用这些事件的 workflow 时，同步更新该策略，并用 hosted 运行验证。
 - Actions 固定完整 commit SHA，Docker Action 固定 image digest；凭证只传给必要步骤。
 - Secret 不写入日志、Summary、评论或 Artifact；产品和生产凭证不进入开发自动化。
 - 修改 workflow、凭证或 required-check 来源后，必须在默认分支生效后验证真实 GitHub 行为。
