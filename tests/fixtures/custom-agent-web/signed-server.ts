@@ -5,6 +5,7 @@ import {
 	type ServerResponse,
 } from "node:http";
 import { pathToFileURL } from "node:url";
+import { WebSocketServer } from "ws";
 import {
 	runSnapshotBusiness,
 	type SnapshotBusinessResult,
@@ -13,7 +14,37 @@ import {
 } from "./snapshot-business.ts";
 
 export const ownEntryPage =
-	'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>自定义应用</title></head><body><main><h1>自定义应用</h1><p>已通过应用身份验证</p><button id="check">读取服务状态</button><p id="result"></p></main><script>document.getElementById(\'check\').onclick=async()=>{const r=await fetch(\'/api/check\');if(r.ok)document.getElementById(\'result\').textContent=(await r.json()).message;};</script></body></html>';
+	'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>自定义应用</title></head><body><main><h1>自定义应用</h1><p>已通过应用身份验证</p><button id="check">读取服务状态</button><button id="events">接收流式状态</button><button id="socket">检查实时连接</button><button id="logout">退出登录</button><p id="result"></p></main><script src="/assets/protocols.js"></script><script>document.getElementById(\'check\').onclick=async()=>{const r=await fetch(\'/api/check\');if(r.ok)document.getElementById(\'result\').textContent=(await r.json()).message;};</script></body></html>';
+export const ownEntryProtocolScript = `
+let events, socket;
+const result = document.getElementById('result');
+document.getElementById('events').onclick = () => {
+  events?.close();
+  result.textContent = '等待流式状态';
+  const current = new EventSource('/api/events');
+  events = current;
+  current.addEventListener('status', event => { if (events === current) result.textContent = JSON.parse(event.data).message; });
+  current.addEventListener('complete', () => { current.close(); if (events === current) result.textContent = '流式状态完成'; });
+  current.onerror = () => { current.close(); if (events === current) result.textContent = '流式连接失败'; };
+};
+document.getElementById('socket').onclick = () => {
+  socket?.close();
+  result.textContent = '等待实时连接';
+  const url = new URL('/ws', location.href);
+  url.protocol = 'wss:';
+  const current = new WebSocket(url);
+  socket = current;
+  current.onopen = () => current.send('check');
+  current.onmessage = event => { if (socket === current) result.textContent = JSON.parse(event.data).message; };
+  current.onerror = () => { if (socket === current) result.textContent = '实时连接失败'; };
+};
+document.getElementById('logout').onclick = async () => {
+  events?.close();
+  socket?.close();
+  const response = await fetch('/auth/logout', { method: 'POST' });
+  if (response.ok) location.assign('/');
+};
+`;
 const loginPage =
 	"<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>登录自定义应用</title></head><body><form><label>应用访问凭证<input name=\"token\" type=\"password\" autocomplete=\"off\"></label><button>登录</button><p id=\"error\"></p></form><script>document.querySelector('form').onsubmit=async e=>{e.preventDefault();const r=await fetch('/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:document.querySelector('input').value})});if(r.ok)location.assign('/app');else document.getElementById('error').textContent='无法登录';};</script></body></html>";
 export const ownEntryResult = {
@@ -31,7 +62,7 @@ type Configuration = {
 	snapshotRoot?: string;
 	basePath?: string;
 };
-type Identity = { status: 200 | 401 | 403; token?: string };
+type Identity = { status: 200; token: string } | { status: 401 | 403 };
 
 export function createOwnEntryServer(configuration: Configuration) {
 	const configuredBasePath = configuration.basePath ?? "/";
@@ -42,13 +73,33 @@ export function createOwnEntryServer(configuration: Configuration) {
 		basePath === "/"
 			? "__Host-custom-entry"
 			: `__Secure-custom-entry-${basePath.split("/")[2]}`;
-	const pageAt = (html: string) =>
-		basePath === "/"
-			? html
-			: html
-					.replaceAll("'/auth/login'", JSON.stringify(`${basePath}auth/login`))
-					.replaceAll("'/app'", JSON.stringify(`${basePath}app`))
-					.replaceAll("'/api/check'", JSON.stringify(`${basePath}api/check`));
+	const pageAt = (text: string) => {
+		if (basePath === "/") return text;
+		let result = text;
+		for (const path of [
+			"/auth/login",
+			"/auth/logout",
+			"/app",
+			"/api/check",
+			"/api/events",
+			"/ws",
+			"/assets/protocols.js",
+			"/",
+		]) {
+			for (const quote of ["'", '"'])
+				result = result.replaceAll(
+					`${quote}${path}${quote}`,
+					JSON.stringify(basePath + path.slice(1)),
+				);
+		}
+		return result;
+	};
+	function applicationPath(pathname: string) {
+		if (basePath === "/" || pathname === "/healthz") return pathname;
+		return pathname.startsWith(basePath)
+			? `/${pathname.slice(basePath.length)}`
+			: undefined;
+	}
 
 	const key = createPublicKey(configuration.publicKey);
 	if (
@@ -104,10 +155,9 @@ export function createOwnEntryServer(configuration: Configuration) {
 				!Array.isArray(claims.permissions)
 			)
 				return { status: 401 };
-			return {
-				status: claims.permissions.includes("web:read") ? 200 : 403,
-				token,
-			};
+			return claims.permissions.includes("web:read")
+				? { status: 200, token }
+				: { status: 403 };
 		} catch {
 			return { status: 401 };
 		}
@@ -138,15 +188,25 @@ export function createOwnEntryServer(configuration: Configuration) {
 		});
 		response.end(body);
 	}
+	async function serviceResult(token: string) {
+		if (configuration.role !== "web") return ownEntryResult;
+		const upstream = await fetch(`${configuration.backend}/api/check`, {
+			headers: { authorization: `Bearer ${token}` },
+			redirect: "error",
+			signal: AbortSignal.timeout(5000),
+		});
+		if (upstream.status !== 200) return undefined;
+		const result: unknown = await upstream.json();
+		return JSON.stringify(result) === JSON.stringify(ownEntryResult)
+			? ownEntryResult
+			: undefined;
+	}
 	async function handle(request: IncomingMessage, response: ServerResponse) {
 		const url = new URL(request.url ?? "/", "http://application");
-		let pathname = url.pathname;
-		if (basePath !== "/" && pathname !== "/healthz") {
-			if (!pathname.startsWith(basePath)) {
-				send(response, 404);
-				return;
-			}
-			pathname = `/${pathname.slice(basePath.length)}`;
+		const pathname = applicationPath(url.pathname);
+		if (pathname === undefined) {
+			send(response, 404);
+			return;
 		}
 		if (request.method === "GET" && pathname === "/healthz") {
 			send(response, 200, '{"status":"ready"}', "application/json");
@@ -197,6 +257,23 @@ export function createOwnEntryServer(configuration: Configuration) {
 			send(response, 204);
 			return;
 		}
+		if (
+			request.method === "POST" &&
+			pathname === "/auth/logout" &&
+			configuration.role !== "api"
+		) {
+			if (request.headers.origin !== `https://${request.headers.host}`) {
+				send(response, 403);
+				return;
+			}
+			request.resume();
+			response.setHeader(
+				"set-cookie",
+				`${cookieName}=; Path=${basePath}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`,
+			);
+			send(response, 204);
+			return;
+		}
 		if (request.method !== "GET") {
 			send(response, 405);
 			return;
@@ -208,6 +285,42 @@ export function createOwnEntryServer(configuration: Configuration) {
 		}
 		if (pathname === "/app" && configuration.role !== "api") {
 			send(response, 200, pageAt(ownEntryPage), "text/html; charset=utf-8");
+			return;
+		}
+		if (pathname === "/assets/protocols.js" && configuration.role !== "api") {
+			send(
+				response,
+				200,
+				pageAt(ownEntryProtocolScript),
+				"text/javascript; charset=utf-8",
+			);
+			return;
+		}
+		if (pathname === "/api/events") {
+			const result = await serviceResult(authenticated.token);
+			if (!result) {
+				send(response, 502);
+				return;
+			}
+			response.writeHead(200, {
+				"content-type": "text/event-stream; charset=utf-8",
+				"cache-control": "no-store",
+				"x-accel-buffering": "no",
+			});
+			response.flushHeaders();
+			response.write(
+				`id: 1\nevent: status\ndata: ${JSON.stringify(result)}\n\n`,
+			);
+			const timer = setTimeout(() => {
+				if (identity(authenticated.token).status !== 200) {
+					response.destroy();
+					return;
+				}
+				response.end(
+					`id: 2\nevent: complete\ndata: ${JSON.stringify(result)}\n\n`,
+				);
+			}, 100);
+			response.once("close", () => clearTimeout(timer));
 			return;
 		}
 		if (pathname === "/api/snapshot-check") {
@@ -248,35 +361,95 @@ export function createOwnEntryServer(configuration: Configuration) {
 			return;
 		}
 		if (pathname === "/api/check") {
-			let result = ownEntryResult;
-			if (configuration.role === "web") {
-				const upstream = await fetch(`${configuration.backend}/api/check`, {
-					headers: { authorization: `Bearer ${authenticated.token}` },
-					redirect: "error",
-					signal: AbortSignal.timeout(5000),
-				});
-				if (upstream.status !== 200) {
-					send(response, 502);
-					return;
-				}
-				const value = await upstream.json();
-				if (JSON.stringify(value) !== JSON.stringify(ownEntryResult)) {
-					send(response, 502);
-					return;
-				}
-				result = value;
+			const result = await serviceResult(authenticated.token);
+			if (!result) {
+				send(response, 502);
+				return;
 			}
 			send(response, 200, JSON.stringify(result), "application/json");
 			return;
 		}
 		send(response, 404);
 	}
-	return createServer((request, response) => {
+	const server = createServer((request, response) => {
 		void handle(request, response).catch(() => {
 			if (!response.headersSent) send(response, 503);
 			else response.destroy();
 		});
 	});
+	const sockets = new WebSocketServer({
+		noServer: true,
+		maxPayload: 4096,
+		perMessageDeflate: false,
+	});
+	server.on("upgrade", (request, transport, head) => {
+		transport.on("error", () => {});
+		const reject = (status: 400 | 401 | 403 | 404 | 405) => {
+			transport.end(
+				`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+			);
+		};
+		if (request.method !== "GET") {
+			reject(405);
+			return;
+		}
+		let pathname: string | undefined;
+		try {
+			pathname = applicationPath(
+				new URL(request.url ?? "/", "http://application").pathname,
+			);
+		} catch {
+			reject(400);
+			return;
+		}
+		if (pathname !== "/ws") {
+			reject(404);
+			return;
+		}
+		if (request.headers.origin !== `https://${request.headers.host}`) {
+			reject(403);
+			return;
+		}
+		const token = credential(request);
+		const authenticated = identity(token);
+		if (authenticated.status !== 200) {
+			reject(authenticated.status);
+			return;
+		}
+		sockets.handleUpgrade(request, transport, head, (socket) => {
+			let responded = false;
+			const timeout = setTimeout(() => socket.terminate(), 5000);
+			timeout.unref();
+			socket.once("close", () => clearTimeout(timeout));
+			socket.on("error", () => {});
+			socket.on("message", (data, binary) => {
+				if (
+					responded ||
+					binary ||
+					data.toString() !== "check" ||
+					identity(token).status !== 200
+				) {
+					socket.close(1008);
+					return;
+				}
+				responded = true;
+				void serviceResult(authenticated.token)
+					.then((result) => {
+						if (!result || identity(token).status !== 200) {
+							socket.close(1008);
+							return;
+						}
+						socket.send(JSON.stringify(result), () => socket.close(1000));
+					})
+					.catch(() => socket.close(1011));
+			});
+		});
+	});
+	server.once("close", () => {
+		for (const socket of sockets.clients) socket.terminate();
+		sockets.close();
+	});
+	return server;
 }
 
 if (
