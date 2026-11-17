@@ -6,11 +6,14 @@ import {
 	ownEntryPage,
 	ownEntryResult,
 } from "./fixtures/custom-agent-web/signed-server.ts";
+import { postOwnEntryFixture } from "./support/own-entry-http.ts";
 
 test("path entry keeps login, backend requests and cookies under its approved prefix", async (t) => {
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const basePath = `/a/agent-${"a".repeat(32)}/`;
+	const publicOrigin = "https://entry.example.test";
 	const server = createOwnEntryServer({
+		publicOrigin,
 		issuer: "path-test",
 		audience: "agent-a",
 		publicKey: publicKey.export({ type: "spki", format: "pem" }),
@@ -46,10 +49,10 @@ test("path entry keeps login, backend requests and cookies under its approved pr
 	]) {
 		assert.equal((await fetch(origin + path)).status, 404);
 	}
-	const login = await fetch(`${origin}${basePath}auth/login`, {
-		method: "POST",
+	const login = await postOwnEntryFixture(`${origin}${basePath}auth/login`, {
 		headers: {
-			origin: origin.replace("http:", "https:"),
+			host: new URL(publicOrigin).host,
+			origin: publicOrigin,
 			"content-type": "application/json",
 		},
 		body: JSON.stringify({ token }),
@@ -69,11 +72,13 @@ test("path entry keeps login, backend requests and cookies under its approved pr
 		ownEntryResult,
 	);
 	assert.equal((await fetch(`${origin}/healthz`)).status, 200);
-	const badOrigin = await fetch(`${origin}${basePath}auth/login`, {
-		method: "POST",
-		headers: { origin: "https://foreign.example.test" },
-		body: JSON.stringify({ token }),
-	});
+	const badOrigin = await postOwnEntryFixture(
+		`${origin}${basePath}auth/login`,
+		{
+			headers: { origin: "https://foreign.example.test" },
+			body: JSON.stringify({ token }),
+		},
+	);
 	assert.equal(badOrigin.status, 403);
 });
 
@@ -81,7 +86,9 @@ test("own entry verifies signed application identity and never trusts supplied p
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const issuer = "test-issuer";
 	const audience = "test-application";
+	const publicOrigin = "https://entry.example.test";
 	const server = createOwnEntryServer({
+		publicOrigin,
 		issuer,
 		audience,
 		publicKey: publicKey.export({ type: "spki", format: "pem" }),
@@ -123,10 +130,10 @@ test("own entry verifies signed application identity and never trusts supplied p
 	assert.equal(await page.text(), ownEntryPage);
 	const backend = await fetch(`${origin}/api/check`, { headers });
 	assert.deepEqual(await backend.json(), ownEntryResult);
-	const login = await fetch(`${origin}/auth/login`, {
-		method: "POST",
+	const login = await postOwnEntryFixture(`${origin}/auth/login`, {
 		headers: {
-			origin: origin.replace("http:", "https:"),
+			host: new URL(publicOrigin).host,
+			origin: publicOrigin,
 			"content-type": "application/json",
 		},
 		body: JSON.stringify({ token: allowed }),
@@ -138,15 +145,13 @@ test("own entry verifies signed application identity and never trusts supplied p
 		headers: { cookie: cookie.split(";")[0] },
 	});
 	assert.equal(await persisted.text(), ownEntryPage);
-	const forgedOrigin = await fetch(`${origin}/auth/login`, {
-		method: "POST",
+	const forgedOrigin = await postOwnEntryFixture(`${origin}/auth/login`, {
 		headers: { origin: "https://foreign.example.test" },
 		body: JSON.stringify({ token: allowed }),
 	});
 	assert.equal(forgedOrigin.status, 403);
-	const deniedLogin = await fetch(`${origin}/auth/login`, {
-		method: "POST",
-		headers: { origin: origin.replace("http:", "https:") },
+	const deniedLogin = await postOwnEntryFixture(`${origin}/auth/login`, {
+		headers: { host: new URL(publicOrigin).host, origin: publicOrigin },
 		body: JSON.stringify({ token: denied }),
 	});
 	assert.equal(deniedLogin.status, 403);

@@ -1,8 +1,18 @@
+FROM node@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS build
+WORKDIR /src
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/config/package.json ./packages/config/package.json
+RUN pnpm install --filter agent-infra... --frozen-lockfile --ignore-scripts
+COPY tests/fixtures/custom-agent-web/signed-server.ts tests/fixtures/custom-agent-web/snapshot-business.ts ./tests/fixtures/custom-agent-web/
+COPY deploy/release/bundle-signed-own-entry.mts ./deploy/release/
+RUN node deploy/release/bundle-signed-own-entry.mts /out/signed-server.ts
+
 FROM node@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
 ARG SOURCE_COMMIT
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.opencontainers.image.source="https://github.com/AgoraIO-Extensions/agent-infra"
-COPY --chown=node:node tests/fixtures/custom-agent-web/signed-server.ts tests/fixtures/custom-agent-web/snapshot-business.ts /app/
+COPY --from=build --chown=node:node /out/signed-server.ts /app/signed-server.ts
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"self-managed","service":{"port":3003},"health":{"path":"/healthz"}}'
 USER node
 EXPOSE 3003

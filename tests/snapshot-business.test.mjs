@@ -37,6 +37,7 @@ async function listen(t, configuration) {
 function signedIdentity() {
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const configuration = {
+		publicOrigin: "https://entry.example.test",
 		issuer: "snapshot-business-test",
 		audience: "agent-a",
 		publicKey: publicKey.export({ type: "spki", format: "pem" }),

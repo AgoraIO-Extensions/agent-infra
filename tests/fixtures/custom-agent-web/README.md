@@ -31,20 +31,55 @@ docker run --rm --publish 8080:8080 \
 匿名或伪造身份不能读取受保护页面；合法但无 `web:read` 的主体被拒绝。签名 token 只通过
 应用登录请求或 Authorization 传入，Cookie 使用 Secure、HttpOnly 和 SameSite=Strict。
 
-应用只需要非秘密配置 `CUSTOM_ENTRY_PUBLIC_KEY`、`CUSTOM_ENTRY_ISSUER`、`CUSTOM_ENTRY_AUDIENCE`
+签名样例同时提供受保护的静态资源 `/assets/protocols.js`、有限 SSE `/api/events` 和
+WebSocket `/ws`。SSE 先发 `status`，再发 `complete` 并结束；设置 `X-Accel-Buffering: no`。
+WebSocket 在升级前校验原签名身份与精确 HTTPS Origin，只接受一次文本 `check`，返回与
+`/api/check` 一致的结果并关闭；禁止 binary、未知指令与超过 4096 bytes 的 payload，连接最长
+5 秒。`web` 角色仍从同 Agent 的 `api` Service 读取结果，不新增公开 Service。
+`POST /auth/logout` 只在相同 Origin 下清除原 host-only Secure/HttpOnly Cookie；不创建或轮换 Key。
+应用页面的按钮可直接操作这些协议，旧路径模式继续将资源、退出和协议 URL 留在原前缀。
+
+镜像仍以非 root 的 `node /app/signed-server.ts` 启动，端口、健康路径、签名配置和快照接口不变。
+构建阶段从现有锁文件固定的纯 JS `ws` 依赖生成一个 CommonJS bundle；最终镜像不安装包、
+不包含测试密钥，也不需要可选 native addon。真实 c549 采用前仍必须核当前 command/args、
+完整镜像集合、两快照和原 PVC；不能强行覆盖不兼容启动参数。
+
+本地正常回归入口：
+
+```bash
+node --test tests/signed-own-entry.test.mjs tests/signed-own-entry-protocols.test.mjs tests/snapshot-business.test.mjs
+```
+
+它同时测试源码与实际打包结果、401/403、跨应用 audience、伪造身份 Header、Cookie/Origin、
+有限帧及快照执行；测试只用隔离临时签名输入，不读取部署私钥。它不签收公开 TLS。
+真实验收必须使用同一 deployed tuple 的正常平台链接、默认浏览器 CA 信任、原 Owner/应用签名方
+提供的现有授权与拒绝 token；不能生成新现场 Key、跳过证书错误、使用 SPKI 例外或以页面 200
+代替 SSE/WebSocket 的实际帧和资源/退出证据。
+
+应用只需要非秘密配置 `CUSTOM_ENTRY_PUBLIC_ORIGIN`、`CUSTOM_ENTRY_PUBLIC_KEY`、`CUSTOM_ENTRY_ISSUER`、`CUSTOM_ENTRY_AUDIENCE`
 和 `CUSTOM_ENTRY_ROLE`。私钥留在部署验证端，镜像、普通环境变量和 ConfigMap 都不含凭证。
+`CUSTOM_ENTRY_PUBLIC_ORIGIN` 是部署/应用 owner 从正式已选入口绑定的 canonical HTTPS origin，
+不是请求 Host、Origin、转发 Header 或 URL 参数。登录、退出与 WebSocket 同时核对这个固定
+origin 和 Host；同步伪造 Host+Origin 仍拒绝。新镜像正常采用前须通过原 Owner 的配置入口补齐
+此非秘密值，不换 Key、issuer、audience、权限或快照，不强行执行缺配置的 image-only 升级。
+现有正常入口为 `PUT /api/v2/agents/{agentId}/configuration` 的 V2 environment 更新：使用原
+Owner 会话及新幂等操作，保留 fresh 当前 environment 的全部条目，仅增加或核实此值；不发送
+Key/model/权限/快照变更，不编造公开接口没有返回的 revision/CAS。配置与镜像采用均由协调者
+绑定实际新有限窗口，当前源码阶段不调用该入口。
 `single` 直接提供应用；多服务 manifest 使用 `web` 与 `api` 两个 Deployment/Service，前者按
 平台生成的 Pod 名推导同 Agent 的 `api` Service，转发签名身份并显示真实后端返回值。
 该命名约定是此样例的约束，不新增平台服务发现契约。
 
-构建时传入实际 clean source SHA，并使用 OCI 格式发布不可变 Digest：
+正式发布只由唯一 publisher 在新有限 scope 内调用既有单镜像入口：
 
 ```bash
-docker buildx build --platform linux/amd64 --build-arg SOURCE_COMMIT="$SOURCE_SHA" \
-  --file tests/fixtures/custom-agent-web/Dockerfile.signed \
-  --output type=image,name="$IMAGE_REFERENCE",push=true,oci-mediatypes=true \
-  .
+gh workflow run publish-signed-own-entry.yml --ref main -f source_sha="$MERGED_SOURCE_SHA"
 ```
+
+`MERGED_SOURCE_SHA` 必须是本次实现实际合入的 exact commit；先按正常入口去重并核 source/main
+门禁，未知结果不重发。不盲开 full release，不在运维机绕过正常发布工具直接 push。
+仅做本地 recipe 验证时从 clean checkout 构建 `Dockerfile.signed`，使用明确 Docker context 与
+本地 tag，不 push、采用或替换现场镜像。
 
 真实 ACK 验收由 [重部署工作流](../../../deploy/ack/ACK-REDEPLOY-WORKFLOW.md) 绑定当前 Agent、
 全部服务、入口 TLS、浏览器和实际 imageID；本地样例测试不代表这些外部条件已通过。
@@ -92,8 +127,11 @@ docker build --build-arg SAMPLE_VERSION=sample-platform-auth \
 `total=55`，切换到 v2 返回 `repoVersion=2`、`total=60`，回滚后再次得到 55。结果摘要可以回显版本和
 数值，不能回显源码、路径或环境文件正文。
 
-合入后的 source-bound full release 可选启用 `publish-images.yml` 的
-`own_entry_fixture=true`，发布 `custom-agent-web-signed` 的 linux/amd64 immutable digest，
-并上传 `signed-own-entry-amd64-<sourceSha>-<attempt>` receipt。该 receipt 只可用于同一
+独立受控发布使用已存在的 `publish-signed-own-entry.yml --ref main`，只提供实际合入的
+`source_sha`；保留 main/source 校验、单镜像选择和 linux/amd64，不能为本样例盲开 full release。
+旧 full-release 的 `own_entry_fixture=true` 仍兼容。当前推广入口只绑定已验证的旧 45cf 内容；
+协议能力变化后的新 artifact 需要真实发布回执与新的受评审固定绑定，不能冒用旧推广回执或覆盖
+标准模板 tag。唯一 publisher 执行前按正常流程去重、绑定新有限 scope，镜像仍以 immutable digest
+准入。发布会上传 `signed-own-entry-amd64-<sourceSha>-<attempt>` receipt。该 receipt 只可用于同一
 source SHA 的私有 ACK capsule；本 fixture 不提供 Platform Task API、Connection supply、
 Ingress 或 DNS 证据，相关门禁继续由 #3870 与 #3874 的独立验收处理。
