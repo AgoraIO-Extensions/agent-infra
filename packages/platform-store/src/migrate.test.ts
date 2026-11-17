@@ -2036,6 +2036,8 @@ describe("published Relay authority migration", () => {
 			79,
 			80,
 			81,
+			82,
+			83,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2113,9 +2115,17 @@ describe("published Relay authority migration", () => {
 			idx: 77,
 			tag: "0077_snapshot_upload_admission",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 81)).toMatchObject({
 			idx: 81,
 			tag: "0081_connection_manual_associations",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 82)).toMatchObject({
+			idx: 82,
+			tag: "0082_operations_resource_snapshots",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 83,
+			tag: "0083_operations_resource_identities",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2665,6 +2675,27 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.indexes.push(
 				"connection_association_generations:connection_association_generations_pkey",
+			);
+			expectedDelta.columns.push(
+				...["cluster_id", "namespace", "observed_at", "snapshot"].map(
+					(name) => `operations_resource_snapshots:${name}`,
+				),
+				...[
+					"agent_id",
+					"cluster_id",
+					"first_seen",
+					"kind",
+					"last_seen",
+					"name",
+					"namespace",
+					"session_id",
+					"uid",
+				].map((name) => `operations_resource_identities:${name}`),
+			);
+			expectedDelta.indexes.push(
+				"operations_resource_snapshots:operations_resource_snapshots_cluster_id_namespace_pk",
+				"operations_resource_identities:operations_resource_identities_cluster_id_namespace_uid_pk",
+				"operations_resource_identities:operations_identity_agent_idx",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,
