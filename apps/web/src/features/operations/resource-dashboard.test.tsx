@@ -62,7 +62,23 @@ const data: OperationsResourcesV2 = {
 			traceDays: 7,
 		},
 		effective: null,
+		configured: {
+			detailDays: 5,
+			aggregateDays: 20,
+			aggregateStepSeconds: 300,
+			logDays: null,
+			traceDays: null,
+		},
 	},
+	errorRates: [
+		{
+			stage: "http",
+			ratio: 0.3,
+			observedAt: "2026-11-17T08:00:00Z",
+			windowSeconds: 300,
+		},
+		{ stage: "model", ratio: null, observedAt: null, windowSeconds: 300 },
+	],
 	links: [],
 	truncated: false,
 };
@@ -85,6 +101,10 @@ describe("resource dashboard", () => {
 			screen.getByRole("heading", { name: "资源与运行状态" }),
 		).toBeTruthy();
 		expect(screen.getByText("0 核")).toBeTruthy();
+		expect(screen.getByText("30.0%")).toBeTruthy();
+		expect(screen.getByText("无有效采样")).toBeTruthy();
+		expect(screen.getByText(/部署声明：细粒度 5 天/)).toBeTruthy();
+		expect(screen.getByText(/声明不代表后端已验证/)).toBeTruthy();
 		expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
 		fireEvent.click(screen.getByRole("button", { name: "分析助手" }));
 		expect(onSelectAgent).toHaveBeenCalledWith("agent-1");

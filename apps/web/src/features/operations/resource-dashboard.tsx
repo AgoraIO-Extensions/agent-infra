@@ -86,6 +86,7 @@ const alertNames = {
 	CACHE_EXPIRED: "缓存已到期",
 	POD_UNAVAILABLE: "运行实例异常",
 	QUEUE_BACKLOG: "任务或后台队列积压",
+	ERROR_RATE: "错误率过高",
 	DATABASE_PRESSURE: "数据库连接接近上限",
 	SOURCE_UNAVAILABLE: "观测来源不可用",
 };
@@ -803,10 +804,35 @@ export function ResourceDashboard({
 					{data.retention.target.aggregateDays} 天，日志 / Trace 各{" "}
 					{data.retention.target.logDays} / {data.retention.target.traceDays}{" "}
 					天。
+					{data.retention.configured && (
+						<span>
+							部署声明：细粒度 {data.retention.configured.detailDays ?? "未知"}{" "}
+							天、聚合 {data.retention.configured.aggregateDays ?? "未知"} 天（
+							{data.retention.configured.aggregateStepSeconds ?? "未知"}{" "}
+							秒），日志 / Trace {data.retention.configured.logDays ?? "未知"} /{" "}
+							{data.retention.configured.traceDays ?? "未知"}{" "}
+							天。声明不代表后端已验证。
+						</span>
+					)}
 					{data.retention.effective
 						? "实际保留策略已声明。"
 						: "实际保留范围尚待数据源确认。"}
 				</p>
+				<ul className="ops-resource-sources">
+					{(data.errorRates ?? []).map((entry) => (
+						<li key={entry.stage}>
+							<span>
+								{entry.stage} 错误率（{entry.windowSeconds} 秒窗口）
+							</span>
+							<span>
+								{entry.ratio === null
+									? "无有效采样"
+									: `${(entry.ratio * 100).toFixed(1)}%`}
+							</span>
+							{entry.observedAt && <Timestamp value={entry.observedAt} />}
+						</li>
+					))}
+				</ul>
 				{data.links.map((link) => (
 					<a key={link.kind} href={link.url} target="_blank" rel="noreferrer">
 						打开

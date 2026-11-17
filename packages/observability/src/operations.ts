@@ -44,6 +44,12 @@ function number(value: unknown, fallback: number, min: number, max: number) {
 		throw new Error("Invalid operations configuration");
 	return result;
 }
+function integer(value: unknown, fallback: number, min: number, max: number) {
+	const result = number(value, fallback, min, max);
+	if (!Number.isSafeInteger(result))
+		throw new Error("Invalid operations configuration");
+	return result;
+}
 function text(value: unknown, max = 256): string {
 	if (typeof value !== "string" || value.length === 0 || value.length > max)
 		throw new Error("Invalid operations configuration");
@@ -110,8 +116,14 @@ export async function readOperationsConfigurationV2(
 		)
 			throw new Error();
 		const thresholds = value.alerts === undefined ? {} : record(value.alerts);
-		keys(thresholds, ["capacityRatio", "criticalRatio", "queueCount"]);
+		keys(thresholds, [
+			"capacityRatio",
+			"criticalRatio",
+			"queueCount",
+			"errorRatio",
+		]);
 		const alerts = {
+			errorRatio: number(thresholds.errorRatio, 0.1, 0.001, 1),
 			capacityRatio: number(
 				thresholds.capacityRatio,
 				defaultOperationsAlertThresholdsV2.capacityRatio,
@@ -146,6 +158,12 @@ export async function readOperationsConfigurationV2(
 				"aggregateDays",
 				"aggregateStepSeconds",
 			]);
+		if (
+			prometheus &&
+			integer(prometheus.aggregateDays, 30, 0, 365) <
+				integer(prometheus.detailDays, 7, 0, 365)
+		)
+			throw new Error();
 		const endpoint = prometheus ? url(prometheus.endpoint) : undefined;
 		if (endpoint && new URL(endpoint).search) throw new Error();
 		const tokenFile =
@@ -158,15 +176,15 @@ export async function readOperationsConfigurationV2(
 			keys(source, ["url", "retentionDays"]);
 			return {
 				url: url(source.url),
-				retentionDays: number(source.retentionDays, 7, 0, 365),
+				retentionDays: integer(source.retentionDays, 7, 0, 365),
 			};
 		};
 		return {
 			scope: { clusterId: text(scope.clusterId), namespace },
 			readCluster: value.readCluster === true,
 			cacheOwner,
-			cacheInventoryLimit: number(value.cacheInventoryLimit, 48, 1, 128),
-			intervalSeconds: number(value.intervalSeconds, 30, 15, 300),
+			cacheInventoryLimit: integer(value.cacheInventoryLimit, 48, 1, 128),
+			intervalSeconds: integer(value.intervalSeconds, 30, 15, 300),
 			alerts,
 			...(value.workloadNamespaceRef === undefined
 				? {}
@@ -176,9 +194,9 @@ export async function readOperationsConfigurationV2(
 						prometheus: {
 							endpoint,
 							...(tokenFile ? { tokenFile } : {}),
-							detailDays: number(prometheus.detailDays, 7, 0, 365),
-							aggregateDays: number(prometheus.aggregateDays, 30, 0, 365),
-							aggregateStepSeconds: number(
+							detailDays: integer(prometheus.detailDays, 7, 0, 365),
+							aggregateDays: integer(prometheus.aggregateDays, 30, 0, 365),
+							aggregateStepSeconds: integer(
 								prometheus.aggregateStepSeconds,
 								300,
 								30,

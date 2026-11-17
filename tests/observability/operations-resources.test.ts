@@ -818,7 +818,10 @@ it("clips name-based PVC history to the observed lifetime of the requested UID",
 			resultType: "matrix",
 			result: [
 				{
-					metric: { persistentvolumeclaim: "retained-pvc" },
+					metric: {
+						uid: "current-pvc-uid",
+						persistentvolumeclaim: "retained-pvc",
+					},
 					values: [
 						[(Date.parse(identity.firstSeen) - 1000) / 1000, "999"],
 						[Date.parse(identity.firstSeen) / 1000, "12"],
@@ -949,3 +952,210 @@ it("establishes a history interval only after separate observations confirm the 
 		await isolated.close();
 	}
 });
+
+it("rejects a previous Node UID's metrics after same-name recreation", async () => {
+	const now = new Date().toISOString();
+	let nodeReads = 0;
+	const snapshot = await collectOperationsSnapshotV2({
+		scope,
+		readCluster: true,
+		cacheOwner: "fixture-cache",
+		cacheInventoryLimit: 48,
+		bindings: [],
+		now: () => now,
+		read: async (kind) => ({
+			truncated: false,
+			items:
+				kind === "nodes"
+					? [
+							{
+								metadata: {
+									name: "reused-node",
+									uid: ++nodeReads === 1 ? "old-node" : "new-node",
+									creationTimestamp: new Date(Date.now() - 1000).toISOString(),
+								},
+								status: {
+									capacity: { cpu: "4", memory: "10Gi" },
+									allocatable: { cpu: "4", memory: "10Gi" },
+								},
+							},
+						]
+					: kind === "nodeMetrics"
+						? [
+								{
+									metadata: { name: "reused-node", uid: "old-node" },
+									timestamp: now,
+									window: "30s",
+									usage: { cpu: "3800m", memory: "9Gi" },
+								},
+							]
+						: [],
+		}),
+	});
+	expect(snapshot.nodes[0]).toMatchObject({
+		uid: "new-node",
+		usage: { cpuCores: null, memoryBytes: null },
+	});
+});
+
+it("retains a capacity alert until that object's own measurement confirms recovery", async () => {
+	const isolated = new PostgresOperationsResourceStoreV2({
+		databaseUrl: database.databaseUrl,
+		scope: { ...scope, namespace: "pressure-fixture" },
+	});
+	try {
+		const at = Date.now();
+		const observation = (offset: number, cpu: number | null) => {
+			const now = new Date(at + offset).toISOString();
+			const snapshot = emptyOperationsResourcesV2(
+				{ ...scope, namespace: "pressure-fixture" },
+				now,
+			);
+			snapshot.sources[2] = {
+				kind: "pod-metrics",
+				state: "available",
+				observedAt: now,
+				windowSeconds: 30,
+				reason: null,
+			};
+			snapshot.resources = [
+				{
+					kind: "Pod",
+					uid: "hot-pod",
+					name: "hot-pod",
+					namespace: "pressure-fixture",
+					resourceVersion: "1",
+					ownerUid: null,
+					ownerGeneration: null,
+					agentId: null,
+					agentName: null,
+					sessionId: null,
+					sandboxId: null,
+					generation: null,
+					revision: null,
+					workloadRevision: null,
+					resourceFence: null,
+					ownership: "unknown",
+					role: "unknown",
+					nodeName: null,
+					phase: "Running",
+					ready: true,
+					restarts: 0,
+					reason: null,
+					observedAt: now,
+					usage: {
+						cpuCores: cpu,
+						memoryBytes: null,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+					requests: {
+						cpuCores: 1,
+						memoryBytes: null,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+					limits: {
+						cpuCores: 1,
+						memoryBytes: null,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+					containers: [],
+					images: [],
+					retainedStorage: false,
+				},
+			];
+			return snapshot;
+		};
+		await isolated.write(observation(0, 0.96));
+		await isolated.write(observation(10, null));
+		const missing = OperationsResourcesV2Schema.parse(
+			await (await app(isolated).request("/api/v2/ops/resources")).json(),
+		);
+		expect(
+			missing.alerts.find((alert) => alert.id === "CPU_PRESSURE:hot-pod")
+				?.state,
+		).toBe("firing");
+		await isolated.write(observation(20, 0.2));
+		const recovered = OperationsResourcesV2Schema.parse(
+			await (await app(isolated).request("/api/v2/ops/resources")).json(),
+		);
+		expect(
+			recovered.alerts.find((alert) => alert.id === "CPU_PRESSURE:hot-pod")
+				?.state,
+		).toBe("resolved");
+	} finally {
+		await isolated.close();
+	}
+});
+
+it.each(["session_sandbox_budgets", "outbox_items"])(
+	"keeps stored resource facts when %s cannot be queried",
+	async (table) => {
+		const isolated = new PostgresOperationsResourceStoreV2({
+			databaseUrl: database.databaseUrl,
+			scope: { ...scope, namespace: "partial-fixture" },
+		});
+		try {
+			const now = new Date().toISOString();
+			const snapshot = emptyOperationsResourcesV2(
+				{ ...scope, namespace: "partial-fixture" },
+				now,
+			);
+			snapshot.nodes = [
+				{
+					uid: "visible-node",
+					name: "visible-node",
+					virtual: false,
+					ready: true,
+					pressures: [],
+					observedAt: now,
+					capacity: {
+						cpuCores: 4,
+						memoryBytes: 10000,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+					allocatable: {
+						cpuCores: 4,
+						memoryBytes: 10000,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+					usage: {
+						cpuCores: 1,
+						memoryBytes: 5000,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+					requests: {
+						cpuCores: null,
+						memoryBytes: null,
+						storageBytes: null,
+						ephemeralStorageBytes: null,
+					},
+				},
+			];
+			await isolated.write(snapshot);
+			await sql.begin(async (transaction) => {
+				await transaction.unsafe(
+					`lock table platform.${table} in access exclusive mode`,
+				);
+				const response = await app(isolated).request("/api/v2/ops/resources");
+				expect(response.status).toBe(200);
+				const body = OperationsResourcesV2Schema.parse(await response.json());
+				expect(body.nodes).toMatchObject([
+					{ uid: "visible-node", usage: { cpuCores: 1 } },
+				]);
+				expect(body.sources).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ kind: "platform", state: "unavailable" }),
+					]),
+				);
+			});
+		} finally {
+			await isolated.close();
+		}
+	},
+);

@@ -14,6 +14,8 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { Timestamp } from "@/components/ui/timestamp";
+import { formatTimestamp } from "@/lib/format-time";
 import { resourceNumber } from "./resource-dashboard.js";
 import {
 	fetchOperationsHistory,
@@ -44,6 +46,7 @@ const stateNames = {
 	missing: "所选范围没有样本",
 	unavailable: "历史数据源暂不可用",
 	"not-configured": "历史查询未接入",
+	"outside-retention": "超出部署声明保留范围",
 	"not-supported": "数据源无法可靠提供此范围的历史",
 };
 function localInput(value: Date) {
@@ -124,12 +127,8 @@ function HistoryChart({
 				<span>最高 {format(maximum)}</span>
 			</div>
 			<div className="ops-history-axis">
-				<time dateTime={series.points[0]?.at}>
-					{Number.isFinite(start) ? new Date(start).toLocaleString() : "未知"}
-				</time>
-				<time dateTime={series.points.at(-1)?.at}>
-					{Number.isFinite(end) ? new Date(end).toLocaleString() : "未知"}
-				</time>
+				<Timestamp value={series.points[0]?.at} style="absolute" />
+				<Timestamp value={series.points.at(-1)?.at} style="absolute" />
 			</div>
 		</figure>
 	);
@@ -321,6 +320,9 @@ export function ResourceHistory({
 						{stateNames[history.state]} · {history.stepSeconds} 秒采样步长 ·{" "}
 						{history.statistic === "maximum" ? "峰值" : "平均值"}
 						{history.truncated ? " · 结果已截断" : ""}
+						{history.coverage?.state === "partial"
+							? ` · 部分时间超出部署声明保留范围，仅查询 ${formatTimestamp(history.coverage.start, { style: "absolute" })?.text ?? "未知"} 起的数据`
+							: ""}
 					</p>
 					<div className="ops-history-series">
 						{history.series.slice(0, 12).map((series) => (

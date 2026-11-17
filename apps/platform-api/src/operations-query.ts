@@ -9,9 +9,9 @@ import {
 	queryOperationsPrometheusV2,
 } from "@agent-infra/observability/operations";
 import type { PostgresOperationsResourceStoreV2 } from "@agent-infra/platform-store";
+import { operationsResourceHistoryPromqlV2 } from "./operations-history-promql.js";
 
 const quote = (value: string) => JSON.stringify(value);
-const regex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function createOperationsQueryV2(options: {
 	store: Pick<PostgresOperationsResourceStoreV2, "read" | "historyIdentities">;
@@ -23,6 +23,14 @@ export function createOperationsQueryV2(options: {
 		async read(input: OperationsResourceQueryV2, signal?: AbortSignal) {
 			const result = await store.read(input, signal);
 			result.refreshSeconds = configuration.intervalSeconds;
+			result.retention.configured = {
+				detailDays: configuration.prometheus?.detailDays ?? null,
+				aggregateDays: configuration.prometheus?.aggregateDays ?? null,
+				aggregateStepSeconds:
+					configuration.prometheus?.aggregateStepSeconds ?? null,
+				logDays: configuration.logs?.retentionDays ?? null,
+				traceDays: configuration.traces?.retentionDays ?? null,
+			};
 			const configuredSources = new Set([
 				"kubernetes",
 				"pod-metrics",
@@ -53,7 +61,9 @@ export function createOperationsQueryV2(options: {
 		): Promise<OperationsHistoryV2> {
 			const span = Date.parse(input.end) - Date.parse(input.start);
 			const stepSeconds =
-				span > 86400_000
+				span > 86400_000 ||
+				Date.parse(input.start) <
+					Date.now() - (configuration.prometheus?.detailDays ?? 7) * 86400_000
 					? (configuration.prometheus?.aggregateStepSeconds ?? 300)
 					: 30;
 			const result: OperationsHistoryV2 = {
@@ -69,83 +79,97 @@ export function createOperationsQueryV2(options: {
 				truncated: false,
 			};
 			if (!configuration.prometheus) return result;
+			const earliest =
+				Date.now() - configuration.prometheus.aggregateDays * 86400_000;
+			const queryStart = new Date(
+				Math.max(Date.parse(input.start), earliest),
+			).toISOString();
+			result.coverage = {
+				start: queryStart,
+				state:
+					Date.parse(input.end) <= earliest
+						? "outside-policy"
+						: Date.parse(input.start) < earliest
+							? "partial"
+							: "within-policy",
+			};
+			if (result.coverage.state === "outside-policy")
+				return { ...result, state: "outside-retention" };
 			const filtered = Boolean(
 				input.agentId || input.sessionId || input.resourceUid,
 			);
 			if (filtered && !["cpu", "memory", "storage"].includes(input.metric))
 				return { ...result, state: "not-supported" };
 			try {
-				const references = filtered
+				const resourceMetric = ["cpu", "memory", "storage"].includes(
+					input.metric,
+				);
+				const references = resourceMetric
 					? await store.historyIdentities(input)
 					: { identities: [], truncated: false };
-				if (filtered && references.identities.length === 0)
+				if (resourceMetric && references.identities.length === 0)
 					return { ...result, state: "missing" };
 				const namespace = `namespace=${quote(configuration.scope.namespace)}`;
 				let expression: string;
-				if (
-					filtered &&
-					references.identities.every((entry) => entry.kind === "Node") &&
-					["cpu", "memory"].includes(input.metric)
-				) {
-					const nodes = `node=~${quote(references.identities.map((entry) => regex(entry.name)).join("|"))}`;
-					expression =
-						input.metric === "cpu"
-							? `sum by (node) (rate(node_cpu_seconds_total{${nodes},mode!="idle"}[2m]))`
-							: `sum by (node) (node_memory_MemTotal_bytes{${nodes}} - node_memory_MemAvailable_bytes{${nodes}})`;
-				} else if (input.metric === "cpu" || input.metric === "memory") {
-					const base =
-						input.metric === "cpu"
-							? `rate(container_cpu_usage_seconds_total{${namespace},container!="",container!="POD"}[2m])`
-							: `container_memory_working_set_bytes{${namespace},container!="",container!="POD"}`;
-					if (filtered) {
-						const pods = references.identities.filter(
-							(entry) => entry.kind === "Pod",
-						);
-						if (!pods.length) return { ...result, state: "not-supported" };
-						expression = `sum by (pod,uid) ((${base}) * on(namespace,pod) group_left(uid) kube_pod_info{${namespace},uid=~${quote(pods.map((entry) => regex(entry.uid)).join("|"))}})`;
-					} else expression = `sum by (pod) (${base})`;
-				} else if (input.metric === "storage") {
-					const volumes = references.identities.filter(
-						(entry) => entry.kind === "PersistentVolumeClaim",
+				if (resourceMetric) {
+					const eligible = references.identities.filter((identity) =>
+						input.metric === "storage"
+							? identity.kind === "PersistentVolumeClaim"
+							: ["Pod", "Node"].includes(identity.kind),
 					);
-					if (filtered && !volumes.length)
-						return { ...result, state: "not-supported" };
-					const selector = filtered
-						? `,persistentvolumeclaim=~${quote(volumes.map((entry) => regex(entry.name)).join("|"))}`
-						: "";
-					expression = `sum by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{${namespace}${selector}})`;
-				} else if (
-					input.metric === "sse-connections" ||
-					input.metric === "sse-pending"
-				) {
-					expression = `sum(agent_platform_resource_count{${namespace},kind=${quote(input.metric === "sse-connections" ? "sse_connections" : "sse_pending_events")}})`;
-				} else if (
-					["model-errors", "tool-errors", "runtime-errors"].includes(
-						input.metric,
-					)
-				) {
-					expression = `sum(rate(agent_platform_operations_total{${namespace},stage=${quote(input.metric.split("-")[0] ?? "runtime")},outcome="failed"}[5m]))`;
-				} else if (input.metric === "waiting" || input.metric === "outbox") {
-					expression = `max(agent_platform_resource_count{${namespace},kind=${quote(input.metric === "waiting" ? "task_waiting" : "outbox_pending")}})`;
-				} else if (
-					input.metric === "http-requests" ||
-					input.metric === "http-errors"
-				) {
-					expression = `sum(rate(agent_platform_operations_total{${namespace},stage="http"${input.metric === "http-errors" ? ',outcome="failed"' : ""}}[5m]))`;
+					if (!eligible.length) return { ...result, state: "not-supported" };
+					let scoped = "";
+					for (let count = 1; count <= eligible.length; count++) {
+						const candidate = operationsResourceHistoryPromqlV2({
+							metric: input.metric as "cpu" | "memory" | "storage",
+							namespace: configuration.scope.namespace,
+							identities: eligible.slice(0, count),
+							stepSeconds,
+							statistic: input.statistic,
+						});
+						if (!candidate || candidate.length > 16000) {
+							references.truncated = true;
+							break;
+						}
+						scoped = candidate;
+					}
+					if (!scoped)
+						return { ...result, state: "unavailable", truncated: true };
+					expression = scoped;
 				} else {
-					const stage =
-						input.metric === "dependency-latency"
-							? "dependency"
-							: (input.metric.split("-")[0] ?? "http");
-					expression = `sum(rate(agent_platform_operation_duration_milliseconds_sum{${namespace},stage=${quote(stage)}}[5m])) / sum(rate(agent_platform_operation_duration_milliseconds_count{${namespace},stage=${quote(stage)}}[5m]))`;
+					if (
+						input.metric === "sse-connections" ||
+						input.metric === "sse-pending"
+					) {
+						expression = `sum(agent_platform_resource_count{${namespace},kind=${quote(input.metric === "sse-connections" ? "sse_connections" : "sse_pending_events")}})`;
+					} else if (
+						["model-errors", "tool-errors", "runtime-errors"].includes(
+							input.metric,
+						)
+					) {
+						expression = `sum(rate(agent_platform_operations_total{${namespace},stage=${quote(input.metric.split("-")[0] ?? "runtime")},outcome="failed"}[5m]))`;
+					} else if (input.metric === "waiting" || input.metric === "outbox") {
+						expression = `max(agent_platform_resource_count{${namespace},kind=${quote(input.metric === "waiting" ? "task_waiting" : "outbox_pending")}})`;
+					} else if (
+						input.metric === "http-requests" ||
+						input.metric === "http-errors"
+					) {
+						expression = `sum(rate(agent_platform_operations_total{${namespace},stage="http"${input.metric === "http-errors" ? ',outcome="failed"' : ""}}[5m]))`;
+					} else {
+						const stage =
+							input.metric === "dependency-latency"
+								? "dependency"
+								: (input.metric.split("-")[0] ?? "http");
+						expression = `sum(rate(agent_platform_operation_duration_milliseconds_sum{${namespace},stage=${quote(stage)}}[5m])) / sum(rate(agent_platform_operation_duration_milliseconds_count{${namespace},stage=${quote(stage)}}[5m]))`;
+					}
+					expression = `${input.statistic === "maximum" ? "max_over_time" : "avg_over_time"}((${expression})[${stepSeconds}s:30s])`;
 				}
-				expression = `${input.statistic === "maximum" ? "max_over_time" : "avg_over_time"}((${expression})[${stepSeconds}s:30s])`;
 				if (expression.length > 16000)
 					return { ...result, state: "unavailable", truncated: true };
 				const data = await (
 					options.queryPrometheus ?? queryOperationsPrometheusV2
 				)(configuration.prometheus, expression, {
-					start: input.start,
+					start: queryStart,
 					end: input.end,
 					stepSeconds,
 					signal,
@@ -173,14 +197,8 @@ export function createOperationsQueryV2(options: {
 							? (entry.metric as Record<string, unknown>)
 							: {};
 					const uid = typeof metric.uid === "string" ? metric.uid : null;
-					const candidates = filtered
-						? references.identities.filter((identity) =>
-								uid
-									? identity.uid === uid
-									: identity.kind === "PersistentVolumeClaim"
-										? identity.name === metric.persistentvolumeclaim
-										: identity.kind === "Node" && identity.name === metric.node,
-							)
+					const candidates = resourceMetric
+						? references.identities.filter((identity) => identity.uid === uid)
 						: [undefined];
 					for (const reference of candidates) {
 						const name =
@@ -213,18 +231,7 @@ export function createOperationsQueryV2(options: {
 									time > Date.parse(reference.lastSeen))
 							)
 								continue;
-							if (
-								reference &&
-								!uid &&
-								references.identities.filter(
-									(other) =>
-										other.kind === reference.kind &&
-										other.name === reference.name &&
-										time >= Date.parse(other.firstSeen) &&
-										time <= Date.parse(other.lastSeen),
-								).length !== 1
-							)
-								continue;
+
 							const value = Number(pair[1]);
 							points.push({
 								at: new Date(time).toISOString(),

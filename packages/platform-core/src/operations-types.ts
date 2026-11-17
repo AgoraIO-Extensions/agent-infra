@@ -211,6 +211,7 @@ export interface OperationsResourceSnapshotV2 {
 			| "POD_UNAVAILABLE"
 			| "QUEUE_BACKLOG"
 			| "DATABASE_PRESSURE"
+			| "ERROR_RATE"
 			| "SOURCE_UNAVAILABLE";
 		severity: "warning" | "critical";
 		state: "firing" | "resolved";
@@ -241,9 +242,16 @@ export interface OperationsResourceSnapshotV2 {
 		roleConnectionLimit: number | null;
 		observedAt: string;
 	} | null;
+	errorRates?: {
+		stage: "http" | "model" | "runtime" | "tool";
+		ratio: number | null;
+		observedAt: string | null;
+		windowSeconds: number;
+	}[];
 	retention: {
 		target: OperationsRetentionPolicyV2;
 		effective: OperationsRetentionPolicyV2 | null;
+		configured?: { [K in keyof OperationsRetentionPolicyV2]: number | null };
 	};
 	links: { kind: "metrics" | "logs" | "traces"; url: string }[];
 	truncated: boolean;

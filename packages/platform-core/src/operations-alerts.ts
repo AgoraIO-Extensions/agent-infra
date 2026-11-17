@@ -5,11 +5,13 @@ export interface OperationsAlertThresholdsV2 {
 	readonly capacityRatio: number;
 	readonly criticalRatio: number;
 	readonly queueCount: number;
+	readonly errorRatio?: number;
 }
 export const defaultOperationsAlertThresholdsV2: OperationsAlertThresholdsV2 = {
 	capacityRatio: 0.9,
 	criticalRatio: 0.95,
 	queueCount: 100,
+	errorRatio: 0.1,
 };
 
 /** A stopped collector cannot publish its own failure; freshness is derived from its last observation. */
@@ -69,7 +71,10 @@ export function evaluateOperationsAlertsV2(
 		thresholds.criticalRatio < thresholds.capacityRatio ||
 		thresholds.criticalRatio > 1 ||
 		!Number.isSafeInteger(thresholds.queueCount) ||
-		thresholds.queueCount < 1
+		thresholds.queueCount < 1 ||
+		!Number.isFinite(thresholds.errorRatio ?? 0.1) ||
+		(thresholds.errorRatio ?? 0.1) <= 0 ||
+		(thresholds.errorRatio ?? 0.1) > 1
 	)
 		throw new Error("Invalid operations thresholds");
 	const active = new Map<string, Alert>();
@@ -265,6 +270,26 @@ export function evaluateOperationsAlertsV2(
 				caches[0]?.inventoryLimit ?? null,
 			);
 	}
+	const freshError = (
+		entry: NonNullable<OperationsResourcesV2["errorRates"]>[number],
+	) =>
+		entry.ratio !== null &&
+		entry.observedAt !== null &&
+		Date.parse(snapshot.generatedAt) - Date.parse(entry.observedAt) <=
+			Math.max(90_000, snapshot.refreshSeconds * 3000);
+	for (const entry of snapshot.errorRates ?? [])
+		if (
+			freshError(entry) &&
+			entry.ratio !== null &&
+			entry.ratio >= (thresholds.errorRatio ?? 0.1)
+		)
+			add(
+				"ERROR_RATE",
+				null,
+				entry.stage,
+				entry.ratio,
+				thresholds.errorRatio ?? 0.1,
+			);
 	for (const source of snapshot.sources)
 		if (["unavailable", "stale"].includes(source.state))
 			add("SOURCE_UNAVAILABLE", null, source.kind);
@@ -283,20 +308,39 @@ export function evaluateOperationsAlertsV2(
 					: healthy("node-metrics");
 			}
 			case "MEMORY_PRESSURE":
-			case "CPU_PRESSURE":
-				if (snapshot.nodes.some((node) => node.uid === alert.objectUid))
-					return healthy("node-metrics");
-				if (
-					snapshot.resources.some(
-						(resource) => resource.uid === alert.objectUid,
-					)
-				)
-					return healthy("pod-metrics");
+			case "CPU_PRESSURE": {
+				const key = alert.code === "CPU_PRESSURE" ? "cpuCores" : "memoryBytes";
+				const node = snapshot.nodes.find(
+					(entry) => entry.uid === alert.objectUid,
+				);
+				if (node)
+					return (
+						healthy("node-metrics") &&
+						node.usage[key] !== null &&
+						node.allocatable[key] !== null &&
+						(node.allocatable[key] ?? 0) > 0 &&
+						Date.parse(snapshot.generatedAt) - Date.parse(node.observedAt) <=
+							Math.max(90_000, snapshot.refreshSeconds * 3000)
+					);
+				const resource = snapshot.resources.find(
+					(entry) => entry.uid === alert.objectUid,
+				);
+				if (resource)
+					return (
+						healthy("pod-metrics") &&
+						resource.usage[key] !== null &&
+						resource.limits[key] !== null &&
+						(resource.limits[key] ?? 0) > 0 &&
+						Date.parse(snapshot.generatedAt) -
+							Date.parse(resource.observedAt) <=
+							Math.max(90_000, snapshot.refreshSeconds * 3000)
+					);
 				return (
 					healthy("kubernetes") &&
 					healthy("node-metrics") &&
 					healthy("pod-metrics")
 				);
+			}
 			case "QUOTA_PRESSURE":
 			case "POD_UNAVAILABLE":
 				return healthy("kubernetes");
@@ -307,6 +351,12 @@ export function evaluateOperationsAlertsV2(
 			case "CACHE_INVENTORY":
 			case "CACHE_EXPIRED":
 				return healthy("image-cache");
+			case "ERROR_RATE":
+				return (
+					snapshot.errorRates?.some(
+						(entry) => entry.stage === alert.objectName && freshError(entry),
+					) ?? false
+				);
 			case "SOURCE_UNAVAILABLE":
 				return snapshot.sources.some(
 					(source) =>

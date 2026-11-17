@@ -259,6 +259,7 @@ export const OperationsAlertV2Schema = z.strictObject({
 		"POD_UNAVAILABLE",
 		"QUEUE_BACKLOG",
 		"DATABASE_PRESSURE",
+		"ERROR_RATE",
 		"SOURCE_UNAVAILABLE",
 	]),
 	severity: z.enum(["warning", "critical"]),
@@ -325,9 +326,29 @@ export const OperationsResourcesV2Schema = z.strictObject({
 		})
 		.nullable()
 		.default(null),
+	errorRates: z
+		.array(
+			z.strictObject({
+				stage: z.enum(["http", "model", "runtime", "tool"]),
+				ratio: z.number().min(0).max(1).nullable(),
+				observedAt: timestamp.nullable(),
+				windowSeconds: count.positive(),
+			}),
+		)
+		.max(4)
+		.optional(),
 	retention: z.strictObject({
 		target: OperationsRetentionV2Schema,
 		effective: OperationsRetentionV2Schema.nullable(),
+		configured: z
+			.strictObject({
+				detailDays: count.nullable(),
+				aggregateDays: count.nullable(),
+				aggregateStepSeconds: count.nullable(),
+				logDays: count.nullable(),
+				traceDays: count.nullable(),
+			})
+			.optional(),
 	}),
 	links: z.array(OperationsLinkV2Schema).max(3),
 	selection: z
@@ -394,9 +415,16 @@ export const OperationsHistoryV2Schema = z.strictObject({
 		"unavailable",
 		"not-configured",
 		"not-supported",
+		"outside-retention",
 	]),
 	start: timestamp,
 	end: timestamp,
+	coverage: z
+		.strictObject({
+			state: z.enum(["within-policy", "partial", "outside-policy"]),
+			start: timestamp,
+		})
+		.optional(),
 	stepSeconds: count.positive(),
 	statistic: z.enum(["average", "maximum"]),
 	series: z

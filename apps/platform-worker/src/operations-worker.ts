@@ -6,6 +6,7 @@ import {
 import { PostgresOperationsResourceStoreV2 } from "@agent-infra/platform-store";
 import { collectOperationsSnapshotV2 } from "./operations-collector.js";
 import { createOperationsKubernetesReaderV2 } from "./operations-kubernetes.js";
+import { collectOperationsErrorRatesV2 } from "./operations-prometheus.js";
 
 export function createOperationsWorkerV2(input: {
 	configuration: OperationsConfigurationV2;
@@ -92,6 +93,10 @@ export function createOperationsWorkerV2(input: {
 				};
 			}
 		}
+		snapshot.errorRates = await collectOperationsErrorRatesV2(
+			configuration,
+			signal,
+		);
 		for (const kind of ["logs", "traces"] as const) {
 			const configured = configuration[kind];
 			if (!configured) continue;

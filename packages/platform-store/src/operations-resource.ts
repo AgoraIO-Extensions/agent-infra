@@ -433,82 +433,94 @@ export class PostgresOperationsResourceStoreV2 {
 				(!input.sessionId || input.sessionId === resource.sessionId),
 		);
 		result.agents = aggregateOperationsAgentsV2(result.resources);
-		result.budget = await this.#sql.begin("read only", async (tx) => {
-			await tx`set local statement_timeout = '3000ms'`;
-			await tx`set local lock_timeout = '1000ms'`;
-			signal.throwIfAborted();
-			const configurations = await tx<
-				{
-					revision: string;
-					configuration: Record<string, unknown>;
-					updated_at: Date;
-				}[]
-			>`
+		let platformAvailable = true;
+		try {
+			result.budget = await this.#sql.begin("read only", async (tx) => {
+				await tx`set local statement_timeout = '3000ms'`;
+				await tx`set local lock_timeout = '1000ms'`;
+				signal.throwIfAborted();
+				const configurations = await tx<
+					{
+						revision: string;
+						configuration: Record<string, unknown>;
+						updated_at: Date;
+					}[]
+				>`
 				select revision, configuration, updated_at from platform.session_sandbox_budgets where namespace = ${namespace}`;
-			const rows = await tx<
-				{
-					resources: unknown;
-					compute_released: boolean;
-					has_allocation: boolean;
-					has_reserve: boolean;
-					claimed: boolean;
-					has_conversation: boolean;
-				}[]
-			>`select ch.resources, ch.compute_released,
+				const rows = await tx<
+					{
+						resources: unknown;
+						compute_released: boolean;
+						has_allocation: boolean;
+						has_reserve: boolean;
+						claimed: boolean;
+						has_conversation: boolean;
+					}[]
+				>`select ch.resources, ch.compute_released,
 				exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=ch.sandbox_id) as has_allocation,
 				exists(select 1 from platform.session_sandbox_reserves r where r.sandbox_id=ch.sandbox_id and r.retired_at is null) as has_reserve,
 				exists(select 1 from platform.session_sandbox_reserves r where r.sandbox_id=ch.sandbox_id and r.status='claimed') as claimed,
 				exists(select 1 from platform.session_sandbox_reserves r join platform.conversations c on c.id=r.session_id where r.sandbox_id=ch.sandbox_id) as has_conversation
 				from platform.session_sandbox_resource_charges ch where ch.namespace=${namespace} and not ch.released
 				limit 10001`;
-			if (rows.length > 10000)
-				throw new Error("Operations budget observation is unavailable");
-			const saved = configurations[0];
-			const missing = await tx<{ sessions: string; reserves: string }[]>`select
+				if (rows.length > 10000)
+					throw new Error("Operations budget observation is unavailable");
+				const saved = configurations[0];
+				const missing = await tx<
+					{ sessions: string; reserves: string }[]
+				>`select
 				(select count(*) from platform.session_sandbox_allocations a where a.resource_policy->>'namespace'=${namespace}
 				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=a.sandbox_id)) as sessions,
 				(select count(*) from platform.session_sandbox_reserves r where r.namespace=${namespace} and r.retired_at is null and r.status <> 'claimed'
 				and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=r.sandbox_id)
 				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=r.sandbox_id)) as reserves`;
-			const unaccountedSessions = Number(missing[0]?.sessions ?? 0);
-			const unaccountedReserves = Number(missing[0]?.reserves ?? 0);
-			const configuration = saved?.configuration;
-			const accounting = configuration?.reserveAccounting as
-				| Record<string, unknown>
-				| undefined;
-			return projectOperationsBudgetV2({
-				namespace,
-				revision: saved ? Number(saved.revision) : null,
-				enabled:
-					typeof configuration?.enabled === "boolean"
-						? configuration.enabled
-						: null,
-				updatedAt: saved?.updated_at.toISOString() ?? null,
-				limits: budget(
-					configuration?.enabled
-						? configuration.totalBudget
-						: accounting?.totalBudget,
-				),
-				charges: rows.map((row) => ({
-					resources: budget(row.resources),
-					computeReleased: row.compute_released,
-					hasAllocation: row.has_allocation,
-					hasReserve: row.has_reserve,
-					claimed: row.claimed,
-					hasConversation: row.has_conversation,
-				})),
-				unaccountedCount: unaccountedSessions + unaccountedReserves,
-				unaccountedReserves,
-				unaccountedSessions,
+				const unaccountedSessions = Number(missing[0]?.sessions ?? 0);
+				const unaccountedReserves = Number(missing[0]?.reserves ?? 0);
+				const configuration = saved?.configuration;
+				const accounting = configuration?.reserveAccounting as
+					| Record<string, unknown>
+					| undefined;
+				return projectOperationsBudgetV2({
+					namespace,
+					revision: saved ? Number(saved.revision) : null,
+					enabled:
+						typeof configuration?.enabled === "boolean"
+							? configuration.enabled
+							: null,
+					updatedAt: saved?.updated_at.toISOString() ?? null,
+					limits: budget(
+						configuration?.enabled
+							? configuration.totalBudget
+							: accounting?.totalBudget,
+					),
+					charges: rows.map((row) => ({
+						resources: budget(row.resources),
+						computeReleased: row.compute_released,
+						hasAllocation: row.has_allocation,
+						hasReserve: row.has_reserve,
+						claimed: row.claimed,
+						hasConversation: row.has_conversation,
+					})),
+					unaccountedCount: unaccountedSessions + unaccountedReserves,
+					unaccountedReserves,
+					unaccountedSessions,
+				});
 			});
-		});
-		signal.throwIfAborted();
-		const queue = await readPlatformQueueResourceSnapshot(this.#sql, signal);
-		result.queue = {
-			waiting: queue.taskWaiting,
-			outboxPending: queue.outboxPending,
-			oldestWaitingAt: queue.oldestWaitingAt ?? null,
-		};
+		} catch {
+			result.budget = null;
+			platformAvailable = false;
+		}
+		try {
+			const queue = await readPlatformQueueResourceSnapshot(this.#sql, signal);
+			result.queue = {
+				waiting: queue.taskWaiting,
+				outboxPending: queue.outboxPending,
+				oldestWaitingAt: queue.oldestWaitingAt ?? null,
+			};
+		} catch {
+			result.queue = null;
+			platformAvailable = false;
+		}
 		let databaseAvailable = true;
 		try {
 			const [database] = await this.#sql<
@@ -551,10 +563,11 @@ export class PostgresOperationsResourceStoreV2 {
 		}
 		result.sources[0] = {
 			kind: "platform",
-			state: databaseAvailable ? "available" : "unavailable",
+			state:
+				databaseAvailable && platformAvailable ? "available" : "unavailable",
 			observedAt: result.generatedAt,
 			windowSeconds: null,
-			reason: databaseAvailable ? null : "QUERY_FAILED",
+			reason: databaseAvailable && platformAvailable ? null : "QUERY_FAILED",
 		};
 		return OperationsResourcesV2Schema.parse(
 			projectOperationsStalenessV2(result, result.generatedAt),

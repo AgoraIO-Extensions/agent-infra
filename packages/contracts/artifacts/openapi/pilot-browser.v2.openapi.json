@@ -11256,6 +11256,29 @@
       "OperationsHistoryV2": {
         "additionalProperties": false,
         "properties": {
+          "coverage": {
+            "additionalProperties": false,
+            "properties": {
+              "start": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "within-policy",
+                  "partial",
+                  "outside-policy"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "start"
+            ],
+            "type": "object"
+          },
           "end": {
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -11379,7 +11402,8 @@
               "missing",
               "unavailable",
               "not-configured",
-              "not-supported"
+              "not-supported",
+              "outside-retention"
             ],
             "type": "string"
           },
@@ -11653,6 +11677,7 @@
                     "POD_UNAVAILABLE",
                     "QUEUE_BACKLOG",
                     "DATABASE_PRESSURE",
+                    "ERROR_RATE",
                     "SOURCE_UNAVAILABLE"
                   ],
                   "type": "string"
@@ -12256,6 +12281,60 @@
               }
             ],
             "default": null
+          },
+          "errorRates": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "observedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ratio": {
+                  "anyOf": [
+                    {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "http",
+                    "model",
+                    "runtime",
+                    "tool"
+                  ],
+                  "type": "string"
+                },
+                "windowSeconds": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "stage",
+                "ratio",
+                "observedAt",
+                "windowSeconds"
+              ],
+              "type": "object"
+            },
+            "maxItems": 4,
+            "type": "array"
           },
           "events": {
             "items": {
@@ -13638,6 +13717,79 @@
           "retention": {
             "additionalProperties": false,
             "properties": {
+              "configured": {
+                "additionalProperties": false,
+                "properties": {
+                  "aggregateDays": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "aggregateStepSeconds": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detailDays": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "logDays": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "traceDays": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "detailDays",
+                  "aggregateDays",
+                  "aggregateStepSeconds",
+                  "logDays",
+                  "traceDays"
+                ],
+                "type": "object"
+              },
               "effective": {
                 "anyOf": [
                   {

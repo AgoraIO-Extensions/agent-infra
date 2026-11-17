@@ -714,7 +714,20 @@ export async function collectOperationsSnapshotV2(input: {
 			labels.type === "virtual-kubelet" ||
 			labels["alibabacloud.com/eci"] === "true" ||
 			name.startsWith("virtual-kubelet");
-		const metric = nodeMetrics.find((entry) => metadata(entry).name === name);
+		const metric = nodeMetrics.find((entry) => {
+			const at = date(entry.timestamp);
+			const created = date(meta.creationTimestamp);
+			const window = /^([0-9]+(?:\.[0-9]+)?)s$/.exec(String(entry.window))?.[1];
+			return (
+				stableIdentity("nodes", node) &&
+				metadata(entry).name === name &&
+				(metadata(entry).uid === undefined || metadata(entry).uid === uid) &&
+				at &&
+				created &&
+				window &&
+				Date.parse(at) - Number(window) * 1000 >= Date.parse(created) + 1000
+			);
+		});
 		const conditions = list(status.conditions);
 		snapshot.nodes.push({
 			uid,

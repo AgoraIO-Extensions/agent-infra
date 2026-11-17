@@ -1902,6 +1902,10 @@ export type NativeMetadataProjectionV1OrV2 = NativeMetadataProjectionV1 | {
 };
 
 export type OperationsHistoryV2 = {
+    coverage?: {
+        start: string;
+        state: 'within-policy' | 'partial' | 'outside-policy';
+    };
     end: string;
     metric: 'cpu' | 'memory' | 'storage' | 'http-requests' | 'http-errors' | 'http-latency' | 'waiting' | 'outbox' | 'dependency-latency' | 'runtime-latency' | 'model-latency' | 'tool-latency' | 'model-errors' | 'tool-errors' | 'runtime-errors' | 'sse-connections' | 'sse-pending';
     schemaVersion: 2;
@@ -1918,7 +1922,7 @@ export type OperationsHistoryV2 = {
         resourceUid: string | null;
     }>;
     start: string;
-    state: 'available' | 'missing' | 'unavailable' | 'not-configured' | 'not-supported';
+    state: 'available' | 'missing' | 'unavailable' | 'not-configured' | 'not-supported' | 'outside-retention';
     statistic: 'average' | 'maximum';
     stepSeconds: number;
     truncated: boolean;
@@ -1951,7 +1955,7 @@ export type OperationsResourcesV2 = {
         volumes: number;
     }>;
     alerts: Array<{
-        code: 'MEMORY_PRESSURE' | 'NODE_PRESSURE' | 'CPU_PRESSURE' | 'QUOTA_PRESSURE' | 'RESERVE_PRESSURE' | 'CACHE_INVENTORY' | 'CACHE_EXPIRED' | 'POD_UNAVAILABLE' | 'QUEUE_BACKLOG' | 'DATABASE_PRESSURE' | 'SOURCE_UNAVAILABLE';
+        code: 'MEMORY_PRESSURE' | 'NODE_PRESSURE' | 'CPU_PRESSURE' | 'QUOTA_PRESSURE' | 'RESERVE_PRESSURE' | 'CACHE_INVENTORY' | 'CACHE_EXPIRED' | 'POD_UNAVAILABLE' | 'QUEUE_BACKLOG' | 'DATABASE_PRESSURE' | 'ERROR_RATE' | 'SOURCE_UNAVAILABLE';
         firstAt: string;
         id: string;
         lastAt: string;
@@ -2022,6 +2026,12 @@ export type OperationsResourcesV2 = {
         roleConnectionLimit: number | null;
         scope: 'current-role';
     } | null;
+    errorRates?: Array<{
+        observedAt: string | null;
+        ratio: number | null;
+        stage: 'http' | 'model' | 'runtime' | 'tool';
+        windowSeconds: number;
+    }>;
     events: Array<{
         category: 'capacity' | 'scheduling' | 'image' | 'runtime' | 'dependency' | 'observation';
         count: number;
@@ -2177,6 +2187,13 @@ export type OperationsResourcesV2 = {
         workloadRevision: number | null;
     }>;
     retention: {
+        configured?: {
+            aggregateDays: number | null;
+            aggregateStepSeconds: number | null;
+            detailDays: number | null;
+            logDays: number | null;
+            traceDays: number | null;
+        };
         effective: {
             aggregateDays: number;
             aggregateStepSeconds: number;

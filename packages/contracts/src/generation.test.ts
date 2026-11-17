@@ -193,7 +193,11 @@ describe("standard contract artifacts", () => {
 			"https://json-schema.org/draft/2020-12/schema",
 		);
 		expect(Object.keys(artifacts.jsonSchema.$defs).sort()).toEqual(schemaNames);
-		expect(first).not.toMatch(/generatedAt|toolVersion|\/Users\//);
+		expect(first).not.toMatch(/toolVersion|\/Users\//);
+		for (const artifact of Object.values(artifacts)) {
+			expect(artifact).not.toHaveProperty("generatedAt");
+			expect(artifact).not.toHaveProperty("info.generatedAt");
+		}
 		expect(artifacts.pilotBrowserOpenapi.openapi).toBe("3.1.0");
 		expect(artifacts.pilotBrowserOpenapi.components.securitySchemes).toEqual(
 			artifacts.pilotBrowserOpenapiV2.components.securitySchemes,
@@ -383,6 +387,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
 			"/api/v2/me/workspace-snapshots",
+			"/api/v2/ops/history",
+			"/api/v2/ops/resources",
 			"/api/v2/skills",
 			"/api/v2/skills/imports",
 			"/api/v2/skills/installations",
