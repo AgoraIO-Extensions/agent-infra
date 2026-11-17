@@ -56,8 +56,16 @@ node --test tests/signed-own-entry.test.mjs tests/signed-own-entry-protocols.tes
 提供的现有授权与拒绝 token；不能生成新现场 Key、跳过证书错误、使用 SPKI 例外或以页面 200
 代替 SSE/WebSocket 的实际帧和资源/退出证据。
 
-应用只需要非秘密配置 `CUSTOM_ENTRY_PUBLIC_KEY`、`CUSTOM_ENTRY_ISSUER`、`CUSTOM_ENTRY_AUDIENCE`
+应用只需要非秘密配置 `CUSTOM_ENTRY_PUBLIC_ORIGIN`、`CUSTOM_ENTRY_PUBLIC_KEY`、`CUSTOM_ENTRY_ISSUER`、`CUSTOM_ENTRY_AUDIENCE`
 和 `CUSTOM_ENTRY_ROLE`。私钥留在部署验证端，镜像、普通环境变量和 ConfigMap 都不含凭证。
+`CUSTOM_ENTRY_PUBLIC_ORIGIN` 是部署/应用 owner 从正式已选入口绑定的 canonical HTTPS origin，
+不是请求 Host、Origin、转发 Header 或 URL 参数。登录、退出与 WebSocket 同时核对这个固定
+origin 和 Host；同步伪造 Host+Origin 仍拒绝。新镜像正常采用前须通过原 Owner 的配置入口补齐
+此非秘密值，不换 Key、issuer、audience、权限或快照，不强行执行缺配置的 image-only 升级。
+现有正常入口为 `PUT /api/v2/agents/{agentId}/configuration` 的 V2 environment 更新：使用原
+Owner 会话及新幂等操作，保留 fresh 当前 environment 的全部条目，仅增加或核实此值；不发送
+Key/model/权限/快照变更，不编造公开接口没有返回的 revision/CAS。配置与镜像采用均由协调者
+绑定实际新有限窗口，当前源码阶段不调用该入口。
 `single` 直接提供应用；多服务 manifest 使用 `web` 与 `api` 两个 Deployment/Service，前者按
 平台生成的 Pod 名推导同 Agent 的 `api` Service，转发签名身份并显示真实后端返回值。
 该命名约定是此样例的约束，不新增平台服务发现契约。

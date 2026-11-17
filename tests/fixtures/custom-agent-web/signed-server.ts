@@ -53,6 +53,8 @@ export const ownEntryResult = {
 };
 
 type Configuration = {
+	/** Trusted deployment/application configuration, never inferred from HTTP headers. */
+	publicOrigin: string;
 	issuer: string;
 	audience: string;
 	publicKey: string;
@@ -65,6 +67,15 @@ type Configuration = {
 type Identity = { status: 200; token: string } | { status: 401 | 403 };
 
 export function createOwnEntryServer(configuration: Configuration) {
+	const publicOrigin = new URL(configuration.publicOrigin);
+	if (
+		publicOrigin.protocol !== "https:" ||
+		publicOrigin.origin !== configuration.publicOrigin
+	)
+		throw new Error("OWN_ENTRY_PUBLIC_ORIGIN_INVALID");
+	const sameOrigin = (request: IncomingMessage) =>
+		request.headers.origin === publicOrigin.origin &&
+		request.headers.host === publicOrigin.host;
 	const configuredBasePath = configuration.basePath ?? "/";
 	const basePath = configuration.role === "api" ? "/" : configuredBasePath;
 	if (basePath !== "/" && !/^\/a\/agent-[a-f0-9]{32}\/$/.test(basePath))
@@ -225,8 +236,7 @@ export function createOwnEntryServer(configuration: Configuration) {
 			pathname === "/auth/login" &&
 			configuration.role !== "api"
 		) {
-			const origin = request.headers.origin;
-			if (origin !== `https://${request.headers.host}`) {
+			if (!sameOrigin(request)) {
 				send(response, 403);
 				return;
 			}
@@ -262,7 +272,7 @@ export function createOwnEntryServer(configuration: Configuration) {
 			pathname === "/auth/logout" &&
 			configuration.role !== "api"
 		) {
-			if (request.headers.origin !== `https://${request.headers.host}`) {
+			if (!sameOrigin(request)) {
 				send(response, 403);
 				return;
 			}
@@ -406,7 +416,7 @@ export function createOwnEntryServer(configuration: Configuration) {
 			reject(404);
 			return;
 		}
-		if (request.headers.origin !== `https://${request.headers.host}`) {
+		if (!sameOrigin(request)) {
 			reject(403);
 			return;
 		}
@@ -463,6 +473,7 @@ if (
 			process.env.HOSTNAME ?? "",
 		)?.[1];
 		const server = createOwnEntryServer({
+			publicOrigin: process.env.CUSTOM_ENTRY_PUBLIC_ORIGIN ?? "",
 			issuer: process.env.CUSTOM_ENTRY_ISSUER ?? "",
 			audience: process.env.CUSTOM_ENTRY_AUDIENCE ?? "",
 			publicKey: process.env.CUSTOM_ENTRY_PUBLIC_KEY ?? "",

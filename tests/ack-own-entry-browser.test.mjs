@@ -34,7 +34,7 @@ async function checkOwnEntryBrowser(t, basePath) {
 		role: "single",
 		basePath,
 	};
-	const application = createOwnEntryServer(configuration);
+	let application;
 	let proxy;
 	try {
 		const key = join(directory, "tls.key");
@@ -62,7 +62,6 @@ async function checkOwnEntryBrowser(t, basePath) {
 		);
 		await chmod(key, 0o600);
 		await chmod(cert, 0o600);
-		await new Promise((resolve) => application.listen(0, "127.0.0.1", resolve));
 		proxy = createServer(
 			{ key: await readFile(key), cert: await readFile(cert) },
 			(request, response) => {
@@ -87,6 +86,11 @@ async function checkOwnEntryBrowser(t, basePath) {
 			},
 		);
 		await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+		application = createOwnEntryServer({
+			...configuration,
+			publicOrigin: `https://127.0.0.1:${proxy.address().port}`,
+		});
+		await new Promise((resolve) => application.listen(0, "127.0.0.1", resolve));
 		const token = (permissions) => {
 			const encode = (value) =>
 				Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -111,7 +115,7 @@ async function checkOwnEntryBrowser(t, basePath) {
 			tlsLeafPinned: true,
 		});
 	} finally {
-		await new Promise((resolve) => application.close(resolve));
+		if (application) await new Promise((resolve) => application.close(resolve));
 		if (proxy) {
 			proxy.closeAllConnections();
 			await new Promise((resolve) => proxy.close(resolve));

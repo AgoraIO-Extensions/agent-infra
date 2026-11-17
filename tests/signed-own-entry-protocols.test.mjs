@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,10 +13,12 @@ import {
 	createOwnEntryServer,
 	ownEntryResult,
 } from "./fixtures/custom-agent-web/signed-server.ts";
+import { postOwnEntryFixture } from "./support/own-entry-http.ts";
 
 async function fixture(t, basePath = "/", factory = createOwnEntryServer) {
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const server = factory({
+		publicOrigin: "https://entry.example.test",
 		issuer: "protocol-fixture",
 		audience: "agent-a",
 		publicKey: publicKey.export({ type: "spki", format: "pem" }),
@@ -34,7 +37,7 @@ async function fixture(t, basePath = "/", factory = createOwnEntryServer) {
 	return {
 		server,
 		origin,
-		publicOrigin: origin.replace("http:", "https:"),
+		publicOrigin: "https://entry.example.test",
 		entry: origin + basePath,
 		token(changes = {}) {
 			const encode = (value) =>
@@ -95,7 +98,11 @@ test("the shipped self-contained bundle preserves entrypoint behavior and snapsh
 function openSocket(t, f, { path = "ws", headers = {} } = {}) {
 	const socket = new WebSocket(f.entry.replace("http:", "ws:") + path, {
 		handshakeTimeout: 1000,
-		headers: { origin: f.publicOrigin, ...headers },
+		headers: {
+			host: new URL(f.publicOrigin).host,
+			origin: f.publicOrigin,
+			...headers,
+		},
 	});
 	// A rejected handshake or intentional protocol failure must not escape teardown.
 	socket.on("error", () => {});
@@ -153,9 +160,12 @@ for (const basePath of ["/", `/a/agent-${"a".repeat(32)}/`]) {
 		timeout: 5000,
 	}, async (t) => {
 		const f = await fixture(t, basePath);
-		const login = await fetch(`${f.entry}auth/login`, {
-			method: "POST",
-			headers: { origin: f.publicOrigin, "content-type": "application/json" },
+		const login = await postOwnEntryFixture(`${f.entry}auth/login`, {
+			headers: {
+				host: new URL(f.publicOrigin).host,
+				origin: f.publicOrigin,
+				"content-type": "application/json",
+			},
 			body: JSON.stringify({ token: f.token() }),
 		});
 		assert.equal(login.status, 204);
@@ -187,16 +197,18 @@ for (const basePath of ["/", `/a/agent-${"a".repeat(32)}/`]) {
 		assert.equal((await closed)[0], 1000);
 		assert.equal(
 			(
-				await fetch(`${f.entry}auth/logout`, {
-					method: "POST",
+				await postOwnEntryFixture(`${f.entry}auth/logout`, {
 					headers: { ...headers, origin: "https://foreign.example.test" },
 				})
 			).status,
 			403,
 		);
-		const logout = await fetch(`${f.entry}auth/logout`, {
-			method: "POST",
-			headers: { ...headers, origin: f.publicOrigin },
+		const logout = await postOwnEntryFixture(`${f.entry}auth/logout`, {
+			headers: {
+				...headers,
+				host: new URL(f.publicOrigin).host,
+				origin: f.publicOrigin,
+			},
 		});
 		assert.equal(logout.status, 204);
 		assert.match(logout.headers.get("set-cookie"), /Max-Age=0/u);
@@ -285,6 +297,43 @@ test("protocol endpoints reject missing, forged, cross-Agent and unauthorized id
 	);
 });
 
+for (const path of ["auth/login", "auth/logout", "ws"]) {
+	test(`trusted origin rejects a synchronously forged Host and Origin for ${path}`, {
+		timeout: 5000,
+	}, async (t) => {
+		const f = await fixture(t);
+		const headers = {
+			host: "forged.example.test",
+			origin: "https://forged.example.test",
+			authorization: `Bearer ${f.token()}`,
+			"content-type": "application/json",
+		};
+		if (path === "ws") {
+			assert.equal(await upgradeStatus(t, f, headers), 403);
+		} else {
+			const status = await new Promise((resolve, reject) => {
+				const request = httpRequest(
+					{
+						hostname: "127.0.0.1",
+						port: f.server.address().port,
+						path: new URL(f.entry + path).pathname,
+						method: "POST",
+						headers,
+						signal: AbortSignal.timeout(2000),
+					},
+					(response) => {
+						response.resume();
+						resolve(response.statusCode);
+					},
+				);
+				request.once("error", reject);
+				request.end(JSON.stringify({ token: f.token() }));
+			});
+			assert.equal(status, 403);
+		}
+	});
+}
+
 for (const [input, options, expectedClose] of [
 	["not-a-check", {}, 1008],
 	[Buffer.from("check"), { binary: true }, 1008],
@@ -326,7 +375,7 @@ import { createOwnEntryServer } from ${JSON.stringify(source)};
 import { generateKeyPairSync } from 'node:crypto';
 import { request } from 'node:http';
 const { publicKey } = generateKeyPairSync('ed25519');
-const server = createOwnEntryServer({ issuer:'test', audience:'test', role:'single', publicKey:publicKey.export({type:'spki',format:'pem'}) });
+const server = createOwnEntryServer({ publicOrigin:'https://entry.example.test', issuer:'test', audience:'test', role:'single', publicKey:publicKey.export({type:'spki',format:'pem'}) });
 server.listen(0,'127.0.0.1',()=>{
   request({hostname:'127.0.0.1',port:server.address().port,path:'//[',headers:{connection:'Upgrade',upgrade:'websocket'}}, async response=>{
     response.resume();
