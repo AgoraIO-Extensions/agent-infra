@@ -8258,3 +8258,90 @@ it("treats a conflicting hostname Secret as a permanent rejection without spendi
 		"foreign-secret",
 	);
 });
+
+async function snapshotEgressReconciliationFixture(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+) {
+	const { projectWorkspaceSnapshotMaterializerV1 } = await import(
+		"./workspace-snapshot-materializer.js"
+	);
+	const configuration = configurationFixture();
+	assert(configuration.source.kind === "custom");
+	const snapshot = {
+		snapshotId: "snapshot-a",
+		name: "repo",
+		digest: `sha256:${"b".repeat(64)}`,
+		sizeBytes: 128,
+		objectRef: "snapshot-object",
+		signedUrl: "https://objects.example.test/archive?signature=synthetic",
+		expiresAt: new Date(Date.now() + 60_000).toISOString(),
+	};
+	return fixture(
+		{
+			policy,
+			workspaceSnapshotResolver: async () => ({
+				inputs: [snapshot],
+				projection: projectWorkspaceSnapshotMaterializerV1([snapshot], {
+					imageDigest: `registry.example.test/worker@sha256:${"c".repeat(64)}`,
+					allowedOrigins: ["https://objects.example.test"],
+					cacheSizeLimit: "2Gi",
+					resources: {
+						requests: { cpu: "100m", memory: "128Mi" },
+						limits: { cpu: "1", memory: "512Mi" },
+					},
+					credentialSecretName: "snapshot-credentials",
+				}),
+			}),
+		},
+		{
+			configuration: {
+				...configuration,
+				source: {
+					...configuration.source,
+					workspaceSnapshots: [{ snapshotId: "snapshot-a", name: "repo" }],
+				},
+			},
+		},
+	);
+}
+
+it.each([undefined, []])(
+	"rejects a snapshot materializer without approved egress before the apply retry loop: %o",
+	async (egress) => {
+		const f = await snapshotEgressReconciliationFixture({
+			...workloadTestPolicy,
+			workspaceSnapshotEgress: egress,
+		});
+		await f.tick(2);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			lastFailure: { reason: "preflight_rejected", attempts: 1 },
+		});
+		expect(f.writes).toHaveLength(0);
+	},
+);
+
+it("rejects persisted snapshot apply when the approved egress disappears after preflight", async () => {
+	const policy = {
+		...workloadTestPolicy,
+		workspaceSnapshotEgress: [
+			{
+				destination: {
+					namespace: "snapshot-storage",
+					podLabels: { app: "snapshots" },
+				},
+				port: 9000,
+			},
+		] as WorkloadRuntimeOptionsV1["policy"]["workspaceSnapshotEgress"],
+	};
+	const f = await snapshotEgressReconciliationFixture(policy);
+	await f.tick(3);
+	expect(f.state?.phase).toBe("applying");
+	policy.workspaceSnapshotEgress = undefined;
+	await f.tick(1);
+	expect(f.state).toMatchObject({
+		phase: "cleaning",
+		lastFailure: { reason: "preflight_rejected", attempts: 1 },
+	});
+	expect(f.writes).toHaveLength(0);
+});

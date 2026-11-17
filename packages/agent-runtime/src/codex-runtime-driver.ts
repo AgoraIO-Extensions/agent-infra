@@ -4866,7 +4866,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						(call.phase !== "completed" && call.phase !== "failed"),
 				) ||
 				latestOperationAttemptFacts(journal.events).some(
-					(fact) => fact.phase !== "completed" && fact.phase !== "failed",
+					(fact) =>
+						fact.phase !== "completed" &&
+						fact.phase !== "failed" &&
+						// A sealed failed model attempt stays unknown without gaining new authority.
+						!(
+							fact.kind === "model" &&
+							fact.phase === "unknown" &&
+							execution.status === "failed" &&
+							journal.nativeCompletionStatus === "failed" &&
+							journal.externalActionsBlocked === true
+						),
 				)
 			)
 				return false;

@@ -1573,6 +1573,17 @@ Worker 签发绑定单对象版本、只读方法和短期限的 URL，经仅 in
 交付；不写入参数、annotation、普通 env、日志或业务容器。长期签名凭据仅在 Worker，
 短期授权过期后沿原 fence 重新准备，不能放宽目标或静默回退。
 
+候选快照 materializer projection 存在时，preflight 必须同时验证部署批准的快照出网目标；
+该声明唯一来自 `KubernetesWorkloadPolicyV1.workspaceSnapshotEgress`，由现有
+`requireWorkspaceSnapshotEgressV1` 验证，不能从 `allowedOrigins`、签名 URL 或快照内容
+反推或扩大 egress authority。
+缺失、空列表或格式非法属于确定性的部署配置拒绝，使用既有 `snapshot-materialization`
+失败边界，在任何 Kubernetes 写入之前结束，不消耗镜像、PVC 或健康等待预算。Worker
+恢复后对已进入 apply 的持久候选也执行相同检查；不满足时进入既有永久拒绝与清理路径，
+不得把同一静态缺项当作临时基础设施异常按固定间隔反复尝试。网络暂不可达和实际下载
+失败仍沿原有有界观察与恢复；本检查不新增或扩大任何出网目标，不绕过原资源归属、
+UID、修订或 fence，路由关闭和安全清理继续沿原持久重试规则。
+
 | 入口 | 平台物化资源 | 业务容器挂载 |
 | --- | --- | --- |
 | self-managed 单镜像 | Agent 专属 RWO retain 缓存卷，按部署 storage profile 创建 | 只挂当前修订所需子目录，只读 |
