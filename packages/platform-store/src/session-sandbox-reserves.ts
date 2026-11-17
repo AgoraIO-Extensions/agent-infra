@@ -429,9 +429,9 @@ async function usedBudget(
   coalesce(sum(case when compute_released then 0 else (resources->>'cpuMillis')::bigint end), 0)::text as cpu,
   coalesce(sum(case when compute_released then 0 else (resources->>'memoryBytes')::bigint end), 0)::text as memory,
   coalesce(sum((resources->>'storageBytes')::bigint), 0)::text as storage
-  from platform.session_sandbox_resource_charges ch where namespace = ${namespace} and not released and (
-   exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id = ch.sandbox_id)
-   or exists(select 1 from platform.session_sandbox_reserves r where r.sandbox_id = ch.sandbox_id and r.retired_at is null))`;
+  from platform.session_sandbox_resource_charges ch where namespace = ${namespace} and not released
+   and exists(select 1 from platform.session_sandbox_reserves r where r.sandbox_id = ch.sandbox_id
+     and r.status <> 'claimed' and r.retired_at is null)`;
 	return {
 		cpuMillis: Number(used?.cpu),
 		memoryBytes: Number(used?.memory),
@@ -791,9 +791,9 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			const [charges] = await tx<
 				{ cpu: string; memory: string; storage: string }[]
 			>`
-				select coalesce(sum((resources->>'cpuMillis')::bigint), 0)::text as cpu,
-				coalesce(sum((resources->>'memoryBytes')::bigint), 0)::text as memory,
-				coalesce(sum((resources->>'storageBytes')::bigint), 0)::text as storage
+				select coalesce(sum(case when compute_released then 0 else (resources->>'cpuMillis')::bigint end), 0)::text as cpu,
+				coalesce(sum(case when compute_released then 0 else (resources->>'memoryBytes')::bigint end), 0)::text as memory,
+				coalesce(sum(case when released then 0 else (resources->>'storageBytes')::bigint end), 0)::text as storage
 				from platform.session_sandbox_resource_charges where namespace = ${this.#configuration.namespace}`;
 			const [sessions] = await tx<{ count: string }[]>`
 				select count(*)::text as count from platform.session_sandbox_allocations
