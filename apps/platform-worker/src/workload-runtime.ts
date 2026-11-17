@@ -82,6 +82,7 @@ import {
 	type WorkloadSkillMaterializationResultV1,
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
+import { requireWorkspaceSnapshotEgressV1 } from "./workload-network.js";
 import {
 	isTransientProbeStatusV1,
 	WorkloadProbeIncompleteErrorV1,
@@ -758,6 +759,15 @@ export function createWorkloadRuntimeV1(
 		object,
 		WorkspaceSnapshotPodProjectionV1
 	>();
+	function assertSnapshotDeploymentPolicy() {
+		try {
+			requireWorkspaceSnapshotEgressV1(options.policy.workspaceSnapshotEgress);
+		} catch (error) {
+			if (error instanceof WorkloadKubernetesError && error.code === "policy")
+				throw new WorkloadPreflightRejectedErrorV1("snapshot-materialization");
+			throw error;
+		}
+	}
 	async function restoreSnapshotProjection(
 		state: WorkloadReconciliationStateV1,
 	) {
@@ -794,6 +804,7 @@ export function createWorkloadRuntimeV1(
 			[...items].sort((a, b) => a.name.localeCompare(b.name));
 		if (!isDeepStrictEqual(sorted(metadata), sorted([...persisted])))
 			throw new WorkloadPreflightRejectedErrorV1("snapshot-materialization");
+		assertSnapshotDeploymentPolicy();
 		snapshotProjections.set(state, resolved.projection);
 	}
 	const observedCapabilities = new WeakMap<
@@ -1840,8 +1851,10 @@ export function createWorkloadRuntimeV1(
 						fence: state.fence,
 						bindings: snapshotBindings,
 					});
-					if (snapshotMaterialization.projection)
+					if (snapshotMaterialization.projection) {
+						assertSnapshotDeploymentPolicy();
 						snapshotProjections.set(state, snapshotMaterialization.projection);
+					}
 				} catch {
 					throw new WorkloadPreflightRejectedErrorV1(
 						"snapshot-materialization",
