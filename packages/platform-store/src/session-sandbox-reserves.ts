@@ -391,21 +391,8 @@ async function lockBudget(
 	if (!hasAccounting) return null;
 	// Disabled mode fences new reserve use but never revalidates or rewrites existing allocation charges.
 	if (!policy.enabled) return { ...config, enabled: false };
-	// Missing original resource policy or unapproved costs cannot be guessed during rollout.
-	const uncharged = await tx<
-		{ sandbox_id: string; resource_hash: string | null }[]
-	>`select a.sandbox_id, a.resource_policy->>'resourceConfigurationHash' as resource_hash from platform.session_sandbox_allocations a where not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id = a.sandbox_id)`;
-	for (const allocation of uncharged) {
-		const cost = allocation.resource_hash
-			? config.resourceCosts.find(
-					(c) => c.resourceConfigurationHash === allocation.resource_hash,
-				)
-			: config.resourceCosts.length === 1
-				? config.resourceCosts[0]
-				: undefined;
-		if (!cost) unavailable();
-		await tx`insert into platform.session_sandbox_resource_charges (sandbox_id, namespace, resources) values (${allocation.sandbox_id}, ${config.namespace}, ${tx.json(cost.resources as unknown as Json)})`;
-	}
+	// Existing allocation charges are retained as facts; missing historical charge
+	// rows are not backfilled or used to reject ordinary cold Sessions.
 	// Only the original Session lifecycle's confirmed stop receipt releases compute. PVC remains charged.
 	await tx`update platform.session_sandbox_resource_charges ch set compute_released = true from platform.session_sandbox_allocations a
   where a.sandbox_id = ch.sandbox_id and a.desired_state = 'stopped' and (
@@ -787,8 +774,8 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			const [charges] = await tx<
 				{ cpu: string; memory: string; storage: string }[]
 			>`
-				select coalesce(sum(case when compute_released then 0 else (resources->>'cpuMillis')::bigint end), 0)::text as cpu,
-				coalesce(sum(case when compute_released then 0 else (resources->>'memoryBytes')::bigint end), 0)::text as memory,
+				select coalesce(sum(case when compute_released or released then 0 else (resources->>'cpuMillis')::bigint end), 0)::text as cpu,
+				coalesce(sum(case when compute_released or released then 0 else (resources->>'memoryBytes')::bigint end), 0)::text as memory,
 				coalesce(sum(case when released then 0 else (resources->>'storageBytes')::bigint end), 0)::text as storage
 				from platform.session_sandbox_resource_charges where namespace = ${this.#configuration.namespace}`;
 			const [sessions] = await tx<{ count: string }[]>`
