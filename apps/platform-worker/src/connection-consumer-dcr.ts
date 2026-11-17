@@ -1,4 +1,7 @@
-import { registerStandardOAuthClient } from "@agent-infra/agent-runtime";
+import {
+	registerConnectionMachineOAuthClientV1,
+	registerStandardOAuthClient,
+} from "@agent-infra/agent-runtime";
 import {
 	type ConnectionConsumerProfileV1,
 	connectionConsumerProfileFingerprintV1,
@@ -45,6 +48,12 @@ export interface ConnectionConsumerDcrResolverOptionsV1 {
 	) => Promise<void>;
 	readonly installationSupplyForAgent: (agentId: string) => unknown;
 	readonly fetch?: typeof fetch;
+	/** EP-1060 machine registration. When set, service credentials stay in this
+	 * protected resolver boundary and are never placed in deployment config. */
+	readonly machineRegistrationEndpoint?: string;
+	readonly serviceCredentialForAgent?: (agentId: string) => string;
+	readonly machineRegistrationKeyForAgent?: (agentId: string) => string;
+	readonly machineClientName?: string;
 }
 
 export function createConnectionConsumerDcrResolverV1(
@@ -122,15 +131,38 @@ export function createConnectionConsumerDcrResolverV1(
 				)
 					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			} else {
-				const clientId = await registerStandardOAuthClient({
-					issuer: options.issuer,
-					registrationEndpoint: options.registrationEndpoint,
-					redirectUri: callbackUrl,
-					scope: "mcp",
-					signal,
-					assertCurrent: () => signal.throwIfAborted(),
-					...(options.fetch ? { fetch: options.fetch } : {}),
-				});
+				const machineMode = options.machineRegistrationEndpoint !== undefined ||
+					options.serviceCredentialForAgent !== undefined ||
+					options.machineRegistrationKeyForAgent !== undefined;
+				if (machineMode &&
+					(!options.machineRegistrationEndpoint ||
+						!options.serviceCredentialForAgent ||
+						!options.machineRegistrationKeyForAgent))
+					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				const clientId = machineMode
+					? (await registerConnectionMachineOAuthClientV1({
+							endpoint: options.machineRegistrationEndpoint as string,
+							serviceCredential: options.serviceCredentialForAgent!(agentId),
+							registrationKey: options.machineRegistrationKeyForAgent!(agentId),
+							clientName: options.machineClientName ?? `Platform Agent ${agentId}`,
+							redirectUri: callbackUrl,
+							resource: `${options.publicOrigin}${options.mcpPath}`,
+							scope: "mcp",
+							source: { ...options.approvalSource },
+							configFingerprint: profileFingerprint,
+							signal,
+							assertCurrent: () => signal.throwIfAborted(),
+							...(options.fetch ? { fetch: options.fetch } : {}),
+						})).registration.clientId
+					: await registerStandardOAuthClient({
+							issuer: options.issuer,
+							registrationEndpoint: options.registrationEndpoint,
+							redirectUri: callbackUrl,
+							scope: "mcp",
+							signal,
+							assertCurrent: () => signal.throwIfAborted(),
+							...(options.fetch ? { fetch: options.fetch } : {}),
+						});
 				if (expectedClientId !== undefined && clientId !== expectedClientId)
 					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 				binding = {

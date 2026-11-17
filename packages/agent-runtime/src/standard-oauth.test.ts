@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	readConnectionMachineOAuthClientV1,
 	registerConnectionMachineOAuthClientV1,
 	registerStandardOAuthClient,
+	revokeConnectionMachineOAuthClientV1,
 } from "./standard-oauth.js";
 
 const issuer = "https://connection.example.test/";
@@ -70,6 +72,40 @@ describe("per-install OAuth DCR", () => {
 			source: { ref: "platform", revision: "r1" },
 			configFingerprint: "a".repeat(64),
 		});
+	});
+
+	it("reads and revokes only the keyed machine registration with bearer auth", async () => {
+		const calls: Request[] = [];
+		const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			calls.push(new Request(input, init));
+			return response(
+				{
+					registrationVersion: 1,
+					outcome: "KNOWN",
+					registration: { registrationKey: "install-agent-a-r1", clientId: "client-agent-a" },
+				},
+				200,
+			);
+		};
+		const options = {
+			endpoint: `${issuer}connection/v1/agents/agent-a/oauth-clients`,
+			serviceCredential: "conn_consumer_test-credential",
+			registrationKey: "install-agent-a-r1",
+			signal: new AbortController().signal,
+			assertCurrent() {},
+			fetch,
+		};
+		const receipt = await readConnectionMachineOAuthClientV1(options);
+		expect(receipt.registration.clientId).toBe("client-agent-a");
+		await revokeConnectionMachineOAuthClientV1(options);
+		expect(calls).toHaveLength(2);
+		expect(calls[0]?.method).toBe("GET");
+		expect(calls[1]?.method).toBe("DELETE");
+		for (const request of calls) {
+			expect(request.url).toContain("/install-agent-a-r1");
+			expect(request.headers.get("authorization")).toBe("Bearer conn_consumer_test-credential");
+			expect(request.headers.get("cookie")).toBeNull();
+		}
 	});
 
 	it("registers and validates the fixed native metadata response", async () => {
