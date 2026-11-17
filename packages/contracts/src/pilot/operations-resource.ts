@@ -282,7 +282,9 @@ export const OperationsLinkV2Schema = z.strictObject({
 				!url.username &&
 				!url.password &&
 				![...url.searchParams.keys()].some((key) =>
-					/token|key|secret|authorization/i.test(key),
+					/token|key|secret|authorization|password|credential|cookie|^session$|jwt/i.test(
+						key,
+					),
 				)
 			);
 		}),

@@ -63,7 +63,9 @@ function url(value: unknown): string {
 		result.password ||
 		result.hash ||
 		[...result.searchParams.keys()].some((key) =>
-			/token|key|secret|authorization/i.test(key),
+			/token|key|secret|authorization|password|credential|cookie|^session$|jwt/i.test(
+				key,
+			),
 		)
 	)
 		throw new Error("Invalid operations configuration");

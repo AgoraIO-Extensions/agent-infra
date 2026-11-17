@@ -68,6 +68,43 @@ it("rejects credential-bearing and non-HTTPS query endpoints", async () => {
 	}
 });
 
+it("rejects credentials in diagnostic links while retaining object query filters", async () => {
+	for (const kind of ["logs", "traces"] as const) {
+		for (const parameter of [
+			"password",
+			"credential",
+			"cookie",
+			"session",
+			"jwt",
+			"access_token",
+			"apiKey",
+		]) {
+			await expect(
+				readOperationsConfigurationV2(
+					await configuration({
+						...configured,
+						[kind]: {
+							url: `https://diagnostics.example.test/?${parameter}=synthetic`,
+						},
+					}),
+				),
+			).rejects.toThrow("OPERATIONS_CONFIGURATION_UNAVAILABLE");
+		}
+		const url =
+			"https://diagnostics.example.test/?namespace=platform-test&agentId=agent-1&sessionId=session-1";
+		expect(
+			(
+				await readOperationsConfigurationV2(
+					await configuration({
+						...configured,
+						[kind]: { url },
+					}),
+				)
+			)?.[kind]?.url,
+		).toBe(url);
+	}
+});
+
 it("bounds the Prometheus response and redacts transport failures", async () => {
 	const config = {
 		endpoint: "https://prometheus.example.test/instance",
