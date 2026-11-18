@@ -137,6 +137,24 @@ describe("explicit custom Agent deployment ports", () => {
 			files,
 		});
 	});
+	it("passes operations configuration into the production assembly", () => {
+		const operations = {
+			schemaVersion: 2,
+			enabled: true,
+			scope: { clusterId: "cluster-a", namespace: "platform-a" },
+			readCluster: true,
+			cacheOwner: "agent-infra",
+			cacheInventoryLimit: 48,
+			intervalSeconds: 30,
+			workloadNamespaceRef: "platform-a",
+			alerts: { capacityRatio: 0.9, criticalRatio: 0.95, queueCount: 100 },
+		} as never;
+		const assembly = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			operations,
+		});
+		expect(assembly.operations).toBe(operations);
+	});
 
 	it("passes trusted Session reserve configuration through production assembly", () => {
 		const reserve = {

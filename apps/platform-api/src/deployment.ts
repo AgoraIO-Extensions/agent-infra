@@ -88,6 +88,8 @@ export interface ProductionPlatformApiInputV1
 		DeploymentAdmissionInputV1,
 		"currentIdentity" | "currentApiPrincipal"
 	> {
+	/** Deployment-owned operations configuration for the administrator resource projection. */
+	readonly operations?: PlatformApiAssemblyInput["operations"];
 	/** Trusted deployment-owned reserve policy; never populated from an HTTP request. */
 	readonly sessionSandboxReserves?: PlatformApiAssemblyInput["sessionSandboxReserves"];
 	readonly agentApiCreation?: {
@@ -622,6 +624,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.sessionSandboxReserves
 			? { sessionSandboxReserves: input.sessionSandboxReserves }
 			: {}),
+		...(input.operations ? { operations: input.operations } : {}),
 		// System access never carries a static or shared Consumer installation.
 		...(input.connectionInstallation && !systemAccessMode
 			? {
