@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createProtectedConnectionHostSupplyV1 } from "./connection-host-supply.js";
 
 describe("protected Connection Host supply adapter", () => {
+	const canaryCredential = "conn_consumer_canary-4206";
+
+	function assertNoCanary(value: unknown) {
+		expect(JSON.stringify(value)).not.toContain(canaryCredential);
+	}
+
 	it("passes credential bytes only to the Host port and clears them after return", async () => {
 		let received: Uint8Array | undefined;
 		const port = {
@@ -81,5 +87,91 @@ describe("protected Connection Host supply adapter", () => {
 			agentId: "agent-a",
 			associationRevision: 7,
 		});
+	});
+
+	it.each([
+		["Host write failure", "host-write-failed"],
+		["CAS conflict", "CONNECTION_HOST_SUPPLY_CAS_CONFLICT"],
+		["stale association", "CONNECTION_HOST_SUPPLY_STALE_ASSOCIATION"],
+	])(
+		"keeps the credential canary out of %s errors and public artifacts",
+		async (_label, failureCode) => {
+			const logs: string[] = [];
+			const persisted: Record<string, unknown>[] = [];
+			const port = {
+				materialize: vi.fn(async () => {
+					throw new Error(`${failureCode}:${canaryCredential}`);
+				}),
+				revoke: vi.fn(async () => {}),
+			};
+			const supply = createProtectedConnectionHostSupplyV1(port);
+			const originalError = console.error;
+			console.error = (...args: unknown[]) => logs.push(args.join(" "));
+			try {
+				let thrown: unknown;
+				try {
+					await supply.materialize({
+						agentId: "agent-a",
+						associationRevision: 4,
+						serviceCredential: canaryCredential,
+					});
+				} catch (error) {
+					thrown = error;
+				}
+				const env = { AGENT_INFRA_CONNECTION_HOST_SUPPLY: "unavailable" };
+				const argv = ["--connection-host-supply", "unavailable"];
+				const artifacts = {
+					thrown: String(thrown),
+					persisted,
+					logs,
+					env,
+					argv,
+				};
+				expect(String(thrown)).toBe(
+					"Error: CONNECTION_HOST_SUPPLY_UNAVAILABLE",
+				);
+				assertNoCanary(artifacts);
+			} finally {
+				console.error = originalError;
+			}
+		},
+	);
+
+	it("keeps a canary out of revoke errors, receipt JSON, env, argv and logs", async () => {
+		const logs: string[] = [];
+		const port = {
+			materialize: vi.fn(async () => ({ ref: "agent-a", revision: "r4" })),
+			revoke: vi.fn(async () => {
+				throw new Error(`revoke-failed:${canaryCredential}`);
+			}),
+		};
+		const supply = createProtectedConnectionHostSupplyV1(port);
+		const originalError = console.error;
+		console.error = (...args: unknown[]) => logs.push(args.join(" "));
+		try {
+			const receipt = await supply.materialize({
+				agentId: "agent-a",
+				associationRevision: 4,
+				serviceCredential: canaryCredential,
+			});
+			let thrown: unknown;
+			try {
+				await supply.revoke({ agentId: "agent-a", associationRevision: 4 });
+			} catch (error) {
+				thrown = error;
+			}
+			const artifacts = {
+				receipt,
+				persisted: JSON.stringify(receipt),
+				env: { AGENT_INFRA_CONNECTION_HOST_SUPPLY: receipt.ref },
+				argv: ["--connection-host-supply", receipt.ref],
+				logs,
+				thrown: String(thrown),
+			};
+			expect(String(thrown)).toBe("Error: CONNECTION_HOST_SUPPLY_UNAVAILABLE");
+			assertNoCanary(artifacts);
+		} finally {
+			console.error = originalError;
+		}
 	});
 });
