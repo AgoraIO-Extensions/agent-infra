@@ -58,8 +58,8 @@ export function displayNameForDirectoryMember(member: DirectoryMember): string {
 }
 
 export class DirectoryUnavailableError extends Error {
-	constructor() {
-		super("Enterprise directory snapshot is unavailable");
+	constructor(options?: ErrorOptions) {
+		super("Enterprise directory snapshot is unavailable", options);
 	}
 }
 

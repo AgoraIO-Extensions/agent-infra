@@ -63,6 +63,7 @@ export {
 	validateStandardTemplateModelBindingsV1,
 } from "./projection.js";
 export { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
+export type { RelayStageObservationV1 } from "./relay-stage.js";
 export { standardTemplateDefinitionsV1 } from "./standard-templates.js";
 export {
 	type AdoptedTemplateValidationV2,

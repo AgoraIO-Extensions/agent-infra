@@ -84,9 +84,33 @@ export class ModelConfigurationErrorV1 extends Error {
 	constructor(
 		readonly retryable = false,
 		readonly reason = "unavailable",
+		readonly timedOut = false,
 	) {
 		super("MODEL_CONFIGURATION_UNAVAILABLE");
 	}
+}
+
+const transportTimeoutCodes = new Set([
+	"ETIMEDOUT",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_HEADERS_TIMEOUT",
+	"UND_ERR_BODY_TIMEOUT",
+]);
+
+export function isModelTimeoutV1(error: unknown): boolean {
+	let current = error;
+	for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+		if (
+			(current instanceof ModelConfigurationErrorV1 && current.timedOut) ||
+			current.name === "TimeoutError" ||
+			("code" in current &&
+				typeof current.code === "string" &&
+				transportTimeoutCodes.has(current.code))
+		)
+			return true;
+		current = current.cause;
+	}
+	return false;
 }
 
 export async function modelOperationV1<T>(
@@ -106,6 +130,8 @@ export async function modelOperationV1<T>(
 	} catch (error) {
 		throw new ModelConfigurationErrorV1(
 			error instanceof ModelConfigurationErrorV1 ? error.retryable : true,
+			"unavailable",
+			isModelTimeoutV1(error) || isModelTimeoutV1(signal.reason),
 		);
 	} finally {
 		signal.removeEventListener("abort", abort);

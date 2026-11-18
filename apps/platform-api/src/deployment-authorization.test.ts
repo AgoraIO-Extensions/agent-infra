@@ -333,8 +333,17 @@ describe("deployment authorization admission", () => {
 			});
 			const response = await submit();
 			expect(response.status).toBe(503);
-			expect(events).toHaveLength(1);
-			expect(events[0]).toMatchObject({
+			expect(events).toHaveLength(2);
+			const [identityEvent, httpEvent] = events;
+			expect(identityEvent).toMatchObject({
+				stage: "dependency",
+				operationRef: "model.admission.identity",
+				outcome: "completed",
+				traceId: httpEvent?.traceId,
+				durationMs: expect.any(Number),
+			});
+			expect(httpEvent).toMatchObject({
+				stage: "http",
 				outcome: "failed",
 				status: 503,
 				protocolCode: "DEPENDENCY_UNAVAILABLE",
@@ -351,9 +360,17 @@ describe("deployment authorization admission", () => {
 			);
 			const response = await submit();
 			expect(response.status).toBe(201);
-			expect(events).toHaveLength(1);
-			expect(events[0]).not.toHaveProperty("failureStep");
-			expect(events[0]).not.toHaveProperty("errorClass");
+			expect(events).toHaveLength(2);
+			const [identityEvent, httpEvent] = events;
+			expect(identityEvent).toMatchObject({
+				stage: "dependency",
+				operationRef: "model.admission.identity",
+				outcome: "completed",
+				traceId: httpEvent?.traceId,
+			});
+			expect(httpEvent).toMatchObject({ stage: "http", outcome: "completed" });
+			expect(httpEvent).not.toHaveProperty("failureStep");
+			expect(httpEvent).not.toHaveProperty("errorClass");
 		});
 	});
 });

@@ -5,6 +5,7 @@ import type {
 } from "./access.js";
 import { validateModelAccessPolicyV1 } from "./access.js";
 import {
+	isModelTimeoutV1,
 	ModelConfigurationErrorV1,
 	type ModelEndpointV1,
 	modelOperationV1,
@@ -262,6 +263,7 @@ export async function probeMessagesModelV1(input: {
 	readonly reasoningLevel: string;
 	readonly signal: AbortSignal;
 	readonly fetch?: typeof fetch;
+	readonly onTimeout?: () => void;
 }): Promise<ResponsesModelProbeOutcomeV1> {
 	if (!efforts.includes(input.reasoningLevel)) return "incompatible";
 	const fetcher = input.fetch ?? globalThis.fetch;
@@ -330,6 +332,7 @@ export async function probeMessagesModelV1(input: {
 		verifyCompletion(await boundedBody(response, signal), input.modelId);
 		return "verified";
 	} catch (error) {
+		if (isModelTimeoutV1(error)) input.onTimeout?.();
 		if (signal.aborted) throw new ModelConfigurationErrorV1(true);
 		if (error instanceof ModelConfigurationErrorV1)
 			return error.retryable ? "unavailable" : "incompatible";

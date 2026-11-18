@@ -8,6 +8,7 @@ import {
 import {
 	LdapIdentityUnavailableError,
 	resolveCurrentTaskUserV1,
+	TaskIdentityUnavailableErrorV1,
 } from "@agent-infra/identity";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
@@ -59,8 +60,19 @@ export async function resolveCurrentTaskUser(
 				: undefined,
 			userId,
 		);
-	} catch {
-		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	} catch (error) {
+		throw new HttpProtocolError(
+			"DEPENDENCY_UNAVAILABLE",
+			traceId,
+			error instanceof TaskIdentityUnavailableErrorV1 && error.timedOut
+				? {
+						cause: new DOMException(
+							"Identity deadline exceeded",
+							"TimeoutError",
+						),
+					}
+				: undefined,
+		);
 	}
 }
 
@@ -264,7 +276,25 @@ export async function resolveIdentity(
 					? error.failure
 					: undefined,
 		});
-		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+		const timedOut =
+			(error instanceof LdapIdentityUnavailableError &&
+				error.failure?.deadlineExpired) ||
+			(error instanceof DOMException && error.name === "TimeoutError") ||
+			(error instanceof Error &&
+				error.cause instanceof DOMException &&
+				error.cause.name === "TimeoutError");
+		throw new HttpProtocolError(
+			"DEPENDENCY_UNAVAILABLE",
+			traceId,
+			timedOut
+				? {
+						cause: new DOMException(
+							"Identity deadline exceeded",
+							"TimeoutError",
+						),
+					}
+				: undefined,
+		);
 	}
 	if (value === null) {
 		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);

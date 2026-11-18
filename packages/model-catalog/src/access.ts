@@ -1,6 +1,7 @@
 import { createParser } from "eventsource-parser";
 import { z } from "zod";
 import {
+	isModelTimeoutV1,
 	ModelConfigurationErrorV1,
 	type ModelEndpointV1,
 	ModelEndpointV1Schema,
@@ -102,6 +103,7 @@ export async function probeResponsesModelV1(input: {
 	readonly strictEcho: boolean;
 	readonly signal: AbortSignal;
 	readonly fetch?: typeof fetch;
+	readonly onTimeout?: () => void;
 }): Promise<ResponsesModelProbeOutcomeV1> {
 	const fetcher = input.fetch ?? globalThis.fetch;
 	const { signal } = input;
@@ -225,6 +227,7 @@ export async function probeResponsesModelV1(input: {
 	} catch (error) {
 		// Aborts and transport failures stay retryable, as do unparseable frames;
 		// a failed stream or wrong result is the Relay's answer for this model and level.
+		if (isModelTimeoutV1(error)) input.onTimeout?.();
 		if (signal.aborted) throw new ModelConfigurationErrorV1(true);
 		if (error instanceof ModelConfigurationErrorV1)
 			return error.retryable ? "unavailable" : "incompatible";

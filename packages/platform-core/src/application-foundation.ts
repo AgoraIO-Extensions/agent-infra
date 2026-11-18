@@ -1134,7 +1134,7 @@ export function createApplicationModelCandidatesUseCaseV1(
 				error instanceof AgentDefaultRelayKeyErrorV1 &&
 				error.code === "invalid_input"
 			)
-				throw new ApplicationFoundationError("not_admitted");
+				throw new ApplicationFoundationError("invalid_command");
 			throw normalizeInitialAdmissionError(error);
 		}
 	};

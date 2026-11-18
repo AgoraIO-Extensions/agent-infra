@@ -131,7 +131,6 @@ function createApp(
 	options: {
 		administrator?: boolean;
 		applicationModelCandidates?: import("./v2-management-routes.js").ManagementRouteDependencies["applicationModelCandidates"];
-		keyValidity?: "valid" | "invalid" | "unavailable";
 		identityFailure?: boolean;
 		identityValue?: unknown;
 		queryFailure?: boolean;
@@ -156,6 +155,7 @@ function createApp(
 				}),
 			})
 		: new Hono();
+	const validateDefaultRelayKey = vi.fn().mockResolvedValue("valid");
 	const submit = vi.fn().mockResolvedValue({});
 	const executeManagementCommand = vi.fn().mockResolvedValue({
 		outcome: "accepted",
@@ -228,9 +228,7 @@ function createApp(
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
-		validateDefaultRelayKey: vi
-			.fn()
-			.mockResolvedValue(options.keyValidity ?? "valid"),
+		validateDefaultRelayKey,
 		enforceDefaultRelayKey: true,
 		readApplicationProjection,
 		readAgentProjection,
@@ -239,6 +237,7 @@ function createApp(
 	return {
 		app,
 		submit,
+		validateDefaultRelayKey,
 		revise,
 		executeManagementCommand,
 		listAgents,
@@ -853,7 +852,7 @@ describe("V2 management routes", () => {
 			expect(response.status).toBe(
 				code === "dependency_unavailable" ? 503 : 409,
 			);
-			expect(telemetry[0]).toMatchObject({
+			expect(telemetry.find((event) => event.stage === "http")).toMatchObject({
 				failureStep: `application.submit.${code}`,
 				traceId: body.traceId,
 				errorClass: "ApplicationFoundationError",
@@ -1883,21 +1882,27 @@ describe("application model candidate preview (#3146)", () => {
 			userId: identity.userId,
 		});
 		expect(f.submit).not.toHaveBeenCalled();
+		expect(f.validateDefaultRelayKey).not.toHaveBeenCalled();
 	});
-	it.each(["invalid", "unavailable"] as const)(
-		"rejects %s Keys before candidate access",
-		async (validity) => {
-			const preview = vi.fn();
-			const f = createApp({
-				applicationModelCandidates: preview,
-				keyValidity: validity,
-			});
-			const response = await f.app.fetch(request());
-			expect(response.status).toBe(validity === "invalid" ? 400 : 503);
-			expect(await response.text()).not.toContain(body.defaultRelayKey);
-			expect(preview).not.toHaveBeenCalled();
-		},
-	);
+	it.each([
+		["invalid_command", 400, "INVALID_REQUEST"],
+		["not_authorized", 404, "RESOURCE_UNAVAILABLE"],
+		["not_admitted", 409, "INVALID_REQUEST"],
+		["dependency_unavailable", 503, "DEPENDENCY_UNAVAILABLE"],
+	] as const)("preserves the preview error %s", async (error, status, code) => {
+		const preview = vi
+			.fn()
+			.mockRejectedValue(new ApplicationFoundationError(error));
+		const f = createApp({ applicationModelCandidates: preview });
+		const response = await f.app.fetch(request());
+		expect(response.status).toBe(status);
+		const responseText = await response.text();
+		expect(JSON.parse(responseText)).toMatchObject({ code });
+		expect(responseText).not.toContain(body.defaultRelayKey);
+		expect(preview).toHaveBeenCalledOnce();
+		expect(f.validateDefaultRelayKey).not.toHaveBeenCalled();
+		expect(f.submit).not.toHaveBeenCalled();
+	});
 	it("rejects unauthenticated access, identity overrides, bearer material and query keys", async () => {
 		const preview = vi.fn();
 		const f = createApp({ applicationModelCandidates: preview });

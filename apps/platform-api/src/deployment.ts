@@ -45,6 +45,7 @@ import type {
 } from "./http/conversation-routes.js";
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
+import { recordRelayStage } from "./model-admission-observation.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 import type { RuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 import {
@@ -683,8 +684,13 @@ export function createProductionPlatformApiAssemblyInputV1(
 						return names(model);
 					},
 				}),
-		...(validatePersonalRelayKey
-			? { validateDefaultRelayKey: validatePersonalRelayKey }
+		...(input.personalRelayKeyValidation
+			? {
+					validateDefaultRelayKey: createPersonalRelayKeyValidatorV1({
+						...input.personalRelayKeyValidation,
+						observe: recordRelayStage,
+					}),
+				}
 			: {}),
 		...(personalRelayKeys && relayKeyEncryptor && deploymentDefaultRelayKey
 			? {
