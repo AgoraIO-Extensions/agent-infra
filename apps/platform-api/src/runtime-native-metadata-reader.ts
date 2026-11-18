@@ -9,6 +9,7 @@ import {
 	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
@@ -236,6 +237,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 				return null;
 			}
 			let requestSourceRef: string | undefined;
+			let step: "scope" | "registry" | "gateway" | "delivery" = "scope";
 			try {
 				const { binding, revalidate } = await prepareRead(
 					options.resolveRequest,
@@ -248,6 +250,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 				);
 				const { originalHostScopeRef: _hostScope, ...requestIdentity } =
 					binding;
+				step = "registry";
 				requestSourceRef = registry.register({
 					binding,
 					identity,
@@ -259,6 +262,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 					apiRequestSourceRef: requestSourceRef,
 					...(projectionVersion === 2 ? { projectionVersion: 2 as const } : {}),
 				});
+				step = "gateway";
 				const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
 					await requestContext.run((signal) =>
 						options.gateway.read(request, signal),
@@ -271,10 +275,17 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 					!projectionMatchesVersion(response.projection, projectionVersion)
 				)
 					throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
+				step = "delivery";
 				await revalidate();
 				requestContext.beforeDelivery(revalidate);
 				return response.projection;
 			} catch {
+				logNativeMetadataHop(
+					"api.read",
+					step,
+					requestContext.traceId,
+					"unavailable",
+				);
 				requestContext.close();
 				return null;
 			} finally {

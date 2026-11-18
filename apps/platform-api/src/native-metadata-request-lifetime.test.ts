@@ -338,6 +338,7 @@ describe("native metadata original HTTP request lifetime", () => {
 	it.each(["session", "original scope"] as const)(
 		"revalidates %s after the reader returns before response bytes",
 		async (fault) => {
+			const log = vi.spyOn(console, "info").mockImplementation(() => {});
 			const f = fixture(
 				fault === "session"
 					? { revokeAfterReader: true }
@@ -346,8 +347,23 @@ describe("native metadata original HTTP request lifetime", () => {
 			const response = await f.app.fetch(
 				new Request(`http://lifetime.invalid${path}`),
 			);
-			expect(response.status).not.toBe(200);
-			expect(await response.json()).not.toHaveProperty("selector");
+			expect(response.status).toBe(fault === "session" ? 401 : 503);
+			const body = await response.json();
+			expect(body).not.toHaveProperty("selector");
+			expect(
+				log.mock.calls
+					.map(([line]) => JSON.parse(line))
+					.filter((row) => row.hop === "api.read"),
+			).toEqual([
+				{
+					event: "native_metadata",
+					hop: "api.read",
+					step: "delivery",
+					traceId: (body as { traceId: string }).traceId,
+					outcome: "unavailable",
+					code: "NATIVE_METADATA_HOP_UNAVAILABLE",
+				},
+			]);
 		},
 	);
 

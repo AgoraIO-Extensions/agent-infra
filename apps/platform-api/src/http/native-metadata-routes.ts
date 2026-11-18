@@ -1,4 +1,5 @@
 import type { NativeMetadataProjectionV1OrV2 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 import type { Hono } from "hono";
 import {
 	createRuntimeNativeMetadataRequestContextV1,
@@ -75,6 +76,7 @@ export function registerNativeMetadataRoutes(
 			const metadata = requestMetadata(context.req.raw);
 			const requestContext = createRuntimeNativeMetadataRequestContextV1({
 				signal: context.req.raw.signal,
+				traceId: metadata.traceId,
 				authenticate: () =>
 					resolveIdentity(
 						dependencies.identity,
@@ -100,8 +102,20 @@ export function registerNativeMetadataRoutes(
 						"DEPENDENCY_UNAVAILABLE",
 						metadata.traceId,
 					);
-				await requestContext.verifyDelivery(identity);
-				return context.json(projection);
+				try {
+					await requestContext.verifyDelivery(identity);
+					const response = context.json(projection);
+					logNativeMetadataHop("api.read", "delivery", metadata.traceId, "ok");
+					return response;
+				} catch (error) {
+					logNativeMetadataHop(
+						"api.read",
+						"delivery",
+						metadata.traceId,
+						"unavailable",
+					);
+					throw error;
+				}
 			} catch (error) {
 				const protocol = responseError(error, metadata);
 				return context.json(protocol.body, protocol.status);

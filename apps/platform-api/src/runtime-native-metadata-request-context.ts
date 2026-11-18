@@ -2,6 +2,7 @@ import { RuntimeNativeMetadataProofMaximumLifetimeMsV1 } from "@agent-infra/cont
 import type { IdentityContext } from "./http/identity.js";
 
 export interface RuntimeNativeMetadataRequestContextV1 {
+	readonly traceId?: string;
 	readonly readStartedAt: number;
 	readonly expiresAt: number;
 	readonly signal: AbortSignal;
@@ -29,6 +30,7 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 	readonly signal: AbortSignal;
 	readonly authenticate: () => Promise<IdentityContext>;
 	readonly now?: () => number;
+	readonly traceId?: string;
 }): RuntimeNativeMetadataRequestContextV1 {
 	const now = options.now ?? Date.now;
 	const readStartedAt = now();
@@ -102,6 +104,7 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 		return current;
 	};
 	return Object.freeze({
+		traceId: options.traceId,
 		readStartedAt,
 		get expiresAt() {
 			return expiresAt;

@@ -7,6 +7,7 @@ import {
 	RuntimeNativeMetadataBindingResponseV1Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
 
@@ -34,9 +35,16 @@ export function createRuntimeNativeMetadataRequestRegistryV1(
 	options: {
 		readonly now?: () => number;
 		readonly maximumEntries?: number;
+		readonly instanceUid?: string;
 	} = {},
 ): RuntimeNativeMetadataRequestRegistryV1 {
 	const now = options.now ?? Date.now;
+	const instanceUid = options.instanceUid;
+	if (
+		instanceUid !== undefined &&
+		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(instanceUid)
+	)
+		throw new TypeError("Native metadata API instance UID is invalid");
 	const maximum = options.maximumEntries ?? maximumEntries;
 	if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > maximumEntries)
 		throw new TypeError("Native metadata request registry size is invalid");
@@ -78,7 +86,9 @@ export function createRuntimeNativeMetadataRequestRegistryV1(
 			}
 			if (entries.size >= maximum)
 				throw new Error("NATIVE_METADATA_REQUEST_CAPACITY");
-			const sourceRef = randomUUID();
+			const sourceRef = instanceUid
+				? `${instanceUid}.${randomUUID()}`
+				: randomUUID();
 			entries.set(sourceRef, { ...input, binding });
 			const abort = () => release(sourceRef);
 			abortListeners.set(sourceRef, abort);
@@ -156,6 +166,14 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 			readonly apiRequestSourceRef: string;
 			readonly signal: AbortSignal;
 		}): Promise<NativeMetadataCurrentResponseV1> {
+			let step: "registry" | "authorization" | "revalidation" = "registry";
+			const log = (outcome: "ok" | "unavailable") =>
+				logNativeMetadataHop(
+					"api.current",
+					step,
+					input.request.traceId,
+					outcome,
+				);
 			let entry: RuntimeNativeMetadataRequestRegistryEntryV1 | undefined;
 			try {
 				entry = options.registry.lookup(
@@ -163,15 +181,21 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 					input.request,
 				);
 			} catch {
+				log("unavailable");
 				return { outcome: "unavailable" };
 			}
-			if (!entry) return { outcome: "unavailable" };
+			if (!entry) {
+				log("unavailable");
+				return { outcome: "unavailable" };
+			}
 			const requestContext = entry.requestContext;
 			const abort = () => requestContext.close();
 			input.signal.addEventListener("abort", abort, { once: true });
 			try {
 				if (input.signal.aborted) throw new Error();
+				step = "revalidation";
 				const identity = await requestContext.run(() => entry.revalidate());
+				step = "authorization";
 				const decision = await requestContext.run(() =>
 					options.authorize(identity, {
 						schemaVersion: 1,
@@ -182,6 +206,7 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 				requestContext.assertCurrent();
 				if (decision.outcome !== "allowed") {
 					requestContext.close();
+					log("unavailable");
 					return {
 						outcome:
 							decision.outcome === "revoked" ? "denied" : decision.outcome,
@@ -194,20 +219,24 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 					authority.channelId !== entry.binding.scope.channelId
 				) {
 					requestContext.close();
+					log("unavailable");
 					return { outcome: "denied" };
 				}
 				requestContext.confirmPolicy(
 					authority,
 					entry.binding.scope.conversationId,
 				);
+				step = "revalidation";
 				await requestContext.run(() => entry.revalidate());
 				if (
 					options.registry.lookup(input.apiRequestSourceRef, input.request) !==
 					entry
 				)
 					throw new Error();
+				log("ok");
 				return { outcome: "allowed", request: input.request };
 			} catch {
+				log("unavailable");
 				requestContext.close();
 				return { outcome: "unavailable" };
 			} finally {

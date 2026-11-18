@@ -55,7 +55,7 @@ metadata:
     app.kubernetes.io/component: platform-api
 spec:
   replicas: 1
-  # Request-local current confirmation must reach the only live API instance.
+  # Preserve the one-replica default for this chart.
   strategy:
     type: Recreate
   selector:
@@ -130,6 +130,12 @@ spec:
             {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (not .Values.workloadTopology.enabled) }}
             - name: PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN
               value: http://{{ $nativeMetadataServiceName }}
+            {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (not .Values.workloadTopology.enabled) (eq .Values.platformApi.placement "in-cluster") (not .Values.platformWorker.nativeMetadataGateway.platformApiOrigin) }}
+            - name: PLATFORM_API_NATIVE_METADATA_INSTANCE_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            {{- end }}
             - name: PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE
               value: /var/run/agent-infra/native-metadata-worker/service-token
             {{- end }}

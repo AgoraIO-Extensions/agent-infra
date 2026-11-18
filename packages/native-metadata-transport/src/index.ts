@@ -100,3 +100,54 @@ export function createNativeMetadataJsonTransport(options: {
 		}
 	};
 }
+
+/** Report fixed metadata stages and the server-generated trace ID only. */
+export function logNativeMetadataHop(
+	hop:
+		| "api.read"
+		| "api.current"
+		| "worker.read"
+		| "worker.api-current"
+		| "host.read",
+	step:
+		| "scope"
+		| "registry"
+		| "authorization"
+		| "revalidation"
+		| "gateway"
+		| "delivery"
+		| "binding"
+		| "current-before"
+		| "proof"
+		| "target"
+		| "host"
+		| "current-after"
+		| "replica"
+		| "transport"
+		| "context"
+		| "driver",
+	traceId: unknown,
+	outcome: "ok" | "unavailable",
+) {
+	const trace =
+		typeof traceId === "string" &&
+		/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(traceId)
+			? traceId
+			: undefined;
+	try {
+		console.info(
+			JSON.stringify({
+				event: "native_metadata",
+				hop,
+				step,
+				traceId: trace,
+				outcome,
+				...(outcome === "unavailable"
+					? { code: "NATIVE_METADATA_HOP_UNAVAILABLE" }
+					: {}),
+			}),
+		);
+	} catch {
+		// Diagnostic output must not affect authorization or request cleanup.
+	}
+}
