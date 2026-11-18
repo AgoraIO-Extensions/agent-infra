@@ -84,7 +84,7 @@ beforeAll(async () => {
 	);
 	await writeFile(
 		join(directory, "connection-manual-bindings.js"),
-		"export const createOwnerConnectionBindingsResolverV1 = () => undefined;\n",
+		"export const createOwnerConnectionBindingsResolverV1 = () => undefined; export const createProductionOwnerConnectionBindingsV1 = () => undefined;\n",
 	);
 	const source = await readFile(
 		new URL("./deployment-entry.ts", import.meta.url),
