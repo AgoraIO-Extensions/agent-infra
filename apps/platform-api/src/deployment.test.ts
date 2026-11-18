@@ -1,4 +1,6 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { Writable } from "node:stream";
@@ -10,6 +12,8 @@ import {
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
+import { createDirectoryClient } from "@agent-infra/enterprise-directory";
+import { resolveLdapPrincipal } from "@agent-infra/identity";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import {
@@ -17,6 +21,7 @@ import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresPlatformUserDisablesV1,
 } from "@agent-infra/platform-store";
+import { Agent } from "undici";
 import {
 	afterAll,
 	beforeAll,
@@ -2308,6 +2313,8 @@ describe("production API creation with user and application Tokens", () => {
 				identity?: IdentityAdapter["resolve"];
 				resolveUser?: NonNullable<IdentityAdapter["resolveUser"]>;
 				upstreamTimeout?: "billing" | "responses-body";
+				billingFetch?: typeof fetch;
+				loadAuthorityContext?: ProductionPlatformApiInputV1["loadAuthorityContext"];
 			} = {},
 		) {
 			await createPlatformApiShutdown(running)();
@@ -2322,6 +2329,8 @@ describe("production API creation with user and application Tokens", () => {
 					expect(init?.signal?.aborted).toBe(false);
 					throw new DOMException("relay-response-canary", "TimeoutError");
 				}
+				if (String(url).endsWith("/billing") && options.billingFetch)
+					return options.billingFetch(url, init);
 				if (String(url).endsWith("/billing"))
 					return Response.json(
 						{
@@ -2385,6 +2394,9 @@ describe("production API creation with user and application Tokens", () => {
 					resolve: options.identity ?? identity.resolve,
 					...(options.resolveUser ? { resolveUser: options.resolveUser } : {}),
 				},
+				...(options.loadAuthorityContext
+					? { loadAuthorityContext: options.loadAuthorityContext }
+					: {}),
 				agentApiCreation: { ...configured, candidates: explicit },
 				agentDefaultRelayKeyPolicy: {
 					templateBindings: [{ ...binding, reasoningLevels: ["medium"] }],
@@ -2742,6 +2754,111 @@ describe("production API creation with user and application Tokens", () => {
 			},
 		);
 
+		it("classifies a wrapped Node fetch timeout before the Relay deadline", async () => {
+			const logs = captureLogs();
+			const server = createServer(() => {});
+			server.listen(0, "127.0.0.1");
+			await once(server, "listening");
+			const { port } = server.address() as AddressInfo;
+			const agent = new Agent();
+			const dispatch = agent.dispatch.bind(agent);
+			agent.dispatch = (options, handler) =>
+				dispatch({ ...options, headersTimeout: 50 }, handler);
+			try {
+				const nativeFailure = vi.fn();
+				const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+					output: logs.output,
+					billingFetch: async (_url, init) => {
+						try {
+							// Node's bundled fetch types pin a different Undici version.
+							const options: RequestInit = {
+								...init,
+								dispatcher: agent as unknown as RequestInit["dispatcher"],
+							};
+							return await fetch(`http://127.0.0.1:${port}/`, options);
+						} catch (error) {
+							nativeFailure(error, init?.signal?.aborted);
+							throw error;
+						}
+					},
+				});
+				const response = await preview();
+				expect(nativeFailure).toHaveBeenCalledExactlyOnceWith(
+					expect.objectContaining({
+						name: "TypeError",
+						cause: expect.objectContaining({ code: "UND_ERR_HEADERS_TIMEOUT" }),
+					}),
+					false,
+				);
+				expect(response.status).toBe(503);
+				const { code, traceId } = (await response.json()) as {
+					code: string;
+					traceId: string;
+				};
+				expect(code).toBe("DEPENDENCY_UNAVAILABLE");
+				expect(logs.read()).toContainEqual(
+					expect.objectContaining({
+						traceId,
+						operationRef: stage("billing"),
+						outcome: "failed",
+						termination: "timeout",
+						durationMs: expect.any(Number),
+					}),
+				);
+				expect(relayFetch).toHaveBeenCalledOnce();
+			} finally {
+				await agent.destroy();
+				server.closeAllConnections();
+				await new Promise<void>((resolve) => server.close(() => resolve()));
+			}
+		});
+
+		function timingOutDirectorySnapshot() {
+			return createDirectoryClient({
+				endpoint: "https://directory.example.test/snapshot",
+				token: "synthetic-directory-token-".repeat(2),
+				timeoutMs: 100,
+				fetch: async (_url, init) =>
+					new Promise<Response>((_resolve, reject) => {
+						init?.signal?.addEventListener(
+							"abort",
+							() => reject(new Error("relay-response-canary")),
+							{ once: true },
+						);
+					}),
+			});
+		}
+
+		it("reports the production Directory client's deadline in authority loading", async () => {
+			const logs = captureLogs();
+			const directory = timingOutDirectorySnapshot();
+			const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+				output: logs.output,
+				loadAuthorityContext: async () => {
+					await directory.loadCurrent();
+					throw new Error("expected Directory deadline");
+				},
+			});
+			const response = await create();
+			expect(response.status).toBe(503);
+			const body = await response.text();
+			expect(body).not.toContain("relay-response-canary");
+			const { traceId } = JSON.parse(body) as { traceId: string };
+			expect(logs.read()).toContainEqual(
+				expect.objectContaining({
+					traceId,
+					operationRef: stage("identity.authority"),
+					outcome: "failed",
+					termination: "timeout",
+					durationMs: expect.any(Number),
+				}),
+			);
+			expect(relayFetch).not.toHaveBeenCalled();
+			expect(await effects()).toEqual([
+				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+			]);
+		});
+
 		it.each([
 			["application", 1, "identity.owner", false],
 			["user", 1, "identity", false],
@@ -2752,17 +2869,34 @@ describe("production API creation with user and application Tokens", () => {
 			async (principal, failedLookup, failedStage, contactedRelay) => {
 				const logs = captureLogs();
 				let lookups = 0;
+				const directory = timingOutDirectorySnapshot();
 				const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
 					output: logs.output,
 					resolveUser: async (userId) => {
-						if (++lookups === failedLookup)
-							throw new DOMException("relay-response-canary", "TimeoutError");
+						const current = await resolveLdapPrincipal(
+							{
+								uid: "synthetic-ldap-uid",
+								userId,
+								email: "owner@example.test",
+								displayName: "Synthetic Owner",
+								accountStatus: "active",
+								roles: ["employee"],
+								authorizationRevision: "current-api-user",
+							},
+							{
+								isPlatformDisabled: async () => false,
+								organizationIds: async () => {
+									if (++lookups === failedLookup) await directory.loadCurrent();
+									return [];
+								},
+							},
+						);
 						return {
-							schemaVersion: 1,
-							userId,
-							accountStatus: "active",
-							organizationIds: [],
-							authorizationRevision: "current-api-user",
+							schemaVersion: current.schemaVersion,
+							userId: current.userId,
+							accountStatus: current.accountStatus,
+							organizationIds: current.organizationIds,
+							authorizationRevision: current.authorizationRevision,
 						};
 					},
 				});

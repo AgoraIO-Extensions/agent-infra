@@ -279,7 +279,10 @@ export async function resolveIdentity(
 		const timedOut =
 			(error instanceof LdapIdentityUnavailableError &&
 				error.failure?.deadlineExpired) ||
-			(error instanceof DOMException && error.name === "TimeoutError");
+			(error instanceof DOMException && error.name === "TimeoutError") ||
+			(error instanceof Error &&
+				error.cause instanceof DOMException &&
+				error.cause.name === "TimeoutError");
 		throw new HttpProtocolError(
 			"DEPENDENCY_UNAVAILABLE",
 			traceId,

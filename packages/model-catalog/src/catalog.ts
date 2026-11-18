@@ -90,11 +90,27 @@ export class ModelConfigurationErrorV1 extends Error {
 	}
 }
 
+const transportTimeoutCodes = new Set([
+	"ETIMEDOUT",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_HEADERS_TIMEOUT",
+	"UND_ERR_BODY_TIMEOUT",
+]);
+
 export function isModelTimeoutV1(error: unknown): boolean {
-	return (
-		(error instanceof ModelConfigurationErrorV1 && error.timedOut) ||
-		(error instanceof Error && error.name === "TimeoutError")
-	);
+	let current = error;
+	for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+		if (
+			(current instanceof ModelConfigurationErrorV1 && current.timedOut) ||
+			current.name === "TimeoutError" ||
+			("code" in current &&
+				typeof current.code === "string" &&
+				transportTimeoutCodes.has(current.code))
+		)
+			return true;
+		current = current.cause;
+	}
+	return false;
 }
 
 export async function modelOperationV1<T>(

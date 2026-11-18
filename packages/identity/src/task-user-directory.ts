@@ -46,6 +46,9 @@ export async function resolveCurrentTaskUserV1(
 		// Retain only the timeout classification across this trust boundary.
 		throw new TaskIdentityUnavailableErrorV1(
 			(error instanceof DOMException && error.name === "TimeoutError") ||
+				(error instanceof Error &&
+					error.cause instanceof DOMException &&
+					error.cause.name === "TimeoutError") ||
 				(error instanceof LdapIdentityUnavailableError &&
 					error.failure?.deadlineExpired === true) ||
 				(error instanceof TaskIdentityUnavailableErrorV1 && error.timedOut),
