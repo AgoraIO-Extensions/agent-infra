@@ -158,6 +158,14 @@ flowchart LR
 再由单独的下线决定处理，旧 namespace 的清理不属于新 lane 的升级或 rollback。Helm rollback 只恢复
 `agent-infra` release 自身的 revision、配置 Secret 和迁移状态，不接管、删除或回写旧 lane 的数据。
 
+本节的 Helm-native 事实源为 Helm remote `ssh://git@git.agoralab.co/ai/helm.git` 的 commit
+`9b20093c392ea5c231fec53f466dfff894a55c7e`，文件
+`docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`，blob
+`542c4389ee6a2b35093d58707422b52ca0b7c522`，文件 SHA-256
+`b93af1da087d977436ec0a7add30742b17e6dcf2a8d4658e2115c0d1ee5ed174`。该 commit 当前只在 Helm owner 的本地
+worktree，尚未进入可由 origin/main 回读的分支；在 Helm owner 发布或确认前，namespace/release、Secret、hooks、
+迁移顺序、A1 和 3–7 天窗口均标为 `PENDING_HELM_OWNER_CONFIRMATION`。
+
 仅 [§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 可使用受认证内部 HTTP，
 承载 API→Worker 的一次读取投递，以及 Host→Worker→承载原 Request 的 API 实例的在线当前确认。
 Worker 保持唯一证明签发与投递方；Host 不直接查询 Platform DB 或 IdentityAdapter。
