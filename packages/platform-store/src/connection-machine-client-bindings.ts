@@ -45,14 +45,14 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 
 	async load(
 		agentId: string,
-		associationRevision?: number,
-		registrationKey?: string,
+		associationRevision: number,
+		registrationKey: string,
 	): Promise<ConnectionMachineClientBindingV1 | undefined> {
-		const registrationKeyHash = registrationKey
-			? connectionMachineRegistrationKeyHashV1(registrationKey)
-			: undefined;
-		const rows = registrationKeyHash
-			? await this.#client<Row[]>`
+		if (!registrationKey) throw new Error("CONNECTION_MACHINE_BINDING_REGISTRATION_KEY_REQUIRED");
+		const registrationKeyHash = connectionMachineRegistrationKeyHashV1(
+			registrationKey,
+		);
+		const rows = await this.#client<Row[]>`
 				select binding.agent_id, binding.association_revision, binding.client_id, binding.callback_url,
 					binding.profile_fingerprint, binding.source_ref, binding.source_revision, binding.registration_key_hash
 				from platform.connection_machine_client_bindings as binding
@@ -61,15 +61,6 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 					and association.association_revision = binding.association_revision
 				where binding.agent_id = ${agentId}
 					and binding.registration_key_hash = ${registrationKeyHash}
-			`
-			: await this.#client<Row[]>`
-			select binding.agent_id, binding.association_revision, binding.client_id, binding.callback_url,
-				binding.profile_fingerprint, binding.source_ref, binding.source_revision, binding.registration_key_hash
-			from platform.connection_machine_client_bindings as binding
-			inner join platform.connection_manual_associations as association
-				on association.agent_id = binding.agent_id
-				and association.association_revision = binding.association_revision
-			where binding.agent_id = ${agentId}
 		`;
 		const [row] = rows;
 		if (

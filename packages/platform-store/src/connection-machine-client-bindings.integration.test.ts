@@ -60,7 +60,7 @@ const binding: ConnectionMachineClientBindingV1 = {
 
 it("persists a non-secret binding and reads it only for the matching association revision", async () => {
 	await store.persist("agent-a", binding, 1);
-	expect(await store.load("agent-a", 1, binding.registrationKey)).toEqual({
+	expect(await store.load("agent-a", 1, binding.registrationKey!)).toEqual({
 		clientId: binding.clientId,
 		callbackUrl: binding.callbackUrl,
 		profileFingerprint: binding.profileFingerprint,
@@ -69,7 +69,13 @@ it("persists a non-secret binding and reads it only for the matching association
 	expect(
 		await store.load("agent-a", 1, "agent-a-install-wrong"),
 	).toBeUndefined();
-	expect(await store.load("agent-a", 2)).toBeUndefined();
+	await expect(
+		(store.load as unknown as (agentId: string, revision: number) => Promise<unknown>)
+			("agent-a", 2),
+	).rejects.toThrow("CONNECTION_MACHINE_BINDING_REGISTRATION_KEY_REQUIRED");
+	await expect(store.load("agent-a", 2, "")).rejects.toThrow(
+		"CONNECTION_MACHINE_BINDING_REGISTRATION_KEY_REQUIRED",
+	);
 	const rows = await sql`
 		select client_id, callback_url, profile_fingerprint, source_ref, source_revision, registration_key_hash
 		from platform.connection_machine_client_bindings
@@ -107,7 +113,7 @@ it("replaces a binding only after the association revision advances and rejects 
 		registrationKey: "agent-a-install-2",
 	};
 	await store.persist("agent-a", replacement, 2);
-	expect(await store.load("agent-a", 1)).toBeUndefined();
+	expect(await store.load("agent-a", 1, replacement.registrationKey!)).toBeUndefined();
 	expect(await store.load("agent-a", 2, replacement.registrationKey)).toEqual({
 		clientId: replacement.clientId,
 		callbackUrl: replacement.callbackUrl,
@@ -130,7 +136,7 @@ it("replaces a binding only after the association revision advances and rejects 
 it("does not revive a binding after the association row is removed", async () => {
 	await store.persist("agent-a", binding, 1);
 	await sql`delete from platform.connection_manual_associations where agent_id = 'agent-a'`;
-	expect(await store.load("agent-a", 1)).toBeUndefined();
+	expect(await store.load("agent-a", 1, binding.registrationKey!)).toBeUndefined();
 	await expect(store.persist("agent-a", binding, 1)).rejects.toThrow(
 		"CONNECTION_MACHINE_BINDING_REVISION_CONFLICT",
 	);

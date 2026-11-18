@@ -26,8 +26,8 @@ export interface ProtectedConnectionHostSupplyV1 {
 export interface ConnectionMachineClientBindingStoreV1 {
 	load(
 		agentId: string,
-		associationRevision?: number,
-		registrationKey?: string,
+		associationRevision: number,
+		registrationKey: string,
 	): Promise<ConnectionConsumerOAuthClientBindingV1 | undefined>;
 	persist(
 		agentId: string,
