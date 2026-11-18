@@ -376,6 +376,26 @@ export async function collectOperationsSnapshotV2(input: {
 		"agent-infra-postgres": "database",
 		"agent-infra-directory": "directory",
 	};
+	const isVirtualNode = (node: ObjectRecord) => {
+		const meta = metadata(node);
+		const labels = object(meta.labels);
+		const name = text(meta.name);
+		return (
+			labels.type === "virtual-kubelet" ||
+			labels["alibabacloud.com/eci"] === "true" ||
+			name?.startsWith("virtual-kubelet") === true
+		);
+	};
+	const nodePlacements = new Map(
+		(loaded.get("nodes") ?? []).flatMap((node) => {
+			const name = text(metadata(node).name);
+			return name
+				? ([
+						[name, isVirtualNode(node) ? ("eci" as const) : ("ecs" as const)],
+					] as const)
+				: [];
+		}),
+	);
 	const metrics = scoped("podMetrics");
 	const rawPods = scoped("pods");
 	for (const pod of rawPods) {
@@ -622,7 +642,7 @@ export async function collectOperationsSnapshotV2(input: {
 			containers,
 			images: [...new Set(containers.map((container) => container.image))],
 			retainedStorage: false,
-			placement: spec.nodeName?.startsWith("virtual-kubelet") ? "eci" : spec.nodeName ? "ecs" : "unknown",
+			placement: nodePlacements.get(text(spec.nodeName) ?? "") ?? "unknown",
 			ownershipReason: agentId || sharedRole ? null : "BINDING_UNAVAILABLE",
 		});
 	}
@@ -710,14 +730,10 @@ export async function collectOperationsSnapshotV2(input: {
 	for (const node of loaded.get("nodes") ?? []) {
 		const meta = metadata(node);
 		const status = object(node.status);
-		const labels = object(meta.labels);
 		const uid = text(meta.uid);
 		const name = text(meta.name);
 		if (!uid || !name) continue;
-		const virtual =
-			labels.type === "virtual-kubelet" ||
-			labels["alibabacloud.com/eci"] === "true" ||
-			name.startsWith("virtual-kubelet");
+		const virtual = isVirtualNode(node);
 		const metric = nodeMetrics.find((entry) => {
 			const at = date(entry.timestamp);
 			const created = date(meta.creationTimestamp);
@@ -784,6 +800,12 @@ export async function collectOperationsSnapshotV2(input: {
 		"services",
 		"secrets",
 	] as const;
+	const quotaEntries = loaded.get("quotas");
+	snapshot.quotaSource = quotaEntries
+		? quotaEntries.length > 0
+			? "kubernetes-resourcequota"
+			: "not-configured"
+		: "unavailable";
 	for (const quota of scoped("quotas")) {
 		const meta = metadata(quota);
 		const status = object(quota.status);

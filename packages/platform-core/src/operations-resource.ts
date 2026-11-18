@@ -273,6 +273,7 @@ export function emptyOperationsResourcesV2(
 		resources: [],
 		agents: [],
 		quotas: [],
+		quotaSource: "not-configured",
 		budget: null,
 		imageCaches: [],
 		cacheEvidence: [],

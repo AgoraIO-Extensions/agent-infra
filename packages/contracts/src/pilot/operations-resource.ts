@@ -203,7 +203,9 @@ export const OperationsQuotaV2Schema = z.strictObject({
 		)
 		.max(32),
 	observedAt: timestamp,
-	source: z.enum(["kubernetes-resourcequota", "not-configured", "unavailable"]).optional(),
+	source: z
+		.enum(["kubernetes-resourcequota", "not-configured", "unavailable"])
+		.optional(),
 });
 export const OperationsImageCacheV2Schema = z.strictObject({
 	uid: identifier,
@@ -304,6 +306,9 @@ export const OperationsResourcesV2Schema = z.strictObject({
 	resources: z.array(OperationsResourceV2Schema).max(2000),
 	agents: z.array(OperationsAgentV2Schema).max(2000),
 	quotas: z.array(OperationsQuotaV2Schema).max(100),
+	quotaSource: z
+		.enum(["kubernetes-resourcequota", "not-configured", "unavailable"])
+		.optional(),
 	budget: OperationsBudgetV2Schema.nullable(),
 	imageCaches: z.array(OperationsImageCacheV2Schema).max(128),
 	cacheEvidence: z.array(OperationsCacheEvidenceV2Schema).max(2000),

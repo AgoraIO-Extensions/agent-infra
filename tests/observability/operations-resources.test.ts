@@ -721,6 +721,101 @@ it("collects container samples while a cache source fails without counting execu
 	expect(JSON.stringify(body)).not.toContain("private cloud message");
 });
 
+it("classifies Pod placement from Node metadata and reports quota availability", async () => {
+	const now = new Date().toISOString();
+	const nodes = [
+		{
+			metadata: {
+				name: "ecs-node",
+				uid: "ecs-node-uid",
+				resourceVersion: "1",
+			},
+		},
+		{
+			metadata: {
+				name: "eci-node",
+				uid: "eci-node-uid",
+				resourceVersion: "1",
+				labels: { "alibabacloud.com/eci": "true" },
+			},
+		},
+	];
+	const pods = ["ecs-node", "eci-node", "missing-node"].map(
+		(nodeName, index) => ({
+			metadata: {
+				name: `placement-pod-${index}`,
+				namespace: scope.namespace,
+				uid: `placement-pod-${index}-uid`,
+				resourceVersion: "1",
+			},
+			spec: {
+				nodeName,
+				containers: [{ name: "runtime", image: "runtime:fixture" }],
+			},
+			status: {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			},
+		}),
+	);
+	const read = async (kind: string) => ({
+		items: kind === "nodes" ? nodes : kind === "pods" ? pods : [],
+		truncated: false,
+	});
+	const collect = (readOverride: typeof read = read) =>
+		collectOperationsSnapshotV2({
+			scope,
+			readCluster: true,
+			cacheOwner: "fixture-cache",
+			cacheInventoryLimit: 48,
+			bindings: [],
+			now: () => now,
+			read: readOverride,
+		});
+
+	const withoutQuota = await collect();
+	expect(withoutQuota.resources.map((resource) => resource.placement)).toEqual([
+		"ecs",
+		"eci",
+		"unknown",
+	]);
+	expect(withoutQuota.quotaSource).toBe("not-configured");
+	expect(OperationsResourcesV2Schema.parse(withoutQuota).quotaSource).toBe(
+		"not-configured",
+	);
+
+	const unavailable = await collect(async (kind) => {
+		if (kind === "quotas") throw new Error("quota backend unavailable");
+		return read(kind);
+	});
+	expect(unavailable.quotaSource).toBe("unavailable");
+	expect(OperationsResourcesV2Schema.parse(unavailable).quotaSource).toBe(
+		"unavailable",
+	);
+
+	const configured = await collect(async (kind) => {
+		if (kind === "quotas")
+			return {
+				items: [
+					{
+						metadata: {
+							name: "platform-quota",
+							uid: "platform-quota-uid",
+							resourceVersion: "1",
+						},
+						status: { hard: { pods: "10" }, used: { pods: "2" } },
+					},
+				],
+				truncated: false,
+			};
+		return read(kind);
+	});
+	expect(configured.quotaSource).toBe("kubernetes-resourcequota");
+	expect(OperationsResourcesV2Schema.parse(configured).quotaSource).toBe(
+		"kubernetes-resourcequota",
+	);
+});
+
 it("queries only verified historical Pod UIDs and does not turn backend failure into zero usage", async () => {
 	const input = {
 		metric: "cpu" as const,
