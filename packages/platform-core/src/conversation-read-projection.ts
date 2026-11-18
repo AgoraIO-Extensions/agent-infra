@@ -29,6 +29,8 @@ export interface ConversationReadExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** Whether this execution has persisted events before the current event page. */
+	readonly hasEarlierEvents?: boolean;
 	/** 经排队受理的 Execution 保存的等待顺序（§12.5）；其他 Execution 为 null 或缺省。 */
 	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因（工程 Spec §16.1.1）。 */
@@ -62,6 +64,8 @@ export interface ConversationMessageReadModelV1 {
 	readonly messages: readonly ConversationReadMessageV1[];
 	readonly executions: readonly ConversationReadExecutionV1[];
 	readonly events: readonly ConversationReadEventV1[];
+	/** Event pagination state for detail reads. Older events may be on another page. */
+	readonly eventWindow?: { readonly hasEarlier: boolean };
 }
 
 export interface ConversationMessageProjectionV1 {
@@ -341,11 +345,23 @@ export function projectConversationMessagesV1(
 	for (const events of byExecution.values()) {
 		events.sort((left, right) => eventSequence(left) - eventSequence(right));
 	}
+	const earlierEventExecutionIds = new Set(
+		input.executions
+			.filter((execution) => execution.hasEarlierEvents === true)
+			.map((execution) => execution.executionId),
+	);
 	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
 		items.flatMap((item, index) => {
 			// 未开始即结束的排队消息没有回复；结果只显示在用户消息的 queue 状态上。
 			if (neverStarted.has(item.executionId)) return [];
 			const events = byExecution.get(item.executionId) ?? [];
+			const status = executionStatus(item.status);
+			if (
+				earlierEventExecutionIds.has(item.executionId) &&
+				events.length === 0 &&
+				isTerminalStatus(status)
+			)
+				return [];
 			const text = events
 				.filter((event) => event.eventType === "text.delta")
 				.map((event) => {
@@ -354,8 +370,11 @@ export function projectConversationMessagesV1(
 					return payload.text;
 				})
 				.join("");
-			const status = executionStatus(item.status);
-			if (text.length === 0 && !isTerminalStatus(status)) {
+			if (
+				text.length === 0 &&
+				!isTerminalStatus(status) &&
+				!(input.eventWindow?.hasEarlier === true && events.length === 0)
+			) {
 				return [];
 			}
 			// Host completion can precede the journal drain; only its persisted terminal event completes the answer.
