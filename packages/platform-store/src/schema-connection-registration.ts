@@ -252,6 +252,49 @@ export const connectionManualAssociations = platformSchema.table(
 	],
 );
 
+/** Non-secret EP-1060 machine-client binding for one Owner association revision. */
+export const connectionMachineClientBindings = platformSchema.table(
+	"connection_machine_client_bindings",
+	{
+		agentId: text("agent_id")
+			.primaryKey()
+			.references(() => agents.id),
+		associationRevision: bigint("association_revision", {
+			mode: "number",
+		}).notNull(),
+		clientId: varchar("client_id", { length: 128 }).notNull(),
+		callbackUrl: text("callback_url").notNull(),
+		profileFingerprint: varchar("profile_fingerprint", {
+			length: 64,
+		}).notNull(),
+		sourceRef: text("source_ref").notNull(),
+		sourceRevision: varchar("source_revision", { length: 128 }).notNull(),
+		registrationKey: varchar("registration_key", { length: 128 }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		uniqueIndex("connection_machine_client_binding_client_unique").on(
+			table.clientId,
+		),
+		uniqueIndex("connection_machine_client_binding_registration_unique").on(
+			table.registrationKey,
+		),
+		check(
+			"connection_machine_client_binding_identity",
+			sql`${table.associationRevision} between 1 and 9007199254740991
+				and ${table.clientId} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+				and ${table.profileFingerprint} ~ '^[a-f0-9]{64}$'
+				and ${table.sourceRevision} <> ''
+				and (${table.registrationKey} is null or ${table.registrationKey} ~ '^[A-Za-z0-9][A-Za-z0-9._~-]{7,127}$')`,
+		),
+	],
+);
+
 /**
  * Durable per-Agent association generation (Spec §13.5.7). It survives disconnect so a
  * reassociation never reuses an earlier association revision as its CAS identity.

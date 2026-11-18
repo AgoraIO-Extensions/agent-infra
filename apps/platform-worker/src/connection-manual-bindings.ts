@@ -26,10 +26,12 @@ export interface ProtectedConnectionHostSupplyV1 {
 export interface ConnectionMachineClientBindingStoreV1 {
 	load(
 		agentId: string,
+		associationRevision?: number,
 	): Promise<ConnectionConsumerOAuthClientBindingV1 | undefined>;
 	persist(
 		agentId: string,
 		binding: ConnectionConsumerOAuthClientBindingV1,
+		associationRevision: number,
 	): Promise<void>;
 }
 
@@ -142,9 +144,16 @@ export function createOwnerConnectionBindingsResolverV1(
 					consumerIdForAgent: () => row.connectionAgentId,
 					installationSupplyForAgent: () => supply,
 					loadOAuthClientBindingForAgent: () =>
-						options.machineClientBindings.load(row.agentId),
+						options.machineClientBindings.load(
+							row.agentId,
+							row.associationRevision,
+						),
 					persistOAuthClientBindingForAgent: (agentId, binding) =>
-						options.machineClientBindings.persist(agentId, binding),
+						options.machineClientBindings.persist(
+							agentId,
+							binding,
+							row.associationRevision,
+						),
 					...(options.fetch ? { fetch: options.fetch } : {}),
 				});
 				const bindings = await resolve(signal);

@@ -90,6 +90,10 @@ export {
 	PostgresConnectionManualAssociationReaderV1,
 } from "./connection-manual-association-reader.js";
 export {
+	type ConnectionMachineClientBindingV1,
+	PostgresConnectionMachineClientBindingStoreV1,
+} from "./connection-machine-client-bindings.js";
+export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
 	type PostgresConversationDispatchOptionsV1,

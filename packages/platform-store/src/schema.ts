@@ -29,6 +29,7 @@ import {
 	connectionAssociationGenerations,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionMachineClientBindings,
 	connectionManualAssociations,
 } from "./schema-connection-registration.js";
 import {
@@ -89,6 +90,7 @@ export {
 	connectionAssociationGenerations,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionMachineClientBindings,
 	connectionManualAssociations,
 } from "./schema-connection-registration.js";
 
@@ -200,6 +202,7 @@ import {
 export const platformInfrastructureTables = [
 	connectionConsumerRegistrations,
 	connectionConsumerDisables,
+	connectionMachineClientBindings,
 	connectionManualAssociations,
 	connectionAssociationGenerations,
 	evaluationExperiments,
