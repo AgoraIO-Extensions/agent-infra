@@ -184,6 +184,7 @@ export * from "./session-sandbox-credential.js";
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
 export * from "./session-sandbox-reserves.js";
+export * from "./session-workspace-reclamation.js";
 export * from "./skill-hub.js";
 export * from "./skill-hub-agent-binding.js";
 export * from "./skill-hub-installation.js";

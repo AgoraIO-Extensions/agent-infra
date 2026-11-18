@@ -234,6 +234,7 @@ export {
 	type SessionSandboxReserveInspectionV1,
 	type SessionSandboxReserveWorkerClaimV1,
 } from "./session-sandbox-reserves.js";
+export * from "./session-workspace-reclamation.js";
 export { PostgresSkillHubLifecycleV1 } from "./skill-hub.js";
 export {
 	PostgresSkillHubAgentBindingAdmissionV1,
