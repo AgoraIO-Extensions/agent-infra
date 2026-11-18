@@ -10,18 +10,21 @@
 通过 `--no-hooks`、`--post-renderer` 或 release 内对象重建来完成定向变更。这种链路无法把配置 Secret、迁移
 hooks、镜像来源、release revision 和回滚统一绑定，也不适合建立一条可重复的正式生产 lane。
 
-上段关于旧脚本入口的细节是 Helm 设计 source snapshot 的现状记录，不是本仓库的现场观测；在该 snapshot 尚未
-由 Helm owner 发布或确认前，这些历史细节与新 lane 的 operational claims 均保持 `PENDING_HELM_OWNER_CONFIRMATION`。
+上段关于旧脚本入口的细节是 Helm source snapshot 的源码记录，不是本仓库的现场观测；生产采用仍需 Helm owner
+按当前 plan/CAS 和现场回读确认。
 
 Helm 仓库的 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md` 记录了新 lane 的
 只读核查和演练结论：正式 namespace/release 均为 `agent-infra`，chart 接管 API/Worker 配置 Secret，
 部署命令使用 `helm upgrade --install --atomic --wait` 并保持 hooks；用户选择 A1，不迁移旧 lane 数据，
-旧 lane 停用后保留 3–7 天。当前可回读的 source pointer 是 Helm remote
-`ssh://git@git.agoralab.co/ai/helm.git`、commit `9b20093c392ea5c231fec53f466dfff894a55c7e`、
-文件路径同上、Git blob `542c4389ee6a2b35093d58707422b52ca0b7c522`、文件 SHA-256
-`b93af1da087d977436ec0a7add30742b17e6dcf2a8d4658e2115c0d1ee5ed174`。该 commit 当前只在 Helm owner 的
-本地 worktree（不在 origin/main 可回读分支），因此 Helm owner 必须在切换前发布或确认这份 source snapshot；
-在此之前本 ADR 将上述部署事实标为 `PENDING_HELM_OWNER_CONFIRMATION`。本 ADR 只记录 agent-infra 工程边界和取舍。
+旧 lane 停用后保留 3–7 天。当前不可变 source pointer 是 Helm 仓库
+`https://bitbucket.agoralab.co/projects/AI/repos/helm` 的 commit
+`c3156272c7aaa09d8896e7f2b71046a6d68d95e1`（PR #169 merge），文件
+`docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`，Git blob
+`542c4389ee6a2b35093d58707422b52ca0b7c522`，文件 SHA-256
+`b93af1da087d977436ec0a7add30742b17e6dcf2a8d4658e2115c0d1ee5ed174`。设计文档第 1、2、3、6、7、10 节分别
+支持 namespace/release、chart Secret、hooks/命令、旧脚本现状、A1 和 3–7 天窗口；旧入口的
+`--no-hooks`/`--post-renderer` 实例可在同一 commit 的 `agent-infra-ack/scripts/publish-platform-code.mts:1067-1074,1154,1324,1351,1399`
+和 `agent-infra-ack/scripts/publish-api-resources.mts:741,856,920` 回读。本 ADR 只记录 agent-infra 工程边界和取舍。
 
 ## 决定
 
@@ -65,8 +68,10 @@ Helm 仓库的 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-d
   Connection consumer 登记，均以 Helm owner 的当前 plan/CAS 和现场回读为准。
 - 旧 lane 保留窗口的确切天数（3–7 天内）及最终下线 owner 由部署负责人在切换验收后确认。
 
-关联事实源：Helm `ssh://git@git.agoralab.co/ai/helm.git@9b20093c392ea5c231fec53f466dfff894a55c7e` 中的
-`docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`（状态
-`PENDING_HELM_OWNER_CONFIRMATION`）；本仓工程边界见
+关联事实源：Helm `https://bitbucket.agoralab.co/projects/AI/repos/helm` commit
+`c3156272c7aaa09d8896e7f2b71046a6d68d95e1` 中的
+`docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`（blob
+`542c4389ee6a2b35093d58707422b52ca0b7c522`，SHA-256
+`b93af1da087d977436ec0a7add30742b17e6dcf2a8d4658e2115c0d1ee5ed174`）；本仓工程边界见
 [工程 Spec §4.1.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#411-正式-helm-native-部署单元)和
 [§21.2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#2121-正式-lane-发布流程)。

@@ -158,13 +158,15 @@ flowchart LR
 再由单独的下线决定处理，旧 namespace 的清理不属于新 lane 的升级或 rollback。Helm rollback 只恢复
 `agent-infra` release 自身的 revision、配置 Secret 和迁移状态，不接管、删除或回写旧 lane 的数据。
 
-本节的 Helm-native 事实源为 Helm remote `ssh://git@git.agoralab.co/ai/helm.git` 的 commit
-`9b20093c392ea5c231fec53f466dfff894a55c7e`，文件
+本节的 Helm-native 事实源为 Helm 仓库
+`https://bitbucket.agoralab.co/projects/AI/repos/helm` 的 commit
+`c3156272c7aaa09d8896e7f2b71046a6d68d95e1`（PR #169 merge），文件
 `docs/superpowers/specs/2026-11-17-agent-infra-helm-native-lane-design.md`，blob
 `542c4389ee6a2b35093d58707422b52ca0b7c522`，文件 SHA-256
-`b93af1da087d977436ec0a7add30742b17e6dcf2a8d4658e2115c0d1ee5ed174`。该 commit 当前只在 Helm owner 的本地
-worktree，尚未进入可由 origin/main 回读的分支；在 Helm owner 发布或确认前，namespace/release、Secret、hooks、
-迁移顺序、A1 和 3–7 天窗口均标为 `PENDING_HELM_OWNER_CONFIRMATION`。
+`b93af1da087d977436ec0a7add30742b17e6dcf2a8d4658e2115c0d1ee5ed174`。设计文档第 1、2、3、6、7、10 节支持
+本节的 namespace/release、Secret、hooks、命令、A1 和保留窗口事实；旧脚本的 `--no-hooks`/`--post-renderer`
+实例可在同一 commit 的 `agent-infra-ack/scripts/publish-platform-code.mts:1067-1074,1154,1324,1351,1399`
+及 `publish-api-resources.mts:741,856,920` 回读。
 
 仅 [§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 可使用受认证内部 HTTP，
 承载 API→Worker 的一次读取投递，以及 Host→Worker→承载原 Request 的 API 实例的在线当前确认。
