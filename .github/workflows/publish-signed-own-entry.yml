@@ -10,10 +10,14 @@ on:
         required: true
         type: string
       promote_existing:
-        description: Promote the verified c549 fixture to its existing admitted repository
+        description: Promote the verified fixture from this workflow to the admitted repository
         required: false
         type: boolean
         default: false
+      origin_run_id:
+        description: Successful earlier publish-signed-own-entry run that produced the source receipt
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -101,8 +105,12 @@ jobs:
       packages: write
       actions: read
     steps:
-      - name: Validate fixed promotion source
-        run: test "$RELEASE_SOURCE_SHA" = "4a3c2840e0d918dfc6fef77ce1cb1b7fffc46c60"
+      - name: Validate promotion inputs
+        env:
+          ORIGIN_RUN_ID: ${{ inputs.origin_run_id }}
+        run: |
+          [[ "$RELEASE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ORIGIN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
       - name: Checkout workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,9 +133,17 @@ jobs:
       - name: Read official origin evidence
         env:
           GH_TOKEN: ${{ github.token }}
+          ORIGIN_RUN_ID: ${{ inputs.origin_run_id }}
         run: |
-          gh run download 43741080676 --repo AgoraIO-Extensions/agent-infra --name signed-own-entry-amd64-4a3c2840e0d918dfc6fef77ce1cb1b7fffc46c60-1 --dir "$RUNNER_TEMP/ownentry-origin"
-          gh run view 43741080676 --repo AgoraIO-Extensions/agent-infra --json databaseId,headSha,status,conclusion,attempt > "$RUNNER_TEMP/ownentry-origin-run.json"
+          gh run view "$ORIGIN_RUN_ID" --repo AgoraIO-Extensions/agent-infra \
+            --json databaseId,headSha,status,conclusion,attempt,event,headBranch,workflowName \
+            > "$RUNNER_TEMP/ownentry-origin-run.json"
+          ORIGIN_ATTEMPT=""
+          ORIGIN_ATTEMPT=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1])).attempt' "$RUNNER_TEMP/ownentry-origin-run.json")
+          gh run download "$ORIGIN_RUN_ID" --repo AgoraIO-Extensions/agent-infra \
+            --name "signed-own-entry-amd64-${RELEASE_SOURCE_SHA}-${ORIGIN_ATTEMPT}" \
+            --dir "$RUNNER_TEMP/ownentry-origin"
+          printf '%s' "$ORIGIN_ATTEMPT" > "$RUNNER_TEMP/ownentry-origin-attempt"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.11.1
         with:
@@ -137,7 +153,17 @@ jobs:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
       - name: Promote unchanged artifact
-        run: node deploy/release/promote-signed-own-entry.ts "$RUNNER_TEMP/ownentry-origin/signed-own-entry.json" "$RUNNER_TEMP/ownentry-origin-run.json" "$RUNNER_TEMP/ownentry-promotion.json"
+        env:
+          PROMOTION_ORIGIN_RUN_ID: ${{ inputs.origin_run_id }}
+          PROMOTION_ORIGIN_ATTEMPT_FILE: ${{ runner.temp }}/ownentry-origin-attempt
+        run: |
+          PROMOTION_ORIGIN_ATTEMPT=""
+          PROMOTION_ORIGIN_ATTEMPT="$(cat "$PROMOTION_ORIGIN_ATTEMPT_FILE")"
+          export PROMOTION_ORIGIN_ATTEMPT
+          node deploy/release/promote-signed-own-entry.ts \
+            "$RUNNER_TEMP/ownentry-origin/signed-own-entry.json" \
+            "$RUNNER_TEMP/ownentry-origin-run.json" \
+            "$RUNNER_TEMP/ownentry-promotion.json"
       - name: Preserve promotion receipt or unknown-copy intent
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
