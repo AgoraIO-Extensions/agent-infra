@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
@@ -251,8 +252,22 @@ export async function queryOperationsPrometheusV2(
 		if (configuration.tokenFile && configuration.basicAuthFile)
 			throw new Error();
 		if (configuration.basicAuthFile) {
+			const maximumBytes = 16 * 1024;
+			const chunks: Buffer[] = [];
+			let length = 0;
+			const stream = createReadStream(configuration.basicAuthFile, {
+				start: 0,
+				end: maximumBytes,
+				highWaterMark: maximumBytes + 1,
+				signal: input.signal,
+			});
+			for await (const chunk of stream) {
+				length += chunk.length;
+				if (length > maximumBytes) throw new Error();
+				chunks.push(chunk);
+			}
 			const credentials = record(
-				JSON.parse(await readFile(configuration.basicAuthFile, "utf8")),
+				JSON.parse(Buffer.concat(chunks).toString("utf8")),
 			);
 			keys(credentials, ["username", "password"]);
 			const username = text(credentials.username, 256);

@@ -70,7 +70,7 @@ Chart 默认配额或过往环境状态代签。ECI 虚拟节点的百分比不�
 内联凭据、带凭据 URL 和重定向。`tokenFile` 与 `basicAuthFile` 互斥，均须为绝对路径。
 ARMS Prometheus V2 使用 Basic auth，部署将 `tokenFile` 替换为
 `"basicAuthFile": "/var/run/agent-infra/operations/prometheus-credentials.json"`。
-该凭据文件是只含 `username`、`password` 的 JSON，分别提供获准的只读 AccessKey ID 和 Secret；
+该凭据文件上限为 16 KiB，是只含 `username`、`password` 的 JSON，分别提供获准的只读 AccessKey ID 和 Secret；
 使用 STS 时按[官方 HTTP API](https://help.aliyun.com/zh/prometheus/user-guide/http-api-urls)
 要求组合 Secret 与 STS Token。配置中只记录文件路径，原始凭据只通过部署批准的服务端只读挂载提供，
 不进入 API 投影、日志或错误。新增凭据文件必须由正式配置发布路径批准，不能借 Kubernetes

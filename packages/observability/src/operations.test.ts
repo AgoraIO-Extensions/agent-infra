@@ -224,6 +224,40 @@ it("keeps Bearer file authentication and rejects conflicting direct query creden
 	expect(fetch).not.toHaveBeenCalled();
 });
 
+it.each([16 * 1024, 16 * 1024 + 1])(
+	"bounds the Basic auth file before parsing (%i bytes)",
+	async (size) => {
+		const basicAuthFile = await configuration(null);
+		const contents = JSON.stringify({
+			username: "synthetic-reader",
+			password: "synthetic-secret",
+		});
+		await writeFile(basicAuthFile, contents.padEnd(size, " "));
+		const fetch = vi.fn(async () =>
+			Response.json({ status: "success", data: { result: [] } }),
+		);
+		vi.stubGlobal("fetch", fetch);
+		const query = queryOperationsPrometheusV2(
+			{
+				endpoint: "https://prometheus.example.test",
+				basicAuthFile,
+				detailDays: 7,
+				aggregateDays: 30,
+				aggregateStepSeconds: 300,
+			},
+			"up",
+			{ signal: AbortSignal.timeout(1000) },
+		);
+		if (size <= 16 * 1024) {
+			await expect(query).resolves.toEqual({ result: [] });
+			expect(fetch).toHaveBeenCalledOnce();
+		} else {
+			await expect(query).rejects.toThrow(/^OPERATIONS_HISTORY_UNAVAILABLE$/);
+			expect(fetch).not.toHaveBeenCalled();
+		}
+	},
+);
+
 it("rejects credentials in diagnostic links while retaining object query filters", async () => {
 	for (const kind of ["logs", "traces"] as const) {
 		for (const parameter of [
