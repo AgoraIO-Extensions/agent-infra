@@ -384,10 +384,11 @@ API 请求通过平台准入、进入创建后才开始关联，待审批、驳�
   显示已关联。服务凭据提交后不回显，无法通过平台接口读取。Owner 可以替换凭据或解除关联。
 - Agent 详情与 API 明确显示未启用、关联处理中、已关联、失败或待核实。重复提交、重启或恢复
   不产生第二个对应 Consumer；外部登记未确认时保留原 Agent 和待处理状态，不显示为已连接。
-- **Agent 的 MCP 客户端与 Connection 鉴权。** 每个 Agent 使用专用 Consumer，每位使用者通过
-  Connection OAuth 独立确认自己的安装。该 Agent 的受保护运行环境可用服务凭据登记、核实和
-  撤销同一 Consumer 下的 OAuth 安装。MCP 调用使用该使用者和安装专属的 Connection 凭据。
-  服务凭据和安装凭据均不进入 Agent、模型、环境变量、启动参数、日志或浏览器持久存储。
+- **Agent 的 MCP 客户端与 Connection 鉴权。** 每个 Agent 使用专用 Consumer。使用者默认通过
+  Connection OAuth 独立确认自己的安装。安装在本人开始授权时按需准备，Owner 关联时无需登记
+  客户端。MCP 调用使用该使用者和安装专属的 Connection 凭据。服务凭据和安装凭据均受保护，
+  不向 Agent 或模型公开，不进入日志或浏览器持久存储。工程边界见
+  [工程 Spec §13.5.7](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)。
 - **外部系统授权。** 需要连接 GitHub 等外部系统或补充操作权限时，MCP 返回 Connection 网站
   的授权链接，由 Agent 使用者在该网站选择账号并完成所需授权。平台不替使用者选择账号、
   完成授权或保管外部系统凭据。

@@ -2231,8 +2231,9 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置、自�
 客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
 前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
 唯一例外是 §13.5.7 Owner 手工关联的 Consumer 服务凭据：它只以应用层密文保存在该关联下，
-明文只在 API 受理并核实关联、Worker 物化到受保护 Host 时短暂存在；API 只用它做一次只读
-核实，不用于 MCP、用户代理或其他查询，其余禁止位置不变。
+API 受理时仅用明文做一次只读核实。Worker 只在物化该 Agent 的受保护 Host 供应时解密。
+受保护 Host 只按 §13.5.7 使用该服务凭据对同一 Consumer 执行获准的 EP-1060 逐安装操作。
+凭据不进入 env、argv 或工具进程，不能用于 MCP、用户代理或外部系统授权，其余禁止位置不变。
 
 **标准 MCP 与 Agent token 消费。** 固定官方 Runtime 的标准 MCP 客户端优先使用 Connection
 签发的 OAuth token 或获准 PAT。每个原用户/独立应用与 Agent 组合使用独立 token；不同
@@ -2490,14 +2491,16 @@ OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配�
 部署配置不提供逐 Agent 绑定。按原用户＋Agent 的受信两层索引
 （`bindingsByAgentAndPrincipal`（API/Store）与 `configurationsByAgentAndPrincipal`（Worker））
 由 §13.5.7 的逐安装 client 登记回执生成，不由部署逐项提供；键只能由服务端已认证用户和
-原 Execution 的 Agent 解析。显式用户索引缺项或非法时拒绝安装，不回退逐 Agent、共享、
-Owner 或其他用户。
-用户索引只接受非 PAT、非 DCR 的预注册 client，每个安装的 issuer＋clientId 必须独立。
+原 Execution 的 Agent 解析。没有可用绑定时，只能沿 §13.5.7 按需准备同一安装。缺少已核实
+的绑定、绑定非法或登记结果不明时，不能发出授权链接，也不能回退逐 Agent、共享、Owner
+或其他用户。每个安装的 issuer＋clientId 必须独立。该 OAuth 用户索引只接受在授权链接
+生成前已核实的 client，不接受 PAT 或通用 DCR 绑定。
 每项 revision 必须等于已 strict 解析的完整配置去除 revision 后，以固定字段顺序序列化的
 UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/revision 替换 client。
 安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
 
-API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择绑定。confirm、status、
+API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择或发起准备原安装绑定。
+首次安装按 §13.5.7 登记并核实回执后，才能生成使用对应 clientId 的授权链接。confirm、status、
 callback 及 Worker 命令领取沿原授权记录重新核对同一 Agent、主体、配置 ref/revision、
 profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker 在已验证的原执行路由内选择
 相应 OAuth 配置，并在最后发送前核对它与目标 Consumer 快照一致。多个 Agent 继续共用现有
@@ -2850,8 +2853,10 @@ resource、scope、回执与生命周期均须匹配批准合同，不靠更换 
 将 Consumer、原用户、Agent、安装、关联修订和接入配置一起核对。Worker 只处理绑定的非秘密
 意图与回执。用户 OAuth 和外部系统授权仍分别沿 §13.5.6 和 Connection 的浏览器流程确认。
 
-已有合法预注册 client 的非秘密回执可以作为安装输入，不要求为接线另建登记接口；其真实
-Consumer、用户/安装粒度、精确回调和生命周期仍须核实，不能推测部署中是否已预置。
+使用者开始 Connection OAuth 安装时才按需登记。Owner 关联不登记 OAuth client。
+已有合规 client 时，可核实并复用同一用户、Agent 和安装的非秘密回执。没有已核实绑定时，
+须先完成该安装的登记及回执核对，再发出 Connection OAuth 授权链接。不得以未经核实的
+既有 client 或不明结果继续授权。真实 Consumer、精确回调和生命周期仍须核实。
 
 client 登记另按原用户＋Agent＋安装修订持久绑定原操作、请求摘要、幂等键、实际 Consumer
 及批准配置，复用上述交付状态与核实规则，但与 Consumer 登记操作分开保存。client 创建
@@ -2877,9 +2882,10 @@ Runtime 仍经原安装接收器和受控重新装配消费；不热改 Thread �
 服务端修订。停用 Agent 先沿平台原授权封闭新安装/业务动作，并在同一停用事务写入对应
 Consumer 停用意图；只有 Connection 的确定回执才能确认远端停用，不以本地停用、删文件或
 请求超时宣称凭据已撤销。手工关联替换或解除时，先按关联修订封闭旧安装和调用。
-远端逐安装撤销只认与原键及实例匹配的确定回执。HTTP 200 携带 `UNKNOWN`、丢失响应或
-原认证已失效时，持久保留原操作的 `unknown` 状态，交 Connection 负责人核实。保留的
-恢复记录只含非秘密操作事实，不延长旧凭据的保存或停用整个手工 Consumer。
+替换或解除同时按手工关联规则删除旧密文。只有原安装仍有符合合同且获准使用的认证时，
+才可请求远端逐安装撤销。只认与原键及实例匹配的确定回执。HTTP 200 携带 `UNKNOWN`、
+丢失响应或已无获准认证时，持久保留原操作的 `unknown` 状态，交 Connection 负责人核实。
+恢复记录只保留非秘密操作事实，不延长旧凭据的保存或停用整个手工 Consumer。
 重新安装或恢复不自动扩大 Grant，不用新 Consumer 代替未知旧状态。
 既有已批准绑定的迁移须单独核实，不在服务启动时扫描重建所有 Consumer。
 
