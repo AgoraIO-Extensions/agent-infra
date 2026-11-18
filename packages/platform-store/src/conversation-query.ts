@@ -121,6 +121,8 @@ export interface ConversationQueryDetailV1 {
 	readonly executions: readonly ConversationQueryExecutionV1[];
 	readonly events: readonly ConversationQueryEventV1[];
 	readonly eventWindow?: ConversationEventWindowV1;
+	/** Execution IDs with events before the returned event page boundary. */
+	readonly earlierEventExecutionIds?: readonly string[];
 }
 
 export interface ConversationQueryReadOptionsV1 {
@@ -1000,6 +1002,7 @@ async function readEventPage(
 ): Promise<{
 	readonly events: readonly ConversationQueryEventV1[];
 	readonly eventWindow: ConversationEventWindowV1;
+	readonly earlierEventExecutionIds: readonly string[];
 }> {
 	// 只扫描最近的 maxEvents + 1 条：超过这个范围的起点必然超出总上限。
 	const [boundary] = await run(database<
@@ -1080,8 +1083,12 @@ async function readEventPage(
 					},
 					run,
 				);
-	const [earlier] = await run(database<{ cursor: string | number | null }[]>`
-		select max(e.conversation_cursor) as cursor
+	const [earlier] = await run(database<{
+		cursor: string | number | null;
+		execution_ids: string[] | null;
+	}[]>`
+		select max(e.conversation_cursor) as cursor,
+			array_agg(distinct e.execution_id order by e.execution_id) as execution_ids
 		from platform.conversation_events e
 		where e.conversation_id = ${conversationId}
 			and e.conversation_cursor < ${pageStart}
@@ -1093,6 +1100,7 @@ async function readEventPage(
 	return {
 		events,
 		eventWindow: { hasEarlier: beforeCursor !== null, beforeCursor },
+		earlierEventExecutionIds: earlier?.execution_ids ?? [],
 	};
 }
 
@@ -2337,6 +2345,7 @@ export class PostgresConversationQueryV1 {
 									(events) => ({
 										events,
 										eventWindow: { hasEarlier: false, beforeCursor: null },
+										earlierEventExecutionIds: [],
 									}),
 								)
 							: readEventPage(
@@ -2356,6 +2365,7 @@ export class PostgresConversationQueryV1 {
 						executions,
 						events: page.events,
 						eventWindow: page.eventWindow,
+						earlierEventExecutionIds: page.earlierEventExecutionIds,
 					};
 				},
 				signal,

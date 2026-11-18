@@ -64,6 +64,8 @@ export interface ConversationMessageReadModelV1 {
 	readonly events: readonly ConversationReadEventV1[];
 	/** Event pagination state for detail reads. Older events may be on another page. */
 	readonly eventWindow?: { readonly hasEarlier: boolean };
+	/** Execution IDs with persisted events before this page boundary. */
+	readonly earlierEventExecutionIds?: readonly string[];
 }
 
 export interface ConversationMessageProjectionV1 {
@@ -343,6 +345,7 @@ export function projectConversationMessagesV1(
 	for (const events of byExecution.values()) {
 		events.sort((left, right) => eventSequence(left) - eventSequence(right));
 	}
+	const earlierEventExecutionIds = new Set(input.earlierEventExecutionIds ?? []);
 	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
 		items.flatMap((item, index) => {
 			// 未开始即结束的排队消息没有回复；结果只显示在用户消息的 queue 状态上。
@@ -350,7 +353,7 @@ export function projectConversationMessagesV1(
 			const events = byExecution.get(item.executionId) ?? [];
 			const status = executionStatus(item.status);
 			if (
-				input.eventWindow?.hasEarlier === true &&
+				earlierEventExecutionIds.has(item.executionId) &&
 				events.length === 0 &&
 				isTerminalStatus(status)
 			)

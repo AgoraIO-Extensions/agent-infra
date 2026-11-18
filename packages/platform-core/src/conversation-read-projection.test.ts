@@ -182,12 +182,50 @@ describe("Conversation read projection", () => {
 			],
 			events: [],
 			eventWindow: { hasEarlier: true },
+			earlierEventExecutionIds: ["execution-old"],
 		};
 
 		expect(projectConversationMessagesV1(input)).toEqual([
 			expect.objectContaining({
 				messageId: "message-old",
 				role: "user",
+			}),
+		]);
+	});
+
+	it("keeps a completed execution with no events when only another execution is earlier", () => {
+		const projected = projectConversationMessagesV1({
+			messages: [
+				{
+					messageId: "message-current",
+					text: "Run it",
+					executionId: "execution-current",
+					status: "submitted",
+					createdAt: first,
+				},
+			],
+			executions: [
+				{
+					executionId: "execution-current",
+					conversationId: "conversation-1",
+					sourceMessageId: "message-current",
+					status: "completed",
+					createdAt: first,
+					updatedAt: second,
+					traceId: "trace-current",
+				},
+			],
+			events: [],
+			eventWindow: { hasEarlier: true },
+			earlierEventExecutionIds: ["execution-other"],
+		});
+
+		expect(projected).toEqual([
+			expect.objectContaining({ messageId: "message-current", role: "user" }),
+			expect.objectContaining({
+				messageId: "assistant:execution-current",
+				status: "processing",
+				text: "",
 			}),
 		]);
 	});

@@ -1966,6 +1966,9 @@ describe("long Conversation reads (#1732)", () => {
 				hasEarlier: true,
 				beforeCursor: expect.any(String),
 			});
+			expect(recent?.earlierEventExecutionIds).toEqual([
+				"long-1",
+			]);
 			const earlier = await reader.get(longScope, "long-history", undefined, {
 				beforeCursor: recent?.eventWindow?.beforeCursor as string,
 			});
@@ -1977,6 +1980,7 @@ describe("long Conversation reads (#1732)", () => {
 				hasEarlier: false,
 				beforeCursor: null,
 			});
+			expect(earlier?.earlierEventExecutionIds).toEqual([]);
 		} finally {
 			await reader.close();
 		}
@@ -2210,10 +2214,9 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 				[2, 3, 4].map((round) => executionOf("reasoning-four", round)),
 			);
 			expect(recent?.events.length).toBeLessThanOrEqual(2_000);
-			// 窗口外的第 1 轮没有正文，由 Web 提示「加载更早内容」（NW-15）。
+			// 第 1 轮的事件在更早页，当前页不再伪造它的 assistant 投影；Web 通过 beforeCursor 加载历史页。
 			expect(answersOf(recent)).toEqual(
 				new Map([
-					[executionOf("reasoning-four", 1), ""],
 					...[2, 3, 4].map(
 						(round) =>
 							[
@@ -2227,6 +2230,9 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 				hasEarlier: true,
 				beforeCursor: expect.any(String),
 			});
+			expect(recent?.earlierEventExecutionIds).toEqual([
+				executionOf("reasoning-four", 1),
+		]);
 			const earlier = await reader.get(
 				reasoningScope,
 				"reasoning-four",
