@@ -931,9 +931,10 @@ async function readExecutions(
 				order by a.occurred_at, a.id
 				limit 1
 			) as trace_id,
-			${beforeEventCursor === undefined
-				? database`false`
-				: database`exists (
+			${
+				beforeEventCursor === undefined
+					? database`false`
+					: database`exists (
 					-- One bounded boolean per already-returned Execution. Do not aggregate
 					-- every historical execution ID into the page result.
 					select 1
@@ -941,7 +942,8 @@ async function readExecutions(
 					where earlier.conversation_id = e.conversation_id
 						and earlier.execution_id = e.execution_id
 						and earlier.conversation_cursor < ${beforeEventCursor}
-				)`} as has_earlier_events,
+				)`
+			} as has_earlier_events,
 			${executionFailureFactsSql(database)}
 		from platform.conversation_executions e
 		join platform.conversations c on c.id = e.conversation_id
@@ -2357,15 +2359,15 @@ export class PostgresConversationQueryV1 {
 									}),
 								)
 							: await readEventPage(
-								transaction,
-								conversationId,
-								{
-									limit: this.#eventWindow ?? 200,
-									maxEvents: this.#eventWindowMaxEvents,
-									...(beforeCursor === undefined ? {} : { beforeCursor }),
-								},
-								run,
-							);
+									transaction,
+									conversationId,
+									{
+										limit: this.#eventWindow ?? 200,
+										maxEvents: this.#eventWindowMaxEvents,
+										...(beforeCursor === undefined ? {} : { beforeCursor }),
+									},
+									run,
+								);
 					const [messages, executions] = await Promise.all([
 						readMessages(transaction, conversationId, run),
 						readExecutions(
