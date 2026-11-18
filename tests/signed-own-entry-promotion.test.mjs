@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { origin, promote } from "../deploy/release/promote-signed-own-entry.ts";
+import {
+	promote,
+	targetRepository,
+} from "../deploy/release/promote-signed-own-entry.ts";
 
 const raw = await readFile(
 	new URL(
@@ -10,7 +14,12 @@ const raw = await readFile(
 	),
 	"utf8",
 );
-const receipt = `${JSON.stringify({ schemaVersion: 1, commitSha: origin.source, platform: "linux/amd64", images: { signedOwnEntry: { repository: origin.repository, digest: origin.digest } } }, null, 2)}\n`;
+const digest = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+const source = "a".repeat(40);
+const workflow = "b".repeat(40);
+const repository =
+	"ghcr.io/agoraio-extensions/agent-infra/custom-agent-web-signed";
+const receipt = `${JSON.stringify({ schemaVersion: 1, commitSha: source, platform: "linux/amd64", images: { signedOwnEntry: { repository, digest } } }, null, 2)}\n`;
 const image = {
 	os: "linux",
 	architecture: "amd64",
@@ -18,7 +27,7 @@ const image = {
 		Entrypoint: ["node", "/app/signed-server.ts"],
 		Cmd: null,
 		Labels: {
-			"org.opencontainers.image.revision": origin.source,
+			"org.opencontainers.image.revision": source,
 			"io.agora.agent.runtime.manifest": JSON.stringify({
 				schemaVersion: 1,
 				interactionMode: "self-managed",
@@ -28,23 +37,29 @@ const image = {
 		},
 	},
 };
+
 function fixture(change = {}) {
 	const calls = [];
 	const records = [];
 	const input = {
 		receipt,
 		runMetadata: {
-			databaseId: origin.run,
-			headSha: origin.workflow,
+			databaseId: 123456,
+			headSha: workflow,
 			status: "completed",
 			conclusion: "success",
 			attempt: 1,
+			event: "workflow_dispatch",
+			headBranch: "main",
+			workflowName: "Publish signed own entry",
 		},
-		source: origin.source,
-		ref: "refs/heads/main",
-		workflowSha: "a".repeat(40),
-		runId: "123456",
+		originRunId: "123456",
+		originAttempt: "1",
+		runId: "654321",
 		attempt: "1",
+		source,
+		ref: "refs/heads/main",
+		workflowSha: "c".repeat(40),
 		record: async (value, exclusive) => records.push({ value, exclusive }),
 		...change,
 	};
@@ -61,7 +76,8 @@ function fixture(change = {}) {
 	};
 	return { input, calls, records, command };
 }
-test("copies only the verified immutable fixture to a new admitted-repository tag", async () => {
+
+test("copies only the verified current-source fixture to the admitted repository", async () => {
 	const f = fixture();
 	const result = await promote(f.input, f.command);
 	assert.equal(result.verified, true);
@@ -76,36 +92,29 @@ test("copies only the verified immutable fixture to a new admitted-repository ta
 		"create",
 		"--prefer-index=false",
 		"--tag",
-		`${origin.targetRepository}:ownentry-45cf40eb5595-123456-1`,
-		`${origin.repository}@${origin.digest}`,
+		`${targetRepository}:ownentry-${source.slice(0, 12)}-123456-1`,
+		`${repository}@${digest}`,
 	]);
 	assert.equal(f.records[0].exclusive, true);
 	assert.equal(f.records[0].value.verified, false);
-	assert.equal(f.records[1].value.status, "VERIFIED");
-	assert.equal(result.deploymentAccepted, false);
 });
-test("rejects caller source/ref/rerun and altered official provenance before Registry access", async () => {
+
+test("rejects altered source, origin run, receipt, ref and rerun before Registry access", async () => {
 	for (const change of [
 		{ ref: "refs/heads/feature" },
-		{ source: "a".repeat(40) },
+		{ source: "d".repeat(40) },
+		{ originRunId: "123457" },
+		{ originAttempt: "2" },
 		{ attempt: "2" },
-		{ runId: "1;sh" },
 		{ receipt: `${receipt} ` },
-		{
-			runMetadata: {
-				databaseId: origin.run,
-				headSha: origin.workflow,
-				status: "completed",
-				conclusion: "failure",
-				attempt: 1,
-			},
-		},
+		{ runMetadata: { ...fixture().input.runMetadata, conclusion: "failure" } },
 	]) {
 		const f = fixture(change);
 		await assert.rejects(promote(f.input, f.command));
 		assert.equal(f.calls.length, 0);
 	}
 });
+
 test("never overwrites or treats auth/transport failure as target absence", async () => {
 	for (const response of [
 		{ status: 0, stdout: raw, stderr: "" },
@@ -125,7 +134,43 @@ test("never overwrites or treats auth/transport failure as target absence", asyn
 		assert.equal(f.records.length, 0);
 	}
 });
-test("refuses bad manifest, architecture, source label or runtime identity before copy", async () => {
+
+test("requires exact origin run identity fields before Registry access", async () => {
+	const { runMetadata } = fixture().input;
+	for (const [key, mismatch] of [
+		["event", "push"],
+		["headBranch", "feature"],
+		["workflowName", "Publish images"],
+	]) {
+		const missing = { ...runMetadata };
+		delete missing[key];
+		for (const metadata of [missing, { ...runMetadata, [key]: mismatch }]) {
+			const f = fixture({ runMetadata: metadata });
+			await assert.rejects(promote(f.input, f.command), {
+				code: "ERR_ASSERTION",
+			});
+			assert.equal(f.calls.length, 0);
+			assert.equal(f.records.length, 0);
+		}
+	}
+});
+
+test("does not copy when the exclusive COPY_STARTED intent cannot be recorded", async () => {
+	const f = fixture({
+		record: async (value, exclusive) => {
+			assert.equal(value.status, "COPY_STARTED");
+			assert.equal(exclusive, true);
+			throw new Error("intent already exists");
+		},
+	});
+	await assert.rejects(promote(f.input, f.command), /intent already exists/);
+	assert.equal(
+		f.calls.some((args) => args.includes("create")),
+		false,
+	);
+});
+
+test("rejects bad manifest, architecture, source label or runtime identity before copy", async () => {
 	for (const bad of [
 		null,
 		{ ...image, architecture: "arm64" },
@@ -148,6 +193,7 @@ test("refuses bad manifest, architecture, source label or runtime identity befor
 		);
 	}
 });
+
 test("unknown copy or changed target retains non-verified intent and never retries", async () => {
 	for (const mode of ["copy-fails", "target-changed"]) {
 		const f = fixture();
@@ -168,31 +214,4 @@ test("unknown copy or changed target retains non-verified intent and never retri
 		assert.equal(f.records.length, 1);
 		assert.equal(f.records[0].value.status, "COPY_STARTED");
 	}
-});
-
-test("a refused exclusive intent prevents copy, and target config drift stays unverified", async () => {
-	const refused = fixture({
-		record: async () => {
-			throw new Error("intent exists");
-		},
-	});
-	await assert.rejects(promote(refused.input, refused.command));
-	assert.equal(
-		refused.calls.some((args) => args.includes("create")),
-		false,
-	);
-	const f = fixture();
-	await assert.rejects(
-		promote(f.input, (args) =>
-			args.includes("--format") &&
-			args.some((x) => x.startsWith(origin.targetRepository))
-				? {
-						status: 0,
-						stdout: JSON.stringify({ ...image, architecture: "arm64" }),
-						stderr: "",
-					}
-				: f.command(args),
-		),
-	);
-	assert.equal(f.records.length, 1);
 });

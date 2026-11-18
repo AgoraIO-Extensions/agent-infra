@@ -491,6 +491,10 @@ test("signed entry dispatch rejects publication scope and source guard mutations
     ["build executes during promotion", (workflow) => { workflow.jobs["own-entry-fixture"].if = "github.ref == 'refs/heads/main'"; }],
     ["promotion extra permissions", (workflow) => { workflow.jobs["promote-existing"].permissions.contents = "write"; }],
     ["unbound origin artifact", (workflow) => { workflow.jobs["promote-existing"].steps[5].run = "echo bypass"; }],
+    ["origin run validation omitted", (workflow) => {
+      const step = workflow.jobs["promote-existing"].steps[5];
+      step.run = step.run.replace("validateOriginRun(metadata, process.env.ORIGIN_RUN_ID, attempt);", "");
+    }],
     ["promotion selectable target", (workflow) => { workflow.on.workflow_dispatch.inputs.target = {type: "string"}; }],
     ["promotion source from caller checkout", (workflow) => { workflow.jobs["promote-existing"].steps[1].with.ref = "${{ inputs.source_sha }}"; }],
     ["extra publish job", (workflow) => { workflow.jobs.platform = structuredClone(workflow.jobs["own-entry-fixture"]); }],
