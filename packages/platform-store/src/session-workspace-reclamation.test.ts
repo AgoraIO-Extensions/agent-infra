@@ -127,7 +127,11 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
 		const candidates = await store.candidates();
-		const { uid: _uid, resourceVersion: _resourceVersion, ...candidate } = target;
+		const {
+			uid: _uid,
+			resourceVersion: _resourceVersion,
+			...candidate
+		} = target;
 		expect(candidates).toEqual([candidate]);
 		await sql`update platform.outbox_items set updated_at=clock_timestamp() where id='reconcile'`;
 		expect(await store.candidates()).toEqual([candidate]);
