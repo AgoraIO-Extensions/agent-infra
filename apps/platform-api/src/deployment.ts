@@ -622,6 +622,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.sessionSandboxReserves
 			? { sessionSandboxReserves: input.sessionSandboxReserves }
 			: {}),
+		...(input.operations ? { operations: input.operations } : {}),
 		// System access never carries a static or shared Consumer installation.
 		...(input.connectionInstallation && !systemAccessMode
 			? {
