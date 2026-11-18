@@ -105,6 +105,7 @@ it("shows bounded database connection aggregates without returning session queri
 	expect(body.database?.active).toBeGreaterThan(0);
 	expect(body.database?.maxConnections).toBeGreaterThan(0);
 	expect(JSON.stringify(body.database)).not.toContain("select");
+	expect(body).toMatchObject({ quotas: [], quotaSource: "unavailable" });
 });
 
 it("separates unclaimed reserve budget from retained Session storage without changing charges", async () => {
@@ -206,6 +207,7 @@ it("keeps a measured zero and refuses an unverified Agent attribution", async ()
 			workloadRevision: null,
 			resourceFence: null,
 			ownership: "agent",
+			ownershipReason: null,
 			role: "sandbox",
 			nodeName: "node-1",
 			phase: "Running",
@@ -244,6 +246,7 @@ it("keeps a measured zero and refuses an unverified Agent attribution", async ()
 		{
 			uid: "unverified-pod-uid",
 			ownership: "unknown",
+			ownershipReason: "BINDING_UNAVAILABLE",
 			agentId: null,
 			sessionId: null,
 			usage: { cpuCores: 0, memoryBytes: 1024, storageBytes: null },
@@ -287,7 +290,8 @@ it("attributes retained storage only to the current bound PVC UID", async () => 
 		revision: 1,
 		workloadRevision: null,
 		resourceFence: 0,
-		ownership: "agent" as const,
+		ownership: "unknown" as const,
+		ownershipReason: "PVC_BINDING_UNAVAILABLE",
 		role: "sandbox" as const,
 		nodeName: null,
 		phase: "Bound",
@@ -328,6 +332,7 @@ it("attributes retained storage only to the current bound PVC UID", async () => 
 			uid: "current-pvc-uid",
 			agentId: "agent-1",
 			ownership: "agent",
+			ownershipReason: null,
 			retainedStorage: true,
 		},
 	]);
@@ -721,99 +726,139 @@ it("collects container samples while a cache source fails without counting execu
 	expect(JSON.stringify(body)).not.toContain("private cloud message");
 });
 
-it("classifies Pod placement from Node metadata and reports quota availability", async () => {
+it("requires stable Node identity and positive placement evidence", async () => {
 	const now = new Date().toISOString();
-	const nodes = [
-		{
-			metadata: {
-				name: "ecs-node",
-				uid: "ecs-node-uid",
-				resourceVersion: "1",
-			},
-		},
-		{
-			metadata: {
-				name: "eci-node",
-				uid: "eci-node-uid",
-				resourceVersion: "1",
-				labels: { "alibabacloud.com/eci": "true" },
-			},
-		},
-	];
-	const pods = ["ecs-node", "eci-node", "missing-node"].map(
-		(nodeName, index) => ({
-			metadata: {
-				name: `placement-pod-${index}`,
-				namespace: scope.namespace,
-				uid: `placement-pod-${index}-uid`,
-				resourceVersion: "1",
-			},
-			spec: {
-				nodeName,
-				containers: [{ name: "runtime", image: "runtime:fixture" }],
-			},
-			status: {
-				phase: "Running",
-				conditions: [{ type: "Ready", status: "True" }],
-			},
-		}),
-	);
-	const read = async (kind: string) => ({
-		items: kind === "nodes" ? nodes : kind === "pods" ? pods : [],
-		truncated: false,
+	const ecsLabels = { "node.kubernetes.io/instance-type": "ecs.g7.large" };
+	const eciLabels = { "alibabacloud.com/eci": "true" };
+	const node = (name: string, labels: Record<string, string> = {}) => ({
+		metadata: { name, uid: `${name}-uid`, labels },
 	});
-	const collect = (readOverride: typeof read = read) =>
+	const nodes = [
+		node("ecs-node", ecsLabels),
+		node("eci-node", eciLabels),
+		node("virtual-node", { type: "virtual-kubelet" }),
+		node("virtual-node-with-eci-instance", { type: "virtual-kubelet" }),
+		node("unlabeled-node"),
+		node("virtual-kubelet-name-only"),
+		node("conflicting-node", { ...ecsLabels, ...eciLabels }),
+		node("replaced-node", ecsLabels),
+	];
+	const pods = [
+		...nodes.map((entry) => entry.metadata.name),
+		"missing-node",
+	].map((nodeName) => ({
+		metadata: {
+			name: `pod-on-${nodeName}`,
+			namespace: scope.namespace,
+			uid: `pod-on-${nodeName}-uid`,
+			resourceVersion: "1",
+			...(nodeName === "virtual-node-with-eci-instance"
+				? { annotations: { "k8s.aliyun.com/eci-instance-id": "eci-fixture" } }
+				: {}),
+		},
+		spec: {
+			nodeName,
+			containers: [{ name: "runtime", image: "runtime:fixture" }],
+		},
+		status: {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		},
+	}));
+	let nodeReads = 0;
+	const snapshot = await collectOperationsSnapshotV2({
+		scope,
+		readCluster: true,
+		cacheOwner: "fixture-cache",
+		cacheInventoryLimit: 48,
+		bindings: [],
+		now: () => now,
+		read: async (kind) => {
+			if (kind === "nodes") {
+				const current =
+					++nodeReads === 1
+						? nodes
+						: nodes.map((entry) =>
+								entry.metadata.name === "replaced-node"
+									? { metadata: { ...entry.metadata, uid: "replacement-uid" } }
+									: entry,
+							);
+				return { items: current, truncated: false };
+			}
+			return { items: kind === "pods" ? pods : [], truncated: false };
+		},
+	});
+	expect(
+		Object.fromEntries(
+			snapshot.resources.map(({ nodeName, placement }) => [
+				nodeName,
+				placement,
+			]),
+		),
+	).toEqual({
+		"ecs-node": "ecs",
+		"eci-node": "eci",
+		"virtual-node": "unknown",
+		"virtual-node-with-eci-instance": "eci",
+		"unlabeled-node": "unknown",
+		"virtual-kubelet-name-only": "unknown",
+		"conflicting-node": "unknown",
+		"replaced-node": "unknown",
+		"missing-node": "unknown",
+	});
+});
+
+it("reports scoped quota rows and distinguishes empty and unavailable reads", async () => {
+	const collect = (
+		readQuotas: () => { items: unknown[]; truncated: boolean },
+	) =>
 		collectOperationsSnapshotV2({
 			scope,
-			readCluster: true,
+			readCluster: false,
 			cacheOwner: "fixture-cache",
 			cacheInventoryLimit: 48,
 			bindings: [],
-			now: () => now,
-			read: readOverride,
+			read: async (kind) =>
+				kind === "quotas" ? readQuotas() : { items: [], truncated: false },
 		});
-
-	const withoutQuota = await collect();
-	expect(withoutQuota.resources.map((resource) => resource.placement)).toEqual([
-		"ecs",
-		"eci",
-		"unknown",
-	]);
-	expect(withoutQuota.quotaSource).toBe("not-configured");
-	expect(OperationsResourcesV2Schema.parse(withoutQuota).quotaSource).toBe(
-		"not-configured",
-	);
-
-	const unavailable = await collect(async (kind) => {
-		if (kind === "quotas") throw new Error("quota backend unavailable");
-		return read(kind);
+	const withoutQuota = await collect(() => ({ items: [], truncated: false }));
+	expect(withoutQuota).toMatchObject({
+		quotas: [],
+		quotaSource: "not-configured",
 	});
-	expect(unavailable.quotaSource).toBe("unavailable");
-	expect(OperationsResourcesV2Schema.parse(unavailable).quotaSource).toBe(
-		"unavailable",
-	);
-
-	const configured = await collect(async (kind) => {
-		if (kind === "quotas")
-			return {
-				items: [
-					{
-						metadata: {
-							name: "platform-quota",
-							uid: "platform-quota-uid",
-							resourceVersion: "1",
-						},
-						status: { hard: { pods: "10" }, used: { pods: "2" } },
-					},
-				],
-				truncated: false,
-			};
-		return read(kind);
+	const unavailable = await collect(() => {
+		throw new Error("quota backend unavailable");
 	});
+	expect(unavailable).toMatchObject({ quotas: [], quotaSource: "unavailable" });
+	expect(await collect(() => ({ items: [], truncated: true }))).toMatchObject({
+		quotas: [],
+		quotaSource: "unavailable",
+	});
+	const quota = (namespace: string) => ({
+		metadata: { namespace, name: "platform-quota", uid: "platform-quota-uid" },
+		status: { hard: { pods: "10" }, used: { pods: "2" } },
+	});
+	const configured = await collect(() => ({
+		items: [quota(scope.namespace), quota("foreign-namespace")],
+		truncated: false,
+	}));
 	expect(configured.quotaSource).toBe("kubernetes-resourcequota");
-	expect(OperationsResourcesV2Schema.parse(configured).quotaSource).toBe(
-		"kubernetes-resourcequota",
-	);
+	expect(configured.quotas).toMatchObject([
+		{
+			namespace: scope.namespace,
+			source: "kubernetes-resourcequota",
+			values: [{ resource: "pods", unit: "count", hard: 10, used: 2 }],
+		},
+	]);
+	expect(
+		await collect(() => ({
+			items: [quota("foreign-namespace")],
+			truncated: false,
+		})),
+	).toMatchObject({
+		quotas: [],
+		quotaSource: "unavailable",
+	});
 });
 
 it("queries only verified historical Pod UIDs and does not turn backend failure into zero usage", async () => {

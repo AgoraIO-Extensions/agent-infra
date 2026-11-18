@@ -215,6 +215,7 @@ export async function collectOperationsSnapshotV2(input: {
 	snapshot.refreshSeconds = input.intervalSeconds ?? 30;
 	const loaded = new Map<OperationsReadKindV2, ObjectRecord[]>();
 	const failed = new Set<OperationsReadKindV2>();
+	let quotasTruncated = false;
 	const readKind = async (kind: OperationsReadKindV2) => {
 		if (
 			!input.readCluster &&
@@ -238,6 +239,7 @@ export async function collectOperationsSnapshotV2(input: {
 				entries.map((entry) => ({ ...entry, kind: objectKinds[kind] })),
 			);
 			failed.delete(kind);
+			if (kind === "quotas") quotasTruncated = result.truncated;
 			snapshot.truncated ||= result.truncated;
 		} catch {
 			loaded.delete(kind);
@@ -386,16 +388,33 @@ export async function collectOperationsSnapshotV2(input: {
 			name?.startsWith("virtual-kubelet") === true
 		);
 	};
-	const nodePlacements = new Map(
-		(loaded.get("nodes") ?? []).flatMap((node) => {
-			const name = text(metadata(node).name);
-			return name
-				? ([
-						[name, isVirtualNode(node) ? ("eci" as const) : ("ecs" as const)],
-					] as const)
-				: [];
-		}),
+	const placementFor = (node: ObjectRecord) => {
+		const labels = object(metadata(node).labels);
+		const ecs = /^ecs\.[a-z0-9]+\.[a-z0-9]+$/.test(
+			text(labels["node.kubernetes.io/instance-type"]) ??
+				text(labels["beta.kubernetes.io/instance-type"]) ??
+				"",
+		);
+		const eci = labels["alibabacloud.com/eci"] === "true";
+		if (labels["alibabacloud.com/acs"] === "true") return "unknown";
+		if (eci && !ecs) return "eci";
+		if (ecs && !isVirtualNode(node)) return "ecs";
+		if (!ecs && labels.type === "virtual-kubelet") return "virtual";
+		return "unknown";
+	};
+	const initialNodes = new Map(
+		(initial.get("nodes") ?? []).map((node) => [metadata(node).name, node]),
 	);
+	const nodePlacements = new Map<string, ReturnType<typeof placementFor>>();
+	for (const node of loaded.get("nodes") ?? []) {
+		const name = text(metadata(node).name);
+		const uid = text(metadata(node).uid);
+		const earlier = initialNodes.get(name);
+		if (!name || !uid || !earlier || metadata(earlier).uid !== uid) continue;
+		const placement = placementFor(node);
+		if (placementFor(earlier) === placement)
+			nodePlacements.set(name, placement);
+	}
 	const metrics = scoped("podMetrics");
 	const rawPods = scoped("pods");
 	for (const pod of rawPods) {
@@ -408,6 +427,11 @@ export async function collectOperationsSnapshotV2(input: {
 		if (!uid || !name || !version) continue;
 		const labels = object(meta.labels);
 		const annotations = object(meta.annotations);
+		const placement = nodePlacements.get(text(spec.nodeName) ?? "");
+		// ACK reports the allocated ECI instance on the Pod after scheduling.
+		const hasEciInstance = /^eci-[a-z0-9]+$/.test(
+			text(annotations["k8s.aliyun.com/eci-instance-id"]) ?? "",
+		);
 		const controller = controllerFor(pod);
 		let controlMeta = controller ? metadata(controller) : {};
 		let controlAnnotations = object(controlMeta.annotations);
@@ -642,7 +666,12 @@ export async function collectOperationsSnapshotV2(input: {
 			containers,
 			images: [...new Set(containers.map((container) => container.image))],
 			retainedStorage: false,
-			placement: nodePlacements.get(text(spec.nodeName) ?? "") ?? "unknown",
+			placement:
+				placement === "eci" || (placement === "virtual" && hasEciInstance)
+					? "eci"
+					: placement === "ecs" && !hasEciInstance
+						? "ecs"
+						: "unknown",
 			ownershipReason: agentId || sharedRole ? null : "BINDING_UNAVAILABLE",
 		});
 	}
@@ -708,7 +737,7 @@ export async function collectOperationsSnapshotV2(input: {
 			images: [],
 			retainedStorage: false,
 			placement: "unknown",
-			ownershipReason: "PVC_BINDING_UNAVAILABLE",
+			ownershipReason: uniqueOwner ? null : "PVC_BINDING_UNAVAILABLE",
 			...(uniqueOwner
 				? {
 						ownerUid: owner.ownerUid,
@@ -800,12 +829,6 @@ export async function collectOperationsSnapshotV2(input: {
 		"services",
 		"secrets",
 	] as const;
-	const quotaEntries = loaded.get("quotas");
-	snapshot.quotaSource = quotaEntries
-		? quotaEntries.length > 0
-			? "kubernetes-resourcequota"
-			: "not-configured"
-		: "unavailable";
 	for (const quota of scoped("quotas")) {
 		const meta = metadata(quota);
 		const status = object(quota.status);
@@ -839,6 +862,10 @@ export async function collectOperationsSnapshotV2(input: {
 			source: "kubernetes-resourcequota",
 		});
 	}
+	if (snapshot.quotas.length > 0)
+		snapshot.quotaSource = "kubernetes-resourcequota";
+	else if (loaded.get("quotas")?.length === 0 && !quotasTruncated)
+		snapshot.quotaSource = "not-configured";
 	for (const cache of loaded.get("imageCaches") ?? []) {
 		const meta = metadata(cache);
 		const status = object(cache.status);
