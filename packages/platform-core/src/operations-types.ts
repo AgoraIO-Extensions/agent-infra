@@ -73,6 +73,8 @@ export interface OperationsResourceObservationV2 {
 	}[];
 	images: string[];
 	retainedStorage: boolean;
+	placement?: "ecs" | "eci" | "unknown";
+	ownershipReason?: string | null;
 }
 export interface OperationsResourceSnapshotV2 {
 	schemaVersion: 2;
@@ -155,7 +157,9 @@ export interface OperationsResourceSnapshotV2 {
 			used: number | null;
 			hard: number;
 		}[];
+		source?: "kubernetes-resourcequota" | "not-configured" | "unavailable";
 	}[];
+	quotaSource?: "kubernetes-resourcequota" | "not-configured" | "unavailable";
 	budget: OperationsBudgetObservationV2 | null;
 	imageCaches: {
 		uid: string;

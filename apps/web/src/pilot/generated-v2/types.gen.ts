@@ -2099,10 +2099,12 @@ export type OperationsResourcesV2 = {
         outboxPending: number;
         waiting: number;
     } | null;
+    quotaSource?: 'kubernetes-resourcequota' | 'not-configured' | 'unavailable';
     quotas: Array<{
         name: string;
         namespace: string;
         observedAt: string;
+        source?: 'kubernetes-resourcequota' | 'not-configured' | 'unavailable';
         uid: string;
         values: Array<{
             hard: number;
@@ -2160,7 +2162,9 @@ export type OperationsResourcesV2 = {
         ownerGeneration: number | null;
         ownerUid: string | null;
         ownership: 'agent' | 'shared' | 'reserve' | 'unknown';
+        ownershipReason?: string | null;
         phase: string;
+        placement?: 'ecs' | 'eci' | 'unknown';
         ready: boolean | null;
         reason: string | null;
         requests: {
