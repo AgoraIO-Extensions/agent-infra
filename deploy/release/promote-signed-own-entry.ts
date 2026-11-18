@@ -35,9 +35,9 @@ type OriginRunMetadata = {
 	readonly status: string;
 	readonly conclusion: string;
 	readonly attempt: number;
-	readonly event?: string;
-	readonly headBranch?: string;
-	readonly workflowName?: string;
+	readonly event: string;
+	readonly headBranch: string;
+	readonly workflowName: string;
 };
 
 function hash(value: string) {
@@ -87,14 +87,19 @@ function parseReceipt(raw: string, source: string) {
 	return receipt.images.signedOwnEntry;
 }
 
-function validateOriginRun(metadata: OriginRunMetadata, originRunId: string, originAttempt: string) {
+export function validateOriginRun(
+	metadata: OriginRunMetadata,
+	originRunId: string,
+	originAttempt: string,
+) {
 	assert.equal(String(metadata.databaseId), originRunId);
+	assert.match(originAttempt, /^[1-9][0-9]{0,3}$/);
 	assert.equal(String(metadata.attempt), originAttempt);
 	assert.equal(metadata.status, "completed");
 	assert.equal(metadata.conclusion, "success");
-	if (metadata.event !== undefined) assert.equal(metadata.event, "workflow_dispatch");
-	if (metadata.headBranch !== undefined) assert.equal(metadata.headBranch, "main");
-	if (metadata.workflowName !== undefined) assert.equal(metadata.workflowName, "Publish signed own entry");
+	assert.equal(metadata.event, "workflow_dispatch");
+	assert.equal(metadata.headBranch, "main");
+	assert.equal(metadata.workflowName, "Publish signed own entry");
 }
 
 export async function promote(
@@ -116,7 +121,6 @@ export async function promote(
 	assert.equal(input.ref, "refs/heads/main", "Promotion workflow must run from main");
 	assert.match(input.workflowSha, sourcePattern, "Promotion workflow SHA is required");
 	assert.match(input.originRunId, /^[1-9][0-9]{0,19}$/);
-	assert.match(input.originAttempt, /^[1-9][0-9]{0,3}$/);
 	assert.match(input.runId, /^[1-9][0-9]{0,19}$/);
 	assert.match(input.attempt, /^[1-9][0-9]{0,3}$/);
 	assert.equal(input.attempt, "1", "Promotion reruns require a new normal scope; do not replay");

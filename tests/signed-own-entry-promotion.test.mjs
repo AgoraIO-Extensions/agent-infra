@@ -135,6 +135,41 @@ test("never overwrites or treats auth/transport failure as target absence", asyn
 	}
 });
 
+test("requires exact origin run identity fields before Registry access", async () => {
+	const { runMetadata } = fixture().input;
+	for (const [key, mismatch] of [
+		["event", "push"],
+		["headBranch", "feature"],
+		["workflowName", "Publish images"],
+	]) {
+		const missing = { ...runMetadata };
+		delete missing[key];
+		for (const metadata of [missing, { ...runMetadata, [key]: mismatch }]) {
+			const f = fixture({ runMetadata: metadata });
+			await assert.rejects(promote(f.input, f.command), {
+				code: "ERR_ASSERTION",
+			});
+			assert.equal(f.calls.length, 0);
+			assert.equal(f.records.length, 0);
+		}
+	}
+});
+
+test("does not copy when the exclusive COPY_STARTED intent cannot be recorded", async () => {
+	const f = fixture({
+		record: async (value, exclusive) => {
+			assert.equal(value.status, "COPY_STARTED");
+			assert.equal(exclusive, true);
+			throw new Error("intent already exists");
+		},
+	});
+	await assert.rejects(promote(f.input, f.command), /intent already exists/);
+	assert.equal(
+		f.calls.some((args) => args.includes("create")),
+		false,
+	);
+});
+
 test("rejects bad manifest, architecture, source label or runtime identity before copy", async () => {
 	for (const bad of [
 		null,

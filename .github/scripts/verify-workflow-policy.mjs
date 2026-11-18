@@ -339,6 +339,7 @@ export function validateWorkflowDocuments(workflows) {
     promotionCheckout?.with?.ref === "${{ github.sha }}" &&
     String(promotionSourceGuard?.run ?? "").includes('git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" origin/main') &&
     String(promotionOriginEvidence?.run ?? "").includes("gh run view") &&
+    String(promotionOriginEvidence?.run ?? "").includes("validateOriginRun(metadata, process.env.ORIGIN_RUN_ID, attempt)") &&
     String(promotionOriginEvidence?.run ?? "").includes("gh run download") &&
     promotionStepNames === "Validate promotion inputs,Checkout workflow source,Verify merged workflow and fixture sources,Set up Node.js,Verify promotion guards,Read official origin evidence,Set up Buildx,Log in to GHCR,Promote unchanged artifact,Preserve promotion receipt or unknown-copy intent" &&
     promotionRunText.includes("origin_run_id") &&
