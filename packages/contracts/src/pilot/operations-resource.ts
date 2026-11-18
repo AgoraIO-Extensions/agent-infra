@@ -141,6 +141,8 @@ export const OperationsResourceV2Schema = z.strictObject({
 	containers: z.array(OperationsContainerV2Schema).max(64),
 	images: z.array(image).max(64),
 	retainedStorage: z.boolean(),
+	placement: z.enum(["ecs", "eci", "unknown"]).optional(),
+	ownershipReason: safeReason.nullable().optional(),
 });
 export const OperationsAgentV2Schema = z.strictObject({
 	agentId: identifier,
@@ -201,6 +203,7 @@ export const OperationsQuotaV2Schema = z.strictObject({
 		)
 		.max(32),
 	observedAt: timestamp,
+	source: z.enum(["kubernetes-resourcequota", "not-configured", "unavailable"]).optional(),
 });
 export const OperationsImageCacheV2Schema = z.strictObject({
 	uid: identifier,

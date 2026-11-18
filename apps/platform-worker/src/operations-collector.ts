@@ -622,6 +622,8 @@ export async function collectOperationsSnapshotV2(input: {
 			containers,
 			images: [...new Set(containers.map((container) => container.image))],
 			retainedStorage: false,
+			placement: spec.nodeName?.startsWith("virtual-kubelet") ? "eci" : spec.nodeName ? "ecs" : "unknown",
+			ownershipReason: agentId || sharedRole ? null : "BINDING_UNAVAILABLE",
 		});
 	}
 	for (const volume of scoped("volumes")) {
@@ -685,6 +687,8 @@ export async function collectOperationsSnapshotV2(input: {
 			containers: [],
 			images: [],
 			retainedStorage: false,
+			placement: "unknown",
+			ownershipReason: "PVC_BINDING_UNAVAILABLE",
 			...(uniqueOwner
 				? {
 						ownerUid: owner.ownerUid,
@@ -810,6 +814,7 @@ export async function collectOperationsSnapshotV2(input: {
 							},
 						];
 			}),
+			source: "kubernetes-resourcequota",
 		});
 	}
 	for (const cache of loaded.get("imageCaches") ?? []) {
