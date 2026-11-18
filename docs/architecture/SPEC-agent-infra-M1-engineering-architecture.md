@@ -2448,6 +2448,12 @@ PKCE（S256）；既有获准 PAT/export 路线继续遵循 §13.5.3/§13.5.5，
 Consumer 的自动登记、Owner 手工关联与定向 OAuth 安装准备另见 §13.5.7；登记命令不复用本节
 的业务执行安装命令，也不要求先取得用户 Token。
 
+**MCP 客户端认证。** 本节的 Connection OAuth 用于原用户的 MCP 安装。
+Host 只为获准的原用户、Agent 和安装修订领取及使用 Connection 凭据。EP-1060 的定向登记
+和撤销见 §13.5.7。Connection 返回的外部系统授权链接指向其网站。平台只向原用户传递
+获准的链接，使用者在 Connection 完成外部账号连接及所需授权。Platform 的安装 callback
+只处理原 Connection OAuth 事务，不转交 Provider 回调、凭据或替用户确认 Grant。
+
 **实际安装绑定回读。** 对已预注册的 HTTPS public client，部署可显式选择 Connection
 [EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
 部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
@@ -2763,9 +2769,10 @@ Agent ID 且该 Consumer 当前可用。认证失败、Agent ID 不符或结果�
 密文，并封闭新的安装与业务调用。已签发的用户 token 仍由 Connection 管理，Platform 不宣称
 远端已撤销；手工关联的 Consumer 本身仍在 Connection 管理，Platform 不发送停用。
 手工关联以上述核实结果代替 Consumer 登记回执；逐 Agent profile、指纹、OAuth 准备、交付与
-用户授权和自动登记共用本节其余规则。Worker 只在把服务凭据物化到该 Agent 受保护 Host 的
-安装供应时解密，凭据不进入 env、argv 或工具进程；API/Worker 不用它调用 MCP、代理用户或
-做核实以外的查询。
+用户授权和自动登记共用本节其余规则。API 的只读核实属于平台与 Connection 鉴权。Worker
+只在把服务凭据物化到该 Agent 受保护 Host 的安装供应时解密。API 仅用该凭据核实关联，
+Worker 不持有明文执行 EP-1060。凭据不进入 env、argv、日志、模型或工具进程，不用于平台
+代理用户或调用 MCP。
 
 **三类绑定。** Consumer、OAuth client/实例与用户授权分别管理：
 
@@ -2835,6 +2842,14 @@ Agent/Consumer 隐藏部分成功；原模型、control 与只读恢复沿自身
 Consumer selector；Connection 验证它属于登记权限范围。client metadata、精确 HTTPS callback、
 resource、scope、回执与生命周期均须匹配批准合同，不靠更换 `client_name` 选择 Consumer，
 也不把固定产品 Consumer 的通用 DCR 当作新 Agent 登记。ACK 不回退为未经受控回传的 loopback。
+
+手工关联选择 Connection 已发布且获准的 EP-1060 路线时，由受保护 Host 使用该 Agent
+已核实 Consumer 的服务凭据执行登记、逐键回读和撤销。方法及路径固定为
+`POST /connection/v1/agents/{agentId}/oauth-clients` 和同一路径附带
+`/{registrationKey}` 的 `GET`、`DELETE`。Host 在受保护供应边界内解析凭据，
+将 Consumer、原用户、Agent、安装、关联修订和接入配置一起核对。Worker 只处理绑定的非秘密
+意图与回执。用户 OAuth 和外部系统授权仍分别沿 §13.5.6 和 Connection 的浏览器流程确认。
+
 已有合法预注册 client 的非秘密回执可以作为安装输入，不要求为接线另建登记接口；其真实
 Consumer、用户/安装粒度、精确回调和生命周期仍须核实，不能推测部署中是否已预置。
 
@@ -2861,7 +2876,11 @@ Runtime 仍经原安装接收器和受控重新装配消费；不热改 Thread �
 **生命周期与启用。** 创建重试复用原绑定；改名不改身份，展示信息更新使用原 Consumer 和
 服务端修订。停用 Agent 先沿平台原授权封闭新安装/业务动作，并在同一停用事务写入对应
 Consumer 停用意图；只有 Connection 的确定回执才能确认远端停用，不以本地停用、删文件或
-请求超时宣称凭据已撤销。重新安装或恢复不自动扩大 Grant，不用新 Consumer 代替未知旧状态。
+请求超时宣称凭据已撤销。手工关联替换或解除时，先按关联修订封闭旧安装和调用。
+远端逐安装撤销只认与原键及实例匹配的确定回执。HTTP 200 携带 `UNKNOWN`、丢失响应或
+原认证已失效时，持久保留原操作的 `unknown` 状态，交 Connection 负责人核实。保留的
+恢复记录只含非秘密操作事实，不延长旧凭据的保存或停用整个手工 Consumer。
+重新安装或恢复不自动扩大 Grant，不用新 Consumer 代替未知旧状态。
 既有已批准绑定的迁移须单独核实，不在服务启动时扫描重建所有 Consumer。
 
 **Consumer 停用。** 只有管理员 `disable_agent` 的已接受事务写入停用意图；停止、重启、创建失败、
