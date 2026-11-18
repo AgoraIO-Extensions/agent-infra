@@ -93,8 +93,21 @@ export function createDirectoryOrganizationResolverV1(
 					binding,
 					organizationIds: organizationIds.toSorted(),
 				};
-			} catch {
-				throw new DirectoryUnavailableError();
+			} catch (error) {
+				const timedOut =
+					error instanceof DirectoryUnavailableError &&
+					error.cause instanceof DOMException &&
+					error.cause.name === "TimeoutError";
+				throw new DirectoryUnavailableError(
+					timedOut
+						? {
+								cause: new DOMException(
+									"Directory snapshot deadline exceeded",
+									"TimeoutError",
+								),
+							}
+						: undefined,
+				);
 			}
 		},
 	};
