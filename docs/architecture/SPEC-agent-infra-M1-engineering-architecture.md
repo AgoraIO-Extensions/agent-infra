@@ -141,6 +141,23 @@ flowchart LR
 
 `platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作；除下述 `native_metadata_read` 例外外，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
 
+### 4.1.1 正式 Helm-native 部署单元
+
+生产的 Platform、Worker 和 Directory 组合由一个明确的 Helm-native 部署单元装配：namespace 与 Helm release
+均为 `agent-infra`。该单元的 chart 同时持有 Platform API 与 Worker 的配置 Secret；配置 Secret 的内容、引用和
+变更随 chart values/私有输入进入同一 release 记录，应用不再依赖 Helm 外的脚本对配置 Secret 做原地替换。
+数据库和 Directory 的迁移由同一 release 的启用 hooks 按既定顺序执行。
+
+该部署单元的安装和升级唯一使用 `helm upgrade --install agent-infra ... --namespace agent-infra --atomic --wait`，
+保持 Platform 与 Directory 的迁移 hooks 开启；不得通过 `--no-hooks`、`--post-renderer`、`--reuse-values`、
+临时 `--set` 或对 release 对象执行 `kubectl patch/replace` 绕过 chart。生产切换前使用独立验收 host，切换到
+生产 host 必须是具名 owner 窗口中的显式步骤，且以当前 cluster/namespace/release/source/CAS 回读为准。
+
+本部署单元与旧的 `agent-infra-d-ws-1103` lane 并行存在一段受控窗口。用户已确定 A1：切换不迁移旧 lane 的
+数据库、Agent、Session、消息、快照或 PVC；用户在新 lane 重新登录并重新创建资源。旧 lane 停用后保留 3–7 天，
+再由单独的下线决定处理，旧 namespace 的清理不属于新 lane 的升级或 rollback。Helm rollback 只恢复
+`agent-infra` release 自身的 revision、配置 Secret 和迁移状态，不接管、删除或回写旧 lane 的数据。
+
 仅 [§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 可使用受认证内部 HTTP，
 承载 API→Worker 的一次读取投递，以及 Host→Worker→承载原 Request 的 API 实例的在线当前确认。
 Worker 保持唯一证明签发与投递方；Host 不直接查询 Platform DB 或 IdentityAdapter。
@@ -3751,6 +3768,24 @@ CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke�
 - 数据库迁移使用独立 Job，先执行向后兼容迁移，再发布应用。
 - 环境配置只保存非敏感值；部署向 `platform-api` 注入版本化加密公钥、向 `platform-worker` 注入 Worker-only 解密 keyring，Secret 明文和私钥不进入 values、镜像或仓库。
 - Helm 的 in-cluster API 通过 API-only Secret references 只读交付私有配置模块及同目录辅助文件、独立代理令牌和可选受信 CA；第一方入口的必要引用缺失时拒绝渲染。API 不因此获得 Kubernetes API 权限或 Worker 解密材料；外置 API 由其部署方提供同一文件契约。
+
+#### 21.2.1 正式 lane 发布流程
+
+正式生产 lane 的 namespace/release、chart Secret 归属和迁移顺序遵循[§4.1.1 正式 Helm-native 部署单元](#411-正式-helm-native-部署单元)。
+部署 owner 从干净、source-bound 的 chart checkout 生成非敏感 values 与私有 Secret 文件，先完成目标 cluster、namespace
+标签、release/CAS、镜像 Digest、迁移历史和 hooks 的离线检查，再执行：
+
+```bash
+helm upgrade --install agent-infra ./agent-infra \
+  --namespace agent-infra --create-namespace \
+  -f agent-infra/values.yaml -f agent-infra/values-prod.yaml \
+  --atomic --wait --timeout 15m
+```
+
+生产迁移 hooks 必须保持启用；Platform 与 Directory 的迁移在应用 rollout 前按 chart 声明执行。升级失败由 Helm 的
+`--atomic` 恢复该 release 的上一版；owner 仍须回读 release、Pod、镜像、配置 Secret UID/RV 和迁移状态，不能把
+rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 release，旧 lane 停用后的 3–7 天保留窗口由单独的
+下线流程负责。任何需要生产 host、DNS、外部 Connection 或业务验收的步骤都属于现场 owner 门禁，不由源码 PR 代签。
 
 ### 21.3 本地开发
 
