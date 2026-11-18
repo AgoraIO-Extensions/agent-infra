@@ -12,7 +12,10 @@ import {
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
-import { createDirectoryClient } from "@agent-infra/enterprise-directory";
+import {
+	createDirectoryClient,
+	createSnapshot,
+} from "@agent-infra/enterprise-directory";
 import { resolveLdapPrincipal } from "@agent-infra/identity";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
@@ -48,6 +51,7 @@ import {
 	mergeProductionPlatformApiDeploymentPortsV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
+import { createDirectoryOrganizationAuthorityResolverV1 } from "./directory-authority.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import {
 	createPlatformApiShutdown,
@@ -2857,6 +2861,102 @@ describe("production API creation with user and application Tokens", () => {
 			expect(await effects()).toEqual([
 				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
 			]);
+		});
+
+		it("classifies a deployment Directory authority timeout at credential recheck", async () => {
+			const logs = captureLogs();
+			const now = Date.now();
+			const snapshot = createSnapshot({
+				rootDepartmentId: 1,
+				startedAt: now,
+				completedAt: now,
+				departments: [{ id: 1, parentId: 0, name: "Example" }],
+				members: [
+					{
+						userId: "owner",
+						email: "owner@example.test",
+						active: true,
+						departmentIds: [1],
+					},
+				],
+			});
+			let lookups = 0;
+			const organizationAuthority =
+				createDirectoryOrganizationAuthorityResolverV1({
+					endpoint: "https://directory.example.test/snapshot",
+					token: "synthetic-directory-token-".repeat(2),
+					timeoutMs: 100,
+					organizationIdForDepartment: () => "org-example",
+					fetch: async (_url, init) => {
+						if (++lookups !== 3) return Response.json(snapshot);
+						return new Promise<Response>((_resolve, reject) => {
+							init?.signal?.addEventListener(
+								"abort",
+								() => reject(new Error("relay-response-canary")),
+								{ once: true },
+							);
+						});
+					},
+				});
+			const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+				output: logs.output,
+				resolveUser: async (userId) => {
+					const current = await resolveLdapPrincipal(
+						{
+							uid: "synthetic-ldap-uid",
+							userId,
+							email: "owner@example.test",
+							displayName: "Synthetic Owner",
+							accountStatus: "active",
+							roles: ["employee"],
+							authorizationRevision: "current-api-user",
+						},
+						{
+							isPlatformDisabled: async () => false,
+							organizationIds: async () => {
+								throw new Error("Unexpected fallback organization lookup");
+							},
+							organizationAuthority,
+						},
+					);
+					return {
+						schemaVersion: current.schemaVersion,
+						userId: current.userId,
+						accountStatus: current.accountStatus,
+						organizationIds: current.organizationIds,
+						authorizationRevision: current.authorizationRevision,
+						...(current.directorySnapshotBinding
+							? { directorySnapshotBinding: current.directorySnapshotBinding }
+							: {}),
+					};
+				},
+			});
+			const response = await create(apiTokens.user);
+			expect(response.status).toBe(503);
+			const body = await response.text();
+			expect(body).not.toContain("relay-response-canary");
+			const { code, traceId } = JSON.parse(body) as {
+				code: string;
+				traceId: string;
+			};
+			expect(code).toBe("DEPENDENCY_UNAVAILABLE");
+			expect(relayFetch).not.toHaveBeenCalled();
+			expect(await effects()).toEqual([
+				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+			]);
+			expect(
+				logs
+					.read()
+					.find(
+						(record) =>
+							record.traceId === traceId &&
+							record.operationRef === stage("identity.credential_recheck") &&
+							record.outcome === "failed",
+					),
+			).toMatchObject({
+				termination: "timeout",
+				durationMs: expect.any(Number),
+			});
 		});
 
 		it.each([
