@@ -70,7 +70,14 @@ export class PostgresSessionWorkspaceReclamationStoreV1
    select a.session_generation::float8 as "sessionGeneration", a.resource_fence::float8 as "resourceFence", a.agent_id as "agentId", a.conversation_id as "sessionId", a.sandbox_id as "sandboxId", ch.namespace, a.resource_name as name, o.payload->'lifecycle' as lifecycle, a.resource_observation as observation
    from platform.session_sandbox_allocations a join platform.conversations c on c.id=a.conversation_id
    join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id
-   join platform.outbox_items o on o.scope_type='conversation' and o.scope_id=c.id and o.operation='conversation.sandbox.reconcile.v1'
+   join lateral (
+     select oi.payload
+     from platform.outbox_items oi
+     where oi.scope_type='conversation' and oi.scope_id=c.id and oi.operation='conversation.sandbox.reconcile.v1'
+       and oi.status='succeeded' and oi.lease_owner is null
+     order by oi.updated_at desc, oi.id desc
+     limit 1
+   ) o on true
    where (${sandboxId ?? null}::text is null or a.sandbox_id=${sandboxId ?? null})
    and ch.namespace=${this.policy.namespace} and not ch.released and ch.compute_released
    and a.resource_observation->>'status'='stopped'
@@ -78,12 +85,21 @@ export class PostgresSessionWorkspaceReclamationStoreV1
    and a.status='stopped' and a.desired_state='stopped' and c.status <> 'active'
    and not exists(select 1 from platform.conversation_generation_tombstones t where t.conversation_id=c.id and t.status='pending')
    and c.agent_id=a.agent_id and c.session_generation=a.session_generation
-   and o.status='succeeded' and o.lease_owner is null
-   and o.updated_at <= clock_timestamp()-(${this.policy.minimumStoppedMs}::bigint*interval '1 millisecond')
    and o.payload->'lifecycle'->'stopReceipt'->>'sandboxId'=a.sandbox_id
    and o.payload->'lifecycle'->'stopReceipt'->>'sessionId'=c.id
    and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration'=a.session_generation::text
    and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence'=a.resource_fence::text
+   and exists(
+     select 1
+     from platform.conversation_audit_events stopped_at
+     where stopped_at.conversation_id=c.id
+       and stopped_at.action='conversation.sandbox.observed'
+       and stopped_at.details->>'sandboxId'=a.sandbox_id
+       and stopped_at.details->>'sessionGeneration'=a.session_generation::text
+       and stopped_at.details->>'resourceFence'=a.resource_fence::text
+       and stopped_at.details->>'status'='stopped'
+       and stopped_at.occurred_at <= clock_timestamp()-(${this.policy.minimumStoppedMs}::bigint*interval '1 millisecond')
+   )
    and not exists(select 1 from platform.conversation_executions e where e.conversation_id=c.id and e.status not in ('completed','failed','cancelled'))
    and not exists(select 1 from platform.outbox_items pending where pending.scope_type='conversation' and pending.scope_id=c.id and pending.status not in ('succeeded','failed'))
    and not exists(select 1 from platform.audit_events j where j.target_id=c.id and j.action=${started})

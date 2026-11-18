@@ -22,6 +22,30 @@ node dist/sessionWorkspaceReclamation.mjs dry-run /private/retention-policy.json
 本命令不写 DB 或 Kubernetes；不列出缺少可核实 PVC 的对象。不要从空清单推断已回收。
 Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为受保护的 JSON 文件。
 
+### 候选清单的排除规则
+
+清单生成只读取当前 deployment policy、`session_sandbox_allocations`、停止审计、
+成功的当前 reconciliation intent 和 PVC metadata。SQL 以当前 sandbox 的唯一最新
+成功 intent 投影候选，停止资格使用不可变的 `conversation.sandbox.observed` 停止审计时间；
+不能用 outbox 的 `updated_at` 作为停止时间，也不能把多条历史 intent 拼成多个候选。
+每个候选仍需在同一 namespace 中匹配原 Agent、Session、Sandbox、generation、fence、
+PVC name、UID 和 resourceVersion。
+
+以下对象在本票中始终排除，且必须在 policy 的三个 retained 数组或内置保护规则中保留：
+
+- #2857 的 AC-7/AC-8 原样本，包括 `agent_api_031fb…` 及其 `cba6a0dd`、`a8dd585a`、
+  `6e5488d7` Sandbox/PVC 记录；
+- #3054、#3230、#4109 当前仍在使用的样本，包括 `agent_ade388…`、
+  `agent_a50d49bb…`、Sandbox `0e14bd4b` 以及 #4109 `cf533` 的原 PVC；
+- #4186 选定的 c549 Agent（完整 ID 由当前 control/Issue 回读提供）及其 data PVC、
+  原有 Sandbox/快照和两次 restart/recovery 历史；
+- #3874 合成 Agent（包括 `agent_api_fea4…`、`agent_api_bbbe…`）及负责人确认前的
+  任何合成样本。
+
+回读只输出候选的安全 metadata；遇到保留前缀、显式 retained ID、非 Session data PVC、
+缺停止审计、UID/RV 不全、同名替换或 owner/fence 不一致时直接排除并记录原因。清单为空、
+读失败或存在 UNKNOWN 都交回负责人确认，不能解释成“没有可回收对象”。
+
 ## 按显式 ID 执行
 
 ```bash

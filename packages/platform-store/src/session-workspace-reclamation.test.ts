@@ -117,8 +117,21 @@ beforeEach(async () => {
 	await sql`insert into platform.session_sandbox_resource_charges(sandbox_id,namespace,resources,compute_released) values(${sandboxId},${target.namespace},'{}',true)`;
 	await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
  values('reconcile','trace','request','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',now()-interval '2 minutes')`;
+	await sql`insert into platform.conversation_audit_events
+		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+		values('stopped-observed','session',null,'agent','user','conversation.sandbox.observed','trace-stop','request-stop',now()-interval '2 minutes',
+			${sql.json({ sandboxId, sessionGeneration: 1, resourceFence: 2, status: "stopped" })})`;
 });
 describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
+	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
+		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
+			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
+		const candidates = await store.candidates();
+		const { uid: _uid, resourceVersion: _resourceVersion, ...candidate } = target;
+		expect(candidates).toEqual([candidate]);
+		await sql`update platform.outbox_items set updated_at=clock_timestamp() where id='reconcile'`;
+		expect(await store.candidates()).toEqual([candidate]);
+	});
 	it("dry-run is read-only; deletes original conditional identity then releases/audits once, history unavailable", async () => {
 		let exists = true;
 		const deletions: unknown[] = [];
@@ -254,6 +267,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 			"OWNERSHIP",
 		);
 		await sql`update platform.outbox_items set updated_at=now()`;
+		await sql`update platform.conversation_audit_events set occurred_at=clock_timestamp() where id='stopped-observed'`;
 		expect(await store.candidates()).toEqual([]);
 	});
 	it("retains charge after unconfirmed delete and resumes original journal after process failure", async () => {
