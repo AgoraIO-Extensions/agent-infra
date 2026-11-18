@@ -278,7 +278,6 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 				step = "delivery";
 				await revalidate();
 				requestContext.beforeDelivery(revalidate);
-				logNativeMetadataHop("api.read", step, requestContext.traceId, "ok");
 				return response.projection;
 			} catch {
 				logNativeMetadataHop(

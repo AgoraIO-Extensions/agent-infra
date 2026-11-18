@@ -112,6 +112,8 @@ export function logNativeMetadataHop(
 	step:
 		| "scope"
 		| "registry"
+		| "authorization"
+		| "revalidation"
 		| "gateway"
 		| "delivery"
 		| "binding"

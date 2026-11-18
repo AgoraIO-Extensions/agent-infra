@@ -166,6 +166,14 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 			readonly apiRequestSourceRef: string;
 			readonly signal: AbortSignal;
 		}): Promise<NativeMetadataCurrentResponseV1> {
+			let step: "registry" | "authorization" | "revalidation" = "registry";
+			const log = (outcome: "ok" | "unavailable") =>
+				logNativeMetadataHop(
+					"api.current",
+					step,
+					input.request.traceId,
+					outcome,
+				);
 			let entry: RuntimeNativeMetadataRequestRegistryEntryV1 | undefined;
 			try {
 				entry = options.registry.lookup(
@@ -173,15 +181,11 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 					input.request,
 				);
 			} catch {
+				log("unavailable");
 				return { outcome: "unavailable" };
 			}
 			if (!entry) {
-				logNativeMetadataHop(
-					"api.current",
-					"registry",
-					input.request.traceId,
-					"unavailable",
-				);
+				log("unavailable");
 				return { outcome: "unavailable" };
 			}
 			const requestContext = entry.requestContext;
@@ -189,7 +193,9 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 			input.signal.addEventListener("abort", abort, { once: true });
 			try {
 				if (input.signal.aborted) throw new Error();
+				step = "revalidation";
 				const identity = await requestContext.run(() => entry.revalidate());
+				step = "authorization";
 				const decision = await requestContext.run(() =>
 					options.authorize(identity, {
 						schemaVersion: 1,
@@ -200,6 +206,7 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 				requestContext.assertCurrent();
 				if (decision.outcome !== "allowed") {
 					requestContext.close();
+					log("unavailable");
 					return {
 						outcome:
 							decision.outcome === "revoked" ? "denied" : decision.outcome,
@@ -212,26 +219,24 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 					authority.channelId !== entry.binding.scope.channelId
 				) {
 					requestContext.close();
+					log("unavailable");
 					return { outcome: "denied" };
 				}
 				requestContext.confirmPolicy(
 					authority,
 					entry.binding.scope.conversationId,
 				);
+				step = "revalidation";
 				await requestContext.run(() => entry.revalidate());
 				if (
 					options.registry.lookup(input.apiRequestSourceRef, input.request) !==
 					entry
 				)
 					throw new Error();
-				logNativeMetadataHop(
-					"api.current",
-					"registry",
-					input.request.traceId,
-					"ok",
-				);
+				log("ok");
 				return { outcome: "allowed", request: input.request };
 			} catch {
+				log("unavailable");
 				requestContext.close();
 				return { outcome: "unavailable" };
 			} finally {

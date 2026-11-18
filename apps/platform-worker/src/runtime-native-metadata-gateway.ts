@@ -156,6 +156,8 @@ async function boundedRequestBody(request: Request) {
 	return Buffer.concat(chunks, bytes).toString("utf8");
 }
 
+type HostCurrentRequest = ReturnType<typeof parseCurrentBody>;
+
 /** Coordinate one authenticated API → Worker → RuntimeHost metadata read. */
 export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 	readonly binding: WorkerRuntimeNativeMetadataBindingResolverV1;
@@ -170,7 +172,48 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 		typeof options.transport?.resolve !== "function"
 	)
 		throw new TypeError("Runtime native metadata gateway options are invalid");
+	// Only an active Host delivery can authorize a nested callback to the API.
+	const active = new Map<
+		string,
+		{
+			readonly binding: string;
+			readonly sourceRef: string;
+			readonly signal: AbortSignal;
+		}
+	>();
 	return {
+		async checkHostCurrent(
+			value: HostCurrentRequest,
+			callbackSignal: AbortSignal,
+		): Promise<NativeMetadataCurrentResponseV1> {
+			if (value.request.phase !== "read_metadata")
+				return { outcome: "unavailable" };
+			const { phase: _phase, ...binding } = value.request;
+			const entry = active.get(binding.readId);
+			if (
+				!entry ||
+				entry.sourceRef !== value.apiRequestSourceRef ||
+				entry.binding !==
+					runtimeNativeMetadataRequestSigningPayloadV1(binding) ||
+				binding.expiresAt <= Date.now() ||
+				entry.signal.aborted ||
+				callbackSignal.aborted
+			)
+				return { outcome: "unavailable" };
+			const signal = AbortSignal.any([entry.signal, callbackSignal]);
+			const result = await options.current.check({
+				request: value.request,
+				apiRequestSourceRef: entry.sourceRef,
+				signal,
+			});
+			if (
+				signal.aborted ||
+				active.get(binding.readId) !== entry ||
+				binding.expiresAt <= Date.now()
+			)
+				return { outcome: "unavailable" };
+			return result;
+		},
 		async read(
 			value: PlatformNativeMetadataReadRequestV1,
 			signal: AbortSignal,
@@ -215,18 +258,41 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 				});
 				if (signal.aborted || !transport) unavailable();
 				step = "host";
-				const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
-					await transport.read(
-						{
-							...parsedBinding,
-							...(request.apiRequestSourceRef
-								? { apiRequestSourceRef: request.apiRequestSourceRef }
-								: {}),
-							proof,
-						},
-						signal,
-					),
-				);
+				if (active.size >= 128 || active.has(parsedBinding.readId))
+					unavailable();
+				const remaining = parsedBinding.expiresAt - Date.now();
+				if (remaining <= 0) unavailable();
+				const delivery = new AbortController();
+				const deliverySignal = AbortSignal.any([
+					signal,
+					delivery.signal,
+					AbortSignal.timeout(remaining),
+				]);
+				const release = () => active.delete(parsedBinding.readId);
+				active.set(parsedBinding.readId, {
+					binding: runtimeNativeMetadataRequestSigningPayloadV1(parsedBinding),
+					sourceRef: request.apiRequestSourceRef,
+					signal: deliverySignal,
+				});
+				deliverySignal.addEventListener("abort", release, { once: true });
+				let response: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadResponseV1OrV2;
+				try {
+					deliverySignal.throwIfAborted();
+					response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
+						await transport.read(
+							{
+								...parsedBinding,
+								apiRequestSourceRef: request.apiRequestSourceRef,
+								proof,
+							},
+							deliverySignal,
+						),
+					);
+					deliverySignal.throwIfAborted();
+				} finally {
+					// The abort handler removes this entry and cancels any outstanding callback.
+					delivery.abort();
+				}
 				const { projection: _projection, ...responseBinding } = response;
 				if (
 					runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
@@ -261,12 +327,11 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 	readonly serviceToken: string;
 	readonly gateway: Pick<
 		ReturnType<typeof createWorkerRuntimeNativeMetadataGatewayV1>,
-		"read"
+		"read" | "checkHostCurrent"
 	>;
 	/** Store-backed resolver used only by the Runtime Host current callback. */
 	readonly binding?: WorkerRuntimeNativeMetadataBindingResolverV1;
 	readonly callbackCredential?: WorkerRuntimeNativeMetadataCallbackCredentialResolverV1;
-	readonly current?: WorkerRuntimeNativeMetadataCurrentCheckerV1;
 }) {
 	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
 		throw new TypeError("Runtime native metadata service token is invalid");
@@ -363,11 +428,7 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 			}
 			try {
 				if (path === currentPath) {
-					if (
-						!options.current ||
-						!options.binding ||
-						!options.callbackCredential
-					)
+					if (!options.binding || !options.callbackCredential)
 						return Response.json({ outcome: "unavailable" }, { status: 503 });
 					if (
 						!(await currentAuthorization({
@@ -383,13 +444,10 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 							{ code: "PLATFORM_WORKER_UNAUTHORIZED" },
 							{ status: 401 },
 						);
-					const current = await options.current.check({
-						request: (value as { request: NativeMetadataCurrentRequestV1 })
-							.request,
-						apiRequestSourceRef: (value as { apiRequestSourceRef: string })
-							.apiRequestSourceRef,
-						signal: request.signal,
-					});
+					const current = await options.gateway.checkHostCurrent(
+						value as HostCurrentRequest,
+						request.signal,
+					);
 					return Response.json(current, {
 						status: current.outcome === "denied" ? 403 : 200,
 					});

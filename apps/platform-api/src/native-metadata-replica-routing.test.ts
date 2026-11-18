@@ -1,12 +1,21 @@
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import type { RuntimeNativeMetadataBindingResponseV1 } from "@agent-infra/contracts/runtime";
 import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
+import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
+import {
+	createRuntimeNativeMetadataCurrentAssemblyV1,
+	createRuntimeNativeMetadataReadV1,
+} from "../../agent-runtime-host/src/native-metadata-assembly.js";
+import { createRuntimeNativeMetadataCurrentClientV1 } from "../../agent-runtime-host/src/native-metadata-current-client.js";
+import { createRuntimeNativeMetadataProofVerifierV1 } from "../../agent-runtime-host/src/native-metadata-proof.js";
+import { createWorkerRuntimeNativeMetadataClientV1 } from "../../platform-worker/src/runtime-native-metadata-client.js";
 import { createPlatformApiNativeMetadataCurrentClientV1 } from "../../platform-worker/src/runtime-native-metadata-current-client.js";
 import {
 	createWorkerRuntimeNativeMetadataGatewayAppV1,
 	createWorkerRuntimeNativeMetadataGatewayV1,
 } from "../../platform-worker/src/runtime-native-metadata-gateway.js";
+import { createWorkerRuntimeNativeMetadataProofIssuerV1 } from "../../platform-worker/src/runtime-native-metadata-proof.js";
 import { createNativeMetadataCurrentAppV1 } from "./http/native-metadata-current-routes.js";
 import { registerNativeMetadataRoutes } from "./http/native-metadata-routes.js";
 import {
@@ -36,13 +45,17 @@ const projection = {
 };
 
 function fixture(
-	mode: "service" | "replicas" | "replacement" | "restart" | "unreachable",
+	mode:
+		| "service"
+		| "replicas"
+		| "replacement"
+		| "restart"
+		| "unreachable"
+		| "wrong-source"
+		| "worker-restart",
 ) {
 	let binding: RuntimeNativeMetadataBindingResponseV1;
 	const destinations: string[] = [];
-	const target = vi.fn(async () => ({
-		read: async () => ({ ...binding, projection }),
-	}));
 	const currentApps: Hono[] = [];
 	const current = createPlatformApiNativeMetadataCurrentClientV1({
 		baseUrl:
@@ -104,21 +117,86 @@ function fixture(
 			return app.fetch(new Request(String(input), init));
 		},
 	});
-	const gateway = createWorkerRuntimeNativeMetadataGatewayAppV1({
-		serviceToken,
-		gateway: createWorkerRuntimeNativeMetadataGatewayV1({
-			binding: { resolve: async () => binding },
-			current,
-			proofIssuer: {
-				issue: async () => ({
-					schemaVersion: 1,
-					format: "native-metadata-jws",
-					token: "fixture-proof",
-				}),
-			},
-			transport: { resolve: target },
-		}),
+	const sandboxToken = "fixture-native-metadata-sandbox-token";
+	const proofIdentity = {
+		issuer: "test",
+		workerId: "worker",
+		keyVersion: "key",
+	};
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const verifyProof = createRuntimeNativeMetadataProofVerifierV1({
+		...proofIdentity,
+		publicKey,
+	}).verify;
+	const nestedDestinations: string[][] = [];
+	const driver = vi.fn(
+		async (
+			...[, context]: Parameters<
+				import("@agent-infra/agent-runtime").RuntimeHost["readNativeMetadataV1"]
+			>
+		) => {
+			await context.revalidate();
+			return { ...binding, selector: projection.selector, projection };
+		},
+	);
+	const hostCurrent = createRuntimeNativeMetadataCurrentClientV1({
+		baseUrl: "http://test-worker",
+		serviceToken: sandboxToken,
+		fetch: async (input, init) => {
+			const start = destinations.length;
+			const envelope = JSON.parse(String(init?.body));
+			if (mode === "wrong-source")
+				envelope.apiRequestSourceRef = `${uid[1]}.${randomUUID()}`;
+			const worker = mode === "worker-restart" ? makeGateway() : gateway;
+			const result = await worker.fetch(
+				new Request(String(input), { ...init, body: JSON.stringify(envelope) }),
+			);
+			nestedDestinations.push(destinations.slice(start));
+			return result;
+		},
 	});
+	const host = createRuntimeHostApp({
+		host: {} as never,
+		serviceToken: sandboxToken,
+		verifyGrant: async () => {
+			throw new Error("unexpected execution grant");
+		},
+		nativeMetadataRead: createRuntimeNativeMetadataReadV1(
+			{ readNativeMetadataV1: driver },
+			createRuntimeNativeMetadataCurrentAssemblyV1({
+				current: hostCurrent,
+				resolveNativeSessionRef: async () => "fixture-native-session",
+				verifyProof,
+			}),
+		),
+	});
+	const target = vi.fn(async () =>
+		createWorkerRuntimeNativeMetadataClientV1({
+			baseUrl: "http://test-host",
+			serviceToken: sandboxToken,
+			fetch: async (input, init) =>
+				host.fetch(new Request(String(input), init)),
+		}),
+	);
+	const resolve = async () => binding;
+	const makeGateway = () =>
+		createWorkerRuntimeNativeMetadataGatewayAppV1({
+			serviceToken,
+			binding: { resolve },
+			callbackCredential: {
+				resolve: async () => ({ kind: "sandbox", token: sandboxToken }),
+			},
+			gateway: createWorkerRuntimeNativeMetadataGatewayV1({
+				binding: { resolve },
+				current,
+				proofIssuer: createWorkerRuntimeNativeMetadataProofIssuerV1({
+					...proofIdentity,
+					privateKey,
+				}),
+				transport: { resolve: target },
+			}),
+		});
+	const gateway = makeGateway();
 	const publicApps = uid.map((instanceUid) => {
 		const registry = createRuntimeNativeMetadataRequestRegistryV1({
 			instanceUid: mode === "service" ? undefined : instanceUid,
@@ -185,6 +263,8 @@ function fixture(
 	return {
 		target,
 		destinations,
+		nestedDestinations,
+		driver,
 		request: (index: number) =>
 			publicApps[index]?.request(
 				"/api/v2/conversations/conversation/executions/execution/native-metadata?selector=skills",
@@ -200,13 +280,15 @@ it("reproduces registry miss when Service routes the original API A request to A
 });
 
 it.each([0, 1])(
-	"routes both current checks to the API replica %s that owns the live request",
+	"routes Worker and nested Host current checks to the API replica %s that owns the live request",
 	async (index) => {
 		const f = fixture("replicas");
 		const response = await f.request(index);
 		expect(response?.status).toBe(200);
 		expect(await response?.json()).toEqual(projection);
-		expect(f.destinations).toEqual([ips[index], ips[index]]);
+		expect(f.destinations).toEqual(Array(4).fill(ips[index]));
+		expect(f.nestedDestinations).toEqual([[ips[index]], [ips[index]]]);
+		expect(f.driver).toHaveBeenCalledOnce();
 		expect(f.target).toHaveBeenCalledOnce();
 	},
 );
@@ -218,5 +300,17 @@ it.each(["replacement", "restart", "unreachable"] as const)(
 		expect((await f.request(0))?.status).toBe(503);
 		expect(f.destinations).toEqual(mode === "replacement" ? [] : [ips[0]]);
 		expect(f.target).not.toHaveBeenCalled();
+	},
+);
+
+it.each(["wrong-source", "worker-restart"] as const)(
+	"rejects a nested Host callback after %s without any outbound API request for that callback",
+	async (mode) => {
+		const f = fixture(mode);
+		expect((await f.request(0))?.status).toBe(503);
+		expect(f.target).toHaveBeenCalledOnce();
+		expect(f.driver).not.toHaveBeenCalled();
+		expect(f.nestedDestinations).toEqual([[]]);
+		expect(f.destinations).toEqual([ips[0]]);
 	},
 );

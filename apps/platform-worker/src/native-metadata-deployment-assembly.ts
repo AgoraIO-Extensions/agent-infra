@@ -458,7 +458,6 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 				serviceToken: options.serviceToken,
 				gateway,
 				...(callbackCredential ? { binding, callbackCredential } : {}),
-				current,
 			}),
 			...(options.ports.port === undefined ? {} : { port: options.ports.port }),
 			...(defaultQuery ? { close: () => defaultQuery.close() } : {}),
