@@ -1,4 +1,16 @@
+import { createHash } from "node:crypto";
 import postgres from "./observed-postgres.js";
+
+const registrationKeyHashDomain =
+	"agent-infra/connection-machine-registration-key/v1\0";
+
+/** Domain-separated SHA-256. The key is already high-entropy, so no stored salt is needed. */
+export function connectionMachineRegistrationKeyHashV1(key: string): string {
+	return createHash("sha256")
+		.update(registrationKeyHashDomain, "utf8")
+		.update(key, "utf8")
+		.digest("hex");
+}
 
 export interface ConnectionMachineClientBindingV1 {
 	readonly clientId: string;
@@ -16,7 +28,7 @@ type Row = {
 	profile_fingerprint: string;
 	source_ref: string;
 	source_revision: string;
-	registration_key: string | null;
+	registration_key_hash: string | null;
 };
 
 /**
@@ -34,16 +46,32 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 	async load(
 		agentId: string,
 		associationRevision?: number,
+		registrationKey?: string,
 	): Promise<ConnectionMachineClientBindingV1 | undefined> {
-		const [row] = await this.#client<Row[]>`
+		const registrationKeyHash = registrationKey
+			? connectionMachineRegistrationKeyHashV1(registrationKey)
+			: undefined;
+		const rows = registrationKeyHash
+			? await this.#client<Row[]>`
+				select binding.agent_id, binding.association_revision, binding.client_id, binding.callback_url,
+					binding.profile_fingerprint, binding.source_ref, binding.source_revision, binding.registration_key_hash
+				from platform.connection_machine_client_bindings as binding
+				inner join platform.connection_manual_associations as association
+					on association.agent_id = binding.agent_id
+					and association.association_revision = binding.association_revision
+				where binding.agent_id = ${agentId}
+					and binding.registration_key_hash = ${registrationKeyHash}
+			`
+			: await this.#client<Row[]>`
 			select binding.agent_id, binding.association_revision, binding.client_id, binding.callback_url,
-				binding.profile_fingerprint, binding.source_ref, binding.source_revision, binding.registration_key
+				binding.profile_fingerprint, binding.source_ref, binding.source_revision, binding.registration_key_hash
 			from platform.connection_machine_client_bindings as binding
 			inner join platform.connection_manual_associations as association
 				on association.agent_id = binding.agent_id
 				and association.association_revision = binding.association_revision
 			where binding.agent_id = ${agentId}
 		`;
+		const [row] = rows;
 		if (
 			!row ||
 			(associationRevision !== undefined &&
@@ -73,11 +101,11 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 			await sql`
 				insert into platform.connection_machine_client_bindings (
 					agent_id, association_revision, client_id, callback_url,
-					profile_fingerprint, source_ref, source_revision, registration_key
+					profile_fingerprint, source_ref, source_revision, registration_key_hash
 				) values (
 					${agentId}, ${associationRevision}, ${binding.clientId}, ${binding.callbackUrl},
 					${binding.profileFingerprint}, ${binding.source.ref}, ${binding.source.revision},
-					${binding.registrationKey ?? null}
+					${binding.registrationKey === undefined ? null : connectionMachineRegistrationKeyHashV1(binding.registrationKey)}
 				)
 				on conflict (agent_id) do update set
 					association_revision = excluded.association_revision,
@@ -86,7 +114,7 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 					profile_fingerprint = excluded.profile_fingerprint,
 					source_ref = excluded.source_ref,
 					source_revision = excluded.source_revision,
-					registration_key = excluded.registration_key,
+					registration_key_hash = excluded.registration_key_hash,
 					updated_at = now()
 			`;
 		});
@@ -103,6 +131,5 @@ function toBinding(row: Row): ConnectionMachineClientBindingV1 {
 		callbackUrl: row.callback_url,
 		profileFingerprint: row.profile_fingerprint,
 		source: { ref: row.source_ref, revision: row.source_revision },
-		...(row.registration_key ? { registrationKey: row.registration_key } : {}),
 	};
 }

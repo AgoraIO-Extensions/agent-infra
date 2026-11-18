@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import {
+	connectionMachineRegistrationKeyHashV1,
 	PostgresConnectionMachineClientBindingStoreV1,
 	type ConnectionMachineClientBindingV1,
 } from "./connection-machine-client-bindings.js";
@@ -59,10 +60,18 @@ const binding: ConnectionMachineClientBindingV1 = {
 
 it("persists a non-secret binding and reads it only for the matching association revision", async () => {
 	await store.persist("agent-a", binding, 1);
-	expect(await store.load("agent-a", 1)).toEqual(binding);
+	expect(await store.load("agent-a", 1, binding.registrationKey)).toEqual({
+		clientId: binding.clientId,
+		callbackUrl: binding.callbackUrl,
+		profileFingerprint: binding.profileFingerprint,
+		source: binding.source,
+	});
+	expect(
+		await store.load("agent-a", 1, "agent-a-install-wrong"),
+	).toBeUndefined();
 	expect(await store.load("agent-a", 2)).toBeUndefined();
 	const rows = await sql`
-		select client_id, callback_url, profile_fingerprint, source_ref, source_revision, registration_key
+		select client_id, callback_url, profile_fingerprint, source_ref, source_revision, registration_key_hash
 		from platform.connection_machine_client_bindings
 	`;
 	expect(rows).toEqual([
@@ -72,10 +81,11 @@ it("persists a non-secret binding and reads it only for the matching association
 			profile_fingerprint: binding.profileFingerprint,
 			source_ref: binding.source.ref,
 			source_revision: binding.source.revision,
-			registration_key: binding.registrationKey,
+			registration_key_hash: connectionMachineRegistrationKeyHashV1(binding.registrationKey!),
 		},
 	]);
 	expect(JSON.stringify(rows)).not.toContain("conn_consumer_");
+	expect(JSON.stringify(rows)).not.toContain(binding.registrationKey!);
 });
 
 it("replaces a binding only after the association revision advances and rejects cross-Agent client reuse", async () => {
@@ -98,7 +108,16 @@ it("replaces a binding only after the association revision advances and rejects 
 	};
 	await store.persist("agent-a", replacement, 2);
 	expect(await store.load("agent-a", 1)).toBeUndefined();
-	expect(await store.load("agent-a", 2)).toEqual(replacement);
+	expect(await store.load("agent-a", 2, replacement.registrationKey)).toEqual({
+		clientId: replacement.clientId,
+		callbackUrl: replacement.callbackUrl,
+		profileFingerprint: replacement.profileFingerprint,
+		source: replacement.source,
+	});
+	// A different Owner/Agent cannot read Agent A's binding by using Agent B's key.
+	expect(
+		await store.load("agent-b", 1, replacement.registrationKey),
+	).toBeUndefined();
 	await expect(
 		store.persist(
 			"agent-b",

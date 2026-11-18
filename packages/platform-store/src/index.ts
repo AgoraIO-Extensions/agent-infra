@@ -90,6 +90,7 @@ export {
 	PostgresConnectionManualAssociationReaderV1,
 } from "./connection-manual-association-reader.js";
 export {
+	connectionMachineRegistrationKeyHashV1,
 	type ConnectionMachineClientBindingV1,
 	PostgresConnectionMachineClientBindingStoreV1,
 } from "./connection-machine-client-bindings.js";

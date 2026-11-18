@@ -27,6 +27,7 @@ export interface ConnectionMachineClientBindingStoreV1 {
 	load(
 		agentId: string,
 		associationRevision?: number,
+		registrationKey?: string,
 	): Promise<ConnectionConsumerOAuthClientBindingV1 | undefined>;
 	persist(
 		agentId: string,
@@ -147,6 +148,7 @@ export function createOwnerConnectionBindingsResolverV1(
 						options.machineClientBindings.load(
 							row.agentId,
 							row.associationRevision,
+							`${row.agentId}-association-${row.associationRevision}`,
 						),
 					persistOAuthClientBindingForAgent: (agentId, binding) =>
 						options.machineClientBindings.persist(

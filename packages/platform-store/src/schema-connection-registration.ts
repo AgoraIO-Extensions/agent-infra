@@ -269,7 +269,7 @@ export const connectionMachineClientBindings = platformSchema.table(
 		}).notNull(),
 		sourceRef: text("source_ref").notNull(),
 		sourceRevision: varchar("source_revision", { length: 128 }).notNull(),
-		registrationKey: varchar("registration_key", { length: 128 }),
+		registrationKeyHash: varchar("registration_key_hash", { length: 64 }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -281,8 +281,8 @@ export const connectionMachineClientBindings = platformSchema.table(
 		uniqueIndex("connection_machine_client_binding_client_unique").on(
 			table.clientId,
 		),
-		uniqueIndex("connection_machine_client_binding_registration_unique").on(
-			table.registrationKey,
+		uniqueIndex("connection_machine_client_binding_registration_hash_unique").on(
+			table.registrationKeyHash,
 		),
 		check(
 			"connection_machine_client_binding_identity",
@@ -290,7 +290,7 @@ export const connectionMachineClientBindings = platformSchema.table(
 				and ${table.clientId} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
 				and ${table.profileFingerprint} ~ '^[a-f0-9]{64}$'
 				and ${table.sourceRevision} <> ''
-				and (${table.registrationKey} is null or ${table.registrationKey} ~ '^[A-Za-z0-9][A-Za-z0-9._~-]{7,127}$')`,
+				and (${table.registrationKeyHash} is null or ${table.registrationKeyHash} ~ '^[a-f0-9]{64}$')`,
 		),
 	],
 );

@@ -1,5 +1,5 @@
 {
-  "id": "7e077bf2-8d7d-4daa-a6c8-a9763ea37499",
+  "id": "cd7633c5-905e-4a8a-9aa5-2508c73395de",
   "prevId": "48ca5993-3992-472c-a248-a26c6262128f",
   "version": "7",
   "dialect": "postgresql",
@@ -2095,9 +2095,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "registration_key": {
-          "name": "registration_key",
-          "type": "varchar(128)",
+        "registration_key_hash": {
+          "name": "registration_key_hash",
+          "type": "varchar(64)",
           "primaryKey": false,
           "notNull": false
         },
@@ -2132,11 +2132,11 @@
           "method": "btree",
           "with": {}
         },
-        "connection_machine_client_binding_registration_unique": {
-          "name": "connection_machine_client_binding_registration_unique",
+        "connection_machine_client_binding_registration_hash_unique": {
+          "name": "connection_machine_client_binding_registration_hash_unique",
           "columns": [
             {
-              "expression": "registration_key",
+              "expression": "registration_key_hash",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2170,7 +2170,7 @@
       "checkConstraints": {
         "connection_machine_client_binding_identity": {
           "name": "connection_machine_client_binding_identity",
-          "value": "\"platform\".\"connection_machine_client_bindings\".\"association_revision\" between 1 and 9007199254740991\n\t\t\t\tand \"platform\".\"connection_machine_client_bindings\".\"client_id\" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'\n\t\t\t\tand \"platform\".\"connection_machine_client_bindings\".\"profile_fingerprint\" ~ '^[a-f0-9]{64}$'\n\t\t\t\tand \"platform\".\"connection_machine_client_bindings\".\"source_revision\" <> ''\n\t\t\t\tand (\"platform\".\"connection_machine_client_bindings\".\"registration_key\" is null or \"platform\".\"connection_machine_client_bindings\".\"registration_key\" ~ '^[A-Za-z0-9][A-Za-z0-9._~-]{7,127}$')"
+          "value": "\"platform\".\"connection_machine_client_bindings\".\"association_revision\" between 1 and 9007199254740991\n\t\t\t\tand \"platform\".\"connection_machine_client_bindings\".\"client_id\" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'\n\t\t\t\tand \"platform\".\"connection_machine_client_bindings\".\"profile_fingerprint\" ~ '^[a-f0-9]{64}$'\n\t\t\t\tand \"platform\".\"connection_machine_client_bindings\".\"source_revision\" <> ''\n\t\t\t\tand (\"platform\".\"connection_machine_client_bindings\".\"registration_key_hash\" is null or \"platform\".\"connection_machine_client_bindings\".\"registration_key_hash\" ~ '^[a-f0-9]{64}$')"
         }
       },
       "isRLSEnabled": false
