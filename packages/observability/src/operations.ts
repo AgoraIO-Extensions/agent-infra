@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
@@ -16,6 +17,7 @@ export interface OperationsConfigurationV2 {
 	readonly prometheus?: {
 		endpoint: string;
 		tokenFile?: string;
+		basicAuthFile?: string;
 		detailDays: number;
 		aggregateDays: number;
 		aggregateStepSeconds: number;
@@ -156,6 +158,7 @@ export async function readOperationsConfigurationV2(
 			keys(prometheus, [
 				"endpoint",
 				"tokenFile",
+				"basicAuthFile",
 				"detailDays",
 				"aggregateDays",
 				"aggregateStepSeconds",
@@ -172,7 +175,16 @@ export async function readOperationsConfigurationV2(
 			prometheus?.tokenFile === undefined
 				? undefined
 				: text(prometheus.tokenFile, 1024);
-		if (tokenFile && !isAbsolute(tokenFile)) throw new Error();
+		const basicAuthFile =
+			prometheus?.basicAuthFile === undefined
+				? undefined
+				: text(prometheus.basicAuthFile, 1024);
+		if (
+			(tokenFile && !isAbsolute(tokenFile)) ||
+			(basicAuthFile && !isAbsolute(basicAuthFile)) ||
+			(tokenFile && basicAuthFile)
+		)
+			throw new Error();
 		const link = (entry: unknown) => {
 			const source = record(entry);
 			keys(source, ["url", "retentionDays"]);
@@ -196,6 +208,7 @@ export async function readOperationsConfigurationV2(
 						prometheus: {
 							endpoint,
 							...(tokenFile ? { tokenFile } : {}),
+							...(basicAuthFile ? { basicAuthFile } : {}),
 							detailDays: integer(prometheus.detailDays, 7, 0, 365),
 							aggregateDays: integer(prometheus.aggregateDays, 30, 0, 365),
 							aggregateStepSeconds: integer(
@@ -236,6 +249,37 @@ export async function queryOperationsPrometheusV2(
 	}
 	try {
 		const headers: Record<string, string> = { Accept: "application/json" };
+		if (configuration.tokenFile && configuration.basicAuthFile)
+			throw new Error();
+		if (configuration.basicAuthFile) {
+			const maximumBytes = 16 * 1024;
+			const chunks: Buffer[] = [];
+			let length = 0;
+			const stream = createReadStream(configuration.basicAuthFile, {
+				start: 0,
+				end: maximumBytes,
+				highWaterMark: maximumBytes + 1,
+				signal: input.signal,
+			});
+			for await (const chunk of stream) {
+				length += chunk.length;
+				if (length > maximumBytes) throw new Error();
+				chunks.push(chunk);
+			}
+			const credentials = record(
+				JSON.parse(Buffer.concat(chunks).toString("utf8")),
+			);
+			keys(credentials, ["username", "password"]);
+			const username = text(credentials.username, 256);
+			const password = text(credentials.password, 8192);
+			if (username.includes(":") || /\p{Cc}/u.test(username + password))
+				throw new Error();
+			const encoded = Buffer.from(`${username}:${password}`, "utf8").toString(
+				"base64",
+			);
+			if (encoded.length > 8192) throw new Error();
+			headers.Authorization = `Basic ${encoded}`;
+		}
 		if (configuration.tokenFile) {
 			const token = (await readFile(configuration.tokenFile, "utf8")).trim();
 			if (!token || token.length > 8192 || /\s/.test(token)) throw new Error();

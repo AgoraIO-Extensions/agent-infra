@@ -66,9 +66,15 @@ Chart 默认配额或过往环境状态代签。ECI 虚拟节点的百分比不�
 ```
 
 `endpoint` 是实例的 HTTP API 基址；只使用 `query`/`query_range`，不是 OTLP 接收地址。
-当前客户端支持服务端 Bearer token 文件或已经获准的无额外认证查询入口，禁止内联凭据、
-带凭据 URL 和重定向。需要其他云认证方式的实例须由部署提供相应的获准查询接入；不能借
-Kubernetes 权限代替云查询授权。原始凭据不进入 API 投影、日志或错误。
+客户端支持服务端 Bearer token 文件、Basic auth 文件或已经获准的无额外认证查询入口，禁止
+内联凭据、带凭据 URL 和重定向。`tokenFile` 与 `basicAuthFile` 互斥，均须为绝对路径。
+ARMS Prometheus V2 使用 Basic auth，部署将 `tokenFile` 替换为
+`"basicAuthFile": "/var/run/agent-infra/operations/prometheus-credentials.json"`。
+该凭据文件上限为 16 KiB，是只含 `username`、`password` 的 JSON，分别提供获准的只读 AccessKey ID 和 Secret；
+使用 STS 时按[官方 HTTP API](https://help.aliyun.com/zh/prometheus/user-guide/http-api-urls)
+要求组合 Secret 与 STS Token。配置中只记录文件路径，原始凭据只通过部署批准的服务端只读挂载提供，
+不进入 API 投影、日志或错误。新增凭据文件必须由正式配置发布路径批准，不能借 Kubernetes
+权限代替云查询授权或将凭据放进 Helm values。
 
 历史查询固定 namespace 和指标集合，不接受客户端 PromQL。Agent/Session 历史按采集时验证并
 保存的 Pod UID 与 `kube_pod_info` 关联；UID 不匹配和未被本采集器观察过的时间不冒充该 Agent
