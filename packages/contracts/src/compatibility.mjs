@@ -7426,6 +7426,9 @@ function normalizeSkillHubProjectRecovery4109(previous, current) {
 
 // #4178: pin the two administrator reads and their bounded response contracts.
 // Strip only this reviewed addition before independent historical compatibility checks.
+// #4201 adds optional placement, ownership-reason, and quota-source fields to
+// the existing response schema. The previous artifact may contain the original
+// #4178 schema while the current artifact must contain the reviewed #4201 schema.
 function normalizeOperations4178(previous, current) {
 	const paths = ["/api/v2/ops/history", "/api/v2/ops/resources"];
 	const schemas = ["OperationsHistoryV2", "OperationsResourcesV2"];
@@ -7438,15 +7441,29 @@ function normalizeOperations4178(previous, current) {
 			(entry) => entry !== undefined,
 		);
 	if (!present(previous) && !present(current)) return { previous, current };
-	const matches = (value) =>
+	const matches = (value, hash) =>
 		value.openapi === "3.1.0" &&
 		value.info?.title === "Agent Infra Pilot Browser Audit API" &&
 		value.info?.version === "2.0.0" &&
 		createHash("sha256")
 			.update(JSON.stringify(selected(value)))
-			.digest("hex") ===
-			"121322d89a2faea2ff2d59d468695c0af2e8cbf32942c77db5be00599faadb9c";
-	if (!matches(current) || (present(previous) && !matches(previous)))
+			.digest("hex") === hash;
+	const previousMatches = (value) =>
+		matches(
+			value,
+			"121322d89a2faea2ff2d59d468695c0af2e8cbf32942c77db5be00599faadb9c",
+		) ||
+		matches(
+			value,
+			"8fc45f4384b35dcf0e0c05332994fd604dfbae825b94859e54d11eee83a9653e",
+		);
+	if (
+		!matches(
+			current,
+			"8fc45f4384b35dcf0e0c05332994fd604dfbae825b94859e54d11eee83a9653e",
+		) ||
+		(present(previous) && !previousMatches(previous))
+	)
 		return { invalid: true };
 	const strip = (value) => {
 		const result = {
