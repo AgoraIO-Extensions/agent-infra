@@ -17,8 +17,13 @@ export interface ConnectionMachineClientBindingV1 {
 	readonly callbackUrl: string;
 	readonly profileFingerprint: string;
 	readonly source: { readonly ref: string; readonly revision: string };
-	readonly registrationKey?: string;
+	readonly registrationKey: string;
 }
+
+export type ConnectionMachineClientBindingRecordV1 = Omit<
+	ConnectionMachineClientBindingV1,
+	"registrationKey"
+>;
 
 type Row = {
 	agent_id: string;
@@ -47,11 +52,11 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 		agentId: string,
 		associationRevision: number,
 		registrationKey: string,
-	): Promise<ConnectionMachineClientBindingV1 | undefined> {
-		if (!registrationKey) throw new Error("CONNECTION_MACHINE_BINDING_REGISTRATION_KEY_REQUIRED");
-		const registrationKeyHash = connectionMachineRegistrationKeyHashV1(
-			registrationKey,
-		);
+	): Promise<ConnectionMachineClientBindingRecordV1 | undefined> {
+		if (!registrationKey)
+			throw new Error("CONNECTION_MACHINE_BINDING_REGISTRATION_KEY_REQUIRED");
+		const registrationKeyHash =
+			connectionMachineRegistrationKeyHashV1(registrationKey);
 		const rows = await this.#client<Row[]>`
 				select binding.agent_id, binding.association_revision, binding.client_id, binding.callback_url,
 					binding.profile_fingerprint, binding.source_ref, binding.source_revision, binding.registration_key_hash
@@ -116,7 +121,7 @@ export class PostgresConnectionMachineClientBindingStoreV1 {
 	}
 }
 
-function toBinding(row: Row): ConnectionMachineClientBindingV1 {
+function toBinding(row: Row): ConnectionMachineClientBindingRecordV1 {
 	return {
 		clientId: row.client_id,
 		callbackUrl: row.callback_url,

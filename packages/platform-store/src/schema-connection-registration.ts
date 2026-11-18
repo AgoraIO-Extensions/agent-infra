@@ -281,9 +281,9 @@ export const connectionMachineClientBindings = platformSchema.table(
 		uniqueIndex("connection_machine_client_binding_client_unique").on(
 			table.clientId,
 		),
-		uniqueIndex("connection_machine_client_binding_registration_hash_unique").on(
-			table.registrationKeyHash,
-		),
+		uniqueIndex(
+			"connection_machine_client_binding_registration_hash_unique",
+		).on(table.registrationKeyHash),
 		check(
 			"connection_machine_client_binding_identity",
 			sql`${table.associationRevision} between 1 and 9007199254740991
