@@ -62,6 +62,7 @@ export interface PostgresApplicationFoundationOptions {
 			typeof captureAgentApiCreatePrincipalsV1
 		>[0];
 		readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
+		readonly observeIdentity?: <T>(resolve: () => Promise<T>) => Promise<T>;
 	};
 }
 
@@ -634,12 +635,16 @@ export class PostgresApplicationFoundationTransactionV1
 			return await this.#database.transaction(async (transaction) => {
 				await transaction.execute(sql`set local lock_timeout = '5s'`);
 				await transaction.execute(sql`set local statement_timeout = '30s'`);
-				const authenticated = await resolveAgentApiIdentityV1(
-					transaction,
-					input.material,
-					this.#userDirectory,
-					"agent:create",
-				);
+				const resolve = () =>
+					resolveAgentApiIdentityV1(
+						transaction,
+						input.material,
+						this.#userDirectory,
+						"agent:create",
+					);
+				const authenticated = await (this.#apiCreation?.observeIdentity?.(
+					resolve,
+				) ?? resolve());
 				const { principal } = authenticated.identity;
 				auditContext = { ...auditContext, principal };
 				requireAgentApiCreatePermissionV1(principal, this.#allowedPrincipals);

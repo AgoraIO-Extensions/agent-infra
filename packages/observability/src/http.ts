@@ -7,6 +7,7 @@ import {
 	createTraceParent,
 	isOperationalFailureStep,
 	type ObservabilitySpan,
+	type OperationalEvent,
 	projectIdentityFailure,
 	type startObservability,
 } from "./index.js";
@@ -21,6 +22,7 @@ interface RequestMetadata {
 const requests = new AsyncLocalStorage<{
 	readonly metadata: RequestMetadata;
 	active: boolean;
+	record: (event: OperationalEvent) => void;
 	failureStep?: string;
 	errorClass?: string;
 	identityFailure?: ReturnType<typeof projectIdentityFailure>;
@@ -30,6 +32,34 @@ const requests = new AsyncLocalStorage<{
 export function currentRequestMetadata(): RequestMetadata | undefined {
 	const request = requests.getStore();
 	return request?.active ? request.metadata : undefined;
+}
+
+export function recordHttpDependency(
+	input: Pick<
+		OperationalEvent,
+		"operationRef" | "outcome" | "durationMs" | "upstreamStatus" | "termination"
+	>,
+): void {
+	const request = requests.getStore();
+	if (!request?.active) return;
+	try {
+		const { operationRef, outcome, durationMs, upstreamStatus, termination } =
+			input;
+		request.record({
+			stage: "dependency",
+			operationRef,
+			outcome,
+			durationMs,
+			...(upstreamStatus === undefined ? {} : { upstreamStatus }),
+			...(termination === undefined ? {} : { termination }),
+			...request.metadata,
+			...(request.metadata.traceParent
+				? { traceParent: request.metadata.traceParent }
+				: {}),
+		});
+	} catch {
+		// Telemetry cannot change the request outcome.
+	}
 }
 
 export function recordHttpFailureContext(input: {
@@ -194,6 +224,7 @@ export function createHttpObservability(
 		const request: {
 			readonly metadata: RequestMetadata;
 			active: boolean;
+			record: (event: OperationalEvent) => void;
 			failureStep?: string;
 			errorClass?: string;
 			identityFailure?: ReturnType<typeof projectIdentityFailure>;
@@ -201,6 +232,7 @@ export function createHttpObservability(
 		} = {
 			metadata: Object.freeze(metadata) as RequestMetadata,
 			active: true,
+			record: (event) => telemetry.record(event),
 		};
 		return requests.run(request, async () => {
 			const began = performance.now();

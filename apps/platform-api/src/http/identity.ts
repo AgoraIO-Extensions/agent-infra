@@ -264,7 +264,22 @@ export async function resolveIdentity(
 					? error.failure
 					: undefined,
 		});
-		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+		const timedOut =
+			(error instanceof LdapIdentityUnavailableError &&
+				error.failure?.deadlineExpired) ||
+			(error instanceof DOMException && error.name === "TimeoutError");
+		throw new HttpProtocolError(
+			"DEPENDENCY_UNAVAILABLE",
+			traceId,
+			timedOut
+				? {
+						cause: new DOMException(
+							"Identity deadline exceeded",
+							"TimeoutError",
+						),
+					}
+				: undefined,
+		);
 	}
 	if (value === null) {
 		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);

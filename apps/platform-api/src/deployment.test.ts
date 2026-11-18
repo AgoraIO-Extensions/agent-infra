@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { Writable } from "node:stream";
 import {
 	AgentApiCreationResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
@@ -566,7 +567,7 @@ let reader: DatabaseReader;
 let fixture: ReturnType<typeof deploymentInput>;
 let running: Awaited<ReturnType<typeof startPlatformApiFromDeployment>>;
 let origin: string;
-async function openApi() {
+async function openApi(output?: Writable) {
 	setProductionDeploymentInput(fixture.input);
 	running = await startPlatformApiFromDeployment({
 		moduleSpecifier: new URL(
@@ -575,6 +576,7 @@ async function openApi() {
 		).href,
 		port: 0,
 		log: () => {},
+		...(output ? { observabilityOptions: { output } } : {}),
 	});
 	origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
 }
@@ -2299,6 +2301,12 @@ describe("production API creation with user and application Tokens", () => {
 			billingStatus: number,
 			explicit?: typeof candidates,
 			probeStatus = 200,
+			options: {
+				output?: Writable;
+				modelsStatus?: () => number | "timeout";
+				catalogFailure?: boolean;
+				identity?: IdentityAdapter["resolve"];
+			} = {},
 		) {
 			await createPlatformApiShutdown(running)();
 			const configured = fixture.input.agentApiCreation;
@@ -2316,7 +2324,10 @@ describe("production API creation with user and application Tokens", () => {
 					);
 				// 保存前对所选模型与档位做一次真实验证请求（ADR-0029）。
 				if (String(url).endsWith("/responses") && probeStatus !== 200)
-					return Response.json({}, { status: probeStatus });
+					return Response.json(
+						{ detail: "relay-response-canary" },
+						{ status: probeStatus },
+					);
 				if (String(url).endsWith("/responses"))
 					return new Response(
 						`data: ${JSON.stringify({
@@ -2334,12 +2345,21 @@ describe("production API creation with user and application Tokens", () => {
 						})}\n\n`,
 						{ headers: { "content-type": "text/event-stream" } },
 					);
-				return Response.json({ data: [{ id: "model-a" }] });
+				const modelsStatus = options.modelsStatus?.() ?? 200;
+				if (modelsStatus === "timeout") return new Promise<Response>(() => {});
+				return Response.json(
+					{ data: [{ id: "model-a" }], detail: "relay-response-canary" },
+					{ status: modelsStatus },
+				);
 			});
 			const binding = fixture.input.templates[0]?.modelBinding;
 			if (!binding) throw new Error("Missing controlled template binding");
 			fixture.input = {
 				...fixture.input,
+				identity: {
+					...fixture.input.identity,
+					resolve: options.identity ?? identity.resolve,
+				},
 				agentApiCreation: { ...configured, candidates: explicit },
 				agentDefaultRelayKeyPolicy: {
 					templateBindings: [{ ...binding, reasoningLevels: ["medium"] }],
@@ -2356,7 +2376,7 @@ describe("production API creation with user and application Tokens", () => {
 					load: async () => ({
 						schemaVersion: 1,
 						revision: fixture.input.modelCatalog.revision,
-						validUntil: Date.now() + 60_000,
+						validUntil: options.catalogFailure ? 1 : Date.now() + 60_000,
 						endpoints: [
 							{
 								endpointId: "endpoint-a",
@@ -2377,9 +2397,284 @@ describe("production API creation with user and application Tokens", () => {
 					}),
 				},
 			};
-			await openApi();
+			await openApi(options.output);
 			return relayFetch;
 		}
+		function preview(authenticated = true) {
+			return fetch(`${origin}/api/v2/agent-applications/model-candidates`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					...(authenticated
+						? { cookie: `synthetic-session=${sessionKeys.alice}` }
+						: {}),
+				},
+				body: JSON.stringify({
+					templateId: "codex",
+					defaultRelayKey: apiBody.defaultRelayKey,
+				}),
+			});
+		}
+		function captureLogs() {
+			let text = "";
+			const output = new Writable({
+				write(chunk, _encoding, done) {
+					text += String(chunk);
+					done();
+				},
+			});
+			return {
+				output,
+				read() {
+					expect(text).not.toContain(apiBody.defaultRelayKey);
+					expect(text).not.toContain(apiTokens.application);
+					expect(text).not.toContain("relay-response-canary");
+					expect(text).not.toContain(apiBody.description);
+					expect(text).not.toContain("Call agent_infra_conformance");
+					return text
+						.trim()
+						.split("\n")
+						.filter(Boolean)
+						.map(
+							(line) =>
+								JSON.parse(line) as {
+									stage: string;
+									traceId?: string;
+									operationRef?: string;
+									outcome?: string;
+									upstreamStatus?: number;
+									termination?: string;
+									durationMs?: number;
+								},
+						);
+				},
+			};
+		}
+		const stage = (name: string) => `model.admission.${name}`;
+
+		it("lists candidates with one billing and zero probes and rechecks on API creation", async () => {
+			const logs = captureLogs();
+			let modelsStatus = 200;
+			const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+				output: logs.output,
+				modelsStatus: () => modelsStatus,
+			});
+			const visible = await preview();
+			expect(visible.status).toBe(200);
+			expect(await visible.json()).toEqual({
+				schemaVersion: 2,
+				candidates: [
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+					},
+				],
+			});
+			expect(
+				relayFetch.mock.calls.map(([url]) => new URL(String(url)).pathname),
+			).toEqual(["/v1/sub2api/billing", "/v1/models"]);
+			const previewLogs = logs.read();
+			const previewTrace = previewLogs.find(
+				(row) => row.stage === "http",
+			)?.traceId;
+			expect(previewTrace).toEqual(expect.any(String));
+			const stages = previewLogs.filter((row) => row.stage === "dependency");
+			expect(
+				stages.every(
+					(row) => row.traceId === previewTrace && (row.durationMs ?? -1) >= 0,
+				),
+			).toBe(true);
+			expect(
+				stages.filter((row) => row.operationRef !== stage("identity")),
+			).toMatchObject([
+				{
+					operationRef: stage("billing"),
+					outcome: "completed",
+					upstreamStatus: 200,
+				},
+				{ operationRef: stage("catalog"), outcome: "completed" },
+				{
+					operationRef: stage("models"),
+					outcome: "completed",
+					upstreamStatus: 200,
+				},
+			]);
+			expect(
+				stages.some(
+					(row) =>
+						row.operationRef === stage("identity") &&
+						row.outcome === "completed",
+				),
+			).toBe(true);
+
+			modelsStatus = 503;
+			const denied = await create();
+			expect(denied.status).toBe(503);
+			const denial = (await denied.json()) as { traceId: string; code: string };
+			expect(denial.code).toBe("DEPENDENCY_UNAVAILABLE");
+			expect(
+				relayFetch.mock.calls.map(([url]) => new URL(String(url)).pathname),
+			).toEqual([
+				"/v1/sub2api/billing",
+				"/v1/models",
+				"/v1/sub2api/billing",
+				"/v1/models",
+			]);
+			expect(
+				logs
+					.read()
+					.filter(
+						(row) =>
+							row.stage === "dependency" && row.traceId === denial.traceId,
+					),
+			).toMatchObject([
+				{ operationRef: stage("identity"), outcome: "completed" },
+				{
+					operationRef: stage("billing"),
+					outcome: "completed",
+					upstreamStatus: 200,
+				},
+				{ operationRef: stage("catalog"), outcome: "completed" },
+				{
+					operationRef: stage("models"),
+					outcome: "failed",
+					upstreamStatus: 503,
+				},
+			]);
+			expect(await effects()).toEqual([
+				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+			]);
+		});
+
+		it.each([
+			[401, 400],
+			[403, 400],
+			[503, 503],
+		] as const)(
+			"short-circuits preview after billing %i",
+			async (upstreamStatus, status) => {
+				const logs = captureLogs();
+				const relayFetch = await openWithDeploymentPolicy(
+					upstreamStatus,
+					undefined,
+					200,
+					{ output: logs.output },
+				);
+				const response = await preview();
+				expect(response.status).toBe(status);
+				const payload = (await response.json()) as {
+					traceId: string;
+					code: string;
+				};
+				expect(payload.code).toBe(
+					status === 400 ? "INVALID_REQUEST" : "DEPENDENCY_UNAVAILABLE",
+				);
+				expect(
+					relayFetch.mock.calls.map(([url]) => new URL(String(url)).pathname),
+				).toEqual(["/v1/sub2api/billing"]);
+				expect(
+					logs
+						.read()
+						.filter(
+							(row) =>
+								row.stage === "dependency" &&
+								row.operationRef !== stage("identity"),
+						),
+				).toMatchObject([
+					{
+						traceId: payload.traceId,
+						operationRef: stage("billing"),
+						upstreamStatus,
+						outcome: status === 400 ? "rejected" : "failed",
+					},
+				]);
+			},
+		);
+
+		it("records a model request timeout and rejects unauthenticated preview before Relay I/O", async () => {
+			const logs = captureLogs();
+			const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+				output: logs.output,
+				modelsStatus: () => "timeout",
+			});
+			const anonymous = await preview(false);
+			expect(anonymous.status).toBe(401);
+			expect(relayFetch).not.toHaveBeenCalled();
+			const response = await preview();
+			expect(response.status).toBe(503);
+			const { traceId } = (await response.json()) as { traceId: string };
+			expect(logs.read()).toContainEqual(
+				expect.objectContaining({
+					traceId,
+					operationRef: stage("models"),
+					outcome: "failed",
+					termination: "timeout",
+				}),
+			);
+			expect(logs.read()).not.toContainEqual(
+				expect.objectContaining({ operationRef: stage("responses") }),
+			);
+		}, 20_000);
+
+		it.each(["identity", "catalog"] as const)(
+			"attributes %s failure and stops downstream calls",
+			async (failedStage) => {
+				const logs = captureLogs();
+				const identityFailure = failedStage === "identity";
+				const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+					output: logs.output,
+					...(identityFailure
+						? {
+								identity: async () => {
+									throw new DOMException(
+										"relay-response-canary",
+										"TimeoutError",
+									);
+								},
+							}
+						: { catalogFailure: true }),
+				});
+				const response = await preview();
+				expect(response.status).toBe(503);
+				const { traceId } = (await response.json()) as { traceId: string };
+				expect(logs.read()).toContainEqual(
+					expect.objectContaining({
+						traceId,
+						operationRef: stage(failedStage),
+						outcome: "failed",
+						durationMs: expect.any(Number),
+						...(identityFailure ? { termination: "timeout" } : {}),
+					}),
+				);
+				expect(
+					relayFetch.mock.calls.map(([url]) => new URL(String(url)).pathname),
+				).toEqual(identityFailure ? [] : ["/v1/sub2api/billing"]);
+			},
+		);
+
+		it("links a failed Responses probe to the API rejection without persisting", async () => {
+			const logs = captureLogs();
+			await openWithDeploymentPolicy(200, undefined, 503, {
+				output: logs.output,
+			});
+			const response = await create();
+			expect(response.status).toBe(503);
+			const { traceId } = (await response.json()) as { traceId: string };
+			expect(logs.read()).toContainEqual(
+				expect.objectContaining({
+					traceId,
+					operationRef: stage("responses"),
+					upstreamStatus: 503,
+					outcome: "failed",
+					durationMs: expect.any(Number),
+				}),
+			);
+			expect(await effects()).toEqual([
+				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+			]);
+		});
+
 		it("uses the deployment default Relay Key policy shared with browser creation", async () => {
 			const relayFetch = await openWithDeploymentPolicy(200);
 			const response = await create();

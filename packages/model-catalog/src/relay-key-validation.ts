@@ -1,4 +1,8 @@
 import { modelOperationV1 } from "./catalog.js";
+import {
+	observeRelayStageV1,
+	type RelayStageObserverV1,
+} from "./relay-stage.js";
 
 type ValidationResult = "valid" | "invalid" | "unavailable";
 const approvedBillingUrl = "https://sub2api.la3.agoralab.co/v1/sub2api/billing";
@@ -49,49 +53,64 @@ export function createPersonalRelayKeyValidatorV1(input: {
 	readonly billingUrl: string;
 	readonly fetch?: typeof fetch;
 	readonly timeoutMs?: number;
+	readonly observe?: RelayStageObserverV1;
 }): (keyValue: string, signal?: AbortSignal) => Promise<ValidationResult> {
 	const fetcher = input.fetch ?? globalThis.fetch;
 	const timeoutMs = input.timeoutMs ?? 10_000;
 	return async (keyValue, parentSignal) => {
 		if (!/^[\x21-\x7e]{16,8192}$/.test(keyValue)) return "invalid";
+		if (
+			input.profile !== "sub2api-key-billing-v1" ||
+			input.billingUrl !== approvedBillingUrl ||
+			!Number.isSafeInteger(timeoutMs) ||
+			timeoutMs < 1 ||
+			timeoutMs > 10_000
+		)
+			return "unavailable";
+		const signal = parentSignal
+			? AbortSignal.any([parentSignal, AbortSignal.timeout(timeoutMs)])
+			: AbortSignal.timeout(timeoutMs);
 		try {
-			if (
-				input.profile !== "sub2api-key-billing-v1" ||
-				input.billingUrl !== approvedBillingUrl ||
-				!Number.isSafeInteger(timeoutMs) ||
-				timeoutMs < 1 ||
-				timeoutMs > 10_000
-			)
-				return "unavailable";
-			const signal = parentSignal
-				? AbortSignal.any([parentSignal, AbortSignal.timeout(timeoutMs)])
-				: AbortSignal.timeout(timeoutMs);
-			const response = await modelOperationV1(signal, () =>
-				fetcher(approvedBillingUrl, {
-					method: "GET",
-					headers: {
-						Authorization: `Bearer ${keyValue}`,
-						Accept: "application/json",
-					},
-					redirect: "error",
-					signal,
-				}),
+			return await observeRelayStageV1(
+				input.observe,
+				"billing",
+				signal,
+				async (status) => {
+					const response = await modelOperationV1(signal, () =>
+						fetcher(approvedBillingUrl, {
+							method: "GET",
+							headers: {
+								Authorization: `Bearer ${keyValue}`,
+								Accept: "application/json",
+							},
+							redirect: "error",
+							signal,
+						}),
+					);
+					status(response.status);
+					if (
+						response.redirected ||
+						(response.url && response.url !== approvedBillingUrl)
+					) {
+						void response.body?.cancel().catch(() => {});
+						return "unavailable";
+					}
+					if (response.status !== 200) {
+						void response.body?.cancel().catch(() => {});
+						return response.status === 401 || response.status === 403
+							? "invalid"
+							: "unavailable";
+					}
+					await readBillingResponse(response, signal);
+					return "valid" as const;
+				},
+				(value) =>
+					value === "valid"
+						? "completed"
+						: value === "invalid"
+							? "rejected"
+							: "failed",
 			);
-			if (
-				response.redirected ||
-				(response.url && response.url !== approvedBillingUrl)
-			) {
-				void response.body?.cancel().catch(() => {});
-				return "unavailable";
-			}
-			if (response.status !== 200) {
-				void response.body?.cancel().catch(() => {});
-				return response.status === 401 || response.status === 403
-					? "invalid"
-					: "unavailable";
-			}
-			await readBillingResponse(response, signal);
-			return "valid";
 		} catch {
 			return "unavailable";
 		}

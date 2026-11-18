@@ -113,6 +113,7 @@ import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import type { WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
+import { observeModelAdmissionIdentity } from "./model-admission-observation.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
 	createPlatformProjectionReaders,
@@ -480,6 +481,7 @@ export function assemblePlatformApi(
 					apiCreation: {
 						allowedPrincipals: input.agentApiCreation.allowedPrincipals,
 						loadAuthorityContext: input.agentApiCreation.loadAuthorityContext,
+						observeIdentity: observeModelAdmissionIdentity,
 					},
 				}
 			: {}),

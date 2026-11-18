@@ -9,6 +9,7 @@ import {
 	type AgentDefaultRelayKeyDependenciesV1,
 	AgentDefaultRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
+import { recordRelayStage } from "./model-admission-observation.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 /** 保存时真实验证的总时长上限：每个组合一次请求，按顺序执行（ADR-0029）。 */
@@ -33,9 +34,13 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 		>[0];
 	},
 ): Required<Pick<AgentDefaultRelayKeyDependenciesV1, "candidates" | "verify">> {
-	const validate = createPersonalRelayKeyValidatorV1(input.validation);
+	const validate = createPersonalRelayKeyValidatorV1({
+		...input.validation,
+		observe: recordRelayStage,
+	});
 	const relay = {
 		...input,
+		observe: recordRelayStage,
 		...(input.validation.fetch ? { fetch: input.validation.fetch } : {}),
 	};
 	const read = createAgentDefaultRelayKeyCandidateReaderV1({
