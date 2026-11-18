@@ -561,6 +561,13 @@
       "when": 1794907754479,
       "tag": "0083_operations_resource_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1795010866528,
+      "tag": "0084_connection_machine_client_bindings",
+      "breakpoints": true
     }
   ]
 }

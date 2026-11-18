@@ -86,6 +86,12 @@ export {
 	PostgresConnectionInstallationAuthorizationTransactionV1,
 } from "./connection-installation.js";
 export {
+	type ConnectionMachineClientBindingRecordV1,
+	type ConnectionMachineClientBindingV1,
+	connectionMachineRegistrationKeyHashV1,
+	PostgresConnectionMachineClientBindingStoreV1,
+} from "./connection-machine-client-bindings.js";
+export {
 	type ConnectionManualAssociationMaterialV1,
 	PostgresConnectionManualAssociationReaderV1,
 } from "./connection-manual-association-reader.js";

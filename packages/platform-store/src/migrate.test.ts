@@ -755,6 +755,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_consumer_registrations",
 				"connection_installation_authorizations",
 				"connection_installation_commands",
+				"connection_machine_client_bindings",
 				"connection_manual_associations",
 				"connection_manual_associations.connection_agent_id",
 				"connection_manual_associations.credential_ciphertext",
@@ -2038,6 +2039,7 @@ describe("published Relay authority migration", () => {
 			81,
 			82,
 			83,
+			84,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2124,8 +2126,8 @@ describe("published Relay authority migration", () => {
 			tag: "0082_operations_resource_snapshots",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 83,
-			tag: "0083_operations_resource_identities",
+			idx: 84,
+			tag: "0084_connection_machine_client_bindings",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2664,6 +2666,28 @@ describe("published Relay authority migration", () => {
 				"connection_manual_associations:connection_manual_association_credential_unique",
 				"connection_manual_associations:connection_manual_association_dek_unique",
 				"connection_manual_associations:connection_manual_associations_pkey",
+			);
+			expectedDelta.columns.push(
+				...[
+					"agent_id",
+					"association_revision",
+					"callback_url",
+					"client_id",
+					"created_at",
+					"profile_fingerprint",
+					"registration_key_hash",
+					"source_ref",
+					"source_revision",
+					"updated_at",
+				].map((name) => `connection_machine_client_bindings:${name}`),
+			);
+			expectedDelta.checks.push(
+				"connection_machine_client_bindings:connection_machine_client_binding_identity",
+			);
+			expectedDelta.indexes.push(
+				"connection_machine_client_bindings:connection_machine_client_binding_client_unique",
+				"connection_machine_client_bindings:connection_machine_client_binding_registration_hash_unique",
+				"connection_machine_client_bindings:connection_machine_client_bindings_pkey",
 			);
 			expectedDelta.columns.push(
 				...["agent_id", "last_revision", "updated_at"].map(
