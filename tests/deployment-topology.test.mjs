@@ -1300,6 +1300,26 @@ test("in-cluster native metadata defaults derive fixed API and Worker inputs", (
 		"topology-agent-infra-platform-api",
 	);
 	const apiContainer = api.spec.template.spec.containers[0];
+	assert.deepEqual(
+		apiContainer.env.find(
+			(entry) => entry.name === "PLATFORM_API_NATIVE_METADATA_INSTANCE_UID",
+		)?.valueFrom,
+		{ fieldRef: { fieldPath: "metadata.uid" } },
+	);
+	const workerRole = resource(
+		resources,
+		"Role",
+		"topology-agent-infra-platform-worker",
+	);
+	assert.deepEqual(
+		workerRole.rules.find((rule) => rule.resources.includes("endpoints")),
+		{
+			apiGroups: [""],
+			resources: ["endpoints"],
+			resourceNames: ["topology-agent-infra-platform-api"],
+			verbs: ["get"],
+		},
+	);
 	assert.equal(
 		apiContainer.env.find(
 			(entry) => entry.name === "PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN",
@@ -1369,6 +1389,13 @@ test("in-cluster native metadata defaults derive fixed API and Worker inputs", (
 				entry.name === "PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN",
 		)?.value,
 		"http://topology-agent-infra-platform-api:3000",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) =>
+				entry.name === "PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING",
+		)?.value,
+		"true",
 	);
 	assert.equal(api.spec.replicas, 1);
 	assert.equal(api.spec.strategy?.type, "Recreate");

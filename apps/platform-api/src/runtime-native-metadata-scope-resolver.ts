@@ -126,7 +126,7 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 				readStartedAt,
 				expiresAt,
 				requestId: requestId(),
-				traceId: requestId(),
+				traceId: input.requestContext?.traceId ?? requestId(),
 				originalHostScopeRef,
 			};
 		} catch {

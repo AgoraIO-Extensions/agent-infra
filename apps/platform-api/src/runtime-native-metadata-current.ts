@@ -7,6 +7,7 @@ import {
 	RuntimeNativeMetadataBindingResponseV1Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
 
@@ -34,9 +35,16 @@ export function createRuntimeNativeMetadataRequestRegistryV1(
 	options: {
 		readonly now?: () => number;
 		readonly maximumEntries?: number;
+		readonly instanceUid?: string;
 	} = {},
 ): RuntimeNativeMetadataRequestRegistryV1 {
 	const now = options.now ?? Date.now;
+	const instanceUid = options.instanceUid;
+	if (
+		instanceUid !== undefined &&
+		!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(instanceUid)
+	)
+		throw new TypeError("Native metadata API instance UID is invalid");
 	const maximum = options.maximumEntries ?? maximumEntries;
 	if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > maximumEntries)
 		throw new TypeError("Native metadata request registry size is invalid");
@@ -78,7 +86,9 @@ export function createRuntimeNativeMetadataRequestRegistryV1(
 			}
 			if (entries.size >= maximum)
 				throw new Error("NATIVE_METADATA_REQUEST_CAPACITY");
-			const sourceRef = randomUUID();
+			const sourceRef = instanceUid
+				? `${instanceUid}.${randomUUID()}`
+				: randomUUID();
 			entries.set(sourceRef, { ...input, binding });
 			const abort = () => release(sourceRef);
 			abortListeners.set(sourceRef, abort);
@@ -165,7 +175,15 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 			} catch {
 				return { outcome: "unavailable" };
 			}
-			if (!entry) return { outcome: "unavailable" };
+			if (!entry) {
+				logNativeMetadataHop(
+					"api.current",
+					"registry",
+					input.request.traceId,
+					"unavailable",
+				);
+				return { outcome: "unavailable" };
+			}
 			const requestContext = entry.requestContext;
 			const abort = () => requestContext.close();
 			input.signal.addEventListener("abort", abort, { once: true });
@@ -206,6 +224,12 @@ export function createRuntimeNativeMetadataCurrentCheckerV1(options: {
 					entry
 				)
 					throw new Error();
+				logNativeMetadataHop(
+					"api.current",
+					"registry",
+					input.request.traceId,
+					"ok",
+				);
 				return { outcome: "allowed", request: input.request };
 			} catch {
 				requestContext.close();

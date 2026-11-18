@@ -75,6 +75,7 @@ export function registerNativeMetadataRoutes(
 			const metadata = requestMetadata(context.req.raw);
 			const requestContext = createRuntimeNativeMetadataRequestContextV1({
 				signal: context.req.raw.signal,
+				traceId: metadata.traceId,
 				authenticate: () =>
 					resolveIdentity(
 						dependencies.identity,

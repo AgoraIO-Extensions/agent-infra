@@ -1,5 +1,4 @@
 import { timingSafeEqual } from "node:crypto";
-
 import {
 	type NativeMetadataCurrentRequestV1,
 	NativeMetadataCurrentRequestV1Schema,
@@ -13,6 +12,7 @@ import {
 	RuntimeNativeMetadataReadResponseV1OrV2Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 
 const gatewayPath = "/internal/platform-worker/v1/native-metadata";
 const currentPath = "/internal/platform-worker/v1/native-metadata/current";
@@ -179,55 +179,79 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 		> {
 			if (signal.aborted) unavailable();
 			const request = PlatformNativeMetadataReadRequestV1Schema.parse(value);
-			const binding = await options.binding.resolve({ request, signal });
-			if (signal.aborted || !binding) unavailable();
-			const parsedBinding =
-				RuntimeNativeMetadataBindingResponseV1Schema.parse(binding);
-			if (!sameIdentity(request, parsedBinding)) unavailable();
-			const current = await options.current.check({
-				request: currentRequest(parsedBinding),
-				apiRequestSourceRef: request.apiRequestSourceRef,
-				signal,
-			});
-			if (signal.aborted || !sameCurrent(current, parsedBinding)) unavailable();
-			const proof = await options.proofIssuer.issue({
-				request: parsedBinding,
-				...(request.apiRequestSourceRef
-					? { apiRequestSourceRef: request.apiRequestSourceRef }
-					: {}),
-				signal,
-			});
-			const transport = await options.transport.resolve({
-				binding: parsedBinding,
-				signal,
-			});
-			if (signal.aborted || !transport) unavailable();
-			const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
-				await transport.read(
-					{
-						...parsedBinding,
-						...(request.apiRequestSourceRef
-							? { apiRequestSourceRef: request.apiRequestSourceRef }
-							: {}),
-						proof,
-					},
+			let step:
+				| "binding"
+				| "current-before"
+				| "proof"
+				| "target"
+				| "host"
+				| "current-after" = "binding";
+			try {
+				const binding = await options.binding.resolve({ request, signal });
+				if (signal.aborted || !binding) unavailable();
+				const parsedBinding =
+					RuntimeNativeMetadataBindingResponseV1Schema.parse(binding);
+				if (!sameIdentity(request, parsedBinding)) unavailable();
+				step = "current-before";
+				const current = await options.current.check({
+					request: currentRequest(parsedBinding),
+					apiRequestSourceRef: request.apiRequestSourceRef,
 					signal,
-				),
-			);
-			const { projection: _projection, ...responseBinding } = response;
-			if (
-				runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
-					runtimeNativeMetadataRequestSigningPayloadV1(parsedBinding) ||
-				response.projection.selector !== parsedBinding.selector
-			)
-				unavailable();
-			const after = await options.current.check({
-				request: currentRequest(parsedBinding),
-				apiRequestSourceRef: request.apiRequestSourceRef,
-				signal,
-			});
-			if (signal.aborted || !sameCurrent(after, parsedBinding)) unavailable();
-			return response;
+				});
+				if (signal.aborted || !sameCurrent(current, parsedBinding))
+					unavailable();
+				step = "proof";
+				const proof = await options.proofIssuer.issue({
+					request: parsedBinding,
+					...(request.apiRequestSourceRef
+						? { apiRequestSourceRef: request.apiRequestSourceRef }
+						: {}),
+					signal,
+				});
+				step = "target";
+				const transport = await options.transport.resolve({
+					binding: parsedBinding,
+					signal,
+				});
+				if (signal.aborted || !transport) unavailable();
+				step = "host";
+				const response = RuntimeNativeMetadataReadResponseV1OrV2Schema.parse(
+					await transport.read(
+						{
+							...parsedBinding,
+							...(request.apiRequestSourceRef
+								? { apiRequestSourceRef: request.apiRequestSourceRef }
+								: {}),
+							proof,
+						},
+						signal,
+					),
+				);
+				const { projection: _projection, ...responseBinding } = response;
+				if (
+					runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
+						runtimeNativeMetadataRequestSigningPayloadV1(parsedBinding) ||
+					response.projection.selector !== parsedBinding.selector
+				)
+					unavailable();
+				step = "current-after";
+				const after = await options.current.check({
+					request: currentRequest(parsedBinding),
+					apiRequestSourceRef: request.apiRequestSourceRef,
+					signal,
+				});
+				if (signal.aborted || !sameCurrent(after, parsedBinding)) unavailable();
+				logNativeMetadataHop("worker.read", step, request.traceId, "ok");
+				return response;
+			} catch (error) {
+				logNativeMetadataHop(
+					"worker.read",
+					step,
+					request.traceId,
+					"unavailable",
+				);
+				throw error;
+			}
 		},
 	};
 }

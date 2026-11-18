@@ -306,6 +306,7 @@ export interface PlatformApiAssemblyInput {
 		readonly fetch?: typeof fetch;
 		readonly transportTimeoutMs?: number;
 		readonly requestRegistry?: RuntimeNativeMetadataRequestRegistryV1;
+		readonly instanceUid?: string;
 	};
 	/** Optional deployment-owned native capability admission route. */
 	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
@@ -732,7 +733,9 @@ export function assemblePlatformApi(
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	const nativeMetadataRequestRegistry = input.nativeMetadataWorker
 		? (input.nativeMetadataWorker.requestRegistry ??
-			createRuntimeNativeMetadataRequestRegistryV1())
+			createRuntimeNativeMetadataRequestRegistryV1({
+				instanceUid: input.nativeMetadataWorker.instanceUid,
+			}))
 		: undefined;
 	const assembledNativeMetadata =
 		input.nativeMetadata ??

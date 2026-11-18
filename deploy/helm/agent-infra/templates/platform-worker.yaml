@@ -30,6 +30,12 @@ rules:
     resources: ["pods"]
     # Session Sandbox Pods are created, replaced and deleted directly by the Worker adapter.
     verbs: ["create", "delete", "get", "list", "update", "watch"]
+  {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (not .Values.workloadTopology.enabled) (eq .Values.platformApi.placement "in-cluster") (not .Values.platformWorker.nativeMetadataGateway.platformApiOrigin) }}
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    resourceNames: [{{ include "agent-infra.componentName" (dict "root" . "suffix" "platform-api") | quote }}]
+    verbs: ["get"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["configmaps", "persistentvolumeclaims", "secrets", "serviceaccounts", "services"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
@@ -158,6 +164,10 @@ spec:
             - name: PLATFORM_WORKER_RELEASE_NAME
               value: {{ .Release.Name | quote }}
             {{- if $nativeMetadataApiOrigin }}
+            {{- if and (eq .Values.platformApi.placement "in-cluster") (not .Values.platformWorker.nativeMetadataGateway.platformApiOrigin) }}
+            - name: PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING
+              value: "true"
+            {{- end }}
             - name: PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN
               value: {{ $nativeMetadataApiOrigin | quote }}
             {{- end }}
