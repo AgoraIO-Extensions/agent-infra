@@ -62,6 +62,8 @@ export interface ConversationMessageReadModelV1 {
 	readonly messages: readonly ConversationReadMessageV1[];
 	readonly executions: readonly ConversationReadExecutionV1[];
 	readonly events: readonly ConversationReadEventV1[];
+	/** Event pagination state for detail reads. Older events may be on another page. */
+	readonly eventWindow?: { readonly hasEarlier: boolean };
 }
 
 export interface ConversationMessageProjectionV1 {
@@ -346,6 +348,13 @@ export function projectConversationMessagesV1(
 			// 未开始即结束的排队消息没有回复；结果只显示在用户消息的 queue 状态上。
 			if (neverStarted.has(item.executionId)) return [];
 			const events = byExecution.get(item.executionId) ?? [];
+			const status = executionStatus(item.status);
+			if (
+				input.eventWindow?.hasEarlier === true &&
+				events.length === 0 &&
+				isTerminalStatus(status)
+			)
+				return [];
 			const text = events
 				.filter((event) => event.eventType === "text.delta")
 				.map((event) => {
@@ -354,8 +363,11 @@ export function projectConversationMessagesV1(
 					return payload.text;
 				})
 				.join("");
-			const status = executionStatus(item.status);
-			if (text.length === 0 && !isTerminalStatus(status)) {
+			if (
+				text.length === 0 &&
+				!isTerminalStatus(status) &&
+				!(input.eventWindow?.hasEarlier === true && events.length === 0)
+			) {
 				return [];
 			}
 			// Host completion can precede the journal drain; only its persisted terminal event completes the answer.

@@ -158,6 +158,130 @@ describe("Conversation read projection", () => {
 		},
 	);
 
+	it("does not fabricate a processing answer for a completed execution on an earlier page", () => {
+		const input = {
+			messages: [
+				{
+					messageId: "message-old",
+					text: "Run it",
+					executionId: "execution-old",
+					status: "submitted",
+					createdAt: first,
+				},
+			],
+			executions: [
+				{
+					executionId: "execution-old",
+					conversationId: "conversation-1",
+					sourceMessageId: "message-old",
+					status: "completed",
+					createdAt: first,
+					updatedAt: second,
+					traceId: "trace-old",
+				},
+			],
+			events: [],
+			eventWindow: { hasEarlier: true },
+		};
+
+		expect(projectConversationMessagesV1(input)).toEqual([
+			expect.objectContaining({
+				messageId: "message-old",
+				role: "user",
+			}),
+		]);
+	});
+
+	it("keeps a non-terminal execution processing when its events are on an earlier page", () => {
+		const projected = projectConversationMessagesV1({
+			messages: [
+				{
+					messageId: "message-current",
+					text: "Run it",
+					executionId: "execution-current",
+					status: "submitted",
+					createdAt: first,
+				},
+			],
+			executions: [
+				{
+					executionId: "execution-current",
+					conversationId: "conversation-1",
+					sourceMessageId: "message-current",
+					status: "processing",
+					createdAt: first,
+					updatedAt: second,
+					traceId: "trace-current",
+				},
+			],
+			events: [],
+			eventWindow: { hasEarlier: true },
+		});
+
+		expect(projected).toEqual([
+			expect.objectContaining({
+				messageId: "message-current",
+				role: "user",
+			}),
+			expect.objectContaining({
+				messageId: "assistant:execution-current",
+				status: "processing",
+				text: "",
+			}),
+		]);
+	});
+
+	it("projects a completed result when the historical page contains its events", () => {
+		const projected = projectConversationMessagesV1({
+			messages: [
+				{
+					messageId: "message-old",
+					text: "Run it",
+					executionId: "execution-old",
+					status: "submitted",
+					createdAt: first,
+				},
+			],
+			executions: [
+				{
+					executionId: "execution-old",
+					conversationId: "conversation-1",
+					sourceMessageId: "message-old",
+					status: "completed",
+					createdAt: first,
+					updatedAt: second,
+					traceId: "trace-old",
+				},
+			],
+			events: [
+				{
+					executionId: "execution-old",
+					sequence: 1,
+					eventType: "text.delta",
+					eventPayload: { type: "text.delta", text: "history" },
+					occurredAt: second,
+				},
+				{
+					executionId: "execution-old",
+					sequence: 2,
+					eventType: "execution.status",
+					eventPayload: { type: "execution.status", status: "completed" },
+					occurredAt: second,
+				},
+			],
+			eventWindow: { hasEarlier: false },
+		});
+
+		expect(projected).toEqual([
+			expect.objectContaining({ messageId: "message-old", role: "user" }),
+			expect.objectContaining({
+				messageId: "assistant:execution-old",
+				status: "completed",
+				text: "history",
+			}),
+		]);
+	});
+
 	it("owns execution status timing and failure projection facts", () => {
 		expect(
 			projectConversationExecutionV1({
