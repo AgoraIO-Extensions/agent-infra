@@ -1,14 +1,22 @@
 import { connectionServiceCredentialFingerprintV1 } from "@agent-infra/platform-core";
 import {
 	type ConnectionManualAssociationMaterialV1,
+	PostgresConnectionMachineClientBindingStoreV1,
 	PostgresConnectionManualAssociationReaderV1,
 } from "@agent-infra/platform-store";
-import type { SecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
+import {
+	createSecretKeyringDecryptorV1,
+	type SecretKeyringDecryptorV1,
+} from "@agent-infra/secret-store/worker";
 import {
 	type ConnectionConsumerOAuthClientBindingV1,
 	createConnectionConsumerDcrResolverV1,
 	revokeConnectionConsumerMachineRegistrationV1,
 } from "./connection-consumer-dcr.js";
+import {
+	createProtectedConnectionHostSupplyV1,
+	type ProtectedConnectionHostSupplyPortV1,
+} from "./connection-host-supply.js";
 import type { ConnectionConsumerDeploymentBindingV1 } from "./connection-registration-bindings.js";
 
 export interface ProtectedConnectionHostSupplyV1 {
@@ -55,6 +63,38 @@ export interface OwnerConnectionBindingsOptionsV1 {
 	readonly callbackUrlForAgent: (agentId: string) => string;
 	readonly fetch?: typeof fetch;
 	readonly traceId?: string;
+}
+
+/** Mounted deployment configuration used to build the production Owner resolver. */
+export interface OwnerConnectionBindingConfigurationV1
+	extends Omit<
+		OwnerConnectionBindingsOptionsV1,
+		"databaseUrl" | "decryptor" | "hostSupply" | "machineClientBindings"
+	> {
+	readonly databaseUrl: string;
+	readonly decryptionKeys: readonly {
+		readonly keyVersion: string;
+		readonly privateKeyPkcs8DerBase64: string;
+	}[];
+	readonly hostSupply: ProtectedConnectionHostSupplyPortV1;
+}
+
+/**
+ * Assemble the Worker-only resolver from deployment-owned ports. The keyring and
+ * machine binding store stay inside this process, while the service credential is
+ * handed only to the protected Host receiver and the Connection registration call.
+ */
+export function createProductionOwnerConnectionBindingsV1(
+	input: OwnerConnectionBindingConfigurationV1,
+): OwnerConnectionBindingsOptionsV1 {
+	return {
+		...input,
+		decryptor: createSecretKeyringDecryptorV1({ keys: input.decryptionKeys }),
+		hostSupply: createProtectedConnectionHostSupplyV1(input.hostSupply),
+		machineClientBindings: new PostgresConnectionMachineClientBindingStoreV1({
+			databaseUrl: input.databaseUrl,
+		}),
+	};
 }
 
 function decodeCredential(value: Uint8Array): string {

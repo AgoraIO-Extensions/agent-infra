@@ -22,6 +22,8 @@ import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js"
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
 export * from "./browser-handoff-command.js";
+export * from "./connection-host-supply.js";
+export * from "./connection-manual-bindings.js";
 export * from "./connection-registration-http.js";
 export * from "./connection-registration-worker.js";
 export * from "./conversation-deployment.js";

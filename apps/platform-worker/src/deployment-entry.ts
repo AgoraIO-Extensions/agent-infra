@@ -26,6 +26,8 @@ import {
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import {
 	createOwnerConnectionBindingsResolverV1,
+	createProductionOwnerConnectionBindingsV1,
+	type OwnerConnectionBindingConfigurationV1,
 	type OwnerConnectionBindingsOptionsV1,
 } from "./connection-manual-bindings.js";
 import {
@@ -122,6 +124,8 @@ type DeploymentConfiguration = {
 	readonly resolveConnectionConsumerBindingsByAgent?: ConnectionConsumerBindingsResolverV1;
 	/** Default Owner-association reader; credentials are decrypted only for protected Host supply. */
 	readonly ownerConnectionBindings?: OwnerConnectionBindingsOptionsV1;
+	/** Deployment-owned ports and keyring used to assemble the Owner resolver in production. */
+	readonly ownerConnectionBindingConfiguration?: OwnerConnectionBindingConfigurationV1;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
 	readonly connectionInstallationSupply?: unknown;
@@ -249,7 +253,8 @@ const {
 	connectionConsumerApproval,
 	connectionConsumerProfilesByAgent: removedConnectionConsumerProfilesByAgent,
 	resolveConnectionConsumerBindingsByAgent,
-	ownerConnectionBindings,
+	ownerConnectionBindings: configuredOwnerConnectionBindings,
+	ownerConnectionBindingConfiguration,
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent:
 		removedConnectionInstallationSuppliesByAgent,
@@ -264,6 +269,14 @@ const {
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
+
+const ownerConnectionBindings =
+	configuredOwnerConnectionBindings ??
+	(ownerConnectionBindingConfiguration === undefined
+		? undefined
+		: createProductionOwnerConnectionBindingsV1(
+				ownerConnectionBindingConfiguration,
+			));
 
 // Capture one immutable declaration/byte digest for the Worker and normal RO entry.
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
