@@ -29,6 +29,8 @@ export interface ConversationReadExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** Whether this execution has persisted events before the current event page. */
+	readonly hasEarlierEvents?: boolean;
 	/** 经排队受理的 Execution 保存的等待顺序（§12.5）；其他 Execution 为 null 或缺省。 */
 	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因（工程 Spec §16.1.1）。 */
@@ -64,8 +66,6 @@ export interface ConversationMessageReadModelV1 {
 	readonly events: readonly ConversationReadEventV1[];
 	/** Event pagination state for detail reads. Older events may be on another page. */
 	readonly eventWindow?: { readonly hasEarlier: boolean };
-	/** Execution IDs with persisted events before this page boundary. */
-	readonly earlierEventExecutionIds?: readonly string[];
 }
 
 export interface ConversationMessageProjectionV1 {
@@ -345,7 +345,11 @@ export function projectConversationMessagesV1(
 	for (const events of byExecution.values()) {
 		events.sort((left, right) => eventSequence(left) - eventSequence(right));
 	}
-	const earlierEventExecutionIds = new Set(input.earlierEventExecutionIds ?? []);
+	const earlierEventExecutionIds = new Set(
+		input.executions
+			.filter((execution) => execution.hasEarlierEvents === true)
+			.map((execution) => execution.executionId),
+	);
 	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
 		items.flatMap((item, index) => {
 			// 未开始即结束的排队消息没有回复；结果只显示在用户消息的 queue 状态上。

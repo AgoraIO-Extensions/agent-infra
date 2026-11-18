@@ -1966,9 +1966,11 @@ describe("long Conversation reads (#1732)", () => {
 				hasEarlier: true,
 				beforeCursor: expect.any(String),
 			});
-			expect(recent?.earlierEventExecutionIds).toEqual([
-				"long-1",
-			]);
+			expect(
+				recent?.executions
+					.filter((execution) => execution.hasEarlierEvents)
+					.map((execution) => execution.executionId),
+			).toEqual(["long-1"]);
 			const earlier = await reader.get(longScope, "long-history", undefined, {
 				beforeCursor: recent?.eventWindow?.beforeCursor as string,
 			});
@@ -1980,7 +1982,9 @@ describe("long Conversation reads (#1732)", () => {
 				hasEarlier: false,
 				beforeCursor: null,
 			});
-			expect(earlier?.earlierEventExecutionIds).toEqual([]);
+			expect(
+				earlier?.executions.every((execution) => !execution.hasEarlierEvents),
+			).toBe(true);
 		} finally {
 			await reader.close();
 		}
@@ -2165,6 +2169,10 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 			{ reasoning: 0, text: 8 },
 			{ reasoning: 120, text: 4 },
 		]);
+		await seedRounds(
+			"reasoning-many",
+			Array.from({ length: 128 }, () => ({ reasoning: 1, text: 1 })),
+		);
 	}, 60_000);
 
 	/** 与 platform-api 装配一致：窗口 200 条、总上限取默认值。 */
@@ -2230,9 +2238,11 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 				hasEarlier: true,
 				beforeCursor: expect.any(String),
 			});
-			expect(recent?.earlierEventExecutionIds).toEqual([
-				executionOf("reasoning-four", 1),
-		]);
+			expect(
+				recent?.executions
+					.filter((execution) => execution.hasEarlierEvents)
+					.map((execution) => execution.executionId),
+			).toEqual([executionOf("reasoning-four", 1)]);
 			const earlier = await reader.get(
 				reasoningScope,
 				"reasoning-four",
@@ -2289,6 +2299,29 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 			const full = await query.get(reasoningScope, "reasoning-walk");
 			expect(walked).toEqual(full?.events.map((event) => event.eventId));
 			expect(new Set(walked).size).toBe(walked.length);
+		} finally {
+			await reader.close();
+		}
+	});
+
+	it("keeps history facts bounded for many executions across event pages", async () => {
+		const reader = new PostgresConversationQueryV1({
+			databaseUrl,
+			eventWindow: 20,
+			eventWindowMaxEvents: 100,
+		});
+		try {
+			const recent = await reader.get(reasoningScope, "reasoning-many");
+			expect(recent?.executions).toHaveLength(128);
+			expect(recent?.events.length).toBeLessThanOrEqual(100);
+			expect(
+				recent?.executions.filter((execution) => execution.hasEarlierEvents)
+					.length,
+			).toBeGreaterThan(100);
+			expect(
+				recent?.executions.filter((execution) => !execution.hasEarlierEvents)
+					.length,
+			).toBeGreaterThan(0);
 		} finally {
 			await reader.close();
 		}

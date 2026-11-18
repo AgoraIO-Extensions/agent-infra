@@ -178,11 +178,11 @@ describe("Conversation read projection", () => {
 					createdAt: first,
 					updatedAt: second,
 					traceId: "trace-old",
+					hasEarlierEvents: true,
 				},
 			],
 			events: [],
 			eventWindow: { hasEarlier: true },
-			earlierEventExecutionIds: ["execution-old"],
 		};
 
 		expect(projectConversationMessagesV1(input)).toEqual([
@@ -213,11 +213,11 @@ describe("Conversation read projection", () => {
 					createdAt: first,
 					updatedAt: second,
 					traceId: "trace-current",
+					hasEarlierEvents: false,
 				},
 			],
 			events: [],
 			eventWindow: { hasEarlier: true },
-			earlierEventExecutionIds: ["execution-other"],
 		});
 
 		expect(projected).toEqual([

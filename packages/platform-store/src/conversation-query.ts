@@ -91,6 +91,8 @@ export interface ConversationQueryExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** Whether this execution has persisted events before the current event page. */
+	readonly hasEarlierEvents?: boolean;
 	/** 经排队受理的 Execution 的等待顺序（§12.5）；只用于派生同会话内位次，不对外暴露。 */
 	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因；其他状态为空。 */
@@ -121,8 +123,6 @@ export interface ConversationQueryDetailV1 {
 	readonly executions: readonly ConversationQueryExecutionV1[];
 	readonly events: readonly ConversationQueryEventV1[];
 	readonly eventWindow?: ConversationEventWindowV1;
-	/** Execution IDs with events before the returned event page boundary. */
-	readonly earlierEventExecutionIds?: readonly string[];
 }
 
 export interface ConversationQueryReadOptionsV1 {
@@ -350,6 +350,7 @@ interface ExecutionRow extends ExecutionFailureFactRowV1 {
 	readonly updated_at: Date;
 	readonly trace_id: string | null;
 	readonly task_wait_order: string | number | null;
+	readonly has_earlier_events: boolean;
 }
 
 interface EventRow {
@@ -770,6 +771,7 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 		createdAt: timestamp(row.created_at),
 		updatedAt: timestamp(row.updated_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
+		...(row.has_earlier_events ? { hasEarlierEvents: true } : {}),
 		taskWaitOrder:
 			row.task_wait_order === null || row.task_wait_order === undefined
 				? null
@@ -904,6 +906,7 @@ async function readExecutions(
 	conversationId: string,
 	executionId?: string,
 	run: RunStatement = runStatement,
+	beforeEventCursor?: number,
 ): Promise<ConversationQueryExecutionV1[]> {
 	const rows = await run(database<ExecutionRow[]>`
 		select e.execution_id, e.conversation_id, e.status, e.created_at, e.updated_at,
@@ -928,6 +931,17 @@ async function readExecutions(
 				order by a.occurred_at, a.id
 				limit 1
 			) as trace_id,
+			${beforeEventCursor === undefined
+				? database`false`
+				: database`exists (
+					-- One bounded boolean per already-returned Execution. Do not aggregate
+					-- every historical execution ID into the page result.
+					select 1
+					from platform.conversation_events earlier
+					where earlier.conversation_id = e.conversation_id
+						and earlier.execution_id = e.execution_id
+						and earlier.conversation_cursor < ${beforeEventCursor}
+				)`} as has_earlier_events,
 			${executionFailureFactsSql(database)}
 		from platform.conversation_executions e
 		join platform.conversations c on c.id = e.conversation_id
@@ -1002,7 +1016,7 @@ async function readEventPage(
 ): Promise<{
 	readonly events: readonly ConversationQueryEventV1[];
 	readonly eventWindow: ConversationEventWindowV1;
-	readonly earlierEventExecutionIds: readonly string[];
+	readonly eventBoundary?: number;
 }> {
 	// 只扫描最近的 maxEvents + 1 条：超过这个范围的起点必然超出总上限。
 	const [boundary] = await run(database<
@@ -1083,12 +1097,8 @@ async function readEventPage(
 					},
 					run,
 				);
-	const [earlier] = await run(database<{
-		cursor: string | number | null;
-		execution_ids: string[] | null;
-	}[]>`
-		select max(e.conversation_cursor) as cursor,
-			array_agg(distinct e.execution_id order by e.execution_id) as execution_ids
+	const [earlier] = await run(database<{ cursor: string | number | null }[]>`
+		select max(e.conversation_cursor) as cursor
 		from platform.conversation_events e
 		where e.conversation_id = ${conversationId}
 			and e.conversation_cursor < ${pageStart}
@@ -1100,7 +1110,7 @@ async function readEventPage(
 	return {
 		events,
 		eventWindow: { hasEarlier: beforeCursor !== null, beforeCursor },
-		earlierEventExecutionIds: earlier?.execution_ids ?? [],
+		eventBoundary: pageStart,
 	};
 }
 
@@ -2337,27 +2347,34 @@ export class PostgresConversationQueryV1 {
 						run,
 					);
 					if (!row) return undefined;
-					const [messages, executions, page] = await Promise.all([
-						readMessages(transaction, conversationId, run),
-						readExecutions(transaction, conversationId, undefined, run),
+					const page =
 						this.#eventWindow === undefined && beforeCursor === undefined
-							? readEvents(transaction, conversationId, {}, run).then(
+							? await readEvents(transaction, conversationId, {}, run).then(
 									(events) => ({
 										events,
 										eventWindow: { hasEarlier: false, beforeCursor: null },
-										earlierEventExecutionIds: [],
+										eventBoundary: undefined,
 									}),
 								)
-							: readEventPage(
-									transaction,
-									conversationId,
-									{
-										limit: this.#eventWindow ?? 200,
-										maxEvents: this.#eventWindowMaxEvents,
-										...(beforeCursor === undefined ? {} : { beforeCursor }),
-									},
-									run,
-								),
+							: await readEventPage(
+								transaction,
+								conversationId,
+								{
+									limit: this.#eventWindow ?? 200,
+									maxEvents: this.#eventWindowMaxEvents,
+									...(beforeCursor === undefined ? {} : { beforeCursor }),
+								},
+								run,
+							);
+					const [messages, executions] = await Promise.all([
+						readMessages(transaction, conversationId, run),
+						readExecutions(
+							transaction,
+							conversationId,
+							undefined,
+							run,
+							page.eventBoundary,
+						),
 					]);
 					return {
 						conversation: projection(row),
@@ -2365,7 +2382,6 @@ export class PostgresConversationQueryV1 {
 						executions,
 						events: page.events,
 						eventWindow: page.eventWindow,
-						earlierEventExecutionIds: page.earlierEventExecutionIds,
 					};
 				},
 				signal,
