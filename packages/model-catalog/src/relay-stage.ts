@@ -1,3 +1,5 @@
+import { isModelTimeoutV1 } from "./catalog.js";
+
 export interface RelayStageObservationV1 {
 	readonly stage: "billing" | "catalog" | "models" | "responses" | "messages";
 	readonly outcome: "completed" | "rejected" | "failed";
@@ -13,7 +15,10 @@ export async function observeRelayStageV1<T>(
 	observer: RelayStageObserverV1 | undefined,
 	stage: RelayStageObservationV1["stage"],
 	signal: AbortSignal,
-	operation: (captureStatus: (status: number) => void) => Promise<T>,
+	operation: (
+		captureStatus: (status: number) => void,
+		captureTimeout: () => void,
+	) => Promise<T>,
 	classify: (value: T) => RelayStageObservationV1["outcome"] = () =>
 		"completed",
 ): Promise<T> {
@@ -22,22 +27,25 @@ export async function observeRelayStageV1<T>(
 	let upstreamStatus: number | undefined;
 	let timedOut = false;
 	try {
-		const value = await operation((status) => {
-			upstreamStatus = status;
-		});
+		const value = await operation(
+			(status) => {
+				upstreamStatus = status;
+			},
+			() => {
+				timedOut = true;
+			},
+		);
 		outcome = classify(value);
 		return value;
 	} catch (error) {
-		timedOut = error instanceof DOMException && error.name === "TimeoutError";
+		timedOut ||= isModelTimeoutV1(error);
 		throw error;
 	} finally {
 		try {
 			const termination =
 				outcome !== "failed"
 					? undefined
-					: timedOut ||
-							(signal.reason instanceof DOMException &&
-								signal.reason.name === "TimeoutError")
+					: timedOut || isModelTimeoutV1(signal.reason)
 						? "timeout"
 						: signal.aborted
 							? "aborted"

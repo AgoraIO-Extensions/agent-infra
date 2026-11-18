@@ -84,9 +84,17 @@ export class ModelConfigurationErrorV1 extends Error {
 	constructor(
 		readonly retryable = false,
 		readonly reason = "unavailable",
+		readonly timedOut = false,
 	) {
 		super("MODEL_CONFIGURATION_UNAVAILABLE");
 	}
+}
+
+export function isModelTimeoutV1(error: unknown): boolean {
+	return (
+		(error instanceof ModelConfigurationErrorV1 && error.timedOut) ||
+		(error instanceof Error && error.name === "TimeoutError")
+	);
 }
 
 export async function modelOperationV1<T>(
@@ -106,6 +114,8 @@ export async function modelOperationV1<T>(
 	} catch (error) {
 		throw new ModelConfigurationErrorV1(
 			error instanceof ModelConfigurationErrorV1 ? error.retryable : true,
+			"unavailable",
+			isModelTimeoutV1(error) || isModelTimeoutV1(signal.reason),
 		);
 	} finally {
 		signal.removeEventListener("abort", abort);

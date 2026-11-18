@@ -359,7 +359,7 @@ export function createAgentDefaultRelayKeyModelVerifierV1(input: RelayInputV1) {
 					input.observe,
 					protocol === "openai-responses-v1" ? "responses" : "messages",
 					signal,
-					(status) =>
+					(status, onTimeout) =>
 						modelOperationV1(signal, () => {
 							const fetcher = input.fetch ?? globalThis.fetch;
 							const fetchWithStatus: typeof fetch = async (url, init) => {
@@ -371,9 +371,14 @@ export function createAgentDefaultRelayKeyModelVerifierV1(input: RelayInputV1) {
 								? probeResponsesModelV1({
 										...probe,
 										fetch: fetchWithStatus,
+										onTimeout,
 										strictEcho: false,
 									})
-								: probeMessagesModelV1({ ...probe, fetch: fetchWithStatus });
+								: probeMessagesModelV1({
+										...probe,
+										fetch: fetchWithStatus,
+										onTimeout,
+									});
 						}),
 					(value) =>
 						value === "verified"

@@ -2306,6 +2306,8 @@ describe("production API creation with user and application Tokens", () => {
 				modelsStatus?: () => number | "timeout";
 				catalogFailure?: boolean;
 				identity?: IdentityAdapter["resolve"];
+				resolveUser?: NonNullable<IdentityAdapter["resolveUser"]>;
+				upstreamTimeout?: "billing" | "responses-body";
 			} = {},
 		) {
 			await createPlatformApiShutdown(running)();
@@ -2313,6 +2315,13 @@ describe("production API creation with user and application Tokens", () => {
 			if (!configured) throw new Error("Missing controlled configuration");
 			const relayFetch = vi.fn<typeof fetch>(async (url, init) => {
 				expect(init?.redirect).toBe("error");
+				if (
+					String(url).endsWith("/billing") &&
+					options.upstreamTimeout === "billing"
+				) {
+					expect(init?.signal?.aborted).toBe(false);
+					throw new DOMException("relay-response-canary", "TimeoutError");
+				}
 				if (String(url).endsWith("/billing"))
 					return Response.json(
 						{
@@ -2323,6 +2332,21 @@ describe("production API creation with user and application Tokens", () => {
 						{ status: billingStatus },
 					);
 				// 保存前对所选模型与档位做一次真实验证请求（ADR-0029）。
+				if (
+					String(url).endsWith("/responses") &&
+					options.upstreamTimeout === "responses-body"
+				)
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								expect(init?.signal?.aborted).toBe(false);
+								controller.error(
+									new DOMException("relay-response-canary", "TimeoutError"),
+								);
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
 				if (String(url).endsWith("/responses") && probeStatus !== 200)
 					return Response.json(
 						{ detail: "relay-response-canary" },
@@ -2359,6 +2383,7 @@ describe("production API creation with user and application Tokens", () => {
 				identity: {
 					...fixture.input.identity,
 					resolve: options.identity ?? identity.resolve,
+					...(options.resolveUser ? { resolveUser: options.resolveUser } : {}),
 				},
 				agentApiCreation: { ...configured, candidates: explicit },
 				agentDefaultRelayKeyPolicy: {
@@ -2428,6 +2453,7 @@ describe("production API creation with user and application Tokens", () => {
 				read() {
 					expect(text).not.toContain(apiBody.defaultRelayKey);
 					expect(text).not.toContain(apiTokens.application);
+					expect(text).not.toContain(apiTokens.user);
 					expect(text).not.toContain("relay-response-canary");
 					expect(text).not.toContain(apiBody.description);
 					expect(text).not.toContain("Call agent_infra_conformance");
@@ -2526,7 +2552,9 @@ describe("production API creation with user and application Tokens", () => {
 					.read()
 					.filter(
 						(row) =>
-							row.stage === "dependency" && row.traceId === denial.traceId,
+							row.stage === "dependency" &&
+							row.traceId === denial.traceId &&
+							!row.operationRef?.startsWith(stage("identity.")),
 					),
 			).toMatchObject([
 				{ operationRef: stage("identity"), outcome: "completed" },
@@ -2674,6 +2702,91 @@ describe("production API creation with user and application Tokens", () => {
 				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
 			]);
 		});
+
+		it.each(["billing", "responses-body"] as const)(
+			"retains an upstream %s timeout before the shared deadline",
+			async (upstreamTimeout) => {
+				const logs = captureLogs();
+				const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+					output: logs.output,
+					upstreamTimeout,
+				});
+				const response = await (upstreamTimeout === "billing"
+					? preview()
+					: create());
+				expect(response.status).toBe(503);
+				const body = await response.text();
+				expect(body).not.toContain("relay-response-canary");
+				expect(body).not.toContain(apiBody.defaultRelayKey);
+				const { traceId } = JSON.parse(body) as { traceId: string };
+				expect(logs.read()).toContainEqual(
+					expect.objectContaining({
+						traceId,
+						operationRef: stage(
+							upstreamTimeout === "billing" ? "billing" : "responses",
+						),
+						outcome: "failed",
+						termination: "timeout",
+						durationMs: expect.any(Number),
+						...(upstreamTimeout === "responses-body"
+							? { upstreamStatus: 200 }
+							: {}),
+					}),
+				);
+				expect(relayFetch).toHaveBeenCalledTimes(
+					upstreamTimeout === "billing" ? 1 : 3,
+				);
+				expect(await effects()).toEqual([
+					{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+				]);
+			},
+		);
+
+		it.each([
+			["application", 1, "identity.owner", false],
+			["user", 1, "identity", false],
+			["user", 3, "identity.credential_recheck", false],
+			["application", 3, "identity.commit_recheck", true],
+		] as const)(
+			"records %s directory timeout at lookup %i as %s and rolls back",
+			async (principal, failedLookup, failedStage, contactedRelay) => {
+				const logs = captureLogs();
+				let lookups = 0;
+				const relayFetch = await openWithDeploymentPolicy(200, undefined, 200, {
+					output: logs.output,
+					resolveUser: async (userId) => {
+						if (++lookups === failedLookup)
+							throw new DOMException("relay-response-canary", "TimeoutError");
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "current-api-user",
+						};
+					},
+				});
+				const response = await create(apiTokens[principal]);
+				expect(response.status).toBe(503);
+				const body = await response.text();
+				expect(body).not.toContain("relay-response-canary");
+				expect(body).not.toContain(apiTokens[principal]);
+				const { traceId } = JSON.parse(body) as { traceId: string };
+				expect(logs.read()).toContainEqual(
+					expect.objectContaining({
+						traceId,
+						operationRef: stage(failedStage),
+						outcome: "failed",
+						termination: "timeout",
+						durationMs: expect.any(Number),
+					}),
+				);
+				expect(relayFetch).toHaveBeenCalledTimes(contactedRelay ? 3 : 0);
+				expect(await effects()).toEqual([
+					{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+				]);
+			},
+		);
 
 		it("uses the deployment default Relay Key policy shared with browser creation", async () => {
 			const relayFetch = await openWithDeploymentPolicy(200);

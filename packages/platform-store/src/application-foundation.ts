@@ -62,7 +62,16 @@ export interface PostgresApplicationFoundationOptions {
 			typeof captureAgentApiCreatePrincipalsV1
 		>[0];
 		readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
-		readonly observeIdentity?: <T>(resolve: () => Promise<T>) => Promise<T>;
+		readonly observeIdentity?: <T>(
+			resolve: () => Promise<T>,
+			stage:
+				| "identity"
+				| "identity.owner"
+				| "identity.references"
+				| "identity.authority"
+				| "identity.credential_recheck"
+				| "identity.commit_recheck",
+		) => Promise<T>;
 	};
 }
 
@@ -642,9 +651,15 @@ export class PostgresApplicationFoundationTransactionV1
 						this.#userDirectory,
 						"agent:create",
 					);
-				const authenticated = await (this.#apiCreation?.observeIdentity?.(
-					resolve,
-				) ?? resolve());
+				const observeIdentity =
+					this.#apiCreation?.observeIdentity ??
+					(<T>(work: () => Promise<T>) => work());
+				const authenticated = await observeIdentity(resolve, "identity");
+				const revalidateCredential = () =>
+					observeIdentity(
+						() => authenticated.revalidate(),
+						"identity.credential_recheck",
+					);
 				const { principal } = authenticated.identity;
 				auditContext = { ...auditContext, principal };
 				requireAgentApiCreatePermissionV1(principal, this.#allowedPrincipals);
@@ -762,10 +777,16 @@ export class PostgresApplicationFoundationTransactionV1
 						requirePersonalApiUserEnabledV1(disabled.length !== 0);
 						return user;
 					};
-					const owner = await currentUser(ownerId);
+					const owner = await observeIdentity(
+						() => currentUser(ownerId),
+						"identity.owner",
+					);
 					const revision = randomUUID();
 					const authorityContext = structuredClone(
-						await deployment.loadAuthorityContext(),
+						await observeIdentity(
+							() => deployment.loadAuthorityContext(),
+							"identity.authority",
+						),
 					);
 					const prepared = await prepare({
 						principal,
@@ -774,7 +795,7 @@ export class PostgresApplicationFoundationTransactionV1
 						authorizationRevision: revision,
 						authorizationAdmission: {
 							authorize: async (request) => {
-								await authenticated.revalidate();
+								await revalidateCredential();
 								requireAgentApiCreatePermissionV1(
 									principal,
 									this.#allowedPrincipals,
@@ -828,7 +849,12 @@ export class PostgresApplicationFoundationTransactionV1
 					const observed = await Promise.all(
 						[...references].map(async (id) => ({
 							id,
-							revision: (await currentUser(id)).authorizationRevision,
+							revision: (
+								await observeIdentity(
+									() => currentUser(id),
+									"identity.references",
+								)
+							).authorizationRevision,
 						})),
 					);
 					await persistApplicationFoundationRowsV1(
@@ -924,8 +950,12 @@ export class PostgresApplicationFoundationTransactionV1
 							authenticated.identity.credential.credentialId,
 						),
 					);
-				await revalidateCreationAuthority?.();
-				await authenticated.revalidate();
+				if (revalidateCreationAuthority)
+					await observeIdentity(
+						revalidateCreationAuthority,
+						"identity.commit_recheck",
+					);
+				await revalidateCredential();
 				requireAgentApiCreatePermissionV1(principal, this.#allowedPrincipals);
 				return completion.result;
 			});

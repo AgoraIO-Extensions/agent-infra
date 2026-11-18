@@ -11,6 +11,13 @@ export function recordRelayStage(event: RelayStageObservationV1): void {
 
 export async function observeModelAdmissionIdentity<T>(
 	resolve: () => Promise<T>,
+	stage:
+		| "identity"
+		| "identity.owner"
+		| "identity.references"
+		| "identity.authority"
+		| "identity.credential_recheck"
+		| "identity.commit_recheck" = "identity",
 ): Promise<T> {
 	const began = performance.now();
 	let outcome: "completed" | "rejected" | "failed" = "completed";
@@ -39,7 +46,7 @@ export async function observeModelAdmissionIdentity<T>(
 		throw error;
 	} finally {
 		recordHttpDependency({
-			operationRef: "model.admission.identity",
+			operationRef: `model.admission.${stage}`,
 			outcome,
 			durationMs: performance.now() - began,
 			...(termination === undefined ? {} : { termination }),
