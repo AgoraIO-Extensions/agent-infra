@@ -97,6 +97,7 @@ import {
 	sessionSandboxTemplateBindingFixture,
 } from "./test-support/session-sandbox-v4.js";
 import { WorkloadDeploymentErrorV1 } from "./workload-deployment.js";
+import type { WorkloadHostnameCertificateV1 } from "./workload-hostname-certificates.js";
 import { WorkloadProbeIncompleteErrorV1 } from "./workload-probe-failure.js";
 import {
 	createWorkloadReadinessLedgerV1,
@@ -8099,38 +8100,42 @@ it.each(["failed", "stopped"] as const)(
 	},
 );
 
+const hostnameTestPolicy = {
+	...workloadTestPolicy,
+	hostnameRoutes: {
+		hostSuffix: "apps.example.test",
+		platformOrigin: "https://platform.example.test",
+		clusterIssuerName: "letsencrypt-http01-staging",
+		agentIds: ["agent-a"],
+	},
+};
+const hostnameWorkloadName = workloadResourceNameV1("agent-a");
+const hostnameCertificateName = `${hostnameWorkloadName}-tls`;
+
+function hostnameConfiguration(kind: "single" | "multi" = "single") {
+	const base =
+		kind === "multi"
+			? multiServiceConfigurationFixture()
+			: configurationFixture();
+	assert(base.source.kind === "custom");
+	return {
+		...base,
+		source: {
+			...base.source,
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+		},
+	} as const;
+}
+
 it.each(["single", "multi"] as const)(
 	"publishes the normal %s self-managed hostname only after certificate readiness and closes it on expiry",
 	async (kind) => {
-		const base =
-			kind === "multi"
-				? multiServiceConfigurationFixture()
-				: configurationFixture();
-		assert(base.source.kind === "custom");
 		const f = fixture(
-			{
-				registry: workloadRegistryFixture(),
-				policy: {
-					...workloadTestPolicy,
-					hostnameRoutes: {
-						hostSuffix: "apps.example.test",
-						platformOrigin: "https://platform.example.test",
-						clusterIssuerName: "letsencrypt-http01-staging",
-						agentIds: ["agent-a"],
-					},
-				},
-			},
-			{
-				configuration: {
-					...base,
-					source: {
-						...base.source,
-						interactionMode: "self-managed",
-						identityResponsibility: "self-managed",
-					},
-				},
-			},
+			{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
+			{ configuration: hostnameConfiguration(kind) },
 		);
+		const create = vi.spyOn(f.client, "create");
 		await f.tick(4);
 		const name = "agent-a51d7389ba2cb760d233154216317fce-tls";
 		const certificate = await f.client.read("Certificate", name);
@@ -8138,6 +8143,29 @@ it.each(["single", "multi"] as const)(
 		expect(
 			await f.client.read("Ingress", "agent-a51d7389ba2cb760d233154216317fce"),
 		).toBeNull();
+		const start = new Date("2026-11-19T00:00:00Z");
+		f.seed({
+			...certificate,
+			metadata: { ...certificate.metadata, creationTimestamp: start },
+			status: null,
+		} as KubernetesObject);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(start.getTime());
+		try {
+			for (let minute = 0; minute < 120; minute += 20) {
+				clock.mockReturnValue(start.getTime() + minute * 60_000);
+				await f.tick(1);
+				f.roundTripState();
+				expect(f.state).toMatchObject({ phase: "observing", attempts: 0 });
+			}
+			expect(
+				await f.client.read(
+					"Ingress",
+					"agent-a51d7389ba2cb760d233154216317fce",
+				),
+			).toBeNull();
+		} finally {
+			clock.mockRestore();
+		}
 		f.seed({
 			...certificate,
 			status: {
@@ -8182,6 +8210,33 @@ it.each(["single", "multi"] as const)(
 		expect(
 			"interactionPath" in verified.route && verified.route.interactionPath,
 		).toBeFalsy();
+		expect(
+			create.mock.calls.filter(([object]) => object.kind === "Certificate"),
+		).toHaveLength(1);
+		expect(create.mock.calls.some(([object]) => object.kind === "Order")).toBe(
+			false,
+		);
+		const volumes = [...f.resources].filter(([key]) =>
+			key.startsWith("PersistentVolumeClaim/"),
+		);
+		if (kind === "single") expect(volumes.length).toBeGreaterThan(0);
+		f.setManagement({
+			...f.management,
+			status: "available",
+			revision: 2,
+			workloadRevision: 2,
+			fence: 2,
+		});
+		await f.tick(9);
+		expect(f.state).toMatchObject({ phase: "ready", fence: 2, revision: 2 });
+		expect(
+			create.mock.calls.filter(([object]) => object.kind === "Certificate"),
+		).toHaveLength(1);
+		expect(create.mock.calls.some(([object]) => object.kind === "Order")).toBe(
+			false,
+		);
+		for (const [key, volume] of volumes)
+			expect(f.resources.get(key)?.metadata?.uid).toBe(volume.metadata?.uid);
 		const ready = await f.client.read("Certificate", name);
 		assert(ready);
 		f.seed({
@@ -8205,6 +8260,203 @@ it.each(["single", "multi"] as const)(
 		expect((await f.client.read("Certificate", name))?.metadata?.uid).toBe(
 			certificate.metadata?.uid,
 		);
+	},
+);
+
+it.each([
+	["issuance failed", "certificate-failed"],
+	["deadline", "certificate-timeout"],
+	["issuer", "certificate-invalid"],
+	["SAN", "certificate-invalid"],
+	["generation", "certificate-invalid"],
+	["owner", "certificate-invalid"],
+] as const)(
+	"keeps the hostname closed on Certificate %s",
+	async (failure, reason) => {
+		const f = fixture(
+			{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
+			{ configuration: hostnameConfiguration() },
+		);
+		await f.tick(4);
+		const certificate = f.resources.get(
+			`Certificate/${hostnameCertificateName}`,
+		) as WorkloadHostnameCertificateV1;
+		assert(certificate);
+		const age = new Date(
+			Date.now() - (failure === "deadline" ? 5 * 60 * 60_000 : 1000),
+		);
+		f.seed({
+			...certificate,
+			metadata: {
+				...certificate.metadata,
+				creationTimestamp: age,
+				...(failure === "owner"
+					? { annotations: { "agent-infra.agora.io/agent-id": "foreign" } }
+					: {}),
+			},
+			spec: {
+				...certificate.spec,
+				...(failure === "issuer"
+					? { issuerRef: { kind: "ClusterIssuer", name: "unexpected" } }
+					: {}),
+				...(failure === "SAN" ? { dnsNames: ["foreign.example.test"] } : {}),
+			},
+			status: {
+				...(failure === "issuance failed"
+					? {
+							lastFailureTime: age.toISOString(),
+							conditions: [
+								{
+									type: "Issuing",
+									status: "False",
+									observedGeneration: 1,
+									message: "provider-canary",
+								},
+							],
+						}
+					: {}),
+				...(failure === "generation"
+					? {
+							conditions: [
+								{ type: "Ready", status: "True", observedGeneration: 0 },
+							],
+						}
+					: {}),
+			},
+		} as WorkloadHostnameCertificateV1);
+		await f.tick(1);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			attempts: 0,
+			lastFailure: { kind: "Certificate", verb: reason },
+		});
+		expect(JSON.stringify(f.state)).not.toContain("provider-canary");
+		await f.tick(3);
+		expect(f.state).toMatchObject({
+			phase: "failed",
+			lastFailure: { verb: reason },
+		});
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		expect(await f.client.read("StatefulSet", hostnameWorkloadName)).toBeNull();
+		expect(
+			(await f.client.read("Certificate", hostnameCertificateName))?.metadata
+				?.uid,
+		).toBe(certificate.metadata?.uid);
+	},
+);
+
+it.each(["incompatible", "compatible", "newer fence"] as const)(
+	"closes the route and fences resource removal during %s rollback",
+	async (variant) => {
+		const f = fixture(
+			{ registry: workloadRegistryFixture() },
+			{ configuration: hostnameConfiguration() },
+		);
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		const initial = f.state;
+		assert(initial?.verified);
+		const volumeName = `${hostnameWorkloadName}-data`;
+		const volume = await f.client.read("PersistentVolumeClaim", volumeName);
+		const workload = await f.client.read("StatefulSet", hostnameWorkloadName);
+		assert(volume?.metadata?.uid && workload?.metadata?.uid);
+		if (variant !== "compatible")
+			Object.assign(f.options, { policy: hostnameTestPolicy });
+		f.setManagement({
+			...f.management,
+			status: "available",
+			revision: 2,
+			workloadRevision: 2,
+			fence: 2,
+		});
+		const remove = vi.spyOn(f.client, "delete");
+		for (let i = 0; i < 6 && f.state?.phase !== "observing"; i++)
+			await f.tick(1);
+		expect(f.state?.phase).toBe("observing");
+		const certificate = await f.client.read(
+			"Certificate",
+			hostnameCertificateName,
+		);
+		if (variant === "compatible") {
+			const fetcher = f.options.fetch;
+			Object.assign(f.options, {
+				fetch: async () => new Response("failure", { status: 500 }),
+			});
+			for (let i = 0; i < 4 && !f.state?.rollback; i++) await f.tick(1);
+			expect(f.state).toMatchObject({
+				phase: "applying",
+				rollback: true,
+				candidate: initial.verified,
+			});
+			Object.assign(f.options, { fetch: fetcher });
+		} else {
+			assert(certificate);
+			f.seed({
+				...certificate,
+				status: { lastFailureTime: new Date().toISOString() },
+			} as KubernetesObject);
+			await f.tick(1);
+			expect(f.state?.phase).toBe("cleaning");
+			if (variant === "newer fence") {
+				const service = await f.client.read("Service", hostnameWorkloadName);
+				assert(service);
+				f.seed({
+					...service,
+					metadata: {
+						...service.metadata,
+						annotations: {
+							...service.metadata?.annotations,
+							"agent-infra.agora.io/fence": "3",
+						},
+					},
+				});
+			}
+		}
+		await f.tick(10);
+		expect(
+			remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+		).toHaveLength(0);
+		expect(
+			(await f.client.read("StatefulSet", hostnameWorkloadName))?.metadata?.uid,
+		).toBe(workload.metadata.uid);
+		expect(
+			(await f.client.read("PersistentVolumeClaim", volumeName))?.metadata?.uid,
+		).toBe(volume.metadata.uid);
+		if (variant === "compatible") {
+			expect(f.state).toMatchObject({ phase: "ready", rollback: true });
+			expect(
+				await f.client.read("Ingress", hostnameWorkloadName),
+			).not.toBeNull();
+		} else {
+			expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+			expect(
+				(await f.client.read("Certificate", hostnameCertificateName))?.metadata
+					?.uid,
+			).toBe(certificate?.metadata?.uid);
+			expect(f.state?.verified).toEqual(initial.verified);
+			if (variant === "incompatible") {
+				expect(f.state).toMatchObject({
+					phase: "failed",
+					lastFailure: {
+						reason: "kubernetes_policy",
+						kind: "Ingress",
+						verb: "rollback",
+						attempts: 1,
+					},
+				});
+				f.setManagement({
+					...f.management,
+					status: "disabled",
+					desiredState: "stopped",
+					revision: 3,
+					workloadRevision: 3,
+					fence: 3,
+				});
+				await f.tick(4);
+				expect(f.state).toMatchObject({ phase: "stopped", fence: 3 });
+				expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+			} else expect(f.state?.phase).toBe("cleaning");
+		}
 	},
 );
 

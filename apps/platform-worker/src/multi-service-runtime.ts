@@ -1903,7 +1903,6 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			identity: { uid: string; generation: number } | "pending",
 		) {
-			if (!(await hostnameCertificates.ready(value))) return "pending" as const;
 			if (await hasAdditionalSnapshotEgress(value)) return "drifted" as const;
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
@@ -1944,6 +1943,8 @@ export function createMultiServiceRuntimeOperations(options: {
 				currentEntry.metadata.generation !== identity.generation
 			)
 				return "drifted" as const;
+			const certificate = await hostnameCertificates.observe(value);
+			if (certificate !== "ready") return certificate;
 			const snapshot = parseMemberSnapshot(
 				currentEntry.metadata.annotations?.[memberIdentityAnnotation],
 			);

@@ -512,9 +512,24 @@ const durableRetryDelayCapMsV1 = 60_000;
  * 其余阶段的 attempts 表示等待就绪或有限的重试预算，保持固定间隔，避免拖慢就绪检测。
  */
 export function workloadRetryDelayMsV1(
-	next: Pick<WorkloadReconciliationStateV1, "phase" | "attempts">,
+	next: Pick<
+		WorkloadReconciliationStateV1,
+		"phase" | "attempts" | "lastFailure"
+	>,
 	baseDelayMs: number,
 ): number {
+	if (
+		next.phase === "observing" &&
+		next.lastFailure?.kind === "Certificate" &&
+		next.lastFailure.verb === "await-issuance"
+	)
+		return Math.max(
+			baseDelayMs,
+			Math.min(
+				durableRetryDelayCapMsV1,
+				5_000 * 2 ** Math.min(next.lastFailure.attempts - 1, 4),
+			),
+		);
 	if (
 		(next.phase !== "cleaning" && next.phase !== "closing") ||
 		next.attempts <= 5 ||

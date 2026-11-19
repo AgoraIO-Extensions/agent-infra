@@ -93,6 +93,7 @@ import {
 	assertWorkloadPublicRouteV1,
 	publicBasePathEnvironmentV1,
 	workloadInteractionRouteV1,
+	workloadPublicRouteV1,
 } from "./workload-public-route.js";
 import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
 import type {
@@ -2237,6 +2238,26 @@ export function createWorkloadRuntimeV1(
 					: candidate;
 			} catch {
 				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
+			}
+		},
+		rollbackRouteCompatible(state) {
+			// Validate the verified route as stored. Re-composing it here would hide
+			// an incompatible rollback target and could serve an unverified route.
+			if (!state.candidate.deployment) return false;
+			const value = desired(state);
+			try {
+				assertWorkloadPublicRouteV1(options.policy, value);
+				return (
+					isMultiService(value) ||
+					value.route.exposure !== "self-managed" ||
+					value.route.interactionOrigin?.origin ===
+						workloadPublicRouteV1(options.policy, value.agentId)
+							.interactionOrigin.origin
+				);
+			} catch (error) {
+				if (error instanceof WorkloadKubernetesError && error.code === "policy")
+					return false;
+				throw error;
 			}
 		},
 		async closeRoute(state) {

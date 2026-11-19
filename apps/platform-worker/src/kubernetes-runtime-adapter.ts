@@ -22,7 +22,10 @@ import {
 	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
-import { WorkloadPreflightRejectedErrorV1 } from "@agent-infra/platform-core";
+import {
+	type WorkloadObservationV1,
+	WorkloadPreflightRejectedErrorV1,
+} from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1EnvVar,
@@ -632,11 +635,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			readonly workloadRevision: number;
 			readonly fence: number;
 		},
-	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted"> {
+	): Promise<WorkloadObservationV1> {
 		const value = desired(input);
 		if (isMultiService(value)) return multiService.observe(value, identity);
-		if (!(await hostnameCertificates.ready(value)))
-			return routeMode === "open" ? "drifted" : "pending";
 		if (
 			!options.connectionConsumerControl &&
 			connectionInstallationRevision === null
@@ -826,6 +827,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 		)
 			return "drifted";
+		const certificate = await hostnameCertificates.observe(value);
+		if (certificate !== "ready") return certificate;
 		const pods = labelledPods.filter(ownedByExpectedWorkload);
 		if (pods.length !== 1) return "pending";
 		const pod = pods[0];

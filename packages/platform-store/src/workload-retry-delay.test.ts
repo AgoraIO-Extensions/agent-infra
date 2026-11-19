@@ -29,6 +29,26 @@ describe("Workload durable retry delay (#2532)", () => {
 			);
 	});
 
+	it("backs off Certificate issuance reads independently of health attempts", () => {
+		const delays = [1, 2, 3, 4, 5, 60].map((attempts) =>
+			workloadRetryDelayMsV1(
+				{
+					phase: "observing",
+					attempts: 0,
+					lastFailure: {
+						schemaVersion: 1,
+						reason: "kubernetes_conflict",
+						kind: "Certificate",
+						verb: "await-issuance",
+						attempts,
+					},
+				},
+				1_000,
+			),
+		);
+		expect(delays).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+	});
+
 	it("never shortens a configured interval and keeps a zero interval at zero", () => {
 		expect(
 			workloadRetryDelayMsV1({ phase: "cleaning", attempts: 40 }, 120_000),
