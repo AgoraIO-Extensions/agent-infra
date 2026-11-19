@@ -68,6 +68,7 @@ function timeline(
 	stopExecution?: string,
 	feedbackIdentity?: string,
 ) {
+	const onExecution = vi.fn();
 	render(
 		<ConversationMessages
 			feedbackIdentity={feedbackIdentity}
@@ -78,7 +79,7 @@ function timeline(
 				messages,
 			})}
 			events={events}
-			onExecution={vi.fn()}
+			onExecution={onExecution}
 			onRegenerate={vi.fn()}
 			canRegenerate
 			onResend={vi.fn()}
@@ -101,11 +102,77 @@ function timeline(
 	const region = screen.getByRole("region", { name: "会话时间线" });
 	return {
 		region,
+		onExecution,
 		labels: within(region)
 			.getAllByRole("article")
 			.map((node) => node.getAttribute("aria-label")),
 	};
 }
+
+it("renders a persisted standalone Skill reply in order without repeating its replayed delta", () => {
+	const output = "The Skill result";
+	const { region } = timeline(
+		[
+			{
+				...message("seed", "user", "Seed", "completed", "seed-execution"),
+				createdAt: "2026-01-01T00:00:00.000Z",
+			},
+			{
+				...message(
+					"assistant:skill-execution",
+					"assistant",
+					output,
+					"completed",
+					"skill-execution",
+				),
+				createdAt: "2026-01-01T00:01:00.000Z",
+			},
+			{
+				...message(
+					"later",
+					"user",
+					"Later question",
+					"completed",
+					"later-execution",
+				),
+				createdAt: "2026-01-01T00:02:00.000Z",
+			},
+		],
+		[
+			fact("skill-execution", 1, { text: output }),
+			fact("skill-execution", 2, { status: "completed" }),
+		],
+	);
+	expect(within(region).getAllByText(output)).toHaveLength(1);
+	const articles = within(region)
+		.getAllByRole("article")
+		.map((node) => node.textContent ?? "");
+	const seed = articles.findIndex((text) => text.includes("Seed"));
+	const reply = articles.findIndex((text) => text.includes(output));
+	const later = articles.findIndex((text) => text.includes("Later question"));
+	expect(seed).toBeGreaterThanOrEqual(0);
+	expect(reply).toBeGreaterThan(seed);
+	expect(later).toBeGreaterThan(reply);
+});
+
+it("opens the corresponding execution from each named Skill reply", () => {
+	const { region, onExecution } = timeline(
+		[
+			message("skill-a", "assistant", "Same result", "completed", "exec-a"),
+			message("skill-b", "assistant", "Same result", "completed", "exec-b"),
+		],
+		[],
+	);
+	const first = within(region).getByRole("button", {
+		name: "查看执行详情：Skill 回复 1",
+	});
+	const second = within(region).getByRole("button", {
+		name: "查看执行详情：Skill 回复 2",
+	});
+	fireEvent.click(first);
+	fireEvent.click(second);
+	expect(onExecution.mock.calls).toEqual([["exec-a"], ["exec-b"]]);
+});
 
 // #3449 N16-01：补充指令沿用原回复的 Execution，答案在原消息的回复中更新（PRD §11.2）。
 describe("supplementary instructions in the timeline (#3449 N16-01)", () => {

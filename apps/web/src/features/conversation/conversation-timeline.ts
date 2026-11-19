@@ -168,6 +168,48 @@ function mergeHistoryEvents(
 	};
 }
 
+/** Keep the persisted reply and the event IDs already folded into its text together. */
+function mergeStandaloneReplies(
+	history: ConversationDetailProjectionV2,
+	earlier: ConversationDetailProjectionV2,
+	loadedEvents: readonly ConversationTimelineEventV2[],
+): ConversationDetailProjectionV2 {
+	if (
+		history.conversation.conversationId !== earlier.conversation.conversationId
+	)
+		return history;
+	const loadedExecutionIds = new Set(
+		loadedEvents.map((event) => event.executionId),
+	);
+	const currentExecutionIds = new Set(
+		history.messages
+			.filter((message) => message.role === "assistant")
+			.map((message) => message.executionId),
+	);
+	const replies = earlier.messages.filter(
+		(message) =>
+			message.role === "assistant" &&
+			message.replyToMessageId === null &&
+			message.executionId !== null &&
+			loadedExecutionIds.has(message.executionId) &&
+			!currentExecutionIds.has(message.executionId),
+	);
+	if (replies.length === 0) return history;
+	const replyExecutionIds = new Set(replies.map((reply) => reply.executionId));
+	return {
+		...history,
+		messages: [...history.messages, ...replies],
+		events: [
+			...prependTimelineEvents(
+				history.events,
+				earlier.events.filter((event) =>
+					replyExecutionIds.has(event.executionId),
+				),
+			),
+		],
+	};
+}
+
 /** Read-only, per-page consumer. Abort on unmount or identity changes. A
  * transient stream end reconnects quickly a bounded number of times (#1606),
  * then keeps retrying slowly while the page is visible and at once on
@@ -368,7 +410,10 @@ export function createConversationTimeline({
 		publish({
 			...state,
 			status: "ready",
-			history,
+			history:
+				merged.keptEarlier && state.history
+					? mergeStandaloneReplies(history, state.history, merged.events)
+					: history,
 			events: merged.events,
 			failure: null,
 			// 保留了更早事件时，「加载更早内容」仍从其中最早的一页继续。
@@ -454,9 +499,13 @@ export function createConversationTimeline({
 		}
 		const eventWindow = parsed.data.eventWindow;
 		const nextBeforeCursor = eventWindow?.beforeCursor ?? null;
+		const events = prependTimelineEvents(state.events, parsed.data.events);
 		publish({
 			...state,
-			events: prependTimelineEvents(state.events, parsed.data.events),
+			history: state.history
+				? mergeStandaloneReplies(state.history, parsed.data, events)
+				: null,
+			events,
 			hasEarlier: eventWindow?.hasEarlier === true && nextBeforeCursor !== null,
 			beforeCursor: nextBeforeCursor,
 			earlierLoading: false,
