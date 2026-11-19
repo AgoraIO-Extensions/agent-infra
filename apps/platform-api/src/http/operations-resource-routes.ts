@@ -5,6 +5,7 @@ import {
 	type OperationsResourceQueryV2,
 	OperationsResourceQueryV2Schema,
 	OperationsResourcesV2Schema,
+	operationsSessionRequestCoverageHeaderV2,
 } from "@agent-infra/contracts/pilot";
 import { OperationsScopeErrorV2 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
@@ -19,7 +20,7 @@ export interface OperationsResourceRoutesDependenciesV2 {
 			signal: AbortSignal,
 		): Promise<unknown>;
 		read(
-			input: OperationsResourceQueryV2,
+			input: OperationsResourceQueryV2 & { includeSessionRequests?: boolean },
 			signal?: AbortSignal,
 		): Promise<unknown>;
 	};
@@ -72,12 +73,17 @@ export function registerOperationsResourceRoutesV2(
 		if (!dependencies.operations)
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		try {
+			const includeSessionRequests =
+				context.req.header(operationsSessionRequestCoverageHeaderV2) === "1";
 			const value = await dependencies.operations.read(
-				query.data,
+				{ ...query.data, includeSessionRequests },
 				AbortSignal.any([context.req.raw.signal, AbortSignal.timeout(5000)]),
 			);
 			const result = OperationsResourcesV2Schema.safeParse(value);
 			if (!result.success) throw new Error();
+			context.header("Vary", operationsSessionRequestCoverageHeaderV2, {
+				append: true,
+			});
 			return context.json(result.data);
 		} catch (error) {
 			if (error instanceof OperationsScopeErrorV2)

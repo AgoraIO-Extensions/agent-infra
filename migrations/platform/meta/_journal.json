@@ -586,8 +586,15 @@
     {
       "idx": 87,
       "version": "7",
-      "when": 1795089846321,
-      "tag": "0087_connection_host_supplies",
+      "when": 1795100183257,
+      "tag": "0087_operations_request_inventory",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1795112755399,
+      "tag": "0088_connection_host_supplies",
       "breakpoints": true
     }
   ]

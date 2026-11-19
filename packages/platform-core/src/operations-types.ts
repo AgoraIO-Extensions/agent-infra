@@ -14,6 +14,12 @@ export interface OperationsBudgetObservationV2 {
 	limits: OperationsQuantitiesV2 | null;
 	reserveUsage: OperationsQuantitiesV2;
 	sessionUsage: OperationsQuantitiesV2;
+	sessionRequestCoverage?: {
+		cpuCores: number;
+		memoryBytes: number;
+		storageBytes: number;
+		unscopedSessions: number;
+	};
 	unknownUsage: OperationsQuantitiesV2;
 	counts: {
 		unclaimedReserves: number;

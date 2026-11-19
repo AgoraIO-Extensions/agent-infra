@@ -2046,6 +2046,7 @@ describe("published Relay authority migration", () => {
 			85,
 			86,
 			87,
+			88,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2139,9 +2140,13 @@ describe("published Relay authority migration", () => {
 			idx: 86,
 			tag: "0086_workload_certificate_reconciliation",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 87)).toMatchObject({
 			idx: 87,
-			tag: "0087_connection_host_supplies",
+			tag: "0087_operations_request_inventory",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 88,
+			tag: "0088_connection_host_supplies",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2781,9 +2786,13 @@ describe("published Relay authority migration", () => {
 				"connection_association_generations:connection_association_generations_pkey",
 			);
 			expectedDelta.columns.push(
-				...["cluster_id", "namespace", "observed_at", "snapshot"].map(
-					(name) => `operations_resource_snapshots:${name}`,
-				),
+				...[
+					"cluster_id",
+					"namespace",
+					"observed_at",
+					"request_inventory",
+					"snapshot",
+				].map((name) => `operations_resource_snapshots:${name}`),
 				...[
 					"agent_id",
 					"cluster_id",
