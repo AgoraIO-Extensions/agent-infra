@@ -41,7 +41,7 @@ function requiredReference(value, prefix) {
 function kubectl(namespace, args, stdin) {
 	const kubeconfig = process.env.ACK_KUBECONFIG;
 	if (!kubeconfig) throw new Error("ACK_KUBECONFIG_REQUIRED");
-	return JSON.parse(execFileSync("kubectl", [
+	const bytes = execFileSync("kubectl", [
 		"--kubeconfig", kubeconfig, "--namespace", namespace, ...args,
 	], {
 		encoding: "utf8",
@@ -49,11 +49,13 @@ function kubectl(namespace, args, stdin) {
 		maxBuffer: 256 * 1024,
 		timeout: 10_000,
 		stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-	}));
+	});
+	return bytes.trim() ? JSON.parse(bytes) : null;
 }
 
-function readConfigMap(namespace, name) {
-	return kubectl(namespace, ["get", "configmap", name, "-o", "json"]);
+function readConfigMap(namespace, name, optional = false) {
+	return kubectl(namespace, ["get", "configmap", name, "-o", "json",
+		...(optional ? ["--ignore-not-found=true"] : [])]);
 }
 
 function input(map, namespace, name, key) {
@@ -116,7 +118,8 @@ export function executorAcceptance(options, get = readConfigMap, cluster = kubec
 	}
 	const run = value;
 	requiredReference(run, "executor-run-");
-	const receiptObject = get(namespace, run);
+	const receiptObject = get(namespace, run, true);
+	if (receiptObject === null) return { schemaVersion: 1, namespace, run, evidence: "pending" };
 	const receipt = input(receiptObject, namespace, run, "receipt.json");
 	const ownerRefs = receiptObject.metadata.ownerReferences;
 	if (!Array.isArray(ownerRefs) || ownerRefs.length !== 1 ||

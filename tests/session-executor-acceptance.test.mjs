@@ -205,3 +205,16 @@ test("starts only the approved fixture for the current Pod UID and fence", () =>
 		);
 	}
 });
+
+test("a missing receipt preserves the original run and reports pending", () => {
+	const { get } = fixture();
+	const noResult = (ns, name, optional) => {
+		if (name === plan) return get(ns, name);
+		assert.equal(optional, true);
+		return null;
+	};
+	assert.deepEqual(
+		executorAcceptance(["read", "--plan", reference, "--run", run], noResult),
+		{ schemaVersion: 1, namespace, run, evidence: "pending" },
+	);
+});

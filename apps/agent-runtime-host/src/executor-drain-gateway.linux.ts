@@ -160,6 +160,10 @@ async function run() {
 			const group = Number(Buffer.from(firstChunk.chunk, "base64").toString());
 			assert.ok(Number.isSafeInteger(group) && group > 1);
 			process.kill(-group, 0);
+			assert.equal(await drain.confirm("execution-original"), false);
+			assert.equal(drain.proven("execution-original"), false);
+			await assert.rejects(drain.arm("execution-before-drain"));
+			process.kill(-group, 0);
 			await drain.sealStop(
 				"execution-original",
 				"stop-original",

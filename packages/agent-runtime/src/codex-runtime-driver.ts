@@ -6721,6 +6721,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		this.inFlightOperations.set(key, execution);
 		try {
 			return await execution;
+		} catch (error) {
+			// Before native submission the Driver deletes the prepared operation.
+			// The authenticated runner must still confirm the empty inventory.
+			if (
+				(command.kind === "submit-turn" || command.kind === "native-command") &&
+				this.executorExecutionId === command.executionId &&
+				!this.operationRecord(command)
+			)
+				await this.sessionExecutor?.drain?.confirm(command.executionId);
+			throw error;
 		} finally {
 			if (this.inFlightOperations.get(key) === execution) {
 				this.inFlightOperations.delete(key);

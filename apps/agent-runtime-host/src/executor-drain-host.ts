@@ -44,7 +44,6 @@ export async function openExecutorDrainHostV1(
 		  }
 		| undefined;
 	const nonces = new Map<string, number>();
-	const finished = new Set<string>();
 	const server = createServer((request, response) => {
 		if (request.method !== "POST" || request.url !== "/control/register") {
 			response.writeHead(404).end();
@@ -178,8 +177,8 @@ export async function openExecutorDrainHostV1(
 			},
 			async confirm(executionId) {
 				const target = active;
-				if (finished.has(executionId)) return true;
 				if (!target || target.executionId !== executionId) return false;
+				if (target.journal.confirmed()) return true;
 				try {
 					const stop = target.journal.sealedStop() ?? naturalStop(executionId);
 					const authorization = target.stopAuthorization;
@@ -208,13 +207,13 @@ export async function openExecutorDrainHostV1(
 						!(await target.journal.confirm(stop, inventory.digest))
 					)
 						return false;
-					finished.add(executionId);
 					return true;
 				} catch {
 					return false;
 				}
 			},
-			proven: (executionId) => finished.has(executionId),
+			proven: (executionId) =>
+				active?.executionId === executionId && active.journal.confirmed(),
 		},
 	};
 }
