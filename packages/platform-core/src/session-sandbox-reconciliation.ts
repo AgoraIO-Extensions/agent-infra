@@ -94,8 +94,6 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly deliveryFence: number;
 	/** Current durable outbox attempt (1-based); used only for bounded diagnostics. */
 	readonly attemptCount?: number;
-	/** Original outbox creation time. It never moves on lease recovery. */
-	readonly startupIntentCreatedAtMs?: number;
 	readonly sandbox: SessionSandboxBindingV1;
 	readonly resourceFence: number;
 	readonly resourceStatus: "applying" | "unknown";
@@ -172,6 +170,7 @@ export interface SessionSandboxObservationV1 {
 	readonly failureCode?:
 		| "eci.image_pull"
 		| "runtime.startup"
+		| "runtime.executor_identity_timeout"
 		| "runtime.configuration"
 		| "workspace.materialization"
 		// #3985：准备认领读回记录的 Pod 已不存在；只作为一次观测的证据，不写入分配。
@@ -305,6 +304,7 @@ export function isSessionSandboxObservationValidV1(
 			![
 				"eci.image_pull",
 				"runtime.startup",
+				"runtime.executor_identity_timeout",
 				"runtime.configuration",
 				"workspace.materialization",
 				"sandbox.pod_lost",

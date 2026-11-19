@@ -510,11 +510,9 @@ export async function claimSandboxReconciliation(
 		return null;
 	}
 	const { outbox, sandbox, allocation, authorization } = context;
-	const [lease] = await transaction<
-		{ eligible: boolean; created_at: Date }[]
-	>`select
+	const [lease] = await transaction<{ eligible: boolean }[]>`select
 		(status in ('pending','retry_scheduled') and available_at <= clock_timestamp()) or
-		(status = 'processing' and lease_expires_at <= clock_timestamp()) as eligible, created_at
+		(status = 'processing' and lease_expires_at <= clock_timestamp()) as eligible
 		from platform.outbox_items where id = ${input.itemId}`;
 	if (!lease?.eligible) {
 		wait("lease_ineligible");
@@ -598,9 +596,6 @@ export async function claimSandboxReconciliation(
 		leaseOwner: input.workerId,
 		deliveryFence,
 		attemptCount: Number(context.outbox.attempt_count) + 1,
-		...(context.purpose === "prepare"
-			? { startupIntentCreatedAtMs: new Date(lease.created_at).getTime() }
-			: {}),
 		sandbox,
 		resourceFence,
 		resourceStatus: allocation.status === "unknown" ? "unknown" : "applying",
@@ -690,6 +685,72 @@ export async function prepareSandboxReconciliation(
 		set lease_expires_at = clock_timestamp() + (${leaseDurationMs}::bigint * interval '1 millisecond')
 		where id = ${claim.itemId} and lease_expires_at > clock_timestamp() returning id`;
 	return renewed.length === 1;
+}
+
+/** Freeze the projection and deadline before the first Kubernetes side effect. */
+export async function recordSandboxExecutorStartup(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	startupRef: string,
+	timeoutMs: number,
+	policy: SessionSandboxPolicyV1,
+	directory: TaskUserDirectoryV1 | undefined,
+): Promise<number | null> {
+	if (
+		startupRef !==
+			`${claim.sandbox.resourceName}-executor-${claim.resourceFence}` ||
+		!Number.isSafeInteger(timeoutMs) ||
+		timeoutMs < 1000 ||
+		timeoutMs > 900_000
+	)
+		throw new TypeError("Invalid executor startup authorization");
+	const context = await ownedContext(transaction, claim, policy, directory);
+	if (context?.purpose !== "prepare") return null;
+	const [existing] = await transaction<
+		{ details: { startupRef?: string; deadlineMs?: number } }[]
+	>`
+		select details from platform.conversation_audit_events
+		where conversation_id = ${claim.sandbox.sessionId}
+			and action = 'conversation.sandbox.observed'
+			and details->>'checkpoint' = 'executor-startup'
+			and details->>'sandboxId' = ${claim.sandbox.sandboxId}
+			and details->>'sessionGeneration' = ${String(claim.sandbox.generation)}
+			and details->>'resourceFence' = ${String(claim.resourceFence)}
+		order by occurred_at desc, id desc limit 1
+	`;
+	if (existing) {
+		const deadline = existing.details.deadlineMs;
+		if (
+			existing.details.startupRef !== startupRef ||
+			typeof deadline !== "number" ||
+			!Number.isSafeInteger(deadline) ||
+			deadline < 1
+		)
+			return null;
+		return deadline;
+	}
+	const [clock] = await transaction<{ deadline_ms: number }[]>`
+		select floor(extract(epoch from clock_timestamp()) * 1000)::float8 + ${timeoutMs}::float8 as deadline_ms
+	`;
+	const deadline = clock?.deadline_ms;
+	if (typeof deadline !== "number" || !Number.isSafeInteger(deadline))
+		return null;
+	await transaction`
+		insert into platform.conversation_audit_events
+			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+		values
+			(${randomUUID()}, ${claim.sandbox.sessionId}, null, ${claim.sandbox.agentId}, ${claim.sandbox.principal.id},
+			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id},
+			clock_timestamp(), ${transaction.json({
+				checkpoint: "executor-startup",
+				startupRef,
+				deadlineMs: deadline,
+				sandboxId: claim.sandbox.sandboxId,
+				sessionGeneration: claim.sandbox.generation,
+				resourceFence: claim.resourceFence,
+			})})
+	`;
+	return deadline;
 }
 
 /** Persist the delete intent/attempt before or after the Kubernetes call and refresh the claim. */
@@ -873,6 +934,7 @@ export async function recordSandboxObservation(
 		from platform.conversation_audit_events
 		where conversation_id = ${context.sandbox.sessionId}
 			and action = 'conversation.sandbox.observed'
+			and details ? 'progress'
 			and details->>'sandboxId' = ${context.sandbox.sandboxId}
 			and details->>'sessionGeneration' = ${String(context.sandbox.generation)}
 			and details->>'resourceFence' = ${String(claim.resourceFence)}

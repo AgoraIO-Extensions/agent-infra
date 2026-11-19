@@ -1180,6 +1180,56 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		return { work, itemId, store };
 	}
 
+	it("freezes the executor projection deadline across expired and replacement Worker leases", async () => {
+		const { itemId, work, store } =
+			await seedSandboxPrepareIntent("executor-startup");
+		try {
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "original-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim) throw new Error("Expected original startup claim");
+			const startupRef = `${claim.sandbox.resourceName}-executor-${claim.resourceFence}`;
+			const input = { claim, startupRef, timeoutMs: 120_000 };
+			const deadline = await store.recordSandboxExecutorStartup(input);
+			expect(deadline).toBeGreaterThan(Date.now());
+			await expect(
+				store.recordSandboxExecutorStartup({ ...input, startupRef: "other" }),
+			).rejects.toThrow();
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${itemId}`;
+			expect(await store.recordSandboxExecutorStartup(input)).toBeNull();
+			const replacement = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "replacement-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!replacement) throw new Error("Expected replacement claim");
+			expect(
+				await store.recordSandboxExecutorStartup({
+					claim: replacement,
+					startupRef,
+					timeoutMs: 900_000,
+				}),
+			).toBe(deadline);
+			const rows = await client`
+				select details from platform.conversation_audit_events
+				where conversation_id = ${work.conversationId}
+					and action = 'conversation.sandbox.observed'
+					and details->>'checkpoint' = 'executor-startup'
+			`;
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.details).toMatchObject({
+				startupRef,
+				deadlineMs: deadline,
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("uses the normal prepare window only for current healthy startup evidence (#3739)", async () => {
 		const { itemId, store, work } =
 			await seedSandboxPrepareIntent("normal-window");

@@ -89,6 +89,7 @@ import {
 	claimSandboxReconciliation,
 	prepareSandboxReconciliation,
 	recordSandboxDeletionProgress,
+	recordSandboxExecutorStartup,
 	recordSandboxObservation,
 	type SandboxClaimRequest,
 	type SessionSandboxClaimWaitReasonV1,
@@ -275,6 +276,27 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.observation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxExecutorStartup(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly startupRef: string;
+		readonly timeoutMs: number;
+	}): Promise<number | null> {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxExecutorStartup(
+					transaction,
+					input.claim,
+					input.startupRef,
+					input.timeoutMs,
 					policy,
 					this.#userDirectory,
 				),

@@ -2296,6 +2296,12 @@ function ownedAtOrBefore(
 	);
 }
 
+export class SessionExecutorStartupExpiredV1 extends WorkloadKubernetesError {
+	constructor() {
+		super("policy");
+	}
+}
+
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly executorIdentityIssuer?: KeyObject;
@@ -2351,7 +2357,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					kind: "Secret",
 					metadata: published.metadata,
 				});
-			if (expired && !initialized) throw new WorkloadKubernetesError("policy");
+			if (expired && !initialized) throw new SessionExecutorStartupExpiredV1();
 			return;
 		}
 		if (published) return;
@@ -2695,6 +2701,13 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			} else {
 				const pod = resources.find((resource) => resource.kind === "Pod");
 				if (!pod) throw new WorkloadKubernetesError("policy");
+				if (
+					allocation.executorDrainIdentity &&
+					allocation.executorStartupDeadline !== undefined &&
+					Date.now() >= allocation.executorStartupDeadline &&
+					!(await options.client.read("Pod", allocation.podName))
+				)
+					throw new SessionExecutorStartupExpiredV1();
 				// PVC, identity, policy, route and Secret are independent. The Pod
 				// is the only resource that consumes all of them, so keep it in a
 				// second wave while collapsing the control-plane round trips.

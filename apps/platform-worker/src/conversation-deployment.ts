@@ -52,6 +52,7 @@ import {
 	createSessionSandboxWorkloadAdapterV1,
 	hasSessionSandboxIdentityV1,
 	isNativeMetadataWorkerOriginV1,
+	SessionExecutorStartupExpiredV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
 	type SessionSandboxOAuthProvisioningV1,
@@ -1271,6 +1272,10 @@ export function createProductionSessionSandboxReceiverV1(
 		recordDeletionProgress?: (
 			progress: SessionSandboxDeletionProgressV1,
 		) => Promise<"committed" | "stale" | "unknown">,
+		recordExecutorStartup?: (
+			startupRef: string,
+			timeoutMs: number,
+		) => Promise<number | null>,
 	) => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
@@ -1636,16 +1641,29 @@ export function createProductionSessionSandboxReceiverV1(
 		}
 		let deploymentAllocation = allocation;
 		if (allocation.executorDrainIdentity) {
-			const startedAt = claim.startupIntentCreatedAtMs;
 			const timeout = options.executorDrainStartupTimeoutMs;
-			if (!startedAt || !timeout || !Number.isSafeInteger(startedAt + timeout))
+			if (!timeout || !recordExecutorStartup)
 				throw new WorkloadKubernetesError("policy");
-			deploymentAllocation = {
-				...allocation,
-				executorStartupDeadline: startedAt + timeout,
+			const executorStartupDeadline = await recordExecutorStartup(
+				`${allocation.podName}-executor-${allocation.resourceFence}`,
+				timeout,
+			);
+			signal.throwIfAborted();
+			if (executorStartupDeadline === null)
+				throw new WorkloadKubernetesError("conflict");
+			deploymentAllocation = { ...allocation, executorStartupDeadline };
+		}
+		try {
+			await adapter.apply(deploymentAllocation, previousForApply);
+		} catch (error) {
+			if (!(error instanceof SessionExecutorStartupExpiredV1)) throw error;
+			signal.throwIfAborted();
+			return {
+				status: "observed" as const,
+				failureCode: "runtime.executor_identity_timeout" as const,
+				resources: previousForApply,
 			};
 		}
-		await adapter.apply(deploymentAllocation, previousForApply);
 		signal.throwIfAborted();
 		// One complete observe per claim; normal prepare pacing is durable in Store.
 		// Keep the lease/abort/CAS boundary here and let the next claim use the
