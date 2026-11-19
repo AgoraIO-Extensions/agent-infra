@@ -18,6 +18,12 @@ export { isCodexConnectionClientConfiguration } from "./codex-connection-client.
 export * from "./codex-installation.js";
 export * from "./codex-runtime-driver.js";
 export * from "./codex-session-executor.js";
+export {
+	type ConnectionHostSupplyBindingV1,
+	encodeConnectionHostSupplyAadV1,
+	openConnectionHostSupplyV1,
+	sealConnectionHostSupplyV1,
+} from "./connection-host-supply-crypto.js";
 export * from "./driver.js";
 export * from "./errors.js";
 export * from "./fake-runtime-driver.js";
