@@ -207,6 +207,16 @@ export interface WorkloadReconciliationStateV1 {
 	readonly attempts: number;
 	/** Latest bounded swallowed-step failure; absent on legacy states. */
 	readonly lastFailure?: WorkloadReconciliationFailureV1;
+	/** Issuance polling does not count as a failed Kubernetes operation. */
+	readonly certificateWait?: {
+		readonly attempts: number;
+		readonly resumeRejected?: true;
+	};
+	/** A fenced route must close, but the verified workload is retained. */
+	readonly retainedFailure?: {
+		readonly certificate?: WorkloadCertificateFailureV1;
+		readonly rollbackRouteRejected?: true;
+	};
 	readonly capabilities?: WorkloadCapabilitiesV1;
 }
 
@@ -315,6 +325,16 @@ export interface WorkloadReconciliationFailureV1 {
 	readonly verb?: string;
 }
 
+export function isRejectedWorkloadRouteClosedForCertificateV1(
+	state: WorkloadReconciliationStateV1,
+): boolean {
+	return (
+		state.phase === "rejected" &&
+		state.lastFailure?.kind === "Certificate" &&
+		state.lastFailure.verb === "certificate-unavailable"
+	);
+}
+
 function classifyWorkloadFailureReasonV1(
 	error: unknown,
 ): WorkloadFailureReasonCodeV1 {
@@ -388,7 +408,24 @@ function classifyWorkloadFailureDetailsV1(
 	};
 }
 
+export type WorkloadCertificateFailureV1 =
+	| "certificate-failed"
+	| "certificate-timeout"
+	| "certificate-invalid";
+
+export type WorkloadObservationV1 =
+	| "pending"
+	| "healthy"
+	| "unhealthy"
+	| "unreachable"
+	| "drifted"
+	| "certificate-pending"
+	| "certificate-unavailable"
+	| WorkloadCertificateFailureV1;
+
 export interface WorkloadRuntimePortV1 {
+	/** Pure check of the retained deployment against the current public route policy. */
+	rollbackRouteCompatible?(state: WorkloadReconciliationStateV1): boolean;
 	capabilities(
 		state: WorkloadReconciliationStateV1,
 	): Promise<WorkloadCapabilitiesV1>;
@@ -404,7 +441,8 @@ export interface WorkloadRuntimePortV1 {
 	): Promise<WorkloadIdentityV1 | WorkloadPreparationV1 | "pending" | null>;
 	observe(
 		state: WorkloadReconciliationStateV1,
-	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted">;
+		reconcileCertificateState?: boolean,
+	): Promise<WorkloadObservationV1>;
 	activateSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -417,7 +455,10 @@ export interface WorkloadRuntimePortV1 {
 				readonly identity: WorkloadIdentityV1;
 		  }
 	>;
-	promote(state: WorkloadReconciliationStateV1): Promise<void>;
+	promote(
+		state: WorkloadReconciliationStateV1,
+		reconcileCertificateState?: boolean,
+	): Promise<void>;
 	discardUnactivatedSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -450,6 +491,8 @@ function nextRevision(revision: number): number {
 export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
+	/** Introduce certificate/route reconciliation state after the compatible release is healthy. */
+	readonly certificateReconciliationWrites?: boolean;
 	readonly maximumAttempts?: number;
 	/** Maximum attempts while Kubernetes resources are being applied. */
 	readonly maximumApplyAttempts?: number;
@@ -568,8 +611,9 @@ export function createWorkloadReconciliationV1(dependencies: {
 							) ||
 							(!state.rollback && supersedesUnverifiedCandidate))
 					) {
+						const { certificateWait: _, ...retained } = state;
 						const interruptedState: WorkloadReconciliationStateV1 = {
-							...state,
+							...retained,
 							phase: "cleaning",
 							sourceConfigurationRevision: configuration.revision,
 							sourceLifecycleRevision: management.workloadRevision,
@@ -589,7 +633,9 @@ export function createWorkloadReconciliationV1(dependencies: {
 						phase: stopped ? "closing" : "preflight",
 						candidate:
 							stopped && state
-								? state.candidate
+								? state.candidate.deployment === null
+									? (state.verified ?? state.candidate)
+									: state.candidate
 								: state?.rollback &&
 										state.verified !== null &&
 										state.sourceConfigurationRevision ===
@@ -617,7 +663,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 					phase: WorkloadPhaseV1,
 					changes: Partial<WorkloadReconciliationStateV1> = {},
 				) => {
-					const next = { ...state, phase, attempts: 0, ...changes };
+					const { certificateWait: _, ...retained } = state;
+					const next = { ...retained, phase, attempts: 0, ...changes };
 					if (!Object.hasOwn(changes, "lastFailure"))
 						delete (next as { lastFailure?: WorkloadReconciliationFailureV1 })
 							.lastFailure;
@@ -631,7 +678,141 @@ export function createWorkloadReconciliationV1(dependencies: {
 						failureCode,
 						...(lastFailure ? { lastFailure } : {}),
 					});
+				// A rollback to the compatible release still drains records already
+				// written by the enabled release. Only entry into new work is gated.
+				const reconcileCertificateState =
+					dependencies.certificateReconciliationWrites === true ||
+					state.certificateWait !== undefined ||
+					state.retainedFailure !== undefined ||
+					isRejectedWorkloadRouteClosedForCertificateV1(state);
+				const observeWorkload = () =>
+					runtime.observe(state, reconcileCertificateState);
+				const waitForCertificate = () =>
+					advance("observing", {
+						attempts: state.phase === "observing" ? state.attempts : 0,
+						certificateWait: {
+							attempts: Math.min((state.certificateWait?.attempts ?? 0) + 1, 5),
+							...(state.phase === "rejected" ||
+							state.certificateWait?.resumeRejected
+								? { resumeRejected: true }
+								: {}),
+						},
+					});
+				const certificateDiagnostic = (
+					certificate: WorkloadCertificateFailureV1,
+				): WorkloadReconciliationFailureV1 => ({
+					schemaVersion: 1,
+					reason:
+						certificate === "certificate-invalid"
+							? "kubernetes_policy"
+							: "kubernetes_invalid",
+					kind: "Certificate",
+					verb: certificate,
+					attempts: 1,
+				});
+				const certificateFailure = (observation: WorkloadObservationV1) => {
+					if (
+						observation !== "certificate-failed" &&
+						observation !== "certificate-timeout" &&
+						observation !== "certificate-invalid"
+					)
+						return undefined;
+					const next = failed(
+						"health_check_failed",
+						certificateDiagnostic(observation),
+					);
+					if (!state.verified) return next;
+					return {
+						...next,
+						retainedFailure: {
+							certificate: observation,
+							...(incompatibleRollback()
+								? { rollbackRouteRejected: true as const }
+								: {}),
+						},
+					};
+				};
+				const rollbackRejected = { rollbackRouteRejected: true } as const;
+				const finishRetainedFailure = (
+					retainedFailure: NonNullable<
+						WorkloadReconciliationStateV1["retainedFailure"]
+					>,
+				) =>
+					advance("failed", {
+						retainedFailure,
+						failureCode: retainedFailure.certificate
+							? "health_check_failed"
+							: "reconciliation_failed",
+						lastFailure: retainedFailure.certificate
+							? certificateDiagnostic(retainedFailure.certificate)
+							: {
+									schemaVersion: 1,
+									reason: "kubernetes_policy",
+									kind: "Ingress",
+									verb: "rollback",
+									attempts: 1,
+								},
+					});
+				const incompatibleRollback = () =>
+					state.verified !== null &&
+					runtime.rollbackRouteCompatible?.({
+						...state,
+						candidate: state.verified,
+					}) === false;
+				let failedClosure: WorkloadReconciliationStateV1 | undefined;
+				let closingUnreadableCertificate = false;
+				const closeUnreadableCertificate = async () => {
+					closingUnreadableCertificate = true;
+					await runtime.closeRoute(state);
+					if (state.phase === "ready") return advance("observing");
+					if (state.phase !== "rejected") return state;
+					// Keep the original verified revision and use fields that the
+					// existing V1 state reader already persists in both rollout modes.
+					return {
+						...state,
+						lastFailure: {
+							schemaVersion: 1 as const,
+							reason: "kubernetes_unreachable" as const,
+							kind: "Certificate",
+							verb: "certificate-unavailable",
+							attempts: 1,
+						},
+					};
+				};
 				try {
+					// A persisted rejection means the route was closed and no resource
+					// teardown is owed. New lifecycle intent still takes the normal path.
+					if (
+						state.phase === "failed" &&
+						(state.retainedFailure ||
+							(state.lastFailure?.kind === "Ingress" &&
+								state.lastFailure.verb === "rollback" &&
+								state.lastFailure.reason === "kubernetes_policy"))
+					)
+						return state;
+					// Protect older rows that entered rollback before the policy check.
+					if (
+						reconcileCertificateState &&
+						!stopped &&
+						state.rollback &&
+						state.verified &&
+						!state.cleanupInterrupted &&
+						!state.retainedFailure &&
+						[
+							"applying",
+							"observing",
+							"activating",
+							"promoting",
+							"rejected",
+							"cleaning",
+							"failed",
+						].includes(state.phase) &&
+						(state.phase === "cleaning" || state.phase === "failed"
+							? incompatibleRollback()
+							: runtime.rollbackRouteCompatible?.(state) === false)
+					) {
+						return advance("cleaning", { retainedFailure: rollbackRejected });
+					}
 					switch (state.phase) {
 						case "preflight": {
 							const candidate = await runtime.preflight(input, state);
@@ -654,7 +835,9 @@ export function createWorkloadReconciliationV1(dependencies: {
 						}
 						case "closing":
 							await runtime.closeRoute(state);
-							return advance("applying");
+							return state.retainedFailure
+								? finishRetainedFailure(state.retainedFailure)
+								: advance("applying");
 						case "applying": {
 							const identity = await runtime.apply(state, stopped, input);
 							if (
@@ -683,11 +866,26 @@ export function createWorkloadReconciliationV1(dependencies: {
 							return advance(stopped ? "stopped" : "observing", { identity });
 						}
 						case "observing": {
-							const health = await runtime.observe(state);
-							if (health === "healthy") return advance("activating");
+							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
+							if (health === "healthy") {
+								if (state.certificateWait?.resumeRejected) {
+									await runtime.promote(state, reconcileCertificateState);
+									return advance("rejected");
+								}
+								return advance("activating");
+							}
+							if (health === "certificate-pending") return waitForCertificate();
+							const certificate = certificateFailure(health);
+							if (certificate) return certificate;
 							if (health === "drifted") {
 								await runtime.closeRoute(state);
-								return advance("applying");
+								return state.certificateWait?.resumeRejected
+									? advance("closing", {
+											revision: nextRevision(state.revision),
+										})
+									: advance("applying");
 							}
 							// A probe that did not complete is retried like a Pod not yet
 							// ready, within the same budget; only an answer fails it (#2046).
@@ -728,7 +926,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 						case "promoting": {
 							// Re-establish a closed route before rechecking a partially published candidate.
 							await runtime.closeRoute(state);
-							const health = await runtime.observe(state);
+							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
+							if (health === "certificate-pending") return waitForCertificate();
+							const certificate = certificateFailure(health);
+							if (certificate) return certificate;
 							if (health !== "healthy") {
 								if (
 									health === "unreachable" &&
@@ -738,7 +941,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return failed("health_check_failed");
 							}
 							const capabilities = await runtime.capabilities(state);
-							await runtime.promote(state);
+							await runtime.promote(state, reconcileCertificateState);
 							return advance("ready", {
 								verified: state.candidate,
 								verifiedRevision: state.revision,
@@ -746,14 +949,25 @@ export function createWorkloadReconciliationV1(dependencies: {
 							});
 						}
 						case "ready": {
-							const health = await runtime.observe(state);
+							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
 							if (health === "healthy") {
-								await runtime.promote(state);
+								await runtime.promote(state, reconcileCertificateState);
 								return servingProbeCompleted(state);
 							}
 							if (servingProbeTolerated(state, health))
 								return { ...state, attempts: state.attempts + 1 };
+							const certificate = certificateFailure(health);
+							if (certificate) {
+								// Persist the cleaning intent through the normal catch if this
+								// first attempt to close the serving route fails.
+								failedClosure = certificate;
+								await runtime.closeRoute(state);
+								return certificate;
+							}
 							await runtime.closeRoute(state);
+							if (health === "certificate-pending") return waitForCertificate();
 							// 漂移只推进 Workload revision，candidate 保留原 verified 部署及其 workloadRevision：
 							// Session Sandbox policy 绑定该值，改写会使已就绪 Sandbox 失效（#1480、#3304）。
 							return health === "drifted"
@@ -763,14 +977,30 @@ export function createWorkloadReconciliationV1(dependencies: {
 								: advance("observing");
 						}
 						case "rejected": {
-							const health = await runtime.observe(state);
+							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
 							if (health === "healthy") {
-								await runtime.promote(state);
+								await runtime.promote(state, reconcileCertificateState);
 								return servingProbeCompleted(state);
 							}
 							if (servingProbeTolerated(state, health))
 								return { ...state, attempts: state.attempts + 1 };
+							const certificate = certificateFailure(health);
+							if (certificate) {
+								// Persist the cleaning intent through the normal catch if this
+								// first attempt to close the serving route fails.
+								failedClosure = certificate;
+								await runtime.closeRoute(state);
+								return certificate;
+							}
 							await runtime.closeRoute(state);
+							if (health === "certificate-pending") return waitForCertificate();
+							if (
+								health === "pending" &&
+								isRejectedWorkloadRouteClosedForCertificateV1(state)
+							)
+								return state;
 							return advance("closing", {
 								revision: nextRevision(state.revision),
 							});
@@ -778,7 +1008,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 						case "cleaning": {
 							await runtime.closeRoute(state);
 							const preservesResources =
-								state.verified !== null && !state.rollback;
+								state.verified !== null &&
+								(state.retainedFailure !== undefined ||
+									!state.rollback ||
+									(reconcileCertificateState &&
+										state.cleanupInterrupted &&
+										incompatibleRollback()));
 							const cleaned = preservesResources
 								? await runtime.discardUnactivatedSecrets(state, input)
 								: await runtime.cleanup(state, state.verified === null, input);
@@ -795,7 +1030,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 									state.verified,
 								);
 							if (state.cleanupInterrupted) {
-								const { cleanupInterrupted: _, ...retained } = state;
+								const {
+									cleanupInterrupted: _,
+									retainedFailure: __,
+									...retained
+								} = state;
 								return {
 									...retained,
 									identity: preservesIdentity ? state.identity : null,
@@ -809,7 +1048,15 @@ export function createWorkloadReconciliationV1(dependencies: {
 									attempts: 0,
 								};
 							}
+							if (state.retainedFailure)
+								return finishRetainedFailure(state.retainedFailure);
 							if (state.verified && !state.rollback) {
+								if (
+									reconcileCertificateState &&
+									!stopped &&
+									incompatibleRollback()
+								)
+									return finishRetainedFailure(rollbackRejected);
 								return advance("applying", {
 									candidate: state.verified,
 									identity: preservesIdentity ? state.identity : null,
@@ -845,13 +1092,14 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 					}
 				} catch (error) {
+					const failedState = failedClosure ?? state;
 					const reason = classifyWorkloadFailureReasonV1(error);
-					const previousFailure = state.lastFailure;
+					const previousFailure = failedState.lastFailure;
 					const consecutiveAttempts =
 						previousFailure?.reason === reason
 							? Math.min(
 									previousFailure.attempts + 1,
-									attemptBudget(state.phase),
+									attemptBudget(failedState.phase),
 								)
 							: 1;
 					const lastFailure = classifyWorkloadFailureDetailsV1(
@@ -864,8 +1112,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 							reason === "kubernetes_forbidden") &&
 						consecutiveAttempts >= authorizationFailureThreshold;
 					const retrying = {
-						...state,
-						attempts: Math.min(state.attempts + 1, attemptBudget(state.phase)),
+						...failedState,
+						attempts: Math.min(
+							failedState.attempts + 1,
+							attemptBudget(failedState.phase),
+						),
 						lastFailure,
 					};
 					// 步骤里的异常被吞掉后只会让 attempts 加一或进入失败处理；这里把它交给
@@ -873,13 +1124,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 					const observe = (next: WorkloadReconciliationStateV1) => {
 						try {
 							dependencies.onStepFailure?.({
-								agentId: state.agentId,
-								phase: state.phase,
+								agentId: failedState.agentId,
+								phase: failedState.phase,
 								attempts: Math.min(
-									state.attempts + 1,
-									attemptBudget(state.phase),
+									failedState.attempts + 1,
+									attemptBudget(failedState.phase),
 								),
-								terminal: next.phase !== state.phase,
+								terminal: next.phase !== failedState.phase,
 								error,
 							});
 						} catch {
@@ -887,7 +1138,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 						}
 						return next;
 					};
-					if (state.phase === "preflight") {
+					if (failedState.phase === "preflight") {
 						// 部署策略不匹配与 preflight 拒绝同为确定性结果（#3034）：立即进入既有失败
 						// 处理，不再消耗重试预算；临时异常仍在预算内重试。
 						const permanent =
@@ -895,14 +1146,29 @@ export function createWorkloadReconciliationV1(dependencies: {
 							reason === "kubernetes_policy";
 						if (
 							!permanent &&
-							state.attempts + 1 < maximumAttempts &&
+							failedState.attempts + 1 < maximumAttempts &&
 							!authorizationTerminal
 						)
 							return observe(retrying);
-						if (state.verified)
+						if (
+							reconcileCertificateState &&
+							failedState.verified &&
+							!stopped &&
+							incompatibleRollback()
+						) {
+							return observe(
+								advance("closing", {
+									candidate: failedState.verified,
+									retainedFailure: rollbackRejected,
+									failureCode: "reconciliation_failed",
+									lastFailure,
+								}),
+							);
+						}
+						if (failedState.verified)
 							return observe(
 								advance("rejected", {
-									candidate: state.verified,
+									candidate: failedState.verified,
 									rollback: true,
 									failureCode: "reconciliation_failed",
 									lastFailure,
@@ -913,19 +1179,25 @@ export function createWorkloadReconciliationV1(dependencies: {
 					// A deterministic rejection can also be discovered while applying a
 					// previously accepted candidate (for example, a migration Job that
 					// has reached Failed). Do not treat it as an image/PVC readiness wait.
+					if (isRejectedWorkloadRouteClosedForCertificateV1(failedState))
+						return observe({
+							...retrying,
+							lastFailure: failedState.lastFailure,
+						});
 					if (error instanceof WorkloadPreflightRejectedErrorV1)
 						return observe(failed("reconciliation_failed", lastFailure));
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
 					if (
-						state.phase === "cleaning" ||
-						state.phase === "closing" ||
-						state.phase === "stopped"
+						closingUnreadableCertificate ||
+						failedState.phase === "cleaning" ||
+						failedState.phase === "closing" ||
+						failedState.phase === "stopped"
 					)
 						return observe(retrying);
 					if (
 						reason === "configuration_mismatch" ||
-						state.attempts + 1 >= attemptBudget(state.phase) ||
+						failedState.attempts + 1 >= attemptBudget(failedState.phase) ||
 						authorizationTerminal
 					)
 						return observe(failed("reconciliation_failed", lastFailure));
@@ -947,17 +1219,20 @@ export async function workloadManagementObservationV1(
 	if (management.status !== "creating" && management.status !== "available")
 		return null;
 	const observation =
-		next.phase === "ready" || next.phase === "rejected"
-			? management.status === "creating"
-				? "creation_succeeded"
-				: "service_ready"
-			: next.phase === "failed"
+		management.status === "available" &&
+		isRejectedWorkloadRouteClosedForCertificateV1(next)
+			? "service_unavailable"
+			: next.phase === "ready" || next.phase === "rejected"
 				? management.status === "creating"
-					? "creation_failed"
-					: "service_unavailable"
-				: management.status === "available"
-					? "service_updating"
-					: null;
+					? "creation_succeeded"
+					: "service_ready"
+				: next.phase === "failed"
+					? management.status === "creating"
+						? "creation_failed"
+						: "service_unavailable"
+					: management.status === "available"
+						? "service_updating"
+						: null;
 	if (
 		!observation ||
 		(observation === "service_ready" &&

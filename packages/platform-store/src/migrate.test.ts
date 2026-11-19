@@ -2041,6 +2041,7 @@ describe("published Relay authority migration", () => {
 			83,
 			84,
 			85,
+			86,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2126,9 +2127,13 @@ describe("published Relay authority migration", () => {
 			idx: 82,
 			tag: "0082_operations_resource_snapshots",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 85)).toMatchObject({
 			idx: 85,
 			tag: "0085_conversation_event_terminal_cursor",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 86,
+			tag: "0086_workload_certificate_reconciliation",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2721,6 +2726,9 @@ describe("published Relay authority migration", () => {
 				"operations_resource_snapshots:operations_resource_snapshots_cluster_id_namespace_pk",
 				"operations_resource_identities:operations_resource_identities_cluster_id_namespace_uid_pk",
 				"operations_resource_identities:operations_identity_agent_idx",
+			);
+			expectedDelta.columns.push(
+				"workload_reconciliations:certificate_reconciliation",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,
