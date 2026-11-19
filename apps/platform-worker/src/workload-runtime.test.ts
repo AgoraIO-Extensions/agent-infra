@@ -8842,7 +8842,9 @@ it.each([true, false])(
 		});
 		expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
 		const reopened = await f.managementObservation();
-		expect(reopened?.request).toMatchObject({ operation: "observe_service_ready" });
+		expect(reopened?.request).toMatchObject({
+			operation: "observe_service_ready",
+		});
 		expect(reopened?.decision).toMatchObject({
 			outcome: "accepted",
 			writePlan: { state: { serviceAvailability: "ready" } },
