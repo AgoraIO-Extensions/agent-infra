@@ -114,7 +114,7 @@ export function createConnectionInstallReadbackClientV1(options: {
 						};
 					},
 				});
-				if (response.status === 403) return "denied";
+				// Only a verified response from the Store readback can deny an installation.
 				const proof =
 					response.headers[connectionInstallReadbackResponseHeaderV1];
 				if (

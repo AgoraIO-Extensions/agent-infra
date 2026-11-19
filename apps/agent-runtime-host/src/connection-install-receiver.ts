@@ -745,18 +745,25 @@ async function assembleConnectionInstallReceiver(
 	async function reserveSlot() {
 		if (slots.size < maxSlots) return true;
 		await reclaimFixedInstallations();
-		for (const [authorizationId, slot] of slots) {
-			if (slot.state !== "confirmed") continue;
-			try {
-				store.assertOriginalExecutionBindingCurrent(
-					slot.template.reference,
-					slot.template.principal,
-					now,
-				);
-			} catch {
-				closeSlot(authorizationId);
-			}
-		}
+		await Promise.all(
+			[...slots].map(async ([authorizationId, slot]) => {
+				if (slot.state !== "confirmed" || fixed.has(authorizationId)) return;
+				try {
+					const admitted = await admitTemplate(slot.template);
+					const outcome = await readbackOutcome(
+						supplyReadback(admitted, slot.binding.attemptId),
+					);
+					if (outcome === "denied" && slots.get(authorizationId) === slot)
+						closeSlot(authorizationId);
+				} catch (error) {
+					if (
+						isAuthorizationDenial(error) &&
+						slots.get(authorizationId) === slot
+					)
+						closeSlot(authorizationId);
+				}
+			}),
+		);
 		for (const [authorizationId, slot] of slots) {
 			if (slot.state !== "closed") continue;
 			slots.delete(authorizationId);

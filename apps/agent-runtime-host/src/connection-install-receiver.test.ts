@@ -63,9 +63,15 @@ import {
 	vi,
 } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
-import type {
-	ConnectionInstallReadbackInputV1,
-	ConnectionInstallReadbackOutcomeV1,
+import {
+	createConnectionInstallReadbackServerV1,
+	sessionSandboxConnectionInstallTokenV1,
+} from "../../platform-worker/src/connection-install-readback-server.js";
+import {
+	type ConnectionInstallReadbackClientV1,
+	type ConnectionInstallReadbackInputV1,
+	type ConnectionInstallReadbackOutcomeV1,
+	createConnectionInstallReadbackClientV1,
 } from "./connection-install-readback-client.js";
 import {
 	prepareConnectionInstallReceiverV1,
@@ -86,7 +92,10 @@ vi.mock("./process-protection.js", () => ({
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
 }));
-const decryption = vi.hoisted(() => ({ opened: 0 }));
+const decryption = vi.hoisted(() => ({
+	opened: 0,
+	capture: undefined as Buffer[] | undefined,
+}));
 vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@agent-infra/agent-runtime")>();
@@ -96,7 +105,9 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 			...args: Parameters<typeof actual.openConnectionHostSupplyV1>
 		) => {
 			decryption.opened++;
-			return actual.openConnectionHostSupplyV1(...args);
+			const material = actual.openConnectionHostSupplyV1(...args);
+			decryption.capture?.push(material);
+			return material;
 		},
 	};
 });
@@ -503,6 +514,7 @@ async function receiver(
 		listen?: boolean;
 		store?: ReturnType<typeof createStore>;
 		readback?: ReturnType<typeof createReadback>;
+		transportReadback?: ConnectionInstallReadbackClientV1;
 		now?: () => number;
 	} = {},
 ) {
@@ -523,7 +535,7 @@ async function receiver(
 		serviceToken,
 		store,
 		fetch: connection.fetch,
-		readback,
+		readback: options.transportReadback ?? readback,
 		now: options.now,
 	});
 	if (assembly?.status !== "available") throw Error("receiver unavailable");
@@ -1747,6 +1759,132 @@ describe("Connection first begin", () => {
 			).status,
 		).toBe(403);
 	}, 20_000);
+
+	it("preserves a fixed installation through a Worker proof rejection and clears it after verified revocation", async () => {
+		const name = "platform-worker.agents.svc";
+		const workerTls = await runtimeTlsFixture({ dnsNames: [name] });
+		cleanups.push(workerTls.cleanup);
+		let skew = 0;
+		let authorized = true;
+		let storeReads = 0;
+		const worker = createConnectionInstallReadbackServerV1({
+			key: workerTls.key,
+			cert: workerTls.cert,
+			port: 0,
+			host: "127.0.0.1",
+			deploymentServiceToken: serviceToken,
+			deploymentIdentity,
+			namespace,
+			now: () => Date.now() + skew,
+			readback: async () => {
+				storeReads++;
+				return authorized ? "allowed" : "denied";
+			},
+		});
+		cleanups.push(() => worker.close());
+		const port = await worker.listen();
+		const transportReadback = createConnectionInstallReadbackClientV1({
+			origin: `https://${name}:${port}/`,
+			ca: workerTls.ca,
+			lookup,
+			installToken: sessionSandboxConnectionInstallTokenV1(
+				serviceToken,
+				namespace,
+				sandboxId,
+			),
+		});
+		const f = await receiver({ transportReadback });
+		await supplied(f);
+		expect((await firstBegin(f)).status).toBe(200);
+		const statusFor = (item: Receiver) =>
+			exchange(
+				item,
+				"/internal/runtime/oauth/v1/status",
+				() => standardRequest(item, "status"),
+				{ authorization: `Bearer ${serviceToken}` },
+			);
+		const before = storeReads;
+		skew = 60_000;
+		expect((await statusFor(f)).status).toBe(503);
+		expect(storeReads).toBe(before);
+		skew = 0;
+		expect((await statusFor(f)).status).toBe(200);
+		await f.stop();
+
+		skew = 60_000;
+		const restarted = await receiver({
+			directory: f.directory,
+			port: f.port,
+			transportReadback,
+		});
+		expect((await statusFor(restarted)).status).toBe(503);
+		skew = 0;
+		expect((await statusFor(restarted)).status).toBe(200);
+		authorized = false;
+		expect((await statusFor(restarted)).status).toBe(403);
+		authorized = true;
+		expect((await statusFor(restarted)).status).toBe(503);
+	}, 25_000);
+
+	it("reclaims pre-begin supply only after authority rejects that original attempt", async () => {
+		const f = await receiver();
+		const withInstall = (id: number) => ({
+			...f,
+			template: templateFor(f.runtimeOrigin, {
+				authorizationId: `pending-${id}`,
+				reference: { ...reference, executionId: `pending-execution-${id}` },
+			}),
+		});
+		const original = Array.from({ length: 8 }, (_, index) =>
+			withInstall(index),
+		);
+		const next = withInstall(8);
+		for (const item of [...original, next])
+			f.store.addInstallation(item.template);
+		const material: Buffer[] = [];
+		decryption.capture = material;
+		const originalAttempt = "first-supply-0";
+		try {
+			for (const [index, item] of original.entries())
+				expect(
+					(await supply(item, { attemptId: `first-supply-${index}` })).status,
+				).toBe(200);
+			expect((await supply(next)).status).toBe(503);
+			expect(material).toHaveLength(8);
+			expect(
+				material.every((buffer) => buffer.some((value) => value !== 0)),
+			).toBe(true);
+			const retired = original[0];
+			if (!retired) throw new Error("Missing test installation");
+			f.readback.invalid.add(retired.template.authorizationId);
+			f.readback.calls.length = 0;
+
+			expect((await supply(next)).status).toBe(200);
+			expect(f.readback.calls).toContainEqual(
+				expect.objectContaining({
+					purpose: "supply",
+					authorizationId: retired.template.authorizationId,
+					supply: expect.objectContaining({ attemptId: originalAttempt }),
+				}),
+			);
+			expect(material[0]?.every((value) => value === 0)).toBe(true);
+			expect(
+				material
+					.slice(1, 8)
+					.every((buffer) => buffer.some((value) => value !== 0)),
+			).toBe(true);
+			expect(
+				(
+					await command(retired, "prepare", {
+						supplyAttemptId: originalAttempt,
+					})
+				).body.outcome,
+			).toBe("rejected");
+			expect(f.connection.calls).toHaveLength(0);
+		} finally {
+			decryption.capture = undefined;
+		}
+	}, 25_000);
 
 	it("reclaims retired Host capacity and restores the live installation after restart", async () => {
 		const f = await receiver();

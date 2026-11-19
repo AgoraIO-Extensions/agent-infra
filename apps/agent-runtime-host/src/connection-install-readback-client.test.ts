@@ -258,7 +258,7 @@ describe("Connection install readback client", () => {
 	);
 
 	it.each([
-		["status-403", "denied"],
+		["status-403", "unavailable"],
 		["status-503", "unavailable"],
 		["request-proof", "unavailable"],
 		["missing-proof", "unavailable"],
@@ -292,7 +292,7 @@ describe("Connection install readback client", () => {
 			lookup,
 		});
 		expect(await client.readback(input, new AbortController().signal)).toBe(
-			"denied",
+			"unavailable",
 		);
 		expect(endpoint.seen).toEqual([
 			expect.objectContaining({ verified: false }),
