@@ -93,8 +93,8 @@ export interface ConversationQueryExecutionV1 {
 	readonly traceId: string | null;
 	/** Whether this execution has persisted events before the current event page. */
 	readonly hasEarlierEvents?: boolean;
-	/** Whether this execution has persisted events at or above the page's exclusive upper bound. */
-	readonly hasLaterEvents?: boolean;
+	/** Whether the journal confirms this execution's terminal status beyond the page. */
+	readonly hasLaterTerminalEvent?: boolean;
 	/** 经排队受理的 Execution 的等待顺序（§12.5）；只用于派生同会话内位次，不对外暴露。 */
 	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因；其他状态为空。 */
@@ -353,7 +353,7 @@ interface ExecutionRow extends ExecutionFailureFactRowV1 {
 	readonly trace_id: string | null;
 	readonly task_wait_order: string | number | null;
 	readonly has_earlier_events: boolean;
-	readonly has_later_events: boolean;
+	readonly has_later_terminal_event: boolean | null;
 }
 
 interface EventRow {
@@ -775,7 +775,7 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 		updatedAt: timestamp(row.updated_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
 		...(row.has_earlier_events ? { hasEarlierEvents: true } : {}),
-		...(row.has_later_events ? { hasLaterEvents: true } : {}),
+		...(row.has_later_terminal_event ? { hasLaterTerminalEvent: true } : {}),
 		taskWaitOrder:
 			row.task_wait_order === null || row.task_wait_order === undefined
 				? null
@@ -952,14 +952,24 @@ async function readExecutions(
 			${
 				upperEventCursor === undefined
 					? database`false`
-					: database`exists (
-				select 1
-				from platform.conversation_events later
-				where later.conversation_id = e.conversation_id
-					and later.execution_id = e.execution_id
-					and later.conversation_cursor >= ${upperEventCursor}
-			)`
-			} as has_later_events,
+					: database`
+				(e.execution_id, e.status::text) in (
+					select execution_id, event_payload ->> 'status'
+					from (
+						-- Stream the scoped cursor range once using the existing index.
+						-- Keep the journal filter outside the ordered range scan.
+						select execution_id, event_type, event_payload
+						from platform.conversation_events
+						where conversation_id = ${conversationId}
+							and conversation_cursor >= ${upperEventCursor}
+						order by conversation_cursor
+						offset 0
+					) upper_window
+					where event_type = 'execution.status'
+						and event_payload ->> 'status' in ('completed', 'failed', 'cancelled')
+				)
+			`
+			} as has_later_terminal_event,
 			${executionFailureFactsSql(database)}
 		from platform.conversation_executions e
 		join platform.conversations c on c.id = e.conversation_id

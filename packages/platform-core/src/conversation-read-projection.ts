@@ -31,7 +31,7 @@ export interface ConversationReadExecutionV1 {
 	readonly traceId: string | null;
 	/** Whether this execution has persisted events before the current event page. */
 	readonly hasEarlierEvents?: boolean;
-	readonly hasLaterEvents?: boolean;
+	readonly hasLaterTerminalEvent?: boolean;
 	/** 经排队受理的 Execution 保存的等待顺序（§12.5）；其他 Execution 为 null 或缺省。 */
 	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因（工程 Spec §16.1.1）。 */
@@ -353,7 +353,8 @@ export function projectConversationMessagesV1(
 			const events = byExecution.get(item.executionId) ?? [];
 			const status = executionStatus(item.status);
 			if (
-				(item.hasEarlierEvents === true || item.hasLaterEvents === true) &&
+				(item.hasEarlierEvents === true ||
+					item.hasLaterTerminalEvent === true) &&
 				events.length === 0 &&
 				isTerminalStatus(status)
 			)

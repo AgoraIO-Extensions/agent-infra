@@ -96,7 +96,7 @@ describe("Conversation read projection", () => {
 						createdAt: first,
 						updatedAt: second,
 						traceId: "trace-1",
-						...(text ? { hasLaterEvents: true } : {}),
+						...(text ? { hasLaterTerminalEvent: true } : {}),
 					},
 				],
 				events: text
@@ -159,7 +159,7 @@ describe("Conversation read projection", () => {
 		},
 	);
 
-	it.each(["hasEarlierEvents", "hasLaterEvents"] as const)(
+	it.each(["hasEarlierEvents", "hasLaterTerminalEvent"] as const)(
 		"does not fabricate a processing answer when %s places a completed execution outside the page",
 		(outsideWindow) => {
 			const input = {
