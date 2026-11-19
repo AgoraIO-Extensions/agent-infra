@@ -107,6 +107,12 @@ release 和 migration 要求启用 migration Job；rollback 要求目标是另�
 image manifest 的 Commit，rollback 的 `HEAD` 必须等于 target image manifest 的 Commit，current
 image manifest 只标识当前已部署 release。
 
+Connection Host 供应迁移 0085 在应用回滚时保留表及迁移历史。回滚 Job 保持关闭，后续迁移
+使用包含 0085 的 bundle。旧 0084 bundle 会拒绝已经应用 0085 的数据库。供应正式启用后，
+回滚或混跑结束须对账。按原 Agent、关联修订和供应 attempt 核对已失去当前关联的记录，
+包括旧版应用解绑时遗漏的记录。完成本地封闭和受保护 Host 清理后，再恢复受影响供应。
+远端结果遵循原安装对账合同。
+
 ## kind 拓扑验证
 
 ### 单 Agent 标准模板发布

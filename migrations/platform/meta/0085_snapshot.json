@@ -1,5 +1,5 @@
 {
-  "id": "d3d1c011-1419-4f3f-84f5-3023e75b5490",
+  "id": "0cf33cb9-d0b6-4dd6-b85b-565d08f0f1b6",
   "prevId": "cd7633c5-905e-4a8a-9aa5-2508c73395de",
   "version": "7",
   "dialect": "postgresql",
@@ -1754,6 +1754,24 @@
         "association_revision": {
           "name": "association_revision",
           "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approval_source_ref": {
+          "name": "approval_source_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approval_source_revision": {
+          "name": "approval_source_revision",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },

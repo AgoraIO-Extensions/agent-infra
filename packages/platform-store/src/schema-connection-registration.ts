@@ -329,6 +329,9 @@ export const connectionHostSupplies = platformSchema.table(
 		associationRevision: bigint("association_revision", {
 			mode: "number",
 		}).notNull(),
+		attemptId: varchar("attempt_id", { length: 36 }).notNull(),
+		approvalSourceRef: text("approval_source_ref").notNull(),
+		approvalSourceRevision: text("approval_source_revision").notNull(),
 		systemFingerprint: varchar("system_fingerprint", { length: 64 }).notNull(),
 		state: text("state").notNull(),
 		ref: varchar("ref", { length: 128 }),

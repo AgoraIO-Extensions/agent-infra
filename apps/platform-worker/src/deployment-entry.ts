@@ -25,12 +25,6 @@ import {
 } from "./connection-consumer-projection.js";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import {
-	createOwnerConnectionBindingsResolverV1,
-	createProductionOwnerConnectionBindingsV1,
-	type OwnerConnectionBindingConfigurationV1,
-	type OwnerConnectionBindingsOptionsV1,
-} from "./connection-manual-bindings.js";
-import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
 	openStartupConnectionDeliveryGuardV1,
@@ -123,10 +117,8 @@ type DeploymentConfiguration = {
 	 * uses the same Agent key for its profile, approval and installation supply.
 	 */
 	readonly resolveConnectionConsumerBindingsByAgent?: ConnectionConsumerBindingsResolverV1;
-	/** Default Owner-association reader; credentials are decrypted only for protected Host supply. */
-	readonly ownerConnectionBindings?: OwnerConnectionBindingsOptionsV1;
-	/** Deployment-owned ports and keyring used to assemble the Owner resolver in production. */
-	readonly ownerConnectionBindingConfiguration?: OwnerConnectionBindingConfigurationV1;
+	readonly ownerConnectionBindings?: unknown;
+	readonly ownerConnectionBindingConfiguration?: unknown;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
 	readonly connectionInstallationSupply?: unknown;
@@ -254,7 +246,7 @@ const {
 	connectionConsumerApproval,
 	connectionConsumerProfilesByAgent: removedConnectionConsumerProfilesByAgent,
 	resolveConnectionConsumerBindingsByAgent,
-	ownerConnectionBindings: configuredOwnerConnectionBindings,
+	ownerConnectionBindings,
 	ownerConnectionBindingConfiguration,
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent:
@@ -272,18 +264,10 @@ const {
 )) as DeploymentConfiguration;
 
 if (
-	configuredOwnerConnectionBindings !== undefined &&
+	ownerConnectionBindings !== undefined ||
 	ownerConnectionBindingConfiguration !== undefined
 )
-	throw new Error("CONNECTION_OWNER_BINDING_CONFIGURATION_CONFLICT");
-
-const ownerConnectionBindings =
-	configuredOwnerConnectionBindings ??
-	(ownerConnectionBindingConfiguration === undefined
-		? undefined
-		: createProductionOwnerConnectionBindingsV1(
-				ownerConnectionBindingConfiguration,
-			));
+	throw new Error("CONNECTION_OWNER_SUPPLY_REQUIRES_PREPARE");
 
 // Capture one immutable declaration/byte digest for the Worker and normal RO entry.
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
@@ -541,13 +525,9 @@ const staticPerAgentConnectionBindings =
 			"configurationsByAgentAndPrincipal",
 			"principalBindingsByAgentAndPrincipal",
 		].some((key) => Object.hasOwn(configuredConnectionInstallation, key)));
-const ownerAssociationBindingsResolver = ownerConnectionBindings
-	? createOwnerConnectionBindingsResolverV1(ownerConnectionBindings)
-	: undefined;
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
-	resolveConnectionConsumerBindingsByAgent !== undefined ||
-	ownerAssociationBindingsResolver !== undefined;
+	resolveConnectionConsumerBindingsByAgent !== undefined;
 const configuredSharedSnapshot = perAgentConsumerSelection
 	? undefined
 	: createRuntimeConnectionConsumerSnapshotV1(
@@ -684,6 +664,15 @@ async function createPreparedOwning(
 	const startupLegacyAgentIds = persistentAutomaticSource
 		? new Set(legacySelection?.legacyAgentIds ?? [])
 		: undefined;
+	const connectionDelivery = legacySelectionRequired
+		? openStartupConnectionDeliveryGuardV1({
+				databaseUrl,
+				...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
+			})
+		: undefined;
+	if (connectionDelivery) owned.close = () => connectionDelivery.close();
+	const connectionDeliveryCurrent = async (agentId: string) =>
+		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	let resolvedProfilesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
@@ -728,44 +717,6 @@ async function createPreparedOwning(
 			]),
 		);
 	}
-	// Manual associations are authoritative independently of the automatic registration
-	// policy and the legacy selector. Generic bindings never displace an Owner binding.
-	const manualBindings = await ownerAssociationBindingsResolver?.(signal).catch(
-		() => {
-			signal.throwIfAborted();
-			return undefined;
-		},
-	);
-	const manualRevisions = new Map(
-		Object.entries(manualBindings ?? {}).map(([agentId, binding]) => [
-			agentId,
-			binding.manualAssociationRevision,
-		]),
-	);
-	if (manualBindings !== undefined) {
-		resolvedProfilesByAgent = { ...resolvedProfilesByAgent, ...manualBindings };
-		resolvedInstallationSuppliesByAgent = {
-			...resolvedInstallationSuppliesByAgent,
-			...Object.fromEntries(
-				Object.entries(manualBindings).map(([agentId, binding]) => [
-					agentId,
-					binding.installationSupply,
-				]),
-			),
-		};
-	}
-	const connectionDelivery =
-		legacySelectionRequired || manualRevisions.size
-			? openStartupConnectionDeliveryGuardV1({
-					databaseUrl,
-					manualRevisions,
-					checkLegacy: legacySelectionRequired,
-					...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
-				})
-			: undefined;
-	if (connectionDelivery) owned.close = () => connectionDelivery.close();
-	const connectionDeliveryCurrent = async (agentId: string) =>
-		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	const resolvedSnapshotsByAgent = resolvedProfilesByAgent
 		? Object.fromEntries(
 				Object.entries(resolvedProfilesByAgent).map(([agentId, value]) => [
@@ -903,9 +854,6 @@ async function createPreparedOwning(
 		sessionOwnerSecrets,
 		// Every Pod delivery of the startup-selected Consumer rechecks the current source.
 		...(connectionDelivery ? { connectionDeliveryCurrent } : {}),
-		...(ownerConnectionBindings
-			? { ownerConnectionHostSupply: ownerConnectionBindings.hostSupply }
-			: {}),
 	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {

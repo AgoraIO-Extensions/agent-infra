@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createProtectedConnectionHostSupplyV1 } from "./connection-host-supply.js";
 
+const attemptId = "474482aa-0326-4d11-831f-92b111cbdd8a";
+
 describe("protected Connection Host supply adapter", () => {
 	const canaryCredential = "conn_consumer_canary-4206";
 
@@ -16,6 +18,7 @@ describe("protected Connection Host supply adapter", () => {
 				return {
 					agentId: "agent-a",
 					associationRevision: 3,
+					attemptId,
 					ref: "agent-a",
 					revision: "association-3",
 				};
@@ -28,6 +31,7 @@ describe("protected Connection Host supply adapter", () => {
 			supply.materialize({
 				agentId: "agent-a",
 				associationRevision: 3,
+				attemptId,
 				serviceCredential: "conn_consumer_0123456789",
 			}),
 		).resolves.toEqual({ ref: "agent-a", revision: "association-3" });
@@ -51,6 +55,7 @@ describe("protected Connection Host supply adapter", () => {
 				materialize: vi.fn(async () => ({
 					agentId: "agent-a",
 					associationRevision: 7,
+					attemptId,
 					ref: "agent-a",
 					revision: "r1",
 				})),
@@ -60,6 +65,7 @@ describe("protected Connection Host supply adapter", () => {
 			await expect(
 				supply.materialize({
 					...input,
+					attemptId,
 					serviceCredential: "conn_consumer_0123456789",
 				}),
 			).rejects.toThrow("CONNECTION_HOST_SUPPLY_INPUT_INVALID");
@@ -72,6 +78,7 @@ describe("protected Connection Host supply adapter", () => {
 			materialize: vi.fn(async () => ({
 				agentId: "agent-a",
 				associationRevision: 1,
+				attemptId,
 				ref: "agent-a",
 				revision: "r1",
 				serviceCredential: "conn_consumer_leak",
@@ -83,6 +90,7 @@ describe("protected Connection Host supply adapter", () => {
 			supply.materialize({
 				agentId: "agent-a",
 				associationRevision: 1,
+				attemptId,
 				serviceCredential: "conn_consumer_0123456789",
 			}),
 		).rejects.toThrow("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
@@ -91,6 +99,7 @@ describe("protected Connection Host supply adapter", () => {
 	it.each([
 		{ agentId: "agent-b" },
 		{ associationRevision: 2 },
+		{ attemptId: "fe2852f0-90fb-4571-9d45-e0467914c092" },
 		{ ref: canaryCredential },
 		{ revision: canaryCredential },
 	])(
@@ -100,6 +109,7 @@ describe("protected Connection Host supply adapter", () => {
 				materialize: async () => ({
 					agentId: "agent-a",
 					associationRevision: 3,
+					attemptId,
 					ref: "agent-a",
 					revision: "r3",
 					...overrides,
@@ -110,6 +120,7 @@ describe("protected Connection Host supply adapter", () => {
 				supply.materialize({
 					agentId: "agent-a",
 					associationRevision: 3,
+					attemptId,
 					serviceCredential: canaryCredential,
 				}),
 			).rejects.toThrow("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
@@ -121,16 +132,22 @@ describe("protected Connection Host supply adapter", () => {
 			materialize: async () => ({
 				agentId: "agent-a",
 				associationRevision: 7,
+				attemptId,
 				ref: "agent-a",
 				revision: "r1",
 			}),
 			revoke: vi.fn(async () => {}),
 		};
 		const supply = createProtectedConnectionHostSupplyV1(port);
-		await supply.revoke({ agentId: "agent-a", associationRevision: 7 });
+		await supply.revoke({
+			agentId: "agent-a",
+			associationRevision: 7,
+			attemptId,
+		});
 		expect(port.revoke).toHaveBeenCalledWith({
 			agentId: "agent-a",
 			associationRevision: 7,
+			attemptId,
 		});
 	});
 
@@ -158,6 +175,7 @@ describe("protected Connection Host supply adapter", () => {
 					await supply.materialize({
 						agentId: "agent-a",
 						associationRevision: 4,
+						attemptId,
 						serviceCredential: canaryCredential,
 					});
 				} catch (error) {
@@ -188,6 +206,7 @@ describe("protected Connection Host supply adapter", () => {
 			materialize: vi.fn(async () => ({
 				agentId: "agent-a",
 				associationRevision: 4,
+				attemptId,
 				ref: "agent-a",
 				revision: "r4",
 			})),
@@ -202,11 +221,16 @@ describe("protected Connection Host supply adapter", () => {
 			const receipt = await supply.materialize({
 				agentId: "agent-a",
 				associationRevision: 4,
+				attemptId,
 				serviceCredential: canaryCredential,
 			});
 			let thrown: unknown;
 			try {
-				await supply.revoke({ agentId: "agent-a", associationRevision: 4 });
+				await supply.revoke({
+					agentId: "agent-a",
+					associationRevision: 4,
+					attemptId,
+				});
 			} catch (error) {
 				thrown = error;
 			}

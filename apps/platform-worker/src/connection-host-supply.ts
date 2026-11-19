@@ -1,42 +1,49 @@
 const agentIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const credentialPattern = /^conn_consumer_[\x21-\x7e]{8,4096}$/;
 
-/**
- * Deployment-owned bridge into the RuntimeHost protected supply boundary.
- * The bridge receives credential bytes only for the duration of materialization.
- * It must never persist them outside the Host's protected receiver.
- * revoke durably fences this revision, including any in-flight write for it,
- * and may be repeated after losing the response.
- */
-export interface ProtectedConnectionHostSupplyPortV1 {
-	materialize(input: {
-		readonly agentId: string;
-		readonly associationRevision: number;
-		readonly credential: Uint8Array;
-	}): Promise<{
-		readonly agentId: string;
-		readonly associationRevision: number;
-		readonly ref: string;
-		readonly revision: string;
-	}>;
-	revoke(input: {
-		readonly agentId: string;
-		readonly associationRevision: number;
-	}): Promise<void>;
+const attemptIdPattern =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export interface HostSupplyAttemptV1 {
+	readonly agentId: string;
+	readonly associationRevision: number;
+	readonly attemptId: string;
 }
 
-function validateIdentity(agentId: string, associationRevision: number) {
+/** The receiver accepts credentials only during materialization.
+ * Revocation fences exactly one attempt, including writes still in flight.
+ */
+export interface ProtectedConnectionHostSupplyPortV1 {
+	materialize(
+		input: HostSupplyAttemptV1 & {
+			readonly credential: Uint8Array;
+		},
+	): Promise<
+		HostSupplyAttemptV1 & {
+			readonly ref: string;
+			readonly revision: string;
+		}
+	>;
+	revoke(input: HostSupplyAttemptV1): Promise<void>;
+}
+
+function validateIdentity({
+	agentId,
+	associationRevision,
+	attemptId,
+}: HostSupplyAttemptV1) {
 	if (
 		!agentIdPattern.test(agentId) ||
 		!Number.isSafeInteger(associationRevision) ||
-		associationRevision < 1
+		associationRevision < 1 ||
+		!attemptIdPattern.test(attemptId)
 	)
 		throw new Error("CONNECTION_HOST_SUPPLY_INPUT_INVALID");
 }
 
 function validateReceipt(
 	value: unknown,
-	expected: { readonly agentId: string; readonly associationRevision: number },
+	expected: HostSupplyAttemptV1,
 	credential: string,
 ): {
 	readonly ref: string;
@@ -47,13 +54,14 @@ function validateReceipt(
 		typeof value !== "object" ||
 		Array.isArray(value) ||
 		Object.keys(value).sort().join(",") !==
-			"agentId,associationRevision,ref,revision"
+			"agentId,associationRevision,attemptId,ref,revision"
 	)
 		throw new Error("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
 	const candidate = value as Record<string, unknown>;
 	if (
 		candidate.agentId !== expected.agentId ||
 		candidate.associationRevision !== expected.associationRevision ||
+		candidate.attemptId !== expected.attemptId ||
 		typeof candidate.ref !== "string" ||
 		candidate.ref.startsWith("conn_consumer_") ||
 		candidate.ref.includes(credential) ||
@@ -81,12 +89,12 @@ export function createProtectedConnectionHostSupplyV1(
 	)
 		throw new TypeError("CONNECTION_HOST_SUPPLY_PORT_INVALID");
 	return {
-		async materialize(input: {
-			readonly agentId: string;
-			readonly associationRevision: number;
-			readonly serviceCredential: string;
-		}) {
-			validateIdentity(input.agentId, input.associationRevision);
+		async materialize(
+			input: HostSupplyAttemptV1 & {
+				readonly serviceCredential: string;
+			},
+		) {
+			validateIdentity(input);
 			if (
 				typeof input.serviceCredential !== "string" ||
 				!credentialPattern.test(input.serviceCredential)
@@ -98,6 +106,7 @@ export function createProtectedConnectionHostSupplyV1(
 					await port.materialize({
 						agentId: input.agentId,
 						associationRevision: input.associationRevision,
+						attemptId: input.attemptId,
 						credential,
 					}),
 					input,
@@ -109,12 +118,11 @@ export function createProtectedConnectionHostSupplyV1(
 				credential.fill(0);
 			}
 		},
-		async revoke(
-			input: Parameters<ProtectedConnectionHostSupplyPortV1["revoke"]>[0],
-		) {
-			validateIdentity(input.agentId, input.associationRevision);
+		async revoke(input: HostSupplyAttemptV1) {
+			validateIdentity(input);
+			const { agentId, associationRevision, attemptId } = input;
 			try {
-				await port.revoke(input);
+				await port.revoke({ agentId, associationRevision, attemptId });
 			} catch {
 				throw new Error("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
 			}

@@ -172,8 +172,6 @@ export function createStartupConnectionSelectionGuardV1(input: {
 export function openStartupConnectionDeliveryGuardV1(input: {
 	readonly databaseUrl: string;
 	readonly startupLegacyAgentIds?: ReadonlySet<string>;
-	readonly manualRevisions?: ReadonlyMap<string, number>;
-	readonly checkLegacy?: boolean;
 }): {
 	readonly current: (agentId: string) => Promise<boolean>;
 	readonly close: () => Promise<void>;
@@ -181,21 +179,13 @@ export function openStartupConnectionDeliveryGuardV1(input: {
 	const source = new PostgresConnectionAssociationSourceV1({
 		databaseUrl: input.databaseUrl,
 	});
-	const legacyCurrent = createStartupConnectionSelectionGuardV1({
-		source,
-		...(input.startupLegacyAgentIds
-			? { startupLegacyAgentIds: input.startupLegacyAgentIds }
-			: {}),
-	});
 	return {
-		current: (agentId) => {
-			const revision = input.manualRevisions?.get(agentId);
-			if (revision !== undefined)
-				return source.manualCurrent(agentId, revision);
-			return input.checkLegacy === false
-				? Promise.resolve(true)
-				: legacyCurrent(agentId);
-		},
+		current: createStartupConnectionSelectionGuardV1({
+			source,
+			...(input.startupLegacyAgentIds
+				? { startupLegacyAgentIds: input.startupLegacyAgentIds }
+				: {}),
+		}),
 		close: () => source.close(),
 	};
 }

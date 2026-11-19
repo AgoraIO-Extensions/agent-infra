@@ -1,6 +1,9 @@
 CREATE TABLE "platform"."connection_host_supplies" (
 	"agent_id" text NOT NULL,
 	"association_revision" bigint NOT NULL,
+	"attempt_id" varchar(36) NOT NULL,
+	"approval_source_ref" text NOT NULL,
+	"approval_source_revision" text NOT NULL,
 	"system_fingerprint" varchar(64) NOT NULL,
 	"state" text NOT NULL,
 	"ref" varchar(128),

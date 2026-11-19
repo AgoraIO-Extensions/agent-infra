@@ -2693,6 +2693,9 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.columns.push(
 				...[
+					"approval_source_ref",
+					"approval_source_revision",
+					"attempt_id",
 					"agent_id",
 					"association_revision",
 					"ref",
