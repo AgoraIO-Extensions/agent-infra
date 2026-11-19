@@ -1,6 +1,6 @@
 import { createPublicKey, randomUUID, sign, verify } from "node:crypto";
 import { z } from "zod";
-import type { ExecutorIdentityV1 } from "./codex-executor-start-identity.js";
+import type { ExecutorIdentityV1 } from "./codex-executor-bootstrap.js";
 
 const envelopeSchema = z.strictObject({
 	sender: z.enum(["host", "runner"]),

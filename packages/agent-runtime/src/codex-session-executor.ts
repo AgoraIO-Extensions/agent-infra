@@ -224,6 +224,7 @@ export interface CodexSessionExecutorAdmissionV1 {
 
 export interface CodexExecutorDrainPortV1 {
 	arm(executionId: string): Promise<void>;
+	bindNativeTurn(executionId: string, nativeTurnId: string): Promise<void>;
 	endpoint(): string;
 	sealStop(
 		executionId: string,

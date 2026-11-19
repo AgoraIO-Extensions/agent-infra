@@ -24,6 +24,7 @@ const stopSchema = z.strictObject({
 const stateSchema = z.strictObject({
 	schemaVersion: z.literal(1),
 	scope: scopeSchema,
+	nativeTurnId: identifier.optional(),
 	attempts: z.array(attemptSchema).max(4_096),
 	stop: stopSchema.optional(),
 	confirmed: z.boolean(),
@@ -46,6 +47,7 @@ function inventory(state: State) {
 				generation,
 				resourceFence,
 				epoch,
+				state.nativeTurnId ?? null,
 				state.stop.stopRequestId,
 				state.stop.stopFence,
 				state.attempts.map(({ protocolSession, handle }) => [
@@ -82,12 +84,26 @@ export class CodexExecutorDrainJournalV1 {
 		return new CodexExecutorDrainJournalV1(file);
 	}
 
+	async bindNativeTurn(input: string) {
+		const nativeTurnId = identifier.parse(input);
+		await this.file.update(
+			(state) => {
+				if (state.nativeTurnId && state.nativeTurnId !== nativeTurnId)
+					return invalid();
+				if (state.stop && !state.nativeTurnId) return invalid();
+				state.nativeTurnId = nativeTurnId;
+			},
+			{ skipUnchanged: true },
+		);
+	}
+
 	/** A true result is durable before the gateway forwards process/start. */
 	async admit(input: State["attempts"][number]) {
 		const attempt = attemptSchema.parse(input);
 		return this.file.update(
 			(state) => {
 				if (
+					!state.nativeTurnId ||
 					state.stop ||
 					state.attempts.length >= 4_096 ||
 					state.attempts.some((existing) =>

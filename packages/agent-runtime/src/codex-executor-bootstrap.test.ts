@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	issueExecutorStartIdentityV1,
 	verifyExecutorStartIdentityV1,
-} from "./codex-executor-start-identity.js";
+} from "./codex-executor-bootstrap.js";
 
 const worker = generateKeyPairSync("ed25519");
 const start = {

@@ -28,6 +28,11 @@ afterEach(async () => {
 it("retains admitted attempts and the seal across restart before a launch acknowledgement", async () => {
 	const { path, journal } = await fixture();
 	const attempt = { protocolSession: "session", handle: "handle" };
+	expect(await journal.admit(attempt)).toBe(false);
+	await journal.bindNativeTurn("turn-original");
+	await expect(journal.bindNativeTurn("turn-other")).rejects.toThrow(
+		"CODEX_EXECUTOR_DRAIN_JOURNAL_INVALID",
+	);
 	expect(await journal.admit(attempt)).toBe(true);
 	const stop = { stopRequestId: "stop-a", stopFence: 4 };
 	const seal = await journal.seal(stop);

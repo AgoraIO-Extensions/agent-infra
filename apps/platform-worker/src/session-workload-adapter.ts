@@ -2323,12 +2323,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		const published = await options.client.readMetadata("Secret", name);
 		if (
 			published &&
-			!published.metadata?.ownerReferences?.some(
-				(owner) =>
-					owner.kind === "Pod" &&
-					owner.name === allocation.podName &&
-					owner.uid === podUid,
-			)
+			(published.metadata?.name !== name ||
+				published.metadata?.namespace !== allocation.namespace ||
+				!published.metadata.uid ||
+				!published.metadata.resourceVersion ||
+				published.metadata.deletionTimestamp !== undefined ||
+				published.metadata.ownerReferences?.length !== 1 ||
+				!published.metadata.ownerReferences.some(
+					(owner) =>
+						owner.apiVersion === "v1" &&
+						owner.kind === "Pod" &&
+						owner.name === allocation.podName &&
+						owner.uid === podUid,
+				))
 		)
 			throw new WorkloadKubernetesError("conflict");
 		const initialized = current.status?.initContainerStatuses?.some(
@@ -2336,16 +2343,17 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				container.name === "codex-session-workspace-init" &&
 				container.state?.terminated?.exitCode === 0,
 		);
-		if (initialized) {
+		const expired = Date.now() >= expiresAt;
+		if (initialized || expired) {
 			if (published?.metadata?.uid && published.metadata.resourceVersion)
 				await options.client.delete({
 					apiVersion: "v1",
 					kind: "Secret",
 					metadata: published.metadata,
 				});
+			if (expired && !initialized) throw new WorkloadKubernetesError("policy");
 			return;
 		}
-		if (Date.now() >= expiresAt) throw new WorkloadKubernetesError("policy");
 		if (published) return;
 		const identities = issueExecutorStartIdentityV1(
 			{

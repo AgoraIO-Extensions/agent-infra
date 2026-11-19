@@ -6697,7 +6697,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return command.kind === "submit-turn"
 				? this.executeSubmitTurn(command, context?.fileBridge)
 				: command.kind === "native-command"
-					? this.executeNativeCommand(command, context?.nativeCommand)
+					? this.executeNativeCommand(command, context?.nativeCommand).then(
+							async (record) => {
+								if (
+									drain &&
+									record.result.outcome === "accepted" &&
+									record.result.status === "completed" &&
+									!(await drain.confirm(command.executionId))
+								)
+									return this.unknown(command, command.nativeSessionRef);
+								return record;
+							},
+						)
 					: command.kind === "supplement"
 						? this.executeSupplement(command, context?.fileBridge)
 						: isCodexInterruptionCommand(command)
@@ -8712,6 +8723,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				threadId: session.threadId,
 				turnId: turn.id,
 			};
+			await this.sessionExecutor?.drain?.bindNativeTurn(
+				command.executionId,
+				turn.id,
+			);
 			candidateModelTurn = nativeTurn;
 			const record = await this.resolve(
 				command,
@@ -13110,6 +13125,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (!pending) return false;
 		pending.turnId = turn.nativeTurnId;
+		await this.sessionExecutor?.drain?.bindNativeTurn(
+			pending.executionId,
+			pending.turnId,
+		);
 		await this.update((state) => {
 			const session = ownRecordValue(state.sessions, pending.nativeSessionRef);
 			const operation = session

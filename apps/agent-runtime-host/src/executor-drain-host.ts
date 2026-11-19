@@ -153,6 +153,10 @@ export async function openExecutorDrainHostV1(
 					journal,
 				};
 			},
+			async bindNativeTurn(executionId, nativeTurnId) {
+				if (!active || active.executionId !== executionId) return invalid();
+				await active.journal.bindNativeTurn(nativeTurnId);
+			},
 			endpoint() {
 				return active?.endpoint ?? invalid();
 			},
