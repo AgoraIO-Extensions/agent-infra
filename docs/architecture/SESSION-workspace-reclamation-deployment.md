@@ -29,7 +29,7 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
 
 ### 生产 dry-run 数据库身份
 
-先通过正式 App 发布执行 `0087_session_workspace_reclamation_read` 迁移，并使用包含该版本
+先通过正式 App 发布执行 `0088_session_workspace_reclamation_read` 迁移，并使用包含该版本
 查询的 Worker 镜像运行一次性 Job。该迁移建立只读投影视图，不创建登录账号。
 查询权限如下，具体列以[角色脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql)
 为准。
@@ -47,7 +47,9 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    确认迁移和三个视图已存在。先用只读查询核对逻辑复制槽，再用
    `psql -X -v ON_ERROR_STOP=1 -f` 执行角色脚本。脚本在创建角色前复查同一条件。
    新 lane 的 PostgreSQL StatefulSet 由 Helm 管理，首次初始化脚本只适用于新数据目录，
-   平台迁移则使用应用角色。创建登录角色和核对有效权限由 PostgreSQL 管理员单独执行一次。
+   平台迁移则使用应用角色。创建登录角色、核对有效权限及保存本次授权回执由 PostgreSQL
+   管理员在同一事务内完成。回执包括对象及列地址、实际 grantor、grantee、权限和 grant option。
+   回执不含凭据，保留至撤权事务成功结束。
 2. 角色应为 `agent_infra_reclamation_ro`、`NOLOGIN`、默认事务只读、没有角色成员资格。
    角色脚本会对包括 `PUBLIC` 在内的有效权限进行检查，发现正文、凭据、原始 JSON、
    非授权对象、可写序列或可写函数权限即回滚，例外仅限下文列出的签名。
@@ -71,9 +73,10 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    用 `psql -X -v ON_ERROR_STOP=1 -f` 执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
    脚本检查 NOLOGIN、活动连接和预备事务，并用 `pg_shdepend` 回读所有数据库中的
    owner 和 ACL 依赖。它分别计数 `postgres` 和 `template1` 的依赖。发现所有权、额外授权
-   或其他依赖时停止，报告计数并保留角色和对象。只剩建角色脚本登记的授权时，同一事务
-   清除这些临时授权，再验证全实例 owner 和 ACL 均为零，最后删除角色并回读 `role_removed=true`。
-   任一检查失败时保留 NOLOGIN、原授权和对象，把状态交 DBA 处理。
+   或其他依赖时停止，报告计数并保留角色和对象。脚本对照实际 ACL 和回执，按原 grantor
+   逐条执行对应的 `REVOKE ... RESTRICT`。同一对象上的第二个 grantor 也算额外授权。
+   撤权事务末尾再次确认全实例 owner 和 ACL 均为零，才删除角色和回执并回读 `role_removed=true`。
+   发现新增依赖或任一检查失败时回滚撤权，保留 NOLOGIN、原授权和对象，把状态交 DBA 处理。
 
 #### 已批准的 PUBLIC 权限例外
 

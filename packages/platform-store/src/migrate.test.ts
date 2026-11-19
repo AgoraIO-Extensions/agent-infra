@@ -130,10 +130,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
-	it("appends reclamation views to the published 0086 history without rewriting it", async () => {
+	it("appends reclamation views to the published 0087 history without rewriting it", async () => {
 		const database = await startPostgresTestDatabase("reclamation-upgrade");
 		const client = postgres(database.databaseUrl, { max: 1 });
-		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0086-"));
+		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0087-"));
 		try {
 			const sourceFolder = resolve(
 				import.meta.dirname,
@@ -143,7 +143,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 			const journalPath = resolve(folder, "meta/_journal.json");
 			const journal = JSON.parse(await readFile(journalPath, "utf8"));
 			journal.entries = journal.entries.filter(
-				(entry: { idx: number }) => entry.idx <= 86,
+				(entry: { idx: number }) => entry.idx <= 87,
 			);
 			await writeFile(journalPath, JSON.stringify(journal));
 			await builtStore.migratePlatformDatabase({
@@ -2101,6 +2101,7 @@ describe("published Relay authority migration", () => {
 			85,
 			86,
 			87,
+			88,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2194,9 +2195,13 @@ describe("published Relay authority migration", () => {
 			idx: 86,
 			tag: "0086_workload_certificate_reconciliation",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 87)).toMatchObject({
 			idx: 87,
-			tag: "0087_session_workspace_reclamation_read",
+			tag: "0087_operations_request_inventory",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 88,
+			tag: "0088_session_workspace_reclamation_read",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2770,9 +2775,13 @@ describe("published Relay authority migration", () => {
 				"connection_association_generations:connection_association_generations_pkey",
 			);
 			expectedDelta.columns.push(
-				...["cluster_id", "namespace", "observed_at", "snapshot"].map(
-					(name) => `operations_resource_snapshots:${name}`,
-				),
+				...[
+					"cluster_id",
+					"namespace",
+					"observed_at",
+					"request_inventory",
+					"snapshot",
+				].map((name) => `operations_resource_snapshots:${name}`),
 				...[
 					"agent_id",
 					"cluster_id",

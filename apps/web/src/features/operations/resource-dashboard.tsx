@@ -419,7 +419,10 @@ export function ResourceDashboard({
 								</TableRow>
 								<TableRow>
 									<TableCell data-label="口径">
-										会话占用 · {data.budget.counts.sessions} 个
+										{data.budget.sessionRequestCoverage
+											? "会话申请占用"
+											: "会话占账"}{" "}
+										· {data.budget.counts.sessions} 个
 									</TableCell>
 									<TableCell data-label="占用">
 										<Quantities values={data.budget.sessionUsage} />
@@ -434,9 +437,24 @@ export function ResourceDashboard({
 							</TableBody>
 						</Table>
 						<p className="ops-resource-note">
-							保留存储 {data.budget.counts.retainedStorage}{" "}
-							项；成本记录缺失或无效 {data.budget.unaccountedCount}{" "}
-							项。预算占账不是 CPU、内存实测。
+							保留存储 {data.budget.counts.retainedStorage} 项。
+							{data.budget.sessionRequestCoverage
+								? "会话申请或预算记录有缺口"
+								: "成本记录缺失或无效"}{" "}
+							{data.budget.unaccountedCount} 项。
+							{data.budget.sessionRequestCoverage && (
+								<>
+									申请量覆盖（会话数） CPU{" "}
+									{data.budget.sessionRequestCoverage.cpuCores}/
+									{data.budget.counts.sessions}，内存{" "}
+									{data.budget.sessionRequestCoverage.memoryBytes}/
+									{data.budget.counts.sessions}，存储{" "}
+									{data.budget.sessionRequestCoverage.storageBytes}/
+									{data.budget.counts.sessions}。
+									{data.budget.sessionRequestCoverage.unscopedSessions > 0 &&
+										` 另有 ${data.budget.sessionRequestCoverage.unscopedSessions} 个会话的部署归属待确认，未纳入覆盖分母。`}
+								</>
+							)}
 						</p>
 					</>
 				) : (

@@ -27,9 +27,24 @@ END;
 $$;
 
 GRANT USAGE ON SCHEMA platform, platform_reclamation_read TO agent_infra_reclamation_ro;
-GRANT SELECT ON platform_reclamation_read.allocations,
-  platform_reclamation_read.outbox_items, platform_reclamation_read.stopped_audit
-  TO agent_infra_reclamation_ro;
+-- Column grants avoid table-wide REVOKE removing any column privileges
+-- other administrators add during the Job.
+DO $$
+DECLARE
+  view_row regclass;
+  columns text;
+BEGIN
+  FOREACH view_row IN ARRAY ARRAY[
+    'platform_reclamation_read.allocations'::regclass,
+    'platform_reclamation_read.outbox_items'::regclass,
+    'platform_reclamation_read.stopped_audit'::regclass
+  ] LOOP
+    SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) INTO STRICT columns
+    FROM pg_attribute WHERE attrelid = view_row AND attnum > 0 AND NOT attisdropped;
+    EXECUTE format('GRANT SELECT (%s) ON TABLE %s TO agent_infra_reclamation_ro', columns, view_row);
+  END LOOP;
+END;
+$$;
 GRANT SELECT (id, agent_id, session_generation, status) ON platform.conversations
   TO agent_infra_reclamation_ro;
 GRANT SELECT (sandbox_id, namespace, released, compute_released)
@@ -39,6 +54,35 @@ GRANT SELECT (conversation_id, status) ON platform.conversation_generation_tombs
 GRANT SELECT (scope_type, scope_id, status) ON platform.outbox_items
   TO agent_infra_reclamation_ro;
 GRANT SELECT (target_id, action) ON platform.audit_events TO agent_infra_reclamation_ro;
+
+-- The same transaction that creates the role records the actual ACL entries,
+-- including their catalog grantors. No credentials are stored.
+CREATE VIEW platform_reclamation_read.reader_grant_catalog AS
+SELECT d.dbid, d.classid, d.objid, d.objsubid,
+  a.grantor, a.grantee, a.privilege_type, a.is_grantable
+FROM pg_shdepend d
+CROSS JOIN LATERAL aclexplode(
+  CASE
+    WHEN d.classid = 'pg_database'::regclass AND d.dbid = 0 THEN
+      (SELECT datacl FROM pg_database WHERE oid = d.objid)
+    WHEN d.dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) THEN
+      CASE
+        WHEN d.classid = 'pg_namespace'::regclass THEN
+          (SELECT nspacl FROM pg_namespace WHERE oid = d.objid)
+        WHEN d.classid = 'pg_class'::regclass AND d.objsubid = 0 THEN
+          (SELECT relacl FROM pg_class WHERE oid = d.objid)
+        WHEN d.classid = 'pg_class'::regclass THEN
+          (SELECT attacl FROM pg_attribute WHERE attrelid = d.objid AND attnum = d.objsubid)
+      END
+  END
+) a
+WHERE d.refclassid = 'pg_authid'::regclass
+  AND d.refobjid = (SELECT oid FROM pg_roles WHERE rolname = 'agent_infra_reclamation_ro')
+  AND d.deptype = 'a'
+  AND d.refobjid IN (a.grantee, a.grantor);
+
+CREATE TABLE platform_reclamation_read.reader_grant_receipt AS
+SELECT * FROM platform_reclamation_read.reader_grant_catalog;
 
 -- Check effective privileges too: PostgreSQL adds any privileges from PUBLIC.
 DO $$

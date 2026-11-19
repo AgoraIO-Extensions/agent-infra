@@ -401,6 +401,83 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		},
 	);
 
+	it("stops when a separate grantor adds the same column privilege", async () => {
+		await prepareReaderTestDatabase();
+		await sql.unsafe(await roleSql);
+		await sql`create role reclamation_second_grantor nologin`;
+		await sql`grant usage on schema platform to reclamation_second_grantor`;
+		try {
+			await sql.begin(async (tx) => {
+				await tx`grant select (id) on platform.conversations
+					to reclamation_second_grantor with grant option`;
+				await tx`set local role reclamation_second_grantor`;
+				await tx`grant select (id) on platform.conversations to agent_infra_reclamation_ro`;
+			});
+			try {
+				await expect(sql.unsafe(await dropRoleSql)).rejects.toMatchObject({
+					message: "WORKSPACE_READER_CLEANUP_UNEXPECTED_DEPENDENCIES",
+					detail: expect.stringContaining('"unexpected_acl_rows":1'),
+				});
+			} finally {
+				await sql`rollback`;
+			}
+			expect(
+				await sql`select grantor::regrole::text as grantor
+					from platform_reclamation_read.reader_grant_catalog
+					where objid='platform.conversations'::regclass and objsubid=(
+						select attnum from pg_attribute where attrelid='platform.conversations'::regclass and attname='id'
+					) order by 1`,
+			).toEqual([
+				{ grantor: "platform_test" },
+				{ grantor: "reclamation_second_grantor" },
+			]);
+		} finally {
+			await sql.begin(async (tx) => {
+				await tx`set local role reclamation_second_grantor`;
+				await tx`revoke select (id) on platform.conversations from agent_infra_reclamation_ro`;
+			});
+			await sql`revoke select (id) on platform.conversations from reclamation_second_grantor`;
+			await sql`revoke usage on schema platform from reclamation_second_grantor`;
+			await sql`drop role reclamation_second_grantor`;
+		}
+		const receipts = await sql.unsafe(await dropRoleSql);
+		expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
+	});
+
+	it("rolls back the recorded revokes when another connection adds an ACL after the precheck", async () => {
+		await prepareReaderTestDatabase();
+		await sql.unsafe(await roleSql);
+		const script = await dropRoleSql;
+		const boundary = script.indexOf("-- Revoke only the recorded privilege");
+		expect(boundary).toBeGreaterThan(0);
+		const concurrent = postgres(db.databaseUrl, { max: 1 });
+		try {
+			await sql.unsafe(script.slice(0, boundary));
+			await concurrent`create table platform.late_reclamation_grant (id integer)`;
+			await concurrent`grant select on platform.late_reclamation_grant to agent_infra_reclamation_ro`;
+			try {
+				await expect(sql.unsafe(script.slice(boundary))).rejects.toMatchObject({
+					message: "WORKSPACE_READER_CLEANUP_DEPENDENCIES_REMAIN",
+					detail: expect.stringContaining('"cluster_acl_entries":1'),
+				});
+			} finally {
+				await sql`rollback`;
+			}
+			expect(
+				await sql`select
+					has_table_privilege('agent_infra_reclamation_ro', 'platform.late_reclamation_grant', 'SELECT') as late_grant,
+					has_column_privilege('agent_infra_reclamation_ro', 'platform.conversations', 'id', 'SELECT') as setup_grant,
+					rolcanlogin from pg_roles where rolname='agent_infra_reclamation_ro'`,
+			).toEqual([{ late_grant: true, setup_grant: true, rolcanlogin: false }]);
+		} finally {
+			await sql`rollback`;
+			await concurrent`drop table if exists platform.late_reclamation_grant`;
+			await concurrent.end();
+		}
+		const receipts = await sql.unsafe(await dropRoleSql);
+		expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
+	});
+
 	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
