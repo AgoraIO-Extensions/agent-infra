@@ -16,6 +16,7 @@ import {
 	type OperationsAlertThresholdsV2,
 	type OperationsBindingV2,
 	OperationsScopeErrorV2,
+	type OperationsSessionAllocationV2,
 	projectOperationsBudgetV2,
 	projectOperationsStalenessV2,
 } from "@agent-infra/platform-core";
@@ -132,6 +133,22 @@ export class PostgresOperationsResourceStoreV2 {
 					: [],
 			),
 		];
+		const identitiesByUid = new Map<
+			string,
+			(typeof identities)[number] | null
+		>();
+		for (const identity of identities) {
+			const prior = identitiesByUid.get(identity.uid);
+			if (prior === undefined) identitiesByUid.set(identity.uid, identity);
+			else if (
+				prior !== null &&
+				JSON.stringify(prior) !== JSON.stringify(identity)
+			)
+				identitiesByUid.set(identity.uid, null);
+		}
+		const uniqueIdentities = [...identitiesByUid.values()].filter(
+			(identity) => identity !== null,
+		);
 		await this.#sql.begin(async (tx) => {
 			await tx`set local statement_timeout = '3000ms'`;
 			await tx`select pg_advisory_xact_lock(hashtextextended(${`operations:${this.#scope.clusterId}:${this.#scope.namespace}`}, 0))`;
@@ -160,11 +177,11 @@ export class PostgresOperationsResourceStoreV2 {
 			(${this.#scope.clusterId}, ${this.#scope.namespace}, ${collectionStartedAt}, ${tx.json(snapshot)})
 			on conflict(cluster_id, namespace) do update set observed_at=excluded.observed_at, snapshot=excluded.snapshot
 			where platform.operations_resource_snapshots.observed_at < excluded.observed_at`;
-			if (identities.length)
+			if (uniqueIdentities.length)
 				await tx`insert into platform.operations_resource_identities
 				(cluster_id,namespace,uid,kind,name,agent_id,session_id,first_seen,last_seen)
 				select ${this.#scope.clusterId},${this.#scope.namespace},v.uid,v.kind,v.name,v."agentId",v."sessionId",v."observedAfter",${collectionStartedAt}
-				from jsonb_to_recordset(${tx.json(identities)}) as v(uid text,kind text,name text,"agentId" text,"sessionId" text,"observedAfter" timestamptz)
+				from jsonb_to_recordset(${tx.json(uniqueIdentities)}) as v(uid text,kind text,name text,"agentId" text,"sessionId" text,"observedAfter" timestamptz)
 				on conflict(cluster_id,namespace,uid) do update set last_seen=excluded.last_seen
 				where platform.operations_resource_identities.agent_id is not distinct from excluded.agent_id
 				and platform.operations_resource_identities.session_id is not distinct from excluded.session_id
@@ -204,6 +221,10 @@ export class PostgresOperationsResourceStoreV2 {
 	}
 
 	async readBindings(): Promise<OperationsBindingV2[]> {
+		return (await this.#readAttribution()).bindings;
+	}
+
+	async #readAttribution() {
 		const rows = await this.#sql<
 			{
 				agent_id: string;
@@ -213,11 +234,23 @@ export class PostgresOperationsResourceStoreV2 {
 				session_generation: string;
 				resource_fence: string;
 				desired_state: string;
+				status: string;
+				resource_name: string;
+				identity_verified: boolean;
 				resource_policy: {
 					namespace?: string;
 					configurationRevision?: number;
 				} | null;
 				resource_observation: {
+					status?: string;
+					sourceStop?: Partial<{
+						schemaVersion: number;
+						sandboxId: string;
+						sessionId: string;
+						targetGeneration: number;
+						targetResourceFence: number;
+						retainedPVC: unknown;
+					}>;
 					resources?: {
 						kind: string;
 						name: string;
@@ -227,18 +260,46 @@ export class PostgresOperationsResourceStoreV2 {
 				} | null;
 			}[]
 		>`select a.agent_id, coalesce(app.name, a.agent_id) as name, a.conversation_id, a.sandbox_id,
-			a.session_generation, a.resource_fence, a.desired_state, a.resource_policy, a.resource_observation
+			a.session_generation, a.resource_fence, a.desired_state, a.status, a.resource_name,
+			(agent.id is not null and c.id is not null) as identity_verified, a.resource_policy, a.resource_observation
 			from platform.session_sandbox_allocations a
-			join platform.agents agent on agent.id=a.agent_id
-			join platform.conversations c on c.id=a.conversation_id and c.agent_id=a.agent_id
+			left join platform.agents agent on agent.id=a.agent_id
+			left join platform.conversations c on c.id=a.conversation_id and c.agent_id=a.agent_id
 			and c.actor_id=a.actor_id and c.principal_type=a.principal_type and c.channel_id=a.channel_id
 			and c.session_generation=a.session_generation
 			left join platform.agent_applications app on app.agent_id=a.agent_id
 			where a.resource_policy->>'namespace'=${this.#scope.namespace} limit 10001`;
 		if (rows.length > 10000) throw new Error("Operations bindings unavailable");
+		const allocations: OperationsSessionAllocationV2[] = rows.map((row) => {
+			const observation = row.resource_observation;
+			const receipt = observation?.sourceStop;
+			const stopped =
+				row.identity_verified &&
+				row.status === "stopped" &&
+				row.desired_state === "stopped" &&
+				observation?.status === "stopped" &&
+				Array.isArray(observation.resources) &&
+				observation.resources.every(
+					(resource) => resource.kind === "PersistentVolumeClaim",
+				) &&
+				receipt?.schemaVersion === 1 &&
+				receipt.sandboxId === row.sandbox_id &&
+				receipt.sessionId === row.conversation_id &&
+				receipt.targetGeneration === Number(row.session_generation) &&
+				receipt.targetResourceFence === Number(row.resource_fence);
+			return {
+				sandboxId: row.sandbox_id,
+				resourceName: row.resource_name,
+				stopped,
+				noRetainedPvc:
+					stopped &&
+					receipt?.retainedPVC === null &&
+					observation?.resources?.length === 0,
+			};
+		});
 		const bindings: OperationsBindingV2[] = rows.flatMap((row) => {
 			const identities = row.resource_observation?.resources;
-			if (!Array.isArray(identities)) return [];
+			if (!row.identity_verified || !Array.isArray(identities)) return [];
 			return [
 				{
 					agentId: row.agent_id,
@@ -324,7 +385,7 @@ export class PostgresOperationsResourceStoreV2 {
 				),
 			});
 		}
-		if (!this.#workloadNamespaceRef) return bindings;
+		if (!this.#workloadNamespaceRef) return { bindings, allocations };
 		const workloads = await this.#sql<
 			{
 				agent_id: string;
@@ -431,7 +492,7 @@ export class PostgresOperationsResourceStoreV2 {
 				/* Legacy or unverified bindings stay unknown in the read projection. */
 			}
 		}
-		return bindings;
+		return { bindings, allocations };
 	}
 
 	async read(
@@ -449,10 +510,13 @@ export class PostgresOperationsResourceStoreV2 {
             exists(select 1 from platform.conversations where id=${input.sessionId ?? null} and (${input.agentId ?? null}::text is null or agent_id=${input.agentId ?? null})) as session_exists`;
 		const savedSnapshots = await this.#sql<{ snapshot: unknown }[]>`
 			select snapshot from platform.operations_resource_snapshots where cluster_id=${this.#scope.clusterId} and namespace=${namespace}`;
-		const result = savedSnapshots[0]
-			? OperationsResourcesV2Schema.parse(savedSnapshots[0].snapshot)
-			: emptyOperationsResourcesV2(this.#scope, new Date().toISOString());
-		result.generatedAt = new Date().toISOString();
+		const now = new Date().toISOString();
+		const result = projectOperationsStalenessV2(
+			savedSnapshots[0]
+				? OperationsResourcesV2Schema.parse(savedSnapshots[0].snapshot)
+				: emptyOperationsResourcesV2(this.#scope, now),
+			now,
+		);
 		result.selection = {
 			agent: input.agentId
 				? selection?.agent_exists
@@ -467,10 +531,18 @@ export class PostgresOperationsResourceStoreV2 {
 		};
 
 		// Attribution is resolved again from authoritative business bindings at read time.
-		result.resources = bindOperationsResourcesV2(
-			result.resources,
-			await this.readBindings(),
-		).filter(
+		const observed = result.resources;
+		const { bindings, allocations } = await this.#readAttribution();
+		const bound = bindOperationsResourcesV2(observed, bindings);
+		const kubernetes = result.sources.find(
+			(source) => source.kind === "kubernetes",
+		);
+		const complete =
+			!result.truncated &&
+			kubernetes?.state === "available" &&
+			kubernetes.observedAt !== null &&
+			kubernetes.reason === null;
+		result.resources = bound.filter(
 			(resource) =>
 				(!input.agentId || input.agentId === resource.agentId) &&
 				(!input.sessionId || input.sessionId === resource.sessionId),
@@ -509,15 +581,10 @@ export class PostgresOperationsResourceStoreV2 {
 				if (rows.length > 10000)
 					throw new Error("Operations budget observation is unavailable");
 				const saved = configurations[0];
-				const missing = await tx<
-					{ sessions: string; reserves: string }[]
-				>`select
-				(select count(*) from platform.session_sandbox_allocations a where a.resource_policy->>'namespace'=${namespace}
-				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=a.sandbox_id)) as sessions,
+				const missing = await tx<{ reserves: string }[]>`select
 				(select count(*) from platform.session_sandbox_reserves r where r.namespace=${namespace} and r.retired_at is null and r.status <> 'claimed'
 				and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=r.sandbox_id)
 				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=r.sandbox_id)) as reserves`;
-				const unaccountedSessions = Number(missing[0]?.sessions ?? 0);
 				const unaccountedReserves = Number(missing[0]?.reserves ?? 0);
 				const configuration = saved?.configuration;
 				const accounting = configuration?.reserveAccounting as
@@ -544,9 +611,8 @@ export class PostgresOperationsResourceStoreV2 {
 						claimed: row.claimed,
 						hasConversation: row.has_conversation,
 					})),
-					unaccountedCount: unaccountedSessions + unaccountedReserves,
 					unaccountedReserves,
-					unaccountedSessions,
+					sessionRequests: { allocations, observed, bound, complete },
 				});
 			});
 		} catch {

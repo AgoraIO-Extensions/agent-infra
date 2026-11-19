@@ -114,6 +114,8 @@ it("shows bounded database connection aggregates without returning session queri
 it("separates unclaimed reserve budget from retained Session storage without changing charges", async () => {
 	const reserveId = "00000000-0000-4000-8000-000000000001";
 	const sessionId = "00000000-0000-4000-8000-000000000002";
+	const coldSandbox = "00000000-0000-4000-8000-000000000003";
+	await sql`insert into platform.agents (id) values ('agent-1') on conflict do nothing`;
 	const reserveCost = {
 		cpuMillis: 1000,
 		memoryBytes: 2048,
@@ -160,16 +162,140 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 		(${reserveId}, ${scope.namespace}, ${sql.json(reserveCost)}, false, false),
 		(${sessionId}, ${scope.namespace}, ${sql.json(sessionCost)}, true, false)`;
 
+	await sql`insert into platform.conversations
+		(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
+		values ('cold-usage-session', 'agent-1', 'actor-1', 'web', 'active', 1, 'revision-1')`;
+	onTestFinished(async () => {
+		await sql`delete from platform.session_sandbox_allocations where sandbox_id=${coldSandbox}`;
+		await sql`delete from platform.conversations where id='cold-usage-session'`;
+	});
+	const now = new Date().toISOString();
+	const snapshot = emptyOperationsResourcesV2(scope, now);
+	snapshot.sources[1] = {
+		kind: "kubernetes",
+		state: "available",
+		observedAt: now,
+		windowSeconds: null,
+		reason: null,
+	};
+	const resource = (
+		sandboxId: string,
+		conversationId: string,
+		kind: "Pod" | "PersistentVolumeClaim",
+	): (typeof snapshot.resources)[number] => {
+		const isPod = kind === "Pod";
+		const empty = {
+			cpuCores: null,
+			memoryBytes: null,
+			storageBytes: null,
+			ephemeralStorageBytes: null,
+		};
+		return {
+			kind,
+			uid: `uid-${kind}-${sandboxId}`,
+			name: `sandbox-${sandboxId}`,
+			namespace: scope.namespace,
+			resourceVersion: "1",
+			ownerUid: null,
+			ownerGeneration: null,
+			agentId: "agent-1",
+			agentName: null,
+			sessionId: conversationId,
+			sandboxId,
+			generation: 1,
+			revision: 1,
+			workloadRevision: null,
+			resourceFence: 1,
+			ownership: "unknown",
+			ownershipReason: null,
+			role: "sandbox",
+			nodeName: isPod ? "node-1" : null,
+			phase: isPod ? "Running" : "Bound",
+			ready: isPod ? true : null,
+			restarts: 0,
+			reason: null,
+			observedAt: now,
+			identityObservedAt: now,
+			usage: empty,
+			requests: isPod
+				? { ...empty, cpuCores: 0.75, memoryBytes: 3072 }
+				: { ...empty, storageBytes: sandboxId === sessionId ? 16384 : 8192 },
+			limits: empty,
+			containers: [],
+			images: [],
+			retainedStorage: false,
+		};
+	};
+	const pod = resource(coldSandbox, "cold-usage-session", "Pod");
+	const claim = resource(
+		coldSandbox,
+		"cold-usage-session",
+		"PersistentVolumeClaim",
+	);
+	const retained = resource(
+		sessionId,
+		"retained-session",
+		"PersistentVolumeClaim",
+	);
+	const identity = ({
+		kind,
+		name,
+		namespace,
+		uid,
+		resourceVersion,
+	}: typeof pod) => ({ kind, name, namespace, uid, resourceVersion });
+	const policy = sql.json({
+		namespace: scope.namespace,
+		configurationRevision: 1,
+	});
+	await sql`insert into platform.session_sandbox_allocations
+		(sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id, session_generation,
+		 resource_name, workspace_scope, status, created_at, updated_at, resource_policy, resource_observation, resource_fence)
+		values (${coldSandbox}, 'cold-usage-session', 'agent-1', 'actor-1', 'user', 'web', 1, ${pod.name},
+		  ${coldSandbox}, 'ready', now(), now(), ${policy},
+		  ${sql.json({ status: "ready", resources: [identity(pod), identity(claim)] })}, 1)`;
+	await sql`update platform.session_sandbox_allocations set desired_state='stopped', resource_fence=1,
+		resource_policy=${policy}, resource_observation=${sql.json({
+			status: "stopped",
+			resources: [identity(retained)],
+			sourceStop: {
+				schemaVersion: 1,
+				sandboxId: sessionId,
+				sessionId: "retained-session",
+				targetGeneration: 1,
+				targetResourceFence: 1,
+				retainedPVC: identity(retained),
+			},
+		})} where sandbox_id=${sessionId}`;
+	await sql`insert into platform.session_sandbox_reserves
+		(sandbox_id, session_id, agent_id, namespace, profile_digest, profile, status, expires_at, created_at, updated_at)
+		values (${sessionId}, 'retained-session', 'agent-1', ${scope.namespace},
+		 ${"b".repeat(64)}, ${sql.json({})}, 'claimed', now() + interval '1 hour', now(), now())`;
+	snapshot.resources = [pod, pod, claim, retained];
+	await store.write(snapshot);
+
 	for (let attempt = 0; attempt < 2; attempt += 1) {
-		const response = await app().request("/api/v2/ops/resources");
+		const response = await app().request(
+			"/api/v2/ops/resources?sessionId=cold-usage-session",
+		);
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
 			schemaVersion: 2,
 			budget: {
 				scope: "unclaimed-reserves",
 				reserveUsage: { cpuCores: 1, memoryBytes: 2048, storageBytes: 8192 },
-				sessionUsage: { cpuCores: 0, memoryBytes: 0, storageBytes: 16384 },
-				counts: { unclaimedReserves: 1, sessions: 1, retainedStorage: 1 },
+				sessionUsage: {
+					cpuCores: 0.75,
+					memoryBytes: 3072,
+					storageBytes: 24576,
+				},
+				sessionRequestCoverage: {
+					cpuCores: 2,
+					memoryBytes: 2,
+					storageBytes: 2,
+				},
+				unaccountedCount: 0,
+				counts: { unclaimedReserves: 1, sessions: 2, retainedStorage: 1 },
 			},
 			sources: expect.arrayContaining([
 				expect.objectContaining({ kind: "platform", state: "available" }),
@@ -180,6 +306,79 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 			]),
 		});
 	}
+
+	const assertGap = async (
+		pods: typeof snapshot.resources,
+		order: number,
+		flags?: { truncated?: boolean; stale?: boolean },
+	) => {
+		const at = new Date(Date.parse(now) + order).toISOString();
+		await store.write({
+			...snapshot,
+			generatedAt: at,
+			collectionStartedAt: at,
+			truncated: flags?.truncated ?? false,
+			sources: snapshot.sources.map((source) =>
+				source.kind === "kubernetes"
+					? {
+							...source,
+							observedAt: flags?.stale
+								? new Date(Date.parse(now) - 120_000).toISOString()
+								: at,
+						}
+					: source,
+			),
+			resources: pods,
+		});
+		const budget = (await store.read({})).budget;
+		expect(budget).toMatchObject({
+			counts: { sessions: 2, unclaimedReserves: 1 },
+			reserveUsage: { cpuCores: 1, memoryBytes: 2048, storageBytes: 8192 },
+		});
+		return budget;
+	};
+	expect(
+		await assertGap([{ ...pod, resourceFence: 2 }, claim, retained], 1),
+	).toMatchObject({
+		sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: 24576 },
+		sessionRequestCoverage: { cpuCores: 1, memoryBytes: 1, storageBytes: 2 },
+	});
+	expect(
+		await assertGap([pod, claim, { ...retained, uid: "foreign-claim-uid" }], 2),
+	).toMatchObject({
+		sessionUsage: { cpuCores: 0.75, memoryBytes: 3072, storageBytes: null },
+		sessionRequestCoverage: { cpuCores: 2, memoryBytes: 2, storageBytes: 1 },
+	});
+	expect(
+		await assertGap(
+			[
+				{ ...pod, requests: { ...pod.requests, memoryBytes: null } },
+				claim,
+				retained,
+			],
+			3,
+		),
+	).toMatchObject({
+		sessionUsage: { cpuCores: 0.75, memoryBytes: null, storageBytes: 24576 },
+	});
+	for (const [index, flags] of [
+		{ truncated: true },
+		{ stale: true },
+	].entries()) {
+		expect(
+			await assertGap([pod, claim, retained], index + 4, flags),
+		).toMatchObject({
+			sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: null },
+			sessionRequestCoverage: { cpuCores: 0, memoryBytes: 0, storageBytes: 0 },
+		});
+	}
+	const charges =
+		await sql`select resources, compute_released from platform.session_sandbox_resource_charges
+		where sandbox_id in (${reserveId}, ${sessionId}) order by sandbox_id`;
+	expect(charges).toEqual([
+		{ resources: reserveCost, compute_released: false },
+		{ resources: sessionCost, compute_released: true },
+	]);
 });
 
 it("keeps a measured zero and refuses an unverified Agent attribution", async () => {

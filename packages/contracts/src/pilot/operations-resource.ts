@@ -74,6 +74,9 @@ export const OperationsBudgetV2Schema = z.strictObject({
 	limits: OperationsQuantitiesV2Schema.nullable(),
 	reserveUsage: OperationsQuantitiesV2Schema,
 	sessionUsage: OperationsQuantitiesV2Schema,
+	sessionRequestCoverage: z
+		.strictObject({ cpuCores: count, memoryBytes: count, storageBytes: count })
+		.optional(),
 	unknownUsage: OperationsQuantitiesV2Schema,
 	counts: z.strictObject({
 		unclaimedReserves: count,

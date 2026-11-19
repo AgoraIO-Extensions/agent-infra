@@ -1989,6 +1989,11 @@ export type OperationsResourcesV2 = {
         };
         revision: number | null;
         scope: 'unclaimed-reserves';
+        sessionRequestCoverage?: {
+            cpuCores: number;
+            memoryBytes: number;
+            storageBytes: number;
+        };
         sessionUsage: {
             cpuCores: number | null;
             ephemeralStorageBytes: number | null;

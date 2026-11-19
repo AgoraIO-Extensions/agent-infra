@@ -11967,6 +11967,32 @@
                     "const": "unclaimed-reserves",
                     "type": "string"
                   },
+                  "sessionRequestCoverage": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cpuCores": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "memoryBytes": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "storageBytes": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "cpuCores",
+                      "memoryBytes",
+                      "storageBytes"
+                    ],
+                    "type": "object"
+                  },
                   "sessionUsage": {
                     "additionalProperties": false,
                     "properties": {
