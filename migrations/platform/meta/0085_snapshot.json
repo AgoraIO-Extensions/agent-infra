@@ -1,5 +1,5 @@
 {
-  "id": "d2bf3cc8-2fa1-4764-8f67-ed3d3bb67f9a",
+  "id": "471ef9a6-39b7-48d7-bc3b-c455d5c077a8",
   "prevId": "cd7633c5-905e-4a8a-9aa5-2508c73395de",
   "version": "7",
   "dialect": "postgresql",
@@ -2680,6 +2680,28 @@
           ],
           "isUnique": false,
           "where": "\"platform\".\"conversation_events\".\"source\"='runtime' and \"platform\".\"conversation_events\".\"event_type\"='execution.operation' and \"platform\".\"conversation_events\".\"event_payload\"->'fact'->>'kind'='model'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "conversation_event_terminal_cursor_idx": {
+          "name": "conversation_event_terminal_cursor_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "conversation_cursor",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"platform\".\"conversation_events\".\"event_type\" = 'execution.status' and \"platform\".\"conversation_events\".\"event_payload\"->>'status' in ('completed', 'failed', 'cancelled')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -8635,12 +8657,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "certificate_reconciliation": {
-          "name": "certificate_reconciliation",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {

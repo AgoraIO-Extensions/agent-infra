@@ -572,8 +572,15 @@
     {
       "idx": 85,
       "version": "7",
-      "when": 1795060228013,
-      "tag": "0085_workload_certificate_reconciliation",
+      "when": 1795070273743,
+      "tag": "0085_conversation_event_terminal_cursor",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1795070821975,
+      "tag": "0086_workload_certificate_reconciliation",
       "breakpoints": true
     }
   ]

@@ -2180,6 +2180,125 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 		return new PostgresConversationQueryV1({ databaseUrl, eventWindow: 200 });
 	}
 
+	it("projects each completed answer only on its own page of a five-round history", async () => {
+		const id = "two-page-history";
+		// The deployed sample returned 121 events for three older rounds and
+		// 293 for two newer rounds, with five user and five assistant messages.
+		const rounds = [
+			{ reasoning: 5, text: 33 },
+			{ reasoning: 5, text: 33 },
+			{ reasoning: 5, text: 34 },
+			{ reasoning: 5, text: 139 },
+			{ reasoning: 5, text: 140 },
+		];
+		await seedRounds(id, rounds);
+		const reader = platformReader();
+		try {
+			const recent = await reader.get(reasoningScope, id);
+			const beforeCursor = recent?.eventWindow?.beforeCursor;
+			if (!recent || !beforeCursor) throw new Error("Expected two event pages");
+			const older = await reader.get(reasoningScope, id, undefined, {
+				beforeCursor,
+			});
+			if (!older) throw new Error("Expected older event page");
+			expect(recent.events).toHaveLength(293);
+			expect(older.events).toHaveLength(121);
+			expect(older.eventWindow).toEqual({
+				hasEarlier: false,
+				beforeCursor: null,
+			});
+
+			const projected = [older, recent].map((page, index) => {
+				const messages = projectConversationMessagesV1(page);
+				expect(messages.filter(({ role }) => role === "user")).toHaveLength(5);
+				const expected = index === 0 ? [1, 2, 3] : [4, 5];
+				expect(messages.filter(({ role }) => role === "assistant")).toEqual(
+					expected.map((round) =>
+						expect.objectContaining({
+							messageId: `assistant:${executionOf(id, round)}`,
+							status: "completed",
+							text: answerOf(id, round, rounds),
+						}),
+					),
+				);
+				return messages;
+			});
+			expect(
+				new Set(projected.flat().map(({ messageId }) => messageId)).size,
+			).toBe(10);
+		} finally {
+			await reader.close();
+		}
+	});
+
+	it("preserves an answer awaiting its terminal event on four history pages", async () => {
+		const id = "history-awaiting-terminal";
+		await seedRounds(id, [
+			{ reasoning: 3, text: 60 },
+			{ reasoning: 5, text: 70 },
+			{ reasoning: 6, text: 75 },
+			{ reasoning: 7, text: 80 },
+		]);
+		const executionId = executionOf(id, 4);
+		const [terminal] = await client`delete from platform.conversation_events
+			where conversation_id = ${id}
+				and execution_id = ${executionId}
+				and event_type = 'execution.status' and event_payload ->> 'status' = 'completed'
+			returning event_id, sequence::int, conversation_cursor::int, occurred_at`;
+		if (!terminal) throw new Error("Expected seeded terminal event");
+
+		const reader = new PostgresConversationQueryV1({
+			databaseUrl,
+			eventWindow: 20,
+			eventWindowMaxEvents: 89,
+		});
+		async function statuses() {
+			const result = [];
+			let beforeCursor: string | undefined;
+			do {
+				const page = await reader.get(
+					reasoningScope,
+					id,
+					undefined,
+					beforeCursor === undefined ? undefined : { beforeCursor },
+				);
+				if (!page) throw new Error("Expected an event page");
+				const answer = projectConversationMessagesV1(page).find(
+					(item) =>
+						item.role === "assistant" && item.executionId === executionId,
+				);
+				result.push({ status: answer?.status, hasBody: Boolean(answer?.text) });
+				beforeCursor = page.eventWindow?.beforeCursor ?? undefined;
+			} while (beforeCursor && result.length < 5);
+			return result;
+		}
+		try {
+			expect(await statuses()).toEqual([
+				{ status: "processing", hasBody: true },
+				...Array.from({ length: 3 }, () => ({
+					status: "processing",
+					hasBody: false,
+				})),
+			]);
+			await client`insert into platform.conversation_events
+				(event_id, conversation_id, execution_id, adapter_event_key, sequence, conversation_cursor,
+				event_type, event_payload, event_digest, runtime_cursor, occurred_at, source)
+				values (${terminal.event_id}, ${id}, ${executionId}, ${terminal.event_id},
+					${terminal.sequence}, ${terminal.conversation_cursor}, 'execution.status',
+					${client.json({ type: "execution.status", status: "completed" })},
+					${"d".repeat(64)}, ${terminal.event_id}, ${terminal.occurred_at}, 'runtime')`;
+			expect(await statuses()).toEqual([
+				{ status: "completed", hasBody: true },
+				...Array.from({ length: 3 }, () => ({
+					status: undefined,
+					hasBody: false,
+				})),
+			]);
+		} finally {
+			await reader.close();
+		}
+	});
+
 	it("shows every answer and thinking process of a three-round reasoning conversation on the first screen", async () => {
 		const reader = platformReader();
 		try {

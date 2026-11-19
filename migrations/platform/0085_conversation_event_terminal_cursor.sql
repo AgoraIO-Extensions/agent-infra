@@ -1,0 +1,1 @@
+CREATE INDEX "conversation_event_terminal_cursor_idx" ON "platform"."conversation_events" USING btree ("conversation_id","conversation_cursor") WHERE "platform"."conversation_events"."event_type" = 'execution.status' and "platform"."conversation_events"."event_payload"->>'status' in ('completed', 'failed', 'cancelled');
