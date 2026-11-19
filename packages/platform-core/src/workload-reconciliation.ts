@@ -731,6 +731,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 						...state,
 						candidate: state.verified,
 					}) === false;
+				let failedClosure: WorkloadReconciliationStateV1 | undefined;
 				try {
 					// A persisted rejection means the route was closed and no resource
 					// teardown is owed. New lifecycle intent still takes the normal path.
@@ -904,7 +905,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (servingProbeTolerated(state, health))
 								return { ...state, attempts: state.attempts + 1 };
 							const certificate = certificateFailure(health);
-							if (certificate) return certificate;
+							if (certificate) {
+								// Persist the cleaning intent through the normal catch if this
+								// first attempt to close the serving route fails.
+								failedClosure = certificate;
+								await runtime.closeRoute(state);
+								return certificate;
+							}
 							await runtime.closeRoute(state);
 							if (health === "certificate-pending") return waitForCertificate();
 							// 漂移只推进 Workload revision，candidate 保留原 verified 部署及其 workloadRevision：
@@ -924,7 +931,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (servingProbeTolerated(state, health))
 								return { ...state, attempts: state.attempts + 1 };
 							const certificate = certificateFailure(health);
-							if (certificate) return certificate;
+							if (certificate) {
+								// Persist the cleaning intent through the normal catch if this
+								// first attempt to close the serving route fails.
+								failedClosure = certificate;
+								await runtime.closeRoute(state);
+								return certificate;
+							}
 							await runtime.closeRoute(state);
 							if (health === "certificate-pending") return waitForCertificate();
 							return advance("closing", {
@@ -1012,13 +1025,14 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 					}
 				} catch (error) {
+					const failedState = failedClosure ?? state;
 					const reason = classifyWorkloadFailureReasonV1(error);
-					const previousFailure = state.lastFailure;
+					const previousFailure = failedState.lastFailure;
 					const consecutiveAttempts =
 						previousFailure?.reason === reason
 							? Math.min(
 									previousFailure.attempts + 1,
-									attemptBudget(state.phase),
+									attemptBudget(failedState.phase),
 								)
 							: 1;
 					const lastFailure = classifyWorkloadFailureDetailsV1(
@@ -1031,8 +1045,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 							reason === "kubernetes_forbidden") &&
 						consecutiveAttempts >= authorizationFailureThreshold;
 					const retrying = {
-						...state,
-						attempts: Math.min(state.attempts + 1, attemptBudget(state.phase)),
+						...failedState,
+						attempts: Math.min(
+							failedState.attempts + 1,
+							attemptBudget(failedState.phase),
+						),
 						lastFailure,
 					};
 					// 步骤里的异常被吞掉后只会让 attempts 加一或进入失败处理；这里把它交给
@@ -1040,13 +1057,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 					const observe = (next: WorkloadReconciliationStateV1) => {
 						try {
 							dependencies.onStepFailure?.({
-								agentId: state.agentId,
-								phase: state.phase,
+								agentId: failedState.agentId,
+								phase: failedState.phase,
 								attempts: Math.min(
-									state.attempts + 1,
-									attemptBudget(state.phase),
+									failedState.attempts + 1,
+									attemptBudget(failedState.phase),
 								),
-								terminal: next.phase !== state.phase,
+								terminal: next.phase !== failedState.phase,
 								error,
 							});
 						} catch {
@@ -1054,7 +1071,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 						}
 						return next;
 					};
-					if (state.phase === "preflight") {
+					if (failedState.phase === "preflight") {
 						// 部署策略不匹配与 preflight 拒绝同为确定性结果（#3034）：立即进入既有失败
 						// 处理，不再消耗重试预算；临时异常仍在预算内重试。
 						const permanent =
@@ -1062,24 +1079,24 @@ export function createWorkloadReconciliationV1(dependencies: {
 							reason === "kubernetes_policy";
 						if (
 							!permanent &&
-							state.attempts + 1 < maximumAttempts &&
+							failedState.attempts + 1 < maximumAttempts &&
 							!authorizationTerminal
 						)
 							return observe(retrying);
-						if (state.verified && !stopped && incompatibleRollback()) {
+						if (failedState.verified && !stopped && incompatibleRollback()) {
 							return observe(
 								advance("closing", {
-									candidate: state.verified,
+									candidate: failedState.verified,
 									retainedFailure: rollbackRejected,
 									failureCode: "reconciliation_failed",
 									lastFailure,
 								}),
 							);
 						}
-						if (state.verified)
+						if (failedState.verified)
 							return observe(
 								advance("rejected", {
-									candidate: state.verified,
+									candidate: failedState.verified,
 									rollback: true,
 									failureCode: "reconciliation_failed",
 									lastFailure,
@@ -1095,14 +1112,14 @@ export function createWorkloadReconciliationV1(dependencies: {
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
 					if (
-						state.phase === "cleaning" ||
-						state.phase === "closing" ||
-						state.phase === "stopped"
+						failedState.phase === "cleaning" ||
+						failedState.phase === "closing" ||
+						failedState.phase === "stopped"
 					)
 						return observe(retrying);
 					if (
 						reason === "configuration_mismatch" ||
-						state.attempts + 1 >= attemptBudget(state.phase) ||
+						failedState.attempts + 1 >= attemptBudget(failedState.phase) ||
 						authorizationTerminal
 					)
 						return observe(failed("reconciliation_failed", lastFailure));

@@ -180,8 +180,6 @@ export function decodePersistedWorkloadStateV1(
 		"cleanupInterrupted",
 		"capabilities",
 		"lastFailure",
-		"certificateWait",
-		"retainedFailure",
 	];
 	if (
 		required.some((key) => !Object.hasOwn(value, key)) ||
@@ -239,48 +237,6 @@ export function decodePersistedWorkloadStateV1(
 	const lastFailure = Object.hasOwn(value, "lastFailure")
 		? parsePersistedWorkloadReconciliationFailureV1(value.lastFailure)
 		: undefined;
-	if (Object.hasOwn(value, "certificateWait")) {
-		const wait = value.certificateWait as Record<string, unknown>;
-		if (
-			!wait ||
-			typeof wait !== "object" ||
-			Array.isArray(wait) ||
-			Object.keys(wait).some(
-				(key) => key !== "attempts" && key !== "resumeRejected",
-			) ||
-			!Number.isSafeInteger(wait.attempts) ||
-			(wait.attempts as number) < 1 ||
-			(wait.attempts as number) > 5 ||
-			value.phase !== "observing" ||
-			(Object.hasOwn(wait, "resumeRejected") &&
-				(wait.resumeRejected !== true || value.verifiedRevision === null))
-		)
-			throw new Error("Invalid persisted Certificate wait");
-	}
-	if (Object.hasOwn(value, "retainedFailure")) {
-		const retained = value.retainedFailure as Record<string, unknown>;
-		if (
-			!retained ||
-			typeof retained !== "object" ||
-			Array.isArray(retained) ||
-			Object.keys(retained).some(
-				(key) => key !== "certificate" && key !== "rollbackRouteRejected",
-			) ||
-			Object.keys(retained).length === 0 ||
-			value.verified === null ||
-			!["closing", "cleaning", "failed"].includes(String(value.phase)) ||
-			(Object.hasOwn(retained, "certificate") &&
-				(typeof retained.certificate !== "string" ||
-					![
-						"certificate-failed",
-						"certificate-timeout",
-						"certificate-invalid",
-					].includes(retained.certificate))) ||
-			(Object.hasOwn(retained, "rollbackRouteRejected") &&
-				retained.rollbackRouteRejected !== true)
-		)
-			throw new Error("Invalid persisted retained Workload failure");
-	}
 	const normalized = {
 		...value,
 		...(capabilities ? { capabilities } : {}),
@@ -477,6 +433,90 @@ interface ClaimedWorkloadTaskV1 {
 interface PersistedWorkloadRowV1 {
 	readonly revision: string;
 	readonly state: unknown;
+	readonly certificate_reconciliation: unknown;
+}
+
+// Keep the state JSON readable by deployed V1 readers. A legacy writer
+// changes updated_at without touching this column, invalidating its receipt.
+const currentCertificateReconciliationV1 = `
+	case when certificate_reconciliation->'updatedAt' = to_jsonb(extract(epoch from updated_at))
+		then certificate_reconciliation->'data' else null end
+`;
+
+function withCertificateReconciliationV1(
+	state: WorkloadReconciliationStateV1,
+	input: unknown,
+): WorkloadReconciliationStateV1 {
+	if (input === null || input === undefined) return state;
+	if (typeof input !== "object" || Array.isArray(input))
+		throw new Error("Invalid Certificate reconciliation");
+	const value = input as Record<string, unknown>;
+	if (
+		Object.keys(value).length !== 1 ||
+		(!Object.hasOwn(value, "certificateWait") &&
+			!Object.hasOwn(value, "retainedFailure"))
+	)
+		throw new Error("Invalid Certificate reconciliation");
+	if (Object.hasOwn(value, "certificateWait")) {
+		const wait = value.certificateWait as Record<string, unknown>;
+		if (
+			!wait ||
+			typeof wait !== "object" ||
+			Array.isArray(wait) ||
+			Object.keys(wait).some(
+				(key) => key !== "attempts" && key !== "resumeRejected",
+			) ||
+			!Number.isSafeInteger(wait.attempts) ||
+			(wait.attempts as number) < 1 ||
+			(wait.attempts as number) > 5 ||
+			state.phase !== "observing" ||
+			(Object.hasOwn(wait, "resumeRejected") &&
+				(wait.resumeRejected !== true || state.verifiedRevision === null))
+		)
+			throw new Error("Invalid persisted Certificate wait");
+	}
+	if (Object.hasOwn(value, "retainedFailure")) {
+		const retained = value.retainedFailure as Record<string, unknown>;
+		if (
+			!retained ||
+			typeof retained !== "object" ||
+			Array.isArray(retained) ||
+			Object.keys(retained).some(
+				(key) => key !== "certificate" && key !== "rollbackRouteRejected",
+			) ||
+			Object.keys(retained).length === 0 ||
+			state.verified === null ||
+			!["closing", "cleaning", "failed"].includes(String(state.phase)) ||
+			(Object.hasOwn(retained, "certificate") &&
+				(typeof retained.certificate !== "string" ||
+					![
+						"certificate-failed",
+						"certificate-timeout",
+						"certificate-invalid",
+					].includes(retained.certificate))) ||
+			(Object.hasOwn(retained, "rollbackRouteRejected") &&
+				retained.rollbackRouteRejected !== true)
+		)
+			throw new Error("Invalid persisted retained Workload failure");
+	}
+
+	return {
+		...state,
+		...(value.certificateWait
+			? {
+					certificateWait: value.certificateWait as NonNullable<
+						WorkloadReconciliationStateV1["certificateWait"]
+					>,
+				}
+			: {}),
+		...(value.retainedFailure
+			? {
+					retainedFailure: value.retainedFailure as NonNullable<
+						WorkloadReconciliationStateV1["retainedFailure"]
+					>,
+				}
+			: {}),
+	};
 }
 
 interface PreparedWorkloadStepV1 {
@@ -687,7 +727,11 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				and (${activeSelection}::boolean is null or schedule.active = ${activeSelection}::boolean)
 				and (
 					(w.agent_id is null and ap.status <> 'creation_failed')
-					or w.next_attempt_at <= clock_timestamp()
+					or (
+					case when w.certificate_reconciliation->'updatedAt' = to_jsonb(extract(epoch from w.updated_at))
+						then coalesce(to_timestamp((w.certificate_reconciliation->>'dueAt')::double precision), 'infinity'::timestamptz)
+						else w.next_attempt_at end
+				) <= clock_timestamp()
 					or wakeup.has_intent
 				) order by
 					case when schedule.active = ${lifecycleSelections < maximumLifecycleSelections} then 0 else 1 end,
@@ -737,7 +781,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				throw new Error();
 			const [persistedRow] = await sql<
 				PersistedWorkloadRowV1[]
-			>`select revision::text, state from platform.workload_reconciliations where agent_id = ${agent.id}`;
+			>`select revision::text, state, ${sql.unsafe(currentCertificateReconciliationV1)} as certificate_reconciliation from platform.workload_reconciliations where agent_id = ${agent.id}`;
 			let persisted = persistedRow ?? null;
 			const decodedState = decodePersistedWorkloadStateV1(
 				persisted?.state,
@@ -797,7 +841,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					set state = ${sql.json(state as unknown as postgres.JSONValue)}, updated_at = clock_timestamp()
 					where agent_id = ${agent.id} and revision = ${persisted?.revision ?? null}
 						and state = ${sql.json(persisted?.state as postgres.JSONValue)}
-					returning revision::text, state
+					returning revision::text, state, null as certificate_reconciliation
 				`;
 				if (!normalized) throw new Error();
 				persisted = normalized;
@@ -805,7 +849,10 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				management = await readAgentManagementState(database, agent.id);
 				if (management?.fence !== fence) throw new Error();
 			} else if (decodedState) {
-				state = decodedState.state;
+				state = withCertificateReconciliationV1(
+					decodedState.state,
+					persisted?.certificate_reconciliation,
+				);
 				if (state.fence > management.fence) throw new Error();
 			}
 			const [candidate] = await sql<{ id: string; delivery_fence: string }[]>`
@@ -1097,7 +1144,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					const current = await readAgentManagementState(database, agentId);
 					const [row] = await sql<
 						PersistedWorkloadRowV1[]
-					>`select revision::text, state from platform.workload_reconciliations where agent_id = ${agentId} for update`;
+					>`select revision::text, state, ${sql.unsafe(currentCertificateReconciliationV1)} as certificate_reconciliation from platform.workload_reconciliations where agent_id = ${agentId} for update`;
 					// Writers may commit while the step runs. Persist only a result
 					// derived from inputs that are still current; otherwise the next
 					// step converges on the newer intent from the stored state. A
@@ -1111,7 +1158,11 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 							? row !== undefined
 							: !row ||
 								row.revision !== persisted.revision ||
-								!isDeepStrictEqual(row.state, persisted.state))
+								!isDeepStrictEqual(row.state, persisted.state) ||
+								!isDeepStrictEqual(
+									row.certificate_reconciliation,
+									persisted.certificate_reconciliation,
+								))
 					)
 						return "stale" as const;
 					const observation = await workloadManagementObservationV1(
@@ -1134,7 +1185,33 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						: workloadMadeProgress(state, next)
 							? 0
 							: workloadRetryDelayMsV1(next, retryDelayMs);
-					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
+					const { certificateWait, retainedFailure, ...baseState } = next;
+					const certificateReconciliation = certificateWait
+						? { certificateWait }
+						: retainedFailure
+							? { retainedFailure }
+							: null;
+					// Old workers can read these V1 states and still honor a new outbox
+					// intent. Only new workers schedule certificate-only follow-up.
+					await sql`
+						insert into platform.workload_reconciliations
+							(agent_id, revision, state, next_attempt_at, updated_at, certificate_reconciliation)
+						values (
+							${agentId}, ${next.revision}, ${sql.json(baseState as unknown as postgres.JSONValue)},
+							case when ${certificateReconciliation !== null} then 'infinity'::timestamptz
+								else statement_timestamp() + ${delay} * interval '1 millisecond' end,
+							statement_timestamp(),
+							case when ${certificateReconciliation !== null} then jsonb_build_object(
+								'updatedAt', extract(epoch from statement_timestamp()),
+								'dueAt', case when ${next.phase !== "failed"}
+									then extract(epoch from statement_timestamp() + ${delay} * interval '1 millisecond') end,
+								'data', ${sql.json(certificateReconciliation as unknown as postgres.JSONValue)}
+							) end
+						)
+						on conflict (agent_id) do update set revision = excluded.revision,
+							state = excluded.state, next_attempt_at = excluded.next_attempt_at,
+							updated_at = excluded.updated_at, certificate_reconciliation = excluded.certificate_reconciliation
+					`;
 					// Idle Session Sandboxes follow a ready verified deployment in
 					// this same transaction; periodic monitor write-backs retry the
 					// ones that were busy (ADR 0023). 空闲回收在任何阶段的写回中都执行
@@ -1175,7 +1252,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				}
 				// The discarded step leaves the stored state untouched; wake the
 				// next step now instead of waiting for the monitor interval.
-				await client`update platform.workload_reconciliations set next_attempt_at = least(next_attempt_at, clock_timestamp()) where agent_id = ${agentId}`;
+				await client`update platform.workload_reconciliations set next_attempt_at = least(next_attempt_at, clock_timestamp()) where agent_id = ${agentId} and (certificate_reconciliation->'updatedAt' is distinct from to_jsonb(extract(epoch from updated_at)))`;
 				return "advanced" as const;
 			} catch {
 				throw new Error("Workload reconciliation persistence failed");
@@ -1226,13 +1303,21 @@ export function openPostgresWorkloadStateReaderV1(options: {
 				throw new TypeError("Workload state reader Agent ID is invalid");
 			signal?.throwIfAborted();
 			return client.begin(async (sql) => {
-				const [row] = await sql<{ state: unknown }[]>`
-					select state from platform.workload_reconciliations
+				const [row] = await sql<
+					{ state: unknown; certificate_reconciliation: unknown }[]
+				>`
+					select state, ${sql.unsafe(currentCertificateReconciliationV1)} as certificate_reconciliation
+					from platform.workload_reconciliations
 					where agent_id = ${agentId}
 				`;
 				signal?.throwIfAborted();
 				const decoded = decodePersistedWorkloadStateV1(row?.state, agentId);
-				return decoded?.legacy ? null : (decoded?.state ?? null);
+				return decoded && !decoded.legacy
+					? withCertificateReconciliationV1(
+							decoded.state,
+							row?.certificate_reconciliation,
+						)
+					: null;
 			});
 		},
 		async close() {

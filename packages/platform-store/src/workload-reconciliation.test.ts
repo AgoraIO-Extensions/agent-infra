@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import {
 	type ImageRegistryAdmissionResultV1,
 	type PlatformSecretRecordV1,
@@ -62,7 +63,11 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
-import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	openPostgresWorkloadReconciliationStoreV1,
+	openPostgresWorkloadStateReaderV1,
+} from "./workload-reconciliation.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 90_000 });
 let database: PostgresTestDatabase;
@@ -114,6 +119,136 @@ beforeEach(async () => {
 	await sql`insert into platform.agent_owners(agent_id, owner_id, created_at) values ('agent-a', 'owner-a', now())`;
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id) values ('task-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1, workloadRevision: 1, fence: 1, desiredState: "running" })}, 'trace-a', 'request-a')`;
 });
+
+it.each(["pending", "retained"] as const)(
+	"keeps %s certificate reconciliation readable by the prior Store and fences a new stop",
+	async (mode) => {
+		const adapter = runtime();
+		const worker = createWorkloadReconciliationV1({
+			store: first,
+			runtime: adapter,
+		});
+		for (let i = 0; i < 7; i++) await worker.tick("worker-new");
+		adapter.observe = async () =>
+			mode === "pending" ? "certificate-pending" : "certificate-invalid";
+		await worker.tick("worker-new");
+		if (mode === "retained") {
+			await worker.tick("worker-new");
+		} else {
+			expect(await worker.tick("worker-new")).toBe("advanced");
+			expect(await worker.tick("worker-new")).toBe("idle");
+		}
+
+		const [row] = await sql`
+			select state, next_attempt_at = 'infinity'::timestamptz as parked
+			from platform.workload_reconciliations where agent_id = 'agent-a'
+		`;
+		expect(row?.parked).toBe(true);
+		expect(row?.state).not.toHaveProperty("certificateWait");
+		expect(row?.state).not.toHaveProperty("retainedFailure");
+		const base = decodePersistedWorkloadStateV1(row?.state, "agent-a");
+		expect(base).toMatchObject({
+			legacy: false,
+			state: {
+				phase: mode === "pending" ? "observing" : "failed",
+				verifiedRevision: 1,
+			},
+		});
+
+		const reader = openPostgresWorkloadStateReaderV1(database);
+		const legacyStoreModule = process.env.WORKLOAD_LEGACY_STORE_MODULE;
+		const legacyCoreModule = process.env.WORKLOAD_LEGACY_CORE_MODULE;
+		// CI always verifies the V1 payload and the new write/read cycle. The
+		// compatibility replay also runs the original reader and writer binaries.
+		const legacyStore:
+			| typeof import("@agent-infra/platform-store")
+			| undefined = legacyStoreModule
+			? await import(pathToFileURL(legacyStoreModule).href)
+			: undefined;
+		const legacyCore: typeof import("@agent-infra/platform-core") | undefined =
+			legacyCoreModule
+				? await import(pathToFileURL(legacyCoreModule).href)
+				: undefined;
+		expect(Boolean(legacyStore)).toBe(Boolean(legacyCore));
+		const rollbackReader = (
+			legacyStore?.openPostgresWorkloadStateReaderV1 ??
+			openPostgresWorkloadStateReaderV1
+		)(database);
+		const rollbackStore = (
+			legacyStore?.openPostgresWorkloadReconciliationStoreV1 ??
+			openPostgresWorkloadReconciliationStoreV1
+		)({
+			...database,
+			retryDelayMs: 0,
+			monitorDelayMs: 0,
+		});
+		const rollbackWorker = (
+			legacyCore?.createWorkloadReconciliationV1 ??
+			createWorkloadReconciliationV1
+		)({
+			store: rollbackStore,
+			runtime: runtime(),
+		});
+		const transaction = new PostgresAgentManagementTransactionV1(database);
+		try {
+			expect(await reader.readCurrentState("agent-a")).toMatchObject(
+				mode === "pending"
+					? { certificateWait: { attempts: 2 } }
+					: {
+							retainedFailure: { certificate: "certificate-invalid" },
+						},
+			);
+			if (legacyStore) {
+				expect(await rollbackReader.readCurrentState("agent-a")).toEqual(
+					base?.state,
+				);
+				expect(await rollbackWorker.tick("worker-old")).toBe("idle");
+			}
+			const [management] = await sql`
+				select management_revision::int as revision, fence::int as fence
+				from platform.agent_applications where agent_id = 'agent-a'
+			`;
+			expect(
+				(
+					await createAgentManagementV1(transaction).executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-a",
+							expectedRevision: management?.revision,
+							idempotencyKey: "stop-after-certificate",
+							requestId: "stop-after-certificate",
+							traceId: "stop-after-certificate",
+						},
+						{
+							schemaVersion: 1,
+							userId: "owner-a",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					)
+				).outcome,
+			).toBe("accepted");
+			for (let i = 0; i < 4; i++) await rollbackWorker.tick("worker-old");
+			const final = await reader.readCurrentState("agent-a");
+			expect(final).toMatchObject({
+				phase: "stopped",
+				fence: management?.fence + 1,
+				verifiedRevision: 1,
+			});
+			expect(final).not.toHaveProperty("certificateWait");
+			expect(final).not.toHaveProperty("retainedFailure");
+		} finally {
+			await Promise.all([
+				reader.close(),
+				rollbackReader.close(),
+				rollbackStore.close(),
+				transaction.close(),
+			]);
+		}
+	},
+);
 
 it("completes an application submission before workload reconciliation", async () => {
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id, available_at, created_at, updated_at)

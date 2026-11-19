@@ -8619,12 +8619,16 @@ it("rejects persisted snapshot apply when the approved egress disappears after p
 	expect(f.writes).toHaveLength(0);
 });
 
-async function readyHostnameFixture() {
+async function readyHostnameFixture(configuration = hostnameConfiguration()) {
 	const f = fixture(
 		{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
-		{ configuration: hostnameConfiguration() },
+		{ configuration },
 	);
 	await f.tick(4);
+	for (const job of f.resources.values()) {
+		if (job.kind === "Job")
+			f.seed({ ...job, status: { succeeded: 1 } } as KubernetesObject);
+	}
 	const certificate = await f.client.read<WorkloadHostnameCertificateV1>(
 		"Certificate",
 		hostnameCertificateName,
@@ -8654,7 +8658,7 @@ async function readyHostnameFixture() {
 			resourceVersion: "1",
 		},
 	});
-	await f.tick(5);
+	await f.tick(10);
 	assert(f.state?.phase === "ready");
 	return { f, ready };
 }
@@ -8685,7 +8689,10 @@ it("retains a verified hostname workload after its certificate expires", async (
 		...ready,
 		status: { ...ready.status, notAfter: "2000-01-01T00:00:00Z" },
 	} as WorkloadHostnameCertificateV1);
-	await f.tick(14);
+	await f.tick(1);
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	expect(f.state?.phase).toBe("cleaning");
+	await f.tick(13);
 	expect(f.state).toMatchObject({
 		phase: "failed",
 		retainedFailure: { certificate: "certificate-invalid" },
@@ -8883,3 +8890,95 @@ it("waits on the rejected revision and restores its route without reapplying it"
 		remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
 	).toHaveLength(0);
 });
+
+it("persists certificate failure when same-tick route closure conflicts", async () => {
+	const { f, ready } = await readyHostnameFixture();
+	const remove = vi.spyOn(f.client, "delete");
+	remove.mockRejectedValueOnce(new WorkloadKubernetesError("conflict"));
+	f.seed({
+		...ready,
+		status: { ...ready.status, notAfter: "2000-01-01T00:00:00Z" },
+	} as WorkloadHostnameCertificateV1);
+	await f.tick(1);
+	expect(remove).toHaveBeenCalledTimes(1);
+	expect(f.state).toMatchObject({
+		phase: "cleaning",
+		attempts: 1,
+		lastFailure: { reason: "kubernetes_conflict", attempts: 1 },
+		retainedFailure: { certificate: "certificate-invalid" },
+	});
+	f.roundTripState();
+	await f.tick(2);
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	expect(f.state).toMatchObject({
+		phase: "failed",
+		lastFailure: { kind: "Certificate", verb: "certificate-invalid" },
+	});
+	expect(
+		remove.mock.calls.every(([resource]) => resource.kind === "Ingress"),
+	).toBe(true);
+});
+
+it.each([false, true])(
+	"keeps the verified migration Job and policy on certificate expiry (newer fence %s)",
+	async (newerFence) => {
+		const configuration = hostnameConfiguration("multi");
+		assert("manifest" in configuration.source);
+		const manifest = JSON.parse(configuration.source.manifest as string);
+		manifest.resources.push({
+			apiVersion: "batch/v1",
+			kind: "Job",
+			metadata: { name: "migrate" },
+			spec: {
+				backoffLimit: 1,
+				activeDeadlineSeconds: 300,
+				template: {
+					metadata: { labels: { app: "migration" } },
+					spec: {
+						restartPolicy: "Never",
+						containers: [
+							{ name: "migrate", image: `sha256:${"d".repeat(64)}` },
+						],
+					},
+				},
+			},
+		});
+		const { f, ready } = await readyHostnameFixture({
+			...configuration,
+			source: { ...configuration.source, manifest: JSON.stringify(manifest) },
+		});
+		const entry = [...f.resources.entries()].find(([key]) =>
+			key.startsWith("Job/"),
+		);
+		assert(entry);
+		const [jobKey, job] = entry;
+		const policyKey = `NetworkPolicy/${job.metadata?.name}-network`;
+		const policy = f.resources.get(policyKey);
+		assert(policy);
+		if (newerFence)
+			f.seed({
+				...job,
+				metadata: {
+					...job.metadata,
+					annotations: {
+						...job.metadata?.annotations,
+						"agent-infra.agora.io/fence": "2",
+					},
+				},
+			});
+		const remove = vi.spyOn(f.client, "delete");
+		f.seed({
+			...ready,
+			status: { ...ready.status, notAfter: "2000-01-01T00:00:00Z" },
+		} as WorkloadHostnameCertificateV1);
+		await f.tick(10);
+		expect(f.state).toMatchObject({ phase: "failed" });
+		expect(f.resources.get(jobKey)?.metadata?.uid).toBe(job.metadata?.uid);
+		expect(f.resources.get(policyKey)?.metadata?.uid).toBe(
+			policy.metadata?.uid,
+		);
+		expect(
+			remove.mock.calls.every(([resource]) => resource.kind === "Ingress"),
+		).toBe(true);
+	},
+);

@@ -2292,6 +2292,8 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
+				// A retained deployment may need its completed Job again on restart.
+				if (state.retainedFailure) return true;
 				return multiServiceFor(state).cleanupMigration(workload);
 			}
 			return true;
