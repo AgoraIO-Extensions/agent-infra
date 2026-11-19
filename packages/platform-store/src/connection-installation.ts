@@ -355,7 +355,11 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				)
 				.for("update");
 			// A manual pre-registration authorization has no OAuth scope yet.
-			return row && row.status !== "preparing" ? decode(row) : null;
+			return row &&
+				row.status !== "preparing" &&
+				(row.binding as { scope?: unknown }).scope !== undefined
+				? decode(row)
+				: null;
 		};
 		const manualPolicy = this.#manualPolicy;
 		const isManual = async (authorizationId: string) => {

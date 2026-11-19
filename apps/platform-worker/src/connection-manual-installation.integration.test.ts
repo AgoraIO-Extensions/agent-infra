@@ -5,7 +5,14 @@ import {
 	randomUUID,
 } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import type { Server } from "node:https";
 import { createServer as createNetServer, type LookupFunction } from "node:net";
 import { tmpdir } from "node:os";
@@ -480,6 +487,18 @@ beforeEach(async () => {
 	connection.losePost = false;
 	readbacks.length = 0;
 	readbackHook = undefined;
+	// Each case starts without the previous case's pending OAuth transaction for the
+	// same user and Agent; the Host serializes one pending installation per pair.
+	const records = join(
+		dataDirectory,
+		"codex-driver.json.native",
+		"conversations",
+		"standard-mcp-oauth",
+		"records",
+	);
+	for (const name of await readdir(records).catch(() => [] as string[]))
+		if (name.startsWith("current-"))
+			await rm(join(records, name), { force: true });
 });
 
 async function begin(user = "alice", suffix = "a") {
@@ -558,6 +577,54 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		expect(await tick()).toBe(0);
 		expect(connection.requests).toHaveLength(1);
 		await noCredentialStored();
+	});
+
+	it("recovers the original consumed begin after the callback mapping CAS fails", async () => {
+		const projection = await begin();
+		expect(await tick()).toBe(1);
+		await client`
+			create function platform.test_reject_first_connection_mapping()
+			returns trigger language plpgsql as $$
+			begin
+				return null;
+			end
+			$$`;
+		try {
+			await client`
+				create trigger test_reject_first_connection_mapping
+				before update on platform.connection_installation_authorizations
+				for each row when (old.binding->'callback' is null and new.binding->'callback' is not null)
+				execute function platform.test_reject_first_connection_mapping()`;
+			expect(await tick()).toBe(1);
+		} finally {
+			await client`drop trigger if exists test_reject_first_connection_mapping on platform.connection_installation_authorizations`;
+			await client`drop function platform.test_reject_first_connection_mapping()`;
+		}
+		const [unmapped] = await client`
+			select a.binding->'callback' as callback, c.status from platform.connection_installation_authorizations a
+			join platform.connection_installation_commands c on c.authorization_id=a.id
+			where a.id=${projection.authorizationId} and c.command='begin'`;
+		expect(unmapped).toMatchObject({ callback: null, status: "unknown" });
+		expect(await status(projection.authorizationId)).not.toHaveProperty(
+			"authorizationUrl",
+		);
+		expect(await tick()).toBe(1);
+		const recovered = await status(projection.authorizationId);
+		expect(recovered).toHaveProperty(
+			"authorizationUrl",
+			expect.stringMatching(/^https:\/\/connection\.test\/oauth\/authorize\?/),
+		);
+		const [mapped] = await client`
+			select a.binding->'callback' as callback, c.status from platform.connection_installation_authorizations a
+			join platform.connection_installation_commands c on c.authorization_id=a.id
+			where a.id=${projection.authorizationId} and c.command='begin'`;
+		expect(mapped).toMatchObject({
+			callback: { stateHash: expect.stringMatching(/^[0-9a-f]{64}$/) },
+			status: "completed",
+		});
+		expect(readbacks).toContain("command:begin_status");
+		expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
+		expect(await tick()).toBe(0);
 	});
 
 	it("keeps a lost POST unknown and verifies only by GET of the original key", async () => {
