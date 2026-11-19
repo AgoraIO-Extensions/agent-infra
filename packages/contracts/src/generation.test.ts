@@ -389,6 +389,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/workspace-snapshots",
 			"/api/v2/ops/history",
 			"/api/v2/ops/resources",
+			"/api/v2/ops/tasks",
 			"/api/v2/skills",
 			"/api/v2/skills/imports",
 			"/api/v2/skills/installations",

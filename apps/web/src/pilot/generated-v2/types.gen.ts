@@ -9156,6 +9156,66 @@ export type GetOperationsResourcesV2Responses = {
 
 export type GetOperationsResourcesV2Response = GetOperationsResourcesV2Responses[keyof GetOperationsResourcesV2Responses];
 
+export type GetOperationsTasksV2Data = {
+    body?: never;
+    path?: never;
+    query: {
+        agentId: string;
+        sessionId: string;
+        start: string;
+        end: string;
+    };
+    url: '/api/v2/ops/tasks';
+};
+
+export type GetOperationsTasksV2Errors = {
+    /**
+     * Invalid bounded query
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Query unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOperationsTasksV2Error = GetOperationsTasksV2Errors[keyof GetOperationsTasksV2Errors];
+
+export type GetOperationsTasksV2Responses = {
+    /**
+     * Task metadata, truncation or a source gap
+     */
+    200: {
+        schemaVersion: 2;
+        source: 'platform';
+        state: 'available' | 'missing' | 'unavailable';
+        tasks: Array<{
+            evidence: Array<{
+                durationMs: number | null;
+                errorCode: string | null;
+                finishedAt: string | null;
+                observedAt: string;
+                stage: 'acceptance' | 'queue' | 'dispatch' | 'execution' | 'result' | 'runtime' | 'model' | 'tool' | 'verification';
+                startedAt: string | null;
+                state: 'accepted' | 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown' | 'started';
+            }>;
+            executionId: string;
+            status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+        }>;
+        truncated: boolean;
+    };
+};
+
+export type GetOperationsTasksV2Response = GetOperationsTasksV2Responses[keyof GetOperationsTasksV2Responses];
+
 export type ListSkillHubVersionsV1Data = {
     body?: never;
     path?: never;
