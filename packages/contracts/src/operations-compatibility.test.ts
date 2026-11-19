@@ -40,7 +40,14 @@ it("admits only the bounded administrator operations addition and preserves exis
 			{ encoding: "utf8" },
 		).status;
 	};
-	const historical = structuredClone(current);
+	const beforeSessionCoverage = structuredClone(current);
+	beforeSessionCoverage.paths[paths[1]].get.parameters =
+		beforeSessionCoverage.paths[paths[1]].get.parameters.filter(
+			(parameter: { in: string }) => parameter.in !== "header",
+		);
+	delete beforeSessionCoverage.components.schemas.OperationsResourcesV2
+		.properties.budget.anyOf[0].properties.sessionRequestCoverage;
+	const historical = structuredClone(beforeSessionCoverage);
 	const operations = historical.components.schemas.OperationsResourcesV2;
 	delete operations.properties.resources.items.properties.placement;
 	delete operations.properties.resources.items.properties.ownershipReason;
@@ -48,6 +55,8 @@ it("admits only the bounded administrator operations addition and preserves exis
 	delete operations.properties.quotaSource;
 	try {
 		expect(await compare(historical, current)).toBe(0);
+		expect(await compare(beforeSessionCoverage, current)).toBe(0);
+		expect(await compare(current, beforeSessionCoverage)).toBe(1);
 		expect(await compare(previous, current)).toBe(0);
 		expect(await compare(current, current)).toBe(0);
 		expect(await compare(current, previous)).toBe(1);

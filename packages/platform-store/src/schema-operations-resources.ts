@@ -8,6 +8,7 @@ export const operationsResourceSnapshots = platformSchema.table(
 		namespace: text("namespace").notNull(),
 		observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
 		snapshot: jsonb("snapshot").notNull(),
+		requestInventory: jsonb("request_inventory"),
 	},
 	(table) => [primaryKey({ columns: [table.clusterId, table.namespace] })],
 );
