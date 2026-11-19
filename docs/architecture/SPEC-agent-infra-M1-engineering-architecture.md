@@ -1953,7 +1953,25 @@ model attempt 引用。相对资源标识由服务端从冻结 manifest 派生�
 声明的全部字节，或已写出分块或请求流的结束标记。随后须在同一连接、同一次 HTTP 请求交换上收到认证端点的
 `2xx` 响应，并按该模型调用协议验证响应体是本次调用的有效输出。对于流式响应，须核对有效输出及其完成标记。
 
-只有经验证的端点协议保证该类响应在完整接收并处理本次请求体后才会产生时，平台才能将上述证据记作完整接收。
+本期完整接收判据适用于部署配置声明的 sub2api 端点。生产声明中的 `sub2api` 使用
+`openai-responses-v1` 和 `/v1/responses`，`sub2api-messages` 使用 `anthropic-messages-v1` 和
+`/v1/messages`。两条路由分别核验。受保护传输按部署声明匹配端点标识、实际认证的目标 origin、请求路由和
+协议版本，并要求命中对应端点实现版本的核验记录。缺少声明、核验记录或匹配项时，保持 `LOAD_UNPROVEN`。
+
+两条路由都要求在请求体完整写出后，才从同一次 HTTP 请求交换收到认证端点的 `2xx` 和 `text/event-stream`
+响应。响应须包含同一调用的有效模型输出，并通过各自协议的 SSE 解析和终态校验。
+
+| 协议 | 完整接收判定所需的响应序列 |
+| --- | --- |
+| Responses | 有效的 `response.created`，随后是有效输出和 `response.completed`，终态通过响应校验。见 [Codex 事件投影](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/codex-model-transport.ts#L543-L612) 和 [完成事件判定](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/codex-model-transport.ts#L795-L810)。 |
+| Messages | 有效的 `message_start`，随后是有效输出、合法的 `message_delta` 停止原因和 `message_stop`，内容块均已关闭。见 [Messages 起始校验](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/claude-messages-stream.ts#L109-L128) 和 [终态校验](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/claude-messages-stream.ts#L328-L350)。 |
+
+上述事件用于判定响应序列。只有该端点经核验的协议保证完整接收并处理本次请求体后才会产生上述有效输出和终态，
+完整接收才成立。缺少所需事件、提前响应、非 `2xx`、连接中断或响应无法唯一关联时均为 `LOAD_UNPROVEN`。
+
+平台 Runtime 维护者在端点接入或升级时依据对应版本的权威协议或服务端实现核验这一保证，用契约测试确认请求体
+未完整读入时无法产生可用于确认的成功序列，并记录适用的端点、路由和版本。Relay 实现、协议版本或判据变化时，
+通过正式文档 PR 和对应测试夹具更新该记录。部署配置引用已核验记录，运行时只按声明匹配。
 平台按一次性关联值只为原尝试确认一次，无需外部 relay 签发回执。证据止于认证端点接收并处理该请求，模型是否
 使用其中某段内容、relay 后续是否转发及工具是否执行仍分别取证。平台只保留受限关联信息与摘要。
 
