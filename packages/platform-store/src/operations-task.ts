@@ -20,18 +20,22 @@ const taskLimit = 48;
 const scanLimit = 1152;
 const eventLimit = 96;
 const outboxEventLimit = 12;
+const queryDeadlineMs = 3000;
 
 export class PostgresOperationsTaskStoreV2 {
 	readonly #sql: ReturnType<typeof postgres>;
 	constructor(
 		databaseUrl: string,
 		private readonly namespace: string,
+		pool?: ReturnType<typeof postgres>,
 	) {
-		this.#sql = postgres(databaseUrl, {
-			max: 2,
-			connect_timeout: 3,
-			connection: { statement_timeout: 3000 },
-		});
+		this.#sql =
+			pool ??
+			postgres(databaseUrl, {
+				max: 2,
+				connect_timeout: 3,
+				connection: { statement_timeout: queryDeadlineMs },
+			});
 	}
 	async close() {
 		await this.#sql.end();
@@ -40,30 +44,51 @@ export class PostgresOperationsTaskStoreV2 {
 		input: OperationsTaskQueryV2,
 		requestSignal: AbortSignal,
 	): Promise<OperationsTasksV2> {
-		const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(3000)]);
-		const deadline = performance.now() + 3000;
+		const deadline = performance.now() + queryDeadlineMs;
+		const signal = AbortSignal.any([
+			requestSignal,
+			AbortSignal.timeout(queryDeadlineMs),
+		]);
 		signal.throwIfAborted();
-		return this.#sql.begin(
+		let stopWaiting = () => {};
+		const aborted = new Promise<never>((_, reject) => {
+			stopWaiting = () => reject(signal.reason);
+			signal.addEventListener("abort", stopWaiting, { once: true });
+		});
+		const result = this.#sql.begin(
 			"isolation level repeatable read read only",
 			async (tx) => {
-				async function run<T extends readonly unknown[]>(
-					query: postgres.PendingQuery<T>,
-				) {
+				// A queued BEGIN can run after the caller has timed out.
+				const assertActive = () => {
 					signal.throwIfAborted();
 					const remaining = Math.floor(deadline - performance.now());
 					if (remaining < 1) throw new Error("Operations query timed out");
-					await tx`select set_config('statement_timeout', ${String(remaining)}, true)`;
-					signal.throwIfAborted();
+					return remaining;
+				};
+				async function execute<T extends readonly unknown[]>(
+					query: postgres.PendingQuery<T>,
+				) {
+					assertActive();
 					const cancel = () => query.cancel();
 					signal.addEventListener("abort", cancel, { once: true });
 					try {
 						const result = await query;
-						signal.throwIfAborted();
+						assertActive();
 						return result;
 					} finally {
 						signal.removeEventListener("abort", cancel);
 					}
 				}
+				async function run<T extends readonly unknown[]>(
+					query: postgres.PendingQuery<T>,
+				) {
+					const remaining = assertActive();
+					await execute(
+						tx`select set_config('statement_timeout', ${String(remaining)}, true)`,
+					);
+					return execute(query);
+				}
+
 				const selected = await run(tx`
 				select 1 from platform.conversations c
 				join platform.session_sandbox_allocations a on a.conversation_id=c.id
@@ -164,5 +189,10 @@ export class PostgresOperationsTaskStoreV2 {
 				} satisfies OperationsTasksV2;
 			},
 		);
+		try {
+			return await Promise.race([aborted, result]);
+		} finally {
+			signal.removeEventListener("abort", stopWaiting);
+		}
 	}
 }

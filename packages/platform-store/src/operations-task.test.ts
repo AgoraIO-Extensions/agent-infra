@@ -217,3 +217,48 @@ it("reports scan truncation even when only content events fill the scan budget",
 	expect(result).toMatchObject({ truncated: true, state: "available" });
 	expect(JSON.stringify(result)).not.toMatch(/private|dependency_unavailable/);
 });
+
+it.each(["timeout", "aborted"] as const)(
+	"returns promptly when a full pool request is %s and skips its queued business queries",
+	async (mode) => {
+		const statements: string[] = [];
+		const pool = postgres(database.databaseUrl, {
+			max: 1,
+			debug: (_connection, statement) => {
+				statements.push(statement);
+			},
+		});
+		const queued = new PostgresOperationsTaskStoreV2(
+			database.databaseUrl,
+			"ops-namespace",
+			pool,
+		);
+		const occupied = await pool.reserve();
+		const controller = new AbortController();
+		let released = false;
+		try {
+			const started = performance.now();
+			const request = queued.read(input, controller.signal);
+			if (mode === "aborted") controller.abort();
+			await expect(request).rejects.toMatchObject({
+				name: mode === "timeout" ? "TimeoutError" : "AbortError",
+			});
+			expect(performance.now() - started).toBeLessThan(
+				mode === "timeout" ? 4000 : 500,
+			);
+			occupied.release();
+			released = true;
+			// This waits behind the queued transaction and proves it released its connection.
+			await pool`select 1`;
+			expect(
+				statements.some((statement) =>
+					/from platform\.|set_config\(/.test(statement),
+				),
+			).toBe(false);
+		} finally {
+			if (!released) occupied.release();
+			await queued.close();
+		}
+	},
+	6000,
+);

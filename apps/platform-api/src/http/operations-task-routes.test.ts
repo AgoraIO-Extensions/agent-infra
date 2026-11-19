@@ -47,4 +47,17 @@ it("enforces administrator access and validates the response before publishing i
 		truncated: false,
 		tasks: [],
 	});
+
+	read.mockRejectedValueOnce(
+		new DOMException("Database deadline exceeded", "TimeoutError"),
+	);
+	const timedOut = await app.request(path);
+	expect(timedOut.status).toBe(200);
+	expect(await timedOut.json()).toEqual({
+		schemaVersion: 2,
+		source: "platform",
+		state: "unavailable",
+		truncated: false,
+		tasks: [],
+	});
 });

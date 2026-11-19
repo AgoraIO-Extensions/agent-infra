@@ -1,3 +1,4 @@
+import { isTurnDispatchFailureCodeV1 } from "./conversation-dispatch-runtime.js";
 import { isExactExecutionFailureCodeV1 } from "./execution-failure.js";
 
 interface Evidence {
@@ -86,7 +87,10 @@ export function projectOperationsTaskV2(
 	const evidence: Evidence[] = [];
 	const start = Date.parse(window.start);
 	const end = Date.parse(window.end);
-	const operationStarts = new Map<string, string>();
+	const operationStarts = new Map<
+		string,
+		{ timestamp: string; observedAt: Date }
+	>();
 	let unknownStart: string | null = null;
 	let ambiguousUnknown = false;
 	let waitingSince: string | null = null;
@@ -98,9 +102,16 @@ export function projectOperationsTaskV2(
 			startedAt?: string | null;
 			finishedAt?: string | null;
 			errorCode?: string | null;
+			matchedObservation?: Date;
 		} = {},
 	) => {
-		if (at.getTime() < start || at.getTime() >= end) return;
+		const isInWindow = (time: Date) =>
+			time.getTime() >= start && time.getTime() < end;
+		if (
+			!isInWindow(at) &&
+			!(options.matchedObservation && isInWindow(options.matchedObservation))
+		)
+			return;
 		const startedAt = options.startedAt ?? null;
 		const finishedAt = options.finishedAt ?? null;
 		const elapsed =
@@ -125,18 +136,28 @@ export function projectOperationsTaskV2(
 			const key = JSON.stringify([kind, fact.operationRef, fact.attemptRef]);
 			if (state === "started") {
 				const observedStart = instant(fact.startedAt);
-				if (observedStart) operationStarts.set(key, observedStart);
+				if (observedStart)
+					operationStarts.set(key, {
+						timestamp: observedStart,
+						observedAt: at,
+					});
 				add(kind, state, at, { startedAt: observedStart });
 			}
 			if (state === "completed" || state === "failed" || state === "unknown") {
-				const pairedStart = operationStarts.get(key) ?? null;
+				const started = operationStarts.get(key);
+				const finishedAt =
+					state === "unknown" ? null : instant(fact.finishedAt);
+				const matched =
+					started &&
+					(!fact.startedAt || instant(fact.startedAt) === started.timestamp);
 				add(kind, state, at, {
-					startedAt:
-						pairedStart &&
-						(!fact.startedAt || instant(fact.startedAt) === pairedStart)
-							? pairedStart
-							: null,
-					finishedAt: state === "unknown" ? null : instant(fact.finishedAt),
+					startedAt: matched ? started.timestamp : null,
+					finishedAt,
+					...(matched &&
+					finishedAt &&
+					Date.parse(finishedAt) >= Date.parse(started.timestamp)
+						? { matchedObservation: started.observedAt }
+						: {}),
 					errorCode:
 						state === "failed" && code && operationCodes.has(code)
 							? code
@@ -149,10 +170,11 @@ export function projectOperationsTaskV2(
 		if (kind === "dispatch-failure" || kind === "runtime-error") {
 			const allowed =
 				code &&
-				(isExactExecutionFailureCodeV1(code) ||
-					(kind === "runtime-error" &&
-						(code === "RUNTIME_EXECUTION_FAILED" ||
-							code === "RUNTIME_DEPENDENCY_UNAVAILABLE")));
+				(kind === "dispatch-failure"
+					? isTurnDispatchFailureCodeV1(code)
+					: isExactExecutionFailureCodeV1(code) ||
+						code === "RUNTIME_EXECUTION_FAILED" ||
+						code === "RUNTIME_DEPENDENCY_UNAVAILABLE");
 			add(kind === "dispatch-failure" ? "dispatch" : "runtime", "failed", at, {
 				errorCode: allowed ? code : null,
 			});
@@ -199,16 +221,19 @@ export function projectOperationsTaskV2(
 				add("queue", "completed", at, {
 					startedAt: waitingSince,
 					finishedAt: at.toISOString(),
+					matchedObservation: new Date(waitingSince),
 				});
 			waitingSince = null;
 			add("dispatch", state, at);
 		} else if (state === "processing") {
 			waitingSince = null;
 			add("execution", state, at);
-		} else if (kind === "task.status" && state === "failed") {
-			add("queue", state, at, {
-				errorCode: code && queueCodes.has(code) ? code : null,
-			});
+		} else {
+			if (kind === "task.status" && state === "failed")
+				add("queue", state, at, {
+					errorCode: code && queueCodes.has(code) ? code : null,
+				});
+			waitingSince = null;
 		}
 	}
 	const open = task.unknownSince?.toISOString() ?? unknownStart;

@@ -1,5 +1,6 @@
 import {
 	type OperationsTaskQueryV2,
+	type OperationsTasksV2,
 	OperationsTasksV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { useQuery } from "@tanstack/react-query";
@@ -34,6 +35,24 @@ const stateLabel = {
 	unknown: "待核实",
 	started: "已开始",
 };
+
+function missingStages(task: OperationsTasksV2["tasks"][number]) {
+	const expected: (keyof typeof stageLabel)[] = ["acceptance", "queue"];
+	if (task.status !== "waiting") expected.push("dispatch");
+	if (task.status !== "waiting" && task.status !== "submitted")
+		expected.push("execution");
+	if (task.status === "unknown") expected.push("verification");
+	if (
+		task.status === "completed" ||
+		task.status === "failed" ||
+		task.status === "cancelled"
+	)
+		expected.push("result");
+	const observed = new Set(task.evidence.map(({ stage }) => stage));
+	return expected
+		.filter((stage) => !observed.has(stage))
+		.map((stage) => stageLabel[stage]);
+}
 
 function localTime(date: Date) {
 	return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -141,46 +160,53 @@ export function TaskEvidence({
 				<Alert tone="warn">查询达到上限。结果可能不完整。</Alert>
 			)}
 			{data?.state === "missing" && <p>所选时间范围内没有匹配的任务证据。</p>}
-			{data?.tasks.map((task) => (
-				<section key={task.executionId} className="space-y-2">
-					<h3 className="break-all">
-						{task.executionId} · {stateLabel[task.status]}
-					</h3>
-					<ul className="space-y-1">
-						{task.evidence.map((fact, index) => (
-							<li key={`${index}-${fact.stage}-${fact.observedAt}`}>
-								{stageLabel[fact.stage]} · {stateLabel[fact.state]} ·{" "}
-								<Timestamp value={fact.observedAt} style="absolute" />
-								{fact.startedAt && (
-									<>
-										{" "}
-										· 开始 <Timestamp value={fact.startedAt} style="absolute" />
-									</>
-								)}
-								{fact.finishedAt && (
-									<>
-										{" "}
-										· 结束{" "}
-										<Timestamp value={fact.finishedAt} style="absolute" />
-									</>
-								)}
-								{fact.stage !== "acceptance" && (
-									<>
-										{" "}
-										·{" "}
-										{fact.durationMs == null
-											? "耗时未知"
-											: `${fact.durationMs} ms`}
-									</>
-								)}
-								{fact.state === "failed" && (
-									<> · {fact.errorCode ?? "错误码缺失"}</>
-								)}
-							</li>
-						))}
-					</ul>
-				</section>
-			))}
+			{data?.tasks.map((task) => {
+				const gaps = missingStages(task);
+				return (
+					<section key={task.executionId} className="space-y-2">
+						<h3 className="break-all">
+							{task.executionId} · {stateLabel[task.status]}
+						</h3>
+						{gaps.length > 0 && (
+							<p>所选范围缺少阶段证据（{gaps.join("、")}）。</p>
+						)}
+						<ul className="space-y-1">
+							{task.evidence.map((fact, index) => (
+								<li key={`${index}-${fact.stage}-${fact.observedAt}`}>
+									{stageLabel[fact.stage]} · {stateLabel[fact.state]} ·{" "}
+									<Timestamp value={fact.observedAt} style="absolute" />
+									{fact.startedAt && (
+										<>
+											{" "}
+											· 开始{" "}
+											<Timestamp value={fact.startedAt} style="absolute" />
+										</>
+									)}
+									{fact.finishedAt && (
+										<>
+											{" "}
+											· 结束{" "}
+											<Timestamp value={fact.finishedAt} style="absolute" />
+										</>
+									)}
+									{fact.stage !== "acceptance" && (
+										<>
+											{" "}
+											·{" "}
+											{fact.durationMs == null
+												? "耗时未知"
+												: `${fact.durationMs} ms`}
+										</>
+									)}
+									{fact.state === "failed" && (
+										<> · {fact.errorCode ?? "错误码缺失"}</>
+									)}
+								</li>
+							))}
+						</ul>
+					</section>
+				);
+			})}
 		</Card>
 	);
 }
