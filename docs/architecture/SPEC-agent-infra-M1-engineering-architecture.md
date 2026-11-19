@@ -1712,7 +1712,8 @@ Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临�
 
 Worker 从权威 Session/Conversation/generation/fence 派生并固定执行工作区。Executor 只挂载
 本代 Conversation `workspace` 的精确 PVC `subPath`，保持与控制容器所见工作区的绝对路径一致；
-不挂载 PVC 根、RuntimeHost/Driver 状态、native HOME、journal、Secret 或其他代次目录。
+executor 运行容器的 PVC 挂载不包括 PVC 根、RuntimeHost/Driver 状态、native HOME、journal
+或其他代次目录。运行容器无 Secret 挂载，启动阶段的专用身份交付遵循下文。
 初始化须校验每级目录归属、权限及无符号链接；仅给 executor 独立、有界且不持久化的临时卷。
 可执行文件随已验证镜像固定；获准 Skill 等只读资源继续沿原交付合同绑定修订/摘要与只读投影，
 不增加授权，也不从控制容器复制凭据或动态配置。
@@ -1723,6 +1724,13 @@ RuntimeHost 验证绑定，Worker 按实际 Pod 的容器、安全上下文、�
 任一漂移拒绝执行。用户、Owner env、模型与工作区文件不能选择 endpoint、执行模式或路径。
 Endpoint 固定在同 Session Pod 的 loopback，不新增 Service/Ingress 或跨 Pod 的无认证监听。
 同 Pod 网络共享不构成身份授权，executor 访问 Host 的模型/控制入口仍须被既有授权门禁拒绝。
+
+Worker 为原 Pod 的 Host 和 runner 分别签发一次性的短期启动凭证，绑定实际 Pod UID、
+Sandbox、Session generation 和 resource fence。可信启动程序使用独立本地事实核对绑定，
+消费凭证并固定原实例公钥。交付限制、运行进程保护及作废规则见
+[Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
+启用仍由部署显式授权。需要 Helm 装配或新增 RBAC 时另开默认关闭的 Helm PR，权限限于
+该启动投影实际所需操作，由部署负责人 sess_fccff4b2 安排目标环境部署。
 
 只有上述外部边界有效时，Driver 才能为模型 Turn 选择固定版本公开 RPC 的
 `SandboxPolicy.externalSandbox`。所有模型可控制的命令、补丁、图片和文件访问必须经过唯一
