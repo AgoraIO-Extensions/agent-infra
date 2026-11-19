@@ -753,6 +753,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_association_generations",
 				"connection_consumer_disables",
 				"connection_consumer_registrations",
+				"connection_host_supplies",
 				"connection_installation_authorizations",
 				"connection_installation_commands",
 				"connection_machine_client_bindings",
@@ -2041,6 +2042,7 @@ describe("published Relay authority migration", () => {
 			83,
 			84,
 			85,
+			86,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2126,9 +2128,13 @@ describe("published Relay authority migration", () => {
 			idx: 82,
 			tag: "0082_operations_resource_snapshots",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 85)).toMatchObject({
 			idx: 85,
 			tag: "0085_conversation_event_terminal_cursor",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 86,
+			tag: "0087_connection_host_supplies",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2689,6 +2695,26 @@ describe("published Relay authority migration", () => {
 				"connection_machine_client_bindings:connection_machine_client_binding_client_unique",
 				"connection_machine_client_bindings:connection_machine_client_binding_registration_hash_unique",
 				"connection_machine_client_bindings:connection_machine_client_bindings_pkey",
+			);
+			expectedDelta.columns.push(
+				...[
+					"approval_source_ref",
+					"approval_source_revision",
+					"attempt_id",
+					"agent_id",
+					"association_revision",
+					"ref",
+					"revision",
+					"state",
+					"system_fingerprint",
+					"updated_at",
+				].map((name) => `connection_host_supplies:${name}`),
+			);
+			expectedDelta.checks.push(
+				"connection_host_supplies:connection_host_supply_state",
+			);
+			expectedDelta.indexes.push(
+				"connection_host_supplies:connection_host_supplies_agent_id_association_revision_pk",
 			);
 			expectedDelta.columns.push(
 				...["agent_id", "last_revision", "updated_at"].map(
