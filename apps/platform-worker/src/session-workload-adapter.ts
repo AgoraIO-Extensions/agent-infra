@@ -55,6 +55,12 @@ import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
 } from "./connection-consumer-projection.js";
+import {
+	connectionInstallInitializerV1,
+	connectionInstallReadbackSecretKeyV1,
+	projectSessionSandboxConnectionInstallV1,
+	type SessionSandboxConnectionInstallBootstrapV1,
+} from "./connection-install-bootstrap.js";
 import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -295,6 +301,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly connectionInstallationRevision?: string | null;
 	readonly connectionInstallationOAuthPublication?: boolean;
 	readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	readonly connectionInstallBootstrap?: SessionSandboxConnectionInstallBootstrapV1;
 	readonly resources: {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
@@ -1299,6 +1306,8 @@ function renderSessionSandboxResourcesV1(
 		pod.spec.volumes?.push(projection.volume);
 	}
 	const oauth = oauthProvisioning(allocation);
+	if (oauth && allocation.connectionInstallBootstrap)
+		throw new WorkloadKubernetesError("policy");
 	if (oauth && pod.spec) {
 		const base = `${allocation.workspaceMountPath}/runtime/codex-driver.json.native/conversations/standard-mcp-oauth`;
 		const runtime = pod.spec.containers[0];
@@ -1559,6 +1568,12 @@ function renderSessionSandboxResourcesV1(
 			port: oauth.port,
 			targetPort: oauth.port,
 		});
+	if (allocation.connectionInstallBootstrap)
+		projectSessionSandboxConnectionInstallV1(
+			allocation.connectionInstallBootstrap,
+			allocation,
+			{ pod, policy, service, secret },
+		);
 	// The Secret precedes the Pod that references it; cleanup runs in reverse.
 	return [account, pvc, policy, service, secret, pod];
 }
@@ -1624,7 +1639,13 @@ export function sessionSandboxImageProjectionV1(
 			},
 		);
 	}
-	if (oauthProvisioning(allocation))
+	if (allocation.connectionInstallBootstrap)
+		containers.push({
+			kind: "init",
+			value: connectionInstallInitializerV1(allocation.imageDigest),
+			sourceField: "imageDigest (Connection installation bootstrap)",
+		});
+	else if (oauthProvisioning(allocation))
 		containers.push({
 			kind: "init",
 			value: {
@@ -2167,6 +2188,7 @@ function withoutOAuthProvisioning<T extends KubernetesObject>(
 				c.ports = c.ports?.filter((p) => p.name !== "oauth");
 				c.env = c.env?.filter(
 					(e) =>
+						!e.name.startsWith("AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_") &&
 						![
 							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE",
 							"AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PROVISIONED",
@@ -2182,15 +2204,37 @@ function withoutOAuthProvisioning<T extends KubernetesObject>(
 				);
 			}
 		}
+	} else if (copy.kind === "Secret") {
+		const data = (copy as V1Secret).data;
+		if (data) delete data[connectionInstallReadbackSecretKeyV1];
 	} else if (copy.kind === "Service") {
 		const spec = (copy as V1Service).spec;
 		if (spec) spec.ports = spec.ports?.filter((p) => p.name !== "oauth");
 	} else if (copy.kind === "NetworkPolicy") {
 		const spec = (copy as V1NetworkPolicy).spec;
-		if (spec)
+		if (spec) {
 			spec.ingress = spec.ingress?.filter((rule) =>
 				rule.ports?.some((p) => p.port === allocation.containerPort),
 			);
+			const bootstrap = allocation.connectionInstallBootstrap;
+			if (bootstrap) {
+				const workerPort = Number(new URL(bootstrap.workerOrigin).port);
+				const readback = stableJson({
+					to: [
+						{
+							podSelector: {
+								matchLabels: allocation.authorizedIngressSelector,
+							},
+						},
+					],
+					ports: [{ protocol: "TCP", port: workerPort }],
+				});
+				const index =
+					spec.egress?.findLastIndex((rule) => stableJson(rule) === readback) ??
+					-1;
+				if (index !== -1) spec.egress?.splice(index, 1);
+			}
+		}
 	}
 	return copy;
 }
