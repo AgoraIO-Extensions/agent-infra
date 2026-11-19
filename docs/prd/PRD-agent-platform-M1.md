@@ -375,17 +375,23 @@ Connection 是 Agent 的按需能力。Agent 的创建者或 Owner 可以在创�
 专用 Agent Consumer 关联。WebUI 与 API 采用相同规则；创建时启用的，Web 申请审批通过或
 API 请求通过平台准入、进入创建后才开始关联，待审批、驳回或撤回的申请不关联外部 Agent。
 
-- 平台管理员一次性配置获准的系统接入；这项配置不包含任何单个 Agent 的关联。
+- **平台与 Connection 鉴权。** 平台管理员一次性配置获准的系统接入，配置中不包含单个 Agent
+  的关联。平台核实关联时，用提交的服务凭据确认对应的 Consumer 身份和可用性。
 - 系统接入支持自动登记时，启用后由平台在 Connection 登记专用 Consumer；Owner 不必逐个
   登记，也不必提供 PAT。
 - 自动登记不可用时，Owner 先在 Connection 为该 Agent 创建 Consumer，再在平台填入其
-  Agent ID 和服务凭据完成关联；在 Connection 创建时须选择按使用者身份执行。平台确认凭据与
-  填入的 Agent ID 一致、该 Consumer 可用后，才显示已关联。服务凭据仅用于本次提交，保存后
-  不可回读，不进入日志、浏览器持久存储、模型或 Agent；Owner 可以替换凭据或解除关联。
+  Agent ID 和服务凭据完成关联。在 Connection 创建时须选择按使用者身份执行。核实通过后才
+  显示已关联。服务凭据提交后不回显，无法通过平台接口读取。Owner 可以替换凭据或解除关联。
 - Agent 详情与 API 明确显示未启用、关联处理中、已关联、失败或待核实。重复提交、重启或恢复
   不产生第二个对应 Consumer；外部登记未确认时保留原 Agent 和待处理状态，不显示为已连接。
-- 每位实际使用者默认通过 Connection OAuth 独立确认自己的安装及账号、操作权限；启用、
-  自动登记和手工关联都不替使用者确认，不复用创建者、Owner 或另一 Agent 的凭据。
+- **Agent 的 MCP 客户端与 Connection 鉴权。** 每个 Agent 使用专用 Consumer。使用者默认通过
+  Connection OAuth 独立确认自己的安装。安装在本人开始授权时按需准备，Owner 关联时无需登记
+  客户端。MCP 调用使用该使用者和安装专属的 Connection 凭据。服务凭据和安装凭据均受保护，
+  不向 Agent 或模型公开，不进入日志或浏览器持久存储。工程边界见
+  [工程 Spec §13.5.7](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)。
+- **外部系统授权。** 需要连接 GitHub 等外部系统或补充操作权限时，MCP 返回 Connection 网站
+  的授权链接，由 Agent 使用者在该网站选择账号并完成所需授权。平台不替使用者选择账号、
+  完成授权或保管外部系统凭据。
 - 修改名称、重试创建不改变关联。停用 Agent 后封闭新的安装与调用，自动登记的 Consumer
   同时请求停用；外部停用未确认时明确显示待处理，不宣称远端凭据已撤销。Owner 解除手工
   关联后同样封闭新的安装与调用；Connection 中的 Consumer 不受影响，需要时在 Connection 停用。
