@@ -91,7 +91,7 @@ export function sealConnectionHostSupplyV1(
 			tag: cipher.getAuthTag().toString("base64url"),
 		};
 	} catch {
-		invalidSupply();
+		return invalidSupply();
 	}
 }
 
@@ -117,7 +117,7 @@ export function openConnectionHostSupplyV1(
 		unverified = decipher.update(ciphertext);
 		return Buffer.concat([unverified, decipher.final()]);
 	} catch {
-		invalidSupply();
+		return invalidSupply();
 	} finally {
 		unverified?.fill(0);
 	}
