@@ -152,7 +152,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 			});
 			const before =
 				await client`select hash, created_at from platform_migrations.history order by id`;
-			expect(before).toHaveLength(87);
+			const checkpoint = readMigrationFiles({ migrationsFolder: folder }).at(
+				-1,
+			);
+			expect(before.at(-1)).toEqual({
+				hash: checkpoint?.hash,
+				created_at: String(checkpoint?.folderMillis),
+			});
 			expect(
 				await client`select to_regnamespace('platform_reclamation_read') as projection`,
 			).toEqual([{ projection: null }]);
@@ -165,8 +171,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 			expect(after.slice(0, before.length)).toEqual(before);
 			expect(after.slice(before.length)).toEqual([
 				{
-					hash: migrations[87]?.hash,
-					created_at: String(migrations[87]?.folderMillis),
+					hash: migrations.at(-1)?.hash,
+					created_at: String(migrations.at(-1)?.folderMillis),
 				},
 			]);
 			expect(
