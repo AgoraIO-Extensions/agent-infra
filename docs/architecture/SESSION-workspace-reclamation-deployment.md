@@ -22,6 +22,46 @@ node dist/sessionWorkspaceReclamation.mjs dry-run /private/retention-policy.json
 本命令不写 DB 或 Kubernetes；不列出缺少可核实 PVC 的对象。不要从空清单推断已回收。
 Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为受保护的 JSON 文件。
 
+### 生产 dry-run 数据库身份
+
+先通过正式 App 发布执行 `0086_session_workspace_reclamation_read` 迁移，并使用包含该版本
+查询的 Worker 镜像运行一次性 Job。该迁移建立只读投影视图，不创建登录账号。
+查询权限如下，具体列以[角色脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql)
+为准。
+
+| 对象 | 读取范围 |
+| --- | --- |
+| `platform_reclamation_read.allocations` | 已停止的 Sandbox 绑定及资源观测所需字段 |
+| `platform_reclamation_read.outbox_items` | 已成功的 Sandbox 调谐及停止证明投影 |
+| `platform_reclamation_read.stopped_audit` | Sandbox 停止时间、代次与 fence |
+| `platform.conversations`、`platform.session_sandbox_resource_charges` | 会话绑定、状态与 charge 释放状态 |
+| `platform.conversation_generation_tombstones`、`platform.conversation_executions` | 会话 ID 与状态 |
+| `platform.outbox_items`、`platform.audit_events` | 待处理调谐和已开始回收所需的筛选列 |
+
+1. 在获准窗口内，部署负责人使用数据库管理员入口核对目标为新 lane 的 Platform DB，
+   确认迁移和三个视图已存在，再用 `psql -X -v ON_ERROR_STOP=1 -f` 执行角色脚本。
+   新 lane 的 PostgreSQL StatefulSet 由 Helm 管理，首次初始化脚本只适用于新数据目录，
+   平台迁移则使用应用角色。创建登录角色和核对有效权限由 PostgreSQL 管理员单独执行一次。
+2. 角色应为 `agent_infra_reclamation_ro`、`NOLOGIN`、默认事务只读、没有角色成员资格。
+   角色脚本会对包括 `PUBLIC` 在内的有效权限进行检查，发现正文、凭据、原始 JSON、
+   非授权对象和写权限即回滚。使用批准的私下凭据流程生成随机密码，在管理员的交互
+   psql 会话中用 `\password agent_infra_reclamation_ro` 设置密码，避免明文进入 SQL、
+   命令参数和日志。随后在同一管理员入口执行
+   `ALTER ROLE agent_infra_reclamation_ro LOGIN VALID UNTIL '<本次窗口的 UTC 结束时间>';`，
+   并从密钥存储组装该角色连接正式 Platform DB 的 URL。
+3. 部署负责人在 `agent-infra` namespace 中从权限为 `0600` 的本机文件创建临时
+   Secret `agent-infra-reclamation-dry-run-db`，键为 `url`。用 `--from-file=url=<文件路径>`
+   提供内容，Job 只用 `secretKeyRef` 将该键注入 `PLATFORM_DATABASE_URL`。
+   禁止在 Git、Helm values、回执或共享日志记录 URL。回读 Secret 仅查名称和键名。
+4. 用该连接回读 `current_user`、`current_database()` 和 `default_transaction_read_only`；
+   确认用户、库名和只读参数与计划一致。从视图读取所需列，并用
+   `has_column_privilege` 验证无法读取 `outbox_items.payload`、消息正文和凭据列。
+   用 `has_table_privilege` 核对业务表写权限均为 false。仅在权限回读通过后执行 dry-run。
+5. 结束或回滚时，停止 Job 并确认该角色连接已退出，移除本次临时 Secret。管理员连接
+   同一 Platform DB，执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
+   该脚本先确认角色没有对象所有权，再撤销授权并 `DROP ROLE`。确认 `role_removed=true`，
+   以及 Job 和 Secret 已退出。保留迁移视图，供以后经批准的窗口使用。
+
 ### 候选清单的排除规则
 
 清单生成只读取当前 deployment policy、`session_sandbox_allocations`、停止审计、

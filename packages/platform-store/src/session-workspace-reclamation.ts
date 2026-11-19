@@ -54,6 +54,18 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 			.digest("hex");
 	}
 	private async eligible(tx: Transaction, sandboxId?: string) {
+		const allocations =
+			sandboxId !== undefined
+				? tx`platform.session_sandbox_allocations`
+				: tx`platform_reclamation_read.allocations`;
+		const outbox =
+			sandboxId !== undefined
+				? tx`platform.outbox_items`
+				: tx`platform_reclamation_read.outbox_items`;
+		const stoppedAudit =
+			sandboxId !== undefined
+				? tx`platform.conversation_audit_events`
+				: tx`platform_reclamation_read.stopped_audit`;
 		const rows = await tx<
 			{
 				sessionGeneration: number;
@@ -68,11 +80,11 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 			}[]
 		>`
    select a.session_generation::float8 as "sessionGeneration", a.resource_fence::float8 as "resourceFence", a.agent_id as "agentId", a.conversation_id as "sessionId", a.sandbox_id as "sandboxId", ch.namespace, a.resource_name as name, o.payload->'lifecycle' as lifecycle, a.resource_observation as observation
-   from platform.session_sandbox_allocations a join platform.conversations c on c.id=a.conversation_id
+   from ${allocations} a join platform.conversations c on c.id=a.conversation_id
    join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id
    join lateral (
      select oi.payload
-     from platform.outbox_items oi
+     from ${outbox} oi
      where oi.scope_type='conversation' and oi.scope_id=c.id and oi.operation='conversation.sandbox.reconcile.v1'
        and oi.status='succeeded' and oi.lease_owner is null
      order by oi.updated_at desc, oi.id desc
@@ -91,7 +103,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
    and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence'=a.resource_fence::text
    and exists(
      select 1
-     from platform.conversation_audit_events stopped_at
+     from ${stoppedAudit} stopped_at
      where stopped_at.conversation_id=c.id
        and stopped_at.action='conversation.sandbox.observed'
        and stopped_at.details->>'sandboxId'=a.sandbox_id
@@ -147,7 +159,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 	}
 
 	async candidates() {
-		const rows = await this.sql.begin((tx) =>
+		const rows = await this.sql.begin("read only", (tx) =>
 			this.eligible(tx as unknown as Transaction),
 		);
 		return rows.filter((t) => !isWorkspaceRetainedV1(this.policy, t));

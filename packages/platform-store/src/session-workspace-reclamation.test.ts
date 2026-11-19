@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {
 	createConversationExecutionUseCaseV1,
 	createSessionWorkspaceReclamationV1,
@@ -95,7 +96,7 @@ const lifecycle = {
 beforeAll(async () => {
 	db = await startPostgresTestDatabase("workspace-4173");
 	await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
-	sql = postgres(db.databaseUrl);
+	sql = postgres(db.databaseUrl, { max: 1 });
 	store = new PostgresSessionWorkspaceReclamationStoreV1(
 		db.databaseUrl,
 		policy,
@@ -123,6 +124,81 @@ beforeEach(async () => {
 			${sql.json({ sandboxId, sessionGeneration: 1, resourceFence: 2, status: "stopped" })})`;
 });
 describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
+	it("runs dry-run under the operator role without access to raw payloads or writes", async () => {
+		const roleSql = await readFile(
+			new URL(
+				"../../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql",
+				import.meta.url,
+			),
+			"utf8",
+		);
+		// Match the Platform database ACL established by ACK bootstrap.
+		await sql.unsafe("revoke all on database platform_test from public");
+		await sql.unsafe(roleSql);
+		await sql`alter role agent_infra_reclamation_ro login password 'reclamation-fixture'`;
+		const url = new URL(db.databaseUrl);
+		url.username = "agent_infra_reclamation_ro";
+		url.password = "reclamation-fixture";
+		const reader = postgres(url.toString());
+		const scopedStore = new PostgresSessionWorkspaceReclamationStoreV1(
+			url.toString(),
+			policy,
+			"deployment-owner",
+		);
+		try {
+			await sql`update platform.outbox_items set payload = ${sql.json({
+				body: "synthetic outbox body",
+				lifecycle: {
+					...lifecycle,
+					source: {
+						...lifecycle.source,
+						modelProjection: { privateValue: "synthetic credential material" },
+					},
+				},
+			})}`;
+			const api = createSessionWorkspaceReclamationV1(scopedStore, {
+				async read() {
+					return { uid: target.uid, resourceVersion: target.resourceVersion };
+				},
+				async delete() {
+					throw new Error("dry-run attempted deletion");
+				},
+			});
+			expect(await api.dryRun()).toEqual([target]);
+			const [row] =
+				await reader`select payload from platform_reclamation_read.outbox_items`;
+			expect(row?.payload.lifecycle.source.modelProjection).toBe(true);
+			expect(JSON.stringify(row)).not.toContain("synthetic");
+			for (const query of [
+				"select payload from platform.outbox_items",
+				"select resource_observation from platform.session_sandbox_allocations",
+				"select details from platform.conversation_audit_events",
+				"select * from platform.conversation_messages",
+				"select * from platform.platform_api_credentials",
+				"update platform.conversations set status = 'unavailable'",
+			]) {
+				await expect(
+					reader.begin("read write", (tx) => tx.unsafe(query)),
+				).rejects.toMatchObject({ code: "42501" });
+			}
+			await sql`update platform.outbox_items set payload = jsonb_set(
+				payload, '{lifecycle,stopReceipt,unexpected}', 'true'::jsonb
+			)`;
+			expect(await api.dryRun()).toEqual([]);
+		} finally {
+			await scopedStore.close();
+			await reader.end();
+			await sql.unsafe(
+				await readFile(
+					new URL(
+						"../../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql",
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+		}
+	});
 	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
