@@ -1019,12 +1019,24 @@ export function createPlatformConversationWorkerV2(
 	}
 	async function drainInstallationCommands() {
 		const commandStore = options.connectionInstallation?.commandStore;
-		if (!commandStore || !runtime) return 0;
+		const manual = options.connectionInstallation?.manual;
+		if ((!commandStore && !manual) || !runtime) return 0;
+		let drained = 0;
+		if (manual) {
+			try {
+				drained += await manual.drain(
+					runtime.connectionInstallation.activeExecutionIds(),
+					signal,
+				);
+			} catch {
+				// Manual install storage failures never block other installation work.
+			}
+		}
+		if (!commandStore) return drained;
 		const pending = await commandStore.listPending(
 			32,
 			runtime.connectionInstallation.activeExecutionIds(),
 		);
-		let drained = 0;
 		for (const item of pending) {
 			if (
 				!runtime.connectionInstallation.canDrain(
@@ -1087,7 +1099,10 @@ export function createPlatformConversationWorkerV2(
 	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
-		if (options.connectionInstallation?.commandStore) {
+		if (
+			options.connectionInstallation?.commandStore ||
+			options.connectionInstallation?.manual
+		) {
 			try {
 				await drainInstallationCommands();
 			} catch {

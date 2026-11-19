@@ -31,6 +31,17 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { readAgentManagementState } from "./agent-management.js";
 import { readRegisteredConnectionConsumerBindingsV1 } from "./connection-consumer-registration.js";
+import {
+	type ConnectionManualInstallationPolicyInputV1,
+	type ConnectionManualInstallationPolicyV1,
+	captureConnectionManualInstallationPolicyV1,
+	createConnectionManualInstallationV1,
+	readConnectionManualInstallationBindingV1,
+	readConnectionManualInstallationFactsV1,
+	readConnectionManualInstallationV1,
+	receiptConnectionManualInstallationV1,
+	requestConnectionManualInstallationStatusV1,
+} from "./connection-manual-installations.js";
 import postgres from "./observed-postgres.js";
 import {
 	connectionInstallationAuthorizations as authorizations,
@@ -44,6 +55,14 @@ import {
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
+/** The existing begin link/state parser; the manual first begin persists the same mapping. */
+export function parseConnectionInstallationAuthorizationRedirectV1(
+	value: string,
+	configuration: RuntimeOAuthConfigurationV1,
+	expiresAt: number,
+) {
+	return parseAuthorizationRedirect(value, configuration, expiresAt);
+}
 function parseAuthorizationRedirect(
 	value: string,
 	configuration: RuntimeOAuthConfigurationV1,
@@ -151,6 +170,8 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 	readonly #bindingsByAgent:
 		| ReadonlyMap<string, InstallationBinding | null>
 		| undefined;
+	/** Explicit manual EP-1060 rollout (§13.5.7); absent keeps manual Agents unavailable. */
+	readonly #manualPolicy: ConnectionManualInstallationPolicyV1 | undefined;
 	constructor(options: {
 		databaseUrl: string;
 		directory: TaskUserDirectoryV1;
@@ -168,8 +189,22 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				Readonly<Record<string, ConnectionInstallationBindingInputV1>>
 			>
 		>;
+		manualInstallation?: ConnectionManualInstallationPolicyInputV1;
 	}) {
 		this.#directory = options.directory;
+		this.#manualPolicy =
+			options.manualInstallation === undefined
+				? undefined
+				: captureConnectionManualInstallationPolicyV1(
+						options.manualInstallation,
+					);
+		const manualOnly =
+			this.#manualPolicy !== undefined &&
+			options.configuration === undefined &&
+			options.profile === undefined &&
+			options.approval === undefined &&
+			options.bindingsByAgent === undefined &&
+			options.bindingsByAgentAndPrincipal === undefined;
 		this.#registrationPolicy =
 			options.connectionConsumerRegistration === undefined
 				? undefined
@@ -178,10 +213,13 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					);
 		if (
 			this.#registrationPolicy &&
-			options.bindingsByAgentAndPrincipal === undefined
+			options.bindingsByAgentAndPrincipal === undefined &&
+			!manualOnly
 		)
 			throw new ConnectionInstallationErrorV1("unavailable");
-		if (options.bindingsByAgentAndPrincipal !== undefined) {
+		if (manualOnly) {
+			// Only per-install bound configurations exist; no static Consumer fallback.
+		} else if (options.bindingsByAgentAndPrincipal !== undefined) {
 			if (
 				options.configuration !== undefined ||
 				options.profile !== undefined ||
@@ -316,9 +354,58 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					and(eq(authorizations.id, id), eq(authorizations.userId, userId)),
 				)
 				.for("update");
-			return row ? decode(row) : null;
+			// A manual pre-registration authorization has no OAuth scope yet.
+			return row && row.status !== "preparing" ? decode(row) : null;
+		};
+		const manualPolicy = this.#manualPolicy;
+		const isManual = async (authorizationId: string) => {
+			const rows = await tx.execute(
+				sql`select 1 from platform.connection_manual_installations where authorization_id=${authorizationId}`,
+			);
+			return rows.length > 0;
 		};
 		return {
+			...(manualPolicy
+				? {
+						currentManual: (userId: string, executionId: string) =>
+							readConnectionManualInstallationFactsV1(
+								tx,
+								this.#directory,
+								userId,
+								executionId,
+							),
+						createManual: (
+							record: Parameters<
+								NonNullable<ConnectionInstallationTransactionV1["createManual"]>
+							>[0],
+							command: Parameters<
+								NonNullable<ConnectionInstallationTransactionV1["createManual"]>
+							>[1],
+							key: string,
+						) => createConnectionManualInstallationV1(tx, record, command, key),
+						readManual: (userId: string, authorizationId: string) =>
+							readConnectionManualInstallationV1(tx, userId, authorizationId),
+						receiptManual: (
+							userId: string,
+							key: string,
+							command: string,
+							digest: string,
+						) =>
+							receiptConnectionManualInstallationV1(
+								tx,
+								userId,
+								key,
+								command,
+								digest,
+							),
+						requestManualStatus: (userId: string, authorizationId: string) =>
+							requestConnectionManualInstallationStatusV1(
+								tx,
+								userId,
+								authorizationId,
+							),
+					}
+				: {}),
 			claimCallback: async ({ stateHash, now }) => {
 				await tx.execute(sql`
 					update platform.connection_installation_authorizations
@@ -359,14 +446,31 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						expiresAt: new Date(row.expires_at as string).getTime(),
 					},
 				);
-				const selected = this.#bindingForAgent(
-					authorization.reference.agentId,
-					authorization.principal.id,
-				);
-				if (!selected) return null;
+				const manual = await isManual(authorization.authorizationId);
+				const selected = manual
+					? manualPolicy &&
+						(await readConnectionManualInstallationBindingV1(tx, manualPolicy, {
+							authorizationId: authorization.authorizationId,
+							userId: authorization.principal.id,
+							agentId: authorization.reference.agentId,
+							executionId: authorization.reference.executionId,
+							sandboxId: authorization.scope.sandboxId,
+							podUid: authorization.scope.podUid,
+							sessionGeneration: authorization.reference.sessionGeneration,
+						}))
+					: this.#bindingForAgent(
+							authorization.reference.agentId,
+							authorization.principal.id,
+						);
+				if (
+					!selected ||
+					selected.configuration.runtimeOrigin !== callback.runtimeOrigin
+				)
+					return null;
 				const current = await this.#operations(tx).current(
 					authorization.principal.id,
 					authorization.reference.executionId,
+					authorization.authorizationId,
 				);
 				if (!current) return null;
 				if (
@@ -484,7 +588,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				const rows = await tx.execute(sql`select clock_timestamp() as now`);
 				return new Date(rows[0]?.now as string).getTime();
 			},
-			current: async (userId, executionId) => {
+			current: async (userId, executionId, authorizationId) => {
 				await tx.execute(
 					sql`lock table platform.platform_user_disables in share mode`,
 				);
@@ -533,12 +637,32 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					row.agent_id as string,
 				);
 				if (!agent) return null;
-				const selected = this.#bindingForAgent(
+				let selected = this.#bindingForAgent(
 					row.agent_id as string,
 					user.userId,
 				);
+				let manualSelected = false;
+				if (!selected && manualPolicy && authorizationId) {
+					const bound = await readConnectionManualInstallationBindingV1(
+						tx,
+						manualPolicy,
+						{
+							authorizationId,
+							userId: user.userId,
+							agentId: row.agent_id as string,
+							executionId: row.execution_id as string,
+							sandboxId: row.sandbox_id as string,
+							podUid: pods[0].uid,
+							sessionGeneration: Number(row.session_generation),
+						},
+					);
+					if (bound) {
+						selected = bound;
+						manualSelected = true;
+					}
+				}
 				if (!selected) return null;
-				if (!this.#registrationPolicy) {
+				if (!manualSelected && !this.#registrationPolicy) {
 					const [association] = await tx
 						.select({
 							operationId: connectionConsumerRegistrations.operationId,
@@ -568,7 +692,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						.for("share");
 					if (manual) return null;
 				}
-				if (this.#registrationPolicy) {
+				if (!manualSelected && this.#registrationPolicy) {
 					const bindings = await readRegisteredConnectionConsumerBindingsV1(
 						tx,
 						this.#registrationPolicy,
@@ -696,11 +820,17 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				);
 			},
 			audit: async (userId, id, command, requestId, traceId) => {
-				const installation = await read(userId, id);
-				if (!installation)
+				// Also covers a manual pre-registration row, which has no OAuth scope.
+				const [installation] = await tx.execute(
+					sql`select binding->'reference'->>'agentId' as agent_id from platform.connection_installation_authorizations where id=${id} and user_id=${userId}`,
+				);
+				if (
+					typeof installation?.agent_id !== "string" ||
+					!installation.agent_id
+				)
 					throw new ConnectionInstallationErrorV1("unavailable");
 				await tx.execute(
-					sql`insert into platform.audit_events(id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,trace_id,details) values (${randomUUID()},'user',${userId},${`connection.installation.${command}`},'agent',${installation.authorization.reference.agentId},'succeeded',${requestId},${traceId},${JSON.stringify({ authorizationId: id })}::jsonb)`,
+					sql`insert into platform.audit_events(id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,trace_id,details) values (${randomUUID()},'user',${userId},${`connection.installation.${command}`},'agent',${installation.agent_id},'succeeded',${requestId},${traceId},${JSON.stringify({ authorizationId: id })}::jsonb)`,
 				);
 			},
 		};
@@ -733,6 +863,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				join platform.connection_installation_authorizations a on a.id=c.authorization_id
 				where c.status='pending' and c.attempt_id is null and ((c.command='begin' and a.status in ('awaiting_confirmation','confirmed')) or (c.command='confirm' and a.status='confirmed'))
 				 and a.expires_at > clock_timestamp()
+				 and not exists (select 1 from platform.connection_manual_installations mi where mi.authorization_id=a.id)
 				and (a.binding->'reference'->>'executionId') in (${sql.join(
 					executionIds.map((id) => sql`${id}`),
 					sql`, `,
@@ -784,6 +915,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					set status='sending', attempt_id=${input.attemptId}, attempt_owner=${input.attemptOwner}, attempt_expires_at=clock_timestamp()+interval '15 seconds', updated_at=clock_timestamp()
 					from platform.connection_installation_authorizations a
 					where c.id=${input.commandId} and c.status='pending' and c.attempt_id is null
+					 and not exists (select 1 from platform.connection_manual_installations mi where mi.authorization_id=c.authorization_id)
 					 and a.id=c.authorization_id and ((c.command='begin' and a.status in ('awaiting_confirmation','confirmed')) or (c.command='confirm' and a.status='confirmed')) and a.expires_at > clock_timestamp()
 					 and not exists (select 1 from platform.connection_installation_commands prior where prior.authorization_id=c.authorization_id and prior.created_at < c.created_at and prior.status in ('pending','sending','unknown'))
 					returning c.*, a.binding, a.confirmation_revision, a.status as authorization_status, a.expires_at
@@ -835,6 +967,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					from platform.connection_installation_commands c
 					join platform.connection_installation_authorizations a on a.id=c.authorization_id
 					where c.id=${input.commandId} and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					 and not exists (select 1 from platform.connection_manual_installations mi where mi.authorization_id=c.authorization_id)
 					for update
 				`);
 				const command = owned[0];

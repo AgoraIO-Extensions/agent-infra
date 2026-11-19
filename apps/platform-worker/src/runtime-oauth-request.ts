@@ -57,6 +57,16 @@ export interface WorkerConnectionInstallationOptions {
 		finalCheck: () => Promise<void>,
 	) => Promise<WorkerInstallationAuthorization | null>;
 	readonly commandStore?: import("@agent-infra/platform-core").ConnectionInstallationCommandDrainStoreV1;
+	/**
+	 * Manual Owner EP-1060 first install (§13.5.5–§13.5.7), drained in the same
+	 * installation tick for Executions this Worker holds. Absent = rollout off.
+	 */
+	readonly manual?: {
+		drain(
+			executionIds: readonly string[],
+			signal: AbortSignal,
+		): Promise<number>;
+	};
 }
 
 /** Actual ConversationRuntime caller owns current authorization and route checks. */

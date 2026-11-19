@@ -24,6 +24,7 @@ import {
 import {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
+	connectionManualInstallations,
 } from "./schema-connection-installation.js";
 import {
 	connectionAssociationGenerations,
@@ -86,6 +87,7 @@ import {
 export {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
+	connectionManualInstallations,
 } from "./schema-connection-installation.js";
 export {
 	connectionAssociationGenerations,
@@ -220,6 +222,7 @@ export const platformInfrastructureTables = [
 	taskFeedback,
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
+	connectionManualInstallations,
 	platformUserDisables,
 	ldapIdentityIds,
 	browserSessions,

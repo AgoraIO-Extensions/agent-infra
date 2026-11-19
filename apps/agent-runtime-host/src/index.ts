@@ -67,6 +67,11 @@ import {
 	readRuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
 import {
+	type ConnectionInstallReceiverAssemblyV1,
+	prepareConnectionInstallReceiverV1,
+	startConnectionInstallReceiverServerV1,
+} from "./connection-install-receiver.js";
+import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
 } from "./legacy-migration.js";
@@ -110,6 +115,7 @@ interface StartOptions {
 		| RuntimeBrowserCapabilityAssemblyV1
 		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
 	oauth?: RuntimeOAuthAssembly;
+	connectionInstall?: ConnectionInstallReceiverAssemblyV1;
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
@@ -279,6 +285,10 @@ const oauthServers = new WeakMap<
 	ReturnType<typeof serve>,
 	ReturnType<typeof createHttpsServer>
 >();
+const connectionInstallServers = new WeakMap<
+	ReturnType<typeof serve>,
+	ReturnType<typeof createHttpsServer>
+>();
 
 export function startRuntimeOAuthServer(
 	assembly: Extract<RuntimeOAuthAssembly, { status: "available" }>,
@@ -318,6 +328,24 @@ export function startRuntimeHost(options: StartOptions) {
 	}
 	if (options.oauth?.status === "available" && options.oauth.port === port)
 		void options.oauth.client.close().catch(() => undefined);
+	let connectionInstallServer: ReturnType<typeof createHttpsServer> | undefined;
+	const connectionInstall = options.connectionInstall;
+	if (connectionInstall?.status === "available") {
+		if (
+			connectionInstall.port !== port &&
+			!(
+				options.oauth?.status === "available" &&
+				options.oauth.port === connectionInstall.port
+			)
+		) {
+			try {
+				connectionInstallServer =
+					startConnectionInstallReceiverServerV1(connectionInstall);
+			} catch {
+				void connectionInstall.close().catch(() => undefined);
+			}
+		} else void connectionInstall.close().catch(() => undefined);
+	}
 	const server = serve(
 		{
 			fetch: createRuntimeHostApp({ ...options, connectionConsumer }).fetch,
@@ -351,6 +379,12 @@ export function startRuntimeHost(options: StartOptions) {
 		oauthServers.set(server, oauthServer);
 		server.once("close", () => {
 			oauthServer.close();
+		});
+	}
+	if (connectionInstallServer) {
+		connectionInstallServers.set(server, connectionInstallServer);
+		server.once("close", () => {
+			connectionInstallServer.close();
 		});
 	}
 	return server;
@@ -515,6 +549,7 @@ export async function assembleRuntimeHost(
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
+	let connectionInstall: ConnectionInstallReceiverAssemblyV1 | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
 	let detachSessionExecutorFailure: (() => void) | undefined;
@@ -536,6 +571,8 @@ export async function assembleRuntimeHost(
 				// Cancel native transport before Host waits for active remote work.
 				if (sessionExecutor) await closeDriver?.();
 				if (oauth?.status === "available") await oauth.client.close();
+				if (connectionInstall?.status === "available")
+					await connectionInstall.close();
 			} finally {
 				try {
 					await assembledHost?.close();
@@ -588,6 +625,17 @@ export async function assembleRuntimeHost(
 			key: publicKey,
 			keyId,
 			issuer: expectedIssuer,
+		});
+		connectionInstall = await prepareConnectionInstallReceiverV1({
+			environment,
+			dataDirectory,
+			agentId,
+			workerId: runtimeWorkerId,
+			key: publicKey,
+			keyId,
+			issuer: expectedIssuer,
+			serviceToken,
+			store,
 		});
 		// Protected Standard MCP is assembled only for a pinned, explicitly gated
 		// native transport. Connection credentials remain in this Host client.
@@ -1006,6 +1054,7 @@ export async function assembleRuntimeHost(
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
 			...(oauth ? { oauth } : {}),
+			...(connectionInstall ? { connectionInstall } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
 			serviceToken,
 			port,
@@ -1044,6 +1093,14 @@ export async function closeRuntimeHost(
 				oauthServer.closeAllConnections();
 			});
 			oauthServers.delete(server);
+		}
+		const connectionInstallServer = connectionInstallServers.get(server);
+		if (connectionInstallServer) {
+			await new Promise<void>((resolve) => {
+				connectionInstallServer.close(() => resolve());
+				connectionInstallServer.closeAllConnections();
+			});
+			connectionInstallServers.delete(server);
 		}
 		await new Promise<void>((resolve, reject) => {
 			server.close((error) => (error ? reject(error) : resolve()));

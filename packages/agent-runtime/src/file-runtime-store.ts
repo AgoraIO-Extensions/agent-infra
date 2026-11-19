@@ -1930,6 +1930,30 @@ export class FileRuntimeStore {
 		};
 	}
 
+	/**
+	 * Host session ref of the same authorized original Execution. The Connection
+	 * install receiver binds it as the local `hostRef`; it is never request input.
+	 */
+	async resolveOriginalExecutionHostSessionRef(
+		reference: RuntimeOriginalExecutionRef,
+		readNow: () => number,
+	): Promise<string> {
+		const session = await this.authorizedOriginalExecution(
+			{ ...reference, runtimeOperationId: reference.executionId },
+			readNow,
+		);
+		if (
+			session.agentId !== reference.agentId ||
+			session.conversationId !== reference.conversationId ||
+			session.sessionGeneration !== reference.sessionGeneration ||
+			!session.authority ||
+			typeof session.hostSessionRef !== "string" ||
+			!session.hostSessionRef
+		)
+			runtimeAuthorizationDenied();
+		return session.hostSessionRef;
+	}
+
 	private async authorizedOriginalExecution(
 		action: {
 			nativeSessionRef?: string;

@@ -12,6 +12,7 @@ import { and, eq, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
 import { enableConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
+import { fenceRetiredConnectionManualInstallationsV1 } from "./connection-manual-installations.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import postgres from "./observed-postgres.js";
 import { isPostgresError } from "./postgres-error.js";
@@ -73,6 +74,11 @@ async function fenceRetiredHostSupply(
 				),
 			),
 		);
+	await fenceRetiredConnectionManualInstallationsV1(
+		transaction,
+		agentId,
+		associationRevision,
+	);
 }
 
 function operations(

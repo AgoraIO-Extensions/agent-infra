@@ -96,6 +96,11 @@ export {
 	type ConnectionManualAssociationMaterialV1,
 	PostgresConnectionManualAssociationReaderV1,
 } from "./connection-manual-association-reader.js";
+export { PostgresConnectionManualInstallationStoreV1 } from "./connection-manual-installation-store.js";
+export type {
+	ConnectionManualInstallationClaimV1,
+	ConnectionManualInstallationPolicyInputV1,
+} from "./connection-manual-installations.js";
 export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
