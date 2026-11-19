@@ -459,6 +459,9 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 - `generation-cancel` 的持久 `accepted` 终态回执确认目标代次的 cancellation barrier 已完成；它是控制操作结果，不是原 Turn 的原生终态。Host 以该回执确认 tombstone，不以原 Turn 的 `unknown` 或不可查询状态覆盖控制回执。Driver 必须先独立持久化屏障，再确认所有旧代次执行源已退出且在途事件与状态写已排空；即使 Session 或 Turn 持久状态无法恢复，也不能跳过这些条件。无法证明停止副作用时不确认。原 Turn 的未知结果和已保存历史保持原状，不生成合成终态事件。
 - Codex 的原生历史恢复被明确拒绝时，仍可按已持久化的原 thread、Turn、子执行源和后台调用标识尝试现有控制；控制失败或没有源退出证据时保持隔离中。原生终态及模型排空证据到达后，Driver 必须持久更新原 generation 控制回执，不能只更新 Host 状态。该回执完整确认后，事件恢复只回放原 durable journal，并在已保存事件排空后结束流，不重新读取损坏的原生历史；保留原游标校验与事件字节，不把流结束转换为原 Turn 的合成终态。
 
+- [独立 executor 精确 Stop 的排空屏障](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
+  继续约束本节的普通恢复预算到期和代次隔离流程。恢复先读取原 Stop、屏障及适用 fence。
+
 ## 8. 消息、事件与 SSE 可靠性
 
 ### 8.1 消息与命令幂等
@@ -1022,6 +1025,43 @@ initialize/config/read 或模型 completed 不充分。Executor 未就绪时固�
 进程状态和 Pod 生命周期收口，不能假定直接 `exec-server --listen` 会随 app-server stdin 关闭。
 Executor 实例或传输会话变化使原准入失效；只有原实例/会话才能恢复已有进程句柄。
 新的连接或容器实例不能代签原操作终态、stop 或资源释放，也不自动重放命令。
+
+独立 executor 的精确 Stop 沿
+[工程 Spec §11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
+收敛。Driver 按现有控制授权和持久 fence 封闭原 Execution，记录原生终态候选，
+同时等待 executor 排空证明。通知、查询恢复和原 Stop 回执共用同一门禁。
+
+- Driver 依据原受理记录把原 Execution、native Turn 和 executor 协议会话的归属
+  交给受信 gateway。允许转发的连接必须能唯一归属原执行，旧连接的迟到帧不能归给
+  后继执行。gateway 在同一持久排序边界内提交启动登记或 Stop 封闭。登记绑定工具
+  attempt、Sandbox、Pod UID、generation、resource fence、executor epoch、协议会话
+  和该会话内的句柄，先记录为可能送达，再转发。封闭先提交时拒绝转发，启动登记
+  先提交时该 attempt 必须纳入排空。重启先恢复原封闭 fence、启动登记与未确认
+  attempt，再开放准入或出具证明。送达未确认的启动保留 unknown，只在原会话核实，
+  不重发 `process/start`。持久记录只保留必要引用、状态、期限及固定原因。
+- runner 在原 executor 的 PID namespace 内，从受信启动观测把原登记的协议会话和
+  句柄唯一绑定到该次实际创建的进程组。记录进程组及其创建身份，核对 namespace、
+  进程启动身份和实例，排除 PID/PGID 复用与旧句柄。Codex 的 `process/start`
+  句柄仅在其协议会话内有效。缺少唯一映射时拒绝归属并保持 unknown。固定
+  exec-server 的 `process/terminate` 可请求停止，runner 的退出证明须覆盖原组
+  所有仍存活的成员。单一进程退出、断连、句柄查无记录和新实例空列表均不能证明
+  原组已排空。
+- 排空使用限定同一 Session 的专用双向认证通道，与业务工具入口分离。部署受信启动
+  在业务准入前核实并固定 Host 和 runner 的本实例公开身份，双方私有材料只在各自
+  受保护进程可用。Driver 代表已核实的 §9 控制 Grant 请求排空。runner 校验
+  Host 身份、控制用途、原 Stop、原 Execution、Pod UID、epoch、generation、
+  resource fence 和 stop fence，以及有效期和防重放绑定。Driver 只接受由该原
+  runner 认证、绑定同一请求与已封闭登记集合的证明。loopback 和业务工具身份不提供控制
+  权限。业务进程不得持有排空认证材料或指定进程标识。接线只使用平台自有组件和
+  固定 Codex 发行物。
+
+验收使用真实 Linux 前台和后台进程组，并在同版本 ACK 镜像复验。绑定同一 Execution、
+stopRequestId、fence、Pod UID、executor epoch 和已登记进程组。按 §8.4 的原
+`stopRequestId.confirmationDeadline` 核对排空证明和首次可观察终态。当前期限是受理后
+60 秒。通过要求证明在期限内取得且终态不早于证明。证明迟到或缺失时，核对同一 Stop
+进入待核实，两个预算均耗尽时仍保留原占用并拒绝后继 Turn。
+覆盖启动已送达但确认尚未落盘时重启、Stop 与启动并发、组内子进程、业务调用方伪造
+控制或证明、陈旧 fence、其他执行、断连、换代、重复 Stop 和排空后的合法 Turn。
 
 ## 11. 验证
 

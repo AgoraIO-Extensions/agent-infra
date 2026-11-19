@@ -1741,6 +1741,20 @@ executor 活性和绑定，不执行命令、读写工作区或扩大 Grant 用�
 executor 重启或断连也使原结果失效。恢复原进程句柄只接受原 exec-server 实例/会话的可核实恢复；
 新实例不能证明旧命令已终止、签收旧 stop/unknown 或获得旧执行权，须重新完成部署准入。
 在途失败沿原 operation/attempt、unknown、stop 与恢复路径收敛，不重放工具或创建替代执行。
+
+在独立 executor 模式，精确 Stop 应先封闭原 Execution 的新工具准入，再排空同一
+executor 实例中归属于原 Execution 的前台和后台工具进程组。在原生 Turn 终态与原工具
+进程组退出都得到确认后，才发布 Execution 终态并释放后继执行的占用。Stop 受理、
+原生 interrupt 响应和 exec-server terminate 响应均不能单独作为退出证明。
+Core/Store 依受信 executor 绑定在受理 Stop 的事务内持久化排空屏障，绑定原 Execution、
+Stop 请求及适用 fence。到达原停止确认期限仍缺证明时，记录非终态
+`STOP_CONFIRMATION_TIMEOUT`。普通恢复预算耗尽后继续保留该屏障和原占用。
+Dispatch/Store 不得借预算到期写入 `RUNTIME_RECOVERY_TIMEOUT` 失败、完成 Stop、
+使 Conversation 可用或准入后继执行。只有同一原执行的可信排空证明，或现有代次退休流程
+对原执行源退出和屏障的确定证明，才可解除占用。退役回执沿原控制语义处理，不合成
+原生终态。迟到 Stop 不覆盖原生自然完成结果。Driver、gateway、runner 与恢复路径见
+[Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
+
 Pod 停止与代次退休同时覆盖两容器及所有后台子进程；新增 CPU/内存、临时卷和启动成本进入原
 容量配置、资源摘要及回执。旧 reserves 不得未经重验绑定到新布局，回滚须先按正式生命周期排空。
 
@@ -2091,7 +2105,7 @@ sequenceDiagram
 - 消息持久化成功后才向用户显示“已提交”。后续投递失败不能删除消息或静默丢弃，必须收敛为可解释状态。
 - 同一 Conversation 同时只有一个活跃 Turn。普通消息、补充指令、重新生成和停止的重试不能产生重复 Execution、越过发送者边界，或改绑到后续 Execution。
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
-- Runtime 明确报告本次 Turn 在原生提交点之前未提交（`RUNTIME_TURN_NOT_SUBMITTED`）时，Worker 把 Execution 退回投递前的状态，用新的 Grant 重新投递同一 Execution：2 分钟内最多 3 次，之后以 `RUNTIME_FILE_INPUT_UNAVAILABLE` 或 `RUNTIME_SESSION_PREPARATION_FAILED` 明确失败。接受结果不确定的恢复按墙钟预算收敛，默认 5 分钟，由部署配置（Worker 环境变量 `PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS`），用尽时以 `RUNTIME_RECOVERY_TIMEOUT` 失败。只核实状态的恢复不以 Session Sandbox 就绪为前置。完整契约见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract) 与 [§7.3](HLD-agent-runtime-M1.md#73-重启恢复)，决策见 [ADR-0034](../adr/0034-not-submitted-turns-and-wall-clock-recovery-budget.md)。
+- Runtime 明确报告本次 Turn 在原生提交点之前未提交（`RUNTIME_TURN_NOT_SUBMITTED`）时，Worker 把 Execution 退回投递前的状态，用新的 Grant 重新投递同一 Execution：2 分钟内最多 3 次，之后以 `RUNTIME_FILE_INPUT_UNAVAILABLE` 或 `RUNTIME_SESSION_PREPARATION_FAILED` 明确失败。接受结果不确定的恢复按墙钟预算收敛，默认 5 分钟，由部署配置（Worker 环境变量 `PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS`），用尽时以 `RUNTIME_RECOVERY_TIMEOUT` 失败。独立 executor 精确 Stop 的排空屏障按 [§11.2.1](#1121-codex-session-独立-executor提案) 处理。只核实状态的恢复不以 Session Sandbox 就绪为前置。完整契约见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract) 与 [§7.3](HLD-agent-runtime-M1.md#73-重启恢复)，决策见 [ADR-0034](../adr/0034-not-submitted-turns-and-wall-clock-recovery-budget.md)。
 - 用户可见结果以 [Agent Platform PRD 11.2](../prd/PRD-agent-platform-M1.md#112-对话能力) 为准；幂等键、事务分支、outbox 状态迁移、Runtime 接受竞态和失败收敛的完整工程契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
 - Connection 的外部调用幂等、未知结果与恢复由 Connection 负责；平台不能通过重投整个任务来绕过原调用对账。
@@ -2143,7 +2157,7 @@ RuntimeHost 命令、租约/fence、原生 Session 和事件字段继续由 [Run
 **与停止、重启、待核实和撤权的关系。**
 
 - 停止：只针对目标 Execution，不终结等待 Execution。停止确认、占用释放后，下一条等待 Execution 按序准入；停止确认超时转为待核实期间继续等待，到期按 `TASK_WAIT_TIMEOUT` 终结。
-- 待核实：`unknown` 不释放占用，等待 Execution 不出队，直到原执行核实为终态、恢复预算用尽（[§12.2](#122-可靠性规则)）或等待到期。代次隔离完成、Conversation 标记为会话不可用的事务（[Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复)）同时终结该 Conversation 的全部等待 Execution；`RUNTIME_SESSION_BLOCKED` 使会话不可用后，等待 Execution 在随后的认领中以 `CONVERSATION_UNAVAILABLE` 终结。
+- 待核实：`unknown` 不释放占用，等待 Execution 不出队，直到原执行核实为终态、普通恢复预算用尽（[§12.2](#122-可靠性规则)）或等待到期。独立 executor 已受理的精确 Stop 遵循 [§11.2.1](#1121-codex-session-独立-executor提案) 的排空屏障。代次隔离完成、Conversation 标记为会话不可用的事务（[Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复)）同时终结该 Conversation 的全部等待 Execution；`RUNTIME_SESSION_BLOCKED` 使会话不可用后，等待 Execution 在随后的认领中以 `CONVERSATION_UNAVAILABLE` 终结。
 - 重启：`platform-api`、`platform-worker` 或 Agent 重启后，等待 Execution 沿原顺序与期限继续（§16.3）。Agent 启动或更新中继续等待，停止或停用时终结。
 - 撤权：主体禁用、Agent 可用范围或渠道权限撤销时，按 §9.2 与 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 取消受影响的等待 Execution，原因为 `AUTHORIZATION_REVOKED`，不投递。
 - 撤回：Web 发送者撤回自己的排队消息，复用 12.4 未投递任务的取消路径。撤回与认领互斥：Execution 仍为 `waiting` 时以 `cancelled` 终结，记录撤回原因与必要审计；已离开 `waiting` 时返回已开始处理，不影响执行。撤回入口遵循 §8.1 的命令约定，校验可信主体与 Conversation 归属并支持幂等。企微不提供撤回入口。
