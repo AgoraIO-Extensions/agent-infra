@@ -2445,10 +2445,9 @@ Host 在打开材料前核对批准来源、原 Sandbox、Pod、代次、关联�
 不能消除未决原操作事实或触发新的 Token/操作 fallback，秘密可达引用释放亦不作为完整
 内存擦除证明。实现与取舍见 [ADR 0020](../adr/0020-protect-connection-installation-delivery.md)。
 
-源码接收器可先使用受控 export 实现与验证；供应方实际输出、可信 SecretRef 解析、合法
-确认/领取、最终 Linux 文件/内存/FD、真实 Runtime/Connection/Provider 与撤销/unknown
-验证分别回链 #851。来源未知或证据不足不启用真实 Token，不以未来整票验收替代当前
-实施所需的最小合同输入，也不以此方案或 fixture 签收真实保护。
+源码接收器可先使用受控 export 实现与验证。生产接收、运行保护和联合验收统一见
+[§13.5.7](#1357-agent-关联与-oauth-安装准备)。来源未知或证据不足不启用真实 Token。
+实施仍需当前最小合同输入，受控 export 不足以证明真实保护。
 
 #### 13.5.6 标准 OAuth 安装供应
 
@@ -2741,12 +2740,16 @@ SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env�
 接受 prepare 或原键只读 status 时无需 clientId。
 
 首次 begin 是同一 Host 接收并固定完整配置的命令。回执经 §13.5.7 CAS 后，Worker 从原
-授权记录取出完整非秘密配置与已核实回执引用，将两者与完整配置摘要、原授权、原 claim、
-原 Pod/代次及登记模板绑定到签名 begin。Host 通过受信内部回读确认原回执 CAS、begin 的
-持久 sending、当前授权及全部原绑定，核对完整配置、摘要和真实 clientId，再为同一授权
-原子固定配置。固定成功才可生成链接，且 callback 在原回跳映射提交后方可转交。后续命令
-使用同一固定配置。配置不同、原 claim 失效或 Host 替换时拒绝 begin，保留原事实，恢复沿
-§13.5.7 原键核实规则。
+授权记录取出完整非秘密配置与已核实回执引用。沿既有 installation JWS
+（`runtime-connection-installation-jws`）合同，首次 begin 的签名绑定本命令引用、自身
+`requestDigest`、完整配置及其摘要、已核实回执引用、原授权、原 claim、原 Pod/代次及
+登记模板。Host 校验 JWS 签名并以接收的命令重算请求摘要，通过受信内部回读将命令引用、
+签名绑定、重算的请求摘要及原领取 fence 与该次 begin 的持久 sending 记录逐项核对，并
+核实当前授权及 §13.5.7 的回执 CAS 已提交且仍对应本次绑定。完整配置、摘要及真实
+clientId 均匹配后，Host 以该命令引用和原授权原子消费首次 begin 并固定配置。只有首次
+消费成功才生成链接，callback 在原回跳映射提交后方可转交。后续命令使用同一固定配置。
+重复命令、校验失败、原 claim 失效或 Host 替换时拒绝本次命令并保留原事实。登记结果为
+unknown 时按 §13.5.7 原键核实。
 
 Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
 保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
@@ -2775,8 +2778,8 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 原平台安装授权与确认合同、Connection 原主体/实例映射来源，以及同版本 MCP 服务/结果
 合同。公开 OAuth/resource metadata 只足以固定协议端点，Browser Token CRUD 不成为领取
 或安装映射合同；上述最小输入缺失时仅推进有明确接收者的受控源码实现，不启用真实 Token。
-两主体/两 Agent、跨 Session/代次、错 state/issuer/resource、重放/撤权、丢响应与最终 Linux
-秘密保护分别沿 #851 验证；登录、文档、export fixture 不代签这些结果。
+生产安装所需的隔离、撤权、运行保护及联合验收统一见
+[§13.5.7](#1357-agent-关联与-oauth-安装准备)。
 
 #### 13.5.7 Agent 关联与 OAuth 安装准备
 
@@ -3007,8 +3010,18 @@ helper 当作生产链路。Web/API 正式创建、同键冲突、丢响应/崩�
 旧修订拒绝均须正负验证。分别替换 prepare 的原用户、Agent 或安装绑定，证明 Host 在读取
 材料及发送 EP-1060 前拒绝。Store 须拒绝不匹配或解绑后迟到的回执，并保证没有授权链接发布。
 验收须从无 clientId 的实际 Host 装配完成 prepare，并由同一 Host 在首次 begin 原子固定
-完整配置后生成链接。模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可
-继续 begin。原 claim 结束后只保留负责人核实路径，不生成链接。生产安装及真实双主体联合验收分别见 [#4155 AC-2 和 AC-3](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155)。
+完整配置后生成链接。首次 begin 负例须分别覆盖请求摘要、签名或持久 sending 与本命令
+不一致、回执 CAS 未确认或失败、同一命令重复、迟到或替换的登记回执，以及单独替换原
+用户、Agent 或安装。每项均验证此次请求未固定或改写配置、未生成新链接。
+模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可继续 begin。登记前
+status 单独替换原用户、Agent 或安装时，Host 须在读取材料及发送原键 GET 前拒绝。
+原 claim 结束后只保留负责人核实路径，不生成链接。
+
+生产安装验收包括供应方实际输出、可信 SecretRef、合法确认和领取、跨 Session/代次、
+错 state/issuer/resource、重放、撤权及 unknown，以及最终 Linux 文件、内存与 FD 保护。
+真实联合验收覆盖两主体、两 Agent 和实际 Runtime、Connection、Provider。登录、文档和
+export fixture 均不足以证明这些结果。生产安装及联合验收分别见
+[#4155 AC-2 和 AC-3](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155)。
 [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) 保留原实现历史。
 
 ## 14. 使用渠道
