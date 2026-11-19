@@ -3659,15 +3659,28 @@ ImageCache 库存读取部署批准的缓存管理范围；库存上限、phase�
 
 请求携带 Agent、Session 和有界 UTC 时间范围。结果包含 Execution ID、当前状态、来源和
 范围内的阶段证据。以 `[start, end)` 筛选下列事实的时间，同一 Execution 内按持久事件序号
-对账。可补齐能与窗口内证据可靠配对的窗口外端点，同时保留原时间。查询限制时间窗口、Execution
-数及每个 Execution 的事实数，显式报告截断。
+对账。可补齐能与窗口内证据可靠配对的窗口外端点，同时保留原时间。
+
+服务端为单次请求设置时间范围、返回条数和总扫描预算。预算包括候选 Execution、会话事件、
+Turn outbox 及事件流的原始候选行，以及跨窗端点查找。扫描预算在按事件类型或内容筛选前计数，
+跨窗查找同时受查找次数和候选行上限约束。候选扫描使用现有会话索引，事件读取按 Execution
+与 sequence 有序推进，模型事件可使用现有部分索引。outbox 事件只按已绑定的 stream 和
+sequence 读取。数据库查询受剩余请求时限与取消信号约束。扫描、跨窗查找或返回条数达到上限时，
+保留已核实证据并标记截断。数据库超时、取消或读取失败时标记来源不可用。只有完成预算内查询且
+确无匹配记录时，才报告无匹配证据。
 
 | 证据 | 权威来源和投影规则 |
 | --- | --- |
 | 受理、当前状态、终态 | `conversation_executions.created_at` 为持久受理时间，`status` 为当前状态，`terminal_observed_at` 为终态观察时间。终态时间缺失时保持未知。 |
 | 等待、投递、执行 | 读取同一 Execution 的 `conversation_events` 中受支持的 `task.status`、`execution.status`、`sequence` 和 `occurred_at`，按生产者语义标明等待、已提交和执行中的已观测状态。已提交状态不充当 Runtime 已受理证明。 |
+| 排队失败 | 同一 Execution 的 failed `task.status` 采用 `conversation_events.occurred_at`，`reason` 只允许 `TASK_WAIT_TIMEOUT`、`AGENT_UNAVAILABLE`、`CONVERSATION_UNAVAILABLE`。 |
+| 投递或恢复失败 | 按同一 Session 和 Execution 核验 Turn submit/regenerate outbox 绑定，从所属 `persisted_events` 流的 `outbox.failed` 取 `occurred_at` 和 `errorCode`。只允许 Core 已明确登记的固定失败码，例如 `RUNTIME_RECOVERY_TIMEOUT`。 |
+| Runtime 错误 | 同一 Execution 的 `conversation.error` 采用 `conversation_events.occurred_at`。错误码只允许 Runtime 已登记的固定码，例如 `RUNTIME_EXECUTION_FAILED`、`RUNTIME_DEPENDENCY_UNAVAILABLE`。 |
+| 模型或工具阶段与失败 | 读取同一 Execution 的 `execution.operation`，按 `operationRef`、`attemptRef` 和事件序号核验配对，使用事实中的 `startedAt`、`finishedAt`。端点缺失时该端点和耗时保持未知。failed 事实的 `failureCode` 只允许 Core 的 `ConversationOperationFailureV2` 枚举值。错误观察时间取 `conversation_events.occurred_at`，与实际操作结束时间分别表达。 |
 | 待核实 | `conversation_executions.unknown_since` 只表示当前 unknown 的开始。历史 unknown 用同一 Execution 已持久化、可配对的状态事件表达。缺结束或存在多次不可区分的转移时，只展示已知时间点，不推算完整区间。 |
-| 错误 | 同一 Execution 的已持久化 `conversation.error` 仅投影既有白名单内的错误码和时间。未知或没有记录的错误码显示缺失。 |
+
+错误码按来源使用固定白名单。通用格式校验和分类前缀匹配均不足以放行原始错误码。
+缺失或未知码显示缺失，保留已核实的阶段和时间。
 
 阶段耗时仅在两个端点均可核实时按实际时间差计算，不能用 `updated_at` 代替阶段事件，
 也不能把任务总时长当作模型、工具或 Runtime 耗时。无匹配任务、缺少阶段证据与来源不可用
