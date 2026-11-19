@@ -563,7 +563,6 @@ export {
 export {
 	createOwnerConnectionBindingsResolverV1,
 	type OwnerConnectionBindingsOptionsV1,
-	type ProtectedConnectionHostSupplyV1,
 } from "./connection-manual-bindings.js";
 export {
 	createWorkerFileClientV1,

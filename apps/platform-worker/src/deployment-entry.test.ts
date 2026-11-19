@@ -84,7 +84,12 @@ beforeAll(async () => {
 	);
 	await writeFile(
 		join(directory, "connection-manual-bindings.js"),
-		"export const createOwnerConnectionBindingsResolverV1 = () => undefined; export const createProductionOwnerConnectionBindingsV1 = () => undefined;\n",
+		`export const createOwnerConnectionBindingsResolverV1 = (options) => async () => {
+ globalThis.ownerResolverCalls = (globalThis.ownerResolverCalls ?? 0) + 1;
+ return options.testBindings ?? {};
+};
+export const createProductionOwnerConnectionBindingsV1 = (options) => options;
+`,
 	);
 	await writeFile(
 		join(directory, "kubernetes-client.js"),
@@ -439,6 +444,7 @@ export class PostgresConnectionAssociationSourceV1 {
   if (globalThis.associationSourceFailed) throw Error('controlled association source unavailable');
   return (globalThis.persistentConnectionAgents ?? []).includes(agentId);
  }
+ async manualCurrent(agentId, revision) { return globalThis.manualRevisions?.[agentId] === revision; }
  async close() { globalThis.associationSourceCloses = (globalThis.associationSourceCloses ?? 0) + 1; if (process.env.ASSOCIATION_CLOSE_FAILS) throw Error('controlled association close failure'); }
 }
 `,
@@ -674,6 +680,16 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_MANUAL_SOURCE === 'true') {
+   const current = workload.connectionDeliveryCurrent;
+   const before = await current('owner-agent');
+   globalThis.manualRevisions = {'owner-agent': 4};
+   const replaced = await current('owner-agent');
+   globalThis.manualRevisions = {};
+   const disconnected = await current('owner-agent');
+   console.log(JSON.stringify({snapshots: globalThis.snapshots, installations: globalThis.installations, ownerCalls: globalThis.ownerResolverCalls, genericCalls:globalThis.legacyResolverCalls ?? 0, before, replaced, disconnected}));
+   process.exit(0);
+ }
  if (process.env.RUN_REGISTERED_BINDINGS === 'true') {
    console.log(JSON.stringify({snapshot:globalThis.snapshot ?? null,snapshots:globalThis.snapshots ?? {},installations:globalThis.installations ?? {},reads:globalThis.registrationReads ?? 0,closes:globalThis.registrationCloses ?? 0,database:globalThis.registrationDatabase ?? null,resolverCalls:globalThis.legacyResolverCalls ?? 0}));process.exit(0);
  }
@@ -789,6 +805,47 @@ it("rejects competing Owner Connection configuration before assembly", async () 
 		await writeFile(path, original);
 	}
 });
+
+it.each([false, true])(
+	"routes manual supply independently from legacy (%s)",
+	async (withLegacy) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		try {
+			await writeFile(
+				path,
+				`${original}
+globalThis.sourceSelection={automaticAgentIds:['owner-agent'],legacyAgentIds:${JSON.stringify(withLegacy ? ["legacy-agent"] : [])}};
+globalThis.manualRevisions={'owner-agent':3};
+const binding = { profile: connectionConsumerProfile, approval: connectionConsumerApproval };
+const manual = {...binding, manualAssociationRevision:3, installationSupply:{ref:'owner-supply',revision:'3'}};
+export const ownerConnectionBindingConfiguration={testBindings:{'owner-agent':manual}};
+export const resolveConnectionConsumerBindingsByAgent=async () => {
+ globalThis.legacyResolverCalls=(globalThis.legacyResolverCalls ?? 0)+1;
+ const generic={...binding, installationSupply:{ref:'legacy-supply',revision:'1'}};
+ return {'owner-agent':generic,'legacy-agent':generic};
+};
+`,
+			);
+			const result = run({ RUN_MANUAL_SOURCE: "true" });
+			expect(result.status, result.stdout + result.stderr).toBe(0);
+			const resultBody = JSON.parse(result.stdout);
+			expect(resultBody).toMatchObject({
+				installations: { "owner-agent": JSON.stringify(["owner-supply", "3"]) },
+				ownerCalls: 1,
+				genericCalls: withLegacy ? 1 : 0,
+				before: true,
+				replaced: false,
+				disconnected: false,
+			});
+			expect(Object.keys(resultBody.snapshots).sort()).toEqual(
+				withLegacy ? ["legacy-agent", "owner-agent"] : ["owner-agent"],
+			);
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 const database = "postgresql://database.example.test/platform";
 function run(overrides: Record<string, string | undefined> = {}) {

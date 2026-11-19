@@ -20,6 +20,7 @@ import {
 	connectionAssociationGenerations,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionHostSupplies,
 	connectionManualAssociations,
 } from "./schema.js";
 
@@ -52,6 +53,26 @@ async function audit(
 				: { associationRevision: event.associationRevision }),
 		},
 	});
+}
+
+async function fenceRetiredHostSupply(
+	transaction: Transaction,
+	agentId: string,
+	associationRevision: number,
+) {
+	await transaction
+		.update(connectionHostSupplies)
+		.set({ state: "cleanup_pending", updatedAt: sql`clock_timestamp()` })
+		.where(
+			and(
+				eq(connectionHostSupplies.agentId, agentId),
+				eq(connectionHostSupplies.associationRevision, associationRevision),
+				or(
+					eq(connectionHostSupplies.state, "writing"),
+					eq(connectionHostSupplies.state, "available"),
+				),
+			),
+		);
 }
 
 function operations(
@@ -241,7 +262,13 @@ function operations(
 						),
 					)
 					.returning({ agentId: connectionManualAssociations.agentId });
-				return updated.length ? associationRevision : null;
+				if (!updated.length) return null;
+				await fenceRetiredHostSupply(
+					transaction,
+					input.agentId,
+					input.expectedRevision,
+				);
+				return associationRevision;
 			} catch (error) {
 				if (isPostgresError(error, "23505"))
 					throw new AgentConnectionAssociationErrorV1("already_associated");
@@ -261,7 +288,9 @@ function operations(
 					),
 				)
 				.returning({ agentId: connectionManualAssociations.agentId });
-			return deleted.length > 0;
+			if (!deleted.length) return false;
+			await fenceRetiredHostSupply(transaction, agentId, expectedRevision);
+			return true;
 		},
 		async enableAutomatic(input) {
 			try {

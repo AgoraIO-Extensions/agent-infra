@@ -1,5 +1,3 @@
-import type { ProtectedConnectionHostSupplyV1 } from "./connection-manual-bindings.js";
-
 const agentIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const credentialPattern = /^conn_consumer_[\x21-\x7e]{8,4096}$/;
 
@@ -7,6 +5,8 @@ const credentialPattern = /^conn_consumer_[\x21-\x7e]{8,4096}$/;
  * Deployment-owned bridge into the RuntimeHost protected supply boundary.
  * The bridge receives credential bytes only for the duration of materialization.
  * It must never persist them outside the Host's protected receiver.
+ * revoke durably fences this revision, including any in-flight write for it,
+ * and may be repeated after losing the response.
  */
 export interface ProtectedConnectionHostSupplyPortV1 {
 	materialize(input: {
@@ -74,14 +74,18 @@ function validateReceipt(
  */
 export function createProtectedConnectionHostSupplyV1(
 	port: ProtectedConnectionHostSupplyPortV1,
-): ProtectedConnectionHostSupplyV1 {
+) {
 	if (
 		typeof port?.materialize !== "function" ||
 		typeof port?.revoke !== "function"
 	)
 		throw new TypeError("CONNECTION_HOST_SUPPLY_PORT_INVALID");
 	return {
-		async materialize(input) {
+		async materialize(input: {
+			readonly agentId: string;
+			readonly associationRevision: number;
+			readonly serviceCredential: string;
+		}) {
 			validateIdentity(input.agentId, input.associationRevision);
 			if (
 				typeof input.serviceCredential !== "string" ||
@@ -105,7 +109,9 @@ export function createProtectedConnectionHostSupplyV1(
 				credential.fill(0);
 			}
 		},
-		async revoke(input) {
+		async revoke(
+			input: Parameters<ProtectedConnectionHostSupplyPortV1["revoke"]>[0],
+		) {
 			validateIdentity(input.agentId, input.associationRevision);
 			try {
 				await port.revoke(input);

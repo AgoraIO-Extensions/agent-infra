@@ -81,6 +81,7 @@ export {
 	readConnectionConsumerSourceSelectionV1,
 	readRegisteredConnectionConsumerBindingsV1,
 } from "./connection-consumer-registration.js";
+export { PostgresConnectionHostSupplyStoreV1 } from "./connection-host-supplies.js";
 export {
 	type ConnectionInstallationBindingInputV1,
 	PostgresConnectionInstallationAuthorizationTransactionV1,

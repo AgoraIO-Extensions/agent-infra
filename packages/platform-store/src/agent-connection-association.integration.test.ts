@@ -20,6 +20,8 @@ import {
 } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.ts";
+import { PostgresConnectionAssociationSourceV1 } from "./connection-consumer-registration.ts";
+import { PostgresConnectionHostSupplyStoreV1 } from "./connection-host-supplies.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import { PostgresPersonalApiCredentialStoreV1 } from "./personal-api-credentials.ts";
 import {
@@ -249,6 +251,75 @@ describe("Owner manual Connection association", () => {
 		).toMatchObject({ status: "not_enabled", source: null });
 		expect(await rows()).toEqual([]);
 		await noCredentialPersisted();
+	});
+
+	it("fences a retired Host supply and recovers its local cleanup by original revision", async () => {
+		await useCase().associate(
+			browser("agent-a"),
+			manual("connection-agent-a", credentialA),
+		);
+		await useCase().associate(
+			browser("agent-b"),
+			manual("connection-agent-b", credentialB),
+		);
+		const supplies = new PostgresConnectionHostSupplyStoreV1(
+			database.databaseUrl,
+		);
+		const source = new PostgresConnectionAssociationSourceV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const a = { agentId: "agent-a", associationRevision: 1 };
+		const b = { agentId: "agent-b", associationRevision: 1 };
+		const fingerprint = "a".repeat(64);
+		const receipt = { ref: "supply-a", revision: "r1" };
+		try {
+			expect(await supplies.reserve(a, fingerprint)).toEqual({
+				state: "reserved",
+			});
+			expect(await supplies.reserve(a, fingerprint)).toEqual({
+				state: "unavailable",
+			});
+			expect(await supplies.publish(a, receipt)).toBe(true);
+			expect(await supplies.reserve(a, fingerprint)).toEqual({
+				state: "available",
+				receipt,
+			});
+			expect(await supplies.reserve(a, "b".repeat(64))).toEqual({
+				state: "unavailable",
+			});
+			expect(await source.manualCurrent("agent-a", 1)).toBe(true);
+			expect(await supplies.reserve(b, fingerprint)).toEqual({
+				state: "reserved",
+			});
+			expect(
+				await supplies.publish(b, { ref: "supply-b", revision: "r1" }),
+			).toBe(true);
+			await useCase().disconnect(browser("agent-a"), {
+				schemaVersion: 1,
+				expectedRevision: 1,
+			});
+			expect(await source.manualCurrent("agent-a", 1)).toBe(false);
+			expect(await source.manualCurrent("agent-b", 1)).toBe(true);
+			expect(await supplies.claimCleanup()).toEqual(a);
+			expect(await supplies.claimCleanup()).toBeUndefined();
+			await sql`update platform.connection_host_supplies set updated_at = clock_timestamp() - interval '31 seconds' where agent_id = 'agent-a'`;
+			const reopened = new PostgresConnectionHostSupplyStoreV1(
+				database.databaseUrl,
+			);
+			try {
+				expect(await reopened.claimCleanup()).toEqual(a);
+				await reopened.cleanupResult(a, "closed");
+				expect(await reopened.claimCleanup()).toBeUndefined();
+				expect(await reopened.publish(a, receipt)).toBe(false);
+				expect(await reopened.reserve(a, fingerprint)).toEqual({
+					state: "unavailable",
+				});
+			} finally {
+				await reopened.close();
+			}
+		} finally {
+			await Promise.all([supplies.close(), source.close()]);
+		}
 	});
 
 	it("never reuses a CAS revision across disconnect and reassociation (ABA)", async () => {

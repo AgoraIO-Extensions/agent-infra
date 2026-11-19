@@ -544,11 +544,10 @@ const staticPerAgentConnectionBindings =
 const ownerAssociationBindingsResolver = ownerConnectionBindings
 	? createOwnerConnectionBindingsResolverV1(ownerConnectionBindings)
 	: undefined;
-const effectiveConnectionConsumerBindingsResolver =
-	resolveConnectionConsumerBindingsByAgent ?? ownerAssociationBindingsResolver;
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
-	effectiveConnectionConsumerBindingsResolver !== undefined;
+	resolveConnectionConsumerBindingsByAgent !== undefined ||
+	ownerAssociationBindingsResolver !== undefined;
 const configuredSharedSnapshot = perAgentConsumerSelection
 	? undefined
 	: createRuntimeConnectionConsumerSnapshotV1(
@@ -641,7 +640,7 @@ async function createPreparedOwning(
 	const legacySelectionRequired =
 		!automaticRegistrationPolicy &&
 		Boolean(
-			connectionConsumerSnapshot || effectiveConnectionConsumerBindingsResolver,
+			connectionConsumerSnapshot || resolveConnectionConsumerBindingsByAgent,
 		);
 	const readLegacySelection = () =>
 		readConnectionConsumerSourceSelectionV1(databaseUrl).catch(() => undefined);
@@ -655,7 +654,7 @@ async function createPreparedOwning(
 		? await resolveRegisteredConnectionConsumerBindingsV1({
 				databaseUrl,
 				policy: automaticRegistrationPolicy,
-				resolve: effectiveConnectionConsumerBindingsResolver,
+				resolve: resolveConnectionConsumerBindingsByAgent,
 				signal,
 			}).catch(() => {
 				signal.throwIfAborted();
@@ -666,8 +665,8 @@ async function createPreparedOwning(
 					(!legacySelection.legacyAgentIds.length &&
 						legacySelection.automaticAgentIds.length > 0))
 			? {}
-			: await effectiveConnectionConsumerBindingsResolver?.(signal);
-	if (legacySelectionRequired && effectiveConnectionConsumerBindingsResolver)
+			: await resolveConnectionConsumerBindingsByAgent?.(signal);
+	if (legacySelectionRequired && resolveConnectionConsumerBindingsByAgent)
 		legacySelection = await readLegacySelection();
 	signal.throwIfAborted();
 	const persistentAutomaticSource =
@@ -685,15 +684,6 @@ async function createPreparedOwning(
 	const startupLegacyAgentIds = persistentAutomaticSource
 		? new Set(legacySelection?.legacyAgentIds ?? [])
 		: undefined;
-	const connectionDelivery = legacySelectionRequired
-		? openStartupConnectionDeliveryGuardV1({
-				databaseUrl,
-				...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
-			})
-		: undefined;
-	if (connectionDelivery) owned.close = () => connectionDelivery.close();
-	const connectionDeliveryCurrent = async (agentId: string) =>
-		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	let resolvedProfilesByAgent = resolvedBindings
 		? Object.fromEntries(
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
@@ -738,6 +728,44 @@ async function createPreparedOwning(
 			]),
 		);
 	}
+	// Manual associations are authoritative independently of the automatic registration
+	// policy and the legacy selector. Generic bindings never displace an Owner binding.
+	const manualBindings = await ownerAssociationBindingsResolver?.(signal).catch(
+		() => {
+			signal.throwIfAborted();
+			return undefined;
+		},
+	);
+	const manualRevisions = new Map(
+		Object.entries(manualBindings ?? {}).map(([agentId, binding]) => [
+			agentId,
+			binding.manualAssociationRevision,
+		]),
+	);
+	if (manualBindings !== undefined) {
+		resolvedProfilesByAgent = { ...resolvedProfilesByAgent, ...manualBindings };
+		resolvedInstallationSuppliesByAgent = {
+			...resolvedInstallationSuppliesByAgent,
+			...Object.fromEntries(
+				Object.entries(manualBindings).map(([agentId, binding]) => [
+					agentId,
+					binding.installationSupply,
+				]),
+			),
+		};
+	}
+	const connectionDelivery =
+		legacySelectionRequired || manualRevisions.size
+			? openStartupConnectionDeliveryGuardV1({
+					databaseUrl,
+					manualRevisions,
+					checkLegacy: legacySelectionRequired,
+					...(startupLegacyAgentIds ? { startupLegacyAgentIds } : {}),
+				})
+			: undefined;
+	if (connectionDelivery) owned.close = () => connectionDelivery.close();
+	const connectionDeliveryCurrent = async (agentId: string) =>
+		connectionDelivery ? connectionDelivery.current(agentId) : true;
 	const resolvedSnapshotsByAgent = resolvedProfilesByAgent
 		? Object.fromEntries(
 				Object.entries(resolvedProfilesByAgent).map(([agentId, value]) => [
@@ -875,6 +903,9 @@ async function createPreparedOwning(
 		sessionOwnerSecrets,
 		// Every Pod delivery of the startup-selected Consumer rechecks the current source.
 		...(connectionDelivery ? { connectionDeliveryCurrent } : {}),
+		...(ownerConnectionBindings
+			? { ownerConnectionHostSupply: ownerConnectionBindings.hostSupply }
+			: {}),
 	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {

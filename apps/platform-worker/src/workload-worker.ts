@@ -6,6 +6,7 @@ import {
 	type WorkloadReconciliationStorePortV1,
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
+import { createOwnerConnectionSupplyCleanupV1 } from "./connection-manual-bindings.js";
 import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
 import {
@@ -24,6 +25,9 @@ import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observat
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly ownerConnectionHostSupply?: Parameters<
+		typeof createOwnerConnectionSupplyCleanupV1
+	>[1];
 	readonly connectionConsumerRegistration?: Omit<
 		Parameters<typeof createConnectionConsumerRegistrationWorkerV1>[0],
 		"databaseUrl"
@@ -166,6 +170,9 @@ export function createPlatformWorkloadWorkerV1(
 		retryDelayMs: pollIntervalMs,
 		idleSandboxReclaimAfterMs: options.idleSandboxReclaimAfterMs,
 	});
+	let ownerSupplyCleanup:
+		| ReturnType<typeof createOwnerConnectionSupplyCleanupV1>
+		| undefined;
 	let monitorStore: typeof store | undefined;
 	let files:
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
@@ -180,6 +187,11 @@ export function createPlatformWorkloadWorkerV1(
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	let monitorReconciliation: typeof reconciliation;
 	try {
+		if (options.ownerConnectionHostSupply)
+			ownerSupplyCleanup = createOwnerConnectionSupplyCleanupV1(
+				options.databaseUrl,
+				options.ownerConnectionHostSupply,
+			);
 		if (options.connectionConsumerRegistration)
 			connectionRegistration = createConnectionConsumerRegistrationWorkerV1({
 				...options.connectionConsumerRegistration,
@@ -260,6 +272,7 @@ export function createPlatformWorkloadWorkerV1(
 			evaluation?.close(),
 			evaluationScoring?.close(),
 			connectionRegistration?.close(),
+			ownerSupplyCleanup?.close(),
 		]);
 		throw error;
 	}
@@ -316,6 +329,7 @@ export function createPlatformWorkloadWorkerV1(
 						await files?.runOnce();
 						await evaluation?.runOnce();
 						await connectionRegistration?.runOnce();
+						await ownerSupplyCleanup?.runOnce();
 					}
 				}
 			});
@@ -414,6 +428,7 @@ export function createPlatformWorkloadWorkerV1(
 					files?.close(),
 					evaluation?.close(),
 					connectionRegistration?.close(),
+					ownerSupplyCleanup?.close(),
 				]);
 				const failed = [...outcomes, ...cleanup].find(
 					(result) => result.status === "rejected",

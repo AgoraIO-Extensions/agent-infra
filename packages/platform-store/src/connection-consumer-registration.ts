@@ -499,6 +499,29 @@ export class PostgresConnectionAssociationSourceV1 {
 		return row.persistent;
 	}
 
+	async manualCurrent(
+		agentId: string,
+		associationRevision: number,
+	): Promise<boolean> {
+		const [row] = await this.#client<{ current: boolean }[]>`
+			select exists (
+				select 1 from platform.connection_manual_associations m
+				join platform.connection_association_generations g
+					on g.agent_id = m.agent_id and g.last_revision = m.association_revision
+				join platform.connection_host_supplies s
+					on s.agent_id = m.agent_id and s.association_revision = m.association_revision
+					and s.state = 'available'
+				where m.agent_id = ${agentId}
+					and m.association_revision = ${associationRevision}
+					and not exists (
+						select 1 from platform.connection_consumer_registrations r
+						where r.agent_id = m.agent_id
+					)
+			) as current
+		`;
+		return row?.current === true;
+	}
+
 	close() {
 		return this.#client.end();
 	}
