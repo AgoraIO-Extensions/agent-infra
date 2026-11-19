@@ -68,8 +68,9 @@ function sha256(value: string) {
 
 /** SQL predicate for when a manual command may be claimed, by its kind. */
 const eligible = sql`(
-	(c.command = 'prepare' and a.status = 'preparing' and m.registration_state = 'pending' and m.supply_state = 'pending')
-	or (c.command = 'status' and a.status = 'preparing' and m.registration_state = 'unknown' and m.supply_state in ('confirmed','unknown'))
+	(c.command = 'prepare' and a.status = 'preparing' and m.registration_state = 'pending' and m.supply_state in ('pending','confirmed'))
+	or (c.command = 'status' and a.status = 'preparing' and ((m.registration_state = 'unknown' and m.supply_state = 'confirmed')
+		or (m.registration_state = 'pending' and m.supply_state = 'unknown')))
 	or (c.command = 'begin' and a.status in ('awaiting_confirmation','confirmed') and m.registration_state = 'registered' and m.supply_state = 'confirmed')
 	or (c.command = 'begin_status' and a.status in ('awaiting_confirmation','confirmed') and m.registration_state = 'registered' and m.supply_state = 'confirmed')
 	or (c.command = 'revoke' and m.revoke_state = 'pending' and m.supply_state = 'confirmed')
@@ -131,9 +132,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		await tx.execute(sql`
 			update platform.connection_manual_installations m
 			set registration_state = case when m.registration_state = 'sending' then 'unknown' else m.registration_state end,
-				supply_state = case when m.supply_state = 'sending' then 'unknown' else m.supply_state end,
+				supply_state = case when m.registration_state = 'pending' then 'unknown' else m.supply_state end,
 				revision = m.revision + 1, updated_at = clock_timestamp()
-			where (m.registration_state = 'sending' or m.supply_state = 'sending')
+			where (m.registration_state = 'sending' or m.supply_state = 'sending'
+				or (m.registration_state = 'pending' and m.supply_state = 'confirmed'
+					and exists (select 1 from platform.connection_installation_commands original
+						where original.authorization_id=m.authorization_id and original.command='prepare'
+							and original.status='unknown' and original.delivery_digest is null)))
 				and not exists (select 1 from platform.connection_installation_commands c
 					where c.authorization_id = m.authorization_id and c.attempt_id is not null
 						and (c.status = 'sending' or (c.command='prepare' and c.status='pending'))
@@ -382,7 +387,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	/**
 	 * Fixes the template, registration key and supply attempt in the original
 	 * installation transaction, then returns the association ciphertext for the
-	 * Worker keyring. A same-attempt redelivery (Host restart) reuses them.
+	 * Worker keyring. Ciphertext is issued only for the first delivery.
 	 */
 	async fixSupply(input: {
 		readonly commandId: string;
@@ -440,14 +445,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			)
 				return null;
 			const digest = connectionRegistrationTemplateDigestV1(template);
-			if (row.template === null) {
-				if (
-					input.command !== "prepare" ||
-					row.supply_state !== "pending" ||
-					row.registration_state !== "pending"
-				)
-					return null;
-				await tx.execute(sql`
+			if (
+				input.command !== "prepare" ||
+				row.template !== null ||
+				row.supply_state !== "pending" ||
+				row.registration_state !== "pending"
+			)
+				return null;
+			await tx.execute(sql`
 					update platform.connection_manual_installations
 					set template=${JSON.stringify(template)}::jsonb, template_digest=${digest},
 						registration_key=${input.registrationKey}, registration_key_hash=${keyHash},
@@ -455,14 +460,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						revision=revision+1, updated_at=clock_timestamp()
 					where authorization_id=${template.authorizationId} and template is null
 				`);
-			} else if (
-				row.template_digest !== digest ||
-				row.registration_key !== input.registrationKey ||
-				row.supply_attempt_id !== input.supplyAttemptId ||
-				!["confirmed", "unknown"].includes(row.supply_state as string)
-			)
-				// Late or replacement attempts never reopen the original supply.
-				return null;
 			const [association] = await tx.execute(sql`
 				select credential_ciphertext, owner_id, association_revision
 				from platform.connection_manual_associations
@@ -499,16 +496,85 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly outcome: "confirmed" | "unknown";
 	}): Promise<boolean> {
 		return this.#transaction(async (tx) => {
-			if (!(await this.#sending(tx, input, input.command, true))) return false;
+			if (
+				input.command !== "prepare" ||
+				!(await this.#sending(tx, input, "prepare", true))
+			)
+				return false;
 			const updated = await tx.execute(sql`
 				update platform.connection_manual_installations
 				set supply_state = ${input.outcome}, revision = revision + 1, updated_at = clock_timestamp()
 				where authorization_id=${input.authorizationId} and supply_attempt_id=${input.supplyAttemptId}
-					and supply_state in ('sending','confirmed','unknown')
-					and not (supply_state = 'confirmed' and ${input.outcome} = 'unknown')
+					and supply_state = 'sending' and registration_state = 'pending'
 				returning authorization_id
 			`);
-			return updated.length === 1;
+			if (updated.length === 0) return false;
+			if (input.outcome === "unknown")
+				await this.#finishCommand(tx, input.commandId, "unknown");
+			return true;
+		});
+	}
+
+	/** Reopens only a prepare that provably never entered sending. */
+	async recoverSupply(input: {
+		readonly commandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+		readonly supplyAttemptId: string;
+		readonly confirmed: boolean;
+	}): Promise<void> {
+		await this.#transaction(async (tx) => {
+			const status = await this.#sending(tx, input, "status");
+			const row = await this.#row(tx, input.authorizationId, "update");
+			if (
+				!status?.delivery_digest ||
+				row?.live !== true ||
+				row.status !== "preparing" ||
+				row.registration_state !== "pending" ||
+				row.supply_state !== "unknown" ||
+				row.supply_attempt_id !== input.supplyAttemptId
+			)
+				return;
+			const authorization = this.#authorization(row);
+			const current = await this.#facts(
+				tx,
+				authorization.principal.id,
+				authorization.reference.executionId,
+			);
+			if (
+				!input.confirmed ||
+				!current ||
+				current.claim.owner !== input.attemptOwner ||
+				!manualTemplateMatchesCurrentV1(
+					this.#policy,
+					ConnectionRegistrationTemplateV1Schema.parse(row.template),
+					authorization,
+					current,
+					row.registration_key_hash as string,
+				)
+			) {
+				await this.#finishCommand(tx, input.commandId, "unknown");
+				return;
+			}
+			const original = await tx.execute(sql`
+				update platform.connection_installation_commands
+				set status='pending', attempt_id=null, attempt_owner=null,
+					attempt_expires_at=null, updated_at=clock_timestamp()
+				where authorization_id=${input.authorizationId} and command='prepare'
+					and status='unknown' and delivery_digest is null
+				returning id
+			`);
+			if (original.length !== 1) {
+				await this.#finishCommand(tx, input.commandId, "unknown");
+				return;
+			}
+			await tx.execute(sql`
+				update platform.connection_manual_installations
+				set supply_state='confirmed', revision=revision+1, updated_at=clock_timestamp()
+				where authorization_id=${input.authorizationId}
+			`);
+			await this.#finishCommand(tx, input.commandId, "completed");
 		});
 	}
 
@@ -529,7 +595,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			const command = await this.#sending(tx, input, input.command, true);
 			if (!command || command.delivery_digest !== null) return false;
 			const row = await this.#row(tx, input.authorizationId, "update");
-			if (row?.supply_state !== "confirmed") return false;
+			const supplyStatus =
+				input.command === "status" &&
+				row?.supply_state === "unknown" &&
+				row.registration_state === "pending" &&
+				row.status === "preparing";
+			if (row?.supply_state !== "confirmed" && !supplyStatus) return false;
 			if (
 				input.command === "prepare" &&
 				(row.registration_state !== "pending" || row.status !== "preparing")
@@ -605,7 +676,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			if (
 				!response ||
 				response.outcome === "unknown" ||
-				response.outcome === "revoked"
+				response.outcome === "revoked" ||
+				response.outcome === "supply_confirmed"
 			)
 				return unknown();
 			if (response.outcome === "rejected") {
@@ -616,6 +688,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				) {
 					await tx.execute(sql`
 						update platform.connection_manual_installations set registration_state='failed',
+							supply_state=case when supply_state='sending' then 'closed' else supply_state end,
 							revision=revision+1, updated_at=clock_timestamp()
 						where authorization_id=${input.authorizationId} and registration_state in ('pending','sending')
 					`);
@@ -1009,6 +1082,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					)
 				)
 					return "denied";
+				if (request.purpose === "supply_delivery")
+					return row.status === "preparing" &&
+						row.supply_state === "sending" &&
+						row.registration_state === "pending"
+						? "allowed"
+						: "denied";
 				if (request.purpose === "supply")
 					return ["sending", "confirmed"].includes(
 						row.supply_state as string,
@@ -1019,7 +1098,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						? "allowed"
 						: "denied";
 				const command = request.command;
-				if (!command || row.supply_state !== "confirmed") return "denied";
+				if (!command) return "denied";
+				const supplyStatus = command.command === "supply_status";
+				if (row.supply_state !== (supplyStatus ? "unknown" : "confirmed"))
+					return "denied";
 				const [persisted] = await tx.execute(sql`
 					select command, status, attempt_id, attempt_owner, delivery_digest,
 						attempt_expires_at > clock_timestamp() as live
@@ -1029,7 +1111,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				`);
 				if (
 					!persisted ||
-					persisted.command !== command.command ||
+					persisted.command !== (supplyStatus ? "status" : command.command) ||
 					persisted.status !== "sending" ||
 					persisted.live !== true ||
 					persisted.attempt_id !== command.attemptId ||
@@ -1044,6 +1126,11 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					case "prepare":
 						return row.status === "preparing" &&
 							row.registration_state === "sending"
+							? "allowed"
+							: "denied";
+					case "supply_status":
+						return row.status === "preparing" &&
+							row.registration_state === "pending"
 							? "allowed"
 							: "denied";
 					case "status":

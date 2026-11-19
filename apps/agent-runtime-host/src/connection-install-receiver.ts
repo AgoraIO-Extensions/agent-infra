@@ -802,9 +802,10 @@ async function assembleConnectionInstallReceiver(
 		};
 		if (conflicting()) conflict();
 		if (!slots.has(authorizationId) && !reserveSlot()) unavailable();
-		const outcome = await readbackOutcome(
-			supplyReadback(admitted, body.attemptId),
-		);
+		const outcome = await readbackOutcome({
+			...supplyReadback(admitted, body.attemptId),
+			purpose: slots.has(authorizationId) ? "supply" : "supply_delivery",
+		});
 		assertOriginal(template);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
@@ -892,7 +893,9 @@ async function assembleConnectionInstallReceiver(
 			claims.requestDigest !== connectionInstallRequestDigestV1(body)
 		)
 			denied();
-		const reply = (outcome: "revoked" | "unknown" | "rejected") =>
+		const reply = (
+			outcome: "revoked" | "unknown" | "rejected" | "supply_confirmed",
+		) =>
 			ConnectionInstallCommandResponseV1Schema.parse({
 				schemaVersion: 1,
 				outcome,
@@ -914,6 +917,25 @@ async function assembleConnectionInstallReceiver(
 		}
 		const { template, templateDigest } = admitted;
 		const authorizationId = template.authorizationId;
+		if (body.command === "supply_status") {
+			const outcome = await readbackOutcome(
+				commandReadback(admitted, body.supplyAttemptId, {
+					commandId: body.commandId,
+					attemptId: body.attemptId,
+					attemptOwner: body.attemptOwner,
+					command: "supply_status",
+					requestDigest: claims.requestDigest,
+					registrationKeyHash,
+				}),
+			);
+			assertOriginal(template);
+			return reply(
+				outcome === "allowed" &&
+					confirmedSlot(template, templateDigest, body.supplyAttemptId)
+					? "supply_confirmed"
+					: "unknown",
+			);
+		}
 		const ledger = ledgers.get(authorizationId);
 		const seen = ledger?.commands.get(body.commandId);
 		if (ledger && seen !== undefined) {
@@ -1584,7 +1606,12 @@ async function assembleConnectionInstallReceiver(
 			context.json(await supply(body, exporter, channel)),
 		);
 	});
-	for (const command of ["prepare", "status", "revoke"] as const) {
+	for (const command of [
+		"prepare",
+		"status",
+		"supply_status",
+		"revoke",
+	] as const) {
 		app.post(connectionInstallPathsV1[command], async (context) => {
 			const parsed = ConnectionInstallCommandRequestV1Schema.safeParse(
 				await boundedJson(context.req.raw, current),

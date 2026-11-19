@@ -314,7 +314,9 @@ export async function readConnectionManualInstallationV1(
 ): Promise<ConnectionManualInstallationSavedV1 | null> {
 	const rows = await tx.execute(sql`
 		select a.id, a.confirmation_revision, a.binding, a.status, a.expires_at, a.identity_revision,
-			a.agent_authorization_revision, m.registration_state, m.preparation
+			a.agent_authorization_revision,
+			case when m.supply_state = 'unknown' and m.registration_state = 'pending' then 'unknown'
+				else m.registration_state end as registration_state, m.preparation
 		from platform.connection_installation_authorizations a
 		join platform.connection_manual_installations m on m.authorization_id = a.id
 		where a.id = ${authorizationId} and a.user_id = ${userId} and m.user_id = ${userId}
@@ -384,8 +386,10 @@ export async function requestConnectionManualInstallationStatusV1(
 	let command: "status" | "begin_status" | undefined;
 	if (
 		row.status === "preparing" &&
-		row.registration_state === "unknown" &&
-		row.supply_state !== "closed" &&
+		((row.registration_state === "unknown" &&
+			row.supply_state === "confirmed") ||
+			(row.registration_state === "pending" &&
+				row.supply_state === "unknown")) &&
 		!unresolved("status") &&
 		!unresolved("prepare")
 	)

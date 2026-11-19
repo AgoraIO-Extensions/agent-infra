@@ -1115,7 +1115,7 @@ describe("Connection Host supply", () => {
 		expect(first.headers["cache-control"]).toBe("no-store");
 		expect(first.headers["referrer-policy"]).toBe("no-referrer");
 		expect(f.readback.calls[0]).toEqual({
-			purpose: "supply",
+			purpose: "supply_delivery",
 			target: f.template.target,
 			principal: f.template.principal,
 			reference: f.template.reference,

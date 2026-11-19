@@ -84,7 +84,7 @@ export interface ConnectionInstallHostClientV1 {
 	): Promise<void>;
 	command(
 		input: {
-			readonly command: "prepare" | "status" | "revoke";
+			readonly command: "prepare" | "status" | "supply_status" | "revoke";
 			readonly commandId: string;
 			readonly attemptId: string;
 			readonly attemptOwner: string;
@@ -443,12 +443,15 @@ export function createConnectionInstallHostClientV1(options: {
 					result.commandId !== unsigned.commandId ||
 					(result.outcome === "registered" &&
 						(unsigned.command === "revoke" ||
+							unsigned.command === "supply_status" ||
 							!matchConnectionRegistrationReceiptV1(
 								result.receipt,
 								template,
 								unsigned.registrationKey,
 							))) ||
-					(result.outcome === "revoked" && unsigned.command !== "revoke")
+					(result.outcome === "revoked" && unsigned.command !== "revoke") ||
+					(result.outcome === "supply_confirmed" &&
+						unsigned.command !== "supply_status")
 				)
 					unavailable();
 				return result;

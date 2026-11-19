@@ -27,6 +27,7 @@ type Store = Pick<
 	| "claim"
 	| "fixSupply"
 	| "settleSupply"
+	| "recoverSupply"
 	| "commitDelivery"
 	| "settleRegistration"
 	| "settleRevoke"
@@ -98,15 +99,14 @@ export function createConnectionManualInstallationDrainV1(
 	const { store, host } = options;
 	const owner = options.attemptOwner;
 
-	/** Same-attempt supply (first delivery or idempotent redelivery). */
+	/** One delivery. Losing confirmation is a separate recovery state. */
 	async function supply(
 		claimed: ConnectionManualInstallationClaimV1,
-		command: "prepare" | "status" | "revoke" | "begin" | "begin_status",
 		template: ConnectionRegistrationTemplateV1,
 		registrationKey: string,
 		supplyAttemptId: string,
 		signal: AbortSignal,
-	): Promise<boolean> {
+	): Promise<"confirmed" | "unknown" | "not_sent"> {
 		const attempt = {
 			commandId: claimed.command.commandId,
 			attemptId: claimed.command.attemptId,
@@ -114,23 +114,25 @@ export function createConnectionManualInstallationDrainV1(
 		};
 		const fixed = await store.fixSupply({
 			...attempt,
-			command,
+			command: "prepare",
 			template,
 			registrationKey,
 			supplyAttemptId,
 		});
 		if (!fixed || !credentialRecordMatches(fixed.ciphertext, fixed.binding))
-			return false;
+			return "not_sent";
 		let credential: Uint8Array | undefined;
+		let deliveryStarted = false;
 		let delivered = false;
 		try {
 			const decrypted = await options.decryptor.decrypt({
 				encryptedRecord: fixed.ciphertext,
 				traceId: randomUUID(),
 			});
-			if (decrypted.outcome !== "decrypted") return false;
+			if (decrypted.outcome !== "decrypted") return "not_sent";
 			credential = decrypted.plaintext;
 			const { runtimeOrigin: _origin, ...target } = template.target;
+			deliveryStarted = true;
 			await host.supply(
 				{ template, attemptId: supplyAttemptId, credential, target },
 				signal,
@@ -141,14 +143,15 @@ export function createConnectionManualInstallationDrainV1(
 		} finally {
 			credential?.fill(0);
 		}
-		await store.settleSupply({
+		if (!deliveryStarted) return "not_sent";
+		const settled = await store.settleSupply({
 			...attempt,
-			command,
+			command: "prepare",
 			authorizationId: claimed.authorization.authorizationId,
 			supplyAttemptId,
 			outcome: delivered ? "confirmed" : "unknown",
 		});
-		return delivered;
+		return settled && delivered ? "confirmed" : "unknown";
 	}
 
 	async function prepare(
@@ -161,28 +164,33 @@ export function createConnectionManualInstallationDrainV1(
 			attemptOwner: owner,
 		};
 		const { current, authorization } = claimed;
-		const registrationKey = `mi-${randomBytes(32).toString("base64url")}`;
-		const supplyAttemptId = randomUUID();
-		const template = buildConnectionRegistrationTemplateV1({
-			access: access as Extract<typeof access, { status: "available" }>,
-			clientName: options.clientName,
-			principal: authorization.principal,
-			reference: authorization.reference,
-			authorizationId: authorization.authorizationId,
-			confirmationRevision: authorization.confirmationRevision,
-			association: current.preparation.association,
-			claim: current.claim,
-			target: {
-				deploymentIdentity,
-				hostRef: current.preparation.hostRef,
-				sandboxId: current.preparation.sandboxId,
-				podUid: current.preparation.podUid,
-				sessionGeneration: current.preparation.sessionGeneration,
-				resourceFence: current.preparation.resourceFence,
-				runtimeOrigin: `https://${current.preparation.resourceName}.${options.namespace}.svc:${options.receiverPort}/`,
-			},
-			registrationKey,
-		});
+		const registrationKey =
+			claimed.installation.registrationKey ??
+			`mi-${randomBytes(32).toString("base64url")}`;
+		const supplyAttemptId =
+			claimed.installation.supplyAttemptId ?? randomUUID();
+		const template =
+			claimed.installation.template ??
+			buildConnectionRegistrationTemplateV1({
+				access: access as Extract<typeof access, { status: "available" }>,
+				clientName: options.clientName,
+				principal: authorization.principal,
+				reference: authorization.reference,
+				authorizationId: authorization.authorizationId,
+				confirmationRevision: authorization.confirmationRevision,
+				association: current.preparation.association,
+				claim: current.claim,
+				target: {
+					deploymentIdentity,
+					hostRef: current.preparation.hostRef,
+					sandboxId: current.preparation.sandboxId,
+					podUid: current.preparation.podUid,
+					sessionGeneration: current.preparation.sessionGeneration,
+					resourceFence: current.preparation.resourceFence,
+					runtimeOrigin: `https://${current.preparation.resourceName}.${options.namespace}.svc:${options.receiverPort}/`,
+				},
+				registrationKey,
+			});
 		const rejected = () =>
 			store.settleRegistration({
 				...attempt,
@@ -194,15 +202,21 @@ export function createConnectionManualInstallationDrainV1(
 					commandId: attempt.commandId,
 				},
 			});
-		if (
-			!(await supply(
+		if (claimed.installation.supplyState === "pending") {
+			const supplied = await supply(
 				claimed,
-				"prepare",
 				template,
 				registrationKey,
 				supplyAttemptId,
 				signal,
-			))
+			);
+			if (supplied === "unknown") return;
+			if (supplied !== "confirmed") return rejected();
+		} else if (
+			claimed.installation.supplyState !== "confirmed" ||
+			!claimed.installation.template ||
+			!claimed.installation.registrationKey ||
+			!claimed.installation.supplyAttemptId
 		)
 			return rejected();
 		const deliveryDigest = connectionInstallCommandDigestV1({
@@ -279,17 +293,14 @@ export function createConnectionManualInstallationDrainV1(
 			!template ||
 			!registrationKey ||
 			!supplyAttemptId ||
-			(kind === "revoke" && !receipt) ||
-			!(await supply(
-				claimed,
-				kind,
-				template,
-				registrationKey,
-				supplyAttemptId,
-				signal,
-			))
+			(kind === "revoke" && !receipt)
 		)
 			return settle(rejected);
+		const originalSupplyUnknown =
+			kind === "status" &&
+			claimed.installation.supplyState === "unknown" &&
+			claimed.installation.registrationState === "pending";
+		const wireCommand = originalSupplyUnknown ? "supply_status" : kind;
 		const expected =
 			kind === "revoke" && receipt
 				? {
@@ -300,7 +311,7 @@ export function createConnectionManualInstallationDrainV1(
 				: undefined;
 		const deliveryDigest = connectionInstallCommandDigestV1({
 			schemaVersion: 1,
-			command: kind,
+			command: wireCommand,
 			...attempt,
 			template,
 			supplyAttemptId,
@@ -320,7 +331,7 @@ export function createConnectionManualInstallationDrainV1(
 		try {
 			response = await host.command(
 				{
-					command: kind,
+					command: wireCommand,
 					...attempt,
 					template,
 					supplyAttemptId,
@@ -332,6 +343,13 @@ export function createConnectionManualInstallationDrainV1(
 		} catch {
 			response = undefined;
 		}
+		if (originalSupplyUnknown)
+			return store.recoverSupply({
+				...attempt,
+				authorizationId: claimed.authorization.authorizationId,
+				supplyAttemptId,
+				confirmed: response?.outcome === "supply_confirmed",
+			});
 		return settle(response);
 	}
 
@@ -353,18 +371,7 @@ export function createConnectionManualInstallationDrainV1(
 		});
 		const unknown = () =>
 			store.settleBegin({ ...attempt, command: kind, authorizationId });
-		if (
-			!context ||
-			!(await supply(
-				claimed,
-				kind,
-				context.template,
-				context.registrationKey,
-				context.supplyAttemptId,
-				signal,
-			))
-		)
-			return unknown();
+		if (!context) return unknown();
 		const { template, configuration, receipt, supplyAttemptId } = context;
 		let result: RuntimeOAuthResponseV1 | undefined;
 		if (kind === "begin") {

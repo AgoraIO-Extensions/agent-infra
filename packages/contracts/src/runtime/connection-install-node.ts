@@ -327,7 +327,7 @@ export function buildConnectionRegistrationTemplateV1(input: {
 /** Digest the Host signs and reads back for a prepare/status/revoke command. */
 export function connectionInstallCommandDigestV1(body: {
 	readonly schemaVersion: 1;
-	readonly command: "prepare" | "status" | "revoke";
+	readonly command: "prepare" | "status" | "supply_status" | "revoke";
 	readonly commandId: string;
 	readonly attemptId: string;
 	readonly attemptOwner: string;

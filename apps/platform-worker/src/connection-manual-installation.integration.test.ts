@@ -251,6 +251,9 @@ let readbackHook:
 	| ((request: ConnectionInstallReadbackRequestV1) => Promise<void>)
 	| undefined;
 const readbacks: string[] = [];
+let loseSupply: "before_host" | "after_host" | undefined;
+let supplyCalls = 0;
+let decryptCalls = 0;
 
 async function freePort() {
 	const server = createNetServer();
@@ -444,14 +447,28 @@ beforeAll(async () => {
 	if (receiver?.status !== "available") throw new Error("receiver unavailable");
 	hostServer = startConnectionInstallReceiverServerV1(receiver);
 	await once(hostServer, "listening");
+	const host = createConnectionInstallHostClientV1({
+		ca: hostTls.ca,
+		signing,
+		lookup,
+	});
 	drain = createConnectionManualInstallationDrainV1({
 		store: manual,
-		decryptor,
-		host: createConnectionInstallHostClientV1({
-			ca: hostTls.ca,
-			signing,
-			lookup,
-		}),
+		decryptor: {
+			decrypt(input) {
+				decryptCalls++;
+				return decryptor.decrypt(input);
+			},
+		},
+		host: {
+			...host,
+			async supply(input, signal) {
+				supplyCalls++;
+				if (loseSupply === "before_host") throw new Error("delivery lost");
+				await host.supply(input, signal);
+				if (loseSupply === "after_host") throw new Error("confirmation lost");
+			},
+		},
 		systemAccess: system,
 		approval,
 		clientName: "Agent Infra",
@@ -487,6 +504,9 @@ beforeEach(async () => {
 	connection.losePost = false;
 	readbacks.length = 0;
 	readbackHook = undefined;
+	loseSupply = undefined;
+	supplyCalls = 0;
+	decryptCalls = 0;
 	// Each case starts without the previous case's pending OAuth transaction for the
 	// same user and Agent; the Host serializes one pending installation per pair.
 	const records = join(
@@ -557,7 +577,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		});
 		// The Host checked the supply record before decrypting and the command before sending.
 		expect(readbacks.slice(0, 3)).toEqual([
-			"supply:supply",
+			"supply_delivery:supply",
 			"command:prepare",
 			"command:prepare",
 		]);
@@ -623,9 +643,69 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			status: "completed",
 		});
 		expect(readbacks).toContain("command:begin_status");
+		expect(supplyCalls).toBe(1);
+		expect(decryptCalls).toBe(1);
 		expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
 		expect(await tick()).toBe(0);
 	});
+
+	it.each(["after_host", "before_host"] as const)(
+		"checks only the original supply metadata when delivery confirmation is lost %s",
+		async (failure) => {
+			loseSupply = failure;
+			const projection = await begin();
+			expect(await tick()).toBe(1);
+			const [original] = await client`
+				select m.supply_state, m.registration_state, m.supply_attempt_id, m.registration_key,
+					c.id as prepare_id, c.status, c.delivery_digest
+				from platform.connection_manual_installations m
+				join platform.connection_installation_commands c using (authorization_id)
+				where authorization_id=${projection.authorizationId} and c.command='prepare'`;
+			expect(original).toMatchObject({
+				supply_state: "unknown",
+				registration_state: "pending",
+				status: "unknown",
+				delivery_digest: null,
+			});
+			expect(await tick()).toBe(0);
+			expect(supplyCalls).toBe(1);
+			expect(decryptCalls).toBe(1);
+			expect(connection.requests).toEqual([]);
+
+			loseSupply = undefined;
+			expect(await status(projection.authorizationId)).toMatchObject({
+				status: "unknown",
+			});
+			expect(await tick()).toBe(1);
+			expect(readbacks).toContain("command:supply_status");
+			expect(supplyCalls).toBe(1);
+			expect(decryptCalls).toBe(1);
+			expect(connection.requests).toEqual([]);
+			const [checked] = await client`
+				select m.supply_state, m.registration_state, m.supply_attempt_id, m.registration_key,
+					c.id as prepare_id, c.status
+				from platform.connection_manual_installations m
+				join platform.connection_installation_commands c using (authorization_id)
+				where authorization_id=${projection.authorizationId} and c.command='prepare'`;
+			expect(checked).toMatchObject({
+				supply_state: failure === "after_host" ? "confirmed" : "unknown",
+				registration_state: "pending",
+				supply_attempt_id: original?.supply_attempt_id,
+				registration_key: original?.registration_key,
+				prepare_id: original?.prepare_id,
+				status: failure === "after_host" ? "pending" : "unknown",
+			});
+			expect(await tick()).toBe(failure === "after_host" ? 1 : 0);
+			expect(connection.requests.map(({ method }) => method)).toEqual(
+				failure === "after_host" ? ["POST"] : [],
+			);
+			if (failure === "after_host")
+				expect(connection.requests[0]?.key).toBe(original?.registration_key);
+			expect(supplyCalls).toBe(1);
+			expect(decryptCalls).toBe(1);
+			await noCredentialStored();
+		},
+	);
 
 	it("keeps a lost POST unknown and verifies only by GET of the original key", async () => {
 		connection.losePost = true;
@@ -652,6 +732,8 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		const [row] =
 			await client`select registration_state from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
 		expect(row?.registration_state).toBe("registered");
+		expect(supplyCalls).toBe(1);
+		expect(decryptCalls).toBe(1);
 		await noCredentialStored();
 	});
 
@@ -667,7 +749,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 	it("rejects the supply when the original claim changes after the template is fixed", async () => {
 		const projection = await begin();
 		readbackHook = async (request) => {
-			if (request.purpose === "supply")
+			if (request.purpose === "supply_delivery")
 				await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
 		};
 		await tick();
@@ -675,7 +757,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		const [row] =
 			await client`select registration_state, supply_state, configuration from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
 		expect(row).toMatchObject({
-			registration_state: "failed",
+			registration_state: "pending",
 			configuration: null,
 		});
 		expect(row?.supply_state).not.toBe("confirmed");

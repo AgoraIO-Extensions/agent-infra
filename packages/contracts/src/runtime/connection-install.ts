@@ -16,6 +16,7 @@ export const connectionInstallPathsV1 = {
 	supply: "/internal/runtime/connection-install/v1/supply",
 	prepare: "/internal/runtime/connection-install/v1/prepare",
 	status: "/internal/runtime/connection-install/v1/status",
+	supply_status: "/internal/runtime/connection-install/v1/supply-status",
 	revoke: "/internal/runtime/connection-install/v1/revoke",
 	begin: "/internal/runtime/connection-install/v1/begin",
 	beginStatus: "/internal/runtime/connection-install/v1/begin-status",
@@ -220,6 +221,7 @@ export type ConnectionHostSupplyClaimsV1 = z.infer<
 export const ConnectionInstallCommandV1Schema = z.enum([
 	"prepare",
 	"status",
+	"supply_status",
 	"revoke",
 ]);
 const commandAttempt = {
@@ -252,7 +254,13 @@ export type ConnectionInstallCommandRequestV1 = z.infer<
 export const ConnectionInstallCommandClaimsV1Schema = z.strictObject({
 	...workerClaims,
 	purpose: z.literal("connection_registration"),
-	command: z.enum(["prepare", "status", "revoke", "begin_status"]),
+	command: z.enum([
+		"prepare",
+		"status",
+		"supply_status",
+		"revoke",
+		"begin_status",
+	]),
 	...commandAttempt,
 	authorizationId: OpaqueIdV1Schema,
 	templateDigest: hex64,
@@ -276,6 +284,11 @@ export const ConnectionInstallCommandResponseV1Schema = z.discriminatedUnion(
 		z.strictObject({
 			schemaVersion: z.literal(1),
 			outcome: z.literal("revoked"),
+			commandId: OpaqueIdV1Schema,
+		}),
+		z.strictObject({
+			schemaVersion: z.literal(1),
+			outcome: z.literal("supply_confirmed"),
 			commandId: OpaqueIdV1Schema,
 		}),
 		z.strictObject({
@@ -351,6 +364,7 @@ export type ConnectionInstallBeginStatusRequestV1 = z.infer<
 
 export const ConnectionInstallReadbackPurposeV1Schema = z.enum([
 	"supply",
+	"supply_delivery",
 	"command",
 ]);
 
@@ -371,7 +385,14 @@ export const ConnectionInstallReadbackRequestV1Schema = z.strictObject({
 	command: z
 		.strictObject({
 			...commandAttempt,
-			command: z.enum(["prepare", "status", "revoke", "begin", "begin_status"]),
+			command: z.enum([
+				"prepare",
+				"status",
+				"supply_status",
+				"revoke",
+				"begin",
+				"begin_status",
+			]),
 			requestDigest: hex64,
 			registrationKeyHash: hex64,
 			/** First begin only: the exact configuration and CAS-verified receipt. */

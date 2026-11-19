@@ -95,6 +95,7 @@ function harness(
 			binding: { agentId: "agent-a", ownerId: "owner", associationRevision: 1 },
 		})),
 		settleSupply: vi.fn(async () => true),
+		recoverSupply: vi.fn(),
 		commitDelivery: vi.fn(async () => overrides.commit ?? true),
 		settleRegistration: vi.fn(async () => "registered" as const),
 		settleRevoke: vi.fn(async () => "revoked" as const),
@@ -180,10 +181,6 @@ describe("manual install drain", () => {
 				}),
 			},
 		],
-		[
-			"a Host supply failure",
-			{ supply: async () => Promise.reject(new Error("tls")) },
-		],
 		["a lost delivery commit", { commit: false }],
 	])("sends nothing to Connection after %s", async (_name, overrides) => {
 		const h = harness(overrides as never);
@@ -195,6 +192,21 @@ describe("manual install drain", () => {
 				response: expect.objectContaining({ outcome: "rejected" }),
 			}),
 		);
+	});
+
+	it("keeps failed supply delivery separate from a rejected registration", async () => {
+		const h = harness({
+			supply: async () => {
+				throw new Error("tls");
+			},
+		});
+		await h.drain.drain(["execution-a"], new AbortController().signal);
+		expect(h.store.settleSupply).toHaveBeenCalledWith(
+			expect.objectContaining({ outcome: "unknown" }),
+		);
+		expect(h.store.settleRegistration).not.toHaveBeenCalled();
+		expect(h.host.command).not.toHaveBeenCalled();
+		expect([...h.plaintext].every((byte) => byte === 0)).toBe(true);
 	});
 
 	it("records a lost prepare response as unknown without a second send", async () => {

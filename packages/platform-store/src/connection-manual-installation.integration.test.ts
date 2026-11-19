@@ -717,7 +717,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(status.claimed?.installation.registrationKey).toBe(
 			run.registrationKey,
 		);
-		// The same supply attempt may be redelivered for verification; nothing new is fixed.
+		// Status never receives ciphertext, even for the original supply attempt.
 		expect(
 			await manual.fixSupply({
 				commandId: status.item.commandId,
@@ -728,7 +728,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 				registrationKey: run.registrationKey,
 				supplyAttemptId: run.supplyAttemptId,
 			}),
-		).not.toBeNull();
+		).toBeNull();
 		expect(
 			await manual.fixSupply({
 				commandId: status.item.commandId,
