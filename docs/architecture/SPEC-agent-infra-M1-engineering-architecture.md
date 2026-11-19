@@ -379,7 +379,7 @@ Worker 到 RuntimeHost 的原业务、控制和就绪检查适用下列集群内
 | 要求 | 机制及边界 |
 | --- | --- |
 | Worker 只访问获准 Host | 只连接服务端从持久 Workload 或 Session 分配解析出的精确 origin `http://<Service>.<namespace>.svc:<port>`；拒绝其他 scheme、userinfo、query、hash 与 redirect，调用方不能覆盖 origin。 |
-| 限定访问面 | Agent 级 Workload 与 Session Sandbox 的 NetworkPolicy ingress 只放行 Worker 选择器；healthz 或 Service 存在不证明隔离。 |
+| 限定访问面 | Agent 级 Workload 与 Session Sandbox 的原业务、控制和就绪端口的 NetworkPolicy ingress 只放行 Worker 选择器。healthz 或 Service 存在不证明隔离。安装专用端口见 [§13.5.6](#1356-标准-oauth-安装供应)。 |
 | Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。部署控制其发布、访问、轮换和撤销；Host 所持 token 不能取得 Grant 签名私钥。 |
 | Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。 |
 
@@ -394,9 +394,9 @@ Worker 到 RuntimeHost 的原业务、控制和就绪检查适用下列集群内
 | 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
 | token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
 
-`platformWorker.trustedCaSecretRef` 继续作为 Worker 访问目录、Registry 等 HTTPS 依赖的附加信任入口，不用于 Runtime 传输。部署不签发 Runtime CA 或 server leaf，Runtime Pod 不挂载 TLS Secret，kubelet readiness 使用 HTTP。
+原业务、控制和就绪通道使用 HTTP，其装配不使用 `platformWorker.trustedCaSecretRef`、Runtime CA、server leaf 或 TLS Secret。kubelet readiness 使用 HTTP。`platformWorker.trustedCaSecretRef` 继续为目录、Registry 等 HTTPS 依赖提供附加信任。安装专用 TLS 装配见 [§13.5.6](#1356-标准-oauth-安装供应)。
 
-**迁移。** 旧 TLS Pod 在新期望 Pod 规格下判定为 drift，由既有 fenced 调谐替换，不保留双栈或 HTTPS 兼容层。替换期间沿原受权持久流程停止新准入、核实原执行；旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛，不重放副作用。
+**迁移。** 原业务、控制或就绪通道仍使用旧 TLS 装配时，按这三个通道的新期望规格判定 drift，由既有 fenced 调谐替换，不保留双栈或 HTTPS 兼容层。安装专用端口与 initializer 挂载按 [§13.5.6](#1356-标准-oauth-安装供应) 核验。替换期间沿原受权持久流程停止新准入、核实原执行。旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛，不重放副作用。
 
 **验收。** business、control、readiness 和 Session 路由均覆盖非精确 origin、redirect、userinfo/query/hash、无效 token 和跨用途/主体/Agent/对象的 Grant；分别验证本机 revision/fence/Digest 与旧请求、重复请求的原屏障。Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由。kubelet readiness 的 HTTP scheme、path/port 与实际 Pod/StatefulSet drift 核验保持一致。
 
