@@ -168,8 +168,10 @@ flowchart LR
 实例可在同一 commit 的 `agent-infra-ack/scripts/publish-platform-code.mts:1067-1074,1154,1324,1351,1399`
 及 `publish-api-resources.mts:741,856,920` 回读。
 
-仅 [§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 可使用受认证内部 HTTP，
-承载 API→Worker 的一次读取投递，以及 Host→Worker→承载原 Request 的 API 实例的在线当前确认。
+原生元数据的 API→Worker 读取投递和 Host→Worker→原 API 实例的在线确认只使用
+[§9.3.1 的 `native_metadata_read`](#931-原生元数据读取授权) 规定的受认证内部 HTTP。
+安装专用通道另按 [§13.5.6](#1356-标准-oauth-安装供应) 使用 TLS，适用范围限于该节所列流量。
+禁止新增通用 API↔Worker RPC。
 Worker 保持唯一证明签发与投递方；Host 不直接查询 Platform DB 或 IdentityAdapter。
 该通路只服务于同一原 Request 及其可信绑定的 API/Worker/Host 实例关联；服务身份和实例映射由可信部署装配固定，
 不能接受调用方回调 URL、任意 origin 或通过负载均衡猜测原实例。
@@ -369,7 +371,10 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 #### 内部 Runtime 传输与身份
 
-Worker 到 RuntimeHost 使用集群内明文 HTTP，决策与接受的风险见 [ADR-0020](../adr/0020-use-in-cluster-plaintext-runtime-transport.md)。它只约束 Worker 到 RuntimeHost 的集群内传输，不改变 Connection 或 Host/Grant/Driver wire；跨集群、跨 VPC 或经过公网的 Runtime 访问必须使用 TLS 并另行评审。
+Worker 到 RuntimeHost 的原业务、控制和就绪检查适用下列集群内明文 HTTP 规则，决策见
+[ADR-0020](../adr/0020-use-in-cluster-plaintext-runtime-transport.md)。跨集群、跨 VPC 或经公网
+访问 Runtime 必须使用 TLS 并另行评审。Connection 专用安装流量沿
+[§13.5.6](#1356-标准-oauth-安装供应) 的独立认证和 TLS 边界。
 
 | 要求 | 机制及边界 |
 | --- | --- |
@@ -2428,8 +2433,8 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 Host 在 §13.5.4 的进程保护下，将材料存入独占、有界的 Memory volume 或等价受保护内存。
 需要落文件时沿本节权限及持久确认规则，使用独立于只读 bootstrap/TLS 的 Host 专用写入目标。
 交付不修改已有不可变 Secret，也不向 native 或工具进程增挂卷。Host 在接受并确认前通过
-[§13.5.6](#1356-标准-oauth-安装供应) 的 Worker 回读重新核对当前授权及投递 attempt。
-同一 attempt、同一摘要且材料一致时可幂等确认。响应丢失按原供应引用、修订与 attempt
+[§13.5.6](#1356-标准-oauth-安装供应) 回读原供应投递记录及当前授权。
+同一 attempt、同一摘要且材料一致时可幂等确认。确认丢响应按原供应引用、修订与 attempt
 核实。失败补偿先封闭该 attempt，再清除其材料。撤权、UID、代次、fence 或相关修订改变
 时亦封闭并清除原 attempt，迟到结果不得重新开启。保护失败或无法确认时，供应保持关闭。
 
@@ -2789,29 +2794,39 @@ Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的
 坏非秘密供应只关闭 OAuth 投射，initializer 材料或保护校验失败输出固定不可用结果后退出，
 不留下可用提交绑定；Host 继续拒绝不完整或错误的 OAuth 输入，普通模型及原控制保持。
 
-Service 为该 HTTPS listener 增加独立端口，NetworkPolicy 仅允许声明的 Worker/API selector
-访问。Host 私有供应接收、安装命令与 API callback 各按用途认证。供应就绪后仍为
-`awaiting_verification`，直至按本节核实实际 OAuth 绑定回执。原业务入口沿原合同。
+安装专用 HTTPS listener 使用原 Sandbox Service 的独立端口，按声明的 Worker/API selector
+限制 ingress。Worker→Host 的私有供应和安装命令、API→Host 的 OAuth callback 各按用途
+认证。Host→同 release Worker 的权威回读使用下文的专用 TLS 路径。供应就绪后仍为
+`awaiting_verification`，直至按本节核实实际 OAuth 绑定回执。
 
 **Worker 权威回读。** Host 通过部署固定的同 release Worker 内部 Service 只读核实当前安装。
-API 负责入口身份和安装授权。Worker 从已验证的安装命令与原执行定位记录，使用 Core/Store
-读取当前事实。本机 FileRuntimeStore 只核验本机绑定。Worker 逐次核对原用户与当前使用权、
-Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批、供应引用与修订、
-命令引用与请求摘要、持久 sending、attempt owner/ID/期限、原 outbox claim/fence，以及
-实际 Host ref、Pod UID、Sandbox、sessionGeneration 与 resourceFence。响应只返回允许、
-拒绝或不可用及对应的非秘密关联字段。获准 Worker 以 Platform Store 为权威，不依赖原
-API 副本。可用的在途记录只用于加强核验。
+API 负责入口身份和安装授权。Worker 用已认证的请求定位原执行，通过 Core/Store 读取当前
+事实。本机 FileRuntimeStore 只核验本机绑定。两种回读均检查原用户与当前使用权、
+Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批、原 outbox claim/fence
+及期限，以及实际 Host ref、Pod UID、Sandbox、sessionGeneration 与 resourceFence。
+
+- 供应确认使用独立的供应投递认证用途。Worker 对照已持久化的原供应投递记录，逐项核对
+  供应引用、修订、投递 attempt 和摘要，并确认该 attempt 仍可确认。对已确认的同一
+  attempt，仅按 [§13.5.5](#1355-受保护安装交付) 幂等核实。此回读在 prepare 建立前即可完成。
+- 安装命令使用独立的安装命令认证用途。prepare、status、begin 等命令各按自身的已验证
+  签名定位命令记录。Worker 对照该命令的持久 sending、命令引用、请求摘要、attempt
+  owner/ID/期限，以及该命令绑定的当前供应引用和修订。
+
+响应只返回允许、拒绝或不可用及对应的非秘密关联字段。获准 Worker 以 Platform Store
+为权威，因此回读可由任一获准 Worker 处理，不依赖原 API 副本。在途记录只用于加强核验。
 
 传输复用 [§9.3.1](#931-原生元数据读取授权) 的固定目标、短期证明、有界超时和响应绑定模式。
-Host 使用部署批准的 Sandbox/Pod 隔离身份，以及绑定安装用途与本命令的短期证明。
-每次回读用独立 nonce 或挑战核对发送记录和响应绑定。安装、metadata、业务 Grant 和
-callback-only 认证用途分别验证，旧响应不能用于后续发送。只能复用已批准且满足认证与
-传输加密要求的路径，否则为合格 Sandbox 和同 release Worker 的专用 TLS 端口声明最小
-ingress/egress，精确限定 namespace、selector 和端口。权限隔离沿 [§17](#17-安全基线)。
+Host 使用部署批准的 Sandbox/Pod 隔离身份及短期证明。证明按用途分别绑定原供应投递
+attempt 或本次安装命令。每次请求使用独立 nonce 或挑战并核对响应绑定。旧响应与
+metadata、业务 Grant 或 callback-only 证明均不能用于安装回读。复用同 release Worker
+已批准的路径时必须验证 TLS 和调用身份。否则使用专用 TLS 端口及最小 ingress/egress，
+精确限定 namespace、selector 和端口。权限隔离沿 [§17](#17-安全基线)。
 
-Host 在确认供应、读取材料、发送 EP-1060 或固定完整配置前核验当前回读，等待结束后再次
-核验。缺少规则、目标错误、超时、授权变更或响应校验失败时拒绝继续。已发送后失去确认，
-按 [§13.5.7](#1357-agent-关联与-oauth-安装准备) 保留 unknown 和原操作，停止后续外发。
+Host 在确认供应前核验供应投递记录，在读取材料、发送 EP-1060 或固定完整配置前核验
+本次安装命令，等待结束后再次核验对应记录。缺少规则、目标错误、超时、授权变更或响应
+校验失败时拒绝继续。供应确认丢响应沿 [§13.5.5](#1355-受保护安装交付) 核实原投递 attempt。
+EP-1060 已发送后失去确认，按 [§13.5.7](#1357-agent-关联与-oauth-安装准备) 保留 unknown
+和原登记键，停止后续外发。
 
 **失败、刷新与撤销。** 兑换或轮换响应丢失、崩溃及持久确认失败均保留该安装的不确定状态，
 不自动重发授权码、refresh 或业务调用；只按实际已发布的恢复合同核实，否则由原主体重新
@@ -3058,7 +3073,10 @@ helper 当作生产链路。Web/API 正式创建、同键冲突、丢响应/崩�
 旧修订拒绝均须正负验证。分别替换 prepare 的原用户、Agent 或安装绑定，证明 Host 在读取
 材料及发送 EP-1060 前拒绝。Store 须拒绝不匹配或解绑后迟到的回执，并保证没有授权链接发布。
 验收须从无用户供应的实际 Host 启动开始，覆盖正常冷启动及 reserve 领取后，在同一 Host
-交付供应、完成 prepare 并由首次 begin 原子固定完整配置后生成链接。负例须覆盖未领取的
+交付供应、完成 prepare 并由首次 begin 原子固定完整配置后生成链接。验证空 Host 在
+prepare 尚未进入 sending 时即可确认原供应。供应回读须拒绝缺失或替换的原投递记录，
+以及跨用户、Agent 或安装的记录。部署负例须验证错误 release、未声明目标、明文连接，
+以及使用 metadata、callback-only 或业务证明进行安装回读均被拒绝。另须覆盖未领取的
 reserve 或缺少保护入口的旧 Host，错 Host/Pod、代次或 fence，过期或重放证明、迟到回复、
 Worker 重启无法核实当前记录，以及审批、关联或供应修改。验证发送前失败无外发，发送后
 失去确认进入 unknown，只按原键核实。迟到的旧投递 attempt 不得重新开放，真实 Host 上的

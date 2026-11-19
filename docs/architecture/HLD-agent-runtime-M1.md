@@ -138,7 +138,12 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 
 ### 4.1 内部 Runtime Service 映射
 
-本节细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)。Worker 到 RuntimeHost 使用集群内明文 HTTP（[ADR-0020](../adr/0020-use-in-cluster-plaintext-runtime-transport.md)），沿已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段。执行授权仍由 service token、signed readiness 与业务/控制 Grant 承担，NetworkPolicy ingress 只放行 Worker。
+Worker 到 RuntimeHost 的原业务、控制和就绪检查沿既有 Workload Service、端口和 Manifest，
+使用 [工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口) 的集群内
+HTTP。执行授权由 service token、signed readiness 与业务/控制 Grant 承担，NetworkPolicy
+ingress 只放行 Worker。Connection 安装使用
+[工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
+限定的 HTTPS listener 及 Worker TLS 回读。
 
 **Agent 级 candidate/verified Workload。** 令 `N = agent-` 加可信 `agentId` 的 SHA-256 十六进制前 32 位（`workloadResourceNameV1`，见[现有命名函数](../../apps/platform-worker/src/kubernetes-runtime-comparison.ts)），`NS = workloadInput.policy.namespace`。`P` 取对应 candidate/verified deployment 的 `service.port`；readiness 取该候选 Manifest 的同一端口。
 
