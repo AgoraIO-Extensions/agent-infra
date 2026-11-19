@@ -2520,12 +2520,17 @@ API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系�
 Host 在读材料、发送 EP-1060 前及每次等待后，通过受信内部回读核对原执行、当前供应、原
 claim 及同一持久 sending。回读必须匹配签名中的操作、摘要、领取 fence 和修订。回读失败
 或不一致时拒绝继续。已发送时按原操作保留不确定状态。prepare 只返回绑定原意图的
-非秘密登记回执或受限状态。按照 §13.5.7 核实并提交回执后，生成含真实 clientId 的完整
-配置及摘要，用既有签名 begin 产生授权链接。confirm、status、
-callback 及 Worker 命令领取沿原授权记录重新核对同一 Agent、主体、配置 ref/revision、
-profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker 在已验证的原执行路由内选择
-相应 OAuth 配置，并在最后发送前核对它与目标 Consumer 快照一致。多个 Agent 继续共用现有
-持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
+非秘密登记回执或受限状态。登记结果为 unknown 时，原用户可另行发起签名 status，只执行
+[原键只读核实](#1357-agent-关联与-oauth-安装准备)。该请求使用当前仍有效的原 claim，
+绑定同一原授权、原登记命令的键与摘要、模板与供应修订及当前 unknown，按自身命令领取并
+持久提交 sending。Host 复核该 status 的签名和权威记录后才可只读查询，不要求原 prepare
+仍为 sending。读材料前、发送前及等待后均复核原绑定。登记前的 prepare 与此 status
+核对原用户、Agent、Consumer、安装、profile/source、Pod/代次及登记前供应，无需完整 OAuth
+配置。回执通过 §13.5.7 的 CAS 后，首次签名 begin 携带完整非秘密配置，按本节 Session Host
+启动供应合同固定配置并生成链接。已绑定阶段的 begin、confirm、status、callback 及 Worker
+命令领取按原授权记录复核完整配置 ref/revision、摘要和全部原绑定。浏览器不能提交配置选择器。
+Worker 在原执行路由中从当前记录选取该阶段的输入，在发送前核对目标 Consumer。多个 Agent
+继续共用现有持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
 
 一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
 callback 格式（标准 OAuth 或既有 PAT binding）；逐 Agent 配置必须与该入口一致，拒绝混用。
@@ -2608,8 +2613,8 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象固定 confirmationRevision。
 
 - **登记前。** 手工 EP-1060 原安装记录须固定批准的模板与供应引用及各自修订、原登记键、
-  请求摘要及原命令领取记录。该阶段只有 prepare 可以执行，完整 OAuth 配置与回跳映射
-  尚未绑定。
+  请求摘要及原命令领取记录。该阶段可执行 prepare，或在原登记已为 unknown 时执行原键只读
+  status。完整 OAuth 配置与回跳映射尚未绑定。
 - **回执确认后。** 只有同一原授权、同一安装和匹配回执通过
   [§13.5.7](#1357-agent-关联与-oauth-安装准备) 的 CAS，才可首次绑定完整 OAuth 配置及其
   摘要，并允许触发 begin。已有获准 client 的路径可以直接保存完整配置。首次绑定保留
@@ -2730,15 +2735,18 @@ SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env�
 
 手工 EP-1060 的登记前 bundle 用已批准的登记模板、独立供应引用和当前原用户、Agent、
 关联修订、安装修订及原 Sandbox/Pod/代次绑定启动同一 Host 的 HTTPS listener。它复用
-上述 Service 名称、独立端口、证书、私有卷保护及受限网络入口。此阶段只开放 Worker
-认证的 prepare，begin、confirm 和 callback 保持关闭。Host 先核验 bundle、TLS、实际
-Pod 与原绑定，再按本节签名命令合同接受 prepare，无需 clientId。
+上述 Service 名称、独立端口、证书、私有卷保护及受限网络入口。在完整配置尚未固定时，
+该入口按阶段接受 Worker 签名的 prepare、unknown 原键只读 status，以及回执 CAS 后的
+首次 begin。confirm 和 callback 保持关闭。Host 核验 bundle、TLS、实际 Pod 与原绑定，
+接受 prepare 或原键只读 status 时无需 clientId。
 
-原安装的回执通过 §13.5.7 CAS 后，Worker 将版本绑定的完整非秘密配置经同一受保护内部
-入口交给同一 Host。Host 核对原授权、原 Pod/代次、登记模板和本次已核实回执，严格验证
-完整配置与摘要及真实 clientId，并为同一授权原子固定该配置。只有固定成功后才为该授权
-开启既有 begin 等入口，继续验证完整签名和回跳绑定。配置不匹配、原 claim 失效或 Host
-替换时，维持原事务关闭，恢复沿原键核实规则。
+首次 begin 是同一 Host 接收并固定完整配置的命令。回执经 §13.5.7 CAS 后，Worker 从原
+授权记录取出完整非秘密配置与已核实回执引用，将两者与完整配置摘要、原授权、原 claim、
+原 Pod/代次及登记模板绑定到签名 begin。Host 通过受信内部回读确认原回执 CAS、begin 的
+持久 sending、当前授权及全部原绑定，核对完整配置、摘要和真实 clientId，再为同一授权
+原子固定配置。固定成功才可生成链接，且 callback 在原回跳映射提交后方可转交。后续命令
+使用同一固定配置。配置不同、原 claim 失效或 Host 替换时拒绝 begin，保留原事实，恢复沿
+§13.5.7 原键核实规则。
 
 Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
 保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
@@ -2907,7 +2915,12 @@ client 登记另按原用户＋Agent＋安装修订持久绑定原操作、请�
 已发送事实。相同安装修订下，已封闭状态不可恢复为可用。client 创建
 丢响应、崩溃或回执保存失败时，该安装独立进入 `unknown`；只核实原 client/实例，未核实前
 不换键、创建新安装或新 client 掩盖结果，也不清除已确认的长期 Consumer 关联。
-恢复可依现有精确查询，或已发布的 client 有效期、放弃与回收合同；后者只有在满足其确定
+原 claim 仍有效时，原用户可按 §13.5.6 发起登记前 status。Host 使用仍获准的原服务认证，
+仅向批准的原 Consumer 和登记键发送精确 GET。只有匹配的确定回执和仍有效的原授权通过
+上文 CAS 才可继续 begin。原 claim 已结束、原认证失效或结果仍不确定时，保留原键、目标
+及修订，交 Connection 负责人按原键核实。负责人核实仅归档原操作结果，无权续租、替换
+Host 或恢复已结束的原授权。所有分支均禁止重发结果不明的登记 POST。
+其他已获准路径可按其精确查询或已发布的 client 有效期、放弃与回收合同恢复；后者只有在满足其确定
 条件后才允许下一登记尝试，并保留原不确定事实，不强制增加非标准查询 API。该例外仅涉及
 client 登记，不允许重发不确定的授权码兑换、refresh 或业务操作。
 
@@ -2921,7 +2934,9 @@ API/Worker 不获取用户 Token、PKCE verifier 或 Consumer secret。Host 按 
 逐安装的 client 登记回执核实后，再生成匹配该用户、Agent、安装及 Consumer 的完整 OAuth
 配置 ref/revision。API/Worker 从持久关联捕获同一修订，复用 §13.5.1–§13.5.3 的完整快照校验，
 不按请求或未核实回执更新，不跨用户供应 client 配置；有关联时，不回退到静态 Consumer。
-Runtime 仍经原安装接收器和受控重新装配消费；不热改 Thread 工具快照或释放 unknown 占用。
+已具备完整配置的既有启动供应路径，以及后续安装修订的消费，仍沿原安装接收器和受控重新
+装配合同。首次手工 EP-1060 在同一原 Host 通过首次 begin 固定本次配置，不触发重新装配。
+两条路径均不热改 Thread 工具快照或释放 unknown 占用。
 
 **生命周期与启用。** 创建重试复用原绑定；改名不改身份，展示信息更新使用原 Consumer 和
 服务端修订。停用 Agent 先沿平台原授权封闭新安装/业务动作，并在同一停用事务写入对应
@@ -2991,8 +3006,9 @@ Agent 已停用时，登记 Worker 不再发送登记：从未发送的 `pending
 helper 当作生产链路。Web/API 正式创建、同键冲突、丢响应/崩溃、跨 Agent/用户/来源、停用与
 旧修订拒绝均须正负验证。分别替换 prepare 的原用户、Agent 或安装绑定，证明 Host 在读取
 材料及发送 EP-1060 前拒绝。Store 须拒绝不匹配或解绑后迟到的回执，并保证没有授权链接发布。
-验收须从无 clientId 的实际 Host 装配完成 prepare，并在同一 Host 通过完整配置校验后完成
-begin。生产安装及真实双主体联合验收分别见 [#4155 AC-2 和 AC-3](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155)。
+验收须从无 clientId 的实际 Host 装配完成 prepare，并由同一 Host 在首次 begin 原子固定
+完整配置后生成链接。模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可
+继续 begin。原 claim 结束后只保留负责人核实路径，不生成链接。生产安装及真实双主体联合验收分别见 [#4155 AC-2 和 AC-3](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155)。
 [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) 保留原实现历史。
 
 ## 14. 使用渠道
