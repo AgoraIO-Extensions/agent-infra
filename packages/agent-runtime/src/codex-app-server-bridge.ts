@@ -691,6 +691,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 			"assertCurrent",
 			"onFailure",
 			"close",
+			...(input.drain === undefined ? [] : ["drain"]),
 		]) ||
 		typeof input.epoch !== "string" ||
 		!/^[-a-f0-9]{36}$/.test(input.epoch) ||
@@ -706,13 +707,37 @@ export function receiveCodexSessionExecutorAdmissionV1(
 		configurationInvalid();
 	}
 	const { epoch, assertCurrent, onFailure, close } = input;
+	let drain: CodexSessionExecutorAdmissionV1["drain"];
+	if (input.drain !== undefined) {
+		const keys = [
+			"arm",
+			"bindNativeTurn",
+			"endpoint",
+			"sealStop",
+			"confirm",
+			"proven",
+		];
+		if (
+			!isPlainRecord(input.drain) ||
+			!exactKeys(input.drain, keys) ||
+			keys.some(
+				(key) =>
+					typeof (input.drain as Record<string, unknown>)[key] !== "function",
+			)
+		)
+			configurationInvalid();
+		drain = Object.freeze({
+			...input.drain,
+		}) as CodexSessionExecutorAdmissionV1["drain"];
+	}
 	const assertPinned = () => {
 		if (
 			input.epoch !== epoch ||
 			!isDeepStrictEqual(input.binding, binding) ||
 			input.assertCurrent !== assertCurrent ||
 			input.onFailure !== onFailure ||
-			input.close !== close
+			input.close !== close ||
+			!isDeepStrictEqual(input.drain, drain)
 		)
 			configurationInvalid();
 	};
@@ -731,6 +756,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 			return unsubscribe;
 		},
 		close: () => close.call(input),
+		...(drain ? { drain } : {}),
 	});
 }
 

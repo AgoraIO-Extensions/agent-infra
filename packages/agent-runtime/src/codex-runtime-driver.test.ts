@@ -14256,6 +14256,67 @@ describe("Codex verified Session executor", () => {
 		return { ...f, accepted, admission, events };
 	}
 
+	it("holds a native cancelled terminal until the original executor proves drain", async () => {
+		const f = await fixture();
+		await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);
+		let runnerProved = false;
+		let confirmed = false;
+		const sealStop = vi.fn(async () => {});
+		const bindNativeTurn = vi.fn(async () => {});
+		const driver = await f.start({
+			sessionExecutor: {
+				...f.admission,
+				drain: {
+					async arm() {},
+					bindNativeTurn,
+					endpoint: () => "ws://127.0.0.1:8068/native/synthetic",
+					sealStop,
+					async confirm() {
+						confirmed = runnerProved;
+						return confirmed;
+					},
+					proven: () => confirmed,
+				},
+			},
+		});
+		const original = await driver.execute(submitCommandV2());
+		expect(bindNativeTurn).toHaveBeenCalledWith(
+			"execution-codex",
+			expect.any(String),
+		);
+		const stop = stopCommand(original.nativeSessionRef);
+		f.bridge.setTurnStatus("interrupted");
+		const authorization = {
+			executorStopAuthorization: { fence: 3, expiresAt: Date.now() + 10_000 },
+		};
+		const pending = await driver.execute(stop, authorization);
+		expect(pending.result.outcome).toBe("unknown");
+		expect(sealStop).toHaveBeenCalledWith(
+			"execution-codex",
+			stop.operationId,
+			3,
+			authorization.executorStopAuthorization.expiresAt,
+		);
+		expect(
+			(
+				await driver.replayEvents(original.nativeSessionRef, "execution-codex")
+			).some((event) => event.type === "completed"),
+		).toBe(false);
+		runnerProved = true;
+		expect(await driver.lookupOperation(stop, authorization)).toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "cancelled" } },
+		});
+		expect(
+			(
+				await driver.replayEvents(original.nativeSessionRef, "execution-codex")
+			).at(-1),
+		).toMatchObject({
+			type: "completed",
+			payload: { status: "cancelled" },
+		});
+	});
+
 	async function failedModelFixture(archived = false) {
 		let upstreamCalls = 0;
 		const endpoint = await listen(

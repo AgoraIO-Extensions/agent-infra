@@ -155,8 +155,9 @@ async function run() {
 					waitMs: 500,
 				})
 			).result?.chunks;
-			assert.ok(output?.length);
-			const group = Number(Buffer.from(output[0].chunk, "base64").toString());
+			const firstChunk = output?.[0];
+			assert.ok(firstChunk);
+			const group = Number(Buffer.from(firstChunk.chunk, "base64").toString());
 			assert.ok(Number.isSafeInteger(group) && group > 1);
 			process.kill(-group, 0);
 			await drain.sealStop(
