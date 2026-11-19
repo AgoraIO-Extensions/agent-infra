@@ -1,5 +1,7 @@
 # 私有 Connection callback V2
 
+本文记录历史私有回调协议。当前 M1 的使用边界以[工程 Spec §10.11](../../../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)为准。
+
 [callback-v2.schema.json](callback-v2.schema.json) 是本版本唯一 wire Schema。
 它保留 [V1](callback-v1.md) 的全部 16 个定义，增加严格的 Connection bootstrap、
 operation 与 metadata-only evidence 帧；V1 帧不允许携带 V2 字段。
