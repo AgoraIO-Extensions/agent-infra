@@ -2512,12 +2512,14 @@ UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/re
 API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择或发起准备原安装绑定。
 选择[首次 OAuth 安装供应](#1355-受保护安装交付)的手工 EP-1060 路线且没有已核实 client 时，
 首次安装进入独立的签名 `prepare` 命令。已有获准路径继续沿相应合同。该命令在完整 OAuth
-配置与 clientId 生成前运行，
+配置与 clientId 生成前运行，经本节 Session Host 启动供应的登记前 HTTPS 入口接收。
 沿既有 Worker 到 Host 的受保护内部命令边界验证签发者、受众、签名、用途与期限。
 命令绑定原用户、原 Execution、Agent、Consumer、关联修订、安装修订、Sandbox、Pod、
 会话代次、当前授权与领取 fence，以及批准的系统接入、登记模板、供应引用和各自修订。
-签名同时绑定原登记键及请求摘要。Host 复核原执行、原 claim、当前供应与原命令已持久提交的
-sending，在 EP-1060 发送前和每次等待后复核其当前性。prepare 只返回绑定原意图的
+签名同时绑定原登记键及请求摘要。Worker 提交原命令的 sending 后，才可签发 prepare。
+Host 在读材料、发送 EP-1060 前及每次等待后，通过受信内部回读核对原执行、当前供应、原
+claim 及同一持久 sending。回读必须匹配签名中的操作、摘要、领取 fence 和修订。回读失败
+或不一致时拒绝继续。已发送时按原操作保留不确定状态。prepare 只返回绑定原意图的
 非秘密登记回执或受限状态。按照 §13.5.7 核实并提交回执后，生成含真实 clientId 的完整
 配置及摘要，用既有签名 begin 产生授权链接。confirm、status、
 callback 及 Worker 命令领取沿原授权记录重新核对同一 Agent、主体、配置 ref/revision、
@@ -2601,16 +2603,20 @@ Runtime 对回跳校验单次 state、期限、原代次、精确 callback、响
 
 `PostgresConnectionInstallationAuthorizationTransactionV1` 在 Platform DB 原子保存平台
 自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent、原 Execution/Session、
-Sandbox/generation/Pod、完整 profile/source 与 OAuth 配置引用、当前授权修订、期限、显式
-确认与撤销状态，以及各安装命令的交付状态。所有目标先从原执行和部署的当前受信事实解析，
-请求不能选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象绑定不可变的
-confirmationRevision；确认只推进原事务的状态，绑定/授权修订发生变化即使旧事务失效，
-不得把新修订补进旧 OAuth 事务。发起确认不等于兑换确认；confirm 命令须有原用户对该次
-安装的明确确认，status 不消费确认或推进权限。审计只记录引用、命令和结果状态。
+Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、显式确认与撤销状态，
+以及各安装命令的交付状态。所有目标先从原执行和部署的当前受信事实解析，调用方输入不能
+选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象固定 confirmationRevision。
 
-手工 EP-1060 登记前，原安装记录固定已批准的登记模板与供应引用及各自修订。回执沿
-[§13.5.7](#1357-agent-关联与-oauth-安装准备) 的安装 CAS 推进到完整 begin 配置。
-该转换保留原授权及修订失效规则，关联替换或解绑沿同一节的生命周期合同处理。
+- **登记前。** 手工 EP-1060 原安装记录须固定批准的模板与供应引用及各自修订、原登记键、
+  请求摘要及原命令领取记录。该阶段只有 prepare 可以执行，完整 OAuth 配置与回跳映射
+  尚未绑定。
+- **回执确认后。** 只有同一原授权、同一安装和匹配回执通过
+  [§13.5.7](#1357-agent-关联与-oauth-安装准备) 的 CAS，才可首次绑定完整 OAuth 配置及其
+  摘要，并允许触发 begin。已有获准 client 的路径可以直接保存完整配置。首次绑定保留
+  authorizationId、confirmationRevision、原执行和期限。
+
+完成首次绑定后，绑定或授权修订变化使旧事务失效。confirm 须经原用户明确确认，status
+只读取原事实。审计只记录引用、命令和结果状态。
 
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
@@ -2721,6 +2727,18 @@ Session 证书。该非秘密 bundle 固定原主体、Agent、完整 OAuth 配�
 SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env、Store claim 或请求覆盖。
 `runtimeOrigin` 必须匹配原 Sandbox Service 的 `<service>.<namespace>.svc`，使用独立且不低于
 1024 的 HTTPS 端口；该版本不对静态配置插值，也不为证书或 Consumer 建立新签发服务。
+
+手工 EP-1060 的登记前 bundle 用已批准的登记模板、独立供应引用和当前原用户、Agent、
+关联修订、安装修订及原 Sandbox/Pod/代次绑定启动同一 Host 的 HTTPS listener。它复用
+上述 Service 名称、独立端口、证书、私有卷保护及受限网络入口。此阶段只开放 Worker
+认证的 prepare，begin、confirm 和 callback 保持关闭。Host 先核验 bundle、TLS、实际
+Pod 与原绑定，再按本节签名命令合同接受 prepare，无需 clientId。
+
+原安装的回执通过 §13.5.7 CAS 后，Worker 将版本绑定的完整非秘密配置经同一受保护内部
+入口交给同一 Host。Host 核对原授权、原 Pod/代次、登记模板和本次已核实回执，严格验证
+完整配置与摘要及真实 clientId，并为同一授权原子固定该配置。只有固定成功后才为该授权
+开启既有 begin 等入口，继续验证完整签名和回跳绑定。配置不匹配、原 claim 失效或 Host
+替换时，维持原事务关闭，恢复沿原键核实规则。
 
 Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
 保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
@@ -2973,7 +2991,9 @@ Agent 已停用时，登记 Worker 不再发送登记：从未发送的 `pending
 helper 当作生产链路。Web/API 正式创建、同键冲突、丢响应/崩溃、跨 Agent/用户/来源、停用与
 旧修订拒绝均须正负验证。分别替换 prepare 的原用户、Agent 或安装绑定，证明 Host 在读取
 材料及发送 EP-1060 前拒绝。Store 须拒绝不匹配或解绑后迟到的回执，并保证没有授权链接发布。
-真实双主体 OAuth/MCP/Provider、撤权及最终 Linux 证据另沿 #851 验收。
+验收须从无 clientId 的实际 Host 装配完成 prepare，并在同一 Host 通过完整配置校验后完成
+begin。生产安装及真实双主体联合验收分别见 [#4155 AC-2 和 AC-3](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155)。
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) 保留原实现历史。
 
 ## 14. 使用渠道
 
