@@ -1087,20 +1087,38 @@ Executor 实例或传输会话变化使原准入失效；只有原实例/会话�
 
 在目标 ACK 新 lane 按以下步骤取证。
 
-1. Runtime 负责人提供绑定候选镜像和验收 namespace 的受控合成场景。部署负责人在
-   获准窗口采用该版本，登记两个独占 Session Sandbox 的 Pod UID、epoch 和 fence。
-   A 通过正常 Agent 和会话入口创建执行，使用 `POST /api/v1/conversations/:conversationId/stops`
-   提交原 Stop，用 `GET /api/v2/conversations/:conversationId/executions/:executionId`
-   回读原 Execution。故障场景只接受部署批准的固定选项、指定合成目标和有界期限。
-2. A 对合成目标分别使用角色互换、跨 Pod 投影、旧 epoch 或 fence、过期、重复消费、
-   投影缺失和丢消费确认后重启场景。回读原启动引用、适用期限、首次拒绝时间和固定
-   原因，核对无业务就绪、无新工具执行及无排空证明。再次读原记录核实失效输入由原
-   所有权收口。
-3. 在正常就绪的合成执行中，通过已获准的原生 shell 运行固定同 UID 只读探针。回执只
-   记录交付文件已移除、内存和 FD 访问被拒、子进程未继承材料的布尔结果。保留同镜像
-   正常命令和本实例身份校验的正例。等待原启动有效期结束后，对同一仍运行的 Execution
-   提交一次 Stop，回读原 epoch 认证和排空证明。另在批准场景中阻断短期控制授权续发，
-   确认无证明时仍待核实、占用保留且后继 Turn 未启动。
+1. Runtime 负责人随实现交付版本化的 ACK 运维命令
+   `node deploy/ack/session-executor-acceptance.mjs` 和验收手册。部署负责人预先固定
+   候选镜像、验收 namespace、两个独占合成 Session Sandbox 及窗口期限，签批对应计划。
+   A 用该命令的 `list --plan <计划引用>` 只读取得可选场景和目标，选择下表一个
+   场景 ID 及一个合成目标。sess_fccff4b2 在获准窗口执行
+   `run --plan <计划引用> --scenario <场景 ID> --target <合成目标引用>`，
+   保存返回的运行引用。现场写入和容器 exec 只由 sess_fccff4b2 执行。命令核对
+   计划及目标的当前归属与 fence，只允许下表固定场景及批准的合成目标。
+2. A 使用同版本命令的 `read --plan <计划引用> --run <运行引用>`，经部署批准的
+   只读运维身份回读已持久化的脱敏回执。回执从原启动或原 Stop 的受信记录投影，
+   携带运行引用、场景 ID、目标绑定、原启动引用、绝对期限、首次拒绝时刻、固定原因，
+   以及就绪、工具准入和排空证明状态。已受理 Stop 另回读原 Stop 引用、屏障、占用和
+   后继 Turn 准入状态。缺失证据标记待核实，尚未创建的 Execution 标记不适用。
+   `read` 全程只读，依计划鉴权和精确目标范围返回回执，排除身份材料、原始日志、
+   用户正文与路径。重复读取核对同一原记录。
+3. 已受理的合成业务由 sess_fccff4b2 通过原业务入口
+   `POST /api/v1/conversations/:conversationId/stops` 提交原 Stop。A 使用
+   `GET /api/v2/conversations/:conversationId/executions/:executionId` 读取执行状态，
+   按同一 Execution 和原 Stop 对照业务状态与脱敏回执。启动失败且未创建 Execution
+   时，使用第 2 步的启动回执完成验收。
+
+| 场景 ID | 脱敏回执的通过判据 |
+| --- | --- |
+| `role-mismatch` | 本端角色校验拒绝，目标不就绪且未准入工具或产生排空证明。 |
+| `cross-pod-projection` | 本地 Pod UID 校验拒绝，目标未就绪、未运行工具且无证明，原投影的归属不变。 |
+| `stale-epoch`、`stale-fence` | 各自的原绑定校验拒绝，旧请求无控制或证明权限，原 Stop 的屏障和占用在缺少原证明时保留。 |
+| `expired-bootstrap`、`duplicate-consumption` | 启动投影过期或重复消费对应的固定原因可回读，本次启动不就绪，且无新工具或排空证明。 |
+| `missing-projection` | 原绝对期限到达后回读启动失败，目标未就绪、未运行工具且无证明，并核对原对象的所有权收口。 |
+| `lost-consumption-restart` | 回读原消费待核实，重启实例未复用原投影、未以旧身份准入或出具证明。 |
+| `same-uid-isolation` | 固定只读探针的布尔回执证明交付文件已移除、内存和 FD 访问被拒及子进程未继承身份材料。同一镜像上的普通工具正例通过。 |
+| `stop-after-bootstrap-expiry` | 原启动凭证到期后，原实例仍验证短期控制授权并提供可信排空证明。 |
+| `control-renewal-unavailable` | 无新排空证明，原 Stop 期限及围栏不变，超过确认期限仍待核实、保留占用且后继 Turn 未启动。 |
 
 验收使用真实 Linux 前台和后台进程组，并在同版本 ACK 镜像复验。绑定同一 Execution、
 stopRequestId、fence、Pod UID、executor epoch 和已登记进程组。按 §8.4 的原
