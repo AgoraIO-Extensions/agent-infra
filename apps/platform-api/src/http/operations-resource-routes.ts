@@ -20,7 +20,7 @@ export interface OperationsResourceRoutesDependenciesV2 {
 			signal: AbortSignal,
 		): Promise<unknown>;
 		read(
-			input: OperationsResourceQueryV2,
+			input: OperationsResourceQueryV2 & { includeSessionRequests?: boolean },
 			signal?: AbortSignal,
 		): Promise<unknown>;
 	};
@@ -73,8 +73,10 @@ export function registerOperationsResourceRoutesV2(
 		if (!dependencies.operations)
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		try {
+			const includeSessionRequests =
+				context.req.header(operationsSessionRequestCoverageHeaderV2) === "1";
 			const value = await dependencies.operations.read(
-				query.data,
+				{ ...query.data, includeSessionRequests },
 				AbortSignal.any([context.req.raw.signal, AbortSignal.timeout(5000)]),
 			);
 			const result = OperationsResourcesV2Schema.safeParse(value);
@@ -82,11 +84,6 @@ export function registerOperationsResourceRoutesV2(
 			context.header("Vary", operationsSessionRequestCoverageHeaderV2, {
 				append: true,
 			});
-			if (
-				result.data.budget &&
-				context.req.header(operationsSessionRequestCoverageHeaderV2) !== "1"
-			)
-				delete result.data.budget.sessionRequestCoverage;
 			return context.json(result.data);
 		} catch (error) {
 			if (error instanceof OperationsScopeErrorV2)

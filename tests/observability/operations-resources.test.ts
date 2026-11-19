@@ -352,7 +352,7 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 			},
 			flags?.inventory,
 		);
-		const budget = (await store.read({})).budget;
+		const budget = (await store.read({ includeSessionRequests: true })).budget;
 		expect(budget).toMatchObject({
 			counts: { sessions: 2, unclaimedReserves: 1 },
 			reserveUsage: { cpuCores: 1, memoryBytes: 2048, storageBytes: 8192 },
@@ -432,7 +432,13 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 	expect(oldClient.headers.get("Vary")).toContain(
 		operationsSessionRequestCoverageHeaderV2,
 	);
-	expect(legacySchema.safeParse(await oldClient.json()).success).toBe(true);
+	const legacyResponse = legacySchema.parse(await oldClient.json());
+	const legacyBudget = {
+		sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: null },
+		unaccountedCount: 1,
+		counts: { sessions: 2, retainedStorage: 1, unclaimedReserves: 1 },
+	};
+	expect(legacyResponse.budget).toMatchObject(legacyBudget);
 	const at = new Date(Date.parse(now) + 9).toISOString();
 	await store.write(
 		{
@@ -449,6 +455,7 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 		where cluster_id=${scope.clusterId} and namespace=${scope.namespace}`;
 	const legacy = legacySchema.parse(saved?.snapshot);
 	expect(legacy.budget).not.toHaveProperty("sessionRequestCoverage");
+	expect(legacy.budget).toEqual(legacyResponse.budget);
 	// An older Worker updates the original columns and leaves the companion proof alone.
 	const legacyAt = new Date(Date.parse(now) + 10).toISOString();
 	await sql`update platform.operations_resource_snapshots set observed_at=${legacyAt},
@@ -465,11 +472,16 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 			}),
 		)}
 		where cluster_id=${scope.clusterId} and namespace=${scope.namespace}`;
-	expect((await store.read({})).budget?.sessionUsage.storageBytes).toBe(24576);
+	expect(
+		(await store.read({ includeSessionRequests: true })).budget?.sessionUsage
+			.storageBytes,
+	).toBe(24576);
 
 	await sql`update platform.session_sandbox_allocations set resource_policy=${sql.json({ namespace: scope.namespace })}
 		where sandbox_id=${coldSandbox}`;
-	expect((await store.read({})).budget).toMatchObject({
+	expect(
+		(await store.read({ includeSessionRequests: true })).budget,
+	).toMatchObject({
 		sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: null },
 		sessionRequestCoverage: { cpuCores: 1, memoryBytes: 1, storageBytes: 1 },
 	});
@@ -527,7 +539,9 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 		await sql`delete from platform.session_sandbox_allocations where sandbox_id=${pending}`;
 		await sql`delete from platform.conversations where id='unprepared-usage-session'`;
 	});
-	expect((await store.read({})).budget).toMatchObject({
+	expect(
+		(await store.read({ includeSessionRequests: true })).budget,
+	).toMatchObject({
 		counts: { sessions: 2 },
 		sessionRequestCoverage: {
 			cpuCores: 2,

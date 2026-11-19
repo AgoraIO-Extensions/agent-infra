@@ -75,7 +75,10 @@ export class PostgresOperationsResourceStoreV2 {
 		requestInventory?: OperationsInventoryV2,
 	): Promise<void> {
 		const snapshot = OperationsResourcesV2Schema.parse(value);
-		if (snapshot.budget) delete snapshot.budget.sessionRequestCoverage;
+		if (snapshot.budget?.sessionRequestCoverage)
+			throw new Error(
+				"Operations snapshots require the budget charge projection",
+			);
 		if (
 			snapshot.scope.clusterId !== this.#scope.clusterId ||
 			snapshot.scope.namespace !== this.#scope.namespace
@@ -519,7 +522,7 @@ export class PostgresOperationsResourceStoreV2 {
 	}
 
 	async read(
-		input: OperationsResourceQueryV2,
+		input: OperationsResourceQueryV2 & { includeSessionRequests?: boolean },
 		signal = AbortSignal.timeout(5000),
 	): Promise<OperationsResourcesV2> {
 		signal.throwIfAborted();
@@ -629,7 +632,12 @@ export class PostgresOperationsResourceStoreV2 {
 				if (rows.length > 10000)
 					throw new Error("Operations budget observation is unavailable");
 				const saved = configurations[0];
-				const missing = await tx<{ reserves: string }[]>`select
+				const missing = await tx<
+					{ reserves: string; sessions: string }[]
+				>`select
+				case when ${input.includeSessionRequests === true} then 0 else
+				(select count(*) from platform.session_sandbox_allocations a where a.resource_policy->>'namespace'=${namespace}
+				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=a.sandbox_id)) end as sessions,
 				(select count(*) from platform.session_sandbox_reserves r where r.namespace=${namespace} and r.retired_at is null and r.status <> 'claimed'
 				and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id=r.sandbox_id)
 				and not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id=r.sandbox_id)) as reserves`;
@@ -660,14 +668,17 @@ export class PostgresOperationsResourceStoreV2 {
 						hasConversation: row.has_conversation,
 					})),
 					unaccountedReserves,
-					sessionRequests: {
-						allocations,
-						unscopedSessions,
-						observed,
-						bound,
-						podsComplete,
-						claimsComplete,
-					},
+					unaccountedSessions: Number(missing[0]?.sessions ?? 0),
+					sessionRequests: input.includeSessionRequests
+						? {
+								allocations,
+								unscopedSessions,
+								observed,
+								bound,
+								podsComplete,
+								claimsComplete,
+							}
+						: undefined,
 				});
 			});
 		} catch {

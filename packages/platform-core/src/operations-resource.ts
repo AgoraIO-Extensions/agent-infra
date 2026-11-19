@@ -317,7 +317,8 @@ export function projectOperationsBudgetV2(input: {
 	limits: SessionSandboxResourceBudgetV1 | null;
 	charges: readonly OperationsChargeV2[];
 	unaccountedReserves: number;
-	sessionRequests: Parameters<typeof projectSessionRequests>[0];
+	unaccountedSessions?: number;
+	sessionRequests?: Parameters<typeof projectSessionRequests>[0];
 }): OperationsBudgetV2 {
 	const zero = (): OperationsQuantitiesV2 => ({
 		cpuCores: 0,
@@ -343,17 +344,25 @@ export function projectOperationsBudgetV2(input: {
 		sessionUsage: zero(),
 		unknownUsage: zero(),
 		counts: { unclaimedReserves: 0, sessions: 0, retainedStorage: 0 },
-		unaccountedCount: input.unaccountedReserves,
+		unaccountedCount:
+			input.unaccountedReserves + (input.unaccountedSessions ?? 0),
 	};
 	for (const charge of input.charges) {
-		if (charge.hasAllocation) continue;
+		if (input.sessionRequests && charge.hasAllocation) continue;
 		const isReserve =
 			charge.hasReserve &&
 			!charge.claimed &&
 			!charge.hasConversation &&
 			!charge.hasAllocation;
-		const bucket = isReserve ? result.reserveUsage : result.unknownUsage;
+		const bucket = charge.hasAllocation
+			? result.sessionUsage
+			: isReserve
+				? result.reserveUsage
+				: result.unknownUsage;
+		if (charge.hasAllocation) result.counts.sessions += 1;
 		if (isReserve) result.counts.unclaimedReserves += 1;
+		if (!input.sessionRequests && charge.computeReleased)
+			result.counts.retainedStorage += 1;
 		if (!charge.resources) {
 			bucket.cpuCores = null;
 			bucket.memoryBytes = null;
@@ -381,7 +390,17 @@ export function projectOperationsBudgetV2(input: {
 			ephemeralStorageBytes: null,
 		};
 	}
-	projectSessionRequests(input.sessionRequests, result);
+	if (input.sessionRequests)
+		projectSessionRequests(input.sessionRequests, result);
+	else if (input.unaccountedSessions) {
+		result.counts.sessions += input.unaccountedSessions;
+		result.sessionUsage = {
+			cpuCores: null,
+			memoryBytes: null,
+			storageBytes: null,
+			ephemeralStorageBytes: null,
+		};
+	}
 	return result;
 }
 
