@@ -801,6 +801,74 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		await noCredentialStored();
 	});
 
+	it.each(["unbind", "replace"] as const)(
+		"commits %s before first supply without rolling back unrelated writes",
+		async (operation) => {
+			const projection = await begin();
+			const otherAgent = `unrelated-${operation}`;
+			await seedAgent(otherAgent);
+			const otherCredential = `conn_consumer_${randomBytes(24).toString("base64url")}`;
+			const save = (
+				agentId: string,
+				serviceCredential: string,
+				expectedRevision: number | null,
+			) => ({
+				agentId,
+				ownerId: "owner",
+				connectionAgentId: `connection-${agentId}`,
+				credentialFingerprint:
+					connectionServiceCredentialFingerprintV1(serviceCredential),
+				expectedRevision,
+				encrypt: (
+					binding: Parameters<
+						typeof connectionServiceCredentialSecretInputV1
+					>[0],
+				) =>
+					encryptor.encrypt(
+						connectionServiceCredentialSecretInputV1(
+							binding,
+							serviceCredential,
+							new Date().toISOString(),
+						),
+					),
+			});
+			const changed = await associations.execute(async (tx) => {
+				await tx.saveManual(save(otherAgent, otherCredential, null));
+				return operation === "unbind"
+					? tx.deleteManual("agent-a", 1)
+					: tx.saveManual(save("agent-a", credential, 1));
+			});
+			expect(changed).toBe(operation === "unbind" ? true : 2);
+			const [old] = await client`
+				select a.status, m.template, m.registration_state, m.revoke_state
+				from platform.connection_installation_authorizations a
+				join platform.connection_manual_installations m on m.authorization_id=a.id
+				where a.id=${projection.authorizationId}`;
+			expect(old).toMatchObject({
+				status: "revoked",
+				template: null,
+				registration_state: "closed",
+				revoke_state: "not_required",
+			});
+			await expect(
+				associations.execute((tx) => tx.current("agent-a")),
+			).resolves.toEqual(
+				operation === "unbind"
+					? null
+					: { source: "manual", associationRevision: 2 },
+			);
+			await expect(
+				associations.execute((tx) => tx.current(otherAgent)),
+			).resolves.toEqual({
+				source: "manual",
+				associationRevision: 1,
+			});
+			expect(await tick()).toBe(0);
+			expect(connection.requests).toEqual([]);
+			expect(decryptCalls).toBe(0);
+		},
+	);
+
 	it("fences installs on unbind so no begin or link is produced afterwards", async () => {
 		const projection = await begin();
 		await tick();

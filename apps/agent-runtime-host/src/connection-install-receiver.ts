@@ -159,9 +159,13 @@ interface RegistrationLedger {
 	receipt?: Receipt;
 }
 
-interface FixedInstallation {
+interface FixedInstallationBinding {
 	readonly template: Template;
 	readonly supplyAttemptId: string;
+	readonly expiresAt: number;
+}
+
+interface FixedInstallation extends FixedInstallationBinding {
 	readonly client: ProtectedRuntimeOAuthClient;
 }
 
@@ -738,8 +742,9 @@ async function assembleConnectionInstallReceiver(
 			? slot
 			: undefined;
 	}
-	function reserveSlot() {
+	async function reserveSlot() {
 		if (slots.size < maxSlots) return true;
+		await reclaimFixedInstallations();
 		for (const [authorizationId, slot] of slots) {
 			if (slot.state !== "confirmed") continue;
 			try {
@@ -801,7 +806,7 @@ async function assembleConnectionInstallReceiver(
 			);
 		};
 		if (conflicting()) conflict();
-		if (!slots.has(authorizationId) && !reserveSlot()) unavailable();
+		if (!slots.has(authorizationId) && !(await reserveSlot())) unavailable();
 		const outcome = await readbackOutcome({
 			...supplyReadback(admitted, body.attemptId),
 			purpose: slots.has(authorizationId) ? "supply" : "supply_delivery",
@@ -810,6 +815,7 @@ async function assembleConnectionInstallReceiver(
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
 		if (conflicting()) conflict();
+		assertOriginal(template);
 		const supplyKey = exporter(
 			connectionInstallExporterLabelsV1.supplyKey,
 			32,
@@ -847,10 +853,6 @@ async function assembleConnectionInstallReceiver(
 			credential.fill(0);
 			if (!same || existing.state !== "confirmed") conflict();
 		} else {
-			if (!reserveSlot()) {
-				credential.fill(0);
-				unavailable();
-			}
 			slots.set(authorizationId, {
 				binding,
 				template,
@@ -1325,7 +1327,13 @@ async function assembleConnectionInstallReceiver(
 		const consumedName = `install-first-begin-${recordKey}.json`;
 		if ((await readRecord(consumedName)) !== undefined) conflict();
 		assertOriginal(template);
-		if (fixed.size >= maxFixedInstallations) unavailable();
+		if (fixed.size >= maxFixedInstallations) {
+			await reclaimFixedInstallations();
+			if (fixed.size >= maxFixedInstallations) unavailable();
+			assertOriginal(template);
+			if (!confirmedSlot(template, templateDigest, body.supplyAttemptId))
+				conflict();
+		}
 		// 6. Worker authority for this exact begin command.
 		const outcome = await readbackOutcome(
 			commandReadback(admitted, body.supplyAttemptId, {
@@ -1399,6 +1407,7 @@ async function assembleConnectionInstallReceiver(
 			fixed.set(template.authorizationId, {
 				template,
 				supplyAttemptId: body.supplyAttemptId,
+				expiresAt: result.expiresAt,
 				client: opened.client,
 			});
 			assertOriginal(template);
@@ -1523,13 +1532,20 @@ async function assembleConnectionInstallReceiver(
 			`install-first-begin-result-${recordKey}.json`,
 		);
 		if (!stored) return;
-		parseFirstBeginResult(stored, consumption);
-		const opened = await openFixedClient(template, consumer, configuration);
-		fixed.set(template.authorizationId, {
+		const result = parseFirstBeginResult(stored, consumption);
+		const binding = {
 			template,
 			supplyAttemptId: consumption.supplyAttemptId,
-			client: opened.client,
-		});
+			expiresAt: result.expiresAt,
+		};
+		try {
+			await assertFixedBindingCurrent(binding);
+		} catch (error) {
+			if (isAuthorizationDenial(error)) return;
+			// Restore the candidate during an outage. Its use still requires live authority.
+		}
+		const opened = await openFixedClient(template, consumer, configuration);
+		fixed.set(template.authorizationId, { ...binding, client: opened.client });
 	}
 	async function reloadFixedInstallations() {
 		const directory = await openProtectedStandardMcpDirectory(records);
@@ -1557,17 +1573,39 @@ async function assembleConnectionInstallReceiver(
 		}
 	}
 	/** The fixed installation still belongs to this Host session and Execution. */
-	async function assertFixedCurrent(entry: FixedInstallation) {
+	async function assertFixedBindingCurrent(entry: FixedInstallationBinding) {
+		if (entry.expiresAt <= now()) denied();
 		const admitted = await admitTemplate(entry.template);
 		const outcome = await readbackOutcome(
 			supplyReadback(admitted, entry.supplyAttemptId),
 		);
-		if (outcome === "denied") {
-			closeSlot(entry.template.authorizationId);
-			denied();
-		}
+		if (outcome === "denied" || entry.expiresAt <= now()) denied();
 		if (outcome !== "allowed") unavailable();
 		assertOriginal(admitted.template);
+	}
+
+	async function assertFixedCurrent(entry: FixedInstallation) {
+		try {
+			await assertFixedBindingCurrent(entry);
+		} catch (error) {
+			const id = entry.template.authorizationId;
+			if (isAuthorizationDenial(error) && fixed.get(id) === entry) {
+				fixed.delete(id);
+				closeSlot(id);
+				await entry.client.close();
+			}
+			throw error;
+		}
+	}
+
+	async function reclaimFixedInstallations() {
+		for (const entry of fixed.values()) {
+			try {
+				await assertFixedCurrent(entry);
+			} catch {
+				// Only definite invalidation frees capacity. Unavailable authority preserves the entry.
+			}
+		}
 	}
 
 	const runtimeHost = runtime.host;

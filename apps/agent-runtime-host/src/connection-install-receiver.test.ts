@@ -220,36 +220,48 @@ function denial() {
 }
 
 function createStore() {
+	const additional = new Map<
+		string,
+		{ principal: { kind: "user"; id: string }; reference: typeof reference }
+	>();
 	const state = {
 		hostRef: "host-ref-a",
 		principal: { kind: "user" as const, id: "alice" },
 		reference: { ...reference },
 		revoked: false,
 	};
+	const resolve = (value: typeof reference) =>
+		additional.get(value.executionId) ?? state;
 	return {
 		state,
+		addInstallation(template: ConnectionRegistrationTemplateV1) {
+			additional.set(template.reference.executionId, template);
+		},
 		async resolveOriginalExecutionBinding(value: typeof reference) {
-			if (state.revoked || !isDeepStrictEqual(value, state.reference))
+			const binding = resolve(value);
+			if (state.revoked || !isDeepStrictEqual(value, binding.reference))
 				throw denial();
 			return {
-				principal: { ...state.principal },
-				scope: { ...state.reference },
+				principal: { ...binding.principal },
+				scope: { ...binding.reference },
 			};
 		},
 		assertOriginalExecutionBindingCurrent(
 			value: typeof reference,
 			principal: { kind: string; id: string },
 		) {
+			const binding = resolve(value);
 			if (
 				state.revoked ||
-				!isDeepStrictEqual(value, state.reference) ||
-				principal.kind !== state.principal.kind ||
-				principal.id !== state.principal.id
+				!isDeepStrictEqual(value, binding.reference) ||
+				principal.kind !== binding.principal.kind ||
+				principal.id !== binding.principal.id
 			)
 				throw denial();
 		},
 		async resolveOriginalExecutionHostSessionRef(value: typeof reference) {
-			if (state.revoked || !isDeepStrictEqual(value, state.reference))
+			const binding = resolve(value);
+			if (state.revoked || !isDeepStrictEqual(value, binding.reference))
 				throw denial();
 			return state.hostRef;
 		},
@@ -259,14 +271,19 @@ function createStore() {
 function createReadback() {
 	const calls: ConnectionInstallReadbackInputV1[] = [];
 	const queued: ConnectionInstallReadbackOutcomeV1[] = [];
+	const invalid = new Set<string>();
 	return {
 		calls,
+		invalid,
 		queue: (...outcomes: ConnectionInstallReadbackOutcomeV1[]) => {
 			queued.push(...outcomes);
 		},
 		async readback(input: ConnectionInstallReadbackInputV1) {
 			calls.push(structuredClone(input));
-			return queued.shift() ?? "allowed";
+			return (
+				queued.shift() ??
+				(invalid.has(input.authorizationId) ? "denied" : "allowed")
+			);
 		},
 	};
 }
@@ -484,13 +501,16 @@ async function receiver(
 		port?: number;
 		environment?: Record<string, string | undefined>;
 		listen?: boolean;
+		store?: ReturnType<typeof createStore>;
+		readback?: ReturnType<typeof createReadback>;
+		now?: () => number;
 	} = {},
 ) {
 	const directory = options.directory ?? (await privateDirectory());
 	const port = options.port ?? (await freePort());
 	const runtimeOrigin = `https://${host}:${port}/`;
-	const store = createStore();
-	const readback = createReadback();
+	const store = options.store ?? createStore();
+	const readback = options.readback ?? createReadback();
 	const connection = createConnection();
 	const assembly = await prepareConnectionInstallReceiverV1({
 		environment: environmentFor(runtimeOrigin, options.environment),
@@ -504,6 +524,7 @@ async function receiver(
 		store,
 		fetch: connection.fetch,
 		readback,
+		now: options.now,
 	});
 	if (assembly?.status !== "available") throw Error("receiver unavailable");
 	let server: Server | undefined;
@@ -1725,6 +1746,88 @@ describe("Connection first begin", () => {
 				)
 			).status,
 		).toBe(403);
+	}, 20_000);
+
+	it("reclaims retired Host capacity and restores the live installation after restart", async () => {
+		const f = await receiver();
+		const candidates = Array.from(
+			{ length: 10 },
+			(_, i) => `installation-${i}`,
+		).sort((a, b) => sha256(a).localeCompare(sha256(b)));
+		const withInstall = (receiver: Receiver, authorizationId: string) => ({
+			...receiver,
+			template: templateFor(receiver.runtimeOrigin, {
+				authorizationId,
+				reference: {
+					...reference,
+					executionId: `execution-${authorizationId}`,
+				},
+				principal: { kind: "user", id: `user-${authorizationId}` },
+			}),
+		});
+		const statusFor = (receiver: Receiver) =>
+			exchange(
+				receiver,
+				"/internal/runtime/oauth/v1/status",
+				() => standardRequest(receiver, "status"),
+				{ authorization: `Bearer ${serviceToken}` },
+			);
+		const original = candidates.slice(0, 8).map((id) => withInstall(f, id));
+		for (const item of original) {
+			f.store.addInstallation(item.template);
+			await supplied(item);
+			expect((await firstBegin(item)).status).toBe(200);
+		}
+		const live = withInstall(f, candidates[8] as string);
+		f.store.addInstallation(live.template);
+		expect((await supply(live)).status).toBe(503);
+		for (const item of original)
+			f.readback.invalid.add(item.template.authorizationId);
+
+		expect((await supply(live)).status).toBe(200);
+		expect((await firstBegin(live)).status).toBe(200);
+		expect((await statusFor(live)).status).toBe(200);
+		await f.stop();
+		const restarted = await receiver({
+			directory: f.directory,
+			port: f.port,
+			store: f.store,
+			readback: f.readback,
+		});
+		expect(
+			(await statusFor(withInstall(restarted, live.template.authorizationId)))
+				.status,
+		).toBe(200);
+		expect(
+			(await statusFor(withInstall(restarted, candidates[0] as string))).status,
+		).toBe(503);
+		const next = withInstall(restarted, candidates[9] as string);
+		f.store.addInstallation(next.template);
+		await supplied(next);
+		expect((await firstBegin(next)).status).toBe(200);
+	}, 35_000);
+
+	it("does not load a fixed installation whose OAuth transaction expired", async () => {
+		const f = await receiver();
+		await registered(f);
+		const begun = await firstBegin(f);
+		expect(begun.status).toBe(200);
+		const expiry = Number(begun.body.expiresAt);
+		expect(expiry).toBeGreaterThan(Date.now());
+		await f.stop();
+		const restarted = await receiver({
+			directory: f.directory,
+			port: f.port,
+			now: () => expiry,
+		});
+		const status = await exchange(
+			restarted,
+			"/internal/runtime/oauth/v1/status",
+			() => standardRequest(restarted, "status"),
+			{ authorization: `Bearer ${serviceToken}` },
+		);
+		expect(status.status).toBe(503);
+		expect(restarted.readback.calls).toEqual([]);
 	}, 20_000);
 
 	it("reloads the fixed installation after a Host restart without reopening the first begin", async () => {

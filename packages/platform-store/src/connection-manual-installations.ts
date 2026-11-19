@@ -496,7 +496,7 @@ export async function fenceRetiredConnectionManualInstallationsV1(
 	// registration may exist is kept closed with its original key as unknown.
 	await tx.execute(sql`
 		update platform.connection_manual_installations
-		set supply_state = 'closed',
+		set supply_state = case when template is null then 'pending' else 'closed' end,
 			registration_state = case when registration_state in ('pending') then 'closed' else registration_state end,
 			revoke_state = case
 				when registration_state in ('sending','unknown','registered') and revoke_state in ('not_required','pending','sending') then 'unknown'
