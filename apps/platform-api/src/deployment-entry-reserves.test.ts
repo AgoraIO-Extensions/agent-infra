@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { connectionSystemAccessFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { sessionSandboxReserveDigestV1 } from "@agent-infra/platform-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -111,6 +112,7 @@ const encryptionKeys = {
 	],
 };
 let directory: string;
+let configurationSequence = 0;
 beforeEach(async () => {
 	vi.resetModules();
 	directory = await mkdtemp(join(tmpdir(), "api-reserve-entry-"));
@@ -133,8 +135,15 @@ afterEach(async () => {
 	await rm(directory, { recursive: true, force: true });
 });
 
-async function load(modulePolicy?: unknown, registrationPolicy?: unknown) {
-	const configuration = join(directory, "configuration.mjs");
+async function load(
+	modulePolicy?: unknown,
+	registrationPolicy?: unknown,
+	additionalExports = "",
+) {
+	const configuration = join(
+		directory,
+		`configuration-${++configurationSequence}.mjs`,
+	);
 	await writeFile(
 		configuration,
 		`
@@ -153,6 +162,7 @@ export const apiInput = {
   ${modulePolicy === undefined ? "" : `sessionSandboxReserves: ${JSON.stringify(modulePolicy)},`}
   ${registrationPolicy === undefined ? "" : `connectionConsumerRegistration: ${JSON.stringify(registrationPolicy)},`}
 };
+${additionalExports}
 `,
 	);
 	vi.stubEnv(
@@ -221,6 +231,96 @@ it.each([true, false])(
 		expect(
 			JSON.stringify(entry.readPlatformSessionReserveDeploymentV1()),
 		).not.toContain("fixture-proxy-sentinel");
+	},
+);
+
+it.each(["unconfigured", "manual", "full"] as const)(
+	"keeps manual OAuth dormant in the API production assembly with %s configuration",
+	async (mode) => {
+		const systemAccess = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			audience: "https://connection.example.test/mcp",
+			egressProfile: { ref: "fixture-egress", revision: "r1" },
+			issuer: "https://connection.example.test/",
+			oauthCallbackUrl:
+				"https://platform.example.test/api/connection-installations/callback",
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionSystemAccessFingerprintV1(systemAccess),
+			egressEnforced: true,
+			source: { ref: "fixture-approval", revision: "r1" },
+		};
+		const manual =
+			mode === "unconfigured"
+				? ""
+				: 'export const connectionManualInstallationClientName = "synthetic-install-name";';
+		const system =
+			mode === "full"
+				? `export const connectionSystemAccess = ${JSON.stringify(systemAccess)}; export const connectionSystemAccessApproval = ${JSON.stringify(approval)};
+apiInput.connectionInstallation = { publicOrigin, manualInstallation: { systemAccess: connectionSystemAccess, approval: connectionSystemAccessApproval, clientName: "synthetic-install-name" } };`
+				: "";
+		const authFile = join(directory, "unused-callback-file");
+		vi.stubEnv("PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE", authFile);
+		const blocked = await load(
+			undefined,
+			undefined,
+			`${manual}
+${system}`,
+		);
+		expect(
+			blocked.createPlatformApiAssemblyInput().connectionInstallation,
+		).toBeUndefined();
+		expect(
+			blocked.createPlatformApiAssemblyInput().connectionInstallationCallback,
+		).toBeUndefined();
+
+		vi.resetModules();
+		const standard = {
+			schemaVersion: 1,
+			ref: "standard",
+			revision: "r1",
+			clientId: "standard-client",
+			issuer: systemAccess.issuer,
+			authorizationEndpoint: `${systemAccess.issuer}oauth/authorize`,
+			tokenEndpoint: `${systemAccess.issuer}oauth/token`,
+			revocationEndpoint: `${systemAccess.issuer}oauth/revoke`,
+			resource: systemAccess.audience,
+			scope: "mcp",
+			callbackUrl: systemAccess.oauthCallbackUrl,
+			runtimeOrigin: "https://runtime.example.test:3443/",
+			configFingerprint: approval.configFingerprint,
+			source: approval.source,
+		};
+		const active = await load(
+			undefined,
+			undefined,
+			`${manual}
+export const connectionInstallationConfiguration = ${JSON.stringify(standard)};`,
+		);
+		const input = active.createPlatformApiAssemblyInput();
+		expect(input.connectionInstallation?.configuration).toEqual(standard);
+		expect(input.connectionInstallation?.manualInstallation).toBeUndefined();
+		expect(typeof input.connectionInstallationCallback?.forward).toBe(
+			"function",
+		);
+		const warnings = vi
+			.mocked(console.warn)
+			.mock.calls.flat()
+			.filter(
+				(value) =>
+					typeof value === "string" &&
+					value.includes("CONNECTION_MANUAL_INSTALLATION_DORMANT"),
+			);
+		expect(warnings).toHaveLength(mode === "unconfigured" ? 0 : 2);
+		for (const warning of warnings)
+			expect(JSON.parse(String(warning))).toEqual({
+				service: "platform-api",
+				code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+				dependency: "EP-1123",
+			});
 	},
 );
 

@@ -515,6 +515,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const systemAccessMode =
 		input.connectionSystemAccess !== undefined ||
 		input.connectionSystemAccessApproval !== undefined;
+	const { manualInstallation: _manualInstallation, ...standardInstallation } =
+		input.connectionInstallation ?? {};
+	const hasStandardInstallation =
+		standardInstallation.configuration !== undefined ||
+		standardInstallation.bindingsByAgent !== undefined ||
+		standardInstallation.bindingsByAgentAndPrincipal !== undefined;
 	const connectionCapability: ReturnType<typeof createConnectionCapability> =
 		!systemAccessMode
 			? createConnectionCapability(
@@ -627,11 +633,11 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.operations ? { operations: input.operations } : {}),
 		// System access never carries a static or shared Consumer installation.
-		...(input.connectionInstallation && !systemAccessMode
+		...(hasStandardInstallation && !systemAccessMode
 			? {
 					connectionInstallation: {
-						...input.connectionInstallation,
-						...(input.connectionInstallation.bindingsByAgent !== undefined
+						...standardInstallation,
+						...(standardInstallation.bindingsByAgent !== undefined
 							? {}
 							: {
 									profile: input.connectionConsumerProfile,

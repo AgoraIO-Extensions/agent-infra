@@ -275,6 +275,19 @@ const {
 )) as DeploymentConfiguration;
 
 if (
+	configuredConnectionInstallBootstrap !== undefined ||
+	configuredConnectionInstallWorker !== undefined
+) {
+	console.warn(
+		JSON.stringify({
+			service: "platform-worker",
+			code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+			dependency: "EP-1123",
+		}),
+	);
+}
+
+if (
 	ownerConnectionBindings !== undefined ||
 	ownerConnectionBindingConfiguration !== undefined
 )
@@ -999,17 +1012,6 @@ async function createPreparedOwning(
 			...(installationStore ? { commandStore: installationStore } : {}),
 		};
 	}
-	const manualInstall = await startManualConnectionInstallation(
-		workload.databaseUrl,
-		workload.policy.namespace,
-	);
-	if (manualInstall) {
-		authorizedInstallation = {
-			...authorizedInstallation,
-			authorize: authorizedInstallation?.authorize ?? (async () => null),
-			manual: manualInstall.drain,
-		};
-	}
 	const evaluationAuthority = evaluationPolicy
 		? new PostgresEvaluationTaskAuthorityV1({
 				databaseUrl: workload.databaseUrl,
@@ -1030,7 +1032,6 @@ async function createPreparedOwning(
 				: {}),
 			closeDeployment: async () => {
 				await connectionDelivery?.close();
-				await manualInstall?.close();
 				await installationStore?.close();
 				await evaluationAuthority?.close();
 				await sessionOwnerSecrets.close();
@@ -1064,12 +1065,6 @@ async function createPreparedOwning(
 					{
 						serviceToken,
 						oauthProvisioning: configuredConnectionOAuthProvisioning,
-						...(configuredConnectionInstallBootstrap
-							? {
-									connectionInstallBootstrap:
-										configuredConnectionInstallBootstrap,
-								}
-							: {}),
 					},
 				),
 			resolveRuntimeHost: async (
@@ -1101,105 +1096,6 @@ async function createPreparedOwning(
 		},
 		wecom: wecomDeployment,
 	};
-}
-
-async function startManualConnectionInstallation(
-	databaseUrl: string,
-	namespace: string,
-) {
-	const bootstrap = configuredConnectionInstallBootstrap;
-	const config = configuredConnectionInstallWorker;
-	if (!config) return undefined;
-	if (
-		!bootstrap ||
-		staticPerAgentConnectionBindings ||
-		configuredConnectionOAuthProvisioning
-	)
-		throw new Error("CONNECTION_MANUAL_INSTALLATION_CONFIGURATION_INVALID");
-	const workerOrigin = new URL(bootstrap.workerOrigin);
-	if (
-		workerOrigin.protocol !== "https:" ||
-		workerOrigin.href !== bootstrap.workerOrigin ||
-		workerOrigin.pathname !== "/" ||
-		!workerOrigin.port ||
-		!workerOrigin.hostname.endsWith(`.${namespace}.svc`) ||
-		workerOrigin.username ||
-		workerOrigin.password ||
-		workerOrigin.search ||
-		workerOrigin.hash
-	)
-		throw new Error("CONNECTION_MANUAL_INSTALLATION_CONFIGURATION_INVALID");
-	const [
-		{ PostgresConnectionManualInstallationStoreV1 },
-		{ createSecretKeyringDecryptorV1 },
-		{ createConnectionInstallHostClientV1 },
-		{ createConnectionInstallReadbackServerV1 },
-		{ createConnectionManualInstallationDrainV1 },
-		{ connectionHostDeploymentIdentityV1 },
-	] = await Promise.all([
-		import("@agent-infra/platform-store"),
-		import("@agent-infra/secret-store/worker"),
-		import("./connection-install-host-client.js"),
-		import("./connection-install-readback-server.js"),
-		import("./connection-manual-installation-drain.js"),
-		import("@agent-infra/contracts/runtime"),
-	]);
-	const policy = {
-		systemAccess: bootstrap.configuration,
-		approval: bootstrap.approval,
-		clientName: bootstrap.clientName,
-	};
-	const store = new PostgresConnectionManualInstallationStoreV1({
-		databaseUrl,
-		directory,
-		policy,
-	});
-	let readback:
-		| ReturnType<typeof createConnectionInstallReadbackServerV1>
-		| undefined;
-	try {
-		const host = createConnectionInstallHostClientV1({
-			ca: readFileSync(config.hostCaFile, "utf8"),
-			signing,
-		});
-		const drain = createConnectionManualInstallationDrainV1({
-			store,
-			host,
-			...policy,
-			decryptor: createSecretKeyringDecryptorV1(config.keyring),
-			namespace,
-			receiverPort: bootstrap.port,
-			deploymentWorkerId: signing.workerId,
-			attemptOwner: instanceId,
-		});
-		const listener = createConnectionInstallReadbackServerV1({
-			key: readFileSync(config.readbackKeyFile, "utf8"),
-			cert: readFileSync(config.readbackCertFile, "utf8"),
-			port: Number(workerOrigin.port),
-			deploymentServiceToken: serviceToken,
-			namespace,
-			deploymentIdentity: connectionHostDeploymentIdentityV1({
-				namespace,
-				workerId: signing.workerId,
-			}),
-			readback: (request) => store.readback(request),
-		});
-		readback = listener;
-		await listener.listen();
-		return {
-			drain,
-			async close() {
-				try {
-					await listener.close();
-				} finally {
-					await store.close();
-				}
-			},
-		};
-	} catch {
-		await Promise.allSettled([readback?.close(), store.close()]);
-		throw new Error("CONNECTION_MANUAL_INSTALLATION_CONFIGURATION_INVALID");
-	}
 }
 
 async function createConversationPrepared(signal: AbortSignal) {
@@ -1289,9 +1185,6 @@ export async function createPlatformSessionReserveWorkerOptionsV1(
 		adapter: createSessionSandboxReserveAdapterV1({
 			workload: deployment.workload,
 			serviceToken,
-			...(configuredConnectionInstallBootstrap
-				? { connectionInstallBootstrap: configuredConnectionInstallBootstrap }
-				: {}),
 		}),
 		signal,
 	};
@@ -1471,9 +1364,6 @@ export async function readPlatformSessionDemandImagesV1(request: unknown) {
 			},
 			serviceToken,
 			oauthProvisioning: configuredConnectionOAuthProvisioning,
-			...(configuredConnectionInstallBootstrap
-				? { connectionInstallBootstrap: configuredConnectionInstallBootstrap }
-				: {}),
 			configurationModule: new URL("./configuration.mjs", import.meta.url),
 			// The same mounted reserve file field the reserve deployment readback reports.
 			configurationSourceSha: (

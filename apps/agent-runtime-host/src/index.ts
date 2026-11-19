@@ -68,7 +68,6 @@ import {
 } from "./connection-consumer-profile.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
-	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
 import {
@@ -549,7 +548,6 @@ export async function assembleRuntimeHost(
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
-	let connectionInstall: ConnectionInstallReceiverAssemblyV1 | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
 	let detachSessionExecutorFailure: (() => void) | undefined;
@@ -571,8 +569,6 @@ export async function assembleRuntimeHost(
 				// Cancel native transport before Host waits for active remote work.
 				if (sessionExecutor) await closeDriver?.();
 				if (oauth?.status === "available") await oauth.client.close();
-				if (connectionInstall?.status === "available")
-					await connectionInstall.close();
 			} finally {
 				try {
 					await assembledHost?.close();
@@ -626,17 +622,21 @@ export async function assembleRuntimeHost(
 			keyId,
 			issuer: expectedIssuer,
 		});
-		connectionInstall = await prepareConnectionInstallReceiverV1({
-			environment,
-			dataDirectory,
-			agentId,
-			workerId: runtimeWorkerId,
-			key: publicKey,
-			keyId,
-			issuer: expectedIssuer,
-			serviceToken,
-			store,
-		});
+		if (
+			Object.keys(environment).some(
+				(key) =>
+					key.startsWith("AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_") &&
+					environment[key] !== undefined,
+			)
+		) {
+			console.warn(
+				JSON.stringify({
+					service: "agent-runtime-host",
+					code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+					dependency: "EP-1123",
+				}),
+			);
+		}
 		// Protected Standard MCP is assembled only for a pinned, explicitly gated
 		// native transport. Connection credentials remain in this Host client.
 		const standardConnectionClient =
@@ -1054,7 +1054,6 @@ export async function assembleRuntimeHost(
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
 			...(oauth ? { oauth } : {}),
-			...(connectionInstall ? { connectionInstall } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
 			serviceToken,
 			port,

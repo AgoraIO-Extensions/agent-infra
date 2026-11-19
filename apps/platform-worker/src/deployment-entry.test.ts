@@ -583,7 +583,7 @@ export const createWorkloadReadinessLedgerV1 = () => ({});`,
 		join(directory, "conversation-deployment.js"),
 		`
 export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; return async () => 'original-control'; };
-export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; return async () => ({ status: 'observed', resources: [] }); };
+export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; globalThis.manualBootstrap = options.connectionInstallBootstrap; return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
 	await writeFile(
@@ -698,6 +698,11 @@ try {
    process.exit(0);
  }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+	if (process.env.RUN_MANUAL_DORMANCY) {
+	 console.log(JSON.stringify({ manualDrain: !!conversation.connectionInstallation?.manual, manualBootstrap: !!globalThis.manualBootstrap, standard: conversation.connectionInstallation?.configuration?.clientId ?? null }));
+	 await conversation.closeDeployment?.();
+	 process.exit(0);
+	}
 	if (process.env.RUN_INSTALLATION_APPROVAL) {
 	 const mode = process.env.RUN_INSTALLATION_APPROVAL;
 	 const {PostgresConnectionInstallationAuthorizationTransactionV1: Store} = await import('@agent-infra/platform-store');
@@ -1781,6 +1786,63 @@ it("passes only the trusted configuration-module Session OAuth provisioning bund
 		await writeFile(path, original);
 	}
 });
+
+it.each(["unconfigured", "manual", "full"] as const)(
+	"keeps manual OAuth dormant in the Worker production assembly with %s configuration",
+	async (mode) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const bootstrap =
+			mode === "unconfigured"
+				? ""
+				: `export const connectionInstallBootstrap = {
+			port: 3445, clientName: "synthetic-install-name", workerOrigin: "https://worker.worker-binding.svc:3446/",
+			configuration: {}, approval: {}, tlsSecretRef: { name: "fixture-tls" }, callbackAuthSecretRef: { name: "fixture-callback" },
+			workerSelector: { component: "platform-worker" }, apiSelector: { component: "platform-api" },
+		};`;
+		const worker =
+			mode === "full"
+				? `export const connectionInstallWorker = {
+			hostCaFile: "/fixture-must-not-read/ca.crt", readbackCertFile: "/fixture-must-not-read/server.crt",
+			readbackKeyFile: "/fixture-must-not-read/server.key", keyring: { keys: [] },
+		};`
+				: "";
+		try {
+			for (const standard of [false, true]) {
+				await writeFile(
+					path,
+					`${original}
+${bootstrap}
+${worker}
+${
+	standard
+		? `${approvedPatInstallationModule}
+delete connectionInstallation.configuration.patBinding;`
+		: ""
+}`,
+				);
+				const result = run({ RUN_MANUAL_DORMANCY: "true" });
+				expect(result.status, result.stderr).toBe(0);
+				expect(JSON.parse(result.stdout)).toEqual({
+					manualDrain: false,
+					manualBootstrap: false,
+					standard: standard ? "platform-client" : null,
+				});
+				expect(result.stderr.trim()).toBe(
+					mode === "unconfigured"
+						? ""
+						: JSON.stringify({
+								service: "platform-worker",
+								code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+								dependency: "EP-1123",
+							}),
+				);
+			}
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it.each([
 	["legacy OAuth", false, true, false],

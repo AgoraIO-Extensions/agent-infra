@@ -71,10 +71,18 @@ import {
 	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
-import { closeRuntimeHost, startRuntimeHost } from "./index.js";
+import {
+	assembleRuntimeHost,
+	closeRuntimeHost,
+	startRuntimeHost,
+} from "./index.js";
 
 const protection = vi.hoisted(() => ({ check: vi.fn() }));
 // Receiver tests exercise real private files and TLS, not Linux acceptance.
+vi.mock("./process-protection.js", () => ({
+	assertRuntimeProcessProtection: vi.fn(),
+}));
+
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
 }));
@@ -1771,6 +1779,56 @@ describe("Connection first begin", () => {
 });
 
 describe("Connection install listener wiring", () => {
+	it.each(["unconfigured", "manual", "full"] as const)(
+		"keeps the manual receiver dormant in the Host production assembly with %s configuration",
+		async (mode) => {
+			const directory = await privateDirectory();
+			const port = await freePort();
+			const manual =
+				mode === "full"
+					? environmentFor(`https://${host}:${port}/`)
+					: mode === "manual"
+						? { AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1" }
+						: {};
+			const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+			try {
+				const runtime = await assembleRuntimeHost({
+					...manual,
+					AGENT_INFRA_RUNTIME_DRIVER: "fake",
+					AGENT_INFRA_RUNTIME_DATA_DIR: directory,
+					AGENT_INFRA_RUNTIME_AGENT_ID: "agent-a",
+					AGENT_INFRA_RUNTIME_WORKER_ID: "worker-a",
+					AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "worker-key",
+					AGENT_INFRA_RUNTIME_GRANT_ISSUER: "platform",
+					AGENT_INFRA_RUNTIME_SERVICE_TOKEN: serviceToken,
+				});
+				try {
+					expect(runtime).not.toHaveProperty("connectionInstall");
+					expect(warning.mock.calls).toEqual(
+						mode === "unconfigured"
+							? []
+							: [
+									[
+										JSON.stringify({
+											service: "agent-runtime-host",
+											code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+											dependency: "EP-1123",
+										}),
+									],
+								],
+					);
+				} finally {
+					await runtime.close();
+				}
+			} finally {
+				warning.mockRestore();
+			}
+		},
+	);
+
 	it("starts and closes the install listener with the Runtime Host", async () => {
 		const f = await receiver({ listen: false });
 		const server = startRuntimeHost({
