@@ -326,11 +326,31 @@ export class PostgresOperationsResourceStoreV2 {
 		}
 		if (!this.#workloadNamespaceRef) return bindings;
 		const workloads = await this.#sql<
-			{ agent_id: string; name: string; revision: string; state: unknown }[]
+			{
+				agent_id: string;
+				name: string;
+				revision: string;
+				state: unknown;
+				stopped: boolean | null;
+				fence: string | null;
+				lifecycle_revision: string | null;
+				claim_uid: string | null;
+			}[]
 		>`
-			select w.agent_id, coalesce(app.name, w.agent_id) as name, w.revision, w.state
+			select w.agent_id, coalesce(app.name, w.agent_id) as name, w.revision, w.state,
+				(app.status='stopped' and app.desired_state='stopped') as stopped,
+				app.fence, app.workload_revision as lifecycle_revision, claim.uid as claim_uid
 			from platform.workload_reconciliations w join platform.agents a on a.id=w.agent_id
-			left join platform.agent_applications app on app.agent_id=w.agent_id limit 10001`;
+			left join platform.agent_applications app on app.agent_id=w.agent_id
+			left join lateral (
+				select i.uid from platform.operations_resource_identities i
+				where i.cluster_id=${this.#scope.clusterId} and i.namespace=${this.#scope.namespace}
+				and i.agent_id=w.agent_id and i.session_id is null and i.kind='PersistentVolumeClaim'
+				and i.name=w.state#>>'{verified,deployment,persistentVolume,name}'
+				and i.first_seen <= i.last_seen
+				order by i.last_seen desc limit 1
+			) claim on w.state->>'phase'='stopped' and app.status='stopped'
+			limit 10001`;
 		if (workloads.length > 10000)
 			throw new Error("Operations bindings unavailable");
 		for (const row of workloads) {
@@ -352,6 +372,38 @@ export class PostgresOperationsResourceStoreV2 {
 					deployment.namespaceRef !== this.#workloadNamespaceRef
 				)
 					continue;
+				const state = decoded.state;
+				if (
+					row.stopped &&
+					state.phase === "stopped" &&
+					state.fence === Number(row.fence) &&
+					state.sourceLifecycleRevision === Number(row.lifecycle_revision) &&
+					!deployment.multiService &&
+					deployment.persistentVolume.retention === "retain" &&
+					row.claim_uid
+				) {
+					bindings.push({
+						agentId: row.agent_id,
+						agentName: row.name,
+						sessionId: null,
+						sandboxId: null,
+						namespace: this.#scope.namespace,
+						generation: decoded.state.identity.generation,
+						revision: deployment.configRevision,
+						resourceFence: state.fence,
+						ownership: "agent",
+						retainedStorage: true,
+						identities: [
+							{
+								kind: "PersistentVolumeClaim",
+								name: deployment.persistentVolume.name,
+								uid: row.claim_uid,
+							},
+						],
+						controllerUid: decoded.state.identity.uid,
+						workloadRevision: state.revision,
+					});
+				}
 				bindings.push({
 					agentId: row.agent_id,
 					agentName: row.name,

@@ -13,7 +13,10 @@ import {
 	OperationsHistoryV2Schema,
 	OperationsResourcesV2Schema,
 } from "../../packages/contracts/src/pilot/operations-resource.js";
-import { agentConfigurationConformanceRecordV1 } from "../../packages/platform-core/src/agent-configuration.conformance.js";
+import {
+	agentConfigurationConformanceRecordV1,
+	agentConfigurationCustomImageRecordV1,
+} from "../../packages/platform-core/src/agent-configuration.conformance.js";
 import { emptyOperationsResourcesV2 } from "../../packages/platform-core/src/operations-resource.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { PostgresOperationsResourceStoreV2 } from "../../packages/platform-store/src/operations-resource.js";
@@ -593,6 +596,175 @@ it("binds Agent Workload samples to the verified controller without reusing anot
 		uid: "workload-pod-uid",
 		ownership: "agent",
 	});
+});
+
+it("attributes an unmounted stopped Workload claim only with the previously verified UID and current stop evidence", async () => {
+	const agentId = "stopped-workload";
+	const deployment = workloadDesiredFixture(1, agentId);
+	const name = deployment.service.name;
+	const claim = deployment.persistentVolume.name;
+	const uid = "retained-workload-pvc";
+	const version = JSON.parse(
+		JSON.stringify({
+			configuration: {
+				...agentConfigurationCustomImageRecordV1,
+				agentId,
+				revision: 1,
+				source: {
+					...agentConfigurationCustomImageRecordV1.source,
+					imageDigest: deployment.imageDigest,
+					identityResponsibility: "self-managed",
+				},
+			},
+			deployment,
+		}),
+	);
+	await sql`insert into platform.agents(id) values (${agentId}), ('other-owner-agent')`;
+	await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,management_revision,approval_revision,desired_state,workload_revision,fence,trace_id,request_id,submitted_at)
+		values ('stopped-application',${agentId},'first-owner','Stopped Agent','fixture','stopped',2,1,'stopped',2,2,'trace','request',now())`;
+	await sql`insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at)
+		values (${agentId},2,${sql.json({
+			schemaVersion: 1,
+			agentId,
+			sourceConfigurationRevision: 1,
+			sourceLifecycleRevision: 2,
+			revision: 2,
+			fence: 2,
+			phase: "stopped",
+			candidate: version,
+			verified: version,
+			verifiedRevision: 1,
+			identity: { uid: "stopped-controller", generation: 3 },
+			rollback: false,
+			failureCode: null,
+			attempts: 0,
+		})},now())`;
+	await sql`insert into platform.operations_resource_identities(cluster_id,namespace,uid,kind,name,agent_id,first_seen,last_seen)
+		values (${scope.clusterId},${scope.namespace},${uid},'PersistentVolumeClaim',${claim},${agentId},now(),now()),
+		(${scope.clusterId},${scope.namespace},'foreign-pvc','PersistentVolumeClaim',${claim},'other-owner-agent',now(),now())`;
+	const annotations = {
+		"agent-infra.agora.io/agent-id": agentId,
+		"agent-infra.agora.io/fence": "1",
+	};
+	const pvc = {
+		metadata: {
+			uid,
+			name: claim,
+			namespace: scope.namespace,
+			resourceVersion: "1",
+			annotations,
+			labels: {
+				"agent-infra.agora.io/agent": name,
+				"agent-infra.agora.io/revision": "1",
+			},
+		},
+		spec: { resources: { requests: { storage: "20Gi" } } },
+		status: { phase: "Bound" },
+	};
+	const controller = {
+		metadata: {
+			uid: "stopped-controller",
+			name,
+			namespace: scope.namespace,
+			generation: 3,
+			annotations: { ...annotations, "agent-infra.agora.io/fence": "2" },
+			labels: { "agent-infra.agora.io/revision": "2" },
+		},
+		spec: {
+			replicas: 0,
+			template: {
+				spec: { volumes: [{ persistentVolumeClaim: { claimName: claim } }] },
+			},
+		},
+		status: { observedGeneration: 3 },
+	};
+	const bindings = await store.readBindings();
+	const collect = (
+		volumes: unknown[],
+		statefulsets: unknown[] = [controller],
+		pods: unknown[] = [],
+		podsTruncated = false,
+	) =>
+		collectOperationsSnapshotV2({
+			scope,
+			readCluster: false,
+			cacheOwner: "unused",
+			cacheInventoryLimit: 48,
+			bindings,
+			now: () => new Date(Date.now() + 4500).toISOString(),
+			read: async (kind) => ({
+				items:
+					({ volumes, statefulsets, pods } as Record<string, unknown[]>)[
+						kind
+					] ?? [],
+				truncated: kind === "pods" && podsTruncated,
+			}),
+		});
+	const foreign = { ...pvc, metadata: { ...pvc.metadata, uid: "foreign-pvc" } };
+	const sameNameReplacement = {
+		...pvc,
+		metadata: { ...pvc.metadata, uid: "recreated-pvc" },
+	};
+	// The same forged Agent labels do not replace either claimed UID or create a new identity.
+	for (const [volume, controllers, pods] of [
+		[foreign, [controller], []],
+		[sameNameReplacement, [controller], []],
+		[
+			pvc,
+			[
+				{
+					...controller,
+					metadata: { ...controller.metadata, uid: "recreated-controller" },
+				},
+			],
+			[],
+		],
+		[pvc, [{ ...controller, spec: { ...controller.spec, replicas: 1 } }], []],
+		[
+			pvc,
+			[controller],
+			[
+				{
+					metadata: { namespace: scope.namespace },
+					spec: controller.spec.template.spec,
+				},
+			],
+		],
+	] as const) {
+		const sample = await collect([volume], [...controllers], [...pods]);
+		expect(sample.resources[0]).toMatchObject({
+			ownerUid: null,
+			retainedStorage: false,
+		});
+	}
+	const partial = await collect([pvc], [controller], [], true);
+	expect(partial.resources[0]).toMatchObject({ ownerUid: null });
+	await store.write(await collect([pvc, foreign, sameNameReplacement]));
+	const path = `/api/v2/ops/resources?agentId=${agentId}`;
+	const read = async () =>
+		OperationsResourcesV2Schema.parse(await (await app().request(path)).json());
+	const result = await read();
+	expect(result.resources).toMatchObject([
+		{
+			uid,
+			agentId,
+			role: "workload",
+			ownership: "agent",
+			ownershipReason: null,
+			retainedStorage: true,
+			usage: { storageBytes: null },
+		},
+	]);
+	expect(result.agents).toMatchObject([
+		{
+			agentId,
+			pods: 0,
+			volumes: 1,
+			requests: { storageBytes: 20 * 1024 ** 3 },
+		},
+	]);
+	await sql`update platform.agent_applications set status='available',desired_state='running',service_availability='starting',fence=3 where agent_id=${agentId}`;
+	expect((await read()).resources).toEqual([]);
 });
 
 it("collects container samples while a cache source fails without counting executor as another Pod", async () => {
