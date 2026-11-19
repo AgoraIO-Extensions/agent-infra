@@ -3822,6 +3822,12 @@ helm upgrade --install agent-infra ./agent-infra \
 rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 release，旧 lane 停用后的 3–7 天保留窗口由单独的
 下线流程负责。任何需要生产 host、DNS、外部 Connection 或业务验收的步骤都属于现场 owner 门禁，不由源码 PR 代签。
 
+如果旧 Worker 无法安全接管新版持久状态，部署 owner 先发布可读取并处理该状态、但默认不写入该状态的兼容版本。
+兼容版本通过健康检查后，下一次 Helm 升级才能启用写入，且 `--atomic` 的回退目标仍须能处理已经提交的新版状态。
+证书调谐及不兼容路由的保留状态采用这一顺序。手动回退到兼容版本之前的版本时，由 owner 先停用受影响的 Agent，
+回读其停用与 fence 收敛后再回退。具体步骤见
+[生产 Helm 部署手册的升级与回滚章节](https://bitbucket.agoralab.co/projects/AI/repos/helm/browse/agent-infra/docs/deploy.md)。
+
 ### 21.3 本地开发
 
 - Docker Compose 提供 PostgreSQL、对象存储和部署边界 Fake。

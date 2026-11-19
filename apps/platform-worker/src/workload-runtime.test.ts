@@ -495,6 +495,7 @@ function fixture(
 		async tick(times: number) {
 			for (let i = 0; i < times; i++) {
 				await createWorkloadReconciliationV1({
+					certificateReconciliationWrites: true,
 					runtime: createWorkloadRuntimeV1(options),
 					maximumAttempts: 2,
 					store: {
