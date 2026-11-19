@@ -37,6 +37,7 @@ import {
 	type ConnectionManualInstallationPolicyV1,
 	captureConnectionManualInstallationPolicyV1,
 	connectionManualCurrentAllowedV1,
+	lockConnectionManualAssociationForInstallationV1,
 	manualTemplateMatchesCurrentV1,
 	readConnectionManualInstallationFactsV1,
 } from "./connection-manual-installations.js";
@@ -101,15 +102,34 @@ export class PostgresConnectionManualInstallationStoreV1 {
 
 	async #transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
 		try {
-			return await this.#database.transaction(async (tx) => {
-				await tx.execute(sql`set local lock_timeout = '5s'`);
-				await tx.execute(sql`set local statement_timeout = '15s'`);
-				return work(tx);
-			});
+			return await this.#database.transaction(
+				async (tx) => {
+					await tx.execute(sql`set local lock_timeout = '5s'`);
+					await tx.execute(sql`set local statement_timeout = '15s'`);
+					return work(tx);
+				},
+				{ isolationLevel: "read committed" },
+			);
 		} catch (error) {
 			if (error instanceof ConnectionInstallationErrorV1) throw error;
 			unavailable();
 		}
+	}
+
+	async #lockInstallation(
+		tx: Transaction,
+		authorizationId: string,
+		lock: "update" | "share" = "update",
+	): Promise<(Row & { associationLocked: boolean }) | undefined> {
+		const associationLocked =
+			await lockConnectionManualAssociationForInstallationV1(
+				tx,
+				authorizationId,
+			);
+		await tx.execute(sql`select id from platform.connection_installation_authorizations
+			where id=${authorizationId} ${lock === "update" ? sql`for update` : sql`for share`}`);
+		const row = await this.#row(tx, authorizationId, lock);
+		return row ? { ...row, associationLocked } : undefined;
 	}
 
 	async #facts(tx: Transaction, userId: string, executionId: string) {
@@ -123,13 +143,16 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/** Expired attempts become unknown, including the registration they were sending. */
-	async #sweep(tx: Transaction) {
-		await tx.execute(sql`
+	async #sweep() {
+		await this.#transaction((tx) =>
+			tx.execute(sql`
 			update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
 			where (status='sending' or (status='pending' and command='prepare' and attempt_id is not null)) and attempt_expires_at is not null and attempt_expires_at <= clock_timestamp()
 				and authorization_id in (select authorization_id from platform.connection_manual_installations)
-		`);
-		await tx.execute(sql`
+		`),
+		);
+		await this.#transaction((tx) =>
+			tx.execute(sql`
 			update platform.connection_manual_installations m
 			set registration_state = case when m.registration_state = 'sending' then 'unknown' else m.registration_state end,
 				supply_state = case when m.registration_state = 'pending' then 'unknown' else m.supply_state end,
@@ -143,12 +166,15 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					where c.authorization_id = m.authorization_id and c.attempt_id is not null
 						and (c.status = 'sending' or (c.command='prepare' and c.status='pending'))
 						and c.command in ('prepare','status'))
-		`);
-		await tx.execute(sql`
+		`),
+		);
+		await this.#transaction((tx) =>
+			tx.execute(sql`
 			update platform.connection_manual_installations m set revoke_state='unknown', revision=m.revision+1, updated_at=clock_timestamp()
 			where m.revoke_state='sending' and not exists (select 1 from platform.connection_installation_commands c
 				where c.authorization_id = m.authorization_id and c.command='revoke' and c.status='sending')
-		`);
+		`),
+		);
 	}
 
 	/** Pending manual commands of Executions this Worker currently holds. */
@@ -170,8 +196,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			executionIds.length === 0
 		)
 			return [];
+		await this.#sweep();
 		const rows = await this.#transaction(async (tx) => {
-			await this.#sweep(tx);
 			return tx.execute(sql`
 				select c.id, c.command, c.authorization_id, a.execution_id
 				from platform.connection_installation_commands c
@@ -293,18 +319,19 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				!manualCommands.includes(command.command as ManualCommand)
 			)
 				return null;
-			const row = await this.#row(
+			const row = await this.#lockInstallation(
 				tx,
 				command.authorization_id as string,
-				"update",
 			);
 			if (!row) return null;
 			const authorization = this.#authorization(row);
-			const current = await this.#facts(
-				tx,
-				authorization.principal.id,
-				authorization.reference.executionId,
-			);
+			const current = row.associationLocked
+				? await this.#facts(
+						tx,
+						authorization.principal.id,
+						authorization.reference.executionId,
+					)
+				: null;
 			if (
 				!current ||
 				current.claim.owner !== input.attemptOwner ||
@@ -372,6 +399,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		},
 		command: ManualCommand,
 		allowReservedPrepare = false,
+		includeExpired = false,
 	) {
 		const [row] = await tx.execute(sql`
 			select id, authorization_id, delivery_digest, attempt_expires_at > clock_timestamp() as live
@@ -381,7 +409,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
 			for update
 		`);
-		return row?.live === true ? row : undefined;
+		return row && (includeExpired || row.live === true) ? row : undefined;
 	}
 
 	/**
@@ -415,6 +443,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		);
 		const keyHash = connectionRegistrationKeyHashV1(input.registrationKey);
 		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, template.authorizationId);
 			if (
 				!(await this.#sending(
 					tx,
@@ -424,14 +453,15 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				))
 			)
 				return null;
-			const row = await this.#row(tx, template.authorizationId, "update");
 			if (row?.live !== true) return null;
 			const authorization = this.#authorization(row);
-			const current = await this.#facts(
-				tx,
-				authorization.principal.id,
-				authorization.reference.executionId,
-			);
+			const current = row.associationLocked
+				? await this.#facts(
+						tx,
+						authorization.principal.id,
+						authorization.reference.executionId,
+					)
+				: null;
 			if (
 				!current ||
 				current.claim.owner !== input.attemptOwner ||
@@ -496,6 +526,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly outcome: "confirmed" | "unknown";
 	}): Promise<boolean> {
 		return this.#transaction(async (tx) => {
+			if (!(await this.#lockInstallation(tx, input.authorizationId)))
+				return false;
 			if (
 				input.command !== "prepare" ||
 				!(await this.#sending(tx, input, "prepare", true))
@@ -525,8 +557,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly confirmed: boolean;
 	}): Promise<void> {
 		await this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
 			const status = await this.#sending(tx, input, "status");
-			const row = await this.#row(tx, input.authorizationId, "update");
 			if (
 				!status?.delivery_digest ||
 				row?.live !== true ||
@@ -537,11 +569,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			)
 				return;
 			const authorization = this.#authorization(row);
-			const current = await this.#facts(
-				tx,
-				authorization.principal.id,
-				authorization.reference.executionId,
-			);
+			const current = row.associationLocked
+				? await this.#facts(
+						tx,
+						authorization.principal.id,
+						authorization.reference.executionId,
+					)
+				: null;
 			if (
 				!input.confirmed ||
 				!current ||
@@ -592,9 +626,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}): Promise<boolean> {
 		if (!/^[a-f0-9]{64}$/.test(input.deliveryDigest)) return false;
 		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
 			const command = await this.#sending(tx, input, input.command, true);
 			if (!command || command.delivery_digest !== null) return false;
-			const row = await this.#row(tx, input.authorizationId, "update");
 			const supplyStatus =
 				input.command === "status" &&
 				row?.supply_state === "unknown" &&
@@ -653,9 +687,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				? undefined
 				: ConnectionInstallCommandResponseV1Schema.parse(input.response);
 		return this.#transaction(async (tx) => {
-			const command = await this.#sending(tx, input, input.command, true);
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			const command = await this.#sending(tx, input, input.command, true, true);
 			if (!command) return "stale";
-			const row = await this.#row(tx, input.authorizationId, "update");
 			if (!row) return "stale";
 			if (
 				response?.outcome !== "rejected" &&
@@ -673,6 +707,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				await this.#finishCommand(tx, input.commandId, "unknown");
 				return "unknown" as const;
 			};
+			if (command.live !== true || row.live !== true) return unknown();
 			if (
 				!response ||
 				response.outcome === "unknown" ||
@@ -706,12 +741,22 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				template,
 				row.registration_key as string,
 			);
+			await this.#lockConsumerSettlement(tx, row);
 			const authorization = this.#authorization(row);
-			const current = await this.#facts(
-				tx,
-				authorization.principal.id,
-				authorization.reference.executionId,
-			);
+			const current = row.associationLocked
+				? await this.#facts(
+						tx,
+						authorization.principal.id,
+						authorization.reference.executionId,
+					)
+				: null;
+			const [deadline] = await tx.execute(sql`
+				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp() as live
+				from platform.connection_installation_commands c
+				join platform.connection_installation_authorizations a on a.id=c.authorization_id
+				where c.id=${input.commandId}
+			`);
+			if (deadline?.live !== true) return unknown();
 			const bindable =
 				receipt !== undefined &&
 				current !== null &&
@@ -781,6 +826,23 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				status: "awaiting_confirmation",
 				expiresAt: authorization.expiresAt,
 			});
+			const accepted = await tx.execute(sql`
+				update platform.connection_installation_commands c
+				set status='completed', updated_at=clock_timestamp()
+				from platform.connection_installation_authorizations a
+				where c.id=${input.commandId} and a.id=c.authorization_id
+					and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and c.attempt_expires_at > clock_timestamp()
+					and a.expires_at > clock_timestamp()
+					and exists (select 1 from platform.outbox_items o
+						where o.scope_type='conversation' and o.scope_id=${authorization.reference.conversationId}
+							and o.payload->>'executionId'=${authorization.reference.executionId}
+							and o.status='processing' and o.lease_owner=${input.attemptOwner}
+							and o.lease_expires_at > clock_timestamp()
+							and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+				returning c.id
+			`);
+			if (accepted.length !== 1) return unknown();
 			await tx.execute(sql`
 				update platform.connection_manual_installations
 				set registration_state='registered', receipt=${JSON.stringify(receipt)}::jsonb,
@@ -802,17 +864,11 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					${sha256(JSON.stringify(["begin", authorization.reference.executionId, input.authorizationId]))},
 					'pending')
 			`);
-			await this.#finishCommand(tx, input.commandId, "completed");
 			return "registered";
 		});
 	}
 
-	/** The actual Consumer is pinned by the first verified receipt of an association. */
-	async #consumerConsistent(
-		tx: Transaction,
-		row: Row,
-		receipt: ConnectionRegistrationReceiptV1,
-	) {
+	async #lockConsumerSettlement(tx: Transaction, row: Row) {
 		// Hold the association-wide lock until the receipt and its next command commit.
 		const lockScope = JSON.stringify([
 			"connection-manual-consumer",
@@ -822,6 +878,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		await tx.execute(
 			sql`select pg_advisory_xact_lock(hashtextextended(${lockScope}, 0))`,
 		);
+	}
+
+	/** The actual Consumer is pinned by the first verified receipt of an association. */
+	async #consumerConsistent(
+		tx: Transaction,
+		row: Row,
+		receipt: ConnectionRegistrationReceiptV1,
+	) {
 		const others = await tx.execute(sql`
 			select distinct consumer_id from platform.connection_manual_installations
 			where agent_id=${row.agent_id as string} and association_revision=${Number(row.association_revision)}
@@ -864,6 +928,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly response?: ConnectionInstallCommandResponseV1;
 	}): Promise<"revoked" | "unknown" | "stale"> {
 		return this.#transaction(async (tx) => {
+			if (!(await this.#lockInstallation(tx, input.authorizationId)))
+				return "stale";
 			if (!(await this.#sending(tx, input, "revoke"))) return "stale";
 			const revoked = input.response?.outcome === "revoked";
 			await tx.execute(sql`
@@ -897,8 +963,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly beginCommandId?: string;
 	} | null> {
 		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
 			if (!(await this.#sending(tx, input, input.command))) return null;
-			const row = await this.#row(tx, input.authorizationId, "share");
 			if (
 				row?.registration_state !== "registered" ||
 				row.supply_state !== "confirmed" ||
@@ -942,9 +1008,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly result?: RuntimeOAuthResponseV1;
 	}): Promise<"mapped" | "unknown" | "stale"> {
 		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
 			const command = await this.#sending(tx, input, input.command);
 			if (!command) return "stale";
-			const row = await this.#row(tx, input.authorizationId, "update");
 			const result =
 				input.result === undefined
 					? undefined
@@ -968,11 +1034,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			const binding = row.binding as { callback?: unknown };
 			if (binding.callback !== undefined) return fail();
 			const authorization = this.#authorization(row);
-			const current = await this.#facts(
-				tx,
-				authorization.principal.id,
-				authorization.reference.executionId,
-			);
+			const current = row.associationLocked
+				? await this.#facts(
+						tx,
+						authorization.principal.id,
+						authorization.reference.executionId,
+					)
+				: null;
 			const template = ConnectionRegistrationTemplateV1Schema.parse(
 				row.template,
 			);
@@ -1055,8 +1123,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		}
 		try {
 			return await this.#transaction(async (tx) => {
-				const row = await this.#row(tx, request.authorizationId, "share");
-				if (!row?.template || row.live !== true) return "denied";
+				const row = await this.#lockInstallation(
+					tx,
+					request.authorizationId,
+					"share",
+				);
+				if (!row?.associationLocked || !row.template || row.live !== true)
+					return "denied";
 				const authorization = this.#authorization(row);
 				const template = ConnectionRegistrationTemplateV1Schema.parse(
 					row.template,

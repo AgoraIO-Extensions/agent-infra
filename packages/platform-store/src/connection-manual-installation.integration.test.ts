@@ -396,6 +396,22 @@ async function prepareDelivered(
 	};
 }
 
+function settlePrepared(run: Awaited<ReturnType<typeof prepareDelivered>>) {
+	return manual.settleRegistration({
+		commandId: run.prepare.item.commandId,
+		attemptId: run.prepare.attemptId,
+		attemptOwner: run.commandReadback.command.attemptOwner,
+		command: "prepare",
+		authorizationId: run.authorizationId,
+		response: {
+			schemaVersion: 1,
+			outcome: "registered",
+			commandId: run.prepare.item.commandId,
+			receipt: receiptFor(run.template, run.registrationKey),
+		},
+	});
+}
+
 describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 	it("creates a pre-registration authorization with one prepare and no link", async () => {
 		const key = randomUUID();
@@ -640,6 +656,135 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(pending.map((entry) => entry.command)).toEqual(["begin"]);
 		// The static drain never sees manual installations.
 		expect(await installations.listPending(32, ["execution-a"])).toEqual([]);
+	});
+
+	it.each(["unlink", "replace"] as const)(
+		"settles an in-flight receipt without a deadlock during Owner %s",
+		async (operation) => {
+			const run = await prepareDelivered();
+			const ownerLocked = Promise.withResolvers<void>();
+			const releaseOwner = Promise.withResolvers<void>();
+			const owner = associations.execute(async (tx) => {
+				await tx.current("agent-a");
+				ownerLocked.resolve();
+				await releaseOwner.promise;
+				return operation === "unlink"
+					? tx.deleteManual("agent-a", 1)
+					: tx.saveManual({
+							agentId: "agent-a",
+							ownerId: "owner",
+							connectionAgentId: "connection-agent-new",
+							credentialFingerprint: randomBytes(32).toString("hex"),
+							expectedRevision: 1,
+							encrypt: ({ agentId, ownerId, associationRevision }) => ({
+								schemaVersion: 1,
+								agentId,
+								ownerId,
+								secretVersion: associationRevision,
+								crypto: { dekFingerprint: randomBytes(32).toString("hex") },
+							}),
+						});
+			});
+			await ownerLocked.promise;
+			const settlement = settlePrepared(run);
+			const done = Promise.allSettled([owner, settlement]);
+			try {
+				await vi.waitFor(
+					async () => {
+						const waiting = await client`select pid from pg_stat_activity
+						where datname=current_database() and cardinality(pg_blocking_pids(pid))>0`;
+						expect(waiting).toHaveLength(1);
+					},
+					{ timeout: 3000, interval: 20 },
+				);
+			} finally {
+				releaseOwner.resolve();
+				await done;
+			}
+			expect(await done).toEqual([
+				{ status: "fulfilled", value: operation === "unlink" ? true : 2 },
+				{ status: "fulfilled", value: "unknown" },
+			]);
+			const [row] =
+				await client`select a.status, m.supply_state, m.configuration, m.registration_key
+				from platform.connection_manual_installations m join platform.connection_installation_authorizations a on a.id=m.authorization_id
+				where m.authorization_id=${run.authorizationId}`;
+			expect(row).toMatchObject({
+				status: "revoked",
+				supply_state: "closed",
+				configuration: null,
+				registration_key: run.registrationKey,
+			});
+			expect(await manual.listPending(32, ["execution-a"])).toEqual([]);
+		},
+	);
+
+	it("keeps a receipt out of begin if the settlement lock wait outlasts the attempt", async () => {
+		const run = await prepareDelivered();
+		const blocker = await client.reserve();
+		let completed: ReturnType<typeof settlePrepared> | undefined;
+		try {
+			const lockScope = JSON.stringify([
+				"connection-manual-consumer",
+				"agent-a",
+				1,
+			]);
+			const [lock] =
+				await blocker`select pg_backend_pid() as pid, pg_advisory_lock(hashtextextended(${lockScope},0))`;
+			await client`update platform.connection_installation_commands
+				set attempt_expires_at=clock_timestamp()+interval '1 second' where id=${run.prepare.item.commandId}`;
+			completed = settlePrepared(run);
+			void completed.catch(() => undefined);
+			await vi.waitFor(
+				async () => {
+					const waiting =
+						await client`select pid from pg_stat_activity where ${lock?.pid}=any(pg_blocking_pids(pid))`;
+					expect(waiting).toHaveLength(1);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+			await vi.waitFor(
+				async () => {
+					const [row] =
+						await client`select attempt_expires_at <= clock_timestamp() as expired
+					from platform.connection_installation_commands where id=${run.prepare.item.commandId}`;
+					expect(row?.expired).toBe(true);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+			await blocker`select pg_advisory_unlock(hashtextextended(${lockScope},0))`;
+		} finally {
+			await blocker`select pg_advisory_unlock_all()`;
+			blocker.release();
+			await completed?.catch(() => undefined);
+		}
+		await expect(completed).resolves.toBe("unknown");
+		const [row] =
+			await client`select m.registration_state, m.consumer_id, m.configuration,
+			m.registration_key, c.status from platform.connection_manual_installations m
+			join platform.connection_installation_commands c on c.authorization_id=m.authorization_id
+			where c.id=${run.prepare.item.commandId}`;
+		expect(row).toEqual({
+			registration_state: "unknown",
+			consumer_id: null,
+			configuration: null,
+			registration_key: run.registrationKey,
+			status: "unknown",
+		});
+		expect(await manual.listPending(32, ["execution-a"])).toEqual([]);
+		const status = await use.executeInstallation({
+			userId: "alice",
+			identityRevision: "identity-r1",
+			command: "status",
+			authorizationId: run.authorizationId,
+			requestId: "request",
+			traceId: "trace",
+		});
+		expect(status).toMatchObject({ manual: true, status: "unknown" });
+		const recovery = await claimFirst("status");
+		expect(recovery.claimed?.installation.registrationKey).toBe(
+			run.registrationKey,
+		);
 	});
 
 	it("pins one Consumer when two installations settle concurrently", async () => {

@@ -81,6 +81,22 @@ const runtimeOperations = [
 	"conversation.turn.supplement.v1",
 ];
 
+/** Association first, then authorization, installation and command. Owner writers hold the association exclusively. */
+export async function lockConnectionManualAssociationForInstallationV1(
+	tx: Pick<Transaction, "execute">,
+	authorizationId: string,
+) {
+	const locked = await tx.execute(sql`
+		select association.agent_id from platform.connection_manual_associations association
+		join platform.connection_manual_installations installation on installation.agent_id=association.agent_id
+		where installation.authorization_id=${authorizationId}
+			and installation.association_revision=association.association_revision
+			and installation.connection_agent_id=association.connection_agent_id
+		for share of association
+	`);
+	return locked.length === 1;
+}
+
 /**
  * Original Web user Execution facts for an Agent whose Owner manual association
  * is current (§13.5.6 Session Host 启动供应): processing V4 Execution, live
@@ -312,6 +328,13 @@ export async function readConnectionManualInstallationV1(
 	userId: string,
 	authorizationId: string,
 ): Promise<ConnectionManualInstallationSavedV1 | null> {
+	if (
+		!(await lockConnectionManualAssociationForInstallationV1(
+			tx,
+			authorizationId,
+		))
+	)
+		return null;
 	const rows = await tx.execute(sql`
 		select a.id, a.confirmation_revision, a.binding, a.status, a.expires_at, a.identity_revision,
 			a.agent_authorization_revision,
@@ -364,6 +387,13 @@ export async function requestConnectionManualInstallationStatusV1(
 	userId: string,
 	authorizationId: string,
 ) {
+	if (
+		!(await lockConnectionManualAssociationForInstallationV1(
+			tx,
+			authorizationId,
+		))
+	)
+		return;
 	const rows = await tx.execute(sql`
 		select a.id, a.status, a.binding, a.execution_id, m.registration_state, m.supply_state
 		from platform.connection_installation_authorizations a
@@ -440,6 +470,13 @@ export async function readConnectionManualInstallationBindingV1(
 	readonly configuration: RuntimeOAuthConfigurationV1;
 	readonly target: ApprovedConnectionConsumerTargetV1;
 } | null> {
+	if (
+		!(await lockConnectionManualAssociationForInstallationV1(
+			tx,
+			input.authorizationId,
+		))
+	)
+		return null;
 	const rows = await tx.execute(sql`
 		select m.template, m.configuration, m.registration_state, m.supply_state,
 			m.association_revision, m.connection_agent_id,
@@ -448,7 +485,7 @@ export async function readConnectionManualInstallationBindingV1(
 		join platform.connection_manual_associations current on current.agent_id = m.agent_id
 		where m.authorization_id = ${input.authorizationId} and m.user_id = ${input.userId}
 			and m.agent_id = ${input.agentId} and m.execution_id = ${input.executionId}
-		for share of m, current
+		for share of m
 	`);
 	const row = rows[0];
 	if (
@@ -495,6 +532,14 @@ export async function fenceRetiredConnectionManualInstallationsV1(
 	// approved authentication remains for a per-install DELETE: an install whose
 	// registration may exist is kept closed with its original key as unknown.
 	await tx.execute(sql`
+		update platform.connection_installation_authorizations a
+		set status = 'revoked', revision = a.revision + 1, updated_at = clock_timestamp()
+		from platform.connection_manual_installations m
+		where m.authorization_id = a.id and m.agent_id = ${agentId}
+			and m.association_revision = ${associationRevision}
+			and a.status in ('preparing','awaiting_confirmation','confirmed')
+	`);
+	await tx.execute(sql`
 		update platform.connection_manual_installations
 		set supply_state = case when template is null then 'pending' else 'closed' end,
 			registration_state = case when registration_state in ('pending') then 'closed' else registration_state end,
@@ -503,14 +548,6 @@ export async function fenceRetiredConnectionManualInstallationsV1(
 				else revoke_state end,
 			revision = revision + 1, updated_at = clock_timestamp()
 		where agent_id = ${agentId} and association_revision = ${associationRevision}
-	`);
-	await tx.execute(sql`
-		update platform.connection_installation_authorizations a
-		set status = 'revoked', revision = a.revision + 1, updated_at = clock_timestamp()
-		from platform.connection_manual_installations m
-		where m.authorization_id = a.id and m.agent_id = ${agentId}
-			and m.association_revision = ${associationRevision}
-			and a.status in ('preparing','awaiting_confirmation','confirmed')
 	`);
 }
 
