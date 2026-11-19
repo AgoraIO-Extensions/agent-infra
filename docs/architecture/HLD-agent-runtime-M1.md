@@ -566,14 +566,16 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 - OpenTelemetry/Pino 导出故障只标记采集/导出异常，不改写任务业务结果；持久意图或必要审计失败按上述可靠性规则处理，两者不能混同。普通任务与 Eval 正文、附件、思考、证明和凭证不进入事实元数据、日志/指标/Trace 或审计；合法任务输入/输出通过受控业务数据路径保存与查询。
 
 Codex 显式 Skill 调用复用现有受保护模型传输作为采集接缝。传输先核对已认证的原生进程、Thread/Turn 和
-当前模型准入，在受限请求解码及持久发送屏障内，基于当前 Turn 的可信原生注入来源核对实际注入资源并关联本次
-model attempt。屏障保存 `started` 后，采集器按工程 Spec 在传输侧关联完整出站请求与对应响应。回执沿现有 Runtime 事实交付，
+当前模型准入。仅当当前 Turn 有可信原生注入来源时，采集器才在受限请求解码及持久发送屏障内核对实际注入资源，
+并关联本次 model attempt。屏障保存 `started` 后，采集器按工程 Spec 在传输侧关联完整出站请求与对应响应。回执沿现有 Runtime 事实交付，
 字段、授权、恢复和待核实规则以 [工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)
 及 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界) 为准。
 
 固定 Codex 0.153.0 的离线模型请求观察显示 `SKILL.md` 字节进入结构化 Skill Turn。公开 app-server 的路径回显
-和 Turn 事件只提供接受及生命周期证据。固定发行物的实际加载状态以
-[工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配) 为准。
+和 Turn 事件只提供接受及生命周期证据。固定发行物的版本绑定与 Worker 装配见
+[工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)。
+逐 Turn 注入关联须独立取证。固定 Codex 0.153.0 缺少可信关联，实际加载记为 `LOAD_UNPROVEN`，
+见 [#4226 的验收结论](https://github.com/AgoraIO-Extensions/agent-infra/issues/4226#issuecomment-7006425608)。
 协议验证见 [#4226 的固定发行物回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/4226#issuecomment-7003370147)。
 
 #### 8.5.1 Codex 原生执行屏障
