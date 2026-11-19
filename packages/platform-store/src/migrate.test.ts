@@ -2128,7 +2128,7 @@ describe("published Relay authority migration", () => {
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
 			idx: 85,
-			tag: "0086_conversation_event_terminal_cursor",
+			tag: "0085_conversation_event_terminal_cursor",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
