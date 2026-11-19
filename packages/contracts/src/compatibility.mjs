@@ -7459,11 +7459,15 @@ function normalizeOperations4178(previous, current) {
 		matches(
 			value,
 			"f60427983ca3e4c2a515bb632c7119b1d79949bf03460958d2838777f8af5af5",
+		) ||
+		matches(
+			value,
+			"f04e3f3ce0657eda36c2f134f8a3c089487543795d39b0daa23ae63a0076cecb",
 		);
 	if (
 		!matches(
 			current,
-			"f60427983ca3e4c2a515bb632c7119b1d79949bf03460958d2838777f8af5af5",
+			"f04e3f3ce0657eda36c2f134f8a3c089487543795d39b0daa23ae63a0076cecb",
 		) ||
 		(present(previous) && !previousMatches(previous))
 	)

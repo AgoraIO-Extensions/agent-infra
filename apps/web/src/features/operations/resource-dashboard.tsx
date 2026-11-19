@@ -451,6 +451,8 @@ export function ResourceDashboard({
 									{data.budget.counts.sessions}，存储{" "}
 									{data.budget.sessionRequestCoverage.storageBytes}/
 									{data.budget.counts.sessions}。
+									{data.budget.sessionRequestCoverage.unscopedSessions > 0 &&
+										` 另有 ${data.budget.sessionRequestCoverage.unscopedSessions} 个会话的部署归属待确认，未纳入覆盖分母。`}
 								</>
 							)}
 						</p>

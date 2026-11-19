@@ -10,20 +10,30 @@ import {
 } from "../../apps/platform-worker/src/kubernetes.fixture.js";
 import { collectOperationsSnapshotV2 } from "../../apps/platform-worker/src/operations-collector.js";
 import {
+	OperationsBudgetV2Schema,
 	OperationsHistoryV2Schema,
 	OperationsResourcesV2Schema,
+	operationsSessionRequestCoverageHeaderV2,
 } from "../../packages/contracts/src/pilot/operations-resource.js";
 import {
 	agentConfigurationConformanceRecordV1,
 	agentConfigurationCustomImageRecordV1,
 } from "../../packages/platform-core/src/agent-configuration.conformance.js";
-import { emptyOperationsResourcesV2 } from "../../packages/platform-core/src/operations-resource.js";
+import {
+	emptyOperationsResourcesV2,
+	type OperationsInventoryV2,
+} from "../../packages/platform-core/src/operations-resource.js";
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { PostgresOperationsResourceStoreV2 } from "../../packages/platform-store/src/operations-resource.js";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../packages/platform-store/src/postgres-test.js";
+import { insertSessionSandboxBinding } from "../../packages/platform-store/src/session-sandbox.js";
+import {
+	admitNewSessionSandboxV1,
+	adoptSessionSandboxReserveV1,
+} from "../../packages/platform-store/src/session-sandbox-reserves.js";
 
 const { Hono } = createRequire(
 	new URL("../../apps/platform-api/package.json", import.meta.url),
@@ -126,24 +136,25 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 		memoryBytes: 1024,
 		storageBytes: 16384,
 	};
+	const policyConfig = {
+		schemaVersion: 1 as const,
+		enabled: true,
+		revision: 1,
+		namespace: scope.namespace,
+		totalBudget: { cpuMillis: 4000, memoryBytes: 4096, storageBytes: 32768 },
+		resourceCosts: [
+			{ resourceConfigurationHash: "a".repeat(64), resources: reserveCost },
+		],
+		maximumReserves: 4,
+		maximumConcurrentCreates: 2,
+		ttlMs: 60000,
+		cooldownMs: 1000,
+		failureBackoffMs: 1000,
+		profiles: [],
+	};
 	await sql`insert into platform.session_sandbox_budgets
 		(namespace, revision, configuration, updated_at) values
-		(${scope.namespace}, 1, ${sql.json({
-			schemaVersion: 1,
-			enabled: true,
-			revision: 1,
-			namespace: scope.namespace,
-			totalBudget: { cpuMillis: 4000, memoryBytes: 4096, storageBytes: 32768 },
-			resourceCosts: [
-				{ resourceConfigurationHash: "a".repeat(64), resources: reserveCost },
-			],
-			maximumReserves: 4,
-			maximumConcurrentCreates: 2,
-			ttlMs: 60000,
-			cooldownMs: 1000,
-			failureBackoffMs: 1000,
-			profiles: [],
-		})}, now())`;
+		(${scope.namespace}, 1, ${sql.json(policyConfig)}, now())`;
 	await sql`insert into platform.session_sandbox_reserves
 		(sandbox_id, session_id, agent_id, namespace, profile_digest, profile,
 		 status, expires_at, created_at, updated_at) values
@@ -277,6 +288,7 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const response = await app().request(
 			"/api/v2/ops/resources?sessionId=cold-usage-session",
+			{ headers: { [operationsSessionRequestCoverageHeaderV2]: "1" } },
 		);
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
@@ -310,26 +322,36 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 	const assertGap = async (
 		pods: typeof snapshot.resources,
 		order: number,
-		flags?: { truncated?: boolean; stale?: boolean },
+		flags?: {
+			truncated?: boolean;
+			stale?: boolean;
+			inventory?: {
+				podsObservedAt: string | null;
+				claimsObservedAt: string | null;
+			};
+		},
 	) => {
 		const at = new Date(Date.parse(now) + order).toISOString();
-		await store.write({
-			...snapshot,
-			generatedAt: at,
-			collectionStartedAt: at,
-			truncated: flags?.truncated ?? false,
-			sources: snapshot.sources.map((source) =>
-				source.kind === "kubernetes"
-					? {
-							...source,
-							observedAt: flags?.stale
-								? new Date(Date.parse(now) - 120_000).toISOString()
-								: at,
-						}
-					: source,
-			),
-			resources: pods,
-		});
+		await store.write(
+			{
+				...snapshot,
+				generatedAt: at,
+				collectionStartedAt: at,
+				truncated: flags?.truncated ?? false,
+				sources: snapshot.sources.map((source) =>
+					source.kind === "kubernetes"
+						? {
+								...source,
+								observedAt: flags?.stale
+									? new Date(Date.parse(now) - 120_000).toISOString()
+									: at,
+							}
+						: source,
+				),
+				resources: pods,
+			},
+			flags?.inventory,
+		);
 		const budget = (await store.read({})).budget;
 		expect(budget).toMatchObject({
 			counts: { sessions: 2, unclaimedReserves: 1 },
@@ -372,6 +394,149 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 			sessionRequestCoverage: { cpuCores: 0, memoryBytes: 0, storageBytes: 0 },
 		});
 	}
+	for (const [index, scenario] of [
+		{
+			inventory: { podsObservedAt: now, claimsObservedAt: null },
+			sessionUsage: { cpuCores: 0.75, memoryBytes: 3072, storageBytes: null },
+		},
+		{
+			inventory: { podsObservedAt: null, claimsObservedAt: now },
+			sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: 24576 },
+		},
+		{
+			inventory: { podsObservedAt: now, claimsObservedAt: now },
+			sessionUsage: { cpuCores: 0.75, memoryBytes: 3072, storageBytes: 24576 },
+		},
+	].entries()) {
+		expect(
+			await assertGap([pod, claim, retained], index + 6, {
+				truncated: true,
+				inventory: {
+					podsObservedAt:
+						scenario.inventory.podsObservedAt &&
+						new Date(Date.parse(now) + index + 6).toISOString(),
+					claimsObservedAt:
+						scenario.inventory.claimsObservedAt &&
+						new Date(Date.parse(now) + index + 6).toISOString(),
+				},
+			}),
+		).toMatchObject({ sessionUsage: scenario.sessionUsage });
+	}
+
+	const legacySchema = OperationsResourcesV2Schema.extend({
+		budget: OperationsBudgetV2Schema.omit({
+			sessionRequestCoverage: true,
+		}).nullable(),
+	});
+	const oldClient = await app().request("/api/v2/ops/resources");
+	expect(oldClient.headers.get("Vary")).toContain(
+		operationsSessionRequestCoverageHeaderV2,
+	);
+	expect(legacySchema.safeParse(await oldClient.json()).success).toBe(true);
+	const at = new Date(Date.parse(now) + 9).toISOString();
+	await store.write(
+		{
+			...snapshot,
+			generatedAt: at,
+			collectionStartedAt: at,
+			budget: (await store.read({})).budget,
+		},
+		{ podsObservedAt: at, claimsObservedAt: null },
+	);
+	const [saved] = await sql<
+		{ snapshot: unknown }[]
+	>`select snapshot from platform.operations_resource_snapshots
+		where cluster_id=${scope.clusterId} and namespace=${scope.namespace}`;
+	const legacy = legacySchema.parse(saved?.snapshot);
+	expect(legacy.budget).not.toHaveProperty("sessionRequestCoverage");
+	// An older Worker updates the original columns and leaves the companion proof alone.
+	const legacyAt = new Date(Date.parse(now) + 10).toISOString();
+	await sql`update platform.operations_resource_snapshots set observed_at=${legacyAt},
+		snapshot=${sql.json(
+			legacySchema.parse({
+				...legacy,
+				generatedAt: legacyAt,
+				collectionStartedAt: legacyAt,
+				sources: legacy.sources.map((source) =>
+					source.kind === "kubernetes"
+						? { ...source, observedAt: legacyAt }
+						: source,
+				),
+			}),
+		)}
+		where cluster_id=${scope.clusterId} and namespace=${scope.namespace}`;
+	expect((await store.read({})).budget?.sessionUsage.storageBytes).toBe(24576);
+
+	await sql`update platform.session_sandbox_allocations set resource_policy=${sql.json({ namespace: scope.namespace })}
+		where sandbox_id=${coldSandbox}`;
+	expect((await store.read({})).budget).toMatchObject({
+		sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: null },
+		sessionRequestCoverage: { cpuCores: 1, memoryBytes: 1, storageBytes: 1 },
+	});
+	await sql`update platform.session_sandbox_allocations set resource_policy=${policy} where sandbox_id=${coldSandbox}`;
+
+	const pending = "00000000-0000-4000-8000-000000000004";
+	const principal = { kind: "user" as const, id: "actor-1" };
+	await sql.begin(async (tx) => {
+		await tx`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
+			values ('unprepared-usage-session', 'agent-1', 'actor-1', 'web', 'active', 1, 'revision-1')`;
+		const admission = await admitNewSessionSandboxV1(
+			tx,
+			{
+				schemaVersion: 1,
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				authorizationRevision: "revision-1",
+				supportsSupplementaryInstruction: false,
+				taskBoundary: {
+					schemaVersion: 1,
+					principal,
+					agentId: "agent-1",
+					channelId: "web",
+					identityRevision: "identity-1",
+					agentAuthorizationRevision: "revision-1",
+					accessSources: [{ kind: "owner", userId: "actor-1" }],
+				},
+			},
+			{
+				schemaVersion: 1,
+				sessionId: "unprepared-usage-session",
+				sandboxId: pending,
+				agentId: "agent-1",
+				channelId: "web",
+				principal,
+				generation: 1,
+				resourceName: `sandbox-${pending}`,
+				workspaceScope: pending,
+			},
+			policyConfig,
+		);
+		expect(admission.profile).toBeNull();
+		await insertSessionSandboxBinding(tx, admission.binding, {
+			requestId: "unprepared-request",
+			traceId: "unprepared-trace",
+			occurredAt: new Date(),
+		});
+		await adoptSessionSandboxReserveV1(tx, admission);
+	});
+	onTestFinished(async () => {
+		await sql`delete from platform.outbox_items where scope_id='unprepared-usage-session'`;
+		await sql`delete from platform.conversation_audit_events where conversation_id='unprepared-usage-session'`;
+		await sql`delete from platform.session_sandbox_allocations where sandbox_id=${pending}`;
+		await sql`delete from platform.conversations where id='unprepared-usage-session'`;
+	});
+	expect((await store.read({})).budget).toMatchObject({
+		counts: { sessions: 2 },
+		sessionRequestCoverage: {
+			cpuCores: 2,
+			memoryBytes: 2,
+			storageBytes: 2,
+			unscopedSessions: 1,
+		},
+		sessionUsage: { cpuCores: null, memoryBytes: null, storageBytes: null },
+	});
 	const charges =
 		await sql`select resources, compute_released from platform.session_sandbox_resource_charges
 		where sandbox_id in (${reserveId}, ${sessionId}) order by sandbox_id`;
@@ -379,6 +544,41 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 		{ resources: reserveCost, compute_released: false },
 		{ resources: sessionCost, compute_released: true },
 	]);
+});
+
+it("records independent Pod and PVC inventory despite unrelated collection failures", async () => {
+	const now = new Date().toISOString();
+	for (const failure of ["none", "pods", "volumes"] as const) {
+		const inventory: OperationsInventoryV2 = {
+			podsObservedAt: null,
+			claimsObservedAt: null,
+		};
+		const onRequestInventory = (value: OperationsInventoryV2) => {
+			Object.assign(inventory, value);
+		};
+		const snapshot = await collectOperationsSnapshotV2({
+			scope,
+			readCluster: false,
+			cacheOwner: "fixture-owner",
+			cacheInventoryLimit: 10,
+			bindings: [],
+			now: () => now,
+			onRequestInventory,
+			read: async (kind) => {
+				if (kind === failure || kind === "events")
+					throw new Error("fixture read failed");
+				return { items: [], truncated: kind === "quotas" };
+			},
+		});
+		expect(snapshot.truncated).toBe(true);
+		expect(
+			snapshot.sources.find((source) => source.kind === "kubernetes")?.state,
+		).toBe("unavailable");
+		expect(inventory).toEqual({
+			podsObservedAt: failure === "pods" ? null : now,
+			claimsObservedAt: failure === "volumes" ? null : now,
+		});
+	}
 });
 
 it("keeps a measured zero and refuses an unverified Agent attribution", async () => {

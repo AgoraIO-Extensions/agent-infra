@@ -173,6 +173,12 @@ export interface OperationsSessionAllocationV2 {
 	readonly resourceName: string;
 	readonly stopped: boolean;
 	readonly noRetainedPvc: boolean;
+	readonly configurationRevision: number | null;
+}
+
+export interface OperationsInventoryV2 {
+	readonly podsObservedAt: string | null;
+	readonly claimsObservedAt: string | null;
 }
 
 const sessionDimensions = ["cpuCores", "memoryBytes", "storageBytes"] as const;
@@ -182,7 +188,9 @@ function projectSessionRequests(
 		allocations: readonly OperationsSessionAllocationV2[];
 		observed: readonly OperationsResourceV2[];
 		bound: readonly OperationsResourceV2[];
-		complete: boolean;
+		unscopedSessions: number;
+		podsComplete: boolean;
+		claimsComplete: boolean;
 	},
 	result: OperationsBudgetV2,
 ): void {
@@ -208,7 +216,8 @@ function projectSessionRequests(
 	) => {
 		const first =
 			indexes[0] === undefined ? undefined : input.bound[indexes[0]];
-		if (!first?.identityObservedAt) return undefined;
+		if (!first?.identityObservedAt || allocation.configurationRevision === null)
+			return undefined;
 		const aliases = byUid.get(first.uid) ?? [];
 		return indexes.length === aliases.length &&
 			indexes.every((i) => input.observed[i]?.uid === first.uid) &&
@@ -219,6 +228,7 @@ function projectSessionRequests(
 					sample.kind === first.kind &&
 					sample.name === first.name &&
 					sample.namespace === result.namespace &&
+					sample.revision === allocation.configurationRevision &&
 					sample.ownership === "agent" &&
 					sample.role === "sandbox" &&
 					sample.sandboxId === allocation.sandboxId &&
@@ -246,9 +256,13 @@ function projectSessionRequests(
 		const claims = candidates.filter(
 			(i) => input.observed[i]?.kind === "PersistentVolumeClaim",
 		);
-		const pod = input.complete ? freshSample(pods, allocation) : undefined;
-		const claim = input.complete ? freshSample(claims, allocation) : undefined;
-		const stopped = input.complete && allocation.stopped && pods.length === 0;
+		const pod = input.podsComplete ? freshSample(pods, allocation) : undefined;
+		const claim = input.claimsComplete
+			? freshSample(claims, allocation)
+			: undefined;
+		const stopped =
+			allocation.stopped && allocation.configurationRevision !== null;
+		const podAbsent = stopped && input.podsComplete && pods.length === 0;
 		const take = (resource: OperationsResourceV2 | undefined) => {
 			if (!resource || counted.has(resource.uid)) return undefined;
 			counted.add(resource.uid);
@@ -257,10 +271,13 @@ function projectSessionRequests(
 		const compute = take(pod);
 		const storage = take(claim?.phase === "Bound" ? claim : undefined);
 		const values = {
-			cpuCores: stopped ? 0 : (compute?.cpuCores ?? null),
-			memoryBytes: stopped ? 0 : (compute?.memoryBytes ?? null),
+			cpuCores: podAbsent ? 0 : (compute?.cpuCores ?? null),
+			memoryBytes: podAbsent ? 0 : (compute?.memoryBytes ?? null),
 			storageBytes:
-				stopped && allocation.noRetainedPvc && claims.length === 0
+				stopped &&
+				input.claimsComplete &&
+				allocation.noRetainedPvc &&
+				claims.length === 0
 					? 0
 					: (storage?.storageBytes ?? null),
 		};
@@ -276,10 +293,15 @@ function projectSessionRequests(
 		}
 	}
 	result.counts.sessions = input.allocations.length;
-	result.sessionRequestCoverage = coverage;
+	result.sessionRequestCoverage = {
+		...coverage,
+		unscopedSessions: input.unscopedSessions,
+	};
+	result.unaccountedCount += input.unscopedSessions;
 	result.sessionUsage = totals;
 	for (const dimension of sessionDimensions) {
 		if (
+			input.unscopedSessions > 0 ||
 			coverage[dimension] !== result.counts.sessions ||
 			(dimension !== "cpuCores" && !Number.isSafeInteger(totals[dimension]))
 		)

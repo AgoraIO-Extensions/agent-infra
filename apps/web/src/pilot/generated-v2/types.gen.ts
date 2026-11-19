@@ -1993,6 +1993,7 @@ export type OperationsResourcesV2 = {
             cpuCores: number;
             memoryBytes: number;
             storageBytes: number;
+            unscopedSessions: number;
         };
         sessionUsage: {
             cpuCores: number | null;
@@ -9106,6 +9107,12 @@ export type GetOperationsHistoryV2Response = GetOperationsHistoryV2Responses[key
 
 export type GetOperationsResourcesV2Data = {
     body?: never;
+    headers?: {
+        /**
+         * Use 1 to receive Session request coverage. Earlier clients receive the legacy response shape.
+         */
+        'X-Agent-Infra-Ops-Session-Requests'?: '1';
+    };
     path?: never;
     query?: {
         namespace?: string;

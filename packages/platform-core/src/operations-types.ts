@@ -18,6 +18,7 @@ export interface OperationsBudgetObservationV2 {
 		cpuCores: number;
 		memoryBytes: number;
 		storageBytes: number;
+		unscopedSessions: number;
 	};
 	unknownUsage: OperationsQuantitiesV2;
 	counts: {

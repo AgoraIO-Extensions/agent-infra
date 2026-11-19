@@ -582,6 +582,13 @@
       "when": 1795073517728,
       "tag": "0086_workload_certificate_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1795100183257,
+      "tag": "0087_operations_request_inventory",
+      "breakpoints": true
     }
   ]
 }

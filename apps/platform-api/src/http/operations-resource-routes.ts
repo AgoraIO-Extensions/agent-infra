@@ -5,6 +5,7 @@ import {
 	type OperationsResourceQueryV2,
 	OperationsResourceQueryV2Schema,
 	OperationsResourcesV2Schema,
+	operationsSessionRequestCoverageHeaderV2,
 } from "@agent-infra/contracts/pilot";
 import { OperationsScopeErrorV2 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
@@ -78,6 +79,14 @@ export function registerOperationsResourceRoutesV2(
 			);
 			const result = OperationsResourcesV2Schema.safeParse(value);
 			if (!result.success) throw new Error();
+			context.header("Vary", operationsSessionRequestCoverageHeaderV2, {
+				append: true,
+			});
+			if (
+				result.data.budget &&
+				context.req.header(operationsSessionRequestCoverageHeaderV2) !== "1"
+			)
+				delete result.data.budget.sessionRequestCoverage;
 			return context.json(result.data);
 		} catch (error) {
 			if (error instanceof OperationsScopeErrorV2)

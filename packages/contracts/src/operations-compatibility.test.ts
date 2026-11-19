@@ -41,6 +41,10 @@ it("admits only the bounded administrator operations addition and preserves exis
 		).status;
 	};
 	const beforeSessionCoverage = structuredClone(current);
+	beforeSessionCoverage.paths[paths[1]].get.parameters =
+		beforeSessionCoverage.paths[paths[1]].get.parameters.filter(
+			(parameter: { in: string }) => parameter.in !== "header",
+		);
 	delete beforeSessionCoverage.components.schemas.OperationsResourcesV2
 		.properties.budget.anyOf[0].properties.sessionRequestCoverage;
 	const historical = structuredClone(beforeSessionCoverage);

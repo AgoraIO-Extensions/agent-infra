@@ -2132,8 +2132,8 @@ describe("published Relay authority migration", () => {
 			tag: "0085_conversation_event_terminal_cursor",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 86,
-			tag: "0086_workload_certificate_reconciliation",
+			idx: 87,
+			tag: "0087_operations_request_inventory",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2707,9 +2707,13 @@ describe("published Relay authority migration", () => {
 				"connection_association_generations:connection_association_generations_pkey",
 			);
 			expectedDelta.columns.push(
-				...["cluster_id", "namespace", "observed_at", "snapshot"].map(
-					(name) => `operations_resource_snapshots:${name}`,
-				),
+				...[
+					"cluster_id",
+					"namespace",
+					"observed_at",
+					"request_inventory",
+					"snapshot",
+				].map((name) => `operations_resource_snapshots:${name}`),
 				...[
 					"agent_id",
 					"cluster_id",

@@ -11984,12 +11984,18 @@
                         "maximum": 9007199254740991,
                         "minimum": 0,
                         "type": "integer"
+                      },
+                      "unscopedSessions": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
                       }
                     },
                     "required": [
                       "cpuCores",
                       "memoryBytes",
-                      "storageBytes"
+                      "storageBytes",
+                      "unscopedSessions"
                     ],
                     "type": "object"
                   },
@@ -33592,6 +33598,18 @@
             "schema": {
               "maxLength": 256,
               "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Use 1 to receive Session request coverage. Earlier clients receive the legacy response shape.",
+            "in": "header",
+            "name": "X-Agent-Infra-Ops-Session-Requests",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1"
+              ],
               "type": "string"
             }
           }
