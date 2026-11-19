@@ -169,7 +169,10 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 		return { route, issuerName: selected.clusterIssuerName };
 	}
-	async function observe(value: AgentWorkloadDesiredV1) {
+	async function observe(
+		value: AgentWorkloadDesiredV1,
+		checkPendingSecret = true,
+	) {
 		const selected = options.policy.hostnameRoutes;
 		if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
 			return "ready" as const;
@@ -194,20 +197,7 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			!options.client.readMetadata
 		)
 			return "certificate-invalid" as const;
-		const secret = await options.client.readMetadata(
-			"Secret",
-			route.tlsSecretName,
-		);
-		if (
-			secret &&
-			!matchesSecretMetadata(
-				secret,
-				current,
-				options.client.namespace,
-				route.tlsSecretName,
-			)
-		)
-			return "certificate-invalid" as const;
+
 		const now = Date.now();
 		const conditions = current.status?.conditions ?? [];
 		const ready = conditions.filter((condition) => condition.type === "Ready");
@@ -226,6 +216,27 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			return "certificate-invalid" as const;
 		const notAfter = Date.parse(current.status?.notAfter ?? "");
 		const notBefore = current.status?.notBefore;
+		const hasReadyCondition = ready[0]?.status === "True";
+		const readMetadata = options.client.readMetadata.bind(options.client);
+		let secret: Awaited<ReturnType<typeof readMetadata>> = null;
+		if (hasReadyCondition || checkPendingSecret) {
+			try {
+				secret = await readMetadata("Secret", route.tlsSecretName);
+			} catch {
+				// Unreadable metadata cannot authorize publication or resource cleanup.
+				return "certificate-unavailable" as const;
+			}
+			if (
+				secret &&
+				!matchesSecretMetadata(
+					secret,
+					current,
+					options.client.namespace,
+					route.tlsSecretName,
+				)
+			)
+				return "certificate-invalid" as const;
+		}
 		if (ready[0]?.status === "True")
 			return secret &&
 				ready[0].observedGeneration === current.metadata.generation &&

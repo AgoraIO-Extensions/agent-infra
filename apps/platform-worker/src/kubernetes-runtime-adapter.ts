@@ -640,11 +640,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const value = desired(input);
 		if (isMultiService(value))
 			return multiService.observe(value, identity, reconcileCertificateState);
-		if (
-			!reconcileCertificateState &&
-			(await hostnameCertificates.observe(value)) !== "ready"
-		)
-			return routeMode === "open" ? "drifted" : "pending";
+		if (!reconcileCertificateState) {
+			const certificate = await hostnameCertificates.observe(value, false);
+			if (certificate === "certificate-unavailable") return certificate;
+			if (certificate !== "ready")
+				return routeMode === "open" ? "drifted" : "pending";
+		}
 		if (
 			!options.connectionConsumerControl &&
 			connectionInstallationRevision === null

@@ -53,6 +53,7 @@ import type {
 	KubernetesObject,
 	V1Deployment,
 	V1Ingress,
+	V1Job,
 	V1Pod,
 	V1Secret,
 	V1Service,
@@ -8664,25 +8665,54 @@ async function readyHostnameFixture(configuration = hostnameConfiguration()) {
 	return { f, ready };
 }
 
-it("keeps the ready multi-service revision while a certificate is pending with writes disabled", async () => {
-	const { f, ready } = await readyHostnameFixture(
-		hostnameConfiguration("multi"),
-	);
-	expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
-	const ingress = await f.client.read("Ingress", hostnameWorkloadName);
-	expect(ingress).not.toBeNull();
-	const pending: WorkloadHostnameCertificateV1 = { ...ready, status: {} };
-	f.seed(pending);
-	await f.tick(1, false);
-	expect(f.state).toMatchObject({ phase: "observing", revision: 1 });
-	expect(f.state).not.toHaveProperty("certificateWait");
-	expect(f.state).not.toHaveProperty("retainedFailure");
-	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
-	f.seed(ready);
-	await f.tick(3, false);
-	expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
-	expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
-});
+it.each([
+	"pending",
+	"pending with denied Secret metadata",
+	"ready with denied Secret metadata",
+] as const)(
+	"closes the ready multi-service route for %s without changing the revision",
+	async (scenario) => {
+		const { f, ready } = await readyHostnameFixture(
+			hostnameConfiguration("multi"),
+		);
+		expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
+		const ingress = await f.client.read("Ingress", hostnameWorkloadName);
+		expect(ingress).not.toBeNull();
+		const pending: WorkloadHostnameCertificateV1 = { ...ready, status: {} };
+		if (scenario !== "ready with denied Secret metadata") f.seed(pending);
+		const metadata = vi.spyOn(f.client, "readMetadata");
+		if (scenario !== "pending")
+			metadata.mockRejectedValue(
+				new WorkloadKubernetesError("unavailable", {
+					status: 403,
+					kind: "Secret",
+					verb: "get",
+				}),
+			);
+		const remove = vi.spyOn(f.client, "delete");
+		await f.tick(
+			scenario === "ready with denied Secret metadata" ? 5 : 1,
+			false,
+		);
+		expect(f.state).toMatchObject({
+			phase: "observing",
+			revision: 1,
+		});
+		expect(
+			remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+		).toHaveLength(0);
+		if (scenario !== "ready with denied Secret metadata")
+			expect(metadata).not.toHaveBeenCalled();
+		metadata.mockRestore();
+		expect(f.state).not.toHaveProperty("certificateWait");
+		expect(f.state).not.toHaveProperty("retainedFailure");
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		f.seed(ready);
+		await f.tick(3, false);
+		expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
+	},
+);
 
 it("retains a verified hostname workload after its certificate expires", async () => {
 	const { f, ready } = await readyHostnameFixture();
@@ -8832,6 +8862,99 @@ it("durably retries route closure and scales down after a rejected multi-service
 	).toHaveLength(0);
 });
 
+it.each(["complete", "active", "wrong owner"] as const)(
+	"checks migration Pod ownership and completion during stop (%s)",
+	async (mode) => {
+		const base = hostnameConfiguration("multi");
+		assert("manifest" in base.source);
+		const manifest = JSON.parse(base.source.manifest);
+		manifest.resources.push({
+			apiVersion: "batch/v1",
+			kind: "Job",
+			metadata: { name: "migrate" },
+			spec: {
+				backoffLimit: 1,
+				activeDeadlineSeconds: 300,
+				template: {
+					metadata: { labels: { app: "migration" } },
+					spec: {
+						restartPolicy: "Never",
+						containers: [
+							{ name: "migrate", image: `sha256:${"d".repeat(64)}` },
+						],
+					},
+				},
+			},
+		});
+		const { f, ready } = await readyHostnameFixture({
+			...base,
+			source: { ...base.source, manifest: JSON.stringify(manifest) },
+		});
+		const job = [...f.resources.values()].find(
+			(object) => object.kind === "Job",
+		) as V1Job;
+		assert(job?.metadata?.name && job.metadata.uid);
+		const complete: V1Job = {
+			...job,
+			status: {
+				succeeded: 1,
+				conditions: [{ type: "Complete", status: "True" }],
+			},
+		};
+		f.seed(complete);
+		const pod: V1Pod = {
+			apiVersion: "v1",
+			kind: "Pod",
+			metadata: {
+				name: "migration-pod",
+				namespace: job.metadata.namespace,
+				uid: "migration-pod-uid",
+				labels: job.spec?.template.metadata?.labels,
+				ownerReferences: [
+					{
+						apiVersion: "batch/v1",
+						kind: "Job",
+						name: job.metadata.name,
+						uid:
+							mode === "wrong owner" ? "different-job-uid" : job.metadata.uid,
+						controller: true,
+					},
+				],
+			},
+			status: { phase: mode === "active" ? "Running" : "Succeeded" },
+		};
+		f.seed(pod);
+		const expired: WorkloadHostnameCertificateV1 = {
+			...ready,
+			status: { ...ready.status, notAfter: "2000-01-01T00:00:00Z" },
+		};
+		f.seed(expired);
+		await f.tick(2);
+		expect(f.state).toMatchObject({
+			phase: "failed",
+			retainedFailure: { certificate: "certificate-invalid" },
+		});
+		f.setManagement({
+			...f.management,
+			desiredState: "stopped",
+			revision: 2,
+			workloadRevision: 2,
+			fence: 2,
+		});
+		await f.tick(9);
+		expect(f.state).toMatchObject({
+			phase: mode === "complete" ? "stopped" : "applying",
+			fence: 2,
+		});
+		expect(await f.client.read("Job", job.metadata.name)).toMatchObject({
+			metadata: { uid: job.metadata.uid },
+		});
+		expect(await f.client.read("Pod", "migration-pod")).toMatchObject({
+			metadata: { uid: "migration-pod-uid" },
+		});
+	},
+);
+
 it("does not count certificate waits as Kubernetes conflicts", async () => {
 	const f = fixture(
 		{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
@@ -8861,9 +8984,10 @@ it("does not count certificate waits as Kubernetes conflicts", async () => {
 	await f.tick(1);
 	expect(f.state).toMatchObject({
 		phase: "observing",
-		attempts: 1,
-		lastFailure: { reason: "kubernetes_conflict", attempts: 1 },
+		attempts: 0,
+		certificateWait: { attempts: 5 },
 	});
+	expect(f.state?.lastFailure).toBeUndefined();
 });
 
 it("waits on the rejected revision and restores its route without reapplying it", async () => {

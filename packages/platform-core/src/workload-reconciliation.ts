@@ -410,6 +410,7 @@ export type WorkloadObservationV1 =
 	| "unreachable"
 	| "drifted"
 	| "certificate-pending"
+	| "certificate-unavailable"
 	| WorkloadCertificateFailureV1;
 
 export interface WorkloadRuntimePortV1 {
@@ -745,6 +746,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 						candidate: state.verified,
 					}) === false;
 				let failedClosure: WorkloadReconciliationStateV1 | undefined;
+				let closingUnreadableCertificate = false;
+				const closeUnreadableCertificate = async () => {
+					closingUnreadableCertificate = true;
+					await runtime.closeRoute(state);
+					return state.phase === "ready" ? advance("observing") : state;
+				};
 				try {
 					// A persisted rejection means the route was closed and no resource
 					// teardown is owed. New lifecycle intent still takes the normal path.
@@ -833,6 +840,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 						}
 						case "observing": {
 							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
 							if (health === "healthy") {
 								if (state.certificateWait?.resumeRejected) {
 									await runtime.promote(state);
@@ -891,6 +900,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 							// Re-establish a closed route before rechecking a partially published candidate.
 							await runtime.closeRoute(state);
 							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
 							if (health === "certificate-pending") return waitForCertificate();
 							const certificate = certificateFailure(health);
 							if (certificate) return certificate;
@@ -912,6 +923,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 						}
 						case "ready": {
 							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
 							if (health === "healthy") {
 								await runtime.promote(state);
 								return servingProbeCompleted(state);
@@ -938,6 +951,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 						}
 						case "rejected": {
 							const health = await observeWorkload();
+							if (health === "certificate-unavailable")
+								return await closeUnreadableCertificate();
 							if (health === "healthy") {
 								await runtime.promote(state);
 								return servingProbeCompleted(state);
@@ -1137,6 +1152,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
 					if (
+						closingUnreadableCertificate ||
 						failedState.phase === "cleaning" ||
 						failedState.phase === "closing" ||
 						failedState.phase === "stopped"

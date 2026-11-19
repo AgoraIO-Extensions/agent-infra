@@ -1664,6 +1664,55 @@ export function createMultiServiceRuntimeOperations(options: {
 		}
 		return false;
 	}
+	async function isCompletedMigrationPod(
+		pod: V1Pod,
+		value: MultiServiceDesired,
+	) {
+		const owners = pod.metadata?.ownerReferences?.filter(
+			(owner) => owner.controller,
+		);
+		const owner = owners?.[0];
+		if (
+			pod.status?.phase !== "Succeeded" ||
+			pod.metadata?.namespace !== value.namespaceRef ||
+			!pod.metadata.uid ||
+			pod.metadata.deletionTimestamp ||
+			pod.metadata.labels?.["agent-infra.agora.io/service"] !== "migration" ||
+			owners?.length !== 1 ||
+			owner?.apiVersion !== "batch/v1" ||
+			owner.kind !== "Job" ||
+			!owner.name ||
+			!owner.uid
+		)
+			return false;
+		const job = await client.read<V1Job>("Job", owner.name);
+		const hash = job?.metadata?.annotations?.[fingerprintAnnotation];
+		const fence = Number(
+			job?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		);
+		return (
+			!!job &&
+			job.metadata?.namespace === value.namespaceRef &&
+			!job.metadata.deletionTimestamp &&
+			job.apiVersion === "batch/v1" &&
+			job.kind === "Job" &&
+			job.metadata.name === owner.name &&
+			job.metadata.uid === owner.uid &&
+			job.metadata.labels?.["agent-infra.agora.io/service"] === "migration" &&
+			!!hash &&
+			/^[a-f0-9]{64}$/.test(hash) &&
+			owner.name ===
+				serviceResourceName(value.agentId, `migration-${hash.slice(0, 12)}`) &&
+			ownedByAgent(job, value) &&
+			fence > 0 &&
+			(job.status?.active ?? 0) === 0 &&
+			!jobFailed(job) &&
+			job.status?.conditions?.some(
+				({ type, status }) => type === "Complete" && status === "True",
+			) === true
+		);
+	}
+
 	async function scaleDown(value: MultiServiceDesired) {
 		let pending = false;
 		for (const resource of value.multiService.resources) {
@@ -1699,11 +1748,15 @@ export function createMultiServiceRuntimeOperations(options: {
 				pending = true;
 			}
 		}
-		const pods = await client.list(
+		if (pending) return "pending" as const;
+		const pods = await client.list<V1Pod>(
 			"Pod",
-			`agent-infra.agora.io/agent=${workloadResourceNameV1(value.agentId)}`,
+			`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
 		);
-		return pending || pods.length > 0 ? ("pending" as const) : null;
+		for (const pod of pods)
+			if (!(await isCompletedMigrationPod(pod, value)))
+				return "pending" as const;
+		return null;
 	}
 	return {
 		isMultiService,
@@ -1902,11 +1955,11 @@ export function createMultiServiceRuntimeOperations(options: {
 			identity: { uid: string; generation: number } | "pending",
 			reconcileCertificateState = true,
 		) {
-			if (
-				!reconcileCertificateState &&
-				(await hostnameCertificates.observe(value)) !== "ready"
-			)
-				return "pending" as const;
+			if (!reconcileCertificateState) {
+				const certificate = await hostnameCertificates.observe(value, false);
+				if (certificate === "certificate-unavailable") return certificate;
+				if (certificate !== "ready") return "pending" as const;
+			}
 			if (await hasAdditionalSnapshotEgress(value)) return "drifted" as const;
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
