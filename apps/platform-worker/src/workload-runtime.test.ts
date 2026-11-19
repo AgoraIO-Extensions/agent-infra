@@ -8684,7 +8684,7 @@ it("retains a verified hostname workload after its certificate expires", async (
 	f.seed({
 		...ready,
 		status: { ...ready.status, notAfter: "2000-01-01T00:00:00Z" },
-	});
+	} as WorkloadHostnameCertificateV1);
 	await f.tick(14);
 	expect(f.state).toMatchObject({
 		phase: "failed",
@@ -8859,7 +8859,7 @@ it("waits on the rejected revision and restores its route without reapplying it"
 		...ready,
 		metadata: { ...ready.metadata, creationTimestamp: new Date() },
 		status: {},
-	});
+	} as WorkloadHostnameCertificateV1);
 	await f.tick(4);
 	expect(f.state).toMatchObject({
 		phase: "observing",
