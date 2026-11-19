@@ -346,7 +346,8 @@ Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，
 每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和已验证 Applied 绑定作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
 
 显式调用按工程 Spec 记录 Driver 字节校验、原生接受与实际加载三种事实。调用入口冻结选中的 Skill Version
-和 Applied generation，Driver 使用公开的结构化 Skill 输入提交原 native Turn，加载证据由执行期采集接缝提供。
+和 Applied generation。Driver 使用公开的结构化 Skill 输入提交原 native Turn，并按工程 Spec 核对原生接受关联。
+加载证据由执行期采集接缝提供。
 证据定义与版本约束见 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)
 和 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界)。
 
@@ -371,7 +372,9 @@ Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，
 
 负例覆盖选错或过期版本、跨用户/会话/代次、在途撤销、摘要漂移、历史上下文或调用方同形文本冒用，以及事件
 丢失、Runtime 重启与重连。发送负例分别模拟 `started` 已持久化但出站请求前中断，以及传输中断且缺少
-同一尝试的可信接收证据。两种场景都保留加载待核实，并按原操作证据核对业务终态。
+同一尝试的发送确认。发送关联另测同一连接上另一请求的响应、前一次尝试的证据重放及请求体未完整发出的响应。
+这些场景均须保持加载待核实。即使原调用业务已完成，调用详情、聚合和审计也不能据此记录 Skill 调用通过。
+原生接受另测同名或同路径的回显无法关联到原冻结提交的情况。
 
 兼容验收覆盖新版事实已写入 Store 但 ACK 丢失，以及仍有未确认 journal 的两种回放。分别用旧 Worker、
 旧 Store 和兼容组合接管或重连，核对不兼容组合拒绝接管，恢复后原事实仍可回读，且没有跳过未持久化事件、
@@ -558,7 +561,7 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 
 Codex 显式 Skill 调用复用现有受保护模型传输作为采集接缝。传输先核对已认证的原生进程、Thread/Turn 和
 当前模型准入，在受限请求解码及持久发送屏障内，基于当前 Turn 的可信原生注入来源核对实际注入资源并关联本次
-model attempt。屏障保存 `started` 后，采集器在传输侧关联同一出站请求的可信接收证据。回执沿现有 Runtime 事实交付，
+model attempt。屏障保存 `started` 后，采集器按工程 Spec 在传输侧关联完整出站请求与对应响应。回执沿现有 Runtime 事实交付，
 字段、授权、恢复和待核实规则以 [工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)
 及 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界) 为准。
 
