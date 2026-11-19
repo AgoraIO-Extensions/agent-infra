@@ -1023,6 +1023,30 @@ initialize/config/read 或模型 completed 不充分。Executor 未就绪时固�
 Executor 实例或传输会话变化使原准入失效；只有原实例/会话才能恢复已有进程句柄。
 新的连接或容器实例不能代签原操作终态、stop 或资源释放，也不自动重放命令。
 
+独立 executor 的精确 Stop 沿
+[工程 Spec §11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
+收敛。Driver 按现有控制授权和持久 fence 封闭原 Execution，记录原生终态候选，
+同时等待 executor 排空证明。通知、查询恢复和原 Stop 回执共用同一门禁。
+
+- 受信 gateway 在转发新工具启动前固定归属，绑定原 Execution、native Turn、工具
+  attempt、Sandbox、Pod UID、generation、resource fence 和 executor epoch 与协议会话。
+  与 Stop 并发的启动要么在封闭前已纳入待排空集合，要么在转发前拒绝。无法确定送达
+  或无法唯一归属的启动，沿原记录保持 unknown。
+- runner 在原 executor 的 PID namespace 中只处理受信登记的句柄及对应进程组。
+  原进程组的退出证明覆盖其仍存活的成员。固定 exec-server 的
+  `process/terminate` 可请求停止，确认须来自可与原登记和同一 executor 实例匹配的
+  终止证据。普通状态、单一进程退出、传输断开、句柄查无记录和新实例的空列表均不能
+  证明原进程组已排空。关联不明时不能扩大信号范围。
+- 控制和退出证明仅经现有 Session 内受保护边界传递。使用当前控制授权及原绑定，
+  拒绝调用方、工具或模型指定进程标识。持久记录只保存恢复所需的原引用、状态、期限
+  和固定原因。重复 Stop 和重启沿原绑定核实，不延长期限。原进程退出证据不足时由
+  现有 unknown 与代次退休路径收敛。实现只修改平台 Driver、gateway 和 runner，
+  使用同一固定 Codex 发行物。
+
+实现验收使用真实 Linux 前台和后台进程组，验证进程组退出证据早于终态发布。覆盖
+启动与 Stop 竞态、同一进程组的子进程、陈旧 fence、其他执行、断连、换代和后续
+合法 Turn，并在同版本 ACK 镜像复验。
+
 ## 11. 验证
 
 ### 11.1 通用 Runtime 与 Driver 验证

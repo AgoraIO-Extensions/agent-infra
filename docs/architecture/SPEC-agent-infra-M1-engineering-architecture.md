@@ -1741,6 +1741,15 @@ executor 活性和绑定，不执行命令、读写工作区或扩大 Grant 用�
 executor 重启或断连也使原结果失效。恢复原进程句柄只接受原 exec-server 实例/会话的可核实恢复；
 新实例不能证明旧命令已终止、签收旧 stop/unknown 或获得旧执行权，须重新完成部署准入。
 在途失败沿原 operation/attempt、unknown、stop 与恢复路径收敛，不重放工具或创建替代执行。
+
+在独立 executor 模式，精确 Stop 应先封闭原 Execution 的新工具准入，再排空同一
+executor 实例中归属于原 Execution 的前台和后台工具进程组。在原生 Turn 终态与原工具
+进程组退出都得到确认后，才发布 Execution 终态并释放后继执行的占用。Stop 受理、
+原生 interrupt 响应和 exec-server terminate 响应均不能单独作为退出证明。
+取消等待复用原控制操作的有界期限。结果无法确认时沿原操作保留未排空或 unknown
+以及原占用。Driver、gateway 和 runner 的职责见
+[Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
+
 Pod 停止与代次退休同时覆盖两容器及所有后台子进程；新增 CPU/内存、临时卷和启动成本进入原
 容量配置、资源摘要及回执。旧 reserves 不得未经重验绑定到新布局，回滚须先按正式生命周期排空。
 
