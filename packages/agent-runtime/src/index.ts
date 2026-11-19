@@ -23,7 +23,7 @@ export {
 	encodeConnectionHostSupplyAadV1,
 	openConnectionHostSupplyV1,
 	sealConnectionHostSupplyV1,
-} from "./connection-host-supply-crypto.js";
+} from "./host-supply-crypto.js";
 export * from "./driver.js";
 export * from "./errors.js";
 export * from "./fake-runtime-driver.js";

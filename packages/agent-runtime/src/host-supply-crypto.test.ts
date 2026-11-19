@@ -5,7 +5,7 @@ import {
 	encodeConnectionHostSupplyAadV1,
 	openConnectionHostSupplyV1,
 	sealConnectionHostSupplyV1,
-} from "./connection-host-supply-crypto.js";
+} from "./host-supply-crypto.js";
 
 const binding: ConnectionHostSupplyBindingV1 = {
 	deploymentIdentity: "namespace/release",
