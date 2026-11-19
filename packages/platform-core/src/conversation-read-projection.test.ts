@@ -96,6 +96,7 @@ describe("Conversation read projection", () => {
 						createdAt: first,
 						updatedAt: second,
 						traceId: "trace-1",
+						...(text ? { hasLaterEvents: true } : {}),
 					},
 				],
 				events: text
@@ -158,40 +159,43 @@ describe("Conversation read projection", () => {
 		},
 	);
 
-	it("does not fabricate a processing answer for a completed execution on an earlier page", () => {
-		const input = {
-			messages: [
-				{
-					messageId: "message-old",
-					text: "Run it",
-					executionId: "execution-old",
-					status: "submitted",
-					createdAt: first,
-				},
-			],
-			executions: [
-				{
-					executionId: "execution-old",
-					conversationId: "conversation-1",
-					sourceMessageId: "message-old",
-					status: "completed",
-					createdAt: first,
-					updatedAt: second,
-					traceId: "trace-old",
-					hasEarlierEvents: true,
-				},
-			],
-			events: [],
-			eventWindow: { hasEarlier: true },
-		};
+	it.each(["hasEarlierEvents", "hasLaterEvents"] as const)(
+		"does not fabricate a processing answer when %s places a completed execution outside the page",
+		(outsideWindow) => {
+			const input = {
+				messages: [
+					{
+						messageId: "message-old",
+						text: "Run it",
+						executionId: "execution-old",
+						status: "submitted",
+						createdAt: first,
+					},
+				],
+				executions: [
+					{
+						executionId: "execution-old",
+						conversationId: "conversation-1",
+						sourceMessageId: "message-old",
+						status: "completed",
+						createdAt: first,
+						updatedAt: second,
+						traceId: "trace-old",
+						[outsideWindow]: true,
+					},
+				],
+				events: [],
+				eventWindow: { hasEarlier: true },
+			};
 
-		expect(projectConversationMessagesV1(input)).toEqual([
-			expect.objectContaining({
-				messageId: "message-old",
-				role: "user",
-			}),
-		]);
-	});
+			expect(projectConversationMessagesV1(input)).toEqual([
+				expect.objectContaining({
+					messageId: "message-old",
+					role: "user",
+				}),
+			]);
+		},
+	);
 
 	it("keeps a completed execution with no events when only another execution is earlier", () => {
 		const projected = projectConversationMessagesV1({

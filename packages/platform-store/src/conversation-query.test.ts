@@ -2180,6 +2180,57 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 		return new PostgresConversationQueryV1({ databaseUrl, eventWindow: 200 });
 	}
 
+	it("projects each completed answer only on its own page of a five-round history", async () => {
+		const id = "two-page-history";
+		// The deployed sample returned 121 events for three older rounds and
+		// 293 for two newer rounds, with five user and five assistant messages.
+		const rounds = [
+			{ reasoning: 5, text: 33 },
+			{ reasoning: 5, text: 33 },
+			{ reasoning: 5, text: 34 },
+			{ reasoning: 5, text: 139 },
+			{ reasoning: 5, text: 140 },
+		];
+		await seedRounds(id, rounds);
+		const reader = platformReader();
+		try {
+			const recent = await reader.get(reasoningScope, id);
+			const beforeCursor = recent?.eventWindow?.beforeCursor;
+			if (!recent || !beforeCursor) throw new Error("Expected two event pages");
+			const older = await reader.get(reasoningScope, id, undefined, {
+				beforeCursor,
+			});
+			if (!older) throw new Error("Expected older event page");
+			expect(recent.events).toHaveLength(293);
+			expect(older.events).toHaveLength(121);
+			expect(older.eventWindow).toEqual({
+				hasEarlier: false,
+				beforeCursor: null,
+			});
+
+			const projected = [older, recent].map((page, index) => {
+				const messages = projectConversationMessagesV1(page);
+				expect(messages.filter(({ role }) => role === "user")).toHaveLength(5);
+				const expected = index === 0 ? [1, 2, 3] : [4, 5];
+				expect(messages.filter(({ role }) => role === "assistant")).toEqual(
+					expected.map((round) =>
+						expect.objectContaining({
+							messageId: `assistant:${executionOf(id, round)}`,
+							status: "completed",
+							text: answerOf(id, round, rounds),
+						}),
+					),
+				);
+				return messages;
+			});
+			expect(
+				new Set(projected.flat().map(({ messageId }) => messageId)).size,
+			).toBe(10);
+		} finally {
+			await reader.close();
+		}
+	});
+
 	it("shows every answer and thinking process of a three-round reasoning conversation on the first screen", async () => {
 		const reader = platformReader();
 		try {

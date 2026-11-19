@@ -93,6 +93,8 @@ export interface ConversationQueryExecutionV1 {
 	readonly traceId: string | null;
 	/** Whether this execution has persisted events before the current event page. */
 	readonly hasEarlierEvents?: boolean;
+	/** Whether this execution has persisted events at or above the page's exclusive upper bound. */
+	readonly hasLaterEvents?: boolean;
 	/** 经排队受理的 Execution 的等待顺序（§12.5）；只用于派生同会话内位次，不对外暴露。 */
 	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因；其他状态为空。 */
@@ -351,6 +353,7 @@ interface ExecutionRow extends ExecutionFailureFactRowV1 {
 	readonly trace_id: string | null;
 	readonly task_wait_order: string | number | null;
 	readonly has_earlier_events: boolean;
+	readonly has_later_events: boolean;
 }
 
 interface EventRow {
@@ -772,6 +775,7 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 		updatedAt: timestamp(row.updated_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
 		...(row.has_earlier_events ? { hasEarlierEvents: true } : {}),
+		...(row.has_later_events ? { hasLaterEvents: true } : {}),
 		taskWaitOrder:
 			row.task_wait_order === null || row.task_wait_order === undefined
 				? null
@@ -907,6 +911,7 @@ async function readExecutions(
 	executionId?: string,
 	run: RunStatement = runStatement,
 	beforeEventCursor?: number,
+	upperEventCursor?: number,
 ): Promise<ConversationQueryExecutionV1[]> {
 	const rows = await run(database<ExecutionRow[]>`
 		select e.execution_id, e.conversation_id, e.status, e.created_at, e.updated_at,
@@ -944,6 +949,17 @@ async function readExecutions(
 						and earlier.conversation_cursor < ${beforeEventCursor}
 				)`
 			} as has_earlier_events,
+			${
+				upperEventCursor === undefined
+					? database`false`
+					: database`exists (
+				select 1
+				from platform.conversation_events later
+				where later.conversation_id = e.conversation_id
+					and later.execution_id = e.execution_id
+					and later.conversation_cursor >= ${upperEventCursor}
+			)`
+			} as has_later_events,
 			${executionFailureFactsSql(database)}
 		from platform.conversation_executions e
 		join platform.conversations c on c.id = e.conversation_id
@@ -2376,6 +2392,7 @@ export class PostgresConversationQueryV1 {
 							undefined,
 							run,
 							page.eventBoundary,
+							beforeCursor,
 						),
 					]);
 					return {
