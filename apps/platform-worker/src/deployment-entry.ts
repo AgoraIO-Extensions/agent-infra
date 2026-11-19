@@ -121,6 +121,7 @@ type DeploymentConfiguration = {
 	readonly ownerConnectionBindingConfiguration?: unknown;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
+	readonly connectionInstallBootstrap?: import("./connection-install-bootstrap.js").ConnectionInstallBootstrapDeploymentV1;
 	readonly connectionInstallationSupply?: unknown;
 	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
@@ -253,6 +254,7 @@ const {
 		removedConnectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
 	connectionOAuthProvisioning: configuredConnectionOAuthProvisioning,
+	connectionInstallBootstrap: configuredConnectionInstallBootstrap,
 	createSkillMaterializer,
 	skillMaterialization,
 	nativeMetadataGateway: configuredNativeMetadataGateway,
@@ -1032,6 +1034,12 @@ async function createPreparedOwning(
 					{
 						serviceToken,
 						oauthProvisioning: configuredConnectionOAuthProvisioning,
+						...(configuredConnectionInstallBootstrap
+							? {
+									connectionInstallBootstrap:
+										configuredConnectionInstallBootstrap,
+								}
+							: {}),
 					},
 				),
 			resolveRuntimeHost: async (
@@ -1152,6 +1160,9 @@ export async function createPlatformSessionReserveWorkerOptionsV1(
 		adapter: createSessionSandboxReserveAdapterV1({
 			workload: deployment.workload,
 			serviceToken,
+			...(configuredConnectionInstallBootstrap
+				? { connectionInstallBootstrap: configuredConnectionInstallBootstrap }
+				: {}),
 		}),
 		signal,
 	};
@@ -1331,6 +1342,9 @@ export async function readPlatformSessionDemandImagesV1(request: unknown) {
 			},
 			serviceToken,
 			oauthProvisioning: configuredConnectionOAuthProvisioning,
+			...(configuredConnectionInstallBootstrap
+				? { connectionInstallBootstrap: configuredConnectionInstallBootstrap }
+				: {}),
 			configurationModule: new URL("./configuration.mjs", import.meta.url),
 			// The same mounted reserve file field the reserve deployment readback reports.
 			configurationSourceSha: (
