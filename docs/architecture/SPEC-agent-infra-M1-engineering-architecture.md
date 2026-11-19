@@ -2587,17 +2587,24 @@ Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
 注册元数据或 Owner 不替代用户实际 OAuth 确认。
 
-动态手工安装仅在 Connection 的原事务绑定回读已发布，且部署已批准其服务认证和合同修订时启用。
-首次登记回执只核实
-原登记键、client/Consumer/实例、回调及登记配置。Connection 在使用者完成原 OAuth 确认时绑定
-实际 Principal。原回跳已经确认且原平台用户明确确认后，Host 须在读取 code 或 verifier 前，从
-原描述符和同一回跳事务派生固定的只读查询，核对实际 Principal 与 §13.5.1 的预期映射，并核对
-同一 client/Consumer/实例、登记键、resource/scope、精确回调和本次已批准、未消费的 OAuth
-授权事务。回读合同须提供能与该次回跳核对的非秘密事务证据。只返回登记项或 DEVICE 当前
-Principal 的查询不足以核实原事务。Host 先经 Worker 只读核对 Store 中的当前原 claim 和
-原授权，再在同一 Host 私有安装事务用 CAS 固定符合本次 confirm 的绑定证据引用及修订。
-CAS 成功并再次核对原授权后才读取兑换材料。结果不明、证据不完整
-或 CAS 不匹配时保留待核实并拒绝兑换。只有换码后才能提供的回读不满足此门禁。
+**动态手工安装的外部依赖。** Connection OAuth API/Store 负责发布受服务认证保护的、版本化
+的原 OAuth 事务只读回读。M1 动态手工安装仅在该合同已发布，且部署已批准精确 HTTPS 目标、
+服务身份及权限、合同版本与修订后启用。任一输入缺失时保持关闭。
+
+首次登记回执只核实原登记键、client/Consumer/实例、回调及登记配置。Connection 在使用者完成
+原 OAuth 确认时，将实际 Principal 与不可变的非秘密事务关联绑定到自己批准的同一授权事务。
+双方发布的合同须规定如何用原登记和已校验且单次消费的回跳 state 摘要，或沿获准服务协议取得、
+与该回跳绑定的非秘密事务引用，唯一定位这一事务。若选 state 摘要，Connection 须在其原授权
+事务中绑定摘要及原登记，在回读时拒绝重复匹配和歧义。Host 只从固定描述符与受信回跳记录
+派生查询。回跳格式沿用本节规则，相关性核实不读取 code 或 verifier。
+
+原回跳已确认且原平台用户明确确认后，Host 用批准的服务身份回读，核对实际 Principal 与
+§13.5.1 的预期映射，并核对 issuer、同一 client/Consumer/实例、登记键、resource/scope、精确
+回调及本次已批准、未消费的 OAuth 授权事务。EP-1060 按登记键返回的登记及 DEVICE Principal
+只证明登记与实例绑定。Host 先经 Worker 只读核对 Store 中的当前原 claim 和原授权，再在同一
+Host 私有安装事务用 CAS 固定本次 confirm 的非秘密绑定证据引用及修订。CAS 成功并再次核对
+原授权后才读取兑换材料。结果不明、证据不完整或 CAS 不匹配时保留待核实并拒绝兑换。
+仅在换码后提供的回读不满足启用门禁。
 
 核实成功后只兑换一次原 code，并以该响应的实际 expiry、原授权/scope/reference、已核实实例
 及部署批准的同版本 MCP 合同生成既有私有 publication 回执。credentialRef/revision 是 Host
@@ -2751,10 +2758,8 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 唯一命令。现有生产 Conversation Worker 从同一持久队列按原 Execution 和有效 claim 领取。
 发送前核对原授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
 本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
-并在换码前和每次等待后复核上述事实。只有同一安装的 publication 提交经复核后才开放 MCP。
-确认已发送但状态不明时，只能由原用户在有效原 claim 内查询同一命令、原绑定与私有发布提交
-的已保存结果。服务端只对同一仍有效的原安装以 CAS 补记已核实结果。无法确认则保留
-`unknown` 并关闭 MCP。恢复不重放 confirm、回跳或换码，不重建 Host 或续租。
+并在换码前和每次等待后复核上述事实。confirm 结果不明时，按本节“来源与发布”的动态启用
+许可和只读恢复规则处理。
 
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
@@ -2841,7 +2846,7 @@ Token 主体、Consumer/实例、generation、期限和授权。供应方仅消�
 refresh Token/verifier 只保留在同一受保护客户端的专用材料中，不进入 reader 的普通 metadata。
 安装/凭据引用区分本地事务引用与 Connection 已确认引用，不以本地随机 ID 冒充服务端实例。
 
-Host 的 `prepareRuntimeOAuth` 仅在部署显式选择 OAuth 发布时消费批准的非秘密安装发布
+已预组装的启动供应由 Host 的 `prepareRuntimeOAuth` 在部署显式选择 OAuth 发布时消费批准的非秘密安装发布
 回执文件。Worker 配置使用显式 `connectionInstallation.publishOAuth=true`，仅当相同
 Agent 的标准 OAuth 配置、完整 profile/approval 和安装 supply 均有效时，生成
 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`；未选择、PAT 或缺 supply 保留
@@ -2866,12 +2871,33 @@ key、完整 metadata 摘要及同一供应修订。payload、sidecar、原事�
 保留锁，接收器拒绝；提交后的目录同步仅确认清理持久性，失败不把已提交事实回写成
 未提交。重启若锁恢复则拒绝，锁缺失时也须核实同一原事务和内容，不能重发换码来恢复。
 reader 在材料读取前后及最终原授权复核后继续核对该提交事实和固定 metadata 快照。
+
+**动态安装的同一 Host 发布。** 部署须明确批准动态发布合同及其修订。空启动的原 Host 在
+首次 begin 通过原 Worker 签名、持久 sending 和原安装 CAS 固定批准的非秘密描述符。原
+confirm 在同一 Host 校验该描述符、原事务绑定证据和当前授权，成功兑换一次后，以核实的
+Principal、client/实例和批准的 publication 合同构造同一版本的非秘密发布回执。由同一 Host
+调用既有私有发布事务，执行相同的材料持久化、发布锁、提交及 reader 核验。动态路径以该描述符
+为发布输入。启动时只需受保护入口及部署信任，不要求预装完整 client 配置或静态回执文件。
+
+**动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
+Platform Store 在核实同一原 confirm 及该证据后，用原安装 CAS 持久写入启用许可。许可绑定
+原用户、Agent、安装、原 confirm、当前 claim、Host/Pod、代次、fence、描述符及提交摘要。
+动态 reader 须经获准的只读权威回读确认该许可当前有效，并同时通过既有本地提交和授权校验，
+才可使用 MCP 材料。Host 本地提交已成而 Platform 尚未记许可时，保留本地提交，MCP 保持
+关闭。许可已持久化而回包丢失时，以当前许可和原 Host 的提交事实判定可用性。
+
+confirm 结果不明时，原用户只能在有效原 claim 内只读核实同一命令、原绑定、Host 私有提交
+和 Platform 许可。服务端仅在原授权及全部绑定当前有效、证据完全匹配时 CAS 补记同一启用
+许可。无法核实时保留 `unknown`，许可缺失、失效或绑定不符时关闭 MCP。恢复不重发 confirm、
+回跳或换码，不重建 Host 或续租，也不抹去已经核实的提交事实。
+
 refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确认后擦除该事务拥有的
 私有 export/reader 材料副本，不删除其他主体或 Agent 的材料。
 
-发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。初版仍采用受控
-重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
-热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
+发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。已预组装的启动
+供应及后续安装修订按受控重新装配和固定安装快照规则，由批准配置、原接收器和 resolver
+重新核对。动态首次安装沿同一原 Host 完成。两条路径均禁止热改已有 Thread 工具快照，
+或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
 
 **Session Host 启动供应。** `createProductionSessionSandboxReceiverV1` 可选择部署批准的
 `oauthProvisioning`，第一版限定一个原用户与 Agent、预注册 HTTPS client 和已签发的精确
@@ -3219,10 +3245,14 @@ Worker 重启无法核实当前记录，以及审批、关联或供应修改。�
 status 单独替换原用户、Agent 或安装时，Host 须在读取材料及发送原键 GET 前拒绝。
 原 claim 结束后只保留负责人核实路径，不生成链接。
 
-动态手工 confirm 验收从原回跳和原用户确认走现有生产 Worker 队列。覆盖映射或 publication
-修订漂移、错 Principal、同一登记键下不同授权事务、未发布或不完整的回读、迟到结果及 CAS
-冲突。上述路径均拒绝读取兑换材料或启用 MCP。分别在发送、换码和 publication 提交后模拟
-丢响应，验证 status 只核实已保存的原事务，无法确认时保留 unknown，且不会重发换码。
+动态手工 confirm 验收从实际空启动 Host 开始，走同一原 Host、真实生产 Worker 队列、原回跳、
+原用户确认、一次 code＋PKCE 兑换、私有 publication 和 reader。换码前覆盖映射或 publication
+修订漂移、错 Principal、同登记键的另一授权事务、回读或部署批准缺失、证据不完整、迟到结果
+及 CAS 冲突，断言不读取兑换材料、不换码、不启用 MCP。
+换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
+首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
+可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
+补记冲突，断言保持 unknown、无许可时不可用、各分支均不重复换码。
 
 生产安装验收包括供应方实际输出、可信 SecretRef、合法确认和领取、跨 Session/代次、
 错 state/issuer/resource、重放、撤权及 unknown，以及最终 Linux 文件、内存与 FD 保护。
