@@ -161,6 +161,12 @@ CI 或评审失败时由负责人、本地 Agent 查看原生日志和评论，�
 后重新判断；已有 auto-merge request 会先取消。最终合并仍以 GitHub 的 required conversation
 resolution 为准。
 
+GitHub 以 `clean` 或 `unstable` 状态拒绝登记时，结果仅表示本次未登记。后续受支持的事件会重新判断。
+若重新判断后仍未登记，有合并权限的维护者须确认当前 head 与已评审的提交一致，并独立核实本节要求的
+全部合并门禁，包括 required checks、CODEOWNER 批准和 conversation resolution。确认后可按常规流程
+执行 Squash，例如 `gh pr merge --squash --match-head-commit <已评审的完整 head SHA>`。
+合并仍受 GitHub 分支保护约束。
+
 ## 10. 安全与验证
 
 - `pull_request_target` 使用默认分支可信代码，不 checkout 或执行 PR head。
