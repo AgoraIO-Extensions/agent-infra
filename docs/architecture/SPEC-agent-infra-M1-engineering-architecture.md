@@ -1725,11 +1725,12 @@ RuntimeHost 验证绑定，Worker 按实际 Pod 的容器、安全上下文、�
 Endpoint 固定在同 Session Pod 的 loopback，不新增 Service/Ingress 或跨 Pod 的无认证监听。
 同 Pod 网络共享不构成身份授权，executor 访问 Host 的模型/控制入口仍须被既有授权门禁拒绝。
 
-排空通道的实例身份由 Worker 按原 Pod 实际 UID、Sandbox、Session generation 和 resource
-fence 签发。控制容器的 Host 和 executor 内的 runner 分别使用独立的短期身份，只有可信
-启动程序可交付给这两个进程。交付限制、运行进程保护及作废规则见
+Worker 为原 Pod 的 Host 和 runner 分别签发一次性的短期启动凭证，绑定实际 Pod UID、
+Sandbox、Session generation 和 resource fence。可信启动程序使用独立本地事实核对绑定，
+消费凭证并固定原实例公钥。交付限制、运行进程保护及作废规则见
 [Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
-启用仍由部署显式授权，认证材料或原绑定缺失时拒绝该模式的准入和排空证明。
+启用仍由部署显式授权。需要 Helm 装配或新增 RBAC 时另开默认关闭的 Helm PR，权限限于
+该启动投影实际所需操作，由部署负责人 sess_fccff4b2 安排目标环境部署。
 
 只有上述外部边界有效时，Driver 才能为模型 Turn 选择固定版本公开 RPC 的
 `SandboxPolicy.externalSandbox`。所有模型可控制的命令、补丁、图片和文件访问必须经过唯一

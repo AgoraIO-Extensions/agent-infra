@@ -1057,26 +1057,50 @@ Executor 实例或传输会话变化使原准入失效；只有原实例/会话�
 
 #### 10.3.1 排空通道的实例身份交付
 
-- Worker 先持久化本次启动意图及一次性投影引用。Pod 的 init 等待该投影。Worker 回读原
-  Pod UID，再沿原所有权、修订与 fence CAS 固定身份和投影。为 Host 和 runner
-  分别签发绑定角色和公钥的短期身份，绑定原
-  Sandbox、Pod UID、Session generation、resource fence 和启动引用。两端启动时核验
-  同一受信部署签发者、原绑定和预期对端公钥及角色。Shell 或工具通道的身份不能用于排空。
-- 启动输入通过 Worker 所有的不可变、一次性文件投影交给原 Pod 的可信 init 程序。
-  init 按角色将两个输入放入不同的临时内存卷。每个卷只挂载到对应的运行容器。
-  启动器先读入保护内存并移除交付文件，关闭临时描述符，完成原对端身份确认后才开放
-  子进程启动。工具、Codex 子进程、模型及浏览器无法取得
-  原始认证材料，日志只记录引用和固定原因。Worker 按本次投影的原所有权清理已确认消费
-  或已过期的输入。生产启动和目标 Linux 环境须证明同 UID 的业务子进程也无法从
-  文件、进程内存、`/proc`、FD、argv 或 env 读取材料。
-- 启动输入只允许原实例消费一次。双方认证时固定 runner 的实际 epoch，并将它绑定到
-  同一原 Pod 与 fence；身份只在其有效期内用于该绑定。Pod 替换、容器实例变化、
-  epoch 或 fence 变化及到期后拒绝原身份继续执行控制。丢失消费结果时只核实原启动，
-  不向新实例交付旧私有材料。原已持久且验证过的证明仍按原绑定回读。缺少可核实的
-  原身份和证明时，保留原 Stop 的排空屏障。
+- Worker 在创建 Pod 前持久化原启动意图、投影引用和部署批准的绝对启动期限，回读实际
+  Pod UID 后按原所有权、修订和 fence CAS 发布不可变投影。init 和运行端分别从 kubelet
+  Downward API 读取本地 Pod UID，从固定启动入口取得本端角色，从独立受信部署输入取得
+  Sandbox、generation、resource fence 和签发公钥。先验签，再逐项比较本地绑定、
+  启动引用、角色和对端公钥。身份包中的字段不能充当本地事实或验签根。
+  [Downward API](https://kubernetes.io/docs/concepts/workloads/pods/downward-api/)
+  Worker 从持久期限检查整个启动过程，包括 kubelet 等待挂载。init 启动后使用同一
+  剩余期限完成校验和交付。期限已到或输入不匹配时，Worker 持久记录启动失败原因，
+  关闭路由和业务准入，按原对象所有权及 CAS 收口。重试先核实原启动，期限不重置。
+- 一次性短期凭证只由原 Pod 的可信 init 读取。init 按角色写入各自的临时内存卷。
+  启动器先关闭调试和转储，在持钥进程中建立并校验 Linux 进程保护。Linux
+  使用 `PR_SET_DUMPABLE=0` 并回读，持钥进程保持该状态。保护校验失败时拒绝读取
+  私有材料和启动业务子进程。角色输入的临时文件由可信启动程序按归属打开，拒绝
+  符号链接和身份漂移。角色输入经验证后读入保护内存，随后移除交付文件，
+  关闭描述符、完成对端认证，才允许同 UID 子进程运行。持钥 FD 不继承，私有材料
+  只在 Host 和 runner 的保护边界内使用，日志只记引用和固定原因。Worker 按本次
+  投影的原所有权清理已确认消费或已过期的输入。
+  [Linux 进程转储控制](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html)
+- 启动凭证的有效期仅约束首次消费。双方在可信启动中固定该次产生并确认的本实例
+  公钥、runner 实际 epoch、Pod UID 和 fence，直至该实例或绑定退役。
+  排空请求沿原 Stop 取得短期控制授权，每次验证当前原绑定、挑战、用途和期限，
+  包括复用已建立连接时。启动凭证到期后，同一原实例上的在途 Execution 继续沿原
+  控制通道完成 Stop。Pod 或任一容器实例替换、epoch 或 fence 变化时使旧绑定作废。
+  消费确认丢失只核实原启动，新实例使用新身份。若原身份无法核实或控制授权重发失败，
+  原 Stop 期限仍按 §8.4 收敛，排空未证继续按
+  [工程 Spec §11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
+  保留原屏障和占用。
 
-启动交付验收覆盖两角色互换、跨 Pod 调换、旧 epoch 或 fence 重放、过期和重复消费，
-以及在首次消费确认丢失后重启。所有拒绝路径均不得开放业务准入或产生排空证明。
+在目标 ACK 新 lane 按以下步骤取证。
+
+1. Runtime 负责人提供绑定候选镜像和验收 namespace 的受控合成场景。部署负责人在
+   获准窗口采用该版本，登记两个独占 Session Sandbox 的 Pod UID、epoch 和 fence。
+   A 通过正常 Agent 和会话入口创建执行，使用 `POST /api/v1/conversations/:conversationId/stops`
+   提交原 Stop，用 `GET /api/v2/conversations/:conversationId/executions/:executionId`
+   回读原 Execution。故障场景只接受部署批准的固定选项、指定合成目标和有界期限。
+2. A 对合成目标分别使用角色互换、跨 Pod 投影、旧 epoch 或 fence、过期、重复消费、
+   投影缺失和丢消费确认后重启场景。回读原启动引用、适用期限、首次拒绝时间和固定
+   原因，核对无业务就绪、无新工具执行及无排空证明。再次读原记录核实失效输入由原
+   所有权收口。
+3. 在正常就绪的合成执行中，通过已获准的原生 shell 运行固定同 UID 只读探针。回执只
+   记录交付文件已移除、内存和 FD 访问被拒、子进程未继承材料的布尔结果。保留同镜像
+   正常命令和本实例身份校验的正例。等待原启动有效期结束后，对同一仍运行的 Execution
+   提交一次 Stop，回读原 epoch 认证和排空证明。另在批准场景中阻断短期控制授权续发，
+   确认无证明时仍待核实、占用保留且后继 Turn 未启动。
 
 验收使用真实 Linux 前台和后台进程组，并在同版本 ACK 镜像复验。绑定同一 Execution、
 stopRequestId、fence、Pod UID、executor epoch 和已登记进程组。按 §8.4 的原
