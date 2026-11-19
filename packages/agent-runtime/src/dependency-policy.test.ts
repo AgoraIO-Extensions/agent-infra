@@ -62,8 +62,12 @@ describe("agent-runtime dependency direction", () => {
 				imports.some((specifier) =>
 					// The canonical shared Consumer type is a contracts subpath, not
 					// a Connection domain/adapter import (Spec §13.5.4 and HLD §12.1).
+					// The installation TLS transport belongs to this package.
 					forbidden === "connection" &&
-					specifier === "@agent-infra/contracts/connection-consumer-profile"
+					[
+						"@agent-infra/contracts/connection-consumer-profile",
+						"./connection-install-tls.js",
+					].includes(specifier)
 						? false
 						: forbidden === "connection"
 							? /(?:^|\/)connection(?:[-/]|$)/.test(specifier)
