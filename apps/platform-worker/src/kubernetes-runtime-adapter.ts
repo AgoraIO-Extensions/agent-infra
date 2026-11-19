@@ -1994,12 +1994,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 			identity: { uid: string; generation: number },
 			routeMode: RouteSelectorMode = "closed",
+			reconcileCertificateState = true,
 		) {
 			const value = desired(input);
-			if (isMultiService(value)) return multiService.promote(value);
-			if (!(await hostnameCertificates.ready(value)))
+			if (isMultiService(value))
+				return multiService.promote(value, reconcileCertificateState);
+			if (!(await hostnameCertificates.ready(value, reconcileCertificateState)))
 				throw new WorkloadKubernetesError("unavailable");
-			if ((await observe(value, identity, routeMode, "required")) !== "healthy")
+			if (
+				(await observe(
+					value,
+					identity,
+					routeMode,
+					"required",
+					undefined,
+					reconcileCertificateState,
+				)) !== "healthy"
+			)
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);
 			if (value.route.exposure === "internal-only") {
@@ -2248,6 +2259,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 			routeMode: RouteSelectorMode = "closed",
 			trustedDesired?: AgentWorkloadDesiredV1,
+			reconcileCertificateState = true,
 		) {
 			const request = validateWorkloadRouteSwitchRequestV1(input);
 			const correlation = {
@@ -2295,6 +2307,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						},
 						routeMode,
 						"required",
+						undefined,
+						reconcileCertificateState,
 					)) !== "healthy"
 				)
 					throw new WorkloadKubernetesError("conflict");
@@ -2305,6 +2319,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						generation: target.workloadGeneration,
 					},
 					routeMode,
+					reconcileCertificateState,
 				);
 				const service = await client.read<V1Service>(
 					"Service",

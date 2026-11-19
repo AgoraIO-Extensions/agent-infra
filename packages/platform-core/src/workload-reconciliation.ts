@@ -455,7 +455,10 @@ export interface WorkloadRuntimePortV1 {
 				readonly identity: WorkloadIdentityV1;
 		  }
 	>;
-	promote(state: WorkloadReconciliationStateV1): Promise<void>;
+	promote(
+		state: WorkloadReconciliationStateV1,
+		reconcileCertificateState?: boolean,
+	): Promise<void>;
 	discardUnactivatedSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -868,7 +871,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return await closeUnreadableCertificate();
 							if (health === "healthy") {
 								if (state.certificateWait?.resumeRejected) {
-									await runtime.promote(state);
+									await runtime.promote(state, reconcileCertificateState);
 									return advance("rejected");
 								}
 								return advance("activating");
@@ -938,7 +941,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return failed("health_check_failed");
 							}
 							const capabilities = await runtime.capabilities(state);
-							await runtime.promote(state);
+							await runtime.promote(state, reconcileCertificateState);
 							return advance("ready", {
 								verified: state.candidate,
 								verifiedRevision: state.revision,
@@ -950,7 +953,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (health === "certificate-unavailable")
 								return await closeUnreadableCertificate();
 							if (health === "healthy") {
-								await runtime.promote(state);
+								await runtime.promote(state, reconcileCertificateState);
 								return servingProbeCompleted(state);
 							}
 							if (servingProbeTolerated(state, health))
@@ -978,7 +981,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (health === "certificate-unavailable")
 								return await closeUnreadableCertificate();
 							if (health === "healthy") {
-								await runtime.promote(state);
+								await runtime.promote(state, reconcileCertificateState);
 								return servingProbeCompleted(state);
 							}
 							if (servingProbeTolerated(state, health))

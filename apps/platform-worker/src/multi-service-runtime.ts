@@ -2067,9 +2067,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			await emitHealthDiagnostic(value, "healthy");
 			return "healthy" as const;
 		},
-		async promote(value: MultiServiceDesired) {
+		async promote(
+			value: MultiServiceDesired,
+			reconcileCertificateState = true,
+		) {
 			assertWorkloadPublicRouteV1(options.policy, value);
-			if (!(await hostnameCertificates.ready(value)))
+			if (!(await hostnameCertificates.ready(value, reconcileCertificateState)))
 				throw new WorkloadKubernetesError("unavailable");
 			await put(ingress(value, options.policy), value);
 		},

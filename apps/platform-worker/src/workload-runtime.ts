@@ -2723,7 +2723,7 @@ export function createWorkloadRuntimeV1(
 			}
 			return resultWithIdentity("active");
 		},
-		async promote(state) {
+		async promote(state, reconcileCertificateState) {
 			await restoreSnapshotProjection(state);
 			const scope = stepScope.getStore();
 			let pass =
@@ -2743,7 +2743,10 @@ export function createWorkloadRuntimeV1(
 			if ("manifest" in state.candidate.configuration.source) {
 				const workload = desiredForRecovery(state);
 				if (isMultiService(workload))
-					await multiServiceFor(state).promote(workload);
+					await multiServiceFor(state).promote(
+						workload,
+						reconcileCertificateState,
+					);
 				return;
 			}
 			// 只在本次晋升的短窗口内复用未变化 Pod 的证明；仍核对资源与 HTTP health。
@@ -2803,6 +2806,7 @@ export function createWorkloadRuntimeV1(
 				},
 				routeSelectorMode(state),
 				workload,
+				reconcileCertificateState,
 			);
 			if (result.status !== "completed")
 				throw new Error("Workload route is unavailable");

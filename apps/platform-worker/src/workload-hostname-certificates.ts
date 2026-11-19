@@ -303,8 +303,11 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			await preparation(value);
 		},
 		observe,
-		async ready(value: AgentWorkloadDesiredV1) {
-			return (await observe(value)) === "ready";
+		async ready(
+			value: AgentWorkloadDesiredV1,
+			reconcileCertificateState = true,
+		) {
+			return (await observe(value, reconcileCertificateState)) === "ready";
 		},
 		async prepare(value: AgentWorkloadDesiredV1) {
 			const plan = await preparation(value);

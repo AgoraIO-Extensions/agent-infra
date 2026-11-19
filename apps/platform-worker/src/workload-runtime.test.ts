@@ -8645,7 +8645,10 @@ it("rejects persisted snapshot apply when the approved egress disappears after p
 	expect(f.writes).toHaveLength(0);
 });
 
-async function readyHostnameFixture(configuration = hostnameConfiguration()) {
+async function readyHostnameFixture(
+	configuration = hostnameConfiguration(),
+	phase: "ready" | "promoting" = "ready",
+) {
 	const f = fixture(
 		{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
 		{ configuration },
@@ -8684,10 +8687,50 @@ async function readyHostnameFixture(configuration = hostnameConfiguration()) {
 			resourceVersion: "1",
 		},
 	});
-	await f.tick(10);
-	assert(f.state?.phase === "ready");
+	await f.tick(phase === "ready" ? 10 : 2);
+	assert(f.state?.phase === phase);
 	return { f, ready };
 }
+
+it.each([
+	["single", "ready"],
+	["multi", "ready"],
+	["single", "promoting"],
+	["multi", "promoting"],
+] as const)(
+	"uses the compatibility Certificate rules for %s publication from %s",
+	async (kind, phase) => {
+		const { f, ready } = await readyHostnameFixture(
+			hostnameConfiguration(kind),
+			phase,
+		);
+		const before = await f.client.read("Ingress", hostnameWorkloadName);
+		const certificate: WorkloadHostnameCertificateV1 = {
+			...ready,
+			status: {
+				...ready.status,
+				conditions: [
+					...ready.status.conditions,
+					{
+						type: "Issuing",
+						status: "False",
+						observedGeneration: (ready.metadata?.generation ?? 1) - 1,
+					},
+				],
+			},
+		};
+		f.seed(certificate);
+		await f.tick(1, false);
+		expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
+		expect(f.state?.lastFailure).toBeUndefined();
+		const after = await f.client.read("Ingress", hostnameWorkloadName);
+		expect(after?.metadata?.uid).toBeTruthy();
+		if (phase === "ready") {
+			expect(before?.metadata?.uid).toBeTruthy();
+			expect(after?.metadata?.uid).toBe(before?.metadata?.uid);
+		}
+	},
+);
 
 it.each([
 	"pending",
