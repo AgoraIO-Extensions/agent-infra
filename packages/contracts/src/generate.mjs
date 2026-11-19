@@ -43,6 +43,7 @@ import {
 	observabilitySchemasV1,
 	operationsResourceOpenApiPathsV2,
 	operationsResourceSchemasV2,
+	operationsTaskOpenApiPathsV2,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
@@ -911,6 +912,7 @@ function buildArtifacts() {
 		paths: {
 			...pilotBrowserOpenApiPathsV2,
 			...operationsResourceOpenApiPathsV2,
+			...operationsTaskOpenApiPathsV2,
 			...agentDetailOpenApiPathsV1,
 			...directorySearchOpenApiPathsV1,
 			...agentCreationFailureOpenApiPathsV1,

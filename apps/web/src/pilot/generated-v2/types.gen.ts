@@ -9144,6 +9144,114 @@ export type GetOperationsResourcesV2Responses = {
 
 export type GetOperationsResourcesV2Response = GetOperationsResourcesV2Responses[keyof GetOperationsResourcesV2Responses];
 
+export type GetOperationsTasksV2Data = {
+    body?: never;
+    path?: never;
+    query: {
+        agentId: string;
+        sessionId: string;
+        start: string;
+        end: string;
+    };
+    url: '/api/v2/ops/tasks';
+};
+
+export type GetOperationsTasksV2Errors = {
+    /**
+     * Invalid bounded query
+     */
+    400: {
+        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
+        message: string;
+        retryable: true;
+        schemaVersion: 1;
+        traceId: string;
+    } | {
+        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
+        message: string;
+        retryable: false;
+        schemaVersion: 1;
+        traceId: string;
+    };
+    /**
+     * Authentication required
+     */
+    401: {
+        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
+        message: string;
+        retryable: true;
+        schemaVersion: 1;
+        traceId: string;
+    } | {
+        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
+        message: string;
+        retryable: false;
+        schemaVersion: 1;
+        traceId: string;
+    };
+    /**
+     * Not authorized
+     */
+    403: {
+        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
+        message: string;
+        retryable: true;
+        schemaVersion: 1;
+        traceId: string;
+    } | {
+        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
+        message: string;
+        retryable: false;
+        schemaVersion: 1;
+        traceId: string;
+    };
+    /**
+     * Query unavailable
+     */
+    503: {
+        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
+        message: string;
+        retryable: true;
+        schemaVersion: 1;
+        traceId: string;
+    } | {
+        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
+        message: string;
+        retryable: false;
+        schemaVersion: 1;
+        traceId: string;
+    };
+};
+
+export type GetOperationsTasksV2Error = GetOperationsTasksV2Errors[keyof GetOperationsTasksV2Errors];
+
+export type GetOperationsTasksV2Responses = {
+    /**
+     * Task metadata, truncation or a source gap
+     */
+    200: {
+        schemaVersion: 2;
+        source: 'platform';
+        state: 'available' | 'missing' | 'unavailable';
+        tasks: Array<{
+            evidence: Array<{
+                durationMs: number | null;
+                errorCode: string | null;
+                finishedAt: string | null;
+                observedAt: string;
+                stage: 'acceptance' | 'queue' | 'dispatch' | 'execution' | 'result' | 'runtime' | 'model' | 'tool' | 'verification';
+                startedAt: string | null;
+                state: 'accepted' | 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown' | 'started';
+            }>;
+            executionId: string;
+            status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+        }>;
+        truncated: boolean;
+    };
+};
+
+export type GetOperationsTasksV2Response = GetOperationsTasksV2Responses[keyof GetOperationsTasksV2Responses];
+
 export type ListSkillHubVersionsV1Data = {
     body?: never;
     path?: never;

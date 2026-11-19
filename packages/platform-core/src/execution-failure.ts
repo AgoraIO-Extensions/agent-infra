@@ -97,6 +97,11 @@ const modelFailureCodes: Readonly<Record<string, ExecutionFailureCategoryV1>> =
 		recovery_unconfirmed: "internal_error",
 	};
 
+/** Administrator projection forwards only explicitly registered values. */
+export function isExactExecutionFailureCodeV1(code: string): boolean {
+	return Object.hasOwn(exactCodes, code);
+}
+
 /** 已确认归类的码返回其分类；没有收录的码返回 null，由调用方继续看下一个来源。 */
 export function executionFailureCategoryForCodeV1(
 	code: string,
