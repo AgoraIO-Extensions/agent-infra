@@ -193,8 +193,7 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			!current.metadata?.uid ||
 			!current.metadata.resourceVersion ||
 			!Number.isSafeInteger(current.metadata.generation) ||
-			(current.metadata.generation ?? 0) < 1 ||
-			!options.client.readMetadata
+			(current.metadata.generation ?? 0) < 1
 		)
 			return "certificate-invalid" as const;
 
@@ -214,18 +213,41 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			)
 		)
 			return "certificate-invalid" as const;
-		const notAfter = Date.parse(current.status?.notAfter ?? "");
-		const notBefore = current.status?.notBefore;
+		const status = current.status;
 		const hasReadyCondition = ready[0]?.status === "True";
-		const readMetadata = options.client.readMetadata.bind(options.client);
-		let secret: Awaited<ReturnType<typeof readMetadata>> = null;
-		if (hasReadyCondition || checkPendingSecret) {
-			try {
-				secret = await readMetadata("Secret", route.tlsSecretName);
-			} catch {
-				// Unreadable metadata cannot authorize publication or resource cleanup.
-				return "certificate-unavailable" as const;
-			}
+		if (hasReadyCondition) {
+			const notAfter = Date.parse(status?.notAfter ?? "");
+			const notBefore = status?.notBefore;
+			if (
+				ready[0]?.observedGeneration !== current.metadata.generation ||
+				!Number.isFinite(notAfter) ||
+				notAfter <= now ||
+				(notBefore !== undefined &&
+					(!Number.isFinite(Date.parse(notBefore)) ||
+						Date.parse(notBefore) > now))
+			)
+				return "certificate-invalid" as const;
+		} else {
+			if (status?.lastFailureTime && issuing[0]?.status !== "True")
+				return "certificate-failed" as const;
+			if (status?.notAfter !== undefined || status?.notBefore !== undefined)
+				return "certificate-invalid" as const;
+			const createdAt = current.metadata.creationTimestamp;
+			const start =
+				createdAt === undefined ? Number.NaN : new Date(createdAt).getTime();
+			if (!Number.isFinite(start) || start > now)
+				return "certificate-invalid" as const;
+			if (now - start >= maximumIssuanceWaitMs)
+				return "certificate-timeout" as const;
+			if (!checkPendingSecret) return "certificate-pending" as const;
+		}
+
+		if (!options.client.readMetadata) return "certificate-unavailable" as const;
+		try {
+			const secret = await options.client.readMetadata(
+				"Secret",
+				route.tlsSecretName,
+			);
 			if (
 				secret &&
 				!matchesSecretMetadata(
@@ -236,29 +258,12 @@ export function createWorkloadHostnameCertificatesV1(options: {
 				)
 			)
 				return "certificate-invalid" as const;
+			if (!hasReadyCondition) return "certificate-pending" as const;
+			return secret ? ("ready" as const) : ("certificate-invalid" as const);
+		} catch {
+			// Unreadable metadata cannot authorize publication or resource cleanup.
+			return "certificate-unavailable" as const;
 		}
-		if (ready[0]?.status === "True")
-			return secret &&
-				ready[0].observedGeneration === current.metadata.generation &&
-				Number.isFinite(notAfter) &&
-				notAfter > now &&
-				(notBefore === undefined ||
-					(Number.isFinite(Date.parse(notBefore)) &&
-						Date.parse(notBefore) <= now))
-				? ("ready" as const)
-				: ("certificate-invalid" as const);
-		if (current.status?.lastFailureTime && issuing[0]?.status !== "True")
-			return "certificate-failed" as const;
-		if (current.status?.notAfter !== undefined || notBefore !== undefined)
-			return "certificate-invalid" as const;
-		const createdAt = current.metadata.creationTimestamp;
-		const start =
-			createdAt === undefined ? Number.NaN : new Date(createdAt).getTime();
-		if (!Number.isFinite(start) || start > now)
-			return "certificate-invalid" as const;
-		return now - start >= maximumIssuanceWaitMs
-			? ("certificate-timeout" as const)
-			: ("certificate-pending" as const);
 	}
 
 	return {

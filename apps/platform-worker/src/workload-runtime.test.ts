@@ -8714,6 +8714,105 @@ it.each([
 	},
 );
 
+it.each(["overdue", "failed"] as const)(
+	"terminates %s issuance when Secret metadata remains forbidden",
+	async (mode) => {
+		const { f, ready } = await readyHostnameFixture(
+			hostnameConfiguration("multi"),
+		);
+		const denied = vi.spyOn(f.client, "readMetadata").mockRejectedValue(
+			new WorkloadKubernetesError("unavailable", {
+				status: 403,
+				kind: "Secret",
+				verb: "get",
+			}),
+		);
+		const remove = vi.spyOn(f.client, "delete");
+		const pending: WorkloadHostnameCertificateV1 = {
+			...ready,
+			metadata: {
+				...ready.metadata,
+				creationTimestamp: new Date(
+					Date.now() - (mode === "overdue" ? 5 : 1) * 3600_000,
+				),
+			},
+			status:
+				mode === "failed" ? { lastFailureTime: new Date().toISOString() } : {},
+		};
+		f.seed(pending);
+		await f.tick(8);
+		const outcome =
+			mode === "overdue" ? "certificate-timeout" : "certificate-failed";
+		expect(f.state).toMatchObject({
+			phase: "failed",
+			revision: 1,
+			retainedFailure: { certificate: outcome },
+			lastFailure: { kind: "Certificate", verb: outcome },
+		});
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		expect(denied).not.toHaveBeenCalled();
+		expect(
+			remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+		).toHaveLength(0);
+	},
+);
+
+it.each([true, false])(
+	"recovers a rejected revision without treating its closed route as drift (writes %s)",
+	async (writes) => {
+		const { f } = await readyHostnameFixture();
+		Object.assign(f.options, { registry: rejectedRegistry() });
+		f.setManagement({
+			...f.management,
+			status: "available",
+			revision: 2,
+			workloadRevision: 2,
+		});
+		await f.tick(2, writes);
+		expect(f.state).toMatchObject({
+			phase: "rejected",
+			revision: 2,
+			verifiedRevision: 1,
+		});
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
+		const remove = vi.spyOn(f.client, "delete");
+		const create = vi.spyOn(f.client, "create");
+		const denied = vi.spyOn(f.client, "readMetadata").mockRejectedValue(
+			new WorkloadKubernetesError("unavailable", {
+				status: 403,
+				kind: "Secret",
+				verb: "get",
+			}),
+		);
+		await f.tick(1, writes);
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		for (let count = 0; count < 6; count++) {
+			f.roundTripState();
+			await f.tick(1, writes);
+			expect(f.state).toMatchObject({
+				phase: "rejected",
+				revision: 2,
+				verifiedRevision: 1,
+			});
+			expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		}
+		denied.mockRestore();
+		await f.tick(2, writes);
+		expect(f.state).toMatchObject({
+			phase: "rejected",
+			revision: 2,
+			verifiedRevision: 1,
+		});
+		expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
+		expect(
+			create.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+		).toHaveLength(0);
+		expect(
+			remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+		).toHaveLength(0);
+	},
+);
+
 it("retains a verified hostname workload after its certificate expires", async () => {
 	const { f, ready } = await readyHostnameFixture();
 	const retained = [

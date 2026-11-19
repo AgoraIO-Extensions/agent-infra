@@ -38,6 +38,7 @@ import {
 	hasUnverifiedWorkloadSecretRecoveryV1,
 	immutableSecretNameV1,
 	inheritWorkloadSecretRecoveriesV1,
+	isRejectedWorkloadRouteClosedForCertificateV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
 	planMissingWorkloadSecretRecoveryV1,
@@ -1255,7 +1256,9 @@ export function createWorkloadRuntimeV1(
 	function routeSelectorMode(
 		state: WorkloadReconciliationStateV1,
 	): "closed" | "open" {
-		return state.phase === "ready" || state.phase === "rejected"
+		return state.phase === "ready" ||
+			(state.phase === "rejected" &&
+				!isRejectedWorkloadRouteClosedForCertificateV1(state))
 			? "open"
 			: "closed";
 	}

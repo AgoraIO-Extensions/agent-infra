@@ -325,6 +325,16 @@ export interface WorkloadReconciliationFailureV1 {
 	readonly verb?: string;
 }
 
+export function isRejectedWorkloadRouteClosedForCertificateV1(
+	state: WorkloadReconciliationStateV1,
+): boolean {
+	return (
+		state.phase === "rejected" &&
+		state.lastFailure?.kind === "Certificate" &&
+		state.lastFailure.verb === "certificate-unavailable"
+	);
+}
+
 function classifyWorkloadFailureReasonV1(
 	error: unknown,
 ): WorkloadFailureReasonCodeV1 {
@@ -750,7 +760,20 @@ export function createWorkloadReconciliationV1(dependencies: {
 				const closeUnreadableCertificate = async () => {
 					closingUnreadableCertificate = true;
 					await runtime.closeRoute(state);
-					return state.phase === "ready" ? advance("observing") : state;
+					if (state.phase === "ready") return advance("observing");
+					if (state.phase !== "rejected") return state;
+					// Keep the original verified revision and use fields that the
+					// existing V1 state reader already persists in both rollout modes.
+					return {
+						...state,
+						lastFailure: {
+							schemaVersion: 1 as const,
+							reason: "kubernetes_unreachable" as const,
+							kind: "Certificate",
+							verb: "certificate-unavailable",
+							attempts: 1,
+						},
+					};
 				};
 				try {
 					// A persisted rejection means the route was closed and no resource
@@ -969,6 +992,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 							await runtime.closeRoute(state);
 							if (health === "certificate-pending") return waitForCertificate();
+							if (
+								health === "pending" &&
+								isRejectedWorkloadRouteClosedForCertificateV1(state)
+							)
+								return state;
 							return advance("closing", {
 								revision: nextRevision(state.revision),
 							});
@@ -1147,6 +1175,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 					// A deterministic rejection can also be discovered while applying a
 					// previously accepted candidate (for example, a migration Job that
 					// has reached Failed). Do not treat it as an image/PVC readiness wait.
+					if (isRejectedWorkloadRouteClosedForCertificateV1(failedState))
+						return observe({
+							...retrying,
+							lastFailure: failedState.lastFailure,
+						});
 					if (error instanceof WorkloadPreflightRejectedErrorV1)
 						return observe(failed("reconciliation_failed", lastFailure));
 					// Cleanup and route closure are retried durably, even after the
