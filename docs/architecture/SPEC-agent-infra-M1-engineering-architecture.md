@@ -823,6 +823,8 @@ custom Owner Secret、自有交互入口及不满足这些条件的模板保持�
 适用的文件交换 token/容器边界 attestation；不包含部署级服务 token、个人/默认 Relay Key、
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
 Connection 和 native callback 入口在没有真实当前 allocation/Execution 时必须拒绝。
+预留可准备 [§13.5.6](#1356-标准-oauth-安装供应) 定义的空接收入口与部署信任材料。
+受保护交付须等领取和实际 Pod 回读完成，沿原 Sandbox、UID、代次及 fence 核对。
 首版预留只验证实际六资源、Host bootstrap `/healthz` 及无业务状态，不建立业务 Execution、
 原生业务 Session 或模型调用。Session Pod 未装配 Agent 级 `READINESS_BINDING`，其 JWS
 绑定 Agent/Workload 而非预留 Sandbox，不能复用它冒充预留原生就绪授权。首版不扩展该 wire；
@@ -2416,15 +2418,20 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 仍沿原 resolver 在每次使用前核对当前绑定。后续实现 primary 必须列出真实供应路径、
 批准来源及接收函数，缺失时不能把测试 export 或占位接收器当作生产交付。
 
-**首次 OAuth 安装供应。** 受信 Worker 按已核实手工关联与获准系统接入生成非秘密登记模板，
-绑定原用户、Agent、Consumer、关联修订、安装修订与目的 Host。服务凭据只在物化时解密，
-由部署批准的私有文件供应交给该 Host。模板与机器凭据分离。该供应可以先于 client 与实例
-回执存在。该材料只供已核实手工关联和获准 EP-1060 的登记前机器认证，存于独立的私有路径，
-不进入 V1 MCP 安装 reader 的绑定、metadata 或 Token 输入。沿用本节文件保护及 §13.5.4 的
-进程保护。
-Host 在打开材料前核对批准来源、原 Sandbox、Pod、代次、关联修订和固定供应引用。
-生产实现须明确物化、接收、失败补偿和旧供应清除入口。任何漂移、撤权、无法核实的写入
-或保护失效都封闭对应供应，只按原引用及修订核实。
+**首次 OAuth 安装供应。** 在 [§13.5.6](#1356-标准-oauth-安装供应) 定义的原 Host 和
+安装授权成立后，Worker 按已核实手工关联及获准系统接入生成独立的非秘密登记模板，
+绑定原用户、Agent、Consumer、关联修订、安装修订与目的 Host。Worker 在既有安装事务
+固定供应引用、修订、投递 attempt 与模板摘要，再解密服务凭据。签名命令只携带非秘密
+引用及摘要，凭据字节经另行认证并加密的内部私有接收通道交付给同一 Host。
+该材料只供 EP-1060 登记前机器认证，独立于 V1 MCP reader 的 metadata 与 Token 输入。
+
+Host 在 §13.5.4 的进程保护下，将材料存入独占、有界的 Memory volume 或等价受保护内存。
+需要落文件时沿本节权限及持久确认规则，使用独立于只读 bootstrap/TLS 的 Host 专用写入目标。
+交付不修改已有不可变 Secret，也不向 native 或工具进程增挂卷。Host 在接受并确认前通过
+[§13.5.6](#1356-标准-oauth-安装供应) 的 Worker 回读重新核对当前授权及投递 attempt。
+同一 attempt、同一摘要且材料一致时可幂等确认。响应丢失按原供应引用、修订与 attempt
+核实。失败补偿先封闭该 attempt，再清除其材料。撤权、UID、代次、fence 或相关修订改变
+时亦封闭并清除原 attempt，迟到结果不得重新开启。保护失败或无法确认时，供应保持关闭。
 
 **发布与修订。** 接收器复用当前 `installationKey`（principal＋Agent＋完整 profile/source）
 和 `materialKey`（installationKey＋credentialRef＋revision），不另建主体或授权索引。
@@ -2511,14 +2518,13 @@ UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/re
 API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择或发起准备原安装绑定。
 选择[首次 OAuth 安装供应](#1355-受保护安装交付)的手工 EP-1060 路线且没有已核实 client 时，
 首次安装进入独立的签名 `prepare` 命令。已有获准路径继续沿相应合同。该命令在完整 OAuth
-配置与 clientId 生成前运行，经本节 Session Host 启动供应的登记前 HTTPS 入口接收。
+配置与 clientId 生成前运行，经本节定义的 Session Host 登记前 HTTPS 入口接收。
 沿既有 Worker 到 Host 的受保护内部命令边界验证签发者、受众、签名、用途与期限。
 命令绑定原用户、原 Execution、Agent、Consumer、关联修订、安装修订、Sandbox、Pod、
 会话代次、当前授权与领取 fence，以及批准的系统接入、登记模板、供应引用和各自修订。
 签名同时绑定原登记键及请求摘要。Worker 提交原命令的 sending 后，才可签发 prepare。
-Host 在读材料、发送 EP-1060 前及每次等待后，通过受信内部回读核对原执行、当前供应、原
-claim 及同一持久 sending。回读必须匹配签名中的操作、摘要、领取 fence 和修订。回读失败
-或不一致时拒绝继续。已发送时按原操作保留不确定状态。prepare 只返回绑定原意图的
+Host 在读材料、发送 EP-1060 前及每次等待后，按本节 Worker 权威回读核对该命令的
+当前性。prepare 只返回绑定原意图的
 非秘密登记回执或受限状态。登记结果为 unknown 时，原用户可另行发起签名 status，只执行
 [原键只读核实](#1357-agent-关联与-oauth-安装准备)。该请求使用当前仍有效的原 claim，
 绑定同一原授权、原登记命令的键与摘要、模板与供应修订及当前 unknown，按自身命令领取并
@@ -2746,12 +2752,19 @@ SecretRef 和 API Pod selector；来源在装配时捕获，不接受 Owner env�
 `runtimeOrigin` 必须匹配原 Sandbox Service 的 `<service>.<namespace>.svc`，使用独立且不低于
 1024 的 HTTPS 端口；该版本不对静态配置插值，也不为证书或 Consumer 建立新签发服务。
 
-手工 EP-1060 的登记前 bundle 用已批准的登记模板、独立供应引用和当前原用户、Agent、
-关联修订、安装修订及原 Sandbox/Pod/代次绑定启动同一 Host 的 HTTPS listener。它复用
-上述 Service 名称、独立端口、证书、私有卷保护及受限网络入口。在完整配置尚未固定时，
-该入口按阶段接受 Worker 签名的 prepare、unknown 原键只读 status，以及回执 CAS 后的
-首次 begin。confirm 和 callback 保持关闭。Host 核验 bundle、TLS、实际 Pod 与原绑定，
-接受 prepare 或原键只读 status 时无需 clientId。
+手工 EP-1060 的合格 Session Host 正常启动时，先用部署固定的信任配置、对应证书及 Host
+私有卷开放空 HTTPS 接收入口。预留实例同样使用此空入口。启动配置没有原用户、安装修订
+或 Connection 供应。无当前 allocation、原 Execution 和有效 claim 时，入口拒绝安装请求。
+待原用户主动发起安装，且原 Execution 已认领、原 Sandbox ready、Host ref 及实际 Pod UID
+已确认后，API/Core 从服务端事实建立原安装意图，Worker 才按
+[§13.5.5](#1355-受保护安装交付) 向同一 Host 交付。已运行但缺少受保护入口、私有卷或 TLS
+的 Host，本次首次安装不可用。以后符合条件的执行可按正常生命周期使用新版 Host。
+Host 重建、Pod UID 或 fence 改变使旧授权与供应失效，恢复沿原 Sandbox 和 Session 核对。
+发送结果不明的操作仅按 [§13.5.7](#1357-agent-关联与-oauth-安装准备) 核实原键。
+
+同一入口完成受保护接收后，按阶段接受 Worker 签名的 prepare、unknown 原键只读 status，
+以及回执 CAS 后的首次 begin。confirm 和 callback 在完整配置固定前保持关闭。Host 核验
+TLS、实际 Pod 与原绑定。prepare 和登记前的只读 status 无需 clientId。
 
 首次 begin 是同一 Host 接收并固定完整配置的命令。回执经 §13.5.7 CAS 后，Worker 从原
 授权记录取出完整非秘密配置与已核实回执引用。沿既有 installation JWS
@@ -2768,18 +2781,37 @@ unknown 时按 §13.5.7 原键核实。
 Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
 保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
 `0700`，文件为 `0600`，仅 Host 挂载既有拒绝树下的 `bootstrap` 与 `tls` 子目录；源 Secret
-只挂 initializer，native/executor 不挂上述私有卷。Host 启动时再核对 bundle 与原主体、Agent、
-Sandbox/generation、实际配置及证书。未认领 reserve 不接收此用户供应；原控制继续排除
-新增交付断言，保留资源归属和 UID 检查。
+只挂 initializer，native/executor 不挂上述私有卷。预注册 client 路径启动时核对 bundle 与
+原主体、Agent、Sandbox/generation、实际配置及证书。空接收端启动时核对部署信任材料及本机保护。
+原控制继续排除新增交付断言，保留资源归属和 UID 检查。
 
 源 Secret 引用为 optional，只表示缺少时不阻断普通 Session；不表示凭据或 TLS 可选。
 坏非秘密供应只关闭 OAuth 投射，initializer 材料或保护校验失败输出固定不可用结果后退出，
 不留下可用提交绑定；Host 继续拒绝不完整或错误的 OAuth 输入，普通模型及原控制保持。
 
 Service 为该 HTTPS listener 增加独立端口，NetworkPolicy 仅允许声明的 Worker/API selector
-访问；业务端口与出站规则保持原合同，callback-only 认证仍隔离 callback 和安装命令。
-本供应不创建实际 OAuth 绑定回执、Token 或 Grant；实际回执仍须按本节核实并单独供应。
-缺少实际回执继续 `awaiting_verification`，不得以 initializer 成功代签真实安装或外部验收。
+访问。Host 私有供应接收、安装命令与 API callback 各按用途认证。供应就绪后仍为
+`awaiting_verification`，直至按本节核实实际 OAuth 绑定回执。原业务入口沿原合同。
+
+**Worker 权威回读。** Host 通过部署固定的同 release Worker 内部 Service 只读核实当前安装。
+API 负责入口身份和安装授权。Worker 从已验证的安装命令与原执行定位记录，使用 Core/Store
+读取当前事实。本机 FileRuntimeStore 只核验本机绑定。Worker 逐次核对原用户与当前使用权、
+Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批、供应引用与修订、
+命令引用与请求摘要、持久 sending、attempt owner/ID/期限、原 outbox claim/fence，以及
+实际 Host ref、Pod UID、Sandbox、sessionGeneration 与 resourceFence。响应只返回允许、
+拒绝或不可用及对应的非秘密关联字段。获准 Worker 以 Platform Store 为权威，不依赖原
+API 副本。可用的在途记录只用于加强核验。
+
+传输复用 [§9.3.1](#931-原生元数据读取授权) 的固定目标、短期证明、有界超时和响应绑定模式。
+Host 使用部署批准的 Sandbox/Pod 隔离身份，以及绑定安装用途与本命令的短期证明。
+每次回读用独立 nonce 或挑战核对发送记录和响应绑定。安装、metadata、业务 Grant 和
+callback-only 认证用途分别验证，旧响应不能用于后续发送。只能复用已批准且满足认证与
+传输加密要求的路径，否则为合格 Sandbox 和同 release Worker 的专用 TLS 端口声明最小
+ingress/egress，精确限定 namespace、selector 和端口。权限隔离沿 [§17](#17-安全基线)。
+
+Host 在确认供应、读取材料、发送 EP-1060 或固定完整配置前核验当前回读，等待结束后再次
+核验。缺少规则、目标错误、超时、授权变更或响应校验失败时拒绝继续。已发送后失去确认，
+按 [§13.5.7](#1357-agent-关联与-oauth-安装准备) 保留 unknown 和原操作，停止后续外发。
 
 **失败、刷新与撤销。** 兑换或轮换响应丢失、崩溃及持久确认失败均保留该安装的不确定状态，
 不自动重发授权码、refresh 或业务调用；只按实际已发布的恢复合同核实，否则由原主体重新
@@ -2926,8 +2958,10 @@ resource、scope、回执与生命周期均须匹配批准合同，不靠更换 
 
 client 登记另按原用户＋Agent＋安装修订持久绑定原操作、请求摘要、幂等键、实际 Consumer
 及批准配置，复用上述交付状态与核实规则，但与 Consumer 登记操作分开保存。
-提交 prepare 回执时，以原用户、Agent、关联修订、安装修订、模板摘要、操作键和领取 fence
-做 CAS。回执须核对原 Consumer、实际 client/实例、回调、resource、scope 与来源。
+提交 prepare 回执时，按 [§13.5.5](#1355-受保护安装交付) 的原供应引用、修订、投递
+attempt 和模板摘要、原操作键及 [§13.5.6](#1356-标准-oauth-安装供应) 回读的当前原用户、
+Agent、关联/安装修订、Host/Pod、代次和领取 fence 做 CAS。回执须核对原 Consumer、实际
+client/实例、回调、resource、scope 与来源。
 重复请求和重启都只按同一原键与目标对账。并发或迟到回执由同一 CAS 拒绝，并保留
 已发送事实。相同安装修订下，已封闭状态不可恢复为可用。client 创建
 丢响应、崩溃或回执保存失败时，该安装独立进入 `unknown`；只核实原 client/实例，未核实前
@@ -3023,9 +3057,15 @@ Agent 已停用时，登记 Worker 不再发送登记：从未发送的 `pending
 helper 当作生产链路。Web/API 正式创建、同键冲突、丢响应/崩溃、跨 Agent/用户/来源、停用与
 旧修订拒绝均须正负验证。分别替换 prepare 的原用户、Agent 或安装绑定，证明 Host 在读取
 材料及发送 EP-1060 前拒绝。Store 须拒绝不匹配或解绑后迟到的回执，并保证没有授权链接发布。
-验收须从无 clientId 的实际 Host 装配完成 prepare，并由同一 Host 在首次 begin 原子固定
-完整配置后生成链接。首次 begin 负例须分别覆盖请求摘要、签名或持久 sending 与本命令
-不一致、回执 CAS 未确认或失败、同一命令重复、迟到或替换的登记回执，以及单独替换原
+验收须从无用户供应的实际 Host 启动开始，覆盖正常冷启动及 reserve 领取后，在同一 Host
+交付供应、完成 prepare 并由首次 begin 原子固定完整配置后生成链接。负例须覆盖未领取的
+reserve 或缺少保护入口的旧 Host，错 Host/Pod、代次或 fence，过期或重放证明、迟到回复、
+Worker 重启无法核实当前记录，以及审批、关联或供应修改。验证发送前失败无外发，发送后
+失去确认进入 unknown，只按原键核实。迟到的旧投递 attempt 不得重新开放，真实 Host 上的
+原生进程不能读取供应文件或内存，也不能继承其秘密 FD。
+
+首次 begin 负例须分别覆盖请求摘要、签名或持久 sending 与本命令不一致、回执 CAS 未确认
+或失败、同一命令重复、迟到或替换的登记回执，以及单独替换原
 用户、Agent 或安装。每项均验证此次请求未固定或改写配置、未生成新链接。
 模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可继续 begin。登记前
 status 单独替换原用户、Agent 或安装时，Host 须在读取材料及发送原键 GET 前拒绝。
