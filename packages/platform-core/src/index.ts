@@ -163,6 +163,7 @@ export * from "./native-capability-admission.js";
 export * from "./native-capability-admission-v6.js";
 export * from "./operations-alerts.js";
 export * from "./operations-resource.js";
+export * from "./operations-task.js";
 export * from "./operations-types.js";
 export * from "./personal-api-agent-read.js";
 export * from "./personal-api-credentials.js";

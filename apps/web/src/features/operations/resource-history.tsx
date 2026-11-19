@@ -191,7 +191,6 @@ export function ResourceHistory({
 		<Card
 			render={<section aria-labelledby={`${id}-title`} />}
 			className="ops-resource-panel"
-			id="ops-history"
 		>
 			<h2 id={`${id}-title`}>历史趋势与依赖</h2>
 			<p>

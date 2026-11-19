@@ -10,16 +10,18 @@ import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 
 /** Operator-only entry, deliberately not an HTTP/user or Worker tick capability. */
 async function main() {
-	const [mode, policyFile, targetFile] = process.argv.slice(2);
+	const [mode, policyFile, inputFile, ...extra] = process.argv.slice(2);
 	if (
 		!["dry-run", "execute", "inspect"].includes(mode ?? "") ||
 		!policyFile ||
-		(mode !== "dry-run" && !targetFile)
+		!inputFile ||
+		extra.length !== 0
 	)
 		throw new Error("WORKSPACE_COMMAND_INVALID");
 	const policy = JSON.parse(
 		readFileSync(policyFile, "utf8"),
 	) as SessionWorkspaceRetentionPolicyV1;
+	const input = JSON.parse(readFileSync(inputFile, "utf8"));
 	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 	const owner = process.env.DEPLOYMENT_OWNER;
 	const kubeconfig = process.env.KUBECONFIG;
@@ -59,25 +61,15 @@ async function main() {
 	try {
 		const result =
 			mode === "inspect"
-				? await store.inspect(
-						JSON.parse(readFileSync(targetFile as string, "utf8")),
-					)
+				? await store.inspect(input as SessionWorkspaceReclamationTargetV1)
 				: mode === "dry-run"
-					? await usecase.dryRun()
-					: await usecase.execute(
-							JSON.parse(
-								readFileSync(targetFile as string, "utf8"),
-							) as SessionWorkspaceReclamationTargetV1,
-						);
+					? await usecase.dryRun(input)
+					: await usecase.execute(input as SessionWorkspaceReclamationTargetV1);
 		const inspectedPvc =
 			mode === "inspect"
 				? await client.read(
 						"PersistentVolumeClaim",
-						(
-							JSON.parse(
-								readFileSync(targetFile as string, "utf8"),
-							) as SessionWorkspaceReclamationTargetV1
-						).name,
+						(input as SessionWorkspaceReclamationTargetV1).name,
 					)
 				: undefined;
 		process.stdout.write(

@@ -59,11 +59,10 @@ export function isWorkspaceRetainedV1(
 	);
 }
 export interface SessionWorkspaceReclamationStoreV1 {
-	candidates(): Promise<
-		readonly Omit<
-			SessionWorkspaceReclamationTargetV1,
-			"uid" | "resourceVersion"
-		>[]
+	candidates(
+		approvedPvcNames: readonly string[],
+	): Promise<
+		readonly Omit<SessionWorkspaceReclamationTargetV1, "resourceVersion">[]
 	>;
 	prepare(
 		target: SessionWorkspaceReclamationTargetV1,
@@ -79,11 +78,28 @@ export function createSessionWorkspaceReclamationV1(
 	pvc: SessionWorkspacePvcPortV1,
 ) {
 	return {
-		async dryRun() {
+		async dryRun(approvedPvcNames: unknown) {
+			if (
+				!Array.isArray(approvedPvcNames) ||
+				approvedPvcNames.length === 0 ||
+				approvedPvcNames.length > 1000 ||
+				!approvedPvcNames.every(
+					(name) =>
+						typeof name === "string" &&
+						/^sandbox-[a-z0-9](?:[a-z0-9-]{0,53}[a-z0-9])?$/.test(name),
+				)
+			)
+				throw new Error("WORKSPACE_APPROVED_PVCS_INVALID");
+			const approved = new Set<string>(approvedPvcNames);
 			const result: SessionWorkspaceReclamationTargetV1[] = [];
-			for (const candidate of await store.candidates()) {
+			for (const candidate of await store.candidates([...approved])) {
+				if (!approved.has(candidate.name)) continue;
 				const identity = await pvc.read(candidate.name);
-				if (identity) result.push({ ...candidate, ...identity });
+				if (identity?.uid === candidate.uid && identity.resourceVersion.trim())
+					result.push({
+						...candidate,
+						resourceVersion: identity.resourceVersion,
+					});
 			}
 			return result;
 		},

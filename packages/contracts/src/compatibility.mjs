@@ -7491,7 +7491,35 @@ function normalizeOperations4178(previous, current) {
 	};
 }
 
-function evaluateBreakingChanges(previousValue, currentValue) {
+function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	let previousValue = originalPrevious;
+	let currentValue = originalCurrent;
+	// #4236: allow the reviewed additive operations query and keep the rest of
+	// the document under its existing historical compatibility checks.
+	const taskPath = "/api/v2/ops/tasks";
+	const taskPathWasPublished = previousValue.paths?.[taskPath] !== undefined;
+	const taskPathIsPresent = currentValue.paths?.[taskPath] !== undefined;
+	if (taskPathWasPublished || taskPathIsPresent) {
+		const valid = (value) =>
+			value.openapi === "3.1.0" &&
+			value.info?.title === "Agent Infra Pilot Browser Audit API" &&
+			value.info?.version === "2.0.0" &&
+			value.paths?.[taskPath] !== undefined &&
+			createHash("sha256")
+				.update(JSON.stringify(value.paths[taskPath]))
+				.digest("hex") ===
+				"912bf08730614b1fa08c6f01a4a61285c56894550a6daf85a37d8dc62239ccd0";
+		if (!valid(currentValue) || (taskPathWasPublished && !valid(previousValue)))
+			return ["removed or changed published operations task contract"];
+		const strip = (value) => {
+			const paths = { ...value.paths };
+			delete paths[taskPath];
+			return { ...value, paths };
+		};
+		currentValue = strip(currentValue);
+		if (taskPathWasPublished) previousValue = strip(previousValue);
+	}
+
 	const operations4178 = normalizeOperations4178(previousValue, currentValue);
 	if (operations4178.invalid)
 		return ["removed or changed published operations contract"];

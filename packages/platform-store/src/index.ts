@@ -177,6 +177,7 @@ export {
 	configureStoreQueryObservability,
 } from "./observed-postgres.js";
 export * from "./operations-resource.js";
+export * from "./operations-task.js";
 export {
 	type ClaimedOutboxItem,
 	type ClaimOutboxItemInput,

@@ -96,6 +96,10 @@ import {
 	registerOperationsResourceRoutesV2,
 } from "./http/operations-resource-routes.js";
 import {
+	type OperationsTaskRoutesDependenciesV2,
+	registerOperationsTaskRoutesV2,
+} from "./http/operations-task-routes.js";
+import {
 	type PersonalApiCredentialRouteDependencies,
 	registerPersonalApiCredentialRoutes,
 } from "./http/personal-api-credential-routes.js";
@@ -196,6 +200,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly operationsTasks?: OperationsTaskRoutesDependenciesV2["tasks"];
 	readonly operations?: OperationsResourceRoutesDependenciesV2["operations"];
 	readonly evaluationAnalysis?: EvaluationAnalysisRoutesV1;
 	readonly evaluationExperiments?: Parameters<
@@ -303,6 +308,12 @@ export function createPlatformApp(
 	registerObservabilityRoutes(app, {
 		identity: dependencies.sessionAudit.identity,
 		...(observability ? { observability } : {}),
+	});
+	registerOperationsTaskRoutesV2(app, {
+		identity: dependencies.sessionAudit.identity,
+		...(dependencies.operationsTasks
+			? { tasks: dependencies.operationsTasks }
+			: {}),
 	});
 	registerOperationsResourceRoutesV2(app, {
 		identity: dependencies.sessionAudit.identity,

@@ -11,6 +11,8 @@ import {
 	OperationsQueryError,
 } from "../features/operations/resource-query.js";
 
+import { TaskEvidence } from "../features/operations/task-evidence.js";
+
 export const Route = createFileRoute("/ops")({
 	validateSearch: (
 		input: Record<string, unknown>,
@@ -81,6 +83,15 @@ function OperationsRoute() {
 					}
 				: query.data
 			: undefined;
+	const taskEvidence =
+		!denied && agentId && sessionId ? (
+			<TaskEvidence
+				key={JSON.stringify([identityKey, agentId, sessionId])}
+				identityKey={identityKey}
+				agentId={agentId}
+				sessionId={sessionId}
+			/>
+		) : null;
 	return (
 		<main className="platform-content management-content">
 			{data ? (
@@ -100,17 +111,20 @@ function OperationsRoute() {
 							void navigate({ search: { agentId, sessionId: value } });
 						}}
 						history={
-							<ResourceHistory
-								identityKey={identityKey}
-								onDenied={() => setForbiddenIdentity(identityKey)}
-								agentId={agentId}
-								sessionId={sessionId}
-								links={data.links}
-								objects={[...data.nodes, ...data.resources].map((entry) => ({
-									uid: entry.uid,
-									name: entry.name,
-								}))}
-							/>
+							<div id="ops-history" className="space-y-4">
+								{taskEvidence}
+								<ResourceHistory
+									identityKey={identityKey}
+									onDenied={() => setForbiddenIdentity(identityKey)}
+									agentId={agentId}
+									sessionId={sessionId}
+									links={data.links}
+									objects={[...data.nodes, ...data.resources].map((entry) => ({
+										uid: entry.uid,
+										name: entry.name,
+									}))}
+								/>
+							</div>
 						}
 					/>
 					{query.isError && (
@@ -120,27 +134,30 @@ function OperationsRoute() {
 					)}
 				</>
 			) : (
-				<OperationsEntry
-					isAdministrator={!denied}
-					onRefresh={() => {
-						void query.refetch();
-					}}
-					isRefreshing={query.isFetching}
-					state={
-						denied
-							? { kind: "denied" }
-							: query.isPending
-								? { kind: "loading" }
-								: query.error instanceof OperationsQueryError &&
-										query.error.kind === "not-connected"
-									? { kind: "not-connected" }
-									: {
-											kind: "unavailable",
-											message:
-												"资源观测查询尚未接通或暂不可用，请检查部署配置后重试。",
-										}
-					}
-				/>
+				<>
+					<OperationsEntry
+						isAdministrator={!denied}
+						onRefresh={() => {
+							void query.refetch();
+						}}
+						isRefreshing={query.isFetching}
+						state={
+							denied
+								? { kind: "denied" }
+								: query.isPending
+									? { kind: "loading" }
+									: query.error instanceof OperationsQueryError &&
+											query.error.kind === "not-connected"
+										? { kind: "not-connected" }
+										: {
+												kind: "unavailable",
+												message:
+													"资源观测查询尚未接通或暂不可用，请检查部署配置后重试。",
+											}
+						}
+					/>
+					{taskEvidence}
+				</>
 			)}
 		</main>
 	);
