@@ -771,6 +771,25 @@ afterAll(async () => {
 	else await writeFile(platformStoreDistPath, platformStoreDistOriginal);
 });
 
+it("rejects competing Owner Connection configuration before assembly", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	try {
+		await writeFile(
+			path,
+			`${original}\nexport const ownerConnectionBindings={};\nexport const ownerConnectionBindingConfiguration={};\n`,
+		);
+		const result = run();
+		expect(result.status).toBe(1);
+		expect(JSON.parse(result.stderr || result.stdout)).toMatchObject({
+			error: "CONNECTION_OWNER_BINDING_CONFIGURATION_CONFLICT",
+			calls: [],
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
 const database = "postgresql://database.example.test/platform";
 function run(overrides: Record<string, string | undefined> = {}) {
 	return spawnSync(process.execPath, [join(directory, "run.mjs")], {

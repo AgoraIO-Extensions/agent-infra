@@ -13,7 +13,12 @@ export interface ProtectedConnectionHostSupplyPortV1 {
 		readonly agentId: string;
 		readonly associationRevision: number;
 		readonly credential: Uint8Array;
-	}): Promise<{ readonly ref: string; readonly revision: string }>;
+	}): Promise<{
+		readonly agentId: string;
+		readonly associationRevision: number;
+		readonly ref: string;
+		readonly revision: string;
+	}>;
 	revoke(input: {
 		readonly agentId: string;
 		readonly associationRevision: number;
@@ -29,7 +34,11 @@ function validateIdentity(agentId: string, associationRevision: number) {
 		throw new Error("CONNECTION_HOST_SUPPLY_INPUT_INVALID");
 }
 
-function validateReceipt(value: unknown): {
+function validateReceipt(
+	value: unknown,
+	expected: { readonly agentId: string; readonly associationRevision: number },
+	credential: string,
+): {
 	readonly ref: string;
 	readonly revision: string;
 } {
@@ -37,14 +46,21 @@ function validateReceipt(value: unknown): {
 		!value ||
 		typeof value !== "object" ||
 		Array.isArray(value) ||
-		Object.keys(value).sort().join(",") !== "ref,revision"
+		Object.keys(value).sort().join(",") !==
+			"agentId,associationRevision,ref,revision"
 	)
 		throw new Error("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
 	const candidate = value as Record<string, unknown>;
 	if (
+		candidate.agentId !== expected.agentId ||
+		candidate.associationRevision !== expected.associationRevision ||
 		typeof candidate.ref !== "string" ||
+		candidate.ref.startsWith("conn_consumer_") ||
+		candidate.ref.includes(credential) ||
 		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(candidate.ref) ||
 		typeof candidate.revision !== "string" ||
+		candidate.revision.startsWith("conn_consumer_") ||
+		candidate.revision.includes(credential) ||
 		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(candidate.revision)
 	)
 		throw new Error("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
@@ -80,6 +96,8 @@ export function createProtectedConnectionHostSupplyV1(
 						associationRevision: input.associationRevision,
 						credential,
 					}),
+					input,
+					input.serviceCredential,
 				);
 			} catch {
 				throw new Error("CONNECTION_HOST_SUPPLY_UNAVAILABLE");

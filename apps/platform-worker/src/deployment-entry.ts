@@ -271,6 +271,12 @@ const {
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
 
+if (
+	configuredOwnerConnectionBindings !== undefined &&
+	ownerConnectionBindingConfiguration !== undefined
+)
+	throw new Error("CONNECTION_OWNER_BINDING_CONFIGURATION_CONFLICT");
+
 const ownerConnectionBindings =
 	configuredOwnerConnectionBindings ??
 	(ownerConnectionBindingConfiguration === undefined

@@ -1,18 +1,16 @@
+import {
+	connectionConsumerProfileFingerprintV1,
+	resolveApprovedConnectionConsumerProfileV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import { connectionServiceCredentialFingerprintV1 } from "@agent-infra/platform-core";
 import {
 	type ConnectionManualAssociationMaterialV1,
-	PostgresConnectionMachineClientBindingStoreV1,
 	PostgresConnectionManualAssociationReaderV1,
 } from "@agent-infra/platform-store";
 import {
 	createSecretKeyringDecryptorV1,
 	type SecretKeyringDecryptorV1,
 } from "@agent-infra/secret-store/worker";
-import {
-	type ConnectionConsumerOAuthClientBindingV1,
-	createConnectionConsumerDcrResolverV1,
-	revokeConnectionConsumerMachineRegistrationV1,
-} from "./connection-consumer-dcr.js";
 import {
 	createProtectedConnectionHostSupplyV1,
 	type ProtectedConnectionHostSupplyPortV1,
@@ -31,19 +29,6 @@ export interface ProtectedConnectionHostSupplyV1 {
 	}): Promise<void>;
 }
 
-export interface ConnectionMachineClientBindingStoreV1 {
-	load(
-		agentId: string,
-		associationRevision: number,
-		registrationKey: string,
-	): Promise<ConnectionConsumerOAuthClientBindingV1 | undefined>;
-	persist(
-		agentId: string,
-		binding: ConnectionConsumerOAuthClientBindingV1,
-		associationRevision: number,
-	): Promise<void>;
-}
-
 export interface OwnerConnectionBindingsOptionsV1 {
 	readonly databaseUrl: string;
 	readonly associationReader?: Pick<
@@ -52,25 +37,17 @@ export interface OwnerConnectionBindingsOptionsV1 {
 	>;
 	readonly decryptor: SecretKeyringDecryptorV1;
 	readonly hostSupply: ProtectedConnectionHostSupplyV1;
-	readonly machineClientBindings: ConnectionMachineClientBindingStoreV1;
-	readonly machineRegistrationEndpointForAgent: (agentId: string) => string;
-	readonly issuer: string;
 	readonly publicOrigin: string;
 	readonly mcpPath: string;
 	readonly audience: string;
 	readonly egressProfile: { readonly ref: string; readonly revision: string };
 	readonly approvalSource: { readonly ref: string; readonly revision: string };
-	readonly callbackUrlForAgent: (agentId: string) => string;
-	readonly fetch?: typeof fetch;
 	readonly traceId?: string;
 }
 
 /** Mounted deployment configuration used to build the production Owner resolver. */
 export interface OwnerConnectionBindingConfigurationV1
-	extends Omit<
-		OwnerConnectionBindingsOptionsV1,
-		"databaseUrl" | "decryptor" | "hostSupply" | "machineClientBindings"
-	> {
+	extends Omit<OwnerConnectionBindingsOptionsV1, "decryptor" | "hostSupply"> {
 	readonly databaseUrl: string;
 	readonly decryptionKeys: readonly {
 		readonly keyVersion: string;
@@ -80,20 +57,17 @@ export interface OwnerConnectionBindingConfigurationV1
 }
 
 /**
- * Assemble the Worker-only resolver from deployment-owned ports. The keyring and
- * machine binding store stay inside this process, while the service credential is
- * handed only to the protected Host receiver and the Connection registration call.
+ * Assemble the Worker-only resolver from deployment-owned ports. The keyring
+ * resolves the service credential specifically for the protected Host receiver.
  */
 export function createProductionOwnerConnectionBindingsV1(
 	input: OwnerConnectionBindingConfigurationV1,
 ): OwnerConnectionBindingsOptionsV1 {
+	const { decryptionKeys, hostSupply, ...configuration } = input;
 	return {
-		...input,
-		decryptor: createSecretKeyringDecryptorV1({ keys: input.decryptionKeys }),
-		hostSupply: createProtectedConnectionHostSupplyV1(input.hostSupply),
-		machineClientBindings: new PostgresConnectionMachineClientBindingStoreV1({
-			databaseUrl: input.databaseUrl,
-		}),
+		...configuration,
+		decryptor: createSecretKeyringDecryptorV1({ keys: decryptionKeys }),
+		hostSupply: createProtectedConnectionHostSupplyV1(hostSupply),
 	};
 }
 
@@ -130,12 +104,8 @@ async function decryptAssociation(
 	return credential;
 }
 
-/**
- * Builds the Worker callback from the current Owner association table. Each invocation
- * reads a fresh association snapshot, materializes only that Agent's protected Host
- * supply, and registers a distinct EP-1060 machine client. No credential is returned
- * in the deployment binding or passed through env/argv.
- */
+/** Capture the dedicated Consumer and its approved Host supply. OAuth clients
+ * are prepared later for the original user's individual installation. */
 export function createOwnerConnectionBindingsResolverV1(
 	options: OwnerConnectionBindingsOptionsV1,
 ) {
@@ -152,94 +122,59 @@ export function createOwnerConnectionBindingsResolverV1(
 			});
 		try {
 			const rows = await reader.current();
-			const result: Record<string, ConnectionConsumerDeploymentBindingV1> = {};
+			const bindings: [string, ConnectionConsumerDeploymentBindingV1][] = [];
 			for (const row of Object.values(rows)) {
 				signal.throwIfAborted();
-				const credential = await decryptAssociation(
-					options.decryptor,
-					row,
-					options.traceId ?? "connection-owner-binding",
-				);
-				const supply = await options.hostSupply.materialize({
-					agentId: row.agentId,
-					associationRevision: row.associationRevision,
-					serviceCredential: credential,
-				});
-				const resolve = createConnectionConsumerDcrResolverV1({
-					agentIds: [row.agentId],
-					issuer: options.issuer,
-					registrationEndpoint: options.machineRegistrationEndpointForAgent(
-						row.agentId,
-					),
-					machineRegistrationEndpoint:
-						options.machineRegistrationEndpointForAgent(row.agentId),
-					serviceCredentialForAgent: () => credential,
-					machineRegistrationKeyForAgent: () =>
-						`${row.agentId}-association-${row.associationRevision}`,
+				const profile = {
+					schemaVersion: 1 as const,
+					consumerId: row.connectionAgentId,
 					publicOrigin: options.publicOrigin,
 					mcpPath: options.mcpPath,
 					audience: options.audience,
-					egressProfile: options.egressProfile,
-					approvalSource: options.approvalSource,
-					callbackUrlForAgent: options.callbackUrlForAgent,
-					consumerIdForAgent: () => row.connectionAgentId,
-					installationSupplyForAgent: () => supply,
-					loadOAuthClientBindingForAgent: () =>
-						options.machineClientBindings.load(
-							row.agentId,
-							row.associationRevision,
-							`${row.agentId}-association-${row.associationRevision}`,
-						),
-					persistOAuthClientBindingForAgent: (agentId, binding) =>
-						options.machineClientBindings.persist(
-							agentId,
-							binding,
-							row.associationRevision,
-						),
-					...(options.fetch ? { fetch: options.fetch } : {}),
+					egressProfile: { ...options.egressProfile },
+				};
+				const approval = {
+					schemaVersion: 1 as const,
+					configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+					egressEnforced: true as const,
+					source: { ...options.approvalSource },
+				};
+				if (
+					resolveApprovedConnectionConsumerProfileV1(profile, approval)
+						.status !== "available"
+				)
+					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				const identity = {
+					agentId: row.agentId,
+					associationRevision: row.associationRevision,
+				};
+				const installationSupply = await options.hostSupply.materialize({
+					...identity,
+					serviceCredential: await decryptAssociation(
+						options.decryptor,
+						row,
+						options.traceId ?? "connection-owner-binding",
+					),
 				});
-				const bindings = await resolve(signal);
-				const binding = bindings[row.agentId];
-				if (binding) result[row.agentId] = binding;
+				const currentRows = await reader.current([row.agentId]);
+				const current = Object.hasOwn(currentRows, row.agentId)
+					? currentRows[row.agentId]
+					: undefined;
+				if (
+					current?.associationRevision !== row.associationRevision ||
+					current.credentialFingerprint !== row.credentialFingerprint ||
+					current.connectionAgentId !== row.connectionAgentId ||
+					current.ownerId !== row.ownerId
+				) {
+					await options.hostSupply.revoke(identity);
+					continue;
+				}
+				signal.throwIfAborted();
+				bindings.push([row.agentId, { profile, approval, installationSupply }]);
 			}
-			return Object.freeze(result);
+			return Object.freeze(Object.fromEntries(bindings));
 		} finally {
 			await reader.close();
 		}
 	};
-}
-
-/** Revoke a removed association's Host supply after the external client revoke succeeds. */
-export async function revokeOwnerConnectionBindingV1(
-	hostSupply: ProtectedConnectionHostSupplyV1,
-	input: { readonly agentId: string; readonly associationRevision: number },
-) {
-	await hostSupply.revoke(input);
-}
-
-/** Disconnect ordering: revoke the Connection client first, then remove Host supply. */
-export async function revokeOwnerConnectionMachineBindingV1(input: {
-	readonly endpoint: string;
-	readonly serviceCredential: string;
-	readonly binding: Pick<
-		ConnectionConsumerOAuthClientBindingV1,
-		"registrationKey"
-	>;
-	readonly signal: AbortSignal;
-	readonly hostSupply: ProtectedConnectionHostSupplyV1;
-	readonly agentId: string;
-	readonly associationRevision: number;
-	readonly fetch?: typeof fetch;
-}) {
-	await revokeConnectionConsumerMachineRegistrationV1({
-		endpoint: input.endpoint,
-		serviceCredential: input.serviceCredential,
-		binding: input.binding,
-		signal: input.signal,
-		...(input.fetch ? { fetch: input.fetch } : {}),
-	});
-	await input.hostSupply.revoke({
-		agentId: input.agentId,
-		associationRevision: input.associationRevision,
-	});
 }

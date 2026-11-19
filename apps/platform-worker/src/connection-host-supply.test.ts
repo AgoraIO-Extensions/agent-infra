@@ -13,7 +13,12 @@ describe("protected Connection Host supply adapter", () => {
 		const port = {
 			materialize: vi.fn(async (input: { credential: Uint8Array }) => {
 				received = input.credential;
-				return { ref: "agent-a", revision: "association-3" };
+				return {
+					agentId: "agent-a",
+					associationRevision: 3,
+					ref: "agent-a",
+					revision: "association-3",
+				};
 			}),
 			revoke: vi.fn(async () => {}),
 		};
@@ -43,7 +48,12 @@ describe("protected Connection Host supply adapter", () => {
 		"rejects invalid identity before passing material to Host",
 		async (input) => {
 			const port = {
-				materialize: vi.fn(async () => ({ ref: "agent-a", revision: "r1" })),
+				materialize: vi.fn(async () => ({
+					agentId: "agent-a",
+					associationRevision: 7,
+					ref: "agent-a",
+					revision: "r1",
+				})),
 				revoke: vi.fn(async () => {}),
 			};
 			const supply = createProtectedConnectionHostSupplyV1(port);
@@ -60,6 +70,8 @@ describe("protected Connection Host supply adapter", () => {
 	it("rejects invalid receipts and never returns a credential-shaped value", async () => {
 		const port = {
 			materialize: vi.fn(async () => ({
+				agentId: "agent-a",
+				associationRevision: 1,
 				ref: "agent-a",
 				revision: "r1",
 				serviceCredential: "conn_consumer_leak",
@@ -76,9 +88,42 @@ describe("protected Connection Host supply adapter", () => {
 		).rejects.toThrow("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
 	});
 
+	it.each([
+		{ agentId: "agent-b" },
+		{ associationRevision: 2 },
+		{ ref: canaryCredential },
+		{ revision: canaryCredential },
+	])(
+		"rejects a mismatched or sensitive Host receipt (%#)",
+		async (overrides) => {
+			const supply = createProtectedConnectionHostSupplyV1({
+				materialize: async () => ({
+					agentId: "agent-a",
+					associationRevision: 3,
+					ref: "agent-a",
+					revision: "r3",
+					...overrides,
+				}),
+				revoke: async () => {},
+			});
+			await expect(
+				supply.materialize({
+					agentId: "agent-a",
+					associationRevision: 3,
+					serviceCredential: canaryCredential,
+				}),
+			).rejects.toThrow("CONNECTION_HOST_SUPPLY_UNAVAILABLE");
+		},
+	);
+
 	it("keeps revoke scoped to the Agent and association revision", async () => {
 		const port = {
-			materialize: async () => ({ ref: "agent-a", revision: "r1" }),
+			materialize: async () => ({
+				agentId: "agent-a",
+				associationRevision: 7,
+				ref: "agent-a",
+				revision: "r1",
+			}),
 			revoke: vi.fn(async () => {}),
 		};
 		const supply = createProtectedConnectionHostSupplyV1(port);
@@ -140,7 +185,12 @@ describe("protected Connection Host supply adapter", () => {
 	it("keeps a canary out of revoke errors, receipt JSON, env, argv and logs", async () => {
 		const logs: string[] = [];
 		const port = {
-			materialize: vi.fn(async () => ({ ref: "agent-a", revision: "r4" })),
+			materialize: vi.fn(async () => ({
+				agentId: "agent-a",
+				associationRevision: 4,
+				ref: "agent-a",
+				revision: "r4",
+			})),
 			revoke: vi.fn(async () => {
 				throw new Error(`revoke-failed:${canaryCredential}`);
 			}),

@@ -85,6 +85,11 @@ describe("per-install OAuth DCR", () => {
 					registration: {
 						registrationKey: "install-agent-a-r1",
 						clientId: "client-agent-a",
+						consumerId: "consumer-agent-a",
+						instanceId: "instance-agent-a",
+						status: init?.method === "DELETE" ? "REVOKED" : "ACTIVE",
+						clientStatus: init?.method === "DELETE" ? "REVOKED" : "ACTIVE",
+						instanceStatus: init?.method === "DELETE" ? "REVOKED" : "ACTIVE",
 					},
 				},
 				200,
@@ -93,6 +98,11 @@ describe("per-install OAuth DCR", () => {
 		const options = {
 			endpoint: `${issuer}connection/v1/agents/agent-a/oauth-clients`,
 			serviceCredential: "conn_consumer_test-credential",
+			expected: {
+				clientId: "client-agent-a",
+				consumerId: "consumer-agent-a",
+				instanceId: "instance-agent-a",
+			},
 			registrationKey: "install-agent-a-r1",
 			signal: new AbortController().signal,
 			assertCurrent() {},
@@ -112,6 +122,49 @@ describe("per-install OAuth DCR", () => {
 			expect(request.headers.get("cookie")).toBeNull();
 		}
 	});
+
+	it.each([
+		{ outcome: "UNKNOWN", registration: null },
+		{ outcome: "KNOWN", registration: { instanceId: "other-instance" } },
+		{ outcome: "KNOWN", registration: { instanceStatus: "ACTIVE" } },
+	])(
+		"refuses revocation without a matching terminal receipt (%#)",
+		async (result) => {
+			const fetch = async () =>
+				response(
+					{
+						registrationVersion: 1,
+						outcome: result.outcome,
+						registration: result.registration && {
+							registrationKey: "install-agent-a-r1",
+							clientId: "client-agent-a",
+							consumerId: "consumer-agent-a",
+							instanceId: "instance-agent-a",
+							status: "REVOKED",
+							clientStatus: "REVOKED",
+							instanceStatus: "REVOKED",
+							...result.registration,
+						},
+					},
+					200,
+				);
+			await expect(
+				revokeConnectionMachineOAuthClientV1({
+					endpoint: `${issuer}connection/v1/agents/agent-a/oauth-clients`,
+					serviceCredential: "conn_consumer_test-credential",
+					registrationKey: "install-agent-a-r1",
+					expected: {
+						clientId: "client-agent-a",
+						consumerId: "consumer-agent-a",
+						instanceId: "instance-agent-a",
+					},
+					signal: new AbortController().signal,
+					assertCurrent() {},
+					fetch,
+				}),
+			).rejects.toThrow();
+		},
+	);
 
 	it("registers and validates the fixed native metadata response", async () => {
 		const calls: Request[] = [];
