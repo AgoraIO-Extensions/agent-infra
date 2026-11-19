@@ -57,6 +57,7 @@ const {
 	connectionSystemAccess,
 	connectionSystemAccessApproval,
 	connectionInstallationConfiguration,
+	connectionManualInstallationClientName,
 	connectionInstallationsByAgent,
 	connectionInstallationsByAgentAndPrincipal,
 	connectionInstallationCallback,
@@ -265,9 +266,18 @@ const browser = createPostgresLdapBrowserDeployment({
 	publicOrigin,
 	trustedProxyToken,
 });
+const manualInstallation =
+	typeof connectionManualInstallationClientName === "string" &&
+	resolvedConnectionSystemAccess
+		? {
+				clientName: connectionManualInstallationClientName,
+				systemAccess: resolvedConnectionSystemAccess.system,
+				approval: resolvedConnectionSystemAccess.approval,
+			}
+		: undefined;
 const callbackForwarder =
 	connectionInstallationCallback ??
-	(connectionInstallationConfiguration &&
+	((connectionInstallationConfiguration || manualInstallation) &&
 	!staticPerAgentConnectionBindings &&
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
 		? {
@@ -403,10 +413,12 @@ export function createPlatformApiAssemblyInput() {
 			: {}),
 		connectionWebPath: resolvedConnectionWebPath,
 		connectionConsumerRegistration,
-		...(connectionInstallationConfiguration && !staticPerAgentConnectionBindings
+		...((connectionInstallationConfiguration || manualInstallation) &&
+		!staticPerAgentConnectionBindings
 			? {
 					connectionInstallation: {
 						configuration: connectionInstallationConfiguration,
+						manualInstallation,
 						publicOrigin,
 					},
 				}

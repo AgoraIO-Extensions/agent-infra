@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { resolveApprovedConnectionSystemAccessV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { NativeMetadataCommandsProjectionV2Schema } from "@agent-infra/contracts/runtime";
 import {
 	type ObjectStorageDataV1,
@@ -187,6 +188,7 @@ export interface PlatformApiAssemblyInput {
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
+		readonly manualInstallation?: import("@agent-infra/platform-store").ConnectionManualInstallationPolicyInputV1;
 		readonly configuration?: RuntimeOAuthConfigurationV1;
 		readonly profile?: unknown;
 		readonly approval?: unknown;
@@ -528,6 +530,22 @@ export function assemblePlatformApi(
 	})();
 	const installationCallbackConfiguration =
 		installationStore?.callbackConfiguration;
+	const installationCallbackTarget =
+		installationCallbackConfiguration ??
+		(installationStore && input.connectionInstallation?.manualInstallation
+			? (() => {
+					const approved = resolveApprovedConnectionSystemAccessV1(
+						input.connectionInstallation.manualInstallation.systemAccess,
+						input.connectionInstallation.manualInstallation.approval,
+					);
+					return approved.status === "available"
+						? {
+								callbackUrl: approved.system.oauthCallbackUrl,
+								issuer: approved.system.issuer,
+							}
+						: undefined;
+				})()
+			: undefined);
 
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
@@ -1420,7 +1438,7 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		...(installationStore &&
-		installationCallbackConfiguration &&
+		installationCallbackTarget &&
 		input.connectionInstallation
 			? {
 					connectionInstallations: {
@@ -1435,14 +1453,14 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		...(installationStore &&
-		installationCallbackConfiguration &&
+		installationCallbackTarget &&
 		input.connectionInstallation &&
 		input.connectionInstallationCallback
 			? {
 					connectionInstallationCallback: {
 						publicOrigin: input.connectionInstallation.publicOrigin,
-						callbackUrl: installationCallbackConfiguration.callbackUrl,
-						issuer: installationCallbackConfiguration.issuer,
+						callbackUrl: installationCallbackTarget.callbackUrl,
+						issuer: installationCallbackTarget.issuer,
 						configuration: installationCallbackConfiguration,
 						installation: createConnectionInstallationAuthorizationV1({
 							store: installationStore,
