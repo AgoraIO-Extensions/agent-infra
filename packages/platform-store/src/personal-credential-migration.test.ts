@@ -180,6 +180,7 @@ beforeAll(async () => {
 		{ idx: 82, tag: "0082_operations_resource_snapshots" },
 		{ idx: 83, tag: "0083_operations_resource_identities" },
 		{ idx: 84, tag: "0084_connection_machine_client_bindings" },
+		{ idx: 85, tag: "0085_conversation_event_terminal_cursor" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
