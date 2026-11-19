@@ -95,7 +95,7 @@ it("authenticates scoped install readback over TLS before consulting the authori
 		};
 		await expect(
 			client.readback(anotherRelease, new AbortController().signal),
-		).resolves.toBe("denied");
+		).resolves.toBe("unavailable");
 
 		const business = createConnectionInstallReadbackClientV1({
 			origin,
@@ -109,7 +109,7 @@ it("authenticates scoped install readback over TLS before consulting the authori
 		});
 		await expect(
 			business.readback(scope, new AbortController().signal),
-		).resolves.toBe("denied");
+		).resolves.toBe("unavailable");
 		expect(readback).toHaveBeenCalledTimes(1);
 	} finally {
 		await server.close();
