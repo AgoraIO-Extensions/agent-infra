@@ -120,7 +120,13 @@ beforeEach(async () => {
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id) values ('task-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1, workloadRevision: 1, fence: 1, desiredState: "running" })}, 'trace-a', 'request-a')`;
 });
 
-it.each(["pending", "retained", "retained-cleaning"] as const)(
+it.each([
+	"pending",
+	"retained",
+	"retained-cleaning",
+	"claimed-stop",
+	"stopped-before-handoff",
+] as const)(
 	"keeps %s certificate reconciliation readable by the prior Store and fences a new stop",
 	async (mode) => {
 		const adapter = runtime();
@@ -129,7 +135,9 @@ it.each(["pending", "retained", "retained-cleaning"] as const)(
 			runtime: adapter,
 		});
 		for (let i = 0; i < 7; i++) await worker.tick("worker-new");
-		if (mode === "retained-cleaning") {
+		const retainingCleanup =
+			mode === "retained-cleaning" || mode === "claimed-stop";
+		if (retainingCleanup) {
 			// Start from the ready revision of a previously completed rollback.
 			await sql`update platform.workload_reconciliations
 				set state = jsonb_set(state, '{rollback}', 'true'::jsonb)
@@ -138,7 +146,7 @@ it.each(["pending", "retained", "retained-cleaning"] as const)(
 		adapter.observe = async () =>
 			mode === "pending" ? "certificate-pending" : "certificate-invalid";
 		await worker.tick("worker-new");
-		if (mode === "retained") {
+		if (mode === "retained" || mode === "stopped-before-handoff") {
 			await worker.tick("worker-new");
 		} else if (mode === "pending") {
 			expect(await worker.tick("worker-new")).toBe("advanced");
@@ -159,10 +167,10 @@ it.each(["pending", "retained", "retained-cleaning"] as const)(
 				phase:
 					mode === "pending"
 						? "observing"
-						: mode === "retained-cleaning"
+						: retainingCleanup
 							? "closing"
 							: "failed",
-				rollback: mode === "retained-cleaning",
+				rollback: retainingCleanup,
 				verifiedRevision: 1,
 			},
 		});
@@ -211,7 +219,7 @@ it.each(["pending", "retained", "retained-cleaning"] as const)(
 					? { certificateWait: { attempts: 2 } }
 					: {
 							retainedFailure: { certificate: "certificate-invalid" },
-							phase: mode === "retained-cleaning" ? "cleaning" : "failed",
+							phase: retainingCleanup ? "cleaning" : "failed",
 						},
 			);
 			if (legacyStore) {
@@ -246,6 +254,44 @@ it.each(["pending", "retained", "retained-cleaning"] as const)(
 					)
 				).outcome,
 			).toBe("accepted");
+			if (mode === "claimed-stop") {
+				expect(await worker.tick("worker-new")).toBe("advanced");
+				const [handoff] = await sql`
+					select state->>'phase' as phase, state->>'fence' as fence,
+						next_attempt_at <= clock_timestamp() as due,
+						(select count(*)::int from platform.outbox_items
+							where status in ('pending', 'retry_scheduled', 'processing')) as work
+					from platform.workload_reconciliations where agent_id = 'agent-a'
+				`;
+				expect(handoff).toEqual({
+					phase: "closing",
+					fence: "2",
+					due: true,
+					work: 0,
+				});
+			}
+			if (mode === "stopped-before-handoff") {
+				for (let i = 0; i < 5; i++) await worker.tick("worker-new");
+				const stopped = await reader.readCurrentState("agent-a");
+				expect(stopped).toMatchObject({ phase: "stopped", fence: 2 });
+				expect(stopped).not.toHaveProperty("retainedFailure");
+				const [current] = await sql`
+					select management_revision::int as revision, workload_revision::int as workload_revision,
+						fence::int as fence from platform.agent_applications where agent_id = 'agent-a'
+				`;
+				await sql`insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id)
+					values ('late-stop-wakeup','agent','agent-a','agent.workload.reconcile.v1',
+						${sql.json({
+							schemaVersion: 1,
+							agentId: "agent-a",
+							revision: current?.revision,
+							workloadRevision: current?.workload_revision,
+							fence: current?.fence,
+							desiredState: "stopped",
+						})},'trace-late','request-late')`;
+			}
+
 			for (let i = 0; i < 5; i++) await rollbackWorker.tick("worker-old");
 			expect(cleanup).not.toHaveBeenCalled();
 			expect(apply).toHaveBeenCalled();

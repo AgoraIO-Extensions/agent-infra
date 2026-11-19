@@ -1233,14 +1233,21 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 										: {}),
 								}
 							: null;
-					// Old workers can read these V1 states and still honor a new outbox
-					// intent. Only new workers schedule certificate-only follow-up.
+					// A consumed stop outbox leaves the persisted deadline as the only
+					// way for a legacy Worker to resume its fenced scale-down.
+					const continuingStop =
+						preservingCleanup &&
+						cleanupInterrupted === true &&
+						(management.desiredState === "stopped" ||
+							management.status === "disabled");
+					const parkLegacyWorker =
+						certificateReconciliation !== null && !continuingStop;
 					await sql`
 						insert into platform.workload_reconciliations
 							(agent_id, revision, state, next_attempt_at, updated_at, certificate_reconciliation)
 						values (
 							${agentId}, ${next.revision}, ${sql.json(baseState as unknown as postgres.JSONValue)},
-							case when ${certificateReconciliation !== null} then 'infinity'::timestamptz
+							case when ${parkLegacyWorker} then 'infinity'::timestamptz
 								else statement_timestamp() + ${delay} * interval '1 millisecond' end,
 							statement_timestamp(),
 							case when ${certificateReconciliation !== null} then jsonb_build_object(
