@@ -10,7 +10,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
 	captureConnectionConsumerRegisteredBindingV1,
@@ -1792,13 +1795,31 @@ it.each(["unconfigured", "manual", "full"] as const)(
 	async (mode) => {
 		const path = join(directory, "configuration.mjs");
 		const original = await readFile(path, "utf8");
+		const { schemaVersion, publicOrigin, mcpPath, audience, egressProfile } =
+			connectionConsumerProfile;
+		const systemAccess = {
+			schemaVersion: schemaVersion as 1,
+			publicOrigin,
+			mcpPath,
+			audience,
+			egressProfile,
+			issuer: `${publicOrigin}/`,
+			oauthCallbackUrl: "https://platform.example.test/connection/callback",
+		};
+		const approval = {
+			...connectionConsumerApproval,
+			configFingerprint: connectionSystemAccessFingerprintV1(systemAccess),
+		};
 		const bootstrap =
 			mode === "unconfigured"
 				? ""
 				: `export const connectionInstallBootstrap = {
 			port: 3445, clientName: "synthetic-install-name", workerOrigin: "https://worker.worker-binding.svc:3446/",
-			configuration: {}, approval: {}, tlsSecretRef: { name: "fixture-tls" }, callbackAuthSecretRef: { name: "fixture-callback" },
-			workerSelector: { component: "platform-worker" }, apiSelector: { component: "platform-api" },
+			configuration: ${JSON.stringify(systemAccess)}, approval: ${JSON.stringify(approval)},
+			tlsSecretForSandbox: () => ({ name: "fixture-tls", certKey: "tls.crt", keyKey: "tls.key" }),
+			callbackAuthSecretRef: { name: "fixture-callback", key: "callback.auth" },
+			workerCaSecretRef: { name: "fixture-worker-ca", key: "ca.crt" },
+			apiSelector: { component: "platform-api" },
 		};`;
 		const worker =
 			mode === "full"
