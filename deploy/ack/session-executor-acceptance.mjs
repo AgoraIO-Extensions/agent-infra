@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 export const scenarios = Object.freeze([
@@ -37,15 +38,22 @@ function requiredReference(value, prefix) {
 	return value;
 }
 
-function readConfigMap(namespace, name) {
+function kubectl(namespace, args, stdin) {
 	const kubeconfig = process.env.ACK_KUBECONFIG;
 	if (!kubeconfig) throw new Error("ACK_KUBECONFIG_REQUIRED");
-	const bytes = execFileSync("kubectl", [
-		"--kubeconfig", kubeconfig,
-		"--namespace", namespace,
-		"get", "configmap", name, "-o", "json",
-	], { encoding: "utf8", maxBuffer: 256 * 1024, timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
-	return JSON.parse(bytes);
+	return JSON.parse(execFileSync("kubectl", [
+		"--kubeconfig", kubeconfig, "--namespace", namespace, ...args,
+	], {
+		encoding: "utf8",
+		input: stdin,
+		maxBuffer: 256 * 1024,
+		timeout: 10_000,
+		stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+	}));
+}
+
+function readConfigMap(namespace, name) {
+	return kubectl(namespace, ["get", "configmap", name, "-o", "json"]);
 }
 
 function input(map, namespace, name, key) {
@@ -57,18 +65,19 @@ function input(map, namespace, name, key) {
 	return JSON.parse(map.data[key]);
 }
 
-export function readAcceptance(options, get = readConfigMap) {
-	const [command, planOption, reference, runOption, run, ...extra] = options;
-	if (extra.length !== 0 || planOption !== "--plan" ||
+export function executorAcceptance(options, get = readConfigMap, cluster = kubectl, now = Date.now) {
+	const [command, planOption, reference, option, value, targetOption, sandbox] = options;
+	if (planOption !== "--plan" ||
 		!(command === "list" && options.length === 3 ||
-			command === "read" && runOption === "--run" && options.length === 5))
+			command === "read" && option === "--run" && options.length === 5 ||
+			command === "run" && option === "--scenario" && targetOption === "--target" && options.length === 7))
 		invalid();
 	const [namespace, name, ...rest] = reference?.split("/") ?? [];
 	if (rest.length || !namespace || !dnsLabel.test(namespace)) invalid();
 	requiredReference(name, "executor-plan-");
 	const planObject = get(namespace, name);
 	const plan = input(planObject, namespace, name, "plan.json");
-	if (!exact(plan, ["schemaVersion", "imageDigest", "startsAt", "expiresAt", "targets"]) ||
+	if (!exact(plan, ["schemaVersion", "imageDigest", "startsAt", "expiresAt", "targets", "fixtures"]) ||
 		plan.schemaVersion !== 1 || !sha.test(plan.imageDigest) ||
 		!integer(plan.startsAt) || !integer(plan.expiresAt) || plan.startsAt >= plan.expiresAt ||
 		!Array.isArray(plan.targets) || plan.targets.length !== 2 ||
@@ -77,10 +86,35 @@ export function readAcceptance(options, get = readConfigMap) {
 			typeof target.sandbox !== "string" || !dnsLabel.test(target.sandbox) ||
 			!target.sandbox.startsWith("sandbox-") ||
 			!integer(target.generation) || !integer(target.resourceFence)) ||
-		plan.targets[0].sandbox === plan.targets[1].sandbox)
+		plan.targets[0].sandbox === plan.targets[1].sandbox ||
+		!Array.isArray(plan.fixtures) || plan.fixtures.length > 2 * scenarios.length ||
+		plan.fixtures.some((fixture) =>
+			!exact(fixture, ["scenario", "sandbox", "sha256"]) ||
+			!scenarios.includes(fixture.scenario) || !sha.test(fixture.sha256) ||
+			!plan.targets.some((target) => target.sandbox === fixture.sandbox)) ||
+		new Set(plan.fixtures.map((fixture) => `${fixture.sandbox}/${fixture.scenario}`)).size !== plan.fixtures.length)
 		invalid();
 	if (command === "list")
-		return { namespace, plan: name, ...plan, scenarios };
+		return {
+			namespace,
+			plan: name,
+			...plan,
+			scenarios: scenarios.filter((scenario) =>
+				plan.fixtures.some((fixture) => fixture.scenario === scenario)),
+		};
+	if (command === "run") {
+		const target = plan.targets.find((entry) => entry.sandbox === sandbox);
+		const time = now();
+		const approved = plan.fixtures.find((entry) => entry.sandbox === sandbox && entry.scenario === value);
+		if (!target || !approved || time < plan.startsAt || time >= plan.expiresAt)
+			invalid();
+		const fixtureId = createHash("sha256")
+			.update(JSON.stringify([planObject.metadata.uid, target.sandbox, value]))
+			.digest("hex").slice(0, 24);
+		return runFixture(cluster, get, { namespace, name, plan, planUid: planObject.metadata.uid,
+			target, scenario: value, fixtureId, approved, now });
+	}
+	const run = value;
 	requiredReference(run, "executor-run-");
 	const receiptObject = get(namespace, run);
 	const receipt = input(receiptObject, namespace, run, "receipt.json");
@@ -94,6 +128,7 @@ export function readAcceptance(options, get = readConfigMap) {
 		"toolAdmitted", "proof", "stop"]) ||
 		receipt.schemaVersion !== 1 || receipt.run !== run ||
 		!scenarios.includes(receipt.scenario) || receipt.imageDigest !== plan.imageDigest ||
+		!plan.fixtures.some((fixture) => fixture.scenario === receipt.scenario && fixture.sandbox === receipt.target?.sandbox) ||
 		!exact(receipt.target, ["sandbox", "generation", "resourceFence"]) ||
 		!plan.targets.some((target) => target.sandbox === receipt.target.sandbox &&
 			target.generation === receipt.target.generation &&
@@ -121,9 +156,72 @@ export function readAcceptance(options, get = readConfigMap) {
 	return receipt;
 }
 
+/** The deployment owner supplies immutable, versioned fixtures in the approved namespace. */
+function runFixture(cluster, get, scope) {
+	const { namespace, name, plan, planUid, target, scenario, fixtureId, approved, now } = scope;
+	const prefix = "agent-infra.agora.io/";
+	const run = `executor-run-${fixtureId}`;
+	const fixtureName = `executor-fixture-${fixtureId}`;
+	const fixtureMap = get(namespace, fixtureName);
+	const fixture = input(fixtureMap, namespace, fixtureName, "fixture.json");
+	const fixtureHash = `sha256:${createHash("sha256").update(fixtureMap.data["fixture.json"]).digest("hex")}`;
+	const owner = fixtureMap.metadata.ownerReferences;
+	if (fixtureHash !== approved.sha256 || !Array.isArray(owner) || owner.length !== 1 ||
+		owner[0].kind !== "ConfigMap" || owner[0].name !== name || owner[0].uid !== planUid ||
+		!exact(fixture, ["schemaVersion", "scenario", "sandbox", "podUid", "jobSpec"]) ||
+		fixture.schemaVersion !== 1 || fixture.scenario !== scenario || fixture.sandbox !== target.sandbox ||
+		typeof fixture.podUid !== "string" || !identifier.test(fixture.podUid))
+		invalid();
+	const original = cluster(namespace, ["get", "pod", target.sandbox, "-o", "json"]);
+	const metadata = original.metadata;
+	if (original.kind !== "Pod" || metadata?.name !== target.sandbox ||
+		metadata.namespace !== namespace || metadata.uid !== fixture.podUid ||
+		metadata.deletionTimestamp !== undefined ||
+		metadata.labels?.[`${prefix}managed`] !== "session-sandbox-v1" ||
+		metadata.labels?.[`${prefix}sandbox-id`] !== target.sandbox.slice("sandbox-".length) ||
+		metadata.labels?.[`${prefix}generation`] !== String(target.generation))
+		invalid();
+	const runner = original.spec?.containers?.find((container) => container.name === "codex-session-executor");
+	const bindingValue = runner?.env?.find((entry) => entry.name === "AGENT_INFRA_CODEX_SESSION_EXECUTOR_BINDING")?.value;
+	const binding = typeof bindingValue === "string" ? JSON.parse(bindingValue) : undefined;
+	if (binding?.resourceFence !== target.resourceFence || binding.sessionGeneration !== target.generation ||
+		binding.namespace !== namespace || binding.podName !== target.sandbox ||
+		!runner.image?.endsWith(`@${plan.imageDigest}`))
+		invalid();
+	const job = fixture.jobSpec;
+	const template = job?.template?.spec;
+	if (!template || template.hostNetwork === true || template.hostPID === true ||
+		template.hostIPC === true || template.restartPolicy !== "Never" || job.backoffLimit !== 0 ||
+		!integer(job.activeDeadlineSeconds) || job.activeDeadlineSeconds > 900 ||
+		!Array.isArray(template.containers) || template.containers.length !== 1 ||
+		!template.containers[0].image?.endsWith(`@${plan.imageDigest}`) ||
+		template.containers[0].securityContext?.privileged === true ||
+		(template.volumes ?? []).some((volume) => volume.hostPath !== undefined) ||
+		now() + job.activeDeadlineSeconds * 1000 > plan.expiresAt)
+		invalid();
+	const created = cluster(namespace, ["create", "-f", "-", "-o", "json"], JSON.stringify({
+		apiVersion: "batch/v1",
+		kind: "Job",
+		metadata: {
+			namespace, name: run,
+			ownerReferences: [{ apiVersion: "v1", kind: "ConfigMap", name, uid: planUid }],
+			annotations: {
+				[`${prefix}executor-scenario`]: scenario,
+				[`${prefix}executor-target-pod-uid`]: fixture.podUid,
+				[`${prefix}executor-target-fence`]: String(target.resourceFence),
+			},
+		},
+		spec: job,
+	}));
+	if (created.kind !== "Job" || created.metadata?.name !== run ||
+		created.metadata.namespace !== namespace || !identifier.test(created.metadata.uid))
+		invalid();
+	return { schemaVersion: 1, namespace, run, scenario, target, evidence: "pending" };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
-		process.stdout.write(`${JSON.stringify(readAcceptance(process.argv.slice(2)))}\n`);
+		process.stdout.write(`${JSON.stringify(executorAcceptance(process.argv.slice(2)))}\n`);
 	} catch {
 		process.stderr.write("SESSION_EXECUTOR_ACCEPTANCE_EVIDENCE_UNAVAILABLE\n");
 		process.exitCode = 1;

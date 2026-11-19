@@ -679,6 +679,24 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]) {
 	);
 }
 
+function isExecutorDrainPort(
+	value: unknown,
+): value is NonNullable<CodexSessionExecutorAdmissionV1["drain"]> {
+	const keys = [
+		"arm",
+		"bindNativeTurn",
+		"endpoint",
+		"sealStop",
+		"confirm",
+		"proven",
+	];
+	return (
+		isPlainRecord(value) &&
+		exactKeys(value, keys) &&
+		keys.every((key) => typeof value[key] === "function")
+	);
+}
+
 /** @internal Receives trusted deployment authority, pinning its identity and epoch. */
 export function receiveCodexSessionExecutorAdmissionV1(
 	input: unknown,
@@ -709,26 +727,8 @@ export function receiveCodexSessionExecutorAdmissionV1(
 	const { epoch, assertCurrent, onFailure, close } = input;
 	let drain: CodexSessionExecutorAdmissionV1["drain"];
 	if (input.drain !== undefined) {
-		const keys = [
-			"arm",
-			"bindNativeTurn",
-			"endpoint",
-			"sealStop",
-			"confirm",
-			"proven",
-		];
-		if (
-			!isPlainRecord(input.drain) ||
-			!exactKeys(input.drain, keys) ||
-			keys.some(
-				(key) =>
-					typeof (input.drain as Record<string, unknown>)[key] !== "function",
-			)
-		)
-			configurationInvalid();
-		drain = Object.freeze({
-			...input.drain,
-		}) as CodexSessionExecutorAdmissionV1["drain"];
+		if (!isExecutorDrainPort(input.drain)) configurationInvalid();
+		drain = Object.freeze({ ...input.drain });
 	}
 	const assertPinned = () => {
 		if (

@@ -410,9 +410,6 @@ export const conversationStops = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
-		executorDrainRequired: boolean("executor_drain_required")
-			.default(false)
-			.notNull(),
 		confirmationDeadline: timestamp("confirmation_deadline", {
 			withTimezone: true,
 		})
@@ -421,6 +418,9 @@ export const conversationStops = platformSchema.table(
 		confirmationTimedOutAt: timestamp("confirmation_timed_out_at", {
 			withTimezone: true,
 		}),
+		executorDrainRequired: boolean("executor_drain_required")
+			.default(false)
+			.notNull(),
 	},
 	(table) => [
 		foreignKey({
