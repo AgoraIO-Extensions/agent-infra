@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type { startObservability } from "@agent-infra/observability";
 import {
 	createWorkloadReconciliationV1,
@@ -6,6 +7,7 @@ import {
 	type WorkloadReconciliationStorePortV1,
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
+import type { V1PersistentVolumeClaim } from "@kubernetes/client-node";
 import { createConnectionConsumerRegistrationWorkerV1 } from "./connection-registration-worker.js";
 import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
 import {
@@ -13,6 +15,10 @@ import {
 	type EvaluationScoringWorkerOptionsV1,
 } from "./evaluation-scoring-worker.js";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
+import {
+	agentAnnotation,
+	revisionLabel,
+} from "./kubernetes-runtime-comparison.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createWorkloadRuntimeV1,
@@ -44,6 +50,7 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
 	readonly certificateReconciliationWrites?: boolean;
+	readonly retainedPvcIdentityWrites?: boolean;
 	/** Separate budget for resource creation and image/PVC readiness. */
 	readonly maximumApplyAttempts?: number;
 	/** Separate budget for health/readiness observation after apply. */
@@ -243,6 +250,44 @@ export function createPlatformWorkloadWorkerV1(
 			return createWorkloadReconciliationV1({
 				store: observedStore,
 				runtime,
+				async observePersistentVolumeUid(state) {
+					if (!options.retainedPvcIdentityWrites) return undefined;
+					try {
+						const desired = validateAgentWorkloadDesiredV1(
+							state.candidate.deployment,
+						);
+						if (
+							desired.multiService ||
+							desired.agentId !== state.agentId ||
+							desired.namespaceRef !== options.policy.namespaceRef ||
+							options.client.namespace !== options.policy.namespace ||
+							desired.persistentVolume.retention !== "retain"
+						)
+							return undefined;
+						const claim = await options.client.read<V1PersistentVolumeClaim>(
+							"PersistentVolumeClaim",
+							desired.persistentVolume.name,
+						);
+						const metadata = claim?.metadata;
+						if (
+							!metadata?.uid ||
+							metadata.name !== desired.persistentVolume.name ||
+							metadata.namespace !== options.client.namespace ||
+							metadata.deletionTimestamp ||
+							metadata.annotations?.[agentAnnotation] !== state.agentId ||
+							metadata.annotations?.["agent-infra.agora.io/fence"] !==
+								String(desired.fence) ||
+							metadata.labels?.[revisionLabel] !==
+								String(desired.workloadRevision) ||
+							claim?.status?.phase !== "Bound"
+						)
+							return undefined;
+						return metadata.uid;
+					} catch {
+						// Missing observation leaves PVC ownership unknown.
+						return undefined;
+					}
+				},
 				maximumAttempts: options.maximumAttempts,
 				certificateReconciliationWrites:
 					options.certificateReconciliationWrites,

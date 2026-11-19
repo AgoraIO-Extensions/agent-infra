@@ -11,6 +11,7 @@ import {
 } from "@agent-infra/platform-core";
 import { serviceResourceName } from "./multi-service-runtime.js";
 import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
+import { workloadResourceNameV1 } from "./workload-resource-name.js";
 
 export const operationsReadKindsV2 = [
 	"pods",
@@ -215,6 +216,7 @@ export async function collectOperationsSnapshotV2(input: {
 	snapshot.refreshSeconds = input.intervalSeconds ?? 30;
 	const loaded = new Map<OperationsReadKindV2, ObjectRecord[]>();
 	const failed = new Set<OperationsReadKindV2>();
+	const incomplete = new Set<OperationsReadKindV2>();
 	let quotasTruncated = false;
 	const readKind = async (kind: OperationsReadKindV2) => {
 		if (
@@ -240,10 +242,12 @@ export async function collectOperationsSnapshotV2(input: {
 			);
 			failed.delete(kind);
 			if (kind === "quotas") quotasTruncated = result.truncated;
+			if (result.truncated) incomplete.add(kind);
 			snapshot.truncated ||= result.truncated;
 		} catch {
 			loaded.delete(kind);
 			failed.add(kind);
+			incomplete.add(kind);
 		}
 	};
 	const identityKinds: OperationsReadKindV2[] = [
@@ -417,6 +421,15 @@ export async function collectOperationsSnapshotV2(input: {
 	}
 	const metrics = scoped("podMetrics");
 	const rawPods = scoped("pods");
+	const observedPods = [
+		...rawPods,
+		...(initial.get("pods") ?? []).filter(
+			(entry) => metadata(entry).namespace === input.scope.namespace,
+		),
+	];
+	const completeStopObservation = !(
+		["pods", "volumes", "statefulsets"] as const
+	).some((kind) => incomplete.has(kind));
 	for (const pod of rawPods) {
 		const meta = metadata(pod);
 		const spec = object(pod.spec);
@@ -683,18 +696,19 @@ export async function collectOperationsSnapshotV2(input: {
 		const name = text(meta.name);
 		const version = text(meta.resourceVersion);
 		if (!uid || !name || !version) continue;
-		const mounted = rawPods
-			.filter((pod) =>
-				list(object(pod.spec).volumes).some(
-					(entry) => object(entry.persistentVolumeClaim).claimName === name,
-				),
-			)
-			.flatMap((pod) =>
-				snapshot.resources.filter(
-					(resource) =>
-						resource.uid === metadata(pod).uid && resource.kind === "Pod",
-				),
+		const referencesClaim = (spec: ObjectRecord) =>
+			list(spec.volumes).some(
+				(entry) => object(entry.persistentVolumeClaim).claimName === name,
 			);
+		const mountingPods = rawPods.filter((pod) =>
+			referencesClaim(object(pod.spec)),
+		);
+		const mounted = mountingPods.flatMap((pod) =>
+			snapshot.resources.filter(
+				(resource) =>
+					resource.uid === metadata(pod).uid && resource.kind === "Pod",
+			),
+		);
 		const owner = mounted[0];
 		const uniqueOwner =
 			owner &&
@@ -705,6 +719,68 @@ export async function collectOperationsSnapshotV2(input: {
 			(owner.ownership === "shared" ||
 				(owner.role === "workload" &&
 					annotations["agent-infra.agora.io/agent-id"] === owner.agentId));
+		// Stopping removes the Pods but keeps the controller and the primary claim.
+		// The Store supplies the previously verified PVC UID and current stop fence.
+		const stoppedBinding =
+			completeStopObservation &&
+			!observedPods.some((pod) => referencesClaim(object(pod.spec))) &&
+			stableIdentity("volumes", volume) &&
+			object(volume.status).phase === "Bound" &&
+			!meta.deletionTimestamp &&
+			!list(meta.ownerReferences).length
+				? input.bindings.find((binding) => {
+						if (
+							!binding.controllerUid ||
+							!binding.retainedStorage ||
+							binding.namespace !== input.scope.namespace ||
+							!binding.identities.some(
+								(identity) =>
+									identity.kind === "PersistentVolumeClaim" &&
+									identity.name === name &&
+									identity.uid === uid,
+							)
+						)
+							return false;
+						const workload = workloadResourceNameV1(binding.agentId);
+						if (
+							name !== `${workload}-data` ||
+							labels["agent-infra.agora.io/agent"] !== workload ||
+							annotations["agent-infra.agora.io/agent-id"] !== binding.agentId
+						)
+							return false;
+						const controller = controllers.find(
+							(entry) =>
+								entry.kind === "StatefulSet" &&
+								metadata(entry).name === workload &&
+								metadata(entry).uid === binding.controllerUid,
+						);
+						if (!controller) return false;
+						const control = metadata(controller);
+						const spec = object(controller.spec);
+						const status = object(controller.status);
+						const generation = integer(control.generation);
+						const controlAnnotations = object(control.annotations);
+						return (
+							!control.deletionTimestamp &&
+							generation === binding.generation &&
+							generation === integer(status.observedGeneration) &&
+							spec.replicas === 0 &&
+							(status.replicas ?? 0) === 0 &&
+							(status.currentReplicas ?? 0) === 0 &&
+							controlAnnotations["agent-infra.agora.io/agent-id"] ===
+								binding.agentId &&
+							integer(controlAnnotations["agent-infra.agora.io/fence"]) ===
+								binding.resourceFence &&
+							integer(
+								object(control.labels)["agent-infra.agora.io/revision"],
+							) === binding.workloadRevision &&
+							referencesClaim(object(object(spec.template).spec)) &&
+							!observedPods.some(
+								(pod) => controllingOwner(pod)?.uid === binding.controllerUid,
+							)
+						);
+					})
+				: undefined;
 		snapshot.resources.push({
 			kind: "PersistentVolumeClaim",
 			uid,
@@ -752,7 +828,19 @@ export async function collectOperationsSnapshotV2(input: {
 						ownership: owner.ownership,
 						role: owner.role,
 					}
-				: {}),
+				: stoppedBinding
+					? {
+							ownerUid: stoppedBinding.controllerUid ?? null,
+							ownerGeneration: stoppedBinding.generation,
+							sessionId: null,
+							sandboxId: null,
+							generation: null,
+							revision: stoppedBinding.revision,
+							workloadRevision: stoppedBinding.workloadRevision ?? null,
+							resourceFence: stoppedBinding.resourceFence,
+							role: "workload" as const,
+						}
+					: {}),
 		});
 	}
 	const nodeMetrics = loaded.get("nodeMetrics") ?? [];

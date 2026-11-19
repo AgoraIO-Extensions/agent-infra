@@ -99,6 +99,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
 	readonly certificateReconciliationWrites?: boolean;
+	readonly retainedPvcIdentityWrites?: boolean;
 	/** Separate budget for resource creation and image/PVC readiness. */
 	readonly maximumApplyAttempts?: number;
 	/** Separate budget for health/readiness observation after apply. */
@@ -298,6 +299,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			certificateReconciliationWrites: input.certificateReconciliationWrites,
+			retainedPvcIdentityWrites: input.retainedPvcIdentityWrites === true,
 			maximumApplyAttempts: input.maximumApplyAttempts,
 			maximumObserveAttempts: input.maximumObserveAttempts,
 			probeFailureThreshold: input.probeFailureThreshold,
