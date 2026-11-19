@@ -2278,6 +2278,15 @@ source: { ref, revision } }`。环境投影使用 `AGENT_INFRA_CONNECTION_SYSTEM
 每个已关联 Agent 的 Consumer 快照由该对象与其关联按上表字段生成，指纹仍按 §13.5.2 的 Consumer
 数组计算，来源为关联引用及修订。
 
+**手工安装的主体映射。** 一次性系统接入为动态手工 OAuth 提供独立、版本化的主体映射规则。
+部署显式批准映射权威、规则 `ref/revision`、获准 Connection issuer 和服务器解析方法，并将该批准
+绑定到同一系统接入指纹及审批来源修订。该批准随系统接入配置交付，`ConnectionSystemAccessV1`
+继续使用原字段与指纹算法。部署只提供规则，不配置逐 Agent 或逐用户条目。
+Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用户与原 Agent，按批准规则从
+受信身份来源解析该 issuer 下的稳定 Connection Principal，并固定来源及修订。映射缺失、歧义、
+过期或修订漂移时关闭该安装。Owner、显示名、邮箱、调用方字段和不透明 Token 均不提供主体权威。
+此处只产生预期主体，实际绑定按 [§13.5.6](#1356-标准-oauth-安装供应) 核实。
+
 #### 13.5.2 版本、指纹与失败行为
 
 版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和
@@ -2578,6 +2587,18 @@ Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
 注册元数据或 Owner 不替代用户实际 OAuth 确认。
 
+动态手工安装仅在 Connection 的原事务绑定回读已发布，且部署已批准其服务认证和合同修订时启用。
+首次登记回执只核实
+原登记键、client/Consumer/实例、回调及登记配置。Connection 在使用者完成原 OAuth 确认时绑定
+实际 Principal。原回跳已经确认且原平台用户明确确认后，Host 须在读取 code 或 verifier 前，从
+原描述符和同一回跳事务派生固定的只读查询，核对实际 Principal 与 §13.5.1 的预期映射，并核对
+同一 client/Consumer/实例、登记键、resource/scope、精确回调和本次已批准、未消费的 OAuth
+授权事务。回读合同须提供能与该次回跳核对的非秘密事务证据。只返回登记项或 DEVICE 当前
+Principal 的查询不足以核实原事务。Host 先经 Worker 只读核对 Store 中的当前原 claim 和
+原授权，再在同一 Host 私有安装事务用 CAS 固定符合本次 confirm 的绑定证据引用及修订。
+CAS 成功并再次核对原授权后才读取兑换材料。结果不明、证据不完整
+或 CAS 不匹配时保留待核实并拒绝兑换。只有换码后才能提供的回读不满足此门禁。
+
 核实成功后只兑换一次原 code，并以该响应的实际 expiry、原授权/scope/reference、已核实实例
 及部署批准的同版本 MCP 合同生成既有私有 publication 回执。credentialRef/revision 是 Host
 本次材料的不可变引用，不冒充 Connection token ID、Grant 或权限修订。沿用原发布锁、事务提交、
@@ -2724,6 +2745,16 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 
 完成首次绑定后，绑定或授权修订变化使旧事务失效。confirm 须经原用户明确确认，status
 只读取原事实。审计只记录引用、命令和结果状态。
+
+动态手工 confirm 以已确认的原回跳及其消费记录、原用户显式确认修订、当前关联和固定描述符为
+权威输入。API/Core 在同一 Platform 安装事务内校验当前身份与 Agent 权限，CAS 保存确认及
+唯一命令。现有生产 Conversation Worker 从同一持久队列按原 Execution 和有效 claim 领取。
+发送前核对原授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
+本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
+并在换码前和每次等待后复核上述事实。只有同一安装的 publication 提交经复核后才开放 MCP。
+确认已发送但状态不明时，只能由原用户在有效原 claim 内查询同一命令、原绑定与私有发布提交
+的已保存结果。服务端只对同一仍有效的原安装以 CAS 补记已核实结果。无法确认则保留
+`unknown` 并关闭 MCP。恢复不重放 confirm、回跳或换码，不重建 Host 或续租。
 
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
@@ -2874,6 +2905,13 @@ clientId 均匹配后，Host 以该命令引用和原授权原子消费首次 be
 消费成功才生成链接，callback 在原回跳映射提交后方可转交。后续命令使用同一固定配置。
 重复命令、校验失败、原 claim 失效或 Host 替换时拒绝本次命令并保留原事实。登记结果为
 unknown 时按 §13.5.7 原键核实。
+
+动态手工路径的完整非秘密描述符随首次 begin 固定。它绑定获准回读合同及其修订、原登记键及
+client/Consumer/实例、原配置 `ref/revision` 与摘要、受信主体映射 `ref/revision` 及预期
+Principal、部署批准的 MCP publication 合同 `ref/revision` 和供应引用与修订。原 Worker
+签名命令、持久 sending 及原安装 CAS 同时绑定该描述符和原 Execution/claim、Host/Pod UID、
+代次和 resource fence。Host 在同一原受保护安装事务固定该描述符，后续 confirm 和恢复沿
+同一描述符核对实际回读与发布。不得从回跳、请求或登记元数据补造实际绑定。
 
 Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
 保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
@@ -3180,6 +3218,11 @@ Worker 重启无法核实当前记录，以及审批、关联或供应修改。�
 模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可继续 begin。登记前
 status 单独替换原用户、Agent 或安装时，Host 须在读取材料及发送原键 GET 前拒绝。
 原 claim 结束后只保留负责人核实路径，不生成链接。
+
+动态手工 confirm 验收从原回跳和原用户确认走现有生产 Worker 队列。覆盖映射或 publication
+修订漂移、错 Principal、同一登记键下不同授权事务、未发布或不完整的回读、迟到结果及 CAS
+冲突。上述路径均拒绝读取兑换材料或启用 MCP。分别在发送、换码和 publication 提交后模拟
+丢响应，验证 status 只核实已保存的原事务，无法确认时保留 unknown，且不会重发换码。
 
 生产安装验收包括供应方实际输出、可信 SecretRef、合法确认和领取、跨 Session/代次、
 错 state/issuer/resource、重放、撤权及 unknown，以及最终 Linux 文件、内存与 FD 保护。
