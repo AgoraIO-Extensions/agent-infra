@@ -517,6 +517,7 @@ export const workloadReconciliations = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		certificateReconciliation: jsonb("certificate_reconciliation"),
 	},
 	(table) => [
 		check(

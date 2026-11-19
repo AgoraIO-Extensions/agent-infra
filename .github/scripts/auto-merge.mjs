@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-const ENROLLMENT_ACTIONS = new Set(["opened", "reopened", "ready_for_review"]);
+const ENROLLMENT_ACTIONS = new Map([
+  ["pull_request_target", ["opened", "reopened", "ready_for_review"]],
+  ["pull_request_review", ["submitted", "edited", "dismissed"]],
+  ["pull_request_review_comment", ["created", "edited", "deleted"]],
+]);
 const ENABLE_AUTO_MERGE_MUTATION = `
   mutation EnablePullRequestAutoMerge($pullRequestId: ID!) {
     enablePullRequestAutoMerge(
@@ -66,13 +70,14 @@ export async function unresolvedReviewThreadCount({ repository, number, request 
 }
 
 export function evaluateAutoMergeEligibility({
+  eventName,
   action,
   pullRequest,
   repository,
   defaultBranch,
   unresolvedReviewThreads = 0,
 }) {
-  if (!ENROLLMENT_ACTIONS.has(action)) {
+  if (!ENROLLMENT_ACTIONS.get(eventName)?.includes(action)) {
     return { eligible: false, reason: "unsupported action" };
   }
   if (pullRequest.state !== "open") {
@@ -103,18 +108,27 @@ export async function enrollPullRequest({ pullRequest, request }) {
   if (pullRequest.auto_merge) return "already-enrolled";
   if (!pullRequest.node_id) throw new Error("Pull request node_id is required");
 
-  const response = await request("/graphql", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query: ENABLE_AUTO_MERGE_MUTATION,
-      variables: { pullRequestId: pullRequest.node_id },
-    }),
-  });
-  if (!response.data?.enablePullRequestAutoMerge?.pullRequest) {
-    throw new Error("GitHub did not confirm auto-merge enrollment");
+  try {
+    const response = await request("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: ENABLE_AUTO_MERGE_MUTATION,
+        variables: { pullRequestId: pullRequest.node_id },
+      }),
+    });
+    if (!response.data?.enablePullRequestAutoMerge?.pullRequest) {
+      throw new Error("GitHub did not confirm auto-merge enrollment");
+    }
+    return "enrolled";
+  } catch (error) {
+    const errors = error?.cause;
+    if (Array.isArray(errors) && errors.length === 1) {
+      const status = /^Pull request (?:Pull request )?is in (clean|unstable) status$/.exec(errors[0]?.message);
+      if (status) return `not enrolled: GitHub reported ${status[1]} status`;
+    }
+    throw error;
   }
-  return "enrolled";
 }
 
 export async function disableAutoMerge({ pullRequest, request }) {
@@ -156,7 +170,9 @@ async function githubRequest(path, options = {}) {
     throw new Error(`GitHub API ${options.method ?? "GET"} ${path}: ${response.status}`);
   }
   if (payload.errors?.length) {
-    throw new Error(`GitHub GraphQL: ${payload.errors.map((error) => error.message).join("; ")}`);
+    throw new Error(`GitHub GraphQL: ${payload.errors.map((error) => error.message).join("; ")}`, {
+      cause: payload.errors,
+    });
   }
   return payload;
 }
@@ -176,13 +192,15 @@ async function main() {
     request: githubRequest,
   });
   const eligibility = evaluateAutoMergeEligibility({
+    eventName: requiredEnvironment("GITHUB_EVENT_NAME"),
     action: event.action,
     pullRequest,
     repository,
     defaultBranch: event.repository?.default_branch,
     unresolvedReviewThreads,
   });
-  if (!eligibility.eligible && unresolvedReviewThreads > 0 && pullRequest.auto_merge) {
+  if (!eligibility.eligible && eligibility.reason !== "unsupported action"
+      && unresolvedReviewThreads > 0 && pullRequest.auto_merge) {
 		const result = await disableAutoMerge({ pullRequest, request: githubRequest });
 		console.log(`Auto-merge ${result}: ${eligibility.reason}`);
 		return;
