@@ -101,7 +101,9 @@ const lifecycle = {
 	stopReceipt,
 };
 beforeAll(async () => {
-	db = await startPostgresTestDatabase("workspace-4173");
+	db = await startPostgresTestDatabase("workspace-4173", {
+		logicalReplication: true,
+	});
 	await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
 	sql = postgres(db.databaseUrl, { max: 1 });
 	store = new PostgresSessionWorkspaceReclamationStoreV1(
@@ -165,10 +167,8 @@ const dropRoleSql = readFile(
 );
 
 async function prepareReaderTestDatabase() {
-	// Isolated fixture only. Keep the default PUBLIC grants on the large object functions.
+	// Match ACK database bootstrap while keeping default PUBLIC function grants.
 	await sql`revoke all on database platform_test from public`;
-	await sql`revoke execute on function pg_catalog.pg_logical_emit_message(boolean,text,text),
-		pg_catalog.pg_logical_emit_message(boolean,text,bytea) from public`;
 }
 
 async function loginTestReader() {
@@ -181,16 +181,56 @@ async function loginTestReader() {
 }
 
 describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
-	it("refuses to provision a role that inherits a non-exempt PostgreSQL write function", async () => {
-		// Match the Platform database ACL established by ACK bootstrap.
-		await sql`revoke all on database platform_test from public`;
+	it("allows the exact PUBLIC logical message signatures without logical slots", async () => {
+		await prepareReaderTestDatabase();
+		// Exercise one explicit ACL and one built-in default ACL.
 		await sql`grant execute on function pg_catalog.pg_logical_emit_message(boolean,text,text) to public`;
+		await sql.unsafe(await roleSql);
+		try {
+			const [grants] = await sql`select
+				has_function_privilege('agent_infra_reclamation_ro',
+					'pg_catalog.pg_logical_emit_message(boolean,text,text)', 'EXECUTE') as text_allowed,
+				has_function_privilege('agent_infra_reclamation_ro',
+					'pg_catalog.pg_logical_emit_message(boolean,text,bytea)', 'EXECUTE') as bytea_allowed,
+				rolcanlogin from pg_roles where rolname='agent_infra_reclamation_ro'`;
+			expect(grants).toEqual({
+				text_allowed: true,
+				bytea_allowed: true,
+				rolcanlogin: false,
+			});
+		} finally {
+			await sql.unsafe(await dropRoleSql);
+		}
+	});
+
+	it("rejects an unapproved overload even when its name matches a PUBLIC exception", async () => {
+		await prepareReaderTestDatabase();
+		await sql`create function pg_catalog.pg_logical_emit_message(integer)
+			returns integer language sql as 'select 1'`;
 		try {
 			await expect(sql.unsafe(await roleSql)).rejects.toThrow(
 				"reclamation reader has unexpected effective privileges",
 			);
 		} finally {
 			await sql`rollback`;
+			await sql`drop function pg_catalog.pg_logical_emit_message(integer)`;
+		}
+		expect(
+			await sql`select oid from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
+		).toEqual([]);
+	});
+
+	it("reports an inactive logical slot and exits before creating the role", async () => {
+		await prepareReaderTestDatabase();
+		await sql`select pg_create_logical_replication_slot('reclamation_fixture', 'pgoutput')`;
+		try {
+			await expect(sql.unsafe(await roleSql)).rejects.toMatchObject({
+				message: "WORKSPACE_READER_LOGICAL_SLOTS_PRESENT",
+				detail: "logical_slot_count=1",
+			});
+		} finally {
+			await sql`rollback`;
+			await sql`select pg_drop_replication_slot('reclamation_fixture')`;
 		}
 		expect(
 			await sql`select oid from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
@@ -261,7 +301,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 				"select * from platform.platform_api_credentials",
 				"update platform.conversations set status = 'unavailable'",
 				"create table public.reclamation_probe (id integer)",
-				"select pg_catalog.pg_logical_emit_message(true, 'fixture', 'fixture'::text)",
+				"select pg_catalog.lo_export(0, '/unreachable')",
 			]) {
 				await expect(
 					reader.begin("read write", (tx) => tx.unsafe(query)),

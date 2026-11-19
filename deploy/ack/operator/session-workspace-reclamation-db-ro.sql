@@ -2,6 +2,20 @@
 -- Apply once, after the workspace reclamation read migration.
 BEGIN;
 
+-- Cluster-wide check includes inactive and temporary logical slots.
+DO $$
+DECLARE
+  logical_slot_count bigint;
+BEGIN
+  SELECT count(*) INTO logical_slot_count
+  FROM pg_catalog.pg_replication_slots WHERE slot_type = 'logical';
+  IF logical_slot_count <> 0 THEN
+    RAISE EXCEPTION 'WORKSPACE_READER_LOGICAL_SLOTS_PRESENT'
+      USING DETAIL = format('logical_slot_count=%s', logical_slot_count);
+  END IF;
+END;
+$$;
+
 CREATE ROLE agent_infra_reclamation_ro NOLOGIN NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2;
 ALTER ROLE agent_infra_reclamation_ro SET default_transaction_read_only = on;
@@ -35,8 +49,8 @@ DECLARE
     'platform_reclamation_read.outbox_items'::regclass::oid,
     'platform_reclamation_read.stopped_audit'::regclass::oid
   ];
-  -- The 2026-11-19 decision permits only these existing PUBLIC grants.
-  public_lo_exception constant oid[] := ARRAY[
+  -- The 2026-11-19 decisions permit only these existing PUBLIC grants.
+  public_execute_exceptions constant oid[] := ARRAY[
     'pg_catalog.lo_creat(integer)'::regprocedure::oid,
     'pg_catalog.lo_create(oid)'::regprocedure::oid,
     'pg_catalog.lo_from_bytea(oid,bytea)'::regprocedure::oid,
@@ -45,7 +59,9 @@ DECLARE
     'pg_catalog.lo_truncate(integer,integer)'::regprocedure::oid,
     'pg_catalog.lo_truncate64(integer,bigint)'::regprocedure::oid,
     'pg_catalog.lo_unlink(oid)'::regprocedure::oid,
-    'pg_catalog.lowrite(integer,bytea)'::regprocedure::oid
+    'pg_catalog.lowrite(integer,bytea)'::regprocedure::oid,
+    'pg_catalog.pg_logical_emit_message(boolean,text,text)'::regprocedure::oid,
+    'pg_catalog.pg_logical_emit_message(boolean,text,bytea)'::regprocedure::oid
   ];
 BEGIN
   IF has_database_privilege(reader, current_database(), 'CREATE,TEMP')
@@ -100,7 +116,7 @@ BEGIN
         AND has_schema_privilege(reader, n.oid, 'USAGE')
         AND has_function_privilege(reader, p.oid, 'EXECUTE')
         AND NOT (
-          p.oid = ANY(public_lo_exception)
+          p.oid = ANY(public_execute_exceptions)
           AND EXISTS (
             SELECT 1
             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl

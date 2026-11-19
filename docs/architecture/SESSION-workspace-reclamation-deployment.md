@@ -44,7 +44,8 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
 | `platform.outbox_items`、`platform.audit_events` | 待处理调谐和已开始回收所需的筛选列 |
 
 1. 在获准窗口内，部署负责人使用数据库管理员入口核对目标为新 lane 的 Platform DB，
-   确认迁移和三个视图已存在，再用 `psql -X -v ON_ERROR_STOP=1 -f` 执行角色脚本。
+   确认迁移和三个视图已存在。先用只读查询核对逻辑复制槽，再用
+   `psql -X -v ON_ERROR_STOP=1 -f` 执行角色脚本。脚本在创建角色前复查同一条件。
    新 lane 的 PostgreSQL StatefulSet 由 Helm 管理，首次初始化脚本只适用于新数据目录，
    平台迁移则使用应用角色。创建登录角色和核对有效权限由 PostgreSQL 管理员单独执行一次。
 2. 角色应为 `agent_infra_reclamation_ro`、`NOLOGIN`、默认事务只读、没有角色成员资格。
@@ -72,10 +73,11 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    和集群所有权记录。全为零才清理角色授权并删除角色，确认 `role_removed=true`。
    任一检查失败时保留 NOLOGIN 和原对象，记录脚本返回的状态并交 DBA 处理。
 
-#### 已批准的大对象权限例外
+#### 已批准的 PUBLIC 权限例外
 
-用户 2026-11-19T14:20Z 批准保留生产 PUBLIC 权限，并接受下列九个 PUBLIC 默认可执行
-的大对象函数签名带来的残余风险。
+用户 2026-11-19T14:20Z 批准保留生产 PUBLIC 权限并接受下列大对象函数的残余风险。
+16:03Z 协调记录按同一原则批准两条 WAL 消息重载。在角色自检中只有精确函数 OID 与
+PUBLIC EXECUTE 同时匹配时才应用例外。
 
 - `lo_creat(integer)`
 - `lo_create(oid)`
@@ -86,11 +88,40 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
 - `lo_truncate64(integer,bigint)`
 - `lo_unlink(oid)`
 - `lowrite(integer,bytea)`
+- `pg_logical_emit_message(boolean,text,text)`
+- `pg_logical_emit_message(boolean,text,bytea)`
 
-默认只读事务可被会话覆盖。Job 使用按需启用并到期的专用登录，收尾时提交 NOLOGIN 后
-回读所有权。该回读只能证明没有留下角色拥有的对象。其余权限检查继续适用，例如仍可执行
-`pg_logical_emit_message` 时角色创建会回滚。遇到该结果时保留回执并交数据库负责人核查。
-后续收紧范围由 [#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪。
+建角色前以管理员入口在目标库执行只读核对，并在启用登录前复查。
+
+```sql
+BEGIN READ ONLY;
+SELECT count(*) AS logical_slot_count
+FROM pg_catalog.pg_replication_slots
+WHERE slot_type = 'logical';
+COMMIT;
+```
+
+统计整个实例的逻辑槽，包含停用和临时槽。计数非零或无法核实时，停止并报告。
+角色脚本对非零计数返回 `WORKSPACE_READER_LOGICAL_SLOTS_PRESENT`。
+
+Files 复核确认，WAL 函数写入调用者提供的消息，权限限于该函数行为。它不授予业务数据读取，
+也不创建角色拥有的对象。无逻辑槽降低现有解码端消费消息的风险，WAL 和 I/O 开销仍可能发生。
+一次性 Job 使用短登录窗口和最多两个连接，收尾执行 NOLOGIN 与所有权回读。
+零所有权只证明清理时角色没有对象。后续收紧范围由
+[#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪。
+
+#### 单库连接准入
+
+先回读实际数据库入口、按顺序生效的认证规则和所有可连接数据库的有效 CONNECT 权限。
+当前生产 PostgreSQL 的通用密码规则覆盖所有数据库和用户，`postgres` 与 `template1`
+也向 PUBLIC 授予 CONNECT。现有直连入口不足以证明单库准入，启动 Job 前须停止并报告。
+
+可采用已经获准的专用入口，由入口认证层只允许该角色连接 Platform DB，并阻断 Job
+到 PostgreSQL 的直接连接。核验这两条约束后，在获准窗口用实际 Job 来源验证 Platform
+连接成功，其他可连接数据库均被拒绝。连接 URL 中的固定数据库名仅用于选择目标。
+当前没有这样的入口。可选方案是经批准为该角色添加先匹配的 Platform DB 允许规则和其他
+数据库拒绝规则，覆盖 TCP 与可触达的本地连接，或另行批准专用受控入口。没有批准时维持
+NOLOGIN 并暂停 dry-run。
 
 ### 候选清单的排除规则
 
