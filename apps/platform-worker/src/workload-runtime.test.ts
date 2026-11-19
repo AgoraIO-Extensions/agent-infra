@@ -8671,7 +8671,8 @@ it("keeps the ready multi-service revision while a certificate is pending with w
 	expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
 	const ingress = await f.client.read("Ingress", hostnameWorkloadName);
 	expect(ingress).not.toBeNull();
-	f.seed({ ...ready, status: {} });
+	const pending: WorkloadHostnameCertificateV1 = { ...ready, status: {} };
+	f.seed(pending);
 	await f.tick(1, false);
 	expect(f.state).toMatchObject({ phase: "observing", revision: 1 });
 	expect(f.state).not.toHaveProperty("certificateWait");
