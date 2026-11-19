@@ -1522,11 +1522,9 @@ export function createMultiServiceRuntimeOperations(options: {
 		const current = await client.read(kind, name);
 		if (!current) return true;
 		if (
-			!owned(current, value) &&
-			!(
-				ownership.allowOwnershipTransition === true &&
-				ownedByAgent(current, value)
-			)
+			ownership.allowOwnershipTransition === true
+				? !ownedByAgent(current, value)
+				: !owned(current, value)
 		)
 			throw new Error("multi-service resource drifted");
 		await client.delete(current);
@@ -1666,6 +1664,55 @@ export function createMultiServiceRuntimeOperations(options: {
 		}
 		return false;
 	}
+	async function isCompletedMigrationPod(
+		pod: V1Pod,
+		value: MultiServiceDesired,
+	) {
+		const owners = pod.metadata?.ownerReferences?.filter(
+			(owner) => owner.controller,
+		);
+		const owner = owners?.[0];
+		if (
+			pod.status?.phase !== "Succeeded" ||
+			pod.metadata?.namespace !== value.namespaceRef ||
+			!pod.metadata.uid ||
+			pod.metadata.deletionTimestamp ||
+			pod.metadata.labels?.["agent-infra.agora.io/service"] !== "migration" ||
+			owners?.length !== 1 ||
+			owner?.apiVersion !== "batch/v1" ||
+			owner.kind !== "Job" ||
+			!owner.name ||
+			!owner.uid
+		)
+			return false;
+		const job = await client.read<V1Job>("Job", owner.name);
+		const hash = job?.metadata?.annotations?.[fingerprintAnnotation];
+		const fence = Number(
+			job?.metadata?.annotations?.["agent-infra.agora.io/fence"],
+		);
+		return (
+			!!job &&
+			job.metadata?.namespace === value.namespaceRef &&
+			!job.metadata.deletionTimestamp &&
+			job.apiVersion === "batch/v1" &&
+			job.kind === "Job" &&
+			job.metadata.name === owner.name &&
+			job.metadata.uid === owner.uid &&
+			job.metadata.labels?.["agent-infra.agora.io/service"] === "migration" &&
+			!!hash &&
+			/^[a-f0-9]{64}$/.test(hash) &&
+			owner.name ===
+				serviceResourceName(value.agentId, `migration-${hash.slice(0, 12)}`) &&
+			ownedByAgent(job, value) &&
+			fence > 0 &&
+			(job.status?.active ?? 0) === 0 &&
+			!jobFailed(job) &&
+			job.status?.conditions?.some(
+				({ type, status }) => type === "Complete" && status === "True",
+			) === true
+		);
+	}
+
 	async function scaleDown(value: MultiServiceDesired) {
 		let pending = false;
 		for (const resource of value.multiService.resources) {
@@ -1676,7 +1723,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				resourceName(value, resource.metadata.name),
 			);
 			if (!current) continue;
-			if (!owned(current, value))
+			if (!owned(current, value) || !ownedByAgent(current, value))
 				throw new Error("multi-service resource drifted");
 			if (current.spec?.replicas !== 0) {
 				if (!current.metadata?.resourceVersion || !current.metadata.uid)
@@ -1701,11 +1748,15 @@ export function createMultiServiceRuntimeOperations(options: {
 				pending = true;
 			}
 		}
-		const pods = await client.list(
+		if (pending) return "pending" as const;
+		const pods = await client.list<V1Pod>(
 			"Pod",
-			`agent-infra.agora.io/agent=${workloadResourceNameV1(value.agentId)}`,
+			`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
 		);
-		return pending || pods.length > 0 ? ("pending" as const) : null;
+		for (const pod of pods)
+			if (!(await isCompletedMigrationPod(pod, value)))
+				return "pending" as const;
+		return null;
 	}
 	return {
 		isMultiService,
@@ -1902,8 +1953,12 @@ export function createMultiServiceRuntimeOperations(options: {
 		async observe(
 			value: MultiServiceDesired,
 			identity: { uid: string; generation: number } | "pending",
+			reconcileCertificateState = true,
 		) {
-			if (!(await hostnameCertificates.ready(value))) return "pending" as const;
+			if (!reconcileCertificateState) {
+				const certificate = await hostnameCertificates.observe(value, false);
+				if (certificate !== "ready") return "pending" as const;
+			}
 			if (await hasAdditionalSnapshotEgress(value)) return "drifted" as const;
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
@@ -1944,6 +1999,10 @@ export function createMultiServiceRuntimeOperations(options: {
 				currentEntry.metadata.generation !== identity.generation
 			)
 				return "drifted" as const;
+			if (reconcileCertificateState) {
+				const certificate = await hostnameCertificates.observe(value);
+				if (certificate !== "ready") return certificate;
+			}
 			const snapshot = parseMemberSnapshot(
 				currentEntry.metadata.annotations?.[memberIdentityAnnotation],
 			);
@@ -2008,9 +2067,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			await emitHealthDiagnostic(value, "healthy");
 			return "healthy" as const;
 		},
-		async promote(value: MultiServiceDesired) {
+		async promote(
+			value: MultiServiceDesired,
+			reconcileCertificateState = true,
+		) {
 			assertWorkloadPublicRouteV1(options.policy, value);
-			if (!(await hostnameCertificates.ready(value)))
+			if (!(await hostnameCertificates.ready(value, reconcileCertificateState)))
 				throw new WorkloadKubernetesError("unavailable");
 			await put(ingress(value, options.policy), value);
 		},

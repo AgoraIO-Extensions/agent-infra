@@ -228,7 +228,7 @@ describe("Agent hostname certificate lifecycle", () => {
 				notAfter: "2030-01-01T00:00:00Z",
 			},
 		} as KubernetesObject);
-		expect(await adapter.observe(input, identity)).toBe("pending");
+		expect(await adapter.observe(input, identity)).toBe("certificate-invalid");
 		await expect(adapter.promote(input, identity)).rejects.toThrow();
 	});
 	it.each([{ usages: [] }, { usages: ["client auth"] }])(
@@ -262,7 +262,9 @@ describe("Agent hostname certificate lifecycle", () => {
 			} as KubernetesObject;
 			f.seed(unusable);
 			seedCertificateSecret(f, certificate);
-			expect(await adapter.observe(input, identity)).toBe("pending");
+			expect(await adapter.observe(input, identity)).toBe(
+				"certificate-invalid",
+			);
 			await expect(adapter.promote(input, identity)).rejects.toThrow();
 			await expect(adapter.apply(input)).rejects.toThrow();
 			expect(await f.client.read("Ingress", input.service.name)).toBeNull();
@@ -393,7 +395,7 @@ describe("Agent hostname certificate lifecycle", () => {
 		if (!certificate) throw new Error("Expected Certificate");
 		f.seed({ ...certificate, status } as KubernetesObject);
 		seedCertificateSecret(f, certificate);
-		expect(await adapter.observe(input, identity)).toBe("pending");
+		expect(await adapter.observe(input, identity)).toBe("certificate-invalid");
 		await expect(adapter.promote(input, identity)).rejects.toThrow();
 		expect(await f.client.read("Ingress", input.service.name)).toBeNull();
 	});
@@ -475,7 +477,7 @@ describe("Agent hostname certificate lifecycle", () => {
 			},
 		} as KubernetesObject);
 		seedCertificateSecret(f, certificate);
-		expect(await adapter.observe(input, identity)).toBe("pending");
+		expect(await adapter.observe(input, identity)).toBe("certificate-invalid");
 		await expect(adapter.promote(input, identity)).rejects.toThrow();
 	});
 	it("keeps the route closed until the current exact Certificate is ready", async () => {
@@ -489,11 +491,18 @@ describe("Agent hostname certificate lifecycle", () => {
 		const identity = await adapter.apply(input);
 		if (!identity || identity === "pending")
 			throw new Error("Expected workload");
-		expect(await adapter.observe(input, identity)).toBe("pending");
-		await expect(adapter.promote(input, identity)).rejects.toThrow();
-		expect(await f.client.read("Ingress", input.service.name)).toBeNull();
 		const certificate = await f.client.read("Certificate", certificateName);
 		if (!certificate) throw new Error("Expected Certificate");
+		f.seed({
+			...certificate,
+			metadata: {
+				...certificate.metadata,
+				creationTimestamp: new Date(Date.now()),
+			},
+		});
+		expect(await adapter.observe(input, identity)).toBe("certificate-pending");
+		await expect(adapter.promote(input, identity)).rejects.toThrow();
+		expect(await f.client.read("Ingress", input.service.name)).toBeNull();
 		f.seed({
 			...certificate,
 			status: {

@@ -29,6 +29,7 @@ export interface WorkloadHostnameCertificateV1 extends KubernetesObject {
 		};
 	};
 	readonly status?: {
+		readonly lastFailureTime?: string;
 		readonly notBefore?: string;
 		readonly notAfter?: string;
 		readonly conditions?: readonly {
@@ -113,6 +114,9 @@ function matchesSecretMetadata(
 	);
 }
 
+// Bound first issuance across Worker restarts using the Certificate's API-server timestamp.
+const maximumIssuanceWaitMs = 4 * 60 * 60_000;
+
 /** Stable declarations; cert-manager exclusively owns issuance and Secret contents. */
 export function createWorkloadHostnameCertificatesV1(options: {
 	readonly client: WorkerKubernetesClientV1;
@@ -165,63 +169,145 @@ export function createWorkloadHostnameCertificatesV1(options: {
 			throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 		return { route, issuerName: selected.clusterIssuerName };
 	}
-	return {
-		async preflight(
-			value: Pick<AgentWorkloadDesiredV1, "agentId" | "replicas">,
-		) {
-			await preparation(value);
-		},
-		async ready(value: AgentWorkloadDesiredV1): Promise<boolean> {
-			const selected = options.policy.hostnameRoutes;
-			if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
-				return true;
-			const route = workloadPublicRouteV1(options.policy, value.agentId);
-			const current = await options.client.read<WorkloadHostnameCertificateV1>(
-				"Certificate",
-				route.tlsSecretName,
-			);
+	async function observe(
+		value: AgentWorkloadDesiredV1,
+		reconcileCertificateState = true,
+	) {
+		const selected = options.policy.hostnameRoutes;
+		if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
+			return "ready" as const;
+		const route = workloadPublicRouteV1(options.policy, value.agentId);
+		const current = await options.client.read<WorkloadHostnameCertificateV1>(
+			"Certificate",
+			route.tlsSecretName,
+		);
+		if (
+			!current ||
+			!matchesCertificate(current, {
+				namespace: options.client.namespace,
+				name: route.tlsSecretName,
+				host: route.host,
+				issuerName: selected.clusterIssuerName,
+				agentId: value.agentId,
+			}) ||
+			!current.metadata?.uid ||
+			!current.metadata.resourceVersion ||
+			!Number.isSafeInteger(current.metadata.generation) ||
+			(current.metadata.generation ?? 0) < 1
+		)
+			return "certificate-invalid" as const;
+
+		const now = Date.now();
+		const conditions = current.status?.conditions ?? [];
+		const ready = conditions.filter((condition) => condition.type === "Ready");
+		// Compatibility mode keeps the serving route and normal retry behavior
+		// of the previous release when its metadata read fails.
+		if (!reconcileCertificateState) {
+			const notAfter = Date.parse(current.status?.notAfter ?? "");
+			const notBefore = current.status?.notBefore;
 			if (
-				!current ||
-				!matchesCertificate(current, {
-					namespace: options.client.namespace,
-					name: route.tlsSecretName,
-					host: route.host,
-					issuerName: selected.clusterIssuerName,
-					agentId: value.agentId,
-				}) ||
-				!current.metadata?.uid ||
-				!current.metadata.resourceVersion ||
-				!Number.isSafeInteger(current.metadata.generation) ||
-				(current.metadata.generation ?? 0) < 1 ||
-				!current.status?.notAfter ||
-				!Number.isFinite(Date.parse(current.status.notAfter)) ||
-				Date.parse(current.status.notAfter) <= Date.now() ||
-				(current.status.notBefore !== undefined &&
-					(!Number.isFinite(Date.parse(current.status.notBefore)) ||
-						Date.parse(current.status.notBefore) > Date.now()))
+				!options.client.readMetadata ||
+				ready.length !== 1 ||
+				ready[0]?.status !== "True" ||
+				ready[0].observedGeneration !== current.metadata.generation ||
+				!Number.isFinite(notAfter) ||
+				notAfter <= now ||
+				(notBefore !== undefined &&
+					(!Number.isFinite(Date.parse(notBefore)) ||
+						Date.parse(notBefore) > now))
 			)
-				return false;
-			const conditions = current.status.conditions?.filter(
-				(condition) => condition.type === "Ready",
-			);
-			const ready =
-				conditions?.length === 1 &&
-				conditions[0]?.status === "True" &&
-				conditions[0].observedGeneration === current.metadata.generation;
-			if (!ready || !options.client.readMetadata) return false;
+				return "certificate-pending" as const;
 			const secret = await options.client.readMetadata(
 				"Secret",
 				route.tlsSecretName,
 			);
-			return (
-				secret !== null &&
+			return secret &&
 				matchesSecretMetadata(
 					secret,
 					current,
 					options.client.namespace,
 					route.tlsSecretName,
 				)
+				? ("ready" as const)
+				: ("certificate-pending" as const);
+		}
+		const issuing = conditions.filter(
+			(condition) => condition.type === "Issuing",
+		);
+		if (
+			ready.length > 1 ||
+			issuing.length > 1 ||
+			[...ready, ...issuing].some(
+				(condition) =>
+					condition.observedGeneration !== undefined &&
+					condition.observedGeneration !== current.metadata?.generation,
+			)
+		)
+			return "certificate-invalid" as const;
+		const status = current.status;
+		const hasReadyCondition = ready[0]?.status === "True";
+		if (hasReadyCondition) {
+			const notAfter = Date.parse(status?.notAfter ?? "");
+			const notBefore = status?.notBefore;
+			if (
+				ready[0]?.observedGeneration !== current.metadata.generation ||
+				!Number.isFinite(notAfter) ||
+				notAfter <= now ||
+				(notBefore !== undefined &&
+					(!Number.isFinite(Date.parse(notBefore)) ||
+						Date.parse(notBefore) > now))
+			)
+				return "certificate-invalid" as const;
+		} else {
+			if (status?.lastFailureTime && issuing[0]?.status !== "True")
+				return "certificate-failed" as const;
+			if (status?.notAfter !== undefined || status?.notBefore !== undefined)
+				return "certificate-invalid" as const;
+			const createdAt = current.metadata.creationTimestamp;
+			const start =
+				createdAt === undefined ? Number.NaN : new Date(createdAt).getTime();
+			if (!Number.isFinite(start) || start > now)
+				return "certificate-invalid" as const;
+			if (now - start >= maximumIssuanceWaitMs)
+				return "certificate-timeout" as const;
+		}
+
+		if (!options.client.readMetadata) return "certificate-unavailable" as const;
+		try {
+			const secret = await options.client.readMetadata(
+				"Secret",
+				route.tlsSecretName,
 			);
+			if (
+				secret &&
+				!matchesSecretMetadata(
+					secret,
+					current,
+					options.client.namespace,
+					route.tlsSecretName,
+				)
+			)
+				return "certificate-invalid" as const;
+			if (!hasReadyCondition) return "certificate-pending" as const;
+			return secret ? ("ready" as const) : ("certificate-invalid" as const);
+		} catch {
+			// Unreadable metadata cannot authorize publication or resource cleanup.
+			return "certificate-unavailable" as const;
+		}
+	}
+
+	return {
+		async preflight(
+			value: Pick<AgentWorkloadDesiredV1, "agentId" | "replicas">,
+		) {
+			await preparation(value);
+		},
+		observe,
+		async ready(
+			value: AgentWorkloadDesiredV1,
+			reconcileCertificateState = true,
+		) {
+			return (await observe(value, reconcileCertificateState)) === "ready";
 		},
 		async prepare(value: AgentWorkloadDesiredV1) {
 			const plan = await preparation(value);

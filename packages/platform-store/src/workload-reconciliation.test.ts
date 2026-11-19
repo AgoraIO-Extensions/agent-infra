@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import {
 	type ImageRegistryAdmissionResultV1,
 	type PlatformSecretRecordV1,
@@ -62,7 +63,11 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
-import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";
+import {
+	decodePersistedWorkloadStateV1,
+	openPostgresWorkloadReconciliationStoreV1,
+	openPostgresWorkloadStateReaderV1,
+} from "./workload-reconciliation.js";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 90_000 });
 let database: PostgresTestDatabase;
@@ -114,6 +119,306 @@ beforeEach(async () => {
 	await sql`insert into platform.agent_owners(agent_id, owner_id, created_at) values ('agent-a', 'owner-a', now())`;
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id) values ('task-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1, workloadRevision: 1, fence: 1, desiredState: "running" })}, 'trace-a', 'request-a')`;
 });
+
+const certificateHandoffModes = [
+	"pending",
+	"retained",
+	"retained-cleaning",
+	"claimed-stop",
+	"stopped-before-handoff",
+] as const;
+
+it.each([
+	...certificateHandoffModes.map((mode) => ({ mode, phased: false })),
+	...certificateHandoffModes.map((mode) => ({ mode, phased: true })),
+	{ mode: "route-policy", phased: true } as const,
+])(
+	"hands off $mode certificate reconciliation (two-phase rollout: $phased)",
+	async ({ mode, phased }) => {
+		const legacyStoreModule = process.env.WORKLOAD_LEGACY_STORE_MODULE;
+		const legacyCoreModule = process.env.WORKLOAD_LEGACY_CORE_MODULE;
+		// CI always verifies the V1 payload and the new write/read cycle. The
+		// compatibility replay also runs the original reader and writer binaries.
+		const legacyStore:
+			| typeof import("@agent-infra/platform-store")
+			| undefined = legacyStoreModule
+			? await import(pathToFileURL(legacyStoreModule).href)
+			: undefined;
+		const legacyCore: typeof import("@agent-infra/platform-core") | undefined =
+			legacyCoreModule
+				? await import(pathToFileURL(legacyCoreModule).href)
+				: undefined;
+		expect(Boolean(legacyStore)).toBe(Boolean(legacyCore));
+		const legacyOrCompatibleStore = (
+			legacyStore?.openPostgresWorkloadReconciliationStoreV1 ??
+			openPostgresWorkloadReconciliationStoreV1
+		)({
+			...database,
+			retryDelayMs: 0,
+			monitorDelayMs: 0,
+		});
+
+		const adapter = runtime();
+		const worker = createWorkloadReconciliationV1({
+			store: first,
+			runtime: adapter,
+			certificateReconciliationWrites: true,
+		});
+		const reader = openPostgresWorkloadStateReaderV1(database);
+		const rollbackRuntime = runtime();
+		const cleanup = vi.spyOn(rollbackRuntime, "cleanup");
+		const apply = vi.spyOn(rollbackRuntime, "apply");
+		const promote = vi.spyOn(rollbackRuntime, "promote");
+		const compatibility = createWorkloadReconciliationV1({
+			store: first,
+			runtime: rollbackRuntime,
+			certificateReconciliationWrites: false,
+		});
+		const oldWorker = (
+			legacyCore?.createWorkloadReconciliationV1 ??
+			createWorkloadReconciliationV1
+		)({ store: legacyOrCompatibleStore, runtime: runtime() });
+		const rollbackReader = (
+			legacyStore?.openPostgresWorkloadStateReaderV1 ??
+			openPostgresWorkloadStateReaderV1
+		)(database);
+		const rollbackWorker = phased
+			? compatibility
+			: (
+					legacyCore?.createWorkloadReconciliationV1 ??
+					createWorkloadReconciliationV1
+				)({
+					store: legacyOrCompatibleStore,
+					runtime: rollbackRuntime,
+				});
+		const retainingCleanup =
+			mode === "retained-cleaning" || mode === "claimed-stop";
+		const certificate =
+			mode === "route-policy"
+				? undefined
+				: mode === "pending"
+					? "certificate-pending"
+					: "certificate-invalid";
+
+		const transaction = new PostgresAgentManagementTransactionV1(database);
+		try {
+			if (phased) {
+				for (let i = 0; i < 7; i++) await oldWorker.tick("worker-old");
+				expect(await reader.readCurrentState("agent-a")).toMatchObject({
+					phase: "ready",
+					fence: 1,
+				});
+				// A false installation over the original release remains healthy.
+				// Cert failure uses legacy transitions and writes no extension.
+				rollbackRuntime.observe = async (_state, reconcileCertificateState) =>
+					reconcileCertificateState ? "certificate-invalid" : "drifted";
+				expect(await compatibility.tick("worker-compatible")).toBe("advanced");
+				expect(await reader.readCurrentState("agent-a")).toMatchObject({
+					phase: "applying",
+					fence: 1,
+				});
+				const [disabled] = await sql`
+					select certificate_reconciliation from platform.workload_reconciliations
+					where agent_id = 'agent-a'
+				`;
+				expect(disabled?.certificate_reconciliation).toBeNull();
+				rollbackRuntime.observe = async () => "healthy";
+				for (let i = 0; i < 5; i++)
+					await compatibility.tick("worker-compatible");
+				expect(await reader.readCurrentState("agent-a")).toMatchObject({
+					phase: "ready",
+					fence: 1,
+				});
+				cleanup.mockClear();
+				apply.mockClear();
+				promote.mockClear();
+			} else {
+				for (let i = 0; i < 7; i++) await worker.tick("worker-new");
+			}
+			if (retainingCleanup || mode === "route-policy") {
+				// Start from the ready revision of a previously completed rollback.
+				await sql`update platform.workload_reconciliations
+					set state = jsonb_set(state, '{rollback}', 'true'::jsonb)
+					where agent_id = 'agent-a'`;
+			}
+			if (mode === "route-policy") {
+				await sql`update platform.workload_reconciliations
+					set state = jsonb_set(state, '{phase}', '"rejected"'::jsonb)
+					where agent_id = 'agent-a'`;
+				rollbackRuntime.rollbackRouteCompatible = () => false;
+				await compatibility.tick("worker-compatible");
+				const [disabled] = await sql`
+					select certificate_reconciliation from platform.workload_reconciliations
+					where agent_id = 'agent-a'
+				`;
+				expect(disabled?.certificate_reconciliation).toBeNull();
+				promote.mockClear();
+				adapter.rollbackRouteCompatible = () => false;
+			}
+			if (certificate !== undefined) adapter.observe = async () => certificate;
+			await worker.tick("worker-new");
+			if (
+				mode === "retained" ||
+				mode === "stopped-before-handoff" ||
+				mode === "route-policy"
+			) {
+				await worker.tick("worker-new");
+			} else if (mode === "pending") {
+				expect(await worker.tick("worker-new")).toBe("advanced");
+				expect(await worker.tick("worker-new")).toBe("idle");
+			}
+			const [row] = await sql`
+				select state, next_attempt_at = 'infinity'::timestamptz as parked
+				from platform.workload_reconciliations where agent_id = 'agent-a'
+			`;
+			expect(row?.parked).toBe(true);
+			expect(row?.state).not.toHaveProperty("certificateWait");
+			expect(row?.state).not.toHaveProperty("retainedFailure");
+			const base = decodePersistedWorkloadStateV1(row?.state, "agent-a");
+			expect(base).toMatchObject({
+				legacy: false,
+				state: {
+					phase:
+						mode === "pending"
+							? "observing"
+							: retainingCleanup
+								? "closing"
+								: "failed",
+					rollback: retainingCleanup || mode === "route-policy",
+					verifiedRevision: phased ? 2 : 1,
+				},
+			});
+			expect(await reader.readCurrentState("agent-a")).toMatchObject(
+				mode === "pending"
+					? { certificateWait: { attempts: 2 } }
+					: {
+							retainedFailure:
+								mode === "route-policy"
+									? { rollbackRouteRejected: true }
+									: { certificate: "certificate-invalid" },
+							phase: retainingCleanup ? "cleaning" : "failed",
+						},
+			);
+			if (legacyStore && !phased) {
+				expect(await rollbackReader.readCurrentState("agent-a")).toEqual(
+					base?.state,
+				);
+				expect(await rollbackWorker.tick("worker-old")).toBe("idle");
+			}
+			if (
+				phased &&
+				(mode === "pending" || mode === "retained" || mode === "route-policy")
+			) {
+				// A same-fence wake can continue an existing wait. It cannot
+				// reactivate a retained route or enter full cleanup.
+				if (mode === "pending")
+					rollbackRuntime.observe = async () => "certificate-pending";
+				await sql`insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id)
+					select 'late-running-wakeup', scope_type, scope_id, operation, payload,
+						'trace-late-running', 'request-late-running'
+					from platform.outbox_items where id = 'task-a'`;
+				expect(await rollbackWorker.tick("worker-compatible")).toBe("advanced");
+				expect(await reader.readCurrentState("agent-a")).toMatchObject({
+					phase: mode === "pending" ? "observing" : "failed",
+					fence: 1,
+					...(mode === "pending" ? { certificateWait: { attempts: 3 } } : {}),
+				});
+				expect(cleanup).not.toHaveBeenCalled();
+				expect(apply).not.toHaveBeenCalled();
+				expect(promote).not.toHaveBeenCalled();
+			}
+			const [management] = await sql`
+				select management_revision::int as revision, fence::int as fence
+				from platform.agent_applications where agent_id = 'agent-a'
+			`;
+			expect(
+				(
+					await createAgentManagementV1(transaction).executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-a",
+							expectedRevision: management?.revision,
+							idempotencyKey: "stop-after-certificate",
+							requestId: "stop-after-certificate",
+							traceId: "stop-after-certificate",
+						},
+						{
+							schemaVersion: 1,
+							userId: "owner-a",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					)
+				).outcome,
+			).toBe("accepted");
+			if (mode === "claimed-stop") {
+				expect(await worker.tick("worker-new")).toBe("advanced");
+				const [handoff] = await sql`
+					select state->>'phase' as phase, state->>'fence' as fence,
+						next_attempt_at <= clock_timestamp() as due,
+						(select count(*)::int from platform.outbox_items
+							where status in ('pending', 'retry_scheduled', 'processing')) as work
+					from platform.workload_reconciliations where agent_id = 'agent-a'
+				`;
+				expect(handoff).toEqual({
+					phase: "closing",
+					fence: "2",
+					due: true,
+					work: 0,
+				});
+			}
+			if (mode === "stopped-before-handoff") {
+				for (let i = 0; i < 5; i++) await worker.tick("worker-new");
+				const stopped = await reader.readCurrentState("agent-a");
+				expect(stopped).toMatchObject({ phase: "stopped", fence: 2 });
+				expect(stopped).not.toHaveProperty("retainedFailure");
+				const [current] = await sql`
+					select management_revision::int as revision, workload_revision::int as workload_revision,
+						fence::int as fence from platform.agent_applications where agent_id = 'agent-a'
+				`;
+				await sql`insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id)
+					values ('late-stop-wakeup','agent','agent-a','agent.workload.reconcile.v1',
+						${sql.json({
+							schemaVersion: 1,
+							agentId: "agent-a",
+							revision: current?.revision,
+							workloadRevision: current?.workload_revision,
+							fence: current?.fence,
+							desiredState: "stopped",
+						})},'trace-late','request-late')`;
+			}
+
+			for (let i = 0; i < 5; i++) await rollbackWorker.tick("worker-old");
+			expect(cleanup).not.toHaveBeenCalled();
+			expect(apply).toHaveBeenCalled();
+			expect(
+				apply.mock.calls.every(
+					([state, stopped]) =>
+						state.fence === management?.fence + 1 && stopped,
+				),
+			).toBe(true);
+			const final = await reader.readCurrentState("agent-a");
+			expect(final).toMatchObject({
+				phase: "stopped",
+				fence: management?.fence + 1,
+				verifiedRevision: phased ? 2 : 1,
+			});
+			expect(final).not.toHaveProperty("certificateWait");
+			expect(final).not.toHaveProperty("retainedFailure");
+		} finally {
+			await Promise.all([
+				reader.close(),
+				rollbackReader.close(),
+				legacyOrCompatibleStore.close(),
+				transaction.close(),
+			]);
+		}
+	},
+);
 
 it("completes an application submission before workload reconciliation", async () => {
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id, available_at, created_at, updated_at)

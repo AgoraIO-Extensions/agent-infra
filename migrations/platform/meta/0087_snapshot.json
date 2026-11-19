@@ -1,6 +1,6 @@
 {
-  "id": "80377ef9-6251-4c4c-979d-0f77545d14c1",
-  "prevId": "471ef9a6-39b7-48d7-bc3b-c455d5c077a8",
+  "id": "26d635d1-49e0-42f0-b063-d4a9e99bbcf8",
+  "prevId": "07878cff-9fff-4766-af1b-91ac4fe08902",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -9054,6 +9054,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "certificate_reconciliation": {
+          "name": "certificate_reconciliation",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
