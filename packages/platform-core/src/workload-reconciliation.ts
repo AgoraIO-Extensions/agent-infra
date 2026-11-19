@@ -428,7 +428,10 @@ export interface WorkloadRuntimePortV1 {
 		stopped: boolean,
 		input: WorkloadReconciliationInputV1,
 	): Promise<WorkloadIdentityV1 | WorkloadPreparationV1 | "pending" | null>;
-	observe(state: WorkloadReconciliationStateV1): Promise<WorkloadObservationV1>;
+	observe(
+		state: WorkloadReconciliationStateV1,
+		reconcileCertificateState?: boolean,
+	): Promise<WorkloadObservationV1>;
 	activateSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -667,20 +670,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 					dependencies.certificateReconciliationWrites === true ||
 					state.certificateWait !== undefined ||
 					state.retainedFailure !== undefined;
-				const observeWorkload = async () => {
-					const observation = await runtime.observe(state);
-					if (
-						!reconcileCertificateState &&
-						(observation === "certificate-pending" ||
-							observation === "certificate-failed" ||
-							observation === "certificate-timeout" ||
-							observation === "certificate-invalid")
-					)
-						return state.phase === "ready" || state.phase === "rejected"
-							? "drifted"
-							: "pending";
-					return observation;
-				};
+				const observeWorkload = () =>
+					runtime.observe(state, reconcileCertificateState);
 				const waitForCertificate = () =>
 					advance("observing", {
 						attempts: state.phase === "observing" ? state.attempts : 0,

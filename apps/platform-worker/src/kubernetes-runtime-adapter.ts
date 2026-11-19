@@ -635,9 +635,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			readonly workloadRevision: number;
 			readonly fence: number;
 		},
+		reconcileCertificateState = true,
 	): Promise<WorkloadObservationV1> {
 		const value = desired(input);
-		if (isMultiService(value)) return multiService.observe(value, identity);
+		if (isMultiService(value))
+			return multiService.observe(value, identity, reconcileCertificateState);
+		if (
+			!reconcileCertificateState &&
+			(await hostnameCertificates.observe(value)) !== "ready"
+		)
+			return routeMode === "open" ? "drifted" : "pending";
 		if (
 			!options.connectionConsumerControl &&
 			connectionInstallationRevision === null
@@ -827,8 +834,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 		)
 			return "drifted";
-		const certificate = await hostnameCertificates.observe(value);
-		if (certificate !== "ready") return certificate;
+		if (reconcileCertificateState) {
+			const certificate = await hostnameCertificates.observe(value);
+			if (certificate !== "ready") return certificate;
+		}
 		const pods = labelledPods.filter(ownedByExpectedWorkload);
 		if (pods.length !== 1) return "pending";
 		const pod = pods[0];

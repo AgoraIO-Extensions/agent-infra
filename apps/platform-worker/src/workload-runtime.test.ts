@@ -492,10 +492,10 @@ function fixture(
 		setManagement(next: WorkloadReconciliationInputV1["management"]) {
 			management = structuredClone(next);
 		},
-		async tick(times: number) {
+		async tick(times: number, certificateReconciliationWrites = true) {
 			for (let i = 0; i < times; i++) {
 				await createWorkloadReconciliationV1({
-					certificateReconciliationWrites: true,
+					certificateReconciliationWrites,
 					runtime: createWorkloadRuntimeV1(options),
 					maximumAttempts: 2,
 					store: {
@@ -8663,6 +8663,25 @@ async function readyHostnameFixture(configuration = hostnameConfiguration()) {
 	assert(f.state?.phase === "ready");
 	return { f, ready };
 }
+
+it("keeps the ready multi-service revision while a certificate is pending with writes disabled", async () => {
+	const { f, ready } = await readyHostnameFixture(
+		hostnameConfiguration("multi"),
+	);
+	expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
+	const ingress = await f.client.read("Ingress", hostnameWorkloadName);
+	expect(ingress).not.toBeNull();
+	f.seed({ ...ready, status: {} });
+	await f.tick(1, false);
+	expect(f.state).toMatchObject({ phase: "observing", revision: 1 });
+	expect(f.state).not.toHaveProperty("certificateWait");
+	expect(f.state).not.toHaveProperty("retainedFailure");
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	f.seed(ready);
+	await f.tick(3, false);
+	expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
+});
 
 it("retains a verified hostname workload after its certificate expires", async () => {
 	const { f, ready } = await readyHostnameFixture();

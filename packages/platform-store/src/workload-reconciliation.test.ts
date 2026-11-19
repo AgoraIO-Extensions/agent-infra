@@ -210,7 +210,8 @@ it.each([
 				});
 				// A false installation over the original release remains healthy.
 				// Cert failure uses legacy transitions and writes no extension.
-				rollbackRuntime.observe = async () => "certificate-invalid";
+				rollbackRuntime.observe = async (_state, reconcileCertificateState) =>
+					reconcileCertificateState ? "certificate-invalid" : "drifted";
 				expect(await compatibility.tick("worker-compatible")).toBe("advanced");
 				expect(await reader.readCurrentState("agent-a")).toMatchObject({
 					phase: "applying",

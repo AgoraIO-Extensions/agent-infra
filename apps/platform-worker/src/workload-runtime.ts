@@ -1564,6 +1564,7 @@ export function createWorkloadRuntimeV1(
 		state: WorkloadReconciliationStateV1,
 		browserBinding?: BrowserCapabilityBindingV1,
 		reconciliationObservation = false,
+		reconcileCertificateState = true,
 	) {
 		const scope = stepScope.getStore();
 		const sequence = scope ? ++scope.sequence : 0;
@@ -1596,6 +1597,7 @@ export function createWorkloadRuntimeV1(
 				const health = await multiServiceFor(state).observe(
 					observedWorkload,
 					state.identity,
+					reconcileCertificateState,
 				);
 				// 多服务 Agent 是自有交互入口，没有平台适配能力；与单镜像 self-managed
 				// 一致，只对完全相同的一次健康晋升尝试保留空能力集。
@@ -1643,6 +1645,8 @@ export function createWorkloadRuntimeV1(
 				state.identity,
 				routeSelectorMode(state),
 				state.phase === "observing" ? "activation" : "required",
+				undefined,
+				reconcileCertificateState,
 			);
 			const current =
 				!scope ||
@@ -2585,8 +2589,8 @@ export function createWorkloadRuntimeV1(
 			const health = await observe(state, browserBinding);
 			return health === "unreachable" ? observe(state, browserBinding) : health;
 		},
-		async observe(state) {
-			return observe(state, undefined, true);
+		async observe(state, reconcileCertificateState) {
+			return observe(state, undefined, true, reconcileCertificateState);
 		},
 		async observeForDrain(state, browserBinding) {
 			return observeForDrain(state, browserBinding);
