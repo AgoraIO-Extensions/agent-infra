@@ -300,12 +300,7 @@ function receiptFor(
 	};
 }
 
-/** Drives prepare to a delivered request; returns the facts the Host would read back. */
-async function prepareDelivered(
-	user = "alice",
-	suffix = "a",
-	worker = "worker-a",
-) {
+async function fixSupply(user = "alice", suffix = "a", worker = "worker-a") {
 	const projection = await begin(user, suffix);
 	const authorizationId = projection.authorizationId;
 	const prepare = await claimFirst("prepare", `execution-${suffix}`, worker);
@@ -346,6 +341,31 @@ async function prepareDelivered(
 	expect(await manual.readback({ ...readbackBase, purpose: "supply" })).toBe(
 		"allowed",
 	);
+	return {
+		authorizationId,
+		prepare,
+		template,
+		registrationKey,
+		supplyAttemptId,
+		readbackBase,
+	};
+}
+
+/** Drives prepare to a delivered request; returns the facts the Host would read back. */
+async function prepareDelivered(
+	user = "alice",
+	suffix = "a",
+	worker = "worker-a",
+) {
+	const fixed = await fixSupply(user, suffix, worker);
+	const {
+		authorizationId,
+		prepare,
+		template,
+		registrationKey,
+		supplyAttemptId,
+		readbackBase,
+	} = fixed;
 	expect(
 		await manual.settleSupply({
 			commandId: prepare.item.commandId,
@@ -390,12 +410,7 @@ async function prepareDelivered(
 		},
 	};
 	return {
-		authorizationId,
-		prepare,
-		template,
-		registrationKey,
-		supplyAttemptId,
-		readbackBase,
+		...fixed,
 		commandReadback,
 	};
 }
@@ -589,6 +604,96 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 				deliveryDigest: "3".repeat(64),
 			}),
 		).toBe(false);
+	});
+
+	it("keeps supply unknown when authorization readback outlasts the recovery attempt", async () => {
+		const run = await fixSupply();
+		const { authorizationId, supplyAttemptId } = run;
+		expect(
+			await manual.settleSupply({
+				commandId: run.prepare.item.commandId,
+				attemptId: run.prepare.attemptId,
+				attemptOwner: "worker-a",
+				command: "prepare",
+				authorizationId,
+				supplyAttemptId,
+				outcome: "unknown",
+			}),
+		).toBe(true);
+		const requestStatus = () =>
+			use.executeInstallation({
+				userId: "alice",
+				identityRevision: "identity-r1",
+				command: "status",
+				authorizationId,
+				requestId: "request",
+				traceId: "trace",
+			});
+		await requestStatus();
+		const recovery = await claimFirst("status");
+		const attempt = {
+			commandId: recovery.item.commandId,
+			attemptId: recovery.attemptId,
+			attemptOwner: "worker-a",
+			authorizationId,
+		};
+		expect(
+			await manual.commitDelivery({
+				...attempt,
+				command: "status",
+				deliveryDigest: "5".repeat(64),
+			}),
+		).toBe(true);
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()+interval '1 second' where id=${attempt.commandId}`;
+		let observedLive = false;
+		beforeResolveUser = async () => {
+			const [row] =
+				await client`select attempt_expires_at > clock_timestamp() as live
+				from platform.connection_installation_commands where id=${attempt.commandId}`;
+			observedLive = row?.live === true;
+			await vi.waitFor(
+				async () => {
+					const [current] =
+						await client`select attempt_expires_at <= clock_timestamp() as expired
+					from platform.connection_installation_commands where id=${attempt.commandId}`;
+					expect(current?.expired).toBe(true);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+		};
+		try {
+			await manual.recoverSupply({
+				...attempt,
+				supplyAttemptId,
+				confirmed: true,
+			});
+		} finally {
+			beforeResolveUser = undefined;
+		}
+		expect(observedLive).toBe(true);
+		const [row] =
+			await client`select m.supply_state, m.registration_state, p.status as prepare, s.status as status
+			from platform.connection_manual_installations m
+			join platform.connection_installation_commands p on p.authorization_id=m.authorization_id
+			join platform.connection_installation_commands s on s.authorization_id=m.authorization_id
+			where p.id=${run.prepare.item.commandId} and s.id=${attempt.commandId}`;
+		expect(row).toEqual({
+			supply_state: "unknown",
+			registration_state: "pending",
+			prepare: "unknown",
+			status: "unknown",
+		});
+		expect(await manual.listPending(32, ["execution-a"])).toEqual([]);
+		await expect(requestStatus()).resolves.not.toHaveProperty(
+			"authorizationUrl",
+		);
+		const retry = await claimFirst("status");
+		expect(retry.claimed?.installation).toMatchObject({
+			registrationKey: run.registrationKey,
+			supplyAttemptId,
+			supplyState: "unknown",
+		});
 	});
 
 	it("binds the configuration only after a deep-matching receipt CAS and enqueues one first begin", async () => {
@@ -1243,6 +1348,86 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			expect(await manual.listPending(32, ["execution-bob"])).toEqual([]);
 		},
 	);
+
+	it("keeps revoke unknown when the command row lock outlasts the attempt", async () => {
+		expect(await settlePrepared(await prepareDelivered())).toBe("registered");
+		const run = await prepareDelivered("bob", "bob", "worker-b");
+		expect(await settlePrepared(run, { consumerId: "consumer-conflict" })).toBe(
+			"unknown",
+		);
+		const { item, attemptId, claimed } = await claimFirst(
+			"revoke",
+			"execution-bob",
+			"worker-b",
+		);
+		const receipt = claimed?.installation.receipt;
+		expect(receipt).toMatchObject({ consumerId: "consumer-conflict" });
+		const attempt = {
+			commandId: item.commandId,
+			attemptId,
+			attemptOwner: "worker-b",
+			authorizationId: run.authorizationId,
+		};
+		expect(
+			await manual.commitDelivery({
+				...attempt,
+				command: "revoke",
+				deliveryDigest: "8".repeat(64),
+			}),
+		).toBe(true);
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()+interval '1 second' where id=${attempt.commandId}`;
+		let settlement: ReturnType<typeof manual.settleRevoke> | undefined;
+		await client.begin(async (tx) => {
+			const [lock] =
+				await tx`select pg_backend_pid() as pid from platform.connection_installation_commands
+				where id=${attempt.commandId} for update`;
+			settlement = manual.settleRevoke({
+				...attempt,
+				response: {
+					schemaVersion: 1,
+					commandId: attempt.commandId,
+					outcome: "revoked",
+				},
+			});
+			void settlement.catch(() => undefined);
+			await vi.waitFor(
+				async () => {
+					const waiting =
+						await client`select pid from pg_stat_activity where ${lock?.pid}=any(pg_blocking_pids(pid))`;
+					expect(waiting).toHaveLength(1);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+			const [live] =
+				await client`select attempt_expires_at > clock_timestamp() as live
+				from platform.connection_installation_commands where id=${attempt.commandId}`;
+			expect(live?.live).toBe(true);
+			await vi.waitFor(
+				async () => {
+					const [row] =
+						await client`select attempt_expires_at <= clock_timestamp() as expired
+					from platform.connection_installation_commands where id=${attempt.commandId}`;
+					expect(row?.expired).toBe(true);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+		});
+		await expect(settlement).resolves.toBe("unknown");
+		const [row] =
+			await client`select m.registration_key, m.revoke_state, m.supply_state, m.receipt, c.status
+			from platform.connection_manual_installations m
+			join platform.connection_installation_commands c on c.authorization_id=m.authorization_id
+			where c.id=${attempt.commandId}`;
+		expect(row).toEqual({
+			registration_key: run.registrationKey,
+			revoke_state: "unknown",
+			supply_state: "closed",
+			receipt,
+			status: "unknown",
+		});
+		expect(await manual.listPending(32, ["execution-bob"])).toEqual([]);
+	});
 
 	it("persists the first begin mapping once and recovers a lost begin read-only", async () => {
 		const run = await prepareDelivered();

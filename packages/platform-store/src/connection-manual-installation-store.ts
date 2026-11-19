@@ -558,7 +558,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}): Promise<void> {
 		await this.#transaction(async (tx) => {
 			const row = await this.#lockInstallation(tx, input.authorizationId);
-			const status = await this.#sending(tx, input, "status");
+			const status = await this.#sending(tx, input, "status", false, true);
 			if (
 				!status?.delivery_digest ||
 				row?.live !== true ||
@@ -577,6 +577,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					)
 				: null;
 			if (
+				status.live !== true ||
 				!input.confirmed ||
 				!current ||
 				current.claim.owner !== input.attemptOwner ||
@@ -591,15 +592,37 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				await this.#finishCommand(tx, input.commandId, "unknown");
 				return;
 			}
-			const original = await tx.execute(sql`
-				update platform.connection_installation_commands
-				set status='pending', attempt_id=null, attempt_owner=null,
-					attempt_expires_at=null, updated_at=clock_timestamp()
+			const originals = await tx.execute(sql`
+				select id from platform.connection_installation_commands
 				where authorization_id=${input.authorizationId} and command='prepare'
 					and status='unknown' and delivery_digest is null
-				returning id
+				for update
 			`);
-			if (original.length !== 1) {
+			const [original] = originals;
+			if (originals.length !== 1 || !original) {
+				await this.#finishCommand(tx, input.commandId, "unknown");
+				return;
+			}
+			// Both commands are locked. Reopen prepare only if the original status is still live.
+			const reopened = await tx.execute(sql`
+				update platform.connection_installation_commands p
+				set status='pending', attempt_id=null, attempt_owner=null,
+					attempt_expires_at=null, updated_at=clock_timestamp()
+				from platform.connection_installation_commands c
+				join platform.connection_installation_authorizations a on a.id=c.authorization_id
+				where p.id=${original.id as string} and p.authorization_id=a.id
+					and c.id=${input.commandId} and c.status='sending'
+					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
+					and exists (select 1 from platform.outbox_items o
+						where o.scope_type='conversation' and o.scope_id=${authorization.reference.conversationId}
+							and o.payload->>'executionId'=${authorization.reference.executionId}
+							and o.status='processing' and o.lease_owner=${input.attemptOwner}
+							and o.lease_expires_at > clock_timestamp()
+							and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+				returning p.id
+			`);
+			if (reopened.length !== 1) {
 				await this.#finishCommand(tx, input.commandId, "unknown");
 				return;
 			}
@@ -608,7 +631,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				set supply_state='confirmed', revision=revision+1, updated_at=clock_timestamp()
 				where authorization_id=${input.authorizationId}
 			`);
-			await this.#finishCommand(tx, input.commandId, "completed");
+			await tx.execute(sql`
+				update platform.connection_installation_commands set status='completed', updated_at=clock_timestamp()
+				where id=${input.commandId}
+			`);
 		});
 	}
 
@@ -928,22 +954,29 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly response?: ConnectionInstallCommandResponseV1;
 	}): Promise<"revoked" | "unknown" | "stale"> {
 		return this.#transaction(async (tx) => {
-			if (!(await this.#lockInstallation(tx, input.authorizationId)))
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			if (row?.revoke_state !== "sending") return "stale";
+			if (!(await this.#sending(tx, input, "revoke", false, true)))
 				return "stale";
-			if (!(await this.#sending(tx, input, "revoke"))) return "stale";
-			const revoked = input.response?.outcome === "revoked";
-			await tx.execute(sql`
-				update platform.connection_manual_installations
-				set revoke_state=${revoked ? "revoked" : "unknown"},
-					supply_state='closed', revision=revision+1, updated_at=clock_timestamp()
-				where authorization_id=${input.authorizationId} and revoke_state='sending'
+			// Compensation applies to a closed authorization and uses its own attempt deadline.
+			const [settled] = await tx.execute(sql`
+				with outcome as (
+					update platform.connection_installation_commands
+					set status=case when ${row.associationLocked && input.response?.outcome === "revoked"}
+						and attempt_expires_at > clock_timestamp() then 'completed' else 'unknown' end,
+						updated_at=clock_timestamp()
+					where id=${input.commandId} and authorization_id=${input.authorizationId} and command='revoke'
+						and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
+					returning authorization_id, status
+				)
+				update platform.connection_manual_installations m
+				set revoke_state=case when outcome.status='completed' then 'revoked' else 'unknown' end,
+					supply_state='closed', revision=m.revision+1, updated_at=clock_timestamp()
+				from outcome where m.authorization_id=outcome.authorization_id and m.revoke_state='sending'
+				returning m.revoke_state
 			`);
-			await this.#finishCommand(
-				tx,
-				input.commandId,
-				revoked ? "completed" : "unknown",
-			);
-			return revoked ? "revoked" : "unknown";
+			if (!settled) return "stale";
+			return settled.revoke_state === "revoked" ? "revoked" : "unknown";
 		});
 	}
 
