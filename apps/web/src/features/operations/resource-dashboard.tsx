@@ -66,6 +66,7 @@ const ownershipNames = {
 	reserve: "未领取备用",
 	unknown: "归属未知",
 };
+const placementNames = { ecs: "ECS", eci: "ECI", unknown: "未知" };
 const roleNames = {
 	sandbox: "Sandbox",
 	workload: "Agent Workload",
@@ -611,6 +612,13 @@ export function ResourceDashboard({
 										<dd>
 											{resource.agentName ?? resource.agentId ?? "未知"} /{" "}
 											{resource.sessionId ?? "不适用"}
+										</dd>
+										<dt>计算放置</dt>
+										<dd>{placementNames[resource.placement ?? "unknown"]}</dd>
+										<dt>归属原因</dt>
+										<dd>
+											{resource.ownershipReason ??
+												(resource.ownership === "unknown" ? "未知" : "不适用")}
 										</dd>
 										<dt>Sandbox</dt>
 										<dd>{resource.sandboxId ?? "不适用"}</dd>

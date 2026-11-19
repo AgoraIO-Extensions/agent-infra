@@ -479,9 +479,18 @@ if (
 	certificateReconciliationWrites !== "true"
 )
 	throw new Error("WORKER_CERTIFICATE_RECONCILIATION_CONFIGURATION_INVALID");
+const retainedPvcIdentityWrites =
+	process.env.PLATFORM_WORKER_RETAINED_PVC_IDENTITY_WRITES;
+if (
+	retainedPvcIdentityWrites !== undefined &&
+	retainedPvcIdentityWrites !== "false" &&
+	retainedPvcIdentityWrites !== "true"
+)
+	throw new Error("WORKER_RETAINED_PVC_IDENTITY_CONFIGURATION_INVALID");
 const workloadInput = {
 	...configuredWorkloadInput,
 	certificateReconciliationWrites: certificateReconciliationWrites === "true",
+	retainedPvcIdentityWrites: retainedPvcIdentityWrites === "true",
 	policy: {
 		...configuredWorkloadInput.policy,
 		...(process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE &&

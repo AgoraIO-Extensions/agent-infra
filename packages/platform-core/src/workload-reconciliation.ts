@@ -93,6 +93,8 @@ export function parseWorkloadExecutionCapacityV1(
 }
 
 export interface WorkloadVersionV1 {
+	/** Main claim observed during a successful single Workload promotion. */
+	readonly persistentVolumeUid?: string;
 	readonly secretRecoveries?: readonly WorkloadSecretRecoveryV1[];
 	readonly configuration: AgentConfigurationRecord;
 	/** Validated, credential-free deployment contract; never a Kubernetes object. */
@@ -491,6 +493,9 @@ function nextRevision(revision: number): number {
 export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
+	readonly observePersistentVolumeUid?: (
+		state: WorkloadReconciliationStateV1,
+	) => Promise<string | undefined>;
 	/** Introduce certificate/route reconciliation state after the compatible release is healthy. */
 	readonly certificateReconciliationWrites?: boolean;
 	readonly maximumAttempts?: number;
@@ -926,6 +931,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 						case "promoting": {
 							// Re-establish a closed route before rechecking a partially published candidate.
 							await runtime.closeRoute(state);
+							const previousVolumeUid = state.verified?.persistentVolumeUid;
+							const observeVolumeUid = dependencies.observePersistentVolumeUid;
+							const volumeUid =
+								previousVolumeUid ?? (await observeVolumeUid?.(state));
 							const health = await observeWorkload();
 							if (health === "certificate-unavailable")
 								return await closeUnreadableCertificate();
@@ -941,9 +950,16 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return failed("health_check_failed");
 							}
 							const capabilities = await runtime.capabilities(state);
+							const persistentVolumeUid =
+								previousVolumeUid ??
+								(volumeUid && volumeUid === (await observeVolumeUid?.(state))
+									? volumeUid
+									: undefined);
 							await runtime.promote(state, reconcileCertificateState);
 							return advance("ready", {
-								verified: state.candidate,
+								verified: persistentVolumeUid
+									? { ...state.candidate, persistentVolumeUid }
+									: state.candidate,
 								verifiedRevision: state.revision,
 								capabilities,
 							});

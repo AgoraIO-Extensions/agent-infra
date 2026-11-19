@@ -19,6 +19,9 @@ function fixture(
 		maximumAttempts?: number;
 		maximumApplyAttempts?: number;
 		maximumObserveAttempts?: number;
+		observePersistentVolumeUid?: Parameters<
+			typeof createWorkloadReconciliationV1
+		>[0]["observePersistentVolumeUid"];
 	} = {},
 ) {
 	const maximumAttempts = budgets.maximumAttempts ?? 3;
@@ -76,6 +79,7 @@ function fixture(
 		maximumAttempts,
 		maximumApplyAttempts,
 		maximumObserveAttempts,
+		observePersistentVolumeUid: budgets.observePersistentVolumeUid,
 		onStepFailure,
 	});
 	return {
@@ -93,6 +97,7 @@ function fixture(
 				maximumAttempts,
 				maximumApplyAttempts,
 				maximumObserveAttempts,
+				observePersistentVolumeUid: budgets.observePersistentVolumeUid,
 				onStepFailure,
 			});
 		},
@@ -131,6 +136,39 @@ function fixture(
 }
 
 describe("durable Workload reconciliation", () => {
+	it("retains the PVC UID verified during promotion across later Workload revisions", async () => {
+		const observePersistentVolumeUid = vi.fn(async () => "original-claim");
+		const f = fixture(undefined, undefined, { observePersistentVolumeUid });
+		await f.tick(7);
+		expect(f.state).toMatchObject({
+			phase: "ready",
+			verified: { persistentVolumeUid: "original-claim" },
+		});
+		expect(observePersistentVolumeUid).toHaveBeenCalledTimes(2);
+		f.upgrade("image-b");
+		f.restart();
+		observePersistentVolumeUid.mockResolvedValue("replacement-claim");
+		await f.tick(7);
+		expect(f.state).toMatchObject({
+			phase: "ready",
+			verified: {
+				configuration: { revision: 2 },
+				persistentVolumeUid: "original-claim",
+			},
+		});
+		expect(observePersistentVolumeUid).toHaveBeenCalledTimes(2);
+	});
+
+	it("leaves PVC ownership unknown when the claim changes during verification", async () => {
+		const observePersistentVolumeUid = vi
+			.fn(async () => "replacement-claim")
+			.mockResolvedValueOnce("original-claim");
+		const f = fixture(undefined, undefined, { observePersistentVolumeUid });
+		await f.tick(7);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.verified?.persistentVolumeUid).toBeUndefined();
+	});
+
 	it("persists a prepared resource intention across a Worker restart before observing it", async () => {
 		const f = fixture();
 		await f.tick(3);

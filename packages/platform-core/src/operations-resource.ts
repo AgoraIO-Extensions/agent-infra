@@ -29,8 +29,14 @@ export function bindOperationsResourcesV2(
 	bindings: readonly OperationsBindingV2[],
 ): OperationsResourceV2[] {
 	return resources.map((resource) => {
-		const binding = bindings.find(
-			(candidate) =>
+		const binding = bindings.find((candidate) => {
+			const exactIdentity = candidate.identities.some(
+				(identity) =>
+					identity.kind === resource.kind &&
+					identity.name === resource.name &&
+					identity.uid === resource.uid,
+			);
+			return (
 				candidate.agentId === resource.agentId &&
 				candidate.sessionId === resource.sessionId &&
 				candidate.sandboxId === resource.sandboxId &&
@@ -50,15 +56,17 @@ export function bindOperationsResourcesV2(
 							candidate.resourceFence === resource.resourceFence) &&
 				(candidate.revision === resource.revision ||
 					(resource.sandboxId !== null && resource.revision === null)) &&
-				(candidate.identities.some(
-					(identity) =>
-						identity.kind === resource.kind &&
-						identity.name === resource.name &&
-						identity.uid === resource.uid,
-				) ||
-					(candidate.controllerUid !== undefined &&
-						candidate.controllerUid === resource.ownerUid)),
-		);
+				(candidate.controllerUid !== undefined && candidate.retainedStorage
+					? resource.kind === "PersistentVolumeClaim" &&
+						resource.phase === "Bound" &&
+						resource.identityObservedAt !== undefined &&
+						exactIdentity &&
+						candidate.controllerUid === resource.ownerUid
+					: exactIdentity ||
+						(candidate.controllerUid !== undefined &&
+							candidate.controllerUid === resource.ownerUid))
+			);
+		});
 		if (binding)
 			return {
 				...resource,
