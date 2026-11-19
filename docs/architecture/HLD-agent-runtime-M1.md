@@ -370,8 +370,12 @@ Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，
 不会新建 Turn、重复模型或工具调用，也不会把证据缺失显示为通过。
 
 负例覆盖选错或过期版本、跨用户/会话/代次、在途撤销、摘要漂移、历史上下文或调用方同形文本冒用，以及事件
-丢失、Runtime 重启与重连。回放时分别检查有原受信记录和原证据缺失的结果，并核对回执和遥测的字段范围。
-验收口径见 [工程 Spec §11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界)。
+丢失、Runtime 重启与重连。发送负例分别模拟 `started` 已持久化但出站请求前中断，以及传输中断且缺少
+同一尝试的可信接收证据。两种场景都保留加载待核实，并按原操作证据核对业务终态。
+
+兼容验收覆盖新版事实已写入 Store 但 ACK 丢失，以及仍有未确认 journal 的两种回放。分别用旧 Worker、
+旧 Store 和兼容组合接管或重连，核对不兼容组合拒绝接管，恢复后原事实仍可回读，且没有跳过未持久化事件、
+重复新增事实或倒退 ACK 游标。同步检查回执和遥测的字段范围。验收口径见 [工程 Spec §11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界)。
 
 [#992](https://github.com/AgoraIO-Extensions/agent-infra/issues/992) 以 [#991](https://github.com/AgoraIO-Extensions/agent-infra/issues/991) 契约评审合入为 native blocker；仅文档完成不签收功能或原票 AC。实施前逐 hunk 交接：Web owner 在 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 唯一输入框/时间线消费生成 Client，遵循 [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) 固定 `agent-infra/index.html`、`screens/chat.html` IA，旧 Pilot 及按当前实现生成的变体不作依据；[#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 拥有任务 API/Store；[#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508) 拥有公共执行/Host/控制恢复；Runtime 原 owner 拥有各 Driver；正式装配归 [#504](https://github.com/AgoraIO-Extensions/agent-infra/issues/504)。本新增能力不反向阻塞这些票，不接管其未完成验收，也不重定义 OpenCode 工具来源或原控制恢复条款。
 
@@ -554,7 +558,7 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 
 Codex 显式 Skill 调用复用现有受保护模型传输作为采集接缝。传输先核对已认证的原生进程、Thread/Turn 和
 当前模型准入，在受限请求解码及持久发送屏障内，基于当前 Turn 的可信原生注入来源核对实际注入资源并关联本次
-model attempt。只有具有实际发送证据的同一次已授权尝试才能提供加载回执。回执沿现有 Runtime 事实交付，
+model attempt。屏障保存 `started` 后，采集器在传输侧关联同一出站请求的可信接收证据。回执沿现有 Runtime 事实交付，
 字段、授权、恢复和待核实规则以 [工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)
 及 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界) 为准。
 
