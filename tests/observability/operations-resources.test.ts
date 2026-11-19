@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { HttpProtocolError } from "../../apps/platform-api/src/http/common.js";
 import type { OperationsResourceRoutesDependenciesV2 } from "../../apps/platform-api/src/http/operations-resource-routes.js";
 import { registerOperationsResourceRoutesV2 } from "../../apps/platform-api/src/http/operations-resource-routes.js";
@@ -602,6 +602,13 @@ it.each(["first observation", "later same-name replacement"] as const)(
 	"attributes retained Workload storage after %s using the verified PVC UID",
 	async (scenario) => {
 		const agentId = `stopped-workload-${scenario.split(" ")[0]}`;
+		const sampleScope = { ...scope, clusterId: agentId };
+		const sampleStore = new PostgresOperationsResourceStoreV2({
+			databaseUrl: database.databaseUrl,
+			scope: sampleScope,
+			workloadNamespaceRef: workloadTestPolicy.namespaceRef,
+		});
+		onTestFinished(() => sampleStore.close());
 		const deployment = workloadDesiredFixture(1, agentId);
 		const name = deployment.service.name;
 		const claim = deployment.persistentVolume.name;
@@ -695,11 +702,11 @@ it.each(["first observation", "later same-name replacement"] as const)(
 			podsTruncated = false,
 		) =>
 			collectOperationsSnapshotV2({
-				scope,
+				scope: sampleScope,
 				readCluster: false,
 				cacheOwner: "unused",
 				cacheInventoryLimit: 48,
-				bindings: await store.readBindings(),
+				bindings: await sampleStore.readBindings(),
 				now: (() => {
 					collected += 3_000;
 					let reading = collected;
@@ -751,11 +758,13 @@ it.each(["first observation", "later same-name replacement"] as const)(
 			spec: controller.spec.template.spec,
 			status: { phase: "Running" },
 		};
-		await store.write(await collect([pvc], [runningController], [runningPod]));
+		await sampleStore.write(
+			await collect([pvc], [runningController], [runningPod]),
+		);
 		if (scenario === "later same-name replacement") {
 			// Observe the replacement twice to make its historical metrics interval complete.
 			for (let i = 0; i < 2; i++)
-				await store.write(
+				await sampleStore.write(
 					await collect(
 						[sameNameReplacement],
 						[runningController],
@@ -763,10 +772,20 @@ it.each(["first observation", "later same-name replacement"] as const)(
 					),
 				);
 		}
+		const history = await sql<{ uid: string; usable_interval: boolean }[]>`
+			select uid, first_seen <= last_seen as usable_interval from platform.operations_resource_identities
+			where cluster_id=${sampleScope.clusterId} and namespace=${sampleScope.namespace}
+			and agent_id=${agentId} and kind='PersistentVolumeClaim'`;
+		expect(history).toContainEqual({ uid, usable_interval: false });
+		if (scenario === "later same-name replacement")
+			expect(history).toContainEqual({
+				uid: sameNameReplacement.metadata.uid,
+				usable_interval: true,
+			});
 		await sql`update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null,management_revision=2,workload_revision=2,fence=2 where agent_id=${agentId}`;
 		await sql`update platform.workload_reconciliations set revision=2,state=${sql.json(stopped)} where agent_id=${agentId}`;
 		await sql`insert into platform.operations_resource_identities(cluster_id,namespace,uid,kind,name,agent_id,first_seen,last_seen)
-		values (${scope.clusterId},${scope.namespace},${foreign.metadata.uid},'PersistentVolumeClaim',${claim},'other-owner-agent',now(),now())`;
+		values (${sampleScope.clusterId},${scope.namespace},${foreign.metadata.uid},'PersistentVolumeClaim',${claim},'other-owner-agent',now(),now())`;
 		// The same forged Agent labels do not replace either claimed UID or create a new identity.
 		for (const [volume, controllers, pods] of [
 			[foreign, [controller], []],
@@ -802,15 +821,15 @@ it.each(["first observation", "later same-name replacement"] as const)(
 		const path = `/api/v2/ops/resources?agentId=${agentId}`;
 		const read = async () =>
 			OperationsResourcesV2Schema.parse(
-				await (await app().request(path)).json(),
+				await (await app(sampleStore).request(path)).json(),
 			);
 		if (scenario === "later same-name replacement") {
-			await store.write(await collect([sameNameReplacement]));
+			await sampleStore.write(await collect([sameNameReplacement]));
 			expect((await read()).resources).toEqual([]);
 		}
 		const partial = await collect([pvc], [controller], [], true);
 		expect(partial.resources[0]).toMatchObject({ ownerUid: null });
-		await store.write(await collect([pvc]));
+		await sampleStore.write(await collect([pvc]));
 		const result = await read();
 		expect(result.resources).toMatchObject([
 			{
