@@ -43,6 +43,7 @@ import {
 	bindHostnameRouteConfigurationV1,
 	readHostnameRouteConfigurationV1,
 } from "./hostname-route-configuration.js";
+import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
@@ -1230,7 +1231,20 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 		...(process.env.PLATFORM_DATABASE_URL
 			? { databaseUrl: process.env.PLATFORM_DATABASE_URL }
 			: {}),
-		ports: nativeMetadataGateway,
+		ports:
+			!nativeMetadataGateway.current &&
+			nativeMetadataGateway.platformApiCurrent &&
+			process.env.PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING === "true"
+				? {
+						...nativeMetadataGateway,
+						platformApiCurrent: {
+							...nativeMetadataGateway.platformApiCurrent,
+							replicas: createWorkerKubernetesClientV1(
+								configuredWorkloadInput.policy.namespace,
+							),
+						},
+					}
+				: nativeMetadataGateway,
 	});
 }
 

@@ -12,6 +12,7 @@ import {
 } from "./runtime-native-metadata-gateway.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 
+const now = Date.now();
 const request = {
 	schemaVersion: 1,
 	readId: "read-gateway",
@@ -26,8 +27,8 @@ const request = {
 		sessionGeneration: 3,
 		authorizationRevision: "authorization-gateway",
 	},
-	readStartedAt: 1_000,
-	expiresAt: 20_000,
+	readStartedAt: now,
+	expiresAt: now + 30_000,
 	requestId: "request-gateway",
 	traceId: "trace-gateway",
 	apiRequestSourceRef: "api-request-gateway",
@@ -222,31 +223,35 @@ describe("Worker native metadata gateway", () => {
 			gateway: f.gateway,
 			binding: { resolve: f.resolveBinding },
 			callbackCredential: { resolve: f.callbackCredential },
-			current: { check: f.current },
 		});
-		const currentRequest = { ...binding, phase: "read_metadata" as const };
-		const responseValue = await app.fetch(
-			new Request(
-				"http://worker/internal/platform-worker/v1/native-metadata/current",
-				{
-					method: "POST",
-					headers: {
-						authorization: "Bearer worker-gateway-token",
-						"content-type": "application/json",
+		f.transportRead.mockImplementationOnce(async () => {
+			const currentRequest = { ...binding, phase: "read_metadata" as const };
+			const responseValue = await app.fetch(
+				new Request(
+					"http://worker/internal/platform-worker/v1/native-metadata/current",
+					{
+						method: "POST",
+						headers: {
+							authorization: "Bearer worker-gateway-token",
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({
+							apiRequestSourceRef: request.apiRequestSourceRef,
+							request: currentRequest,
+						}),
 					},
-					body: JSON.stringify({
-						apiRequestSourceRef: request.apiRequestSourceRef,
-						request: currentRequest,
-					}),
-				},
-			),
-		);
-		expect(responseValue.status).toBe(200);
-		expect(f.current).toHaveBeenCalledWith({
-			request: currentRequest,
-			apiRequestSourceRef: request.apiRequestSourceRef,
-			signal: expect.any(AbortSignal),
+				),
+			);
+			expect(responseValue.status).toBe(200);
+			expect(f.current).toHaveBeenCalledWith({
+				request: currentRequest,
+				apiRequestSourceRef: request.apiRequestSourceRef,
+				signal: expect.any(AbortSignal),
+			});
+			return response;
 		});
+		await f.gateway.read(request, new AbortController().signal);
+		expect(f.current).toHaveBeenCalledTimes(3);
 	});
 
 	it("requires the derived Sandbox token on a current callback", async () => {
@@ -265,31 +270,34 @@ describe("Worker native metadata gateway", () => {
 			gateway: f.gateway,
 			binding: { resolve: f.resolveBinding },
 			callbackCredential: { resolve: f.callbackCredential },
-			current: { check: f.current },
 		});
-		const currentRequest = { ...binding, phase: "read_metadata" as const };
-		const body = JSON.stringify({
-			apiRequestSourceRef: request.apiRequestSourceRef,
-			request: currentRequest,
-		});
-		const post = (token: string) =>
-			app.fetch(
-				new Request(
-					"http://worker/internal/platform-worker/v1/native-metadata/current",
-					{
-						method: "POST",
-						headers: {
-							authorization: `Bearer ${token}`,
-							"content-type": "application/json",
+		f.transportRead.mockImplementationOnce(async () => {
+			const currentRequest = { ...binding, phase: "read_metadata" as const };
+			const body = JSON.stringify({
+				apiRequestSourceRef: request.apiRequestSourceRef,
+				request: currentRequest,
+			});
+			const post = (token: string) =>
+				app.fetch(
+					new Request(
+						"http://worker/internal/platform-worker/v1/native-metadata/current",
+						{
+							method: "POST",
+							headers: {
+								authorization: `Bearer ${token}`,
+								"content-type": "application/json",
+							},
+							body,
 						},
-						body,
-					},
-				),
-			);
-		await expect(post("worker-gateway-token")).resolves.toMatchObject({
-			status: 401,
+					),
+				);
+			await expect(post("worker-gateway-token")).resolves.toMatchObject({
+				status: 401,
+			});
+			await expect(post(sandboxToken)).resolves.toMatchObject({ status: 200 });
+			return response;
 		});
-		await expect(post(sandboxToken)).resolves.toMatchObject({ status: 200 });
+		await f.gateway.read(request, new AbortController().signal);
 	});
 
 	it("does not let a Sandbox callback token cross its bound request", async () => {
@@ -308,29 +316,32 @@ describe("Worker native metadata gateway", () => {
 			gateway: f.gateway,
 			binding: { resolve: f.resolveBinding },
 			callbackCredential: { resolve: f.callbackCredential },
-			current: { check: f.current },
 		});
-		const responseValue = await app.fetch(
-			new Request(
-				"http://worker/internal/platform-worker/v1/native-metadata/current",
-				{
-					method: "POST",
-					headers: {
-						authorization: `Bearer ${sandboxToken}`,
-						"content-type": "application/json",
-					},
-					body: JSON.stringify({
-						apiRequestSourceRef: request.apiRequestSourceRef,
-						request: {
-							...binding,
-							scope: { ...binding.scope, conversationId: "foreign" },
-							phase: "read_metadata" as const,
+		f.transportRead.mockImplementationOnce(async () => {
+			const responseValue = await app.fetch(
+				new Request(
+					"http://worker/internal/platform-worker/v1/native-metadata/current",
+					{
+						method: "POST",
+						headers: {
+							authorization: `Bearer ${sandboxToken}`,
+							"content-type": "application/json",
 						},
-					}),
-				},
-			),
-		);
-		expect(responseValue.status).toBe(401);
-		expect(f.current).toHaveBeenCalledTimes(0);
+						body: JSON.stringify({
+							apiRequestSourceRef: request.apiRequestSourceRef,
+							request: {
+								...binding,
+								scope: { ...binding.scope, conversationId: "foreign" },
+								phase: "read_metadata" as const,
+							},
+						}),
+					},
+				),
+			);
+			expect(responseValue.status).toBe(401);
+			expect(f.current).toHaveBeenCalledTimes(1);
+			return response;
+		});
+		await f.gateway.read(request, new AbortController().signal);
 	});
 });

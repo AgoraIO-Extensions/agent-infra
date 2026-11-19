@@ -40,7 +40,14 @@ it("admits only the bounded administrator operations addition and preserves exis
 			{ encoding: "utf8" },
 		).status;
 	};
+	const historical = structuredClone(current);
+	const operations = historical.components.schemas.OperationsResourcesV2;
+	delete operations.properties.resources.items.properties.placement;
+	delete operations.properties.resources.items.properties.ownershipReason;
+	delete operations.properties.quotas.items.properties.source;
+	delete operations.properties.quotaSource;
 	try {
+		expect(await compare(historical, current)).toBe(0);
 		expect(await compare(previous, current)).toBe(0);
 		expect(await compare(current, current)).toBe(0);
 		expect(await compare(current, previous)).toBe(1);

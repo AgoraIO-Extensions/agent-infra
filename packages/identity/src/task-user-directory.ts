@@ -1,14 +1,14 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-
 import {
 	type CurrentTaskUserV1,
 	parseCurrentTaskUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
+import { LdapIdentityUnavailableError } from "./ldap.js";
 
 export class TaskIdentityUnavailableErrorV1 extends Error {
-	constructor() {
+	constructor(readonly timedOut = false) {
 		super("TASK_IDENTITY_UNAVAILABLE");
 		this.name = "TaskIdentityUnavailableErrorV1";
 	}
@@ -42,9 +42,17 @@ export async function resolveCurrentTaskUserV1(
 		requireUserId(userId);
 		if (!directory) throw new TaskIdentityUnavailableErrorV1();
 		return parseUser(await directory.resolveUser(userId), userId);
-	} catch {
-		// Dependency exceptions can contain credentials or untrusted response bodies.
-		throw new TaskIdentityUnavailableErrorV1();
+	} catch (error) {
+		// Retain only the timeout classification across this trust boundary.
+		throw new TaskIdentityUnavailableErrorV1(
+			(error instanceof DOMException && error.name === "TimeoutError") ||
+				(error instanceof Error &&
+					error.cause instanceof DOMException &&
+					error.cause.name === "TimeoutError") ||
+				(error instanceof LdapIdentityUnavailableError &&
+					error.failure?.deadlineExpired === true) ||
+				(error instanceof TaskIdentityUnavailableErrorV1 && error.timedOut),
+		);
 	}
 }
 
@@ -192,12 +200,15 @@ export function createHttpTaskUserDirectoryV1(
 					new Promise<never>((_resolve, reject) => {
 						timer = setTimeout(() => {
 							controller.abort();
-							reject(new TaskIdentityUnavailableErrorV1());
+							reject(new TaskIdentityUnavailableErrorV1(true));
 						}, timeoutMs);
 					}),
 				]);
-			} catch {
-				throw new TaskIdentityUnavailableErrorV1();
+			} catch (error) {
+				throw new TaskIdentityUnavailableErrorV1(
+					(error instanceof TaskIdentityUnavailableErrorV1 && error.timedOut) ||
+						(error instanceof DOMException && error.name === "TimeoutError"),
+				);
 			} finally {
 				if (timer !== undefined) clearTimeout(timer);
 				controller.abort();

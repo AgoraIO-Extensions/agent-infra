@@ -31,14 +31,31 @@ export function createDirectoryClient(config: DirectoryClientConfig) {
 	}
 	const fetcher = config.fetch ?? fetch;
 	async function fetchSnapshot(): Promise<DirectorySnapshot> {
-		const response = await fetcher(endpoint, {
-			method: "GET",
-			headers: { Authorization: `Bearer ${config.token}` },
-			redirect: "error",
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!response.ok) throw new DirectoryUnavailableError();
-		return fromDirectorySnapshot(await response.json());
+		const signal = AbortSignal.timeout(timeoutMs);
+		try {
+			const response = await fetcher(endpoint, {
+				method: "GET",
+				headers: { Authorization: `Bearer ${config.token}` },
+				redirect: "error",
+				signal,
+			});
+			if (!response.ok) throw new DirectoryUnavailableError();
+			return fromDirectorySnapshot(await response.json());
+		} catch (error) {
+			const timedOut =
+				signal.aborted ||
+				(error instanceof DOMException && error.name === "TimeoutError");
+			throw new DirectoryUnavailableError(
+				timedOut
+					? {
+							cause: new DOMException(
+								"Directory snapshot deadline exceeded",
+								"TimeoutError",
+							),
+						}
+					: undefined,
+			);
+		}
 	}
 	/**
 	 * 正在进行的那次取快照（#2740）。同一时刻的调用共用它，而不是各发一次请求：Worker 重启时
@@ -61,7 +78,8 @@ export function createDirectoryClient(config: DirectoryClientConfig) {
 				const snapshot = await inflight;
 				// 有效期仍按每个调用自己的时间校验；每个调用拿到独立副本，互不影响。
 				return requireCurrentSnapshot(structuredClone(snapshot), now);
-			} catch {
+			} catch (error) {
+				if (error instanceof DirectoryUnavailableError) throw error;
 				throw new DirectoryUnavailableError();
 			}
 		},

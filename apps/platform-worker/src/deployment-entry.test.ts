@@ -86,6 +86,10 @@ beforeAll(async () => {
 		join(directory, "connection-manual-bindings.js"),
 		"export const createOwnerConnectionBindingsResolverV1 = () => undefined; export const createProductionOwnerConnectionBindingsV1 = () => undefined;\n",
 	);
+	await writeFile(
+		join(directory, "kubernetes-client.js"),
+		"export const createWorkerKubernetesClientV1 = (namespace) => ({ namespace });",
+	);
 	const source = await readFile(
 		new URL("./deployment-entry.ts", import.meta.url),
 		"utf8",
@@ -1490,6 +1494,14 @@ it("wires the deployment API origin and keeps explicit current-confirmation port
 				baseUrl: overrides.PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN,
 				serviceToken: "fixture-service-token",
 			},
+		});
+		result = run({
+			...overrides,
+			PLATFORM_WORKER_NATIVE_METADATA_API_REPLICA_ROUTING: "true",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout).platformApiCurrent.replicas).toEqual({
+			namespace: "worker-binding",
 		});
 		await writeFile(
 			configurationPath,

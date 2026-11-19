@@ -12,6 +12,10 @@ import {
 	type StandardTemplateModelBindingV1,
 	standardTemplateModelBindingV1,
 } from "./projection.js";
+import {
+	observeRelayStageV1,
+	type RelayStageObserverV1,
+} from "./relay-stage.js";
 
 /** Deployment-approved Relay routes. The legacy fields remain supported for one route. */
 export type AgentDefaultRelayKeyEndpointPolicyV1 =
@@ -75,6 +79,7 @@ type RelayInputV1 = AgentDefaultRelayKeyEndpointPolicyV1 & {
 	};
 	readonly templateBindings: readonly DeploymentTemplateBindingV1[];
 	readonly fetch?: typeof fetch;
+	readonly observe?: RelayStageObserverV1;
 };
 
 const approvedEndpointSchema = z.strictObject({
@@ -163,6 +168,7 @@ async function visibleModelIds(
 	keyValue: string,
 	signal: AbortSignal,
 	fetcher: typeof fetch,
+	captureStatus: (status: number) => void,
 ) {
 	const url = `${endpoint.baseUrl.replace(/\/$/, "")}/models`;
 	const response = await fetcher(url, {
@@ -177,6 +183,7 @@ async function visibleModelIds(
 						Accept: "application/json",
 					},
 	});
+	captureStatus(response.status);
 	if (
 		!response.ok ||
 		response.redirected ||
@@ -246,35 +253,45 @@ export function createAgentDefaultRelayKeyCandidateReaderV1(
 	): Promise<readonly AgentDefaultRelayKeyCandidateV1[]> {
 		const validity = await input.validateKey(keyValue, signal);
 		if (validity !== "valid") throw new Error("RELAY_KEY_VALIDATION_FAILED");
-		return modelOperationV1(signal, async () => {
-			const { endpoints } = await relayEndpoints(
-				input,
-				approvedEndpoints,
-				bindings,
-				configuration.source,
+		const { endpoints } = await observeRelayStageV1(
+			input.observe,
+			"catalog",
+			signal,
+			() =>
+				modelOperationV1(signal, () =>
+					relayEndpoints(
+						input,
+						approvedEndpoints,
+						bindings,
+						configuration.source,
+						signal,
+					),
+				),
+		);
+		const candidates: AgentDefaultRelayKeyCandidateV1[] = [];
+		for (const endpoint of endpoints) {
+			const visible = await observeRelayStageV1(
+				input.observe,
+				"models",
 				signal,
+				(status) =>
+					modelOperationV1(signal, () =>
+						visibleModelIds(endpoint, keyValue, signal, fetcher, status),
+					),
 			);
-			const candidates: AgentDefaultRelayKeyCandidateV1[] = [];
-			for (const endpoint of endpoints) {
-				for (const id of await visibleModelIds(
-					endpoint,
-					keyValue,
-					signal,
-					fetcher,
-				)) {
-					if (
-						endpoint.allowedModels === null ||
-						endpoint.allowedModels.includes(id)
-					)
-						candidates.push({
-							endpointId: endpoint.endpointId,
-							modelId: id,
-							reasoningLevels: [...standardTemplateReasoningLevelsV1],
-						});
-				}
+			for (const id of visible) {
+				if (
+					endpoint.allowedModels === null ||
+					endpoint.allowedModels.includes(id)
+				)
+					candidates.push({
+						endpointId: endpoint.endpointId,
+						modelId: id,
+						reasoningLevels: [...standardTemplateReasoningLevelsV1],
+					});
 			}
-			return candidates;
-		});
+		}
+		return candidates;
 	};
 }
 
@@ -297,14 +314,20 @@ export function createAgentDefaultRelayKeyModelVerifierV1(input: RelayInputV1) {
 		if (combos.length > 384) return "incompatible";
 		let resolved: Awaited<ReturnType<typeof relayEndpoints>>;
 		try {
-			resolved = await modelOperationV1(signal, () =>
-				relayEndpoints(
-					input,
-					approvedEndpoints,
-					bindings,
-					configuration.source,
-					signal,
-				),
+			resolved = await observeRelayStageV1(
+				input.observe,
+				"catalog",
+				signal,
+				() =>
+					modelOperationV1(signal, () =>
+						relayEndpoints(
+							input,
+							approvedEndpoints,
+							bindings,
+							configuration.source,
+							signal,
+						),
+					),
 			);
 		} catch {
 			return "unavailable";
@@ -330,13 +353,39 @@ export function createAgentDefaultRelayKeyModelVerifierV1(input: RelayInputV1) {
 				modelId: combo.modelId,
 				reasoningLevel: combo.reasoningLevel,
 				signal,
-				...(input.fetch ? { fetch: input.fetch } : {}),
 			};
 			try {
-				outcome = await modelOperationV1(signal, () =>
-					protocol === "openai-responses-v1"
-						? probeResponsesModelV1({ ...probe, strictEcho: false })
-						: probeMessagesModelV1(probe),
+				outcome = await observeRelayStageV1(
+					input.observe,
+					protocol === "openai-responses-v1" ? "responses" : "messages",
+					signal,
+					(status, onTimeout) =>
+						modelOperationV1(signal, () => {
+							const fetcher = input.fetch ?? globalThis.fetch;
+							const fetchWithStatus: typeof fetch = async (url, init) => {
+								const response = await fetcher(url, init);
+								status(response.status);
+								return response;
+							};
+							return protocol === "openai-responses-v1"
+								? probeResponsesModelV1({
+										...probe,
+										fetch: fetchWithStatus,
+										onTimeout,
+										strictEcho: false,
+									})
+								: probeMessagesModelV1({
+										...probe,
+										fetch: fetchWithStatus,
+										onTimeout,
+									});
+						}),
+					(value) =>
+						value === "verified"
+							? "completed"
+							: value === "unavailable"
+								? "failed"
+								: "rejected",
 				);
 			} catch {
 				outcome = "unavailable";

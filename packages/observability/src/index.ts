@@ -129,6 +129,8 @@ export interface OperationalEvent {
 	readonly code?: OperationalCode;
 	/** HTTP 状态码，仅 `http` 阶段的被拒绝或失败请求使用（#2569）。 */
 	readonly status?: number;
+	readonly upstreamStatus?: number;
+	readonly termination?: "timeout" | "aborted";
 	/**
 	 * 响应里的协议错误码（如 `DEPENDENCY_UNAVAILABLE`），用于 `http` 阶段；`runtime` 阶段
 	 * 记录 Runtime Host 返回的稳定错误码（#3276）；`task_dispatch` 阶段记录已排期重试的
@@ -703,6 +705,8 @@ export function startObservability(options: ObservabilityOptions) {
 					durationMs,
 					code,
 					status,
+					upstreamStatus,
+					termination,
 					protocolCode,
 					failureStep,
 					errorClass,
@@ -811,6 +815,17 @@ export function startObservability(options: ObservabilityOptions) {
 					typeof protocolCode === "string" &&
 					protocolCodePattern.test(protocolCode)
 						? { protocolCode }
+						: {}),
+					...(stage === "dependency" &&
+					typeof upstreamStatus === "number" &&
+					Number.isInteger(upstreamStatus) &&
+					upstreamStatus >= 100 &&
+					upstreamStatus <= 599
+						? { upstreamStatus }
+						: {}),
+					...(stage === "dependency" &&
+					(termination === "timeout" || termination === "aborted")
+						? { termination }
 						: {}),
 					...(isOperationalFailureStep(failureStep) ? { failureStep } : {}),
 					...(errorClass !== undefined &&

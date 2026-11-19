@@ -189,7 +189,11 @@ async function nativeMetadataWorkerFromEnvironment() {
 		throw new Error(
 			"PLATFORM_API_NATIVE_METADATA_WORKER_CONFIGURATION_INVALID",
 		);
-	return { baseUrl, serviceToken };
+	return {
+		baseUrl,
+		serviceToken,
+		instanceUid: process.env.PLATFORM_API_NATIVE_METADATA_INSTANCE_UID,
+	};
 }
 
 // Helm/local deployment inputs may provide the fixed Worker ingress without

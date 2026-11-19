@@ -64,13 +64,20 @@ export function bindOperationsResourcesV2(
 				...resource,
 				revision: binding.revision,
 				ownership: binding.ownership,
+				ownershipReason: null,
 				agentName: binding.agentName,
 				retainedStorage:
 					resource.kind === "PersistentVolumeClaim" && binding.retainedStorage,
 			};
+		const shared = resource.ownership === "shared";
 		return {
 			...resource,
-			ownership: resource.ownership === "shared" ? "shared" : "unknown",
+			ownership: shared ? "shared" : "unknown",
+			ownershipReason: shared
+				? null
+				: resource.kind === "PersistentVolumeClaim"
+					? "PVC_BINDING_UNAVAILABLE"
+					: "BINDING_UNAVAILABLE",
 			agentId: null,
 			agentName: null,
 			sessionId: null,
@@ -273,6 +280,7 @@ export function emptyOperationsResourcesV2(
 		resources: [],
 		agents: [],
 		quotas: [],
+		quotaSource: "unavailable",
 		budget: null,
 		imageCaches: [],
 		cacheEvidence: [],

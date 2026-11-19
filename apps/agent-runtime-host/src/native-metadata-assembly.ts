@@ -11,6 +11,7 @@ import {
 	RuntimeNativeMetadataReadRequestV1Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 
 export interface RuntimeNativeMetadataReadAssemblyV1 {
 	/**
@@ -169,11 +170,19 @@ export function createRuntimeNativeMetadataReadV1(
 			);
 		const request = parsed.data;
 		if (signal.aborted) throw unavailable();
+		let step: "context" | "driver" = "context";
 		try {
 			const context = await assembly.resolveContext({ request, signal });
 			if (!context) throw unavailable();
-			return await host.readNativeMetadataV1(request, { ...context, signal });
+			step = "driver";
+			const response = await host.readNativeMetadataV1(request, {
+				...context,
+				signal,
+			});
+			logNativeMetadataHop("host.read", step, request.traceId, "ok");
+			return response;
 		} catch (error) {
+			logNativeMetadataHop("host.read", step, request.traceId, "unavailable");
 			if (error instanceof RuntimeHostError) throw error;
 			throw unavailable();
 		}

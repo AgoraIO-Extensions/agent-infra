@@ -41,8 +41,11 @@ export type PersonalApiCredentialErrorCodeV1 =
 	| "unavailable";
 
 export class PersonalApiCredentialErrorV1 extends Error {
-	constructor(readonly code: PersonalApiCredentialErrorCodeV1) {
-		super("Personal API credential operation failed");
+	constructor(
+		readonly code: PersonalApiCredentialErrorCodeV1,
+		options?: ErrorOptions,
+	) {
+		super("Personal API credential operation failed", options);
 		this.name = "PersonalApiCredentialErrorV1";
 	}
 }
@@ -465,8 +468,22 @@ export async function resolveCurrentPersonalApiUserV1(
 		return user;
 	} catch (error) {
 		if (error instanceof PersonalApiCredentialErrorV1) throw error;
-		// Identity dependency errors may contain confidential upstream payloads.
-		throw new PersonalApiCredentialErrorV1("unavailable");
+		// Retain only a sanitized classification, never the directory exception.
+		const cause = error instanceof Error ? error.cause : undefined;
+		const timedOut = [error, cause].some(
+			(item) => item instanceof DOMException && item.name === "TimeoutError",
+		);
+		throw new PersonalApiCredentialErrorV1(
+			"unavailable",
+			timedOut
+				? {
+						cause: new DOMException(
+							"Identity deadline exceeded",
+							"TimeoutError",
+						),
+					}
+				: undefined,
+		);
 	}
 }
 

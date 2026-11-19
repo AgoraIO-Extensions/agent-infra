@@ -4,12 +4,12 @@ import type {
 	AgentConfigurationAuthorizationAdmissionPortV1,
 } from "@agent-infra/platform-core";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
-
 import {
 	allocateDeploymentApplicationIds,
 	type createDeploymentIdentityScope,
 } from "./deployment-identity.js";
 import { parseIdempotencyKey } from "./http/common.js";
+import { observeModelAdmissionIdentity } from "./model-admission-observation.js";
 
 export function createDeploymentAuthorizationAdmission(input: {
 	readonly identityScope: ReturnType<typeof createDeploymentIdentityScope>;
@@ -32,11 +32,16 @@ export function createDeploymentAuthorizationAdmission(input: {
 				agentId: request.agentId,
 				actorId: request.actorId,
 			};
-			const identity = await input.identityScope.currentIdentity(
-				request.traceId,
-			);
-			if (identity.userId !== request.actorId) return rejected;
 			const currentRequest = input.identityScope.currentRequest();
+			const path = new URL(currentRequest.url).pathname;
+			const resolve = () =>
+				input.identityScope.currentIdentity(request.traceId);
+			const identity = await (currentRequest.method === "POST" &&
+			(path === "/api/v2/agent-applications/model-candidates" ||
+				path === "/api/v2/agent-applications")
+				? observeModelAdmissionIdentity(resolve)
+				: resolve());
+			if (identity.userId !== request.actorId) return rejected;
 			let authorityContext: AgentConfigurationAuthorityContextV1;
 			try {
 				authorityContext = await input.loadAuthorityContext();
@@ -48,8 +53,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 			}
 			if (
 				currentRequest.method === "POST" &&
-				new URL(currentRequest.url).pathname ===
-					"/api/v2/agent-applications/model-candidates"
+				path === "/api/v2/agent-applications/model-candidates"
 			) {
 				if (request.actorId !== identity.userId) return rejected;
 				// 预览只读取候选，路由生成的临时 Agent ID 尚无持久化 Owner。
@@ -62,7 +66,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 			}
 			if (
 				currentRequest.method === "POST" &&
-				new URL(currentRequest.url).pathname === "/api/v2/agent-applications"
+				path === "/api/v2/agent-applications"
 			) {
 				const ids = await allocateDeploymentApplicationIds({
 					identity,

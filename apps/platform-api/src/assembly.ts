@@ -113,6 +113,7 @@ import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import type { WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
+import { observeModelAdmissionIdentity } from "./model-admission-observation.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
 	createPlatformProjectionReaders,
@@ -306,6 +307,7 @@ export interface PlatformApiAssemblyInput {
 		readonly fetch?: typeof fetch;
 		readonly transportTimeoutMs?: number;
 		readonly requestRegistry?: RuntimeNativeMetadataRequestRegistryV1;
+		readonly instanceUid?: string;
 	};
 	/** Optional deployment-owned native capability admission route. */
 	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
@@ -480,6 +482,7 @@ export function assemblePlatformApi(
 					apiCreation: {
 						allowedPrincipals: input.agentApiCreation.allowedPrincipals,
 						loadAuthorityContext: input.agentApiCreation.loadAuthorityContext,
+						observeIdentity: observeModelAdmissionIdentity,
 					},
 				}
 			: {}),
@@ -732,7 +735,9 @@ export function assemblePlatformApi(
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	const nativeMetadataRequestRegistry = input.nativeMetadataWorker
 		? (input.nativeMetadataWorker.requestRegistry ??
-			createRuntimeNativeMetadataRequestRegistryV1())
+			createRuntimeNativeMetadataRequestRegistryV1({
+				instanceUid: input.nativeMetadataWorker.instanceUid,
+			}))
 		: undefined;
 	const assembledNativeMetadata =
 		input.nativeMetadata ??

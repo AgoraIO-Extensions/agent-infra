@@ -47,6 +47,7 @@ import type {
 	AgentManagementPageV1,
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
+import { observeModelAdmissionIdentity } from "../model-admission-observation.js";
 import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
 	createConcurrencyLimit,
@@ -790,26 +791,15 @@ export function registerV2ManagementRoutes(
 				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
 			if (new URL(request.url).search)
 				fail("INVALID_REQUEST", metadata.traceId);
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				request,
-				metadata.traceId,
+			const identity = await observeModelAdmissionIdentity(() =>
+				resolveIdentity(dependencies.identity, request, metadata.traceId),
 			);
 			const { value: body, rawRequestDigest } = await parseJson(
 				request,
 				AgentApplicationModelCandidatesRequestV2Schema,
 				metadata.traceId,
 			);
-			if (
-				!dependencies.applicationModelCandidates ||
-				!dependencies.validateDefaultRelayKey
-			)
-				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-			const validity = await dependencies.validateDefaultRelayKey(
-				body.defaultRelayKey,
-			);
-			if (validity === "invalid") fail("INVALID_REQUEST", metadata.traceId);
-			if (validity !== "valid")
+			if (!dependencies.applicationModelCandidates)
 				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			const result = await dependencies.applicationModelCandidates(
 				{
@@ -830,10 +820,12 @@ export function registerV2ManagementRoutes(
 	);
 	app.post("/api/v2/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
+			const identity = await observeModelAdmissionIdentity(() =>
+				resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				),
 			);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
