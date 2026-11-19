@@ -2653,7 +2653,21 @@ signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序�
 callback。Worker 收到合法 begin 响应后，把 state 的 hash、authorizationId、原 scope、
 当前 Runtime HTTPS 目标及期限关联到同一 Platform 安装事务，再开放登录入口；未保存映射
 时不向浏览器返回 URL。原事务唯一约束与 CAS 保证同一 state 只定位一个当前安装且只消费
-一次。回跳格式由获准配置固定：标准 OAuth 只接受 code/state/iss 或协议 error；既有 PAT binding
+一次。
+
+首次 begin 消费后，Host 在原受保护安装事务内持久保存该命令的结果，包括原命令引用、
+请求摘要、固定配置引用与摘要、原授权、Host/Pod、会话代次、期限和该次生成的原链接与
+state 绑定。Platform 在同一安装记录保存原命令绑定、可核实的非秘密结果引用和回跳映射
+提交状态。原结果未能持久确认，或 Platform 未能确认映射已提交时，保留 unknown，
+继续关闭链接。原主体可通过只读 status 核实同一次 begin 的已消费结果及原映射状态。
+status 只读取已保存事实，由服务端使用核实结果补提交映射。服务端只在原授权仍有效、
+原 Host/Pod、会话代次、固定配置和期限仍匹配，且结果与原命令引用及请求摘要一致时，
+才以原安装事务 CAS 幂等补提交同一 state hash 的映射。已提交且完全一致时复用原映射。
+映射确认提交且上述绑定仍有效后才开放原链接。结果无法核实、CAS 冲突或绑定失效时，
+保留 unknown 并继续关闭链接。恢复只使用本次已保存的材料，不重发 begin，也不生成
+新链接、state 或 verifier，材料隔离与原回跳单次消费规则照常适用。
+
+回跳格式由获准配置固定：标准 OAuth 只接受 code/state/iss 或协议 error；既有 PAT binding
 只接受唯一的 `binding_id`。两种格式不混用，拒绝额外、重复和矛盾参数；目标、主体、Consumer、
 安装和任意 redirect 参数均不能来自回跳。PAT 原 ID 只在固定 callback 窄通道和 Host 私有事务中
 使用，Platform 持久定位与事实投影只保留其 hash。与 Connection 原流程一致，回跳不
