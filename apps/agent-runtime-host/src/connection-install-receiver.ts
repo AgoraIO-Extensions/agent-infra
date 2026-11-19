@@ -161,6 +161,7 @@ interface RegistrationLedger {
 
 interface FixedInstallation {
 	readonly template: Template;
+	readonly supplyAttemptId: string;
 	readonly client: ProtectedRuntimeOAuthClient;
 }
 
@@ -169,6 +170,7 @@ interface FirstBeginConsumption {
 	readonly authorizationId: string;
 	readonly commandId: string;
 	readonly bodyDigest: string;
+	readonly supplyAttemptId: string;
 	readonly configurationDigest: string;
 	readonly receiptDigest: string;
 	readonly configuration: unknown;
@@ -1179,10 +1181,12 @@ async function assembleConnectionInstallReceiver(
 	function parseConsumption(value: Record<string, unknown>) {
 		if (
 			Object.keys(value).sort().join(",") !==
-				"authorizationId,bodyDigest,commandId,configuration,configurationDigest,receipt,receiptDigest,schemaVersion,template" ||
+				"authorizationId,bodyDigest,commandId,configuration,configurationDigest,receipt,receiptDigest,schemaVersion,supplyAttemptId,template" ||
 			value.schemaVersion !== 1 ||
 			typeof value.authorizationId !== "string" ||
 			typeof value.commandId !== "string" ||
+			typeof value.supplyAttemptId !== "string" ||
+			!value.supplyAttemptId ||
 			!isDigest(value.bodyDigest) ||
 			!isDigest(value.configurationDigest) ||
 			!isDigest(value.receiptDigest)
@@ -1337,6 +1341,7 @@ async function assembleConnectionInstallReceiver(
 					authorizationId: template.authorizationId,
 					commandId: body.commandId,
 					bodyDigest: marker.bodyDigest,
+					supplyAttemptId: body.supplyAttemptId,
 					configurationDigest: marker.configurationDigest,
 					receiptDigest: marker.receiptDigest,
 					configuration,
@@ -1371,6 +1376,7 @@ async function assembleConnectionInstallReceiver(
 			);
 			fixed.set(template.authorizationId, {
 				template,
+				supplyAttemptId: body.supplyAttemptId,
 				client: opened.client,
 			});
 			assertOriginal(template);
@@ -1497,7 +1503,11 @@ async function assembleConnectionInstallReceiver(
 		if (!stored) return;
 		parseFirstBeginResult(stored, consumption);
 		const opened = await openFixedClient(template, consumer, configuration);
-		fixed.set(template.authorizationId, { template, client: opened.client });
+		fixed.set(template.authorizationId, {
+			template,
+			supplyAttemptId: consumption.supplyAttemptId,
+			client: opened.client,
+		});
 	}
 	async function reloadFixedInstallations() {
 		const directory = await openProtectedStandardMcpDirectory(records);
@@ -1526,18 +1536,16 @@ async function assembleConnectionInstallReceiver(
 	}
 	/** The fixed installation still belongs to this Host session and Execution. */
 	async function assertFixedCurrent(entry: FixedInstallation) {
-		current();
-		const hostRef = await store.resolveOriginalExecutionHostSessionRef(
-			entry.template.reference,
-			now,
+		const admitted = await admitTemplate(entry.template);
+		const outcome = await readbackOutcome(
+			supplyReadback(admitted, entry.supplyAttemptId),
 		);
-		current();
-		if (hostRef !== entry.template.target.hostRef) denied();
-		store.assertOriginalExecutionBindingCurrent(
-			entry.template.reference,
-			entry.template.principal,
-			now,
-		);
+		if (outcome === "denied") {
+			closeSlot(entry.template.authorizationId);
+			denied();
+		}
+		if (outcome !== "allowed") unavailable();
+		assertOriginal(admitted.template);
 	}
 
 	const runtimeHost = runtime.host;

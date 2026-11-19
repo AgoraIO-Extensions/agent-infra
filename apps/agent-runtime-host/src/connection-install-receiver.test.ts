@@ -1704,6 +1704,19 @@ describe("Connection first begin", () => {
 				})
 			).status,
 		).toBe(404);
+		// Even if this Host and its original execution are still present, a
+		// retired Store supply cannot accept a callback or run another command.
+		f.readback.queue("denied");
+		expect(
+			(
+				await exchange(
+					f,
+					"/internal/runtime/oauth/v1/status",
+					() => standardRequest(f, "status"),
+					{ authorization: `Bearer ${serviceToken}` },
+				)
+			).status,
+		).toBe(403);
 	}, 20_000);
 
 	it("reloads the fixed installation after a Host restart without reopening the first begin", async () => {
