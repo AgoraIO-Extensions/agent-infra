@@ -354,6 +354,53 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
 	});
 
+	it.each(["owner", "ACL"] as const)(
+		"preserves the role and template1 object when a cross-database %s dependency remains",
+		async (dependency) => {
+			await prepareReaderTestDatabase();
+			await sql.unsafe(await roleSql);
+			const url = new URL(db.databaseUrl);
+			const template = postgres(new URL("/template1", url).toString(), {
+				max: 1,
+			});
+			try {
+				await template`create table public.reclamation_dependency_fixture (id integer)`;
+				if (dependency === "owner") {
+					await template`alter table public.reclamation_dependency_fixture owner to agent_infra_reclamation_ro`;
+				} else {
+					await template`grant select on public.reclamation_dependency_fixture to agent_infra_reclamation_ro`;
+				}
+				try {
+					await expect(sql.unsafe(await dropRoleSql)).rejects.toMatchObject({
+						message:
+							dependency === "owner"
+								? "WORKSPACE_READER_CLEANUP_OWNERSHIP_PRESENT"
+								: "WORKSPACE_READER_CLEANUP_UNEXPECTED_DEPENDENCIES",
+						detail: expect.stringContaining(
+							dependency === "owner"
+								? '"template1_ownership_entries":1'
+								: '"template1_acl_entries":1',
+						),
+					});
+				} finally {
+					await sql`rollback`;
+				}
+				expect(
+					await template`select has_table_privilege('agent_infra_reclamation_ro',
+						'public.reclamation_dependency_fixture', 'SELECT') as still_granted`,
+				).toEqual([{ still_granted: true }]);
+				expect(
+					await sql`select rolcanlogin from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
+				).toEqual([{ rolcanlogin: false }]);
+			} finally {
+				await template`drop table if exists public.reclamation_dependency_fixture`;
+				await template.end();
+			}
+			const receipts = await sql.unsafe(await dropRoleSql);
+			expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
+		},
+	);
+
 	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;

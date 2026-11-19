@@ -52,8 +52,8 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    角色脚本会对包括 `PUBLIC` 在内的有效权限进行检查，发现正文、凭据、原始 JSON、
    非授权对象、可写序列或可写函数权限即回滚，例外仅限下文列出的签名。
    管理员先为 NOLOGIN 角色用交互式 psql `\password agent_infra_reclamation_ro` 设置随机密码。
-   核验此身份只可连接目标 Platform DB 后，在 dry-run Job 启动前才开启登录，并设置
-   `VALID UNTIL` 为本次 Job 的 UTC 截止时间。Job 结束立即停用登录。
+   回读目标库及下文已知连接范围，在 dry-run Job 启动前才开启登录。将 `VALID UNTIL`
+   设为本次 Job 的 UTC 截止时间，Job 结束立即停用登录。
 3. 部署负责人在 `agent-infra` namespace 中从权限为 `0600` 的本机文件创建临时
    Secret `agent-infra-reclamation-dry-run-db`，键为 `url`。用 `--from-file=url=<文件路径>`
    提供内容，Job 只用 `secretKeyRef` 将该键注入 `PLATFORM_DATABASE_URL`。
@@ -69,9 +69,11 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    `ALTER ROLE agent_infra_reclamation_ro NOLOGIN;` 并提交，再确认所有连接已退出。
    删除 Job、临时 Secret、ServiceAccount、Role 和 RoleBinding，分别 GET 确认已不存在。
    用 `psql -X -v ON_ERROR_STOP=1 -f` 执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
-   脚本检查 NOLOGIN、活动连接和预备事务，并逐项回读大对象、表、序列、视图、函数、schema
-   和集群所有权记录。全为零才清理角色授权并删除角色，确认 `role_removed=true`。
-   任一检查失败时保留 NOLOGIN 和原对象，记录脚本返回的状态并交 DBA 处理。
+   脚本检查 NOLOGIN、活动连接和预备事务，并用 `pg_shdepend` 回读所有数据库中的
+   owner 和 ACL 依赖。它分别计数 `postgres` 和 `template1` 的依赖。发现所有权、额外授权
+   或其他依赖时停止，报告计数并保留角色和对象。只剩建角色脚本登记的授权时，同一事务
+   清除这些临时授权，再验证全实例 owner 和 ACL 均为零，最后删除角色并回读 `role_removed=true`。
+   任一检查失败时保留 NOLOGIN、原授权和对象，把状态交 DBA 处理。
 
 #### 已批准的 PUBLIC 权限例外
 
@@ -106,22 +108,17 @@ COMMIT;
 
 Files 复核确认，WAL 函数写入调用者提供的消息，权限限于该函数行为。它不授予业务数据读取，
 也不创建角色拥有的对象。无逻辑槽降低现有解码端消费消息的风险，WAL 和 I/O 开销仍可能发生。
-一次性 Job 使用短登录窗口和最多两个连接，收尾执行 NOLOGIN 与所有权回读。
-零所有权只证明清理时角色没有对象。后续收紧范围由
+一次性 Job 使用短登录窗口和最多两个连接，收尾执行 NOLOGIN 与全实例依赖回读。后续收紧范围由
 [#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪。
 
-#### 单库连接准入
+#### 已批准的连接例外
 
-先回读实际数据库入口、按顺序生效的认证规则和所有可连接数据库的有效 CONNECT 权限。
-当前生产 PostgreSQL 的通用密码规则覆盖所有数据库和用户，`postgres` 与 `template1`
-也向 PUBLIC 授予 CONNECT。现有直连入口不足以证明单库准入，启动 Job 前须停止并报告。
-
-可采用已经获准的专用入口，由入口认证层只允许该角色连接 Platform DB，并阻断 Job
-到 PostgreSQL 的直接连接。核验这两条约束后，在获准窗口用实际 Job 来源验证 Platform
-连接成功，其他可连接数据库均被拒绝。连接 URL 中的固定数据库名仅用于选择目标。
-当前没有这样的入口。可选方案是经批准为该角色添加先匹配的 Platform DB 允许规则和其他
-数据库拒绝规则，覆盖 TCP 与可触达的本地连接，或另行批准专用受控入口。没有批准时维持
-NOLOGIN 并暂停 dry-run。
+2026-11-19T17:32Z 协调决定按同一原则接受两处额外 CONNECT。生产直连使用现有通用
+密码规则，临时角色可通过 PUBLIC 连接 `postgres` 和 `template1`。这两个库没有业务数据。
+Job 仍使用指向 Platform DB 的 URL，登录只在本次 Job 窗口内有效，并限制为两个连接。
+`template1` 是新库的默认模板。遗留对象及其对象级授权可能随模板复制，因此收尾时单独
+记录该库中的所有权和 ACL 依赖计数。后续的角色专用 HBA 规则由
+[#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪。
 
 ### 候选清单的排除规则
 
