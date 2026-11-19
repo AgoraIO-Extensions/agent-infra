@@ -3648,6 +3648,33 @@ ImageCache 库存读取部署批准的缓存管理范围；库存上限、phase�
 
 采集、导出、后端接收、查询与通知出口分别表达健康和缺失状态。OTel provider 已创建只证明本进程导出已配置，不能证明远端收到数据。每个面板保留数据来源、最新样本时间和查询范围；来源不可用、数据过期、对象不存在、有效零值与没有样本必须可区分。某个来源故障不遮蔽其他来源的有效数据。
 
+#### 18.2.3 会话任务诊断
+
+[PRD §14.2](../prd/PRD-agent-platform-M1.md#142-运维观测) 的任务缓慢或失败诊断，
+在 `/ops` 的 Agent → Session 下钻提供独立的只读 OpenAPI 查询。查询只依赖 Platform DB
+已持久化的 Execution 和状态事实，指标、日志和 Trace 后端未接入时仍可用。API 按 §18.2.2
+校验当前系统管理员和部署范围。Store 通过权威 Session → Agent → Execution 绑定限定结果，
+沿已有部署范围规则验证对象，无法证明绑定时不返回证据。普通用户、Owner、应用身份和撤权或
+失效身份不能调用此查询。此权限仅允许读取本节的元数据。
+
+请求携带 Agent、Session 和有界 UTC 时间范围。结果包含 Execution ID、当前状态、来源和
+范围内的阶段证据。以 `[start, end)` 筛选下列事实的时间，同一 Execution 内按持久事件序号
+对账。可补齐能与窗口内证据可靠配对的窗口外端点，同时保留原时间。查询限制时间窗口、Execution
+数及每个 Execution 的事实数，显式报告截断。
+
+| 证据 | 权威来源和投影规则 |
+| --- | --- |
+| 受理、当前状态、终态 | `conversation_executions.created_at` 为持久受理时间，`status` 为当前状态，`terminal_observed_at` 为终态观察时间。终态时间缺失时保持未知。 |
+| 等待、投递、执行 | 读取同一 Execution 的 `conversation_events` 中受支持的 `task.status`、`execution.status`、`sequence` 和 `occurred_at`，按生产者语义标明等待、已提交和执行中的已观测状态。已提交状态不充当 Runtime 已受理证明。 |
+| 待核实 | `conversation_executions.unknown_since` 只表示当前 unknown 的开始。历史 unknown 用同一 Execution 已持久化、可配对的状态事件表达。缺结束或存在多次不可区分的转移时，只展示已知时间点，不推算完整区间。 |
+| 错误 | 同一 Execution 的已持久化 `conversation.error` 仅投影既有白名单内的错误码和时间。未知或没有记录的错误码显示缺失。 |
+
+阶段耗时仅在两个端点均可核实时按实际时间差计算，不能用 `updated_at` 代替阶段事件，
+也不能把任务总时长当作模型、工具或 Runtime 耗时。无匹配任务、缺少阶段证据与来源不可用
+分别表达，缺失耗时不填零。API 只投影上述 ID、状态、时间、耗时、错误码与来源或缺失状态，
+不读取或返回会话正文、思考、附件、工具参数、错误原文、原始事件 JSON 或凭据。
+查询沿现有部署数据政策，不为本入口新增采集或延长保留。
+
 ### 18.3 持久审计
 
 Core 定义 [平台审计 PRD](../prd/PRD-agent-platform-M1.md#13-平台操作审计) 的事件和查询权限，Store 以用例级事务原子保存业务变更、outbox 与必要审计。API/Worker 只调用这些用例，不能另写无事务保障的成功日志充当审计。审计不随 Trace 采样丢失，不另建审计微服务。
