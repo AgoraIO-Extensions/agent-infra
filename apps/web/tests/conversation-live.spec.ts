@@ -1992,6 +1992,75 @@ test("regenerates a terminal answer and opens its execution details", async ({
 	).toBeVisible();
 });
 
+test("opens execution details for each persisted Skill reply", async ({
+	page,
+}) => {
+	const agent = activeAgent();
+	const skillExecutions = ["execution-skill-first", "execution-skill-second"];
+	const base = history(conversationId, []);
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...base,
+		conversation: { ...base.conversation, status: "ready" },
+		messages: skillExecutions.map((id) => ({
+			messageId: `assistant:${id}`,
+			role: "assistant",
+			text: "已完成 Skill 检查。",
+			status: "completed",
+			executionId: id,
+			replyToMessageId: null,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			error: null,
+			createdAt: timestamp,
+		})),
+	});
+	const readExecutions: string[] = [];
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill({ json: detail });
+		if (path.endsWith("/events"))
+			return route.fulfill({
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		const id = skillExecutions.find(
+			(id) =>
+				path === `/api/v2/conversations/${conversationId}/executions/${id}`,
+		);
+		if (id) {
+			readExecutions.push(id);
+			return route.fulfill({ json: execution(conversationId, id) });
+		}
+		return route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	for (const [index, id] of skillExecutions.entries()) {
+		await page
+			.getByRole("button", {
+				name: `查看执行详情：Skill 回复 ${index + 1}`,
+				exact: true,
+			})
+			.click();
+		const details = page.getByRole("dialog", { name: "执行详情" });
+		await expect(details.getByText("模型与工具调用事实")).toBeVisible();
+		await expect.poll(() => readExecutions.at(-1)).toBe(id);
+		await details.getByRole("button", { name: "关闭弹窗" }).click();
+		await expect(details).toBeHidden();
+	}
+	expect(readExecutions).toEqual(skillExecutions);
+});
+
 for (const source of ["standard", "custom"] as const) {
 	for (const code of ["PROVIDER_RATE_LIMITED", "PROVIDER_REJECTED"] as const) {
 		test(`personal Key recovery for ${code} on ${source} preserves the accepted scope`, async ({

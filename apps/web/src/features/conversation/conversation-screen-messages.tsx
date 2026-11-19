@@ -604,7 +604,7 @@ export function ConversationMessages({
 		.sort(
 			(left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
 		);
-	for (const answer of standaloneAnswers) {
+	for (const [index, answer] of standaloneAnswers.entries()) {
 		if (!answer.executionId) continue;
 		const status = answerStatus(events, answer.executionId, answer.status);
 		const text = answerText(history, events, answer.executionId, answer.text);
@@ -633,6 +633,7 @@ export function ConversationMessages({
 						bodyKind,
 						createdAt: answer.createdAt,
 						startedAt: answer.createdAt,
+						objectName: `Skill 回复 ${index + 1}`,
 						error: answer.error,
 						failure: answer.status === "failed" ? answer.failure : undefined,
 					})}

@@ -68,6 +68,7 @@ function timeline(
 	stopExecution?: string,
 	feedbackIdentity?: string,
 ) {
+	const onExecution = vi.fn();
 	render(
 		<ConversationMessages
 			feedbackIdentity={feedbackIdentity}
@@ -78,7 +79,7 @@ function timeline(
 				messages,
 			})}
 			events={events}
-			onExecution={vi.fn()}
+			onExecution={onExecution}
 			onRegenerate={vi.fn()}
 			canRegenerate
 			onResend={vi.fn()}
@@ -101,6 +102,7 @@ function timeline(
 	const region = screen.getByRole("region", { name: "会话时间线" });
 	return {
 		region,
+		onExecution,
 		labels: within(region)
 			.getAllByRole("article")
 			.map((node) => node.getAttribute("aria-label")),
@@ -151,6 +153,25 @@ it("renders a persisted standalone Skill reply in order without repeating its re
 	expect(seed).toBeGreaterThanOrEqual(0);
 	expect(reply).toBeGreaterThan(seed);
 	expect(later).toBeGreaterThan(reply);
+});
+
+it("opens the corresponding execution from each named Skill reply", () => {
+	const { region, onExecution } = timeline(
+		[
+			message("skill-a", "assistant", "Same result", "completed", "exec-a"),
+			message("skill-b", "assistant", "Same result", "completed", "exec-b"),
+		],
+		[],
+	);
+	const first = within(region).getByRole("button", {
+		name: "查看执行详情：Skill 回复 1",
+	});
+	const second = within(region).getByRole("button", {
+		name: "查看执行详情：Skill 回复 2",
+	});
+	fireEvent.click(first);
+	fireEvent.click(second);
+	expect(onExecution.mock.calls).toEqual([["exec-a"], ["exec-b"]]);
 });
 
 // #3449 N16-01：补充指令沿用原回复的 Execution，答案在原消息的回复中更新（PRD §11.2）。
