@@ -1,3 +1,4 @@
+import { OperationsTasksV2Schema } from "@agent-infra/contracts/pilot";
 import { OperationsScopeErrorV2 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -206,6 +207,105 @@ it("reports a completed empty query separately from cancellation", async () => {
 	});
 });
 
+it.each([
+	{
+		rawEvidence: 160,
+		submitFailures: 7,
+		regenerateFailures: 7,
+		truncated: false,
+		lastAt: "2026-11-02T00:02:59.000Z",
+	},
+	{
+		rawEvidence: 161,
+		submitFailures: 7,
+		regenerateFailures: 8,
+		truncated: true,
+		lastAt: "2026-11-02T00:01:55.000Z",
+	},
+	{
+		rawEvidence: 172,
+		submitFailures: 13,
+		regenerateFailures: 13,
+		truncated: true,
+		lastAt: "2026-11-02T00:01:51.000Z",
+	},
+])(
+	"retains the first 160 entries from $rawEvidence projected entries",
+	async ({ submitFailures, regenerateFailures, truncated, lastAt }) => {
+		const execution = "ops-evidence-limit";
+		await sql.begin(async (tx) => {
+			await tx`alter table platform.conversation_executions disable trigger conversation_execution_terminal_observed_at`;
+			await tx`insert into platform.conversation_executions
+			(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,
+			session_generation,authorization_revision,created_at,terminal_observed_at)
+			values (${execution},'ops-session','ops-agent','ops-actor','web','turn-limit','failed',
+			1,'auth','2026-11-02T00:00:00Z','2026-11-02T00:02:59Z')`;
+			await tx`alter table platform.conversation_executions enable trigger conversation_execution_terminal_observed_at`;
+		});
+		const streams = [
+			{
+				id: `conversation:turn:${execution}`,
+				operation: "conversation.turn.submit.v1",
+				count: submitFailures,
+				offset: 100,
+			},
+			{
+				id: `conversation:regenerate:${execution}`,
+				operation: "conversation.turn.regenerate.v1",
+				count: regenerateFailures,
+				offset: 107,
+			},
+		];
+		const streamIds = streams.map(({ id }) => `outbox:${id}`);
+		try {
+			// 48 waiting/submitted pairs create 144 entries. Acceptance and terminal
+			// evidence add two, and each outbox failure adds one.
+			await sql`insert into platform.conversation_events
+			(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,
+			event_payload,event_digest,runtime_cursor,occurred_at,source)
+			select 'limit-'||n,'ops-session',${execution},'limit-'||n,n,1000+n,'execution.status',
+			jsonb_build_object('type','execution.status','status',case when n%2=1 then 'waiting' else 'submitted' end),
+			${"0".repeat(64)},'limit-'||n,'2026-11-02T00:00:00Z'::timestamptz+n*interval '1 second','runtime'
+			from generate_series(1,96) n`;
+			for (const stream of streams) {
+				await sql`insert into platform.outbox_items
+				(id,scope_type,scope_id,operation,status,trace_id,payload)
+				values (${stream.id},'conversation','ops-session',${stream.operation},'failed','trace-1',
+					jsonb_build_object('executionId',${execution}::text))`;
+				await sql`insert into platform.persisted_events
+				(event_id,stream_id,sequence,stream_cursor,event_type,payload,trace_id,occurred_at)
+				select ${stream.id}::text||':'||n,${`outbox:${stream.id}`},n,n,'outbox.failed',
+					'{"errorCode":"RUNTIME_RECOVERY_TIMEOUT"}','trace-1',
+					'2026-11-02T00:00:00Z'::timestamptz+(${stream.offset}::int+n)*interval '1 second'
+				from generate_series(1,${stream.count}) n`;
+			}
+			const result = OperationsTasksV2Schema.parse(
+				await store.read(
+					{
+						...input,
+						start: "2026-11-02T00:00:00Z",
+						end: "2026-11-02T00:03:00Z",
+					},
+					new AbortController().signal,
+				),
+			);
+			expect(result).toMatchObject({ state: "available", truncated });
+			expect(result.tasks).toHaveLength(1);
+			const evidence = result.tasks[0]?.evidence ?? [];
+			expect(evidence).toHaveLength(160);
+			expect(evidence[0]).toMatchObject({
+				stage: "acceptance",
+				observedAt: "2026-11-02T00:00:00.000Z",
+			});
+			expect(evidence.at(-1)?.observedAt).toBe(lastAt);
+		} finally {
+			await sql`delete from platform.persisted_events where stream_id=any(${streamIds}::text[])`;
+			await sql`delete from platform.outbox_items where id=any(${streams.map(({ id }) => id)}::text[])`;
+			await sql`delete from platform.conversation_events where execution_id=${execution}`;
+			await sql`delete from platform.conversation_executions where execution_id=${execution}`;
+		}
+	},
+);
 it("reports scan truncation even when only content events fill the scan budget", async () => {
 	await sql`insert into platform.conversation_events
 		(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,

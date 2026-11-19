@@ -53,6 +53,8 @@ const evidence = z.strictObject({
 	durationMs: z.number().int().nonnegative().nullable(),
 	errorCode: z.string().min(1).max(128).nullable(),
 });
+export const operationsTaskEvidenceLimitV2 = 160;
+
 export const OperationsTasksV2Schema = z.strictObject({
 	schemaVersion: z.literal(2),
 	source: z.literal("platform"),
@@ -63,7 +65,7 @@ export const OperationsTasksV2Schema = z.strictObject({
 			z.strictObject({
 				executionId: id,
 				status,
-				evidence: z.array(evidence).max(160),
+				evidence: z.array(evidence).max(operationsTaskEvidenceLimitV2),
 			}),
 		)
 		.max(48),

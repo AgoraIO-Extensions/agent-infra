@@ -8,14 +8,14 @@ vi.mock("../../pilot/generated-v2/sdk.gen.js", () => ({
 	getOperationsTasksV2: vi.fn(),
 }));
 
-it("keeps acceptance visible and reports missing phases including the terminal result", async () => {
+it("keeps acceptance visible and distinguishes a truncated result from a source gap", async () => {
 	vi.mocked(getOperationsTasksV2).mockResolvedValueOnce({
 		response: { status: 200 },
 		data: {
 			schemaVersion: 2,
 			source: "platform",
 			state: "available",
-			truncated: false,
+			truncated: true,
 			tasks: [
 				{
 					executionId: "run-1",
@@ -47,6 +47,8 @@ it("keeps acceptance visible and reports missing phases including the terminal r
 				"所选范围缺少阶段证据（等待、投递或恢复、执行、结果）。",
 			),
 		).toBeTruthy();
+		expect(screen.getByText("查询达到上限。结果可能不完整。")).toBeTruthy();
+		expect(screen.queryByText("Platform 任务数据源暂不可用。")).toBeNull();
 		expect(screen.getByText(/受理 · 已受理/)).toBeTruthy();
 		expect(screen.getByRole("heading", { name: "run-1 · 失败" })).toBeTruthy();
 	} finally {

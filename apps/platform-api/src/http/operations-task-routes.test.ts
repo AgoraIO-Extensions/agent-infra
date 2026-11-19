@@ -61,3 +61,41 @@ it("enforces administrator access and validates the response before publishing i
 		tasks: [],
 	});
 });
+
+it("serves a truncated response at the evidence limit", async () => {
+	const evidence = Array.from({ length: 160 }, () => ({
+		stage: "execution",
+		state: "processing",
+		observedAt: "2026-11-01T08:00:00Z",
+		startedAt: null,
+		finishedAt: null,
+		durationMs: null,
+		errorCode: null,
+	}));
+	const result = {
+		schemaVersion: 2,
+		source: "platform",
+		state: "available",
+		truncated: true,
+		tasks: [{ executionId: "run", status: "processing", evidence }],
+	};
+	const app = new Hono();
+	registerOperationsTaskRoutesV2(app, {
+		identity: {
+			resolve: async () => ({
+				schemaVersion: 1,
+				userId: "admin",
+				displayName: "Admin",
+				accountStatus: "active",
+				roles: ["system_admin"],
+				organizationIds: [],
+				authorizationRevision: "rev-1",
+			}),
+			hydrateUsers: async () => [],
+		},
+		tasks: { read: async () => result },
+	});
+	const response = await app.request(path);
+	expect(response.status).toBe(200);
+	expect(await response.json()).toEqual(result);
+});

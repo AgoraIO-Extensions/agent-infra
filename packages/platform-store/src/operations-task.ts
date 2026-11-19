@@ -1,6 +1,7 @@
-import type {
-	OperationsTaskQueryV2,
-	OperationsTasksV2,
+import {
+	type OperationsTaskQueryV2,
+	type OperationsTasksV2,
+	operationsTaskEvidenceLimitV2,
 } from "@agent-infra/contracts/pilot";
 import {
 	OperationsScopeErrorV2,
@@ -178,6 +179,13 @@ export class PostgresOperationsTaskStoreV2 {
 						[...events, ...dispatch],
 						input,
 					);
+					if (projection.evidence.length > operationsTaskEvidenceLimitV2) {
+						projection.evidence = projection.evidence.slice(
+							0,
+							operationsTaskEvidenceLimitV2,
+						);
+						truncated = true;
+					}
 					if (projection.evidence.length) tasks.push(projection);
 				}
 				return {
