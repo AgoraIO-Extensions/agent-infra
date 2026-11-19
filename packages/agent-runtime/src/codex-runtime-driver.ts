@@ -6727,7 +6727,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (
 				(command.kind === "submit-turn" || command.kind === "native-command") &&
 				this.executorExecutionId === command.executionId &&
-				!this.operationRecord(command)
+				!ownRecordValue(this.readState().operations, key)
 			)
 				await this.sessionExecutor?.drain?.confirm(command.executionId);
 			throw error;
