@@ -2416,6 +2416,14 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 仍沿原 resolver 在每次使用前核对当前绑定。后续实现 primary 必须列出真实供应路径、
 批准来源及接收函数，缺失时不能把测试 export 或占位接收器当作生产交付。
 
+**首次 OAuth 安装供应。** 受信 Worker 按已核实手工关联与获准系统接入生成非秘密登记模板，
+绑定原用户、Agent、Consumer、关联修订、安装修订与目的 Host。服务凭据只在物化时解密，
+由部署批准的私有文件供应交给该 Host。模板与机器凭据分离。该供应可以先于 client 与实例
+回执存在，且只准备用于 EP-1060 的机器认证。复用 §13.5.4 的进程保护和本节私有文件保护。
+Host 在打开材料前核对批准来源、原 Sandbox、Pod、代次、关联修订和固定供应引用。
+生产实现须明确物化、接收、失败补偿和旧供应清除入口。任何漂移、撤权、无法核实的写入
+或保护失效都封闭对应供应，只按原引用及修订核实。
+
 **发布与修订。** 接收器复用当前 `installationKey`（principal＋Agent＋完整 profile/source）
 和 `materialKey`（installationKey＋credentialRef＋revision），不另建主体或授权索引。
 先以私有权限、独占创建和完整持久确认发布不可变 material，成功后才原子发布 metadata。
@@ -2500,7 +2508,13 @@ UTF-8 SHA-256；配置内容改变必须推进该摘要，不能保留原 ref/re
 安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
 
 API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择或发起准备原安装绑定。
-首次安装按 §13.5.7 登记并核实回执后，才能生成使用对应 clientId 的授权链接。confirm、status、
+首次安装进入独立的签名 `prepare` 命令。该命令在完整 OAuth 配置与 clientId 生成前运行，
+沿既有 Worker 到 Host 的受保护内部命令边界验证签发者、受众、签名、用途与期限。
+命令绑定原用户、原 Execution、Agent、Consumer、关联修订、安装修订、Sandbox、Pod、
+会话代次、当前授权与领取 fence，以及批准的系统接入、登记模板、供应引用和各自修订。
+Host 独立复核原执行和当前供应，在发送前与每次等待后复核。prepare 只返回绑定原意图的
+非秘密登记回执或受限状态。按照 §13.5.7 核实并提交回执后，生成含真实 clientId 的完整
+配置及摘要，用既有签名 begin 产生授权链接。confirm、status、
 callback 及 Worker 命令领取沿原授权记录重新核对同一 Agent、主体、配置 ref/revision、
 profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker 在已验证的原执行路由内选择
 相应 OAuth 配置，并在最后发送前核对它与目标 Consumer 快照一致。多个 Agent 继续共用现有
@@ -2859,7 +2873,11 @@ resource、scope、回执与生命周期均须匹配批准合同，不靠更换 
 既有 client 或不明结果继续授权。真实 Consumer、精确回调和生命周期仍须核实。
 
 client 登记另按原用户＋Agent＋安装修订持久绑定原操作、请求摘要、幂等键、实际 Consumer
-及批准配置，复用上述交付状态与核实规则，但与 Consumer 登记操作分开保存。client 创建
+及批准配置，复用上述交付状态与核实规则，但与 Consumer 登记操作分开保存。
+提交 prepare 回执时，以原用户、Agent、关联修订、安装修订、模板摘要、操作键和领取 fence
+做 CAS。回执须核对原 Consumer、实际 client/实例、回调、resource、scope 与来源。
+重复请求和重启都只按同一原键与目标对账。并发或迟到回执由同一 CAS 拒绝，并保留
+已发送事实。相同安装修订下，已封闭状态不可恢复为可用。client 创建
 丢响应、崩溃或回执保存失败时，该安装独立进入 `unknown`；只核实原 client/实例，未核实前
 不换键、创建新安装或新 client 掩盖结果，也不清除已确认的长期 Consumer 关联。
 恢复可依现有精确查询，或已发布的 client 有效期、放弃与回收合同；后者只有在满足其确定
@@ -2886,6 +2904,9 @@ Consumer 停用意图；只有 Connection 的确定回执才能确认远端停�
 才可请求远端逐安装撤销。只认与原键及实例匹配的确定回执。HTTP 200 携带 `UNKNOWN`、
 丢失响应或已无获准认证时，持久保留原操作的 `unknown` 状态，交 Connection 负责人核实。
 恢复记录只保留非秘密操作事实，不延长旧凭据的保存或停用整个手工 Consumer。
+替换或解绑的本地事务同时推进关联 fence 和原安装清理状态。重启后按原安装、Consumer、
+登记键及实例核实远端状态。仍有获准的原认证才允许按已发布合同执行撤销。撤销结果不明
+时持久保存原键、目标、修订和 `unknown`，保留本地封闭，交 Connection 负责人核实。
 重新安装或恢复不自动扩大 Grant，不用新 Consumer 代替未知旧状态。
 既有已批准绑定的迁移须单独核实，不在服务启动时扫描重建所有 Consumer。
 
