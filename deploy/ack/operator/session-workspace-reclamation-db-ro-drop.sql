@@ -131,9 +131,10 @@ BEGIN
   RAISE NOTICE 'WORKSPACE_READER_CLEANUP_DEPENDENCIES_CLEAR %', row_to_json(counts);
 END;
 $$;
+-- Let DROP ROLE reject any new dependency before removing its potential target.
+DROP ROLE agent_infra_reclamation_ro;
 DROP VIEW platform_reclamation_read.reader_grant_catalog;
 DROP TABLE platform_reclamation_read.reader_grant_receipt;
-DROP ROLE agent_infra_reclamation_ro;
 COMMIT;
 SELECT NOT EXISTS (
   SELECT 1 FROM pg_roles WHERE rolname = 'agent_infra_reclamation_ro'

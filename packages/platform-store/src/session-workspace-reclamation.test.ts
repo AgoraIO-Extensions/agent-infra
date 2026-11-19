@@ -478,6 +478,50 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
 	});
 
+	it("preserves the receipt and all grants when a receipt ACL appears after the final dependency check", async () => {
+		await prepareReaderTestDatabase();
+		await sql.unsafe(await roleSql);
+		const script = await dropRoleSql;
+		const finalCheck = script.indexOf(
+			"WORKSPACE_READER_CLEANUP_DEPENDENCIES_CLEAR",
+		);
+		const boundary = script.indexOf("$$;", finalCheck) + "$$;".length;
+		expect(finalCheck).toBeGreaterThan(0);
+		expect(boundary).toBeGreaterThan(finalCheck);
+		const concurrent = postgres(db.databaseUrl, { max: 1 });
+		try {
+			await sql.unsafe(script.slice(0, boundary));
+			await concurrent`grant select on platform_reclamation_read.reader_grant_receipt
+				to agent_infra_reclamation_ro`;
+			try {
+				await expect(sql.unsafe(script.slice(boundary))).rejects.toMatchObject({
+					code: "2BP01",
+				});
+			} finally {
+				await sql`rollback`;
+			}
+			expect(
+				await concurrent`select
+					has_table_privilege('agent_infra_reclamation_ro',
+						'platform_reclamation_read.reader_grant_receipt', 'SELECT') as receipt_grant,
+					has_column_privilege('agent_infra_reclamation_ro',
+						'platform.conversations', 'id', 'SELECT') as setup_grant,
+					rolcanlogin from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
+			).toEqual([
+				{ receipt_grant: true, setup_grant: true, rolcanlogin: false },
+			]);
+			expect(
+				await concurrent`select 1 from platform_reclamation_read.reader_grant_catalog limit 1`,
+			).toHaveLength(1);
+			await concurrent`revoke select on platform_reclamation_read.reader_grant_receipt
+				from agent_infra_reclamation_ro`;
+		} finally {
+			await sql`rollback`;
+			await concurrent.end();
+		}
+		const receipts = await sql.unsafe(await dropRoleSql);
+		expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
+	});
 	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;

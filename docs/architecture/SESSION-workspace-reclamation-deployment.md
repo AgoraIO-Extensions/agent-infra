@@ -75,7 +75,8 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    owner 和 ACL 依赖。它分别计数 `postgres` 和 `template1` 的依赖。发现所有权、额外授权
    或其他依赖时停止，报告计数并保留角色和对象。脚本对照实际 ACL 和回执，按原 grantor
    逐条执行对应的 `REVOKE ... RESTRICT`。同一对象上的第二个 grantor 也算额外授权。
-   撤权事务末尾再次确认全实例 owner 和 ACL 均为零，才删除角色和回执并回读 `role_removed=true`。
+   撤权事务末尾再次确认全实例 owner 和 ACL 均为零后，先删除角色，再删除回执。
+   角色删除仍会检查新增依赖。事务提交后回读 `role_removed=true`。
    发现新增依赖或任一检查失败时回滚撤权，保留 NOLOGIN、原授权和对象，把状态交 DBA 处理。
 
 #### 已批准的 PUBLIC 权限例外
