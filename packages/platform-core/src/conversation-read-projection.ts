@@ -25,6 +25,7 @@ export interface ConversationReadExecutionV1 {
 	readonly executionId: string;
 	readonly conversationId: string;
 	readonly sourceMessageId: string | null;
+	readonly nativeSkill?: true;
 	readonly status: string;
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
@@ -346,7 +347,13 @@ export function projectConversationMessagesV1(
 	for (const events of byExecution.values()) {
 		events.sort((left, right) => eventSequence(left) - eventSequence(right));
 	}
-	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
+	const answerGroups: [string | null, ConversationReadExecutionV1[]][] = [
+		...bySource,
+		...input.executions
+			.filter((item) => item.sourceMessageId === null && item.nativeSkill)
+			.map((item): [null, ConversationReadExecutionV1[]] => [null, [item]]),
+	];
+	const answers = answerGroups.flatMap(([sourceMessageId, items]) =>
 		items.flatMap((item, index) => {
 			// 未开始即结束的排队消息没有回复；结果只显示在用户消息的 queue 状态上。
 			if (neverStarted.has(item.executionId)) return [];
@@ -392,12 +399,17 @@ export function projectConversationMessagesV1(
 					status: projectedStatus,
 					executionId: item.executionId,
 					replyToMessageId: sourceMessageId,
-					answerVersion: index + 1,
-					isCurrentAnswer: index === items.length - 1,
+					answerVersion: sourceMessageId === null ? null : index + 1,
+					isCurrentAnswer:
+						sourceMessageId === null ? null : index === items.length - 1,
 					failureTraceId: failureTraceId(status, item.traceId),
 					failureCode: null,
 					failure: answerFailure(status, item),
-					createdAt: date(events[0]?.occurredAt ?? item.updatedAt),
+					createdAt: date(
+						sourceMessageId === null
+							? item.createdAt
+							: (events[0]?.occurredAt ?? item.updatedAt),
+					),
 				},
 			];
 		}),

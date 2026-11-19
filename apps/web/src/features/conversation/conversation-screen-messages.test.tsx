@@ -107,6 +107,52 @@ function timeline(
 	};
 }
 
+it("renders a persisted standalone Skill reply in order without repeating its replayed delta", () => {
+	const output = "The Skill result";
+	const { region } = timeline(
+		[
+			{
+				...message("seed", "user", "Seed", "completed", "seed-execution"),
+				createdAt: "2026-01-01T00:00:00.000Z",
+			},
+			{
+				...message(
+					"assistant:skill-execution",
+					"assistant",
+					output,
+					"completed",
+					"skill-execution",
+				),
+				createdAt: "2026-01-01T00:01:00.000Z",
+			},
+			{
+				...message(
+					"later",
+					"user",
+					"Later question",
+					"completed",
+					"later-execution",
+				),
+				createdAt: "2026-01-01T00:02:00.000Z",
+			},
+		],
+		[
+			fact("skill-execution", 1, { text: output }),
+			fact("skill-execution", 2, { status: "completed" }),
+		],
+	);
+	expect(within(region).getAllByText(output)).toHaveLength(1);
+	const articles = within(region)
+		.getAllByRole("article")
+		.map((node) => node.textContent ?? "");
+	const seed = articles.findIndex((text) => text.includes("Seed"));
+	const reply = articles.findIndex((text) => text.includes(output));
+	const later = articles.findIndex((text) => text.includes("Later question"));
+	expect(seed).toBeGreaterThanOrEqual(0);
+	expect(reply).toBeGreaterThan(seed);
+	expect(later).toBeGreaterThan(reply);
+});
+
 // #3449 N16-01：补充指令沿用原回复的 Execution，答案在原消息的回复中更新（PRD §11.2）。
 describe("supplementary instructions in the timeline (#3449 N16-01)", () => {
 	const question = message(

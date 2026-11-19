@@ -1233,6 +1233,73 @@ describe("Conversation HTTP routes", () => {
 	});
 });
 
+it("returns a completed Skill reply beside the ordinary answer on repeated V2 history reads", async () => {
+	const input = dependencies();
+	const detail = await input.query.get(
+		{ actorId: identity.userId, channelId: "web" },
+		conversation.conversationId,
+	);
+	if (!detail) throw new Error("Missing history fixture");
+	const skillId = "skill-execution";
+	const text = {
+		...persistedEvent,
+		eventId: "skill-text",
+		executionId: skillId,
+		conversationCursor: "cursor-2",
+		eventPayload: { type: "text.delta", text: "Skill result" },
+	};
+	input.query.get = vi.fn().mockResolvedValue({
+		...detail,
+		executions: [
+			...detail.executions,
+			{
+				...detail.executions[0],
+				executionId: skillId,
+				sourceMessageId: null,
+				nativeSkill: true,
+				status: "completed",
+			},
+		],
+		events: [
+			...detail.events,
+			text,
+			{
+				...text,
+				eventId: "skill-terminal",
+				sequence: 2,
+				conversationCursor: "cursor-3",
+				eventType: "execution.status",
+				eventPayload: { type: "execution.status", status: "completed" },
+			},
+		],
+	});
+	const { app } = testApp(input);
+	const read = async () => {
+		const response = await app.request("/api/v2/conversations/conversation-1");
+		expect(response.status).toBe(200);
+		return ConversationDetailProjectionV2Schema.parse(await response.json())
+			.messages;
+	};
+	const first = await read();
+	expect(first.filter(({ role }) => role === "assistant")).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				executionId: "execution-1",
+				replyToMessageId: "message-1",
+				answerVersion: 1,
+			}),
+			expect.objectContaining({
+				messageId: "assistant:skill-execution",
+				executionId: skillId,
+				replyToMessageId: null,
+				status: "completed",
+				text: "Skill result",
+			}),
+		]),
+	);
+	expect(await read()).toEqual(first);
+});
+
 describe("Conversation persisted SSE", () => {
 	const operationEvent = {
 		...persistedEvent,

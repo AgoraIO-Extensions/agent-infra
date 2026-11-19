@@ -530,7 +530,7 @@ export function ConversationMessages({
 		const queued = message.executionId
 			? queue.get(message.executionId)
 			: undefined;
-		return (
+		const content = (
 			<div className="exchange" key={message.messageId}>
 				<MessageFrame
 					name={userName}
@@ -597,7 +597,42 @@ export function ConversationMessages({
 				{reply}
 			</div>
 		);
+		return { key: message.messageId, createdAt: message.createdAt, content };
 	});
+	for (const answer of answers) {
+		if (answer.replyToMessageId !== null || !answer.executionId) continue;
+		const status = answerStatus(events, answer.executionId, answer.status);
+		const text = answerText(history, events, answer.executionId, answer.text);
+		const bodyKind = text
+			? "text"
+			: emptyAnswerKind(
+					history,
+					events,
+					answer.executionId,
+					status,
+					hasEarlier,
+				);
+		if (bodyKind === "not_loaded") notLoaded.push(answer.messageId);
+		timelineItems.push({
+			key: answer.messageId,
+			createdAt: answer.createdAt,
+			content: (
+				<div className="exchange" key={answer.messageId}>
+					{replyFor({
+						key: answer.messageId,
+						executionId: answer.executionId,
+						status,
+						text,
+						bodyKind,
+						createdAt: answer.createdAt,
+						startedAt: answer.createdAt,
+						error: answer.error,
+						failure: answer.status === "failed" ? answer.failure : undefined,
+					})}
+				</div>
+			),
+		});
+	}
 	const notLoadedKey = notLoaded.join(" ");
 	useEffect(() => {
 		if (!focusAfterLoad || notLoadedKey.split(" ").includes(focusAfterLoad))
@@ -657,7 +692,13 @@ export function ConversationMessages({
 				</div>
 			)}
 			{/* Z-01：设计稿的空会话时间线只有「加载更早内容」，不放欢迎空态卡。 */}
-			{timelineItems}
+			{timelineItems
+				.sort(
+					(left, right) =>
+						Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+						left.key.localeCompare(right.key),
+				)
+				.map(({ content }) => content)}
 			{trailingExecutions.map((id, index) => (
 				<div className="exchange" key={id}>
 					{/* 时间线里没有对应提问的回复按顺序编号，同名控件仍可区分（N-12）。 */}

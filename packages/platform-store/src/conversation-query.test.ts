@@ -2105,11 +2105,15 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 		);
 
 	/** 按轮次批量写入：每轮依次为 processing、思考增量、正文增量、completed。 */
-	async function seedRounds(conversationId: string, rounds: readonly Round[]) {
+	async function seedRounds(
+		conversationId: string,
+		rounds: readonly Round[],
+		agentId = "reasoning-agent",
+	) {
 		const total = rounds.reduce((sum, round) => sum + roundSize(round), 0);
 		await client`insert into platform.conversations
 			(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,last_conversation_cursor)
-			values (${conversationId},'reasoning-agent','reasoning-actor','web','ready',1,'auth-reasoning',${total})`;
+			values (${conversationId},${agentId},'reasoning-actor','web','ready',1,'auth-reasoning',${total})`;
 		let cursor = 0;
 		for (const [index, round] of rounds.entries()) {
 			const executionId = executionOf(conversationId, index + 1);
@@ -2117,7 +2121,7 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 			const createdAt = new Date(Date.UTC(2026, 9, 1, 0, index)).toISOString();
 			await client`insert into platform.conversation_executions
 				(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at)
-				values (${executionId},${conversationId},'reasoning-agent','reasoning-actor','web',${`turn-${executionId}`},'completed',1,'auth-reasoning',${createdAt})`;
+				values (${executionId},${conversationId},${agentId},'reasoning-actor','web',${`turn-${executionId}`},'completed',1,'auth-reasoning',${createdAt})`;
 			await client`insert into platform.conversation_messages
 				(message_id,conversation_id,actor_id,role,text,execution_id,status,created_at,updated_at)
 				values (${messageId},${conversationId},'reasoning-actor','user',${`question-${index + 1}`},${executionId},'submitted',${createdAt},${createdAt})`;
@@ -2179,6 +2183,58 @@ describe("reasoning-heavy Conversation windows (#3068)", () => {
 	function platformReader() {
 		return new PostgresConversationQueryV1({ databaseUrl, eventWindow: 200 });
 	}
+
+	it("projects the Skill reply on its own history page only for the original actor and Agent", async () => {
+		const id = "two-page-native-skill";
+		const skill = executionOf(id, 2);
+		const round = { reasoning: 0, text: 190 };
+		await seedRounds(id, [round, round, round, round]);
+		await client`delete from platform.conversation_messages where execution_id = ${skill}`;
+		await client`update platform.outbox_items
+			set id=${`conversation:native-capability:${skill}`}, operation='conversation.native-capability.invoke.v1',
+				payload=(payload - 'messageId') || '{"capabilityKind":"skill"}'::jsonb
+			where id=${`outbox-${skill}`}`;
+		const reader = platformReader();
+		try {
+			const recent = await reader.get(reasoningScope, id);
+			const cursor = recent?.eventWindow?.beforeCursor;
+			if (!recent || !cursor) throw new Error("Expected two event pages");
+			const earlier = await reader.get(reasoningScope, id, undefined, {
+				beforeCursor: cursor,
+			});
+			if (!earlier) throw new Error("Missing first page");
+			expect(answersOf(recent).has(skill)).toBe(false);
+			const answers = projectConversationMessagesV1(earlier).filter(
+				({ role }) => role === "assistant",
+			);
+			expect(answers).toEqual([
+				expect.objectContaining({
+					executionId: executionOf(id, 1),
+					replyToMessageId: expect.any(String),
+					status: "completed",
+				}),
+				expect.objectContaining({
+					executionId: skill,
+					replyToMessageId: null,
+					status: "completed",
+					text: expect.stringContaining(`${skill}-answer-2`),
+				}),
+			]);
+			expect(
+				await reader.get({ ...reasoningScope, actorId: "other-actor" }, id),
+			).toBeUndefined();
+			const otherConversation = "native-skill-other-agent";
+			await seedRounds(otherConversation, [round], "other-agent");
+			const other = await reader.get(reasoningScope, otherConversation);
+			expect(other?.conversation.agentId).toBe("other-agent");
+			expect(answersOf(other).has(skill)).toBe(false);
+			expect(
+				await reader.getExecution(reasoningScope, otherConversation, skill),
+			).toBeUndefined();
+		} finally {
+			await reader.close();
+		}
+	});
 
 	it("projects each completed answer only on its own page of a five-round history", async () => {
 		const id = "two-page-history";
