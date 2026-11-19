@@ -35,6 +35,18 @@ DECLARE
     'platform_reclamation_read.outbox_items'::regclass::oid,
     'platform_reclamation_read.stopped_audit'::regclass::oid
   ];
+  -- The 2026-11-19 decision permits only these existing PUBLIC grants.
+  public_lo_exception constant oid[] := ARRAY[
+    'pg_catalog.lo_creat(integer)'::regprocedure::oid,
+    'pg_catalog.lo_create(oid)'::regprocedure::oid,
+    'pg_catalog.lo_from_bytea(oid,bytea)'::regprocedure::oid,
+    'pg_catalog.lo_open(oid,integer)'::regprocedure::oid,
+    'pg_catalog.lo_put(oid,bigint,bytea)'::regprocedure::oid,
+    'pg_catalog.lo_truncate(integer,integer)'::regprocedure::oid,
+    'pg_catalog.lo_truncate64(integer,bigint)'::regprocedure::oid,
+    'pg_catalog.lo_unlink(oid)'::regprocedure::oid,
+    'pg_catalog.lowrite(integer,bytea)'::regprocedure::oid
+  ];
 BEGIN
   IF has_database_privilege(reader, current_database(), 'CREATE,TEMP')
     OR EXISTS (
@@ -87,6 +99,14 @@ BEGIN
       )
         AND has_schema_privilege(reader, n.oid, 'USAGE')
         AND has_function_privilege(reader, p.oid, 'EXECUTE')
+        AND NOT (
+          p.oid = ANY(public_lo_exception)
+          AND EXISTS (
+            SELECT 1
+            FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl
+            WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+          )
+        )
     )
   THEN
     RAISE EXCEPTION 'reclamation reader has unexpected effective privileges';

@@ -49,14 +49,10 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    平台迁移则使用应用角色。创建登录角色和核对有效权限由 PostgreSQL 管理员单独执行一次。
 2. 角色应为 `agent_infra_reclamation_ro`、`NOLOGIN`、默认事务只读、没有角色成员资格。
    角色脚本会对包括 `PUBLIC` 在内的有效权限进行检查，发现正文、凭据、原始 JSON、
-   非授权对象和写权限即回滚，检查也覆盖可写序列、large object 等函数的有效权限。
-   默认事务只读可被会话覆盖。若角色仍通过 `PUBLIC` 继承可写函数的执行权，角色创建
-   会回滚。暂停流程，由数据库负责人审核共享 ACL 的影响并取得批准，再确认可用的只读边界。
-   使用批准的私下凭据流程生成随机密码，在管理员的交互
-   psql 会话中用 `\password agent_infra_reclamation_ro` 设置密码，避免明文进入 SQL、
-   命令参数和日志。随后在同一管理员入口执行
-   `ALTER ROLE agent_infra_reclamation_ro LOGIN VALID UNTIL '<本次窗口的 UTC 结束时间>';`，
-   并从密钥存储组装该角色连接正式 Platform DB 的 URL。
+   非授权对象、可写序列或可写函数权限即回滚，例外仅限下文列出的签名。
+   管理员先为 NOLOGIN 角色用交互式 psql `\password agent_infra_reclamation_ro` 设置随机密码。
+   核验此身份只可连接目标 Platform DB 后，在 dry-run Job 启动前才开启登录，并设置
+   `VALID UNTIL` 为本次 Job 的 UTC 截止时间。Job 结束立即停用登录。
 3. 部署负责人在 `agent-infra` namespace 中从权限为 `0600` 的本机文件创建临时
    Secret `agent-infra-reclamation-dry-run-db`，键为 `url`。用 `--from-file=url=<文件路径>`
    提供内容，Job 只用 `secretKeyRef` 将该键注入 `PLATFORM_DATABASE_URL`。
@@ -68,11 +64,33 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    确认用户、库名和只读参数与计划一致。从视图读取所需列，并用
    `has_column_privilege` 验证无法读取 `outbox_items.payload`、消息正文和凭据列。
    用 `has_table_privilege` 核对业务表写权限均为 false。仅在权限回读通过后执行 dry-run。
-5. 结束或回滚时，删除 Job 并确认该角色连接已退出，删除本次临时 Secret、
-   ServiceAccount、Role 和 RoleBinding。分别 GET 这些对象并确认均已不存在。
-   管理员连接同一 Platform DB，执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
-   该脚本先确认角色没有对象所有权，再撤销授权并 `DROP ROLE`。确认 `role_removed=true`。
-   保留迁移视图，供以后经批准的窗口使用。
+5. 结束或回滚时，停止 Job。管理员在同一 Platform DB 先执行
+   `ALTER ROLE agent_infra_reclamation_ro NOLOGIN;` 并提交，再确认所有连接已退出。
+   删除 Job、临时 Secret、ServiceAccount、Role 和 RoleBinding，分别 GET 确认已不存在。
+   用 `psql -X -v ON_ERROR_STOP=1 -f` 执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
+   脚本检查 NOLOGIN、活动连接和预备事务，并逐项回读大对象、表、序列、视图、函数、schema
+   和集群所有权记录。全为零才清理角色授权并删除角色，确认 `role_removed=true`。
+   任一检查失败时保留 NOLOGIN 和原对象，记录脚本返回的状态并交 DBA 处理。
+
+#### 已批准的大对象权限例外
+
+用户 2026-11-19T14:20Z 批准保留生产 PUBLIC 权限，并接受下列九个 PUBLIC 默认可执行
+的大对象函数签名带来的残余风险。
+
+- `lo_creat(integer)`
+- `lo_create(oid)`
+- `lo_from_bytea(oid,bytea)`
+- `lo_open(oid,integer)`
+- `lo_put(oid,bigint,bytea)`
+- `lo_truncate(integer,integer)`
+- `lo_truncate64(integer,bigint)`
+- `lo_unlink(oid)`
+- `lowrite(integer,bytea)`
+
+默认只读事务可被会话覆盖。Job 使用按需启用并到期的专用登录，收尾时提交 NOLOGIN 后
+回读所有权。该回读只能证明没有留下角色拥有的对象。其余权限检查继续适用，例如仍可执行
+`pg_logical_emit_message` 时角色创建会回滚。遇到该结果时保留回执并交数据库负责人核查。
+后续收紧范围由 [#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪。
 
 ### 候选清单的排除规则
 

@@ -156,26 +156,35 @@ const roleSql = readFile(
 	"utf8",
 );
 
-// This ACL adjustment is only for the disposable PostgreSQL test instance.
-async function restrictTestDatabaseFunctions() {
-	await sql`do $$
-	declare f record;
-	begin
-		for f in select p.oid::regprocedure as signature from pg_proc p
-			where p.pronamespace = 'pg_catalog'::regnamespace
-			and (p.proname in ('lo_creat','lo_create','lo_from_bytea','lo_import','lo_export',
-				'lo_open','lo_put','lowrite','lo_truncate','lo_truncate64','lo_unlink','pg_logical_emit_message'))
-		loop
-			execute format('revoke execute on function %s from public', f.signature);
-		end loop;
-	end;
-	$$`;
+const dropRoleSql = readFile(
+	new URL(
+		"../../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql",
+		import.meta.url,
+	),
+	"utf8",
+);
+
+async function prepareReaderTestDatabase() {
+	// Isolated fixture only. Keep the default PUBLIC grants on the large object functions.
+	await sql`revoke all on database platform_test from public`;
+	await sql`revoke execute on function pg_catalog.pg_logical_emit_message(boolean,text,text),
+		pg_catalog.pg_logical_emit_message(boolean,text,bytea) from public`;
+}
+
+async function loginTestReader() {
+	await sql.unsafe(await roleSql);
+	await sql`alter role agent_infra_reclamation_ro login password 'reclamation-fixture'`;
+	const url = new URL(db.databaseUrl);
+	url.username = "agent_infra_reclamation_ro";
+	url.password = "reclamation-fixture";
+	return url.toString();
 }
 
 describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
-	it("refuses to provision a role that inherits PostgreSQL write-capable functions", async () => {
+	it("refuses to provision a role that inherits a non-exempt PostgreSQL write function", async () => {
 		// Match the Platform database ACL established by ACK bootstrap.
 		await sql`revoke all on database platform_test from public`;
+		await sql`grant execute on function pg_catalog.pg_logical_emit_message(boolean,text,text) to public`;
 		try {
 			await expect(sql.unsafe(await roleSql)).rejects.toThrow(
 				"reclamation reader has unexpected effective privileges",
@@ -191,7 +200,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 	it.each(["SELECT", "SELECT (value)"])(
 		"rejects extra %s in the projection schema",
 		async (privilege) => {
-			await restrictTestDatabaseFunctions();
+			await prepareReaderTestDatabase();
 			await sql`create view platform_reclamation_read.extra as select 1 as value`;
 			try {
 				await sql.unsafe(
@@ -211,16 +220,12 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		},
 	);
 
-	it("runs dry-run under the operator role without access to raw payloads or writes", async () => {
-		await restrictTestDatabaseFunctions();
-		await sql.unsafe(await roleSql);
-		await sql`alter role agent_infra_reclamation_ro login password 'reclamation-fixture'`;
-		const url = new URL(db.databaseUrl);
-		url.username = "agent_infra_reclamation_ro";
-		url.password = "reclamation-fixture";
-		const reader = postgres(url.toString());
+	it("runs dry-run under the operator role without access to raw payloads or business writes", async () => {
+		await prepareReaderTestDatabase();
+		const databaseUrl = await loginTestReader();
+		const reader = postgres(databaseUrl);
 		const scopedStore = new PostgresSessionWorkspaceReclamationStoreV1(
-			url.toString(),
+			databaseUrl,
 			policy,
 			"deployment-owner",
 		);
@@ -256,8 +261,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 				"select * from platform.platform_api_credentials",
 				"update platform.conversations set status = 'unavailable'",
 				"create table public.reclamation_probe (id integer)",
-				"select pg_catalog.lo_create(0)",
-				"select pg_catalog.lo_from_bytea(0, ''::bytea)",
+				"select pg_catalog.pg_logical_emit_message(true, 'fixture', 'fixture'::text)",
 			]) {
 				await expect(
 					reader.begin("read write", (tx) => tx.unsafe(query)),
@@ -270,17 +274,46 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		} finally {
 			await scopedStore.close();
 			await reader.end();
-			await sql.unsafe(
-				await readFile(
-					new URL(
-						"../../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql",
-						import.meta.url,
-					),
-					"utf8",
-				),
-			);
+			await sql`alter role agent_infra_reclamation_ro nologin`;
+			const receipts = await sql.unsafe(await dropRoleSql);
+			expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
 		}
 	});
+	it("preserves a large object and its role when the ownership guard blocks cleanup", async () => {
+		await prepareReaderTestDatabase();
+		const reader = postgres(await loginTestReader(), { max: 1 });
+		let oid: number | undefined;
+		try {
+			const [object] = await reader.begin(
+				"read write",
+				(tx) => tx<{ oid: number }[]>`select pg_catalog.lo_create(0) as oid`,
+			);
+			oid = object?.oid;
+			expect(oid).toBeDefined();
+		} finally {
+			await reader.end();
+			await sql`alter role agent_infra_reclamation_ro nologin`;
+		}
+		try {
+			await expect(sql.unsafe(await dropRoleSql)).rejects.toMatchObject({
+				message: "WORKSPACE_READER_CLEANUP_OWNERSHIP_PRESENT",
+				detail: expect.stringContaining('"large_objects":1'),
+			});
+		} finally {
+			await sql`rollback`;
+		}
+		expect(
+			await sql`select lomowner::regrole::text as owner from pg_largeobject_metadata where oid = ${oid ?? 0}`,
+		).toEqual([{ owner: "agent_infra_reclamation_ro" }]);
+		expect(
+			await sql`select rolcanlogin from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
+		).toEqual([{ rolcanlogin: false }]);
+		// Remove only the isolated test object, then verify the normal cleanup path.
+		await sql`select pg_catalog.lo_unlink(${oid ?? 0})`;
+		const receipts = await sql.unsafe(await dropRoleSql);
+		expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
+	});
+
 	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
