@@ -1806,7 +1806,11 @@ export class CodexAppServerBridge {
 						// Only trusted Session authority can select the fixed remote executor.
 						...nativeLaunchPolicy.environment,
 						...(validated.sessionExecutor
-							? { CODEX_EXEC_SERVER_URL: CODEX_SESSION_EXECUTOR_ENDPOINT }
+							? {
+									CODEX_EXEC_SERVER_URL:
+										validated.sessionExecutor.drain?.endpoint() ??
+										CODEX_SESSION_EXECUTOR_ENDPOINT,
+								}
 							: {}),
 						...loopbackProxyEnvironment(),
 						...(validated.modelAccess

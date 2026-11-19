@@ -1865,6 +1865,57 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("retains a managed Stop when the ordinary recovery budget is exhausted", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "executor-drain-session",
+		});
+		await client`update platform.conversation_stops
+			set confirmation_deadline = clock_timestamp() - interval '1 second',
+				executor_drain_required = true
+			where execution_id = ${work.executionId}`;
+		const store = open();
+		try {
+			const decision = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "executor-drain-worker",
+				leaseDurationMs: 30_000,
+			});
+			expect(decision.outcome).toBe("claimed");
+			if (decision.outcome !== "claimed") return;
+			expect(decision.claim).toMatchObject({
+				executionStatus: "unknown",
+				stopPending: true,
+				executorDrainPending: true,
+			});
+			expect(
+				await store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				}),
+			).toBe(false);
+			const [unchanged] = await client`
+				select execution.status as execution_status, stop.status as stop_status,
+					conversation.status as conversation_status
+				from platform.conversation_executions execution
+				join platform.conversations conversation on conversation.id = execution.conversation_id
+				join platform.conversation_stops stop using (execution_id)
+				where execution.execution_id = ${work.executionId}
+			`;
+			expect(unchanged?.execution_status).toBe("unknown");
+			expect(unchanged?.stop_status).toBe("submitted");
+			expect(unchanged?.conversation_status).not.toBe("ready");
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each(["stop-first", "claim-first"] as const)(
 		"serializes never-prepared stop with first resource authorization (%s)",
 		async (order) => {

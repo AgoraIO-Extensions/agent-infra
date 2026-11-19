@@ -510,9 +510,11 @@ export async function claimSandboxReconciliation(
 		return null;
 	}
 	const { outbox, sandbox, allocation, authorization } = context;
-	const [lease] = await transaction<{ eligible: boolean }[]>`select
+	const [lease] = await transaction<
+		{ eligible: boolean; created_at: Date }[]
+	>`select
 		(status in ('pending','retry_scheduled') and available_at <= clock_timestamp()) or
-		(status = 'processing' and lease_expires_at <= clock_timestamp()) as eligible
+		(status = 'processing' and lease_expires_at <= clock_timestamp()) as eligible, created_at
 		from platform.outbox_items where id = ${input.itemId}`;
 	if (!lease?.eligible) {
 		wait("lease_ineligible");
@@ -596,6 +598,9 @@ export async function claimSandboxReconciliation(
 		leaseOwner: input.workerId,
 		deliveryFence,
 		attemptCount: Number(context.outbox.attempt_count) + 1,
+		...(context.purpose === "prepare"
+			? { startupIntentCreatedAtMs: new Date(lease.created_at).getTime() }
+			: {}),
 		sandbox,
 		resourceFence,
 		resourceStatus: allocation.status === "unknown" ? "unknown" : "applying",

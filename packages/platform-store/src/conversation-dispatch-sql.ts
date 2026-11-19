@@ -214,7 +214,7 @@ export async function readStop(
 ): Promise<StopRow | undefined> {
 	const rows = await transaction<StopRow[]>`
 		select execution_id, stop_request_id, status, confirmation_deadline,
-			confirmation_timed_out_at
+			confirmation_timed_out_at, executor_drain_required
 		from platform.conversation_stops where execution_id = ${executionId}
 	`;
 	return rows[0];

@@ -1914,10 +1914,15 @@ export class PostgresConversationExecutionTransactionV1
 			if (!reservationId) unavailable();
 			await transaction`
 				insert into platform.conversation_stops
-					(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at)
+					(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at,
+					 executor_drain_required)
 				values
 					(${plan.targetExecution.executionId}, ${plan.stopRequestId}, 'submitted',
-					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
+					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt},
+					 exists (select 1 from platform.session_sandbox_allocations
+					  where conversation_id = ${plan.outboxIntent.conversationId}
+					  	and session_generation = ${plan.outboxIntent.sessionGeneration}
+					  	and resource_observation->'executorDrainRequired' = 'true'::jsonb))
 			`;
 			await transaction`
 				insert into platform.outbox_items

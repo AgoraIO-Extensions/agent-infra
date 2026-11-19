@@ -219,6 +219,20 @@ export interface CodexSessionExecutorAdmissionV1 {
 	assertCurrent(): Promise<void>;
 	onFailure(listener: () => void): () => void;
 	close(): Promise<void>;
+	readonly drain?: CodexExecutorDrainPortV1;
+}
+
+export interface CodexExecutorDrainPortV1 {
+	arm(executionId: string): Promise<void>;
+	endpoint(): string;
+	sealStop(
+		executionId: string,
+		stopRequestId: string,
+		stopFence: number,
+		authorizedUntil: number,
+	): Promise<void>;
+	confirm(executionId: string): Promise<boolean>;
+	proven(executionId: string): boolean;
 }
 
 export async function openCodexSessionExecutorAdmissionV1(
@@ -558,9 +572,10 @@ export class CodexExecServerStartupClientV1 {
 
 export async function probeCodexSessionExecutorStartupV1(
 	input: unknown,
+	privateClient?: Pick<CodexExecServerStartupClientV1, "request" | "close">,
 ): Promise<void> {
 	const binding = parseCodexSessionExecutorBindingV1(input);
-	const client = await CodexExecServerStartupClientV1.open();
+	const client = privateClient ?? (await CodexExecServerStartupClientV1.open());
 	const processId = `startup-${randomUUID()}`;
 	const scratch = pathToFileURL(
 		`${binding.workspaceRoot}/.executor-${processId}`,

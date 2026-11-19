@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
 	bigint,
+	boolean,
 	check,
 	foreignKey,
 	index,
@@ -408,6 +409,9 @@ export const conversationStops = platformSchema.table(
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
+			.notNull(),
+		executorDrainRequired: boolean("executor_drain_required")
+			.default(false)
 			.notNull(),
 		confirmationDeadline: timestamp("confirmation_deadline", {
 			withTimezone: true,

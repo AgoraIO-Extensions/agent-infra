@@ -36,6 +36,7 @@ import {
 
 import type {
 	RuntimeDriver,
+	RuntimeDriverExecutionContextV1,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 } from "./driver.js";
@@ -64,6 +65,7 @@ interface Options {
 		hostSessionRef: string,
 		operation: StoredOperation,
 		allowBusinessExecution?: boolean,
+		context?: RuntimeDriverExecutionContextV1,
 	) => Promise<RuntimeOperationResponseV1 | RuntimeOperationResponseV2>;
 	serialize: <T>(key: string, work: () => Promise<T>) => Promise<T>;
 	executeBrowserHandoff?: (
@@ -915,6 +917,13 @@ export class RuntimeHostV3 {
 						...(await this.options.dispatch(
 							prepared.session.hostSessionRef,
 							prepared.operation,
+							true,
+							{
+								executorStopAuthorization: {
+									fence: prepared.operation.deliveryFence,
+									expiresAt: claims.expiresAt,
+								},
+							},
 						)),
 						schemaVersion: 3 as const,
 					};

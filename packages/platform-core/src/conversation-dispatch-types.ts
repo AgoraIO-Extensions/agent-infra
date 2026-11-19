@@ -233,6 +233,8 @@ export interface ConversationDispatchClaimV1 {
 	readonly browserHandoff?: BrowserHandoffCommandV1;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly stopPending: boolean;
+	/** Original Stop must retain the Execution until the executor proves drain. */
+	readonly executorDrainPending?: true;
 	/** Set only when the Store durably marked the stop confirmation timeout. */
 	readonly stopConfirmationTimedOut?: true;
 }

@@ -116,6 +116,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
+	readonly executorDrainStartupTimeoutMs?: number;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
 	readonly connectionConsumerProfilesByAgent?: Readonly<
@@ -231,6 +232,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	const runtime = createWorkloadRuntimeV1(workload);
 	const allocationFor = createSessionSandboxAllocationResolverV1(workload, {
 		serviceToken,
+		executorDrainStartupTimeoutMs: options.executorDrainStartupTimeoutMs,
 	});
 	const sandboxAdapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
@@ -592,6 +594,7 @@ export function createSessionSandboxResourceInputResolverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
 	const egressPolicy = structuredClone(workload.policy);
@@ -833,7 +836,12 @@ export function createSessionSandboxResourceInputResolverV1(
 		const allocation: SessionSandboxResourceInputV1 = {
 			...(runtime?.sessionExecutor &&
 			workload.policy.codexSessionExecutor !== undefined
-				? { codexSessionExecutor: workload.policy.codexSessionExecutor }
+				? {
+						codexSessionExecutor: workload.policy.codexSessionExecutor,
+						...(options.executorDrainStartupTimeoutMs === undefined
+							? {}
+							: { executorDrainIdentity: true as const }),
+					}
 				: {}),
 			...(skillHub ? { skillHub } : {}),
 			...(deployment.skillDeliveryImage
@@ -1064,6 +1072,7 @@ function createSessionSandboxAllocationResolverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
 	const provisioning =
@@ -1244,10 +1253,13 @@ export function createProductionSessionSandboxReceiverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly executorDrainStartupTimeoutMs?: number;
+		readonly executorIdentityIssuer?: ConversationRuntimeOptionsV2["signing"]["privateKey"];
 	},
 ) {
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
+		executorIdentityIssuer: options.executorIdentityIssuer,
 	});
 	const allocationFor = createSessionSandboxAllocationResolverV1(
 		workload,
@@ -1622,11 +1634,22 @@ export function createProductionSessionSandboxReceiverV1(
 			signal.throwIfAborted();
 			previousForApply = preparedReplacement ? previous : [];
 		}
-		await adapter.apply(allocation, previousForApply);
+		let deploymentAllocation = allocation;
+		if (allocation.executorDrainIdentity) {
+			const startedAt = claim.startupIntentCreatedAtMs;
+			const timeout = options.executorDrainStartupTimeoutMs;
+			if (!startedAt || !timeout || !Number.isSafeInteger(startedAt + timeout))
+				throw new WorkloadKubernetesError("policy");
+			deploymentAllocation = {
+				...allocation,
+				executorStartupDeadline: startedAt + timeout,
+			};
+		}
+		await adapter.apply(deploymentAllocation, previousForApply);
 		signal.throwIfAborted();
 		// One complete observe per claim; normal prepare pacing is durable in Store.
 		// Keep the lease/abort/CAS boundary here and let the next claim use the
 		// persisted generation/fence audit anchor instead of a hot in-lease loop.
-		return adapter.observe(allocation, previousForApply);
+		return adapter.observe(deploymentAllocation, previousForApply);
 	};
 }

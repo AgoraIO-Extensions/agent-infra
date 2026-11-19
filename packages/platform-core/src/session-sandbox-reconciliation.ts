@@ -94,6 +94,8 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly deliveryFence: number;
 	/** Current durable outbox attempt (1-based); used only for bounded diagnostics. */
 	readonly attemptCount?: number;
+	/** Original outbox creation time. It never moves on lease recovery. */
+	readonly startupIntentCreatedAtMs?: number;
 	readonly sandbox: SessionSandboxBindingV1;
 	readonly resourceFence: number;
 	readonly resourceStatus: "applying" | "unknown";
@@ -165,6 +167,7 @@ export interface SessionSandboxObservationV1 {
 	 * nor terminated: the Host is still starting. Used only like `waitingReason`.
 	 */
 	readonly runtimeStarting?: true;
+	readonly executorDrainRequired?: true;
 	/** Bounded startup evidence from the Pod status; never a log message. */
 	readonly failureCode?:
 		| "eci.image_pull"
@@ -306,6 +309,9 @@ export function isSessionSandboxObservationValidV1(
 				"workspace.materialization",
 				"sandbox.pod_lost",
 			].includes(observation.failureCode)) ||
+		(observation.executorDrainRequired !== undefined &&
+			(observation.executorDrainRequired !== true ||
+				observation.status !== "ready")) ||
 		!Array.isArray(observation.resources)
 	)
 		return false;

@@ -5807,6 +5807,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	// One native process per Conversation generation. The key is derived from the
 	// server-resolved binding, never from a wire field.
 	private readonly conversationRpcs = new Map<string, CodexRpc>();
+	private executorExecutionId?: string;
 	// A transport multiplexes one JSON-RPC id space, so it can never carry two
 	// request multiplexers. It is also bound to the Conversation it was opened
 	// for: reusing it for another key would alias two Conversations onto one
@@ -6679,16 +6680,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const key = operationKey(command);
 		const inFlight = this.inFlightOperations.get(key);
 		if (inFlight) return inFlight;
-		const execution =
-			command.kind === "submit-turn"
+		const execution = (async () => {
+			const drain = this.sessionExecutor?.drain;
+			if (
+				drain &&
+				(command.kind === "submit-turn" || command.kind === "native-command") &&
+				this.executorExecutionId !== command.executionId
+			) {
+				await drain.arm(command.executionId);
+				const oldRpcs = [...this.conversationRpcs.values()];
+				this.conversationRpcs.clear();
+				this.resumedSessions.clear();
+				await Promise.all(oldRpcs.map((rpc) => rpc.close()));
+				this.executorExecutionId = command.executionId;
+			}
+			return command.kind === "submit-turn"
 				? this.executeSubmitTurn(command, context?.fileBridge)
 				: command.kind === "native-command"
 					? this.executeNativeCommand(command, context?.nativeCommand)
 					: command.kind === "supplement"
 						? this.executeSupplement(command, context?.fileBridge)
 						: isCodexInterruptionCommand(command)
-							? this.executeInterruption(command)
+							? this.executeInterruption(
+									command,
+									context?.executorStopAuthorization,
+								)
 							: Promise.reject(unavailableError());
+		})();
 		this.inFlightOperations.set(key, execution);
 		try {
 			return await execution;
@@ -9177,8 +9195,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		unavailable();
 	}
 
-	private async executeInterruption(command: CodexInterruptionCommand) {
+	private async executeInterruption(
+		command: CodexInterruptionCommand,
+		stopAuthorization?: RuntimeDriverExecutionContextV1["executorStopAuthorization"],
+	) {
 		const prepared = await this.prepareInterruption(command);
+		const drain = this.sessionExecutor?.drain;
+		if (drain && command.kind === "stop") {
+			if (!stopAuthorization)
+				return this.unknown(command, prepared.operation.nativeSessionRef);
+			await drain.sealStop(
+				command.executionId,
+				command.operationId,
+				stopAuthorization.fence,
+				stopAuthorization.expiresAt,
+			);
+		}
 		const standard = this.standardMcpClients.get(
 			prepared.operation.nativeSessionRef,
 		);
@@ -9192,6 +9224,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (prepared.operation.record) return prepared.operation.record;
 		if (!prepared.created) {
+			if (
+				drain &&
+				command.kind === "stop" &&
+				(await drain.confirm(command.executionId))
+			) {
+				const status = await this.getStatus(
+					prepared.operation.nativeSessionRef,
+					command.executionId,
+				);
+				if (status !== "unknown" && status !== "running")
+					return this.resolveInterruption(
+						command,
+						prepared.operation.nativeSessionRef,
+						status,
+					);
+			}
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
 		const nativeTurn = this.interruptionNativeTurn(
@@ -9268,6 +9316,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		} finally {
 			await Promise.all(turns.map((turn) => this.cancelModelTurn?.(turn)));
 		}
+		if (
+			drain &&
+			command.kind === "stop" &&
+			!(await drain.confirm(command.executionId))
+		)
+			return this.unknown(command, prepared.operation.nativeSessionRef);
 		const status = await this.getStatus(
 			prepared.operation.nativeSessionRef,
 			command.executionId,
@@ -9392,6 +9446,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	async lookupOperation(
 		command: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
 	): Promise<RuntimeDriverLookup> {
 		const operation = ownRecordValue(
 			this.readState().operations,
@@ -9422,6 +9477,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return { state: "found", record: operation.record };
 		}
 		if (command.kind === "supplement") return this.recoverSupplement(command);
+		if (
+			command.kind === "stop" &&
+			this.sessionExecutor?.drain &&
+			context?.executorStopAuthorization
+		) {
+			const { fence, expiresAt } = context.executorStopAuthorization;
+			await this.sessionExecutor.drain.sealStop(
+				command.executionId,
+				command.operationId,
+				fence,
+				expiresAt,
+			);
+			await this.sessionExecutor.drain.confirm(command.executionId);
+		}
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
 		const rootTurn = this.interruptionNativeTurn(
 			operation.nativeSessionRef,
@@ -13284,6 +13353,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					await this.cancelModelTurn?.(turn);
 				else await this.drainModelTurn?.(turn);
 			}
+			if (resolvedCompleted?.execution)
+				await this.sessionExecutor?.drain?.confirm(
+					resolvedCompleted.execution.executionId,
+				);
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -14091,6 +14164,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			protocolInvalid();
 		journal.nativeCompletionStatus = status;
+		if (
+			this.sessionExecutor?.drain &&
+			!this.sessionExecutor.drain.proven(
+				original?.executionId ?? this.executorExecutionId ?? "",
+			)
+		)
+			return false;
 		// #3226：最终回答中的 sandbox: 引用发布完成前不写终态事件。
 		if (this.deferForResultPublication(session, journal, status)) return false;
 		if (
@@ -14677,6 +14757,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					turnId: nativeTurnId,
 				});
 		}
+		if (status !== "running")
+			await this.sessionExecutor?.drain?.confirm(executionId);
 		if (
 			status === "running" &&
 			this.runningStatusDurable(nativeSessionRef, executionId, nativeTurnId)
@@ -15374,10 +15456,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async resolve(
 		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
-		result: RuntimeDriverOperationRecord["result"],
+		proposedResult: RuntimeDriverOperationRecord["result"],
 		nativeTurnId?: string,
 		admissionPending = false,
 	) {
+		let result = proposedResult;
 		if (
 			result.outcome === "accepted" &&
 			result.status !== "running" &&
@@ -15389,6 +15472,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				),
 			);
 		}
+		const drain = this.sessionExecutor?.drain;
+		if (
+			drain &&
+			result.outcome === "accepted" &&
+			result.status !== "running" &&
+			!(await drain.confirm(command.executionId))
+		)
+			result = { outcome: "accepted", status: "running" };
 		let record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,

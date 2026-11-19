@@ -1560,6 +1560,11 @@ export class PostgresConversationDispatchStoreV1
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
+			if (input.errorCode === "RUNTIME_RECOVERY_TIMEOUT") {
+				const stop = await readStop(transaction, state.execution.execution_id);
+				if (stop?.status === "submitted" && stop.executor_drain_required)
+					throw new StaleDispatchLease();
+			}
 			await applyTransition(transaction, state, input.claim, input.transition);
 			// 只有 RUNTIME_SESSION_BLOCKED 的 rejected 收敛会经 finish 把会话置为不可用（ADR-0029）；
 			// 代次隔离走 confirmGenerationIsolation，不经过这里。两个条件同时满足才收敛，避免其他
