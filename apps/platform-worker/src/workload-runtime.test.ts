@@ -3,6 +3,7 @@ import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -47,6 +48,7 @@ import {
 	type SecretActivationStorePortV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
+	workloadManagementObservationV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
 import type {
@@ -493,27 +495,49 @@ function fixture(
 		setManagement(next: WorkloadReconciliationInputV1["management"]) {
 			management = structuredClone(next);
 		},
-		async tick(times: number, certificateReconciliationWrites = true) {
+		async tick(
+			times: number,
+			certificateReconciliationWrites = true,
+			worker = {
+				createCore: createWorkloadReconciliationV1,
+				createRuntime: createWorkloadRuntimeV1,
+			},
+		) {
 			for (let i = 0; i < times; i++) {
-				await createWorkloadReconciliationV1({
-					certificateReconciliationWrites,
-					runtime: createWorkloadRuntimeV1(options),
-					maximumAttempts: 2,
-					store: {
-						async runNext(_workerId, step) {
-							state = await step({
-								state,
-								configuration,
-								management,
-								requestId: "request-a",
-								traceId: "trace-a",
-								secrets: inputOverrides.secrets,
-							});
-							return "advanced";
+				await worker
+					.createCore({
+						certificateReconciliationWrites,
+						runtime: worker.createRuntime(options),
+						maximumAttempts: 2,
+						store: {
+							async runNext(_workerId, step) {
+								state = await step({
+									state,
+									configuration,
+									management,
+									requestId: "request-a",
+									traceId: "trace-a",
+									secrets: inputOverrides.secrets,
+								});
+								return "advanced";
+							},
 						},
-					},
-				}).tick("worker-a");
+					})
+					.tick("worker-a");
 			}
+		},
+		async managementObservation() {
+			assert(state);
+			return workloadManagementObservationV1(
+				{
+					state,
+					configuration,
+					management,
+					requestId: "request-a",
+					traceId: "trace-a",
+				},
+				state,
+			);
 		},
 	};
 }
@@ -8690,12 +8714,12 @@ it.each([
 				}),
 			);
 		const remove = vi.spyOn(f.client, "delete");
-		await f.tick(
-			scenario === "ready with denied Secret metadata" ? 5 : 1,
-			false,
-		);
+		await f.tick(1, false);
 		expect(f.state).toMatchObject({
-			phase: "observing",
+			phase:
+				scenario === "ready with denied Secret metadata"
+					? "ready"
+					: "observing",
 			revision: 1,
 		});
 		expect(
@@ -8706,7 +8730,9 @@ it.each([
 		metadata.mockRestore();
 		expect(f.state).not.toHaveProperty("certificateWait");
 		expect(f.state).not.toHaveProperty("retainedFailure");
-		expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		expect(Boolean(await f.client.read("Ingress", hostnameWorkloadName))).toBe(
+			scenario === "ready with denied Secret metadata",
+		);
 		f.seed(ready);
 		await f.tick(3, false);
 		expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
@@ -8765,6 +8791,7 @@ it.each([true, false])(
 		f.setManagement({
 			...f.management,
 			status: "available",
+			serviceAvailability: "ready",
 			revision: 2,
 			workloadRevision: 2,
 		});
@@ -8784,8 +8811,18 @@ it.each([true, false])(
 				verb: "get",
 			}),
 		);
-		await f.tick(1, writes);
+		await f.tick(1, true);
 		expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+		const closed = await f.managementObservation();
+		expect(closed?.request).toMatchObject({
+			operation: "observe_service_unavailable",
+		});
+		expect(closed?.decision).toMatchObject({
+			outcome: "accepted",
+			writePlan: { state: { serviceAvailability: "unavailable" } },
+		});
+		assert(closed?.decision.outcome === "accepted");
+		f.setManagement(closed.decision.writePlan.state);
 		for (let count = 0; count < 6; count++) {
 			f.roundTripState();
 			await f.tick(1, writes);
@@ -8804,6 +8841,12 @@ it.each([true, false])(
 			verifiedRevision: 1,
 		});
 		expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
+		const reopened = await f.managementObservation();
+		expect(reopened?.request).toMatchObject({ operation: "observe_service_ready" });
+		expect(reopened?.decision).toMatchObject({
+			outcome: "accepted",
+			writePlan: { state: { serviceAvailability: "ready" } },
+		});
 		expect(
 			create.mock.calls.filter(([object]) => object.kind !== "Ingress"),
 		).toHaveLength(0);
@@ -8812,6 +8855,71 @@ it.each([true, false])(
 		).toHaveLength(0);
 	},
 );
+
+it("keeps a rejected route compatible with the previous release while writes are disabled", async () => {
+	const { f } = await readyHostnameFixture();
+	Object.assign(f.options, { registry: rejectedRegistry() });
+	f.setManagement({
+		...f.management,
+		status: "available",
+		serviceAvailability: "ready",
+		revision: 2,
+		workloadRevision: 2,
+	});
+	await f.tick(2, false);
+	expect(f.state).toMatchObject({
+		phase: "rejected",
+		revision: 2,
+		verifiedRevision: 1,
+	});
+	const ingress = await f.client.read("Ingress", hostnameWorkloadName);
+	expect(ingress).not.toBeNull();
+	const metadata = vi.spyOn(f.client, "readMetadata").mockRejectedValueOnce(
+		new WorkloadKubernetesError("unavailable", {
+			status: 403,
+			kind: "Secret",
+			verb: "get",
+		}),
+	);
+	await f.tick(1, false);
+	expect(metadata).toHaveBeenCalled();
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toEqual(ingress);
+	expect(f.state?.lastFailure?.verb).not.toBe("certificate-unavailable");
+	expect(await f.managementObservation()).toBeNull();
+
+	const coreModule = process.env.WORKLOAD_LEGACY_CORE_MODULE;
+	const workerModule = process.env.WORKLOAD_LEGACY_WORKER_MODULE;
+	expect(Boolean(coreModule)).toBe(Boolean(workerModule));
+	const worker =
+		coreModule && workerModule
+			? {
+					createCore: (
+						(await import(
+							pathToFileURL(coreModule).href
+						)) as typeof import("@agent-infra/platform-core")
+					).createWorkloadReconciliationV1,
+					createRuntime: (
+						(await import(
+							pathToFileURL(workerModule).href
+						)) as typeof import("./workload-runtime.js")
+					).createWorkloadRuntimeV1,
+				}
+			: undefined;
+	const remove = vi.spyOn(f.client, "delete");
+	const create = vi.spyOn(f.client, "create");
+	f.roundTripState();
+	await f.tick(3, false, worker);
+	expect(f.state).toMatchObject({
+		phase: "rejected",
+		revision: 2,
+		verifiedRevision: 1,
+	});
+	expect(
+		(await f.client.read("Ingress", hostnameWorkloadName))?.metadata?.uid,
+	).toBe(ingress?.metadata?.uid);
+	expect(create).not.toHaveBeenCalled();
+	expect(remove).not.toHaveBeenCalled();
+});
 
 it("retains a verified hostname workload after its certificate expires", async () => {
 	const { f, ready } = await readyHostnameFixture();

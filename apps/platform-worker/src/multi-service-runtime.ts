@@ -1957,7 +1957,6 @@ export function createMultiServiceRuntimeOperations(options: {
 		) {
 			if (!reconcileCertificateState) {
 				const certificate = await hostnameCertificates.observe(value, false);
-				if (certificate === "certificate-unavailable") return certificate;
 				if (certificate !== "ready") return "pending" as const;
 			}
 			if (await hasAdditionalSnapshotEgress(value)) return "drifted" as const;

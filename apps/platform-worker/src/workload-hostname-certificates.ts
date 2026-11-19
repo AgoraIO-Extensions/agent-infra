@@ -171,7 +171,7 @@ export function createWorkloadHostnameCertificatesV1(options: {
 	}
 	async function observe(
 		value: AgentWorkloadDesiredV1,
-		checkPendingSecret = true,
+		reconcileCertificateState = true,
 	) {
 		const selected = options.policy.hostnameRoutes;
 		if (!selected?.agentIds.includes(value.agentId) || value.replicas === 0)
@@ -200,6 +200,37 @@ export function createWorkloadHostnameCertificatesV1(options: {
 		const now = Date.now();
 		const conditions = current.status?.conditions ?? [];
 		const ready = conditions.filter((condition) => condition.type === "Ready");
+		// Compatibility mode keeps the serving route and normal retry behavior
+		// of the previous release when its metadata read fails.
+		if (!reconcileCertificateState) {
+			const notAfter = Date.parse(current.status?.notAfter ?? "");
+			const notBefore = current.status?.notBefore;
+			if (
+				!options.client.readMetadata ||
+				ready.length !== 1 ||
+				ready[0]?.status !== "True" ||
+				ready[0].observedGeneration !== current.metadata.generation ||
+				!Number.isFinite(notAfter) ||
+				notAfter <= now ||
+				(notBefore !== undefined &&
+					(!Number.isFinite(Date.parse(notBefore)) ||
+						Date.parse(notBefore) > now))
+			)
+				return "certificate-pending" as const;
+			const secret = await options.client.readMetadata(
+				"Secret",
+				route.tlsSecretName,
+			);
+			return secret &&
+				matchesSecretMetadata(
+					secret,
+					current,
+					options.client.namespace,
+					route.tlsSecretName,
+				)
+				? ("ready" as const)
+				: ("certificate-pending" as const);
+		}
 		const issuing = conditions.filter(
 			(condition) => condition.type === "Issuing",
 		);
@@ -239,7 +270,6 @@ export function createWorkloadHostnameCertificatesV1(options: {
 				return "certificate-invalid" as const;
 			if (now - start >= maximumIssuanceWaitMs)
 				return "certificate-timeout" as const;
-			if (!checkPendingSecret) return "certificate-pending" as const;
 		}
 
 		if (!options.client.readMetadata) return "certificate-unavailable" as const;

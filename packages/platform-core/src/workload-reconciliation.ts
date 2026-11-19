@@ -680,7 +680,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 				const reconcileCertificateState =
 					dependencies.certificateReconciliationWrites === true ||
 					state.certificateWait !== undefined ||
-					state.retainedFailure !== undefined;
+					state.retainedFailure !== undefined ||
+					isRejectedWorkloadRouteClosedForCertificateV1(state);
 				const observeWorkload = () =>
 					runtime.observe(state, reconcileCertificateState);
 				const waitForCertificate = () =>
@@ -1215,17 +1216,20 @@ export async function workloadManagementObservationV1(
 	if (management.status !== "creating" && management.status !== "available")
 		return null;
 	const observation =
-		next.phase === "ready" || next.phase === "rejected"
-			? management.status === "creating"
-				? "creation_succeeded"
-				: "service_ready"
-			: next.phase === "failed"
+		management.status === "available" &&
+		isRejectedWorkloadRouteClosedForCertificateV1(next)
+			? "service_unavailable"
+			: next.phase === "ready" || next.phase === "rejected"
 				? management.status === "creating"
-					? "creation_failed"
-					: "service_unavailable"
-				: management.status === "available"
-					? "service_updating"
-					: null;
+					? "creation_succeeded"
+					: "service_ready"
+				: next.phase === "failed"
+					? management.status === "creating"
+						? "creation_failed"
+						: "service_unavailable"
+					: management.status === "available"
+						? "service_updating"
+						: null;
 	if (
 		!observation ||
 		(observation === "service_ready" &&
