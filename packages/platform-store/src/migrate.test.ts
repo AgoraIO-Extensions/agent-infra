@@ -1450,6 +1450,7 @@ describe("approved Platform migration gaps", () => {
 	beforeEach(async () => {
 		client = postgres(databaseUrl, { max: 1 });
 		// This file's isolated test database is never the retained acceptance PG.
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema if exists platform cascade`;
 		await client`drop schema if exists platform_migrations cascade`;
 		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-approved-gap-"));
@@ -1696,6 +1697,7 @@ describe("approved Platform migration gaps", () => {
 	);
 
 	it("upgrades an actually executed original Task28 source and preserves its history", async () => {
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema platform cascade`;
 		await client`drop schema platform_migrations cascade`;
 		journal.entries = journal.entries.filter((row) => row.idx < 29);
@@ -1967,6 +1969,7 @@ describe("published Relay authority migration", () => {
 
 	beforeEach(async () => {
 		client = postgres(databaseUrl, { max: 1 });
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema if exists platform cascade`;
 		await client`drop schema if exists platform_migrations cascade`;
 		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-relay-migration-"));
@@ -2127,8 +2130,8 @@ describe("published Relay authority migration", () => {
 			tag: "0082_operations_resource_snapshots",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 85,
-			tag: "0085_conversation_event_terminal_cursor",
+			idx: 86,
+			tag: "0086_session_workspace_reclamation_read",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),

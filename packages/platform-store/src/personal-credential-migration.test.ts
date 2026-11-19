@@ -181,6 +181,7 @@ beforeAll(async () => {
 		{ idx: 83, tag: "0083_operations_resource_identities" },
 		{ idx: 84, tag: "0084_connection_machine_client_bindings" },
 		{ idx: 85, tag: "0085_conversation_event_terminal_cursor" },
+		{ idx: 86, tag: "0086_session_workspace_reclamation_read" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -207,6 +208,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	// This database belongs to this test, never to the retained acceptance service.
+	await client`drop schema if exists platform_reclamation_read cascade`;
 	await client`drop schema if exists platform cascade`;
 	await client`drop schema if exists platform_migrations cascade`;
 	await migrate(drizzle(client), {
