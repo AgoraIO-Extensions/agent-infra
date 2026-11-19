@@ -19,6 +19,7 @@ export interface PostgresTestDatabase {
 
 export async function startPostgresTestDatabase(
 	name: string,
+	options: { logicalReplication?: boolean } = {},
 ): Promise<PostgresTestDatabase> {
 	const containerName = `agent-infra-${name}-${randomUUID()}`;
 	const stop = async () => {
@@ -47,6 +48,7 @@ export async function startPostgresTestDatabase(
 			"--publish",
 			"127.0.0.1::5432",
 			postgresImage,
+			...(options.logicalReplication ? ["-c", "wal_level=logical"] : []),
 		]);
 		const { stdout } = await execFile("docker", [
 			"port",

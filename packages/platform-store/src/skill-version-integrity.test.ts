@@ -147,6 +147,7 @@ describe("Skill Version PostgreSQL integrity", () => {
 	});
 
 	it("installs on a fresh database and repeats migration without changing history", async () => {
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema platform cascade`;
 		await client`drop schema platform_migrations cascade`;
 		await migratePlatformDatabase({ databaseUrl: database?.databaseUrl ?? "" });
