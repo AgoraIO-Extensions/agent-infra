@@ -120,7 +120,7 @@ beforeEach(async () => {
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id) values ('task-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1, workloadRevision: 1, fence: 1, desiredState: "running" })}, 'trace-a', 'request-a')`;
 });
 
-it.each(["pending", "retained"] as const)(
+it.each(["pending", "retained", "retained-cleaning"] as const)(
 	"keeps %s certificate reconciliation readable by the prior Store and fences a new stop",
 	async (mode) => {
 		const adapter = runtime();
@@ -129,12 +129,18 @@ it.each(["pending", "retained"] as const)(
 			runtime: adapter,
 		});
 		for (let i = 0; i < 7; i++) await worker.tick("worker-new");
+		if (mode === "retained-cleaning") {
+			// Start from the ready revision of a previously completed rollback.
+			await sql`update platform.workload_reconciliations
+				set state = jsonb_set(state, '{rollback}', 'true'::jsonb)
+				where agent_id = 'agent-a'`;
+		}
 		adapter.observe = async () =>
 			mode === "pending" ? "certificate-pending" : "certificate-invalid";
 		await worker.tick("worker-new");
 		if (mode === "retained") {
 			await worker.tick("worker-new");
-		} else {
+		} else if (mode === "pending") {
 			expect(await worker.tick("worker-new")).toBe("advanced");
 			expect(await worker.tick("worker-new")).toBe("idle");
 		}
@@ -150,7 +156,13 @@ it.each(["pending", "retained"] as const)(
 		expect(base).toMatchObject({
 			legacy: false,
 			state: {
-				phase: mode === "pending" ? "observing" : "failed",
+				phase:
+					mode === "pending"
+						? "observing"
+						: mode === "retained-cleaning"
+							? "closing"
+							: "failed",
+				rollback: mode === "retained-cleaning",
 				verifiedRevision: 1,
 			},
 		});
@@ -182,12 +194,15 @@ it.each(["pending", "retained"] as const)(
 			retryDelayMs: 0,
 			monitorDelayMs: 0,
 		});
+		const rollbackRuntime = runtime();
+		const cleanup = vi.spyOn(rollbackRuntime, "cleanup");
+		const apply = vi.spyOn(rollbackRuntime, "apply");
 		const rollbackWorker = (
 			legacyCore?.createWorkloadReconciliationV1 ??
 			createWorkloadReconciliationV1
 		)({
 			store: rollbackStore,
-			runtime: runtime(),
+			runtime: rollbackRuntime,
 		});
 		const transaction = new PostgresAgentManagementTransactionV1(database);
 		try {
@@ -196,6 +211,7 @@ it.each(["pending", "retained"] as const)(
 					? { certificateWait: { attempts: 2 } }
 					: {
 							retainedFailure: { certificate: "certificate-invalid" },
+							phase: mode === "retained-cleaning" ? "cleaning" : "failed",
 						},
 			);
 			if (legacyStore) {
@@ -230,7 +246,15 @@ it.each(["pending", "retained"] as const)(
 					)
 				).outcome,
 			).toBe("accepted");
-			for (let i = 0; i < 4; i++) await rollbackWorker.tick("worker-old");
+			for (let i = 0; i < 5; i++) await rollbackWorker.tick("worker-old");
+			expect(cleanup).not.toHaveBeenCalled();
+			expect(apply).toHaveBeenCalled();
+			expect(
+				apply.mock.calls.every(
+					([state, stopped]) =>
+						state.fence === management?.fence + 1 && stopped,
+				),
+			).toBe(true);
 			const final = await reader.readCurrentState("agent-a");
 			expect(final).toMatchObject({
 				phase: "stopped",

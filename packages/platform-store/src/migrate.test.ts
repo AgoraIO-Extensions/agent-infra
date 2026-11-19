@@ -2128,7 +2128,7 @@ describe("published Relay authority migration", () => {
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
 			idx: 85,
-			tag: "0086_workload_certificate_reconciliation",
+			tag: "0085_workload_certificate_reconciliation",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),

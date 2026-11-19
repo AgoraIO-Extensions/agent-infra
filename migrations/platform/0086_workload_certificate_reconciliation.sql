@@ -1,1 +1,0 @@
-ALTER TABLE "platform"."workload_reconciliations" ADD COLUMN "certificate_reconciliation" jsonb;

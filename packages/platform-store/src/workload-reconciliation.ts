@@ -452,11 +452,25 @@ function withCertificateReconciliationV1(
 		throw new Error("Invalid Certificate reconciliation");
 	const value = input as Record<string, unknown>;
 	if (
-		Object.keys(value).length !== 1 ||
-		(!Object.hasOwn(value, "certificateWait") &&
-			!Object.hasOwn(value, "retainedFailure"))
+		Object.keys(value).some(
+			(key) =>
+				!["certificateWait", "retainedFailure", "preservedCleaning"].includes(
+					key,
+				),
+		) ||
+		Object.hasOwn(value, "certificateWait") ===
+			Object.hasOwn(value, "retainedFailure")
 	)
 		throw new Error("Invalid Certificate reconciliation");
+	const preservedCleaning = value.preservedCleaning;
+	if (
+		Object.hasOwn(value, "preservedCleaning") &&
+		(!Object.hasOwn(value, "retainedFailure") ||
+			state.phase !== "closing" ||
+			(preservedCleaning !== "cleaning" && preservedCleaning !== "interrupted"))
+	)
+		throw new Error("Invalid persisted retained Workload cleanup");
+
 	if (Object.hasOwn(value, "certificateWait")) {
 		const wait = value.certificateWait as Record<string, unknown>;
 		if (
@@ -502,6 +516,10 @@ function withCertificateReconciliationV1(
 
 	return {
 		...state,
+		...(preservedCleaning ? { phase: "cleaning" as const } : {}),
+		...(preservedCleaning === "interrupted"
+			? { cleanupInterrupted: true as const }
+			: {}),
 		...(value.certificateWait
 			? {
 					certificateWait: value.certificateWait as NonNullable<
@@ -1185,11 +1203,35 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						: workloadMadeProgress(state, next)
 							? 0
 							: workloadRetryDelayMsV1(next, retryDelayMs);
-					const { certificateWait, retainedFailure, ...baseState } = next;
+					const {
+						certificateWait,
+						retainedFailure,
+						cleanupInterrupted,
+						...stateWithoutCertificate
+					} = next;
+					const preservingCleanup =
+						next.phase === "cleaning" && retainedFailure !== undefined;
+					// Legacy Workers must re-enter through the incoming lifecycle intent.
+					// A legacy "cleaning" row would trigger teardown before processing stop.
+					const baseState = preservingCleanup
+						? { ...stateWithoutCertificate, phase: "closing" }
+						: {
+								...stateWithoutCertificate,
+								...(cleanupInterrupted ? { cleanupInterrupted } : {}),
+							};
 					const certificateReconciliation = certificateWait
 						? { certificateWait }
 						: retainedFailure
-							? { retainedFailure }
+							? {
+									retainedFailure,
+									...(preservingCleanup
+										? {
+												preservedCleaning: cleanupInterrupted
+													? "interrupted"
+													: "cleaning",
+											}
+										: {}),
+								}
 							: null;
 					// Old workers can read these V1 states and still honor a new outbox
 					// intent. Only new workers schedule certificate-only follow-up.
