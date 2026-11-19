@@ -2200,8 +2200,8 @@ describe("published Relay authority migration", () => {
 			tag: "0087_operations_request_inventory",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 88,
-			tag: "0088_session_workspace_reclamation_read",
+			idx: 89,
+			tag: "0089_executor_stop_drain",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),

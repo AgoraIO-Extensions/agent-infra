@@ -1921,8 +1921,8 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt},
 					 exists (select 1 from platform.session_sandbox_allocations
 					  where conversation_id = ${plan.outboxIntent.conversationId}
-					  	and session_generation = ${plan.outboxIntent.sessionGeneration}
-					  	and resource_observation->'executorDrainRequired' = 'true'::jsonb))
+                        and session_generation = ${plan.outboxIntent.sessionGeneration}
+                        and resource_observation->'executorDrainRequired' = 'true'::jsonb))
 			`;
 			await transaction`
 				insert into platform.outbox_items

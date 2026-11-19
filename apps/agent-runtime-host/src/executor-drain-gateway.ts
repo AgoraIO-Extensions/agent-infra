@@ -293,6 +293,8 @@ export async function startExecutorDrainGatewayV1(options: {
 					)
 						throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
 					if (frame.id === undefined) {
+						if (method === "process/start")
+							throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
 						current.backend.notification(method, frame.params);
 						return;
 					}

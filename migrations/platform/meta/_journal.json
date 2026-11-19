@@ -596,6 +596,13 @@
       "when": 1795115580986,
       "tag": "0088_session_workspace_reclamation_read",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1795128447892,
+      "tag": "0089_executor_stop_drain",
+      "breakpoints": true
     }
   ]
 }
