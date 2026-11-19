@@ -227,6 +227,20 @@ describe("production Worker deployment", () => {
 		).rejects.toMatchObject({ code: "WORKER_CONFIGURATION_INVALID" });
 	});
 
+	it.each([undefined, false, true])(
+		"passes retained PVC identity writes through production assembly (%s)",
+		async (retainedPvcIdentityWrites) => {
+			const options = await createProductionWorkloadWorkerOptionsV1({
+				...(await input()),
+				...(retainedPvcIdentityWrites === undefined
+					? {}
+					: { retainedPvcIdentityWrites }),
+			});
+			expect(options.retainedPvcIdentityWrites).toBe(
+				retainedPvcIdentityWrites === true,
+			);
+		},
+	);
 	it("passes a validated deployment-owned file reconciliation adapter", async () => {
 		const deployment = await input();
 		const files = {
