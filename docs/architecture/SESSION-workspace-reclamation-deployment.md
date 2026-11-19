@@ -15,8 +15,13 @@
 内置前缀防线额外保护负责人已指出的历史 Agent/Sandbox 和 #3874 合成样本；不能靠漏填配置取消保护。
 
 ```bash
-node dist/sessionWorkspaceReclamation.mjs dry-run /private/retention-policy.json
+node dist/sessionWorkspaceReclamation.mjs dry-run /private/retention-policy.json /private/approved-pvc-names.json
 ```
+
+`approved-pvc-names.json` 是本次获准的精确 Sandbox PVC 名称组成的非空 JSON 字符串数组，
+例如 `["sandbox-12345678-1234-1234-1234-123456789abc"]`。与 Role 的 `resourceNames`
+使用同一份清单。CLI 在数据库候选筛选及 Kubernetes GET 前应用此范围。缺少或无效的清单
+会使命令失败。候选仍须满足停止证据和保留政策。
 
 输出候选携带精确 Agent/Session/Sandbox、namespace、PVC name/UID/resourceVersion。
 本命令不写 DB 或 Kubernetes；不列出缺少可核实 PVC 的对象。不要从空清单推断已回收。

@@ -1,4 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
 	createConversationExecutionUseCaseV1,
 	createSessionWorkspaceReclamationV1,
@@ -112,17 +119,35 @@ beforeEach(async () => {
 	await sql`truncate platform.agents,platform.conversations cascade`;
 	await sql`truncate platform.outbox_items,platform.audit_events,platform.session_sandbox_resource_charges`;
 	await sql`insert into platform.agents(id,current_configuration_revision,authorization_revision) values('agent',1,'auth')`;
-	await sql`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values('session','agent','user','web','ready',1,'auth')`;
+	await seedStoppedSandbox(target);
+});
+
+async function seedStoppedSandbox(candidate: typeof target) {
+	const { sandboxId, sessionId, name, uid } = candidate;
+	const pvc = { ...pvcIdentity, name, uid };
+	const receipt = { ...stopReceipt, sandboxId, sessionId, retainedPVC: pvc };
+	const source = lifecycle.source;
+	const savedLifecycle = {
+		...lifecycle,
+		source: {
+			...source,
+			sandbox: { ...source.sandbox, sandboxId, sessionId, resourceName: name },
+			observation: { ...source.observation, resources: [pvc] },
+		},
+		stopReceipt: receipt,
+	};
+	await sql`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values(${sessionId},'agent','user','web','ready',1,'auth')`;
 	await sql`insert into platform.session_sandbox_allocations(sandbox_id,conversation_id,agent_id,actor_id,principal_type,channel_id,session_generation,resource_name,workspace_scope,status,created_at,updated_at,resource_fence,desired_state,resource_observation)
- values(${sandboxId},'session','agent','user','user','web',1,${target.name},${sandboxId},'stopped',now(),now(),2,'stopped',${sql.json(observation)})`;
+ values(${sandboxId},${sessionId},'agent','user','user','web',1,${name},${sandboxId},'stopped',now(),now(),2,'stopped',${sql.json({ ...observation, resources: [pvc], sourceStop: receipt })})`;
 	await sql`insert into platform.session_sandbox_resource_charges(sandbox_id,namespace,resources,compute_released) values(${sandboxId},${target.namespace},'{}',true)`;
 	await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
- values('reconcile','trace','request','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',now()-interval '2 minutes')`;
+ values(${sessionId === target.sessionId ? "reconcile" : `reconcile-${sessionId}`},'trace','request','conversation',${sessionId},'conversation.sandbox.reconcile.v1',${sql.json({ lifecycle: savedLifecycle })},'succeeded',now(),now()-interval '2 minutes',now()-interval '2 minutes')`;
 	await sql`insert into platform.conversation_audit_events
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
-		values('stopped-observed','session',null,'agent','user','conversation.sandbox.observed','trace-stop','request-stop',now()-interval '2 minutes',
+		values(${sessionId === target.sessionId ? "stopped-observed" : `stopped-observed-${sessionId}`},${sessionId},null,'agent','user','conversation.sandbox.observed','trace-stop','request-stop',now()-interval '2 minutes',
 			${sql.json({ sandboxId, sessionGeneration: 1, resourceFence: 2, status: "stopped" })})`;
-});
+}
+
 const roleSql = readFile(
 	new URL(
 		"../../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql",
@@ -218,7 +243,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 					throw new Error("dry-run attempted deletion");
 				},
 			});
-			expect(await api.dryRun()).toEqual([target]);
+			expect(await api.dryRun([target.name])).toEqual([target]);
 			const [row] =
 				await reader`select payload from platform_reclamation_read.outbox_items`;
 			expect(row?.payload.lifecycle.source.modelProjection).toBe(true);
@@ -241,7 +266,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 			await sql`update platform.outbox_items set payload = jsonb_set(
 				payload, '{lifecycle,stopReceipt,unexpected}', 'true'::jsonb
 			)`;
-			expect(await api.dryRun()).toEqual([]);
+			expect(await api.dryRun([target.name])).toEqual([]);
 		} finally {
 			await scopedStore.close();
 			await reader.end();
@@ -259,12 +284,153 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 	it("uses the durable stopped observation clock and de-duplicates succeeded reconciliation rows", async () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
-		const candidates = await store.candidates();
+		const candidates = await store.candidates([target.name]);
 		const { resourceVersion: _resourceVersion, ...candidate } = target;
 		expect(candidates).toEqual([candidate]);
 		await sql`update platform.outbox_items set updated_at=clock_timestamp() where id='reconcile'`;
-		expect(await store.candidates()).toEqual([candidate]);
+		expect(await store.candidates([target.name])).toEqual([candidate]);
 	});
+	it("runs the operator CLI against two eligible candidates with PVC get permission for only one", async () => {
+		const unapprovedSandbox = "22345678-1234-1234-1234-123456789abc";
+		const unapprovedPvcName = `sandbox-${unapprovedSandbox}`;
+		await seedStoppedSandbox({
+			...target,
+			sandboxId: unapprovedSandbox,
+			sessionId: "unapproved",
+			name: unapprovedPvcName,
+			uid: "different",
+		});
+		expect(
+			(await store.candidates([target.name, unapprovedPvcName])).map(
+				(row) => row.name,
+			),
+		).toEqual([target.name, unapprovedPvcName]);
+		const base = `/api/v1/namespaces/${target.namespace}/persistentvolumeclaims`;
+		const requests: string[] = [];
+		const server = createServer((request, response) => {
+			response.setHeader("content-type", "application/json");
+			if (request.method === "GET" && request.url === "/api/v1") {
+				response.end(
+					JSON.stringify({
+						kind: "APIResourceList",
+						apiVersion: "v1",
+						groupVersion: "v1",
+						resources: [
+							{
+								name: "persistentvolumeclaims",
+								kind: "PersistentVolumeClaim",
+								namespaced: true,
+								verbs: ["get"],
+							},
+						],
+					}),
+				);
+				return;
+			}
+			requests.push(`${request.method} ${request.url}`);
+			if (
+				request.method === "GET" &&
+				request.url === `${base}/${target.name}`
+			) {
+				response.end(
+					JSON.stringify({
+						apiVersion: "v1",
+						kind: "PersistentVolumeClaim",
+						metadata: {
+							namespace: target.namespace,
+							name: target.name,
+							uid: target.uid,
+							resourceVersion: target.resourceVersion,
+						},
+					}),
+				);
+				return;
+			}
+			response.statusCode = 403;
+			response.end(
+				JSON.stringify({
+					apiVersion: "v1",
+					kind: "Status",
+					status: "Failure",
+					code: 403,
+				}),
+			);
+		});
+		const folder = await mkdtemp(join(tmpdir(), "reclamation-cli-"));
+		try {
+			server.listen(0, "127.0.0.1");
+			await once(server, "listening");
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("local fake failed to bind");
+			const policyFile = join(folder, "policy.json");
+			const namesFile = join(folder, "approved.json");
+			const kubeconfig = join(folder, "kubeconfig.json");
+			await writeFile(policyFile, JSON.stringify(policy));
+			await writeFile(namesFile, JSON.stringify([target.name]));
+			await writeFile(
+				kubeconfig,
+				JSON.stringify({
+					apiVersion: "v1",
+					kind: "Config",
+					clusters: [
+						{
+							name: "fixture",
+							cluster: {
+								server: `http://127.0.0.1:${address.port}`,
+								"insecure-skip-tls-verify": true,
+							},
+						},
+					],
+					contexts: [
+						{
+							name: "fixture",
+							context: { cluster: "fixture", user: "fixture" },
+						},
+					],
+					users: [{ name: "fixture", user: {} }],
+					"current-context": "fixture",
+				}),
+			);
+			const worker = fileURLToPath(
+				new URL("../../../apps/platform-worker/", import.meta.url),
+			);
+			const run = (...args: string[]) =>
+				promisify(execFile)(
+					process.execPath,
+					[
+						"--import",
+						"tsx",
+						"src/session-workspace-reclamation-cli.ts",
+						"dry-run",
+						policyFile,
+						...args,
+					],
+					{
+						cwd: worker,
+						env: {
+							...process.env,
+							PLATFORM_DATABASE_URL: db.databaseUrl,
+							DEPLOYMENT_OWNER: "fixture",
+							KUBECONFIG: kubeconfig,
+						},
+					},
+				);
+			await expect(run()).rejects.toMatchObject({ code: 1 });
+			expect(requests).toEqual([]);
+			const { stdout } = await run(namesFile);
+			expect(JSON.parse(stdout)).toEqual({
+				schemaVersion: 1,
+				mode: "dry-run",
+				result: [target],
+			});
+			expect(requests).toEqual([`GET ${base}/${target.name}`]);
+		} finally {
+			server.close();
+			await rm(folder, { recursive: true, force: true });
+		}
+	}, 30000);
+
 	it("excludes a same-name PVC with a replacement UID", async () => {
 		const api = createSessionWorkspaceReclamationV1(store, {
 			async read(name) {
@@ -275,7 +441,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 				throw new Error("dry-run attempted deletion");
 			},
 		});
-		expect(await api.dryRun()).toEqual([]);
+		expect(await api.dryRun([target.name])).toEqual([]);
 	});
 
 	it.each([
@@ -339,7 +505,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 				},
 			)}`;
 			await sql`update platform.outbox_items set payload = ${sql.json({ lifecycle: intent })}`;
-			expect(await store.candidates()).toHaveLength(1);
+			expect(await store.candidates([target.name])).toHaveLength(1);
 			await sql`update platform.outbox_items set payload = ${sql.json({
 				lifecycle: {
 					...intent,
@@ -349,7 +515,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 					},
 				},
 			})}`;
-			expect(await store.candidates()).toEqual([]);
+			expect(await store.candidates([target.name])).toEqual([]);
 			await expect(store.prepare(target)).rejects.toThrow(
 				"WORKSPACE_NOT_ELIGIBLE",
 			);
@@ -368,7 +534,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 				exists = false;
 			},
 		});
-		expect(await api.dryRun()).toEqual([target]);
+		expect(await api.dryRun([target.name])).toEqual([target]);
 		expect(await sql`select * from platform.audit_events`).toHaveLength(0);
 		await api.execute(target);
 		await api.execute(target);
@@ -435,7 +601,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 	});
 	it("rejects malformed stop proof and changed generation/fence on recovery", async () => {
 		await sql`update platform.outbox_items set payload='{"lifecycle":{"stopReceipt":{}}}'`;
-		expect(await store.candidates()).toEqual([]);
+		expect(await store.candidates([target.name])).toEqual([]);
 		await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
 	});
 	it("does not delete after a journaled target generation changes", async () => {
@@ -461,19 +627,19 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 	});
 	it.each(["running", "unknown"])("refuses allocation %s", async (status) => {
 		await sql`update platform.session_sandbox_allocations set status=${status === "running" ? "ready" : "unknown"}`;
-		expect(await store.candidates()).toEqual([]);
+		expect(await store.candidates([target.name])).toEqual([]);
 		await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
 	});
 	it("rejects unknown executions and unfinished reconciliation before any tombstone", async () => {
 		await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at) values('execution','session','agent','user','web','turn','unknown',1,'auth',now())`;
-		expect(await store.candidates()).toEqual([]);
+		expect(await store.candidates([target.name])).toEqual([]);
 		await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
 		expect(
 			(await sql`select status from platform.conversations`)[0]?.status,
 		).toBe("ready");
 		await sql`delete from platform.conversation_executions`;
 		await sql`update platform.outbox_items set status='processing',lease_owner='worker',lease_expires_at=now()+interval '1 minute'`;
-		expect(await store.candidates()).toEqual([]);
+		expect(await store.candidates([target.name])).toEqual([]);
 	});
 	it("protects deployment retention, stopped threshold and original PVC UID", async () => {
 		const retained = new PostgresSessionWorkspaceReclamationStoreV1(
@@ -482,7 +648,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 			"owner",
 		);
 		try {
-			expect(await retained.candidates()).toEqual([]);
+			expect(await retained.candidates([target.name])).toEqual([]);
 			await expect(retained.prepare(target)).rejects.toThrow("DENIED");
 		} finally {
 			await retained.close();
@@ -492,7 +658,7 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		);
 		await sql`update platform.outbox_items set updated_at=now()`;
 		await sql`update platform.conversation_audit_events set occurred_at=clock_timestamp() where id='stopped-observed'`;
-		expect(await store.candidates()).toEqual([]);
+		expect(await store.candidates([target.name])).toEqual([]);
 	});
 	it("retains charge after unconfirmed delete and resumes original journal after process failure", async () => {
 		await store.prepare(target);

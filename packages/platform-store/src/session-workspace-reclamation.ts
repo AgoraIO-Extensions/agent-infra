@@ -53,7 +53,15 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 			)
 			.digest("hex");
 	}
-	private async eligible(tx: Transaction, sandboxId?: string) {
+	private async eligible(
+		tx: Transaction,
+		scope: { sandboxId: string } | { approvedPvcNames: readonly string[] },
+	) {
+		const sandboxId = "sandboxId" in scope ? scope.sandboxId : undefined;
+		const target =
+			"sandboxId" in scope
+				? tx`a.sandbox_id = ${scope.sandboxId}`
+				: tx`a.resource_name = any(${[...scope.approvedPvcNames]}::text[])`;
 		const allocations =
 			sandboxId !== undefined
 				? tx`platform.session_sandbox_allocations`
@@ -90,7 +98,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
      order by oi.updated_at desc, oi.id desc
      limit 1
    ) o on true
-   where (${sandboxId ?? null}::text is null or a.sandbox_id=${sandboxId ?? null})
+   where ${target}
    and ch.namespace=${this.policy.namespace} and not ch.released and ch.compute_released
    and a.resource_observation->>'status'='stopped'
    and exists(select 1 from jsonb_array_elements(case when jsonb_typeof(a.resource_observation->'resources') = 'array' then a.resource_observation->'resources' end) r where r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=ch.namespace and r->>'name'=a.resource_name)
@@ -158,9 +166,9 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 		return { journal, state: rows[0] ?? null };
 	}
 
-	async candidates() {
+	async candidates(approvedPvcNames: readonly string[]) {
 		const rows = await this.sql.begin("read only", (tx) =>
-			this.eligible(tx as unknown as Transaction),
+			this.eligible(tx as unknown as Transaction, { approvedPvcNames }),
 		);
 		return rows.filter((t) => !isWorkspaceRetainedV1(this.policy, t));
 	}
@@ -229,7 +237,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 				if (still.length !== 1) throw new Error("WORKSPACE_TOMBSTONE_CONFLICT");
 				return "prepared" as const;
 			}
-			const rows = await this.eligible(tx, t.sandboxId);
+			const rows = await this.eligible(tx, { sandboxId: t.sandboxId });
 			const pvc =
 				await tx`select a.sandbox_id from platform.session_sandbox_allocations a, jsonb_array_elements(a.resource_observation->'resources') r where a.sandbox_id=${t.sandboxId} and r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=${t.namespace} and r->>'name'=${t.name} and r->>'uid'=${t.uid}`;
 			if (pvc.length !== 1) throw new Error("WORKSPACE_PVC_OWNERSHIP_CONFLICT");
