@@ -2254,12 +2254,12 @@ export function createWorkloadRuntimeV1(
 			const value = desired(state);
 			try {
 				assertWorkloadPublicRouteV1(options.policy, value);
+				if (value.route.exposure !== "self-managed") return true;
+				const expected = workloadPublicRouteV1(options.policy, value.agentId);
 				return (
-					isMultiService(value) ||
-					value.route.exposure !== "self-managed" ||
 					value.route.interactionOrigin?.origin ===
-						workloadPublicRouteV1(options.policy, value.agentId)
-							.interactionOrigin.origin
+						expected.interactionOrigin.origin &&
+					value.route.interactionPath === expected.interactionPath
 				);
 			} catch (error) {
 				if (error instanceof WorkloadKubernetesError && error.code === "policy")

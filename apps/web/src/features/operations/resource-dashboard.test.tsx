@@ -111,4 +111,61 @@ describe("resource dashboard", () => {
 		expect(screen.getAllByText(/镜像缓存/).length).toBeGreaterThan(0);
 		expect(screen.getAllByText("暂不可用").length).toBeGreaterThan(0);
 	});
+	it("shows the placement and ownership reason returned for an expanded resource", async () => {
+		await renderWithAgentRouter(
+			<ResourceDashboard
+				data={{
+					...data,
+					resources: [
+						{
+							kind: "Pod",
+							uid: "pod-uid",
+							name: "sample-pod",
+							namespace: data.scope.namespace,
+							resourceVersion: "1",
+							ownerUid: null,
+							ownerGeneration: null,
+							agentId: null,
+							agentName: null,
+							sessionId: null,
+							sandboxId: null,
+							generation: null,
+							revision: null,
+							workloadRevision: null,
+							resourceFence: null,
+							ownership: "unknown",
+							role: "unknown",
+							nodeName: "virtual-node",
+							phase: "Running",
+							ready: true,
+							restarts: 0,
+							reason: null,
+							observedAt: data.generatedAt,
+							usage: missing,
+							requests: missing,
+							limits: missing,
+							containers: [],
+							images: [],
+							retainedStorage: false,
+							placement: "eci",
+							ownershipReason: "BINDING_UNAVAILABLE",
+						},
+					],
+				}}
+				refreshing={false}
+				onRefresh={() => undefined}
+				onSelectAgent={() => undefined}
+				agentId=""
+				sessionId=""
+				onSelectSession={() => undefined}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /sample-pod/ }));
+		expect(screen.getByText("计算放置").nextElementSibling?.textContent).toBe(
+			"ECI",
+		);
+		expect(screen.getByText("归属原因").nextElementSibling?.textContent).toBe(
+			"BINDING_UNAVAILABLE",
+		);
+	});
 });

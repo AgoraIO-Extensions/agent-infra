@@ -2278,6 +2278,15 @@ source: { ref, revision } }`。环境投影使用 `AGENT_INFRA_CONNECTION_SYSTEM
 每个已关联 Agent 的 Consumer 快照由该对象与其关联按上表字段生成，指纹仍按 §13.5.2 的 Consumer
 数组计算，来源为关联引用及修订。
 
+**手工安装的主体映射。** 一次性系统接入为动态手工 OAuth 提供独立、版本化的主体映射规则。
+部署显式批准映射权威、规则 `ref/revision`、获准 Connection issuer 和服务器解析方法，并将该批准
+绑定到同一系统接入指纹及审批来源修订。该批准随系统接入配置交付，`ConnectionSystemAccessV1`
+继续使用原字段与指纹算法。部署只提供规则，不配置逐 Agent 或逐用户条目。
+Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用户与原 Agent，按批准规则从
+受信身份来源解析该 issuer 下的稳定 Connection Principal，并固定来源及修订。映射缺失、歧义、
+过期或修订漂移时关闭该安装。Owner、显示名、邮箱、调用方字段和不透明 Token 均不提供主体权威。
+此处只产生预期主体，实际绑定按 [§13.5.6](#1356-标准-oauth-安装供应) 核实。
+
 #### 13.5.2 版本、指纹与失败行为
 
 版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和
@@ -2583,6 +2592,25 @@ Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
 注册元数据或 Owner 不替代用户实际 OAuth 确认。
 
+**动态手工安装的外部依赖。** Connection OAuth API/Store 负责发布受服务认证保护的、版本化
+的原 OAuth 事务只读回读。M1 动态手工安装仅在该合同已发布，且部署已批准精确 HTTPS 目标、
+服务身份及权限、合同版本与修订后启用。任一输入缺失时保持关闭。
+
+首次登记回执只核实原登记键、client/Consumer/实例、回调及登记配置。Connection 在使用者完成
+原 OAuth 确认时，将实际 Principal 与不可变的非秘密事务关联绑定到自己批准的同一授权事务。
+双方发布的合同须规定如何用原登记和已校验且单次消费的回跳 state 摘要，或沿获准服务协议取得、
+与该回跳绑定的非秘密事务引用，唯一定位这一事务。若选 state 摘要，Connection 须在其原授权
+事务中绑定摘要及原登记，在回读时拒绝重复匹配和歧义。Host 只从固定描述符与受信回跳记录
+派生查询。回跳格式沿用本节规则，相关性核实不读取 code 或 verifier。
+
+原回跳已确认且原平台用户明确确认后，Host 用批准的服务身份回读，核对实际 Principal 与
+§13.5.1 的预期映射，并核对 issuer、同一 client/Consumer/实例、登记键、resource/scope、精确
+回调及本次已批准、未消费的 OAuth 授权事务。EP-1060 按登记键返回的登记及 DEVICE Principal
+只证明登记与实例绑定。Host 先经 Worker 只读核对 Store 中的当前原 claim 和原授权，再在同一
+Host 私有安装事务用 CAS 固定本次 confirm 的非秘密绑定证据引用及修订。CAS 成功并再次核对
+原授权后才读取兑换材料。结果不明、证据不完整或 CAS 不匹配时保留待核实并拒绝兑换。
+仅在换码后提供的回读不满足启用门禁。
+
 核实成功后只兑换一次原 code，并以该响应的实际 expiry、原授权/scope/reference、已核实实例
 及部署批准的同版本 MCP 合同生成既有私有 publication 回执。credentialRef/revision 是 Host
 本次材料的不可变引用，不冒充 Connection token ID、Grant 或权限修订。沿用原发布锁、事务提交、
@@ -2730,6 +2758,14 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 完成首次绑定后，绑定或授权修订变化使旧事务失效。confirm 须经原用户明确确认，status
 只读取原事实。审计只记录引用、命令和结果状态。
 
+动态手工 confirm 以已确认的原回跳及其消费记录、原用户显式确认修订、当前关联和固定描述符为
+权威输入。API/Core 在同一 Platform 安装事务内校验当前身份与 Agent 权限，CAS 保存确认及
+唯一命令。现有生产 Conversation Worker 从同一持久队列按原 Execution 和有效 claim 领取。
+发送前核对原授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
+本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
+并在换码前和每次等待后复核上述事实。confirm 结果不明时，按本节“来源与发布”的动态启用
+许可和只读恢复规则处理。
+
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
 发起登录，也不建立第二个任务调度器。Worker 仅沿本进程当前持有的原 claim 执行，不能从
@@ -2815,7 +2851,7 @@ Token 主体、Consumer/实例、generation、期限和授权。供应方仅消�
 refresh Token/verifier 只保留在同一受保护客户端的专用材料中，不进入 reader 的普通 metadata。
 安装/凭据引用区分本地事务引用与 Connection 已确认引用，不以本地随机 ID 冒充服务端实例。
 
-Host 的 `prepareRuntimeOAuth` 仅在部署显式选择 OAuth 发布时消费批准的非秘密安装发布
+已预组装的启动供应由 Host 的 `prepareRuntimeOAuth` 在部署显式选择 OAuth 发布时消费批准的非秘密安装发布
 回执文件。Worker 配置使用显式 `connectionInstallation.publishOAuth=true`，仅当相同
 Agent 的标准 OAuth 配置、完整 profile/approval 和安装 supply 均有效时，生成
 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_PUBLICATION=true`；未选择、PAT 或缺 supply 保留
@@ -2840,12 +2876,35 @@ key、完整 metadata 摘要及同一供应修订。payload、sidecar、原事�
 保留锁，接收器拒绝；提交后的目录同步仅确认清理持久性，失败不把已提交事实回写成
 未提交。重启若锁恢复则拒绝，锁缺失时也须核实同一原事务和内容，不能重发换码来恢复。
 reader 在材料读取前后及最终原授权复核后继续核对该提交事实和固定 metadata 快照。
+
+**动态安装的同一 Host 发布。** 部署须明确批准动态发布合同及其修订。空启动的原 Host 在
+首次 begin 通过原 Worker 签名、持久 sending 和原安装 CAS 固定批准的非秘密描述符。原
+confirm 在同一 Host 校验该描述符、原事务绑定证据和当前授权，成功兑换一次后，以核实的
+Principal、client/实例和批准的 publication 合同构造同一版本的非秘密发布回执。由同一 Host
+调用既有私有发布事务，执行相同的材料持久化、发布锁、提交及 reader 核验。动态路径以该描述符
+为发布输入。启动时只需受保护入口及部署信任，不要求预装完整 client 配置或静态回执文件。
+
+**动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
+Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
+启用许可。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
+代次、resourceFence、描述符、提交摘要和许可期限。原 claim 正常结束后，已提交许可仍可由同一
+安装的后续获准 Execution 使用，按本节“Worker 权威回读”复核当前执行与许可绑定。动态 reader
+必须同时通过许可回读、既有本地提交和授权校验，才可使用 MCP 材料。Host 本地提交已成而 Platform
+尚未记许可时，保留本地提交，MCP 保持关闭。许可已持久化而回包丢失时，以当前许可和原 Host 的
+提交事实判定可用性。
+
+confirm 结果不明时，原用户只能在有效原 claim 内只读核实同一命令、原绑定、Host 私有提交
+和 Platform 许可。服务端仅在原授权及全部绑定当前有效、证据完全匹配时 CAS 补记同一启用
+许可。无法核实时保留 `unknown`，许可缺失、失效或绑定不符时关闭 MCP。恢复不重发 confirm、
+回跳或换码，不重建 Host 或续租，也不抹去已经核实的提交事实。
+
 refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确认后擦除该事务拥有的
 私有 export/reader 材料副本，不删除其他主体或 Agent 的材料。
 
-发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。初版仍采用受控
-重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
-热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
+发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。已预组装的启动
+供应及后续安装修订按受控重新装配和固定安装快照规则，由批准配置、原接收器和 resolver
+重新核对。动态首次安装沿同一原 Host 完成。两条路径均禁止热改已有 Thread 工具快照，
+或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
 
 **Session Host 启动供应。** `createProductionSessionSandboxReceiverV1` 可选择部署批准的
 `oauthProvisioning`，第一版限定一个原用户与 Agent、预注册 HTTPS client 和已签发的精确
@@ -2880,6 +2939,13 @@ clientId 均匹配后，Host 以该命令引用和原授权原子消费首次 be
 重复命令、校验失败、原 claim 失效或 Host 替换时拒绝本次命令并保留原事实。登记结果为
 unknown 时按 §13.5.7 原键核实。
 
+动态手工路径的完整非秘密描述符随首次 begin 固定。它绑定获准回读合同及其修订、原登记键及
+client/Consumer/实例、原配置 `ref/revision` 与摘要、受信主体映射 `ref/revision` 及预期
+Principal、部署批准的 MCP publication 合同 `ref/revision` 和供应引用与修订。原 Worker
+签名命令、持久 sending 及原安装 CAS 同时绑定该描述符和原 Execution/claim、Host/Pod UID、
+代次和 resource fence。Host 在同一原受保护安装事务固定该描述符，后续 confirm 和恢复沿
+同一描述符核对实际回读与发布。不得从回跳、请求或登记元数据补造实际绑定。
+
 Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的非 root initializer 在真实
 保护检查后，把有界 TLS/callback 材料复制到 Host 独占的 Memory volume。目标目录为
 `0700`，文件为 `0600`，仅 Host 挂载既有拒绝树下的 `bootstrap` 与 `tls` 子目录；源 Secret
@@ -2897,10 +2963,10 @@ Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的
 `awaiting_verification`，直至按本节核实实际 OAuth 绑定回执。
 
 **Worker 权威回读。** Host 通过部署固定的同 release Worker 内部 Service 只读核实当前安装。
-API 负责入口身份和安装授权。Worker 用已认证的请求定位原执行，通过 Core/Store 读取当前
-事实。本机 FileRuntimeStore 只核验本机绑定。两种回读均检查原用户与当前使用权、
-Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批、原 outbox claim/fence
-及期限，以及实际 Host ref、Pod UID、Sandbox、sessionGeneration 与 resourceFence。
+API 负责入口身份和安装授权。Worker 用已认证的请求定位适用执行，通过 Core/Store 读取当前
+事实。本机 FileRuntimeStore 只核验本机绑定。各用途均检查原用户与当前使用权、Agent/Consumer、
+Conversation、安装与关联修订、系统审批及实际 Host ref、Pod UID、Sandbox、sessionGeneration
+与 resourceFence。供应确认和安装命令回读同时核对原 Execution、原 outbox claim/fence 及期限。
 
 - 供应确认使用独立的供应投递认证用途。Worker 对照已持久化的原供应投递记录，逐项核对
   供应引用、修订、投递 attempt 和摘要，并确认该 attempt 仍可确认。对已确认的同一
@@ -2908,13 +2974,20 @@ Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批�
 - 安装命令使用独立的安装命令认证用途。prepare、status、begin 等命令各按自身的已验证
   签名定位命令记录。Worker 对照该命令的持久 sending、命令引用、请求摘要、attempt
   owner/ID/期限，以及该命令绑定的当前供应引用和修订。
+- 已提交许可使用独立的许可读取用途。Worker 按当前获准 Execution 的短期证明和持久授权，
+  复核当前 Execution 的 claim/fence、期限及其与同一安装和 Host/Sandbox 的绑定。以 Platform
+  Store 中该安装已提交的启用许可为权威，核对许可期限、原 confirm 来源、描述符与提交摘要。
+  原 confirm 的 claim 作为来源保留，许可读取不要求该 claim 仍活动或原命令仍为 sending。
+  读取只返回本次核实结果，无权签发、补记或续期许可。撤权、过期、关联或安装修订变更、
+  Host/Pod、Sandbox、代次或 fence 漂移及任一绑定无法核实，均拒绝材料读取与使用。
 
 响应只返回允许、拒绝或不可用及对应的非秘密关联字段。获准 Worker 以 Platform Store
 为权威，因此回读可由任一获准 Worker 处理，不依赖原 API 副本。在途记录只用于加强核验。
 
 传输复用 [§9.3.1](#931-原生元数据读取授权) 的固定目标、短期证明、有界超时和响应绑定模式。
 Host 使用部署批准的 Sandbox/Pod 隔离身份及短期证明。证明按用途分别绑定原供应投递
-attempt 或本次安装命令。每次请求使用独立 nonce 或挑战并核对响应绑定。旧响应与
+attempt、本次安装命令，或当前获准 Execution 和同一安装的已提交许可。每次请求使用独立
+nonce 或挑战并核对响应绑定。旧响应与
 metadata、业务 Grant 或 callback-only 证明均不能用于安装回读。复用同 release Worker
 已批准的路径时必须验证 TLS 和调用身份。否则使用专用 TLS 端口及最小 ingress/egress，
 精确限定 namespace、selector 和端口。权限隔离沿 [§17](#17-安全基线)。
@@ -3185,6 +3258,19 @@ Worker 重启无法核实当前记录，以及审批、关联或供应修改。�
 模拟登记 POST 丢响应，证明仅 GET 原键，原授权与回执 CAS 匹配才可继续 begin。登记前
 status 单独替换原用户、Agent 或安装时，Host 须在读取材料及发送原键 GET 前拒绝。
 原 claim 结束后只保留负责人核实路径，不生成链接。
+
+动态手工 confirm 验收从实际空启动 Host 开始，走同一原 Host、真实生产 Worker 队列、原回跳、
+原用户确认、一次 code＋PKCE 兑换、私有 publication 和 reader。换码前覆盖映射或 publication
+修订漂移、错 Principal、同登记键的另一授权事务、回读或部署批准缺失、证据不完整、迟到结果
+及 CAS 冲突，断言不读取兑换材料、不换码、不启用 MCP。
+换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
+首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
+可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
+补记冲突，断言保持 unknown、无许可时不可用、各分支均不重复换码。
+原 confirm 的 claim 正常结束后，验证同一安装及原 Host/Sandbox 上的后续获准 Execution
+能按自己的当前 claim 只读核验并使用已提交许可。原 claim 结束前未提交许可时，后续
+Execution 不得签发或补记。分别验证当前执行未获准、撤权、过期、关联或安装修订变更，
+以及 Host/Pod、Sandbox、代次或 fence 漂移均关闭 MCP。
 
 生产安装验收包括供应方实际输出、可信 SecretRef、合法确认和领取、跨 Session/代次、
 错 state/issuer/resource、重放、撤权及 unknown，以及最终 Linux 文件、内存与 FD 保护。
@@ -3652,6 +3738,46 @@ ImageCache 库存读取部署批准的缓存管理范围；库存上限、phase�
 资源采集与页面刷新默认目标均为 30 秒。指标保留目标为 7 天细粒度样本和 30 天的 5 分钟聚合趋势，日志与 Trace 保留目标为 7 天；部署方案核算采样、存储和保留成本，并公布实际生效的周期与覆盖范围。聚合值保留统计口径，峰值与平均值分别表达。指标明细和聚合历史服从部署数据政策。
 
 采集、导出、后端接收、查询与通知出口分别表达健康和缺失状态。OTel provider 已创建只证明本进程导出已配置，不能证明远端收到数据。每个面板保留数据来源、最新样本时间和查询范围；来源不可用、数据过期、对象不存在、有效零值与没有样本必须可区分。某个来源故障不遮蔽其他来源的有效数据。
+
+#### 18.2.3 会话任务诊断
+
+[PRD §14.2](../prd/PRD-agent-platform-M1.md#142-运维观测) 的任务缓慢或失败诊断，
+在 `/ops` 的 Agent → Session 下钻提供独立的只读 OpenAPI 查询。查询只依赖 Platform DB
+已持久化的 Execution 和状态事实，指标、日志和 Trace 后端未接入时仍可用。API 按 §18.2.2
+校验当前系统管理员和部署范围。Store 通过权威 Session → Agent → Execution 绑定限定结果，
+沿已有部署范围规则验证对象，无法证明绑定时不返回证据。普通用户、Owner、应用身份和撤权或
+失效身份不能调用此查询。此权限仅允许读取本节的元数据。
+
+请求携带 Agent、Session 和有界 UTC 时间范围。结果包含 Execution ID、当前状态、来源和
+范围内的阶段证据。以 `[start, end)` 筛选下列事实的时间，同一 Execution 内按持久事件序号
+对账。可补齐能与窗口内证据可靠配对的窗口外端点，同时保留原时间。
+
+服务端为单次请求设置时间范围、返回条数和总扫描预算。预算包括候选 Execution、会话事件、
+Turn outbox 及事件流的原始候选行，以及跨窗端点查找。扫描预算在按事件类型或内容筛选前计数，
+跨窗查找同时受查找次数和候选行上限约束。候选扫描使用现有会话索引，事件读取按 Execution
+与 sequence 有序推进，模型事件可使用现有部分索引。outbox 事件只按已绑定的 stream 和
+sequence 读取。数据库查询受剩余请求时限与取消信号约束。扫描、跨窗查找或返回条数达到上限时，
+保留已核实证据并标记截断。数据库超时、取消或读取失败时标记来源不可用。只有完成预算内查询且
+确无匹配记录时，才报告无匹配证据。
+
+| 证据 | 权威来源和投影规则 |
+| --- | --- |
+| 受理、当前状态、终态 | `conversation_executions.created_at` 为持久受理时间，`status` 为当前状态，`terminal_observed_at` 为终态观察时间。终态时间缺失时保持未知。 |
+| 等待、投递、执行 | 读取同一 Execution 的 `conversation_events` 中受支持的 `task.status`、`execution.status`、`sequence` 和 `occurred_at`，按生产者语义标明等待、已提交和执行中的已观测状态。已提交状态不充当 Runtime 已受理证明。 |
+| 排队失败 | 同一 Execution 的 failed `task.status` 采用 `conversation_events.occurred_at`，`reason` 只允许 `TASK_WAIT_TIMEOUT`、`AGENT_UNAVAILABLE`、`CONVERSATION_UNAVAILABLE`。 |
+| 投递或恢复失败 | 按同一 Session 和 Execution 核验 Turn submit/regenerate outbox 绑定，从所属 `persisted_events` 流的 `outbox.failed` 取 `occurred_at` 和 `errorCode`。只允许 Core 已明确登记的固定失败码，例如 `RUNTIME_RECOVERY_TIMEOUT`。 |
+| Runtime 错误 | 同一 Execution 的 `conversation.error` 采用 `conversation_events.occurred_at`。错误码只允许 Runtime 已登记的固定码，例如 `RUNTIME_EXECUTION_FAILED`、`RUNTIME_DEPENDENCY_UNAVAILABLE`。 |
+| 模型或工具阶段与失败 | 读取同一 Execution 的 `execution.operation`，按 `operationRef`、`attemptRef` 和事件序号核验配对，使用事实中的 `startedAt`、`finishedAt`。端点缺失时该端点和耗时保持未知。failed 事实的 `failureCode` 只允许 Core 的 `ConversationOperationFailureV2` 枚举值。错误观察时间取 `conversation_events.occurred_at`，与实际操作结束时间分别表达。 |
+| 待核实 | `conversation_executions.unknown_since` 只表示当前 unknown 的开始。历史 unknown 用同一 Execution 已持久化、可配对的状态事件表达。缺结束或存在多次不可区分的转移时，只展示已知时间点，不推算完整区间。 |
+
+错误码按来源使用固定白名单。通用格式校验和分类前缀匹配均不足以放行原始错误码。
+缺失或未知码显示缺失，保留已核实的阶段和时间。
+
+阶段耗时仅在两个端点均可核实时按实际时间差计算，不能用 `updated_at` 代替阶段事件，
+也不能把任务总时长当作模型、工具或 Runtime 耗时。无匹配任务、缺少阶段证据与来源不可用
+分别表达，缺失耗时不填零。API 只投影上述 ID、状态、时间、耗时、错误码与来源或缺失状态，
+不读取或返回会话正文、思考、附件、工具参数、错误原文、原始事件 JSON 或凭据。
+查询沿现有部署数据政策，不为本入口新增采集或延长保留。
 
 ### 18.3 持久审计
 

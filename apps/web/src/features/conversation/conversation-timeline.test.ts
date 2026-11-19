@@ -1070,6 +1070,58 @@ describe("re-reading history keeps loaded rounds (#3068)", () => {
 		});
 	});
 
+	it("keeps a standalone Skill projection once across earlier-page loading and refresh", async () => {
+		const stream = sse();
+		const older = round(1, 3);
+		const newer = round(2, 4);
+		const recent = windowedHistory("conversation-1", newer, {
+			hasEarlier: true,
+			beforeCursor: "before-skill-end",
+		});
+		const skillPage = windowedHistory("conversation-1", older, {
+			hasEarlier: false,
+			beforeCursor: null,
+		});
+		const skillReply = {
+			messageId: "assistant:execution-1",
+			role: "assistant" as const,
+			text: "Earlier Skill result",
+			status: "completed" as const,
+			executionId: "execution-1",
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: timestamp,
+		};
+		const { reader } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			return Response.json(
+				new URL(request.url).searchParams.has("beforeCursor")
+					? { ...skillPage, messages: [skillReply] }
+					: recent,
+			);
+		});
+		await reader.open("conversation-1");
+		await reader.loadEarlier();
+		const expectSkillPage = () => {
+			const loaded = reader.getSnapshot().history;
+			expect(
+				loaded?.messages.filter(
+					({ executionId }) => executionId === "execution-1",
+				),
+			).toEqual([skillReply]);
+			expect(
+				loaded?.events.filter(
+					({ executionId }) => executionId === "execution-1",
+				),
+			).toEqual(older);
+		};
+		expectSkillPage();
+		await reader.refresh();
+		expectSkillPage();
+	});
+
 	it("keeps earlier rounds across a timeline reload whose window overlaps them", async () => {
 		const first = sse();
 		const second = sse();

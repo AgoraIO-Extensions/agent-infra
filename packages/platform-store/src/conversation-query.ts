@@ -87,6 +87,7 @@ export interface ConversationQueryExecutionV1 {
 	readonly executionId: string;
 	readonly conversationId: string;
 	readonly sourceMessageId: string | null;
+	readonly nativeSkill?: true;
 	readonly status: string;
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
@@ -347,6 +348,7 @@ interface ExecutionRow extends ExecutionFailureFactRowV1 {
 	readonly execution_id: string;
 	readonly conversation_id: string;
 	readonly source_message_id: string | null;
+	readonly native_skill: boolean;
 	readonly status: string;
 	readonly created_at: Date;
 	readonly updated_at: Date;
@@ -770,6 +772,7 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 		conversationId: text(row.conversation_id),
 		sourceMessageId:
 			row.source_message_id === null ? null : text(row.source_message_id),
+		...(row.native_skill ? { nativeSkill: true as const } : {}),
 		status: text(row.status, 64),
 		createdAt: timestamp(row.created_at),
 		updatedAt: timestamp(row.updated_at),
@@ -929,6 +932,16 @@ async function readExecutions(
 				order by o.created_at, o.id
 				limit 1
 			) as source_message_id,
+			exists (
+				select 1
+				from platform.outbox_items invoke
+				where invoke.id = 'conversation:native-capability:' || e.execution_id
+					and invoke.scope_type = 'conversation'
+					and invoke.scope_id = e.conversation_id
+					and invoke.operation = 'conversation.native-capability.invoke.v1'
+					and invoke.payload ->> 'executionId' = e.execution_id
+					and invoke.payload ->> 'capabilityKind' = 'skill'
+			) as native_skill,
 			(
 				select a.trace_id
 				from platform.conversation_audit_events a

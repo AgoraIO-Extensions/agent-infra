@@ -117,15 +117,24 @@ function persistedWorkloadVersion(input: unknown, agentId: string) {
 					"modelProjection",
 					"executionCapacity",
 					"secretRecoveries",
+					"persistentVolumeUid",
 				].includes(key),
 		)
 	)
 		throw new Error();
 	const configuration = decodeAgentConfigurationRecord(value.configuration);
 	if (configuration.agentId !== agentId) throw new Error();
+	const persistentVolumeUid = value.persistentVolumeUid;
+	if (
+		Object.hasOwn(value, "persistentVolumeUid") &&
+		(typeof persistentVolumeUid !== "string" ||
+			!/^[a-zA-Z0-9_.:-]{1,128}$/u.test(persistentVolumeUid))
+	)
+		throw new Error("Invalid persisted Workload PVC UID");
 	return {
 		configuration,
 		deployment: value.deployment,
+		...(typeof persistentVolumeUid === "string" ? { persistentVolumeUid } : {}),
 		...(Object.hasOwn(value, "secretRecoveries")
 			? {
 					secretRecoveries: parseWorkloadSecretRecoveriesV1(
