@@ -1162,7 +1162,7 @@ export function createWorkloadRuntimeV1(
 				state.candidate.configuration.source.imageDigest
 		)
 			throw new Error("Workload deployment correlation mismatch");
-		if (state.phase === "rejected")
+		if (state.phase === "rejected" || state.certificateWait?.resumeRejected)
 			return validateAgentWorkloadDesiredV1({
 				...deployment,
 				workloadRevision: state.verifiedRevision,
@@ -2274,7 +2274,9 @@ export function createWorkloadRuntimeV1(
 				return;
 			}
 			const revision =
-				state.phase === "rejected" ? state.verifiedRevision : state.revision;
+				state.phase === "rejected" || state.certificateWait?.resumeRejected
+					? state.verifiedRevision
+					: state.revision;
 			if (
 				revision === null ||
 				!(await adapter.closeAgent(state.agentId, revision, state.fence))

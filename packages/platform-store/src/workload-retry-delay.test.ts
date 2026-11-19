@@ -35,13 +35,7 @@ describe("Workload durable retry delay (#2532)", () => {
 				{
 					phase: "observing",
 					attempts: 0,
-					lastFailure: {
-						schemaVersion: 1,
-						reason: "kubernetes_conflict",
-						kind: "Certificate",
-						verb: "await-issuance",
-						attempts,
-					},
+					certificateWait: { attempts },
 				},
 				1_000,
 			),

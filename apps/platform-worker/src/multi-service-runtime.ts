@@ -1522,11 +1522,9 @@ export function createMultiServiceRuntimeOperations(options: {
 		const current = await client.read(kind, name);
 		if (!current) return true;
 		if (
-			!owned(current, value) &&
-			!(
-				ownership.allowOwnershipTransition === true &&
-				ownedByAgent(current, value)
-			)
+			ownership.allowOwnershipTransition === true
+				? !ownedByAgent(current, value)
+				: !owned(current, value)
 		)
 			throw new Error("multi-service resource drifted");
 		await client.delete(current);
@@ -1676,7 +1674,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				resourceName(value, resource.metadata.name),
 			);
 			if (!current) continue;
-			if (!owned(current, value))
+			if (!owned(current, value) || !ownedByAgent(current, value))
 				throw new Error("multi-service resource drifted");
 			if (current.spec?.replicas !== 0) {
 				if (!current.metadata?.resourceVersion || !current.metadata.uid)

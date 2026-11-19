@@ -180,6 +180,8 @@ export function decodePersistedWorkloadStateV1(
 		"cleanupInterrupted",
 		"capabilities",
 		"lastFailure",
+		"certificateWait",
+		"retainedFailure",
 	];
 	if (
 		required.some((key) => !Object.hasOwn(value, key)) ||
@@ -237,6 +239,48 @@ export function decodePersistedWorkloadStateV1(
 	const lastFailure = Object.hasOwn(value, "lastFailure")
 		? parsePersistedWorkloadReconciliationFailureV1(value.lastFailure)
 		: undefined;
+	if (Object.hasOwn(value, "certificateWait")) {
+		const wait = value.certificateWait as Record<string, unknown>;
+		if (
+			!wait ||
+			typeof wait !== "object" ||
+			Array.isArray(wait) ||
+			Object.keys(wait).some(
+				(key) => key !== "attempts" && key !== "resumeRejected",
+			) ||
+			!Number.isSafeInteger(wait.attempts) ||
+			(wait.attempts as number) < 1 ||
+			(wait.attempts as number) > 5 ||
+			value.phase !== "observing" ||
+			(Object.hasOwn(wait, "resumeRejected") &&
+				(wait.resumeRejected !== true || value.verifiedRevision === null))
+		)
+			throw new Error("Invalid persisted Certificate wait");
+	}
+	if (Object.hasOwn(value, "retainedFailure")) {
+		const retained = value.retainedFailure as Record<string, unknown>;
+		if (
+			!retained ||
+			typeof retained !== "object" ||
+			Array.isArray(retained) ||
+			Object.keys(retained).some(
+				(key) => key !== "certificate" && key !== "rollbackRouteRejected",
+			) ||
+			Object.keys(retained).length === 0 ||
+			value.verified === null ||
+			!["closing", "cleaning", "failed"].includes(String(value.phase)) ||
+			(Object.hasOwn(retained, "certificate") &&
+				(typeof retained.certificate !== "string" ||
+					![
+						"certificate-failed",
+						"certificate-timeout",
+						"certificate-invalid",
+					].includes(retained.certificate))) ||
+			(Object.hasOwn(retained, "rollbackRouteRejected") &&
+				retained.rollbackRouteRejected !== true)
+		)
+			throw new Error("Invalid persisted retained Workload failure");
+	}
 	const normalized = {
 		...value,
 		...(capabilities ? { capabilities } : {}),
@@ -514,20 +558,16 @@ const durableRetryDelayCapMsV1 = 60_000;
 export function workloadRetryDelayMsV1(
 	next: Pick<
 		WorkloadReconciliationStateV1,
-		"phase" | "attempts" | "lastFailure"
+		"phase" | "attempts" | "certificateWait"
 	>,
 	baseDelayMs: number,
 ): number {
-	if (
-		next.phase === "observing" &&
-		next.lastFailure?.kind === "Certificate" &&
-		next.lastFailure.verb === "await-issuance"
-	)
+	if (next.phase === "observing" && next.certificateWait)
 		return Math.max(
 			baseDelayMs,
 			Math.min(
 				durableRetryDelayCapMsV1,
-				5_000 * 2 ** Math.min(next.lastFailure.attempts - 1, 4),
+				5_000 * 2 ** Math.min(next.certificateWait.attempts - 1, 4),
 			),
 		);
 	if (

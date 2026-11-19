@@ -8252,7 +8252,7 @@ it.each(["single", "multi"] as const)(
 				notAfter: "2000-01-01T00:00:00Z",
 			},
 		} as KubernetesObject);
-		await f.tick(1);
+		await f.tick(2);
 		expect(f.state?.phase).not.toBe("ready");
 		expect(
 			await f.client.read("Ingress", "agent-a51d7389ba2cb760d233154216317fce"),
@@ -8437,10 +8437,14 @@ it.each(["incompatible", "compatible", "newer fence"] as const)(
 			if (variant === "incompatible") {
 				expect(f.state).toMatchObject({
 					phase: "failed",
+					retainedFailure: {
+						certificate: "certificate-failed",
+						rollbackRouteRejected: true,
+					},
 					lastFailure: {
-						reason: "kubernetes_policy",
-						kind: "Ingress",
-						verb: "rollback",
+						reason: "kubernetes_invalid",
+						kind: "Certificate",
+						verb: "certificate-failed",
 						attempts: 1,
 					},
 				});
@@ -8613,4 +8617,269 @@ it("rejects persisted snapshot apply when the approved egress disappears after p
 		lastFailure: { reason: "preflight_rejected", attempts: 1 },
 	});
 	expect(f.writes).toHaveLength(0);
+});
+
+async function readyHostnameFixture() {
+	const f = fixture(
+		{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
+		{ configuration: hostnameConfiguration() },
+	);
+	await f.tick(4);
+	const certificate = await f.client.read<WorkloadHostnameCertificateV1>(
+		"Certificate",
+		hostnameCertificateName,
+	);
+	assert(certificate);
+	const ready = {
+		...certificate,
+		status: {
+			notAfter: "2035-01-01T00:00:00Z",
+			conditions: [
+				{
+					type: "Ready",
+					status: "True",
+					observedGeneration: certificate.metadata?.generation,
+				},
+			],
+		},
+	};
+	f.seed(ready);
+	f.seed({
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: {
+			namespace: "workload-test",
+			name: hostnameCertificateName,
+			uid: "tls-secret",
+			resourceVersion: "1",
+		},
+	});
+	await f.tick(5);
+	assert(f.state?.phase === "ready");
+	return { f, ready };
+}
+
+it("retains a verified hostname workload after its certificate expires", async () => {
+	const { f, ready } = await readyHostnameFixture();
+	const retained = [
+		"StatefulSet",
+		"Service",
+		"PersistentVolumeClaim",
+		"Certificate",
+	] as const;
+	const names = [
+		hostnameWorkloadName,
+		hostnameWorkloadName,
+		`${hostnameWorkloadName}-data`,
+		hostnameCertificateName,
+	];
+	const uids = await Promise.all(
+		retained.map(
+			async (kind, index) =>
+				(await f.client.read(kind, names[index] ?? ""))?.metadata?.uid,
+		),
+	);
+	expect(uids.every(Boolean)).toBe(true);
+	const remove = vi.spyOn(f.client, "delete");
+	f.seed({
+		...ready,
+		status: { ...ready.status, notAfter: "2000-01-01T00:00:00Z" },
+	});
+	await f.tick(14);
+	expect(f.state).toMatchObject({
+		phase: "failed",
+		retainedFailure: { certificate: "certificate-invalid" },
+		lastFailure: { kind: "Certificate", verb: "certificate-invalid" },
+	});
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	expect(
+		await Promise.all(
+			retained.map(
+				async (kind, index) =>
+					(await f.client.read(kind, names[index] ?? ""))?.metadata?.uid,
+			),
+		),
+	).toEqual(uids);
+	expect(
+		remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+	).toHaveLength(0);
+});
+
+it("durably retries route closure and scales down after a rejected multi-service hostname preflight", async () => {
+	const f = fixture(
+		{ registry: workloadRegistryFixture() },
+		{ configuration: hostnameConfiguration("multi") },
+	);
+	await f.tick(9);
+	const verified = f.state?.verified;
+	assert(verified?.deployment);
+	const deployments = [...f.resources].filter(([key]) =>
+		key.startsWith("Deployment/"),
+	);
+	expect(deployments.length).toBeGreaterThan(0);
+	Object.assign(f.options, { policy: hostnameTestPolicy });
+	f.seed({
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: {
+			namespace: "workload-test",
+			name: hostnameCertificateName,
+			uid: "foreign-secret",
+			resourceVersion: "1",
+		},
+	});
+	f.setManagement({
+		...f.management,
+		status: "available",
+		revision: 2,
+		workloadRevision: 2,
+		fence: 2,
+	});
+	await f.tick(2);
+	expect(f.state).toMatchObject({
+		phase: "closing",
+		candidate: verified,
+		retainedFailure: { rollbackRouteRejected: true },
+	});
+	const remove = vi.spyOn(f.client, "delete");
+	remove.mockRejectedValueOnce(new WorkloadKubernetesError("conflict"));
+	await f.tick(1);
+	expect(f.state).toMatchObject({
+		phase: "closing",
+		attempts: 1,
+		lastFailure: { reason: "kubernetes_conflict", attempts: 1 },
+	});
+	f.roundTripState();
+	const ingress = await f.client.read("Ingress", hostnameWorkloadName);
+	assert(ingress);
+	f.seed({
+		...ingress,
+		metadata: {
+			...ingress.metadata,
+			annotations: {
+				...ingress.metadata?.annotations,
+				"agent-infra.agora.io/fence": "4",
+			},
+		},
+	});
+	await f.tick(1);
+	expect(f.state).toMatchObject({
+		phase: "closing",
+		attempts: 2,
+		retainedFailure: { rollbackRouteRejected: true },
+	});
+	expect(remove).toHaveBeenCalledTimes(1);
+	expect(
+		(await f.client.read("Ingress", hostnameWorkloadName))?.metadata?.uid,
+	).toBe(ingress.metadata?.uid);
+	f.seed(ingress);
+	await f.tick(3);
+	expect(f.state).toMatchObject({
+		phase: "failed",
+		candidate: verified,
+		retainedFailure: { rollbackRouteRejected: true },
+	});
+	f.setManagement({
+		...f.management,
+		status: "disabled",
+		desiredState: "stopped",
+		revision: 3,
+		workloadRevision: 3,
+		fence: 3,
+	});
+	await f.tick(7);
+	expect(f.state).toMatchObject({ phase: "stopped", fence: 3 });
+	for (const [key, original] of deployments) {
+		expect(f.resources.get(key)).toMatchObject({
+			metadata: {
+				uid: original.metadata?.uid,
+				annotations: { "agent-infra.agora.io/fence": "3" },
+			},
+			spec: { replicas: 0 },
+		});
+	}
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	expect(
+		remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+	).toHaveLength(0);
+});
+
+it("does not count certificate waits as Kubernetes conflicts", async () => {
+	const f = fixture(
+		{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
+		{ configuration: hostnameConfiguration() },
+	);
+	await f.tick(4);
+	const certificate = await f.client.read(
+		"Certificate",
+		hostnameCertificateName,
+	);
+	assert(certificate);
+	f.seed({
+		...certificate,
+		metadata: { ...certificate.metadata, creationTimestamp: new Date() },
+	});
+	await f.tick(5);
+	expect(f.state).toMatchObject({
+		phase: "observing",
+		attempts: 0,
+		certificateWait: { attempts: 5 },
+	});
+	expect(f.state?.lastFailure).toBeUndefined();
+	f.roundTripState();
+	vi.spyOn(f.client, "readMetadata").mockRejectedValueOnce(
+		new WorkloadKubernetesError("conflict"),
+	);
+	await f.tick(1);
+	expect(f.state).toMatchObject({
+		phase: "observing",
+		attempts: 1,
+		lastFailure: { reason: "kubernetes_conflict", attempts: 1 },
+	});
+});
+
+it("waits on the rejected revision and restores its route without reapplying it", async () => {
+	const { f, ready } = await readyHostnameFixture();
+	const before = f.state?.verifiedRevision;
+	Object.assign(f.options, { registry: rejectedRegistry() });
+	f.setManagement({
+		...f.management,
+		status: "available",
+		revision: 2,
+		workloadRevision: 2,
+	});
+	await f.tick(2);
+	expect(f.state).toMatchObject({
+		phase: "rejected",
+		verifiedRevision: before,
+	});
+	const create = vi.spyOn(f.client, "create");
+	const remove = vi.spyOn(f.client, "delete");
+	f.seed({
+		...ready,
+		metadata: { ...ready.metadata, creationTimestamp: new Date() },
+		status: {},
+	});
+	await f.tick(4);
+	expect(f.state).toMatchObject({
+		phase: "observing",
+		attempts: 0,
+		verifiedRevision: before,
+		certificateWait: { attempts: 4, resumeRejected: true },
+	});
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	f.roundTripState();
+	f.seed(ready);
+	await f.tick(1);
+	expect(f.state).toMatchObject({
+		phase: "rejected",
+		verifiedRevision: before,
+	});
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).not.toBeNull();
+	expect(
+		create.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+	).toHaveLength(0);
+	expect(
+		remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+	).toHaveLength(0);
 });
