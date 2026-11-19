@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { PilotProtocolErrorV1Schema } from "./errors.ts";
 
 const id = z.string().min(1).max(256);
 const timestamp = z.iso.datetime({ offset: true });
@@ -76,6 +75,14 @@ const response = (description: string, model: z.ZodType) => {
 	delete schema.$schema;
 	return { description, content: { "application/json": { schema } } };
 };
+const errorResponse = (description: string) => ({
+	description,
+	content: {
+		"application/json": {
+			schema: { $ref: "#/components/schemas/PilotProtocolErrorV1" },
+		},
+	},
+});
 export const operationsTaskOpenApiPathsV2 = {
 	"/api/v2/ops/tasks": {
 		get: {
@@ -96,10 +103,10 @@ export const operationsTaskOpenApiPathsV2 = {
 					"Task metadata, truncation or a source gap",
 					OperationsTasksV2Schema,
 				),
-				"400": response("Invalid bounded query", PilotProtocolErrorV1Schema),
-				"401": response("Authentication required", PilotProtocolErrorV1Schema),
-				"403": response("Not authorized", PilotProtocolErrorV1Schema),
-				"503": response("Query unavailable", PilotProtocolErrorV1Schema),
+				"400": errorResponse("Invalid bounded query"),
+				"401": errorResponse("Authentication required"),
+				"403": errorResponse("Not authorized"),
+				"503": errorResponse("Query unavailable"),
 			},
 		},
 	},

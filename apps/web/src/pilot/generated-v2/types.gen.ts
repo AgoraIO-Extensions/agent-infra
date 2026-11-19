@@ -9160,67 +9160,19 @@ export type GetOperationsTasksV2Errors = {
     /**
      * Invalid bounded query
      */
-    400: {
-        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
-        message: string;
-        retryable: true;
-        schemaVersion: 1;
-        traceId: string;
-    } | {
-        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
-        message: string;
-        retryable: false;
-        schemaVersion: 1;
-        traceId: string;
-    };
+    400: PilotProtocolErrorV1;
     /**
      * Authentication required
      */
-    401: {
-        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
-        message: string;
-        retryable: true;
-        schemaVersion: 1;
-        traceId: string;
-    } | {
-        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
-        message: string;
-        retryable: false;
-        schemaVersion: 1;
-        traceId: string;
-    };
+    401: PilotProtocolErrorV1;
     /**
      * Not authorized
      */
-    403: {
-        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
-        message: string;
-        retryable: true;
-        schemaVersion: 1;
-        traceId: string;
-    } | {
-        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
-        message: string;
-        retryable: false;
-        schemaVersion: 1;
-        traceId: string;
-    };
+    403: PilotProtocolErrorV1;
     /**
      * Query unavailable
      */
-    503: {
-        code: 'AGENT_BUSY' | 'AGENT_STARTING' | 'AGENT_UPDATING' | 'RUNTIME_UNAVAILABLE' | 'CONNECTION_UNAVAILABLE' | 'PROVIDER_RATE_LIMITED' | 'DEPENDENCY_UNAVAILABLE' | 'INTERNAL_ERROR' | 'UPLOAD_RATE_LIMITED';
-        message: string;
-        retryable: true;
-        schemaVersion: 1;
-        traceId: string;
-    } | {
-        code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
-        message: string;
-        retryable: false;
-        schemaVersion: 1;
-        traceId: string;
-    };
+    503: PilotProtocolErrorV1;
 };
 
 export type GetOperationsTasksV2Error = GetOperationsTasksV2Errors[keyof GetOperationsTasksV2Errors];

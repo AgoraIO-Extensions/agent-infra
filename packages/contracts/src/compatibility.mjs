@@ -7501,7 +7501,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			createHash("sha256")
 				.update(JSON.stringify(value.paths[taskPath]))
 				.digest("hex") ===
-				"ff0b5273181ceec48acf8882384c424fc7c0e39f12c9de8f4163e76a6c1fb3b3";
+				"912bf08730614b1fa08c6f01a4a61285c56894550a6daf85a37d8dc62239ccd0";
 		if (!valid(currentValue) || (taskPathWasPublished && !valid(previousValue)))
 			return ["removed or changed published operations task contract"];
 		const strip = (value) => {
