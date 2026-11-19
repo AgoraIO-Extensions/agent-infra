@@ -1775,6 +1775,23 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 - 目录只在已有原 Execution 时读取（[§9.3.1](#931-原生元数据读取授权)、[Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用)）。尚无原 Execution 的会话，包括首条消息前的新会话，不读取原生目录，也不为读取目录创建 Runtime Session 或 Execution（[Runtime HLD §7.1](HLD-agent-runtime-M1.md#71-session-生命周期)）；Web 在输入框说明发送首条消息后才能使用命令与 Skill。这是 M1 的确定行为，不属于能力缺口。
 
+显式 Skill 调用的三个事实分别记录，不能相互替代。
+
+| 事实 | 证据来源与含义 |
+| --- | --- |
+| Driver 字节校验 | Driver 按冻结版本的 manifest 和 Applied 绑定读取受控只读文件，核对文件身份、大小和 SHA-256。此事实确认提交前读取的字节。 |
+| 原生接受 | 固定 Driver 经受信原生接口提交结构化 Skill 选择，并用原生请求与 native Turn 的关联确认本次提交已被接受。 |
+| 实际加载 | 受保护 Runtime 证明所选资源字节由本次原生 Skill 注入进入同一 Turn 实际发送的模型上下文，并取得满足 [§11.6](#116-skill-hub版本绑定与-worker-装配) 的证据。 |
+
+确认原生接受前，Driver 必须按原调用核对冻结的 Skill Version、Applied generation、manifest 内资源标识及摘要，
+并将这些标识绑定到该次结构化提交。原生回执若携带绑定标识，须与冻结值一致。原生协议只回显名称或路径时，
+须由 Driver 使用受信请求关联证明收到的是本次提交的回执。仅有同名、同路径回显或无法唯一关联的回执时，
+原生接受保持未确认。已确认的接受只证明原生进程接纳了对应提交。
+
+目录发现、挂载、Turn 终态、模型自报和工具完成事件均不能代签实际加载。调用准入、业务终态和加载状态的关系
+见 [§11.6.4](#1164-重放故障与证据边界)。
+固定官方发行物缺少可信证据接缝时，按 [§10.11](#1011-codex-上游原生补丁与执行屏障) 记录能力缺口。
+
 #### 11.4.1 有状态原生命令
 
 本节定义 Codex 原生压缩的有状态命令合同，使用业务执行授权。命令发现及执行前的目录
@@ -1916,8 +1933,51 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 - 有界交付的固定 init 镜像由 Worker 写入同一 Workload Desired/Applied 的 `skillDeliveryImage`，与原 Skill generation 一起冻结；该字段只接受不可变 OCI 引用，且必须同时有非空 Skill 集合及其 Applied bindings。已验证的 Skill generation 未携带该字段时继续使用原 PVC 模式，恢复时即使原 Workload 身份已消失也不能改为有界交付。已有有界交付在新配置物化时沿用已验证的 init 镜像；已持久化的 candidate 不重新选择交付方式。此前没有 Skill generation 的 Agent，在新的配置修订中首次绑定 Skill 时可选择当前部署声明的有界交付；不能因 Agent 已运行而推断它已有 PVC Skill 挂载。Session 从原已验证 Desired 复制该字段，不能从调用方或当前 Worker 镜像重新推断。无 Skill 绑定时不添加交付字段或改变已有可写工作区挂载。
 - Platform Worker 消费带有 Skill Version、对象版本、manifest、digest/signature、目标相对路径和只读策略的不可变投影，写入并回读版本化 Workload Desired/Applied/恢复事实。调用方不能提交路径、URL、身份、Agent、Connection 或权限字段；Worker 不直接解析 Provider，也不执行未经 grant 的脚本。
 - Runtime 的 find_skills、install_skills 和 read_skills 仅作用于当前主体、Agent Version、Sandbox 和已批准 grant 的交集。初始 Prompt 只放有界 metadata（最多 150 项、约 30000 字符），正文和关联资源按需读取；读取结果必须包含实际包版本和加载证据。Runtime 不能自行改变 Hub 权威状态，不能静默跟随同名新版本。
-- Skill 的 Tool、Connection、文件、网络和脚本执行 grant 只能收敛既有授权；脚本默认关闭。当前权限失效、跨组织/Agent/Session、无实际加载证据、包不可用或工具结果无法核实时，调用拒绝或保持 unknown，不降级为普通文本。
+- Skill 的 Tool、Connection、文件、网络和脚本执行 grant 只能收敛既有授权；脚本默认关闭。调用继续校验当前权限、组织与 Agent/Session 归属、冻结包可用性及原有执行门禁。业务结果与加载证据按 [§11.6.4](#1164-重放故障与证据边界) 分别回读。
 - Skill Hub 的 API、事务、CAS、idempotency、outbox、audit 和 recovery 必须复用现有 Agent Configuration Revision 和 Execution/Worker fence；不建立第二套 Skill 状态机或调度循环。旧 Driver/Host 不支持该契约时显式返回不支持。
+
+显式 Skill 加载回执由受保护 Runtime 生成，绑定原主体及 Agent、Conversation、Execution、操作与该次尝试、
+Session 身份及代次、冻结的配置修订、Applied generation、不可变 Skill Version 和本次原生 Turn。
+回执携带 manifest 内受控的相对资源标识、实际送入模型上下文的该资源字节 SHA-256，以及关联的实际模型操作与
+model attempt 引用。相对资源标识由服务端从冻结 manifest 派生。原生 Thread/Turn ID 仅用于受限的内部关联，
+调用详情使用平台引用。
+
+确认加载须同时核对原授权范围与当前有效权限，匹配以上作用域及版本，将实际内容字节的摘要与冻结 manifest
+中的同一资源摘要比较，并证明该内容由当前原生 Turn 的 Skill 注入产生、随绑定的同一次模型尝试实际发送。
+传输中的诊断只可在现有受保护处理边界内比较字节。证据必须排除历史上下文中的同名或同版本内容、重放内容、
+调用方可构造的同形文本以及模型生成的内容。内容匹配、格式标记和固定输入位置只可辅助关联。来源、摘要或发送
+无法唯一确认时，按 [§11.6.4](#1164-重放故障与证据边界) 保留结果，并由对应 Driver 记录能力缺口。
+
+实际发送由平台的受保护模型传输确认。出站前，传输为每次 model attempt 生成仅在平台内部使用的一次性关联值，
+绑定最终出站请求体的 SHA-256、认证端点及本次尝试。持久发送屏障通过后，传输须确认已写出按 `Content-Length`
+声明的全部字节，或已写出分块或请求流的结束标记。随后须在同一连接、同一次 HTTP 请求交换上收到认证端点的
+`2xx` 响应，并按该模型调用协议验证响应体是本次调用的有效输出。对于流式响应，须核对有效输出及其完成标记。
+
+本期完整接收判据适用于部署配置声明的 sub2api 端点。生产声明中的 `sub2api` 使用
+`openai-responses-v1` 和 `/v1/responses`，`sub2api-messages` 使用 `anthropic-messages-v1` 和
+`/v1/messages`。两条路由分别核验。受保护传输按部署声明匹配端点标识、实际认证的目标 origin、请求路由和
+协议版本，并要求命中对应端点实现版本的核验记录。缺少声明、核验记录或匹配项时，保持 `LOAD_UNPROVEN`。
+
+两条路由都要求在请求体完整写出后，才从同一次 HTTP 请求交换收到认证端点的 `2xx` 和 `text/event-stream`
+响应。响应须包含同一调用的有效模型输出，并通过各自协议的 SSE 解析和终态校验。
+
+| 协议 | 完整接收判定所需的响应序列 |
+| --- | --- |
+| Responses | 有效的 `response.created`，随后是有效输出和 `response.completed`，终态通过响应校验。见 [Codex 事件投影](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/codex-model-transport.ts#L543-L612) 和 [完成事件判定](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/codex-model-transport.ts#L795-L810)。 |
+| Messages | 有效的 `message_start`，随后是有效输出、合法的 `message_delta` 停止原因和 `message_stop`，内容块均已关闭。见 [Messages 起始校验](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/claude-messages-stream.ts#L109-L128) 和 [终态校验](https://github.com/AgoraIO-Extensions/agent-infra/blob/20285b6bd47e5cf97617b449f703d7f32fdd551f/packages/agent-runtime/src/claude-messages-stream.ts#L328-L350)。 |
+
+上述事件用于判定响应序列。只有该端点经核验的协议保证完整接收并处理本次请求体后才会产生上述有效输出和终态，
+完整接收才成立。缺少所需事件、提前响应、非 `2xx`、连接中断或响应无法唯一关联时均为 `LOAD_UNPROVEN`。
+
+平台 Runtime 维护者在端点接入或升级时依据对应版本的权威协议或服务端实现核验这一保证，用契约测试确认请求体
+未完整读入时无法产生可用于确认的成功序列，并记录适用的端点、路由和版本。Relay 实现、协议版本或判据变化时，
+通过正式文档 PR 和对应测试夹具更新该记录。部署配置引用已核验记录，运行时只按声明匹配。
+平台按一次性关联值只为原尝试确认一次，无需外部 relay 签发回执。证据止于认证端点接收并处理该请求，模型是否
+使用其中某段内容、relay 后续是否转发及工具是否执行仍分别取证。平台只保留受限关联信息与摘要。
+
+仅有完整出站和普通 HTTP 响应，或出现提前响应、非 `2xx`、连接重置、超时、输出无法解析或无法与原请求唯一
+关联时，均保持 `LOAD_UNPROVEN`。持久化的 `started`、发起 `fetch` 及共享连接上其他请求或尝试的响应也不能
+用于确认。
 
 #### 11.6.1 包字节与摘要
 
@@ -1969,6 +2029,31 @@ S3 VersionId 使用原始、不透明的 UTF-8 值，非空且不能是未启用
 - metadata、成功审计、幂等结果或提交失败时，不暴露为可安装版本；上传对象保留隔离/未引用状态供原恢复机制处理。清理只处理可证明未被版本、配置或历史 Execution 引用的本操作对象版本，不能清除发布历史或借清理推进业务状态。
 - 业务 API、Runtime 与 Worker 不能接收 `verified`、`clean`、任意 source URL、调用方路径或权限声明来绕过该供应入口。目录与操作审计只含获准有界 metadata、受控引用、状态与原因码，不含 Skill 全文、普通 reason、对象地址、原始凭证或签名私钥。
 - 源代码测试、受控真实 PG/S3/扫描器与部署验收分别记录。包准入正向必须有实际归档、固定对象版本、manifest、真实签名及扫描证据；安装/挂载/加载/工具结果须再取得各自回执。合同、metadata 登记或固定安装包发现不代签完整 Skill Hub 与会话验收。
+
+显式调用在准入和执行过程中继续应用原有授权、版本和运行门禁。门禁拒绝沿原合同处理。业务操作结果确实无法
+确认时，才沿该操作的恢复合同保留 unknown。已授权执行缺少加载证据时，只将加载状态标为待核实
+（`LOAD_UNPROVEN`），已确认的业务终态仍按原合同回读。调用详情须在同一次回读中分别展示加载状态与业务
+终态。页面展示、结果聚合和审计均不得将 `LOAD_UNPROVEN` 记作 Skill 调用通过。加载证据是执行期事实，
+不能作为调用前置条件。真实工具结果沿原工具证据合同单独验收。
+
+显式 Skill 加载回执采用可独立协商的版本化 Runtime 事实及调用详情投影。Host、Worker、Store、API 和生成
+Client 先具备接收与回读能力，再启用可信生产者。旧事件和旧调用合同保持原语义。Host 只向已协商并具有兼容
+持久化路径的消费者交付新版事实。旧详情投影可保持原版本，加载状态只能按其可读取的证据表达。
+
+新版事实产生后，部署回滚、Worker/Store 接管和重连须原样保留已写入 Store 的事实、未确认 journal、稳定事件
+键和最后持久确认的 ACK 游标。只有能解码、持久化与幂等重放该流的 Worker/Store 组合才能接管含新版事实的流。
+不兼容时拒绝接管，保留原 journal 和 ACK，等待兼容链路恢复后从最后确认位置续读。禁止跳过尚未持久化的事实
+并确认共享游标，也不得把重放的同一事件确认成新事实。回滚不得降级已有事实的存储格式或重置游标。
+
+回执沿原 Runtime journal、Worker fence 和 ACK 持久交付到 Store。Worker 在已有事务中核对绑定、原授权
+与当前有效权限、执行顺序及事件身份，持久化成功后才确认游标。以原 Execution、操作与尝试、资源和 model attempt
+关联稳定事件键。同一事实重连时幂等回读，冲突拒绝。持久记录和调用详情只含受控标识、摘要、状态及受限原因。
+工具参数、普通 stdout、私有绝对路径、凭据、Skill 正文和模型请求正文不得进入回执、journal 或遥测。
+只有当前会话主体经原 Execution 读取授权后才能在调用详情读取对应投影。
+
+错误或失效版本、跨主体/会话/代次、在途撤销、摘要漂移均不能生成通过回执。发送前中断（即使已经持久化
+`started`）、发送结果不明、事件丢失或重连后缺少原受信记录时，加载状态保持 `LOAD_UNPROVEN`。只能沿原操作
+核实，禁止重发来补证。已持久的可信回执仅在再次通过当前读取授权后恢复。
 
 ## 12. 对话与长任务
 

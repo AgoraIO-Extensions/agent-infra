@@ -343,7 +343,13 @@ assembly 已通过 Invocation V3、Native V6 和 Driver V2 接通 state-changing
 
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
-每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和加载证据作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
+每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和已验证 Applied 绑定作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
+
+显式调用按工程 Spec 记录 Driver 字节校验、原生接受与实际加载三种事实。调用入口冻结选中的 Skill Version
+和 Applied generation。Driver 使用公开的结构化 Skill 输入提交原 native Turn，并按工程 Spec 核对原生接受关联。
+加载证据由执行期采集接缝提供。
+证据定义与版本约束见 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)
+和 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界)。
 
 本节源码与官方 SDK 声明属于静态证据；上游测试属于上游证据。运行证据须另列原生版本及发行摘要、受控 Skill 摘要、实际发现/调用、加载及工具事实、平台持久结果与浏览器回读。没有这些证据不得写“支持已验收”；本节不授权新增隔离探针或修改上游实现。
 
@@ -359,6 +365,23 @@ Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，
 | 串行与恢复 | 活跃/等待/unknown 时不发新 Turn；同键重投/异参冲突、受理响应丢失、原生 ACK 后失败、停止竞态、重启和 SSE 重连保持原操作及结果；不重复模型/工具副作用，不提前释放占用 |
 | 其余模板 | Claude/OpenCode/Pi 各按上表真实 SDK/ACP/RPC 路径核对发现、调用、加载/工具及终态；缺口绑定版本、原因、原 owner 与实施 AC，不能以四行 unsupported 结案 |
 | Skill Hub 挂载 | 真实控制面完成发布/审核/安装/Agent Version 绑定后，Worker Applied 与 Runtime 目录修订、按需读取和真实工具结果均绑定同一 Skill Version；同步、撤销、升级、回滚、重启和重复提交均保留可回读状态 |
+
+显式 Skill 调用的加载回执验收使用同一浏览器会话。选择一个固定版本并正常调用后，在调用详情核对三种事实、
+原 Execution 的实际加载回执及至少一次同一 Execution 的真实工具结果。刷新后从已持久证据恢复，检查重连
+不会新建 Turn、重复模型或工具调用，也不会把证据缺失显示为通过。
+
+负例覆盖选错或过期版本、跨用户/会话/代次、在途撤销、摘要漂移、历史上下文或调用方同形文本冒用，以及事件
+丢失、Runtime 重启与重连。发送负例分别模拟 `started` 已持久化但出站请求前中断，以及传输中断且缺少
+同一尝试的发送确认。发送关联正例使用保证完整接收才生成有效输出的认证端点。负例包括完整出站后的普通成功
+响应、提前响应、非 `2xx`、连接重置或超时、无法解析为本次调用输出、同一连接上另一请求的响应及前次尝试重放。
+另给已核验和未核验端点相同的合法 `2xx`、有效输出和 SSE 完成序列，只允许前者确认完整接收。以同一端点
+变更路由或协议版本验证匹配失败。对两条 sub2api 路由分别回放请求体尚未完整读入和缺少必要事件的情况。
+这些负例均须保持加载待核实。即使原调用业务已完成，调用详情、聚合和审计也不能据此记录 Skill 调用通过。
+原生接受另测同名或同路径的回显无法关联到原冻结提交的情况。
+
+兼容验收覆盖新版事实已写入 Store 但 ACK 丢失，以及仍有未确认 journal 的两种回放。分别用旧 Worker、
+旧 Store 和兼容组合接管或重连，核对不兼容组合拒绝接管，恢复后原事实仍可回读，且没有跳过未持久化事件、
+重复新增事实或倒退 ACK 游标。同步检查回执和遥测的字段范围。验收口径见 [工程 Spec §11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界)。
 
 [#992](https://github.com/AgoraIO-Extensions/agent-infra/issues/992) 以 [#991](https://github.com/AgoraIO-Extensions/agent-infra/issues/991) 契约评审合入为 native blocker；仅文档完成不签收功能或原票 AC。实施前逐 hunk 交接：Web owner 在 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 唯一输入框/时间线消费生成 Client，遵循 [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) 固定 `agent-infra/index.html`、`screens/chat.html` IA，旧 Pilot 及按当前实现生成的变体不作依据；[#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 拥有任务 API/Store；[#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508) 拥有公共执行/Host/控制恢复；Runtime 原 owner 拥有各 Driver；正式装配归 [#504](https://github.com/AgoraIO-Extensions/agent-infra/issues/504)。本新增能力不反向阻塞这些票，不接管其未完成验收，也不重定义 OpenCode 工具来源或原控制恢复条款。
 
@@ -538,6 +561,18 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 - Runtime 事实复用 8.2 的日志、游标、fence 和重放确认。Worker 在同一用例事务内保存事件及必要平台审计，成功后才确认 Runtime 游标；失败时保留未确认事实并重试保存，不重新执行原操作。平台审计为查询权威，执行侧未确认记录仅用于可靠交付与恢复，不能提前回收。
 - 平台 API/Dispatch 自产的受理、等待、投递和结果阶段与 Runtime 事实使用同一 Execution 关联。真实操作及其新尝试按稳定引用分别计数，重连/恢复不重复统计；Connection 记录在独立入口按真实调用核对。
 - OpenTelemetry/Pino 导出故障只标记采集/导出异常，不改写任务业务结果；持久意图或必要审计失败按上述可靠性规则处理，两者不能混同。普通任务与 Eval 正文、附件、思考、证明和凭证不进入事实元数据、日志/指标/Trace 或审计；合法任务输入/输出通过受控业务数据路径保存与查询。
+
+Codex 显式 Skill 调用复用现有受保护模型传输作为采集接缝。传输先核对已认证的原生进程、Thread/Turn 和
+当前模型准入，在受限请求解码及持久发送屏障内，基于当前 Turn 的可信原生注入来源核对实际注入资源并关联本次
+model attempt。屏障保存 `started` 后，采集器按工程 Spec 在传输侧关联完整出站请求与对应响应。回执沿现有 Runtime 事实交付，
+字段、授权、恢复和待核实规则以 [工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)
+及 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界) 为准。
+
+固定 Codex 0.153.0 的离线模型请求观察显示 `SKILL.md` 字节进入结构化 Skill Turn。公开 app-server 的路径回显
+和 Turn 事件只提供接受及生命周期证据。若受保护传输无法证明当前注入来源，按
+[工程 Spec §10.11](SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
+登记需原生组装边界提供的关联与摘要事实，在正式接缝补齐之前保持 `LOAD_UNPROVEN`。
+协议验证见 [#4226 的固定发行物回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/4226#issuecomment-7003370147)。
 
 #### 8.5.1 Codex 原生执行屏障
 
