@@ -130,6 +130,61 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
+	it("appends reclamation views to the published 0087 history without rewriting it", async () => {
+		const database = await startPostgresTestDatabase("reclamation-upgrade");
+		const client = postgres(database.databaseUrl, { max: 1 });
+		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0087-"));
+		try {
+			const sourceFolder = resolve(
+				import.meta.dirname,
+				"../../../migrations/platform",
+			);
+			await cp(sourceFolder, folder, { recursive: true });
+			const journalPath = resolve(folder, "meta/_journal.json");
+			const journal = JSON.parse(await readFile(journalPath, "utf8"));
+			journal.entries = journal.entries.filter(
+				(entry: { idx: number }) => entry.idx <= 87,
+			);
+			await writeFile(journalPath, JSON.stringify(journal));
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+				migrationsFolder: folder,
+			});
+			const before =
+				await client`select hash, created_at from platform_migrations.history order by id`;
+			const checkpoint = readMigrationFiles({ migrationsFolder: folder }).at(
+				-1,
+			);
+			expect(before.at(-1)).toEqual({
+				hash: checkpoint?.hash,
+				created_at: String(checkpoint?.folderMillis),
+			});
+			expect(
+				await client`select to_regnamespace('platform_reclamation_read') as projection`,
+			).toEqual([{ projection: null }]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			const after =
+				await client`select hash, created_at from platform_migrations.history order by id`;
+			expect(after.slice(0, before.length)).toEqual(before);
+			expect(after.slice(before.length)).toEqual([
+				{
+					hash: migrations.at(-1)?.hash,
+					created_at: String(migrations.at(-1)?.folderMillis),
+				},
+			]);
+			expect(
+				await client`select count(*)::int as count from pg_views where schemaname='platform_reclamation_read'`,
+			).toEqual([{ count: 3 }]);
+		} finally {
+			await client.end();
+			await database.stop();
+			await rm(folder, { recursive: true, force: true });
+		}
+	}, 120_000);
+
 	it("upgrades the main 0023 history to application targets without rewriting it", async () => {
 		const database = await startPostgresTestDatabase(
 			"migration-0023-application-targets",
@@ -1450,6 +1505,7 @@ describe("approved Platform migration gaps", () => {
 	beforeEach(async () => {
 		client = postgres(databaseUrl, { max: 1 });
 		// This file's isolated test database is never the retained acceptance PG.
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema if exists platform cascade`;
 		await client`drop schema if exists platform_migrations cascade`;
 		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-approved-gap-"));
@@ -1696,6 +1752,7 @@ describe("approved Platform migration gaps", () => {
 	);
 
 	it("upgrades an actually executed original Task28 source and preserves its history", async () => {
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema platform cascade`;
 		await client`drop schema platform_migrations cascade`;
 		journal.entries = journal.entries.filter((row) => row.idx < 29);
@@ -1967,6 +2024,7 @@ describe("published Relay authority migration", () => {
 
 	beforeEach(async () => {
 		client = postgres(databaseUrl, { max: 1 });
+		await client`drop schema if exists platform_reclamation_read cascade`;
 		await client`drop schema if exists platform cascade`;
 		await client`drop schema if exists platform_migrations cascade`;
 		folder = await mkdtemp(resolve(tmpdir(), "agent-infra-relay-migration-"));
@@ -2043,6 +2101,7 @@ describe("published Relay authority migration", () => {
 			85,
 			86,
 			87,
+			88,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2132,9 +2191,17 @@ describe("published Relay authority migration", () => {
 			idx: 85,
 			tag: "0085_conversation_event_terminal_cursor",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 86)).toMatchObject({
+			idx: 86,
+			tag: "0086_workload_certificate_reconciliation",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 87)).toMatchObject({
 			idx: 87,
 			tag: "0087_operations_request_inventory",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 88,
+			tag: "0088_session_workspace_reclamation_read",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),

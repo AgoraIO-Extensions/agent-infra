@@ -32,6 +32,7 @@ beforeAll(async () => {
 	sql = postgres(database.databaseUrl, { max: 1 });
 }, 120_000);
 beforeEach(async () => {
+	await sql`drop schema if exists platform_reclamation_read cascade`;
 	await sql`drop schema if exists platform cascade`;
 	await sql`drop schema if exists platform_migrations cascade`;
 });
