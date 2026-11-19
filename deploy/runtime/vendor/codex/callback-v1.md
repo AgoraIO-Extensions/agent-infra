@@ -1,5 +1,7 @@
 # Codex 原生强制回调 v1
 
+本文记录历史私有回调协议。当前 M1 的使用边界以[工程 Spec §10.11](../../../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)为准。
+
 这是固定上游补丁与 TypeScript Driver 的私有接缝。权威要求引用
 [Runtime HLD 8.5.1](../../../../docs/architecture/HLD-agent-runtime-M1.md#851-codex-原生执行屏障)，
 结构以 [JSON Schema](callback-v1.schema.json) 为准。不是公开 app-server API 或第二任务循环。
