@@ -4,6 +4,8 @@ import { PilotProtocolErrorV1Schema } from "./errors.ts";
 const count = z.number().int().safe().nonnegative();
 const timestamp = z.string().datetime({ offset: true });
 const identifier = z.string().min(1).max(256);
+export const operationsSessionRequestCoverageHeaderV2 =
+	"X-Agent-Infra-Ops-Session-Requests";
 
 export const OperationsScopeV2Schema = z.strictObject({
 	clusterId: identifier,
@@ -74,6 +76,14 @@ export const OperationsBudgetV2Schema = z.strictObject({
 	limits: OperationsQuantitiesV2Schema.nullable(),
 	reserveUsage: OperationsQuantitiesV2Schema,
 	sessionUsage: OperationsQuantitiesV2Schema,
+	sessionRequestCoverage: z
+		.strictObject({
+			cpuCores: count,
+			memoryBytes: count,
+			storageBytes: count,
+			unscopedSessions: count,
+		})
+		.optional(),
 	unknownUsage: OperationsQuantitiesV2Schema,
 	counts: z.strictObject({
 		unclaimedReserves: count,
@@ -502,14 +512,24 @@ export const operationsResourceOpenApiPathsV2 = {
 			operationId: "getOperationsResourcesV2",
 			summary: "Read administrator resource observations",
 			security: [{ PlatformSession: [] }],
-			parameters: Object.entries(OperationsResourceQueryV2Schema.shape).map(
-				([name, schema]) => ({
-					name,
-					in: "query",
+			parameters: [
+				...Object.entries(OperationsResourceQueryV2Schema.shape).map(
+					([name, schema]) => ({
+						name,
+						in: "query",
+						required: false,
+						schema: parameterSchema(schema),
+					}),
+				),
+				{
+					name: operationsSessionRequestCoverageHeaderV2,
+					in: "header",
 					required: false,
-					schema: parameterSchema(schema),
-				}),
-			),
+					description:
+						"Use 1 to receive Session request coverage. Earlier clients receive the legacy response shape.",
+					schema: { type: "string", enum: ["1"] },
+				},
+			],
 			responses: {
 				"200": response(
 					"Resource observations and individual source health",

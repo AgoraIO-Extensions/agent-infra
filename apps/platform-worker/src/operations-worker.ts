@@ -3,6 +3,7 @@ import {
 	queryOperationsPrometheusV2,
 	readOperationsConfigurationV2,
 } from "@agent-infra/observability/operations";
+import type { OperationsInventoryV2 } from "@agent-infra/platform-core";
 import { PostgresOperationsResourceStoreV2 } from "@agent-infra/platform-store";
 import { collectOperationsSnapshotV2 } from "./operations-collector.js";
 import { createOperationsKubernetesReaderV2 } from "./operations-kubernetes.js";
@@ -24,11 +25,15 @@ export function createOperationsWorkerV2(input: {
 	const collect = async () => {
 		const configuration = input.configuration;
 		const bindings = await input.store.readBindings().catch(() => []);
+		let requestInventory: OperationsInventoryV2 | undefined;
 		const snapshot = await collectOperationsSnapshotV2({
 			...configuration,
 			bindings,
 			read: input.read,
 			signal,
+			onRequestInventory: (value) => {
+				requestInventory = value;
+			},
 		});
 		try {
 			const platform = await input.store.read({}, signal);
@@ -117,7 +122,7 @@ export function createOperationsWorkerV2(input: {
 		}
 		snapshot.refreshSeconds = configuration.intervalSeconds;
 		snapshot.generatedAt = new Date().toISOString();
-		if (!signal.aborted) await input.store.write(snapshot);
+		if (!signal.aborted) await input.store.write(snapshot, requestInventory);
 	};
 	const tick = () => {
 		if (signal.aborted || pending) return;

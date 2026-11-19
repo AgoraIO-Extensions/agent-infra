@@ -1,0 +1,1 @@
+ALTER TABLE "platform"."operations_resource_snapshots" ADD COLUMN "request_inventory" jsonb;

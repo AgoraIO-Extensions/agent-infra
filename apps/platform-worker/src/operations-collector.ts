@@ -7,6 +7,7 @@ import {
 import {
 	emptyOperationsResourcesV2,
 	type OperationsBindingV2,
+	type OperationsInventoryV2,
 	quantityRatioV1,
 } from "@agent-infra/platform-core";
 import { serviceResourceName } from "./multi-service-runtime.js";
@@ -206,6 +207,7 @@ export async function collectOperationsSnapshotV2(input: {
 	) => Promise<{ items: unknown[]; truncated: boolean }>;
 	signal?: AbortSignal;
 	now?: () => string;
+	onRequestInventory?: (inventory: OperationsInventoryV2) => void;
 }): Promise<OperationsResourcesV2> {
 	const signal = AbortSignal.any([
 		input.signal ?? new AbortController().signal,
@@ -437,7 +439,10 @@ export async function collectOperationsSnapshotV2(input: {
 		const uid = text(meta.uid);
 		const name = text(meta.name);
 		const version = text(meta.resourceVersion);
-		if (!uid || !name || !version) continue;
+		if (!uid || !name || !version) {
+			incomplete.add("pods");
+			continue;
+		}
 		const labels = object(meta.labels);
 		const annotations = object(meta.annotations);
 		const placement = nodePlacements.get(text(spec.nodeName) ?? "");
@@ -695,7 +700,10 @@ export async function collectOperationsSnapshotV2(input: {
 		const uid = text(meta.uid);
 		const name = text(meta.name);
 		const version = text(meta.resourceVersion);
-		if (!uid || !name || !version) continue;
+		if (!uid || !name || !version) {
+			incomplete.add("volumes");
+			continue;
+		}
 		const referencesClaim = (spec: ObjectRecord) =>
 			list(spec.volumes).some(
 				(entry) => object(entry.persistentVolumeClaim).claimName === name,
@@ -1166,6 +1174,8 @@ export async function collectOperationsSnapshotV2(input: {
 		cacheEvidence: 2000,
 		events: 1000,
 	} as const;
+	for (const dropped of snapshot.resources.slice(limits.resources))
+		incomplete.add(dropped.kind === "Pod" ? "pods" : "volumes");
 	for (const [key, limit] of Object.entries(limits) as [
 		keyof typeof limits,
 		number,
@@ -1195,5 +1205,14 @@ export async function collectOperationsSnapshotV2(input: {
 			hit: entry.hit === "not-applicable" ? "not-applicable" : "unknown",
 		}));
 	}
-	return OperationsResourcesV2Schema.parse(snapshot);
+	const result = OperationsResourcesV2Schema.parse(snapshot);
+	input.onRequestInventory?.({
+		podsObservedAt:
+			loaded.has("pods") && !incomplete.has("pods") ? identityObservedAt : null,
+		claimsObservedAt:
+			loaded.has("volumes") && !incomplete.has("volumes")
+				? identityObservedAt
+				: null,
+	});
+	return result;
 }

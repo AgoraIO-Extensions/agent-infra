@@ -168,6 +168,147 @@ export interface OperationsChargeV2 {
 	readonly hasConversation: boolean;
 }
 
+export interface OperationsSessionAllocationV2 {
+	readonly sandboxId: string;
+	readonly resourceName: string;
+	readonly stopped: boolean;
+	readonly noRetainedPvc: boolean;
+	readonly configurationRevision: number | null;
+}
+
+export interface OperationsInventoryV2 {
+	readonly podsObservedAt: string | null;
+	readonly claimsObservedAt: string | null;
+}
+
+const sessionDimensions = ["cpuCores", "memoryBytes", "storageBytes"] as const;
+
+function projectSessionRequests(
+	input: {
+		allocations: readonly OperationsSessionAllocationV2[];
+		observed: readonly OperationsResourceV2[];
+		bound: readonly OperationsResourceV2[];
+		unscopedSessions: number;
+		podsComplete: boolean;
+		claimsComplete: boolean;
+	},
+	result: OperationsBudgetV2,
+): void {
+	const coverage = { cpuCores: 0, memoryBytes: 0, storageBytes: 0 };
+	const totals = { ...coverage, ephemeralStorageBytes: null };
+	const bySandbox = new Map<string, number[]>();
+	const byName = new Map<string, number[]>();
+	const byUid = new Map<string, number[]>();
+	const index = (map: Map<string, number[]>, key: string, i: number) => {
+		const entries = map.get(key);
+		if (entries) entries.push(i);
+		else map.set(key, [i]);
+	};
+	for (const [i, resource] of input.observed.entries()) {
+		if (resource.namespace !== result.namespace) continue;
+		index(byName, resource.name, i);
+		index(byUid, resource.uid, i);
+		if (resource.sandboxId) index(bySandbox, resource.sandboxId, i);
+	}
+	const freshSample = (
+		indexes: readonly number[],
+		allocation: OperationsSessionAllocationV2,
+	) => {
+		const first =
+			indexes[0] === undefined ? undefined : input.bound[indexes[0]];
+		if (!first?.identityObservedAt || allocation.configurationRevision === null)
+			return undefined;
+		const aliases = byUid.get(first.uid) ?? [];
+		return indexes.length === aliases.length &&
+			indexes.every((i) => input.observed[i]?.uid === first.uid) &&
+			aliases.every((i) => {
+				const sample = input.bound[i];
+				return (
+					sample?.uid === first.uid &&
+					sample.kind === first.kind &&
+					sample.name === first.name &&
+					sample.namespace === result.namespace &&
+					sample.revision === allocation.configurationRevision &&
+					sample.ownership === "agent" &&
+					sample.role === "sandbox" &&
+					sample.sandboxId === allocation.sandboxId &&
+					sample.resourceVersion === first.resourceVersion &&
+					sample.identityObservedAt === first.identityObservedAt &&
+					sample.phase === first.phase &&
+					sessionDimensions.every(
+						(dimension) =>
+							sample.requests[dimension] === first.requests[dimension],
+					)
+				);
+			})
+			? first
+			: undefined;
+	};
+	const counted = new Set<string>();
+	for (const allocation of input.allocations) {
+		const candidates = [
+			...new Set([
+				...(bySandbox.get(allocation.sandboxId) ?? []),
+				...(byName.get(allocation.resourceName) ?? []),
+			]),
+		];
+		const pods = candidates.filter((i) => input.observed[i]?.kind === "Pod");
+		const claims = candidates.filter(
+			(i) => input.observed[i]?.kind === "PersistentVolumeClaim",
+		);
+		const pod = input.podsComplete ? freshSample(pods, allocation) : undefined;
+		const claim = input.claimsComplete
+			? freshSample(claims, allocation)
+			: undefined;
+		const stopped =
+			allocation.stopped && allocation.configurationRevision !== null;
+		const podAbsent = stopped && input.podsComplete && pods.length === 0;
+		const take = (resource: OperationsResourceV2 | undefined) => {
+			if (!resource || counted.has(resource.uid)) return undefined;
+			counted.add(resource.uid);
+			return resource.requests;
+		};
+		const compute = take(pod);
+		const storage = take(claim?.phase === "Bound" ? claim : undefined);
+		const values = {
+			cpuCores: podAbsent ? 0 : (compute?.cpuCores ?? null),
+			memoryBytes: podAbsent ? 0 : (compute?.memoryBytes ?? null),
+			storageBytes:
+				stopped &&
+				input.claimsComplete &&
+				allocation.noRetainedPvc &&
+				claims.length === 0
+					? 0
+					: (storage?.storageBytes ?? null),
+		};
+		if (stopped && storage?.storageBytes != null)
+			result.counts.retainedStorage++;
+		if (sessionDimensions.some((dimension) => values[dimension] === null))
+			result.unaccountedCount++;
+		for (const dimension of sessionDimensions) {
+			const value = values[dimension];
+			if (value === null) continue;
+			totals[dimension] += value;
+			coverage[dimension]++;
+		}
+	}
+	result.counts.sessions = input.allocations.length;
+	result.sessionRequestCoverage = {
+		...coverage,
+		unscopedSessions: input.unscopedSessions,
+	};
+	result.unaccountedCount += input.unscopedSessions;
+	result.sessionUsage = totals;
+	for (const dimension of sessionDimensions) {
+		if (
+			input.unscopedSessions > 0 ||
+			coverage[dimension] !== result.counts.sessions ||
+			(dimension !== "cpuCores" && !Number.isSafeInteger(totals[dimension]))
+		)
+			result.sessionUsage[dimension] = null;
+	}
+}
+
 export function projectOperationsBudgetV2(input: {
 	namespace: string;
 	revision: number | null;
@@ -175,9 +316,9 @@ export function projectOperationsBudgetV2(input: {
 	updatedAt: string | null;
 	limits: SessionSandboxResourceBudgetV1 | null;
 	charges: readonly OperationsChargeV2[];
-	unaccountedCount: number;
-	unaccountedReserves?: number;
+	unaccountedReserves: number;
 	unaccountedSessions?: number;
+	sessionRequests?: Parameters<typeof projectSessionRequests>[0];
 }): OperationsBudgetV2 {
 	const zero = (): OperationsQuantitiesV2 => ({
 		cpuCores: 0,
@@ -203,9 +344,11 @@ export function projectOperationsBudgetV2(input: {
 		sessionUsage: zero(),
 		unknownUsage: zero(),
 		counts: { unclaimedReserves: 0, sessions: 0, retainedStorage: 0 },
-		unaccountedCount: input.unaccountedCount,
+		unaccountedCount:
+			input.unaccountedReserves + (input.unaccountedSessions ?? 0),
 	};
 	for (const charge of input.charges) {
+		if (input.sessionRequests && charge.hasAllocation) continue;
 		const isReserve =
 			charge.hasReserve &&
 			!charge.claimed &&
@@ -218,7 +361,8 @@ export function projectOperationsBudgetV2(input: {
 				: result.unknownUsage;
 		if (charge.hasAllocation) result.counts.sessions += 1;
 		if (isReserve) result.counts.unclaimedReserves += 1;
-		if (charge.computeReleased) result.counts.retainedStorage += 1;
+		if (!input.sessionRequests && charge.computeReleased)
+			result.counts.retainedStorage += 1;
 		if (!charge.resources) {
 			bucket.cpuCores = null;
 			bucket.memoryBytes = null;
@@ -246,7 +390,9 @@ export function projectOperationsBudgetV2(input: {
 			ephemeralStorageBytes: null,
 		};
 	}
-	if (input.unaccountedSessions) {
+	if (input.sessionRequests)
+		projectSessionRequests(input.sessionRequests, result);
+	else if (input.unaccountedSessions) {
 		result.counts.sessions += input.unaccountedSessions;
 		result.sessionUsage = {
 			cpuCores: null,

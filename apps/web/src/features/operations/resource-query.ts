@@ -3,6 +3,7 @@ import {
 	OperationsHistoryV2Schema,
 	type OperationsResourceQueryV2,
 	OperationsResourcesV2Schema,
+	operationsSessionRequestCoverageHeaderV2,
 } from "@agent-infra/contracts/pilot";
 import {
 	getOperationsHistoryV2,
@@ -26,6 +27,7 @@ export async function fetchOperationsResources(
 ) {
 	const result = await getOperationsResourcesV2({
 		query: input,
+		headers: { [operationsSessionRequestCoverageHeaderV2]: "1" },
 		signal,
 		throwOnError: false,
 	});

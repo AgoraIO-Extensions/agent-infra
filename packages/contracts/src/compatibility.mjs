@@ -7426,9 +7426,8 @@ function normalizeSkillHubProjectRecovery4109(previous, current) {
 
 // #4178: pin the two administrator reads and their bounded response contracts.
 // Strip only this reviewed addition before independent historical compatibility checks.
-// #4201 adds optional placement, ownership-reason, and quota-source fields to
-// the existing response schema. The previous artifact may contain the original
-// #4178 schema while the current artifact must contain the reviewed #4201 schema.
+// #4201 adds optional placement, ownership-reason, and quota-source fields.
+// #4172 adds optional per-dimension Session request coverage.
 function normalizeOperations4178(previous, current) {
 	const paths = ["/api/v2/ops/history", "/api/v2/ops/resources"];
 	const schemas = ["OperationsHistoryV2", "OperationsResourcesV2"];
@@ -7456,11 +7455,19 @@ function normalizeOperations4178(previous, current) {
 		matches(
 			value,
 			"8fc45f4384b35dcf0e0c05332994fd604dfbae825b94859e54d11eee83a9653e",
+		) ||
+		matches(
+			value,
+			"f60427983ca3e4c2a515bb632c7119b1d79949bf03460958d2838777f8af5af5",
+		) ||
+		matches(
+			value,
+			"f04e3f3ce0657eda36c2f134f8a3c089487543795d39b0daa23ae63a0076cecb",
 		);
 	if (
 		!matches(
 			current,
-			"8fc45f4384b35dcf0e0c05332994fd604dfbae825b94859e54d11eee83a9653e",
+			"f04e3f3ce0657eda36c2f134f8a3c089487543795d39b0daa23ae63a0076cecb",
 		) ||
 		(present(previous) && !previousMatches(previous))
 	)
