@@ -169,12 +169,12 @@ describe("Platform PostgreSQL migration foundation", () => {
 			const after =
 				await client`select hash, created_at from platform_migrations.history order by id`;
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after.slice(before.length)).toEqual([
-				{
-					hash: migrations.at(-1)?.hash,
-					created_at: String(migrations.at(-1)?.folderMillis),
-				},
-			]);
+			expect(after.slice(before.length)).toEqual(
+				migrations.slice(before.length).map((migration) => ({
+					hash: migration.hash,
+					created_at: String(migration.folderMillis),
+				})),
+			);
 			expect(
 				await client`select count(*)::int as count from pg_views where schemaname='platform_reclamation_read'`,
 			).toEqual([{ count: 3 }]);
@@ -2105,6 +2105,7 @@ describe("published Relay authority migration", () => {
 			86,
 			87,
 			88,
+			89,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
