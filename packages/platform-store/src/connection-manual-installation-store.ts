@@ -813,6 +813,15 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		row: Row,
 		receipt: ConnectionRegistrationReceiptV1,
 	) {
+		// Hold the association-wide lock until the receipt and its next command commit.
+		const lockScope = JSON.stringify([
+			"connection-manual-consumer",
+			row.agent_id,
+			Number(row.association_revision),
+		]);
+		await tx.execute(
+			sql`select pg_advisory_xact_lock(hashtextextended(${lockScope}, 0))`,
+		);
 		const others = await tx.execute(sql`
 			select distinct consumer_id from platform.connection_manual_installations
 			where agent_id=${row.agent_id as string} and association_revision=${Number(row.association_revision)}
@@ -829,7 +838,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		await tx.execute(sql`
 			update platform.connection_manual_installations
 			set registration_state='closed', receipt=${JSON.stringify(receipt)}::jsonb,
-				consumer_id=${receipt.consumerId}, client_id=${receipt.clientId}, instance_id=${receipt.instanceId},
+				client_id=${receipt.clientId}, instance_id=${receipt.instanceId},
 				revoke_state='pending', revision=revision+1, updated_at=clock_timestamp()
 			where authorization_id=${row.id as string}
 		`);

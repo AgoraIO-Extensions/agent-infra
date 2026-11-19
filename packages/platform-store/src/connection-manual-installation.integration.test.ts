@@ -17,7 +17,15 @@ import {
 } from "@agent-infra/contracts/runtime/connection-install-node";
 import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.js";
 import { PostgresConnectionInstallationAuthorizationTransactionV1 } from "./connection-installation.js";
 import { PostgresConnectionManualInstallationStoreV1 } from "./connection-manual-installation-store.js";
@@ -221,6 +229,7 @@ async function templateFor(
 		connectionAgentId?: string;
 		podUid?: string;
 		claimFence?: number;
+		worker?: string;
 		registrationKey?: string;
 	} = {},
 ) {
@@ -244,7 +253,10 @@ async function templateFor(
 			connectionAgentId: options.connectionAgentId ?? "connection-agent-a",
 			revision: 1,
 		},
-		claim: { owner: "worker-a", fence: options.claimFence ?? 3 },
+		claim: {
+			owner: options.worker ?? "worker-a",
+			fence: options.claimFence ?? 3,
+		},
 		target: {
 			deploymentIdentity,
 			hostRef: f.hostRef,
@@ -285,17 +297,25 @@ function receiptFor(
 }
 
 /** Drives prepare to a delivered request; returns the facts the Host would read back. */
-async function prepareDelivered() {
-	const projection = await begin();
+async function prepareDelivered(
+	user = "alice",
+	suffix = "a",
+	worker = "worker-a",
+) {
+	const projection = await begin(user, suffix);
 	const authorizationId = projection.authorizationId;
-	const prepare = await claimFirst("prepare");
+	const prepare = await claimFirst("prepare", `execution-${suffix}`, worker);
 	expect(prepare.claimed?.command.command).toBe("prepare");
-	const { template, registrationKey } = await templateFor(authorizationId);
+	const { template, registrationKey } = await templateFor(authorizationId, {
+		user,
+		suffix,
+		worker,
+	});
 	const supplyAttemptId = randomUUID();
 	const supply = await manual.fixSupply({
 		commandId: prepare.item.commandId,
 		attemptId: prepare.attemptId,
-		attemptOwner: "worker-a",
+		attemptOwner: worker,
 		command: "prepare",
 		template,
 		registrationKey,
@@ -326,7 +346,7 @@ async function prepareDelivered() {
 		await manual.settleSupply({
 			commandId: prepare.item.commandId,
 			attemptId: prepare.attemptId,
-			attemptOwner: "worker-a",
+			attemptOwner: worker,
 			command: "prepare",
 			authorizationId,
 			supplyAttemptId,
@@ -338,7 +358,7 @@ async function prepareDelivered() {
 		command: "prepare",
 		commandId: prepare.item.commandId,
 		attemptId: prepare.attemptId,
-		attemptOwner: "worker-a",
+		attemptOwner: worker,
 		template,
 		supplyAttemptId,
 		registrationKey,
@@ -347,7 +367,7 @@ async function prepareDelivered() {
 		await manual.commitDelivery({
 			commandId: prepare.item.commandId,
 			attemptId: prepare.attemptId,
-			attemptOwner: "worker-a",
+			attemptOwner: worker,
 			command: "prepare",
 			authorizationId,
 			deliveryDigest,
@@ -359,7 +379,7 @@ async function prepareDelivered() {
 		command: {
 			commandId: prepare.item.commandId,
 			attemptId: prepare.attemptId,
-			attemptOwner: "worker-a",
+			attemptOwner: worker,
 			command: "prepare" as const,
 			requestDigest: deliveryDigest,
 			registrationKeyHash: template.registration.registrationKeyHash,
@@ -620,6 +640,106 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(pending.map((entry) => entry.command)).toEqual(["begin"]);
 		// The static drain never sees manual installations.
 		expect(await installations.listPending(32, ["execution-a"])).toEqual([]);
+	});
+
+	it("pins one Consumer when two installations settle concurrently", async () => {
+		const first = await prepareDelivered();
+		const second = await prepareDelivered("bob", "bob", "worker-b");
+		const settle = (run: typeof first, consumerId: string) =>
+			manual.settleRegistration({
+				commandId: run.prepare.item.commandId,
+				attemptId: run.prepare.attemptId,
+				attemptOwner: run.commandReadback.command.attemptOwner,
+				command: "prepare",
+				authorizationId: run.authorizationId,
+				response: {
+					schemaVersion: 1,
+					outcome: "registered",
+					commandId: run.prepare.item.commandId,
+					receipt: receiptFor(run.template, run.registrationKey, {
+						consumerId,
+					}),
+				},
+			});
+
+		// Pause each successful update after its Consumer check. Observe both
+		// transactions waiting before allowing the first one to commit.
+		await client`create function platform.pause_consumer_settlement() returns trigger
+			language plpgsql as $$
+			begin
+				perform pg_advisory_xact_lock(4206, 4199);
+				return new;
+			end
+			$$`;
+		await client`create trigger pause_consumer_settlement before update on platform.connection_manual_installations
+			for each row when (new.registration_state = 'registered')
+			execute function platform.pause_consumer_settlement()`;
+		const pending: ReturnType<typeof settle>[] = [];
+		const blocker = await client.reserve();
+		try {
+			const [lock] =
+				await blocker`select pg_backend_pid() as pid, pg_advisory_lock(4206, 4199)`;
+			pending.push(settle(first, "consumer-first"));
+			await vi.waitFor(
+				async () => {
+					const blocked = await client`select pid from pg_stat_activity
+					where ${lock?.pid} = any(pg_blocking_pids(pid))`;
+					expect(blocked).toHaveLength(1);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+			pending.push(settle(second, "consumer-second"));
+			await vi.waitFor(
+				async () => {
+					const [blocked] =
+						await client`select count(*)::int as count from pg_locks
+					where database = (select oid from pg_database where datname = current_database())
+						and locktype = 'advisory' and not granted`;
+					expect(blocked?.count).toBe(2);
+				},
+				{ timeout: 3000, interval: 20 },
+			);
+		} finally {
+			await blocker`select pg_advisory_unlock(4206, 4199)`;
+			blocker.release();
+			await Promise.allSettled(pending);
+			await client`drop trigger pause_consumer_settlement on platform.connection_manual_installations`;
+			await client`drop function platform.pause_consumer_settlement()`;
+		}
+		expect(await Promise.all(pending)).toEqual(["registered", "unknown"]);
+
+		const [accepted] =
+			await client`select registration_state, consumer_id from platform.connection_manual_installations where authorization_id=${first.authorizationId}`;
+		expect(accepted).toMatchObject({
+			registration_state: "registered",
+			consumer_id: "consumer-first",
+		});
+		const [rejected] = await client`
+			select a.status, m.registration_state, m.consumer_id, m.configuration, m.revoke_state,
+				m.receipt->>'consumerId' as rejected_consumer
+			from platform.connection_manual_installations m
+			join platform.connection_installation_authorizations a on a.id=m.authorization_id
+			where m.authorization_id=${second.authorizationId}`;
+		expect(rejected).toMatchObject({
+			status: "revoked",
+			registration_state: "closed",
+			consumer_id: null,
+			configuration: null,
+			revoke_state: "pending",
+			rejected_consumer: "consumer-second",
+		});
+		expect(
+			(await manual.listPending(32, ["execution-a", "execution-bob"])).map(
+				({ command, authorizationId }) => [command, authorizationId],
+			),
+		).toEqual(
+			expect.arrayContaining([
+				["begin", first.authorizationId],
+				["revoke", second.authorizationId],
+			]),
+		);
+		const next = await prepareDelivered();
+		expect(await settle(next, "consumer-first")).toBe("registered");
 	});
 
 	it("never binds a mismatching, replaced or late receipt", async () => {
