@@ -1,5 +1,5 @@
 {
-  "id": "0cf33cb9-d0b6-4dd6-b85b-565d08f0f1b6",
+  "id": "471ef9a6-39b7-48d7-bc3b-c455d5c077a8",
   "prevId": "cd7633c5-905e-4a8a-9aa5-2508c73395de",
   "version": "7",
   "dialect": "postgresql",
@@ -1741,108 +1741,6 @@
       },
       "isRLSEnabled": false
     },
-    "platform.connection_host_supplies": {
-      "name": "connection_host_supplies",
-      "schema": "platform",
-      "columns": {
-        "agent_id": {
-          "name": "agent_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "association_revision": {
-          "name": "association_revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attempt_id": {
-          "name": "attempt_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "approval_source_ref": {
-          "name": "approval_source_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "approval_source_revision": {
-          "name": "approval_source_revision",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "system_fingerprint": {
-          "name": "system_fingerprint",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ref": {
-          "name": "ref",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "connection_host_supplies_agent_id_agents_id_fk": {
-          "name": "connection_host_supplies_agent_id_agents_id_fk",
-          "tableFrom": "connection_host_supplies",
-          "tableTo": "agents",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "connection_host_supplies_agent_id_association_revision_pk": {
-          "name": "connection_host_supplies_agent_id_association_revision_pk",
-          "columns": [
-            "agent_id",
-            "association_revision"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "connection_host_supply_state": {
-          "name": "connection_host_supply_state",
-          "value": "\n\t\t\t\"platform\".\"connection_host_supplies\".\"state\" in ('writing', 'available', 'cleanup_pending', 'cleanup_unknown', 'closed')\n\t\t\tand (\"platform\".\"connection_host_supplies\".\"state\" <> 'available' or (\"platform\".\"connection_host_supplies\".\"ref\" is not null and \"platform\".\"connection_host_supplies\".\"revision\" is not null))\n\t\t"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "platform.connection_installation_authorizations": {
       "name": "connection_installation_authorizations",
       "schema": "platform",
@@ -2782,6 +2680,28 @@
           ],
           "isUnique": false,
           "where": "\"platform\".\"conversation_events\".\"source\"='runtime' and \"platform\".\"conversation_events\".\"event_type\"='execution.operation' and \"platform\".\"conversation_events\".\"event_payload\"->'fact'->>'kind'='model'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "conversation_event_terminal_cursor_idx": {
+          "name": "conversation_event_terminal_cursor_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "conversation_cursor",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"platform\".\"conversation_events\".\"event_type\" = 'execution.status' and \"platform\".\"conversation_events\".\"event_payload\"->>'status' in ('completed', 'failed', 'cancelled')",
           "concurrently": false,
           "method": "btree",
           "with": {}

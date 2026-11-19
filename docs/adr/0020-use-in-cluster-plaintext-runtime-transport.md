@@ -12,11 +12,11 @@ server TLS 契约要求部署为每个 Agent 级 Workload 和每个 Session Sand
 
 ## 决策
 
-1. Worker 到 RuntimeHost 的 business、verified control、readiness 和 Session Sandbox 调用都使用集群内明文 HTTP。
+1. Worker 到 RuntimeHost 的原 business、verified control 和 readiness 使用集群内明文 HTTP，适用于 Agent Workload 与 Session Sandbox。Connection 安装的 TLS 边界见 [工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
 2. 只连接服务端解析出的精确 origin `http://<Service>.<namespace>.svc:<port>`。拒绝其他 scheme、userinfo、query、hash 和 redirect，调用方不能覆盖 origin。
 3. 执行授权不变：Host 继续校验部署 service token，并按 [Spec §9.3](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文) 校验 signed readiness 和业务/控制 Grant 的签名、对象、用途、时间、幂等和 fence。
-4. Runtime Pod 的 NetworkPolicy ingress 只放行 Worker；Agent 级 Workload 和 Session Sandbox 都适用。
-5. 不签发 Runtime CA 或 server leaf，不挂载 `runtime-tls` Secret，kubelet readiness 使用 HTTP。
+4. Agent 级 Workload 和 Session Sandbox 的原业务、控制及就绪端口，NetworkPolicy ingress 只放行 Worker 选择器。Connection 安装专用端口的 ingress 见 [工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
+5. 原业务、控制及就绪通道的装配不签发 Runtime CA 或 server leaf，也不挂载 `runtime-tls` Secret。kubelet readiness 使用 HTTP。安装专用 TLS 与挂载见 [工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
 
 ## 风险与边界
 
@@ -26,7 +26,7 @@ server TLS 契约要求部署为每个 Agent 级 Workload 和每个 Session Sand
 
 ## 迁移
 
-旧 TLS Pod 在新的期望 Pod 规格下判定为 drift，由既有 fenced 调谐替换，不保留双栈或 HTTPS 兼容层。替换期间仍沿原持久流程停止新准入、核实原执行；旧控制不可达时保持 pending/unknown，不重放副作用。
+原业务、控制或就绪通道仍使用旧 TLS 装配时，按这三个通道的新期望规格判定 drift，由既有 fenced 调谐替换，不保留双栈或 HTTPS 兼容层。安装专用端口和挂载按 [工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应) 核验。替换期间仍沿原持久流程停止新准入、核实原执行；旧控制不可达时保持 pending/unknown，不重放副作用。
 
 ## 备选方案
 

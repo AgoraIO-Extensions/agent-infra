@@ -604,6 +604,11 @@ export const conversationEvents = platformSchema.table(
 			.where(
 				sql`${table.source}='runtime' and ${table.eventType}='execution.operation' and ${table.eventPayload}->'fact'->>'kind'='model'`,
 			),
+		index("conversation_event_terminal_cursor_idx")
+			.on(table.conversationId, table.conversationCursor)
+			.where(
+				sql`${table.eventType} = 'execution.status' and ${table.eventPayload}->>'status' in ('completed', 'failed', 'cancelled')`,
+			),
 		index("conversation_event_conversation_cursor_idx").on(
 			table.conversationId,
 			table.conversationCursor,
