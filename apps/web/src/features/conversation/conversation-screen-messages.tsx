@@ -597,10 +597,15 @@ export function ConversationMessages({
 				{reply}
 			</div>
 		);
-		return { key: message.messageId, createdAt: message.createdAt, content };
+		return { createdAt: message.createdAt, content };
 	});
-	for (const answer of answers) {
-		if (answer.replyToMessageId !== null || !answer.executionId) continue;
+	const standaloneAnswers = answers
+		.filter((answer) => answer.replyToMessageId === null)
+		.sort(
+			(left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+		);
+	for (const answer of standaloneAnswers) {
+		if (!answer.executionId) continue;
 		const status = answerStatus(events, answer.executionId, answer.status);
 		const text = answerText(history, events, answer.executionId, answer.text);
 		const bodyKind = text
@@ -613,8 +618,10 @@ export function ConversationMessages({
 					hasEarlier,
 				);
 		if (bodyKind === "not_loaded") notLoaded.push(answer.messageId);
-		timelineItems.push({
-			key: answer.messageId,
+		const following = timelineItems.findIndex(
+			(item) => Date.parse(item.createdAt) > Date.parse(answer.createdAt),
+		);
+		timelineItems.splice(following < 0 ? timelineItems.length : following, 0, {
 			createdAt: answer.createdAt,
 			content: (
 				<div className="exchange" key={answer.messageId}>
@@ -692,13 +699,7 @@ export function ConversationMessages({
 				</div>
 			)}
 			{/* Z-01：设计稿的空会话时间线只有「加载更早内容」，不放欢迎空态卡。 */}
-			{timelineItems
-				.sort(
-					(left, right) =>
-						Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-						left.key.localeCompare(right.key),
-				)
-				.map(({ content }) => content)}
+			{timelineItems.map(({ content }) => content)}
 			{trailingExecutions.map((id, index) => (
 				<div className="exchange" key={id}>
 					{/* 时间线里没有对应提问的回复按顺序编号，同名控件仍可区分（N-12）。 */}
