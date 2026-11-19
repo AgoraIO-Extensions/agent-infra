@@ -2880,11 +2880,13 @@ Principal、client/实例和批准的 publication 合同构造同一版本的非
 为发布输入。启动时只需受保护入口及部署信任，不要求预装完整 client 配置或静态回执文件。
 
 **动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
-Platform Store 在核实同一原 confirm 及该证据后，用原安装 CAS 持久写入启用许可。许可绑定
-原用户、Agent、安装、原 confirm、当前 claim、Host/Pod、代次、fence、描述符及提交摘要。
-动态 reader 须经获准的只读权威回读确认该许可当前有效，并同时通过既有本地提交和授权校验，
-才可使用 MCP 材料。Host 本地提交已成而 Platform 尚未记许可时，保留本地提交，MCP 保持
-关闭。许可已持久化而回包丢失时，以当前许可和原 Host 的提交事实判定可用性。
+Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
+启用许可。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
+代次、resourceFence、描述符、提交摘要和许可期限。原 claim 正常结束后，已提交许可仍可由同一
+安装的后续获准 Execution 使用，按本节“Worker 权威回读”复核当前执行与许可绑定。动态 reader
+必须同时通过许可回读、既有本地提交和授权校验，才可使用 MCP 材料。Host 本地提交已成而 Platform
+尚未记许可时，保留本地提交，MCP 保持关闭。许可已持久化而回包丢失时，以当前许可和原 Host 的
+提交事实判定可用性。
 
 confirm 结果不明时，原用户只能在有效原 claim 内只读核实同一命令、原绑定、Host 私有提交
 和 Platform 许可。服务端仅在原授权及全部绑定当前有效、证据完全匹配时 CAS 补记同一启用
@@ -2956,10 +2958,10 @@ Session Adapter 只引用已批准的 Secret，不读取其内容；同镜像的
 `awaiting_verification`，直至按本节核实实际 OAuth 绑定回执。
 
 **Worker 权威回读。** Host 通过部署固定的同 release Worker 内部 Service 只读核实当前安装。
-API 负责入口身份和安装授权。Worker 用已认证的请求定位原执行，通过 Core/Store 读取当前
-事实。本机 FileRuntimeStore 只核验本机绑定。两种回读均检查原用户与当前使用权、
-Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批、原 outbox claim/fence
-及期限，以及实际 Host ref、Pod UID、Sandbox、sessionGeneration 与 resourceFence。
+API 负责入口身份和安装授权。Worker 用已认证的请求定位适用执行，通过 Core/Store 读取当前
+事实。本机 FileRuntimeStore 只核验本机绑定。各用途均检查原用户与当前使用权、Agent/Consumer、
+Conversation、安装与关联修订、系统审批及实际 Host ref、Pod UID、Sandbox、sessionGeneration
+与 resourceFence。供应确认和安装命令回读同时核对原 Execution、原 outbox claim/fence 及期限。
 
 - 供应确认使用独立的供应投递认证用途。Worker 对照已持久化的原供应投递记录，逐项核对
   供应引用、修订、投递 attempt 和摘要，并确认该 attempt 仍可确认。对已确认的同一
@@ -2967,13 +2969,20 @@ Agent/Consumer、Conversation/Execution、安装与关联修订、系统审批�
 - 安装命令使用独立的安装命令认证用途。prepare、status、begin 等命令各按自身的已验证
   签名定位命令记录。Worker 对照该命令的持久 sending、命令引用、请求摘要、attempt
   owner/ID/期限，以及该命令绑定的当前供应引用和修订。
+- 已提交许可使用独立的许可读取用途。Worker 按当前获准 Execution 的短期证明和持久授权，
+  复核当前 Execution 的 claim/fence、期限及其与同一安装和 Host/Sandbox 的绑定。以 Platform
+  Store 中该安装已提交的启用许可为权威，核对许可期限、原 confirm 来源、描述符与提交摘要。
+  原 confirm 的 claim 作为来源保留，许可读取不要求该 claim 仍活动或原命令仍为 sending。
+  读取只返回本次核实结果，无权签发、补记或续期许可。撤权、过期、关联或安装修订变更、
+  Host/Pod、Sandbox、代次或 fence 漂移及任一绑定无法核实，均拒绝材料读取与使用。
 
 响应只返回允许、拒绝或不可用及对应的非秘密关联字段。获准 Worker 以 Platform Store
 为权威，因此回读可由任一获准 Worker 处理，不依赖原 API 副本。在途记录只用于加强核验。
 
 传输复用 [§9.3.1](#931-原生元数据读取授权) 的固定目标、短期证明、有界超时和响应绑定模式。
 Host 使用部署批准的 Sandbox/Pod 隔离身份及短期证明。证明按用途分别绑定原供应投递
-attempt 或本次安装命令。每次请求使用独立 nonce 或挑战并核对响应绑定。旧响应与
+attempt、本次安装命令，或当前获准 Execution 和同一安装的已提交许可。每次请求使用独立
+nonce 或挑战并核对响应绑定。旧响应与
 metadata、业务 Grant 或 callback-only 证明均不能用于安装回读。复用同 release Worker
 已批准的路径时必须验证 TLS 和调用身份。否则使用专用 TLS 端口及最小 ingress/egress，
 精确限定 namespace、selector 和端口。权限隔离沿 [§17](#17-安全基线)。
@@ -3253,6 +3262,10 @@ status 单独替换原用户、Agent 或安装时，Host 须在读取材料及�
 首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
 可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
 补记冲突，断言保持 unknown、无许可时不可用、各分支均不重复换码。
+原 confirm 的 claim 正常结束后，验证同一安装及原 Host/Sandbox 上的后续获准 Execution
+能按自己的当前 claim 只读核验并使用已提交许可。原 claim 结束前未提交许可时，后续
+Execution 不得签发或补记。分别验证当前执行未获准、撤权、过期、关联或安装修订变更，
+以及 Host/Pod、Sandbox、代次或 fence 漂移均关闭 MCP。
 
 生产安装验收包括供应方实际输出、可信 SecretRef、合法确认和领取、跨 Session/代次、
 错 state/issuer/resource、重放、撤权及 unknown，以及最终 Linux 文件、内存与 FD 保护。
