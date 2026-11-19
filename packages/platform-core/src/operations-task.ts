@@ -1,8 +1,45 @@
-import type { OperationsTasksV2 } from "@agent-infra/contracts/pilot";
 import { isExactExecutionFailureCodeV1 } from "./execution-failure.js";
 
-type Task = OperationsTasksV2["tasks"][number];
-type Evidence = Task["evidence"][number];
+interface Evidence {
+	stage:
+		| "acceptance"
+		| "queue"
+		| "dispatch"
+		| "execution"
+		| "result"
+		| "runtime"
+		| "model"
+		| "tool"
+		| "verification";
+	state:
+		| "accepted"
+		| "waiting"
+		| "submitted"
+		| "processing"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "unknown"
+		| "started";
+	observedAt: string;
+	startedAt: string | null;
+	finishedAt: string | null;
+	durationMs: number | null;
+	errorCode: string | null;
+}
+
+interface Task {
+	executionId: string;
+	status:
+		| "waiting"
+		| "submitted"
+		| "processing"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "unknown";
+	evidence: Evidence[];
+}
 
 export interface OperationsTaskFactV2 {
 	kind: string;
