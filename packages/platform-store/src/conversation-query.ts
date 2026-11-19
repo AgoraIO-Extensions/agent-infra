@@ -955,17 +955,10 @@ async function readExecutions(
 					: database`
 				(e.execution_id, e.status::text) in (
 					select execution_id, event_payload ->> 'status'
-					from (
-						-- Stream the scoped cursor range once using the existing index.
-						-- Keep the journal filter outside the ordered range scan.
-						select execution_id, event_type, event_payload
-						from platform.conversation_events
-						where conversation_id = ${conversationId}
-							and conversation_cursor >= ${upperEventCursor}
-						order by conversation_cursor
-						offset 0
-					) upper_window
-					where event_type = 'execution.status'
+					from platform.conversation_events
+					where conversation_id = ${conversationId}
+						and conversation_cursor >= ${upperEventCursor}
+						and event_type = 'execution.status'
 						and event_payload ->> 'status' in ('completed', 'failed', 'cancelled')
 				)
 			`
