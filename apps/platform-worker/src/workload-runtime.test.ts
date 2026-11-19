@@ -8693,6 +8693,97 @@ async function readyHostnameFixture(
 }
 
 it.each([
+	["hostname removed", true, false, true],
+	["hostname selected", false, true, true],
+	["hostname retained", true, true, true],
+	["compatibility mode", true, false, false],
+] as const)(
+	"checks the verified multi-service route before rollback (%s)",
+	async (_scenario, initialHostname, currentHostname, writes) => {
+		const configuration = hostnameConfiguration("multi");
+		const f = initialHostname
+			? (await readyHostnameFixture(configuration)).f
+			: fixture({ registry: workloadRegistryFixture() }, { configuration });
+		if (!initialHostname) await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		const verified = f.state?.verified;
+		const originalIngress = await f.client.read<V1Ingress>(
+			"Ingress",
+			hostnameWorkloadName,
+		);
+		assert(verified && originalIngress?.metadata?.uid);
+		const workloadUids = () =>
+			[...f.resources]
+				.filter(
+					([, resource]) =>
+						resource.kind === "Deployment" || resource.kind === "Service",
+				)
+				.map(([key, resource]) => [key, resource.metadata?.uid]);
+		const originalWorkloadUids = workloadUids();
+		expect(originalWorkloadUids).toHaveLength(4);
+		const deleteResource = vi.spyOn(f.client, "delete");
+		const createResource = vi.spyOn(f.client, "create");
+		Object.assign(f.options, {
+			policy: {
+				...(currentHostname ? hostnameTestPolicy : workloadTestPolicy),
+				platformAuthAnnotations: {},
+			},
+		});
+		// A candidate that requires platform identity cannot start on this deployment.
+		f.setConfiguration({
+			...configuration,
+			revision: 2,
+			source: {
+				...configuration.source,
+				identityResponsibility: "platform-managed",
+			},
+		});
+		f.setManagement({
+			...f.management,
+			status: "available",
+			revision: 2,
+			workloadRevision: 2,
+			fence: 2,
+		});
+
+		await f.tick(2, writes);
+		if (writes && initialHostname !== currentHostname) {
+			expect(f.state).toMatchObject({
+				phase: "closing",
+				candidate: verified,
+				retainedFailure: { rollbackRouteRejected: true },
+			});
+			await f.tick(3, writes);
+			expect(f.state).toMatchObject({
+				phase: "failed",
+				verified,
+				retainedFailure: { rollbackRouteRejected: true },
+			});
+			expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+			expect(
+				deleteResource.mock.calls.map(([resource]) => [
+					resource.kind,
+					resource.metadata?.uid,
+				]),
+			).toEqual([["Ingress", originalIngress.metadata.uid]]);
+			expect(createResource).not.toHaveBeenCalled();
+		} else {
+			expect(f.state).toMatchObject({
+				phase: "rejected",
+				rollback: true,
+				candidate: verified,
+			});
+			expect(
+				(await f.client.read("Ingress", hostnameWorkloadName))?.metadata?.uid,
+			).toBe(originalIngress.metadata.uid);
+			expect(deleteResource).not.toHaveBeenCalled();
+			expect(createResource).not.toHaveBeenCalled();
+		}
+		expect(workloadUids()).toEqual(originalWorkloadUids);
+	},
+);
+
+it.each([
 	["single", "ready"],
 	["multi", "ready"],
 	["single", "promoting"],
