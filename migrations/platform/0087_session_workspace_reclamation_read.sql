@@ -19,7 +19,10 @@ AS $$
   SELECT CASE WHEN jsonb_typeof(value) = 'object' THEN (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
     FROM jsonb_each(CASE WHEN jsonb_typeof(value) = 'object' THEN value ELSE '{}'::jsonb END)
     WHERE key IN ('kind', 'namespace', 'name', 'uid', 'resourceVersion', 'controllerUid')
-      AND jsonb_typeof(value) IN ('string', 'number', 'boolean', 'null')) ELSE 'null'::jsonb END;
+      AND jsonb_typeof(value) IN ('string', 'number', 'boolean', 'null'))
+    || CASE WHEN jsonb_typeof(value->'controllerUid') IN ('object', 'array')
+      THEN '{"controllerUid":null}'::jsonb ELSE '{}'::jsonb END
+  ELSE 'null'::jsonb END;
 $$;
 --> statement-breakpoint
 CREATE FUNCTION platform_reclamation_read.stop_receipt(value jsonb)
@@ -62,7 +65,9 @@ AS $$
         'preconditions', platform_reclamation_read.identity(item->'preconditions')
       )
       || CASE WHEN item ? 'absence'
-        THEN jsonb_build_object('absence', platform_reclamation_read.identity(item->'absence'))
+        THEN jsonb_build_object('absence',
+          CASE WHEN jsonb_typeof(item->'absence') IN ('object', 'null')
+            THEN platform_reclamation_read.identity(item->'absence') ELSE 'true'::jsonb END)
         ELSE '{}'::jsonb END
       ORDER BY ord), '[]'::jsonb)
     FROM jsonb_array_elements(value) WITH ORDINALITY AS e(item, ord)
@@ -77,18 +82,27 @@ AS $$
   SELECT CASE WHEN jsonb_typeof(value) = 'object' THEN
     (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
     FROM jsonb_each(CASE WHEN jsonb_typeof(value) = 'object' THEN value ELSE '{}'::jsonb END)
-    WHERE key IN ('status', 'failureCode')
+    WHERE key = 'status'
       AND jsonb_typeof(value) IN ('string', 'number', 'boolean', 'null'))
+    -- Keep malformed field presence as JSON null so Core rejects it without seeing its contents.
+    || CASE WHEN value ? 'failureCode' THEN jsonb_build_object('failureCode',
+      platform_reclamation_read.scalar(value->'failureCode')) ELSE '{}'::jsonb END
     || jsonb_build_object('resources', CASE WHEN jsonb_typeof(value->'resources') = 'array' THEN (
       SELECT coalesce(jsonb_agg(platform_reclamation_read.identity(item) ORDER BY ord), '[]'::jsonb)
       FROM jsonb_array_elements(value->'resources') WITH ORDINALITY AS e(item, ord)
     ) ELSE 'null'::jsonb END)
     || CASE WHEN value ? 'sourceStop' THEN jsonb_build_object('sourceStop', platform_reclamation_read.stop_receipt(value->'sourceStop')) ELSE '{}'::jsonb END
     || CASE WHEN value ? 'deletionProgress' THEN jsonb_build_object('deletionProgress', platform_reclamation_read.deletion_progress(value->'deletionProgress')) ELSE '{}'::jsonb END
-    || CASE WHEN value ? 'workspaceSnapshot' THEN jsonb_build_object('workspaceSnapshot', (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
-    FROM jsonb_each(CASE WHEN jsonb_typeof(value->'workspaceSnapshot') = 'object' THEN value->'workspaceSnapshot' ELSE '{}'::jsonb END)
-    WHERE key IN ('podUid', 'imageDigest', 'outcome', 'attempt', 'durationMs')
-      AND jsonb_typeof(value) IN ('string', 'number', 'boolean', 'null'))) ELSE '{}'::jsonb END
+    || CASE WHEN value ? 'workspaceSnapshot' THEN jsonb_build_object('workspaceSnapshot', (
+      SELECT CASE WHEN value->'workspaceSnapshot' = projected THEN projected ELSE 'null'::jsonb END
+      FROM (
+        SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) AS projected
+        FROM jsonb_each(CASE WHEN jsonb_typeof(value->'workspaceSnapshot') = 'object'
+          THEN value->'workspaceSnapshot' ELSE '{}'::jsonb END) AS e
+        WHERE e.key IN ('podUid', 'imageDigest', 'outcome', 'attempt', 'durationMs')
+          AND jsonb_typeof(e.value) IN ('string', 'number', 'boolean', 'null')
+      ) snapshot
+    )) ELSE '{}'::jsonb END
   ELSE 'null'::jsonb END;
 $$;
 --> statement-breakpoint

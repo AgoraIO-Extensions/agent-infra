@@ -579,8 +579,15 @@
     {
       "idx": 86,
       "version": "7",
-      "when": 1795070273744,
-      "tag": "0086_session_workspace_reclamation_read",
+      "when": 1795073517728,
+      "tag": "0086_workload_certificate_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1795091842175,
+      "tag": "0087_session_workspace_reclamation_read",
       "breakpoints": true
     }
   ]

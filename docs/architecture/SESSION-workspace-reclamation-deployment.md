@@ -24,7 +24,7 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
 
 ### 生产 dry-run 数据库身份
 
-先通过正式 App 发布执行 `0086_session_workspace_reclamation_read` 迁移，并使用包含该版本
+先通过正式 App 发布执行 `0087_session_workspace_reclamation_read` 迁移，并使用包含该版本
 查询的 Worker 镜像运行一次性 Job。该迁移建立只读投影视图，不创建登录账号。
 查询权限如下，具体列以[角色脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql)
 为准。
@@ -44,7 +44,10 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    平台迁移则使用应用角色。创建登录角色和核对有效权限由 PostgreSQL 管理员单独执行一次。
 2. 角色应为 `agent_infra_reclamation_ro`、`NOLOGIN`、默认事务只读、没有角色成员资格。
    角色脚本会对包括 `PUBLIC` 在内的有效权限进行检查，发现正文、凭据、原始 JSON、
-   非授权对象和写权限即回滚。使用批准的私下凭据流程生成随机密码，在管理员的交互
+   非授权对象和写权限即回滚，检查也覆盖可写序列、large object 等函数的有效权限。
+   默认事务只读可被会话覆盖。若角色仍通过 `PUBLIC` 继承可写函数的执行权，角色创建
+   会回滚。暂停流程，由数据库负责人审核共享 ACL 的影响并取得批准，再确认可用的只读边界。
+   使用批准的私下凭据流程生成随机密码，在管理员的交互
    psql 会话中用 `\password agent_infra_reclamation_ro` 设置密码，避免明文进入 SQL、
    命令参数和日志。随后在同一管理员入口执行
    `ALTER ROLE agent_infra_reclamation_ro LOGIN VALID UNTIL '<本次窗口的 UTC 结束时间>';`，
@@ -53,14 +56,18 @@ Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为�
    Secret `agent-infra-reclamation-dry-run-db`，键为 `url`。用 `--from-file=url=<文件路径>`
    提供内容，Job 只用 `secretKeyRef` 将该键注入 `PLATFORM_DATABASE_URL`。
    禁止在 Git、Helm values、回执或共享日志记录 URL。回读 Secret 仅查名称和键名。
+   Job 绑定一次性 ServiceAccount。其 Role 和 RoleBinding 只授权该 namespace 内获准候选
+   PVC 的 `get`，用 `resourceNames` 限定候选名，仅使用返回的 metadata。该身份无 PVC
+   `list`、`watch`、写权限或 Secret API 权限。
 4. 用该连接回读 `current_user`、`current_database()` 和 `default_transaction_read_only`；
    确认用户、库名和只读参数与计划一致。从视图读取所需列，并用
    `has_column_privilege` 验证无法读取 `outbox_items.payload`、消息正文和凭据列。
    用 `has_table_privilege` 核对业务表写权限均为 false。仅在权限回读通过后执行 dry-run。
-5. 结束或回滚时，停止 Job 并确认该角色连接已退出，移除本次临时 Secret。管理员连接
-   同一 Platform DB，执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
-   该脚本先确认角色没有对象所有权，再撤销授权并 `DROP ROLE`。确认 `role_removed=true`，
-   以及 Job 和 Secret 已退出。保留迁移视图，供以后经批准的窗口使用。
+5. 结束或回滚时，删除 Job 并确认该角色连接已退出，删除本次临时 Secret、
+   ServiceAccount、Role 和 RoleBinding。分别 GET 这些对象并确认均已不存在。
+   管理员连接同一 Platform DB，执行[撤权脚本](../../deploy/ack/operator/session-workspace-reclamation-db-ro-drop.sql)。
+   该脚本先确认角色没有对象所有权，再撤销授权并 `DROP ROLE`。确认 `role_removed=true`。
+   保留迁移视图，供以后经批准的窗口使用。
 
 ### 候选清单的排除规则
 

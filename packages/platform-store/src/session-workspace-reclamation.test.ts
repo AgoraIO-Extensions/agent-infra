@@ -123,18 +123,72 @@ beforeEach(async () => {
 		values('stopped-observed','session',null,'agent','user','conversation.sandbox.observed','trace-stop','request-stop',now()-interval '2 minutes',
 			${sql.json({ sandboxId, sessionGeneration: 1, resourceFence: 2, status: "stopped" })})`;
 });
+const roleSql = readFile(
+	new URL(
+		"../../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql",
+		import.meta.url,
+	),
+	"utf8",
+);
+
+// This ACL adjustment is only for the disposable PostgreSQL test instance.
+async function restrictTestDatabaseFunctions() {
+	await sql`do $$
+	declare f record;
+	begin
+		for f in select p.oid::regprocedure as signature from pg_proc p
+			where p.pronamespace = 'pg_catalog'::regnamespace
+			and (p.proname in ('lo_creat','lo_create','lo_from_bytea','lo_import','lo_export',
+				'lo_open','lo_put','lowrite','lo_truncate','lo_truncate64','lo_unlink','pg_logical_emit_message'))
+		loop
+			execute format('revoke execute on function %s from public', f.signature);
+		end loop;
+	end;
+	$$`;
+}
+
 describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
-	it("runs dry-run under the operator role without access to raw payloads or writes", async () => {
-		const roleSql = await readFile(
-			new URL(
-				"../../../deploy/ack/operator/session-workspace-reclamation-db-ro.sql",
-				import.meta.url,
-			),
-			"utf8",
-		);
+	it("refuses to provision a role that inherits PostgreSQL write-capable functions", async () => {
 		// Match the Platform database ACL established by ACK bootstrap.
-		await sql.unsafe("revoke all on database platform_test from public");
-		await sql.unsafe(roleSql);
+		await sql`revoke all on database platform_test from public`;
+		try {
+			await expect(sql.unsafe(await roleSql)).rejects.toThrow(
+				"reclamation reader has unexpected effective privileges",
+			);
+		} finally {
+			await sql`rollback`;
+		}
+		expect(
+			await sql`select oid from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
+		).toEqual([]);
+	});
+
+	it.each(["SELECT", "SELECT (value)"])(
+		"rejects extra %s in the projection schema",
+		async (privilege) => {
+			await restrictTestDatabaseFunctions();
+			await sql`create view platform_reclamation_read.extra as select 1 as value`;
+			try {
+				await sql.unsafe(
+					`grant ${privilege} on platform_reclamation_read.extra to public`,
+				);
+				await expect(sql.unsafe(await roleSql)).rejects.toThrow(
+					"reclamation reader has unexpected effective privileges",
+				);
+				await sql`rollback`;
+				expect(
+					await sql`select oid from pg_roles where rolname = 'agent_infra_reclamation_ro'`,
+				).toEqual([]);
+			} finally {
+				await sql`rollback`;
+				await sql`drop view platform_reclamation_read.extra`;
+			}
+		},
+	);
+
+	it("runs dry-run under the operator role without access to raw payloads or writes", async () => {
+		await restrictTestDatabaseFunctions();
+		await sql.unsafe(await roleSql);
 		await sql`alter role agent_infra_reclamation_ro login password 'reclamation-fixture'`;
 		const url = new URL(db.databaseUrl);
 		url.username = "agent_infra_reclamation_ro";
@@ -176,6 +230,9 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 				"select * from platform.conversation_messages",
 				"select * from platform.platform_api_credentials",
 				"update platform.conversations set status = 'unavailable'",
+				"create table public.reclamation_probe (id integer)",
+				"select pg_catalog.lo_create(0)",
+				"select pg_catalog.lo_from_bytea(0, ''::bytea)",
 			]) {
 				await expect(
 					reader.begin("read write", (tx) => tx.unsafe(query)),
@@ -203,15 +260,102 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		await sql`insert into platform.outbox_items(id,trace_id,request_id,scope_type,scope_id,operation,payload,status,available_at,created_at,updated_at)
 			values('reconcile-duplicate','trace-2','request-2','conversation','session','conversation.sandbox.reconcile.v1',${sql.json({ lifecycle })},'succeeded',now(),now()-interval '2 minutes',clock_timestamp())`;
 		const candidates = await store.candidates();
-		const {
-			uid: _uid,
-			resourceVersion: _resourceVersion,
-			...candidate
-		} = target;
+		const { resourceVersion: _resourceVersion, ...candidate } = target;
 		expect(candidates).toEqual([candidate]);
 		await sql`update platform.outbox_items set updated_at=clock_timestamp() where id='reconcile'`;
 		expect(await store.candidates()).toEqual([candidate]);
 	});
+	it("excludes a same-name PVC with a replacement UID", async () => {
+		const api = createSessionWorkspaceReclamationV1(store, {
+			async read(name) {
+				expect(name).toBe(target.name);
+				return { uid: "replacement", resourceVersion: "3" };
+			},
+			async delete() {
+				throw new Error("dry-run attempted deletion");
+			},
+		});
+		expect(await api.dryRun()).toEqual([]);
+	});
+
+	it.each([
+		{ failureCode: { privateValue: "synthetic" } },
+		{
+			workspaceSnapshot: {
+				podUid: "source-pod",
+				imageDigest: `sha256:${"0".repeat(64)}`,
+				outcome: "completed",
+				attempt: 1,
+				extra: "synthetic",
+			},
+		},
+	])(
+		"rejects malformed source evidence on both projection and original-table paths",
+		async (invalid) => {
+			const pod = { ...pvcIdentity, kind: "Pod", uid: "source-pod" };
+			const receipt = {
+				...stopReceipt,
+				removed: [
+					{
+						resource: pod,
+						preconditions: {
+							uid: pod.uid,
+							resourceVersion: pod.resourceVersion,
+						},
+						absence: {
+							kind: pod.kind,
+							namespace: pod.namespace,
+							name: pod.name,
+						},
+					},
+				],
+			};
+			const source = {
+				...lifecycle.source,
+				observation: { status: "observed", resources: [pod, pvcIdentity] },
+			};
+			const intent = {
+				...lifecycle,
+				source,
+				stopReceipt: receipt,
+				deletionProgress: [
+					{
+						...receipt.removed[0],
+						schemaVersion: 1,
+						state: "absent",
+						deleteAttemptId: "fixture",
+						deleteAttempted: true,
+						deleteCallResult: "acknowledged",
+						sourceGeneration: 1,
+						resourceFence: 1,
+						managementFence: 1,
+					},
+				],
+			};
+			await sql`update platform.session_sandbox_allocations set resource_observation = ${sql.json(
+				{
+					...observation,
+					sourceStop: receipt,
+				},
+			)}`;
+			await sql`update platform.outbox_items set payload = ${sql.json({ lifecycle: intent })}`;
+			expect(await store.candidates()).toHaveLength(1);
+			await sql`update platform.outbox_items set payload = ${sql.json({
+				lifecycle: {
+					...intent,
+					source: {
+						...source,
+						observation: { ...source.observation, ...invalid },
+					},
+				},
+			})}`;
+			expect(await store.candidates()).toEqual([]);
+			await expect(store.prepare(target)).rejects.toThrow(
+				"WORKSPACE_NOT_ELIGIBLE",
+			);
+		},
+	);
+
 	it("dry-run is read-only; deletes original conditional identity then releases/audits once, history unavailable", async () => {
 		let exists = true;
 		const deletions: unknown[] = [];

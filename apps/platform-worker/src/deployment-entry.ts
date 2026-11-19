@@ -471,8 +471,17 @@ const runtimeAuth =
 					: {}),
 				...(fileExchangeOrigin !== undefined ? { fileExchangeOrigin } : {}),
 			};
+const certificateReconciliationWrites =
+	process.env.PLATFORM_WORKER_CERTIFICATE_RECONCILIATION_WRITES;
+if (
+	certificateReconciliationWrites !== undefined &&
+	certificateReconciliationWrites !== "false" &&
+	certificateReconciliationWrites !== "true"
+)
+	throw new Error("WORKER_CERTIFICATE_RECONCILIATION_CONFIGURATION_INVALID");
 const workloadInput = {
 	...configuredWorkloadInput,
+	certificateReconciliationWrites: certificateReconciliationWrites === "true",
 	policy: {
 		...configuredWorkloadInput.policy,
 		...(process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE &&

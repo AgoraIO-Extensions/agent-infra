@@ -130,6 +130,55 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
+	it("appends reclamation views to the published 0086 history without rewriting it", async () => {
+		const database = await startPostgresTestDatabase("reclamation-upgrade");
+		const client = postgres(database.databaseUrl, { max: 1 });
+		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0086-"));
+		try {
+			const sourceFolder = resolve(
+				import.meta.dirname,
+				"../../../migrations/platform",
+			);
+			await cp(sourceFolder, folder, { recursive: true });
+			const journalPath = resolve(folder, "meta/_journal.json");
+			const journal = JSON.parse(await readFile(journalPath, "utf8"));
+			journal.entries = journal.entries.filter(
+				(entry: { idx: number }) => entry.idx <= 86,
+			);
+			await writeFile(journalPath, JSON.stringify(journal));
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+				migrationsFolder: folder,
+			});
+			const before =
+				await client`select hash, created_at from platform_migrations.history order by id`;
+			expect(before).toHaveLength(87);
+			expect(
+				await client`select to_regnamespace('platform_reclamation_read') as projection`,
+			).toEqual([{ projection: null }]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			const after =
+				await client`select hash, created_at from platform_migrations.history order by id`;
+			expect(after.slice(0, before.length)).toEqual(before);
+			expect(after.slice(before.length)).toEqual([
+				{
+					hash: migrations[87]?.hash,
+					created_at: String(migrations[87]?.folderMillis),
+				},
+			]);
+			expect(
+				await client`select count(*)::int as count from pg_views where schemaname='platform_reclamation_read'`,
+			).toEqual([{ count: 3 }]);
+		} finally {
+			await client.end();
+			await database.stop();
+			await rm(folder, { recursive: true, force: true });
+		}
+	}, 120_000);
+
 	it("upgrades the main 0023 history to application targets without rewriting it", async () => {
 		const database = await startPostgresTestDatabase(
 			"migration-0023-application-targets",
@@ -2045,6 +2094,7 @@ describe("published Relay authority migration", () => {
 			84,
 			85,
 			86,
+			87,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2130,9 +2180,17 @@ describe("published Relay authority migration", () => {
 			idx: 82,
 			tag: "0082_operations_resource_snapshots",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 85)).toMatchObject({
+			idx: 85,
+			tag: "0085_conversation_event_terminal_cursor",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 86)).toMatchObject({
 			idx: 86,
-			tag: "0086_session_workspace_reclamation_read",
+			tag: "0086_workload_certificate_reconciliation",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 87,
+			tag: "0087_session_workspace_reclamation_read",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2725,6 +2783,9 @@ describe("published Relay authority migration", () => {
 				"operations_resource_snapshots:operations_resource_snapshots_cluster_id_namespace_pk",
 				"operations_resource_identities:operations_resource_identities_cluster_id_namespace_uid_pk",
 				"operations_resource_identities:operations_identity_agent_idx",
+			);
+			expectedDelta.columns.push(
+				"workload_reconciliations:certificate_reconciliation",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

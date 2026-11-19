@@ -1357,13 +1357,12 @@ provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验�
 才能启用。私有 lane 只服务于平台中介调用，不是 Sandbox 内原生工具的启用前置。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在
 结果或 unknown 可靠保存前不得交付原生推理循环；缺失、错配、断连、过期或被模型/Owner
 配置关闭时 fail closed。专用 FD 必须由 native 接管后设置 close-on-exec，工具子进程不能继承
-或重开控制端。普通官方路径与私有 lane 的 capability 必须分别声明和验收。
+或重开控制端。普通官方路径与私有 lane 的 capability 必须分别声明和验收。依赖派生或私有构建产物的 lane 在 M1 不启用。
 
-本 M1 路径不维护第三方 Codex 源码补丁、vendor builder、派生二进制或下载编译流程。若
-上游 release 缺少所需接缝，先走 upstream contribution；引入任何受控 derived/private artifact
-前须由单独架构决策明确其来源、供应链证明、维护责任和退出路径，不能在实现中隐式恢复旧
-vendor 方案。Platform、Connection、Host 和 Driver 继续使用 TypeScript，不新增自有 Rust
-crate、推理循环、服务、插件平台或统一 Sandbox。
+上游发行物缺少所需接缝时，记录对应的能力缺口。M1 不修改 Codex 或其他上游源码，不提交
+上游补丁，也不把上游改动排入后续工作。设计、交付和验收均不依赖或等待上游修改，不引入
+派生或私有构建产物、vendor builder 或下载编译流程。Platform、Connection、Host 和 Driver
+继续使用 TypeScript，不新增自有 Rust crate、推理循环、服务、插件平台或统一 Sandbox。
 
 PRD 的外部操作持久意图、当前授权和真实结果要求不变，适用范围是 §10.14 的平台中介调用；官方 release 的协议可用或部分
 能力通过不能被解释为完整 M1 验收。尚不能满足的平台中介调用必须标记未通过，不能以本节豁免
@@ -1440,14 +1439,9 @@ Issue #957 的固定源码回读记录了 v1.18.30 (`3104c1428ec91f809e5ab866313
 | #930 | ACP progress、before/after 和自有工具不能替代原生 effect receipt；原 built-in 缺口保留 | #930 Draft/能力缺口保留 |
 | 四模板、恢复、取消、隔离与 P1 工具义务 | 不因本决策或受控扩展通过而缩减原产品矩阵 | 由后续实现票逐项验证 |
 
-优先通过 upstream contribution 提供可等待、不可由模型或 Owner 关闭的原生接缝。
-官方 artifact 缺少可靠接缝时，记录对应能力未通过；不把完整 M1 义务改成模型子集或永久
-unsupported 清单。当前 M1 不维护、准备、应用或构建 OpenCode 上游补丁、derived/private
-artifact、vendor builder 或修改版发行物，也不把 source-review packet 当作实现交付。若官方
-artifact 缺少可靠接缝，运行时必须拒绝对应能力并保留能力缺口；不能通过本 Issue、架构评审、
-fixture、环境变量或部署说明授权例外。Upstream contribution 可以由上游项目另行接收和维护，
-但不属于本仓实现、运行 pin 或验收证据；不能因此在本仓下载依赖、编译源码、发布或启用修改版，
-也不能另建 vendor 服务、插件平台或推理循环。
+OpenCode 的上游能力缺口按 [§10.11](#1011-codex-上游原生补丁与执行屏障) 处理。官方发行物
+缺少可靠接缝时，运行时必须拒绝对应能力并记录未通过。架构评审、fixture、环境变量或部署说明
+不能豁免门禁。M1 产品义务继续适用，source-review packet 不计作实现交付。
 
 官方公开工具扩展可以作为受控执行请求入口，实际 I/O 位于现有 Driver 信任域的执行叶子；
 扩展只能请求执行并等待结果，不能提交可信开始或结果事实。该路径复用既有 journal、Host
@@ -1947,6 +1941,9 @@ model attempt 引用。相对资源标识由服务端从冻结 manifest 派生�
 传输中的诊断只可在现有受保护处理边界内比较字节。证据必须排除历史上下文中的同名或同版本内容、重放内容、
 调用方可构造的同形文本以及模型生成的内容。内容匹配、格式标记和固定输入位置只可辅助关联。来源、摘要或发送
 无法唯一确认时，按 [§11.6.4](#1164-重放故障与证据边界) 保留结果，并由对应 Driver 记录能力缺口。
+
+当前固定的 Codex 发行物没有可信的逐 Turn Skill 注入关联，因此该路径的实际加载记为
+`LOAD_UNPROVEN`。见 [#4226](https://github.com/AgoraIO-Extensions/agent-infra/issues/4226#issuecomment-7006425608)。
 
 实际发送由平台的受保护模型传输确认。出站前，传输为每次 model attempt 生成仅在平台内部使用的一次性关联值，
 绑定最终出站请求体的 SHA-256、认证端点及本次尝试。持久发送屏障通过后，传输须确认已写出按 `Content-Length`
@@ -4065,6 +4062,12 @@ helm upgrade --install agent-infra ./agent-infra \
 `--atomic` 恢复该 release 的上一版；owner 仍须回读 release、Pod、镜像、配置 Secret UID/RV 和迁移状态，不能把
 rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 release，旧 lane 停用后的 3–7 天保留窗口由单独的
 下线流程负责。任何需要生产 host、DNS、外部 Connection 或业务验收的步骤都属于现场 owner 门禁，不由源码 PR 代签。
+
+如果旧 Worker 无法安全接管新版持久状态，部署 owner 先发布可读取并处理该状态、但默认不写入该状态的兼容版本。
+兼容版本通过健康检查后，下一次 Helm 升级才能启用写入，且 `--atomic` 的回退目标仍须能处理已经提交的新版状态。
+证书调谐及不兼容路由的保留状态采用这一顺序。手动回退到兼容版本之前的版本时，由 owner 先停用受影响的 Agent，
+回读其停用与 fence 收敛后再回退。具体步骤见
+[生产 Helm 部署手册的升级与回滚章节](https://bitbucket.agoralab.co/projects/AI/repos/helm/browse/agent-infra/docs/deploy.md)。
 
 ### 21.3 本地开发
 

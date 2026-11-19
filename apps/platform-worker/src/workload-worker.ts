@@ -43,6 +43,7 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly workerId?: string;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	readonly certificateReconciliationWrites?: boolean;
 	/** Separate budget for resource creation and image/PVC readiness. */
 	readonly maximumApplyAttempts?: number;
 	/** Separate budget for health/readiness observation after apply. */
@@ -243,6 +244,8 @@ export function createPlatformWorkloadWorkerV1(
 				store: observedStore,
 				runtime,
 				maximumAttempts: options.maximumAttempts,
+				certificateReconciliationWrites:
+					options.certificateReconciliationWrites,
 				maximumApplyAttempts: options.maximumApplyAttempts,
 				maximumObserveAttempts: options.maximumObserveAttempts,
 				probeFailureThreshold: options.probeFailureThreshold,

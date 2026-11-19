@@ -98,6 +98,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly runtimeFetch?: typeof fetch;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	readonly certificateReconciliationWrites?: boolean;
 	/** Separate budget for resource creation and image/PVC readiness. */
 	readonly maximumApplyAttempts?: number;
 	/** Separate budget for health/readiness observation after apply. */
@@ -296,6 +297,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
+			certificateReconciliationWrites: input.certificateReconciliationWrites,
 			maximumApplyAttempts: input.maximumApplyAttempts,
 			maximumObserveAttempts: input.maximumObserveAttempts,
 			probeFailureThreshold: input.probeFailureThreshold,

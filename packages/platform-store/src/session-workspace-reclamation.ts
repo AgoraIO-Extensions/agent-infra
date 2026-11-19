@@ -93,7 +93,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
    where (${sandboxId ?? null}::text is null or a.sandbox_id=${sandboxId ?? null})
    and ch.namespace=${this.policy.namespace} and not ch.released and ch.compute_released
    and a.resource_observation->>'status'='stopped'
-   and exists(select 1 from jsonb_array_elements(a.resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=ch.namespace and r->>'name'=a.resource_name)
+   and exists(select 1 from jsonb_array_elements(case when jsonb_typeof(a.resource_observation->'resources') = 'array' then a.resource_observation->'resources' end) r where r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=ch.namespace and r->>'name'=a.resource_name)
    and a.status='stopped' and a.desired_state='stopped' and c.status <> 'active'
    and not exists(select 1 from platform.conversation_generation_tombstones t where t.conversation_id=c.id and t.status='pending')
    and c.agent_id=a.agent_id and c.session_generation=a.session_generation
@@ -116,38 +116,38 @@ export class PostgresSessionWorkspaceReclamationStoreV1
    and not exists(select 1 from platform.outbox_items pending where pending.scope_type='conversation' and pending.scope_id=c.id and pending.status not in ('succeeded','failed'))
    and not exists(select 1 from platform.audit_events j where j.target_id=c.id and j.action=${started})
    order by a.sandbox_id limit 1000`;
-		return rows
-			.filter((row) => {
-				try {
-					const source = row.lifecycle.source.sandbox;
-					if (
-						source.agentId !== row.agentId ||
-						source.sessionId !== row.sessionId ||
-						source.sandboxId !== row.sandboxId ||
-						source.resourceName !== row.name ||
-						row.lifecycle.preparation ||
-						row.lifecycle.resumeRequested ||
-						!isDeepStrictEqual(
-							row.observation.sourceStop,
-							row.lifecycle.stopReceipt,
-						)
-					)
-						return false;
-					return (
-						decideSessionSandboxDrainObservationV1({
-							sandbox: { ...source, generation: row.sessionGeneration },
-							resourceFence: row.resourceFence,
-							lifecycle: row.lifecycle,
-							observation: row.observation,
-						}).status === "stopped"
-					);
-				} catch {
-					return false;
-				}
-			})
-			.map(
-				({ lifecycle: _lifecycle, observation: _observation, ...row }) => row,
-			);
+		return rows.flatMap(({ lifecycle, observation, ...row }) => {
+			try {
+				const source = lifecycle.source.sandbox;
+				if (
+					source.agentId !== row.agentId ||
+					source.sessionId !== row.sessionId ||
+					source.sandboxId !== row.sandboxId ||
+					source.resourceName !== row.name ||
+					lifecycle.preparation ||
+					lifecycle.resumeRequested ||
+					!isDeepStrictEqual(observation.sourceStop, lifecycle.stopReceipt)
+				)
+					return [];
+				const decision = decideSessionSandboxDrainObservationV1({
+					sandbox: { ...source, generation: row.sessionGeneration },
+					resourceFence: row.resourceFence,
+					lifecycle,
+					observation,
+				});
+				const pvc = decision.stopReceipt?.retainedPVC;
+				if (
+					decision.status !== "stopped" ||
+					pvc?.namespace !== row.namespace ||
+					pvc.name !== row.name ||
+					!pvc.uid?.trim()
+				)
+					return [];
+				return [{ ...row, uid: pvc.uid }];
+			} catch {
+				return [];
+			}
+		});
 	}
 	async inspect(t: SessionWorkspaceReclamationTargetV1) {
 		if (t.namespace !== this.policy.namespace)
@@ -243,6 +243,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 					sandboxId: t.sandboxId,
 					namespace: t.namespace,
 					name: t.name,
+					uid: t.uid,
 				})
 			)
 				throw new Error("WORKSPACE_NOT_ELIGIBLE");

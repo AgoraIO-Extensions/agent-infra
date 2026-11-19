@@ -60,10 +60,7 @@ export function isWorkspaceRetainedV1(
 }
 export interface SessionWorkspaceReclamationStoreV1 {
 	candidates(): Promise<
-		readonly Omit<
-			SessionWorkspaceReclamationTargetV1,
-			"uid" | "resourceVersion"
-		>[]
+		readonly Omit<SessionWorkspaceReclamationTargetV1, "resourceVersion">[]
 	>;
 	prepare(
 		target: SessionWorkspaceReclamationTargetV1,
@@ -83,7 +80,11 @@ export function createSessionWorkspaceReclamationV1(
 			const result: SessionWorkspaceReclamationTargetV1[] = [];
 			for (const candidate of await store.candidates()) {
 				const identity = await pvc.read(candidate.name);
-				if (identity) result.push({ ...candidate, ...identity });
+				if (identity?.uid === candidate.uid && identity.resourceVersion.trim())
+					result.push({
+						...candidate,
+						resourceVersion: identity.resourceVersion,
+					});
 			}
 			return result;
 		},

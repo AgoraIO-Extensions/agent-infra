@@ -22,7 +22,10 @@ import {
 	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
-import { WorkloadPreflightRejectedErrorV1 } from "@agent-infra/platform-core";
+import {
+	type WorkloadObservationV1,
+	WorkloadPreflightRejectedErrorV1,
+} from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1EnvVar,
@@ -632,11 +635,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			readonly workloadRevision: number;
 			readonly fence: number;
 		},
-	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted"> {
+		reconcileCertificateState = true,
+	): Promise<WorkloadObservationV1> {
 		const value = desired(input);
-		if (isMultiService(value)) return multiService.observe(value, identity);
-		if (!(await hostnameCertificates.ready(value)))
-			return routeMode === "open" ? "drifted" : "pending";
+		if (isMultiService(value))
+			return multiService.observe(value, identity, reconcileCertificateState);
+		if (!reconcileCertificateState) {
+			const certificate = await hostnameCertificates.observe(value, false);
+			if (certificate !== "ready")
+				return routeMode === "open" ? "drifted" : "pending";
+		}
 		if (
 			!options.connectionConsumerControl &&
 			connectionInstallationRevision === null
@@ -826,6 +834,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 		)
 			return "drifted";
+		if (reconcileCertificateState) {
+			const certificate = await hostnameCertificates.observe(value);
+			if (certificate !== "ready") return certificate;
+		}
 		const pods = labelledPods.filter(ownedByExpectedWorkload);
 		if (pods.length !== 1) return "pending";
 		const pod = pods[0];
@@ -1982,12 +1994,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 			identity: { uid: string; generation: number },
 			routeMode: RouteSelectorMode = "closed",
+			reconcileCertificateState = true,
 		) {
 			const value = desired(input);
-			if (isMultiService(value)) return multiService.promote(value);
-			if (!(await hostnameCertificates.ready(value)))
+			if (isMultiService(value))
+				return multiService.promote(value, reconcileCertificateState);
+			if (!(await hostnameCertificates.ready(value, reconcileCertificateState)))
 				throw new WorkloadKubernetesError("unavailable");
-			if ((await observe(value, identity, routeMode, "required")) !== "healthy")
+			if (
+				(await observe(
+					value,
+					identity,
+					routeMode,
+					"required",
+					undefined,
+					reconcileCertificateState,
+				)) !== "healthy"
+			)
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);
 			if (value.route.exposure === "internal-only") {
@@ -2236,6 +2259,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 			routeMode: RouteSelectorMode = "closed",
 			trustedDesired?: AgentWorkloadDesiredV1,
+			reconcileCertificateState = true,
 		) {
 			const request = validateWorkloadRouteSwitchRequestV1(input);
 			const correlation = {
@@ -2283,6 +2307,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						},
 						routeMode,
 						"required",
+						undefined,
+						reconcileCertificateState,
 					)) !== "healthy"
 				)
 					throw new WorkloadKubernetesError("conflict");
@@ -2293,6 +2319,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						generation: target.workloadGeneration,
 					},
 					routeMode,
+					reconcileCertificateState,
 				);
 				const service = await client.read<V1Service>(
 					"Service",

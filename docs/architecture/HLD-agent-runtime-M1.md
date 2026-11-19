@@ -569,9 +569,8 @@ model attempt。屏障保存 `started` 后，采集器按工程 Spec 在传输�
 及 [§11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1164-重放故障与证据边界) 为准。
 
 固定 Codex 0.153.0 的离线模型请求观察显示 `SKILL.md` 字节进入结构化 Skill Turn。公开 app-server 的路径回显
-和 Turn 事件只提供接受及生命周期证据。若受保护传输无法证明当前注入来源，按
-[工程 Spec §10.11](SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
-登记需原生组装边界提供的关联与摘要事实，在正式接缝补齐之前保持 `LOAD_UNPROVEN`。
+和 Turn 事件只提供接受及生命周期证据。固定发行物的实际加载状态以
+[工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配) 为准。
 协议验证见 [#4226 的固定发行物回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/4226#issuecomment-7003370147)。
 
 #### 8.5.1 Codex 原生执行屏障

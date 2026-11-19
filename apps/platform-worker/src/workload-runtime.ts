@@ -38,6 +38,7 @@ import {
 	hasUnverifiedWorkloadSecretRecoveryV1,
 	immutableSecretNameV1,
 	inheritWorkloadSecretRecoveriesV1,
+	isRejectedWorkloadRouteClosedForCertificateV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
 	planMissingWorkloadSecretRecoveryV1,
@@ -93,6 +94,7 @@ import {
 	assertWorkloadPublicRouteV1,
 	publicBasePathEnvironmentV1,
 	workloadInteractionRouteV1,
+	workloadPublicRouteV1,
 } from "./workload-public-route.js";
 import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
 import type {
@@ -1161,7 +1163,7 @@ export function createWorkloadRuntimeV1(
 				state.candidate.configuration.source.imageDigest
 		)
 			throw new Error("Workload deployment correlation mismatch");
-		if (state.phase === "rejected")
+		if (state.phase === "rejected" || state.certificateWait?.resumeRejected)
 			return validateAgentWorkloadDesiredV1({
 				...deployment,
 				workloadRevision: state.verifiedRevision,
@@ -1254,7 +1256,9 @@ export function createWorkloadRuntimeV1(
 	function routeSelectorMode(
 		state: WorkloadReconciliationStateV1,
 	): "closed" | "open" {
-		return state.phase === "ready" || state.phase === "rejected"
+		return state.phase === "ready" ||
+			(state.phase === "rejected" &&
+				!isRejectedWorkloadRouteClosedForCertificateV1(state))
 			? "open"
 			: "closed";
 	}
@@ -1563,6 +1567,7 @@ export function createWorkloadRuntimeV1(
 		state: WorkloadReconciliationStateV1,
 		browserBinding?: BrowserCapabilityBindingV1,
 		reconciliationObservation = false,
+		reconcileCertificateState = true,
 	) {
 		const scope = stepScope.getStore();
 		const sequence = scope ? ++scope.sequence : 0;
@@ -1595,6 +1600,7 @@ export function createWorkloadRuntimeV1(
 				const health = await multiServiceFor(state).observe(
 					observedWorkload,
 					state.identity,
+					reconcileCertificateState,
 				);
 				// 多服务 Agent 是自有交互入口，没有平台适配能力；与单镜像 self-managed
 				// 一致，只对完全相同的一次健康晋升尝试保留空能力集。
@@ -1642,6 +1648,8 @@ export function createWorkloadRuntimeV1(
 				state.identity,
 				routeSelectorMode(state),
 				state.phase === "observing" ? "activation" : "required",
+				undefined,
+				reconcileCertificateState,
 			);
 			const current =
 				!scope ||
@@ -2239,6 +2247,26 @@ export function createWorkloadRuntimeV1(
 				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 			}
 		},
+		rollbackRouteCompatible(state) {
+			// Validate the verified route as stored. Re-composing it here would hide
+			// an incompatible rollback target and could serve an unverified route.
+			if (!state.candidate.deployment) return false;
+			const value = desired(state);
+			try {
+				assertWorkloadPublicRouteV1(options.policy, value);
+				if (value.route.exposure !== "self-managed") return true;
+				const expected = workloadPublicRouteV1(options.policy, value.agentId);
+				return (
+					value.route.interactionOrigin?.origin ===
+						expected.interactionOrigin.origin &&
+					value.route.interactionPath === expected.interactionPath
+				);
+			} catch (error) {
+				if (error instanceof WorkloadKubernetesError && error.code === "policy")
+					return false;
+				throw error;
+			}
+		},
 		async closeRoute(state) {
 			if ("manifest" in state.candidate.configuration.source) {
 				if (isUnmaterializedInitialWorkload(state)) return;
@@ -2253,7 +2281,9 @@ export function createWorkloadRuntimeV1(
 				return;
 			}
 			const revision =
-				state.phase === "rejected" ? state.verifiedRevision : state.revision;
+				state.phase === "rejected" || state.certificateWait?.resumeRejected
+					? state.verifiedRevision
+					: state.revision;
 			if (
 				revision === null ||
 				!(await adapter.closeAgent(state.agentId, revision, state.fence))
@@ -2269,6 +2299,8 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
+				// A retained deployment may need its completed Job again on restart.
+				if (state.retainedFailure) return true;
 				return multiServiceFor(state).cleanupMigration(workload);
 			}
 			return true;
@@ -2560,8 +2592,8 @@ export function createWorkloadRuntimeV1(
 			const health = await observe(state, browserBinding);
 			return health === "unreachable" ? observe(state, browserBinding) : health;
 		},
-		async observe(state) {
-			return observe(state, undefined, true);
+		async observe(state, reconcileCertificateState) {
+			return observe(state, undefined, true, reconcileCertificateState);
 		},
 		async observeForDrain(state, browserBinding) {
 			return observeForDrain(state, browserBinding);
@@ -2691,7 +2723,7 @@ export function createWorkloadRuntimeV1(
 			}
 			return resultWithIdentity("active");
 		},
-		async promote(state) {
+		async promote(state, reconcileCertificateState) {
 			await restoreSnapshotProjection(state);
 			const scope = stepScope.getStore();
 			let pass =
@@ -2711,7 +2743,10 @@ export function createWorkloadRuntimeV1(
 			if ("manifest" in state.candidate.configuration.source) {
 				const workload = desiredForRecovery(state);
 				if (isMultiService(workload))
-					await multiServiceFor(state).promote(workload);
+					await multiServiceFor(state).promote(
+						workload,
+						reconcileCertificateState,
+					);
 				return;
 			}
 			// 只在本次晋升的短窗口内复用未变化 Pod 的证明；仍核对资源与 HTTP health。
@@ -2771,6 +2806,7 @@ export function createWorkloadRuntimeV1(
 				},
 				routeSelectorMode(state),
 				workload,
+				reconcileCertificateState,
 			);
 			if (result.status !== "completed")
 				throw new Error("Workload route is unavailable");

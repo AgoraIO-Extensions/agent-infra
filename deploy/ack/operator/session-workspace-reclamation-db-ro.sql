@@ -30,6 +30,11 @@ GRANT SELECT (target_id, action) ON platform.audit_events TO agent_infra_reclama
 DO $$
 DECLARE
   reader constant name := 'agent_infra_reclamation_ro';
+  readable_views constant oid[] := ARRAY[
+    'platform_reclamation_read.allocations'::regclass::oid,
+    'platform_reclamation_read.outbox_items'::regclass::oid,
+    'platform_reclamation_read.stopped_audit'::regclass::oid
+  ];
 BEGIN
   IF has_database_privilege(reader, current_database(), 'CREATE,TEMP')
     OR EXISTS (
@@ -44,16 +49,17 @@ BEGIN
         AND (
           has_table_privilege(reader, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')
           OR has_any_column_privilege(reader, c.oid, 'INSERT,UPDATE,REFERENCES')
-          OR (n.nspname <> 'platform_reclamation_read' AND has_table_privilege(reader, c.oid, 'SELECT'))
+          OR (NOT (c.oid = ANY(readable_views)) AND has_table_privilege(reader, c.oid, 'SELECT'))
         )
     )
     OR EXISTS (
       SELECT 1
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'platform_reclamation_read')
+      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
         AND n.nspname NOT LIKE 'pg_toast%'
         AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND NOT (c.oid = ANY(readable_views))
         AND has_column_privilege(reader, c.oid, a.attnum, 'SELECT')
         AND NOT (n.nspname = 'platform' AND (c.relname || '.' || a.attname) IN (
           'conversations.id', 'conversations.agent_id', 'conversations.session_generation', 'conversations.status',
@@ -66,9 +72,20 @@ BEGIN
         ))
     )
     OR EXISTS (
+      SELECT 1 FROM pg_sequence s
+      WHERE has_sequence_privilege(reader, s.seqrelid, 'USAGE,UPDATE')
+    )
+    OR EXISTS (
       SELECT 1 FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid
-      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-        AND p.prosecdef AND has_schema_privilege(reader, n.oid, 'USAGE')
+      WHERE (
+        (n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prosecdef)
+        OR (n.nspname = 'pg_catalog' AND p.proname IN (
+          'lo_creat', 'lo_create', 'lo_from_bytea', 'lo_import', 'lo_export',
+          'lo_open', 'lo_put', 'lowrite', 'lo_truncate', 'lo_truncate64', 'lo_unlink',
+          'pg_logical_emit_message'
+        ))
+      )
+        AND has_schema_privilege(reader, n.oid, 'USAGE')
         AND has_function_privilege(reader, p.oid, 'EXECUTE')
     )
   THEN
