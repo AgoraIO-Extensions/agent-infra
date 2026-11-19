@@ -1009,7 +1009,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}): Promise<"mapped" | "unknown" | "stale"> {
 		return this.#transaction(async (tx) => {
 			const row = await this.#lockInstallation(tx, input.authorizationId);
-			const command = await this.#sending(tx, input, input.command);
+			const command = await this.#sending(
+				tx,
+				input,
+				input.command,
+				false,
+				true,
+			);
 			if (!command) return "stale";
 			const result =
 				input.result === undefined
@@ -1022,6 +1028,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			if (
 				!row ||
 				!result?.success ||
+				command.live !== true ||
 				command.delivery_digest === null ||
 				row.live !== true ||
 				!["awaiting_confirmation", "confirmed"].includes(
@@ -1088,13 +1095,32 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				expiresAt: mappingExpiresAt,
 				status: "pending",
 			};
+			// Commit the mapping and its command outcome at the same deadline check.
 			const updated = await tx.execute(sql`
-				update platform.connection_installation_authorizations
-				set binding = jsonb_set(jsonb_set(binding, '{authorizationUrl}', to_jsonb(${value.authorizationUrl}::text), true),
+				with mapped as (
+					update platform.connection_installation_authorizations a
+					set binding = jsonb_set(jsonb_set(binding, '{authorizationUrl}', to_jsonb(${value.authorizationUrl}::text), true),
 					'{callback}', ${JSON.stringify(callback)}::jsonb, true),
 					revision = revision + 1, updated_at = clock_timestamp()
-				where id = ${input.authorizationId} and binding->'callback' is null
-				returning id
+					where a.id = ${input.authorizationId} and a.binding->'callback' is null
+						and a.expires_at > clock_timestamp()
+						and to_timestamp(${mappingExpiresAt}::double precision / 1000) > clock_timestamp()
+						and exists (select 1 from platform.connection_installation_commands c
+							where c.id=${input.commandId} and c.authorization_id=a.id
+								and c.status='sending' and c.attempt_id=${input.attemptId}
+								and c.attempt_owner=${input.attemptOwner} and c.attempt_expires_at > clock_timestamp())
+						and exists (select 1 from platform.outbox_items o
+							where o.scope_type='conversation' and o.scope_id=${authorization.reference.conversationId}
+								and o.payload->>'executionId'=${authorization.reference.executionId}
+								and o.status='processing' and o.lease_owner=${input.attemptOwner}
+								and o.lease_expires_at > clock_timestamp()
+								and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+					returning a.id
+				)
+				update platform.connection_installation_commands c
+				set status='completed', updated_at=clock_timestamp()
+				from mapped where c.id=${input.commandId} and c.authorization_id=mapped.id
+				returning c.id
 			`);
 			if (updated.length !== 1) return fail();
 			if (input.command === "begin_status")
@@ -1102,7 +1128,6 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					update platform.connection_installation_commands set status='completed', updated_at=clock_timestamp()
 					where authorization_id=${input.authorizationId} and command='begin' and status='unknown'
 				`);
-			await this.#finishCommand(tx, input.commandId, "completed");
 			return "mapped";
 		});
 	}

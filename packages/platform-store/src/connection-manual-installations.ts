@@ -544,10 +544,20 @@ export async function fenceRetiredConnectionManualInstallationsV1(
 		set supply_state = case when template is null then 'pending' else 'closed' end,
 			registration_state = case when registration_state in ('pending') then 'closed' else registration_state end,
 			revoke_state = case
-				when registration_state in ('sending','unknown','registered') and revoke_state in ('not_required','pending','sending') then 'unknown'
+				when revoke_state in ('pending','sending')
+					or (revoke_state = 'not_required' and registration_state in ('sending','unknown','registered'))
+					then 'unknown'
 				else revoke_state end,
 			revision = revision + 1, updated_at = clock_timestamp()
 		where agent_id = ${agentId} and association_revision = ${associationRevision}
+	`);
+	await tx.execute(sql`
+		update platform.connection_installation_commands c
+		set status='unknown', updated_at=clock_timestamp()
+		from platform.connection_manual_installations m
+		where c.authorization_id=m.authorization_id and m.agent_id=${agentId}
+			and m.association_revision=${associationRevision} and m.revoke_state='unknown'
+			and c.command='revoke' and c.status in ('pending','sending')
 	`);
 }
 
