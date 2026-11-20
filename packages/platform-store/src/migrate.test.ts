@@ -866,7 +866,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 			// The Owner manual association holds only the Consumer service credential as ADR 0002
 			// ciphertext plus a reuse fingerprint (Spec §13.5.3 exception), never Provider credentials.
 			// The §13.5.1 exception pins and their receipts hold only non-secret Principal ids
-			// and the Host's candidate facts.
+			// and the Host's candidate facts; the §13.5.6 install permits hold only
+			// references, digests, the non-secret binding and their expiry.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
 				"connection_association_generations",
@@ -880,6 +881,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_manual_associations.connection_agent_id",
 				"connection_manual_associations.credential_ciphertext",
 				"connection_manual_associations.credential_fingerprint",
+				"connection_manual_install_permits",
 				"connection_manual_installations",
 				"connection_manual_installations.connection_agent_id",
 				"connection_principal_pin_receipts",
@@ -2177,6 +2179,7 @@ describe("published Relay authority migration", () => {
 			92,
 			93,
 			94,
+			95,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2298,9 +2301,13 @@ describe("published Relay authority migration", () => {
 			idx: 93,
 			tag: "0093_connection_manual_descriptor",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 94)).toMatchObject({
 			idx: 94,
 			tag: "0094_connection_manual_confirm",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 95,
+			tag: "0095_connection_manual_permit",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2958,10 +2965,28 @@ describe("published Relay authority migration", () => {
 					"expires_at",
 					"created_at",
 				].map((name) => `connection_principal_pin_receipts:${name}`),
+				...[
+					"id",
+					"revision",
+					"authorization_id",
+					"confirm_command_id",
+					"exchange_command_id",
+					"exchange_request_digest",
+					"pin_receipt_id",
+					"binding",
+					"descriptor_digest",
+					"commit_digest",
+					"claim_owner",
+					"claim_fence",
+					"attempt_id",
+					"expires_at",
+					"created_at",
+				].map((name) => `connection_manual_install_permits:${name}`),
 			);
 			expectedDelta.checks.push(
 				"connection_principal_pins:connection_principal_pin_identity",
 				"connection_principal_pin_receipts:connection_principal_pin_receipt_digest",
+				"connection_manual_install_permits:connection_manual_install_permit_digest",
 			);
 			expectedDelta.indexes.push(
 				"connection_principal_pins:connection_principal_pins_pkey",
@@ -2969,6 +2994,8 @@ describe("published Relay authority migration", () => {
 				"connection_principal_pins:connection_principal_pin_user_unique",
 				"connection_principal_pin_receipts:connection_principal_pin_receipts_pkey",
 				"connection_principal_pin_receipts:connection_principal_pin_receipt_confirm_unique",
+				"connection_manual_install_permits:connection_manual_install_permits_pkey",
+				"connection_manual_install_permits:connection_manual_install_permit_authorization_unique",
 			);
 			expectedDelta.columns.push(
 				...["agent_id", "last_revision", "updated_at"].map(

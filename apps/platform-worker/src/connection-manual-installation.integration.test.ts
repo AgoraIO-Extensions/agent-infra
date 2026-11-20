@@ -553,6 +553,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	await client`delete from platform.connection_manual_install_permits`;
 	await client`delete from platform.connection_principal_pin_receipts`;
 	await client`delete from platform.connection_principal_pins`;
 	await client`delete from platform.connection_manual_installations`;
