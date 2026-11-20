@@ -477,3 +477,64 @@ test(
 		}
 	},
 );
+
+test(
+	"executor stdio EOF cannot release its adopted live group or replay its admitted launch",
+	linux,
+	async () => {
+		const f = await drainFixture();
+		const backend = spawn(
+			process.execPath,
+			[
+				"-e",
+				`
+ const { spawn } = require("node:child_process");
+ process.stdout.write("ready\\n");
+ process.stdin.once("data", () => {
+  const tool = spawn("/bin/sh", ["-c", 'kill -STOP "$$"; exec sleep 30'], { detached: true, stdio: "ignore" });
+  process.stdout.write(String(tool.pid) + "\\n");
+ });
+ process.stdin.once("end", () => process.exit(0));
+ `,
+			],
+			{ stdio: ["pipe", "pipe", "ignore"] },
+		);
+		const closed = once(backend, "close");
+		let toolPid;
+		try {
+			await once(backend.stdout, "data");
+			const attempt = {
+				protocolSession: "original-backend",
+				handle: "original-launch",
+			};
+			assert.equal(await f.journal.admit(attempt), true);
+			const baseline = await executorChildrenV1(backend.pid);
+			const output = once(backend.stdout, "data");
+			backend.stdin.write("launch\n");
+			toolPid = Number(String((await output)[0]).trim());
+			const group = await waitForExecutorProcessGroupV1(
+				backend.pid,
+				baseline,
+				Date.now() + 2000,
+			);
+			assert.equal(group?.leader, toolPid);
+			const seal = await f.journal.seal(stop);
+			backend.stdin.end();
+			await closed;
+			process.kill(toolPid, 0);
+			assert.equal(
+				await waitForExecutorProcessGroupExitV1(group, Date.now() + 100),
+				false,
+			);
+			await f.reopen();
+			assert.deepEqual(await f.journal.seal(stop), seal);
+			assert.equal(await f.journal.admit(attempt), false);
+			await retained(f.journal);
+		} finally {
+			if (toolPid) await killGroup(toolPid);
+			backend.kill("SIGKILL");
+			await closed;
+			await f.close();
+		}
+	},
+);
