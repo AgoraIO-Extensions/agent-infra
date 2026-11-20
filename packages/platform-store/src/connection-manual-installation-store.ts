@@ -169,8 +169,51 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		return connectionManualCurrentAllowedV1(current, userId) ? current : null;
 	}
 
+	/**
+	 * A prepare claimed but expired before fixSupply committed sent nothing: no
+	 * template, supply attempt or ciphertext exists, and registration needs a
+	 * confirmed supply. It reopens for the same installation under the usual
+	 * association → authorization → installation → command lock order; anything
+	 * past fixSupply keeps the unknown path below.
+	 */
+	async #reopenUnsuppliedPrepares() {
+		const candidates = await this.#transaction((tx) =>
+			tx.execute(sql`
+			select c.id, c.authorization_id from platform.connection_installation_commands c
+			join platform.connection_manual_installations m on m.authorization_id=c.authorization_id
+			where c.command='prepare' and c.status='pending' and c.attempt_id is not null
+				and c.attempt_expires_at <= clock_timestamp() and c.delivery_digest is null
+				and m.template is null and m.supply_attempt_id is null
+				and m.supply_state='pending' and m.registration_state='pending'
+			order by c.created_at, c.id limit 32
+		`),
+		);
+		for (const candidate of candidates)
+			await this.#transaction(async (tx) => {
+				const row = await this.#lockInstallation(
+					tx,
+					candidate.authorization_id as string,
+				);
+				if (!row?.associationLocked) return;
+				await tx.execute(sql`
+					update platform.connection_installation_commands c
+					set status='pending', attempt_id=null, attempt_owner=null, attempt_expires_at=null,
+						updated_at=clock_timestamp()
+					from platform.connection_manual_installations m, platform.connection_installation_authorizations a
+					where c.id=${candidate.id as string} and c.command='prepare' and c.status='pending'
+						and c.attempt_id is not null and c.attempt_expires_at <= clock_timestamp()
+						and c.delivery_digest is null
+						and m.authorization_id=c.authorization_id and a.id=c.authorization_id
+						and a.status='preparing' and a.expires_at > clock_timestamp()
+						and m.template is null and m.supply_attempt_id is null
+						and m.supply_state='pending' and m.registration_state='pending'
+				`);
+			});
+	}
+
 	/** Expired attempts become unknown, including the registration they were sending. */
 	async #sweep() {
+		await this.#reopenUnsuppliedPrepares();
 		await this.#transaction((tx) =>
 			tx.execute(sql`
 			update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
@@ -1314,11 +1357,28 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					)
 				)
 					return "denied";
+				/**
+				 * Final permit (§13.5.6 Worker 权威回读): the directory read may have
+				 * outlasted the authorization or the original claim, so both are
+				 * rechecked at the database clock. Only the template's own claim and
+				 * fence count; another live claim of the same Execution never does.
+				 */
+				const permit = async (commandId?: string) => {
+					const [final] = await tx.execute(sql`
+						select a.expires_at > clock_timestamp()
+							and ${originalClaimHolds(template.reference, template.claim)}
+							and (${commandId === undefined} or exists (select 1 from platform.connection_installation_commands c
+								where c.id=${commandId ?? null} and c.authorization_id=a.id and c.status='sending'
+									and c.attempt_expires_at > clock_timestamp())) as live
+						from platform.connection_installation_authorizations a where a.id=${request.authorizationId}
+					`);
+					return final?.live === true ? "allowed" : "denied";
+				};
 				if (request.purpose === "supply_delivery")
 					return row.status === "preparing" &&
 						row.supply_state === "sending" &&
 						row.registration_state === "pending"
-						? "allowed"
+						? permit()
 						: "denied";
 				if (request.purpose === "supply")
 					return ["sending", "confirmed"].includes(
@@ -1327,7 +1387,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						(!["failed", "closed"].includes(row.registration_state as string) ||
 							// The originating attempt's compensation DELETE still needs its supply.
 							row.revoke_state === "sending")
-						? "allowed"
+						? permit()
 						: "denied";
 				const command = request.command;
 				if (!command) return "denied";
@@ -1354,24 +1414,25 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				)
 					return "denied";
 				const binding = row.binding as { callback?: unknown };
+				const allowed = () => permit(command.commandId);
 				switch (command.command) {
 					case "prepare":
 						return row.status === "preparing" &&
 							row.registration_state === "sending"
-							? "allowed"
+							? allowed()
 							: "denied";
 					case "supply_status":
 						return row.status === "preparing" &&
 							row.registration_state === "pending"
-							? "allowed"
+							? allowed()
 							: "denied";
 					case "status":
 						return row.status === "preparing" &&
 							row.registration_state === "unknown"
-							? "allowed"
+							? allowed()
 							: "denied";
 					case "revoke":
-						return row.revoke_state === "sending" ? "allowed" : "denied";
+						return row.revoke_state === "sending" ? allowed() : "denied";
 					case "begin":
 					case "begin_status": {
 						if (
@@ -1384,7 +1445,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							binding.callback !== undefined
 						)
 							return "denied";
-						if (command.command === "begin_status") return "allowed";
+						if (command.command === "begin_status") return allowed();
 						const configuration = RuntimeOAuthConfigurationV1Schema.parse(
 							row.configuration,
 						);
@@ -1395,7 +1456,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							connectionInstallConfigurationDigestV1(configuration) &&
 							command.receiptDigest ===
 								connectionRegistrationReceiptDigestV1(receipt)
-							? "allowed"
+							? allowed()
 							: "denied";
 					}
 				}

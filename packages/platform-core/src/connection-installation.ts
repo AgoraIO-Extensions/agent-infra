@@ -383,8 +383,24 @@ function requireManualSaved(
 	current: ConnectionManualInstallationCurrentV1,
 	now: number,
 ) {
+	if (record?.status !== "preparing") denied();
+	return requireManualOriginal(record, current, now);
+}
+/**
+ * The original manual installation still belongs to this user, Execution, Host
+ * preparation and current authorization. Its own stage is not checked: an
+ * idempotent replay reads the original back after the receipt CAS moved it on.
+ */
+function requireManualOriginal(
+	record: ConnectionManualInstallationSavedV1 | null,
+	current: ConnectionManualInstallationCurrentV1,
+	now: number,
+) {
 	if (
-		record?.status !== "preparing" ||
+		!record ||
+		!["preparing", "awaiting_confirmation", "confirmed"].includes(
+			record.status,
+		) ||
 		record.expiresAt <= now ||
 		record.identityRevision !== current.user.authorizationRevision ||
 		record.agentAuthorizationRevision !== current.agentAuthorizationRevision ||
@@ -533,7 +549,8 @@ export function createConnectionInstallationAuthorizationV1(options: {
 						digest,
 					);
 					if (replay) {
-						requireManualSaved(replay, manual, now);
+						// The same begin reads its original installation back at any stage.
+						requireManualOriginal(replay, manual, now);
 						return manualProjection(replay);
 					}
 					const record: ConnectionManualInstallationSavedV1 = {

@@ -305,8 +305,13 @@ function receiptFor(
 	};
 }
 
-async function fixSupply(user = "alice", suffix = "a", worker = "worker-a") {
-	const projection = await begin(user, suffix);
+async function fixSupply(
+	user = "alice",
+	suffix = "a",
+	worker = "worker-a",
+	key = randomUUID(),
+) {
+	const projection = await begin(user, suffix, key);
 	const authorizationId = projection.authorizationId;
 	const prepare = await claimFirst("prepare", `execution-${suffix}`, worker);
 	expect(prepare.claimed?.command.command).toBe("prepare");
@@ -361,8 +366,9 @@ async function prepareDelivered(
 	user = "alice",
 	suffix = "a",
 	worker = "worker-a",
+	key = randomUUID(),
 ) {
-	const fixed = await fixSupply(user, suffix, worker);
+	const fixed = await fixSupply(user, suffix, worker, key);
 	const {
 		authorizationId,
 		prepare,
@@ -2188,5 +2194,190 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		});
 		await expect(settlement).resolves.toBe(false);
 		expect(await callbackStatus(run.authorizationId)).toBe("unknown");
+	});
+
+	// PR-Agent 93a436f78b2e: the readback permit is decided after the directory
+	// read, at the database clock, against the original claim only.
+	it.each([
+		["supply_delivery", "authorization"],
+		["supply", "authorization"],
+		["command", "authorization"],
+		["supply_delivery", "claim"],
+		["supply", "claim"],
+		["command", "claim"],
+	] as const)(
+		"permits no %s readback when the directory read outlasts the %s",
+		async (purpose, expiry) => {
+			const run =
+				purpose === "command" ? await prepareDelivered() : await fixSupply();
+			const request =
+				purpose === "command"
+					? (run as Awaited<ReturnType<typeof prepareDelivered>>)
+							.commandReadback
+					: { ...run.readbackBase, purpose };
+			expect(await manual.readback(request)).toBe("allowed");
+			if (expiry === "authorization") {
+				await client`update platform.connection_installation_authorizations
+				set expires_at=clock_timestamp()+interval '1 second' where id=${run.authorizationId}`;
+				waitDuringRead(
+					() => client`select expires_at <= clock_timestamp() as expired
+					from platform.connection_installation_authorizations where id=${run.authorizationId}`,
+				);
+			} else {
+				// Another live outbox of the same Worker and Execution never stands in.
+				await expireClaimDuringRead();
+			}
+			try {
+				expect(await manual.readback(request)).toBe("denied");
+			} finally {
+				beforeResolveUser = undefined;
+			}
+		},
+	);
+
+	// PR-Agent 435324e3306b: the original begin stays idempotent after its receipt CAS.
+	it("replays the same begin after the receipt CAS as the original installation", async () => {
+		const key = randomUUID();
+		const run = await prepareDelivered("alice", "a", "worker-a", key);
+		expect(await settlePrepared(run)).toBe("registered");
+		const replay = await begin("alice", "a", key);
+		expect(replay).toEqual({
+			schemaVersion: 1,
+			manual: true,
+			authorizationId: run.authorizationId,
+			status: "awaiting_confirmation",
+			expiresAt: expect.any(Number),
+		});
+		// The replay is a readback: no second prepare, registration or installation.
+		const installations =
+			await client`select authorization_id from platform.connection_manual_installations`;
+		expect(installations).toEqual([{ authorization_id: run.authorizationId }]);
+		const commands =
+			await client`select command, status from platform.connection_installation_commands
+			where authorization_id=${run.authorizationId} order by created_at, command`;
+		expect(commands).toEqual([
+			{ command: "prepare", status: "completed" },
+			{ command: "begin", status: "pending" },
+		]);
+		// A different request under the same key still conflicts.
+		await expect(begin("alice", "b", key)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
+	// PR-Agent 46d2b1c86bf3: a prepare claimed but never fixed sent nothing and
+	// reopens for the same installation instead of staying unknown forever.
+	it("reopens a prepare whose attempt expired before fixSupply and finishes the same installation", async () => {
+		const projection = await begin();
+		const first = await claimFirst("prepare");
+		expect(first.claimed?.command.command).toBe("prepare");
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()-interval '1 second' where id=${first.item.commandId}`;
+		expect(await manual.listPending(32, ["execution-a"])).toEqual([
+			{
+				commandId: first.item.commandId,
+				command: "prepare",
+				authorizationId: projection.authorizationId,
+				executionId: "execution-a",
+			},
+		]);
+		// The expired attempt can no longer fix a template or obtain ciphertext.
+		const stale = await templateFor(projection.authorizationId);
+		expect(
+			await manual.fixSupply({
+				commandId: first.item.commandId,
+				attemptId: first.attemptId,
+				attemptOwner: "worker-a",
+				command: "prepare",
+				template: stale.template,
+				registrationKey: stale.registrationKey,
+				supplyAttemptId: randomUUID(),
+			}),
+		).toBeNull();
+		const attemptId = randomUUID();
+		const claimed = await manual.claim({
+			commandId: first.item.commandId,
+			attemptId,
+			attemptOwner: "worker-a",
+		});
+		expect(claimed?.authorization.authorizationId).toBe(
+			projection.authorizationId,
+		);
+		const { template, registrationKey } = await templateFor(
+			projection.authorizationId,
+		);
+		const supplyAttemptId = randomUUID();
+		const attempt = {
+			commandId: first.item.commandId,
+			attemptId,
+			attemptOwner: "worker-a",
+		};
+		expect(
+			await manual.fixSupply({
+				...attempt,
+				command: "prepare",
+				template,
+				registrationKey,
+				supplyAttemptId,
+			}),
+		).not.toBeNull();
+		expect(
+			await manual.settleSupply({
+				...attempt,
+				command: "prepare",
+				authorizationId: projection.authorizationId,
+				supplyAttemptId,
+				outcome: "confirmed",
+			}),
+		).toBe(true);
+		expect(
+			await manual.commitDelivery({
+				...attempt,
+				command: "prepare",
+				authorizationId: projection.authorizationId,
+				deliveryDigest: connectionInstallCommandDigestV1({
+					schemaVersion: 1,
+					command: "prepare",
+					...attempt,
+					template,
+					supplyAttemptId,
+					registrationKey,
+				}),
+			}),
+		).toBe(true);
+		expect(
+			await manual.settleRegistration({
+				...attempt,
+				command: "prepare",
+				authorizationId: projection.authorizationId,
+				response: {
+					schemaVersion: 1,
+					outcome: "registered",
+					commandId: first.item.commandId,
+					receipt: receiptFor(template, registrationKey),
+				},
+			}),
+		).toBe("registered");
+		const prepares =
+			await client`select id from platform.connection_installation_commands
+			where authorization_id=${projection.authorizationId} and command='prepare'`;
+		expect(prepares).toEqual([{ id: first.item.commandId }]);
+	});
+
+	it("keeps a prepare unknown when its attempt expired after fixSupply", async () => {
+		const run = await fixSupply();
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()-interval '1 second' where id=${run.prepare.item.commandId}`;
+		expect(await manual.listPending(32, ["execution-a"])).toEqual([]);
+		const [row] =
+			await client`select m.supply_state, m.registration_key, c.status, c.attempt_id
+			from platform.connection_manual_installations m join platform.connection_installation_commands c
+			on c.authorization_id=m.authorization_id where c.id=${run.prepare.item.commandId}`;
+		expect(row).toEqual({
+			supply_state: "unknown",
+			registration_key: run.registrationKey,
+			status: "unknown",
+			attempt_id: run.prepare.attemptId,
+		});
 	});
 });
