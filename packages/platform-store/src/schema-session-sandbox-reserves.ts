@@ -3,6 +3,7 @@ import {
 	bigint,
 	boolean,
 	check,
+	foreignKey,
 	jsonb,
 	text,
 	timestamp,
@@ -10,6 +11,7 @@ import {
 	varchar,
 } from "drizzle-orm/pg-core";
 import { platformSchema } from "./schema-common";
+import { sessionSandboxAllocations } from "./schema-session-sandboxes";
 
 export const sessionSandboxBudgets = platformSchema.table(
 	"session_sandbox_budgets",
@@ -53,6 +55,8 @@ export const sessionSandboxReserves = platformSchema.table(
 		claimedAt: timestamp("claimed_at", { withTimezone: true }),
 		retiredAt: timestamp("retired_at", { withTimezone: true }),
 		readyAt: timestamp("ready_at", { withTimezone: true }),
+		/** Non-secret executor startup and projection facts (HLD §10.3.1); null for single-container reserves. */
+		executorStartup: jsonb("executor_startup"),
 	},
 	(table) => [
 		uniqueIndex("session_sandbox_reserve_session_unique").on(table.sessionId),
@@ -67,6 +71,41 @@ export const sessionSandboxReserves = platformSchema.table(
 		check(
 			"session_sandbox_reserve_id_uuid",
 			sql`${table.sandboxId} ~ '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'`,
+		),
+	],
+);
+/**
+ * Business promotion receipt of a claimed independent-executor reserve (Spec
+ * §10.1.1, ADR-0036 Platform DB fact). One receipt per allocation generation/fence.
+ */
+export const sessionSandboxExecutorPromotions = platformSchema.table(
+	"session_sandbox_executor_promotions",
+	{
+		id: text("id").primaryKey(),
+		sandboxId: text("sandbox_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		sessionGeneration: bigint("session_generation", {
+			mode: "number",
+		}).notNull(),
+		resourceFence: bigint("resource_fence", { mode: "number" }).notNull(),
+		receipt: jsonb("receipt").notNull(),
+		receiptDigest: text("receipt_digest").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		foreignKey({
+			name: "session_sandbox_executor_promotion_allocation_fk",
+			columns: [table.sandboxId],
+			foreignColumns: [sessionSandboxAllocations.sandboxId],
+		}).onDelete("cascade"),
+		uniqueIndex("session_sandbox_executor_promotion_unique").on(
+			table.sandboxId,
+			table.sessionGeneration,
+			table.resourceFence,
+		),
+		check(
+			"session_sandbox_executor_promotion_digest",
+			sql`${table.receiptDigest} ~ '^[0-9a-f]{64}$'`,
 		),
 	],
 );

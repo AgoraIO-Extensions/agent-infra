@@ -451,7 +451,11 @@ export async function submitConversationTask(
 			traceId: request.command.traceId,
 			occurredAt: plan.acceptedAt,
 		});
-		if (admission) await adoptSessionSandboxReserveV1(transaction, admission);
+		if (admission)
+			await adoptSessionSandboxReserveV1(transaction, admission, {
+				requestId: request.command.requestId,
+				traceId: request.command.traceId,
+			});
 	} else {
 		await transaction`
 			update platform.conversations
