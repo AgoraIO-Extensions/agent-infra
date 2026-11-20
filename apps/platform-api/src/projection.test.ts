@@ -55,6 +55,7 @@ function readers(
 	) =>
 		| { status: "processing" | "associated" | "failed" | "unverified" }
 		| undefined,
+	availability: readonly unknown[] = configuration.availability,
 ) {
 	const hydrateUsers = vi.fn(async (ids: readonly string[]) =>
 		ids.map((userId) => ({
@@ -71,6 +72,7 @@ function readers(
 				outcome: "found" as const,
 				configuration: {
 					...configuration,
+					availability,
 					agentId,
 					// 第三个 Agent 有另一组 Owner：只能和同一组 Owner 共用解析结果。
 					ownerIds:
@@ -408,5 +410,58 @@ describe("Agent Connection association projection (#851)", () => {
 			agent: agent("agent_02"),
 		});
 		expect(legacy).not.toHaveProperty("connectionAssociation");
+	});
+});
+
+describe("Agent availability application entries (#4283)", () => {
+	it("keeps application entries off the current V1 and V2 wire instead of failing the projection", async () => {
+		const { projections } = readers(undefined, [
+			{ kind: "user", userId: "shared_01" },
+			{ kind: "organization", organizationId: "org_01" },
+			{ kind: "application", applicationId: "shared_01" },
+		]);
+		const metadata = {
+			identity,
+			requestId: "application-entry-request",
+			traceId: "application-entry-trace",
+			requestScope: {},
+		};
+		const people = [
+			{ kind: "user", userId: "shared_01" },
+			{ kind: "organization", organizationId: "org_01" },
+		];
+		const [v1, v2, detail, application] = await Promise.all([
+			projections.readManagementAgentProjection({
+				...metadata,
+				agent: agent("agent_01"),
+			}),
+			projections.readManagementAgentProjectionV2({
+				...metadata,
+				agent: agent("agent_01"),
+			}),
+			projections.readAgentDetailProjection({
+				...metadata,
+				agent: agent("agent_01"),
+			}),
+			projections.readApplicationProjection({
+				...metadata,
+				application: {
+					schemaVersion: 1,
+					applicationId: "application_01",
+					agentId: "agent_01",
+					applicantId: "user_01",
+					name: "Application",
+					description: "Application entry stays off the current wire",
+					sourceReference: "sha256:custom",
+					management,
+					submittedAt: new Date("2026-09-03T08:00:00Z"),
+					decision: null,
+				},
+			}),
+		]);
+		expect(v1?.configuration.availability).toEqual(people);
+		expect(v2?.configuration.availability).toEqual(people);
+		expect(detail.configuration.availability).toEqual(people);
+		expect(application.configuration.availability).toEqual(people);
 	});
 });

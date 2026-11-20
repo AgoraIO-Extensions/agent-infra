@@ -109,7 +109,9 @@ const emptySnapshot = (): ApplicationFoundationSnapshot => ({
 function accessTargetKey(target: AgentConfigurationAccessTargetV1): string {
 	return target.kind === "user"
 		? `user\0${target.userId}`
-		: `organization\0${target.organizationId}`;
+		: target.kind === "organization"
+			? `organization\0${target.organizationId}`
+			: `application\0${target.applicationId}`;
 }
 
 function validDate(value: unknown): value is Date {
@@ -184,7 +186,9 @@ function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
 		plan.access.availability.some((target) =>
 			target.kind === "user"
 				? !validText(target.userId)
-				: !validText(target.organizationId),
+				: target.kind === "organization"
+					? !validText(target.organizationId)
+					: !validText(target.applicationId),
 		) ||
 		!sameValue(plan.result, expectedResult) ||
 		!validText(plan.idempotency.key, 128) ||

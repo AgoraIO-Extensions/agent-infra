@@ -225,7 +225,15 @@ export function decideAgentAccessUpdatePolicy(
 			availability.some((target) =>
 				target.kind === "user"
 					? users.get(target.userId) !== "active"
-					: !authority.organizationIds.includes(target.organizationId),
+					: target.kind === "organization"
+						? !authority.organizationIds.includes(target.organizationId)
+						: // Existing application entries are kept without a recheck;
+							// adding one needs Access confirmation (Spec §9.2.2).
+							!state.availability.some(
+								(current) =>
+									current.kind === "application" &&
+									current.applicationId === target.applicationId,
+							),
 			))
 	) {
 		return {

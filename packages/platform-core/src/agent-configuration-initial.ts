@@ -77,7 +77,9 @@ function admittedInitialAccess(
 		command.availability.some((target) =>
 			target.kind === "user"
 				? !activeUserIds.has(target.userId)
-				: !organizationIds.has(target.organizationId),
+				: // Application entries need Access confirmation (Spec §9.2.2).
+					target.kind !== "organization" ||
+					!organizationIds.has(target.organizationId),
 		)
 	) {
 		throw new AgentConfigurationError("not_authorized");

@@ -235,7 +235,11 @@ export function createPlatformProjectionReaders(
 			presentation,
 			wire: {
 				owners: hydratedOwners,
-				availability: configuration.availability,
+				// V1/V2 availability carries people entries only; application
+				// entries need a new wire version (Spec §9.2.2, §6.4).
+				availability: configuration.availability.filter(
+					({ kind }) => kind !== "application",
+				),
 				modelOptions: presentation.modelOptions,
 				defaultModelOptionId: configuration.defaultModelOptionId,
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
