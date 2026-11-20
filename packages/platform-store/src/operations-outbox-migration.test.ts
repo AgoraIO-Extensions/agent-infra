@@ -114,9 +114,10 @@ it.each(["lock", "build", "remaining-transaction"] as const)(
 			const [index] = await sql`select indisvalid from pg_index
 				where indexrelid='platform.outbox_scope_operation_idx'::regclass`;
 			expect(index?.indisvalid).toBe(true);
-			expect(
-				await sql`select * from platform_migrations.history order by id`,
-			).toHaveLength(baseline.length + 1);
+			const completedHistory =
+				await sql`select * from platform_migrations.history order by id`;
+			expect(completedHistory).toHaveLength(journal.entries.length);
+			expect(completedHistory.slice(0, baseline.length)).toEqual(baseline);
 		} finally {
 			release?.();
 			await holding;
