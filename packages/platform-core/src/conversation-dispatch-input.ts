@@ -230,6 +230,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"generationIsolation",
 			"runtimeTerminalEventSeen",
 			"metadataRecovery",
+			"executorDrainPending",
 			"attemptCount",
 			"recoveryElapsedMs",
 			"notSubmittedResubmissions",
@@ -507,6 +508,11 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(input.attemptCount === undefined
 			? {}
 			: { attemptCount: nonNegativeInteger(input.attemptCount) }),
+		...(input.executorDrainPending === undefined
+			? {}
+			: input.executorDrainPending === true && input.stopPending === true
+				? { executorDrainPending: true as const }
+				: invalidInput()),
 		...(input.recoveryElapsedMs === undefined
 			? {}
 			: { recoveryElapsedMs: nonNegativeInteger(input.recoveryElapsedMs) }),

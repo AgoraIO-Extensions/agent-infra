@@ -66,6 +66,8 @@ import {
 	type RuntimeConnectionConsumerProfile,
 	readRuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
+import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
+import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
 	startConnectionInstallReceiverServerV1,
@@ -590,6 +592,17 @@ export async function assembleRuntimeHost(
 				required("AGENT_INFRA_RUNTIME_POD_UID"),
 			);
 			await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
+			if (environment.AGENT_INFRA_EXECUTOR_STARTUP_REF !== undefined) {
+				sessionExecutor = await openExecutorDrainHostV1(
+					sessionExecutor,
+					await consumeExecutorIdentityV1(
+						"host",
+						sessionExecutorBinding,
+						environment,
+					),
+					dataDirectory,
+				);
+			}
 			detachSessionExecutorFailure = sessionExecutor.onFailure(() => {
 				void Promise.resolve()
 					.then(async () => {

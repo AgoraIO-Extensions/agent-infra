@@ -1,10 +1,17 @@
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	type KeyObject,
+	randomUUID,
+} from "node:crypto";
 import { posix } from "node:path";
 import {
 	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
 	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	type CodexSessionExecutorBindingV1,
+	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	issueExecutorStartIdentityV1,
 	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import {
@@ -42,6 +49,9 @@ import type {
 } from "@kubernetes/client-node";
 import {
 	type CodexSessionExecutorPolicyV1,
+	executorStartupDeadlineAnnotationV1,
+	executorStartupPodProjectionV1,
+	executorStartupRefV1,
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
 	sessionExecutorContainerNameV1,
@@ -308,6 +318,8 @@ export interface SessionSandboxAllocationV1 {
 	};
 	/** Trusted deployment resource layout; absent preserves the existing single container. */
 	readonly codexSessionExecutor?: CodexSessionExecutorPolicyV1;
+	readonly executorDrainIdentity?: true;
+	readonly executorStartupDeadline?: number;
 	readonly storageSize: string;
 	readonly storageClassName?: string;
 	readonly desiredState: "running" | "stopped";
@@ -1304,6 +1316,20 @@ function renderSessionSandboxResourcesV1(
 		];
 		pod.spec.containers.push(projection.executor);
 		pod.spec.volumes?.push(projection.volume);
+		if (allocation.executorDrainIdentity) {
+			const host = pod.spec.containers[0];
+			if (!host || !pod.spec.volumes)
+				throw new WorkloadKubernetesError("policy");
+			pod.spec.volumes.push(
+				...executorStartupPodProjectionV1(
+					allocation.runtime.sessionExecutor.binding,
+					allocation.runtime.grantPublicKey,
+					projection.init,
+					host,
+					projection.executor,
+				),
+			);
+		}
 	}
 	const oauth = oauthProvisioning(allocation);
 	if (oauth && allocation.connectionInstallBootstrap)
@@ -2314,9 +2340,112 @@ function ownedAtOrBefore(
 	);
 }
 
+export class SessionExecutorStartupExpiredV1 extends WorkloadKubernetesError {
+	constructor() {
+		super("policy");
+	}
+}
+
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
+	readonly executorIdentityIssuer?: KeyObject;
 }) {
+	const ensureExecutorIdentity = async (
+		pod: KubernetesObject,
+		allocation: SessionSandboxAllocationV1,
+	) => {
+		const binding = allocation.runtime?.sessionExecutor?.binding;
+		const issuer = options.executorIdentityIssuer;
+		const expiresAt = allocation.executorStartupDeadline;
+		if (!binding || !issuer || !expiresAt || !options.client.readMetadata)
+			throw new WorkloadKubernetesError("policy");
+		const current = await options.client.read<V1Pod>("Pod", allocation.podName);
+		const podUid = current?.metadata?.uid;
+		if (
+			!current ||
+			!podUid ||
+			!owned(current, pod, allocation) ||
+			current.metadata?.annotations?.[executorStartupDeadlineAnnotationV1] !==
+				String(expiresAt)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		const name = executorStartupRefV1(binding);
+		const published = await options.client.readMetadata("Secret", name);
+		if (
+			published &&
+			(published.metadata?.name !== name ||
+				published.metadata?.namespace !== allocation.namespace ||
+				!published.metadata.uid ||
+				!published.metadata.resourceVersion ||
+				published.metadata.deletionTimestamp !== undefined ||
+				published.metadata.ownerReferences?.length !== 1 ||
+				!published.metadata.ownerReferences.some(
+					(owner) =>
+						owner.apiVersion === "v1" &&
+						owner.kind === "Pod" &&
+						owner.name === allocation.podName &&
+						owner.uid === podUid,
+				))
+		)
+			throw new WorkloadKubernetesError("conflict");
+		const initialized = current.status?.initContainerStatuses?.some(
+			(container) =>
+				container.name === "codex-session-workspace-init" &&
+				container.state?.terminated?.exitCode === 0,
+		);
+		const expired = Date.now() >= expiresAt;
+		if (
+			expired &&
+			(!initialized ||
+				!current.status?.conditions?.some(
+					(condition) =>
+						condition.type === "Ready" && condition.status === "True",
+				))
+		)
+			throw new SessionExecutorStartupExpiredV1();
+		if (initialized) {
+			if (published?.metadata?.uid && published.metadata.resourceVersion)
+				await options.client.delete({
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: published.metadata,
+				});
+			return;
+		}
+		if (published) return;
+		const identities = issueExecutorStartIdentityV1(
+			{
+				podUid,
+				bindingDigest: codexSessionExecutorBindingDigestV1(binding),
+				startupRef: name,
+				expiresAt,
+			},
+			issuer,
+		);
+		await options.client.create<V1Secret>({
+			apiVersion: "v1",
+			kind: "Secret",
+			type: "Opaque",
+			immutable: true,
+			metadata: {
+				...metadata(allocation, name),
+				ownerReferences: [
+					{
+						apiVersion: "v1",
+						kind: "Pod",
+						name: allocation.podName,
+						uid: podUid,
+					},
+				],
+			},
+			data: {
+				host: Buffer.from(JSON.stringify(identities.host)).toString("base64"),
+				runner: Buffer.from(JSON.stringify(identities.runner)).toString(
+					"base64",
+				),
+			},
+		});
+	};
 	const validateSkillSource = async (
 		allocation: SessionSandboxAllocationV1,
 	) => {
@@ -2624,6 +2753,13 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			} else {
 				const pod = resources.find((resource) => resource.kind === "Pod");
 				if (!pod) throw new WorkloadKubernetesError("policy");
+				if (
+					allocation.executorDrainIdentity &&
+					allocation.executorStartupDeadline !== undefined &&
+					Date.now() >= allocation.executorStartupDeadline &&
+					!(await options.client.read("Pod", allocation.podName))
+				)
+					throw new SessionExecutorStartupExpiredV1();
 				// PVC, identity, policy, route and Secret are independent. The Pod
 				// is the only resource that consumes all of them, so keep it in a
 				// second wave while collapsing the control-plane round trips.
@@ -2645,7 +2781,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						allocation.workspaceSnapshotProjection,
 						metadata(allocation, sessionSnapshotSecretNameV1(allocation)),
 					);
+				if (allocation.executorDrainIdentity) {
+					if (!allocation.executorStartupDeadline || !pod.metadata)
+						throw new WorkloadKubernetesError("policy");
+					pod.metadata.annotations = {
+						...pod.metadata.annotations,
+						[executorStartupDeadlineAnnotationV1]: String(
+							allocation.executorStartupDeadline,
+						),
+					};
+				}
 				await ensure(pod);
+				if (allocation.executorDrainIdentity)
+					await ensureExecutorIdentity(pod, allocation);
 				if (allocation.workspaceSnapshotProjection?.manifest) {
 					const created = await options.client.read<V1Pod>(
 						"Pod",
@@ -2871,10 +3019,84 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				...(failureCode === undefined ? {} : { failureCode }),
 				...(waitingReason === undefined ? {} : { waitingReason }),
 				...(runtimeStarting ? { runtimeStarting: true as const } : {}),
+				...(purpose === "business" &&
+				status === "ready" &&
+				allocation.executorDrainIdentity
+					? { executorDrainRequired: true as const }
+					: {}),
 				...(workspaceSnapshot === undefined ? {} : { workspaceSnapshot }),
 				resources,
 			};
 		},
+		async retireExpiredExecutorStartup(
+			allocation: SessionSandboxAllocationV1,
+			previous: readonly SessionSandboxResourceIdentityV1[],
+			record: (
+				resources: readonly SessionSandboxResourceIdentityV1[],
+			) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+			signal: AbortSignal,
+		) {
+			if (
+				!allocation.executorDrainIdentity ||
+				!allocation.executorStartupDeadline ||
+				options.client.namespace !== allocation.namespace
+			)
+				throw new WorkloadKubernetesError("policy");
+			const expected = sessionSandboxResourcesV1(allocation);
+			const targets: SessionSandboxResourceIdentityV1[] = [];
+			for (const kind of ["Service", "Pod"] as const) {
+				const want = expected.find((item) => item.kind === kind);
+				const name = want?.metadata?.name;
+				if (!want || !name) throw new WorkloadKubernetesError("policy");
+				const current = await options.client.read(kind, name);
+				if (!current) continue;
+				const { uid, resourceVersion } = current.metadata ?? {};
+				const prior = previous.find((item) => item.kind === kind);
+				if (
+					!uid ||
+					!resourceVersion ||
+					!owned(current, want, allocation) ||
+					(prior && prior.uid !== uid) ||
+					(kind === "Pod" &&
+						current.metadata?.annotations?.[
+							executorStartupDeadlineAnnotationV1
+						] !== String(allocation.executorStartupDeadline))
+				)
+					throw new WorkloadKubernetesError("conflict");
+				targets.push({
+					kind,
+					namespace: allocation.namespace,
+					name,
+					uid,
+					resourceVersion,
+				});
+			}
+			signal.throwIfAborted();
+			const original = await record(targets);
+			if (!original) throw new WorkloadKubernetesError("conflict");
+			// Close the route before retiring the process. Every delete is scoped
+			// to the identities persisted before the first Kubernetes write.
+			for (const target of original) {
+				signal.throwIfAborted();
+				const current = await options.client.read(target.kind, target.name);
+				if (!current) continue;
+				const want = expected.find((item) => item.kind === target.kind);
+				if (
+					!want ||
+					!owned(current, want, allocation) ||
+					current.metadata?.uid !== target.uid ||
+					!current.metadata.resourceVersion
+				)
+					throw new WorkloadKubernetesError("conflict");
+				await options.client.delete(current);
+				if (await options.client.read(target.kind, target.name))
+					throw new WorkloadKubernetesError("unavailable");
+			}
+			return previous.filter(
+				({ kind }) => kind !== "Pod" && kind !== "Service",
+			);
+		},
+
 		async cleanup(
 			allocation: SessionSandboxAllocationV1,
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],

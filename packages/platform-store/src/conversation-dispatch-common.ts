@@ -173,6 +173,7 @@ export interface StopRow {
 	status: "submitted" | "completed";
 	confirmation_deadline: Date;
 	confirmation_timed_out_at: Date | null;
+	executor_drain_required: boolean;
 }
 
 export interface DispatchState {

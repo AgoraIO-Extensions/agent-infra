@@ -15,6 +15,9 @@ export {
 export * from "./claude-runtime-driver.js";
 export { validateModelAccess as validateCodexModelAccess } from "./codex-app-server-bridge.js";
 export { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";
+export * from "./codex-executor-bootstrap.js";
+export * from "./codex-executor-control.js";
+export * from "./codex-executor-drain-journal.js";
 export * from "./codex-installation.js";
 export * from "./codex-runtime-driver.js";
 export * from "./codex-session-executor.js";

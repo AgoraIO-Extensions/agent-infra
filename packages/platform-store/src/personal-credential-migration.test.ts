@@ -185,7 +185,8 @@ beforeAll(async () => {
 		{ idx: 87, tag: "0087_operations_request_inventory" },
 		{ idx: 88, tag: "0088_session_workspace_reclamation_read" },
 		{ idx: 89, tag: "0089_operations_outbox_scope" },
-		{ idx: 90, tag: "0090_connection_host_supplies" },
+		{ idx: 90, tag: "0090_executor_stop_drain" },
+		{ idx: 91, tag: "0091_connection_host_supplies" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -436,6 +437,13 @@ describe("personal credential disable authority append", () => {
 							delete copy.creator_principal_id;
 						}
 						if (table === "outbox_items") delete copy.trace_parent;
+						if (
+							table === "conversation_stops" &&
+							"executor_drain_required" in copy
+						) {
+							expect(copy.executor_drain_required).toBe(false);
+							delete copy.executor_drain_required;
+						}
 						// #3078：迁移把已有修订的 Runtime 修订回填为自身修订号。
 						if (table === "agent_configuration_revisions") {
 							if ("runtime_revision" in copy)
