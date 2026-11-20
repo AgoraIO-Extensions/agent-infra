@@ -254,6 +254,7 @@ describe("platform-core package surface", () => {
 			"markSkillHubInstallationUpgradeV1",
 			"markSkillHubUpgradeV1",
 			"modelOptionDisplayNameV1",
+			"nativeCapabilityAdmissionReplayDigestV6",
 			"nativeCapabilityAdmissionRequestDigest",
 			"nativeCapabilityAdmissionRequestDigestV1",
 			"nativeCapabilityAdmissionRequestDigestV2",
