@@ -5,6 +5,7 @@ import {
 	createNativeCapabilityAdmissionUseCaseV1,
 	createTaskRuntimeAuthorizationUseCaseV1,
 	emptyOperationsResourcesV2,
+	projectConversationExecutionV1,
 	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
@@ -9141,6 +9142,14 @@ describe("PostgreSQL terminal outbox event recovery", () => {
 					execution_status: "completed",
 					execution_fence: 1,
 				});
+				// #4266: only the original control drain remains after lifecycle stop.
+				if (fault !== "none") {
+					await client`update platform.session_sandbox_allocations set status='stopped', desired_state='stopped'
+                    where conversation_id=${work.conversationId}`;
+					await client`update platform.agent_applications set status='stopped', desired_state='stopped', service_availability=null
+                    where agent_id='agent-dispatch'`;
+					if (fault === "terminal-commit") await seedStop(work);
+				}
 				// Replaying a terminal journal must not need new Agent capacity or reset
 				// the Conversation state now used by a subsequent Execution.
 				await client`update platform.workload_reconciliations set state = state #- '{verified,executionCapacity}' #- '{candidate,executionCapacity}' where agent_id = 'agent-dispatch'`;
@@ -9181,6 +9190,21 @@ describe("PostgreSQL terminal outbox event recovery", () => {
 				const rows =
 					await client`select event_type, event_payload, runtime_cursor from platform.conversation_events where execution_id = ${work.executionId} order by sequence`;
 				expect(rows).toHaveLength(5);
+				const query = new PostgresConversationQueryV1({ databaseUrl });
+				try {
+					const detail = await query.getExecution(
+						{ actorId: "actor-dispatch", channelId: "web" },
+						work.conversationId,
+						work.executionId,
+					);
+					if (!detail) throw new Error("Expected original execution detail");
+					expect(projectConversationExecutionV1(detail)).toMatchObject({
+						status: "completed",
+						finishedAt: new Date(event(4).occurredAt),
+					});
+				} finally {
+					await query.close();
+				}
 				expect(rows[4]?.event_payload).toMatchObject({
 					type: "execution.operation",
 					fact: {
@@ -10921,6 +10945,41 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		return row;
 	}
 
+	it("retains the original compute until terminal event/ACK control work settles (#4266)", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+			executionFence: 3,
+			hostSessionRef: "original-host",
+		});
+		const sandbox = await prepared(work);
+		await client`update platform.conversation_executions set last_runtime_cursor='original-cursor' where execution_id=${work.executionId}`;
+		await reverify();
+		expect(await upgrade()).toBe(1);
+		const store = sandboxStore();
+		const request = {
+			schemaVersion: 1 as const,
+			itemId: sandbox.itemId,
+			workerId: "control-drain-test",
+			leaseDurationMs: 30_000,
+		};
+		try {
+			const drain = await store.claimSandboxReconciliation(request);
+			expect(drain).toMatchObject({
+				purpose: "drain",
+				drainComputeAllowed: false,
+			});
+			await client`update platform.outbox_items set status='succeeded' where id=${work.itemId}`;
+			await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${sandbox.itemId}`;
+			const settled = await store.claimSandboxReconciliation(request);
+			expect(settled).toMatchObject({
+				purpose: "drain",
+				drainComputeAllowed: true,
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("keeps an idle Sandbox current after a channel-only configuration revision (ADR-0028)", async () => {
 		const idle = await seed("conversation.turn.submit.v1", {
 			executionFence: 2,
@@ -12013,4 +12072,183 @@ describe("Web bounded queue dispatch (#3376)", () => {
 			await Promise.all([store.close(), transaction.close()]);
 		}
 	});
+});
+
+describe("Files4266 terminal event recovery diagnosis", () => {
+	it.each(["processing", "unknown", "completed"] as const)(
+		"Files4266 discovers original %s Turn recovery after Sandbox stop",
+		async (status) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: status,
+				executionFence: 3,
+				hostSessionRef: "original-host",
+			});
+			await client`update platform.conversation_executions
+        set last_runtime_cursor='cursor-21', last_event_sequence=21
+        where execution_id=${work.executionId}`;
+			await client`update platform.outbox_items
+        set status='retry_scheduled', attempt_count=3, delivery_fence=3,
+            available_at=clock_timestamp()-interval '1 second',
+            lease_owner=null,lease_expires_at=null where id=${work.itemId}`;
+			await client`update platform.session_sandbox_allocations
+        set status='stopped',desired_state='stopped' where conversation_id=${work.conversationId}`;
+			const store = open();
+			try {
+				const found = await store.findDispatchable({ limit: 256 });
+				expect(found.some((x) => x.itemId === work.itemId)).toBe(true);
+			} finally {
+				await store.close();
+			}
+		},
+	);
+	it("Files4266 claims terminal original event recovery without a running Sandbox", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+			executionFence: 3,
+			hostSessionRef: "original-host",
+		});
+		await client`update platform.conversation_executions
+      set last_runtime_cursor='cursor-21',last_event_sequence=21 where execution_id=${work.executionId}`;
+		await client`update platform.outbox_items set status='retry_scheduled',
+      attempt_count=3,delivery_fence=3,available_at=clock_timestamp()-interval '1 second'
+      where id=${work.itemId}`;
+		await client`update platform.session_sandbox_allocations
+      set status='stopped',desired_state='stopped' where conversation_id=${work.conversationId}`;
+		const store = open();
+		try {
+			const result = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "files4266",
+				leaseDurationMs: 30000,
+			});
+			expect(result.outcome).toBe("claimed");
+		} finally {
+			await store.close();
+		}
+	});
+});
+
+describe("terminal original Turn control authority (#4266)", () => {
+	async function terminalWork() {
+		const work = await acceptedKeyWork("web");
+		const first = await claim(work.itemId);
+		try {
+			if (first.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			const original = first.decision.claim;
+			expect(
+				await first.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect(
+				await first.store.recordRuntimeResponse({
+					claim: original,
+					hostSessionRef: "original-host",
+					originalOperationAccepted: true,
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+				}),
+			).toBe(true);
+			expect(
+				await first.store.retry({
+					claim: original,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_STREAM_INCOMPLETE",
+					transition: {},
+				}),
+			).toBe(true);
+		} finally {
+			await first.store.close();
+		}
+		await client`update platform.session_sandbox_allocations set status='stopped',desired_state='stopped' where conversation_id=${work.conversationId}`;
+		await client`update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id='agent-dispatch'`;
+		return work;
+	}
+	it("preserves original acceptance, digest and fence while only the outbox lease advances", async () => {
+		const work = await terminalWork();
+		const before = await savedPreparationPins(work.executionId);
+		const store = open();
+		try {
+			expect(
+				(await store.findDispatchable({ limit: 256 })).some(
+					(i) => i.itemId === work.itemId,
+				),
+			).toBe(true);
+			const result = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "terminal-worker",
+				leaseDurationMs: 30_000,
+			});
+			expect(result.outcome).toBe("claimed");
+			if (result.outcome !== "claimed") throw new Error("Expected claim");
+			expect(result.claim).toMatchObject({
+				executionDeliveryFence: 1,
+				deliveryFence: 2,
+				hostSessionRef: "original-host",
+				runtimeCursor: null,
+			});
+			expect(await savedPreparationPins(work.executionId)).toEqual(before);
+			const state = await store.readRuntimeState({ claim: result.claim });
+			expect(state?.originalOperationDigest).toBe(
+				before?.original_operation_digest,
+			);
+			const drifts = [
+				{ actorId: "other-user" },
+				{ agentId: "other-agent" },
+				{ conversationId: "other-conversation" },
+				{ sessionGeneration: 2 },
+				{ executionDeliveryFence: 2 },
+				{ deliveryFence: 3 },
+				{ sandbox: { ...result.claim.sandbox!, sandboxId: "other-sandbox" } },
+			];
+			for (const drift of drifts) {
+				let state: unknown = null;
+				try {
+					state = await store.readRuntimeState({
+						claim: { ...result.claim, ...drift },
+					});
+				} catch (error) {
+					expect(error).toBeInstanceOf(TypeError);
+				}
+				expect(state).toBeNull();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+	it.each(["host", "turn", "generation", "fence"] as const)(
+		"rejects original %s drift without claiming or replaying",
+		async (drift) => {
+			const work = await terminalWork();
+			if (drift === "host")
+				await client`update platform.conversations set host_session_ref='replacement-host' where id=${work.conversationId}`;
+			if (drift === "turn")
+				await client`update platform.outbox_items set payload=jsonb_set(payload,'{turnId}','"replacement-turn"') where id=${work.itemId}`;
+			if (drift === "generation")
+				await client`update platform.outbox_items set payload=jsonb_set(payload,'{sessionGeneration}','2') where id=${work.itemId}`;
+			if (drift === "fence")
+				await client`update platform.outbox_items set delivery_fence=0 where id=${work.itemId}`;
+			const store = open();
+			try {
+				const result = await store.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "terminal-worker",
+					leaseDurationMs: 30_000,
+				});
+				expect(result.outcome).toBe("stale");
+				const [row] =
+					await client`select status,lease_owner from platform.outbox_items where id=${work.itemId}`;
+				expect(row).toEqual({ status: "retry_scheduled", lease_owner: null });
+			} finally {
+				await store.close();
+			}
+		},
+	);
 });

@@ -869,6 +869,18 @@ describe("stop proof of a partially prepared source (#2918)", () => {
 });
 
 describe("original Execution drain eligibility", () => {
+	it.each(["eventsPending", "executorDrainPending"] as const)(
+		"retains terminal compute while %s remains unconfirmed (#4266)",
+		(pending) => {
+			expect(
+				canDrainSessionSandboxComputeV1(["completed"], {
+					eventsPending: pending === "eventsPending",
+					executorDrainPending: pending === "executorDrainPending",
+				}),
+			).toBe(false);
+		},
+	);
+
 	it.each(["processing", "unknown", "invalid"])(
 		"does not release %s occupancy",
 		(status) => {

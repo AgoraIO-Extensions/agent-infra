@@ -251,6 +251,28 @@ async function lockedContext(
 				!isDeepStrictEqual(source.observation, allocation.resource_observation)
 			)
 				return waiting("lifecycle_stale");
+			const [control] = await transaction<
+				{
+					events_pending: boolean;
+					executor_drain_pending: boolean;
+				}[]
+			>`
+                select exists (
+                    select 1 from platform.conversation_executions e
+                    join platform.outbox_items o on o.scope_type = 'conversation'
+                        and o.scope_id = e.conversation_id and o.payload->>'executionId' = e.execution_id
+                    where e.conversation_id = ${sandbox.sessionId} and e.delivery_fence > 0
+                        and ${conversation.host_session_ref !== null}
+                        and o.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+                        and o.status in ('pending', 'processing', 'retry_scheduled')
+                ) as events_pending,
+                exists (
+                    select 1 from platform.conversation_stops s
+                    join platform.conversation_executions e on e.execution_id = s.execution_id
+                    where e.conversation_id = ${sandbox.sessionId}
+                        and s.status = 'submitted' and s.executor_drain_required
+                ) as executor_drain_pending
+            `;
 			return {
 				outbox,
 				sandbox,
@@ -260,6 +282,10 @@ async function lockedContext(
 				lifecycle,
 				drainComputeAllowed: canDrainSessionSandboxComputeV1(
 					executions.map((execution) => execution.status),
+					{
+						eventsPending: control?.events_pending !== false,
+						executorDrainPending: control?.executor_drain_pending !== false,
+					},
 				),
 				policy: source.policy,
 				deployment: null,
