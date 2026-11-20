@@ -314,23 +314,19 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/**
-	 * §13.5.6: a logical confirm that ended unknown after phase 1 committed its
-	 * pin, without a permit, is closed and its original key revoked at
-	 * Connection (which also ends any token already exchanged); nothing is
-	 * resent or re-granted and the pin stays (exception item 6).
-	 * - Its `exchange` never opened (#4309 S2): only the original attempt drives
-	 *   the phases, so it can never be sent; close at once.
-	 * - Its `exchange` was sent, completed or unknown, but no permit was written
-	 *   (#4312 S1): while the original claim still holds the permit may still be
-	 *   verified and recorded read-only; once that claim ends, close.
+	 * §13.5.6 (#4309 S2, #4312 S1): a logical confirm that ended unknown after
+	 * phase 1 committed its pin, without a permit, is closed at once and its
+	 * original key queued for revocation at Connection, whether its `exchange`
+	 * never opened, completed or stayed unknown. Only the original attempt drives
+	 * the phases, so nothing is resent or re-granted; the pin stays (exception
+	 * item 6). Closing at once, not when the original claim ends, is what lets
+	 * the revoke still reach Connection: every install command, the revoke
+	 * included, runs only under that original claim.
 	 */
 	async #closeStrandedConfirms() {
 		await this.#transaction(async (tx) => {
 			const stranded = await tx.execute(sql`
-				select a.id, m.template, exists (select 1 from platform.connection_installation_commands x
-						where x.authorization_id=a.id
-							and x.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange') as exchanged
-				from platform.connection_installation_authorizations a
+				select a.id from platform.connection_installation_authorizations a
 				join platform.connection_manual_installations m on m.authorization_id=a.id
 				join platform.connection_installation_commands c on c.authorization_id=a.id
 					and c.command='confirm' and c.status='unknown'
@@ -344,14 +340,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				limit 32
 				for update of a, m
 			`);
-			for (const { id, template, exchanged } of stranded) {
+			for (const { id } of stranded) {
 				const authorizationId = id as string;
-				if (exchanged === true) {
-					const [claim] = await tx.execute(
-						sql`select ${templateClaimHolds(template)} as holds`,
-					);
-					if (claim?.holds === true) continue;
-				}
 				await tx.execute(sql`
 					update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
 						updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'

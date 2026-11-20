@@ -894,6 +894,36 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		).toEqual([]);
 
 	it(
+		"closes an exchanged install without a permit and deletes its original key at Connection",
+		async () => {
+			const { projection, registrationKey } = await approvedInstall();
+			expect(await tick()).toBe(1);
+			// No publication evidence yet, so no permit: the attempt lapses.
+			await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+				where authorization_id=${projection.authorizationId} and status='sending'`;
+			expect(await tick()).toBe(1);
+			const [row] =
+				await client`select revoke_state from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
+			expect(row?.revoke_state).toBe("revoked");
+			expect(
+				connection.requests.map(({ method, path }) => `${method} ${path}`),
+			).toEqual([
+				"POST /connection/v1/agents/connection-agent-a/oauth-clients",
+				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+				"POST /oauth/token",
+				`DELETE /connection/v1/agents/connection-agent-a/oauth-clients/${encodeURIComponent(registrationKey)}`,
+			]);
+			expect(
+				(connection.receipts.get(registrationKey) as { status?: string })
+					.status,
+			).toBe("REVOKED");
+			await noCredentialStored();
+		},
+		confirmTimeout,
+	);
+
+	it(
 		"refuses phase 2 and revokes when the binding drifted after the pin",
 		async () => {
 			const { projection, registrationKey } = await approvedInstall();

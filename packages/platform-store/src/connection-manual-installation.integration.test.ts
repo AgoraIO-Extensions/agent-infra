@@ -3870,21 +3870,14 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(await manual.readback(request)).toBe("allowed");
 	});
 
-	// #4312 S1: a confirm that ends without a permit is closed and its original
-	// key revoked once its original claim ends; it is never resent.
-	it("closes an exchanged confirm without a permit once its original claim ends", async () => {
+	// #4312 S1: a confirm that ends without a permit is closed at once and its
+	// original key revoked while the original claim can still carry the revoke.
+	it("closes an exchanged confirm without a permit as soon as its attempt lapses", async () => {
 		const flow = await confirmed();
 		await exchanged(flow);
 		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
 			where authorization_id=${flow.run.authorizationId} and status='sending'`;
-		await manual.listPending(32, ["execution-a"]);
-		// The original claim still holds: kept for read-only verification.
-		expect(await pinFacts(flow.run.authorizationId)).toMatchObject({
-			status: "confirmed",
-			revoke_state: "not_required",
-		});
-		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id='item-a'`;
-		await manual.listPending(32, ["execution-a"]);
+		const pending = await manual.listPending(32, ["execution-a"]);
 		expect(await pinFacts(flow.run.authorizationId)).toEqual({
 			pins: 1,
 			receipts: 1,
@@ -3893,9 +3886,15 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			confirm:
 				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:completed",
 		});
-		const [revoke] =
-			await client`select status from platform.connection_installation_commands where authorization_id=${flow.run.authorizationId} and command='revoke'`;
-		expect(revoke?.status).toBe("pending");
+		// The revoke is listed for the original Execution, whose claim still holds.
+		expect(
+			pending.filter(
+				(item) =>
+					item.authorizationId === flow.run.authorizationId &&
+					item.command === "revoke",
+			),
+		).toHaveLength(1);
+		expect(await permitCount(flow.run.authorizationId)).toBe(0);
 	});
 
 	it("keeps a permitted install open after its confirm attempt and claim end", async () => {
@@ -4021,7 +4020,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		).toBeNull();
 	});
 
-	it("leaves an unknown confirm whose exchange was already sent for read-only verification", async () => {
+	it("also closes an unknown confirm whose exchange was sent but never settled", async () => {
 		const flow = await confirmed();
 		const phase = await bindingReadback(flow);
 		const candidate = await candidateFor(flow, phase);
@@ -4042,8 +4041,8 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(await pinFacts(flow.run.authorizationId)).toEqual({
 			pins: 1,
 			receipts: 1,
-			status: "confirmed",
-			revoke_state: "not_required",
+			status: "revoked",
+			revoke_state: "pending",
 			confirm:
 				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:unknown",
 		});
