@@ -87,9 +87,9 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 				name: string;
 			}[]
 		>`
-   select a.session_generation::float8 as "sessionGeneration", a.resource_fence::float8 as "resourceFence", a.agent_id as "agentId", a.conversation_id as "sessionId", a.sandbox_id as "sandboxId", ch.namespace, a.resource_name as name, o.payload->'lifecycle' as lifecycle, a.resource_observation as observation
+   select a.session_generation::float8 as "sessionGeneration", a.resource_fence::float8 as "resourceFence", a.agent_id as "agentId", a.conversation_id as "sessionId", a.sandbox_id as "sandboxId", ${this.policy.namespace}::text as namespace, a.resource_name as name, o.payload->'lifecycle' as lifecycle, a.resource_observation as observation
    from ${allocations} a join platform.conversations c on c.id=a.conversation_id
-   join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id
+   left join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id
    join lateral (
      select oi.payload
      from ${outbox} oi
@@ -99,9 +99,10 @@ export class PostgresSessionWorkspaceReclamationStoreV1
      limit 1
    ) o on true
    where ${target}
-   and ch.namespace=${this.policy.namespace} and not ch.released and ch.compute_released
+   and ((ch.namespace=${this.policy.namespace} and not ch.released and ch.compute_released)
+     or (ch.sandbox_id is null and not exists(select 1 from platform.session_sandbox_reserves origin where origin.sandbox_id=a.sandbox_id)))
    and a.resource_observation->>'status'='stopped'
-   and exists(select 1 from jsonb_array_elements(case when jsonb_typeof(a.resource_observation->'resources') = 'array' then a.resource_observation->'resources' end) r where r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=ch.namespace and r->>'name'=a.resource_name)
+   and exists(select 1 from jsonb_array_elements(case when jsonb_typeof(a.resource_observation->'resources') = 'array' then a.resource_observation->'resources' end) r where r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=${this.policy.namespace} and r->>'name'=a.resource_name)
    and a.status='stopped' and a.desired_state='stopped' and c.status <> 'active'
    and not exists(select 1 from platform.conversation_generation_tombstones t where t.conversation_id=c.id and t.status='pending')
    and c.agent_id=a.agent_id and c.session_generation=a.session_generation
@@ -162,7 +163,20 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 			throw new Error("WORKSPACE_SCOPE_CONFLICT");
 		const journal = await this.journal(this.sql as unknown as Transaction, t);
 		const rows = await this
-			.sql`select c.status as conversation_status,a.status as sandbox_status,ch.released,ch.compute_released from platform.conversations c join platform.session_sandbox_allocations a on a.conversation_id=c.id join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id where c.id=${t.sessionId} and a.sandbox_id=${t.sandboxId} and a.agent_id=${t.agentId} and ch.namespace=${t.namespace}`;
+			.sql`select c.status as conversation_status,a.status as sandbox_status,ch.released,ch.compute_released,
+				(ch.sandbox_id is not null) as charge_present,
+				(ch.sandbox_id is not null or exists(select 1 from platform.session_sandbox_reserves origin where origin.sandbox_id=a.sandbox_id)) as charge_applicable
+				from platform.conversations c join platform.session_sandbox_allocations a on a.conversation_id=c.id
+				left join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id
+				where c.id=${t.sessionId} and a.sandbox_id=${t.sandboxId} and a.agent_id=${t.agentId}
+				and (ch.namespace=${t.namespace} or (ch.sandbox_id is null
+					and a.resource_observation->'sourceStop'->'retainedPVC'->>'namespace'=${t.namespace}))`;
+		const start = journal.find((row) => row.action === started);
+		if (rows[0] && start)
+			rows[0].charge_applicable = this.chargeApplicable(start.details);
+		if (rows[0])
+			rows[0].charge_conflict =
+				rows[0].charge_applicable !== rows[0].charge_present;
 		return { journal, state: rows[0] ?? null };
 	}
 
@@ -206,9 +220,10 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 		tx: Transaction,
 		t: SessionWorkspaceReclamationTargetV1,
 		action: string,
+		chargeApplicable?: boolean,
 	) {
 		await tx`insert into platform.audit_events(id,target_id,target_type,agent_id,actor_id,actor_type,outcome,action,trace_id,request_id,occurred_at,details)
-  values(${randomUUID()},${t.sessionId},'conversation',${t.agentId},${this.owner},'system','succeeded',${action},${this.operation(t)},${this.operation(t)},clock_timestamp(),${tx.json({ ...t, deploymentOwner: this.owner })})`;
+  values(${randomUUID()},${t.sessionId},'conversation',${t.agentId},${this.owner},'system','succeeded',${action},${this.operation(t)},${this.operation(t)},clock_timestamp(),${tx.json({ ...t, deploymentOwner: this.owner, ...(chargeApplicable === undefined ? {} : { chargeApplicable }) })})`;
 	}
 	private async journal(
 		tx: Transaction,
@@ -217,14 +232,33 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 		const rows = await tx<
 			{ action: string; details: unknown }[]
 		>`select action,details from platform.audit_events where target_type='conversation' and target_id=${t.sessionId} and action in (${started},${completed})`;
-		if (
-			rows.some(
-				(r) =>
-					!isDeepStrictEqual(r.details, { ...t, deploymentOwner: this.owner }),
-			)
-		)
+		if (rows.some((r) => !this.sameJournalIdentity(r.details, t)))
+			throw new Error("WORKSPACE_OPERATION_CONFLICT");
+		if (new Set(rows.map((row) => this.chargeApplicable(row.details))).size > 1)
 			throw new Error("WORKSPACE_OPERATION_CONFLICT");
 		return rows;
+	}
+	private sameJournalIdentity(
+		details: unknown,
+		t: SessionWorkspaceReclamationTargetV1,
+	) {
+		if (!details || typeof details !== "object" || Array.isArray(details))
+			return false;
+		const { chargeApplicable, ...identity } = details as Record<
+			string,
+			unknown
+		>;
+		return (
+			(chargeApplicable === undefined ||
+				typeof chargeApplicable === "boolean") &&
+			isDeepStrictEqual(identity, { ...t, deploymentOwner: this.owner })
+		);
+	}
+	private chargeApplicable(details: unknown) {
+		// Published journals without the marker always required a charge.
+		return (
+			(details as { chargeApplicable?: boolean }).chargeApplicable !== false
+		);
 	}
 	async prepare(t: SessionWorkspaceReclamationTargetV1) {
 		return this.locked(t, async (tx) => {
@@ -237,6 +271,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 				if (still.length !== 1) throw new Error("WORKSPACE_TOMBSTONE_CONFLICT");
 				return "prepared" as const;
 			}
+			await tx`select pg_advisory_xact_lock(hashtextextended('session-sandbox:deployment-budget', 0))`;
 			const rows = await this.eligible(tx, { sandboxId: t.sandboxId });
 			const pvc =
 				await tx`select a.sandbox_id from platform.session_sandbox_allocations a, jsonb_array_elements(a.resource_observation->'resources') r where a.sandbox_id=${t.sandboxId} and r->>'kind'='PersistentVolumeClaim' and r->>'namespace'=${t.namespace} and r->>'name'=${t.name} and r->>'uid'=${t.uid}`;
@@ -257,7 +292,9 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 				throw new Error("WORKSPACE_NOT_ELIGIBLE");
 			await tx`update platform.conversations set status='unavailable',updated_at=clock_timestamp() where id=${t.sessionId}`;
 			await tx`update platform.session_sandbox_allocations set status='unavailable',updated_at=clock_timestamp() where sandbox_id=${t.sandboxId}`;
-			await this.audit(tx, t, started);
+			const charge =
+				await tx`select sandbox_id from platform.session_sandbox_resource_charges where sandbox_id=${t.sandboxId}`;
+			await this.audit(tx, t, started, charge.length === 1);
 			return "prepared" as const;
 		});
 	}
@@ -271,10 +308,20 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 				await tx`select sandbox_id from platform.session_sandbox_allocations a join platform.conversations c on c.id=a.conversation_id where a.sandbox_id=${t.sandboxId} and a.status='unavailable' and c.status='unavailable' and a.desired_state='stopped' and a.session_generation=${t.sessionGeneration} and a.resource_fence=${t.resourceFence} and c.session_generation=a.session_generation`;
 			if (binding.length !== 1) throw new Error("WORKSPACE_TOMBSTONE_CONFLICT");
 			await tx`select pg_advisory_xact_lock(hashtextextended('session-sandbox:deployment-budget', 0))`;
-			const released =
-				await tx`update platform.session_sandbox_resource_charges set released=true where sandbox_id=${t.sandboxId} and namespace=${t.namespace} and compute_released and not released returning sandbox_id`;
-			if (released.length !== 1) throw new Error("WORKSPACE_CHARGE_CONFLICT");
-			await this.audit(tx, t, completed);
+			const applicable = this.chargeApplicable(
+				journal.find((r) => r.action === started)?.details,
+			);
+			if (applicable) {
+				const released =
+					await tx`update platform.session_sandbox_resource_charges set released=true where sandbox_id=${t.sandboxId} and namespace=${t.namespace} and compute_released and not released returning sandbox_id`;
+				if (released.length !== 1) throw new Error("WORKSPACE_CHARGE_CONFLICT");
+			} else {
+				const conflict =
+					await tx`select 1 from platform.session_sandbox_resource_charges where sandbox_id=${t.sandboxId}
+					union all select 1 from platform.session_sandbox_reserves where sandbox_id=${t.sandboxId}`;
+				if (conflict.length) throw new Error("WORKSPACE_CHARGE_CONFLICT");
+			}
+			await this.audit(tx, t, completed, applicable);
 		});
 	}
 }

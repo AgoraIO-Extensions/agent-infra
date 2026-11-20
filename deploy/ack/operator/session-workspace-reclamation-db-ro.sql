@@ -54,6 +54,7 @@ GRANT SELECT (conversation_id, status) ON platform.conversation_generation_tombs
 GRANT SELECT (scope_type, scope_id, status) ON platform.outbox_items
   TO agent_infra_reclamation_ro;
 GRANT SELECT (target_id, action) ON platform.audit_events TO agent_infra_reclamation_ro;
+GRANT SELECT (sandbox_id) ON platform.session_sandbox_reserves TO agent_infra_reclamation_ro;
 
 -- The same transaction that creates the role records the actual ACL entries,
 -- including their catalog grantors. No credentials are stored.
@@ -140,7 +141,8 @@ BEGIN
           'conversation_generation_tombstones.conversation_id', 'conversation_generation_tombstones.status',
           'conversation_executions.conversation_id', 'conversation_executions.status',
           'outbox_items.scope_type', 'outbox_items.scope_id', 'outbox_items.status',
-          'audit_events.target_id', 'audit_events.action'
+          'audit_events.target_id', 'audit_events.action',
+          'session_sandbox_reserves.sandbox_id'
         ))
     )
     OR EXISTS (
