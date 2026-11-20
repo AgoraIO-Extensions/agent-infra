@@ -217,6 +217,14 @@ function reserveEvidenceMatches(
 		evidence.runnerEpoch === instance.runnerEpoch
 	);
 }
+/** Database-clock predicate for the final write: `observedAt ≤ now < expiresAt`. */
+function evidenceOpenSql(
+	tx: Transaction,
+	evidence: SessionSandboxInstanceEvidenceV1,
+) {
+	return tx`${evidence.observedAtMs}::float8 <= floor(extract(epoch from clock_timestamp()) * 1000)
+		and floor(extract(epoch from clock_timestamp()) * 1000) < ${evidence.expiresAtMs}::float8`;
+}
 /** Evidence is still valid by the database clock at commit, after the row locks. */
 async function evidenceCurrent(
 	tx: Transaction,
@@ -798,11 +806,17 @@ export async function recordSessionSandboxExecutorPromotionV1(
 			? { receiptId: existing.id, receiptDigest }
 			: null;
 	const receiptId = randomUUID();
-	await tx`insert into platform.session_sandbox_executor_promotions
+	// The final write carries the evidence lifetime: a wait before it cannot commit expired evidence.
+	const inserted = await tx<
+		{ id: string }[]
+	>`insert into platform.session_sandbox_executor_promotions
 		(id, sandbox_id, conversation_id, session_generation, resource_fence, receipt, receipt_digest, created_at)
-		values (${receiptId}, ${input.sandboxId}, ${input.sessionId}, ${input.generation}, ${input.resourceFence},
-			${tx.json(receipt as unknown as Json)}, ${receiptDigest}, clock_timestamp())`;
-	return { receiptId, receiptDigest };
+		select ${receiptId}::text, ${input.sandboxId}::text, ${input.sessionId}::text,
+			${input.generation}::bigint, ${input.resourceFence}::bigint,
+			${tx.json(receipt as unknown as Json)}::jsonb, ${receiptDigest}::text, clock_timestamp()
+		where ${evidenceOpenSql(tx, evidence)}
+		returning id`;
+	return inserted.length === 1 ? { receiptId, receiptDigest } : null;
 }
 /** Resume the original allocation; a stopped Session is never given a reserve. */
 export async function reserveSessionSandboxResumeBudgetV1(
@@ -1569,8 +1583,15 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		row: ReserveRow,
 		startup: SessionSandboxReserveExecutorStartupV1,
 		status: SessionSandboxReserveStatusV1 = row.status,
-	): Promise<void> {
-		await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+		evidence?: SessionSandboxInstanceEvidenceV1,
+	): Promise<boolean> {
+		const written = evidence
+			? await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp()
+				where sandbox_id = ${row.sandbox_id} and ${evidenceOpenSql(tx, evidence)}
+					and ${startup.deadlineMs}::float8 > extract(epoch from clock_timestamp()) * 1000
+				returning sandbox_id`
+			: await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id} returning sandbox_id`;
+		return written.length === 1;
 	}
 	async #beforeExecutorDeadline(
 		tx: Transaction,
@@ -1827,8 +1848,13 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				!(await this.#beforeExecutorDeadline(tx, startup))
 			)
 				return false;
-			await this.#writeExecutor(tx, row, { ...startup, consumption });
-			return true;
+			return this.#writeExecutor(
+				tx,
+				row,
+				{ ...startup, consumption },
+				row.status,
+				input.evidence,
+			);
 		});
 	}
 	/** Persist the conditional DELETE intent of the original projection before sending it. */
@@ -2027,8 +2053,14 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			const business =
 				await tx`select 1 from platform.conversations where id = ${row.session_id} union all select 1 from platform.session_sandbox_allocations where sandbox_id = ${row.sandbox_id}`;
 			if (business.length) return false;
-			await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
-			return true;
+			const instance = row.executor_startup
+				? evidence.instanceEvidence
+				: undefined;
+			const readied = instance
+				? await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp()
+					where sandbox_id = ${row.sandbox_id} and ${evidenceOpenSql(tx, instance)} returning sandbox_id`
+				: await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id} returning sandbox_id`;
+			return readied.length === 1;
 		});
 	}
 	async retire(sandboxId: string): Promise<boolean> {

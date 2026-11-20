@@ -2865,6 +2865,145 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 		expect(await ready(await reserveEvidence(reserve))).toBe(true);
 	});
 
+	/** Holds a SHARE lock on `table` until `statement` is observed waiting on it, then past `untilMs`. */
+	async function blockFinalWrite<T>(
+		table: string,
+		statement: string,
+		untilMs: number,
+		write: () => Promise<T>,
+	): Promise<T> {
+		let release: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let locked: () => void = () => {};
+		const lockTaken = new Promise<void>((resolve) => {
+			locked = resolve;
+		});
+		const holder = sql.begin(async (tx) => {
+			await tx.unsafe(`lock table ${table} in share mode`);
+			locked();
+			await held;
+		});
+		await lockTaken;
+		const pending = write();
+		try {
+			let waiting = false;
+			for (let attempt = 0; attempt < 200 && !waiting; attempt++) {
+				const rows = await sql`
+					select pid from pg_stat_activity
+					where datname = current_database()
+						and cardinality(pg_blocking_pids(pid)) > 0
+						and query ilike ${`%${statement}%`}`;
+				waiting = rows.length === 1;
+				if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(waiting).toBe(true);
+			while ((await dbNow()) <= untilMs)
+				await new Promise((resolve) => setTimeout(resolve, 100));
+		} finally {
+			release();
+		}
+		await holder;
+		return pending;
+	}
+
+	it("refuses a promotion whose evidence expires while the final INSERT waits", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		const evidence = await claimedEvidence(reserve, {
+			expiresAtMs: (await dbNow()) + 1500,
+		});
+		expect(
+			await blockFinalWrite(
+				"platform.session_sandbox_executor_promotions",
+				"insert into platform.session_sandbox_executor_promotions",
+				evidence.expiresAtMs,
+				() => reserve.store.recordExecutorPromotion({ ...promotion, evidence }),
+			),
+		).toBeNull();
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_executor_promotions`,
+		).toEqual([{ count: 0 }]);
+	});
+
+	it("refuses consumption and ready whose evidence expires while the final UPDATE waits", async () => {
+		const reserve = await executorPrepared();
+		const { store, lease, intent, projection, podUid } = reserve;
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: projection,
+			}),
+		).toBe(true);
+		const consumption = {
+			attemptId: intent.attemptId,
+			podUid,
+			projectionUid: projection.uid,
+			hostKeyId: intent.hostKeyId,
+			runnerEpoch: "runner-epoch-1",
+		};
+		const late = await reserveEvidence(reserve, lease, {
+			expiresAtMs: (await dbNow()) + 1500,
+		});
+		expect(
+			await blockFinalWrite(
+				"platform.session_sandbox_reserves",
+				"update platform.session_sandbox_reserves set executor_startup",
+				late.expiresAtMs,
+				() =>
+					store.recordExecutorConsumption(lease, {
+						...consumption,
+						evidence: late,
+					}),
+			),
+		).toBe(false);
+		expect(
+			await sql`select executor_startup->'consumption' as consumption from platform.session_sandbox_reserves`,
+		).toEqual([{ consumption: null }]);
+		expect(
+			await store.recordExecutorConsumption(lease, {
+				...consumption,
+				evidence: await reserveEvidence(reserve),
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteIntent(lease, {
+				attemptId: "projection-delete-1",
+				resource: projection,
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteResponse(lease, {
+				attemptId: "projection-delete-1",
+				response: "absent",
+			}),
+		).toBe(true);
+		const readyEvidence = await reserveEvidence(reserve, lease, {
+			expiresAtMs: (await dbNow()) + 1500,
+		});
+		expect(
+			await blockFinalWrite(
+				"platform.session_sandbox_reserves",
+				"set status = 'ready'",
+				readyEvidence.expiresAtMs,
+				() =>
+					store.markReady(lease, {
+						bootstrapReady: true,
+						businessStateAbsent: true,
+						instanceEvidence: readyEvidence,
+					}),
+			),
+		).toBe(false);
+		expect(
+			await sql`select status from platform.session_sandbox_reserves`,
+		).toEqual([{ status: "preparing" }]);
+		expect(await notReady(reserve)).toBe(true);
+	});
+
 	it("keeps an unresolved projection create counted against concurrent creates after retirement", async () => {
 		const store = reserves({ ...config, maximumConcurrentCreates: 1 });
 		const reserve = await executorPrepared(store);
