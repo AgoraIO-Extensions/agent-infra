@@ -3,6 +3,7 @@ import type {
 	createWecomReceiptAccessV1,
 	WecomMessageV1,
 } from "@agent-infra/platform-core";
+import { executionFailureMessageV1 } from "@agent-infra/platform-core";
 import {
 	type createWecomAdapterV1,
 	type WecomConfigurationV1,
@@ -184,7 +185,9 @@ export function registerWecomRoutesV1(
 						configuration,
 						replyRequest,
 						message,
-						"Agent 当前不可用，请稍后重试",
+						result.reason === "personal_relay_key_unavailable"
+							? executionFailureMessageV1("relay_key_unavailable")
+							: "Agent 当前不可用，请稍后重试",
 					);
 				if (result.outcome === "conflict")
 					return context.text("Conflicting callback", 409);

@@ -5,6 +5,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import type { SessionSandboxReserveConfigurationV1 } from "@agent-infra/platform-core";
 import {
+	ConversationExecutionError,
 	createConversationExecutionUseCaseV1,
 	createWecomAuthorizationV1,
 	isWecomMediaRejectionV1,
@@ -834,9 +835,18 @@ export class PostgresWecomChannelV1
 									if (changed.length !== 1)
 										throw new TaskAuthorizationStoreError();
 								},
+							}).catch((error: unknown) => {
+								if (
+									error instanceof ConversationExecutionError &&
+									error.code === "personal_relay_key_unavailable"
+								)
+									return error;
+								throw error;
 							}),
 						signal,
 					);
+					if (executionResult instanceof ConversationExecutionError)
+						throw executionResult;
 					// 新会话与入站媒体拒绝（#3227）的回执不关联 Conversation；其余状态都必须关联映射到的
 					// Conversation。只有媒体拒绝带原因，且原因必须完整。
 					const mediaRejection = executionResult.mediaRejection;
@@ -927,6 +937,22 @@ export class PostgresWecomChannelV1
 					await requireFinalAuthority(business);
 				});
 			} catch (error) {
+				if (
+					error instanceof ConversationExecutionError &&
+					error.code === "personal_relay_key_unavailable"
+				) {
+					// The business savepoint rolled back all task/idempotency writes.
+					// Recheck sender/channel authority after the Key wait before disclosing a reason.
+					try {
+						await requireFinalAuthority(sql);
+						return readyToCommit({
+							outcome: "unavailable" as const,
+							reason: "personal_relay_key_unavailable" as const,
+						});
+					} catch (currentError) {
+						error = currentError;
+					}
+				}
 				if (error instanceof WecomAuthorizationDenied) return reject("denied");
 				if (!(error instanceof WecomAuthorizationRevoked)) throw error;
 				await revokeUserTasksInTransaction(

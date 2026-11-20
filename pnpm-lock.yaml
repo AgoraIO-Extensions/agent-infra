@@ -114,6 +114,9 @@ importers:
       '@agent-infra/native-metadata-transport':
         specifier: workspace:*
         version: link:../../packages/native-metadata-transport
+      '@agent-infra/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.7)

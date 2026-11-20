@@ -410,6 +410,15 @@ describe("Trusted conversation Runtime adapter", () => {
 		const h = harness(1, async () => true, {
 			recordDrainStage: (observation) => observations.push(observation),
 		});
+		Object.assign(h.claim, {
+			executionStatus: "completed",
+			runtimeTerminalEventSeen: true,
+			runtimeCursor: "committed",
+		});
+		Object.assign(h.state, {
+			executionStatus: "completed",
+			runtimeCursor: "committed",
+		});
 		const reference = await h.authorize();
 		h.fetcher.mockImplementation(async (url) => {
 			const path = String(url);
@@ -436,8 +445,6 @@ describe("Trusted conversation Runtime adapter", () => {
 		const stream = h.runtime.runtimeHost
 			.events({ ...h.events(reference), afterCursor: "caller-cursor" })
 			[Symbol.asyncIterator]();
-		Object.assign(h.claim, { executionStatus: "completed" });
-		Object.assign(h.state, { executionStatus: "completed" });
 		expect((await stream.next()).done).toBe(true);
 		Object.assign(h.state, { runtimeCursor: "committed" });
 		await h.runtime.runtimeHost.acknowledge?.({
@@ -3192,3 +3199,204 @@ it.each(["claude", "pi", "opencode", "custom"])(
 		}
 	},
 );
+
+it("Files4266 keeps the same control drain alive across an empty page before a terminal event", async () => {
+	const h = harness();
+	Object.assign(h.claim, {
+		deliveryFence: 7,
+		executionStatus: "completed",
+		runtimeCursor: "committed",
+	});
+	Object.assign(h.state, {
+		executionStatus: "completed",
+		runtimeCursor: "committed",
+	});
+	const record = h.record();
+	if (!record) throw new Error("missing fixture");
+	h.setRecord({ ...record, revokedAt: new Date(now), workload: null });
+	h.directory.resolveUser.mockRejectedValue(new Error("directory unavailable"));
+	const context = await h.authorize();
+	const terminal = {
+		schemaVersion: 1,
+		adapterEventKey: "completed-late",
+		cursor: "terminal",
+		executionId: "execution",
+		occurredAt: "2026-09-14T12:00:01Z",
+		type: "completed",
+		payload: { status: "completed" },
+	};
+	let reads = 0;
+	h.fetcher.mockImplementation(
+		async () =>
+			new Response(
+				++reads === 1
+					? ""
+					: `id: ${terminal.cursor}\nevent: ${terminal.type}\ndata: ${JSON.stringify(terminal)}\n\n`,
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+	);
+	const stream = h.runtime.runtimeHost
+		.events(h.events(context))
+		[Symbol.asyncIterator]();
+	try {
+		const next = await stream.next();
+		expect(next.done).toBe(false);
+		expect(next.value).toEqual(terminal);
+		expect(reads).toBe(2);
+	} finally {
+		await stream.return?.();
+		h.runtime.close();
+	}
+});
+
+it.each([false, true])(
+	"bounds empty terminal control pages without inventing completion (cancel=%s, #4266)",
+	async (cancel) => {
+		const h = harness();
+		Object.assign(h.claim, {
+			executionStatus: "completed",
+			runtimeCursor: "committed",
+		});
+		Object.assign(h.state, {
+			executionStatus: "completed",
+			runtimeCursor: "committed",
+		});
+		const context = await h.authorize();
+		const abort = new AbortController();
+		h.fetcher.mockImplementation(async () => {
+			if (cancel) abort.abort();
+			return new Response("", {
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+		try {
+			const stream = h.runtime.runtimeHost
+				.events(h.events(context), abort.signal)
+				[Symbol.asyncIterator]();
+			await expect(stream.next()).rejects.toBeDefined();
+			expect(h.fetcher).toHaveBeenCalledTimes(cancel ? 1 : 3);
+			for (const [, init] of h.fetcher.mock.calls) {
+				const wire = JSON.parse(String(init?.body));
+				expect(wire.afterCursor).toBe("committed");
+				expect(verify(wire.grant).claims).toMatchObject({ purpose: "control" });
+			}
+		} finally {
+			h.runtime.close();
+		}
+	},
+);
+
+it("continues terminal control pages only from committed cursors across an empty page (#4266)", async () => {
+	const h = harness();
+	Object.assign(h.claim, {
+		executionStatus: "completed",
+		runtimeCursor: "committed",
+	});
+	Object.assign(h.state, {
+		executionStatus: "completed",
+		runtimeCursor: "committed",
+	});
+	const context = await h.authorize();
+	const delta = {
+		schemaVersion: 1,
+		executionId: "execution",
+		adapterEventKey: "delta-late",
+		cursor: "delta-late",
+		occurredAt: "2026-09-14T12:00:01Z",
+		type: "text",
+		payload: { delta: "synthetic control event" },
+	};
+	const terminal = {
+		...delta,
+		adapterEventKey: "terminal-late",
+		cursor: "terminal-late",
+		type: "completed",
+		payload: { status: "completed" },
+	};
+	const frame = (x: unknown) => {
+		const e = x as typeof delta;
+		return `id: ${e.cursor}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
+	};
+	let reads = 0;
+	h.fetcher.mockImplementation(
+		async () =>
+			new Response(
+				++reads === 1 ? frame(delta) : reads === 2 ? "" : frame(terminal),
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+	);
+	const stream = h.runtime.runtimeHost
+		.events(h.events(context))
+		[Symbol.asyncIterator]();
+	try {
+		expect((await stream.next()).value).toEqual(delta);
+		Object.assign(h.state, { runtimeCursor: delta.cursor });
+		expect((await stream.next()).value).toEqual(terminal);
+		Object.assign(h.state, { runtimeCursor: terminal.cursor });
+		expect((await stream.next()).done).toBe(true);
+		expect(
+			h.fetcher.mock.calls.map(
+				([, i]) => JSON.parse(String(i?.body)).afterCursor,
+			),
+		).toEqual(["committed", "delta-late", "delta-late"]);
+	} finally {
+		await stream.return?.();
+		h.runtime.close();
+	}
+});
+
+describe("#4273 personal API business-to-control boundary", () => {
+	it("never sends a Turn or renewal after confirmed availability removal", async () => {
+		const h = harness(1, async () => true, {
+			resolveCurrentApiUseGrant: async () => ({
+				principal: { kind: "user", id: "user" },
+				agentId: "agent",
+				grantType: "use",
+				authorizationRevision: "use-1",
+				revoked: false,
+			}),
+		});
+		const record = h.record();
+		if (!record) throw new Error("Missing original record");
+		Object.assign(h.claim, { channelId: "api" });
+		Object.assign(record.boundary, {
+			channelId: "api",
+			accessSources: [{ kind: "api-use", useGrantRevision: "use-1" }],
+		});
+		try {
+			const grant = await h.authorize();
+			record.agent = { ...record.agent, availability: [] };
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(grant)),
+			).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+			expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					executionId: "execution",
+					authorizationRecordId: "original-authorization",
+					reason: "authorization_revoked",
+				}),
+			);
+			expect(h.record()?.revokedAt).toBeInstanceOf(Date);
+			expect(
+				h.fetcher.mock.calls.some(([url]) => String(url).endsWith("/turns")),
+			).toBe(false);
+			const calls = h.fetcher.mock.calls.length;
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(h.events(grant)),
+			).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+			expect(h.fetcher.mock.calls.length).toBeGreaterThanOrEqual(calls);
+			expect(
+				h.fetcher.mock.calls.some(([url]) =>
+					String(url).endsWith("/authorizations/renew"),
+				),
+			).toBe(false);
+			expect(h.sent().claims).toMatchObject({
+				purpose: "control",
+				reason: "authorization_revoked",
+			});
+			expect(h.sent().body).not.toHaveProperty("input");
+		} finally {
+			h.runtime.close();
+		}
+	});
+});

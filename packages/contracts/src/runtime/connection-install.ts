@@ -180,6 +180,103 @@ export type ConnectionRegistrationReceiptV1 = z.infer<
 	typeof ConnectionRegistrationReceiptV1Schema
 >;
 
+/** Binds an approval to the one-time system access fingerprint and its approval source. */
+const systemAccessBinding = {
+	systemAccessFingerprint: hex64,
+	approvalSource: reference,
+};
+/** UTC instant written as `YYYY-MM-DDTHH:MM:SS[.sss]Z`. */
+const utcInstant = z
+	.string()
+	.regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/)
+	.refine((value) => Number.isFinite(Date.parse(value)));
+
+/**
+ * §13.5.1 principal mapping approval for dynamic manual OAuth: the mapping
+ * authority, rule, approved Connection issuer and server resolution method.
+ */
+export const ConnectionPrincipalMappingApprovalV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	kind: z.literal("principal_mapping"),
+	authority: reference,
+	rule: reference,
+	issuer: httpsUrl({ origin: false }),
+	resolution: reference,
+	...systemAccessBinding,
+});
+export type ConnectionPrincipalMappingApprovalV1 = z.infer<
+	typeof ConnectionPrincipalMappingApprovalV1Schema
+>;
+
+/**
+ * §13.5.1 M1 time-limited exception `consistency-exception-v1` (ADR-0047). Every
+ * field is required; `connectionRelease` names the Connection release on which
+ * the instance-binding precondition was verified.
+ */
+export const ConnectionConsistencyExceptionApprovalV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	kind: z.literal("consistency-exception-v1"),
+	policy: reference,
+	notAfter: utcInstant,
+	maximumPinnedPrincipals: positive,
+	verificationWindowHours: z.number().int().min(1).max(24),
+	connectionRelease: contextText,
+	...systemAccessBinding,
+});
+export type ConnectionConsistencyExceptionApprovalV1 = z.infer<
+	typeof ConnectionConsistencyExceptionApprovalV1Schema
+>;
+
+/** Deployment approvals a dynamic manual installation fixes in its descriptor (§13.5.6). */
+export const ConnectionManualDynamicApprovalV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	principalMapping: z.discriminatedUnion("kind", [
+		ConnectionPrincipalMappingApprovalV1Schema,
+		ConnectionConsistencyExceptionApprovalV1Schema,
+	]),
+	readbackContract: reference,
+	publicationContract: reference,
+});
+export type ConnectionManualDynamicApprovalV1 = z.infer<
+	typeof ConnectionManualDynamicApprovalV1Schema
+>;
+
+/**
+ * §13.5.6 complete non-secret descriptor of a dynamic manual installation,
+ * fixed by the first begin. Within the §13.5.1 exception it names the
+ * exception policy and the user's pinned `principalId` (null before the first pin).
+ */
+export const ConnectionManualInstallDescriptorV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	readbackContract: reference,
+	registrationKey: ConnectionRegistrationKeyV1Schema,
+	consumerId: installIdentifier,
+	clientId: installIdentifier,
+	instanceId: installIdentifier,
+	configuration: z.strictObject({
+		ref: OpaqueIdV1Schema.max(512),
+		revision: OpaqueIdV1Schema.max(512),
+		digest: hex64,
+	}),
+	principalMapping: z.discriminatedUnion("kind", [
+		z.strictObject({
+			kind: z.literal("principal_mapping"),
+			rule: reference,
+			expectedPrincipalId: installIdentifier,
+		}),
+		z.strictObject({
+			kind: z.literal("consistency-exception-v1"),
+			policy: reference,
+			pinnedPrincipalId: installIdentifier.nullable(),
+		}),
+	]),
+	publicationContract: reference,
+	supply: z.strictObject({ ref: contextText, revision: contextText }),
+});
+export type ConnectionManualInstallDescriptorV1 = z.infer<
+	typeof ConnectionManualInstallDescriptorV1Schema
+>;
+
 const envelope = z.strictObject({
 	nonce: z.string().max(64),
 	ciphertext: z.string().max(12_000),
@@ -322,6 +419,7 @@ export const ConnectionInstallFirstBeginClaimV1Schema = z.strictObject({
 	registrationKeyHash: hex64,
 	receiptDigest: hex64,
 	configurationDigest: hex64,
+	descriptorDigest: hex64,
 	bodyDigest: hex64,
 	channelBinding,
 });
@@ -341,6 +439,7 @@ export const ConnectionInstallFirstBeginRequestV1Schema = z.strictObject({
 	supplyAttemptId: contextText,
 	receipt: ConnectionRegistrationReceiptV1Schema,
 	configuration: RuntimeOAuthConfigurationV1Schema,
+	descriptor: ConnectionManualInstallDescriptorV1Schema,
 	request: RuntimeOAuthAuthorizedRequestV1Schema,
 });
 export type ConnectionInstallFirstBeginRequestV1 = z.infer<
@@ -395,9 +494,10 @@ export const ConnectionInstallReadbackRequestV1Schema = z.strictObject({
 			]),
 			requestDigest: hex64,
 			registrationKeyHash: hex64,
-			/** First begin only: the exact configuration and CAS-verified receipt. */
+			/** First begin only: the exact configuration, CAS-verified receipt and descriptor. */
 			configurationDigest: hex64.optional(),
 			receiptDigest: hex64.optional(),
+			descriptorDigest: hex64.optional(),
 		})
 		.optional(),
 	nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),

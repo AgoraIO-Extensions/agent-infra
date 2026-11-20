@@ -43,6 +43,7 @@ import type {
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
+import { startObservability } from "@agent-infra/observability";
 import { getRequestListener, serve } from "@hono/node-server";
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import { probeRuntimeBrowserCapabilityV1 } from "./browser-capability-probe.js";
@@ -554,6 +555,7 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	let modelTelemetry: ReturnType<typeof startObservability> | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
@@ -583,7 +585,11 @@ export async function assembleRuntimeHost(
 					try {
 						await closeDriver?.();
 					} finally {
-						await openedStore?.close();
+						try {
+							await openedStore?.close();
+						} finally {
+							await modelTelemetry?.close().catch(() => {});
+						}
 					}
 				}
 			}
@@ -697,6 +703,28 @@ export async function assembleRuntimeHost(
 		await sessionExecutor?.assertCurrent();
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					observeModelTransportFailure: (event) => {
+						modelTelemetry ??= startObservability({
+							service: "agent-runtime-host",
+							...(environment.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+								? {
+										otlpEndpoint:
+											environment.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+									}
+								: {}),
+						});
+						modelTelemetry.record({
+							stage: "model",
+							outcome: "unknown",
+							code: "OPERATION_UNKNOWN",
+							modelTransport: event,
+							operationRef: event.operationRef,
+							attemptRef: event.attemptRef,
+							agentId: event.agentId,
+							conversationId: event.conversationId,
+							executionId: event.executionId,
+						});
+					},
 					isolationMode: codexIsolationMode,
 					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,

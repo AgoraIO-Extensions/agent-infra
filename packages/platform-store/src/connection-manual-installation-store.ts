@@ -6,6 +6,8 @@ import {
 	ConnectionInstallCommandResponseV1Schema,
 	type ConnectionInstallReadbackRequestV1,
 	ConnectionInstallReadbackRequestV1Schema,
+	type ConnectionManualInstallDescriptorV1,
+	ConnectionManualInstallDescriptorV1Schema,
 	type ConnectionRegistrationReceiptV1,
 	ConnectionRegistrationReceiptV1Schema,
 	type ConnectionRegistrationTemplateV1,
@@ -18,6 +20,8 @@ import {
 import {
 	connectionInstallConfigurationDigestV1,
 	connectionManualInstallConfigurationV1,
+	connectionManualInstallDescriptorDigestV1,
+	connectionManualInstallDescriptorV1,
 	connectionRegistrationKeyHashV1,
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
@@ -37,6 +41,7 @@ import {
 	type ConnectionManualInstallationPolicyV1,
 	captureConnectionManualInstallationPolicyV1,
 	connectionManualCurrentAllowedV1,
+	connectionManualExceptionLiveV1,
 	lockConnectionManualAssociationForInstallationV1,
 	manualTemplateMatchesCurrentV1,
 	readConnectionManualInstallationFactsV1,
@@ -362,6 +367,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						a.execution_id, m.template, m.template_digest, m.registration_key, m.registration_key_hash,
 						m.supply_attempt_id, m.supply_state, m.registration_state, m.receipt, m.configuration,
 						m.revoke_state, m.consumer_id, m.agent_id, m.association_revision, m.connection_agent_id,
+						m.descriptor, m.descriptor_digest,
 						a.expires_at > clock_timestamp() as live
 					from platform.connection_installation_authorizations a
 					join platform.connection_manual_installations m on m.authorization_id = a.id
@@ -372,6 +378,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						a.execution_id, m.template, m.template_digest, m.registration_key, m.registration_key_hash,
 						m.supply_attempt_id, m.supply_state, m.registration_state, m.receipt, m.configuration,
 						m.revoke_state, m.consumer_id, m.agent_id, m.association_revision, m.connection_agent_id,
+						m.descriptor, m.descriptor_digest,
 						a.expires_at > clock_timestamp() as live
 					from platform.connection_installation_authorizations a
 					join platform.connection_manual_installations m on m.authorization_id = a.id
@@ -967,13 +974,17 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				: null;
 			const [deadline] = await tx.execute(sql`
 				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-					and ${originalClaimHolds(template.reference, template.claim)} as live
+					and ${originalClaimHolds(template.reference, template.claim)} as live,
+					${connectionManualExceptionLiveV1(this.#policy)} as exception
 				from platform.connection_installation_commands c
 				join platform.connection_installation_authorizations a on a.id=c.authorization_id
 				where c.id=${input.commandId}
 			`);
 			if (deadline?.live !== true) return unknown(receipt);
+			// Past `notAfter` the exception binds no new installation; the registered
+			// client of this attempt is compensated with its original key.
 			const bindable =
+				deadline.exception === true &&
 				receipt !== undefined &&
 				current !== null &&
 				row.live === true &&
@@ -1028,6 +1039,15 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				template,
 				receipt,
 			});
+			// The first begin fixes this descriptor. No user has a pinned principalId
+			// before the exception's first-pin CAS exists, so each install is a first one.
+			const descriptor = connectionManualInstallDescriptorV1({
+				approval: this.#policy.dynamic,
+				template,
+				receipt,
+				configuration,
+				pinnedPrincipalId: null,
+			});
 			const scope = {
 				agentId: template.reference.agentId,
 				sandboxId: template.target.sandboxId,
@@ -1061,6 +1081,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp()
 					and a.expires_at > clock_timestamp()
+					and ${connectionManualExceptionLiveV1(this.#policy)}
 					and ${originalClaimHolds(template.reference, template.claim)}
 				returning c.id
 			`);
@@ -1069,7 +1090,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				update platform.connection_manual_installations
 				set registration_state='registered', receipt=${JSON.stringify(receipt)}::jsonb,
 					consumer_id=${receipt.consumerId}, client_id=${receipt.clientId}, instance_id=${receipt.instanceId},
-					configuration=${JSON.stringify(configuration)}::jsonb, revision=revision+1, updated_at=clock_timestamp()
+					configuration=${JSON.stringify(configuration)}::jsonb,
+					descriptor=${JSON.stringify(descriptor)}::jsonb,
+					descriptor_digest=${connectionManualInstallDescriptorDigestV1(descriptor)},
+					revision=revision+1, updated_at=clock_timestamp()
 				where authorization_id=${input.authorizationId} and registration_state=${expectedState}
 			`);
 			await tx.execute(sql`
@@ -1191,6 +1215,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly supplyAttemptId: string;
 		readonly receipt: ConnectionRegistrationReceiptV1;
 		readonly configuration: RuntimeOAuthConfigurationV1;
+		readonly descriptor: ConnectionManualInstallDescriptorV1;
 		readonly beginCommandId?: string;
 	} | null> {
 		return this.#transaction(async (tx) => {
@@ -1201,7 +1226,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				row.supply_state !== "confirmed" ||
 				!row.template ||
 				!row.receipt ||
-				!row.configuration
+				!row.configuration ||
+				!row.descriptor
 			)
 				return null;
 			const [begin] =
@@ -1219,6 +1245,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				receipt: ConnectionRegistrationReceiptV1Schema.parse(row.receipt),
 				configuration: RuntimeOAuthConfigurationV1Schema.parse(
 					row.configuration,
+				),
+				descriptor: ConnectionManualInstallDescriptorV1Schema.parse(
+					row.descriptor,
 				),
 				...(begin ? { beginCommandId: begin.id as string } : {}),
 			};
@@ -1500,6 +1529,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							row.registration_state !== "registered" ||
 							!row.configuration ||
 							!row.receipt ||
+							!row.descriptor_digest ||
 							binding.callback !== undefined
 						)
 							return "denied";
@@ -1513,7 +1543,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						return command.configurationDigest ===
 							connectionInstallConfigurationDigestV1(configuration) &&
 							command.receiptDigest ===
-								connectionRegistrationReceiptDigestV1(receipt)
+								connectionRegistrationReceiptDigestV1(receipt) &&
+							command.descriptorDigest === row.descriptor_digest
 							? allowed()
 							: "denied";
 					}

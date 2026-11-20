@@ -93,6 +93,27 @@ export {
 	type DispatchConversationCommandV1,
 } from "./conversation-dispatch-types.js";
 
+/** A reliable business terminal still owns its original event/ACK control work.
+ * Adapters must additionally validate the persisted original binding and lease. */
+export function isConversationTerminalControlDrainV1(
+	input: Pick<
+		ConversationDispatchClaimV1,
+		| "operation"
+		| "executionStatus"
+		| "executionDeliveryFence"
+		| "hostSessionRef"
+	>,
+): boolean {
+	return (
+		isTurnOperation(input.operation) &&
+		executionTerminal(input.executionStatus) &&
+		Number.isSafeInteger(input.executionDeliveryFence) &&
+		input.executionDeliveryFence > 0 &&
+		typeof input.hostSessionRef === "string" &&
+		input.hostSessionRef.length > 0
+	);
+}
+
 /** Far below the Host bound of 256 delivered but unacknowledged cursors. */
 const acknowledgementBatchSize = 32;
 

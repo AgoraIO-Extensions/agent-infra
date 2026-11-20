@@ -147,6 +147,7 @@ beforeEach(async () => {
 	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',${configuration.agentId},1,1)`;
 	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',${configuration.agentId},1,'original-key',${sql.json({ schemaVersion: 1, purpose: "agent-default", subjectId: configuration.agentId, keyId: "original-key", keyVersion: 1 })})`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('same-id','Application','owner','app-1')`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'user','same-id')`;
 	for (const kind of ["user", "application"] as const) {
 		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${configuration.agentId},${kind},'same-id','use',${`use-${kind}`})`;
 		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values(${`credential-${kind}`},${kind},'same-id',${createHash("sha256").update(material[kind]).digest("hex")},${sql.json(["agent:read", "agent:use"])})`;
@@ -862,6 +863,7 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 		// issued through the production HTTP endpoint with controlled identities.
 		await sql`truncate platform.platform_api_credentials`;
 		for (const userId of ["user_alice", "user_bob"]) {
+			await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'user',${userId})`;
 			await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${configuration.agentId},'user',${userId},'use','formal-use-1')`;
 		}
 		const moduleSpecifier = new URL(
@@ -1092,6 +1094,7 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 			await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) select ${otherConfiguration.agentId},revision,source_reference,created_at,${sql.json(otherConfiguration as unknown as postgres.JSONValue)} from platform.agent_configuration_revisions where agent_id=${configuration.agentId}`;
 			await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('formal-other-application',${otherConfiguration.agentId},'owner','Agent','Synthetic fixture','available','seed','seed',now(),1,1,'ready','running',1,1)`;
 			await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${otherConfiguration.agentId},'user','user_alice','use','formal-use-1')`;
+			await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${otherConfiguration.agentId},'user','user_alice')`;
 			await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',${otherConfiguration.agentId},1,1)`;
 			await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',${otherConfiguration.agentId},1,'other-key',${sql.json({ schemaVersion: 1, purpose: "agent-default", subjectId: otherConfiguration.agentId, keyId: "other-key", keyVersion: 1 })})`;
 			const otherPath = `/api/v1/agents/${otherConfiguration.agentId}/tasks`;
@@ -1241,4 +1244,115 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 			);
 		}
 	}, 60_000);
+});
+
+describe("#4273 human Task access intersection over HTTP and PostgreSQL", () => {
+	it.each(["grant", "availability", "both"] as const)(
+		"refuses submission, existing reads and cancellation after removing %s",
+		async (removed) => {
+			const original = await submit("user", "4273-positive");
+			if (removed !== "availability")
+				await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='user'`;
+			if (removed !== "grant")
+				await sql`delete from platform.agent_availability where agent_id=${configuration.agentId}`;
+			const absent = { ...original, executionId: "absent-execution" };
+			const hidden = await request(path(original), "user");
+			const missing = await request(path(absent), "user");
+			expect(hidden.status).toBe(404);
+			expect(missing.status).toBe(404);
+			const hiddenBody = (await hidden.json()) as { code: string };
+			const missingBody = (await missing.json()) as { code: string };
+			expect(hiddenBody.code).toBe("RESOURCE_UNAVAILABLE");
+			expect(hiddenBody.code).toBe(missingBody.code);
+			expect(
+				(await cancel(original, "user", "4273-hidden-cancel")).status,
+			).toBe(404);
+			const next = await request(
+				`/api/v1/agents/${configuration.agentId}/tasks`,
+				"user",
+				{ schemaVersion: 1, text: "controlled refusal" },
+				"4273-new",
+			);
+			expect(next.status).toBe(403);
+			expect(
+				await sql`select execution_id from platform.conversation_executions`,
+			).toHaveLength(1);
+			// The explicitly approved application transition is independent of human availability.
+			expect(
+				(
+					await request(
+						`/api/v1/agents/${configuration.agentId}/tasks`,
+						"application",
+						{ schemaVersion: 1, text: "controlled app transition" },
+						"4273-app",
+					)
+				).status,
+			).toBe(202);
+		},
+	);
+});
+
+describe("#4273 mixed typed availability after #4304", () => {
+	it.each(["user", "organization"] as const)(
+		"keeps human %s access independent of application entries",
+		async (mode) => {
+			const originalResolver = directory.resolveUser;
+			directory.resolveUser = async () => ({
+				schemaVersion: 1,
+				userId: "same-id",
+				accountStatus: "active",
+				organizationIds: mode === "organization" ? ["mixed-org"] : [],
+				authorizationRevision: "user-1",
+			});
+			try {
+				await sql`delete from platform.agent_availability where agent_id=${configuration.agentId}`;
+				await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values
+    (${configuration.agentId},'application','same-id'),
+    (${configuration.agentId},'organization','mixed-org'),
+    (${configuration.agentId},'user',${mode === "user" ? "same-id" : "another-user"})`;
+				const original = await submit("user", "mixed-availability");
+				expect((await request(path(original), "user")).status).toBe(200);
+				expect((await cancel(original, "user", "mixed-cancel")).status).toBe(
+					202,
+				);
+				expect(
+					TaskProjectionV1Schema.parse(
+						await (await request(path(original), "user")).json(),
+					).status,
+				).toBe("cancelled");
+				await sql`delete from platform.agent_availability where agent_id=${configuration.agentId} and target_type::text<>'application'`;
+				expect((await request(path(original), "user")).status).toBe(404);
+				expect(
+					(await cancel(original, "user", "mixed-denied-cancel")).status,
+				).toBe(404);
+				expect(
+					(
+						await request(
+							`/api/v1/agents/${configuration.agentId}/tasks`,
+							"user",
+							{ schemaVersion: 1, text: "controlled refusal" },
+							"mixed-denied-submit",
+						)
+					).status,
+				).toBe(403);
+				expect(
+					await sql`select execution_id from platform.conversation_executions`,
+				).toHaveLength(1);
+				// Applications keep the approved grant-only transition, without borrowing human scope.
+				await sql`update platform.agent_availability set target_id='unrelated-application' where agent_id=${configuration.agentId}`;
+				expect(
+					(
+						await request(
+							`/api/v1/agents/${configuration.agentId}/tasks`,
+							"application",
+							{ schemaVersion: 1, text: "controlled transition" },
+							"mixed-app-transition",
+						)
+					).status,
+				).toBe(202);
+			} finally {
+				directory.resolveUser = originalResolver;
+			}
+		},
+	);
 });

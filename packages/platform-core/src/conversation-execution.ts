@@ -1000,7 +1000,12 @@ export function createConversationExecutionUseCaseV1(
 					),
 					parseRegenerationCommandResult,
 				);
-			} catch {
+			} catch (error) {
+				if (
+					error instanceof ConversationExecutionError &&
+					error.code === "personal_relay_key_unavailable"
+				)
+					throw error;
 				return unavailable();
 			}
 		},

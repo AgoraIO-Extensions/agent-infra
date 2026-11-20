@@ -15,6 +15,11 @@ import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-co
 import { and, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
+import {
+	agentAvailabilityTargetId,
+	agentAvailabilityTargetKey,
+	decodeAgentAvailabilityTarget,
+} from "./agent-availability-target.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import postgres from "./observed-postgres.js";
 import {
@@ -129,11 +134,7 @@ function resultValue(input: unknown): ApplicationRevisionResultV1 {
 	return result;
 }
 
-function accessKey(target: AgentConfigurationAccessTargetV1): string {
-	return target.kind === "user"
-		? `user\0${target.userId}`
-		: `organization\0${target.organizationId}`;
-}
+const accessKey = agentAvailabilityTargetKey;
 
 function compareAccessTargets(
 	left: AgentConfigurationAccessTargetV1,
@@ -149,13 +150,12 @@ function decodeAccessTarget(row: {
 	readonly targetId: unknown;
 }): AgentConfigurationAccessTargetV1 {
 	if (!validText(row.targetId)) unavailable();
-	if (row.targetType === "user") {
-		return { kind: "user", userId: row.targetId };
-	}
-	if (row.targetType === "organization") {
-		return { kind: "organization", organizationId: row.targetId };
-	}
-	unavailable();
+	return (
+		decodeAgentAvailabilityTarget({
+			targetType: row.targetType,
+			targetId: row.targetId,
+		}) ?? unavailable()
+	);
 }
 
 function validateAccess(
@@ -172,11 +172,7 @@ function validateAccess(
 		availability.length > maximumAccessTargets ||
 		new Set(targetKeys).size !== targetKeys.length ||
 		!sameValue(targetKeys, [...targetKeys].sort()) ||
-		availability.some((target) =>
-			target.kind === "user"
-				? !validText(target.userId)
-				: target.kind !== "organization" || !validText(target.organizationId),
-		)
+		availability.some((target) => !validText(agentAvailabilityTargetId(target)))
 	) {
 		unavailable();
 	}

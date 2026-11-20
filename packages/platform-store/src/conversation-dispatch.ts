@@ -688,7 +688,13 @@ export class PostgresConversationDispatchStoreV1
 										join platform.conversations c on c.id = e.conversation_id
 										where e.execution_id = outbox_items.payload->>'executionId'
 											and e.conversation_id = outbox_items.scope_id
-											and e.status in ('processing', 'unknown')
+											and (
+												e.status in ('processing', 'unknown')
+												or (e.status in ('completed', 'failed', 'cancelled')
+													and outbox_items.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+													and e.delivery_fence > 0 and e.delivery_fence <= outbox_items.delivery_fence
+													and c.host_session_ref is not null)
+											)
 											and (
 												outbox_items.operation not in ('conversation.native-capability.invoke.v1', 'conversation.native-capability.invoke.v2')
 												or c.host_session_ref is not null

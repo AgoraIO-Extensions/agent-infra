@@ -296,7 +296,32 @@ Store 记录的 UID/resourceVersion 条件删除，回读不存在时由 Store �
 - 对象的 ownerReference 指向原 Pod UID，归属标签与第 2 节一致；
 - Pod 已删除时，ownerReference 级联回收不能证明没有迟到的投影 create。
 
-3a/3b 的 PR 须在本节写入投影记录的实际表、列和只读查询，并经复审；未补齐时不批准 Codex profile。
+投影记录保存在 `platform.session_sandbox_reserves.executor_startup`（jsonb，单容器 reserve 为空），
+与六类资源的 `operations` 分开。只读查询：
+
+```sql
+BEGIN READ ONLY;
+SELECT r.sandbox_id, r.status, r.delivery_fence,
+       r.executor_startup->>'startupRef' AS startup_ref,
+       (r.executor_startup->>'deadlineMs')::bigint AS deadline_ms,
+       r.executor_startup->'projection'->>'podUid' AS pod_uid,
+       r.executor_startup->'projection'->>'hostKeyId' AS host_key_id,
+       r.executor_startup->'projection'->'create' AS projection_create,
+       r.executor_startup->'projection'->'deletes' AS projection_deletes,
+       r.executor_startup->'consumption' AS consumption
+FROM platform.session_sandbox_reserves r
+WHERE r.sandbox_id = :'sandbox_id';
+COMMIT;
+```
+
+`projection_create` 与 `projection_deletes` 的每一项有 `attemptId`、`status`、`writeCompletion`、
+`absent`、`resource`（UID/resourceVersion）和 `writer`（owner/fence），语义与第 3 节的 create 和
+DELETE 相同；投影 Secret 名称等于 `startup_ref`。判定沿用第 3 节；第 5.1 节的 Store 修正对投影
+写入只改 `executor_startup` 中对应的那一项，CAS 前置条件另加 `executor_startup` 的 SHA-256。
+领取后，原启动事实写入 `conversation_audit_events`（`details.checkpoint = 'executor-startup'`、
+`details.source = 'reserve'`），业务晋升回执在 `platform.session_sandbox_executor_promotions`。
+
+Worker 与 Host 的取证步骤由 3b 写入本节并经复审；未补齐时不批准 Codex profile。
 
 ## 7. 回退
 

@@ -1299,6 +1299,7 @@ export function registerV2ManagementRoutes(
 						const apiScope = {
 							kind: "api_user",
 							userId: apiUser.userId,
+							organizationIds: apiUser.organizationIds,
 						} as const;
 						const projectedPage = await projectPage(
 							() => dependencies.query.listAgents(apiScope, queryPage),
@@ -1354,7 +1355,11 @@ export function registerV2ManagementRoutes(
 					material,
 					async (apiUser) => {
 						const agent = await dependencies.query.getAgent(
-							{ kind: "api_user", userId: apiUser.userId },
+							{
+								kind: "api_user",
+								userId: apiUser.userId,
+								organizationIds: apiUser.organizationIds,
+							},
 							context.req.param("agentId"),
 						);
 						if (!agent) throw new PersonalApiCredentialErrorV1("not_found");

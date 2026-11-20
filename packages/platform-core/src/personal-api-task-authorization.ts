@@ -1,5 +1,9 @@
 import { types } from "node:util";
 import {
+	type AgentManagementStateV1,
+	isAgentApiPrincipalAvailableV1,
+} from "./agent-management.js";
+import {
 	requireAgentManagementExactKeys as exact,
 	snapshotAgentManagementDataObject,
 	isAgentManagementText as text,
@@ -155,6 +159,10 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 		readonly revokedAt: Date | null;
 	} | null;
 	readonly user: CurrentTaskUserV1 | null;
+	readonly agent?: Pick<
+		AgentManagementStateV1,
+		"agentId" | "ownerIds" | "availability"
+	> | null;
 	readonly application?: CurrentTaskApplicationV1 | null;
 	readonly disabled: boolean;
 	readonly grant: {
@@ -222,6 +230,14 @@ export function requirePersonalApiTaskUseAuthorizationV1(input: {
 				throw new PersonalApiCredentialErrorV1("unavailable");
 			if (input.disabled || user.accountStatus !== "active")
 				throw new PersonalApiCredentialErrorV1("forbidden");
+			if (input.agent === undefined)
+				throw new PersonalApiCredentialErrorV1("unavailable");
+			if (
+				!input.agent ||
+				input.agent.agentId !== authority.agentId ||
+				!isAgentApiPrincipalAvailableV1(input.agent, authority.principal, user)
+			)
+				throw new PersonalApiCredentialErrorV1("not_found");
 			identityRevision = user.authorizationRevision;
 		}
 		if (identityRevision !== authority.identityRevision)

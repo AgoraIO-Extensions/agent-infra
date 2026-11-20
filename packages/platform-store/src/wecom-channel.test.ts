@@ -3878,3 +3878,155 @@ describe("WeCom bounded queue receipts (#3376)", () => {
 		}
 	});
 });
+
+describe("4281 personal Key WeCom admission", () => {
+	let next = 0;
+	async function setup(
+		conversationType: "single" | "group",
+		key = false,
+		agentId = message.agentId,
+	) {
+		const actor = `4281-sender-${++next}`;
+		const input: WecomMessageV1 = {
+			...message,
+			agentId,
+			conversationType,
+			senderId: actor,
+			peerId: `4281-peer-${next}`,
+			eventId: `4281-event-${next}`,
+		};
+		if (key) {
+			const keyId = `4281-personal-${actor}`;
+			await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version)values('personal',${actor},1,1)`;
+			await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)values('personal',${actor},1,${keyId},${sql.json({ purpose: "personal", subjectId: actor, keyId, keyVersion: 1 })})`;
+		}
+		await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version)values('agent-default',${input.agentId},1,1) on conflict do nothing`;
+		const defaultKeyId = `4281-default-not-for-${input.agentId}`;
+		await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)values('agent-default',${input.agentId},1,${defaultKeyId},${sql.json({ purpose: "agent-default", subjectId: input.agentId, keyId: defaultKeyId, keyVersion: 1 })}) on conflict do nothing`;
+		const producer = createWecomChannelV1({
+			store,
+			authorization: createWecomAuthorizationV1({
+				identity: fixtureIdentity,
+				state: store,
+			}),
+		});
+		return { input, producer };
+	}
+	async function expectNoTask(sender: string) {
+		const [row] = await sql`select
+   (select count(*)::int from platform.conversation_executions where actor_id=${sender}) as executions,
+   (select count(*)::int from platform.outbox_items o join platform.conversations c on c.id=o.scope_id where c.actor_id=${sender}) as outbox,
+   (select count(*)::int from platform.idempotency_records where actor_id=${sender}) as idempotency`;
+		expect(row).toEqual({ executions: 0, outbox: 0, idempotency: 0 });
+	}
+	it.each(["single", "group"] as const)(
+		"4281 explains missing sender Key without task side effects (%s)",
+		async (type) => {
+			const { input, producer } = await setup(type);
+			expect(await producer.receive(input)).toEqual({
+				outcome: "unavailable",
+				reason: "personal_relay_key_unavailable",
+			});
+			await expectNoTask(input.senderId);
+		},
+	);
+	it("4281 group messages use only the actual sender Key", async () => {
+		const { input, producer } = await setup("group", true);
+		const accepted = await producer.receive(input);
+		expect(accepted.outcome).toBe("accepted");
+		if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+		const [execution] =
+			await sql`select execution_source,relay_key_purpose,relay_key_subject_id from platform.conversation_executions where execution_id=${accepted.receipt.executionId}`;
+		expect(execution).toEqual({
+			execution_source: "wecom",
+			relay_key_purpose: "personal",
+			relay_key_subject_id: input.senderId,
+		});
+		const other = {
+			...input,
+			senderId: `4281-other-${++next}`,
+			eventId: `4281-other-event-${next}`,
+		};
+		expect(await producer.receive(other)).toEqual({
+			outcome: "unavailable",
+			reason: "personal_relay_key_unavailable",
+		});
+		await expectNoTask(other.senderId);
+	});
+	it.each(["single", "group"] as const)(
+		"4281 accepts a legitimate sender with Key (%s)",
+		async (type) => {
+			const { input, producer } = await setup(type, true);
+			expect((await producer.receive(input)).outcome).toBe("accepted");
+		},
+	);
+	it.each([
+		"unauthorized",
+		"revoked",
+		"foreign-user",
+		"foreign-agent",
+		"key-recheck",
+		"channel-recheck",
+	] as const)("4281 hides Key state after %s refusal", async (mode) => {
+		const { input } = await setup("group");
+		let directoryReads = 0;
+		let senderReads = 0;
+		const identity: WecomIdentityPortV1 = {
+			activeUsers: fixtureIdentity.activeUsers,
+			resolveSender: async (scope) => {
+				const user = await fixtureUserDirectory.resolveUser(scope.senderId);
+				if (mode === "channel-recheck" && directoryReads >= 2) return null;
+				if (mode === "foreign-user" && ++senderReads > 1)
+					return { ...user, userId: "4281-different-user" };
+				return mode === "unauthorized"
+					? { ...user, organizationIds: [] }
+					: mode === "revoked"
+						? { ...user, accountStatus: "disabled" }
+						: user;
+			},
+		};
+		const target = new PostgresWecomChannelV1({
+			...db,
+			identity,
+			userDirectory: {
+				resolveUser: async (id) => {
+					directoryReads++;
+					const user = await fixtureUserDirectory.resolveUser(id);
+					return mode === "key-recheck" && directoryReads >= 2
+						? { ...user, authorizationRevision: "4281-revoked" }
+						: user;
+				},
+			},
+		});
+		const producer = createWecomChannelV1({
+			store: target,
+			authorization: createWecomAuthorizationV1({ identity, state: target }),
+		});
+		try {
+			const response = await producer
+				.receive(
+					mode === "foreign-agent"
+						? { ...input, agentId: "4281-invisible-agent" }
+						: input,
+				)
+				.catch(() => ({ outcome: "unavailable" as const }));
+			expect(response).not.toHaveProperty("reason");
+			expect(["denied", "unavailable"]).toContain(response.outcome);
+			if (mode === "channel-recheck") {
+				expect(directoryReads).toBe(2);
+				expect(response.outcome).toBe("denied");
+			}
+			await expectNoTask(input.senderId);
+		} finally {
+			await target.close();
+		}
+	});
+	it("4281 never borrows the V3 Agent default Key for a missing sender Key", async () => {
+		const { input, producer } = await setup("group", false, keylessAgentId);
+		expect(await producer.receive(input)).toEqual({
+			outcome: "unavailable",
+			reason: "personal_relay_key_unavailable",
+		});
+		await expectNoTask(input.senderId);
+	});
+});

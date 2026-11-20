@@ -9,6 +9,7 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
+import { createServer as createCollector } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -349,6 +350,72 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("wires model transport failures to the safe production log and OTLP projection", async () => {
+		const fixture = await sessionExecutorFixture();
+		const exports: Buffer[] = [];
+		const logs: string[] = [];
+		const collector = createCollector(async (request, response) => {
+			const chunks: Buffer[] = [];
+			for await (const chunk of request) chunks.push(Buffer.from(chunk));
+			exports.push(Buffer.concat(chunks));
+			response.end();
+		});
+		await new Promise<void>((resolve) =>
+			collector.listen(0, "127.0.0.1", resolve),
+		);
+		const address = collector.address();
+		if (!address || typeof address === "string")
+			throw new Error("missing collector");
+		fixture.values.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT = `http://127.0.0.1:${address.port}`;
+		const write = process.stdout.write;
+		const output = vi.spyOn(process.stdout, "write").mockImplementation(((
+			chunk: unknown,
+			...args: unknown[]
+		) => {
+			logs.push(String(chunk));
+			return Reflect.apply(write, process.stdout, [chunk, ...args]);
+		}) as typeof process.stdout.write);
+		const canary = "PRIVATE_MODEL_BODY_KEY_COOKIE_QUERY_ERROR";
+		try {
+			const runtime = await assembleRuntimeHost(fixture.values);
+			try {
+				const options = runtimeAssemblyMocks.openCodexRuntimeDriver.mock
+					.calls[0]?.[0] as CodexRuntimeDriverOptions;
+				expect(options.observeModelTransportFailure).toBeTypeOf("function");
+				const event = {
+					stage: "response_body" as const,
+					errorClass: "connection_reset" as const,
+					elapsedMs: 17,
+					upstreamStatus: 200,
+					agentId: "123e4567-e89b-42d3-a456-426614174001",
+					conversationId: "123e4567-e89b-42d3-a456-426614174002",
+					executionId: "123e4567-e89b-42d3-a456-426614174003",
+					operationRef: "123e4567-e89b-42d3-a456-426614174004",
+					attemptRef: "123e4567-e89b-42d3-a456-426614174005",
+					message: canary,
+					stack: canary,
+					body: canary,
+					headers: { cookie: canary },
+				};
+				options.observeModelTransportFailure?.(event);
+			} finally {
+				await runtime.close();
+			}
+		} finally {
+			output.mockRestore();
+			await new Promise<void>((resolve) => collector.close(() => resolve()));
+		}
+		expect(logs.join("")).toContain(
+			'"modelTransportErrorClass":"connection_reset"',
+		);
+		expect(logs.join("")).toContain('"modelTransportHttpStatus":200');
+		expect(logs.join("")).not.toContain(canary);
+		const otlp = Buffer.concat(exports).toString();
+		expect(otlp).toContain("modelTransportErrorClass");
+		expect(otlp).toContain("123e4567-e89b-42d3-a456-426614174004");
+		expect(otlp).not.toContain(canary);
+	});
+
 	it("waits for Session executor admission before opening a native Driver", async () => {
 		const fixture = await sessionExecutorFixture();
 		const startup = Promise.withResolvers<CodexSessionExecutorAdmissionV1>();

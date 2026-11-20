@@ -1002,6 +1002,7 @@ function openDriverWithModelEndpoint(
 	credential: string | null = upstreamModelAccess.credential,
 	authorizeExternalAction?: CodexRuntimeDriverOptions["authorizeExternalAction"],
 	waitForInitialModelRequest = false,
+	observeModelTransportFailure?: CodexRuntimeDriverOptions["observeModelTransportFailure"],
 ) {
 	modelTransportTestHooks.waitForInitialModelRequest =
 		waitForInitialModelRequest;
@@ -1009,6 +1010,7 @@ function openDriverWithModelEndpoint(
 		{
 			...driverOptions(path, configVersion),
 			...(authorizeExternalAction ? { authorizeExternalAction } : {}),
+			...(observeModelTransportFailure ? { observeModelTransportFailure } : {}),
 			modelOptions: driverOptions(path).modelOptions.map((option) => ({
 				...option,
 				endpoint,
@@ -2290,6 +2292,82 @@ describe("TestCodexBridge processing receipt", () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it.each(["capture", "throw", "reject"] as const)(
+		"correlates safe transport diagnostics without changing persisted unknown facts when telemetry %s",
+		async (sink) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const endpointServer = createServer();
+			const endpoint = await listen(endpointServer);
+			await new Promise<void>((resolve) =>
+				endpointServer.close(() => resolve()),
+			);
+			const canary = "PRIVATE_MODEL_KEY_BODY_ERROR_CANARY";
+			const bridge = new TestCodexBridge();
+			let loopback: CodexModelAccess | undefined;
+			const observed: unknown[] = [];
+			const observer: NonNullable<
+				CodexRuntimeDriverOptions["observeModelTransportFailure"]
+			> = (event) => {
+				observed.push(event);
+				if (sink === "throw") throw new Error(canary);
+				if (sink === "reject") return Promise.reject(new Error(canary));
+			};
+			const driver = await openDriverWithModelEndpoint(
+				path,
+				bridge,
+				endpoint,
+				(options) => {
+					loopback = options.modelAccess;
+				},
+				undefined,
+				`synthetic-credential-${canary}`,
+				undefined,
+				false,
+				observer,
+			);
+			drivers.push(driver);
+			const command = submitCommandV2();
+			const accepted = await driver.execute(command);
+			if (!loopback) throw new Error("missing model access");
+			expect((await modelRequest(loopback, bridge)).status).toBe(502);
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			const facts = events
+				.filter((event) => event.type === "operation")
+				.map((event) => event.payload as RuntimeOperationFactV2);
+			expect(facts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				"unknown",
+			]);
+			const fact = facts.at(-1);
+			expect(fact).toMatchObject({ failureCode: "dependency_unavailable" });
+			expect(fact).not.toHaveProperty("durationMs");
+			expect(fact).not.toHaveProperty("finishedAt");
+			expect(observed).toEqual([
+				{
+					stage: "response_headers",
+					errorClass: "connect_refused",
+					elapsedMs: expect.any(Number),
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					executionId: command.executionId,
+					operationRef: fact?.operationRef,
+					attemptRef: fact?.attemptRef,
+				},
+			]);
+			const persisted = await readFile(path, "utf8");
+			expect(persisted).not.toContain(canary);
+			expect(persisted).not.toContain("connect_refused");
+			expect(JSON.stringify(observed)).not.toContain(canary);
+			// A diagnostic is not permission to resend the failed Turn.
+			expect((await modelRequest(loopback, bridge)).status).toBe(409);
+			expect(observed).toHaveLength(1);
+		},
+	);
+
 	it("persists actual model intent before HTTP, preserves facts across ack/restart, and rejects foreign cursors", async () => {
 		const path = join(await runtimeDirectory(), "driver.json");
 		let endpointFacts: RuntimeOperationFactV2[] = [];
@@ -15122,6 +15200,28 @@ describe("Codex verified Session executor", () => {
 			expect(await readFile(f.path, "utf8")).toBe(before);
 		},
 	);
+
+	it("accepts only a callable deployment transport observer at the public Session executor startup boundary", async () => {
+		const f = await fixture({ observeModelTransportFailure: () => {} });
+		await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);
+		const driver = await CodexRuntimeDriver.open(f.options);
+		drivers.push(driver);
+		expect(await driver.getCapabilities()).toMatchObject({
+			modelSelection: true,
+		});
+		await driver.close();
+		for (const extra of [
+			{ execServerUrl: "ws://127.0.0.1:9999" },
+			{ observeModelTransportFailure: "not-a-callback" },
+		]) {
+			await expect(
+				CodexRuntimeDriver.open({
+					...f.options,
+					...extra,
+				} as CodexRuntimeDriverOptions),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+		}
+	});
 
 	it("initializes a fresh executor workspace before the public Driver open without accepting a lost mapping", async () => {
 		const f = await fixture();

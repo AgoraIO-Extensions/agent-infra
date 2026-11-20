@@ -6,7 +6,9 @@
 同属 [#4157](https://github.com/AgoraIO-Extensions/agent-infra/issues/4157) 的 Owner 手工关联交付线。
 须经非实现方独立评审后合入。完整规则只在
 [工程 Spec §13.5.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1351-字段与配置来源)
-维护，本 ADR 只记录取舍、风险和接受依据，不单独覆盖两份 PRD、工程 Spec 或 HLD。
+维护；换码前首次固定的两阶段命令和 Store 提交通道只在
+[工程 Spec §13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
+定义。本 ADR 只记录取舍、风险和接受依据，不单独覆盖两份 PRD、工程 Spec 或 HLD。
 
 例外在 Connection 原 OAuth 事务回读合同（[EP-1123](https://jira.agoralab.co/browse/EP-1123)）
 发布并获部署批准后失效，最迟在部署批准的 UTC 截止时间 `notAfter`（不晚于 M1 结束）到期；
@@ -39,9 +41,8 @@ M1 期间，动态手工安装用“换码前回读 EP-1060 的实例 `principal
 映射的核对：一个 `principalId` 只能对应一个 Platform 用户；一个 Platform 用户首次通过的
 `principalId` 固定下来，之后所有安装必须相同；可首次固定的 `principalId` 总数受部署批准的
 上限约束；首次绑定后由 Connection 管理员或其书面指定的非实现方在 Connection 管理端调用审计中
-限期人工核对，超期或不一致即封闭并撤销；例外安装带 `consistency-exception-v1` 标记，到达
-`notAfter` 时全部封闭并撤销，EP-1123 先获批时逐一回溯核对。前提、触发条件、补偿和失效的完整
-规则见工程 Spec §13.5.1。
+限期人工核对，超期或不一致即封闭并撤销；例外安装带 `consistency-exception-v1` 标记。前提、
+触发条件、补偿和失效的完整规则见工程 Spec §13.5.1；到期与转为标准安装的门禁只在例外第 8 项维护。
 
 每个使用者照常用自己的身份为自己发起安装，Owner 关联 Agent 时不需要任何批准动作，与
 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)
@@ -70,13 +71,30 @@ Grant。
 更现实的一种情况是误操作：测试人员在同一个浏览器里登录着另一个测试账号去批准。一致性约束
 和人工核对可以发现这种情况。
 
-**风险接受依据。** 用户 2026-11-20T04:3xZ 原话（经 Kiro sess_714f2fb5 前台转达）：
-“我觉得这是安全问题吧？先不管它打通流程再说，后续再优化”。用户 2026-11-20T05:4xZ 另确认
-产品模型保持不变：Owner 关联 Agent 时不需要批准动作，每个使用者用自己的身份在 Connection
-独立确认自己的安装。用户 2026-11-20T07:5xZ 决定（原话“按你的建议”，见
-[#4269 评论 7033676112](https://github.com/AgoraIO-Extensions/agent-infra/pull/4269#issuecomment-7033676112)）
-接受：去掉 Owner-only 后，上文最坏情况中的攻击者从该 Agent 的 Owner 扩大到该 Agent 的任一
-使用者；补偿措施不变。
+**运行版本的人工依赖。** 已核实的 Connection 合同尚未提供可供 Host 在 EP-1060 回读时比对的
+运行发布版本或修订。EP-1060 的 `registrationVersion`、EP-1062 的资源 `revision` 不证明实际部署
+版本；EP-1123 的版本与发布出处仍是未发布提案，不能作为现行接口。接口现状见
+[#4155 的合同对照](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155#issuecomment-7028245236)
+及[只读核对](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155#issuecomment-7028819877)。
+当前人工处理沿工程 Spec §13.5.1 例外第 1 项的版本核实、升级前撤批和重新批准流程；Platform
+不能自动发现未通知的升级或人工漏撤批准，实例绑定前提可能因此未被及时复核。该人工撤批门禁
+已在 [提交 `6b66e59d`](https://github.com/AgoraIO-Extensions/agent-infra/commit/6b66e59d764a2d2d4dcdb4f4349d69e0acc46524)
+写入工程 Spec §13.5.1 例外第 1 项，早于下述
+[用户接受记录](https://github.com/AgoraIO-Extensions/agent-infra/pull/4269#issuecomment-7033676112)。
+此处仅说明该人工门禁已有的残余风险，不是新的风险接受，也不表示持续自动检测能力或授权未核实
+版本继续使用例外；原试点上限、已接受的最坏情况和全部补偿门禁仍适用。
+
+**唯一性冲突的可用性影响。** 攻击者诱导持有方批准另一安装的链接，也可能触发唯一性冲突，
+使本无错绑的持有方全部例外安装暂时不能取得新的 MCP 许可，影响其工具调用。临时暂停的核对
+窗口最长不超过部署批准的 `verificationWindowHours`（≤ 24 小时），仍受工程 Spec §13.5.1
+例外第 4 项的核对期限约束。窗口内核对一致才恢复签发；超期未核对或不一致
+转为该项规定的封闭撤销，不会自动恢复。因此窗口上限不是对总不可用时长的恢复承诺。
+
+**风险接受依据。** 用户 2026-11-20T07:5xZ 的决定记录于
+[#4269 评论 7033676112](https://github.com/AgoraIO-Extensions/agent-infra/pull/4269#issuecomment-7033676112)
+（原话“按你的建议”）：接受去掉 Owner-only 后，上文最坏情况中的攻击者从该 Agent 的 Owner
+扩大到该 Agent 的任一使用者，补偿措施不变。本次记录不扩大试点、攻击影响面或已批准版本范围，
+也不免除工程 Spec §13.5.1 例外第 1、4、8 项的门禁。
 
 ## 取舍
 
@@ -87,7 +105,7 @@ Grant。
 | EP-1060 回读加一致性约束，并只允许 Owner 本人安装 | 不选。只允许 Owner 安装与 PRD §9.1 的按使用者身份模型冲突，需要改 PRD。 |
 | EP-1060 回读加一致性约束，使用者照常为自己安装 | 选用。不改 PRD 和 Connection；错绑由唯一性、首次固定、人工核对和回溯核对发现并撤销。 |
 | 试点界限只写在 ADR | 不选。使用者不限于 Owner 后例外覆盖全部使用者，界限须由工程 Spec 的批准上限强制。 |
-| 到达 `notAfter` 后保留已核对的例外安装 | 不选。EP-1123 不来时例外会无限期有效；到期统一封闭撤销，使用者按届时有效路径重装。 |
+| 到达 `notAfter` 后保留仍未转为标准安装的例外 | 不选。EP-1123 获批不等于安装已按标准核实；到期处理以工程 Spec §13.5.1 例外第 8 项为准。 |
 
 EP-1123 获批后另开后续 PR：接入事务回读、完成回溯核对并移除例外。
 

@@ -2257,32 +2257,43 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			h.runtime.close();
 		}
 	});
-	it("keeps reading Host pages past a terminal Platform status until the terminal event (#1524)", async () => {
-		const h = runtimeV4Harness();
-		try {
-			const reference = await h.authorize();
-			Object.assign(h.state, { executionStatus: "completed" });
-			h.fetcher.mockImplementation(async (_url, init) => {
-				const body = JSON.parse(init?.body as string);
-				return Response.json({
-					schemaVersion: 4,
-					hostSessionRef: "host",
-					executionId: "execution",
-					events:
-						body.afterCursor === "model-cursor" ? [terminal] : [modelFact],
+	it.each([false, true])(
+		"keeps reading Host pages past a terminal Platform status until the terminal event (empty page=%s, #1524/#4266)",
+		async (emptyPage) => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				Object.assign(h.state, { executionStatus: "completed" });
+				let emptyReturned = false;
+				h.fetcher.mockImplementation(async (_url, init) => {
+					const body = JSON.parse(init?.body as string);
+					const gap =
+						emptyPage && !emptyReturned && body.afterCursor === "model-cursor";
+					if (gap) emptyReturned = true;
+					return Response.json({
+						schemaVersion: 4,
+						hostSessionRef: "host",
+						executionId: "execution",
+						events:
+							body.afterCursor === "model-cursor"
+								? gap
+									? []
+									: [terminal]
+								: [modelFact],
+					});
 				});
-			});
-			const stream = h.runtime.runtimeHost
-				.events(h.events(reference))
-				[Symbol.asyncIterator]();
-			expect((await stream.next()).value).toEqual(modelFact);
-			Object.assign(h.state, { runtimeCursor: "model-cursor" });
-			expect((await stream.next()).value).toEqual(terminal);
-			expect((await stream.next()).done).toBe(true);
-		} finally {
-			h.runtime.close();
-		}
-	});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(modelFact);
+				Object.assign(h.state, { runtimeCursor: "model-cursor" });
+				expect((await stream.next()).value).toEqual(terminal);
+				expect((await stream.next()).done).toBe(true);
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
 
 	describe("continuing a V4 drain on its proven route (#1525)", () => {
 		function pages(h: ReturnType<typeof runtimeV4Harness>) {
@@ -2634,7 +2645,7 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		});
 	});
 
-	it("ends a drained stream for a terminal Platform status without spinning (#1524)", async () => {
+	it("bounds an incomplete terminal journal without pretending it is drained (#1524/#4266)", async () => {
 		const h = runtimeV4Harness();
 		try {
 			const reference = await h.authorize();
@@ -2653,9 +2664,17 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 				[Symbol.asyncIterator]();
 			expect((await stream.next()).value).toEqual(modelFact);
 			Object.assign(h.state, { runtimeCursor: "model-cursor" });
-			// The Host has nothing more; Core decides whether the stream completed.
-			expect((await stream.next()).done).toBe(true);
-			expect(h.fetcher).toHaveBeenCalledTimes(2);
+			// A business terminal plus an empty journal is not archival proof.
+			await expect(stream.next()).rejects.toMatchObject({
+				code: "RUNTIME_STREAM_INCOMPLETE",
+				retryable: true,
+			});
+			expect(h.fetcher).toHaveBeenCalledTimes(4);
+			expect(
+				h.fetcher.mock.calls
+					.slice(1)
+					.map(([, init]) => JSON.parse(String(init?.body)).afterCursor),
+			).toEqual(["model-cursor", "model-cursor", "model-cursor"]);
 		} finally {
 			h.runtime.close();
 		}

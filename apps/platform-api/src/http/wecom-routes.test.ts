@@ -28,11 +28,12 @@ const message = {
 		"https://qyapi.weixin.qq.com/cgi-bin/aibot/response?response_code=fixture",
 };
 function fixture(
-	outcome: "accepted" | "denied",
+	outcome: "accepted" | "denied" | "missing-personal-key",
 	protectReply: () => Promise<string> = async () => "protected",
 	acceptMessages?: () => Promise<boolean>,
 ) {
 	const app = createPlatformHealthApp();
+	const replies: string[] = [];
 	const seen: unknown[] = [];
 	const observed: string[] = [];
 	const signals: (AbortSignal | undefined)[] = [];
@@ -41,26 +42,37 @@ function fixture(
 	registerWecomRoutesV1(app, {
 		resolveBinding: async () => config,
 		...(acceptMessages ? { acceptMessages } : {}),
-		adapter: createWecomAdapterV1({
-			now: () => now,
-			protectReply,
-		}),
+		adapter: {
+			...createWecomAdapterV1({ now: () => now, protectReply }),
+			passiveReply(...args) {
+				replies.push(args[3]);
+				return createWecomAdapterV1({
+					now: () => now,
+					protectReply,
+				}).passiveReply(...args);
+			},
+		},
 		channel: {
 			async receive(input, fence, signal) {
 				seen.push(input);
 				signals.push(signal);
 				fences.push(fence);
-				return outcome === "denied"
-					? { outcome }
-					: {
-							outcome,
-							receipt: {
-								receiptId: "receipt",
-								status: "accepted",
-								conversationId: "conversation",
-								executionId: "execution",
-							},
-						};
+				return outcome === "missing-personal-key"
+					? {
+							outcome: "unavailable" as const,
+							reason: "personal_relay_key_unavailable" as const,
+						}
+					: outcome === "denied"
+						? { outcome }
+						: {
+								outcome,
+								receipt: {
+									receiptId: "receipt",
+									status: "accepted",
+									conversationId: "conversation",
+									executionId: "execution",
+								},
+							};
 			},
 		},
 		receipts: {
@@ -78,6 +90,7 @@ function fixture(
 	});
 	return {
 		app,
+		replies,
 		seen,
 		observed,
 		signals,
@@ -142,4 +155,16 @@ it("forwards the original callback signal to Core without a connection fence", a
 	expect(f.fences).toEqual([undefined]);
 	controller.abort();
 	expect(f.signals[0]?.aborted).toBe(true);
+});
+
+it("4281 callback uses the existing Key hint with the encrypted passive reply", async () => {
+	const f = fixture("missing-personal-key");
+	const response = await f.app.request(f.request());
+	expect(response.status).toBe(200);
+	expect(await response.json()).toMatchObject({
+		encrypt: expect.any(String),
+		msgsignature: expect.any(String),
+	});
+	expect(f.replies).toEqual(["个人 Relay Key 不可用，请到个人设置处理"]);
+	expect(f.observed).toEqual(["unavailable"]);
 });

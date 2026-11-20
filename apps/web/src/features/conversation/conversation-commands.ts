@@ -204,6 +204,16 @@ export async function performConversationCommand(
 					capabilityId: payload.result.capabilityId,
 					outcome: payload.outcome,
 				};
+			const keyFailure = failure(
+				response.response?.status,
+				response.error,
+				true,
+			);
+			if (
+				keyFailure.kind === "rejected" &&
+				keyFailure.reason === "personal_relay_key_unavailable"
+			)
+				return keyFailure;
 			if (payload?.outcome === "unknown") return { kind: "unknown" };
 			if (typeof payload?.outcome === "string")
 				return {
@@ -323,7 +333,7 @@ export async function performConversationCommand(
 			return failure(
 				result.response?.status,
 				result.error,
-				command.kind === "message",
+				command.kind === "message" || command.kind === "regenerate",
 			);
 		const expectedStatus =
 			command.kind === "create"

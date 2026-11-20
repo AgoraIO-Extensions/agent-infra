@@ -130,9 +130,14 @@ export interface AgentManagementStateV1 {
 	readonly workloadRevision: number;
 	readonly fence: number;
 	readonly ownerIds: readonly string[];
+	/**
+	 * One availability scope (PRD §7.1, Spec §9.2.2). Application entries only
+	 * stand for that application and never admit a user or organization member.
+	 */
 	readonly availability: readonly (
 		| { readonly kind: "user"; readonly userId: string }
 		| { readonly kind: "organization"; readonly organizationId: string }
+		| { readonly kind: "application"; readonly applicationId: string }
 	)[];
 	readonly failureCode: AgentFailureCodeV1 | null;
 }
@@ -153,8 +158,12 @@ export function isAdministratorAgentReadAllowedV1(
 }
 
 export function isAgentAccessAllowedV1(
-	state: AgentManagementStateV1,
-	actor: AgentManagementActorContextV1,
+	state: Pick<AgentManagementStateV1, "ownerIds" | "availability">,
+	actor: Pick<
+		AgentManagementActorContextV1,
+		"userId" | "accountStatus" | "organizationIds"
+	> &
+		Partial<AgentManagementActorContextV1>,
 	intent: AgentAccessQueryV1["intent"],
 ): boolean {
 	if (actor.accountStatus !== "active") return false;
@@ -164,8 +173,28 @@ export function isAgentAccessAllowedV1(
 		state.availability.some((target) =>
 			target.kind === "user"
 				? target.userId === actor.userId
-				: actor.organizationIds.includes(target.organizationId),
+				: target.kind === "organization" &&
+					actor.organizationIds.includes(target.organizationId),
 		)
+	);
+}
+
+/** API range fact only: explicit grants and credential checks remain independent.
+ * The application exception is temporary until #4283 is merged and deployed. */
+export function isAgentApiPrincipalAvailableV1(
+	state: Pick<AgentManagementStateV1, "ownerIds" | "availability">,
+	principal: { readonly kind: "user" | "application"; readonly id: string },
+	user?: Pick<
+		AgentManagementActorContextV1,
+		"userId" | "accountStatus" | "organizationIds"
+	> | null,
+): boolean {
+	if (principal.kind === "application") return true;
+	return (
+		principal.kind === "user" &&
+		!!user &&
+		user.userId === principal.id &&
+		isAgentAccessAllowedV1(state, user, "use")
 	);
 }
 

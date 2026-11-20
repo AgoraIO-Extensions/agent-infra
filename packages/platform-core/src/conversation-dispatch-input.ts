@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { BrowserHandoffCommandV1 } from "./browser-handoff-admission.js";
 import { isTurnOperation } from "./conversation-dispatch-runtime.js";
 import type {
@@ -22,6 +23,10 @@ import {
 	conversationExecutionSourceV1,
 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+import {
+	type NativeCapabilityInvocationPlanV6,
+	validateNativeCapabilityReplayPlanV6,
+} from "./native-capability-admission-v6.js";
 import { parseSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	parseTaskPrincipalV1,
@@ -104,6 +109,7 @@ function operation(value: unknown): ConversationDispatchOperationV1 {
 		value !== "conversation.turn.supplement.v1" &&
 		value !== "conversation.turn.stop.v1" &&
 		value !== "conversation.native-capability.invoke.v1" &&
+		value !== "conversation.native-capability.invoke.v2" &&
 		value !== "conversation.browser.handoff.v1"
 	) {
 		return unavailable();
@@ -195,6 +201,126 @@ export function parseCommand(value: unknown): DispatchConversationCommandV1 {
 	}
 }
 
+function nativeCapabilityV6Claim(
+	value: unknown,
+	claim: Record<string, unknown>,
+) {
+	const native = exactObject(value, [
+		"schemaVersion",
+		"kind",
+		"conversationId",
+		"agentId",
+		"actorId",
+		"principal",
+		"executionSource",
+		"operation",
+		"channelId",
+		"executionId",
+		"turnId",
+		"sessionGeneration",
+		"authorizationRevision",
+		"taskBoundary",
+		"hostSessionRef",
+		"capabilityId",
+		"directoryRevision",
+		"capabilitySourceVersion",
+		"parameters",
+		"parametersDigest",
+		"modelOptionId",
+		"reasoningLevel",
+		"configVersion",
+		"keyBinding",
+		"modelConfigurationRevision",
+		"executionStatus",
+		"requestDigest",
+		"operationDigest",
+		"requestId",
+		"traceId",
+		"idempotencyKey",
+	]);
+	const payload =
+		native as unknown as NativeCapabilityInvocationPlanV6["outbox"]["payload"];
+	const { requestId, traceId, idempotencyKey, ...binding } = payload;
+	try {
+		validateNativeCapabilityReplayPlanV6(
+			{
+				...binding,
+				outbox: {
+					id: `conversation:native-capability:${text(claim.executionId)}`,
+					operation: "conversation.native-capability.invoke.v2",
+					payload,
+				},
+			},
+			{
+				invocation: {
+					schemaVersion: 3,
+					conversationId: text(claim.conversationId),
+					capabilityId: payload.capabilityId,
+					directoryRevision: payload.directoryRevision,
+					parameters: payload.parameters,
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: text(claim.modelOptionId),
+						reasoningLevel: text(claim.reasoningLevel),
+					},
+					requestId: text(claim.requestId),
+					traceId: text(claim.traceId),
+					idempotencyKey,
+				},
+				authority: {
+					conversationId: text(claim.conversationId),
+					agentId: text(claim.agentId),
+					actorId: text(claim.actorId),
+					channelId: text(claim.channelId),
+					principal: principal(claim.principal),
+					executionSource: executionSource(claim.executionSource),
+					authorizationRevision: text(claim.authorizationRevision),
+					sessionGeneration: positiveInteger(claim.sessionGeneration),
+					hostSessionRef: text(claim.hostSessionRef),
+				},
+				taskAuthority: {
+					schemaVersion: 1,
+					agentId: text(claim.agentId),
+					actorId: text(claim.actorId),
+					channelId: text(claim.channelId),
+					authorizationRevision: text(claim.authorizationRevision),
+					supportsSupplementaryInstruction: false,
+					taskBoundary: payload.taskBoundary,
+				},
+				requestDigest: payload.requestDigest,
+			},
+		);
+	} catch {
+		return unavailable();
+	}
+	const key = exactObject(claim.relayKeyBinding, [
+		"purpose",
+		"subjectId",
+		"keyId",
+		"keyVersion",
+	]);
+	if (
+		payload.executionId !== text(claim.executionId) ||
+		payload.turnId !== text(claim.turnId) ||
+		requestId !== claim.requestId ||
+		traceId !== claim.traceId ||
+		payload.modelConfigurationRevision !==
+			positiveInteger(claim.modelConfigurationRevision) ||
+		!isDeepStrictEqual(payload.keyBinding, {
+			purpose: key.purpose,
+			subjectId: key.subjectId,
+			ciphertextRef: key.keyId,
+			version: key.keyVersion,
+		}) ||
+		positiveInteger(payload.operation.deliveryFence) >
+			positiveInteger(claim.deliveryFence) ||
+		positiveInteger(claim.deliveryFence) !==
+			positiveInteger(claim.executionDeliveryFence)
+	)
+		return unavailable();
+	return structuredClone(payload);
+}
+
 export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	const input = exactObject(
 		value,
@@ -242,6 +368,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"stopConfirmationTimedOut",
 			"acceptedOriginalHostSessionRef",
 			"nativeCapability",
+			"nativeCapabilityV6",
 			"traceParent",
 			"browserHandoff",
 		],
@@ -424,8 +551,17 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			nonNegativeInteger(input.executionDeliveryFence) < 1)
 	)
 		return unavailable();
+	const isV6 = parsedOperation === "conversation.native-capability.invoke.v2";
+	const parsedV6 = isV6
+		? nativeCapabilityV6Claim(input.nativeCapabilityV6, input)
+		: undefined;
+	if (
+		(!isV6 && input.nativeCapabilityV6 !== undefined) ||
+		(isV6 && input.nativeCapability !== undefined)
+	)
+		return unavailable();
 	const isNativeCapability =
-		parsedOperation === "conversation.native-capability.invoke.v1";
+		parsedOperation === "conversation.native-capability.invoke.v1" || isV6;
 	const isBrowserHandoff =
 		parsedOperation === "conversation.browser.handoff.v1";
 	if (
@@ -450,7 +586,8 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 				? stopRequestId !== null ||
 					messageId !== null ||
 					runtimeInput !== null ||
-					(parsedNativeCapability?.capabilityKind !== "skill" &&
+					(!isV6 &&
+						parsedNativeCapability?.capabilityKind !== "skill" &&
 						(modelConfigurationRevision !== null ||
 							modelOptionId !== null ||
 							reasoningLevel !== null))
@@ -538,6 +675,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(parsedNativeCapability
 			? { nativeCapability: parsedNativeCapability }
 			: {}),
+		...(parsedV6 ? { nativeCapabilityV6: parsedV6 } : {}),
 		...(parsedBrowserHandoff ? { browserHandoff: parsedBrowserHandoff } : {}),
 		executionStatus: executionStatus(input.executionStatus),
 		stopPending:

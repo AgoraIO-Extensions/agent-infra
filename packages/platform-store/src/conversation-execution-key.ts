@@ -28,7 +28,7 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 	input: {
 		readonly authority: ConversationExecutionAuthorityV1;
 		readonly userDirectory: TaskUserDirectoryV1 | undefined;
-		/** Ordinary Web message admission only; other callers retain their existing refusal. */
+		/** Human Web/WeCom admission callers opt in; other callers retain their refusal. */
 		readonly reportMissingPersonalKey?: true;
 		readonly personalApiAdmissionAuthority?: PersonalApiTaskAdmissionAuthorityV1;
 	},
@@ -168,7 +168,11 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 		);
 		if (!confirmed || !(await hasCurrentApiAdmission())) return null;
 		if (!binding) {
-			if (subject.purpose === "personal" && subject.executionSource === "web")
+			if (
+				subject.purpose === "personal" &&
+				(subject.executionSource === "web" ||
+					subject.executionSource === "wecom")
+			)
 				throw new ConversationExecutionError("personal_relay_key_unavailable");
 			return null;
 		}

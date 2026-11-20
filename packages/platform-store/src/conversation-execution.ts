@@ -509,6 +509,9 @@ export class PostgresConversationExecutionTransactionV1
 					currentConversationExecutionRelayKeyBindingV1(transaction, {
 						authority,
 						userDirectory: this.#userDirectory,
+						...(authority.channelId === "web"
+							? { reportMissingPersonalKey: true as const }
+							: {}),
 						personalApiAdmissionAuthority:
 							authority.personalApiAdmissionAuthority,
 					}),
@@ -838,6 +841,9 @@ export class PostgresConversationExecutionTransactionV1
 				await currentConversationExecutionRelayKeyBindingV1(transaction, {
 					authority: input.taskAuthority,
 					userDirectory: this.#userDirectory,
+					...(input.taskAuthority.channelId === "web"
+						? { reportMissingPersonalKey: true as const }
+						: {}),
 					personalApiAdmissionAuthority:
 						input.taskAuthority.personalApiAdmissionAuthority,
 				});
@@ -972,6 +978,9 @@ export class PostgresConversationExecutionTransactionV1
 			await currentConversationExecutionRelayKeyBindingV1(transaction, {
 				authority,
 				userDirectory: this.#userDirectory,
+				...(authority.channelId === "web"
+					? { reportMissingPersonalKey: true as const }
+					: {}),
 				personalApiAdmissionAuthority: authority.personalApiAdmissionAuthority,
 			});
 		if (
@@ -1318,7 +1327,10 @@ export class PostgresConversationExecutionTransactionV1
 				traceId: request.command.traceId,
 				occurredAt,
 			});
-			await adoptSessionSandboxReserveV1(transaction, admission);
+			await adoptSessionSandboxReserveV1(transaction, admission, {
+				requestId: request.command.requestId,
+				traceId: request.command.traceId,
+			});
 			await completeIdempotency(
 				transaction,
 				reservationId,
@@ -1384,7 +1396,9 @@ export class PostgresConversationExecutionTransactionV1
 					(await currentConversationExecutionRelayKeyBindingV1(transaction, {
 						authority,
 						userDirectory: this.#userDirectory,
-						...(authority.channelId === "web"
+						...(authority.channelId === "web" ||
+						authority.channelId.startsWith("wecom_bot:") ||
+						authority.channelId.startsWith("wecom_app:")
 							? { reportMissingPersonalKey: true as const }
 							: {}),
 						personalApiAdmissionAuthority:
@@ -1749,6 +1763,9 @@ export class PostgresConversationExecutionTransactionV1
 				(await currentConversationExecutionRelayKeyBindingV1(transaction, {
 					authority,
 					userDirectory: this.#userDirectory,
+					...(authority.channelId === "web"
+						? { reportMissingPersonalKey: true as const }
+						: {}),
 					personalApiAdmissionAuthority:
 						authority.personalApiAdmissionAuthority,
 				}));
