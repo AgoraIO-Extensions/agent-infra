@@ -638,6 +638,13 @@
       "when": 1795186438700,
       "tag": "0094_connection_manual_confirm",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1795211372499,
+      "tag": "0095_connection_principal_pin_rules",
+      "breakpoints": true
     }
   ]
 }

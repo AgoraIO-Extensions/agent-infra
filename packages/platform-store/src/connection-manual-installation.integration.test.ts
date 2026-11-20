@@ -31,6 +31,7 @@ import {
 import { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.js";
 import { PostgresConnectionInstallationAuthorizationTransactionV1 } from "./connection-installation.js";
 import { PostgresConnectionManualInstallationStoreV1 } from "./connection-manual-installation-store.js";
+import { PostgresConnectionPrincipalPinAdministrationV1 } from "./connection-principal-pin-administration.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -344,10 +345,13 @@ async function fixSupply(
 	const authorizationId = projection.authorizationId;
 	const prepare = await claimFirst("prepare", `execution-${suffix}`, worker);
 	expect(prepare.claimed?.command.command).toBe("prepare");
+	// Execution "b" runs on agent-b; every other fixture Execution on agent-a.
+	const agentId = suffix === "b" ? "agent-b" : "agent-a";
 	const { template, registrationKey } = await templateFor(authorizationId, {
 		user,
 		suffix,
 		worker,
+		connectionAgentId: `connection-${agentId}`,
 	});
 	const supplyAttemptId = randomUUID();
 	const supply = await manual.fixSupply({
@@ -360,7 +364,7 @@ async function fixSupply(
 		supplyAttemptId,
 	});
 	expect(supply?.binding).toEqual({
-		agentId: "agent-a",
+		agentId,
 		ownerId: "owner",
 		associationRevision: 1,
 	});
@@ -3280,9 +3284,10 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		],
 		["a Principal pinned by another user", "principal-b"],
 	])("refuses %s and keeps the existing pins", async (_name, principalId) => {
-		await client`insert into platform.connection_principal_pins(id, issuer, principal_id, user_id, policy_ref, policy_revision)
-			values ('pin-alice-agent-b', ${system.issuer}, 'principal-x', 'alice', 'consistency-exception-v1', 'r1'),
-				('pin-bob', ${system.issuer}, 'principal-b', 'bob', 'consistency-exception-v1', 'r1')`;
+		// Both pins are live: inside their verification window (§13.5.1 item 4).
+		await client`insert into platform.connection_principal_pins(id, issuer, principal_id, user_id, policy_ref, policy_revision, verification_deadline)
+			values ('pin-alice-agent-b', ${system.issuer}, 'principal-x', 'alice', 'consistency-exception-v1', 'r1', clock_timestamp() + interval '1 day'),
+				('pin-bob', ${system.issuer}, 'principal-b', 'bob', 'consistency-exception-v1', 'r1', clock_timestamp() + interval '1 day')`;
 		const flow = await confirmed();
 		const phase = await bindingReadback(flow);
 		expect(
@@ -3716,6 +3721,525 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			status: "confirmed",
 			revoke_state: "not_required",
 			confirm: "confirm:sending,confirm_binding_readback:sending",
+		});
+	});
+});
+
+describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 4, 6, 8)", () => {
+	let admin: PostgresConnectionPrincipalPinAdministrationV1;
+	const expiredPolicy = {
+		...policy,
+		dynamic: {
+			...dynamic,
+			principalMapping: {
+				...dynamic.principalMapping,
+				notAfter: "2026-01-01T00:00:00Z",
+			},
+		},
+	};
+
+	beforeAll(() => {
+		admin = new PostgresConnectionPrincipalPinAdministrationV1({
+			databaseUrl: database.databaseUrl,
+			policy,
+		});
+	});
+
+	afterAll(async () => {
+		await admin?.close();
+	});
+
+	/** One exception installation through phase 1 and its committed pin. */
+	async function pinned(
+		user = "alice",
+		suffix = "a",
+		worker = "worker-a",
+		principalId = "principal-a",
+	) {
+		const flow = await confirmed(user, suffix, worker);
+		const phase = await bindingReadback(flow);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...phase,
+					candidate: await candidateFor(flow, phase, principalId),
+				})
+			).outcome,
+		).toBe("pinned");
+		return { flow, phase };
+	}
+
+	/** The logical confirm finished: the installation holds a Connection client. */
+	async function finish({ flow }: Awaited<ReturnType<typeof pinned>>) {
+		await client`update platform.connection_installation_commands set status='completed'
+			where authorization_id=${flow.run.authorizationId} and command like 'confirm%' and status='sending'`;
+	}
+
+	/** The Worker's DELETE of the original key; without a response it stays unknown. */
+	async function revoke(
+		{ flow }: Awaited<ReturnType<typeof pinned>>,
+		revoked = true,
+	) {
+		const { item, attemptId } = await claimFirst(
+			"revoke",
+			`execution-${flow.suffix}`,
+			flow.worker,
+		);
+		expect(item.authorizationId).toBe(flow.run.authorizationId);
+		const attempt = {
+			commandId: item.commandId,
+			attemptId,
+			attemptOwner: flow.worker,
+			authorizationId: flow.run.authorizationId,
+		};
+		expect(
+			await manual.commitDelivery({
+				...attempt,
+				command: "revoke",
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		return manual.settleRevoke({
+			...attempt,
+			...(revoked
+				? {
+						response: {
+							schemaVersion: 1 as const,
+							commandId: item.commandId,
+							outcome: "revoked" as const,
+						},
+					}
+				: {}),
+		});
+	}
+
+	async function pinOf(userId: string) {
+		const [row] =
+			await client`select id, revision::int, rule_revision::int, verification_state,
+			extract(epoch from verification_deadline - pinned_at)::int as window_seconds,
+			verified_at is not null as verified, suspended_at is not null as suspended,
+			overdue_at is not null as overdue, release_requested_at is not null as releasing,
+			release_reason, released_at is not null as released
+			from platform.connection_principal_pins where user_id=${userId}`;
+		return row;
+	}
+
+	async function installation({ flow }: Awaited<ReturnType<typeof pinned>>) {
+		const [row] = await client`select a.status, m.revoke_state,
+			(select string_agg(c.idempotency_key || ':' || c.status, ',') from platform.connection_installation_commands c
+				where c.authorization_id=a.id and c.command='revoke') as revoke
+			from platform.connection_installation_authorizations a
+			join platform.connection_manual_installations m on m.authorization_id=a.id
+			where a.id=${flow.run.authorizationId}`;
+		return row;
+	}
+
+	async function audit(pinId: string) {
+		const rows =
+			await client`select action, actor_type, actor_id, outcome from platform.audit_events
+			where target_type='connection_principal_pin' and target_id=${pinId} order by occurred_at, action`;
+		return rows.map((row) => ({ ...row }));
+	}
+
+	function record(pinId: string, expectedRuleRevision: number) {
+		return {
+			pinId,
+			expectedRuleRevision,
+			administratorId: "admin-1",
+			reference:
+				"https://github.com/AgoraIO-Extensions/agent-infra/issues/4199",
+			requestId: "request-admin",
+			traceId: "trace-admin",
+		};
+	}
+
+	it("unpins only after closing and revoking every exception installation of the user (item 6)", async () => {
+		const aliceA = await pinned();
+		const aliceB = await pinned("alice", "b");
+		const bob = await pinned("bob", "bob", "worker-b", "principal-b");
+		for (const flow of [aliceA, aliceB, bob]) await finish(flow);
+		const pin = await pinOf("alice");
+		expect(pin).toMatchObject({
+			revision: 1,
+			rule_revision: 1,
+			verification_state: "pending",
+			window_seconds: 24 * 3600,
+			releasing: false,
+			released: false,
+		});
+		await expect(
+			admin.requestRelease({ ...record(pin?.id, 1), reference: "" }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		expect(await admin.requestRelease(record(pin?.id, 1))).toEqual({
+			outcome: "recorded",
+			ruleRevision: 2,
+			closed: 2,
+		});
+		// The same administrator record against the old rule revision writes nothing.
+		expect(await admin.requestRelease(record(pin?.id, 1))).toEqual({
+			outcome: "stale",
+		});
+		for (const flow of [aliceA, aliceB])
+			expect(await installation(flow)).toEqual({
+				status: "revoked",
+				revoke_state: "pending",
+				revoke: `manual-revoke:${flow.flow.run.authorizationId}:pending`,
+			});
+		// Another user's installation on the same Agent is untouched.
+		expect(await installation(bob)).toEqual({
+			status: "confirmed",
+			revoke_state: "not_required",
+			revoke: null,
+		});
+		// Permits stop at once; the pin stays until every revoke settled.
+		expect(await pinOf("alice")).toMatchObject({
+			revision: 1,
+			rule_revision: 2,
+			releasing: true,
+			release_reason: "administrator",
+			released: false,
+		});
+		expect(await revoke(aliceA)).toBe("revoked");
+		await admin.sweep();
+		expect((await pinOf("alice"))?.released).toBe(false);
+		expect(await revoke(aliceB)).toBe("revoked");
+		await admin.sweep();
+		// Releasing moves the pin revision, so no earlier receipt binds it again.
+		expect(await pinOf("alice")).toMatchObject({
+			revision: 2,
+			released: true,
+		});
+		expect(await audit(pin?.id)).toEqual([
+			{
+				action: "connection.principal_pin.release_requested",
+				actor_type: "user",
+				actor_id: "admin-1",
+				outcome: "succeeded",
+			},
+			{
+				action: "connection.principal_pin.released",
+				actor_type: "system",
+				actor_id: "platform-worker",
+				outcome: "succeeded",
+			},
+		]);
+		expect(await admin.requestRelease(record(pin?.id, 2))).toEqual({
+			outcome: "not_found",
+		});
+		expect(await pinOf("bob")).toMatchObject({
+			rule_revision: 1,
+			releasing: false,
+			released: false,
+		});
+	});
+
+	it("keeps the pin while a revoke result is unknown and never re-sends it", async () => {
+		const flow = await pinned();
+		await finish(flow);
+		const pin = await pinOf("alice");
+		expect(await admin.requestRelease(record(pin?.id, 1))).toMatchObject({
+			outcome: "recorded",
+			closed: 1,
+		});
+		expect(await revoke(flow, false)).toBe("unknown");
+		await admin.sweep();
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({
+			releasing: true,
+			released: false,
+		});
+		// Only the original key exists; it is verified, never resent under a new one.
+		expect(await installation(flow)).toEqual({
+			status: "revoked",
+			revoke_state: "unknown",
+			revoke: `manual-revoke:${flow.flow.run.authorizationId}:unknown`,
+		});
+		expect(
+			(await manual.listPending(32, ["execution-a"])).filter(
+				(entry) => entry.command === "revoke",
+			),
+		).toEqual([]);
+	});
+
+	it("suspends the holder on a uniqueness conflict and resumes it on a consistent record (item 4)", async () => {
+		const alice = await pinned();
+		const pin = await pinOf("alice");
+		const bobFlow = await confirmed("bob", "bob", "worker-b");
+		const bobPhase = await bindingReadback(bobFlow);
+		expect(
+			await manual.commitConfirmPin({
+				...bobPhase,
+				candidate: await candidateFor(bobFlow, bobPhase, "principal-a"),
+			}),
+		).toEqual({ outcome: "rejected" });
+		expect(await pinOf("alice")).toMatchObject({
+			revision: 1,
+			rule_revision: 2,
+			verification_state: "pending",
+			suspended: true,
+		});
+		expect((await audit(pin?.id)).map(({ action }) => action)).toEqual([
+			"connection.principal_pin.suspended",
+		]);
+		// The holder's in-flight confirm opens no exchange while suspended.
+		const exchange = { ...alice.phase, phase: "confirm_exchange" as const };
+		expect(await manual.openConfirmPhase(exchange)).toBeNull();
+		// A record against the rule revision before the suspension writes nothing.
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 1),
+				result: "consistent",
+			}),
+		).toEqual({ outcome: "stale" });
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 2),
+				result: "consistent",
+			}),
+		).toEqual({ outcome: "recorded", ruleRevision: 3, closed: 0 });
+		expect(await pinOf("alice")).toMatchObject({
+			revision: 1,
+			verification_state: "verified",
+			verified: true,
+			suspended: false,
+		});
+		expect(await manual.openConfirmPhase(exchange)).not.toBeNull();
+	});
+
+	it("suspends no holder when the latecomer's original claim no longer holds", async () => {
+		await pinned();
+		const pin = await pinOf("alice");
+		const bobFlow = await confirmed("bob", "bob", "worker-b");
+		const bobPhase = await bindingReadback(bobFlow);
+		const candidate = await candidateFor(bobFlow, bobPhase, "principal-a");
+		await reclaim("bob");
+		expect(await manual.commitConfirmPin({ ...bobPhase, candidate })).toEqual({
+			outcome: "unknown",
+		});
+		expect(await pinOf("alice")).toMatchObject({
+			rule_revision: 1,
+			suspended: false,
+		});
+		expect(await audit(pin?.id)).toEqual([]);
+	});
+
+	it("re-reads the pin after waiting on an unpin and accepts no new installation", async () => {
+		const aliceA = await pinned();
+		await finish(aliceA);
+		const aliceB = await confirmed("alice", "b");
+		const phase = await bindingReadback(aliceB);
+		const candidate = await candidateFor(aliceB, phase, "principal-a");
+		const pin = await pinOf("alice");
+		let commit: ReturnType<typeof manual.commitConfirmPin> | undefined;
+		// An unpin holds the pin row while the second installation's CAS waits on it.
+		await client.begin(async (tx) => {
+			await tx`update platform.connection_principal_pins
+				set release_requested_at=clock_timestamp(), release_reason='administrator',
+					release_actor_id='admin-1', release_reference='reference', rule_revision=rule_revision+1
+				where id=${pin?.id}`;
+			commit = manual.commitConfirmPin({ ...phase, candidate });
+			await vi.waitFor(
+				async () => {
+					const [row] =
+						await client`select count(*)::int as n from pg_stat_activity
+						where datname=current_database() and wait_event_type='Lock'`;
+					expect(row?.n).toBe(1);
+				},
+				{ timeout: 5000, interval: 20 },
+			);
+		});
+		expect(await commit).toEqual({ outcome: "rejected" });
+		expect(await pinFacts(aliceB.run.authorizationId)).toMatchObject({
+			receipts: 0,
+			status: "revoked",
+			revoke_state: "pending",
+		});
+	});
+
+	it("allows no exchange readback while the pin backs no permits (items 4 and 8)", async () => {
+		const alice = await confirmed();
+		const phase = await bindingReadback(alice);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...phase,
+					candidate: await candidateFor(alice, phase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const exchange = await manual.openConfirmPhase({
+			...phase,
+			phase: "confirm_exchange",
+		});
+		if (!exchange?.receipt) throw new Error("phase 2 not opened");
+		expect(
+			await manual.commitDelivery({
+				commandId: exchange.phaseCommandId,
+				attemptId: phase.attemptId,
+				attemptOwner: phase.attemptOwner,
+				command: "confirm_exchange",
+				authorizationId: phase.authorizationId,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		const [row] =
+			await client`select descriptor_digest from platform.connection_manual_installations where authorization_id=${alice.run.authorizationId}`;
+		const readback = (store = manual) =>
+			store.readback({
+				...alice.run.commandReadback,
+				command: {
+					...alice.run.commandReadback.command,
+					commandId: exchange.phaseCommandId,
+					attemptId: phase.attemptId,
+					attemptOwner: phase.attemptOwner,
+					command: "confirm_exchange",
+					requestDigest: "7".repeat(64),
+					descriptorDigest: row?.descriptor_digest as string,
+					pinReceipt: {
+						id: exchange.receipt?.id as string,
+						candidateDigest: exchange.receipt?.candidateDigest as string,
+					},
+				},
+			});
+		expect(await readback()).toBe("allowed");
+		// Overdue on the database clock, before any sweep closed the installation.
+		const pin = await pinOf("alice");
+		await client`update platform.connection_principal_pins
+			set verification_deadline=clock_timestamp()-interval '1 second' where id=${pin?.id}`;
+		expect(await readback()).toBe("denied");
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 1),
+				result: "consistent",
+			}),
+		).toMatchObject({ outcome: "recorded" });
+		expect(await readback()).toBe("allowed");
+		const expired = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: expiredPolicy,
+		});
+		try {
+			expect(await readback(expired)).toBe("denied");
+		} finally {
+			await expired.close();
+		}
+	});
+
+	it("stops, closes and unpins the user after an inconsistent record (item 4)", async () => {
+		const alice = await pinned();
+		const bob = await pinned("bob", "bob", "worker-b", "principal-b");
+		for (const flow of [alice, bob]) await finish(flow);
+		const pin = await pinOf("alice");
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 1),
+				result: "inconsistent",
+			}),
+		).toEqual({ outcome: "recorded", ruleRevision: 2, closed: 1 });
+		expect(await pinOf("alice")).toMatchObject({
+			verification_state: "mismatch",
+			releasing: true,
+			release_reason: "mismatch",
+			released: false,
+		});
+		// A later record cannot turn a mismatch back into a verified pin.
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 2),
+				result: "consistent",
+			}),
+		).toEqual({ outcome: "stale" });
+		expect(await installation(alice)).toMatchObject({
+			status: "revoked",
+			revoke_state: "pending",
+		});
+		expect(await installation(bob)).toMatchObject({
+			status: "confirmed",
+			revoke_state: "not_required",
+		});
+		expect(await revoke(alice)).toBe("revoked");
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({ released: true });
+		expect((await audit(pin?.id)).map(({ action }) => action)).toEqual([
+			"connection.principal_pin.verification_mismatch",
+			"connection.principal_pin.released",
+		]);
+		expect(await pinOf("bob")).toMatchObject({
+			rule_revision: 1,
+			released: false,
+		});
+	});
+
+	it("closes the user's installations once the verification window passes and keeps the pin (item 4)", async () => {
+		const aliceA = await pinned();
+		await finish(aliceA);
+		const bob = await pinned("bob", "bob", "worker-b", "principal-b");
+		await finish(bob);
+		// A second installation of the same user is read back before the deadline.
+		const aliceB = await confirmed("alice", "b");
+		const aliceBPhase = await bindingReadback(aliceB);
+		const pin = await pinOf("alice");
+		await client`update platform.connection_principal_pins
+			set verification_deadline=clock_timestamp()-interval '1 second' where id=${pin?.id}`;
+		// The overdue pin backs no new installation, though the Principal is its own.
+		expect(
+			await manual.commitConfirmPin({
+				...aliceBPhase,
+				candidate: await candidateFor(aliceB, aliceBPhase, "principal-a"),
+			}),
+		).toEqual({ outcome: "rejected" });
+		expect((await pinFacts(aliceB.run.authorizationId))?.receipts).toBe(0);
+		await admin.sweep();
+		await admin.sweep();
+		expect(await installation(aliceA)).toMatchObject({
+			status: "revoked",
+			revoke_state: "pending",
+		});
+		expect(await installation(bob)).toMatchObject({
+			status: "confirmed",
+			revoke_state: "not_required",
+		});
+		expect(await pinOf("alice")).toMatchObject({
+			verification_state: "pending",
+			overdue: true,
+			releasing: false,
+			released: false,
+		});
+		expect(await audit(pin?.id)).toEqual([
+			{
+				action: "connection.principal_pin.verification_overdue",
+				actor_type: "system",
+				actor_id: "platform-worker",
+				outcome: "succeeded",
+			},
+		]);
+		expect(await pinOf("bob")).toMatchObject({ overdue: false });
+	});
+
+	it("closes and revokes every exception installation at notAfter in the drain sweep (item 8)", async () => {
+		const alice = await pinned();
+		const bob = await pinned("bob", "bob", "worker-b", "principal-b");
+		for (const flow of [alice, bob]) await finish(flow);
+		const expired = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: expiredPolicy,
+		});
+		try {
+			await expired.listPending(32, ["execution-a"]);
+		} finally {
+			await expired.close();
+		}
+		for (const flow of [alice, bob])
+			expect(await installation(flow)).toEqual({
+				status: "revoked",
+				revoke_state: "pending",
+				revoke: `manual-revoke:${flow.flow.run.authorizationId}:pending`,
+			});
+		expect(await revoke(alice)).toBe("revoked");
+		expect(await installation(alice)).toMatchObject({
+			revoke_state: "revoked",
 		});
 	});
 });
