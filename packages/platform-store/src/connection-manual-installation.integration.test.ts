@@ -607,7 +607,11 @@ async function mapFirstBegin(
 				authorizationId: run.authorizationId,
 				phase: "awaiting_callback",
 				expiresAt: Date.now() + 60_000,
-				authorizationUrl: authorizationUrlFor(context.configuration),
+				// Each installation gets its own state, as a real first begin does.
+				authorizationUrl: authorizationUrlFor(
+					context.configuration,
+					randomBytes(32).toString("hex"),
+				),
 			},
 		}),
 	).toBe("mapped");
