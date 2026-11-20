@@ -12,9 +12,15 @@ const scopeSchema = z.strictObject({
 	resourceFence: fence,
 	epoch: identifier,
 });
+const rejectionSchema = z.strictObject({
+	id: z.string().regex(/^[a-f0-9]{64}$/),
+	code: z.number().int().safe(),
+	occurredAt: fence,
+});
 const attemptSchema = z.strictObject({
 	protocolSession: identifier,
 	handle: identifier,
+	rejection: rejectionSchema.optional(),
 });
 const stopSchema = z.strictObject({
 	stopRequestId: identifier,
@@ -23,6 +29,15 @@ const stopSchema = z.strictObject({
 });
 const drainEvidenceSchema = z.strictObject({
 	verifiedAt: fence,
+	rejectedStarts: z
+		.array(
+			z.strictObject({
+				id: z.string().regex(/^[a-f0-9]{64}$/),
+				rejectedAt: fence,
+			}),
+		)
+		.max(4_096)
+		.optional(),
 	groups: z
 		.array(
 			z.strictObject({
@@ -63,10 +78,11 @@ function inventory(state: State) {
 				state.nativeTurnId ?? null,
 				state.stop.stopRequestId,
 				state.stop.stopFence,
-				state.attempts.map(({ protocolSession, handle }) => [
-					protocolSession,
-					handle,
-				]),
+				state.attempts.map(({ protocolSession, handle, rejection }) =>
+					rejection
+						? [protocolSession, handle, rejection]
+						: [protocolSession, handle],
+				),
 			]),
 		)
 		.digest("hex");
@@ -112,21 +128,66 @@ export class CodexExecutorDrainJournalV1 {
 	}
 
 	/** A true result is durable before the gateway forwards process/start. */
-	async admit(input: State["attempts"][number]) {
-		const attempt = attemptSchema.parse(input);
+	async admit(input: { protocolSession: string; handle: string }) {
+		const attempt = attemptSchema.omit({ rejection: true }).parse(input);
 		return this.file.update(
 			(state) => {
 				if (
 					!state.nativeTurnId ||
 					state.stop ||
 					state.attempts.length >= 4_096 ||
-					state.attempts.some((existing) =>
-						isDeepStrictEqual(existing, attempt),
+					state.attempts.some(
+						(existing) =>
+							existing.protocolSession === attempt.protocolSession &&
+							existing.handle === attempt.handle,
 					)
 				)
 					return false;
 				state.attempts.push(attempt);
 				return true;
+			},
+			{ skipUnchanged: true },
+		);
+	}
+
+	/** Only a verified runner response can refine an existing admission; never erase it. */
+	async rejectStart(
+		input: { protocolSession: string; handle: string },
+		code: number,
+		occurredAt: number,
+	) {
+		const attempt = attemptSchema.omit({ rejection: true }).parse(input);
+		const value = rejectionSchema
+			.omit({ id: true })
+			.parse({ code, occurredAt });
+		return this.file.update(
+			(state) => {
+				const existing = state.attempts.find(
+					(entry) =>
+						entry.protocolSession === attempt.protocolSession &&
+						entry.handle === attempt.handle,
+				);
+				if (!existing || state.confirmed) return invalid();
+				if (existing.rejection) {
+					if (
+						existing.rejection.code !== code ||
+						existing.rejection.occurredAt !== occurredAt
+					)
+						return invalid();
+					return structuredClone(existing.rejection);
+				}
+				const id = createHash("sha256")
+					.update(
+						JSON.stringify([
+							"agent-infra/codex-executor-start-rejected/v1",
+							state.scope,
+							attempt,
+							value,
+						]),
+					)
+					.digest("hex");
+				existing.rejection = { id, ...value };
+				return structuredClone(existing.rejection);
 			},
 			{ skipUnchanged: true },
 		);
@@ -175,11 +236,29 @@ export class CodexExecutorDrainJournalV1 {
 					inventory(state).digest !== digest
 				)
 					return false;
+				if (!evidence && state.attempts.some((attempt) => attempt.rejection))
+					return false;
 				if (
 					evidence &&
-					(evidence.groups.length !== state.attempts.length ||
-						new Set(evidence.groups.map(({ id }) => id)).size !==
-							evidence.groups.length ||
+					(evidence.groups.length !==
+						state.attempts.filter((attempt) => !attempt.rejection).length ||
+						!isDeepStrictEqual(
+							evidence.rejectedStarts ?? [],
+							state.attempts.flatMap(({ rejection }) =>
+								rejection
+									? [{ id: rejection.id, rejectedAt: rejection.occurredAt }]
+									: [],
+							),
+						) ||
+						(evidence.rejectedStarts ?? []).some(
+							({ rejectedAt }) => rejectedAt > evidence.verifiedAt,
+						) ||
+						new Set(
+							[...evidence.groups, ...(evidence.rejectedStarts ?? [])].map(
+								({ id }) => id,
+							),
+						).size !==
+							evidence.groups.length + (evidence.rejectedStarts?.length ?? 0) ||
 						evidence.groups.some(
 							({ exitedAt }) => exitedAt > evidence.verifiedAt,
 						))

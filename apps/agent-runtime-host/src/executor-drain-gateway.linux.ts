@@ -204,6 +204,89 @@ async function run() {
 				process.stdout.write("bounded delayed process/read passed\n");
 				return;
 			}
+			if (process.argv.includes("--rejected-start")) {
+				const withLiveGroup = process.argv.includes("--with-live-group");
+				if (withLiveGroup)
+					assert.ok(
+						(
+							await request("process/start", {
+								processId: "live-before-rejection",
+								argv: ["/bin/sh", "-c", "sleep 60"],
+								cwd: pathToFileURL(binding.workspaceRoot).href,
+								env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+								tty: false,
+								pipeStdin: false,
+								arg0: null,
+								sandbox: null,
+								enforceManagedNetwork: false,
+							})
+						).result,
+					);
+				const response = await request("process/start", {
+					processId: "rejected-original",
+					argv: ["/bin/sh", "-c", "exit 0"],
+					cwd: pathToFileURL(join(directory, "missing-directory")).href,
+					env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+					tty: false,
+					pipeStdin: false,
+					arg0: null,
+					sandbox: null,
+					enforceManagedNetwork: false,
+				});
+				assert.ok(
+					response.error,
+					"the stock server must explicitly reject the launch",
+				);
+				const stop = !process.argv.includes("--natural");
+				if (withLiveGroup) {
+					assert.equal(await drain.confirm("execution-original"), false);
+					assert.equal(drain.proven("execution-original"), false);
+				}
+				if (stop)
+					await drain.sealStop(
+						"execution-original",
+						"stop-original",
+						8,
+						Date.now() + 20_000,
+					);
+				const started = Date.now();
+				assert.equal(
+					await drain.confirm("execution-original"),
+					true,
+					"an explicitly rejected launch must not permanently block drain",
+				);
+				assert.ok(Date.now() - started < 5000);
+				const file = join(
+					directory,
+					"executor-drain",
+					`${createHash("sha256").update("execution-original").digest("hex")}.json`,
+				);
+				const persisted = JSON.parse(await readFile(file, "utf8"));
+				assert.equal(
+					persisted.attempts.length,
+					withLiveGroup ? 2 : 1,
+					"retain every original admission",
+				);
+				assert.equal(
+					persisted.attempts[withLiveGroup ? 1 : 0].handle,
+					"rejected-original",
+				);
+				assert.equal(
+					persisted.attempts[withLiveGroup ? 1 : 0].rejection.code,
+					-32603,
+				);
+				assert.equal(persisted.evidence.groups.length, withLiveGroup ? 1 : 0);
+				assert.equal(persisted.evidence.rejectedStarts.length, 1);
+				assert.equal(persisted.stop.stopFence, stop ? 8 : 1);
+				assert.equal(persisted.scope.epoch, epoch);
+				assert.equal(drain.proven("execution-original"), true);
+				await drain.arm("execution-next");
+				assert.notEqual(drain.endpoint(), client.url);
+				process.stdout.write(
+					`stock explicit start rejection, ${stop ? "Stop" : "natural drain"}, durable evidence and next execution passed\n`,
+				);
+				return;
+			}
 			const detached = process.argv.includes("--detached-descendant");
 			const launch = {
 				processId: "registered-original",

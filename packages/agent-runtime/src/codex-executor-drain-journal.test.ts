@@ -60,3 +60,78 @@ it("does not let a new Pod or fence adopt prior evidence", async () => {
 		CodexExecutorDrainJournalV1.open(path, { ...scope, resourceFence: 4 }),
 	).rejects.toThrow("CODEX_EXECUTOR_DRAIN_JOURNAL_INVALID");
 });
+
+it("durably refines only the original attempt after an explicit native rejection, including an already sealed Stop", async () => {
+	const { path, journal } = await fixture();
+	const attempt = { protocolSession: "session", handle: "rejected" };
+	await journal.bindNativeTurn("turn-original");
+	expect(await journal.admit(attempt)).toBe(true);
+	const stop = { stopRequestId: "stop-a", stopFence: 4 };
+	const before = await journal.seal(stop);
+	const rejection = await journal.rejectStart(attempt, -32603, 1000);
+	expect(await journal.rejectStart(attempt, -32603, 1000)).toEqual(rejection);
+	await expect(
+		journal.rejectStart({ ...attempt, handle: "another" }, -32603, 1000),
+	).rejects.toThrow();
+	await expect(journal.rejectStart(attempt, -32000, 1000)).rejects.toThrow();
+	await journal.close();
+	const recovered = await CodexExecutorDrainJournalV1.open(path, scope);
+	try {
+		const after = await recovered.seal(stop);
+		expect(after.attempts).toEqual([{ ...attempt, rejection }]);
+		expect(after.digest).not.toBe(before.digest);
+		expect(await recovered.confirm(stop, after.digest)).toBe(false);
+		const evidence = {
+			verifiedAt: 1200,
+			groups: [],
+			rejectedStarts: [{ id: rejection.id, rejectedAt: 1000 }],
+		};
+		expect(await recovered.confirm(stop, before.digest, evidence)).toBe(false);
+		expect(
+			await recovered.confirm(stop, after.digest, {
+				...evidence,
+				rejectedStarts: [],
+			}),
+		).toBe(false);
+		expect(
+			await recovered.confirm(stop, after.digest, {
+				...evidence,
+				rejectedStarts: [{ id: "a".repeat(64), rejectedAt: 1000 }],
+			}),
+		).toBe(false);
+		expect(
+			await recovered.confirm(
+				{ ...stop, stopFence: 3 },
+				after.digest,
+				evidence,
+			),
+		).toBe(false);
+		expect(await recovered.confirm(stop, after.digest, evidence)).toBe(true);
+		expect(recovered.evidence()).toMatchObject({
+			...scope,
+			...stop,
+			...evidence,
+		});
+	} finally {
+		await recovered.close();
+	}
+});
+
+it("retains occupancy for an admitted start with no authenticated native rejection", async () => {
+	const { journal } = await fixture();
+	try {
+		await journal.bindNativeTurn("turn-original");
+		await journal.admit({ protocolSession: "session", handle: "unknown" });
+		const stop = { stopRequestId: "stop-a", stopFence: 4 };
+		const sealed = await journal.seal(stop);
+		expect(
+			await journal.confirm(stop, sealed.digest, {
+				verifiedAt: 1200,
+				groups: [],
+			}),
+		).toBe(false);
+		expect(journal.confirmed()).toBe(false);
+	} finally {
+		await journal.close();
+	}
+});

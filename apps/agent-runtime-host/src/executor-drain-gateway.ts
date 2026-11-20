@@ -17,6 +17,7 @@ import {
 	executorProcessStartTicksV1,
 	terminateExecutorDescendantsV1,
 	trackExecutorDescendantsV1,
+	waitForExecutorDescendantsExitV1,
 	waitForExecutorProcessGroupExitV1,
 	waitForExecutorProcessGroupV1,
 } from "./executor-process-group.js";
@@ -46,11 +47,17 @@ async function body(request: IncomingMessage): Promise<unknown> {
 	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+interface RejectedStart {
+	readonly rejection: { code: number; occurredAt: number };
+	readonly parent: number;
+	readonly parentStartTicks: string;
+}
+
 interface Attachment {
 	readonly executionId: string;
 	readonly protocolSession: string;
 	readonly token: string;
-	readonly groups: Map<string, ExecutorProcessGroupV1 | null>;
+	readonly groups: Map<string, ExecutorProcessGroupV1 | RejectedStart | null>;
 	readonly backend: ReturnType<typeof openPrivateExecutorV1>;
 	connected: boolean;
 	sealed: boolean;
@@ -92,6 +99,26 @@ export async function startExecutorDrainGatewayV1(options: {
 		const next = actions.then(work);
 		actions = next.catch(() => undefined);
 		return next;
+	}
+	async function persistRejection(
+		current: Attachment,
+		handle: string,
+		rejected: RejectedStart,
+	) {
+		await executorControlRequestV1(
+			identity,
+			executorHostControlOriginV1,
+			"/control/start-rejected",
+			{
+				epoch,
+				executionId: current.executionId,
+				protocolSession: current.protocolSession,
+				handle,
+				generation: binding.sessionGeneration,
+				resourceFence: binding.resourceFence,
+				...rejected.rejection,
+			},
+		);
 	}
 	async function route(path: string, raw: unknown) {
 		const request = verifyExecutorControlV1(identity, path, raw);
@@ -163,11 +190,36 @@ export async function startExecutorDrainGatewayV1(options: {
 				current.stop = { id: stopRequestId, fence: stopFence };
 			current.sealed = true;
 			const handles = new Set<string>();
+			const rejectedStarts: { id: string; rejectedAt: number }[] = [];
+			const rejectedScopes: RejectedStart[] = [];
 			for (const rawAttempt of input.attempts) {
 				const attempt = record(rawAttempt);
 				if (attempt.protocolSession !== current.protocolSession)
 					throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
-				handles.add(identifier(attempt.handle));
+				const handle = identifier(attempt.handle);
+				if (handles.has(handle))
+					throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
+				handles.add(handle);
+				const pending = current.groups.get(handle);
+				if (pending && "rejection" in pending) {
+					// An interrupted acknowledgement retries the same fact, never process/start.
+					await persistRejection(current, handle, pending);
+					const rejection = record(attempt.rejection);
+					if (
+						rejection.code !== pending.rejection.code ||
+						rejection.occurredAt !== pending.rejection.occurredAt ||
+						typeof rejection.id !== "string" ||
+						!/^[a-f0-9]{64}$/.test(rejection.id)
+					)
+						throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+					rejectedStarts.push({
+						id: rejection.id,
+						rejectedAt: pending.rejection.occurredAt,
+					});
+					rejectedScopes.push(pending);
+				} else if (attempt.rejection !== undefined) {
+					throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
+				}
 			}
 			if (handles.size !== current.groups.size)
 				throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
@@ -178,9 +230,10 @@ export async function startExecutorDrainGatewayV1(options: {
 					: request.deadline,
 				Date.now() + 1_000,
 			);
-			const groups = [...handles].map((handle) => {
+			const groups = [...handles].flatMap((handle) => {
 				const group = current.groups.get(handle);
 				if (!group) throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+				if ("rejection" in group) return [];
 				const id = createHash("sha256")
 					.update(
 						JSON.stringify([
@@ -192,7 +245,7 @@ export async function startExecutorDrainGatewayV1(options: {
 						]),
 					)
 					.digest("hex");
-				return { handle, group, id };
+				return [{ handle, group, id }];
 			});
 			if (input.terminate === true) {
 				// Materialize the registered groups before asking the backend to stop.
@@ -209,6 +262,7 @@ export async function startExecutorDrainGatewayV1(options: {
 						stopFence,
 						digest,
 						groupIds: groups.map(({ id }) => id),
+						...(rejectedStarts.length ? { rejectedStarts } : {}),
 					})}\n`,
 				);
 			}
@@ -231,7 +285,19 @@ export async function startExecutorDrainGatewayV1(options: {
 					return { id, exitedAt: Date.now() };
 				}),
 			);
-			if (exited.some((result) => !result))
+			const rejectedExited = await Promise.all(
+				rejectedScopes.map((scope) =>
+					waitForExecutorDescendantsExitV1(
+						scope.parent,
+						scope.parentStartTicks,
+						deadline,
+					),
+				),
+			);
+			if (
+				exited.some((result) => !result) ||
+				rejectedExited.some((exited) => !exited)
+			)
 				throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
 			current.drained = true;
 			// Keep the original native queries alive until the Driver retires this
@@ -242,6 +308,7 @@ export async function startExecutorDrainGatewayV1(options: {
 				stopRequestId,
 				stopFence: input.stopFence,
 				groups: exited,
+				...(rejectedStarts.length ? { rejectedStarts } : {}),
 			};
 		} else {
 			throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
@@ -431,6 +498,25 @@ export async function startExecutorDrainGatewayV1(options: {
 									],
 					});
 					if (response.error) {
+						const error = record(response.error);
+						// Transport closure synthesizes an error without a native response id.
+						if (
+							typeof response.id === "number" &&
+							Number.isSafeInteger(response.id) &&
+							Number.isSafeInteger(error.code) &&
+							response.result === undefined
+						) {
+							const rejected: RejectedStart = {
+								parent,
+								parentStartTicks,
+								rejection: {
+									code: error.code as number,
+									occurredAt: Date.now(),
+								},
+							};
+							current.groups.set(handle, rejected);
+							await persistRejection(current, handle, rejected);
+						}
 						emit({ ...response, id: frame.id });
 						return;
 					}

@@ -346,3 +346,39 @@ test("mixed highest-fence proof conflicts remain unproven before digest selectio
 		assert.equal(read([conflict, proof, terminal]).evidence, "pending");
 	}
 });
+
+test("keeps explicit native start rejections separate from actual process group exits", () => {
+	const { seal, proof, terminal, read } = drainReadFixture();
+	const rejectedStarts = [{ id: "d".repeat(64), rejectedAt: 1650 }];
+	for (const includeGroup of [true, false]) {
+		const sealed = {
+			...seal,
+			groupIds: includeGroup ? seal.groupIds : [],
+			rejectedStarts,
+		};
+		const verified = {
+			...proof,
+			groups: includeGroup ? proof.groups : [],
+			rejectedStarts,
+		};
+		assert.equal(
+			read([verified, terminal], { seals: [sealed] }).drainEvidence.terminalAt,
+			1680,
+		);
+		assert.equal(
+			read([proof, terminal], { seals: [sealed] }).evidence,
+			"pending",
+		);
+		for (const wrong of [
+			[{ id: "e".repeat(64), rejectedAt: 1650 }],
+			[{ id: rejectedStarts[0].id, rejectedAt: 1671 }],
+			[{ ...rejectedStarts[0], error: "untrusted" }],
+		])
+			assert.equal(
+				read([{ ...verified, rejectedStarts: wrong }, terminal], {
+					seals: [sealed],
+				}).evidence,
+				"pending",
+			);
+	}
+});

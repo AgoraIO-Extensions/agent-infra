@@ -203,7 +203,25 @@ export async function waitForExecutorProcessGroupExitV1(
 	return false;
 }
 
-async function executorDescendantsExited(group: ExecutorProcessGroupV1) {
+/** Rejected launches have no PGID; still prove the original server's entire descendant scope empty. */
+export async function waitForExecutorDescendantsExitV1(
+	parent: number,
+	parentStartTicks: string,
+	deadline: number,
+) {
+	while (Date.now() < deadline) {
+		if (await executorDescendantsExited({ parent, parentStartTicks }))
+			return true;
+		await setTimeout(20);
+	}
+	return false;
+}
+
+async function executorDescendantsExited(
+	group: Pick<ExecutorProcessGroupV1, "parent" | "parentStartTicks"> & {
+		leader?: number;
+	},
+) {
 	if (
 		!reapOrphan ||
 		(await procStatus(group.parent))?.startTicks !== group.parentStartTicks

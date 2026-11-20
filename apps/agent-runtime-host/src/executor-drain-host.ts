@@ -47,7 +47,11 @@ export async function openExecutorDrainHostV1(
 		| undefined;
 	const nonces = new Map<string, number>();
 	const server = createServer((request, response) => {
-		if (request.method !== "POST" || request.url !== "/control/register") {
+		const path = request.url;
+		if (
+			request.method !== "POST" ||
+			(path !== "/control/register" && path !== "/control/start-rejected")
+		) {
 			response.writeHead(404).end();
 			return;
 		}
@@ -62,7 +66,7 @@ export async function openExecutorDrainHostV1(
 			}
 			const packet = verifyExecutorControlV1(
 				identity,
-				"/control/register",
+				path,
 				JSON.parse(Buffer.concat(chunks).toString("utf8")),
 			);
 			const target = active;
@@ -89,14 +93,24 @@ export async function openExecutorDrainHostV1(
 				typeof value.handle !== "string"
 			)
 				return invalid();
-			const admitted = await target.journal.admit({
+			const attempt = {
 				handle: value.handle,
 				protocolSession: target.protocolSession,
-			});
+			};
+			const contents =
+				path === "/control/register"
+					? { admitted: await target.journal.admit(attempt) }
+					: {
+							rejection: await target.journal.rejectStart(
+								attempt,
+								value.code as number,
+								value.occurredAt as number,
+							),
+						};
 			const result = signExecutorControlV1(
 				identity,
-				"/control/register/result",
-				{ admitted },
+				`${path}/result`,
+				contents,
 				packet.requestId,
 				packet.deadline,
 			);
@@ -210,6 +224,13 @@ export async function openExecutorDrainHostV1(
 						!(await target.journal.confirm(stop, inventory.digest, {
 							verifiedAt: Date.now(),
 							groups: result.groups as CodexExecutorDrainEvidenceV1["groups"],
+							...(result.rejectedStarts === undefined
+								? {}
+								: {
+										rejectedStarts: result.rejectedStarts as NonNullable<
+											CodexExecutorDrainEvidenceV1["rejectedStarts"]
+										>,
+									}),
 						}))
 					)
 						return false;
