@@ -1796,6 +1796,136 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(row).toEqual({ template: null, supply_state: "pending" });
 	});
 
+	// PR-Agent "Partial state commit": an Owner unlink or replace after the claim
+	// never leaves a fixed template sending without the ciphertext it fixed.
+	it.each([
+		["unlink", "before"],
+		["unlink", "during"],
+		["replace", "before"],
+		["replace", "during"],
+	] as const)(
+		"leaves no half-fixed supply when the Owner %s lands %s fixSupply",
+		async (operation, order) => {
+			const projection = await begin();
+			const prepare = await claimFirst("prepare");
+			const { template, registrationKey } = await templateFor(
+				projection.authorizationId,
+			);
+			const supplyAttemptId = randomUUID();
+			const supply = () =>
+				manual.fixSupply({
+					commandId: prepare.item.commandId,
+					attemptId: prepare.attemptId,
+					attemptOwner: "worker-a",
+					command: "prepare",
+					template,
+					registrationKey,
+					supplyAttemptId,
+				});
+			const ownerWrite = () =>
+				associations.execute((tx) =>
+					operation === "unlink"
+						? tx.deleteManual("agent-a", 1)
+						: tx.saveManual({
+								agentId: "agent-a",
+								ownerId: "owner",
+								connectionAgentId: "connection-agent-new",
+								credentialFingerprint: randomBytes(32).toString("hex"),
+								expectedRevision: 1,
+								encrypt: ({ agentId, ownerId, associationRevision }) => ({
+									schemaVersion: 1,
+									agentId,
+									ownerId,
+									secretVersion: associationRevision,
+									crypto: { dekFingerprint: randomBytes(32).toString("hex") },
+								}),
+							}),
+				);
+			let fixed: Awaited<ReturnType<typeof supply>>;
+			let owner: Awaited<ReturnType<typeof ownerWrite>>;
+			if (order === "before") {
+				owner = await ownerWrite();
+				fixed = await supply();
+			} else {
+				// fixSupply holds the association share lock through its directory read.
+				const reading = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				beforeResolveUser = async () => {
+					beforeResolveUser = undefined;
+					reading.resolve();
+					await release.promise;
+				};
+				const supplying = supply();
+				await reading.promise;
+				const writing = ownerWrite();
+				try {
+					await vi.waitFor(
+						async () => {
+							const waiting = await client`select pid from pg_stat_activity
+							where datname=current_database() and cardinality(pg_blocking_pids(pid))>0`;
+							expect(waiting).toHaveLength(1);
+						},
+						{ timeout: 3000, interval: 20 },
+					);
+				} finally {
+					beforeResolveUser = undefined;
+					release.resolve();
+				}
+				[fixed, owner] = await Promise.all([supplying, writing]);
+			}
+			expect(owner).toBe(operation === "unlink" ? true : 2);
+			const state = () => client`
+				select a.status, m.template is not null as fixed, m.supply_attempt_id,
+					m.supply_state, m.registration_state, c.status as command
+				from platform.connection_manual_installations m
+				join platform.connection_installation_authorizations a on a.id=m.authorization_id
+				join platform.connection_installation_commands c on c.id=${prepare.item.commandId}
+				where m.authorization_id=${projection.authorizationId}`;
+			if (order === "before") {
+				// Nothing was fixed: the Owner closed the unsupplied installation first.
+				expect(fixed).toBeNull();
+				expect(await state()).toEqual([
+					{
+						status: "revoked",
+						fixed: false,
+						supply_attempt_id: null,
+						supply_state: "pending",
+						registration_state: "closed",
+						command: "pending",
+					},
+				]);
+			} else {
+				// The Owner waited for the fixed row and its ciphertext, then closed the supply.
+				expect(fixed?.binding).toEqual({
+					agentId: "agent-a",
+					ownerId: "owner",
+					associationRevision: 1,
+				});
+				expect(await state()).toEqual([
+					{
+						status: "revoked",
+						fixed: true,
+						supply_attempt_id: supplyAttemptId,
+						supply_state: "closed",
+						registration_state: "closed",
+						command: "pending",
+					},
+				]);
+			}
+			// The expired attempt closes as unknown; nothing is left sending or pending.
+			await client`update platform.connection_installation_commands
+				set attempt_expires_at=clock_timestamp()-interval '1 second' where id=${prepare.item.commandId}`;
+			expect(await manual.listPending(32, ["execution-a"])).toEqual([]);
+			const [closed] = await state();
+			expect(closed).toMatchObject({
+				status: "revoked",
+				supply_state: order === "before" ? "pending" : "closed",
+				registration_state: "closed",
+				command: "unknown",
+			});
+		},
+	);
+
 	it("keeps the original supply unknown when the original claim is re-claimed during Host supply", async () => {
 		const run = await fixSupply();
 		await reclaim();
