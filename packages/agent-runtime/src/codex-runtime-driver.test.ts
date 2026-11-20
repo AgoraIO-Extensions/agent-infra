@@ -15201,6 +15201,28 @@ describe("Codex verified Session executor", () => {
 		},
 	);
 
+	it("accepts only a callable deployment transport observer at the public Session executor startup boundary", async () => {
+		const f = await fixture({ observeModelTransportFailure: () => {} });
+		await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);
+		const driver = await CodexRuntimeDriver.open(f.options);
+		drivers.push(driver);
+		expect(await driver.getCapabilities()).toMatchObject({
+			modelSelection: true,
+		});
+		await driver.close();
+		for (const extra of [
+			{ execServerUrl: "ws://127.0.0.1:9999" },
+			{ observeModelTransportFailure: "not-a-callback" },
+		]) {
+			await expect(
+				CodexRuntimeDriver.open({
+					...f.options,
+					...extra,
+				} as CodexRuntimeDriverOptions),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+		}
+	});
+
 	it("initializes a fresh executor workspace before the public Driver open without accepting a lost mapping", async () => {
 		const f = await fixture();
 		await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);

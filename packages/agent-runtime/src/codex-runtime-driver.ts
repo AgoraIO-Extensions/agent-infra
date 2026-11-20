@@ -6243,6 +6243,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const privateLane =
 			options.nativeLane === "private-callback" ||
 			options.connectionClient !== undefined;
+		if (
+			options.observeModelTransportFailure !== undefined &&
+			typeof options.observeModelTransportFailure !== "function"
+		)
+			configurationInvalid();
 		let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
 		if (options.isolationMode === "session-executor") {
 			if (
@@ -6262,6 +6267,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						"defaultReasoningLevel",
 						"modelOptions",
 						"authorizeExternalAction",
+						"observeModelTransportFailure",
 						"connectionClient",
 					].includes(key),
 				)
