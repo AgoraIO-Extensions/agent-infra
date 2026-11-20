@@ -120,13 +120,32 @@ export async function migratePlatformDatabase({
 			) {
 				throw new Error("Invalid Platform migration history");
 			}
+			// Bound the entire remaining transaction once the hot outbox index starts.
+			let outboxIndexDeadline: number | undefined;
+			const setRemainingBudget = async () => {
+				if (outboxIndexDeadline === undefined) return;
+				const remaining = outboxIndexDeadline - Date.now();
+				if (remaining <= 0) throw new Error("Outbox index migration expired");
+				await transaction`select
+					set_config('lock_timeout', '100ms', true),
+					set_config('statement_timeout', ${`${Math.min(1000, remaining)}ms`}, true),
+					set_config('idle_in_transaction_session_timeout', '1000ms', true)`;
+			};
 			for (const migration of missing) {
 				for (const statement of migration.sql) {
+					if (
+						outboxIndexDeadline === undefined &&
+						statement.includes('CREATE INDEX "outbox_scope_operation_idx"')
+					)
+						outboxIndexDeadline = Date.now() + 2000;
+					await setRemainingBudget();
 					await transaction.unsafe(statement);
 				}
+				await setRemainingBudget();
 				await transaction`insert into platform_migrations.history (hash, created_at)
 					values (${migration.hash}, ${migration.folderMillis})`;
 			}
+			await setRemainingBudget();
 		});
 	} catch {
 		// PostgreSQL errors can include SQL values; do not expose them at startup.
