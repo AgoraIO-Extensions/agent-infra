@@ -125,6 +125,7 @@ export interface ProductionPlatformApiInputV1
 	readonly connectionInstallationCallback?: PlatformApiAssemblyInput["connectionInstallationCallback"];
 	/** Deployment-owned recipient for one-time application credential material. */
 	readonly applicationCredentialDelivery?: PlatformApiAssemblyInput["applicationCredentialDelivery"];
+	readonly applicationCredentialMaterialDelivery?: PlatformApiAssemblyInput["applicationCredentialMaterialDelivery"];
 	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
@@ -653,6 +654,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.connectionInstallationCallback
 			? { connectionInstallationCallback: input.connectionInstallationCallback }
+			: {}),
+		...(input.applicationCredentialMaterialDelivery
+			? {
+					applicationCredentialMaterialDelivery:
+						input.applicationCredentialMaterialDelivery,
+				}
 			: {}),
 		...(input.applicationCredentialDelivery
 			? { applicationCredentialDelivery: input.applicationCredentialDelivery }

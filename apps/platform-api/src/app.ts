@@ -35,6 +35,10 @@ import {
 } from "./http/agent-user-use-grant-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
+	type ApplicationCredentialMaterialRouteDependenciesV1,
+	registerApplicationCredentialMaterialRoutesV1,
+} from "./http/application-credential-material-routes.js";
+import {
 	type ApplicationMaterialGrantRouteDependencies,
 	registerApplicationMaterialGrantRoutes,
 } from "./http/application-material-grant-routes.js";
@@ -214,6 +218,7 @@ export interface PlatformAppDependencies {
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
 	readonly agentUserUseGrants?: AgentUserUseGrantRouteDependencies;
 	readonly agentUserManageGrants?: AgentUserManageGrantRouteDependencies;
+	readonly applicationCredentialMaterialDelivery?: ApplicationCredentialMaterialRouteDependenciesV1;
 	readonly applicationApiCredentials?: Parameters<
 		typeof registerApplicationApiCredentialRoutes
 	>[1];
@@ -379,6 +384,11 @@ export function createPlatformApp(
 	registerEvaluationDataRoutesV1(app, dependencies.evaluation);
 	registerEvaluationExperimentRoutesV1(app, dependencies.evaluationExperiments);
 	registerEvaluationAnalysisRoutesV1(app, dependencies.evaluationAnalysis);
+	if (dependencies.applicationCredentialMaterialDelivery)
+		registerApplicationCredentialMaterialRoutesV1(
+			app,
+			dependencies.applicationCredentialMaterialDelivery,
+		);
 	if (dependencies.applicationApiCredentials)
 		registerApplicationApiCredentialRoutes(
 			app,

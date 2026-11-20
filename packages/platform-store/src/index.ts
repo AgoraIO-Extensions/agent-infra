@@ -26,7 +26,8 @@ export {
 	PostgresAgentManagementTransactionV1,
 } from "./agent-management.ts";
 export * from "./api-audit-identity.js";
-export * from "./application-api-credentials.js";
+export { PostgresApplicationApiCredentialIssuerStoreV1 } from "./application-api-credentials.js";
+export * from "./application-credential-material.js";
 export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,

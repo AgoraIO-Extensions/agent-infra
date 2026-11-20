@@ -62,6 +62,7 @@ const {
 	connectionInstallationsByAgentAndPrincipal,
 	connectionInstallationCallback,
 	applicationCredentialDelivery,
+	applicationCredentialMaterialDelivery,
 	apiInput,
 	customAgentGateway,
 	modelSelection,
@@ -426,6 +427,9 @@ export function createPlatformApiAssemblyInput() {
 			: {}),
 		...(callbackForwarder
 			? { connectionInstallationCallback: callbackForwarder }
+			: {}),
+		...(applicationCredentialMaterialDelivery
+			? { applicationCredentialMaterialDelivery }
 			: {}),
 		...(applicationCredentialDelivery ? { applicationCredentialDelivery } : {}),
 		databaseUrl: configuredDatabaseUrl,
