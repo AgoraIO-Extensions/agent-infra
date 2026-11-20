@@ -885,7 +885,7 @@ Pod 记为 absent、保留 PVC，再在原 Sandbox 和 PVC 上按替换准备恢
 compute_released=true 且 released=false。合法冷路径没有 charge、也没有该 Sandbox 的 reserve 来源记录时，
 记账项为不适用，不因此排除候选，也不补写 charge。预期应有 charge 的 reserve 来源缺记录时仍拒绝。
 开始审计持久记录本次是否适用 charge；后续恢复不能把原应释放但已缺失的行改判为不适用，
-已有旧审计未记录该标记时沿原有 charge 合同处理。
+无 charge 时显式标记不适用；有 charge 的操作继续使用原审计形状。未记录标记时沿原有 charge 合同处理。
 带新记账标记的操作须由兼容版本接管；旧版本不能解析时保持拒绝，回退不得删除标记、
 改写历史或更换目标重放。部署回退前先收敛在途回收，或保留兼容执行入口完成原操作。
 之后在数据库事务外按原 UID/resourceVersion 条件删除 PVC。只有回读确认 PVC 不存在后，才在同一事务
