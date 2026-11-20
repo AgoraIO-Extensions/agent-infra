@@ -844,6 +844,33 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 			});
 		},
 	);
+	it("reports the original N/A journal's newly appearing reserve source consistently in inspect and complete", async () => {
+		await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+		await store.prepare(target);
+		await sql`insert into platform.session_sandbox_reserves(sandbox_id,session_id,agent_id,namespace,profile_digest,profile,status,expires_at,created_at,updated_at)
+			values(${target.sandboxId},${target.sessionId},${target.agentId},${target.namespace},'fixture','{}','claimed',now(),now(),now())`;
+		try {
+			const before = await store.inspect(target);
+			expect(before.state).toMatchObject({
+				charge_applicable: false,
+				charge_present: false,
+				charge_conflict: true,
+				reserve_present: true,
+			});
+			expect(before.journal[0]?.details).toMatchObject({
+				chargeApplicable: false,
+			});
+			await expect(store.complete(target)).rejects.toThrow(
+				"WORKSPACE_CHARGE_CONFLICT",
+			);
+			expect((await store.inspect(target)).state).toEqual(before.state);
+			expect(
+				await sql`select 1 from platform.audit_events where action='conversation.workspace.reclamation.completed'`,
+			).toHaveLength(0);
+		} finally {
+			await sql`delete from platform.session_sandbox_reserves where sandbox_id=${target.sandboxId}`;
+		}
+	});
 	it("does not treat a reserve's missing charge as an uncharged cold Session", async () => {
 		await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
 		await sql`insert into platform.session_sandbox_reserves(sandbox_id,session_id,agent_id,namespace,profile_digest,profile,status,expires_at,created_at,updated_at)

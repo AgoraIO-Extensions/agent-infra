@@ -165,18 +165,21 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 		const rows = await this
 			.sql`select c.status as conversation_status,a.status as sandbox_status,ch.released,ch.compute_released,
 				(ch.sandbox_id is not null) as charge_present,
-				(ch.sandbox_id is not null or exists(select 1 from platform.session_sandbox_reserves origin where origin.sandbox_id=a.sandbox_id)) as charge_applicable
+				exists(select 1 from platform.session_sandbox_reserves origin where origin.sandbox_id=a.sandbox_id) as reserve_present
 				from platform.conversations c join platform.session_sandbox_allocations a on a.conversation_id=c.id
 				left join platform.session_sandbox_resource_charges ch on ch.sandbox_id=a.sandbox_id
 				where c.id=${t.sessionId} and a.sandbox_id=${t.sandboxId} and a.agent_id=${t.agentId}
 				and (ch.namespace=${t.namespace} or (ch.sandbox_id is null
 					and a.resource_observation->'sourceStop'->'retainedPVC'->>'namespace'=${t.namespace}))`;
 		const start = journal.find((row) => row.action === started);
-		if (rows[0] && start)
-			rows[0].charge_applicable = this.chargeApplicable(start.details);
-		if (rows[0])
+		if (rows[0]) {
+			rows[0].charge_applicable = start
+				? this.chargeApplicable(start.details)
+				: rows[0].charge_present || rows[0].reserve_present;
 			rows[0].charge_conflict =
-				rows[0].charge_applicable !== rows[0].charge_present;
+				rows[0].charge_applicable !== rows[0].charge_present ||
+				(!rows[0].charge_applicable && rows[0].reserve_present);
+		}
 		return { journal, state: rows[0] ?? null };
 	}
 
