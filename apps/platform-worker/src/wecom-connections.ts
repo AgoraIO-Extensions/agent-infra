@@ -1,4 +1,5 @@
 import {
+	executionFailureMessageV1,
 	type WecomAcceptanceV1,
 	type WecomConnectionFenceV1,
 	type WecomMessageV1,
@@ -229,7 +230,10 @@ export function createPlatformWecomConnectionsV1(
 						text:
 							result.outcome === "denied"
 								? "暂无权限使用此 Agent"
-								: "Agent 当前不可用，请稍后重试",
+								: result.outcome === "unavailable" &&
+										result.reason === "personal_relay_key_unavailable"
+									? executionFailureMessageV1("relay_key_unavailable")
+									: "Agent 当前不可用，请稍后重试",
 					});
 					if (status !== "sent") options.observeIngress?.("unavailable");
 				}
