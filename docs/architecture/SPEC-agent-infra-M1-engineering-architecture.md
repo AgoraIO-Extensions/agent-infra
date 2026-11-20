@@ -2369,6 +2369,38 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 过期或修订漂移时关闭该安装。Owner、显示名、邮箱、调用方字段和不透明 Token 均不提供主体权威。
 此处只产生预期主体，实际绑定按 [§13.5.6](#1356-标准-oauth-安装供应) 核实。
 
+**M1 限时例外：按使用者首次绑定锁定。** Connection 尚未发布原 OAuth 事务回读合同
+（[EP-1123](https://jira.agoralab.co/browse/EP-1123)）时，动态手工安装可按本例外启用，不使用
+上述主体映射规则。部署须显式批准例外策略 `consistency-exception-v1` 的 `ref/revision`，并绑定
+同一系统接入指纹及审批来源修订；未批准时动态手工安装保持关闭。例外在 EP-1123 发布并获部署
+批准后失效，最晚到 M1 结束；失效后不再受理新的例外安装。风险接受与取舍见
+[ADR-0046](../adr/0046-m1-connection-principal-first-binding-exception.md)。
+
+1. **换码前回读。** 原回跳已确认、原平台用户已明确确认后，Host 在读取 code 和 verifier 前，按
+   §13.5.6 的实际安装绑定回读，用 EP-1060 读取本安装的登记键。同时满足以下条件才继续：结果为
+   `KNOWN`；`principalId` 非空；client、DEVICE 实例、Consumer、`redirectUri`、`resource` 和
+   `scope` 与原安装一致；`instanceStatus` 为 `ACTIVE`；通过第 2 项的一致性约束。任一项不满足时
+   不换码，按 §13.5.7 的逐安装撤销用原键 EP-1060 `DELETE` 撤销该 client 和实例，安装记为
+   “主体未核实，已关闭”。
+2. **一致性约束。** Platform DB 持久保存 Connection `principalId` 与 Platform 用户的绑定。同一
+   `principalId` 最多对应一个 Platform 用户，跨全部 Agent 计算。一个 Platform 用户首次通过的
+   `principalId` 固定，此后该用户的所有例外安装必须相同；变更只能由平台管理员经受审计的操作
+   先解除固定。首次固定与原 claim、原授权的核对在同一 Store CAS 中提交，并发的首次绑定只有
+   一个成功。
+3. **补偿。** 每个 `principalId` 首次绑定后，由非实现方的验收 lane 在 Connection 管理端的调用
+   审计中核对它属于预期员工，并把结果留作 Issue 证据；核对前安装可以使用，安装记录和审计标注
+   “主体待核对”。记录 EP-1060 回读的非秘密字段、Platform 用户、Agent、安装与关联修订、授权
+   引用、确认时间、Host/Pod，以及 token 响应的有效期和 scope；不记录 code、verifier、token
+   或服务凭据。撤销沿用 §13.5.7 的逐安装撤销和关联解除。EP-1123 发布并获部署批准后，对全部
+   例外安装逐一回溯核对映射，不一致的立即封闭并撤销，并留审计。
+4. **发布标记。** 例外安装的发布回执以 EP-1060 回读的 `principalId` 作为
+   `connectionPrincipalId`，并标注 `principalMapping=consistency-exception-v1`。该标记只用于审计
+   和回溯，不表示已按主体映射规则核实。
+
+例外期内，§13.5.6 对动态手工安装的可信映射、批准映射、预期 Principal 及用户索引主体映射的要求
+均按本例外执行。Worker claim 核对、Host CAS、单次换码以及失败和未知结果的处理不变；
+PKCE/state 仍只证明原 OAuth 事务的领取来源。
+
 #### 13.5.2 版本、指纹与失败行为
 
 版本 `1` 只接受上述字段及 `egressProfile` 的两个子字段，拒绝未知字段、缺失值、错误类型和
@@ -2668,10 +2700,14 @@ Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的
 不用 Cookie、不跟随重定向、不隐式重试；UNKNOWN、未绑定、错 client/instance/Consumer、
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
 注册元数据或 Owner 不替代用户实际 OAuth 确认。
+[§13.5.1 的 M1 限时例外](#1351-字段与配置来源)期内，动态手工安装同样在换码前执行此 READ，
+比对对象为该例外的一致性约束。
 
 **动态手工安装的外部依赖。** Connection OAuth API/Store 负责发布受服务认证保护的、版本化
 的原 OAuth 事务只读回读。M1 动态手工安装仅在该合同已发布，且部署已批准精确 HTTPS 目标、
-服务身份及权限、合同版本与修订后启用。任一输入缺失时保持关闭。
+服务身份及权限、合同版本与修订后启用。该合同获批前只能按 §13.5.1 的 M1 限时例外启用：
+本段的事务回读以及与 §13.5.1 预期映射的核对，由例外的 EP-1060 回读和一致性约束代替，
+其余门禁不变。任一输入缺失时保持关闭。
 
 首次登记回执只核实原登记键、client/Consumer/实例、回调及登记配置。Connection 在使用者完成
 原 OAuth 确认时，将实际 Principal 与不可变的非秘密事务关联绑定到自己批准的同一授权事务。
@@ -2923,6 +2959,7 @@ Token 主体、Consumer/实例、generation、期限和授权。供应方仅消�
 核对 §13.5.3 要求的原主体/安装映射；标准 OAuth response 未提供的 identity/instance 字段
 不能从邮箱、显示名、Token 名称、local state、JWT 猜测或 metadata 声明补造。缺少可信映射
 时，即使领取成功也不发布可用安装，不调用业务工具；不得为了补证查询猜测的私有接口。
+§13.5.1 例外期内的动态手工安装以该例外的回读和一致性约束代替可信映射，并带例外标记。
 
 有效凭据通过 §13.5.5 的同一私有 export/接收器交付，access Token 与 metadata 分离；
 refresh Token/verifier 只保留在同一受保护客户端的专用材料中，不进入 reader 的普通 metadata。
@@ -2935,7 +2972,8 @@ Agent 的标准 OAuth 配置、完整 profile/approval 和安装 supply 均有�
 既有路径。逐 Agent 配置缺条目不回退共享批准，Owner/请求与内部 policy 不能覆盖生成值。
 缺失实际回执或提交证明不能降级到旧 export 来源。该回执须绑定原
 `authorizationId`、`confirmationRevision`、精确 OAuth client 与配置指纹、供应引用/修订，
-并显式包含 Connection 已确认实际绑定的 `connectionPrincipalId`、原平台主体，以及该
+并显式包含 Connection 已确认实际绑定的 `connectionPrincipalId`（§13.5.1 例外期内取 EP-1060
+回读值并带 `principalMapping=consistency-exception-v1`）、原平台主体，以及该
 client/实例对应的 §13.5.5 版本 1 metadata，并与原签名授权中的 Connection 主体一致。
 既有 `principalBindingsByAgent` 可为 OAuth/PAT 提供同一批准的原主体映射，仍须在 Core
 授权及最终复核后签入；缺映射不从 Owner、邮箱或请求补齐。注册时的计划用户不作为实际绑定证明；两系统
@@ -3018,7 +3056,8 @@ unknown 时按 §13.5.7 原键核实。
 
 动态手工路径的完整非秘密描述符随首次 begin 固定。它绑定获准回读合同及其修订、原登记键及
 client/Consumer/实例、原配置 `ref/revision` 与摘要、受信主体映射 `ref/revision` 及预期
-Principal、部署批准的 MCP publication 合同 `ref/revision` 和供应引用与修订。原 Worker
+Principal（§13.5.1 例外期内为例外策略 `ref/revision` 及该用户已固定的 `principalId`，首次
+安装为空）、部署批准的 MCP publication 合同 `ref/revision` 和供应引用与修订。原 Worker
 签名命令、持久 sending 及原安装 CAS 同时绑定该描述符和原 Execution/claim、Host/Pod UID、
 代次和 resource fence。Host 在同一原受保护安装事务固定该描述符，后续 confirm 和恢复沿
 同一描述符核对实际回读与发布。不得从回跳、请求或登记元数据补造实际绑定。
@@ -3340,6 +3379,9 @@ status 单独替换原用户、Agent 或安装时，Host 须在读取材料及�
 原用户确认、一次 code＋PKCE 兑换、私有 publication 和 reader。换码前覆盖映射或 publication
 修订漂移、错 Principal、同登记键的另一授权事务、回读或部署批准缺失、证据不完整、迟到结果
 及 CAS 冲突，断言不读取兑换材料、不换码、不启用 MCP。
+§13.5.1 例外期内，“错 Principal”分支改为：`principalId` 为空、实例非 `ACTIVE`、违反唯一性、
+违反首次固定、例外未批准或已失效，均断言不换码并按原键撤销。另验证并发的首次绑定只有一次
+成功，管理员解除固定前不能换绑，回溯核对把不一致的安装封闭并撤销。
 换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
 首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
 可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
