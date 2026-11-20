@@ -16,6 +16,10 @@ import {
 	nativeTextInputLimitV1,
 	resolveNativeTextInputsV1,
 } from "./file-authority.js";
+import {
+	type NativeAdmissionObserverV1,
+	observeNativeAdmissionV1,
+} from "./native-admission-observation.js";
 
 const digestPattern = /^[a-f0-9]{64}$/u;
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/u;
@@ -269,6 +273,7 @@ export interface NativeCapabilityAdmissionTransactionPortV1 {
 			readonly command: NativeCapabilityAdmissionRequest;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
+			readonly observe?: NativeAdmissionObserverV1;
 		},
 		decide: (state: NativeCapabilityAdmissionStateV1) => Promise<
 			| NativeCapabilityInvocationPlanV1
@@ -737,6 +742,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 	readonly inputLimits?: NativeCapabilityInputLimitsPortV1;
 	readonly now?: () => Date;
 	readonly newId?: () => string;
+	readonly observe?: NativeAdmissionObserverV1;
 }): NativeCapabilityAdmissionUseCaseV1 {
 	const newId = dependencies.newId ?? randomUUID;
 	const now = dependencies.now ?? (() => new Date());
@@ -746,11 +752,16 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 			const metadataRequest = nativeCapabilityMetadataRequestViewV1(request);
 			let authority: ConversationExecutionAuthorityV1;
 			try {
-				const decision = await dependencies.authorization.authorize({
-					schemaVersion: 1,
-					operation: "native-capability.invoke",
-					conversationId: request.conversationId,
-				});
+				const decision = await observeNativeAdmissionV1(
+					dependencies.observe,
+					"authorization.initial",
+					() =>
+						dependencies.authorization.authorize({
+							schemaVersion: 1,
+							operation: "native-capability.invoke",
+							conversationId: request.conversationId,
+						}),
+				);
 				if (decision.outcome !== "allowed")
 					return { outcome: "denied", reason: "authorization_lost" };
 				authority = parseAuthority(decision.authority);
@@ -767,7 +778,12 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 			try {
 				let latestScopeForCommit: NativeCapabilityAdmissionScopeV1 | undefined;
 				return await dependencies.transaction.admitNativeCapability(
-					{ command: request, authority, requestDigest },
+					{
+						command: request,
+						authority,
+						requestDigest,
+						...(dependencies.observe ? { observe: dependencies.observe } : {}),
+					},
 					async (state) => {
 						const conversation = parseState({
 							conversation: state.conversation ?? undefined,
@@ -791,11 +807,16 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						)
 							return { outcome: "denied", reason: "authorization_lost" };
 						if (state.activeExecution) return { outcome: "busy" };
-						const metadata = await dependencies.metadata.revalidate({
-							request: metadataRequest,
-							authority,
-							sessionGeneration: conversation.sessionGeneration,
-						});
+						const metadata = await observeNativeAdmissionV1(
+							dependencies.observe,
+							"metadata.first",
+							() =>
+								dependencies.metadata.revalidate({
+									request: metadataRequest,
+									authority,
+									sessionGeneration: conversation.sessionGeneration,
+								}),
+						);
 						if (metadata.outcome !== "allowed") return metadata;
 						const selected = parseAdmittedCapability(metadata.capability);
 						const scope = exactObject(metadata.scope, [
@@ -831,21 +852,31 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							request.parameters.trim().length === 0
 						)
 							return { outcome: "invalid_parameters" };
-						const current = await dependencies.authorization.authorize({
-							schemaVersion: 1,
-							operation: "native-capability.invoke",
-							conversationId: request.conversationId,
-						});
+						const current = await observeNativeAdmissionV1(
+							dependencies.observe,
+							"authorization.recheck",
+							() =>
+								dependencies.authorization.authorize({
+									schemaVersion: 1,
+									operation: "native-capability.invoke",
+									conversationId: request.conversationId,
+								}),
+						);
 						if (
 							current.outcome !== "allowed" ||
 							!isDeepStrictEqual(parseAuthority(current.authority), authority)
 						)
 							return { outcome: "denied", reason: "authorization_lost" };
-						const latestMetadata = await dependencies.metadata.revalidate({
-							request: metadataRequest,
-							authority,
-							sessionGeneration: conversation.sessionGeneration,
-						});
+						const latestMetadata = await observeNativeAdmissionV1(
+							dependencies.observe,
+							"metadata.second",
+							() =>
+								dependencies.metadata.revalidate({
+									request: metadataRequest,
+									authority,
+									sessionGeneration: conversation.sessionGeneration,
+								}),
+						);
 						if (latestMetadata.outcome !== "allowed") return latestMetadata;
 						const latestSelected = parseAdmittedCapability(
 							latestMetadata.capability,
@@ -1038,11 +1069,16 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						}),
 					async () => {
 						try {
-							const current = await dependencies.authorization.authorize({
-								schemaVersion: 1,
-								operation: "native-capability.invoke",
-								conversationId: request.conversationId,
-							});
+							const current = await observeNativeAdmissionV1(
+								dependencies.observe,
+								"precommit",
+								() =>
+									dependencies.authorization.authorize({
+										schemaVersion: 1,
+										operation: "native-capability.invoke",
+										conversationId: request.conversationId,
+									}),
+							);
 							return (
 								current.outcome === "allowed" &&
 								isDeepStrictEqual(parseAuthority(current.authority), authority)

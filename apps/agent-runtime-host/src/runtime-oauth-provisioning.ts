@@ -289,6 +289,61 @@ export async function provisionRuntimeOAuthFiles(options: {
 	assertStandardMcpProcessProtection();
 }
 
+/** Copy deployment trust only. The empty receiver has no user or Consumer material. */
+export async function provisionRuntimeConnectionInstallTrustV1(options: {
+	dataDirectory: string;
+	privateDirectory: string;
+	tlsSource: string;
+	callbackSource: string;
+	readbackSource: string;
+	runtimeOrigin: string;
+}) {
+	const origin = new URL(options.runtimeOrigin);
+	if (
+		origin.protocol !== "https:" ||
+		origin.href !== options.runtimeOrigin ||
+		origin.pathname !== "/" ||
+		!origin.port ||
+		origin.username ||
+		origin.password ||
+		origin.search ||
+		origin.hash
+	)
+		unavailable();
+	await prepareRuntimeOAuthProvisioningDirectories(options);
+	const certificate = await readSource(options.tlsSource, "server.crt", 16_384);
+	const privateKey = await readSource(options.tlsSource, "server.key", 16_384);
+	const callbackToken = validateStandardMcpToken(
+		await readSource(options.callbackSource, "callback.auth", 4096),
+	);
+	const installToken = validateStandardMcpToken(
+		await readSource(options.readbackSource, "install.auth", 4096),
+	);
+	const workerCa = await readSource(
+		options.readbackSource,
+		"worker-ca.crt",
+		16_384,
+	);
+	const leaf = new X509Certificate(certificate);
+	const now = Date.now();
+	if (
+		!leaf.checkHost(origin.hostname) ||
+		!leaf.checkPrivateKey(createPrivateKey(privateKey)) ||
+		Date.parse(leaf.validFrom) > now ||
+		Date.parse(leaf.validTo) <= now ||
+		!new X509Certificate(workerCa).ca ||
+		callbackToken === installToken
+	)
+		unavailable();
+	const directory = join(options.privateDirectory, "tls");
+	await writePrivate(directory, "server.crt", certificate, 16_384);
+	await writePrivate(directory, "server.key", privateKey, 16_384);
+	await writePrivate(directory, "callback.auth", callbackToken, 4096);
+	await writePrivate(directory, "worker-ca.crt", workerCa, 16_384);
+	await writePrivate(directory, "install.auth", installToken, 4096);
+	assertStandardMcpProcessProtection();
+}
+
 /** A provisioned bundle never changes the existing client/options contract. */
 export async function validateRuntimeOAuthProvisioning(
 	environment: NodeJS.ProcessEnv,

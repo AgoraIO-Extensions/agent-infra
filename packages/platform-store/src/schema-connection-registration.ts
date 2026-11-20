@@ -12,6 +12,7 @@ import {
 	check,
 	index,
 	jsonb,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -314,6 +315,39 @@ export const connectionAssociationGenerations = platformSchema.table(
 		check(
 			"connection_association_generation_revision",
 			sql`${table.lastRevision} between 1 and 9007199254740991`,
+		),
+	],
+);
+
+/** Records Host supply delivery and local cleanup, separate from OAuth client state. */
+export const connectionHostSupplies = platformSchema.table(
+	"connection_host_supplies",
+	{
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		associationRevision: bigint("association_revision", {
+			mode: "number",
+		}).notNull(),
+		attemptId: varchar("attempt_id", { length: 36 }).notNull(),
+		approvalSourceRef: text("approval_source_ref").notNull(),
+		approvalSourceRevision: text("approval_source_revision").notNull(),
+		systemFingerprint: varchar("system_fingerprint", { length: 64 }).notNull(),
+		state: text("state").notNull(),
+		ref: varchar("ref", { length: 128 }),
+		revision: varchar("revision", { length: 128 }),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.agentId, table.associationRevision] }),
+		check(
+			"connection_host_supply_state",
+			sql`
+			${table.state} in ('writing', 'available', 'cleanup_pending', 'cleanup_unknown', 'closed')
+			and (${table.state} <> 'available' or (${table.ref} is not null and ${table.revision} is not null))
+		`,
 		),
 	],
 );

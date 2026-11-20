@@ -37,6 +37,7 @@ import {
 	type NativeTextInputV1,
 	nativeCapabilityAdmissionReplayDigestV6,
 	nativeCapabilityParametersDigestV1,
+	observeNativeAdmissionV1,
 	PersonalApiCredentialErrorV1,
 	parseConversationOperationEventV2,
 	parseNativeCapabilityAdmissionRequestV3,
@@ -387,15 +388,20 @@ export class PostgresConversationExecutionTransactionV1
 		isCurrent: NativeAdmissionCurrent,
 		isAuthorized: NativeAdmissionAuthorized,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
-		return this.#transaction(async (transaction) => {
+		const work = async (
+			transaction: Transaction,
+		): Promise<NativeCapabilityAdmissionDecisionV1> => {
 			const authority = parseAuthority(request.authority);
 			const command = request.command;
-			await transaction`
-				select id from platform.agents where id = ${authority.agentId} for share
-			`;
-			const conversation = await lockConversation(
-				transaction,
-				text(command.conversationId),
+			const conversation = await observeNativeAdmissionV1(
+				request.observe,
+				"store.lock",
+				async () => {
+					await transaction`
+  select id from platform.agents where id = ${authority.agentId} for share
+ `;
+					return lockConversation(transaction, text(command.conversationId));
+				},
 			);
 			if (
 				!conversation ||
@@ -411,7 +417,11 @@ export class PostgresConversationExecutionTransactionV1
 				commandType: "native-capability.invoke",
 				key: command.idempotencyKey,
 			};
-			const existing = await readIdempotency(transaction, idempotencyScope);
+			const existing = await observeNativeAdmissionV1(
+				request.observe,
+				"store.query",
+				() => readIdempotency(transaction, idempotencyScope),
+			);
 			if (existing) {
 				if (existing.request_digest !== request.requestDigest)
 					return {
@@ -440,25 +450,29 @@ export class PostgresConversationExecutionTransactionV1
 				};
 			}
 
-			const state = await readMessageState(transaction, conversation);
+			const state = await observeNativeAdmissionV1(
+				request.observe,
+				"store.query",
+				() => readMessageState(transaction, conversation),
+			);
 			// 原生命令与 Skill 不进入排队：有排队消息时同样按占用处理（§12.5）。
 			const [waiting] =
 				state.activeExecution || (state.queue?.waitingCount ?? 0) === 0
 					? []
 					: await transaction<{ execution_id: string }[]>`
-							select execution_id from platform.conversation_executions
-							where conversation_id = ${conversation.conversationId} and status = 'waiting'
-							order by task_wait_order limit 1
-						`;
+						select execution_id from platform.conversation_executions
+						where conversation_id = ${conversation.conversationId} and status = 'waiting'
+						order by task_wait_order limit 1
+					`;
 			const inputFiles =
 				command.schemaVersion === 2
 					? {
 							async getFile(fileId: string) {
 								const [row] = await transaction<{ record: FileRecordV1 }[]>`
-									select record from platform.files
-									where file_id = ${fileId}
-										and conversation_id = ${command.conversationId}
-								`;
+								select record from platform.files
+								where file_id = ${fileId}
+									and conversation_id = ${command.conversationId}
+							`;
 								return row?.record ?? null;
 							},
 						}
@@ -468,7 +482,10 @@ export class PostgresConversationExecutionTransactionV1
 				activeExecution:
 					state.activeExecution ??
 					(waiting
-						? { executionId: waiting.execution_id, status: "waiting" as const }
+						? {
+								executionId: waiting.execution_id,
+								status: "waiting" as const,
+							}
 						: null),
 				authorizationRevision: conversation.authorizationRevision,
 				inputFiles,
@@ -485,13 +502,17 @@ export class PostgresConversationExecutionTransactionV1
 			if (!(await isAuthorized()))
 				return { outcome: "denied", reason: "authorization_lost" };
 			if (!isCurrent(plan, conversation)) return { outcome: "stale" };
-			const executionBinding =
-				await currentConversationExecutionRelayKeyBindingV1(transaction, {
-					authority,
-					userDirectory: this.#userDirectory,
-					personalApiAdmissionAuthority:
-						authority.personalApiAdmissionAuthority,
-				});
+			const executionBinding = await observeNativeAdmissionV1(
+				request.observe,
+				"precommit",
+				() =>
+					currentConversationExecutionRelayKeyBindingV1(transaction, {
+						authority,
+						userDirectory: this.#userDirectory,
+						personalApiAdmissionAuthority:
+							authority.personalApiAdmissionAuthority,
+					}),
+			);
 			if (!executionBinding)
 				return { outcome: "denied", reason: "authorization_lost" };
 
@@ -508,28 +529,28 @@ export class PostgresConversationExecutionTransactionV1
 			if (!reservationId) unavailable();
 			const principalType = conversation.principal?.kind ?? "user";
 			await transaction`
-				insert into platform.conversation_executions
-					(execution_id, conversation_id, sandbox_id, agent_id, actor_id,
-					 channel_id, turn_id, status, session_generation, delivery_fence,
-					 authorization_revision, model_configuration_revision, model_option_id,
-					 reasoning_level, execution_source, relay_key_purpose,
-					 relay_key_subject_id, relay_key_id, relay_key_version,
-					 runtime_submit_protocol, original_operation_digest,
-					 original_submit_host_session_ref, principal_type, created_at, updated_at)
-				values
-					(${plan.executionId}, ${plan.conversationId},
-					 ${conversation.sandbox?.sandboxId ?? null}, ${plan.agentId},
-					 ${plan.actorId}, ${plan.channelId}, ${plan.turnId}, 'submitted',
-					 ${plan.sessionGeneration}, 0, ${plan.authorizationRevision},
-					 ${nativeModel?.configurationRevision ?? null},
-					 ${nativeModel?.defaultOptionId ?? null},
-					 ${nativeModel?.defaultReasoningLevel ?? null}, ${executionBinding.executionSource},
-					 ${executionBinding.relayKeyBinding?.purpose ?? null},
-					 ${executionBinding.relayKeyBinding?.subjectId ?? null},
-					 ${executionBinding.relayKeyBinding?.keyId ?? null},
-					 ${executionBinding.relayKeyBinding?.keyVersion ?? null}, null, null, null,
-					 ${principalType}, ${occurredAt}, ${occurredAt})
-			`;
+			insert into platform.conversation_executions
+				(execution_id, conversation_id, sandbox_id, agent_id, actor_id,
+				 channel_id, turn_id, status, session_generation, delivery_fence,
+				 authorization_revision, model_configuration_revision, model_option_id,
+				 reasoning_level, execution_source, relay_key_purpose,
+				 relay_key_subject_id, relay_key_id, relay_key_version,
+				 runtime_submit_protocol, original_operation_digest,
+				 original_submit_host_session_ref, principal_type, created_at, updated_at)
+			values
+				(${plan.executionId}, ${plan.conversationId},
+				 ${conversation.sandbox?.sandboxId ?? null}, ${plan.agentId},
+				 ${plan.actorId}, ${plan.channelId}, ${plan.turnId}, 'submitted',
+				 ${plan.sessionGeneration}, 0, ${plan.authorizationRevision},
+				 ${nativeModel?.configurationRevision ?? null},
+				 ${nativeModel?.defaultOptionId ?? null},
+				 ${nativeModel?.defaultReasoningLevel ?? null}, ${executionBinding.executionSource},
+				 ${executionBinding.relayKeyBinding?.purpose ?? null},
+				 ${executionBinding.relayKeyBinding?.subjectId ?? null},
+				 ${executionBinding.relayKeyBinding?.keyId ?? null},
+				 ${executionBinding.relayKeyBinding?.keyVersion ?? null}, null, null, null,
+				 ${principalType}, ${occurredAt}, ${occurredAt})
+		`;
 			if (authority.taskBoundary) {
 				await insertTaskAuthorization(transaction, {
 					executionId: plan.executionId,
@@ -554,11 +575,11 @@ export class PostgresConversationExecutionTransactionV1
 					if (!attachment || attachment.fileId !== command.attachments[index])
 						unavailable();
 					const [row] = await transaction<{ record: FileRecordV1 }[]>`
-						select record from platform.files
-						where file_id = ${attachment.fileId}
-							and conversation_id = ${plan.conversationId}
-						for update
-					`;
+					select record from platform.files
+					where file_id = ${attachment.fileId}
+						and conversation_id = ${plan.conversationId}
+					for update
+				`;
 					const file = bindNativeTextInputFileV1(
 						row?.record ?? null,
 						fileScope,
@@ -575,34 +596,34 @@ export class PostgresConversationExecutionTransactionV1
 					)
 						unavailable();
 					await transaction`
-						update platform.files
-						set record = ${transaction.json(file as unknown as JsonValue)},
-							updated_at = ${occurredAt}
-						where file_id = ${attachment.fileId}
-					`;
+					update platform.files
+					set record = ${transaction.json(file as unknown as JsonValue)},
+						updated_at = ${occurredAt}
+					where file_id = ${attachment.fileId}
+				`;
 				}
 			}
 			await transaction`
-				insert into platform.outbox_items
-					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
-					 available_at, created_at, updated_at)
-				values
-					(${plan.outbox.id}, 'conversation', ${plan.conversationId},
-					 ${plan.outbox.operation}, ${transaction.json(
-							plan.outbox.payload as unknown as JsonValue,
-						)}, ${plan.outbox.traceId}, ${plan.outbox.requestId},
-					 ${occurredAt}, ${occurredAt}, ${occurredAt})
-			`;
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 available_at, created_at, updated_at)
+			values
+				(${plan.outbox.id}, 'conversation', ${plan.conversationId},
+				 ${plan.outbox.operation}, ${transaction.json(
+						plan.outbox.payload as unknown as JsonValue,
+					)}, ${plan.outbox.traceId}, ${plan.outbox.requestId},
+				 ${occurredAt}, ${occurredAt}, ${occurredAt})
+		`;
 			await transaction`
-				insert into platform.conversation_audit_events
-					(id, conversation_id, execution_id, agent_id, actor_id, action,
-					 trace_id, request_id, occurred_at)
-				values
-					(${randomUUID()}, ${plan.conversationId}, ${plan.executionId},
-					 ${plan.agentId}, ${plan.actorId},
-					 'conversation.native_capability.accepted', ${plan.outbox.traceId},
-					 ${plan.outbox.requestId}, ${occurredAt})
-			`;
+			insert into platform.conversation_audit_events
+				(id, conversation_id, execution_id, agent_id, actor_id, action,
+				 trace_id, request_id, occurred_at)
+			values
+				(${randomUUID()}, ${plan.conversationId}, ${plan.executionId},
+				 ${plan.agentId}, ${plan.actorId},
+				 'conversation.native_capability.accepted', ${plan.outbox.traceId},
+				 ${plan.outbox.requestId}, ${occurredAt})
+		`;
 			await completeIdempotency(
 				transaction,
 				reservationId,
@@ -614,7 +635,10 @@ export class PostgresConversationExecutionTransactionV1
 				result: structuredClone(plan.result),
 				plan,
 			};
-		});
+		};
+		return observeNativeAdmissionV1(request.observe, "store.transaction", () =>
+			this.#transaction(work),
+		);
 	}
 
 	/** Read accepted V3 retries using only the current authorized conversation scope. */

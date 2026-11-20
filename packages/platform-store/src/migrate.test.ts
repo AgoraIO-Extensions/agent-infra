@@ -808,6 +808,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_association_generations",
 				"connection_consumer_disables",
 				"connection_consumer_registrations",
+				"connection_host_supplies",
 				"connection_installation_authorizations",
 				"connection_installation_commands",
 				"connection_machine_client_bindings",
@@ -815,6 +816,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_manual_associations.connection_agent_id",
 				"connection_manual_associations.credential_ciphertext",
 				"connection_manual_associations.credential_fingerprint",
+				"connection_manual_installations",
+				"connection_manual_installations.connection_agent_id",
 				"platform_api_credentials",
 				"platform_api_credentials.credential_hash",
 				"wecom_connections",
@@ -2104,6 +2107,7 @@ describe("published Relay authority migration", () => {
 			88,
 			89,
 			90,
+			91,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2201,13 +2205,21 @@ describe("published Relay authority migration", () => {
 			idx: 87,
 			tag: "0087_operations_request_inventory",
 		});
+		expect(journal.entries.find((entry) => entry.idx === 88)).toMatchObject({
+			idx: 88,
+			tag: "0088_session_workspace_reclamation_read",
+		});
 		expect(journal.entries.find((entry) => entry.idx === 89)).toMatchObject({
 			idx: 89,
 			tag: "0089_operations_outbox_scope",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 90)).toMatchObject({
 			idx: 90,
 			tag: "0090_executor_stop_drain",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 91,
+			tag: "0091_connection_host_supplies",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2770,6 +2782,72 @@ describe("published Relay authority migration", () => {
 				"connection_machine_client_bindings:connection_machine_client_bindings_pkey",
 			);
 			expectedDelta.columns.push(
+				...[
+					"approval_source_ref",
+					"approval_source_revision",
+					"attempt_id",
+					"agent_id",
+					"association_revision",
+					"ref",
+					"revision",
+					"state",
+					"system_fingerprint",
+					"updated_at",
+				].map((name) => `connection_host_supplies:${name}`),
+			);
+			expectedDelta.checks.push(
+				"connection_host_supplies:connection_host_supply_state",
+			);
+			expectedDelta.indexes.push(
+				"connection_host_supplies:connection_host_supplies_agent_id_association_revision_pk",
+			);
+			expectedDelta.columns.push(
+				...[
+					"agent_id",
+					"association_revision",
+					"authorization_id",
+					"client_id",
+					"configuration",
+					"connection_agent_id",
+					"consumer_id",
+					"created_at",
+					"execution_id",
+					"instance_id",
+					"preparation",
+					"receipt",
+					"registration_key",
+					"registration_key_hash",
+					"registration_state",
+					"revision",
+					"revoke_state",
+					"supply_attempt_id",
+					"supply_state",
+					"template",
+					"template_digest",
+					"updated_at",
+					"user_id",
+				].map((name) => `connection_manual_installations:${name}`),
+			);
+			expectedDelta.checks.push(
+				...["states", "fixed", "receipt", "identity"].map(
+					(name) =>
+						`connection_manual_installations:connection_manual_installation_${name}`,
+				),
+			);
+			expectedDelta.indexes.push(
+				"connection_manual_installations:connection_manual_installations_pkey",
+				...[
+					"key_unique",
+					"key_hash_unique",
+					"supply_unique",
+					"client_unique",
+					"agent_idx",
+				].map(
+					(name) =>
+						`connection_manual_installations:connection_manual_installation_${name}`,
+				),
+			);
+			expectedDelta.columns.push(
 				...["agent_id", "last_revision", "updated_at"].map(
 					(name) => `connection_association_generations:${name}`,
 				),
@@ -2911,6 +2989,7 @@ describe("published Relay authority migration", () => {
 						"attempt_id",
 						"attempt_owner",
 						"attempt_expires_at",
+						"delivery_digest",
 					].map((name) => `connection_installation_commands:${name}`),
 					...[
 						"actor_id",
@@ -2975,7 +3054,12 @@ describe("published Relay authority migration", () => {
 						(name) =>
 							`connection_installation_authorizations:connection_installation_${name}`,
 					),
-					...["command_valid", "delivery_valid", "digest_valid"].map(
+					...[
+						"command_valid",
+						"delivery_valid",
+						"digest_valid",
+						"delivery_digest_valid",
+					].map(
 						(name) =>
 							`connection_installation_commands:connection_installation_${name}`,
 					),

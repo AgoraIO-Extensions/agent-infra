@@ -1321,6 +1321,30 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		});
 		expect(input.files).toBe(files);
 	});
+	it("preserves the protected HTTPS material configuration and remains closed when omitted", () => {
+		const applicationCredentialMaterialDelivery = {
+			schemaVersion: 1 as const,
+			enabled: true,
+			publicOrigin: "https://platform.example.test",
+			recipients: [
+				{
+					applicationId: "app-1",
+					principalType: "user" as const,
+					principalId: "recipient",
+				},
+			],
+		};
+		expect(
+			createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				applicationCredentialMaterialDelivery,
+			}).applicationCredentialMaterialDelivery,
+		).toBe(applicationCredentialMaterialDelivery);
+		expect(
+			createProductionPlatformApiAssemblyInputV1(fixture.input)
+				.applicationCredentialMaterialDelivery,
+		).toBeUndefined();
+	});
 	it("passes the deployment-owned application credential delivery into the API assembly", () => {
 		const applicationCredentialDelivery = {
 			principalType: "application" as const,

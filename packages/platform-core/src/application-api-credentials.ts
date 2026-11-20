@@ -4,6 +4,7 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
+import { authorizeApplicationCredentialDeliveryV1 } from "./application-credential-authority.js";
 import type { ApplicationMaterialGrantMetadataV1 } from "./application-material-grant.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
@@ -14,8 +15,6 @@ import {
 	parsePersonalApiCredentialIssuanceV1,
 	parsePersonalApiCredentialRequestV1,
 	requirePersonalApiCredentialFutureExpiryV1,
-	requirePersonalApiUserActiveV1,
-	resolveCurrentPersonalApiUserV1,
 } from "./personal-api-credentials.js";
 import type { TaskUserDirectoryV1 } from "./task-authorization.js";
 
@@ -246,51 +245,18 @@ export function createApplicationApiCredentialIssuerV1(input: {
 	readonly userDirectory: TaskUserDirectoryV1;
 	readonly delivery: ApplicationCredentialDeliveryPortV1 | undefined;
 }) {
-	async function authority(
+	const authority = (
 		tx: ApplicationApiCredentialTransactionV1,
 		request: ApplicationApiCredentialRequestV1,
 		recipient: ApplicationCredentialRecipientV1,
-	) {
-		if (await tx.lockUserDisabled(request.userId))
-			throw new ApplicationApiCredentialErrorV1("forbidden");
-		const manager = await resolveCurrentPersonalApiUserV1(
+	) =>
+		authorizeApplicationCredentialDeliveryV1(
+			tx,
 			input.userDirectory,
-			request.userId,
+			request,
+			recipient,
 		);
-		requirePersonalApiUserActiveV1(manager);
-		const application = await tx.lockApplication(request.applicationId);
-		if (
-			application?.status !== "active" ||
-			application.responsibleUserId !== request.userId
-		)
-			throw new ApplicationApiCredentialErrorV1("not_found");
-		if (
-			recipient.principalType === "application" &&
-			recipient.principalId !== request.applicationId
-		)
-			throw new ApplicationApiCredentialErrorV1("not_found");
-		const grant = await tx.lockGrant(request.applicationId, recipient);
-		if (
-			!grant ||
-			grant.revokedAt !== null ||
-			grant.applicationId !== request.applicationId ||
-			grant.principalType !== recipient.principalType ||
-			grant.principalId !== recipient.principalId
-		)
-			throw new ApplicationApiCredentialErrorV1("forbidden");
-		let recipientRevision: string | null = null;
-		if (recipient.principalType === "user") {
-			if (await tx.lockUserDisabled(recipient.principalId))
-				throw new ApplicationApiCredentialErrorV1("forbidden");
-			const user = await resolveCurrentPersonalApiUserV1(
-				input.userDirectory,
-				recipient.principalId,
-			);
-			requirePersonalApiUserActiveV1(user);
-			recipientRevision = user.authorizationRevision;
-		}
-		return { grant, manager, recipientRevision };
-	}
+
 	async function execute(
 		requestInput: ApplicationApiCredentialRequestV1,
 		commandInput: unknown,

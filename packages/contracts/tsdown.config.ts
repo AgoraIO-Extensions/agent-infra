@@ -11,6 +11,7 @@ export default defineConfig({
 		"./src/pilot/index.ts",
 		"./src/runtime/index.ts",
 		"./src/runtime/oauth-installation-node.ts",
+		"./src/runtime/connection-install-node.ts",
 		"./src/workload/index.ts",
 	],
 	format: "esm",

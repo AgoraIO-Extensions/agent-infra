@@ -60,6 +60,13 @@ import {
 	ApplicationApiCredentialRevocationV1Schema,
 } from "./application-api-credentials.ts";
 import {
+	ApplicationCredentialMaterialConfirmV1Schema,
+	ApplicationCredentialMaterialIntentV1Schema,
+	ApplicationCredentialMaterialMetadataV1Schema,
+	ApplicationCredentialMaterialReceiveV1Schema,
+	ApplicationCredentialMaterialResponseV1Schema,
+} from "./application-credential-material.ts";
+import {
 	ApplicationMaterialGrantRequestV1Schema,
 	ApplicationMaterialGrantResponseV1Schema,
 	ApplicationMaterialGrantRevokeRequestV1Schema,
@@ -1590,6 +1597,108 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/applications/{applicationId}/credential-material-deliveries": {
+		post: {
+			operationId: "prepareApplicationCredentialMaterialV2",
+			summary: "prepareApplicationCredentialMaterialV2",
+			description:
+				"Current browser session only, no Authorization header or query. Independent material grant required for receiving. No-store; no automatic replay of material.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				ApplicationCredentialMaterialIntentV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Authorized response; metadata replays never include material",
+					ApplicationCredentialMaterialMetadataV1Schema,
+				),
+				"201": jsonResponse(
+					"Intent metadata only; no credential generated",
+					ApplicationCredentialMaterialMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}":
+		{
+			get: {
+				operationId: "readApplicationCredentialMaterialV2",
+				summary: "readApplicationCredentialMaterialV2",
+				description:
+					"Current browser session only, no Authorization header or query. Independent material grant required for receiving. No-store; no automatic replay of material.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: pathId(),
+						attemptId: pathId(),
+					}),
+				},
+				responses: {
+					"200": jsonResponse(
+						"Authorized response; metadata replays never include material",
+						ApplicationCredentialMaterialMetadataV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+		},
+	"/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}/receive":
+		{
+			post: {
+				operationId: "receiveApplicationCredentialMaterialV2",
+				summary: "receiveApplicationCredentialMaterialV2",
+				description:
+					"Current browser session only, no Authorization header or query. Independent material grant required for receiving. No-store; no automatic replay of material.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: pathId(),
+						attemptId: pathId(),
+					}),
+				},
+				requestBody: requiredJsonRequestBody(
+					ApplicationCredentialMaterialReceiveV1Schema,
+				),
+				responses: {
+					"200": jsonResponse(
+						"Authorized response; metadata replays never include material",
+						ApplicationCredentialMaterialResponseV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+		},
+	"/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}/confirm":
+		{
+			post: {
+				operationId: "confirmApplicationCredentialMaterialV2",
+				summary: "confirmApplicationCredentialMaterialV2",
+				description:
+					"Current browser session only, no Authorization header or query. Independent material grant required for receiving. No-store; no automatic replay of material.",
+				security: personalCredentialSecurity,
+				requestParams: {
+					path: z.strictObject({
+						applicationId: pathId(),
+						attemptId: pathId(),
+					}),
+				},
+				requestBody: requiredJsonRequestBody(
+					ApplicationCredentialMaterialConfirmV1Schema,
+				),
+				responses: {
+					"200": jsonResponse(
+						"Authorized response; metadata replays never include material",
+						ApplicationCredentialMaterialMetadataV1Schema,
+					),
+					...errorResponses,
+				},
+			},
+		},
 	...workspaceSnapshotOpenApiPathsV1,
 	"/api/v2/evaluation/history": {
 		get: {

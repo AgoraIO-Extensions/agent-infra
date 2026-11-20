@@ -19,6 +19,7 @@ import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/r
 import { afterEach, expect, it, vi } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import {
+	provisionRuntimeConnectionInstallTrustV1,
 	provisionRuntimeOAuthFiles,
 	validateRuntimeOAuthProvisioning,
 } from "./runtime-oauth-provisioning.js";
@@ -98,6 +99,31 @@ async function fixture() {
 	};
 	return { root, source, memory, input, options };
 }
+it("bootstraps an empty installation listener from scoped deployment trust", async () => {
+	const f = await fixture();
+	const worker = await runtimeTlsFixture({
+		dnsNames: ["install-worker.workload-test.svc"],
+	});
+	cleanup.push(worker.cleanup);
+	const auth = "synthetic-install-readback-material";
+	await writeFile(join(f.source, "worker-ca.crt"), worker.ca, { mode: 0o440 });
+	await writeFile(join(f.source, "install.auth"), auth, { mode: 0o440 });
+	await provisionRuntimeConnectionInstallTrustV1({
+		dataDirectory: f.options.dataDirectory,
+		privateDirectory: f.memory,
+		tlsSource: f.source,
+		callbackSource: f.source,
+		readbackSource: f.source,
+		runtimeOrigin: f.input.configuration.runtimeOrigin,
+	});
+	const installed = join(f.memory, "tls", "install.auth");
+	expect(await readFile(installed, "utf8")).toBe(auth);
+	expect((await stat(installed)).mode & 0o777).toBe(0o600);
+	await expect(
+		readFile(join(f.memory, "bootstrap", "configuration.json")),
+	).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it("copies an approved registration descriptor and its independent machine credential to Host-only files", async () => {
 	const f = await fixture();
 	const descriptor = {

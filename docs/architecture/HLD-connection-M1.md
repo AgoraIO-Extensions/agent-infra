@@ -74,6 +74,11 @@ OAuth client 准备只在
 [工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
 定义；登记认证和手工关联的服务凭据都不成为 MCP 或用户 Grant 权限，Connection 的当前身份、
 实例与授权检查不变。
+Connection 尚未发布原 OAuth 事务回读合同时，Platform 的动态手工安装可按工程 Spec
+[§13.5.1 的 M1 限时例外](SPEC-agent-infra-M1-engineering-architecture.md#1351-字段与配置来源)，
+用 EP-1060 实例回读和一致性约束代替主体映射核对；Connection 侧的行为和检查不变。该例外以
+Connection 实例绑定不变式为外部前提：DEVICE 实例只接受首个批准它的 Principal。该前提不在
+EP-1060 已发布合同中，核实范围、证据和不成立时的处理见该例外第 1 项。
 
 Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
@@ -172,6 +177,8 @@ Connection 审计保存 Principal、ConsumerInstance、Actor、Connection、Acti
 验收覆盖两名独立 Principal、两个专用 GitHub 账号、一个受控 private 仓库、Direct MCP OAuth、三项 Action、真实 PR、幂等、跨主体隔离、撤权、Provider revoke、未知结果、Credential 边界和调用关联。
 
 成功声明只适用于具名环境、固定版本、记录的 Consumer/Instance、主体、账号、仓库和任务范围；不代表其他 Consumer、Provider、模板或广泛生产上线。
+
+工程 Spec §13.5.1 的 M1 限时例外期内，涉及 Platform 动态手工安装的成功声明须注明：两系统主体对应按该例外的一致性约束和人工核对确定，未经 Connection 授权事务回读核实。
 
 ## 14. 历史迁移说明
 

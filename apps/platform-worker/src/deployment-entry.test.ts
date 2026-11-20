@@ -10,7 +10,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import {
 	captureConnectionConsumerRegisteredBindingV1,
@@ -82,10 +85,7 @@ beforeAll(async () => {
 		join(directory, "session-reserve-adapter.js"),
 		"export const createSessionSandboxReserveAdapterV1 = (options) => ({ input: options });\n",
 	);
-	await writeFile(
-		join(directory, "connection-manual-bindings.js"),
-		"export const createOwnerConnectionBindingsResolverV1 = () => undefined;\n",
-	);
+
 	await writeFile(
 		join(directory, "kubernetes-client.js"),
 		"export const createWorkerKubernetesClientV1 = (namespace) => ({ namespace });",
@@ -586,7 +586,7 @@ export const createWorkloadReadinessLedgerV1 = () => ({});`,
 		join(directory, "conversation-deployment.js"),
 		`
 export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; return async () => 'original-control'; };
-export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; return async () => ({ status: 'observed', resources: [] }); };
+export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; globalThis.manualBootstrap = options.connectionInstallBootstrap; return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
 	await writeFile(
@@ -701,6 +701,11 @@ try {
    process.exit(0);
  }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+	if (process.env.RUN_MANUAL_DORMANCY) {
+	 console.log(JSON.stringify({ manualDrain: !!conversation.connectionInstallation?.manual, manualBootstrap: !!globalThis.manualBootstrap, standard: conversation.connectionInstallation?.configuration?.clientId ?? null }));
+	 await conversation.closeDeployment?.();
+	 process.exit(0);
+	}
 	if (process.env.RUN_INSTALLATION_APPROVAL) {
 	 const mode = process.env.RUN_INSTALLATION_APPROVAL;
 	 const {PostgresConnectionInstallationAuthorizationTransactionV1: Store} = await import('@agent-infra/platform-store');
@@ -770,6 +775,25 @@ afterAll(async () => {
 		await rm(platformStoreDistPath, { force: true });
 	else await writeFile(platformStoreDistPath, platformStoreDistOriginal);
 });
+
+it.each(["ownerConnectionBindings", "ownerConnectionBindingConfiguration"])(
+	"keeps Owner supply dormant when %s is configured",
+	async (name) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		try {
+			await writeFile(path, `${original}\nexport const ${name} = {};\n`);
+			const result = run();
+			expect(result.status).toBe(1);
+			expect(JSON.parse(result.stderr || result.stdout)).toEqual({
+				error: "CONNECTION_OWNER_SUPPLY_REQUIRES_PREPARE",
+				calls: [],
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 const database = "postgresql://database.example.test/platform";
 function run(overrides: Record<string, string | undefined> = {}) {
@@ -1765,6 +1789,81 @@ it("passes only the trusted configuration-module Session OAuth provisioning bund
 		await writeFile(path, original);
 	}
 });
+
+it.each(["unconfigured", "manual", "full"] as const)(
+	"keeps manual OAuth dormant in the Worker production assembly with %s configuration",
+	async (mode) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const { schemaVersion, publicOrigin, mcpPath, audience, egressProfile } =
+			connectionConsumerProfile;
+		const systemAccess = {
+			schemaVersion: schemaVersion as 1,
+			publicOrigin,
+			mcpPath,
+			audience,
+			egressProfile,
+			issuer: `${publicOrigin}/`,
+			oauthCallbackUrl: "https://platform.example.test/connection/callback",
+		};
+		const approval = {
+			...connectionConsumerApproval,
+			configFingerprint: connectionSystemAccessFingerprintV1(systemAccess),
+		};
+		const bootstrap =
+			mode === "unconfigured"
+				? ""
+				: `export const connectionInstallBootstrap = {
+			port: 3445, clientName: "synthetic-install-name", workerOrigin: "https://worker.worker-binding.svc:3446/",
+			configuration: ${JSON.stringify(systemAccess)}, approval: ${JSON.stringify(approval)},
+			tlsSecretForSandbox: () => ({ name: "fixture-tls", certKey: "tls.crt", keyKey: "tls.key" }),
+			callbackAuthSecretRef: { name: "fixture-callback", key: "callback.auth" },
+			workerCaSecretRef: { name: "fixture-worker-ca", key: "ca.crt" },
+			apiSelector: { component: "platform-api" },
+		};`;
+		const worker =
+			mode === "full"
+				? `export const connectionInstallWorker = {
+			hostCaFile: "/fixture-must-not-read/ca.crt", readbackCertFile: "/fixture-must-not-read/server.crt",
+			readbackKeyFile: "/fixture-must-not-read/server.key", keyring: { keys: [] },
+		};`
+				: "";
+		try {
+			for (const standard of [false, true]) {
+				await writeFile(
+					path,
+					`${original}
+${bootstrap}
+${worker}
+${
+	standard
+		? `${approvedPatInstallationModule}
+delete connectionInstallation.configuration.patBinding;`
+		: ""
+}`,
+				);
+				const result = run({ RUN_MANUAL_DORMANCY: "true" });
+				expect(result.status, result.stderr).toBe(0);
+				expect(JSON.parse(result.stdout)).toEqual({
+					manualDrain: false,
+					manualBootstrap: false,
+					standard: standard ? "platform-client" : null,
+				});
+				expect(result.stderr.trim()).toBe(
+					mode === "unconfigured"
+						? ""
+						: JSON.stringify({
+								service: "platform-worker",
+								code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+								dependency: "EP-1123",
+							}),
+				);
+			}
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it.each([
 	["legacy OAuth", false, true, false],

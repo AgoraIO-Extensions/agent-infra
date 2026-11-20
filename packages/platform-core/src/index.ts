@@ -70,6 +70,7 @@ export * from "./agent-user-use-grants.js";
 export * from "./api-audit-identity.js";
 export * from "./application-api-credential-management.js";
 export * from "./application-api-credentials.js";
+export * from "./application-credential-material.js";
 export * from "./application-foundation.js";
 export * from "./application-material-grant.js";
 export * from "./application-registration.js";
@@ -160,6 +161,7 @@ export {
 } from "./file-limits.js";
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
+export * from "./native-admission-observation.js";
 export * from "./native-capability-admission.js";
 export * from "./native-capability-admission-v6.js";
 export * from "./operations-alerts.js";

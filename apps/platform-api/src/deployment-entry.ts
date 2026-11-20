@@ -57,10 +57,12 @@ const {
 	connectionSystemAccess,
 	connectionSystemAccessApproval,
 	connectionInstallationConfiguration,
+	connectionManualInstallationClientName,
 	connectionInstallationsByAgent,
 	connectionInstallationsByAgentAndPrincipal,
 	connectionInstallationCallback,
 	applicationCredentialDelivery,
+	applicationCredentialMaterialDelivery,
 	apiInput,
 	customAgentGateway,
 	modelSelection,
@@ -265,6 +267,18 @@ const browser = createPostgresLdapBrowserDeployment({
 	publicOrigin,
 	trustedProxyToken,
 });
+if (
+	connectionManualInstallationClientName !== undefined ||
+	apiInput?.connectionInstallation?.manualInstallation !== undefined
+) {
+	console.warn(
+		JSON.stringify({
+			service: "platform-api",
+			code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+			dependency: "EP-1123",
+		}),
+	);
+}
 const callbackForwarder =
 	connectionInstallationCallback ??
 	(connectionInstallationConfiguration &&
@@ -413,6 +427,9 @@ export function createPlatformApiAssemblyInput() {
 			: {}),
 		...(callbackForwarder
 			? { connectionInstallationCallback: callbackForwarder }
+			: {}),
+		...(applicationCredentialMaterialDelivery
+			? { applicationCredentialMaterialDelivery }
 			: {}),
 		...(applicationCredentialDelivery ? { applicationCredentialDelivery } : {}),
 		databaseUrl: configuredDatabaseUrl,

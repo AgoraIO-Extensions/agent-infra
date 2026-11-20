@@ -2,7 +2,10 @@ import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import type { NativeCapabilityInvocationRequestV1 } from "@agent-infra/contracts/pilot";
 import { runtimeOAuthConfigurationRevisionV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import * as telemetryModule from "@agent-infra/observability";
@@ -995,17 +998,28 @@ describe("Platform API production assembly", () => {
 	});
 });
 
-it.each(
-	[false, true].flatMap((mismatch) =>
+it.each([
+	...[false, true].flatMap((mismatch) =>
 		[false, true].flatMap((perPrincipal) =>
 			[false, true].map(
-				(automatic) => [mismatch, perPrincipal, automatic] as const,
+				(automatic) => [mismatch, perPrincipal, automatic, false] as const,
 			),
 		),
 	),
-)(
-	"assembles only a consistent installation callback (mismatch=%s, perPrincipal=%s, automatic=%s)",
-	async (mismatch, perPrincipal, automatic) => {
+	[false, false, false, true] as const,
+	[true, false, false, true] as const,
+])(
+	"assembles only a consistent installation callback (mismatch=%s, perPrincipal=%s, automatic=%s, manual=%s)",
+	async (mismatch, perPrincipal, automatic, manual) => {
+		const systemAccess = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.test",
+			mcpPath: "/mcp",
+			audience: "https://connection.test/mcp",
+			issuer: "https://connection.test/",
+			oauthCallbackUrl: "https://platform.test/callback",
+			egressProfile: { ref: "deployment-egress", revision: "r1" },
+		};
 		const unavailable = async () => {
 			throw Error("unused test adapter");
 		};
@@ -1089,14 +1103,29 @@ it.each(
 				: {}),
 			connectionInstallation: {
 				publicOrigin: "https://platform.test",
-				...(perPrincipal
+				...(manual
 					? {
-							bindingsByAgentAndPrincipal: {
-								"agent-a": { alice: bindingsByAgent["agent-a"] },
-								"agent-b": { bob: bindingsByAgent["agent-b"] },
+							manualInstallation: {
+								systemAccess,
+								clientName: "Agent platform",
+								approval: {
+									schemaVersion: 1,
+									configFingerprint: mismatch
+										? "a".repeat(64)
+										: connectionSystemAccessFingerprintV1(systemAccess),
+									egressEnforced: true,
+									source: { ref: "deployment-approval", revision: "r1" },
+								},
 							},
 						}
-					: { bindingsByAgent }),
+					: perPrincipal
+						? {
+								bindingsByAgentAndPrincipal: {
+									"agent-a": { alice: bindingsByAgent["agent-a"] },
+									"agent-b": { bob: bindingsByAgent["agent-b"] },
+								},
+							}
+						: { bindingsByAgent }),
 			},
 			connectionInstallationCallback: { forward: vi.fn(async () => {}) },
 		});

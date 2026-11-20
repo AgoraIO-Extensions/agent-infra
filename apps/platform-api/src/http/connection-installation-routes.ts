@@ -24,7 +24,13 @@ export interface ConnectionInstallationRouteDependenciesV1 {
 	readonly installation: Pick<
 		ReturnType<typeof createConnectionInstallationAuthorizationV1>,
 		"execute" | "authorize"
-	>;
+	> &
+		Partial<
+			Pick<
+				ReturnType<typeof createConnectionInstallationAuthorizationV1>,
+				"executeInstallation"
+			>
+		>;
 	/** URL is projected only when the callback receiver is actually enabled. */
 	readonly callbackEnabled?: () => boolean;
 }
@@ -94,7 +100,7 @@ export function registerConnectionInstallationRoutesV1(
 				command === "begin"
 					? undefined
 					: OpaqueIdV1Schema.parse(context.req.param("authorizationId"));
-			const result = await dependencies.installation.execute({
+			const input = {
 				...metadata,
 				userId: identity.userId,
 				identityRevision: identity.authorizationRevision,
@@ -104,7 +110,21 @@ export function registerConnectionInstallationRoutesV1(
 				...(command !== "status"
 					? { idempotencyKey: parseIdempotencyKey(request, metadata.traceId) }
 					: {}),
-			});
+			};
+			const result = dependencies.installation.executeInstallation
+				? await dependencies.installation.executeInstallation(input)
+				: await dependencies.installation.execute(input);
+			// Manual EP-1060 route before its receipt CAS: no link and no scope yet.
+			if ("manual" in result)
+				return context.json(
+					ConnectionInstallationProjectionV1Schema.parse({
+						schemaVersion: result.schemaVersion,
+						authorizationId: result.authorizationId,
+						status: result.status,
+						expiresAt: result.expiresAt,
+					}),
+					command === "status" ? 200 : 202,
+				);
 			const authorization =
 				ConnectionInstallationAuthorizationV1Schema.parse(result);
 			return context.json(

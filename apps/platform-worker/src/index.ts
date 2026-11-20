@@ -22,6 +22,7 @@ import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js"
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
 export * from "./browser-handoff-command.js";
+export * from "./connection-host-supply.js";
 export * from "./connection-registration-http.js";
 export * from "./connection-registration-worker.js";
 export * from "./conversation-deployment.js";
@@ -558,14 +559,6 @@ export {
 	type BrowserResultFileEventResultV1,
 	createBrowserResultFileEventAdapterV1,
 } from "./browser-result-file-event.js";
-export {
-	type ConnectionMachineClientBindingStoreV1,
-	createOwnerConnectionBindingsResolverV1,
-	type OwnerConnectionBindingsOptionsV1,
-	type ProtectedConnectionHostSupplyV1,
-	revokeOwnerConnectionBindingV1,
-	revokeOwnerConnectionMachineBindingV1,
-} from "./connection-manual-bindings.js";
 export {
 	createWorkerFileClientV1,
 	createWorkerRuntimeFileBridgeFactoryV1,

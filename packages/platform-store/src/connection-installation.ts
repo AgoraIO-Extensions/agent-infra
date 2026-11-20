@@ -31,6 +31,18 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { readAgentManagementState } from "./agent-management.js";
 import { readRegisteredConnectionConsumerBindingsV1 } from "./connection-consumer-registration.js";
+import {
+	type ConnectionManualInstallationPolicyInputV1,
+	type ConnectionManualInstallationPolicyV1,
+	captureConnectionManualInstallationPolicyV1,
+	createConnectionManualInstallationV1,
+	lockConnectionManualAssociationForInstallationV1,
+	readConnectionManualInstallationBindingV1,
+	readConnectionManualInstallationFactsV1,
+	readConnectionManualInstallationV1,
+	receiptConnectionManualInstallationV1,
+	requestConnectionManualInstallationStatusV1,
+} from "./connection-manual-installations.js";
 import postgres from "./observed-postgres.js";
 import {
 	connectionInstallationAuthorizations as authorizations,
@@ -44,6 +56,14 @@ import {
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
+/** The existing begin link/state parser; the manual first begin persists the same mapping. */
+export function parseConnectionInstallationAuthorizationRedirectV1(
+	value: string,
+	configuration: RuntimeOAuthConfigurationV1,
+	expiresAt: number,
+) {
+	return parseAuthorizationRedirect(value, configuration, expiresAt);
+}
 function parseAuthorizationRedirect(
 	value: string,
 	configuration: RuntimeOAuthConfigurationV1,
@@ -151,6 +171,8 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 	readonly #bindingsByAgent:
 		| ReadonlyMap<string, InstallationBinding | null>
 		| undefined;
+	/** Explicit manual EP-1060 rollout (§13.5.7); absent keeps manual Agents unavailable. */
+	readonly #manualPolicy: ConnectionManualInstallationPolicyV1 | undefined;
 	constructor(options: {
 		databaseUrl: string;
 		directory: TaskUserDirectoryV1;
@@ -168,8 +190,22 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				Readonly<Record<string, ConnectionInstallationBindingInputV1>>
 			>
 		>;
+		manualInstallation?: ConnectionManualInstallationPolicyInputV1;
 	}) {
 		this.#directory = options.directory;
+		this.#manualPolicy =
+			options.manualInstallation === undefined
+				? undefined
+				: captureConnectionManualInstallationPolicyV1(
+						options.manualInstallation,
+					);
+		const manualOnly =
+			this.#manualPolicy !== undefined &&
+			options.configuration === undefined &&
+			options.profile === undefined &&
+			options.approval === undefined &&
+			options.bindingsByAgent === undefined &&
+			options.bindingsByAgentAndPrincipal === undefined;
 		this.#registrationPolicy =
 			options.connectionConsumerRegistration === undefined
 				? undefined
@@ -178,10 +214,13 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					);
 		if (
 			this.#registrationPolicy &&
-			options.bindingsByAgentAndPrincipal === undefined
+			options.bindingsByAgentAndPrincipal === undefined &&
+			!manualOnly
 		)
 			throw new ConnectionInstallationErrorV1("unavailable");
-		if (options.bindingsByAgentAndPrincipal !== undefined) {
+		if (manualOnly) {
+			// Only per-install bound configurations exist; no static Consumer fallback.
+		} else if (options.bindingsByAgentAndPrincipal !== undefined) {
 			if (
 				options.configuration !== undefined ||
 				options.profile !== undefined ||
@@ -308,7 +347,109 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		}
 	}
 	#operations(tx: Transaction): ConnectionInstallationTransactionV1 {
+		const manualPolicy = this.#manualPolicy;
+		const databaseMilliseconds = sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`;
+		/** Manual callback deadlines use the database clock; other rows keep the caller time. */
+		const callbackClock = (now: number) => sql`(case when exists (
+			select 1 from platform.connection_manual_installations clocked
+			where clocked.authorization_id=connection_installation_authorizations.id
+		) then ${databaseMilliseconds} else ${now}::bigint end)`;
+		/**
+		 * Settles a manual callback attempt after its row lock, then rechecks the
+		 * original mapping, current association and deadlines at the same write.
+		 */
+		const settleManualCallback = async (
+			policy: ConnectionManualInstallationPolicyV1,
+			authorizationId: string,
+			input: {
+				stateHash: string;
+				attemptId: string;
+				status: "delivered" | "unknown";
+			},
+		) => {
+			const associated = await lockConnectionManualAssociationForInstallationV1(
+				tx,
+				authorizationId,
+			);
+			const [locked] = await tx.execute(sql`
+				select binding, status from platform.connection_installation_authorizations
+				where id=${authorizationId} and binding->'callback'->>'stateHash'=${input.stateHash}
+					and binding->'callback'->>'status'='sending'
+					and binding->'callback'->>'attemptId'=${input.attemptId}
+				for update
+			`);
+			if (!locked) return false;
+			const binding = locked.binding as {
+				principal?: { id?: unknown };
+				reference?: {
+					agentId?: unknown;
+					executionId?: unknown;
+					sessionGeneration?: unknown;
+				};
+				scope?: { sandboxId?: unknown; podUid?: unknown };
+				callback?: { runtimeOrigin?: unknown };
+			};
+			const fields = [
+				binding.principal?.id,
+				binding.reference?.agentId,
+				binding.reference?.executionId,
+				binding.scope?.sandboxId,
+				binding.scope?.podUid,
+			];
+			const selected =
+				associated &&
+				["awaiting_confirmation", "confirmed"].includes(
+					locked.status as string,
+				) &&
+				fields.every((value) => typeof value === "string" && value) &&
+				Number.isSafeInteger(binding.reference?.sessionGeneration)
+					? await readConnectionManualInstallationBindingV1(tx, policy, {
+							authorizationId,
+							userId: binding.principal?.id as string,
+							agentId: binding.reference?.agentId as string,
+							executionId: binding.reference?.executionId as string,
+							sandboxId: binding.scope?.sandboxId as string,
+							podUid: binding.scope?.podUid as string,
+							sessionGeneration: binding.reference?.sessionGeneration as number,
+						})
+					: null;
+			const bound =
+				!!selected &&
+				selected.configuration.runtimeOrigin ===
+					binding.callback?.runtimeOrigin;
+			const result = await tx.execute(sql`
+				update platform.connection_installation_authorizations
+				set binding=(jsonb_set(
+					binding,
+					'{callback,status}',
+					to_jsonb(case when ${bound}
+						and coalesce((binding->'callback'->>'attemptExpiresAt')::bigint, 0) > ${databaseMilliseconds}
+						and expires_at > clock_timestamp()
+						and status in ('awaiting_confirmation','confirmed')
+						then ${input.status} else 'unknown' end::text),
+					true
+				) #- '{callback,attemptId}' #- '{callback,attemptExpiresAt}'),
+					revision=revision+1, updated_at=clock_timestamp()
+				where id=${authorizationId} and binding->'callback'->>'stateHash'=${input.stateHash}
+					and binding->'callback'->>'status'='sending'
+					and binding->'callback'->>'attemptId'=${input.attemptId}
+				returning binding->'callback'->>'status' as status
+			`);
+			return result[0]?.status === input.status;
+		};
+		const isManual = async (authorizationId: string) => {
+			const rows = await tx.execute(
+				sql`select 1 from platform.connection_manual_installations where authorization_id=${authorizationId}`,
+			);
+			return rows.length > 0;
+		};
 		const read = async (userId: string, id: string) => {
+			if (
+				manualPolicy &&
+				(await isManual(id)) &&
+				!(await lockConnectionManualAssociationForInstallationV1(tx, id))
+			)
+				return null;
 			const [row] = await tx
 				.select()
 				.from(authorizations)
@@ -316,10 +457,71 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					and(eq(authorizations.id, id), eq(authorizations.userId, userId)),
 				)
 				.for("update");
-			return row ? decode(row) : null;
+			// A manual pre-registration authorization has no OAuth scope yet.
+			return row &&
+				row.status !== "preparing" &&
+				(row.binding as { scope?: unknown }).scope !== undefined
+				? decode(row)
+				: null;
 		};
 		return {
+			...(manualPolicy
+				? {
+						currentManual: (userId: string, executionId: string) =>
+							readConnectionManualInstallationFactsV1(
+								tx,
+								this.#directory,
+								userId,
+								executionId,
+							),
+						createManual: (
+							record: Parameters<
+								NonNullable<ConnectionInstallationTransactionV1["createManual"]>
+							>[0],
+							command: Parameters<
+								NonNullable<ConnectionInstallationTransactionV1["createManual"]>
+							>[1],
+							key: string,
+						) => createConnectionManualInstallationV1(tx, record, command, key),
+						readManual: (userId: string, authorizationId: string) =>
+							readConnectionManualInstallationV1(tx, userId, authorizationId),
+						receiptManual: (
+							userId: string,
+							key: string,
+							command: string,
+							digest: string,
+						) =>
+							receiptConnectionManualInstallationV1(
+								tx,
+								userId,
+								key,
+								command,
+								digest,
+							),
+						requestManualStatus: (userId: string, authorizationId: string) =>
+							requestConnectionManualInstallationStatusV1(
+								tx,
+								userId,
+								authorizationId,
+							),
+					}
+				: {}),
 			claimCallback: async ({ stateHash, now }) => {
+				if (manualPolicy) {
+					const [manual] = await tx.execute(sql`
+						select m.authorization_id from platform.connection_manual_installations m
+						join platform.connection_installation_authorizations a on a.id=m.authorization_id
+						where a.binding->'callback'->>'stateHash'=${stateHash}
+					`);
+					if (
+						manual &&
+						!(await lockConnectionManualAssociationForInstallationV1(
+							tx,
+							manual.authorization_id as string,
+						))
+					)
+						return null;
+				}
 				await tx.execute(sql`
 					update platform.connection_installation_authorizations
 					set binding=(jsonb_set(
@@ -330,14 +532,18 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					) #- '{callback,attemptId}' #- '{callback,attemptExpiresAt}'),
 					revision=revision+1, updated_at=clock_timestamp()
 					where binding->'callback'->>'status'='sending'
-					  and (binding->'callback'->>'attemptExpiresAt')::bigint <= ${now}
+					  and (binding->'callback'->>'attemptExpiresAt')::bigint <= ${callbackClock(now)}
+					  and (binding->'callback'->>'stateHash'=${stateHash} or not exists (
+						select 1 from platform.connection_manual_installations m
+						where m.authorization_id=connection_installation_authorizations.id
+					  ))
 				`);
 				const rows = await tx.execute(sql`
 					select id, binding, confirmation_revision, identity_revision, agent_authorization_revision, status, expires_at
 					from platform.connection_installation_authorizations
 					where binding->'callback'->>'stateHash'=${stateHash}
 					  and binding->'callback'->>'status'='pending'
-					  and (binding->'callback'->>'expiresAt')::bigint > ${now}
+					  and (binding->'callback'->>'expiresAt')::bigint > ${callbackClock(now)}
 					  and expires_at > clock_timestamp()
 					  and status in ('awaiting_confirmation','confirmed')
 					for update
@@ -359,14 +565,31 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						expiresAt: new Date(row.expires_at as string).getTime(),
 					},
 				);
-				const selected = this.#bindingForAgent(
-					authorization.reference.agentId,
-					authorization.principal.id,
-				);
-				if (!selected) return null;
+				const manual = await isManual(authorization.authorizationId);
+				const selected = manual
+					? manualPolicy &&
+						(await readConnectionManualInstallationBindingV1(tx, manualPolicy, {
+							authorizationId: authorization.authorizationId,
+							userId: authorization.principal.id,
+							agentId: authorization.reference.agentId,
+							executionId: authorization.reference.executionId,
+							sandboxId: authorization.scope.sandboxId,
+							podUid: authorization.scope.podUid,
+							sessionGeneration: authorization.reference.sessionGeneration,
+						}))
+					: this.#bindingForAgent(
+							authorization.reference.agentId,
+							authorization.principal.id,
+						);
+				if (
+					!selected ||
+					selected.configuration.runtimeOrigin !== callback.runtimeOrigin
+				)
+					return null;
 				const current = await this.#operations(tx).current(
 					authorization.principal.id,
 					authorization.reference.executionId,
+					authorization.authorizationId,
 				);
 				if (!current) return null;
 				if (
@@ -397,17 +620,30 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				)
 					return null;
 				const attemptId = randomUUID();
-				await tx.execute(sql`
+				// A manual claim recommits the original mapping, authorization and
+				// deadlines on the database clock after the directory read.
+				const claimed = await tx.execute(sql`
 					update platform.connection_installation_authorizations
 					set binding=jsonb_set(
 						jsonb_set(
 							jsonb_set(binding, '{callback,status}', to_jsonb('sending'::text), true),
 							'{callback,attemptId}', to_jsonb(${attemptId}::text), true
 						),
-						'{callback,attemptExpiresAt}', to_jsonb(${now + 15_000}::bigint), true
+						'{callback,attemptExpiresAt}',
+						to_jsonb(${manual ? sql`${databaseMilliseconds} + 15000` : sql`${now + 15_000}::bigint`}), true
 					), revision=revision+1, updated_at=clock_timestamp()
-					where id=${row.id}
+					where id=${row.id}${
+						manual
+							? sql` and binding=${JSON.stringify(row.binding)}::jsonb
+						and binding->'callback'->>'status'='pending'
+						and (binding->'callback'->>'expiresAt')::bigint > ${databaseMilliseconds}
+						and expires_at > clock_timestamp()
+						and status in ('awaiting_confirmation','confirmed')`
+							: sql``
+					}
+					returning id
 				`);
+				if (claimed.length !== 1) return null;
 				return {
 					authorizationId: row.id as string,
 					runtimeOrigin: callback.runtimeOrigin,
@@ -418,6 +654,19 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				};
 			},
 			settleCallback: async ({ stateHash, attemptId, now, status }) => {
+				const [manual] = manualPolicy
+					? await tx.execute(sql`
+						select m.authorization_id from platform.connection_manual_installations m
+						join platform.connection_installation_authorizations a on a.id=m.authorization_id
+						where a.binding->'callback'->>'stateHash'=${stateHash}
+					`)
+					: [];
+				if (manualPolicy && manual)
+					return settleManualCallback(
+						manualPolicy,
+						manual.authorization_id as string,
+						{ stateHash, attemptId, status },
+					);
 				const result = await tx.execute(sql`
 					update platform.connection_installation_authorizations
 					set binding=(jsonb_set(
@@ -484,7 +733,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				const rows = await tx.execute(sql`select clock_timestamp() as now`);
 				return new Date(rows[0]?.now as string).getTime();
 			},
-			current: async (userId, executionId) => {
+			current: async (userId, executionId, authorizationId) => {
 				await tx.execute(
 					sql`lock table platform.platform_user_disables in share mode`,
 				);
@@ -533,12 +782,32 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					row.agent_id as string,
 				);
 				if (!agent) return null;
-				const selected = this.#bindingForAgent(
+				let selected = this.#bindingForAgent(
 					row.agent_id as string,
 					user.userId,
 				);
+				let manualSelected = false;
+				if (!selected && manualPolicy && authorizationId) {
+					const bound = await readConnectionManualInstallationBindingV1(
+						tx,
+						manualPolicy,
+						{
+							authorizationId,
+							userId: user.userId,
+							agentId: row.agent_id as string,
+							executionId: row.execution_id as string,
+							sandboxId: row.sandbox_id as string,
+							podUid: pods[0].uid,
+							sessionGeneration: Number(row.session_generation),
+						},
+					);
+					if (bound) {
+						selected = bound;
+						manualSelected = true;
+					}
+				}
 				if (!selected) return null;
-				if (!this.#registrationPolicy) {
+				if (!manualSelected && !this.#registrationPolicy) {
 					const [association] = await tx
 						.select({
 							operationId: connectionConsumerRegistrations.operationId,
@@ -568,7 +837,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						.for("share");
 					if (manual) return null;
 				}
-				if (this.#registrationPolicy) {
+				if (!manualSelected && this.#registrationPolicy) {
 					const bindings = await readRegisteredConnectionConsumerBindingsV1(
 						tx,
 						this.#registrationPolicy,
@@ -696,11 +965,17 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				);
 			},
 			audit: async (userId, id, command, requestId, traceId) => {
-				const installation = await read(userId, id);
-				if (!installation)
+				// Also covers a manual pre-registration row, which has no OAuth scope.
+				const [installation] = await tx.execute(
+					sql`select binding->'reference'->>'agentId' as agent_id from platform.connection_installation_authorizations where id=${id} and user_id=${userId}`,
+				);
+				if (
+					typeof installation?.agent_id !== "string" ||
+					!installation.agent_id
+				)
 					throw new ConnectionInstallationErrorV1("unavailable");
 				await tx.execute(
-					sql`insert into platform.audit_events(id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,trace_id,details) values (${randomUUID()},'user',${userId},${`connection.installation.${command}`},'agent',${installation.authorization.reference.agentId},'succeeded',${requestId},${traceId},${JSON.stringify({ authorizationId: id })}::jsonb)`,
+					sql`insert into platform.audit_events(id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,trace_id,details) values (${randomUUID()},'user',${userId},${`connection.installation.${command}`},'agent',${installation.agent_id},'succeeded',${requestId},${traceId},${JSON.stringify({ authorizationId: id })}::jsonb)`,
 				);
 			},
 		};
@@ -733,6 +1008,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				join platform.connection_installation_authorizations a on a.id=c.authorization_id
 				where c.status='pending' and c.attempt_id is null and ((c.command='begin' and a.status in ('awaiting_confirmation','confirmed')) or (c.command='confirm' and a.status='confirmed'))
 				 and a.expires_at > clock_timestamp()
+				 and not exists (select 1 from platform.connection_manual_installations mi where mi.authorization_id=a.id)
 				and (a.binding->'reference'->>'executionId') in (${sql.join(
 					executionIds.map((id) => sql`${id}`),
 					sql`, `,
@@ -784,6 +1060,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					set status='sending', attempt_id=${input.attemptId}, attempt_owner=${input.attemptOwner}, attempt_expires_at=clock_timestamp()+interval '15 seconds', updated_at=clock_timestamp()
 					from platform.connection_installation_authorizations a
 					where c.id=${input.commandId} and c.status='pending' and c.attempt_id is null
+					 and not exists (select 1 from platform.connection_manual_installations mi where mi.authorization_id=c.authorization_id)
 					 and a.id=c.authorization_id and ((c.command='begin' and a.status in ('awaiting_confirmation','confirmed')) or (c.command='confirm' and a.status='confirmed')) and a.expires_at > clock_timestamp()
 					 and not exists (select 1 from platform.connection_installation_commands prior where prior.authorization_id=c.authorization_id and prior.created_at < c.created_at and prior.status in ('pending','sending','unknown'))
 					returning c.*, a.binding, a.confirmation_revision, a.status as authorization_status, a.expires_at
@@ -835,6 +1112,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					from platform.connection_installation_commands c
 					join platform.connection_installation_authorizations a on a.id=c.authorization_id
 					where c.id=${input.commandId} and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					 and not exists (select 1 from platform.connection_manual_installations mi where mi.authorization_id=c.authorization_id)
 					for update
 				`);
 				const command = owned[0];
