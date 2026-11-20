@@ -205,6 +205,37 @@ export function createWorkerKubernetesClientV1(
 							object.stringData !== undefined
 						)
 							throw new WorkloadKubernetesError("policy");
+						const select = (
+							values: Record<string, string> | undefined,
+							names: readonly string[],
+						) =>
+							Object.fromEntries(
+								names.flatMap((name) =>
+									values?.[name] === undefined ? [] : [[name, values[name]]],
+								),
+							);
+						// Public ownership facts only. Never propagate last-applied or arbitrary labels/annotations.
+						const labels = select(
+							object.metadata.labels,
+							[
+								"managed",
+								"agent-ref",
+								"session-ref",
+								"sandbox-id",
+								"generation",
+							].map((name) => `agent-infra.agora.io/${name}`),
+						);
+						const annotations = select(
+							object.metadata.annotations,
+							[
+								"agent-id",
+								"session-id",
+								"managed",
+								"fence",
+								"executor-instance-digest",
+								"executor-host-key-id",
+							].map((name) => `agent-infra.agora.io/${name}`),
+						);
 						return {
 							metadata: {
 								name: object.metadata.name,
@@ -213,18 +244,8 @@ export function createWorkerKubernetesClientV1(
 								resourceVersion: object.metadata.resourceVersion,
 								deletionTimestamp: object.metadata.deletionTimestamp,
 								ownerReferences: object.metadata.ownerReferences,
-								...(object.metadata?.annotations?.[
-									"agent-infra.agora.io/executor-instance-digest"
-								]
-									? {
-											annotations: {
-												"agent-infra.agora.io/executor-instance-digest":
-													object.metadata.annotations[
-														"agent-infra.agora.io/executor-instance-digest"
-													],
-											},
-										}
-									: {}),
+								...(Object.keys(labels).length ? { labels } : {}),
+								...(Object.keys(annotations).length ? { annotations } : {}),
 							},
 						};
 					} catch (error) {

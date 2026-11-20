@@ -179,6 +179,7 @@ it("fetches Secret metadata with strict content negotiation and no full-object f
 	const tls = await runtimeTlsFixture();
 	const requests: Array<{ url: string; accept?: string }> = [];
 	let returnFullSecret = false;
+	let returnReserveFacts = false;
 	const server = createServer(
 		{ key: tls.key, cert: tls.cert },
 		(request, response) => {
@@ -212,7 +213,24 @@ it("fetches Secret metadata with strict content negotiation and no full-object f
 							namespace: "test",
 							uid: "secret-uid",
 							resourceVersion: "7",
+							...(returnReserveFacts
+								? {
+										labels: {
+											"agent-infra.agora.io/sandbox-id": "reserve-sandbox",
+											"unrelated-label": "not-returned",
+										},
+									}
+								: {}),
 							annotations: {
+								...(returnReserveFacts
+									? {
+											"agent-infra.agora.io/agent-id": "reserve-agent",
+											"agent-infra.agora.io/executor-host-key-id":
+												"public-key-id",
+											"agent-infra.agora.io/executor-instance-digest":
+												"d".repeat(64),
+										}
+									: {}),
 								"kubectl.kubernetes.io/last-applied-configuration":
 									"not-returned",
 							},
@@ -261,6 +279,21 @@ it("fetches Secret metadata with strict content negotiation and no full-object f
 		});
 		expect(metadata).not.toHaveProperty("data");
 		expect(metadata?.metadata).not.toHaveProperty("annotations");
+		returnReserveFacts = true;
+		const reserve = await client.readMetadata?.("Secret", "agent-tls");
+		expect(reserve?.metadata).toMatchObject({
+			labels: { "agent-infra.agora.io/sandbox-id": "reserve-sandbox" },
+			annotations: {
+				"agent-infra.agora.io/agent-id": "reserve-agent",
+				"agent-infra.agora.io/executor-host-key-id": "public-key-id",
+				"agent-infra.agora.io/executor-instance-digest": "d".repeat(64),
+			},
+		});
+		expect(reserve?.metadata?.labels).not.toHaveProperty("unrelated-label");
+		expect(reserve?.metadata?.annotations).not.toHaveProperty(
+			"kubectl.kubernetes.io/last-applied-configuration",
+		);
+		returnReserveFacts = false;
 		expect(
 			requests.find((request) => request.url.includes("/secrets/"))?.accept,
 		).toBe("application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1");

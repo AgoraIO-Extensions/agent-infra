@@ -2263,6 +2263,394 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 		return lease;
 	}
 
+	it("keeps all six resources intact while the original identity projection create is unresolved (#4248 B3b)", async () => {
+		const reserve = await executorPrepared();
+		const { store, lease, intent, projection, sandboxId } = reserve;
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(
+			await store.recordExecutorProjectionResult(lease, {
+				attemptId: intent.attemptId,
+			}),
+		).toBe(true);
+		expect(await store.retire(sandboxId)).toBe(true);
+		const removed: string[] = [];
+		const objects = new Map(
+			lease.operations.map((o) => [
+				o.kind,
+				{ apiVersion: "v1", kind: o.kind, metadata: o.resource! },
+			]),
+		);
+		const inspection = await store.inspect(sandboxId);
+		for (const operation of inspection!.operations)
+			objects.set(operation.kind, {
+				apiVersion: "v1",
+				kind: operation.kind,
+				metadata: operation.resource!,
+			});
+		const unused = async (): Promise<never> => {
+			throw new Error("unused preparation during cleanup");
+		};
+		const adapter = {
+			render: unused,
+			create: unused,
+			read: async (_claim: unknown, kind: string) =>
+				objects.get(
+					kind as (typeof sessionSandboxReserveResourceKindsV1)[number],
+				) ?? null,
+			remove: async (_claim: unknown, identity: { kind: string }) => {
+				removed.push(identity.kind);
+				return "acknowledged" as const;
+			},
+			bootstrap: async () => ({
+				bootstrapReady: false,
+				businessStateAbsent: false,
+			}),
+			executor: {
+				startup: unused,
+				projection: unused,
+				createProjection: unused,
+				readInstance: unused,
+				readProjection: async () => ({
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: projection,
+				}),
+				removeProjection: unused,
+			},
+		};
+		const worker = createPlatformSessionReserveWorkerV1({
+			databaseUrl: database.databaseUrl,
+			configuration: config,
+			store,
+			adapter,
+			workerId: "cleanup-v2",
+			pollIntervalMs: 100,
+			leaseDurationMs: 30000,
+		});
+		try {
+			await worker.reconcile();
+			expect(removed).toEqual([]);
+			expect((await store.inspect(sandboxId))?.status).toBe("retiring");
+			expect(
+				await sql`select released from platform.session_sandbox_resource_charges where sandbox_id=${sandboxId}`,
+			).toEqual([{ released: false }]);
+		} finally {
+			await worker.stop();
+		}
+	});
+
+	it.each(["lost", "consumed", "unconsumed"] as const)(
+		"persists executor preparation and settles only confirmed projection/consumption/absence (%s, #4248 B3b)",
+		async (outcome) => {
+			const configuration = {
+				...config,
+				maximumReserves: 1,
+				maximumConcurrentCreates: 1,
+				profiles: config.profiles.map((p) => ({ ...p, maximum: 1 })),
+			};
+			const store = reserves(configuration);
+			const sandboxId = await store.prepare("agent");
+			if (!sandboxId) throw new Error("Missing reserve");
+			const objects = new Map<
+				string,
+				{
+					apiVersion: string;
+					kind: string;
+					metadata: {
+						name: string;
+						namespace: string;
+						uid?: string;
+						resourceVersion?: string;
+					};
+				}
+			>();
+			let issued = 0;
+			let published = 0;
+			const image = `registry.test/codex@${imageDigest}`;
+			const startup = async () => ({
+				kind: "prepare" as const,
+				bindingDigest,
+				configurationVersion: "fixture-v4",
+				timeoutMs: outcome === "unconsumed" ? 1000 : 60000,
+				approval: {
+					schemaVersion: 2 as const,
+					imageDigest: image,
+					verificationRef: "approved-consumers",
+				},
+			});
+			const read = async (claim: { sandboxId: string }, kind: string) =>
+				objects.get(`${kind}/sandbox-${claim.sandboxId}`) ?? null;
+			const proof = (claim: {
+				sandboxId: string;
+				deliveryFence?: number;
+				readFence?: number;
+				executorStartup?: {
+					projection: { podUid: string; hostKeyId: string } | null;
+				} | null;
+			}) => ({
+				scope: {
+					phase: "reserve" as const,
+					reserveRef: `reserve:${claim.sandboxId}`,
+					reserveDeliveryFence: claim.deliveryFence ?? claim.readFence!,
+				},
+				podUid: claim.executorStartup!.projection!.podUid,
+				hostKeyId: claim.executorStartup!.projection!.hostKeyId,
+				runnerEpoch: "original-runner-epoch",
+				generation: 1,
+				resourceFence: 1,
+				issuedAtMs: Date.now(),
+				observedAtMs: Date.now(),
+				expiresAtMs: Date.now() + 20000,
+			});
+			const adapter = {
+				deliverable: async (claim: { sandboxId: string }) =>
+					claim.sandboxId === sandboxId,
+				render: async (claim: Awaited<ReturnType<typeof store.claimLease>>) => {
+					expect(["prepared", "published"]).toContain(
+						claim?.executorStartup?.instance?.phase,
+					);
+					return sessionSandboxReserveResourceKindsV1.map((kind) => ({
+						apiVersion: "v1",
+						kind,
+						metadata: {
+							name: `sandbox-${sandboxId}`,
+							namespace: config.namespace,
+						},
+					}));
+				},
+				read,
+				create: async (
+					_claim: unknown,
+					object: {
+						kind?: string;
+						metadata?: { name?: string; namespace?: string };
+					},
+				) => {
+					const created = {
+						...object,
+						apiVersion: "v1",
+						kind: object.kind!,
+						metadata: {
+							name: object.metadata!.name!,
+							namespace: config.namespace,
+							uid: `uid-${object.kind}`,
+							resourceVersion: "1",
+						},
+					};
+					objects.set(`${created.kind}/${created.metadata.name}`, created);
+					return created;
+				},
+				remove: async (
+					claim: { executorStartup?: { startupRef: string } | null },
+					resource: { kind: string; name: string },
+				) => {
+					expect(
+						objects.has(`Secret/${claim.executorStartup!.startupRef}`),
+					).toBe(false);
+					objects.delete(`${resource.kind}/${resource.name}`);
+					return "acknowledged" as const;
+				},
+				bootstrap: async (claim: Parameters<typeof proof>[0]) => ({
+					bootstrapReady: true,
+					businessStateAbsent: true,
+					instanceEvidence: proof(claim),
+				}),
+				executor: {
+					startup,
+					readInstance: async (claim: Parameters<typeof proof>[0]) =>
+						outcome === "unconsumed" ? null : proof(claim),
+					removeProjection: async (
+						_claim: unknown,
+						resource: { name: string },
+					) => {
+						objects.delete(`Secret/${resource.name}`);
+						return "acknowledged" as const;
+					},
+					readProjection: async (claim: {
+						executorStartup?: { startupRef: string } | null;
+					}) =>
+						objects.get(`Secret/${claim.executorStartup?.startupRef}`) ?? null,
+					projection: async (
+						claim: NonNullable<Awaited<ReturnType<typeof store.claimLease>>>,
+					) => {
+						issued++;
+						const publicKey = Buffer.from("synthetic-public-key").toString(
+							"base64url",
+						);
+						return {
+							intent: {
+								attemptId: claim.executorStartup!.instance!.attemptId,
+								podUid: "uid-Pod",
+								hostKeyId: createHash("sha256").update(publicKey).digest("hex"),
+								hostPublicKey: publicKey,
+								bindingDigest,
+								instanceDelivery: {
+									runnerPublicKey: Buffer.from("synthetic-runner-key").toString(
+										"base64url",
+									),
+									identityDigest: "d".repeat(64),
+								},
+							},
+							resource: {
+								apiVersion: "v1",
+								kind: "Secret",
+								metadata: {
+									name: claim.executorStartup!.startupRef,
+									namespace: config.namespace,
+								},
+								data: { host: "PRIVATE_TEST_MATERIAL" },
+							},
+						};
+					},
+					createProjection: async (
+						claim: NonNullable<Awaited<ReturnType<typeof store.claimLease>>>,
+						object: { metadata?: { name?: string } },
+					) => {
+						published++;
+						expect(
+							(await store.inspect(sandboxId))?.executorStartup?.projection
+								?.create.writeCompletion,
+						).toBe("pending");
+						expect(
+							(await store.inspect(sandboxId))?.executorStartup?.instance
+								?.delivery?.identityDigest,
+						).toBe("d".repeat(64));
+						objects.set(`Secret/${object.metadata?.name}`, {
+							apiVersion: "v1",
+							kind: "Secret",
+							metadata: {
+								name: claim.executorStartup!.startupRef,
+								namespace: config.namespace,
+								uid: "projection-uid",
+								resourceVersion: "1",
+							},
+						});
+						if (outcome === "lost") throw new Error("lost create response");
+						return objects.get(`Secret/${object.metadata?.name}`)!;
+					},
+				},
+			};
+			let timeOffset = 0;
+			const make = (workerStore: typeof store) =>
+				createPlatformSessionReserveWorkerV1({
+					databaseUrl: database.databaseUrl,
+					configuration,
+					now: () => Date.now() + timeOffset,
+					adapter,
+					store: workerStore,
+					workerId: "executor-prepare",
+					pollIntervalMs: 100,
+					leaseDurationMs: 30000,
+				});
+			const first = make(store);
+			await first.reconcile();
+			const before = await store.inspect(sandboxId);
+			if (outcome !== "lost") {
+				expect(before?.status).toBe(
+					outcome === "consumed" ? "ready" : "preparing",
+				);
+				expect(
+					before?.executorStartup?.projection?.create.writeCompletion,
+				).toBe("response");
+				expect(
+					objects.has(`Secret/${before!.executorStartup!.startupRef}`),
+				).toBe(outcome !== "consumed");
+				expect(
+					await sql`select released from platform.session_sandbox_resource_charges where sandbox_id=${sandboxId}`,
+				).toEqual([{ released: false }]);
+				if (outcome === "unconsumed")
+					timeOffset = before!.executorStartup!.deadlineMs - Date.now() + 1;
+				else expect(await store.retire(sandboxId)).toBe(true);
+				await sql`update platform.session_sandbox_reserves set lease_expires_at=clock_timestamp()-interval '1 second' where sandbox_id=${sandboxId}`;
+				expect(await first.reconcile()).toMatchObject({ unavailable: 0 });
+				expect(["retiring", "retired"]).toContain(
+					(await store.inspect(sandboxId))?.status ?? "retired",
+				);
+				// A timeout can only enter retiring on this pass; the following pass performs original cleanup.
+				await sql`update platform.session_sandbox_reserves set lease_expires_at=clock_timestamp()-interval '1 second' where sandbox_id=${sandboxId}`;
+				expect(await first.reconcile()).toMatchObject({ unavailable: 0 });
+				expect(objects.size).toBe(0);
+				expect(
+					await sql`select released from platform.session_sandbox_resource_charges where sandbox_id=${sandboxId}`,
+				).toEqual([{ released: true }]);
+				expect(issued).toBe(1);
+				expect(published).toBe(1);
+				await first.stop();
+				return;
+			}
+			expect(before?.status).toBe("unknown");
+			expect(before?.executorStartup?.projection?.create).toMatchObject({
+				status: "unknown",
+				writeCompletion: "pending",
+			});
+			expect(issued).toBe(1);
+			expect(published).toBe(1);
+			expect(JSON.stringify(before?.executorStartup)).not.toContain(
+				"PRIVATE_TEST_MATERIAL",
+			);
+			await first.stop();
+			await sql`update platform.session_sandbox_reserves set lease_expires_at=clock_timestamp()-interval '1 second' where sandbox_id=${sandboxId}`;
+			const restartedStore = reserves(configuration);
+			const second = make(restartedStore);
+			try {
+				await second.reconcile();
+				expect(issued).toBe(1);
+				expect(published).toBe(1);
+				expect(
+					(await restartedStore.inspect(sandboxId))?.executorStartup,
+				).toEqual(before?.executorStartup);
+				expect(
+					await sql`select released from platform.session_sandbox_resource_charges where sandbox_id=${sandboxId}`,
+				).toEqual([{ released: false }]);
+			} finally {
+				await second.stop();
+			}
+		},
+	);
+
+	it("renews executor readiness only with fresh original-instance proof at the observed reserve fence (#4248 B3b)", async () => {
+		const reserve = await executorPrepared();
+		await consumeAndRemove(reserve);
+		expect(await notReady(reserve)).toBe(true);
+		const snapshot = await reserve.store.inspect(reserve.sandboxId);
+		expect(snapshot?.readFence).toBeTypeOf("number");
+		const evidence = {
+			...(await reserveEvidence(reserve)),
+			scope: {
+				phase: "reserve" as const,
+				reserveRef: `reserve:${reserve.sandboxId}`,
+				reserveDeliveryFence: snapshot!.readFence!,
+			},
+		};
+		expect(await reserve.store.refreshReady(reserve.sandboxId, 60000)).toBe(
+			false,
+		);
+		expect(
+			await reserve.store.refreshReady(reserve.sandboxId, 60000, {
+				readFence: snapshot!.readFence!,
+				instanceEvidence: evidence,
+			}),
+		).toBe(true);
+		for (const patch of [
+			{ runnerEpoch: "another-epoch" },
+			{ expiresAtMs: (await dbNow()) - 1 },
+			{
+				scope: {
+					...evidence.scope,
+					reserveDeliveryFence: evidence.scope.reserveDeliveryFence - 1,
+				},
+			},
+		])
+			expect(
+				await reserve.store.refreshReady(reserve.sandboxId, 60000, {
+					readFence: snapshot!.readFence!,
+					instanceEvidence: { ...evidence, ...patch },
+				}),
+			).toBe(false);
+	});
+
 	it("stays unready until both-role consumption and confirmed projection removal", async () => {
 		const reserve = await executorPrepared();
 		const { store, lease, intent, projection, podUid } = reserve;
@@ -2908,6 +3296,57 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 		return pending;
 	}
 
+	it("commits neither a Pod intent nor a V2 permit when the final grant waits past its database deadline (#4248 B3b)", async () => {
+		const store = reserves();
+		const sandboxId = await store.prepare("agent");
+		const lease = await store.claimLease({
+			sandboxId: sandboxId!,
+			workerId: "expired-pod-grant",
+			leaseDurationMs: 30000,
+		});
+		if (!lease) throw new Error("Missing lease");
+		const started = await store.transitionExecutorReserveInstanceV2(lease, {
+			kind: "prepare",
+			bindingDigest,
+			configurationVersion: "v4",
+			timeoutMs: 1500,
+			approval: {
+				schemaVersion: 2,
+				imageDigest: `registry.test/codex@${imageDigest}`,
+				verificationRef: "approved-v2",
+			},
+		});
+		if (!started) throw new Error("Missing startup");
+		const pending = await blockFinalWrite(
+			"platform.session_sandbox_reserves",
+			"set executor_startup=",
+			started.state.expiresAt,
+			() =>
+				store.transitionExecutorReserveInstanceV2(
+					lease,
+					{
+						kind: "pod-create",
+						attemptId: started.state.attemptId,
+						revision: started.state.revision,
+					},
+					{
+						attemptId: "pod-intent",
+						operation: "create",
+						kind: "Pod",
+						name: `sandbox-${sandboxId}`,
+						status: "pending",
+						resource: null,
+						absent: false,
+					},
+				),
+		);
+		expect(pending).toBeNull();
+		expect((await store.inspect(sandboxId!))?.operations).toEqual([]);
+		expect(
+			(await store.inspect(sandboxId!))?.executorStartup?.instance,
+		).toEqual(started.state);
+	});
+
 	it("refuses a promotion whose evidence expires while the final INSERT waits", async () => {
 		const { reserve, promotion } = await claimedExecutorReserve();
 		const evidence = await claimedEvidence(reserve, {
@@ -3132,4 +3571,179 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 			await record({ status: "ready", executorDrainRequired: true, resources }),
 		).toBe("committed");
 	});
+});
+
+it("persists reserve V2 startup before Pod writes and reads the same immutable facts after Worker restart (#4248 B3b)", async () => {
+	const store = reserves();
+	const sandboxId = await store.prepare("agent");
+	if (!sandboxId) throw new Error("Missing reserve");
+	const lease = await store.claimLease({
+		sandboxId,
+		workerId: "worker-v2",
+		leaseDurationMs: 30000,
+	});
+	if (!lease) throw new Error("Missing lease");
+	const mutation = {
+		kind: "prepare" as const,
+		bindingDigest: "c".repeat(64),
+		configurationVersion: "config-v4",
+		timeoutMs: 60000,
+		approval: {
+			schemaVersion: 2 as const,
+			imageDigest: `registry.test/codex@${imageDigest}`,
+			verificationRef: "verified-consumer-v2",
+		},
+	};
+	const first = await store.transitionExecutorReserveInstanceV2(
+		lease,
+		mutation,
+	);
+	expect(first?.state.phase).toBe("prepared");
+	expect(first?.state.startupRef).toMatch(/^executor-v2-/);
+	const replay = await store.transitionExecutorReserveInstanceV2(lease, {
+		...mutation,
+		timeoutMs: 1000,
+	});
+	expect(replay?.state).toEqual(first?.state);
+	expect(replay?.permit).toBe(false);
+	const restarted = await store.inspect(sandboxId);
+	expect(restarted?.executorStartup).toMatchObject({
+		startupRef: first!.state.startupRef,
+		deadlineMs: first!.state.expiresAt,
+		instance: first!.state,
+	});
+	expect(
+		await store.transitionExecutorReserveInstanceV2(
+			{ ...lease, deliveryFence: lease.deliveryFence + 1 },
+			mutation,
+		),
+	).toBeNull();
+	expect(
+		await store.transitionExecutorReserveInstanceV2(lease, {
+			...mutation,
+			bindingDigest: "d".repeat(64),
+		}),
+	).toBeNull();
+	expect((await store.inspect(sandboxId))?.operations).toEqual([]);
+});
+
+it("binds the V2 projection response to the original Pod attempt, and includes it in rollback inventory (#4248 B3b)", async () => {
+	const store = reserves();
+	const sandboxId = await store.prepare("agent");
+	const lease = await store.claimLease({
+		sandboxId: sandboxId!,
+		workerId: "v2-publication",
+		leaseDurationMs: 30000,
+	});
+	if (!lease) throw new Error("Missing lease");
+	const first = await store.transitionExecutorReserveInstanceV2(lease, {
+		kind: "prepare",
+		bindingDigest: "c".repeat(64),
+		configurationVersion: "v4",
+		timeoutMs: 60000,
+		approval: {
+			schemaVersion: 2,
+			imageDigest: `registry.test/codex@${imageDigest}`,
+			verificationRef: "approved-v2",
+		},
+	});
+	if (!first) throw new Error("Missing startup");
+	expect(
+		await store.transitionExecutorReserveInstanceV2(lease, {
+			kind: "pod-create",
+			attemptId: first.state.attemptId,
+			revision: first.state.revision,
+		}),
+	).toBeNull();
+	const identities = [];
+	let state = first.state;
+	for (const kind of ["Service", "Pod"] as const) {
+		const resource = {
+			kind,
+			name: `sandbox-${sandboxId}`,
+			namespace: config.namespace,
+			uid: `${kind}-original`,
+			resourceVersion: "1",
+		};
+		const operation = {
+			attemptId: `create-${kind}`,
+			operation: "create" as const,
+			kind,
+			name: resource.name,
+			status: "pending" as const,
+			resource: null,
+			absent: false,
+		};
+		if (kind === "Pod") {
+			const pending = await store.transitionExecutorReserveInstanceV2(
+				lease,
+				{
+					kind: "pod-create",
+					attemptId: state.attemptId,
+					revision: state.revision,
+				},
+				operation,
+			);
+			expect(pending?.permit).toBe(true);
+			state = pending!.state;
+		} else expect(await store.recordIntent(lease, operation)).toBe(true);
+		expect(
+			await store.recordCreateResponse(lease, {
+				attemptId: `create-${kind}`,
+				response: "created",
+				resource,
+			}),
+		).toBe(true);
+		identities.push(resource);
+	}
+	const bound = await store.transitionExecutorReserveInstanceV2(lease, {
+		kind: "bind",
+		attemptId: state.attemptId,
+		revision: state.revision,
+		podUid: "Pod-original",
+		resources: identities,
+	});
+	if (!bound) throw new Error("Missing bind");
+	state = bound.state;
+	const hostPublicKey = Buffer.from("public-host").toString("base64url");
+	const intent = {
+		attemptId: state.attemptId,
+		podUid: "Pod-original",
+		hostKeyId: createHash("sha256").update(hostPublicKey).digest("hex"),
+		hostPublicKey,
+		bindingDigest: state.bindingDigest,
+		instanceDelivery: {
+			runnerPublicKey: Buffer.from("public-runner").toString("base64url"),
+			identityDigest: "d".repeat(64),
+		},
+	};
+	expect(
+		await store.recordExecutorProjectionIntent(lease, {
+			...intent,
+			attemptId: "different-attempt",
+		}),
+	).toBe(false);
+	expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(true);
+	const projection = {
+		kind: "Secret" as const,
+		name: state.startupRef,
+		namespace: config.namespace,
+		uid: "original-projection",
+		resourceVersion: "1",
+	};
+	expect(
+		await store.recordExecutorProjectionCreateResponse(lease, {
+			attemptId: intent.attemptId,
+			response: "created",
+			resource: projection,
+		}),
+	).toBe(true);
+	expect(
+		(await store.inspect(sandboxId!))?.executorStartup?.instance,
+	).toMatchObject({ phase: "published", projection });
+	const rollbackModule: string = "./executor-instance-rollback-preflight.mjs";
+	const { readExecutorInstanceRollbackV2 } = await import(rollbackModule);
+	expect(
+		await readExecutorInstanceRollbackV2(sql, config.namespace, 1),
+	).toMatchObject({ compatible: false, instances: 1, active: 1 });
 });

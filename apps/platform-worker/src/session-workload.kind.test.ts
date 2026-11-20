@@ -3,9 +3,17 @@ import { execFile as execFileCallback } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import {
+	codexSessionExecutorAttestationV1,
+	codexSessionExecutorBindingDigestV1,
+	createCodexSessionExecutorBindingV1,
+	issueExecutorStartIdentityV1,
+} from "@agent-infra/agent-runtime";
+import { executorInstanceStartV2 } from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import { transitionExecutorInstanceV2 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
-import { KubeConfig, type V1Pod } from "@kubernetes/client-node";
+import { KubeConfig, type V1Pod, type V1Secret } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
@@ -19,11 +27,16 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
-import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
+import {
+	type SessionSandboxResourceInputV1,
+	sessionSandboxExecutorReserveResourcesV1,
+	sessionSandboxLabelsV1,
+} from "./session-workload-adapter.js";
 import {
 	sessionSandboxDeploymentTokenFixture,
 	sessionSandboxModelProjectionFixture,
 	sessionSandboxRuntimeAuthFixture,
+	sessionSandboxRuntimeInputFixture,
 	sessionSandboxTemplateBindingFixture,
 } from "./test-support/session-sandbox-v4.js";
 import {
@@ -638,4 +651,238 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 			});
 		}
 	}, 600_000);
+
+	it("creates a two-container reserve with its Pod-owned projection and enforces real UID/RV deletion preconditions (#4248 B3b)", async () => {
+		const image = process.env.WORKLOAD_KIND_HOST_IMAGE;
+		const repository = process.env.WORKLOAD_KIND_REPOSITORY;
+		assert(image && repository);
+		const ownNamespace = `${namespace}-reserve`;
+		const config = new KubeConfig();
+		config.loadFromFile(process.env.KUBECONFIG!);
+		config.setCurrentContext(process.env.WORKLOAD_KIND_CONTEXT!);
+		await execFile("kubectl", [
+			...kubeArgs(),
+			"create",
+			"namespace",
+			ownNamespace,
+		]);
+		const client = createWorkerKubernetesClientV1(ownNamespace, config);
+		try {
+			const sandboxId = "reserve-kind";
+			const name = `sandbox-${sandboxId}`;
+			const issuer = generateKeyPairSync("ed25519");
+			const binding = createCodexSessionExecutorBindingV1({
+				namespace: ownNamespace,
+				podName: name,
+				agentId: "agent-kind",
+				conversationId: "session-kind",
+				sessionGeneration: 1,
+				sandboxId,
+				resourceFence: 1,
+				imageDigest: `${repository}@${image}`,
+			});
+			const runtime = sessionSandboxRuntimeInputFixture({
+				agentId: "agent-kind",
+				namespace: ownNamespace,
+				sandboxId,
+				sessionId: "session-kind",
+				imageDigest: image,
+			});
+			const input: SessionSandboxResourceInputV1 = {
+				schemaVersion: 1,
+				agentId: "agent-kind",
+				sessionId: "session-kind",
+				sandboxId,
+				generation: 1,
+				resourceFence: 1,
+				resourceName: name,
+				workspaceScope: sandboxId,
+				namespace: ownNamespace,
+				podName: name,
+				serviceName: name,
+				serviceAccountName: name,
+				pvcName: name,
+				networkPolicyName: name,
+				secretName: name,
+				egress: {},
+				imageDigest: `${repository}@${image}`,
+				authorizedIngressSelector: { component: "dispatcher" },
+				containerPort: 3003,
+				workspaceMountPath: "/workspace",
+				resources: {
+					requests: { cpu: "100m", memory: "128Mi" },
+					limits: { cpu: "1", memory: "1Gi" },
+				},
+				storageSize: "64Mi",
+				desiredState: "running",
+				runtime: {
+					...runtime,
+					grantPublicKey: issuer.publicKey
+						.export({ format: "pem", type: "spki" })
+						.toString(),
+					sessionExecutor: {
+						binding,
+						attestation: codexSessionExecutorAttestationV1(
+							binding,
+							runtime.serviceToken,
+						),
+					},
+				},
+				codexSessionExecutor: {
+					resources: {
+						requests: { cpu: "100m", memory: "128Mi" },
+						limits: { cpu: "1", memory: "1Gi" },
+					},
+				},
+			};
+			const authority = {
+				namespace: ownNamespace,
+				podName: name,
+				sandboxId,
+				generation: 1,
+				resourceFence: 1,
+				configurationRevision: 1,
+				imageDigest: image,
+				now: Date.now(),
+				hasUnresolvedExecution: false,
+				proofVerified: false,
+			};
+			let state = transitionExecutorInstanceV2({
+				state: null,
+				mutation: {
+					kind: "prepare",
+					bindingDigest: codexSessionExecutorBindingDigestV1(binding),
+					configurationVersion: JSON.parse(runtime.modelConfiguration)
+						.configVersion,
+					timeoutMs: 60000,
+					approval: {
+						schemaVersion: 2,
+						imageDigest: input.imageDigest,
+						verificationRef: "kind-consumer-v2",
+					},
+				},
+				authority,
+			})!.state;
+			const startup = {
+				schemaVersion: 1 as const,
+				startupRef: state.startupRef,
+				deadlineMs: state.expiresAt,
+				writer: { owner: "kind-worker", fence: 1 },
+				projection: null,
+				consumption: null,
+				instance: state,
+			};
+			const desired = sessionSandboxExecutorReserveResourcesV1(input, startup);
+			const observed = [];
+			for (const resource of desired)
+				observed.push(await client.create(resource));
+			const pod = observed.find((x) => x.kind === "Pod") as V1Pod;
+			expect(pod.spec?.containers.map((c) => c.name)).toEqual([
+				"runtime",
+				"codex-session-executor",
+			]);
+			expect(
+				pod.spec?.containers
+					.find((c) => c.name === "codex-session-executor")
+					?.volumeMounts?.some((x) => x.name === "runtime-secret"),
+			).toBe(false);
+			state = transitionExecutorInstanceV2({
+				state,
+				mutation: {
+					kind: "pod-create",
+					attemptId: state.attemptId,
+					revision: state.revision,
+				},
+				authority,
+			})!.state;
+			state = transitionExecutorInstanceV2({
+				state,
+				mutation: {
+					kind: "bind",
+					attemptId: state.attemptId,
+					revision: state.revision,
+					podUid: pod.metadata!.uid!,
+					resources: observed
+						.filter((x) => x.kind === "Pod" || x.kind === "Service")
+						.map((x) => ({
+							kind: x.kind as "Pod" | "Service",
+							name,
+							namespace: ownNamespace,
+							uid: x.metadata!.uid!,
+							resourceVersion: x.metadata!.resourceVersion!,
+						})),
+				},
+				authority,
+			})!.state;
+			const material = issueExecutorStartIdentityV1(
+				executorInstanceStartV2(state),
+				issuer.privateKey,
+			);
+			const secret: V1Secret = {
+				apiVersion: "v1",
+				kind: "Secret",
+				type: "Opaque",
+				immutable: true,
+				metadata: {
+					name: state.startupRef,
+					namespace: ownNamespace,
+					ownerReferences: [
+						{ apiVersion: "v1", kind: "Pod", name, uid: pod.metadata!.uid! },
+					],
+				},
+				data: {
+					host: Buffer.from(JSON.stringify(material.host)).toString("base64"),
+					runner: Buffer.from(JSON.stringify(material.runner)).toString(
+						"base64",
+					),
+				},
+			};
+			const created = await client.create(secret);
+			const metadata = await client.readMetadata!("Secret", state.startupRef);
+			expect(metadata?.metadata?.uid).toBe(created.metadata?.uid);
+			expect(metadata).not.toHaveProperty("data");
+			await execFile("kubectl", [
+				...kubeArgs(),
+				"-n",
+				ownNamespace,
+				"annotate",
+				"secret",
+				state.startupRef,
+				"kind-rv=advanced",
+			]);
+			await expect(client.deleteResult!(created)).rejects.toMatchObject({
+				details: { status: 409 },
+			});
+			const advanced = await client.readMetadata!("Secret", state.startupRef);
+			expect(advanced?.metadata?.uid).toBe(created.metadata?.uid);
+			expect(advanced?.metadata?.resourceVersion).not.toBe(
+				created.metadata?.resourceVersion,
+			);
+			expect(
+				await client.deleteResult!({
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: advanced!.metadata,
+				}),
+			).toBe("acknowledged");
+			await eventually(
+				() => client.readMetadata!("Secret", state.startupRef),
+				(value) => value === null,
+			);
+			const replacement = await client.create(secret);
+			expect(replacement.metadata?.uid).not.toBe(created.metadata?.uid);
+			await expect(client.deleteResult!(created)).rejects.toMatchObject({
+				details: { status: 409 },
+			});
+			expect(
+				(await client.readMetadata!("Secret", state.startupRef))?.metadata?.uid,
+			).toBe(replacement.metadata?.uid);
+		} finally {
+			await execFile(
+				"kubectl",
+				[...kubeArgs(), "delete", "namespace", ownNamespace, "--wait=true"],
+				{ timeout: 120000 },
+			);
+		}
+	}, 180000);
 });

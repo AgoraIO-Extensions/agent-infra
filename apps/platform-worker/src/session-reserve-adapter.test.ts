@@ -1,4 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import {
+	createHash,
+	createPrivateKey,
+	generateKeyPairSync,
+	randomUUID,
+	sign,
+} from "node:crypto";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	standardTemplateDefinitionsV1,
@@ -8,6 +14,7 @@ import {
 	type SessionSandboxReserveOperationV1,
 	type SessionSandboxResourceIdentityV1,
 	sessionSandboxReserveDigestV1,
+	transitionExecutorInstanceV2,
 } from "@agent-infra/platform-core";
 import type { SessionSandboxReserveWorkerClaimV1 } from "@agent-infra/platform-store";
 import type { KubernetesObject, V1Pod } from "@kubernetes/client-node";
@@ -21,6 +28,7 @@ import {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import {
+	createSessionSandboxExecutorReservePreparationAdapterV1,
 	createSessionSandboxReserveAdapterV1,
 	createSessionSandboxReserveResourceInputV1,
 } from "./session-reserve-adapter.js";
@@ -102,6 +110,16 @@ function fixture(
 		read: vi.fn(async (kind: string, name: string) =>
 			structuredClone(objects.get(`${kind}/${name}`) ?? null),
 		),
+		readMetadata: vi.fn(async (kind: string, name: string) => {
+			const object = objects.get(`${kind}/${name}`);
+			return object
+				? {
+						apiVersion: object.apiVersion,
+						kind: object.kind,
+						metadata: structuredClone(object.metadata),
+					}
+				: null;
+		}),
 		list: vi.fn(async () => []),
 		create,
 		replace: vi.fn(async () => {
@@ -932,4 +950,537 @@ describe("Session reserve Connection delivery (#4157)", () => {
 		},
 		180_000,
 	);
+});
+
+it("prepares only an approved V2 executor layout at the full resource cost, retaining production Codex rejection (#4248 B3b)", async () => {
+	const issuer = generateKeyPairSync("ed25519");
+	const imageDigest = `sha256:${"1".repeat(64)}`;
+	const f = fixture("codex", {
+		policy: {
+			codexSessionExecutor: executorPolicy,
+			runtimeAuth: {
+				...sessionSandboxRuntimeAuthFixture,
+				grantPublicKey: issuer.publicKey
+					.export({ format: "pem", type: "spki" })
+					.toString(),
+			},
+			executorInstanceStartupApprovals: [
+				{
+					schemaVersion: 2,
+					imageDigest: `registry.example.test/templates/codex@${imageDigest}`,
+					verificationRef: "verified-v2-consumer",
+				},
+			],
+		},
+	});
+	Object.assign(f.claim.profile.resources, {
+		cpuMillis: 1000,
+		memoryBytes: 512 * 1024 ** 2,
+	});
+	const adapter = createSessionSandboxExecutorReservePreparationAdapterV1({
+		...f.options,
+		executorIdentityIssuer: issuer.privateKey,
+		executorDrainStartupTimeoutMs: 60000,
+	});
+	const plan = await adapter.executor!.startup(f.claim);
+	expect(plan).not.toBeNull();
+	const state = transitionExecutorInstanceV2({
+		state: null,
+		mutation: plan!,
+		authority: {
+			namespace: f.claim.profile.policy.namespace,
+			podName: `sandbox-${f.claim.sandboxId}`,
+			sandboxId: f.claim.sandboxId,
+			generation: 1,
+			resourceFence: 1,
+			configurationRevision: 1,
+			imageDigest,
+			now: Date.now(),
+			hasUnresolvedExecution: false,
+			proofVerified: false,
+		},
+	})!.state;
+	Object.assign(f.claim, {
+		executorStartup: {
+			schemaVersion: 1,
+			startupRef: state.startupRef,
+			deadlineMs: state.expiresAt,
+			writer: { owner: f.claim.leaseOwner, fence: f.claim.deliveryFence },
+			instance: state,
+			projection: null,
+			consumption: null,
+		},
+	});
+	const rendered = await adapter.render(f.claim);
+	const pod = rendered.find((r) => r.kind === "Pod") as V1Pod;
+	expect(pod.spec?.containers).toHaveLength(2);
+	expect(
+		pod.spec?.volumes?.find((v) => v.name === "executor-bootstrap")?.secret
+			?.secretName,
+	).toBe(state.startupRef);
+	expect(
+		pod.metadata?.annotations?.[
+			"agent-infra.agora.io/executor-startup-deadline"
+		],
+	).toBe(String(state.expiresAt));
+	expect(JSON.stringify(rendered)).not.toContain(
+		sessionSandboxDeploymentTokenFixture,
+	);
+	const runner = pod.spec?.containers.find(
+		(c) => c.name === "codex-session-executor",
+	);
+	expect(
+		runner?.volumeMounts?.some(
+			(v) => v.name === "runtime-secret" || v.name === "executor-identity-host",
+		),
+	).toBe(false);
+	await expect(f.adapter.render(f.claim)).rejects.toMatchObject({
+		code: "policy",
+	});
+	const cost = f.claim.profile.resources.cpuMillis;
+	Object.assign(f.claim.profile.resources, { cpuMillis: 100 });
+	await expect(adapter.render(f.claim)).rejects.toMatchObject({
+		code: "policy",
+	});
+	Object.assign(f.claim.profile.resources, { cpuMillis: cost });
+	Object.assign(f.options.workload.policy, {
+		executorInstanceStartupApprovals: [],
+	});
+	await expect(adapter.render(f.claim)).rejects.toMatchObject({
+		code: "policy",
+	});
+});
+
+async function executorPublicationFixture() {
+	const issuer = generateKeyPairSync("ed25519");
+	const f = fixture("codex", {
+		policy: {
+			codexSessionExecutor: executorPolicy,
+			runtimeAuth: {
+				...sessionSandboxRuntimeAuthFixture,
+				grantPublicKey: issuer.publicKey
+					.export({ format: "pem", type: "spki" })
+					.toString(),
+			},
+			executorInstanceStartupApprovals: [
+				{
+					schemaVersion: 2,
+					imageDigest: `registry.example.test/templates/codex@${"sha256:" + "1".repeat(64)}`,
+					verificationRef: "verified-v2",
+				},
+			],
+		},
+	});
+	Object.assign(f.claim.profile.resources, {
+		cpuMillis: 1000,
+		memoryBytes: 512 * 1024 ** 2,
+	});
+	const adapter = createSessionSandboxExecutorReservePreparationAdapterV1({
+		...f.options,
+		executorIdentityIssuer: issuer.privateKey,
+		executorDrainStartupTimeoutMs: 60000,
+	});
+	const authority = {
+		namespace: f.claim.profile.policy.namespace,
+		podName: `sandbox-${f.claim.sandboxId}`,
+		sandboxId: f.claim.sandboxId,
+		generation: 1,
+		resourceFence: 1,
+		configurationRevision: 1,
+		imageDigest: f.claim.profile.policy.imageDigest,
+		now: Date.now(),
+		hasUnresolvedExecution: false,
+		proofVerified: false,
+	};
+	let state = required(
+		transitionExecutorInstanceV2({
+			state: null,
+			mutation: required(await adapter.executor!.startup(f.claim)),
+			authority,
+		}),
+	).state;
+	const startup = {
+		schemaVersion: 1 as const,
+		startupRef: state.startupRef,
+		deadlineMs: state.expiresAt,
+		writer: { owner: f.claim.leaseOwner, fence: f.claim.deliveryFence },
+		instance: state,
+		projection: null,
+		consumption: null,
+	};
+	Object.assign(f.claim, { executorStartup: startup });
+	const resources: KubernetesObject[] = [];
+	for (const object of await adapter.render(f.claim)) {
+		if (object.kind === "Pod") {
+			state = required(
+				transitionExecutorInstanceV2({
+					state,
+					mutation: {
+						kind: "pod-create",
+						attemptId: state.attemptId,
+						revision: state.revision,
+					},
+					authority,
+				}),
+			).state;
+			Object.assign(startup, { instance: state });
+		}
+		const current = await adapter.create(f.claim, object);
+		resources.push(current);
+		(f.claim.operations as SessionSandboxReserveOperationV1[]).push({
+			attemptId: randomUUID(),
+			operation: "create",
+			kind: current.kind as SessionSandboxReserveOperationV1["kind"],
+			name: required(current.metadata?.name),
+			status: "confirmed",
+			writeCompletion: "response",
+			writer: startup.writer,
+			resource: f.identity(current),
+			absent: false,
+		});
+	}
+	const pod = required(resources.find((x) => x.kind === "Pod"));
+	state = required(
+		transitionExecutorInstanceV2({
+			state,
+			mutation: {
+				kind: "bind",
+				attemptId: state.attemptId,
+				revision: state.revision,
+				podUid: required(pod.metadata?.uid),
+				resources: resources
+					.filter((x) => x.kind === "Pod" || x.kind === "Service")
+					.map((x) => ({
+						...f.identity(x),
+						kind: x.kind as "Pod" | "Service",
+					})),
+			},
+			authority,
+		}),
+	).state;
+	Object.assign(startup, { instance: state });
+	const publication = await adapter.executor!.projection(f.claim, pod);
+	state = required(
+		transitionExecutorInstanceV2({
+			state,
+			mutation: {
+				kind: "delivery",
+				attemptId: state.attemptId,
+				revision: state.revision,
+				hostPublicKey: publication.intent.hostPublicKey,
+				...publication.intent.instanceDelivery!,
+			},
+			authority,
+		}),
+	).state;
+	Object.assign(startup, {
+		instance: state,
+		projection: {
+			podUid: required(pod.metadata?.uid),
+			hostKeyId: publication.intent.hostKeyId,
+			hostPublicKey: publication.intent.hostPublicKey,
+			bindingDigest: publication.intent.bindingDigest,
+			create: {
+				attemptId: state.attemptId,
+				status: "pending",
+				resource: null,
+				absent: false,
+				writeCompletion: "pending",
+				writer: startup.writer,
+			},
+			deletes: [],
+		},
+	});
+	return { ...f, adapter, publication, resources };
+}
+
+it("publishes role-separated V2 inputs only once and deletes only the original projection UID/current RV (#4248 B3b)", async () => {
+	const f = await executorPublicationFixture();
+	const port = f.adapter.executor!;
+	const projection = f.claim.executorStartup!.projection!;
+	const material = f.publication
+		.resource as import("@kubernetes/client-node").V1Secret;
+	expect(Object.keys(material.data!).sort()).toEqual(["host", "runner"]);
+	const host = JSON.parse(
+		Buffer.from(material.data!.host!, "base64").toString(),
+	);
+	const runner = JSON.parse(
+		Buffer.from(material.data!.runner!, "base64").toString(),
+	);
+	expect(host.privateKey).not.toBe(runner.privateKey);
+	expect(host.statement.instance.recordRef).toBe(
+		f.claim.executorStartup!.instance!.recordRef,
+	);
+	expect(JSON.stringify(material)).not.toContain(
+		sessionSandboxDeploymentTokenFixture,
+	);
+	const created = await port.createProjection(f.claim, material);
+	expect(f.create).toHaveBeenCalledTimes(7);
+	await expect(port.createProjection(f.claim, material)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	Object.assign(projection.create, {
+		status: "confirmed",
+		writeCompletion: "response",
+		resource: f.identity(created),
+	});
+	await expect(port.createProjection(f.claim, material)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	const secret = required(f.objects.get(`Secret/${material.metadata!.name}`));
+	secret.metadata!.resourceVersion = "2";
+	const old = f.identity(created);
+	const current = f.identity(secret);
+	(projection.deletes as unknown[]).push({
+		attemptId: "delete-1",
+		status: "pending",
+		writeCompletion: "pending",
+		resource: old,
+		absent: false,
+		writer: { owner: f.claim.leaseOwner, fence: f.claim.deliveryFence },
+	});
+	await expect(port.removeProjection(f.claim, old)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	expect(f.remove).not.toHaveBeenCalled();
+	Object.assign(projection.deletes[0]!, { resource: current });
+	expect(await port.removeProjection(f.claim, current)).toBe("acknowledged");
+	expect(await port.readProjection(f.claim)).toBeNull();
+	f.objects.set(`Secret/${material.metadata!.name}`, {
+		...created,
+		metadata: { ...created.metadata, uid: "replacement-uid" },
+	});
+	await expect(port.readProjection(f.claim)).rejects.toMatchObject({
+		code: "conflict",
+	});
+	expect(f.remove).toHaveBeenCalledTimes(1);
+});
+
+it("rejects foreign role material, subjects, expired starts and unconfirmed creates without publishing (#4248 B3b)", async () => {
+	const f = await executorPublicationFixture();
+	const port = f.adapter.executor!;
+	const material = structuredClone(
+		f.publication.resource,
+	) as import("@kubernetes/client-node").V1Secret;
+	material.data!.host = required(material.data!.runner);
+	await expect(port.createProjection(f.claim, material)).rejects.toThrow();
+	await expect(
+		port.projection(
+			{ ...f.claim, principal: { userId: "foreign" } } as typeof f.claim,
+			f.resources.find((x) => x.kind === "Pod")!,
+		),
+	).rejects.toThrow();
+	const startup = f.claim.executorStartup!;
+	const expired = {
+		...f.claim,
+		executorStartup: {
+			...startup,
+			deadlineMs: Date.now() - 1,
+			instance: { ...startup.instance!, expiresAt: Date.now() - 1 },
+		},
+	};
+	await expect(
+		port.createProjection(expired, f.publication.resource),
+	).rejects.toThrow();
+	expect(f.create).toHaveBeenCalledTimes(6);
+	const response = await f.adapter.bootstrap(f.claim, f.resources);
+	expect(response).toMatchObject({
+		bootstrapReady: false,
+		businessStateAbsent: false,
+	});
+	expect(f.fetch).not.toHaveBeenCalled();
+});
+
+it("bootstraps only from both original containers, fixed checks and fresh pinned Host evidence (#4248 B3b)", async () => {
+	const f = await executorPublicationFixture();
+	const projection = f.claim.executorStartup!.projection!;
+	const material = f.publication
+		.resource as import("@kubernetes/client-node").V1Secret;
+	const host = JSON.parse(
+		Buffer.from(material.data!.host!, "base64").toString(),
+	);
+	const signingKey = createPrivateKey({
+		key: Buffer.from(host.privateKey, "base64url"),
+		format: "der",
+		type: "pkcs8",
+	});
+	const created = await f.adapter.executor!.createProjection(f.claim, material);
+	Object.assign(projection.create, {
+		status: "confirmed",
+		writeCompletion: "response",
+		resource: f.identity(created),
+	});
+	f.objects.delete(`Secret/${f.claim.executorStartup!.startupRef}`);
+	const pod = f.objects.get(`Pod/sandbox-${f.claim.sandboxId}`) as V1Pod;
+	const digest = f.claim.profile.policy.imageDigest;
+	pod.status = {
+		phase: "Running",
+		podIP: "10.0.0.9",
+		conditions: [{ type: "Ready", status: "True" }],
+		containerStatuses: ["runtime", "codex-session-executor"].map((name) => ({
+			name,
+			image: digest,
+			imageID: `docker-pullable://runtime@${digest}`,
+			ready: true,
+			restartCount: 0,
+			state: { running: { startedAt: new Date() } },
+		})),
+		initContainerStatuses: [
+			{
+				name: "codex-session-workspace-init",
+				image: digest,
+				imageID: `docker-pullable://runtime@${digest}`,
+				ready: false,
+				restartCount: 0,
+				state: { terminated: { exitCode: 0 } },
+			},
+		],
+	};
+	const name = pod.metadata!.name!;
+	const namespace = pod.metadata!.namespace!;
+	const endpoints = {
+		apiVersion: "v1",
+		kind: "Endpoints",
+		metadata: { name, namespace },
+		subsets: [
+			{
+				addresses: [
+					{
+						ip: pod.status.podIP,
+						targetRef: { kind: "Pod", name, namespace, uid: pod.metadata!.uid },
+					},
+				],
+				ports: [{ port: f.claim.deployment!.service.port, protocol: "TCP" }],
+			},
+		],
+	};
+	f.objects.set(`Endpoints/${name}`, endpoints);
+	let driftDuringRead = false;
+	f.fetch.mockImplementation(async (_url, init) => {
+		const { authorization, ...request } = JSON.parse(init!.body as string);
+		const grant = JSON.parse(
+			Buffer.from(authorization.split(".")[1], "base64url").toString(),
+		);
+		const body = {
+			...request,
+			requestDigest: grant.requestDigest,
+			hostKeyId: projection.hostKeyId,
+			runnerEpoch: "123e4567-e89b-42d3-a456-426614174099",
+			observedAt: Date.now(),
+			expiresAt: Date.now() + 5000,
+			checks: {
+				hostIdentityConsumed: true,
+				runnerIdentityConsumed: true,
+				deliveryFilesRemoved: true,
+				executorReady: true,
+				emptyBusinessState: true,
+			},
+		};
+		const header = Buffer.from(
+			JSON.stringify({
+				alg: "EdDSA",
+				kid: projection.hostKeyId,
+				typ: "session-instance-evidence-v1",
+			}),
+		).toString("base64url");
+		const payload = Buffer.from(
+			JSON.stringify({
+				...body,
+				purpose: "session-instance-evidence-v1",
+				audience: request.workerId,
+			}),
+		).toString("base64url");
+		const bytes = `${header}.${payload}`;
+		if (driftDuringRead) pod.metadata!.uid = "replacement-pod";
+		return new Response(
+			JSON.stringify({
+				...body,
+				signature: `${bytes}.${sign(null, Buffer.from(bytes), signingKey).toString("base64url")}`,
+			}),
+			{ headers: { "content-type": "application/json" } },
+		);
+	});
+	expect(await f.adapter.bootstrap(f.claim, f.resources)).toMatchObject({
+		bootstrapReady: true,
+		businessStateAbsent: true,
+	});
+	for (const mutate of [
+		() => {
+			pod.status!.containerStatuses![1]!.ready = false;
+		},
+		() => {
+			pod.status!.containerStatuses![1]!.imageID =
+				`runtime@sha256:${"f".repeat(64)}`;
+		},
+		() => {
+			pod.status!.containerStatuses![1]!.restartCount = 1;
+		},
+		() => {
+			pod.status!.initContainerStatuses![0]!.state = { running: {} };
+		},
+		() => {
+			endpoints.subsets[0]!.addresses[0]!.targetRef.uid = "foreign-pod";
+		},
+	]) {
+		const originalStatus: V1Pod["status"] = structuredClone(pod.status);
+		const originalEndpoint = endpoints.subsets[0]!.addresses[0]!.targetRef.uid;
+		mutate();
+		expect(await f.adapter.bootstrap(f.claim, f.resources)).toMatchObject({
+			bootstrapReady: false,
+		});
+		pod.status = originalStatus;
+		endpoints.subsets[0]!.addresses[0]!.targetRef.uid = originalEndpoint;
+	}
+	const fetched = f.fetch.mock.calls.length;
+	f.objects.set(`Secret/${f.claim.executorStartup!.startupRef}`, created);
+	expect(await f.adapter.bootstrap(f.claim, f.resources)).toMatchObject({
+		bootstrapReady: false,
+	});
+	expect(f.fetch).toHaveBeenCalledTimes(fetched);
+	f.objects.delete(`Secret/${f.claim.executorStartup!.startupRef}`);
+	driftDuringRead = true;
+	expect(await f.adapter.bootstrap(f.claim, f.resources)).toMatchObject({
+		bootstrapReady: false,
+	});
+});
+
+it("never mutates a claimed reserve through the preparation seam (#4248 B3b)", async () => {
+	const f = await executorPublicationFixture();
+	const port = f.adapter.executor!;
+	const claimed = { ...f.claim, status: "claimed" as const };
+	const resource = f.resources[0]!;
+	for (const action of [
+		() => f.adapter.create(claimed, resource),
+		() => f.adapter.remove(claimed, f.identity(resource)),
+		() => port.startup(claimed),
+		() => port.projection(claimed, f.resources.find((x) => x.kind === "Pod")!),
+		() => port.createProjection(claimed, f.publication.resource),
+		() => port.removeProjection(claimed, f.identity(resource)),
+	])
+		await expect(action()).rejects.toThrow();
+	expect(f.create).toHaveBeenCalledTimes(6);
+	expect(f.remove).not.toHaveBeenCalled();
+});
+
+it("rejects missing V2 approvals at preparation assembly before any lease or write (#4248 B3b)", () => {
+	const issuer = generateKeyPairSync("ed25519");
+	const f = fixture("codex", {
+		policy: {
+			codexSessionExecutor: executorPolicy,
+			runtimeAuth: {
+				...sessionSandboxRuntimeAuthFixture,
+				grantPublicKey: issuer.publicKey
+					.export({ format: "pem", type: "spki" })
+					.toString(),
+			},
+		},
+	});
+	expect(() =>
+		createSessionSandboxExecutorReservePreparationAdapterV1({
+			...f.options,
+			executorIdentityIssuer: issuer.privateKey,
+			executorDrainStartupTimeoutMs: 60000,
+		}),
+	).toThrow("WORKER_EXECUTOR_V2_APPROVALS_REQUIRED");
+	expect(f.create).not.toHaveBeenCalled();
 });

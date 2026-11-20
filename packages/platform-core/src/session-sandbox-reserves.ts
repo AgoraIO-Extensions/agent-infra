@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ExecutorInstanceStateV2 } from "./executor-instance-types.js";
 import type {
 	SessionSandboxResourceIdentityV1,
 	SessionSandboxVerifiedPolicyV1,
@@ -147,7 +148,9 @@ export interface SessionSandboxReserveProjectionWriteV1 {
  */
 export interface SessionSandboxReserveExecutorStartupV1 {
 	readonly schemaVersion: 1;
-	/** Equals the projection Secret name: `<podName>-executor-<resourceFence>`. */
+	/** Original reserve-owned V2 ledger; no Conversation/allocation is invented. */
+	readonly instance?: ExecutorInstanceStateV2;
+	/** Original projection Secret name; V2 uses the immutable instance startup ref, legacy rows retain the Pod/fence ref. */
 	readonly startupRef: string;
 	/** Absolute deadline taken from the database clock before the Pod create. */
 	readonly deadlineMs: number;
