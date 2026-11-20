@@ -184,6 +184,7 @@ beforeAll(async () => {
 		{ idx: 86, tag: "0086_workload_certificate_reconciliation" },
 		{ idx: 87, tag: "0087_operations_request_inventory" },
 		{ idx: 88, tag: "0088_session_workspace_reclamation_read" },
+		{ idx: 89, tag: "0089_operations_outbox_scope" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
