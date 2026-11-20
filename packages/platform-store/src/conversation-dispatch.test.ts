@@ -2816,6 +2816,18 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 								},
 							});
 						}
+						await client`insert into platform.outbox_items
+							(id,scope_type,scope_id,operation,payload,status,trace_id)
+							select id || ':ambiguous',scope_type,scope_id,operation,payload,status,trace_id
+							from platform.outbox_items where id=${request.itemId}`;
+						expect(await readRequests()).toMatchObject({
+							sessionUsage: {
+								cpuCores: null,
+								memoryBytes: null,
+								storageBytes: 8192,
+							},
+						});
+						await client`delete from platform.outbox_items where id=${`${request.itemId}:ambiguous`}`;
 						for (const [path, value] of [
 							[["lifecycle", "stopReceipt", "sourceResourceFence"], 999],
 							[["lifecycle", "authority", "managementFence"], 999],

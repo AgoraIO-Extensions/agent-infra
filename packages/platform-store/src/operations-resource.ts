@@ -334,11 +334,17 @@ export class PostgresOperationsResourceStoreV2 {
 				inherited_lifecycle: SessionSandboxLifecycleV1 | null;
 				settled_at: Date;
 			}[]
-		>`select a.agent_id, coalesce(app.name, a.agent_id) as name, a.conversation_id, a.sandbox_id,
+		>`with candidates as materialized (
+			select * from platform.session_sandbox_allocations
+			where resource_policy->>'namespace'=${this.#scope.namespace}
+				or nullif(resource_policy->>'namespace','') is null
+			limit 10001
+		)
+			select a.agent_id, coalesce(app.name, a.agent_id) as name, a.conversation_id, a.sandbox_id,
 			a.session_generation, a.resource_fence, a.desired_state, a.status, a.resource_name, a.updated_at as settled_at, a.actor_id, a.principal_type, a.channel_id,
 			(agent.id is not null and c.id is not null) as identity_verified, a.resource_policy, a.resource_observation,
 			${includeSessionRequests ? this.#sql`intent.payload->'lifecycle'` : this.#sql`null`} as inherited_lifecycle
-			from platform.session_sandbox_allocations a
+			from candidates a
 			left join platform.agents agent on agent.id=a.agent_id
 			left join platform.conversations c on c.id=a.conversation_id and c.agent_id=a.agent_id
 			and c.actor_id=a.actor_id and c.principal_type=a.principal_type and c.channel_id=a.channel_id
@@ -347,12 +353,16 @@ export class PostgresOperationsResourceStoreV2 {
 			${
 				includeSessionRequests
 					? this.#sql`
-			left join (
-				select scope_id, min(id) as id from platform.outbox_items
-				where scope_type='conversation' and operation='conversation.sandbox.reconcile.v1'
-				group by scope_id having count(*)=1
-			) original on original.scope_id=a.conversation_id and a.status='stopped' and a.desired_state='stopped'
-				and a.resource_observation->'sourceStop'->>'targetResourceFence' <> a.resource_fence::text
+			left join lateral (
+				select min(id) as id from (
+					select id from platform.outbox_items
+					where scope_type='conversation' and scope_id=a.conversation_id
+						and operation='conversation.sandbox.reconcile.v1'
+						and a.status='stopped' and a.desired_state='stopped'
+						and a.resource_observation->'sourceStop'->>'targetResourceFence' <> a.resource_fence::text
+					order by id limit 2
+				) matches having count(*)=1
+			) original on true
 			left join platform.outbox_items intent on intent.id=original.id
 				and intent.status='succeeded' and intent.lease_owner is null and intent.lease_expires_at is null
 				and intent.payload->'schemaVersion'='1'::jsonb
@@ -370,8 +380,7 @@ export class PostgresOperationsResourceStoreV2 {
 			`
 					: this.#sql``
 			}
-			where a.resource_policy->>'namespace'=${this.#scope.namespace}
-			or nullif(a.resource_policy->>'namespace','') is null limit 10001`;
+			`;
 		if (rows.length > 10000) throw new Error("Operations bindings unavailable");
 		const scoped = rows.filter(
 			(row) => row.resource_policy?.namespace === this.#scope.namespace,
