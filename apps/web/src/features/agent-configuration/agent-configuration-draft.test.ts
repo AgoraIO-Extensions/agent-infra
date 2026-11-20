@@ -2,11 +2,15 @@ import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
 import {
+	AgentConfigurationScopeConflictError,
+	agentConfigurationApplicationScopeConflict,
 	agentConfigurationApplicationsChanged,
 	agentConfigurationDraftChanged,
+	applicationScopeDraft,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 	configurationKeyError,
+	scopePeopleDraft,
 } from "./agent-configuration-draft.js";
 
 const agent = AgentProjectionV2Schema.parse({
@@ -55,6 +59,81 @@ const agent = AgentProjectionV2Schema.parse({
 });
 
 describe("Agent configuration draft", () => {
+	it("takes people and applications from the same scope read so a removed person is never restored (#4308 PR-Agent mixed snapshot)", () => {
+		// The Agent projection was read before another Owner removed organization-1;
+		// the whole scope read arrived afterwards at revision 8.
+		const newerScope = {
+			schemaVersion: 1 as const,
+			agentId: agent.agentId,
+			managementRevision: 8,
+			availability: [{ kind: "user" as const, userId: "user-reader-1" }],
+		};
+		const draft = configurationDraftFromAgent(agent, newerScope);
+		const request = buildAgentConfigurationRequest(
+			{ ...draft, applicationAvailabilityIds: "app-1" },
+			agent,
+		);
+		expect(request).toEqual(
+			expect.objectContaining({
+				schemaVersion: 5,
+				expectedManagementRevision: 8,
+				availability: [
+					{ kind: "user", userId: "user-reader-1" },
+					{ kind: "application", applicationId: "app-1" },
+				],
+			}),
+		);
+	});
+
+	it("refuses a whole-scope save when edited people cannot be tied to the scope read (#4308 PR-Agent mixed snapshot)", () => {
+		const newerScope = {
+			schemaVersion: 1 as const,
+			agentId: agent.agentId,
+			managementRevision: 8,
+			availability: [{ kind: "user" as const, userId: "user-reader-1" }],
+		};
+		// The scope arrives after the Owner already edited people on the older projection.
+		const projectionDraft = configurationDraftFromAgent(agent);
+		const peopleEdited = {
+			...projectionDraft,
+			userAvailabilityIds: "user-reader-1\nuser-reader-2",
+		};
+		const merged = {
+			...peopleEdited,
+			...applicationScopeDraft(agent, newerScope),
+			...scopePeopleDraft(peopleEdited, newerScope),
+		};
+		// The edit is kept; nothing silently replaces it.
+		expect(merged.userAvailabilityIds).toBe("user-reader-1\nuser-reader-2");
+		expect(merged.organizationAvailabilityIds).toBe("organization-1");
+		const withApplication = { ...merged, applicationAvailabilityIds: "app-1" };
+		expect(agentConfigurationApplicationScopeConflict(withApplication)).toBe(
+			true,
+		);
+		expect(() =>
+			buildAgentConfigurationRequest(withApplication, agent),
+		).toThrow(AgentConfigurationScopeConflictError);
+		// Without an application edit the save stays a people-only V2 update.
+		expect(agentConfigurationApplicationScopeConflict(merged)).toBe(false);
+		expect(buildAgentConfigurationRequest(merged, agent).schemaVersion).toBe(2);
+		// Unedited people follow the scope read, so the application edit is safe.
+		const unedited = {
+			...projectionDraft,
+			...applicationScopeDraft(agent, newerScope),
+			...scopePeopleDraft(projectionDraft, newerScope),
+			applicationAvailabilityIds: "app-1",
+		};
+		expect(agentConfigurationApplicationScopeConflict(unedited)).toBe(false);
+		expect(buildAgentConfigurationRequest(unedited, agent)).toMatchObject({
+			schemaVersion: 5,
+			expectedManagementRevision: 8,
+			availability: [
+				{ kind: "user", userId: "user-reader-1" },
+				{ kind: "application", applicationId: "app-1" },
+			],
+		});
+	});
+
 	it("never sends an application replacement from a stale scope the Owner did not edit (#4308 Review2 MUST)", () => {
 		// Tab A read the whole scope at management revision 3, before tab B added applications.
 		const staleScope = {

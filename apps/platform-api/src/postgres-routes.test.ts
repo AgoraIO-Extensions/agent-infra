@@ -39,6 +39,13 @@ import { serve } from "@hono/node-server";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+// The #4308 mixed-snapshot regression drives the actual Web draft builder; its
+// only alias import is a pure text helper.
+vi.mock(
+	"@/lib/cjk-spacing",
+	async () => import("../../web/src/lib/cjk-spacing.ts"),
+);
+
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -203,6 +210,7 @@ beforeAll(async () => {
 				"agent-admin-out-of-scope",
 				"agent-app-scope",
 				"agent-app-stale",
+				"agent-app-mixed",
 			].map((agentId) => ({
 				agentId,
 				owner: "owner" as const,
@@ -489,25 +497,30 @@ beforeAll(async () => {
 										applicationId: "application-app-stale",
 										agentId: "agent-app-stale",
 									}
-								: idempotencyKey === "create-owner-status"
+								: idempotencyKey === "create-app-mixed"
 									? {
-											applicationId: "application-owner-status",
-											agentId: "agent-owner-status",
+											applicationId: "application-app-mixed",
+											agentId: "agent-app-mixed",
 										}
-									: idempotencyKey === "create-owner-status-other"
+									: idempotencyKey === "create-owner-status"
 										? {
-												applicationId: "application-owner-status-other",
-												agentId: "agent-owner-status-other",
+												applicationId: "application-owner-status",
+												agentId: "agent-owner-status",
 											}
-										: idempotencyKey === "create-admin-out-of-scope"
+										: idempotencyKey === "create-owner-status-other"
 											? {
-													applicationId: "application-admin-out-of-scope",
-													agentId: "agent-admin-out-of-scope",
+													applicationId: "application-owner-status-other",
+													agentId: "agent-owner-status-other",
 												}
-											: {
-													applicationId: "application-run",
-													agentId: "agent-run",
-												};
+											: idempotencyKey === "create-admin-out-of-scope"
+												? {
+														applicationId: "application-admin-out-of-scope",
+														agentId: "agent-admin-out-of-scope",
+													}
+												: {
+														applicationId: "application-run",
+														agentId: "agent-run",
+													};
 			},
 			prepareSecretReplacements: async () => ({ secrets: [] }),
 			readApplicationProjection: projectionReaders.readApplicationProjection,
@@ -1452,6 +1465,115 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			).status,
 		).toBe(200);
 		expect(await applicationRows()).toEqual(["app-stale-1"]);
+	});
+
+	it("never restores a removed person when the Web draft pairs an older Agent projection with a newer scope (#4308 PR-Agent mixed snapshot)", async () => {
+		// A computed specifier keeps the Web module (and its "@" alias) out of this
+		// package's type check; Vitest still runs the real builder.
+		const webDraftModule = new URL(
+			"../../web/src/features/agent-configuration/agent-configuration-draft.ts",
+			import.meta.url,
+		).pathname;
+		const { buildAgentConfigurationRequest, configurationDraftFromAgent } =
+			(await import(/* @vite-ignore */ webDraftModule)) as {
+				configurationDraftFromAgent(
+					agent: unknown,
+					scope: unknown,
+				): Record<string, unknown>;
+				buildAgentConfigurationRequest(
+					draft: Record<string, unknown>,
+					agent: unknown,
+				): object;
+			};
+		await database`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values ('app-mixed-1', 'Mixed app', ${identities.owner.userId}, 'active', 'app-mixed-1')
+			on conflict (id) do nothing
+		`;
+		expect(
+			(
+				await app.request("/api/v2/agent-applications", {
+					method: "POST",
+					headers: {
+						...requestHeaders("owner", "create-app-mixed"),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ ...applicationBody, name: "App mixed" }),
+				})
+			).status,
+		).toBe(201);
+		expect(
+			(
+				await app.request(
+					"/api/v2/admin/agent-applications/application-app-mixed/decision",
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders("admin", "approve-app-mixed"),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+					},
+				)
+			).status,
+		).toBe(200);
+		const put = (key: string, body: object) =>
+			app.request("/api/v2/agents/agent-app-mixed/configuration", {
+				method: "PUT",
+				headers: {
+					...requestHeaders("owner", key),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(body),
+			});
+		const owner = { kind: "user", userId: identities.owner.userId };
+		const organization = { kind: "organization", organizationId: "org-1" };
+		expect(
+			(
+				await put("app-mixed-people", {
+					schemaVersion: 2,
+					availability: [owner, organization],
+				})
+			).status,
+		).toBe(200);
+		// Tab A reads the Agent projection while org-1 is still in scope.
+		const agentA = AgentProjectionV2Schema.parse(
+			await (
+				await app.request("/api/v2/agents/agent-app-mixed", {
+					headers: requestHeaders("owner"),
+				})
+			).json(),
+		);
+		expect(agentA.configuration.availability).toContainEqual(organization);
+		// Another Owner removes org-1.
+		expect(
+			(
+				await put("app-mixed-remove", {
+					schemaVersion: 2,
+					availability: [owner],
+				})
+			).status,
+		).toBe(200);
+		// Tab A's whole scope read arrives after the removal, with the newer revision.
+		const scopeA = await (
+			await app.request(
+				"/api/v2/agents/agent-app-mixed/configuration/availability",
+				{ headers: requestHeaders("owner") },
+			)
+		).json();
+		const draft = configurationDraftFromAgent(agentA, scopeA);
+		const edited = { ...draft, applicationAvailabilityIds: "app-mixed-1" };
+		const body = buildAgentConfigurationRequest(edited, agentA);
+		expect((await put("app-mixed-save", body)).status).toBe(200);
+		const rows = await database<{ target_type: string; target_id: string }[]>`
+			select target_type::text, target_id from platform.agent_availability
+			where agent_id = 'agent-app-mixed' order by target_type::text, target_id
+		`.then((result) => result.map((row) => ({ ...row })));
+		expect(rows).toEqual([
+			{ target_type: "application", target_id: "app-mixed-1" },
+			{ target_type: "user", target_id: identities.owner.userId },
+		]);
 	});
 
 	it("projects current Owner status on the Agent detail without crossing Agent visibility (#2910)", async () => {

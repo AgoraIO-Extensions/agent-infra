@@ -246,6 +246,32 @@ describe("AgentConfigurationScreen", () => {
 		expect(document.activeElement).not.toBe(document.body);
 	});
 
+	it("never pairs older people entries with a newer scope revision (#4308 PR-Agent mixed snapshot)", () => {
+		const people = agent.configuration.availability;
+		expect(people.length).toBeGreaterThan(0);
+		const { onSave, rerender } = renderScreen();
+		// The whole scope arrives after another Owner removed every person entry.
+		rerender({
+			availabilityScope: {
+				schemaVersion: 1,
+				agentId: agent.agentId,
+				managementRevision: 9,
+				availability: [],
+			},
+		});
+		fireEvent.change(
+			screen.getByLabelText<HTMLTextAreaElement>("可使用的独立应用"),
+			{ target: { value: "app-1" } },
+		);
+		fireEvent.click(saveButton());
+		expect(onSave).toHaveBeenCalledTimes(1);
+		expect(onSave.mock.lastCall?.[0]).toMatchObject({
+			schemaVersion: 5,
+			expectedManagementRevision: 9,
+			availability: [{ kind: "application", applicationId: "app-1" }],
+		});
+	});
+
 	it("refreshes unedited application entries from a reread and keeps a real edit bound to its read (#4308)", () => {
 		const scope = (managementRevision: number, applicationIds: string[]) => ({
 			schemaVersion: 1 as const,

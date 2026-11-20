@@ -27,6 +27,7 @@ import {
 } from "./agent-configuration.js";
 import {
 	type AgentConfigurationRequest,
+	agentConfigurationApplicationScopeConflict,
 	agentConfigurationApplicationsChanged,
 	agentConfigurationDraftChanged,
 	agentConfigurationEnvironmentChanged,
@@ -34,6 +35,7 @@ import {
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 	configurationKeyError,
+	scopePeopleDraft,
 } from "./agent-configuration-draft.js";
 import { ConfigurationConnectionSection } from "./configuration-connection-section.js";
 import {
@@ -266,7 +268,8 @@ export function AgentConfigurationScreen({
 		configurationDraftFromAgent(agent, availabilityScope),
 	);
 	// 完整可用范围晚于 Agent 投影到达或被重读：用户没编辑应用条目时，按最新读取（条目与
-	// 修订）刷新；已编辑时保留编辑与原读取修订，保存时由服务端 CAS 判陈旧（#4308）。
+	// 修订）刷新，没改过的人员字段也改用同一次读取，三者同源；已编辑时保留编辑与原读取，
+	// 保存时由服务端 CAS 判陈旧（#4308）。
 	const applicationsEdited = agentConfigurationApplicationsChanged(draft);
 	useEffect(() => {
 		if (!availabilityScope || applicationsEdited) return;
@@ -278,7 +281,11 @@ export function AgentConfigurationScreen({
 				next.applicationAvailabilityRevision &&
 				current.applicationAvailabilityIds !== undefined)
 				? current
-				: { ...current, ...next },
+				: {
+						...current,
+						...next,
+						...scopePeopleDraft(current, availabilityScope),
+					},
 		);
 	}, [agent, availabilityScope, applicationsEdited]);
 	const [ownerError, setOwnerError] = useState<string>();
@@ -327,6 +334,7 @@ export function AgentConfigurationScreen({
 									.filter((item) => item.length > 0),
 							applicationAvailabilityRevision:
 								current.applicationAvailabilityRevision,
+							applicationScopePeople: current.applicationScopePeople,
 						}),
 			}));
 		setEnvErrors({});
@@ -410,6 +418,11 @@ export function AgentConfigurationScreen({
 		)
 			return;
 		setSavedModelsReloaded(false);
+		// 人员条目与应用条目、修订不是同一次读取时不能整表保存，否则可能加回并发移除的人员。
+		if (agentConfigurationApplicationScopeConflict(draft)) {
+			toast("可用范围已被修改，请刷新页面后再保存独立应用的修改");
+			return;
+		}
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
