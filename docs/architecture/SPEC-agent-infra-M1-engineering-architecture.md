@@ -2510,7 +2510,8 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    §13.5.6 的实际安装绑定回读，用 EP-1060 读取本安装的登记键。同时满足以下条件才继续：结果为
    `KNOWN`；`principalId` 非空；client、DEVICE 实例、Consumer、`redirectUri`、`resource` 和
    `scope` 与原安装一致；`instanceStatus` 为 `ACTIVE`；当前时间早于 `notAfter`；通过第 3 项的
-   一致性约束。任一项不满足时不换码，按 §13.5.7 的逐安装撤销用原键 EP-1060 `DELETE` 撤销该
+   一致性约束，并经 [§13.5.6“例外 confirm 的换码前固定通道”](#1356-标准-oauth-安装供应)
+   核实本次 Store 提交后才读取兑换材料。任一项不满足时不换码，按 §13.5.7 的逐安装撤销用原键 EP-1060 `DELETE` 撤销该
    client 和实例，安装记为“主体未核实，已关闭”。§13.5.6 动态手工 confirm 的事务回读段在例外期内
    这样适用：用批准的服务身份回读、核对 issuer、client/Consumer/实例、登记键、resource/scope
    和精确回调，照常执行；与预期映射的核对由第 3 项代替；EP-1060 的 DEVICE Principal 依第 1 项
@@ -2521,8 +2522,9 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    用户的绑定，并把非例外路径已确认的 `principalId`（`principalBindingsByAgentAndPrincipal` 及
    标准安装回执的 `connectionPrincipalId`）一并计入。同一键最多对应一个 Platform 用户，跨全部
    Agent 计算。一个 Platform 用户首次通过的 `principalId` 固定，此后该用户的所有例外安装必须相同。
-   首次固定与原 claim、原授权的核对在同一 Store CAS 中提交：同一用户、同一 `principalId` 的并发
-   安装，后到者按与已固定值一致通过；不同用户争同一 `principalId` 时只有一个成功，另一个按第 2 项
+   首次固定由 Worker 经 [§13.5.6 的两阶段 confirm](#1356-标准-oauth-安装供应) 提交；该段统一定义
+   与原 claim、原授权核对的 Store CAS 及提交回执，Host 私有 CAS 不替代它。同一用户、同一 `principalId`
+   的并发安装，后到者按与已固定值一致通过；不同用户争同一 `principalId` 时只有一个成功，另一个按第 2 项
    拒绝并撤销，并按第 4 项处理冲突。当前有效的例外固定数达到 `maximumPinnedPrincipals` 时，新的
    首次固定按第 2 项拒绝。
 4. **人工核对。** 核对人为 Connection 管理员，或其书面指定、持有 Connection 管理端调用审计只读
@@ -3042,8 +3044,62 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 唯一命令。现有生产 Conversation Worker 从同一持久队列按原 Execution 和有效 claim 领取。
 发送前核对原授权、回跳、映射与 publication 修订、完整描述符、供应和实际 Host/Pod，持久化
 本命令摘要和 sending 后签发。Host 验签和回读该次 sending，按原安装做绑定回读与 CAS，
-并在换码前和每次等待后复核上述事实。confirm 结果不明时，按本节“来源与发布”的动态启用
-许可和只读恢复规则处理。
+并在换码前和每次等待后复核上述事实。§13.5.1 例外路径先执行下述两阶段 confirm 的 Store
+固定门禁；标准事务回读路径不增加该阶段。confirm 结果不明时，换码前按下段、换码后按本节
+“来源与发布”的动态启用许可和只读恢复规则处理。
+
+**例外 confirm 的换码前固定通道。** 原用户仍只显式确认一次。API/Core 保存同一个逻辑 confirm
+意图，由当前原 claim 内的 Worker 顺序驱动 `binding-readback`、`exchange` 两阶段；不增加用户命令、
+业务 Turn、调度器或 Host 发起的写 RPC。阶段、阶段命令引用及独立请求摘要采用显式的新安装
+命令/结果合同版本，并纳入签名和持久交付记录；不向旧版 confirm 添加可选阶段或默认值兼容。
+唯一键绑定原 confirm 与阶段；双方不支持同一批准版本、阶段缺失或
+未知时拒绝，不把旧的单阶段 confirm 降级解释为 `exchange`。两阶段不得并发、换键或换 claim；例外模式只从原 Store 授权与固定描述符解析，不接受请求或 Host
+改称标准路径绕过阶段门禁。
+
+1. **Host 回读并返回候选。** Worker 在原确认、授权、供应、固定描述符及 claim 当前有效时，先持久
+   提交 `binding-readback` 的 sending，再发送该阶段签名命令。Host 沿原安装命令认证和本节只读
+   权威回读核验它，仅执行 §13.5.1 例外第 2 项的 EP-1060 回读，把匹配的非秘密候选以原阶段键、
+   请求摘要和原 claim/fence 绑定到同一 Host 私有事务；不读取 code/verifier、不换码、不发布。
+   候选经这次命令的受认证响应返回 Worker；不增加 Host→Worker 写入口。候选只含原用户/Agent/
+   安装及关联修订、原 confirm/阶段/请求摘要、Host ref/Pod UID、Sandbox/代次/resourceFence、
+   固定描述符及供应引用/修订、例外批准修订，以及已核实的 issuer、登记键、Principal、client/
+   Consumer/DEVICE 实例、callback、resource/scope 和实例状态。每项均与原 Worker 命令及固定
+   输入匹配，未知或含材料字段的响应拒绝；Connection 运行版本的人工核实仍按例外第 1 项，不从 EP-1060 响应虚构发布标识。
+2. **Worker 在 Store 提交固定。** Worker 只接受这次原命令目标的响应，或原用户依下文 status
+   核实的同一 Host 已保存结果；身份和目标不能由响应自报字段选择。Core 复核当前原用户和 Agent
+   使用权后，由原 Platform 安装事务执行 Store CAS：按例外第 3 项串行核对 issuer/Principal 的
+   全局唯一性、同一用户已固定值、非例外已确认绑定及容量上限，并原子保存首次固定（或一致的已有
+   固定检查）、第一阶段结果/完成事实和**本次 confirm 的首次固定提交回执**。回执固定候选摘要、固定记录引用/修订、原
+   confirm/阶段及其请求摘要、原 claim owner/attempt/fence、原授权/confirmationRevision、
+   用户/Agent/安装与关联修订、原执行/会话、Host/Pod/Sandbox/代次/resourceFence、描述符、
+   供应与例外批准修订及原期限。已有相同固定可复用全局记录，但本次检查回执仍须在本次 CAS 提交，
+   不借另一安装/confirm 的回执放行；已有固定的首次固定时间及人工核对期限不因新安装、一致检查
+   或恢复重置。不同候选或同键异摘要拒绝，事务不留下部分固定、阶段完成或回执。
+   每一处 await（含授权复核和锁等待）之后的 Store 持久提交，都在最终写谓词重新核对原命令阶段、
+   sending、原 claim/fence/owner/attempt、原执行仍 processing、原授权未撤销、安装未封闭及全部
+   当前绑定，并用数据库
+   `clock_timestamp()` 核对 claim/命令/授权期限及例外 `notAfter`；不以等待前快照或事务开始时间
+   放行迟到写入。失败、结果不明或任何绑定漂移均不得进入兑换阶段。
+3. **确认提交后才下发换码。** 原 claim 仍有效且第一阶段完成、上述 Store 提交已确定时，Worker 以原 confirm 下
+   独立的 `exchange` 阶段键和请求摘要，签入首次固定提交回执的引用/修订及候选摘要；再次按第 2 步
+   的最终谓词核对第二阶段尚未 sending，提交该阶段 sending 后才首次发送。Host 验签并通过既有“安装命令”只读用途核实当前
+   sending、回执仍已提交、全局固定仍有效且与候选一致，以及相同的原 claim/fence 与全部绑定。
+   旧回执、管理员解除后再固定同值或任何修订漂移均不能放行。Host 再做本节既有换码前实际绑定回读，结果
+   必须仍为匹配候选的 KNOWN/ACTIVE；未知或漂移时不改写固定来迁就新值。随后执行既有 Host
+   私有安装 CAS、等待后再次核对当前原授权，才读取原 code/verifier 并兑换一次。其余私有 publication、
+   Platform 启用许可及 reader 门禁不变。首次固定提交回执只证明本次固定检查已提交，不是 MCP
+   许可、用户 Grant 或 Connection 授权，Host 不能用它写 Store、改他人固定或延长期限。
+
+候选响应、固定提交或其响应丢失时，保留原阶段键/摘要和 unknown；原用户只能在有效原 claim 内
+请求既有只读 status。Host 仅返回同一原阶段已持久的非秘密结果；Worker 只核实原 Store 固定及
+本次回执，确定未提交时才在第 2 步的完整谓词下幂等补提交。无法区分未提交与已提交时仍关闭兑换。
+只有确定本阶段从未进入 sending、原固定提交已确认且原 claim 仍有效，才允许 `exchange` 的首次
+发送；已 sending/unknown 的任何阶段不自动重发 confirm。Host 的 status 响应只读；核实后若条件
+满足，只能由原 Worker 沿原 confirm 意图继续首次发送尚未 sending 的 exchange，不能在 status
+处理中兑换。原 claim 结束、旧 fence、过期或撤权后只保留事实并沿原封闭/撤销处理，不续租或借
+新 claim 继续。固定已提交
+但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。换码已经 sending 的未知
+结果沿既有原 Host 只读核实和启用许可规则收口，不重兑 code、不重放回跳，也不抹除已确认提交。
 
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
@@ -3167,7 +3223,8 @@ Principal、client/实例和批准的 publication 合同构造同一版本的非
 
 **动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
 Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
-启用许可。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
+启用许可。例外两阶段路径的原 confirm 来源同时绑定逻辑 confirm 和实际 `exchange` 阶段的引用及
+请求摘要，不能以 `binding-readback` 的结果替代兑换和私有发布的提交证明。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
 代次、resourceFence、描述符、提交摘要和许可期限。原 claim 正常结束后，已提交许可仍可由同一
 安装的后续获准 Execution 使用，按本节“Worker 权威回读”复核当前执行与许可绑定。动态 reader
 必须同时通过许可回读、既有本地提交和授权校验，才可使用 MCP 材料。Host 本地提交已成而 Platform
@@ -3255,7 +3312,9 @@ Conversation、安装与关联修订、系统审批及实际 Host ref、Pod UID�
   attempt，仅按 [§13.5.5](#1355-受保护安装交付) 幂等核实。此回读在 prepare 建立前即可完成。
 - 安装命令使用独立的安装命令认证用途。prepare、status、begin 等命令各按自身的已验证
   签名定位命令记录。Worker 对照该命令的持久 sending、命令引用、请求摘要、attempt
-  owner/ID/期限，以及该命令绑定的当前供应引用和修订。
+  owner/ID/期限，以及该命令绑定的当前供应引用和修订。例外 confirm 的两阶段还核对阶段及
+  本节“例外 confirm 的换码前固定通道”要求的提交回执；仍只返回本次核实的非秘密事实，
+  不因 Host 回读写入首次固定或推进阶段。
 - 已提交许可使用独立的许可读取用途。Worker 按当前获准 Execution 的短期证明和持久授权，
   复核当前 Execution 的 claim/fence、期限及其与同一安装和 Host/Sandbox 的绑定。以 Platform
   Store 中该安装已提交的启用许可为权威，核对许可期限、原 confirm 来源、描述符与提交摘要。
@@ -3263,6 +3322,8 @@ Conversation、安装与关联修订、系统审批及实际 Host ref、Pod UID�
   读取只返回本次核实结果，无权签发、补记或续期许可。撤权、过期、关联或安装修订变更、
   Host/Pod、Sandbox、代次或 fence 漂移及任一绑定无法核实，均拒绝材料读取与使用。
 
+上述三种用途均只读，不能作为首次固定的写通道；首次固定只由前述 Worker 处理安装命令结果
+后的 Store CAS 提交。Host 不取得 Platform DB 连接、任意用户/Agent 固定查询或修改权限。
 响应只返回允许、拒绝或不可用及对应的非秘密关联字段。获准 Worker 以 Platform Store
 为权威，因此回读可由任一获准 Worker 处理，不依赖原 API 副本。在途记录只用于加强核验。
 
@@ -3551,6 +3612,18 @@ status 单独替换原用户、Agent 或安装时，Host 须在读取材料及�
 的并发安装均通过；唯一性冲突时持有方停止获得新的 MCP 许可，核对一致后恢复；超期未核对、
 核对不一致及到达 `notAfter` 时停止签发许可并逐安装封闭撤销；管理员解除固定前不能换绑；
 回溯核对把不一致的安装封闭并撤销；用户界面和 API 只呈现 Platform PRD §9.1 已有的状态。
+例外的两阶段 confirm 另须覆盖：跨用户、Agent、安装或关联修订、Host/Pod、代次及旧 claim/fence
+的候选或提交回执，错阶段/摘要、直接跳到 exchange、用另一个 confirm 的相同全局固定回执，
+均在原 Store CAS 或安装命令回读拒绝，断言该拒绝请求没有新增固定或成功阶段、没有读取
+code/verifier 或换码，既有已确认固定保留。分别暂停 EP-1060
+响应、Core 授权复核及数据库锁等待，在等待中终结原执行、撤权、替换 claim/fence 或越过命令/授权期限与
+notAfter，证明最终数据库时钟谓词拒绝迟到提交和第二阶段发送。模拟候选响应丢失、固定提交
+成功而响应丢失、提交结果不明、exchange 的 sending/响应丢失及 Worker 崩溃：只核实原键，
+不自动重发任一未知阶段；仅确定未发送的 exchange 可在仍有效原 claim 下首次发送。固定后、
+换码前解除固定或改变批准修订时拒绝；固定已提交而安装失败不自动解除固定或释放容量；相同固定
+的一致检查和恢复不重置首次固定时间或人工核对期限。
+正例须证明原用户只确认一次、相同原 claim/fence 串起两阶段，固定提交先于任何 code/verifier
+读取及换码，且三种只读回读用途没有写副作用。
 换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
 首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
 可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
