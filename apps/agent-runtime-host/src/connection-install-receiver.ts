@@ -1454,7 +1454,16 @@ async function assembleConnectionInstallReceiver(
 			denied();
 		const admitted = await admitTemplate(body.template);
 		const { template, templateDigest } = admitted;
-		if (!confirmedSlot(template, templateDigest, body.supplyAttemptId))
+		// A Host restart loses the in-memory supply slot. Only a lost slot is replaced,
+		// read-only, by the persisted first begin and the Worker's live supply authority;
+		// a slot of this process that is not confirmed, or was closed, still refuses.
+		const slotLost =
+			!slots.has(template.authorizationId) &&
+			!closedSlots.has(template.authorizationId);
+		if (
+			!slotLost &&
+			!confirmedSlot(template, templateDigest, body.supplyAttemptId)
+		)
 			conflict();
 		const recordKey = sha256Hex(template.authorizationId);
 		const consumed = await readRecord(`install-first-begin-${recordKey}.json`);
@@ -1471,6 +1480,15 @@ async function assembleConnectionInstallReceiver(
 			!isDeepStrictEqual(consumption.template, template)
 		)
 			conflict();
+		if (slotLost) {
+			// Only the supply attempt the first begin consumed stands in for the slot.
+			if (consumption.supplyAttemptId !== body.supplyAttemptId) conflict();
+			await assertFixedBindingCurrent({
+				template,
+				supplyAttemptId: body.supplyAttemptId,
+				expiresAt: result.expiresAt,
+			});
+		}
 		const outcome = await readbackOutcome(
 			commandReadback(admitted, body.supplyAttemptId, {
 				commandId: body.commandId,
@@ -1484,6 +1502,7 @@ async function assembleConnectionInstallReceiver(
 		assertOriginal(template);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
+		if (result.expiresAt <= now()) denied();
 		// Read-only: the stored result is returned; no state, PKCE or link is generated.
 		return result;
 	}

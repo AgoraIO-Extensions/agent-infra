@@ -1968,6 +1968,53 @@ describe("Connection first begin", () => {
 		expect(restarted.readback.calls).toEqual([]);
 	}, 20_000);
 
+	it.each([-1, 0, 1])(
+		"rechecks the original begin result after command readback at expiry offset %i",
+		async (offset) => {
+			let at = Date.now();
+			vi.spyOn(Date, "now").mockImplementation(() => at);
+			const first = await receiver({ now: () => at });
+			await registered(first);
+			const begun = await firstBegin(first);
+			expect(begun.status).toBe(200);
+			const expiry = Number(begun.body.expiresAt);
+			const before = await recordNames(first);
+			await first.stop();
+			at = expiry - 1;
+			const calls: ConnectionInstallReadbackInputV1[] = [];
+			const restarted = await receiver({
+				directory: first.directory,
+				port: first.port,
+				store: first.store,
+				now: () => at,
+				transportReadback: {
+					async readback(input) {
+						calls.push(structuredClone(input));
+						if (input.purpose === "command") at = expiry + offset;
+						return "allowed";
+					},
+				},
+			});
+			// Startup revalidates the persisted installation independently.
+			calls.length = 0;
+			const recovered = await beginStatus(restarted);
+			expect(calls.map((call) => call.purpose)).toEqual(["supply", "command"]);
+			expect(calls[1]?.command?.command).toBe("begin_status");
+			// The command's fresh 30-second grant advanced by at most two milliseconds.
+			expect(at - (expiry - 1)).toBeLessThan(30_000);
+			if (offset < 0) {
+				expect(recovered).toMatchObject({ status: 200, body: begun.body });
+			} else {
+				expect(recovered.status).toBe(403);
+				expect(recovered.body).not.toHaveProperty("authorizationUrl");
+			}
+			expect(await recordNames(restarted)).toEqual(before);
+			expect(restarted.connection.calls).toEqual([]);
+			expect(decryption.opened).toBe(1);
+		},
+		20_000,
+	);
+
 	it("reloads the fixed installation after a Host restart without reopening the first begin", async () => {
 		const first = await receiver();
 		await registered(first);
