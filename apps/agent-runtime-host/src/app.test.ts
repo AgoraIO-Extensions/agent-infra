@@ -838,3 +838,48 @@ it("keeps executor adoption default-off and authenticates and strictly scopes th
 	});
 	expect(reads).toBe(1);
 });
+
+it("keeps Session instance evidence default-off and wires only an explicitly constructed reader", async () => {
+	const f = await setup();
+	const path = "/internal/runtime/v1/session-instance/read";
+	const issue = (
+		app: ReturnType<typeof createRuntimeHostApp>,
+		token = "synthetic-service-proof",
+	) =>
+		app.request(path, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${token}`,
+				"content-type": "application/json",
+			},
+			body: "{}",
+		});
+	const disabled = createRuntimeHostApp({
+		host: f.host,
+		serviceToken: "synthetic-service-proof",
+		verifyGrant: createExecutionGrantVerifier(
+			new Map([["key-http", publicKey]]),
+		),
+	});
+	expect((await issue(disabled)).status).toBe(404);
+	let reads = 0;
+	const enabled = createRuntimeHostApp({
+		host: f.host,
+		serviceToken: "synthetic-service-proof",
+		verifyGrant: createExecutionGrantVerifier(
+			new Map([["key-http", publicKey]]),
+		),
+		sessionInstanceRead: async () => {
+			reads++;
+			throw new RuntimeHostError(
+				"RUNTIME_SESSION_INSTANCE_UNAVAILABLE",
+				"Session instance evidence is unavailable",
+				503,
+				true,
+			);
+		},
+	});
+	expect((await issue(enabled, "wrong-worker")).status).toBe(401);
+	expect(reads).toBe(0);
+	expect((await issue(enabled)).status).toBe(400);
+});

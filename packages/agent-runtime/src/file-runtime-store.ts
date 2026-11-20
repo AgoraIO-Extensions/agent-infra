@@ -513,6 +513,17 @@ export class FileRuntimeStore {
 		private readonly file: DurableJsonFile<RuntimeStoreState>,
 	) {}
 
+	/** No business binding, including quarantined or not-yet-committed work. */
+	isBusinessStateEmpty(): boolean {
+		if (!this.file.isQuiescent()) return false;
+		const state = this.file.snapshot();
+		return (
+			Object.keys(state.sessionBindings).length === 0 &&
+			Object.keys(state.sessions).length === 0 &&
+			Object.keys(state.quarantinedSessions).length === 0
+		);
+	}
+
 	static async open(path: string) {
 		let file: DurableJsonFile<RuntimeStoreState>;
 		try {

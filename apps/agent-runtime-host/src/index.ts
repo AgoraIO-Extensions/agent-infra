@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
 	CodexSessionExecutorAdmissionV1,
+	ExecutorIdentityV1,
 	RuntimeBrowserCapabilityAssemblyV1,
 	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
@@ -20,6 +21,8 @@ import {
 	createRuntimeExecutionKeyRecoveryValidatorV5,
 	createWorkloadReadinessVerifierV1,
 	discoverRuntimeBrowserCapabilityV1,
+	executorControlRequestV1,
+	executorRunnerControlOriginV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	openCodexSessionExecutorAdmissionV1,
@@ -95,6 +98,7 @@ import {
 	prepareRuntimeOAuth,
 	type RuntimeOAuthAssembly,
 } from "./runtime-oauth.js";
+import { createSessionInstanceReaderV1 } from "./session-instance.js";
 import {
 	readRuntimeSkillHubBindingV1,
 	runtimeSkillHubMountRootV1,
@@ -113,6 +117,7 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	sessionInstanceRead?: ReturnType<typeof createSessionInstanceReaderV1>;
 	executorInstanceRead?: (
 		request: import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionReadV2,
 	) => Promise<
@@ -168,6 +173,11 @@ export type RuntimeHostAssemblyOptionsV1 = Pick<
 > & {
 	/** Deployment-owned Worker proof/current binding for native metadata reads. */
 	nativeMetadataRead?: RuntimeNativeMetadataReadAssemblyV1;
+	/** Explicit composition input only; no production caller supplies this before step 4. */
+	sessionInstanceEvidence?: {
+		readonly profileDigest: string;
+		readonly hostKeyId: string;
+	};
 };
 
 export interface RuntimeNativeMetadataDeploymentModuleV1 {
@@ -597,6 +607,7 @@ export async function assembleRuntimeHost(
 		return closing;
 	};
 	let executorInstanceRead: StartOptions["executorInstanceRead"];
+	let consumedHostIdentity: ExecutorIdentityV1 | undefined;
 	try {
 		if (sessionExecutorBinding) {
 			sessionExecutor = await openCodexSessionExecutorAdmissionV1(
@@ -609,6 +620,7 @@ export async function assembleRuntimeHost(
 					sessionExecutorBinding,
 					environment,
 				);
+				consumedHostIdentity = identity;
 				const pin = await pinCodexSessionExecutorEpochV1(
 					dataDirectory,
 					sessionExecutor,
@@ -1070,6 +1082,62 @@ export async function assembleRuntimeHost(
 		);
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		await sessionExecutor?.assertCurrent();
+		let sessionInstanceRead: StartOptions["sessionInstanceRead"];
+		if (options.sessionInstanceEvidence) {
+			if (
+				!consumedHostIdentity ||
+				!sessionExecutor ||
+				!sessionExecutorBinding ||
+				!runtimeWorkerId ||
+				!configuration
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_SESSION_INSTANCE_UNAVAILABLE",
+					"Session instance evidence is unavailable",
+					503,
+					true,
+				);
+			const identity = consumedHostIdentity;
+			const admission = sessionExecutor;
+			sessionInstanceRead = createSessionInstanceReaderV1({
+				identity,
+				binding: sessionExecutorBinding,
+				podUid: required("AGENT_INFRA_RUNTIME_POD_UID"),
+				runnerEpoch: admission.epoch,
+				...options.sessionInstanceEvidence,
+				worker: {
+					workerId: runtimeWorkerId,
+					issuer: expectedIssuer,
+					keyId,
+					publicKey,
+				},
+				readPreparation: async (signal) => {
+					await admission.assertCurrent();
+					const result = (await executorControlRequestV1(
+						identity,
+						executorRunnerControlOriginV1,
+						"/control/status",
+						{
+							epoch: admission.epoch,
+							generation: sessionExecutorBinding.sessionGeneration,
+							resourceFence: sessionExecutorBinding.resourceFence,
+						},
+						signal,
+					)) as Record<string, unknown>;
+					await admission.assertCurrent();
+					return {
+						runnerEpoch: typeof result.epoch === "string" ? result.epoch : "",
+						runnerIdentityConsumed: result.runnerIdentityConsumed === true,
+						deliveryFilesRemoved: result.deliveryFilesRemoved === true,
+						executorReady: result.executorReady === true,
+						emptyBusinessState: result.emptyBusinessState === true,
+					};
+				},
+				isBusinessStateEmpty: () =>
+					store.isBusinessStateEmpty() &&
+					(driver as CodexRuntimeDriver).isBusinessStateEmpty(),
+			});
+		}
 		return {
 			host,
 			browserCapability: () => browserCapabilityAssembly,
@@ -1120,6 +1188,7 @@ export async function assembleRuntimeHost(
 			...(oauth ? { oauth } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
 			...(executorInstanceRead ? { executorInstanceRead } : {}),
+			...(sessionInstanceRead ? { sessionInstanceRead } : {}),
 			serviceToken,
 			port,
 			close,

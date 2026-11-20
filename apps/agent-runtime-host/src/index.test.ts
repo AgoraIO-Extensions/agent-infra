@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import {
 	cp,
 	mkdir,
@@ -33,7 +33,11 @@ import {
 	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import { RuntimeSubmitTurnRequestV4Schema } from "@agent-infra/contracts/runtime";
+import {
+	RuntimeSubmitTurnRequestV4Schema,
+	type SessionInstanceReadRequestV1,
+	sessionInstanceRequestSigningPayloadV1,
+} from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requestDigest } from "../../../packages/agent-runtime/src/file-runtime-store.js";
 import {
@@ -63,6 +67,8 @@ vi.mock("node:fs/promises", async (original) => {
 				? T
 				: never
 		) => fs.open(executorIdentityPaths.get(String(path)) ?? path, ...args),
+		lstat: (path: Parameters<typeof fs.lstat>[0]) =>
+			fs.lstat(executorIdentityPaths.get(String(path)) ?? path),
 		unlink: (path: Parameters<typeof fs.unlink>[0]) =>
 			fs.unlink(executorIdentityPaths.get(String(path)) ?? path),
 	};
@@ -431,6 +437,7 @@ describe("RuntimeHost environment assembly", () => {
 		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
 		startup.resolve(fixture.admission);
 		const runtime = await assembling;
+		expect(runtime.sessionInstanceRead).toBeUndefined();
 		try {
 			expect(runtimeAssemblyMocks.openCodexRuntimeDriver).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -2505,4 +2512,150 @@ describe("RuntimeHost environment assembly", () => {
 			).rejects.toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
 		},
 	);
+});
+
+it("keeps production evidence absent and explicitly assembles it from consumed V2 identity and authenticated runner facts", async () => {
+	const f = await sessionExecutorFixture();
+	const directory = f.values.AGENT_INFRA_RUNTIME_DATA_DIR as string;
+	const binding = f.admission.binding;
+	const podUid = f.values.AGENT_INFRA_RUNTIME_POD_UID as string;
+	const admission = { ...f.admission, podUid };
+	runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockResolvedValue(
+		admission,
+	);
+	const start = {
+		schemaVersion: 2 as const,
+		purpose: "executor-instance-startup-v2" as const,
+		podUid,
+		startupRef: "evidence-start",
+		bindingDigest: codexSessionExecutorBindingDigestV1(binding),
+		expiresAt: Date.now() + 60_000,
+		instance: {
+			attemptId: randomUUID(),
+			recordRef: randomUUID(),
+			sandboxId: binding.sandboxId,
+			configurationRevision: 1,
+			configurationVersion: "session-executor-fixture",
+			generation: binding.sessionGeneration,
+			resourceFence: binding.resourceFence,
+		},
+	};
+	const material = issueExecutorStartIdentityV1(start, privateKey);
+	const runner = verifyExecutorStartIdentityV1(material.runner, {
+		...start,
+		issuerKey: publicKey,
+		role: "runner",
+		now: Date.now(),
+	});
+	const identityPath = join(directory, "identity-for-evidence.json");
+	await writeFile(identityPath, JSON.stringify(material.host), { mode: 0o400 });
+	executorIdentityPaths.set(
+		join(executorIdentityFileRootV1, executorIdentityFileV1),
+		identityPath,
+	);
+	Object.assign(f.values, {
+		AGENT_INFRA_EXECUTOR_STARTUP_REF: start.startupRef,
+		AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE: String(start.expiresAt),
+	});
+	const businessEmpty = vi.fn(() => true);
+	const openDriver =
+		runtimeAssemblyMocks.openCodexRuntimeDriver.getMockImplementation();
+	runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+		async (...args) =>
+			Object.assign(await openDriver?.(...args), {
+				isBusinessStateEmpty: businessEmpty,
+			}),
+	);
+	const transport = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation(async (url, options) => {
+			const path = new URL(String(url)).pathname;
+			expect(path).toBe("/control/status");
+			const request = verifyExecutorControlV1(
+				runner,
+				path,
+				JSON.parse(String(options?.body)),
+			);
+			if (!request) throw new Error("invalid runner channel");
+			return Response.json(
+				signExecutorControlV1(
+					runner,
+					`${path}/result`,
+					{
+						epoch: admission.epoch,
+						runnerIdentityConsumed: true,
+						deliveryFilesRemoved: true,
+						executorReady: true,
+						emptyBusinessState: true,
+					},
+					request.requestId,
+					request.deadline,
+				),
+			);
+		});
+	let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+	try {
+		runtime = await assembleRuntimeHost(f.values, undefined, {
+			sessionInstanceEvidence: {
+				profileDigest: "b".repeat(64),
+				hostKeyId: "original-host-key",
+			},
+		});
+		expect(runtime.sessionInstanceRead).toBeTypeOf("function");
+		const body: SessionInstanceReadRequestV1 = {
+			schemaVersion: 1,
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+			nonce: randomUUID(),
+			workerId: "worker-a",
+			namespace: binding.namespace,
+			agentId: binding.agentId,
+			sessionId: binding.conversationId,
+			sandboxId: binding.sandboxId,
+			podUid,
+			generation: binding.sessionGeneration,
+			resourceFence: binding.resourceFence,
+			startupRef: start.startupRef,
+			bindingDigest: start.bindingDigest,
+			profileDigest: "b".repeat(64),
+			scope: {
+				phase: "reserve",
+				reserveRef: "reserve-original",
+				reserveDeliveryFence: 1,
+			},
+			authorization: "unsigned",
+		};
+		const at = Date.now();
+		const claims = {
+			issuer: "synthetic-platform",
+			audience: "runtime_host_session_instance",
+			purpose: "session-instance-read-v1",
+			workerId: "worker-a",
+			issuedAt: at,
+			expiresAt: at + 10_000,
+			requestDigest: createHash("sha256")
+				.update(sessionInstanceRequestSigningPayloadV1(body))
+				.digest("hex"),
+		};
+		const bytes = [
+			JSON.stringify({
+				alg: "EdDSA",
+				typ: "session-instance-read-v1",
+				kid: "synthetic-key",
+			}),
+			JSON.stringify(claims),
+		]
+			.map((value) => Buffer.from(value).toString("base64url"))
+			.join(".");
+		body.authorization = `${bytes}.${sign(null, Buffer.from(bytes), privateKey).toString("base64url")}`;
+		expect(await runtime.sessionInstanceRead?.(body)).toMatchObject({
+			runnerEpoch: admission.epoch,
+			hostKeyId: "original-host-key",
+			checks: { emptyBusinessState: true },
+		});
+	} finally {
+		await runtime?.close();
+		executorIdentityPaths.clear();
+		transport.mockRestore();
+	}
 });
