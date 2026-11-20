@@ -444,7 +444,24 @@ API 创建许可由部署显式配置获准主体集合，以主体类型和稳�
 
 Agent 资源授权修订与逐主体的 manage/use 授权修订属于不同版本域。独立授权的撤销、重新授予产生新的授权修订；消费者按完整主体类型、稳定 ID、Agent 与授权类型复核当前记录，不能以授权修订等于 Agent 修订判断是否授权。任务边界分别绑定 `agentAuthorizationRevision` 与 `useGrantRevision` 并复验；审计查询使用当前使用权，同时保留原提交主体和执行关联校验。
 
-Agent 元数据的个人 API 列表与单项读取要求凭证包含 `agent:read`，并仅返回主体当前显式拥有管理或使用授权的 Agent；任一授权有效即可读取元数据，两项均撤销时排除该 Agent。元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代独立 API 授权。无可见 Agent 时返回空页，浏览器发现与 Owner 读取仍按其既有规则执行。
+人类主体通过平台 API 读取目标 Agent 元数据、使用其任务能力或执行创建以外的管理操作时，须同时满足
+[平台 PRD §7.1](../prd/PRD-agent-platform-M1.md#71-可用范围)规定的当前可用范围和对应的显式 API grant；
+两项是独立事实，不能用 grant 代替可用范围。元数据列表与单项读取还要求凭证包含 `agent:read`，
+只返回范围内且显式管理或使用授权至少一项当前有效的 Agent；任一条件失效即不可见，无可见项返回空页。
+提交任务、查询进度/结果、订阅及调用方取消须有当前显式 API 使用授权和相应凭证范围，
+并保留上述原提交主体匹配检查。创建以外的 Agent 配置、生命周期等 API 管理调用同样要求上述
+可用范围与当前对应显式 API 管理授权的交集，以及相应凭证操作范围；使用授权不能代替管理授权。
+元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代
+独立 API grant。失去可用范围后的拒绝、进行中任务的系统取消及不可见/不存在的一致拒绝，按
+[平台 PRD §7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)和本节撤权规则执行；
+浏览器发现与 Owner 读取仍按既有规则。
+
+**应用限时过渡。** 在 [#4283](https://github.com/AgoraIO-Extensions/agent-infra/issues/4283)
+合入并正式上线前，应用的目标 Agent API 权限沿现有路径只按对应显式 API grant 判定，暂不要求尚未
+落地的应用可用范围；当前可信主体、凭证范围/有效期、任务原提交主体绑定、创建许可及其他独立
+门禁不变。不新增调用入口或授权，不扩大任何现有调用方权限，不继承责任人的范围或权限，也不把
+同一 grant 当作两份独立事实。#4283 合入并上线后必须删除本段，应用转为 PRD §7.1 的统一可用范围
+与显式 API grant 交集；只合入未上线不能提前结束过渡，上线后不得继续沿本段绕过应用范围校验。
 
 个人凭证自查使用 `GET /api/v2/me/api-identity`，仅接受当前个人 Bearer，不接受 Cookie、
 其他凭证类型或调用方选择主体。返回 `schemaVersion: 1`、`principal: { kind: "user", id }`、
@@ -454,7 +471,7 @@ Agent 元数据的个人 API 列表与单项读取要求凭证包含 `agent:read
 
 `GET /api/v2/agents/:agentId` 的个人 Bearer 路径使用与列表项相同的 V2 投影及 API 用户查询范围。
 两项读取均复核当前凭证、目录及禁用事实，沿用读取事务和必要审计；提交失败不得返回成功。
-单项读取额外检查上述 `agent:read` 与目标显式授权；已通过身份和范围校验后，不可见或不存在
+单项读取额外检查上述 `agent:read` 及目标的可用范围与显式授权交集；已通过身份和范围校验后，不可见或不存在
 均返回 `404 RESOURCE_UNAVAILABLE`。无效凭证返回 `401 AUTHENTICATION_REQUIRED`，禁用主体
 或缺少读取范围返回 `403 FORBIDDEN`，非法输入返回 `400 INVALID_REQUEST`，依赖故障返回
 `503 DEPENDENCY_UNAVAILABLE`。两项 Bearer 请求拒绝混合 Cookie、额外 query/body 和自报身份头，
@@ -465,13 +482,13 @@ Agent 元数据的个人 API 列表与单项读取要求凭证包含 `agent:read
 | --- | --- | --- |
 | 单个凭证过期或撤销 | 拒绝该凭证并关闭其流 | 继续执行，不把凭证失效当作主体撤权 |
 | 主体禁用 | 拒绝该主体全部 API 访问和订阅 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
-| Agent 使用权撤销 | 拒绝新任务及依赖该使用权的访问和订阅；独立管理授权不被一并撤销，元数据和管理操作按当前对应权限检查 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
-| Agent 管理权撤销 | 拒绝该主体之后的生命周期命令；使用权与元数据读取按各自授权检查 | 不受影响 |
+| Agent 使用权撤销（含已确认人类主体失去可用范围） | 拒绝新任务及依赖该使用权的访问和订阅；独立管理授权不被一并撤销，元数据与 API 管理操作各按[本节范围与对应显式授权交集](#92-权限顺序)检查 | 取消未开始任务，向进行中任务投递系统取消，并阻止后续平台受控操作 |
+| Agent 管理权撤销 | 拒绝该主体之后的 API 生命周期管理命令；使用权与元数据读取各按[本节范围与对应显式授权交集](#92-权限顺序)检查 | 不受影响 |
 | 身份或授权依赖无法确认 | 敏感操作 fail closed | 不凭旧缓存继续投递；保持可解释的等待/未知状态，按原执行恢复核实 |
 
 撤权控制以服务端持久授权关系定位 Execution，由系统身份执行，不能借用已失效调用方凭证。取消请求与实际停止分开保存，不回滚已发生的外部效果；Connection 在自己的入口执行当前授权。
 
-系统管理员按[平台 PRD 2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)的职责读取 Agent 管理投影：列表 `GET /api/v2/admin/agents` 与单项 `GET /api/v2/admin/agents/{agentId}` 只接受浏览器会话，每次按 9.1 重新确认当前账号有效且为 `system_admin`，返回与普通读取相同的 `AgentProjectionV2`，Owner 等字段均由服务端投影，单项不存在时返回不可用。管理员读取不授予配置写入、授权变更或使用权，管理员命令仍在各自入口按当前身份独立授权；它也不扩大 `GET /api/v2/agents`、`GET /api/v2/agents/{agentId}` 及详情投影的可见范围，管理员不在可用范围内时普通读取仍按不可见处理。
+系统管理员按[平台 PRD 2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)的职责读取 Agent 管理投影：列表 `GET /api/v2/admin/agents` 与单项 `GET /api/v2/admin/agents/{agentId}` 只接受浏览器会话，每次按 9.1 重新确认当前账号有效且为 `system_admin`，返回与普通读取相同的 `AgentProjectionV2`，Owner 等字段均由服务端投影，单项不存在时返回不可用。管理员读取不授予配置写入、授权变更或使用权，管理员命令仍在各自入口按当前身份独立授权；它也不扩大 `GET /api/v2/agents`、`GET /api/v2/agents/{agentId}` 及详情投影的可见范围，管理员不在可用范围内时普通读取仍按不可见处理。个人 Bearer 读取仍须满足[本节的 API 范围与授权交集](#92-权限顺序)，不得借用管理员专用浏览器入口。
 
 ### 9.2.1 应用凭证材料的进程外一次性交付
 
@@ -574,7 +591,7 @@ credential/attempt 引用、grant 修订、阶段、时间和固定原因码；�
 
 ### 9.3 服务端授权上下文
 
-Web 和企微仍按可信用户、当前 Agent 可用范围及渠道权限校验；API 按 9.2 校验。每次 Turn 或补充指令实际投递前，平台重验当前主体和 Agent 使用权，再生成短期、不可篡改且版本化的 Runtime Execution Grant；Web/渠道排队消息出队时同样在首次 Runtime 准备前重验（[§12.5](#125-执行中消息的补充指令与排队)）。Grant 绑定签发方、RuntimeHost audience、签发/过期时间、唯一 `grantId`、Execution、Agent、提交主体及类型、渠道、Conversation/Turn、允许命令和附件操作；标准模板业务 Grant 还绑定该 Execution 已固化的 Relay Key 用途、引用与版本，但不含原值。执行范围受原受理授权边界约束，不能因后台 Worker 的服务权限而扩张；Platform API 凭证的后续失效按 9.2 处理，Relay Key 的执行期规则按 10.7 处理。
+Web 和企微仍按可信用户、当前 Agent 可用范围及渠道权限校验；API 按[§9.2](#92-权限顺序)的范围与授权规则校验。每次 Turn 或补充指令实际投递前，平台重验当前主体和 Agent 使用权，再生成短期、不可篡改且版本化的 Runtime Execution Grant；Web/渠道排队消息出队时同样在首次 Runtime 准备前重验（[§12.5](#125-执行中消息的补充指令与排队)）。Grant 绑定签发方、RuntimeHost audience、签发/过期时间、唯一 `grantId`、Execution、Agent、提交主体及类型、渠道、Conversation/Turn、允许命令和附件操作；标准模板业务 Grant 还绑定该 Execution 已固化的 Relay Key 用途、引用与版本，但不含原值。执行范围受原受理授权边界约束，不能因后台 Worker 的服务权限而扩张；Platform API 凭证的后续失效按 9.2 处理，Relay Key 的执行期规则按 10.7 处理。
 
 RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience、有效期与全部对象绑定。服务身份、请求字段、Session Ref 或 Runtime 返回值不能单独作为授权依据。补充指令取原 Execution 边界与当前授权的交集；不匹配或过期时拒绝，日志和审计只保存 Grant 引用及受限原因，不保存原始证明。
 
@@ -4236,7 +4253,7 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 
 数据基础模块的 `read` 用例仅校验 `read` 用途。后续实验和评分在该模块的事务/版本/授权边界扩展服务端固定的 `run`、`score`、`review` 或 `analyze` 入口，并与 Execution/fence 绑定；不得借用浏览器 `read` 入口或要求额外授予 `read` 来实现这些独立用途，也不接受客户端自报用途来扩大正文权限。
 
-实验、评分和复核 API 分别要求凭证最大范围 `eval:run`、`eval:score`、`eval:review`；浏览器会话沿相同对象权限边界。最大范围不授予具体数据用途，也不替代当前 Agent 使用权。任务提交为用户和应用均核对精确主体的显式 Agent use grant；应用始终保留应用主体。已受理任务的调用方停止/取消仍按 PRD §7.3 要求当前有效主体、原任务归属、当前 Agent use 授权及 API 凭证的 `eval:run` 范围；数据集 run 用途撤销不要求重新授予正文/运行许可，取消不授权读取已撤正文。凭证范围收窄或 Agent use 撤销后，调用方不得继续取消；撤权后的系统停止/unknown 核实沿独立持久控制记录执行，不借调用方失效权限。
+实验、评分和复核 API 分别要求凭证最大范围 `eval:run`、`eval:score`、`eval:review`；浏览器会话沿相同对象权限边界。最大范围不授予具体数据用途，也不替代当前 Agent 使用权。任务提交为用户和应用均核对精确主体的显式 Agent use grant，范围与授权判定沿 [§9.2](#92-权限顺序)；应用始终保留应用主体。已受理任务的调用方停止/取消仍按 PRD §7.3 要求当前有效主体、原任务归属、当前 Agent use 授权及 API 凭证的 `eval:run` 范围；数据集 run 用途撤销不要求重新授予正文/运行许可，取消不授权读取已撤正文。凭证范围收窄或 Agent use 撤销后，调用方不得继续取消；撤权后的系统停止/unknown 核实沿独立持久控制记录执行，不借调用方失效权限。
 
 实验受理在原 ConversationTask 事务中为每个样本/基线或候选建立独立 Conversation/Execution、outbox 和 Eval 绑定。`TaskAuthorizationBoundaryV1.evaluation` 仅允许 `channelId=eval`，由服务端绑定 experiment/sample/variant、dataset/version、run grant ID/revision、policy ID/revision、Agent configuration revision、模型选项/推理级别、工具环境及内容截止时间；对应 `eval-use` 来源只保存已核对的 Agent use grant revision。普通 API/Web 不能提交或借用该绑定，Eval 不被归类为 API 渠道。请求条件与实际执行事实分别保存，不允许当前配置漂移悄悄替换基线。Worker 的当前用途回读缺失或不可确认时不投递；读取、SSE、文件及结果提交也使用同一持久绑定复核。
 
