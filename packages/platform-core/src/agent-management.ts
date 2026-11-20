@@ -158,8 +158,12 @@ export function isAdministratorAgentReadAllowedV1(
 }
 
 export function isAgentAccessAllowedV1(
-	state: AgentManagementStateV1,
-	actor: AgentManagementActorContextV1,
+	state: Pick<AgentManagementStateV1, "ownerIds" | "availability">,
+	actor: Pick<
+		AgentManagementActorContextV1,
+		"userId" | "accountStatus" | "organizationIds"
+	> &
+		Partial<AgentManagementActorContextV1>,
 	intent: AgentAccessQueryV1["intent"],
 ): boolean {
 	if (actor.accountStatus !== "active") return false;
@@ -172,6 +176,25 @@ export function isAgentAccessAllowedV1(
 				: target.kind === "organization" &&
 					actor.organizationIds.includes(target.organizationId),
 		)
+	);
+}
+
+/** API range fact only: explicit grants and credential checks remain independent.
+ * The application exception is temporary until #4283 is merged and deployed. */
+export function isAgentApiPrincipalAvailableV1(
+	state: Pick<AgentManagementStateV1, "ownerIds" | "availability">,
+	principal: { readonly kind: "user" | "application"; readonly id: string },
+	user?: Pick<
+		AgentManagementActorContextV1,
+		"userId" | "accountStatus" | "organizationIds"
+	> | null,
+): boolean {
+	if (principal.kind === "application") return true;
+	return (
+		principal.kind === "user" &&
+		!!user &&
+		user.userId === principal.id &&
+		isAgentAccessAllowedV1(state, user, "use")
 	);
 }
 

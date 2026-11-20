@@ -3344,3 +3344,59 @@ it("continues terminal control pages only from committed cursors across an empty
 		h.runtime.close();
 	}
 });
+
+describe("#4273 personal API business-to-control boundary", () => {
+	it("never sends a Turn or renewal after confirmed availability removal", async () => {
+		const h = harness(1, async () => true, {
+			resolveCurrentApiUseGrant: async () => ({
+				principal: { kind: "user", id: "user" },
+				agentId: "agent",
+				grantType: "use",
+				authorizationRevision: "use-1",
+				revoked: false,
+			}),
+		});
+		const record = h.record();
+		if (!record) throw new Error("Missing original record");
+		Object.assign(h.claim, { channelId: "api" });
+		Object.assign(record.boundary, {
+			channelId: "api",
+			accessSources: [{ kind: "api-use", useGrantRevision: "use-1" }],
+		});
+		try {
+			const grant = await h.authorize();
+			record.agent = { ...record.agent, availability: [] };
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(grant)),
+			).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+			expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					executionId: "execution",
+					authorizationRecordId: "original-authorization",
+					reason: "authorization_revoked",
+				}),
+			);
+			expect(h.record()?.revokedAt).toBeInstanceOf(Date);
+			expect(
+				h.fetcher.mock.calls.some(([url]) => String(url).endsWith("/turns")),
+			).toBe(false);
+			const calls = h.fetcher.mock.calls.length;
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(h.events(grant)),
+			).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+			expect(h.fetcher.mock.calls.length).toBeGreaterThanOrEqual(calls);
+			expect(
+				h.fetcher.mock.calls.some(([url]) =>
+					String(url).endsWith("/authorizations/renew"),
+				),
+			).toBe(false);
+			expect(h.sent().claims).toMatchObject({
+				purpose: "control",
+				reason: "authorization_revoked",
+			});
+			expect(h.sent().body).not.toHaveProperty("input");
+		} finally {
+			h.runtime.close();
+		}
+	});
+});

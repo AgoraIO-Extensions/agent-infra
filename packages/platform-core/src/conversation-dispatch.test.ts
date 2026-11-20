@@ -83,6 +83,8 @@ describe("current-state retry transition", () => {
 			for (const operation of [
 				"conversation.turn.submit.v1",
 				"conversation.turn.regenerate.v1",
+				"conversation.native-capability.invoke.v1",
+				"conversation.native-capability.invoke.v2",
 			] as const) {
 				expect(
 					decideConversationDispatchRetryTransitionV1({
@@ -153,6 +155,7 @@ describe("rejected Runtime result transition", () => {
 		"conversation.turn.submit.v1",
 		"conversation.turn.regenerate.v1",
 		"conversation.native-capability.invoke.v1",
+		"conversation.native-capability.invoke.v2",
 	] as const)(
 		"fails the %s Execution and marks the Conversation unavailable for a blocked session",
 		(operation) => {
@@ -177,6 +180,7 @@ describe("rejected Runtime result transition", () => {
 			"conversation.turn.submit.v1",
 			"conversation.turn.regenerate.v1",
 			"conversation.native-capability.invoke.v1",
+			"conversation.native-capability.invoke.v2",
 		] as const)
 			expect(
 				decideConversationDispatchRejectedTransitionV1({ operation, code }),

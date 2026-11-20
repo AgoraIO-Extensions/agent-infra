@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
 	type AgentManagementActorContextV1,
 	type AgentManagementStateV1,
 	isAgentAccessAllowedV1,
+	isAgentApiPrincipalAvailableV1,
 } from "./agent-management.js";
 import {
 	AgentManagementError,
@@ -200,7 +200,12 @@ export function isAgentRuntimePresentationVisibleV1(
 			: apiMetadata?.agentId === management.agentId &&
 				apiMetadata.userId === actor.userId &&
 				Array.isArray(apiMetadata.grantTypes) &&
-				isPersonalApiAgentMetadataReadAllowedV1(apiMetadata.grantTypes))
+				isPersonalApiAgentMetadataReadAllowedV1(apiMetadata.grantTypes) &&
+				isAgentApiPrincipalAvailableV1(
+					management,
+					{ kind: "user", id: apiMetadata.userId },
+					actor,
+				))
 	);
 }
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	type AgentManagementStateV1,
 	type CurrentTaskApplicationV1,
 	PersonalApiCredentialErrorV1,
 	type PersonalApiTaskAdmissionAuthorityV1,
@@ -14,6 +15,7 @@ import {
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
+import { agentAvailabilityTargetJsonSql } from "./agent-availability-target.js";
 import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
 
 interface CredentialRow {
@@ -97,11 +99,45 @@ async function currentFacts(
 		input.principal.kind === "user"
 			? await resolveCurrentPersonalApiUserV1(userDirectory, input.principal.id)
 			: null;
-	// Resolve external identity before taking a fresh database clock sample.
-	const [clock] = await transaction<{ now: Date }[]>`
-		select clock_timestamp() as now
-	`;
+	const agent =
+		input.principal.kind === "user"
+			? (
+					await transaction<
+						{
+							agent_id: string;
+							owner_ids: string[];
+							availability: (
+								| AgentManagementStateV1["availability"][number]
+								| null
+							)[];
+						}[]
+					>`
+						select a.id as agent_id,
+						    array(select owner_id from platform.agent_owners
+						        where agent_id = a.id order by owner_id) as owner_ids,
+						    coalesce((select jsonb_agg(${transaction.unsafe(agentAvailabilityTargetJsonSql("availability_target"))})
+						        from platform.agent_availability availability_target where availability_target.agent_id = a.id), '[]'::jsonb) as availability
+						from platform.agents a where a.id = ${input.agentId}
+					`
+				)[0]
+			: null;
+	// All dependency and scope reads precede the final credential-expiry clock.
+	const [clock] = await transaction<
+		{ now: Date }[]
+	>`select clock_timestamp() as now`;
+
 	return {
+		agent: agent
+			? {
+					agentId: agent.agent_id,
+					ownerIds: agent.owner_ids,
+					availability: agent.availability.map((target) => {
+						if (target === null)
+							throw new PersonalApiCredentialErrorV1("unavailable");
+						return target;
+					}),
+				}
+			: null,
 		credential: credential
 			? {
 					id: credential.id,

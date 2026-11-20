@@ -333,7 +333,11 @@ describe("personal Bearer GET Agents boundary", () => {
 		expect(projected.schemaVersion).toBe(2);
 		expect(projected.configuration).not.toHaveProperty("actions");
 		expect(h.listAgents).toHaveBeenCalledExactlyOnceWith(
-			{ kind: "api_user", userId: "user-api" },
+			{
+				kind: "api_user",
+				userId: "user-api",
+				organizationIds: identity.organizationIds,
+			},
 			{ limit: 10, afterId: "agent-0" },
 		);
 		expect(h.resolve).not.toHaveBeenCalled();
@@ -1612,8 +1616,16 @@ describe("reads re-read a snapshot that went stale while projecting (#2661)", ()
 			["agent-2", "revision 2"],
 		]);
 		expect(h.listAgents.mock.calls.map(([scope]) => scope)).toEqual([
-			{ kind: "api_user", userId: "user-api" },
-			{ kind: "api_user", userId: "user-api" },
+			{
+				kind: "api_user",
+				userId: "user-api",
+				organizationIds: identity.organizationIds,
+			},
+			{
+				kind: "api_user",
+				userId: "user-api",
+				organizationIds: identity.organizationIds,
+			},
 		]);
 		expect(api.audits).toHaveLength(1);
 		expect(api.audits[0]).toMatchObject({

@@ -77,9 +77,12 @@ Grant。
 [#4155 的合同对照](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155#issuecomment-7028245236)
 及[只读核对](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155#issuecomment-7028819877)。
 当前人工处理沿工程 Spec §13.5.1 例外第 1 项的版本核实、升级前撤批和重新批准流程；Platform
-不能自动发现未通知的升级或人工漏撤批准，实例绑定前提可能因此未被及时复核。这是既有限时试点
-在人工流程下接受的残余风险，不是持续自动检测能力，也不授权未核实版本继续使用例外；原试点
-上限、已接受的最坏情况和全部补偿门禁仍适用。
+不能自动发现未通知的升级或人工漏撤批准，实例绑定前提可能因此未被及时复核。该人工撤批门禁
+已在 [提交 `6b66e59d`](https://github.com/AgoraIO-Extensions/agent-infra/commit/6b66e59d764a2d2d4dcdb4f4349d69e0acc46524)
+写入工程 Spec §13.5.1 例外第 1 项，早于下述
+[用户接受记录](https://github.com/AgoraIO-Extensions/agent-infra/pull/4269#issuecomment-7033676112)。
+此处仅说明该人工门禁已有的残余风险，不是新的风险接受，也不表示持续自动检测能力或授权未核实
+版本继续使用例外；原试点上限、已接受的最坏情况和全部补偿门禁仍适用。
 
 **唯一性冲突的可用性影响。** 攻击者诱导持有方批准另一安装的链接，也可能触发唯一性冲突，
 使本无错绑的持有方全部例外安装暂时不能取得新的 MCP 许可，影响其工具调用。临时暂停的核对

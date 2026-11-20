@@ -1365,3 +1365,69 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		});
 	});
 });
+
+describe("#4273 human API management availability", () => {
+	it("rechecks scope after the final identity dependency without recording success", async () => {
+		await sql`update platform.agent_owners set owner_id='another-owner' where agent_id='agent-a'`;
+		await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-a','user','same-id')`;
+		let reads = 0;
+		resolveUser.mockImplementation(async () => {
+			if (++reads === 2)
+				await sql`delete from platform.agent_availability where agent_id='agent-a'`;
+			return user();
+		});
+		const response = await fetch(`${origin}/api/v2/agents/agent-a/state`, {
+			headers: { Authorization: `Bearer ${material.user}` },
+		});
+		expect(response.status).toBe(404);
+		expect(
+			await sql`select id from platform.audit_events where action='api.agent.state.read' and outcome='succeeded'`,
+		).toHaveLength(0);
+	});
+
+	it.each(["availability", "grant", "both"] as const)(
+		"requires both independent facts after removing %s",
+		async (removed) => {
+			await sql`update platform.agent_owners set owner_id='another-owner' where agent_id='agent-a'`;
+			await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-a','user','same-id')`;
+			const read = (id: string) =>
+				fetch(`${origin}/api/v2/agents/${id}/state`, {
+					headers: { Authorization: `Bearer ${material.user}` },
+				});
+			expect((await read("agent-a")).status).toBe(200);
+			expect(
+				(await request("agent-a", "start", "4273-allowed", material.user))
+					.status,
+			).toBe(202);
+			if (removed !== "grant")
+				await sql`delete from platform.agent_availability where agent_id='agent-a'`;
+			if (removed !== "availability")
+				await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='user' and agent_id='agent-a'`;
+			const before = await effects();
+			const denied = await request(
+				"agent-a",
+				"stop",
+				"4273-hidden",
+				material.user,
+			);
+			const missing = await request(
+				"absent-agent",
+				"stop",
+				"4273-missing",
+				material.user,
+			);
+			expect(denied.status).toBe(404);
+			expect(missing.status).toBe(404);
+			const deniedBody = (await denied.json()) as { code: string };
+			const missingBody = (await missing.json()) as { code: string };
+			expect(deniedBody.code).toBe("RESOURCE_UNAVAILABLE");
+			expect(deniedBody.code).toBe(missingBody.code);
+			expect((await read("agent-a")).status).toBe(404);
+			expect(await effects()).toEqual(before);
+			expect(
+				(await request("agent-b", "start", "4273-other-agent", material.user))
+					.status,
+			).toBe(404);
+		},
+	);
+});

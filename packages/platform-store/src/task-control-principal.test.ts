@@ -1,6 +1,8 @@
-import type {
-	TaskAuthorizationBoundaryV1,
-	TaskPrincipalV1,
+import {
+	type ConversationDispatchClaimV1,
+	createTaskRuntimeAuthorizationUseCaseV1,
+	type TaskAuthorizationBoundaryV1,
+	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
@@ -544,6 +546,8 @@ async function waitingTask(kind: TaskPrincipalV1["kind"]) {
 			values ('same-id', 'Fixture', 'owner', 'identity-1')`;
 	}
 	await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent', ${kind}, 'same-id', 'use', 'use-1')`;
+	if (kind === "user")
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same-id')`;
 	await client`insert into platform.agent_applications
 		(id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence)
 		values ('agent-application', 'agent', 'owner', 'Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
@@ -1311,5 +1315,185 @@ describe("waiting user authority", () => {
 		} finally {
 			await dispatch.close();
 		}
+	});
+});
+
+describe("#4273 current human API availability in the real Store control path", () => {
+	it("cancels an accepted waiting Task when only its current availability is removed", async () => {
+		await waitingTask("user");
+		await client`delete from platform.agent_availability where agent_id='agent'`;
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			...database,
+			userDirectory,
+		});
+		const request = {
+			schemaVersion: 1 as const,
+			itemId: "conversation:turn:execution",
+			workerId: "worker",
+			leaseDurationMs: 30_000,
+		};
+		try {
+			expect(await dispatch.claim(request)).toEqual({ outcome: "failed" });
+			const after = await waitingSnapshot();
+			expect(after.executions).toHaveLength(1);
+			expect(after.executions[0]).toMatchObject({
+				execution_id: "execution",
+				status: "cancelled",
+				delivery_fence: "0",
+			});
+			expect(after.events).toHaveLength(1);
+			expect(after.events[0]).toMatchObject({
+				execution_id: "execution",
+				event_type: "task.status",
+				event_payload: { status: "cancelled" },
+			});
+			expect(after.controls[0]).toMatchObject({
+				execution_id: "execution",
+				reason: "authorization_revoked",
+			});
+			await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same-id')`;
+			expect(await dispatch.claim(request)).toEqual({ outcome: "failed" });
+			expect(await waitingSnapshot()).toEqual(after);
+		} finally {
+			await dispatch.close();
+		}
+	});
+
+	it("persists original revocation control, blocks later business authority and never replays after regrant", async () => {
+		await seed("user");
+		await client`insert into platform.agent_applications
+   (id,agent_id,applicant_id,name,description,status,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence,trace_id,request_id,submitted_at)
+   values ('application','agent','owner','Agent','Fixture','available',1,1,'ready','running',1,1,'trace','request',now())`;
+		await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values('agent','owner',clock_timestamp())`;
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same-id')`;
+		await client`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent','user','same-id','use','use-1')`;
+		await client`update platform.conversations set status='active',host_session_ref='host' where id='conversation'`;
+		await client`update platform.conversation_executions set status='processing',delivery_fence=1 where execution_id='execution'`;
+		const record = await store.readExecution("execution");
+		if (!record) throw new Error("Missing original authority");
+		const claim: ConversationDispatchClaimV1 = {
+			schemaVersion: 1,
+			itemId: "item",
+			leaseOwner: "worker",
+			operation: "conversation.turn.submit.v1",
+			requestId: "request",
+			traceId: "trace",
+			agentId: "agent",
+			actorId: "same-id",
+			channelId: "api",
+			conversationId: "conversation",
+			executionId: "execution",
+			turnId: "turn",
+			messageId: "message",
+			stopRequestId: null,
+			sessionGeneration: 1,
+			deliveryFence: 1,
+			executionDeliveryFence: 1,
+			authorizationRevision: "agent-1",
+			modelConfigurationRevision: 1,
+			modelOptionId: "option",
+			reasoningLevel: "high",
+			hostSessionRef: "host",
+			runtimeCursor: null,
+			input: { text: "controlled fixture", attachments: [] },
+			executionStatus: "processing",
+			stopPending: false,
+		};
+		const state = {
+			hostSessionRef: "host",
+			runtimeCursor: null,
+			originalOperationDigest: "a".repeat(43),
+			executionStatus: "processing" as const,
+			stopPending: false,
+		};
+		let unavailable = true;
+		const useCase = createTaskRuntimeAuthorizationUseCaseV1({
+			workerId: "worker",
+			readRuntimeState: async () => state,
+			readAuthorization: async (id) => store.readExecution(id),
+			resolveCurrentUser: async (id) => {
+				if (unavailable) throw new Error("controlled directory unavailable");
+				return {
+					...(await userDirectory.resolveUser(id)),
+					accountStatus: "active" as const,
+					schemaVersion: 1 as const,
+				};
+			},
+			resolveCurrentApiUseGrant: async (principal, agentId) =>
+				store.readCurrentApiUseGrant({ principal, agentId }),
+			recordControl: async (input) => {
+				if (
+					input.reason === "browser_handoff" ||
+					input.reason === "browser_side_effect"
+				)
+					throw new Error("Unexpected browser control");
+				return store.recordControl({ ...input, reason: input.reason });
+			},
+		});
+		const context = {
+			kind: "business" as const,
+			claim,
+			principal: boundary("user").principal,
+			authorizationRecordId: record.authorizationRecordId,
+		};
+		await expect(
+			useCase.current(
+				context,
+				state,
+				"turn.submit",
+				new AbortController().signal,
+			),
+		).rejects.toThrow();
+		await expectNoControlEffects();
+		unavailable = false;
+		await client`delete from platform.agent_availability where agent_id='agent'`;
+		const result = await useCase.current(
+			context,
+			state,
+			"turn.submit",
+			new AbortController().signal,
+		);
+		expect(result.authority).toMatchObject({
+			purpose: "control",
+			reason: "authorization_revoked",
+		});
+		expect(
+			await client`select revoked_at from platform.task_authorization_records where id=${record.authorizationRecordId}`,
+		).toEqual([{ revoked_at: expect.any(Date) }]);
+		expect(
+			await client`select execution_id,authorization_record_id,reason from platform.task_control_records`,
+		).toEqual([
+			{
+				execution_id: "execution",
+				authorization_record_id: record.authorizationRecordId,
+				reason: "authorization_revoked",
+			},
+		]);
+		expect(
+			await client`select execution_id,status from platform.conversation_stops`,
+		).toEqual([{ execution_id: "execution", status: "submitted" }]);
+		// A processing Turn still needs the original Host Stop/drain acknowledgement.
+		expect(
+			await client`select execution_id,status,delivery_fence from platform.conversation_executions`,
+		).toEqual([
+			{ execution_id: "execution", status: "processing", delivery_fence: "1" },
+		]);
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same-id')`;
+		expect(
+			(
+				await useCase.current(
+					context,
+					state,
+					"turn.submit",
+					new AbortController().signal,
+				)
+			).authority,
+		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+		expect(
+			await client`select execution_id from platform.conversation_executions`,
+		).toHaveLength(1);
+		expect(
+			await client`select id from platform.task_control_records`,
+		).toHaveLength(1);
 	});
 });

@@ -313,6 +313,18 @@ export function fakeKubernetesApi() {
 					resourceVersion: object.metadata?.resourceVersion,
 					deletionTimestamp: object.metadata?.deletionTimestamp,
 					ownerReferences: object.metadata?.ownerReferences,
+					...(object.metadata?.annotations?.[
+						"agent-infra.agora.io/executor-instance-digest"
+					]
+						? {
+								annotations: {
+									"agent-infra.agora.io/executor-instance-digest":
+										object.metadata.annotations[
+											"agent-infra.agora.io/executor-instance-digest"
+										],
+								},
+							}
+						: {}),
 				},
 			});
 		},

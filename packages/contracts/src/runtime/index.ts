@@ -351,7 +351,7 @@ export const RuntimeHostV3SchemaDefinitions = {
 };
 
 export * from "./connection-install.ts";
+export * from "./executor-startup.ts";
 export * from "./installation.ts";
 export * from "./oauth.ts";
-
 export { canonicalRuntimeRequestSigningPayload } from "./request-signing.ts";

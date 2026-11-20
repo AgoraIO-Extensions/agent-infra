@@ -2769,6 +2769,12 @@ describe("PostgreSQL Agent configuration query", () => {
 			outcome: "unavailable",
 		});
 		await adminClient`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent_01','user','api-reader','use','api-grant')`;
+		await expect(query.readRuntimePresentation(api)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+		await adminClient`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent_01','user','api-reader')`;
+		api.expected = await runtimeExpectation(query);
+
 		await expect(query.readRuntimePresentation(api)).resolves.toMatchObject({
 			outcome: "found",
 			capabilities: state.capabilities,

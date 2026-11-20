@@ -1,5 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { createHash, createPublicKey, randomUUID, verify } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+	ExecutorInstanceAdoptionV2Schema,
+	type ExecutorInstanceMutationV2,
+	ExecutorInstanceStateV2Schema,
+	executorInstanceAdoptionBytesV2,
+	executorInstanceFactBytesV2,
+	executorInstanceStartV2,
+} from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
@@ -32,6 +40,7 @@ import {
 	type TaskApiChannelV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
+	transitionExecutorInstanceV2,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
@@ -40,6 +49,7 @@ import {
 	readCurrentTaskApplicationV1,
 } from "./application-task-authorization.js";
 import { lockConversation, lockOutbox } from "./conversation-dispatch-sql.js";
+import { readSessionExecutorInstanceStateV2 } from "./session-sandbox.js";
 import {
 	releaseSessionSandboxComputeBudgetV1,
 	reserveSessionSandboxPreparationBudgetV1,
@@ -716,6 +726,190 @@ export async function prepareSandboxReconciliation(
 	return renewed.length === 1;
 }
 
+export async function readSandboxExecutorInstanceV2(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+) {
+	const source =
+		claim.purpose === "drain" ? claim.lifecycle?.source : undefined;
+	return readSessionExecutorInstanceStateV2(
+		transaction,
+		source?.sandbox ?? claim.sandbox,
+		source?.resourceFence ?? claim.resourceFence,
+		source?.policy?.namespace ?? claim.policy.namespace,
+	);
+}
+
+export async function transitionSandboxExecutorInstance(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	mutation: ExecutorInstanceMutationV2,
+	policy: SessionSandboxPolicyV1,
+	directory: TaskUserDirectoryV1 | undefined,
+) {
+	await transaction`select pg_advisory_xact_lock_shared(hashtextextended(${`agent-infra/executor-instance-v2/${policy.namespace}`},0))`;
+	const context = await ownedContext(transaction, claim, policy, directory);
+	if (
+		!context ||
+		(context.purpose !== "prepare" && mutation.kind === "prepare")
+	)
+		return null;
+	const state = await readSandboxExecutorInstanceV2(transaction, claim);
+	if (
+		context.purpose === "drain" &&
+		(!(
+			[
+				"read",
+				"published",
+				"cleanup-request",
+				"cleanup-absent",
+				"seal",
+				"retirement-progress",
+				"retired",
+			] as readonly string[]
+		).includes(mutation.kind) ||
+			(mutation.kind === "published" && state?.phase !== "closing"))
+	)
+		return null;
+	if (mutation.kind === "prepare" && !state) {
+		const [legacy] = await transaction<
+			{ present: boolean }[]
+		>`select exists(select 1 from platform.conversation_audit_events where conversation_id=${claim.sandbox.sessionId}
+		 and details->>'checkpoint'='executor-startup' and details->>'sandboxId'=${claim.sandbox.sandboxId}
+		 and details->>'sessionGeneration'=${String(claim.sandbox.generation)} and details->>'resourceFence'=${String(claim.resourceFence)}) as present`;
+		if (
+			legacy?.present ||
+			context.allocation.resource_observation?.resources.some(
+				(r) => r.kind === "Pod",
+			)
+		)
+			return null;
+	}
+	const source =
+		context.purpose === "drain" ? context.lifecycle?.source : undefined;
+	const sandbox = source?.sandbox ?? claim.sandbox;
+	const fence = source?.resourceFence ?? claim.resourceFence;
+	const verifiedPolicy = source?.policy ?? claim.policy;
+	if (!verifiedPolicy) return null;
+	const [clock] = await transaction<
+		{ now: number; unresolved: boolean }[]
+	>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now,
+  (exists(select 1 from platform.conversation_executions e where e.sandbox_id=${sandbox.sandboxId} and
+    (e.status in ('processing','unknown') or e.status='submitted' and (e.original_operation_digest is not null or e.accepted_original_host_session_ref is not null)))
+   or exists(select 1 from platform.conversation_stops s join platform.conversation_executions e on e.execution_id=s.execution_id
+    where e.sandbox_id=${sandbox.sandboxId} and s.status<>'completed')) as unresolved`;
+	if (!clock) return null;
+	if (mutation.kind === "bind" && state) {
+		const [old] = await transaction<
+			{ present: boolean }[]
+		>`select exists(select 1 from platform.conversation_audit_events
+		 where conversation_id=${sandbox.sessionId} and details->>'checkpoint'='executor-instance-v2'
+		 and details->'state'->>'podUid'=${mutation.podUid} and details->'state'->>'attemptId'<>${state.attemptId}) as present`;
+		if (old?.present) return null;
+	}
+	let proofVerified = false;
+	if (
+		mutation.kind === "adopted" &&
+		state?.delivery &&
+		state.podUid &&
+		state.recordRef
+	) {
+		const proof = ExecutorInstanceAdoptionV2Schema.parse(mutation.proof);
+		const fact = executorInstanceStartV2(state);
+		if (
+			proof.challenge === state.delivery.challenge &&
+			proof.podUid === state.podUid &&
+			proof.attemptId === state.attemptId &&
+			proof.recordRef === state.recordRef &&
+			proof.startupRef === state.startupRef &&
+			proof.bindingDigest === state.bindingDigest &&
+			proof.generation === state.generation &&
+			proof.resourceFence === state.resourceFence &&
+			proof.factDigest ===
+				createHash("sha256")
+					.update(executorInstanceFactBytesV2(fact))
+					.digest("hex")
+		) {
+			try {
+				proofVerified = verify(
+					null,
+					Buffer.from(executorInstanceAdoptionBytesV2(proof)),
+					createPublicKey({
+						key: Buffer.from(state.delivery.hostPublicKey, "base64url"),
+						format: "der",
+						type: "spki",
+					}),
+					Buffer.from(proof.signature, "base64url"),
+				);
+			} catch {
+				proofVerified = false;
+			}
+		}
+	}
+	const decision = transitionExecutorInstanceV2({
+		state,
+		mutation,
+		authority: {
+			namespace: verifiedPolicy.namespace,
+			podName: sandbox.resourceName,
+			sandboxId: sandbox.sandboxId,
+			generation: sandbox.generation,
+			resourceFence: fence,
+			configurationRevision: verifiedPolicy.configurationRevision,
+			imageDigest: verifiedPolicy.imageDigest,
+			now: clock.now,
+			hasUnresolvedExecution: clock.unresolved,
+			proofVerified,
+		},
+	});
+	if (!decision) return null;
+	let currentClaim = claim;
+	if (
+		context.purpose === "prepare" &&
+		(decision.clearReady ||
+			(mutation.kind === "retired" && decision.state.phase === "retired"))
+	) {
+		const { executorInstance: _previousInstance, ...previousObservation } =
+			context.allocation.resource_observation ?? { resources: [] };
+		void _previousInstance;
+		const observation: SessionSandboxObservationV1 = {
+			...previousObservation,
+			status: "unknown" as const,
+			...(mutation.kind === "retired"
+				? {
+						resources: (
+							context.allocation.resource_observation?.resources ?? []
+						).filter((r) => r.kind === "PersistentVolumeClaim"),
+					}
+				: {}),
+		};
+
+		await transaction`update platform.session_sandbox_allocations set status='unknown',resource_observation=${transaction.json(observation as unknown as Parameters<typeof transaction.json>[0])},updated_at=clock_timestamp() where sandbox_id=${sandbox.sandboxId} and resource_fence=${fence}`;
+		currentClaim = {
+			...claim,
+			resourceStatus: "unknown",
+			previousObservation: observation,
+		};
+	}
+	if (!isDeepStrictEqual(state, decision.state)) {
+		const next = ExecutorInstanceStateV2Schema.parse(decision.state);
+		const recordId =
+			mutation.kind === "bind" && !state?.recordRef
+				? (next.recordRef ?? randomUUID())
+				: randomUUID();
+		await transaction`insert into platform.conversation_audit_events (id,conversation_id,execution_id,agent_id,actor_id,action,trace_id,request_id,occurred_at,details)
+   values (${recordId},${sandbox.sessionId},null,${sandbox.agentId},${sandbox.principal.id},'conversation.sandbox.observed',${context.outbox.trace_id},${context.outbox.request_id},clock_timestamp(),${transaction.json({ checkpoint: "executor-instance-v2", sandboxId: sandbox.sandboxId, sessionGeneration: sandbox.generation, resourceFence: fence, state: next } as unknown as Parameters<typeof transaction.json>[0])})`;
+		if (mutation.kind === "prepare")
+			await transaction`insert into platform.conversation_audit_events (id,conversation_id,execution_id,agent_id,actor_id,action,trace_id,request_id,occurred_at,details)
+   values (${randomUUID()},${sandbox.sessionId},null,${sandbox.agentId},${sandbox.principal.id},'conversation.sandbox.observed',${context.outbox.trace_id},${context.outbox.request_id},clock_timestamp(),${transaction.json({ checkpoint: "executor-startup", startupRef: next.startupRef, deadlineMs: next.expiresAt, sandboxId: sandbox.sandboxId, sessionGeneration: sandbox.generation, resourceFence: fence, schemaVersion: 2 })})`;
+	}
+	return {
+		state: decision.state,
+		permit: decision.permit,
+		claim: currentClaim,
+	};
+}
+
 /** Freeze the projection and deadline before the first Kubernetes side effect. */
 export async function recordSandboxExecutorStartup(
 	transaction: Transaction,
@@ -991,7 +1185,38 @@ export async function recordSandboxObservation(
 ): Promise<"committed" | "stale" | "unknown"> {
 	const context = await ownedContext(transaction, claim, policy, directory);
 	if (!context) return "stale";
-	if (observation.status === "ready" && context.purpose === "prepare") {
+	const instance = await readSandboxExecutorInstanceV2(transaction, claim);
+	if (
+		context.purpose === "drain" &&
+		observation.status === "stopped" &&
+		instance &&
+		instance.phase !== "retired"
+	)
+		return "stale";
+	if (
+		observation.status === "ready" &&
+		context.purpose === "prepare" &&
+		instance
+	) {
+		if (
+			instance.phase !== "adopted" ||
+			!instance.adoption ||
+			instance.cleanup !== "absent" ||
+			observation.executorInstance?.attemptId !== instance.attemptId ||
+			observation.executorInstance.startupRef !== instance.startupRef ||
+			observation.executorInstance.podUid !== instance.podUid ||
+			observation.executorInstance.epoch !== instance.adoption.epoch ||
+			!observation.resources.some(
+				(r) => r.kind === "Pod" && r.uid === instance.podUid,
+			)
+		)
+			return "stale";
+	}
+	if (
+		observation.status === "ready" &&
+		context.purpose === "prepare" &&
+		!instance
+	) {
 		if ((await readExecutorStartupRetirement(transaction, claim)) !== null)
 			return "stale";
 		if (context.allocation.resource_observation?.status !== "ready") {
@@ -1080,6 +1305,10 @@ export async function recordSandboxObservation(
 		) &&
 		context.purpose === "prepare" &&
 		(await readExecutorStartupRetirement(transaction, claim)) !== null;
+	const executorInstanceUnresolved =
+		!!instance &&
+		instance.phase !== "retired" &&
+		observation.status === "unknown";
 	const unknown = decision.status === "unknown";
 	const continuePreparation =
 		decision.finished &&
@@ -1173,8 +1402,8 @@ export async function recordSandboxObservation(
 			and delivery_fence = ${claim.deliveryFence}
 			and lease_expires_at > clock_timestamp() returning id`;
 	if (recorded.length !== 1) return "stale";
-	await transaction`update platform.session_sandbox_allocations set status = ${executorStartupRetired ? "unknown" : decision.status},
-		resource_observation = ${transaction.json((executorStartupRetired ? observation : decision.observation) as unknown as Parameters<typeof transaction.json>[0])},
+	await transaction`update platform.session_sandbox_allocations set status = ${executorStartupRetired || executorInstanceUnresolved ? "unknown" : decision.status},
+		resource_observation = ${transaction.json((executorStartupRetired || executorInstanceUnresolved ? observation : decision.observation) as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
 	if (stopReceipt)
 		await releaseSessionSandboxComputeBudgetV1(

@@ -633,7 +633,7 @@ describe("original application API Task authority", () => {
 		])
 			expect(() => parseTaskAuthorizationBoundaryV1(value)).toThrow();
 	});
-	it("keeps personal API use independent from Web Owner and does not read credential lifetime", () => {
+	it("requires current API grant and availability without borrowing Web Owner or credential lifetime", () => {
 		const grant = {
 			...applicationUseGrant,
 			principal: { kind: "user" as const, id: user.userId },
@@ -652,7 +652,7 @@ describe("original application API Task authority", () => {
 				useGrant: grant,
 				agent: { ...agent, availability: [] },
 			}),
-		).toBe(true);
+		).toBe(false);
 		expect(
 			isTaskAuthorizationCurrentV1({
 				boundary,
@@ -740,4 +740,36 @@ describe("typed waiting system control", () => {
 			).toThrow("Task system control is invalid");
 		},
 	);
+});
+
+describe("human API availability intersection (#4273)", () => {
+	it("rejects a valid API use grant outside the current Agent availability", () => {
+		const grant = {
+			...applicationUseGrant,
+			principal: { kind: "user" as const, id: user.userId },
+		};
+		expect(
+			capturePersonalApiTaskAuthorizationBoundaryV1({
+				user,
+				useGrant: grant,
+				agent: { ...agent, availability: [] },
+				agentAuthorizationRevision: "agent-access-4",
+			}),
+		).toBeNull();
+		const boundary = capturePersonalApiTaskAuthorizationBoundaryV1({
+			user,
+			useGrant: grant,
+			agent,
+			agentAuthorizationRevision: "agent-access-4",
+		});
+		if (!boundary) throw new Error("Expected authorized positive");
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				user,
+				useGrant: grant,
+				agent: { ...agent, availability: [] },
+			}),
+		).toBe(false);
+	});
 });

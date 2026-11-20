@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ExecutorInstanceMutationV2 } from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	type ConversationDispatchClaimDecisionV1,
@@ -97,6 +98,7 @@ import {
 	recordSandboxObservation,
 	type SandboxClaimRequest,
 	type SessionSandboxClaimWaitReasonV1,
+	transitionSandboxExecutorInstance,
 } from "./session-sandbox-reconciliation.js";
 import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
@@ -316,6 +318,25 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.resources,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async transitionSandboxExecutorInstance(input: {
+		claim: SessionSandboxReconciliationClaimV1;
+		mutation: ExecutorInstanceMutationV2;
+	}) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				transitionSandboxExecutorInstance(
+					transaction,
+					input.claim,
+					input.mutation,
 					policy,
 					this.#userDirectory,
 				),

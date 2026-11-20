@@ -43,6 +43,7 @@ import type {
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
+import { startObservability } from "@agent-infra/observability";
 import { getRequestListener, serve } from "@hono/node-server";
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import { probeRuntimeBrowserCapabilityV1 } from "./browser-capability-probe.js";
@@ -112,6 +113,11 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	executorInstanceRead?: (
+		request: import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionReadV2,
+	) => Promise<
+		import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionV2
+	>;
 	browserCapability?:
 		| RuntimeBrowserCapabilityAssemblyV1
 		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
@@ -549,6 +555,7 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	let modelTelemetry: ReturnType<typeof startObservability> | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
@@ -578,31 +585,53 @@ export async function assembleRuntimeHost(
 					try {
 						await closeDriver?.();
 					} finally {
-						await openedStore?.close();
+						try {
+							await openedStore?.close();
+						} finally {
+							await modelTelemetry?.close().catch(() => {});
+						}
 					}
 				}
 			}
 		})();
 		return closing;
 	};
+	let executorInstanceRead: StartOptions["executorInstanceRead"];
 	try {
 		if (sessionExecutorBinding) {
 			sessionExecutor = await openCodexSessionExecutorAdmissionV1(
 				sessionExecutorBinding,
 				required("AGENT_INFRA_RUNTIME_POD_UID"),
 			);
-			await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
 			if (environment.AGENT_INFRA_EXECUTOR_STARTUP_REF !== undefined) {
+				const identity = await consumeExecutorIdentityV1(
+					"host",
+					sessionExecutorBinding,
+					environment,
+				);
+				const pin = await pinCodexSessionExecutorEpochV1(
+					dataDirectory,
+					sessionExecutor,
+					identity,
+					activeConfiguration?.configVersion,
+				);
+				if (pin)
+					executorInstanceRead = async (request) => {
+						if (
+							request.startupRef !== pin.startupRef ||
+							request.attemptId !== pin.attemptId ||
+							request.podUid !== pin.podUid
+						)
+							throw new Error("CODEX_SESSION_EXECUTOR_INVALID");
+						return pin.read(request.challenge);
+					};
 				sessionExecutor = await openExecutorDrainHostV1(
 					sessionExecutor,
-					await consumeExecutorIdentityV1(
-						"host",
-						sessionExecutorBinding,
-						environment,
-					),
+					identity,
 					dataDirectory,
 				);
-			}
+			} else
+				await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
 			detachSessionExecutorFailure = sessionExecutor.onFailure(() => {
 				void Promise.resolve()
 					.then(async () => {
@@ -674,6 +703,28 @@ export async function assembleRuntimeHost(
 		await sessionExecutor?.assertCurrent();
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					observeModelTransportFailure: (event) => {
+						modelTelemetry ??= startObservability({
+							service: "agent-runtime-host",
+							...(environment.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+								? {
+										otlpEndpoint:
+											environment.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+									}
+								: {}),
+						});
+						modelTelemetry.record({
+							stage: "model",
+							outcome: "unknown",
+							code: "OPERATION_UNKNOWN",
+							modelTransport: event,
+							operationRef: event.operationRef,
+							attemptRef: event.attemptRef,
+							agentId: event.agentId,
+							conversationId: event.conversationId,
+							executionId: event.executionId,
+						});
+					},
 					isolationMode: codexIsolationMode,
 					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,
@@ -1068,6 +1119,7 @@ export async function assembleRuntimeHost(
 				: {}),
 			...(oauth ? { oauth } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
+			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			serviceToken,
 			port,
 			close,

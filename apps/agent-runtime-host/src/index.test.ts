@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
 	cp,
 	mkdir,
@@ -9,6 +9,7 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
+import { createServer as createCollector } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -21,8 +22,15 @@ import {
 	type CodexRuntimeDriverOptions,
 	type CodexSessionExecutorAdmissionV1,
 	codexSessionExecutorAttestationV1,
+	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	executorIdentityFileRootV1,
+	executorIdentityFileV1,
 	FakeRuntimeDriver,
+	issueExecutorStartIdentityV1,
+	signExecutorControlV1,
+	verifyExecutorControlV1,
+	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeSubmitTurnRequestV4Schema } from "@agent-infra/contracts/runtime";
@@ -43,6 +51,25 @@ import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
+
+const executorIdentityPaths = vi.hoisted(() => new Map<string, string>());
+vi.mock("node:fs/promises", async (original) => {
+	const fs = await original<typeof import("node:fs/promises")>();
+	return {
+		...fs,
+		open: (
+			path: Parameters<typeof fs.open>[0],
+			...args: Parameters<typeof fs.open> extends [unknown, ...infer T]
+				? T
+				: never
+		) => fs.open(executorIdentityPaths.get(String(path)) ?? path, ...args),
+		unlink: (path: Parameters<typeof fs.unlink>[0]) =>
+			fs.unlink(executorIdentityPaths.get(String(path)) ?? path),
+	};
+});
+vi.mock("./executor-identity-process.js", () => ({
+	protectExecutorIdentityProcessV1: () => {},
+}));
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openClaudeRuntimeDriver: vi.fn(),
@@ -323,6 +350,72 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("wires model transport failures to the safe production log and OTLP projection", async () => {
+		const fixture = await sessionExecutorFixture();
+		const exports: Buffer[] = [];
+		const logs: string[] = [];
+		const collector = createCollector(async (request, response) => {
+			const chunks: Buffer[] = [];
+			for await (const chunk of request) chunks.push(Buffer.from(chunk));
+			exports.push(Buffer.concat(chunks));
+			response.end();
+		});
+		await new Promise<void>((resolve) =>
+			collector.listen(0, "127.0.0.1", resolve),
+		);
+		const address = collector.address();
+		if (!address || typeof address === "string")
+			throw new Error("missing collector");
+		fixture.values.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT = `http://127.0.0.1:${address.port}`;
+		const write = process.stdout.write;
+		const output = vi.spyOn(process.stdout, "write").mockImplementation(((
+			chunk: unknown,
+			...args: unknown[]
+		) => {
+			logs.push(String(chunk));
+			return Reflect.apply(write, process.stdout, [chunk, ...args]);
+		}) as typeof process.stdout.write);
+		const canary = "PRIVATE_MODEL_BODY_KEY_COOKIE_QUERY_ERROR";
+		try {
+			const runtime = await assembleRuntimeHost(fixture.values);
+			try {
+				const options = runtimeAssemblyMocks.openCodexRuntimeDriver.mock
+					.calls[0]?.[0] as CodexRuntimeDriverOptions;
+				expect(options.observeModelTransportFailure).toBeTypeOf("function");
+				const event = {
+					stage: "response_body" as const,
+					errorClass: "connection_reset" as const,
+					elapsedMs: 17,
+					upstreamStatus: 200,
+					agentId: "123e4567-e89b-42d3-a456-426614174001",
+					conversationId: "123e4567-e89b-42d3-a456-426614174002",
+					executionId: "123e4567-e89b-42d3-a456-426614174003",
+					operationRef: "123e4567-e89b-42d3-a456-426614174004",
+					attemptRef: "123e4567-e89b-42d3-a456-426614174005",
+					message: canary,
+					stack: canary,
+					body: canary,
+					headers: { cookie: canary },
+				};
+				options.observeModelTransportFailure?.(event);
+			} finally {
+				await runtime.close();
+			}
+		} finally {
+			output.mockRestore();
+			await new Promise<void>((resolve) => collector.close(() => resolve()));
+		}
+		expect(logs.join("")).toContain(
+			'"modelTransportErrorClass":"connection_reset"',
+		);
+		expect(logs.join("")).toContain('"modelTransportHttpStatus":200');
+		expect(logs.join("")).not.toContain(canary);
+		const otlp = Buffer.concat(exports).toString();
+		expect(otlp).toContain("modelTransportErrorClass");
+		expect(otlp).toContain("123e4567-e89b-42d3-a456-426614174004");
+		expect(otlp).not.toContain(canary);
+	});
+
 	it("waits for Session executor admission before opening a native Driver", async () => {
 		const fixture = await sessionExecutorFixture();
 		const startup = Promise.withResolvers<CodexSessionExecutorAdmissionV1>();
@@ -356,6 +449,132 @@ describe("RuntimeHost environment assembly", () => {
 		expect(fixture.closeDriver).toHaveBeenCalledOnce();
 		expect(fixture.closeAdmission).toHaveBeenCalledOnce();
 		expect(fixture.listenerCount()).toBe(0);
+	});
+
+	it("assembles the original V1 executor after upgrade without rewriting its pin or journal", async () => {
+		const fixture = await sessionExecutorFixture();
+		const directory = fixture.values.AGENT_INFRA_RUNTIME_DATA_DIR as string;
+		const admission = { ...fixture.admission, podUid: "synthetic-pod-uid" };
+		runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockResolvedValue(
+			admission,
+		);
+		await actualMessageRuntimes.pinCodexSessionExecutorEpochV1(
+			directory,
+			admission,
+		);
+		const pin = join(
+			directory,
+			`.executor-${codexSessionExecutorBindingDigestV1(admission.binding)}.json`,
+		);
+		const bytes = await readFile(pin);
+		const executionId = "original-execution";
+		const journal = join(
+			directory,
+			"executor-drain",
+			`${createHash("sha256").update(executionId).digest("hex")}.json`,
+		);
+		const scope = {
+			executionId,
+			podUid: admission.podUid,
+			epoch: admission.epoch,
+			generation: admission.binding.sessionGeneration,
+			resourceFence: admission.binding.resourceFence,
+		};
+		const original =
+			await actualMessageRuntimes.CodexExecutorDrainJournalV1.open(
+				journal,
+				scope,
+			);
+		await original.bindNativeTurn("original-turn");
+		await original.admit({
+			protocolSession: "original-protocol",
+			handle: "pending-launch",
+		});
+		const stop = { stopRequestId: "original-stop", stopFence: 7 };
+		const seal = await original.seal(stop);
+		await original.close();
+		const journalBytes = await readFile(journal);
+		const start = {
+			podUid: admission.podUid,
+			bindingDigest: codexSessionExecutorBindingDigestV1(admission.binding),
+			startupRef: "original-v1-start",
+			expiresAt: Date.now() + 60_000,
+		};
+		const material = issueExecutorStartIdentityV1(start, privateKey);
+		const runner = verifyExecutorStartIdentityV1(material.runner, {
+			...start,
+			issuerKey: publicKey,
+			now: Date.now(),
+			role: "runner",
+		});
+		const identityPath = join(directory, "private-startup.json");
+		await writeFile(identityPath, JSON.stringify(material.host), {
+			mode: 0o400,
+		});
+		executorIdentityPaths.set(
+			join(executorIdentityFileRootV1, executorIdentityFileV1),
+			identityPath,
+		);
+		Object.assign(fixture.values, {
+			AGENT_INFRA_EXECUTOR_STARTUP_REF: start.startupRef,
+			AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE: String(start.expiresAt),
+		});
+		const transport = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (url, options) => {
+				const path = new URL(String(url)).pathname;
+				const request = verifyExecutorControlV1(
+					runner,
+					path,
+					JSON.parse(String(options?.body)),
+				);
+				if (!request) throw new Error("invalid fixture authentication");
+				return Response.json(
+					signExecutorControlV1(
+						runner,
+						`${path}/result`,
+						{ epoch: admission.epoch },
+						request.requestId,
+						request.deadline,
+					),
+				);
+			});
+		try {
+			const runtime = await assembleRuntimeHost(fixture.values);
+			try {
+				expect(
+					runtimeAssemblyMocks.openCodexRuntimeDriver,
+				).toHaveBeenCalledWith(
+					expect.objectContaining({
+						sessionExecutor: expect.objectContaining({
+							drain: expect.any(Object),
+							epoch: admission.epoch,
+						}),
+					}),
+				);
+				expect(await readFile(pin)).toEqual(bytes);
+				expect(await readFile(journal)).toEqual(journalBytes);
+				await expect(stat(identityPath)).rejects.toMatchObject({
+					code: "ENOENT",
+				});
+			} finally {
+				await runtime.close();
+			}
+			const recovered =
+				await actualMessageRuntimes.CodexExecutorDrainJournalV1.open(
+					journal,
+					scope,
+				);
+			try {
+				expect(await recovered.seal(stop)).toEqual(seal);
+				expect(recovered.confirmed()).toBe(false);
+			} finally {
+				await recovered.close();
+			}
+		} finally {
+			executorIdentityPaths.clear();
+			transport.mockRestore();
+		}
 	});
 
 	it("rejects a foreign Session attestation before executor or Driver startup", async () => {

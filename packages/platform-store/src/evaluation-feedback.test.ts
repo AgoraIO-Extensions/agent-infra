@@ -5,7 +5,7 @@ import {
 	parseEvaluationAnalysisPolicyV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { PostgresEvaluationFeedbackV1 } from "./evaluation-feedback.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
@@ -62,6 +62,9 @@ beforeAll(async () => {
 		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values(${kind},${kind},'same',${createHash("sha256").update(token(kind)).digest("hex")},${sql.json(["agent:use", "agent:read"])})`;
 	}
 }, 120000);
+beforeEach(async () => {
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same') on conflict do nothing`;
+});
 afterAll(async () => {
 	await store?.close();
 	await sql?.end();
@@ -225,12 +228,13 @@ it("counts unfeedback Tasks and hides other Task identities in current Owner agg
 		).rejects.toBeDefined();
 	} finally {
 		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values('agent','owner',now())`;
+		await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same') on conflict do nothing`;
 	}
 });
 
 it("authorizes Web historical feedback without an API grant and accepts a newly granted current API use revision", async () => {
 	const id = await seed("user", "web");
-	await sql`insert into platform.agent_availability(agent_id,target_type,target_id)values('agent','user','same')`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id)values('agent','user','same') on conflict do nothing`;
 	await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='user' and principal_id='same'`;
 	const browser: EvaluationRequestV1 = {
 		authentication: { kind: "browser", userId: "same" },
