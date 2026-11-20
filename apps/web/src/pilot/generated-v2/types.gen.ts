@@ -321,6 +321,13 @@ export type AgentApplicationUpdateRequestV2 = {
     };
 };
 
+export type AgentAvailabilityProjectionV1 = {
+    agentId: string;
+    availability: Array<AvailabilityTargetV2>;
+    managementRevision: number;
+    schemaVersion: 1;
+};
+
 export type AgentConfigurationProjectionV2 = {
     availability: Array<{
         kind: 'user';
@@ -391,6 +398,63 @@ export type AgentConfigurationUpdateRequestV2 = {
         }>;
     };
     schemaVersion: 2;
+    secrets?: Array<{
+        name: string;
+    }>;
+    source?: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    };
+};
+
+export type AgentConfigurationUpdateRequestV5 = {
+    availability: Array<AvailabilityTargetV2>;
+    channels?: Array<{
+        bindingReference: string;
+        enabled: true;
+        kind: 'wecom_bot' | 'wecom_app';
+    } | {
+        enabled: false;
+        kind: 'wecom_bot' | 'wecom_app';
+    }>;
+    coOwnerIds?: Array<string>;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    expectedConfigurationRevision?: number;
+    expectedKeyVersion?: number | null;
+    expectedManagementRevision: number;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 5;
     secrets?: Array<{
         name: string;
     }>;
@@ -785,6 +849,17 @@ export type AuthorizationRevokedSignalV1 = {
     kind: 'control';
     schemaVersion: 1;
     type: 'authorization.revoked';
+};
+
+export type AvailabilityTargetV2 = {
+    kind: 'user';
+    userId: string;
+} | {
+    kind: 'organization';
+    organizationId: string;
+} | {
+    applicationId: string;
+    kind: 'application';
 };
 
 export type BrowserHandoffEventV2 = {
@@ -3482,6 +3557,66 @@ export type AgentConfigurationUpdateRequestV2Writable = {
     };
 };
 
+export type AgentConfigurationUpdateRequestV5Writable = {
+    availability: Array<AvailabilityTargetV2>;
+    channels?: Array<{
+        bindingReference: string;
+        enabled: true;
+        kind: 'wecom_bot' | 'wecom_app';
+    } | {
+        enabled: false;
+        kind: 'wecom_bot' | 'wecom_app';
+    }>;
+    coOwnerIds?: Array<string>;
+    defaultRelayKey?: string;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    expectedConfigurationRevision?: number;
+    expectedKeyVersion?: number | null;
+    expectedManagementRevision: number;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 5;
+    secrets?: Array<{
+        name: string;
+        value: string;
+    }>;
+    source?: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    };
+};
+
 export type BeginPlatformConnectionInstallationV1Data = {
     body: {
         executionId: string;
@@ -5127,7 +5262,7 @@ export type CommandAgentApiLifecycleV1Responses = {
 export type CommandAgentApiLifecycleV1Response = CommandAgentApiLifecycleV1Responses[keyof CommandAgentApiLifecycleV1Responses];
 
 export type UpdateAgentConfigurationV2Data = {
-    body: AgentConfigurationUpdateRequestV2Writable;
+    body: AgentConfigurationUpdateRequestV2Writable | AgentConfigurationUpdateRequestV5Writable;
     headers: {
         'Idempotency-Key': string;
     };
@@ -5179,6 +5314,57 @@ export type UpdateAgentConfigurationV2Responses = {
 };
 
 export type UpdateAgentConfigurationV2Response = UpdateAgentConfigurationV2Responses[keyof UpdateAgentConfigurationV2Responses];
+
+export type GetAgentAvailabilityV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/configuration/availability';
+};
+
+export type GetAgentAvailabilityV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentAvailabilityV1Error = GetAgentAvailabilityV1Errors[keyof GetAgentAvailabilityV1Errors];
+
+export type GetAgentAvailabilityV1Responses = {
+    /**
+     * Agent availability scope
+     */
+    200: AgentAvailabilityProjectionV1;
+};
+
+export type GetAgentAvailabilityV1Response = GetAgentAvailabilityV1Responses[keyof GetAgentAvailabilityV1Responses];
 
 export type UpdateAgentSavedModelConfigurationV2Data = {
     body: {

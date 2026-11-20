@@ -1,7 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useRef } from "react";
 
-import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+import type {
+	AgentConfigurationUpdateRequestV2Writable,
+	AgentConfigurationUpdateRequestV5Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import type { AgentSavedModelConfigurationUpdate } from "./agent-configuration.js";
 import {
 	checkAgentDefaultRelayKey,
@@ -16,6 +19,7 @@ type AgentConfigurationCommand =
 	| {
 			body:
 				| AgentConfigurationUpdateRequestV2Writable
+				| AgentConfigurationUpdateRequestV5Writable
 				| AgentSavedModelConfigurationUpdate;
 			kind: "configuration";
 	  }
@@ -127,6 +131,7 @@ export function useAgentConfigurationSubmission(agentId: string) {
 		saveConfiguration: (
 			body:
 				| AgentConfigurationUpdateRequestV2Writable
+				| AgentConfigurationUpdateRequestV5Writable
 				| AgentSavedModelConfigurationUpdate,
 		) => {
 			void startSubmission({ kind: "configuration", body });

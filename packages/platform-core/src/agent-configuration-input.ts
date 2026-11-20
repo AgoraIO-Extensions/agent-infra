@@ -600,6 +600,35 @@ export function parseAvailability(
 	return parseAccessTargets(input, false);
 }
 
+/**
+ * Application IDs of one scope (unique, canonical order) and the management
+ * revision they were read at (Spec §9.2.2).
+ */
+export function parseApplicationAvailability(input: unknown): {
+	expectedManagementRevision: number;
+	applicationIds: string[];
+} {
+	const values = exactObject(input, [
+		"expectedManagementRevision",
+		"applicationIds",
+	]);
+	if (
+		!Number.isSafeInteger(values.expectedManagementRevision) ||
+		(values.expectedManagementRevision as number) < 0
+	)
+		invalidCommand();
+	const ids = denseArray(values.applicationIds, maxAccessTargets).map((id) => {
+		if (!isText(id, idMaxBytes)) invalidCommand();
+		return id;
+	});
+	const applicationIds = ids.toSorted(compareText);
+	if (new Set(applicationIds).size !== applicationIds.length) invalidCommand();
+	return {
+		expectedManagementRevision: values.expectedManagementRevision as number,
+		applicationIds,
+	};
+}
+
 /** The persisted or planned scope: users, organizations and applications. */
 export function parseAvailabilityScope(
 	input: unknown,
@@ -616,6 +645,7 @@ export function parseAgentConfigurationChangesV1(
 		[
 			"coOwnerIds",
 			"availability",
+			"applicationAvailability",
 			"source",
 			"modelConfiguration",
 			"environment",
@@ -629,6 +659,13 @@ export function parseAgentConfigurationChangesV1(
 			: {}),
 		...(Object.hasOwn(changes, "availability")
 			? { availability: parseAvailability(changes.availability) }
+			: {}),
+		...(Object.hasOwn(changes, "applicationAvailability")
+			? {
+					applicationAvailability: parseApplicationAvailability(
+						changes.applicationAvailability,
+					),
+				}
 			: {}),
 		...(Object.hasOwn(changes, "source")
 			? { source: parseSourceSelection(changes.source) }

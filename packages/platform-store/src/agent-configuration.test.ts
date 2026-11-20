@@ -2231,6 +2231,36 @@ async function seedActiveCoOwnerSecrets() {
 }
 
 describe("PostgreSQL Agent configuration query", () => {
+	it("confirms only registered active applications for a new availability entry (#4283)", async () => {
+		await adminClient`truncate platform.platform_applications cascade`;
+		await adminClient`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values ('app_active', 'Active', 'owner_01', 'active', 'rev_1'),
+				('app_disabled', 'Disabled', 'owner_01', 'disabled', 'rev_1')
+		`;
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		await expect(
+			query.confirmActiveApplications({
+				agentId: "agent_01",
+				applicationIds: [
+					"app_active",
+					"app_disabled",
+					"app_missing",
+					"owner_01",
+				],
+			}),
+		).resolves.toEqual(["app_active"]);
+		for (const applicationIds of [[], [""], ["a\0b"]])
+			await expect(
+				query.confirmActiveApplications({
+					agentId: "agent_01",
+					applicationIds,
+				}),
+			).rejects.toBeInstanceOf(AgentConfigurationStoreError);
+	});
+
 	it("projects a persisted multi-service manifest as source material", async () => {
 		await clearDatabase();
 		const manifest = '{"schemaVersion":1,"entryServiceName":"api"}';

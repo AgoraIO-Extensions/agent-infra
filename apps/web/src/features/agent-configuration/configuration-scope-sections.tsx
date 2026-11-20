@@ -1,4 +1,7 @@
+import { Field } from "@/components/ui/field";
 import { FormSection } from "@/components/ui/form-section";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { DirectoryPicker } from "../directory-fields.js";
 
 /** 「共同 Owner」分区（O-03）：标题与说明按设计稿。 */
@@ -39,15 +42,22 @@ export function ConfigurationCoOwnerSection({
 	);
 }
 
-/** 「可用范围」分区（O-03）：人员与组织两列，窄屏单列。 */
+/**
+ * 「可用范围」分区（O-03）：人员与组织两列，窄屏单列。读到完整可用范围后再显示独立应用
+ * （Spec §9.2.2）；应用条目只代表该应用，不给责任人或任何用户 Web、企微访问。
+ */
 export function ConfigurationAvailabilitySection({
+	applicationIds,
 	disabled,
+	onApplicationsChange,
 	onOrganizationsChange,
 	onUsersChange,
 	organizationIds,
 	userIds,
 }: {
+	applicationIds?: string;
 	disabled: boolean;
+	onApplicationsChange?: (value: string) => void;
 	onOrganizationsChange: (value: string) => void;
 	onUsersChange: (value: string) => void;
 	organizationIds: string;
@@ -81,6 +91,30 @@ export function ConfigurationAvailabilitySection({
 					onChange={(next) => onOrganizationsChange(next)}
 				/>
 			</div>
+			{applicationIds === undefined ? null : (
+				<div className="mt-[14px] max-w-[720px]">
+					<Field>
+						<Label htmlFor="configuration-application-availability">
+							可使用的独立应用
+						</Label>
+						<Textarea
+							id="configuration-application-availability"
+							value={applicationIds}
+							disabled={disabled}
+							placeholder="每行一个应用 ID"
+							aria-describedby="configuration-application-availability-help"
+							onChange={(event) => onApplicationsChange?.(event.target.value)}
+						/>
+						<p
+							id="configuration-application-availability-help"
+							className="text-muted-foreground text-sm"
+						>
+							可选；新增的应用须已登记且处于启用状态。应用还需单独的 API
+							授权才能调用。
+						</p>
+					</Field>
+				</div>
+			)}
 		</FormSection>
 	);
 }

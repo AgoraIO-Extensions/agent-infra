@@ -39,6 +39,13 @@ import { serve } from "@hono/node-server";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+// The #4308 mixed-snapshot regression drives the actual Web draft builder; its
+// only alias import is a pure text helper.
+vi.mock(
+	"@/lib/cjk-spacing",
+	async () => import("../../web/src/lib/cjk-spacing.ts"),
+);
+
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -201,6 +208,9 @@ beforeAll(async () => {
 				"agent-v2",
 				"agent-owner-status",
 				"agent-admin-out-of-scope",
+				"agent-app-scope",
+				"agent-app-stale",
+				"agent-app-mixed",
 			].map((agentId) => ({
 				agentId,
 				owner: "owner" as const,
@@ -313,6 +323,10 @@ beforeAll(async () => {
 	const configurationUseCase = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...sharedAdmissions,
+		applicationAdmission: {
+			confirmActiveApplications: (request) =>
+				configurationQuery.confirmActiveApplications(request),
+		},
 	});
 
 	const identityAdapter: IdentityAdapter = {
@@ -473,22 +487,40 @@ beforeAll(async () => {
 					? { applicationId: "application-withdraw", agentId: "agent-withdraw" }
 					: idempotencyKey === "create-v2"
 						? { applicationId: "application-v2", agentId: "agent-v2" }
-						: idempotencyKey === "create-owner-status"
+						: idempotencyKey === "create-app-scope"
 							? {
-									applicationId: "application-owner-status",
-									agentId: "agent-owner-status",
+									applicationId: "application-app-scope",
+									agentId: "agent-app-scope",
 								}
-							: idempotencyKey === "create-owner-status-other"
+							: idempotencyKey === "create-app-stale"
 								? {
-										applicationId: "application-owner-status-other",
-										agentId: "agent-owner-status-other",
+										applicationId: "application-app-stale",
+										agentId: "agent-app-stale",
 									}
-								: idempotencyKey === "create-admin-out-of-scope"
+								: idempotencyKey === "create-app-mixed"
 									? {
-											applicationId: "application-admin-out-of-scope",
-											agentId: "agent-admin-out-of-scope",
+											applicationId: "application-app-mixed",
+											agentId: "agent-app-mixed",
 										}
-									: { applicationId: "application-run", agentId: "agent-run" };
+									: idempotencyKey === "create-owner-status"
+										? {
+												applicationId: "application-owner-status",
+												agentId: "agent-owner-status",
+											}
+										: idempotencyKey === "create-owner-status-other"
+											? {
+													applicationId: "application-owner-status-other",
+													agentId: "agent-owner-status-other",
+												}
+											: idempotencyKey === "create-admin-out-of-scope"
+												? {
+														applicationId: "application-admin-out-of-scope",
+														agentId: "agent-admin-out-of-scope",
+													}
+												: {
+														applicationId: "application-run",
+														agentId: "agent-run",
+													};
 			},
 			prepareSecretReplacements: async () => ({ secrets: [] }),
 			readApplicationProjection: projectionReaders.readApplicationProjection,
@@ -1099,6 +1131,449 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		]) {
 			expect([403, 404]).toContain(response.status);
 		}
+	});
+
+	it("adds and removes independent applications through the Owner V5 configuration and keeps them from V2 (#4283)", async () => {
+		await database`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values ('app-active', 'Active app', ${identities.owner.userId}, 'active', 'app-active-1'),
+				('app-disabled', 'Disabled app', ${identities.owner.userId}, 'disabled', 'app-disabled-1'),
+				('user-owner', 'Same bare ID', ${identities.attacker.userId}, 'active', 'user-owner-1')
+		`;
+		expect(
+			(
+				await app.request("/api/v2/agent-applications", {
+					method: "POST",
+					headers: {
+						...requestHeaders("owner", "create-app-scope"),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ ...applicationBody, name: "App scope" }),
+				})
+			).status,
+		).toBe(201);
+		expect(
+			(
+				await app.request(
+					"/api/v2/admin/agent-applications/application-app-scope/decision",
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders("admin", "approve-app-scope"),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+					},
+				)
+			).status,
+		).toBe(200);
+		const put = (
+			key: string,
+			body: object,
+			identity: keyof typeof identities = "owner",
+		) =>
+			app.request("/api/v2/agents/agent-app-scope/configuration", {
+				method: "PUT",
+				headers: {
+					...requestHeaders(identity, key),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(body),
+			});
+		const scope = async (identity: keyof typeof identities = "owner") => {
+			const response = await app.request(
+				"/api/v2/agents/agent-app-scope/configuration/availability",
+				{ headers: requestHeaders(identity) },
+			);
+			return {
+				status: response.status,
+				cacheControl: response.headers.get("cache-control"),
+				body: (await response.json()) as unknown,
+			};
+		};
+		const rows = () =>
+			database<{ target_type: string; target_id: string }[]>`
+				select target_type::text, target_id from platform.agent_availability
+				where agent_id = 'agent-app-scope' order by target_type::text, target_id
+			`.then((result) => result.map((row) => ({ ...row })));
+		const accessAudits = () =>
+			database`
+				select count(*)::int as count from platform.audit_events
+				where action = 'agent.access.updated' and target_id = 'agent-app-scope'
+			`.then(([row]) => row?.count as number);
+		// V5 is bound to the management revision read with the whole scope.
+		const revision = async () =>
+			((await scope()).body as { managementRevision: number })
+				.managementRevision;
+
+		// V1 targets reject the application kind; nothing is written.
+		const v2WithApplication = await put("app-scope-v2-app", {
+			schemaVersion: 2,
+			availability: [{ kind: "application", applicationId: "app-active" }],
+		});
+		expect(v2WithApplication.status).toBe(400);
+
+		// The application with the Owner's bare user ID stays a separate entry.
+		const added = await put("app-scope-add", {
+			schemaVersion: 5,
+			availability: [
+				{ kind: "user", userId: identities.owner.userId },
+				{ kind: "application", applicationId: "app-active" },
+				{ kind: "application", applicationId: "user-owner" },
+			],
+			expectedManagementRevision: await revision(),
+		});
+		expect(added.status).toBe(200);
+		const addedProjection = AgentProjectionV2Schema.parse(await added.json());
+		expect(addedProjection.configuration.availability).toEqual([
+			{ kind: "user", userId: identities.owner.userId },
+		]);
+		expect(await rows()).toEqual([
+			{ target_type: "application", target_id: "app-active" },
+			{ target_type: "application", target_id: "user-owner" },
+			{ target_type: "user", target_id: identities.owner.userId },
+		]);
+		expect(await scope()).toEqual({
+			status: 200,
+			cacheControl: "no-store",
+			body: {
+				schemaVersion: 1,
+				agentId: "agent-app-scope",
+				managementRevision: expect.any(Number),
+				availability: [
+					{ kind: "application", applicationId: "app-active" },
+					{ kind: "application", applicationId: "user-owner" },
+					{ kind: "user", userId: identities.owner.userId },
+				],
+			},
+		});
+		expect(await accessAudits()).toBe(1);
+
+		// Missing and disabled applications are rejected the same way, writing nothing.
+		const current = await revision();
+		const missing = await put("app-scope-missing", {
+			schemaVersion: 5,
+			availability: [
+				{ kind: "application", applicationId: "app-active" },
+				{ kind: "application", applicationId: "app-missing" },
+			],
+			expectedManagementRevision: current,
+		});
+		const disabled = await put("app-scope-disabled", {
+			schemaVersion: 5,
+			availability: [
+				{ kind: "application", applicationId: "app-active" },
+				{ kind: "application", applicationId: "app-disabled" },
+			],
+			expectedManagementRevision: current,
+		});
+		expect(missing.status).toBe(disabled.status);
+		expect(missing.status).toBe(409);
+		const { traceId: _missingTrace, ...missingError } =
+			(await missing.json()) as Record<string, unknown>;
+		const { traceId: _disabledTrace, ...disabledError } =
+			(await disabled.json()) as Record<string, unknown>;
+		expect(missingError).toEqual(disabledError);
+		expect(await accessAudits()).toBe(1);
+
+		// A V2 people-only write keeps the application entries.
+		expect(
+			(
+				await put("app-scope-v2-people", {
+					schemaVersion: 2,
+					availability: [{ kind: "organization", organizationId: "org-1" }],
+				})
+			).status,
+		).toBe(200);
+		expect(await rows()).toEqual([
+			{ target_type: "application", target_id: "app-active" },
+			{ target_type: "application", target_id: "user-owner" },
+			{ target_type: "organization", target_id: "org-1" },
+		]);
+
+		// An existing entry stays without a recheck; V5 without it removes it.
+		await database`update platform.platform_applications set status = 'disabled' where id = 'app-active'`;
+		expect(
+			(
+				await put("app-scope-remove", {
+					schemaVersion: 5,
+					availability: [
+						{ kind: "organization", organizationId: "org-1" },
+						{ kind: "application", applicationId: "app-active" },
+					],
+					expectedManagementRevision: await revision(),
+				})
+			).status,
+		).toBe(200);
+		expect(await rows()).toEqual([
+			{ target_type: "application", target_id: "app-active" },
+			{ target_type: "organization", target_id: "org-1" },
+		]);
+		expect(await accessAudits()).toBe(3);
+
+		// Another user cannot read or change the scope, and cannot tell it exists.
+		const foreign = await scope("attacker");
+		expect(foreign.status).toBe(404);
+		expect(
+			(
+				await put(
+					"app-scope-attacker",
+					{
+						schemaVersion: 5,
+						availability: [],
+						expectedManagementRevision: 0,
+					},
+					"attacker",
+				)
+			).status,
+		).toBe(404);
+		expect(
+			(
+				await app.request(
+					"/api/v2/agents/agent-missing/configuration/availability",
+					{ headers: requestHeaders("owner") },
+				)
+			).status,
+		).toBe(404);
+	});
+
+	it("never replaces application entries from a stale whole scope (#4308 Review2 MUST)", async () => {
+		await database`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values ('app-stale-1', 'Stale app 1', ${identities.owner.userId}, 'active', 'app-stale-1'),
+				('app-stale-2', 'Stale app 2', ${identities.owner.userId}, 'active', 'app-stale-2')
+			on conflict (id) do nothing
+		`;
+		expect(
+			(
+				await app.request("/api/v2/agent-applications", {
+					method: "POST",
+					headers: {
+						...requestHeaders("owner", "create-app-stale"),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ ...applicationBody, name: "App stale" }),
+				})
+			).status,
+		).toBe(201);
+		expect(
+			(
+				await app.request(
+					"/api/v2/admin/agent-applications/application-app-stale/decision",
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders("admin", "approve-app-stale"),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+					},
+				)
+			).status,
+		).toBe(200);
+		const put = (key: string, body: object) =>
+			app.request("/api/v2/agents/agent-app-stale/configuration", {
+				method: "PUT",
+				headers: {
+					...requestHeaders("owner", key),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(body),
+			});
+		const readScope = async () =>
+			(await (
+				await app.request(
+					"/api/v2/agents/agent-app-stale/configuration/availability",
+					{ headers: requestHeaders("owner") },
+				)
+			).json()) as { managementRevision?: number };
+		const applicationRows = () =>
+			database<{ target_id: string }[]>`
+				select target_id from platform.agent_availability
+				where agent_id = 'agent-app-stale' and target_type::text = 'application'
+				order by target_id
+			`.then((rows) => rows.map(({ target_id }) => target_id));
+		const owner = { kind: "user", userId: identities.owner.userId };
+
+		// Tab A reads the whole scope before tab B adds two applications.
+		const tabA = await readScope();
+		const tabB = await readScope();
+		expect(
+			(
+				await put("app-stale-b-add", {
+					schemaVersion: 5,
+					availability: [
+						owner,
+						{ kind: "application", applicationId: "app-stale-1" },
+						{ kind: "application", applicationId: "app-stale-2" },
+					],
+					expectedManagementRevision: tabB.managementRevision,
+				})
+			).status,
+		).toBe(200);
+		expect(await applicationRows()).toEqual(["app-stale-1", "app-stale-2"]);
+
+		// A only changes an environment value: its stale people-only whole scope
+		// without a read revision never replaces B's applications.
+		const staleWhole = await put("app-stale-a-whole", {
+			schemaVersion: 5,
+			availability: [owner],
+			environment: [{ name: "LOG_LEVEL", value: "stale-whole" }],
+			expectedManagementRevision: undefined,
+		});
+		expect(await applicationRows()).toEqual(["app-stale-1", "app-stale-2"]);
+		expect(staleWhole.status).toBe(400);
+
+		// The page now sends a people-only V2 save when applications were not edited.
+		expect(
+			(
+				await put("app-stale-a-people", {
+					schemaVersion: 2,
+					availability: [owner],
+					environment: [{ name: "LOG_LEVEL", value: "people-only" }],
+				})
+			).status,
+		).toBe(200);
+		expect(await applicationRows()).toEqual(["app-stale-1", "app-stale-2"]);
+
+		// A real application edit bound to A's stale read conflicts and writes nothing.
+		const staleEdit = await put("app-stale-a-edit", {
+			schemaVersion: 5,
+			availability: [
+				owner,
+				{ kind: "application", applicationId: "app-stale-1" },
+			],
+			expectedManagementRevision: tabA.managementRevision,
+		});
+		expect(staleEdit.status).toBe(409);
+		expect(await applicationRows()).toEqual(["app-stale-1", "app-stale-2"]);
+
+		// After rereading, the same edit is accepted.
+		const fresh = await readScope();
+		expect(
+			(
+				await put("app-stale-a-fresh", {
+					schemaVersion: 5,
+					availability: [
+						owner,
+						{ kind: "application", applicationId: "app-stale-1" },
+					],
+					expectedManagementRevision: fresh.managementRevision,
+				})
+			).status,
+		).toBe(200);
+		expect(await applicationRows()).toEqual(["app-stale-1"]);
+	});
+
+	it("never restores a removed person when the Web draft pairs an older Agent projection with a newer scope (#4308 PR-Agent mixed snapshot)", async () => {
+		// A computed specifier keeps the Web module (and its "@" alias) out of this
+		// package's type check; Vitest still runs the real builder.
+		const webDraftModule = new URL(
+			"../../web/src/features/agent-configuration/agent-configuration-draft.ts",
+			import.meta.url,
+		).pathname;
+		const { buildAgentConfigurationRequest, configurationDraftFromAgent } =
+			(await import(/* @vite-ignore */ webDraftModule)) as {
+				configurationDraftFromAgent(
+					agent: unknown,
+					scope: unknown,
+				): Record<string, unknown>;
+				buildAgentConfigurationRequest(
+					draft: Record<string, unknown>,
+					agent: unknown,
+				): object;
+			};
+		await database`
+			insert into platform.platform_applications
+				(id, name, responsible_user_id, status, authorization_revision)
+			values ('app-mixed-1', 'Mixed app', ${identities.owner.userId}, 'active', 'app-mixed-1')
+			on conflict (id) do nothing
+		`;
+		expect(
+			(
+				await app.request("/api/v2/agent-applications", {
+					method: "POST",
+					headers: {
+						...requestHeaders("owner", "create-app-mixed"),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ ...applicationBody, name: "App mixed" }),
+				})
+			).status,
+		).toBe(201);
+		expect(
+			(
+				await app.request(
+					"/api/v2/admin/agent-applications/application-app-mixed/decision",
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders("admin", "approve-app-mixed"),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+					},
+				)
+			).status,
+		).toBe(200);
+		const put = (key: string, body: object) =>
+			app.request("/api/v2/agents/agent-app-mixed/configuration", {
+				method: "PUT",
+				headers: {
+					...requestHeaders("owner", key),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(body),
+			});
+		const owner = { kind: "user", userId: identities.owner.userId };
+		const organization = { kind: "organization", organizationId: "org-1" };
+		expect(
+			(
+				await put("app-mixed-people", {
+					schemaVersion: 2,
+					availability: [owner, organization],
+				})
+			).status,
+		).toBe(200);
+		// Tab A reads the Agent projection while org-1 is still in scope.
+		const agentA = AgentProjectionV2Schema.parse(
+			await (
+				await app.request("/api/v2/agents/agent-app-mixed", {
+					headers: requestHeaders("owner"),
+				})
+			).json(),
+		);
+		expect(agentA.configuration.availability).toContainEqual(organization);
+		// Another Owner removes org-1.
+		expect(
+			(
+				await put("app-mixed-remove", {
+					schemaVersion: 2,
+					availability: [owner],
+				})
+			).status,
+		).toBe(200);
+		// Tab A's whole scope read arrives after the removal, with the newer revision.
+		const scopeA = await (
+			await app.request(
+				"/api/v2/agents/agent-app-mixed/configuration/availability",
+				{ headers: requestHeaders("owner") },
+			)
+		).json();
+		const draft = configurationDraftFromAgent(agentA, scopeA);
+		const edited = { ...draft, applicationAvailabilityIds: "app-mixed-1" };
+		const body = buildAgentConfigurationRequest(edited, agentA);
+		expect((await put("app-mixed-save", body)).status).toBe(200);
+		const rows = await database<{ target_type: string; target_id: string }[]>`
+			select target_type::text, target_id from platform.agent_availability
+			where agent_id = 'agent-app-mixed' order by target_type::text, target_id
+		`.then((result) => result.map((row) => ({ ...row })));
+		expect(rows).toEqual([
+			{ target_type: "application", target_id: "app-mixed-1" },
+			{ target_type: "user", target_id: identities.owner.userId },
+		]);
 	});
 
 	it("projects current Owner status on the Agent detail without crossing Agent visibility (#2910)", async () => {

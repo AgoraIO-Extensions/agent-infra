@@ -112,6 +112,82 @@ describe("Agent availability application entries (#4283)", () => {
 		});
 	});
 
+	it("adds only Access-confirmed applications and keeps the people part apart (#4283)", () => {
+		const added = [
+			{ kind: "application" as const, applicationId: "application_new" },
+			{ kind: "application" as const, applicationId: "shared_01" },
+		];
+		expect(
+			decideAgentAccessUpdatePolicy(
+				{
+					schemaVersion: 1,
+					agentId: "agent_01",
+					expectedRevision: 3,
+					desiredOwnerIds: ["owner_01"],
+					desiredAvailability: added,
+					requestId: "request_01",
+					traceId: "trace_01",
+				},
+				state,
+				owner,
+				authority,
+				["application_new"],
+			),
+		).toMatchObject({
+			outcome: "accepted",
+			planFragment: { availability: added },
+		});
+		// A user confirmation never stands in for an application with the same ID.
+		expect(
+			decideAgentAccessUpdatePolicy(
+				{
+					schemaVersion: 1,
+					agentId: "agent_01",
+					expectedRevision: 3,
+					desiredOwnerIds: ["owner_01"],
+					desiredAvailability: [
+						{ kind: "application", applicationId: "owner_01" },
+					],
+					requestId: "request_01",
+					traceId: "trace_01",
+				},
+				state,
+				owner,
+				authority,
+			),
+		).toEqual({
+			outcome: "conflict",
+			reason: "invalid_target",
+			planFragment: null,
+		});
+		expect(
+			parseAgentConfigurationChangesV1({
+				applicationAvailability: {
+					expectedManagementRevision: 4,
+					applicationIds: ["b_app", "a_app"],
+				},
+			}),
+		).toEqual({
+			applicationAvailability: {
+				expectedManagementRevision: 4,
+				applicationIds: ["a_app", "b_app"],
+			},
+		});
+		// A whole application part is always bound to the revision it was read at.
+		for (const applicationAvailability of [
+			["a_app"],
+			{ applicationIds: ["a_app"] },
+			{ expectedManagementRevision: -1, applicationIds: ["a_app"] },
+			{ expectedManagementRevision: 1.5, applicationIds: ["a_app"] },
+			{ expectedManagementRevision: 4, applicationIds: ["a_app", "a_app"] },
+			{ expectedManagementRevision: 4, applicationIds: [""] },
+			{ expectedManagementRevision: 4, applicationIds: [1] },
+		])
+			expect(() =>
+				parseAgentConfigurationChangesV1({ applicationAvailability }),
+			).toThrow();
+	});
+
 	it("rejects application entries in current command versions and types the persisted scope", () => {
 		expect(() =>
 			parseAgentConfigurationChangesV1({

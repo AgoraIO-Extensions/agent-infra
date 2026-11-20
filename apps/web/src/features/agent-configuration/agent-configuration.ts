@@ -9,6 +9,7 @@ import type {
 } from "../../pilot/generated-v2/client/index.js";
 import {
 	commandAgentLifecycleV2,
+	getAgentAvailabilityV1,
 	getAgentDefaultRelayKeyDisplayCandidatesV2,
 	getAgentDefaultRelayKeySavedDisplayCandidatesV2,
 	getAgentDefaultRelayKeyV2,
@@ -18,10 +19,14 @@ import {
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
+	AgentAvailabilityProjectionV1,
 	AgentConfigurationUpdateRequestV2Writable,
+	AgentConfigurationUpdateRequestV5Writable,
 	AgentProjectionV2,
 	CommandAgentLifecycleV2Errors,
 	CommandAgentLifecycleV2Responses,
+	GetAgentAvailabilityV1Errors,
+	GetAgentAvailabilityV1Responses,
 	GetAgentDefaultRelayKeyDisplayCandidatesV2Errors,
 	GetAgentDefaultRelayKeyDisplayCandidatesV2Responses,
 	GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors,
@@ -61,6 +66,35 @@ export type AgentDefaultRelayKeyCheck = AgentDefaultRelayKeyCandidates & {
 };
 export type AgentSavedModelConfigurationUpdate =
 	UpdateAgentSavedModelConfigurationV2Data["body"];
+
+/**
+ * Owner 读取完整可用范围（含独立应用，Spec §9.2.2）。Agent 投影 V2 只含人员条目，
+ * 页面只有读到这里的应用条目后才发送带应用条目的 V5 保存请求。
+ */
+export async function loadAgentAvailability(
+	agentId: string,
+	client?: Client,
+): Promise<AgentAvailabilityProjectionV1> {
+	const result: Awaited<
+		RequestResult<
+			GetAgentAvailabilityV1Responses,
+			GetAgentAvailabilityV1Errors,
+			false
+		>
+	> = await getAgentAvailabilityV1<false>({
+		client,
+		path: { agentId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
+	if (result.data.agentId !== agentId) throw requestError(false);
+	return result.data;
+}
 
 export async function loadAgentDefaultRelayKey(
 	agentId: string,
@@ -228,7 +262,9 @@ function requestError(
 
 export async function updateAgentConfiguration(
 	agentId: string,
-	body: AgentConfigurationUpdateRequestV2Writable,
+	body:
+		| AgentConfigurationUpdateRequestV2Writable
+		| AgentConfigurationUpdateRequestV5Writable,
 	idempotencyKey: string,
 	client?: Client,
 ): Promise<AgentProjectionV2> {

@@ -1849,6 +1849,37 @@
         ],
         "type": "object"
       },
+      "AgentAvailabilityProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "availability": {
+            "items": {
+              "$ref": "#/components/schemas/AvailabilityTargetV2"
+            },
+            "type": "array"
+          },
+          "managementRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "managementRevision",
+          "availability"
+        ],
+        "type": "object"
+      },
       "AgentConfigurationProjectionV2": {
         "additionalProperties": false,
         "properties": {
@@ -2460,6 +2491,354 @@
         },
         "required": [
           "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "AgentConfigurationUpdateRequestV5": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "items": {
+              "$ref": "#/components/schemas/AvailabilityTargetV2"
+            },
+            "type": "array"
+          },
+          "channels": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bindingReference": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "enabled": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "kind": {
+                      "enum": [
+                        "wecom_bot",
+                        "wecom_app"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "enabled",
+                    "bindingReference"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "const": false,
+                      "type": "boolean"
+                    },
+                    "kind": {
+                      "enum": [
+                        "wecom_bot",
+                        "wecom_app"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "enabled"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "coOwnerIds": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "defaultRelayKey": {
+            "maxLength": 8192,
+            "minLength": 16,
+            "pattern": "^[\\x21-\\x7e]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "environment": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "expectedConfigurationRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "expectedKeyVersion": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expectedManagementRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "modelConfiguration": {
+            "additionalProperties": false,
+            "properties": {
+              "defaultOptionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "defaultReasoningLevel": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "credentialValue": {
+                      "minLength": 1,
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "endpointId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "modelId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "optionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevels": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "optionId",
+                    "endpointId",
+                    "modelId",
+                    "reasoningLevels"
+                  ],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "options",
+              "defaultOptionId",
+              "defaultReasoningLevel"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 5,
+            "type": "number"
+          },
+          "secrets": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "minLength": 1,
+                  "type": "string",
+                  "writeOnly": true
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "enum": [
+                      "self-managed",
+                      "platform-managed"
+                    ],
+                    "type": "string"
+                  },
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode",
+                  "identityResponsibility"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "platform-adapter",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "availability",
+          "expectedManagementRevision"
         ],
         "type": "object"
       },
@@ -4491,6 +4870,65 @@
           "kind",
           "type",
           "error"
+        ],
+        "type": "object"
+      },
+      "AvailabilityTargetV2": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "user",
+                "type": "string"
+              },
+              "userId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "userId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "organization",
+                "type": "string"
+              },
+              "organizationId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "organizationId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "applicationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "application",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "applicationId"
+            ],
+            "type": "object"
+          }
         ],
         "type": "object"
       },
@@ -23215,6 +23653,7 @@
     },
     "/api/v2/agents/{agentId}/configuration": {
       "put": {
+        "description": "Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries and must carry the managementRevision read with that scope, a changed revision is a CONFLICT. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.",
         "operationId": "updateAgentConfigurationV2",
         "parameters": [
           {
@@ -23242,7 +23681,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AgentConfigurationUpdateRequestV2"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AgentConfigurationUpdateRequestV2"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AgentConfigurationUpdateRequestV5"
+                  }
+                ]
               }
             }
           },
@@ -23330,6 +23776,111 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v2/agents/{agentId}/configuration/availability": {
+      "get": {
+        "description": "Owner browser session only. Returns user, organization and application entries with the managementRevision of the same read; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.",
+        "operationId": "getAgentAvailabilityV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAvailabilityProjectionV1"
+                }
+              }
+            },
+            "description": "Agent availability scope"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Read the Agent's whole availability scope"
       }
     },
     "/api/v2/agents/{agentId}/configuration/saved-model": {

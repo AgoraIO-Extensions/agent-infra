@@ -5278,6 +5278,26 @@ describe("contract compatibility command", () => {
 		restorePreAgentApiManagementContract(current);
 		restorePreManagementRevisionContract(current);
 		restorePreConnectionAssociationContract(current);
+		// #4283 application availability is a later addition as well.
+		delete current.paths["/api/v2/agents/{agentId}/configuration/availability"];
+		delete current.paths["/api/v2/agents/{agentId}/configuration"].put
+			.description;
+		current.paths["/api/v2/agents/{agentId}/configuration"].put.requestBody = {
+			content: {
+				"application/json": {
+					schema: {
+						$ref: "#/components/schemas/AgentConfigurationUpdateRequestV2",
+					},
+				},
+			},
+			required: true,
+		};
+		for (const name of [
+			"AvailabilityTargetV2",
+			"AgentConfigurationUpdateRequestV5",
+			"AgentAvailabilityProjectionV1",
+		])
+			delete current.components.schemas[name];
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
