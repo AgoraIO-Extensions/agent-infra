@@ -75,12 +75,19 @@ const policy = {
 	approval: systemApproval,
 	clientName: "Agent Infra",
 	dynamic,
+	// The server-resolved set: no Principal confirmed outside the exception.
+	confirmedPrincipals: [],
 };
-const access = (() => {
-	const value = resolveApprovedConnectionSystemAccessV1(system, systemApproval);
+function resolvedAccess(
+	systemAccess: typeof system,
+	approval: typeof systemApproval,
+) {
+	const value = resolveApprovedConnectionSystemAccessV1(systemAccess, approval);
 	if (value.status !== "available") throw new Error("fixture");
 	return value;
-})();
+}
+/** Swapped only while a test drives a second issuer's installation. */
+let access = resolvedAccess(system, systemApproval);
 let beforeResolveUser: (() => Promise<void>) | undefined;
 const directory = {
 	resolveUser: async (userId: string) => {
@@ -712,7 +719,7 @@ async function candidateFor(
 		supply: template.supply,
 		exceptionPolicy: dynamic.principalMapping.policy,
 		verified: {
-			issuer: system.issuer,
+			issuer: access.system.issuer,
 			registrationKey: row?.registration_key as string,
 			principalId,
 			clientId: row?.client_id as string,
@@ -866,6 +873,51 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			),
 		).toBe("unavailable");
 	});
+
+	// §13.5.1 exception item 3: uniqueness also counts Principals confirmed
+	// outside the exception. Without the caller's server-resolved complete set
+	// the route stays closed instead of treating it as an empty, verified set.
+	it.each([
+		["omitted", undefined],
+		["null", null],
+		["not a list", { issuer: system.issuer }],
+	])(
+		"keeps the manual route closed when the confirmed Principals are %s",
+		(_name, value) => {
+			const { confirmedPrincipals: _confirmed, ...rest } = policy;
+			const input = (
+				value === undefined ? rest : { ...rest, confirmedPrincipals: value }
+			) as never;
+			const refused = (create: () => { close(): Promise<void> }) => {
+				try {
+					void create().close();
+				} catch (error) {
+					return (error as { code?: string }).code;
+				}
+				return "constructed";
+			};
+			expect(
+				refused(
+					() =>
+						new PostgresConnectionManualInstallationStoreV1({
+							databaseUrl: database.databaseUrl,
+							directory,
+							policy: input,
+						}),
+				),
+			).toBe("unavailable");
+			expect(
+				refused(
+					() =>
+						new PostgresConnectionInstallationAuthorizationTransactionV1({
+							databaseUrl: database.databaseUrl,
+							directory,
+							manualInstallation: input,
+						}),
+				),
+			).toBe("unavailable");
+		},
+	);
 
 	// §13.5.1 item 8: after `notAfter` (database clock) the exception accepts no new
 	// installation, and an installation begun before it binds no receipt.
@@ -3338,6 +3390,97 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		const [count] =
 			await client`select count(*)::int as n from platform.connection_principal_pins where released_at is null`;
 		expect(count?.n).toBe(dynamic.principalMapping.maximumPinnedPrincipals);
+	});
+
+	it("admits only one of two issuers' concurrent first pins at the last free slot", async () => {
+		// `maximumPinnedPrincipals` bounds the total across issuers (§13.5.1), so a
+		// Worker still configured for another issuer shares the same capacity.
+		const systemB = {
+			...system,
+			publicOrigin: "https://connection-b.test",
+			issuer: "https://connection-b.test/",
+		};
+		const approvalB = {
+			...systemApproval,
+			configFingerprint: connectionSystemAccessFingerprintV1(systemB),
+		};
+		const policyB = {
+			...policy,
+			systemAccess: systemB,
+			approval: approvalB,
+			dynamic: {
+				...dynamic,
+				principalMapping: {
+					...dynamic.principalMapping,
+					systemAccessFingerprint: connectionSystemAccessFingerprintV1(systemB),
+				},
+			},
+		};
+		const installationsB =
+			new PostgresConnectionInstallationAuthorizationTransactionV1({
+				databaseUrl: database.databaseUrl,
+				directory,
+				manualInstallation: policyB,
+			});
+		const manualB = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: policyB,
+		});
+		const saved = { access, installations, manual, use };
+		try {
+			await client`insert into platform.connection_principal_pins(id, issuer, principal_id, user_id, policy_ref, policy_revision)
+				values ('pin-1', ${system.issuer}, 'principal-1', 'carol', 'consistency-exception-v1', 'r1')`;
+			const alice = await confirmed();
+			const alicePhase = await bindingReadback(alice);
+			const aliceCandidate = await candidateFor(
+				alice,
+				alicePhase,
+				"principal-a",
+			);
+			// Bob's installation is fixed, confirmed and read back under issuer B.
+			access = resolvedAccess(systemB, approvalB);
+			installations = installationsB;
+			manual = manualB;
+			use = createConnectionInstallationAuthorizationV1({
+				store: installationsB,
+			});
+			const bob = await confirmed("bob", "bob", "worker-b");
+			const bobPhase = await bindingReadback(bob);
+			const bobCandidate = await candidateFor(bob, bobPhase, "principal-b");
+			expect(bobCandidate.verified.issuer).toBe(systemB.issuer);
+			const arrived = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let waiting = 0;
+			beforeResolveUser = async () => {
+				waiting++;
+				if (waiting === 2) arrived.resolve();
+				await release.promise;
+			};
+			try {
+				const outcomes = Promise.all([
+					saved.manual.commitConfirmPin({
+						...alicePhase,
+						candidate: aliceCandidate,
+					}),
+					manualB.commitConfirmPin({ ...bobPhase, candidate: bobCandidate }),
+				]);
+				await arrived.promise;
+				release.resolve();
+				const results = (await outcomes).map(({ outcome }) => outcome).sort();
+				expect(results).toEqual(["pinned", "rejected"]);
+			} finally {
+				beforeResolveUser = undefined;
+				release.resolve();
+			}
+			const [count] =
+				await client`select count(*)::int as n from platform.connection_principal_pins where released_at is null`;
+			expect(count?.n).toBe(dynamic.principalMapping.maximumPinnedPrincipals);
+		} finally {
+			({ access, installations, manual, use } = saved);
+			await manualB.close();
+			await installationsB.close();
+		}
 	});
 
 	it("refuses a Principal another user confirmed outside the exception", async () => {
