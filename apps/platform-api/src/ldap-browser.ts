@@ -214,6 +214,15 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 					renewedExpiresAt,
 				);
 				if (!renewed) return null;
+			} else {
+				// Directory checks can outlive revocation or expiry even without renewal.
+				const confirmed = await input.sessions.find(tokenDigest, now());
+				if (
+					!confirmed ||
+					confirmed.uid !== session.uid ||
+					confirmed.absoluteExpiresAt !== session.absoluteExpiresAt
+				)
+					return null;
 			}
 			return identity;
 		},

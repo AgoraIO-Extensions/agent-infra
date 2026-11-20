@@ -12,7 +12,7 @@ import {
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import type postgres from "postgres";
+import postgres from "postgres";
 // 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
 import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
@@ -176,6 +176,9 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 		) {
 			return null;
 		}
+		// Keep only the known lock classification across the transaction boundary.
+		if (error instanceof postgres.PostgresError && error.code === "55P03")
+			throw new ConversationExecutionError("unavailable", "55P03");
 		// Do not expose identity, credential, ciphertext or SQL errors to callers.
 		throw new ConversationExecutionError("unavailable");
 	}
