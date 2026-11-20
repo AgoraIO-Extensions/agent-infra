@@ -1,5 +1,5 @@
 {
-  "id": "66644a49-a041-47a4-9b1e-5602f468de26",
+  "id": "dfa9c1f8-ab2d-49dc-a157-8114f77d0080",
   "prevId": "932aaa0f-dc32-4b00-85d0-ae60ebb43b23",
   "version": "7",
   "dialect": "postgresql",
@@ -2573,18 +2573,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "descriptor": {
-          "name": "descriptor",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "descriptor_digest": {
-          "name": "descriptor_digest",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -2715,10 +2703,6 @@
         "connection_manual_installation_receipt": {
           "name": "connection_manual_installation_receipt",
           "value": "(\"platform\".\"connection_manual_installations\".\"registration_state\" <> 'registered' or (\"platform\".\"connection_manual_installations\".\"receipt\" is not null and \"platform\".\"connection_manual_installations\".\"client_id\" is not null\n\t\t\t\t\tand \"platform\".\"connection_manual_installations\".\"consumer_id\" is not null and \"platform\".\"connection_manual_installations\".\"instance_id\" is not null))\n\t\t\t\tand (\"platform\".\"connection_manual_installations\".\"configuration\" is null or \"platform\".\"connection_manual_installations\".\"registration_state\" in ('registered','closed'))"
-        },
-        "connection_manual_installation_descriptor": {
-          "name": "connection_manual_installation_descriptor",
-          "value": "(\"platform\".\"connection_manual_installations\".\"descriptor\" is null) = (\"platform\".\"connection_manual_installations\".\"descriptor_digest\" is null)\n\t\t\t\tand (\"platform\".\"connection_manual_installations\".\"descriptor\" is null) = (\"platform\".\"connection_manual_installations\".\"configuration\" is null)\n\t\t\t\tand (\"platform\".\"connection_manual_installations\".\"descriptor_digest\" is null or \"platform\".\"connection_manual_installations\".\"descriptor_digest\" ~ '^[a-f0-9]{64}$')"
         },
         "connection_manual_installation_identity": {
           "name": "connection_manual_installation_identity",
@@ -9996,6 +9980,115 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "platform.session_sandbox_executor_promotions": {
+      "name": "session_sandbox_executor_promotions",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "sandbox_id": {
+          "name": "sandbox_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_generation": {
+          "name": "session_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_fence": {
+          "name": "resource_fence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receipt": {
+          "name": "receipt",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receipt_digest": {
+          "name": "receipt_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "session_sandbox_executor_promotion_unique": {
+          "name": "session_sandbox_executor_promotion_unique",
+          "columns": [
+            {
+              "expression": "sandbox_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "session_generation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "resource_fence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "session_sandbox_executor_promotion_allocation_fk": {
+          "name": "session_sandbox_executor_promotion_allocation_fk",
+          "tableFrom": "session_sandbox_executor_promotions",
+          "tableTo": "session_sandbox_allocations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "sandbox_id"
+          ],
+          "columnsTo": [
+            "sandbox_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "session_sandbox_executor_promotion_digest": {
+          "name": "session_sandbox_executor_promotion_digest",
+          "value": "\"platform\".\"session_sandbox_executor_promotions\".\"receipt_digest\" ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "platform.session_sandbox_reserves": {
       "name": "session_sandbox_reserves",
       "schema": "platform",
@@ -10101,6 +10194,12 @@
         "ready_at": {
           "name": "ready_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "executor_startup": {
+          "name": "executor_startup",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         }
