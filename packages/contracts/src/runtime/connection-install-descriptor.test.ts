@@ -227,7 +227,8 @@ describe("§13.5.6 dynamic manual descriptor", () => {
 			connectionManualInstallDescriptorDigestV1({
 				...descriptor,
 				principalMapping: {
-					...descriptor.principalMapping,
+					kind: "consistency-exception-v1",
+					policy: exception.policy,
 					pinnedPrincipalId: "principal-a",
 				},
 			}),
