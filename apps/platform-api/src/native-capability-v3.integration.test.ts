@@ -840,8 +840,12 @@ it.each(["foreign-actor", "foreign-agent"] as const)(
 			"code",
 			"ACTION_UNAVAILABLE",
 		);
+		expect(await db`select id from platform.outbox_items`).toHaveLength(0);
 		expect(
-			await db`select id from platform.outbox_items where scope_id=${conversationId}`,
+			await db`select execution_id from platform.conversation_executions where execution_id<>${originalExecutionId}`,
 		).toHaveLength(0);
+		expect(await db`select id from platform.idempotency_records`).toHaveLength(
+			0,
+		);
 	},
 );
