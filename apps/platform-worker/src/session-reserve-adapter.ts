@@ -171,9 +171,6 @@ export function createSessionSandboxReserveResourceInputV1(
 	)
 		throw new WorkloadKubernetesError("conflict");
 	const policy = options.workload.policy;
-	// Reserves have no business Conversation binding or executor promotion receipt.
-	if (policy.codexSessionExecutor !== undefined)
-		throw new WorkloadKubernetesError("policy");
 	if (
 		policy.namespace !== claim.profile.policy.namespace ||
 		options.workload.client.namespace !== policy.namespace ||
@@ -212,6 +209,9 @@ export function createSessionSandboxReserveResourceInputV1(
 				sessionSandboxReserveDigestV1(template),
 		)
 	)
+		throw new WorkloadKubernetesError("policy");
+	// Independent Codex executors require a business binding and promotion receipt.
+	if (template.driver === "codex" && policy.codexSessionExecutor !== undefined)
 		throw new WorkloadKubernetesError("policy");
 	return createSessionSandboxResourceInputResolverV1(options.workload, {
 		serviceToken: options.serviceToken,
