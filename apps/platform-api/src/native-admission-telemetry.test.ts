@@ -121,3 +121,50 @@ it("replaces an unlocated failure only with the first fixed classification", asy
 	);
 	expect(JSON.stringify(events)).not.toContain("PRIVATE_CANARY");
 });
+
+it("records cancellation delivered outside the original async HTTP context", async () => {
+	const events: OperationalEvent[] = [];
+	const entered = Promise.withResolvers<void>();
+	const abort = new AbortController();
+	const app = new Hono();
+	app.use("*", createHttpObservability({ record: (e) => events.push(e) }));
+	app.get("/external", async (c) => {
+		const request = createRuntimeNativeMetadataRequestContextV1({
+			signal: abort.signal,
+			authenticate: async () => identity,
+			admissionTelemetry: true,
+		});
+		request.setAdmissionProtocolVersion?.(1);
+		try {
+			await observeNativeAdmissionV1(
+				request.observeAdmission,
+				"metadata.first",
+				() =>
+					request.run(async () => {
+						entered.resolve();
+						await new Promise<void>(() => {});
+					}),
+			);
+			return c.text("unexpected");
+		} catch {
+			return c.json({ outcome: "unavailable" }, 503);
+		} finally {
+			request.close();
+		}
+	});
+	const response = app.request("/external");
+	await entered.promise;
+	abort.abort();
+	expect((await response).status).toBe(503);
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			stage: "http",
+			nativeAdmission: expect.objectContaining({
+				stage: "metadata.first",
+				reason: "client_abort",
+				cancelSource: "client_abort",
+			}),
+		}),
+	);
+	expect(new Set(events.map((e) => e.traceId)).size).toBe(1);
+});

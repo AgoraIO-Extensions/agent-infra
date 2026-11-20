@@ -35,8 +35,8 @@ const requests = new AsyncLocalStorage<{
 }>();
 
 export function createHttpNativeAdmissionTelemetry() {
+	const request = requests.getStore();
 	return createNativeAdmissionTelemetry((value) => {
-		const request = requests.getStore();
 		if (!request?.active || !projectNativeAdmission(value)) return;
 		const stage = value as { phase: string };
 		const previous = request.nativeAdmission as
