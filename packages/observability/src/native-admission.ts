@@ -23,6 +23,7 @@ const stages = new Set([
 ]);
 const reasons = new Set([
 	"ok",
+	"completed_after_cancel",
 	"client_abort",
 	"internal_deadline",
 	"dependency",
@@ -50,6 +51,12 @@ export function projectNativeAdmission(value: unknown) {
 		!reasons.has(v.reason as string) ||
 		!reasons.has(v.cancelSource as string) ||
 		v.cancelSource === "ok" ||
+		v.cancelSource === "completed_after_cancel" ||
+		(v.reason === "completed_after_cancel" &&
+			(v.phase !== "completed" ||
+				!["client_abort", "internal_deadline"].includes(
+					v.cancelSource as string,
+				))) ||
 		![1, 2, 3, 6, "UNKNOWN"].includes(v.protocolVersion as number) ||
 		!Number.isSafeInteger(v.elapsedMs) ||
 		(v.elapsedMs as number) < 0
@@ -169,7 +176,12 @@ export function createNativeAdmissionTelemetry(
 				elapsedMs: event.elapsedMs,
 				protocolVersion,
 				cancelSource,
-				reason: event.phase === "failed" ? (first?.reason ?? "UNKNOWN") : "ok",
+				reason:
+					event.phase === "failed"
+						? (first?.reason ?? "UNKNOWN")
+						: event.phase === "completed" && cancelSource !== "UNKNOWN"
+							? "completed_after_cancel"
+							: "ok",
 				...(event.phase === "failed" ? first : {}),
 			});
 		} catch {

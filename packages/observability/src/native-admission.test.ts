@@ -121,9 +121,31 @@ it("drops private canaries from real logs and exported Trace attributes", async 
 				sqlState: "PRIVATE_SQL",
 			},
 		});
+		const stages = createNativeAdmissionTelemetry((value) =>
+			telemetry.record({
+				stage: "dependency",
+				outcome: "completed",
+				nativeAdmission: value,
+			}),
+		);
+		stages.observe({
+			stage: "store.lock",
+			phase: "started",
+			observationId: 10,
+			elapsedMs: 0,
+		});
+		stages.cancel("internal_deadline");
+		stages.observe({
+			stage: "store.lock",
+			phase: "completed",
+			observationId: 10,
+			elapsedMs: 100,
+		});
 		await telemetry.close();
 		expect(logs.join("")).toContain("metadata.second");
 		expect(exports.join("")).toContain("metadata.second");
+		expect(logs.join("")).toContain("completed_after_cancel");
+		expect(exports.join("")).toContain("completed_after_cancel");
 		for (const output of [...logs, ...exports])
 			expect(output).not.toContain("PRIVATE_");
 	} finally {
@@ -146,5 +168,32 @@ it.each([401, 403])(
 			reason: "UNKNOWN",
 		});
 		expect(JSON.stringify(values)).not.toContain("PRIVATE_CANARY");
+	},
+);
+
+it.each(["client_abort", "internal_deadline"] as const)(
+	"retains completion after %s without calling it ok",
+	(source) => {
+		const values: unknown[] = [];
+		const telemetry = createNativeAdmissionTelemetry((v) => values.push(v));
+		telemetry.observe({
+			stage: "store.lock",
+			phase: "started",
+			observationId: 101,
+			elapsedMs: 0,
+		});
+		telemetry.cancel(source);
+		telemetry.observe({
+			stage: "store.lock",
+			phase: "completed",
+			observationId: 101,
+			elapsedMs: 150,
+		});
+		expect(projectNativeAdmission(values.at(-1))).toMatchObject({
+			nativeAdmissionPhase: "completed",
+			elapsedMs: 150,
+			reason: "completed_after_cancel",
+			cancelSource: source,
+		});
 	},
 );

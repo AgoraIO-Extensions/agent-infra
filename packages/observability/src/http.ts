@@ -37,17 +37,24 @@ const requests = new AsyncLocalStorage<{
 export function createHttpNativeAdmissionTelemetry() {
 	const request = requests.getStore();
 	return createNativeAdmissionTelemetry((value) => {
-		if (!request?.active || !projectNativeAdmission(value)) return;
+		const projected = projectNativeAdmission(value);
+		if (
+			!request ||
+			!projected ||
+			(!request.active && projected.reason !== "completed_after_cancel")
+		)
+			return;
 		const stage = value as { phase: string };
 		const previous = request.nativeAdmission as
 			| { phase?: string; reason?: string }
 			| undefined;
 		const incoming = value as { phase: string; reason: string };
 		if (
-			previous?.phase !== "failed" ||
-			(previous.reason === "UNKNOWN" &&
-				incoming.phase === "failed" &&
-				incoming.reason !== "UNKNOWN")
+			request.active &&
+			(previous?.phase !== "failed" ||
+				(previous.reason === "UNKNOWN" &&
+					incoming.phase === "failed" &&
+					incoming.reason !== "UNKNOWN"))
 		)
 			request.nativeAdmission = value;
 		try {
