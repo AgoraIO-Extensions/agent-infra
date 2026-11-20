@@ -1532,6 +1532,117 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		});
 	});
 
+	it("keeps typed application entries through a people-only availability update (#4283)", async () => {
+		await clearDatabase();
+		await seed();
+		await adminClient`
+			insert into platform.agent_availability (agent_id, target_type, target_id)
+			values ('agent_01', 'application', 'shared_01'),
+				('agent_01', 'user', 'shared_01')
+		`;
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		const owner = {
+			agentId: "agent_01",
+			actorId: "owner_01",
+			organizationIds: [],
+			isAdministrator: false,
+		};
+		const before = await query.readAuthority(owner);
+		if (before.outcome !== "found" || !before.management)
+			throw new Error("Expected the Owner authority");
+		expect(before.management.availability).toEqual([
+			{ kind: "user", userId: "shared_01" },
+			{ kind: "application", applicationId: "shared_01" },
+		]);
+		await expect(
+			query.read({ ...owner, intent: "manage" }),
+		).resolves.toMatchObject({
+			outcome: "found",
+			configuration: {
+				availability: [
+					{ kind: "application", applicationId: "shared_01" },
+					{ kind: "user", userId: "shared_01" },
+				],
+			},
+		});
+		// The application entry never admits the user or organization with the same bare ID.
+		await expect(
+			query.read({
+				agentId: "agent_01",
+				actorId: "member_01",
+				organizationIds: ["shared_01"],
+				isAdministrator: false,
+				intent: "discover",
+			}),
+		).resolves.toEqual({ outcome: "unavailable" });
+		const configuration = createAgentConfigurationUseCaseV1(
+			{
+				...dependencies(openTransaction()),
+				authorizationAdmission: new FakeAgentConfigurationAdmissionsV1({
+					...agentConfigurationConformanceAdmissionsV1,
+					authorizations: [
+						{
+							agentId: "agent_01",
+							actorId: "owner_01",
+							authorizationRevision: "authorization_10",
+							accessAuthority: {
+								...accessAuthority,
+								state: before.management,
+								authorityContext: {
+									...accessAuthority.authorityContext,
+									users: [
+										...accessAuthority.authorityContext.users,
+										{ userId: "shared_01", accountStatus: "active" },
+									],
+								},
+							},
+						},
+					],
+				}),
+			},
+			{ now: () => new Date(occurredAt) },
+		);
+		await configuration.update(
+			{
+				schemaVersion: 2,
+				agentId: "agent_01",
+				idempotencyKey: "people-only",
+				requestId: "request_people",
+				traceId: "trace_people",
+				changes: { availability: [{ kind: "user", userId: "owner_02" }] },
+			},
+			actor,
+		);
+		await expect(
+			adminClient`
+				select target_type, target_id from platform.agent_availability
+				where agent_id = 'agent_01' order by target_type, target_id
+			`.then((rows) => rows.map((row) => ({ ...row }))),
+		).resolves.toEqual([
+			{ target_type: "user", target_id: "owner_02" },
+			{ target_type: "application", target_id: "shared_01" },
+		]);
+		const after = await query.readAuthority(owner);
+		expect(after).toMatchObject({
+			outcome: "found",
+			management: {
+				revision: 12,
+				availability: [
+					{ kind: "user", userId: "owner_02" },
+					{ kind: "application", applicationId: "shared_01" },
+				],
+			},
+		});
+		const [audit] = await adminClient`
+			select details from platform.audit_events
+			where action = 'agent.access.updated'
+		`;
+		expect(audit?.details).toMatchObject({
+			changedFields: ["availability"],
+		});
+	});
+
 	it("serializes competing authorization, configuration, and Owner updates", async () => {
 		await clearDatabase();
 		await seed();

@@ -20,6 +20,10 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
+	agentAvailabilityTargetKey,
+	decodeAgentAvailabilityTarget,
+} from "./agent-availability-target.js";
+import {
 	AgentConfigurationStoreError,
 	canonicalSourceReference,
 	maxAccessTargets,
@@ -856,39 +860,28 @@ export class PostgresAgentConfigurationQueryV1 {
 						new Set(ownerIds).size !== ownerIds.length ||
 						ownerIds.some((ownerId) => !validateText(ownerId)) ||
 						availabilityRows.some(
-							({ targetType, targetId }) =>
-								(targetType !== "user" && targetType !== "organization") ||
-								!validateText(targetId),
+							(row) =>
+								!decodeAgentAvailabilityTarget(row) ||
+								!validateText(row.targetId),
 						)
 					) {
 						throw new AgentConfigurationStoreError();
 					}
 					const availability: AgentConfigurationAccessTargetV1[] =
 						availabilityRows
-							.map(({ targetType, targetId }) =>
-								targetType === "user"
-									? { kind: "user" as const, userId: targetId }
-									: {
-											kind: "organization" as const,
-											organizationId: targetId,
-										},
-							)
+							.flatMap((row) => decodeAgentAvailabilityTarget(row) ?? [])
 							.toSorted((left, right) => {
-								const leftKey =
-									left.kind === "user"
-										? `user\0${left.userId}`
-										: `organization\0${left.organizationId}`;
-								const rightKey =
-									right.kind === "user"
-										? `user\0${right.userId}`
-										: `organization\0${right.organizationId}`;
+								const leftKey = agentAvailabilityTargetKey(left);
+								const rightKey = agentAvailabilityTargetKey(right);
 								return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 							});
 					const owner = ownerIds.includes(input.actorId);
+					// Application entries never admit a user (Spec §9.2.2).
 					const available = availability.some((target) =>
 						target.kind === "user"
 							? target.userId === input.actorId
-							: input.organizationIds.includes(target.organizationId),
+							: target.kind === "organization" &&
+								input.organizationIds.includes(target.organizationId),
 					);
 					if (input.intent === "api_metadata") {
 						const grants = await this.#apiMetadataGrants(

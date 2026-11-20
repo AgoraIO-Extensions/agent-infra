@@ -23,6 +23,7 @@ import {
 	agentManagementV1Conformance,
 } from "../../platform-core/src/agent-management.conformance.ts";
 import { parseAgentManagementPortState } from "../../platform-core/src/agent-management-input.ts";
+import { agentAvailabilityTargetId } from "./agent-availability-target.ts";
 import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
@@ -254,7 +255,7 @@ async function seedStates(states: readonly AgentManagementStateV1[]) {
 		state.availability.map((target) => ({
 			agent_id: state.agentId,
 			target_type: target.kind,
-			target_id: target.kind === "user" ? target.userId : target.organizationId,
+			target_id: agentAvailabilityTargetId(target),
 		})),
 	);
 	if (availability.length > 0) {

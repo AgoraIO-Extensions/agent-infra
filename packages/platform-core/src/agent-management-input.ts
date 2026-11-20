@@ -174,7 +174,9 @@ type AgentAccessTargetV1 = AgentManagementStateV1["availability"][number];
 export function agentAccessTargetKey(target: AgentAccessTargetV1): string {
 	return target.kind === "user"
 		? `user:${target.userId}`
-		: `organization:${target.organizationId}`;
+		: target.kind === "organization"
+			? `organization:${target.organizationId}`
+			: `application:${target.applicationId}`;
 }
 
 export function parseAgentAccessTargets(
@@ -193,6 +195,13 @@ export function parseAgentAccessTargets(
 				invalidAgentManagementInput();
 			}
 			return { kind: "organization", organizationId: target.organizationId };
+		}
+		if (target.kind === "application") {
+			requireAgentManagementExactKeys(target, ["kind", "applicationId"]);
+			if (!isAgentManagementText(target.applicationId)) {
+				invalidAgentManagementInput();
+			}
+			return { kind: "application", applicationId: target.applicationId };
 		}
 		return invalidAgentManagementInput();
 	});

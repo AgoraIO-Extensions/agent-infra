@@ -130,9 +130,14 @@ export interface AgentManagementStateV1 {
 	readonly workloadRevision: number;
 	readonly fence: number;
 	readonly ownerIds: readonly string[];
+	/**
+	 * One availability scope (PRD §7.1, Spec §9.2.2). Application entries only
+	 * stand for that application and never admit a user or organization member.
+	 */
 	readonly availability: readonly (
 		| { readonly kind: "user"; readonly userId: string }
 		| { readonly kind: "organization"; readonly organizationId: string }
+		| { readonly kind: "application"; readonly applicationId: string }
 	)[];
 	readonly failureCode: AgentFailureCodeV1 | null;
 }
@@ -164,7 +169,8 @@ export function isAgentAccessAllowedV1(
 		state.availability.some((target) =>
 			target.kind === "user"
 				? target.userId === actor.userId
-				: actor.organizationIds.includes(target.organizationId),
+				: target.kind === "organization" &&
+					actor.organizationIds.includes(target.organizationId),
 		)
 	);
 }

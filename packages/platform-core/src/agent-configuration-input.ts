@@ -552,43 +552,59 @@ export function accessTargetKey(
 ): string {
 	return target.kind === "user"
 		? `user:${target.userId}`
-		: `organization:${target.organizationId}`;
+		: target.kind === "organization"
+			? `organization:${target.organizationId}`
+			: `application:${target.applicationId}`;
 }
 
-export function parseAvailability(
+function parseAccessTargets(
 	input: unknown,
+	allowApplications: boolean,
 ): AgentConfigurationAccessTargetV1[] {
 	return denseArray(input, maxAccessTargets)
-		.map((targetInput) => {
+		.map((targetInput): AgentConfigurationAccessTargetV1 => {
 			const target = exactObject(
 				targetInput,
 				["kind"],
-				["userId", "organizationId"],
+				["userId", "organizationId", "applicationId"],
 			);
-			if (target.kind === "user") {
-				if (
-					!isText(target.userId, idMaxBytes) ||
-					Object.keys(target).length !== 2
-				) {
-					invalidCommand();
-				}
-				return { kind: "user" as const, userId: target.userId };
-			}
+			const [field, ...extra] = Object.keys(target).filter(
+				(key) => key !== "kind",
+			);
+			const id = field === undefined ? undefined : target[field];
+			if (extra.length > 0 || !isText(id, idMaxBytes)) invalidCommand();
+			if (target.kind === "user" && field === "userId")
+				return { kind: "user", userId: id };
+			if (target.kind === "organization" && field === "organizationId")
+				return { kind: "organization", organizationId: id };
 			if (
-				target.kind !== "organization" ||
-				!isText(target.organizationId, idMaxBytes) ||
-				Object.keys(target).length !== 2
-			) {
-				invalidCommand();
-			}
-			return {
-				kind: "organization" as const,
-				organizationId: target.organizationId,
-			};
+				allowApplications &&
+				target.kind === "application" &&
+				field === "applicationId"
+			)
+				return { kind: "application", applicationId: id };
+			return invalidCommand();
 		})
 		.toSorted((left, right) =>
 			compareText(accessTargetKey(left), accessTargetKey(right)),
 		);
+}
+
+/**
+ * Current command versions carry only user and organization entries; an
+ * application entry is rejected here and existing ones are kept by the policy.
+ */
+export function parseAvailability(
+	input: unknown,
+): AgentConfigurationAccessTargetV1[] {
+	return parseAccessTargets(input, false);
+}
+
+/** The persisted or planned scope: users, organizations and applications. */
+export function parseAvailabilityScope(
+	input: unknown,
+): AgentConfigurationAccessTargetV1[] {
+	return parseAccessTargets(input, true);
 }
 
 export function parseAgentConfigurationChangesV1(
