@@ -1396,7 +1396,9 @@ export class PostgresConversationExecutionTransactionV1
 					(await currentConversationExecutionRelayKeyBindingV1(transaction, {
 						authority,
 						userDirectory: this.#userDirectory,
-						...(authority.channelId === "web"
+						...(authority.channelId === "web" ||
+						authority.channelId.startsWith("wecom_bot:") ||
+						authority.channelId.startsWith("wecom_app:")
 							? { reportMissingPersonalKey: true as const }
 							: {}),
 						personalApiAdmissionAuthority:

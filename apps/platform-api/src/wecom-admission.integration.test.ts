@@ -43,7 +43,10 @@ async function waiter(query: () => Promise<readonly unknown[]>) {
 		.poll(async () => (await query()).length, { timeout: 4_000 })
 		.toBeGreaterThan(0);
 }
-async function fixture(userId = `http-user-${++sequence}`) {
+async function fixture(
+	userId = `http-user-${++sequence}`,
+	conversationType: "single" | "group" = "group",
+) {
 	const suffix = ++sequence;
 	const peerId = `http-peer-${suffix}`;
 	const config: WecomConfigurationV1 = {
@@ -114,7 +117,7 @@ async function fixture(userId = `http-user-${++sequence}`) {
 			{
 				msgid: eventId,
 				aibotid: config.botId,
-				chattype: "group",
+				chattype: conversationType,
 				chatid: peerId,
 				from: { userid: userId },
 				msgtype: "text",
@@ -237,12 +240,20 @@ afterAll(async () => {
 });
 
 describe("signed Hono callback through the original WeCom acceptance transaction", () => {
-	it("rejects a missing personal Key without accepting callback facts", async () => {
-		const f = await fixture();
-		await sql`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${f.userId}`;
-		expect((await f.app.request(f.request())).status).toBe(503);
-		await noFacts(f);
-	});
+	it.each(["single", "group"] as const)(
+		"4281 replies to missing personal Key without accepting callback facts (%s)",
+		async (conversationType) => {
+			const f = await fixture(undefined, conversationType);
+			await sql`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${f.userId}`;
+			const response = await f.app.request(f.request());
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				encrypt: expect.any(String),
+				msgsignature: expect.any(String),
+			});
+			await noFacts(f);
+		},
+	);
 	it("rolls back this admission and commits controls for the original user's prior task when disabled before commit", async () => {
 		const prior = await fixture();
 		expect((await prior.app.request(prior.request())).status).toBe(200);

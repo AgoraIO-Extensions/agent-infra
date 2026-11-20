@@ -235,7 +235,11 @@ export type WecomAcceptanceV1 =
 			readonly outcome: "accepted" | "replayed";
 			readonly receipt: WecomReceiptV1;
 	  }
-	| { readonly outcome: "denied" | "unavailable" | "conflict" };
+	| {
+			readonly outcome: "unavailable";
+			readonly reason?: "personal_relay_key_unavailable";
+	  }
+	| { readonly outcome: "denied" | "conflict" };
 export interface WecomConnectionFenceV1 {
 	readonly botId: string;
 	readonly holderId: string;
