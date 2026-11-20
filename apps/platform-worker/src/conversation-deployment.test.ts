@@ -1113,6 +1113,135 @@ describe("production SessionSandbox resource receiver", () => {
 		}
 	});
 
+	it.each(["unknown", "acknowledged-visible"])(
+		"closes the original Service independently while Pod DELETE is %s",
+		async (outcome) => {
+			const f = await executorInstanceFixtureV2();
+			const clock = Date.now;
+			const remove = f.client.delete;
+			const deletes = { Pod: 0, Service: 0 };
+			try {
+				await f.run();
+				const original = structuredClone(f.state());
+				if (!original) throw new Error("missing original instance");
+				f.client.delete = async (object) => {
+					if (object.kind === "Pod") {
+						deletes.Pod++;
+						if (outcome === "unknown")
+							throw new Error("Pod DELETE outcome unknown");
+						return;
+					}
+					if (object.kind === "Service") deletes.Service++;
+					return remove(object);
+				};
+				Date.now = () => original.expiresAt + 1;
+				await expect(f.run()).rejects.toThrow();
+				await expect(f.run()).rejects.toThrow();
+				expect(deletes).toEqual({ Pod: 1, Service: 1 });
+				expect(f.resources.has(`Service/${f.claim.sandbox.resourceName}`)).toBe(
+					false,
+				);
+				expect(
+					f.resources.get(`Pod/${f.claim.sandbox.resourceName}`)?.metadata?.uid,
+				).toBe(original.podUid);
+				expect(f.state()?.phase).toBe("closing");
+				expect(f.state()?.attemptId).toBe(original.attemptId);
+				expect(f.state()?.expiresAt).toBe(original.expiresAt);
+				expect(
+					f.state()?.retirement.find((item) => item.resource.kind === "Pod"),
+				).toMatchObject({
+					state: "delete-requested",
+					callResult: outcome === "unknown" ? "unknown" : "acknowledged",
+				});
+				expect(
+					f.state()?.retirement.find((item) => item.resource.kind === "Service")
+						?.state,
+				).toBe("absent");
+			} finally {
+				Date.now = clock;
+				await f.close();
+			}
+		},
+	);
+	it("retains an unknown Service DELETE without resending or declaring retirement", async () => {
+		const f = await executorInstanceFixtureV2();
+		const clock = Date.now;
+		const remove = f.client.delete;
+		const deletes = { Pod: 0, Service: 0 };
+		try {
+			await f.run();
+			const original = structuredClone(f.state());
+			if (!original) throw new Error("missing original instance");
+			f.client.delete = async (object) => {
+				if (object.kind === "Service") {
+					deletes.Service++;
+					throw new Error("Service DELETE outcome unknown");
+				}
+				if (object.kind === "Pod") deletes.Pod++;
+				return remove(object);
+			};
+			Date.now = () => original.expiresAt + 1;
+			await expect(f.run()).rejects.toThrow();
+			await expect(f.run()).rejects.toThrow();
+			expect(deletes).toEqual({ Pod: 1, Service: 1 });
+			expect(f.resources.has(`Pod/${f.claim.sandbox.resourceName}`)).toBe(
+				false,
+			);
+			expect(f.resources.has(`Service/${f.claim.sandbox.resourceName}`)).toBe(
+				true,
+			);
+			expect(f.state()?.phase).toBe("closing");
+			expect(
+				f.state()?.retirement.find((item) => item.resource.kind === "Service"),
+			).toMatchObject({ state: "delete-requested", callResult: "unknown" });
+			expect(f.state()?.attemptId).toBe(original.attemptId);
+		} finally {
+			Date.now = clock;
+			await f.close();
+		}
+	});
+	it.each(["Pod", "Service"])(
+		"never deletes a replacement %s UID while closing other original resources",
+		async (kind) => {
+			const f = await executorInstanceFixtureV2();
+			const clock = Date.now;
+			const read = f.client.read;
+			const remove = f.client.delete;
+			const deleted: string[] = [];
+			try {
+				await f.run();
+				const original = structuredClone(f.state());
+				if (!original) throw new Error("missing original instance");
+				f.client.read = async <T extends KubernetesObject>(
+					resourceKind: Parameters<typeof read>[0],
+					name: string,
+				): Promise<T | null> => {
+					const object = await read<T>(resourceKind, name);
+					return object &&
+						resourceKind === kind &&
+						f.state()?.phase === "closing"
+						? ({
+								...object,
+								metadata: { ...object.metadata, uid: "replacement-uid" },
+							} as T)
+						: object;
+				};
+				f.client.delete = async (object) => {
+					deleted.push(object.kind ?? "");
+					return remove(object);
+				};
+				Date.now = () => original.expiresAt + 1;
+				await expect(f.run()).rejects.toThrow();
+				expect(deleted).not.toContain(kind);
+				expect(deleted).toContain(kind === "Pod" ? "Service" : "Pod");
+				expect(f.state()?.phase).toBe("closing");
+				expect(f.state()?.attemptId).toBe(original.attemptId);
+			} finally {
+				Date.now = clock;
+				await f.close();
+			}
+		},
+	);
 	it("closes expired Pod and route while an unobserved identity write stays unknown", async () => {
 		const f = await executorInstanceFixtureV2();
 		const clock = Date.now;

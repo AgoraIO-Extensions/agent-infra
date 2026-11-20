@@ -372,21 +372,33 @@ export function createExecutorInstanceControlV2(options: {
 		async retire() {
 			if (!state) return unavailable();
 			if (state.phase !== "closing") await mutate({ kind: "seal" });
+			let pending = false;
+			let failure: unknown;
 			for (const resource of state.resources) {
 				let progress = state.retirement.find(
 					(item) => item.resource.kind === resource.kind,
 				);
-				const current = await client.read(resource.kind, resource.name);
+				let current: Awaited<ReturnType<typeof client.read>>;
+				try {
+					current = await client.read(resource.kind, resource.name);
+				} catch (error) {
+					failure ??= error;
+					pending = true;
+					continue;
+				}
 				if (
 					current &&
 					(current.metadata?.uid !== resource.uid ||
 						current.metadata.namespace !== resource.namespace ||
 						current.metadata.name !== resource.name ||
 						!hasSessionSandboxIdentityV1(current, allocation))
-				)
-					throw new WorkloadKubernetesError("conflict");
+				) {
+					failure ??= new WorkloadKubernetesError("conflict");
+					pending = true;
+					continue;
+				}
 				if (progress?.state === "absent") {
-					if (current) return unavailable();
+					if (current) pending = true;
 					continue;
 				}
 				if (!progress) {
@@ -414,18 +426,31 @@ export function createExecutorInstanceControlV2(options: {
 								kind: "retirement-progress",
 								progress: { ...progress, callResult: "unknown" },
 							});
-							return unavailable();
+							pending = true;
+							continue;
 						}
 					} else progress = { ...progress, callResult: "unknown" };
 					await mutate({ kind: "retirement-progress", progress });
 				}
-				if (await client.read(resource.kind, resource.name))
-					return unavailable();
+				let remaining: Awaited<ReturnType<typeof client.read>>;
+				try {
+					remaining = await client.read(resource.kind, resource.name);
+				} catch (error) {
+					failure ??= error;
+					pending = true;
+					continue;
+				}
+				if (remaining) {
+					pending = true;
+					continue;
+				}
 				await mutate({
 					kind: "retirement-progress",
 					progress: { ...progress, state: "absent" },
 				});
 			}
+			if (failure !== undefined) throw failure;
+			if (pending) return unavailable();
 			await cleanup();
 			await mutate({ kind: "retired" });
 		},
