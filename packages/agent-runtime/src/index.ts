@@ -21,6 +21,12 @@ export * from "./codex-executor-drain-journal.js";
 export * from "./codex-installation.js";
 export * from "./codex-runtime-driver.js";
 export * from "./codex-session-executor.js";
+export {
+	type ConnectionInstallTlsExporterV1,
+	type ConnectionInstallTlsResponseV1,
+	connectionInstallServerExporterV1,
+	requestOverConnectionInstallTlsV1,
+} from "./connection-install-tls.js";
 export * from "./driver.js";
 export * from "./errors.js";
 export * from "./fake-runtime-driver.js";
@@ -28,6 +34,12 @@ export * from "./file-runtime-store.js";
 export * from "./grant.js";
 export * from "./grant-v2.js";
 export * from "./grant-v4.js";
+export {
+	type ConnectionHostSupplyBindingV1,
+	encodeConnectionHostSupplyAadV1,
+	openConnectionHostSupplyV1,
+	sealConnectionHostSupplyV1,
+} from "./host-supply-crypto.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
 export * from "./pi-bootstrap.js";

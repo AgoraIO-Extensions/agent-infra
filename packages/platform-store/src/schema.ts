@@ -24,11 +24,13 @@ import {
 import {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
+	connectionManualInstallations,
 } from "./schema-connection-installation.js";
 import {
 	connectionAssociationGenerations,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionHostSupplies,
 	connectionMachineClientBindings,
 	connectionManualAssociations,
 } from "./schema-connection-registration.js";
@@ -86,11 +88,13 @@ import {
 export {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
+	connectionManualInstallations,
 } from "./schema-connection-installation.js";
 export {
 	connectionAssociationGenerations,
 	connectionConsumerDisables,
 	connectionConsumerRegistrations,
+	connectionHostSupplies,
 	connectionMachineClientBindings,
 	connectionManualAssociations,
 } from "./schema-connection-registration.js";
@@ -203,6 +207,7 @@ import {
 export const platformInfrastructureTables = [
 	connectionConsumerRegistrations,
 	connectionConsumerDisables,
+	connectionHostSupplies,
 	connectionMachineClientBindings,
 	connectionManualAssociations,
 	connectionAssociationGenerations,
@@ -218,6 +223,7 @@ export const platformInfrastructureTables = [
 	taskFeedback,
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
+	connectionManualInstallations,
 	platformUserDisables,
 	ldapIdentityIds,
 	browserSessions,

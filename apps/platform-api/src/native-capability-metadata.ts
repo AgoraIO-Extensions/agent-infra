@@ -12,6 +12,7 @@ import type {
 } from "@agent-infra/platform-core";
 import {
 	nativeCapabilityAdmissionRequestDigestV1,
+	observeNativeAdmissionV1,
 	parseNativeCapabilityMetadataProjectionV1,
 } from "@agent-infra/platform-core";
 import type {
@@ -192,31 +193,46 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 				)
 					return { outcome: "unavailable" };
 				await options.requestContext.revalidate(options.identity);
-				const current = await options.requestContext.run(() =>
-					options.query.readNativeCapabilityCurrentScopeV1({
-						scope: scopeForQuery(authority),
-						agentId: authority.agentId,
-						conversationId: request.conversationId,
-						signal: options.requestContext.signal,
-					}),
+				const current = await observeNativeAdmissionV1(
+					options.requestContext.observeAdmission,
+					"metadata.scope",
+					() =>
+						options.requestContext.run(() =>
+							options.query.readNativeCapabilityCurrentScopeV1({
+								scope: scopeForQuery(authority),
+								agentId: authority.agentId,
+								conversationId: request.conversationId,
+								signal: options.requestContext.signal,
+							}),
+						),
 				);
 				if (!current) return { outcome: "unavailable" };
 				if (!isCurrentScope(current, authority, request, sessionGeneration))
 					return { outcome: "stale" };
 				const [commands, skills] = await Promise.all([
-					options.reader.read(
-						options.identity,
-						request.conversationId,
-						current.executionId,
-						"commands",
-						options.requestContext,
+					observeNativeAdmissionV1(
+						options.requestContext.observeAdmission,
+						"metadata.commands",
+						() =>
+							options.reader.read(
+								options.identity,
+								request.conversationId,
+								current.executionId,
+								"commands",
+								options.requestContext,
+							),
 					),
-					options.reader.read(
-						options.identity,
-						request.conversationId,
-						current.executionId,
-						"skills",
-						options.requestContext,
+					observeNativeAdmissionV1(
+						options.requestContext.observeAdmission,
+						"metadata.skills",
+						() =>
+							options.reader.read(
+								options.identity,
+								request.conversationId,
+								current.executionId,
+								"skills",
+								options.requestContext,
+							),
 					),
 				]);
 				if (!commands || !skills) return { outcome: "unavailable" };

@@ -82,6 +82,10 @@
 		"./runtime/oauth-installation-node": {
 			"types": "./dist/runtime/oauth-installation-node.d.mts",
 			"import": "./dist/runtime/oauth-installation-node.mjs"
+		},
+		"./runtime/connection-install-node": {
+			"types": "./dist/runtime/connection-install-node.d.mts",
+			"import": "./dist/runtime/connection-install-node.mjs"
 		}
 	},
 	"files": [

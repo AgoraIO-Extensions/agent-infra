@@ -2503,6 +2503,9 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    不在 EP-1060 已发布合同中，证据为 agora-connector `2019ca075149ec5184ceadc06d923b69e64c37e5`
    的 `packages/connection-store/src/oauth-repository.ts` L1567–1582。Connection 升级到未核实的
    版本前，部署负责人先撤回例外批准；重新只读核实并以新修订批准前，例外保持关闭。
+   现有已核实合同未提供供 Host 在 EP-1060 回读时比对的 Connection 运行发布标识；批准中的版本
+   仍由部署负责人核实发布出处，协议版本或资源修订不能代替它。人工依赖及残余风险见
+   [ADR-0047“风险与接受”](../adr/0047-m1-connection-principal-first-binding-exception.md#风险与接受)。
 2. **换码前回读。** 原回跳已确认、原平台用户已明确确认后，Host 在读取 code 和 verifier 前，按
    §13.5.6 的实际安装绑定回读，用 EP-1060 读取本安装的登记键。同时满足以下条件才继续：结果为
    `KNOWN`；`principalId` 非空；client、DEVICE 实例、Consumer、`redirectUri`、`resource` 和
@@ -2545,11 +2548,14 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    或服务凭据。例外安装的发布回执以 EP-1060 回读的 `principalId` 作为 `connectionPrincipalId`，
    并标注 `principalMapping=consistency-exception-v1`。该标记只用于审计和回溯，不表示已按主体
    映射规则核实。
-8. **失效。** 到达 `notAfter` 或 EP-1123 发布并获部署批准后，例外不再受理新的安装。到达
-   `notAfter` 时 EP-1123 仍未获批的，Core 停止为全部例外安装签发 MCP 许可，Worker 封闭并按
-   §13.5.7 逐安装撤销这些安装；使用者按届时有效的路径重新安装。EP-1123 在 `notAfter` 之前获批的，
-   对全部例外安装逐一回溯核对映射，不一致或无法核实的封闭并撤销，留审计；延长 `notAfter` 须以新
-   修订重新批准，并重新完成风险接受。
+8. **失效。** 到达 `notAfter` 或 EP-1123 发布并获部署批准后，例外不再受理新的安装。
+   EP-1123 在 `notAfter` 之前获批的，对全部例外安装逐一回溯核对；只有按届时有效的标准安装
+   门禁完成核实，并提交标准发布回执后，该安装才退出例外，原例外记录保留用于审计。
+   不一致或无法核实的安装立即封闭并按 [§13.5.7](#1357-agent-关联与-oauth-安装准备) 逐安装撤销，留审计。
+   无论 EP-1123 是否已获批，到达 `notAfter` 时，Core 均停止为所有尚未完成上述核实并提交标准
+   发布回执的例外安装签发 MCP 许可，Worker 封闭并按 §13.5.7 逐安装撤销；回溯核对未启动、
+   未完成或失败均不得推迟此门禁。使用者按届时有效的路径重新安装。延长 `notAfter` 须以新修订
+   重新批准，并重新完成风险接受。
 
 例外期内，§13.5.6 对动态手工安装的可信映射、批准映射、预期 Principal 及用户索引主体映射的要求
 均按本例外执行。Worker claim 核对、Host CAS、单次换码以及失败和未知结果的处理不变；
@@ -2789,11 +2795,16 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 引用及摘要，凭据字节经另行认证并加密的内部私有接收通道交付给同一 Host。
 该材料只供 EP-1060 登记前机器认证，独立于 V1 MCP reader 的 metadata 与 Token 输入。
 
-凭据密文须通过附加认证数据（AAD）或等价的密码学机制，将载荷完整性绑定到同一份上下文。
-上下文包含目标 Host 的部署身份与 Host ref、Sandbox 标识、实际 Pod UID、
-sessionGeneration、resourceFence、供应引用及修订、投递 attempt 和模板摘要。
-Host 从本机可信身份与 Worker 回读的原投递记录取得预期上下文，解密前先逐项核对。
-只有上下文匹配且密文完整性认证通过，才向受保护的安装逻辑释放明文。任一校验失败即拒绝供应。
+凭据载荷必须使用 AES-256-GCM 进行 AEAD 加密，使用独立的附加认证数据（AAD）绑定
+同一投递上下文。每次加密生成新的 96-bit 随机 nonce，认证标签为 128-bit。Worker 和
+Host 共用同一版本的 AAD 编码。按下列固定顺序编码所有字段，不得省略、重排或增加字段：
+协议域标识 `agent-infra/connection-host-supply/v1`、目标 Host 的部署身份、Host ref、
+Sandbox 标识、实际 Pod UID、sessionGeneration、resourceFence、供应引用、供应修订、
+投递 attempt、模板摘要。每个字段由 4 字节大端无符号长度和对应 UTF-8 字节组成。代次和
+fence 使用无前导零的十进制安全正整数，模板摘要使用小写十六进制 SHA-256。Worker 和
+Host 从各自受信事实构造上下文，不从请求中的字段顺序或密文中推导。Host 在解密前逐项
+核对本机可信身份和 Worker 回读的原投递记录。上下文匹配且 AEAD 认证成功后才向受保护
+安装逻辑释放明文。任一校验失败即拒绝供应。
 
 验收须证明原目标可成功接收，已确认的同一 attempt 可幂等核实。保持当前签名和持久投递
 记录合法，分别换入原属其他 Host、重建前 Pod 或旧 attempt 的密文，三种情况均须拒绝，

@@ -20,6 +20,7 @@ import {
 } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresAgentConnectionAssociationStoreV1 } from "./agent-connection-association.ts";
+import { PostgresConnectionHostSupplyStoreV1 } from "./connection-host-supplies.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import { PostgresPersonalApiCredentialStoreV1 } from "./personal-api-credentials.ts";
 import {
@@ -249,6 +250,119 @@ describe("Owner manual Connection association", () => {
 		).toMatchObject({ status: "not_enabled", source: null });
 		expect(await rows()).toEqual([]);
 		await noCredentialPersisted();
+	});
+
+	it("isolates failed supply attempts across Agents and allows bounded recovery", async () => {
+		await useCase().associate(
+			browser("agent-a"),
+			manual("connection-agent-a", credentialA),
+		);
+		await useCase().associate(
+			browser("agent-b"),
+			manual("connection-agent-b", credentialB),
+		);
+		const supplies = new PostgresConnectionHostSupplyStoreV1(
+			database.databaseUrl,
+		);
+		const reopened = new PostgresConnectionHostSupplyStoreV1(
+			database.databaseUrl,
+		);
+		const a = { agentId: "agent-a", associationRevision: 1 };
+		const b = { agentId: "agent-b", associationRevision: 1 };
+		const approval = {
+			systemFingerprint: "a".repeat(64),
+			source: { ref: "approval-a", revision: "1" },
+		};
+		const receipt = { ref: "supply-a", revision: "r1" };
+		try {
+			const first = await supplies.reserve(a, approval);
+			const failed = await supplies.reserve(b, approval);
+			if (first.state !== "reserved" || failed.state !== "reserved")
+				throw new Error("Missing supply reservation");
+			expect(await supplies.publish(first.attempt, receipt)).toBe(true);
+			expect(
+				await supplies.fence({ ...failed.attempt, agentId: "agent-a" }),
+			).toBe(false);
+			expect(await supplies.fence(failed.attempt)).toBe(true);
+			expect(await reopened.reserve(a, approval)).toEqual({
+				state: "available",
+				attempt: first.attempt,
+				receipt,
+			});
+			expect(await reopened.claimCleanup()).toEqual(failed.attempt);
+			expect(await reopened.reserve(b, approval)).toEqual({
+				state: "unavailable",
+			});
+			expect(await reopened.cleanupResult(failed.attempt, "closed")).toBe(true);
+			const retry = await reopened.reserve(b, approval);
+			if (retry.state !== "reserved")
+				throw new Error("Missing recovered reservation");
+			expect(retry.attempt.attemptId).not.toBe(failed.attempt.attemptId);
+			expect(await supplies.fence(failed.attempt)).toBe(false);
+			expect(await supplies.publish(failed.attempt, receipt)).toBe(false);
+			expect(
+				await supplies.publish(retry.attempt, {
+					ref: "supply-b",
+					revision: "r2",
+				}),
+			).toBe(true);
+		} finally {
+			await Promise.all([supplies.close(), reopened.close()]);
+		}
+	});
+
+	it("fences superseded approvals and finds cleanup missed by the old App", async () => {
+		await useCase().associate(
+			browser("agent-a"),
+			manual("connection-agent-a", credentialA),
+		);
+		const supplies = new PostgresConnectionHostSupplyStoreV1(
+			database.databaseUrl,
+		);
+		const scope = { agentId: "agent-a", associationRevision: 1 };
+		const approval = {
+			systemFingerprint: "a".repeat(64),
+			source: { ref: "approval-a", revision: "1" },
+		};
+		const receipt = { ref: "supply-a", revision: "r1" };
+		try {
+			const original = await supplies.reserve(scope, approval);
+			if (original.state !== "reserved")
+				throw new Error("Missing original reservation");
+			expect(await supplies.publish(original.attempt, receipt)).toBe(true);
+			const newer = {
+				...approval,
+				source: { ...approval.source, revision: "2" },
+			};
+			expect(await supplies.reserve(scope, newer)).toEqual({
+				state: "unavailable",
+			});
+			expect(await supplies.reserve(scope, approval)).toEqual({
+				state: "unavailable",
+			});
+			expect(await supplies.claimCleanup()).toEqual(original.attempt);
+			expect(await supplies.cleanupResult(original.attempt, "closed")).toBe(
+				true,
+			);
+			const replacement = await supplies.reserve(scope, newer);
+			if (replacement.state !== "reserved")
+				throw new Error("Missing replacement reservation");
+			expect(
+				await supplies.publish(replacement.attempt, {
+					ref: "supply-a",
+					revision: "r2",
+				}),
+			).toBe(true);
+			// An older application deletes the association without updating the supply ledger.
+			await sql`delete from platform.connection_manual_associations where agent_id = 'agent-a'`;
+			expect(await supplies.reserve(scope, newer)).toEqual({
+				state: "unavailable",
+			});
+			expect(await supplies.claimCleanup()).toEqual(replacement.attempt);
+			expect(await supplies.claimCleanup()).toBeUndefined();
+		} finally {
+			await supplies.close();
+		}
 	});
 
 	it("never reuses a CAS revision across disconnect and reassociation (ABA)", async () => {

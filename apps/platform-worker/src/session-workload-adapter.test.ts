@@ -14,7 +14,10 @@ import {
 	codexSessionExecutorAttestationV1,
 	createCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
 import type {
 	SessionSandboxDeletionProgressV1,
@@ -68,6 +71,7 @@ import {
 	sessionSandboxImageProjectionV1,
 	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
+	sessionSandboxReserveResourcesV1,
 	sessionSandboxResourcesV1,
 	sessionSandboxRuntimeContainerName,
 	sessionSandboxSelectorMatchesV1,
@@ -177,6 +181,88 @@ const allocation: SessionSandboxAllocationV1 = {
 	}),
 	desiredState: "running",
 };
+
+it("keeps the empty installation receiver on both cold and reserve Hosts", () => {
+	const configuration = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "approved-egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/connection/callback",
+	};
+	const connectionInstallBootstrap = {
+		port: 3443,
+		workerOrigin: "https://install-worker.workload-test.svc:3444/",
+		apiSelector: { component: "platform-api" },
+		clientName: "Agent platform",
+		configuration,
+		approval: {
+			schemaVersion: 1,
+			configFingerprint: connectionSystemAccessFingerprintV1(configuration),
+			egressEnforced: true,
+			source: { ref: "approval", revision: "r1" },
+		},
+		installToken: "install-readback-canary-Z9Z9Z9Z9Z9Z9Z9Z9Z9Z",
+		tlsSecretRef: {
+			name: "session-tls",
+			certKey: "tls.crt",
+			keyKey: "tls.key",
+		},
+		callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+		workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+	};
+	const {
+		principal: _principal,
+		channelId: _channel,
+		...unclaimed
+	} = allocation;
+	const cold = sessionSandboxResourcesV1({
+		...allocation,
+		connectionInstallBootstrap,
+	});
+	const reserve = sessionSandboxReserveResourcesV1({
+		...unclaimed,
+		generation: 1,
+		resourceFence: 1,
+		connectionInstallBootstrap,
+	});
+	for (const [, , policy, service, secret, pod] of [cold, reserve]) {
+		expect(service.spec?.ports).toContainEqual({
+			name: "oauth",
+			port: 3443,
+			targetPort: 3443,
+		});
+		expect(policy.spec?.egress).toContainEqual({
+			to: [
+				{ podSelector: { matchLabels: allocation.authorizedIngressSelector } },
+			],
+			ports: [{ protocol: "TCP", port: 3444 }],
+		});
+		expect(
+			pod.spec?.initContainers?.some(
+				(container) => container.name === "runtime-oauth-provision",
+			),
+		).toBe(true);
+		expect(JSON.stringify(pod)).not.toContain(
+			connectionInstallBootstrap.installToken,
+		);
+		expect(JSON.stringify(pod)).not.toContain("actor-a");
+		expect(secret.data?.["connection-install-readback-token"]).toBe(
+			Buffer.from(connectionInstallBootstrap.installToken).toString("base64"),
+		);
+	}
+	expect(() =>
+		sessionSandboxResourcesV1({
+			...allocation,
+			connectionInstallBootstrap: {
+				...connectionInstallBootstrap,
+				workerOrigin: "http://install-worker.workload-test.svc:3444/",
+			},
+		}),
+	).toThrow();
+});
 
 describe("image-only Session layout", () => {
 	it("projects a custom ACP Session without materializing its Owner Secret", () => {

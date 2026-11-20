@@ -1981,6 +1981,7 @@ export function createConversationRuntimeV2(
 			try {
 				let previous: Awaited<ReturnType<typeof prepare>> | undefined;
 				let controlReprepareAttempts = 0;
+				let emptyTerminalPages = 0;
 				for (;;) {
 					active.throwIfAborted();
 					// #3443：先让消费方提交已缓冲的事件，读取起点与发送前复核的 fenced state 都是已提交游标。
@@ -2043,11 +2044,26 @@ export function createConversationRuntimeV2(
 					// The Host replays a bounded page per read. A non-empty page without
 					// the terminal event may hide later events even when the Platform
 					// already recorded a terminal status from a status response (#1524).
-					if (delivered > 0) continue;
+					if (delivered > 0) {
+						emptyTerminalPages = 0;
+						continue;
+					}
 					if (
 						["completed", "failed", "cancelled"].includes(state.executionStatus)
-					)
-						return;
+					) {
+						// Business completion does not prove journal archival. Only a
+						// committed terminal cursor permits an empty control read to end.
+						if (
+							prepared.context.claim.runtimeTerminalEventSeen ||
+							prepared.context.claim.metadataRecovery
+						)
+							return;
+						if (++emptyTerminalPages >= eventPreparationAttempts)
+							throw new ConversationRuntimeHostError(
+								"RUNTIME_STREAM_INCOMPLETE",
+								true,
+							);
+					}
 					await pause();
 				}
 			} finally {
