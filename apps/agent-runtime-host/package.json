@@ -18,6 +18,7 @@
 		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/native-metadata-transport": "workspace:*",
+		"@agent-infra/observability": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "4.13.7",
 		"koffi": "3.3.8",
