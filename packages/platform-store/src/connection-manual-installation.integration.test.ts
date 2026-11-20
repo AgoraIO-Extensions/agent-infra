@@ -2380,4 +2380,67 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			attempt_id: run.prepare.attemptId,
 		});
 	});
+
+	// Files K8413-4206-0500: recovery is not truncated by one sweep page, and it
+	// spans Executions. Every unsupplied prepare keeps its original command.
+	it("recovers every unsupplied prepare across Executions after more than one page expires", async () => {
+		const originals: { commandId: string; executionId: string }[] = [];
+		for (const [user, suffix, worker, count] of [
+			["alice", "a", "worker-a", 33],
+			["bob", "bob", "worker-b", 2],
+		] as const)
+			for (let index = 0; index < count; index += 1) {
+				const projection = await begin(user, suffix);
+				const [command] =
+					await client`select id from platform.connection_installation_commands
+					where authorization_id=${projection.authorizationId} and command='prepare'`;
+				const commandId = command?.id as string;
+				expect(
+					await manual.claim({
+						commandId,
+						attemptId: randomUUID(),
+						attemptOwner: worker,
+					}),
+				).not.toBeNull();
+				originals.push({ commandId, executionId: `execution-${suffix}` });
+			}
+		// Every Worker exits before fixSupply.
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()-interval '1 second' where command='prepare'`;
+		const first = await manual.listPending(32, ["execution-a"]);
+		expect(first).toHaveLength(32);
+		for (const item of first)
+			expect(
+				await manual.claim({
+					commandId: item.commandId,
+					attemptId: randomUUID(),
+					attemptOwner: "worker-a",
+				}),
+			).not.toBeNull();
+		const next = await manual.listPending(32, ["execution-a"]);
+		expect(next).toHaveLength(1);
+		const bob = await manual.listPending(32, ["execution-bob"]);
+		expect(bob).toHaveLength(2);
+		expect(
+			[...first, ...next, ...bob].map((item) => item.commandId).sort(),
+		).toEqual(originals.map((item) => item.commandId).sort());
+		expect(
+			await client`select count(*)::int as n from platform.connection_installation_commands
+				where command='prepare' and status='unknown'`,
+		).toEqual([{ n: 0 }]);
+	}, 60_000);
+
+	it("closes an unsupplied expired prepare whose authorization expired as unknown", async () => {
+		const projection = await begin();
+		const first = await claimFirst("prepare");
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()-interval '1 second' where id=${first.item.commandId}`;
+		await client`update platform.connection_installation_authorizations
+			set expires_at=clock_timestamp()-interval '1 second' where id=${projection.authorizationId}`;
+		expect(await manual.listPending(32, ["execution-a"])).toEqual([]);
+		const [row] =
+			await client`select status, attempt_id from platform.connection_installation_commands
+			where id=${first.item.commandId}`;
+		expect(row).toEqual({ status: "unknown", attempt_id: first.attemptId });
+	});
 });

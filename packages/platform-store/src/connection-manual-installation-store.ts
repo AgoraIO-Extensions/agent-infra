@@ -58,6 +58,8 @@ const manualCommands: readonly ManualCommand[] = [
 ];
 /** Two bounded network hops (supply, then one Connection request) per attempt. */
 const attemptLifetime = sql`interval '60 seconds'`;
+/** One bounded read per page; the sweep pages until every candidate is handled. */
+const unsuppliedPageSize = 32;
 
 function unavailable(): never {
 	throw new ConnectionInstallationErrorV1("unavailable");
@@ -172,43 +174,60 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	/**
 	 * A prepare claimed but expired before fixSupply committed sent nothing: no
 	 * template, supply attempt or ciphertext exists, and registration needs a
-	 * confirmed supply. It reopens for the same installation under the usual
-	 * association → authorization → installation → command lock order; anything
-	 * past fixSupply keeps the unknown path below.
+	 * confirmed supply. Every such prepare, across Executions and pages, either
+	 * reopens for the same installation or, when its authorization or
+	 * association no longer holds, closes as unknown with its original key. The
+	 * locks follow association → authorization → installation → command; the
+	 * blind sweep below never touches these rows, so no page limit strands one.
 	 */
 	async #reopenUnsuppliedPrepares() {
-		const candidates = await this.#transaction((tx) =>
-			tx.execute(sql`
-			select c.id, c.authorization_id from platform.connection_installation_commands c
-			join platform.connection_manual_installations m on m.authorization_id=c.authorization_id
-			where c.command='prepare' and c.status='pending' and c.attempt_id is not null
-				and c.attempt_expires_at <= clock_timestamp() and c.delivery_digest is null
-				and m.template is null and m.supply_attempt_id is null
-				and m.supply_state='pending' and m.registration_state='pending'
-			order by c.created_at, c.id limit 32
-		`),
-		);
-		for (const candidate of candidates)
-			await this.#transaction(async (tx) => {
-				const row = await this.#lockInstallation(
-					tx,
-					candidate.authorization_id as string,
-				);
-				if (!row?.associationLocked) return;
-				await tx.execute(sql`
-					update platform.connection_installation_commands c
-					set status='pending', attempt_id=null, attempt_owner=null, attempt_expires_at=null,
-						updated_at=clock_timestamp()
-					from platform.connection_manual_installations m, platform.connection_installation_authorizations a
-					where c.id=${candidate.id as string} and c.command='prepare' and c.status='pending'
-						and c.attempt_id is not null and c.attempt_expires_at <= clock_timestamp()
-						and c.delivery_digest is null
-						and m.authorization_id=c.authorization_id and a.id=c.authorization_id
-						and a.status='preparing' and a.expires_at > clock_timestamp()
-						and m.template is null and m.supply_attempt_id is null
-						and m.supply_state='pending' and m.registration_state='pending'
-				`);
-			});
+		let after = "";
+		for (;;) {
+			const page = await this.#transaction((tx) =>
+				tx.execute(sql`
+				select c.id, c.authorization_id from platform.connection_installation_commands c
+				join platform.connection_manual_installations m on m.authorization_id=c.authorization_id
+				where c.command='prepare' and c.status='pending' and c.attempt_id is not null
+					and c.attempt_expires_at <= clock_timestamp() and c.delivery_digest is null
+					and m.template is null and m.supply_attempt_id is null
+					and m.supply_state='pending' and m.registration_state='pending'
+					and c.id > ${after}
+				order by c.id limit ${unsuppliedPageSize}
+			`),
+			);
+			for (const candidate of page)
+				await this.#transaction(async (tx) => {
+					const row = await this.#lockInstallation(
+						tx,
+						candidate.authorization_id as string,
+					);
+					if (!row) return;
+					const reopened = row.associationLocked
+						? await tx.execute(sql`
+							update platform.connection_installation_commands c
+							set status='pending', attempt_id=null, attempt_owner=null, attempt_expires_at=null,
+								updated_at=clock_timestamp()
+							from platform.connection_manual_installations m, platform.connection_installation_authorizations a
+							where c.id=${candidate.id as string} and c.command='prepare' and c.status='pending'
+								and c.attempt_id is not null and c.attempt_expires_at <= clock_timestamp()
+								and c.delivery_digest is null
+								and m.authorization_id=c.authorization_id and a.id=c.authorization_id
+								and a.status='preparing' and a.expires_at > clock_timestamp()
+								and m.template is null and m.supply_attempt_id is null
+								and m.supply_state='pending' and m.registration_state='pending'
+							returning c.id
+						`)
+						: [];
+					if (reopened.length === 1) return;
+					await tx.execute(sql`
+						update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
+						where id=${candidate.id as string} and command='prepare' and status='pending'
+							and attempt_id is not null and attempt_expires_at <= clock_timestamp()
+					`);
+				});
+			if (page.length < unsuppliedPageSize) return;
+			after = page.at(-1)?.id as string;
+		}
 	}
 
 	/** Expired attempts become unknown, including the registration they were sending. */
@@ -216,9 +235,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		await this.#reopenUnsuppliedPrepares();
 		await this.#transaction((tx) =>
 			tx.execute(sql`
-			update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
-			where (status='sending' or (status='pending' and command='prepare' and attempt_id is not null)) and attempt_expires_at is not null and attempt_expires_at <= clock_timestamp()
-				and authorization_id in (select authorization_id from platform.connection_manual_installations)
+			update platform.connection_installation_commands c set status='unknown', updated_at=clock_timestamp()
+			where (c.status='sending' or (c.status='pending' and c.command='prepare' and c.attempt_id is not null
+					and not exists (select 1 from platform.connection_manual_installations unsupplied
+						where unsupplied.authorization_id=c.authorization_id and unsupplied.template is null
+							and unsupplied.supply_attempt_id is null and unsupplied.supply_state='pending'
+							and unsupplied.registration_state='pending')))
+				and c.attempt_expires_at is not null and c.attempt_expires_at <= clock_timestamp()
+				and c.authorization_id in (select authorization_id from platform.connection_manual_installations)
 		`),
 		);
 		await this.#transaction((tx) =>
