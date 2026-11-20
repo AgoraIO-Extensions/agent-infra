@@ -1328,6 +1328,12 @@ export function createProductionSessionSandboxReceiverV1(
 		readonly executorIdentityIssuer?: ConversationRuntimeOptionsV2["signing"]["privateKey"];
 	},
 ) {
+	if (
+		workload.policy.codexSessionExecutor !== undefined &&
+		options.executorDrainStartupTimeoutMs !== undefined &&
+		workload.policy.executorInstanceStartupApprovals === undefined
+	)
+		throw new Error("WORKER_EXECUTOR_V2_APPROVALS_REQUIRED");
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
 		executorIdentityIssuer: options.executorIdentityIssuer,
