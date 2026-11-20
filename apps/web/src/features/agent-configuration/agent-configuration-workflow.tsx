@@ -23,6 +23,7 @@ import type {
 	KeylessEndpointNames,
 	KeylessModelCandidate,
 } from "./keyless-model-selection.js";
+import { useAgentAvailabilityScope } from "./use-agent-availability-scope.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
 import { useAgentSavedRelayKeyCandidates } from "./use-agent-saved-relay-key-candidates.js";
@@ -89,6 +90,11 @@ function AgentConfigurationWorkflowContent({
 	const isSystemAdministrator =
 		session.state.kind === "ready" &&
 		session.state.session.user.roles.includes("system_admin");
+	// 只有 Owner 能读取含独立应用的完整可用范围（Spec §9.2.2）。
+	const availabilityScope = useAgentAvailabilityScope(
+		agent.agentId,
+		isConfigurationOwner,
+	);
 	// 只有 Owner 能读取默认 Key 状态；`isSet` 表示模型由默认 Key 管理（#2421）。
 	const defaultRelayKey = useAgentDefaultRelayKeyState(
 		agent.agentId,
@@ -153,6 +159,7 @@ function AgentConfigurationWorkflowContent({
 		<AgentConfigurationScreen
 			afterForm={isConfigurationOwner ? afterForm : undefined}
 			agent={agent}
+			availabilityScope={availabilityScope.data}
 			allowedEnvironmentKeys={allowedEnvironmentKeys}
 			allowedSecretKeys={allowedSecretKeys}
 			deploymentModelCandidates={deploymentModelCandidates}

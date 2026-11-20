@@ -2,6 +2,7 @@ import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
 import {
+	agentConfigurationApplicationsChanged,
 	agentConfigurationDraftChanged,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
@@ -54,6 +55,55 @@ const agent = AgentProjectionV2Schema.parse({
 });
 
 describe("Agent configuration draft", () => {
+	it("keeps V2 people-only saves until the whole scope is loaded, then echoes application entries in V5 (#4283)", () => {
+		const peopleOnly = buildAgentConfigurationRequest(
+			configurationDraftFromAgent(agent),
+			agent,
+		);
+		expect(peopleOnly).toMatchObject({
+			schemaVersion: 2,
+			availability: [
+				{ kind: "user", userId: "user-reader-1" },
+				{ kind: "organization", organizationId: "organization-1" },
+			],
+		});
+		const scope = {
+			schemaVersion: 1 as const,
+			agentId: agent.agentId,
+			availability: [
+				{ kind: "application" as const, applicationId: "app-1" },
+				{ kind: "organization" as const, organizationId: "organization-1" },
+				{ kind: "user" as const, userId: "user-reader-1" },
+			],
+		};
+		const draft = configurationDraftFromAgent(agent, scope);
+		expect(draft.applicationAvailabilityIds).toBe("app-1");
+		expect(buildAgentConfigurationRequest(draft, agent)).toMatchObject({
+			schemaVersion: 5,
+			availability: [
+				{ kind: "user", userId: "user-reader-1" },
+				{ kind: "organization", organizationId: "organization-1" },
+				{ kind: "application", applicationId: "app-1" },
+			],
+		});
+		expect(agentConfigurationDraftChanged(agent, draft, scope)).toBe(false);
+		expect(agentConfigurationApplicationsChanged(draft, scope)).toBe(false);
+		const removed = { ...draft, applicationAvailabilityIds: "" };
+		expect(agentConfigurationDraftChanged(agent, removed, scope)).toBe(true);
+		expect(agentConfigurationApplicationsChanged(removed, scope)).toBe(true);
+		expect(buildAgentConfigurationRequest(removed, agent).availability).toEqual(
+			[
+				{ kind: "user", userId: "user-reader-1" },
+				{ kind: "organization", organizationId: "organization-1" },
+			],
+		);
+		// A scope for another Agent never seeds this draft.
+		expect(
+			configurationDraftFromAgent(agent, { ...scope, agentId: "agent-other" })
+				.applicationAvailabilityIds,
+		).toBeUndefined();
+	});
+
 	it("initializes editable values without reconstructing Secrets or credentials", () => {
 		const draft = configurationDraftFromAgent(agent);
 

@@ -1591,6 +1591,55 @@ function isOwnApplicationDisableV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #4283 admits only the application availability V2 target, the V5 Owner
+// configuration request beside V2 on the same route, and the Owner-only
+// availability read. V2 keeps its people-only wire meaning (Spec §9.2.2).
+function isApplicationAvailabilityV2OpenApiAddition(previous, current) {
+	const configuration = "/api/v2/agents/{agentId}/configuration";
+	const read = "/api/v2/agents/{agentId}/configuration/availability";
+	const schemas = [
+		"AvailabilityTargetV2",
+		"AgentConfigurationUpdateRequestV5",
+		"AgentAvailabilityProjectionV1",
+	];
+	const previousPut = previous.paths?.[configuration]?.put;
+	const currentPut = current.paths?.[configuration]?.put;
+	if (
+		!previousPut ||
+		!currentPut ||
+		previousPut.description !== undefined ||
+		previous.paths?.[read] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		description: currentPut.description,
+		requestBody: currentPut.requestBody,
+		read: current.paths?.[read],
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	// Generated and committed artifacts order keys differently.
+	if (
+		![
+			"b75d900e90714d8bf01c783fe201bafb29fe28827fca56ffc75c84fb7e117bf1",
+			"ed527786ab9bf66898bd35068178b7fbdef06089c62b0fef732878c63ec37086",
+		].includes(
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
+		)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[read];
+	delete normalized.paths[configuration].put.description;
+	normalized.paths[configuration].put.requestBody = structuredClone(
+		previousPut.requestBody,
+	);
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #1166 admits only the reviewed own-application metadata GET.
 function isOwnApplicationMetadataV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/applications/{applicationId}";
@@ -7913,6 +7962,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleAcceptedResponseOpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
+			!isApplicationAvailabilityV2OpenApiAddition(previous, current) &&
 			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
 			!isApplicationCredentialIssuerV2OpenApiAddition(previous, current) &&
 			!isApplicationCredentialGovernanceV2OpenApiAddition(previous, current) &&

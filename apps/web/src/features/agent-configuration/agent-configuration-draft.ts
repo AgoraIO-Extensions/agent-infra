@@ -1,6 +1,8 @@
 import { cjkSpaced } from "@/lib/cjk-spacing";
 import type {
+	AgentAvailabilityProjectionV1,
 	AgentConfigurationUpdateRequestV2Writable,
+	AgentConfigurationUpdateRequestV5Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 
@@ -29,6 +31,11 @@ export type AgentConfigurationDraft = {
 	environment: readonly AgentConfigurationEnvironmentDraft[];
 	models: readonly AgentConfigurationModelDraft[];
 	organizationAvailabilityIds: string;
+	/**
+	 * 独立应用条目（Spec §9.2.2）。未读到 Owner 完整可用范围时为 undefined：保存仍走 V2，
+	 * 只替换人员条目，服务端原样保留应用条目；读到后整表以 V5 回传，不会丢掉应用条目。
+	 */
+	applicationAvailabilityIds?: string;
 	replaceModels: boolean;
 	workspaceSnapshots: readonly { snapshotId: string; name: string }[];
 	userAvailabilityIds: string;
@@ -43,8 +50,18 @@ function splitValues(value: string) {
 
 export function configurationDraftFromAgent(
 	agent: AgentProjectionV2,
+	scope?: AgentAvailabilityProjectionV1,
 ): AgentConfigurationDraft {
 	return {
+		...(scope?.agentId === agent.agentId
+			? {
+					applicationAvailabilityIds: scope.availability
+						.flatMap((target) =>
+							target.kind === "application" ? [target.applicationId] : [],
+						)
+						.join("\n"),
+				}
+			: {}),
 		coOwnerIds: agent.configuration.owners
 			.map((owner) => owner.userId)
 			.join("\n"),
@@ -95,10 +112,14 @@ export function agentConfigurationEnvironmentChanged(
 	);
 }
 
+export type AgentConfigurationRequest =
+	| AgentConfigurationUpdateRequestV2Writable
+	| AgentConfigurationUpdateRequestV5Writable;
+
 export function buildAgentConfigurationRequest(
 	draft: AgentConfigurationDraft,
 	agent: AgentProjectionV2,
-): AgentConfigurationUpdateRequestV2Writable {
+): AgentConfigurationRequest {
 	const modelConfiguration = draft.replaceModels
 		? {
 				options: draft.models.map((model) => ({
@@ -118,21 +139,32 @@ export function buildAgentConfigurationRequest(
 			}))
 		: undefined;
 
+	const people = [
+		...splitValues(draft.userAvailabilityIds).map((userId) => ({
+			kind: "user" as const,
+			userId,
+		})),
+		...splitValues(draft.organizationAvailabilityIds).map((organizationId) => ({
+			kind: "organization" as const,
+			organizationId,
+		})),
+	];
 	return {
-		schemaVersion: 2,
-		coOwnerIds: splitValues(draft.coOwnerIds),
-		availability: [
-			...splitValues(draft.userAvailabilityIds).map((userId) => ({
-				kind: "user" as const,
-				userId,
-			})),
-			...splitValues(draft.organizationAvailabilityIds).map(
-				(organizationId) => ({
-					kind: "organization" as const,
-					organizationId,
+		...(draft.applicationAvailabilityIds === undefined
+			? { schemaVersion: 2 as const, availability: people }
+			: {
+					schemaVersion: 5 as const,
+					availability: [
+						...people,
+						...[...new Set(splitValues(draft.applicationAvailabilityIds))].map(
+							(applicationId) => ({
+								kind: "application" as const,
+								applicationId,
+							}),
+						),
+					],
 				}),
-			),
-		],
+		coOwnerIds: splitValues(draft.coOwnerIds),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		...(environment === undefined ? {} : { environment }),
 		...(draft.channels === undefined ? {} : { channels: draft.channels }),
@@ -149,6 +181,25 @@ export function buildAgentConfigurationRequest(
 	};
 }
 
+function applicationIds(value: string | undefined) {
+	return value === undefined ? [] : splitValues(value);
+}
+
+/** 草稿里的独立应用条目是否与 Owner 读到的完整可用范围不同。 */
+export function agentConfigurationApplicationsChanged(
+	draft: Pick<AgentConfigurationDraft, "applicationAvailabilityIds">,
+	scope: AgentAvailabilityProjectionV1 | undefined,
+): boolean {
+	if (draft.applicationAvailabilityIds === undefined) return false;
+	const current = (scope?.availability ?? []).flatMap((target) =>
+		target.kind === "application" ? [target.applicationId] : [],
+	);
+	return (
+		sortedJson(applicationIds(draft.applicationAvailabilityIds)) !==
+		sortedJson(current)
+	);
+}
+
 /** 按集合比较：服务端对 Owner 与范围去重后再比较，重复的 ID 不算改动。 */
 function sortedJson(values: readonly string[]) {
 	return JSON.stringify([...new Set(values)].sort());
@@ -163,9 +214,10 @@ function sortedJson(values: readonly string[]) {
 export function agentConfigurationDraftChanged(
 	agent: AgentProjectionV2,
 	draft: AgentConfigurationDraft,
+	scope?: AgentAvailabilityProjectionV1,
 ): boolean {
 	const baseline = buildAgentConfigurationRequest(
-		configurationDraftFromAgent(agent),
+		configurationDraftFromAgent(agent, scope),
 		agent,
 	);
 	const request = buildAgentConfigurationRequest(draft, agent);
@@ -181,7 +233,9 @@ export function agentConfigurationDraftChanged(
 			(value.availability ?? []).map((target) =>
 				target.kind === "user"
 					? `user:${target.userId}`
-					: `organization:${target.organizationId}`,
+					: target.kind === "organization"
+						? `organization:${target.organizationId}`
+						: `application:${target.applicationId}`,
 			),
 		);
 	if (targets(request) !== targets(baseline)) return true;

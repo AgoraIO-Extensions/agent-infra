@@ -974,6 +974,34 @@ export class PostgresAgentConfigurationQueryV1 {
 		}
 	}
 
+	/**
+	 * Access confirmation for application entries being added to an availability
+	 * scope (Spec §9.2.2): returns only registered, active application IDs and
+	 * nothing else about other applications.
+	 */
+	async confirmActiveApplications(input: {
+		readonly agentId: string;
+		readonly applicationIds: readonly string[];
+	}): Promise<readonly string[]> {
+		if (
+			!validateText(input.agentId) ||
+			!Array.isArray(input.applicationIds) ||
+			input.applicationIds.length === 0 ||
+			input.applicationIds.length > maxAccessTargets ||
+			input.applicationIds.some((id) => !validateText(id))
+		)
+			throw new AgentConfigurationStoreError();
+		try {
+			const rows = await this.#client<{ id: string }[]>`
+				select id from platform.platform_applications
+				where id = any(${[...input.applicationIds]}::text[]) and status = 'active'
+			`;
+			return rows.map(({ id }) => id);
+		} catch {
+			throw new AgentConfigurationStoreError();
+		}
+	}
+
 	async close(): Promise<void> {
 		try {
 			await this.#client.end();

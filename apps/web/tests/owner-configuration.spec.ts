@@ -844,8 +844,9 @@ test("environment variables save as a full table and the page stays after saving
 	await expect(main(page).getByText("没有需要保存的变更。")).toHaveCount(0);
 	await save.click();
 	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
+	// The Owner read the whole scope (no application entries), so the save is V5 (#4283).
 	expect(api.commands.at(-1)?.body).toEqual({
-		schemaVersion: 2,
+		schemaVersion: 5,
 		coOwnerIds: ["user-owner-1"],
 		availability: [{ kind: "organization", organizationId: "org-platform" }],
 		environment: [{ name: "AGENT_WORKSPACE", value: "workspace" }],
@@ -1131,7 +1132,7 @@ test("saved-Key candidates start unchanged and use readable names (RK2-01, RK2-0
 		.fill("owner-only-change");
 	await page.getByRole("button", { name: "保存配置" }).click();
 	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
-	expect(api.commands.at(-1)?.body).toMatchObject({ schemaVersion: 2 });
+	expect(api.commands.at(-1)?.body).toMatchObject({ schemaVersion: 5 });
 	expect(api.commands.at(-1)?.body).not.toHaveProperty("modelConfiguration");
 });
 

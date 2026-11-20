@@ -1,8 +1,10 @@
 import { types } from "node:util";
 
 import {
+	AgentAvailabilityProjectionV1Schema,
 	AgentConfigurationUpdateRequestV2Schema,
 	AgentConfigurationUpdateRequestV4Schema,
+	AgentConfigurationUpdateRequestV5Schema,
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -21,6 +23,7 @@ import type {
 	AgentConfigurationQueryResultV1,
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
+import { z } from "zod";
 import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
 	HttpProtocolError,
@@ -82,21 +85,43 @@ export interface ConfigurationRoutesDependencies {
 	};
 }
 
-const updateConfigurationRequestSchema =
-	AgentConfigurationUpdateRequestV2Schema.or(
-		AgentConfigurationUpdateRequestV4Schema,
+const updateConfigurationRequestSchema = z.union([
+	AgentConfigurationUpdateRequestV2Schema,
+	AgentConfigurationUpdateRequestV4Schema,
+	AgentConfigurationUpdateRequestV5Schema,
+]);
+
+type ConfigurationUpdateBody =
+	| ReturnType<typeof AgentConfigurationUpdateRequestV2Schema.parse>
+	| ReturnType<typeof AgentConfigurationUpdateRequestV5Schema.parse>;
+
+/**
+ * V2/V4 availability only replaces people entries; V5 carries the whole scope,
+ * so its application entries become the application part (Spec §9.2.2).
+ */
+function availabilityChanges(input: ConfigurationUpdateBody) {
+	if (input.availability === undefined) return {};
+	const people = input.availability.flatMap((target) =>
+		target.kind === "application" ? [] : [target],
 	);
+	return input.schemaVersion === 5
+		? {
+				availability: people,
+				applicationAvailability: input.availability.flatMap((target) =>
+					target.kind === "application" ? [target.applicationId] : [],
+				),
+			}
+		: { availability: people };
+}
 
 function configurationChanges(
-	input: ReturnType<typeof AgentConfigurationUpdateRequestV2Schema.parse>,
+	input: ConfigurationUpdateBody,
 	preparedModelCredentialOptionIds: ReadonlySet<string>,
 ) {
 	return {
 		...(input.source === undefined ? {} : { source: input.source }),
 		...(input.coOwnerIds === undefined ? {} : { coOwnerIds: input.coOwnerIds }),
-		...(input.availability === undefined
-			? {}
-			: { availability: input.availability }),
+		...availabilityChanges(input),
 		...(input.modelConfiguration === undefined
 			? {}
 			: {
@@ -154,7 +179,7 @@ function snapshotArray(input: unknown): unknown[] {
 }
 
 function validatePreparedSecrets(
-	input: ReturnType<typeof AgentConfigurationUpdateRequestV2Schema.parse>,
+	input: ConfigurationUpdateBody,
 	prepared: Awaited<
 		ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 	>,
@@ -235,9 +260,7 @@ export function registerV2ConfigurationRoutes(
 			updateConfigurationRequestSchema,
 			metadata.traceId,
 		);
-		const legacyBody = body as ReturnType<
-			typeof AgentConfigurationUpdateRequestV2Schema.parse
-		>;
+		const legacyBody = body as ConfigurationUpdateBody;
 		// 带默认 Key 的更换模型请求：Key、版本与模型选择成套出现，走 V3 命令（#2421）。
 		const keyReplacement = parseDefaultRelayKeyReplacement(
 			body,
@@ -513,6 +536,48 @@ export function registerV2ConfigurationRoutes(
 		);
 	};
 	app.put("/api/v2/agents/:agentId/configuration", updateConfiguration);
+	// Owner-only whole availability scope with application entries (Spec §9.2.2);
+	// the V2 Agent projection keeps people entries only.
+	app.get(
+		"/api/v2/agents/:agentId/configuration/availability",
+		async (context) => {
+			const request = context.req.raw;
+			const metadata = requestMetadata(request);
+			context.header("Cache-Control", "no-store");
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				request,
+				metadata.traceId,
+			);
+			const agentId = context.req.param("agentId");
+			if (!agentId || new URL(request.url).search || request.body !== null)
+				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			let result: AgentConfigurationQueryResultV1;
+			try {
+				result = await dependencies.configurationQuery.read({
+					agentId,
+					actorId: identity.userId,
+					organizationIds: identity.organizationIds,
+					isAdministrator: false,
+					intent: "manage",
+				});
+			} catch {
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
+			if (
+				result.outcome !== "found" ||
+				!result.configuration.ownerIds.includes(identity.userId)
+			)
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+			return context.json(
+				AgentAvailabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					agentId,
+					availability: result.configuration.availability,
+				}),
+			);
+		},
+	);
 	app.put(
 		"/api/v2/agents/:agentId/configuration/saved-model",
 		updateConfiguration,

@@ -622,10 +622,14 @@ credential/attempt 引用、grant 修订、阶段、时间和固定原因码；�
   无法确认时 fail closed，不凭旧缓存继续投递。
 - **其他入口。** 平台对话页和企微只映射公司用户，应用条目不影响这两个入口；用户与组织条目的判定不变。
   Agent 默认 Relay Key 的用途不变。
-- **契约。** 可用范围目标增加 `application` 判别值，`applicationId` 使用既有不透明 ID 约束。读取和
-  写入可用范围的 Web 投影与请求在同一版本同时支持该值；Web 更新可用范围时须回传已有的应用条目，
-  不能因不识别而丢弃。对外 API 的现有投影若会出现应用条目，须按 [§6.4](#64-contract-schema-authority)
-  发布新版本，不静默改变旧版本的 wire 含义。
+- **契约。** 应用条目只出现在新的可用范围目标版本 `AvailabilityTargetV2` 中：增加 `application`
+  判别值，`applicationId` 使用既有不透明 ID 约束。`AvailabilityTargetV1` 不追加判别值，因为旧 Web
+  包按 kind 只取用户和组织条目并整表回传，同版追加会让它静默删掉应用条目，管理修订 CAS 拦不住这种
+  覆盖。读取和写入完整范围的 Web 投影与请求同时发布、使用同一目标版本：Owner 只读投影
+  `AgentAvailabilityProjectionV1` 与 Owner 配置更新请求 V5；V5 的 `availability` 是含应用条目的
+  完整范围，Web 须回传已有的应用条目。现有 V1/V2 投影只返回用户和组织条目，现有请求版本只替换这两类
+  条目并原样保留应用条目。对外 API 的现有投影不返回应用条目；需要返回时按
+  [§6.4](#64-contract-schema-authority) 发布新版本，不静默改变旧版本的 wire 含义。
 
 ### 9.3 服务端授权上下文
 

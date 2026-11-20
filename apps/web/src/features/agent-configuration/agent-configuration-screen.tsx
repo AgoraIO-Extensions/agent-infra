@@ -8,7 +8,7 @@ import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { client as generatedV2Client } from "../../pilot/generated-v2/client.gen.js";
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
-	AgentConfigurationUpdateRequestV2Writable,
+	AgentAvailabilityProjectionV1,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -26,6 +26,8 @@ import {
 	isRetryableConfigurationError,
 } from "./agent-configuration.js";
 import {
+	type AgentConfigurationRequest,
+	agentConfigurationApplicationsChanged,
 	agentConfigurationDraftChanged,
 	agentConfigurationEnvironmentChanged,
 	buildAgentConfigurationRequest,
@@ -67,11 +69,13 @@ import type {
 type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
 type ConfigurationSaveRequest =
-	| AgentConfigurationUpdateRequestV2Writable
+	| AgentConfigurationRequest
 	| AgentSavedModelConfigurationUpdate;
 
 type AgentConfigurationScreenProps = {
 	agent: AgentProjectionV2;
+	/** Owner 读到的完整可用范围（含独立应用）；未读到时只编辑人员条目。 */
+	availabilityScope?: AgentAvailabilityProjectionV1;
 	/** 表单卡内的首个分区（Agent 授权控制）。 */
 	authorization?: ReactNode;
 	/** 表单卡之后的独立区域：Owner 危险区与管理员操作区。 */
@@ -226,6 +230,7 @@ export function AgentAdministratorConfigurationScreen({
 
 export function AgentConfigurationScreen({
 	agent,
+	availabilityScope,
 	afterForm,
 	allowedEnvironmentKeys,
 	allowedSecretKeys,
@@ -256,7 +261,25 @@ export function AgentConfigurationScreen({
 	upgradingImage = false,
 }: AgentConfigurationScreenProps) {
 	const toast = useToast();
-	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
+	const [draft, setDraft] = useState(() =>
+		configurationDraftFromAgent(agent, availabilityScope),
+	);
+	// 完整可用范围晚于 Agent 投影到达：只在草稿还没有应用条目时补上，不覆盖正在编辑的值。
+	const applicationScopeMissing =
+		draft.applicationAvailabilityIds === undefined;
+	useEffect(() => {
+		if (!applicationScopeMissing || !availabilityScope) return;
+		const { applicationAvailabilityIds } = configurationDraftFromAgent(
+			agent,
+			availabilityScope,
+		);
+		if (applicationAvailabilityIds === undefined) return;
+		setDraft((current) =>
+			current.applicationAvailabilityIds === undefined
+				? { ...current, applicationAvailabilityIds }
+				: current,
+		);
+	}, [agent, availabilityScope, applicationScopeMissing]);
 	const [ownerError, setOwnerError] = useState<string>();
 	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
 	const [savedSelectionError, setSavedSelectionError] = useState(false);
@@ -288,7 +311,13 @@ export function AgentConfigurationScreen({
 		if (!submittedResult || submittedResult === handledResult.current) return;
 		handledResult.current = submittedResult;
 		if ("configuration" in submittedResult)
-			setDraft(configurationDraftFromAgent(submittedResult));
+			// V2 投影不含应用条目：保存成功后保留刚提交的应用条目，等完整范围重读。
+			setDraft((current) => ({
+				...configurationDraftFromAgent(submittedResult),
+				...(current.applicationAvailabilityIds === undefined
+					? {}
+					: { applicationAvailabilityIds: current.applicationAvailabilityIds }),
+			}));
 		setEnvErrors({});
 		setShowSelectionErrors(false);
 		setSavedSelectionError(false);
@@ -302,7 +331,8 @@ export function AgentConfigurationScreen({
 		session.kind === "ready" &&
 		isAgentConfigurationOwner(agent, session.session);
 	const isDisabled = submitting || agent.managementStatus === "disabled";
-	const hasChanges = isOwner && agentConfigurationDraftChanged(agent, draft);
+	const hasChanges =
+		isOwner && agentConfigurationDraftChanged(agent, draft, availabilityScope);
 
 	// 保存期间「保存配置」是可聚焦的禁用，焦点留在按钮上；在字段里按 Enter 提交时先交给按钮
 	// （字段随 fieldset 禁用）。保存成功后按钮因没有变更而禁用，焦点落到「没有需要保存的变更。」
@@ -422,9 +452,17 @@ export function AgentConfigurationScreen({
 			savedRelayKeyConfigurationRevision !== undefined &&
 			savedRelayKeyVersion !== undefined
 		) {
+			// 已保存 Key 的模型保存（V4）只替换人员条目；独立应用的改动须单独保存，不能静默丢弃。
+			if (agentConfigurationApplicationsChanged(draft, availabilityScope)) {
+				toast("请先单独保存独立应用的修改，再更换模型");
+				return;
+			}
 			setSavePath("saved-model");
 			onSave({
 				...withoutModels,
+				availability: (withoutModels.availability ?? []).flatMap((target) =>
+					target.kind === "application" ? [] : [target],
+				),
 				modelConfiguration,
 				schemaVersion: 4,
 				expectedConfigurationRevision: savedRelayKeyConfigurationRevision,
@@ -501,6 +539,13 @@ export function AgentConfigurationScreen({
 							disabled={isDisabled}
 							userIds={draft.userAvailabilityIds}
 							organizationIds={draft.organizationAvailabilityIds}
+							applicationIds={draft.applicationAvailabilityIds}
+							onApplicationsChange={(value) =>
+								setDraft((current) => ({
+									...current,
+									applicationAvailabilityIds: value,
+								}))
+							}
 							onUsersChange={(value) =>
 								setDraft((current) => ({
 									...current,

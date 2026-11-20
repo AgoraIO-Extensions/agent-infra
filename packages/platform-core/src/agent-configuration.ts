@@ -269,7 +269,8 @@ function createAgentConfigurationUseCaseV1Internal(
 		const changedFields: AgentConfigurationChangedFieldV1[] = [];
 		if (
 			changes.coOwnerIds !== undefined ||
-			changes.availability !== undefined
+			changes.availability !== undefined ||
+			changes.applicationAvailability !== undefined
 		) {
 			const access = authorization.accessAuthority;
 			if (
@@ -278,6 +279,47 @@ function createAgentConfigurationUseCaseV1Internal(
 				access.actorContext.userId !== actorContext.actorId
 			) {
 				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			// People and application entries form one scope (Spec §9.2.2): each part
+			// keeps its current entries unless the command replaces that part.
+			const currentApplicationIds = access.state.availability.flatMap(
+				(target) =>
+					target.kind === "application" ? [target.applicationId] : [],
+			);
+			const desiredAvailability = [
+				...(changes.availability ??
+					access.state.availability.filter(
+						({ kind }) => kind !== "application",
+					)),
+				...(changes.applicationAvailability ?? currentApplicationIds).map(
+					(applicationId) => ({
+						kind: "application" as const,
+						applicationId,
+					}),
+				),
+			].toSorted((left, right) =>
+				compareText(accessTargetKey(left), accessTargetKey(right)),
+			);
+			const addedApplicationIds = (
+				changes.applicationAvailability ?? []
+			).filter(
+				(applicationId) => !currentApplicationIds.includes(applicationId),
+			);
+			let confirmedApplicationIds: readonly string[] = [];
+			if (addedApplicationIds.length > 0 && dependencies.applicationAdmission) {
+				try {
+					const confirmed =
+						await dependencies.applicationAdmission.confirmActiveApplications({
+							agentId: command.agentId,
+							applicationIds: addedApplicationIds,
+						});
+					confirmedApplicationIds = addedApplicationIds.filter(
+						(applicationId) => confirmed.includes(applicationId),
+					);
+				} catch {
+					// Unconfirmable is rejected like a missing or disabled application.
+					confirmedApplicationIds = [];
+				}
 			}
 			let decision: ReturnType<typeof decideAgentAccessUpdatePolicy>;
 			try {
@@ -295,26 +337,14 @@ function createAgentConfigurationUseCaseV1Internal(
 						agentId: command.agentId,
 						expectedRevision: access.state.revision,
 						desiredOwnerIds,
-						// Current command versions only carry people entries; the
-						// application entries of the same scope are kept (Spec §9.2.2).
-						desiredAvailability: [
-							...(changes.availability === undefined
-								? access.state.availability
-								: [
-										...changes.availability,
-										...access.state.availability.filter(
-											({ kind }) => kind === "application",
-										),
-									]),
-						].toSorted((left, right) =>
-							compareText(accessTargetKey(left), accessTargetKey(right)),
-						),
+						desiredAvailability,
 						requestId: command.requestId,
 						traceId: command.traceId,
 					},
 					access.state,
 					access.actorContext,
 					access.authorityContext,
+					confirmedApplicationIds,
 				);
 			} catch {
 				throw new AgentConfigurationError("dependency_unavailable");

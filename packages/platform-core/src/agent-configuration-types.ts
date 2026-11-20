@@ -268,7 +268,13 @@ export interface UpdateAgentConfigurationCommandV2 {
 	readonly traceId: string;
 	readonly changes: {
 		readonly coOwnerIds?: readonly string[];
+		/** User and organization entries only; application entries stay as they are. */
 		readonly availability?: readonly AgentConfigurationAccessTargetV1[];
+		/**
+		 * The whole set of application entries in the same scope (Spec §9.2.2).
+		 * Omitted keeps the current application entries.
+		 */
+		readonly applicationAvailability?: readonly string[];
 		readonly source?: AgentConfigurationSourceSelectionV1;
 		readonly modelConfiguration?: AgentConfigurationModelInputV1;
 		readonly environment?: readonly {
@@ -721,6 +727,17 @@ export class AgentConfigurationError extends Error {
 	}
 }
 
+/**
+ * Access confirmation for application entries being added to an availability
+ * scope (Spec §9.2.2). Returns only the IDs that are registered and active.
+ */
+export interface AgentConfigurationApplicationAdmissionPortV1 {
+	confirmActiveApplications(input: {
+		readonly agentId: string;
+		readonly applicationIds: readonly string[];
+	}): Promise<readonly string[]>;
+}
+
 export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly defaultRelayKey?: Pick<
 		AgentDefaultRelayKeyDependenciesV1,
@@ -734,6 +751,8 @@ export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly keylessModelAdmission?: AgentConfigurationModelAdmissionPortV2;
 	readonly secretAdmission: AgentConfigurationSecretAdmissionPortV1;
 	readonly channelAdmission: AgentConfigurationChannelAdmissionPortV1;
+	/** Without it a new application entry cannot be confirmed and is rejected. */
+	readonly applicationAdmission?: AgentConfigurationApplicationAdmissionPortV1;
 }
 
 export type InitialAgentConfigurationAdmissionDependenciesV1 = Omit<

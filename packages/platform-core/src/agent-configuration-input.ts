@@ -600,6 +600,17 @@ export function parseAvailability(
 	return parseAccessTargets(input, false);
 }
 
+/** Application IDs of one scope: unique, canonical order (Spec §9.2.2). */
+export function parseApplicationAvailability(input: unknown): string[] {
+	const ids = denseArray(input, maxAccessTargets).map((id) => {
+		if (!isText(id, idMaxBytes)) invalidCommand();
+		return id;
+	});
+	const sorted = ids.toSorted(compareText);
+	if (new Set(sorted).size !== sorted.length) invalidCommand();
+	return sorted;
+}
+
 /** The persisted or planned scope: users, organizations and applications. */
 export function parseAvailabilityScope(
 	input: unknown,
@@ -616,6 +627,7 @@ export function parseAgentConfigurationChangesV1(
 		[
 			"coOwnerIds",
 			"availability",
+			"applicationAvailability",
 			"source",
 			"modelConfiguration",
 			"environment",
@@ -629,6 +641,13 @@ export function parseAgentConfigurationChangesV1(
 			: {}),
 		...(Object.hasOwn(changes, "availability")
 			? { availability: parseAvailability(changes.availability) }
+			: {}),
+		...(Object.hasOwn(changes, "applicationAvailability")
+			? {
+					applicationAvailability: parseApplicationAvailability(
+						changes.applicationAvailability,
+					),
+				}
 			: {}),
 		...(Object.hasOwn(changes, "source")
 			? { source: parseSourceSelection(changes.source) }

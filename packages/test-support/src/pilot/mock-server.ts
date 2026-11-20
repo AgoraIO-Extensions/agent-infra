@@ -33,6 +33,11 @@ export type PilotAgentMockServerScenarioV1 = {
 	readonly getAgentDefaultRelayKey?: PilotAgentMockResponderV1<
 		[Request, string]
 	>;
+	/**
+	 * Owner 完整可用范围（#4283）。未提供时由 getAgent 的 V2 响应派生，只含人员条目；
+	 * getAgent 不是 200 时按不可读处理（404）。
+	 */
+	readonly getAgentAvailability?: PilotAgentMockResponderV1<[Request, string]>;
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
 	readonly createAgentApplication?: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgentApplication?: PilotAgentMockResponderV1<[Request, string]>;
@@ -178,6 +183,10 @@ function createPilotAgentMockServer(
 	const getAgentDefaultRelayKeyOperation =
 		version === 2
 			? operation("/api/v2/agents/{agentId}/default-relay-key", "get")
+			: undefined;
+	const getAgentAvailabilityOperation =
+		version === 2
+			? operation("/api/v2/agents/{agentId}/configuration/availability", "get")
 			: undefined;
 	const getAgentConnectionAssociationOperation =
 		version === 2
@@ -607,6 +616,63 @@ function createPilotAgentMockServer(
 						},
 					};
 			validateResponse(getAgentDefaultRelayKeyOperation, response);
+			return jsonResponse(response);
+		}
+		const availabilityAgentIdPath =
+			/^\/api\/v1\/agents\/([^/]+)\/configuration\/availability$/.exec(
+				routingPath,
+			)?.[1];
+		if (
+			request.method === "GET" &&
+			availabilityAgentIdPath !== undefined &&
+			getAgentAvailabilityOperation !== undefined
+		) {
+			const agentId = decodeURIComponent(availabilityAgentIdPath);
+			getAgentAvailabilityOperation.requestParams.path?.parse({ agentId });
+			let response: PilotAgentMockResponseV1;
+			if (scenario.getAgentAvailability) {
+				response = await resolveResponse(
+					scenario.getAgentAvailability,
+					request,
+					agentId,
+				);
+			} else {
+				const agentUrl = new URL(request.url);
+				agentUrl.pathname = agentUrl.pathname.replace(
+					/\/configuration\/availability$/,
+					"",
+				);
+				const agent = resolveResponse(
+					scenario.getAgent,
+					new Request(agentUrl, request),
+					agentId,
+				);
+				validateResponse(getAgentOperation, agent);
+				const body = agent.body as {
+					configuration?: { availability?: unknown };
+				};
+				response =
+					agent.status === 200
+						? {
+								status: 200,
+								body: {
+									schemaVersion: 1,
+									agentId,
+									availability: body.configuration?.availability ?? [],
+								},
+							}
+						: {
+								status: 404,
+								body: {
+									schemaVersion: 1,
+									code: "RESOURCE_UNAVAILABLE",
+									message: "Resource is unavailable.",
+									retryable: false,
+									traceId: "trace-mock-availability",
+								},
+							};
+			}
+			validateResponse(getAgentAvailabilityOperation, response);
 			return jsonResponse(response);
 		}
 		// #4157：Agent 设置的 Connection 分区默认读到「未启用」，不关联任何外部 Consumer。
