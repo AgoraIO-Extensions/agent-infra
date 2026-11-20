@@ -19,6 +19,7 @@ import {
 	BatchSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import pino from "pino";
+import { projectNativeAdmission } from "./native-admission.js";
 import {
 	createTraceParent,
 	formatTraceParent,
@@ -123,6 +124,7 @@ export const operationalCodes = [
 export type OperationalCode = (typeof operationalCodes)[number];
 
 export interface OperationalEvent {
+	readonly nativeAdmission?: unknown;
 	readonly stage: OperationalStage;
 	readonly outcome: OperationalOutcome;
 	readonly durationMs?: number;
@@ -701,6 +703,7 @@ export function startObservability(options: ObservabilityOptions) {
 			}
 			try {
 				const {
+					nativeAdmission,
 					stage,
 					outcome,
 					durationMs,
@@ -829,6 +832,7 @@ export function startObservability(options: ObservabilityOptions) {
 						? { termination }
 						: {}),
 					...(isOperationalFailureStep(failureStep) ? { failureStep } : {}),
+					...projectNativeAdmission(nativeAdmission),
 					...(errorClass !== undefined &&
 					/^[A-Za-z][A-Za-z0-9_$.-]{0,63}$/.test(errorClass)
 						? { errorClass }

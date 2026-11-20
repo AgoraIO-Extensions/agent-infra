@@ -229,13 +229,35 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 				| "target"
 				| "host"
 				| "current-after" = "binding";
+			let stageBegan = performance.now();
+			const elapsed = () =>
+				Math.max(0, Math.round(performance.now() - stageBegan));
+			const advance = (next: typeof step) => {
+				logNativeMetadataHop(
+					"worker.read",
+					step,
+					request.traceId,
+					"ok",
+					elapsed(),
+				);
+				step = next;
+				stageBegan = performance.now();
+				logNativeMetadataHop(
+					"worker.read",
+					step,
+					request.traceId,
+					"started",
+					0,
+				);
+			};
+			logNativeMetadataHop("worker.read", step, request.traceId, "started", 0);
 			try {
 				const binding = await options.binding.resolve({ request, signal });
 				if (signal.aborted || !binding) unavailable();
 				const parsedBinding =
 					RuntimeNativeMetadataBindingResponseV1Schema.parse(binding);
 				if (!sameIdentity(request, parsedBinding)) unavailable();
-				step = "current-before";
+				advance("current-before");
 				const current = await options.current.check({
 					request: currentRequest(parsedBinding),
 					apiRequestSourceRef: request.apiRequestSourceRef,
@@ -243,7 +265,7 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 				});
 				if (signal.aborted || !sameCurrent(current, parsedBinding))
 					unavailable();
-				step = "proof";
+				advance("proof");
 				const proof = await options.proofIssuer.issue({
 					request: parsedBinding,
 					...(request.apiRequestSourceRef
@@ -251,13 +273,13 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 						: {}),
 					signal,
 				});
-				step = "target";
+				advance("target");
 				const transport = await options.transport.resolve({
 					binding: parsedBinding,
 					signal,
 				});
 				if (signal.aborted || !transport) unavailable();
-				step = "host";
+				advance("host");
 				if (active.size >= 128 || active.has(parsedBinding.readId))
 					unavailable();
 				const remaining = parsedBinding.expiresAt - Date.now();
@@ -300,14 +322,20 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 					response.projection.selector !== parsedBinding.selector
 				)
 					unavailable();
-				step = "current-after";
+				advance("current-after");
 				const after = await options.current.check({
 					request: currentRequest(parsedBinding),
 					apiRequestSourceRef: request.apiRequestSourceRef,
 					signal,
 				});
 				if (signal.aborted || !sameCurrent(after, parsedBinding)) unavailable();
-				logNativeMetadataHop("worker.read", step, request.traceId, "ok");
+				logNativeMetadataHop(
+					"worker.read",
+					step,
+					request.traceId,
+					"ok",
+					elapsed(),
+				);
 				return response;
 			} catch (error) {
 				logNativeMetadataHop(
@@ -315,6 +343,7 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 					step,
 					request.traceId,
 					"unavailable",
+					elapsed(),
 				);
 				throw error;
 			}

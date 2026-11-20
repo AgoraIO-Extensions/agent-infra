@@ -127,6 +127,8 @@ export function registerNativeCapabilityInvocationRoutesV1(
 		const metadata = requestMetadata(context.req.raw);
 		const requestContext = createRuntimeNativeMetadataRequestContextV1({
 			signal: context.req.raw.signal,
+			traceId: metadata.traceId,
+			admissionTelemetry: true,
 			authenticate: () =>
 				resolveIdentity(
 					dependencies.identity,
@@ -148,6 +150,7 @@ export function registerNativeCapabilityInvocationRoutesV1(
 				if (!parsed.valid)
 					return context.json({ outcome: "invalid_parameters" }, 400);
 				body = parseHttpRequest(parsed.value);
+				requestContext.setAdmissionProtocolVersion?.(body.schemaVersion);
 			} catch {
 				if (requestContext.signal.aborted)
 					return context.json({ outcome: "unavailable" }, 503);
