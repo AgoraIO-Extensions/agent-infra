@@ -1448,6 +1448,22 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					key,
 				).toString("base64url"),
 			});
+			const impostor = generateKeyPairSync("ed25519");
+			expect(
+				await command({
+					kind: "adopted",
+					attemptId: state.attemptId,
+					revision: state.revision,
+					proof: {
+						...unsigned,
+						signature: sign(
+							null,
+							Buffer.from(executorInstanceAdoptionBytesV2(unsigned)),
+							impostor.privateKey,
+						).toString("base64url"),
+					},
+				}),
+			).toBeNull();
 			for (const wrong of [
 				{ ...unsigned, podUid: "another-pod" },
 				{ ...unsigned, resourceFence: unsigned.resourceFence + 1 },
