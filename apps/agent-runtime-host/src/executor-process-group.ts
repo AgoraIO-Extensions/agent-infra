@@ -94,30 +94,32 @@ export async function executorChildrenV1(parent: number) {
 	)
 		throw new Error("CODEX_EXECUTOR_PROCESS_IDENTITY_INVALID");
 	const result = new Map<number, ProcessStatus>();
-	const tasks = await readdir(`/proc/${parent}/task`);
-	if (tasks.length > 4096) throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
-	const children = new Set<number>();
-	for (const task of tasks) {
-		try {
-			const ids = await readFile(
-				`/proc/${parent}/task/${task}/children`,
-				"utf8",
-			);
-			for (const id of ids.trim().split(/\s+/))
-				if (id) {
-					children.add(Number(id));
-					if (children.size > 4096)
-						throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
-				}
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-	}
-	for (const pid of children) {
+	for (const pid of await executorChildPids(parent)) {
 		const status = await procStatus(pid);
 		if (status?.parent === parent) result.set(pid, status);
 	}
 	return result;
+}
+
+async function executorChildPids(parent: number) {
+	const tasks = await readdir(`/proc/${parent}/task`);
+	// Orphans are reparented to the live main thread; read it after the other threads.
+	tasks.sort(
+		(left, right) =>
+			Number(left === String(parent)) - Number(right === String(parent)),
+	);
+	if (tasks.length > 4096) throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+	const children = new Set<number>();
+	for (const task of tasks) {
+		const ids = await readFile(`/proc/${parent}/task/${task}/children`, "utf8");
+		for (const id of ids.trim().split(/\s+/))
+			if (id) {
+				children.add(Number(id));
+				if (children.size > 4096)
+					throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+			}
+	}
+	return children;
 }
 
 /** The platform-owned launch wrapper pauses before exec, so a tool cannot lose its leader before registration. */
@@ -201,15 +203,17 @@ async function executorDescendantsExited(group: ExecutorProcessGroupV1) {
 	// Read the native server before its subreaper: an orphan cannot fall between the two checks.
 	if (
 		group.parent !== process.pid &&
-		(await executorChildrenV1(group.parent)).size
+		(await executorChildPids(group.parent)).size
 	)
 		return false;
-	const children = await executorChildrenV1(process.pid);
+	const children = await executorChildPids(process.pid);
 	let empty = true;
-	for (const [pid, status] of children) {
+	for (const pid of children) {
 		if (group.parent !== process.pid && pid === group.parent) continue;
+		// Even an already-gone PID makes this sample unproven: never discard an exit observed mid-scan.
 		empty = false;
-		if (status.state === "Z" && pid !== group.leader) reapOrphan(pid);
+		const status = await procStatus(pid);
+		if (status?.state === "Z" && pid !== group.leader) reapOrphan(pid);
 	}
 	return (
 		empty &&
