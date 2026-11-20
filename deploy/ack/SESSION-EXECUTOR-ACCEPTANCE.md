@@ -36,7 +36,6 @@ node deploy/ack/session-executor-acceptance.mjs run --plan <namespace>/<plan> \
 窗口、目标元组及固定状态。字段由只读入口校验。A 的授权限制在批准的计划和回执
 ConfigMap 名称。若缺少回执或原业务 Execution，分别按照 HLD 判为待核实或不适用。
 
-
 已确认排空的回执还填写 `stop.firstTerminalAt`。此值是原业务只读查询首次观察到终态的时间。
 `read` 经获准的 Kubernetes 只读身份读取原 Pod 的 `runtime` 容器日志，在读取前后核实 Pod UID。
 须有该 Pod 的 `get` 和 `pods/log` 读取权限。命令仅投影 `CODEX_EXECUTOR_DRAIN_VERIFIED`。
