@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExecutorInstanceStateV2 } from "@agent-infra/contracts/runtime";
+import type { ExecutorInstanceStateV2 } from "./executor-instance-types.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
 	SessionSandboxLifecycleV1,

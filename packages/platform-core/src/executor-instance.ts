@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import {
-	type ExecutorInstanceMutationV2,
-	type ExecutorInstanceStateV2,
-	ExecutorInstanceStateV2Schema,
-} from "@agent-infra/contracts/runtime";
+import type {
+	ExecutorInstanceMutationV2,
+	ExecutorInstanceStateV2,
+} from "./executor-instance-types.js";
 
 /** Pure transitions; the Store supplies current lease/identity, clock and verified proof. */
 export function transitionExecutorInstanceV2(input: {
@@ -24,9 +23,7 @@ export function transitionExecutorInstanceV2(input: {
 	};
 }) {
 	const { mutation, authority: a } = input;
-	let state = input.state
-		? ExecutorInstanceStateV2Schema.parse(input.state)
-		: null;
+	let state = input.state ? structuredClone(input.state) : null;
 	if (
 		state &&
 		(state.namespace !== a.namespace ||
@@ -36,10 +33,21 @@ export function transitionExecutorInstanceV2(input: {
 			state.resourceFence !== a.resourceFence)
 	)
 		return null;
+	if (
+		!Number.isSafeInteger(a.now) ||
+		a.now < 1 ||
+		(state &&
+			(!Number.isSafeInteger(state.sequence) ||
+				!Number.isSafeInteger(state.revision)))
+	)
+		return null;
 	if (mutation.kind === "read")
 		return state ? { state, permit: false, clearReady: false } : null;
 	if (mutation.kind === "prepare") {
 		if (
+			!mutation.configurationVersion ||
+			mutation.configurationVersion.length > 256 ||
+			!Number.isSafeInteger(a.now + mutation.timeoutMs) ||
 			!/^[a-f0-9]{64}$/.test(mutation.bindingDigest) ||
 			!Number.isSafeInteger(mutation.timeoutMs) ||
 			mutation.timeoutMs < 1000 ||
@@ -64,7 +72,7 @@ export function transitionExecutorInstanceV2(input: {
 			return null;
 		if (!state && a.hasUnresolvedExecution) return null;
 		const attemptId = randomUUID();
-		state = ExecutorInstanceStateV2Schema.parse({
+		state = {
 			schemaVersion: 2,
 			revision: 1,
 			sequence: (state?.sequence ?? 0) + 1,
@@ -101,7 +109,8 @@ export function transitionExecutorInstanceV2(input: {
 			adoption: null,
 			closureRef: null,
 			retirement: [],
-		});
+		};
+
 		return { state, permit: false, clearReady: false };
 	}
 	if (
@@ -273,8 +282,13 @@ export function transitionExecutorInstanceV2(input: {
 		return { state, permit: false, clearReady: false };
 	next.revision++;
 	next.sequence++;
+	if (
+		!Number.isSafeInteger(next.revision) ||
+		!Number.isSafeInteger(next.sequence)
+	)
+		return null;
 	return {
-		state: ExecutorInstanceStateV2Schema.parse(next),
+		state: next,
 		permit,
 		clearReady,
 	};

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
 	ExecutorInstanceAdoptionV2Schema,
 	type ExecutorInstanceMutationV2,
+	ExecutorInstanceStateV2Schema,
 	executorInstanceAdoptionBytesV2,
 	executorInstanceFactBytesV2,
 	executorInstanceStartV2,
@@ -863,7 +864,7 @@ export async function transitionSandboxExecutorInstance(
 		};
 	}
 	if (!isDeepStrictEqual(state, decision.state)) {
-		const next = decision.state;
+		const next = ExecutorInstanceStateV2Schema.parse(decision.state);
 		const recordId =
 			mutation.kind === "bind" && !state?.recordRef
 				? (next.recordRef ?? randomUUID())
