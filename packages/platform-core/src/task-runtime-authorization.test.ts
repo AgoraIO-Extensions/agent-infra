@@ -587,6 +587,12 @@ function applicationHarness() {
 		identityRevision: "application-1",
 		accessSources: [{ kind: "api-use", useGrantRevision: "use-1" }],
 	};
+	Object.assign(h.agent, {
+		availability: [
+			...h.agent.availability,
+			{ kind: "application", applicationId: "user" },
+		],
+	});
 	const record = { ...h.record, boundary };
 	h.setRecord(record);
 	let application: CurrentTaskApplicationV1 | null = {
@@ -861,4 +867,24 @@ describe("#4273 human API runtime authority", () => {
 		).rejects.toThrow();
 		expect(h.ports.recordControl).not.toHaveBeenCalled();
 	});
+});
+
+it("#4283 replaces application business authority with original revocation control on scope loss", async () => {
+	const h = applicationHarness();
+	expect(
+		(await h.useCase.current(h.context, h.state, "turn.submit", signal()))
+			.authority.purpose,
+	).toBe("business");
+	h.setRecord({
+		...h.record,
+		agent: {
+			...h.record.agent,
+			availability: [{ kind: "user", userId: "user" }],
+		},
+	});
+	expect(
+		(await h.useCase.current(h.context, h.state, "execution.renew", signal()))
+			.authority,
+	).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+	expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
 });

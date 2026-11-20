@@ -440,6 +440,7 @@ describe("PostgreSQL same-transaction personal Task policy", () => {
 // it does not prove an application issuer, recipient delivery or public Task API.
 const appMaterial = `papi_${"B".repeat(43)}`;
 async function seedApplicationCredential() {
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'application',${userId})`;
 	await client`insert into platform.platform_applications
 		(id,name,responsible_user_id,status,authorization_revision)
 		values (${userId},'controlled application',${userId},'active','application_1')`;

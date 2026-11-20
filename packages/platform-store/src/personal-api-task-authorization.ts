@@ -99,19 +99,14 @@ async function currentFacts(
 		input.principal.kind === "user"
 			? await resolveCurrentPersonalApiUserV1(userDirectory, input.principal.id)
 			: null;
-	const agent =
-		input.principal.kind === "user"
-			? (
-					await transaction<
-						{
-							agent_id: string;
-							owner_ids: string[];
-							availability: (
-								| AgentManagementStateV1["availability"][number]
-								| null
-							)[];
-						}[]
-					>`
+	const agent = (
+		await transaction<
+			{
+				agent_id: string;
+				owner_ids: string[];
+				availability: (AgentManagementStateV1["availability"][number] | null)[];
+			}[]
+		>`
 						select a.id as agent_id,
 						    array(select owner_id from platform.agent_owners
 						        where agent_id = a.id order by owner_id) as owner_ids,
@@ -119,8 +114,7 @@ async function currentFacts(
 						        from platform.agent_availability availability_target where availability_target.agent_id = a.id), '[]'::jsonb) as availability
 						from platform.agents a where a.id = ${input.agentId}
 					`
-				)[0]
-			: null;
+	)[0];
 	// All dependency and scope reads precede the final credential-expiry clock.
 	const [clock] = await transaction<
 		{ now: Date }[]

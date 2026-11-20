@@ -179,8 +179,7 @@ export function isAgentAccessAllowedV1(
 	);
 }
 
-/** API range fact only: explicit grants and credential checks remain independent.
- * The application exception is temporary until #4283 is merged and deployed. */
+/** API range fact only: explicit grants and credential checks remain independent. */
 export function isAgentApiPrincipalAvailableV1(
 	state: Pick<AgentManagementStateV1, "ownerIds" | "availability">,
 	principal: { readonly kind: "user" | "application"; readonly id: string },
@@ -189,7 +188,11 @@ export function isAgentApiPrincipalAvailableV1(
 		"userId" | "accountStatus" | "organizationIds"
 	> | null,
 ): boolean {
-	if (principal.kind === "application") return true;
+	if (principal.kind === "application")
+		return state.availability.some(
+			(target) =>
+				target.kind === "application" && target.applicationId === principal.id,
+		);
 	return (
 		principal.kind === "user" &&
 		!!user &&

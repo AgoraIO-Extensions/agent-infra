@@ -148,6 +148,7 @@ beforeEach(async () => {
 	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',${configuration.agentId},1,'original-key',${sql.json({ schemaVersion: 1, purpose: "agent-default", subjectId: configuration.agentId, keyId: "original-key", keyVersion: 1 })})`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('same-id','Application','owner','app-1')`;
 	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'user','same-id')`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'application','same-id') on conflict do nothing`;
 	for (const kind of ["user", "application"] as const) {
 		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${configuration.agentId},${kind},'same-id','use',${`use-${kind}`})`;
 		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values(${`credential-${kind}`},${kind},'same-id',${createHash("sha256").update(material[kind]).digest("hex")},${sql.json(["agent:read", "agent:use"])})`;
@@ -1277,7 +1278,7 @@ describe("#4273 human Task access intersection over HTTP and PostgreSQL", () => 
 			expect(
 				await sql`select execution_id from platform.conversation_executions`,
 			).toHaveLength(1);
-			// The explicitly approved application transition is independent of human availability.
+			// Application scope is independent of human scope, but its own entry is required.
 			expect(
 				(
 					await request(
@@ -1287,7 +1288,7 @@ describe("#4273 human Task access intersection over HTTP and PostgreSQL", () => 
 						"4273-app",
 					)
 				).status,
-			).toBe(202);
+			).toBe(removed === "grant" ? 202 : 403);
 		},
 	);
 });
@@ -1338,7 +1339,7 @@ describe("#4273 mixed typed availability after #4304", () => {
 				expect(
 					await sql`select execution_id from platform.conversation_executions`,
 				).toHaveLength(1);
-				// Applications keep the approved grant-only transition, without borrowing human scope.
+				// An unrelated application entry cannot satisfy the original application scope.
 				await sql`update platform.agent_availability set target_id='unrelated-application' where agent_id=${configuration.agentId}`;
 				expect(
 					(
@@ -1349,10 +1350,134 @@ describe("#4273 mixed typed availability after #4304", () => {
 							"mixed-app-transition",
 						)
 					).status,
-				).toBe(202);
+				).toBe(403);
 			} finally {
 				directory.resolveUser = originalResolver;
 			}
 		},
 	);
+});
+
+describe("#4283 application Task scope intersection over HTTP/PostgreSQL", () => {
+	it.each(["scope", "grant", "both"] as const)(
+		"conceals original Tasks and refuses new use after removing %s",
+		async (removed) => {
+			await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'application','same-id') on conflict do nothing`;
+			const original = await submit("application", "4283-scoped");
+			if (removed !== "grant")
+				await sql`delete from platform.agent_availability where agent_id=${configuration.agentId} and target_type='application'`;
+			if (removed !== "scope")
+				await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='application'`;
+			const hidden = await request(path(original), "application");
+			const absent = await request(
+				path({ ...original, executionId: "absent-execution" }),
+				"application",
+			);
+			expect(hidden.status).toBe(404);
+			expect(absent.status).toBe(404);
+			expect(
+				(await cancel(original, "application", "4283-hidden-cancel")).status,
+			).toBe(404);
+			expect(
+				(
+					await request(
+						`/api/v1/agents/${configuration.agentId}/tasks`,
+						"application",
+						{ schemaVersion: 1, text: "controlled refusal" },
+						"4283-denied",
+					)
+				).status,
+			).toBe(403);
+			expect(
+				await sql`select execution_id from platform.conversation_executions`,
+			).toHaveLength(1);
+		},
+	);
+});
+
+it("#4283 isolates two independently scoped applications with valid grants and credentials", async () => {
+	const original = await submit("application", "4283-original");
+	const otherMaterial = `papi_${"O".repeat(43)}`;
+	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('other-app','Another application','same-id','other-1')`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'application','other-app')`;
+	await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${configuration.agentId},'application','other-app','use','other-use-1')`;
+	await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('other-app-credential','application','other-app',${createHash("sha256").update(otherMaterial).digest("hex")},'["agent:read","agent:use"]'::jsonb)`;
+	const asOther = (url: string, body?: unknown, key = "other") =>
+		router.request(url, {
+			method: body === undefined ? "GET" : "POST",
+			headers: {
+				Authorization: `Bearer ${otherMaterial}`,
+				"Content-Type": "application/json",
+				"Idempotency-Key": key,
+			},
+			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+		});
+	const accepted = await asOther(
+		`/api/v1/agents/${configuration.agentId}/tasks`,
+		{ schemaVersion: 1, text: "controlled second application" },
+		"4283-other-positive",
+	);
+	expect(accepted.status).toBe(202);
+	const own = TaskAcceptedV1Schema.parse(await accepted.json());
+	expect(
+		(
+			await asOther(
+				`/api/v1/conversations/${own.conversationId}/tasks/${own.executionId}`,
+			)
+		).status,
+	).toBe(200);
+	expect((await asOther(path(original))).status).toBe(404);
+	expect(
+		(
+			await asOther(
+				`${path(original)}/cancel`,
+				{ schemaVersion: 1 },
+				"4283-other-denied-cancel",
+			)
+		).status,
+	).toBe(404);
+	expect((await request(path(original), "application")).status).toBe(200);
+	expect(await sql`select id from platform.task_control_records`).toHaveLength(
+		0,
+	);
+});
+
+it("#4283 refuses a foreign Conversation even when the application can use both Agents", async () => {
+	const original = await submit("application", "4283-agent-a");
+	const other = { ...configuration, agentId: "other-scoped-agent" };
+	await sql`insert into platform.agents(id,current_configuration_revision,authorization_revision) values(${other.agentId},${other.revision},'agent-1')`;
+	await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('other-scoped-application',${other.agentId},'owner','Agent','Controlled fixture','available','seed','seed',now(),1,1,'ready','running',1,1)`;
+	await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) select ${other.agentId},revision,source_reference,clock_timestamp(),${sql.json(other as unknown as postgres.JSONValue)} from platform.agent_configuration_revisions where agent_id=${configuration.agentId}`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${other.agentId},'application','same-id')`;
+	await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${other.agentId},'application','same-id','use','other-agent-use')`;
+	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',${other.agentId},1,1)`;
+	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',${other.agentId},1,'other-agent-key',${sql.json({ purpose: "agent-default", subjectId: other.agentId, keyId: "other-agent-key", keyVersion: 1 })})`;
+	const target = `/api/v1/agents/${other.agentId}/tasks`;
+	expect(
+		(
+			await request(
+				target,
+				"application",
+				{ schemaVersion: 1, text: "controlled other Agent" },
+				"4283-other-agent-positive",
+			)
+		).status,
+	).toBe(202);
+	expect(
+		(
+			await request(
+				target,
+				"application",
+				{
+					schemaVersion: 1,
+					conversationId: original.conversationId,
+					text: "controlled wrong binding",
+				},
+				"4283-other-agent-denied",
+			)
+		).status,
+	).toBe(404);
+	expect(
+		await sql`select execution_id from platform.conversation_executions`,
+	).toHaveLength(2);
 });
