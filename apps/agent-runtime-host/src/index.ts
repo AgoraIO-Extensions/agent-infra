@@ -66,12 +66,12 @@ import {
 	type RuntimeConnectionConsumerProfile,
 	readRuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
-import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
-import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
+import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
+import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
 import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,

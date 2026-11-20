@@ -1823,7 +1823,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 					supplyAttemptId,
 				});
 			const ownerWrite = () =>
-				associations.execute((tx) =>
+				associations.execute<boolean | number | null>((tx) =>
 					operation === "unlink"
 						? tx.deleteManual("agent-a", 1)
 						: tx.saveManual({
