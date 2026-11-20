@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 export type NativeAdmissionStageV1 =
 	| "UNKNOWN"
 	| "identity.initial"
@@ -29,6 +30,12 @@ export type NativeAdmissionObserverV1 = (
 ) => void;
 
 let observationSequence = 0;
+const observationContext = new AsyncLocalStorage<number>();
+
+/** Diagnostic correlation only; never an authorization or request identity. */
+export function currentNativeAdmissionObservationV1() {
+	return observationContext.getStore();
+}
 
 /** Observation failures must not change the work, its result or its exception. */
 export async function observeNativeAdmissionV1<T>(
@@ -57,7 +64,7 @@ export async function observeNativeAdmissionV1<T>(
 	};
 	record("started");
 	try {
-		const result = await work();
+		const result = await observationContext.run(observationId, work);
 		let phase: "failed" | "completed" = "completed";
 		try {
 			if (

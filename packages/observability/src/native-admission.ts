@@ -1,6 +1,7 @@
-import type {
-	NativeAdmissionObservationV1,
-	NativeAdmissionObserverV1,
+import {
+	currentNativeAdmissionObservationV1,
+	type NativeAdmissionObservationV1,
+	type NativeAdmissionObserverV1,
 } from "@agent-infra/platform-core";
 
 const stages = new Set([
@@ -77,7 +78,14 @@ export function createNativeAdmissionTelemetry(
 		{ stage: NativeAdmissionObservationV1["stage"]; began: number }
 	>();
 	const failPending = (error?: unknown) => {
-		const entry = [...pending.entries()].at(-1);
+		const source = currentNativeAdmissionObservationV1();
+		const match = source === undefined ? undefined : pending.get(source);
+		const entry =
+			match && source !== undefined
+				? ([source, match] as const)
+				: source === undefined && pending.size === 1
+					? pending.entries().next().value
+					: undefined;
 		if (!entry) {
 			observe({
 				stage: "UNKNOWN",
