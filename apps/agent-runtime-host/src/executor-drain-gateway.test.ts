@@ -16,6 +16,28 @@ import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
 import { waitForExecutorDescendantsExitV1 } from "./executor-process-group.js";
 import { openPrivateExecutorV1 } from "./executor-stdio.js";
 
+const ports = vi.hoisted(() => new Map<number, number>());
+// Production ports stay fixed; independent test files use private ephemeral listeners.
+vi.mock("node:http", async (original) => {
+	const http = await original<typeof import("node:http")>();
+	return {
+		...http,
+		createServer: (...args: Parameters<typeof http.createServer>) => {
+			const server = http.createServer(...args);
+			const listen = server.listen.bind(server);
+			server.listen = ((port: number, host: string, ready: () => void) =>
+				listen(0, host, () => {
+					const address = server.address();
+					if (!address || typeof address === "string")
+						throw new Error("missing test listener");
+					ports.set(port, address.port);
+					ready();
+				})) as typeof server.listen;
+			return server;
+		},
+	};
+});
+
 vi.mock("@agent-infra/agent-runtime", async (original) => ({
 	...(await original<typeof import("@agent-infra/agent-runtime")>()),
 	probeCodexSessionExecutorStartupV1: vi.fn(),
@@ -40,6 +62,18 @@ it.each([
 	"native-rejected",
 	"rejected-not-exited",
 ])("drain preserves the native launch outcome: %s", async (outcome) => {
+	ports.clear();
+	const fetch = globalThis.fetch;
+	const redirected = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation((input, init) => {
+			const url = new URL(String(input));
+			const port = ports.get(Number(url.port));
+			if (!port || url.hostname !== "127.0.0.1")
+				throw new Error("unexpected test destination");
+			url.port = String(port);
+			return fetch(url, init);
+		});
 	const rejected =
 		outcome === "native-rejected" || outcome === "rejected-not-exited";
 	vi.mocked(waitForExecutorDescendantsExitV1).mockResolvedValue(
@@ -113,7 +147,9 @@ it.each([
 		if (!drain) throw new Error("missing drain");
 		await drain.arm("original");
 		await drain.bindNativeTurn("original", "turn");
-		socket = new WebSocket(drain.endpoint());
+		socket = new WebSocket(
+			drain.endpoint().replace(":8068", `:${ports.get(8068)}`),
+		);
 		await once(socket, "open");
 		const reply = once(socket, "message");
 		socket.send(
@@ -174,5 +210,6 @@ it.each([
 		await host.close();
 		await runner.close();
 		await rm(directory, { recursive: true, force: true });
+		redirected.mockRestore();
 	}
 });
