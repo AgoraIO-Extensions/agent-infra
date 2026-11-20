@@ -1,6 +1,6 @@
 import {
 	accessTargetKey,
-	parseAvailability,
+	parseAvailabilityScope,
 	parseOwnerIds,
 } from "./agent-configuration-input.js";
 import {
@@ -214,7 +214,7 @@ function snapshotConfigurationAccessPlanV1(
 			values.availability,
 			maxAccessTargets,
 		);
-		const availability = parseAvailability(availabilityInputs);
+		const availability = parseAvailabilityScope(availabilityInputs);
 		if (
 			values.schemaVersion !== 1 ||
 			values.fragmentType !== "agent_access" ||

@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-
 import {
 	type AgentApiAuditContextV1,
 	type AgentApiCreationRowsV1,
@@ -30,6 +29,10 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import {
+	agentAvailabilityTargetId,
+	agentAvailabilityTargetKey,
+} from "./agent-availability-target.js";
 import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readAgentManagementState } from "./agent-management.js";
 import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
@@ -117,9 +120,7 @@ function canonicalSourceReference(
 function accessTargetKey(
 	target: ApplicationFoundationWritePlanV1["access"]["availability"][number],
 ): string {
-	return target.kind === "user"
-		? `user\0${target.userId}`
-		: `organization\0${target.organizationId}`;
+	return agentAvailabilityTargetKey(target);
 }
 
 function parseResult(input: unknown): CommitApplicationFoundationResultV1 {
@@ -198,10 +199,8 @@ function validatedPlan(input: ApplicationFoundationWritePlanV1) {
 		targetKeys.length > 256 ||
 		new Set(targetKeys).size !== targetKeys.length ||
 		!sameValue(targetKeys, targetKeys.toSorted()) ||
-		plan.access.availability.some((target) =>
-			target.kind === "user"
-				? !validText(target.userId)
-				: !validText(target.organizationId),
+		plan.access.availability.some(
+			(target) => !validText(agentAvailabilityTargetId(target)),
 		) ||
 		!sameValue(result, expectedResult) ||
 		!validText(plan.idempotency.key, 128) ||
@@ -445,8 +444,7 @@ async function persistApplicationFoundationRowsV1(
 			plan.access.availability.map((target) => ({
 				agentId: plan.access.agentId,
 				targetType: target.kind,
-				targetId:
-					target.kind === "user" ? target.userId : target.organizationId,
+				targetId: agentAvailabilityTargetId(target),
 			})),
 		);
 	}

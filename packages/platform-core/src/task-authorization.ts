@@ -410,6 +410,8 @@ function accessSources(
 		sources.push({ kind: "owner", userId: user.userId });
 	}
 	for (const target of agent.availability) {
+		// An application entry only stands for that application (Spec §9.2.2).
+		if (target.kind === "application") continue;
 		if (
 			target.kind === "user"
 				? target.userId === user.userId

@@ -1,3 +1,5 @@
+import { agentAvailabilityTargetJsonSql } from "./agent-availability-target.js";
+
 /**
  * 与 `readAgentManagementState` 同形的 Agent 管理状态 JSON（#2775）。
  *
@@ -20,9 +22,7 @@ export function agentManagementStateJsonSql(applications: string): string {
 		'workloadRevision', ${row}.workload_revision, 'fence', ${row}.fence, 'failureCode', ${row}.failure_code,
 		'ownerIds', (select coalesce(jsonb_agg(management_owner.owner_id order by management_owner.owner_id), '[]'::jsonb)
 			from platform.agent_owners management_owner where management_owner.agent_id = ${row}.agent_id),
-		'availability', (select coalesce(jsonb_agg(case when management_target.target_type = 'user'
-			then jsonb_build_object('kind', 'user', 'userId', management_target.target_id)
-			else jsonb_build_object('kind', 'organization', 'organizationId', management_target.target_id) end
+		'availability', (select coalesce(jsonb_agg(${agentAvailabilityTargetJsonSql("management_target")}
 			order by management_target.target_type, management_target.target_id), '[]'::jsonb)
 			from platform.agent_availability management_target where management_target.agent_id = ${row}.agent_id)
 	) || case when to_jsonb(${row})->>'creation_channel' = 'api'

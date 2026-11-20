@@ -43,6 +43,7 @@ import {
 import { and, asc, eq, gt, inArray, or, type SQL, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import { decodeAgentAvailabilityTarget } from "./agent-availability-target.js";
 import { insertConnectionConsumerDisableV1 } from "./connection-consumer-disable.js";
 import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
 import postgres from "./observed-postgres.js";
@@ -300,11 +301,11 @@ export async function readAgentManagementState(
 			? { creationChannel: "api" as const }
 			: {}),
 		ownerIds: owners.map(({ ownerId }) => ownerId),
-		availability: availability.map(({ targetType, targetId }) =>
-			targetType === "user"
-				? { kind: "user" as const, userId: targetId }
-				: { kind: "organization" as const, organizationId: targetId },
-		),
+		availability: availability.map((row) => {
+			const target = decodeAgentAvailabilityTarget(row);
+			if (!target) throw new AgentManagementError("unavailable");
+			return target;
+		}),
 	};
 }
 
@@ -2043,10 +2044,17 @@ const projectionAccessSelection = {
 					then jsonb_build_object(
 						'kind', 'user', 'userId', ${agentAvailability.targetId}
 					)
-				else jsonb_build_object(
-					'kind', 'organization',
-					'organizationId', ${agentAvailability.targetId}
-				)
+				when ${agentAvailability.targetType} = 'organization'
+					then jsonb_build_object(
+						'kind', 'organization',
+						'organizationId', ${agentAvailability.targetId}
+					)
+				-- Text comparison also runs before the enum gained 'application'.
+				when ${agentAvailability.targetType}::text = 'application'
+					then jsonb_build_object(
+						'kind', 'application',
+						'applicationId', ${agentAvailability.targetId}
+					)
 			end
 			order by ${agentAvailability.targetType}, ${agentAvailability.targetId}
 		)
