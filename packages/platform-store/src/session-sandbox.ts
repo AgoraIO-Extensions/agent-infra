@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { ExecutorInstanceStateV2Schema } from "@agent-infra/contracts/runtime";
 import { AgentWorkloadDesiredV1Schema } from "@agent-infra/contracts/workload";
 import {
 	isSessionSandboxObservationValidV1,
@@ -216,6 +217,14 @@ export async function readSessionSandboxRuntimeState(
 			))
 	)
 		return null;
+	const executorInstance = observation?.executorInstance
+		? await readSessionExecutorInstanceStateV2(
+				transaction,
+				sandbox,
+				resourceFence,
+				policy.namespace,
+			)
+		: null;
 	return {
 		sandbox,
 		resourceFence,
@@ -223,6 +232,7 @@ export async function readSessionSandboxRuntimeState(
 		status: row.status,
 		policy,
 		observation,
+		...(executorInstance ? { executorInstance } : {}),
 	};
 }
 
@@ -455,4 +465,30 @@ export async function insertSessionSandboxBinding(
 			${transaction.json({ schemaVersion: 1, conversationId: binding.sessionId, sessionGeneration: binding.generation })},
 			${audit.traceId}, ${audit.requestId}, ${audit.occurredAt}, ${audit.occurredAt}, ${audit.occurredAt})
 	`;
+}
+
+/** The caller owns current Session authority; a lookup alone never grants execution. */
+export async function readSessionExecutorInstanceStateV2(
+	transaction: Transaction,
+	sandbox: SessionSandboxBindingV1,
+	fence: number,
+	namespace: string,
+) {
+	const [row] = await transaction<
+		{ details: unknown }[]
+	>`select details->'state' as details from platform.conversation_audit_events
+ where conversation_id=${sandbox.sessionId} and action='conversation.sandbox.observed' and details->>'checkpoint'='executor-instance-v2'
+ and details->>'sandboxId'=${sandbox.sandboxId} and details->>'sessionGeneration'=${String(sandbox.generation)} and details->>'resourceFence'=${String(fence)}
+ order by (details->'state'->>'sequence')::numeric desc limit 1`;
+	if (!row) return null;
+	const state = ExecutorInstanceStateV2Schema.parse(row.details);
+	if (
+		state.namespace !== namespace ||
+		state.sandboxId !== sandbox.sandboxId ||
+		state.generation !== sandbox.generation ||
+		state.resourceFence !== fence ||
+		state.podName !== sandbox.resourceName
+	)
+		throw new Error("Executor instance scope is unavailable");
+	return state;
 }

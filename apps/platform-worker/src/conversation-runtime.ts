@@ -1681,7 +1681,11 @@ export function createConversationRuntimeV2(
 						turnId: context.claim.turnId,
 						sessionGeneration: context.claim.sessionGeneration,
 						hostSessionRef: state.hostSessionRef,
-						operation: binding.operation,
+						operation: {
+							...binding.operation,
+							deliveryFence: context.claim.deliveryFence,
+							executionDeliveryFence: context.claim.executionDeliveryFence,
+						},
 						grant: {
 							schemaVersion: 6,
 							format: "runtime-execution-jws",

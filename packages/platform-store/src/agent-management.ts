@@ -20,6 +20,7 @@ import {
 	type AgentUserUseRevokeResultV1,
 	type ConnectionConsumerRegistrationPolicyV1,
 	captureConnectionConsumerRegistrationPolicyV1,
+	isAgentApiPrincipalAvailableV1,
 	PersonalApiCredentialErrorV1,
 	parseAgentApiLifecycleCommandV1,
 	parseAgentApplicationGrantCommandV1,
@@ -39,9 +40,10 @@ import {
 	type WorkloadFailureReasonCodeV1,
 	withAgentApiAuditContextV1,
 } from "@agent-infra/platform-core";
-import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, or, type SQL, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import { decodeAgentAvailabilityTarget } from "./agent-availability-target.js";
 import { insertConnectionConsumerDisableV1 } from "./connection-consumer-disable.js";
 import { insertConnectionConsumerRegistrationV1 } from "./connection-consumer-registration.js";
 import postgres from "./observed-postgres.js";
@@ -299,11 +301,11 @@ export async function readAgentManagementState(
 			? { creationChannel: "api" as const }
 			: {}),
 		ownerIds: owners.map(({ ownerId }) => ownerId),
-		availability: availability.map(({ targetType, targetId }) =>
-			targetType === "user"
-				? { kind: "user" as const, userId: targetId }
-				: { kind: "organization" as const, organizationId: targetId },
-		),
+		availability: availability.map((row) => {
+			const target = decodeAgentAvailabilityTarget(row);
+			if (!target) throw new AgentManagementError("unavailable");
+			return target;
+		}),
 	};
 }
 
@@ -582,6 +584,14 @@ export class PostgresAgentManagementTransactionV1
 				if (!state) throw new PersonalApiCredentialErrorV1("not_found");
 				auditContext = { ...auditContext, agentId: state.agentId };
 				const requireManage = async () => {
+					if (
+						!isAgentApiPrincipalAvailableV1(
+							state,
+							principal,
+							authenticated.identity.user,
+						)
+					)
+						throw new PersonalApiCredentialErrorV1("not_found");
 					const rows = await transaction
 						.select({
 							authorization_revision:
@@ -716,7 +726,15 @@ export class PostgresAgentManagementTransactionV1
 					transaction,
 					request.agentId,
 				);
-				if (!state) throw new PersonalApiCredentialErrorV1("not_found");
+				if (
+					!state ||
+					!isAgentApiPrincipalAvailableV1(
+						state,
+						principal,
+						authenticated.identity.user,
+					)
+				)
+					throw new PersonalApiCredentialErrorV1("not_found");
 				const [workload] = await transaction
 					.select({ state: workloadReconciliations.state })
 					.from(workloadReconciliations)
@@ -764,6 +782,22 @@ export class PostgresAgentManagementTransactionV1
 				await authenticated.revalidate();
 				if (!sameValue(await currentGrants(), grants))
 					throw new PersonalApiCredentialErrorV1("unavailable");
+				if (principal.kind === "user") {
+					const current = await readAgentManagementState(
+						transaction,
+						request.agentId,
+					);
+					if (
+						!current ||
+						!isAgentApiPrincipalAvailableV1(
+							current,
+							principal,
+							authenticated.identity.user,
+						)
+					)
+						throw new PersonalApiCredentialErrorV1("not_found");
+				}
+
 				return result;
 			});
 		} catch (error) {
@@ -1809,7 +1843,11 @@ export type AgentManagementApplicationScopeV1 =
 export type AgentManagementAgentScopeV1 =
 	| { readonly kind: "owner"; readonly ownerId: string }
 	| { readonly kind: "administrator" }
-	| { readonly kind: "api_user"; readonly userId: string }
+	| {
+			readonly kind: "api_user";
+			readonly userId: string;
+			readonly organizationIds?: readonly string[];
+	  }
 	| {
 			readonly kind: "user";
 			readonly userId: string;
@@ -1901,10 +1939,21 @@ function requireAgentScope(
 		}
 		if (
 			values.kind === "api_user" &&
-			exact(["kind", "userId"]) &&
+			exact([
+				"kind",
+				"userId",
+				...(Object.hasOwn(values, "organizationIds")
+					? ["organizationIds"]
+					: []),
+			]) &&
 			validText(values.userId)
 		) {
-			return { kind: "api_user", userId: values.userId };
+			const organizationIds =
+				values.organizationIds === undefined
+					? []
+					: snapshotScopeTextArray(values.organizationIds);
+			if (!organizationIds) throw new AgentManagementError("unavailable");
+			return { kind: "api_user", userId: values.userId, organizationIds };
 		}
 		if (
 			values.kind === "owner" &&
@@ -1932,17 +1981,26 @@ function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 		: eq(agentApplications.applicantId, scope.applicantId);
 }
 
-function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
+function agentScopeCondition(
+	scope: AgentManagementAgentScopeV1,
+): SQL | undefined {
 	if (scope.kind === "administrator") return undefined;
 	if (scope.kind === "api_user") {
-		return sql<boolean>`exists (
+		return and(
+			agentScopeCondition({
+				kind: "user",
+				userId: scope.userId,
+				organizationIds: scope.organizationIds ?? [],
+			}),
+			sql<boolean>`exists (
 			select 1 from ${agentPrincipalGrants}
 			where ${agentPrincipalGrants.agentId} = ${agentApplications.agentId}
 				and ${agentPrincipalGrants.principalType} = 'user'
 				and ${agentPrincipalGrants.principalId} = ${scope.userId}
 				and ${inArray(agentPrincipalGrants.grantType, [...personalApiAgentMetadataGrantTypesV1])}
 				and ${agentPrincipalGrants.revokedAt} is null
-		)`;
+		)`,
+		);
 	}
 	const owner = sql<boolean>`exists (
 		select 1 from ${agentOwners}
@@ -1986,10 +2044,17 @@ const projectionAccessSelection = {
 					then jsonb_build_object(
 						'kind', 'user', 'userId', ${agentAvailability.targetId}
 					)
-				else jsonb_build_object(
-					'kind', 'organization',
-					'organizationId', ${agentAvailability.targetId}
-				)
+				when ${agentAvailability.targetType} = 'organization'
+					then jsonb_build_object(
+						'kind', 'organization',
+						'organizationId', ${agentAvailability.targetId}
+					)
+				-- Text comparison also runs before the enum gained 'application'.
+				when ${agentAvailability.targetType}::text = 'application'
+					then jsonb_build_object(
+						'kind', 'application',
+						'applicationId', ${agentAvailability.targetId}
+					)
 			end
 			order by ${agentAvailability.targetType}, ${agentAvailability.targetId}
 		)

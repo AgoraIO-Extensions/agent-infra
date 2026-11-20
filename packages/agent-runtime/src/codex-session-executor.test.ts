@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { receiveCodexSessionExecutorAdmissionV1 } from "./codex-app-server-bridge.js";
 import {
 	type CodexSessionExecutorAdmissionV1,
 	codexSessionExecutorAttestationV1,
@@ -125,6 +126,23 @@ describe("Codex Session executor authority", () => {
 			),
 		).toThrow();
 	});
+	it("passes the real instance-bound admission through the Driver/Bridge receiver and pins its Pod UID", async () => {
+		const source = statusSource();
+		const admission = await openCodexSessionExecutorAdmissionV1(
+			binding,
+			"pod-uid",
+			{ fetch: source.fetcher, pollIntervalMs: 10000 },
+		);
+		cleanups.push(() => admission.close());
+		const received = receiveCodexSessionExecutorAdmissionV1(admission);
+		expect(received.podUid).toBe("pod-uid");
+		await received.assertCurrent();
+		(admission as { podUid: string }).podUid = "foreign-pod";
+		await expect(received.assertCurrent()).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+		});
+	});
+
 	it("pins the live Pod and epoch and never recovers a poisoned admission", async () => {
 		const source = statusSource();
 		const admission = await openCodexSessionExecutorAdmissionV1(

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-
 import {
 	type AgentConfigurationRecord,
 	type AgentConfigurationRelayKeyAttachmentV1,
@@ -10,6 +9,7 @@ import {
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
+import { agentAvailabilityTargetId } from "./agent-availability-target.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
@@ -222,8 +222,7 @@ export async function replaceAgentAccess(
 			access.availability.map((target) => ({
 				agentId: access.agentId,
 				targetType: target.kind,
-				targetId:
-					target.kind === "user" ? target.userId : target.organizationId,
+				targetId: agentAvailabilityTargetId(target),
 			})),
 		);
 	}

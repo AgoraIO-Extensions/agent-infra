@@ -29,6 +29,7 @@ import type {
 	ApplicationRevisionFailurePoint,
 	ApplicationRevisionFakeSnapshotV1,
 } from "../../platform-core/src/fake-application-revision.ts";
+import { agentAvailabilityTargetId } from "./agent-availability-target.ts";
 import {
 	decodeAgentConfigurationRecord,
 	decodeVersionedAgentConfigurationRecord,
@@ -368,7 +369,7 @@ async function seedRevisionState(
 			insert into platform.agent_availability
 				(agent_id, target_type, target_id)
 			values (${state.application.agentId}, ${target.kind},
-				${target.kind === "user" ? target.userId : target.organizationId})
+				${agentAvailabilityTargetId(target)})
 		`;
 	}
 }

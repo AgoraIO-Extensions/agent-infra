@@ -73,6 +73,16 @@ export async function startExecutorDrainGatewayV1(options: {
 	readonly nativeHome: string;
 }) {
 	const { binding, identity, epoch, nativeHome } = options;
+	const startup =
+		"instance" in identity
+			? {
+					schemaVersion: 2 as const,
+					attemptId: identity.instance.attemptId,
+					startupRef: identity.startupRef,
+					recordRef: identity.instance.recordRef,
+					factDigest: identity.factDigest,
+				}
+			: undefined;
 	trackExecutorDescendantsV1();
 	if ((await executorChildrenV1(process.pid)).size)
 		throw new Error("CODEX_EXECUTOR_DESCENDANTS_UNAVAILABLE");
@@ -262,6 +272,7 @@ export async function startExecutorDrainGatewayV1(options: {
 						stopFence,
 						digest,
 						groupIds: groups.map(({ id }) => id),
+						...(startup ? { startup } : {}),
 						...(rejectedStarts.length ? { rejectedStarts } : {}),
 					})}\n`,
 				);

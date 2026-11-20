@@ -295,8 +295,20 @@ function createAgentConfigurationUseCaseV1Internal(
 						agentId: command.agentId,
 						expectedRevision: access.state.revision,
 						desiredOwnerIds,
-						desiredAvailability:
-							changes.availability ?? access.state.availability,
+						// Current command versions only carry people entries; the
+						// application entries of the same scope are kept (Spec §9.2.2).
+						desiredAvailability: [
+							...(changes.availability === undefined
+								? access.state.availability
+								: [
+										...changes.availability,
+										...access.state.availability.filter(
+											({ kind }) => kind === "application",
+										),
+									]),
+						].toSorted((left, right) =>
+							compareText(accessTargetKey(left), accessTargetKey(right)),
+						),
 						requestId: command.requestId,
 						traceId: command.traceId,
 					},

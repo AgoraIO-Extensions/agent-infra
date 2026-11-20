@@ -778,3 +778,87 @@ describe("application Task current consumer", () => {
 		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
 	});
 });
+
+describe("#4273 human API runtime authority", () => {
+	it.each(["availability", "grant", "both"] as const)(
+		"converts confirmed %s loss to original control authority",
+		async (removed) => {
+			const h = harness();
+			const grant = {
+				principal: { kind: "user" as const, id: "user" },
+				agentId: "agent",
+				grantType: "use" as const,
+				authorizationRevision: "use-1",
+				revoked: false,
+			};
+			const boundary = {
+				...h.boundary,
+				channelId: "api",
+				accessSources: [
+					{ kind: "api-use" as const, useGrantRevision: "use-1" },
+				],
+			};
+			const claim = { ...h.claim, channelId: "api" };
+			h.setRecord({ ...h.record, boundary });
+			const context = { ...h.context, claim };
+			const resolver = vi.fn(async () => grant);
+			const useCase = createTaskRuntimeAuthorizationUseCaseV1({
+				...h.ports,
+				resolveCurrentApiUseGrant: resolver,
+			});
+			expect(
+				(await useCase.current(context, h.state, "turn.submit", signal()))
+					.authority.purpose,
+			).toBe("business");
+			if (removed !== "grant")
+				h.setRecord({
+					...h.record,
+					boundary,
+					agent: { ...h.agent, availability: [] },
+				});
+			if (removed !== "availability")
+				resolver.mockResolvedValue({ ...grant, revoked: true });
+			for (const command of ["turn.submit", "execution.renew"] as const) {
+				expect(
+					(await useCase.current(context, h.state, command, signal()))
+						.authority,
+				).toMatchObject({
+					purpose: "control",
+					reason: "authorization_revoked",
+				});
+			}
+			expect(h.ports.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					executionId: "execution",
+					authorizationRecordId: "original-authorization",
+					reason: "authorization_revoked",
+				}),
+				expect.any(AbortSignal),
+			);
+		},
+	);
+	it("does not persist revocation when current directory or grant cannot be confirmed", async () => {
+		const h = harness();
+		const boundary = {
+			...h.boundary,
+			channelId: "api",
+			accessSources: [{ kind: "api-use" as const, useGrantRevision: "use-1" }],
+		};
+		h.setRecord({ ...h.record, boundary });
+		const useCase = createTaskRuntimeAuthorizationUseCaseV1({
+			...h.ports,
+			resolveCurrentApiUseGrant: async () => {
+				throw new Error("controlled unavailable");
+			},
+		});
+		await expect(
+			useCase.current(
+				{ ...h.context, claim: { ...h.claim, channelId: "api" } },
+				h.state,
+				"turn.submit",
+				signal(),
+			),
+		).rejects.toThrow();
+		expect(h.ports.recordControl).not.toHaveBeenCalled();
+	});
+});

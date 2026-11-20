@@ -1,4 +1,16 @@
-import { createHash, randomUUID } from "node:crypto";
+import {
+	createHash,
+	createPrivateKey,
+	generateKeyPairSync,
+	randomUUID,
+	sign,
+} from "node:crypto";
+import {
+	type ExecutorInstanceMutationV2,
+	executorInstanceAdoptionBytesV2,
+	executorInstanceFactBytesV2,
+	executorInstanceStartV2,
+} from "@agent-infra/contracts/runtime";
 import {
 	type ConversationExecutionAuthorityV1,
 	createAgentManagementV1,
@@ -16,6 +28,7 @@ import {
 	workloadTestPolicy,
 } from "../../../apps/platform-worker/src/kubernetes.fixture.ts";
 import { workloadResourceConfigurationHashV1 } from "../../../apps/platform-worker/src/workload-runtime.ts";
+import { issueExecutorStartIdentityV1 } from "../../agent-runtime/src/codex-executor-bootstrap.js";
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimV1,
@@ -1185,6 +1198,384 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		});
 		return { work, itemId, store };
 	}
+
+	it("freezes a versioned executor instance before Pod creation and rejects another UID under its original attempt", async () => {
+		const { itemId, work, store } = await seedSandboxPrepareIntent(
+			"executor-instance-v2",
+		);
+		try {
+			await client`update platform.session_sandbox_allocations set status='observed',
+				resource_observation=jsonb_build_object('status','observed','resources',coalesce((select jsonb_agg(r) from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim'),'[]'::jsonb)) where conversation_id=${work.conversationId}`;
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "instance-worker",
+				leaseDurationMs: 30000,
+			});
+			if (!claim) throw new Error("missing fixture claim");
+			const input = {
+				kind: "prepare" as const,
+				bindingDigest: "a".repeat(64),
+				configurationVersion: "configuration-one",
+				timeoutMs: 120000,
+				approval: {
+					schemaVersion: 2 as const,
+					imageDigest: `registry.example/runtime@${claim.policy.imageDigest}`,
+					verificationRef: "fixture-verified-consumer",
+				},
+			};
+			const first = await store.transitionSandboxExecutorInstance({
+				claim,
+				mutation: input,
+			});
+			expect(first?.state.phase).toBe("prepared");
+			expect(first?.state.startupRef).not.toBe(
+				`${claim.sandbox.resourceName}-executor-${claim.resourceFence}`,
+			);
+			if (!first) throw new Error("missing prepared fact");
+			const retried = await store.transitionSandboxExecutorInstance({
+				claim,
+				mutation: { ...input, timeoutMs: 900000 },
+			});
+			expect(retried?.state).toEqual(first.state);
+			const permission = await store.transitionSandboxExecutorInstance({
+				claim,
+				mutation: {
+					kind: "pod-create",
+					attemptId: first.state.attemptId,
+					revision: first.state.revision,
+				},
+			});
+			expect(permission?.permit).toBe(true);
+			if (!permission) throw new Error("missing creation permission");
+			expect(
+				(
+					await store.transitionSandboxExecutorInstance({
+						claim,
+						mutation: {
+							kind: "pod-create",
+							attemptId: first.state.attemptId,
+							revision: first.state.revision,
+						},
+					})
+				)?.permit,
+			).toBe(false);
+			const resources = [
+				{
+					kind: "Pod" as const,
+					namespace: claim.policy.namespace,
+					name: claim.sandbox.resourceName,
+					uid: "pod-original",
+					resourceVersion: "1",
+				},
+				{
+					kind: "Service" as const,
+					namespace: claim.policy.namespace,
+					name: claim.sandbox.resourceName,
+					uid: "service-original",
+					resourceVersion: "2",
+				},
+			];
+			const bound = await store.transitionSandboxExecutorInstance({
+				claim,
+				mutation: {
+					kind: "bind",
+					attemptId: first.state.attemptId,
+					revision: permission.state.revision,
+					podUid: "pod-original",
+					resources,
+				},
+			});
+			expect(bound?.state.podUid).toBe("pod-original");
+			if (!bound) throw new Error("missing bound fact");
+			expect(
+				await store.transitionSandboxExecutorInstance({
+					claim,
+					mutation: {
+						kind: "bind",
+						attemptId: first.state.attemptId,
+						revision: bound.state.revision,
+						podUid: "pod-replacement",
+						resources: resources.map((r) =>
+							r.kind === "Pod" ? { ...r, uid: "pod-replacement" } : r,
+						),
+					},
+				}),
+			).toBeNull();
+			expect(
+				(
+					await store.transitionSandboxExecutorInstance({
+						claim,
+						mutation: { kind: "read" },
+					})
+				)?.state.podUid,
+			).toBe("pod-original");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("adopts only the persisted Host key and original scope, and holds unknown publication or retirement without releasing the instance", async () => {
+		const { itemId, work, store } = await seedSandboxPrepareIntent(
+			"executor-verified-adoption",
+		);
+		try {
+			await client`update platform.session_sandbox_allocations set status='observed',resource_observation=jsonb_build_object('status','observed','resources',coalesce((select jsonb_agg(r) from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim'),'[]'::jsonb)) where conversation_id=${work.conversationId}`;
+			let claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "adoption-worker",
+				leaseDurationMs: 30000,
+			});
+			if (!claim) throw new Error("missing claim");
+			const command = async (mutation: ExecutorInstanceMutationV2) => {
+				if (!claim) throw new Error("missing claim");
+				const result = await store.transitionSandboxExecutorInstance({
+					claim,
+					mutation,
+				});
+				if (result) claim = result.claim as typeof claim;
+				return result?.state ?? null;
+			};
+			const prepared = await command({
+				kind: "prepare",
+				bindingDigest: "a".repeat(64),
+				configurationVersion: "configuration-one",
+				timeoutMs: 120000,
+				approval: {
+					schemaVersion: 2,
+					imageDigest: `registry.example/runtime@${claim.policy.imageDigest}`,
+					verificationRef: "verified-4",
+				},
+			});
+			if (!prepared) throw new Error("missing prepared");
+			let state = await command({
+				kind: "pod-create",
+				attemptId: prepared.attemptId,
+				revision: prepared.revision,
+			});
+			if (!state) throw new Error("missing pending");
+			const resources = [
+				{
+					kind: "Pod" as const,
+					namespace: claim.policy.namespace,
+					name: claim.sandbox.resourceName,
+					uid: "original-pod",
+					resourceVersion: "1",
+				},
+				{
+					kind: "Service" as const,
+					namespace: claim.policy.namespace,
+					name: claim.sandbox.resourceName,
+					uid: "original-service",
+					resourceVersion: "2",
+				},
+			];
+			state = await command({
+				kind: "bind",
+				attemptId: state.attemptId,
+				revision: state.revision,
+				podUid: "original-pod",
+				resources,
+			});
+			if (!state) throw new Error("missing bound");
+			const issuer = generateKeyPairSync("ed25519");
+			const material = issueExecutorStartIdentityV1(
+				executorInstanceStartV2(state),
+				issuer.privateKey,
+			);
+			state = await command({
+				kind: "delivery",
+				attemptId: state.attemptId,
+				revision: state.revision,
+				hostPublicKey: material.host.statement.publicKey,
+				runnerPublicKey: material.runner.statement.publicKey,
+				identityDigest: "c".repeat(64),
+			});
+			if (!state?.delivery) throw new Error("missing delivery");
+			const pending = structuredClone(state);
+			expect(
+				await command({
+					kind: "delivery",
+					attemptId: state.attemptId,
+					revision: state.revision,
+					hostPublicKey: "other",
+					runnerPublicKey: "other-key",
+					identityDigest: "d".repeat(64),
+				}),
+			).toBeNull();
+			expect((await command({ kind: "read" }))?.delivery).toEqual(
+				pending.delivery,
+			);
+			state = await command({
+				kind: "published",
+				attemptId: state.attemptId,
+				revision: state.revision,
+				projection: {
+					kind: "Secret",
+					namespace: claim.policy.namespace,
+					name: state.startupRef,
+					uid: "original-projection",
+					resourceVersion: "3",
+				},
+			});
+			if (!state?.delivery || !state.podUid || !state.recordRef)
+				throw new Error("missing projection");
+			const originalState = state;
+			const unsigned = {
+				schemaVersion: 2 as const,
+				purpose: "executor-instance-adoption-v2" as const,
+				challenge: state.delivery.challenge,
+				startupRef: state.startupRef,
+				attemptId: state.attemptId,
+				recordRef: state.recordRef,
+				podUid: state.podUid,
+				bindingDigest: state.bindingDigest,
+				factDigest: createHash("sha256")
+					.update(executorInstanceFactBytesV2(executorInstanceStartV2(state)))
+					.digest("hex"),
+				generation: state.generation,
+				resourceFence: state.resourceFence,
+				epoch: randomUUID(),
+				pinDigest: "e".repeat(64),
+			};
+			const key = createPrivateKey({
+				key: Buffer.from(material.host.privateKey, "base64url"),
+				format: "der",
+				type: "pkcs8",
+			});
+			const signed = (value: typeof unsigned) => ({
+				...value,
+				signature: sign(
+					null,
+					Buffer.from(executorInstanceAdoptionBytesV2(value)),
+					key,
+				).toString("base64url"),
+			});
+			const impostor = generateKeyPairSync("ed25519");
+			expect(
+				await command({
+					kind: "adopted",
+					attemptId: state.attemptId,
+					revision: state.revision,
+					proof: {
+						...unsigned,
+						signature: sign(
+							null,
+							Buffer.from(executorInstanceAdoptionBytesV2(unsigned)),
+							impostor.privateKey,
+						).toString("base64url"),
+					},
+				}),
+			).toBeNull();
+			for (const wrong of [
+				{ ...unsigned, podUid: "another-pod" },
+				{ ...unsigned, resourceFence: unsigned.resourceFence + 1 },
+				{ ...unsigned, challenge: randomUUID() },
+			])
+				expect(
+					await command({
+						kind: "adopted",
+						attemptId: state.attemptId,
+						revision: state.revision,
+						proof: signed(wrong),
+					}),
+				).toBeNull();
+			state = await command({
+				kind: "adopted",
+				attemptId: state.attemptId,
+				revision: state.revision,
+				proof: signed(unsigned),
+			});
+			if (!state) throw new Error("missing adoption");
+			expect(state.adoption?.epoch).toBe(unsigned.epoch);
+			for (const badClaim of [
+				{ ...claim, deliveryFence: claim.deliveryFence + 1 },
+				{ ...claim, sandbox: { ...claim.sandbox, agentId: "foreign-agent" } },
+				{
+					...claim,
+					sandbox: {
+						...claim.sandbox,
+						principal: { kind: "user" as const, id: "foreign-owner" },
+					},
+				},
+			])
+				expect(
+					await store.transitionSandboxExecutorInstance({
+						claim: badClaim,
+						mutation: { kind: "read" },
+					}),
+				).toBeNull();
+			state = await command({
+				kind: "cleanup-request",
+				attemptId: state.attemptId,
+				revision: state.revision,
+			});
+			if (!state) throw new Error("missing cleanup");
+			state = await command({
+				kind: "cleanup-absent",
+				attemptId: state.attemptId,
+				revision: state.revision,
+			});
+			if (!state) throw new Error("missing absence");
+			state = await command({
+				kind: "seal",
+				attemptId: state.attemptId,
+				revision: state.revision,
+			});
+			if (!state) throw new Error("missing seal");
+			expect(
+				await command({
+					kind: "retired",
+					attemptId: state.attemptId,
+					revision: state.revision,
+				}),
+			).toBeNull();
+			for (const resource of resources) {
+				const progress = {
+					resource,
+					deleteAttemptId: randomUUID(),
+					state: "delete-requested" as const,
+					callResult: "unknown" as const,
+				};
+				state = await command({
+					kind: "retirement-progress",
+					attemptId: state.attemptId,
+					revision: state.revision,
+					progress,
+				});
+				if (!state) throw new Error("missing removal");
+				state = await command({
+					kind: "retirement-progress",
+					attemptId: state.attemptId,
+					revision: state.revision,
+					progress: { ...progress, state: "absent" },
+				});
+				if (!state) throw new Error("missing absence");
+			}
+			state = await command({
+				kind: "retired",
+				attemptId: state.attemptId,
+				revision: state.revision,
+			});
+			expect(state?.phase).toBe("retired");
+			const replacement = await command({
+				kind: "prepare",
+				bindingDigest: originalState.bindingDigest,
+				configurationVersion: originalState.configurationVersion,
+				timeoutMs: 120000,
+				approval: originalState.approval,
+			});
+			expect(replacement?.startupRef).not.toBe(originalState.startupRef);
+			expect(replacement?.expiresAt).toBeGreaterThan(originalState.expiresAt);
+			const [rows] = await client<
+				{ states: number }[]
+			>`select count(*)::int as states from platform.conversation_audit_events where conversation_id=${work.conversationId} and details->>'checkpoint'='executor-instance-v2'`;
+			expect(rows?.states).toBeGreaterThan(10);
+		} finally {
+			await store.close();
+		}
+	});
 
 	it("freezes the executor projection deadline across expired and replacement Worker leases", async () => {
 		const { itemId, work, store } =
@@ -10238,6 +10629,7 @@ describe("waiting Task original Store promotion", () => {
 			agentId: "other-agent",
 		});
 		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-dispatch','user','actor-dispatch') on conflict do nothing`;
 		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 		await client`update platform.agent_applications set service_availability='starting' where agent_id='agent-dispatch'`;
 		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${blocked.executionId}`;
@@ -10307,6 +10699,7 @@ describe("waiting Task original Store promotion", () => {
 				const work = await acceptedKeyWork(channel);
 				if (channel === "api:user") {
 					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+					await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-dispatch','user','actor-dispatch') on conflict do nothing`;
 				}
 				if (channel === "api:application") {
 					await client`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values ('actor-dispatch', 'Fixture', 'owner-a', 'identity-dispatch')`;
@@ -10423,6 +10816,7 @@ describe("unsent first dispatch returned to waiting (#3173)", () => {
 	async function waitingTask() {
 		const work = await acceptedKeyWork("api:user");
 		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-dispatch','user','actor-dispatch') on conflict do nothing`;
 		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${work.executionId}`;
 		await client`update platform.outbox_items set available_at='infinity' where id=${work.itemId}`;

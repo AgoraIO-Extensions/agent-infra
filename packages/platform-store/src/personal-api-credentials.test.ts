@@ -664,3 +664,117 @@ describe("PostgreSQL personal API credential governance", () => {
 		});
 	});
 });
+
+it.each(["agent_availability", "agent_owners"] as const)(
+	"#4273 keeps %s stable through the metadata projection and required audit",
+	async (table) => {
+		const adapter = new PostgresPersonalApiCredentialStoreV1(database);
+		stores.push(adapter);
+		const mutation = () =>
+			client.begin(async (transaction) => {
+				await transaction`set local lock_timeout='100ms'`;
+				await transaction.unsafe(
+					`delete from platform.${table} where agent_id='4273-absent-agent'`,
+				);
+			});
+		await adapter.executeAgentRead(async (transaction) => {
+			await transaction.lockAgentGrants();
+			await expect(mutation()).rejects.toMatchObject({ code: "55P03" });
+		});
+		await expect(mutation()).resolves.toBeUndefined();
+	},
+);
+
+it.each([false, true])(
+	"#4273 completes metadata reading alongside an owners-first range replacement (grant write=%s)",
+	async (writeGrant) => {
+		const agentId = "4273-lock-order";
+		await client`insert into platform.agents(id) values(${agentId})`;
+		await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values(${agentId},'owner-before',now())`;
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'user','user-before')`;
+		await client`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${agentId},'user','user-after','use','grant-after')`;
+		const writerConnection = postgres(database.databaseUrl, { max: 1 });
+		const adapter = new PostgresPersonalApiCredentialStoreV1(database);
+		stores.push(adapter);
+		const ownersHeld = Promise.withResolvers<number>();
+		const continueWrite = Promise.withResolvers<void>();
+		let pending: Promise<PromiseSettledResult<unknown>[]> | undefined;
+		try {
+			const writer = writerConnection.begin(async (transaction) => {
+				await transaction`set local deadlock_timeout='100ms'`;
+				await transaction`set local lock_timeout='5s'`;
+				const [backend] = await transaction<
+					{ pid: number }[]
+				>`select pg_backend_pid() as pid`;
+				if (!backend) throw new Error("Missing range writer");
+				// replaceAgentAccess: owners are replaced before availability.
+				await transaction`delete from platform.agent_owners where agent_id=${agentId}`;
+				await transaction`insert into platform.agent_owners(agent_id,owner_id,created_at) values(${agentId},'owner-after',now())`;
+				ownersHeld.resolve(backend.pid);
+				await continueWrite.promise;
+				await transaction`delete from platform.agent_availability where agent_id=${agentId}`;
+				await transaction`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'user','user-after')`;
+				if (writeGrant)
+					await transaction`update platform.agent_principal_grants set authorization_revision='grant-next' where agent_id=${agentId}`;
+			});
+			const writerPid = await Promise.race([
+				ownersHeld.promise,
+				writer.then((): never => {
+					throw new Error("Writer ended before owners barrier");
+				}),
+			]);
+			const reader = adapter.executeAgentRead(async (transaction) => {
+				await transaction.lockAgentGrants();
+				const [facts] = await client`
+				select array(select owner_id from platform.agent_owners where agent_id=${agentId}) as owners,
+					array(select target_id from platform.agent_availability where agent_id=${agentId}) as availability,
+					exists(select 1 from platform.agent_principal_grants where agent_id=${agentId}
+						and principal_type='user' and principal_id='user-after' and revoked_at is null) as granted,
+					(select authorization_revision from platform.agent_principal_grants where agent_id=${agentId} and principal_type='user' and principal_id='user-after' and grant_type='use') as grant_revision
+			`;
+				return facts;
+			});
+			pending = Promise.allSettled([writer, reader]);
+			await vi.waitFor(
+				async () => {
+					const [blocked] = await client<{ waiting: boolean }[]>`
+				select exists(select 1 from pg_locks l where l.relation='platform.agent_owners'::regclass
+					and l.mode='ShareLock' and not l.granted
+					and ${writerPid}=any(pg_blocking_pids(l.pid))) as waiting
+			`;
+					expect(blocked?.waiting).toBe(true);
+				},
+				{ timeout: 3000, interval: 10 },
+			);
+			continueWrite.resolve();
+			const settled = await pending;
+			expect(
+				settled.map((result) => {
+					if (result.status === "fulfilled") return "committed";
+					const error = result.reason as {
+						code?: string;
+						cause?: { code?: string };
+					};
+					return error.code ?? error.cause?.code ?? "unknown";
+				}),
+			).toEqual(["committed", "committed"]);
+			expect(settled[1]).toMatchObject({
+				status: "fulfilled",
+				value: {
+					owners: ["owner-after"],
+					availability: ["user-after"],
+					granted: true,
+					grant_revision: writeGrant ? "grant-next" : "grant-after",
+				},
+			});
+		} finally {
+			continueWrite.resolve();
+			await pending;
+			await writerConnection.end();
+			await client`delete from platform.agent_principal_grants where agent_id=${agentId}`;
+			await client`delete from platform.agent_availability where agent_id=${agentId}`;
+			await client`delete from platform.agent_owners where agent_id=${agentId}`;
+			await client`delete from platform.agents where id=${agentId}`;
+		}
+	},
+);

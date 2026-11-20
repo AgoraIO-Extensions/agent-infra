@@ -74,6 +74,9 @@ const claim = {
 		executionStatus: "submitted",
 		requestDigest: "d".repeat(64),
 		operationDigest: "e".repeat(64),
+		requestId: "request-v6",
+		traceId: "trace-v6",
+		idempotencyKey: "v6-key",
 	},
 } as unknown as ConversationDispatchClaimV1;
 

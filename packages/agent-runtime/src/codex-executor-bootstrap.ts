@@ -1,4 +1,5 @@
 import {
+	createHash,
 	createPrivateKey,
 	createPublicKey,
 	generateKeyPairSync,
@@ -6,6 +7,11 @@ import {
 	sign,
 	verify,
 } from "node:crypto";
+import {
+	type ExecutorInstanceStartV2,
+	ExecutorInstanceStartV2Schema,
+	executorInstanceFactBytesV2,
+} from "@agent-infra/contracts/runtime";
 import { z } from "zod";
 
 const token = z.string().min(1).max(256);
@@ -25,16 +31,42 @@ const statementSchema = startSchema.extend({
 	publicKey: encoded,
 	peerKey: encoded,
 });
+const v2StatementSchema = ExecutorInstanceStartV2Schema.extend({
+	role: z.enum(["host", "runner"]),
+	publicKey: encoded,
+	peerKey: encoded,
+	issuerKeyId: z.string().regex(/^[a-f0-9]{64}$/),
+	factDigest: z.string().regex(/^[a-f0-9]{64}$/),
+});
+const anyStatementSchema = z.union([statementSchema, v2StatementSchema]);
 const materialSchema = z.strictObject({
-	statement: statementSchema,
+	statement: anyStatementSchema,
 	privateKey: encoded,
 	signature: encoded,
 });
 export type ExecutorStartupBindingV1 = z.infer<typeof startSchema>;
-type Startup = ExecutorStartupBindingV1;
-type Statement = z.infer<typeof statementSchema>;
+type Startup = ExecutorStartupBindingV1 | ExecutorInstanceStartV2;
+type Statement = z.infer<typeof anyStatementSchema>;
 type Material = z.infer<typeof materialSchema>;
 export type ExecutorIdentityV1 = Statement & { privateKey: KeyObject };
+const verifiedIdentities = new WeakSet<object>();
+export function verifiedExecutorLegacyIdentityV1(identity: ExecutorIdentityV1) {
+	if (!verifiedIdentities.has(identity) || "schemaVersion" in identity)
+		return invalid();
+	return identity;
+}
+
+export function verifiedExecutorInstanceIdentityV2(
+	identity: ExecutorIdentityV1,
+) {
+	if (
+		!verifiedIdentities.has(identity) ||
+		!("schemaVersion" in identity) ||
+		identity.schemaVersion !== 2
+	)
+		return invalid();
+	return identity;
+}
 
 export const executorIdentityFileV1 = "startup.json";
 export const executorIdentityFileRootV1 =
@@ -47,6 +79,18 @@ function invalid(): never {
 }
 
 function signingBytes(statement: Statement) {
+	if ("schemaVersion" in statement)
+		return Buffer.from(
+			JSON.stringify([
+				"executor-instance-startup-v2",
+				executorInstanceFactBytesV2(statement),
+				statement.factDigest,
+				statement.issuerKeyId,
+				statement.role,
+				statement.publicKey,
+				statement.peerKey,
+			]),
+		);
 	return Buffer.from(
 		JSON.stringify([
 			"agent-infra/codex-executor-start/v1",
@@ -70,7 +114,10 @@ export function issueExecutorStartIdentityV1(
 	start: Startup,
 	issuerKey: KeyObject,
 ) {
-	const binding = startSchema.parse(start);
+	const binding =
+		"schemaVersion" in start
+			? ExecutorInstanceStartV2Schema.parse(start)
+			: startSchema.parse(start);
 	if (issuerKey.type !== "private" || issuerKey.asymmetricKeyType !== "ed25519")
 		invalid();
 	const host = generateKeyPairSync("ed25519");
@@ -80,8 +127,22 @@ export function issueExecutorStartIdentityV1(
 		keys: typeof host,
 		peer: typeof host,
 	): Material => {
-		const statement = {
+		const statement: Statement = {
 			...binding,
+			...("schemaVersion" in binding
+				? {
+						issuerKeyId: createHash("sha256")
+							.update(encodedPublicKey(createPublicKey(issuerKey)))
+							.digest("hex"),
+						factDigest: createHash("sha256")
+							.update(
+								executorInstanceFactBytesV2(
+									ExecutorInstanceStartV2Schema.parse(binding),
+								),
+							)
+							.digest("hex"),
+					}
+				: {}),
 			role,
 			publicKey: encodedPublicKey(keys.publicKey),
 			peerKey: encodedPublicKey(peer.publicKey),
@@ -91,9 +152,11 @@ export function issueExecutorStartIdentityV1(
 			privateKey: keys.privateKey
 				.export({ format: "der", type: "pkcs8" })
 				.toString("base64url"),
-			signature: sign(null, signingBytes(statement), issuerKey).toString(
-				"base64url",
-			),
+			signature: sign(
+				null,
+				signingBytes(anyStatementSchema.parse(statement)),
+				issuerKey,
+			).toString("base64url"),
 		};
 	};
 	return {
@@ -109,10 +172,17 @@ export function verifyExecutorStartIdentityV1(
 		role: Statement["role"];
 		now: number;
 		issuerKey: KeyObject;
+		instanceBinding?: {
+			sandboxId: string;
+			generation: number;
+			resourceFence: number;
+		};
 	},
 ) {
 	try {
 		const { statement, privateKey, signature } = materialSchema.parse(input);
+		if ("schemaVersion" in expected && !("schemaVersion" in statement))
+			return invalid();
 		if (
 			expected.issuerKey.type !== "public" ||
 			expected.issuerKey.asymmetricKeyType !== "ed25519" ||
@@ -132,6 +202,32 @@ export function verifyExecutorStartIdentityV1(
 			)
 		)
 			return invalid();
+		if ("schemaVersion" in statement) {
+			if (
+				("schemaVersion" in expected
+					? expected.schemaVersion !== 2 ||
+						executorInstanceFactBytesV2(statement) !==
+							executorInstanceFactBytesV2(
+								ExecutorInstanceStartV2Schema.strip().parse(expected),
+							)
+					: !expected.instanceBinding ||
+						expected.instanceBinding.sandboxId !==
+							statement.instance.sandboxId ||
+						expected.instanceBinding.generation !==
+							statement.instance.generation ||
+						expected.instanceBinding.resourceFence !==
+							statement.instance.resourceFence) ||
+				statement.factDigest !==
+					createHash("sha256")
+						.update(executorInstanceFactBytesV2(statement))
+						.digest("hex") ||
+				statement.issuerKeyId !==
+					createHash("sha256")
+						.update(encodedPublicKey(expected.issuerKey))
+						.digest("hex")
+			)
+				return invalid();
+		}
 		const key = createPrivateKey({
 			key: Buffer.from(privateKey, "base64url"),
 			format: "der",
@@ -142,7 +238,10 @@ export function verifyExecutorStartIdentityV1(
 			encodedPublicKey(createPublicKey(key)) !== statement.publicKey
 		)
 			return invalid();
-		return { ...statement, privateKey: key };
+		if ("instance" in statement) Object.freeze(statement.instance);
+		const identity = Object.freeze({ ...statement, privateKey: key });
+		verifiedIdentities.add(identity);
+		return identity;
 	} catch {
 		return invalid();
 	}

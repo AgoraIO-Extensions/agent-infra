@@ -49,7 +49,7 @@ export interface PersonalApiAgentReadTransactionV1 {
 		| null
 	>;
 	lockUserDisabled(userId: string): Promise<boolean>;
-	/** Includes absent grants: concurrent insertion/revocation cannot race the read. */
+	/** Includes absent grants/range rows: current access stays stable through the read. */
 	lockAgentGrants(): Promise<void>;
 	databaseTime(): Promise<Date>;
 	markCredentialUsed(credentialId: string, usedAt: Date): Promise<void>;
@@ -246,7 +246,7 @@ export function createPersonalApiAgentReadUseCaseV1(dependencies: {
 		},
 		/**
 		 * Both reads revalidate the used credential and current user.
-		 * Agent reads additionally hold the explicit grant lock.
+		 * Agent reads additionally hold the explicit grant and current range locks.
 		 * Its result is withheld until the required audit and transaction commit succeed.
 		 */
 		async readIdentity(
