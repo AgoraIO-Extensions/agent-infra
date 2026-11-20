@@ -97,11 +97,43 @@ async function currentFacts(
 		input.principal.kind === "user"
 			? await resolveCurrentPersonalApiUserV1(userDirectory, input.principal.id)
 			: null;
-	// Resolve external identity before taking a fresh database clock sample.
-	const [clock] = await transaction<{ now: Date }[]>`
-		select clock_timestamp() as now
-	`;
+	const agent =
+		input.principal.kind === "user"
+			? (
+					await transaction<
+						{
+							agent_id: string;
+							owner_ids: string[];
+							availability: (
+								| { kind: "user"; userId: string }
+								| { kind: "organization"; organizationId: string }
+							)[];
+						}[]
+					>`
+						select a.id as agent_id,
+						    array(select owner_id from platform.agent_owners
+						        where agent_id = a.id order by owner_id) as owner_ids,
+						    coalesce((select jsonb_agg(case target_type
+						        when 'user' then jsonb_build_object('kind','user','userId',target_id)
+						        when 'organization' then jsonb_build_object('kind','organization','organizationId',target_id)
+						        end) from platform.agent_availability where agent_id = a.id), '[]'::jsonb) as availability
+						from platform.agents a where a.id = ${input.agentId}
+					`
+				)[0]
+			: null;
+	// All dependency and scope reads precede the final credential-expiry clock.
+	const [clock] = await transaction<
+		{ now: Date }[]
+	>`select clock_timestamp() as now`;
+
 	return {
+		agent: agent
+			? {
+					agentId: agent.agent_id,
+					ownerIds: agent.owner_ids,
+					availability: agent.availability,
+				}
+			: null,
 		credential: credential
 			? {
 					id: credential.id,

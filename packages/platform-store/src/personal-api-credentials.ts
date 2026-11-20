@@ -295,9 +295,9 @@ export class PostgresPersonalApiCredentialStoreV1
 					};
 				},
 				async lockAgentGrants() {
-					// Covers missing rows as well as existing grants during projection and audit.
+					// Keep both current range and explicit grants stable through projection/audit.
 					await transaction.execute(
-						sql`lock table platform.agent_principal_grants in share mode`,
+						sql`lock table platform.agent_principal_grants, platform.agent_availability, platform.agent_owners in share mode`,
 					);
 				},
 				async markCredentialUsed(credentialId, usedAt) {

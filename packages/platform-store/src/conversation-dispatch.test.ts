@@ -10236,6 +10236,7 @@ describe("waiting Task original Store promotion", () => {
 			agentId: "other-agent",
 		});
 		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-dispatch','user','actor-dispatch') on conflict do nothing`;
 		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 		await client`update platform.agent_applications set service_availability='starting' where agent_id='agent-dispatch'`;
 		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${blocked.executionId}`;
@@ -10305,6 +10306,7 @@ describe("waiting Task original Store promotion", () => {
 				const work = await acceptedKeyWork(channel);
 				if (channel === "api:user") {
 					await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+					await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-dispatch','user','actor-dispatch') on conflict do nothing`;
 				}
 				if (channel === "api:application") {
 					await client`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values ('actor-dispatch', 'Fixture', 'owner-a', 'identity-dispatch')`;
@@ -10421,6 +10423,7 @@ describe("unsent first dispatch returned to waiting (#3173)", () => {
 	async function waitingTask() {
 		const work = await acceptedKeyWork("api:user");
 		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-dispatch','user','actor-dispatch') on conflict do nothing`;
 		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
 		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${work.executionId}`;
 		await client`update platform.outbox_items set available_at='infinity' where id=${work.itemId}`;

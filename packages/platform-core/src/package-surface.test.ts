@@ -223,6 +223,7 @@ describe("platform-core package surface", () => {
 			"installSkillHubVersionV1",
 			"isAdministratorAgentReadAllowedV1",
 			"isAgentAccessAllowedV1",
+			"isAgentApiPrincipalAvailableV1",
 			"isAgentCreationFailureReadAllowedV1",
 			"isAgentOwnerV1",
 			"isAgentRuntimePresentationVisibleV1",

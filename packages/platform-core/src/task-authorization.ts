@@ -1,5 +1,6 @@
 import { types } from "node:util";
 import type { AgentManagementStateV1 } from "./agent-management.js";
+import { isAgentApiPrincipalAvailableV1 } from "./agent-management.js";
 import {
 	snapshotAgentManagementDenseArray as array,
 	requireAgentManagementExactKeys as exact,
@@ -639,7 +640,8 @@ export function capturePersonalApiTaskAuthorizationBoundaryV1(input: {
 		grant.agentId !== agent.agentId ||
 		grant.principal.kind !== "user" ||
 		grant.principal.id !== user.userId ||
-		!isTaskApiChannelV1(input.channelId ?? "api", grant.principal)
+		!isTaskApiChannelV1(input.channelId ?? "api", grant.principal) ||
+		!isAgentApiPrincipalAvailableV1(agent, grant.principal, user)
 	)
 		return null;
 	return parseTaskAuthorizationBoundaryV1({
@@ -713,6 +715,7 @@ export function isTaskAuthorizationCurrentV1(input: {
 	)
 		return (
 			user.accountStatus === "active" &&
+			isAgentApiPrincipalAvailableV1(agent, boundary.principal, user) &&
 			apiUseCurrent(boundary, input.useGrant ?? null)
 		);
 	const current = new Set(accessSources(user, agent).map(sourceKey));

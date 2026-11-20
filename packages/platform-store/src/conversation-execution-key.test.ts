@@ -164,6 +164,14 @@ function harness(
 					revoked_at: null,
 				},
 			];
+		if (statement.includes("from platform.agents a where"))
+			return [
+				{
+					agent_id: apiAuthority.agentId,
+					owner_ids: ["owner"],
+					availability: [{ kind: "user", userId: identity.userId }],
+				},
+			];
 		if (statement.includes("from platform.agent_principal_grants"))
 			return options.revokedGrant
 				? []

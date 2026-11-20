@@ -664,3 +664,23 @@ describe("PostgreSQL personal API credential governance", () => {
 		});
 	});
 });
+
+it.each(["agent_availability", "agent_owners"] as const)(
+	"#4273 keeps %s stable through the metadata projection and required audit",
+	async (table) => {
+		const adapter = new PostgresPersonalApiCredentialStoreV1(database);
+		stores.push(adapter);
+		const mutation = () =>
+			client.begin(async (transaction) => {
+				await transaction`set local lock_timeout='100ms'`;
+				await transaction.unsafe(
+					`delete from platform.${table} where agent_id='4273-absent-agent'`,
+				);
+			});
+		await adapter.executeAgentRead(async (transaction) => {
+			await transaction.lockAgentGrants();
+			await expect(mutation()).rejects.toMatchObject({ code: "55P03" });
+		});
+		await expect(mutation()).resolves.toBeUndefined();
+	},
+);

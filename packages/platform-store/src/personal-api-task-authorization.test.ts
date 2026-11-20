@@ -125,6 +125,7 @@ beforeEach(async () => {
 		platform.platform_user_disables,platform.platform_applications,platform.idempotency_records,platform.audit_events,
 		platform.outbox_items cascade`;
 	await client`insert into platform.agents(id,authorization_revision) values (${agentId},'agent_1')`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'user',${userId})`;
 	await client`insert into platform.agent_principal_grants
 		(agent_id,principal_type,principal_id,grant_type,authorization_revision)
 		values (${agentId},'user',${userId},'use','use_1')`;
