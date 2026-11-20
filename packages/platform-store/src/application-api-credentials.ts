@@ -46,7 +46,7 @@ function metadata(
 		lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
 	};
 }
-function operations(
+export function applicationApiCredentialTransactionV1(
 	tx: Transaction,
 ): ApplicationApiCredentialTransactionV1 &
 	ApplicationApiCredentialManagementTransactionV1 {
@@ -324,7 +324,9 @@ export class PostgresApplicationApiCredentialIssuerStoreV1
 				ApplicationApiCredentialManagementTransactionV1,
 		) => Promise<T>,
 	): Promise<T> {
-		return this.#database.transaction((tx) => work(operations(tx)));
+		return this.#database.transaction((tx) =>
+			work(applicationApiCredentialTransactionV1(tx)),
+		);
 	}
 	async close(): Promise<void> {
 		await this.#client.end();

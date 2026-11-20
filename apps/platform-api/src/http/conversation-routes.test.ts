@@ -1971,6 +1971,18 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("private Runtime failure detail");
 	});
 
+	it.each([1, 2])(
+		"disables proxy buffering for V%d event streams",
+		async (version) => {
+			const response = await testApp().app.request(
+				`/api/v${version}/conversations/conversation-1/events`,
+			);
+			await response.text();
+			expect(response.status).toBe(200);
+			expect(response.headers.get("X-Accel-Buffering")).toBe("no");
+		},
+	);
+
 	it("resolves Last-Event-ID, rechecks authorization before each event, and emits reload", async () => {
 		const input = dependencies();
 		const response = await testApp(input).app.request(
@@ -3103,4 +3115,52 @@ describe("bounded message queue routes (#3376)", () => {
 		expect([missingKey.status, extra.status]).toEqual([400, 400]);
 		expect(withdraw).not.toHaveBeenCalled();
 	});
+});
+
+it("4270 maps the authorized personal Key failure to a fixed settings action", async () => {
+	const { ConversationExecutionError } = await import(
+		"@agent-infra/platform-core"
+	);
+	const input = dependencies();
+	input.commands(identity).accept = vi
+		.fn()
+		.mockRejectedValue(
+			new ConversationExecutionError("personal_relay_key_unavailable"),
+		);
+	const { app } = testApp(input);
+	const response = await app.request(
+		"/api/v1/conversations/conversation-1/messages",
+		{
+			method: "POST",
+			headers: commandHeaders,
+			body: JSON.stringify({ schemaVersion: 1, text: "Synthetic" }),
+		},
+	);
+	expect(response.status).toBe(409);
+	expect(await response.json()).toMatchObject({
+		code: "ACTION_UNAVAILABLE",
+		retryable: false,
+		message:
+			"Personal Relay Key is unavailable. Configure it in personal settings.",
+	});
+});
+
+it("4270 keeps unauthorized resources hidden before considering a missing Key", async () => {
+	const input = dependencies();
+	input.authorization.authorize = vi
+		.fn()
+		.mockResolvedValue({ outcome: "denied" });
+	const accept = vi.fn().mockResolvedValue({ outcome: "denied" });
+	input.commands(identity).accept = accept;
+	const response = await testApp(input).app.request(
+		"/api/v1/conversations/conversation-1/messages",
+		{
+			method: "POST",
+			headers: commandHeaders,
+			body: JSON.stringify({ schemaVersion: 1, text: "Synthetic" }),
+		},
+	);
+	expect(response.status).toBe(404);
+	expect(await response.json()).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
+	expect(accept).toHaveBeenCalledTimes(1);
 });

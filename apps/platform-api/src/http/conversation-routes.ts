@@ -291,9 +291,11 @@ async function boundary(
 		if (error instanceof HttpProtocolError) protocol = error;
 		else if (error instanceof ConversationExecutionError) {
 			protocol = new HttpProtocolError(
-				error.code === "invalid_input"
-					? "INVALID_REQUEST"
-					: "DEPENDENCY_UNAVAILABLE",
+				error.code === "personal_relay_key_unavailable"
+					? "PERSONAL_RELAY_KEY_UNAVAILABLE"
+					: error.code === "invalid_input"
+						? "INVALID_REQUEST"
+						: "DEPENDENCY_UNAVAILABLE",
 				metadata.traceId,
 			);
 		} else if (error instanceof ConversationQueryError) {
@@ -1716,6 +1718,7 @@ export function registerConversationRoutes(
 						}
 					}
 					const request = context.req.raw;
+					context.header("X-Accel-Buffering", "no");
 					return streamSSE(
 						context,
 						async (stream) => {

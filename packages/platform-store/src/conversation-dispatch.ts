@@ -20,6 +20,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
+	type SessionSandboxResourceIdentityV1,
 	type TaskPrincipalV1,
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
@@ -52,6 +53,7 @@ import {
 	readStop,
 	renewLease,
 	retryOutbox,
+	sessionRequiresExecutorDrain,
 	settleUnacceptedExecutionWork,
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
@@ -87,8 +89,11 @@ import {
 } from "./session-sandbox.js";
 import {
 	claimSandboxReconciliation,
+	hasSandboxExecutorRetirement,
 	prepareSandboxReconciliation,
 	recordSandboxDeletionProgress,
+	recordSandboxExecutorRetirement,
+	recordSandboxExecutorStartup,
 	recordSandboxObservation,
 	type SandboxClaimRequest,
 	type SessionSandboxClaimWaitReasonV1,
@@ -275,6 +280,63 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.observation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async hasSandboxExecutorRetirement(
+		claim: SessionSandboxReconciliationClaimV1,
+	) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) throw new Error("Sandbox policy is unavailable");
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				hasSandboxExecutorRetirement(
+					transaction,
+					claim,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxExecutorRetirement(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly resources: readonly SessionSandboxResourceIdentityV1[];
+	}) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxExecutorRetirement(
+					transaction,
+					input.claim,
+					input.resources,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxExecutorStartup(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly startupRef: string;
+		readonly timeoutMs: number;
+	}): Promise<number | null> {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxExecutorStartup(
+					transaction,
+					input.claim,
+					input.startupRef,
+					input.timeoutMs,
 					policy,
 					this.#userDirectory,
 				),
@@ -1560,6 +1622,23 @@ export class PostgresConversationDispatchStoreV1
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
+			if (
+				input.transition.executionStatus === "failed" ||
+				input.transition.executionStatus === "cancelled" ||
+				input.transition.executionStatus === "completed"
+			) {
+				const stop = await readStop(transaction, state.execution.execution_id);
+				if (
+					stop?.status === "submitted" &&
+					(stop.executor_drain_required ||
+						(await sessionRequiresExecutorDrain(
+							transaction,
+							input.claim.conversationId,
+							input.claim.sessionGeneration,
+						)))
+				)
+					throw new StaleDispatchLease();
+			}
 			await applyTransition(transaction, state, input.claim, input.transition);
 			// 只有 RUNTIME_SESSION_BLOCKED 的 rejected 收敛会经 finish 把会话置为不可用（ADR-0029）；
 			// 代次隔离走 confirmGenerationIsolation，不经过这里。两个条件同时满足才收敛，避免其他

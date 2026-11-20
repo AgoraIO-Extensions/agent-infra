@@ -554,6 +554,9 @@ export async function claimWork(
 			: {}),
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
+		...(stop?.status === "submitted" && stop.executor_drain_required
+			? { executorDrainPending: true as const }
+			: {}),
 		...(stopConfirmationTimedOut ||
 		(stop !== undefined && stop.confirmation_timed_out_at !== null)
 			? { stopConfirmationTimedOut: true as const }

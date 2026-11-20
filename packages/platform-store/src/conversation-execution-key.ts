@@ -28,6 +28,8 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 	input: {
 		readonly authority: ConversationExecutionAuthorityV1;
 		readonly userDirectory: TaskUserDirectoryV1 | undefined;
+		/** Ordinary Web message admission only; other callers retain their existing refusal. */
+		readonly reportMissingPersonalKey?: true;
 		readonly personalApiAdmissionAuthority?: PersonalApiTaskAdmissionAuthorityV1;
 	},
 ): Promise<
@@ -145,14 +147,15 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 			purpose: subject.purpose,
 			subjectId: subject.subjectId,
 		});
-		if (!binding) return null;
+		if (!binding && !input.reportMissingPersonalKey) return null;
 		// Validate the exact identity conversion against the existing V4 contract.
-		RuntimeRelayKeyBindingV1Schema.parse({
-			purpose: binding.purpose,
-			subjectId: binding.subjectId,
-			ciphertextRef: binding.keyId,
-			version: binding.keyVersion,
-		});
+		if (binding)
+			RuntimeRelayKeyBindingV1Schema.parse({
+				purpose: binding.purpose,
+				subjectId: binding.subjectId,
+				ciphertextRef: binding.keyId,
+				version: binding.keyVersion,
+			});
 		// Database locks cover local authority; external identity is sampled again
 		// after the Key read and must still match the original boundary.
 		// API policy samples a fresh database clock after its own final identity read.
@@ -164,11 +167,21 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 			finalPrincipal,
 		);
 		if (!confirmed || !(await hasCurrentApiAdmission())) return null;
+		if (!binding) {
+			if (subject.purpose === "personal" && subject.executionSource === "web")
+				throw new ConversationExecutionError("personal_relay_key_unavailable");
+			return null;
+		}
 		return {
 			executionSource: subject.executionSource,
 			relayKeyBinding: binding,
 		};
 	} catch (error) {
+		if (
+			error instanceof ConversationExecutionError &&
+			error.code === "personal_relay_key_unavailable"
+		)
+			throw error;
 		if (
 			error instanceof PersonalApiCredentialErrorV1 &&
 			error.code !== "unavailable" &&

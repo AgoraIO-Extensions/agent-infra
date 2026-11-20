@@ -20,6 +20,7 @@
 		"@agent-infra/native-metadata-transport": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "4.13.7",
+		"koffi": "3.3.8",
 		"ws": "8.21.3"
 	},
 	"devDependencies": {

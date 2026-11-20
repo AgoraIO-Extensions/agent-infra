@@ -7,6 +7,7 @@ export * from "./agent-detail.ts";
 export * from "./agent-user-manage-grants.ts";
 export * from "./agent-user-use-grants.ts";
 export * from "./application-api-credentials.ts";
+export * from "./application-credential-material.ts";
 export * from "./application-material-grants.ts";
 export * from "./application-registration.ts";
 export * from "./audit.ts";

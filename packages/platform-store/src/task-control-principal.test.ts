@@ -156,6 +156,42 @@ async function expectNoControlEffects() {
 }
 
 describe("System controls use the durable typed Execution principal", () => {
+	it("latches executor drain for revocation and keeps a timed-out original Stop occupied", async () => {
+		await seed("user");
+		await client`update platform.conversations set status = 'active' where id = 'conversation'`;
+		await client`update platform.conversation_executions set status = 'processing' where execution_id = 'execution'`;
+		await client`update platform.session_sandbox_allocations set resource_observation = coalesce(resource_observation, '{}'::jsonb) || '{"executorDrainRequired":true}'::jsonb where conversation_id = 'conversation'`;
+		await control("authorization_revoked");
+		const [stop] = await client`
+			select stop_request_id, executor_drain_required from platform.conversation_stops where execution_id = 'execution'
+		`;
+		expect(stop?.executor_drain_required).toBe(true);
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`update platform.conversation_stops set confirmation_deadline = now() - interval '1 minute', confirmation_timed_out_at = now() where execution_id = 'execution'`;
+		await expect(
+			store.resolveTimedOutUnknownStop({
+				conversationId: "conversation",
+				executionId: "execution",
+				stopRequestId: stop?.stop_request_id,
+				sessionGeneration: 1,
+				operatorId: "operator",
+				idempotencyKey: "executor-held",
+				requestDigest: "a".repeat(64),
+				traceId: "trace-ops",
+				requestId: "request-ops",
+			}),
+		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+		expect(
+			await client`select status from platform.conversations where id = 'conversation'`,
+		).toEqual([{ status: "active" }]);
+		expect(
+			await client`select status from platform.conversation_executions where execution_id = 'execution'`,
+		).toEqual([{ status: "unknown" }]);
+		expect(
+			await client`select status from platform.conversation_stops where execution_id = 'execution'`,
+		).toEqual([{ status: "submitted" }]);
+	});
+
 	it("resolves a timed-out unknown stop atomically and replays it", async () => {
 		await seed("user");
 		await client`update platform.conversations set status = 'active' where id = 'conversation'`;

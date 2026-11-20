@@ -256,6 +256,11 @@ export type RuntimeDriverCommand =
 
 /** Request-local execution dependencies; never part of a durable command. */
 export interface RuntimeDriverExecutionContextV1 {
+	/** Fence of the original control operation, taken from the Host-owned record. */
+	readonly executorStopAuthorization?: {
+		readonly fence: number;
+		readonly expiresAt: number;
+	};
 	readonly fileBridge?: RuntimeFileBridgePortV1;
 	/** Current Host authority for one native command execution. */
 	readonly nativeCommand?: RuntimeNativeMetadataReadContextV1;
@@ -399,7 +404,10 @@ export interface RuntimeDriver {
 		command: RuntimeDriverCommand,
 		context?: RuntimeDriverExecutionContextV1,
 	): Promise<RuntimeDriverOperationRecord>;
-	lookupOperation(command: RuntimeDriverCommand): Promise<RuntimeDriverLookup>;
+	lookupOperation(
+		command: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
+	): Promise<RuntimeDriverLookup>;
 	getStatus(
 		nativeSessionRef: string,
 		executionId: string,

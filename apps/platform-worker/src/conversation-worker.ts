@@ -13,6 +13,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
+	type SessionSandboxResourceIdentityV1,
 	sessionSandboxRetryDelayMsV1,
 } from "@agent-infra/platform-core";
 import {
@@ -65,6 +66,14 @@ export interface PlatformConversationWorkerOptionsV2
 		recordDeletionProgress?: (
 			progress: SessionSandboxDeletionProgressV1,
 		) => Promise<"committed" | "stale" | "unknown">,
+		recordExecutorStartup?: (
+			startupRef: string,
+			timeoutMs: number,
+		) => Promise<number | null>,
+		recordExecutorRetirement?: (
+			resources: readonly SessionSandboxResourceIdentityV1[],
+		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+		readExecutorRetirement?: () => Promise<boolean>,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
@@ -890,6 +899,11 @@ export function createPlatformConversationWorkerV2(
 						claim = result.claim as typeof claim;
 					return result.status;
 				},
+				(startupRef, timeoutMs) =>
+					store.recordSandboxExecutorStartup({ claim, startupRef, timeoutMs }),
+				(resources) =>
+					store.recordSandboxExecutorRetirement({ claim, resources }),
+				() => store.hasSandboxExecutorRetirement(claim),
 			);
 			clearInterval(renewal);
 			renewal = undefined;

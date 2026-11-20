@@ -28,6 +28,7 @@ import {
 	lockConversation,
 	lockExecution,
 	lockOutbox,
+	sessionRequiresExecutorDrain,
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
 import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
@@ -253,9 +254,19 @@ export async function recordTaskSystemControlInTransactionV1(
 		const [stop] = await transaction<
 			{ stop_request_id: string }[]
 		>`select stop_request_id from platform.conversation_stops where execution_id = ${input.executionId}`;
+		const executorDrainRequired = await sessionRequiresExecutorDrain(
+			transaction,
+			execution.conversation_id,
+			Number(execution.session_generation),
+		);
+		if (stop && executorDrainRequired)
+			await transaction`update platform.conversation_stops set executor_drain_required = true
+				where execution_id = ${input.executionId} and status = 'submitted' and not executor_drain_required`;
 		if (!stop) {
 			const stopRequestId = randomUUID();
-			await transaction`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at) values (${input.executionId}, ${stopRequestId}, 'submitted', now() + (${conversationStopConfirmationTimeoutMsV1}::bigint * interval '1 millisecond'), now(), now())`;
+			await transaction`insert into platform.conversation_stops
+				(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at, executor_drain_required)
+				values (${input.executionId}, ${stopRequestId}, 'submitted', now() + (${conversationStopConfirmationTimeoutMsV1}::bigint * interval '1 millisecond'), now(), now(), ${executorDrainRequired})`;
 			await transaction`
 							insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
 							values (${`conversation:stop:${stopRequestId}`}, 'conversation', ${execution.conversation_id}, 'conversation.turn.stop.v1', ${transaction.json({ schemaVersion: 1, conversationId: execution.conversation_id, executionId: input.executionId, sessionGeneration: Number(execution.session_generation), stopRequestId })}, ${input.traceId}, ${input.requestId})
@@ -379,15 +390,27 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 			stop_request_id: string;
 			status: string;
 			confirmation_timed_out_at: Date | null;
+			executor_drain_required: boolean;
 		}[]
 	>`
-		select stop_request_id, status, confirmation_timed_out_at
+		select stop_request_id, status, confirmation_timed_out_at, executor_drain_required
 		from platform.conversation_stops
 		where execution_id = ${input.executionId}
 			and stop_request_id = ${input.stopRequestId}
 		for update
 	`;
 	if (!conversation || !execution || !agent || !stop)
+		throw new TaskAuthorizationStoreError();
+	// A timeout is not an executor proof. Only Runtime terminal evidence or
+	// the existing verified retirement flow may release a held execution.
+	if (
+		stop.executor_drain_required ||
+		(await sessionRequiresExecutorDrain(
+			transaction,
+			input.conversationId,
+			input.sessionGeneration,
+		))
+	)
 		throw new TaskAuthorizationStoreError();
 	const resolution = planTimedOutUnknownStopResolutionV1({
 		command: input,

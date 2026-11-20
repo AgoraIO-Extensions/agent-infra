@@ -922,6 +922,7 @@ export function createConversationDispatchUseCaseV1(
 				}
 				if (
 					!claim.metadataRecovery &&
+					!claim.executorDrainPending &&
 					recoveryExhausted(claim) &&
 					(claim.operation === "conversation.turn.submit.v1" ||
 						claim.operation === "conversation.turn.regenerate.v1" ||
@@ -1188,6 +1189,7 @@ export function createConversationDispatchUseCaseV1(
 			}
 			if (
 				!claim.metadataRecovery &&
+				!claim.executorDrainPending &&
 				recoveryExhausted(claim) &&
 				(claim.operation === "conversation.turn.submit.v1" ||
 					claim.operation === "conversation.turn.regenerate.v1" ||

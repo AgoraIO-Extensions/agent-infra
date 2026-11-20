@@ -15,6 +15,11 @@ import {
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
 import { WebSocket, WebSocketServer } from "ws";
+import { startExecutorDrainGatewayV1 } from "./executor-drain-gateway.js";
+import {
+	consumeExecutorIdentityV1,
+	stageExecutorIdentitiesV1,
+} from "./executor-identity-startup.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 
 const maximumProxyMessageBytes = 64 * 1024 * 1024;
@@ -182,6 +187,8 @@ async function run() {
 		throw new Error("CODEX_SESSION_EXECUTOR_INVALID");
 	if (mode === "init") {
 		await initializeCodexSessionExecutorWorkspaceV1(binding);
+		if (process.env.AGENT_INFRA_EXECUTOR_STARTUP_REF)
+			await stageExecutorIdentitiesV1(binding, process.env);
 		return;
 	}
 	const allowed = new Set([
@@ -189,6 +196,9 @@ async function run() {
 		"AGENT_INFRA_RUNTIME_POD_UID",
 		"AGENT_INFRA_RUNTIME_INSTALLED_SKILL",
 		"AGENT_INFRA_RUNTIME_DATA_DIR",
+		"AGENT_INFRA_EXECUTOR_STARTUP_REF",
+		"AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE",
+		"AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY",
 	]);
 	if (
 		Object.keys(process.env).some(
@@ -208,6 +218,26 @@ async function run() {
 	);
 	const home = "/tmp/codex-executor-home";
 	await mkdir(home, { mode: 0o700 });
+	if (process.env.AGENT_INFRA_EXECUTOR_STARTUP_REF) {
+		const identity = await consumeExecutorIdentityV1(
+			"runner",
+			binding,
+			process.env,
+		);
+		const control = await startExecutorDrainGatewayV1({
+			binding,
+			identity,
+			epoch: randomUUID(),
+			nativeHome: home,
+		});
+		const close = () =>
+			void control.close().catch(() => {
+				process.exitCode = 1;
+			});
+		process.once("SIGTERM", close);
+		process.once("SIGINT", close);
+		return;
+	}
 	const child = spawn(
 		CODEX_PILOT_EXECUTABLE,
 		["exec-server", "--listen", CODEX_SESSION_EXECUTOR_BACKEND],
