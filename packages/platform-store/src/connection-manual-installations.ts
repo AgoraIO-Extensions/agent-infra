@@ -49,6 +49,16 @@ export interface ConnectionManualInstallationPolicyInputV1 {
 	readonly clientName: string;
 	/** §13.5.1/§13.5.6 principal mapping, readback and publication approvals. */
 	readonly dynamic: unknown;
+	/**
+	 * §13.5.1 exception item 3: Principals already confirmed outside the
+	 * exception (`principalBindingsByAgentAndPrincipal`, standard receipts'
+	 * `connectionPrincipalId`). They count for the per-issuer uniqueness.
+	 */
+	readonly confirmedPrincipals?: readonly {
+		readonly issuer: string;
+		readonly principalId: string;
+		readonly userId: string;
+	}[];
 }
 
 export type ConnectionManualInstallationPolicyV1 = {
@@ -60,6 +70,11 @@ export type ConnectionManualInstallationPolicyV1 = {
 	readonly dynamic: ConnectionManualDynamicApprovalV1 & {
 		readonly principalMapping: ConnectionConsistencyExceptionApprovalV1;
 	};
+	readonly confirmedPrincipals: readonly {
+		readonly issuer: string;
+		readonly principalId: string;
+		readonly userId: string;
+	}[];
 };
 
 function unavailable(): never {
@@ -93,10 +108,25 @@ export function captureConnectionManualInstallationPolicyV1(
 	// the mapping is missing and the dynamic route stays closed (§13.5.1).
 	const mapping = dynamic.principalMapping;
 	if (mapping.kind !== "consistency-exception-v1") unavailable();
+	const confirmedPrincipals = structuredClone(input.confirmedPrincipals ?? []);
+	if (
+		!Array.isArray(confirmedPrincipals) ||
+		confirmedPrincipals.some(
+			(entry) =>
+				typeof entry?.issuer !== "string" ||
+				!entry.issuer ||
+				typeof entry.principalId !== "string" ||
+				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(entry.principalId) ||
+				typeof entry.userId !== "string" ||
+				!entry.userId,
+		)
+	)
+		unavailable();
 	return {
 		access,
 		clientName: input.clientName,
 		dynamic: { ...dynamic, principalMapping: mapping },
+		confirmedPrincipals,
 	};
 }
 
@@ -421,6 +451,63 @@ export async function receiptConnectionManualInstallationV1(
  * `status` for an unknown registration under the same claim, or one
  * `begin_status` for a first begin whose result is unknown. Never a POST replay.
  */
+/**
+ * §13.5.6 dynamic manual confirm: the original user's explicit confirmation and
+ * its single logical confirm command, in one CAS on the original installation.
+ * The callback of the first begin must have been consumed, the association,
+ * descriptor and receipt still hold, nothing else is in flight, and the
+ * authorization and exception deadlines hold on the database clock.
+ */
+export async function confirmConnectionManualInstallationV1(
+	tx: Transaction,
+	policy: ConnectionManualInstallationPolicyV1,
+	input: {
+		readonly userId: string;
+		readonly authorizationId: string;
+		readonly confirmationRevision: string;
+		readonly command: ConnectionInstallationCommandFactV1;
+		readonly key: string;
+	},
+): Promise<boolean> {
+	if (
+		input.command.command !== "confirm" ||
+		input.command.status !== "pending" ||
+		input.command.authorizationId !== input.authorizationId
+	)
+		unavailable();
+	if (
+		!(await lockConnectionManualAssociationForInstallationV1(
+			tx,
+			input.authorizationId,
+		))
+	)
+		return false;
+	const confirmed = await tx.execute(sql`
+		update platform.connection_installation_authorizations a
+		set status='confirmed', revision=a.revision+1, updated_at=clock_timestamp()
+		from platform.connection_manual_installations m
+		where a.id=${input.authorizationId} and m.authorization_id=a.id
+			and a.user_id=${input.userId} and m.user_id=${input.userId}
+			and a.status='awaiting_confirmation' and a.confirmation_revision=${input.confirmationRevision}
+			and a.expires_at > clock_timestamp() and ${connectionManualExceptionLiveV1(policy)}
+			and a.binding->'callback'->>'status'='delivered'
+			and m.registration_state='registered' and m.supply_state='confirmed'
+			and m.revoke_state='not_required' and m.descriptor_digest is not null
+			and not exists (select 1 from platform.connection_installation_commands c
+				where c.authorization_id=a.id
+					and (c.command='confirm' or c.status in ('pending','sending','unknown')))
+		returning a.id
+	`);
+	if (confirmed.length !== 1) return false;
+	await tx.execute(sql`
+		insert into platform.connection_installation_commands
+			(id, authorization_id, command, idempotency_key, request_digest, status)
+		values (${input.command.commandId}, ${input.authorizationId}, 'confirm', ${input.key},
+			${input.command.requestDigest}, 'pending')
+	`);
+	return true;
+}
+
 export async function requestConnectionManualInstallationStatusV1(
 	tx: Transaction,
 	userId: string,
@@ -608,7 +695,8 @@ export interface ConnectionManualInstallationClaimV1 {
 			| "status"
 			| "revoke"
 			| "begin"
-			| "begin_status";
+			| "begin_status"
+			| "confirm";
 		readonly attemptId: string;
 		readonly attemptOwner: string;
 	};
