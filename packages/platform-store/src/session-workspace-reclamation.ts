@@ -223,7 +223,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 		chargeApplicable?: boolean,
 	) {
 		await tx`insert into platform.audit_events(id,target_id,target_type,agent_id,actor_id,actor_type,outcome,action,trace_id,request_id,occurred_at,details)
-  values(${randomUUID()},${t.sessionId},'conversation',${t.agentId},${this.owner},'system','succeeded',${action},${this.operation(t)},${this.operation(t)},clock_timestamp(),${tx.json({ ...t, deploymentOwner: this.owner, ...(chargeApplicable === undefined ? {} : { chargeApplicable }) })})`;
+  values(${randomUUID()},${t.sessionId},'conversation',${t.agentId},${this.owner},'system','succeeded',${action},${this.operation(t)},${this.operation(t)},clock_timestamp(),${tx.json({ ...t, deploymentOwner: this.owner, ...(chargeApplicable === false ? { chargeApplicable: false } : {}) })})`;
 	}
 	private async journal(
 		tx: Transaction,
