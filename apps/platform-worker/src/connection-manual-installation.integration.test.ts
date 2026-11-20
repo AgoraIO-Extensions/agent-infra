@@ -239,6 +239,8 @@ let readbackServer: ReturnType<typeof createConnectionInstallReadbackServerV1>;
 let hostServer: Server | undefined;
 let receiver: ConnectionInstallReceiverAssemblyV1 | undefined;
 let dataDirectory: string;
+/** Starts the Host receiver on the same port and private data directory. */
+let startHost: () => Promise<void>;
 let drain: ReturnType<typeof createConnectionManualInstallationDrainV1>;
 let sandboxId: string;
 type HostReference = {
@@ -388,66 +390,73 @@ beforeAll(async () => {
 			resources: { kind: string; uid: string }[];
 		}
 	).resources.find((resource) => resource.kind === "Pod")?.uid as string;
-	receiver = await prepareConnectionInstallReceiverV1({
-		environment: {
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN: `https://sandbox-${sandboxId}.${namespace}.svc:${hostPort}/`,
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_WORKER_ORIGIN: `https://${workerService}:${workerPort}/`,
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS:
-				JSON.stringify(system),
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS_APPROVAL:
-				JSON.stringify(approval),
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_CLIENT_NAME: "Agent Infra",
-			AGENT_INFRA_RUNTIME_NAMESPACE: namespace,
-			AGENT_INFRA_RUNTIME_POD_NAME: `sandbox-${sandboxId}`,
-			AGENT_INFRA_RUNTIME_POD_UID: podUid,
-			AGENT_INFRA_RUNTIME_RESOURCE_FENCE: "1",
-			AGENT_INFRA_RUNTIME_SANDBOX_ID: sandboxId,
-			AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
-			PORT: "3003",
-		},
-		dataDirectory,
-		agentId: "agent-a",
-		workerId: "worker-a",
-		key: grant.publicKey,
-		keyId: signing.keyId,
-		issuer: signing.issuer,
-		serviceToken: randomBytes(32).toString("base64url"),
-		// The Host journal holds alice's original Execution on host-a.
-		store: {
-			resolveOriginalExecutionBinding: async (reference: HostReference) => {
-				if (reference.executionId !== "execution-a") throw new Error("denied");
-				return {
-					principal: { kind: "user", id: "alice" },
-					scope: {
-						agentId: reference.agentId,
-						conversationId: reference.conversationId,
-						sessionGeneration: reference.sessionGeneration,
-						executionId: reference.executionId,
-					},
-				};
+	startHost = async () => {
+		receiver = await prepareConnectionInstallReceiverV1({
+			environment: {
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN: `https://sandbox-${sandboxId}.${namespace}.svc:${hostPort}/`,
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_WORKER_ORIGIN: `https://${workerService}:${workerPort}/`,
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS:
+					JSON.stringify(system),
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS_APPROVAL:
+					JSON.stringify(approval),
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_CLIENT_NAME: "Agent Infra",
+				AGENT_INFRA_RUNTIME_NAMESPACE: namespace,
+				AGENT_INFRA_RUNTIME_POD_NAME: `sandbox-${sandboxId}`,
+				AGENT_INFRA_RUNTIME_POD_UID: podUid,
+				AGENT_INFRA_RUNTIME_RESOURCE_FENCE: "1",
+				AGENT_INFRA_RUNTIME_SANDBOX_ID: sandboxId,
+				AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
+				PORT: "3003",
 			},
-			assertOriginalExecutionBindingCurrent: (reference: HostReference) => {
-				if (reference.executionId !== "execution-a") throw new Error("denied");
-			},
-			resolveOriginalExecutionHostSessionRef: async (
-				reference: HostReference,
-			) => {
-				if (reference.executionId !== "execution-a") throw new Error("denied");
-				return "host-a";
-			},
-		} as never,
-		fetch: connectionFetch as never,
-		readback: createConnectionInstallReadbackClientV1({
-			origin: `https://${workerService}:${workerPort}/`,
-			ca: workerTls.ca,
-			installToken,
-			lookup,
-		}),
-	});
-	if (receiver?.status !== "available") throw new Error("receiver unavailable");
-	hostServer = startConnectionInstallReceiverServerV1(receiver);
-	await once(hostServer, "listening");
+			dataDirectory,
+			agentId: "agent-a",
+			workerId: "worker-a",
+			key: grant.publicKey,
+			keyId: signing.keyId,
+			issuer: signing.issuer,
+			serviceToken: randomBytes(32).toString("base64url"),
+			// The Host journal holds alice's original Execution on host-a.
+			store: {
+				resolveOriginalExecutionBinding: async (reference: HostReference) => {
+					if (reference.executionId !== "execution-a")
+						throw new Error("denied");
+					return {
+						principal: { kind: "user", id: "alice" },
+						scope: {
+							agentId: reference.agentId,
+							conversationId: reference.conversationId,
+							sessionGeneration: reference.sessionGeneration,
+							executionId: reference.executionId,
+						},
+					};
+				},
+				assertOriginalExecutionBindingCurrent: (reference: HostReference) => {
+					if (reference.executionId !== "execution-a")
+						throw new Error("denied");
+				},
+				resolveOriginalExecutionHostSessionRef: async (
+					reference: HostReference,
+				) => {
+					if (reference.executionId !== "execution-a")
+						throw new Error("denied");
+					return "host-a";
+				},
+			} as never,
+			fetch: connectionFetch as never,
+			readback: createConnectionInstallReadbackClientV1({
+				origin: `https://${workerService}:${workerPort}/`,
+				ca: workerTls.ca,
+				installToken,
+				lookup,
+			}),
+		});
+		if (receiver?.status !== "available")
+			throw new Error("receiver unavailable");
+		hostServer = startConnectionInstallReceiverServerV1(receiver);
+		await once(hostServer, "listening");
+	};
+	await startHost();
 	const host = createConnectionInstallHostClientV1({
 		ca: hostTls.ca,
 		signing,
@@ -559,6 +568,40 @@ async function noCredentialStored() {
 	);
 }
 
+/** Runs the first begin while the callback mapping CAS is rejected: begin stays unknown. */
+async function firstBeginWithoutMapping() {
+	await client`
+		create function platform.test_reject_first_connection_mapping()
+		returns trigger language plpgsql as $$
+		begin
+			return null;
+		end
+		$$`;
+	try {
+		await client`
+			create trigger test_reject_first_connection_mapping
+			before update on platform.connection_installation_authorizations
+			for each row when (old.binding->'callback' is null and new.binding->'callback' is not null)
+			execute function platform.test_reject_first_connection_mapping()`;
+		expect(await tick()).toBe(1);
+	} finally {
+		await client`drop trigger if exists test_reject_first_connection_mapping on platform.connection_installation_authorizations`;
+		await client`drop function platform.test_reject_first_connection_mapping()`;
+	}
+}
+
+/** Stops the Host process state: its in-memory supply slots are gone; the private volume stays. */
+async function restartHost() {
+	const server = hostServer;
+	if (server) {
+		server.closeAllConnections();
+		server.close();
+		await once(server, "close");
+	}
+	if (receiver?.status === "available") await receiver.close();
+	await startHost();
+}
+
 describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13.5.5–§13.5.7)", () => {
 	it("supplies, prepares once, CASes the receipt and fixes the configuration in the first begin", async () => {
 		const projection = await begin();
@@ -603,24 +646,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 	it("recovers the original consumed begin after the callback mapping CAS fails", async () => {
 		const projection = await begin();
 		expect(await tick()).toBe(1);
-		await client`
-			create function platform.test_reject_first_connection_mapping()
-			returns trigger language plpgsql as $$
-			begin
-				return null;
-			end
-			$$`;
-		try {
-			await client`
-				create trigger test_reject_first_connection_mapping
-				before update on platform.connection_installation_authorizations
-				for each row when (old.binding->'callback' is null and new.binding->'callback' is not null)
-				execute function platform.test_reject_first_connection_mapping()`;
-			expect(await tick()).toBe(1);
-		} finally {
-			await client`drop trigger if exists test_reject_first_connection_mapping on platform.connection_installation_authorizations`;
-			await client`drop function platform.test_reject_first_connection_mapping()`;
-		}
+		await firstBeginWithoutMapping();
 		const [unmapped] = await client`
 			select a.binding->'callback' as callback, c.status from platform.connection_installation_authorizations a
 			join platform.connection_installation_commands c on c.authorization_id=a.id
@@ -648,6 +674,75 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		expect(decryptCalls).toBe(1);
 		expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
 		expect(await tick()).toBe(0);
+	});
+
+	// PR-Agent on #4206: after a Host restart the in-memory supply slot is gone, so
+	// begin_status could only answer conflict for a consumed first begin.
+	it("recovers the original consumed begin read-only after the Host restarts", async () => {
+		const projection = await begin();
+		expect(await tick()).toBe(1);
+		await firstBeginWithoutMapping();
+		const [lost] = await client`
+			select a.binding->'callback' as callback, c.status from platform.connection_installation_authorizations a
+			join platform.connection_installation_commands c on c.authorization_id=a.id
+			where a.id=${projection.authorizationId} and c.command='begin'`;
+		expect(lost).toMatchObject({ callback: null, status: "unknown" });
+		await restartHost();
+		expect(await status(projection.authorizationId)).not.toHaveProperty(
+			"authorizationUrl",
+		);
+		readbacks.length = 0;
+		expect(await tick()).toBe(1);
+		const recovered = await status(projection.authorizationId);
+		expect(recovered).toHaveProperty(
+			"authorizationUrl",
+			expect.stringMatching(/^https:\/\/connection\.test\/oauth\/authorize\?/),
+		);
+		const [mapped] = await client`
+			select c.status, (select status from platform.connection_installation_commands
+				where authorization_id=a.id and command='begin_status') as begin_status
+			from platform.connection_installation_authorizations a
+			join platform.connection_installation_commands c on c.authorization_id=a.id
+			where a.id=${projection.authorizationId} and c.command='begin'`;
+		expect(mapped).toEqual({ status: "completed", begin_status: "completed" });
+		// Read-only: the restarted Host checked the original supply and the command, and
+		// neither the supply nor Connection was contacted again.
+		expect(readbacks).toEqual(["supply:supply", "command:begin_status"]);
+		expect(supplyCalls).toBe(1);
+		expect(decryptCalls).toBe(1);
+		expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
+		expect(await tick()).toBe(0);
+	});
+
+	it("keeps the link closed after a Host restart once the original supply no longer holds", async () => {
+		const projection = await begin();
+		expect(await tick()).toBe(1);
+		await firstBeginWithoutMapping();
+		await restartHost();
+		expect(await status(projection.authorizationId)).not.toHaveProperty(
+			"authorizationUrl",
+		);
+		// The original supply attempt stops being confirmable while the restarted Host
+		// reads it back; the begin_status command itself was signed and sent.
+		readbackHook = async (request) => {
+			if (request.purpose === "supply")
+				await client`update platform.connection_manual_installations set supply_state='unknown'
+					where authorization_id=${projection.authorizationId}`;
+		};
+		readbacks.length = 0;
+		await tick();
+		expect(readbacks).toEqual(["supply:supply"]);
+		// The install is closed for its user; no link is returned or mapped.
+		await expect(status(projection.authorizationId)).rejects.toMatchObject({
+			code: "denied",
+		});
+		const [row] = await client`
+			select a.binding->'callback' as callback, c.status from platform.connection_installation_authorizations a
+			join platform.connection_installation_commands c on c.authorization_id=a.id
+			where a.id=${projection.authorizationId} and c.command='begin'`;
+		expect(row).toMatchObject({ callback: null, status: "unknown" });
+		expect(supplyCalls).toBe(1);
+		expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
 	});
 
 	it.each(["after_host", "before_host"] as const)(
