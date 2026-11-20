@@ -229,6 +229,7 @@ describe("platform-core package surface", () => {
 			"isConnectionConsumerRevisionV1",
 			"isConversationAgentRunnableV1",
 			"isConversationGenerationBarrierConfirmedV1",
+			"isConversationTerminalControlDrainV1",
 			"isCurrentTaskFeedbackUseV1",
 			"isEvaluationFileRuntimeCurrentV1",
 			"isExactExecutionFailureCodeV1",
