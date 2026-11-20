@@ -295,9 +295,9 @@ export class PostgresPersonalApiCredentialStoreV1
 					};
 				},
 				async lockAgentGrants() {
-					// Keep both current range and explicit grants stable through projection/audit.
+					// Match access replacement and creation: owners -> availability -> grants.
 					await transaction.execute(
-						sql`lock table platform.agent_principal_grants, platform.agent_availability, platform.agent_owners in share mode`,
+						sql`lock table platform.agent_owners, platform.agent_availability, platform.agent_principal_grants in share mode`,
 					);
 				},
 				async markCredentialUsed(credentialId, usedAt) {
