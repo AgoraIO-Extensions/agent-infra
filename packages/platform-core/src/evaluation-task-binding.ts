@@ -1,5 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
 import { snapshotObject } from "./conversation-execution-values.js";
+import { matchesVerifiedWorkloadVersionV1 } from "./workload-reconciliation.js";
 
 /** Server-created durable reference. It carries no dataset content or credential material. */
 export interface EvaluationTaskBindingV1 {
@@ -119,7 +119,7 @@ export function isEvaluationFileRuntimeCurrentV1(input: {
 		!!w.identity &&
 		!!w.verified &&
 		w.verifiedRevision === w.revision &&
-		isDeepStrictEqual(w.candidate, w.verified) &&
+		matchesVerifiedWorkloadVersionV1(w.candidate, w.verified) &&
 		w.sourceConfigurationRevision === input.configurationRevision &&
 		w.verified.configuration.revision === input.configurationRevision &&
 		w.sourceLifecycleRevision === input.workloadRevision &&
