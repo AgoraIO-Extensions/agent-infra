@@ -757,3 +757,57 @@ it("bounds one admission by the reply lifetime so a stuck frame releases its ses
 		await worker.close();
 	}
 });
+
+it.each(["single", "group"] as const)(
+	"4281 replies with the existing personal Key settings hint (%s)",
+	async (conversationType) => {
+		const worker = createPlatformWecomConnectionsV1({
+			databaseUrl: "postgres://fixture",
+			holderId: "worker",
+			bindings: async () => [
+				{
+					botId: "bot",
+					agentId: "agent",
+					bindingReference: "binding",
+					credentialVersion: "v1",
+					secret: "fixture",
+				},
+			],
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+			receive: async () => ({
+				outcome: "unavailable",
+				reason: "personal_relay_key_unavailable",
+			}),
+		});
+		try {
+			await worker.tick();
+			const message: WecomMessageV1 = {
+				agentId: "agent",
+				bindingReference: "binding",
+				kind: "wecom_bot",
+				senderId: "sender",
+				peerId: "peer",
+				conversationType,
+				threadId: null,
+				providerId: "bot",
+				eventId: "event",
+				text: "fixture",
+				replyHandle: "reply",
+				replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+			};
+			await mocks.receive?.(message);
+			await vi.waitFor(() =>
+				expect(mocks.socketSend).toHaveBeenCalledWith({
+					scope: message,
+					replyHandle: "reply",
+					text: "个人 Relay Key 不可用，请到个人设置处理",
+				}),
+			);
+		} finally {
+			await worker.close();
+		}
+	},
+);
