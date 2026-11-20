@@ -2,6 +2,7 @@ import { createPublicKey } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	codexSessionExecutorAttestationV1,
+	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import {
@@ -9,6 +10,11 @@ import {
 	resolveApprovedConnectionConsumerProfileV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { BrowserCapabilityBindingV1 } from "@agent-infra/contracts/runtime";
+import {
+	type ExecutorInstanceMutationV2,
+	type ExecutorInstanceStateV2,
+	ExecutorInstanceStateV2Schema,
+} from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -46,6 +52,7 @@ import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-instal
 import { sessionSandboxConnectionInstallTokenV1 } from "./connection-install-readback-server.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
@@ -490,7 +497,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					input.purpose === "control" &&
 					input.requireSandboxObservation === true;
 				if (
-					(input.purpose === "business" && connectionDeliveryConfigured) ||
+					(input.purpose === "business" &&
+						(connectionDeliveryConfigured ||
+							sandboxResource.executorInstance !== undefined)) ||
 					requireSandboxObservation
 				) {
 					// Both principal facts come from the server's original execution/Store.
@@ -511,22 +520,53 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						pod.name !== sandboxResource.sandbox.resourceName
 					)
 						throw new Error();
+					let observedAllocation = await allocationFor(
+						sandboxResource.sandbox,
+						sandboxResource.policy,
+						deployment,
+						// The verified projection the Sandbox was prepared from (#1466).
+						requireSandboxObservation
+							? state.verified?.modelProjection
+							: state.candidate.modelProjection,
+						"running",
+						sandboxResource.sandbox.generation,
+						sandboxResource.resourceFence,
+						true,
+						// The recorded Session Secret is re-checked by identity (#3938).
+						resources?.find((resource) => resource.kind === "Secret"),
+					);
+					if (sandboxResource.executorInstance) {
+						const instance = sandboxResource.executorInstance;
+						if (
+							instance.phase !== "adopted" ||
+							!instance.adoption ||
+							instance.cleanup !== "absent"
+						)
+							throw new Error();
+						if (
+							input.purpose === "business" &&
+							[
+								"turn.submit",
+								"turn.supplement",
+								"native-capability.invoke",
+							].includes(input.command) &&
+							!workload.policy.executorInstanceStartupApprovals?.some(
+								(x) =>
+									x.schemaVersion === 2 &&
+									x.imageDigest.endsWith(`@${deployment.imageDigest}`) &&
+									x.verificationRef,
+							)
+						)
+							throw new Error();
+						observedAllocation = {
+							...observedAllocation,
+							executorDrainIdentity: true,
+							executorStartupDeadline: instance.expiresAt,
+							executorInstance: instance,
+						};
+					}
 					const observed = await sandboxAdapter.observe(
-						await allocationFor(
-							sandboxResource.sandbox,
-							sandboxResource.policy,
-							deployment,
-							// The verified projection the Sandbox was prepared from (#1466).
-							requireSandboxObservation
-								? state.verified?.modelProjection
-								: state.candidate.modelProjection,
-							"running",
-							sandboxResource.sandbox.generation,
-							sandboxResource.resourceFence,
-							true,
-							// The recorded Session Secret is re-checked by identity (#3938).
-							resources?.find((resource) => resource.kind === "Secret"),
-						),
+						observedAllocation,
 						resources,
 					);
 					input.signal.throwIfAborted();
@@ -1310,6 +1350,9 @@ export function createProductionSessionSandboxReceiverV1(
 			resources: readonly SessionSandboxResourceIdentityV1[],
 		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
 		readExecutorRetirement?: () => Promise<boolean>,
+		executorInstances?: (
+			mutation: ExecutorInstanceMutationV2,
+		) => Promise<{ state: ExecutorInstanceStateV2; permit: boolean } | null>,
 	): Promise<SessionSandboxObservationV1> => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
@@ -1323,7 +1366,7 @@ export function createProductionSessionSandboxReceiverV1(
 				source.deployment,
 			);
 			// The source keeps the projection it was prepared with (#1466).
-			const sourceAllocation = await allocationFor(
+			let sourceAllocation = await allocationFor(
 				source.sandbox,
 				source.policy,
 				sourceDeployment,
@@ -1334,13 +1377,52 @@ export function createProductionSessionSandboxReceiverV1(
 				// Drain validates the captured source, not today's preparation allowlist.
 				false,
 			);
+			const sourceInstance = executorInstances
+				? await executorInstances({ kind: "read" })
+				: null;
+			if (sourceInstance)
+				sourceAllocation = {
+					...sourceAllocation,
+					executorDrainIdentity: true,
+					executorStartupDeadline: sourceInstance.state.expiresAt,
+					executorInstance: sourceInstance.state,
+				};
+			const closeSourceInstance = async () => {
+				if (!sourceInstance) return;
+				if (sourceInstance.state.phase === "retired") {
+					if (
+						!workload.client.readMetadata ||
+						(await workload.client.readMetadata(
+							"Secret",
+							sourceInstance.state.startupRef,
+						))
+					)
+						throw new WorkloadKubernetesError("unavailable");
+					return;
+				}
+				if (
+					!executorInstances ||
+					!options.executorIdentityIssuer ||
+					!claim.drainComputeAllowed
+				)
+					throw new WorkloadKubernetesError("unavailable");
+				await createExecutorInstanceControlV2({
+					client: workload.client,
+					issuer: options.executorIdentityIssuer,
+					allocation: sourceAllocation,
+					ledger: executorInstances,
+					signal,
+				}).retire();
+			};
 			const sourceResources = source.observation?.resources ?? [];
-			if (lifecycle.stopReceipt)
+			if (lifecycle.stopReceipt) {
+				await closeSourceInstance();
 				return {
 					status: "stopped" as const,
 					sourceStop: lifecycle.stopReceipt,
 					resources: retainedResources(lifecycle.stopReceipt),
 				};
+			}
 			// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源。没有可删除的资源，
 			// 只读证明停止；与正常排空一样，执行未终态或已进入准备时不下结论。
 			if (source.observation?.status === "stopped") {
@@ -1371,6 +1453,7 @@ export function createProductionSessionSandboxReceiverV1(
 					)
 				)
 					return { status: "observed" as const, resources: owned.resources };
+				await closeSourceInstance();
 				const stopReceipt = await adapter.confirmStoppedSource(
 					await allocationFor(
 						claim.sandbox,
@@ -1458,6 +1541,7 @@ export function createProductionSessionSandboxReceiverV1(
 							return { status: "unknown" as const, resources: sourceResources };
 						if (!recordDeletionProgress)
 							throw new Error("Session Sandbox deletion CAS is unavailable");
+						await closeSourceInstance();
 						const stopReceipt = await adapter.cleanup(
 							await allocationFor(
 								claim.sandbox,
@@ -1586,6 +1670,7 @@ export function createProductionSessionSandboxReceiverV1(
 			);
 			if (!recordDeletionProgress)
 				throw new Error("Session Sandbox deletion CAS is unavailable");
+			await closeSourceInstance();
 			const stopReceipt = await adapter.cleanup(allocation, sourceResources, {
 				sourceGeneration: source.sandbox.generation,
 				sourceResourceFence: source.resourceFence,
@@ -1645,6 +1730,110 @@ export function createProductionSessionSandboxReceiverV1(
 				resources: retainedResources(stopReceipt),
 			};
 		}
+		const existingInstance =
+			allocation.executorDrainIdentity && executorInstances
+				? await executorInstances({ kind: "read" })
+				: null;
+		const approvals = workload.policy.executorInstanceStartupApprovals;
+		if (
+			allocation.executorDrainIdentity &&
+			(existingInstance || approvals !== undefined)
+		) {
+			if (
+				!executorInstances ||
+				!options.executorIdentityIssuer ||
+				!options.executorDrainStartupTimeoutMs ||
+				!allocation.runtime?.sessionExecutor ||
+				!approvals
+			)
+				throw new WorkloadKubernetesError("policy");
+			if (
+				!Array.isArray(approvals) ||
+				approvals.length > 128 ||
+				new Set(approvals.map((x) => x.imageDigest)).size !== approvals.length
+			)
+				throw new WorkloadKubernetesError("policy");
+			const approval = approvals
+				.map((x) => ExecutorInstanceStateV2Schema.shape.approval.parse(x))
+				.find(
+					(x) =>
+						x.imageDigest ===
+						allocation.runtime?.sessionExecutor?.binding.imageDigest,
+				);
+			if (!approval) throw new WorkloadKubernetesError("policy");
+			const live = await workload.client.read<V1Pod>("Pod", allocation.podName);
+			if (!existingInstance && live)
+				throw new WorkloadKubernetesError("conflict");
+			if (existingInstance?.state.phase === "retired") {
+				if (
+					live ||
+					!workload.client.readMetadata ||
+					(await workload.client.readMetadata(
+						"Secret",
+						existingInstance.state.startupRef,
+					))
+				)
+					throw new WorkloadKubernetesError("conflict");
+			}
+			const prepared = await executorInstances({
+				kind: "prepare",
+				bindingDigest: codexSessionExecutorBindingDigestV1(
+					allocation.runtime.sessionExecutor.binding,
+				),
+				configurationVersion: JSON.parse(allocation.runtime.modelConfiguration)
+					.configVersion,
+				timeoutMs: options.executorDrainStartupTimeoutMs,
+				approval,
+			});
+			if (!prepared) throw new WorkloadKubernetesError("conflict");
+			let instanceAllocation = {
+				...allocation,
+				executorInstance: prepared.state,
+				executorStartupDeadline: prepared.state.expiresAt,
+			};
+			const control = createExecutorInstanceControlV2({
+				client: workload.client,
+				issuer: options.executorIdentityIssuer,
+				allocation: instanceAllocation,
+				ledger: executorInstances,
+				signal,
+			});
+			if (
+				live &&
+				prepared.state.podUid &&
+				live.metadata?.uid !== prepared.state.podUid
+			)
+				throw new WorkloadKubernetesError("conflict");
+			if (
+				prepared.state.phase === "closing" ||
+				(prepared.state.podUid && !live) ||
+				(!prepared.state.adoption && Date.now() >= prepared.state.expiresAt)
+			) {
+				if (live && !prepared.state.podUid) await control.bindForCleanup(live);
+				await control.retire();
+				return {
+					status: "unknown",
+					failureCode: "runtime.executor_identity_timeout",
+					resources: previous.filter((r) => r.kind === "PersistentVolumeClaim"),
+				};
+			}
+			if (claim.lifecycle?.stopReceipt?.retainedPVC)
+				await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
+			await adapter.apply(instanceAllocation, previous, control);
+			const current = control.current();
+			if (!current) throw new WorkloadKubernetesError("unavailable");
+			instanceAllocation = { ...instanceAllocation, executorInstance: current };
+			if (!current.adoption && Date.now() >= current.expiresAt) {
+				await control.retire();
+				return {
+					status: "unknown",
+					failureCode: "runtime.executor_identity_timeout",
+					resources: previous.filter((r) => r.kind === "PersistentVolumeClaim"),
+				};
+			}
+			return adapter.observe(instanceAllocation, previous);
+		}
+
 		const recordedPod = previous.find((resource) => resource.kind === "Pod");
 		// A ready replacement owns its current UIDs; an older stop receipt cannot replace them again.
 		const preparedReplacement =

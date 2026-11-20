@@ -382,3 +382,38 @@ test("keeps explicit native start rejections separate from actual process group 
 			);
 	}
 });
+
+test("V2 drain scope never joins another startup attempt, reference or committed fact", () => {
+	const { seal, proof, terminal, read } = drainReadFixture();
+	const startup = {
+		schemaVersion: 2,
+		attemptId: "a3a70de0-42c8-4d3b-9e93-956695751afa",
+		startupRef: "original-start",
+		recordRef: "a3a70de0-42c8-4d3b-9e93-956695751afb",
+		factDigest: "f".repeat(64),
+	};
+	const original = { ...proof, startup };
+	const committed = { ...terminal, startup };
+	const sealed = { ...seal, startup };
+	assert.equal(
+		read([original, committed], { seals: [sealed] }).drainEvidence.startup
+			.startupRef,
+		"original-start",
+	);
+	for (const change of [
+		{ startupRef: "another-start" },
+		{ attemptId: "a3a70de0-42c8-4d3b-9e93-956695751afc" },
+		{ recordRef: "a3a70de0-42c8-4d3b-9e93-956695751afd" },
+		{ factDigest: "d".repeat(64) },
+	]) {
+		const conflicting = { ...original, startup: { ...startup, ...change } };
+		assert.equal(
+			read([conflicting, committed], { seals: [sealed] }).evidence,
+			"pending",
+		);
+		assert.equal(
+			read([original, conflicting, committed], { seals: [sealed] }).evidence,
+			"pending",
+		);
+	}
+});

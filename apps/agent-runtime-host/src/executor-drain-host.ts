@@ -27,6 +27,16 @@ export async function openExecutorDrainHostV1(
 		resourceFence: binding.resourceFence,
 		generation: binding.sessionGeneration,
 	};
+	const startup =
+		"instance" in identity
+			? {
+					schemaVersion: 2 as const,
+					attemptId: identity.instance.attemptId,
+					startupRef: identity.startupRef,
+					recordRef: identity.instance.recordRef,
+					factDigest: identity.factDigest,
+				}
+			: undefined;
 	const call = (path: string, input: Record<string, unknown>) =>
 		executorControlRequestV1(identity, executorRunnerControlOriginV1, path, {
 			...input,
@@ -159,7 +169,12 @@ export async function openExecutorDrainHostV1(
 						"executor-drain",
 						`${createHash("sha256").update(executionId).digest("hex")}.json`,
 					),
-					{ ...authority, podUid: identity.podUid, executionId },
+					{
+						...authority,
+						podUid: identity.podUid,
+						executionId,
+						...(startup ? { startup } : {}),
+					},
 				);
 				active = {
 					executionId,
@@ -263,6 +278,7 @@ export async function openExecutorDrainHostV1(
 					epoch,
 					stopFence,
 					digest,
+					startup,
 				} = evidence;
 				target.terminalReported = true;
 				process.stdout.write(
@@ -277,6 +293,7 @@ export async function openExecutorDrainHostV1(
 						epoch,
 						stopFence,
 						digest,
+						...(startup ? { startup } : {}),
 						occurredAt: Date.parse(occurredAt),
 					})}\n`,
 				);

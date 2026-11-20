@@ -1,5 +1,4 @@
 import { timingSafeEqual } from "node:crypto";
-
 import {
 	discoverRuntimeBrowserCapabilityV1,
 	type RuntimeBrowserCapabilityAssemblyV1,
@@ -9,6 +8,10 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	type ExecutionGrantV1,
+	type ExecutorInstanceAdoptionReadV2,
+	ExecutorInstanceAdoptionReadV2Schema,
+	type ExecutorInstanceAdoptionV2,
+	ExecutorInstanceAdoptionV2Schema,
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
@@ -60,6 +63,9 @@ import {
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	executorInstanceRead?: (
+		request: ExecutorInstanceAdoptionReadV2,
+	) => Promise<ExecutorInstanceAdoptionV2>;
 	/** Admitted manifest plus local probe evidence; never selected by a caller. */
 	browserCapability?:
 		| RuntimeBrowserCapabilityAssemblyV1
@@ -194,6 +200,34 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		}
 		await next();
+	});
+
+	app.post("/internal/runtime/v2/executor-startup/read", async (context) => {
+		if (!options.executorInstanceRead)
+			throw new RuntimeHostError(
+				"RUNTIME_SESSION_UNAVAILABLE",
+				"Executor instance proof is unavailable",
+				503,
+				true,
+			);
+		const request = await parseBody(
+			context.req.raw,
+			ExecutorInstanceAdoptionReadV2Schema,
+		);
+		try {
+			return context.json(
+				ExecutorInstanceAdoptionV2Schema.parse(
+					await options.executorInstanceRead(request),
+				),
+			);
+		} catch {
+			throw new RuntimeHostError(
+				"RUNTIME_SESSION_UNAVAILABLE",
+				"Executor instance proof is unavailable",
+				503,
+				true,
+			);
+		}
 	});
 
 	app.get("/internal/runtime/v1/browser-capability", (context) => {

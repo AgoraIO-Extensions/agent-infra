@@ -63,6 +63,11 @@ function verifyMaterial(
 				startupRef,
 				expiresAt: Number(environment.AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE),
 				role,
+				instanceBinding: {
+					sandboxId: binding.sandboxId,
+					generation: binding.sessionGeneration,
+					resourceFence: binding.resourceFence,
+				},
 				now: Date.now(),
 				issuerKey: createPublicKey(issuer),
 			},

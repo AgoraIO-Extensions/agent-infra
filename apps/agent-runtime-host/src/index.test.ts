@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
 	cp,
 	mkdir,
@@ -22,8 +22,15 @@ import {
 	type CodexRuntimeDriverOptions,
 	type CodexSessionExecutorAdmissionV1,
 	codexSessionExecutorAttestationV1,
+	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	executorIdentityFileRootV1,
+	executorIdentityFileV1,
 	FakeRuntimeDriver,
+	issueExecutorStartIdentityV1,
+	signExecutorControlV1,
+	verifyExecutorControlV1,
+	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeSubmitTurnRequestV4Schema } from "@agent-infra/contracts/runtime";
@@ -44,6 +51,25 @@ import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
+
+const executorIdentityPaths = vi.hoisted(() => new Map<string, string>());
+vi.mock("node:fs/promises", async (original) => {
+	const fs = await original<typeof import("node:fs/promises")>();
+	return {
+		...fs,
+		open: (
+			path: Parameters<typeof fs.open>[0],
+			...args: Parameters<typeof fs.open> extends [unknown, ...infer T]
+				? T
+				: never
+		) => fs.open(executorIdentityPaths.get(String(path)) ?? path, ...args),
+		unlink: (path: Parameters<typeof fs.unlink>[0]) =>
+			fs.unlink(executorIdentityPaths.get(String(path)) ?? path),
+	};
+});
+vi.mock("./executor-identity-process.js", () => ({
+	protectExecutorIdentityProcessV1: () => {},
+}));
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openClaudeRuntimeDriver: vi.fn(),
@@ -423,6 +449,132 @@ describe("RuntimeHost environment assembly", () => {
 		expect(fixture.closeDriver).toHaveBeenCalledOnce();
 		expect(fixture.closeAdmission).toHaveBeenCalledOnce();
 		expect(fixture.listenerCount()).toBe(0);
+	});
+
+	it("assembles the original V1 executor after upgrade without rewriting its pin or journal", async () => {
+		const fixture = await sessionExecutorFixture();
+		const directory = fixture.values.AGENT_INFRA_RUNTIME_DATA_DIR as string;
+		const admission = { ...fixture.admission, podUid: "synthetic-pod-uid" };
+		runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockResolvedValue(
+			admission,
+		);
+		await actualMessageRuntimes.pinCodexSessionExecutorEpochV1(
+			directory,
+			admission,
+		);
+		const pin = join(
+			directory,
+			`.executor-${codexSessionExecutorBindingDigestV1(admission.binding)}.json`,
+		);
+		const bytes = await readFile(pin);
+		const executionId = "original-execution";
+		const journal = join(
+			directory,
+			"executor-drain",
+			`${createHash("sha256").update(executionId).digest("hex")}.json`,
+		);
+		const scope = {
+			executionId,
+			podUid: admission.podUid,
+			epoch: admission.epoch,
+			generation: admission.binding.sessionGeneration,
+			resourceFence: admission.binding.resourceFence,
+		};
+		const original =
+			await actualMessageRuntimes.CodexExecutorDrainJournalV1.open(
+				journal,
+				scope,
+			);
+		await original.bindNativeTurn("original-turn");
+		await original.admit({
+			protocolSession: "original-protocol",
+			handle: "pending-launch",
+		});
+		const stop = { stopRequestId: "original-stop", stopFence: 7 };
+		const seal = await original.seal(stop);
+		await original.close();
+		const journalBytes = await readFile(journal);
+		const start = {
+			podUid: admission.podUid,
+			bindingDigest: codexSessionExecutorBindingDigestV1(admission.binding),
+			startupRef: "original-v1-start",
+			expiresAt: Date.now() + 60_000,
+		};
+		const material = issueExecutorStartIdentityV1(start, privateKey);
+		const runner = verifyExecutorStartIdentityV1(material.runner, {
+			...start,
+			issuerKey: publicKey,
+			now: Date.now(),
+			role: "runner",
+		});
+		const identityPath = join(directory, "private-startup.json");
+		await writeFile(identityPath, JSON.stringify(material.host), {
+			mode: 0o400,
+		});
+		executorIdentityPaths.set(
+			join(executorIdentityFileRootV1, executorIdentityFileV1),
+			identityPath,
+		);
+		Object.assign(fixture.values, {
+			AGENT_INFRA_EXECUTOR_STARTUP_REF: start.startupRef,
+			AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE: String(start.expiresAt),
+		});
+		const transport = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (url, options) => {
+				const path = new URL(String(url)).pathname;
+				const request = verifyExecutorControlV1(
+					runner,
+					path,
+					JSON.parse(String(options?.body)),
+				);
+				if (!request) throw new Error("invalid fixture authentication");
+				return Response.json(
+					signExecutorControlV1(
+						runner,
+						`${path}/result`,
+						{ epoch: admission.epoch },
+						request.requestId,
+						request.deadline,
+					),
+				);
+			});
+		try {
+			const runtime = await assembleRuntimeHost(fixture.values);
+			try {
+				expect(
+					runtimeAssemblyMocks.openCodexRuntimeDriver,
+				).toHaveBeenCalledWith(
+					expect.objectContaining({
+						sessionExecutor: expect.objectContaining({
+							drain: expect.any(Object),
+							epoch: admission.epoch,
+						}),
+					}),
+				);
+				expect(await readFile(pin)).toEqual(bytes);
+				expect(await readFile(journal)).toEqual(journalBytes);
+				await expect(stat(identityPath)).rejects.toMatchObject({
+					code: "ENOENT",
+				});
+			} finally {
+				await runtime.close();
+			}
+			const recovered =
+				await actualMessageRuntimes.CodexExecutorDrainJournalV1.open(
+					journal,
+					scope,
+				);
+			try {
+				expect(await recovered.seal(stop)).toEqual(seal);
+				expect(recovered.confirmed()).toBe(false);
+			} finally {
+				await recovered.close();
+			}
+		} finally {
+			executorIdentityPaths.clear();
+			transport.mockRestore();
+		}
 	});
 
 	it("rejects a foreign Session attestation before executor or Driver startup", async () => {

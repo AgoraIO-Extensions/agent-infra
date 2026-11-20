@@ -711,11 +711,15 @@ export function receiveCodexSessionExecutorAdmissionV1(
 		!exactKeys(input, [
 			"binding",
 			"epoch",
+			...(input.podUid === undefined ? [] : ["podUid"]),
 			"assertCurrent",
 			"onFailure",
 			"close",
 			...(input.drain === undefined ? [] : ["drain"]),
 		]) ||
+		(input.podUid !== undefined &&
+			(typeof input.podUid !== "string" ||
+				!/^[A-Za-z0-9-]{1,256}$/.test(input.podUid))) ||
 		typeof input.epoch !== "string" ||
 		!/^[-a-f0-9]{36}$/.test(input.epoch) ||
 		typeof input.assertCurrent !== "function" ||
@@ -729,7 +733,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 	} catch {
 		configurationInvalid();
 	}
-	const { epoch, assertCurrent, onFailure, close } = input;
+	const { epoch, podUid, assertCurrent, onFailure, close } = input;
 	let drain: CodexSessionExecutorAdmissionV1["drain"];
 	if (input.drain !== undefined) {
 		if (!isExecutorDrainPort(input.drain)) configurationInvalid();
@@ -738,6 +742,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 	const assertPinned = () => {
 		if (
 			input.epoch !== epoch ||
+			input.podUid !== podUid ||
 			!isDeepStrictEqual(input.binding, binding) ||
 			input.assertCurrent !== assertCurrent ||
 			input.onFailure !== onFailure ||
@@ -749,6 +754,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 	return Object.freeze({
 		binding,
 		epoch,
+		...(podUid === undefined ? {} : { podUid }),
 		async assertCurrent() {
 			assertPinned();
 			await assertCurrent.call(input);

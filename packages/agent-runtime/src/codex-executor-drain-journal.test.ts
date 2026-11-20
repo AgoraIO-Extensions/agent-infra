@@ -135,3 +135,45 @@ it("retains occupancy for an admitted start with no authenticated native rejecti
 		await journal.close();
 	}
 });
+
+it("keeps an unfinished V2 journal under its original startup attempt and leaves its ACK/Stop unchanged", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "executor-v2-journal-"));
+	paths.push(dir);
+	const path = join(dir, "journal.json");
+	const startup = {
+		schemaVersion: 2 as const,
+		attemptId: "a3a70de0-42c8-4d3b-9e93-956695751afa",
+		startupRef: "executor-original",
+		recordRef: "a3a70de0-42c8-4d3b-9e93-956695751afb",
+		factDigest: "a".repeat(64),
+	};
+	const original = await CodexExecutorDrainJournalV1.open(path, {
+		...scope,
+		startup,
+	});
+	await original.bindNativeTurn("original-turn");
+	await original.admit({
+		protocolSession: "original-native",
+		handle: "unconfirmed-tool",
+	});
+	const stop = { stopRequestId: "original-stop", stopFence: 7 };
+	const seal = await original.seal(stop);
+	await original.close();
+	await expect(
+		CodexExecutorDrainJournalV1.open(path, {
+			...scope,
+			startup: {
+				...startup,
+				attemptId: "a3a70de0-42c8-4d3b-9e93-956695751afc",
+			},
+		}),
+	).rejects.toThrow("CODEX_EXECUTOR_DRAIN_JOURNAL_INVALID");
+	const reopened = await CodexExecutorDrainJournalV1.open(path, {
+		...scope,
+		startup,
+	});
+	expect(await reopened.seal(stop)).toEqual(seal);
+	expect(reopened.confirmed()).toBe(false);
+	expect(reopened.sealedStop()).toEqual(stop);
+	await reopened.close();
+});

@@ -11,6 +11,7 @@ import {
 	executorControlRequestV1,
 	executorRunnerControlOriginV1,
 	issueExecutorStartIdentityV1,
+	pinCodexSessionExecutorEpochV1,
 	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
 import { WebSocket } from "ws";
@@ -34,10 +35,27 @@ async function run() {
 	const directory = await mkdtemp(join(tmpdir(), "executor-drain-"));
 	const worker = generateKeyPairSync("ed25519");
 	const scope = {
+		...(process.argv.includes("--instance-v2")
+			? {
+					schemaVersion: 2 as const,
+					purpose: "executor-instance-startup-v2" as const,
+					instance: {
+						attemptId: randomUUID(),
+						recordRef: randomUUID(),
+						sandboxId: binding.sandboxId,
+						configurationRevision: 1,
+						configurationVersion: "configuration-one",
+						generation: binding.sessionGeneration,
+						resourceFence: binding.resourceFence,
+					},
+				}
+			: {}),
 		podUid: "original-pod",
 		startupRef: "original-start",
 		bindingDigest: codexSessionExecutorBindingDigestV1(binding),
-		expiresAt: Date.now() + 60_000,
+		expiresAt:
+			Date.now() +
+			(process.argv.includes("--bootstrap-expired") ? 3000 : 60_000),
 	};
 	const materials = issueExecutorStartIdentityV1(scope, worker.privateKey);
 	const getIdentity = (role: "host" | "runner") =>
@@ -72,12 +90,20 @@ async function run() {
 	const launchInterrupted = process.argv.includes("--lost-launch");
 	const originalAdmission = {
 		binding,
+		podUid: scope.podUid,
 		epoch,
 		async assertCurrent() {},
 		onFailure: () => () => {},
 		async close() {},
 	};
 	try {
+		if (process.argv.includes("--instance-v2"))
+			await pinCodexSessionExecutorEpochV1(
+				directory,
+				originalAdmission,
+				hostIdentity,
+				"configuration-one",
+			);
 		const host = await openExecutorDrainHostV1(
 			originalAdmission,
 			hostIdentity,
@@ -372,6 +398,11 @@ async function run() {
 			await assert.rejects(drain.arm("execution-before-drain"));
 			if (detached) process.kill(childPid, 0);
 			else process.kill(-group, 0);
+			if (process.argv.includes("--bootstrap-expired")) {
+				const until = scope.expiresAt - Date.now() + 25;
+				if (until > 0)
+					await new Promise((resolve) => setTimeout(resolve, until));
+			}
 			await drain.sealStop(
 				"execution-original",
 				"stop-original",

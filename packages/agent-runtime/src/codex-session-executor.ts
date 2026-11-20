@@ -1,11 +1,25 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, sign } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open } from "node:fs/promises";
+import { lstat, mkdir, open, readdir } from "node:fs/promises";
 import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+	ExecutorInstanceAdoptionV2Schema,
+	executorInstanceAdoptionBytesV2,
+} from "@agent-infra/contracts/runtime";
 import { z } from "zod";
 
 export * from "./codex-session-executor-binding.js";
+
+import {
+	type ExecutorIdentityV1,
+	verifiedExecutorInstanceIdentityV2,
+	verifiedExecutorLegacyIdentityV1,
+} from "./codex-executor-bootstrap.js";
+import {
+	executorControlRequestV1,
+	executorRunnerControlOriginV1,
+} from "./codex-executor-control.js";
 
 import {
 	CODEX_SESSION_EXECUTOR_BACKEND,
@@ -215,6 +229,7 @@ export interface CodexSessionExecutorStatusV1 {
 /** Trusted deployment object; never assembled from native frames or a wire command. */
 export interface CodexSessionExecutorAdmissionV1 {
 	readonly binding: CodexSessionExecutorBindingV1;
+	readonly podUid?: string;
 	readonly epoch: string;
 	assertCurrent(): Promise<void>;
 	onFailure(listener: () => void): () => void;
@@ -397,6 +412,7 @@ export async function openCodexSessionExecutorAdmissionV1(
 	timer.unref();
 	return {
 		binding: Object.freeze(binding),
+		podUid,
 		epoch: pinnedEpoch,
 		assertCurrent,
 		onFailure(listener) {
@@ -421,25 +437,183 @@ export async function openCodexSessionExecutorAdmissionV1(
 export async function pinCodexSessionExecutorEpochV1(
 	directory: string,
 	admission: CodexSessionExecutorAdmissionV1,
-): Promise<void> {
+	identity?: ExecutorIdentityV1,
+	configurationVersion?: string,
+) {
+	try {
+		return await pinExecutorEpoch(
+			directory,
+			admission,
+			identity,
+			configurationVersion,
+		);
+	} catch {
+		return invalid();
+	}
+}
+
+async function pinExecutorEpoch(
+	directory: string,
+	admission: CodexSessionExecutorAdmissionV1,
+	identity?: ExecutorIdentityV1,
+	configurationVersion?: string,
+) {
 	await admission.assertCurrent();
+	const bindingDigest = codexSessionExecutorBindingDigestV1(admission.binding);
+	let instance:
+		| ReturnType<typeof verifiedExecutorInstanceIdentityV2>
+		| undefined;
+	let instanceKey: string | undefined;
+	if (identity && !("schemaVersion" in identity)) {
+		const legacy = verifiedExecutorLegacyIdentityV1(identity);
+		if (
+			legacy.role !== "host" ||
+			legacy.podUid !== admission.podUid ||
+			legacy.bindingDigest !== bindingDigest
+		)
+			invalid();
+	}
+	if (identity && "schemaVersion" in identity) {
+		instance = verifiedExecutorInstanceIdentityV2(identity);
+		try {
+			await lstat(posix.join(directory, `.executor-${bindingDigest}.json`));
+			return invalid();
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (
+			instance.role !== "host" ||
+			instance.podUid !== admission.podUid ||
+			instance.bindingDigest !== bindingDigest ||
+			instance.instance.sandboxId !== admission.binding.sandboxId ||
+			instance.instance.generation !== admission.binding.sessionGeneration ||
+			instance.instance.resourceFence !== admission.binding.resourceFence ||
+			instance.instance.configurationVersion !== configurationVersion
+		)
+			invalid();
+		for (const name of (await readdir(directory)).filter((name) =>
+			name.startsWith(`.executor-instance-${bindingDigest}-`),
+		)) {
+			const existing = await open(
+				posix.join(directory, name),
+				constants.O_RDONLY | constants.O_NOFOLLOW,
+			);
+			try {
+				const info = await existing.stat();
+				if (
+					!info.isFile() ||
+					info.nlink !== 1 ||
+					info.uid !== process.getuid?.() ||
+					(info.mode & 0o077) !== 0 ||
+					info.size > 4096
+				)
+					invalid();
+				const old = JSON.parse(await existing.readFile("utf8")) as Record<
+					string,
+					unknown
+				>;
+				if (
+					old.schemaVersion !== 2 ||
+					typeof old.podUid !== "string" ||
+					typeof old.attemptId !== "string"
+				)
+					invalid();
+				if (
+					old.podUid === instance.podUid &&
+					(old.attemptId !== instance.instance.attemptId ||
+						old.startupRef !== instance.startupRef)
+				)
+					invalid();
+			} finally {
+				await existing.close();
+			}
+		}
+		instanceKey = createHash("sha256")
+			.update(
+				JSON.stringify([
+					bindingDigest,
+					instance.instance.attemptId,
+					instance.startupRef,
+					instance.podUid,
+					instance.instance.generation,
+					instance.instance.resourceFence,
+				]),
+			)
+			.digest("hex");
+	} else if (
+		(await readdir(directory)).some((name) =>
+			name.startsWith(`.executor-instance-${bindingDigest}-`),
+		)
+	)
+		invalid();
+	const authenticate = async () => {
+		if (!identity) return;
+		const status = await executorControlRequestV1(
+			identity,
+			executorRunnerControlOriginV1,
+			"/control/status",
+			{
+				epoch: admission.epoch,
+				generation: admission.binding.sessionGeneration,
+				resourceFence: admission.binding.resourceFence,
+			},
+		);
+		if (
+			!status ||
+			typeof status !== "object" ||
+			(status as { epoch?: unknown }).epoch !== admission.epoch
+		)
+			invalid();
+	};
+	await authenticate();
 	const path = posix.join(
 		directory,
-		`.executor-${codexSessionExecutorBindingDigestV1(admission.binding)}.json`,
+		instanceKey
+			? `.executor-instance-${bindingDigest}-${instanceKey}.json`
+			: `.executor-${bindingDigest}.json`,
 	);
-	const bytes = JSON.stringify({ schemaVersion: 1, epoch: admission.epoch });
+	const pin = instance
+		? {
+				schemaVersion: 2 as const,
+				startupRef: instance.startupRef,
+				attemptId: instance.instance.attemptId,
+				recordRef: instance.instance.recordRef,
+				podUid: instance.podUid,
+				bindingDigest,
+				epoch: admission.epoch,
+				generation: instance.instance.generation,
+				resourceFence: instance.instance.resourceFence,
+				factDigest: instance.factDigest,
+				configurationVersion: instance.instance.configurationVersion,
+				identityDigest: createHash("sha256")
+					.update(
+						JSON.stringify([
+							instance.publicKey,
+							instance.peerKey,
+							instance.issuerKeyId,
+							instance.factDigest,
+						]),
+					)
+					.digest("hex"),
+			}
+		: { schemaVersion: 1 as const, epoch: admission.epoch };
+	const bytes = JSON.stringify(pin);
 	let file: Awaited<ReturnType<typeof open>>;
 	let created = false;
 	try {
-		file = await open(
-			path,
-			constants.O_CREAT |
-				constants.O_EXCL |
-				constants.O_WRONLY |
-				constants.O_NOFOLLOW,
-			0o600,
-		);
-		created = true;
+		if (identity && !instance) {
+			// A legacy identity can only verify an existing original pin; it cannot authorize a fresh one.
+			file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		} else
+			file = await open(
+				path,
+				constants.O_CREAT |
+					constants.O_EXCL |
+					constants.O_WRONLY |
+					constants.O_NOFOLLOW,
+				0o600,
+			);
+		created = !identity || instance !== undefined;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 		file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -451,17 +625,58 @@ export async function pinCodexSessionExecutorEpochV1(
 			info.nlink !== 1 ||
 			info.uid !== process.getuid?.() ||
 			(info.mode & 0o077) !== 0 ||
-			info.size > 256
+			info.size > 4096
 		)
 			invalid();
 		if (created) {
+			if (instance && Date.now() >= instance.expiresAt) invalid();
 			await file.writeFile(bytes);
 			await file.sync();
+			const parent = await open(directory, constants.O_RDONLY);
+			try {
+				await parent.sync();
+			} finally {
+				await parent.close();
+			}
 		} else if ((await file.readFile("utf8")) !== bytes) invalid();
 	} finally {
 		await file.close();
 	}
+	await authenticate();
 	await admission.assertCurrent();
+	if (!instance) return undefined;
+	const metadata = Object.freeze({
+		schemaVersion: 2 as const,
+		purpose: "executor-instance-adoption-v2" as const,
+		startupRef: instance.startupRef,
+		attemptId: instance.instance.attemptId,
+		recordRef: instance.instance.recordRef,
+		podUid: instance.podUid,
+		bindingDigest,
+		generation: instance.instance.generation,
+		resourceFence: instance.instance.resourceFence,
+		epoch: admission.epoch,
+		factDigest: instance.factDigest,
+		pinDigest: createHash("sha256").update(bytes).digest("hex"),
+	});
+	const signingIdentity = instance;
+	return Object.freeze({
+		...metadata,
+		async read(challenge: string) {
+			z.string().uuid().parse(challenge);
+			await authenticate();
+			await admission.assertCurrent();
+			const proof = { ...metadata, challenge };
+			return ExecutorInstanceAdoptionV2Schema.parse({
+				...proof,
+				signature: sign(
+					null,
+					Buffer.from(executorInstanceAdoptionBytesV2(proof)),
+					signingIdentity.privateKey,
+				).toString("base64url"),
+			});
+		},
+	});
 }
 
 /** Fixed upstream exec-server protocol; used only during credential-free deployment initialization. */

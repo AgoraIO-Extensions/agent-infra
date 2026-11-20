@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ExecutorInstanceStateV2 } from "./executor-instance-types.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
 	SessionSandboxLifecycleV1,
@@ -166,6 +167,12 @@ export interface SessionSandboxObservationV1 {
 	 */
 	readonly runtimeStarting?: true;
 	readonly executorDrainRequired?: true;
+	readonly executorInstance?: {
+		attemptId: string;
+		startupRef: string;
+		podUid: string;
+		epoch: string;
+	};
 	/** Bounded startup evidence from the Pod status; never a log message. */
 	readonly failureCode?:
 		| "eci.image_pull"
@@ -269,6 +276,7 @@ export function canAdvanceSessionSandboxDeletionProgressV1(
 
 /** Persisted resource facts, not a grant to call or recreate the Runtime. */
 export interface SessionSandboxRuntimeStateV1 {
+	readonly executorInstance?: ExecutorInstanceStateV2;
 	/** Source facts only; require original control-purpose authority and live resource verification. */
 	readonly controlSource?: SessionSandboxSourceV1;
 	readonly sandbox: SessionSandboxBindingV1;
@@ -360,6 +368,19 @@ export function isSessionSandboxObservationValidV1(
 			(observation.workspaceSnapshot.outcome === "failed" &&
 				(observation.status === "ready" ||
 					observation.failureCode !== "workspace.materialization")))
+	)
+		return false;
+	if (
+		observation.executorInstance &&
+		(observation.status !== "ready" ||
+			!observation.executorDrainRequired ||
+			!observation.executorInstance.attemptId ||
+			!observation.executorInstance.startupRef ||
+			!observation.executorInstance.epoch ||
+			!observation.resources.some(
+				(r) =>
+					r.kind === "Pod" && r.uid === observation.executorInstance?.podUid,
+			))
 	)
 		return false;
 	if (observation.status === "ready") {

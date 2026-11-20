@@ -54,3 +54,29 @@ fence 的证明签收续期后的 Stop。同一最高 fence 记录冲突、原�
 executor 的完整后代范围已经退出。没有明确原生应答、传输中断或结果未知时不得生成
 此记录，仍保留占用。只有拒绝记录而没有实际组的场景可确认“没有遗留进程”，不能
 代替 AC-1 对真实工具进程取消的验收。
+
+采用实例身份 V2 时，seal、证明及持久终态另带严格的 `startup` 范围，固定
+`schemaVersion: 2`、原 `attemptId`、`startupRef`、Store `recordRef` 和 `factDigest`。
+读取器独立对照计划回执的原启动引用，三份证据须属于同一实例；同 epoch/fence 下不同
+attempt、启动引用或已提交事实不能互相签收。缺证或混合范围冲突仍返回待核实，
+不推进旧 journal 或 ACK 游标。旧格式证据沿原读取规则处理，不据此授予新实例权限。
+
+实例 V2 的生产者只接受部署配置 `workload.policy.executorInstanceStartupApprovals` 中
+与实际不可变镜像匹配的记录。每条含 `schemaVersion: 2`、完整 `imageDigest` 和
+已评审契约验证的 `verificationRef`。缺失记录不准入 V2，不以 Pod 健康推断支持。
+沿用现有启动开关及全部 Pod 字段名；本文件不授权启用，#4274 门禁仍适用。
+
+回退操作遵循 [HLD 的混合版本与回退规则](../../docs/architecture/HLD-agent-runtime-M1.md#1031-排空通道的实例身份交付)。
+部署负责人先以兼容版本将上述 approvals 置为空列表，冻结新 V2 启动和新业务提交，
+保留原布局、启动开关、身份消费者及原 Stop/事件通道。确认旧 Worker 实例退出后，
+沿正式入口结清或退休原范围。再使用已批准的只读数据库 URL 文件执行预检；URL 不进参数或 env。
+
+```bash
+node packages/platform-store/src/executor-instance-rollback-preflight.mjs \
+  --database-url-file <只读连接文件> --namespace <namespace> --consumer-protocol 1
+```
+
+文件须为当前运维用户持有的普通文件，无组或其他用户权限、硬链接和符号链接。
+命令在只读事务中，先与实例生产事务排序，再读取完整采用清单及未结束的 Sandbox lease，
+只输出汇总数量与兼容布尔值。待确认交付、未退休 V2 实例、活跃 lease 或证据不完整均拒绝旧消费者。
+拒绝时保持兼容版本与原事实；预检通过也不代替发布权限和目标配置回读。

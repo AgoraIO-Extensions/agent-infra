@@ -493,6 +493,7 @@ describe("platform-core package surface", () => {
 			"taskFeedbackCategoriesV1",
 			"taskFeedbackConditionDigestV1",
 			"taskFeedbackEligibilityV1",
+			"transitionExecutorInstanceV2",
 			"uninstallSkillHubInstallationV1",
 			"validateCodexSessionExecutorResourcePolicyV1",
 			"validateEvaluationDatasetContentV1",
