@@ -111,14 +111,30 @@ function machineRegistrationEndpoint(
 }
 
 /** Read the current machine registration; stale or unknown keys fail closed. */
-export async function readConnectionMachineOAuthClientV1(options: {
+export async function readConnectionMachineOAuthClientV1(
+	options: Parameters<typeof readConnectionMachineOAuthClientOutcomeV1>[0],
+): Promise<ConnectionMachineOAuthClientRegistrationV1> {
+	const read = await readConnectionMachineOAuthClientOutcomeV1(options);
+	if (read.outcome !== "KNOWN") standardOAuthUnavailable();
+	return read;
+}
+
+/**
+ * Read the current machine registration and keep Connection's explicit,
+ * well-formed `UNKNOWN` answer apart from a failed read: a transport error,
+ * non-200 status, redirect or any other body still fails closed.
+ */
+export async function readConnectionMachineOAuthClientOutcomeV1(options: {
 	readonly endpoint: string;
 	readonly serviceCredential: string;
 	readonly registrationKey: string;
 	readonly signal: AbortSignal;
 	readonly assertCurrent: () => void;
 	readonly fetch?: FetchLike;
-}): Promise<ConnectionMachineOAuthClientRegistrationV1> {
+}): Promise<
+	| ConnectionMachineOAuthClientRegistrationV1
+	| { readonly registrationVersion: 1; readonly outcome: "UNKNOWN" }
+> {
 	if (
 		!options.serviceCredential.startsWith("conn_consumer_") ||
 		!options.registrationKey
@@ -144,10 +160,17 @@ export async function readConnectionMachineOAuthClientV1(options: {
 		if (response.status !== 200 || response.redirected)
 			standardOAuthUnavailable();
 		const value: unknown = JSON.parse(await response.text());
+		options.assertCurrent();
 		if (!value || typeof value !== "object" || Array.isArray(value))
 			standardOAuthUnavailable();
 		const payload = value as Record<string, unknown>;
 		const registration = payload.registration;
+		if (
+			payload.registrationVersion === 1 &&
+			payload.outcome === "UNKNOWN" &&
+			(registration === null || registration === undefined)
+		)
+			return { registrationVersion: 1, outcome: "UNKNOWN" };
 		if (
 			payload.registrationVersion !== 1 ||
 			payload.outcome !== "KNOWN" ||

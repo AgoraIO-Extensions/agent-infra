@@ -18,6 +18,7 @@ import {
 	type FileRuntimeStore,
 	openConnectionHostSupplyV1,
 	RuntimeHostError,
+	readConnectionMachineOAuthClientOutcomeV1,
 	readConnectionMachineOAuthClientV1,
 	registerConnectionMachineOAuthClientV1,
 	revokeConnectionMachineOAuthClientV1,
@@ -1548,9 +1549,11 @@ async function assembleConnectionInstallReceiver(
 				now,
 			);
 		};
-		let read: Awaited<ReturnType<typeof readConnectionMachineOAuthClientV1>>;
+		let read: Awaited<
+			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
+		>;
 		try {
-			read = await readConnectionMachineOAuthClientV1({
+			read = await readConnectionMachineOAuthClientOutcomeV1({
 				endpoint: template.registration.endpoint,
 				serviceCredential: slot.credential.toString("utf8"),
 				registrationKey: body.registrationKey,
@@ -1559,10 +1562,9 @@ async function assembleConnectionInstallReceiver(
 				...(machineFetch ? { fetch: machineFetch } : {}),
 			});
 		} catch {
+			// A failed read is not an answer: the phase stays unknown, verify only.
 			return reply("unknown");
 		}
-		const registration = read.registration as Record<string, unknown>;
-		const principalId = registration.principalId;
 		// The EP-1060 wait may have outlasted the phase, the claim or the Host
 		// binding; neither a reject nor a candidate outlives them.
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
@@ -1572,6 +1574,11 @@ async function assembleConnectionInstallReceiver(
 		} catch {
 			return reply("unknown");
 		}
+		// §13.5.1 item 2: anything but KNOWN is refused. Connection's explicit
+		// UNKNOWN for the original key closes and revokes it like a mismatch.
+		if (read.outcome !== "KNOWN") return reply("rejected");
+		const registration = read.registration as Record<string, unknown>;
+		const principalId = registration.principalId;
 		// §13.5.1 item 2: KNOWN, a principal, the same client, instance, Consumer,
 		// redirect URI, resource and scope, and an ACTIVE instance.
 		if (

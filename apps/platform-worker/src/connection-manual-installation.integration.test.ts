@@ -181,6 +181,7 @@ const connection = {
 	}[],
 	receipts: new Map<string, Record<string, unknown>>(),
 	losePost: false,
+	loseGet: false,
 };
 async function connectionFetch(
 	input: string | URL | Request,
@@ -229,6 +230,8 @@ async function connectionFetch(
 		url.pathname.split("/").at(-1) ?? "",
 	);
 	const known = connection.receipts.get(registrationKey);
+	if (method === "GET" && connection.loseGet)
+		throw new TypeError("connection reset");
 	if (method === "GET")
 		return Response.json(
 			known
@@ -539,6 +542,7 @@ beforeEach(async () => {
 	await associate(1);
 	connection.requests.length = 0;
 	connection.losePost = false;
+	connection.loseGet = false;
 	readbacks.length = 0;
 	readbackHook = undefined;
 	loseSupply = undefined;
@@ -839,6 +843,61 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 					status: "revoked",
 					commands:
 						"confirm:rejected,confirm_binding_readback:rejected,revoke:pending",
+				},
+			]);
+			expect(connection.requests.map(({ method }) => method)).toEqual([
+				"POST",
+				"GET",
+			]);
+		},
+		confirmTimeout,
+	);
+
+	// #4309 S1: Connection's explicit UNKNOWN is a non-KNOWN answer (§13.5.1
+	// item 2) and is refused; a failed read is no answer and stays unknown.
+	it(
+		"revokes the original key when Connection answers UNKNOWN for it",
+		async () => {
+			const { projection, registrationKey } = await confirmedInstall();
+			connection.receipts.delete(registrationKey);
+			expect(await tick()).toBe(1);
+			expect(await confirmState(projection.authorizationId)).toEqual([
+				{
+					pins: 0,
+					receipts: 0,
+					status: "revoked",
+					commands:
+						"confirm:rejected,confirm_binding_readback:rejected,revoke:pending",
+				},
+			]);
+			expect(connection.requests.map(({ method }) => method)).toEqual([
+				"POST",
+				"GET",
+			]);
+		},
+		confirmTimeout,
+	);
+
+	it(
+		"keeps the phase unknown without a revoke when the EP-1060 read fails",
+		async () => {
+			const { projection, registrationKey } = await confirmedInstall();
+			const known = connection.receipts.get(registrationKey) as Record<
+				string,
+				unknown
+			>;
+			connection.receipts.set(registrationKey, {
+				...known,
+				principalId: "principal-a",
+			});
+			connection.loseGet = true;
+			expect(await tick()).toBe(1);
+			expect(await confirmState(projection.authorizationId)).toEqual([
+				{
+					pins: 0,
+					receipts: 0,
+					status: "confirmed",
+					commands: "confirm:unknown,confirm_binding_readback:unknown",
 				},
 			]);
 			expect(connection.requests.map(({ method }) => method)).toEqual([
