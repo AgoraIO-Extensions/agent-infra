@@ -21,6 +21,7 @@ import {
 	ConnectionInstallCommandResponseV1Schema,
 	ConnectionInstallFirstBeginGrantClaimsV1Schema,
 	ConnectionInstallFirstBeginRequestV1Schema,
+	type ConnectionManualInstallDescriptorV1,
 	ConnectionRegistrationKeyV1Schema,
 	type ConnectionRegistrationReceiptV1,
 	ConnectionRegistrationReceiptV1Schema,
@@ -40,6 +41,8 @@ import {
 import {
 	connectionInstallConfigurationDigestV1,
 	connectionInstallRequestDigestV1,
+	connectionManualInstallDescriptorDigestV1,
+	connectionManualInstallDescriptorMatchesV1,
 	connectionRegistrationKeyHashV1,
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
@@ -110,6 +113,8 @@ export interface ConnectionInstallHostClientV1 {
 			readonly supplyAttemptId: string;
 			readonly receipt: ConnectionRegistrationReceiptV1;
 			readonly configuration: RuntimeOAuthConfigurationV1;
+			/** §13.5.6 descriptor the Store fixed with the configuration. */
+			readonly descriptor: ConnectionManualInstallDescriptorV1;
 			readonly request: Omit<RuntimeOAuthAuthorizedRequestV1, "grant">;
 			readonly principal: { readonly kind: "user"; readonly id: string };
 		},
@@ -502,7 +507,12 @@ export function createConnectionInstallHostClientV1(options: {
 					request.sessionGeneration !== template.target.sessionGeneration ||
 					request.configFingerprint !==
 						template.registration.configFingerprint ||
-					!isDeepStrictEqual(request.source, template.registration.source)
+					!isDeepStrictEqual(request.source, template.registration.source) ||
+					!connectionManualInstallDescriptorMatchesV1(input.descriptor, {
+						template,
+						receipt,
+						configuration,
+					})
 				)
 					unavailable();
 				const body = ConnectionInstallFirstBeginRequestV1Schema.parse({
@@ -514,6 +524,7 @@ export function createConnectionInstallHostClientV1(options: {
 					supplyAttemptId: input.supplyAttemptId,
 					receipt,
 					configuration,
+					descriptor: input.descriptor,
 					request: {
 						...request,
 						grant: {
@@ -536,6 +547,9 @@ export function createConnectionInstallHostClientV1(options: {
 				const receiptDigest = connectionRegistrationReceiptDigestV1(receipt);
 				const configurationDigest =
 					connectionInstallConfigurationDigestV1(configuration);
+				const descriptorDigest = connectionManualInstallDescriptorDigestV1(
+					body.descriptor,
+				);
 				const result = RuntimeOAuthResponseV1Schema.parse(
 					await send(
 						template.target.runtimeOrigin,
@@ -568,6 +582,7 @@ export function createConnectionInstallHostClientV1(options: {
 											template.registration.registrationKeyHash,
 										receiptDigest,
 										configurationDigest,
+										descriptorDigest,
 										bodyDigest,
 										channelBinding,
 									},

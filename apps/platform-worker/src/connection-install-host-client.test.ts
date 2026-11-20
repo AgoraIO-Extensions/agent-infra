@@ -32,6 +32,8 @@ import {
 import {
 	connectionInstallConfigurationDigestV1,
 	connectionInstallRequestDigestV1,
+	connectionManualInstallDescriptorDigestV1,
+	connectionManualInstallDescriptorV1,
 	connectionRegistrationKeyHashV1,
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
@@ -847,6 +849,37 @@ describe("Connection install Host client: registration commands", () => {
 });
 
 describe("Connection install Host client: first begin", () => {
+	/** The Store's §13.5.6 descriptor for this receipt and configuration (exception policy). */
+	function descriptorFor(
+		template: ConnectionRegistrationTemplateV1,
+		configuration = configurationFor(template),
+	) {
+		return connectionManualInstallDescriptorV1({
+			approval: {
+				schemaVersion: 1,
+				principalMapping: {
+					schemaVersion: 1,
+					kind: "consistency-exception-v1",
+					policy: { ref: "consistency-exception-v1", revision: "r1" },
+					notAfter: "2099-01-01T00:00:00Z",
+					maximumPinnedPrincipals: 2,
+					verificationWindowHours: 24,
+					connectionRelease: "agora-connector-2019ca07",
+					systemAccessFingerprint: template.systemAccess.configFingerprint,
+					approvalSource: template.systemAccess.source,
+				},
+				readbackContract: { ref: "connection-ep-1060-read", revision: "1" },
+				publicationContract: {
+					ref: "connection-mcp-publication",
+					revision: "1",
+				},
+			},
+			template,
+			receipt: receiptFor(template),
+			configuration,
+			pinnedPrincipalId: null,
+		});
+	}
 	function firstBeginInput(template: ConnectionRegistrationTemplateV1) {
 		const configuration = configurationFor(template);
 		return {
@@ -857,6 +890,7 @@ describe("Connection install Host client: first begin", () => {
 			supplyAttemptId: "supply-attempt-1",
 			receipt: receiptFor(template),
 			configuration,
+			descriptor: descriptorFor(template, configuration),
 			request: beginRequestFor(template, configuration),
 			principal: { kind: "user" as const, id: "user-1" },
 		};
@@ -879,6 +913,7 @@ describe("Connection install Host client: first begin", () => {
 				supplyAttemptId: input.supplyAttemptId,
 				receipt: input.receipt,
 				configuration: input.configuration,
+				descriptor: input.descriptor,
 			});
 			expect(body.request.grant.format).toBe(
 				"runtime-connection-installation-jws",
@@ -913,6 +948,9 @@ describe("Connection install Host client: first begin", () => {
 					supplyAttemptId: input.supplyAttemptId,
 					registrationKeyHash: template.registration.registrationKeyHash,
 					receiptDigest: connectionRegistrationReceiptDigestV1(body.receipt),
+					descriptorDigest: connectionManualInstallDescriptorDigestV1(
+						body.descriptor,
+					),
 					configurationDigest: connectionInstallConfigurationDigestV1(
 						body.configuration,
 					),
@@ -949,6 +987,23 @@ describe("Connection install Host client: first begin", () => {
 	});
 
 	it.each([
+		[
+			"a descriptor of another client",
+			(input: ReturnType<typeof firstBeginInput>) => ({
+				...input,
+				descriptor: { ...input.descriptor, clientId: "client-other" },
+			}),
+		],
+		[
+			"a descriptor of another supply revision",
+			(input: ReturnType<typeof firstBeginInput>) => ({
+				...input,
+				descriptor: {
+					...input.descriptor,
+					supply: { ...input.descriptor.supply, revision: "99" },
+				},
+			}),
+		],
 		[
 			"another configuration runtime origin",
 			(input: ReturnType<typeof firstBeginInput>) => ({
@@ -1128,6 +1183,7 @@ describe("Connection install Host client: first begin", () => {
 						supplyAttemptId: "supply-attempt-1",
 						receipt: receiptFor(template),
 						configuration,
+						descriptor: descriptorFor(template, configuration),
 						request: beginRequestFor(template, configuration),
 						principal: { kind: "user", id: "user-1" },
 					},

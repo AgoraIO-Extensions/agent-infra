@@ -482,7 +482,14 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 								NonNullable<ConnectionInstallationTransactionV1["createManual"]>
 							>[1],
 							key: string,
-						) => createConnectionManualInstallationV1(tx, record, command, key),
+						) =>
+							createConnectionManualInstallationV1(
+								tx,
+								manualPolicy,
+								record,
+								command,
+								key,
+							),
 						readManual: (userId: string, authorizationId: string) =>
 							readConnectionManualInstallationV1(tx, userId, authorizationId),
 						receiptManual: (

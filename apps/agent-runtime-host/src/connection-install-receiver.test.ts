@@ -32,6 +32,7 @@ import {
 	resolveApprovedConnectionSystemAccessV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
+	type ConnectionManualInstallDescriptorV1,
 	type ConnectionRegistrationReceiptV1,
 	type ConnectionRegistrationTemplateV1,
 	canonicalRuntimeRequestSigningPayload,
@@ -48,6 +49,8 @@ import {
 	connectionMachineRegistrationEndpointV1,
 	connectionManualConsumerTargetV1,
 	connectionManualInstallConfigurationV1,
+	connectionManualInstallDescriptorDigestV1,
+	connectionManualInstallDescriptorV1,
 	connectionRegistrationKeyHashV1,
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
@@ -783,6 +786,38 @@ interface BeginOptions {
 		derived: RuntimeOAuthConfigurationV1,
 	) => RuntimeOAuthConfigurationV1;
 	readonly scope?: Record<string, unknown>;
+	readonly descriptor?: (
+		derived: ConnectionManualInstallDescriptorV1,
+	) => ConnectionManualInstallDescriptorV1;
+}
+/** The Store's §13.5.6 descriptor for this receipt and configuration (exception policy). */
+function descriptorFor(
+	template: ConnectionRegistrationTemplateV1,
+	actualReceipt: ConnectionRegistrationReceiptV1,
+	configuration: RuntimeOAuthConfigurationV1,
+) {
+	return connectionManualInstallDescriptorV1({
+		approval: {
+			schemaVersion: 1,
+			principalMapping: {
+				schemaVersion: 1,
+				kind: "consistency-exception-v1",
+				policy: { ref: "consistency-exception-v1", revision: "r1" },
+				notAfter: "2099-01-01T00:00:00Z",
+				maximumPinnedPrincipals: 2,
+				verificationWindowHours: 24,
+				connectionRelease: "agora-connector-2019ca07",
+				systemAccessFingerprint: template.systemAccess.configFingerprint,
+				approvalSource: template.systemAccess.source,
+			},
+			readbackContract: { ref: "connection-ep-1060-read", revision: "1" },
+			publicationContract: { ref: "connection-mcp-publication", revision: "1" },
+		},
+		template,
+		receipt: actualReceipt,
+		configuration,
+		pinnedPrincipalId: null,
+	});
 }
 function firstBeginBody(
 	f: Receiver,
@@ -797,6 +832,13 @@ function firstBeginBody(
 		receipt: actualReceipt,
 	});
 	const configuration = options.configuration?.(derived) ?? derived;
+	const derivedDescriptor = descriptorFor(
+		template,
+		actualReceipt,
+		configuration,
+	);
+	const descriptor =
+		options.descriptor?.(derivedDescriptor) ?? derivedDescriptor;
 	const scope = { ...installScope(f, configuration), ...options.scope };
 	const request = {
 		schemaVersion: 1,
@@ -815,6 +857,7 @@ function firstBeginBody(
 		supplyAttemptId: options.supplyAttemptId ?? "supply-attempt-1",
 		receipt: actualReceipt,
 		configuration,
+		descriptor,
 	};
 	const issuedAt = Date.now();
 	const token = jws(connectionInstallJwsTypesV1.firstBegin, {
@@ -845,6 +888,7 @@ function firstBeginBody(
 			receiptDigest: connectionRegistrationReceiptDigestV1(actualReceipt),
 			configurationDigest:
 				connectionInstallConfigurationDigestV1(configuration),
+			descriptorDigest: connectionManualInstallDescriptorDigestV1(descriptor),
 			bodyDigest: connectionInstallRequestDigestV1({ ...outer, request }),
 			channelBinding: channel,
 		},
@@ -1587,15 +1631,28 @@ describe("Connection first begin", () => {
 		expect(url.searchParams.get("redirect_uri")).toBe(system.oauthCallbackUrl);
 		expect(url.searchParams.get("resource")).toBe(consumer.url);
 		const beginReadback = f.readback.calls.at(-1);
+		const descriptor = descriptorFor(f.template, receipt, configuration);
 		expect(beginReadback?.command).toMatchObject({
 			command: "begin",
 			commandId: "begin-1",
 			configurationDigest:
 				connectionInstallConfigurationDigestV1(configuration),
 			receiptDigest: connectionRegistrationReceiptDigestV1(receipt),
+			descriptorDigest: connectionManualInstallDescriptorDigestV1(descriptor),
 		});
 		const names = await recordNames(f);
 		const key = sha256("authorization-a");
+		// §13.5.6: the consumed first begin fixes the descriptor in the Host record.
+		const consumption = JSON.parse(
+			await readFile(
+				join(f.records, `install-first-begin-${key}.json`),
+				"utf8",
+			),
+		);
+		expect(consumption).toMatchObject({
+			descriptor,
+			descriptorDigest: connectionManualInstallDescriptorDigestV1(descriptor),
+		});
 		expect(names).toEqual(
 			expect.arrayContaining([
 				`install-first-begin-${key}.json`,
@@ -1641,6 +1698,33 @@ describe("Connection first begin", () => {
 			{ receipt: { ...receipt, principalId: "principal-x" } },
 		],
 		["scope", { scope: { podUid: "pod-uid-0" } }],
+		[
+			"descriptor client",
+			{
+				descriptor: (d: ConnectionManualInstallDescriptorV1) => ({
+					...d,
+					clientId: "client-other",
+				}),
+			},
+		],
+		[
+			"descriptor supply revision",
+			{
+				descriptor: (d: ConnectionManualInstallDescriptorV1) => ({
+					...d,
+					supply: { ...d.supply, revision: "99" },
+				}),
+			},
+		],
+		[
+			"descriptor configuration",
+			{
+				descriptor: (d: ConnectionManualInstallDescriptorV1) => ({
+					...d,
+					configuration: { ...d.configuration, digest: "e".repeat(64) },
+				}),
+			},
+		],
 	] as const)(
 		"rejects a %s mismatch before consumption",
 		async (_name, options) => {

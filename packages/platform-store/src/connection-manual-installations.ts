@@ -5,7 +5,9 @@ import {
 	resolveApprovedConnectionSystemAccessV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
+	type ConnectionConsistencyExceptionApprovalV1,
 	type ConnectionInstallReadbackRequestV1,
+	type ConnectionManualDynamicApprovalV1,
 	type ConnectionRegistrationReceiptV1,
 	type ConnectionRegistrationTemplateV1,
 	ConnectionRegistrationTemplateV1Schema,
@@ -15,6 +17,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import {
 	connectionManualConsumerTargetV1,
+	resolveConnectionManualDynamicApprovalV1,
 	verifyConnectionRegistrationTemplateV1,
 } from "@agent-infra/contracts/runtime/connection-install-node";
 import {
@@ -44,6 +47,8 @@ export interface ConnectionManualInstallationPolicyInputV1 {
 	readonly approval: unknown;
 	/** Fixed EP-1060 `clientName`; Owner, user and request never choose it. */
 	readonly clientName: string;
+	/** §13.5.1/§13.5.6 principal mapping, readback and publication approvals. */
+	readonly dynamic: unknown;
 }
 
 export type ConnectionManualInstallationPolicyV1 = {
@@ -52,6 +57,9 @@ export type ConnectionManualInstallationPolicyV1 = {
 		{ status: "available" }
 	>;
 	readonly clientName: string;
+	readonly dynamic: ConnectionManualDynamicApprovalV1 & {
+		readonly principalMapping: ConnectionConsistencyExceptionApprovalV1;
+	};
 };
 
 function unavailable(): never {
@@ -72,7 +80,31 @@ export function captureConnectionManualInstallationPolicyV1(
 		input.clientName.trim() !== input.clientName
 	)
 		unavailable();
-	return { access, clientName: input.clientName };
+	let dynamic: ConnectionManualDynamicApprovalV1;
+	try {
+		dynamic = resolveConnectionManualDynamicApprovalV1(
+			structuredClone(input.dynamic),
+			access,
+		);
+	} catch {
+		unavailable();
+	}
+	// A mapping rule's expected Principal has no server resolver yet; until it does,
+	// the mapping is missing and the dynamic route stays closed (§13.5.1).
+	const mapping = dynamic.principalMapping;
+	if (mapping.kind !== "consistency-exception-v1") unavailable();
+	return {
+		access,
+		clientName: input.clientName,
+		dynamic: { ...dynamic, principalMapping: mapping },
+	};
+}
+
+/** The exception's `notAfter` against the database clock (§13.5.1 item 8). */
+export function connectionManualExceptionLiveV1(
+	policy: ConnectionManualInstallationPolicyV1,
+) {
+	return sql`${policy.dynamic.principalMapping.notAfter}::timestamptz > clock_timestamp()`;
 }
 
 const runtimeOperations = [
@@ -286,6 +318,7 @@ function savedFrom(row: Row): ConnectionManualInstallationSavedV1 {
 
 export async function createConnectionManualInstallationV1(
 	tx: Transaction,
+	policy: ConnectionManualInstallationPolicyV1,
 	record: ConnectionManualInstallationSavedV1,
 	command: ConnectionInstallationCommandFactV1,
 	key: string,
@@ -298,6 +331,12 @@ export async function createConnectionManualInstallationV1(
 		command.authorizationId !== record.authorizationId
 	)
 		unavailable();
+	// After `notAfter` the exception accepts no new installation (§13.5.1 item 8).
+	const [exception] = await tx.execute(
+		sql`select ${connectionManualExceptionLiveV1(policy)} as live`,
+	);
+	if (exception?.live !== true)
+		throw new ConnectionInstallationErrorV1("denied");
 	const preparation = preparationFrom(record.preparation);
 	const binding = { principal: record.principal, reference: record.reference };
 	await tx.execute(sql`

@@ -372,7 +372,8 @@ export function createConnectionManualInstallationDrainV1(
 		const unknown = () =>
 			store.settleBegin({ ...attempt, command: kind, authorizationId });
 		if (!context) return unknown();
-		const { template, configuration, receipt, supplyAttemptId } = context;
+		const { template, configuration, receipt, supplyAttemptId, descriptor } =
+			context;
 		let result: RuntimeOAuthResponseV1 | undefined;
 		if (kind === "begin") {
 			const request: Omit<RuntimeOAuthAuthorizedRequestV1, "grant"> = {
@@ -399,6 +400,7 @@ export function createConnectionManualInstallationDrainV1(
 				supplyAttemptId,
 				receipt,
 				configuration,
+				descriptor,
 				request,
 			});
 			if (
@@ -418,6 +420,7 @@ export function createConnectionManualInstallationDrainV1(
 						supplyAttemptId,
 						receipt,
 						configuration,
+						descriptor,
 						request,
 						principal: template.principal,
 					},

@@ -1116,6 +1116,32 @@ it.each([
 									egressEnforced: true,
 									source: { ref: "deployment-approval", revision: "r1" },
 								},
+								dynamic: {
+									schemaVersion: 1,
+									principalMapping: {
+										schemaVersion: 1,
+										kind: "consistency-exception-v1",
+										policy: { ref: "consistency-exception-v1", revision: "r1" },
+										notAfter: "2099-01-01T00:00:00Z",
+										maximumPinnedPrincipals: 2,
+										verificationWindowHours: 24,
+										connectionRelease: "agora-connector-2019ca07",
+										systemAccessFingerprint:
+											connectionSystemAccessFingerprintV1(systemAccess),
+										approvalSource: {
+											ref: "deployment-approval",
+											revision: "r1",
+										},
+									},
+									readbackContract: {
+										ref: "connection-ep-1060-read",
+										revision: "1",
+									},
+									publicationContract: {
+										ref: "connection-mcp-publication",
+										revision: "1",
+									},
+								},
 							},
 						}
 					: perPrincipal

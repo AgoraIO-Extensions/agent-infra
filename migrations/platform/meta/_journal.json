@@ -624,6 +624,13 @@
       "when": 1795176746674,
       "tag": "0092_executor_reserve_startup",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1795184776276,
+      "tag": "0093_connection_manual_descriptor",
+      "breakpoints": true
     }
   ]
 }

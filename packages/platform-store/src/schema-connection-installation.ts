@@ -187,6 +187,9 @@ export const connectionManualInstallations = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		/** §13.5.6 dynamic descriptor fixed with the configuration; the first begin binds it. */
+		descriptor: jsonb("descriptor"),
+		descriptorDigest: varchar("descriptor_digest", { length: 64 }),
 	},
 	(table) => [
 		foreignKey({
@@ -230,6 +233,12 @@ export const connectionManualInstallations = platformSchema.table(
 			sql`(${table.registrationState} <> 'registered' or (${table.receipt} is not null and ${table.clientId} is not null
 					and ${table.consumerId} is not null and ${table.instanceId} is not null))
 				and (${table.configuration} is null or ${table.registrationState} in ('registered','closed'))`,
+		),
+		check(
+			"connection_manual_installation_descriptor",
+			sql`(${table.descriptor} is null) = (${table.descriptorDigest} is null)
+				and (${table.descriptor} is null) = (${table.configuration} is null)
+				and (${table.descriptorDigest} is null or ${table.descriptorDigest} ~ '^[a-f0-9]{64}$')`,
 		),
 		check(
 			"connection_manual_installation_identity",

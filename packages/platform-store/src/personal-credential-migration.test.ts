@@ -188,6 +188,7 @@ beforeAll(async () => {
 		{ idx: 90, tag: "0090_executor_stop_drain" },
 		{ idx: 91, tag: "0091_connection_host_supplies" },
 		{ idx: 92, tag: "0092_executor_reserve_startup" },
+		{ idx: 93, tag: "0093_connection_manual_descriptor" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

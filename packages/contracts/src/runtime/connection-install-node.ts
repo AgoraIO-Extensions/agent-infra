@@ -7,6 +7,10 @@ import {
 	resolveApprovedConnectionConsumerProfileV1,
 } from "../connection-consumer-profile.ts";
 import {
+	type ConnectionManualDynamicApprovalV1,
+	ConnectionManualDynamicApprovalV1Schema,
+	type ConnectionManualInstallDescriptorV1,
+	ConnectionManualInstallDescriptorV1Schema,
 	type ConnectionRegistrationReceiptV1,
 	ConnectionRegistrationReceiptV1Schema,
 	type ConnectionRegistrationTemplateV1,
@@ -389,4 +393,100 @@ export function connectionManualInstallConfigurationV1(input: {
 		...parsed,
 		revision: runtimeOAuthConfigurationRevisionV1(parsed),
 	});
+}
+
+/**
+ * Dynamic manual approvals bound to this approved system access (§13.5.1): the
+ * same system access fingerprint and approval source revision, and for a mapping
+ * rule the same Connection issuer. Anything else keeps the route closed.
+ */
+export function resolveConnectionManualDynamicApprovalV1(
+	input: unknown,
+	access: ApprovedSystemAccess,
+): ConnectionManualDynamicApprovalV1 {
+	const parsed = ConnectionManualDynamicApprovalV1Schema.safeParse(input);
+	if (!parsed.success)
+		throw new Error("CONNECTION_MANUAL_DYNAMIC_APPROVAL_INVALID");
+	const mapping = parsed.data.principalMapping;
+	if (
+		mapping.systemAccessFingerprint !== access.configFingerprint ||
+		!isDeepStrictEqual(mapping.approvalSource, access.source) ||
+		(mapping.kind === "principal_mapping" &&
+			mapping.issuer !== access.system.issuer)
+	)
+		throw new Error("CONNECTION_MANUAL_DYNAMIC_APPROVAL_INVALID");
+	return parsed.data;
+}
+
+/**
+ * Descriptor the first begin fixes (§13.5.6). Within the §13.5.1 exception it
+ * names the exception policy and the user's pinned `principalId` (null for the
+ * first installation). A mapping rule's expected Principal has no resolver yet,
+ * so that approval never produces a descriptor.
+ */
+export function connectionManualInstallDescriptorV1(input: {
+	readonly approval: ConnectionManualDynamicApprovalV1;
+	readonly template: ConnectionRegistrationTemplateV1;
+	readonly receipt: ConnectionRegistrationReceiptV1;
+	readonly configuration: RuntimeOAuthConfigurationV1;
+	readonly pinnedPrincipalId: string | null;
+}): ConnectionManualInstallDescriptorV1 {
+	const mapping = input.approval.principalMapping;
+	if (mapping.kind !== "consistency-exception-v1")
+		throw new Error("CONNECTION_MANUAL_PRINCIPAL_MAPPING_UNAVAILABLE");
+	return ConnectionManualInstallDescriptorV1Schema.parse({
+		schemaVersion: 1,
+		readbackContract: input.approval.readbackContract,
+		registrationKey: input.receipt.registrationKey,
+		consumerId: input.receipt.consumerId,
+		clientId: input.receipt.clientId,
+		instanceId: input.receipt.instanceId,
+		configuration: {
+			ref: input.configuration.ref,
+			revision: input.configuration.revision,
+			digest: connectionInstallConfigurationDigestV1(input.configuration),
+		},
+		principalMapping: {
+			kind: mapping.kind,
+			policy: mapping.policy,
+			pinnedPrincipalId: input.pinnedPrincipalId,
+		},
+		publicationContract: input.approval.publicationContract,
+		supply: input.template.supply,
+	});
+}
+
+export function connectionManualInstallDescriptorDigestV1(
+	descriptor: ConnectionManualInstallDescriptorV1,
+): string {
+	return sha256(
+		canonicalConnectionInstallJsonV1(
+			ConnectionManualInstallDescriptorV1Schema.parse(descriptor),
+		),
+	);
+}
+
+/** The descriptor names exactly this installation's receipt, configuration and supply. */
+export function connectionManualInstallDescriptorMatchesV1(
+	descriptor: ConnectionManualInstallDescriptorV1,
+	input: {
+		readonly template: ConnectionRegistrationTemplateV1;
+		readonly receipt: ConnectionRegistrationReceiptV1;
+		readonly configuration: RuntimeOAuthConfigurationV1;
+	},
+): boolean {
+	const parsed =
+		ConnectionManualInstallDescriptorV1Schema.safeParse(descriptor);
+	return (
+		parsed.success &&
+		parsed.data.registrationKey === input.receipt.registrationKey &&
+		parsed.data.consumerId === input.receipt.consumerId &&
+		parsed.data.clientId === input.receipt.clientId &&
+		parsed.data.instanceId === input.receipt.instanceId &&
+		parsed.data.configuration.ref === input.configuration.ref &&
+		parsed.data.configuration.revision === input.configuration.revision &&
+		parsed.data.configuration.digest ===
+			connectionInstallConfigurationDigestV1(input.configuration) &&
+		isDeepStrictEqual(parsed.data.supply, input.template.supply)
+	);
 }
