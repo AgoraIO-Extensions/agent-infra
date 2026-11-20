@@ -9,6 +9,7 @@ import {
 	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { ConversationExecutionError } from "@agent-infra/platform-core";
 import { ConversationEventWakeHubV1 } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
@@ -3163,4 +3164,26 @@ it("4270 keeps unauthorized resources hidden before considering a missing Key", 
 	expect(response.status).toBe(404);
 	expect(await response.json()).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
 	expect(accept).toHaveBeenCalledTimes(1);
+});
+
+it("4281 classifies an authorized regeneration missing personal Key", async () => {
+	const input = dependencies();
+	input.commands(identity).regenerate = vi
+		.fn()
+		.mockRejectedValue(
+			new ConversationExecutionError("personal_relay_key_unavailable"),
+		);
+	const response = await testApp(input).app.request(
+		"/api/v1/conversations/conversation-1/regenerations",
+		{
+			method: "POST",
+			headers: commandHeaders,
+			body: JSON.stringify({ schemaVersion: 1, messageId: "message-1" }),
+		},
+	);
+	expect(response.status).toBe(409);
+	expect(await response.json()).toMatchObject({
+		code: "ACTION_UNAVAILABLE",
+		retryable: false,
+	});
 });

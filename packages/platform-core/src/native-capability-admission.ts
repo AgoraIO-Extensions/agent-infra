@@ -6,6 +6,7 @@ import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
 } from "./conversation-execution-types.js";
+import { ConversationExecutionError } from "./conversation-execution-types.js";
 import { nextOpaqueId } from "./conversation-execution-values.js";
 import {
 	FileAuthorityError,
@@ -1088,7 +1089,12 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						}
 					},
 				);
-			} catch {
+			} catch (error) {
+				if (
+					error instanceof ConversationExecutionError &&
+					error.code === "personal_relay_key_unavailable"
+				)
+					throw error;
 				return { outcome: "unavailable", reason: "metadata_unavailable" };
 			}
 		},

@@ -727,3 +727,121 @@ it("keeps the earliest real V1 Store lock SQLSTATE through the safe HTTP reply",
 		await blocker;
 	}
 }, 15_000);
+
+it.each([1, 3] as const)(
+	"4281 classifies missing personal Key for native V%d with no new task",
+	async (version) => {
+		legacySkill = version === 1;
+		await db`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${identity.userId}`;
+		const payload =
+			version === 1
+				? {
+						capabilityId: command.id,
+						directoryRevision,
+						parameters: "Synthetic",
+						idempotencyKey: "4281-key",
+						requestId: "4281-request",
+						traceId: "4281-trace",
+					}
+				: invocation;
+		const response = await app.request(
+			`https://native.invalid/api/v2/conversations/${conversationId}/native-capability/invoke`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(payload),
+			},
+		);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			code: "ACTION_UNAVAILABLE",
+			retryable: false,
+		});
+		const [count] =
+			await db`select count(*)::int as n from platform.conversation_executions where conversation_id=${conversationId} and execution_id<>${originalExecutionId}`;
+		expect(count?.n).toBe(0);
+		expect(
+			await db`select id from platform.outbox_items where scope_id=${conversationId}`,
+		).toHaveLength(0);
+	},
+);
+
+it.each([1, 3] as const)(
+	"4281 hides Key state from foreign or revoked native V%d callers",
+	async (version) => {
+		legacySkill = version === 1;
+		await db`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${identity.userId}`;
+		await db`delete from platform.agent_owners where agent_id=${agentId}`;
+		const payload =
+			version === 1
+				? {
+						capabilityId: command.id,
+						directoryRevision,
+						parameters: "Synthetic",
+						idempotencyKey: "4281-denied",
+						requestId: "4281",
+						traceId: "4281",
+					}
+				: invocation;
+		const response = await app.request(
+			`https://native.invalid/api/v2/conversations/${conversationId}/native-capability/invoke`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(payload),
+			},
+		);
+		expect(response.status).toBe(403);
+		expect(await response.json()).not.toHaveProperty(
+			"code",
+			"ACTION_UNAVAILABLE",
+		);
+		expect(
+			(
+				await db`select count(*)::int as n from platform.conversation_executions where conversation_id=${conversationId} and execution_id<>${originalExecutionId}`
+			)[0]?.n,
+		).toBe(0);
+		expect(
+			await db`select id from platform.outbox_items where scope_id=${conversationId}`,
+		).toHaveLength(0);
+		expect(
+			await db`select id from platform.idempotency_records where scope_id=${conversationId}`,
+		).toHaveLength(0);
+	},
+);
+
+it.each(["foreign-actor", "foreign-agent"] as const)(
+	"4281 hides missing Key on %s native resources",
+	async (mode) => {
+		legacySkill = true;
+		await db`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${identity.userId}`;
+		const target = "4281-foreign-conversation";
+		const targetAgent = mode === "foreign-agent" ? "foreign-agent" : agentId;
+		if (mode === "foreign-agent")
+			await db`insert into platform.agents(id,current_configuration_revision,authorization_revision) values('foreign-agent',1,'foreign-auth')`;
+		await db`insert into platform.conversations(id,agent_id,actor_id,principal_type,channel_id,status,session_generation,host_session_ref,authorization_revision) values(${target},${targetAgent},${mode === "foreign-actor" ? "foreign" : identity.userId},'user','web','ready',1,'foreign-host','foreign-auth')`;
+		const response = await app.request(
+			`https://native.invalid/api/v2/conversations/${target}/native-capability/invoke`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					capabilityId: command.id,
+					directoryRevision,
+					parameters: "Synthetic",
+					idempotencyKey: "4281-foreign",
+					requestId: "4281",
+					traceId: "4281",
+				}),
+			},
+		);
+		expect(response.status).toBe(403);
+		expect(await response.json()).not.toHaveProperty(
+			"code",
+			"ACTION_UNAVAILABLE",
+		);
+		expect(
+			await db`select id from platform.outbox_items where scope_id=${conversationId}`,
+		).toHaveLength(0);
+	},
+);
