@@ -2108,6 +2108,7 @@ describe("published Relay authority migration", () => {
 			89,
 			90,
 			91,
+			92,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2217,9 +2218,13 @@ describe("published Relay authority migration", () => {
 			idx: 90,
 			tag: "0090_executor_stop_drain",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 91)).toMatchObject({
 			idx: 91,
 			tag: "0091_connection_host_supplies",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 92,
+			tag: "0092_connection_manual_descriptor",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2811,6 +2816,8 @@ describe("published Relay authority migration", () => {
 					"connection_agent_id",
 					"consumer_id",
 					"created_at",
+					"descriptor",
+					"descriptor_digest",
 					"execution_id",
 					"instance_id",
 					"preparation",
@@ -2829,7 +2836,7 @@ describe("published Relay authority migration", () => {
 				].map((name) => `connection_manual_installations:${name}`),
 			);
 			expectedDelta.checks.push(
-				...["states", "fixed", "receipt", "identity"].map(
+				...["states", "fixed", "receipt", "descriptor", "identity"].map(
 					(name) =>
 						`connection_manual_installations:connection_manual_installation_${name}`,
 				),

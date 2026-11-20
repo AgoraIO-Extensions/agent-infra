@@ -9,6 +9,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readdir,
+	readFile,
 	realpath,
 	rm,
 	writeFile,
@@ -95,7 +96,29 @@ const approval = {
 	egressEnforced: true as const,
 	source: { ref: "platform-deployment", revision: "r1" },
 };
-const policy = { systemAccess: system, approval, clientName: "Agent Infra" };
+/** §13.5.1 exception approval bound to the same system access and approval source. */
+const dynamic = {
+	schemaVersion: 1 as const,
+	principalMapping: {
+		schemaVersion: 1 as const,
+		kind: "consistency-exception-v1" as const,
+		policy: { ref: "consistency-exception-v1", revision: "r1" },
+		notAfter: "2099-01-01T00:00:00Z",
+		maximumPinnedPrincipals: 2,
+		verificationWindowHours: 24,
+		connectionRelease: "agora-connector-2019ca07",
+		systemAccessFingerprint: connectionSystemAccessFingerprintV1(system),
+		approvalSource: approval.source,
+	},
+	readbackContract: { ref: "connection-ep-1060-read", revision: "1" },
+	publicationContract: { ref: "connection-mcp-publication", revision: "1" },
+};
+const policy = {
+	systemAccess: system,
+	approval,
+	clientName: "Agent Infra",
+	dynamic,
+};
 const directory = {
 	resolveUser: async (userId: string) => ({
 		schemaVersion: 1 as const,
@@ -594,6 +617,38 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		);
 		expect(link.searchParams.get("client_id")).toBe(row?.client_id);
 		expect(link.searchParams.get("redirect_uri")).toBe(system.oauthCallbackUrl);
+		// §13.5.6: the Host fixed the same descriptor the Store bound at the receipt CAS.
+		const [fixed] = await client`
+			select descriptor, descriptor_digest, consumer_id, instance_id from platform.connection_manual_installations
+			where authorization_id=${projection.authorizationId}`;
+		expect(fixed?.descriptor).toMatchObject({
+			registrationKey: row?.registration_key,
+			clientId: row?.client_id,
+			consumerId: fixed?.consumer_id,
+			instanceId: fixed?.instance_id,
+			principalMapping: {
+				kind: "consistency-exception-v1",
+				policy: dynamic.principalMapping.policy,
+				pinnedPrincipalId: null,
+			},
+			readbackContract: dynamic.readbackContract,
+			publicationContract: dynamic.publicationContract,
+		});
+		const consumption = JSON.parse(
+			await readFile(
+				join(
+					dataDirectory,
+					"codex-driver.json.native",
+					"conversations",
+					"standard-mcp-oauth",
+					"records",
+					`install-first-begin-${createHash("sha256").update(projection.authorizationId).digest("hex")}.json`,
+				),
+				"utf8",
+			),
+		);
+		expect(consumption.descriptor).toEqual(fixed?.descriptor);
+		expect(consumption.descriptorDigest).toBe(fixed?.descriptor_digest);
 		// Duplicate drains find nothing to resend.
 		expect(await tick()).toBe(0);
 		expect(connection.requests).toHaveLength(1);

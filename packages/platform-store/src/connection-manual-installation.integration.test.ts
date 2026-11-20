@@ -12,6 +12,7 @@ import {
 	buildConnectionRegistrationTemplateV1,
 	connectionInstallCommandDigestV1,
 	connectionInstallConfigurationDigestV1,
+	connectionManualInstallDescriptorDigestV1,
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
 } from "@agent-infra/contracts/runtime/connection-install-node";
@@ -51,10 +52,28 @@ const systemApproval = {
 	egressEnforced: true as const,
 	source: { ref: "platform-deployment", revision: "r1" },
 };
+/** §13.5.1 exception approval bound to the same system access and approval source. */
+const dynamic = {
+	schemaVersion: 1 as const,
+	principalMapping: {
+		schemaVersion: 1 as const,
+		kind: "consistency-exception-v1" as const,
+		policy: { ref: "consistency-exception-v1", revision: "r1" },
+		notAfter: "2099-01-01T00:00:00Z",
+		maximumPinnedPrincipals: 2,
+		verificationWindowHours: 24,
+		connectionRelease: "agora-connector-2019ca07",
+		systemAccessFingerprint: connectionSystemAccessFingerprintV1(system),
+		approvalSource: systemApproval.source,
+	},
+	readbackContract: { ref: "connection-ep-1060-read", revision: "1" },
+	publicationContract: { ref: "connection-mcp-publication", revision: "1" },
+};
 const policy = {
 	systemAccess: system,
 	approval: systemApproval,
 	clientName: "Agent Infra",
+	dynamic,
 };
 const access = (() => {
 	const value = resolveApprovedConnectionSystemAccessV1(system, systemApproval);
@@ -652,6 +671,166 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 	it("is unavailable without an Owner manual association", async () => {
 		await client`delete from platform.connection_manual_associations where agent_id='agent-a'`;
 		await expect(begin()).rejects.toMatchObject({ code: "denied" });
+	});
+
+	// §13.5.1: a missing or invalid dynamic approval keeps the whole route closed.
+	it.each([
+		["no dynamic approval", undefined],
+		[
+			"an exception for another system access",
+			{
+				...dynamic,
+				principalMapping: {
+					...dynamic.principalMapping,
+					systemAccessFingerprint: "a".repeat(64),
+				},
+			},
+		],
+		[
+			"an exception without a Connection release",
+			{
+				...dynamic,
+				principalMapping: {
+					...dynamic.principalMapping,
+					connectionRelease: undefined,
+				},
+			},
+		],
+		[
+			"a mapping rule without a server resolver",
+			{
+				...dynamic,
+				principalMapping: {
+					schemaVersion: 1,
+					kind: "principal_mapping",
+					authority: { ref: "corp-identity", revision: "r1" },
+					rule: { ref: "ldap-uid-to-connection-subject", revision: "r1" },
+					issuer: system.issuer,
+					resolution: { ref: "identity-adapter-ldap", revision: "r1" },
+					systemAccessFingerprint: connectionSystemAccessFingerprintV1(system),
+					approvalSource: systemApproval.source,
+				},
+			},
+		],
+	])("keeps the manual route closed with %s", (_name, value) => {
+		const refused = (create: () => unknown) => {
+			try {
+				create();
+			} catch (error) {
+				return (error as { code?: string }).code;
+			}
+			return "constructed";
+		};
+		const input = { ...policy, dynamic: value } as never;
+		expect(
+			refused(
+				() =>
+					new PostgresConnectionManualInstallationStoreV1({
+						databaseUrl: database.databaseUrl,
+						directory,
+						policy: input,
+					}),
+			),
+		).toBe("unavailable");
+		expect(
+			refused(
+				() =>
+					new PostgresConnectionInstallationAuthorizationTransactionV1({
+						databaseUrl: database.databaseUrl,
+						directory,
+						manualInstallation: input,
+					}),
+			),
+		).toBe("unavailable");
+	});
+
+	// §13.5.1 item 8: after `notAfter` (database clock) the exception accepts no new
+	// installation, and an installation begun before it binds no receipt.
+	it("accepts no new installation and binds no receipt after the exception's notAfter", async () => {
+		const expired = {
+			...policy,
+			dynamic: {
+				...dynamic,
+				principalMapping: {
+					...dynamic.principalMapping,
+					notAfter: "2026-01-01T00:00:00Z",
+				},
+			},
+		};
+		const lateInstallations =
+			new PostgresConnectionInstallationAuthorizationTransactionV1({
+				databaseUrl: database.databaseUrl,
+				directory,
+				manualInstallation: expired,
+			});
+		const lateManual = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: expired,
+		});
+		try {
+			await expect(
+				createConnectionInstallationAuthorizationV1({
+					store: lateInstallations,
+				}).executeInstallation({
+					userId: "alice",
+					identityRevision: "identity-r1",
+					command: "begin",
+					executionId: "execution-a",
+					idempotencyKey: randomUUID(),
+					requestId: "request",
+					traceId: "trace",
+				}),
+			).rejects.toMatchObject({ code: "denied" });
+			const [empty] = await client`select
+				(select count(*)::int from platform.connection_installation_authorizations) as authorizations,
+				(select count(*)::int from platform.connection_manual_installations) as installations,
+				(select count(*)::int from platform.connection_installation_commands) as commands`;
+			expect(empty).toEqual({
+				authorizations: 0,
+				installations: 0,
+				commands: 0,
+			});
+
+			const run = await prepareDelivered();
+			expect(
+				await lateManual.settleRegistration({
+					commandId: run.prepare.item.commandId,
+					attemptId: run.prepare.attemptId,
+					attemptOwner: "worker-a",
+					command: "prepare",
+					authorizationId: run.authorizationId,
+					response: {
+						schemaVersion: 1,
+						outcome: "registered",
+						commandId: run.prepare.item.commandId,
+						receipt: receiptFor(run.template, run.registrationKey),
+					},
+				}),
+			).toBe("unknown");
+			const [row] = await client`
+				select a.status, m.registration_state, m.configuration, m.descriptor, m.revoke_state
+				from platform.connection_installation_authorizations a
+				join platform.connection_manual_installations m on m.authorization_id=a.id
+				where a.id=${run.authorizationId}`;
+			expect(row).toEqual({
+				status: "revoked",
+				registration_state: "closed",
+				configuration: null,
+				descriptor: null,
+				revoke_state: "pending",
+			});
+			// The registered client is compensated with its original key; no begin exists.
+			expect(
+				(
+					await client`select command, status from platform.connection_installation_commands
+						where authorization_id=${run.authorizationId} order by created_at`
+				).map(({ command, status }) => `${command}:${status}`),
+			).toEqual(["prepare:completed", "revoke:pending"]);
+		} finally {
+			await lateManual.close();
+			await lateInstallations.close();
+		}
 	});
 
 	it("claims only on the original claim holder and fixes one template", async () => {
@@ -1645,6 +1824,31 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		const configuration = context?.configuration as NonNullable<
 			typeof context
 		>["configuration"];
+		// §13.5.6: the descriptor fixed with the configuration names this install's
+		// receipt, configuration and supply, and the exception policy (first pin: none).
+		const descriptor = context?.descriptor as NonNullable<
+			typeof context
+		>["descriptor"];
+		expect(descriptor).toEqual({
+			schemaVersion: 1,
+			readbackContract: dynamic.readbackContract,
+			registrationKey: run.registrationKey,
+			consumerId: receipt.consumerId,
+			clientId: receipt.clientId,
+			instanceId: receipt.instanceId,
+			configuration: {
+				ref: configuration.ref,
+				revision: configuration.revision,
+				digest: connectionInstallConfigurationDigestV1(configuration),
+			},
+			principalMapping: {
+				kind: "consistency-exception-v1",
+				policy: dynamic.principalMapping.policy,
+				pinnedPrincipalId: null,
+			},
+			publicationContract: dynamic.publicationContract,
+			supply: run.template.supply,
+		});
 		expect(
 			await manual.commitDelivery({
 				commandId: first.item.commandId,
@@ -1666,18 +1870,21 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 				configurationDigest:
 					connectionInstallConfigurationDigestV1(configuration),
 				receiptDigest: connectionRegistrationReceiptDigestV1(receipt),
+				descriptorDigest: connectionManualInstallDescriptorDigestV1(descriptor),
 			},
 		};
 		expect(await manual.readback(beginReadback)).toBe("allowed");
-		expect(
-			await manual.readback({
-				...beginReadback,
-				command: {
-					...beginReadback.command,
-					configurationDigest: "5".repeat(64),
-				},
-			}),
-		).toBe("denied");
+		for (const replaced of [
+			{ configurationDigest: "5".repeat(64) },
+			{ descriptorDigest: "5".repeat(64) },
+			{ descriptorDigest: undefined },
+		])
+			expect(
+				await manual.readback({
+					...beginReadback,
+					command: { ...beginReadback.command, ...replaced },
+				}),
+			).toBe("denied");
 		// The begin response is lost: unknown, no link, no automatic resend.
 		expect(
 			await manual.settleBegin({

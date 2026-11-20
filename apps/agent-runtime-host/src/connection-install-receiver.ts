@@ -44,6 +44,8 @@ import {
 	ConnectionInstallFirstBeginGrantClaimsV1Schema,
 	type ConnectionInstallFirstBeginRequestV1,
 	ConnectionInstallFirstBeginRequestV1Schema,
+	type ConnectionManualInstallDescriptorV1,
+	ConnectionManualInstallDescriptorV1Schema,
 	type ConnectionRegistrationReceiptV1,
 	type ConnectionRegistrationTemplateV1,
 	canonicalRuntimeRequestSigningPayload,
@@ -67,6 +69,8 @@ import {
 	connectionInstallConfigurationDigestV1,
 	connectionInstallRequestDigestV1,
 	connectionManualInstallConfigurationV1,
+	connectionManualInstallDescriptorDigestV1,
+	connectionManualInstallDescriptorMatchesV1,
 	connectionRegistrationKeyHashV1,
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
@@ -177,9 +181,12 @@ interface FirstBeginConsumption {
 	readonly supplyAttemptId: string;
 	readonly configurationDigest: string;
 	readonly receiptDigest: string;
+	readonly descriptorDigest: string;
 	readonly configuration: unknown;
 	readonly template: unknown;
 	readonly receipt: unknown;
+	/** §13.5.6 descriptor fixed by this first begin; confirm and recovery follow it. */
+	readonly descriptor: unknown;
 }
 
 const oauthRoot = [
@@ -1212,7 +1219,7 @@ async function assembleConnectionInstallReceiver(
 	function parseConsumption(value: Record<string, unknown>) {
 		if (
 			Object.keys(value).sort().join(",") !==
-				"authorizationId,bodyDigest,commandId,configuration,configurationDigest,receipt,receiptDigest,schemaVersion,supplyAttemptId,template" ||
+				"authorizationId,bodyDigest,commandId,configuration,configurationDigest,descriptor,descriptorDigest,receipt,receiptDigest,schemaVersion,supplyAttemptId,template" ||
 			value.schemaVersion !== 1 ||
 			typeof value.authorizationId !== "string" ||
 			typeof value.commandId !== "string" ||
@@ -1220,7 +1227,13 @@ async function assembleConnectionInstallReceiver(
 			!value.supplyAttemptId ||
 			!isDigest(value.bodyDigest) ||
 			!isDigest(value.configurationDigest) ||
-			!isDigest(value.receiptDigest)
+			!isDigest(value.receiptDigest) ||
+			!isDigest(value.descriptorDigest) ||
+			!ConnectionManualInstallDescriptorV1Schema.safeParse(value.descriptor)
+				.success ||
+			connectionManualInstallDescriptorDigestV1(
+				value.descriptor as ConnectionManualInstallDescriptorV1,
+			) !== value.descriptorDigest
 		)
 			unavailable();
 		return value as unknown as FirstBeginConsumption;
@@ -1298,6 +1311,8 @@ async function assembleConnectionInstallReceiver(
 				connectionRegistrationReceiptDigestV1(body.receipt) ||
 			marker.configurationDigest !==
 				connectionInstallConfigurationDigestV1(body.configuration) ||
+			marker.descriptorDigest !==
+				connectionManualInstallDescriptorDigestV1(body.descriptor) ||
 			!sameText(marker.channelBinding, channel)
 		)
 			denied();
@@ -1327,6 +1342,15 @@ async function assembleConnectionInstallReceiver(
 			conflict();
 		}
 		if (!isDeepStrictEqual(configuration, body.configuration)) conflict();
+		// The descriptor names exactly this receipt, configuration and supply.
+		if (
+			!connectionManualInstallDescriptorMatchesV1(body.descriptor, {
+				template,
+				receipt,
+				configuration,
+			})
+		)
+			conflict();
 		const scope = installScope(template, configuration);
 		if (!isDeepStrictEqual(runtimeOAuthScopeV1(request), scope)) conflict();
 		// 5. A consumed first begin is never repeated, replayed or late-accepted.
@@ -1352,6 +1376,7 @@ async function assembleConnectionInstallReceiver(
 				registrationKeyHash: template.registration.registrationKeyHash,
 				configurationDigest: marker.configurationDigest,
 				receiptDigest: marker.receiptDigest,
+				descriptorDigest: marker.descriptorDigest,
 			}),
 		);
 		assertOriginal(template);
@@ -1381,9 +1406,11 @@ async function assembleConnectionInstallReceiver(
 					supplyAttemptId: body.supplyAttemptId,
 					configurationDigest: marker.configurationDigest,
 					receiptDigest: marker.receiptDigest,
+					descriptorDigest: marker.descriptorDigest,
 					configuration,
 					template,
 					receipt,
+					descriptor: body.descriptor,
 				},
 				{ immutable: true, guard: () => assertOriginal(template) },
 			);
@@ -1532,7 +1559,11 @@ async function assembleConnectionInstallReceiver(
 			connectionInstallConfigurationDigestV1(configuration) !==
 				consumption.configurationDigest ||
 			connectionRegistrationReceiptDigestV1(receipt) !==
-				consumption.receiptDigest
+				consumption.receiptDigest ||
+			!connectionManualInstallDescriptorMatchesV1(
+				consumption.descriptor as ConnectionManualInstallDescriptorV1,
+				{ template, receipt, configuration },
+			)
 		)
 			return;
 		const stored = await readRecord(
