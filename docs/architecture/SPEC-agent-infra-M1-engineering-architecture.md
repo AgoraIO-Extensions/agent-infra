@@ -821,14 +821,21 @@ Agent 级授权、幂等、锁顺序、resourceFence、执行容量或预留池�
 规格、env 摘要、模型投影、只读 Skill generation、Connection Consumer 配置、网络策略及
 Runtime 签名/传输配置版本；任一影响实际 Pod 输入或授权的修订改变，未领取项立即失去领取资格。
 独立 executor 模式按可信模板投影判定。Codex profile 须另外固定双容器布局、镜像、工作区挂载、
-身份交付配置及合计资源摘要。旧 profile 缺少这些事实，或布局、容量和当前配置失配时，
+身份交付配置及合计资源摘要。这些事实沿用部署配置 profile 的现有字段，不新增 executor
+配置版本：是否装配 executor 及其资源、临时卷和放置归 `resourceConfigurationHash`，
+executor 镜像随模板镜像 Digest 固定，工作区挂载由 §11.2.1 的固定绑定从最终 ID 派生；
+签发启动身份、实例读取授权和晋升证明所用 Worker 签名材料归 `signingConfigurationVersion`；
+启动期限不进入 profile 摘要，按每份预留在启动意图中持久化为绝对时间。
+旧 profile 缺少这些事实，或布局、容量和当前配置失配时，
 对应未领取项失去资格，走原淘汰流程。没有合格项时走冷路径。
 custom Owner Secret、自有交互入口及不满足这些条件的模板保持原准备路径，不自动扩展预热资格。
 未领取实例不预先持有 Owner Secret 的决定与重新评估条件见 [ADR-0038](../adr/0038-no-owner-secret-in-session-reserves.md)。
 
 未领取实例只有全新专属 PVC、原临时目录及已验证的只读 Skill 挂载；不复制业务工作区、
 原生会话历史或个人记忆。Secret 只能包含该 Sandbox 的派生服务凭据、无 Key 模型投影及
-适用的文件交换 token/容器边界 attestation；不包含部署级服务 token、个人/默认 Relay Key、
+适用的文件交换 token/容器边界 attestation；独立 executor 预留另含 §11.2.1 的 Worker-owned
+executor 绑定及其 attestation。一次性启动身份投影是下文单独记录的临时 Secret。
+Secret 不包含部署级服务 token、个人/默认 Relay Key、
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
 Connection 和 native callback 入口在没有真实当前 allocation/Execution 时必须拒绝。
 预留可准备 [§13.5.6](#1356-标准-oauth-安装供应) 定义的空接收入口与部署信任材料。
@@ -883,7 +890,8 @@ generation/resource fence 及原期限写入预留事实。同一提交固定本
 实例取证和 Kubernetes 回读均在领取事务之外完成。
 Worker 从当前 allocation、资源回读和受信 Host 的本实例校验形成业务晋升回执，绑定唯一领取、
 真实 Conversation/主体/渠道、Session/Sandbox、generation/resource fence、配置/profile、
-原 Pod UID 及当前 RV、原 PVC UID、实际布局和实例 epoch。Store 以原 allocation 的当前绑定和
+原 Pod UID 及回执时回读的 RV、原 PVC UID、实际布局和实例 epoch。RV 只记录回执时刻的证据，
+后续准入按 Pod UID、实例 epoch 和 generation/resource fence 核对。Store 以原 allocation 的当前绑定和
 fence 为条件持久化回执，回执确认后才可写入业务 `ready`。首个业务 Turn 同时需要原业务 Grant
 和随受信 Worker 投递的已提交晋升事实。只有 RuntimeHost 按当前本地实例核对两者后才开放业务准入。
 实例取证和投递约束见 [Runtime HLD §10.3.2](HLD-agent-runtime-M1.md#1032-session-实例只读合同-v1)。
@@ -904,9 +912,13 @@ PVC 和占用，沿原领取与会话恢复有界收口。只在既有代次退�
 独立 executor 同时收口原临时身份投影。淘汰 CAS 获胜后持久化条件删除意图，在当前淘汰
 fence 下核对原发布 attempt、目标 Pod UID 和投影 UID/resourceVersion，只删除原对象。
 须确认原创建和投影发布均已结束且不会迟到写入，并回读六类长期资源及原投影均不存在，
-才能释放占用。一次 GET absence、lease 失效或凭证过期都不足以确认未决 create 已结束。
+才能释放占用。一次 GET absence、lease 失效或凭证过期都不足以确认未决 create 已结束；
+等到请求超时后再读到一次 absence 也不能证明没有迟到写入。
 结果不明时保留原 attempt、不可领取状态和预算，仅沿原意图有界核实，迟到的原对象按原条件清理。发现已领取、
 业务绑定或同名不同 UID 时拒绝清理。正式 Session 的 PVC 保留规则不变。
+启用任何独立 executor 的 Codex profile 前，部署须先有经评审、可执行的人工核实与恢复手册，
+覆盖上述结果不明的创建、投影发布和删除：告警入口、核实所需证据、由部署负责人执行的步骤，
+以及核实前继续保留占用。手册未就位时该 profile 保持未批准。
 
 **有界补充与扩缩。** 部署策略声明允许的 profile、每项最小/最大备用数、总备用数、
 部署总 CPU/内存/PVC 预算、创建并发、过期时长、缩容冷却和失败退避。缺少上限不启用。
