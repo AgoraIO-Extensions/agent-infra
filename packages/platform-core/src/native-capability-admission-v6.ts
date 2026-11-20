@@ -279,6 +279,23 @@ export type NativeCapabilityAdmissionV6KeyBinding = Readonly<{
 	version: number;
 }>;
 
+export type NativeCapabilityAdmissionV6AuthorizationSnapshot = Readonly<{
+	readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+	readonly taskAuthority: ConversationExecutionAuthorityV1;
+	readonly modelConfigurationRevision: number;
+	readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
+	readonly executionSource: ConversationExecutionSourceV1;
+	readonly sessionGeneration: number;
+	readonly hostSessionRef: string;
+	readonly configVersion: string;
+	readonly metadataExecutionId: string;
+}>;
+
+export type NativeCapabilityAdmissionV6AuthorizationReader = (input: {
+	readonly authority: ConversationExecutionAuthorityV1;
+	readonly conversationId: string;
+}) => Promise<NativeCapabilityAdmissionV6AuthorizationSnapshot | null>;
+
 export type NativeCapabilityAdmissionV6Decision =
 	| {
 			readonly outcome: "accepted" | "replayed";
@@ -308,12 +325,17 @@ export interface NativeCapabilityAdmissionTransactionPortV6 {
 			readonly requestDigest: string;
 			readonly operationDigest: string;
 		},
-		isAuthorized: () => Promise<boolean>,
+		isAuthorized: (
+			readAuthorization: NativeCapabilityAdmissionV6AuthorizationReader,
+		) => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionV6Decision>;
 }
 
 export interface NativeCapabilityAdmissionV6AuthorizationPort {
-	authorize(input: { readonly conversationId: string }): Promise<
+	authorize(
+		input: { readonly conversationId: string },
+		readAuthorization?: NativeCapabilityAdmissionV6AuthorizationReader,
+	): Promise<
 		| {
 				readonly outcome: "allowed";
 				readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
@@ -394,12 +416,21 @@ export function parseNativeCapabilityAdmissionRequestV6(
 	});
 }
 
+type NativeCapabilityAdmissionDigestInputV6 = Omit<
+	NativeCapabilityAdmissionRequestV6,
+	| "schemaVersion"
+	| "requestId"
+	| "traceId"
+	| "capabilitySourceVersion"
+	| "parametersDigest"
+	| "configVersion"
+>;
+
 export function nativeCapabilityAdmissionRequestDigestV6(
 	request: NativeCapabilityAdmissionRequestV6,
 ): string {
-	// Public input + authorization scope identify admission. Resolved config,
-	// Key and allocated operation IDs belong only to the frozen operation.
 	const {
+		schemaVersion: _schemaVersion,
 		requestId: _requestId,
 		traceId: _traceId,
 		capabilitySourceVersion: _sourceVersion,
@@ -407,9 +438,37 @@ export function nativeCapabilityAdmissionRequestDigestV6(
 		configVersion: _configVersion,
 		...business
 	} = request;
+	return nativeCapabilityAdmissionDigest(business);
+}
+
+function nativeCapabilityAdmissionDigest(
+	business: NativeCapabilityAdmissionDigestInputV6,
+): string {
+	// Resolved config, Key and allocated operation IDs belong only to the frozen operation.
 	return createHash("sha256")
 		.update(JSON.stringify(canonical({ ...business, schemaVersion: 3 })))
 		.digest("hex");
+}
+
+export function nativeCapabilityAdmissionReplayDigestV6(
+	invocation: NativeCapabilityAdmissionRequestV3,
+	authority: NativeCapabilityAdmissionV6AuthorityBinding,
+): string {
+	return nativeCapabilityAdmissionDigest({
+		principal: authority.principal,
+		executionSource: authority.executionSource,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		sessionGeneration: authority.sessionGeneration,
+		hostSessionRef: authority.hostSessionRef,
+		conversationId: invocation.conversationId,
+		capabilityId: invocation.capabilityId,
+		directoryRevision: invocation.directoryRevision,
+		parameters: invocation.parameters,
+		modelOptionId: invocation.selection.modelOptionId,
+		reasoningLevel: invocation.selection.reasoningLevel,
+		idempotencyKey: invocation.idempotencyKey,
+	});
 }
 
 export function nativeCapabilityOperationDigestV6(
@@ -732,22 +791,19 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 					requestDigest,
 					operationDigest,
 				}),
-				async () => {
-					try {
-						const current = await dependencies.authorization.authorize({
-							conversationId: request.conversationId,
-						});
-						return (
-							current.outcome === "allowed" &&
-							isDeepStrictEqual(current.authority, authority) &&
-							isDeepStrictEqual(
-								parseAuthority(current.taskAuthority),
-								taskAuthority,
-							)
-						);
-					} catch {
-						return false;
-					}
+				async (readAuthorization) => {
+					const current = await dependencies.authorization.authorize(
+						{ conversationId: request.conversationId },
+						readAuthorization,
+					);
+					return (
+						current.outcome === "allowed" &&
+						isDeepStrictEqual(current.authority, authority) &&
+						isDeepStrictEqual(
+							parseAuthority(current.taskAuthority),
+							taskAuthority,
+						)
+					);
 				},
 			);
 		},

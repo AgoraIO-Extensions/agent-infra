@@ -537,13 +537,20 @@ it("freezes the accepted Task boundary and revalidates current authority inside 
 		h.transaction.admitNativeCapabilityV6.mock.calls[0] ?? [];
 	if (!sent || !isAuthorized)
 		throw new Error("missing transaction authorization");
-	expect(await isAuthorized()).toBe(true);
+	const readAuthorization = async () => null;
+	expect(await isAuthorized(readAuthorization)).toBe(true);
+	expect(h.authorization.authorize).toHaveBeenLastCalledWith(
+		{ conversationId: request.conversationId },
+		readAuthorization,
+	);
 	h.taskAuthority.taskBoundary.identityRevision = "revoked";
-	expect(await isAuthorized()).toBe(false);
+	expect(await isAuthorized(readAuthorization)).toBe(false);
 	expect(sent.plan.taskBoundary.identityRevision).toBe("identity-1");
 	expect(Object.isFrozen(sent.plan.taskBoundary)).toBe(true);
 	h.authorization.authorize.mockRejectedValueOnce(
 		new Error("authority unavailable"),
 	);
-	expect(await isAuthorized()).toBe(false);
+	await expect(isAuthorized(readAuthorization)).rejects.toThrow(
+		"authority unavailable",
+	);
 });

@@ -3,11 +3,13 @@ import {
 	NativeCapabilityInvocationRequestV2Schema,
 	NativeCapabilityInvocationRequestV3Schema,
 } from "@agent-infra/contracts/pilot";
-import type {
-	NativeCapabilityAdmissionDecisionV1,
-	NativeCapabilityAdmissionRequest,
-	NativeCapabilityAdmissionRequestV3,
-	NativeCapabilityAdmissionV6Decision,
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
+import {
+	ConversationExecutionError,
+	type NativeCapabilityAdmissionDecisionV1,
+	type NativeCapabilityAdmissionRequest,
+	type NativeCapabilityAdmissionRequestV3,
+	type NativeCapabilityAdmissionV6Decision,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 import type { z } from "zod";
@@ -177,7 +179,16 @@ export function registerNativeCapabilityInvocationRoutesV1(
 				sanitizedDecision(decision),
 				outcomeStatus(decision.outcome),
 			);
-		} catch {
+		} catch (error) {
+			if (
+				error instanceof ConversationExecutionError &&
+				error.sqlState === "55P03"
+			)
+				recordHttpFailureContext({
+					failureStep: "store.query",
+					error,
+					sqlState: error.sqlState,
+				});
 			return context.json({ outcome: "unavailable" }, 503);
 		} finally {
 			requestContext.close();
