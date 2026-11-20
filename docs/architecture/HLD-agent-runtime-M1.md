@@ -335,11 +335,10 @@ assembly 已通过 Invocation V3、Native V6 和 Driver V2 接通 state-changing
 同一目录与授权屏障下执行 Driver command。旧 V1/V2 admission 仍拒绝该版本，不能把命令降级成普通
 消息。代码装配和受控测试不替代真实 Runtime/浏览器压缩终态验收。
 
-同一固定 Codex 版本还提供 `thread/goal/set|get|clear` 与目标更新通知。当前平台未开放 `/goal`：
-原生 Goal 可以自行产生后续 Turn，尚缺对应的平台持久目标、持续执行、预算、控制和恢复合同。
-公开 RPC 存在不代表当前业务 Execution 已授权这些后续 Turn；不能只打开原生开关或发送普通提示。
-该差额由 [#4045](https://github.com/AgoraIO-Extensions/agent-infra/issues/4045) 承接，具体提案见
-[ADR-0039](../adr/0039-native-command-discovery-and-goal-lifecycle.md)；提案通过前保持不可用。
+同一固定 Codex 版本还提供 `thread/goal/set|get|clear` 与目标更新通知。M1 的 `/goal` 范围和输入行为
+见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)。
+原生 Goal 可产生后续 Turn，每次续跑仍须受平台业务 Execution 的持久受理和当前授权约束。
+后续设计见已推迟的 [ADR-0039](../adr/0039-native-command-discovery-and-goal-lifecycle.md)。
 
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
