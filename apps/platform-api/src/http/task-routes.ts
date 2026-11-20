@@ -392,6 +392,7 @@ export function registerTaskRoutes(
 				"request_accepted",
 			);
 			const request = context.req.raw;
+			context.header("X-Accel-Buffering", "no");
 			return streamSSE(context, async (stream) => {
 				const connection = dependencies.sseResources?.open();
 				const began = performance.now();
