@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import { once } from "node:events";
 import {
 	createServer,
@@ -6,6 +7,7 @@ import {
 	Server,
 	ServerResponse,
 } from "node:http";
+import { createServer as createTlsServer } from "node:https";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	gunzipSync,
@@ -13,8 +15,8 @@ import {
 	zstdCompressSync,
 	zstdDecompressSync,
 } from "node:zlib";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 
 import {
 	type CodexModelRequestOutcome,
@@ -533,6 +535,175 @@ function observePersistenceDeadlines() {
 }
 
 describe("Codex model transport", () => {
+	it.each([
+		{ code: "ENOTFOUND", errorClass: "dns" },
+		{ code: "EAI_AGAIN", errorClass: "dns" },
+		{ code: "PRIVATE_UNRECOGNIZED_NETWORK_CODE", errorClass: "UNKNOWN" },
+	])(
+		"classifies a resolver failure through real fetch: $errorClass/$code",
+		async ({ code, errorClass }) => {
+			const original = dns.lookup;
+			const canary = "PRIVATE_TRANSPORT_ERROR_cookie_token_body_query";
+			const resolver = vi.spyOn(dns, "lookup").mockImplementation(((
+				hostname: string,
+				...args: unknown[]
+			) => {
+				if (hostname !== "model-fixture.invalid")
+					return Reflect.apply(original, dns, [hostname, ...args]);
+				const callback = args.at(-1) as (error: Error) => void;
+				queueMicrotask(() =>
+					callback(
+						Object.assign(new Error(canary), { code, hostname: canary }),
+					),
+				);
+			}) as typeof dns.lookup);
+			try {
+				const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+				const value = await transport("https://model-fixture.invalid", true, {
+					beforeRequest: async () => ({ started: async () => {}, finish }),
+				});
+				expect((await request(value.modelAccess)).status).toBe(502);
+				expect(finish).toHaveBeenCalledWith(
+					expect.objectContaining({
+						diagnostic: {
+							stage: "response_headers",
+							errorClass,
+							elapsedMs: expect.any(Number),
+						},
+					}),
+				);
+				expect(JSON.stringify(finish.mock.calls)).not.toContain(canary);
+				expect(JSON.stringify(finish.mock.calls)).not.toContain(
+					"PRIVATE_UNRECOGNIZED_NETWORK_CODE",
+				);
+			} finally {
+				resolver.mockRestore();
+			}
+		},
+	);
+
+	it("classifies a real untrusted TLS peer without recording its certificate or URL", async () => {
+		const tls = await runtimeTlsFixture({ dnsNames: ["localhost"] });
+		close.push(tls.cleanup);
+		const server = createTlsServer(
+			{ key: tls.key, cert: tls.cert },
+			(_request, response) => response.end(),
+		);
+		server.on("tlsClientError", () => {});
+		const endpoint = (await listen(server)).replace("http:", "https:");
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const value = await transport(endpoint, true, {
+			beforeRequest: async () => ({ started: async () => {}, finish }),
+		});
+		expect((await request(value.modelAccess)).status).toBe(502);
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({
+				diagnostic: {
+					stage: "response_headers",
+					errorClass: "tls",
+					elapsedMs: expect.any(Number),
+				},
+			}),
+		);
+		expect(JSON.stringify(finish.mock.calls)).not.toContain(endpoint);
+	});
+
+	it.each(["headers", "body"] as const)(
+		"classifies a real reset during %s with only an observed HTTP status",
+		async (phase) => {
+			const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+			let calls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					calls++;
+					if (phase === "body") {
+						response.writeHead(200, { "content-type": "text/event-stream" });
+						response.write(event({ type: "response.created", response: {} }));
+					}
+					void delay(10).then(() => response.socket?.destroy());
+				}),
+			);
+			const value = await transport(endpoint, true, {
+				beforeRequest: async () => ({ started: async () => {}, finish }),
+			});
+			await (await request(value.modelAccess)).text();
+			expect(calls).toBe(1);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "unknown",
+					failureCode: "transport_error",
+					diagnostic: {
+						stage: phase === "body" ? "response_body" : "response_headers",
+						errorClass: "connection_reset",
+						elapsedMs: expect.any(Number),
+						...(phase === "body" ? { upstreamStatus: 200 } : {}),
+					},
+				}),
+			);
+		},
+	);
+
+	it.each(["headers", "body"] as const)(
+		"classifies the owned %s timeout without changing the unknown outcome",
+		async (phase) => {
+			const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					if (phase === "body") {
+						response.writeHead(200, { "content-type": "text/event-stream" });
+						response.write(event({ type: "response.created", response: {} }));
+					}
+				}),
+			);
+			const value = await transport(
+				endpoint,
+				true,
+				{ beforeRequest: async () => ({ started: async () => {}, finish }) },
+				{
+					responseHeaderTimeoutMs: phase === "headers" ? 25 : 2000,
+					streamIdleTimeoutMs: 25,
+				},
+			);
+			await (await request(value.modelAccess)).text();
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "unknown",
+					failureCode: "transport_error",
+					diagnostic: {
+						stage: phase === "body" ? "response_body" : "response_headers",
+						errorClass: "timeout",
+						elapsedMs: expect.any(Number),
+						...(phase === "body" ? { upstreamStatus: 200 } : {}),
+					},
+				}),
+			);
+		},
+	);
+
+	it("classifies a real refused connection at the transport catch without inventing HTTP status", async () => {
+		const server = createServer();
+		const endpoint = await listen(server);
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const value = await transport(endpoint, true, {
+			beforeRequest: async () => ({ started: async () => {}, finish }),
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		await response.text();
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "unknown",
+				failureCode: "transport_error",
+				diagnostic: {
+					stage: "response_headers",
+					errorClass: "connect_refused",
+					elapsedMs: expect.any(Number),
+				},
+			}),
+		);
+	});
+
 	it.each([0, 2_147_483_648])(
 		"rejects an idle timeout outside Node's timer range: %s",
 		async (timeout) => {

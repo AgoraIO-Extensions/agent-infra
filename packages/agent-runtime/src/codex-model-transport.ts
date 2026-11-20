@@ -14,6 +14,10 @@ import {
 	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import { createCredentialMatcher } from "./model-credential-matcher.js";
+import {
+	type ModelTransportDiagnostic,
+	modelTransportErrorClass,
+} from "./model-transport-diagnostic.js";
 
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumEventBytes = 1024 * 1024;
@@ -75,6 +79,7 @@ export type CodexModelRequestOutcome = {
 	| { readonly phase: "succeeded"; readonly usage?: CodexModelRequestUsage }
 	| {
 			readonly phase: "failed" | "unknown";
+			readonly diagnostic?: ModelTransportDiagnostic;
 			readonly failureCode:
 				| "request_not_started"
 				| "http_error"
@@ -923,8 +928,12 @@ async function forwardValidatedStream(
 	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
 	officialLane: boolean,
 	idleTimeoutMs: number,
+	upstreamStatus: number,
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
+	const began = performance.now();
+	let diagnostic: ModelTransportDiagnostic | undefined;
+	let idleTimedOut = false;
 	let failed = false;
 	let terminal: string | undefined;
 	let usage: CodexModelRequestUsage | undefined;
@@ -1009,10 +1018,10 @@ async function forwardValidatedStream(
 	const readChunk = async () => {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const idle = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => reject(new Error("MODEL_STREAM_IDLE_TIMEOUT")),
-				idleTimeoutMs,
-			);
+			timer = setTimeout(() => {
+				idleTimedOut = !controller.signal.aborted;
+				reject(new Error("MODEL_STREAM_IDLE_TIMEOUT"));
+			}, idleTimeoutMs);
 		});
 		try {
 			return await Promise.race([reader.read(), idle]);
@@ -1060,9 +1069,15 @@ async function forwardValidatedStream(
 			ending = `${ending}${decoded}`.slice(-4);
 			parser.feed(decoded);
 		}
-	} catch {
+	} catch (error) {
 		failed = true;
 		failure.code = "transport_error";
+		diagnostic = {
+			stage: "response_body",
+			errorClass: idleTimedOut ? "timeout" : modelTransportErrorClass(error),
+			elapsedMs: Math.max(0, Math.round(performance.now() - began)),
+			upstreamStatus,
+		};
 	}
 
 	if (failed || !terminal || !hasTerminatingBlankLine(ending)) {
@@ -1072,6 +1087,7 @@ async function forwardValidatedStream(
 		await recordOutcome({
 			phase: failure.code === "provider_error" ? "failed" : "unknown",
 			failureCode: interrupted ? "interrupted" : failure.code,
+			...(diagnostic ? { diagnostic } : {}),
 		});
 		await failStream(response);
 		reader.releaseLock();
@@ -1516,6 +1532,7 @@ export async function openCodexModelTransport(
 		let startedPersistence: Promise<void> | undefined;
 		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
 		let startedAt: number | undefined;
+		let diagnostic: ModelTransportDiagnostic | undefined;
 		let responseFailed = false;
 		let outcomeReported = false;
 		let outcomeReport: Promise<void> | undefined;
@@ -1660,11 +1677,13 @@ export async function openCodexModelTransport(
 				return;
 			}
 			startedAt = performance.now();
+			const requestBegan = startedAt;
 			const upstreamAbort = new AbortController();
-			const headerTimer = setTimeout(
-				() => upstreamAbort.abort(),
-				responseHeaderTimeout,
-			);
+			let headerTimedOut = false;
+			const headerTimer = setTimeout(() => {
+				headerTimedOut = !controller.signal.aborted;
+				upstreamAbort.abort();
+			}, responseHeaderTimeout);
 			upstreamResult = fetch(routed.route.target, {
 				method: "POST",
 				headers: {
@@ -1677,7 +1696,19 @@ export async function openCodexModelTransport(
 				signal: AbortSignal.any([controller.signal, upstreamAbort.signal]),
 			}).then(
 				(value) => ({ value }),
-				() => ({ value: undefined }),
+				(error: unknown) => {
+					diagnostic = {
+						stage: "response_headers",
+						errorClass: headerTimedOut
+							? "timeout"
+							: modelTransportErrorClass(error),
+						elapsedMs: Math.max(
+							0,
+							Math.round(performance.now() - requestBegan),
+						),
+					};
+					return { value: undefined };
+				},
 			);
 			const upstream = (await upstreamResult).value;
 			clearTimeout(headerTimer);
@@ -1721,6 +1752,7 @@ export async function openCodexModelTransport(
 				recordOutcome,
 				officialLane,
 				idleTimeout,
+				upstream.status,
 			);
 		} catch {
 			responseFailed = outcomeReported || outcomeReport !== undefined;
@@ -1737,6 +1769,7 @@ export async function openCodexModelTransport(
 					: {
 							phase: "unknown",
 							failureCode: interrupted ? "interrupted" : "transport_error",
+							...(diagnostic ? { diagnostic } : {}),
 						},
 			).catch(() => {});
 			settleModelRequestWaiters(turnKey, false);

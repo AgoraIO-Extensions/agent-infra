@@ -161,6 +161,7 @@ import type {
 } from "./driver.js";
 import { DurableJsonFile, deepFreeze } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import type { ModelTransportDiagnostic } from "./model-transport-diagnostic.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -619,7 +620,20 @@ import {
 	standardMcpDigest,
 } from "./standard-mcp-client.js";
 
+export interface ModelTransportFailureObservation
+	extends ModelTransportDiagnostic {
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+}
+
 export interface CodexRuntimeDriverOptions {
+	/** Best-effort operational metadata, never persisted as a Runtime fact. */
+	readonly observeModelTransportFailure?: (
+		event: ModelTransportFailureObservation,
+	) => void;
 	/** Deployment-owned native isolation boundary; defaults to Landlock. */
 	readonly isolationMode?:
 		| "landlock"
@@ -5160,6 +5174,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		 */
 		private readonly codexInputRootPath?: string,
 		private readonly sessionExecutor?: CodexSessionExecutorAdmissionV1,
+		private readonly observeModelTransportFailure?: CodexRuntimeDriverOptions["observeModelTransportFailure"],
 	) {
 		this.unsubscribeSessionExecutor = sessionExecutor?.onFailure(() =>
 			this.failSessionExecutor(),
@@ -6620,6 +6635,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				options.browserCapability,
 				inputRoot,
 				sessionExecutor,
+				options.observeModelTransportFailure,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -12837,6 +12853,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.appendOperationFact(session, journal, fact);
 			return {
 				nativeSessionRef: resolved.nativeSessionRef,
+				agentId: session.agentId,
+				conversationId: session.conversationId,
 				executionId: execution.executionId,
 				journalTurnId: journal.nativeTurnId,
 				fact,
@@ -13010,18 +13028,37 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				: { credential: authorization.relayKey }),
 			assertCurrent,
 			started: (startedAt) => record("started", { startedAt }),
-			finish: (outcome) =>
-				record(outcome.phase === "succeeded" ? "completed" : outcome.phase, {
-					...(outcome.finishedAt ? { finishedAt: outcome.finishedAt } : {}),
-					...(outcome.durationMs === undefined
-						? {}
-						: { durationMs: outcome.durationMs }),
-					...(outcome.phase === "succeeded"
-						? outcome.usage
-							? { usage: outcome.usage }
-							: {}
-						: { failureCode: modelOperationFailure(outcome.failureCode) }),
-				}),
+			finish: async (outcome) => {
+				await record(
+					outcome.phase === "succeeded" ? "completed" : outcome.phase,
+					{
+						...(outcome.finishedAt ? { finishedAt: outcome.finishedAt } : {}),
+						...(outcome.durationMs === undefined
+							? {}
+							: { durationMs: outcome.durationMs }),
+						...(outcome.phase === "succeeded"
+							? outcome.usage
+								? { usage: outcome.usage }
+								: {}
+							: { failureCode: modelOperationFailure(outcome.failureCode) }),
+					},
+				);
+				if (outcome.phase !== "succeeded" && outcome.diagnostic) {
+					try {
+						const captured: unknown = this.observeModelTransportFailure?.({
+							...outcome.diagnostic,
+							agentId: prepared.agentId,
+							conversationId: prepared.conversationId,
+							executionId: prepared.executionId,
+							operationRef: prepared.fact.operationRef,
+							attemptRef: prepared.fact.attemptRef,
+						});
+						void Promise.resolve(captured).catch(() => {});
+					} catch {
+						// Operational capture never changes the durable outcome or drain.
+					}
+				}
+			},
 		};
 	}
 
