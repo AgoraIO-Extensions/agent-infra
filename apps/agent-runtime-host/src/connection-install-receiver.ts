@@ -1502,6 +1502,7 @@ async function assembleConnectionInstallReceiver(
 		assertOriginal(template);
 		if (outcome === "denied") denied();
 		if (outcome !== "allowed") unavailable();
+		if (result.expiresAt <= now()) denied();
 		// Read-only: the stored result is returned; no state, PKCE or link is generated.
 		return result;
 	}
