@@ -1821,6 +1821,29 @@ describe("Connection first begin", () => {
 				phase: "awaiting_confirmation",
 			},
 		});
+		// §13.5.6: an exception install exchanges only through its `exchange`
+		// phase; a valid standard confirm grant cannot stand in for it.
+		expect(
+			(
+				await exchange(
+					f,
+					"/internal/runtime/oauth/v1/confirm",
+					() => standardRequest(f, "confirm"),
+					{ authorization: `Bearer ${serviceToken}` },
+				)
+			).status,
+		).toBe(403);
+		expect(
+			await exchange(
+				f,
+				"/internal/runtime/oauth/v1/status",
+				() => standardRequest(f, "status"),
+				{ authorization: `Bearer ${serviceToken}` },
+			),
+		).toMatchObject({
+			status: 200,
+			body: { phase: "awaiting_confirmation" },
+		});
 		// The standard begin route never exists on the install listener.
 		expect(
 			(

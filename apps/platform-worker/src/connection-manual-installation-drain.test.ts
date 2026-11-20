@@ -72,6 +72,12 @@ const ciphertext = {
 	secretId: `${connectionServiceCredentialSecretNameV1}:agent-a:1`,
 };
 
+const pinReceipt = {
+	id: "receipt-a",
+	revision: 1,
+	candidateDigest: "c".repeat(64),
+};
+
 function harness(
 	overrides: {
 		readonly ciphertext?: unknown;
@@ -80,6 +86,7 @@ function harness(
 		readonly commit?: boolean;
 		readonly command?: () => Promise<unknown>;
 		readonly readback?: () => Promise<unknown>;
+		readonly exchange?: () => Promise<unknown>;
 	} = {},
 ) {
 	const plaintext = new TextEncoder().encode("conn_consumer_synthetic-0001");
@@ -104,8 +111,19 @@ function harness(
 		settleRevoke: vi.fn(async () => "revoked" as const),
 		firstBeginContext: vi.fn(async () => null),
 		settleBegin: vi.fn(async () => "mapped" as const),
-		openConfirmPhase: vi.fn(async () => ({ phaseCommandId: "phase-a" })),
-		commitConfirmPin: vi.fn(async () => "pinned" as const),
+		openConfirmPhase: vi.fn(async (input: { phase: string }) =>
+			input.phase === "confirm_exchange"
+				? {
+						phaseCommandId: "phase-b",
+						requestDigest: "d".repeat(64),
+						receipt: pinReceipt,
+					}
+				: { phaseCommandId: "phase-a", requestDigest: "e".repeat(64) },
+		),
+		commitConfirmPin: vi.fn(async () => ({
+			outcome: "pinned" as const,
+			receipt: pinReceipt,
+		})),
 		settleConfirmPhase: vi.fn(async () => true),
 	};
 	const decryptor = {
@@ -128,6 +146,9 @@ function harness(
 		beginStatus: vi.fn(),
 		confirmBindingReadback: vi.fn(
 			overrides.readback ?? (async () => Promise.reject(new Error("unset"))),
+		),
+		confirmExchange: vi.fn(
+			overrides.exchange ?? (async () => Promise.reject(new Error("unset"))),
 		),
 	};
 	const drain = createConnectionManualInstallationDrainV1({
@@ -160,9 +181,14 @@ function confirmHarness(
 		readonly phase?: null;
 		readonly commit?: boolean;
 		readonly readback?: () => Promise<unknown>;
+		readonly exchange?: () => Promise<unknown>;
 	} = {},
 ) {
-	const h = harness({ commit: overrides.commit, readback: overrides.readback });
+	const h = harness({
+		commit: overrides.commit,
+		readback: overrides.readback,
+		exchange: overrides.exchange,
+	});
 	h.store.listPending.mockResolvedValue([
 		{
 			commandId: "confirm-a",
@@ -338,11 +364,155 @@ describe("manual install drain", () => {
 				candidate: { synthetic: "candidate" },
 			}),
 		);
-		expect(h.store.settleConfirmPhase).not.toHaveBeenCalled();
+		expect(h.store.settleConfirmPhase).not.toHaveBeenCalledWith(
+			expect.objectContaining({ phaseCommandId: "phase-a" }),
+		);
 		// Phase 1 never exchanges, begins or sends an install command.
 		expect(h.host.command).not.toHaveBeenCalled();
 		expect(h.host.firstBegin).not.toHaveBeenCalled();
 		expect(h.host.beginStatus).not.toHaveBeenCalled();
+	});
+
+	const candidateReply = async () => ({
+		schemaVersion: 1,
+		contract: connectionManualConfirmContractV1,
+		outcome: "candidate",
+		commandId: "phase-a",
+		candidate: { synthetic: "candidate" },
+	});
+	const exchangeReply = (outcome: string) => async () => ({
+		schemaVersion: 1,
+		contract: connectionManualConfirmContractV1,
+		outcome,
+		commandId: "phase-b",
+	});
+
+	it("continues into phase 2 with its own committed receipt and commits before it sends", async () => {
+		const h = confirmHarness({
+			readback: candidateReply,
+			exchange: exchangeReply("exchanged"),
+		});
+		await h.drain.drain(["execution-a"], new AbortController().signal);
+		expect(h.store.openConfirmPhase).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				confirmCommandId: "confirm-a",
+				phase: "confirm_exchange",
+			}),
+		);
+		const request = {
+			confirmCommandId: "confirm-a",
+			attemptId: "attempt-a",
+			attemptOwner: "worker-a",
+			template: confirmContext.template,
+			supplyAttemptId: confirmContext.supplyAttemptId,
+			registrationKey: confirmContext.registrationKey,
+			descriptor: confirmContext.descriptor,
+			commandId: "phase-b",
+			pinReceipt,
+			candidate: { synthetic: "candidate" },
+		};
+		expect(h.store.commitDelivery).toHaveBeenLastCalledWith({
+			attemptId: "attempt-a",
+			attemptOwner: "worker-a",
+			authorizationId: "authorization-a",
+			commandId: "phase-b",
+			command: "confirm_exchange",
+			deliveryDigest: connectionInstallRequestDigestV1({
+				schemaVersion: 1,
+				contract: connectionManualConfirmContractV1,
+				phase: "exchange",
+				...request,
+			}),
+		});
+		expect(h.host.confirmExchange).toHaveBeenCalledTimes(1);
+		expect(h.host.confirmExchange).toHaveBeenCalledWith(
+			request,
+			expect.any(AbortSignal),
+		);
+		expect(h.store.commitDelivery.mock.invocationCallOrder[1]).toBeLessThan(
+			h.host.confirmExchange.mock.invocationCallOrder[0] ?? 0,
+		);
+		expect(h.store.settleConfirmPhase).toHaveBeenCalledTimes(1);
+		expect(h.store.settleConfirmPhase).toHaveBeenCalledWith(
+			expect.objectContaining({
+				confirmCommandId: "confirm-a",
+				phaseCommandId: "phase-b",
+				phase: "confirm_exchange",
+				outcome: "exchanged",
+			}),
+		);
+	});
+
+	it.each([
+		["a drifted binding", exchangeReply("rejected"), "rejected"],
+		["an unknown exchange", exchangeReply("unknown"), "unknown"],
+		[
+			"a lost exchange response",
+			async () => Promise.reject(new Error("reset")),
+			"unknown",
+		],
+	] as const)(
+		"settles phase 2 after %s as %s",
+		async (_name, exchange, outcome) => {
+			const h = confirmHarness({ readback: candidateReply, exchange });
+			await h.drain.drain(["execution-a"], new AbortController().signal);
+			expect(h.host.confirmExchange).toHaveBeenCalledTimes(1);
+			expect(h.store.settleConfirmPhase).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phaseCommandId: "phase-b",
+					phase: "confirm_exchange",
+					outcome,
+				}),
+			);
+		},
+	);
+
+	it.each([
+		[
+			"a refused pin",
+			(h: ReturnType<typeof confirmHarness>) =>
+				h.store.commitConfirmPin.mockResolvedValue({
+					outcome: "rejected",
+				} as never),
+		],
+		[
+			"no openable exchange phase",
+			(h: ReturnType<typeof confirmHarness>) =>
+				h.store.openConfirmPhase.mockImplementation(async (input) =>
+					input.phase === "confirm_exchange"
+						? (null as never)
+						: { phaseCommandId: "phase-a", requestDigest: "e".repeat(64) },
+				),
+		],
+		[
+			"a phase opened with another receipt",
+			(h: ReturnType<typeof confirmHarness>) =>
+				h.store.openConfirmPhase.mockImplementation(async (input) =>
+					input.phase === "confirm_exchange"
+						? {
+								phaseCommandId: "phase-b",
+								requestDigest: "d".repeat(64),
+								receipt: { ...pinReceipt, id: "receipt-other" },
+							}
+						: { phaseCommandId: "phase-a", requestDigest: "e".repeat(64) },
+				),
+		],
+		[
+			"a lost exchange sending commit",
+			(h: ReturnType<typeof confirmHarness>) =>
+				h.store.commitDelivery
+					.mockResolvedValueOnce(true)
+					.mockResolvedValueOnce(false),
+		],
+	] as const)("sends no exchange after %s", async (_name, arrange) => {
+		const h = confirmHarness({
+			readback: candidateReply,
+			exchange: exchangeReply("exchanged"),
+		});
+		arrange(h);
+		await h.drain.drain(["execution-a"], new AbortController().signal);
+		expect(h.host.confirmExchange).not.toHaveBeenCalled();
+		expect(h.store.settleConfirmPhase).not.toHaveBeenCalled();
 	});
 
 	it.each([

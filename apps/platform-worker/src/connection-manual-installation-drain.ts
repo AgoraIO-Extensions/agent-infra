@@ -3,6 +3,7 @@ import { resolveApprovedConnectionSystemAccessV1 } from "@agent-infra/contracts/
 import {
 	type ConnectionInstallCommandResponseV1,
 	type ConnectionInstallConfirmBindingReadbackResponseV1,
+	type ConnectionInstallConfirmExchangeResponseV1,
 	type ConnectionRegistrationTemplateV1,
 	connectionHostDeploymentIdentityV1,
 	connectionManualConfirmContractV1,
@@ -22,6 +23,10 @@ import type {
 } from "@agent-infra/platform-store";
 import type { SecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import type { ConnectionInstallHostClientV1 } from "./connection-install-host-client.js";
+
+type ExchangeInput = Parameters<
+	ConnectionInstallHostClientV1["confirmExchange"]
+>[0];
 
 type Store = Pick<
 	PostgresConnectionManualInstallationStoreV1,
@@ -361,8 +366,8 @@ export function createConnectionManualInstallationDrainV1(
 	/**
 	 * §13.5.6 exception confirm, phase 1: under the logical confirm's attempt the
 	 * Worker commits the phase's sending before it signs and sends, then commits
-	 * the first pin in the Store from this command's own candidate. The exchange
-	 * phase follows once the Host side exists; nothing here exchanges a code.
+	 * the first pin in the Store from this command's own candidate. A pinned
+	 * confirm continues into phase 2 under the same attempt.
 	 */
 	async function confirm(
 		claimed: ConnectionManualInstallationClaimV1,
@@ -423,14 +428,91 @@ export function createConnectionManualInstallationDrainV1(
 		} catch {
 			response = undefined;
 		}
-		if (response?.outcome === "candidate")
-			return store.commitConfirmPin({
+		if (response?.outcome === "candidate") {
+			const pinned = await store.commitConfirmPin({
 				...attempt,
 				confirmCommandId: claimed.command.commandId,
 				phaseCommandId: phase.phaseCommandId,
 				candidate: response.candidate,
 			});
+			if (pinned.outcome !== "pinned") return;
+			const { commandId: _phase1, ...fixedInput } = request;
+			return exchange(
+				fixedInput,
+				attempt,
+				pinned.receipt,
+				response.candidate,
+				signal,
+			);
+		}
 		return settle(response?.outcome === "rejected" ? "rejected" : "unknown");
+	}
+
+	/**
+	 * §13.5.6 exception confirm, phase 2: only while the same attempt still holds
+	 * and this confirm's first-pin receipt is committed. The phase is opened
+	 * with that receipt, its sending is committed before it is signed and sent,
+	 * and its result is settled under the same final predicate. A lost answer
+	 * stays unknown; nothing is resent.
+	 */
+	async function exchange(
+		fixedInput: Omit<ExchangeInput, "commandId" | "pinReceipt" | "candidate">,
+		attempt: {
+			readonly attemptId: string;
+			readonly attemptOwner: string;
+			readonly authorizationId: string;
+		},
+		committed: { readonly id: string; readonly candidateDigest: string },
+		candidate: ExchangeInput["candidate"],
+		signal: AbortSignal,
+	) {
+		const phase = await store.openConfirmPhase({
+			...attempt,
+			confirmCommandId: fixedInput.confirmCommandId,
+			phase: "confirm_exchange",
+		});
+		if (
+			!phase?.receipt ||
+			phase.receipt.id !== committed.id ||
+			phase.receipt.candidateDigest !== committed.candidateDigest
+		)
+			return;
+		const request: ExchangeInput = {
+			...fixedInput,
+			commandId: phase.phaseCommandId,
+			pinReceipt: phase.receipt,
+			candidate,
+		};
+		if (
+			!(await store.commitDelivery({
+				...attempt,
+				commandId: phase.phaseCommandId,
+				command: "confirm_exchange",
+				deliveryDigest: connectionInstallRequestDigestV1({
+					schemaVersion: 1,
+					contract: connectionManualConfirmContractV1,
+					phase: "exchange",
+					...request,
+				}),
+			}))
+		)
+			return;
+		let response: ConnectionInstallConfirmExchangeResponseV1 | undefined;
+		try {
+			response = await host.confirmExchange(request, signal);
+		} catch {
+			response = undefined;
+		}
+		return store.settleConfirmPhase({
+			...attempt,
+			confirmCommandId: fixedInput.confirmCommandId,
+			phaseCommandId: phase.phaseCommandId,
+			phase: "confirm_exchange",
+			outcome:
+				response?.outcome === "exchanged" || response?.outcome === "rejected"
+					? response.outcome
+					: "unknown",
+		});
 	}
 
 	async function begin(

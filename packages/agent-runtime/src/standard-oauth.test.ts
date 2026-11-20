@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	readConnectionMachineOAuthClientOutcomeV1,
 	readConnectionMachineOAuthClientV1,
 	registerConnectionMachineOAuthClientV1,
 	registerStandardOAuthClient,
@@ -121,6 +122,46 @@ describe("per-install OAuth DCR", () => {
 			);
 			expect(request.headers.get("cookie")).toBeNull();
 		}
+	});
+
+	// §13.5.1 item 2 (#4309 S1): only a well-formed 200 UNKNOWN is an answer.
+	it("keeps Connection's explicit UNKNOWN apart from a failed read", async () => {
+		const read = (fetch: () => Promise<Response>) =>
+			readConnectionMachineOAuthClientOutcomeV1({
+				endpoint: `${issuer}connection/v1/agents/agent-a/oauth-clients`,
+				serviceCredential: "conn_consumer_test-credential",
+				registrationKey: "install-agent-a-r1",
+				signal: new AbortController().signal,
+				assertCurrent() {},
+				fetch,
+			});
+		const unknown = { registrationVersion: 1, outcome: "UNKNOWN" };
+		await expect(
+			read(async () => response({ ...unknown, registration: null }, 200)),
+		).resolves.toEqual(unknown);
+		await expect(read(async () => response(unknown, 200))).resolves.toEqual(
+			unknown,
+		);
+		for (const failed of [
+			async () => response({ ...unknown, registration: null }, 503),
+			async () =>
+				response({ ...unknown, registration: { clientId: "client-a" } }, 200),
+			async () => response({ registrationVersion: 2, outcome: "UNKNOWN" }, 200),
+			async () => response({ registrationVersion: 1, outcome: "GONE" }, 200),
+			async () => Promise.reject(new TypeError("connection reset")),
+		])
+			await expect(read(failed)).rejects.toThrow();
+		// The fail-closed reader still refuses UNKNOWN for every other caller.
+		await expect(
+			readConnectionMachineOAuthClientV1({
+				endpoint: `${issuer}connection/v1/agents/agent-a/oauth-clients`,
+				serviceCredential: "conn_consumer_test-credential",
+				registrationKey: "install-agent-a-r1",
+				signal: new AbortController().signal,
+				assertCurrent() {},
+				fetch: async () => response({ ...unknown, registration: null }, 200),
+			}),
+		).rejects.toThrow();
 	});
 
 	it.each([
