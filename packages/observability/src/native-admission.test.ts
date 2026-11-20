@@ -131,3 +131,20 @@ it("drops private canaries from real logs and exported Trace attributes", async 
 		await new Promise<void>((resolve) => collector.close(() => resolve()));
 	}
 }, 10_000);
+
+it.each([401, 403])(
+	"does not call an identity rejection %s a dependency failure",
+	(status) => {
+		const values: unknown[] = [];
+		createNativeAdmissionTelemetry((v) => values.push(v)).observe({
+			stage: "identity.initial",
+			phase: "failed",
+			elapsedMs: 1,
+			error: Object.assign(new Error("PRIVATE_CANARY"), { status }),
+		});
+		expect(projectNativeAdmission(values[0])).toMatchObject({
+			reason: "UNKNOWN",
+		});
+		expect(JSON.stringify(values)).not.toContain("PRIVATE_CANARY");
+	},
+);

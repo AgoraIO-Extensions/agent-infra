@@ -102,16 +102,19 @@ export function createNativeAdmissionTelemetry(
 		try {
 			let current = error;
 			let sqlState: string | undefined;
+			let authorizationRejected = false;
 			for (
 				let depth = 0;
 				depth < 4 && current && typeof current === "object";
 				depth++
 			) {
 				const e = current as {
+					status?: unknown;
 					code?: unknown;
 					sqlState?: unknown;
 					cause?: unknown;
 				};
+				if (e.status === 401 || e.status === 403) authorizationRejected = true;
 				for (const code of [e.sqlState, e.code]) {
 					if (typeof code === "string" && sqlStates.has(code))
 						sqlState ??= code;
@@ -125,7 +128,8 @@ export function createNativeAdmissionTelemetry(
 							(error !== undefined &&
 								(stage === "store.lock" || stage === "store.query"))
 						? "store"
-						: error !== undefined &&
+						: !authorizationRejected &&
+								error !== undefined &&
 								(stage?.startsWith("metadata.") ||
 									stage?.startsWith("identity."))
 							? "dependency"
