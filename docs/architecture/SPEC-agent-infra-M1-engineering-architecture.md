@@ -2789,11 +2789,16 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 引用及摘要，凭据字节经另行认证并加密的内部私有接收通道交付给同一 Host。
 该材料只供 EP-1060 登记前机器认证，独立于 V1 MCP reader 的 metadata 与 Token 输入。
 
-凭据密文须通过附加认证数据（AAD）或等价的密码学机制，将载荷完整性绑定到同一份上下文。
-上下文包含目标 Host 的部署身份与 Host ref、Sandbox 标识、实际 Pod UID、
-sessionGeneration、resourceFence、供应引用及修订、投递 attempt 和模板摘要。
-Host 从本机可信身份与 Worker 回读的原投递记录取得预期上下文，解密前先逐项核对。
-只有上下文匹配且密文完整性认证通过，才向受保护的安装逻辑释放明文。任一校验失败即拒绝供应。
+凭据载荷必须使用 AES-256-GCM 进行 AEAD 加密，使用独立的附加认证数据（AAD）绑定
+同一投递上下文。每次加密生成新的 96-bit 随机 nonce，认证标签为 128-bit。Worker 和
+Host 共用同一版本的 AAD 编码。按下列固定顺序编码所有字段，不得省略、重排或增加字段：
+协议域标识 `agent-infra/connection-host-supply/v1`、目标 Host 的部署身份、Host ref、
+Sandbox 标识、实际 Pod UID、sessionGeneration、resourceFence、供应引用、供应修订、
+投递 attempt、模板摘要。每个字段由 4 字节大端无符号长度和对应 UTF-8 字节组成。代次和
+fence 使用无前导零的十进制安全正整数，模板摘要使用小写十六进制 SHA-256。Worker 和
+Host 从各自受信事实构造上下文，不从请求中的字段顺序或密文中推导。Host 在解密前逐项
+核对本机可信身份和 Worker 回读的原投递记录。上下文匹配且 AEAD 认证成功后才向受保护
+安装逻辑释放明文。任一校验失败即拒绝供应。
 
 验收须证明原目标可成功接收，已确认的同一 attempt 可幂等核实。保持当前签名和持久投递
 记录合法，分别换入原属其他 Host、重建前 Pod 或旧 attempt 的密文，三种情况均须拒绝，

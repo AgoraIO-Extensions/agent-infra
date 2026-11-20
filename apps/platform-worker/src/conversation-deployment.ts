@@ -42,6 +42,8 @@ import {
 	runtimeConnectionInstallationOAuthPublicationForAgentV1,
 	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
+import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
+import { sessionSandboxConnectionInstallTokenV1 } from "./connection-install-readback-server.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -596,10 +598,12 @@ export function createSessionSandboxResourceInputResolverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
 	const egressPolicy = structuredClone(workload.policy);
+	const install = options.connectionInstallBootstrap;
 	if (workload.policy.codexSessionExecutor !== undefined)
 		validateCodexSessionExecutorPolicyV1(workload.policy.codexSessionExecutor);
 	workloadEgressRulesV1(egressPolicy);
@@ -836,6 +840,29 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(install &&
+			runtime?.driver === "codex" &&
+			templateBinding &&
+			!runtime.custom
+				? {
+						connectionInstallBootstrap: {
+							port: install.port,
+							workerOrigin: install.workerOrigin,
+							apiSelector: install.apiSelector,
+							clientName: install.clientName,
+							configuration: install.configuration,
+							approval: install.approval,
+							tlsSecretRef: install.tlsSecretForSandbox(binding.resourceName),
+							callbackAuthSecretRef: install.callbackAuthSecretRef,
+							workerCaSecretRef: install.workerCaSecretRef,
+							installToken: sessionSandboxConnectionInstallTokenV1(
+								options.serviceToken,
+								policy.namespace,
+								binding.sandboxId,
+							),
+						},
+					}
+				: {}),
 			...(runtime?.sessionExecutor &&
 			workload.policy.codexSessionExecutor !== undefined
 				? {
@@ -1074,6 +1101,7 @@ function createSessionSandboxAllocationResolverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
@@ -1255,6 +1283,7 @@ export function createProductionSessionSandboxReceiverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 		readonly executorDrainStartupTimeoutMs?: number;
 		readonly executorIdentityIssuer?: ConversationRuntimeOptionsV2["signing"]["privateKey"];
 	},

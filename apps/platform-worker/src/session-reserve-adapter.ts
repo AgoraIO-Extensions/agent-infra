@@ -16,6 +16,7 @@ import type {
 	V1Pod,
 	V1Service,
 } from "@kubernetes/client-node";
+import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import { createSessionSandboxResourceInputResolverV1 } from "./conversation-deployment.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
@@ -54,6 +55,7 @@ export interface SessionSandboxReserveAdapterOptionsV1 {
 		| "connectionDeliveryCurrent"
 	>;
 	readonly serviceToken: string;
+	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 	readonly fetch?: typeof fetch;
 }
 
@@ -216,6 +218,9 @@ export function createSessionSandboxReserveResourceInputV1(
 		throw new WorkloadKubernetesError("policy");
 	return createSessionSandboxResourceInputResolverV1(options.workload, {
 		serviceToken: options.serviceToken,
+		...(options.connectionInstallBootstrap
+			? { connectionInstallBootstrap: options.connectionInstallBootstrap }
+			: {}),
 	})(
 		{
 			schemaVersion: 1,

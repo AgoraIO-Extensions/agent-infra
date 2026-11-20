@@ -6,6 +6,7 @@ import {
 	type SessionSandboxImageProjectionInputV1,
 } from "@agent-infra/platform-store";
 import { sessionExecutorPodProjectionV1 } from "./codex-session-executor.js";
+import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import { createSessionSandboxResourceInputResolverV1 } from "./conversation-deployment.js";
 import { workloadImagePullSpecV1 } from "./kubernetes-runtime-comparison.js";
 import { selectSessionOAuthProvisioningV1 } from "./session-oauth-provisioning-selection.js";
@@ -88,6 +89,7 @@ export interface SessionDemandImageAuthorityV1 {
 	>;
 	readonly serviceToken: string;
 	readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 }
 
 /** Each authority assignment binds a real Store row/input, not a caller-supplied completeness flag. */
@@ -141,7 +143,15 @@ export async function projectSessionDemandImagesV1(input: {
 				if (desired.desiredState === "disabled") throw new Error();
 				const resolve = createSessionSandboxResourceInputResolverV1(
 					authority.workload,
-					{ serviceToken: authority.serviceToken },
+					{
+						serviceToken: authority.serviceToken,
+						...(authority.connectionInstallBootstrap
+							? {
+									connectionInstallBootstrap:
+										authority.connectionInstallBootstrap,
+								}
+							: {}),
+					},
 				);
 				let allocation: SessionSandboxAllocationV1 = {
 					...resolve(
