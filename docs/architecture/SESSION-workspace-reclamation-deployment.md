@@ -113,7 +113,8 @@ COMMIT;
 Files 复核确认，WAL 函数写入调用者提供的消息，权限限于该函数行为。它不授予业务数据读取，
 也不创建角色拥有的对象。无逻辑槽降低现有解码端消费消息的风险，WAL 和 I/O 开销仍可能发生。
 一次性 Job 使用短登录窗口和最多两个连接，收尾执行 NOLOGIN 与全实例依赖回读。后续收紧范围由
-[#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪。
+[#4239](https://github.com/AgoraIO-Extensions/agent-infra/issues/4239) 跟踪，实施和回退见
+[Platform 数据库函数权限手册](PLATFORM-database-function-execute-hardening.md)。
 
 #### 已批准的连接例外
 
