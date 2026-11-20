@@ -9,7 +9,8 @@
 维护，本 ADR 只记录取舍、风险和接受依据，不单独覆盖两份 PRD、工程 Spec 或 HLD。
 
 例外在 Connection 原 OAuth 事务回读合同（[EP-1123](https://jira.agoralab.co/browse/EP-1123)）
-发布并获部署批准后失效，最晚到 M1 结束。
+发布并获部署批准后失效，最迟在部署批准的 UTC 截止时间 `notAfter`（不晚于 M1 结束）到期；
+到期时已有例外安装的处理见工程 Spec §13.5.1 例外第 8 项。
 
 ## 问题
 
@@ -28,15 +29,19 @@ main `2019ca075149ec5184ceadc06d923b69e64c37e5` 的
 `packages/connection-store/src/oauth-repository.ts` 批准事务（L1567–1582）以
 `principal_id IS NULL OR principal_id = 当前 Principal` 为条件更新实例，另一 Principal 再批准同一
 实例返回 `access_denied`。所以一个安装只会绑定一个 Principal，换码前读到的 `principalId` 就是
-token 将绑定的 Principal。缺的是这个不透明 ID 与公司员工的对应关系。
+token 将绑定的 Principal。这一行为不在 EP-1060 已发布合同中，工程 Spec §13.5.1 例外第 1 项把它
+列为启用前提，并把例外批准绑定到已核实的 Connection 版本。缺的是这个不透明 ID 与公司员工的
+对应关系。
 
 ## 决策
 
 M1 期间，动态手工安装用“换码前回读 EP-1060 的实例 `principalId`，再做一致性约束”代替与预期
 映射的核对：一个 `principalId` 只能对应一个 Platform 用户；一个 Platform 用户首次通过的
-`principalId` 固定下来，之后所有安装必须相同；首次绑定后由非实现方的验收 lane 在 Connection
-管理端调用审计中人工核对；例外安装带 `consistency-exception-v1` 标记，EP-1123 获批后逐一回溯
-核对。触发条件、补偿和失效的完整规则见工程 Spec §13.5.1。
+`principalId` 固定下来，之后所有安装必须相同；可首次固定的 `principalId` 总数受部署批准的
+上限约束；首次绑定后由 Connection 管理员或其书面指定的非实现方在 Connection 管理端调用审计中
+限期人工核对，超期或不一致即封闭并撤销；例外安装带 `consistency-exception-v1` 标记，到达
+`notAfter` 时全部封闭并撤销，EP-1123 先获批时逐一回溯核对。前提、触发条件、补偿和失效的完整
+规则见工程 Spec §13.5.1。
 
 每个使用者照常用自己的身份为自己发起安装，Owner 关联 Agent 时不需要任何批准动作，与
 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)
@@ -58,7 +63,9 @@ Grant。
   或同一浏览器登录了别人的 Connection 账号。
 - 受害者用自己的公司账号在 Connection 上批准了一个不属于自己的链接，属于同公司内部的诱导授权。
 - 受害者已经在同一个 Agent 的 Consumer 上有 Grant，或者又被诱导去授权。
-- 试点只有两个测试用户、专用的 GitHub 测试账号和一个受控的 private 仓库，影响面限于测试资源。
+- 试点只有两个测试用户，由部署批准 `maximumPinnedPrincipals` 为 2，按工程 Spec §13.5.1 例外
+  第 3 项在换码前强制；外部账号限于专用的 GitHub 测试账号和一个受控的 private 仓库，影响面限于
+  测试资源。
 
 更现实的一种情况是误操作：测试人员在同一个浏览器里登录着另一个测试账号去批准。一致性约束
 和人工核对可以发现这种情况。
@@ -76,12 +83,14 @@ Grant。
 | 从已发布接口取得 `issuer + stable uid` | 不可行。Connection 没有对应接口，推断主体被工程 Spec 禁止。 |
 | EP-1060 回读加一致性约束，并只允许 Owner 本人安装 | 不选。只允许 Owner 安装与 PRD §9.1 的按使用者身份模型冲突，需要改 PRD。 |
 | EP-1060 回读加一致性约束，使用者照常为自己安装 | 选用。不改 PRD 和 Connection；错绑由唯一性、首次固定、人工核对和回溯核对发现并撤销。 |
+| 试点界限只写在 ADR | 不选。使用者不限于 Owner 后例外覆盖全部使用者，界限须由工程 Spec 的批准上限强制。 |
+| 到达 `notAfter` 后保留已核对的例外安装 | 不选。EP-1123 不来时例外会无限期有效；到期统一封闭撤销，使用者按届时有效路径重装。 |
 
 EP-1123 获批后另开后续 PR：接入事务回读、完成回溯核对并移除例外。
 
 ## 验证
 
-工程 Spec §13.5.7 的动态手工 confirm 验收覆盖例外的负例：`principalId` 为空、实例非 `ACTIVE`、
-违反唯一性、违反首次固定、例外未批准或已失效时不换码并撤销；并发首次绑定只有一次成功；
-管理员解除固定前不能换绑；回溯核对封闭不一致的安装。首次绑定的人工核对和 #4157 AC-4、
-AC-6 的真实验收由非实现方在目标环境完成，源码测试不能代替。
+例外负例的验收见
+[工程 Spec §13.5.7](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
+动态手工 confirm 验收。首次绑定的人工核对和 #4157 AC-4、AC-6 的真实验收由非实现方在目标环境
+完成，源码测试不能代替。

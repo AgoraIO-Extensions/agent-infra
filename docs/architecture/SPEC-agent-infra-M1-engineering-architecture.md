@@ -2372,30 +2372,64 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 **M1 限时例外：按使用者首次绑定锁定。** Connection 尚未发布原 OAuth 事务回读合同
 （[EP-1123](https://jira.agoralab.co/browse/EP-1123)）时，动态手工安装可按本例外启用，不使用
 上述主体映射规则。部署须显式批准例外策略 `consistency-exception-v1` 的 `ref/revision`，并绑定
-同一系统接入指纹及审批来源修订；未批准时动态手工安装保持关闭。例外在 EP-1123 发布并获部署
-批准后失效，最晚到 M1 结束；失效后不再受理新的例外安装。风险接受与取舍见
-[ADR-0046](../adr/0046-m1-connection-principal-first-binding-exception.md)。
+同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
+固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
+（不超过 24）以及已核实第 1 项前提的 Connection 发布版本或修订。任一项缺失或无效时，动态手工安装
+保持关闭。风险接受与取舍见 [ADR-0046](../adr/0046-m1-connection-principal-first-binding-exception.md)。
 
-1. **换码前回读。** 原回跳已确认、原平台用户已明确确认后，Host 在读取 code 和 verifier 前，按
+1. **前提：Connection 实例绑定不变式。** Connection 批准 OAuth 授权时，只在 DEVICE 实例尚未绑定
+   Principal 或已绑定同一 Principal 时成功，并在同一事务把该 Principal 写入实例；其他 Principal
+   批准同一实例返回 `access_denied`。因此同一安装发出的授权码都属于实例绑定的 Principal。该行为
+   不在 EP-1060 已发布合同中，证据为 agora-connector `2019ca075149ec5184ceadc06d923b69e64c37e5`
+   的 `packages/connection-store/src/oauth-repository.ts` L1567–1582。Connection 升级到未核实的
+   版本前，部署负责人先撤回例外批准；重新只读核实并以新修订批准前，例外保持关闭。
+2. **换码前回读。** 原回跳已确认、原平台用户已明确确认后，Host 在读取 code 和 verifier 前，按
    §13.5.6 的实际安装绑定回读，用 EP-1060 读取本安装的登记键。同时满足以下条件才继续：结果为
    `KNOWN`；`principalId` 非空；client、DEVICE 实例、Consumer、`redirectUri`、`resource` 和
-   `scope` 与原安装一致；`instanceStatus` 为 `ACTIVE`；通过第 2 项的一致性约束。任一项不满足时
-   不换码，按 §13.5.7 的逐安装撤销用原键 EP-1060 `DELETE` 撤销该 client 和实例，安装记为
-   “主体未核实，已关闭”。
-2. **一致性约束。** Platform DB 持久保存 Connection `principalId` 与 Platform 用户的绑定。同一
-   `principalId` 最多对应一个 Platform 用户，跨全部 Agent 计算。一个 Platform 用户首次通过的
-   `principalId` 固定，此后该用户的所有例外安装必须相同；变更只能由平台管理员经受审计的操作
-   先解除固定。首次固定与原 claim、原授权的核对在同一 Store CAS 中提交，并发的首次绑定只有
-   一个成功。
-3. **补偿。** 每个 `principalId` 首次绑定后，由非实现方的验收 lane 在 Connection 管理端的调用
-   审计中核对它属于预期员工，并把结果留作 Issue 证据；核对前安装可以使用，安装记录和审计标注
-   “主体待核对”。记录 EP-1060 回读的非秘密字段、Platform 用户、Agent、安装与关联修订、授权
-   引用、确认时间、Host/Pod，以及 token 响应的有效期和 scope；不记录 code、verifier、token
-   或服务凭据。撤销沿用 §13.5.7 的逐安装撤销和关联解除。EP-1123 发布并获部署批准后，对全部
-   例外安装逐一回溯核对映射，不一致的立即封闭并撤销，并留审计。
-4. **发布标记。** 例外安装的发布回执以 EP-1060 回读的 `principalId` 作为
-   `connectionPrincipalId`，并标注 `principalMapping=consistency-exception-v1`。该标记只用于审计
-   和回溯，不表示已按主体映射规则核实。
+   `scope` 与原安装一致；`instanceStatus` 为 `ACTIVE`；当前时间早于 `notAfter`；通过第 3 项的
+   一致性约束。任一项不满足时不换码，按 §13.5.7 的逐安装撤销用原键 EP-1060 `DELETE` 撤销该
+   client 和实例，安装记为“主体未核实，已关闭”。§13.5.6 动态手工 confirm 的事务回读段在例外期内
+   这样适用：用批准的服务身份回读、核对 issuer、client/Consumer/实例、登记键、resource/scope
+   和精确回调，照常执行；与预期映射的核对由第 3 项代替；EP-1060 的 DEVICE Principal 依第 1 项
+   作为本安装全部授权码的主体；不要求定位 Connection 授权事务，单次消费由 Platform 回跳 state 的
+   一次性消费和 Connection 换码时对 code 的原子消费保证；Worker 核对原 claim 与原授权、Host 私有
+   安装事务的 CAS、CAS 后再次核对原授权、结果不明时拒绝兑换，以及换码后才回读不满足门禁，均不变。
+3. **一致性约束。** Platform DB 以 Connection issuer 加 `principalId` 为键，持久保存与 Platform
+   用户的绑定，并把非例外路径已确认的 `principalId`（`principalBindingsByAgentAndPrincipal` 及
+   标准安装回执的 `connectionPrincipalId`）一并计入。同一键最多对应一个 Platform 用户，跨全部
+   Agent 计算。一个 Platform 用户首次通过的 `principalId` 固定，此后该用户的所有例外安装必须相同。
+   首次固定与原 claim、原授权的核对在同一 Store CAS 中提交：同一用户、同一 `principalId` 的并发
+   安装，后到者按与已固定值一致通过；不同用户争同一 `principalId` 时只有一个成功，另一个按第 2 项
+   拒绝并撤销，并按第 4 项处理冲突。当前有效的例外固定数达到 `maximumPinnedPrincipals` 时，新的
+   首次固定按第 2 项拒绝。
+4. **人工核对。** 核对人为 Connection 管理员，或其书面指定、持有 Connection 管理端调用审计只读
+   权限的非实现方；Platform 管理员权限不继承 Connection 管理权限，见
+   [Platform PRD §13.2](../prd/PRD-agent-platform-M1.md#132-查询与权限)。核对入口为 Connection
+   管理端“操作记录”（`GET /api/v1/connection/admin/action-calls`），按 `principalId` 和
+   `consumerId` 过滤，读出 `person`、`email` 与 `instanceId`，核对它们属于该 Platform 用户对应的
+   员工。首次固定后，安装在核对完成前可以使用；首次真实调用产生审计记录后即可核对，须在首次固定
+   后 `verificationWindowHours` 内完成。平台管理员依核对人的书面结论，经受审计的运维操作把结果
+   记入安装记录，并在对应 Issue 留证。
+   - 核对一致：解除“主体待核对”标注，安装照常。
+   - 超期未核对或核对不一致：Core 停止为该用户的全部例外安装签发 MCP 许可，Worker 封闭这些安装并
+     按 §13.5.7 逐安装撤销；核对不一致时同时解除该用户的固定，并留审计。
+   - 第 3 项的唯一性冲突：除拒绝后来者外，Core 立即停止为持有该 `principalId` 的用户的例外安装签发
+     新的 MCP 许可，已签发许可按原期限失效，并转入核对。持有方核对一致后恢复签发；不一致时按上一条
+     处理，后来者可在解除固定后重新安装。
+5. **标注不新增产品状态。** “主体待核对”“主体未核实，已关闭”只是安装记录和审计中的标注。
+   用户界面和 API 只呈现 Platform PRD §9.1 已有的状态，不新增状态。
+6. **解除固定。** 只能由平台管理员经受审计的运维或管理员操作执行，不新增产品界面。解除前，先按
+   §13.5.7 封闭并撤销该用户已有的例外安装。
+7. **记录与发布标记。** 记录 EP-1060 回读的非秘密字段、Platform 用户、Agent、安装与关联修订、
+   授权引用、确认时间、Host/Pod，以及 token 响应的有效期和 scope；不记录 code、verifier、token
+   或服务凭据。例外安装的发布回执以 EP-1060 回读的 `principalId` 作为 `connectionPrincipalId`，
+   并标注 `principalMapping=consistency-exception-v1`。该标记只用于审计和回溯，不表示已按主体
+   映射规则核实。
+8. **失效。** 到达 `notAfter` 或 EP-1123 发布并获部署批准后，例外不再受理新的安装。到达
+   `notAfter` 时 EP-1123 仍未获批的，Core 停止为全部例外安装签发 MCP 许可，Worker 封闭并按
+   §13.5.7 逐安装撤销这些安装；使用者按届时有效的路径重新安装。EP-1123 在 `notAfter` 之前获批的，
+   对全部例外安装逐一回溯核对映射，不一致或无法核实的封闭并撤销，留审计；延长 `notAfter` 须以新
+   修订重新批准，并重新完成风险接受。
 
 例外期内，§13.5.6 对动态手工安装的可信映射、批准映射、预期 Principal 及用户索引主体映射的要求
 均按本例外执行。Worker claim 核对、Host CAS、单次换码以及失败和未知结果的处理不变；
@@ -2719,7 +2753,8 @@ Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的
 原回跳已确认且原平台用户明确确认后，Host 用批准的服务身份回读，核对实际 Principal 与
 §13.5.1 的预期映射，并核对 issuer、同一 client/Consumer/实例、登记键、resource/scope、精确
 回调及本次已批准、未消费的 OAuth 授权事务。EP-1060 按登记键返回的登记及 DEVICE Principal
-只证明登记与实例绑定。Host 先经 Worker 只读核对 Store 中的当前原 claim 和原授权，再在同一
+只证明登记与实例绑定；§13.5.1 例外期内另依该例外第 1 项的前提，逐句适用方式见该例外第 2 项。
+Host 先经 Worker 只读核对 Store 中的当前原 claim 和原授权，再在同一
 Host 私有安装事务用 CAS 固定本次 confirm 的非秘密绑定证据引用及修订。CAS 成功并再次核对
 原授权后才读取兑换材料。结果不明、证据不完整或 CAS 不匹配时保留待核实并拒绝兑换。
 仅在换码后提供的回读不满足启用门禁。
@@ -3380,8 +3415,11 @@ status 单独替换原用户、Agent 或安装时，Host 须在读取材料及�
 修订漂移、错 Principal、同登记键的另一授权事务、回读或部署批准缺失、证据不完整、迟到结果
 及 CAS 冲突，断言不读取兑换材料、不换码、不启用 MCP。
 §13.5.1 例外期内，“错 Principal”分支改为：`principalId` 为空、实例非 `ACTIVE`、违反唯一性、
-违反首次固定、例外未批准或已失效，均断言不换码并按原键撤销。另验证并发的首次绑定只有一次
-成功，管理员解除固定前不能换绑，回溯核对把不一致的安装封闭并撤销。
+违反首次固定、例外固定数已达 `maximumPinnedPrincipals`、例外未批准、批准缺项或已到 `notAfter`，
+均断言不换码并按原键撤销。另验证：并发的首次绑定只有一次成功，同一用户、同一 `principalId`
+的并发安装均通过；唯一性冲突时持有方停止获得新的 MCP 许可，核对一致后恢复；超期未核对、
+核对不一致及到达 `notAfter` 时停止签发许可并逐安装封闭撤销；管理员解除固定前不能换绑；
+回溯核对把不一致的安装封闭并撤销；用户界面和 API 只呈现 Platform PRD §9.1 已有的状态。
 换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
 首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
 可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
