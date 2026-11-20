@@ -154,30 +154,41 @@ export function openPrivateExecutorV1(cwd: string, home: string) {
 					enforceManagedNetwork: false,
 				});
 				if (started.error) throw new Error();
-				const exited = await request("process/read", {
-					processId,
-					afterSeq: 0,
-					maxBytes: 1024,
-					waitMs: 1000,
-				});
-				const result = exited.result as
-					| {
-							exited?: boolean;
-							closed?: boolean;
-							exitCode?: number;
-							failure?: unknown;
-							sandboxDenied?: boolean;
-					  }
-					| undefined;
-				if (
-					exited.error ||
-					!result?.exited ||
-					!result.closed ||
-					result.exitCode !== 0 ||
-					result.failure ||
-					result.sandboxDenied
-				)
-					throw new Error();
+				const deadline = Date.now() + 2000;
+				while (true) {
+					const remaining = deadline - Date.now();
+					if (remaining <= 0) throw new Error();
+					const exited = await request(
+						"process/read",
+						{
+							processId,
+							afterSeq: 0,
+							maxBytes: 1024,
+							waitMs: Math.min(1000, remaining),
+						},
+						remaining,
+					);
+					const result = exited.result as
+						| {
+								exited?: boolean;
+								closed?: boolean;
+								exitCode?: number;
+								failure?: unknown;
+								sandboxDenied?: boolean;
+						  }
+						| undefined;
+					if (
+						exited.error ||
+						!result ||
+						result.failure ||
+						result.sandboxDenied ||
+						(result.exited && result.exitCode !== 0)
+					)
+						throw new Error();
+					if (result.exited && result.closed) break;
+					// Exit and pipe closure are separate native observations of the same probe.
+					await new Promise<void>((resolve) => setTimeout(resolve, 5));
+				}
 			} catch {
 				close();
 				throw new Error("CODEX_EXECUTOR_LAUNCH_NOT_ISOLATED");
