@@ -449,7 +449,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			fence: 1,
 			phase: "ready",
 			candidate: version,
-			verified: version,
+			verified: { ...version, persistentVolumeUid: "retained-original-claim" },
 			verifiedRevision: 1,
 			identity,
 			rollback: false,

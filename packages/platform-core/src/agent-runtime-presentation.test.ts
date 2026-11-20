@@ -13,6 +13,7 @@ import {
 	presentAgentConnectionAssociationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
+import { isEvaluationFileRuntimeCurrentV1 } from "./evaluation-task-binding.js";
 import {
 	createWorkloadReconciliationV1,
 	type WorkloadBrowserCapabilityProjectionV1,
@@ -105,6 +106,47 @@ function fixture() {
 }
 
 describe("Agent runtime presentation policy", () => {
+	it("uses the same verified version for presentation and Eval when it carries a PVC UID", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error("Missing Runtime fixture");
+		const state = {
+			...runtime.state,
+			verified: {
+				...runtime.state.candidate,
+				persistentVolumeUid: "retained-volume",
+			},
+			capabilities: { modelSelection: true, attachments: true },
+		};
+		const facts = { ...input.facts, runtime: { ...runtime, state } };
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toMatchObject(
+			{
+				outcome: "found",
+				capabilities: { modelSelection: true },
+			},
+		);
+		const evaluation = {
+			configurationRevision: state.sourceConfigurationRevision,
+			workload: state,
+			status: "available",
+			desiredState: "running",
+			serviceAvailability: "ready",
+			workloadRevision: state.sourceLifecycleRevision,
+			fence: state.fence,
+			kind: "attachment" as const,
+		};
+		expect(isEvaluationFileRuntimeCurrentV1(evaluation)).toBe(true);
+		expect(
+			isEvaluationFileRuntimeCurrentV1({
+				...evaluation,
+				workload: {
+					...state,
+					candidate: { ...state.candidate, deployment: {} },
+				},
+			}),
+		).toBe(false);
+	});
+
 	it("fails closed when Browser is declared but verified projection is missing", () => {
 		const input = fixture();
 		const runtime = input.facts.runtime;

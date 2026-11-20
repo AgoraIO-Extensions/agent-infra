@@ -166,6 +166,21 @@ describe("Core dispatch capacity decision", () => {
 			decideConversationDispatchCapacityV1({ ...snapshot(), agentId: "other" }),
 		).toBe("capacity_unavailable");
 	});
+	it("admits capacity with a retained PVC UID recorded only on verified", () => {
+		const state = snapshot();
+		expect(
+			decideConversationDispatchCapacityV1({
+				...state,
+				workload: {
+					...state.workload,
+					verified: {
+						...state.workload.candidate,
+						persistentVolumeUid: "retained-claim",
+					},
+				},
+			}),
+		).toBe("admit");
+	});
 	it("requires a verified current candidate and current resource/image binding", () => {
 		const state = snapshot();
 		expect(
