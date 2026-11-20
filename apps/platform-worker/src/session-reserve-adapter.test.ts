@@ -437,14 +437,13 @@ describe("Session reserve resource adapter", () => {
 			await expect(f.adapter.render({ ...f.claim, profile })).rejects.toThrow();
 		expect(f.create).not.toHaveBeenCalled();
 	});
-	it("rejects Codex reserves when independent execution is enabled, even with a current policy hash", async () => {
+	it("rejects Codex reserve input when independent execution is enabled, even with a current policy hash", () => {
 		const f = fixture("codex", {
 			policy: { codexSessionExecutor: executorPolicy },
 		});
-		await expect(f.adapter.render(f.claim)).rejects.toMatchObject({
-			code: "policy",
-		});
-		expect(f.create).not.toHaveBeenCalled();
+		expect(() =>
+			createSessionSandboxReserveResourceInputV1(f.options, f.claim),
+		).toThrow(expect.objectContaining({ code: "policy" }));
 	});
 	it("rejects a previous layout hash, untrusted template and business subject before reserve writes", async () => {
 		const f = fixture("claude", {
@@ -555,14 +554,26 @@ describe("Session reserve resource adapter", () => {
 			for (const object of objects) {
 				const identity = f.identity(object);
 				await expect(f.adapter.remove(f.claim, identity)).rejects.toThrow();
+				const current = required(
+					f.objects.get(`${identity.kind}/${identity.name}`),
+				);
+				required(current.metadata).resourceVersion = "2";
+				const currentIdentity = f.identity(current);
 				await expect(
-					f.adapter.remove(retiring, { ...identity, uid: randomUUID() }),
-				).rejects.toThrow();
+					f.adapter.remove(retiring, { ...currentIdentity, uid: randomUUID() }),
+				).rejects.toMatchObject({ code: "conflict" });
 				await expect(
-					f.adapter.remove(retiring, { ...identity, resourceVersion: "stale" }),
-				).rejects.toThrow();
-				expect(await f.adapter.remove(retiring, identity)).toBe("acknowledged");
-				expect(await f.adapter.remove(retiring, identity)).toBe("absent");
+					f.adapter.remove(retiring, identity),
+				).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(await f.adapter.remove(retiring, currentIdentity)).toBe(
+					"acknowledged",
+				);
+				expect(f.remove).toHaveBeenLastCalledWith(current);
+				expect(await f.adapter.remove(retiring, currentIdentity)).toBe(
+					"absent",
+				);
 			}
 			expect(f.remove).toHaveBeenCalledTimes(6);
 		},

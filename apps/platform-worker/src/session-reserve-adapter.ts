@@ -211,6 +211,7 @@ export function createSessionSandboxReserveResourceInputV1(
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Independent Codex executors require a business binding and promotion receipt.
+	// Replace this guard when the #4248 option B promotion contract is implemented.
 	if (template.driver === "codex" && policy.codexSessionExecutor !== undefined)
 		throw new WorkloadKubernetesError("policy");
 	return createSessionSandboxResourceInputResolverV1(options.workload, {
