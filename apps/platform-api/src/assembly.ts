@@ -1080,7 +1080,9 @@ export function assemblePlatformApi(
 					}),
 					admitWithIdentity: async ({ identity, request, requestContext }) => {
 						if (request.schemaVersion === 3) {
-							const authorizeV6 = async () => {
+							const authorizeV6 = async (
+								readAuthorization = conversationTransaction.readNativeCapabilityV6Authorization,
+							) => {
 								const decision = await conversationAuthorization.authorize(
 									identity,
 									{
@@ -1089,19 +1091,20 @@ export function assemblePlatformApi(
 										conversationId: request.conversationId,
 									},
 								);
+								if (decision.outcome === "unavailable")
+									throw new Error(
+										"Native capability authorization unavailable",
+									);
 								if (decision.outcome !== "allowed")
 									return { outcome: "denied" as const };
 								requestContext.confirmPolicy(
 									decision.authority,
 									request.conversationId,
 								);
-								const snapshot =
-									await conversationTransaction.readNativeCapabilityV6Authorization(
-										{
-											authority: decision.authority,
-											conversationId: request.conversationId,
-										},
-									);
+								const snapshot = await readAuthorization({
+									authority: decision.authority,
+									conversationId: request.conversationId,
+								});
 								if (!snapshot) return { outcome: "denied" as const };
 								return { outcome: "allowed" as const, snapshot };
 							};
@@ -1163,8 +1166,8 @@ export function assemblePlatformApi(
 							};
 							const useCase = createNativeCapabilityAdmissionUseCaseV6({
 								authorization: {
-									authorize: async () => {
-										const next = await authorizeV6();
+									authorize: async (_request, readAuthorization) => {
+										const next = await authorizeV6(readAuthorization);
 										return next.outcome === "allowed"
 											? {
 													outcome: "allowed" as const,

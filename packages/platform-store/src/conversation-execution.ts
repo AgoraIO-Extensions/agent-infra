@@ -26,9 +26,9 @@ import {
 	type NativeCapabilityAdmissionDecisionV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
 	type NativeCapabilityAdmissionTransactionPortV6,
-	type NativeCapabilityAdmissionV6AuthorityBinding,
+	type NativeCapabilityAdmissionV6AuthorizationReader,
+	type NativeCapabilityAdmissionV6AuthorizationSnapshot,
 	type NativeCapabilityAdmissionV6Decision,
-	type NativeCapabilityAdmissionV6KeyBinding,
 	type NativeCapabilityInvocationPlanV1,
 	type NativeCapabilityInvocationPlanV6,
 	type NativeTextInputV1,
@@ -175,18 +175,6 @@ type NativeAdmissionCurrent = Parameters<
 type NativeAdmissionAuthorized = Parameters<
 	NativeCapabilityAdmissionTransactionPortV1["admitNativeCapability"]
 >[3];
-
-export type NativeCapabilityV6AuthorizationSnapshotV1 = Readonly<{
-	readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
-	readonly taskAuthority: ConversationExecutionAuthorityV1;
-	readonly modelConfigurationRevision: number;
-	readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
-	readonly executionSource: import("@agent-infra/platform-core").ConversationExecutionSourceV1;
-	readonly sessionGeneration: number;
-	readonly hostSessionRef: string;
-	readonly configVersion: string;
-	readonly metadataExecutionId: string;
-}>;
 
 function nativePlanAttachments(
 	value: unknown,
@@ -628,7 +616,9 @@ export class PostgresConversationExecutionTransactionV1
 		candidate: Parameters<
 			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
 		>[0],
-		isAuthorized: () => Promise<boolean>,
+		isAuthorized: (
+			readAuthorization: NativeCapabilityAdmissionV6AuthorizationReader,
+		) => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionV6Decision> {
 		const input = structuredClone(candidate);
 		return this.#transaction(async (transaction) => {
@@ -659,7 +649,16 @@ export class PostgresConversationExecutionTransactionV1
 				conversation.hostSessionRef !== input.authority.hostSessionRef
 			)
 				return { outcome: "denied", reason: "authorization_lost" };
-			if (!(await isAuthorized()))
+			// Recheck current authority with this transaction's already locked rows.
+			const readAuthorization: NativeCapabilityAdmissionV6AuthorizationReader =
+				(authorization) =>
+					this.#readNativeCapabilityV6Authorization(
+						transaction,
+						authorization,
+						agent,
+						conversation,
+					);
+			if (!(await isAuthorized(readAuthorization)))
 				return { outcome: "denied", reason: "authorization_lost" };
 			const scope = {
 				scopeType: "conversation",
@@ -744,7 +743,7 @@ export class PostgresConversationExecutionTransactionV1
 				executionBinding?.executionSource !== input.plan.executionSource ||
 				currentKey.keyId !== input.keyBinding.ciphertextRef ||
 				currentKey.keyVersion !== input.keyBinding.version ||
-				!(await isAuthorized())
+				!(await isAuthorized(readAuthorization))
 			)
 				return { outcome: "denied", reason: "authorization_lost" };
 			const occurredAt = new Date();
@@ -810,96 +809,106 @@ export class PostgresConversationExecutionTransactionV1
 	}
 
 	/** Resolve the trusted V6 admission tuple before Core freezes a new operation. */
-	async readNativeCapabilityV6Authorization(input: {
-		readonly authority: ConversationExecutionAuthorityV1;
-		readonly conversationId: string;
-	}): Promise<NativeCapabilityV6AuthorizationSnapshotV1 | null> {
-		return this.#transaction(async (transaction) => {
-			const authority = parseAuthority(input.authority);
-			const agent = await lockAgentConfiguration(
-				transaction,
-				authority.agentId,
-			);
-			const conversation = await lockConversation(
-				transaction,
-				text(input.conversationId),
-			);
-			if (
-				!agent ||
-				!conversation ||
-				conversation.conversationId !== input.conversationId ||
-				!matchesBinding(conversation, authority) ||
-				conversation.authorizationRevision !==
-					authority.authorizationRevision ||
-				conversation.status !== "ready" ||
-				conversation.sandboxReady !== true ||
-				!conversation.hostSessionRef ||
-				!agent.runtimeConfiguration
-			)
-				return null;
-			const state = await readMessageState(transaction, conversation);
-			const [metadataExecution] = await transaction<{ execution_id: string }[]>`
-				select e.execution_id
-				from platform.conversation_executions e
-				where e.conversation_id = ${conversation.conversationId}
-					and e.agent_id = ${conversation.agentId}
-					and e.actor_id = ${conversation.actorId}
-					and e.channel_id = ${conversation.channelId}
-					and e.principal_type = ${conversation.principal?.kind ?? "user"}
-					and e.session_generation = ${conversation.sessionGeneration}
-					and e.authorization_revision = ${conversation.authorizationRevision}
-					and coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) = ${conversation.hostSessionRef}
-				order by e.updated_at desc, e.execution_id
-				limit 1
-			`;
-			if (!metadataExecution?.execution_id) return null;
-			const executionBinding =
-				await currentConversationExecutionRelayKeyBindingV1(transaction, {
-					authority,
-					userDirectory: this.#userDirectory,
-					personalApiAdmissionAuthority:
-						authority.personalApiAdmissionAuthority,
-				});
-			if (
-				!executionBinding?.relayKeyBinding ||
-				!executionBinding.executionSource ||
-				!state.modelConfiguration
-			)
-				return null;
-			const keyBinding = executionBinding.relayKeyBinding;
-			return {
-				authority: {
-					conversationId: conversation.conversationId,
-					principal: parseTaskPrincipalV1(
-						authority.taskBoundary?.principal ?? {
-							kind: "user",
-							id: authority.actorId,
-						},
-					),
-					executionSource: executionBinding.executionSource,
-					agentId: authority.agentId,
-					actorId: authority.actorId,
-					channelId: authority.channelId,
-					authorizationRevision: authority.authorizationRevision,
-					sessionGeneration: conversation.sessionGeneration,
-					hostSessionRef: conversation.hostSessionRef,
-				},
-				taskAuthority: authority,
-				modelConfigurationRevision:
-					state.modelConfiguration.configurationRevision,
-				keyBinding: {
-					purpose: keyBinding.purpose,
-					subjectId: keyBinding.subjectId,
-					ciphertextRef: keyBinding.keyId,
-					version: keyBinding.keyVersion,
-				},
+	readNativeCapabilityV6Authorization: NativeCapabilityAdmissionV6AuthorizationReader =
+		(input) =>
+			this.#transaction(async (transaction) => {
+				const authority = parseAuthority(input.authority);
+				const agent = await lockAgentConfiguration(
+					transaction,
+					authority.agentId,
+				);
+				const conversation = await lockConversation(
+					transaction,
+					text(input.conversationId),
+				);
+				return this.#readNativeCapabilityV6Authorization(
+					transaction,
+					input,
+					agent,
+					conversation,
+				);
+			});
+
+	async #readNativeCapabilityV6Authorization(
+		transaction: Transaction,
+		input: Parameters<NativeCapabilityAdmissionV6AuthorizationReader>[0],
+		agent: Awaited<ReturnType<typeof lockAgentConfiguration>>,
+		conversation: Awaited<ReturnType<typeof lockConversation>>,
+	): Promise<NativeCapabilityAdmissionV6AuthorizationSnapshot | null> {
+		const authority = parseAuthority(input.authority);
+		if (
+			!agent ||
+			!conversation ||
+			conversation.conversationId !== input.conversationId ||
+			!matchesBinding(conversation, authority) ||
+			conversation.authorizationRevision !== authority.authorizationRevision ||
+			conversation.status !== "ready" ||
+			conversation.sandboxReady !== true ||
+			!conversation.hostSessionRef ||
+			!agent.runtimeConfiguration
+		)
+			return null;
+		const state = await readMessageState(transaction, conversation);
+		const [metadataExecution] = await transaction<{ execution_id: string }[]>`
+			select e.execution_id
+			from platform.conversation_executions e
+			where e.conversation_id = ${conversation.conversationId}
+				and e.agent_id = ${conversation.agentId}
+				and e.actor_id = ${conversation.actorId}
+				and e.channel_id = ${conversation.channelId}
+				and e.principal_type = ${conversation.principal?.kind ?? "user"}
+				and e.session_generation = ${conversation.sessionGeneration}
+				and e.authorization_revision = ${conversation.authorizationRevision}
+				and coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) = ${conversation.hostSessionRef}
+			order by e.updated_at desc, e.execution_id
+			limit 1
+		`;
+		if (!metadataExecution?.execution_id) return null;
+		const executionBinding =
+			await currentConversationExecutionRelayKeyBindingV1(transaction, {
+				authority,
+				userDirectory: this.#userDirectory,
+				personalApiAdmissionAuthority: authority.personalApiAdmissionAuthority,
+			});
+		if (
+			!executionBinding?.relayKeyBinding ||
+			!executionBinding.executionSource ||
+			!state.modelConfiguration
+		)
+			return null;
+		const keyBinding = executionBinding.relayKeyBinding;
+		return {
+			authority: {
+				conversationId: conversation.conversationId,
+				principal: parseTaskPrincipalV1(
+					authority.taskBoundary?.principal ?? {
+						kind: "user",
+						id: authority.actorId,
+					},
+				),
 				executionSource: executionBinding.executionSource,
+				agentId: authority.agentId,
+				actorId: authority.actorId,
+				channelId: authority.channelId,
+				authorizationRevision: authority.authorizationRevision,
 				sessionGeneration: conversation.sessionGeneration,
 				hostSessionRef: conversation.hostSessionRef,
-				configVersion: String(agent.runtimeConfiguration.revision),
-				metadataExecutionId: metadataExecution.execution_id,
-			} satisfies NativeCapabilityV6AuthorizationSnapshotV1;
-		});
+			},
+			taskAuthority: authority,
+			modelConfigurationRevision:
+				state.modelConfiguration.configurationRevision,
+			keyBinding: {
+				purpose: keyBinding.purpose,
+				subjectId: keyBinding.subjectId,
+				ciphertextRef: keyBinding.keyId,
+				version: keyBinding.keyVersion,
+			},
+			executionSource: executionBinding.executionSource,
+			sessionGeneration: conversation.sessionGeneration,
+			hostSessionRef: conversation.hostSessionRef,
+			configVersion: String(agent.runtimeConfiguration.revision),
+			metadataExecutionId: metadataExecution.execution_id,
+		} satisfies NativeCapabilityAdmissionV6AuthorizationSnapshot;
 	}
 
 	/** Reads the saved operation and Key tuple using this original Store instance. */

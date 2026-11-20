@@ -279,6 +279,23 @@ export type NativeCapabilityAdmissionV6KeyBinding = Readonly<{
 	version: number;
 }>;
 
+export type NativeCapabilityAdmissionV6AuthorizationSnapshot = Readonly<{
+	readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+	readonly taskAuthority: ConversationExecutionAuthorityV1;
+	readonly modelConfigurationRevision: number;
+	readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
+	readonly executionSource: ConversationExecutionSourceV1;
+	readonly sessionGeneration: number;
+	readonly hostSessionRef: string;
+	readonly configVersion: string;
+	readonly metadataExecutionId: string;
+}>;
+
+export type NativeCapabilityAdmissionV6AuthorizationReader = (input: {
+	readonly authority: ConversationExecutionAuthorityV1;
+	readonly conversationId: string;
+}) => Promise<NativeCapabilityAdmissionV6AuthorizationSnapshot | null>;
+
 export type NativeCapabilityAdmissionV6Decision =
 	| {
 			readonly outcome: "accepted" | "replayed";
@@ -308,12 +325,17 @@ export interface NativeCapabilityAdmissionTransactionPortV6 {
 			readonly requestDigest: string;
 			readonly operationDigest: string;
 		},
-		isAuthorized: () => Promise<boolean>,
+		isAuthorized: (
+			readAuthorization: NativeCapabilityAdmissionV6AuthorizationReader,
+		) => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionV6Decision>;
 }
 
 export interface NativeCapabilityAdmissionV6AuthorizationPort {
-	authorize(input: { readonly conversationId: string }): Promise<
+	authorize(
+		input: { readonly conversationId: string },
+		readAuthorization?: NativeCapabilityAdmissionV6AuthorizationReader,
+	): Promise<
 		| {
 				readonly outcome: "allowed";
 				readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
@@ -732,22 +754,19 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 					requestDigest,
 					operationDigest,
 				}),
-				async () => {
-					try {
-						const current = await dependencies.authorization.authorize({
-							conversationId: request.conversationId,
-						});
-						return (
-							current.outcome === "allowed" &&
-							isDeepStrictEqual(current.authority, authority) &&
-							isDeepStrictEqual(
-								parseAuthority(current.taskAuthority),
-								taskAuthority,
-							)
-						);
-					} catch {
-						return false;
-					}
+				async (readAuthorization) => {
+					const current = await dependencies.authorization.authorize(
+						{ conversationId: request.conversationId },
+						readAuthorization,
+					);
+					return (
+						current.outcome === "allowed" &&
+						isDeepStrictEqual(current.authority, authority) &&
+						isDeepStrictEqual(
+							parseAuthority(current.taskAuthority),
+							taskAuthority,
+						)
+					);
 				},
 			);
 		},
