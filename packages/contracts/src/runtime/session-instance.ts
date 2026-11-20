@@ -62,7 +62,7 @@ export const SessionInstanceEvidenceBodyV1Schema =
 	SessionInstanceReadBodyV1Schema.extend({
 		requestDigest: digest,
 		hostKeyId: OpaqueIdV1Schema,
-		runnerEpoch: z.string().uuid(),
+		runnerEpoch: OpaqueIdV1Schema,
 		observedAt: positive,
 		expiresAt: positive,
 		checks: z.strictObject({
@@ -110,3 +110,13 @@ export function parseSessionInstanceJsonV1(text: string): unknown {
 	}
 	return result;
 }
+
+export type SessionInstanceReadRequestV1 = z.infer<
+	typeof SessionInstanceReadRequestV1Schema
+>;
+export type SessionInstanceReadClaimsV1 = z.infer<
+	typeof SessionInstanceReadClaimsV1Schema
+>;
+export type SessionInstanceEvidenceV1 = z.infer<
+	typeof SessionInstanceEvidenceV1Schema
+>;

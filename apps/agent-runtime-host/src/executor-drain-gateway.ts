@@ -11,6 +11,10 @@ import {
 } from "@agent-infra/agent-runtime";
 import { WebSocket, WebSocketServer } from "ws";
 import {
+	executorIdentityConsumedV1,
+	executorIdentityDeliveryRemovedV1,
+} from "./executor-identity-startup.js";
+import {
 	continueExecutorProcessGroupV1,
 	type ExecutorProcessGroupV1,
 	executorChildrenV1,
@@ -150,6 +154,15 @@ export async function startExecutorDrainGatewayV1(options: {
 		let result: unknown;
 		if (path === "/control/status") {
 			result = { epoch };
+		} else if (path === "/control/session-instance/read") {
+			result = {
+				epoch,
+				runnerIdentityConsumed: executorIdentityConsumedV1(identity),
+				deliveryFilesRemoved: await executorIdentityDeliveryRemovedV1(identity),
+				executorReady:
+					!closed && (await executorChildrenV1(process.pid)).size === 0,
+				emptyBusinessState: attachment === undefined,
+			};
 		} else if (path === "/control/attach") {
 			const executionId = identifier(input.executionId);
 			if (!attachment || attachment.executionId !== executionId) {

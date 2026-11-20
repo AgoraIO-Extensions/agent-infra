@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	executorControlRequestV1,
 	issueExecutorStartIdentityV1,
 	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
@@ -146,6 +147,14 @@ it.each([
 		expect(drain).toBeDefined();
 		if (!drain) throw new Error("missing drain");
 		await drain.arm("original");
+		expect(
+			await executorControlRequestV1(
+				identity("host"),
+				"http://127.0.0.1:8068",
+				"/control/status",
+				{ epoch, generation: 2, resourceFence: 3 },
+			),
+		).toEqual({ epoch });
 		await drain.bindNativeTurn("original", "turn");
 		socket = new WebSocket(
 			drain.endpoint().replace(":8068", `:${ports.get(8068)}`),

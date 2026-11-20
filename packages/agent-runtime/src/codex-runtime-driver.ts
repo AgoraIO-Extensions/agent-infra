@@ -6159,6 +6159,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return rpc;
 	}
 
+	/** Preparation evidence only: never creates or resumes native business state. */
+	isBusinessStateEmpty(): boolean {
+		if (
+			this.closed ||
+			this.sessionExecutorFailed ||
+			!this.file.isQuiescent() ||
+			this.inFlightOperations.size ||
+			this.inFlightConversationRpcs.size ||
+			this.textDeltaBatches.size
+		)
+			return false;
+		const state = this.readState();
+		return (
+			Object.keys(state.sessions).length === 0 &&
+			Object.keys(state.operations).length === 0
+		);
+	}
+
 	static async open(options: CodexRuntimeDriverOptions) {
 		// The deployment's Driver file and its sibling native storage share one
 		// Agent PVC. Losing the mapping must never initialize replacement sessions.
