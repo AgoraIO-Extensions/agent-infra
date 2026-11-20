@@ -1017,7 +1017,8 @@ fence 下核对原发布 attempt、目标 Pod UID 和投影 UID/resourceVersion�
 业务绑定或同名不同 UID 时拒绝清理。正式 Session 的 PVC 保留规则不变。
 启用任何独立 executor 的 Codex profile 前，部署须先有经评审、可执行的人工核实与恢复手册，
 覆盖上述结果不明的创建、投影发布和删除：告警入口、核实所需证据、由部署负责人执行的步骤，
-以及核实前继续保留占用。手册未就位时该 profile 保持未批准。
+以及核实前继续保留占用。手册未就位时该 profile 保持未批准。手册见
+[`deploy/ack/SESSION-RESERVE-UNKNOWN-RECOVERY.md`](../../deploy/ack/SESSION-RESERVE-UNKNOWN-RECOVERY.md)。
 
 **有界补充与扩缩。** 部署策略声明允许的 profile、每项最小/最大备用数、总备用数、
 部署总 CPU/内存/PVC 预算、创建并发、过期时长、缩容冷却和失败退避。缺少上限不启用。
