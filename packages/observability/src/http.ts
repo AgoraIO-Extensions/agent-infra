@@ -11,6 +11,10 @@ import {
 	projectIdentityFailure,
 	type startObservability,
 } from "./index.js";
+import {
+	createNativeAdmissionTelemetry,
+	projectNativeAdmission,
+} from "./native-admission.js";
 
 interface RequestMetadata {
 	readonly requestId: string;
@@ -23,12 +27,48 @@ const requests = new AsyncLocalStorage<{
 	readonly metadata: RequestMetadata;
 	active: boolean;
 	record: (event: OperationalEvent) => void;
+	nativeAdmission?: unknown;
 	failureStep?: string;
 	errorClass?: string;
 	identityFailure?: ReturnType<typeof projectIdentityFailure>;
 	sqlState?: string;
 }>();
 
+export function createHttpNativeAdmissionTelemetry() {
+	return createNativeAdmissionTelemetry((value) => {
+		const request = requests.getStore();
+		if (!request?.active || !projectNativeAdmission(value)) return;
+		const stage = value as { phase: string };
+		const previous = request.nativeAdmission as
+			| { phase?: string; reason?: string }
+			| undefined;
+		const incoming = value as { phase: string; reason: string };
+		if (
+			previous?.phase !== "failed" ||
+			(previous.reason === "UNKNOWN" &&
+				incoming.phase === "failed" &&
+				incoming.reason !== "UNKNOWN")
+		)
+			request.nativeAdmission = value;
+		try {
+			request.record({
+				stage: "dependency",
+				operationRef: `native_admission.${(value as { stage: string }).stage}`,
+				outcome:
+					stage.phase === "failed"
+						? "failed"
+						: stage.phase === "started"
+							? "waiting"
+							: "completed",
+				nativeAdmission: value,
+				...request.metadata,
+				...(request.metadata.traceParent
+					? { traceParent: request.metadata.traceParent }
+					: {}),
+			});
+		} catch {}
+	});
+}
 export function currentRequestMetadata(): RequestMetadata | undefined {
 	const request = requests.getStore();
 	return request?.active ? request.metadata : undefined;
@@ -225,6 +265,7 @@ export function createHttpObservability(
 			readonly metadata: RequestMetadata;
 			active: boolean;
 			record: (event: OperationalEvent) => void;
+			nativeAdmission?: unknown;
 			failureStep?: string;
 			errorClass?: string;
 			identityFailure?: ReturnType<typeof projectIdentityFailure>;
@@ -259,6 +300,9 @@ export function createHttpObservability(
 							: await failureDetails(context, status);
 					telemetry.record({
 						stage: "http",
+						...(request.nativeAdmission === undefined
+							? {}
+							: { nativeAdmission: request.nativeAdmission }),
 						outcome,
 						durationMs: performance.now() - began,
 						...failure,

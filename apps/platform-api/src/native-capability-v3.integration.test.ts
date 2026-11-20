@@ -105,6 +105,7 @@ let browserCookie: string | undefined;
 let taskIdentityTimeout: boolean;
 let directoryReads: number;
 let liveDirectoryRevision: string;
+let legacySkill = false;
 let requestMetadata: ReturnType<typeof currentRequestMetadata>;
 const events: OperationalEvent[] = [];
 const unused = async (): Promise<never> => {
@@ -164,6 +165,32 @@ beforeAll(async () => {
 					_context,
 					version,
 				) => {
+					if (legacySkill) {
+						directoryReads++;
+						await afterDirectoryRead();
+						if (selector === "skills")
+							return {
+								selector: "skills",
+								revision: liveDirectoryRevision,
+								capabilities: [
+									{
+										id: command.id,
+										kind: "skill",
+										name: "review",
+										description: "Synthetic",
+										source: { name: "skillhub", version: "1" },
+										availability: "discovered",
+									},
+								],
+							};
+						if (selector === "commands")
+							return {
+								selector: "commands",
+								revision: liveDirectoryRevision,
+								capabilities: [],
+							};
+						return null;
+					}
 					if (
 						conversation !== conversationId ||
 						execution !== originalExecutionId ||
@@ -205,6 +232,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	legacySkill = false;
 	afterDirectoryRead = async () => {};
 	browserSessionActive = true;
 	browserResolutions = 0;
@@ -576,3 +604,126 @@ it.each(["agent", "conversation", "generation", "host"] as const)(
 		});
 	},
 );
+
+it("observes the normal V1 assembly, both metadata reads and durable idempotent delivery", async () => {
+	legacySkill = true;
+	const payload = {
+		capabilityId: command.id,
+		directoryRevision,
+		parameters: "PRIVATE_PARAMETER_CANARY",
+		idempotencyKey: "v1-stage-key",
+		requestId: "v1-request",
+		traceId: "v1-trace",
+	};
+	const send = () =>
+		app.request(
+			new Request(
+				`https://native.invalid/api/v2/conversations/${conversationId}/native-capability/invoke`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(payload),
+				},
+			),
+		);
+	const response = await send();
+	expect(response.status).toBe(202);
+	const admitted = NativeCapabilityInvocationResponseV1Schema.parse(
+		await response.json(),
+	);
+	if (admitted.outcome !== "accepted") throw new Error("Expected admission");
+	const observations = events
+		.filter((e) => e.nativeAdmission)
+		.map((e) => ({
+			...e,
+			nativeAdmission: e.nativeAdmission as {
+				stage: string;
+				phase: string;
+				protocolVersion: number | "UNKNOWN";
+			},
+		}));
+	const stages = observations.map((e) => e.nativeAdmission.stage);
+	expect(stages).toEqual(
+		expect.arrayContaining([
+			"identity.initial",
+			"authorization.initial",
+			"store.transaction",
+			"store.lock",
+			"store.query",
+			"metadata.first",
+			"metadata.second",
+			"metadata.scope",
+			"metadata.commands",
+			"metadata.skills",
+			"precommit",
+			"delivery",
+		]),
+	);
+	const traces = new Set(observations.map((e) => e.traceId));
+	expect(traces.size).toBe(1);
+	expect([...traces][0]).toBeTruthy();
+	expect(
+		observations
+			.filter((e) => e.nativeAdmission.stage === "metadata.second")
+			.every((e) => e.nativeAdmission.protocolVersion === 1),
+	).toBe(true);
+	expect(JSON.stringify(observations)).not.toContain(
+		"PRIVATE_PARAMETER_CANARY",
+	);
+	expect(directoryReads).toBe(4);
+	const replay = await send();
+	expect(replay.status).toBe(202);
+	expect(await replay.json()).toMatchObject({
+		outcome: "replayed",
+		result: admitted.result,
+	});
+	const [count] =
+		await db`select count(*)::int as n from platform.conversation_executions where conversation_id=${conversationId} and execution_id<>${originalExecutionId}`;
+	expect(count?.n).toBe(1);
+});
+
+it("keeps the earliest real V1 Store lock SQLSTATE through the safe HTTP reply", async () => {
+	legacySkill = true;
+	const held = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const blocker = db.begin(async (tx) => {
+		await tx`select id from platform.conversations where id=${conversationId} for update`;
+		held.resolve();
+		await release.promise;
+	});
+	await held.promise;
+	try {
+		const response = await app.request(
+			new Request(
+				`https://native.invalid/api/v2/conversations/${conversationId}/native-capability/invoke`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						capabilityId: command.id,
+						directoryRevision,
+						parameters: "PRIVATE_PARAMETER_CANARY",
+						idempotencyKey: "v1-lock",
+						requestId: "v1-lock-request",
+						traceId: "v1-lock-trace",
+					}),
+				},
+			),
+		);
+		expect(response.status).toBe(503);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				stage: "http",
+				nativeAdmission: expect.objectContaining({
+					stage: "store.lock",
+					reason: "store",
+					sqlState: "55P03",
+				}),
+			}),
+		);
+		expect(JSON.stringify(events)).not.toContain("PRIVATE_PARAMETER_CANARY");
+	} finally {
+		release.resolve();
+		await blocker;
+	}
+}, 15_000);

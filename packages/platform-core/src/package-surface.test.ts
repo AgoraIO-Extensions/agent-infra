@@ -266,6 +266,7 @@ describe("platform-core package surface", () => {
 			"normalizeFileLimitDeclarationV1",
 			"normalizeSkillHubProjectFilesV1",
 			"normalizeWorkspaceSnapshotBindingsV1",
+			"observeNativeAdmissionV1",
 			"pageSkillHubInstallationsV1",
 			"pageSkillHubOwnedVersionsV1",
 			"pageSkillHubReviewQueueV1",

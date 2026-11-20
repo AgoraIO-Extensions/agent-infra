@@ -1,7 +1,14 @@
 import { RuntimeNativeMetadataProofMaximumLifetimeMsV1 } from "@agent-infra/contracts/runtime";
+import { createHttpNativeAdmissionTelemetry } from "@agent-infra/observability/http";
+import {
+	type NativeAdmissionObserverV1,
+	observeNativeAdmissionV1,
+} from "@agent-infra/platform-core";
 import type { IdentityContext } from "./http/identity.js";
 
 export interface RuntimeNativeMetadataRequestContextV1 {
+	readonly observeAdmission?: NativeAdmissionObserverV1;
+	setAdmissionProtocolVersion?(version: number): void;
 	readonly traceId?: string;
 	readonly readStartedAt: number;
 	readonly expiresAt: number;
@@ -31,7 +38,11 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 	readonly authenticate: () => Promise<IdentityContext>;
 	readonly now?: () => number;
 	readonly traceId?: string;
+	readonly admissionTelemetry?: boolean;
 }): RuntimeNativeMetadataRequestContextV1 {
+	const telemetry = options.admissionTelemetry
+		? createHttpNativeAdmissionTelemetry()
+		: undefined;
 	const now = options.now ?? Date.now;
 	const readStartedAt = now();
 	if (!Number.isSafeInteger(readStartedAt) || readStartedAt < 1)
@@ -43,10 +54,18 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const close = () => {
 		if (timer !== undefined) clearTimeout(timer);
-		options.signal.removeEventListener("abort", close);
+		options.signal.removeEventListener("abort", clientAbort);
 		deliveryChecks.clear();
 		policyRevisions.clear();
 		controller.abort();
+	};
+	const clientAbort = () => {
+		telemetry?.cancel("client_abort");
+		close();
+	};
+	const onDeadline = () => {
+		telemetry?.cancel("internal_deadline");
+		close();
 	};
 	const assertCurrent = () => {
 		if (
@@ -54,14 +73,16 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 			controller.signal.aborted ||
 			now() >= expiresAt
 		) {
+			if (options.signal.aborted) telemetry?.cancel("client_abort");
+			else if (now() >= expiresAt) telemetry?.cancel("internal_deadline");
 			close();
 			throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
 		}
 	};
-	options.signal.addEventListener("abort", close, { once: true });
-	timer = setTimeout(close, Math.max(0, expiresAt - now()));
+	options.signal.addEventListener("abort", clientAbort, { once: true });
+	timer = setTimeout(onDeadline, Math.max(0, expiresAt - now()));
 	timer.unref();
-	if (options.signal.aborted) close();
+	if (options.signal.aborted) clientAbort();
 	const run = async <T>(work: (signal: AbortSignal) => Promise<T>) => {
 		assertCurrent();
 		try {
@@ -86,11 +107,19 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 					.finally(() => controller.signal.removeEventListener("abort", abort));
 			});
 		} catch (error) {
+			telemetry?.failure(error);
 			close();
 			throw error;
 		}
 	};
-	const authenticate = () => run(() => options.authenticate());
+	let initialIdentity = true;
+	const authenticate = () => {
+		const stage = initialIdentity ? "identity.initial" : "identity.revalidate";
+		initialIdentity = false;
+		return observeNativeAdmissionV1(telemetry?.observe, stage, () =>
+			run(() => options.authenticate()),
+		);
+	};
 	const revalidate = async (identity: IdentityContext) => {
 		const current = await authenticate();
 		if (
@@ -104,6 +133,9 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 		return current;
 	};
 	return Object.freeze({
+		observeAdmission: telemetry?.observe,
+		setAdmissionProtocolVersion: (version: number) =>
+			telemetry?.protocol(version),
 		traceId: options.traceId,
 		readStartedAt,
 		get expiresAt() {
@@ -162,7 +194,7 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 			}
 			expiresAt = deadline;
 			if (timer !== undefined) clearTimeout(timer);
-			timer = setTimeout(close, Math.max(0, expiresAt - now()));
+			timer = setTimeout(onDeadline, Math.max(0, expiresAt - now()));
 			timer.unref();
 		},
 		run,
@@ -177,9 +209,15 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 			deliveryChecks.add(check);
 		},
 		async verifyDelivery(identity: IdentityContext) {
-			await revalidate(identity);
-			for (const check of deliveryChecks) await run(check);
-			await revalidate(identity);
+			return observeNativeAdmissionV1(
+				telemetry?.observe,
+				"delivery",
+				async () => {
+					await revalidate(identity);
+					for (const check of deliveryChecks) await run(check);
+					await revalidate(identity);
+				},
+			);
 		},
 		close,
 	});

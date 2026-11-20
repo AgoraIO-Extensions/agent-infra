@@ -1234,6 +1234,7 @@ export function assemblePlatformApi(
 						if (!metadata)
 							throw new Error("Native capability metadata unavailable");
 						const admission = createNativeCapabilityAdmissionUseCaseV1({
+							observe: requestContext.observeAdmission,
 							authorization: {
 								async authorize(authorizationRequest) {
 									const currentIdentity =

@@ -127,7 +127,8 @@ export function logNativeMetadataHop(
 		| "context"
 		| "driver",
 	traceId: unknown,
-	outcome: "ok" | "unavailable",
+	outcome: "ok" | "unavailable" | "started",
+	elapsedMs?: number,
 ) {
 	const trace =
 		typeof traceId === "string" &&
@@ -142,6 +143,9 @@ export function logNativeMetadataHop(
 				step,
 				traceId: trace,
 				outcome,
+				...(Number.isSafeInteger(elapsedMs) && (elapsedMs as number) >= 0
+					? { elapsedMs }
+					: {}),
 				...(outcome === "unavailable"
 					? { code: "NATIVE_METADATA_HOP_UNAVAILABLE" }
 					: {}),

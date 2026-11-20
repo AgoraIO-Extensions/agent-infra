@@ -159,6 +159,7 @@ export {
 } from "./file-limits.js";
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
+export * from "./native-admission-observation.js";
 export * from "./native-capability-admission.js";
 export * from "./native-capability-admission-v6.js";
 export * from "./operations-alerts.js";
