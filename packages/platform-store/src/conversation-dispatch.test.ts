@@ -10945,6 +10945,34 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		return row;
 	}
 
+	it.each(["submitted", "waiting"] as const)(
+		"does not let an unsent %s Turn block its own upgrade drain with a retained Host ref (#4266)",
+		async (status) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: status,
+				executionFence: 2,
+			});
+			const sandbox = await prepared(work);
+			await client`update platform.conversations set host_session_ref='retained-host' where id=${work.conversationId}`;
+			await client`update platform.outbox_items set status='processing',delivery_fence=2,lease_owner='turn-worker',lease_expires_at=clock_timestamp()+interval '30 seconds' where id=${work.itemId}`;
+			await reverify();
+			expect(await upgrade()).toBe(1);
+			const store = sandboxStore();
+			try {
+				expect(
+					await store.claimSandboxReconciliation({
+						schemaVersion: 1,
+						itemId: sandbox.itemId,
+						workerId: "drain-worker",
+						leaseDurationMs: 30_000,
+					}),
+				).toMatchObject({ purpose: "drain", drainComputeAllowed: true });
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("retains the original compute until terminal event/ACK control work settles (#4266)", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "completed",

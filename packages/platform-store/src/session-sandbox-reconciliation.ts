@@ -262,6 +262,7 @@ async function lockedContext(
                     join platform.outbox_items o on o.scope_type = 'conversation'
                         and o.scope_id = e.conversation_id and o.payload->>'executionId' = e.execution_id
                     where e.conversation_id = ${sandbox.sessionId} and e.delivery_fence > 0
+                        and e.status in ('completed', 'failed', 'cancelled')
                         and ${conversation.host_session_ref !== null}
                         and o.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
                         and o.status in ('pending', 'processing', 'retry_scheduled')
