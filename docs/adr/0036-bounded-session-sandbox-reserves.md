@@ -78,11 +78,15 @@ env、卷与 immutable Secret，但需要独立预留事实和原 Conversation �
 实现拆成三个明确范围：
 
 1. `platform-core`/`platform-store` 与 migration：预留事实、预算、原入口事务领取，保留
-   Conversation 复合外键与原幂等；真实 PostgreSQL 并发、失败恢复和隔离测试。
+   Conversation 复合外键与原幂等；独立 executor 另保存原启动与投影记录、领取后的晋升回执，
+   均为 Platform DB 中预留与 allocation 事实的一部分，不新增服务或 CRD；真实 PostgreSQL
+   并发、失败恢复和隔离测试。
 2. `platform-worker` 与部署配置：未领取资源准备、原始 UID 接收、条件清理、容量补充和
    关闭。六资源、Host bootstrap 与无业务状态仍须检查，独立 executor 另按 §10.1.1
    核对双容器的非业务启动证明和同一实例晋升。不得以假主体适配旧 claim，
-   不使用 Agent 级 readiness JWS 代替预留授权。原生业务进程预热或新探测 wire 留待单独评审。
+   不使用 Agent 级 readiness JWS 代替预留授权。独立 executor 的实例取证和首投使用
+   [Runtime HLD §10.3.2](../architecture/HLD-agent-runtime-M1.md#1032-session-实例只读合同-v1)
+   的 V1 合同；原生业务进程预热仍留待单独评审。
 3. 部署与业务验收：真实 ACK 中受上限约束的同源对照，完整功能回归、成本与可比耗时；
    未达到目标时保留指标与问题，不以文档、Pod Ready 或合成 receipt 关闭性能父票。
 

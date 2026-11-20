@@ -2207,9 +2207,13 @@ describe("published Relay authority migration", () => {
 			idx: 88,
 			tag: "0088_session_workspace_reclamation_read",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 89)).toMatchObject({
 			idx: 89,
-			tag: "0089_connection_host_supplies",
+			tag: "0089_operations_outbox_scope",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 90,
+			tag: "0090_connection_host_supplies",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2870,6 +2874,7 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.indexes.push(
 				"operations_resource_snapshots:operations_resource_snapshots_cluster_id_namespace_pk",
+				"outbox_items:outbox_scope_operation_idx",
 				"operations_resource_identities:operations_resource_identities_cluster_id_namespace_uid_pk",
 				"operations_resource_identities:operations_identity_agent_idx",
 			);

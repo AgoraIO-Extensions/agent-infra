@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type OperationsHistoryQueryV2,
 	type OperationsResourceQueryV2,
@@ -11,6 +12,7 @@ import type { SessionSandboxResourceBudgetV1 } from "@agent-infra/platform-core"
 import {
 	aggregateOperationsAgentsV2,
 	bindOperationsResourcesV2,
+	decideSessionSandboxDrainObservationV1,
 	emptyOperationsResourcesV2,
 	evaluateOperationsAlertsV2,
 	type OperationsAlertThresholdsV2,
@@ -20,6 +22,8 @@ import {
 	type OperationsSessionAllocationV2,
 	projectOperationsBudgetV2,
 	projectOperationsStalenessV2,
+	type SessionSandboxLifecycleV1,
+	type SessionSandboxObservationV1,
 } from "@agent-infra/platform-core";
 import { readPlatformQueueResourceSnapshot } from "./observability-snapshot.js";
 import postgres from "./observed-postgres.js";
@@ -39,6 +43,76 @@ function budget(value: unknown): SessionSandboxResourceBudgetV1 | null {
 		memoryBytes: data.memoryBytes as number,
 		storageBytes: data.storageBytes as number,
 	};
+}
+
+function inheritedStopProof(
+	lifecycle: SessionSandboxLifecycleV1 | null,
+	observation: SessionSandboxObservationV1 | null,
+	target: {
+		sandboxId: string;
+		sessionId: string;
+		agentId: string;
+		actorId: string;
+		principalType: string;
+		channelId: string;
+		resourceName: string;
+		namespace: string;
+		generation: number;
+		fence: number;
+		settledAt: Date;
+	},
+): OperationsSessionAllocationV2["inheritedStop"] {
+	try {
+		const receipt = lifecycle?.stopReceipt;
+		const source = lifecycle?.source;
+		const pvc = receipt?.retainedPVC;
+		const observed = observation?.resources?.[0];
+		if (
+			lifecycle?.schemaVersion !== 1 ||
+			lifecycle.preparation !== undefined ||
+			!Number.isSafeInteger(lifecycle.authority.managementRevision) ||
+			lifecycle.authority.managementRevision < 1 ||
+			source?.policy?.namespace !== target.namespace ||
+			!receipt ||
+			!source ||
+			!pvc ||
+			!Number.isSafeInteger(receipt.targetResourceFence) ||
+			receipt.targetResourceFence <= source.resourceFence ||
+			receipt.targetResourceFence >= target.fence ||
+			source.sandbox.sandboxId !== target.sandboxId ||
+			source.sandbox.sessionId !== target.sessionId ||
+			source.sandbox.agentId !== target.agentId ||
+			source.sandbox.principal.id !== target.actorId ||
+			source.sandbox.principal.kind !== target.principalType ||
+			source.sandbox.channelId !== target.channelId ||
+			source.sandbox.resourceName !== target.resourceName ||
+			receipt.targetGeneration !== target.generation ||
+			!isDeepStrictEqual(observation?.sourceStop, receipt) ||
+			observation?.status !== "stopped" ||
+			observation.resources.length !== 1 ||
+			observed?.kind !== "PersistentVolumeClaim" ||
+			observed.namespace !== target.namespace ||
+			observed.name !== pvc.name ||
+			observed.uid !== pvc.uid ||
+			!decideSessionSandboxDrainObservationV1({
+				sandbox: { ...source.sandbox, generation: target.generation },
+				resourceFence: receipt.targetResourceFence,
+				lifecycle,
+				observation,
+			}).finished
+		)
+			return undefined;
+		return {
+			pvcUid: pvc.uid,
+			removedPodNames: receipt.removed.flatMap(({ resource }) =>
+				resource.kind === "Pod" ? [resource.name] : [],
+			),
+			settledAt: target.settledAt.toISOString(),
+		};
+	} catch {
+		// Older or malformed saved facts do not prove release.
+		return undefined;
+	}
 }
 
 export class PostgresOperationsResourceStoreV2 {
@@ -236,12 +310,15 @@ export class PostgresOperationsResourceStoreV2 {
 		return (await this.#readAttribution()).bindings;
 	}
 
-	async #readAttribution() {
+	async #readAttribution(includeSessionRequests = false) {
 		const rows = await this.#sql<
 			{
 				agent_id: string;
 				name: string;
 				conversation_id: string;
+				actor_id: string;
+				principal_type: string;
+				channel_id: string;
 				sandbox_id: string;
 				session_generation: string;
 				resource_fence: string;
@@ -253,35 +330,57 @@ export class PostgresOperationsResourceStoreV2 {
 					namespace?: string;
 					configurationRevision?: number;
 				} | null;
-				resource_observation: {
-					status?: string;
-					sourceStop?: Partial<{
-						schemaVersion: number;
-						sandboxId: string;
-						sessionId: string;
-						targetGeneration: number;
-						targetResourceFence: number;
-						retainedPVC: unknown;
-					}>;
-					resources?: {
-						kind: string;
-						name: string;
-						namespace: string;
-						uid: string;
-					}[];
-				} | null;
+				resource_observation: SessionSandboxObservationV1 | null;
+				inherited_lifecycle: SessionSandboxLifecycleV1 | null;
+				settled_at: Date;
 			}[]
-		>`select a.agent_id, coalesce(app.name, a.agent_id) as name, a.conversation_id, a.sandbox_id,
-			a.session_generation, a.resource_fence, a.desired_state, a.status, a.resource_name,
-			(agent.id is not null and c.id is not null) as identity_verified, a.resource_policy, a.resource_observation
-			from platform.session_sandbox_allocations a
+		>`with candidates as materialized (
+			select * from platform.session_sandbox_allocations
+			where resource_policy->>'namespace'=${this.#scope.namespace}
+				or nullif(resource_policy->>'namespace','') is null
+			limit 10001
+		)
+			select a.agent_id, coalesce(app.name, a.agent_id) as name, a.conversation_id, a.sandbox_id,
+			a.session_generation, a.resource_fence, a.desired_state, a.status, a.resource_name, a.updated_at as settled_at, a.actor_id, a.principal_type, a.channel_id,
+			(agent.id is not null and c.id is not null) as identity_verified, a.resource_policy, a.resource_observation,
+			${includeSessionRequests ? this.#sql`intent.payload->'lifecycle'` : this.#sql`null`} as inherited_lifecycle
+			from candidates a
 			left join platform.agents agent on agent.id=a.agent_id
 			left join platform.conversations c on c.id=a.conversation_id and c.agent_id=a.agent_id
 			and c.actor_id=a.actor_id and c.principal_type=a.principal_type and c.channel_id=a.channel_id
 			and c.session_generation=a.session_generation
 			left join platform.agent_applications app on app.agent_id=a.agent_id
-			where a.resource_policy->>'namespace'=${this.#scope.namespace}
-			or nullif(a.resource_policy->>'namespace','') is null limit 10001`;
+			${
+				includeSessionRequests
+					? this.#sql`
+			left join lateral (
+				select min(id) as id from (
+					select id from platform.outbox_items
+					where scope_type='conversation' and scope_id=a.conversation_id
+						and operation='conversation.sandbox.reconcile.v1'
+						and a.status='stopped' and a.desired_state='stopped'
+						and a.resource_observation->'sourceStop'->>'targetResourceFence' <> a.resource_fence::text
+					order by id limit 2
+				) matches having count(*)=1
+			) original on true
+			left join platform.outbox_items intent on intent.id=original.id
+				and intent.status='succeeded' and intent.lease_owner is null and intent.lease_expires_at is null
+				and intent.payload->'schemaVersion'='1'::jsonb
+				and intent.payload->>'conversationId'=a.conversation_id
+				and intent.payload->>'sessionGeneration'=a.session_generation::text
+				and app.desired_state='stopped'
+				and intent.payload #>> '{lifecycle,authority,targetDesiredState}' = 'stopped'
+				and intent.payload #>> '{lifecycle,authority,kind}' = 'management'
+				and intent.payload #>> '{lifecycle,authority,applicationId}' = app.id
+				and intent.payload #>> '{lifecycle,authority,managementFence}' = app.fence::text
+				and intent.payload #>> '{lifecycle,authority,workloadRevision}' = app.workload_revision::text
+				and intent.payload #> '{lifecycle,authority,managementRevision}' between '1'::jsonb and to_jsonb(app.management_revision)
+				and not exists (select 1 from platform.conversation_generation_tombstones pending
+					where pending.conversation_id=a.conversation_id and pending.status='pending')
+			`
+					: this.#sql``
+			}
+			`;
 		if (rows.length > 10000) throw new Error("Operations bindings unavailable");
 		const scoped = rows.filter(
 			(row) => row.resource_policy?.namespace === this.#scope.namespace,
@@ -305,9 +404,26 @@ export class PostgresOperationsResourceStoreV2 {
 				receipt.sessionId === row.conversation_id &&
 				receipt.targetGeneration === Number(row.session_generation) &&
 				receipt.targetResourceFence === Number(row.resource_fence);
+			const inheritedStop =
+				row.identity_verified && row.inherited_lifecycle
+					? inheritedStopProof(row.inherited_lifecycle, observation, {
+							sandboxId: row.sandbox_id,
+							sessionId: row.conversation_id,
+							agentId: row.agent_id,
+							actorId: row.actor_id,
+							principalType: row.principal_type,
+							channelId: row.channel_id,
+							resourceName: row.resource_name,
+							namespace: this.#scope.namespace,
+							generation: Number(row.session_generation),
+							fence: Number(row.resource_fence),
+							settledAt: row.settled_at,
+						})
+					: undefined;
 			return {
 				sandboxId: row.sandbox_id,
 				resourceName: row.resource_name,
+				...(inheritedStop ? { inheritedStop } : {}),
 				configurationRevision:
 					row.identity_verified &&
 					typeof revision === "number" &&
@@ -564,7 +680,7 @@ export class PostgresOperationsResourceStoreV2 {
 		// Attribution is resolved again from authoritative business bindings at read time.
 		const observed = result.resources;
 		const { bindings, allocations, unscopedSessions } =
-			await this.#readAttribution();
+			await this.#readAttribution(input.includeSessionRequests === true);
 		const bound = bindOperationsResourcesV2(observed, bindings);
 		const kubernetes = result.sources.find(
 			(source) => source.kind === "kubernetes",
@@ -676,6 +792,8 @@ export class PostgresOperationsResourceStoreV2 {
 								observed,
 								bound,
 								podsComplete,
+								podsObservedAt: currentInventory?.podsObservedAt ?? null,
+								claimsObservedAt: currentInventory?.claimsObservedAt ?? null,
 								claimsComplete,
 							}
 						: undefined,

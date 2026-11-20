@@ -1971,6 +1971,18 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("private Runtime failure detail");
 	});
 
+	it.each([1, 2])(
+		"disables proxy buffering for V%d event streams",
+		async (version) => {
+			const response = await testApp().app.request(
+				`/api/v${version}/conversations/conversation-1/events`,
+			);
+			await response.text();
+			expect(response.status).toBe(200);
+			expect(response.headers.get("X-Accel-Buffering")).toBe("no");
+		},
+	);
+
 	it("resolves Last-Event-ID, rechecks authorization before each event, and emits reload", async () => {
 		const input = dependencies();
 		const response = await testApp(input).app.request(
