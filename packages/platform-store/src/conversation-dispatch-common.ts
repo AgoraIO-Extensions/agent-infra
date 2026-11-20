@@ -199,7 +199,7 @@ export interface ConversationPayload {
 	modelOptionId: string | null;
 	reasoningLevel: string | null;
 	nativeCapability?: import("@agent-infra/platform-core").ConversationNativeCapabilityBindingV1;
-	nativeCapabilityV6?: import("@agent-infra/platform-core").NativeCapabilityInvocationBindingV6;
+	nativeCapabilityV6?: import("@agent-infra/platform-core").NativeCapabilityInvocationPlanV6["outbox"]["payload"];
 	browserHandoff?: BrowserHandoffCommandV1;
 }
 

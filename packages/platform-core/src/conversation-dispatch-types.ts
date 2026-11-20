@@ -4,7 +4,10 @@ import type { ConversationExecutionSourceV1 } from "./conversation-execution-typ
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import type { NativeTextInputV1 } from "./file-authority.js";
-import type { NativeCapabilityInvocationBindingV6 } from "./native-capability-admission-v6.js";
+import type {
+	NativeCapabilityInvocationBindingV6,
+	NativeCapabilityInvocationPlanV6,
+} from "./native-capability-admission-v6.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export type ConversationDispatchOperationV1 =
@@ -228,7 +231,7 @@ export interface ConversationDispatchClaimV1 {
 	} | null;
 	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
 	/** Store-owned immutable V6 native invocation binding. */
-	readonly nativeCapabilityV6?: NativeCapabilityInvocationBindingV6;
+	readonly nativeCapabilityV6?: NativeCapabilityInvocationPlanV6["outbox"]["payload"];
 	/** Server-admitted Browser command carried by the same outbox lease. */
 	readonly browserHandoff?: BrowserHandoffCommandV1;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;

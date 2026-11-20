@@ -10,6 +10,7 @@ import {
 import {
 	type ConversationDispatchClaimV1,
 	parseTaskAuthorizationBoundaryV1,
+	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
 import {
 	type DispatchState,
@@ -70,9 +71,125 @@ export async function originalOperationBinding(
 	select * from platform.outbox_items where scope_type = 'conversation'
 	and scope_id = ${claim.conversationId}
 	and id in (${`conversation:turn:${claim.executionId}`}, ${`conversation:regenerate:${claim.executionId}`}, ${`conversation:native-capability:${claim.executionId}`})
-	and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1', 'conversation.native-capability.invoke.v1')
+	and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1', 'conversation.native-capability.invoke.v1', 'conversation.native-capability.invoke.v2')
 `;
 	const [origin] = origins;
+
+	if (
+		origins.length === 1 &&
+		origin?.operation === "conversation.native-capability.invoke.v2"
+	) {
+		const payload = exactPayload(origin.payload, origin.operation);
+		const native = payload?.nativeCapabilityV6;
+		const principal = executionPrincipalProjection(state.execution);
+		const pinDigest =
+			native && /^[a-f0-9]{64}$/.test(native.operationDigest)
+				? Buffer.from(native.operationDigest, "hex").toString("base64url")
+				: null;
+		if (
+			!native ||
+			!pinDigest ||
+			native.requestId !== origin.request_id ||
+			native.traceId !== origin.trace_id ||
+			!key.executionSource ||
+			!key.relayKeyBinding ||
+			native.conversationId !== base.conversationId ||
+			native.executionId !== base.executionId ||
+			native.turnId !== base.turnId ||
+			native.sessionGeneration !== base.sessionGeneration ||
+			native.agentId !== base.agentId ||
+			native.actorId !== state.execution.actor_id ||
+			native.channelId !== state.execution.channel_id ||
+			!isDeepStrictEqual(native.principal, principal) ||
+			native.authorizationRevision !== state.execution.authorization_revision ||
+			native.hostSessionRef !== state.conversation.host_session_ref ||
+			native.modelConfigurationRevision !==
+				safeCounter(state.execution.model_configuration_revision, 1) ||
+			native.modelOptionId !== state.execution.model_option_id ||
+			native.reasoningLevel !== state.execution.reasoning_level ||
+			native.executionSource !== key.executionSource ||
+			!isDeepStrictEqual(native.keyBinding, {
+				purpose: key.relayKeyBinding.purpose,
+				subjectId: key.relayKeyBinding.subjectId,
+				ciphertextRef: key.relayKeyBinding.keyId,
+				version: key.relayKeyBinding.keyVersion,
+			}) ||
+			(claim.operation === origin.operation
+				? origin.id !== state.outbox.id ||
+					!isDeepStrictEqual(native, claim.nativeCapabilityV6)
+				: claim.operation !== "conversation.turn.stop.v1") ||
+			(protocol !== null &&
+				(protocol !== "v4" ||
+					digest !== pinDigest ||
+					originalRef !== native.hostSessionRef)) ||
+			(protocol === null && (digest !== null || originalRef !== null))
+		)
+			return null;
+		const [authorization] = await transaction<
+			{ boundary: unknown }[]
+		>`select boundary from platform.task_authorization_records where execution_id = ${claim.executionId}`;
+		if (!authorization) return null;
+		const boundary = parseTaskAuthorizationBoundaryV1(authorization.boundary);
+		if (!isDeepStrictEqual(boundary, native.taskBoundary)) return null;
+		const { requestId, traceId, idempotencyKey, ...binding } = native;
+		try {
+			validateNativeCapabilityReplayPlanV6(
+				{
+					...binding,
+					outbox: {
+						id: origin.id,
+						operation: "conversation.native-capability.invoke.v2",
+						payload: native,
+					},
+				},
+				{
+					invocation: {
+						schemaVersion: 3,
+						conversationId: base.conversationId,
+						capabilityId: native.capabilityId,
+						directoryRevision: native.directoryRevision,
+						parameters: native.parameters,
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: native.modelOptionId,
+							reasoningLevel: native.reasoningLevel,
+						},
+						idempotencyKey,
+						requestId,
+						traceId,
+					},
+					authority: {
+						...base,
+						actorId: state.execution.actor_id,
+						principal,
+						channelId: state.execution.channel_id,
+						executionSource: key.executionSource,
+						authorizationRevision: state.execution.authorization_revision,
+						hostSessionRef: native.hostSessionRef,
+					},
+					taskAuthority: {
+						schemaVersion: 1,
+						actorId: state.execution.actor_id,
+						agentId: base.agentId,
+						channelId: state.execution.channel_id,
+						authorizationRevision: state.execution.authorization_revision,
+						supportsSupplementaryInstruction: false,
+						taskBoundary: boundary,
+					},
+					requestDigest: native.requestDigest,
+				},
+			);
+		} catch {
+			return null;
+		}
+		// Host stores the same SHA-256 bytes as base64url; the V6 Key receipt uses hex.
+		return {
+			runtimeSubmitProtocol: "v4" as const,
+			originalOperationDigest: pinDigest,
+			originalSubmitHostSessionRef: native.hostSessionRef,
+		};
+	}
+
 	if (
 		origins.length === 1 &&
 		origin?.operation === "conversation.native-capability.invoke.v1"

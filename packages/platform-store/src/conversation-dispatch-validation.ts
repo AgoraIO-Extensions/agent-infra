@@ -176,6 +176,11 @@ export function exactPayload(
 				!validText(binding.requestDigest) ||
 				!validText(binding.operationDigest) ||
 				binding.executionStatus !== "submitted" ||
+				!validText(binding.turnId) ||
+				safeCounter(binding.sessionGeneration, 1) === undefined ||
+				safeCounter(binding.modelConfigurationRevision, 1) === undefined ||
+				!validText(binding.modelOptionId) ||
+				!validText(binding.reasoningLevel) ||
 				!validText(binding.requestId) ||
 				!validText(binding.traceId) ||
 				!validText(binding.idempotencyKey) ||
@@ -190,9 +195,12 @@ export function exactPayload(
 				turnId: input.turnId as string,
 				sessionGeneration: safeCounter(input.sessionGeneration, 1) as number,
 				stopRequestId: null,
-				modelConfigurationRevision: null,
-				modelOptionId: null,
-				reasoningLevel: null,
+				modelConfigurationRevision: safeCounter(
+					binding.modelConfigurationRevision,
+					1,
+				) as number,
+				modelOptionId: binding.modelOptionId,
+				reasoningLevel: binding.reasoningLevel,
 				nativeCapabilityV6:
 					binding as ConversationPayload["nativeCapabilityV6"],
 			};
