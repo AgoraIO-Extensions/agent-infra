@@ -75,6 +75,8 @@ const policy = {
 	approval: systemApproval,
 	clientName: "Agent Infra",
 	dynamic,
+	// The server-resolved set: no Principal confirmed outside the exception.
+	confirmedPrincipals: [],
 };
 function resolvedAccess(
 	systemAccess: typeof system,
@@ -871,6 +873,51 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			),
 		).toBe("unavailable");
 	});
+
+	// §13.5.1 exception item 3: uniqueness also counts Principals confirmed
+	// outside the exception. Without the caller's server-resolved complete set
+	// the route stays closed instead of treating it as an empty, verified set.
+	it.each([
+		["omitted", undefined],
+		["null", null],
+		["not a list", { issuer: system.issuer }],
+	])(
+		"keeps the manual route closed when the confirmed Principals are %s",
+		(_name, value) => {
+			const { confirmedPrincipals: _confirmed, ...rest } = policy;
+			const input = (
+				value === undefined ? rest : { ...rest, confirmedPrincipals: value }
+			) as never;
+			const refused = (create: () => { close(): Promise<void> }) => {
+				try {
+					void create().close();
+				} catch (error) {
+					return (error as { code?: string }).code;
+				}
+				return "constructed";
+			};
+			expect(
+				refused(
+					() =>
+						new PostgresConnectionManualInstallationStoreV1({
+							databaseUrl: database.databaseUrl,
+							directory,
+							policy: input,
+						}),
+				),
+			).toBe("unavailable");
+			expect(
+				refused(
+					() =>
+						new PostgresConnectionInstallationAuthorizationTransactionV1({
+							databaseUrl: database.databaseUrl,
+							directory,
+							manualInstallation: input,
+						}),
+				),
+			).toBe("unavailable");
+		},
+	);
 
 	// §13.5.1 item 8: after `notAfter` (database clock) the exception accepts no new
 	// installation, and an installation begun before it binds no receipt.

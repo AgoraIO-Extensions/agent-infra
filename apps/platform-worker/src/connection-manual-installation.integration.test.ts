@@ -118,6 +118,8 @@ const policy = {
 	approval,
 	clientName: "Agent Infra",
 	dynamic,
+	// The server-resolved set: no Principal confirmed outside the exception.
+	confirmedPrincipals: [],
 };
 const directory = {
 	resolveUser: async (userId: string) => ({
