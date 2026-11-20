@@ -3483,6 +3483,68 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		}
 	});
 
+	// #4309 S2 (§13.5.6): only the original attempt drives the phases and an
+	// unknown confirm is never resent, so a confirm that lapsed after its pin but
+	// before its exchange opened is closed and its original key revoked.
+	it("closes a confirm stranded between its pin and its exchange and revokes the original key", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		expect(
+			(await manual.commitConfirmPin({ ...phase, candidate })).outcome,
+		).toBe("pinned");
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+			where authorization_id=${flow.run.authorizationId} and status='sending'`;
+		await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "revoked",
+			revoke_state: "pending",
+			confirm: "confirm:unknown,confirm_binding_readback:completed",
+		});
+		const [revoke] =
+			await client`select status from platform.connection_installation_commands where authorization_id=${flow.run.authorizationId} and command='revoke'`;
+		expect(revoke?.status).toBe("pending");
+		expect(
+			await manual.openConfirmPhase({
+				confirmCommandId: phase.confirmCommandId,
+				attemptId: phase.attemptId,
+				attemptOwner: phase.attemptOwner,
+				authorizationId: phase.authorizationId,
+				phase: "confirm_exchange",
+			}),
+		).toBeNull();
+	});
+
+	it("leaves an unknown confirm whose exchange was already sent for read-only verification", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		expect(
+			(await manual.commitConfirmPin({ ...phase, candidate })).outcome,
+		).toBe("pinned");
+		const exchange = await manual.openConfirmPhase({
+			confirmCommandId: phase.confirmCommandId,
+			attemptId: phase.attemptId,
+			attemptOwner: phase.attemptOwner,
+			authorizationId: phase.authorizationId,
+			phase: "confirm_exchange",
+		});
+		expect(exchange?.receipt).toBeDefined();
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+			where authorization_id=${flow.run.authorizationId} and status='sending'`;
+		await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "confirmed",
+			revoke_state: "not_required",
+			confirm:
+				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:unknown",
+		});
+	});
+
 	it("refuses a Principal another user confirmed outside the exception", async () => {
 		const confirmedElsewhere = new PostgresConnectionManualInstallationStoreV1({
 			databaseUrl: database.databaseUrl,

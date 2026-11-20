@@ -14,7 +14,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import type { Server } from "node:https";
+import { request as httpsRequest, type Server } from "node:https";
 import { createServer as createNetServer, type LookupFunction } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,6 +182,8 @@ const connection = {
 	receipts: new Map<string, Record<string, unknown>>(),
 	losePost: false,
 	loseGet: false,
+	/** Codes the fake token endpoint accepts exactly once (PKCE checked by S256). */
+	codes: new Map<string, string>(),
 };
 async function connectionFetch(
 	input: string | URL | Request,
@@ -190,6 +192,25 @@ async function connectionFetch(
 	const url = new URL(String(input));
 	const headers = new Headers(init?.headers);
 	const method = init?.method ?? "GET";
+	if (method === "POST" && url.pathname === "/oauth/token") {
+		const form = new URLSearchParams(String(init?.body));
+		connection.requests.push({ method, path: url.pathname });
+		const challenge = connection.codes.get(form.get("code") ?? "");
+		connection.codes.delete(form.get("code") ?? "");
+		if (
+			form.get("grant_type") !== "authorization_code" ||
+			!challenge ||
+			createHash("sha256")
+				.update(form.get("code_verifier") ?? "")
+				.digest("base64url") !== challenge
+		)
+			return Response.json({ error: "invalid_grant" }, { status: 400 });
+		return Response.json({
+			access_token: `synthetic-access-${randomBytes(16).toString("hex")}`,
+			token_type: "Bearer",
+			expires_in: 3600,
+		});
+	}
 	const key = headers.get("idempotency-key") ?? undefined;
 	connection.requests.push({
 		method,
@@ -269,6 +290,8 @@ let receiver: ConnectionInstallReceiverAssemblyV1 | undefined;
 let dataDirectory: string;
 /** Starts the Host receiver on the same port and private data directory. */
 let startHost: () => Promise<void>;
+let hostOrigin: string;
+let callbackAuth: string;
 let drain: ReturnType<typeof createConnectionManualInstallationDrainV1>;
 let sandboxId: string;
 type HostReference = {
@@ -383,6 +406,7 @@ beforeAll(async () => {
 	});
 	const workerPort = await readbackServer.listen();
 	const hostPort = await freePort();
+	hostOrigin = `https://sandbox-${sandboxId}.${namespace}.svc:${hostPort}/`;
 
 	dataDirectory = await realpath(
 		await mkdtemp(join(tmpdir(), "manual-install-host-")),
@@ -404,11 +428,8 @@ beforeAll(async () => {
 	);
 	await writePrivate(path, "server.crt", hostTls.cert);
 	await writePrivate(path, "server.key", hostTls.key);
-	await writePrivate(
-		path,
-		"callback.auth",
-		randomBytes(32).toString("base64url"),
-	);
+	callbackAuth = randomBytes(32).toString("base64url");
+	await writePrivate(path, "callback.auth", callbackAuth);
 	await writePrivate(path, "install.auth", installToken);
 	await writePrivate(path, "worker-ca.crt", workerTls.ca);
 	const [pod] =
@@ -543,6 +564,7 @@ beforeEach(async () => {
 	connection.requests.length = 0;
 	connection.losePost = false;
 	connection.loseGet = false;
+	connection.codes.clear();
 	readbacks.length = 0;
 	readbackHook = undefined;
 	loseSupply = undefined;
@@ -706,11 +728,51 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		await noCredentialStored();
 	});
 
+	/** The API's callback delivery to the original Host (code + state; PKCE checked by the fake). */
+	async function deliverHostCallback(authorizationUrl: string) {
+		const link = new URL(authorizationUrl);
+		const code = `synthetic-code-${randomBytes(12).toString("hex")}`;
+		connection.codes.set(code, link.searchParams.get("code_challenge") ?? "");
+		const body = JSON.stringify({
+			schemaVersion: 1,
+			state: link.searchParams.get("state"),
+			issuer: system.issuer,
+			code,
+		});
+		return new Promise<number>((resolve, reject) => {
+			const sent = httpsRequest(
+				new URL("/internal/runtime/oauth/v1/callback", hostOrigin),
+				{
+					method: "POST",
+					ca: hostTls.ca,
+					lookup,
+					headers: {
+						authorization: `Bearer ${callbackAuth}`,
+						"content-type": "application/json",
+						"content-length": Buffer.byteLength(body),
+					},
+				},
+				(response) => {
+					response.resume();
+					response.on("end", () => resolve(response.statusCode ?? 0));
+				},
+			);
+			sent.on("error", reject);
+			sent.end(body);
+		});
+	}
+
 	/** First begin, consumed callback and the original user's explicit confirm. */
 	async function confirmedInstall() {
 		const projection = await begin();
 		expect(await tick()).toBe(1);
 		expect(await tick()).toBe(1);
+		const bound = await status(projection.authorizationId);
+		expect(
+			await deliverHostCallback(
+				(bound as { authorizationUrl?: string }).authorizationUrl ?? "",
+			),
+		).toBe(200);
 		const [mapped] =
 			await client`select binding->'callback'->>'stateHash' as hash from platform.connection_installation_authorizations where id=${projection.authorizationId}`;
 		const stateHash = mapped?.hash as string;
@@ -752,7 +814,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 
 	// §13.5.6 exception confirm, phase 1 over the real Store, Worker and Host.
 	it(
-		"reads the binding back once and commits the first pin before any exchange",
+		"reads the binding back, pins, and exchanges the original code once in phase 2",
 		async () => {
 			const { projection, registrationKey } = await confirmedInstall();
 			// The user approved the installation in Connection: the instance now names a Principal.
@@ -766,12 +828,15 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			});
 			readbacks.length = 0;
 			expect(await tick()).toBe(1);
+			// Phase 2 completed; the logical confirm stays open for the publication
+			// permit, so MCP remains closed.
 			expect(await confirmState(projection.authorizationId)).toEqual([
 				{
 					pins: 1,
 					receipts: 1,
 					status: "confirmed",
-					commands: "confirm:sending,confirm_binding_readback:completed",
+					commands:
+						"confirm:sending,confirm_binding_readback:completed,confirm_exchange:completed",
 				},
 			]);
 			const [pin] =
@@ -781,22 +846,119 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 				principal_id: "principal-a",
 				user_id: "alice",
 			});
-			// The Host checked the phase command before and after the single GET of the original key.
+			// Phase 1 checked its command around its GET; phase 2 checked the receipt,
+			// the fixed transaction's supply, the receipt after its GET and after its
+			// private record, then exchanged once.
 			expect(readbacks).toEqual([
 				"command:confirm_binding_readback",
 				"command:confirm_binding_readback",
+				"command:confirm_exchange",
+				"supply:supply",
+				"command:confirm_exchange",
+				"command:confirm_exchange",
 			]);
-			expect(connection.requests.map(({ method }) => method)).toEqual([
-				"POST",
-				"GET",
+			expect(
+				connection.requests.map(({ method, path }) => `${method} ${path}`),
+			).toEqual([
+				"POST /connection/v1/agents/connection-agent-a/oauth-clients",
+				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+				"POST /oauth/token",
 			]);
-			expect(connection.requests[1]?.path).toBe(
-				`/connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
-			);
-			// Nothing exchanged: no token request, and no second phase-1 read on the next tick.
+			// The code was used once; the next tick sends nothing and resends nothing.
+			expect(connection.codes.size).toBe(0);
 			expect(await tick()).toBe(0);
-			expect(connection.requests).toHaveLength(2);
+			expect(connection.requests).toHaveLength(4);
 			await noCredentialStored();
+		},
+		confirmTimeout,
+	);
+
+	/** Confirmed install whose Connection instance now names principal-a. */
+	async function approvedInstall() {
+		const installed = await confirmedInstall();
+		const known = connection.receipts.get(installed.registrationKey) as Record<
+			string,
+			unknown
+		>;
+		connection.receipts.set(installed.registrationKey, {
+			...known,
+			principalId: "principal-a",
+		});
+		return installed;
+	}
+	const exchangedNothing = () =>
+		expect(
+			connection.requests.filter(({ path }) => path === "/oauth/token"),
+		).toEqual([]);
+
+	it(
+		"refuses phase 2 and revokes when the binding drifted after the pin",
+		async () => {
+			const { projection, registrationKey } = await approvedInstall();
+			readbackHook = async (request) => {
+				if (request.command?.command !== "confirm_exchange") return;
+				readbackHook = undefined;
+				const known = connection.receipts.get(registrationKey) as Record<
+					string,
+					unknown
+				>;
+				connection.receipts.set(registrationKey, {
+					...known,
+					principalId: "principal-b",
+				});
+			};
+			expect(await tick()).toBe(1);
+			// The pin stays (exception item 6); nothing re-pins to the new value.
+			expect(await confirmState(projection.authorizationId)).toEqual([
+				{
+					pins: 1,
+					receipts: 1,
+					status: "revoked",
+					commands:
+						"confirm:rejected,confirm_binding_readback:completed,confirm_exchange:rejected,revoke:pending",
+				},
+			]);
+			exchangedNothing();
+			expect(connection.codes.size).toBe(1);
+		},
+		confirmTimeout,
+	);
+
+	it.each([
+		[
+			"the original fence moved",
+			() =>
+				client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`,
+		],
+		[
+			"the pin was released",
+			() =>
+				client`update platform.connection_principal_pins set released_at=now()`,
+		],
+		[
+			"the first-pin receipt expired",
+			() =>
+				client`update platform.connection_principal_pin_receipts set expires_at=now()-interval '1 second'`,
+		],
+	])(
+		"reads nothing back and exchanges nothing in phase 2 once %s",
+		async (_name, change) => {
+			const { projection } = await approvedInstall();
+			readbackHook = async (request) => {
+				if (request.command?.command !== "confirm_exchange") return;
+				readbackHook = undefined;
+				await change();
+			};
+			await tick();
+			const getCount = connection.requests.filter(
+				({ method }) => method === "GET",
+			).length;
+			expect(getCount).toBe(1);
+			exchangedNothing();
+			const [state] = await confirmState(projection.authorizationId);
+			expect(state?.commands).toMatch(/confirm_exchange:(unknown|sending)/);
+			expect(state?.commands).not.toContain("confirm_exchange:completed");
 		},
 		confirmTimeout,
 	);

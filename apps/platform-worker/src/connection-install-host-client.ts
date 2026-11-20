@@ -22,8 +22,12 @@ import {
 	ConnectionInstallConfirmBindingReadbackRequestV1Schema,
 	type ConnectionInstallConfirmBindingReadbackResponseV1,
 	ConnectionInstallConfirmBindingReadbackResponseV1Schema,
+	ConnectionInstallConfirmExchangeRequestV1Schema,
+	type ConnectionInstallConfirmExchangeResponseV1,
+	ConnectionInstallConfirmExchangeResponseV1Schema,
 	ConnectionInstallFirstBeginGrantClaimsV1Schema,
 	ConnectionInstallFirstBeginRequestV1Schema,
+	type ConnectionManualConfirmCandidateV1,
 	type ConnectionManualInstallDescriptorV1,
 	ConnectionRegistrationKeyV1Schema,
 	type ConnectionRegistrationReceiptV1,
@@ -45,6 +49,7 @@ import {
 import {
 	connectionInstallConfigurationDigestV1,
 	connectionInstallRequestDigestV1,
+	connectionManualConfirmCandidateDigestV1,
 	connectionManualInstallDescriptorDigestV1,
 	connectionManualInstallDescriptorMatchesV1,
 	connectionRegistrationKeyHashV1,
@@ -124,6 +129,26 @@ export interface ConnectionInstallHostClientV1 {
 		},
 		signal: AbortSignal,
 	): Promise<ConnectionInstallConfirmBindingReadbackResponseV1>;
+	/** §13.5.6 exception confirm, phase 2: after the first-pin receipt committed. */
+	confirmExchange(
+		input: {
+			readonly confirmCommandId: string;
+			readonly commandId: string;
+			readonly attemptId: string;
+			readonly attemptOwner: string;
+			readonly template: ConnectionRegistrationTemplateV1;
+			readonly supplyAttemptId: string;
+			readonly registrationKey: string;
+			readonly descriptor: ConnectionManualInstallDescriptorV1;
+			readonly pinReceipt: {
+				readonly id: string;
+				readonly revision: number;
+				readonly candidateDigest: string;
+			};
+			readonly candidate: ConnectionManualConfirmCandidateV1;
+		},
+		signal: AbortSignal,
+	): Promise<ConnectionInstallConfirmExchangeResponseV1>;
 	/** The single begin that fixes the configuration on the Host and creates the link. */
 	firstBegin(
 		input: {
@@ -539,6 +564,70 @@ export function createConnectionInstallHostClientV1(options: {
 						),
 					);
 				// Only this command's own answer counts; the Store checks the candidate.
+				if (result.commandId !== unsigned.commandId) unavailable();
+				return result;
+			});
+		},
+
+		confirmExchange(input, signal) {
+			return guarded(async () => {
+				const template = ConnectionRegistrationTemplateV1Schema.parse(
+					input.template,
+				);
+				const registrationKeyHash = registrationKeyHashFor(
+					template,
+					input.registrationKey,
+				);
+				const { grant: _grant, ...unsigned } =
+					ConnectionInstallConfirmExchangeRequestV1Schema.parse({
+						schemaVersion: 1,
+						contract: connectionManualConfirmContractV1,
+						phase: "exchange",
+						confirmCommandId: input.confirmCommandId,
+						commandId: input.commandId,
+						attemptId: input.attemptId,
+						attemptOwner: input.attemptOwner,
+						template,
+						supplyAttemptId: input.supplyAttemptId,
+						registrationKey: input.registrationKey,
+						descriptor: input.descriptor,
+						pinReceipt: input.pinReceipt,
+						candidate: input.candidate,
+						grant: unsignedGrant,
+					});
+				if (
+					unsigned.descriptor.registrationKey !== unsigned.registrationKey ||
+					connectionManualConfirmCandidateDigestV1(unsigned.candidate) !==
+						unsigned.pinReceipt.candidateDigest
+				)
+					unavailable();
+				const templateDigest = connectionRegistrationTemplateDigestV1(template);
+				const requestDigest = connectionInstallRequestDigestV1(unsigned);
+				const result = ConnectionInstallConfirmExchangeResponseV1Schema.parse(
+					await send(
+						template.target.runtimeOrigin,
+						connectionInstallPathsV1.confirmExchange,
+						signal,
+						(channelBinding) => ({
+							...unsigned,
+							grant: jws(
+								connectionInstallJwsTypesV1.registration,
+								ConnectionInstallCommandClaimsV1Schema.parse({
+									...installClaims(channelBinding, requestDigest),
+									purpose: "connection_registration",
+									command: "confirm_exchange",
+									commandId: unsigned.commandId,
+									attemptId: unsigned.attemptId,
+									attemptOwner: unsigned.attemptOwner,
+									authorizationId: template.authorizationId,
+									templateDigest,
+									supplyAttemptId: unsigned.supplyAttemptId,
+									registrationKeyHash,
+								}),
+							),
+						}),
+					),
+				);
 				if (result.commandId !== unsigned.commandId) unavailable();
 				return result;
 			});
