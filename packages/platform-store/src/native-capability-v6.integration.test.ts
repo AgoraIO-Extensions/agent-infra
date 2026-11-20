@@ -117,8 +117,8 @@ function request(executionId = "native-v6-execution") {
 		capabilityId: "c".repeat(64),
 		capabilityKind: "command" as const,
 		directoryRevision: "d".repeat(64),
-		parameters: "compact",
-		parametersDigest: createHash("sha256").update("compact").digest("hex"),
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
 		capabilitySourceVersion: "0.153.0",
 		selection: {
 			schemaVersion: 1 as const,
@@ -859,7 +859,7 @@ it.each([false, true])(
 						executionId: request().executionId,
 						confirmedCursor: body.confirmedCursor,
 					});
-				throw new Error("Unexpected synthetic Host path: " + path);
+				throw new Error(`Unexpected synthetic Host path: ${path}`);
 			},
 		});
 		try {
