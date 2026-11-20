@@ -803,6 +803,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
 			// The Owner manual association holds only the Consumer service credential as ADR 0002
 			// ciphertext plus a reuse fingerprint (Spec §13.5.3 exception), never Provider credentials.
+			// The §13.5.1 exception pins and their receipts hold only non-secret Principal ids
+			// and the Host's candidate facts.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
 				"connection_association_generations",
@@ -818,6 +820,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_manual_associations.credential_fingerprint",
 				"connection_manual_installations",
 				"connection_manual_installations.connection_agent_id",
+				"connection_principal_pin_receipts",
+				"connection_principal_pins",
 				"platform_api_credentials",
 				"platform_api_credentials.credential_hash",
 				"wecom_connections",
@@ -2109,6 +2113,7 @@ describe("published Relay authority migration", () => {
 			90,
 			91,
 			92,
+			93,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2222,9 +2227,13 @@ describe("published Relay authority migration", () => {
 			idx: 91,
 			tag: "0091_connection_host_supplies",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 92)).toMatchObject({
 			idx: 92,
 			tag: "0092_connection_manual_descriptor",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 93,
+			tag: "0093_connection_manual_confirm",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2853,6 +2862,46 @@ describe("published Relay authority migration", () => {
 					(name) =>
 						`connection_manual_installations:connection_manual_installation_${name}`,
 				),
+			);
+			expectedDelta.columns.push(
+				...[
+					"id",
+					"issuer",
+					"principal_id",
+					"user_id",
+					"policy_ref",
+					"policy_revision",
+					"pinned_at",
+					"released_at",
+					"revision",
+				].map((name) => `connection_principal_pins:${name}`),
+				...[
+					"id",
+					"revision",
+					"authorization_id",
+					"confirm_command_id",
+					"phase_command_id",
+					"pin_id",
+					"pin_revision",
+					"candidate",
+					"candidate_digest",
+					"claim_owner",
+					"claim_fence",
+					"attempt_id",
+					"expires_at",
+					"created_at",
+				].map((name) => `connection_principal_pin_receipts:${name}`),
+			);
+			expectedDelta.checks.push(
+				"connection_principal_pins:connection_principal_pin_identity",
+				"connection_principal_pin_receipts:connection_principal_pin_receipt_digest",
+			);
+			expectedDelta.indexes.push(
+				"connection_principal_pins:connection_principal_pins_pkey",
+				"connection_principal_pins:connection_principal_pin_principal_unique",
+				"connection_principal_pins:connection_principal_pin_user_unique",
+				"connection_principal_pin_receipts:connection_principal_pin_receipts_pkey",
+				"connection_principal_pin_receipts:connection_principal_pin_receipt_confirm_unique",
 			);
 			expectedDelta.columns.push(
 				...["agent_id", "last_revision", "updated_at"].map(

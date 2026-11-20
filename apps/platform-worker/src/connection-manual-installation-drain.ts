@@ -485,6 +485,9 @@ export function createConnectionManualInstallationDrainV1(
 			for (const item of pending) {
 				if (signal.aborted) break;
 				if (!executionIds.includes(item.executionId)) continue;
+				// The two-phase exception confirm drain (§13.5.6) is not delivered yet:
+				// a confirm is never claimed here, so it stays pending and unsent.
+				if (item.command === "confirm") continue;
 				const claimed = await store.claim({
 					commandId: item.commandId,
 					attemptId: randomUUID(),

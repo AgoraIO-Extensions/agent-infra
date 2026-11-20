@@ -230,6 +230,23 @@ describe("manual install drain", () => {
 		expect(await h.drain.drain([], new AbortController().signal)).toBe(0);
 	});
 
+	it("never claims a confirm before its two-phase drain exists", async () => {
+		const h = harness();
+		h.store.listPending.mockResolvedValueOnce([
+			{
+				commandId: "confirm-a",
+				command: "confirm" as never,
+				authorizationId: "authorization-a",
+				executionId: "execution-a",
+			},
+		]);
+		expect(
+			await h.drain.drain(["execution-a"], new AbortController().signal),
+		).toBe(0);
+		expect(h.store.claim).not.toHaveBeenCalled();
+		expect(h.host.command).not.toHaveBeenCalled();
+	});
+
 	it("hands its cancellation signal to the bounded recovery pass", async () => {
 		const h = harness();
 		const controller = new AbortController();

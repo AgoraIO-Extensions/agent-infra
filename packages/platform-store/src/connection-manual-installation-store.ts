@@ -6,6 +6,8 @@ import {
 	ConnectionInstallCommandResponseV1Schema,
 	type ConnectionInstallReadbackRequestV1,
 	ConnectionInstallReadbackRequestV1Schema,
+	type ConnectionManualConfirmCandidateV1,
+	ConnectionManualConfirmCandidateV1Schema,
 	type ConnectionManualInstallDescriptorV1,
 	ConnectionManualInstallDescriptorV1Schema,
 	type ConnectionRegistrationReceiptV1,
@@ -19,6 +21,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import {
 	connectionInstallConfigurationDigestV1,
+	connectionManualConfirmCandidateDigestV1,
 	connectionManualInstallConfigurationV1,
 	connectionManualInstallDescriptorDigestV1,
 	connectionManualInstallDescriptorV1,
@@ -60,7 +63,10 @@ const manualCommands: readonly ManualCommand[] = [
 	"revoke",
 	"begin",
 	"begin_status",
+	"confirm",
 ];
+/** §13.5.6 exception confirm phase commands; each is a row of the original confirm. */
+type ConfirmPhaseCommand = "confirm_binding_readback" | "confirm_exchange";
 /** Two bounded network hops (supply, then one Connection request) per attempt. */
 const attemptLifetime = sql`interval '60 seconds'`;
 /**
@@ -115,6 +121,8 @@ const eligible = sql`(
 	or (c.command = 'begin' and a.status in ('awaiting_confirmation','confirmed') and m.registration_state = 'registered' and m.supply_state = 'confirmed')
 	or (c.command = 'begin_status' and a.status in ('awaiting_confirmation','confirmed') and m.registration_state = 'registered' and m.supply_state = 'confirmed')
 	or (c.command = 'revoke' and m.revoke_state = 'pending' and m.supply_state = 'confirmed')
+	or (c.command = 'confirm' and a.status = 'confirmed' and m.registration_state = 'registered'
+		and m.supply_state = 'confirmed' and m.revoke_state = 'not_required' and m.descriptor_digest is not null)
 ) and (c.command = 'revoke' or a.expires_at > clock_timestamp())`;
 
 /**
@@ -569,7 +577,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			attemptOwner: string;
 			authorizationId: string;
 		},
-		command: ManualCommand,
+		command: ManualCommand | ConfirmPhaseCommand,
 		allowReservedPrepare = false,
 		includeExpired = false,
 	) {
@@ -829,7 +837,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly commandId: string;
 		readonly attemptId: string;
 		readonly attemptOwner: string;
-		readonly command: ManualCommand;
+		readonly command: ManualCommand | ConfirmPhaseCommand;
 		readonly authorizationId: string;
 		readonly deliveryDigest: string;
 	}): Promise<boolean> {
@@ -871,6 +879,382 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				`);
 			return true;
 		});
+	}
+
+	/**
+	 * §13.5.6 exception confirm: final-write predicate of a phase. The phase and
+	 * its logical confirm are sending for the same attempt, the original
+	 * Execution is processing, the authorization is confirmed and live, the
+	 * installation is open with its descriptor, and the original claim, fence and
+	 * the exception's `notAfter` hold at the database clock.
+	 */
+	#phaseHolds(input: {
+		readonly confirmCommandId: string;
+		readonly phaseCommandId: string;
+		readonly phase: ConfirmPhaseCommand;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+		readonly template: ConnectionRegistrationTemplateV1;
+	}) {
+		return sql`exists (select 1 from platform.connection_installation_commands p
+			join platform.connection_installation_commands c on c.id=${input.confirmCommandId}
+				and c.authorization_id=p.authorization_id
+			join platform.connection_installation_authorizations a on a.id=p.authorization_id
+			join platform.connection_manual_installations m on m.authorization_id=a.id
+			join platform.conversation_executions e on e.execution_id=a.execution_id
+			where p.id=${input.phaseCommandId} and p.command=${input.phase} and p.status='sending'
+				and p.attempt_id=${input.attemptId} and p.attempt_owner=${input.attemptOwner}
+				and p.attempt_expires_at > clock_timestamp() and p.delivery_digest is not null
+				and c.command='confirm' and c.status='sending'
+				and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+				and c.attempt_expires_at > clock_timestamp()
+				and a.id=${input.authorizationId} and a.status='confirmed' and a.expires_at > clock_timestamp()
+				and e.status='processing'
+				and m.registration_state='registered' and m.supply_state='confirmed'
+				and m.revoke_state='not_required' and m.descriptor_digest is not null
+				and ${connectionManualExceptionLiveV1(this.#policy)}
+				and ${originalClaimHolds(input.template.reference, input.template.claim)})`;
+	}
+
+	/**
+	 * Opens one exception confirm phase as `sending` under the logical confirm's
+	 * attempt (§13.5.6). `binding_readback` comes first; `exchange` only after
+	 * this confirm's first-pin receipt committed and its pin is still active.
+	 * Neither phase is ever reopened, re-keyed or moved to another claim.
+	 */
+	async openConfirmPhase(input: {
+		readonly confirmCommandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+		readonly phase: ConfirmPhaseCommand;
+	}): Promise<{
+		readonly phaseCommandId: string;
+		readonly requestDigest: string;
+		readonly receipt?: {
+			readonly id: string;
+			readonly revision: number;
+			readonly candidateDigest: string;
+		};
+	} | null> {
+		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			if (!row?.associationLocked || !row.template) return null;
+			const template = ConnectionRegistrationTemplateV1Schema.parse(
+				row.template,
+			);
+			const [receipt] =
+				input.phase === "confirm_exchange"
+					? await tx.execute(sql`
+						select r.id, r.revision, r.candidate_digest from platform.connection_principal_pin_receipts r
+						join platform.connection_principal_pins pin on pin.id=r.pin_id and pin.revision=r.pin_revision
+							and pin.released_at is null
+						join platform.connection_installation_commands b on b.authorization_id=r.authorization_id
+							and b.id=r.phase_command_id and b.command='confirm_binding_readback' and b.status='completed'
+						where r.confirm_command_id=${input.confirmCommandId} and r.authorization_id=${input.authorizationId}
+							and r.attempt_id=${input.attemptId} and r.claim_owner=${input.attemptOwner}
+							and r.claim_fence=${template.claim.fence} and r.expires_at > clock_timestamp()`)
+					: [undefined];
+			if (input.phase === "confirm_exchange" && !receipt) return null;
+			const phaseCommandId = randomUUID();
+			const requestDigest = sha256(
+				JSON.stringify([
+					input.phase,
+					input.confirmCommandId,
+					input.authorizationId,
+					receipt?.id ?? null,
+					receipt?.candidate_digest ?? null,
+				]),
+			);
+			// The phase row is inserted only while the logical confirm and every
+			// binding still hold; a phase that ever existed is never opened again.
+			const opened = await tx.execute(sql`
+				insert into platform.connection_installation_commands
+					(id, authorization_id, command, idempotency_key, request_digest, status,
+					 attempt_id, attempt_owner, attempt_expires_at)
+				select ${phaseCommandId}, c.authorization_id, ${input.phase},
+					${`confirm-phase:${input.confirmCommandId}:${input.phase}`}, ${requestDigest}, 'sending',
+					c.attempt_id, c.attempt_owner, c.attempt_expires_at
+				from platform.connection_installation_commands c
+				join platform.connection_installation_authorizations a on a.id=c.authorization_id
+				join platform.connection_manual_installations m on m.authorization_id=a.id
+				join platform.conversation_executions e on e.execution_id=a.execution_id
+				where c.id=${input.confirmCommandId} and c.authorization_id=${input.authorizationId}
+					and c.command='confirm' and c.status='sending'
+					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and c.attempt_expires_at > clock_timestamp()
+					and a.status='confirmed' and a.expires_at > clock_timestamp() and e.status='processing'
+					and m.registration_state='registered' and m.supply_state='confirmed'
+					and m.revoke_state='not_required' and m.descriptor_digest is not null
+					and ${connectionManualExceptionLiveV1(this.#policy)}
+					and ${originalClaimHolds(template.reference, template.claim)}
+					and not exists (select 1 from platform.connection_installation_commands prior
+						where prior.authorization_id=c.authorization_id
+							and prior.idempotency_key=${`confirm-phase:${input.confirmCommandId}:${input.phase}`})
+					and (${input.phase === "confirm_binding_readback"} or exists (
+						select 1 from platform.connection_installation_commands b
+						where b.authorization_id=c.authorization_id and b.command='confirm_binding_readback'
+							and b.idempotency_key=${`confirm-phase:${input.confirmCommandId}:confirm_binding_readback`}
+							and b.status='completed'))
+				on conflict (authorization_id, command, idempotency_key) do nothing
+				returning id
+			`);
+			if (opened.length !== 1) return null;
+			return {
+				phaseCommandId,
+				requestDigest,
+				...(receipt
+					? {
+							receipt: {
+								id: receipt.id as string,
+								revision: Number(receipt.revision),
+								candidateDigest: receipt.candidate_digest as string,
+							},
+						}
+					: {}),
+			};
+		});
+	}
+
+	/**
+	 * §13.5.6 exception confirm, step 2: the Worker commits the first pin from
+	 * the Host's phase-1 candidate. One Store CAS checks the candidate against
+	 * this installation, the per-issuer uniqueness (pins and Principals confirmed
+	 * outside the exception), the user's existing pin and the capacity, then
+	 * saves the pin (or reuses the same one), the phase result and this confirm's
+	 * own commit receipt. A refused candidate closes the installation and revokes
+	 * its original key; a write whose bindings no longer hold commits nothing.
+	 */
+	async commitConfirmPin(input: {
+		readonly confirmCommandId: string;
+		readonly phaseCommandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+		readonly candidate: ConnectionManualConfirmCandidateV1;
+	}): Promise<
+		| {
+				readonly outcome: "pinned";
+				readonly receipt: {
+					readonly id: string;
+					readonly revision: number;
+					readonly candidateDigest: string;
+				};
+		  }
+		| { readonly outcome: "rejected" | "unknown" | "stale" }
+	> {
+		const parsed = ConnectionManualConfirmCandidateV1Schema.safeParse(
+			input.candidate,
+		);
+		// Rolls the whole CAS back; #transaction rethrows Connection errors as-is.
+		class Uncommitted extends ConnectionInstallationErrorV1 {
+			constructor() {
+				super("unavailable");
+			}
+		}
+		const uncommitted = () => new Uncommitted();
+		try {
+			return await this.#transaction(async (tx) => {
+				const row = await this.#lockInstallation(tx, input.authorizationId);
+				if (!row?.associationLocked || !row.template)
+					return { outcome: "stale" };
+				const template = ConnectionRegistrationTemplateV1Schema.parse(
+					row.template,
+				);
+				const phase = await this.#sending(
+					tx,
+					{
+						commandId: input.phaseCommandId,
+						attemptId: input.attemptId,
+						attemptOwner: input.attemptOwner,
+						authorizationId: input.authorizationId,
+					},
+					"confirm_binding_readback",
+				);
+				if (!phase?.delivery_digest) return { outcome: "stale" };
+				const authorization = this.#authorization(row);
+				// Core recheck of the original user and Agent use, after which every
+				// write below re-evaluates the bindings at the database clock.
+				const current = await this.#facts(
+					tx,
+					authorization.principal.id,
+					authorization.reference.executionId,
+				);
+				const holds = this.#phaseHolds({
+					...input,
+					phase: "confirm_binding_readback",
+					template,
+				});
+				if (
+					!current ||
+					current.claim.owner !== input.attemptOwner ||
+					!manualTemplateMatchesCurrentV1(
+						this.#policy,
+						template,
+						authorization,
+						current,
+						row.registration_key_hash as string,
+					)
+				)
+					return { outcome: "unknown" };
+				const candidate = parsed.success ? parsed.data : undefined;
+				const fixedReceipt = row.receipt
+					? ConnectionRegistrationReceiptV1Schema.parse(row.receipt)
+					: undefined;
+				const exception = this.#policy.dynamic.principalMapping;
+				const issuer = this.#policy.access.system.issuer;
+				const matches =
+					candidate !== undefined &&
+					isDeepStrictEqual(candidate.principal, authorization.principal) &&
+					isDeepStrictEqual(candidate.reference, authorization.reference) &&
+					candidate.authorizationId === authorization.authorizationId &&
+					candidate.confirmationRevision ===
+						authorization.confirmationRevision &&
+					candidate.association.connectionAgentId === row.connection_agent_id &&
+					candidate.association.revision === Number(row.association_revision) &&
+					candidate.confirm.commandId === input.confirmCommandId &&
+					candidate.confirm.phaseCommandId === input.phaseCommandId &&
+					candidate.confirm.requestDigest === phase.delivery_digest &&
+					isDeepStrictEqual(candidate.target, template.target) &&
+					candidate.descriptorDigest === row.descriptor_digest &&
+					isDeepStrictEqual(candidate.supply, template.supply) &&
+					isDeepStrictEqual(candidate.exceptionPolicy, exception.policy) &&
+					candidate.verified.issuer === issuer &&
+					fixedReceipt !== undefined &&
+					candidate.verified.registrationKey === row.registration_key &&
+					candidate.verified.clientId === fixedReceipt.clientId &&
+					candidate.verified.consumerId === fixedReceipt.consumerId &&
+					candidate.verified.instanceId === fixedReceipt.instanceId &&
+					candidate.verified.redirectUri ===
+						template.registration.redirectUri &&
+					candidate.verified.resource === template.registration.resource;
+				if (!candidate || !matches) {
+					if (!(await this.#rejectConfirm(tx, input, holds)))
+						throw uncommitted();
+					return { outcome: "rejected" };
+				}
+				const principalId = candidate.verified.principalId;
+				const userId = authorization.principal.id;
+				// Serialize every pin decision for this Principal and this user.
+				for (const scope of [
+					["connection-principal-pin", issuer, "principal", principalId],
+					["connection-principal-pin", issuer, "user", userId],
+				].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
+					await tx.execute(
+						sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(scope)}, 0))`,
+					);
+				const pins = await tx.execute(sql`
+					select id, revision, principal_id, user_id from platform.connection_principal_pins
+					where issuer=${issuer} and released_at is null
+						and (principal_id=${principalId} or user_id=${userId})
+					for update
+				`);
+				const own = pins.find((pin) => pin.user_id === userId);
+				const conflict =
+					pins.some(
+						(pin) => pin.principal_id === principalId && pin.user_id !== userId,
+					) ||
+					(own !== undefined && own.principal_id !== principalId) ||
+					this.#policy.confirmedPrincipals.some(
+						(entry) =>
+							entry.issuer === issuer &&
+							entry.principalId === principalId &&
+							entry.userId !== userId,
+					);
+				const [capacity] = own
+					? [{ full: false }]
+					: await tx.execute(sql`
+						select count(*) >= ${exception.maximumPinnedPrincipals} as full
+						from platform.connection_principal_pins where released_at is null`);
+				if (conflict || capacity?.full === true) {
+					if (!(await this.#rejectConfirm(tx, input, holds)))
+						throw uncommitted();
+					return { outcome: "rejected" };
+				}
+				const pinId = (own?.id as string | undefined) ?? randomUUID();
+				if (!own) {
+					const inserted = await tx.execute(sql`
+						insert into platform.connection_principal_pins
+							(id, issuer, principal_id, user_id, policy_ref, policy_revision)
+						select ${pinId}, ${issuer}, ${principalId}, ${userId},
+							${exception.policy.ref}, ${exception.policy.revision}
+						where ${holds}
+						returning id
+					`);
+					if (inserted.length !== 1) throw uncommitted();
+				}
+				const receiptId = randomUUID();
+				const candidateDigest =
+					connectionManualConfirmCandidateDigestV1(candidate);
+				const receipt = await tx.execute(sql`
+					insert into platform.connection_principal_pin_receipts
+						(id, authorization_id, confirm_command_id, phase_command_id, pin_id, pin_revision,
+						 candidate, candidate_digest, claim_owner, claim_fence, attempt_id, expires_at)
+					select ${receiptId}, a.id, ${input.confirmCommandId}, ${input.phaseCommandId}, pin.id, pin.revision,
+						${JSON.stringify(candidate)}::jsonb, ${candidateDigest}, ${input.attemptOwner},
+						${template.claim.fence}, ${input.attemptId}, a.expires_at
+					from platform.connection_installation_authorizations a
+					join platform.connection_principal_pins pin on pin.id=${pinId} and pin.released_at is null
+						and pin.issuer=${issuer} and pin.principal_id=${principalId} and pin.user_id=${userId}
+					where a.id=${input.authorizationId} and ${holds}
+					returning id, revision
+				`);
+				const done = await tx.execute(sql`
+					update platform.connection_installation_commands set status='completed', updated_at=clock_timestamp()
+					where id=${input.phaseCommandId} and status='sending' and ${holds}
+					returning id
+				`);
+				if (receipt.length !== 1 || done.length !== 1) throw uncommitted();
+				return {
+					outcome: "pinned",
+					receipt: {
+						id: receiptId,
+						revision: Number(receipt[0]?.revision),
+						candidateDigest,
+					},
+				};
+			});
+		} catch (error) {
+			// Nothing of this CAS committed: no partial pin, phase result or receipt.
+			if (error instanceof Uncommitted) return { outcome: "unknown" };
+			throw error;
+		}
+	}
+
+	/** Refused principal (§13.5.1 item 2): no exchange; close and revoke the original key. */
+	async #rejectConfirm(
+		tx: Transaction,
+		input: {
+			readonly confirmCommandId: string;
+			readonly phaseCommandId: string;
+			readonly authorizationId: string;
+		},
+		holds: ReturnType<typeof sql>,
+	) {
+		const closed = await tx.execute(sql`
+			update platform.connection_installation_commands set status='rejected', updated_at=clock_timestamp()
+			where id in (${input.phaseCommandId}, ${input.confirmCommandId}) and status='sending' and ${holds}
+			returning id
+		`);
+		if (closed.length !== 2) return false;
+		await tx.execute(sql`
+			update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
+				updated_at=clock_timestamp() where id=${input.authorizationId} and status='confirmed'
+		`);
+		await tx.execute(sql`
+			update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,
+				updated_at=clock_timestamp() where authorization_id=${input.authorizationId} and revoke_state='not_required'
+		`);
+		await tx.execute(sql`
+			insert into platform.connection_installation_commands
+				(id, authorization_id, command, idempotency_key, request_digest, status)
+			select ${randomUUID()}, a.id, 'revoke', ${`manual-revoke:${input.authorizationId}`},
+				${sha256(JSON.stringify(["revoke", "principal-unverified", input.authorizationId]))}, 'pending'
+			from platform.connection_installation_authorizations a where a.id=${input.authorizationId}
+			on conflict (authorization_id, command, idempotency_key) do nothing
+		`);
+		return true;
 	}
 
 	async #finishCommand(

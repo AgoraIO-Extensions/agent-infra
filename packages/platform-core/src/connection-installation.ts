@@ -207,6 +207,19 @@ export interface ConnectionInstallationTransactionV1 {
 	 * registration) or begin_status (lost first begin) under the original claim.
 	 */
 	requestManualStatus?(userId: string, authorizationId: string): Promise<void>;
+	/**
+	 * §13.5.6 dynamic manual confirm: one CAS on the original installation that
+	 * records the original user's explicit confirmation and its single logical
+	 * confirm command. False when any authoritative input no longer holds.
+	 */
+	confirmManual?(input: {
+		readonly userId: string;
+		readonly authorizationId: string;
+		readonly confirmationRevision: string;
+		readonly command: ConnectionInstallationCommandFactV1;
+		readonly key: string;
+	}): Promise<boolean>;
+
 	read(
 		userId: string,
 		authorizationId: string,
@@ -426,7 +439,9 @@ function manualProjection(
 				: record.registrationState === "failed" ||
 						record.registrationState === "closed"
 					? "revoked"
-					: "awaiting_confirmation",
+					: record.status === "confirmed"
+						? "confirmed"
+						: "awaiting_confirmation",
 		expiresAt: record.expiresAt,
 	};
 }
@@ -516,17 +531,86 @@ export function createConnectionInstallationAuthorizationV1(options: {
 					);
 					return manualProjection(manual);
 				}
-				if (
-					request.command !== "begin" &&
-					(request.command === "confirm" || !manualRoute) &&
-					(await transaction.readManual?.(
+				const manualRecord =
+					request.command !== "begin"
+						? await transaction.readManual?.(
+								request.userId,
+								request.authorizationId as string,
+							)
+						: null;
+				// A static-only entry never reads, verifies or confirms a manual install.
+				if (manualRecord && !manualRoute) denied();
+				const manualConfirm =
+					request.command === "confirm" ? manualRecord : null;
+				if (manualConfirm) {
+					// §13.5.6 dynamic manual confirm: the original user's explicit
+					// confirmation of the bound installation, saved with one command.
+					if (
+						!transaction.currentManual ||
+						!transaction.confirmManual ||
+						!transaction.receiptManual
+					)
+						denied();
+					const current = requireManualCurrent(
+						await transaction.currentManual(
+							request.userId,
+							manualConfirm.reference.executionId,
+						),
 						request.userId,
-						request.authorizationId as string,
-					))
-				)
-					// The manual route's code exchange and publication are not enabled,
-					// and a static-only entry never reads or verifies a manual install.
-					denied();
+					);
+					if (current.user.authorizationRevision !== request.identityRevision)
+						denied();
+					const now = await transaction.now();
+					requireManualOriginal(manualConfirm, current, now);
+					const replay = await transaction.receiptManual(
+						request.userId,
+						request.idempotencyKey as string,
+						request.command,
+						digest,
+					);
+					if (replay) {
+						requireManualOriginal(replay, current, now);
+						return manualProjection(replay);
+					}
+					if (
+						manualConfirm.status !== "awaiting_confirmation" ||
+						manualConfirm.registrationState !== "registered" ||
+						!(await transaction.confirmManual({
+							userId: request.userId,
+							authorizationId: manualConfirm.authorizationId,
+							confirmationRevision: manualConfirm.confirmationRevision,
+							command: {
+								schemaVersion: 1,
+								commandId: randomUUID(),
+								authorizationId: manualConfirm.authorizationId,
+								command: "confirm",
+								requestDigest: digest,
+								status: "pending",
+								attemptId: null,
+								attemptOwner: null,
+								createdAt: now,
+								updatedAt: now,
+							},
+							key: request.idempotencyKey as string,
+						}))
+					)
+						throw new ConnectionInstallationErrorV1("conflict");
+					await transaction.audit(
+						request.userId,
+						manualConfirm.authorizationId,
+						request.command,
+						request.requestId,
+						request.traceId,
+					);
+					await transaction.completeReceipt(
+						request.userId,
+						request.idempotencyKey as string,
+						request.command,
+						digest,
+						manualConfirm.authorizationId,
+					);
+					return manualProjection({ ...manualConfirm, status: "confirmed" });
+				}
 				const executionId =
 					request.executionId ?? existing?.authorization.reference.executionId;
 				const staticCurrent = await transaction.current(

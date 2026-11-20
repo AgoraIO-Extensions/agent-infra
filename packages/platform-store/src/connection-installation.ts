@@ -35,6 +35,7 @@ import {
 	type ConnectionManualInstallationPolicyInputV1,
 	type ConnectionManualInstallationPolicyV1,
 	captureConnectionManualInstallationPolicyV1,
+	confirmConnectionManualInstallationV1,
 	createConnectionManualInstallationV1,
 	lockConnectionManualAssociationForInstallationV1,
 	readConnectionManualInstallationBindingV1,
@@ -511,6 +512,13 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 								userId,
 								authorizationId,
 							),
+						confirmManual: (
+							input: Parameters<
+								NonNullable<
+									ConnectionInstallationTransactionV1["confirmManual"]
+								>
+							>[0],
+						) => confirmConnectionManualInstallationV1(tx, manualPolicy, input),
 					}
 				: {}),
 			claimCallback: async ({ stateHash, now }) => {

@@ -7,6 +7,8 @@ import {
 	resolveApprovedConnectionConsumerProfileV1,
 } from "../connection-consumer-profile.ts";
 import {
+	type ConnectionManualConfirmCandidateV1,
+	ConnectionManualConfirmCandidateV1Schema,
 	type ConnectionManualDynamicApprovalV1,
 	ConnectionManualDynamicApprovalV1Schema,
 	type ConnectionManualInstallDescriptorV1,
@@ -488,5 +490,15 @@ export function connectionManualInstallDescriptorMatchesV1(
 		parsed.data.configuration.digest ===
 			connectionInstallConfigurationDigestV1(input.configuration) &&
 		isDeepStrictEqual(parsed.data.supply, input.template.supply)
+	);
+}
+
+export function connectionManualConfirmCandidateDigestV1(
+	candidate: ConnectionManualConfirmCandidateV1,
+): string {
+	return sha256(
+		canonicalConnectionInstallJsonV1(
+			ConnectionManualConfirmCandidateV1Schema.parse(candidate),
+		),
 	);
 }

@@ -277,6 +277,57 @@ export type ConnectionManualInstallDescriptorV1 = z.infer<
 	typeof ConnectionManualInstallDescriptorV1Schema
 >;
 
+/** §13.5.6 exception confirm phases; one logical confirm drives both in order. */
+export const ConnectionManualConfirmPhaseV1Schema = z.enum([
+	"binding_readback",
+	"exchange",
+]);
+export type ConnectionManualConfirmPhaseV1 = z.infer<
+	typeof ConnectionManualConfirmPhaseV1Schema
+>;
+
+/**
+ * §13.5.6 exception confirm, phase 1: the non-secret candidate the Host verified
+ * with the EP-1060 readback. It never carries code, verifier or Token material;
+ * the Store CAS checks every field against its own facts before the first pin.
+ */
+export const ConnectionManualConfirmCandidateV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	principal: z.strictObject({ kind: z.literal("user"), id: OpaqueIdV1Schema }),
+	reference: RuntimeOAuthOriginalExecutionRefV1Schema,
+	authorizationId: OpaqueIdV1Schema,
+	confirmationRevision: OpaqueIdV1Schema,
+	association: z.strictObject({
+		connectionAgentId: z.string().regex(/^[a-z0-9][a-z0-9-]{2,79}$/),
+		revision: positive,
+	}),
+	confirm: z.strictObject({
+		commandId: OpaqueIdV1Schema.max(128),
+		phase: z.literal("binding_readback"),
+		phaseCommandId: OpaqueIdV1Schema.max(128),
+		requestDigest: hex64,
+	}),
+	target: ConnectionHostInstallTargetV1Schema,
+	descriptorDigest: hex64,
+	supply: z.strictObject({ ref: contextText, revision: contextText }),
+	exceptionPolicy: reference,
+	verified: z.strictObject({
+		issuer: httpsUrl({ origin: false }),
+		registrationKey: ConnectionRegistrationKeyV1Schema,
+		principalId: installIdentifier,
+		clientId: installIdentifier,
+		consumerId: installIdentifier,
+		instanceId: installIdentifier,
+		redirectUri: httpsUrl({ origin: false }),
+		resource: z.string().min(1).max(2048),
+		scope: z.literal("mcp"),
+		instanceStatus: z.literal("ACTIVE"),
+	}),
+});
+export type ConnectionManualConfirmCandidateV1 = z.infer<
+	typeof ConnectionManualConfirmCandidateV1Schema
+>;
+
 const envelope = z.strictObject({
 	nonce: z.string().max(64),
 	ciphertext: z.string().max(12_000),

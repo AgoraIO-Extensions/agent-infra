@@ -4,6 +4,7 @@ import {
 	resolveApprovedConnectionSystemAccessV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
+	type ConnectionManualConfirmCandidateV1,
 	type ConnectionRegistrationReceiptV1,
 	type ConnectionRegistrationTemplateV1,
 	connectionHostDeploymentIdentityV1,
@@ -188,6 +189,8 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	await client`delete from platform.connection_principal_pin_receipts`;
+	await client`delete from platform.connection_principal_pins`;
 	await client`delete from platform.connection_manual_installations`;
 	await client`delete from platform.connection_installation_commands`;
 	await client`delete from platform.connection_installation_authorizations`;
@@ -576,14 +579,18 @@ async function beginStatusDelivered() {
 }
 
 /** A first begin whose callback mapping is committed; returns the stored state hash. */
-async function mapFirstBegin() {
-	const run = await prepareDelivered();
+async function mapFirstBegin(
+	user = "alice",
+	suffix = "a",
+	worker = "worker-a",
+) {
+	const run = await prepareDelivered(user, suffix, worker);
 	expect(await settlePrepared(run)).toBe("registered");
-	const first = await claimFirst("begin");
+	const first = await claimFirst("begin", `execution-${suffix}`, worker);
 	const attempt = {
 		commandId: first.item.commandId,
 		attemptId: first.attemptId,
-		attemptOwner: "worker-a",
+		attemptOwner: worker,
 		authorizationId: run.authorizationId,
 		command: "begin" as const,
 	};
@@ -613,6 +620,118 @@ async function callbackStatus(authorizationId: string) {
 	const [row] =
 		await client`select binding->'callback'->>'status' as status from platform.connection_installation_authorizations where id=${authorizationId}`;
 	return row?.status;
+}
+
+/** Consumed first-begin callback and the original user's explicit confirm. */
+async function confirmed(user = "alice", suffix = "a", worker = "worker-a") {
+	const { run, stateHash } = await mapFirstBegin(user, suffix, worker);
+	const claimed = await use.callback.claim({ stateHash, now: Date.now() });
+	expect(
+		await use.callback.settle({
+			stateHash,
+			attemptId: claimed?.attemptId as string,
+			now: Date.now(),
+			status: "delivered",
+		}),
+	).toBe(true);
+	const key = randomUUID();
+	const projection = await use.executeInstallation({
+		userId: user,
+		identityRevision: "identity-r1",
+		command: "confirm",
+		authorizationId: run.authorizationId,
+		idempotencyKey: key,
+		requestId: "request",
+		traceId: "trace",
+	});
+	expect(projection).toMatchObject({ manual: true, status: "confirmed" });
+	return { run, key, user, suffix, worker };
+}
+
+/** Claims the logical confirm and opens phase 1 with a committed delivery. */
+async function bindingReadback(flow: Awaited<ReturnType<typeof confirmed>>) {
+	const confirm = await claimFirst(
+		"confirm",
+		`execution-${flow.suffix}`,
+		flow.worker,
+	);
+	const attempt = {
+		confirmCommandId: confirm.item.commandId,
+		attemptId: confirm.attemptId,
+		attemptOwner: flow.worker,
+		authorizationId: flow.run.authorizationId,
+	};
+	const phase = await manual.openConfirmPhase({
+		...attempt,
+		phase: "confirm_binding_readback",
+	});
+	if (!phase) throw new Error("phase 1 not opened");
+	const deliveryDigest = randomBytes(32).toString("hex");
+	expect(
+		await manual.commitDelivery({
+			commandId: phase.phaseCommandId,
+			attemptId: confirm.attemptId,
+			attemptOwner: flow.worker,
+			command: "confirm_binding_readback",
+			authorizationId: flow.run.authorizationId,
+			deliveryDigest,
+		}),
+	).toBe(true);
+	return { ...attempt, phaseCommandId: phase.phaseCommandId, deliveryDigest };
+}
+
+/** The Host's phase-1 candidate for this installation (EP-1060 readback facts). */
+async function candidateFor(
+	flow: Awaited<ReturnType<typeof confirmed>>,
+	phase: Awaited<ReturnType<typeof bindingReadback>>,
+	principalId = "principal-a",
+): Promise<ConnectionManualConfirmCandidateV1> {
+	const [row] = await client`
+		select client_id, consumer_id, instance_id, registration_key, descriptor_digest
+		from platform.connection_manual_installations where authorization_id=${flow.run.authorizationId}`;
+	const template = flow.run.template;
+	return {
+		schemaVersion: 1,
+		principal: template.principal,
+		reference: template.reference,
+		authorizationId: template.authorizationId,
+		confirmationRevision: template.confirmationRevision,
+		association: template.association,
+		confirm: {
+			commandId: phase.confirmCommandId,
+			phase: "binding_readback",
+			phaseCommandId: phase.phaseCommandId,
+			requestDigest: phase.deliveryDigest,
+		},
+		target: template.target,
+		descriptorDigest: row?.descriptor_digest as string,
+		supply: template.supply,
+		exceptionPolicy: dynamic.principalMapping.policy,
+		verified: {
+			issuer: system.issuer,
+			registrationKey: row?.registration_key as string,
+			principalId,
+			clientId: row?.client_id as string,
+			consumerId: row?.consumer_id as string,
+			instanceId: row?.instance_id as string,
+			redirectUri: template.registration.redirectUri,
+			resource: template.registration.resource,
+			scope: "mcp",
+			instanceStatus: "ACTIVE",
+		},
+	};
+}
+
+async function pinFacts(authorizationId: string) {
+	const [row] = await client`select
+		(select count(*)::int from platform.connection_principal_pins where released_at is null) as pins,
+		(select count(*)::int from platform.connection_principal_pin_receipts where authorization_id=${authorizationId}) as receipts,
+		(select a.status from platform.connection_installation_authorizations a where a.id=${authorizationId}) as status,
+		(select m.revoke_state from platform.connection_manual_installations m where m.authorization_id=${authorizationId}) as revoke_state,
+		(select string_agg(command || ':' || status, ',' order by created_at, command)
+			from platform.connection_installation_commands
+			where authorization_id=${authorizationId} and command like 'confirm%') as confirm`;
+	return row;
 }
 
 describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
@@ -2920,5 +3039,359 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(pending.map((item) => item.commandId).sort()).toEqual(
 			commandIds.sort(),
 		);
+	});
+
+	// §13.5.6 dynamic manual confirm and the exception's pre-exchange first pin.
+	it("confirms once after the consumed callback and pins before any exchange", async () => {
+		const { run, stateHash } = await mapFirstBegin();
+		const confirm = (key = randomUUID()) =>
+			use.executeInstallation({
+				userId: "alice",
+				identityRevision: "identity-r1",
+				command: "confirm",
+				authorizationId: run.authorizationId,
+				idempotencyKey: key,
+				requestId: "request",
+				traceId: "trace",
+			});
+		// The callback of the first begin is not consumed yet.
+		await expect(confirm()).rejects.toMatchObject({ code: "conflict" });
+		const claimed = await use.callback.claim({ stateHash, now: Date.now() });
+		expect(
+			await use.callback.settle({
+				stateHash,
+				attemptId: claimed?.attemptId as string,
+				now: Date.now(),
+				status: "delivered",
+			}),
+		).toBe(true);
+		// Another user never confirms it.
+		await expect(
+			use.executeInstallation({
+				userId: "bob",
+				identityRevision: "identity-r1",
+				command: "confirm",
+				authorizationId: run.authorizationId,
+				idempotencyKey: randomUUID(),
+				requestId: "request",
+				traceId: "trace",
+			}),
+		).rejects.toMatchObject({ code: "denied" });
+		const key = randomUUID();
+		expect(await confirm(key)).toMatchObject({ status: "confirmed" });
+		// The same request replays; another explicit confirm saves nothing new.
+		expect(await confirm(key)).toMatchObject({ status: "confirmed" });
+		await expect(confirm()).rejects.toMatchObject({ code: "conflict" });
+		const flow = { run, key, user: "alice", suffix: "a", worker: "worker-a" };
+		expect((await pinFacts(run.authorizationId))?.confirm).toBe(
+			"confirm:pending",
+		);
+		const phase = await bindingReadback(flow);
+		const attempt = {
+			confirmCommandId: phase.confirmCommandId,
+			attemptId: phase.attemptId,
+			attemptOwner: phase.attemptOwner,
+			authorizationId: run.authorizationId,
+		};
+		// No exchange before this confirm's first-pin receipt committed; no second phase 1.
+		for (const next of [
+			"confirm_exchange",
+			"confirm_binding_readback",
+		] as const)
+			expect(
+				await manual.openConfirmPhase({ ...attempt, phase: next }),
+			).toBeNull();
+		const pinned = await manual.commitConfirmPin({
+			...attempt,
+			phaseCommandId: phase.phaseCommandId,
+			candidate: await candidateFor(flow, phase),
+		});
+		expect(pinned).toMatchObject({
+			outcome: "pinned",
+			receipt: { revision: 1 },
+		});
+		expect(await pinFacts(run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "confirmed",
+			revoke_state: "not_required",
+			confirm: "confirm:sending,confirm_binding_readback:completed",
+		});
+		const [pin] =
+			await client`select issuer, principal_id, user_id, policy_ref, policy_revision from platform.connection_principal_pins`;
+		expect(pin).toEqual({
+			issuer: system.issuer,
+			principal_id: "principal-a",
+			user_id: "alice",
+			policy_ref: dynamic.principalMapping.policy.ref,
+			policy_revision: dynamic.principalMapping.policy.revision,
+		});
+		// A replayed candidate commits nothing more.
+		expect(
+			await manual.commitConfirmPin({
+				...attempt,
+				phaseCommandId: phase.phaseCommandId,
+				candidate: await candidateFor(flow, phase),
+			}),
+		).toEqual({ outcome: "stale" });
+		const exchange = await manual.openConfirmPhase({
+			...attempt,
+			phase: "confirm_exchange",
+		});
+		expect(exchange?.receipt).toEqual(
+			pinned.outcome === "pinned" ? pinned.receipt : undefined,
+		);
+		expect(
+			await manual.openConfirmPhase({ ...attempt, phase: "confirm_exchange" }),
+		).toBeNull();
+	});
+
+	it.each([
+		["another client", { clientId: "client-other" }],
+		["another DEVICE instance", { instanceId: "instance-other" }],
+		[
+			"another registration key",
+			{ registrationKey: "mi-other-registration-key" },
+		],
+		["another issuer", { issuer: "https://other.test/" }],
+	] as const)(
+		"refuses a candidate naming %s, revokes the original key and pins nothing",
+		async (_name, verified) => {
+			const flow = await confirmed();
+			const phase = await bindingReadback(flow);
+			const candidate = await candidateFor(flow, phase);
+			expect(
+				await manual.commitConfirmPin({
+					...phase,
+					candidate: {
+						...candidate,
+						verified: { ...candidate.verified, ...verified },
+					},
+				}),
+			).toEqual({ outcome: "rejected" });
+			expect(await pinFacts(flow.run.authorizationId)).toEqual({
+				pins: 0,
+				receipts: 0,
+				status: "revoked",
+				revoke_state: "pending",
+				confirm: "confirm:rejected,confirm_binding_readback:rejected",
+			});
+			expect(
+				await manual.openConfirmPhase({ ...phase, phase: "confirm_exchange" }),
+			).toBeNull();
+		},
+	);
+
+	it.each([
+		[
+			"another user's Execution",
+			{ reference: { executionId: "execution-bob" } },
+		],
+		[
+			"another installation revision",
+			{ confirmationRevision: "confirmation-other" },
+		],
+		["another association revision", { association: { revision: 2 } }],
+		["another Pod", { target: { podUid: "pod-other" } }],
+		["an older fence", { target: { resourceFence: 99 } }],
+		["another phase request", { confirm: { requestDigest: "7".repeat(64) } }],
+	] as const)("refuses a candidate bound to %s", async (_name, change) => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		const replaced = Object.fromEntries(
+			Object.entries(change).map(([key, value]) => [
+				key,
+				{
+					...(candidate as unknown as Record<string, object>)[key],
+					...value,
+				},
+			]),
+		);
+		expect(
+			await manual.commitConfirmPin({
+				...phase,
+				candidate: { ...candidate, ...replaced } as never,
+			}),
+		).toEqual({ outcome: "rejected" });
+		expect((await pinFacts(flow.run.authorizationId))?.pins).toBe(0);
+	});
+
+	it.each([
+		[
+			"another Principal for a user pinned through another Agent",
+			"principal-a",
+		],
+		["a Principal pinned by another user", "principal-b"],
+	])("refuses %s and keeps the existing pins", async (_name, principalId) => {
+		await client`insert into platform.connection_principal_pins(id, issuer, principal_id, user_id, policy_ref, policy_revision)
+			values ('pin-alice-agent-b', ${system.issuer}, 'principal-x', 'alice', 'consistency-exception-v1', 'r1'),
+				('pin-bob', ${system.issuer}, 'principal-b', 'bob', 'consistency-exception-v1', 'r1')`;
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		expect(
+			await manual.commitConfirmPin({
+				...phase,
+				candidate: await candidateFor(flow, phase, principalId),
+			}),
+		).toEqual({ outcome: "rejected" });
+		const pins =
+			await client`select principal_id, user_id from platform.connection_principal_pins where released_at is null order by id`;
+		expect(pins).toEqual([
+			{ principal_id: "principal-x", user_id: "alice" },
+			{ principal_id: "principal-b", user_id: "bob" },
+		]);
+		expect((await pinFacts(flow.run.authorizationId))?.receipts).toBe(0);
+	});
+
+	it("reuses the user's pin, keeps its first pin time and commits a receipt per confirm", async () => {
+		const first = await confirmed();
+		const firstPhase = await bindingReadback(first);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...firstPhase,
+					candidate: await candidateFor(first, firstPhase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const [before] =
+			await client`select id, pinned_at from platform.connection_principal_pins`;
+		// The first installation ends; alice installs again with the same Principal.
+		await client`update platform.connection_installation_commands set status='completed' where authorization_id=${first.run.authorizationId}`;
+		await client`update platform.connection_installation_authorizations set status='revoked' where id=${first.run.authorizationId}`;
+		const second = await confirmed();
+		const secondPhase = await bindingReadback(second);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...secondPhase,
+					candidate: await candidateFor(second, secondPhase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const pins =
+			await client`select id, pinned_at from platform.connection_principal_pins`;
+		expect(pins).toEqual([before]);
+		const receipts =
+			await client`select authorization_id, pin_id from platform.connection_principal_pin_receipts order by created_at`;
+		expect(receipts).toEqual([
+			{ authorization_id: first.run.authorizationId, pin_id: before?.id },
+			{ authorization_id: second.run.authorizationId, pin_id: before?.id },
+		]);
+	});
+
+	it("refuses a new first pin at the exception's capacity", async () => {
+		await client`insert into platform.connection_principal_pins(id, issuer, principal_id, user_id, policy_ref, policy_revision)
+			values ('pin-1', ${system.issuer}, 'principal-1', 'carol', 'consistency-exception-v1', 'r1'),
+				('pin-2', ${system.issuer}, 'principal-2', 'dave', 'consistency-exception-v1', 'r1')`;
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		expect(
+			await manual.commitConfirmPin({
+				...phase,
+				candidate: await candidateFor(flow, phase),
+			}),
+		).toEqual({ outcome: "rejected" });
+		expect((await pinFacts(flow.run.authorizationId))?.pins).toBe(2);
+	});
+
+	it("refuses a Principal another user confirmed outside the exception", async () => {
+		const confirmedElsewhere = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: {
+				...policy,
+				confirmedPrincipals: [
+					{ issuer: system.issuer, principalId: "principal-a", userId: "bob" },
+				],
+			},
+		});
+		try {
+			const flow = await confirmed();
+			const phase = await bindingReadback(flow);
+			expect(
+				await confirmedElsewhere.commitConfirmPin({
+					...phase,
+					candidate: await candidateFor(flow, phase),
+				}),
+			).toEqual({ outcome: "rejected" });
+			expect((await pinFacts(flow.run.authorizationId))?.pins).toBe(0);
+		} finally {
+			await confirmedElsewhere.close();
+		}
+	});
+
+	it("commits no pin when the original claim expires during the authorization recheck", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		// The recheck's directory read outlasts the original lease; another outbox
+		// of the same Worker and Execution holds a live lease meanwhile.
+		await expireClaimDuringRead();
+		try {
+			expect(await manual.commitConfirmPin({ ...phase, candidate })).toEqual({
+				outcome: "unknown",
+			});
+		} finally {
+			beforeResolveUser = undefined;
+		}
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 0,
+			receipts: 0,
+			status: "confirmed",
+			revoke_state: "not_required",
+			confirm: "confirm:sending,confirm_binding_readback:sending",
+		});
+		expect(
+			await manual.openConfirmPhase({ ...phase, phase: "confirm_exchange" }),
+		).toBeNull();
+	});
+
+	it("commits no pin once the original fence, the attempt owner or notAfter no longer holds", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		// Another Worker never commits this confirm's pin.
+		expect(
+			await manual.commitConfirmPin({
+				...phase,
+				attemptOwner: "worker-b",
+				candidate,
+			}),
+		).toEqual({ outcome: "stale" });
+		const expired = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: {
+				...policy,
+				dynamic: {
+					...dynamic,
+					principalMapping: {
+						...dynamic.principalMapping,
+						notAfter: "2026-01-01T00:00:00Z",
+					},
+				},
+			},
+		});
+		try {
+			expect(await expired.commitConfirmPin({ ...phase, candidate })).toEqual({
+				outcome: "unknown",
+			});
+		} finally {
+			await expired.close();
+		}
+		// The original claim is re-claimed at the next fence while the pin is decided.
+		await reclaim();
+		expect(await manual.commitConfirmPin({ ...phase, candidate })).toEqual({
+			outcome: "unknown",
+		});
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 0,
+			receipts: 0,
+			status: "confirmed",
+			revoke_state: "not_required",
+			confirm: "confirm:sending,confirm_binding_readback:sending",
+		});
 	});
 });
