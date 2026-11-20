@@ -3303,8 +3303,8 @@
                     "type": "string"
                   },
                   "authorization": {
-                    "maxLength": 16384,
-                    "minLength": 1,
+                    "maxLength": 32768,
+                    "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
                     "type": "string"
                   },
                   "bindingDigest": {
@@ -3321,7 +3321,9 @@
                     "type": "string"
                   },
                   "nonce": {
-                    "minLength": 1,
+                    "maxLength": 128,
+                    "minLength": 22,
+                    "pattern": "^[A-Za-z0-9_-]+$",
                     "type": "string"
                   },
                   "podUid": {
@@ -3510,7 +3512,9 @@
                       "type": "string"
                     },
                     "nonce": {
-                      "minLength": 1,
+                      "maxLength": 128,
+                      "minLength": 22,
+                      "pattern": "^[A-Za-z0-9_-]+$",
                       "type": "string"
                     },
                     "observedAt": {
@@ -3608,7 +3612,7 @@
                       "type": "string"
                     },
                     "signature": {
-                      "maxLength": 16384,
+                      "maxLength": 32768,
                       "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
                       "type": "string"
                     },

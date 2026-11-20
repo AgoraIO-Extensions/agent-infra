@@ -336,6 +336,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/channels/{channelId}/file-limits",
 			"/api/v2/agents/{agentId}/commands",
 			"/api/v2/agents/{agentId}/configuration",
+			"/api/v2/agents/{agentId}/configuration/availability",
 			"/api/v2/agents/{agentId}/configuration/saved-model",
 			"/api/v2/agents/{agentId}/connection-association",
 			"/api/v2/agents/{agentId}/creation-failure",

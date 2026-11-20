@@ -52,11 +52,18 @@ export async function readExecutorInstanceRollbackV2(
 			await transaction`select distinct on (conversation_id,details->>'sandboxId',details->>'sessionGeneration',details->>'resourceFence') details->'state' as state
    from platform.conversation_audit_events where action='conversation.sandbox.observed' and details->>'checkpoint'='executor-instance-v2'
    order by conversation_id,details->>'sandboxId',details->>'sessionGeneration',details->>'resourceFence',(details->'state'->>'sequence')::numeric desc`;
+		// Unclaimed reserves have their own durable V2 ledger, not a business Conversation audit.
+		const reserves =
+			await transaction`select executor_startup->'instance' as state
+			from platform.session_sandbox_reserves where namespace=${namespace}
+			and retired_at is null and executor_startup->'instance' is not null`;
 		const [leases] =
-			await transaction`select count(*)::int as count from platform.outbox_items o join platform.session_sandbox_allocations s on s.conversation_id=o.scope_id
-   where o.operation='conversation.sandbox.reconcile.v1' and o.status='processing' and o.lease_expires_at>clock_timestamp() and s.resource_policy->>'namespace'=${namespace}`;
+			await transaction`select ((select count(*) from platform.outbox_items o join platform.session_sandbox_allocations s on s.conversation_id=o.scope_id
+   where o.operation='conversation.sandbox.reconcile.v1' and o.status='processing' and o.lease_expires_at>clock_timestamp() and s.resource_policy->>'namespace'=${namespace})
+   + (select count(*) from platform.session_sandbox_reserves where namespace=${namespace} and status<>'claimed'
+   and retired_at is null and lease_owner is not null and lease_expires_at>clock_timestamp()))::int as count`;
 		return executorInstanceRollbackCompatibilityV2(
-			rows,
+			[...rows, ...reserves],
 			namespace,
 			consumerProtocol,
 			leases?.count ?? -1,

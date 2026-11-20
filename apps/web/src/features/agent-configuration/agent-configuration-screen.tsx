@@ -8,7 +8,7 @@ import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { client as generatedV2Client } from "../../pilot/generated-v2/client.gen.js";
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
-	AgentConfigurationUpdateRequestV2Writable,
+	AgentAvailabilityProjectionV1,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -26,11 +26,16 @@ import {
 	isRetryableConfigurationError,
 } from "./agent-configuration.js";
 import {
+	type AgentConfigurationRequest,
+	agentConfigurationApplicationScopeConflict,
+	agentConfigurationApplicationsChanged,
 	agentConfigurationDraftChanged,
 	agentConfigurationEnvironmentChanged,
+	applicationScopeDraft,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 	configurationKeyError,
+	scopePeopleDraft,
 } from "./agent-configuration-draft.js";
 import { ConfigurationConnectionSection } from "./configuration-connection-section.js";
 import {
@@ -67,11 +72,13 @@ import type {
 type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
 type ConfigurationSaveRequest =
-	| AgentConfigurationUpdateRequestV2Writable
+	| AgentConfigurationRequest
 	| AgentSavedModelConfigurationUpdate;
 
 type AgentConfigurationScreenProps = {
 	agent: AgentProjectionV2;
+	/** Owner 读到的完整可用范围（含独立应用）；未读到时只编辑人员条目。 */
+	availabilityScope?: AgentAvailabilityProjectionV1;
 	/** 表单卡内的首个分区（Agent 授权控制）。 */
 	authorization?: ReactNode;
 	/** 表单卡之后的独立区域：Owner 危险区与管理员操作区。 */
@@ -226,6 +233,7 @@ export function AgentAdministratorConfigurationScreen({
 
 export function AgentConfigurationScreen({
 	agent,
+	availabilityScope,
 	afterForm,
 	allowedEnvironmentKeys,
 	allowedSecretKeys,
@@ -256,7 +264,30 @@ export function AgentConfigurationScreen({
 	upgradingImage = false,
 }: AgentConfigurationScreenProps) {
 	const toast = useToast();
-	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
+	const [draft, setDraft] = useState(() =>
+		configurationDraftFromAgent(agent, availabilityScope),
+	);
+	// 完整可用范围晚于 Agent 投影到达或被重读：用户没编辑应用条目时，按最新读取（条目与
+	// 修订）刷新，没改过的人员字段也改用同一次读取，三者同源；已编辑时保留编辑与原读取，
+	// 保存时由服务端 CAS 判陈旧（#4308）。
+	const applicationsEdited = agentConfigurationApplicationsChanged(draft);
+	useEffect(() => {
+		if (!availabilityScope || applicationsEdited) return;
+		const next = applicationScopeDraft(agent, availabilityScope);
+		if (next.applicationAvailabilityRevision === undefined) return;
+		setDraft((current) =>
+			agentConfigurationApplicationsChanged(current) ||
+			(current.applicationAvailabilityRevision ===
+				next.applicationAvailabilityRevision &&
+				current.applicationAvailabilityIds !== undefined)
+				? current
+				: {
+						...current,
+						...next,
+						...scopePeopleDraft(current, availabilityScope),
+					},
+		);
+	}, [agent, availabilityScope, applicationsEdited]);
 	const [ownerError, setOwnerError] = useState<string>();
 	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
 	const [savedSelectionError, setSavedSelectionError] = useState(false);
@@ -288,7 +319,24 @@ export function AgentConfigurationScreen({
 		if (!submittedResult || submittedResult === handledResult.current) return;
 		handledResult.current = submittedResult;
 		if ("configuration" in submittedResult)
-			setDraft(configurationDraftFromAgent(submittedResult));
+			// V2 投影不含应用条目：保存成功后把刚提交的应用条目当作已保存的基线，读取修订
+			// 保持原值，等完整范围重读后再按新修订刷新。
+			setDraft((current) => ({
+				...configurationDraftFromAgent(submittedResult),
+				...(current.applicationAvailabilityIds === undefined
+					? {}
+					: {
+							applicationAvailabilityIds: current.applicationAvailabilityIds,
+							applicationAvailabilityBaseline:
+								current.applicationAvailabilityIds
+									.split(/[\n,]/)
+									.map((item) => item.trim())
+									.filter((item) => item.length > 0),
+							applicationAvailabilityRevision:
+								current.applicationAvailabilityRevision,
+							applicationScopePeople: current.applicationScopePeople,
+						}),
+			}));
 		setEnvErrors({});
 		setShowSelectionErrors(false);
 		setSavedSelectionError(false);
@@ -370,6 +418,11 @@ export function AgentConfigurationScreen({
 		)
 			return;
 		setSavedModelsReloaded(false);
+		// 人员条目与应用条目、修订不是同一次读取时不能整表保存，否则可能加回并发移除的人员。
+		if (agentConfigurationApplicationScopeConflict(draft)) {
+			toast("可用范围已被修改，请刷新页面后再保存独立应用的修改");
+			return;
+		}
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -422,9 +475,17 @@ export function AgentConfigurationScreen({
 			savedRelayKeyConfigurationRevision !== undefined &&
 			savedRelayKeyVersion !== undefined
 		) {
+			// 已保存 Key 的模型保存（V4）只替换人员条目；独立应用的改动须单独保存，不能静默丢弃。
+			if (agentConfigurationApplicationsChanged(draft)) {
+				toast("请先单独保存独立应用的修改，再更换模型");
+				return;
+			}
 			setSavePath("saved-model");
 			onSave({
 				...withoutModels,
+				availability: (withoutModels.availability ?? []).flatMap((target) =>
+					target.kind === "application" ? [] : [target],
+				),
 				modelConfiguration,
 				schemaVersion: 4,
 				expectedConfigurationRevision: savedRelayKeyConfigurationRevision,
@@ -501,6 +562,13 @@ export function AgentConfigurationScreen({
 							disabled={isDisabled}
 							userIds={draft.userAvailabilityIds}
 							organizationIds={draft.organizationAvailabilityIds}
+							applicationIds={draft.applicationAvailabilityIds}
+							onApplicationsChange={(value) =>
+								setDraft((current) => ({
+									...current,
+									applicationAvailabilityIds: value,
+								}))
+							}
 							onUsersChange={(value) =>
 								setDraft((current) => ({
 									...current,

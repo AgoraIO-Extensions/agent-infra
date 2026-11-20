@@ -1,3 +1,6 @@
+import { createPublicKey, type KeyObject } from "node:crypto";
+import { codexSessionExecutorBindingDigestV1 } from "@agent-infra/agent-runtime";
+import { ExecutorInstanceStateV2Schema } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
@@ -16,6 +19,7 @@ import type {
 	V1Pod,
 	V1Service,
 } from "@kubernetes/client-node";
+import { sessionSandboxResourceCostsV1 } from "./codex-session-executor.js";
 import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import { createSessionSandboxResourceInputResolverV1 } from "./conversation-deployment.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -26,9 +30,11 @@ import {
 	quantityRatio,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import { createSessionReserveExecutorOperationsV1 } from "./session-reserve-executor-adapter.js";
 import {
 	hasSessionSandboxIdentityV1,
 	type SessionSandboxResourceInputV1,
+	sessionSandboxExecutorReserveResourcesV1,
 	sessionSandboxReserveResourcesV1,
 	sessionSandboxResourceMatchesV1,
 	sessionSandboxRuntimeContainerName,
@@ -46,6 +52,8 @@ import {
 } from "./workload-runtime.js";
 
 export interface SessionSandboxReserveAdapterOptionsV1 {
+	readonly executorIdentityIssuer?: KeyObject;
+	readonly executorDrainStartupTimeoutMs?: number;
 	readonly workload: Pick<
 		WorkloadRuntimeOptionsV1,
 		| "client"
@@ -68,6 +76,7 @@ export type SessionSandboxReserveObservationV1 = Omit<
 	"leaseOwner" | "deliveryFence"
 > & {
 	readonly currentProfileDigest?: string | null;
+	readonly readFence?: number;
 };
 
 function reserveEgressPolicy(
@@ -142,7 +151,7 @@ function resourceIdentity(object: KubernetesObject): {
 	};
 }
 
-export function createSessionSandboxReserveResourceInputV1(
+function reserveResourceInput(
 	options: SessionSandboxReserveAdapterOptionsV1,
 	claim: SessionSandboxReserveObservationV1,
 ): SessionSandboxResourceInputV1 {
@@ -212,12 +221,13 @@ export function createSessionSandboxReserveResourceInputV1(
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	// Independent Codex executors require a business binding and promotion receipt.
-	// Replace this guard when the #4248 option B promotion contract is implemented.
-	if (template.driver === "codex" && policy.codexSessionExecutor !== undefined)
-		throw new WorkloadKubernetesError("policy");
 	return createSessionSandboxResourceInputResolverV1(options.workload, {
 		serviceToken: options.serviceToken,
+		...(options.executorDrainStartupTimeoutMs === undefined
+			? {}
+			: {
+					executorDrainStartupTimeoutMs: options.executorDrainStartupTimeoutMs,
+				}),
 		...(options.connectionInstallBootstrap
 			? { connectionInstallBootstrap: options.connectionInstallBootstrap }
 			: {}),
@@ -240,11 +250,130 @@ export function createSessionSandboxReserveResourceInputV1(
 	);
 }
 
+export function createSessionSandboxReserveResourceInputV1(
+	options: SessionSandboxReserveAdapterOptionsV1,
+	claim: SessionSandboxReserveObservationV1,
+): SessionSandboxResourceInputV1 {
+	const input = reserveResourceInput(options, claim);
+	// Independent Codex executors require a business binding and promotion receipt.
+	// Replace this guard when the #4248 option B promotion contract is implemented.
+	if (
+		input.runtime?.driver === "codex" &&
+		options.workload.policy.codexSessionExecutor !== undefined
+	)
+		throw new WorkloadKubernetesError("policy");
+	return input;
+}
+
+/** Testable non-business preparation path; never selected by production reserve admission. */
+export function createSessionSandboxExecutorReserveResourceInputV1(
+	options: SessionSandboxReserveAdapterOptionsV1,
+	claim: SessionSandboxReserveObservationV1,
+): SessionSandboxResourceInputV1 {
+	const input = reserveResourceInput(options, claim);
+	if (!input.runtime?.sessionExecutor) return input;
+	const state = ExecutorInstanceStateV2Schema.parse(
+		claim.executorStartup?.instance,
+	);
+	const approvals = options.workload.policy.executorInstanceStartupApprovals;
+	if (
+		!approvals ||
+		approvals.length > 128 ||
+		new Set(approvals.map((x) => x.imageDigest)).size !== approvals.length
+	)
+		throw new WorkloadKubernetesError("policy");
+	const approval = approvals.find((x) => x.imageDigest === input.imageDigest);
+	const required = sessionSandboxResourceCostsV1(options.workload.policy);
+	if (
+		!approval ||
+		JSON.stringify(state.approval) !==
+			JSON.stringify(
+				ExecutorInstanceStateV2Schema.shape.approval.parse(approval),
+			) ||
+		state.sandboxId !== claim.sandboxId ||
+		state.namespace !== input.namespace ||
+		state.podName !== input.podName ||
+		state.generation !== 1 ||
+		state.resourceFence !== 1 ||
+		state.configurationRevision !==
+			claim.profile.policy.configurationRevision ||
+		state.configurationVersion !==
+			JSON.parse(input.runtime.modelConfiguration).configVersion ||
+		state.bindingDigest !==
+			codexSessionExecutorBindingDigestV1(
+				input.runtime.sessionExecutor.binding,
+			) ||
+		state.startupRef !== claim.executorStartup?.startupRef ||
+		state.expiresAt !== claim.executorStartup.deadlineMs ||
+		(["cpuMillis", "memoryBytes", "storageBytes"] as const).some(
+			(key) => claim.profile.resources[key] < required[key],
+		)
+	)
+		throw new WorkloadKubernetesError("policy");
+	return {
+		...input,
+		executorDrainIdentity: true,
+		executorStartupDeadline: state.expiresAt,
+		executorInstance: state,
+	};
+}
+
 export function createSessionSandboxReserveAdapterV1(
 	options: SessionSandboxReserveAdapterOptionsV1,
 ) {
+	return assembleReserveAdapter(options, false);
+}
+/** No deployment flag selects this preparation seam; business adoption remains a separate gated step. */
+export function createSessionSandboxExecutorReservePreparationAdapterV1(
+	options: SessionSandboxReserveAdapterOptionsV1,
+) {
+	if (
+		options.workload.policy.codexSessionExecutor !== undefined &&
+		options.workload.policy.executorInstanceStartupApprovals === undefined
+	)
+		throw new Error("WORKER_EXECUTOR_V2_APPROVALS_REQUIRED");
+	const issuer = options.executorIdentityIssuer;
+	const auth = options.workload.policy.runtimeAuth;
+	const timeout = options.executorDrainStartupTimeoutMs;
+	if (
+		!issuer ||
+		issuer.asymmetricKeyType !== "ed25519" ||
+		issuer.type !== "private" ||
+		!auth ||
+		createPublicKey(issuer)
+			.export({ format: "pem", type: "spki" })
+			.toString() !== auth.grantPublicKey ||
+		!Number.isSafeInteger(timeout) ||
+		!timeout ||
+		timeout < 1000 ||
+		timeout > 900000
+	)
+		throw new WorkloadKubernetesError("policy");
+	return assembleReserveAdapter(options, true);
+}
+function assembleReserveAdapter(
+	options: SessionSandboxReserveAdapterOptionsV1,
+	preparation: boolean,
+) {
 	const fetcher = options.fetch ?? options.workload.fetch ?? globalThis.fetch;
 	const client = options.workload.client;
+	const inputFor = (claim: SessionSandboxReserveObservationV1) =>
+		preparation
+			? createSessionSandboxExecutorReserveResourceInputV1(options, claim)
+			: createSessionSandboxReserveResourceInputV1(options, claim);
+	const resourcesFor = (
+		claim: SessionSandboxReserveObservationV1,
+		input: SessionSandboxResourceInputV1,
+	) =>
+		input.runtime?.sessionExecutor
+			? sessionSandboxExecutorReserveResourcesV1(
+					input,
+					claim.executorStartup ??
+						(() => {
+							throw new WorkloadKubernetesError("policy");
+						})(),
+				)
+			: sessionSandboxReserveResourcesV1(input);
 	function identityClaim(claim: SessionSandboxReserveObservationV1) {
 		if (
 			!claim.sandboxId ||
@@ -273,7 +402,9 @@ export function createSessionSandboxReserveAdapterV1(
 		identityClaim(claim);
 		const current = options.workload.connectionDeliveryCurrent;
 		if (!current) return true;
-		const input = createSessionSandboxReserveResourceInputV1(options, claim);
+		const input = preparation
+			? reserveResourceInput(options, claim)
+			: inputFor(claim);
 		if (typeof input.connectionConsumerSnapshot !== "string") return true;
 		try {
 			return await current(claim.agentId);
@@ -287,8 +418,8 @@ export function createSessionSandboxReserveAdapterV1(
 	) => {
 		signal?.throwIfAborted();
 		identityClaim(claim);
-		const input = createSessionSandboxReserveResourceInputV1(options, claim);
-		const resources = sessionSandboxReserveResourcesV1(input);
+		const input = inputFor(claim);
+		const resources = resourcesFor(claim, input);
 		if (input.skillHub) {
 			const owner = workloadResourceNameV1(claim.agentId);
 			const source = await client.read(
@@ -344,8 +475,8 @@ export function createSessionSandboxReserveAdapterV1(
 		if (prior?.resource && prior.resource.uid !== identity.uid)
 			throw new WorkloadKubernetesError("conflict");
 		if (claim.status !== "retiring") {
-			const input = createSessionSandboxReserveResourceInputV1(options, claim);
-			const expected = sessionSandboxReserveResourcesV1(input).find(
+			const input = inputFor(claim);
+			const expected = resourcesFor(claim, input).find(
 				(object) => object.kind === kind,
 			);
 			if (
@@ -356,7 +487,16 @@ export function createSessionSandboxReserveAdapterV1(
 		}
 		return current;
 	};
+	const executor = preparation
+		? createSessionReserveExecutorOperationsV1({
+				options,
+				resourceInput: reserveResourceInput,
+				validatedInput: inputFor,
+				read,
+			})
+		: undefined;
 	return {
+		...(executor ? { executor } : {}),
 		render,
 		read,
 		deliverable,
@@ -385,10 +525,16 @@ export function createSessionSandboxReserveAdapterV1(
 				throw new WorkloadKubernetesError("conflict");
 			if (!(await deliverable(claim)))
 				throw new WorkloadKubernetesError("policy");
+			if (
+				preparation &&
+				claim.executorStartup &&
+				Date.now() >= claim.executorStartup.deadlineMs
+			)
+				throw new WorkloadKubernetesError("conflict");
 			const result = await client.create(expected);
 			// Keep the actual response available even if cancellation follows it;
 			// controller must commit the original write outcome before stopping.
-			const input = createSessionSandboxReserveResourceInputV1(options, claim);
+			const input = inputFor(claim);
 			if (!sessionSandboxResourceMatchesV1(result, expected, input))
 				throw new WorkloadKubernetesError("conflict");
 			return result;
@@ -432,7 +578,11 @@ export function createSessionSandboxReserveAdapterV1(
 			claim: SessionSandboxReserveObservationV1,
 			resources: readonly KubernetesObject[],
 			signal?: AbortSignal,
-		): Promise<{ bootstrapReady: boolean; businessStateAbsent: boolean }> {
+		): Promise<{
+			bootstrapReady: boolean;
+			businessStateAbsent: boolean;
+			instanceEvidence?: import("@agent-infra/platform-core").SessionSandboxInstanceEvidenceV1;
+		}> {
 			signal?.throwIfAborted();
 			const unavailable = { bootstrapReady: false, businessStateAbsent: false };
 			identityClaim(claim);
@@ -442,7 +592,7 @@ export function createSessionSandboxReserveAdapterV1(
 				new Set(resources.map((r) => r.kind)).size !== 6
 			)
 				return unavailable;
-			const input = createSessionSandboxReserveResourceInputV1(options, claim);
+			const input = inputFor(claim);
 			// A reserve that would hand an old Consumer to a business Session is never ready.
 			try {
 				if (!(await deliverable(claim))) return unavailable;
@@ -477,7 +627,11 @@ export function createSessionSandboxReserveAdapterV1(
 				!pod.status.conditions?.some(
 					(c) => c.type === "Ready" && c.status === "True",
 				) ||
-				!status?.imageID?.endsWith(`@${claim.profile.policy.imageDigest}`) ||
+				!status?.imageID?.endsWith(
+					input.runtime?.sessionExecutor
+						? claim.profile.policy.imageDigest
+						: `@${claim.profile.policy.imageDigest}`,
+				) ||
 				service.metadata?.name !== input.serviceName
 			)
 				return unavailable;
@@ -507,6 +661,22 @@ export function createSessionSandboxReserveAdapterV1(
 			)
 				return unavailable;
 			let response: Response;
+			if (input.runtime?.sessionExecutor) {
+				if (!executor || (await executor.readProjection(claim, signal)))
+					return unavailable;
+				const instanceEvidence = await executor.readInstance(
+					claim,
+					observed,
+					signal,
+				);
+				return instanceEvidence
+					? {
+							bootstrapReady: true,
+							businessStateAbsent: true,
+							instanceEvidence,
+						}
+					: unavailable;
+			}
 			try {
 				response = await fetcher(
 					`http://${input.serviceName}.${input.namespace}.svc:${input.containerPort}/healthz`,

@@ -556,6 +556,43 @@ export const AgentConfigurationUpdateRequestV4Schema =
 	});
 export const AgentConfigurationUpdateRequestV2Schema =
 	AgentConfigurationUpdateRequestV2BaseSchema;
+/**
+ * 可用范围目标 V2 增加独立应用（Spec §9.2.2）。V1 不追加判别值：旧 Web 包按 kind
+ * 只取 user/org 并整表回传，同版追加会静默删掉应用条目，管理修订 CAS 拦不住。
+ */
+export const AvailabilityTargetV2Schema = z.discriminatedUnion("kind", [
+	...AvailabilityTargetV1Schema.options,
+	z.strictObject({
+		kind: z.literal("application"),
+		applicationId: OpaqueIdV1Schema,
+	}),
+]);
+const ManagementRevisionV1Schema = z
+	.number()
+	.int()
+	.min(0)
+	.max(Number.MAX_SAFE_INTEGER);
+/**
+ * V5 与 V2 同形，`availability` 为含应用条目的完整可用范围，必须带上读取该范围时的
+ * `managementRevision`；修订已变时整次写入冲突，不能用陈旧整表覆盖并发加入的应用。
+ * V2/V4 的 `availability` 只替换人员条目，已有应用条目原样保留。
+ */
+export const AgentConfigurationUpdateRequestV5Schema =
+	AgentConfigurationUpdateRequestV2BaseSchema.extend({
+		schemaVersion: z.literal(5),
+		availability: z.array(AvailabilityTargetV2Schema),
+		expectedManagementRevision: ManagementRevisionV1Schema,
+	});
+/**
+ * Owner 读取完整可用范围（含应用条目）及同一读取的 Agent 管理修订；与 V5 请求使用
+ * 同一目标版本。
+ */
+export const AgentAvailabilityProjectionV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	agentId: OpaqueIdV1Schema,
+	managementRevision: ManagementRevisionV1Schema,
+	availability: z.array(AvailabilityTargetV2Schema),
+});
 export const AgentConfigurationProjectionV2Schema =
 	AgentConfigurationProjectionV1Schema.omit({ actions: true });
 export const AgentApplicationProjectionV2Schema =
@@ -3107,12 +3144,34 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 	"/api/v2/agents/{agentId}/configuration": {
 		put: {
 			operationId: "updateAgentConfigurationV2",
+			description:
+				"Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries and must carry the managementRevision read with that scope, a changed revision is a CONFLICT. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.",
 			requestParams: { path: agentPath, header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(
-				AgentConfigurationUpdateRequestV2Schema,
+				z.union([
+					AgentConfigurationUpdateRequestV2Schema,
+					AgentConfigurationUpdateRequestV5Schema,
+				]),
 			),
 			responses: {
 				"200": jsonResponse("Agent configuration", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/configuration/availability": {
+		get: {
+			operationId: "getAgentAvailabilityV1",
+			summary: "Read the Agent's whole availability scope",
+			description:
+				"Owner browser session only. Returns user, organization and application entries with the managementRevision of the same read; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Agent availability scope",
+					AgentAvailabilityProjectionV1Schema,
+				),
 				...errorResponses,
 			},
 		},
@@ -3384,6 +3443,9 @@ export const pilotBrowserSchemasV2 = {
 		AgentApplicationModelCandidatesResponseV2Schema,
 	AgentApplicationUpdateRequestV2: AgentApplicationUpdateRequestV2Schema,
 	AgentConfigurationUpdateRequestV2: AgentConfigurationUpdateRequestV2Schema,
+	AgentConfigurationUpdateRequestV5: AgentConfigurationUpdateRequestV5Schema,
+	AvailabilityTargetV2: AvailabilityTargetV2Schema,
+	AgentAvailabilityProjectionV1: AgentAvailabilityProjectionV1Schema,
 	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,
 	AgentConfigurationProjectionV2: AgentConfigurationProjectionV2Schema,
 	AgentProjectionV2: AgentProjectionV2Schema,

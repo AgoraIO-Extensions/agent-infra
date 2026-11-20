@@ -30,7 +30,7 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	type SessionInstanceReadRequestV1,
-	sessionInstanceRequestSigningPayloadV1,
+	sessionInstanceReadSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import { startExecutorDrainGatewayV1 } from "./executor-drain-gateway.js";
 import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
@@ -210,7 +210,7 @@ if (process.argv[2] === "runner") {
 				reserveRef: "reserve",
 				reserveDeliveryFence: 1,
 			},
-			authorization: "unsigned",
+			authorization: "e30.e30.AA",
 		};
 		const claims = {
 			issuer: "platform",
@@ -220,7 +220,13 @@ if (process.argv[2] === "runner") {
 			issuedAt: at,
 			expiresAt: at + 10_000,
 			requestDigest: createHash("sha256")
-				.update(sessionInstanceRequestSigningPayloadV1(body))
+				.update(
+					sessionInstanceReadSigningPayloadV1(
+						Object.fromEntries(
+							Object.entries(body).filter(([key]) => key !== "authorization"),
+						),
+					),
+				)
 				.digest("hex"),
 		};
 		const signed = [

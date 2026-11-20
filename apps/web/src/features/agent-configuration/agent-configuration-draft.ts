@@ -1,6 +1,8 @@
 import { cjkSpaced } from "@/lib/cjk-spacing";
 import type {
+	AgentAvailabilityProjectionV1,
 	AgentConfigurationUpdateRequestV2Writable,
+	AgentConfigurationUpdateRequestV5Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 
@@ -29,6 +31,20 @@ export type AgentConfigurationDraft = {
 	environment: readonly AgentConfigurationEnvironmentDraft[];
 	models: readonly AgentConfigurationModelDraft[];
 	organizationAvailabilityIds: string;
+	/**
+	 * 独立应用条目（Spec §9.2.2），由 Owner 读到的完整可用范围填入。只有用户真的改了
+	 * 应用条目才以 V5 整表回传，并带上那次读取的管理修订；未改时保存走 V2，只替换人员
+	 * 条目，服务端原样保留应用条目，陈旧的读取不会删掉并发加入的应用（#4308）。
+	 */
+	applicationAvailabilityIds?: string;
+	/** 填入 `applicationAvailabilityIds` 时读到的应用 ID，用于判断是否真的编辑过。 */
+	applicationAvailabilityBaseline?: readonly string[];
+	/** 同一次读取的 Agent 管理修订；V5 保存以它做 CAS，已变则冲突。 */
+	applicationAvailabilityRevision?: number;
+	/** 同一次读取里的人员条目（`kind:id`）；V5 整表中的人员必须与之同源（#4308）。 */
+	applicationScopePeople?: readonly string[];
+	/** 人员字段填入时的人员条目（`kind:id`），来自 Agent 投影或完整范围读取。 */
+	peopleAvailabilityBaseline?: readonly string[];
 	replaceModels: boolean;
 	workspaceSnapshots: readonly { snapshotId: string; name: string }[];
 	userAvailabilityIds: string;
@@ -41,21 +57,152 @@ function splitValues(value: string) {
 		.filter((item) => item.length > 0);
 }
 
+type PeopleTarget =
+	| { readonly kind: "user"; readonly userId: string }
+	| { readonly kind: "organization"; readonly organizationId: string };
+
+function peopleKey(target: PeopleTarget) {
+	return target.kind === "user"
+		? `user:${target.userId}`
+		: `organization:${target.organizationId}`;
+}
+
+function peopleFields(targets: readonly PeopleTarget[]) {
+	return {
+		userAvailabilityIds: targets
+			.flatMap((target) => (target.kind === "user" ? [target.userId] : []))
+			.join("\n"),
+		organizationAvailabilityIds: targets
+			.flatMap((target) =>
+				target.kind === "organization" ? [target.organizationId] : [],
+			)
+			.join("\n"),
+		peopleAvailabilityBaseline: targets.map(peopleKey),
+	};
+}
+
+function scopePeople(scope: AgentAvailabilityProjectionV1): PeopleTarget[] {
+	return scope.availability.flatMap((target) =>
+		target.kind === "application" ? [] : [target],
+	);
+}
+
+/** 从 Owner 读到的完整可用范围取出应用条目及其读取修订；范围属于别的 Agent 时不取。 */
+export function applicationScopeDraft(
+	agent: Pick<AgentProjectionV2, "agentId">,
+	scope: AgentAvailabilityProjectionV1 | undefined,
+): Pick<
+	AgentConfigurationDraft,
+	| "applicationAvailabilityIds"
+	| "applicationAvailabilityBaseline"
+	| "applicationAvailabilityRevision"
+	| "applicationScopePeople"
+> {
+	if (scope?.agentId !== agent.agentId) return {};
+	const ids = scope.availability.flatMap((target) =>
+		target.kind === "application" ? [target.applicationId] : [],
+	);
+	return {
+		applicationAvailabilityIds: ids.join("\n"),
+		applicationAvailabilityBaseline: ids,
+		applicationAvailabilityRevision: scope.managementRevision,
+		applicationScopePeople: scopePeople(scope).map(peopleKey),
+	};
+}
+
+/**
+ * 完整范围读取晚于 Agent 投影到达时，用户没改过的人员字段改用同一次读取的人员条目，
+ * 让 V5 整表里的人员、应用条目和修订同源；人员集合相同时保留字段原样（#4308）。
+ */
+export function scopePeopleDraft(
+	draft: AgentConfigurationDraft,
+	scope: AgentAvailabilityProjectionV1,
+): Partial<AgentConfigurationDraft> {
+	if (agentConfigurationPeopleChanged(draft)) return {};
+	const people = scopePeople(scope);
+	return sortedJson(people.map(peopleKey)) ===
+		sortedJson(draftPeopleKeys(draft))
+		? { peopleAvailabilityBaseline: people.map(peopleKey) }
+		: peopleFields(people);
+}
+
+function draftPeopleKeys(
+	draft: Pick<
+		AgentConfigurationDraft,
+		"userAvailabilityIds" | "organizationAvailabilityIds"
+	>,
+) {
+	return [
+		...splitValues(draft.userAvailabilityIds).map((id) => `user:${id}`),
+		...splitValues(draft.organizationAvailabilityIds).map(
+			(id) => `organization:${id}`,
+		),
+	];
+}
+
+/** 人员字段是否相对填入时的人员条目被编辑过。 */
+export function agentConfigurationPeopleChanged(
+	draft: Pick<
+		AgentConfigurationDraft,
+		| "userAvailabilityIds"
+		| "organizationAvailabilityIds"
+		| "peopleAvailabilityBaseline"
+	>,
+): boolean {
+	return (
+		draft.peopleAvailabilityBaseline !== undefined &&
+		sortedJson(draftPeopleKeys(draft)) !==
+			sortedJson(draft.peopleAvailabilityBaseline)
+	);
+}
+
+/** 应用编辑无法安全保存：人员条目与应用条目、修订不是同一次读取（#4308）。 */
+export class AgentConfigurationScopeConflictError extends Error {
+	constructor() {
+		super(
+			"Agent availability scope changed; reread before saving applications",
+		);
+	}
+}
+
+/**
+ * 应用条目被编辑过，但草稿里的人员条目不是从同一次完整范围读取填入的（或没有读取修订），
+ * 整表 V5 可能把并发移除的人员加回去，必须重读后再保存。
+ */
+export function agentConfigurationApplicationScopeConflict(
+	draft: AgentConfigurationDraft,
+): boolean {
+	return (
+		agentConfigurationApplicationsChanged(draft) &&
+		(draft.applicationAvailabilityRevision === undefined ||
+			draft.applicationScopePeople === undefined ||
+			draft.peopleAvailabilityBaseline === undefined ||
+			sortedJson(draft.applicationScopePeople) !==
+				sortedJson(draft.peopleAvailabilityBaseline))
+	);
+}
+
 export function configurationDraftFromAgent(
 	agent: AgentProjectionV2,
+	scope?: AgentAvailabilityProjectionV1,
 ): AgentConfigurationDraft {
+	const ownScope = scope?.agentId === agent.agentId ? scope : undefined;
 	return {
+		...applicationScopeDraft(agent, ownScope),
 		coOwnerIds: agent.configuration.owners
 			.map((owner) => owner.userId)
 			.join("\n"),
-		userAvailabilityIds: agent.configuration.availability
-			.filter((target) => target.kind === "user")
-			.map((target) => target.userId)
-			.join("\n"),
-		organizationAvailabilityIds: agent.configuration.availability
-			.filter((target) => target.kind === "organization")
-			.map((target) => target.organizationId)
-			.join("\n"),
+		// People come from the whole scope read when there is one, so people,
+		// applications and its revision share one snapshot (#4308).
+		...peopleFields(
+			ownScope
+				? scopePeople(ownScope)
+				: agent.configuration.availability.flatMap((target) =>
+						target.kind === "user" || target.kind === "organization"
+							? [target]
+							: [],
+					),
+		),
 		replaceModels: false,
 		models: [],
 		defaultModelOptionId: "",
@@ -95,10 +242,14 @@ export function agentConfigurationEnvironmentChanged(
 	);
 }
 
+export type AgentConfigurationRequest =
+	| AgentConfigurationUpdateRequestV2Writable
+	| AgentConfigurationUpdateRequestV5Writable;
+
 export function buildAgentConfigurationRequest(
 	draft: AgentConfigurationDraft,
 	agent: AgentProjectionV2,
-): AgentConfigurationUpdateRequestV2Writable {
+): AgentConfigurationRequest {
 	const modelConfiguration = draft.replaceModels
 		? {
 				options: draft.models.map((model) => ({
@@ -118,21 +269,36 @@ export function buildAgentConfigurationRequest(
 			}))
 		: undefined;
 
+	const people = [
+		...splitValues(draft.userAvailabilityIds).map((userId) => ({
+			kind: "user" as const,
+			userId,
+		})),
+		...splitValues(draft.organizationAvailabilityIds).map((organizationId) => ({
+			kind: "organization" as const,
+			organizationId,
+		})),
+	];
+	const revision = draft.applicationAvailabilityRevision;
+	if (agentConfigurationApplicationScopeConflict(draft))
+		throw new AgentConfigurationScopeConflictError();
 	return {
-		schemaVersion: 2,
-		coOwnerIds: splitValues(draft.coOwnerIds),
-		availability: [
-			...splitValues(draft.userAvailabilityIds).map((userId) => ({
-				kind: "user" as const,
-				userId,
-			})),
-			...splitValues(draft.organizationAvailabilityIds).map(
-				(organizationId) => ({
-					kind: "organization" as const,
-					organizationId,
+		...(!agentConfigurationApplicationsChanged(draft) || revision === undefined
+			? { schemaVersion: 2 as const, availability: people }
+			: {
+					schemaVersion: 5 as const,
+					availability: [
+						...people,
+						...[
+							...new Set(applicationIds(draft.applicationAvailabilityIds)),
+						].map((applicationId) => ({
+							kind: "application" as const,
+							applicationId,
+						})),
+					],
+					expectedManagementRevision: revision,
 				}),
-			),
-		],
+		coOwnerIds: splitValues(draft.coOwnerIds),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		...(environment === undefined ? {} : { environment }),
 		...(draft.channels === undefined ? {} : { channels: draft.channels }),
@@ -147,6 +313,28 @@ export function buildAgentConfigurationRequest(
 				}
 			: {}),
 	};
+}
+
+function applicationIds(value: string | undefined) {
+	return value === undefined ? [] : splitValues(value);
+}
+
+/** 草稿里的独立应用条目是否相对填入时读到的条目被编辑过。 */
+export function agentConfigurationApplicationsChanged(
+	draft: Pick<
+		AgentConfigurationDraft,
+		"applicationAvailabilityIds" | "applicationAvailabilityBaseline"
+	>,
+): boolean {
+	if (
+		draft.applicationAvailabilityIds === undefined ||
+		draft.applicationAvailabilityBaseline === undefined
+	)
+		return false;
+	return (
+		sortedJson(applicationIds(draft.applicationAvailabilityIds)) !==
+		sortedJson(draft.applicationAvailabilityBaseline)
+	);
 }
 
 /** 按集合比较：服务端对 Owner 与范围去重后再比较，重复的 ID 不算改动。 */
@@ -164,6 +352,7 @@ export function agentConfigurationDraftChanged(
 	agent: AgentProjectionV2,
 	draft: AgentConfigurationDraft,
 ): boolean {
+	if (agentConfigurationApplicationsChanged(draft)) return true;
 	const baseline = buildAgentConfigurationRequest(
 		configurationDraftFromAgent(agent),
 		agent,
@@ -181,7 +370,9 @@ export function agentConfigurationDraftChanged(
 			(value.availability ?? []).map((target) =>
 				target.kind === "user"
 					? `user:${target.userId}`
-					: `organization:${target.organizationId}`,
+					: target.kind === "organization"
+						? `organization:${target.organizationId}`
+						: `application:${target.applicationId}`,
 			),
 		);
 	if (targets(request) !== targets(baseline)) return true;

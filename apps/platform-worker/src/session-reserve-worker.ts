@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
+import type { ExecutorInstanceMutationV2 } from "@agent-infra/contracts/runtime";
 import {
 	parseSessionSandboxReserveConfigurationV1,
+	type SessionSandboxInstanceEvidenceV1,
 	type SessionSandboxReserveConfigurationV1,
 	type SessionSandboxReserveOperationInputV1,
 	type SessionSandboxReserveOperationV1,
 	type SessionSandboxReserveResourceKindV1,
 	type SessionSandboxResourceIdentityV1,
+	sessionSandboxReserveExecutorSettledV1,
 	sessionSandboxReserveResourceKindsV1,
 } from "@agent-infra/platform-core";
 import {
@@ -40,8 +43,54 @@ export type SessionReserveStoreV1 = Pick<
 	| "finishRetirement"
 	| "close"
 >;
+export type SessionReserveExecutorStoreV1 = Pick<
+	PostgresSessionSandboxReserveStoreV1,
+	| "transitionExecutorReserveInstanceV2"
+	| "recordExecutorProjectionIntent"
+	| "recordExecutorProjectionCreateResponse"
+	| "recordExecutorProjectionResult"
+	| "recordExecutorConsumption"
+	| "recordExecutorProjectionDeleteIntent"
+	| "recordExecutorProjectionDeleteResponse"
+	| "recordExecutorProjectionDeleteObservation"
+>;
+export interface SessionReserveExecutorAdapterV1 {
+	startup(
+		claim: Claim,
+	): Promise<Extract<ExecutorInstanceMutationV2, { kind: "prepare" }> | null>;
+	projection(
+		claim: Claim,
+		pod: KubernetesObject,
+	): Promise<{
+		intent: Parameters<
+			PostgresSessionSandboxReserveStoreV1["recordExecutorProjectionIntent"]
+		>[1];
+		resource: KubernetesObject;
+	}>;
+	readProjection(
+		claim: SessionSandboxReserveObservationV1,
+		signal?: AbortSignal,
+	): Promise<KubernetesObject | null>;
+	createProjection(
+		claim: Claim,
+		resource: KubernetesObject,
+		signal?: AbortSignal,
+	): Promise<KubernetesObject>;
+	removeProjection(
+		claim: Claim,
+		resource: SessionSandboxResourceIdentityV1,
+		signal?: AbortSignal,
+	): Promise<"acknowledged" | "absent">;
+	readInstance(
+		claim: SessionSandboxReserveObservationV1,
+		resources: readonly KubernetesObject[],
+		signal?: AbortSignal,
+	): Promise<SessionSandboxInstanceEvidenceV1 | null>;
+}
 /** The adapter verifies current resource ownership/spec and never retries mutations. */
 export interface SessionReserveAdapterV1 {
+	/** Preparation seam only; the production adapter's Codex admission guard stays closed. */
+	readonly executor?: SessionReserveExecutorAdapterV1;
 	render(claim: Claim): Promise<readonly KubernetesObject[]>;
 	read(
 		claim: SessionSandboxReserveObservationV1,
@@ -62,7 +111,11 @@ export interface SessionReserveAdapterV1 {
 		claim: SessionSandboxReserveObservationV1,
 		resources: readonly KubernetesObject[],
 		signal?: AbortSignal,
-	): Promise<{ bootstrapReady: boolean; businessStateAbsent: boolean }>;
+	): Promise<{
+		bootstrapReady: boolean;
+		businessStateAbsent: boolean;
+		instanceEvidence?: SessionSandboxInstanceEvidenceV1;
+	}>;
 	/**
 	 * False when the reserve would deliver a startup-selected Consumer snapshot to an Agent
 	 * that now has a persistent association (Spec §13.5.7). Throws when the source is
@@ -144,7 +197,8 @@ export function createPlatformSessionReserveWorkerV1(options: {
 	readonly databaseUrl: string;
 	readonly configuration: SessionSandboxReserveConfigurationV1;
 	readonly adapter: SessionReserveAdapterV1;
-	readonly store?: SessionReserveStoreV1;
+	readonly store?: SessionReserveStoreV1 &
+		Partial<SessionReserveExecutorStoreV1>;
 	readonly workerId?: string;
 	readonly pollIntervalMs?: number;
 	readonly leaseDurationMs?: number;
@@ -176,6 +230,23 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			configuration,
 		});
 	const adapter = options.adapter;
+	const executorStore = (): SessionReserveExecutorStoreV1 => {
+		const candidate = store as SessionReserveStoreV1 &
+			Partial<SessionReserveExecutorStoreV1>;
+		for (const name of [
+			"transitionExecutorReserveInstanceV2",
+			"recordExecutorProjectionIntent",
+			"recordExecutorProjectionCreateResponse",
+			"recordExecutorProjectionResult",
+			"recordExecutorConsumption",
+			"recordExecutorProjectionDeleteIntent",
+			"recordExecutorProjectionDeleteResponse",
+			"recordExecutorProjectionDeleteObservation",
+		] as const)
+			if (typeof candidate[name] !== "function")
+				throw new WorkloadKubernetesError("policy");
+		return candidate as SessionReserveStoreV1 & SessionReserveExecutorStoreV1;
+	};
 	const now = options.now ?? Date.now;
 	const abortController = new AbortController();
 	let stopped = false;
@@ -242,11 +313,268 @@ export function createPlatformSessionReserveWorkerV1(options: {
 	async function retire(claim: Claim) {
 		if (!stopped) await store.retire(claim.sandboxId);
 	}
-	async function prepare(
+	async function reload(claim: Claim): Promise<Claim> {
+		const snapshot = await store.inspect(claim.sandboxId);
+		if (
+			!snapshot ||
+			snapshot.status === "claimed" ||
+			snapshot.profile.digest !== claim.profile.digest ||
+			snapshot.sessionId !== claim.sessionId ||
+			snapshot.agentId !== claim.agentId ||
+			(snapshot.status !== "retiring" &&
+				snapshot.currentProfileDigest !== claim.profile.digest)
+		)
+			throw new LeaseLost();
+		return { ...claim, ...snapshot };
+	}
+	async function prepareProjection(
+		initialClaim: Claim,
+		resources: readonly KubernetesObject[],
+		guard: () => Promise<void>,
+	): Promise<Claim | null> {
+		let claim = initialClaim;
+		if (!claim.executorStartup) return claim;
+		const port = adapter.executor;
+		if (!port) throw new WorkloadKubernetesError("policy");
+		const writes = executorStore();
+		claim = await reload(claim);
+		let startup = claim.executorStartup;
+		if (!startup?.instance) throw new WorkloadKubernetesError("policy");
+		if (!startup.consumption && now() >= startup.deadlineMs) {
+			await retire(claim);
+			return null;
+		}
+		if (startup.instance.phase === "pod-pending") {
+			const pod = resources.find((r) => r.kind === "Pod");
+			const service = resources.find((r) => r.kind === "Service");
+			if (!pod || !service) throw new WorkloadKubernetesError("conflict");
+			await guard();
+			const bound = await writes.transitionExecutorReserveInstanceV2(claim, {
+				kind: "bind",
+				attemptId: startup.instance.attemptId,
+				revision: startup.instance.revision,
+				podUid: identity(claim, pod).uid,
+				resources: [identity(claim, pod), identity(claim, service)].map(
+					(r) => ({ ...r, kind: r.kind as "Pod" | "Service" }),
+				),
+			});
+			if (!bound) throw new LeaseLost();
+			claim = await reload(claim);
+			startup = claim.executorStartup;
+		}
+		if (!startup) throw new LeaseLost();
+		if (!startup.projection) {
+			const pod = resources.find((r) => r.kind === "Pod");
+			if (!pod || startup.instance?.phase !== "bound") return null;
+			if (await port.readProjection(claim, abortController.signal))
+				throw new WorkloadKubernetesError("conflict");
+			const publication = await port.projection(claim, pod);
+			await guard();
+			if (
+				!(await writes.recordExecutorProjectionIntent(
+					claim,
+					publication.intent,
+				))
+			)
+				throw new LeaseLost();
+			claim = await reload(claim);
+			await guard();
+			try {
+				const created = await port.createProjection(
+					claim,
+					publication.resource,
+					abortController.signal,
+				);
+				if (
+					!(await writes.recordExecutorProjectionCreateResponse(claim, {
+						attemptId: publication.intent.attemptId,
+						response: "created",
+						resource: projectionIdentity(claim, created),
+					}))
+				)
+					throw new LeaseLost();
+			} catch (error) {
+				if (error instanceof LeaseLost) throw error;
+				if (definiteCreateRejection(error)) {
+					await writes.recordExecutorProjectionCreateResponse(claim, {
+						attemptId: publication.intent.attemptId,
+						response: "rejected",
+						resource: null,
+					});
+					await retire(claim);
+				} else
+					await writes.recordExecutorProjectionResult(claim, {
+						attemptId: publication.intent.attemptId,
+					});
+				throw error;
+			}
+			claim = await reload(claim);
+			startup = claim.executorStartup;
+		}
+		const projection = startup?.projection;
+		if (!projection || projection.create.writeCompletion !== "response") {
+			await port.readProjection(claim, abortController.signal);
+			return null;
+		}
+		if (projection.create.status === "rejected") {
+			await retire(claim);
+			return null;
+		}
+		if (!startup?.consumption) {
+			await guard();
+			const proof = await port.readInstance(
+				claim,
+				resources,
+				abortController.signal,
+			);
+			if (!proof) return null;
+			await guard();
+			if (
+				!(await writes.recordExecutorConsumption(claim, {
+					attemptId: projection.create.attemptId,
+					podUid: proof.podUid,
+					hostKeyId: proof.hostKeyId,
+					runnerEpoch: proof.runnerEpoch,
+					projectionUid: projection.create.resource?.uid ?? "",
+					evidence: proof,
+				}))
+			)
+				return null;
+			claim = await reload(claim);
+		}
+		if (!(await cleanProjection(claim, guard))) return null;
+		return reload(claim);
+	}
+	function projectionIdentity(
 		claim: Claim,
+		object: KubernetesObject,
+	): SessionSandboxResourceIdentityV1 {
+		const metadata = object.metadata;
+		if (
+			!claim.executorStartup?.startupRef ||
+			object.kind !== "Secret" ||
+			metadata?.namespace !== claim.profile.policy.namespace ||
+			metadata.name !== claim.executorStartup?.startupRef ||
+			!metadata.uid ||
+			!metadata.resourceVersion
+		)
+			throw new WorkloadKubernetesError("conflict");
+		return {
+			kind: "Secret",
+			name: metadata.name,
+			namespace: claim.profile.policy.namespace,
+			uid: metadata.uid,
+			resourceVersion: metadata.resourceVersion,
+		};
+	}
+	/** The temporary projection settles before any of the six long-lived resources are touched. */
+	async function cleanProjection(
+		initialClaim: Claim,
+		guard: () => Promise<void>,
+	): Promise<boolean> {
+		let claim = initialClaim;
+		const startup = claim.executorStartup;
+		if (!startup) return true;
+		if (!adapter.executor) throw new WorkloadKubernetesError("policy");
+		const writes = executorStore();
+		await guard();
+		const object = await adapter.executor.readProjection(
+			claim,
+			abortController.signal,
+		);
+		await guard();
+		const projection = startup.projection;
+		if (!projection) {
+			if (object) throw new WorkloadKubernetesError("conflict");
+			return !startup.instance?.delivery;
+		}
+		const create = projection.create;
+		if (
+			object &&
+			create.resource?.uid &&
+			object.metadata?.uid !== create.resource.uid
+		)
+			throw new WorkloadKubernetesError("conflict");
+		// A GET is never the response to the original create. In particular, no new key or write is issued.
+		if (create.writeCompletion !== "response") return false;
+		if (create.status === "rejected") {
+			if (object) throw new WorkloadKubernetesError("conflict");
+			return true;
+		}
+		if (create.status !== "confirmed" || !create.resource) return false;
+		const deletion = projection.deletes.at(-1);
+		if (deletion?.absent) {
+			if (object) throw new WorkloadKubernetesError("conflict");
+			return sessionSandboxReserveExecutorSettledV1(startup);
+		}
+		if (deletion?.writeCompletion === "pending") return false;
+		if (deletion && !object) {
+			return writes.recordExecutorProjectionDeleteObservation(claim, {
+				attemptId: deletion.attemptId,
+			});
+		}
+		if (deletion?.status === "confirmed") return false;
+		if (
+			deletion &&
+			(projection.deletes.length >= 3 ||
+				deletion.resource?.resourceVersion ===
+					object?.metadata?.resourceVersion)
+		)
+			return false;
+		const resource = object
+			? projectionIdentity(claim, object)
+			: create.resource;
+		const attemptId = randomUUID();
+		await guard();
+		if (
+			!(await writes.recordExecutorProjectionDeleteIntent(claim, {
+				attemptId,
+				resource,
+			}))
+		)
+			throw new LeaseLost();
+		claim = await reload(claim);
+		try {
+			const response = await adapter.executor.removeProjection(
+				claim,
+				resource,
+				abortController.signal,
+			);
+			if (
+				!(await writes.recordExecutorProjectionDeleteResponse(claim, {
+					attemptId,
+					response,
+				}))
+			)
+				throw new LeaseLost();
+		} catch (error) {
+			if (error instanceof LeaseLost) throw error;
+			if (definiteDeleteRejection(error))
+				await writes.recordExecutorProjectionDeleteResponse(claim, {
+					attemptId,
+					response: "rejected",
+				});
+			else await writes.recordExecutorProjectionResult(claim, { attemptId });
+			throw error;
+		}
+		await guard();
+		if (await adapter.executor.readProjection(claim, abortController.signal))
+			return false;
+		await guard();
+		const inspection = await store.inspect(claim.sandboxId);
+		const recorded = inspection?.executorStartup?.projection?.deletes.at(-1);
+		if (!recorded || recorded.attemptId !== attemptId) throw new LeaseLost();
+		return (
+			recorded.absent ||
+			writes.recordExecutorProjectionDeleteObservation(claim, { attemptId })
+		);
+	}
+	async function prepare(
+		initialClaim: Claim,
 		result: SessionReserveReconcileResultV1,
 		guard: () => Promise<void>,
 	) {
+		let claim = initialClaim;
 		// Retire before any write: nothing was created for this reserve with the old Consumer.
 		// Backing off the Agent stops capacity reconciliation from recreating it every poll.
 		if (adapter.deliverable && !(await adapter.deliverable(claim))) {
@@ -254,6 +582,19 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			await retire(claim);
 			return;
 		}
+		const startupPlan = await adapter.executor?.startup(claim);
+		if (startupPlan) {
+			await guard();
+			if (
+				!(await executorStore().transitionExecutorReserveInstanceV2(
+					claim,
+					startupPlan,
+				))
+			)
+				throw new LeaseLost();
+			claim = await reload(claim);
+		} else if (claim.executorStartup)
+			throw new WorkloadKubernetesError("policy");
 		const rendered = await adapter.render(claim);
 		if (
 			rendered.length !== creationOrder.length ||
@@ -265,6 +606,14 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		const observed: KubernetesObject[] = [];
 		for (const kind of creationOrder) {
 			await guard();
+			if (
+				claim.executorStartup &&
+				!claim.executorStartup.consumption &&
+				now() >= claim.executorStartup.deadlineMs
+			) {
+				await retire(claim);
+				return;
+			}
 			const prior = operations.find(
 				(operation) =>
 					operation.kind === kind && operation.operation === "create",
@@ -308,7 +657,21 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					absent: false,
 				};
 				await guard();
-				if (!(await store.recordIntent(claim, operation)))
+				if (kind === "Pod" && claim.executorStartup?.instance) {
+					const instance = claim.executorStartup.instance;
+					const pending =
+						await executorStore().transitionExecutorReserveInstanceV2(
+							claim,
+							{
+								kind: "pod-create",
+								attemptId: instance.attemptId,
+								revision: instance.revision,
+							},
+							operation,
+						);
+					if (!pending?.permit) throw new LeaseLost();
+					claim = await reload(claim);
+				} else if (!(await store.recordIntent(claim, operation)))
 					throw new LeaseLost();
 				if (stopped) return;
 				const desired = rendered.find((resource) => resource.kind === kind);
@@ -350,6 +713,13 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			}
 			observed.push(object);
 		}
+		const prepared = await prepareProjection(
+			{ ...claim, operations },
+			observed,
+			guard,
+		);
+		if (!prepared) return;
+		claim = prepared;
 		await guard();
 		const evidence = await adapter.bootstrap(
 			{ ...claim, operations },
@@ -404,11 +774,17 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			)
 				throw new LeaseLost();
 		}
+		if (claim.executorStartup) {
+			if (!adapter.executor) throw new WorkloadKubernetesError("policy");
+			await guard();
+			await adapter.executor.readProjection(claim, abortController.signal);
+		}
 		// An uncertain reserve is not promoted. Once all original writes settle it can be retired safely.
 		if (
 			claim.operations.every(
 				(operation) => operation.writeCompletion === "response",
-			)
+			) &&
+			sessionSandboxReserveExecutorSettledV1(claim.executorStartup)
 		)
 			await retire(claim);
 	}
@@ -434,6 +810,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					if (await store.retire(row.sandboxId)) result.retired++;
 					return;
 				}
+				const observed: KubernetesObject[] = [];
 				for (const kind of creationOrder) {
 					const current = await adapter.read(
 						inspection,
@@ -444,6 +821,24 @@ export function createPlatformSessionReserveWorkerV1(options: {
 						if (await store.retire(row.sandboxId)) result.retired++;
 						return;
 					}
+					observed.push(current);
+				}
+				const instance = inspection.executorStartup
+					? await adapter.bootstrap(
+							inspection,
+							observed,
+							abortController.signal,
+						)
+					: null;
+				if (
+					inspection.executorStartup &&
+					(!instance?.bootstrapReady ||
+						!instance.businessStateAbsent ||
+						!instance.instanceEvidence ||
+						!inspection.readFence)
+				) {
+					if (await store.retire(row.sandboxId)) result.retired++;
+					return;
 				}
 				// Recheck after the awaited reads, immediately before extending readiness.
 				if (adapter.deliverable && !(await adapter.deliverable(inspection))) {
@@ -451,7 +846,14 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					if (await store.retire(row.sandboxId)) result.retired++;
 					return;
 				}
-				if (!(await store.refreshReady(row.sandboxId, configuration.ttlMs))) {
+				const refreshed =
+					instance?.instanceEvidence && inspection.readFence
+						? await store.refreshReady(row.sandboxId, configuration.ttlMs, {
+								readFence: inspection.readFence,
+								instanceEvidence: instance.instanceEvidence,
+							})
+						: await store.refreshReady(row.sandboxId, configuration.ttlMs);
+				if (!refreshed) {
 					if (await store.retire(row.sandboxId)) result.retired++;
 				}
 			} catch {
@@ -467,6 +869,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		guard: () => Promise<void>,
 	) {
 		if (claim.status !== "retiring") return;
+		if (!(await cleanProjection(claim, guard))) return;
 		for (const kind of deletionOrder) {
 			await guard();
 			const create = claim.operations.find(

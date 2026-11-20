@@ -36,7 +36,7 @@ import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/c
 import {
 	RuntimeSubmitTurnRequestV4Schema,
 	type SessionInstanceReadRequestV1,
-	sessionInstanceRequestSigningPayloadV1,
+	sessionInstanceReadSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requestDigest } from "../../../packages/agent-runtime/src/file-runtime-store.js";
@@ -2625,7 +2625,7 @@ it("keeps production evidence absent and explicitly assembles it from consumed V
 				reserveRef: "reserve-original",
 				reserveDeliveryFence: 1,
 			},
-			authorization: "unsigned",
+			authorization: "e30.e30.AA",
 		};
 		const at = Date.now();
 		const claims = {
@@ -2636,7 +2636,13 @@ it("keeps production evidence absent and explicitly assembles it from consumed V
 			issuedAt: at,
 			expiresAt: at + 10_000,
 			requestDigest: createHash("sha256")
-				.update(sessionInstanceRequestSigningPayloadV1(body))
+				.update(
+					sessionInstanceReadSigningPayloadV1(
+						Object.fromEntries(
+							Object.entries(body).filter(([key]) => key !== "authorization"),
+						),
+					),
+				)
 				.digest("hex"),
 		};
 		const bytes = [

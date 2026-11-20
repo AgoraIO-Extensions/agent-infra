@@ -40,10 +40,15 @@ import {
 	ConnectionInstallCommandRequestV1Schema,
 	type ConnectionInstallCommandResponseV1,
 	ConnectionInstallCommandResponseV1Schema,
+	type ConnectionInstallConfirmBindingReadbackRequestV1,
+	ConnectionInstallConfirmBindingReadbackRequestV1Schema,
+	type ConnectionInstallConfirmBindingReadbackResponseV1,
+	ConnectionInstallConfirmBindingReadbackResponseV1Schema,
 	type ConnectionInstallFirstBeginGrantClaimsV1,
 	ConnectionInstallFirstBeginGrantClaimsV1Schema,
 	type ConnectionInstallFirstBeginRequestV1,
 	ConnectionInstallFirstBeginRequestV1Schema,
+	ConnectionManualConfirmCandidateV1Schema,
 	type ConnectionManualInstallDescriptorV1,
 	ConnectionManualInstallDescriptorV1Schema,
 	type ConnectionRegistrationReceiptV1,
@@ -53,6 +58,7 @@ import {
 	connectionInstallExporterLabelsV1,
 	connectionInstallJwsTypesV1,
 	connectionInstallPathsV1,
+	connectionManualConfirmContractV1,
 	connectionServiceCredentialPatternV1,
 	type RuntimeOAuthAuthorizedRequestV1,
 	RuntimeOAuthAuthorizedRequestV1Schema,
@@ -1453,6 +1459,186 @@ async function assembleConnectionInstallReceiver(
 		}
 	}
 
+	/**
+	 * §13.5.6 exception confirm, phase 1 (`connection-manual-confirm/v1`). On a
+	 * fixed installation and a sending phase command, the Host reads EP-1060
+	 * back for the original key, checks the §13.5.1 item 2 gates and returns the
+	 * non-secret candidate, recorded once under the phase key. It never reads a
+	 * code or verifier, exchanges or publishes, and it writes nothing to the Store.
+	 */
+	async function confirmBindingReadback(
+		body: ConnectionInstallConfirmBindingReadbackRequestV1,
+		channel: string,
+	): Promise<ConnectionInstallConfirmBindingReadbackResponseV1> {
+		const parsedClaims = ConnectionInstallCommandClaimsV1Schema.safeParse(
+			verifyCompact(body.grant, connectionInstallJwsTypesV1.registration),
+		);
+		if (!parsedClaims.success) denied();
+		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const registrationKeyHash = connectionRegistrationKeyHashV1(
+			body.registrationKey,
+		);
+		const descriptorDigest = connectionManualInstallDescriptorDigestV1(
+			body.descriptor,
+		);
+		if (
+			claims.command !== "confirm_binding_readback" ||
+			claims.commandId !== body.commandId ||
+			claims.attemptId !== body.attemptId ||
+			claims.attemptOwner !== body.attemptOwner ||
+			claims.supplyAttemptId !== body.supplyAttemptId ||
+			claims.authorizationId !== body.template.authorizationId ||
+			claims.templateDigest !==
+				connectionRegistrationTemplateDigestV1(body.template) ||
+			claims.registrationKeyHash !== registrationKeyHash ||
+			registrationKeyHash !== body.template.registration.registrationKeyHash ||
+			claims.requestDigest !== connectionInstallRequestDigestV1(body) ||
+			body.descriptor.registrationKey !== body.registrationKey ||
+			body.descriptor.principalMapping.kind !== "consistency-exception-v1"
+		)
+			denied();
+		const reply = (outcome: "rejected" | "unknown") =>
+			ConnectionInstallConfirmBindingReadbackResponseV1Schema.parse({
+				schemaVersion: 1,
+				contract: connectionManualConfirmContractV1,
+				outcome,
+				commandId: body.commandId,
+			});
+		const admitted = await admitTemplate(body.template);
+		const { template, templateDigest } = admitted;
+		// Only the installation this Host fixed, with the same descriptor and supply.
+		const consumed = await readRecord(
+			`install-first-begin-${sha256Hex(template.authorizationId)}.json`,
+		);
+		if (!consumed) conflict();
+		const consumption = parseConsumption(consumed);
+		if (
+			!isDeepStrictEqual(consumption.template, template) ||
+			consumption.descriptorDigest !== descriptorDigest ||
+			consumption.supplyAttemptId !== body.supplyAttemptId
+		)
+			conflict();
+		const slot = confirmedSlot(template, templateDigest, body.supplyAttemptId);
+		if (!slot) conflict();
+		const candidateName = `install-confirm-candidate-${sha256Hex(body.commandId)}.json`;
+		if ((await readRecord(candidateName)) !== undefined) conflict();
+		const readbackInput = commandReadback(admitted, body.supplyAttemptId, {
+			commandId: body.commandId,
+			attemptId: body.attemptId,
+			attemptOwner: body.attemptOwner,
+			command: "confirm_binding_readback",
+			requestDigest: claims.requestDigest,
+			registrationKeyHash,
+			descriptorDigest,
+		});
+		const outcome = await readbackOutcome(readbackInput);
+		assertOriginal(template);
+		if (outcome === "denied") denied();
+		if (outcome !== "allowed") unavailable();
+		const assertCurrent = () => {
+			current();
+			if (
+				slots.get(template.authorizationId) !== slot ||
+				slot.state !== "confirmed"
+			)
+				unavailable();
+			store.assertOriginalExecutionBindingCurrent(
+				template.reference,
+				template.principal,
+				now,
+			);
+		};
+		let read: Awaited<ReturnType<typeof readConnectionMachineOAuthClientV1>>;
+		try {
+			read = await readConnectionMachineOAuthClientV1({
+				endpoint: template.registration.endpoint,
+				serviceCredential: slot.credential.toString("utf8"),
+				registrationKey: body.registrationKey,
+				signal: abort.signal,
+				assertCurrent,
+				...(machineFetch ? { fetch: machineFetch } : {}),
+			});
+		} catch {
+			return reply("unknown");
+		}
+		const registration = read.registration as Record<string, unknown>;
+		const principalId = registration.principalId;
+		// The EP-1060 wait may have outlasted the phase, the claim or the Host
+		// binding; neither a reject nor a candidate outlives them.
+		if ((await readbackOutcome(readbackInput)) !== "allowed")
+			return reply("unknown");
+		try {
+			assertOriginal(template);
+		} catch {
+			return reply("unknown");
+		}
+		// §13.5.1 item 2: KNOWN, a principal, the same client, instance, Consumer,
+		// redirect URI, resource and scope, and an ACTIVE instance.
+		if (
+			typeof principalId !== "string" ||
+			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(principalId) ||
+			registration.registrationKey !== body.registrationKey ||
+			registration.clientId !== body.descriptor.clientId ||
+			registration.instanceId !== body.descriptor.instanceId ||
+			registration.consumerId !== body.descriptor.consumerId ||
+			registration.redirectUri !== template.registration.redirectUri ||
+			registration.resource !== template.registration.resource ||
+			registration.scope !== "mcp" ||
+			registration.instanceStatus !== "ACTIVE"
+		)
+			return reply("rejected");
+		const candidate = ConnectionManualConfirmCandidateV1Schema.parse({
+			schemaVersion: 1,
+			principal: template.principal,
+			reference: template.reference,
+			authorizationId: template.authorizationId,
+			confirmationRevision: template.confirmationRevision,
+			association: template.association,
+			confirm: {
+				commandId: body.confirmCommandId,
+				phase: "binding_readback",
+				phaseCommandId: body.commandId,
+				requestDigest: claims.requestDigest,
+			},
+			target: template.target,
+			descriptorDigest,
+			supply: template.supply,
+			exceptionPolicy: body.descriptor.principalMapping.policy,
+			verified: {
+				issuer: access.system.issuer,
+				registrationKey: body.registrationKey,
+				principalId,
+				clientId: body.descriptor.clientId,
+				consumerId: body.descriptor.consumerId,
+				instanceId: body.descriptor.instanceId,
+				redirectUri: template.registration.redirectUri,
+				resource: template.registration.resource,
+				scope: "mcp",
+				instanceStatus: "ACTIVE",
+			},
+		});
+		// Bound once to this phase key, request digest and the original claim/fence.
+		await publishMetadata(
+			records,
+			candidateName,
+			{
+				schemaVersion: 1,
+				phaseCommandId: body.commandId,
+				requestDigest: claims.requestDigest,
+				claim: template.claim,
+				candidate,
+			},
+			{ immutable: true, guard: () => assertOriginal(template) },
+		);
+		return ConnectionInstallConfirmBindingReadbackResponseV1Schema.parse({
+			schemaVersion: 1,
+			contract: connectionManualConfirmContractV1,
+			outcome: "candidate",
+			commandId: body.commandId,
+			candidate,
+		});
+	}
+
 	async function beginStatus(
 		body: ConnectionInstallBeginStatusRequestV1,
 		channel: string,
@@ -1727,6 +1913,18 @@ async function assembleConnectionInstallReceiver(
 		const body = parsed.data;
 		const channel = context.get("channel");
 		return serial(async () => context.json(await firstBegin(body, channel)));
+	});
+	app.post(connectionInstallPathsV1.confirmBindingReadback, async (context) => {
+		const parsed =
+			ConnectionInstallConfirmBindingReadbackRequestV1Schema.safeParse(
+				await boundedJson(context.req.raw, current),
+			);
+		if (!parsed.success) denied();
+		const body = parsed.data;
+		const channel = context.get("channel");
+		return serial(async () =>
+			context.json(await confirmBindingReadback(body, channel)),
+		);
 	});
 	app.post(connectionInstallPathsV1.beginStatus, async (context) => {
 		const parsed = ConnectionInstallBeginStatusRequestV1Schema.safeParse(

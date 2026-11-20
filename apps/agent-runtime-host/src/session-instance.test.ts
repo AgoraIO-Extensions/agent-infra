@@ -20,7 +20,7 @@ import {
 	SessionInstanceEvidenceV1Schema,
 	type SessionInstanceReadRequestV1,
 	sessionInstanceReadPathV1,
-	sessionInstanceRequestSigningPayloadV1,
+	sessionInstanceReadSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
@@ -68,7 +68,7 @@ afterEach(async () => {
 	);
 });
 
-async function fixture() {
+async function fixture(runnerEpoch = "runner-original") {
 	const directory = await mkdtemp(join(tmpdir(), "session-instance-"));
 	directories.push(directory);
 	delivery.path = join(directory, "startup.json");
@@ -115,7 +115,7 @@ async function fixture() {
 	const worker = generateKeyPairSync("ed25519");
 	const at = { now: Date.now() };
 	const facts: SessionInstancePreparationFactsV1 = {
-		runnerEpoch: "runner-original",
+		runnerEpoch,
 		runnerIdentityConsumed: true,
 		deliveryFilesRemoved: true,
 		executorReady: true,
@@ -168,7 +168,7 @@ async function fixture() {
 				reserveRef: "reserve-original",
 				reserveDeliveryFence: 7,
 			},
-			authorization: "not-signed",
+			authorization: "e30.e30.AA",
 			...changes,
 		};
 		const claims = {
@@ -179,7 +179,13 @@ async function fixture() {
 			issuedAt: at.now,
 			expiresAt: at.now + 10_000,
 			requestDigest: createHash("sha256")
-				.update(sessionInstanceRequestSigningPayloadV1(body))
+				.update(
+					sessionInstanceReadSigningPayloadV1(
+						Object.fromEntries(
+							Object.entries(body).filter(([key]) => key !== "authorization"),
+						),
+					),
+				)
 				.digest("hex"),
 			...claimChanges,
 		};
@@ -208,6 +214,7 @@ async function fixture() {
 		material,
 		issuer,
 		start,
+		worker,
 	};
 }
 
@@ -345,7 +352,7 @@ it.each([
 it("rejects unsigned, wrong-key and tampered requests, including before an async concurrent nonce can replay", async () => {
 	const f = await fixture();
 	await expect(
-		f.read({ ...f.request(), authorization: "unsigned" }),
+		f.read({ ...f.request(), authorization: "e30.e30.AA" }),
 	).rejects.toMatchObject({ code: "RUNTIME_SESSION_INSTANCE_DENIED" });
 	await expect(
 		f.read(f.request({}, {}, generateKeyPairSync("ed25519").privateKey)),
@@ -564,3 +571,137 @@ it("keeps the consumed original instance readable after its one-time startup dea
 	f.at.now = f.start.expiresAt + 1;
 	expect((await f.read(f.request())).checks.hostIdentityConsumed).toBe(true);
 });
+
+async function workerHostFixture(epoch: string) {
+	const f = await fixture(epoch);
+	const { serve } = await import("@hono/node-server");
+	const { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } = await import(
+		"@agent-infra/agent-runtime"
+	);
+	const { createRuntimeHostApp } = await import("./app.js");
+	const directory = await mkdtemp(join(tmpdir(), "session-instance-wire-"));
+	directories.push(directory);
+	const host = await RuntimeHost.open({
+		store: await FileRuntimeStore.open(join(directory, "host.json")),
+		driver: await FakeRuntimeDriver.open(join(directory, "driver.json")),
+		grantValidation: { expectedIssuer: "platform" },
+	});
+	const token = "synthetic-internal-service-token";
+	const statuses: number[] = [];
+	const app = createRuntimeHostApp({
+		host,
+		serviceToken: token,
+		verifyGrant: () => {
+			throw new Error("business grant must not be used");
+		},
+		sessionInstanceRead: f.read,
+	});
+	const ready = Promise.withResolvers<number>();
+	const server = serve(
+		{
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async (request) => {
+				const response = await app.fetch(request);
+				statuses.push(response.status);
+				return response;
+			},
+		},
+		(info) => ready.resolve(info.port),
+	);
+	const port = await ready.promise;
+	const {
+		authorization: _authorization,
+		nonce: _nonce,
+		requestId: _requestId,
+		traceId: _traceId,
+		...binding
+	} = f.request();
+	return {
+		f,
+		statuses,
+		options: {
+			binding,
+			hostKeyId: f.options.hostKeyId,
+			hostPublicKey: f.material.host.statement.publicKey,
+			expectedRunnerEpoch: epoch,
+			serviceToken: token,
+			origin: `http://127.0.0.1:${port}/`,
+			signing: { ...f.options.worker, privateKey: f.worker.privateKey },
+			revalidate: vi.fn(async () => {}),
+			now: () => f.at.now,
+		},
+		close: async () => {
+			server.closeAllConnections();
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+			await host.close();
+		},
+	};
+}
+
+it.each(["123e4567-e89b-42d3-a456-426614174099", "runner-original"])(
+	"Worker client accepts the real Host HTTP signature with epoch %s",
+	async (epoch) => {
+		const { readSessionReserveInstanceV1 } = await import(
+			"../../platform-worker/src/session-reserve-instance.js"
+		);
+		const wire = await workerHostFixture(epoch);
+		try {
+			const proof = await readSessionReserveInstanceV1(wire.options);
+			expect(wire.statuses).toEqual([200]);
+			expect(proof).toMatchObject({
+				runnerEpoch: epoch,
+				hostKeyId: wire.options.hostKeyId,
+				podUid: wire.options.binding.podUid,
+				scope: wire.options.binding.scope,
+			});
+			expect(wire.options.revalidate).toHaveBeenCalledTimes(2);
+		} finally {
+			await wire.close();
+		}
+	},
+);
+
+it.each(["epoch", "nonce", "signature", "expiry"])(
+	"real Worker to Host HTTP read stays closed on %s drift",
+	async (drift) => {
+		const { readSessionReserveInstanceV1 } = await import(
+			"../../platform-worker/src/session-reserve-instance.js"
+		);
+		const wire = await workerHostFixture("runner-original");
+		try {
+			const options = { ...wire.options };
+			if (drift === "epoch") options.expectedRunnerEpoch = "foreign-runner";
+			if (drift === "expiry")
+				wire.f.readPreparation.mockImplementationOnce(async () => {
+					wire.f.at.now += 10_000;
+					return wire.f.facts;
+				});
+			const transport: typeof fetch = async (input, init) => {
+				const response = await fetch(input, init);
+				if (
+					response.status !== 200 ||
+					(drift !== "nonce" && drift !== "signature")
+				)
+					return response;
+				const body = (await response.json()) as Record<string, unknown>;
+				if (drift === "nonce") body.nonce = "foreign-nonce-with-enough-bits";
+				else {
+					const [header, payload, signature] = String(body.signature).split(
+						".",
+					) as [string, string, string];
+					body.signature = `${header}.${payload}.${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
+				}
+				return Response.json(body);
+			};
+			expect(
+				await readSessionReserveInstanceV1({ ...options, fetch: transport }),
+			).toBeNull();
+			expect(wire.statuses).toEqual([drift === "expiry" ? 403 : 200]);
+		} finally {
+			await wire.close();
+		}
+	},
+);

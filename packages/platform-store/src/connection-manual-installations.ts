@@ -52,9 +52,11 @@ export interface ConnectionManualInstallationPolicyInputV1 {
 	/**
 	 * §13.5.1 exception item 3: Principals already confirmed outside the
 	 * exception (`principalBindingsByAgentAndPrincipal`, standard receipts'
-	 * `connectionPrincipalId`). They count for the per-issuer uniqueness.
+	 * `connectionPrincipalId`). They count for the per-issuer uniqueness. The
+	 * caller supplies the complete server-resolved set, `[]` only when it found
+	 * none; an omitted set closes the route instead of skipping the check.
 	 */
-	readonly confirmedPrincipals?: readonly {
+	readonly confirmedPrincipals: readonly {
 		readonly issuer: string;
 		readonly principalId: string;
 		readonly userId: string;
@@ -108,7 +110,8 @@ export function captureConnectionManualInstallationPolicyV1(
 	// the mapping is missing and the dynamic route stays closed (§13.5.1).
 	const mapping = dynamic.principalMapping;
 	if (mapping.kind !== "consistency-exception-v1") unavailable();
-	const confirmedPrincipals = structuredClone(input.confirmedPrincipals ?? []);
+	// No default: a missing set is not an empty, verified one (§13.5.1 item 3).
+	const confirmedPrincipals = structuredClone(input.confirmedPrincipals);
 	if (
 		!Array.isArray(confirmedPrincipals) ||
 		confirmedPrincipals.some(

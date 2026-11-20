@@ -356,4 +356,4 @@ export * from "./installation.ts";
 export * from "./oauth.ts";
 export { canonicalRuntimeRequestSigningPayload } from "./request-signing.ts";
 
-export * from "./session-instance-v1.ts";
+export * from "./session-instance.ts";

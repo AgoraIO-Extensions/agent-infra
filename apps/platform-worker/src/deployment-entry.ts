@@ -1045,6 +1045,10 @@ async function createPreparedOwning(
 	return {
 		// Database lease ownership is per process; Runtime service identity is deployment-bound.
 		workload: { ...workload, workerId: instanceId },
+		reservePreparation: {
+			executorIdentityIssuer: signing.privateKey,
+			executorDrainStartupTimeoutMs,
+		},
 		conversation: {
 			databaseUrl: workload.databaseUrl,
 			workerId: instanceId,
@@ -1207,9 +1211,12 @@ export async function createPlatformSessionReserveWorkerOptionsV1(
 	return {
 		databaseUrl: deployment.workload.databaseUrl,
 		configuration: sessionSandboxReserves,
+		// B3b only prepares a separately testable adapter. Production retains A's Codex rejection;
+		// enabling its factory requires Host evidence and the separately gated adoption step.
 		adapter: createSessionSandboxReserveAdapterV1({
 			workload: deployment.workload,
 			serviceToken,
+			...deployment.reservePreparation,
 		}),
 		signal,
 	};

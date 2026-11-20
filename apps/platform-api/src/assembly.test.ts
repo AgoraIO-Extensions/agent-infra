@@ -1108,6 +1108,7 @@ it.each([
 							manualInstallation: {
 								systemAccess,
 								clientName: "Agent platform",
+								confirmedPrincipals: [],
 								approval: {
 									schemaVersion: 1,
 									configFingerprint: mismatch

@@ -975,6 +975,10 @@ export function assemblePlatformApi(
 		...admissions,
 		...channelAdmission,
 		...defaultRelayKeyPorts,
+		applicationAdmission: {
+			confirmActiveApplications: (request) =>
+				configurationQuery.confirmActiveApplications(request),
+		},
 	});
 	const projections = createPlatformProjectionReaders({
 		identity: input.identity,

@@ -8,6 +8,7 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	canonicalRuntimeRequestSigningPayload,
+	parseSessionInstanceJsonV1,
 	SessionInstanceEvidenceClaimsV1Schema,
 	type SessionInstanceEvidenceV1,
 	SessionInstanceEvidenceV1Schema,
@@ -15,7 +16,7 @@ import {
 	SessionInstanceReadClaimsV1Schema,
 	type SessionInstanceReadRequestV1,
 	SessionInstanceReadRequestV1Schema,
-	sessionInstanceRequestSigningPayloadV1,
+	sessionInstanceReadSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import {
 	executorIdentityConsumedV1,
@@ -45,25 +46,6 @@ function invalid(): never {
 	);
 }
 
-/** Bounded strict JSON including escaped duplicate object keys. */
-function strictJson(text: string): unknown {
-	const value: unknown = JSON.parse(text);
-	const objects: (Set<string> | undefined)[] = [];
-	for (const match of text.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\]]/g)) {
-		const token = match[0];
-		if (token === "{") objects.push(new Set());
-		else if (token === "[") objects.push(undefined);
-		else if (token === "}" || token === "]") objects.pop();
-		else if (/^\s*:/.test(text.slice(match.index + token.length))) {
-			const keys = objects.at(-1);
-			const key: string = JSON.parse(token);
-			if (!keys || keys.has(key)) invalid();
-			keys.add(key);
-		}
-	}
-	return value;
-}
-
 export async function readSessionInstanceBodyV1(request: Request) {
 	const reader = request.body?.getReader();
 	if (!reader) invalid();
@@ -81,7 +63,7 @@ export async function readSessionInstanceBodyV1(request: Request) {
 			chunks.push(item.value);
 		}
 		return SessionInstanceReadRequestV1Schema.parse(
-			strictJson(
+			parseSessionInstanceJsonV1(
 				new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
 			),
 		);
@@ -178,16 +160,17 @@ export function createSessionInstanceReaderV1(options: {
 		} catch {
 			return invalid();
 		}
+		const { authorization: _authorization, ...body } = request;
 		let claims: SessionInstanceReadClaimsV1;
 		const requestDigest = createHash("sha256")
-			.update(sessionInstanceRequestSigningPayloadV1(request))
+			.update(sessionInstanceReadSigningPayloadV1(body))
 			.digest("hex");
 		try {
 			const parts = request.authorization.split(".");
 			if (parts.length !== 3) denied();
 			const [h, p, s] = parts;
 			if (!h || !p || !s) denied();
-			const header = strictJson(
+			const header = parseSessionInstanceJsonV1(
 				new TextDecoder("utf-8", { fatal: true }).decode(decode(h)),
 			) as Record<string, unknown>;
 			if (
@@ -210,7 +193,9 @@ export function createSessionInstanceReaderV1(options: {
 			)
 				denied();
 			claims = SessionInstanceReadClaimsV1Schema.parse(
-				strictJson(new TextDecoder("utf-8", { fatal: true }).decode(decode(p))),
+				parseSessionInstanceJsonV1(
+					new TextDecoder("utf-8", { fatal: true }).decode(decode(p)),
+				),
 			);
 		} catch {
 			return denied();
@@ -288,7 +273,6 @@ export function createSessionInstanceReaderV1(options: {
 		} catch {
 			return unavailable();
 		}
-		const { authorization: _authorization, ...body } = request;
 		const response = {
 			...body,
 			requestDigest,

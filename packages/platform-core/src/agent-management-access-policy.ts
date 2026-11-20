@@ -154,6 +154,8 @@ export function decideAgentAccessUpdatePolicy(
 	stateInput: AgentManagementStateV1 | undefined,
 	actorInput: AgentManagementActorContextV1,
 	authorityInput: AgentAccessAuthorityContextV1,
+	/** Application IDs that Access confirmed registered and active just now. */
+	confirmedApplicationIds: readonly string[] = [],
 ): AgentAccessUpdatePolicyDecisionV1 {
 	const command = parseCommand(commandInput);
 	const actor = parseActor(actorInput);
@@ -229,6 +231,7 @@ export function decideAgentAccessUpdatePolicy(
 						? !authority.organizationIds.includes(target.organizationId)
 						: // Existing application entries are kept without a recheck;
 							// adding one needs Access confirmation (Spec §9.2.2).
+							!confirmedApplicationIds.includes(target.applicationId) &&
 							!state.availability.some(
 								(current) =>
 									current.kind === "application" &&
