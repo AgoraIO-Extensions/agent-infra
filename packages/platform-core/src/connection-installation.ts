@@ -445,8 +445,13 @@ export function createConnectionInstallationAuthorizationV1(options: {
 		requestId: string;
 		traceId: string;
 	};
-	const executeInstallation = async (
+	/**
+	 * `manualRoute` is the entry's capability. Without it no manual hook runs, so
+	 * a static-only caller is refused before any manual write (Spec §13.5.7).
+	 */
+	const run = async (
 		input: ExecuteInput,
+		manualRoute: boolean,
 	): Promise<
 		| ConnectionInstallationAuthorizationFactV1
 		| ConnectionManualInstallationProjectionFactV1
@@ -486,7 +491,9 @@ export function createConnectionInstallationAuthorizationV1(options: {
 					// Spec §13.5.7 manual EP-1060 route before its receipt CAS. Confirm and
 					// callback stay closed until the configuration is fixed.
 					const manual =
-						request.command === "status" && transaction.readManual
+						manualRoute &&
+						request.command === "status" &&
+						transaction.readManual
 							? await transaction.readManual(
 									request.userId,
 									request.authorizationId as string,
@@ -510,13 +517,15 @@ export function createConnectionInstallationAuthorizationV1(options: {
 					return manualProjection(manual);
 				}
 				if (
-					request.command === "confirm" &&
+					request.command !== "begin" &&
+					(request.command === "confirm" || !manualRoute) &&
 					(await transaction.readManual?.(
 						request.userId,
 						request.authorizationId as string,
 					))
 				)
-					// The manual route's code exchange and publication are not enabled.
+					// The manual route's code exchange and publication are not enabled,
+					// and a static-only entry never reads or verifies a manual install.
 					denied();
 				const executionId =
 					request.executionId ?? existing?.authorization.reference.executionId;
@@ -526,6 +535,7 @@ export function createConnectionInstallationAuthorizationV1(options: {
 					existing?.authorization.authorizationId,
 				);
 				if (
+					manualRoute &&
 					request.command === "begin" &&
 					!staticCurrent &&
 					transaction.currentManual &&
@@ -617,10 +627,11 @@ export function createConnectionInstallationAuthorizationV1(options: {
 				if (request.command === "status") {
 					if (!existing) denied();
 					// A bound manual install may verify a lost first begin read-only.
-					await transaction.requestManualStatus?.(
-						request.userId,
-						existing.authorization.authorizationId,
-					);
+					if (manualRoute)
+						await transaction.requestManualStatus?.(
+							request.userId,
+							existing.authorization.authorizationId,
+						);
 					return existing.authorization;
 				}
 				const replay = await transaction.receipt(
@@ -725,14 +736,15 @@ export function createConnectionInstallationAuthorizationV1(options: {
 			throw new ConnectionInstallationErrorV1("unavailable");
 		}
 	};
-	/** Static-configuration callers; a manual-route projection is never returned here. */
+	/** Static-configuration callers; the manual route is refused before it writes. */
 	const execute = async (
 		input: ExecuteInput,
 	): Promise<ConnectionInstallationAuthorizationFactV1> => {
-		const result = await executeInstallation(input);
+		const result = await run(input, false);
 		if ("manual" in result) throw new ConnectionInstallationErrorV1("denied");
 		return result;
 	};
+	const executeInstallation = (input: ExecuteInput) => run(input, true);
 	return {
 		execute,
 		/** Includes the manual EP-1060 route's pre-registration projection (§13.5.7). */
