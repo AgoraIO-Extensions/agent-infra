@@ -876,16 +876,34 @@ Pod 记为 absent、保留 PVC，再在原 Sandbox 和 PVC 上按替换准备恢
 **已停止 Session 的工作区回收。** 部署 owner 可按部署数据政策显式回收工作区；这不是用户删除会话功能，
 也不适用于 Agent 级 PVC、Postgres 或平台存储。正式入口先 dry-run 列候选，再按候选中的显式 Session/Sandbox ID
 及 PVC UID/resourceVersion 执行。资格必须同时满足：Sandbox 与期望状态均为 stopped，当前 generation/resourceFence
-的 stopReceipt 已确认，计算 charge 已释放，全部执行终态且没有 active、waiting、unknown 执行或未完成调谐，
+的 stopReceipt 已确认，计算资源已按该证明释放，全部执行终态且没有 active、waiting、unknown 执行或未完成调谐，
 停止时间超过部署配置阈值，并且不在部署保留名单中。保留名单按 Agent、Session、Sandbox 精确身份配置，
 至少保护 #2857 AC-7/AC-8、#3054、#3230、#4109 当前验收样本；#3874 合成样本默认保留，单独确认后才能移出名单。
 
 执行先按 Agent → Conversation → Sandbox allocation → 调谐 outbox 的锁顺序重新核对资格，持久记录原 PVC 身份和
-回收意图，并将 Conversation 与 Sandbox 标为 unavailable、保持停止；之后在数据库事务外按原 UID/resourceVersion
-条件删除 PVC。只有回读确认 PVC 不存在后，才在同一事务记录完成审计并释放存储 charge；charge 写入必须取得
+回收意图，并将 Conversation 与 Sandbox 标为 unavailable、保持停止。已有 charge 的目标还须确认同 namespace、
+compute_released=true 且 released=false。合法冷路径没有 charge、也没有该 Sandbox 的 reserve 来源记录时，
+记账项为不适用，不因此排除候选，也不补写 charge。预期应有 charge 的 reserve 来源缺记录时仍拒绝。
+开始审计持久记录本次是否适用 charge；后续恢复不能把原应释放但已缺失的行改判为不适用，
+无 charge 时显式标记不适用；有 charge 的操作继续使用原审计形状。未记录标记时沿原有 charge 合同处理。
+带新记账标记的操作须由兼容版本接管；旧版本不能解析时保持拒绝，回退不得删除标记、
+改写历史或更换目标重放。部署回退前先收敛在途回收，或保留兼容执行入口完成原操作。
+之后在数据库事务外按原 UID/resourceVersion 条件删除 PVC。只有回读确认 PVC 不存在后，才在同一事务
+记录完成审计：有 charge 时释放原存储 charge；不适用时核对仍无 charge 及 reserve 来源，不产生记账行。
+charge 写入必须取得
 `pg_advisory_xact_lock(hashtextextended('session-sandbox:deployment-budget', 0))`，且不得倒置上述实体锁顺序。
 失败、超时、对象替换或未知结果保留 charge 和回收意图，按同一身份幂等恢复，不重新选择 PVC。历史、消息、授权映射、
 Session/Sandbox ID 和审计均保留；后续消息明确返回会话不可用，不能恢复被删除的工作区、静默创建新实例或重放任务。
+
+dry-run、执行、恢复与 inspect 均区分上述两种记账情况；inspect 在无 charge 时仍回读会话及 Sandbox
+状态，明确表示记账不适用，不能用空状态冒充完成。重复执行只回读原操作，不重复删除或追加审计。
+只读 dry-run 身份可读取判定来源所需的 reserve Sandbox ID，不开放 profile、模型输入或凭据。
+此规则沿用下文及 ADR-0036 的备用池预算边界，不改变普通会话准入或预算口径。
+
+验收分别核对原 PVC 的真实 absence、开始与完成审计、记账状态，以及完成后新鲜完整的 Kubernetes
+存储观测和 Agent 保留存储聚合不再含该 PVC。有 charge 时回读 released=true；合法无 charge 时
+前后核对无残留记录，记为不适用。charge 数量为零不能证明存储已释放；陈旧、缺失或 unknown 的观测
+不签该项通过。Session 请求量的 coverage 缺口仍如实显示，不用它或备用池的零用量代替原 PVC 的观测证据。
 
 历史 Agent 共享 PVC 不能直接标记为新 Sandbox 已隔离。迁移须先停止旧业务准入，核实并排空
 旧执行源；unknown 或归属不明时保持隔离维护，不自动复制共享历史、补造主体或新建 Session。
