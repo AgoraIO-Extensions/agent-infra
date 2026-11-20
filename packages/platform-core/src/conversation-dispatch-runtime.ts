@@ -16,7 +16,51 @@ import {
 	unavailable,
 } from "./conversation-dispatch-values.js";
 import { parseConversationOperationFactV2 } from "./conversation-operation-facts.js";
+import { isExactExecutionFailureCodeV1 } from "./execution-failure.js";
 import { isWorkspaceReferenceV1 } from "./file-authority.js";
+
+type RuntimeRejection = Extract<
+	ConversationRuntimeOperationResultV1,
+	{ outcome: "rejected"; retryable: false }
+>;
+
+const runtimeRejectionMessages = {
+	RUNTIME_TURN_NOT_ACTIVE: "Runtime turn is no longer active",
+	RUNTIME_MODEL_SELECTION_UNSUPPORTED: "Runtime model selection is unsupported",
+	RUNTIME_SESSION_BLOCKED: "Runtime session is blocked by an unconfirmed turn",
+	RUNTIME_FILE_INPUT_REJECTED: "Runtime file input was rejected",
+} as const satisfies Record<
+	RuntimeRejection["code"],
+	RuntimeRejection["message"]
+>;
+
+function isRuntimeRejectionCode(
+	code: unknown,
+): code is RuntimeRejection["code"] {
+	return (
+		typeof code === "string" && Object.hasOwn(runtimeRejectionMessages, code)
+	);
+}
+
+// Fixed failures emitted by the Turn dispatcher or its Host adapter. Do not
+// inherit any of the user-facing classification prefixes.
+const fixedTurnFailures = new Set([
+	"RUNTIME_FILE_INPUT_UNAVAILABLE",
+	"RUNTIME_EVENT_CONFLICT",
+	"RUNTIME_METADATA_RECOVERY_TIMEOUT",
+	"RUNTIME_STATUS_CONFLICT",
+	"RUNTIME_BUSY",
+	"RUNTIME_REQUEST_INVALID",
+	"RUNTIME_GRANT_INVALID",
+]);
+
+export function isTurnDispatchFailureCodeV1(code: string): boolean {
+	return (
+		isRuntimeRejectionCode(code) ||
+		fixedTurnFailures.has(code) ||
+		isExactExecutionFailureCodeV1(code)
+	);
+}
 
 function runtimeOperation(
 	claim: ConversationDispatchClaimV1,
@@ -224,47 +268,20 @@ export function parseRuntimeResponse(
 		}
 		result = { outcome: "busy" };
 	} else if (resultInput.outcome === "rejected") {
-		const turnEnded =
-			resultInput.code === "RUNTIME_TURN_NOT_ACTIVE" &&
-			resultInput.message === "Runtime turn is no longer active";
-		const unsupportedSelection =
-			expectedVersion === 2 &&
-			resultInput.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED" &&
-			resultInput.message === "Runtime model selection is unsupported";
-		// 原生会话被受理不明的 Turn 阻塞（ADR-0029）：只有 submit V2 及以上的结果枚举包含该成员，
-		// V1 响应出现该码仍失败关闭。
-		const sessionBlocked =
-			expectedVersion === 2 &&
-			resultInput.code === "RUNTIME_SESSION_BLOCKED" &&
-			resultInput.message ===
-				"Runtime session is blocked by an unconfirmed turn";
-		// #3314：附件读取在原生副作用前被平台明确拒绝，同样只属于 submit V2 及以上的结果枚举。
-		const fileInputRejected =
-			expectedVersion === 2 &&
-			resultInput.code === "RUNTIME_FILE_INPUT_REJECTED" &&
-			resultInput.message === "Runtime file input was rejected";
+		const { code, message } = resultInput;
 		if (
 			resultInput.status !== undefined ||
-			(!turnEnded &&
-				!unsupportedSelection &&
-				!sessionBlocked &&
-				!fileInputRejected) ||
+			!isRuntimeRejectionCode(code) ||
+			(expectedVersion !== 2 && code !== "RUNTIME_TURN_NOT_ACTIVE") ||
+			message !== runtimeRejectionMessages[code] ||
 			resultInput.retryable !== false
 		) {
 			return unavailable();
 		}
 		result = {
 			outcome: "rejected",
-			code: resultInput.code as
-				| "RUNTIME_TURN_NOT_ACTIVE"
-				| "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
-				| "RUNTIME_SESSION_BLOCKED"
-				| "RUNTIME_FILE_INPUT_REJECTED",
-			message: resultInput.message as
-				| "Runtime turn is no longer active"
-				| "Runtime model selection is unsupported"
-				| "Runtime session is blocked by an unconfirmed turn"
-				| "Runtime file input was rejected",
+			code,
+			message: runtimeRejectionMessages[code],
 			retryable: false,
 		};
 	} else if (resultInput.outcome === "unknown") {

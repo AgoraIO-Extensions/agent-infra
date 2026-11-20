@@ -70,6 +70,7 @@ import {
 	PostgresEvaluationScoringV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresFileLimitDeclarationStoreV1,
+	PostgresOperationsTaskStoreV2,
 	PostgresPersonalApiCredentialStoreV1,
 	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
@@ -1404,7 +1405,14 @@ export function assemblePlatformApi(
 				alertThresholds: input.operations.alerts,
 			})
 		: undefined;
+	const operationsTasks = input.operations
+		? new PostgresOperationsTaskStoreV2(
+				input.databaseUrl,
+				input.operations.scope.namespace,
+			)
+		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(operationsTasks ? { operationsTasks } : {}),
 		...(operations && input.operations
 			? {
 					operations: createOperationsQueryV2({
@@ -1827,6 +1835,7 @@ export function assemblePlatformApi(
 		: undefined;
 	if (snapshotGc) adapters.push(snapshotGc);
 	if (operations) adapters.push(operations);
+	if (operationsTasks) adapters.push(operationsTasks);
 	return {
 		dependencies,
 		readResourceSnapshot: (signal) =>
