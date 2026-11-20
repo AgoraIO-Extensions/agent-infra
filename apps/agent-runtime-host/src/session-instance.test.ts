@@ -632,7 +632,7 @@ async function workerHostFixture(epoch: string) {
 			now: () => f.at.now,
 		},
 		close: async () => {
-			server.closeAllConnections();
+			if ("closeAllConnections" in server) server.closeAllConnections();
 			await new Promise<void>((resolve, reject) =>
 				server.close((error) => (error ? reject(error) : resolve())),
 			);
