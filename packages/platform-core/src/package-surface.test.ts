@@ -456,6 +456,8 @@ describe("platform-core package surface", () => {
 			"sessionSandboxFileExchangeTokenV1",
 			"sessionSandboxReconcileProgressV1",
 			"sessionSandboxReserveDigestV1",
+			"sessionSandboxReserveExecutorSettledV1",
+			"sessionSandboxReserveExecutorStartupRefV1",
 			"sessionSandboxReserveResourceKindsV1",
 			"sessionSandboxReserveTargetV1",
 			"sessionSandboxResourceCostsV1",
