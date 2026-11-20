@@ -333,7 +333,7 @@ export const commandAgentApiLifecycleV1 = <ThrowOnError extends boolean = false>
 });
 
 /**
- * Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.
+ * Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries and must carry the managementRevision read with that scope, a changed revision is a CONFLICT. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.
  */
 export const updateAgentConfigurationV2 = <ThrowOnError extends boolean = false>(options: Options<UpdateAgentConfigurationV2Data, ThrowOnError>): RequestResult<UpdateAgentConfigurationV2Responses, UpdateAgentConfigurationV2Errors, ThrowOnError> => (options.client ?? client).put<UpdateAgentConfigurationV2Responses, UpdateAgentConfigurationV2Errors, ThrowOnError>({
     url: '/api/v2/agents/{agentId}/configuration',
@@ -347,7 +347,7 @@ export const updateAgentConfigurationV2 = <ThrowOnError extends boolean = false>
 /**
  * Read the Agent's whole availability scope
  *
- * Owner browser session only. Returns user, organization and application entries; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.
+ * Owner browser session only. Returns user, organization and application entries with the managementRevision of the same read; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.
  */
 export const getAgentAvailabilityV1 = <ThrowOnError extends boolean = false>(options: Options<GetAgentAvailabilityV1Data, ThrowOnError>): RequestResult<GetAgentAvailabilityV1Responses, GetAgentAvailabilityV1Errors, ThrowOnError> => (options.client ?? client).get<GetAgentAvailabilityV1Responses, GetAgentAvailabilityV1Errors, ThrowOnError>({
     security: [{

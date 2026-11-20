@@ -15,10 +15,13 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { standardTemplateReasoningLevelsV1 } from "@agent-infra/model-catalog";
 import type {
+	AgentConfigurationRecord,
 	AgentConfigurationUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
 import type {
+	AgentConfigurationAuthorityQueryInputV1,
+	AgentConfigurationAuthorityQueryResultV1,
 	AgentConfigurationQueryInputV1,
 	AgentConfigurationQueryResultV1,
 } from "@agent-infra/platform-store";
@@ -46,6 +49,12 @@ export interface ConfigurationRoutesDependencies {
 		read(
 			input: AgentConfigurationQueryInputV1,
 		): Promise<AgentConfigurationQueryResultV1>;
+		/** Owner-only management state: the whole availability scope and its revision. */
+		readVersionedAuthority?: (
+			input: AgentConfigurationAuthorityQueryInputV1,
+		) => Promise<
+			AgentConfigurationAuthorityQueryResultV1<AgentConfigurationRecord>
+		>;
 	};
 	readonly readAgentProjection: (input: {
 		readonly agentId: string;
@@ -107,9 +116,12 @@ function availabilityChanges(input: ConfigurationUpdateBody) {
 	return input.schemaVersion === 5
 		? {
 				availability: people,
-				applicationAvailability: input.availability.flatMap((target) =>
-					target.kind === "application" ? [target.applicationId] : [],
-				),
+				applicationAvailability: {
+					expectedManagementRevision: input.expectedManagementRevision,
+					applicationIds: input.availability.flatMap((target) =>
+						target.kind === "application" ? [target.applicationId] : [],
+					),
+				},
 			}
 		: { availability: people };
 }
@@ -552,28 +564,42 @@ export function registerV2ConfigurationRoutes(
 			const agentId = context.req.param("agentId");
 			if (!agentId || new URL(request.url).search || request.body !== null)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
-			let result: AgentConfigurationQueryResultV1;
+			const query = dependencies.configurationQuery;
+			if (!query.readVersionedAuthority)
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			let result: AgentConfigurationAuthorityQueryResultV1<AgentConfigurationRecord>;
 			try {
-				result = await dependencies.configurationQuery.read({
+				// One read: the scope and the management revision a V5 save must match.
+				result = await query.readVersionedAuthority({
 					agentId,
 					actorId: identity.userId,
 					organizationIds: identity.organizationIds,
 					isAdministrator: false,
-					intent: "manage",
 				});
 			} catch {
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 			if (
 				result.outcome !== "found" ||
-				!result.configuration.ownerIds.includes(identity.userId)
+				result.management.agentId !== agentId ||
+				!result.management.ownerIds.includes(identity.userId)
 			)
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+			const key = (target: (typeof result.management.availability)[number]) =>
+				target.kind === "user"
+					? `user\0${target.userId}`
+					: target.kind === "organization"
+						? `organization\0${target.organizationId}`
+						: `application\0${target.applicationId}`;
 			return context.json(
 				AgentAvailabilityProjectionV1Schema.parse({
 					schemaVersion: 1,
 					agentId,
-					availability: result.configuration.availability,
+					managementRevision: result.management.revision,
+					availability: result.management.availability.toSorted(
+						(left, right) =>
+							key(left) < key(right) ? -1 : key(left) > key(right) ? 1 : 0,
+					),
 				}),
 			);
 		},

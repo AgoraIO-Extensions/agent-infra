@@ -34,8 +34,8 @@ export type PilotAgentMockServerScenarioV1 = {
 		[Request, string]
 	>;
 	/**
-	 * Owner 完整可用范围（#4283）。未提供时由 getAgent 的 V2 响应派生，只含人员条目；
-	 * getAgent 不是 200 时按不可读处理（404）。
+	 * Owner 完整可用范围（#4283）。未提供时由 getAgent 的 V2 响应派生，只含人员条目，
+	 * 管理修订取投影的 managementRevision（没有时为 0）；getAgent 不是 200 时按不可读处理（404）。
 	 */
 	readonly getAgentAvailability?: PilotAgentMockResponderV1<[Request, string]>;
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
@@ -650,6 +650,7 @@ function createPilotAgentMockServer(
 				validateResponse(getAgentOperation, agent);
 				const body = agent.body as {
 					configuration?: { availability?: unknown };
+					managementRevision?: number;
 				};
 				response =
 					agent.status === 200
@@ -658,6 +659,7 @@ function createPilotAgentMockServer(
 								body: {
 									schemaVersion: 1,
 									agentId,
+									managementRevision: body.managementRevision ?? 0,
 									availability: body.configuration?.availability ?? [],
 								},
 							}

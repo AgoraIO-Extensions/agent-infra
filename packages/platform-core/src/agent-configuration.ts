@@ -280,8 +280,18 @@ function createAgentConfigurationUseCaseV1Internal(
 			) {
 				throw new AgentConfigurationError("dependency_unavailable");
 			}
+			// A whole application part comes from one read: a changed management
+			// revision means it may miss entries written since (Spec §9.2.2).
+			if (
+				changes.applicationAvailability !== undefined &&
+				changes.applicationAvailability.expectedManagementRevision !==
+					access.state.revision
+			)
+				throw new AgentConfigurationError("stale_revision");
 			// People and application entries form one scope (Spec §9.2.2): each part
 			// keeps its current entries unless the command replaces that part.
+			const desiredApplicationIds =
+				changes.applicationAvailability?.applicationIds;
 			const currentApplicationIds = access.state.availability.flatMap(
 				(target) =>
 					target.kind === "application" ? [target.applicationId] : [],
@@ -291,7 +301,7 @@ function createAgentConfigurationUseCaseV1Internal(
 					access.state.availability.filter(
 						({ kind }) => kind !== "application",
 					)),
-				...(changes.applicationAvailability ?? currentApplicationIds).map(
+				...(desiredApplicationIds ?? currentApplicationIds).map(
 					(applicationId) => ({
 						kind: "application" as const,
 						applicationId,
@@ -300,9 +310,7 @@ function createAgentConfigurationUseCaseV1Internal(
 			].toSorted((left, right) =>
 				compareText(accessTargetKey(left), accessTargetKey(right)),
 			);
-			const addedApplicationIds = (
-				changes.applicationAvailability ?? []
-			).filter(
+			const addedApplicationIds = (desiredApplicationIds ?? []).filter(
 				(applicationId) => !currentApplicationIds.includes(applicationId),
 			);
 			let confirmedApplicationIds: readonly string[] = [];

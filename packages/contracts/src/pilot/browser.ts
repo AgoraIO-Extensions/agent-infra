@@ -567,19 +567,30 @@ export const AvailabilityTargetV2Schema = z.discriminatedUnion("kind", [
 		applicationId: OpaqueIdV1Schema,
 	}),
 ]);
+const ManagementRevisionV1Schema = z
+	.number()
+	.int()
+	.min(0)
+	.max(Number.MAX_SAFE_INTEGER);
 /**
- * V5 与 V2 同形，`availability` 为含应用条目的完整可用范围；省略时不改变范围。
+ * V5 与 V2 同形，`availability` 为含应用条目的完整可用范围，必须带上读取该范围时的
+ * `managementRevision`；修订已变时整次写入冲突，不能用陈旧整表覆盖并发加入的应用。
  * V2/V4 的 `availability` 只替换人员条目，已有应用条目原样保留。
  */
 export const AgentConfigurationUpdateRequestV5Schema =
 	AgentConfigurationUpdateRequestV2BaseSchema.extend({
 		schemaVersion: z.literal(5),
-		availability: z.array(AvailabilityTargetV2Schema).optional(),
+		availability: z.array(AvailabilityTargetV2Schema),
+		expectedManagementRevision: ManagementRevisionV1Schema,
 	});
-/** Owner 读取完整可用范围（含应用条目）；与 V5 请求使用同一目标版本。 */
+/**
+ * Owner 读取完整可用范围（含应用条目）及同一读取的 Agent 管理修订；与 V5 请求使用
+ * 同一目标版本。
+ */
 export const AgentAvailabilityProjectionV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	agentId: OpaqueIdV1Schema,
+	managementRevision: ManagementRevisionV1Schema,
 	availability: z.array(AvailabilityTargetV2Schema),
 });
 export const AgentConfigurationProjectionV2Schema =
@@ -3134,7 +3145,7 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		put: {
 			operationId: "updateAgentConfigurationV2",
 			description:
-				"Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.",
+				"Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries and must carry the managementRevision read with that scope, a changed revision is a CONFLICT. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.",
 			requestParams: { path: agentPath, header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(
 				z.union([
@@ -3153,7 +3164,7 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			operationId: "getAgentAvailabilityV1",
 			summary: "Read the Agent's whole availability scope",
 			description:
-				"Owner browser session only. Returns user, organization and application entries; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.",
+				"Owner browser session only. Returns user, organization and application entries with the managementRevision of the same read; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.",
 			security: personalCredentialSecurity,
 			requestParams: { path: agentPath },
 			responses: {

@@ -600,15 +600,33 @@ export function parseAvailability(
 	return parseAccessTargets(input, false);
 }
 
-/** Application IDs of one scope: unique, canonical order (Spec §9.2.2). */
-export function parseApplicationAvailability(input: unknown): string[] {
-	const ids = denseArray(input, maxAccessTargets).map((id) => {
+/**
+ * Application IDs of one scope (unique, canonical order) and the management
+ * revision they were read at (Spec §9.2.2).
+ */
+export function parseApplicationAvailability(input: unknown): {
+	expectedManagementRevision: number;
+	applicationIds: string[];
+} {
+	const values = exactObject(input, [
+		"expectedManagementRevision",
+		"applicationIds",
+	]);
+	if (
+		!Number.isSafeInteger(values.expectedManagementRevision) ||
+		(values.expectedManagementRevision as number) < 0
+	)
+		invalidCommand();
+	const ids = denseArray(values.applicationIds, maxAccessTargets).map((id) => {
 		if (!isText(id, idMaxBytes)) invalidCommand();
 		return id;
 	});
-	const sorted = ids.toSorted(compareText);
-	if (new Set(sorted).size !== sorted.length) invalidCommand();
-	return sorted;
+	const applicationIds = ids.toSorted(compareText);
+	if (new Set(applicationIds).size !== applicationIds.length) invalidCommand();
+	return {
+		expectedManagementRevision: values.expectedManagementRevision as number,
+		applicationIds,
+	};
 }
 
 /** The persisted or planned scope: users, organizations and applications. */

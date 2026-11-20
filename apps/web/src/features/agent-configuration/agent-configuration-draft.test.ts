@@ -55,7 +55,58 @@ const agent = AgentProjectionV2Schema.parse({
 });
 
 describe("Agent configuration draft", () => {
-	it("keeps V2 people-only saves until the whole scope is loaded, then echoes application entries in V5 (#4283)", () => {
+	it("never sends an application replacement from a stale scope the Owner did not edit (#4308 Review2 MUST)", () => {
+		// Tab A read the whole scope at management revision 3, before tab B added applications.
+		const staleScope = {
+			schemaVersion: 1 as const,
+			agentId: agent.agentId,
+			managementRevision: 3,
+			availability: [
+				{ kind: "organization" as const, organizationId: "organization-1" },
+				{ kind: "user" as const, userId: "user-reader-1" },
+			],
+		};
+		const draft = configurationDraftFromAgent(agent, staleScope);
+		const environmentOnly = buildAgentConfigurationRequest(
+			{ ...draft, environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			agent,
+		);
+		expect(environmentOnly.schemaVersion).toBe(2);
+		expect(
+			(environmentOnly.availability ?? []).some(
+				(target) => target.kind === "application",
+			),
+		).toBe(false);
+		expect(environmentOnly).not.toHaveProperty("expectedManagementRevision");
+		const peopleOnly = buildAgentConfigurationRequest(
+			{ ...draft, userAvailabilityIds: "user-reader-2" },
+			agent,
+		);
+		expect(peopleOnly).toMatchObject({
+			schemaVersion: 2,
+			availability: [
+				{ kind: "user", userId: "user-reader-2" },
+				{ kind: "organization", organizationId: "organization-1" },
+			],
+		});
+		// A real application edit is bound to the revision of the scope it was read from.
+		expect(
+			buildAgentConfigurationRequest(
+				{ ...draft, applicationAvailabilityIds: "app-1" },
+				agent,
+			),
+		).toMatchObject({
+			schemaVersion: 5,
+			expectedManagementRevision: 3,
+			availability: [
+				{ kind: "user", userId: "user-reader-1" },
+				{ kind: "organization", organizationId: "organization-1" },
+				{ kind: "application", applicationId: "app-1" },
+			],
+		});
+	});
+
+	it("seeds application entries from the whole scope and sends V5 only for a real application edit (#4283)", () => {
 		const peopleOnly = buildAgentConfigurationRequest(
 			configurationDraftFromAgent(agent),
 			agent,
@@ -70,6 +121,7 @@ describe("Agent configuration draft", () => {
 		const scope = {
 			schemaVersion: 1 as const,
 			agentId: agent.agentId,
+			managementRevision: 7,
 			availability: [
 				{ kind: "application" as const, applicationId: "app-1" },
 				{ kind: "organization" as const, organizationId: "organization-1" },
@@ -77,26 +129,26 @@ describe("Agent configuration draft", () => {
 			],
 		};
 		const draft = configurationDraftFromAgent(agent, scope);
-		expect(draft.applicationAvailabilityIds).toBe("app-1");
-		expect(buildAgentConfigurationRequest(draft, agent)).toMatchObject({
+		expect(draft).toMatchObject({
+			applicationAvailabilityIds: "app-1",
+			applicationAvailabilityBaseline: ["app-1"],
+			applicationAvailabilityRevision: 7,
+		});
+		// Loaded but not edited: a people-only V2 save keeps the application entries.
+		expect(buildAgentConfigurationRequest(draft, agent)).toEqual(peopleOnly);
+		expect(agentConfigurationDraftChanged(agent, draft)).toBe(false);
+		expect(agentConfigurationApplicationsChanged(draft)).toBe(false);
+		const removed = { ...draft, applicationAvailabilityIds: "" };
+		expect(agentConfigurationDraftChanged(agent, removed)).toBe(true);
+		expect(agentConfigurationApplicationsChanged(removed)).toBe(true);
+		expect(buildAgentConfigurationRequest(removed, agent)).toMatchObject({
 			schemaVersion: 5,
+			expectedManagementRevision: 7,
 			availability: [
 				{ kind: "user", userId: "user-reader-1" },
 				{ kind: "organization", organizationId: "organization-1" },
-				{ kind: "application", applicationId: "app-1" },
 			],
 		});
-		expect(agentConfigurationDraftChanged(agent, draft, scope)).toBe(false);
-		expect(agentConfigurationApplicationsChanged(draft, scope)).toBe(false);
-		const removed = { ...draft, applicationAvailabilityIds: "" };
-		expect(agentConfigurationDraftChanged(agent, removed, scope)).toBe(true);
-		expect(agentConfigurationApplicationsChanged(removed, scope)).toBe(true);
-		expect(buildAgentConfigurationRequest(removed, agent).availability).toEqual(
-			[
-				{ kind: "user", userId: "user-reader-1" },
-				{ kind: "organization", organizationId: "organization-1" },
-			],
-		);
 		// A scope for another Agent never seeds this draft.
 		expect(
 			configurationDraftFromAgent(agent, { ...scope, agentId: "agent-other" })

@@ -271,10 +271,15 @@ export interface UpdateAgentConfigurationCommandV2 {
 		/** User and organization entries only; application entries stay as they are. */
 		readonly availability?: readonly AgentConfigurationAccessTargetV1[];
 		/**
-		 * The whole set of application entries in the same scope (Spec §9.2.2).
+		 * The whole set of application entries in the same scope (Spec §9.2.2),
+		 * bound to the management revision the caller read it at: a changed
+		 * revision is stale, so concurrent entries are never overwritten.
 		 * Omitted keeps the current application entries.
 		 */
-		readonly applicationAvailability?: readonly string[];
+		readonly applicationAvailability?: {
+			readonly expectedManagementRevision: number;
+			readonly applicationIds: readonly string[];
+		};
 		readonly source?: AgentConfigurationSourceSelectionV1;
 		readonly modelConfiguration?: AgentConfigurationModelInputV1;
 		readonly environment?: readonly {

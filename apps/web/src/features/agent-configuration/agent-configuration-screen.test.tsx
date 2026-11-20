@@ -246,6 +246,43 @@ describe("AgentConfigurationScreen", () => {
 		expect(document.activeElement).not.toBe(document.body);
 	});
 
+	it("refreshes unedited application entries from a reread and keeps a real edit bound to its read (#4308)", () => {
+		const scope = (managementRevision: number, applicationIds: string[]) => ({
+			schemaVersion: 1 as const,
+			agentId: agent.agentId,
+			managementRevision,
+			availability: applicationIds.map((applicationId) => ({
+				kind: "application" as const,
+				applicationId,
+			})),
+		});
+		const { onSave, rerender } = renderScreen({
+			availabilityScope: scope(3, []),
+		});
+		const applications = () =>
+			screen.getByLabelText<HTMLTextAreaElement>("可使用的独立应用");
+		expect(applications().value).toBe("");
+		// Another tab added an application; the reread replaces the unedited field.
+		rerender({ availabilityScope: scope(4, ["app-b"]) });
+		expect(applications().value).toBe("app-b");
+		// An environment-only save never replaces application entries.
+		changeEnvironment();
+		fireEvent.click(saveButton());
+		expect(onSave.mock.lastCall?.[0]).toMatchObject({ schemaVersion: 2 });
+		expect(onSave.mock.lastCall?.[0]).not.toHaveProperty(
+			"expectedManagementRevision",
+		);
+		// A real edit keeps its value and the revision it was read at, even after a reread.
+		fireEvent.change(applications(), { target: { value: "app-b\napp-c" } });
+		rerender({ availabilityScope: scope(5, ["app-b", "app-d"]) });
+		expect(applications().value).toBe("app-b\napp-c");
+		fireEvent.click(saveButton());
+		expect(onSave.mock.lastCall?.[0]).toMatchObject({
+			schemaVersion: 5,
+			expectedManagementRevision: 4,
+		});
+	});
+
 	it("does not treat another Agent's result as this page's save", () => {
 		renderScreen({
 			agent: { ...agent, agentId: "agent-pilot-2" },

@@ -324,6 +324,7 @@ export type AgentApplicationUpdateRequestV2 = {
 export type AgentAvailabilityProjectionV1 = {
     agentId: string;
     availability: Array<AvailabilityTargetV2>;
+    managementRevision: number;
     schemaVersion: 1;
 };
 
@@ -426,7 +427,7 @@ export type AgentConfigurationUpdateRequestV2 = {
 };
 
 export type AgentConfigurationUpdateRequestV5 = {
-    availability?: Array<AvailabilityTargetV2>;
+    availability: Array<AvailabilityTargetV2>;
     channels?: Array<{
         bindingReference: string;
         enabled: true;
@@ -442,6 +443,7 @@ export type AgentConfigurationUpdateRequestV5 = {
     }>;
     expectedConfigurationRevision?: number;
     expectedKeyVersion?: number | null;
+    expectedManagementRevision: number;
     modelConfiguration?: {
         defaultOptionId: string;
         defaultReasoningLevel: string;
@@ -3556,7 +3558,7 @@ export type AgentConfigurationUpdateRequestV2Writable = {
 };
 
 export type AgentConfigurationUpdateRequestV5Writable = {
-    availability?: Array<AvailabilityTargetV2>;
+    availability: Array<AvailabilityTargetV2>;
     channels?: Array<{
         bindingReference: string;
         enabled: true;
@@ -3573,6 +3575,7 @@ export type AgentConfigurationUpdateRequestV5Writable = {
     }>;
     expectedConfigurationRevision?: number;
     expectedKeyVersion?: number | null;
+    expectedManagementRevision: number;
     modelConfiguration?: {
         defaultOptionId: string;
         defaultReasoningLevel: string;

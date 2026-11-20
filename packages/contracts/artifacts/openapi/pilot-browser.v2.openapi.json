@@ -1862,6 +1862,11 @@
             },
             "type": "array"
           },
+          "managementRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "schemaVersion": {
             "const": 1,
             "type": "number"
@@ -1870,6 +1875,7 @@
         "required": [
           "schemaVersion",
           "agentId",
+          "managementRevision",
           "availability"
         ],
         "type": "object"
@@ -2603,6 +2609,11 @@
               }
             ]
           },
+          "expectedManagementRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "modelConfiguration": {
             "additionalProperties": false,
             "properties": {
@@ -2825,7 +2836,9 @@
           }
         },
         "required": [
-          "schemaVersion"
+          "schemaVersion",
+          "availability",
+          "expectedManagementRevision"
         ],
         "type": "object"
       },
@@ -23640,7 +23653,7 @@
     },
     "/api/v2/agents/{agentId}/configuration": {
       "put": {
-        "description": "Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.",
+        "description": "Owner browser session. schemaVersion 2 replaces only user and organization availability entries and keeps application entries; schemaVersion 5 replaces the whole availability scope including application entries and must carry the managementRevision read with that scope, a changed revision is a CONFLICT. Adding an application requires it to be registered and active; a missing, disabled or unconfirmable application is rejected with the same error.",
         "operationId": "updateAgentConfigurationV2",
         "parameters": [
           {
@@ -23767,7 +23780,7 @@
     },
     "/api/v2/agents/{agentId}/configuration/availability": {
       "get": {
-        "description": "Owner browser session only. Returns user, organization and application entries; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.",
+        "description": "Owner browser session only. Returns user, organization and application entries with the managementRevision of the same read; a non-Owner and a missing Agent are indistinguishable. Responses are no-store.",
         "operationId": "getAgentAvailabilityV1",
         "parameters": [
           {

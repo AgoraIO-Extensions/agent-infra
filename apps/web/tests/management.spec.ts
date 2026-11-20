@@ -1649,9 +1649,8 @@ test("Owner configuration save, lifecycle and custom image upgrade", async ({
 	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
 	await expect(page.locator("#main-content")).not.toContainText("配置已提交");
 	await expect(page.getByRole("button", { name: "保存配置" })).toBeVisible();
-	// The Owner read the whole scope, so the save carries it as V5 (#4283).
 	expect(api.commands[0]?.body).toMatchObject({
-		schemaVersion: 5,
+		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1"],
 		environment: [{ name: "WORKSPACE_NAME", value: "synthetic-browser-value" }],
 	});
@@ -3311,7 +3310,7 @@ test("Agent detail and configuration use readable directory records with canonic
 	await page.getByRole("button", { name: "保存配置" }).click();
 	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
 	expect(api.commands.at(-1)?.body).toMatchObject({
-		schemaVersion: 5,
+		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1", "user-2"],
 		availability: [
 			{ kind: "user", userId: "user-3" },

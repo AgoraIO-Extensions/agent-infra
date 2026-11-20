@@ -30,6 +30,7 @@ import {
 	agentConfigurationApplicationsChanged,
 	agentConfigurationDraftChanged,
 	agentConfigurationEnvironmentChanged,
+	applicationScopeDraft,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 	configurationKeyError,
@@ -264,22 +265,22 @@ export function AgentConfigurationScreen({
 	const [draft, setDraft] = useState(() =>
 		configurationDraftFromAgent(agent, availabilityScope),
 	);
-	// 完整可用范围晚于 Agent 投影到达：只在草稿还没有应用条目时补上，不覆盖正在编辑的值。
-	const applicationScopeMissing =
-		draft.applicationAvailabilityIds === undefined;
+	// 完整可用范围晚于 Agent 投影到达或被重读：用户没编辑应用条目时，按最新读取（条目与
+	// 修订）刷新；已编辑时保留编辑与原读取修订，保存时由服务端 CAS 判陈旧（#4308）。
+	const applicationsEdited = agentConfigurationApplicationsChanged(draft);
 	useEffect(() => {
-		if (!applicationScopeMissing || !availabilityScope) return;
-		const { applicationAvailabilityIds } = configurationDraftFromAgent(
-			agent,
-			availabilityScope,
-		);
-		if (applicationAvailabilityIds === undefined) return;
+		if (!availabilityScope || applicationsEdited) return;
+		const next = applicationScopeDraft(agent, availabilityScope);
+		if (next.applicationAvailabilityRevision === undefined) return;
 		setDraft((current) =>
-			current.applicationAvailabilityIds === undefined
-				? { ...current, applicationAvailabilityIds }
-				: current,
+			agentConfigurationApplicationsChanged(current) ||
+			(current.applicationAvailabilityRevision ===
+				next.applicationAvailabilityRevision &&
+				current.applicationAvailabilityIds !== undefined)
+				? current
+				: { ...current, ...next },
 		);
-	}, [agent, availabilityScope, applicationScopeMissing]);
+	}, [agent, availabilityScope, applicationsEdited]);
 	const [ownerError, setOwnerError] = useState<string>();
 	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
 	const [savedSelectionError, setSavedSelectionError] = useState(false);
@@ -311,12 +312,22 @@ export function AgentConfigurationScreen({
 		if (!submittedResult || submittedResult === handledResult.current) return;
 		handledResult.current = submittedResult;
 		if ("configuration" in submittedResult)
-			// V2 投影不含应用条目：保存成功后保留刚提交的应用条目，等完整范围重读。
+			// V2 投影不含应用条目：保存成功后把刚提交的应用条目当作已保存的基线，读取修订
+			// 保持原值，等完整范围重读后再按新修订刷新。
 			setDraft((current) => ({
 				...configurationDraftFromAgent(submittedResult),
 				...(current.applicationAvailabilityIds === undefined
 					? {}
-					: { applicationAvailabilityIds: current.applicationAvailabilityIds }),
+					: {
+							applicationAvailabilityIds: current.applicationAvailabilityIds,
+							applicationAvailabilityBaseline:
+								current.applicationAvailabilityIds
+									.split(/[\n,]/)
+									.map((item) => item.trim())
+									.filter((item) => item.length > 0),
+							applicationAvailabilityRevision:
+								current.applicationAvailabilityRevision,
+						}),
 			}));
 		setEnvErrors({});
 		setShowSelectionErrors(false);
@@ -331,8 +342,7 @@ export function AgentConfigurationScreen({
 		session.kind === "ready" &&
 		isAgentConfigurationOwner(agent, session.session);
 	const isDisabled = submitting || agent.managementStatus === "disabled";
-	const hasChanges =
-		isOwner && agentConfigurationDraftChanged(agent, draft, availabilityScope);
+	const hasChanges = isOwner && agentConfigurationDraftChanged(agent, draft);
 
 	// 保存期间「保存配置」是可聚焦的禁用，焦点留在按钮上；在字段里按 Enter 提交时先交给按钮
 	// （字段随 fieldset 禁用）。保存成功后按钮因没有变更而禁用，焦点落到「没有需要保存的变更。」
@@ -453,7 +463,7 @@ export function AgentConfigurationScreen({
 			savedRelayKeyVersion !== undefined
 		) {
 			// 已保存 Key 的模型保存（V4）只替换人员条目；独立应用的改动须单独保存，不能静默丢弃。
-			if (agentConfigurationApplicationsChanged(draft, availabilityScope)) {
+			if (agentConfigurationApplicationsChanged(draft)) {
 				toast("请先单独保存独立应用的修改，再更换模型");
 				return;
 			}

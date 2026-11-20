@@ -32,10 +32,15 @@ export type AgentConfigurationDraft = {
 	models: readonly AgentConfigurationModelDraft[];
 	organizationAvailabilityIds: string;
 	/**
-	 * 独立应用条目（Spec §9.2.2）。未读到 Owner 完整可用范围时为 undefined：保存仍走 V2，
-	 * 只替换人员条目，服务端原样保留应用条目；读到后整表以 V5 回传，不会丢掉应用条目。
+	 * 独立应用条目（Spec §9.2.2），由 Owner 读到的完整可用范围填入。只有用户真的改了
+	 * 应用条目才以 V5 整表回传，并带上那次读取的管理修订；未改时保存走 V2，只替换人员
+	 * 条目，服务端原样保留应用条目，陈旧的读取不会删掉并发加入的应用（#4308）。
 	 */
 	applicationAvailabilityIds?: string;
+	/** 填入 `applicationAvailabilityIds` 时读到的应用 ID，用于判断是否真的编辑过。 */
+	applicationAvailabilityBaseline?: readonly string[];
+	/** 同一次读取的 Agent 管理修订；V5 保存以它做 CAS，已变则冲突。 */
+	applicationAvailabilityRevision?: number;
 	replaceModels: boolean;
 	workspaceSnapshots: readonly { snapshotId: string; name: string }[];
 	userAvailabilityIds: string;
@@ -48,20 +53,33 @@ function splitValues(value: string) {
 		.filter((item) => item.length > 0);
 }
 
+/** 从 Owner 读到的完整可用范围取出应用条目及其读取修订；范围属于别的 Agent 时不取。 */
+export function applicationScopeDraft(
+	agent: Pick<AgentProjectionV2, "agentId">,
+	scope: AgentAvailabilityProjectionV1 | undefined,
+): Pick<
+	AgentConfigurationDraft,
+	| "applicationAvailabilityIds"
+	| "applicationAvailabilityBaseline"
+	| "applicationAvailabilityRevision"
+> {
+	if (scope?.agentId !== agent.agentId) return {};
+	const ids = scope.availability.flatMap((target) =>
+		target.kind === "application" ? [target.applicationId] : [],
+	);
+	return {
+		applicationAvailabilityIds: ids.join("\n"),
+		applicationAvailabilityBaseline: ids,
+		applicationAvailabilityRevision: scope.managementRevision,
+	};
+}
+
 export function configurationDraftFromAgent(
 	agent: AgentProjectionV2,
 	scope?: AgentAvailabilityProjectionV1,
 ): AgentConfigurationDraft {
 	return {
-		...(scope?.agentId === agent.agentId
-			? {
-					applicationAvailabilityIds: scope.availability
-						.flatMap((target) =>
-							target.kind === "application" ? [target.applicationId] : [],
-						)
-						.join("\n"),
-				}
-			: {}),
+		...applicationScopeDraft(agent, scope),
 		coOwnerIds: agent.configuration.owners
 			.map((owner) => owner.userId)
 			.join("\n"),
@@ -149,20 +167,22 @@ export function buildAgentConfigurationRequest(
 			organizationId,
 		})),
 	];
+	const revision = draft.applicationAvailabilityRevision;
 	return {
-		...(draft.applicationAvailabilityIds === undefined
+		...(!agentConfigurationApplicationsChanged(draft) || revision === undefined
 			? { schemaVersion: 2 as const, availability: people }
 			: {
 					schemaVersion: 5 as const,
 					availability: [
 						...people,
-						...[...new Set(splitValues(draft.applicationAvailabilityIds))].map(
-							(applicationId) => ({
-								kind: "application" as const,
-								applicationId,
-							}),
-						),
+						...[
+							...new Set(applicationIds(draft.applicationAvailabilityIds)),
+						].map((applicationId) => ({
+							kind: "application" as const,
+							applicationId,
+						})),
 					],
+					expectedManagementRevision: revision,
 				}),
 		coOwnerIds: splitValues(draft.coOwnerIds),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
@@ -185,18 +205,21 @@ function applicationIds(value: string | undefined) {
 	return value === undefined ? [] : splitValues(value);
 }
 
-/** 草稿里的独立应用条目是否与 Owner 读到的完整可用范围不同。 */
+/** 草稿里的独立应用条目是否相对填入时读到的条目被编辑过。 */
 export function agentConfigurationApplicationsChanged(
-	draft: Pick<AgentConfigurationDraft, "applicationAvailabilityIds">,
-	scope: AgentAvailabilityProjectionV1 | undefined,
+	draft: Pick<
+		AgentConfigurationDraft,
+		"applicationAvailabilityIds" | "applicationAvailabilityBaseline"
+	>,
 ): boolean {
-	if (draft.applicationAvailabilityIds === undefined) return false;
-	const current = (scope?.availability ?? []).flatMap((target) =>
-		target.kind === "application" ? [target.applicationId] : [],
-	);
+	if (
+		draft.applicationAvailabilityIds === undefined ||
+		draft.applicationAvailabilityBaseline === undefined
+	)
+		return false;
 	return (
 		sortedJson(applicationIds(draft.applicationAvailabilityIds)) !==
-		sortedJson(current)
+		sortedJson(draft.applicationAvailabilityBaseline)
 	);
 }
 
@@ -214,10 +237,10 @@ function sortedJson(values: readonly string[]) {
 export function agentConfigurationDraftChanged(
 	agent: AgentProjectionV2,
 	draft: AgentConfigurationDraft,
-	scope?: AgentAvailabilityProjectionV1,
 ): boolean {
+	if (agentConfigurationApplicationsChanged(draft)) return true;
 	const baseline = buildAgentConfigurationRequest(
-		configurationDraftFromAgent(agent, scope),
+		configurationDraftFromAgent(agent),
 		agent,
 	);
 	const request = buildAgentConfigurationRequest(draft, agent);

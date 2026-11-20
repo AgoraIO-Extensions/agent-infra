@@ -1623,8 +1623,8 @@ function isApplicationAvailabilityV2OpenApiAddition(previous, current) {
 	// Generated and committed artifacts order keys differently.
 	if (
 		![
-			"b75d900e90714d8bf01c783fe201bafb29fe28827fca56ffc75c84fb7e117bf1",
-			"ed527786ab9bf66898bd35068178b7fbdef06089c62b0fef732878c63ec37086",
+			"97c11c5197cd5841b942839d3819078748b8c19bb7f4a5558471da80470f513e",
+			"ed6aaf001934bae12c092371419bc70dce39246487ab9fecfc0420155844c0b9",
 		].includes(
 			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
 		)

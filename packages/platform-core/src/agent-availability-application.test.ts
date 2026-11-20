@@ -162,10 +162,27 @@ describe("Agent availability application entries (#4283)", () => {
 		});
 		expect(
 			parseAgentConfigurationChangesV1({
-				applicationAvailability: ["b_app", "a_app"],
+				applicationAvailability: {
+					expectedManagementRevision: 4,
+					applicationIds: ["b_app", "a_app"],
+				},
 			}),
-		).toEqual({ applicationAvailability: ["a_app", "b_app"] });
-		for (const applicationAvailability of [["a_app", "a_app"], [""], [1]])
+		).toEqual({
+			applicationAvailability: {
+				expectedManagementRevision: 4,
+				applicationIds: ["a_app", "b_app"],
+			},
+		});
+		// A whole application part is always bound to the revision it was read at.
+		for (const applicationAvailability of [
+			["a_app"],
+			{ applicationIds: ["a_app"] },
+			{ expectedManagementRevision: -1, applicationIds: ["a_app"] },
+			{ expectedManagementRevision: 1.5, applicationIds: ["a_app"] },
+			{ expectedManagementRevision: 4, applicationIds: ["a_app", "a_app"] },
+			{ expectedManagementRevision: 4, applicationIds: [""] },
+			{ expectedManagementRevision: 4, applicationIds: [1] },
+		])
 			expect(() =>
 				parseAgentConfigurationChangesV1({ applicationAvailability }),
 			).toThrow();
