@@ -1080,6 +1080,48 @@ Executor 实例或传输会话变化使原准入失效；只有原实例/会话�
   原投影已按原所有权收口，再为新 Pod 持久化新的启动意图、投影引用和绝对期限，回读新 Pod UID
   后签发。启动引用和投影名须区分同一 fence 下的不同实例，期限记录按启动意图幂等。
   旧实例的启动、消费记录和证明不转给新实例。
+- **按实例 pin 的授权。** 采用本规则的启动身份使用显式版本 2，签名用途须表明实例 pin 授权。
+  Worker 仅在 Store 按原授权与 CAS 提交启动 attempt/ref、Sandbox、静态 binding digest、
+  配置修订、generation/resource fence、实际 Pod UID 和绝对首次消费期限后签发。
+  已提交事实的引用和摘要由 Worker 作为签名声明交付；Worker 负责原 Store 权威回读，
+  Host 按该已验证声明与本地事实核对，不新增 Agent Pod 直连 Platform DB 的通道。
+  Host 先用独立部署信任根验签，核对签发者、用途、版本及该已提交事实的引用与摘要，再与
+  本地 Downward API 的 Pod UID、受信布局和启动引用比较；从本实例的受认证 runner 通道
+  核实实际 epoch。env 字符串、Pod Ready 或身份包自带的公钥都不能单独授权建 pin。
+  同 binding 的另一个 Pod 必须有独立 attempt/ref，且签发前已按本节确认旧源封闭与原投影收口。
+  同一 Pod 重试或 Worker 重启沿原 attempt、UID 和期限，不另签身份掩盖未知创建、消费或清理。
+  校验冲突时以既有本地分类 `CODEX_SESSION_EXECUTOR_INVALID` 拒绝 pin 和业务就绪；
+  Store 提交或原绑定未能确认时保持 `unknown`、关闭新准入并保留原事实和占用。
+- **pin 的持久实例范围。** Host 在上述验证之后、Driver 副作用之前，以同一次崩溃一致提交
+  创建或核对版本 2 pin。逻辑键包含静态 binding digest、原 startup attempt/ref、Pod UID、
+  generation/resource fence，值固定实际 runner epoch 及已验证启动身份的非秘密引用/摘要。
+  同键同 epoch 读取原 pin；同键另一 epoch、另一 Pod 或配置漂移均拒绝，不覆盖原值。
+  新实例只能在其新逻辑键下建立 pin，旧 pin 保留为原实例的历史和恢复索引；不能删除、改名、
+  覆盖或按当前 UID 给旧 pin 补身份以绕过保护。历史读取按原实例键及原会话授权，只读取旧事实，
+  不能作为当前实例授权。文件损坏、符号链接、所有权或版本不符仍拒绝，不能按“文件不存在”
+  静默回退；无法核实原范围时保持 `unknown`。取舍记录见
+  [ADR-0046](../adr/0046-instance-scoped-executor-epoch-pins.md)。
+- **未确认事实与原 Stop。** 工具启动登记、Stop fence、journal 和 ACK 游标按其持久原记录
+  绑定 Execution、原 attempt/ref、Pod UID、epoch 和 generation/resource fence。新 pin
+  只授权新实例的初始化，不能证明旧工具已退出、代签旧终态或停止回执、释放旧占用、推进旧 ACK，
+  也不能重新发送原 `process/start`、Turn 或其他未知副作用。旧 pin 和 journal 必须能按原键
+  继续读取；不兼容的消费者暂停接管并保留事实和游标。未确认范围由原权威沿原请求核实，
+  或按既有合同正式退休；仅有新 Pod、新 pin、空进程列表或旧 Pod absence 均不足以结清。
+  仍占用原会话的未确认范围核实前，不开放新的业务 Turn。
+  结果未证继续保持 `unknown` 和原屏障/占用，普通恢复预算耗尽也不能越过排空门槛。
+  已消费的原实例继续用原身份和当前短期控制授权完成在途 Stop，首次消费凭证过期不撤销
+  该通道；实例变化后新通道不得继承其排空证明。
+- **旧格式、混合版本与回退。** 旧 pin 仅含 binding/epoch、缺少 attempt/ref 或 Pod UID 时，
+  不自动迁移成版本 2。只有原 Store 资源/消费记录、当前实际实例及原受认证通道能共同证明
+  连续性时，才沿原 pin 服务原已获准的读取或 Stop；缺证、重连后连续性未明或 epoch 改变时，
+  保持 `unknown`，不写当前 UID、不重建 pin、不误删旧投影或释放占用。没有可信新实例授权
+  时，Host 拒绝建立版本 2 pin。新 Worker/旧 Host 不以新引用或健康检查推断兼容，而须先由
+  部署批准的镜像/配置版本和对应契约验证记录确认消费者支持本规则，再允许签发版本 2 输入；
+  不支持者不得接收新实例。旧 Worker/新 Host 的旧格式输入只沿上述原实例限制处理，不隐式升级。
+  消费者先升级，生产者后采用。回退预检按持久采用记录冻结受影响范围的新准入，保留兼容
+  消费者和原实例，直到原未确认事实已核实或正式退休；无法确认清单完整性时拒绝回退。
+  不能把版本 2 范围交给只认识旧格式的程序，再假设它会安全拒绝。pin 校验失败沿上述固定
+  拒绝分类，接管/回退证据不足保持 `unknown`，不降级到 Host 本地执行或其他无认证入口。
 - 一次性短期凭证只由原 Pod 的可信 init 读取。init 按角色写入各自的临时内存卷。
   启动器先关闭调试和转储，在持钥进程中建立并校验 Linux 进程保护。Linux
   使用 `PR_SET_DUMPABLE=0` 并回读，持钥进程保持该状态。保护校验失败时拒绝读取

@@ -1887,6 +1887,8 @@ Sandbox、Session generation 和 resource fence，再按原所有权、部署修
 专用不可变投影。可信启动程序使用独立本地事实核对绑定，
 消费凭证并固定原实例公钥。交付限制、运行进程保护及作废规则见
 [Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
+同 binding 重建的实例 pin 授权、原事实保留及混合版本/回退遵循
+[Runtime HLD §10.3.1](HLD-agent-runtime-M1.md#1031-排空通道的实例身份交付)。
 启用仍由部署显式授权。需要 Helm 装配或新增 RBAC 时另开默认关闭的 Helm PR，权限限于
 该启动投影实际所需操作，由部署负责人 sess_fccff4b2 安排目标环境部署。
 
