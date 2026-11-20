@@ -740,122 +740,143 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			(select string_agg(command || ':' || status, ',' order by created_at, command)
 				from platform.connection_installation_commands
 				where authorization_id=${authorizationId} and (command like 'confirm%' or command='revoke')) as commands`;
+	// Begin, callback, confirm and the phase run over real TLS in one test; the
+	// default 5 s is too tight when the whole package runs in parallel.
+	const confirmTimeout = 20_000;
 
 	// §13.5.6 exception confirm, phase 1 over the real Store, Worker and Host.
-	it("reads the binding back once and commits the first pin before any exchange", async () => {
-		const { projection, registrationKey } = await confirmedInstall();
-		// The user approved the installation in Connection: the instance now names a Principal.
-		const known = connection.receipts.get(registrationKey) as Record<
-			string,
-			unknown
-		>;
-		connection.receipts.set(registrationKey, {
-			...known,
-			principalId: "principal-a",
-		});
-		readbacks.length = 0;
-		expect(await tick()).toBe(1);
-		expect(await confirmState(projection.authorizationId)).toEqual([
-			{
-				pins: 1,
-				receipts: 1,
-				status: "confirmed",
-				commands: "confirm:sending,confirm_binding_readback:completed",
-			},
-		]);
-		const [pin] =
-			await client`select issuer, principal_id, user_id from platform.connection_principal_pins`;
-		expect(pin).toEqual({
-			issuer: system.issuer,
-			principal_id: "principal-a",
-			user_id: "alice",
-		});
-		// The Host checked the phase command before and after the single GET of the original key.
-		expect(readbacks).toEqual([
-			"command:confirm_binding_readback",
-			"command:confirm_binding_readback",
-		]);
-		expect(connection.requests.map(({ method }) => method)).toEqual([
-			"POST",
-			"GET",
-		]);
-		expect(connection.requests[1]?.path).toBe(
-			`/connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
-		);
-		// Nothing exchanged: no token request, and no second phase-1 read on the next tick.
-		expect(await tick()).toBe(0);
-		expect(connection.requests).toHaveLength(2);
-		await noCredentialStored();
-	});
+	it(
+		"reads the binding back once and commits the first pin before any exchange",
+		async () => {
+			const { projection, registrationKey } = await confirmedInstall();
+			// The user approved the installation in Connection: the instance now names a Principal.
+			const known = connection.receipts.get(registrationKey) as Record<
+				string,
+				unknown
+			>;
+			connection.receipts.set(registrationKey, {
+				...known,
+				principalId: "principal-a",
+			});
+			readbacks.length = 0;
+			expect(await tick()).toBe(1);
+			expect(await confirmState(projection.authorizationId)).toEqual([
+				{
+					pins: 1,
+					receipts: 1,
+					status: "confirmed",
+					commands: "confirm:sending,confirm_binding_readback:completed",
+				},
+			]);
+			const [pin] =
+				await client`select issuer, principal_id, user_id from platform.connection_principal_pins`;
+			expect(pin).toEqual({
+				issuer: system.issuer,
+				principal_id: "principal-a",
+				user_id: "alice",
+			});
+			// The Host checked the phase command before and after the single GET of the original key.
+			expect(readbacks).toEqual([
+				"command:confirm_binding_readback",
+				"command:confirm_binding_readback",
+			]);
+			expect(connection.requests.map(({ method }) => method)).toEqual([
+				"POST",
+				"GET",
+			]);
+			expect(connection.requests[1]?.path).toBe(
+				`/connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+			);
+			// Nothing exchanged: no token request, and no second phase-1 read on the next tick.
+			expect(await tick()).toBe(0);
+			expect(connection.requests).toHaveLength(2);
+			await noCredentialStored();
+		},
+		confirmTimeout,
+	);
 
-	it("sends no EP-1060 readback and pins nothing once the original claim changes", async () => {
-		const { projection, registrationKey } = await confirmedInstall();
-		const known = connection.receipts.get(registrationKey) as Record<
-			string,
-			unknown
-		>;
-		connection.receipts.set(registrationKey, {
-			...known,
-			principalId: "principal-a",
-		});
-		readbackHook = async (request) => {
-			if (request.command?.command === "confirm_binding_readback")
-				await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
-		};
-		readbacks.length = 0;
-		await tick();
-		expect(readbacks).toEqual(["command:confirm_binding_readback"]);
-		expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
-		const [state] = await confirmState(projection.authorizationId);
-		expect(state).toMatchObject({ pins: 0, receipts: 0 });
-		expect(state?.commands).not.toContain("confirm_binding_readback:completed");
-		await noCredentialStored();
-	});
+	it(
+		"sends no EP-1060 readback and pins nothing once the original claim changes",
+		async () => {
+			const { projection, registrationKey } = await confirmedInstall();
+			const known = connection.receipts.get(registrationKey) as Record<
+				string,
+				unknown
+			>;
+			connection.receipts.set(registrationKey, {
+				...known,
+				principalId: "principal-a",
+			});
+			readbackHook = async (request) => {
+				if (request.command?.command === "confirm_binding_readback")
+					await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+			};
+			readbacks.length = 0;
+			await tick();
+			expect(readbacks).toEqual(["command:confirm_binding_readback"]);
+			expect(connection.requests.map(({ method }) => method)).toEqual(["POST"]);
+			const [state] = await confirmState(projection.authorizationId);
+			expect(state).toMatchObject({ pins: 0, receipts: 0 });
+			expect(state?.commands).not.toContain(
+				"confirm_binding_readback:completed",
+			);
+			await noCredentialStored();
+		},
+		confirmTimeout,
+	);
 
-	it("revokes the original key when the binding readback names no Principal", async () => {
-		const { projection } = await confirmedInstall();
-		expect(await tick()).toBe(1);
-		expect(await confirmState(projection.authorizationId)).toEqual([
-			{
-				pins: 0,
-				receipts: 0,
-				status: "revoked",
-				commands:
-					"confirm:rejected,confirm_binding_readback:rejected,revoke:pending",
-			},
-		]);
-		expect(connection.requests.map(({ method }) => method)).toEqual([
-			"POST",
-			"GET",
-		]);
-	});
+	it(
+		"revokes the original key when the binding readback names no Principal",
+		async () => {
+			const { projection } = await confirmedInstall();
+			expect(await tick()).toBe(1);
+			expect(await confirmState(projection.authorizationId)).toEqual([
+				{
+					pins: 0,
+					receipts: 0,
+					status: "revoked",
+					commands:
+						"confirm:rejected,confirm_binding_readback:rejected,revoke:pending",
+				},
+			]);
+			expect(connection.requests.map(({ method }) => method)).toEqual([
+				"POST",
+				"GET",
+			]);
+		},
+		confirmTimeout,
+	);
 
-	it("keeps a would-be reject unknown when the claim changes during the EP-1060 read", async () => {
-		const { projection } = await confirmedInstall();
-		let phaseReadbacks = 0;
-		readbackHook = async (request) => {
-			if (
-				request.command?.command === "confirm_binding_readback" &&
-				++phaseReadbacks === 2
-			)
-				await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
-		};
-		await tick();
-		expect(phaseReadbacks).toBe(2);
-		expect(await confirmState(projection.authorizationId)).toEqual([
-			{
-				pins: 0,
-				receipts: 0,
-				status: "confirmed",
-				commands: "confirm:unknown,confirm_binding_readback:unknown",
-			},
-		]);
-		// No compensation was queued from a read the claim no longer held.
-		expect(connection.requests.map(({ method }) => method)).toEqual([
-			"POST",
-			"GET",
-		]);
-	});
+	it(
+		"keeps a would-be reject unknown when the claim changes during the EP-1060 read",
+		async () => {
+			const { projection } = await confirmedInstall();
+			let phaseReadbacks = 0;
+			readbackHook = async (request) => {
+				if (
+					request.command?.command === "confirm_binding_readback" &&
+					++phaseReadbacks === 2
+				)
+					await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+			};
+			await tick();
+			expect(phaseReadbacks).toBe(2);
+			expect(await confirmState(projection.authorizationId)).toEqual([
+				{
+					pins: 0,
+					receipts: 0,
+					status: "confirmed",
+					commands: "confirm:unknown,confirm_binding_readback:unknown",
+				},
+			]);
+			// No compensation was queued from a read the claim no longer held.
+			expect(connection.requests.map(({ method }) => method)).toEqual([
+				"POST",
+				"GET",
+			]);
+		},
+		confirmTimeout,
+	);
 
 	it("recovers the original consumed begin after the callback mapping CAS fails", async () => {
 		const projection = await begin();
