@@ -1,6 +1,8 @@
-import { isDeepStrictEqual } from "node:util";
 import type { ConversationDispatchOperationV1 } from "./conversation-dispatch-types.js";
-import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
+import {
+	matchesVerifiedWorkloadVersionV1,
+	type WorkloadReconciliationStateV1,
+} from "./workload-reconciliation.js";
 
 /** Narrow current-state projection, read under the same Agent lock as the reservation. */
 interface CapacityState {
@@ -59,7 +61,7 @@ export function decideConversationDispatchCapacityV1(
 		!modelConfigurationMatches ||
 		workload.sourceLifecycleRevision !== state.workloadRevision ||
 		workload.fence !== state.fence ||
-		!isDeepStrictEqual(workload.candidate, verified) ||
+		!matchesVerifiedWorkloadVersionV1(workload.candidate, verified) ||
 		deployment.agentId !== state.agentId ||
 		deployment.configurationRevision !== verified.configuration.revision ||
 		deployment.interactionMode !== "platform-adapter" ||

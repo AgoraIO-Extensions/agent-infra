@@ -14,10 +14,11 @@ import {
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
 import { isPersonalApiAgentMetadataReadAllowedV1 } from "./personal-api-agent-read.js";
-import type {
-	WorkloadBrowserCapabilityProjectionV1,
-	WorkloadReconciliationStateV1,
-	WorkloadSkillCapabilityV1,
+import {
+	matchesVerifiedWorkloadVersionV1,
+	type WorkloadBrowserCapabilityProjectionV1,
+	type WorkloadReconciliationStateV1,
+	type WorkloadSkillCapabilityV1,
 } from "./workload-reconciliation.js";
 
 /** Current explicit grants for the exact user/Agent, resolved by Store. */
@@ -332,7 +333,7 @@ export function decideAgentRuntimePresentationV1(input: {
 		state.sourceConfigurationRevision !== facts.runtimeConfiguration.revision ||
 		state.revision !== runtime.revision ||
 		state.verifiedRevision !== state.revision ||
-		!isDeepStrictEqual(state.candidate, state.verified) ||
+		!matchesVerifiedWorkloadVersionV1(state.candidate, state.verified) ||
 		!isDeepStrictEqual(configuration, state.verified.configuration) ||
 		!isDeepStrictEqual(configuration, facts.runtimeConfiguration) ||
 		runtime.verifiedSourceReference !== facts.sourceReference ||
