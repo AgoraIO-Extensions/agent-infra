@@ -162,7 +162,15 @@ beforeAll(async () => {
 	});
 	app = createPlatformApp(assembly.dependencies, {
 		record: (event) => events.push(event),
-		status: () => ({}),
+		status: () => ({
+			enabled: true,
+			state: "active",
+			captureFailures: 0,
+			exportFailures: 0,
+			lastExportFailureAt: undefined,
+			droppedLogs: 0,
+			invalidRecords: 0,
+		}),
 	});
 }, 120_000);
 
