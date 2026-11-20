@@ -221,7 +221,7 @@ function readOriginalDrainEvidence(cluster, namespace, plan, receipt) {
 			matchesStop(item) && item.code === "CODEX_EXECUTOR_TERMINAL_COMMITTED",
 		));
 		const proof = consistent(runtime.filter((item) =>
-			matchesStop(item) && sameSeal(item) && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED",
+			matchesStop(item) && item.stopFence === highestFence && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED",
 		));
 		if (!exact(committed, [...keys, "occurredAt"]) || !sameSeal(committed) ||
 			!integer(committed.occurredAt) || committed.occurredAt > plan.expiresAt ||

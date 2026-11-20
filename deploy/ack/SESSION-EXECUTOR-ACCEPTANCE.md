@@ -44,4 +44,5 @@ Pod、generation/resource fence 和库存关联，核对登记组、截止时间
 同一 Stop 未排空时可以沿更高 stop fence 续期。读取器保留旧尝试，以原 runner 最新封闭的最高
 fence、epoch 和库存摘要匹配证明及持久终态。旧 seal 必须保持同一 epoch 和登记组，不能用旧
 fence 的证明签收续期后的 Stop。同一最高 fence 记录冲突、原记录缺失或证明晚于持久终态
-时返回待核实。
+时返回待核实。检查同一最高 fence 的全部候选证明后才选择匹配摘要，不能先按 digest
+过滤而丢弃冲突；混合有效证明与 epoch、摘要或登记组不一致的证明同样保持待核实。

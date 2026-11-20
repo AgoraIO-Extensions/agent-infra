@@ -334,3 +334,15 @@ test("an old fence proof cannot satisfy the renewed original Stop", () => {
 		"pending",
 	);
 });
+
+test("mixed highest-fence proof conflicts remain unproven before digest selection", () => {
+	const { proof, terminal, read } = drainReadFixture();
+	for (const conflict of [
+		{ ...proof, digest: "d".repeat(64) },
+		{ ...proof, epoch: "a3a70de0-42c8-4d3b-9e93-956695751af0" },
+		{ ...proof, groups: [{ id: "e".repeat(64), exitedAt: 1660 }] },
+	]) {
+		assert.equal(read([proof, conflict, terminal]).evidence, "pending");
+		assert.equal(read([conflict, proof, terminal]).evidence, "pending");
+	}
+});
