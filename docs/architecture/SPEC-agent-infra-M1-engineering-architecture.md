@@ -828,7 +828,9 @@ custom Owner Secret、自有交互入口及不满足这些条件的模板保持�
 
 未领取实例只有全新专属 PVC、原临时目录及已验证的只读 Skill 挂载；不复制业务工作区、
 原生会话历史或个人记忆。Secret 只能包含该 Sandbox 的派生服务凭据、无 Key 模型投影及
-适用的文件交换 token/容器边界 attestation；不包含部署级服务 token、个人/默认 Relay Key、
+适用的文件交换 token/容器边界 attestation；独立 executor 预留另含 §11.2.1 的 Worker-owned
+executor 绑定及其 attestation。一次性启动身份投影是下文单独记录的临时 Secret。
+Secret 不包含部署级服务 token、个人/默认 Relay Key、
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
 Connection 和 native callback 入口在没有真实当前 allocation/Execution 时必须拒绝。
 预留可准备 [§13.5.6](#1356-标准-oauth-安装供应) 定义的空接收入口与部署信任材料。
@@ -883,7 +885,8 @@ generation/resource fence 及原期限写入预留事实。同一提交固定本
 实例取证和 Kubernetes 回读均在领取事务之外完成。
 Worker 从当前 allocation、资源回读和受信 Host 的本实例校验形成业务晋升回执，绑定唯一领取、
 真实 Conversation/主体/渠道、Session/Sandbox、generation/resource fence、配置/profile、
-原 Pod UID 及当前 RV、原 PVC UID、实际布局和实例 epoch。Store 以原 allocation 的当前绑定和
+原 Pod UID 及回执时回读的 RV、原 PVC UID、实际布局和实例 epoch。RV 只记录回执时刻的证据，
+后续准入按 Pod UID、实例 epoch 和 generation/resource fence 核对。Store 以原 allocation 的当前绑定和
 fence 为条件持久化回执，回执确认后才可写入业务 `ready`。首个业务 Turn 同时需要原业务 Grant
 和随受信 Worker 投递的已提交晋升事实。只有 RuntimeHost 按当前本地实例核对两者后才开放业务准入。
 实例取证和投递约束见 [Runtime HLD §10.3.2](HLD-agent-runtime-M1.md#1032-session-实例只读合同-v1)。
