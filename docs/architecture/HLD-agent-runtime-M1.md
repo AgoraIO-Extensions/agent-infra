@@ -1190,6 +1190,21 @@ Worker 在签发前从 Platform DB 确认当前 lease 或已领取 allocation �
 序列化，对象键递归按字典序排列，数组保留顺序。业务、Worker readiness 和 Stop 的
 Grant 各自只适用于其原用途。
 
+**Host 公开验签身份。** 方案 B 沿用 [§10.3.1](#1031-排空通道的实例身份交付) 的一次性角色
+交付和本实例校验。Worker 回读原 Pod UID 后，在创建不可变身份投影前，按原启动意图与当前
+fence 在 Store 持久固定 Host 实例 Ed25519 公钥和 key ID。该记录绑定预留、Sandbox、
+原 Pod UID、启动引用、投影名称和发布 attempt、批准的 profile/配置与 executor 绑定摘要、
+generation/resource fence、预留 lease/delivery fence 和原期限。部署签发身份为该 attempt
+签发一次性投影，投影的签名覆盖该公开身份和绑定。实例私钥只沿原角色交付保护边界使用。
+
+Worker 按原意图、所有权和当前 fence 核对实际投影归属及其签发绑定，把实际 UID/resourceVersion
+关联到同一发布 attempt。创建响应丢失或 Worker 重启时，只回读核对原投影和原绑定。缺少记录或
+对象、键、绑定无法确认时保留待核实和原占用，关闭 ready，不为同一 attempt 换键或另建投影。
+双角色消费和交付文件移除的确认关联同一 attempt、投影 UID 和原 Pod UID。正常路径在原消费
+确认后按原所有权和已核实的 UID/resourceVersion CAS 清理，并记录不存在和无迟到写入的回读。
+过期或无法核实时走 §10.3.1 的原绑定收口。领取后继续沿原启动及消费记录读取固定的公钥和 key ID，
+验签不依赖已清理的投影或应答所带公钥。
+
 **本地取证。** Host 核对服务身份、Worker key、有效期和完整请求摘要，并把 Pod UID
 与本地 Downward API 比较。Sandbox、generation/resource fence、启动引用和绑定摘要
 来自原可信启动输入。Host 使用已验证的本实例通道读取当前 runner epoch、绑定和活性，
@@ -1227,25 +1242,33 @@ Store 按原绑定提交 CAS，以数据库时钟检查证据在提交时仍有�
 **晋升与首个业务 Turn。** Worker 先按同一 allocation fence 持久提交晋升回执，再
 回读原记录和当前业务授权。首个 Turn 使用
 `POST /internal/runtime/v1/session-promotion/turns` 的 V1 envelope
-`{schemaVersion, turn, promotion}`。其中 `turn` 保持原 V4 Turn 提交和当前
-业务 Grant 的校验规则。Worker 以部署签名 key 签发 `promotion`，用途与 JWS 类型
-固定为 `session-promotion-use-v1`，audience 为 `runtime_host_session_promotion`。
+`{schemaVersion, turn, promotion}`。`turn` 使用现有
+[RuntimeSubmitTurnTransportV4](../../packages/contracts/src/runtime/host-v4.ts)，
+沿用 V4 受认证且保密的传输。原始 Relay Key 仅在现有 `turn.privateKeyField` 和执行内存中
+使用。Worker 以部署签名 key 签发 `promotion`，用途与 JWS 类型固定为
+`session-promotion-use-v1`，audience 为 `runtime_host_session_promotion`。
 签名覆盖原晋升回执引用和摘要、已提交的领取和 allocation 引用、真实主体与渠道、
 Session/Sandbox、Pod UID、Host key 与 runner epoch、generation/resource fence、
-当前 Execution/Turn、operation delivery fence、业务 Grant ID 及 V4 Turn 请求摘要。
+当前 Execution/Turn、operation delivery fence、业务 Grant ID 和
+`runtimeRequestDigestV4(turn.businessRequest)`。原始 Key 不进入晋升载荷、签名摘要或持久记录。
 签名另包含 issuer、`workerId`、`issuedAt` 和 `expiresAt`。其有效期不得超过
 当次业务 Grant 和新取证证明的有效期。如果提交晋升后尚未投递且证明过期，Worker
 按原领取在同一实例重新取证并核对原回执。原业务操作的受理结果未明时先做原请求
 恢复查询，避免重新开始首投。
 
-Host 分别校验当前 Grant 和 `promotion` 签名，核对相同请求及本地仍有效的实例。
+Host 分别校验当前 Grant 和 `promotion` 签名，并核对传输认证、签名和当前 Grant
+所绑定的 Worker 身份一致。请求摘要、业务绑定和本地实例也须匹配。
 受信启动元数据在创建时固定实例来源，纳入启动签名和本地校验。来自预留的实例在任何
 业务入口先完成这一首投门禁。已领取 allocation 继承原启动引用和消费确认，启动期限
 仍沿原记录，用于首次消费。成立的消费事实在领取后继续沿原实例核实。既有 V4 Turn 的
 业务入口校验也适用于此 envelope。
-Host 按原业务操作的幂等和 delivery fence 持久记录已用晋升回执及 Execution，再一次性
-准入原操作。响应丢失沿原 operation 查询。新实例、旧 epoch 或其他 Execution 的晋升
-证明拒绝验证。晋升待核实期间关闭业务入口。控制、续期和事件读取仍沿已获准执行的原合同。
+Host 按 [§8.1](#81-消息与命令幂等) 使用同一持久事务检查原操作的幂等和最高 delivery fence。
+在该事务中原子提交适用的最高 fence 更新和原操作记录，并保存或核对绑定同一 Execution、
+稳定 V4 `operationId`、业务输入摘要和原实例的晋升消费。提交前禁止 Driver 副作用。
+相同输入的并发重复提交只读取原记录或按 §8.1 恢复，陈旧 fence 或输入不符时拒绝。
+提交后中断或响应丢失时沿原 `operationId` 查询和收敛。无法确认原操作是否已产生副作用时保持 `unknown`，禁止重新消费晋升
+或开启新操作。新实例、旧 epoch 或其他 Execution 的晋升证明拒绝验证。晋升待核实期间关闭
+业务入口。控制、续期和事件读取仍沿已获准执行的原合同。
 
 **拒绝与验收。** 请求形状无效返回 `400 RUNTIME_REQUEST_INVALID`。内部服务
 认证失败沿现有 `401 RUNTIME_SERVICE_UNAUTHORIZED`。签名校验、用途、请求摘要、
@@ -1261,6 +1284,16 @@ ready、晋升和首次业务投递。保留原意图、领取记录、PVC 和�
 预留的旧读取跨到已领取阶段、未提交晋升回执、复制晋升证明至另一 Execution，以及有
 业务 Grant 但缺晋升证明。负例均不得触发业务 Turn 或改写持久业务事实。通过路径核对
 同一个请求的证据、原领取后的新证据及同一实例的首次合法 Turn。
+
+- 丢失原投影的创建响应并重启 Worker。只允许对账原 attempt、固定公钥和投影 UID/RV。
+  核对缺少投影、同名投影绑定不符、同一 key ID 使用不同公钥均保持待核实，禁止 ready、
+  换键和清理不匹配对象。原消费与清理确认后，核对领取后仍用原公钥验证新挑战。
+- 传输认证、晋升签名或当前 Grant 的 Worker 身份不一致，以及篡改已签名的业务请求时，
+  拒绝提交晋升消费和原操作，也不得触发 Driver。
+- 在晋升消费提交前中断，核对消费、操作记录及 Driver 副作用均未发生。在持久提交后、
+  Driver 调用前与调用后分别中断，并模拟原响应丢失，核对消费与原操作记录仍成对存在，
+  可用原操作查询，无法确认时保持 `unknown`。并发重复提交相同操作，核对至多一次
+  消费和 Driver 执行。旧 fence 或不同输入的另一提交不得消费或产生 Driver 副作用。
 
 ## 11. 验证
 

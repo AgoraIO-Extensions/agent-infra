@@ -855,8 +855,9 @@ Session、接受工具请求、调用模型或写入用户数据。
 独立 executor 的一次性身份投影单独记为临时资源，原六类长期资源继续沿既有生命周期管理，
 原不可变 Sandbox Secret 保持独立。Worker 在发送投影创建前，将原启动意图、预留 ID、
 目标 Pod UID、固定投影名称、发布 attempt、所有权、预留 lease/delivery fence、Sandbox
-generation/resource fence 及原期限写入预留事实。按原意图和当前 fence 回读投影身份，
-记录实际 UID/resourceVersion。创建响应丢失时沿原 attempt 核实创建结果和归属。
+generation/resource fence 及原期限写入预留事实。同一提交固定本次 Host 的公开验签身份与
+批准配置。预留领取保留该记录。投影绑定、原 attempt 对账和验签按
+[Runtime HLD §10.3.2](HLD-agent-runtime-M1.md#1032-session-实例只读合同-v1) 执行。
 
 标记 `ready` 前，须取得原 Pod 的 Host 和 runner 已消费该投影、固定实例身份并移除临时交付
 文件的证明。Worker 在原预留所有权和 fence 的约束下，按已核实的投影 UID/resourceVersion
