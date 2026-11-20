@@ -1,5 +1,13 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	symlink,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -201,3 +209,170 @@ it("does not turn a legacy pin or caller-shaped identity into authority for a V2
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it.each([
+	"matching",
+	"missing",
+	"wrong-epoch",
+	"wrong-binding",
+	"wrong-pod",
+	"wrong-role",
+	"v2-pin",
+	"symlink",
+	"unverified",
+])(
+	"only reads the existing original pin for a verified V1 identity: %s",
+	async (scenario) => {
+		const directory = await mkdtemp(join(tmpdir(), "executor-v1-upgrade-"));
+		const binding = createCodexSessionExecutorBindingV1({
+			namespace: "fixture",
+			podName: "sandbox-fixture",
+			sandboxId: "fixture",
+			agentId: "agent",
+			conversationId: "conversation",
+			sessionGeneration: 2,
+			resourceFence: 3,
+			imageDigest: `registry.example/runtime@sha256:${"a".repeat(64)}`,
+		});
+		const admission = {
+			binding,
+			podUid: "original-pod",
+			epoch: randomUUID(),
+			assertCurrent: async () => {},
+			onFailure: () => () => {},
+			close: async () => {},
+		};
+		const issuer = generateKeyPairSync("ed25519");
+		const start = {
+			podUid: scenario === "wrong-pod" ? "other-pod" : admission.podUid,
+			bindingDigest:
+				scenario === "wrong-binding"
+					? "b".repeat(64)
+					: codexSessionExecutorBindingDigestV1(binding),
+			startupRef: "original-start",
+			expiresAt: Date.now() + 60_000,
+		};
+		const material = issueExecutorStartIdentityV1(start, issuer.privateKey);
+		const expected = { ...start, now: Date.now(), issuerKey: issuer.publicKey };
+		const host = verifyExecutorStartIdentityV1(material.host, {
+			...expected,
+			role: "host",
+		});
+		let runner = verifyExecutorStartIdentityV1(material.runner, {
+			...expected,
+			role: "runner",
+		});
+		const path = join(
+			directory,
+			`.executor-${codexSessionExecutorBindingDigestV1(binding)}.json`,
+		);
+		const transport = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (url, options) => {
+				const route = new URL(String(url)).pathname;
+				const request = verifyExecutorControlV1(
+					runner,
+					route,
+					JSON.parse(String(options?.body)),
+				);
+				if (!request) throw new Error("invalid fixture authentication");
+				return Response.json(
+					signExecutorControlV1(
+						runner,
+						`${route}/result`,
+						{ epoch: admission.epoch },
+						request.requestId,
+						request.deadline,
+					),
+				);
+			});
+		try {
+			if (scenario !== "missing" && scenario !== "v2-pin")
+				await pinCodexSessionExecutorEpochV1(directory, admission);
+			if (scenario === "v2-pin") {
+				const v2 = {
+					...start,
+					schemaVersion: 2 as const,
+					purpose: "executor-instance-startup-v2" as const,
+					instance: {
+						attemptId: randomUUID(),
+						recordRef: randomUUID(),
+						sandboxId: binding.sandboxId,
+						configurationRevision: 1,
+						configurationVersion: "configuration-one",
+						generation: 2,
+						resourceFence: 3,
+					},
+				};
+				const signed = issueExecutorStartIdentityV1(v2, issuer.privateKey);
+				const v2Expected = {
+					...v2,
+					issuerKey: issuer.publicKey,
+					now: Date.now(),
+				};
+				const originalRunner = runner;
+				runner = verifyExecutorStartIdentityV1(signed.runner, {
+					...v2Expected,
+					role: "runner",
+				});
+				await pinCodexSessionExecutorEpochV1(
+					directory,
+					admission,
+					verifyExecutorStartIdentityV1(signed.host, {
+						...v2Expected,
+						role: "host",
+					}),
+					"configuration-one",
+				);
+				runner = originalRunner;
+			}
+			if (scenario === "symlink") {
+				await writeFile(
+					join(directory, "original.json"),
+					await readFile(path),
+					{ mode: 0o600 },
+				);
+				await unlink(path);
+				await symlink(join(directory, "original.json"), path);
+			}
+			const files = new Map(
+				await Promise.all(
+					(await readdir(directory)).map(
+						async (name) =>
+							[name, await readFile(join(directory, name), "utf8")] as const,
+					),
+				),
+			);
+			if (scenario === "wrong-epoch") admission.epoch = randomUUID();
+			const operation = () =>
+				pinCodexSessionExecutorEpochV1(
+					directory,
+					admission,
+					scenario === "unverified"
+						? { ...host }
+						: scenario === "wrong-role"
+							? runner
+							: host,
+				);
+			if (scenario === "matching")
+				await expect(operation()).resolves.toBeUndefined();
+			else
+				await expect(operation()).rejects.toThrow(
+					"CODEX_SESSION_EXECUTOR_INVALID",
+				);
+			expect(
+				new Map(
+					await Promise.all(
+						(await readdir(directory)).map(
+							async (name) =>
+								[name, await readFile(join(directory, name), "utf8")] as const,
+						),
+					),
+				),
+			).toEqual(files);
+		} finally {
+			transport.mockRestore();
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);

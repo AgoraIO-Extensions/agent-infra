@@ -50,6 +50,12 @@ type Statement = z.infer<typeof anyStatementSchema>;
 type Material = z.infer<typeof materialSchema>;
 export type ExecutorIdentityV1 = Statement & { privateKey: KeyObject };
 const verifiedIdentities = new WeakSet<object>();
+export function verifiedExecutorLegacyIdentityV1(identity: ExecutorIdentityV1) {
+	if (!verifiedIdentities.has(identity) || "schemaVersion" in identity)
+		return invalid();
+	return identity;
+}
+
 export function verifiedExecutorInstanceIdentityV2(
 	identity: ExecutorIdentityV1,
 ) {

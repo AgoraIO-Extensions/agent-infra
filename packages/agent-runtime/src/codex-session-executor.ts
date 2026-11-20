@@ -14,6 +14,7 @@ export * from "./codex-session-executor-binding.js";
 import {
 	type ExecutorIdentityV1,
 	verifiedExecutorInstanceIdentityV2,
+	verifiedExecutorLegacyIdentityV1,
 } from "./codex-executor-bootstrap.js";
 import {
 	executorControlRequestV1,
@@ -463,7 +464,15 @@ async function pinExecutorEpoch(
 		| ReturnType<typeof verifiedExecutorInstanceIdentityV2>
 		| undefined;
 	let instanceKey: string | undefined;
-	if (identity && !("schemaVersion" in identity)) invalid();
+	if (identity && !("schemaVersion" in identity)) {
+		const legacy = verifiedExecutorLegacyIdentityV1(identity);
+		if (
+			legacy.role !== "host" ||
+			legacy.podUid !== admission.podUid ||
+			legacy.bindingDigest !== bindingDigest
+		)
+			invalid();
+	}
 	if (identity && "schemaVersion" in identity) {
 		instance = verifiedExecutorInstanceIdentityV2(identity);
 		try {
