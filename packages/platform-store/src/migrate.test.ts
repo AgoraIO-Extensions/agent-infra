@@ -2177,6 +2177,7 @@ describe("published Relay authority migration", () => {
 			92,
 			93,
 			94,
+			95,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2298,9 +2299,13 @@ describe("published Relay authority migration", () => {
 			idx: 93,
 			tag: "0093_connection_manual_descriptor",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 94)).toMatchObject({
 			idx: 94,
 			tag: "0094_connection_manual_confirm",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 95,
+			tag: "0095_connection_principal_pin_rules",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2941,6 +2946,18 @@ describe("published Relay authority migration", () => {
 					"pinned_at",
 					"released_at",
 					"revision",
+					"verification_state",
+					"verification_deadline",
+					"verified_at",
+					"verification_actor_id",
+					"verification_reference",
+					"suspended_at",
+					"overdue_at",
+					"release_requested_at",
+					"release_reason",
+					"release_actor_id",
+					"release_reference",
+					"rule_revision",
 				].map((name) => `connection_principal_pins:${name}`),
 				...[
 					"id",
@@ -2961,6 +2978,7 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.checks.push(
 				"connection_principal_pins:connection_principal_pin_identity",
+				"connection_principal_pins:connection_principal_pin_rules",
 				"connection_principal_pin_receipts:connection_principal_pin_receipt_digest",
 			);
 			expectedDelta.indexes.push(
