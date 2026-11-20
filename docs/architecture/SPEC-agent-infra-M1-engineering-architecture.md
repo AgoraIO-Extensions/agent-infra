@@ -820,6 +820,9 @@ Agent 级授权、幂等、锁顺序、resourceFence、执行容量或预留池�
 不能跨 Agent 共用。匹配依据包括 Runtime/Workload 修订、管理 fence、镜像 Digest、资源与存储
 规格、env 摘要、模型投影、只读 Skill generation、Connection Consumer 配置、网络策略及
 Runtime 签名/传输配置版本；任一影响实际 Pod 输入或授权的修订改变，未领取项立即失去领取资格。
+独立 executor 模式按可信模板投影判定。Codex profile 须另外固定双容器布局、镜像、工作区挂载、
+身份交付配置及合计资源摘要。旧 profile 缺少这些事实，或布局、容量和当前配置失配时，
+对应未领取项失去资格，走原淘汰流程。没有合格项时走冷路径。
 custom Owner Secret、自有交互入口及不满足这些条件的模板保持原准备路径，不自动扩展预热资格。
 未领取实例不预先持有 Owner Secret 的决定与重新评估条件见 [ADR-0038](../adr/0038-no-owner-secret-in-session-reserves.md)。
 
@@ -829,11 +832,17 @@ custom Owner Secret、自有交互入口及不满足这些条件的模板保持�
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
 Connection 和 native callback 入口在没有真实当前 allocation/Execution 时必须拒绝。
 预留可准备 [§13.5.6](#1356-标准-oauth-安装供应) 定义的空接收入口与部署信任材料。
-受保护交付须等领取和实际 Pod 回读完成，沿原 Sandbox、UID、代次及 fence 核对。
-首版预留只验证实际六资源、Host bootstrap `/healthz` 及无业务状态，不建立业务 Execution、
-原生业务 Session 或模型调用。Session Pod 未装配 Agent 级 `READINESS_BINDING`，其 JWS
-绑定 Agent/Workload 而非预留 Sandbox，不能复用它冒充预留原生就绪授权。首版不扩展该 wire；
-若后续需要预热原生进程或新的签名预留探测，须另行完成契约评审及原生状态隔离验收。
+受保护的业务输入须在领取事务提交和实际 Pod 回读后，按当前主体授权及原 Sandbox、UID、代次和
+fence 交付。独立 executor 的非业务启动可在领取前按 [§11.2.1](#1121-codex-session-独立-executor提案)
+向可信 init 交付原 Pod 专用的启动身份。它只用于认证 Host 和 runner 的实例，不授予业务 Grant。
+该模式可预拉双容器镜像、创建空工作区、启动 Host 和 runner/exec-server，并用 §11.2.1 规定的
+固定检查复核本代挂载和执行边界。检查只使用独立合成 scratch，结束后复核工作区与业务状态为空。
+预留就绪额外要求实际两容器、挂载、实例认证、活性和固定检查均已确认。禁止在此期间建立原生业务
+Session、接受工具请求、调用模型或写入用户数据。
+未装配独立 executor 的预留只验证实际六资源、Host bootstrap `/healthz` 及无业务状态。
+所有预留在领取前均不得建立业务 Execution。Session Pod 未装配 Agent 级 `READINESS_BINDING`，
+其 JWS 绑定 Agent/Workload，不得作为预留 Sandbox 的原生就绪授权。保留现有 wire。
+原生业务进程预热或新的签名预留探测须另行完成契约评审及原生状态隔离验收。
 
 **创建、领取与回收。** 预留事实包含不可变 ID/profile、`preparing/ready/claimed/retiring/unknown`
 状态、当前 lease/delivery fence、逐资源 UID/resourceVersion、待核实操作及期限。它只负责未领取
@@ -841,6 +850,17 @@ Connection 和 native callback 入口在没有真实当前 allocation/Execution 
 固定名称的幂等 create，不修改未知或不同 UID 的对象。六类资源、Host bootstrap、隔离及全部
 创建意图已确认、没有未完成或结果不明的资源写操作时，才能以当前 lease/CAS 标记 `ready`。
 启动时产生的受控 Host 元数据可以保留，但不得存在业务 Session、Execution 或用户文件。
+
+独立 executor 的一次性身份投影单独记为临时资源，原六类长期资源继续沿既有生命周期管理，
+原不可变 Sandbox Secret 保持独立。Worker 在发送投影创建前，将原启动意图、预留 ID、
+目标 Pod UID、固定投影名称、发布 attempt、所有权、预留 lease/delivery fence、Sandbox
+generation/resource fence 及原期限写入预留事实。按原意图和当前 fence 回读投影身份，
+记录实际 UID/resourceVersion。创建响应丢失时沿原 attempt 核实创建结果和归属。
+
+标记 `ready` 前，须取得原 Pod 的 Host 和 runner 已消费该投影、固定实例身份并移除临时交付
+文件的证明。Worker 在原预留所有权和 fence 的约束下，按已核实的投影 UID/resourceVersion
+清理，并确认不存在且没有可能迟到的投影写入。Store 只在该证据和全部创建、清理意图已确认后
+允许 `ready` 的 CAS。创建、消费或删除结果未确认时保留原意图与占用，预留保持不可领取。
 
 新会话按原入口事务先核验当前主体、Agent、渠道和幂等记录。只有创建新 Conversation 的分支
 可以 `FOR UPDATE SKIP LOCKED` 选择匹配 `ready` 项；续接、重试和恢复不得重新领取。事务中
@@ -857,26 +877,43 @@ Connection 和 native callback 入口在没有真实当前 allocation/Execution 
 必须沿当前主体授权重读实际六类资源、profile、路由，并完成原会话准备路径的全部检查后才写入
 业务 `ready`。首次实际投递仍执行原 Runtime 授权、准入与原生准备，耗时计入真实可执行指标；
 不以预留 `ready` 声称原生进程已暖，也不能为满足延迟目标跳过检查或提前记就绪。
+独立 executor 预留须在原领取提交后复核同一 Pod、PVC、原六类资源和 Host/runner 实例。
+Worker 从当前 allocation、资源回读和受信 Host 的本实例校验形成业务晋升回执，绑定唯一领取、
+真实 Conversation/主体/渠道、Session/Sandbox、generation/resource fence、配置/profile、
+原 Pod UID 及当前 RV、原 PVC UID、实际布局和实例 epoch。Store 以原 allocation 的当前绑定和
+fence 为条件持久化回执，回执确认后才可写入业务 `ready`。首个业务 Turn 同时需要原业务 Grant
+和随受信 Worker 投递的已提交晋升事实。只有 RuntimeHost 按当前本地实例核对两者后才开放业务准入。
+实例取证和投递约束见 [Runtime HLD §10.3.1](HLD-agent-runtime-M1.md#1031-排空通道的实例身份交付)。
 
 淘汰必须先在同一预留行上赢得 `ready/preparing/unknown → retiring` CAS，再持久化每项
 条件删除意图并发送 DELETE；`retiring` 不回到 `ready`。这样领取和淘汰只有一个赢家，
 提前缓存的列表或过期 lease 不授予清理权。领取前若有任何未决资源写操作，保持不可领取；
 旧 create 只能针对原名称幂等创建，不能 replace、patch 或 delete 已领取资源。`claimed` 后
 预留清理器永远不再操作该组资源，包括因禁用预热、缩容、过期或 Worker 重启触发的清理。
-已领取实例发生故障，沿原会话恢复，不能归还池、换一项重新领取或释放未知执行占用。
+领取提交结果不明时，沿原幂等记录和预留行核实是否已提交，不尝试领取另一项。
+已领取实例的晋升确认缺失、失败或漂移时关闭业务准入，保留原 Conversation、allocation、
+PVC 和占用，沿原领取与会话恢复有界收口。只在既有代次退休、Stop 屏障与所有权条件满足后，
+按原会话恢复规则使用同一 PVC。恢复时若产生新 Pod，须回读其新 UID 并重新做实例准入，
+不得沿用旧实例证明或向宿主切回本地执行。无法安全恢复时只标记原会话不可用。
+已领取资源不得归还池或重新领取。
 
 未领取项退出时，按自身原始 UID/resourceVersion 删除六类资源，包括从未交付用户的空 PVC，
-已确认原创建操作不再可能迟到写入，并回读全部 absence 后才释放占用。待核实的 create
-不能仅因一次 GET absence 判为结束；保留原 attempt、不可领取状态与预算，核实迟到资源后
-沿原淘汰意图清理。结果不明保留 `unknown`、原意图与预算，继续有界收敛；
-若已被领取、发现业务绑定或同名不同 UID，清理拒绝。正式 Session 的 PVC 保留规则不变。
+独立 executor 同时收口原临时身份投影。淘汰 CAS 获胜后持久化条件删除意图，在当前淘汰
+fence 下核对原发布 attempt、目标 Pod UID 和投影 UID/resourceVersion，只删除原对象。
+须确认原创建和投影发布均已结束且不会迟到写入，并回读六类长期资源及原投影均不存在，
+才能释放占用。一次 GET absence、lease 失效或凭证过期都不足以确认未决 create 已结束。
+结果不明时保留原 attempt、不可领取状态和预算，仅沿原意图有界核实，迟到的原对象按原条件清理。发现已领取、
+业务绑定或同名不同 UID 时拒绝清理。正式 Session 的 PVC 保留规则不变。
 
 **有界补充与扩缩。** 部署策略声明允许的 profile、每项最小/最大备用数、总备用数、
 部署总 CPU/内存/PVC 预算、创建并发、过期时长、缩容冷却和失败退避。缺少上限不启用。
 `ready + preparing` 计入补充目标，`unknown + retiring` 仍占预算；不得在每轮重复创建同一缺额。
 领取只将占用从预留事实转入 allocation；领取后的普通会话不参与备用池预算准入。补充使用同一
 事务预算锁，只统计未领取的预留项，retiring/unknown 的未领取实例在身份与 CAS 未收敛前继续
-保护其占用。CPU、内存、PVC 存储和会话数量对已领取与续接资源只做整体用量监控与告警，不因
+保护其占用。独立 executor 按已验证的实际双容器布局合计 CPU、内存，并只计一份专属 PVC。
+首轮采用当前双容器容量规格时，每份按 2 核、3 GiB 和 20 GiB PVC 占用预留预算。采用前按
+镜像、布局和容量 profile/hash 核对该规格。费用按实际资源规格、持有时长和部署地域费率核算。
+CPU、内存、PVC 存储和会话数量对已领取与续接资源只做整体用量监控与告警，不因
 存量超过备用池预算停止普通冷启动、续接或已领取会话，也不驱逐在用会话。
 
 目标备用数按同 profile 的新会话到达率、实际补充耗时和小额突发余量计算，并夹在批准的
@@ -1703,7 +1740,10 @@ Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临�
 取舍见 [ADR-0041](../adr/0041-propose-credential-free-codex-session-executor.md)；
 实现合入不代表目标 ACK 或业务验收通过，部署启用前仍须完成本节验收。
 
-候选仅用于 Worker 独占管理、采用 keyless 模型配置的标准 Codex 业务 Session Sandbox。
+候选仅用于 Worker 独占管理、采用 keyless 模型配置的标准 Codex Session Sandbox，
+涵盖正式业务实例和 §10.1.1 批准的未领取准备阶段。预留从首建 Pod 即固定控制容器和 executor，
+使用预分配的最终 Session/Sandbox ID 派生同一 PVC 的精确 `workspace` 布局。业务 Conversation
+归属由真实领取事务建立。
 每个 Session Pod 增加一个无业务凭据的固定 Codex `exec-server` 容器，RuntimeHost 与持模型
 传输凭据的 app-server 留在控制容器。两个容器保持独立 PID 与 mount 可见域，禁止
 `shareProcessNamespace`、host PID/IPC/network、额外 capabilities、privileged 或放松 seccomp。
@@ -1725,8 +1765,12 @@ RuntimeHost 验证绑定，Worker 按实际 Pod 的容器、安全上下文、�
 Endpoint 固定在同 Session Pod 的 loopback，不新增 Service/Ingress 或跨 Pod 的无认证监听。
 同 Pod 网络共享不构成身份授权，executor 访问 Host 的模型/控制入口仍须被既有授权门禁拒绝。
 
+静态布局及 Worker-owned executor attestation 在建 Pod 前以受信部署输入和最终 ID 固定。
+适用的旧 `agentId:sessionId` 容器边界 attestation 保留原值及原用途，两者均不代替实际实例认证。
+Worker 先持久化原启动意图、启动投影引用和绝对期限。创建回读取得实际 Pod UID 后，
 Worker 为原 Pod 的 Host 和 runner 分别签发一次性的短期启动凭证，绑定实际 Pod UID、
-Sandbox、Session generation 和 resource fence。可信启动程序使用独立本地事实核对绑定，
+Sandbox、Session generation 和 resource fence，再按原所有权、部署修订和 fence CAS 发布
+专用不可变投影。可信启动程序使用独立本地事实核对绑定，
 消费凭证并固定原实例公钥。交付限制、运行进程保护及作废规则见
 [Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
 启用仍由部署显式授权。需要 Helm 装配或新增 RBAC 时另开默认关闭的 Helm PR，权限限于
@@ -1764,7 +1808,8 @@ Dispatch/Store 不得借预算到期写入 `RUNTIME_RECOVERY_TIMEOUT` 失败、�
 [Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
 
 Pod 停止与代次退休同时覆盖两容器及所有后台子进程；新增 CPU/内存、临时卷和启动成本进入原
-容量配置、资源摘要及回执。旧 reserves 不得未经重验绑定到新布局，回滚须先按正式生命周期排空。
+容量配置、资源摘要及回执。旧 reserve 的资格、费用及同 Pod 领取见 §10.1.1。
+旧单容器 Pod 不在领取时改装。回滚须先按正式生命周期排空。
 
 准入前须在目标 ACK 的同版本镜像上验证本人 shell/patch/图片/搜索成功，并拒绝控制侧凭据、
 `/proc`/FD、Host/native 状态、兄弟 Conversation/代次、路径别名及跨 Session Pod/PVC/网络访问。
