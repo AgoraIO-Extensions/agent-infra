@@ -2,9 +2,9 @@
 
 ## 状态
 
-提案，归属 [#4045](https://github.com/AgoraIO-Extensions/agent-infra/issues/4045)。
-本提案需要负责人评审，采纳后先同步受影响的 PRD、工程 Spec 和 Runtime HLD，再实施新增合同。
-提案不代表 `/compact` 或 `/goal` 已在真实 Web 会话中可用。
+推迟。M1 不实施 Goal 生命周期，后续由 [#4249](https://github.com/AgoraIO-Extensions/agent-infra/issues/4249) 承接。
+恢复时由负责人评审，采纳后先同步受影响的 PRD、工程 Spec 和 Runtime HLD，再实施新增合同。
+`/compact` 继续按既有合同和真实会话证据独立验收，见 [#4045](https://github.com/AgoraIO-Extensions/agent-infra/issues/4045)。
 
 ## 问题
 
