@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	codexSessionExecutorAttestationV1,
+	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import {
@@ -24,7 +25,10 @@ import type {
 	SessionSandboxLifecycleV1,
 	SessionSandboxResourceIdentityV1,
 } from "@agent-infra/platform-core";
-import { sessionSandboxFileExchangeTokenV1 } from "@agent-infra/platform-core";
+import {
+	sessionSandboxFileExchangeTokenV1,
+	transitionExecutorInstanceV2,
+} from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1ContainerStatus,
@@ -67,6 +71,7 @@ import {
 	hasSessionSandboxIdentityV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxRuntimeInputV1,
+	sessionSandboxExecutorReserveResourcesV1,
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxImageProjectionV1,
 	sessionSandboxLabelsMatchV1,
@@ -3897,4 +3902,117 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 	const drifted = await adapter.observe(selected);
 	expect(drifted.status).toBe("unknown");
 	expect(drifted.workspaceSnapshot).toBeUndefined();
+});
+
+it("renders an executor reserve only with its original durable startup, while the default reserve renderer stays closed", () => {
+	const { principal: _principal, channelId: _channel, ...base } = allocation;
+	const binding = createCodexSessionExecutorBindingV1({
+		namespace: base.namespace,
+		podName: base.podName,
+		agentId: base.agentId,
+		conversationId: base.sessionId,
+		sessionGeneration: 1,
+		sandboxId: base.sandboxId,
+		resourceFence: 1,
+		imageDigest: base.imageDigest,
+	});
+	if (!base.runtime) throw new Error("Missing runtime fixture");
+	const input = {
+		...base,
+		generation: 1,
+		resourceFence: 1,
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "100m", memory: "64Mi" },
+				limits: { cpu: "500m", memory: "256Mi" },
+			},
+		},
+		runtime: {
+			...base.runtime,
+			codexContainerBoundaryEnabled: false,
+			codexContainerBoundaryAttestation: undefined,
+			sessionExecutor: {
+				binding,
+				attestation: codexSessionExecutorAttestationV1(
+					binding,
+					base.runtime.serviceToken,
+				),
+			},
+		},
+	};
+	const instance = required(
+		transitionExecutorInstanceV2({
+			state: null,
+			mutation: {
+				kind: "prepare",
+				bindingDigest: codexSessionExecutorBindingDigestV1(binding),
+				configurationVersion: JSON.parse(input.runtime.modelConfiguration)
+					.configVersion,
+				timeoutMs: 60000,
+				approval: {
+					schemaVersion: 2,
+					imageDigest: input.imageDigest,
+					verificationRef: "fixture-v2",
+				},
+			},
+			authority: {
+				namespace: input.namespace,
+				podName: input.podName,
+				sandboxId: input.sandboxId,
+				generation: 1,
+				resourceFence: 1,
+				configurationRevision: 1,
+				imageDigest: required(input.imageDigest.split("@").at(-1)),
+				now: Date.now(),
+				hasUnresolvedExecution: false,
+				proofVerified: false,
+			},
+		}),
+	).state;
+	const startup = {
+		schemaVersion: 1 as const,
+		instance,
+		startupRef: instance.startupRef,
+		deadlineMs: instance.expiresAt,
+		writer: { owner: "worker", fence: 1 },
+		projection: null,
+		consumption: null,
+	};
+	expect(() => sessionSandboxReserveResourcesV1(input)).toThrow();
+	const rendered = sessionSandboxExecutorReserveResourcesV1(input, startup);
+	const business = sessionSandboxResourcesV1({
+		...input,
+		principal: allocation.principal,
+		channelId: allocation.channelId,
+		executorDrainIdentity: true,
+		executorStartupDeadline: startup.deadlineMs,
+		executorInstance: instance,
+	});
+	business[5].metadata!.annotations![
+		"agent-infra.agora.io/executor-startup-deadline"
+	] = String(startup.deadlineMs);
+	expect(rendered).toEqual(business);
+	expect(rendered[5].spec?.containers).toHaveLength(2);
+	expect(
+		rendered[5].spec?.volumes?.find((v) => v.name === "executor-bootstrap")
+			?.secret?.secretName,
+	).toBe(startup.startupRef);
+	expect(
+		rendered[5].spec?.containers
+			.find((c) => c.name === "codex-session-executor")
+			?.volumeMounts?.some((v) => v.name === "runtime-secret"),
+	).toBe(false);
+	for (const patch of [
+		{ startupRef: "another-pod-executor-1" },
+		{ deadlineMs: 0 },
+	])
+		expect(() =>
+			sessionSandboxExecutorReserveResourcesV1(input, { ...startup, ...patch }),
+		).toThrow();
+	expect(() =>
+		sessionSandboxExecutorReserveResourcesV1(
+			{ ...input, principal: allocation.principal } as typeof input,
+			startup,
+		),
+	).toThrow();
 });

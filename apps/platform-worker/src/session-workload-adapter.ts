@@ -32,6 +32,7 @@ import {
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxObservationV1,
+	type SessionSandboxReserveExecutorStartupV1,
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxStopReceiptV1,
 	type TaskPrincipalV1,
@@ -1733,6 +1734,63 @@ export function sessionSandboxReserveResourcesV1(
 		throw new WorkloadKubernetesError("policy");
 	validateResourceInput(input);
 	return renderSessionSandboxResourcesV1(input);
+}
+
+/** Resource-only preparation seam. Production reserve admission stays closed until option B promotion is wired. */
+export function sessionSandboxExecutorReserveResourcesV1(
+	input: SessionSandboxResourceInputV1,
+	startup: SessionSandboxReserveExecutorStartupV1,
+): SessionSandboxResourceSetV1 {
+	if (
+		"principal" in input ||
+		"channelId" in input ||
+		input.oauthProvisioning !== undefined ||
+		input.generation !== 1 ||
+		input.resourceFence !== 1 ||
+		input.desiredState !== "running" ||
+		input.runtime?.driver !== "codex" ||
+		!input.runtime.sessionExecutor ||
+		!input.codexSessionExecutor ||
+		input.runtime.custom ||
+		startup.schemaVersion !== 1 ||
+		!startup.instance ||
+		startup.startupRef !== startup.instance.startupRef ||
+		startup.deadlineMs !== startup.instance.expiresAt ||
+		(startup.instance &&
+			(startup.instance.sandboxId !== input.sandboxId ||
+				startup.instance.namespace !== input.namespace ||
+				startup.instance.podName !== input.podName ||
+				startup.instance.generation !== 1 ||
+				startup.instance.resourceFence !== 1 ||
+				startup.instance.bindingDigest !==
+					codexSessionExecutorBindingDigestV1(
+						input.runtime.sessionExecutor.binding,
+					))) ||
+		!Number.isSafeInteger(startup.deadlineMs) ||
+		startup.deadlineMs <= 0 ||
+		(startup.projection &&
+			startup.projection.bindingDigest !==
+				codexSessionExecutorBindingDigestV1(
+					input.runtime.sessionExecutor.binding,
+				))
+	)
+		throw new WorkloadKubernetesError("policy");
+	const prepared = {
+		...input,
+		executorDrainIdentity: true as const,
+		executorStartupDeadline: startup.deadlineMs,
+		...(startup.instance ? { executorInstance: startup.instance } : {}),
+	};
+	validateResourceInput(prepared);
+	const resources = renderSessionSandboxResourcesV1(prepared);
+	resources[5].metadata = {
+		...resources[5].metadata,
+		annotations: {
+			...resources[5].metadata?.annotations,
+			[executorStartupDeadlineAnnotationV1]: String(startup.deadlineMs),
+		},
+	};
+	return resources;
 }
 
 /** Same strict spec/identity checks used by the existing Session adapter. */

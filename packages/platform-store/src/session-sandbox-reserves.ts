@@ -1,5 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+	type ExecutorInstanceMutationV2,
+	type ExecutorInstanceStateV2,
+	ExecutorInstanceStateV2Schema,
+} from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
@@ -43,6 +48,7 @@ import {
 	sessionSandboxReserveResourceKindsV1,
 	sessionSandboxReserveTargetV1,
 	type TaskUserDirectoryV1,
+	transitionExecutorInstanceV2,
 } from "@agent-infra/platform-core";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import type { Transaction } from "./conversation-execution-common.js";
@@ -62,6 +68,8 @@ export type SessionSandboxReserveInspectionV1 = Omit<
 	"leaseOwner" | "deliveryFence"
 > & {
 	readonly currentProfileDigest: string | null;
+	/** Read-only CAS version for instance evidence. It confers no resource-write lease. */
+	readonly readFence?: number;
 };
 export type SessionSandboxReserveDeleteResponseV1 =
 	| "acknowledged"
@@ -198,7 +206,7 @@ function settledStatus(
 function reserveEvidenceMatches(
 	evidence: SessionSandboxInstanceEvidenceV1 | undefined,
 	sandboxId: string,
-	lease: SessionSandboxReserveLeaseV1,
+	lease: Pick<SessionSandboxReserveLeaseV1, "deliveryFence">,
 	instance: {
 		readonly podUid: string;
 		readonly hostKeyId: string;
@@ -990,20 +998,74 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				deployment: current?.deployment ?? null,
 				modelProjection: current?.modelProjection ?? null,
 				currentProfileDigest: current?.profile.digest ?? null,
+				executorStartup: row.executor_startup,
+				readFence: Number(row.delivery_fence),
 			};
 		});
 	}
 	/** Keep a verified ready reserve alive while this Worker is healthy. */
-	async refreshReady(sandboxId: string, ttlMs: number): Promise<boolean> {
+	async refreshReady(
+		sandboxId: string,
+		ttlMs: number,
+		proof?: {
+			readonly readFence: number;
+			readonly instanceEvidence: SessionSandboxInstanceEvidenceV1;
+		},
+	): Promise<boolean> {
 		if (!sandboxId || !Number.isSafeInteger(ttlMs) || ttlMs < 1) unavailable();
 		return this.#client.begin(async (tx) => {
+			const [hint] = proof
+				? await tx<
+						{ agent_id: string }[]
+					>`select agent_id from platform.session_sandbox_reserves where sandbox_id=${sandboxId}`
+				: [];
+			const current = hint
+				? await readCurrentSessionSandboxReserveProfileV1(
+						tx,
+						hint.agent_id,
+						this.#configuration,
+					)
+				: null;
 			await lockBudget(tx, this.#configuration);
+			if (proof) {
+				const [row] = await tx<
+					ReserveRow[]
+				>`select * from platform.session_sandbox_reserves where sandbox_id=${sandboxId} and status='ready' and retired_at is null for update`;
+				const consumed = row?.executor_startup?.consumption;
+				if (
+					!row ||
+					!consumed ||
+					!current ||
+					current.profile.digest !== row.profile_digest ||
+					proof.readFence !== Number(row.delivery_fence) ||
+					!reserveEvidenceMatches(
+						proof.instanceEvidence,
+						sandboxId,
+						{ deliveryFence: proof.readFence },
+						consumed,
+					) ||
+					!canReadySessionSandboxReserveV1({
+						status: "preparing",
+						operations: row.operations,
+						executorStartup: row.executor_startup,
+						bootstrapReady: true,
+						businessStateAbsent: true,
+					})
+				)
+					return false;
+				const written =
+					await tx`update platform.session_sandbox_reserves set expires_at=clock_timestamp()+${ttlMs}*interval '1 millisecond', updated_at=clock_timestamp()
+					where sandbox_id=${sandboxId} and status='ready' and retired_at is null and expires_at>clock_timestamp()
+					and delivery_fence=${proof.readFence} and ${evidenceOpenSql(tx, proof.instanceEvidence)} returning sandbox_id`;
+				return written.length === 1;
+			}
 			const rows = await tx`
 				update platform.session_sandbox_reserves
 				set expires_at = clock_timestamp() + ${ttlMs} * interval '1 millisecond',
 					updated_at = clock_timestamp()
 				where sandbox_id = ${sandboxId}
 					and status = 'ready'
+					and executor_startup is null
 					and retired_at is null
 					and expires_at > clock_timestamp()
 				returning sandbox_id`;
@@ -1584,13 +1646,19 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		startup: SessionSandboxReserveExecutorStartupV1,
 		status: SessionSandboxReserveStatusV1 = row.status,
 		evidence?: SessionSandboxInstanceEvidenceV1,
+		intentLease?: SessionSandboxReserveLeaseV1,
 	): Promise<boolean> {
-		const written = evidence
-			? await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp()
+		const written = intentLease
+			? await tx`update platform.session_sandbox_reserves set executor_startup=${tx.json(startup as unknown as Json)}, status=${status}, updated_at=clock_timestamp()
+				where sandbox_id=${row.sandbox_id} and status='preparing' and lease_owner=${intentLease.leaseOwner}
+				and delivery_fence=${intentLease.deliveryFence} and lease_expires_at>clock_timestamp()
+				and ${startup.deadlineMs}::float8>extract(epoch from clock_timestamp())*1000 returning sandbox_id`
+			: evidence
+				? await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp()
 				where sandbox_id = ${row.sandbox_id} and ${evidenceOpenSql(tx, evidence)}
 					and ${startup.deadlineMs}::float8 > extract(epoch from clock_timestamp()) * 1000
 				returning sandbox_id`
-			: await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id} returning sandbox_id`;
+				: await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id} returning sandbox_id`;
 		return written.length === 1;
 	}
 	async #beforeExecutorDeadline(
@@ -1644,6 +1712,119 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		});
 		return deadline === false ? null : deadline;
 	}
+
+	/** Reserve-owned subset of the existing V2 ledger, committed before any identity delivery. */
+	async transitionExecutorReserveInstanceV2(
+		lease: SessionSandboxReserveLeaseV1,
+		mutation: ExecutorInstanceMutationV2,
+		podIntent?: SessionSandboxReserveOperationInputV1,
+	): Promise<{ state: ExecutorInstanceStateV2; permit: boolean } | null> {
+		const decision = await this.#mutate(lease, async (tx, row) => {
+			if (!["read", "prepare", "pod-create", "bind"].includes(mutation.kind))
+				return false;
+			if (mutation.kind !== "read" && row.status !== "preparing") return false;
+			const original = row.executor_startup;
+			await tx`select pg_advisory_xact_lock_shared(hashtextextended(${`agent-infra/executor-instance-v2/${row.namespace}`},0))`;
+			// Grant the resource create and advance V2 in one commit; an expired grant leaves neither half pending.
+			if (
+				mutation.kind === "pod-create"
+					? !podIntent ||
+						podIntent.kind !== "Pod" ||
+						podIntent.operation !== "create" ||
+						podIntent.name !== `sandbox-${row.sandbox_id}` ||
+						podIntent.status !== "pending" ||
+						podIntent.resource !== null ||
+						podIntent.absent ||
+						!boundedText(podIntent.attemptId) ||
+						podIntent.attemptId === original?.instance?.attemptId ||
+						row.operations.some(
+							(o) => o.kind === "Pod" || o.attemptId === podIntent.attemptId,
+						)
+					: podIntent !== undefined
+			)
+				return false;
+			if (original && !original.instance) return false;
+			if (
+				!original &&
+				(mutation.kind !== "prepare" ||
+					row.operations.some((o) => o.kind === "Pod"))
+			)
+				return false;
+			const business =
+				await tx`select 1 from platform.conversations where id=${row.session_id}
+				union all select 1 from platform.session_sandbox_allocations where sandbox_id=${row.sandbox_id}`;
+			if (business.length) return false;
+			if (
+				mutation.kind === "bind" &&
+				mutation.resources.some(
+					(resource) =>
+						!row.operations.some(
+							(o) =>
+								o.operation === "create" &&
+								o.kind === resource.kind &&
+								o.status === "confirmed" &&
+								o.writeCompletion === "response" &&
+								o.resource?.uid === resource.uid &&
+								o.resource.namespace === resource.namespace &&
+								o.resource.name === resource.name,
+						),
+				)
+			)
+				return false;
+			const [clock] = await tx<
+				{ now: number }[]
+			>`select floor(extract(epoch from clock_timestamp()) * 1000)::float8 as now`;
+			if (!clock) return false;
+			const next = transitionExecutorInstanceV2({
+				state: original?.instance ?? null,
+				mutation,
+				authority: {
+					namespace: row.namespace,
+					podName: `sandbox-${row.sandbox_id}`,
+					sandboxId: row.sandbox_id,
+					generation: 1,
+					resourceFence: 1,
+					configurationRevision: row.profile.policy.configurationRevision,
+					imageDigest: row.profile.policy.imageDigest,
+					now: clock.now,
+					hasUnresolvedExecution: false,
+					proofVerified: false,
+				},
+			});
+			if (!next) return false;
+			const state = ExecutorInstanceStateV2Schema.parse(next.state);
+			const startup = {
+				schemaVersion: 1 as const,
+				startupRef: state.startupRef,
+				deadlineMs: state.expiresAt,
+				writer: original?.writer ?? {
+					owner: lease.leaseOwner,
+					fence: lease.deliveryFence,
+				},
+				projection: original?.projection ?? null,
+				consumption: original?.consumption ?? null,
+				instance: state,
+			};
+			const operations = podIntent
+				? [
+						...row.operations,
+						{
+							...podIntent,
+							writeCompletion: "pending" as const,
+							writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+						},
+					]
+				: row.operations;
+			const written = await tx`update platform.session_sandbox_reserves
+				set executor_startup=${tx.json(startup as unknown as Json)}, operations=${tx.json(operations as unknown as Json)}, updated_at=clock_timestamp()
+				where sandbox_id=${row.sandbox_id} and status<>'claimed' and lease_owner=${lease.leaseOwner}
+				and delivery_fence=${lease.deliveryFence} and lease_expires_at>clock_timestamp()
+				and (${mutation.kind !== "pod-create"} or ${state.expiresAt}::float8>extract(epoch from clock_timestamp())*1000) returning sandbox_id`;
+			if (written.length !== 1) return false;
+			return { state, permit: next.permit };
+		});
+		return decision === false ? null : decision;
+	}
 	/**
 	 * Fix the projection attempt and Host public identity after the actual Pod UID
 	 * is read back and before the projection is created. One attempt never re-keys.
@@ -1656,6 +1837,11 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			readonly hostKeyId: string;
 			readonly hostPublicKey: string;
 			readonly bindingDigest: string;
+			/** V2 key/identity adoption and the original create intent commit atomically. */
+			readonly instanceDelivery?: {
+				readonly runnerPublicKey: string;
+				readonly identityDigest: string;
+			};
 		},
 	): Promise<boolean> {
 		if (
@@ -1678,7 +1864,12 @@ export class PostgresSessionSandboxReserveStoreV1 {
 					existing.podUid === input.podUid &&
 					existing.hostKeyId === input.hostKeyId &&
 					existing.hostPublicKey === input.hostPublicKey &&
-					existing.bindingDigest === input.bindingDigest
+					existing.bindingDigest === input.bindingDigest &&
+					(!startup.instance ||
+						(input.instanceDelivery?.runnerPublicKey ===
+							startup.instance.delivery?.runnerPublicKey &&
+							input.instanceDelivery?.identityDigest ===
+								startup.instance.delivery?.identityDigest))
 				);
 			const pod = row.operations.find(
 				(operation) =>
@@ -1694,25 +1885,75 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				!(await this.#beforeExecutorDeadline(tx, startup))
 			)
 				return false;
-			await this.#writeExecutor(tx, row, {
-				...startup,
-				projection: {
-					podUid: input.podUid,
-					hostKeyId: input.hostKeyId,
-					hostPublicKey: input.hostPublicKey,
-					bindingDigest: input.bindingDigest,
-					create: {
-						attemptId: input.attemptId,
-						status: "pending",
-						resource: null,
-						absent: false,
-						writeCompletion: "pending",
-						writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+			let instance = startup.instance;
+			if (instance) {
+				if (
+					input.attemptId !== instance.attemptId ||
+					!input.instanceDelivery ||
+					instance.phase !== "bound" ||
+					instance.podUid !== input.podUid ||
+					instance.bindingDigest !== input.bindingDigest ||
+					!instance.recordRef ||
+					input.hostKeyId !==
+						createHash("sha256").update(input.hostPublicKey).digest("hex")
+				)
+					return false;
+				const [clock] = await tx<
+					{ now: number }[]
+				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				if (!clock) return false;
+				const next = transitionExecutorInstanceV2({
+					state: instance,
+					mutation: {
+						kind: "delivery",
+						attemptId: instance.attemptId,
+						revision: instance.revision,
+						hostPublicKey: input.hostPublicKey,
+						runnerPublicKey: input.instanceDelivery.runnerPublicKey,
+						identityDigest: input.instanceDelivery.identityDigest,
 					},
-					deletes: [],
+					authority: {
+						namespace: row.namespace,
+						podName: `sandbox-${row.sandbox_id}`,
+						sandboxId: row.sandbox_id,
+						generation: 1,
+						resourceFence: 1,
+						configurationRevision: row.profile.policy.configurationRevision,
+						imageDigest: row.profile.policy.imageDigest,
+						now: clock.now,
+						hasUnresolvedExecution: false,
+						proofVerified: false,
+					},
+				});
+				if (!next?.permit) return false;
+				instance = ExecutorInstanceStateV2Schema.parse(next.state);
+			}
+			return this.#writeExecutor(
+				tx,
+				row,
+				{
+					...startup,
+					...(instance ? { instance } : {}),
+					projection: {
+						podUid: input.podUid,
+						hostKeyId: input.hostKeyId,
+						hostPublicKey: input.hostPublicKey,
+						bindingDigest: input.bindingDigest,
+						create: {
+							attemptId: input.attemptId,
+							status: "pending",
+							resource: null,
+							absent: false,
+							writeCompletion: "pending",
+							writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+						},
+						deletes: [],
+					},
 				},
-			});
-			return true;
+				row.status,
+				undefined,
+				lease,
+			);
 		});
 	}
 	/** Original projection create response; like `recordCreateResponse`, only the original writer settles it. */
@@ -1746,8 +1987,39 @@ export class PostgresSessionSandboxReserveStoreV1 {
 					: input.resource !== null)
 			)
 				return false;
+			let instance = startup.instance;
+			if (instance && input.response === "created" && input.resource) {
+				const [clock] = await tx<
+					{ now: number }[]
+				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				if (!clock) return false;
+				const published = transitionExecutorInstanceV2({
+					state: instance,
+					mutation: {
+						kind: "published",
+						attemptId: instance.attemptId,
+						revision: instance.revision,
+						projection: { ...input.resource, kind: "Secret" },
+					},
+					authority: {
+						namespace: row.namespace,
+						podName: `sandbox-${row.sandbox_id}`,
+						sandboxId: row.sandbox_id,
+						generation: 1,
+						resourceFence: 1,
+						configurationRevision: row.profile.policy.configurationRevision,
+						imageDigest: row.profile.policy.imageDigest,
+						now: clock.now,
+						hasUnresolvedExecution: false,
+						proofVerified: false,
+					},
+				});
+				if (!published) return false;
+				instance = ExecutorInstanceStateV2Schema.parse(published.state);
+			}
 			const next: SessionSandboxReserveExecutorStartupV1 = {
 				...startup,
+				...(instance ? { instance } : {}),
 				projection: {
 					...projection,
 					create: {
