@@ -2495,7 +2495,7 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
 固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
 （不超过 24）以及已核实第 1 项前提的 Connection 发布版本或修订。任一项缺失或无效时，动态手工安装
-保持关闭。风险接受与取舍见 [ADR-0046](../adr/0046-m1-connection-principal-first-binding-exception.md)。
+保持关闭。风险接受与取舍见 [ADR-0047](../adr/0047-m1-connection-principal-first-binding-exception.md)。
 
 1. **前提：Connection 实例绑定不变式。** Connection 批准 OAuth 授权时，只在 DEVICE 实例尚未绑定
    Principal 或已绑定同一 Principal 时成功，并在同一事务把该 Principal 写入实例；其他 Principal
