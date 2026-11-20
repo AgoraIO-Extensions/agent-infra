@@ -654,6 +654,63 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		await expect(begin()).rejects.toMatchObject({ code: "denied" });
 	});
 
+	// PR-Agent on #4206: the static-only `execute` entry used to commit the manual
+	// begin before refusing its projection. It now refuses before any write.
+	it("refuses the manual route through the static-only entry before any write", async () => {
+		const facts = async () => {
+			const [row] = await client`select
+				(select count(*)::int from platform.connection_installation_authorizations) as authorizations,
+				(select count(*)::int from platform.connection_manual_installations) as installations,
+				(select count(*)::int from platform.connection_installation_commands) as commands,
+				(select count(*)::int from platform.idempotency_records where scope_type='connection_installation') as receipts,
+				(select count(*)::int from platform.audit_events where action like 'connection.installation.%') as audits`;
+			return row;
+		};
+		const before = await facts();
+		const staticRequest = (
+			command: "begin" | "confirm" | "status",
+			authorizationId?: string,
+		) =>
+			use.execute({
+				userId: "alice",
+				identityRevision: "identity-r1",
+				command,
+				...(command === "begin"
+					? { executionId: "execution-a" }
+					: { authorizationId }),
+				...(command === "status" ? {} : { idempotencyKey: randomUUID() }),
+				requestId: "request",
+				traceId: "trace",
+			});
+		await expect(staticRequest("begin")).rejects.toMatchObject({
+			code: "denied",
+		});
+		expect(await facts()).toEqual(before);
+
+		// Before and after the receipt CAS, the static entry neither reads back nor
+		// enqueues a manual status, begin_status or confirm.
+		const run = await prepareDelivered();
+		const commands = () =>
+			client`select command, status from platform.connection_installation_commands
+				where authorization_id=${run.authorizationId} order by created_at, command`;
+		const pending = await commands();
+		for (const command of ["status", "confirm"] as const)
+			await expect(
+				staticRequest(command, run.authorizationId),
+			).rejects.toMatchObject({ code: "denied" });
+		expect(await commands()).toEqual(pending);
+		expect(await settlePrepared(run)).toBe("registered");
+		const bound = await commands();
+		for (const command of ["status", "confirm"] as const)
+			await expect(
+				staticRequest(command, run.authorizationId),
+			).rejects.toMatchObject({ code: "denied" });
+		expect(await commands()).toEqual(bound);
+		const [audits] =
+			await client`select count(*)::int as n from platform.audit_events where details->>'authorizationId'=${run.authorizationId}`;
+		expect(audits?.n).toBe(1);
+	});
+
 	it("claims only on the original claim holder and fixes one template", async () => {
 		const projection = await begin();
 		const pending = await manual.listPending(32, ["execution-a"]);
