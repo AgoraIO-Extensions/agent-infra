@@ -536,3 +536,74 @@ it("exposes only allowlisted material audit metadata to administrators and never
 		capture.mockRestore();
 	}
 });
+
+it("keeps authorized history readable on a disabled replica without reopening admission", async () => {
+	const intent = ApplicationCredentialMaterialMetadataV1Schema.parse(
+		await (await post(path, command)).json(),
+	);
+	await (
+		await post(
+			`${path}/${intent.attemptId}/receive`,
+			{ schemaVersion: 1 },
+			"recipient",
+		)
+	).arrayBuffer();
+	const replica = assemblePlatformApi({
+		...assemblyInput,
+		applicationCredentialMaterialDelivery: { schemaVersion: 1, enabled: false },
+	});
+	const listener = serve({
+		fetch: createPlatformApp(replica.dependencies).fetch,
+		hostname: "127.0.0.1",
+		port: 0,
+	});
+	await once(listener, "listening");
+	const address = listener.address();
+	if (!address || typeof address === "string")
+		throw new Error("Listener absent");
+	const app = {
+		request: (path: string, init?: RequestInit) =>
+			fetch(`http://127.0.0.1:${address.port}${path}`, init),
+	};
+	try {
+		for (const user of ["manager", "recipient"]) {
+			const response = await app.request(`${path}/${intent.attemptId}`, {
+				headers: { Cookie: `fixture=${user}` },
+			});
+			expect(response.status).toBe(200);
+			expect(
+				Object.hasOwn(
+					ApplicationCredentialMaterialMetadataV1Schema.parse(
+						await response.json(),
+					),
+					"material",
+				),
+			).toBe(false);
+		}
+		expect(
+			(
+				await app.request(`${path}/${intent.attemptId}`, {
+					headers: { Cookie: "fixture=other" },
+				})
+			).status,
+		).toBe(404);
+		for (const target of [path, `${path}/${intent.attemptId}/receive`])
+			expect(
+				(
+					await app.request(target, {
+						method: "POST",
+						headers: {
+							Cookie: "fixture=recipient",
+							Origin: publicOrigin,
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1 }),
+					})
+				).status,
+			).toBe(503);
+	} finally {
+		if (listener instanceof Server) listener.closeAllConnections();
+		await new Promise<void>((resolve) => listener.close(() => resolve()));
+		await replica.close();
+	}
+});

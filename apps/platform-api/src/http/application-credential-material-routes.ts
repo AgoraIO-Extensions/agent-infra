@@ -133,7 +133,7 @@ export function registerApplicationCredentialMaterialRoutesV1(
 						request,
 						metadata.traceId,
 					);
-					if (!input.delivery.publicOrigin)
+					if (operation !== "read" && !input.delivery.publicOrigin)
 						throw new HttpProtocolError(
 							"DEPENDENCY_UNAVAILABLE",
 							metadata.traceId,

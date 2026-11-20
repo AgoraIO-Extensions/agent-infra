@@ -10,6 +10,7 @@ import {
 import { authorizeApplicationCredentialDeliveryV1 } from "./application-credential-authority.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
+	PersonalApiCredentialErrorV1,
 	type PersonalApiCredentialScopeV1,
 	requirePersonalApiCredentialFutureExpiryV1,
 	requirePersonalApiUserActiveV1,
@@ -27,7 +28,27 @@ export interface ApplicationCredentialMaterialConfigurationV1 {
 		readonly principalId: string;
 	}[];
 }
+export type MaterialFailureReasonV1 =
+	| "deadline_exceeded"
+	| "authorization_changed"
+	| "credential_changed"
+	| "request_aborted"
+	| "dependency_unavailable"
+	| "claim_commit_unconfirmed"
+	| "generation_failed"
+	| "generation_commit_unconfirmed"
+	| "transport_failed"
+	| "transmission_failed"
+	| "transmission_commit_unconfirmed"
+	| "confirmation_failed"
+	| "confirmation_commit_unconfirmed";
+class MaterialFailure extends ApplicationApiCredentialErrorV1 {
+	constructor(readonly reason: MaterialFailureReasonV1) {
+		super("unavailable");
+	}
+}
 export interface ApplicationCredentialMaterialRecordV1 {
+	readonly failureReason?: MaterialFailureReasonV1 | null;
 	readonly schemaVersion: 1;
 	readonly managerUserId: string;
 	readonly managerRevision: string;
@@ -212,7 +233,7 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 			throw new ApplicationApiCredentialErrorV1("forbidden");
 	}
 	async function inspect(request: MaterialRequest, recipientOnly: boolean) {
-		if (!policy) fail("unavailable");
+		if (recipientOnly && !policy) fail("unavailable");
 		const record = await input.store.inspect(
 			request.applicationId,
 			request.attemptId,
@@ -224,7 +245,8 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 				record.command.recipient.principalId !== request.userId)
 		)
 			fail("not_found");
-		requireConfigured(request.applicationId, record.command.recipient);
+		if (recipientOnly)
+			requireConfigured(request.applicationId, record.command.recipient);
 		return record;
 	}
 	async function authorized(
@@ -267,7 +289,9 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 		fence: string | null,
 		signal?: AbortSignal,
 	) {
-		signal?.throwIfAborted();
+		if ((await tx.databaseTime()).getTime() >= Date.parse(record.expiresAt))
+			throw new MaterialFailure("deadline_exceeded");
+		if (signal?.aborted) throw new MaterialFailure("request_aborted");
 		if (
 			!fence ||
 			record.result.metadata.fence !== fence ||
@@ -287,16 +311,92 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 			) &&
 			(await tx.databaseTime()).getTime() >= Date.parse(record.expiresAt)
 		) {
-			const expired = change(
-				record,
-				record.result.metadata.phase,
-				record.result.metadata.phase === "pending" ? "failed" : "unknown",
-			);
+			const expired = {
+				...change(
+					record,
+					record.result.metadata.phase,
+					record.result.metadata.phase === "pending" ? "failed" : "unknown",
+				),
+				failureReason: "deadline_exceeded" as const,
+			};
 			await tx.save(expired);
 			await tx.audit(request, expired, "expired", "failed");
 			return expired;
 		}
 		return record;
+	}
+	function reasonFor(
+		error: unknown,
+		stage: "claim" | "generation" | "transmission",
+		prepared: boolean,
+		signal?: AbortSignal,
+		written = false,
+	): MaterialFailureReasonV1 {
+		if (error instanceof MaterialFailure) return error.reason;
+		if (
+			error instanceof PersonalApiCredentialErrorV1 &&
+			["forbidden", "authentication_required"].includes(error.code)
+		)
+			return "authorization_changed";
+		if (
+			error instanceof ApplicationApiCredentialErrorV1 &&
+			error.code === "forbidden"
+		)
+			return "authorization_changed";
+		if (
+			error instanceof ApplicationApiCredentialErrorV1 &&
+			error.code === "idempotency_conflict"
+		)
+			return "credential_changed";
+		if (signal?.aborted) return "request_aborted";
+		if (prepared) return `${stage}_commit_unconfirmed`;
+		return stage === "claim"
+			? "dependency_unavailable"
+			: stage === "generation"
+				? "generation_failed"
+				: written
+					? "transmission_failed"
+					: "transport_failed";
+	}
+	async function recordFailure(
+		request: MaterialRequest,
+		snapshot: ApplicationCredentialMaterialRecordV1,
+		fence: string | null,
+		reason: MaterialFailureReasonV1,
+	) {
+		try {
+			await input.store.execute(async (tx) => {
+				await tx.lockUserDisabled(snapshot.managerUserId);
+				await tx.lockApplication(request.applicationId);
+				await tx.lockGrant(request.applicationId, snapshot.command.recipient);
+				const saved = await tx.lockByAttempt(
+					request.applicationId,
+					request.attemptId,
+				);
+				if (
+					!saved ||
+					saved.result.delivery.status === "accepted" ||
+					(saved.result.metadata.fence !== fence &&
+						saved.result.metadata.phase !== "pending")
+				)
+					return;
+				const failed = {
+					...change(
+						saved,
+						saved.result.metadata.phase,
+						fence === null && saved.result.metadata.phase === "pending"
+							? "failed"
+							: "unknown",
+						saved.result.metadata.fence ?? fence,
+					),
+					failureReason: reason,
+				};
+				await tx.save(failed);
+				await tx.audit(request, failed, "unknown", "failed");
+			});
+		} catch {
+			/* Durable original claim remains non-replayable if reconciliation fails. */
+		}
 	}
 	return {
 		publicOrigin: policy?.publicOrigin,
@@ -321,7 +421,14 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 						request.applicationId,
 						snapshot.command.recipient,
 					);
-					if (!grant || grant.revokedAt !== null) fail("not_found");
+					if (
+						!grant ||
+						grant.revokedAt !== null ||
+						grant.applicationId !== request.applicationId ||
+						grant.principalType !== snapshot.command.recipient.principalType ||
+						grant.principalId !== snapshot.command.recipient.principalId
+					)
+						fail("not_found");
 				}
 				const saved = await tx.lockByAttempt(
 					request.applicationId,
@@ -342,25 +449,43 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 			) => Promise<void>,
 		) {
 			const snapshot = await inspect(request, true);
-			const claim = await input.store.execute(async (tx) => {
-				const saved = await authorized(tx, request, snapshot);
-				const current = await expire(tx, request, saved);
-				if (
-					current.result.delivery.status !== "delivery_pending" ||
-					current.result.metadata.phase !== "pending"
-				)
-					return { record: current, fresh: false };
-				request.signal?.throwIfAborted();
-				const record = change(
-					current,
-					"claimed",
-					"delivery_in_flight",
-					randomUUID(),
+			const claimFence = randomUUID();
+			let claimPrepared = false;
+			let claim: {
+				record: ApplicationCredentialMaterialRecordV1;
+				fresh: boolean;
+			};
+			try {
+				claim = await input.store.execute(async (tx) => {
+					const saved = await authorized(tx, request, snapshot);
+					const current = await expire(tx, request, saved);
+					if (
+						current.result.delivery.status !== "delivery_pending" ||
+						current.result.metadata.phase !== "pending"
+					)
+						return { record: current, fresh: false };
+					request.signal?.throwIfAborted();
+					const record = change(
+						current,
+						"claimed",
+						"delivery_in_flight",
+						claimFence,
+					);
+					await tx.save(record);
+					await tx.audit(request, record, "claimed", "succeeded");
+					claimPrepared = true;
+					return { record, fresh: true };
+				});
+			} catch (error) {
+				await recordFailure(
+					request,
+					snapshot,
+					claimPrepared ? claimFence : null,
+					reasonFor(error, "claim", claimPrepared, request.signal),
 				);
-				await tx.save(record);
-				await tx.audit(request, record, "claimed", "succeeded");
-				return { record, fresh: true };
-			});
+				throw error;
+			}
+
 			if (!claim.fresh)
 				return applicationCredentialMaterialMetadataV1(claim.record, true);
 			const controller = new AbortController();
@@ -375,6 +500,9 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 				),
 			);
 			let material: string | undefined;
+			let stage: "generation" | "transmission" = "generation";
+			let prepared = false;
+			let written = false;
 			try {
 				await input.store.execute(async (tx) => {
 					const record = await authorized(tx, request, snapshot);
@@ -408,7 +536,10 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 						record.command.operation === "issue" ? "issued" : "rotated",
 						"succeeded",
 					);
+					prepared = true;
 				});
+				stage = "transmission";
+				prepared = false;
 				return await input.store.execute(async (tx) => {
 					const record = await authorized(tx, request, snapshot);
 					await live(tx, record, claim.record.result.metadata.fence, signal);
@@ -427,6 +558,7 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 						applicationCredentialMaterialMetadataV1(record),
 						signal,
 					);
+					written = true;
 					await live(tx, record, claim.record.result.metadata.fence, signal);
 					const transmitted = change(
 						record,
@@ -435,40 +567,20 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 					);
 					await tx.save(transmitted);
 					await tx.audit(request, transmitted, "transmitted", "succeeded");
+					prepared = true;
 					return applicationCredentialMaterialMetadataV1(transmitted);
 				});
 			} catch (error) {
+				const reason = controller.signal.aborted
+					? "deadline_exceeded"
+					: reasonFor(error, stage, prepared, signal, written);
 				controller.abort();
-				try {
-					await input.store.execute(async (tx) => {
-						await tx.lockUserDisabled(snapshot.managerUserId);
-						await tx.lockApplication(request.applicationId);
-						await tx.lockGrant(
-							request.applicationId,
-							snapshot.command.recipient,
-						);
-						const saved = await tx.lockByAttempt(
-							request.applicationId,
-							request.attemptId,
-						);
-						if (
-							saved &&
-							saved.result.metadata.fence ===
-								claim.record.result.metadata.fence &&
-							saved.result.delivery.status !== "accepted"
-						) {
-							const unknown = change(
-								saved,
-								saved.result.metadata.phase,
-								"unknown",
-							);
-							await tx.save(unknown);
-							await tx.audit(request, unknown, "unknown", "failed");
-						}
-					});
-				} catch {
-					/* The original durable in-flight claim still prevents material replay. */
-				}
+				await recordFailure(
+					request,
+					snapshot,
+					claim.record.result.metadata.fence,
+					reason,
+				);
 				if (error instanceof ApplicationApiCredentialErrorV1) throw error;
 				fail("unavailable");
 			} finally {
@@ -481,27 +593,46 @@ export function createApplicationCredentialMaterialDeliveryV1(input: {
 			confirmation: { credentialId: string; fence: string },
 		) {
 			const snapshot = await inspect(request, true);
-			return input.store.execute(async (tx) => {
-				const record = await authorized(tx, request, snapshot);
-				if (
-					confirmation.credentialId !== record.result.metadata.credentialId ||
-					confirmation.fence !== record.result.metadata.fence
-				)
-					fail("not_found");
-				if (record.result.delivery.status === "accepted")
-					return applicationCredentialMaterialMetadataV1(record, true);
-				await live(tx, record, confirmation.fence);
-				const credential = await tx.lockActiveCredential(request.applicationId);
-				if (
-					record.result.metadata.phase !== "transmitted" ||
-					credential?.credentialId !== confirmation.credentialId
-				)
-					fail("idempotency_conflict");
-				const accepted = change(record, "accepted", "accepted");
-				await tx.save(accepted);
-				await tx.audit(request, accepted, "accepted", "succeeded");
-				return applicationCredentialMaterialMetadataV1(accepted);
-			});
+			let confirming = false;
+			let committing = false;
+			try {
+				return await input.store.execute(async (tx) => {
+					const record = await authorized(tx, request, snapshot);
+					if (
+						confirmation.credentialId !== record.result.metadata.credentialId ||
+						confirmation.fence !== record.result.metadata.fence
+					)
+						fail("not_found");
+					if (record.result.delivery.status === "accepted")
+						return applicationCredentialMaterialMetadataV1(record, true);
+					await live(tx, record, confirmation.fence);
+					const credential = await tx.lockActiveCredential(
+						request.applicationId,
+					);
+					if (
+						record.result.metadata.phase !== "transmitted" ||
+						credential?.credentialId !== confirmation.credentialId
+					)
+						fail("idempotency_conflict");
+					confirming = true;
+					const accepted = change(record, "accepted", "accepted");
+					await tx.save(accepted);
+					await tx.audit(request, accepted, "accepted", "succeeded");
+					committing = true;
+					return applicationCredentialMaterialMetadataV1(accepted);
+				});
+			} catch (error) {
+				if (confirming)
+					await recordFailure(
+						request,
+						snapshot,
+						confirmation.fence,
+						committing
+							? "confirmation_commit_unconfirmed"
+							: "confirmation_failed",
+					);
+				throw error;
+			}
 		},
 
 		async prepare(

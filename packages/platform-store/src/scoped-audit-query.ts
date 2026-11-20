@@ -655,9 +655,27 @@ function materialDeliverySummary(
 		!d ||
 		typeof d !== "object" ||
 		Array.isArray(d) ||
-		Object.keys(d).sort().join() !==
-			"attemptId,containsMaterial,credentialId,deliveryStatus,fence,grantRevision,managerId,phase,recipient" ||
+		![
+			"attemptId,containsMaterial,credentialId,deliveryStatus,fence,grantRevision,managerId,phase,recipient",
+			"attemptId,containsMaterial,credentialId,deliveryStatus,failureReason,fence,grantRevision,managerId,phase,recipient",
+		].includes(Object.keys(d).sort().join()) ||
 		d.containsMaterial !== false ||
+		(d.failureReason != null &&
+			![
+				"deadline_exceeded",
+				"authorization_changed",
+				"credential_changed",
+				"request_aborted",
+				"dependency_unavailable",
+				"claim_commit_unconfirmed",
+				"generation_failed",
+				"generation_commit_unconfirmed",
+				"transport_failed",
+				"transmission_failed",
+				"transmission_commit_unconfirmed",
+				"confirmation_failed",
+				"confirmation_commit_unconfirmed",
+			].includes(String(d.failureReason))) ||
 		![d.managerId, d.credentialId, d.attemptId, d.grantRevision].every(
 			boundedText,
 		) ||
@@ -683,7 +701,7 @@ function materialDeliverySummary(
 		!boundedText(recipient.principalId)
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
-	return `${row.action}: status=${d.deliveryStatus}`;
+	return `${row.action}: status=${d.deliveryStatus}${d.failureReason ? ` reason=${d.failureReason}` : ""}`;
 }
 const applicationCredentialActions = new Set([
 	"application.credential.issued",

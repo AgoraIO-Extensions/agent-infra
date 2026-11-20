@@ -36,6 +36,22 @@ function decode(
 		if (
 			row.status !== "completed" ||
 			record.schemaVersion !== 1 ||
+			(record.failureReason != null &&
+				![
+					"deadline_exceeded",
+					"authorization_changed",
+					"credential_changed",
+					"request_aborted",
+					"dependency_unavailable",
+					"claim_commit_unconfirmed",
+					"generation_failed",
+					"generation_commit_unconfirmed",
+					"transport_failed",
+					"transmission_failed",
+					"transmission_commit_unconfirmed",
+					"confirmation_failed",
+					"confirmation_commit_unconfirmed",
+				].includes(record.failureReason)) ||
 			record.managerUserId !== row.actorId ||
 			record.requestDigest !== row.requestDigest ||
 			record.idempotencyKey !== row.idempotencyKey ||
@@ -130,6 +146,7 @@ function operations(
 					phase: record.result.metadata.phase,
 					fence: record.result.metadata.fence,
 					containsMaterial: false,
+					failureReason: record.failureReason ?? null,
 				},
 			});
 		},
