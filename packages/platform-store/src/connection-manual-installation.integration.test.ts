@@ -3488,6 +3488,143 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		}
 	});
 
+	// §13.5.6 step 3: the exchange readback is read-only and admits only the
+	// receipt this confirm's phase 2 was opened with, its active pin and phase 1.
+	it("allows the exchange readback only with this installation's own receipt and active pin", async () => {
+		const alice = await confirmed();
+		const alicePhase = await bindingReadback(alice);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...alicePhase,
+					candidate: await candidateFor(alice, alicePhase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const bob = await confirmed("bob", "bob", "worker-b");
+		const bobPhase = await bindingReadback(bob);
+		const bobPinned = await manual.commitConfirmPin({
+			...bobPhase,
+			candidate: await candidateFor(bob, bobPhase, "principal-b"),
+		});
+		expect(bobPinned.outcome).toBe("pinned");
+		const exchange = await manual.openConfirmPhase({
+			confirmCommandId: alicePhase.confirmCommandId,
+			attemptId: alicePhase.attemptId,
+			attemptOwner: alicePhase.attemptOwner,
+			authorizationId: alicePhase.authorizationId,
+			phase: "confirm_exchange",
+		});
+		if (!exchange?.receipt) throw new Error("phase 2 not opened");
+		expect(
+			await manual.commitDelivery({
+				commandId: exchange.phaseCommandId,
+				attemptId: alicePhase.attemptId,
+				attemptOwner: alicePhase.attemptOwner,
+				command: "confirm_exchange",
+				authorizationId: alicePhase.authorizationId,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		const [row] =
+			await client`select descriptor_digest from platform.connection_manual_installations where authorization_id=${alice.run.authorizationId}`;
+		const readback = (pinReceipt?: { id: string; candidateDigest: string }) =>
+			manual.readback({
+				...alice.run.commandReadback,
+				command: {
+					...alice.run.commandReadback.command,
+					commandId: exchange.phaseCommandId,
+					attemptId: alicePhase.attemptId,
+					attemptOwner: alicePhase.attemptOwner,
+					command: "confirm_exchange",
+					requestDigest: "7".repeat(64),
+					descriptorDigest: row?.descriptor_digest as string,
+					...(pinReceipt ? { pinReceipt } : {}),
+				},
+			});
+		const own = {
+			id: exchange.receipt.id,
+			candidateDigest: exchange.receipt.candidateDigest,
+		};
+		expect(await readback(own)).toBe("allowed");
+		expect(await readback()).toBe("denied");
+		expect(await readback({ ...own, candidateDigest: "8".repeat(64) })).toBe(
+			"denied",
+		);
+		if (bobPinned.outcome !== "pinned") throw new Error("bob not pinned");
+		expect(
+			await readback({
+				id: bobPinned.receipt.id,
+				candidateDigest: bobPinned.receipt.candidateDigest,
+			}),
+		).toBe("denied");
+		// A pin re-issued at another revision never admits the old receipt.
+		await client`update platform.connection_principal_pins set revision=revision+1 where user_id='alice'`;
+		expect(await readback(own)).toBe("denied");
+	});
+
+	// #4309 S2 (§13.5.6): only the original attempt drives the phases and an
+	// unknown confirm is never resent, so a confirm that lapsed after its pin but
+	// before its exchange opened is closed and its original key revoked.
+	it("closes a confirm stranded between its pin and its exchange and revokes the original key", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		expect(
+			(await manual.commitConfirmPin({ ...phase, candidate })).outcome,
+		).toBe("pinned");
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+			where authorization_id=${flow.run.authorizationId} and status='sending'`;
+		await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "revoked",
+			revoke_state: "pending",
+			confirm: "confirm:unknown,confirm_binding_readback:completed",
+		});
+		const [revoke] =
+			await client`select status from platform.connection_installation_commands where authorization_id=${flow.run.authorizationId} and command='revoke'`;
+		expect(revoke?.status).toBe("pending");
+		expect(
+			await manual.openConfirmPhase({
+				confirmCommandId: phase.confirmCommandId,
+				attemptId: phase.attemptId,
+				attemptOwner: phase.attemptOwner,
+				authorizationId: phase.authorizationId,
+				phase: "confirm_exchange",
+			}),
+		).toBeNull();
+	});
+
+	it("leaves an unknown confirm whose exchange was already sent for read-only verification", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		const candidate = await candidateFor(flow, phase);
+		expect(
+			(await manual.commitConfirmPin({ ...phase, candidate })).outcome,
+		).toBe("pinned");
+		const exchange = await manual.openConfirmPhase({
+			confirmCommandId: phase.confirmCommandId,
+			attemptId: phase.attemptId,
+			attemptOwner: phase.attemptOwner,
+			authorizationId: phase.authorizationId,
+			phase: "confirm_exchange",
+		});
+		expect(exchange?.receipt).toBeDefined();
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+			where authorization_id=${flow.run.authorizationId} and status='sending'`;
+		await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "confirmed",
+			revoke_state: "not_required",
+			confirm:
+				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:unknown",
+		});
+	});
+
 	it("refuses a Principal another user confirmed outside the exception", async () => {
 		const confirmedElsewhere = new PostgresConnectionManualInstallationStoreV1({
 			databaseUrl: database.databaseUrl,

@@ -23,6 +23,8 @@ export const connectionInstallPathsV1 = {
 	/** §13.5.6 exception confirm, phase 1 (contract `connection-manual-confirm/v1`). */
 	confirmBindingReadback:
 		"/internal/runtime/connection-install/v1/confirm/binding-readback",
+	/** §13.5.6 exception confirm, phase 2 (same contract). */
+	confirmExchange: "/internal/runtime/connection-install/v1/confirm/exchange",
 	readback: "/internal/platform-worker/v1/connection-install/readback",
 } as const;
 
@@ -412,6 +414,7 @@ export const ConnectionInstallCommandClaimsV1Schema = z.strictObject({
 		"revoke",
 		"begin_status",
 		"confirm_binding_readback",
+		"confirm_exchange",
 	]),
 	...commandAttempt,
 	authorizationId: OpaqueIdV1Schema,
@@ -560,6 +563,51 @@ export type ConnectionInstallConfirmBindingReadbackResponseV1 = z.infer<
 	typeof ConnectionInstallConfirmBindingReadbackResponseV1Schema
 >;
 
+/**
+ * §13.5.6 exception confirm, phase 2 (`exchange`): sent only after this
+ * confirm's first-pin receipt committed. It carries the receipt reference and
+ * the phase-1 candidate whose digest the receipt fixed; the Host verifies both
+ * through the read-only command readback before it reads the binding back
+ * again and exchanges the original code once. `commandId` is the phase command.
+ */
+export const ConnectionInstallConfirmExchangeRequestV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	contract: z.literal(connectionManualConfirmContractV1),
+	phase: z.literal("exchange"),
+	confirmCommandId: OpaqueIdV1Schema.max(128),
+	...commandAttempt,
+	template: ConnectionRegistrationTemplateV1Schema,
+	supplyAttemptId: contextText,
+	registrationKey: ConnectionRegistrationKeyV1Schema,
+	descriptor: ConnectionManualInstallDescriptorV1Schema,
+	pinReceipt: z.strictObject({
+		id: OpaqueIdV1Schema,
+		revision: positive,
+		candidateDigest: hex64,
+	}),
+	candidate: ConnectionManualConfirmCandidateV1Schema,
+	/** Registration JWS with command `confirm_exchange`. */
+	grant: compactJws,
+});
+export type ConnectionInstallConfirmExchangeRequestV1 = z.infer<
+	typeof ConnectionInstallConfirmExchangeRequestV1Schema
+>;
+/**
+ * `exchanged`: the Host exchanged the original code once and holds the
+ * material in its private transaction; nothing is published and MCP stays
+ * closed until the publication and the Platform permit exist. `rejected`: the
+ * binding no longer matches the pinned candidate, nothing was exchanged.
+ */
+export const ConnectionInstallConfirmExchangeResponseV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	contract: z.literal(connectionManualConfirmContractV1),
+	outcome: z.enum(["exchanged", "rejected", "unknown"]),
+	commandId: OpaqueIdV1Schema,
+});
+export type ConnectionInstallConfirmExchangeResponseV1 = z.infer<
+	typeof ConnectionInstallConfirmExchangeResponseV1Schema
+>;
+
 export const ConnectionInstallReadbackPurposeV1Schema = z.enum([
 	"supply",
 	"supply_delivery",
@@ -599,6 +647,10 @@ export const ConnectionInstallReadbackRequestV1Schema = z.strictObject({
 			configurationDigest: hex64.optional(),
 			receiptDigest: hex64.optional(),
 			descriptorDigest: hex64.optional(),
+			/** Exception `confirm_exchange` only: the first-pin receipt it was opened with. */
+			pinReceipt: z
+				.strictObject({ id: OpaqueIdV1Schema, candidateDigest: hex64 })
+				.optional(),
 		})
 		.optional(),
 	nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),

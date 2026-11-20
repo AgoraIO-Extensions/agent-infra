@@ -320,6 +320,54 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				where c.authorization_id = m.authorization_id and c.command='revoke' and c.status='sending')
 		`),
 		);
+		if (signal?.aborted) return;
+		await this.#closeStrandedConfirms();
+	}
+
+	/**
+	 * §13.5.6 (#4309 S2): a logical confirm that ended unknown after phase 1
+	 * committed its pin but before its `exchange` phase ever opened can no
+	 * longer send it: only the original attempt drives the phases and an
+	 * unknown confirm is never resent. The installation is closed and the
+	 * original key revoked; the pin stays (exception item 6).
+	 */
+	async #closeStrandedConfirms() {
+		await this.#transaction(async (tx) => {
+			const stranded = await tx.execute(sql`
+				select a.id from platform.connection_installation_authorizations a
+				join platform.connection_manual_installations m on m.authorization_id=a.id
+				join platform.connection_installation_commands c on c.authorization_id=a.id
+					and c.command='confirm' and c.status='unknown'
+				join platform.connection_installation_commands b on b.authorization_id=a.id
+					and b.command='confirm_binding_readback' and b.status='completed'
+					and b.idempotency_key='confirm-phase:' || c.id || ':confirm_binding_readback'
+				where a.status='confirmed' and m.revoke_state='not_required'
+					and not exists (select 1 from platform.connection_installation_commands x
+						where x.authorization_id=a.id
+							and x.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange')
+				order by a.id
+				limit 32
+				for update of a, m
+			`);
+			for (const { id } of stranded) {
+				const authorizationId = id as string;
+				await tx.execute(sql`
+					update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
+						updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'
+				`);
+				await tx.execute(sql`
+					update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,
+						updated_at=clock_timestamp() where authorization_id=${authorizationId} and revoke_state='not_required'
+				`);
+				await tx.execute(sql`
+					insert into platform.connection_installation_commands
+						(id, authorization_id, command, idempotency_key, request_digest, status)
+					values (${randomUUID()}, ${authorizationId}, 'revoke', ${`manual-revoke:${authorizationId}`},
+						${sha256(JSON.stringify(["revoke", "confirm-stranded", authorizationId]))}, 'pending')
+					on conflict (authorization_id, command, idempotency_key) do nothing
+				`);
+			}
+		});
 	}
 
 	/**
@@ -1274,11 +1322,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/**
-	 * Settles exception confirm phase 1 without a candidate. `rejected` means the
-	 * Host's EP-1060 readback failed the exception gates (§13.5.1 item 2): no
-	 * exchange, close and revoke the original key. Anything else, including a
-	 * lost response, keeps the phase and the logical confirm unknown; neither is
-	 * resent automatically.
+	 * Settles an exception confirm phase without a phase-1 candidate. `rejected`
+	 * means the Host's EP-1060 readback failed the exception gates (§13.5.1 item
+	 * 2) or, in `exchange`, no longer matched the pinned candidate: no exchange,
+	 * close and revoke the original key. `exchanged` (phase 2 only) completes the
+	 * exchange phase while every binding still holds; the logical confirm stays
+	 * open for the publication permit and MCP stays closed. Anything else,
+	 * including a lost response, keeps the phase and the logical confirm unknown;
+	 * neither is resent automatically.
 	 */
 	async settleConfirmPhase(input: {
 		readonly confirmCommandId: string;
@@ -1286,27 +1337,32 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly attemptId: string;
 		readonly attemptOwner: string;
 		readonly authorizationId: string;
-		readonly outcome: "rejected" | "unknown";
-	}): Promise<"rejected" | "unknown" | "stale"> {
+		readonly phase?: ConfirmPhaseCommand;
+		readonly outcome: "rejected" | "unknown" | "exchanged";
+	}): Promise<"rejected" | "unknown" | "exchanged" | "stale"> {
+		const phase = input.phase ?? "confirm_binding_readback";
+		if (input.outcome === "exchanged" && phase !== "confirm_exchange")
+			throw new ConnectionInstallationErrorV1("unavailable");
 		return this.#transaction(async (tx) => {
 			const row = await this.#lockInstallation(tx, input.authorizationId);
 			if (!row?.template) return "stale";
 			const template = ConnectionRegistrationTemplateV1Schema.parse(
 				row.template,
 			);
+			const holds = this.#phaseHolds({ ...input, phase, template });
 			if (
 				input.outcome === "rejected" &&
-				(await this.#rejectConfirm(
-					tx,
-					input,
-					this.#phaseHolds({
-						...input,
-						phase: "confirm_binding_readback",
-						template,
-					}),
-				))
+				(await this.#rejectConfirm(tx, input, holds))
 			)
 				return "rejected";
+			if (input.outcome === "exchanged") {
+				const done = await tx.execute(sql`
+					update platform.connection_installation_commands set status='completed', updated_at=clock_timestamp()
+					where id=${input.phaseCommandId} and command='confirm_exchange' and status='sending' and ${holds}
+					returning id
+				`);
+				if (done.length === 1) return "exchanged";
+			}
 			const settled = await tx.execute(sql`
 				update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
 				where id in (${input.phaseCommandId}, ${input.confirmCommandId})
@@ -2020,10 +2076,52 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							? allowed()
 							: "denied";
 					}
-					case "confirm_exchange":
-						// Phase 2 verification against the commit receipt arrives with the
-						// Host exchange; until then nothing exchanges.
-						return "denied";
+					case "confirm_exchange": {
+						// §13.5.6 exception confirm phase 2: read-only. The phase and its
+						// logical confirm are sending for this attempt, the phase was opened
+						// with exactly this confirm's first-pin receipt, that receipt is still
+						// committed for the same attempt, claim and fence, its pin is active
+						// at the same revision and phase 1 completed. Nothing here writes.
+						const receipt = command.pinReceipt;
+						if (!receipt) return "denied";
+						const [phase] = await tx.execute(sql`
+							select p.request_digest, c.id as confirm_id
+							from platform.connection_installation_commands p
+							join platform.connection_installation_commands c on c.authorization_id=p.authorization_id
+								and c.command='confirm' and c.status='sending'
+								and c.attempt_id=p.attempt_id and c.attempt_owner=p.attempt_owner
+								and p.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange'
+							join platform.connection_principal_pin_receipts r on r.id=${receipt.id}
+								and r.authorization_id=p.authorization_id and r.confirm_command_id=c.id
+								and r.candidate_digest=${receipt.candidateDigest}
+								and r.attempt_id=p.attempt_id and r.claim_owner=p.attempt_owner
+								and r.claim_fence=${template.claim.fence} and r.expires_at > clock_timestamp()
+							join platform.connection_principal_pins pin on pin.id=r.pin_id
+								and pin.revision=r.pin_revision and pin.released_at is null
+							join platform.connection_installation_commands b on b.id=r.phase_command_id
+								and b.authorization_id=p.authorization_id and b.command='confirm_binding_readback'
+								and b.status='completed'
+								and b.idempotency_key='confirm-phase:' || c.id || ':confirm_binding_readback'
+							where p.id=${command.commandId} and p.command='confirm_exchange'`);
+						return phase &&
+							phase.request_digest ===
+								sha256(
+									JSON.stringify([
+										"confirm_exchange",
+										phase.confirm_id,
+										request.authorizationId,
+										receipt.id,
+										receipt.candidateDigest,
+									]),
+								) &&
+							row.status === "confirmed" &&
+							row.registration_state === "registered" &&
+							row.revoke_state === "not_required" &&
+							row.descriptor_digest !== null &&
+							command.descriptorDigest === row.descriptor_digest
+							? allowed()
+							: "denied";
+					}
 					case "begin":
 					case "begin_status": {
 						if (

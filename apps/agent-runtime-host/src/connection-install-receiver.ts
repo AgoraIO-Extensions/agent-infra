@@ -2,6 +2,8 @@ import {
 	createHash,
 	createPrivateKey,
 	type KeyObject,
+	randomBytes,
+	randomUUID,
 	timingSafeEqual,
 	verify,
 	X509Certificate,
@@ -18,6 +20,7 @@ import {
 	type FileRuntimeStore,
 	openConnectionHostSupplyV1,
 	RuntimeHostError,
+	readConnectionMachineOAuthClientOutcomeV1,
 	readConnectionMachineOAuthClientV1,
 	registerConnectionMachineOAuthClientV1,
 	revokeConnectionMachineOAuthClientV1,
@@ -44,6 +47,10 @@ import {
 	ConnectionInstallConfirmBindingReadbackRequestV1Schema,
 	type ConnectionInstallConfirmBindingReadbackResponseV1,
 	ConnectionInstallConfirmBindingReadbackResponseV1Schema,
+	type ConnectionInstallConfirmExchangeRequestV1,
+	ConnectionInstallConfirmExchangeRequestV1Schema,
+	type ConnectionInstallConfirmExchangeResponseV1,
+	ConnectionInstallConfirmExchangeResponseV1Schema,
 	type ConnectionInstallFirstBeginGrantClaimsV1,
 	ConnectionInstallFirstBeginGrantClaimsV1Schema,
 	type ConnectionInstallFirstBeginRequestV1,
@@ -64,7 +71,9 @@ import {
 	RuntimeOAuthAuthorizedRequestV1Schema,
 	RuntimeOAuthCallbackRequestV1Schema,
 	type RuntimeOAuthConfigurationV1,
+	RuntimeOAuthConfigurationV1Schema,
 	type RuntimeOAuthGrantClaimsV1,
+	RuntimeOAuthGrantClaimsV1Schema,
 	type RuntimeOAuthResponseV1,
 	RuntimeOAuthResponseV1Schema,
 	type RuntimeOAuthScopeV1,
@@ -74,6 +83,7 @@ import {
 import {
 	connectionInstallConfigurationDigestV1,
 	connectionInstallRequestDigestV1,
+	connectionManualConfirmCandidateDigestV1,
 	connectionManualInstallConfigurationV1,
 	connectionManualInstallDescriptorDigestV1,
 	connectionManualInstallDescriptorMatchesV1,
@@ -177,6 +187,15 @@ interface FixedInstallationBinding {
 
 interface FixedInstallation extends FixedInstallationBinding {
 	readonly client: ProtectedRuntimeOAuthClient;
+	/**
+	 * §13.5.6 exception installs exchange only through their `exchange` phase:
+	 * one in-process confirm under claims this receiver built after every
+	 * phase-2 gate held. The standard confirm route refuses them.
+	 */
+	readonly exchangeOnce: (
+		request: RuntimeOAuthAuthorizedRequestV1,
+		claims: RuntimeOAuthGrantClaimsV1,
+	) => Promise<RuntimeOAuthResponseV1>;
 }
 
 interface FirstBeginConsumption {
@@ -1166,6 +1185,7 @@ async function assembleConnectionInstallReceiver(
 		template: Template,
 		consumer: ApprovedConnectionConsumerTargetV1,
 		configuration: RuntimeOAuthConfigurationV1,
+		descriptor: ConnectionManualInstallDescriptorV1,
 		firstBeginToken?: string,
 	) {
 		const scope = installScope(template, configuration);
@@ -1179,6 +1199,11 @@ async function assembleConnectionInstallReceiver(
 			now,
 		});
 		let activeToken = firstBeginToken;
+		const exception =
+			descriptor.principalMapping.kind === "consistency-exception-v1";
+		let exchangeGrant:
+			| { readonly token: string; readonly claims: RuntimeOAuthGrantClaimsV1 }
+			| undefined;
 		const client = await createProtectedRuntimeOAuthClient({
 			dataDirectory,
 			configuration,
@@ -1188,6 +1213,15 @@ async function assembleConnectionInstallReceiver(
 			store,
 			...(machineFetch ? { fetch: machineFetch } : {}),
 			verifyGrant: (request) => {
+				if (exception && request.command === "confirm") {
+					// §13.5.6: no standard confirm can stand in for the exchange phase.
+					if (
+						exchangeGrant === undefined ||
+						request.grant.token !== exchangeGrant.token
+					)
+						denied();
+					return exchangeGrant.claims;
+				}
 				if (request.command !== "begin") return verifyStandard(request);
 				// Only the first begin consumed by this receiver may open the transaction.
 				if (activeToken === undefined || request.grant.token !== activeToken)
@@ -1201,6 +1235,18 @@ async function assembleConnectionInstallReceiver(
 			client,
 			endFirstBegin: () => {
 				activeToken = undefined;
+			},
+			exchangeOnce: async (
+				request: RuntimeOAuthAuthorizedRequestV1,
+				claims: RuntimeOAuthGrantClaimsV1,
+			) => {
+				if (!exception || request.command !== "confirm") denied();
+				exchangeGrant = { token: request.grant.token, claims };
+				try {
+					return await client.authorized(request);
+				} finally {
+					exchangeGrant = undefined;
+				}
 			},
 		};
 	}
@@ -1395,6 +1441,7 @@ async function assembleConnectionInstallReceiver(
 			template,
 			admitted.consumer,
 			configuration,
+			body.descriptor,
 			request.grant.token,
 		);
 		try {
@@ -1449,6 +1496,7 @@ async function assembleConnectionInstallReceiver(
 				supplyAttemptId: body.supplyAttemptId,
 				expiresAt: result.expiresAt,
 				client: opened.client,
+				exchangeOnce: opened.exchangeOnce,
 			});
 			assertOriginal(template);
 			return result;
@@ -1548,9 +1596,11 @@ async function assembleConnectionInstallReceiver(
 				now,
 			);
 		};
-		let read: Awaited<ReturnType<typeof readConnectionMachineOAuthClientV1>>;
+		let read: Awaited<
+			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
+		>;
 		try {
-			read = await readConnectionMachineOAuthClientV1({
+			read = await readConnectionMachineOAuthClientOutcomeV1({
 				endpoint: template.registration.endpoint,
 				serviceCredential: slot.credential.toString("utf8"),
 				registrationKey: body.registrationKey,
@@ -1559,10 +1609,9 @@ async function assembleConnectionInstallReceiver(
 				...(machineFetch ? { fetch: machineFetch } : {}),
 			});
 		} catch {
+			// A failed read is not an answer: the phase stays unknown, verify only.
 			return reply("unknown");
 		}
-		const registration = read.registration as Record<string, unknown>;
-		const principalId = registration.principalId;
 		// The EP-1060 wait may have outlasted the phase, the claim or the Host
 		// binding; neither a reject nor a candidate outlives them.
 		if ((await readbackOutcome(readbackInput)) !== "allowed")
@@ -1572,6 +1621,11 @@ async function assembleConnectionInstallReceiver(
 		} catch {
 			return reply("unknown");
 		}
+		// §13.5.1 item 2: anything but KNOWN is refused. Connection's explicit
+		// UNKNOWN for the original key closes and revokes it like a mismatch.
+		if (read.outcome !== "KNOWN") return reply("rejected");
+		const registration = read.registration as Record<string, unknown>;
+		const principalId = registration.principalId;
 		// §13.5.1 item 2: KNOWN, a principal, the same client, instance, Consumer,
 		// redirect URI, resource and scope, and an ACTIVE instance.
 		if (
@@ -1637,6 +1691,228 @@ async function assembleConnectionInstallReceiver(
 			commandId: body.commandId,
 			candidate,
 		});
+	}
+
+	/**
+	 * §13.5.6 exception confirm, phase 2 (`exchange`). Only after this
+	 * confirm's first-pin receipt committed: the Host verifies the receipt, the
+	 * active pin and the original claim through the read-only command readback,
+	 * reads EP-1060 back again for the original key (it must still be the
+	 * pinned KNOWN/ACTIVE candidate), records the phase once, rechecks, and
+	 * only then lets its fixed transaction read the original code/verifier and
+	 * exchange it once. It publishes nothing and writes nothing to the Store.
+	 */
+	async function confirmExchange(
+		body: ConnectionInstallConfirmExchangeRequestV1,
+		channel: string,
+	): Promise<ConnectionInstallConfirmExchangeResponseV1> {
+		const parsedClaims = ConnectionInstallCommandClaimsV1Schema.safeParse(
+			verifyCompact(body.grant, connectionInstallJwsTypesV1.registration),
+		);
+		if (!parsedClaims.success) denied();
+		const claims = admitWorkerClaims(parsedClaims.data, channel);
+		const registrationKeyHash = connectionRegistrationKeyHashV1(
+			body.registrationKey,
+		);
+		const descriptorDigest = connectionManualInstallDescriptorDigestV1(
+			body.descriptor,
+		);
+		const pinned = body.candidate;
+		if (
+			claims.command !== "confirm_exchange" ||
+			claims.commandId !== body.commandId ||
+			claims.attemptId !== body.attemptId ||
+			claims.attemptOwner !== body.attemptOwner ||
+			claims.supplyAttemptId !== body.supplyAttemptId ||
+			claims.authorizationId !== body.template.authorizationId ||
+			claims.templateDigest !==
+				connectionRegistrationTemplateDigestV1(body.template) ||
+			claims.registrationKeyHash !== registrationKeyHash ||
+			registrationKeyHash !== body.template.registration.registrationKeyHash ||
+			claims.requestDigest !== connectionInstallRequestDigestV1(body) ||
+			body.descriptor.registrationKey !== body.registrationKey ||
+			body.descriptor.principalMapping.kind !== "consistency-exception-v1" ||
+			connectionManualConfirmCandidateDigestV1(pinned) !==
+				body.pinReceipt.candidateDigest ||
+			pinned.confirm.commandId !== body.confirmCommandId ||
+			pinned.authorizationId !== body.template.authorizationId ||
+			pinned.descriptorDigest !== descriptorDigest ||
+			pinned.verified.registrationKey !== body.registrationKey ||
+			!isDeepStrictEqual(pinned.principal, body.template.principal) ||
+			!isDeepStrictEqual(pinned.reference, body.template.reference) ||
+			!isDeepStrictEqual(pinned.target, body.template.target)
+		)
+			denied();
+		const reply = (outcome: "exchanged" | "rejected" | "unknown") =>
+			ConnectionInstallConfirmExchangeResponseV1Schema.parse({
+				schemaVersion: 1,
+				contract: connectionManualConfirmContractV1,
+				outcome,
+				commandId: body.commandId,
+			});
+		const admitted = await admitTemplate(body.template);
+		const { template, templateDigest } = admitted;
+		const consumed = await readRecord(
+			`install-first-begin-${sha256Hex(template.authorizationId)}.json`,
+		);
+		if (!consumed) conflict();
+		const consumption = parseConsumption(consumed);
+		if (
+			!isDeepStrictEqual(consumption.template, template) ||
+			consumption.descriptorDigest !== descriptorDigest ||
+			consumption.supplyAttemptId !== body.supplyAttemptId
+		)
+			conflict();
+		const slot = confirmedSlot(template, templateDigest, body.supplyAttemptId);
+		if (!slot) conflict();
+		// Phase 1 of this same Host recorded exactly this candidate for this claim.
+		const recorded = await readRecord(
+			`install-confirm-candidate-${sha256Hex(pinned.confirm.phaseCommandId)}.json`,
+		);
+		if (
+			!recorded ||
+			!isDeepStrictEqual(recorded.candidate, pinned) ||
+			!isDeepStrictEqual(recorded.claim, template.claim)
+		)
+			conflict();
+		const exchangeName = `install-confirm-exchange-${sha256Hex(body.commandId)}.json`;
+		if ((await readRecord(exchangeName)) !== undefined) conflict();
+		const readbackInput = commandReadback(admitted, body.supplyAttemptId, {
+			commandId: body.commandId,
+			attemptId: body.attemptId,
+			attemptOwner: body.attemptOwner,
+			command: "confirm_exchange",
+			requestDigest: claims.requestDigest,
+			registrationKeyHash,
+			descriptorDigest,
+			pinReceipt: {
+				id: body.pinReceipt.id,
+				candidateDigest: body.pinReceipt.candidateDigest,
+			},
+		});
+		const outcome = await readbackOutcome(readbackInput);
+		assertOriginal(template);
+		if (outcome === "denied") denied();
+		if (outcome !== "allowed") unavailable();
+		const entry = fixed.get(template.authorizationId);
+		if (!entry) unavailable();
+		await assertFixedCurrent(entry);
+		const assertCurrent = () => {
+			current();
+			if (
+				slots.get(template.authorizationId) !== slot ||
+				slot.state !== "confirmed"
+			)
+				unavailable();
+			store.assertOriginalExecutionBindingCurrent(
+				template.reference,
+				template.principal,
+				now,
+			);
+		};
+		let read: Awaited<
+			ReturnType<typeof readConnectionMachineOAuthClientOutcomeV1>
+		>;
+		try {
+			read = await readConnectionMachineOAuthClientOutcomeV1({
+				endpoint: template.registration.endpoint,
+				serviceCredential: slot.credential.toString("utf8"),
+				registrationKey: body.registrationKey,
+				signal: abort.signal,
+				assertCurrent,
+				...(machineFetch ? { fetch: machineFetch } : {}),
+			});
+		} catch {
+			return reply("unknown");
+		}
+		if ((await readbackOutcome(readbackInput)) !== "allowed")
+			return reply("unknown");
+		try {
+			assertOriginal(template);
+		} catch {
+			return reply("unknown");
+		}
+		// The binding must still be the pinned KNOWN/ACTIVE candidate; a drift is
+		// refused, never re-pinned to the new value.
+		const registration =
+			read.outcome === "KNOWN"
+				? (read.registration as Record<string, unknown>)
+				: undefined;
+		if (
+			!registration ||
+			registration.principalId !== pinned.verified.principalId ||
+			registration.registrationKey !== pinned.verified.registrationKey ||
+			registration.clientId !== pinned.verified.clientId ||
+			registration.instanceId !== pinned.verified.instanceId ||
+			registration.consumerId !== pinned.verified.consumerId ||
+			registration.redirectUri !== pinned.verified.redirectUri ||
+			registration.resource !== pinned.verified.resource ||
+			registration.scope !== "mcp" ||
+			registration.instanceStatus !== "ACTIVE"
+		)
+			return reply("rejected");
+		// Host-private CAS: this phase exchanges at most once, bound to its key,
+		// request digest, receipt and the original claim/fence.
+		await publishMetadata(
+			records,
+			exchangeName,
+			{
+				schemaVersion: 1,
+				phaseCommandId: body.commandId,
+				requestDigest: claims.requestDigest,
+				claim: template.claim,
+				pinReceipt: body.pinReceipt,
+			},
+			{ immutable: true, guard: () => assertOriginal(template) },
+		);
+		if ((await readbackOutcome(readbackInput)) !== "allowed")
+			return reply("unknown");
+		assertOriginal(template);
+		const scope = installScope(
+			template,
+			RuntimeOAuthConfigurationV1Schema.parse(consumption.configuration),
+		);
+		const issuedAt = now();
+		const request = RuntimeOAuthAuthorizedRequestV1Schema.parse({
+			...scope,
+			schemaVersion: 1,
+			authorizationId: template.authorizationId,
+			confirmationRevision: template.confirmationRevision,
+			reference: template.reference,
+			command: "confirm",
+			grant: {
+				schemaVersion: 1,
+				format: "runtime-connection-installation-jws",
+				token: [0, 1, 2]
+					.map(() => randomBytes(32).toString("base64url"))
+					.join("."),
+			},
+		});
+		const result = await entry.exchangeOnce(
+			request,
+			RuntimeOAuthGrantClaimsV1Schema.parse({
+				...scope,
+				schemaVersion: 1,
+				reference: template.reference,
+				purpose: "connection_installation",
+				audience: "runtime_connection_client",
+				issuer,
+				workerId,
+				principal: template.principal,
+				command: "confirm",
+				authorizationId: template.authorizationId,
+				confirmationRevision: template.confirmationRevision,
+				grantId: randomUUID(),
+				issuedAt,
+				expiresAt: issuedAt + 60_000,
+				requestDigest: sha256Hex(
+					canonicalRuntimeRequestSigningPayload(request),
+				),
+			}),
+		);
+		return reply(
+			result.phase === "awaiting_verification" ? "exchanged" : "unknown",
+		);
 	}
 
 	async function beginStatus(
@@ -1787,8 +2063,17 @@ async function assembleConnectionInstallReceiver(
 			if (isAuthorizationDenial(error)) return;
 			// Restore the candidate during an outage. Its use still requires live authority.
 		}
-		const opened = await openFixedClient(template, consumer, configuration);
-		fixed.set(template.authorizationId, { ...binding, client: opened.client });
+		const opened = await openFixedClient(
+			template,
+			consumer,
+			configuration,
+			ConnectionManualInstallDescriptorV1Schema.parse(consumption.descriptor),
+		);
+		fixed.set(template.authorizationId, {
+			...binding,
+			client: opened.client,
+			exchangeOnce: opened.exchangeOnce,
+		});
 	}
 	async function reloadFixedInstallations() {
 		const directory = await openProtectedStandardMcpDirectory(records);
@@ -1924,6 +2209,17 @@ async function assembleConnectionInstallReceiver(
 		const channel = context.get("channel");
 		return serial(async () =>
 			context.json(await confirmBindingReadback(body, channel)),
+		);
+	});
+	app.post(connectionInstallPathsV1.confirmExchange, async (context) => {
+		const parsed = ConnectionInstallConfirmExchangeRequestV1Schema.safeParse(
+			await boundedJson(context.req.raw, current),
+		);
+		if (!parsed.success) denied();
+		const body = parsed.data;
+		const channel = context.get("channel");
+		return serial(async () =>
+			context.json(await confirmExchange(body, channel)),
 		);
 	});
 	app.post(connectionInstallPathsV1.beginStatus, async (context) => {
