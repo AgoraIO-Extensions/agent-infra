@@ -857,6 +857,12 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 			await sql`delete from platform.session_sandbox_reserves where sandbox_id=${target.sandboxId}`;
 		}
 	});
+	it("does not accept an operator-supplied charge applicability marker", async () => {
+		await expect(
+			store.prepare({ ...target, chargeApplicable: false } as typeof target),
+		).rejects.toThrow("WORKSPACE_RECLAMATION_DENIED");
+		expect(await sql`select 1 from platform.audit_events`).toHaveLength(0);
+	});
 	it("dry-run is read-only; deletes original conditional identity then releases/audits once, history unavailable", async () => {
 		let exists = true;
 		const deletions: unknown[] = [];

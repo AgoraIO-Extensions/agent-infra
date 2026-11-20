@@ -191,6 +191,7 @@ export class PostgresSessionWorkspaceReclamationStoreV1
 		body: (tx: Transaction) => Promise<T>,
 	): Promise<T> {
 		if (
+			Object.hasOwn(t, "chargeApplicable") ||
 			t.namespace !== this.policy.namespace ||
 			t.name !== `sandbox-${t.sandboxId}` ||
 			!Number.isSafeInteger(t.sessionGeneration) ||
