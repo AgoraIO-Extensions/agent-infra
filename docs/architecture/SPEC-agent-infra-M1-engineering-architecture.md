@@ -886,6 +886,8 @@ compute_released=true 且 released=false。合法冷路径没有 charge、也没
 记账项为不适用，不因此排除候选，也不补写 charge。预期应有 charge 的 reserve 来源缺记录时仍拒绝。
 开始审计持久记录本次是否适用 charge；后续恢复不能把原应释放但已缺失的行改判为不适用，
 已有旧审计未记录该标记时沿原有 charge 合同处理。
+带新记账标记的操作须由兼容版本接管；旧版本不能解析时保持拒绝，回退不得删除标记、
+改写历史或更换目标重放。部署回退前先收敛在途回收，或保留兼容执行入口完成原操作。
 之后在数据库事务外按原 UID/resourceVersion 条件删除 PVC。只有回读确认 PVC 不存在后，才在同一事务
 记录完成审计：有 charge 时释放原存储 charge；不适用时核对仍无 charge 及 reserve 来源，不产生记账行。
 charge 写入必须取得
