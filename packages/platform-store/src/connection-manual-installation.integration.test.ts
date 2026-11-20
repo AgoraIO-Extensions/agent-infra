@@ -4056,6 +4056,76 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		});
 	});
 
+	it("allows no exchange readback while the pin backs no permits (items 4 and 8)", async () => {
+		const alice = await confirmed();
+		const phase = await bindingReadback(alice);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...phase,
+					candidate: await candidateFor(alice, phase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const exchange = await manual.openConfirmPhase({
+			...phase,
+			phase: "confirm_exchange",
+		});
+		if (!exchange?.receipt) throw new Error("phase 2 not opened");
+		expect(
+			await manual.commitDelivery({
+				commandId: exchange.phaseCommandId,
+				attemptId: phase.attemptId,
+				attemptOwner: phase.attemptOwner,
+				command: "confirm_exchange",
+				authorizationId: phase.authorizationId,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		const [row] =
+			await client`select descriptor_digest from platform.connection_manual_installations where authorization_id=${alice.run.authorizationId}`;
+		const readback = (store = manual) =>
+			store.readback({
+				...alice.run.commandReadback,
+				command: {
+					...alice.run.commandReadback.command,
+					commandId: exchange.phaseCommandId,
+					attemptId: phase.attemptId,
+					attemptOwner: phase.attemptOwner,
+					command: "confirm_exchange",
+					requestDigest: "7".repeat(64),
+					descriptorDigest: row?.descriptor_digest as string,
+					pinReceipt: {
+						id: exchange.receipt?.id as string,
+						candidateDigest: exchange.receipt?.candidateDigest as string,
+					},
+				},
+			});
+		expect(await readback()).toBe("allowed");
+		// Overdue on the database clock, before any sweep closed the installation.
+		const pin = await pinOf("alice");
+		await client`update platform.connection_principal_pins
+			set verification_deadline=clock_timestamp()-interval '1 second' where id=${pin?.id}`;
+		expect(await readback()).toBe("denied");
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 1),
+				result: "consistent",
+			}),
+		).toMatchObject({ outcome: "recorded" });
+		expect(await readback()).toBe("allowed");
+		const expired = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: expiredPolicy,
+		});
+		try {
+			expect(await readback(expired)).toBe("denied");
+		} finally {
+			await expired.close();
+		}
+	});
+
 	it("stops, closes and unpins the user after an inconsistent record (item 4)", async () => {
 		const alice = await pinned();
 		const bob = await pinned("bob", "bob", "worker-b", "principal-b");

@@ -2082,6 +2082,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						// with exactly this confirm's first-pin receipt, that receipt is still
 						// committed for the same attempt, claim and fence, its pin is active
 						// at the same revision and phase 1 completed. Nothing here writes.
+						// The pin must still back permits (§13.5.1 items 4, 6 and 8), so a
+						// suspended, overdue, inconsistent, releasing or expired pin
+						// exchanges nothing.
 						const receipt = command.pinReceipt;
 						if (!receipt) return "denied";
 						const [phase] = await tx.execute(sql`
@@ -2098,6 +2101,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 								and r.claim_fence=${template.claim.fence} and r.expires_at > clock_timestamp()
 							join platform.connection_principal_pins pin on pin.id=r.pin_id
 								and pin.revision=r.pin_revision and pin.released_at is null
+								and ${connectionPrincipalPinPermitsSql("pin", this.#policy)}
 							join platform.connection_installation_commands b on b.id=r.phase_command_id
 								and b.authorization_id=p.authorization_id and b.command='confirm_binding_readback'
 								and b.status='completed'
