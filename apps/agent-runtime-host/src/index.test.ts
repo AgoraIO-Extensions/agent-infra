@@ -2570,7 +2570,9 @@ it("keeps production evidence absent and explicitly assembles it from consumed V
 		.spyOn(globalThis, "fetch")
 		.mockImplementation(async (url, options) => {
 			const path = new URL(String(url)).pathname;
-			expect(path).toBe("/control/status");
+			expect(["/control/status", "/control/session-instance/read"]).toContain(
+				path,
+			);
 			const request = verifyExecutorControlV1(
 				runner,
 				path,

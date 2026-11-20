@@ -153,6 +153,8 @@ export async function startExecutorDrainGatewayV1(options: {
 			throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
 		let result: unknown;
 		if (path === "/control/status") {
+			result = { epoch };
+		} else if (path === "/control/session-instance/read") {
 			result = {
 				epoch,
 				runnerIdentityConsumed: executorIdentityConsumedV1(identity),

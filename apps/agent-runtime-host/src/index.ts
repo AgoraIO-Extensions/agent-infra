@@ -1116,7 +1116,7 @@ export async function assembleRuntimeHost(
 					const result = (await executorControlRequestV1(
 						identity,
 						executorRunnerControlOriginV1,
-						"/control/status",
+						"/control/session-instance/read",
 						{
 							epoch: admission.epoch,
 							generation: sessionExecutorBinding.sessionGeneration,

@@ -175,7 +175,7 @@ if (process.argv[2] === "runner") {
 				const result = (await executorControlRequestV1(
 					identity,
 					executorRunnerControlOriginV1,
-					"/control/status",
+					"/control/session-instance/read",
 					{ epoch: "runner-evidence", generation: 2, resourceFence: 3 },
 					signal,
 				)) as {
