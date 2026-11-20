@@ -253,6 +253,7 @@ describe("platform-core package surface", () => {
 			"isWorkspaceSnapshotObservationValidV1",
 			"markSkillHubInstallationUpgradeV1",
 			"markSkillHubUpgradeV1",
+			"matchesVerifiedWorkloadVersionV1",
 			"modelOptionDisplayNameV1",
 			"nativeCapabilityAdmissionRequestDigest",
 			"nativeCapabilityAdmissionRequestDigestV1",

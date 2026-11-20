@@ -105,6 +105,18 @@ export interface WorkloadVersionV1 {
 	readonly executionCapacity?: WorkloadExecutionCapacityV1;
 }
 
+/** A promotion can add a storage observation to the verified version. */
+export function matchesVerifiedWorkloadVersionV1(
+	candidate: WorkloadVersionV1,
+	verified: WorkloadVersionV1,
+): boolean {
+	if (candidate.persistentVolumeUid !== undefined)
+		return isDeepStrictEqual(candidate, verified);
+	const { persistentVolumeUid: _observedVolumeUid, ...verifiedVersion } =
+		verified;
+	return isDeepStrictEqual(candidate, verifiedVersion);
+}
+
 export interface WorkloadCapabilitiesV1 {
 	readonly modelSelection?: boolean;
 	readonly attachments?: boolean;
