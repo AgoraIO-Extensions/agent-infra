@@ -313,7 +313,7 @@ test(
 test(
 	"repeated Stop keeps the same inventory while its Linux group lives",
 	linux,
-	async () => {
+	async (t) => {
 		const f = await drainFixture();
 		try {
 			const tool = await f.launch("first");
@@ -330,13 +330,17 @@ test(
 				await waitForExecutorProcessGroupExitV1(tool.group, Date.now() + 2000),
 				true,
 			);
-			assert.equal(
-				await f.journal.confirm(stop, seal.digest, {
-					verifiedAt: Date.now(),
-					groups: [{ id: "a".repeat(64), exitedAt: Date.now() }],
-				}),
-				true,
-			);
+			const now = Date.now();
+			let tick = 0;
+			const clock = t.mock.method(Date, "now", () => now + tick++);
+			// A progressing clock must not put the exit after its verification.
+			const exitedAt = Date.now();
+			const evidence = {
+				verifiedAt: Date.now(),
+				groups: [{ id: "a".repeat(64), exitedAt }],
+			};
+			clock.mock.restore();
+			assert.equal(await f.journal.confirm(stop, seal.digest, evidence), true);
 			assert.equal(f.journal.confirmed(), true);
 		} finally {
 			await f.close();
@@ -387,7 +391,7 @@ test(
 test(
 	"stale Stop fence is rejected after a real group exits",
 	linux,
-	async () => {
+	async (t) => {
 		const f = await drainFixture();
 		try {
 			const tool = await f.launch("first");
@@ -400,10 +404,16 @@ test(
 				await waitForExecutorProcessGroupExitV1(tool.group, Date.now() + 2000),
 				true,
 			);
+			const now = Date.now();
+			let tick = 0;
+			const clock = t.mock.method(Date, "now", () => now + tick++);
+			// A progressing clock must not put the exit after its verification.
+			const exitedAt = Date.now();
 			const evidence = {
 				verifiedAt: Date.now(),
-				groups: [{ id: "b".repeat(64), exitedAt: Date.now() }],
+				groups: [{ id: "b".repeat(64), exitedAt }],
 			};
+			clock.mock.restore();
 			assert.equal(await f.journal.confirm(stop, old.digest, evidence), false);
 			await retained(f.journal);
 			assert.equal(
