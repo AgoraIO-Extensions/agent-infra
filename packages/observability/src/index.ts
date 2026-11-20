@@ -224,6 +224,7 @@ const operationalFailureSteps = new Set([
 	"auth.login.directory_principal",
 	"auth.login.session_store_create",
 	"identity.resolve",
+	"identity.timeout",
 	"identity.parse",
 	"identity.hydrate",
 	// 准入时读取当前权限事实（目录成员与组织）失败（#2696）。

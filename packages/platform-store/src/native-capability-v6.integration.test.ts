@@ -113,7 +113,7 @@ function request(executionId = "native-v6-execution") {
 			modelOptionId: "model-primary",
 			reasoningLevel: "high",
 		},
-		configVersion: "config-1",
+		configVersion: "1",
 	};
 	RuntimeNativeCapabilityRequestV6Schema.parse(wireRequest);
 	const { grant: _grant, ...context } = wireRequest;
@@ -454,7 +454,7 @@ it("returns the original accepted operation after current Key/config and candida
 	const retry = {
 		...request("new-candidate"),
 		keyBinding: next,
-		configVersion: "config-2",
+		configVersion: "2",
 	};
 	expect(
 		await useCase(next).admit(
@@ -569,7 +569,7 @@ it("stores the approved model revision and explicit selection on the Execution",
 	await advanceModelConfiguration();
 	const result = await useCase(keyBinding, 2).admit({
 		...request(),
-		configVersion: "config-2",
+		configVersion: "2",
 	});
 	expect(result).toMatchObject({
 		outcome: "accepted",
@@ -590,7 +590,7 @@ it("replays the original model snapshot after current model configuration change
 	if (accepted.outcome !== "accepted") throw new Error("expected acceptance");
 	const before = await effects();
 	await advanceModelConfiguration();
-	const candidate = { ...request("new-candidate"), configVersion: "config-2" };
+	const candidate = { ...request("new-candidate"), configVersion: "2" };
 	expect(
 		await useCase(keyBinding, 2).admit(
 			candidate,
