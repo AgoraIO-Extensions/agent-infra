@@ -642,6 +642,14 @@ it.each(["parameters", "selection"] as const)(
 	},
 );
 
+// Dispatch readiness is measured by the DB clock, independently of the test host clock.
+async function admitDispatchFixture() {
+	const admitted = await useCase().admit(request());
+	if (admitted.outcome === "accepted")
+		await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+	return admitted;
+}
+
 async function seedDispatchWorkload() {
 	const deployment = workloadDesiredFixture(
 		1,
@@ -692,7 +700,7 @@ async function seedDispatchWorkload() {
 
 it("dispatches the admitted V6 operation rather than leaving its outbox pending (#4255)", async () => {
 	await seedDispatchWorkload();
-	const admitted = await useCase().admit(request());
+	const admitted = await admitDispatchFixture();
 	expect(admitted.outcome).toBe("accepted");
 	if (admitted.outcome !== "accepted") return;
 	const dispatch = new PostgresConversationDispatchStoreV1({
@@ -773,7 +781,7 @@ it.each(["normal", "reclaimed", "lost"])(
 	async (mode) => {
 		const loseResponse = mode === "lost";
 		await seedDispatchWorkload();
-		const admitted = await useCase().admit(request());
+		const admitted = await admitDispatchFixture();
 		if (admitted.outcome !== "accepted") throw new Error("expected admission");
 		const dispatch = new PostgresConversationDispatchStoreV1({
 			databaseUrl,
@@ -952,7 +960,7 @@ it.each([
 ] as const)(
 	"refuses a V6 %s binding drift before Runtime (#4255)",
 	async (field, value) => {
-		const admitted = await useCase().admit(request());
+		const admitted = await admitDispatchFixture();
 		if (admitted.outcome !== "accepted") throw new Error("expected admission");
 		await client`update platform.outbox_items set payload=payload || ${client.json({ [field]: value } as unknown as postgres.JSONValue)} where id=${admitted.plan.outbox.id}`;
 		const dispatch = new PostgresConversationDispatchStoreV1({
@@ -979,7 +987,7 @@ it.each([
 
 it("keeps one claim owner and reclaims unknown work with the original V6 pin (#4255)", async () => {
 	await seedDispatchWorkload();
-	const admitted = await useCase().admit(request());
+	const admitted = await admitDispatchFixture();
 	if (admitted.outcome !== "accepted") throw new Error("expected admission");
 	const dispatch = new PostgresConversationDispatchStoreV1({
 		databaseUrl,
@@ -1031,7 +1039,7 @@ it("keeps one claim owner and reclaims unknown work with the original V6 pin (#4
 });
 
 it("cancels a stopped V6 operation before transport without a second execution (#4255)", async () => {
-	const admitted = await useCase().admit(request());
+	const admitted = await admitDispatchFixture();
 	if (admitted.outcome !== "accepted") throw new Error("expected admission");
 	await client`insert into platform.conversation_stops(execution_id,stop_request_id,status,created_at,updated_at) values(${admitted.plan.executionId},'v6-stop','submitted',now(),now())`;
 	await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id,request_id,available_at,created_at,updated_at) values('conversation:stop:v6-stop','conversation',${authority.conversationId},'conversation.turn.stop.v1',${client.json({ schemaVersion: 1, conversationId: authority.conversationId, executionId: admitted.plan.executionId, sessionGeneration: 1, stopRequestId: "v6-stop" })},'trace','request',now(),now(),now())`;
