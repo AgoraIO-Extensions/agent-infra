@@ -1112,6 +1112,48 @@ describe("production SessionSandbox resource receiver", () => {
 			await f.close();
 		}
 	});
+
+	it("closes expired Pod and route while an unobserved identity write stays unknown", async () => {
+		const f = await executorInstanceFixtureV2();
+		const clock = Date.now;
+		const create = f.client.create;
+		f.client.create = async (object) => {
+			if (
+				object.kind === "Secret" &&
+				object.metadata?.name?.startsWith("executor-v2-")
+			)
+				throw new Error("identity write outcome unknown");
+			return create(object);
+		};
+		try {
+			await expect(f.run()).rejects.toThrow();
+			const original = structuredClone(f.state());
+			if (!original) throw new Error("missing original intent");
+			Date.now = () => original.expiresAt + 1;
+			await expect(f.run()).rejects.toThrow();
+			expect(f.resources.has(`Pod/${f.claim.sandbox.resourceName}`)).toBe(
+				false,
+			);
+			expect(f.resources.has(`Service/${f.claim.sandbox.resourceName}`)).toBe(
+				false,
+			);
+			expect(
+				f.resources.has(
+					`PersistentVolumeClaim/${f.claim.sandbox.resourceName}`,
+				),
+			).toBe(true);
+			expect(f.state()?.phase).toBe("closing");
+			expect(f.state()?.attemptId).toBe(original.attemptId);
+			expect(f.state()?.cleanup).not.toBe("absent");
+			const writes = f.writes.length;
+			await expect(f.run()).rejects.toThrow();
+			expect(f.writes.length).toBe(writes);
+			expect(f.state()?.expiresAt).toBe(original.expiresAt);
+		} finally {
+			Date.now = clock;
+			await f.close();
+		}
+	});
 	it.each(["unready", "late-ready"])(
 		"retires the original executor on deadline expiry (%s)",
 		async (readiness) => {

@@ -372,7 +372,6 @@ export function createExecutorInstanceControlV2(options: {
 		async retire() {
 			if (!state) return unavailable();
 			if (state.phase !== "closing") await mutate({ kind: "seal" });
-			await cleanup();
 			for (const resource of state.resources) {
 				let progress = state.retirement.find(
 					(item) => item.resource.kind === resource.kind,
@@ -427,6 +426,7 @@ export function createExecutorInstanceControlV2(options: {
 					progress: { ...progress, state: "absent" },
 				});
 			}
+			await cleanup();
 			await mutate({ kind: "retired" });
 		},
 	};
