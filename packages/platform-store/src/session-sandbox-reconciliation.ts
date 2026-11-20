@@ -787,6 +787,18 @@ export async function recordSandboxExecutorRetirement(
 		context.allocation.resource_observation?.status === "ready"
 	)
 		return null;
+	const [priorAdmission] = await transaction<{ ready: boolean }[]>`
+		select exists (
+			select 1 from platform.conversation_audit_events
+			where conversation_id = ${claim.sandbox.sessionId}
+				and action = 'conversation.sandbox.observed'
+				and details->>'status' = 'ready'
+				and details->>'sandboxId' = ${claim.sandbox.sandboxId}
+				and details->>'sessionGeneration' = ${String(claim.sandbox.generation)}
+				and details->>'resourceFence' = ${String(claim.resourceFence)}
+		) as ready
+	`;
+	if (priorAdmission?.ready) return null;
 	const [expired] = await transaction<{ expired: boolean }[]>`
 		select (details->>'deadlineMs')::numeric <= extract(epoch from clock_timestamp()) * 1000 as expired
 		from platform.conversation_audit_events
@@ -1075,7 +1087,7 @@ export async function recordSandboxObservation(
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
 		values (${randomUUID()}, ${context.sandbox.sessionId}, null, ${context.sandbox.agentId}, ${context.sandbox.principal.id},
 			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),
-			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status, progress, progressAttempt: Number(context.outbox.attempt_count) })})`;
+			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status, executorDrainRequired: decision.observation.executorDrainRequired === true, progress, progressAttempt: Number(context.outbox.attempt_count) })})`;
 	return unknown ? "unknown" : "committed";
 }
 

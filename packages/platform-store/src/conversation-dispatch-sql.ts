@@ -215,10 +215,20 @@ export async function sessionRequiresExecutorDrain(
 ) {
 	const [row] = await transaction<{ required: boolean }[]>`
 		select exists (
-			select 1 from platform.session_sandbox_allocations
-			where conversation_id = ${conversationId}
-				and session_generation = ${generation}
-				and resource_observation->'executorDrainRequired' = 'true'::jsonb
+			select 1 from platform.session_sandbox_allocations a
+			where a.conversation_id = ${conversationId}
+				and a.session_generation = ${generation}
+				and (
+					a.resource_observation->'executorDrainRequired' = 'true'::jsonb or exists (
+						select 1 from platform.conversation_audit_events e
+						where e.conversation_id = a.conversation_id
+							and e.action = 'conversation.sandbox.observed'
+							and e.details->'executorDrainRequired' = 'true'::jsonb
+							and e.details->>'sandboxId' = a.sandbox_id
+							and e.details->>'sessionGeneration' = a.session_generation::text
+							and e.details->>'resourceFence' = a.resource_fence::text
+					)
+				)
 		) as required
 	`;
 	return row?.required === true;
