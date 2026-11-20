@@ -2550,7 +2550,9 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
 固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
 （不超过 24）以及已核实第 1 项前提的 Connection 发布版本或修订。任一项缺失或无效时，动态手工安装
-保持关闭。风险接受与取舍见 [ADR-0047](../adr/0047-m1-connection-principal-first-binding-exception.md)。
+保持关闭。#4199 C2 启用前，本例外第 4、6、8 项的后续规则必须全部实现并通过非实现方独立复审；
+在此之前不得批准例外。风险接受与取舍见
+[ADR-0047](../adr/0047-m1-connection-principal-first-binding-exception.md)。
 
 1. **前提：Connection 实例绑定不变式。** Connection 批准 OAuth 授权时，只在 DEVICE 实例尚未绑定
    Principal 或已绑定同一 Principal 时成功，并在同一事务把该 Principal 写入实例；其他 Principal
@@ -2590,6 +2592,9 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    员工。首次固定后，安装在核对完成前可以使用；首次真实调用产生审计记录后即可核对，须在首次固定
    后 `verificationWindowHours` 内完成。平台管理员依核对人的书面结论，经受审计的运维操作把结果
    记入安装记录，并在对应 Issue 留证。
+   首次固定已提交但后续 `exchange` 失败、未形成可用安装时，没有真实调用审计记录，人工核对无法
+   完成；到核对期限按超期未核对处理，只能经第 6 项解除固定后重新安装。在解除前，该固定一直计入
+   `maximumPinnedPrincipals`，不因安装失败或核对期限到达自动释放容量。
    - 核对一致：解除“主体待核对”标注，安装照常。
    - 超期未核对或核对不一致：Core 停止为该用户的全部例外安装签发 MCP 许可，Worker 封闭这些安装并
      按 §13.5.7 逐安装撤销；核对不一致时同时解除该用户的固定，并留审计。
@@ -3107,7 +3112,7 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 意图，由当前原 claim 内的 Worker 顺序驱动 `binding-readback`、`exchange` 两阶段；不增加用户命令、
 业务 Turn、调度器或 Host 发起的写 RPC。阶段、阶段命令引用及独立请求摘要采用显式的新安装
 命令/结果合同版本，并纳入签名和持久交付记录；不向旧版 confirm 添加可选阶段或默认值兼容。
-唯一键绑定原 confirm 与阶段；双方不支持同一批准版本、阶段缺失或
+唯一键绑定原 confirm 与阶段；Worker 与 Host 不支持同一批准版本、阶段缺失或
 未知时拒绝，不把旧的单阶段 confirm 降级解释为 `exchange`。两阶段不得并发、换键或换 claim；例外模式只从原 Store 授权与固定描述符解析，不接受请求或 Host
 改称标准路径绕过阶段门禁。
 
@@ -3667,6 +3672,9 @@ status 单独替换原用户、Agent 或安装时，Host 须在读取材料及�
 的并发安装均通过；唯一性冲突时持有方停止获得新的 MCP 许可，核对一致后恢复；超期未核对、
 核对不一致及到达 `notAfter` 时停止签发许可并逐安装封闭撤销；管理员解除固定前不能换绑；
 回溯核对把不一致的安装封闭并撤销；用户界面和 API 只呈现 Platform PRD §9.1 已有的状态。
+C2（#4199）测试清单另须引用以下负例：EP-1123 已获批，但该安装的回溯核对或标准发布回执仍未完成
+时到达 `notAfter`，按 [§13.5.1](#1351-字段与配置来源) 例外第 8 项停止签发许可，并按本节逐安装
+封闭撤销，不因 EP-1123 已获批而继续使用例外。
 例外的两阶段 confirm 另须覆盖：跨用户、Agent、安装或关联修订、Host/Pod、代次及旧 claim/fence
 的候选或提交回执，错阶段/摘要、直接跳到 exchange、用另一个 confirm 的相同全局固定回执，
 均在原 Store CAS 或安装命令回读拒绝，断言该拒绝请求没有新增固定或成功阶段、没有读取
