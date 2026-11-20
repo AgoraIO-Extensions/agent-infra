@@ -944,16 +944,21 @@ export interface ConversationExecutionUseCaseOptionsV1 {
 }
 
 export class ConversationExecutionError extends Error {
-	readonly code: "invalid_input" | "unavailable";
+	readonly code:
+		| "invalid_input"
+		| "unavailable"
+		| "personal_relay_key_unavailable";
 
 	constructor(
-		code: "invalid_input" | "unavailable",
+		code: "invalid_input" | "unavailable" | "personal_relay_key_unavailable",
 		readonly sqlState?: "55P03",
 	) {
 		super(
-			code === "invalid_input"
-				? "Invalid conversation command"
-				: "Conversation persistence is unavailable",
+			code === "personal_relay_key_unavailable"
+				? "Personal Relay Key is unavailable"
+				: code === "invalid_input"
+					? "Invalid conversation command"
+					: "Conversation persistence is unavailable",
 		);
 		this.name = "ConversationExecutionError";
 		this.code = code;

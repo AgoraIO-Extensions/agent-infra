@@ -43,7 +43,10 @@ import type {
 	ConversationWithdrawResultV1,
 	ConversationWithdrawStateV1,
 } from "./conversation-execution-types.js";
-import { conversationAttachmentMergeMaxCountV1 } from "./conversation-execution-types.js";
+import {
+	ConversationExecutionError,
+	conversationAttachmentMergeMaxCountV1,
+} from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
@@ -748,7 +751,12 @@ export function createConversationExecutionUseCaseV1(
 						.wakeUnknownExecutionRecovery(unknownOccupant)
 						.catch(() => undefined);
 				return decision;
-			} catch {
+			} catch (error) {
+				if (
+					error instanceof ConversationExecutionError &&
+					error.code === "personal_relay_key_unavailable"
+				)
+					throw error;
 				return unavailable();
 			}
 		},

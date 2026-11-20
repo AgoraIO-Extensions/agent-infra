@@ -83,7 +83,9 @@ export function CommandNotice({
 				<AlertDescription>
 					{result.code === "AGENT_BUSY"
 						? queueFullText(queuedCount)
-						: commandFailure(result.code)}
+						: result.reason === "personal_relay_key_unavailable"
+							? "个人 Relay Key 不可用，请到个人设置处理。"
+							: commandFailure(result.code)}
 				</AlertDescription>
 				{retry && (
 					<Button variant="outline" onClick={retry}>

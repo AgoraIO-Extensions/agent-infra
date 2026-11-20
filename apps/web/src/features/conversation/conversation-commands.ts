@@ -99,11 +99,16 @@ export type ConversationCommandResult =
 	  }
 	| {
 			kind: "rejected";
+			reason?: "personal_relay_key_unavailable";
 			code: PilotProtocolErrorV1["code"];
 			retryable: boolean;
 	  };
 
-function failure(status?: number, error?: unknown): ConversationCommandResult {
+function failure(
+	status?: number,
+	error?: unknown,
+	messageCommand = false,
+): ConversationCommandResult {
 	const parsed = PilotProtocolErrorV1Schema.safeParse(error);
 	const code = parsed.success ? parsed.data.code : undefined;
 	if (
@@ -125,6 +130,11 @@ function failure(status?: number, error?: unknown): ConversationCommandResult {
 		kind: "rejected",
 		code: parsed.data.code,
 		retryable: parsed.data.retryable,
+		...(messageCommand &&
+		status === 409 &&
+		parsed.data.code === "ACTION_UNAVAILABLE"
+			? { reason: "personal_relay_key_unavailable" as const }
+			: {}),
 	};
 }
 
@@ -309,7 +319,12 @@ export async function performConversationCommand(
 				body: body.data,
 			});
 		}
-		if (!result.data) return failure(result.response?.status, result.error);
+		if (!result.data)
+			return failure(
+				result.response?.status,
+				result.error,
+				command.kind === "message",
+			);
 		const expectedStatus =
 			command.kind === "create"
 				? 201

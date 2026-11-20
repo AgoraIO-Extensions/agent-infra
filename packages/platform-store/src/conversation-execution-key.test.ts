@@ -464,3 +464,39 @@ it.each(["api", "api:application"] as const)(
 		]);
 	},
 );
+
+it("4270 classifies a missing personal Key only after current Web authority is rechecked", async () => {
+	const h = harness({ missingKey: true });
+	await expect(
+		selectKey(h.transaction, {
+			authority: authority(),
+			userDirectory: h.userDirectory,
+			reportMissingPersonalKey: true,
+		}),
+	).rejects.toMatchObject({ code: "personal_relay_key_unavailable" });
+});
+it.each([
+	{ disabled: true },
+	{ users: [identity, { ...identity, authorizationRevision: "revoked" }] },
+])(
+	"4270 hides missing Key when authority is disabled or revoked",
+	async (options) => {
+		const h = harness({ ...options, missingKey: true });
+		await expect(
+			selectKey(h.transaction, {
+				authority: authority(),
+				userDirectory: h.userDirectory,
+				reportMissingPersonalKey: true,
+			}),
+		).resolves.toBeNull();
+	},
+);
+it("4270 preserves other callers' existing missing Key refusal", async () => {
+	const h = harness({ missingKey: true });
+	await expect(
+		selectKey(h.transaction, {
+			authority: authority(),
+			userDirectory: h.userDirectory,
+		}),
+	).resolves.toBeNull();
+});

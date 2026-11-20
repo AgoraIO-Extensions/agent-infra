@@ -11,6 +11,12 @@ export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
 type ProtocolErrorCode = PilotProtocolErrorV1["code"];
 
 const protocolErrors = {
+	PERSONAL_RELAY_KEY_UNAVAILABLE: [
+		409,
+		"ACTION_UNAVAILABLE",
+		"Personal Relay Key is unavailable. Configure it in personal settings.",
+		false,
+	],
 	INVALID_REQUEST: [400, "INVALID_REQUEST", "Request is invalid.", false],
 	VERSION_RETIRED: [
 		400,
@@ -141,6 +147,7 @@ const protocolErrors = {
 		| "VERSION_RETIRED"
 		| "CODEX_MODEL_PROFILE_UNSUPPORTED"
 		| "PLATFORM_IDENTITY_ENTRY_UNAVAILABLE"
+		| "PERSONAL_RELAY_KEY_UNAVAILABLE"
 		| "CONNECTION_ALREADY_ASSOCIATED"
 		| "CONNECTION_CREDENTIAL_REJECTED"
 		| "CONNECTION_CONSUMER_UNAVAILABLE"
