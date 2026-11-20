@@ -4,6 +4,7 @@ import {
 	createAgentManagementV1,
 	createNativeCapabilityAdmissionUseCaseV1,
 	createTaskRuntimeAuthorizationUseCaseV1,
+	emptyOperationsResourcesV2,
 	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
@@ -33,6 +34,7 @@ import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
 import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
+import { PostgresOperationsResourceStoreV2 } from "./operations-resource.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -2684,6 +2686,202 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						desired_state: "stopped",
 						resource_observation: { status: "stopped", resources: [pvc] },
 					});
+					const scope = {
+						clusterId: "retained-stop-test",
+						namespace: policy.namespace,
+					};
+					const operations = new PostgresOperationsResourceStoreV2({
+						databaseUrl,
+						scope,
+					});
+					try {
+						const {
+							sandboxId,
+							sessionId: conversationId,
+							agentId,
+							generation,
+						} = drain.sandbox;
+						const quantity = {
+							cpuCores: null,
+							memoryBytes: null,
+							storageBytes: null,
+							ephemeralStorageBytes: null,
+						};
+						const [clock] = await client<
+							{ at: Date }[]
+						>`select clock_timestamp() as at`;
+						if (!clock) throw new Error("Missing fixture clock");
+						const at = clock.at.getTime();
+						const [beforeAccounting] = await client`select
+							(select jsonb_agg(to_jsonb(c)) from platform.session_sandbox_resource_charges c) as charges,
+							(select jsonb_agg(to_jsonb(r)) from platform.session_sandbox_reserves r) as reserves`;
+						let sample = 0;
+						const readRequests = async (
+							options: {
+								conflict?: boolean;
+								wrongPvc?: boolean;
+								pods?: "missing" | "stale" | "truncated";
+								claimsMissing?: boolean;
+							} = {},
+						) => {
+							const now = new Date(at + ++sample).toISOString();
+							const snapshot = emptyOperationsResourcesV2(scope, now);
+							const claim = {
+								...pvc,
+								uid: options.wrongPvc ? "foreign-pvc" : pvc.uid,
+								kind: "PersistentVolumeClaim" as const,
+								ownerUid: null,
+								ownerGeneration: null,
+								agentId,
+								agentName: null,
+								sessionId: conversationId,
+								sandboxId,
+								generation,
+								revision: sourcePolicy.configurationRevision,
+								workloadRevision: null,
+								resourceFence: receipt.sourceResourceFence,
+								ownership: "unknown" as const,
+								ownershipReason: null,
+								role: "sandbox" as const,
+								nodeName: null,
+								phase: "Bound",
+								ready: null,
+								restarts: 0,
+								reason: null,
+								observedAt: now,
+								identityObservedAt: now,
+								usage: quantity,
+								requests: { ...quantity, storageBytes: 8192 },
+								limits: quantity,
+								containers: [],
+								images: [],
+								retainedStorage: false,
+							};
+							snapshot.resources = [claim];
+							if (options.conflict)
+								snapshot.resources.push({
+									...claim,
+									kind: "Pod",
+									name: pod.name,
+									uid: "conflicting-pod",
+									phase: "Running",
+									requests: { ...quantity, cpuCores: 4, memoryBytes: 16384 },
+									sandboxId: null,
+								});
+							snapshot.truncated = options.pods === "truncated";
+							await operations.write(snapshot, {
+								podsObservedAt: options.pods
+									? options.pods === "stale"
+										? new Date(at - 120_000).toISOString()
+										: null
+									: now,
+								claimsObservedAt: options.claimsMissing ? null : now,
+							});
+							return (await operations.read({ includeSessionRequests: true }))
+								.budget;
+						};
+						expect(await readRequests()).toMatchObject({
+							counts: { sessions: 1, retainedStorage: 1 },
+							sessionUsage: { cpuCores: 0, memoryBytes: 0, storageBytes: 8192 },
+							sessionRequestCoverage: {
+								cpuCores: 1,
+								memoryBytes: 1,
+								storageBytes: 1,
+							},
+							unaccountedCount: 0,
+						});
+						for (const options of [
+							{ conflict: true },
+							{ pods: "missing" },
+							{ pods: "stale" },
+							{ pods: "truncated" },
+						] as const) {
+							expect(await readRequests(options)).toMatchObject({
+								sessionUsage: {
+									cpuCores: null,
+									memoryBytes: null,
+									storageBytes: 8192,
+								},
+							});
+						}
+						for (const options of [
+							{ wrongPvc: true },
+							{ claimsMissing: true },
+						]) {
+							expect(await readRequests(options)).toMatchObject({
+								sessionUsage: {
+									cpuCores: null,
+									memoryBytes: null,
+									storageBytes: null,
+								},
+							});
+						}
+						await client`insert into platform.outbox_items
+							(id,scope_type,scope_id,operation,payload,status,trace_id)
+							select id || ':ambiguous',scope_type,scope_id,operation,payload,status,trace_id
+							from platform.outbox_items where id=${request.itemId}`;
+						expect(await readRequests()).toMatchObject({
+							sessionUsage: {
+								cpuCores: null,
+								memoryBytes: null,
+								storageBytes: 8192,
+							},
+						});
+						await client`delete from platform.outbox_items where id=${`${request.itemId}:ambiguous`}`;
+						for (const [path, value] of [
+							[["lifecycle", "stopReceipt", "sourceResourceFence"], 999],
+							[["lifecycle", "authority", "managementFence"], 999],
+							[
+								["lifecycle", "preparation"],
+								{ generation, resourceFence: receipt.targetResourceFence + 1 },
+							],
+						] as const) {
+							await client`update platform.outbox_items
+								set payload=jsonb_set(payload,${[...path]}::text[],${client.json(value)})
+								where id=${request.itemId}`;
+							expect(await readRequests()).toMatchObject({
+								sessionUsage: {
+									cpuCores: null,
+									memoryBytes: null,
+									storageBytes: 8192,
+								},
+							});
+							await client`update platform.outbox_items set payload=${client.json(pending?.payload)} where id=${request.itemId}`;
+						}
+						const [presentObservation] =
+							await client`select resource_observation
+							from platform.session_sandbox_allocations where sandbox_id=${sandboxId}`;
+						if (!presentObservation)
+							throw new Error("Missing stop observation");
+						await client`update platform.session_sandbox_allocations set resource_observation=
+							jsonb_set(resource_observation,'{resources,0,uid}','"foreign-receipt-pvc"'::jsonb)
+							where sandbox_id=${sandboxId}`;
+						expect(await readRequests()).toMatchObject({
+							sessionUsage: {
+								cpuCores: null,
+								memoryBytes: null,
+								storageBytes: null,
+							},
+						});
+						await client`update platform.session_sandbox_allocations
+							set resource_observation=${client.json(presentObservation.resource_observation)}
+							where sandbox_id=${sandboxId}`;
+						const [afterAccounting] = await client`select
+							(select jsonb_agg(to_jsonb(c)) from platform.session_sandbox_resource_charges c) as charges,
+							(select jsonb_agg(to_jsonb(r)) from platform.session_sandbox_reserves r) as reserves`;
+						expect(afterAccounting).toEqual(beforeAccounting);
+						await client`update platform.outbox_items set status='pending' where id=${request.itemId}`;
+						expect(await readRequests()).toMatchObject({
+							sessionUsage: {
+								cpuCores: null,
+								memoryBytes: null,
+								storageBytes: 8192,
+							},
+						});
+					} finally {
+						await operations.close();
+					}
+
 					return;
 				}
 				// Original verified Workload is a controlled receiver fixture, not runtime acceptance.

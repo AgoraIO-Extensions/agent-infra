@@ -174,6 +174,11 @@ export interface OperationsSessionAllocationV2 {
 	readonly stopped: boolean;
 	readonly noRetainedPvc: boolean;
 	readonly configurationRevision: number | null;
+	readonly inheritedStop?: {
+		readonly pvcUid: string;
+		readonly removedPodNames: readonly string[];
+		readonly settledAt: string;
+	};
 }
 
 export interface OperationsInventoryV2 {
@@ -190,6 +195,8 @@ function projectSessionRequests(
 		bound: readonly OperationsResourceV2[];
 		unscopedSessions: number;
 		podsComplete: boolean;
+		podsObservedAt?: string | null;
+		claimsObservedAt?: string | null;
 		claimsComplete: boolean;
 	},
 	result: OperationsBudgetV2,
@@ -253,6 +260,10 @@ function projectSessionRequests(
 			]),
 		];
 		const pods = candidates.filter((i) => input.observed[i]?.kind === "Pod");
+		const inherited = allocation.inheritedStop;
+		const removedPodPresent = inherited?.removedPodNames.some((name) =>
+			(byName.get(name) ?? []).some((i) => input.observed[i]?.kind === "Pod"),
+		);
 		const claims = candidates.filter(
 			(i) => input.observed[i]?.kind === "PersistentVolumeClaim",
 		);
@@ -260,8 +271,18 @@ function projectSessionRequests(
 		const claim = input.claimsComplete
 			? freshSample(claims, allocation)
 			: undefined;
+		const inheritedStopped =
+			inherited !== undefined &&
+			claim?.uid === inherited.pvcUid &&
+			claim.phase === "Bound" &&
+			input.podsObservedAt != null &&
+			Date.parse(input.podsObservedAt) >= Date.parse(inherited.settledAt) &&
+			input.claimsObservedAt != null &&
+			Date.parse(input.claimsObservedAt) >= Date.parse(inherited.settledAt) &&
+			!removedPodPresent;
 		const stopped =
-			allocation.stopped && allocation.configurationRevision !== null;
+			(allocation.stopped || inheritedStopped) &&
+			allocation.configurationRevision !== null;
 		const podAbsent = stopped && input.podsComplete && pods.length === 0;
 		const take = (resource: OperationsResourceV2 | undefined) => {
 			if (!resource || counted.has(resource.uid)) return undefined;

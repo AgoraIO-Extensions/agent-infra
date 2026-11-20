@@ -1,0 +1,1 @@
+CREATE INDEX "outbox_scope_operation_idx" ON "platform"."outbox_items" USING btree ("scope_type","scope_id","operation","id");
