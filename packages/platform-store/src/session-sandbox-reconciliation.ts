@@ -266,6 +266,7 @@ async function lockedContext(
                         and ${conversation.host_session_ref !== null}
                         and o.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
                         and o.status in ('pending', 'processing', 'retry_scheduled')
+                        and not (o.payload ? 'metadataRecovery')
                 ) as events_pending,
                 exists (
                     select 1 from platform.conversation_stops s

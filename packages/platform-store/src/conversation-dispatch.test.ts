@@ -10973,40 +10973,45 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		},
 	);
 
-	it("retains the original compute until terminal event/ACK control work settles (#4266)", async () => {
-		const work = await seed("conversation.turn.submit.v1", {
-			executionStatus: "completed",
-			executionFence: 3,
-			hostSessionRef: "original-host",
-		});
-		const sandbox = await prepared(work);
-		await client`update platform.conversation_executions set last_runtime_cursor='original-cursor' where execution_id=${work.executionId}`;
-		await reverify();
-		expect(await upgrade()).toBe(1);
-		const store = sandboxStore();
-		const request = {
-			schemaVersion: 1 as const,
-			itemId: sandbox.itemId,
-			workerId: "control-drain-test",
-			leaseDurationMs: 30_000,
-		};
-		try {
-			const drain = await store.claimSandboxReconciliation(request);
-			expect(drain).toMatchObject({
-				purpose: "drain",
-				drainComputeAllowed: false,
+	it.each([false, true])(
+		"retains required terminal control work without extending historical metadata-only occupancy (metadata=%s, #4266)",
+		async (metadata) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "completed",
+				executionFence: 3,
+				hostSessionRef: "original-host",
 			});
-			await client`update platform.outbox_items set status='succeeded' where id=${work.itemId}`;
-			await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${sandbox.itemId}`;
-			const settled = await store.claimSandboxReconciliation(request);
-			expect(settled).toMatchObject({
-				purpose: "drain",
-				drainComputeAllowed: true,
-			});
-		} finally {
-			await store.close();
-		}
-	});
+			const sandbox = await prepared(work);
+			await client`update platform.conversation_executions set last_runtime_cursor='original-cursor' where execution_id=${work.executionId}`;
+			if (metadata)
+				await client`update platform.outbox_items set payload=jsonb_set(payload,'{metadataRecovery}',${client.json({ id: "metadata-control-test", requestedAt: Date.now(), originalStatus: "succeeded" })}::jsonb) where id=${work.itemId}`;
+			await reverify();
+			expect(await upgrade()).toBe(1);
+			const store = sandboxStore();
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: sandbox.itemId,
+				workerId: "control-drain-test",
+				leaseDurationMs: 30_000,
+			};
+			try {
+				const drain = await store.claimSandboxReconciliation(request);
+				expect(drain).toMatchObject({
+					purpose: "drain",
+					drainComputeAllowed: metadata,
+				});
+				await client`update platform.outbox_items set status='succeeded' where id=${work.itemId}`;
+				await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${sandbox.itemId}`;
+				const settled = await store.claimSandboxReconciliation(request);
+				expect(settled).toMatchObject({
+					purpose: "drain",
+					drainComputeAllowed: true,
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
 
 	it("keeps an idle Sandbox current after a channel-only configuration revision (ADR-0028)", async () => {
 		const idle = await seed("conversation.turn.submit.v1", {
