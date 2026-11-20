@@ -1716,6 +1716,7 @@ export function registerConversationRoutes(
 						}
 					}
 					const request = context.req.raw;
+					context.header("X-Accel-Buffering", "no");
 					return streamSSE(
 						context,
 						async (stream) => {

@@ -600,8 +600,15 @@
     {
       "idx": 89,
       "version": "7",
-      "when": 1795128447892,
-      "tag": "0089_executor_stop_drain",
+      "when": 1795145800747,
+      "tag": "0089_operations_outbox_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1795158036005,
+      "tag": "0090_executor_stop_drain",
       "breakpoints": true
     }
   ]

@@ -89,6 +89,12 @@ export const outboxItems = platformSchema.table(
 			sql`(${table.status} = 'processing') = (${table.leaseOwner} IS NOT NULL)`,
 		),
 		index("outbox_eligibility_idx").on(table.status, table.availableAt),
+		index("outbox_scope_operation_idx").on(
+			table.scopeType,
+			table.scopeId,
+			table.operation,
+			table.id,
+		),
 	],
 );
 

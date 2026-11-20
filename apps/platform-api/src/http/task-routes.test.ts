@@ -176,6 +176,7 @@ describe("task route observability", () => {
 		await reader.read();
 		controller.abort();
 		await reader.cancel();
+		expect(response.headers.get("X-Accel-Buffering")).toBe("no");
 		await vi.waitFor(() => {
 			expect(observations.filter(({ stage }) => stage === "sse")).toEqual(
 				expect.arrayContaining([

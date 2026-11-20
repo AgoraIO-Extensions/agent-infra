@@ -1,5 +1,5 @@
 {
-  "id": "50a68896-44f8-4927-8667-3d9a35fa6401",
+  "id": "aa16d836-0c73-425f-9bef-2e2365d1dc83",
   "prevId": "0776e92b-fa3c-48ba-9cbc-44c68d4492ff",
   "version": "7",
   "dialect": "postgresql",
@@ -3696,13 +3696,6 @@
           "notNull": true,
           "default": "now()"
         },
-        "executor_drain_required": {
-          "name": "executor_drain_required",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "confirmation_deadline": {
           "name": "confirmation_deadline",
           "type": "timestamp with time zone",
@@ -5378,6 +5371,39 @@
             },
             {
               "expression": "available_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "outbox_scope_operation_idx": {
+          "name": "outbox_scope_operation_idx",
+          "columns": [
+            {
+              "expression": "scope_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scope_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "operation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
