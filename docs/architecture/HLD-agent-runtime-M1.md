@@ -1015,6 +1015,12 @@ environment 选择的持久/工作区配置；不能继承请求、Owner 或宿�
 这不是 `sandbox_mode` 配置值；`thread/start.sandbox` 也不接收该 policy 类型。
 该 policy 把 enforcement 交给上述已验证外部边界，不自行创建隔离或替代 NetworkPolicy。
 
+获准的 Codex reserve 按工程 Spec [§10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)
+从首次创建起使用双容器。领取前只启动 Host 和受控的 runner/exec-server，按下文建立实例身份，
+用固定合成 scratch 检查远端执行和精确挂载。Host 在返回预留可用证明前复核本实例 epoch、
+检查结果与无业务状态。app-server 的业务 Session、模型请求及受业务 Grant 保护的入口保持关闭，
+直到原领取完成且取得业务晋升回执。预留可用证明不代替原生业务准备。
+
 固定 upstream 的模型 `exec_command`、`apply_patch`、`view_image` 与文件访问须走所选 remote
 process/filesystem；独立 app-server `command/exec` 和 `fs/*` 是 local-only 客户端 API，
 不得用作该模式的模型工具或恢复回退。平台固定工作区 reader 与文件交换仍沿现有有界接口。
@@ -1086,6 +1092,25 @@ Executor 实例或传输会话变化使原准入失效；只有原实例/会话�
   原 Stop 期限仍按 §8.4 收敛，排空未证继续按
   [工程 Spec §11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
   保留原屏障和占用。
+
+**预留实例的启动与领取。** Worker 用最终 ID 固定 executor 静态绑定和空 workspace，
+按本节在实际 Pod UID 回读后绑定双端身份。可信 init 的交付允许在领取前完成。
+原绝对启动期限和凭证首次消费期限仍适用，另按预留 TTL 判定领取资格。
+已固定的原实例可在首次消费期限结束后保持有效。领取时须确认预留未过期、原 Pod UID、
+已认证的 Host/runner epoch、generation/fence、布局及活性均与当前绑定一致。
+同名 Pod 或任一容器实例替换、断连后无法核实原传输会话、身份或配置漂移时拒绝沿旧证明晋升。
+
+真实领取提交后，Worker 使用现有受信 Worker→Host 校验取得同一实例的复核结果，
+并结合资源和 allocation 回读，按工程 Spec §10.1.1 持久交付业务晋升回执。
+该路径沿用现有业务授权和只读 readiness 范围，不改变不可变 Secret 与容器装配。
+启动或交付结果不明时只核实原意图与原 Pod，期限不刷新。领取后证据未确认继续关闭业务入口，
+原会话、PVC 和占用沿正式恢复路径收口。获准后原业务 Turn 的 Stop 与排空继续使用本节的实例身份，
+保留原执行屏障和占用直至取得相应证明。
+
+预留验收须回读同一 Pod/PVC 从无业务状态到一次真实领取、业务晋升和首次正常投递的受信证据。
+覆盖旧 profile 或单容器、错误主体、旧 UID/epoch/fence、启动与预留过期、领取与淘汰竞争、
+Worker 重启及领取或晋升确认丢失。负例确认业务保持关闭，未知占用不释放，且已领取 PVC
+不被预留清理器回收。单独运行下述 Stop 与实例身份验收。
 
 在目标 ACK 新 lane 按以下步骤取证。
 
