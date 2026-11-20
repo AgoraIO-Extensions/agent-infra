@@ -21,6 +21,18 @@ const stopSchema = z.strictObject({
 	stopFence: fence,
 	natural: z.literal(true).optional(),
 });
+const drainEvidenceSchema = z.strictObject({
+	verifiedAt: fence,
+	groups: z
+		.array(
+			z.strictObject({
+				id: z.string().regex(/^[a-f0-9]{64}$/),
+				exitedAt: fence,
+			}),
+		)
+		.max(4_096),
+});
+export type CodexExecutorDrainEvidenceV1 = z.infer<typeof drainEvidenceSchema>;
 const stateSchema = z.strictObject({
 	schemaVersion: z.literal(1),
 	scope: scopeSchema,
@@ -28,6 +40,7 @@ const stateSchema = z.strictObject({
 	attempts: z.array(attemptSchema).max(4_096),
 	stop: stopSchema.optional(),
 	confirmed: z.boolean(),
+	evidence: drainEvidenceSchema.optional(),
 });
 type State = z.infer<typeof stateSchema>;
 
@@ -76,7 +89,8 @@ export class CodexExecutorDrainJournalV1 {
 		if (
 			!loaded.success ||
 			!isDeepStrictEqual(loaded.data.scope, expected) ||
-			(loaded.data.confirmed && !loaded.data.stop)
+			(loaded.data.confirmed && !loaded.data.stop) ||
+			(loaded.data.evidence !== undefined && !loaded.data.confirmed)
 		) {
 			await file.close();
 			return invalid();
@@ -144,8 +158,16 @@ export class CodexExecutorDrainJournalV1 {
 	}
 
 	/** Call only with the inventory digest from a verified runner proof. */
-	async confirm(input: NonNullable<State["stop"]>, digest: string) {
+	async confirm(
+		input: NonNullable<State["stop"]>,
+		digest: string,
+		inputEvidence?: CodexExecutorDrainEvidenceV1,
+	) {
 		const stop = stopSchema.parse(input);
+		const evidence =
+			inputEvidence === undefined
+				? undefined
+				: drainEvidenceSchema.parse(inputEvidence);
 		return this.file.update(
 			(state) => {
 				if (
@@ -153,11 +175,33 @@ export class CodexExecutorDrainJournalV1 {
 					inventory(state).digest !== digest
 				)
 					return false;
+				if (
+					evidence &&
+					(evidence.groups.length !== state.attempts.length ||
+						new Set(evidence.groups.map(({ id }) => id)).size !==
+							evidence.groups.length ||
+						evidence.groups.some(
+							({ exitedAt }) => exitedAt > evidence.verifiedAt,
+						))
+				)
+					return false;
+				state.evidence ??= evidence;
 				state.confirmed = true;
 				return true;
 			},
 			{ skipUnchanged: true },
 		);
+	}
+
+	evidence() {
+		const state = this.file.snapshot();
+		if (!state.confirmed || !state.stop || !state.evidence) return null;
+		return {
+			...state.scope,
+			...state.stop,
+			digest: inventory(state).digest,
+			...state.evidence,
+		};
 	}
 
 	confirmed() {

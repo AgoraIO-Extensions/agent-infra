@@ -1,6 +1,51 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 import { CODEX_PILOT_EXECUTABLE } from "@agent-infra/agent-runtime";
+
+// Run under the fixed exec-server's own launch path, with the same UID and
+// ancestry as ordinary tools. Opens only check access. Nothing is read from
+// the parent's memory or written to the parent's channels.
+const launchIsolationProbe = String.raw`
+	const fs = require("node:fs");
+	const parent = Number(process.argv[1]);
+	const uid = Number(process.argv[2]);
+	const proc = "/proc/" + parent;
+	if (process.ppid !== parent || uid <= 0 || process.getuid() !== uid ||
+		process.geteuid() !== uid ||
+		!["1", "2", "3"].includes(fs.readFileSync("/proc/sys/kernel/yama/ptrace_scope", "utf8").trim()))
+		process.exit(1);
+	const parentStatus = fs.readFileSync(proc + "/status", "utf8");
+	if (!parentStatus.split("\n").some((line) =>
+		line.startsWith("Uid:") && line.trim().split(/\s+/).slice(1).every((value) => Number(value) === uid)))
+		process.exit(1);
+	const channels = ["0", "1"].map((fd) => fs.readlinkSync(proc + "/fd/" + fd));
+	if (!channels.every((channel) => /^socket:\[\d+\]$/.test(channel)))
+		process.exit(1);
+	for (const fd of fs.readdirSync("/proc/self/fd")) {
+		try {
+			if (channels.includes(fs.readlinkSync("/proc/self/fd/" + fd))) process.exit(1);
+		} catch (error) {
+			if (error.code !== "ENOENT") process.exit(1);
+		}
+	}
+	for (const [path, modes] of [
+		[proc + "/mem", [fs.constants.O_RDONLY, fs.constants.O_RDWR]],
+		[proc + "/fd/0", [fs.constants.O_RDONLY, fs.constants.O_WRONLY]],
+		[proc + "/fd/1", [fs.constants.O_RDONLY, fs.constants.O_WRONLY]],
+	]) {
+		for (const mode of modes) {
+			try {
+				fs.closeSync(fs.openSync(path, mode));
+				process.exit(1);
+			} catch (error) {
+				if (!["EPERM", "EACCES"].includes(error.code) &&
+					!(path.includes("/fd/") && error.code === "ENXIO")) process.exit(1);
+			}
+		}
+	}
+`;
 
 export function openPrivateExecutorV1(cwd: string, home: string) {
 	const child = spawn(
@@ -78,6 +123,69 @@ export function openPrivateExecutorV1(cwd: string, home: string) {
 			}
 		});
 	}
+	let isolation: Promise<void> | undefined;
+	function requireLaunchIsolation() {
+		isolation ??= (async () => {
+			try {
+				const uid = process.getuid?.();
+				if (
+					process.platform !== "linux" ||
+					uid === undefined ||
+					uid <= 0 ||
+					!child.pid
+				)
+					throw new Error();
+				const processId = `isolation-${randomUUID()}`;
+				const started = await request("process/start", {
+					processId,
+					argv: [
+						"/usr/local/bin/node",
+						"-e",
+						launchIsolationProbe,
+						String(child.pid),
+						String(uid),
+					],
+					cwd: pathToFileURL(cwd).href,
+					env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+					tty: false,
+					pipeStdin: false,
+					arg0: null,
+					sandbox: null,
+					enforceManagedNetwork: false,
+				});
+				if (started.error) throw new Error();
+				const exited = await request("process/read", {
+					processId,
+					afterSeq: 0,
+					maxBytes: 1024,
+					waitMs: 1000,
+				});
+				const result = exited.result as
+					| {
+							exited?: boolean;
+							closed?: boolean;
+							exitCode?: number;
+							failure?: unknown;
+							sandboxDenied?: boolean;
+					  }
+					| undefined;
+				if (
+					exited.error ||
+					!result?.exited ||
+					!result.closed ||
+					result.exitCode !== 0 ||
+					result.failure ||
+					result.sandboxDenied
+				)
+					throw new Error();
+			} catch {
+				close();
+				throw new Error("CODEX_EXECUTOR_LAUNCH_NOT_ISOLATED");
+			}
+		})();
+		return isolation;
+	}
+
 	return {
 		get pid() {
 			return child.pid;
@@ -93,6 +201,7 @@ export function openPrivateExecutorV1(cwd: string, home: string) {
 			}
 			write({ method: "initialized", params: {} });
 		},
+		requireLaunchIsolation,
 		request,
 		notification(method: string, params: unknown) {
 			write({ method, params });

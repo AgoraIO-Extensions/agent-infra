@@ -13,6 +13,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
+	type SessionSandboxResourceIdentityV1,
 	sessionSandboxRetryDelayMsV1,
 } from "@agent-infra/platform-core";
 import {
@@ -69,6 +70,9 @@ export interface PlatformConversationWorkerOptionsV2
 			startupRef: string,
 			timeoutMs: number,
 		) => Promise<number | null>,
+		recordExecutorRetirement?: (
+			resources: readonly SessionSandboxResourceIdentityV1[],
+		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
@@ -896,6 +900,8 @@ export function createPlatformConversationWorkerV2(
 				},
 				(startupRef, timeoutMs) =>
 					store.recordSandboxExecutorStartup({ claim, startupRef, timeoutMs }),
+				(resources) =>
+					store.recordSandboxExecutorRetirement({ claim, resources }),
 			);
 			clearInterval(renewal);
 			renewal = undefined;

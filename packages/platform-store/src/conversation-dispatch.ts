@@ -20,6 +20,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
+	type SessionSandboxResourceIdentityV1,
 	type TaskPrincipalV1,
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
@@ -52,6 +53,7 @@ import {
 	readStop,
 	renewLease,
 	retryOutbox,
+	sessionRequiresExecutorDrain,
 	settleUnacceptedExecutionWork,
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
@@ -89,6 +91,7 @@ import {
 	claimSandboxReconciliation,
 	prepareSandboxReconciliation,
 	recordSandboxDeletionProgress,
+	recordSandboxExecutorRetirement,
 	recordSandboxExecutorStartup,
 	recordSandboxObservation,
 	type SandboxClaimRequest,
@@ -276,6 +279,25 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.observation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxExecutorRetirement(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly resources: readonly SessionSandboxResourceIdentityV1[];
+	}) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxExecutorRetirement(
+					transaction,
+					input.claim,
+					input.resources,
 					policy,
 					this.#userDirectory,
 				),
@@ -1582,9 +1604,21 @@ export class PostgresConversationDispatchStoreV1
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
-			if (input.errorCode === "RUNTIME_RECOVERY_TIMEOUT") {
+			if (
+				input.transition.executionStatus === "failed" ||
+				input.transition.executionStatus === "cancelled" ||
+				input.transition.executionStatus === "completed"
+			) {
 				const stop = await readStop(transaction, state.execution.execution_id);
-				if (stop?.status === "submitted" && stop.executor_drain_required)
+				if (
+					stop?.status === "submitted" &&
+					(stop.executor_drain_required ||
+						(await sessionRequiresExecutorDrain(
+							transaction,
+							input.claim.conversationId,
+							input.claim.sessionGeneration,
+						)))
+				)
 					throw new StaleDispatchLease();
 			}
 			await applyTransition(transaction, state, input.claim, input.transition);

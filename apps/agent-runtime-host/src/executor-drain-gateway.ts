@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import {
 	type CodexSessionExecutorBindingV1,
@@ -66,6 +66,7 @@ export async function startExecutorDrainGatewayV1(options: {
 	const startupProbe = openPrivateExecutorV1(binding.workspaceRoot, nativeHome);
 	try {
 		await startupProbe.initialize();
+		await startupProbe.requireLaunchIsolation();
 		await probeCodexSessionExecutorStartupV1(binding, {
 			async request(method, params) {
 				const response = await startupProbe.request(method, params);
@@ -182,7 +183,20 @@ export async function startExecutorDrainGatewayV1(options: {
 						await current.backend
 							.request("process/terminate", { processId: handle }, 500)
 							.catch(() => undefined);
-					return waitForExecutorProcessGroupExitV1(group, deadline);
+					if (!(await waitForExecutorProcessGroupExitV1(group, deadline)))
+						return null;
+					const id = createHash("sha256")
+						.update(
+							JSON.stringify([
+								epoch,
+								current.protocolSession,
+								handle,
+								group.leader,
+								group.startTicks,
+							]),
+						)
+						.digest("hex");
+					return { id, exitedAt: Date.now() };
 				}),
 			);
 			if (exited.some((result) => !result))
@@ -190,7 +204,13 @@ export async function startExecutorDrainGatewayV1(options: {
 			current.drained = true;
 			// Keep the original native queries alive until the Driver retires this
 			// connection. The execution stays sealed to any further launches.
-			result = { epoch, digest, stopRequestId, stopFence: input.stopFence };
+			result = {
+				epoch,
+				digest,
+				stopRequestId,
+				stopFence: input.stopFence,
+				groups: exited,
+			};
 		} else {
 			throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
 		}
@@ -317,6 +337,7 @@ export async function startExecutorDrainGatewayV1(options: {
 						(params.arg0 != null && typeof params.arg0 !== "string")
 					)
 						throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
+					await current.backend.requireLaunchIsolation();
 					const admitted = record(
 						await executorControlRequestV1(
 							identity,

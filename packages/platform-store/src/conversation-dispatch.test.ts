@@ -1230,6 +1230,84 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("closes an expired executor preparation after original route and Pod retirement", async () => {
+		const { itemId, work, store } = await seedSandboxPrepareIntent(
+			"executor-retirement",
+		);
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status = 'observed', resource_observation = resource_observation || '{"status":"observed"}'::jsonb
+				where conversation_id = ${work.conversationId}`;
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "executor-operator",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim) throw new Error("Expected original startup claim");
+			const startupRef = `${claim.sandbox.resourceName}-executor-${claim.resourceFence}`;
+			await store.recordSandboxExecutorStartup({
+				claim,
+				startupRef,
+				timeoutMs: 1_000,
+			});
+			await client`update platform.conversation_audit_events
+				set details = details || '{"deadlineMs":1}'::jsonb
+				where conversation_id = ${work.conversationId} and details->>'checkpoint' = 'executor-startup'`;
+			const resources = (claim.previousObservation?.resources ?? []).filter(
+				({ kind }) => kind === "Service" || kind === "Pod",
+			);
+			expect(
+				await store.recordSandboxExecutorRetirement({ claim, resources }),
+			).toEqual(resources);
+			const pod = resources.find((resource) => resource.kind === "Pod");
+			if (!pod) throw new Error("Missing original Pod");
+			expect(
+				await store.recordSandboxExecutorRetirement({
+					claim,
+					resources: [{ ...pod, uid: "replacement" }],
+				}),
+			).toBeNull();
+			expect(
+				await store.recordSandboxExecutorRetirement({ claim, resources: [] }),
+			).toEqual(resources);
+			await store.recordSandboxObservation({
+				claim,
+				observation: {
+					status: "unknown",
+					failureCode: "runtime.executor_identity_timeout",
+					resources: (claim.previousObservation?.resources ?? []).filter(
+						({ kind }) => kind !== "Service" && kind !== "Pod",
+					),
+				},
+			});
+			const [outbox] =
+				await client`select status from platform.outbox_items where id = ${itemId}`;
+			expect(outbox?.status).toBe("failed");
+			const [allocation] =
+				await client`select status, resource_observation from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+			expect(allocation).toMatchObject({
+				status: "unknown",
+				resource_observation: {
+					failureCode: "runtime.executor_identity_timeout",
+					resources: expect.arrayContaining([
+						expect.objectContaining({ kind: "PersistentVolumeClaim" }),
+					]),
+				},
+			});
+			expect(
+				await store.claimSandboxReconciliation({
+					schemaVersion: 1,
+					itemId,
+					workerId: "executor-retry",
+					leaseDurationMs: 30_000,
+				}),
+			).toBeNull();
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("uses the normal prepare window only for current healthy startup evidence (#3739)", async () => {
 		const { itemId, store, work } =
 			await seedSandboxPrepareIntent("normal-window");

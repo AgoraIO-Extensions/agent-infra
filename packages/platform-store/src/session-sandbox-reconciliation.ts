@@ -25,6 +25,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
+	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxVerifiedPolicyV1,
 	sessionSandboxReconcileProgressV1,
 	shouldContinueSessionSandboxPreparationV1,
@@ -753,6 +754,90 @@ export async function recordSandboxExecutorStartup(
 	return deadline;
 }
 
+async function readExecutorStartupRetirement(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+) {
+	const [entry] = await transaction<
+		{ resources: SessionSandboxResourceIdentityV1[] }[]
+	>`
+		select details->'resources' as resources from platform.conversation_audit_events
+		where conversation_id = ${claim.sandbox.sessionId}
+			and action = 'conversation.sandbox.observed'
+			and details->>'checkpoint' = 'executor-startup-retirement'
+			and details->>'sandboxId' = ${claim.sandbox.sandboxId}
+			and details->>'sessionGeneration' = ${String(claim.sandbox.generation)}
+			and details->>'resourceFence' = ${String(claim.resourceFence)}
+		order by occurred_at desc, id desc limit 1
+	`;
+	return entry?.resources ?? null;
+}
+
+export async function recordSandboxExecutorRetirement(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	resources: readonly SessionSandboxResourceIdentityV1[],
+	policy: SessionSandboxPolicyV1,
+	directory: TaskUserDirectoryV1 | undefined,
+) {
+	const context = await ownedContext(transaction, claim, policy, directory);
+	if (
+		!context ||
+		context.purpose !== "prepare" ||
+		context.allocation.resource_observation?.status === "ready"
+	)
+		return null;
+	const [expired] = await transaction<{ expired: boolean }[]>`
+		select (details->>'deadlineMs')::numeric <= extract(epoch from clock_timestamp()) * 1000 as expired
+		from platform.conversation_audit_events
+		where conversation_id = ${claim.sandbox.sessionId}
+			and action = 'conversation.sandbox.observed'
+			and details->>'checkpoint' = 'executor-startup'
+			and details->>'sandboxId' = ${claim.sandbox.sandboxId}
+			and details->>'sessionGeneration' = ${String(claim.sandbox.generation)}
+			and details->>'resourceFence' = ${String(claim.resourceFence)}
+		order by occurred_at desc, id desc limit 1
+	`;
+	if (
+		!expired?.expired ||
+		resources.length > 2 ||
+		new Set(resources.map(({ kind }) => kind)).size !== resources.length ||
+		resources.some(
+			({ kind, name, namespace, uid, resourceVersion }) =>
+				(kind !== "Pod" && kind !== "Service") ||
+				name !== claim.sandbox.resourceName ||
+				namespace !== claim.policy.namespace ||
+				!uid ||
+				!resourceVersion,
+		)
+	)
+		return null;
+	const original = await readExecutorStartupRetirement(transaction, claim);
+	if (original)
+		return resources.every((current) =>
+			original.some(
+				(item) => item.kind === current.kind && item.uid === current.uid,
+			),
+		)
+			? original
+			: null;
+	await transaction`
+		insert into platform.conversation_audit_events
+			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+		values
+			(${randomUUID()}, ${claim.sandbox.sessionId}, null, ${claim.sandbox.agentId}, ${claim.sandbox.principal.id},
+			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id},
+			clock_timestamp(), ${transaction.json({
+				checkpoint: "executor-startup-retirement",
+				sandboxId: claim.sandbox.sandboxId,
+				sessionGeneration: claim.sandbox.generation,
+				resourceFence: claim.resourceFence,
+				resources: [...resources],
+			} as unknown as Parameters<typeof transaction.json>[0])})
+	`;
+	return resources;
+}
+
 /** Persist the delete intent/attempt before or after the Kubernetes call and refresh the claim. */
 export async function recordSandboxDeletionProgress(
 	transaction: Transaction,
@@ -876,6 +961,14 @@ export async function recordSandboxObservation(
 					context.allocation.resource_observation,
 					observation,
 				);
+	const executorStartupRetired =
+		observation.status === "unknown" &&
+		observation.failureCode === "runtime.executor_identity_timeout" &&
+		!observation.resources.some(
+			({ kind }) => kind === "Pod" || kind === "Service",
+		) &&
+		context.purpose === "prepare" &&
+		(await readExecutorStartupRetirement(transaction, claim)) !== null;
 	const unknown = decision.status === "unknown";
 	const continuePreparation =
 		decision.finished &&
@@ -962,15 +1055,15 @@ export async function recordSandboxObservation(
 	});
 	const recorded = await transaction`update platform.outbox_items
 		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
-		status = ${terminal ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
+		status = ${executorStartupRetired ? "failed" : terminal ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
 		available_at = clock_timestamp() + (${terminal ? 1000 : retry.delayMs}::bigint * interval '1 millisecond'), updated_at = clock_timestamp()
 		where id = ${claim.itemId} and status = 'processing'
 			and lease_owner = ${claim.leaseOwner}
 			and delivery_fence = ${claim.deliveryFence}
 			and lease_expires_at > clock_timestamp() returning id`;
 	if (recorded.length !== 1) return "stale";
-	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
-		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
+	await transaction`update platform.session_sandbox_allocations set status = ${executorStartupRetired ? "unknown" : decision.status},
+		resource_observation = ${transaction.json((executorStartupRetired ? observation : decision.observation) as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
 	if (stopReceipt)
 		await releaseSessionSandboxComputeBudgetV1(

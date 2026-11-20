@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -49,25 +49,41 @@ async function run() {
 		});
 	const hostIdentity = getIdentity("host");
 	const epoch = randomUUID();
-	const runner = await startExecutorDrainGatewayV1({
+	const openRunner = () =>
+		startExecutorDrainGatewayV1({
+			binding,
+			epoch,
+			identity: getIdentity("runner"),
+			nativeHome: directory,
+		});
+	if (process.argv.includes("--unverified-launch-isolation")) {
+		try {
+			await assert.rejects(async () => {
+				const unexpected = await openRunner();
+				await unexpected.close();
+			}, /CODEX_EXECUTOR_LAUNCH_NOT_ISOLATED/);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+		return;
+	}
+	const runner = await openRunner();
+	let socket: WebSocket | undefined;
+	const launchInterrupted = process.argv.includes("--lost-launch");
+	const originalAdmission = {
 		binding,
 		epoch,
-		identity: getIdentity("runner"),
-		nativeHome: directory,
-	});
-	let socket: WebSocket | undefined;
+		async assertCurrent() {},
+		onFailure: () => () => {},
+		async close() {},
+	};
 	try {
 		const host = await openExecutorDrainHostV1(
-			{
-				binding,
-				epoch,
-				async assertCurrent() {},
-				onFailure: () => () => {},
-				async close() {},
-			},
+			originalAdmission,
 			hostIdentity,
 			directory,
 		);
+		let hostClosed = false;
 		try {
 			const drain = host.drain;
 			assert.ok(drain);
@@ -146,7 +162,15 @@ async function run() {
 				sandbox: null,
 				enforceManagedNetwork: false,
 			};
-			assert.ok((await request("process/start", launch)).result);
+			if (launchInterrupted) {
+				// Deliberately drop the launch acknowledgement. The next serialized
+				// request is the independent witness that the original group exists.
+				client.send(
+					JSON.stringify({ method: "process/start", params: launch, id: ++id }),
+				);
+			} else {
+				assert.ok((await request("process/start", launch)).result);
+			}
 			const output = (
 				await request("process/read", {
 					processId: launch.processId,
@@ -160,6 +184,38 @@ async function run() {
 			const group = Number(Buffer.from(firstChunk.chunk, "base64").toString());
 			assert.ok(Number.isSafeInteger(group) && group > 1);
 			process.kill(-group, 0);
+			if (launchInterrupted) {
+				await host.close();
+				hostClosed = true;
+				const reopened = await openExecutorDrainHostV1(
+					originalAdmission,
+					hostIdentity,
+					directory,
+				);
+				try {
+					const file = join(
+						directory,
+						"executor-drain",
+						`${createHash("sha256").update("execution-original").digest("hex")}.json`,
+					);
+					const persisted = JSON.parse(await readFile(file, "utf8"));
+					assert.equal(persisted.scope.epoch, epoch);
+					assert.equal(persisted.confirmed, false);
+					assert.equal(persisted.attempts.length, 1);
+					assert.equal(persisted.attempts[0].handle, launch.processId);
+					assert.equal(
+						await reopened.drain?.confirm("execution-original"),
+						false,
+					);
+					await assert.rejects(
+						reopened.drain?.arm("execution-after-crash") ?? Promise.resolve(),
+					);
+					process.kill(-group, 0);
+				} finally {
+					await reopened.close();
+				}
+				return;
+			}
 			assert.equal(await drain.confirm("execution-original"), false);
 			assert.equal(drain.proven("execution-original"), false);
 			await assert.rejects(drain.arm("execution-before-drain"));
@@ -203,7 +259,7 @@ async function run() {
 			);
 		} finally {
 			socket?.terminate();
-			await host.close();
+			if (!hostClosed) await host.close();
 		}
 	} finally {
 		await runner.close();

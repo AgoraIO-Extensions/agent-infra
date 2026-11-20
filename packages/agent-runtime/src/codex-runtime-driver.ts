@@ -3205,7 +3205,6 @@ function isCodexOperation(
 		);
 		if (
 			!isNativeCommand ||
-			value.state !== "resolved" ||
 			!result.success ||
 			result.data.selector !== "status"
 		)
@@ -5808,6 +5807,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	// server-resolved binding, never from a wire field.
 	private readonly conversationRpcs = new Map<string, CodexRpc>();
 	private executorExecutionId?: string;
+	private readonly retiringExecutorRpcs = new WeakSet<CodexRpc>();
 	// A transport multiplexes one JSON-RPC id space, so it can never carry two
 	// request multiplexers. It is also bound to the Conversation it was opened
 	// for: reusing it for another key would alias two Conversations onto one
@@ -6026,7 +6026,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				),
 			() => {
 				unsubscribeExecutor?.();
-				if (this.sessionExecutor) this.failSessionExecutor();
+				if (this.sessionExecutor && !this.retiringExecutorRpcs.has(rpc))
+					this.failSessionExecutor();
 				// Deltas already accepted from this process still commit in order.
 				void (textDeltas.flushing ?? Promise.resolve()).then(() =>
 					this.textDeltaBatches.delete(textDeltas),
@@ -6685,30 +6686,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (
 				drain &&
 				(command.kind === "submit-turn" || command.kind === "native-command") &&
-				this.executorExecutionId !== command.executionId
+				this.executorExecutionId !== command.executionId &&
+				(command.kind !== "native-command" ||
+					!ownRecordValue(this.readState().operations, key))
 			) {
 				await drain.arm(command.executionId);
 				const oldRpcs = [...this.conversationRpcs.values()];
 				this.conversationRpcs.clear();
 				this.resumedSessions.clear();
+				for (const rpc of oldRpcs) this.retiringExecutorRpcs.add(rpc);
 				await Promise.all(oldRpcs.map((rpc) => rpc.close()));
 				this.executorExecutionId = command.executionId;
 			}
 			return command.kind === "submit-turn"
 				? this.executeSubmitTurn(command, context?.fileBridge)
 				: command.kind === "native-command"
-					? this.executeNativeCommand(command, context?.nativeCommand).then(
-							async (record) => {
-								if (
-									drain &&
-									record.result.outcome === "accepted" &&
-									record.result.status === "completed" &&
-									!(await drain.confirm(command.executionId))
-								)
-									return this.unknown(command, command.nativeSessionRef);
-								return record;
-							},
-						)
+					? this.executeNativeCommand(command, context?.nativeCommand)
 					: command.kind === "supplement"
 						? this.executeSupplement(command, context?.fileBridge)
 						: isCodexInterruptionCommand(command)
@@ -7993,7 +7986,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return prepared.operation.record;
 		}
 		if (!prepared.created)
-			return this.unknown(command, prepared.operation.nativeSessionRef);
+			return prepared.operation.nativeCommandResult
+				? this.resolveNativeCommand(
+						command,
+						command.nativeSessionRef,
+						prepared.operation.nativeCommandResult,
+					)
+				: this.unknown(command, prepared.operation.nativeSessionRef);
 		const observed = await this.readNativeStatus(
 			{
 				capabilityId: command.capabilityId,
@@ -8071,6 +8070,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return prepared.operation.record;
 		}
 		if (!prepared.created) {
+			if (prepared.operation.nativeCommandResult)
+				return this.resolveNativeCommand(
+					command,
+					command.nativeSessionRef,
+					prepared.operation.nativeCommandResult,
+				);
 			if (
 				!prepared.operation.nativeTurnId ||
 				!prepared.operation.nativeCompactionItemId
@@ -9500,6 +9505,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				return { state: "found", record: current.record };
 			}
 			return { state: "found", record: operation.record };
+		}
+		if (command.kind === "native-command" && operation.nativeCommandResult) {
+			const result = await this.resolveNativeCommand(
+				command,
+				command.nativeSessionRef,
+				operation.nativeCommandResult,
+			);
+			return result.result.outcome === "accepted"
+				? { state: "found", record: result }
+				: { state: "unknown" };
 		}
 		if (command.kind === "supplement") return this.recoverSupplement(command);
 		if (
@@ -15600,6 +15615,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		result: CodexNativeCommandResult,
 	) {
+		const key = operationKey(command);
+		const candidate = await this.update(
+			(state) => {
+				const operation = ownRecordValue(state.operations, key);
+				if (!operation || !operationMatchesCommand(operation, command))
+					stateInvalid();
+				if (operation.state === "prepared")
+					operation.nativeCommandResult ??= result;
+				return operation.record;
+			},
+			{ skipUnchanged: true },
+		);
+		if (candidate) return candidate;
+		const drain = this.sessionExecutor?.drain;
+		if (drain && !(await drain.confirm(command.executionId)))
+			return this.unknown(command, nativeSessionRef);
 		const record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,
@@ -15629,7 +15660,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (operation.state !== "prepared") stateInvalid();
 			operation.state = "resolved";
 			operation.record = record;
-			operation.nativeCommandResult = result;
+			if (!operation.nativeCommandResult) stateInvalid();
 			return record;
 		});
 	}

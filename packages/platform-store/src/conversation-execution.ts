@@ -52,6 +52,7 @@ import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,
 	lockOutbox as lockDispatchOutbox,
+	sessionRequiresExecutorDrain,
 } from "./conversation-dispatch-sql.js";
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
 import {
@@ -1912,6 +1913,11 @@ export class PostgresConversationExecutionTransactionV1
 				occurredAt: plan.outboxIntent.occurredAt,
 			});
 			if (!reservationId) unavailable();
+			const executorDrainRequired = await sessionRequiresExecutorDrain(
+				transaction,
+				plan.outboxIntent.conversationId,
+				plan.outboxIntent.sessionGeneration,
+			);
 			await transaction`
 				insert into platform.conversation_stops
 					(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at,
@@ -1919,10 +1925,7 @@ export class PostgresConversationExecutionTransactionV1
 				values
 					(${plan.targetExecution.executionId}, ${plan.stopRequestId}, 'submitted',
 					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt},
-					 exists (select 1 from platform.session_sandbox_allocations
-					  where conversation_id = ${plan.outboxIntent.conversationId}
-                        and session_generation = ${plan.outboxIntent.sessionGeneration}
-                        and resource_observation->'executorDrainRequired' = 'true'::jsonb))
+					 ${executorDrainRequired})
 			`;
 			await transaction`
 				insert into platform.outbox_items

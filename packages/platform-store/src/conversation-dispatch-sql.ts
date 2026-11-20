@@ -208,6 +208,22 @@ export async function readInitialTurnInput(
 	};
 }
 
+export async function sessionRequiresExecutorDrain(
+	transaction: Transaction,
+	conversationId: string,
+	generation: number,
+) {
+	const [row] = await transaction<{ required: boolean }[]>`
+		select exists (
+			select 1 from platform.session_sandbox_allocations
+			where conversation_id = ${conversationId}
+				and session_generation = ${generation}
+				and resource_observation->'executorDrainRequired' = 'true'::jsonb
+		) as required
+	`;
+	return row?.required === true;
+}
+
 export async function readStop(
 	transaction: Transaction,
 	executionId: string,
@@ -488,6 +504,16 @@ export async function cancelAcceptedTurn(
 ) {
 	const payload = exactPayload(state.outbox.payload, claim.operation);
 	const stop = await readStop(transaction, claim.executionId);
+	if (
+		stop?.status === "submitted" &&
+		(stop.executor_drain_required ||
+			(await sessionRequiresExecutorDrain(
+				transaction,
+				claim.conversationId,
+				claim.sessionGeneration,
+			)))
+	)
+		throw new StaleDispatchLease();
 	const stopOutbox = stop
 		? await lockOutbox(
 				transaction,

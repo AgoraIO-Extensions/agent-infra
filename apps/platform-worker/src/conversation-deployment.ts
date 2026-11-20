@@ -27,10 +27,11 @@ import type {
 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
+	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
-import type { V1Secret, V1Service } from "@kubernetes/client-node";
+import type { V1Pod, V1Secret, V1Service } from "@kubernetes/client-node";
 import {
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
@@ -1276,7 +1277,10 @@ export function createProductionSessionSandboxReceiverV1(
 			startupRef: string,
 			timeoutMs: number,
 		) => Promise<number | null>,
-	) => {
+		recordExecutorRetirement?: (
+			resources: readonly SessionSandboxResourceIdentityV1[],
+		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+	): Promise<SessionSandboxObservationV1> => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
 			throw new Error("Sandbox reconcile has no execution");
@@ -1621,7 +1625,12 @@ export function createProductionSessionSandboxReceiverV1(
 				({ resource }) =>
 					resource.kind === "Pod" && resource.uid === recordedPod?.uid,
 			);
-		if ((!claim.lifecycle || preparedReplacement) && recordedPod) {
+		if (
+			(!claim.lifecycle || preparedReplacement) &&
+			recordedPod &&
+			(!allocation.executorDrainIdentity ||
+				claim.previousObservation?.status === "ready")
+		) {
 			if ((await workload.client.read("Pod", recordedPod.name)) === null) {
 				signal.throwIfAborted();
 				return {
@@ -1653,17 +1662,52 @@ export function createProductionSessionSandboxReceiverV1(
 				throw new WorkloadKubernetesError("conflict");
 			deploymentAllocation = { ...allocation, executorStartupDeadline };
 		}
+		const retireExpired = async () => {
+			if (
+				!recordExecutorRetirement ||
+				claim.previousObservation?.status === "ready"
+			)
+				throw new WorkloadKubernetesError("conflict");
+			const resources = await adapter.retireExpiredExecutorStartup(
+				deploymentAllocation,
+				previousForApply,
+				recordExecutorRetirement,
+				signal,
+			);
+			signal.throwIfAborted();
+			return {
+				status: "unknown" as const,
+				failureCode: "runtime.executor_identity_timeout" as const,
+				resources,
+			};
+		};
+		if (
+			deploymentAllocation.executorStartupDeadline !== undefined &&
+			claim.previousObservation?.status !== "ready"
+		) {
+			const pod = await workload.client.read<V1Pod>("Pod", allocation.podName);
+			if (
+				Date.now() >= deploymentAllocation.executorStartupDeadline &&
+				!pod?.status?.conditions?.some(
+					(condition) =>
+						condition.type === "Ready" && condition.status === "True",
+				)
+			)
+				return retireExpired();
+			if (recordedPod && !pod)
+				return {
+					status: "unknown" as const,
+					failureCode: "sandbox.pod_lost" as const,
+					resources: previous,
+				};
+		}
 		try {
 			await adapter.apply(deploymentAllocation, previousForApply);
 		} catch (error) {
 			if (!(error instanceof SessionExecutorStartupExpiredV1)) throw error;
-			signal.throwIfAborted();
-			return {
-				status: "observed" as const,
-				failureCode: "runtime.executor_identity_timeout" as const,
-				resources: previousForApply,
-			};
+			return retireExpired();
 		}
+
 		signal.throwIfAborted();
 		// One complete observe per claim; normal prepare pacing is durable in Store.
 		// Keep the lease/abort/CAS boundary here and let the next claim use the

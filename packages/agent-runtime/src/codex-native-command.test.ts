@@ -14,6 +14,7 @@ import {
 	type CodexNativeStatusSelection,
 	CodexRuntimeDriver,
 } from "./codex-runtime-driver.js";
+import { createCodexSessionExecutorBindingV1 } from "./codex-session-executor-binding.js";
 import { DurableJsonFile } from "./durable-json.js";
 
 class MetadataTransport {
@@ -47,7 +48,10 @@ class MetadataTransport {
 	async send(frame: CodexAppServerFrame) {
 		this.requests.push(frame);
 		if (this.beforeSend) await this.beforeSend(frame);
-		if (frame.method === "initialize") this.respond(frame, {});
+		if (frame.method === "initialize" || frame.method === "environment/info")
+			this.respond(frame, {});
+		else if (frame.method === "environment/status")
+			this.respond(frame, { status: "ready" });
 		else if (frame.method === "config/read") {
 			const config: Record<string, unknown> = {
 				model: this.options?.model,
@@ -303,6 +307,7 @@ async function fixture(stateful = false) {
 async function invokeNativeQuery(
 	f: Awaited<ReturnType<typeof fixture>>,
 	executionId = "native-query-1",
+	beforeExecute?: () => void,
 ) {
 	const directory = await f.driver.discoverNativeCommands(f.read);
 	const capability = directory.capabilities[0];
@@ -331,11 +336,92 @@ async function invokeNativeQuery(
 		parameters: "",
 		parametersDigest: createHash("sha256").update("").digest("hex"),
 	});
+	beforeExecute?.();
 	const record = await f.driver.execute(command, { nativeCommand: read });
 	return { command, read, record };
 }
 
 describe("Codex native command result lifecycle", () => {
+	it("keeps native command lookup, status and recovery behind the original drain proof", async () => {
+		const f = await fixture();
+		const binding = createCodexSessionExecutorBindingV1({
+			namespace: "runtime",
+			podName: "sandbox-a",
+			sandboxId: "a",
+			agentId: f.binding.scope.agentId,
+			conversationId: f.binding.scope.conversationId,
+			sessionGeneration: 1,
+			resourceFence: 1,
+			imageDigest: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
+		});
+		let confirmed = false;
+		let active: string | undefined;
+		const admission = {
+			binding,
+			assertCurrent: async () => {},
+			onFailure: () => () => {},
+			drain: {
+				async arm(id: string) {
+					if (active && active !== id && !confirmed)
+						throw new Error("Still draining");
+					active = id;
+				},
+				confirm: async (id: string) => active === id && confirmed,
+				proven: (id: string) => active === id && confirmed,
+			},
+		};
+		f.transport.successor = new MetadataTransport();
+		const first = await invokeNativeQuery(f, undefined, () => {
+			Object.defineProperty(f.driver, "sessionExecutor", { value: admission });
+			active = "native-query-1";
+			Object.defineProperty(f.driver, "executorExecutionId", {
+				value: active,
+				writable: true,
+			});
+		});
+		expect(first.record.result.outcome).toBe("unknown");
+		expect(await f.driver.lookupOperation(first.command)).toEqual({
+			state: "unknown",
+		});
+		expect(
+			await f.driver.getStatus(
+				f.read.nativeSessionRef,
+				first.command.executionId,
+			),
+		).toBe("unknown");
+		await expect(invokeNativeQuery(f, "next")).rejects.toThrow(
+			"Still draining",
+		);
+		await f.driver.close();
+		const restartedTransport = new MetadataTransport();
+		restartedTransport.successor = new MetadataTransport();
+		const reopened = await MetadataDriver.openFixture(
+			f.path,
+			restartedTransport,
+		);
+		fixtures.push({ directory: f.directory, driver: reopened });
+		Object.defineProperty(reopened, "sessionExecutor", { value: admission });
+		expect(await reopened.lookupOperation(first.command)).toEqual({
+			state: "unknown",
+		});
+		confirmed = true;
+		expect(await reopened.lookupOperation(first.command)).toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "completed" } },
+		});
+		expect(
+			await reopened.getStatus(
+				f.read.nativeSessionRef,
+				first.command.executionId,
+			),
+		).toBe("completed");
+		const next = await invokeNativeQuery({ ...f, driver: reopened }, "next");
+		expect(next.record.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+	});
+
 	it("exposes compact only through the versioned state-changing directory", async () => {
 		const f = await fixture();
 		const projection = await f.driver.readNativeMetadataV2("commands", f.read);

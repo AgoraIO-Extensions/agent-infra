@@ -2350,14 +2350,22 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				container.state?.terminated?.exitCode === 0,
 		);
 		const expired = Date.now() >= expiresAt;
-		if (initialized || expired) {
+		if (
+			expired &&
+			(!initialized ||
+				!current.status?.conditions?.some(
+					(condition) =>
+						condition.type === "Ready" && condition.status === "True",
+				))
+		)
+			throw new SessionExecutorStartupExpiredV1();
+		if (initialized) {
 			if (published?.metadata?.uid && published.metadata.resourceVersion)
 				await options.client.delete({
 					apiVersion: "v1",
 					kind: "Secret",
 					metadata: published.metadata,
 				});
-			if (expired && !initialized) throw new SessionExecutorStartupExpiredV1();
 			return;
 		}
 		if (published) return;
@@ -2976,6 +2984,89 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				resources,
 			};
 		},
+		async retireExpiredExecutorStartup(
+			allocation: SessionSandboxAllocationV1,
+			previous: readonly SessionSandboxResourceIdentityV1[],
+			record: (
+				resources: readonly SessionSandboxResourceIdentityV1[],
+			) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+			signal: AbortSignal,
+		) {
+			if (
+				!allocation.executorDrainIdentity ||
+				!allocation.executorStartupDeadline ||
+				Date.now() < allocation.executorStartupDeadline ||
+				options.client.namespace !== allocation.namespace
+			)
+				throw new WorkloadKubernetesError("policy");
+			const expected = sessionSandboxResourcesV1(allocation);
+			const targets: SessionSandboxResourceIdentityV1[] = [];
+			for (const kind of ["Service", "Pod"] as const) {
+				const want = expected.find((item) => item.kind === kind);
+				const name = want?.metadata?.name;
+				if (!want || !name) throw new WorkloadKubernetesError("policy");
+				const current = await options.client.read(kind, name);
+				if (!current) continue;
+				if (
+					kind === "Pod" &&
+					(current as V1Pod).status?.conditions?.some(
+						(condition) =>
+							condition.type === "Ready" && condition.status === "True",
+					)
+				)
+					throw new WorkloadKubernetesError("conflict");
+				const { uid, resourceVersion } = current.metadata ?? {};
+				const prior = previous.find((item) => item.kind === kind);
+				if (
+					!uid ||
+					!resourceVersion ||
+					!owned(current, want, allocation) ||
+					(prior && prior.uid !== uid) ||
+					(kind === "Pod" &&
+						current.metadata?.annotations?.[
+							executorStartupDeadlineAnnotationV1
+						] !== String(allocation.executorStartupDeadline))
+				)
+					throw new WorkloadKubernetesError("conflict");
+				targets.push({
+					kind,
+					namespace: allocation.namespace,
+					name,
+					uid,
+					resourceVersion,
+				});
+			}
+			signal.throwIfAborted();
+			const original = await record(targets);
+			if (!original) throw new WorkloadKubernetesError("conflict");
+			// Close the route before retiring the process. Every delete is scoped
+			// to the identities persisted before the first Kubernetes write.
+			for (const target of original) {
+				signal.throwIfAborted();
+				const current = await options.client.read(target.kind, target.name);
+				if (!current) continue;
+				const want = expected.find((item) => item.kind === target.kind);
+				if (
+					!want ||
+					!owned(current, want, allocation) ||
+					current.metadata?.uid !== target.uid ||
+					!current.metadata.resourceVersion ||
+					(target.kind === "Pod" &&
+						(current as V1Pod).status?.conditions?.some(
+							(condition) =>
+								condition.type === "Ready" && condition.status === "True",
+						))
+				)
+					throw new WorkloadKubernetesError("conflict");
+				await options.client.delete(current);
+				if (await options.client.read(target.kind, target.name))
+					throw new WorkloadKubernetesError("unavailable");
+			}
+			return previous.filter(
+				({ kind }) => kind !== "Pod" && kind !== "Service",
+			);
+		},
+
 		async cleanup(
 			allocation: SessionSandboxAllocationV1,
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],

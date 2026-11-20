@@ -50,6 +50,15 @@ function kubectl(namespace, args, stdin) {
 		timeout: 10_000,
 		stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 	});
+	if (args[0] === "logs")
+		return bytes.split("\n").flatMap((line) => {
+			try {
+				const value = JSON.parse(line);
+				return value?.code === "CODEX_EXECUTOR_DRAIN_VERIFIED" ? [value] : [];
+			} catch {
+				return [];
+			}
+		});
 	return bytes.trim() ? JSON.parse(bytes) : null;
 }
 
@@ -148,7 +157,7 @@ export function executorAcceptance(options, get = readConfigMap, cluster = kubec
 		invalid();
 	const stop = receipt.stop;
 	if (stop !== null && (!exact(stop, ["id", "executionId", "confirmationDeadline",
-		"barrier", "occupancy", "nextTurn"]) ||
+		"barrier", "occupancy", "nextTurn", ...(receipt.proof === "confirmed" ? ["firstTerminalAt"] : [])]) ||
 		typeof stop.id !== "string" || !identifier.test(stop.id) ||
 		typeof stop.executionId !== "string" || !identifier.test(stop.executionId) ||
 		!integer(stop.confirmationDeadline) ||
@@ -156,7 +165,54 @@ export function executorAcceptance(options, get = readConfigMap, cluster = kubec
 		!["retained", "released", "unproven"].includes(stop.occupancy) ||
 		!["accepted", "rejected", "unproven"].includes(stop.nextTurn)))
 		invalid();
+	if (receipt.proof === "confirmed") {
+		const evidence = stop && readOriginalDrainEvidence(cluster, namespace, plan, receipt);
+		if (!evidence) return { schemaVersion: 1, namespace, run, evidence: "pending" };
+		return { ...receipt, drainEvidence: evidence };
+	}
 	return receipt;
+}
+
+function readOriginalDrainEvidence(cluster, namespace, plan, receipt) {
+	const { stop, target, podUid } = receipt;
+	if (!podUid || !integer(stop.firstTerminalAt) || stop.firstTerminalAt < plan.startsAt ||
+		stop.firstTerminalAt > plan.expiresAt)
+		return null;
+	const original = () => {
+		const pod = cluster(namespace, ["get", "pod", target.sandbox, "-o", "json"]);
+		return pod?.kind === "Pod" && pod.metadata?.uid === podUid &&
+			pod.metadata.name === target.sandbox && pod.metadata.namespace === namespace;
+	};
+	try {
+		if (!original()) return null;
+		const logs = cluster(namespace, [
+			"logs", target.sandbox, "--container=runtime",
+			`--since-time=${new Date(plan.startsAt).toISOString()}`,
+		]);
+		if (!Array.isArray(logs) || !original()) return null;
+		const candidates = logs.filter((item) =>
+			exact(item, ["schemaVersion", "code", "podUid", "executionId", "stopRequestId",
+				"generation", "resourceFence", "epoch", "stopFence", "digest", "verifiedAt", "groups"]) &&
+			item.schemaVersion === 1 && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED" &&
+			item.podUid === podUid && item.executionId === stop.executionId &&
+			item.stopRequestId === stop.id && item.generation === target.generation &&
+			item.resourceFence === target.resourceFence &&
+			/^[a-f0-9-]{36}$/.test(item.epoch) && integer(item.stopFence) &&
+			/^[a-f0-9]{64}$/.test(item.digest) && integer(item.verifiedAt) &&
+			item.verifiedAt >= plan.startsAt && item.verifiedAt <= stop.firstTerminalAt &&
+			item.verifiedAt <= stop.confirmationDeadline &&
+			Array.isArray(item.groups) && item.groups.length > 0 && item.groups.length <= 4096 &&
+			item.groups.every((group) =>
+				exact(group, ["id", "exitedAt"]) && /^[a-f0-9]{64}$/.test(group.id) &&
+				integer(group.exitedAt) && group.exitedAt >= plan.startsAt && group.exitedAt <= item.verifiedAt) &&
+			new Set(item.groups.map(({ id }) => id)).size === item.groups.length,
+		);
+		const first = candidates[0];
+		return first && candidates.every((proof) => JSON.stringify(proof) === JSON.stringify(first))
+			? first : null;
+	} catch {
+		return null;
+	}
 }
 
 /** The deployment owner supplies immutable, versioned fixtures in the approved namespace. */

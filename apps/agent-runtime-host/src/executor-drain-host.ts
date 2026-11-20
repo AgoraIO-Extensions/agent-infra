@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import {
+	type CodexExecutorDrainEvidenceV1,
 	CodexExecutorDrainJournalV1,
 	type CodexSessionExecutorAdmissionV1,
 	type ExecutorIdentityV1,
@@ -204,9 +205,19 @@ export async function openExecutorDrainHostV1(
 						result.digest !== inventory.digest ||
 						result.stopRequestId !== stop.stopRequestId ||
 						result.stopFence !== stop.stopFence ||
-						!(await target.journal.confirm(stop, inventory.digest))
+						!Array.isArray(result.groups) ||
+						!(await target.journal.confirm(stop, inventory.digest, {
+							verifiedAt: Date.now(),
+							groups: result.groups as CodexExecutorDrainEvidenceV1["groups"],
+						}))
 					)
 						return false;
+					const evidence = target.journal.evidence();
+					if (evidence && !evidence.natural) {
+						process.stdout.write(
+							`${JSON.stringify({ schemaVersion: 1, code: "CODEX_EXECUTOR_DRAIN_VERIFIED", ...evidence })}\n`,
+						);
+					}
 					return true;
 				} catch {
 					return false;
