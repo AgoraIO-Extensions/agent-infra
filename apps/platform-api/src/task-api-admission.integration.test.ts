@@ -1291,3 +1291,68 @@ describe("#4273 human Task access intersection over HTTP and PostgreSQL", () => 
 		},
 	);
 });
+
+describe("#4273 mixed typed availability after #4304", () => {
+	it.each(["user", "organization"] as const)(
+		"keeps human %s access independent of application entries",
+		async (mode) => {
+			const originalResolver = directory.resolveUser;
+			directory.resolveUser = async () => ({
+				schemaVersion: 1,
+				userId: "same-id",
+				accountStatus: "active",
+				organizationIds: mode === "organization" ? ["mixed-org"] : [],
+				authorizationRevision: "user-1",
+			});
+			try {
+				await sql`delete from platform.agent_availability where agent_id=${configuration.agentId}`;
+				await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values
+    (${configuration.agentId},'application','same-id'),
+    (${configuration.agentId},'organization','mixed-org'),
+    (${configuration.agentId},'user',${mode === "user" ? "same-id" : "another-user"})`;
+				const original = await submit("user", "mixed-availability");
+				expect((await request(path(original), "user")).status).toBe(200);
+				expect((await cancel(original, "user", "mixed-cancel")).status).toBe(
+					202,
+				);
+				expect(
+					TaskProjectionV1Schema.parse(
+						await (await request(path(original), "user")).json(),
+					).status,
+				).toBe("cancelled");
+				await sql`delete from platform.agent_availability where agent_id=${configuration.agentId} and target_type::text<>'application'`;
+				expect((await request(path(original), "user")).status).toBe(404);
+				expect(
+					(await cancel(original, "user", "mixed-denied-cancel")).status,
+				).toBe(404);
+				expect(
+					(
+						await request(
+							`/api/v1/agents/${configuration.agentId}/tasks`,
+							"user",
+							{ schemaVersion: 1, text: "controlled refusal" },
+							"mixed-denied-submit",
+						)
+					).status,
+				).toBe(403);
+				expect(
+					await sql`select execution_id from platform.conversation_executions`,
+				).toHaveLength(1);
+				// Applications keep the approved grant-only transition, without borrowing human scope.
+				await sql`update platform.agent_availability set target_id='unrelated-application' where agent_id=${configuration.agentId}`;
+				expect(
+					(
+						await request(
+							`/api/v1/agents/${configuration.agentId}/tasks`,
+							"application",
+							{ schemaVersion: 1, text: "controlled transition" },
+							"mixed-app-transition",
+						)
+					).status,
+				).toBe(202);
+			} finally {
+				directory.resolveUser = originalResolver;
+			}
+		},
+	);
+});

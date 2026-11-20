@@ -200,6 +200,7 @@ function harness(
 			`Unrecognized controlled transaction statement: ${statement}`,
 		);
 	}) as unknown as postgres.TransactionSql;
+	Object.assign(transaction, { unsafe: (fragment: string) => fragment });
 	let reads = 0;
 	const userDirectory: TaskUserDirectoryV1 = {
 		async resolveUser() {

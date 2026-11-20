@@ -948,3 +948,31 @@ it("#4273 intersects explicit metadata grants with current availability before p
 	});
 	expect(single.response?.status).toBe(404);
 });
+
+it("#4273 mixed availability metadata neither exposes nor borrows application entries", async () => {
+	await client`update platform.agent_owners set owner_id='another-owner' where agent_id='agent_1'`;
+	await client`delete from platform.agent_availability where agent_id='agent_1'`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values
+  ('agent_1','application','org_1'),('agent_1','organization','org_1'),('agent_1','user','user_alice')`;
+	await grant("agent_1", "use");
+	const service = await start();
+	const issued = await issue(service, "mixed.availability");
+	const list = () =>
+		listAgentsV2({ ...service.options, auth: issued.credential });
+	const get = () =>
+		getAgentV2({
+			...service.options,
+			auth: issued.credential,
+			path: { agentId: "agent_1" },
+		});
+	const visible = await list();
+	expect(visible.response?.status).toBe(200);
+	expect(visible.data?.items).toHaveLength(1);
+	expect(visible.data?.items[0]?.configuration.availability).toHaveLength(2);
+	expect((await get()).response?.status).toBe(200);
+	await client`delete from platform.agent_availability where agent_id='agent_1' and target_type::text<>'application'`;
+	const hidden = await list();
+	expect(hidden.response?.status).toBe(200);
+	expect(hidden.data?.items).toEqual([]);
+	expect((await get()).response?.status).toBe(404);
+});

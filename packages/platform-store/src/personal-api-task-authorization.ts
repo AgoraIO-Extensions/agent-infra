@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	type AgentManagementStateV1,
 	type CurrentTaskApplicationV1,
 	PersonalApiCredentialErrorV1,
 	type PersonalApiTaskAdmissionAuthorityV1,
@@ -14,6 +15,7 @@ import {
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
+import { agentAvailabilityTargetJsonSql } from "./agent-availability-target.js";
 import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
 
 interface CredentialRow {
@@ -105,18 +107,16 @@ async function currentFacts(
 							agent_id: string;
 							owner_ids: string[];
 							availability: (
-								| { kind: "user"; userId: string }
-								| { kind: "organization"; organizationId: string }
+								| AgentManagementStateV1["availability"][number]
+								| null
 							)[];
 						}[]
 					>`
 						select a.id as agent_id,
 						    array(select owner_id from platform.agent_owners
 						        where agent_id = a.id order by owner_id) as owner_ids,
-						    coalesce((select jsonb_agg(case target_type
-						        when 'user' then jsonb_build_object('kind','user','userId',target_id)
-						        when 'organization' then jsonb_build_object('kind','organization','organizationId',target_id)
-						        end) from platform.agent_availability where agent_id = a.id), '[]'::jsonb) as availability
+						    coalesce((select jsonb_agg(${transaction.unsafe(agentAvailabilityTargetJsonSql("availability_target"))})
+						        from platform.agent_availability availability_target where availability_target.agent_id = a.id), '[]'::jsonb) as availability
 						from platform.agents a where a.id = ${input.agentId}
 					`
 				)[0]
@@ -131,7 +131,11 @@ async function currentFacts(
 			? {
 					agentId: agent.agent_id,
 					ownerIds: agent.owner_ids,
-					availability: agent.availability,
+					availability: agent.availability.map((target) => {
+						if (target === null)
+							throw new PersonalApiCredentialErrorV1("unavailable");
+						return target;
+					}),
 				}
 			: null,
 		credential: credential

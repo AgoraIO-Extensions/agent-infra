@@ -538,3 +538,13 @@ describe("same-transaction typed application API policy", () => {
 		).rejects.toMatchObject({ code: "not_found" });
 	});
 });
+
+it("#4273 unknown availability fails closed even for an effective Owner", async () => {
+	const credential = await issue();
+	await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values(${agentId},${userId},clock_timestamp())`;
+	await client`alter type platform.agent_availability_target_type add value 'future-4273'`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'future-4273','unknown-target')`;
+	await expect(
+		client.begin((tx) => resolve(tx, credential.credential)),
+	).rejects.toMatchObject({ code: "unavailable" });
+});
