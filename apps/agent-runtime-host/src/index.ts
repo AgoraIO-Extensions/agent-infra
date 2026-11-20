@@ -108,6 +108,11 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	executorInstanceRead?: (
+		request: import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionReadV2,
+	) => Promise<
+		import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionV2
+	>;
 	browserCapability?:
 		| RuntimeBrowserCapabilityAssemblyV1
 		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
@@ -552,24 +557,42 @@ export async function assembleRuntimeHost(
 		})();
 		return closing;
 	};
+	let executorInstanceRead: StartOptions["executorInstanceRead"];
 	try {
 		if (sessionExecutorBinding) {
 			sessionExecutor = await openCodexSessionExecutorAdmissionV1(
 				sessionExecutorBinding,
 				required("AGENT_INFRA_RUNTIME_POD_UID"),
 			);
-			await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
 			if (environment.AGENT_INFRA_EXECUTOR_STARTUP_REF !== undefined) {
+				const identity = await consumeExecutorIdentityV1(
+					"host",
+					sessionExecutorBinding,
+					environment,
+				);
+				const pin = await pinCodexSessionExecutorEpochV1(
+					dataDirectory,
+					sessionExecutor,
+					identity,
+					activeConfiguration?.configVersion,
+				);
+				if (pin)
+					executorInstanceRead = async (request) => {
+						if (
+							request.startupRef !== pin.startupRef ||
+							request.attemptId !== pin.attemptId ||
+							request.podUid !== pin.podUid
+						)
+							throw new Error("CODEX_SESSION_EXECUTOR_INVALID");
+						return pin.read(request.challenge);
+					};
 				sessionExecutor = await openExecutorDrainHostV1(
 					sessionExecutor,
-					await consumeExecutorIdentityV1(
-						"host",
-						sessionExecutorBinding,
-						environment,
-					),
+					identity,
 					dataDirectory,
 				);
-			}
+			} else
+				await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
 			detachSessionExecutorFailure = sessionExecutor.onFailure(() => {
 				void Promise.resolve()
 					.then(async () => {
@@ -1020,6 +1043,7 @@ export async function assembleRuntimeHost(
 				: {}),
 			...(oauth ? { oauth } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
+			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			serviceToken,
 			port,
 			close,

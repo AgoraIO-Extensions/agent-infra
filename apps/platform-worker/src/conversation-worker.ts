@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
+	ExecutorInstanceMutationV2,
+	ExecutorInstanceStateV2,
+} from "@agent-infra/contracts/runtime";
+import type {
 	ObservabilitySpan,
 	startObservability,
 } from "@agent-infra/observability";
@@ -74,6 +78,9 @@ export interface PlatformConversationWorkerOptionsV2
 			resources: readonly SessionSandboxResourceIdentityV1[],
 		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
 		readExecutorRetirement?: () => Promise<boolean>,
+		executorInstances?: (
+			mutation: ExecutorInstanceMutationV2,
+		) => Promise<{ state: ExecutorInstanceStateV2; permit: boolean } | null>,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
@@ -904,6 +911,14 @@ export function createPlatformConversationWorkerV2(
 				(resources) =>
 					store.recordSandboxExecutorRetirement({ claim, resources }),
 				() => store.hasSandboxExecutorRetirement(claim),
+				async (mutation) => {
+					const result = await store.transitionSandboxExecutorInstance({
+						claim,
+						mutation,
+					});
+					if (result) claim = result.claim as typeof claim;
+					return result ? { state: result.state, permit: result.permit } : null;
+				},
 			);
 			clearInterval(renewal);
 			renewal = undefined;

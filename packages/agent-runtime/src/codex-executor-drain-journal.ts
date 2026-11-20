@@ -11,6 +11,15 @@ const scopeSchema = z.strictObject({
 	generation: fence,
 	resourceFence: fence,
 	epoch: identifier,
+	startup: z
+		.strictObject({
+			schemaVersion: z.literal(2),
+			attemptId: z.string().uuid(),
+			startupRef: identifier,
+			recordRef: z.string().uuid(),
+			factDigest: z.string().regex(/^[a-f0-9]{64}$/),
+		})
+		.optional(),
 });
 const rejectionSchema = z.strictObject({
 	id: z.string().regex(/^[a-f0-9]{64}$/),
@@ -83,6 +92,7 @@ function inventory(state: State) {
 						? [protocolSession, handle, rejection]
 						: [protocolSession, handle],
 				),
+				...(state.scope.startup ? [state.scope.startup] : []),
 			]),
 		)
 		.digest("hex");

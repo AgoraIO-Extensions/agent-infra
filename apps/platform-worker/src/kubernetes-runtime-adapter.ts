@@ -161,6 +161,12 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly codexContainerBoundaryEnabled?: boolean;
 	/** Worker-owned approval for standard keyless Codex business Sessions only. */
 	readonly codexSessionExecutor?: CodexSessionExecutorPolicyV1;
+	/** Deployment-reviewed consumers; absent does not permit V2 production. */
+	readonly executorInstanceStartupApprovals?: readonly {
+		schemaVersion: 2;
+		imageDigest: string;
+		verificationRef: string;
+	}[];
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionConsumerSnapshotsByAgent?: RuntimeConnectionConsumerSnapshotsByAgentV1;

@@ -99,6 +99,8 @@ import {
 	browserCapabilityOpenApiPathsV1,
 } from "./runtime/browser-capability.ts";
 import {
+	ExecutorInstanceAdoptionReadV2Schema,
+	ExecutorInstanceAdoptionV2Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeDriverV1SchemaDefinitions,
@@ -739,6 +741,14 @@ function buildArtifacts() {
 		info: { title: "Agent Infra RuntimeHost Contract", version: "4.0.0" },
 		security: [{ RuntimeServiceBearer: [] }],
 		paths: {
+			"/internal/runtime/v2/executor-startup/read": {
+				post: postOperation(
+					"readExecutorStartupAdoptionV2",
+					ExecutorInstanceAdoptionReadV2Schema,
+					ExecutorInstanceAdoptionV2Schema,
+					"application/json",
+				),
+			},
 			"/internal/runtime/v4/turns": {
 				post: postOperation(
 					"submitRuntimeTurnV4",

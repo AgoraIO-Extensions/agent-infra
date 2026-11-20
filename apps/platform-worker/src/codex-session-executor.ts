@@ -52,8 +52,9 @@ export function executorStartupPodProjectionV1(
 	init: V1Container,
 	host: V1Container,
 	runner: V1Container,
+	startupRef?: string,
 ) {
-	const ref = executorStartupRefV1(binding);
+	const ref = startupRef ?? executorStartupRefV1(binding);
 	const podUid = sessionExecutorPodEnvironmentV1()[0];
 	if (!podUid) throw new WorkloadKubernetesError("policy");
 	const common: V1EnvVar[] = [

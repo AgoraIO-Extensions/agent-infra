@@ -110,6 +110,7 @@ export * from "./evaluation-score-intents.js";
 export * from "./evaluation-scoring.js";
 export * from "./evaluation-task-binding.js";
 export * from "./execution-failure.js";
+export { transitionExecutorInstanceV2 } from "./executor-instance.js";
 export {
 	bindInputFileV1,
 	bindNativeTextInputFileV1,

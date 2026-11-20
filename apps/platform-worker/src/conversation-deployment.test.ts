@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import {
 	chmod,
 	mkdir,
@@ -12,10 +12,19 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	createAppliedRuntimeSkillDirectoryV1,
+	pinCodexSessionExecutorEpochV1,
+	signExecutorControlV1,
 	verifyCodexSessionExecutorBindingV1,
+	verifyExecutorControlV1,
+	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	type ExecutorInstanceMutationV2,
+	type ExecutorInstanceStateV2,
+	executorInstanceStartV2,
+	RuntimeSkillHubBindingV1Schema,
+} from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import {
@@ -24,6 +33,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
+	transitionExecutorInstanceV2,
 } from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
@@ -34,7 +44,7 @@ import type {
 	V1Secret,
 	V1Service,
 } from "@kubernetes/client-node";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
@@ -727,7 +737,381 @@ function customOwnerSecretFixture(
 	};
 }
 
+async function executorInstanceFixtureV2() {
+	const f = fixture();
+	const directory = await mkdtemp(join(tmpdir(), "worker-instance-"));
+	const issuer = generateKeyPairSync("ed25519");
+	const policy = {
+		...f.options.policy,
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "100m", memory: "64Mi" },
+				limits: { cpu: "500m", memory: "256Mi" },
+			},
+		},
+		executorInstanceStartupApprovals: [] as {
+			schemaVersion: 2;
+			imageDigest: string;
+			verificationRef: string;
+		}[],
+	};
+	const claim = {
+		...f.claim,
+		policy: {
+			...f.claim.policy,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		},
+	};
+	const workload = { ...f.options, policy };
+	const allocation = createSessionSandboxResourceInputResolverV1(workload, {
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+		executorDrainStartupTimeoutMs: 10000,
+	})(
+		claim.sandbox,
+		claim.policy,
+		validateAgentWorkloadDesiredV1(claim.deployment),
+		claim.modelProjection,
+		"running",
+		claim.sandbox.generation,
+		claim.resourceFence,
+	);
+	const binding = allocation.runtime?.sessionExecutor?.binding;
+	if (!binding) throw new Error("missing executor fixture binding");
+	policy.executorInstanceStartupApprovals.push({
+		schemaVersion: 2,
+		imageDigest: binding.imageDigest,
+		verificationRef: "contract-verified-image",
+	});
+	let state: ExecutorInstanceStateV2 | null = null;
+	const history: ExecutorInstanceStateV2[] = [];
+	const behavior = { unresolved: false };
+	const ledger = async (mutation: ExecutorInstanceMutationV2) => {
+		const result = transitionExecutorInstanceV2({
+			state,
+			mutation,
+			authority: {
+				namespace: claim.policy.namespace,
+				podName: claim.sandbox.resourceName,
+				sandboxId: claim.sandbox.sandboxId,
+				generation: claim.sandbox.generation,
+				resourceFence: claim.resourceFence,
+				configurationRevision: claim.policy.configurationRevision,
+				imageDigest: claim.policy.imageDigest,
+				now: Date.now(),
+				hasUnresolvedExecution: behavior.unresolved,
+				proofVerified: true,
+			},
+		});
+		if (!result) return null;
+		state = result.state;
+		history.push(structuredClone(state));
+		return { state, permit: result.permit };
+	};
+	const receiver = () =>
+		createProductionSessionSandboxReceiverV1(workload, {
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+			executorIdentityIssuer: issuer.privateKey,
+			executorDrainStartupTimeoutMs: 10000,
+		});
+	let receive = receiver();
+	const run = (previous: SessionSandboxObservationV1 | null = null) =>
+		receive(
+			{ ...claim, previousObservation: previous },
+			new AbortController().signal,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			ledger,
+		);
+	let runner: ReturnType<typeof verifyExecutorStartIdentityV1> | undefined;
+	let epoch = randomUUID();
+	let pin: Awaited<ReturnType<typeof pinCodexSessionExecutorEpochV1>>;
+	const transport = vi
+		.spyOn(globalThis, "fetch")
+		.mockImplementation(async (url, init) => {
+			const path = new URL(String(url)).pathname;
+			if (path === "/control/status") {
+				if (!runner) throw new Error("missing original runner");
+				const request = verifyExecutorControlV1(
+					runner,
+					path,
+					JSON.parse(String(init?.body)),
+				);
+				if (!request)
+					throw new Error("invalid original control authentication");
+				return Response.json(
+					signExecutorControlV1(
+						runner,
+						`${path}/result`,
+						{ epoch },
+						request.requestId,
+						request.deadline,
+					),
+				);
+			}
+			if (path !== "/internal/runtime/v2/executor-startup/read" || !pin)
+				throw new Error("unexpected fixture destination");
+			const request = JSON.parse(String(init?.body));
+			return Response.json(await pin.read(request.challenge));
+		});
+	return {
+		...f,
+		claim,
+		workload,
+		behavior,
+		history,
+		binding,
+		run,
+		state: () => state,
+		restartWorker() {
+			receive = receiver();
+		},
+		async boot() {
+			if (!state) throw new Error("missing persisted startup");
+			const secret = f.resources.get(`Secret/${state.startupRef}`) as V1Secret;
+			const start = executorInstanceStartV2(state);
+			const host = verifyExecutorStartIdentityV1(
+				JSON.parse(Buffer.from(secret.data?.host ?? "", "base64").toString()),
+				{
+					...start,
+					role: "host",
+					now: Date.now(),
+					issuerKey: issuer.publicKey,
+				},
+			);
+			runner = verifyExecutorStartIdentityV1(
+				JSON.parse(Buffer.from(secret.data?.runner ?? "", "base64").toString()),
+				{
+					...start,
+					role: "runner",
+					now: Date.now(),
+					issuerKey: issuer.publicKey,
+				},
+			);
+			epoch = randomUUID();
+			pin = await pinCodexSessionExecutorEpochV1(
+				directory,
+				{
+					binding,
+					podUid: state.podUid ?? "",
+					epoch,
+					assertCurrent: async () => {},
+					onFailure: () => () => {},
+					close: async () => {},
+				},
+				host,
+				state.configurationVersion,
+			);
+			const pod = f.resources.get(`Pod/${claim.sandbox.resourceName}`) as V1Pod;
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+				initContainerStatuses: [
+					{
+						name: "codex-session-workspace-init",
+						image: "fixture",
+						imageID: "fixture",
+						ready: false,
+						restartCount: 0,
+						state: { terminated: { exitCode: 0 } },
+					},
+				],
+			};
+			await f.client.replace(pod);
+		},
+		driftEpoch() {
+			epoch = randomUUID();
+		},
+		async close() {
+			transport.mockRestore();
+			await rm(directory, { recursive: true, force: true });
+		},
+	};
+}
+
 describe("production SessionSandbox resource receiver", () => {
+	it("rebuilds an authorized executor on the same fence with a fresh reference and preserves the original deadline/history", async () => {
+		const f = await executorInstanceFixtureV2();
+		try {
+			const first = await f.run();
+			expect(first.status).toBe("observed");
+			await f.boot();
+			const ready = await f.run(first);
+			expect(ready.status).toBe("ready");
+			const original = structuredClone(f.state());
+			if (!original) throw new Error("missing original");
+			expect(original.phase).toBe("adopted");
+			expect(original.cleanup).toBe("absent");
+			expect(JSON.stringify(original)).not.toContain("privateKey");
+			f.resources.delete(`Pod/${f.claim.sandbox.resourceName}`);
+			const retired = await f.run(ready);
+			expect(f.state()?.phase).toBe("retired");
+			f.restartWorker();
+			const next = await f.run(retired);
+			expect(next.status).toBe("observed");
+			const replacement = f.state();
+			expect(replacement?.startupRef).not.toBe(original.startupRef);
+			expect(replacement?.attemptId).not.toBe(original.attemptId);
+			expect(replacement?.podUid).not.toBe(original.podUid);
+			expect(replacement?.resourceFence).toBe(original.resourceFence);
+			expect(
+				f.history.some(
+					(row) =>
+						row.attemptId === original.attemptId &&
+						row.adoption?.epoch === original.adoption?.epoch,
+				),
+			).toBe(true);
+			await f.boot();
+			const nextReady = await f.run(next);
+			expect(nextReady.status).toBe("ready");
+			expect(nextReady.executorInstance?.startupRef).toBe(
+				replacement?.startupRef,
+			);
+		} finally {
+			await f.close();
+		}
+	});
+	it.each(["Pod", "Secret"])(
+		"recovers a lost %s create response without new keys, reference or a second create",
+		async (kind) => {
+			const f = await executorInstanceFixtureV2();
+			const create = f.client.create;
+			let lost = false;
+			let calls = 0;
+			f.client.create = async (object) => {
+				const result = await create(object);
+				if (
+					object.kind === kind &&
+					(kind !== "Secret" ||
+						object.metadata?.name?.startsWith("executor-v2-"))
+				) {
+					calls++;
+					if (!lost) {
+						lost = true;
+						throw new Error("lost response");
+					}
+				}
+				return result;
+			};
+			try {
+				await expect(f.run()).rejects.toThrow();
+				const original = structuredClone(f.state());
+				f.restartWorker();
+				const recovered = await f.run();
+				expect(recovered.status).toBe("observed");
+				expect(calls).toBe(1);
+				expect(f.state()?.attemptId).toBe(original?.attemptId);
+				expect(f.state()?.expiresAt).toBe(original?.expiresAt);
+				if (kind === "Secret")
+					expect(f.state()?.delivery).toEqual(original?.delivery);
+			} finally {
+				await f.close();
+			}
+		},
+	);
+	it("retains the original instance and stops replacement when its execution is unresolved", async () => {
+		const f = await executorInstanceFixtureV2();
+		try {
+			const first = await f.run();
+			await f.boot();
+			const ready = await f.run(first);
+			const original = structuredClone(f.state());
+			f.behavior.unresolved = true;
+			f.resources.delete(`Pod/${f.claim.sandbox.resourceName}`);
+			const writes = f.writes.length;
+			await expect(f.run(ready)).rejects.toThrow();
+			expect(f.state()).toEqual(original);
+			expect(f.writes.length).toBe(writes);
+		} finally {
+			await f.close();
+		}
+	});
+	it("rejects a replacement epoch without changing adoption or minting a new pin", async () => {
+		const f = await executorInstanceFixtureV2();
+		try {
+			const first = await f.run();
+			await f.boot();
+			const ready = await f.run(first);
+			const original = structuredClone(f.state());
+			f.driftEpoch();
+			await expect(f.run(ready)).rejects.toThrow();
+			expect(f.state()).toEqual(original);
+		} finally {
+			await f.close();
+		}
+	});
+
+	it("holds a residual old projection before authorizing another startup intent", async () => {
+		const f = await executorInstanceFixtureV2();
+		try {
+			const first = await f.run();
+			const originalProjection = structuredClone(
+				f.resources.get(`Secret/${f.state()?.startupRef}`),
+			);
+			await f.boot();
+			const ready = await f.run(first);
+			f.resources.delete(`Pod/${f.claim.sandbox.resourceName}`);
+			const retired = await f.run(ready);
+			const old = structuredClone(f.state());
+			if (!originalProjection) throw new Error("missing original projection");
+			f.resources.set(`Secret/${old?.startupRef}`, originalProjection);
+			const writes = f.writes.length;
+			await expect(f.run(retired)).rejects.toThrow();
+			expect(f.state()).toEqual(old);
+			expect(f.writes.length).toBe(writes);
+			f.resources.delete(`Secret/${old?.startupRef}`);
+			expect((await f.run(retired)).status).toBe("observed");
+			expect(f.state()?.attemptId).not.toBe(old?.attemptId);
+		} finally {
+			await f.close();
+		}
+	});
+	it("does not reuse late Ready or the expired startup deadline for a replacement", async () => {
+		const f = await executorInstanceFixtureV2();
+		const clock = Date.now;
+		try {
+			const first = await f.run();
+			await f.boot();
+			const original = structuredClone(f.state());
+			if (!original) throw new Error("missing startup");
+			const pod = f.resources.get(
+				`Pod/${f.claim.sandbox.resourceName}`,
+			) as V1Pod;
+			if (!pod.status) throw new Error("missing fixture status");
+			pod.status.conditions = [
+				{
+					type: "Ready",
+					status: "True",
+					lastTransitionTime: new Date(original.expiresAt + 1),
+				},
+			];
+			Date.now = () => original.expiresAt + 5;
+			const retired = await f.run(first);
+			expect(retired.status).toBe("unknown");
+			expect(f.state()?.phase).toBe("retired");
+			expect(f.state()?.adoption).toBeNull();
+			const next = await f.run(retired);
+			expect(next.status).toBe("observed");
+			expect(f.state()?.startupRef).not.toBe(original.startupRef);
+			expect(f.state()?.expiresAt).toBeGreaterThan(original.expiresAt);
+			expect(f.state()?.adoption).toBeNull();
+		} finally {
+			Date.now = clock;
+			await f.close();
+		}
+	});
+	it("refuses an undeclared V2 consumer before creating a Pod or issuing material", async () => {
+		const f = await executorInstanceFixtureV2();
+		try {
+			f.workload.policy.executorInstanceStartupApprovals = [];
+			await expect(f.run()).rejects.toThrow();
+			expect(f.state()).toBeNull();
+			expect(f.writes).toHaveLength(0);
+		} finally {
+			await f.close();
+		}
+	});
 	it.each(["unready", "late-ready"])(
 		"retires the original executor on deadline expiry (%s)",
 		async (readiness) => {

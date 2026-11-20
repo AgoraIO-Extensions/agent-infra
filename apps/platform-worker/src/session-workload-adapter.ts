@@ -14,6 +14,7 @@ import {
 	issueExecutorStartIdentityV1,
 	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
+import type { ExecutorInstanceStateV2 } from "@agent-infra/contracts/runtime";
 import {
 	RuntimeModelConfigurationV4Schema,
 	type RuntimeOAuthBindingReadDescriptorV1,
@@ -65,6 +66,7 @@ import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
 } from "./connection-consumer-projection.js";
+import type { ExecutorInstanceControlV2 } from "./executor-instance-startup.js";
 import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -313,6 +315,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly codexSessionExecutor?: CodexSessionExecutorPolicyV1;
 	readonly executorDrainIdentity?: true;
 	readonly executorStartupDeadline?: number;
+	readonly executorInstance?: ExecutorInstanceStateV2;
 	readonly storageSize: string;
 	readonly storageClassName?: string;
 	readonly desiredState: "running" | "stopped";
@@ -1320,6 +1323,7 @@ function renderSessionSandboxResourcesV1(
 					projection.init,
 					host,
 					projection.executor,
+					allocation.executorInstance?.startupRef,
 				),
 			);
 		}
@@ -2600,6 +2604,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		async apply(
 			allocation: SessionSandboxAllocationV1,
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],
+			executorInstanceControl?: ExecutorInstanceControlV2,
 		) {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
@@ -2667,8 +2672,14 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				// observation deliberately validates every owned resource before readiness.
 				if (current && !owned(current, expected, allocation))
 					throw new WorkloadKubernetesError("conflict");
-				if (!current) await options.client.create(expected);
-				else if (expected.kind === "PersistentVolumeClaim") {
+				if (!current) {
+					if (expected.kind === "Pod" && allocation.executorInstance) {
+						if (!executorInstanceControl)
+							throw new WorkloadKubernetesError("policy");
+						await executorInstanceControl.beforePodCreate();
+					}
+					await options.client.create(expected);
+				} else if (expected.kind === "PersistentVolumeClaim") {
 					if (
 						!pvcSpecMatches(
 							current as V1PersistentVolumeClaim,
@@ -2748,7 +2759,21 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					};
 				}
 				await ensure(pod);
-				if (allocation.executorDrainIdentity)
+				if (allocation.executorInstance) {
+					if (!executorInstanceControl)
+						throw new WorkloadKubernetesError("policy");
+					const current = await options.client.read<V1Pod>(
+						"Pod",
+						allocation.podName,
+					);
+					if (
+						!current ||
+						!owned(current, pod, allocation) ||
+						!podSpecMatches(current, pod as V1Pod)
+					)
+						throw new WorkloadKubernetesError("conflict");
+					await executorInstanceControl.afterPod(current);
+				} else if (allocation.executorDrainIdentity)
 					await ensureExecutorIdentity(pod, allocation);
 				if (allocation.workspaceSnapshotProjection?.manifest) {
 					const created = await options.client.read<V1Pod>(
@@ -2969,12 +2994,37 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					allocation.workspaceSnapshotProjection,
 					metadata(allocation, sessionSnapshotSecretNameV1(allocation)),
 				);
+			if (
+				purpose === "business" &&
+				status === "ready" &&
+				allocation.executorInstance &&
+				(!allocation.executorInstance.adoption ||
+					allocation.executorInstance.phase !== "adopted" ||
+					allocation.executorInstance.cleanup !== "absent" ||
+					!resources.some(
+						(r) =>
+							r.kind === "Pod" && r.uid === allocation.executorInstance?.podUid,
+					))
+			)
+				status = "observed";
 			return {
 				status:
 					purpose === "control" && status === "ready" ? "observed" : status,
 				...(failureCode === undefined ? {} : { failureCode }),
 				...(waitingReason === undefined ? {} : { waitingReason }),
 				...(runtimeStarting ? { runtimeStarting: true as const } : {}),
+				...(purpose === "business" &&
+				status === "ready" &&
+				allocation.executorInstance?.adoption
+					? {
+							executorInstance: {
+								attemptId: allocation.executorInstance.attemptId,
+								startupRef: allocation.executorInstance.startupRef,
+								podUid: allocation.executorInstance.podUid ?? "",
+								epoch: allocation.executorInstance.adoption.epoch,
+							},
+						}
+					: {}),
 				...(purpose === "business" &&
 				status === "ready" &&
 				allocation.executorDrainIdentity

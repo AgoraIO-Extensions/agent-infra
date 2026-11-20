@@ -778,3 +778,63 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		await reader.cancel();
 	});
 });
+
+it("keeps executor adoption default-off and authenticates and strictly scopes the private read route", async () => {
+	const f = await setup();
+	const path = "/internal/runtime/v2/executor-startup/read";
+	const request = {
+		schemaVersion: 2 as const,
+		challenge: "a3a70de0-42c8-4d3b-9e93-956695751afa",
+		startupRef: "executor-fixture",
+		attemptId: "a3a70de0-42c8-4d3b-9e93-956695751afb",
+		podUid: "fixture-pod",
+	};
+	const issue = (
+		app: ReturnType<typeof createRuntimeHostApp>,
+		body: unknown,
+		token = "synthetic-service-proof",
+	) =>
+		app.request(path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${token}`,
+			},
+			body: JSON.stringify(body),
+		});
+	expect((await issue(f.app, request, "wrong-worker")).status).toBe(401);
+	expect((await issue(f.app, request)).status).toBe(503);
+	let reads = 0;
+	const proof = {
+		purpose: "executor-instance-adoption-v2" as const,
+		...request,
+		recordRef: "a3a70de0-42c8-4d3b-9e93-956695751afc",
+		bindingDigest: "a".repeat(64),
+		factDigest: "b".repeat(64),
+		generation: 2,
+		resourceFence: 3,
+		epoch: "a3a70de0-42c8-4d3b-9e93-956695751afd",
+		pinDigest: "c".repeat(64),
+		signature: "a".repeat(86),
+	};
+	const app = createRuntimeHostApp({
+		host: f.host,
+		serviceToken: "synthetic-service-proof",
+		verifyGrant: createExecutionGrantVerifier(
+			new Map([["key-http", publicKey]]),
+		),
+		executorInstanceRead: async () => {
+			reads++;
+			return proof;
+		},
+	});
+	expect((await issue(app, { ...request, unexpected: "no" })).status).toBe(400);
+	expect(reads).toBe(0);
+	const accepted = await issue(app, request);
+	expect(accepted.status).toBe(200);
+	expect(await accepted.json()).toMatchObject({
+		purpose: "executor-instance-adoption-v2",
+		challenge: request.challenge,
+	});
+	expect(reads).toBe(1);
+});
