@@ -17,6 +17,15 @@ interface ProcessStatus {
 }
 
 let reapOrphan: ((pid: number) => void) | undefined;
+const nativeServers = new Set<number>();
+
+/** Node owns waitpid for its native servers; only adopted tools are reaped here. */
+export function retainExecutorServerV1(pid: number) {
+	nativeServers.add(pid);
+	return () => {
+		nativeServers.delete(pid);
+	};
+}
 
 /** Orphans remain children of this trusted runner even after setsid and double fork. */
 export function trackExecutorDescendantsV1() {
@@ -213,7 +222,12 @@ async function executorDescendantsExited(group: ExecutorProcessGroupV1) {
 		// Even an already-gone PID makes this sample unproven: never discard an exit observed mid-scan.
 		empty = false;
 		const status = await procStatus(pid);
-		if (status?.state === "Z" && pid !== group.leader) reapOrphan(pid);
+		if (
+			status?.state === "Z" &&
+			pid !== group.leader &&
+			!nativeServers.has(pid)
+		)
+			reapOrphan(pid);
 	}
 	return (
 		empty &&
@@ -237,6 +251,7 @@ export async function terminateExecutorDescendantsV1(
 				await visit(pid);
 				continue;
 			}
+			if (nativeServers.has(pid)) continue;
 			await visit(pid).catch((error: NodeJS.ErrnoException) => {
 				if (error.code !== "ENOENT") throw error;
 			});

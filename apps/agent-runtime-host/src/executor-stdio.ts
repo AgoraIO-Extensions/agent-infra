@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { CODEX_PILOT_EXECUTABLE } from "@agent-infra/agent-runtime";
+import { retainExecutorServerV1 } from "./executor-process-group.js";
 
 // Run under the fixed exec-server's own launch path, with the same UID and
 // ancestry as ordinary tools. Opens only check access. Nothing is read from
@@ -62,6 +63,7 @@ export function openPrivateExecutorV1(cwd: string, home: string) {
 			stdio: ["pipe", "pipe", "ignore"],
 		},
 	);
+	if (child.pid) child.once("exit", retainExecutorServerV1(child.pid));
 	const pending = new Map<
 		number,
 		(response: Record<string, unknown>) => void
