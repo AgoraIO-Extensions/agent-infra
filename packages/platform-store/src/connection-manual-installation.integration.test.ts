@@ -2407,6 +2407,13 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		// Every Worker exits before fixSupply.
 		await client`update platform.connection_installation_commands
 			set attempt_expires_at=clock_timestamp()-interval '1 second' where command='prepare'`;
+		// Bounded recovery passes continue until every expired candidate is handled.
+		for (
+			let pass = 0;
+			pass < 40 && (await unsuppliedStates()).waiting > 0;
+			pass += 1
+		)
+			await manual.listPending(1, ["execution-a"]);
 		const first = await manual.listPending(32, ["execution-a"]);
 		expect(first).toHaveLength(32);
 		for (const item of first)
@@ -2442,5 +2449,82 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			await client`select status, attempt_id from platform.connection_installation_commands
 			where id=${first.item.commandId}`;
 		expect(row).toEqual({ status: "unknown", attempt_id: first.attemptId });
+	});
+
+	/** Claims `count` prepares on execution-a and lets every attempt expire before fixSupply. */
+	async function expiredUnsuppliedBacklog(count: number) {
+		const commandIds: string[] = [];
+		for (let index = 0; index < count; index += 1) {
+			const projection = await begin();
+			const [command] =
+				await client`select id from platform.connection_installation_commands
+				where authorization_id=${projection.authorizationId} and command='prepare'`;
+			const commandId = command?.id as string;
+			expect(
+				await manual.claim({
+					commandId,
+					attemptId: randomUUID(),
+					attemptOwner: "worker-a",
+				}),
+			).not.toBeNull();
+			commandIds.push(commandId);
+		}
+		await client`update platform.connection_installation_commands
+			set attempt_expires_at=clock_timestamp()-interval '1 second' where command='prepare'`;
+		return commandIds;
+	}
+
+	async function unsuppliedStates() {
+		const [row] = await client`select
+			count(*) filter (where status='pending' and attempt_id is not null)::int as waiting,
+			count(*) filter (where status='pending' and attempt_id is null)::int as reopened,
+			count(*) filter (where status='unknown')::int as unknown
+			from platform.connection_installation_commands where command='prepare'`;
+		return row as { waiting: number; reopened: number; unknown: number };
+	}
+
+	// Files K8413-4206-0620 (r4639978171): one recovery pass has a bounded amount
+	// of work and yields; the backlog keeps its eligibility for later passes.
+	it("bounds one unsupplied recovery pass and finishes the backlog in later passes", async () => {
+		const commandIds = await expiredUnsuppliedBacklog(70);
+		// The pass returns with the backlog only partly handled; listing still answers.
+		expect(await manual.listPending(1, ["execution-a"])).toHaveLength(1);
+		const first = await unsuppliedStates();
+		expect(first.waiting).toBeGreaterThan(0);
+		expect(first.reopened).toBeGreaterThan(0);
+		expect(first.unknown).toBe(0);
+		let passes = 1;
+		while ((await unsuppliedStates()).waiting > 0 && passes < 40) {
+			await manual.listPending(1, ["execution-a"]);
+			passes += 1;
+		}
+		expect(passes).toBeGreaterThan(1);
+		expect(await unsuppliedStates()).toEqual({
+			waiting: 0,
+			reopened: 70,
+			unknown: 0,
+		});
+		const reopened =
+			await client`select id from platform.connection_installation_commands
+			where command='prepare' and status='pending' and attempt_id is null`;
+		expect(reopened.map((row) => row.id as string).sort()).toEqual(
+			commandIds.sort(),
+		);
+	}, 120_000);
+
+	it("yields a recovery pass on an aborted signal and keeps every candidate eligible", async () => {
+		const commandIds = await expiredUnsuppliedBacklog(3);
+		expect(
+			await manual.listPending(32, ["execution-a"], AbortSignal.abort()),
+		).toEqual([]);
+		expect(await unsuppliedStates()).toEqual({
+			waiting: 3,
+			reopened: 0,
+			unknown: 0,
+		});
+		const pending = await manual.listPending(32, ["execution-a"]);
+		expect(pending.map((item) => item.commandId).sort()).toEqual(
+			commandIds.sort(),
+		);
 	});
 });

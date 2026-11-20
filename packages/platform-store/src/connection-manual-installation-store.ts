@@ -58,8 +58,14 @@ const manualCommands: readonly ManualCommand[] = [
 ];
 /** Two bounded network hops (supply, then one Connection request) per attempt. */
 const attemptLifetime = sql`interval '60 seconds'`;
-/** One bounded read per page; the sweep pages until every candidate is handled. */
-const unsuppliedPageSize = 32;
+/**
+ * One unsupplied-prepare recovery pass reads at most one page and starts no new
+ * candidate after its deadline or on cancellation. Each candidate is a single
+ * transaction under the lock and statement timeouts; the rest of the backlog
+ * keeps its eligibility and the next tick continues after the last handled id.
+ */
+const unsuppliedPassBudget = 32;
+const unsuppliedPassMs = 2_000;
 
 function unavailable(): never {
 	throw new ConnectionInstallationErrorV1("unavailable");
@@ -117,6 +123,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	readonly #database: ReturnType<typeof drizzle>;
 	readonly #directory: TaskUserDirectoryV1;
 	readonly #policy: ConnectionManualInstallationPolicyV1;
+	/** Last unsupplied prepare a recovery pass handled; the next pass continues after it. */
+	#unsuppliedAfter = "";
 
 	constructor(options: {
 		readonly databaseUrl: string;
@@ -174,16 +182,17 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	/**
 	 * A prepare claimed but expired before fixSupply committed sent nothing: no
 	 * template, supply attempt or ciphertext exists, and registration needs a
-	 * confirmed supply. Every such prepare, across Executions and pages, either
-	 * reopens for the same installation or, when its authorization or
-	 * association no longer holds, closes as unknown with its original key. The
-	 * locks follow association → authorization → installation → command; the
-	 * blind sweep below never touches these rows, so no page limit strands one.
+	 * confirmed supply. Each such prepare, across Executions, either reopens for
+	 * the same installation or, when its authorization or association no longer
+	 * holds, closes as unknown with its original key. The locks follow
+	 * association → authorization → installation → command. A pass is bounded
+	 * (see `unsuppliedPassBudget`); the blind sweep below never touches these
+	 * rows, so whatever a pass leaves stays eligible for the next one.
 	 */
-	async #reopenUnsuppliedPrepares() {
-		let after = "";
-		for (;;) {
-			const page = await this.#transaction((tx) =>
+	async #reopenUnsuppliedPrepares(signal?: AbortSignal) {
+		const deadline = performance.now() + unsuppliedPassMs;
+		const read = (after: string, upTo: string | null, limit: number) =>
+			this.#transaction((tx) =>
 				tx.execute(sql`
 				select c.id, c.authorization_id from platform.connection_installation_commands c
 				join platform.connection_manual_installations m on m.authorization_id=c.authorization_id
@@ -191,48 +200,66 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.attempt_expires_at <= clock_timestamp() and c.delivery_digest is null
 					and m.template is null and m.supply_attempt_id is null
 					and m.supply_state='pending' and m.registration_state='pending'
-					and c.id > ${after}
-				order by c.id limit ${unsuppliedPageSize}
+					and c.id > ${after} and (${upTo === null} or c.id <= ${upTo ?? ""})
+				order by c.id limit ${limit}
 			`),
 			);
-			for (const candidate of page)
-				await this.#transaction(async (tx) => {
-					const row = await this.#lockInstallation(
-						tx,
-						candidate.authorization_id as string,
-					);
-					if (!row) return;
-					const reopened = row.associationLocked
-						? await tx.execute(sql`
-							update platform.connection_installation_commands c
-							set status='pending', attempt_id=null, attempt_owner=null, attempt_expires_at=null,
-								updated_at=clock_timestamp()
-							from platform.connection_manual_installations m, platform.connection_installation_authorizations a
-							where c.id=${candidate.id as string} and c.command='prepare' and c.status='pending'
-								and c.attempt_id is not null and c.attempt_expires_at <= clock_timestamp()
-								and c.delivery_digest is null
-								and m.authorization_id=c.authorization_id and a.id=c.authorization_id
-								and a.status='preparing' and a.expires_at > clock_timestamp()
-								and m.template is null and m.supply_attempt_id is null
-								and m.supply_state='pending' and m.registration_state='pending'
-							returning c.id
-						`)
-						: [];
-					if (reopened.length === 1) return;
-					await tx.execute(sql`
-						update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
-						where id=${candidate.id as string} and command='prepare' and status='pending'
-							and attempt_id is not null and attempt_expires_at <= clock_timestamp()
-					`);
-				});
-			if (page.length < unsuppliedPageSize) return;
-			after = page.at(-1)?.id as string;
+		// Continue after the previous pass, then wrap to the ids before it.
+		const cursor = this.#unsuppliedAfter;
+		const page = [...(await read(cursor, null, unsuppliedPassBudget))];
+		if (page.length < unsuppliedPassBudget && cursor !== "")
+			page.push(
+				...(await read("", cursor, unsuppliedPassBudget - page.length)),
+			);
+		for (const candidate of page) {
+			if (signal?.aborted || performance.now() >= deadline) return;
+			this.#unsuppliedAfter = candidate.id as string;
+			try {
+				await this.#settleUnsuppliedPrepare(
+					candidate.id as string,
+					candidate.authorization_id as string,
+				);
+			} catch {
+				// A failed candidate keeps its eligibility; a later pass retries it.
+			}
 		}
+		// Every candidate fit in this pass; the next one starts from the beginning.
+		if (page.length < unsuppliedPassBudget) this.#unsuppliedAfter = "";
+	}
+
+	async #settleUnsuppliedPrepare(commandId: string, authorizationId: string) {
+		await this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, authorizationId);
+			if (!row) return;
+			const reopened = row.associationLocked
+				? await tx.execute(sql`
+					update platform.connection_installation_commands c
+					set status='pending', attempt_id=null, attempt_owner=null, attempt_expires_at=null,
+						updated_at=clock_timestamp()
+					from platform.connection_manual_installations m, platform.connection_installation_authorizations a
+					where c.id=${commandId} and c.command='prepare' and c.status='pending'
+						and c.attempt_id is not null and c.attempt_expires_at <= clock_timestamp()
+						and c.delivery_digest is null
+						and m.authorization_id=c.authorization_id and a.id=c.authorization_id
+						and a.status='preparing' and a.expires_at > clock_timestamp()
+						and m.template is null and m.supply_attempt_id is null
+						and m.supply_state='pending' and m.registration_state='pending'
+					returning c.id
+				`)
+				: [];
+			if (reopened.length === 1) return;
+			await tx.execute(sql`
+				update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
+				where id=${commandId} and command='prepare' and status='pending'
+					and attempt_id is not null and attempt_expires_at <= clock_timestamp()
+			`);
+		});
 	}
 
 	/** Expired attempts become unknown, including the registration they were sending. */
-	async #sweep() {
-		await this.#reopenUnsuppliedPrepares();
+	async #sweep(signal?: AbortSignal) {
+		await this.#reopenUnsuppliedPrepares(signal);
+		if (signal?.aborted) return;
 		await this.#transaction((tx) =>
 			tx.execute(sql`
 			update platform.connection_installation_commands c set status='unknown', updated_at=clock_timestamp()
@@ -271,10 +298,15 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		);
 	}
 
-	/** Pending manual commands of Executions this Worker currently holds. */
+	/**
+	 * Pending manual commands of Executions this Worker currently holds. The
+	 * expiry sweep before the listing is one bounded recovery pass; a cancelled
+	 * signal yields before or after it without listing.
+	 */
 	async listPending(
 		limit: number,
 		executionIds: readonly string[],
+		signal?: AbortSignal,
 	): Promise<
 		readonly {
 			readonly commandId: string;
@@ -287,10 +319,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			!Number.isSafeInteger(limit) ||
 			limit < 1 ||
 			limit > 256 ||
-			executionIds.length === 0
+			executionIds.length === 0 ||
+			signal?.aborted
 		)
 			return [];
-		await this.#sweep();
+		await this.#sweep(signal);
+		if (signal?.aborted) return [];
 		const rows = await this.#transaction(async (tx) => {
 			return tx.execute(sql`
 				select c.id, c.command, c.authorization_id, a.execution_id

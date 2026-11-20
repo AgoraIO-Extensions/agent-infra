@@ -230,6 +230,21 @@ describe("manual install drain", () => {
 		expect(await h.drain.drain([], new AbortController().signal)).toBe(0);
 	});
 
+	it("hands its cancellation signal to the bounded recovery pass", async () => {
+		const h = harness();
+		const controller = new AbortController();
+		await h.drain.drain(["execution-a"], controller.signal);
+		const [, , passed] = h.store.listPending.mock.calls[0] as unknown as [
+			number,
+			readonly string[],
+			AbortSignal,
+		];
+		expect(passed).toBeInstanceOf(AbortSignal);
+		expect(passed.aborted).toBe(false);
+		controller.abort();
+		expect(passed.aborted).toBe(true);
+	});
+
 	it("refuses an unapproved system access or a privileged receiver port", () => {
 		expect(() =>
 			createConnectionManualInstallationDrainV1({

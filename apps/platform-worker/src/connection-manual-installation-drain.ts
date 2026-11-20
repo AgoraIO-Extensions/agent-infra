@@ -476,7 +476,8 @@ export function createConnectionManualInstallationDrainV1(
 			signal: AbortSignal,
 		): Promise<number> {
 			if (executionIds.length === 0 || signal.aborted) return 0;
-			const pending = await store.listPending(32, executionIds);
+			// The listing's recovery pass is bounded and yields to the same signal.
+			const pending = await store.listPending(32, executionIds, signal);
 			let drained = 0;
 			for (const item of pending) {
 				if (signal.aborted) break;
