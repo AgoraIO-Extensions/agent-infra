@@ -1,8 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { setTimeout } from "node:timers/promises";
 
 export interface ExecutorProcessGroupV1 {
 	readonly leader: number;
+	readonly parent: number;
+	readonly parentStartTicks: string;
 	readonly startTicks: string;
 }
 
@@ -11,6 +14,46 @@ interface ProcessStatus {
 	readonly parent: number;
 	readonly group: number;
 	readonly startTicks: string;
+}
+
+let reapOrphan: ((pid: number) => void) | undefined;
+
+/** Orphans remain children of this trusted runner even after setsid and double fork. */
+export function trackExecutorDescendantsV1() {
+	if (reapOrphan) return;
+	if (process.platform !== "linux")
+		throw new Error("CODEX_EXECUTOR_DESCENDANTS_UNAVAILABLE");
+	const koffi = createRequire(import.meta.url)(
+		"koffi",
+	) as typeof import("koffi");
+	const libc = koffi.load("libc.so.6");
+	const set = libc.func("prctl", "int", [
+		"int",
+		"unsigned long",
+		"unsigned long",
+		"unsigned long",
+		"unsigned long",
+	]);
+	const get = libc.func("prctl", "int", [
+		"int",
+		"_Out_ int *",
+		"unsigned long",
+		"unsigned long",
+		"unsigned long",
+	]);
+	const setChildSubreaper = 36;
+	const getChildSubreaper = 37;
+	const current = [0];
+	if (
+		set(setChildSubreaper, 1, 0, 0, 0) !== 0 ||
+		get(getChildSubreaper, current, 0, 0, 0) !== 0 ||
+		current[0] !== 1
+	)
+		throw new Error("CODEX_EXECUTOR_DESCENDANTS_UNAVAILABLE");
+	const wait = libc.func("waitpid", "int", ["int", "_Out_ int *", "int"]);
+	reapOrphan = (pid) => {
+		wait(pid, [0], 1);
+	};
 }
 
 async function procStatus(pid: number): Promise<ProcessStatus | null> {
@@ -36,6 +79,12 @@ async function procStatus(pid: number): Promise<ProcessStatus | null> {
 	}
 }
 
+export async function executorProcessStartTicksV1(pid: number) {
+	const status = await procStatus(pid);
+	if (!status) throw new Error("CODEX_EXECUTOR_PROCESS_IDENTITY_INVALID");
+	return status.startTicks;
+}
+
 /** Snapshot the private exec-server's direct children before one serialized launch. */
 export async function executorChildrenV1(parent: number) {
 	if (
@@ -45,10 +94,26 @@ export async function executorChildrenV1(parent: number) {
 	)
 		throw new Error("CODEX_EXECUTOR_PROCESS_IDENTITY_INVALID");
 	const result = new Map<number, ProcessStatus>();
-	const entries = await readdir("/proc");
-	for (const entry of entries) {
-		if (!/^\d+$/.test(entry)) continue;
-		const pid = Number(entry);
+	const tasks = await readdir(`/proc/${parent}/task`);
+	if (tasks.length > 4096) throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+	const children = new Set<number>();
+	for (const task of tasks) {
+		try {
+			const ids = await readFile(
+				`/proc/${parent}/task/${task}/children`,
+				"utf8",
+			);
+			for (const id of ids.trim().split(/\s+/))
+				if (id) {
+					children.add(Number(id));
+					if (children.size > 4096)
+						throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+				}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+	for (const pid of children) {
 		const status = await procStatus(pid);
 		if (status?.parent === parent) result.set(pid, status);
 	}
@@ -60,7 +125,11 @@ export async function waitForExecutorProcessGroupV1(
 	parent: number,
 	baseline: ReadonlyMap<number, ProcessStatus>,
 	deadline: number,
+	parentStartTicks?: string,
 ): Promise<ExecutorProcessGroupV1 | null> {
+	trackExecutorDescendantsV1();
+	const parentIdentity =
+		parentStartTicks ?? (await executorProcessStartTicksV1(parent));
 	while (Date.now() < deadline) {
 		const candidates = [...(await executorChildrenV1(parent))].filter(
 			([pid, status]) =>
@@ -71,7 +140,12 @@ export async function waitForExecutorProcessGroupV1(
 		if (candidates.length > 1) return null;
 		const candidate = candidates[0];
 		if (candidate)
-			return { leader: candidate[0], startTicks: candidate[1].startTicks };
+			return {
+				leader: candidate[0],
+				parent,
+				parentStartTicks: parentIdentity,
+				startTicks: candidate[1].startTicks,
+			};
 		await setTimeout(10);
 	}
 	return null;
@@ -84,6 +158,8 @@ export async function continueExecutorProcessGroupV1(
 	const status = await procStatus(group.leader);
 	if (
 		status?.state !== "T" ||
+		group.parent !== parent ||
+		(await procStatus(parent))?.startTicks !== group.parentStartTicks ||
 		status.parent !== parent ||
 		status.group !== group.leader ||
 		status.startTicks !== group.startTicks
@@ -104,13 +180,74 @@ export async function waitForExecutorProcessGroupExitV1(
 	)
 		return false;
 	while (Date.now() < deadline) {
+		const descendantsExited = await executorDescendantsExited(group);
 		try {
 			process.kill(-group.leader, 0);
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-			return false;
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
+			if (descendantsExited) return true;
 		}
 		await setTimeout(20);
 	}
 	return false;
+}
+
+async function executorDescendantsExited(group: ExecutorProcessGroupV1) {
+	if (
+		!reapOrphan ||
+		(await procStatus(group.parent))?.startTicks !== group.parentStartTicks
+	)
+		return false;
+	// Read the native server before its subreaper: an orphan cannot fall between the two checks.
+	if (
+		group.parent !== process.pid &&
+		(await executorChildrenV1(group.parent)).size
+	)
+		return false;
+	const children = await executorChildrenV1(process.pid);
+	let empty = true;
+	for (const [pid, status] of children) {
+		if (group.parent !== process.pid && pid === group.parent) continue;
+		empty = false;
+		if (status.state === "Z" && pid !== group.leader) reapOrphan(pid);
+	}
+	return (
+		empty &&
+		(await procStatus(group.parent))?.startTicks === group.parentStartTicks
+	);
+}
+
+/** Signal only this runner's descendants, preserving the private server for native result recovery. */
+export async function terminateExecutorDescendantsV1(
+	backendPid: number,
+	deadline: number,
+) {
+	if (!reapOrphan) throw new Error("CODEX_EXECUTOR_DESCENDANTS_UNAVAILABLE");
+	let visited = 0;
+	const reap = reapOrphan;
+	const visit = async (parent: number) => {
+		if (++visited > 4096 || Date.now() >= deadline)
+			throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+		for (const [pid, status] of await executorChildrenV1(parent)) {
+			if (pid === backendPid) {
+				await visit(pid);
+				continue;
+			}
+			await visit(pid).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			});
+			const current = await procStatus(pid);
+			if (current?.startTicks !== status.startTicks) continue;
+			if (current.state === "Z" && current.parent === process.pid) {
+				reap(pid);
+			} else {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				}
+			}
+		}
+	};
+	await visit(process.pid);
 }

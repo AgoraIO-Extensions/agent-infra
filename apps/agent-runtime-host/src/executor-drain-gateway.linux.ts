@@ -151,9 +151,69 @@ async function run() {
 				).result,
 			);
 			client.send(JSON.stringify({ method: "initialized", params: {} }));
+			if (process.argv.includes("--delayed-read")) {
+				const slow = {
+					processId: "slow-output",
+					argv: ["/bin/sh", "-c", "sleep 3; printf delayed-output"],
+					cwd: pathToFileURL(binding.workspaceRoot).href,
+					env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+					tty: false,
+					pipeStdin: false,
+					arg0: null,
+					sandbox: null,
+					enforceManagedNetwork: false,
+				};
+				assert.ok((await request("process/start", slow)).result);
+				const read = await request("process/read", {
+					processId: slow.processId,
+					afterSeq: 0,
+					maxBytes: 8192,
+					waitMs: 5000,
+				});
+				assert.ok(
+					read.result?.chunks?.some((chunk) =>
+						Buffer.from(chunk.chunk, "base64")
+							.toString()
+							.includes("delayed-output"),
+					),
+				);
+				const since = Date.now();
+				for (const waitMs of [
+					30001,
+					-1,
+					1.5,
+					Number.MAX_SAFE_INTEGER,
+					null,
+					"5000",
+				]) {
+					assert.ok(
+						(
+							await request("process/read", {
+								processId: slow.processId,
+								afterSeq: 0,
+								maxBytes: 8192,
+								waitMs,
+							})
+						).error,
+					);
+				}
+				assert.ok(
+					Date.now() - since < 2000,
+					"invalid waits must fail before reaching the server",
+				);
+				process.stdout.write("bounded delayed process/read passed\n");
+				return;
+			}
+			const detached = process.argv.includes("--detached-descendant");
 			const launch = {
 				processId: "registered-original",
-				argv: ["/bin/sh", "-c", 'sleep 60 & echo "$$"; wait'],
+				argv: detached
+					? [
+							"/usr/local/bin/node",
+							"-e",
+							'const {spawn}=require("node:child_process");const child=spawn(process.execPath,["-e","setTimeout(()=>{},30000)"],{detached:true,stdio:"ignore"});child.unref();process.stdout.write(process.pid+" "+child.pid);',
+						]
+					: ["/bin/sh", "-c", 'sleep 60 & echo "$$"; wait'],
 				cwd: pathToFileURL(binding.workspaceRoot).href,
 				env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
 				tty: false,
@@ -181,9 +241,17 @@ async function run() {
 			).result?.chunks;
 			const firstChunk = output?.[0];
 			assert.ok(firstChunk);
-			const group = Number(Buffer.from(firstChunk.chunk, "base64").toString());
+			const ids = Buffer.from(firstChunk.chunk, "base64")
+				.toString()
+				.trim()
+				.split(/\s+/);
+			const group = Number(ids[0]);
+			const childPid = Number(ids[1]);
 			assert.ok(Number.isSafeInteger(group) && group > 1);
-			process.kill(-group, 0);
+			if (detached) {
+				assert.ok(Number.isSafeInteger(childPid) && childPid > 1);
+				process.kill(childPid, 0);
+			} else process.kill(-group, 0);
 			if (launchInterrupted) {
 				await host.close();
 				hostClosed = true;
@@ -219,7 +287,8 @@ async function run() {
 			assert.equal(await drain.confirm("execution-original"), false);
 			assert.equal(drain.proven("execution-original"), false);
 			await assert.rejects(drain.arm("execution-before-drain"));
-			process.kill(-group, 0);
+			if (detached) process.kill(childPid, 0);
+			else process.kill(-group, 0);
 			await drain.sealStop(
 				"execution-original",
 				"stop-original",
@@ -244,6 +313,8 @@ async function run() {
 			);
 			assert.equal(await drain.confirm("execution-original"), true);
 			assert.throws(() => process.kill(-group, 0), { code: "ESRCH" });
+			if (detached)
+				assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
 			assert.equal(drain.proven("execution-original"), true);
 			assert.equal(drain.proven("execution-other"), false);
 			assert.equal(await drain.confirm("execution-original"), true);

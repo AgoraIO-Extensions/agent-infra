@@ -41,4 +41,7 @@ ConfigMap 名称。若缺少回执或原业务 Execution，分别按照 HLD 判�
 epoch、fence、库存摘要和实际登记组。Host 验签并持久化证明后记录逐组退出与验证时间。
 Driver 持久提交终态后，Host 记录原终态事件的时间。读取器将三份证据按原 Stop、Execution、
 Pod、generation/resource fence 和库存关联，核对登记组、截止时间和持久终态时序。
-原记录缺失、相互冲突或证明晚于持久终态时返回待核实。
+同一 Stop 未排空时可以沿更高 stop fence 续期。读取器保留旧尝试，以原 runner 最新封闭的最高
+fence、epoch 和库存摘要匹配证明及持久终态。旧 seal 必须保持同一 epoch 和登记组，不能用旧
+fence 的证明签收续期后的 Stop。同一最高 fence 记录冲突、原记录缺失或证明晚于持久终态
+时返回待核实。

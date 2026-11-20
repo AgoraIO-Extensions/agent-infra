@@ -202,22 +202,27 @@ function readOriginalDrainEvidence(cluster, namespace, plan, receipt) {
 		const executor = read("codex-session-executor");
 		const runtime = read("runtime");
 		if (!Array.isArray(executor) || !Array.isArray(runtime) || !original()) return null;
-		const seal = consistent(executor.filter((item) =>
+		const seals = executor.filter((item) =>
 			matchesStop(item) && item.code === "CODEX_EXECUTOR_DRAIN_SEALED",
-		));
-		if (!exact(seal, [...keys, "groupIds"]) || !/^[a-f0-9-]{36}$/.test(seal.epoch) ||
-			!integer(seal.stopFence) || !/^[a-f0-9]{64}$/.test(seal.digest) ||
-			!Array.isArray(seal.groupIds) || seal.groupIds.length < 1 || seal.groupIds.length > 4096 ||
-			new Set(seal.groupIds).size !== seal.groupIds.length ||
-			!seal.groupIds.every((id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id)))
+		);
+		if (!seals.length || !seals.every((item) =>
+			exact(item, [...keys, "groupIds"]) && /^[a-f0-9-]{36}$/.test(item.epoch) &&
+			integer(item.stopFence) && /^[a-f0-9]{64}$/.test(item.digest) &&
+			Array.isArray(item.groupIds) && item.groupIds.length > 0 && item.groupIds.length <= 4096 &&
+			new Set(item.groupIds).size === item.groupIds.length &&
+			item.groupIds.every((id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id))))
 			return null;
+		const highestFence = seals.reduce((highest, item) => Math.max(highest, item.stopFence), 0);
+		const seal = consistent(seals.filter((item) => item.stopFence === highestFence));
+		if (!seal || !seals.every((item) => item.epoch === seal.epoch &&
+			JSON.stringify(item.groupIds) === JSON.stringify(seal.groupIds))) return null;
+		const sameSeal = (item) => ["epoch", "stopFence", "digest"].every((key) => item[key] === seal[key]);
 		const committed = consistent(runtime.filter((item) =>
 			matchesStop(item) && item.code === "CODEX_EXECUTOR_TERMINAL_COMMITTED",
 		));
 		const proof = consistent(runtime.filter((item) =>
-			matchesStop(item) && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED",
+			matchesStop(item) && sameSeal(item) && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED",
 		));
-		const sameSeal = (item) => ["epoch", "stopFence", "digest"].every((key) => item[key] === seal[key]);
 		if (!exact(committed, [...keys, "occurredAt"]) || !sameSeal(committed) ||
 			!integer(committed.occurredAt) || committed.occurredAt > plan.expiresAt ||
 			!exact(proof, [...keys, "verifiedAt", "groups"]) || !sameSeal(proof) ||

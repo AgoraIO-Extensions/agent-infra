@@ -219,7 +219,7 @@ test("a missing receipt preserves the original run and reports pending", () => {
 	);
 });
 
-test("checks the original epoch, Stop fence, registered groups and durable terminal time", () => {
+function drainReadFixture() {
 	const f = fixture({ proof: "confirmed" });
 	const scope = {
 		schemaVersion: 1,
@@ -267,6 +267,11 @@ test("checks the original epoch, Stop fence, registered groups and durable termi
 				},
 			};
 		});
+	return { scope, seal, proof, terminal, groupId, read };
+}
+
+test("checks the original epoch, Stop fence, registered groups and durable terminal time", () => {
+	const { proof, terminal, groupId, read } = drainReadFixture();
 	assert.deepEqual(read([proof, terminal]).drainEvidence, {
 		...proof,
 		terminalAt: 1680,
@@ -302,4 +307,30 @@ test("checks the original epoch, Stop fence, registered groups and durable termi
 		],
 	])
 		assert.equal(read([altered, terminal]).evidence, "pending", name);
+});
+
+test("an unproven original Stop can confirm after a higher fence renewal", () => {
+	const { seal, proof, terminal, read } = drainReadFixture();
+	const oldSeal = { ...seal, stopFence: 3, digest: "c".repeat(64) };
+	assert.equal(read([terminal], { seals: [oldSeal] }).evidence, "pending");
+	assert.deepEqual(
+		read([proof, terminal], { seals: [oldSeal, seal] }).drainEvidence,
+		{ ...proof, terminalAt: terminal.occurredAt },
+	);
+});
+
+test("an old fence proof cannot satisfy the renewed original Stop", () => {
+	const { seal, proof, terminal, read } = drainReadFixture();
+	const oldSeal = { ...seal, stopFence: 3, digest: "c".repeat(64) };
+	const oldProof = { ...proof, stopFence: 3, digest: oldSeal.digest };
+	assert.equal(
+		read([oldProof, terminal], { seals: [oldSeal, seal] }).evidence,
+		"pending",
+	);
+	assert.equal(
+		read([oldProof, { ...terminal, stopFence: 3, digest: oldSeal.digest }], {
+			seals: [oldSeal, seal],
+		}).evidence,
+		"pending",
+	);
 });

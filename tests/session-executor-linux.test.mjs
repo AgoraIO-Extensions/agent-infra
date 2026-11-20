@@ -59,6 +59,59 @@ test("a successful control signal does not prove the original group drained", {
 	}
 });
 
+test("a detached surviving descendant keeps the original group unproven", {
+	skip: process.platform !== "linux",
+	timeout: 10000,
+}, async () => {
+	const before = await executorChildrenV1(process.pid);
+	const script = [
+		'const {spawn}=require("node:child_process");',
+		'const child=spawn(process.execPath,["-e","setTimeout(()=>{},30000)"],{detached:true,stdio:"ignore"});',
+		"child.unref(); process.stdout.write(String(child.pid));",
+	].join("");
+	const parent = spawn(
+		"/bin/sh",
+		[
+			"-c",
+			'kill -STOP "$$"; exec "$@"',
+			"detached-descendant",
+			process.execPath,
+			"-e",
+			script,
+		],
+		{ detached: true, stdio: ["ignore", "pipe", "ignore"] },
+	);
+	const closed = once(parent, "close");
+	const output = once(parent.stdout, "data");
+	let detached;
+	try {
+		const group = await waitForExecutorProcessGroupV1(
+			process.pid,
+			before,
+			Date.now() + 2000,
+		);
+		assert.equal(group?.leader, parent.pid);
+		await continueExecutorProcessGroupV1(process.pid, group);
+		detached = Number(String((await output)[0]).trim());
+		assert.ok(Number.isSafeInteger(detached) && detached > 1);
+		await closed;
+		process.kill(detached, 0);
+		assert.equal(
+			await waitForExecutorProcessGroupExitV1(group, Date.now() + 150),
+			false,
+		);
+		process.kill(detached, "SIGKILL");
+		assert.equal(
+			await waitForExecutorProcessGroupExitV1(group, Date.now() + 2000),
+			true,
+		);
+	} finally {
+		if (detached) await killGroup(detached);
+		await killGroup(parent.pid);
+		await closed;
+	}
+});
+
 test("same-UID tool cannot open protected Node memory, environment or file descriptors", {
 	skip: process.platform !== "linux" || process.getuid() === 0,
 }, async () => {

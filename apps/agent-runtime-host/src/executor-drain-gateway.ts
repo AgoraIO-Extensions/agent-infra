@@ -14,6 +14,9 @@ import {
 	continueExecutorProcessGroupV1,
 	type ExecutorProcessGroupV1,
 	executorChildrenV1,
+	executorProcessStartTicksV1,
+	terminateExecutorDescendantsV1,
+	trackExecutorDescendantsV1,
 	waitForExecutorProcessGroupExitV1,
 	waitForExecutorProcessGroupV1,
 } from "./executor-process-group.js";
@@ -63,6 +66,9 @@ export async function startExecutorDrainGatewayV1(options: {
 	readonly nativeHome: string;
 }) {
 	const { binding, identity, epoch, nativeHome } = options;
+	trackExecutorDescendantsV1();
+	if ((await executorChildrenV1(process.pid)).size)
+		throw new Error("CODEX_EXECUTOR_DESCENDANTS_UNAVAILABLE");
 	const startupProbe = openPrivateExecutorV1(binding.workspaceRoot, nativeHome);
 	try {
 		await startupProbe.initialize();
@@ -206,12 +212,20 @@ export async function startExecutorDrainGatewayV1(options: {
 					})}\n`,
 				);
 			}
-			const exited = await Promise.all(
-				groups.map(async ({ handle, group, id }) => {
-					if (input.terminate === true)
-						await current.backend
+			if (input.terminate === true) {
+				await Promise.all(
+					groups.map(({ handle }) =>
+						current.backend
 							.request("process/terminate", { processId: handle }, 500)
-							.catch(() => undefined);
+							.catch(() => undefined),
+					),
+				);
+				if (!current.backend.pid)
+					throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
+				await terminateExecutorDescendantsV1(current.backend.pid, deadline);
+			}
+			const exited = await Promise.all(
+				groups.map(async ({ group, id }) => {
 					if (!(await waitForExecutorProcessGroupExitV1(group, deadline)))
 						return null;
 					return { id, exitedAt: Date.now() };
@@ -337,9 +351,23 @@ export async function startExecutorDrainGatewayV1(options: {
 						return;
 					}
 					if (method !== "process/start") {
+						let timeoutMs = 2000;
+						if (method === "process/read") {
+							const value = record(frame.params).waitMs;
+							const waitMs = value === undefined ? 0 : value;
+							if (
+								typeof waitMs !== "number" ||
+								!Number.isSafeInteger(waitMs) ||
+								waitMs < 0 ||
+								waitMs > 30000
+							)
+								throw new Error("CODEX_EXECUTOR_CONTROL_REJECTED");
+							timeoutMs += waitMs;
+						}
 						const response = await current.backend.request(
 							method,
 							frame.params,
+							timeoutMs,
 						);
 						emit({ ...response, id: frame.id });
 						return;
@@ -376,6 +404,7 @@ export async function startExecutorDrainGatewayV1(options: {
 					current.groups.set(handle, null);
 					const parent = current.backend.pid;
 					if (!parent) throw new Error("CODEX_EXECUTOR_TRANSPORT_UNAVAILABLE");
+					const parentStartTicks = await executorProcessStartTicksV1(parent);
 					const before = await executorChildrenV1(parent);
 					const { CODEX_EXEC_SERVER_URL: _executorUrl, ...environment } =
 						record(params.env);
@@ -409,6 +438,7 @@ export async function startExecutorDrainGatewayV1(options: {
 						parent,
 						before,
 						Date.now() + 1_000,
+						parentStartTicks,
 					);
 					if (!group)
 						throw new Error("CODEX_EXECUTOR_PROCESS_IDENTITY_INVALID");
