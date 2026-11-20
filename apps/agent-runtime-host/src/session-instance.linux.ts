@@ -54,6 +54,11 @@ if (process.argv[2] === "runner") {
 		binding,
 		process.env,
 	);
+
+	for (const path of ["mem", "environ"])
+		await assert.rejects(readFile(`/proc/${process.ppid}/${path}`));
+	await assert.rejects(readdir(`/proc/${process.ppid}/fd`));
+	await assert.rejects(readFile(delivery));
 	// A real same-UID business descendant cannot inspect either key-holding process.
 	execFileSync(
 		process.execPath,
