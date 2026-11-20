@@ -212,6 +212,7 @@ beforeAll(async () => {
 	await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence)values('fixture-agent',${configuration.agentId},'admin','Eval fixture','fixture','available','seed','seed',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version)values('agent-default',${configuration.agentId},1,1)`;
 	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext)values('agent-default',${configuration.agentId},1,'eval-default',${sql.json({ schemaVersion: 1, purpose: "agent-default", subjectId: configuration.agentId, keyId: "eval-default", keyVersion: 1 })})`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${configuration.agentId},'user','runner')`;
 	for (const kind of ["user", "application"])
 		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},${kind},'runner','use','use-1')`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)values('runner','App','admin','identity-1')`;

@@ -951,9 +951,20 @@ describe("personal API runtime presentation purpose", () => {
 		(grant) => {
 			const input = fixture();
 			const apiActor = { ...actor, userId: "api-reader" };
+			if (!input.facts.management)
+				throw new Error("Missing management fixture");
+			const accessible = {
+				...input.facts.management,
+				availability: [{ kind: "user" as const, userId: apiActor.userId }],
+			};
+			const scoped = {
+				...input,
+				facts: { ...input.facts, management: accessible },
+				expected: { ...input.expected, management: accessible },
+			};
 			expect(
 				decideAgentRuntimePresentationV1({
-					...input,
+					...scoped,
 					actor: apiActor,
 					apiMetadata: {
 						agentId: input.agentId,

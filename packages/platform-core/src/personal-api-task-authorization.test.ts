@@ -25,6 +25,11 @@ const binding = {
 };
 const facts = {
 	authority,
+	agent: {
+		agentId: "agent_1",
+		ownerIds: ["owner"],
+		availability: [{ kind: "user" as const, userId: "user_1" }],
+	},
 	credential: {
 		id: authority.credentialId,
 		credentialHash: authority.credentialHash,
@@ -182,6 +187,51 @@ describe("personal API Task authority", () => {
 			).toThrow(expect.objectContaining({ code: "forbidden" }));
 		},
 	);
+
+	it.each([
+		["outside scope", { ...facts.agent, availability: [] }],
+		[
+			"other user",
+			{
+				...facts.agent,
+				availability: [{ kind: "user" as const, userId: "user_2" }],
+			},
+		],
+		["other Agent", { ...facts.agent, agentId: "agent_2" }],
+		["absent Agent", null],
+	] as const)("requires current human availability (%s)", (_, agent) => {
+		expect(() =>
+			requirePersonalApiTaskUseAuthorizationV1({ ...facts, agent }),
+		).toThrow(expect.objectContaining({ code: "not_found" }));
+	});
+	it("keeps missing scope provenance unavailable and accepts current organization or effective Owner only with a grant", () => {
+		expect(() =>
+			requirePersonalApiTaskUseAuthorizationV1({ ...facts, agent: undefined }),
+		).toThrow(expect.objectContaining({ code: "unavailable" }));
+		for (const agent of [
+			{
+				...facts.agent,
+				availability: [
+					{
+						kind: "organization" as const,
+						organizationId: "owner_organization",
+					},
+				],
+			},
+			{ ...facts.agent, ownerIds: ["user_1"], availability: [] },
+		]) {
+			expect(
+				requirePersonalApiTaskUseAuthorizationV1({ ...facts, agent }),
+			).toMatchObject({ principal: authority.principal });
+			expect(() =>
+				requirePersonalApiTaskUseAuthorizationV1({
+					...facts,
+					agent,
+					grant: null,
+				}),
+			).toThrow(expect.objectContaining({ code: "not_found" }));
+		}
+	});
 
 	it.each([
 		["absent", null],

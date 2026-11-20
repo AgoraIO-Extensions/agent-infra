@@ -9,6 +9,7 @@ import {
 	type AgentRuntimePresentationExpectationV1,
 	type AgentRuntimePresentationFactsV1,
 	decideAgentRuntimePresentationV1,
+	isAgentApiPrincipalAvailableV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
@@ -889,7 +890,18 @@ export class PostgresAgentConfigurationQueryV1 {
 							input.agentId,
 							input.actorId,
 						);
-						if (!isPersonalApiAgentMetadataReadAllowedV1(grants)) {
+						if (
+							!isPersonalApiAgentMetadataReadAllowedV1(grants) ||
+							!isAgentApiPrincipalAvailableV1(
+								{ ownerIds, availability },
+								{ kind: "user", id: input.actorId },
+								{
+									userId: input.actorId,
+									organizationIds: input.organizationIds,
+									accountStatus: "active",
+								},
+							)
+						) {
 							return { outcome: "unavailable" };
 						}
 					} else if (
