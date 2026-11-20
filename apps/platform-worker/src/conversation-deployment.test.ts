@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import * as runtimeIdentity from "@agent-infra/agent-runtime";
 import {
 	createAppliedRuntimeSkillDirectoryV1,
 	pinCodexSessionExecutorEpochV1,
@@ -737,6 +738,88 @@ function customOwnerSecretFixture(
 	};
 }
 
+it("rejects V1-only identity startup during assembly before any Pod, signing or retry", () => {
+	const f = fixture();
+	const workload = {
+		...f.options,
+		policy: {
+			...f.options.policy,
+			codexSessionExecutor: {
+				resources: {
+					requests: { cpu: "100m", memory: "64Mi" },
+					limits: { cpu: "500m", memory: "256Mi" },
+				},
+			},
+		},
+	};
+	const signing = vi.spyOn(runtimeIdentity, "issueExecutorStartIdentityV1");
+	const issuer = generateKeyPairSync("ed25519");
+	try {
+		expect(() =>
+			createProductionSessionSandboxReceiverV1(workload, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+				executorIdentityIssuer: issuer.privateKey,
+				executorDrainStartupTimeoutMs: 1000,
+			}),
+		).toThrow("WORKER_EXECUTOR_V2_APPROVALS_REQUIRED");
+		expect(f.writes).toHaveLength(0);
+		expect(f.resources.size).toBe(0);
+		expect(signing).not.toHaveBeenCalled();
+	} finally {
+		signing.mockRestore();
+	}
+});
+
+it("preserves ordinary executor deployment without an identity startup timeout or ref", async () => {
+	const f = fixture();
+	const policy = {
+		...f.options.policy,
+		codexSessionExecutor: {
+			resources: {
+				requests: { cpu: "100m", memory: "64Mi" },
+				limits: { cpu: "500m", memory: "256Mi" },
+			},
+		},
+	};
+	const signing = vi.spyOn(runtimeIdentity, "issueExecutorStartIdentityV1");
+	try {
+		const receive = createProductionSessionSandboxReceiverV1(
+			{ ...f.options, policy },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		const observed = await receive(
+			{
+				...f.claim,
+				policy: {
+					...f.claim.policy,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				},
+			},
+			new AbortController().signal,
+		);
+		expect(observed.status).toBe("observed");
+		const pod = f.resources.get(`Pod/${f.claim.sandbox.resourceName}`) as V1Pod;
+		expect(
+			pod.spec?.containers.some(
+				(container) => container.name === "codex-session-executor",
+			),
+		).toBe(true);
+		for (const container of [
+			...(pod.spec?.initContainers ?? []),
+			...(pod.spec?.containers ?? []),
+		])
+			expect(
+				container.env?.some(
+					(entry) => entry.name === "AGENT_INFRA_EXECUTOR_STARTUP_REF",
+				),
+			).not.toBe(true);
+		expect(signing).not.toHaveBeenCalled();
+	} finally {
+		signing.mockRestore();
+	}
+});
+
 async function executorInstanceFixtureV2() {
 	const f = fixture();
 	const directory = await mkdtemp(join(tmpdir(), "worker-instance-"));
@@ -1284,105 +1367,51 @@ describe("production SessionSandbox resource receiver", () => {
 		}
 	});
 	it.each(["unready", "late-ready"])(
-		"retires the original executor on deadline expiry (%s)",
+		"retires the approved V2 executor on deadline expiry (%s)",
 		async (readiness) => {
-			const f = fixture();
-			const policy = {
-				...f.options.policy,
-				codexSessionExecutor: {
-					resources: {
-						requests: { cpu: "100m", memory: "64Mi" },
-						limits: { cpu: "500m", memory: "256Mi" },
-					},
-				},
-			};
-			const issuer = generateKeyPairSync("ed25519");
-			const receive = createProductionSessionSandboxReceiverV1(
-				{ ...f.options, policy },
-				{
-					serviceToken: sessionSandboxDeploymentTokenFixture,
-					executorIdentityIssuer: issuer.privateKey,
-					executorDrainStartupTimeoutMs: 1_000,
-				},
-			);
-			const claim = {
-				...f.claim,
-				policy: {
-					...f.claim.policy,
-					resourceConfigurationHash:
-						workloadResourceConfigurationHashV1(policy),
-				},
-			};
-			const deadline = Date.now() + 10_000;
-			const signal = new AbortController().signal;
-			const first = await receive(
-				claim,
-				signal,
-				undefined,
-				async () => deadline,
-			);
-			expect(first.status).toBe("observed");
-			const route = "Service/sandbox-allocation-a";
-			const pod = "Pod/sandbox-allocation-a";
-			const pvc = "PersistentVolumeClaim/sandbox-allocation-a";
-			expect(f.resources.has(route)).toBe(true);
-			expect(f.resources.has(pod)).toBe(true);
-			if (readiness === "late-ready") {
-				const current = f.resources.get(pod) as V1Pod;
-				current.status = {
-					phase: "Running",
-					initContainerStatuses: [
-						{
-							name: "codex-session-workspace-init",
-							image: "fixture",
-							imageID: "fixture",
-							ready: false,
-							restartCount: 0,
-							state: {
-								terminated: { exitCode: 0, finishedAt: new Date(deadline - 1) },
-							},
-						},
-					],
-					conditions: [
+			const f = await executorInstanceFixtureV2();
+			const clock = Date.now;
+			try {
+				const first = await f.run();
+				if (readiness === "late-ready") await f.boot();
+				const original = structuredClone(f.state());
+				if (!original) throw new Error("missing original V2 intent");
+				if (readiness === "late-ready") {
+					const pod = f.resources.get(
+						`Pod/${f.claim.sandbox.resourceName}`,
+					) as V1Pod;
+					if (!pod.status) throw new Error("missing original Pod status");
+					pod.status.conditions = [
 						{
 							type: "Ready",
 							status: "True",
-							lastTransitionTime: new Date(deadline + 1),
+							lastTransitionTime: new Date(original.expiresAt + 1),
 						},
-					],
-				};
-			}
-			const before = Date.now;
-			Date.now = () => deadline + 1;
-			try {
-				let retirement: typeof first.resources | undefined;
-				const expired = async () =>
-					receive(
-						{ ...claim, previousObservation: first },
-						signal,
-						undefined,
-						async () => deadline,
-						async (identities: typeof first.resources) => {
-							retirement ??= identities;
-							return retirement;
-						},
-					);
-				expect(await expired()).toMatchObject({
+					];
+				}
+				Date.now = () => original.expiresAt + 1;
+				const expired = await f.run(first);
+				expect(expired).toMatchObject({
+					status: "unknown",
 					failureCode: "runtime.executor_identity_timeout",
 				});
-				expect(retirement?.map((item) => item.kind)).toEqual([
-					"Service",
-					"Pod",
-				]);
-				expect(f.resources.has(route)).toBe(false);
-				expect(f.resources.has(pod)).toBe(false);
-				expect(f.resources.has(pvc)).toBe(true);
-				expect(await expired()).toMatchObject({
-					failureCode: "runtime.executor_identity_timeout",
-				});
-				expect(f.resources.has(pod)).toBe(false);
+				expect(f.state()?.phase).toBe("retired");
+				expect(f.state()?.adoption).toBeNull();
+				expect(f.state()?.attemptId).toBe(original.attemptId);
+				expect(f.resources.has(`Service/${f.claim.sandbox.resourceName}`)).toBe(
+					false,
+				);
+				expect(f.resources.has(`Pod/${f.claim.sandbox.resourceName}`)).toBe(
+					false,
+				);
+				expect(
+					f.resources.has(
+						`PersistentVolumeClaim/${f.claim.sandbox.resourceName}`,
+					),
+				).toBe(true);
 			} finally {
-				Date.now = before;
+				Date.now = clock;
+				await f.close();
 			}
 		},
 	);
