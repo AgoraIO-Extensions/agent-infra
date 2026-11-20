@@ -1,0 +1,5 @@
+ALTER TABLE "platform"."connection_manual_installations" ADD COLUMN "descriptor" jsonb;--> statement-breakpoint
+ALTER TABLE "platform"."connection_manual_installations" ADD COLUMN "descriptor_digest" varchar(64);--> statement-breakpoint
+ALTER TABLE "platform"."connection_manual_installations" ADD CONSTRAINT "connection_manual_installation_descriptor" CHECK (("platform"."connection_manual_installations"."descriptor" is null) = ("platform"."connection_manual_installations"."descriptor_digest" is null)
+				and ("platform"."connection_manual_installations"."descriptor" is null) = ("platform"."connection_manual_installations"."configuration" is null)
+				and ("platform"."connection_manual_installations"."descriptor_digest" is null or "platform"."connection_manual_installations"."descriptor_digest" ~ '^[a-f0-9]{64}$'));

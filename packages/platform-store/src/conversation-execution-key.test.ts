@@ -508,3 +508,34 @@ it("4270 preserves other callers' existing missing Key refusal", async () => {
 		}),
 	).resolves.toBeNull();
 });
+
+it.each(["wecom_bot:binding-1", "wecom_app:binding-1"])(
+	"4281 preserves the missing personal Key reason after trusted %s recheck",
+	async (channel) => {
+		const h = harness({ missingKey: true });
+		await expect(
+			selectKey(h.transaction, {
+				authority: authority(channel),
+				userDirectory: h.userDirectory,
+				reportMissingPersonalKey: true,
+			}),
+		).rejects.toMatchObject({ code: "personal_relay_key_unavailable" });
+	},
+);
+
+it.each(["wecom_bot:binding-1", "wecom_app:binding-1"])(
+	"4281 hides missing Key after %s identity recheck fails",
+	async (channel) => {
+		const h = harness({
+			missingKey: true,
+			users: [identity, { ...identity, authorizationRevision: "changed" }],
+		});
+		expect(
+			await selectKey(h.transaction, {
+				authority: authority(channel),
+				userDirectory: h.userDirectory,
+				reportMissingPersonalKey: true,
+			}),
+		).toBeNull();
+	},
+);

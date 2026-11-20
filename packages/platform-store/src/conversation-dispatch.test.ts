@@ -85,6 +85,7 @@ afterEach(async () => {
 		platform.connection_manual_installations,
 		platform.connection_installation_commands,
 		platform.connection_installation_authorizations,
+		platform.session_sandbox_executor_promotions,
 		platform.session_sandbox_allocations,
 		platform.task_control_records, platform.task_authorization_records,
 		platform.file_accesses, platform.files, platform.conversation_events,

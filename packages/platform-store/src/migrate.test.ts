@@ -185,6 +185,68 @@ describe("Platform PostgreSQL migration foundation", () => {
 		}
 	}, 120_000);
 
+	it("appends executor reserve facts to the published 0091 history without rewriting it", async () => {
+		const database = await startPostgresTestDatabase(
+			"executor-reserve-upgrade",
+		);
+		const client = postgres(database.databaseUrl, { max: 1 });
+		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0091-"));
+		try {
+			const sourceFolder = resolve(
+				import.meta.dirname,
+				"../../../migrations/platform",
+			);
+			await cp(sourceFolder, folder, { recursive: true });
+			const journalPath = resolve(folder, "meta/_journal.json");
+			const journal = JSON.parse(await readFile(journalPath, "utf8"));
+			journal.entries = journal.entries.filter(
+				(entry: { idx: number }) => entry.idx <= 91,
+			);
+			expect(journal.entries.at(-1)).toMatchObject({
+				idx: 91,
+				tag: "0091_connection_host_supplies",
+			});
+			await writeFile(journalPath, JSON.stringify(journal));
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+				migrationsFolder: folder,
+			});
+			const before =
+				await client`select hash, created_at from platform_migrations.history order by id`;
+			await client`insert into platform.session_sandbox_reserves
+				(sandbox_id, session_id, agent_id, namespace, profile_digest, profile, status, operations,
+				 delivery_fence, expires_at, created_at, updated_at)
+				values ('00000000-0000-4000-8000-000000000092', 'session-0092', 'agent', 'reserve-test',
+				 'digest', '{}', 'ready', '[]', 1, clock_timestamp(), clock_timestamp(), clock_timestamp())`;
+			expect(
+				await client`select to_regclass('platform.session_sandbox_executor_promotions') as relation`,
+			).toEqual([{ relation: null }]);
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			const after =
+				await client`select hash, created_at from platform_migrations.history order by id`;
+			expect(after.slice(0, before.length)).toEqual(before);
+			expect(after.slice(before.length)).toEqual(
+				migrations.slice(before.length).map((migration) => ({
+					hash: migration.hash,
+					created_at: String(migration.folderMillis),
+				})),
+			);
+			expect(
+				await client`select status, executor_startup from platform.session_sandbox_reserves`,
+			).toEqual([{ status: "ready", executor_startup: null }]);
+			expect(
+				await client`select count(*)::int as count from platform.session_sandbox_executor_promotions`,
+			).toEqual([{ count: 0 }]);
+		} finally {
+			await client.end();
+			await database.stop();
+			await rm(folder, { recursive: true, force: true });
+		}
+	}, 120_000);
+
 	it("upgrades the main 0023 history to application targets without rewriting it", async () => {
 		const database = await startPostgresTestDatabase(
 			"migration-0023-application-targets",
@@ -2108,6 +2170,8 @@ describe("published Relay authority migration", () => {
 			89,
 			90,
 			91,
+			92,
+			93,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2217,9 +2281,17 @@ describe("published Relay authority migration", () => {
 			idx: 90,
 			tag: "0090_executor_stop_drain",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 91)).toMatchObject({
 			idx: 91,
 			tag: "0091_connection_host_supplies",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 92)).toMatchObject({
+			idx: 92,
+			tag: "0092_executor_reserve_startup",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 93,
+			tag: "0093_connection_manual_descriptor",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2811,6 +2883,8 @@ describe("published Relay authority migration", () => {
 					"connection_agent_id",
 					"consumer_id",
 					"created_at",
+					"descriptor",
+					"descriptor_digest",
 					"execution_id",
 					"instance_id",
 					"preparation",
@@ -2829,7 +2903,7 @@ describe("published Relay authority migration", () => {
 				].map((name) => `connection_manual_installations:${name}`),
 			);
 			expectedDelta.checks.push(
-				...["states", "fixed", "receipt", "identity"].map(
+				...["states", "fixed", "receipt", "descriptor", "identity"].map(
 					(name) =>
 						`connection_manual_installations:connection_manual_installation_${name}`,
 				),
@@ -2887,6 +2961,26 @@ describe("published Relay authority migration", () => {
 			expectedDelta.columns.push(
 				"workload_reconciliations:certificate_reconciliation",
 				"conversation_stops:executor_drain_required",
+			);
+			expectedDelta.columns.push(
+				"session_sandbox_reserves:executor_startup",
+				...[
+					"conversation_id",
+					"created_at",
+					"id",
+					"receipt",
+					"receipt_digest",
+					"resource_fence",
+					"sandbox_id",
+					"session_generation",
+				].map((name) => `session_sandbox_executor_promotions:${name}`),
+			);
+			expectedDelta.checks.push(
+				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_digest",
+			);
+			expectedDelta.indexes.push(
+				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_unique",
+				"session_sandbox_executor_promotions:session_sandbox_executor_promotions_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

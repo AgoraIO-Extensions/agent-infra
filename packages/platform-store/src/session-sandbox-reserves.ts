@@ -18,19 +18,28 @@ import {
 	parseSessionSandboxReserveConfigurationV1,
 	resolveCurrentPersonalApiUserV1,
 	type SessionSandboxBindingV1,
+	type SessionSandboxInstanceEvidenceV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReserveClaimV1,
 	type SessionSandboxReserveConfigurationV1,
+	type SessionSandboxReserveExecutorStartupV1,
 	type SessionSandboxReserveLeaseV1,
 	type SessionSandboxReserveOperationInputV1,
 	type SessionSandboxReserveOperationV1,
 	type SessionSandboxReserveProfileV1,
+	type SessionSandboxReserveProjectionWriteV1,
 	type SessionSandboxReserveStatusV1,
 	type SessionSandboxResourceBudgetV1,
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxVerifiedPolicyV1,
+	sessionSandboxAllocationRefV1,
 	sessionSandboxBudgetFitsV1,
+	sessionSandboxInstanceEvidenceShapeV1,
+	sessionSandboxReserveClaimRefV1,
 	sessionSandboxReserveDigestV1,
+	sessionSandboxReserveExecutorSettledV1,
+	sessionSandboxReserveExecutorStartupRefV1,
+	sessionSandboxReserveRefV1,
 	sessionSandboxReserveResourceKindsV1,
 	sessionSandboxReserveTargetV1,
 	type TaskUserDirectoryV1,
@@ -70,6 +79,7 @@ interface ReserveRow {
 	lease_owner: string | null;
 	delivery_fence: number | string;
 	expires_at: Date;
+	executor_startup: SessionSandboxReserveExecutorStartupV1 | null;
 }
 interface ReserveSizing {
 	profileDigest: string;
@@ -152,6 +162,84 @@ export interface SessionSandboxAdmissionV1 {
 	readonly admissionProfileDigest: string | null;
 	readonly profile: SessionSandboxReserveProfileV1 | null;
 	readonly observation: SessionSandboxObservationV1 | null;
+	/** Original executor startup facts handed to the business path on claim (Spec §10.1.1 G6). */
+	readonly executorStartup?: SessionSandboxReserveExecutorStartupV1 | null;
+}
+function boundedText(value: string): boolean {
+	return value.length > 0 && value.length <= 512;
+}
+function isProjectionIdentity(
+	resource: SessionSandboxResourceIdentityV1 | null,
+	row: ReserveRow,
+	startup: SessionSandboxReserveExecutorStartupV1,
+): resource is SessionSandboxResourceIdentityV1 {
+	return (
+		resource?.kind === "Secret" &&
+		resource.name === startup.startupRef &&
+		resource.namespace === row.namespace &&
+		!!resource.uid &&
+		!!resource.resourceVersion
+	);
+}
+/** An unknown reserve returns to preparing only after every original write has its response. */
+function settledStatus(
+	row: ReserveRow,
+	startup: SessionSandboxReserveExecutorStartupV1,
+): SessionSandboxReserveStatusV1 {
+	return row.status === "unknown" &&
+		row.operations.every(
+			(operation) => operation.writeCompletion === "response",
+		) &&
+		sessionSandboxReserveExecutorSettledV1(startup)
+		? "preparing"
+		: row.status;
+}
+/** The original reserve instance (generation 1, fence 1) under the current lease. */
+function reserveEvidenceMatches(
+	evidence: SessionSandboxInstanceEvidenceV1 | undefined,
+	sandboxId: string,
+	lease: SessionSandboxReserveLeaseV1,
+	instance: {
+		readonly podUid: string;
+		readonly hostKeyId: string;
+		readonly runnerEpoch: string;
+	},
+): evidence is SessionSandboxInstanceEvidenceV1 {
+	return (
+		sessionSandboxInstanceEvidenceShapeV1(evidence) &&
+		evidence.scope.phase === "reserve" &&
+		evidence.scope.reserveRef === sessionSandboxReserveRefV1(sandboxId) &&
+		evidence.scope.reserveDeliveryFence === lease.deliveryFence &&
+		evidence.generation === 1 &&
+		evidence.resourceFence === 1 &&
+		evidence.podUid === instance.podUid &&
+		evidence.hostKeyId === instance.hostKeyId &&
+		evidence.runnerEpoch === instance.runnerEpoch
+	);
+}
+/** Database-clock predicate for the final write: `observedAt ≤ now < expiresAt`. */
+function evidenceOpenSql(
+	tx: Transaction,
+	evidence: SessionSandboxInstanceEvidenceV1,
+) {
+	return tx`${evidence.observedAtMs}::float8 <= floor(extract(epoch from clock_timestamp()) * 1000)
+		and floor(extract(epoch from clock_timestamp()) * 1000) < ${evidence.expiresAtMs}::float8`;
+}
+/** Evidence is still valid by the database clock at commit, after the row locks. */
+async function evidenceCurrent(
+	tx: Transaction,
+	evidence: SessionSandboxInstanceEvidenceV1,
+	notBeforeMs?: number,
+): Promise<boolean> {
+	const [clock] = await tx<{ now_ms: number }[]>`
+		select floor(extract(epoch from clock_timestamp()) * 1000)::float8 as now_ms`;
+	const now = clock?.now_ms;
+	return (
+		typeof now === "number" &&
+		evidence.observedAtMs <= now &&
+		now < evidence.expiresAtMs &&
+		(notBeforeMs === undefined || evidence.issuedAtMs >= notBeforeMs)
+	);
 }
 function unavailable(): never {
 	throw new Error("Session Sandbox reserve persistence is unavailable");
@@ -473,6 +561,7 @@ export async function admitNewSessionSandboxV1(
 				operations: row.operations,
 				bootstrapReady: true,
 				businessStateAbsent: true,
+				executorStartup: row.executor_startup,
 			})
 		) {
 			const changed =
@@ -492,6 +581,7 @@ export async function admitNewSessionSandboxV1(
 					status: "observed",
 					resources: row.operations.map((o) => o.resource ?? unavailable()),
 				},
+				executorStartup: row.executor_startup,
 			};
 		}
 	}
@@ -507,6 +597,10 @@ export async function admitNewSessionSandboxV1(
 export async function adoptSessionSandboxReserveV1(
 	tx: Transaction,
 	admission: SessionSandboxAdmissionV1,
+	audit?: {
+		readonly requestId: string;
+		readonly traceId: string;
+	},
 ): Promise<void> {
 	if (admission.admissionProfileDigest !== null) {
 		const rows = await tx`update platform.session_sandbox_allocations
@@ -519,6 +613,210 @@ export async function adoptSessionSandboxReserveV1(
 	const changed =
 		await tx`update platform.session_sandbox_allocations set resource_fence = 1, resource_policy = ${tx.json(admission.profile.policy as unknown as Json)}, resource_observation = ${tx.json(admission.observation as unknown as Json)}, status = 'allocated' where sandbox_id = ${admission.binding.sandboxId} and conversation_id = ${admission.binding.sessionId} and session_generation = 1 returning sandbox_id`;
 	if (changed.length !== 1) unavailable();
+	const startup = admission.executorStartup;
+	if (!startup) return;
+	// The business path reads the original startup record instead of signing a
+	// new deadline; `source` keeps a claimed reserve out of startup-timeout retirement.
+	if (!audit || !startup.projection || !startup.consumption) unavailable();
+	const binding = admission.binding;
+	await tx`
+		insert into platform.conversation_audit_events
+			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+		values
+			(${randomUUID()}, ${binding.sessionId}, null, ${binding.agentId}, ${binding.principal.id},
+			'conversation.sandbox.observed', ${audit.traceId}, ${audit.requestId}, clock_timestamp(),
+			${tx.json({
+				checkpoint: "executor-startup",
+				startupRef: startup.startupRef,
+				deadlineMs: startup.deadlineMs,
+				sandboxId: binding.sandboxId,
+				sessionGeneration: 1,
+				resourceFence: 1,
+				source: "reserve",
+				podUid: startup.projection.podUid,
+				hostKeyId: startup.projection.hostKeyId,
+				hostPublicKey: startup.projection.hostPublicKey,
+				bindingDigest: startup.projection.bindingDigest,
+				projectionAttemptId: startup.projection.create.attemptId,
+				projectionUid: startup.consumption.projectionUid,
+				runnerEpoch: startup.consumption.runnerEpoch,
+			})})
+	`;
+}
+/** Non-secret facts a Worker binds into one business promotion receipt (Spec §10.1.1). */
+export interface SessionSandboxExecutorPromotionInputV1 {
+	readonly sandboxId: string;
+	readonly sessionId: string;
+	readonly agentId: string;
+	readonly principal: {
+		readonly kind: "user" | "application";
+		readonly id: string;
+	};
+	readonly channelId: string;
+	readonly generation: number;
+	readonly resourceFence: number;
+	readonly profileDigest: string;
+	readonly bindingDigest: string;
+	readonly layoutDigest: string;
+	readonly podUid: string;
+	/** Evidence snapshot only; later admission compares Pod UID, epoch and generation/fence. */
+	readonly podResourceVersion: string;
+	readonly pvcUid: string;
+	readonly hostKeyId: string;
+	readonly runnerEpoch: string;
+	/** Verified `claimed`-scope evidence issued after the claim committed. */
+	readonly evidence: SessionSandboxInstanceEvidenceV1;
+}
+export interface SessionSandboxExecutorPromotionReceiptRefV1 {
+	readonly receiptId: string;
+	readonly receiptDigest: string;
+}
+const digestPattern = /^[0-9a-f]{64}$/;
+/**
+ * Persist the promotion receipt of a claimed executor reserve under the
+ * current allocation binding and fence. Replay returns the original receipt;
+ * a different receipt for the same generation/fence is refused.
+ */
+export async function recordSessionSandboxExecutorPromotionV1(
+	tx: Transaction,
+	input: SessionSandboxExecutorPromotionInputV1,
+): Promise<SessionSandboxExecutorPromotionReceiptRefV1 | null> {
+	if (
+		![
+			input.sandboxId,
+			input.sessionId,
+			input.agentId,
+			input.principal?.id,
+			input.channelId,
+			input.podUid,
+			input.podResourceVersion,
+			input.pvcUid,
+			input.hostKeyId,
+			input.runnerEpoch,
+		].every((value) => typeof value === "string" && boundedText(value)) ||
+		!["user", "application"].includes(input.principal.kind) ||
+		![input.generation, input.resourceFence].every(
+			(value) => Number.isSafeInteger(value) && value > 0,
+		) ||
+		![input.profileDigest, input.bindingDigest, input.layoutDigest].every(
+			(value) => digestPattern.test(value),
+		)
+	)
+		return null;
+	const evidence = input.evidence;
+	if (
+		!sessionSandboxInstanceEvidenceShapeV1(evidence) ||
+		evidence.scope.phase !== "claimed" ||
+		evidence.scope.claimRef !==
+			sessionSandboxReserveClaimRefV1({
+				sandboxId: input.sandboxId,
+				sessionId: input.sessionId,
+			}) ||
+		evidence.scope.allocationRef !==
+			sessionSandboxAllocationRefV1({
+				sandboxId: input.sandboxId,
+				sessionId: input.sessionId,
+				generation: input.generation,
+				resourceFence: input.resourceFence,
+			}) ||
+		evidence.podUid !== input.podUid ||
+		evidence.hostKeyId !== input.hostKeyId ||
+		evidence.runnerEpoch !== input.runnerEpoch ||
+		evidence.generation !== input.generation ||
+		evidence.resourceFence !== input.resourceFence
+	)
+		return null;
+	const [allocation] = await tx<
+		{
+			agent_id: string;
+			actor_id: string;
+			principal_type: string;
+			channel_id: string;
+			session_generation: number | string;
+			resource_fence: number | string;
+			status: string;
+		}[]
+	>`select agent_id, actor_id, principal_type, channel_id, session_generation, resource_fence, status
+		from platform.session_sandbox_allocations
+		where sandbox_id = ${input.sandboxId} and conversation_id = ${input.sessionId} for update`;
+	if (
+		!allocation ||
+		allocation.agent_id !== input.agentId ||
+		allocation.actor_id !== input.principal.id ||
+		allocation.principal_type !== input.principal.kind ||
+		allocation.channel_id !== input.channelId ||
+		Number(allocation.session_generation) !== input.generation ||
+		Number(allocation.resource_fence) !== input.resourceFence ||
+		["stopped", "unavailable"].includes(allocation.status)
+	)
+		return null;
+	const [reserve] = await tx<
+		(Pick<ReserveRow, "profile_digest" | "operations" | "executor_startup"> & {
+			claimed_ms: number | null;
+		})[]
+	>`select profile_digest, operations, executor_startup,
+			floor(extract(epoch from claimed_at) * 1000)::float8 as claimed_ms
+		from platform.session_sandbox_reserves
+		where sandbox_id = ${input.sandboxId} and session_id = ${input.sessionId} and status = 'claimed'`;
+	const startup = reserve?.executor_startup;
+	const projection = startup?.projection;
+	const pvc = reserve?.operations.find(
+		(operation) =>
+			operation.kind === "PersistentVolumeClaim" &&
+			operation.operation === "create",
+	);
+	if (
+		!reserve ||
+		!startup ||
+		!projection ||
+		!startup.consumption ||
+		typeof reserve.claimed_ms !== "number" ||
+		// Only the original reserve instance: its startup fixes generation 1 and this fence.
+		input.generation !== 1 ||
+		startup.startupRef !==
+			`sandbox-${input.sandboxId}-executor-${input.resourceFence}` ||
+		reserve.profile_digest !== input.profileDigest ||
+		projection.bindingDigest !== input.bindingDigest ||
+		projection.podUid !== input.podUid ||
+		projection.hostKeyId !== input.hostKeyId ||
+		startup.consumption.runnerEpoch !== input.runnerEpoch ||
+		pvc?.resource?.uid !== input.pvcUid ||
+		!(await evidenceCurrent(tx, evidence, reserve.claimed_ms))
+	)
+		return null;
+	const { evidence: _evidence, ...binding } = input;
+	// Replay compares the instance binding; fresh evidence of the same instance replays it.
+	const receiptDigest = sessionSandboxReserveDigestV1({
+		schemaVersion: 1,
+		startupRef: startup.startupRef,
+		...binding,
+	});
+	const receipt = {
+		schemaVersion: 1 as const,
+		startupRef: startup.startupRef,
+		...binding,
+		evidence,
+	};
+	const [existing] = await tx<{ id: string; receipt_digest: string }[]>`
+		select id, receipt_digest from platform.session_sandbox_executor_promotions
+		where sandbox_id = ${input.sandboxId} and session_generation = ${input.generation}
+			and resource_fence = ${input.resourceFence}`;
+	if (existing)
+		return existing.receipt_digest === receiptDigest
+			? { receiptId: existing.id, receiptDigest }
+			: null;
+	const receiptId = randomUUID();
+	// The final write carries the evidence lifetime: a wait before it cannot commit expired evidence.
+	const inserted = await tx<
+		{ id: string }[]
+	>`insert into platform.session_sandbox_executor_promotions
+		(id, sandbox_id, conversation_id, session_generation, resource_fence, receipt, receipt_digest, created_at)
+		select ${receiptId}::text, ${input.sandboxId}::text, ${input.sessionId}::text,
+			${input.generation}::bigint, ${input.resourceFence}::bigint,
+			${tx.json(receipt as unknown as Json)}::jsonb, ${receiptDigest}::text, clock_timestamp()
+		where ${evidenceOpenSql(tx, evidence)}
+		returning id`;
+	return inserted.length === 1 ? { receiptId, receiptDigest } : null;
 }
 /** Resume the original allocation; a stopped Session is never given a reserve. */
 export async function reserveSessionSandboxResumeBudgetV1(
@@ -834,7 +1132,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			unavailable();
 		const [count] = await tx<
 			{ total: string; profile: string; preparing: string }[]
-		>`select count(*)::text as total, count(*) filter(where profile_digest = ${profile.digest})::text as profile, count(*) filter(where status in ('preparing','unknown') or (status = 'retiring' and exists(select 1 from jsonb_array_elements(operations) o where o->>'operation' = 'create' and o->>'writeCompletion' <> 'response')))::text as preparing from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
+		>`select count(*)::text as total, count(*) filter(where profile_digest = ${profile.digest})::text as profile, count(*) filter(where status in ('preparing','unknown') or (status = 'retiring' and (exists(select 1 from jsonb_array_elements(operations) o where o->>'operation' = 'create' and o->>'writeCompletion' <> 'response') or executor_startup->'projection'->'create'->>'writeCompletion' = 'pending')))::text as preparing from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
 		if (
 			!count ||
 			Number(count.total) >= config.maximumReserves ||
@@ -974,13 +1272,14 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				deliveryFence: Number(row.delivery_fence),
 				deployment: current?.deployment ?? null,
 				modelProjection: current?.modelProjection ?? null,
+				executorStartup: row.executor_startup,
 			};
 		});
 	}
-	async #mutate(
+	async #mutate<T = boolean>(
 		lease: SessionSandboxReserveLeaseV1,
-		action: (tx: Transaction, row: ReserveRow) => Promise<boolean>,
-	): Promise<boolean> {
+		action: (tx: Transaction, row: ReserveRow) => Promise<T | false>,
+	): Promise<T | false> {
 		return this.#client.begin(async (tx) => {
 			await lockBudget(tx, this.#configuration);
 			const [row] = await tx<
@@ -988,7 +1287,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			>`select * from platform.session_sandbox_reserves where sandbox_id = ${lease.sandboxId} and lease_owner = ${lease.leaseOwner} and delivery_fence = ${lease.deliveryFence} and lease_expires_at > clock_timestamp() and status <> 'claimed' and retired_at is null for update`;
 			if (!row) return false;
 			return action(tx, row);
-		});
+		}) as Promise<T | false>;
 	}
 	async recordIntent(
 		lease: SessionSandboxReserveLeaseV1,
@@ -1156,9 +1455,10 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			const operations = row.operations.map((o) =>
 				o.attemptId === before.attemptId ? completed : o,
 			);
-			const settled = operations.every(
-				(operation) => operation.writeCompletion === "response",
-			);
+			const settled =
+				operations.every(
+					(operation) => operation.writeCompletion === "response",
+				) && sessionSandboxReserveExecutorSettledV1(row.executor_startup);
 			const status =
 				row.status === "unknown" && settled ? "preparing" : row.status;
 			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(operations as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
@@ -1278,9 +1578,435 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		});
 	}
 
+	async #writeExecutor(
+		tx: Transaction,
+		row: ReserveRow,
+		startup: SessionSandboxReserveExecutorStartupV1,
+		status: SessionSandboxReserveStatusV1 = row.status,
+		evidence?: SessionSandboxInstanceEvidenceV1,
+	): Promise<boolean> {
+		const written = evidence
+			? await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp()
+				where sandbox_id = ${row.sandbox_id} and ${evidenceOpenSql(tx, evidence)}
+					and ${startup.deadlineMs}::float8 > extract(epoch from clock_timestamp()) * 1000
+				returning sandbox_id`
+			: await tx`update platform.session_sandbox_reserves set executor_startup = ${tx.json(startup as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id} returning sandbox_id`;
+		return written.length === 1;
+	}
+	async #beforeExecutorDeadline(
+		tx: Transaction,
+		startup: SessionSandboxReserveExecutorStartupV1,
+	): Promise<boolean> {
+		const [clock] = await tx<{ open: boolean }[]>`
+			select ${startup.deadlineMs}::float8 > extract(epoch from clock_timestamp()) * 1000 as open`;
+		return clock?.open === true;
+	}
+	/**
+	 * Freeze the startup ref and absolute deadline from the database clock before
+	 * the reserve Pod create intent. Retries return the original deadline.
+	 */
+	async recordExecutorStartup(
+		lease: SessionSandboxReserveLeaseV1,
+		input: { readonly timeoutMs: number },
+	): Promise<number | null> {
+		if (
+			!Number.isSafeInteger(input.timeoutMs) ||
+			input.timeoutMs < 1000 ||
+			input.timeoutMs > 900_000
+		)
+			throw new TypeError("Invalid executor startup timeout");
+		const deadline = await this.#mutate<number>(lease, async (tx, row) => {
+			const startupRef = sessionSandboxReserveExecutorStartupRefV1(
+				row.sandbox_id,
+			);
+			const existing = row.executor_startup;
+			if (existing)
+				return existing.startupRef === startupRef ? existing.deadlineMs : false;
+			if (
+				row.status !== "preparing" ||
+				row.operations.some((operation) => operation.kind === "Pod")
+			)
+				return false;
+			const [clock] = await tx<{ deadline_ms: number }[]>`
+				select floor(extract(epoch from clock_timestamp()) * 1000)::float8 + ${input.timeoutMs}::float8 as deadline_ms`;
+			const deadlineMs = clock?.deadline_ms;
+			if (typeof deadlineMs !== "number" || !Number.isSafeInteger(deadlineMs))
+				return false;
+			await this.#writeExecutor(tx, row, {
+				schemaVersion: 1,
+				startupRef,
+				deadlineMs,
+				writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+				projection: null,
+				consumption: null,
+			});
+			return deadlineMs;
+		});
+		return deadline === false ? null : deadline;
+	}
+	/**
+	 * Fix the projection attempt and Host public identity after the actual Pod UID
+	 * is read back and before the projection is created. One attempt never re-keys.
+	 */
+	async recordExecutorProjectionIntent(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			readonly attemptId: string;
+			readonly podUid: string;
+			readonly hostKeyId: string;
+			readonly hostPublicKey: string;
+			readonly bindingDigest: string;
+		},
+	): Promise<boolean> {
+		if (
+			![
+				input.attemptId,
+				input.podUid,
+				input.hostKeyId,
+				input.hostPublicKey,
+			].every((value) => typeof value === "string" && boundedText(value)) ||
+			!/^[0-9a-f]{64}$/.test(input.bindingDigest)
+		)
+			return false;
+		return this.#mutate(lease, async (tx, row) => {
+			const startup = row.executor_startup;
+			if (!startup || row.status !== "preparing") return false;
+			const existing = startup.projection;
+			if (existing)
+				return (
+					existing.create.attemptId === input.attemptId &&
+					existing.podUid === input.podUid &&
+					existing.hostKeyId === input.hostKeyId &&
+					existing.hostPublicKey === input.hostPublicKey &&
+					existing.bindingDigest === input.bindingDigest
+				);
+			const pod = row.operations.find(
+				(operation) =>
+					operation.kind === "Pod" && operation.operation === "create",
+			);
+			if (
+				pod?.status !== "confirmed" ||
+				pod.writeCompletion !== "response" ||
+				pod.resource?.uid !== input.podUid ||
+				row.operations.some(
+					(operation) => operation.attemptId === input.attemptId,
+				) ||
+				!(await this.#beforeExecutorDeadline(tx, startup))
+			)
+				return false;
+			await this.#writeExecutor(tx, row, {
+				...startup,
+				projection: {
+					podUid: input.podUid,
+					hostKeyId: input.hostKeyId,
+					hostPublicKey: input.hostPublicKey,
+					bindingDigest: input.bindingDigest,
+					create: {
+						attemptId: input.attemptId,
+						status: "pending",
+						resource: null,
+						absent: false,
+						writeCompletion: "pending",
+						writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+					},
+					deletes: [],
+				},
+			});
+			return true;
+		});
+	}
+	/** Original projection create response; like `recordCreateResponse`, only the original writer settles it. */
+	async recordExecutorProjectionCreateResponse(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			readonly attemptId: string;
+			readonly response: "created" | "rejected";
+			readonly resource: SessionSandboxResourceIdentityV1 | null;
+		},
+	): Promise<boolean> {
+		return this.#client.begin(async (tx) => {
+			await lockBudget(tx);
+			const [row] = await tx<
+				ReserveRow[]
+			>`select * from platform.session_sandbox_reserves where sandbox_id = ${lease.sandboxId} and status in ('preparing','unknown','retiring') and retired_at is null for update`;
+			const startup = row?.executor_startup;
+			const projection = startup?.projection;
+			const create = projection?.create;
+			if (
+				!row ||
+				!startup ||
+				!projection ||
+				create?.attemptId !== input.attemptId ||
+				create.writeCompletion !== "pending" ||
+				create.writer.owner !== lease.leaseOwner ||
+				create.writer.fence !== lease.deliveryFence ||
+				!["pending", "unknown"].includes(create.status) ||
+				(input.response === "created"
+					? !isProjectionIdentity(input.resource, row, startup)
+					: input.resource !== null)
+			)
+				return false;
+			const next: SessionSandboxReserveExecutorStartupV1 = {
+				...startup,
+				projection: {
+					...projection,
+					create: {
+						...create,
+						status: input.response === "created" ? "confirmed" : "rejected",
+						resource: input.resource,
+						writeCompletion: "response",
+					},
+				},
+			};
+			await this.#writeExecutor(tx, row, next, settledStatus(row, next));
+			return true;
+		});
+	}
+	/** A projection write whose result is unknown keeps the reserve unclaimable. */
+	async recordExecutorProjectionResult(
+		lease: SessionSandboxReserveLeaseV1,
+		input: { readonly attemptId: string },
+	): Promise<boolean> {
+		return this.#mutate(lease, async (tx, row) => {
+			const startup = row.executor_startup;
+			const projection = startup?.projection;
+			if (!startup || !projection) return false;
+			const before = [projection.create, ...projection.deletes].find(
+				(write) => write.attemptId === input.attemptId,
+			);
+			if (
+				!before ||
+				before.writer.owner !== lease.leaseOwner ||
+				before.writer.fence !== lease.deliveryFence ||
+				before.writeCompletion !== "pending" ||
+				!["pending", "unknown"].includes(before.status)
+			)
+				return false;
+			const mark = (write: SessionSandboxReserveProjectionWriteV1) =>
+				write.attemptId === input.attemptId
+					? { ...write, status: "unknown" as const }
+					: write;
+			await this.#writeExecutor(
+				tx,
+				row,
+				{
+					...startup,
+					projection: {
+						...projection,
+						create: mark(projection.create),
+						deletes: projection.deletes.map(mark),
+					},
+				},
+				row.status === "retiring" ? "retiring" : "unknown",
+			);
+			return true;
+		});
+	}
+	/** Both roles consumed the original projection before the deadline (from verified Host evidence). */
+	async recordExecutorConsumption(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			readonly attemptId: string;
+			readonly podUid: string;
+			readonly projectionUid: string;
+			readonly hostKeyId: string;
+			readonly runnerEpoch: string;
+			/** Verified `reserve`-scope instance evidence for this lease. */
+			readonly evidence: SessionSandboxInstanceEvidenceV1;
+		},
+	): Promise<boolean> {
+		if (!boundedText(input.runnerEpoch)) return false;
+		const consumption = {
+			attemptId: input.attemptId,
+			podUid: input.podUid,
+			projectionUid: input.projectionUid,
+			hostKeyId: input.hostKeyId,
+			runnerEpoch: input.runnerEpoch,
+		};
+		return this.#mutate(lease, async (tx, row) => {
+			const startup = row.executor_startup;
+			const projection = startup?.projection;
+			if (
+				!startup ||
+				!projection ||
+				row.status !== "preparing" ||
+				!reserveEvidenceMatches(input.evidence, row.sandbox_id, lease, input) ||
+				!(await evidenceCurrent(tx, input.evidence))
+			)
+				return false;
+			if (startup.consumption)
+				return isDeepStrictEqual(startup.consumption, consumption);
+			const { create } = projection;
+			if (
+				create.attemptId !== input.attemptId ||
+				create.status !== "confirmed" ||
+				create.writeCompletion !== "response" ||
+				create.resource?.uid !== input.projectionUid ||
+				projection.podUid !== input.podUid ||
+				projection.hostKeyId !== input.hostKeyId ||
+				projection.deletes.length > 0 ||
+				!(await this.#beforeExecutorDeadline(tx, startup))
+			)
+				return false;
+			return this.#writeExecutor(
+				tx,
+				row,
+				{ ...startup, consumption },
+				row.status,
+				input.evidence,
+			);
+		});
+	}
+	/** Persist the conditional DELETE intent of the original projection before sending it. */
+	async recordExecutorProjectionDeleteIntent(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			readonly attemptId: string;
+			readonly resource: SessionSandboxResourceIdentityV1;
+		},
+	): Promise<boolean> {
+		return this.#mutate(lease, async (tx, row) => {
+			const startup = row.executor_startup;
+			const projection = startup?.projection;
+			if (!startup || !projection || !boundedText(input.attemptId))
+				return false;
+			const { create } = projection;
+			if (
+				create.status !== "confirmed" ||
+				create.writeCompletion !== "response" ||
+				!isProjectionIdentity(input.resource, row, startup) ||
+				input.resource.uid !== create.resource?.uid ||
+				(row.status === "preparing"
+					? !startup.consumption
+					: row.status !== "retiring") ||
+				projection.deletes.length >= 3 ||
+				projection.deletes.some(
+					(prior) =>
+						prior.status !== "rejected" ||
+						prior.writeCompletion !== "response" ||
+						prior.resource?.resourceVersion === input.resource.resourceVersion,
+				) ||
+				[create, ...projection.deletes].some(
+					(write) => write.attemptId === input.attemptId,
+				) ||
+				row.operations.some(
+					(operation) => operation.attemptId === input.attemptId,
+				)
+			)
+				return false;
+			await this.#writeExecutor(tx, row, {
+				...startup,
+				projection: {
+					...projection,
+					deletes: [
+						...projection.deletes,
+						{
+							attemptId: input.attemptId,
+							status: "pending",
+							resource: input.resource,
+							absent: false,
+							writeCompletion: "pending",
+							writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+						},
+					],
+				},
+			});
+			return true;
+		});
+	}
+	/** Original projection DELETE response; `absent` is the provider's own not-found response. */
+	async recordExecutorProjectionDeleteResponse(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			readonly attemptId: string;
+			readonly response: SessionSandboxReserveDeleteResponseV1;
+		},
+	): Promise<boolean> {
+		return this.#client.begin(async (tx) => {
+			await lockBudget(tx);
+			const [row] = await tx<
+				ReserveRow[]
+			>`select * from platform.session_sandbox_reserves where sandbox_id = ${lease.sandboxId} and status in ('preparing','unknown','retiring') and retired_at is null for update`;
+			const startup = row?.executor_startup;
+			const projection = startup?.projection;
+			const before = projection?.deletes.find(
+				(write) => write.attemptId === input.attemptId,
+			);
+			if (
+				!row ||
+				!startup ||
+				!projection ||
+				!before ||
+				before.writeCompletion !== "pending" ||
+				before.writer.owner !== lease.leaseOwner ||
+				before.writer.fence !== lease.deliveryFence
+			)
+				return false;
+			const completed: SessionSandboxReserveProjectionWriteV1 = {
+				...before,
+				status: input.response === "rejected" ? "rejected" : "confirmed",
+				absent: input.response === "absent",
+				writeCompletion: "response",
+			};
+			const next: SessionSandboxReserveExecutorStartupV1 = {
+				...startup,
+				projection: {
+					...projection,
+					deletes: projection.deletes.map((write) =>
+						write.attemptId === before.attemptId ? completed : write,
+					),
+				},
+			};
+			await this.#writeExecutor(tx, row, next, settledStatus(row, next));
+			return true;
+		});
+	}
+	/** A fresh absence after the original DELETE response settled; never a DELETE acknowledgement. */
+	async recordExecutorProjectionDeleteObservation(
+		lease: SessionSandboxReserveLeaseV1,
+		input: { readonly attemptId: string },
+	): Promise<boolean> {
+		return this.#mutate(lease, async (tx, row) => {
+			const startup = row.executor_startup;
+			const projection = startup?.projection;
+			const last = projection?.deletes.at(-1);
+			if (
+				!startup ||
+				!projection ||
+				last?.attemptId !== input.attemptId ||
+				last.absent ||
+				last.writeCompletion !== "response" ||
+				!["confirmed", "rejected"].includes(last.status)
+			)
+				return false;
+			await this.#writeExecutor(tx, row, {
+				...startup,
+				projection: {
+					...projection,
+					deletes: [
+						...projection.deletes.slice(0, -1),
+						{ ...last, status: "confirmed", absent: true },
+					],
+				},
+			});
+			return true;
+		});
+	}
+	async recordExecutorPromotion(
+		input: SessionSandboxExecutorPromotionInputV1,
+	): Promise<SessionSandboxExecutorPromotionReceiptRefV1 | null> {
+		return this.#client.begin((tx) =>
+			recordSessionSandboxExecutorPromotionV1(tx, input),
+		) as Promise<SessionSandboxExecutorPromotionReceiptRefV1 | null>;
+	}
 	async markReady(
 		lease: SessionSandboxReserveLeaseV1,
-		evidence: { bootstrapReady: boolean; businessStateAbsent: boolean },
+		evidence: {
+			bootstrapReady: boolean;
+			businessStateAbsent: boolean;
+			/** Required for an executor reserve: fresh `reserve`-scope evidence of the consumed instance. */
+			instanceEvidence?: SessionSandboxInstanceEvidenceV1;
+		},
 	): Promise<boolean> {
 		// Re-read current profile before budget/reserve locks. Old deployment facts cannot confer readiness.
 		return this.#client.begin(async (tx) => {
@@ -1303,17 +2029,38 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				!current ||
 				row.profile_digest !== current.profile.digest ||
 				!canReadySessionSandboxReserveV1({
-					...evidence,
+					bootstrapReady: evidence.bootstrapReady,
+					businessStateAbsent: evidence.businessStateAbsent,
 					status: row.status,
 					operations: row.operations,
+					executorStartup: row.executor_startup,
 				})
+			)
+				return false;
+			const consumed = row.executor_startup?.consumption;
+			if (
+				row.executor_startup &&
+				(!consumed ||
+					!reserveEvidenceMatches(
+						evidence.instanceEvidence,
+						row.sandbox_id,
+						lease,
+						consumed,
+					) ||
+					!(await evidenceCurrent(tx, evidence.instanceEvidence)))
 			)
 				return false;
 			const business =
 				await tx`select 1 from platform.conversations where id = ${row.session_id} union all select 1 from platform.session_sandbox_allocations where sandbox_id = ${row.sandbox_id}`;
 			if (business.length) return false;
-			await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
-			return true;
+			const instance = row.executor_startup
+				? evidence.instanceEvidence
+				: undefined;
+			const readied = instance
+				? await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp()
+					where sandbox_id = ${row.sandbox_id} and ${evidenceOpenSql(tx, instance)} returning sandbox_id`
+				: await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id} returning sandbox_id`;
+			return readied.length === 1;
 		});
 	}
 	async retire(sandboxId: string): Promise<boolean> {
@@ -1330,6 +2077,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				!canReleaseSessionSandboxReserveV1({
 					status: row.status,
 					operations: row.operations,
+					executorStartup: row.executor_startup,
 				})
 			)
 				return false;
