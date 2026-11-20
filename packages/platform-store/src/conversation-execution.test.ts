@@ -623,6 +623,7 @@ function createConversation(
 	resolvedAuthority: ConversationExecutionAuthorityV1 = authority,
 	options: {
 		readonly sandbox?: "preparing" | "ready";
+		readonly userDirectory?: PostgresConversationExecutionOptionsV1["userDirectory"];
 		readonly readRequestedModelDisplayName?: PostgresConversationExecutionOptionsV1["readRequestedModelDisplayName"];
 		/** 让某类命令的计划带上与命令不一致的 outbox traceparent（#2473）。 */
 		readonly tamperTraceParent?: {
@@ -637,7 +638,7 @@ function createConversation(
 		...(options.readRequestedModelDisplayName
 			? { readRequestedModelDisplayName: options.readRequestedModelDisplayName }
 			: {}),
-		userDirectory: {
+		userDirectory: options.userDirectory ?? {
 			async resolveUser(userId) {
 				return {
 					schemaVersion: 1,
@@ -4149,6 +4150,131 @@ it("4270 refuses an authorized Web message without a personal Key before writing
 			).resolves.toMatchObject({ outcome: "denied" });
 		} finally {
 			await denied.transaction.close();
+		}
+	} finally {
+		await transaction.close();
+	}
+});
+
+it.each([
+	"present",
+	"missing",
+	"foreign",
+	"foreign-agent",
+	"revoked",
+	"late-revoked",
+] as const)("4281 regeneration with personal Key: %s", async (mode) => {
+	const typed: ConversationExecutionAuthorityV1 = {
+		...authority,
+		taskBoundary: {
+			schemaVersion: 1,
+			principal: { kind: "user", id: authority.actorId },
+			agentId: authority.agentId,
+			channelId: "web",
+			identityRevision: "identity-01",
+			agentAuthorizationRevision: authority.authorizationRevision,
+			accessSources: [{ kind: "user", userId: authority.actorId }],
+		},
+	};
+	await persistConformanceModelConfiguration(
+		conformanceModelConfiguration,
+		typed,
+	);
+	let checkingRegeneration = false;
+	let identityReads = 0;
+	const { transaction, useCase } = createConversation(typed, {
+		userDirectory: {
+			async resolveUser(userId) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision:
+						mode === "late-revoked" &&
+						checkingRegeneration &&
+						++identityReads > 1
+							? "revoked"
+							: "identity-01",
+				};
+			},
+		},
+	});
+	try {
+		const created = await useCase.createConversation({
+			schemaVersion: 1,
+			agentId: typed.agentId,
+			idempotencyKey: "4270-create",
+			requestId: "4270",
+			traceId: "4270",
+		});
+		if (created.outcome !== "accepted")
+			throw new Error("Expected conversation");
+		const conversationId = created.result.conversationId;
+		await client`update platform.relay_key_subjects set current_version=last_version where purpose='personal' and subject_id=${typed.actorId}`;
+		const first = await useCase.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId,
+			text: "Synthetic",
+			idempotencyKey: "4281-first",
+			requestId: "4281",
+			traceId: "4281",
+		});
+		if (first.outcome !== "accepted" || !first.result.messageId)
+			throw new Error("Expected baseline");
+		await client`update platform.conversation_executions set status='completed' where execution_id=${first.result.executionId}`;
+		if (mode !== "present")
+			await client`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${typed.actorId}`;
+		checkingRegeneration = true;
+		const counts = await commandEffectCounts();
+		if (!typed.taskBoundary) throw new Error("Expected typed boundary");
+		const foreign =
+			mode === "foreign" || mode === "foreign-agent"
+				? createConversation({
+						...typed,
+						actorId: mode === "foreign" ? "foreign" : typed.actorId,
+						agentId: mode === "foreign-agent" ? "foreign-agent" : typed.agentId,
+						taskBoundary: {
+							...typed.taskBoundary,
+							principal: {
+								kind: "user",
+								id: mode === "foreign" ? "foreign" : typed.actorId,
+							},
+							agentId:
+								mode === "foreign-agent" ? "foreign-agent" : typed.agentId,
+							accessSources: [
+								{
+									kind: "user",
+									userId: mode === "foreign" ? "foreign" : typed.actorId,
+								},
+							],
+						},
+					})
+				: null;
+		if (mode === "revoked")
+			await client`update platform.agents set authorization_revision='revoked' where id=${typed.agentId}`;
+		try {
+			const result = (foreign?.useCase ?? useCase).regenerate({
+				schemaVersion: 1,
+				command: "regenerate",
+				conversationId,
+				sourceMessageId: first.result.messageId,
+				idempotencyKey: "4281-regenerate",
+				requestId: "4281",
+				traceId: "4281",
+			});
+			if (mode === "missing")
+				await expect(result).rejects.toMatchObject({
+					code: "personal_relay_key_unavailable",
+				});
+			else if (mode === "present")
+				expect(await result).toMatchObject({ outcome: "accepted" });
+			else expect(await result).toMatchObject({ outcome: "denied" });
+			if (mode !== "present")
+				expect(await commandEffectCounts()).toEqual(counts);
+		} finally {
+			await foreign?.transaction.close();
 		}
 	} finally {
 		await transaction.close();

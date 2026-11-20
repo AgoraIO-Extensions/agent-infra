@@ -28,7 +28,7 @@ export async function currentConversationExecutionRelayKeyBindingV1(
 	input: {
 		readonly authority: ConversationExecutionAuthorityV1;
 		readonly userDirectory: TaskUserDirectoryV1 | undefined;
-		/** Ordinary Web message admission only; other callers retain their existing refusal. */
+		/** Web admission callers opt in; other callers retain their existing refusal. */
 		readonly reportMissingPersonalKey?: true;
 		readonly personalApiAdmissionAuthority?: PersonalApiTaskAdmissionAuthorityV1;
 	},

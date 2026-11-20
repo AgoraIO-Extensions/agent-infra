@@ -17,7 +17,7 @@ import {
 	createRuntimeNativeMetadataRequestContextV1,
 	type RuntimeNativeMetadataRequestContextV1,
 } from "../runtime-native-metadata-request-context.js";
-import { requestMetadata } from "./common.js";
+import { HttpProtocolError, requestMetadata } from "./common.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -165,19 +165,33 @@ export function registerNativeCapabilityInvocationRoutesV1(
 			);
 			if (request.schemaVersion !== body.schemaVersion)
 				throw new Error("Native capability invocation version changed");
-			const decision = await requestContext.run(() =>
-				dependencies.admitWithIdentity
-					? dependencies.admitWithIdentity({
-							identity,
-							request,
-							requestContext,
-						})
-					: dependencies.admit
-						? dependencies.admit(request)
-						: Promise.resolve(undefined),
-			);
+			const decision = await requestContext.run(async () => {
+				try {
+					return await (dependencies.admitWithIdentity
+						? dependencies.admitWithIdentity({
+								identity,
+								request,
+								requestContext,
+							})
+						: dependencies.admit?.(request));
+				} catch (error) {
+					if (
+						error instanceof ConversationExecutionError &&
+						error.code === "personal_relay_key_unavailable"
+					)
+						return { personalKeyUnavailable: true as const };
+					throw error;
+				}
+			});
 			if (!decision) throw new Error("Native capability admission unavailable");
 			await requestContext.verifyDelivery(identity);
+			if ("personalKeyUnavailable" in decision) {
+				const failure = new HttpProtocolError(
+					"PERSONAL_RELAY_KEY_UNAVAILABLE",
+					metadata.traceId,
+				);
+				return context.json(failure.body, failure.status);
+			}
 			return context.json(
 				sanitizedDecision(decision),
 				outcomeStatus(decision.outcome),
