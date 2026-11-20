@@ -36,8 +36,9 @@ node deploy/ack/session-executor-acceptance.mjs run --plan <namespace>/<plan> \
 窗口、目标元组及固定状态。字段由只读入口校验。A 的授权限制在批准的计划和回执
 ConfigMap 名称。若缺少回执或原业务 Execution，分别按照 HLD 判为待核实或不适用。
 
-已确认排空的回执还填写 `stop.firstTerminalAt`。此值是原业务只读查询首次观察到终态的时间。
-`read` 经获准的 Kubernetes 只读身份读取原 Pod 的 `runtime` 容器日志，在读取前后核实 Pod UID。
-须有该 Pod 的 `get` 和 `pods/log` 读取权限。命令仅投影 `CODEX_EXECUTOR_DRAIN_VERIFIED`。
-Host 在验签并持久化原 runner 的排空证明后写入该记录，包含原 executor epoch、Stop fence、登记组摘要、
-逐组退出时间和 Host 验证时间。原 Pod 无法核实、记录缺失或退出、验证和首次终态时间不符时返回待核实。
+确认排空时，`read` 读取原 Pod 的 executor 和 `runtime` 容器日志，前后核实 Pod UID。
+只读身份须有原 Pod 的 `get` 和 `pods/log` 权限。executor 在发出终止前记录已认证 Stop 的
+epoch、fence、库存摘要和实际登记组。Host 验签并持久化证明后记录逐组退出与验证时间。
+Driver 持久提交终态后，Host 记录原终态事件的时间。读取器将三份证据按原 Stop、Execution、
+Pod、generation/resource fence 和库存关联，核对登记组、截止时间和持久终态时序。
+原记录缺失、相互冲突或证明晚于持久终态时返回待核实。

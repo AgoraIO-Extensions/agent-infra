@@ -1280,6 +1280,7 @@ export function createProductionSessionSandboxReceiverV1(
 		recordExecutorRetirement?: (
 			resources: readonly SessionSandboxResourceIdentityV1[],
 		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+		readExecutorRetirement?: () => Promise<boolean>,
 	): Promise<SessionSandboxObservationV1> => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
@@ -1642,12 +1643,6 @@ export function createProductionSessionSandboxReceiverV1(
 			signal.throwIfAborted();
 		}
 		let previousForApply = previous;
-		// 没有保留 PVC 的回执（#2918）按新建准备；旧来源 UID 只在首次替换时排除。
-		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
-			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
-			signal.throwIfAborted();
-			previousForApply = preparedReplacement ? previous : [];
-		}
 		let deploymentAllocation = allocation;
 		if (allocation.executorDrainIdentity) {
 			const timeout = options.executorDrainStartupTimeoutMs;
@@ -1681,19 +1676,16 @@ export function createProductionSessionSandboxReceiverV1(
 				resources,
 			};
 		};
-		if (
-			deploymentAllocation.executorStartupDeadline !== undefined &&
-			claim.previousObservation?.status !== "ready"
-		) {
-			const pod = await workload.client.read<V1Pod>("Pod", allocation.podName);
-			if (
-				Date.now() >= deploymentAllocation.executorStartupDeadline &&
-				!pod?.status?.conditions?.some(
-					(condition) =>
-						condition.type === "Ready" && condition.status === "True",
-				)
-			)
+		const firstExecutorDeadline =
+			claim.previousObservation?.status === "ready"
+				? undefined
+				: deploymentAllocation.executorStartupDeadline;
+		if (firstExecutorDeadline !== undefined) {
+			const retirementPending = await readExecutorRetirement?.();
+			signal.throwIfAborted();
+			if (retirementPending || Date.now() >= firstExecutorDeadline)
 				return retireExpired();
+			const pod = await workload.client.read<V1Pod>("Pod", allocation.podName);
 			if (recordedPod && !pod)
 				return {
 					status: "unknown" as const,
@@ -1701,6 +1693,13 @@ export function createProductionSessionSandboxReceiverV1(
 					resources: previous,
 				};
 		}
+		// 没有保留 PVC 的回执（#2918）按新建准备；旧来源 UID 只在首次替换时排除。
+		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
+			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
+			signal.throwIfAborted();
+			previousForApply = preparedReplacement ? previous : [];
+		}
+
 		try {
 			await adapter.apply(deploymentAllocation, previousForApply);
 		} catch (error) {
@@ -1712,6 +1711,15 @@ export function createProductionSessionSandboxReceiverV1(
 		// One complete observe per claim; normal prepare pacing is durable in Store.
 		// Keep the lease/abort/CAS boundary here and let the next claim use the
 		// persisted generation/fence audit anchor instead of a hot in-lease loop.
-		return adapter.observe(deploymentAllocation, previousForApply);
+		const observed = await adapter.observe(
+			deploymentAllocation,
+			previousForApply,
+		);
+		if (
+			firstExecutorDeadline !== undefined &&
+			Date.now() >= firstExecutorDeadline
+		)
+			return retireExpired();
+		return observed;
 	};
 }

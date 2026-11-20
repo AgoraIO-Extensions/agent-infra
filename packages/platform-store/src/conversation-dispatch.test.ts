@@ -1230,6 +1230,76 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("rejects ready after a replacement lease takes over expired executor retirement", async () => {
+		const { itemId, work, store } = await seedSandboxPrepareIntent(
+			"executor-late-ready",
+		);
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status='observed', resource_observation=resource_observation || '{"status":"observed"}'::jsonb
+				where conversation_id=${work.conversationId}`;
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "original-retirement-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim?.previousObservation)
+				throw new Error("Expected original resources");
+			await store.recordSandboxExecutorStartup({
+				claim,
+				startupRef: `${claim.sandbox.resourceName}-executor-${claim.resourceFence}`,
+				timeoutMs: 1_000,
+			});
+			await client`update platform.conversation_audit_events
+				set details=details || '{"deadlineMs":1}'::jsonb
+				where conversation_id=${work.conversationId} and details->>'checkpoint'='executor-startup'`;
+			const resources = claim.previousObservation.resources;
+			const lateReady = {
+				status: "ready" as const,
+				executorDrainRequired: true as const,
+				resources,
+			};
+			expect(
+				await store.recordSandboxObservation({ claim, observation: lateReady }),
+			).toBe("stale");
+			const originals = resources.filter(
+				({ kind }) => kind === "Pod" || kind === "Service",
+			);
+			expect(
+				await store.recordSandboxExecutorRetirement({
+					claim,
+					resources: originals,
+				}),
+			).toEqual(originals);
+			await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+			const replacement = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "replacement-retirement-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!replacement) throw new Error("Expected replacement lease");
+			expect(
+				await store.recordSandboxExecutorRetirement({
+					claim: replacement,
+					resources: [],
+				}),
+			).toEqual(originals);
+			expect(
+				await store.recordSandboxObservation({
+					claim: replacement,
+					observation: lateReady,
+				}),
+			).toBe("stale");
+			const [allocation] =
+				await client`select status from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+			expect(allocation?.status).toBe("applying");
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each([false, true])(
 		"closes only never-admitted expired executor preparation (prior readiness %s)",
 		async (wasReady) => {

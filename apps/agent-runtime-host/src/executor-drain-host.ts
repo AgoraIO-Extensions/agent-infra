@@ -42,6 +42,7 @@ export async function openExecutorDrainHostV1(
 				protocolSession: string;
 				journal: CodexExecutorDrainJournalV1;
 				stopAuthorization?: { fence: number; expiresAt: number };
+				terminalReported?: boolean;
 		  }
 		| undefined;
 	const nonces = new Map<string, number>();
@@ -222,6 +223,42 @@ export async function openExecutorDrainHostV1(
 				} catch {
 					return false;
 				}
+			},
+			reportTerminal(executionId, occurredAt) {
+				const target = active;
+				if (
+					!target ||
+					target.executionId !== executionId ||
+					target.terminalReported
+				)
+					return;
+				const evidence = target.journal.evidence();
+				if (!evidence || evidence.natural) return;
+				const {
+					podUid,
+					stopRequestId,
+					generation,
+					resourceFence,
+					epoch,
+					stopFence,
+					digest,
+				} = evidence;
+				target.terminalReported = true;
+				process.stdout.write(
+					`${JSON.stringify({
+						schemaVersion: 1,
+						code: "CODEX_EXECUTOR_TERMINAL_COMMITTED",
+						podUid,
+						executionId,
+						stopRequestId,
+						generation,
+						resourceFence,
+						epoch,
+						stopFence,
+						digest,
+						occurredAt: Date.parse(occurredAt),
+					})}\n`,
+				);
 			},
 			proven: (executionId) =>
 				active?.executionId === executionId && active.journal.confirmed(),

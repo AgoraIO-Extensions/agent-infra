@@ -219,12 +219,10 @@ test("a missing receipt preserves the original run and reports pending", () => {
 	);
 });
 
-test("binds the drain chronology to the original runtime log and Pod identity", () => {
+test("checks the original epoch, Stop fence, registered groups and durable terminal time", () => {
 	const f = fixture({ proof: "confirmed" });
-	f.receipt.stop.firstTerminalAt = 1680;
-	const proof = {
+	const scope = {
 		schemaVersion: 1,
-		code: "CODEX_EXECUTOR_DRAIN_VERIFIED",
 		podUid: f.receipt.podUid,
 		executionId: f.receipt.stop.executionId,
 		stopRequestId: f.receipt.stop.id,
@@ -233,26 +231,75 @@ test("binds the drain chronology to the original runtime log and Pod identity", 
 		epoch: "a3a70de0-42c8-4d3b-9e93-956695751afa",
 		stopFence: 4,
 		digest: "a".repeat(64),
+	};
+	const groupId = "b".repeat(64);
+	const seal = {
+		...scope,
+		code: "CODEX_EXECUTOR_DRAIN_SEALED",
+		groupIds: [groupId],
+	};
+	const proof = {
+		...scope,
+		code: "CODEX_EXECUTOR_DRAIN_VERIFIED",
 		verifiedAt: 1670,
-		groups: [{ id: "b".repeat(64), exitedAt: 1660 }],
+		groups: [{ id: groupId, exitedAt: 1660 }],
+	};
+	const terminal = {
+		...scope,
+		code: "CODEX_EXECUTOR_TERMINAL_COMMITTED",
+		occurredAt: 1680,
 	};
 	const argv = ["read", "--plan", reference, "--run", run];
-	const read = (logs, uid = f.receipt.podUid) =>
+	const read = (logs, options = {}) =>
 		executorAcceptance(argv, f.get, (ns, args) => {
 			assert.equal(ns, namespace);
-			if (args[0] === "logs") return logs;
+			if (args[0] === "logs")
+				return args.includes("--container=codex-session-executor")
+					? (options.seals ?? [seal])
+					: logs;
 			assert.equal(args[0], "get");
 			return {
 				kind: "Pod",
-				metadata: { uid, name: target.sandbox, namespace },
+				metadata: {
+					uid: options.uid ?? f.receipt.podUid,
+					name: target.sandbox,
+					namespace,
+				},
 			};
 		});
-	assert.deepEqual(read([proof]).drainEvidence, proof);
-	assert.equal(read([proof], "replacement").evidence, "pending");
-	assert.equal(read([{ ...proof, verifiedAt: 1690 }]).evidence, "pending");
+	assert.deepEqual(read([proof, terminal]).drainEvidence, {
+		...proof,
+		terminalAt: 1680,
+	});
 	assert.equal(
-		read([{ ...proof, groups: [{ id: "b".repeat(64), exitedAt: 1671 }] }])
-			.evidence,
+		read([proof, terminal], { uid: "replacement" }).evidence,
 		"pending",
 	);
+	assert.equal(read([proof, terminal], { seals: [] }).evidence, "pending");
+	assert.equal(
+		read([proof]).evidence,
+		"pending",
+		"a late poll cannot prove a durable terminal",
+	);
+	assert.equal(
+		read([proof, { ...terminal, occurredAt: 1669 }]).evidence,
+		"pending",
+		"late polling hides early terminal publication",
+	);
+	for (const [name, altered] of [
+		[
+			"old epoch on the same Pod",
+			{ ...proof, epoch: "a3a70de0-42c8-4d3b-9e93-956695751af0" },
+		],
+		["old fence on the same Pod", { ...proof, stopFence: 3 }],
+		[
+			"different registered group",
+			{ ...proof, groups: [{ id: "c".repeat(64), exitedAt: 1660 }] },
+		],
+		[
+			"group exit after proof",
+			{ ...proof, groups: [{ id: groupId, exitedAt: 1671 }] },
+		],
+	])
+		assert.equal(read([altered, terminal]).evidence, "pending", name);
 });

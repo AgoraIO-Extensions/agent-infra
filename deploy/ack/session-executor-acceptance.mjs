@@ -54,7 +54,8 @@ function kubectl(namespace, args, stdin) {
 		return bytes.split("\n").flatMap((line) => {
 			try {
 				const value = JSON.parse(line);
-				return value?.code === "CODEX_EXECUTOR_DRAIN_VERIFIED" ? [value] : [];
+				return ["CODEX_EXECUTOR_DRAIN_VERIFIED", "CODEX_EXECUTOR_DRAIN_SEALED",
+					"CODEX_EXECUTOR_TERMINAL_COMMITTED"].includes(value?.code) ? [value] : [];
 			} catch {
 				return [];
 			}
@@ -157,7 +158,7 @@ export function executorAcceptance(options, get = readConfigMap, cluster = kubec
 		invalid();
 	const stop = receipt.stop;
 	if (stop !== null && (!exact(stop, ["id", "executionId", "confirmationDeadline",
-		"barrier", "occupancy", "nextTurn", ...(receipt.proof === "confirmed" ? ["firstTerminalAt"] : [])]) ||
+		"barrier", "occupancy", "nextTurn"]) ||
 		typeof stop.id !== "string" || !identifier.test(stop.id) ||
 		typeof stop.executionId !== "string" || !identifier.test(stop.executionId) ||
 		!integer(stop.confirmationDeadline) ||
@@ -175,41 +176,59 @@ export function executorAcceptance(options, get = readConfigMap, cluster = kubec
 
 function readOriginalDrainEvidence(cluster, namespace, plan, receipt) {
 	const { stop, target, podUid } = receipt;
-	if (!podUid || !integer(stop.firstTerminalAt) || stop.firstTerminalAt < plan.startsAt ||
-		stop.firstTerminalAt > plan.expiresAt)
-		return null;
+	if (!podUid) return null;
 	const original = () => {
 		const pod = cluster(namespace, ["get", "pod", target.sandbox, "-o", "json"]);
 		return pod?.kind === "Pod" && pod.metadata?.uid === podUid &&
 			pod.metadata.name === target.sandbox && pod.metadata.namespace === namespace;
 	};
+	const keys = ["schemaVersion", "code", "podUid", "executionId", "stopRequestId",
+		"generation", "resourceFence", "epoch", "stopFence", "digest"];
+	const matchesStop = (item) =>
+		item?.schemaVersion === 1 && item.podUid === podUid && item.executionId === stop.executionId &&
+		item.stopRequestId === stop.id && item.generation === target.generation &&
+		item.resourceFence === target.resourceFence;
+	const consistent = (entries) => {
+		const first = entries[0];
+		return first && entries.every((entry) => JSON.stringify(entry) === JSON.stringify(first))
+			? first : null;
+	};
 	try {
 		if (!original()) return null;
-		const logs = cluster(namespace, [
-			"logs", target.sandbox, "--container=runtime",
+		const read = (container) => cluster(namespace, [
+			"logs", target.sandbox, `--container=${container}`,
 			`--since-time=${new Date(plan.startsAt).toISOString()}`,
 		]);
-		if (!Array.isArray(logs) || !original()) return null;
-		const candidates = logs.filter((item) =>
-			exact(item, ["schemaVersion", "code", "podUid", "executionId", "stopRequestId",
-				"generation", "resourceFence", "epoch", "stopFence", "digest", "verifiedAt", "groups"]) &&
-			item.schemaVersion === 1 && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED" &&
-			item.podUid === podUid && item.executionId === stop.executionId &&
-			item.stopRequestId === stop.id && item.generation === target.generation &&
-			item.resourceFence === target.resourceFence &&
-			/^[a-f0-9-]{36}$/.test(item.epoch) && integer(item.stopFence) &&
-			/^[a-f0-9]{64}$/.test(item.digest) && integer(item.verifiedAt) &&
-			item.verifiedAt >= plan.startsAt && item.verifiedAt <= stop.firstTerminalAt &&
-			item.verifiedAt <= stop.confirmationDeadline &&
-			Array.isArray(item.groups) && item.groups.length > 0 && item.groups.length <= 4096 &&
-			item.groups.every((group) =>
-				exact(group, ["id", "exitedAt"]) && /^[a-f0-9]{64}$/.test(group.id) &&
-				integer(group.exitedAt) && group.exitedAt >= plan.startsAt && group.exitedAt <= item.verifiedAt) &&
-			new Set(item.groups.map(({ id }) => id)).size === item.groups.length,
-		);
-		const first = candidates[0];
-		return first && candidates.every((proof) => JSON.stringify(proof) === JSON.stringify(first))
-			? first : null;
+		const executor = read("codex-session-executor");
+		const runtime = read("runtime");
+		if (!Array.isArray(executor) || !Array.isArray(runtime) || !original()) return null;
+		const seal = consistent(executor.filter((item) =>
+			matchesStop(item) && item.code === "CODEX_EXECUTOR_DRAIN_SEALED",
+		));
+		if (!exact(seal, [...keys, "groupIds"]) || !/^[a-f0-9-]{36}$/.test(seal.epoch) ||
+			!integer(seal.stopFence) || !/^[a-f0-9]{64}$/.test(seal.digest) ||
+			!Array.isArray(seal.groupIds) || seal.groupIds.length < 1 || seal.groupIds.length > 4096 ||
+			new Set(seal.groupIds).size !== seal.groupIds.length ||
+			!seal.groupIds.every((id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id)))
+			return null;
+		const committed = consistent(runtime.filter((item) =>
+			matchesStop(item) && item.code === "CODEX_EXECUTOR_TERMINAL_COMMITTED",
+		));
+		const proof = consistent(runtime.filter((item) =>
+			matchesStop(item) && item.code === "CODEX_EXECUTOR_DRAIN_VERIFIED",
+		));
+		const sameSeal = (item) => ["epoch", "stopFence", "digest"].every((key) => item[key] === seal[key]);
+		if (!exact(committed, [...keys, "occurredAt"]) || !sameSeal(committed) ||
+			!integer(committed.occurredAt) || committed.occurredAt > plan.expiresAt ||
+			!exact(proof, [...keys, "verifiedAt", "groups"]) || !sameSeal(proof) ||
+			!integer(proof.verifiedAt) || proof.verifiedAt < plan.startsAt ||
+			proof.verifiedAt > committed.occurredAt || proof.verifiedAt > stop.confirmationDeadline ||
+			!Array.isArray(proof.groups) || proof.groups.length !== seal.groupIds.length ||
+			!proof.groups.every((group, index) =>
+				exact(group, ["id", "exitedAt"]) && group.id === seal.groupIds[index] &&
+				integer(group.exitedAt) && group.exitedAt >= plan.startsAt && group.exitedAt <= proof.verifiedAt))
+			return null;
+		return { ...proof, terminalAt: committed.occurredAt };
 	} catch {
 		return null;
 	}

@@ -342,6 +342,59 @@ async function invokeNativeQuery(
 }
 
 describe("Codex native command result lifecycle", () => {
+	it("keeps a baseline-readable file if the default native command result commit is interrupted", async () => {
+		const f = await fixture();
+		const key = JSON.stringify([
+			"agent-1",
+			"conversation-1",
+			1,
+			"native-command",
+			"native-query-1",
+		]);
+		const committed = () =>
+			readFile(f.path, "utf8").then(
+				(data) =>
+					(
+						JSON.parse(data) as {
+							operations: Record<
+								string,
+								{ state: string; nativeCommandResult?: unknown }
+							>;
+						}
+					).operations[key],
+			);
+		const update = DurableJsonFile.prototype.update;
+		const fault = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementation(function (
+				this: DurableJsonFile<unknown>,
+				mutation,
+				options,
+			) {
+				return update.call(
+					this,
+					async (draft) => {
+						const value = await mutation(draft);
+						const operation = (
+							draft as { operations?: Record<string, { state: string }> }
+						).operations?.[key];
+						if (operation?.state === "resolved")
+							throw new Error("interrupted result commit");
+						return value;
+					},
+					options,
+				);
+			} as typeof update);
+		try {
+			await expect(invokeNativeQuery(f)).rejects.toThrow();
+			// f31b030c accepts nativeCommandResult only on a resolved operation.
+			expect(await committed()).toMatchObject({ state: "prepared" });
+			expect(await committed()).not.toHaveProperty("nativeCommandResult");
+		} finally {
+			fault.mockRestore();
+		}
+	});
+
 	it("keeps native command lookup, status and recovery behind the original drain proof", async () => {
 		const f = await fixture();
 		const binding = createCodexSessionExecutorBindingV1({
@@ -380,6 +433,21 @@ describe("Codex native command result lifecycle", () => {
 			});
 		});
 		expect(first.record.result.outcome).toBe("unknown");
+		const candidateState = JSON.parse(await readFile(f.path, "utf8"));
+		expect(
+			candidateState.operations[
+				JSON.stringify([
+					"agent-1",
+					"conversation-1",
+					1,
+					"native-command",
+					first.command.executionId,
+				])
+			],
+		).toMatchObject({
+			state: "prepared",
+			nativeCommandResult: { selector: "status" },
+		});
 		expect(await f.driver.lookupOperation(first.command)).toEqual({
 			state: "unknown",
 		});

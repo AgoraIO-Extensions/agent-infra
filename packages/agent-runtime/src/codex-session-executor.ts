@@ -234,6 +234,7 @@ export interface CodexExecutorDrainPortV1 {
 	): Promise<void>;
 	confirm(executionId: string): Promise<boolean>;
 	proven(executionId: string): boolean;
+	reportTerminal?(executionId: string, occurredAt: string): void;
 }
 
 export async function openCodexSessionExecutorAdmissionV1(

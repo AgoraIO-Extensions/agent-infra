@@ -175,27 +175,45 @@ export async function startExecutorDrainGatewayV1(options: {
 			const groups = [...handles].map((handle) => {
 				const group = current.groups.get(handle);
 				if (!group) throw new Error("CODEX_EXECUTOR_STILL_DRAINING");
-				return { handle, group };
+				const id = createHash("sha256")
+					.update(
+						JSON.stringify([
+							epoch,
+							current.protocolSession,
+							handle,
+							group.leader,
+							group.startTicks,
+						]),
+					)
+					.digest("hex");
+				return { handle, group, id };
 			});
+			if (input.terminate === true) {
+				// Materialize the registered groups before asking the backend to stop.
+				process.stdout.write(
+					`${JSON.stringify({
+						schemaVersion: 1,
+						code: "CODEX_EXECUTOR_DRAIN_SEALED",
+						podUid: identity.podUid,
+						executionId: current.executionId,
+						stopRequestId,
+						generation: binding.sessionGeneration,
+						resourceFence: binding.resourceFence,
+						epoch,
+						stopFence,
+						digest,
+						groupIds: groups.map(({ id }) => id),
+					})}\n`,
+				);
+			}
 			const exited = await Promise.all(
-				groups.map(async ({ handle, group }) => {
+				groups.map(async ({ handle, group, id }) => {
 					if (input.terminate === true)
 						await current.backend
 							.request("process/terminate", { processId: handle }, 500)
 							.catch(() => undefined);
 					if (!(await waitForExecutorProcessGroupExitV1(group, deadline)))
 						return null;
-					const id = createHash("sha256")
-						.update(
-							JSON.stringify([
-								epoch,
-								current.protocolSession,
-								handle,
-								group.leader,
-								group.startTicks,
-							]),
-						)
-						.digest("hex");
 					return { id, exitedAt: Date.now() };
 				}),
 			);

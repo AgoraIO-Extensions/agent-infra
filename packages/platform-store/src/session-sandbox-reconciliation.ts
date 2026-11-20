@@ -773,6 +773,18 @@ async function readExecutorStartupRetirement(
 	return entry?.resources ?? null;
 }
 
+export async function hasSandboxExecutorRetirement(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	policy: SessionSandboxPolicyV1,
+	directory: TaskUserDirectoryV1 | undefined,
+) {
+	const context = await ownedContext(transaction, claim, policy, directory);
+	if (!context || context.purpose !== "prepare")
+		throw new Error("Executor startup lease is unavailable");
+	return (await readExecutorStartupRetirement(transaction, claim)) !== null;
+}
+
 export async function recordSandboxExecutorRetirement(
 	transaction: Transaction,
 	claim: SessionSandboxReconciliationClaimV1,
@@ -945,6 +957,40 @@ export async function recordSandboxObservation(
 ): Promise<"committed" | "stale" | "unknown"> {
 	const context = await ownedContext(transaction, claim, policy, directory);
 	if (!context) return "stale";
+	if (observation.status === "ready" && context.purpose === "prepare") {
+		if ((await readExecutorStartupRetirement(transaction, claim)) !== null)
+			return "stale";
+		if (
+			observation.executorDrainRequired &&
+			context.allocation.resource_observation?.status !== "ready"
+		) {
+			const [startup] = await transaction<
+				{ on_time: boolean; previously_ready: boolean }[]
+			>`
+				select (s.details->>'deadlineMs')::numeric > extract(epoch from clock_timestamp()) * 1000 as on_time,
+					exists (
+						select 1 from platform.conversation_audit_events r
+						where r.conversation_id = s.conversation_id
+							and r.action = s.action
+							and r.details->>'status' = 'ready'
+							and r.details->>'sandboxId' = s.details->>'sandboxId'
+							and r.details->>'sessionGeneration' = s.details->>'sessionGeneration'
+							and r.details->>'resourceFence' = s.details->>'resourceFence'
+							and extract(epoch from r.occurred_at) * 1000 < (s.details->>'deadlineMs')::numeric
+					) as previously_ready
+				from platform.conversation_audit_events s
+				where s.conversation_id = ${claim.sandbox.sessionId}
+					and s.action = 'conversation.sandbox.observed'
+					and s.details->>'checkpoint' = 'executor-startup'
+					and s.details->>'sandboxId' = ${claim.sandbox.sandboxId}
+					and s.details->>'sessionGeneration' = ${String(claim.sandbox.generation)}
+					and s.details->>'resourceFence' = ${String(claim.resourceFence)}
+				order by s.occurred_at desc, s.id desc limit 1
+			`;
+			if (!startup?.on_time && !startup?.previously_ready) return "stale";
+		}
+	}
+
 	if (
 		observation.status === "unknown" &&
 		observation.failureCode === "sandbox.pod_lost" &&

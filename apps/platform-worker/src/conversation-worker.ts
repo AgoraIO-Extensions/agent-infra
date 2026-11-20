@@ -73,6 +73,7 @@ export interface PlatformConversationWorkerOptionsV2
 		recordExecutorRetirement?: (
 			resources: readonly SessionSandboxResourceIdentityV1[],
 		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+		readExecutorRetirement?: () => Promise<boolean>,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
@@ -902,6 +903,7 @@ export function createPlatformConversationWorkerV2(
 					store.recordSandboxExecutorStartup({ claim, startupRef, timeoutMs }),
 				(resources) =>
 					store.recordSandboxExecutorRetirement({ claim, resources }),
+				() => store.hasSandboxExecutorRetirement(claim),
 			);
 			clearInterval(renewal);
 			renewal = undefined;

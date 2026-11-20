@@ -14262,6 +14262,7 @@ describe("Codex verified Session executor", () => {
 		let runnerProved = false;
 		let confirmed = false;
 		const sealStop = vi.fn(async () => {});
+		const reportTerminal = vi.fn();
 		const bindNativeTurn = vi.fn(async () => {});
 		const driver = await f.start({
 			sessionExecutor: {
@@ -14271,6 +14272,7 @@ describe("Codex verified Session executor", () => {
 					bindNativeTurn,
 					endpoint: () => "ws://127.0.0.1:8068/native/synthetic",
 					sealStop,
+					reportTerminal,
 					async confirm() {
 						confirmed = runnerProved;
 						return confirmed;
@@ -14302,19 +14304,23 @@ describe("Codex verified Session executor", () => {
 				await driver.replayEvents(original.nativeSessionRef, "execution-codex")
 			).some((event) => event.type === "completed"),
 		).toBe(false);
+		expect(reportTerminal).not.toHaveBeenCalled();
 		runnerProved = true;
 		expect(await driver.lookupOperation(stop, authorization)).toMatchObject({
 			state: "found",
 			record: { result: { outcome: "accepted", status: "cancelled" } },
 		});
-		expect(
-			(
-				await driver.replayEvents(original.nativeSessionRef, "execution-codex")
-			).at(-1),
-		).toMatchObject({
+		const terminal = (
+			await driver.replayEvents(original.nativeSessionRef, "execution-codex")
+		).at(-1);
+		expect(terminal).toMatchObject({
 			type: "completed",
 			payload: { status: "cancelled" },
 		});
+		expect(reportTerminal).toHaveBeenCalledWith(
+			"execution-codex",
+			terminal?.occurredAt,
+		);
 	});
 
 	async function failedModelFixture(archived = false) {

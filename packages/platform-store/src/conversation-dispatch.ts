@@ -89,6 +89,7 @@ import {
 } from "./session-sandbox.js";
 import {
 	claimSandboxReconciliation,
+	hasSandboxExecutorRetirement,
 	prepareSandboxReconciliation,
 	recordSandboxDeletionProgress,
 	recordSandboxExecutorRetirement,
@@ -279,6 +280,23 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.observation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async hasSandboxExecutorRetirement(
+		claim: SessionSandboxReconciliationClaimV1,
+	) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) throw new Error("Sandbox policy is unavailable");
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				hasSandboxExecutorRetirement(
+					transaction,
+					claim,
 					policy,
 					this.#userDirectory,
 				),

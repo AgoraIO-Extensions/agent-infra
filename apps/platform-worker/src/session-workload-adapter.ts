@@ -2995,7 +2995,6 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (
 				!allocation.executorDrainIdentity ||
 				!allocation.executorStartupDeadline ||
-				Date.now() < allocation.executorStartupDeadline ||
 				options.client.namespace !== allocation.namespace
 			)
 				throw new WorkloadKubernetesError("policy");
@@ -3007,14 +3006,6 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				if (!want || !name) throw new WorkloadKubernetesError("policy");
 				const current = await options.client.read(kind, name);
 				if (!current) continue;
-				if (
-					kind === "Pod" &&
-					(current as V1Pod).status?.conditions?.some(
-						(condition) =>
-							condition.type === "Ready" && condition.status === "True",
-					)
-				)
-					throw new WorkloadKubernetesError("conflict");
 				const { uid, resourceVersion } = current.metadata ?? {};
 				const prior = previous.find((item) => item.kind === kind);
 				if (
@@ -3050,12 +3041,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					!want ||
 					!owned(current, want, allocation) ||
 					current.metadata?.uid !== target.uid ||
-					!current.metadata.resourceVersion ||
-					(target.kind === "Pod" &&
-						(current as V1Pod).status?.conditions?.some(
-							(condition) =>
-								condition.type === "Ready" && condition.status === "True",
-						))
+					!current.metadata.resourceVersion
 				)
 					throw new WorkloadKubernetesError("conflict");
 				await options.client.delete(current);

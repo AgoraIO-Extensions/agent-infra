@@ -728,72 +728,109 @@ function customOwnerSecretFixture(
 }
 
 describe("production SessionSandbox resource receiver", () => {
-	it("retires only the original unready Pod and route after the identity deadline", async () => {
-		const f = fixture();
-		const policy = {
-			...f.options.policy,
-			codexSessionExecutor: {
-				resources: {
-					requests: { cpu: "100m", memory: "64Mi" },
-					limits: { cpu: "500m", memory: "256Mi" },
-				},
-			},
-		};
-		const issuer = generateKeyPairSync("ed25519");
-		const receive = createProductionSessionSandboxReceiverV1(
-			{ ...f.options, policy },
-			{
-				serviceToken: sessionSandboxDeploymentTokenFixture,
-				executorIdentityIssuer: issuer.privateKey,
-				executorDrainStartupTimeoutMs: 1_000,
-			},
-		);
-		const claim = {
-			...f.claim,
-			policy: {
-				...f.claim.policy,
-				resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
-			},
-		};
-		const deadline = Date.now() + 10_000;
-		const signal = new AbortController().signal;
-		const first = await receive(claim, signal, undefined, async () => deadline);
-		expect(first.status).toBe("observed");
-		const route = "Service/sandbox-allocation-a";
-		const pod = "Pod/sandbox-allocation-a";
-		const pvc = "PersistentVolumeClaim/sandbox-allocation-a";
-		expect(f.resources.has(route)).toBe(true);
-		expect(f.resources.has(pod)).toBe(true);
-		const before = Date.now;
-		Date.now = () => deadline + 1;
-		try {
-			let retirement: typeof first.resources | undefined;
-			const expired = async () =>
-				receive(
-					{ ...claim, previousObservation: first },
-					signal,
-					undefined,
-					async () => deadline,
-					async (identities: typeof first.resources) => {
-						retirement ??= identities;
-						return retirement;
+	it.each(["unready", "late-ready"])(
+		"retires the original executor on deadline expiry (%s)",
+		async (readiness) => {
+			const f = fixture();
+			const policy = {
+				...f.options.policy,
+				codexSessionExecutor: {
+					resources: {
+						requests: { cpu: "100m", memory: "64Mi" },
+						limits: { cpu: "500m", memory: "256Mi" },
 					},
-				);
-			expect(await expired()).toMatchObject({
-				failureCode: "runtime.executor_identity_timeout",
-			});
-			expect(retirement?.map((item) => item.kind)).toEqual(["Service", "Pod"]);
-			expect(f.resources.has(route)).toBe(false);
-			expect(f.resources.has(pod)).toBe(false);
-			expect(f.resources.has(pvc)).toBe(true);
-			expect(await expired()).toMatchObject({
-				failureCode: "runtime.executor_identity_timeout",
-			});
-			expect(f.resources.has(pod)).toBe(false);
-		} finally {
-			Date.now = before;
-		}
-	});
+				},
+			};
+			const issuer = generateKeyPairSync("ed25519");
+			const receive = createProductionSessionSandboxReceiverV1(
+				{ ...f.options, policy },
+				{
+					serviceToken: sessionSandboxDeploymentTokenFixture,
+					executorIdentityIssuer: issuer.privateKey,
+					executorDrainStartupTimeoutMs: 1_000,
+				},
+			);
+			const claim = {
+				...f.claim,
+				policy: {
+					...f.claim.policy,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				},
+			};
+			const deadline = Date.now() + 10_000;
+			const signal = new AbortController().signal;
+			const first = await receive(
+				claim,
+				signal,
+				undefined,
+				async () => deadline,
+			);
+			expect(first.status).toBe("observed");
+			const route = "Service/sandbox-allocation-a";
+			const pod = "Pod/sandbox-allocation-a";
+			const pvc = "PersistentVolumeClaim/sandbox-allocation-a";
+			expect(f.resources.has(route)).toBe(true);
+			expect(f.resources.has(pod)).toBe(true);
+			if (readiness === "late-ready") {
+				const current = f.resources.get(pod) as V1Pod;
+				current.status = {
+					phase: "Running",
+					initContainerStatuses: [
+						{
+							name: "codex-session-workspace-init",
+							image: "fixture",
+							imageID: "fixture",
+							ready: false,
+							restartCount: 0,
+							state: {
+								terminated: { exitCode: 0, finishedAt: new Date(deadline - 1) },
+							},
+						},
+					],
+					conditions: [
+						{
+							type: "Ready",
+							status: "True",
+							lastTransitionTime: new Date(deadline + 1),
+						},
+					],
+				};
+			}
+			const before = Date.now;
+			Date.now = () => deadline + 1;
+			try {
+				let retirement: typeof first.resources | undefined;
+				const expired = async () =>
+					receive(
+						{ ...claim, previousObservation: first },
+						signal,
+						undefined,
+						async () => deadline,
+						async (identities: typeof first.resources) => {
+							retirement ??= identities;
+							return retirement;
+						},
+					);
+				expect(await expired()).toMatchObject({
+					failureCode: "runtime.executor_identity_timeout",
+				});
+				expect(retirement?.map((item) => item.kind)).toEqual([
+					"Service",
+					"Pod",
+				]);
+				expect(f.resources.has(route)).toBe(false);
+				expect(f.resources.has(pod)).toBe(false);
+				expect(f.resources.has(pvc)).toBe(true);
+				expect(await expired()).toMatchObject({
+					failureCode: "runtime.executor_identity_timeout",
+				});
+				expect(f.resources.has(pod)).toBe(false);
+			} finally {
+				Date.now = before;
+			}
+		},
+	);
 
 	it("takes the image pull Secret only from deployment policy", async () => {
 		const f = fixture();

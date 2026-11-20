@@ -10657,13 +10657,38 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		change: (state: CodexDriverState) => R,
 		options?: { readonly skipUnchanged?: boolean },
 	) {
-		return this.file.update((state) => {
-			// The committed state passed this check when it was opened or committed,
-			// so only the changed draft needs the full-state validation (#1637).
-			const result = change(state);
-			assertDriverState(state);
-			return result;
-		}, options);
+		const drain = this.sessionExecutor?.drain;
+		const executionId = this.executorExecutionId;
+		if (!drain?.reportTerminal || !executionId) {
+			return this.file.update((state) => {
+				const result = change(state);
+				assertDriverState(state);
+				return result;
+			}, options);
+		}
+		return this.file
+			.update((state) => {
+				const result = change(state);
+				assertDriverState(state);
+				const session = Object.values(state.sessions).find(
+					(entry) =>
+						ownRecordValue(entry.executions, executionId) !== undefined,
+				);
+				const execution =
+					session && ownRecordValue(session.executions, executionId);
+				const terminal =
+					session &&
+					execution &&
+					ownRecordValue(
+						session.journals ?? {},
+						execution.nativeTurnId,
+					)?.events.find((event) => event.type === "completed");
+				return { result, terminal };
+			}, options)
+			.then(({ result, terminal }) => {
+				if (terminal) drain.reportTerminal?.(executionId, terminal.occurredAt);
+				return result;
+			});
 	}
 
 	private handleNativeCallback(
@@ -15615,22 +15640,26 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		result: CodexNativeCommandResult,
 	) {
-		const key = operationKey(command);
-		const candidate = await this.update(
-			(state) => {
-				const operation = ownRecordValue(state.operations, key);
-				if (!operation || !operationMatchesCommand(operation, command))
-					stateInvalid();
-				if (operation.state === "prepared")
-					operation.nativeCommandResult ??= result;
-				return operation.record;
-			},
-			{ skipUnchanged: true },
-		);
-		if (candidate) return candidate;
 		const drain = this.sessionExecutor?.drain;
-		if (drain && !(await drain.confirm(command.executionId)))
-			return this.unknown(command, nativeSessionRef);
+		if (drain) {
+			const candidate = await this.update(
+				(state) => {
+					const operation = ownRecordValue(
+						state.operations,
+						operationKey(command),
+					);
+					if (!operation || !operationMatchesCommand(operation, command))
+						stateInvalid();
+					if (operation.state === "prepared")
+						operation.nativeCommandResult ??= result;
+					return operation.record;
+				},
+				{ skipUnchanged: true },
+			);
+			if (candidate) return candidate;
+			if (!(await drain.confirm(command.executionId)))
+				return this.unknown(command, nativeSessionRef);
+		}
 		const record = driverRecord(command, {
 			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,
@@ -15660,7 +15689,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (operation.state !== "prepared") stateInvalid();
 			operation.state = "resolved";
 			operation.record = record;
-			if (!operation.nativeCommandResult) stateInvalid();
+			operation.nativeCommandResult ??= result;
 			return record;
 		});
 	}

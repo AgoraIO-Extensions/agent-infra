@@ -692,8 +692,13 @@ function isExecutorDrainPort(
 	];
 	return (
 		isPlainRecord(value) &&
-		exactKeys(value, keys) &&
-		keys.every((key) => typeof value[key] === "function")
+		exactKeys(
+			value,
+			value.reportTerminal === undefined ? keys : [...keys, "reportTerminal"],
+		) &&
+		keys.every((key) => typeof value[key] === "function") &&
+		(value.reportTerminal === undefined ||
+			typeof value.reportTerminal === "function")
 	);
 }
 
