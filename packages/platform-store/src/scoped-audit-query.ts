@@ -629,6 +629,62 @@ function agentDefaultRelayKeyReadSummary(
 	return `${row.action}${reason}`;
 }
 
+const materialAuditPhases = new Set([
+	"intent",
+	"claimed",
+	"issued",
+	"rotated",
+	"transmitted",
+	"accepted",
+	"unknown",
+	"expired",
+]);
+function materialDeliverySummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string | null {
+	if (!row.action.startsWith("application.credential.material.")) return null;
+	const phase = row.action.slice("application.credential.material.".length);
+	const d = row.details as Record<string, unknown>;
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.actorType !== "user" ||
+		row.targetType !== "application" ||
+		!materialAuditPhases.has(phase) ||
+		!d ||
+		typeof d !== "object" ||
+		Array.isArray(d) ||
+		Object.keys(d).sort().join() !==
+			"attemptId,containsMaterial,credentialId,deliveryStatus,fence,grantRevision,managerId,phase,recipient" ||
+		d.containsMaterial !== false ||
+		![d.managerId, d.credentialId, d.attemptId, d.grantRevision].every(
+			boundedText,
+		) ||
+		![
+			"delivery_pending",
+			"delivery_in_flight",
+			"accepted",
+			"failed",
+			"unknown",
+		].includes(String(d.deliveryStatus)) ||
+		!["pending", "claimed", "generated", "transmitted", "accepted"].includes(
+			String(d.phase),
+		) ||
+		!(d.fence === null || boundedText(d.fence))
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const recipient = d.recipient as Record<string, unknown>;
+	if (
+		!recipient ||
+		typeof recipient !== "object" ||
+		Object.keys(recipient).sort().join() !== "principalId,principalType" ||
+		!["user", "application"].includes(String(recipient.principalType)) ||
+		!boundedText(recipient.principalId)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	return `${row.action}: status=${d.deliveryStatus}`;
+}
 const applicationCredentialActions = new Set([
 	"application.credential.issued",
 	"application.credential.rotated",
@@ -881,9 +937,11 @@ function project(
 				return row.action;
 			})()
 		: null;
-	const applicationSummary = applicationCredentialActions.has(row.action)
-		? applicationCredentialSummary(row, scope)
-		: null;
+	const applicationSummary =
+		materialDeliverySummary(row, scope) ??
+		(applicationCredentialActions.has(row.action)
+			? applicationCredentialSummary(row, scope)
+			: null);
 	const legacy =
 		executionActions.has(row.action) ||
 		metadataSummary !== null ||
