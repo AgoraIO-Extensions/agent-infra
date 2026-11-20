@@ -1137,12 +1137,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				const principalId = candidate.verified.principalId;
 				const userId = authorization.principal.id;
 				// Serialize every pin decision for this Principal, this user and the
-				// issuer's capacity, in one fixed order. The capacity lock is taken on
+				// exception's capacity, in one fixed order. The capacity lock is taken on
 				// every decision because whether this is a first pin is only known
 				// under the user lock; without it two users' first pins could both
-				// count the same free slot under READ COMMITTED.
+				// count the same free slot under READ COMMITTED. It spans every issuer
+				// because `maximumPinnedPrincipals` bounds the total count below.
 				for (const scope of [
-					["connection-principal-pin", issuer, "capacity"],
+					["connection-principal-pin", "capacity"],
 					["connection-principal-pin", issuer, "principal", principalId],
 					["connection-principal-pin", issuer, "user", userId],
 				].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
