@@ -851,6 +851,17 @@ Session、接受工具请求、调用模型或写入用户数据。
 创建意图已确认、没有未完成或结果不明的资源写操作时，才能以当前 lease/CAS 标记 `ready`。
 启动时产生的受控 Host 元数据可以保留，但不得存在业务 Session、Execution 或用户文件。
 
+独立 executor 的一次性身份投影单独记为临时资源，原六类长期资源继续沿既有生命周期管理，
+原不可变 Sandbox Secret 保持独立。Worker 在发送投影创建前，将原启动意图、预留 ID、
+目标 Pod UID、固定投影名称、发布 attempt、所有权、预留 lease/delivery fence、Sandbox
+generation/resource fence 及原期限写入预留事实。按原意图和当前 fence 回读投影身份，
+记录实际 UID/resourceVersion。创建响应丢失时沿原 attempt 核实创建结果和归属。
+
+标记 `ready` 前，须取得原 Pod 的 Host 和 runner 已消费该投影、固定实例身份并移除临时交付
+文件的证明。Worker 在原预留所有权和 fence 的约束下，按已核实的投影 UID/resourceVersion
+清理，并确认不存在且没有可能迟到的投影写入。Store 只在该证据和全部创建、清理意图已确认后
+允许 `ready` 的 CAS。创建、消费或删除结果未确认时保留原意图与占用，预留保持不可领取。
+
 新会话按原入口事务先核验当前主体、Agent、渠道和幂等记录。只有创建新 Conversation 的分支
 可以 `FOR UPDATE SKIP LOCKED` 选择匹配 `ready` 项；续接、重试和恢复不得重新领取。事务中
 同时完成 `ready → claimed` CAS、真实 Conversation、allocation、原 outbox、审计和幂等结果，
@@ -870,7 +881,9 @@ Session、接受工具请求、调用模型或写入用户数据。
 Worker 从当前 allocation、资源回读和受信 Host 的本实例校验形成业务晋升回执，绑定唯一领取、
 真实 Conversation/主体/渠道、Session/Sandbox、generation/resource fence、配置/profile、
 原 Pod UID 及当前 RV、原 PVC UID、实际布局和实例 epoch。Store 以原 allocation 的当前绑定和
-fence 为条件持久化回执，回执确认后才可写入业务 `ready`。首个业务 Turn 仍走原业务 Grant。
+fence 为条件持久化回执，回执确认后才可写入业务 `ready`。首个业务 Turn 同时需要原业务 Grant
+和随受信 Worker 投递的已提交晋升事实。只有 RuntimeHost 按当前本地实例核对两者后才开放业务准入。
+实例取证和投递约束见 [Runtime HLD §10.3.1](HLD-agent-runtime-M1.md#1031-排空通道的实例身份交付)。
 
 淘汰必须先在同一预留行上赢得 `ready/preparing/unknown → retiring` CAS，再持久化每项
 条件删除意图并发送 DELETE；`retiring` 不回到 `ready`。这样领取和淘汰只有一个赢家，
@@ -885,10 +898,12 @@ PVC 和占用，沿原领取与会话恢复有界收口。只在既有代次退�
 已领取资源不得归还池或重新领取。
 
 未领取项退出时，按自身原始 UID/resourceVersion 删除六类资源，包括从未交付用户的空 PVC，
-已确认原创建操作不再可能迟到写入，并回读全部 absence 后才释放占用。待核实的 create
-不能仅因一次 GET absence 判为结束；保留原 attempt、不可领取状态与预算，核实迟到资源后
-沿原淘汰意图清理。结果不明保留 `unknown`、原意图与预算，继续有界收敛；
-若已被领取、发现业务绑定或同名不同 UID，清理拒绝。正式 Session 的 PVC 保留规则不变。
+独立 executor 同时收口原临时身份投影。淘汰 CAS 获胜后持久化条件删除意图，在当前淘汰
+fence 下核对原发布 attempt、目标 Pod UID 和投影 UID/resourceVersion，只删除原对象。
+须确认原创建和投影发布均已结束且不会迟到写入，并回读六类长期资源及原投影均不存在，
+才能释放占用。一次 GET absence、lease 失效或凭证过期都不足以确认未决 create 已结束。
+结果不明时保留原 attempt、不可领取状态和预算，仅沿原意图有界核实，迟到的原对象按原条件清理。发现已领取、
+业务绑定或同名不同 UID 时拒绝清理。正式 Session 的 PVC 保留规则不变。
 
 **有界补充与扩缩。** 部署策略声明允许的 profile、每项最小/最大备用数、总备用数、
 部署总 CPU/内存/PVC 预算、创建并发、过期时长、缩容冷却和失败退避。缺少上限不启用。
