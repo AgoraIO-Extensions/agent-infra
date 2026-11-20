@@ -67,6 +67,33 @@ function sha256(value: string) {
 	return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+/**
+ * Final-write predicate (§13.5.7 领取 fence): the original outbox claim still
+ * holds at the database clock. The same lease owner and delivery fence must be
+ * on both the outbox item and the Execution, so a renewed-after-loss claim,
+ * a changed fence or another outbox of the same Worker never matches.
+ */
+function originalClaimHolds(
+	reference: { readonly conversationId: string; readonly executionId: string },
+	claim: { readonly owner: string; readonly fence: number },
+) {
+	return sql`exists (select 1 from platform.outbox_items o
+		join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' and e.conversation_id=o.scope_id
+		where o.scope_type='conversation' and o.scope_id=${reference.conversationId}
+			and o.payload->>'executionId'=${reference.executionId}
+			and o.status='processing' and o.lease_owner=${claim.owner}
+			and o.lease_expires_at > clock_timestamp()
+			and o.delivery_fence=${claim.fence} and e.delivery_fence=${claim.fence}
+			and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))`;
+}
+
+/** The fixed template's original claim, or a predicate that never holds. */
+function templateClaimHolds(template: unknown) {
+	if (!template) return sql`false`;
+	const fixed = ConnectionRegistrationTemplateV1Schema.parse(template);
+	return originalClaimHolds(fixed.reference, fixed.claim);
+}
+
 /** SQL predicate for when a manual command may be claimed, by its kind. */
 const eligible = sql`(
 	(c.command = 'prepare' and a.status = 'preparing' and m.registration_state = 'pending' and m.supply_state in ('pending','confirmed'))
@@ -350,11 +377,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					))
 			) {
 				// The original claim or Host binding no longer holds: nothing is sent.
-				await tx.execute(sql`
-					update platform.connection_installation_commands set status='rejected', updated_at=clock_timestamp()
-					where id=${input.commandId} and status='pending'
-				`);
-				return null;
+				return this.#claimLost(tx, input.commandId, command.command as string);
 			}
 			const updated = await tx.execute(sql`
 				update platform.connection_installation_commands c
@@ -364,12 +387,25 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				from platform.connection_installation_authorizations a, platform.connection_manual_installations m
 				where c.id=${input.commandId} and c.status='pending' and c.attempt_id is null
 					and a.id=c.authorization_id and m.authorization_id=a.id and ${eligible}
+					and ${originalClaimHolds(current.reference, current.claim)}
 					and not exists (select 1 from platform.connection_installation_commands prior
 						where prior.authorization_id = c.authorization_id and prior.created_at < c.created_at
 							and prior.status in ('pending','sending'))
 				returning c.id
 			`);
-			if (updated.length !== 1) return null;
+			if (updated.length !== 1) {
+				// A claim lost during the directory read is final for its fence.
+				const [held] = await tx.execute(
+					sql`select ${originalClaimHolds(current.reference, current.claim)} as held`,
+				);
+				if (held?.held !== true)
+					return this.#claimLost(
+						tx,
+						input.commandId,
+						command.command as string,
+					);
+				return null;
+			}
 			if (command.command === "revoke")
 				await tx.execute(sql`
 					update platform.connection_manual_installations set revoke_state='sending', revision=revision+1,
@@ -387,6 +423,34 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				installation: this.#installation(row),
 			};
 		});
+	}
+
+	/**
+	 * A command whose original claim or binding no longer holds sends nothing.
+	 * A pending compensation revoke keeps its original key and receipt as
+	 * unknown for the Connection owner instead of a rejected command beside a
+	 * still-pending installation.
+	 */
+	async #claimLost(tx: Transaction, commandId: string, command: string) {
+		if (command === "revoke") {
+			const [lost] = await tx.execute(sql`
+				update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
+				where id=${commandId} and status='pending' and attempt_id is null
+				returning authorization_id
+			`);
+			if (lost)
+				await tx.execute(sql`
+					update platform.connection_manual_installations set revoke_state='unknown', revision=revision+1,
+						updated_at=clock_timestamp()
+					where authorization_id=${lost.authorization_id as string} and revoke_state='pending'
+				`);
+			return null;
+		}
+		await tx.execute(sql`
+			update platform.connection_installation_commands set status='rejected', updated_at=clock_timestamp()
+			where id=${commandId} and status='pending'
+		`);
+		return null;
 	}
 
 	async #sending(
@@ -482,14 +546,23 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				row.registration_state !== "pending"
 			)
 				return null;
-			await tx.execute(sql`
-					update platform.connection_manual_installations
+			// Recheck the attempt, authorization and original claim after the directory read.
+			const fixed = await tx.execute(sql`
+					update platform.connection_manual_installations m
 					set template=${JSON.stringify(template)}::jsonb, template_digest=${digest},
 						registration_key=${input.registrationKey}, registration_key_hash=${keyHash},
 						supply_attempt_id=${input.supplyAttemptId}, supply_state='sending',
-						revision=revision+1, updated_at=clock_timestamp()
-					where authorization_id=${template.authorizationId} and template is null
+						revision=m.revision+1, updated_at=clock_timestamp()
+					from platform.connection_installation_commands c, platform.connection_installation_authorizations a
+					where m.authorization_id=${template.authorizationId} and m.template is null
+						and c.id=${input.commandId} and c.authorization_id=m.authorization_id
+						and c.command='prepare' and c.status='pending' and c.attempt_id=${input.attemptId}
+						and c.attempt_owner=${input.attemptOwner} and c.attempt_expires_at > clock_timestamp()
+						and a.id=m.authorization_id and a.expires_at > clock_timestamp()
+						and ${originalClaimHolds(template.reference, template.claim)}
+					returning m.authorization_id
 				`);
+			if (fixed.length !== 1) return null;
 			const [association] = await tx.execute(sql`
 				select credential_ciphertext, owner_id, association_revision
 				from platform.connection_manual_associations
@@ -526,24 +599,31 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly outcome: "confirmed" | "unknown";
 	}): Promise<boolean> {
 		return this.#transaction(async (tx) => {
-			if (!(await this.#lockInstallation(tx, input.authorizationId)))
-				return false;
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			if (!row) return false;
 			if (
 				input.command !== "prepare" ||
-				!(await this.#sending(tx, input, "prepare", true))
+				!(await this.#sending(tx, input, "prepare", true, true))
 			)
 				return false;
-			const updated = await tx.execute(sql`
-				update platform.connection_manual_installations
-				set supply_state = ${input.outcome}, revision = revision + 1, updated_at = clock_timestamp()
-				where authorization_id=${input.authorizationId} and supply_attempt_id=${input.supplyAttemptId}
-					and supply_state = 'sending' and registration_state = 'pending'
-				returning authorization_id
+			// The supply was already sent: a late or unbound outcome keeps the original key as unknown.
+			const [updated] = await tx.execute(sql`
+				update platform.connection_manual_installations m
+				set supply_state = case when ${row.associationLocked}
+						and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
+						and ${templateClaimHolds(row.template)}
+					then ${input.outcome} else 'unknown' end,
+					revision = m.revision + 1, updated_at = clock_timestamp()
+				from platform.connection_installation_commands c, platform.connection_installation_authorizations a
+				where m.authorization_id=${input.authorizationId} and m.supply_attempt_id=${input.supplyAttemptId}
+					and m.supply_state = 'sending' and m.registration_state = 'pending'
+					and c.id=${input.commandId} and c.authorization_id=m.authorization_id and a.id=m.authorization_id
+				returning m.supply_state
 			`);
-			if (updated.length === 0) return false;
-			if (input.outcome === "unknown")
+			if (!updated) return false;
+			if (updated.supply_state === "unknown")
 				await this.#finishCommand(tx, input.commandId, "unknown");
-			return true;
+			return updated.supply_state === input.outcome;
 		});
 	}
 
@@ -614,12 +694,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.id=${input.commandId} and c.status='sending'
 					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
-					and exists (select 1 from platform.outbox_items o
-						where o.scope_type='conversation' and o.scope_id=${authorization.reference.conversationId}
-							and o.payload->>'executionId'=${authorization.reference.executionId}
-							and o.status='processing' and o.lease_owner=${input.attemptOwner}
-							and o.lease_expires_at > clock_timestamp()
-							and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+					and ${templateClaimHolds(row.template)}
 				returning p.id
 			`);
 			if (reopened.length !== 1) {
@@ -666,10 +741,20 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				(row.registration_state !== "pending" || row.status !== "preparing")
 			)
 				return false;
-			await tx.execute(sql`
-				update platform.connection_installation_commands set status='sending', delivery_digest=${input.deliveryDigest},
-					updated_at=clock_timestamp() where id=${input.commandId} and delivery_digest is null
+			if (!row.associationLocked) return false;
+			// Commit point: attempt, authorization (revoke uses its own attempt) and original claim.
+			const committed = await tx.execute(sql`
+				update platform.connection_installation_commands c set status='sending', delivery_digest=${input.deliveryDigest},
+					updated_at=clock_timestamp()
+				from platform.connection_installation_authorizations a
+				where c.id=${input.commandId} and c.delivery_digest is null
+					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and c.attempt_expires_at > clock_timestamp()
+					and a.id=c.authorization_id and (c.command='revoke' or a.expires_at > clock_timestamp())
+					and ${templateClaimHolds(row.template)}
+				returning c.id
 			`);
+			if (committed.length !== 1) return false;
 			if (input.command === "prepare")
 				await tx.execute(sql`
 					update platform.connection_manual_installations set registration_state='sending',
@@ -723,10 +808,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			)
 				return "stale";
 			const expectedState = input.command === "prepare" ? "sending" : "unknown";
-			const unknown = async () => {
+			const unknown = async (verified?: ConnectionRegistrationReceiptV1) => {
+				// A verified late receipt is kept beside the original key for exact reconciliation.
 				await tx.execute(sql`
 					update platform.connection_manual_installations
 					set registration_state = case when registration_state in ('sending','unknown') then 'unknown' else registration_state end,
+						receipt = case when registration_state in ('sending','unknown')
+							then coalesce(${verified ? JSON.stringify(verified) : null}::jsonb, receipt) else receipt end,
 						revision = revision + 1, updated_at = clock_timestamp()
 					where authorization_id = ${input.authorizationId}
 				`);
@@ -777,12 +865,13 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					)
 				: null;
 			const [deadline] = await tx.execute(sql`
-				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp() as live
+				select c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
+					and ${originalClaimHolds(template.reference, template.claim)} as live
 				from platform.connection_installation_commands c
 				join platform.connection_installation_authorizations a on a.id=c.authorization_id
 				where c.id=${input.commandId}
 			`);
-			if (deadline?.live !== true) return unknown();
+			if (deadline?.live !== true) return unknown(receipt);
 			const bindable =
 				receipt !== undefined &&
 				current !== null &&
@@ -816,11 +905,22 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				) {
 					// Compensation for this originating attempt only: our key now names
 					// a client we cannot bind; close locally, then DELETE the same key.
+					// It commits at the same attempt, authorization and claim check.
+					const settled = await tx.execute(sql`
+						update platform.connection_installation_commands c
+						set status='completed', updated_at=clock_timestamp()
+						from platform.connection_installation_authorizations a
+						where c.id=${input.commandId} and a.id=c.authorization_id
+							and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+							and c.attempt_expires_at > clock_timestamp() and a.expires_at > clock_timestamp()
+							and ${originalClaimHolds(template.reference, template.claim)}
+						returning c.id
+					`);
+					if (settled.length !== 1) return unknown(receipt);
 					await this.#closeForCompensation(tx, row, receipt);
-					await this.#finishCommand(tx, input.commandId, "completed");
 					return "unknown";
 				}
-				return unknown();
+				return unknown(receipt);
 			}
 			const configuration = connectionManualInstallConfigurationV1({
 				access: this.#policy.access,
@@ -860,15 +960,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
 					and c.attempt_expires_at > clock_timestamp()
 					and a.expires_at > clock_timestamp()
-					and exists (select 1 from platform.outbox_items o
-						where o.scope_type='conversation' and o.scope_id=${authorization.reference.conversationId}
-							and o.payload->>'executionId'=${authorization.reference.executionId}
-							and o.status='processing' and o.lease_owner=${input.attemptOwner}
-							and o.lease_expires_at > clock_timestamp()
-							and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+					and ${originalClaimHolds(template.reference, template.claim)}
 				returning c.id
 			`);
-			if (accepted.length !== 1) return unknown();
+			if (accepted.length !== 1) return unknown(receipt);
 			await tx.execute(sql`
 				update platform.connection_manual_installations
 				set registration_state='registered', receipt=${JSON.stringify(receipt)}::jsonb,
@@ -958,12 +1053,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			if (row?.revoke_state !== "sending") return "stale";
 			if (!(await this.#sending(tx, input, "revoke", false, true)))
 				return "stale";
-			// Compensation applies to a closed authorization and uses its own attempt deadline.
+			// Compensation applies to a closed authorization and uses its own attempt deadline
+			// and the original claim and fence.
 			const [settled] = await tx.execute(sql`
 				with outcome as (
 					update platform.connection_installation_commands
 					set status=case when ${row.associationLocked && input.response?.outcome === "revoked"}
-						and attempt_expires_at > clock_timestamp() then 'completed' else 'unknown' end,
+						and attempt_expires_at > clock_timestamp()
+						and ${templateClaimHolds(row.template)} then 'completed' else 'unknown' end,
 						updated_at=clock_timestamp()
 					where id=${input.commandId} and authorization_id=${input.authorizationId} and command='revoke'
 						and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
@@ -1142,12 +1239,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							where c.id=${input.commandId} and c.authorization_id=a.id
 								and c.status='sending' and c.attempt_id=${input.attemptId}
 								and c.attempt_owner=${input.attemptOwner} and c.attempt_expires_at > clock_timestamp())
-						and exists (select 1 from platform.outbox_items o
-							where o.scope_type='conversation' and o.scope_id=${authorization.reference.conversationId}
-								and o.payload->>'executionId'=${authorization.reference.executionId}
-								and o.status='processing' and o.lease_owner=${input.attemptOwner}
-								and o.lease_expires_at > clock_timestamp()
-								and o.operation in ('conversation.turn.submit.v1','conversation.turn.regenerate.v1','conversation.turn.supplement.v1'))
+						and ${originalClaimHolds(template.reference, template.claim)}
 					returning a.id
 				)
 				update platform.connection_installation_commands c
