@@ -173,9 +173,10 @@ fi
 
 `managedFields` 的 `manager` 只作参考，不代表认证主体；写入方以审计的 `user.username` 为准。
 
-**API Server 审计。** 在审计 Logstore 中，按 reserve `created_at` 到当前的时间范围，取该名称的
-全部 create 与 delete 事件，不限用户。记录每条的 `auditID`、`stage`、`verb`、
-`objectRef.resource`、`objectRef.name`、`objectRef.namespace`、`user.username`、
+**API Server 审计。** 在审计 Logstore 中，时间范围从 reserve `created_at` 前 5 分钟到当前，取该
+名称的全部 create 与 delete 事件，不限用户。起点提前是为了覆盖 Platform DB 与 API Server 的时钟
+偏差；名称含不复用的 `sandboxId`，放宽起点不会混入其他 reserve 的事件。记录每条的 `auditID`、
+`stage`、`verb`、`objectRef.resource`、`objectRef.name`、`objectRef.namespace`、`user.username`、
 `responseStatus.code`、`requestReceivedTimestamp` 和 `stageTimestamp`。字段名以目标 Logstore 的
 索引为准。
 
@@ -208,7 +209,7 @@ Worker 的身份为 `system:serviceaccount:agent-infra:agent-infra-worker`。只
 
 | 操作 | 原请求的响应（审计） | 本次观测 | 判定 |
 | --- | --- | --- | --- |
-| create | 201 | `present`，满足归属条件，`creationTimestamp` 在该请求的接收与完成时间之间 | 已创建 |
+| create | 201 | `present`，满足归属条件，`creationTimestamp` 与该请求的时间按秒相符（见下） | 已创建 |
 | create | 400、403、404、405、413、415、422 | `not-found` | 确定拒绝 |
 | create | 201 | `not-found` | 保持占用，升级 Runtime 负责人（见下） |
 | create | 401、409、5xx、504，只有 `RequestReceived`，或没有唯一关联 | 任意 | 不能证明，保持占用 |
@@ -220,6 +221,19 @@ Worker 的身份为 `system:serviceaccount:agent-infra:agent-infra-worker`。只
 | 任一 | 任意 | 同名不同 UID、归属不符，或出现业务绑定 | 停止，不清理，升级 Runtime 负责人 |
 
 表中没有的组合视为矛盾，按最后两行处理。401 的请求没有认证用户，无法与 Worker 的原请求关联。
+
+**时间按秒比较。** 对象的 `creationTimestamp` 序列化为整秒（小数部分截断），审计的
+`requestReceivedTimestamp` 与 `stageTimestamp` 精确到微秒。比较时先把两个审计时间截断到秒，
+满足“截断后的接收秒 ≤ `creationTimestamp` ≤ 截断后的完成秒”即相符，等价于对象所在的这一秒与
+请求的接收到完成区间有交集。时间只作佐证：它不能代替唯一关联和归属核对，也不能单独证明已创建；
+只有确实不相交时才视为矛盾。
+
+- 同秒：请求 `07:00:00.100000Z`–`07:00:00.200000Z`，对象 `07:00:00Z`，相符。
+- 跨秒：请求 `07:00:00.900000Z`–`07:00:01.050000Z`，对象 `07:00:00Z` 或 `07:00:01Z`，都相符。
+- 不相交：请求 `07:00:00.100000Z`–`07:00:00.200000Z`，对象 `07:00:01Z` 或 `06:59:59Z`，不相符，
+  按矛盾处理。
+
+表中其他行只比较状态码、UID 与 `deletionTimestamp` 是否存在，不比较时间。
 
 create 为 201 而对象已不存在时，这一分支保持占用。Store 记录已创建须有原 create 响应的 UID 与
 resourceVersion（`recordCreateResponse`），对象已不存在时没有可信来源：Metadata 级审计不含
