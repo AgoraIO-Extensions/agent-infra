@@ -1,4 +1,4 @@
-import { isTurnOperation } from "./conversation-dispatch-runtime.js";
+import { isRuntimeEventOperation } from "./conversation-dispatch-runtime.js";
 import {
 	type ConversationDispatchClaimV1,
 	type ConversationDispatchDecisionV1,
@@ -179,8 +179,7 @@ export function decideConversationDispatchRetryTransitionV1(input: {
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly transition: ConversationDispatchStateTransitionV1;
 }): ConversationDispatchStateTransitionV1 {
-	return (isTurnOperation(input.operation) ||
-		input.operation === "conversation.native-capability.invoke.v1") &&
+	return isRuntimeEventOperation(input.operation) &&
 		executionTerminal(input.executionStatus) &&
 		input.transition.executionStatus === "unknown"
 		? {}
@@ -188,9 +187,7 @@ export function decideConversationDispatchRetryTransitionV1(input: {
 }
 
 export function retryTransition(claim: ConversationDispatchClaimV1) {
-	const eventOperation =
-		isTurnOperation(claim.operation) ||
-		claim.operation === "conversation.native-capability.invoke.v1";
+	const eventOperation = isRuntimeEventOperation(claim.operation);
 	return decideConversationDispatchRetryTransitionV1({
 		operation: claim.operation,
 		executionStatus: claim.executionStatus,
@@ -201,9 +198,7 @@ export function retryTransition(claim: ConversationDispatchClaimV1) {
 export function rejectedTransition(
 	claim: Pick<ConversationDispatchClaimV1, "operation">,
 ) {
-	return claim.operation === "conversation.turn.submit.v1" ||
-		claim.operation === "conversation.turn.regenerate.v1" ||
-		claim.operation === "conversation.native-capability.invoke.v1"
+	return isRuntimeEventOperation(claim.operation)
 		? transitionForStatus("failed")
 		: {};
 }

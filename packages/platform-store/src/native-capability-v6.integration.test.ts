@@ -776,7 +776,15 @@ it("dispatches the admitted V6 operation rather than leaving its outbox pending 
 	}
 });
 
-it.each(["normal", "reclaimed", "lost"])(
+it.each([
+	"normal",
+	"reclaimed",
+	"lost",
+	"unknown-result",
+	"denied",
+	"busy",
+	"rejected",
+])(
 	"runs V3 through the default Worker to terminal events (mode=%s, #4255)",
 	async (mode) => {
 		const loseResponse = mode === "lost";
@@ -828,6 +836,26 @@ it.each(["normal", "reclaimed", "lost"])(
 						body.businessRequest,
 					);
 					sent.push(wire);
+					const result =
+						mode === "busy"
+							? { outcome: "busy" }
+							: mode === "rejected"
+								? {
+										outcome: "rejected",
+										code: "RUNTIME_TURN_NOT_ACTIVE",
+										message: "Runtime turn is no longer active",
+										retryable: false,
+									}
+								: mode === "unknown-result"
+									? { outcome: "unknown" }
+									: null;
+					if (result)
+						return Response.json({
+							schemaVersion: 6,
+							hostSessionRef: authority.hostSessionRef,
+							operationId: wire.executionId,
+							result,
+						});
 					if (loseResponse)
 						throw new TypeError("Synthetic accepted response lost");
 					return Response.json({
@@ -878,7 +906,10 @@ it.each(["normal", "reclaimed", "lost"])(
 					transaction: eventTransaction,
 				}),
 				runtimeHost: runtime.runtimeHost,
-				authorization: runtime.authorization,
+				authorization:
+					mode === "denied"
+						? { authorize: async () => ({ outcome: "denied" as const }) }
+						: runtime.authorization,
 			});
 			if (mode === "reclaimed") {
 				expect(
@@ -897,10 +928,35 @@ it.each(["normal", "reclaimed", "lost"])(
 				workerId: "v6-worker",
 			});
 
-			if (loseResponse) {
+			if (["denied", "busy", "rejected"].includes(mode)) {
+				expect(decision).toMatchObject({ outcome: "rejected" });
+				const [failed] =
+					await client`select e.status,e.delivery_fence::int as fence,o.status as outbox_status,o.lease_owner,c.status as conversation_status,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id) as events from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} join platform.conversations c on c.id=e.conversation_id where e.execution_id=${admitted.plan.executionId}`;
+				expect(failed).toMatchObject({
+					status: "failed",
+					outbox_status: "failed",
+					conversation_status: "ready",
+					lease_owner: null,
+					fence: 1,
+				});
+				expect(failed?.events).toBeGreaterThan(0);
+				expect(sent).toHaveLength(mode === "denied" ? 0 : 1);
+				expect(await useCase().admit(request())).toMatchObject({
+					outcome: "replayed",
+					plan: admitted.plan,
+				});
+				if (mode !== "blocked")
+					expect(
+						await useCase().admit(request("next-after-failure")),
+					).toMatchObject({ outcome: "accepted" });
+				return;
+			}
+			if (loseResponse || mode === "unknown-result") {
 				expect(decision).toMatchObject({
 					outcome: "retry",
-					errorCode: "RUNTIME_UNAVAILABLE",
+					errorCode: loseResponse
+						? "RUNTIME_UNAVAILABLE"
+						: "RUNTIME_ACCEPTANCE_UNKNOWN",
 				});
 				const [unknown] =
 					await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
