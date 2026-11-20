@@ -1,12 +1,23 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
 	type CurrentTaskUserV1,
+	createConversationDispatchUseCaseV1,
+	createConversationEventUseCaseV1,
 	createNativeCapabilityAdmissionUseCaseV6,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { createConversationRuntimeV2 } from "../../../apps/platform-worker/src/conversation-runtime.js";
+import {
+	workloadDesiredFixture,
+	workloadTestPolicy,
+} from "../../../apps/platform-worker/src/kubernetes.fixture.ts";
+import { workloadResourceConfigurationHashV1 } from "../../../apps/platform-worker/src/workload-runtime.ts";
 import { RuntimeNativeCapabilityRequestV6Schema } from "../../contracts/src/runtime/host-v6.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.js";
+import { parseClaim } from "../../platform-core/src/conversation-dispatch-input.js";
+import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.js";
+import { PostgresConversationEventTransactionV1 } from "./conversation-events.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
@@ -14,6 +25,7 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
 import { seedSessionSandboxFixture } from "./session-sandbox.fixture.js";
+import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.js";
 
 let database: PostgresTestDatabase | undefined;
 let client: ReturnType<typeof postgres>;
@@ -105,8 +117,8 @@ function request(executionId = "native-v6-execution") {
 		capabilityId: "c".repeat(64),
 		capabilityKind: "command" as const,
 		directoryRevision: "d".repeat(64),
-		parameters: "compact",
-		parametersDigest: createHash("sha256").update("compact").digest("hex"),
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
 		capabilitySourceVersion: "0.153.0",
 		selection: {
 			schemaVersion: 1 as const,
@@ -197,7 +209,7 @@ beforeEach(async () => {
 	authorizationReads = 0;
 	revokeOnAuthorizationRead = Number.POSITIVE_INFINITY;
 	await client`truncate platform.agents, platform.conversations, platform.conversation_executions,
- platform.outbox_items, platform.idempotency_records, platform.conversation_audit_events, platform.relay_key_subjects, platform.platform_user_disables, platform.audit_events cascade`;
+ platform.outbox_items, platform.persisted_events, platform.idempotency_records, platform.conversation_audit_events, platform.relay_key_subjects, platform.platform_user_disables, platform.audit_events cascade`;
 	await client`insert into platform.agents (id,current_configuration_revision,authorization_revision)
  values (${authority.agentId},1,${authority.authorizationRevision})`;
 	await client`insert into platform.conversations (id,agent_id,actor_id,principal_type,channel_id,status,session_generation,host_session_ref,authorization_revision,last_conversation_cursor)
@@ -629,3 +641,489 @@ it.each(["parameters", "selection"] as const)(
 		expect(await effects()).toEqual(before);
 	},
 );
+
+// Dispatch readiness is measured by the DB clock, independently of the test host clock.
+async function admitDispatchFixture() {
+	const admitted = await useCase().admit(request());
+	if (admitted.outcome === "accepted")
+		await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+	return admitted;
+}
+
+async function seedDispatchWorkload() {
+	const deployment = workloadDesiredFixture(
+		1,
+		authority.agentId,
+		"internal-only",
+	);
+	const config = {
+		...configuration,
+		source: { ...configuration.source, imageDigest: deployment.imageDigest },
+	};
+	const capacity = {
+		schemaVersion: 1,
+		imageDigest: deployment.imageDigest,
+		resourceProfileRef: deployment.resourceProfileRef,
+		resourceConfigurationHash:
+			workloadResourceConfigurationHashV1(workloadTestPolicy),
+		maximumConcurrentExecutions: 8,
+		conformanceEvidenceHash: "c".repeat(64),
+	};
+	const version = {
+		configuration: config,
+		deployment,
+		executionCapacity: capacity,
+	};
+	const state = {
+		schemaVersion: 1,
+		agentId: authority.agentId,
+		sourceConfigurationRevision: 1,
+		sourceLifecycleRevision: 1,
+		revision: 1,
+		fence: 1,
+		phase: "ready",
+		candidate: version,
+		verified: version,
+		verifiedRevision: 1,
+		identity: { uid: "v6-workload", generation: 1 },
+		rollback: false,
+		failureCode: null,
+		attempts: 0,
+	};
+	await client`update platform.agent_configuration_revisions set configuration=${client.json(config as unknown as postgres.JSONValue)} where agent_id=${authority.agentId} and revision=1`;
+	await client`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,desired_state,service_availability,workload_revision,fence) values('v6-app',${authority.agentId},${authority.actorId},'fixture','fixture','available','trace','request',now(),1,1,'running','ready',1,1)`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values(${authority.agentId},'user',${authority.actorId})`;
+	await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values(${authority.agentId},${authority.actorId},now())`;
+	await client`insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values(${authority.agentId},1,${client.json(state as unknown as postgres.JSONValue)},now())`;
+	await client`update platform.session_sandbox_allocations set resource_policy=jsonb_build_object('namespace','fixture-sandboxes','resourceConfigurationHash',${capacity.resourceConfigurationHash}::text,'configurationRevision',1,'workloadRevision',1,'managementFence',1,'imageDigest',${deployment.imageDigest}::text) where conversation_id=${authority.conversationId}`;
+}
+
+it("dispatches the admitted V6 operation rather than leaving its outbox pending (#4255)", async () => {
+	await seedDispatchWorkload();
+	const admitted = await admitDispatchFixture();
+	expect(admitted.outcome).toBe("accepted");
+	if (admitted.outcome !== "accepted") return;
+	const dispatch = new PostgresConversationDispatchStoreV1({
+		databaseUrl,
+		userDirectory,
+	});
+	try {
+		expect(await dispatch.findDispatchable({ limit: 20 })).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ itemId: admitted.plan.outbox.id }),
+			]),
+		);
+		const result = await dispatch.claim({
+			schemaVersion: 1,
+			itemId: admitted.plan.outbox.id,
+			workerId: "v6-dispatch-worker",
+			leaseDurationMs: 30000,
+		});
+		expect(result.outcome).toBe("claimed");
+		if (result.outcome !== "claimed") return;
+		expect(parseClaim(result.claim)).toMatchObject({
+			nativeCapabilityV6: { modelOptionId: admitted.plan.modelOptionId },
+		});
+		for (const change of [
+			{ agentId: "wrong-agent" },
+			{ actorId: "wrong-user" },
+			{ turnId: "wrong-turn" },
+			{ sessionGeneration: 2 },
+			{ authorizationRevision: "wrong-auth" },
+			{ modelConfigurationRevision: 2 },
+			{ modelOptionId: "wrong-model" },
+			{ reasoningLevel: "low" },
+			{ hostSessionRef: "wrong-host" },
+			{ deliveryFence: 0 },
+			{ executionDeliveryFence: 2 },
+			{ nativeCapabilityV6: undefined },
+			{ relayKeyBinding: { ...result.claim.relayKeyBinding, keyVersion: 2 } },
+		])
+			expect(() => parseClaim({ ...result.claim, ...change })).toThrow();
+		const [row] =
+			await client`select attempt_count,lease_owner from platform.outbox_items where id=${admitted.plan.outbox.id}`;
+		expect(row).toMatchObject({
+			attempt_count: 1,
+			lease_owner: "v6-dispatch-worker",
+		});
+		expect(
+			await dispatch.readRuntimeState({ claim: result.claim }),
+		).toMatchObject({
+			originalOperationDigest: Buffer.from(
+				admitted.plan.operationDigest,
+				"hex",
+			).toString("base64url"),
+			hostSessionRef: authority.hostSessionRef,
+		});
+		expect(
+			await dispatch.prepareRuntimeDispatch({
+				claim: result.claim,
+				leaseDurationMs: 30000,
+			}),
+		).toBe(true);
+		expect(
+			await dispatch.readRuntimeState({ claim: result.claim }),
+		).toMatchObject({
+			executionStatus: "unknown",
+			runtimeSubmitProtocol: "v4",
+			originalOperationDigest: Buffer.from(
+				admitted.plan.operationDigest,
+				"hex",
+			).toString("base64url"),
+		});
+	} finally {
+		await dispatch.close();
+	}
+});
+
+it.each([
+	"normal",
+	"reclaimed",
+	"lost",
+	"unknown-result",
+	"denied",
+	"busy",
+	"rejected",
+])(
+	"runs V3 through the default Worker to terminal events (mode=%s, #4255)",
+	async (mode) => {
+		const loseResponse = mode === "lost";
+		await seedDispatchWorkload();
+		const admitted = await admitDispatchFixture();
+		if (admitted.outcome !== "accepted") throw new Error("expected admission");
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory,
+		});
+		const authorization = new PostgresTaskAuthorizationStoreV1({ databaseUrl });
+		const eventTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const sent: unknown[] = [];
+		const runtime = createConversationRuntimeV2({
+			workerId: "v6-worker",
+			signing: {
+				issuer: "platform-worker",
+				workerId: "v6-worker",
+				keyId: "synthetic",
+				privateKey: generateKeyPairSync("ed25519").privateKey,
+			},
+			directory: userDirectory,
+			taskAuthorizationStore: authorization,
+			dispatchStore: dispatch,
+			channelAuthorizationCurrent: async () => true,
+			resolveRuntimeHost: async () => ({
+				baseUrl: "http://runtime.test",
+				serviceToken: "synthetic-service-token",
+				workerId: "v6-worker",
+			}),
+			executionKeys: {
+				readAcceptedExecution: (r) => store.readAcceptedExecution(r),
+				readAcceptedExecutionV6: (r) => store.readAcceptedExecutionV6(r),
+				readCiphertext: async () => ({ opaque: "synthetic-encrypted-record" }),
+			},
+			relayKeyDecryptor: {
+				decrypt: async () => ({
+					outcome: "decrypted",
+					plaintext: new TextEncoder().encode("synthetic-test-key"),
+				}),
+			},
+			fetch: async (url, init) => {
+				const path = new URL(String(url)).pathname;
+				const body = JSON.parse(init?.body as string);
+				if (path.endsWith("/native-capability")) {
+					const wire = RuntimeNativeCapabilityRequestV6Schema.parse(
+						body.businessRequest,
+					);
+					sent.push(wire);
+					const result =
+						mode === "busy"
+							? { outcome: "busy" }
+							: mode === "rejected"
+								? {
+										outcome: "rejected",
+										code: "RUNTIME_TURN_NOT_ACTIVE",
+										message: "Runtime turn is no longer active",
+										retryable: false,
+									}
+								: mode === "unknown-result"
+									? { outcome: "unknown" }
+									: null;
+					if (result)
+						return Response.json({
+							schemaVersion: 6,
+							hostSessionRef: authority.hostSessionRef,
+							operationId: wire.executionId,
+							result,
+						});
+					if (loseResponse)
+						throw new TypeError("Synthetic accepted response lost");
+					return Response.json({
+						schemaVersion: 6,
+						hostSessionRef: authority.hostSessionRef,
+						operationId: wire.executionId,
+						result: { outcome: "accepted", status: "running" },
+					});
+				}
+				if (path.endsWith("/status"))
+					return Response.json({
+						schemaVersion: 3,
+						hostSessionRef: authority.hostSessionRef,
+						executionId: request().executionId,
+						outcome: "found",
+						status: "completed",
+					});
+				if (path.endsWith("/events/read"))
+					return Response.json({
+						schemaVersion: 4,
+						hostSessionRef: authority.hostSessionRef,
+						executionId: request().executionId,
+						events: [
+							{
+								schemaVersion: 1,
+								type: "completed",
+								executionId: request().executionId,
+								adapterEventKey: "compact-completed",
+								cursor: "compact-completed",
+								occurredAt: new Date().toISOString(),
+								payload: { status: "completed" },
+							},
+						],
+					});
+				if (path.endsWith("/events/ack"))
+					return Response.json({
+						schemaVersion: 4,
+						executionId: request().executionId,
+						confirmedCursor: body.confirmedCursor,
+					});
+				throw new Error(`Unexpected synthetic Host path: ${path}`);
+			},
+		});
+		try {
+			const worker = createConversationDispatchUseCaseV1({
+				store: dispatch,
+				events: createConversationEventUseCaseV1({
+					transaction: eventTransaction,
+				}),
+				runtimeHost: runtime.runtimeHost,
+				authorization:
+					mode === "denied"
+						? { authorize: async () => ({ outcome: "denied" as const }) }
+						: runtime.authorization,
+			});
+			if (mode === "reclaimed") {
+				expect(
+					await dispatch.claim({
+						schemaVersion: 1,
+						itemId: admitted.plan.outbox.id,
+						workerId: "departed-worker",
+						leaseDurationMs: 30000,
+					}),
+				).toMatchObject({ outcome: "claimed" });
+				await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+			}
+			const decision = await worker.dispatch({
+				schemaVersion: 1,
+				itemId: admitted.plan.outbox.id,
+				workerId: "v6-worker",
+			});
+
+			if (["denied", "busy", "rejected"].includes(mode)) {
+				expect(decision).toMatchObject({ outcome: "rejected" });
+				const [failed] =
+					await client`select e.status,e.delivery_fence::int as fence,o.status as outbox_status,o.lease_owner,c.status as conversation_status,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id) as events from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} join platform.conversations c on c.id=e.conversation_id where e.execution_id=${admitted.plan.executionId}`;
+				expect(failed).toMatchObject({
+					status: "failed",
+					outbox_status: "failed",
+					conversation_status: "ready",
+					lease_owner: null,
+					fence: 1,
+				});
+				expect(failed?.events).toBeGreaterThan(0);
+				expect(sent).toHaveLength(mode === "denied" ? 0 : 1);
+				expect(await useCase().admit(request())).toMatchObject({
+					outcome: "replayed",
+					plan: admitted.plan,
+				});
+				if (mode !== "blocked")
+					expect(
+						await useCase().admit(request("next-after-failure")),
+					).toMatchObject({ outcome: "accepted" });
+				return;
+			}
+			if (loseResponse || mode === "unknown-result") {
+				expect(decision).toMatchObject({
+					outcome: "retry",
+					errorCode: loseResponse
+						? "RUNTIME_UNAVAILABLE"
+						: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				});
+				const [unknown] =
+					await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
+				expect(unknown?.status).toBe("unknown");
+				await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+				expect(
+					await worker.dispatch({
+						schemaVersion: 1,
+						itemId: admitted.plan.outbox.id,
+						workerId: "v6-worker",
+					}),
+				).toMatchObject({ outcome: "accepted" });
+			} else expect(decision).toMatchObject({ outcome: "accepted" });
+			expect(sent).toHaveLength(1);
+			expect(sent[0]).toMatchObject({
+				schemaVersion: 6,
+				executionId: admitted.plan.executionId,
+				operation: {
+					deliveryFence: mode === "reclaimed" ? 2 : 1,
+					executionDeliveryFence: mode === "reclaimed" ? 2 : 1,
+				},
+				selection: request().selection,
+			});
+			const [terminal] =
+				await client`select e.status,o.status as outbox_status,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id) as events from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} where e.execution_id=${admitted.plan.executionId}`;
+			expect(terminal).toMatchObject({
+				status: "completed",
+				outbox_status: "succeeded",
+			});
+			expect(terminal?.events).toBeGreaterThan(0);
+			expect(await useCase().admit(request())).toMatchObject({
+				outcome: "replayed",
+				plan: admitted.plan,
+			});
+		} finally {
+			await runtime.close();
+			await authorization.close();
+			await eventTransaction.close();
+			await dispatch.close();
+		}
+	},
+);
+
+it.each([
+	["modelOptionId", "other-model"],
+	["modelConfigurationRevision", 2],
+	["reasoningLevel", "low"],
+	["hostSessionRef", "other-host"],
+	["parameters", "changed"],
+	["parametersDigest", "0".repeat(64)],
+	["directoryRevision", "0".repeat(64)],
+	["configVersion", "changed"],
+	["operationDigest", "0".repeat(64)],
+	["keyBinding", { ...keyBinding, version: 2 }],
+	["taskBoundary", { ...taskAuthority.taskBoundary, agentId: "other-agent" }],
+	["operation", { ...request().operation, id: "other-execution" }],
+] as const)(
+	"refuses a V6 %s binding drift before Runtime (#4255)",
+	async (field, value) => {
+		const admitted = await admitDispatchFixture();
+		if (admitted.outcome !== "accepted") throw new Error("expected admission");
+		await client`update platform.outbox_items set payload=payload || ${client.json({ [field]: value } as unknown as postgres.JSONValue)} where id=${admitted.plan.outbox.id}`;
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory,
+		});
+		try {
+			const decision = await dispatch.claim({
+				schemaVersion: 1,
+				itemId: admitted.plan.outbox.id,
+				workerId: "drift-worker",
+				leaseDurationMs: 30000,
+			});
+			if (decision.outcome === "claimed")
+				expect(
+					await dispatch.readRuntimeState({ claim: decision.claim }),
+				).toBeNull();
+			else expect(decision.outcome).toMatch(/stale|failed/);
+		} finally {
+			await dispatch.close();
+		}
+	},
+);
+
+it("keeps one claim owner and reclaims unknown work with the original V6 pin (#4255)", async () => {
+	await seedDispatchWorkload();
+	const admitted = await admitDispatchFixture();
+	if (admitted.outcome !== "accepted") throw new Error("expected admission");
+	const dispatch = new PostgresConversationDispatchStoreV1({
+		databaseUrl,
+		userDirectory,
+	});
+	const claim = (workerId: string) =>
+		dispatch.claim({
+			schemaVersion: 1,
+			itemId: admitted.plan.outbox.id,
+			workerId,
+			leaseDurationMs: 30000,
+		});
+	try {
+		const decisions = await Promise.all([claim("one"), claim("two")]);
+		expect(decisions.map((d) => d.outcome).sort()).toEqual(["busy", "claimed"]);
+		const owned = decisions.find((d) => d.outcome === "claimed");
+		if (owned?.outcome !== "claimed") throw new Error("missing claim");
+		expect(
+			await dispatch.prepareRuntimeDispatch({
+				claim: owned.claim,
+				leaseDurationMs: 30000,
+			}),
+		).toBe(true);
+		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+		const next = await claim("recovery");
+		expect(next.outcome).toBe("claimed");
+		if (next.outcome !== "claimed") return;
+		expect(next.claim).toMatchObject({
+			executionStatus: "unknown",
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		});
+		expect(
+			await dispatch.readRuntimeState({ claim: next.claim }),
+		).toMatchObject({
+			originalOperationDigest: Buffer.from(
+				admitted.plan.operationDigest,
+				"hex",
+			).toString("base64url"),
+		});
+		expect(await dispatch.readRuntimeState({ claim: owned.claim })).toBeNull();
+		expect(await useCase().admit(request())).toMatchObject({
+			outcome: "replayed",
+			plan: admitted.plan,
+		});
+	} finally {
+		await dispatch.close();
+	}
+});
+
+it("cancels a stopped V6 operation before transport without a second execution (#4255)", async () => {
+	const admitted = await admitDispatchFixture();
+	if (admitted.outcome !== "accepted") throw new Error("expected admission");
+	await client`insert into platform.conversation_stops(execution_id,stop_request_id,status,created_at,updated_at) values(${admitted.plan.executionId},'v6-stop','submitted',now(),now())`;
+	await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,trace_id,request_id,available_at,created_at,updated_at) values('conversation:stop:v6-stop','conversation',${authority.conversationId},'conversation.turn.stop.v1',${client.json({ schemaVersion: 1, conversationId: authority.conversationId, executionId: admitted.plan.executionId, sessionGeneration: 1, stopRequestId: "v6-stop" })},'trace','request',now(),now(),now())`;
+	const dispatch = new PostgresConversationDispatchStoreV1({
+		databaseUrl,
+		userDirectory,
+	});
+	try {
+		const stop = await dispatch.claim({
+			schemaVersion: 1,
+			itemId: "conversation:stop:v6-stop",
+			workerId: "stop-worker",
+			leaseDurationMs: 30000,
+		});
+		expect(stop.outcome).toBe("claimed");
+		if (stop.outcome !== "claimed") return;
+		expect(
+			await dispatch.readRuntimeState({ claim: stop.claim }),
+		).not.toBeNull();
+		expect(await dispatch.cancelUnaccepted({ claim: stop.claim })).toBe(true);
+		const [row] =
+			await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
+		expect(row?.status).toBe("cancelled");
+		expect(await useCase().admit(request())).toMatchObject({
+			outcome: "replayed",
+			plan: admitted.plan,
+		});
+	} finally {
+		await dispatch.close();
+	}
+});

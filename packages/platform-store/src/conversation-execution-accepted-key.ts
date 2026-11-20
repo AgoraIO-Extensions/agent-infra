@@ -296,7 +296,8 @@ export async function readAcceptedExecutionKeyInTransactionV6(
 		execution.agent_id !== request.agentId ||
 		execution.actor_id !== request.principal.id ||
 		execution.channel_id !== request.channelId ||
-		execution.session_generation !== request.sessionGeneration ||
+		safeCounter(execution.session_generation, 1) !==
+			request.sessionGeneration ||
 		conversation.host_session_ref !== request.hostSessionRef
 	)
 		return null;
