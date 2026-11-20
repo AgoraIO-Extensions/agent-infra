@@ -1,6 +1,8 @@
 import {
 	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	type CodexSessionExecutorBindingV1,
+	executorIdentityFileRootV1,
+	executorIdentityInputRootV1,
 } from "@agent-infra/agent-runtime";
 import {
 	type CodexSessionExecutorResourcePolicyV1,
@@ -37,6 +39,68 @@ export const sessionExecutorBindingSecretKeyV1 = "session-executor-binding";
 export const sessionExecutorAttestationSecretKeyV1 =
 	"session-executor-attestation";
 export const sessionExecutorPodUidEnvironmentV1 = "AGENT_INFRA_RUNTIME_POD_UID";
+export const executorStartupDeadlineAnnotationV1 =
+	"agent-infra.agora.io/executor-startup-deadline";
+
+export function executorStartupRefV1(binding: CodexSessionExecutorBindingV1) {
+	return `${binding.podName}-executor-${binding.resourceFence}`;
+}
+
+export function executorStartupPodProjectionV1(
+	binding: CodexSessionExecutorBindingV1,
+	issuerPublicKey: string,
+	init: V1Container,
+	host: V1Container,
+	runner: V1Container,
+) {
+	const ref = executorStartupRefV1(binding);
+	const podUid = sessionExecutorPodEnvironmentV1()[0];
+	if (!podUid) throw new WorkloadKubernetesError("policy");
+	const common: V1EnvVar[] = [
+		{ name: "AGENT_INFRA_EXECUTOR_STARTUP_REF", value: ref },
+		{
+			name: "AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE",
+			valueFrom: {
+				fieldRef: {
+					apiVersion: "v1",
+					fieldPath: `metadata.annotations['${executorStartupDeadlineAnnotationV1}']`,
+				},
+			},
+		},
+	];
+	const issuer = {
+		name: "AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY",
+		value: issuerPublicKey,
+	};
+	init.env = [...(init.env ?? []), ...common, podUid, issuer];
+	runner.env = [...(runner.env ?? []), ...common, issuer];
+	host.env = [...(host.env ?? []), ...common];
+	const volumes: V1Volume[] = [
+		{ name: "executor-bootstrap", secret: { secretName: ref } },
+	];
+	for (const [role, container] of [
+		["host", host],
+		["runner", runner],
+	] as const) {
+		const name = `executor-identity-${role}`;
+		volumes.push({ name, emptyDir: { medium: "Memory", sizeLimit: "1Mi" } });
+		init.volumeMounts = [
+			...(init.volumeMounts ?? []),
+			{
+				name: "executor-bootstrap",
+				mountPath: `${executorIdentityInputRootV1}/${role}`,
+				subPath: role,
+				readOnly: true,
+			},
+			{ name, mountPath: `${executorIdentityFileRootV1}/${role}` },
+		];
+		container.volumeMounts = [
+			...(container.volumeMounts ?? []),
+			{ name, mountPath: executorIdentityFileRootV1 },
+		];
+	}
+	return volumes;
+}
 
 export function sessionExecutorPodEnvironmentV1(): V1EnvVar[] {
 	return (

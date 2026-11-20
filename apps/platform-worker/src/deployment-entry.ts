@@ -895,11 +895,25 @@ async function createPreparedOwning(
 		configuration: wecom,
 		sessionSandboxReserves,
 	});
+	const executorStartupTimeout =
+		process.env.PLATFORM_WORKER_EXECUTOR_DRAIN_STARTUP_TIMEOUT_MS;
+	const executorDrainStartupTimeoutMs =
+		executorStartupTimeout === undefined
+			? undefined
+			: Number(executorStartupTimeout);
+	if (
+		executorDrainStartupTimeoutMs !== undefined &&
+		(!Number.isSafeInteger(executorDrainStartupTimeoutMs) ||
+			executorDrainStartupTimeoutMs < 1_000 ||
+			executorDrainStartupTimeoutMs > 900_000)
+	)
+		throw new Error("WORKER_EXECUTOR_DRAIN_STARTUP_TIMEOUT_INVALID");
 	const resolveRuntimeHost =
 		conversationDeployment.createProductionConversationRuntimeResolverV2({
 			workload: { ...workload, workerId: signing.workerId },
 			signing,
 			serviceToken,
+			executorDrainStartupTimeoutMs,
 			connectionConsumerProfile: selectedSharedConsumer?.profile,
 			connectionConsumerApproval: selectedSharedConsumer?.approval,
 			...(resolvedProfilesByAgent
@@ -1052,6 +1066,8 @@ async function createPreparedOwning(
 					{
 						serviceToken,
 						oauthProvisioning: configuredConnectionOAuthProvisioning,
+						executorDrainStartupTimeoutMs,
+						executorIdentityIssuer: signing.privateKey,
 					},
 				),
 			resolveRuntimeHost: async (

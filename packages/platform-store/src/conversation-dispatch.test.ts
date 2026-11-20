@@ -1182,6 +1182,226 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		return { work, itemId, store };
 	}
 
+	it("freezes the executor projection deadline across expired and replacement Worker leases", async () => {
+		const { itemId, work, store } =
+			await seedSandboxPrepareIntent("executor-startup");
+		try {
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "original-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim) throw new Error("Expected original startup claim");
+			const startupRef = `${claim.sandbox.resourceName}-executor-${claim.resourceFence}`;
+			const input = { claim, startupRef, timeoutMs: 120_000 };
+			const deadline = await store.recordSandboxExecutorStartup(input);
+			expect(deadline).toBeGreaterThan(Date.now());
+			await expect(
+				store.recordSandboxExecutorStartup({ ...input, startupRef: "other" }),
+			).rejects.toThrow();
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${itemId}`;
+			expect(await store.recordSandboxExecutorStartup(input)).toBeNull();
+			const replacement = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "replacement-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!replacement) throw new Error("Expected replacement claim");
+			expect(
+				await store.recordSandboxExecutorStartup({
+					claim: replacement,
+					startupRef,
+					timeoutMs: 900_000,
+				}),
+			).toBe(deadline);
+			const rows = await client`
+				select details from platform.conversation_audit_events
+				where conversation_id = ${work.conversationId}
+					and action = 'conversation.sandbox.observed'
+					and details->>'checkpoint' = 'executor-startup'
+			`;
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.details).toMatchObject({
+				startupRef,
+				deadlineMs: deadline,
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("rejects ready after a replacement lease takes over expired executor retirement", async () => {
+		const { itemId, work, store } = await seedSandboxPrepareIntent(
+			"executor-late-ready",
+		);
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status='observed', resource_observation=resource_observation || '{"status":"observed"}'::jsonb
+				where conversation_id=${work.conversationId}`;
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "original-retirement-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim?.previousObservation)
+				throw new Error("Expected original resources");
+			await store.recordSandboxExecutorStartup({
+				claim,
+				startupRef: `${claim.sandbox.resourceName}-executor-${claim.resourceFence}`,
+				timeoutMs: 1_000,
+			});
+			await client`update platform.conversation_audit_events
+				set details=details || '{"deadlineMs":1}'::jsonb
+				where conversation_id=${work.conversationId} and details->>'checkpoint'='executor-startup'`;
+			const resources = claim.previousObservation.resources;
+			const lateReady = {
+				status: "ready" as const,
+				executorDrainRequired: true as const,
+				resources,
+			};
+			expect(
+				await store.recordSandboxObservation({ claim, observation: lateReady }),
+			).toBe("stale");
+			const originals = resources.filter(
+				({ kind }) => kind === "Pod" || kind === "Service",
+			);
+			expect(
+				await store.recordSandboxExecutorRetirement({
+					claim,
+					resources: originals,
+				}),
+			).toEqual(originals);
+			await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+			const replacement = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "replacement-retirement-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!replacement) throw new Error("Expected replacement lease");
+			expect(
+				await store.recordSandboxExecutorRetirement({
+					claim: replacement,
+					resources: [],
+				}),
+			).toEqual(originals);
+			expect(
+				await store.recordSandboxObservation({
+					claim: replacement,
+					observation: lateReady,
+				}),
+			).toBe("stale");
+			const [allocation] =
+				await client`select status from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+			expect(allocation?.status).toBe("applying");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it.each([false, true])(
+		"closes only never-admitted expired executor preparation (prior readiness %s)",
+		async (wasReady) => {
+			const { itemId, work, store } = await seedSandboxPrepareIntent(
+				"executor-retirement",
+			);
+			try {
+				await client`update platform.session_sandbox_allocations
+				set status = 'observed', resource_observation = resource_observation || '{"status":"observed"}'::jsonb
+				where conversation_id = ${work.conversationId}`;
+				const claim = await store.claimSandboxReconciliation({
+					schemaVersion: 1,
+					itemId,
+					workerId: "executor-operator",
+					leaseDurationMs: 30_000,
+				});
+				if (!claim) throw new Error("Expected original startup claim");
+				const startupRef = `${claim.sandbox.resourceName}-executor-${claim.resourceFence}`;
+				await store.recordSandboxExecutorStartup({
+					claim,
+					startupRef,
+					timeoutMs: 1_000,
+				});
+				await client`update platform.conversation_audit_events
+				set details = details || '{"deadlineMs":1}'::jsonb
+				where conversation_id = ${work.conversationId} and details->>'checkpoint' = 'executor-startup'`;
+				const resources = (claim.previousObservation?.resources ?? []).filter(
+					({ kind }) => kind === "Service" || kind === "Pod",
+				);
+				if (wasReady) {
+					await client`insert into platform.conversation_audit_events
+					(id, conversation_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+					values ('prior-ready', ${work.conversationId}, ${claim.sandbox.agentId}, ${claim.sandbox.principal.id},
+						'conversation.sandbox.observed', 'trace', 'request', now(), ${client.json(
+							{
+								status: "ready",
+								executorDrainRequired: true,
+								sandboxId: claim.sandbox.sandboxId,
+								sessionGeneration: claim.sandbox.generation,
+								resourceFence: claim.resourceFence,
+							},
+						)})`;
+					expect(
+						await store.recordSandboxExecutorRetirement({ claim, resources }),
+					).toBeNull();
+					return;
+				}
+
+				expect(
+					await store.recordSandboxExecutorRetirement({ claim, resources }),
+				).toEqual(resources);
+				const pod = resources.find((resource) => resource.kind === "Pod");
+				if (!pod) throw new Error("Missing original Pod");
+				expect(
+					await store.recordSandboxExecutorRetirement({
+						claim,
+						resources: [{ ...pod, uid: "replacement" }],
+					}),
+				).toBeNull();
+				expect(
+					await store.recordSandboxExecutorRetirement({ claim, resources: [] }),
+				).toEqual(resources);
+				await store.recordSandboxObservation({
+					claim,
+					observation: {
+						status: "unknown",
+						failureCode: "runtime.executor_identity_timeout",
+						resources: (claim.previousObservation?.resources ?? []).filter(
+							({ kind }) => kind !== "Service" && kind !== "Pod",
+						),
+					},
+				});
+				const [outbox] =
+					await client`select status from platform.outbox_items where id = ${itemId}`;
+				expect(outbox?.status).toBe("failed");
+				const [allocation] =
+					await client`select status, resource_observation from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+				expect(allocation).toMatchObject({
+					status: "unknown",
+					resource_observation: {
+						failureCode: "runtime.executor_identity_timeout",
+						resources: expect.arrayContaining([
+							expect.objectContaining({ kind: "PersistentVolumeClaim" }),
+						]),
+					},
+				});
+				expect(
+					await store.claimSandboxReconciliation({
+						schemaVersion: 1,
+						itemId,
+						workerId: "executor-retry",
+						leaseDurationMs: 30_000,
+					}),
+				).toBeNull();
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("uses the normal prepare window only for current healthy startup evidence (#3739)", async () => {
 		const { itemId, store, work } =
 			await seedSandboxPrepareIntent("normal-window");
@@ -1862,6 +2082,57 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			const [completedStop] = await client`
 				select status from platform.conversation_stops where execution_id = ${work.executionId}`;
 			expect(completedStop?.status).toBe("completed");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("retains a managed Stop when the ordinary recovery budget is exhausted", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "executor-drain-session",
+		});
+		await client`update platform.conversation_stops
+			set confirmation_deadline = clock_timestamp() - interval '1 second',
+				executor_drain_required = true
+			where execution_id = ${work.executionId}`;
+		const store = open();
+		try {
+			const decision = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "executor-drain-worker",
+				leaseDurationMs: 30_000,
+			});
+			expect(decision.outcome).toBe("claimed");
+			if (decision.outcome !== "claimed") return;
+			expect(decision.claim).toMatchObject({
+				executionStatus: "unknown",
+				stopPending: true,
+				executorDrainPending: true,
+			});
+			expect(
+				await store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				}),
+			).toBe(false);
+			const [unchanged] = await client`
+				select execution.status as execution_status, stop.status as stop_status,
+					conversation.status as conversation_status
+				from platform.conversation_executions execution
+				join platform.conversations conversation on conversation.id = execution.conversation_id
+				join platform.conversation_stops stop using (execution_id)
+				where execution.execution_id = ${work.executionId}
+			`;
+			expect(unchanged?.execution_status).toBe("unknown");
+			expect(unchanged?.stop_status).toBe("submitted");
+			expect(unchanged?.conversation_status).not.toBe("ready");
 		} finally {
 			await store.close();
 		}
