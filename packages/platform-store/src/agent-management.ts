@@ -1992,7 +1992,8 @@ const projectionAccessSelection = {
 						'kind', 'organization',
 						'organizationId', ${agentAvailability.targetId}
 					)
-				when ${agentAvailability.targetType} = 'application'
+				-- Text comparison also runs before the enum gained 'application'.
+				when ${agentAvailability.targetType}::text = 'application'
 					then jsonb_build_object(
 						'kind', 'application',
 						'applicationId', ${agentAvailability.targetId}

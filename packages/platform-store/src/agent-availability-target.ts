@@ -33,9 +33,13 @@ export function agentAvailabilityTargetKey(
 	return `${target.kind}\0${agentAvailabilityTargetId(target)}`;
 }
 
-/** SQL jsonb for one availability row; an unknown type yields SQL null. */
+/**
+ * SQL jsonb for one availability row; an unknown type yields SQL null. The
+ * type is compared as text so the query also runs before the enum gained
+ * `application`.
+ */
 export function agentAvailabilityTargetJsonSql(alias: string): string {
-	return `case ${alias}.target_type
+	return `case ${alias}.target_type::text
 		when 'user' then jsonb_build_object('kind', 'user', 'userId', ${alias}.target_id)
 		when 'organization' then jsonb_build_object('kind', 'organization', 'organizationId', ${alias}.target_id)
 		when 'application' then jsonb_build_object('kind', 'application', 'applicationId', ${alias}.target_id)
