@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
-import { validateRuntimeModelProjectionV4 } from "@agent-infra/model-catalog";
+import {
+	standardTemplateDefinitionsV1,
+	validateRuntimeModelProjectionV4,
+} from "@agent-infra/model-catalog";
 import {
 	type SessionSandboxReserveOperationV1,
 	type SessionSandboxResourceIdentityV1,
@@ -33,6 +36,13 @@ import {
 import type { WorkloadRuntimeOptionsV1 } from "./workload-runtime.js";
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
+const executorPolicy = {
+	resources: {
+		requests: { cpu: "100m", memory: "64Mi" },
+		limits: { cpu: "500m", memory: "128Mi" },
+	},
+};
+
 function fixture(
 	driver: "codex" | "claude" | "acp" | "pi" = "codex",
 	overrides: {
@@ -53,7 +63,9 @@ function fixture(
 	});
 	const { fingerprint: _fingerprint, ...content } = initialProjection;
 	content.standardTemplateBinding = {
-		templateId: content.standardTemplateBinding.templateId,
+		templateId: required(
+			standardTemplateDefinitionsV1.find((entry) => entry.driver === driver),
+		).templateId,
 		imageDigest: content.standardTemplateBinding.imageDigest,
 		imageRepository: `registry.example.test/templates/${driver}`,
 		driver: content.standardTemplateBinding.driver,
@@ -298,6 +310,34 @@ describe("Session reserve resource adapter", () => {
 			await compareNormalSession(fixture(driver));
 		},
 	);
+	it.each(["claude", "acp", "pi"] as const)(
+		"prepares and adopts a %s reserve when independent Codex execution is enabled",
+		async (driver) => {
+			const f = fixture(driver, {
+				policy: { codexSessionExecutor: executorPolicy },
+			});
+			const resources = await f.ready();
+			expect(resources).toHaveLength(6);
+			expect(await f.adapter.bootstrap(f.claim, resources)).toEqual({
+				bootstrapReady: true,
+				businessStateAbsent: true,
+			});
+			const identities = resources.map(f.identity);
+			f.create.mockClear();
+			expect(await prepareNormalSession(f, identities)).toEqual({
+				status: "ready",
+				resources: expect.arrayContaining(identities),
+			});
+			expect(f.create).not.toHaveBeenCalled();
+			await expect(
+				f.adapter.remove(
+					{ ...f.claim, status: "claimed" },
+					f.identity(required(resources[0])),
+				),
+			).rejects.toMatchObject({ code: "policy" });
+			expect(f.remove).not.toHaveBeenCalled();
+		},
+	);
 	it("preserves the verified read-only Skill generation used by normal Sessions", async () => {
 		const f = fixture();
 		addSkill(f);
@@ -372,9 +412,19 @@ describe("Session reserve resource adapter", () => {
 		expect(f.create).not.toHaveBeenCalled();
 	});
 	it("rejects changed image, configuration and deployment digest before writes", async () => {
-		const f = fixture();
+		const f = fixture("claude", {
+			policy: { codexSessionExecutor: executorPolicy },
+		});
 		for (const profile of [
 			{ ...f.claim.profile, deploymentDigest: "b".repeat(64) },
+			{
+				...f.claim.profile,
+				policy: {
+					...f.claim.profile.policy,
+					configurationRevision:
+						f.claim.profile.policy.configurationRevision + 1,
+				},
+			},
 			{
 				...f.claim.profile,
 				policy: {
@@ -387,33 +437,42 @@ describe("Session reserve resource adapter", () => {
 			await expect(f.adapter.render({ ...f.claim, profile })).rejects.toThrow();
 		expect(f.create).not.toHaveBeenCalled();
 	});
-	it("rejects old reserves for an independently approved executor layout before writes", () => {
-		const f = fixture();
-		const policy = {
-			...f.options.workload.policy,
-			codexSessionExecutor: {
-				resources: {
-					requests: { cpu: "100m", memory: "64Mi" },
-					limits: { cpu: "500m", memory: "128Mi" },
+	it("rejects Codex reserve input when independent execution is enabled, even with a current policy hash", () => {
+		const f = fixture("codex", {
+			policy: { codexSessionExecutor: executorPolicy },
+		});
+		expect(() =>
+			createSessionSandboxReserveResourceInputV1(f.options, f.claim),
+		).toThrow(expect.objectContaining({ code: "policy" }));
+	});
+	it("rejects a previous layout hash, untrusted template and business subject before reserve writes", async () => {
+		const f = fixture("claude", {
+			policy: { codexSessionExecutor: executorPolicy },
+		});
+		const oldLayout = {
+			...f.claim,
+			profile: {
+				...f.claim.profile,
+				policy: {
+					...f.claim.profile.policy,
+					resourceConfigurationHash:
+						fixture("claude").claim.profile.policy.resourceConfigurationHash,
 				},
 			},
 		};
-		expect(() =>
-			createSessionSandboxReserveResourceInputV1(
-				{ ...f.options, workload: { ...f.options.workload, policy } },
-				{
-					...f.claim,
-					profile: {
-						...f.claim.profile,
-						policy: {
-							...f.claim.profile.policy,
-							resourceConfigurationHash:
-								workloadResourceConfigurationHashV1(policy),
-						},
-					},
-				},
-			),
-		).toThrow();
+		await expect(f.adapter.render(oldLayout)).rejects.toMatchObject({
+			code: "policy",
+		});
+		await expect(
+			f.adapter.render({
+				...f.claim,
+				principal: { kind: "user", id: "foreign-user" },
+			} as SessionSandboxReserveWorkerClaimV1),
+		).rejects.toMatchObject({ code: "policy" });
+		f.options.workload.templateModelBindings.length = 0;
+		await expect(f.adapter.render(f.claim)).rejects.toMatchObject({
+			code: "policy",
+		});
 		expect(f.create).not.toHaveBeenCalled();
 	});
 	it.each(["cpuMillis", "memoryBytes", "storageBytes"] as const)(
@@ -433,7 +492,9 @@ describe("Session reserve resource adapter", () => {
 		},
 	);
 	it("uses bootstrap health only after six original create responses and exact Pod image", async () => {
-		const f = fixture();
+		const f = fixture("claude", {
+			policy: { codexSessionExecutor: executorPolicy },
+		});
 		const objects = await f.ready();
 		expect(await f.adapter.bootstrap(f.claim, objects)).toEqual({
 			bootstrapReady: true,
@@ -447,9 +508,11 @@ describe("Session reserve resource adapter", () => {
 				i === 0 ? { ...o, writeCompletion: "pending" as const } : o,
 			),
 		};
+		f.fetch.mockClear();
 		expect((await f.adapter.bootstrap(pending, objects)).bootstrapReady).toBe(
 			false,
 		);
+		expect(f.fetch).not.toHaveBeenCalled();
 	});
 	it("rejects foreign UID and wrong endpoint before probing", async () => {
 		const f = fixture();
@@ -475,26 +538,46 @@ describe("Session reserve resource adapter", () => {
 		required(pod.metadata).uid = randomUUID();
 		await expect(f.adapter.read(f.claim, "Pod")).rejects.toThrow();
 	});
-	it("requires retiring state and original UID/current RV for conditional deletion", async () => {
-		const f = fixture();
-		const objects = await f.ready();
-		const identity = f.identity(required(objects[0]));
-		await expect(f.adapter.remove(f.claim, identity)).rejects.toThrow();
-		const retiring = {
-			...f.claim,
-			status: "retiring" as const,
-			deployment: null,
-			modelProjection: null,
-		};
-		await expect(
-			f.adapter.remove(retiring, { ...identity, uid: randomUUID() }),
-		).rejects.toThrow();
-		expect(await f.adapter.remove(retiring, identity)).toBe("acknowledged");
-		expect(await f.adapter.remove(retiring, identity)).toBe("absent");
-		await expect(
-			f.adapter.remove({ ...retiring, status: "claimed" }, identity),
-		).rejects.toThrow();
-	});
+	it.each(["claude", "acp", "pi"] as const)(
+		"conditionally deletes the six original %s resources after retirement",
+		async (driver) => {
+			const f = fixture(driver, {
+				policy: { codexSessionExecutor: executorPolicy },
+			});
+			const objects = await f.ready();
+			const retiring = {
+				...f.claim,
+				status: "retiring" as const,
+				deployment: null,
+				modelProjection: null,
+			};
+			for (const object of objects) {
+				const identity = f.identity(object);
+				await expect(f.adapter.remove(f.claim, identity)).rejects.toThrow();
+				const current = required(
+					f.objects.get(`${identity.kind}/${identity.name}`),
+				);
+				required(current.metadata).resourceVersion = "2";
+				const currentIdentity = f.identity(current);
+				await expect(
+					f.adapter.remove(retiring, { ...currentIdentity, uid: randomUUID() }),
+				).rejects.toMatchObject({ code: "conflict" });
+				await expect(
+					f.adapter.remove(retiring, identity),
+				).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(await f.adapter.remove(retiring, currentIdentity)).toBe(
+					"acknowledged",
+				);
+				expect(f.remove).toHaveBeenLastCalledWith(current);
+				expect(await f.adapter.remove(retiring, currentIdentity)).toBe(
+					"absent",
+				);
+			}
+			expect(f.remove).toHaveBeenCalledTimes(6);
+		},
+	);
 });
 
 function required<T>(value: T | undefined | null): T {
@@ -503,8 +586,10 @@ function required<T>(value: T | undefined | null): T {
 	return value;
 }
 
-async function compareNormalSession(f: ReturnType<typeof fixture>) {
-	const expected = await f.adapter.render(f.claim);
+async function prepareNormalSession(
+	f: ReturnType<typeof fixture>,
+	resources?: SessionSandboxResourceIdentityV1[],
+) {
 	const workload: WorkloadRuntimeOptionsV1 = {
 		...f.options.workload,
 		workerId: "worker-a",
@@ -524,7 +609,7 @@ async function compareNormalSession(f: ReturnType<typeof fixture>) {
 	const receive = createProductionSessionSandboxReceiverV1(workload, {
 		serviceToken: sessionSandboxDeploymentTokenFixture,
 	});
-	await receive(
+	return receive(
 		{
 			schemaVersion: 1,
 			operation: "conversation.sandbox.reconcile.v1",
@@ -553,10 +638,15 @@ async function compareNormalSession(f: ReturnType<typeof fixture>) {
 			policy: f.claim.profile.policy,
 			deployment: f.claim.deployment,
 			modelProjection: f.claim.modelProjection,
-			previousObservation: null,
+			previousObservation: resources ? { status: "observed", resources } : null,
 		},
 		new AbortController().signal,
 	);
+}
+
+async function compareNormalSession(f: ReturnType<typeof fixture>) {
+	const expected = await f.adapter.render(f.claim);
+	await prepareNormalSession(f);
 	expect(
 		f.create.mock.calls
 			.map(([object]) => object)
