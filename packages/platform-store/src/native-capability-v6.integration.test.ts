@@ -768,9 +768,10 @@ it("dispatches the admitted V6 operation rather than leaving its outbox pending 
 	}
 });
 
-it.each([false, true])(
-	"runs V3 through the default Worker to terminal events (lost response=%s, #4255)",
-	async (loseResponse) => {
+it.each(["normal", "reclaimed", "lost"])(
+	"runs V3 through the default Worker to terminal events (mode=%s, #4255)",
+	async (mode) => {
+		const loseResponse = mode === "lost";
 		await seedDispatchWorkload();
 		const admitted = await useCase().admit(request());
 		if (admitted.outcome !== "accepted") throw new Error("expected admission");
@@ -871,6 +872,17 @@ it.each([false, true])(
 				runtimeHost: runtime.runtimeHost,
 				authorization: runtime.authorization,
 			});
+			if (mode === "reclaimed") {
+				expect(
+					await dispatch.claim({
+						schemaVersion: 1,
+						itemId: admitted.plan.outbox.id,
+						workerId: "departed-worker",
+						leaseDurationMs: 30000,
+					}),
+				).toMatchObject({ outcome: "claimed" });
+				await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+			}
 			const decision = await worker.dispatch({
 				schemaVersion: 1,
 				itemId: admitted.plan.outbox.id,
@@ -898,7 +910,10 @@ it.each([false, true])(
 			expect(sent[0]).toMatchObject({
 				schemaVersion: 6,
 				executionId: admitted.plan.executionId,
-				operation: { deliveryFence: 1, executionDeliveryFence: 1 },
+				operation: {
+					deliveryFence: mode === "reclaimed" ? 2 : 1,
+					executionDeliveryFence: mode === "reclaimed" ? 2 : 1,
+				},
 				selection: request().selection,
 			});
 			const [terminal] =
