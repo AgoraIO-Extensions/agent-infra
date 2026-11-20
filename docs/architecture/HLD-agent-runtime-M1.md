@@ -335,11 +335,10 @@ assembly 已通过 Invocation V3、Native V6 和 Driver V2 接通 state-changing
 同一目录与授权屏障下执行 Driver command。旧 V1/V2 admission 仍拒绝该版本，不能把命令降级成普通
 消息。代码装配和受控测试不替代真实 Runtime/浏览器压缩终态验收。
 
-同一固定 Codex 版本还提供 `thread/goal/set|get|clear` 与目标更新通知。当前平台未开放 `/goal`：
-原生 Goal 可以自行产生后续 Turn，尚缺对应的平台持久目标、持续执行、预算、控制和恢复合同。
-公开 RPC 存在不代表当前业务 Execution 已授权这些后续 Turn；不能只打开原生开关或发送普通提示。
-该差额由 [#4045](https://github.com/AgoraIO-Extensions/agent-infra/issues/4045) 承接，具体提案见
-[ADR-0039](../adr/0039-native-command-discovery-and-goal-lifecycle.md)；提案通过前保持不可用。
+同一固定 Codex 版本还提供 `thread/goal/set|get|clear` 与目标更新通知。M1 的 `/goal` 范围和输入行为
+见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)。
+原生 Goal 可产生后续 Turn，每次续跑仍须受平台业务 Execution 的持久受理和当前授权约束。
+后续设计见已推迟的 [ADR-0039](../adr/0039-native-command-discovery-and-goal-lifecycle.md)。
 
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
@@ -1015,6 +1014,12 @@ environment 选择的持久/工作区配置；不能继承请求、Owner 或宿�
 这不是 `sandbox_mode` 配置值；`thread/start.sandbox` 也不接收该 policy 类型。
 该 policy 把 enforcement 交给上述已验证外部边界，不自行创建隔离或替代 NetworkPolicy。
 
+获准的 Codex reserve 按工程 Spec [§10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)
+从首次创建起使用双容器。领取前只启动 Host 和受控的 runner/exec-server，按下文建立实例身份，
+用固定合成 scratch 检查远端执行和精确挂载。Worker 按下文的只读合同与预留意图，
+核对 Host/runner 的本实例身份、检查结果和无业务状态。app-server 的业务 Session、模型请求及受业务 Grant 保护的入口保持关闭，
+直到原领取完成且取得业务晋升回执。预留可用证明不代替原生业务准备。
+
 固定 upstream 的模型 `exec_command`、`apply_patch`、`view_image` 与文件访问须走所选 remote
 process/filesystem；独立 app-server `command/exec` 和 `fs/*` 是 local-only 客户端 API，
 不得用作该模式的模型工具或恢复回退。平台固定工作区 reader 与文件交换仍沿现有有界接口。
@@ -1086,6 +1091,42 @@ Executor 实例或传输会话变化使原准入失效；只有原实例/会话�
   原 Stop 期限仍按 §8.4 收敛，排空未证继续按
   [工程 Spec §11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
   保留原屏障和占用。
+
+**预留实例的启动与领取。** Worker 用最终 ID 固定 executor 静态绑定和空 workspace，
+按本节在实际 Pod UID 回读后绑定双端身份。可信 init 的交付允许在领取前完成。
+原绝对启动期限和凭证首次消费期限仍适用，另按预留 TTL 判定领取资格。
+已固定的原实例可在首次消费期限结束后保持有效。领取时须确认预留未过期、原 Pod UID、
+已认证的 Host/runner epoch、generation/fence、布局及活性均与当前绑定一致。
+同名 Pod 或任一容器实例替换、断连后无法核实原传输会话、身份或配置漂移时拒绝沿旧证明晋升。
+
+**实例取证。** 现有预留 `/healthz` 只证明服务健康，签名 readiness 依赖 Agent 级
+Workload 绑定。实施前须先评审版本化的 Worker→Host Session 实例只读合同。请求限定为
+已认证且获准的 Worker，只允许读取当前预留或已领取 allocation 的实例状态。
+响应由当前 Host 实例认证，按本地 kubelet Pod UID、已固定的 Host/runner 实例与 runner
+epoch、当前 Sandbox generation/resource fence，以及原启动意图、已消费投影引用和固定检查结果生成。
+响应绑定本次只读请求的一次性关联值和有界有效期。Worker 核对认证、请求关联与有效期，
+并与当前预留或 allocation、Kubernetes 对象身份及布局回读比对。领取后对同一实例重新取证。
+此入口仅返回消费确认、非业务准备和实例活性的受限事实。
+
+**业务准入。** 真实领取提交后，Worker 将新取证结果和当前 allocation 按工程 Spec §10.1.1
+提交为业务晋升回执。首个业务 Turn 上，RuntimeHost 只接受由受信 Worker 从已提交的
+allocation 取得的晋升事实和当前业务 Grant。该事实须经认证并绑定同一领取、allocation、
+当前 Execution 与 Grant 以及实际 Pod UID、实例 epoch、generation/resource fence。
+Host 核验本地实例仍与晋升事实匹配且绑定仍有效后，才按业务 Grant 授权。
+实施前的版本化合同评审须同时明确投递侧如何认证并关联这一事实。调用方字段、启动凭证
+或预留可用证明均不授予业务准入。
+
+启动或交付结果不明时只核实原意图与原 Pod，保留原期限。领取后证据未确认继续关闭业务入口，
+原会话、PVC 和占用沿正式恢复路径收口。获准后业务 Turn 的 Stop 与排空继续使用本节的
+实例身份，保留原执行屏障和占用直至取得相应证明。
+
+预留验收须回读同一 Pod/PVC 从无业务状态到一次真实领取、业务晋升和首次正常投递的受信证据。
+覆盖旧 profile 或单容器、错误主体、旧 UID/epoch/fence、启动与预留过期、Worker 重启及
+领取或晋升确认丢失。模拟投影 create 响应丢失后与领取、淘汰交错，回读唯一 CAS 赢家、
+原投影 UID/RV 和待处理意图。创建未确认时不能领取；淘汰后须确认原写入结束且原投影不存在
+才释放预算。当前 Pod 无实例证明、证据来自旧 epoch 或业务晋升结果未确认时，实际首个
+业务投递必须拒绝，原占用继续保留。核对已领取 PVC 不会被预留清理器回收。
+单独运行下述 Stop 与实例身份验收。
 
 在目标 ACK 新 lane 按以下步骤取证。
 

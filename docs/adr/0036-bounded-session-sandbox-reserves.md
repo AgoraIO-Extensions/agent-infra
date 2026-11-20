@@ -17,8 +17,14 @@
 Pod 使用最终身份，真实用户领取时保持 ID、Pod 和 PVC 不变。沿现有 Platform DB/Worker
 实现一次性分配，首阶段只支持无 Owner Secret 的标准模板，不增加通用 Runtime 身份重绑接口。
 让未领取实例预先持有 Owner Secret 的扩展已由 [ADR-0038](0038-no-owner-secret-in-session-reserves.md) 否决。
-首版只预先完成计算、镜像和 Host bootstrap。原生 Session 仍在真实授权投递时准备，其等待
+原方案先完成计算、镜像和 Host bootstrap。原生 Session 仍在真实授权投递时准备，其等待
 完整计入可执行耗时；不能将预留池命中或 `/healthz` 当作原生进程已暖。
+
+[#4248](https://github.com/AgoraIO-Extensions/agent-infra/issues/4248) 补齐独立 executor 的 Codex 路径。
+首建就使用最终 ID 装配双容器，领取后沿原 Pod 和 PVC 晋升。这样可复用已准备的计算和挂载，
+避免领取时修改不可变配置或更换 Pod。非业务启动、实例证明、领取后的业务晋升与预算以
+[工程 Spec §10.1.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)为准。
+独立执行器的隔离取舍见 [ADR-0041](0041-propose-credential-free-codex-session-executor.md)。
 
 ## 选择理由
 
@@ -74,8 +80,9 @@ env、卷与 immutable Secret，但需要独立预留事实和原 Conversation �
 1. `platform-core`/`platform-store` 与 migration：预留事实、预算、原入口事务领取，保留
    Conversation 复合外键与原幂等；真实 PostgreSQL 并发、失败恢复和隔离测试。
 2. `platform-worker` 与部署配置：未领取资源准备、原始 UID 接收、条件清理、容量补充和
-   关闭；首版只检查六资源、Host bootstrap 与无业务状态，不以假主体适配旧 claim，
-   不使用 Agent 级 readiness JWS 代替预留授权。原生进程预热或新探测 wire 留待单独评审。
+   关闭。六资源、Host bootstrap 与无业务状态仍须检查，独立 executor 另按 §10.1.1
+   核对双容器的非业务启动证明和同一实例晋升。不得以假主体适配旧 claim，
+   不使用 Agent 级 readiness JWS 代替预留授权。原生业务进程预热或新探测 wire 留待单独评审。
 3. 部署与业务验收：真实 ACK 中受上限约束的同源对照，完整功能回归、成本与可比耗时；
    未达到目标时保留指标与问题，不以文档、Pod Ready 或合成 receipt 关闭性能父票。
 
