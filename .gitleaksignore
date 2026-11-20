@@ -1,0 +1,3 @@
+# #4264: public SHA-256 of the generated OpenAPI material-intent operation.
+# Recomputed from pilot-browser.v2.openapi.json; this is a contract fingerprint.
+94fd36c301f12e37483c153f3df6df34524fbcb7:packages/contracts/src/compatibility.mjs:generic-api-key:7499

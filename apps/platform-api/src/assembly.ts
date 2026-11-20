@@ -9,6 +9,7 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentManagementActorContextV1,
 	type ApiPrincipalV1,
+	type ApplicationCredentialMaterialConfigurationV1,
 	type ConversationTaskAdmissionPolicyV1,
 	createAgentApiCreationV1,
 	createAgentApiLifecycleV1,
@@ -18,6 +19,7 @@ import {
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
 	createApplicationApiCredentialManagementV1,
+	createApplicationCredentialMaterialDeliveryV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
 	createApplicationModelCandidatesUseCaseV1,
@@ -56,6 +58,7 @@ import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationApiCredentialIssuerStoreV1,
+	PostgresApplicationCredentialMaterialStoreV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
@@ -213,6 +216,7 @@ export interface PlatformApiAssemblyInput {
 	readonly connectionInstallationCallback?: {
 		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
 	};
+	readonly applicationCredentialMaterialDelivery?: ApplicationCredentialMaterialConfigurationV1;
 	readonly applicationCredentialDelivery?: Parameters<
 		typeof createApplicationCredentialProcessDeliveryV1
 	>[0];
@@ -541,6 +545,19 @@ export function assemblePlatformApi(
 	const applicationApiCredentialStore =
 		new PostgresApplicationApiCredentialIssuerStoreV1({
 			databaseUrl: input.databaseUrl,
+		});
+	const applicationCredentialMaterialStore =
+		new PostgresApplicationCredentialMaterialStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const applicationCredentialMaterialDelivery =
+		createApplicationCredentialMaterialDeliveryV1({
+			store: applicationCredentialMaterialStore,
+			userDirectory: {
+				resolveUser: (userId) =>
+					resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+			},
+			configuration: input.applicationCredentialMaterialDelivery,
 		});
 	const applicationApiCredentials = createApplicationApiCredentialIssuerV1({
 		store: applicationApiCredentialStore,
@@ -1692,6 +1709,10 @@ export function assemblePlatformApi(
 						}),
 					}
 				: undefined,
+		applicationCredentialMaterialDelivery: {
+			identity: input.identity,
+			delivery: applicationCredentialMaterialDelivery,
+		},
 		applicationApiCredentials: {
 			identity: input.identity,
 			issuer: applicationApiCredentials,
@@ -1858,6 +1879,7 @@ export function assemblePlatformApi(
 		skillHubRead,
 		skillHubBindingAdmission,
 		applicationApiCredentialStore,
+		applicationCredentialMaterialStore,
 		...(evaluationStore ? [evaluationStore] : []),
 		...(evaluationExperiments ? [evaluationExperiments] : []),
 		...(evaluationScoring ? [evaluationScoring] : []),

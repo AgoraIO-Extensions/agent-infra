@@ -257,3 +257,31 @@ Owner 治理入口分别修改应用 manage 或 use 授权，撤销一项不隐�
 [工程 Spec §9.2](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)
 独立处理。Token 范围、到期、撤销及当前主体状态在原管理事务内复核，状态、outbox、
 幂等与必要审计共同提交。HTTP 返回管理状态，不等同于 Workload 已就绪。
+
+### 一次性应用凭证材料交付
+
+工程合同见[工程 Spec §9.2.1](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#921-应用凭证材料的进程外一次性交付)。
+API 的受保护配置模块可导出以下非秘密配置；缺省或 `enabled: false` 保持关闭：
+
+```ts
+export const applicationCredentialMaterialDelivery = {
+  schemaVersion: 1,
+  enabled: false,
+  publicOrigin: "https://platform.example.test",
+  recipients: [
+    { applicationId: "test-application-id", principalType: "user", principalId: "test-recipient-id" },
+  ],
+};
+```
+
+`publicOrigin` 必须是部署的精确 HTTPS origin。当前接收入口使用用户浏览器会话，`recipients` 仅接受 user 主体；
+未接入应用接收身份，不允许借本次待签凭证自认证。配置列表不授予材料权限，仍须由当前系统管理员显式授予同一应用/主体的 material grant。
+账号、应用 ID 和生产接收者由部署采用时核实，不使用示例值或 callback 占位消费者。
+
+使用正式 `/api/v2/applications/{applicationId}/credential-material-deliveries` 创建意图，再由独立认证的接收者
+POST `/{attemptId}/receive`。接收者仅在第一响应的 `kind: material` 中取得材料；重复请求只返回 `kind: metadata`。
+接收者以返回的 credentialId/fence POST `/{attemptId}/confirm`，确认提交后才为 accepted；GET `/{attemptId}` 仅返回状态。
+所有 POST 使用平台精确 Origin，管理意图还须有 Idempotency-Key；接收及确认 body 的 schemaVersion 为 1。
+
+启用前须完成所有相关读写副本的兼容升级，且运输链为该专用响应关闭缓存、落盘、正文采样及自动重放；Helm 接线独立评审。
+本次复用既有幂等表的非秘密 JSON 元数据及已有凭证校验表，无新增数据库迁移。未知结果只读核实原 attempt，不能重送原材料。
