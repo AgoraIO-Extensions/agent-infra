@@ -279,7 +279,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			},
 		]);
 	});
-	it("rejects a missing personal Key without persisting task effects", async () => {
+	it("classifies a missing personal Key without persisting task effects", async () => {
 		const conversationId = await createConversation();
 		await db.unsafe(
 			"update platform.relay_key_subjects set current_version=null where purpose='personal'",
@@ -290,7 +290,13 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			{ schemaVersion: 1, text: "synthetic" },
 			"missing-key",
 		);
-		expect(response.status).toBe(404);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			code: "ACTION_UNAVAILABLE",
+			retryable: false,
+			message:
+				"Personal Relay Key is unavailable. Configure it in personal settings.",
+		});
 		expect(await snapshot()).toEqual(before);
 	});
 	it.each(["stale", "unavailable", "failure"] as const)(
