@@ -154,6 +154,11 @@ grantee、权限和 grant option。无关授权保留并报告，原始基线只
   启用临时登录。以实际登录确认默认只读、三个批准的视图和指定列可读，原始 payload、资源观测、
   审计明细、消息和凭据列受限。逐一核对 Platform 库对 11 个签名的
   `has_function_privilege(..., 'EXECUTE')` 均为 false。
+- 在同一个已撤权的隔离库放入符合停止和保留政策的合成候选。使用正式临时角色和隔离 PVC
+  元数据，按[先列清单](SESSION-workspace-reclamation-deployment.md#先列清单)运行正式 dry-run CLI。
+  只在批准清单中填入本次获准的 PVC 名。回读结果中的 Agent、Session、Sandbox、namespace、
+  PVC 名称、UID 和 resourceVersion，核对与获准候选一致。确认只读取获准 PVC 的元数据，
+  并保存候选回执。完成后按下方步骤清理角色和授权回执。
 - 在隔离库用合成输入验证 11 个函数调用、创建持久表及写入业务表，共 13 项。每项使用独立的
   `BEGIN READ WRITE` 事务并回滚，或每项建立 savepoint、记录结果后回滚到该 savepoint。
   每项都应单独得到 SQLSTATE `42501`。遇到 `25P02` 时该项缺少有效证据，须另开事务重验。
