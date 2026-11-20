@@ -77,8 +77,10 @@ export function createNativeAdmissionTelemetry(
 		number,
 		{ stage: NativeAdmissionObservationV1["stage"]; began: number }
 	>();
-	const failPending = (error?: unknown) => {
-		const source = currentNativeAdmissionObservationV1();
+	const failPending = (error?: unknown, sharedCancellation = false) => {
+		const source = sharedCancellation
+			? undefined
+			: currentNativeAdmissionObservationV1();
 		const match = source === undefined ? undefined : pending.get(source);
 		const entry =
 			match && source !== undefined
@@ -183,7 +185,7 @@ export function createNativeAdmissionTelemetry(
 		cancel(source: "client_abort" | "internal_deadline") {
 			if (cancelSource === "UNKNOWN") cancelSource = source;
 			failure(undefined);
-			failPending();
+			failPending(undefined, true);
 		},
 	};
 }

@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { RuntimeNativeMetadataProofMaximumLifetimeMsV1 } from "@agent-infra/contracts/runtime";
 import { createHttpNativeAdmissionTelemetry } from "@agent-infra/observability/http";
 import {
@@ -67,6 +68,13 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 		telemetry?.cancel("internal_deadline");
 		close();
 	};
+	// limit() can run inside either directory branch. Timers always belong to
+	// the original request, rather than the branch that last shortened its budget.
+	const armDeadline = AsyncResource.bind(() => {
+		if (timer !== undefined) clearTimeout(timer);
+		timer = setTimeout(onDeadline, Math.max(0, expiresAt - now()));
+		timer.unref();
+	});
 	const assertCurrent = () => {
 		if (
 			options.signal.aborted ||
@@ -80,8 +88,7 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 		}
 	};
 	options.signal.addEventListener("abort", clientAbort, { once: true });
-	timer = setTimeout(onDeadline, Math.max(0, expiresAt - now()));
-	timer.unref();
+	armDeadline();
 	if (options.signal.aborted) clientAbort();
 	const run = async <T>(work: (signal: AbortSignal) => Promise<T>) => {
 		assertCurrent();
@@ -193,9 +200,7 @@ export function createRuntimeNativeMetadataRequestContextV1(options: {
 				throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
 			}
 			expiresAt = deadline;
-			if (timer !== undefined) clearTimeout(timer);
-			timer = setTimeout(onDeadline, Math.max(0, expiresAt - now()));
-			timer.unref();
+			armDeadline();
 		},
 		run,
 		authenticate,
