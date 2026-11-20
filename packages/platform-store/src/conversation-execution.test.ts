@@ -4076,3 +4076,80 @@ describe("PostgreSQL bounded message queue (#3376)", () => {
 		}
 	});
 });
+
+it("4270 refuses an authorized Web message without a personal Key before writing any task", async () => {
+	const typed: ConversationExecutionAuthorityV1 = {
+		...authority,
+		taskBoundary: {
+			schemaVersion: 1,
+			principal: { kind: "user", id: authority.actorId },
+			agentId: authority.agentId,
+			channelId: "web",
+			identityRevision: "identity-01",
+			agentAuthorizationRevision: authority.authorizationRevision,
+			accessSources: [{ kind: "user", userId: authority.actorId }],
+		},
+	};
+	await persistConformanceModelConfiguration(
+		conformanceModelConfiguration,
+		typed,
+	);
+	const { transaction, useCase } = createConversation(typed);
+	try {
+		const created = await useCase.createConversation({
+			schemaVersion: 1,
+			agentId: typed.agentId,
+			idempotencyKey: "4270-create",
+			requestId: "4270",
+			traceId: "4270",
+		});
+		if (created.outcome !== "accepted")
+			throw new Error("Expected conversation");
+		const conversationId = created.result.conversationId;
+		await client`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${typed.actorId}`;
+		await expect(
+			useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId,
+				text: "Synthetic message",
+				idempotencyKey: "4270-message",
+				requestId: "4270",
+				traceId: "4270",
+			}),
+		).rejects.toMatchObject({ code: "personal_relay_key_unavailable" });
+		const [effects] = await client`select
+   (select count(*)::int from platform.conversation_messages where conversation_id=${conversationId}) as messages,
+   (select count(*)::int from platform.conversation_executions where conversation_id=${conversationId}) as executions,
+   (select count(*)::int from platform.outbox_items where scope_id=${conversationId} and operation='conversation.turn.submit.v1') as turns`;
+		expect(effects).toEqual({ messages: 0, executions: 0, turns: 0 });
+		if (!typed.taskBoundary) throw new Error("Missing boundary fixture");
+		const other = {
+			...typed,
+			actorId: "another-user",
+			taskBoundary: {
+				...typed.taskBoundary,
+				principal: { kind: "user" as const, id: "another-user" },
+				accessSources: [{ kind: "user" as const, userId: "another-user" }],
+			},
+		};
+		const denied = createConversation(other);
+		try {
+			await expect(
+				denied.useCase.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId,
+					text: "Synthetic",
+					idempotencyKey: "4270-other",
+					requestId: "4270",
+					traceId: "4270",
+				}),
+			).resolves.toMatchObject({ outcome: "denied" });
+		} finally {
+			await denied.transaction.close();
+		}
+	} finally {
+		await transaction.close();
+	}
+});
