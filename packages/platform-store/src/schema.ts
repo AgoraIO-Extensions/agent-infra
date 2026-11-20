@@ -70,6 +70,7 @@ export {
 
 import {
 	sessionSandboxBudgets,
+	sessionSandboxExecutorPromotions,
 	sessionSandboxReserves,
 	sessionSandboxResourceCharges,
 } from "./schema-session-sandbox-reserves.js";
@@ -242,6 +243,7 @@ export const platformInfrastructureTables = [
 	sessionSandboxBudgets,
 	sessionSandboxReserves,
 	sessionSandboxResourceCharges,
+	sessionSandboxExecutorPromotions,
 	taskAuthorizationRecords,
 	operationsResourceSnapshots,
 	operationsResourceIdentities,

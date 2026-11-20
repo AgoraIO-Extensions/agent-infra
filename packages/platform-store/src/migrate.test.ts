@@ -2104,6 +2104,7 @@ describe("published Relay authority migration", () => {
 			88,
 			89,
 			90,
+			91,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2205,9 +2206,13 @@ describe("published Relay authority migration", () => {
 			idx: 89,
 			tag: "0089_operations_outbox_scope",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 90)).toMatchObject({
 			idx: 90,
 			tag: "0090_executor_stop_drain",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 91,
+			tag: "0091_executor_reserve_startup",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2809,6 +2814,26 @@ describe("published Relay authority migration", () => {
 			expectedDelta.columns.push(
 				"workload_reconciliations:certificate_reconciliation",
 				"conversation_stops:executor_drain_required",
+			);
+			expectedDelta.columns.push(
+				"session_sandbox_reserves:executor_startup",
+				...[
+					"conversation_id",
+					"created_at",
+					"id",
+					"receipt",
+					"receipt_digest",
+					"resource_fence",
+					"sandbox_id",
+					"session_generation",
+				].map((name) => `session_sandbox_executor_promotions:${name}`),
+			);
+			expectedDelta.checks.push(
+				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_digest",
+			);
+			expectedDelta.indexes.push(
+				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_unique",
+				"session_sandbox_executor_promotions:session_sandbox_executor_promotions_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

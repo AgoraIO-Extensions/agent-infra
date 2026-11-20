@@ -32,7 +32,12 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
-import { claimSandboxReconciliation } from "./session-sandbox-reconciliation.js";
+import {
+	claimSandboxReconciliation,
+	recordSandboxExecutorRetirement,
+	recordSandboxExecutorStartup,
+	recordSandboxObservation,
+} from "./session-sandbox-reconciliation.js";
 import {
 	PostgresSessionSandboxReserveStoreV1,
 	releaseSessionSandboxComputeBudgetV1,
@@ -2064,4 +2069,634 @@ describe("reserve eligibility stays standard-only (ADR-0038, #3937)", () => {
 			).toEqual([{ sandbox_id: standard.sandboxId, status: "ready" }]);
 		},
 	);
+});
+
+describe("independent executor reserve startup and projection (#4248 B 3a)", () => {
+	const bindingDigest = "c".repeat(64);
+	const policy = {
+		namespace: config.namespace,
+		resourceConfigurationHash: resourceHash,
+	};
+	type Store = PostgresSessionSandboxReserveStoreV1;
+	type Lease = NonNullable<Awaited<ReturnType<Store["claimLease"]>>>;
+	async function executorPrepared(store = reserves()) {
+		const sandboxId = await store.prepare("agent");
+		if (typeof sandboxId !== "string") throw new Error("Expected reserve");
+		const lease = await store.claimLease({
+			sandboxId,
+			workerId: "worker-a",
+			leaseDurationMs: 30000,
+		});
+		if (!lease) throw new Error("Expected reserve lease");
+		const deadline = await store.recordExecutorStartup(lease, {
+			timeoutMs: 60000,
+		});
+		expect(deadline).toBeTypeOf("number");
+		for (const kind of sessionSandboxReserveResourceKindsV1) {
+			const name = `sandbox-${sandboxId}`;
+			expect(
+				await store.recordIntent(lease, {
+					attemptId: `create-${kind}`,
+					operation: "create",
+					kind,
+					name,
+					status: "pending",
+					resource: null,
+					absent: false,
+				}),
+			).toBe(true);
+			expect(
+				await store.recordCreateResponse(lease, {
+					attemptId: `create-${kind}`,
+					response: "created",
+					resource: {
+						kind,
+						name,
+						namespace: config.namespace,
+						uid: `${kind}-uid-${sandboxId}`,
+						resourceVersion: "1",
+					},
+				}),
+			).toBe(true);
+		}
+		const startupRef = `sandbox-${sandboxId}-executor-1`;
+		const podUid = `Pod-uid-${sandboxId}`;
+		const intent = {
+			attemptId: "projection-1",
+			podUid,
+			hostKeyId: "host-key-1",
+			hostPublicKey: "host-public-key-1",
+			bindingDigest,
+		};
+		const projection = {
+			kind: "Secret" as const,
+			name: startupRef,
+			namespace: config.namespace,
+			uid: `projection-uid-${sandboxId}`,
+			resourceVersion: "7",
+		};
+		return {
+			store,
+			lease,
+			sandboxId,
+			sessionId: lease.sessionId,
+			deadline: deadline as number,
+			startupRef,
+			podUid,
+			intent,
+			projection,
+		};
+	}
+	type Prepared = Awaited<ReturnType<typeof executorPrepared>>;
+	const notReady = (reserve: Prepared, lease: Lease = reserve.lease) =>
+		reserve.store.markReady(lease, {
+			bootstrapReady: true,
+			businessStateAbsent: true,
+		});
+	async function consumeAndRemove(reserve: Prepared) {
+		const { store, lease, intent, projection, podUid } = reserve;
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: projection,
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorConsumption(lease, {
+				attemptId: intent.attemptId,
+				podUid,
+				projectionUid: projection.uid,
+				hostKeyId: intent.hostKeyId,
+				runnerEpoch: "runner-epoch-1",
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteIntent(lease, {
+				attemptId: "projection-delete-1",
+				resource: projection,
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteResponse(lease, {
+				attemptId: "projection-delete-1",
+				response: "acknowledged",
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteObservation(lease, {
+				attemptId: "projection-delete-1",
+			}),
+		).toBe(true);
+	}
+	async function cleanSix(store: Store, lease: Lease, sandboxId: string) {
+		for (const kind of sessionSandboxReserveResourceKindsV1) {
+			const resource = {
+				kind,
+				name: `sandbox-${sandboxId}`,
+				namespace: config.namespace,
+				uid: `${kind}-uid-${sandboxId}`,
+				resourceVersion: "1",
+			};
+			expect(
+				await store.recordIntent(lease, {
+					attemptId: `delete-${kind}`,
+					operation: "delete",
+					kind,
+					name: resource.name,
+					status: "pending",
+					resource,
+					absent: false,
+				}),
+			).toBe(true);
+			expect(
+				await store.recordDeleteResponse(lease, {
+					attemptId: `delete-${kind}`,
+					response: "absent",
+					resource,
+				}),
+			).toBe(true);
+		}
+	}
+	async function retiringLease(store: Store, sandboxId: string) {
+		expect(await store.retire(sandboxId)).toBe(true);
+		const lease = await store.claimLease({
+			sandboxId,
+			workerId: "worker-retire",
+			leaseDurationMs: 30000,
+		});
+		if (!lease) throw new Error("Expected retiring lease");
+		return lease;
+	}
+
+	it("stays unready until both-role consumption and confirmed projection removal", async () => {
+		const reserve = await executorPrepared();
+		const { store, lease, intent, projection, podUid } = reserve;
+		expect(await notReady(reserve)).toBe(false);
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(await notReady(reserve)).toBe(false);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: projection,
+			}),
+		).toBe(true);
+		expect(await notReady(reserve)).toBe(false);
+		expect(
+			await store.recordExecutorConsumption(lease, {
+				attemptId: intent.attemptId,
+				podUid,
+				projectionUid: projection.uid,
+				hostKeyId: intent.hostKeyId,
+				runnerEpoch: "runner-epoch-1",
+			}),
+		).toBe(true);
+		expect(await notReady(reserve)).toBe(false);
+		expect(
+			await store.recordExecutorProjectionDeleteIntent(lease, {
+				attemptId: "projection-delete-1",
+				resource: projection,
+			}),
+		).toBe(true);
+		expect(await notReady(reserve)).toBe(false);
+		expect(
+			await store.recordExecutorProjectionDeleteResponse(lease, {
+				attemptId: "projection-delete-1",
+				response: "acknowledged",
+			}),
+		).toBe(true);
+		// A DELETE acknowledgement is not absence evidence.
+		expect(await notReady(reserve)).toBe(false);
+		expect(
+			await store.recordExecutorProjectionDeleteObservation(lease, {
+				attemptId: "projection-delete-1",
+			}),
+		).toBe(true);
+		expect(await notReady(reserve)).toBe(true);
+		const [row] =
+			await sql`select status, executor_startup from platform.session_sandbox_reserves`;
+		expect(row?.status).toBe("ready");
+		expect(row?.executor_startup).toMatchObject({
+			schemaVersion: 1,
+			startupRef: reserve.startupRef,
+			deadlineMs: reserve.deadline,
+			projection: {
+				podUid,
+				hostKeyId: "host-key-1",
+				create: { status: "confirmed", writeCompletion: "response" },
+				deletes: [{ status: "confirmed", absent: true }],
+			},
+			consumption: { projectionUid: projection.uid },
+		});
+	});
+
+	it("binds the projection to a confirmed Pod UID, the current lease, one key and an open deadline", async () => {
+		// The deadline is frozen before the Pod create intent and never reset.
+		const legacy = await prepared();
+		expect(
+			await legacy.store.recordExecutorStartup(legacy.lease, {
+				timeoutMs: 60000,
+			}),
+		).toBeNull();
+		const reserve = await executorPrepared();
+		const { store, lease, intent } = reserve;
+		expect(await store.recordExecutorStartup(lease, { timeoutMs: 5000 })).toBe(
+			reserve.deadline,
+		);
+		expect(
+			await store.recordExecutorProjectionIntent(lease, {
+				...intent,
+				podUid: "other-pod",
+			}),
+		).toBe(false);
+		expect(
+			await store.recordExecutorProjectionIntent(
+				{ ...lease, deliveryFence: lease.deliveryFence - 1 },
+				intent,
+			),
+		).toBe(false);
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		// The same attempt never re-keys or changes its binding.
+		for (const change of [
+			{ hostPublicKey: "other-key" },
+			{ hostKeyId: "host-key-2" },
+			{ bindingDigest: "d".repeat(64) },
+			{ attemptId: "projection-2" },
+		])
+			expect(
+				await store.recordExecutorProjectionIntent(lease, {
+					...intent,
+					...change,
+				}),
+			).toBe(false);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: { ...reserve.projection, name: "other-secret" },
+			}),
+		).toBe(false);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: reserve.projection,
+			}),
+		).toBe(true);
+		await sql`update platform.session_sandbox_reserves set executor_startup = jsonb_set(executor_startup, '{deadlineMs}', to_jsonb(floor(extract(epoch from clock_timestamp()) * 1000) - 1))`;
+		expect(
+			await store.recordExecutorConsumption(lease, {
+				attemptId: intent.attemptId,
+				podUid: reserve.podUid,
+				projectionUid: reserve.projection.uid,
+				hostKeyId: intent.hostKeyId,
+				runnerEpoch: "runner-epoch-1",
+			}),
+		).toBe(false);
+		expect(await notReady(reserve)).toBe(false);
+	});
+
+	it("refuses a projection intent once the original deadline has passed", async () => {
+		const late = await executorPrepared();
+		await sql`update platform.session_sandbox_reserves set executor_startup = jsonb_set(executor_startup, '{deadlineMs}', to_jsonb(floor(extract(epoch from clock_timestamp()) * 1000) - 1)) where sandbox_id = ${late.sandboxId}`;
+		expect(
+			await late.store.recordExecutorProjectionIntent(late.lease, late.intent),
+		).toBe(false);
+		expect(
+			await sql`select executor_startup->'projection' as projection from platform.session_sandbox_reserves`,
+		).toEqual([{ projection: null }]);
+	});
+
+	it("keeps an unknown projection create unclaimable, retirement wins, and budget stays held until absence", async () => {
+		const reserve = await executorPrepared();
+		const { store, lease, intent, sandboxId } = reserve;
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(
+			await store.recordExecutorProjectionResult(lease, {
+				attemptId: intent.attemptId,
+			}),
+		).toBe(true);
+		const [unknown] =
+			await sql`select status from platform.session_sandbox_reserves`;
+		expect(unknown?.status).toBe("unknown");
+		expect(await notReady(reserve)).toBe(false);
+		// A competing new Session cannot claim it and takes the cold path.
+		const created = await create();
+		expect(created).toMatchObject({ outcome: "accepted" });
+		expect(created).not.toMatchObject({
+			result: { conversationId: reserve.sessionId },
+		});
+		const retiring = await retiringLease(store, sandboxId);
+		await cleanSix(store, retiring, sandboxId);
+		expect(await store.finishRetirement(retiring)).toBe(false);
+		// The original writer's late response is still accepted after takeover.
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: reserve.projection,
+			}),
+		).toBe(true);
+		expect(await store.finishRetirement(retiring)).toBe(false);
+		expect(
+			await store.recordExecutorProjectionDeleteIntent(retiring, {
+				attemptId: "projection-delete-r",
+				resource: reserve.projection,
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteResponse(retiring, {
+				attemptId: "projection-delete-r",
+				response: "acknowledged",
+			}),
+		).toBe(true);
+		expect(await store.finishRetirement(retiring)).toBe(false);
+		expect(
+			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`,
+		).toEqual([{ released: false }]);
+		expect(
+			await store.recordExecutorProjectionDeleteObservation(retiring, {
+				attemptId: "projection-delete-r",
+			}),
+		).toBe(true);
+		expect(await store.finishRetirement(retiring)).toBe(true);
+		expect(
+			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`,
+		).toEqual([{ released: true }]);
+	});
+
+	it("restores an unknown reserve to preparing only after the projection response settles too", async () => {
+		const reserve = await executorPrepared();
+		const { store, lease, intent } = reserve;
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(
+			await store.recordExecutorProjectionResult(lease, {
+				attemptId: intent.attemptId,
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "rejected",
+				resource: null,
+			}),
+		).toBe(true);
+		expect(
+			await sql`select status from platform.session_sandbox_reserves`,
+		).toEqual([{ status: "preparing" }]);
+		// A definite rejection is never consumption evidence.
+		expect(
+			await store.recordExecutorConsumption(lease, {
+				attemptId: intent.attemptId,
+				podUid: reserve.podUid,
+				projectionUid: reserve.projection.uid,
+				hostKeyId: intent.hostKeyId,
+				runnerEpoch: "runner-epoch-1",
+			}),
+		).toBe(false);
+		expect(await notReady(reserve)).toBe(false);
+	});
+
+	it("hands the original startup facts to the claimed allocation and never retires it as a startup timeout", async () => {
+		const reserve = await executorPrepared();
+		await consumeAndRemove(reserve);
+		expect(await notReady(reserve)).toBe(true);
+		const created = await create();
+		expect(created).toMatchObject({
+			result: { conversationId: reserve.sessionId },
+		});
+		const events = await sql<{ details: Record<string, unknown> }[]>`
+			select details from platform.conversation_audit_events
+			where conversation_id = ${reserve.sessionId} and details->>'checkpoint' = 'executor-startup'`;
+		expect(events).toHaveLength(1);
+		expect(events[0]?.details).toMatchObject({
+			startupRef: reserve.startupRef,
+			deadlineMs: reserve.deadline,
+			sandboxId: reserve.sandboxId,
+			sessionGeneration: 1,
+			resourceFence: 1,
+			source: "reserve",
+			podUid: reserve.podUid,
+			hostKeyId: "host-key-1",
+			projectionUid: reserve.projection.uid,
+		});
+		const [outbox] =
+			await sql`select id from platform.outbox_items where scope_id = ${reserve.sessionId} and operation = 'conversation.sandbox.reconcile.v1'`;
+		if (!outbox) throw new Error("Expected original Sandbox intent");
+		const claim = await sql.begin((tx) =>
+			claimSandboxReconciliation(
+				tx,
+				{
+					itemId: outbox.id,
+					workerId: "business-worker",
+					leaseDurationMs: 30000,
+				},
+				policy,
+				directory,
+			),
+		);
+		if (!claim) throw new Error("Expected business claim");
+		expect(claim).toMatchObject({ purpose: "prepare", resourceFence: 1 });
+		// The business path reads the original deadline instead of signing a new one.
+		expect(
+			await sql.begin((tx) =>
+				recordSandboxExecutorStartup(
+					tx,
+					claim,
+					reserve.startupRef,
+					5000,
+					policy,
+					directory,
+				),
+			),
+		).toBe(reserve.deadline);
+		await sql`update platform.conversation_audit_events set details = jsonb_set(details, '{deadlineMs}', to_jsonb(floor(extract(epoch from clock_timestamp()) * 1000) - 1)) where conversation_id = ${reserve.sessionId} and details->>'checkpoint' = 'executor-startup'`;
+		const pod = {
+			kind: "Pod" as const,
+			name: `sandbox-${reserve.sandboxId}`,
+			namespace: config.namespace,
+			uid: reserve.podUid,
+			resourceVersion: "2",
+		};
+		expect(
+			await sql.begin((tx) =>
+				recordSandboxExecutorRetirement(tx, claim, [pod], policy, directory),
+			),
+		).toBeNull();
+		expect(
+			await sql`select count(*)::int as count from platform.conversation_audit_events where details->>'checkpoint' = 'executor-startup-retirement'`,
+		).toEqual([{ count: 0 }]);
+	});
+
+	it("does not claim a ready row whose persisted executor evidence no longer satisfies readiness", async () => {
+		const reserve = await executorPrepared();
+		await consumeAndRemove(reserve);
+		expect(await notReady(reserve)).toBe(true);
+		await sql`update platform.session_sandbox_reserves set executor_startup = jsonb_set(executor_startup, '{consumption}', 'null'::jsonb)`;
+		const created = await create();
+		expect(created).toMatchObject({ outcome: "accepted" });
+		expect(created).not.toMatchObject({
+			result: { conversationId: reserve.sessionId },
+		});
+		expect(
+			await sql`select status from platform.session_sandbox_reserves`,
+		).toEqual([{ status: "ready" }]);
+	});
+
+	it("leaves single-container reserves unaffected by the new column", async () => {
+		const reserve = await ready();
+		const [row] =
+			await sql`select executor_startup from platform.session_sandbox_reserves`;
+		expect(row?.executor_startup).toBeNull();
+		expect(await create()).toMatchObject({
+			result: { conversationId: reserve.sessionId },
+		});
+		expect(
+			await sql`select count(*)::int as count from platform.conversation_audit_events where details->>'checkpoint' = 'executor-startup'`,
+		).toEqual([{ count: 0 }]);
+	});
+
+	async function claimedExecutorReserve() {
+		const reserve = await executorPrepared();
+		await consumeAndRemove(reserve);
+		expect(await notReady(reserve)).toBe(true);
+		expect(await create()).toMatchObject({
+			result: { conversationId: reserve.sessionId },
+		});
+		const [row] =
+			await sql`select profile_digest from platform.session_sandbox_reserves`;
+		if (!row) throw new Error("Expected claimed reserve");
+		const promotion = {
+			sandboxId: reserve.sandboxId,
+			sessionId: reserve.sessionId,
+			agentId: "agent",
+			principal: { kind: "user" as const, id: "user-a" },
+			channelId: "web",
+			generation: 1,
+			resourceFence: 1,
+			profileDigest: row.profile_digest as string,
+			bindingDigest,
+			layoutDigest: "e".repeat(64),
+			podUid: reserve.podUid,
+			podResourceVersion: "9",
+			pvcUid: `PersistentVolumeClaim-uid-${reserve.sandboxId}`,
+			hostKeyId: "host-key-1",
+			runnerEpoch: "runner-epoch-1",
+		};
+		return { reserve, promotion };
+	}
+
+	it("binds one promotion receipt to the claimed allocation and its original instance", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		for (const change of [
+			{ sessionId: "other-conversation" },
+			{ principal: { kind: "user" as const, id: "user-b" } },
+			{ principal: { kind: "application" as const, id: "user-a" } },
+			{ agentId: "other-agent" },
+			{ channelId: "api" },
+			{ generation: 2 },
+			{ resourceFence: 2 },
+			{ podUid: "replacement-pod" },
+			{ hostKeyId: "host-key-2" },
+			{ runnerEpoch: "runner-epoch-2" },
+			{ pvcUid: "other-pvc" },
+			{ profileDigest: "f".repeat(64) },
+			{ bindingDigest: "d".repeat(64) },
+		])
+			expect(
+				await reserve.store.recordExecutorPromotion({
+					...promotion,
+					...change,
+				}),
+			).toBeNull();
+		const receipt = await reserve.store.recordExecutorPromotion(promotion);
+		expect(receipt).toMatchObject({
+			receiptId: expect.any(String),
+			receiptDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+		});
+		expect(await reserve.store.recordExecutorPromotion(promotion)).toEqual(
+			receipt,
+		);
+		// The same generation/fence never accepts a second, different receipt.
+		expect(
+			await reserve.store.recordExecutorPromotion({
+				...promotion,
+				podResourceVersion: "10",
+			}),
+		).toBeNull();
+		await sql`update platform.session_sandbox_allocations set resource_fence = 2 where sandbox_id = ${reserve.sandboxId}`;
+		expect(await reserve.store.recordExecutorPromotion(promotion)).toBeNull();
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_executor_promotions`,
+		).toEqual([{ count: 1 }]);
+	});
+
+	it("refuses a promotion receipt for a cold allocation of another user", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		const other = await create(execution(), "user-b", "web", "other-user");
+		if (other.outcome !== "accepted") throw new Error("Expected cold Session");
+		const [allocation] =
+			await sql`select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${other.result.conversationId}`;
+		expect(
+			await reserve.store.recordExecutorPromotion({
+				...promotion,
+				sandboxId: allocation?.sandbox_id,
+				sessionId: other.result.conversationId,
+				principal: { kind: "user", id: "user-b" },
+			}),
+		).toBeNull();
+	});
+
+	it("keeps a claimed executor reserve out of business ready until its promotion receipt commits", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		const [outbox] =
+			await sql`select id from platform.outbox_items where scope_id = ${reserve.sessionId} and operation = 'conversation.sandbox.reconcile.v1'`;
+		if (!outbox) throw new Error("Expected original Sandbox intent");
+		const claim = await sql.begin((tx) =>
+			claimSandboxReconciliation(
+				tx,
+				{
+					itemId: outbox.id,
+					workerId: "business-worker",
+					leaseDurationMs: 30000,
+				},
+				policy,
+				directory,
+			),
+		);
+		if (!claim?.previousObservation)
+			throw new Error("Expected adopted resources");
+		const resources = claim.previousObservation.resources;
+		const record = (
+			observation: Parameters<typeof recordSandboxObservation>[2],
+		) =>
+			sql.begin((tx) =>
+				recordSandboxObservation(tx, claim, observation, policy, directory),
+			);
+		expect(
+			await record({ status: "ready", executorDrainRequired: true, resources }),
+		).toBe("stale");
+		expect(await record({ status: "ready", resources })).toBe("stale");
+		expect(
+			await reserve.store.recordExecutorPromotion(promotion),
+		).not.toBeNull();
+		expect(
+			await record({ status: "ready", executorDrainRequired: true, resources }),
+		).toBe("committed");
+	});
 });

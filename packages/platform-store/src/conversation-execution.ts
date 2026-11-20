@@ -1294,7 +1294,10 @@ export class PostgresConversationExecutionTransactionV1
 				traceId: request.command.traceId,
 				occurredAt,
 			});
-			await adoptSessionSandboxReserveV1(transaction, admission);
+			await adoptSessionSandboxReserveV1(transaction, admission, {
+				requestId: request.command.requestId,
+				traceId: request.command.traceId,
+			});
 			await completeIdempotency(
 				transaction,
 				reservationId,

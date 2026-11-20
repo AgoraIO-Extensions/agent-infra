@@ -127,6 +127,110 @@ export interface SessionSandboxReserveV1 {
 	readonly profile: SessionSandboxReserveProfileV1;
 	readonly operations: readonly SessionSandboxReserveOperationV1[];
 	readonly expiresAt: Date;
+	/** Present only for an independent-executor reserve (HLD §10.3.1). */
+	readonly executorStartup?: SessionSandboxReserveExecutorStartupV1 | null;
+}
+/** One writer-bound write of the one-time executor identity projection Secret. */
+export interface SessionSandboxReserveProjectionWriteV1 {
+	readonly attemptId: string;
+	readonly status: "pending" | "unknown" | "confirmed" | "rejected";
+	/** Actual identity once created; original identity for a conditional DELETE. */
+	readonly resource: SessionSandboxResourceIdentityV1 | null;
+	readonly absent: boolean;
+	/** Terminal response of the original call, distinct from observation. */
+	readonly writeCompletion: "pending" | "response";
+	readonly writer: { readonly owner: string; readonly fence: number };
+}
+/**
+ * Non-secret startup facts of one reserve Pod instance. The projection is a
+ * temporary resource outside the six long-lived `operations` (Spec §10.1.1).
+ */
+export interface SessionSandboxReserveExecutorStartupV1 {
+	readonly schemaVersion: 1;
+	/** Equals the projection Secret name: `<podName>-executor-<resourceFence>`. */
+	readonly startupRef: string;
+	/** Absolute deadline taken from the database clock before the Pod create. */
+	readonly deadlineMs: number;
+	readonly writer: { readonly owner: string; readonly fence: number };
+	readonly projection: {
+		readonly podUid: string;
+		readonly hostKeyId: string;
+		/** Public verification key fixed before the projection is published. */
+		readonly hostPublicKey: string;
+		readonly bindingDigest: string;
+		readonly create: SessionSandboxReserveProjectionWriteV1;
+		readonly deletes: readonly SessionSandboxReserveProjectionWriteV1[];
+	} | null;
+	readonly consumption: {
+		readonly attemptId: string;
+		readonly podUid: string;
+		readonly projectionUid: string;
+		readonly hostKeyId: string;
+		readonly runnerEpoch: string;
+	} | null;
+}
+export function sessionSandboxReserveExecutorStartupRefV1(sandboxId: string) {
+	return `sandbox-${sandboxId}-executor-1`;
+}
+/** Every projection write has its original terminal response. */
+export function sessionSandboxReserveExecutorSettledV1(
+	startup: SessionSandboxReserveExecutorStartupV1 | null | undefined,
+): boolean {
+	const projection = startup?.projection;
+	return (
+		!projection ||
+		[projection.create, ...projection.deletes].every(
+			(write) => write.writeCompletion === "response",
+		)
+	);
+}
+function projectionRemoved(
+	projection: NonNullable<SessionSandboxReserveExecutorStartupV1["projection"]>,
+): boolean {
+	const last = projection.deletes.at(-1);
+	return (
+		!!last &&
+		last.status === "confirmed" &&
+		last.writeCompletion === "response" &&
+		last.absent &&
+		!!projection.create.resource?.uid &&
+		last.resource?.uid === projection.create.resource.uid
+	);
+}
+/** Ready needs both-role consumption and confirmed removal of the original projection. */
+function executorReady(
+	startup: SessionSandboxReserveExecutorStartupV1,
+	operations: readonly SessionSandboxReserveOperationV1[],
+): boolean {
+	const { projection, consumption } = startup;
+	if (!projection || !consumption) return false;
+	const { create } = projection;
+	const pod = operations.find(
+		(o) => o.kind === "Pod" && o.operation === "create",
+	);
+	return (
+		sessionSandboxReserveExecutorSettledV1(startup) &&
+		create.status === "confirmed" &&
+		!create.absent &&
+		!!create.resource?.uid &&
+		pod?.resource?.uid === projection.podUid &&
+		consumption.attemptId === create.attemptId &&
+		consumption.podUid === projection.podUid &&
+		consumption.projectionUid === create.resource.uid &&
+		consumption.hostKeyId === projection.hostKeyId &&
+		projectionRemoved(projection)
+	);
+}
+/** Release needs every projection write settled and an original projection confirmed absent. */
+function executorReleasable(
+	startup: SessionSandboxReserveExecutorStartupV1,
+): boolean {
+	const { projection } = startup;
+	if (!projection) return true;
+	if (!sessionSandboxReserveExecutorSettledV1(startup)) return false;
+	return (
+		projection.create.status === "rejected" || projectionRemoved(projection)
+	);
 }
 export interface SessionSandboxReserveClaimV1
 	extends SessionSandboxReserveV1,
@@ -270,11 +374,14 @@ export function canReadySessionSandboxReserveV1(input: {
 	operations: readonly SessionSandboxReserveOperationV1[];
 	bootstrapReady: boolean;
 	businessStateAbsent: boolean;
+	executorStartup?: SessionSandboxReserveExecutorStartupV1 | null;
 }): boolean {
 	return (
 		input.status === "preparing" &&
 		input.bootstrapReady &&
 		input.businessStateAbsent &&
+		(!input.executorStartup ||
+			executorReady(input.executorStartup, input.operations)) &&
 		input.operations.length === 6 &&
 		sessionSandboxReserveResourceKindsV1.every(
 			(kind) =>
@@ -295,9 +402,11 @@ export function canReadySessionSandboxReserveV1(input: {
 export function canReleaseSessionSandboxReserveV1(input: {
 	status: SessionSandboxReserveStatusV1;
 	operations: readonly SessionSandboxReserveOperationV1[];
+	executorStartup?: SessionSandboxReserveExecutorStartupV1 | null;
 }): boolean {
 	return (
 		input.status === "retiring" &&
+		(!input.executorStartup || executorReleasable(input.executorStartup)) &&
 		input.operations.every(
 			(operation) => operation.writeCompletion === "response",
 		) &&

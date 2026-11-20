@@ -811,8 +811,13 @@ export async function recordSandboxExecutorRetirement(
 		) as ready
 	`;
 	if (priorAdmission?.ready) return null;
-	const [expired] = await transaction<{ expired: boolean }[]>`
-		select (details->>'deadlineMs')::numeric <= extract(epoch from clock_timestamp()) * 1000 as expired
+	// A claimed executor reserve keeps its original deadline for first consumption
+	// only; a later NotReady is a promotion failure, never startup-timeout retirement.
+	const [expired] = await transaction<
+		{ expired: boolean; source: string | null }[]
+	>`
+		select (details->>'deadlineMs')::numeric <= extract(epoch from clock_timestamp()) * 1000 as expired,
+			details->>'source' as source
 		from platform.conversation_audit_events
 		where conversation_id = ${claim.sandbox.sessionId}
 			and action = 'conversation.sandbox.observed'
@@ -824,6 +829,7 @@ export async function recordSandboxExecutorRetirement(
 	`;
 	if (
 		!expired?.expired ||
+		expired.source === "reserve" ||
 		resources.length > 2 ||
 		new Set(resources.map(({ kind }) => kind)).size !== resources.length ||
 		resources.some(
@@ -960,12 +966,14 @@ export async function recordSandboxObservation(
 	if (observation.status === "ready" && context.purpose === "prepare") {
 		if ((await readExecutorStartupRetirement(transaction, claim)) !== null)
 			return "stale";
-		if (
-			observation.executorDrainRequired &&
-			context.allocation.resource_observation?.status !== "ready"
-		) {
+		if (context.allocation.resource_observation?.status !== "ready") {
 			const [startup] = await transaction<
-				{ on_time: boolean; previously_ready: boolean }[]
+				{
+					on_time: boolean;
+					previously_ready: boolean;
+					source: string | null;
+					promoted: boolean;
+				}[]
 			>`
 				select (s.details->>'deadlineMs')::numeric > extract(epoch from clock_timestamp()) * 1000 as on_time,
 					exists (
@@ -977,7 +985,15 @@ export async function recordSandboxObservation(
 							and r.details->>'sessionGeneration' = s.details->>'sessionGeneration'
 							and r.details->>'resourceFence' = s.details->>'resourceFence'
 							and extract(epoch from r.occurred_at) * 1000 < (s.details->>'deadlineMs')::numeric
-					) as previously_ready
+					) as previously_ready,
+					s.details->>'source' as source,
+					exists (
+						select 1 from platform.session_sandbox_executor_promotions p
+						where p.sandbox_id = ${claim.sandbox.sandboxId}
+							and p.conversation_id = ${claim.sandbox.sessionId}
+							and p.session_generation = ${claim.sandbox.generation}
+							and p.resource_fence = ${claim.resourceFence}
+					) as promoted
 				from platform.conversation_audit_events s
 				where s.conversation_id = ${claim.sandbox.sessionId}
 					and s.action = 'conversation.sandbox.observed'
@@ -987,7 +1003,16 @@ export async function recordSandboxObservation(
 					and s.details->>'resourceFence' = ${String(claim.resourceFence)}
 				order by s.occurred_at desc, s.id desc limit 1
 			`;
-			if (!startup?.on_time && !startup?.previously_ready) return "stale";
+			// A claimed executor reserve becomes business-ready only after its
+			// promotion receipt commits; its original startup deadline no longer applies.
+			if (startup?.source === "reserve") {
+				if (!startup.promoted) return "stale";
+			} else if (
+				observation.executorDrainRequired &&
+				!startup?.on_time &&
+				!startup?.previously_ready
+			)
+				return "stale";
 		}
 	}
 
