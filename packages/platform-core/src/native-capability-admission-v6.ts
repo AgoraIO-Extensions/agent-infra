@@ -416,12 +416,21 @@ export function parseNativeCapabilityAdmissionRequestV6(
 	});
 }
 
+type NativeCapabilityAdmissionDigestInputV6 = Omit<
+	NativeCapabilityAdmissionRequestV6,
+	| "schemaVersion"
+	| "requestId"
+	| "traceId"
+	| "capabilitySourceVersion"
+	| "parametersDigest"
+	| "configVersion"
+>;
+
 export function nativeCapabilityAdmissionRequestDigestV6(
 	request: NativeCapabilityAdmissionRequestV6,
 ): string {
-	// Public input + authorization scope identify admission. Resolved config,
-	// Key and allocated operation IDs belong only to the frozen operation.
 	const {
+		schemaVersion: _schemaVersion,
 		requestId: _requestId,
 		traceId: _traceId,
 		capabilitySourceVersion: _sourceVersion,
@@ -429,9 +438,37 @@ export function nativeCapabilityAdmissionRequestDigestV6(
 		configVersion: _configVersion,
 		...business
 	} = request;
+	return nativeCapabilityAdmissionDigest(business);
+}
+
+function nativeCapabilityAdmissionDigest(
+	business: NativeCapabilityAdmissionDigestInputV6,
+): string {
+	// Resolved config, Key and allocated operation IDs belong only to the frozen operation.
 	return createHash("sha256")
 		.update(JSON.stringify(canonical({ ...business, schemaVersion: 3 })))
 		.digest("hex");
+}
+
+export function nativeCapabilityAdmissionReplayDigestV6(
+	invocation: NativeCapabilityAdmissionRequestV3,
+	authority: NativeCapabilityAdmissionV6AuthorityBinding,
+): string {
+	return nativeCapabilityAdmissionDigest({
+		principal: authority.principal,
+		executionSource: authority.executionSource,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		sessionGeneration: authority.sessionGeneration,
+		hostSessionRef: authority.hostSessionRef,
+		conversationId: invocation.conversationId,
+		capabilityId: invocation.capabilityId,
+		directoryRevision: invocation.directoryRevision,
+		parameters: invocation.parameters,
+		modelOptionId: invocation.selection.modelOptionId,
+		reasoningLevel: invocation.selection.reasoningLevel,
+		idempotencyKey: invocation.idempotencyKey,
+	});
 }
 
 export function nativeCapabilityOperationDigestV6(

@@ -61,6 +61,8 @@ export async function resolveCurrentTaskUser(
 			userId,
 		);
 	} catch (error) {
+		if (error instanceof TaskIdentityUnavailableErrorV1 && error.timedOut)
+			recordHttpFailureContext({ failureStep: "identity.timeout", error });
 		throw new HttpProtocolError(
 			"DEPENDENCY_UNAVAILABLE",
 			traceId,

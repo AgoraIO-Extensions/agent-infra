@@ -20,21 +20,26 @@ import {
 	type ConversationWithdrawDecisionV1,
 	type CreateConversationDecisionV1,
 	conversationAttachmentMergeWindowMsV1,
+	conversationExecutionSourceV1,
 	EvaluationDataErrorV1,
 	type FileRecordV1,
 	isNativeCapabilityModelSelectionCurrentV6,
 	type NativeCapabilityAdmissionDecisionV1,
+	type NativeCapabilityAdmissionRequestV3,
 	type NativeCapabilityAdmissionTransactionPortV1,
 	type NativeCapabilityAdmissionTransactionPortV6,
+	type NativeCapabilityAdmissionV6AuthorityBinding,
 	type NativeCapabilityAdmissionV6AuthorizationReader,
 	type NativeCapabilityAdmissionV6AuthorizationSnapshot,
 	type NativeCapabilityAdmissionV6Decision,
 	type NativeCapabilityInvocationPlanV1,
 	type NativeCapabilityInvocationPlanV6,
 	type NativeTextInputV1,
+	nativeCapabilityAdmissionReplayDigestV6,
 	nativeCapabilityParametersDigestV1,
 	PersonalApiCredentialErrorV1,
 	parseConversationOperationEventV2,
+	parseNativeCapabilityAdmissionRequestV3,
 	parseNativeCapabilityAttachmentsV1,
 	parseSessionSandboxReserveConfigurationV1,
 	parseTaskAuthorizationBoundaryV1,
@@ -611,6 +616,110 @@ export class PostgresConversationExecutionTransactionV1
 		});
 	}
 
+	/** Read accepted V3 retries using only the current authorized conversation scope. */
+	async readNativeCapabilityV6Replay(
+		publicInput: NativeCapabilityAdmissionRequestV3,
+		currentAuthority: ConversationExecutionAuthorityV1,
+	): Promise<NativeCapabilityAdmissionV6Decision | null> {
+		const invocation = parseNativeCapabilityAdmissionRequestV3(publicInput);
+		const taskAuthority = parseAuthority(currentAuthority);
+		return this.#transaction(async (transaction) => {
+			const [agent] = await transaction<
+				{ authorization_revision: string | null }[]
+			>`
+				select authorization_revision from platform.agents
+				where id = ${taskAuthority.agentId} for share
+			`;
+			if (
+				!agent ||
+				agent.authorization_revision !== taskAuthority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			const conversation = await lockConversationForRead(
+				transaction,
+				invocation.conversationId,
+			);
+			if (
+				!conversation ||
+				!matchesBinding(conversation, taskAuthority) ||
+				conversation.authorizationRevision !==
+					taskAuthority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			// A new, never-executed conversation follows normal admission.
+			if (!conversation.hostSessionRef || !conversation.principal) return null;
+			return this.#readNativeCapabilityV6Replay(
+				transaction,
+				invocation,
+				{
+					conversationId: conversation.conversationId,
+					principal: conversation.principal,
+					executionSource: conversationExecutionSourceV1(
+						conversation.channelId,
+					),
+					agentId: conversation.agentId,
+					actorId: conversation.actorId,
+					channelId: conversation.channelId,
+					authorizationRevision: conversation.authorizationRevision,
+					sessionGeneration: conversation.sessionGeneration,
+					hostSessionRef: conversation.hostSessionRef,
+				},
+				taskAuthority,
+			);
+		});
+	}
+
+	async #readNativeCapabilityV6Replay(
+		transaction: Transaction,
+		invocation: NativeCapabilityAdmissionRequestV3,
+		authority: NativeCapabilityAdmissionV6AuthorityBinding,
+		taskAuthority: ConversationExecutionAuthorityV1,
+	): Promise<NativeCapabilityAdmissionV6Decision | null> {
+		const existing = await readIdempotency(transaction, {
+			scopeType: "conversation",
+			scopeId: invocation.conversationId,
+			actorId: authority.actorId,
+			commandType: "native-capability.invoke.v2",
+			key: invocation.idempotencyKey,
+		});
+		if (!existing) return null;
+		const requestDigest = nativeCapabilityAdmissionReplayDigestV6(
+			invocation,
+			authority,
+		);
+		if (existing.request_digest !== requestDigest)
+			return { outcome: "conflict", reason: "idempotency_conflict" };
+		if (existing.status !== "completed" || existing.result === null)
+			return { outcome: "unavailable", reason: "idempotency_in_progress" };
+		const envelope = existing.result;
+		if (
+			typeof envelope !== "object" ||
+			Array.isArray(envelope) ||
+			!("plan" in envelope) ||
+			typeof envelope.plan !== "object" ||
+			envelope.plan === null ||
+			Array.isArray(envelope.plan)
+		)
+			return unavailable();
+		const saved = envelope.plan as NativeCapabilityInvocationPlanV6;
+		if (!isDeepStrictEqual(saved.taskBoundary, taskAuthority.taskBoundary))
+			return { outcome: "denied", reason: "authorization_lost" };
+		const payload = saved.outbox?.payload;
+		if (
+			!payload ||
+			typeof payload.requestId !== "string" ||
+			typeof payload.traceId !== "string"
+		)
+			return unavailable();
+		validateNativeCapabilityReplayPlanV6(saved, {
+			invocation,
+			taskAuthority,
+			authority,
+			requestDigest,
+		});
+		return { outcome: "replayed", plan: structuredClone(saved) };
+	}
+
 	/** Persists a pre-validated V6 plan atomically with idempotency and outbox state. */
 	async admitNativeCapabilityV6(
 		candidate: Parameters<
@@ -667,45 +776,13 @@ export class PostgresConversationExecutionTransactionV1
 				commandType: "native-capability.invoke.v2",
 				key: input.request.idempotencyKey,
 			};
-			const existing = await readIdempotency(transaction, scope);
-			if (existing) {
-				if (existing.request_digest !== input.requestDigest)
-					return { outcome: "conflict", reason: "idempotency_conflict" };
-				if (existing.status !== "completed" || existing.result === null)
-					return { outcome: "unavailable", reason: "idempotency_in_progress" };
-				const envelope = existing.result;
-				if (
-					typeof envelope !== "object" ||
-					Array.isArray(envelope) ||
-					!("plan" in envelope) ||
-					typeof envelope.plan !== "object" ||
-					envelope.plan === null ||
-					Array.isArray(envelope.plan)
-				)
-					return unavailable();
-				const saved = envelope.plan as NativeCapabilityInvocationPlanV6;
-				if (
-					!isDeepStrictEqual(
-						saved.taskBoundary,
-						input.taskAuthority.taskBoundary,
-					)
-				)
-					return { outcome: "denied", reason: "authorization_lost" };
-				const payload = saved.outbox?.payload;
-				if (
-					!payload ||
-					typeof payload.requestId !== "string" ||
-					typeof payload.traceId !== "string"
-				)
-					return unavailable();
-				validateNativeCapabilityReplayPlanV6(saved, {
-					invocation: input.invocation,
-					taskAuthority: input.taskAuthority,
-					authority: input.authority,
-					requestDigest: input.requestDigest,
-				});
-				return { outcome: "replayed", plan: structuredClone(saved) };
-			}
+			const replay = await this.#readNativeCapabilityV6Replay(
+				transaction,
+				input.invocation,
+				input.authority,
+				input.taskAuthority,
+			);
+			if (replay) return replay;
 			if (conversation.status !== "ready" || conversation.isolationPending)
 				return { outcome: "denied", reason: "conversation_unavailable" };
 			if (conversation.sandboxReady !== true)
@@ -723,6 +800,8 @@ export class PostgresConversationExecutionTransactionV1
 			if (!agent.modelConfiguration)
 				return { outcome: "unavailable", reason: "metadata_unavailable" };
 			if (
+				String(agent.runtimeConfiguration?.revision) !==
+					input.plan.configVersion ||
 				!isNativeCapabilityModelSelectionCurrentV6(
 					input.plan,
 					agent.modelConfiguration,
@@ -2379,6 +2458,8 @@ export class PostgresConversationExecutionTransactionV1
 				error instanceof PersonalApiCredentialErrorV1
 			)
 				throw error;
+			if (error instanceof postgres.PostgresError && error.code === "55P03")
+				throw new ConversationExecutionError("unavailable", "55P03");
 			return unavailable();
 		}
 	}

@@ -1,4 +1,6 @@
 import { NativeCapabilityInvocationResponseV1Schema } from "@agent-infra/contracts/pilot";
+import type { OperationalEvent } from "@agent-infra/observability";
+import { currentRequestMetadata } from "@agent-infra/observability/http";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
@@ -78,6 +80,12 @@ let db: postgres.Sql;
 let assembly: PlatformApiAssembly;
 let app: ReturnType<typeof createPlatformApp>;
 let afterDirectoryRead: () => Promise<void>;
+let browserSessionActive: boolean;
+let taskIdentityTimeout: boolean;
+let directoryReads: number;
+let liveDirectoryRevision: string;
+let requestMetadata: ReturnType<typeof currentRequestMetadata>;
+const events: OperationalEvent[] = [];
 const unused = async (): Promise<never> => {
 	throw new Error("Unexpected fixture adapter call");
 };
@@ -93,14 +101,21 @@ beforeAll(async () => {
 			waitingTimeoutMs: 60_000,
 		},
 		identity: {
-			resolve: async () => identity,
-			resolveUser: async (userId) => ({
-				schemaVersion: 1,
-				userId,
-				accountStatus: "active",
-				organizationIds: [],
-				authorizationRevision: "directory-auth-1",
-			}),
+			resolve: async () => {
+				requestMetadata = currentRequestMetadata();
+				return browserSessionActive ? identity : null;
+			},
+			resolveUser: async (userId) => {
+				if (taskIdentityTimeout)
+					throw new DOMException("private identity evidence", "TimeoutError");
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "directory-auth-1",
+				};
+			},
 			hydrateUsers: async () => [],
 		},
 		admissions: {
@@ -132,19 +147,23 @@ beforeAll(async () => {
 						version !== 2
 					)
 						return null;
+					directoryReads++;
 					await afterDirectoryRead();
 					return {
 						schemaVersion: 1,
 						projectionVersion: 2,
 						selector: "commands",
-						revision: directoryRevision,
+						revision: liveDirectoryRevision,
 						capabilities: [{ ...command, parameters: [] }],
 					};
 				},
 			},
 		},
 	});
-	app = createPlatformApp(assembly.dependencies);
+	app = createPlatformApp(assembly.dependencies, {
+		record: (event) => events.push(event),
+		status: () => ({}),
+	});
 }, 120_000);
 
 afterAll(async () => {
@@ -155,6 +174,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	afterDirectoryRead = async () => {};
+	browserSessionActive = true;
+	taskIdentityTimeout = false;
+	liveDirectoryRevision = directoryRevision;
+	directoryReads = 0;
+	events.length = 0;
+	requestMetadata = undefined;
 	await db`truncate platform.agents, platform.conversations, platform.conversation_executions,
 		platform.relay_key_subjects, platform.idempotency_records, platform.outbox_items,
 		platform.conversation_audit_events, platform.audit_events cascade`;
@@ -305,9 +330,109 @@ it("reports a real PostgreSQL lock timeout as unavailable without exposing the e
 		await blocker;
 	}
 	expect(blocker).toBeDefined();
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			...requestMetadata,
+			stage: "http",
+			status: 503,
+			failureStep: "store.query",
+			sqlState: "55P03",
+		}),
+	);
 	expect(await durableCounts()).toEqual({
 		executions: 0,
 		outbox: 0,
 		idempotency: 0,
 	});
 }, 15_000);
+
+it("rechecks only the original browser session before writing", async () => {
+	afterDirectoryRead = async () => {
+		browserSessionActive = false;
+	};
+	expect(await invoke()).toEqual({
+		status: 503,
+		body: { outcome: "unavailable" },
+	});
+	expect(await durableCounts()).toEqual({
+		executions: 0,
+		outbox: 0,
+		idempotency: 0,
+	});
+});
+
+async function moveRuntimeConfiguration() {
+	await db.begin(async (transaction) => {
+		await transaction`insert into platform.agent_configuration_revisions
+			(agent_id,revision,source_reference,created_at,configuration)
+			values (${agentId},2,'fixture',now(),${db.json({ ...configuration, revision: 2 } as unknown as postgres.JSONValue)})`;
+		await transaction`update platform.agents set current_configuration_revision=2 where id=${agentId}`;
+	});
+}
+
+it("rejects a Runtime revision change while discovering the command even when the selection still exists", async () => {
+	afterDirectoryRead = moveRuntimeConfiguration;
+	expect(await invoke()).toEqual({ status: 409, body: { outcome: "stale" } });
+	expect(await durableCounts()).toEqual({
+		executions: 0,
+		outbox: 0,
+		idempotency: 0,
+	});
+});
+
+it.each(["directory", "key", "config"] as const)(
+	"reads the saved operation before checking the current %s and preserves same-key conflicts",
+	async (drift) => {
+		const first = await invoke();
+		expect(first.body.outcome).toBe("accepted");
+		if (drift === "directory") liveDirectoryRevision = "e".repeat(64);
+		if (drift === "key") {
+			await db`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${identity.userId}`;
+		}
+		if (drift === "config") await moveRuntimeConfiguration();
+		const before = directoryReads;
+		expect(await invoke()).toEqual({
+			...first,
+			body: { ...first.body, outcome: "replayed" },
+		});
+		expect(
+			await invoke({
+				...invocation,
+				selection: { ...invocation.selection, reasoningLevel: "low" },
+			}),
+		).toEqual({
+			status: 409,
+			body: { outcome: "conflict", reason: "idempotency_conflict" },
+		});
+		expect(directoryReads).toBe(before);
+		expect(await durableCounts()).toEqual({
+			executions: 1,
+			outbox: 1,
+			idempotency: 1,
+		});
+	},
+);
+
+it("records an identity timeout against the original request with a safe public reply", async () => {
+	afterDirectoryRead = async () => {
+		taskIdentityTimeout = true;
+	};
+	expect(await invoke()).toEqual({
+		status: 503,
+		body: { outcome: "unavailable" },
+	});
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			...requestMetadata,
+			stage: "http",
+			status: 503,
+			failureStep: "identity.timeout",
+		}),
+	);
+	expect(JSON.stringify(events)).not.toContain("private identity evidence");
+	expect(await durableCounts()).toEqual({
+		executions: 0,
+		outbox: 0,
+		idempotency: 0,
+	});
+});

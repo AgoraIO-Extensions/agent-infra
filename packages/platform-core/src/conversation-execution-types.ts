@@ -946,7 +946,10 @@ export interface ConversationExecutionUseCaseOptionsV1 {
 export class ConversationExecutionError extends Error {
 	readonly code: "invalid_input" | "unavailable";
 
-	constructor(code: "invalid_input" | "unavailable") {
+	constructor(
+		code: "invalid_input" | "unavailable",
+		readonly sqlState?: "55P03",
+	) {
 		super(
 			code === "invalid_input"
 				? "Invalid conversation command"

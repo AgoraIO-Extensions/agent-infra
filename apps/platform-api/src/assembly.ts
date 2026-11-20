@@ -38,6 +38,7 @@ import {
 	type FileLimitDeclarationSubjectV1,
 	type FileLimitDeclarationsV1,
 	type FileScopeV1,
+	type NativeCapabilityAdmissionV6AuthorizationReader,
 	type NativeCapabilityMetadataRevalidationPortV1,
 	readFileLimitDeclarationV1,
 	resolveFileLimitsV1,
@@ -1080,11 +1081,10 @@ export function assemblePlatformApi(
 					}),
 					admitWithIdentity: async ({ identity, request, requestContext }) => {
 						if (request.schemaVersion === 3) {
-							const authorizeV6 = async (
-								readAuthorization = conversationTransaction.readNativeCapabilityV6Authorization,
-							) => {
+							const currentAuthority = async () => {
+								const current = await requestContext.revalidate(identity);
 								const decision = await conversationAuthorization.authorize(
-									identity,
+									current,
 									{
 										schemaVersion: 1,
 										operation: "native-capability.invoke",
@@ -1095,25 +1095,33 @@ export function assemblePlatformApi(
 									throw new Error(
 										"Native capability authorization unavailable",
 									);
-								if (decision.outcome !== "allowed")
-									return { outcome: "denied" as const };
+								if (decision.outcome !== "allowed") return null;
 								requestContext.confirmPolicy(
 									decision.authority,
 									request.conversationId,
 								);
-								const snapshot = await readAuthorization({
-									authority: decision.authority,
-									conversationId: request.conversationId,
-								});
-								if (!snapshot) return { outcome: "denied" as const };
-								return { outcome: "allowed" as const, snapshot };
+								return decision.authority;
 							};
-							const first = await authorizeV6();
-							if (first.outcome !== "allowed") return first;
+							const initialAuthority = await currentAuthority();
+							if (!initialAuthority) return { outcome: "denied" as const };
+							const replay =
+								await conversationTransaction.readNativeCapabilityV6Replay(
+									request,
+									initialAuthority,
+								);
+							if (replay) return replay;
+							const first =
+								await conversationTransaction.readNativeCapabilityV6Authorization(
+									{
+										authority: initialAuthority,
+										conversationId: request.conversationId,
+									},
+								);
+							if (!first) return { outcome: "denied" as const };
 							const projection = await assembledNativeMetadata?.reader.read(
 								identity,
 								request.conversationId,
-								first.snapshot.metadataExecutionId,
+								first.metadataExecutionId,
 								"commands",
 								requestContext,
 								2,
@@ -1137,22 +1145,22 @@ export function assemblePlatformApi(
 								schemaVersion: 6 as const,
 								requestId: request.requestId,
 								traceId: request.traceId,
-								principal: first.snapshot.authority.principal,
-								executionSource: first.snapshot.executionSource,
-								channelId: first.snapshot.authority.channelId,
-								agentId: first.snapshot.authority.agentId,
+								principal: first.authority.principal,
+								executionSource: first.executionSource,
+								channelId: first.authority.channelId,
+								agentId: first.authority.agentId,
 								conversationId: request.conversationId,
 								executionId,
 								turnId: randomUUID(),
-								sessionGeneration: first.snapshot.sessionGeneration,
-								hostSessionRef: first.snapshot.hostSessionRef,
+								sessionGeneration: first.sessionGeneration,
+								hostSessionRef: first.hostSessionRef,
 								operation: {
 									kind: "execution" as const,
 									id: executionId,
 									deliveryFence: 1,
 									executionDeliveryFence: 1,
 								},
-								keyBinding: first.snapshot.keyBinding,
+								keyBinding: first.keyBinding,
 								capabilityId: request.capabilityId,
 								capabilityKind: "command" as const,
 								directoryRevision: request.directoryRevision,
@@ -1162,22 +1170,35 @@ export function assemblePlatformApi(
 									.digest("hex"),
 								capabilitySourceVersion: capability.source.version,
 								selection: request.selection,
-								configVersion: first.snapshot.configVersion,
+								configVersion: first.configVersion,
 							};
 							const useCase = createNativeCapabilityAdmissionUseCaseV6({
 								authorization: {
-									authorize: async (_request, readAuthorization) => {
-										const next = await authorizeV6(readAuthorization);
-										return next.outcome === "allowed"
-											? {
-													outcome: "allowed" as const,
-													authority: next.snapshot.authority,
-													taskAuthority: next.snapshot.taskAuthority,
-													modelConfigurationRevision:
-														next.snapshot.modelConfigurationRevision,
-													keyBinding: next.snapshot.keyBinding,
-												}
-											: { outcome: "denied" as const };
+									authorize: async (
+										_request,
+										readAuthorization?: NativeCapabilityAdmissionV6AuthorizationReader,
+									) => {
+										const authority = await currentAuthority();
+										if (!authority) return { outcome: "denied" as const };
+										const read =
+											readAuthorization ??
+											conversationTransaction.readNativeCapabilityV6Authorization;
+										const next = await read({
+											authority,
+											conversationId: request.conversationId,
+										});
+										if (!next) return { outcome: "denied" as const };
+										// Check the original browser session again after the awaited Store checks.
+										if (readAuthorization)
+											await requestContext.revalidate(identity);
+										return {
+											outcome: "allowed" as const,
+											authority: next.authority,
+											taskAuthority: next.taskAuthority,
+											modelConfigurationRevision:
+												next.modelConfigurationRevision,
+											keyBinding: next.keyBinding,
+										};
 									},
 								},
 								transaction: conversationTransaction,
