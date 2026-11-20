@@ -172,6 +172,82 @@ export interface SessionSandboxReserveExecutorStartupV1 {
 export function sessionSandboxReserveExecutorStartupRefV1(sandboxId: string) {
 	return `sandbox-${sandboxId}-executor-1`;
 }
+/**
+ * Host instance evidence after the Worker verified its signature (HLD
+ * §10.3.2). The Store re-checks scope, binding and lifetime when it commits.
+ */
+export interface SessionSandboxInstanceEvidenceV1 {
+	readonly scope:
+		| {
+				readonly phase: "reserve";
+				readonly reserveRef: string;
+				readonly reserveDeliveryFence: number;
+		  }
+		| {
+				readonly phase: "claimed";
+				readonly claimRef: string;
+				readonly allocationRef: string;
+		  };
+	readonly podUid: string;
+	readonly hostKeyId: string;
+	readonly runnerEpoch: string;
+	readonly generation: number;
+	readonly resourceFence: number;
+	readonly issuedAtMs: number;
+	readonly observedAtMs: number;
+	readonly expiresAtMs: number;
+}
+/** A read authorization lasts at most 30 seconds and bounds the evidence. */
+export const sessionSandboxInstanceEvidenceMaxMsV1 = 30_000;
+export function sessionSandboxReserveRefV1(sandboxId: string) {
+	return `reserve:${sandboxId}`;
+}
+export function sessionSandboxReserveClaimRefV1(input: {
+	readonly sandboxId: string;
+	readonly sessionId: string;
+}) {
+	return `claim:${input.sandboxId}:${input.sessionId}`;
+}
+export function sessionSandboxAllocationRefV1(input: {
+	readonly sandboxId: string;
+	readonly sessionId: string;
+	readonly generation: number;
+	readonly resourceFence: number;
+}) {
+	return `allocation:${input.sandboxId}:${input.sessionId}:${input.generation}:${input.resourceFence}`;
+}
+/** Shape and window only; scope, binding and the database clock are checked by the Store. */
+export function sessionSandboxInstanceEvidenceShapeV1(
+	evidence: unknown,
+): evidence is SessionSandboxInstanceEvidenceV1 {
+	if (!evidence || typeof evidence !== "object") return false;
+	const value = evidence as SessionSandboxInstanceEvidenceV1;
+	const scope = value.scope;
+	const text = (entry: unknown) =>
+		typeof entry === "string" && entry.length > 0 && entry.length <= 512;
+	const positive = (entry: unknown) =>
+		typeof entry === "number" && Number.isSafeInteger(entry) && entry > 0;
+	return (
+		!!scope &&
+		(scope.phase === "reserve"
+			? text(scope.reserveRef) && positive(scope.reserveDeliveryFence)
+			: scope.phase === "claimed" &&
+				text(scope.claimRef) &&
+				text(scope.allocationRef)) &&
+		[value.podUid, value.hostKeyId, value.runnerEpoch].every(text) &&
+		[
+			value.generation,
+			value.resourceFence,
+			value.issuedAtMs,
+			value.observedAtMs,
+			value.expiresAtMs,
+		].every(positive) &&
+		value.issuedAtMs <= value.observedAtMs &&
+		value.observedAtMs < value.expiresAtMs &&
+		value.expiresAtMs - value.issuedAtMs <=
+			sessionSandboxInstanceEvidenceMaxMsV1
+	);
+}
 /** Every projection write has its original terminal response. */
 export function sessionSandboxReserveExecutorSettledV1(
 	startup: SessionSandboxReserveExecutorStartupV1 | null | undefined,

@@ -2148,10 +2148,40 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 		};
 	}
 	type Prepared = Awaited<ReturnType<typeof executorPrepared>>;
-	const notReady = (reserve: Prepared, lease: Lease = reserve.lease) =>
+	async function dbNow(): Promise<number> {
+		const [row] = await sql<{ now: number }[]>`
+			select floor(extract(epoch from clock_timestamp()) * 1000)::float8 as now`;
+		if (typeof row?.now !== "number") throw new Error("Expected clock");
+		return row.now;
+	}
+	async function reserveEvidence(
+		reserve: Prepared,
+		lease: Lease = reserve.lease,
+		overrides: Record<string, unknown> = {},
+	) {
+		const now = await dbNow();
+		return {
+			scope: {
+				phase: "reserve" as const,
+				reserveRef: `reserve:${reserve.sandboxId}`,
+				reserveDeliveryFence: lease.deliveryFence,
+			},
+			podUid: reserve.podUid,
+			hostKeyId: "host-key-1",
+			runnerEpoch: "runner-epoch-1",
+			generation: 1,
+			resourceFence: 1,
+			issuedAtMs: now,
+			observedAtMs: now,
+			expiresAtMs: now + 20000,
+			...overrides,
+		};
+	}
+	const notReady = async (reserve: Prepared, lease: Lease = reserve.lease) =>
 		reserve.store.markReady(lease, {
 			bootstrapReady: true,
 			businessStateAbsent: true,
+			instanceEvidence: await reserveEvidence(reserve, lease),
 		});
 	async function consumeAndRemove(reserve: Prepared) {
 		const { store, lease, intent, projection, podUid } = reserve;
@@ -2172,6 +2202,7 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 				projectionUid: projection.uid,
 				hostKeyId: intent.hostKeyId,
 				runnerEpoch: "runner-epoch-1",
+				evidence: await reserveEvidence(reserve),
 			}),
 		).toBe(true);
 		expect(
@@ -2255,6 +2286,7 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 				projectionUid: projection.uid,
 				hostKeyId: intent.hostKeyId,
 				runnerEpoch: "runner-epoch-1",
+				evidence: await reserveEvidence(reserve),
 			}),
 		).toBe(true);
 		expect(await notReady(reserve)).toBe(false);
@@ -2362,6 +2394,7 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 				projectionUid: reserve.projection.uid,
 				hostKeyId: intent.hostKeyId,
 				runnerEpoch: "runner-epoch-1",
+				evidence: await reserveEvidence(reserve),
 			}),
 		).toBe(false);
 		expect(await notReady(reserve)).toBe(false);
@@ -2467,6 +2500,7 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 				projectionUid: reserve.projection.uid,
 				hostKeyId: intent.hostKeyId,
 				runnerEpoch: "runner-epoch-1",
+				evidence: await reserveEvidence(reserve),
 			}),
 		).toBe(false);
 		expect(await notReady(reserve)).toBe(false);
@@ -2597,9 +2631,269 @@ describe("independent executor reserve startup and projection (#4248 B 3a)", () 
 			pvcUid: `PersistentVolumeClaim-uid-${reserve.sandboxId}`,
 			hostKeyId: "host-key-1",
 			runnerEpoch: "runner-epoch-1",
+			evidence: await claimedEvidence(reserve),
 		};
 		return { reserve, promotion };
 	}
+	async function claimedEvidence(
+		reserve: Prepared,
+		overrides: Record<string, unknown> = {},
+	) {
+		const now = await dbNow();
+		return {
+			scope: {
+				phase: "claimed" as const,
+				claimRef: `claim:${reserve.sandboxId}:${reserve.sessionId}`,
+				allocationRef: `allocation:${reserve.sandboxId}:${reserve.sessionId}:1:1`,
+			},
+			podUid: reserve.podUid,
+			hostKeyId: "host-key-1",
+			runnerEpoch: "runner-epoch-1",
+			generation: 1,
+			resourceFence: 1,
+			issuedAtMs: now,
+			observedAtMs: now,
+			expiresAtMs: now + 20000,
+			...overrides,
+		};
+	}
+
+	it("rejects a promotion without valid, current claimed instance evidence", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		const { evidence: _evidence, ...withoutEvidence } = promotion;
+		expect(
+			await reserve.store.recordExecutorPromotion(
+				withoutEvidence as unknown as typeof promotion,
+			),
+		).toBeNull();
+		const [claimed] = await sql<{ claimed_ms: number }[]>`
+			select floor(extract(epoch from claimed_at) * 1000)::float8 as claimed_ms
+			from platform.session_sandbox_reserves`;
+		const now = await dbNow();
+		for (const evidence of [
+			await claimedEvidence(reserve, { expiresAtMs: now - 1 }),
+			await claimedEvidence(reserve, {
+				issuedAtMs: (claimed?.claimed_ms ?? now) - 1000,
+				observedAtMs: (claimed?.claimed_ms ?? now) - 1000,
+			}),
+			await claimedEvidence(reserve, { expiresAtMs: now + 31000 }),
+			await claimedEvidence(reserve, { observedAtMs: now + 60000 }),
+			await claimedEvidence(reserve, {
+				scope: { ...promotion.evidence.scope, claimRef: "claim:other" },
+			}),
+			await claimedEvidence(reserve, {
+				scope: {
+					...promotion.evidence.scope,
+					allocationRef: `allocation:${reserve.sandboxId}:${reserve.sessionId}:1:2`,
+				},
+			}),
+			await reserveEvidence(reserve),
+			await claimedEvidence(reserve, { podUid: "other-pod" }),
+			await claimedEvidence(reserve, { runnerEpoch: "runner-epoch-2" }),
+			await claimedEvidence(reserve, { resourceFence: 2 }),
+		])
+			expect(
+				await reserve.store.recordExecutorPromotion({
+					...promotion,
+					evidence: evidence as typeof promotion.evidence,
+				}),
+			).toBeNull();
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_executor_promotions`,
+		).toEqual([{ count: 0 }]);
+		expect(
+			await reserve.store.recordExecutorPromotion(promotion),
+		).not.toBeNull();
+	});
+
+	it("checks the evidence lifetime with the database clock after the allocation lock", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		const now = await dbNow();
+		const evidence = await claimedEvidence(reserve, {
+			expiresAtMs: now + 1500,
+		});
+		let release: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let locked: () => void = () => {};
+		const lockTaken = new Promise<void>((resolve) => {
+			locked = resolve;
+		});
+		const holder = sql.begin(async (tx) => {
+			await tx`select sandbox_id from platform.session_sandbox_allocations where sandbox_id = ${reserve.sandboxId} for update`;
+			locked();
+			await held;
+		});
+		await lockTaken;
+		const pending = reserve.store.recordExecutorPromotion({
+			...promotion,
+			evidence,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 2500));
+		release();
+		await holder;
+		expect(await pending).toBeNull();
+	});
+
+	it("never promotes the original reserve instance under an advanced fence", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		await sql`update platform.session_sandbox_allocations set resource_fence = 2 where sandbox_id = ${reserve.sandboxId}`;
+		expect(
+			await reserve.store.recordExecutorPromotion({
+				...promotion,
+				resourceFence: 2,
+				evidence: await claimedEvidence(reserve, {
+					resourceFence: 2,
+					scope: {
+						...promotion.evidence.scope,
+						allocationRef: `allocation:${reserve.sandboxId}:${reserve.sessionId}:1:2`,
+					},
+				}),
+			}),
+		).toBeNull();
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_executor_promotions`,
+		).toEqual([{ count: 0 }]);
+	});
+
+	it("refuses same-fence replacement Pod or runner epoch evidence for promotion", async () => {
+		const { reserve, promotion } = await claimedExecutorReserve();
+		for (const change of [
+			{ podUid: "replacement-pod" },
+			{ runnerEpoch: "runner-epoch-2" },
+			{ hostKeyId: "host-key-2" },
+		])
+			expect(
+				await reserve.store.recordExecutorPromotion({
+					...promotion,
+					...change,
+					evidence: await claimedEvidence(reserve, change),
+				}),
+			).toBeNull();
+	});
+
+	it("checks reserve-scope evidence for consumption and ready", async () => {
+		const reserve = await executorPrepared();
+		const { store, lease, intent, projection, podUid } = reserve;
+		expect(await store.recordExecutorProjectionIntent(lease, intent)).toBe(
+			true,
+		);
+		expect(
+			await store.recordExecutorProjectionCreateResponse(lease, {
+				attemptId: intent.attemptId,
+				response: "created",
+				resource: projection,
+			}),
+		).toBe(true);
+		const consumption = {
+			attemptId: intent.attemptId,
+			podUid,
+			projectionUid: projection.uid,
+			hostKeyId: intent.hostKeyId,
+			runnerEpoch: "runner-epoch-1",
+		};
+		const now = await dbNow();
+		for (const evidence of [
+			await reserveEvidence(reserve, lease, { expiresAtMs: now - 1 }),
+			await reserveEvidence(reserve, lease, {
+				scope: {
+					phase: "reserve",
+					reserveRef: `reserve:${reserve.sandboxId}`,
+					reserveDeliveryFence: lease.deliveryFence - 1,
+				},
+			}),
+			await reserveEvidence(reserve, lease, {
+				scope: {
+					phase: "reserve",
+					reserveRef: "reserve:other",
+					reserveDeliveryFence: lease.deliveryFence,
+				},
+			}),
+			await reserveEvidence(reserve, lease, { runnerEpoch: "runner-epoch-2" }),
+			await reserveEvidence(reserve, lease, { podUid: "other-pod" }),
+		])
+			expect(
+				await store.recordExecutorConsumption(lease, {
+					...consumption,
+					evidence: evidence as Awaited<ReturnType<typeof reserveEvidence>>,
+				}),
+			).toBe(false);
+		expect(
+			await store.recordExecutorConsumption(lease, {
+				...consumption,
+				evidence: await reserveEvidence(reserve),
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteIntent(lease, {
+				attemptId: "projection-delete-1",
+				resource: projection,
+			}),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionDeleteResponse(lease, {
+				attemptId: "projection-delete-1",
+				response: "absent",
+			}),
+		).toBe(true);
+		const ready = (instanceEvidence?: unknown) =>
+			store.markReady(lease, {
+				bootstrapReady: true,
+				businessStateAbsent: true,
+				...(instanceEvidence
+					? {
+							instanceEvidence: instanceEvidence as Awaited<
+								ReturnType<typeof reserveEvidence>
+							>,
+						}
+					: {}),
+			});
+		expect(await ready()).toBe(false);
+		expect(
+			await ready(
+				await reserveEvidence(reserve, lease, {
+					expiresAtMs: (await dbNow()) - 1,
+				}),
+			),
+		).toBe(false);
+		expect(
+			await ready(
+				await reserveEvidence(reserve, lease, { hostKeyId: "host-key-2" }),
+			),
+		).toBe(false);
+		expect(await ready(await reserveEvidence(reserve))).toBe(true);
+	});
+
+	it("keeps an unresolved projection create counted against concurrent creates after retirement", async () => {
+		const store = reserves({ ...config, maximumConcurrentCreates: 1 });
+		const reserve = await executorPrepared(store);
+		expect(
+			await store.recordExecutorProjectionIntent(reserve.lease, reserve.intent),
+		).toBe(true);
+		expect(
+			await store.recordExecutorProjectionResult(reserve.lease, {
+				attemptId: reserve.intent.attemptId,
+			}),
+		).toBe(true);
+		expect(await store.retire(reserve.sandboxId)).toBe(true);
+		expect(await store.prepare("agent")).toBeNull();
+		const retiring = await store.claimLease({
+			sandboxId: reserve.sandboxId,
+			workerId: "worker-retire",
+			leaseDurationMs: 30000,
+		});
+		if (!retiring) throw new Error("Expected retiring lease");
+		// The original writer's late response settles the projection write and frees the slot.
+		expect(
+			await store.recordExecutorProjectionCreateResponse(reserve.lease, {
+				attemptId: reserve.intent.attemptId,
+				response: "rejected",
+				resource: null,
+			}),
+		).toBe(true);
+		expect(await store.prepare("agent")).toBeTypeOf("string");
+	});
 
 	it("binds one promotion receipt to the claimed allocation and its original instance", async () => {
 		const { reserve, promotion } = await claimedExecutorReserve();

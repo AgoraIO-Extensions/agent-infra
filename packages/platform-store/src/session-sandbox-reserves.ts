@@ -18,6 +18,7 @@ import {
 	parseSessionSandboxReserveConfigurationV1,
 	resolveCurrentPersonalApiUserV1,
 	type SessionSandboxBindingV1,
+	type SessionSandboxInstanceEvidenceV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReserveClaimV1,
 	type SessionSandboxReserveConfigurationV1,
@@ -31,10 +32,14 @@ import {
 	type SessionSandboxResourceBudgetV1,
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxVerifiedPolicyV1,
+	sessionSandboxAllocationRefV1,
 	sessionSandboxBudgetFitsV1,
+	sessionSandboxInstanceEvidenceShapeV1,
+	sessionSandboxReserveClaimRefV1,
 	sessionSandboxReserveDigestV1,
 	sessionSandboxReserveExecutorSettledV1,
 	sessionSandboxReserveExecutorStartupRefV1,
+	sessionSandboxReserveRefV1,
 	sessionSandboxReserveResourceKindsV1,
 	sessionSandboxReserveTargetV1,
 	type TaskUserDirectoryV1,
@@ -188,6 +193,45 @@ function settledStatus(
 		sessionSandboxReserveExecutorSettledV1(startup)
 		? "preparing"
 		: row.status;
+}
+/** The original reserve instance (generation 1, fence 1) under the current lease. */
+function reserveEvidenceMatches(
+	evidence: SessionSandboxInstanceEvidenceV1 | undefined,
+	sandboxId: string,
+	lease: SessionSandboxReserveLeaseV1,
+	instance: {
+		readonly podUid: string;
+		readonly hostKeyId: string;
+		readonly runnerEpoch: string;
+	},
+): evidence is SessionSandboxInstanceEvidenceV1 {
+	return (
+		sessionSandboxInstanceEvidenceShapeV1(evidence) &&
+		evidence.scope.phase === "reserve" &&
+		evidence.scope.reserveRef === sessionSandboxReserveRefV1(sandboxId) &&
+		evidence.scope.reserveDeliveryFence === lease.deliveryFence &&
+		evidence.generation === 1 &&
+		evidence.resourceFence === 1 &&
+		evidence.podUid === instance.podUid &&
+		evidence.hostKeyId === instance.hostKeyId &&
+		evidence.runnerEpoch === instance.runnerEpoch
+	);
+}
+/** Evidence is still valid by the database clock at commit, after the row locks. */
+async function evidenceCurrent(
+	tx: Transaction,
+	evidence: SessionSandboxInstanceEvidenceV1,
+	notBeforeMs?: number,
+): Promise<boolean> {
+	const [clock] = await tx<{ now_ms: number }[]>`
+		select floor(extract(epoch from clock_timestamp()) * 1000)::float8 as now_ms`;
+	const now = clock?.now_ms;
+	return (
+		typeof now === "number" &&
+		evidence.observedAtMs <= now &&
+		now < evidence.expiresAtMs &&
+		(notBeforeMs === undefined || evidence.issuedAtMs >= notBeforeMs)
+	);
 }
 function unavailable(): never {
 	throw new Error("Session Sandbox reserve persistence is unavailable");
@@ -612,6 +656,8 @@ export interface SessionSandboxExecutorPromotionInputV1 {
 	readonly pvcUid: string;
 	readonly hostKeyId: string;
 	readonly runnerEpoch: string;
+	/** Verified `claimed`-scope evidence issued after the claim committed. */
+	readonly evidence: SessionSandboxInstanceEvidenceV1;
 }
 export interface SessionSandboxExecutorPromotionReceiptRefV1 {
 	readonly receiptId: string;
@@ -649,6 +695,29 @@ export async function recordSessionSandboxExecutorPromotionV1(
 		)
 	)
 		return null;
+	const evidence = input.evidence;
+	if (
+		!sessionSandboxInstanceEvidenceShapeV1(evidence) ||
+		evidence.scope.phase !== "claimed" ||
+		evidence.scope.claimRef !==
+			sessionSandboxReserveClaimRefV1({
+				sandboxId: input.sandboxId,
+				sessionId: input.sessionId,
+			}) ||
+		evidence.scope.allocationRef !==
+			sessionSandboxAllocationRefV1({
+				sandboxId: input.sandboxId,
+				sessionId: input.sessionId,
+				generation: input.generation,
+				resourceFence: input.resourceFence,
+			}) ||
+		evidence.podUid !== input.podUid ||
+		evidence.hostKeyId !== input.hostKeyId ||
+		evidence.runnerEpoch !== input.runnerEpoch ||
+		evidence.generation !== input.generation ||
+		evidence.resourceFence !== input.resourceFence
+	)
+		return null;
 	const [allocation] = await tx<
 		{
 			agent_id: string;
@@ -674,8 +743,12 @@ export async function recordSessionSandboxExecutorPromotionV1(
 	)
 		return null;
 	const [reserve] = await tx<
-		Pick<ReserveRow, "profile_digest" | "operations" | "executor_startup">[]
-	>`select profile_digest, operations, executor_startup from platform.session_sandbox_reserves
+		(Pick<ReserveRow, "profile_digest" | "operations" | "executor_startup"> & {
+			claimed_ms: number | null;
+		})[]
+	>`select profile_digest, operations, executor_startup,
+			floor(extract(epoch from claimed_at) * 1000)::float8 as claimed_ms
+		from platform.session_sandbox_reserves
 		where sandbox_id = ${input.sandboxId} and session_id = ${input.sessionId} and status = 'claimed'`;
 	const startup = reserve?.executor_startup;
 	const projection = startup?.projection;
@@ -689,20 +762,33 @@ export async function recordSessionSandboxExecutorPromotionV1(
 		!startup ||
 		!projection ||
 		!startup.consumption ||
+		typeof reserve.claimed_ms !== "number" ||
+		// Only the original reserve instance: its startup fixes generation 1 and this fence.
+		input.generation !== 1 ||
+		startup.startupRef !==
+			`sandbox-${input.sandboxId}-executor-${input.resourceFence}` ||
 		reserve.profile_digest !== input.profileDigest ||
 		projection.bindingDigest !== input.bindingDigest ||
 		projection.podUid !== input.podUid ||
 		projection.hostKeyId !== input.hostKeyId ||
 		startup.consumption.runnerEpoch !== input.runnerEpoch ||
-		pvc?.resource?.uid !== input.pvcUid
+		pvc?.resource?.uid !== input.pvcUid ||
+		!(await evidenceCurrent(tx, evidence, reserve.claimed_ms))
 	)
 		return null;
+	const { evidence: _evidence, ...binding } = input;
+	// Replay compares the instance binding; fresh evidence of the same instance replays it.
+	const receiptDigest = sessionSandboxReserveDigestV1({
+		schemaVersion: 1,
+		startupRef: startup.startupRef,
+		...binding,
+	});
 	const receipt = {
 		schemaVersion: 1 as const,
 		startupRef: startup.startupRef,
-		...input,
+		...binding,
+		evidence,
 	};
-	const receiptDigest = sessionSandboxReserveDigestV1(receipt);
 	const [existing] = await tx<{ id: string; receipt_digest: string }[]>`
 		select id, receipt_digest from platform.session_sandbox_executor_promotions
 		where sandbox_id = ${input.sandboxId} and session_generation = ${input.generation}
@@ -1032,7 +1118,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			unavailable();
 		const [count] = await tx<
 			{ total: string; profile: string; preparing: string }[]
-		>`select count(*)::text as total, count(*) filter(where profile_digest = ${profile.digest})::text as profile, count(*) filter(where status in ('preparing','unknown') or (status = 'retiring' and exists(select 1 from jsonb_array_elements(operations) o where o->>'operation' = 'create' and o->>'writeCompletion' <> 'response')))::text as preparing from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
+		>`select count(*)::text as total, count(*) filter(where profile_digest = ${profile.digest})::text as profile, count(*) filter(where status in ('preparing','unknown') or (status = 'retiring' and (exists(select 1 from jsonb_array_elements(operations) o where o->>'operation' = 'create' and o->>'writeCompletion' <> 'response') or executor_startup->'projection'->'create'->>'writeCompletion' = 'pending')))::text as preparing from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
 		if (
 			!count ||
 			Number(count.total) >= config.maximumReserves ||
@@ -1704,6 +1790,8 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			readonly projectionUid: string;
 			readonly hostKeyId: string;
 			readonly runnerEpoch: string;
+			/** Verified `reserve`-scope instance evidence for this lease. */
+			readonly evidence: SessionSandboxInstanceEvidenceV1;
 		},
 	): Promise<boolean> {
 		if (!boundedText(input.runnerEpoch)) return false;
@@ -1717,7 +1805,14 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		return this.#mutate(lease, async (tx, row) => {
 			const startup = row.executor_startup;
 			const projection = startup?.projection;
-			if (!startup || !projection || row.status !== "preparing") return false;
+			if (
+				!startup ||
+				!projection ||
+				row.status !== "preparing" ||
+				!reserveEvidenceMatches(input.evidence, row.sandbox_id, lease, input) ||
+				!(await evidenceCurrent(tx, input.evidence))
+			)
+				return false;
 			if (startup.consumption)
 				return isDeepStrictEqual(startup.consumption, consumption);
 			const { create } = projection;
@@ -1880,7 +1975,12 @@ export class PostgresSessionSandboxReserveStoreV1 {
 	}
 	async markReady(
 		lease: SessionSandboxReserveLeaseV1,
-		evidence: { bootstrapReady: boolean; businessStateAbsent: boolean },
+		evidence: {
+			bootstrapReady: boolean;
+			businessStateAbsent: boolean;
+			/** Required for an executor reserve: fresh `reserve`-scope evidence of the consumed instance. */
+			instanceEvidence?: SessionSandboxInstanceEvidenceV1;
+		},
 	): Promise<boolean> {
 		// Re-read current profile before budget/reserve locks. Old deployment facts cannot confer readiness.
 		return this.#client.begin(async (tx) => {
@@ -1903,11 +2003,25 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				!current ||
 				row.profile_digest !== current.profile.digest ||
 				!canReadySessionSandboxReserveV1({
-					...evidence,
+					bootstrapReady: evidence.bootstrapReady,
+					businessStateAbsent: evidence.businessStateAbsent,
 					status: row.status,
 					operations: row.operations,
 					executorStartup: row.executor_startup,
 				})
+			)
+				return false;
+			const consumed = row.executor_startup?.consumption;
+			if (
+				row.executor_startup &&
+				(!consumed ||
+					!reserveEvidenceMatches(
+						evidence.instanceEvidence,
+						row.sandbox_id,
+						lease,
+						consumed,
+					) ||
+					!(await evidenceCurrent(tx, evidence.instanceEvidence)))
 			)
 				return false;
 			const business =
