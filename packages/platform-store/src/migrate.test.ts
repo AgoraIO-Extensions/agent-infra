@@ -2106,6 +2106,7 @@ describe("published Relay authority migration", () => {
 			87,
 			88,
 			89,
+			90,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,

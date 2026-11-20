@@ -114,9 +114,15 @@ it.each(["lock", "build", "remaining-transaction"] as const)(
 			const [index] = await sql`select indisvalid from pg_index
 				where indexrelid='platform.outbox_scope_operation_idx'::regclass`;
 			expect(index?.indisvalid).toBe(true);
+			// The retry applies the outbox migration and every later one.
 			expect(
 				await sql`select * from platform_migrations.history order by id`,
-			).toHaveLength(baseline.length + 1);
+			).toHaveLength(
+				baseline.length +
+					journal.entries.filter(
+						(entry: { idx: number }) => entry.idx >= target.idx,
+					).length,
+			);
 		} finally {
 			release?.();
 			await holding;
