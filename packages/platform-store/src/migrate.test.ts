@@ -2797,7 +2797,7 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.indexes.push(
 				"operations_resource_snapshots:operations_resource_snapshots_cluster_id_namespace_pk",
-					"outbox_items:outbox_scope_operation_idx",
+				"outbox_items:outbox_scope_operation_idx",
 				"operations_resource_identities:operations_resource_identities_cluster_id_namespace_uid_pk",
 				"operations_resource_identities:operations_identity_agent_idx",
 			);
