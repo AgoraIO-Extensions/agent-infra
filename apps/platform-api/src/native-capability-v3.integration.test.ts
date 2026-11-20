@@ -1,9 +1,25 @@
+import { createHash } from "node:crypto";
 import { NativeCapabilityInvocationResponseV1Schema } from "@agent-infra/contracts/pilot";
+import type {
+	createLdapIdentityDirectory,
+	LdapAccount,
+} from "@agent-infra/identity";
 import type { OperationalEvent } from "@agent-infra/observability";
 import { currentRequestMetadata } from "@agent-infra/observability/http";
-import { migratePlatformDatabase } from "@agent-infra/platform-store";
+import {
+	migratePlatformDatabase,
+	PostgresLdapSessionStoreV1,
+} from "@agent-infra/platform-store";
 import type postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	expect,
+	it,
+	onTestFinished,
+	vi,
+} from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.js";
 import {
 	openPostgresTestClient,
@@ -13,7 +29,8 @@ import {
 import { seedSessionSandboxFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
-import type { IdentityContext } from "./http/identity.js";
+import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
+import { createLdapBrowserAdapter } from "./ldap-browser.js";
 
 const conversationId = "v3-conversation";
 const agentId = "v3-agent";
@@ -81,6 +98,10 @@ let assembly: PlatformApiAssembly;
 let app: ReturnType<typeof createPlatformApp>;
 let afterDirectoryRead: () => Promise<void>;
 let browserSessionActive: boolean;
+let browserResolutions: number;
+let beforeBrowserResolve: (call: number) => Promise<void>;
+let ldapIdentity: IdentityAdapter | undefined;
+let browserCookie: string | undefined;
 let taskIdentityTimeout: boolean;
 let directoryReads: number;
 let liveDirectoryRevision: string;
@@ -101,11 +122,14 @@ beforeAll(async () => {
 			waitingTimeoutMs: 60_000,
 		},
 		identity: {
-			resolve: async () => {
+			resolve: async (request) => {
 				requestMetadata = currentRequestMetadata();
+				await beforeBrowserResolve(++browserResolutions);
+				if (ldapIdentity) return ldapIdentity.resolve(request);
 				return browserSessionActive ? identity : null;
 			},
 			resolveUser: async (userId) => {
+				if (ldapIdentity?.resolveUser) return ldapIdentity.resolveUser(userId);
 				if (taskIdentityTimeout)
 					throw new DOMException("private identity evidence", "TimeoutError");
 				return {
@@ -183,6 +207,10 @@ afterAll(async () => {
 beforeEach(async () => {
 	afterDirectoryRead = async () => {};
 	browserSessionActive = true;
+	browserResolutions = 0;
+	beforeBrowserResolve = async () => {};
+	ldapIdentity = undefined;
+	browserCookie = undefined;
 	taskIdentityTimeout = false;
 	liveDirectoryRevision = directoryRevision;
 	directoryReads = 0;
@@ -219,11 +247,17 @@ beforeEach(async () => {
 });
 
 async function invoke(body = invocation) {
+	browserResolutions = 0;
 	const response = await app.request(
-		`/api/v2/conversations/${conversationId}/native-capability/invoke`,
+		`https://native.invalid/api/v2/conversations/${conversationId}/native-capability/invoke`,
 		{
 			method: "POST",
-			headers: { "content-type": "application/json" },
+			headers: {
+				"content-type": "application/json",
+				...(browserCookie
+					? { cookie: browserCookie, origin: "https://native.invalid" }
+					: {}),
+			},
 			body: JSON.stringify(body),
 		},
 	);
@@ -444,3 +478,101 @@ it("records an identity timeout against the original request with a safe public 
 		idempotency: 0,
 	});
 });
+
+it.each(["revoked", "expired"] as const)(
+	"rejects a session %s during the last LDAP read when no renewal is possible",
+	async (mode) => {
+		if (!database) throw new Error("Missing PostgreSQL fixture");
+		const sessions = new PostgresLdapSessionStoreV1(database.databaseUrl);
+		onTestFinished(() => sessions.close());
+		const token = "q".repeat(43);
+		const digest = createHash("sha256").update(token).digest("hex");
+		let now = Date.now();
+		const absoluteExpiresAt = now + 60_000;
+		await sessions.create(
+			digest,
+			"v3-ldap-uid",
+			absoluteExpiresAt,
+			absoluteExpiresAt,
+		);
+		const account: LdapAccount = {
+			uid: "v3-ldap-uid",
+			userId: identity.userId,
+			email: "v3-owner@example.test",
+			displayName: identity.displayName,
+			accountStatus: "active",
+			roles: ["employee"],
+			authorizationRevision: "ldap-1",
+		};
+		let browserDirectoryChecks = 0;
+		let armed = false;
+		const directory = {
+			userIdForUid: async () => identity.userId,
+			current: async () => {
+				if (armed && ++browserDirectoryChecks === 5) {
+					if (mode === "revoked") await sessions.revoke(digest);
+					else now = absoluteExpiresAt + 1;
+				}
+				return account;
+			},
+			currentByUserId: async () => account,
+		} as unknown as ReturnType<typeof createLdapIdentityDirectory>;
+		const adapter = createLdapBrowserAdapter({
+			publicOrigin: "https://native.invalid",
+			sessions,
+			directory,
+			isPlatformDisabled: async () => false,
+			organizationIds: async () => [],
+			now: () => now,
+		});
+		ldapIdentity = adapter.identityAdapter;
+		browserCookie = `__Host-platform-session=${token}`;
+		const renew = vi.spyOn(sessions, "renew");
+		afterDirectoryRead = async () => {
+			armed = true;
+		};
+		expect(await invoke()).toEqual({
+			status: 503,
+			body: { outcome: "unavailable" },
+		});
+		expect(browserDirectoryChecks).toBe(5);
+		expect(renew).not.toHaveBeenCalled();
+		expect(await durableCounts()).toEqual({
+			executions: 0,
+			outbox: 0,
+			idempotency: 0,
+		});
+	},
+);
+
+it.each(["agent", "conversation", "generation", "host"] as const)(
+	"revalidates the original %s scope before delivering an accepted replay",
+	async (target) => {
+		expect((await invoke()).body.outcome).toBe("accepted");
+		// Change authority after Store replay commits, while the route revalidates delivery.
+		beforeBrowserResolve = async (call) => {
+			if (call !== 3) return;
+			if (target === "agent") {
+				await db`update platform.agents set authorization_revision='changed' where id=${agentId}`;
+				await db`delete from platform.agent_owners where agent_id=${agentId}`;
+			} else if (target === "conversation") {
+				await db`update platform.conversations set authorization_revision='changed' where id=${conversationId}`;
+			} else if (target === "generation") {
+				await db`update platform.conversations set session_generation=session_generation+1 where id=${conversationId}`;
+			} else {
+				await db`update platform.conversations set host_session_ref='replacement-host' where id=${conversationId}`;
+			}
+		};
+		const reads = directoryReads;
+		expect(await invoke()).toEqual({
+			status: 503,
+			body: { outcome: "unavailable" },
+		});
+		expect(directoryReads).toBe(reads);
+		expect(await durableCounts()).toEqual({
+			executions: 1,
+			outbox: 1,
+			idempotency: 1,
+		});
+	},
+);

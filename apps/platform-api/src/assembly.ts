@@ -1109,7 +1109,30 @@ export function assemblePlatformApi(
 									request,
 									initialAuthority,
 								);
-							if (replay) return replay;
+							if (replay) {
+								if (replay.outcome === "replayed") {
+									requestContext.beforeDelivery(async () => {
+										const authority = await currentAuthority();
+										if (!authority)
+											throw new Error(
+												"Native replay authorization unavailable",
+											);
+										const current =
+											await conversationTransaction.readNativeCapabilityV6Replay(
+												request,
+												authority,
+											);
+										if (
+											current?.outcome !== "replayed" ||
+											current.plan.executionId !== replay.plan.executionId ||
+											current.plan.operationDigest !==
+												replay.plan.operationDigest
+										)
+											throw new Error("Native replay scope changed");
+									});
+								}
+								return replay;
+							}
 							const first =
 								await conversationTransaction.readNativeCapabilityV6Authorization(
 									{
