@@ -165,10 +165,12 @@ export interface SessionSandboxObservationV1 {
 	 * nor terminated: the Host is still starting. Used only like `waitingReason`.
 	 */
 	readonly runtimeStarting?: true;
+	readonly executorDrainRequired?: true;
 	/** Bounded startup evidence from the Pod status; never a log message. */
 	readonly failureCode?:
 		| "eci.image_pull"
 		| "runtime.startup"
+		| "runtime.executor_identity_timeout"
 		| "runtime.configuration"
 		| "workspace.materialization"
 		// #3985：准备认领读回记录的 Pod 已不存在；只作为一次观测的证据，不写入分配。
@@ -302,10 +304,14 @@ export function isSessionSandboxObservationValidV1(
 			![
 				"eci.image_pull",
 				"runtime.startup",
+				"runtime.executor_identity_timeout",
 				"runtime.configuration",
 				"workspace.materialization",
 				"sandbox.pod_lost",
 			].includes(observation.failureCode)) ||
+		(observation.executorDrainRequired !== undefined &&
+			(observation.executorDrainRequired !== true ||
+				observation.status !== "ready")) ||
 		!Array.isArray(observation.resources)
 	)
 		return false;

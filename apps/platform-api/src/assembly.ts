@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { resolveApprovedConnectionSystemAccessV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { NativeMetadataCommandsProjectionV2Schema } from "@agent-infra/contracts/runtime";
 import {
 	type ObjectStorageDataV1,
@@ -9,6 +10,7 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentManagementActorContextV1,
 	type ApiPrincipalV1,
+	type ApplicationCredentialMaterialConfigurationV1,
 	type ConversationTaskAdmissionPolicyV1,
 	createAgentApiCreationV1,
 	createAgentApiLifecycleV1,
@@ -18,6 +20,7 @@ import {
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
 	createApplicationApiCredentialManagementV1,
+	createApplicationCredentialMaterialDeliveryV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
 	createApplicationModelCandidatesUseCaseV1,
@@ -56,6 +59,7 @@ import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationApiCredentialIssuerStoreV1,
+	PostgresApplicationCredentialMaterialStoreV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
@@ -189,6 +193,7 @@ export interface PlatformApiAssemblyInput {
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
+		readonly manualInstallation?: import("@agent-infra/platform-store").ConnectionManualInstallationPolicyInputV1;
 		readonly configuration?: RuntimeOAuthConfigurationV1;
 		readonly profile?: unknown;
 		readonly approval?: unknown;
@@ -213,6 +218,7 @@ export interface PlatformApiAssemblyInput {
 	readonly connectionInstallationCallback?: {
 		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
 	};
+	readonly applicationCredentialMaterialDelivery?: ApplicationCredentialMaterialConfigurationV1;
 	readonly applicationCredentialDelivery?: Parameters<
 		typeof createApplicationCredentialProcessDeliveryV1
 	>[0];
@@ -530,6 +536,22 @@ export function assemblePlatformApi(
 	})();
 	const installationCallbackConfiguration =
 		installationStore?.callbackConfiguration;
+	const installationCallbackTarget =
+		installationCallbackConfiguration ??
+		(installationStore && input.connectionInstallation?.manualInstallation
+			? (() => {
+					const approved = resolveApprovedConnectionSystemAccessV1(
+						input.connectionInstallation.manualInstallation.systemAccess,
+						input.connectionInstallation.manualInstallation.approval,
+					);
+					return approved.status === "available"
+						? {
+								callbackUrl: approved.system.oauthCallbackUrl,
+								issuer: approved.system.issuer,
+							}
+						: undefined;
+				})()
+			: undefined);
 
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
@@ -541,6 +563,19 @@ export function assemblePlatformApi(
 	const applicationApiCredentialStore =
 		new PostgresApplicationApiCredentialIssuerStoreV1({
 			databaseUrl: input.databaseUrl,
+		});
+	const applicationCredentialMaterialStore =
+		new PostgresApplicationCredentialMaterialStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const applicationCredentialMaterialDelivery =
+		createApplicationCredentialMaterialDeliveryV1({
+			store: applicationCredentialMaterialStore,
+			userDirectory: {
+				resolveUser: (userId) =>
+					resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+			},
+			configuration: input.applicationCredentialMaterialDelivery,
 		});
 	const applicationApiCredentials = createApplicationApiCredentialIssuerV1({
 		store: applicationApiCredentialStore,
@@ -1234,6 +1269,7 @@ export function assemblePlatformApi(
 						if (!metadata)
 							throw new Error("Native capability metadata unavailable");
 						const admission = createNativeCapabilityAdmissionUseCaseV1({
+							observe: requestContext.observeAdmission,
 							authorization: {
 								async authorize(authorizationRequest) {
 									const currentIdentity =
@@ -1475,7 +1511,7 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		...(installationStore &&
-		installationCallbackConfiguration &&
+		installationCallbackTarget &&
 		input.connectionInstallation
 			? {
 					connectionInstallations: {
@@ -1490,14 +1526,14 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		...(installationStore &&
-		installationCallbackConfiguration &&
+		installationCallbackTarget &&
 		input.connectionInstallation &&
 		input.connectionInstallationCallback
 			? {
 					connectionInstallationCallback: {
 						publicOrigin: input.connectionInstallation.publicOrigin,
-						callbackUrl: installationCallbackConfiguration.callbackUrl,
-						issuer: installationCallbackConfiguration.issuer,
+						callbackUrl: installationCallbackTarget.callbackUrl,
+						issuer: installationCallbackTarget.issuer,
 						configuration: installationCallbackConfiguration,
 						installation: createConnectionInstallationAuthorizationV1({
 							store: installationStore,
@@ -1692,6 +1728,10 @@ export function assemblePlatformApi(
 						}),
 					}
 				: undefined,
+		applicationCredentialMaterialDelivery: {
+			identity: input.identity,
+			delivery: applicationCredentialMaterialDelivery,
+		},
 		applicationApiCredentials: {
 			identity: input.identity,
 			issuer: applicationApiCredentials,
@@ -1858,6 +1898,7 @@ export function assemblePlatformApi(
 		skillHubRead,
 		skillHubBindingAdmission,
 		applicationApiCredentialStore,
+		applicationCredentialMaterialStore,
 		...(evaluationStore ? [evaluationStore] : []),
 		...(evaluationExperiments ? [evaluationExperiments] : []),
 		...(evaluationScoring ? [evaluationScoring] : []),

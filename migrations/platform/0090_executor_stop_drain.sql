@@ -1,0 +1,1 @@
+ALTER TABLE "platform"."conversation_stops" ADD COLUMN "executor_drain_required" boolean DEFAULT false NOT NULL;

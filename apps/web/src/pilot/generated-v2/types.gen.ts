@@ -6500,6 +6500,362 @@ export type DisableOwnApplicationV2Responses = {
 
 export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[keyof DisableOwnApplicationV2Responses];
 
+export type PrepareApplicationCredentialMaterialV2Data = {
+    body: {
+        expiresAt: string | null;
+        operation: 'issue';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        schemaVersion: 1;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+    } | {
+        credentialId: string;
+        expiresAt: string | null;
+        operation: 'rotate';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        schemaVersion: 1;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+    };
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credential-material-deliveries';
+};
+
+export type PrepareApplicationCredentialMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type PrepareApplicationCredentialMaterialV2Error = PrepareApplicationCredentialMaterialV2Errors[keyof PrepareApplicationCredentialMaterialV2Errors];
+
+export type PrepareApplicationCredentialMaterialV2Responses = {
+    /**
+     * Authorized response; metadata replays never include material
+     */
+    200: {
+        applicationId: string;
+        attemptId: string;
+        createdAt: string;
+        credentialExpiresAt: string | null;
+        credentialId: string;
+        expiresAt: string;
+        fence: string | null;
+        grantRevision: string;
+        phase: 'pending' | 'claimed' | 'generated' | 'transmitted' | 'accepted';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        replayed: boolean;
+        schemaVersion: 1;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+        status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+    };
+    /**
+     * Intent metadata only; no credential generated
+     */
+    201: {
+        applicationId: string;
+        attemptId: string;
+        createdAt: string;
+        credentialExpiresAt: string | null;
+        credentialId: string;
+        expiresAt: string;
+        fence: string | null;
+        grantRevision: string;
+        phase: 'pending' | 'claimed' | 'generated' | 'transmitted' | 'accepted';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        replayed: boolean;
+        schemaVersion: 1;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+        status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+    };
+};
+
+export type PrepareApplicationCredentialMaterialV2Response = PrepareApplicationCredentialMaterialV2Responses[keyof PrepareApplicationCredentialMaterialV2Responses];
+
+export type ReadApplicationCredentialMaterialV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+        attemptId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}';
+};
+
+export type ReadApplicationCredentialMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadApplicationCredentialMaterialV2Error = ReadApplicationCredentialMaterialV2Errors[keyof ReadApplicationCredentialMaterialV2Errors];
+
+export type ReadApplicationCredentialMaterialV2Responses = {
+    /**
+     * Authorized response; metadata replays never include material
+     */
+    200: {
+        applicationId: string;
+        attemptId: string;
+        createdAt: string;
+        credentialExpiresAt: string | null;
+        credentialId: string;
+        expiresAt: string;
+        fence: string | null;
+        grantRevision: string;
+        phase: 'pending' | 'claimed' | 'generated' | 'transmitted' | 'accepted';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        replayed: boolean;
+        schemaVersion: 1;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+        status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+    };
+};
+
+export type ReadApplicationCredentialMaterialV2Response = ReadApplicationCredentialMaterialV2Responses[keyof ReadApplicationCredentialMaterialV2Responses];
+
+export type ConfirmApplicationCredentialMaterialV2Data = {
+    body: {
+        credentialId: string;
+        fence: string;
+        schemaVersion: 1;
+    };
+    path: {
+        applicationId: string;
+        attemptId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}/confirm';
+};
+
+export type ConfirmApplicationCredentialMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ConfirmApplicationCredentialMaterialV2Error = ConfirmApplicationCredentialMaterialV2Errors[keyof ConfirmApplicationCredentialMaterialV2Errors];
+
+export type ConfirmApplicationCredentialMaterialV2Responses = {
+    /**
+     * Authorized response; metadata replays never include material
+     */
+    200: {
+        applicationId: string;
+        attemptId: string;
+        createdAt: string;
+        credentialExpiresAt: string | null;
+        credentialId: string;
+        expiresAt: string;
+        fence: string | null;
+        grantRevision: string;
+        phase: 'pending' | 'claimed' | 'generated' | 'transmitted' | 'accepted';
+        recipient: {
+            principalId: string;
+            principalType: 'user' | 'application';
+        };
+        replayed: boolean;
+        schemaVersion: 1;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+        status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+    };
+};
+
+export type ConfirmApplicationCredentialMaterialV2Response = ConfirmApplicationCredentialMaterialV2Responses[keyof ConfirmApplicationCredentialMaterialV2Responses];
+
+export type ReceiveApplicationCredentialMaterialV2Data = {
+    body: {
+        schemaVersion: 1;
+    };
+    path: {
+        applicationId: string;
+        attemptId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}/receive';
+};
+
+export type ReceiveApplicationCredentialMaterialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReceiveApplicationCredentialMaterialV2Error = ReceiveApplicationCredentialMaterialV2Errors[keyof ReceiveApplicationCredentialMaterialV2Errors];
+
+export type ReceiveApplicationCredentialMaterialV2Responses = {
+    /**
+     * Authorized response; metadata replays never include material
+     */
+    200: {
+        delivery: {
+            applicationId: string;
+            attemptId: string;
+            createdAt: string;
+            credentialExpiresAt: string | null;
+            credentialId: string;
+            expiresAt: string;
+            fence: string | null;
+            grantRevision: string;
+            phase: 'pending' | 'claimed' | 'generated' | 'transmitted' | 'accepted';
+            recipient: {
+                principalId: string;
+                principalType: 'user' | 'application';
+            };
+            replayed: boolean;
+            schemaVersion: 1;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+            status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+        };
+        kind: 'material';
+        material: string;
+        schemaVersion: 1;
+    } | {
+        delivery: {
+            applicationId: string;
+            attemptId: string;
+            createdAt: string;
+            credentialExpiresAt: string | null;
+            credentialId: string;
+            expiresAt: string;
+            fence: string | null;
+            grantRevision: string;
+            phase: 'pending' | 'claimed' | 'generated' | 'transmitted' | 'accepted';
+            recipient: {
+                principalId: string;
+                principalType: 'user' | 'application';
+            };
+            replayed: boolean;
+            schemaVersion: 1;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
+            status: 'delivery_pending' | 'delivery_in_flight' | 'accepted' | 'failed' | 'unknown';
+        };
+        kind: 'metadata';
+        schemaVersion: 1;
+    };
+};
+
+export type ReceiveApplicationCredentialMaterialV2Response = ReceiveApplicationCredentialMaterialV2Responses[keyof ReceiveApplicationCredentialMaterialV2Responses];
+
 export type ListApplicationApiCredentialsV2Data = {
     body?: never;
     path: {

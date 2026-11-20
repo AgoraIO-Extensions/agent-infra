@@ -208,13 +208,39 @@ export async function readInitialTurnInput(
 	};
 }
 
+export async function sessionRequiresExecutorDrain(
+	transaction: Transaction,
+	conversationId: string,
+	generation: number,
+) {
+	const [row] = await transaction<{ required: boolean }[]>`
+		select exists (
+			select 1 from platform.session_sandbox_allocations a
+			where a.conversation_id = ${conversationId}
+				and a.session_generation = ${generation}
+				and (
+					a.resource_observation->'executorDrainRequired' = 'true'::jsonb or exists (
+						select 1 from platform.conversation_audit_events e
+						where e.conversation_id = a.conversation_id
+							and e.action = 'conversation.sandbox.observed'
+							and e.details->'executorDrainRequired' = 'true'::jsonb
+							and e.details->>'sandboxId' = a.sandbox_id
+							and e.details->>'sessionGeneration' = a.session_generation::text
+							and e.details->>'resourceFence' = a.resource_fence::text
+					)
+				)
+		) as required
+	`;
+	return row?.required === true;
+}
+
 export async function readStop(
 	transaction: Transaction,
 	executionId: string,
 ): Promise<StopRow | undefined> {
 	const rows = await transaction<StopRow[]>`
 		select execution_id, stop_request_id, status, confirmation_deadline,
-			confirmation_timed_out_at
+			confirmation_timed_out_at, executor_drain_required
 		from platform.conversation_stops where execution_id = ${executionId}
 	`;
 	return rows[0];
@@ -488,6 +514,16 @@ export async function cancelAcceptedTurn(
 ) {
 	const payload = exactPayload(state.outbox.payload, claim.operation);
 	const stop = await readStop(transaction, claim.executionId);
+	if (
+		stop?.status === "submitted" &&
+		(stop.executor_drain_required ||
+			(await sessionRequiresExecutorDrain(
+				transaction,
+				claim.conversationId,
+				claim.sessionGeneration,
+			)))
+	)
+		throw new StaleDispatchLease();
 	const stopOutbox = stop
 		? await lockOutbox(
 				transaction,

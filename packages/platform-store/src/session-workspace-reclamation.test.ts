@@ -260,65 +260,73 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		},
 	);
 
-	it("runs dry-run under the operator role without access to raw payloads or business writes", async () => {
-		await prepareReaderTestDatabase();
-		const databaseUrl = await loginTestReader();
-		const reader = postgres(databaseUrl);
-		const scopedStore = new PostgresSessionWorkspaceReclamationStoreV1(
-			databaseUrl,
-			policy,
-			"deployment-owner",
-		);
-		try {
-			await sql`update platform.outbox_items set payload = ${sql.json({
-				body: "synthetic outbox body",
-				lifecycle: {
-					...lifecycle,
-					source: {
-						...lifecycle.source,
-						modelProjection: { privateValue: "synthetic credential material" },
+	it.each([true, false])(
+		"runs dry-run under the operator role without access to raw payloads or business writes (charge=%s)",
+		async (charged) => {
+			if (!charged)
+				await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+			await prepareReaderTestDatabase();
+			const databaseUrl = await loginTestReader();
+			const reader = postgres(databaseUrl);
+			const scopedStore = new PostgresSessionWorkspaceReclamationStoreV1(
+				databaseUrl,
+				policy,
+				"deployment-owner",
+			);
+			try {
+				await sql`update platform.outbox_items set payload = ${sql.json({
+					body: "synthetic outbox body",
+					lifecycle: {
+						...lifecycle,
+						source: {
+							...lifecycle.source,
+							modelProjection: {
+								privateValue: "synthetic credential material",
+							},
+						},
 					},
-				},
-			})}`;
-			const api = createSessionWorkspaceReclamationV1(scopedStore, {
-				async read() {
-					return { uid: target.uid, resourceVersion: target.resourceVersion };
-				},
-				async delete() {
-					throw new Error("dry-run attempted deletion");
-				},
-			});
-			expect(await api.dryRun([target.name])).toEqual([target]);
-			const [row] =
-				await reader`select payload from platform_reclamation_read.outbox_items`;
-			expect(row?.payload.lifecycle.source.modelProjection).toBe(true);
-			expect(JSON.stringify(row)).not.toContain("synthetic");
-			for (const query of [
-				"select payload from platform.outbox_items",
-				"select resource_observation from platform.session_sandbox_allocations",
-				"select details from platform.conversation_audit_events",
-				"select * from platform.conversation_messages",
-				"select * from platform.platform_api_credentials",
-				"update platform.conversations set status = 'unavailable'",
-				"create table public.reclamation_probe (id integer)",
-				"select pg_catalog.lo_export(0, '/unreachable')",
-			]) {
-				await expect(
-					reader.begin("read write", (tx) => tx.unsafe(query)),
-				).rejects.toMatchObject({ code: "42501" });
-			}
-			await sql`update platform.outbox_items set payload = jsonb_set(
+				})}`;
+				const api = createSessionWorkspaceReclamationV1(scopedStore, {
+					async read() {
+						return { uid: target.uid, resourceVersion: target.resourceVersion };
+					},
+					async delete() {
+						throw new Error("dry-run attempted deletion");
+					},
+				});
+				expect(await api.dryRun([target.name])).toEqual([target]);
+				const [row] =
+					await reader`select payload from platform_reclamation_read.outbox_items`;
+				expect(row?.payload.lifecycle.source.modelProjection).toBe(true);
+				expect(JSON.stringify(row)).not.toContain("synthetic");
+				for (const query of [
+					"select payload from platform.outbox_items",
+					"select resource_observation from platform.session_sandbox_allocations",
+					"select details from platform.conversation_audit_events",
+					"select * from platform.conversation_messages",
+					"select * from platform.platform_api_credentials",
+					"select profile from platform.session_sandbox_reserves",
+					"update platform.conversations set status = 'unavailable'",
+					"create table public.reclamation_probe (id integer)",
+					"select pg_catalog.lo_export(0, '/unreachable')",
+				]) {
+					await expect(
+						reader.begin("read write", (tx) => tx.unsafe(query)),
+					).rejects.toMatchObject({ code: "42501" });
+				}
+				await sql`update platform.outbox_items set payload = jsonb_set(
 				payload, '{lifecycle,stopReceipt,unexpected}', 'true'::jsonb
 			)`;
-			expect(await api.dryRun([target.name])).toEqual([]);
-		} finally {
-			await scopedStore.close();
-			await reader.end();
-			await sql`alter role agent_infra_reclamation_ro nologin`;
-			const receipts = await sql.unsafe(await dropRoleSql);
-			expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
-		}
-	});
+				expect(await api.dryRun([target.name])).toEqual([]);
+			} finally {
+				await scopedStore.close();
+				await reader.end();
+				await sql`alter role agent_infra_reclamation_ro nologin`;
+				const receipts = await sql.unsafe(await dropRoleSql);
+				expect(receipts.at(-1)).toEqual([{ role_removed: true }]);
+			}
+		},
+	);
 	it("preserves a large object and its role when the ownership guard blocks cleanup", async () => {
 		await prepareReaderTestDatabase();
 		const reader = postgres(await loginTestReader(), { max: 1 });
@@ -672,18 +680,23 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		}
 	}, 30000);
 
-	it("excludes a same-name PVC with a replacement UID", async () => {
-		const api = createSessionWorkspaceReclamationV1(store, {
-			async read(name) {
-				expect(name).toBe(target.name);
-				return { uid: "replacement", resourceVersion: "3" };
-			},
-			async delete() {
-				throw new Error("dry-run attempted deletion");
-			},
-		});
-		expect(await api.dryRun([target.name])).toEqual([]);
-	});
+	it.each([true, false])(
+		"excludes a same-name PVC with a replacement UID (charge=%s)",
+		async (charged) => {
+			if (!charged)
+				await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+			const api = createSessionWorkspaceReclamationV1(store, {
+				async read(name) {
+					expect(name).toBe(target.name);
+					return { uid: "replacement", resourceVersion: "3" };
+				},
+				async delete() {
+					throw new Error("dry-run attempted deletion");
+				},
+			});
+			expect(await api.dryRun([target.name])).toEqual([]);
+		},
+	);
 
 	it.each([
 		{ failureCode: { privateValue: "synthetic" } },
@@ -763,6 +776,120 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		},
 	);
 
+	it("reclaims an uncharged cold Session through dry-run, prepare, execute and inspect without backfilling charges", async () => {
+		await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+		let exists = true;
+		const deletions: unknown[] = [];
+		const api = createSessionWorkspaceReclamationV1(store, {
+			async read() {
+				return exists
+					? { uid: target.uid, resourceVersion: target.resourceVersion }
+					: null;
+			},
+			async delete(t) {
+				deletions.push(t);
+				exists = false;
+			},
+		});
+		expect(await api.dryRun([target.name])).toEqual([target]);
+		expect(await sql`select 1 from platform.audit_events`).toHaveLength(0);
+		expect(await store.prepare(target)).toBe("prepared");
+		expect(await store.inspect(target)).toMatchObject({
+			state: {
+				charge_applicable: false,
+				released: null,
+				compute_released: null,
+				conversation_status: "unavailable",
+			},
+		});
+		expect(await api.execute(target)).toBe("completed");
+		expect(await api.execute(target)).toBe("completed");
+		expect(deletions).toEqual([target]);
+		expect(
+			await sql`select 1 from platform.session_sandbox_resource_charges`,
+		).toHaveLength(0);
+		const result = await store.inspect(target);
+		expect(result.state).toMatchObject({
+			charge_applicable: false,
+			released: null,
+			sandbox_status: "unavailable",
+		});
+		expect(result.journal.map((row) => row.action)).toEqual([
+			"conversation.workspace.reclamation.started",
+			"conversation.workspace.reclamation.completed",
+		]);
+		expect(result.journal[0]?.details).toMatchObject({
+			chargeApplicable: false,
+		});
+		expect(await api.dryRun([target.name])).toEqual([]);
+	});
+	it.each([true, false])(
+		"rejects changed charge applicability during recovery (charge=%s)",
+		async (charged) => {
+			if (!charged)
+				await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+			await store.prepare(target);
+			if (charged)
+				await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+			else
+				await sql`insert into platform.session_sandbox_resource_charges(sandbox_id,namespace,resources,compute_released) values(${target.sandboxId},${target.namespace},'{}',true)`;
+			await expect(store.complete(target)).rejects.toThrow(
+				"WORKSPACE_CHARGE_CONFLICT",
+			);
+			expect(
+				await sql`select 1 from platform.audit_events where action='conversation.workspace.reclamation.completed'`,
+			).toHaveLength(0);
+			expect(await store.inspect(target)).toMatchObject({
+				state: { charge_applicable: charged },
+			});
+		},
+	);
+	it("reports the original N/A journal's newly appearing reserve source consistently in inspect and complete", async () => {
+		await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+		await store.prepare(target);
+		await sql`insert into platform.session_sandbox_reserves(sandbox_id,session_id,agent_id,namespace,profile_digest,profile,status,expires_at,created_at,updated_at)
+			values(${target.sandboxId},${target.sessionId},${target.agentId},${target.namespace},'fixture','{}','claimed',now(),now(),now())`;
+		try {
+			const before = await store.inspect(target);
+			expect(before.state).toMatchObject({
+				charge_applicable: false,
+				charge_present: false,
+				charge_conflict: true,
+				reserve_present: true,
+			});
+			expect(before.journal[0]?.details).toMatchObject({
+				chargeApplicable: false,
+			});
+			await expect(store.complete(target)).rejects.toThrow(
+				"WORKSPACE_CHARGE_CONFLICT",
+			);
+			expect((await store.inspect(target)).state).toEqual(before.state);
+			expect(
+				await sql`select 1 from platform.audit_events where action='conversation.workspace.reclamation.completed'`,
+			).toHaveLength(0);
+		} finally {
+			await sql`delete from platform.session_sandbox_reserves where sandbox_id=${target.sandboxId}`;
+		}
+	});
+	it("does not treat a reserve's missing charge as an uncharged cold Session", async () => {
+		await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+		await sql`insert into platform.session_sandbox_reserves(sandbox_id,session_id,agent_id,namespace,profile_digest,profile,status,expires_at,created_at,updated_at)
+			values(${target.sandboxId},${target.sessionId},${target.agentId},${target.namespace},'fixture','{}','claimed',now(),now(),now())`;
+		try {
+			expect(await store.candidates([target.name])).toEqual([]);
+			await expect(store.prepare(target)).rejects.toThrow(
+				"WORKSPACE_NOT_ELIGIBLE",
+			);
+		} finally {
+			await sql`delete from platform.session_sandbox_reserves where sandbox_id=${target.sandboxId}`;
+		}
+	});
+	it("does not accept an operator-supplied charge applicability marker", async () => {
+		await expect(
+			store.prepare({ ...target, chargeApplicable: false } as typeof target),
+		).rejects.toThrow("WORKSPACE_RECLAMATION_DENIED");
+		expect(await sql`select 1 from platform.audit_events`).toHaveLength(0);
+	});
 	it("dry-run is read-only; deletes original conditional identity then releases/audits once, history unavailable", async () => {
 		let exists = true;
 		const deletions: unknown[] = [];
@@ -871,35 +998,68 @@ describe("real PostgreSQL storage reclamation and Kubernetes fake", () => {
 		expect(await store.candidates([target.name])).toEqual([]);
 		await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
 	});
-	it("rejects unknown executions and unfinished reconciliation before any tombstone", async () => {
-		await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at) values('execution','session','agent','user','web','turn','unknown',1,'auth',now())`;
-		expect(await store.candidates([target.name])).toEqual([]);
-		await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
-		expect(
-			(await sql`select status from platform.conversations`)[0]?.status,
-		).toBe("ready");
-		await sql`delete from platform.conversation_executions`;
-		await sql`update platform.outbox_items set status='processing',lease_owner='worker',lease_expires_at=now()+interval '1 minute'`;
-		expect(await store.candidates([target.name])).toEqual([]);
-	});
-	it("protects deployment retention, stopped threshold and original PVC UID", async () => {
-		const retained = new PostgresSessionWorkspaceReclamationStoreV1(
-			db.databaseUrl,
-			{ ...policy, retainedSessionIds: ["session"] },
-			"owner",
-		);
-		try {
-			expect(await retained.candidates([target.name])).toEqual([]);
-			await expect(retained.prepare(target)).rejects.toThrow("DENIED");
-		} finally {
-			await retained.close();
-		}
-		await expect(store.prepare({ ...target, uid: "new-uid" })).rejects.toThrow(
-			"OWNERSHIP",
-		);
-		await sql`update platform.outbox_items set updated_at=now()`;
-		await sql`update platform.conversation_audit_events set occurred_at=clock_timestamp() where id='stopped-observed'`;
-		expect(await store.candidates([target.name])).toEqual([]);
+	it.each([true, false])(
+		"rejects unknown executions and unfinished reconciliation before any tombstone (charge=%s)",
+		async (charged) => {
+			if (!charged)
+				await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+			await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at) values('execution','session','agent','user','web','turn','unknown',1,'auth',now())`;
+			expect(await store.candidates([target.name])).toEqual([]);
+			await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
+			expect(
+				(await sql`select status from platform.conversations`)[0]?.status,
+			).toBe("ready");
+			await sql`delete from platform.conversation_executions`;
+			await sql`update platform.outbox_items set status='processing',lease_owner='worker',lease_expires_at=now()+interval '1 minute'`;
+			expect(await store.candidates([target.name])).toEqual([]);
+		},
+	);
+	it.each([true, false])(
+		"protects deployment retention, stopped threshold and original PVC UID (charge=%s)",
+		async (charged) => {
+			if (!charged)
+				await sql`delete from platform.session_sandbox_resource_charges where sandbox_id=${target.sandboxId}`;
+			const retained = new PostgresSessionWorkspaceReclamationStoreV1(
+				db.databaseUrl,
+				{ ...policy, retainedSessionIds: ["session"] },
+				"owner",
+			);
+			try {
+				expect(await retained.candidates([target.name])).toEqual([]);
+				await expect(retained.prepare(target)).rejects.toThrow("DENIED");
+			} finally {
+				await retained.close();
+			}
+			await expect(
+				store.prepare({ ...target, uid: "new-uid" }),
+			).rejects.toThrow("OWNERSHIP");
+			const deletion = () => {
+				throw new Error("must not delete");
+			};
+			await expect(
+				createSessionWorkspaceReclamationV1(store, {
+					async read() {
+						return { uid: target.uid, resourceVersion: "changed-rv" };
+					},
+					delete: deletion,
+				}).execute(target),
+			).rejects.toThrow("WORKSPACE_PVC_IDENTITY_CONFLICT");
+			await sql`update platform.session_sandbox_allocations set status='ready'`;
+			expect(await store.candidates([target.name])).toEqual([]);
+			await expect(store.prepare(target)).rejects.toThrow("ELIGIBLE");
+			await sql`update platform.session_sandbox_allocations set status='stopped'`;
+			await sql`update platform.outbox_items set updated_at=now()`;
+			await sql`update platform.conversation_audit_events set occurred_at=clock_timestamp() where id='stopped-observed'`;
+			expect(await store.candidates([target.name])).toEqual([]);
+		},
+	);
+	it("resumes a published charged journal without the new marker", async () => {
+		await store.prepare(target);
+		await sql`update platform.audit_events set details=details-'chargeApplicable'`;
+		await store.complete(target);
+		expect(await store.inspect(target)).toMatchObject({
+			state: { charge_applicable: true, released: true },
+		});
 	});
 	it("retains charge after unconfirmed delete and resumes original journal after process failure", async () => {
 		await store.prepare(target);

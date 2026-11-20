@@ -169,11 +169,47 @@ export async function readConnectionMachineOAuthClientV1(options: {
 	}
 }
 
+async function readMachineRevocationReceipt(
+	response: Response,
+	assertCurrent: () => void,
+): Promise<unknown> {
+	if (!response.body) standardOAuthUnavailable();
+	const reader = response.body.getReader();
+	const buffer = new Uint8Array(32_768);
+	let size = 0;
+	let complete = false;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			assertCurrent();
+			if (done) break;
+			if (size + value.byteLength > buffer.byteLength)
+				standardOAuthUnavailable();
+			buffer.set(value, size);
+			size += value.byteLength;
+		}
+		complete = true;
+		return JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(
+				buffer.subarray(0, size),
+			),
+		);
+	} finally {
+		if (!complete) void reader.cancel().catch(() => undefined);
+		reader.releaseLock();
+	}
+}
+
 /** Revoke a machine registration and dependent device/OAuth session state. */
 export async function revokeConnectionMachineOAuthClientV1(options: {
 	readonly endpoint: string;
 	readonly serviceCredential: string;
 	readonly registrationKey: string;
+	readonly expected: {
+		readonly consumerId: string;
+		readonly clientId: string;
+		readonly instanceId: string;
+	};
 	readonly signal: AbortSignal;
 	readonly assertCurrent: () => void;
 	readonly fetch?: FetchLike;
@@ -200,9 +236,36 @@ export async function revokeConnectionMachineOAuthClientV1(options: {
 			signal,
 		});
 		options.assertCurrent();
+		if (response.status !== 200 || response.redirected)
+			standardOAuthUnavailable();
+		const value = await readMachineRevocationReceipt(
+			response,
+			options.assertCurrent,
+		);
+		options.assertCurrent();
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			standardOAuthUnavailable();
+		const { registrationVersion, outcome, registration } = value as Record<
+			string,
+			unknown
+		>;
 		if (
-			(response.status !== 200 && response.status !== 204) ||
-			response.redirected
+			registrationVersion !== 1 ||
+			outcome !== "KNOWN" ||
+			!registration ||
+			typeof registration !== "object" ||
+			Array.isArray(registration)
+		)
+			standardOAuthUnavailable();
+		const record = registration as Record<string, unknown>;
+		if (
+			record.registrationKey !== options.registrationKey ||
+			record.consumerId !== options.expected.consumerId ||
+			record.clientId !== options.expected.clientId ||
+			record.instanceId !== options.expected.instanceId ||
+			record.status !== "REVOKED" ||
+			record.clientStatus !== "REVOKED" ||
+			record.instanceStatus !== "REVOKED"
 		)
 			standardOAuthUnavailable();
 	} catch {

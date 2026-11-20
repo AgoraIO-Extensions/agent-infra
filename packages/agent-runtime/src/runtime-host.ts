@@ -830,8 +830,8 @@ export class RuntimeHost {
 				store: options.store,
 				driver: options.driver,
 				grantValidation: options.grantValidationV2,
-				dispatch: (ref, operation, allowBusinessExecution) =>
-					this.dispatch(ref, operation, allowBusinessExecution),
+				dispatch: (ref, operation, allowBusinessExecution, context) =>
+					this.dispatch(ref, operation, allowBusinessExecution, context),
 				serialize: (key, work) => this.serialize(key, work),
 				executeBrowserHandoff: (request, claims, signal) =>
 					this.executeBrowserHandoffV3(request, claims, signal),
@@ -3432,7 +3432,7 @@ export class RuntimeHost {
 		}
 		await this.options.afterOperationPrepared?.(operation.operationId);
 		const rawLookup = await callDriverWithUncertainty(() =>
-			this.options.driver.lookupOperation(operation.command),
+			this.options.driver.lookupOperation(operation.command, context),
 		);
 		if (rawLookup === driverUncertain) {
 			if (isInterruption(operation)) {

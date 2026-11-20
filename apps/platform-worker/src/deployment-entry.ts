@@ -25,10 +25,6 @@ import {
 } from "./connection-consumer-projection.js";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
 import {
-	createOwnerConnectionBindingsResolverV1,
-	type OwnerConnectionBindingsOptionsV1,
-} from "./connection-manual-bindings.js";
-import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
 	openStartupConnectionDeliveryGuardV1,
@@ -121,10 +117,19 @@ type DeploymentConfiguration = {
 	 * uses the same Agent key for its profile, approval and installation supply.
 	 */
 	readonly resolveConnectionConsumerBindingsByAgent?: ConnectionConsumerBindingsResolverV1;
-	/** Default Owner-association reader; credentials are decrypted only for protected Host supply. */
-	readonly ownerConnectionBindings?: OwnerConnectionBindingsOptionsV1;
+	readonly ownerConnectionBindings?: unknown;
+	readonly ownerConnectionBindingConfiguration?: unknown;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
+	readonly connectionInstallBootstrap?: import("./connection-install-bootstrap.js").ConnectionInstallBootstrapDeploymentV1;
+	readonly connectionInstallWorker?: {
+		readonly hostCaFile: string;
+		readonly readbackCertFile: string;
+		readonly readbackKeyFile: string;
+		readonly keyring: Parameters<
+			typeof import("@agent-infra/secret-store/worker").createSecretKeyringDecryptorV1
+		>[0];
+	};
 	readonly connectionInstallationSupply?: unknown;
 	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
@@ -251,11 +256,14 @@ const {
 	connectionConsumerProfilesByAgent: removedConnectionConsumerProfilesByAgent,
 	resolveConnectionConsumerBindingsByAgent,
 	ownerConnectionBindings,
+	ownerConnectionBindingConfiguration,
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent:
 		removedConnectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
 	connectionOAuthProvisioning: configuredConnectionOAuthProvisioning,
+	connectionInstallBootstrap: configuredConnectionInstallBootstrap,
+	connectionInstallWorker: configuredConnectionInstallWorker,
 	createSkillMaterializer,
 	skillMaterialization,
 	nativeMetadataGateway: configuredNativeMetadataGateway,
@@ -265,6 +273,25 @@ const {
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
+
+if (
+	configuredConnectionInstallBootstrap !== undefined ||
+	configuredConnectionInstallWorker !== undefined
+) {
+	console.warn(
+		JSON.stringify({
+			service: "platform-worker",
+			code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+			dependency: "EP-1123",
+		}),
+	);
+}
+
+if (
+	ownerConnectionBindings !== undefined ||
+	ownerConnectionBindingConfiguration !== undefined
+)
+	throw new Error("CONNECTION_OWNER_SUPPLY_REQUIRES_PREPARE");
 
 // Capture one immutable declaration/byte digest for the Worker and normal RO entry.
 const hostnameRouteConfigurationSource = readHostnameRouteConfigurationV1();
@@ -540,14 +567,9 @@ const staticPerAgentConnectionBindings =
 			"configurationsByAgentAndPrincipal",
 			"principalBindingsByAgentAndPrincipal",
 		].some((key) => Object.hasOwn(configuredConnectionInstallation, key)));
-const ownerAssociationBindingsResolver = ownerConnectionBindings
-	? createOwnerConnectionBindingsResolverV1(ownerConnectionBindings)
-	: undefined;
-const effectiveConnectionConsumerBindingsResolver =
-	resolveConnectionConsumerBindingsByAgent ?? ownerAssociationBindingsResolver;
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
-	effectiveConnectionConsumerBindingsResolver !== undefined;
+	resolveConnectionConsumerBindingsByAgent !== undefined;
 const configuredSharedSnapshot = perAgentConsumerSelection
 	? undefined
 	: createRuntimeConnectionConsumerSnapshotV1(
@@ -640,7 +662,7 @@ async function createPreparedOwning(
 	const legacySelectionRequired =
 		!automaticRegistrationPolicy &&
 		Boolean(
-			connectionConsumerSnapshot || effectiveConnectionConsumerBindingsResolver,
+			connectionConsumerSnapshot || resolveConnectionConsumerBindingsByAgent,
 		);
 	const readLegacySelection = () =>
 		readConnectionConsumerSourceSelectionV1(databaseUrl).catch(() => undefined);
@@ -654,7 +676,7 @@ async function createPreparedOwning(
 		? await resolveRegisteredConnectionConsumerBindingsV1({
 				databaseUrl,
 				policy: automaticRegistrationPolicy,
-				resolve: effectiveConnectionConsumerBindingsResolver,
+				resolve: resolveConnectionConsumerBindingsByAgent,
 				signal,
 			}).catch(() => {
 				signal.throwIfAborted();
@@ -665,8 +687,8 @@ async function createPreparedOwning(
 					(!legacySelection.legacyAgentIds.length &&
 						legacySelection.automaticAgentIds.length > 0))
 			? {}
-			: await effectiveConnectionConsumerBindingsResolver?.(signal);
-	if (legacySelectionRequired && effectiveConnectionConsumerBindingsResolver)
+			: await resolveConnectionConsumerBindingsByAgent?.(signal);
+	if (legacySelectionRequired && resolveConnectionConsumerBindingsByAgent)
 		legacySelection = await readLegacySelection();
 	signal.throwIfAborted();
 	const persistentAutomaticSource =
@@ -895,11 +917,25 @@ async function createPreparedOwning(
 		configuration: wecom,
 		sessionSandboxReserves,
 	});
+	const executorStartupTimeout =
+		process.env.PLATFORM_WORKER_EXECUTOR_DRAIN_STARTUP_TIMEOUT_MS;
+	const executorDrainStartupTimeoutMs =
+		executorStartupTimeout === undefined
+			? undefined
+			: Number(executorStartupTimeout);
+	if (
+		executorDrainStartupTimeoutMs !== undefined &&
+		(!Number.isSafeInteger(executorDrainStartupTimeoutMs) ||
+			executorDrainStartupTimeoutMs < 1_000 ||
+			executorDrainStartupTimeoutMs > 900_000)
+	)
+		throw new Error("WORKER_EXECUTOR_DRAIN_STARTUP_TIMEOUT_INVALID");
 	const resolveRuntimeHost =
 		conversationDeployment.createProductionConversationRuntimeResolverV2({
 			workload: { ...workload, workerId: signing.workerId },
 			signing,
 			serviceToken,
+			executorDrainStartupTimeoutMs,
 			connectionConsumerProfile: selectedSharedConsumer?.profile,
 			connectionConsumerApproval: selectedSharedConsumer?.approval,
 			...(resolvedProfilesByAgent
@@ -1052,6 +1088,8 @@ async function createPreparedOwning(
 					{
 						serviceToken,
 						oauthProvisioning: configuredConnectionOAuthProvisioning,
+						executorDrainStartupTimeoutMs,
+						executorIdentityIssuer: signing.privateKey,
 					},
 				),
 			resolveRuntimeHost: async (

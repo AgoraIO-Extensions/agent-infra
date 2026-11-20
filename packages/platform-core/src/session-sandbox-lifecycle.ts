@@ -380,12 +380,20 @@ function holdsNoSandboxWorkV1(status: string): boolean {
 }
 
 /** Resource absence never decides an original Execution outcome or frees unknown occupancy.
- * Only execution status decides (ADR 0023): a Turn waiting for this very
- * drain already carries a delivery fence from its claim. */
+ * A waiting Turn has no Runtime occupancy, but a terminal Turn can still own
+ * journal/ACK or executor drain work that needs the original compute. */
 export function canDrainSessionSandboxComputeV1(
 	executionStatuses: readonly string[],
+	control?: {
+		readonly eventsPending: boolean;
+		readonly executorDrainPending: boolean;
+	},
 ): boolean {
-	return executionStatuses.every(holdsNoSandboxWorkV1);
+	return (
+		!control?.eventsPending &&
+		!control?.executorDrainPending &&
+		executionStatuses.every(holdsNoSandboxWorkV1)
+	);
 }
 
 /**

@@ -4865,3 +4865,134 @@ describe("Runtime-reported unsubmitted Turns (#3373)", () => {
 		expect(store.current.executionStatus).toBe("unknown");
 	});
 });
+
+it("Files4266 records reliable completed before retrying an absent terminal event", async () => {
+	let submissions = 0;
+	const runtimeHost: ConversationRuntimeHostPortV1 = {
+		async dispatch() {
+			submissions++;
+			throw new Error("No Turn replay permitted");
+		},
+		async recoverStatus() {
+			throw new Error("No legacy recovery");
+		},
+		async recoverOriginalStatus(request) {
+			return {
+				schemaVersion: 2,
+				executionId: request.executionId,
+				hostSessionRef: "host-original",
+				outcome: "found",
+				status: "completed",
+			};
+		},
+		async *events() {},
+	};
+	const store = new MemoryDispatchStore(
+		claim({
+			executionStatus: "unknown",
+			hostSessionRef: "host-original",
+			stopPending: true,
+		}),
+	);
+	const h = setup({ store, runtimeHost });
+	const result = await dispatch(h.useCase);
+	expect(result).toMatchObject({ outcome: "retry" });
+	expect(store.current.executionStatus).toBe("completed");
+	expect(store.outboxStatus).toBe("retry_scheduled");
+	expect(store.errorCode).toBe("RUNTIME_STREAM_INCOMPLETE");
+	expect(h.events.persisted).toHaveLength(0);
+	expect(submissions).toBe(0);
+});
+
+it("Files4266 retains completed when original control event reading is unavailable", async () => {
+	let submissions = 0;
+	const runtimeHost: ConversationRuntimeHostPortV1 = {
+		async dispatch() {
+			submissions++;
+			throw new Error("No Turn replay permitted");
+		},
+		async recoverStatus() {
+			throw new Error("No legacy recovery");
+		},
+		async recoverOriginalStatus(request) {
+			return {
+				schemaVersion: 2,
+				executionId: request.executionId,
+				hostSessionRef: "host-original",
+				outcome: "found",
+				status: "completed",
+			};
+		},
+		events() {
+			throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+		},
+	};
+	const store = new MemoryDispatchStore(
+		claim({
+			executionStatus: "unknown",
+			hostSessionRef: "host-original",
+			stopPending: true,
+		}),
+	);
+	const h = setup({
+		store,
+		runtimeHost,
+		authorization: authorization({ controlOnly: true }),
+	});
+	const result = await dispatch(h.useCase);
+	expect(result).toMatchObject({ outcome: "retry" });
+	expect(store.current.executionStatus).toBe("completed");
+	expect(store.outboxStatus).toBe("retry_scheduled");
+	expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
+	expect(h.events.persisted).toHaveLength(0);
+	expect(submissions).toBe(0);
+});
+
+it.each([false, true])(
+	"retains terminal/event or executor control occupancy past the ordinary recovery budget (executor=%s, #4266)",
+	async (executor) => {
+		const status = executor ? "unknown" : "completed";
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: status,
+				hostSessionRef: "host-original",
+				attemptCount: 999,
+				recoveryElapsedMs: 300_001,
+				...(executor
+					? { executorDrainPending: true as const, stopPending: true }
+					: {}),
+			}),
+		);
+		let submissions = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				submissions++;
+				throw new Error("Original Turn must not replay");
+			},
+			async recoverStatus() {
+				throw new Error("Use the original accepted scope");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-original",
+					outcome: "found",
+					status,
+				};
+			},
+			events() {
+				throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+			},
+		};
+		const h = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(h.useCase)).toMatchObject({ outcome: "retry" });
+		expect(store.current.executionStatus).toBe(status);
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(submissions).toBe(0);
+	},
+);

@@ -5,6 +5,7 @@ import {
 	openPostgresSessionSandboxImageReaderV1,
 	openPostgresWorkspaceSnapshotMaterializationReaderV1,
 } from "@agent-infra/platform-store";
+import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import {
 	type RuntimeDemandImageContextV1,
 	runtimeDemandImageContextV1,
@@ -38,6 +39,7 @@ export interface WorkerSessionDemandImageDeploymentV1 {
 	};
 	readonly serviceToken: unknown;
 	readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 	/** The deployment configuration module this process evaluated. */
 	readonly configurationModule: URL;
 	/**
@@ -167,6 +169,9 @@ async function deploymentAuthority(
 				...(resolver ? { workspaceSnapshotResolver: resolver } : {}),
 			},
 			serviceToken: deployment.serviceToken,
+			...(deployment.connectionInstallBootstrap
+				? { connectionInstallBootstrap: deployment.connectionInstallBootstrap }
+				: {}),
 			...(deployment.oauthProvisioning
 				? { oauthProvisioning: deployment.oauthProvisioning }
 				: {}),

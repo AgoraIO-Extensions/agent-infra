@@ -1,7 +1,6 @@
 import {
 	registerConnectionMachineOAuthClientV1,
 	registerStandardOAuthClient,
-	revokeConnectionMachineOAuthClientV1,
 } from "@agent-infra/agent-runtime";
 import {
 	type ConnectionConsumerProfileV1,
@@ -221,28 +220,4 @@ export function createConnectionConsumerDcrResolverV1(
 		}
 		return result;
 	};
-}
-
-/** Revocation hook used by Owner disconnect/replacement cleanup. It is deliberately
- * explicit so a stale installation cannot be silently reused after association CAS. */
-export async function revokeConnectionConsumerMachineRegistrationV1(options: {
-	readonly endpoint: string;
-	readonly serviceCredential: string;
-	readonly binding: Pick<
-		ConnectionConsumerOAuthClientBindingV1,
-		"registrationKey"
-	>;
-	readonly signal: AbortSignal;
-	readonly fetch?: typeof fetch;
-}) {
-	if (!options.binding.registrationKey)
-		throw new Error("CONNECTION_OAUTH_REGISTRATION_UNAVAILABLE");
-	await revokeConnectionMachineOAuthClientV1({
-		endpoint: options.endpoint,
-		serviceCredential: options.serviceCredential,
-		registrationKey: options.binding.registrationKey,
-		signal: options.signal,
-		assertCurrent: () => options.signal.throwIfAborted(),
-		...(options.fetch ? { fetch: options.fetch } : {}),
-	});
 }

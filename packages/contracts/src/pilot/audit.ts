@@ -159,6 +159,15 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"application.credential.issued",
 	"application.credential.rotated",
 	"application.credential.delivery",
+	"application.credential.material.intent",
+	"application.credential.material.claimed",
+	"application.credential.material.issued",
+	"application.credential.material.rotated",
+	"application.credential.material.transmitted",
+	"application.credential.material.accepted",
+	"application.credential.material.unknown",
+	"application.credential.material.expired",
+
 	"application.credential.metadata.read",
 	"application.credential.revoked",
 ]);

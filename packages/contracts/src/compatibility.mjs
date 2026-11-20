@@ -7491,9 +7491,90 @@ function normalizeOperations4178(previous, current) {
 	};
 }
 
+// #4264: exact additive material endpoints and audit actions; unrelated changes remain checked.
+function normalizeMaterialDelivery4264(document) {
+	if (!document.openapi) return document;
+	const copy = structuredClone(document);
+	const paths = {
+		"/api/v2/applications/{applicationId}/credential-material-deliveries":
+			"2968dcd12d52924abf943953c8fbe2d9b784a441378cee11098c964c7b7ae01d",
+		"/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}":
+			"ea3a6d6f243a1d7104dbff615b6b92dd812ecd395193bbdda60018d37e26f39c",
+		"/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}/confirm":
+			"2e6d42b91fd20979dc4413e6cdfd3c90ed1b2885549444ced966302bbfcc07f8",
+		"/api/v2/applications/{applicationId}/credential-material-deliveries/{attemptId}/receive":
+			"6c6aa8ff28bc7070b38cecab624895de19beede5dea101f6454a5ef6f83e8f73",
+	};
+	for (const [path, digest] of Object.entries(paths)) {
+		if (copy.paths?.[path] === undefined) continue;
+		if (
+			createHash("sha256")
+				.update(JSON.stringify(copy.paths[path]))
+				.digest("hex") !== digest
+		)
+			return document;
+		delete copy.paths[path];
+	}
+	const additions = [
+		"application.credential.material.intent",
+		"application.credential.material.claimed",
+		"application.credential.material.issued",
+		"application.credential.material.rotated",
+		"application.credential.material.transmitted",
+		"application.credential.material.accepted",
+		"application.credential.material.unknown",
+		"application.credential.material.expired",
+	];
+	let invalid = false;
+	function visit(value) {
+		if (!value || typeof value !== "object") return;
+		if (
+			Array.isArray(value.enum) &&
+			value.enum.some((action) => additions.includes(action))
+		) {
+			const selected = value.enum.filter((action) =>
+				String(action).startsWith("application.credential.material."),
+			);
+			if (!sameValue(selected, additions)) {
+				invalid = true;
+				return;
+			}
+			value.enum = value.enum.filter((action) => !additions.includes(action));
+		}
+		for (const child of Object.values(value)) visit(child);
+	}
+	visit(copy);
+	return invalid ? document : copy;
+}
+
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
-	let previousValue = originalPrevious;
-	let currentValue = originalCurrent;
+	// Once published, the added endpoints/actions cannot be removed through normalization.
+	const prefix4264 =
+		"/api/v2/applications/{applicationId}/credential-material-deliveries";
+	const priorPaths4264 = Object.keys(originalPrevious.paths ?? {}).filter(
+		(path) => path.startsWith(prefix4264),
+	);
+	if (
+		priorPaths4264.some((path) => originalCurrent.paths?.[path] === undefined)
+	)
+		return ["removed published application material endpoint"];
+	const beforeActions4264 =
+		originalPrevious.components?.schemas?.ScopedPlatformAuditActionV1?.enum ??
+		[];
+	const afterActions4264 =
+		originalCurrent.components?.schemas?.ScopedPlatformAuditActionV1?.enum ??
+		[];
+	if (
+		beforeActions4264.some(
+			(action) =>
+				String(action).startsWith("application.credential.material.") &&
+				!afterActions4264.includes(action),
+		)
+	)
+		return ["removed published application material audit action"];
+
+	let previousValue = normalizeMaterialDelivery4264(originalPrevious);
+	let currentValue = normalizeMaterialDelivery4264(originalCurrent);
 	// #4236: allow the reviewed additive operations query and keep the rest of
 	// the document under its existing historical compatibility checks.
 	const taskPath = "/api/v2/ops/tasks";

@@ -1372,6 +1372,7 @@ describe("RuntimeHost environment assembly", () => {
 					approval.source.revision,
 				]),
 				AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE: oauthFile,
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
 				AGENT_INFRA_RUNTIME_SANDBOX_ID: "synthetic-sandbox",
 				AGENT_INFRA_RUNTIME_POD_UID: "synthetic-pod",
 				AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",

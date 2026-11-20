@@ -27,10 +27,11 @@ import type {
 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
+	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
-import type { V1Secret, V1Service } from "@kubernetes/client-node";
+import type { V1Pod, V1Secret, V1Service } from "@kubernetes/client-node";
 import {
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
@@ -41,6 +42,8 @@ import {
 	runtimeConnectionInstallationOAuthPublicationForAgentV1,
 	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
+import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
+import { sessionSandboxConnectionInstallTokenV1 } from "./connection-install-readback-server.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -52,6 +55,7 @@ import {
 	createSessionSandboxWorkloadAdapterV1,
 	hasSessionSandboxIdentityV1,
 	isNativeMetadataWorkerOriginV1,
+	SessionExecutorStartupExpiredV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
 	type SessionSandboxOAuthProvisioningV1,
@@ -116,6 +120,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
+	readonly executorDrainStartupTimeoutMs?: number;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
 	readonly connectionConsumerProfilesByAgent?: Readonly<
@@ -231,6 +236,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	const runtime = createWorkloadRuntimeV1(workload);
 	const allocationFor = createSessionSandboxAllocationResolverV1(workload, {
 		serviceToken,
+		executorDrainStartupTimeoutMs: options.executorDrainStartupTimeoutMs,
 	});
 	const sandboxAdapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
@@ -592,9 +598,12 @@ export function createSessionSandboxResourceInputResolverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
+		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
 	const egressPolicy = structuredClone(workload.policy);
+	const install = options.connectionInstallBootstrap;
 	if (workload.policy.codexSessionExecutor !== undefined)
 		validateCodexSessionExecutorPolicyV1(workload.policy.codexSessionExecutor);
 	workloadEgressRulesV1(egressPolicy);
@@ -831,9 +840,37 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(install &&
+			runtime?.driver === "codex" &&
+			templateBinding &&
+			!runtime.custom
+				? {
+						connectionInstallBootstrap: {
+							port: install.port,
+							workerOrigin: install.workerOrigin,
+							apiSelector: install.apiSelector,
+							clientName: install.clientName,
+							configuration: install.configuration,
+							approval: install.approval,
+							tlsSecretRef: install.tlsSecretForSandbox(binding.resourceName),
+							callbackAuthSecretRef: install.callbackAuthSecretRef,
+							workerCaSecretRef: install.workerCaSecretRef,
+							installToken: sessionSandboxConnectionInstallTokenV1(
+								options.serviceToken,
+								policy.namespace,
+								binding.sandboxId,
+							),
+						},
+					}
+				: {}),
 			...(runtime?.sessionExecutor &&
 			workload.policy.codexSessionExecutor !== undefined
-				? { codexSessionExecutor: workload.policy.codexSessionExecutor }
+				? {
+						codexSessionExecutor: workload.policy.codexSessionExecutor,
+						...(options.executorDrainStartupTimeoutMs === undefined
+							? {}
+							: { executorDrainIdentity: true as const }),
+					}
 				: {}),
 			...(skillHub ? { skillHub } : {}),
 			...(deployment.skillDeliveryImage
@@ -1064,6 +1101,8 @@ function createSessionSandboxAllocationResolverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
+		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
 	const provisioning =
@@ -1244,10 +1283,14 @@ export function createProductionSessionSandboxReceiverV1(
 	options: {
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
+		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
+		readonly executorDrainStartupTimeoutMs?: number;
+		readonly executorIdentityIssuer?: ConversationRuntimeOptionsV2["signing"]["privateKey"];
 	},
 ) {
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
+		executorIdentityIssuer: options.executorIdentityIssuer,
 	});
 	const allocationFor = createSessionSandboxAllocationResolverV1(
 		workload,
@@ -1259,7 +1302,15 @@ export function createProductionSessionSandboxReceiverV1(
 		recordDeletionProgress?: (
 			progress: SessionSandboxDeletionProgressV1,
 		) => Promise<"committed" | "stale" | "unknown">,
-	) => {
+		recordExecutorStartup?: (
+			startupRef: string,
+			timeoutMs: number,
+		) => Promise<number | null>,
+		recordExecutorRetirement?: (
+			resources: readonly SessionSandboxResourceIdentityV1[],
+		) => Promise<readonly SessionSandboxResourceIdentityV1[] | null>,
+		readExecutorRetirement?: () => Promise<boolean>,
+	): Promise<SessionSandboxObservationV1> => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
 			throw new Error("Sandbox reconcile has no execution");
@@ -1604,7 +1655,12 @@ export function createProductionSessionSandboxReceiverV1(
 				({ resource }) =>
 					resource.kind === "Pod" && resource.uid === recordedPod?.uid,
 			);
-		if ((!claim.lifecycle || preparedReplacement) && recordedPod) {
+		if (
+			(!claim.lifecycle || preparedReplacement) &&
+			recordedPod &&
+			(!allocation.executorDrainIdentity ||
+				claim.previousObservation?.status === "ready")
+		) {
 			if ((await workload.client.read("Pod", recordedPod.name)) === null) {
 				signal.throwIfAborted();
 				return {
@@ -1616,17 +1672,83 @@ export function createProductionSessionSandboxReceiverV1(
 			signal.throwIfAborted();
 		}
 		let previousForApply = previous;
+		let deploymentAllocation = allocation;
+		if (allocation.executorDrainIdentity) {
+			const timeout = options.executorDrainStartupTimeoutMs;
+			if (!timeout || !recordExecutorStartup)
+				throw new WorkloadKubernetesError("policy");
+			const executorStartupDeadline = await recordExecutorStartup(
+				`${allocation.podName}-executor-${allocation.resourceFence}`,
+				timeout,
+			);
+			signal.throwIfAborted();
+			if (executorStartupDeadline === null)
+				throw new WorkloadKubernetesError("conflict");
+			deploymentAllocation = { ...allocation, executorStartupDeadline };
+		}
+		const retireExpired = async () => {
+			if (
+				!recordExecutorRetirement ||
+				claim.previousObservation?.status === "ready"
+			)
+				throw new WorkloadKubernetesError("conflict");
+			const resources = await adapter.retireExpiredExecutorStartup(
+				deploymentAllocation,
+				previousForApply,
+				recordExecutorRetirement,
+				signal,
+			);
+			signal.throwIfAborted();
+			return {
+				status: "unknown" as const,
+				failureCode: "runtime.executor_identity_timeout" as const,
+				resources,
+			};
+		};
+		const firstExecutorDeadline =
+			claim.previousObservation?.status === "ready"
+				? undefined
+				: deploymentAllocation.executorStartupDeadline;
+		if (firstExecutorDeadline !== undefined) {
+			const retirementPending = await readExecutorRetirement?.();
+			signal.throwIfAborted();
+			if (retirementPending || Date.now() >= firstExecutorDeadline)
+				return retireExpired();
+			const pod = await workload.client.read<V1Pod>("Pod", allocation.podName);
+			if (recordedPod && !pod)
+				return {
+					status: "unknown" as const,
+					failureCode: "sandbox.pod_lost" as const,
+					resources: previous,
+				};
+		}
 		// 没有保留 PVC 的回执（#2918）按新建准备；旧来源 UID 只在首次替换时排除。
 		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
 			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
 			signal.throwIfAborted();
 			previousForApply = preparedReplacement ? previous : [];
 		}
-		await adapter.apply(allocation, previousForApply);
+
+		try {
+			await adapter.apply(deploymentAllocation, previousForApply);
+		} catch (error) {
+			if (!(error instanceof SessionExecutorStartupExpiredV1)) throw error;
+			return retireExpired();
+		}
+
 		signal.throwIfAborted();
 		// One complete observe per claim; normal prepare pacing is durable in Store.
 		// Keep the lease/abort/CAS boundary here and let the next claim use the
 		// persisted generation/fence audit anchor instead of a hot in-lease loop.
-		return adapter.observe(allocation, previousForApply);
+		const observed = await adapter.observe(
+			deploymentAllocation,
+			previousForApply,
+		);
+		if (
+			firstExecutorDeadline !== undefined &&
+			Date.now() >= firstExecutorDeadline
+		)
+			return retireExpired();
+		return observed;
 	};
 }

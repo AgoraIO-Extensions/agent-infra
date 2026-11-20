@@ -679,6 +679,29 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]) {
 	);
 }
 
+function isExecutorDrainPort(
+	value: unknown,
+): value is NonNullable<CodexSessionExecutorAdmissionV1["drain"]> {
+	const keys = [
+		"arm",
+		"bindNativeTurn",
+		"endpoint",
+		"sealStop",
+		"confirm",
+		"proven",
+	];
+	return (
+		isPlainRecord(value) &&
+		exactKeys(
+			value,
+			value.reportTerminal === undefined ? keys : [...keys, "reportTerminal"],
+		) &&
+		keys.every((key) => typeof value[key] === "function") &&
+		(value.reportTerminal === undefined ||
+			typeof value.reportTerminal === "function")
+	);
+}
+
 /** @internal Receives trusted deployment authority, pinning its identity and epoch. */
 export function receiveCodexSessionExecutorAdmissionV1(
 	input: unknown,
@@ -691,6 +714,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 			"assertCurrent",
 			"onFailure",
 			"close",
+			...(input.drain === undefined ? [] : ["drain"]),
 		]) ||
 		typeof input.epoch !== "string" ||
 		!/^[-a-f0-9]{36}$/.test(input.epoch) ||
@@ -706,13 +730,19 @@ export function receiveCodexSessionExecutorAdmissionV1(
 		configurationInvalid();
 	}
 	const { epoch, assertCurrent, onFailure, close } = input;
+	let drain: CodexSessionExecutorAdmissionV1["drain"];
+	if (input.drain !== undefined) {
+		if (!isExecutorDrainPort(input.drain)) configurationInvalid();
+		drain = Object.freeze({ ...input.drain });
+	}
 	const assertPinned = () => {
 		if (
 			input.epoch !== epoch ||
 			!isDeepStrictEqual(input.binding, binding) ||
 			input.assertCurrent !== assertCurrent ||
 			input.onFailure !== onFailure ||
-			input.close !== close
+			input.close !== close ||
+			!isDeepStrictEqual(input.drain, drain)
 		)
 			configurationInvalid();
 	};
@@ -731,6 +761,7 @@ export function receiveCodexSessionExecutorAdmissionV1(
 			return unsubscribe;
 		},
 		close: () => close.call(input),
+		...(drain ? { drain } : {}),
 	});
 }
 
@@ -1806,7 +1837,11 @@ export class CodexAppServerBridge {
 						// Only trusted Session authority can select the fixed remote executor.
 						...nativeLaunchPolicy.environment,
 						...(validated.sessionExecutor
-							? { CODEX_EXEC_SERVER_URL: CODEX_SESSION_EXECUTOR_ENDPOINT }
+							? {
+									CODEX_EXEC_SERVER_URL:
+										validated.sessionExecutor.drain?.endpoint() ??
+										CODEX_SESSION_EXECUTOR_ENDPOINT,
+								}
 							: {}),
 						...loopbackProxyEnvironment(),
 						...(validated.modelAccess

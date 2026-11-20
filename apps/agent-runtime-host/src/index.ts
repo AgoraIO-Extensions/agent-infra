@@ -67,6 +67,12 @@ import {
 	readRuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
 import {
+	type ConnectionInstallReceiverAssemblyV1,
+	startConnectionInstallReceiverServerV1,
+} from "./connection-install-receiver.js";
+import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
+import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
+import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
 } from "./legacy-migration.js";
@@ -110,6 +116,7 @@ interface StartOptions {
 		| RuntimeBrowserCapabilityAssemblyV1
 		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
 	oauth?: RuntimeOAuthAssembly;
+	connectionInstall?: ConnectionInstallReceiverAssemblyV1;
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
@@ -279,6 +286,10 @@ const oauthServers = new WeakMap<
 	ReturnType<typeof serve>,
 	ReturnType<typeof createHttpsServer>
 >();
+const connectionInstallServers = new WeakMap<
+	ReturnType<typeof serve>,
+	ReturnType<typeof createHttpsServer>
+>();
 
 export function startRuntimeOAuthServer(
 	assembly: Extract<RuntimeOAuthAssembly, { status: "available" }>,
@@ -318,6 +329,24 @@ export function startRuntimeHost(options: StartOptions) {
 	}
 	if (options.oauth?.status === "available" && options.oauth.port === port)
 		void options.oauth.client.close().catch(() => undefined);
+	let connectionInstallServer: ReturnType<typeof createHttpsServer> | undefined;
+	const connectionInstall = options.connectionInstall;
+	if (connectionInstall?.status === "available") {
+		if (
+			connectionInstall.port !== port &&
+			!(
+				options.oauth?.status === "available" &&
+				options.oauth.port === connectionInstall.port
+			)
+		) {
+			try {
+				connectionInstallServer =
+					startConnectionInstallReceiverServerV1(connectionInstall);
+			} catch {
+				void connectionInstall.close().catch(() => undefined);
+			}
+		} else void connectionInstall.close().catch(() => undefined);
+	}
 	const server = serve(
 		{
 			fetch: createRuntimeHostApp({ ...options, connectionConsumer }).fetch,
@@ -351,6 +380,12 @@ export function startRuntimeHost(options: StartOptions) {
 		oauthServers.set(server, oauthServer);
 		server.once("close", () => {
 			oauthServer.close();
+		});
+	}
+	if (connectionInstallServer) {
+		connectionInstallServers.set(server, connectionInstallServer);
+		server.once("close", () => {
+			connectionInstallServer.close();
 		});
 	}
 	return server;
@@ -557,6 +592,17 @@ export async function assembleRuntimeHost(
 				required("AGENT_INFRA_RUNTIME_POD_UID"),
 			);
 			await pinCodexSessionExecutorEpochV1(dataDirectory, sessionExecutor);
+			if (environment.AGENT_INFRA_EXECUTOR_STARTUP_REF !== undefined) {
+				sessionExecutor = await openExecutorDrainHostV1(
+					sessionExecutor,
+					await consumeExecutorIdentityV1(
+						"host",
+						sessionExecutorBinding,
+						environment,
+					),
+					dataDirectory,
+				);
+			}
 			detachSessionExecutorFailure = sessionExecutor.onFailure(() => {
 				void Promise.resolve()
 					.then(async () => {
@@ -589,6 +635,21 @@ export async function assembleRuntimeHost(
 			keyId,
 			issuer: expectedIssuer,
 		});
+		if (
+			Object.keys(environment).some(
+				(key) =>
+					key.startsWith("AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_") &&
+					environment[key] !== undefined,
+			)
+		) {
+			console.warn(
+				JSON.stringify({
+					service: "agent-runtime-host",
+					code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+					dependency: "EP-1123",
+				}),
+			);
+		}
 		// Protected Standard MCP is assembled only for a pinned, explicitly gated
 		// native transport. Connection credentials remain in this Host client.
 		const standardConnectionClient =
@@ -1044,6 +1105,14 @@ export async function closeRuntimeHost(
 				oauthServer.closeAllConnections();
 			});
 			oauthServers.delete(server);
+		}
+		const connectionInstallServer = connectionInstallServers.get(server);
+		if (connectionInstallServer) {
+			await new Promise<void>((resolve) => {
+				connectionInstallServer.close(() => resolve());
+				connectionInstallServer.closeAllConnections();
+			});
+			connectionInstallServers.delete(server);
 		}
 		await new Promise<void>((resolve, reject) => {
 			server.close((error) => (error ? reject(error) : resolve()));
