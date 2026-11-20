@@ -73,7 +73,10 @@ Grant。
 **风险接受依据。** 用户 2026-11-20T04:3xZ 原话（经 Kiro sess_714f2fb5 前台转达）：
 “我觉得这是安全问题吧？先不管它打通流程再说，后续再优化”。用户 2026-11-20T05:4xZ 另确认
 产品模型保持不变：Owner 关联 Agent 时不需要批准动作，每个使用者用自己的身份在 Connection
-独立确认自己的安装。
+独立确认自己的安装。用户 2026-11-20T07:5xZ 决定（原话“按你的建议”，见
+[#4269 评论 7033676112](https://github.com/AgoraIO-Extensions/agent-infra/pull/4269#issuecomment-7033676112)）
+接受：去掉 Owner-only 后，上文最坏情况中的攻击者从该 Agent 的 Owner 扩大到该 Agent 的任一
+使用者；补偿措施不变。
 
 ## 取舍
 
