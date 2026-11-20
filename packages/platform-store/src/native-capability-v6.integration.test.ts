@@ -281,9 +281,11 @@ it("rejects a new operation when its Key is no longer current", async () => {
 	expect(await useCase().admit(request())).toMatchObject({ outcome: "denied" });
 	expect(await effects()).toEqual(noEffects);
 });
-it("rejects a new operation when the current Key is absent", async () => {
+it("reports an absent personal Key before writing a new operation", async () => {
 	await client`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${authority.actorId}`;
-	expect(await useCase().admit(request())).toMatchObject({ outcome: "denied" });
+	await expect(useCase().admit(request())).rejects.toMatchObject({
+		code: "personal_relay_key_unavailable",
+	});
 	expect(await effects()).toEqual(noEffects);
 });
 it("accepts and persists the newly authorized current Key after rotation", async () => {

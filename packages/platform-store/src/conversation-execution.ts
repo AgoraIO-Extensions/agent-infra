@@ -509,6 +509,9 @@ export class PostgresConversationExecutionTransactionV1
 					currentConversationExecutionRelayKeyBindingV1(transaction, {
 						authority,
 						userDirectory: this.#userDirectory,
+						...(authority.channelId === "web"
+							? { reportMissingPersonalKey: true as const }
+							: {}),
 						personalApiAdmissionAuthority:
 							authority.personalApiAdmissionAuthority,
 					}),
@@ -838,6 +841,9 @@ export class PostgresConversationExecutionTransactionV1
 				await currentConversationExecutionRelayKeyBindingV1(transaction, {
 					authority: input.taskAuthority,
 					userDirectory: this.#userDirectory,
+					...(input.taskAuthority.channelId === "web"
+						? { reportMissingPersonalKey: true as const }
+						: {}),
 					personalApiAdmissionAuthority:
 						input.taskAuthority.personalApiAdmissionAuthority,
 				});
@@ -972,6 +978,9 @@ export class PostgresConversationExecutionTransactionV1
 			await currentConversationExecutionRelayKeyBindingV1(transaction, {
 				authority,
 				userDirectory: this.#userDirectory,
+				...(authority.channelId === "web"
+					? { reportMissingPersonalKey: true as const }
+					: {}),
 				personalApiAdmissionAuthority: authority.personalApiAdmissionAuthority,
 			});
 		if (
@@ -1749,6 +1758,9 @@ export class PostgresConversationExecutionTransactionV1
 				(await currentConversationExecutionRelayKeyBindingV1(transaction, {
 					authority,
 					userDirectory: this.#userDirectory,
+					...(authority.channelId === "web"
+						? { reportMissingPersonalKey: true as const }
+						: {}),
 					personalApiAdmissionAuthority:
 						authority.personalApiAdmissionAuthority,
 				}));

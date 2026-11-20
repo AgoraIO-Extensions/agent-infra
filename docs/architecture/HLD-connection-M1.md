@@ -79,6 +79,9 @@ Connection 尚未发布原 OAuth 事务回读合同时，Platform 的动态手�
 用 EP-1060 实例回读和一致性约束代替主体映射核对；Connection 侧的行为和检查不变。该例外以
 Connection 实例绑定不变式为外部前提：DEVICE 实例只接受首个批准它的 Principal。该前提不在
 EP-1060 已发布合同中，核实范围、证据和不成立时的处理见该例外第 1 项。
+换码前首次固定经 Platform Worker 处理两阶段 confirm 的结果提交，不赋予 Host 写 Platform Store 的
+入口；命令、提交回执与未知结果的唯一合同见
+[工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
 
 Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 

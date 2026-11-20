@@ -1,3 +1,4 @@
+import { ConversationExecutionError } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import {
@@ -356,3 +357,30 @@ it.each([
 	expect(response.status).toBe(400);
 	expect(admit).not.toHaveBeenCalled();
 });
+
+it.each([true, false])(
+	"4281 rechecks delivery identity before reporting missing Key: %s",
+	async (current) => {
+		let active = true;
+		const response = await app({
+			identity: {
+				resolve: async () => (active ? identity : null),
+				hydrateUsers: async () => undefined,
+			},
+			admit: async () => {
+				active = current;
+				throw new ConversationExecutionError("personal_relay_key_unavailable");
+			},
+		}).request("/api/v2/conversations/conversation/native-capability/invoke", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+		expect(response.status).toBe(current ? 409 : 503);
+		expect(await response.json()).toMatchObject(
+			current
+				? { code: "ACTION_UNAVAILABLE", retryable: false }
+				: { outcome: "unavailable" },
+		);
+	},
+);
