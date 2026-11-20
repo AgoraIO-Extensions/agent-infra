@@ -7,6 +7,12 @@
 为准，协议接线见 [Runtime HLD §10.3](../architecture/HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
 本提案不修改现有模式的 Landlock、Provider sandbox 或凭据保护门禁。
 
+[#4248](https://github.com/AgoraIO-Extensions/agent-infra/issues/4248) 将该布局补入标准 Codex 预留路径。
+双容器在建 Pod 时固定，可信启动按实际 Pod UID 建立实例身份，原 Pod 留给领取后的业务晋升。
+领取时改装旧 Pod 或为预热更换 Pod 会破坏已验证的实例绑定并损失准备收益，因此沿用原单次领取。
+预留权威和预算见 [ADR-0036](0036-bounded-session-sandbox-reserves.md)，启动与业务晋升门禁见
+[Runtime HLD §10.3.1](../architecture/HLD-agent-runtime-M1.md#1031-排空通道的实例身份交付)。
+
 ## 问题
 
 目标 ACK 环境缺少完整 Landlock ABI V5 和 Codex bwrap 所需 namespace 能力。
