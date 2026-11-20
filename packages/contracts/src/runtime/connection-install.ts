@@ -20,6 +20,9 @@ export const connectionInstallPathsV1 = {
 	revoke: "/internal/runtime/connection-install/v1/revoke",
 	begin: "/internal/runtime/connection-install/v1/begin",
 	beginStatus: "/internal/runtime/connection-install/v1/begin-status",
+	/** §13.5.6 exception confirm, phase 1 (contract `connection-manual-confirm/v1`). */
+	confirmBindingReadback:
+		"/internal/runtime/connection-install/v1/confirm/binding-readback",
 	readback: "/internal/platform-worker/v1/connection-install/readback",
 } as const;
 
@@ -408,6 +411,7 @@ export const ConnectionInstallCommandClaimsV1Schema = z.strictObject({
 		"supply_status",
 		"revoke",
 		"begin_status",
+		"confirm_binding_readback",
 	]),
 	...commandAttempt,
 	authorizationId: OpaqueIdV1Schema,
@@ -512,6 +516,50 @@ export type ConnectionInstallBeginStatusRequestV1 = z.infer<
 	typeof ConnectionInstallBeginStatusRequestV1Schema
 >;
 
+/**
+ * §13.5.6 exception confirm, phase 1 (`binding_readback`), new contract
+ * `connection-manual-confirm/v1`: the Host only reads EP-1060 back for the
+ * installation's key and returns the non-secret candidate. It never reads code
+ * or verifier, exchanges or publishes. `commandId` is the phase command.
+ */
+export const connectionManualConfirmContractV1 = "connection-manual-confirm/v1";
+export const ConnectionInstallConfirmBindingReadbackRequestV1Schema =
+	z.strictObject({
+		schemaVersion: z.literal(1),
+		contract: z.literal(connectionManualConfirmContractV1),
+		phase: z.literal("binding_readback"),
+		confirmCommandId: OpaqueIdV1Schema.max(128),
+		...commandAttempt,
+		template: ConnectionRegistrationTemplateV1Schema,
+		supplyAttemptId: contextText,
+		registrationKey: ConnectionRegistrationKeyV1Schema,
+		descriptor: ConnectionManualInstallDescriptorV1Schema,
+		/** Registration JWS with command `confirm_binding_readback`. */
+		grant: compactJws,
+	});
+export type ConnectionInstallConfirmBindingReadbackRequestV1 = z.infer<
+	typeof ConnectionInstallConfirmBindingReadbackRequestV1Schema
+>;
+export const ConnectionInstallConfirmBindingReadbackResponseV1Schema =
+	z.discriminatedUnion("outcome", [
+		z.strictObject({
+			schemaVersion: z.literal(1),
+			contract: z.literal(connectionManualConfirmContractV1),
+			outcome: z.literal("candidate"),
+			commandId: OpaqueIdV1Schema,
+			candidate: ConnectionManualConfirmCandidateV1Schema,
+		}),
+		z.strictObject({
+			schemaVersion: z.literal(1),
+			contract: z.literal(connectionManualConfirmContractV1),
+			outcome: z.enum(["rejected", "unknown"]),
+			commandId: OpaqueIdV1Schema,
+		}),
+	]);
+export type ConnectionInstallConfirmBindingReadbackResponseV1 = z.infer<
+	typeof ConnectionInstallConfirmBindingReadbackResponseV1Schema
+>;
+
 export const ConnectionInstallReadbackPurposeV1Schema = z.enum([
 	"supply",
 	"supply_delivery",
@@ -542,6 +590,8 @@ export const ConnectionInstallReadbackRequestV1Schema = z.strictObject({
 				"revoke",
 				"begin",
 				"begin_status",
+				"confirm_binding_readback",
+				"confirm_exchange",
 			]),
 			requestDigest: hex64,
 			registrationKeyHash: hex64,

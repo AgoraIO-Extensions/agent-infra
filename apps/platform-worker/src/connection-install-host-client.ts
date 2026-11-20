@@ -19,6 +19,9 @@ import {
 	ConnectionInstallCommandRequestV1Schema,
 	type ConnectionInstallCommandResponseV1,
 	ConnectionInstallCommandResponseV1Schema,
+	ConnectionInstallConfirmBindingReadbackRequestV1Schema,
+	type ConnectionInstallConfirmBindingReadbackResponseV1,
+	ConnectionInstallConfirmBindingReadbackResponseV1Schema,
 	ConnectionInstallFirstBeginGrantClaimsV1Schema,
 	ConnectionInstallFirstBeginRequestV1Schema,
 	type ConnectionManualInstallDescriptorV1,
@@ -31,6 +34,7 @@ import {
 	connectionInstallExporterLabelsV1,
 	connectionInstallJwsTypesV1,
 	connectionInstallPathsV1,
+	connectionManualConfirmContractV1,
 	type RuntimeOAuthAuthorizedRequestV1,
 	RuntimeOAuthAuthorizedRequestV1Schema,
 	type RuntimeOAuthConfigurationV1,
@@ -103,6 +107,23 @@ export interface ConnectionInstallHostClientV1 {
 		},
 		signal: AbortSignal,
 	): Promise<ConnectionInstallCommandResponseV1>;
+	/**
+	 * §13.5.6 exception confirm phase 1: the Host reads EP-1060 back and returns
+	 * the non-secret candidate; it never exchanges or publishes.
+	 */
+	confirmBindingReadback(
+		input: {
+			readonly confirmCommandId: string;
+			readonly commandId: string;
+			readonly attemptId: string;
+			readonly attemptOwner: string;
+			readonly template: ConnectionRegistrationTemplateV1;
+			readonly supplyAttemptId: string;
+			readonly registrationKey: string;
+			readonly descriptor: ConnectionManualInstallDescriptorV1;
+		},
+		signal: AbortSignal,
+	): Promise<ConnectionInstallConfirmBindingReadbackResponseV1>;
 	/** The single begin that fixes the configuration on the Host and creates the link. */
 	firstBegin(
 		input: {
@@ -459,6 +480,66 @@ export function createConnectionInstallHostClientV1(options: {
 						unsigned.command !== "supply_status")
 				)
 					unavailable();
+				return result;
+			});
+		},
+
+		confirmBindingReadback(input, signal) {
+			return guarded(async () => {
+				const template = ConnectionRegistrationTemplateV1Schema.parse(
+					input.template,
+				);
+				const registrationKeyHash = registrationKeyHashFor(
+					template,
+					input.registrationKey,
+				);
+				const { grant: _grant, ...unsigned } =
+					ConnectionInstallConfirmBindingReadbackRequestV1Schema.parse({
+						schemaVersion: 1,
+						contract: connectionManualConfirmContractV1,
+						phase: "binding_readback",
+						confirmCommandId: input.confirmCommandId,
+						commandId: input.commandId,
+						attemptId: input.attemptId,
+						attemptOwner: input.attemptOwner,
+						template,
+						supplyAttemptId: input.supplyAttemptId,
+						registrationKey: input.registrationKey,
+						descriptor: input.descriptor,
+						grant: unsignedGrant,
+					});
+				if (unsigned.descriptor.registrationKey !== unsigned.registrationKey)
+					unavailable();
+				const templateDigest = connectionRegistrationTemplateDigestV1(template);
+				const requestDigest = connectionInstallRequestDigestV1(unsigned);
+				const result =
+					ConnectionInstallConfirmBindingReadbackResponseV1Schema.parse(
+						await send(
+							template.target.runtimeOrigin,
+							connectionInstallPathsV1.confirmBindingReadback,
+							signal,
+							(channelBinding) => ({
+								...unsigned,
+								grant: jws(
+									connectionInstallJwsTypesV1.registration,
+									ConnectionInstallCommandClaimsV1Schema.parse({
+										...installClaims(channelBinding, requestDigest),
+										purpose: "connection_registration",
+										command: "confirm_binding_readback",
+										commandId: unsigned.commandId,
+										attemptId: unsigned.attemptId,
+										attemptOwner: unsigned.attemptOwner,
+										authorizationId: template.authorizationId,
+										templateDigest,
+										supplyAttemptId: unsigned.supplyAttemptId,
+										registrationKeyHash,
+									}),
+								),
+							}),
+						),
+					);
+				// Only this command's own answer counts; the Store checks the candidate.
+				if (result.commandId !== unsigned.commandId) unavailable();
 				return result;
 			});
 		},

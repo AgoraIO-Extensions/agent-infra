@@ -1227,6 +1227,51 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		}
 	}
 
+	/**
+	 * Settles exception confirm phase 1 without a candidate. `rejected` means the
+	 * Host's EP-1060 readback failed the exception gates (§13.5.1 item 2): no
+	 * exchange, close and revoke the original key. Anything else, including a
+	 * lost response, keeps the phase and the logical confirm unknown; neither is
+	 * resent automatically.
+	 */
+	async settleConfirmPhase(input: {
+		readonly confirmCommandId: string;
+		readonly phaseCommandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+		readonly outcome: "rejected" | "unknown";
+	}): Promise<"rejected" | "unknown" | "stale"> {
+		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			if (!row?.template) return "stale";
+			const template = ConnectionRegistrationTemplateV1Schema.parse(
+				row.template,
+			);
+			if (
+				input.outcome === "rejected" &&
+				(await this.#rejectConfirm(
+					tx,
+					input,
+					this.#phaseHolds({
+						...input,
+						phase: "confirm_binding_readback",
+						template,
+					}),
+				))
+			)
+				return "rejected";
+			const settled = await tx.execute(sql`
+				update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp()
+				where id in (${input.phaseCommandId}, ${input.confirmCommandId})
+					and authorization_id=${input.authorizationId} and status='sending'
+					and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
+				returning id
+			`);
+			return settled.length === 2 ? "unknown" : "stale";
+		});
+	}
+
 	/** Refused principal (§13.5.1 item 2): no exchange; close and revoke the original key. */
 	async #rejectConfirm(
 		tx: Transaction,
@@ -1597,7 +1642,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly attemptId: string;
 		readonly attemptOwner: string;
 		readonly authorizationId: string;
-		readonly command: "begin" | "begin_status";
+		/** `confirm` reads the same fixed facts for the logical confirm's phases. */
+		readonly command: "begin" | "begin_status" | "confirm";
 	}): Promise<{
 		readonly template: ConnectionRegistrationTemplateV1;
 		readonly registrationKey: string;
@@ -1909,6 +1955,29 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							: "denied";
 					case "revoke":
 						return row.revoke_state === "sending" ? allowed() : "denied";
+					case "confirm_binding_readback": {
+						// §13.5.6 exception confirm phase 1: read-only; the phase and its
+						// logical confirm are sending for this attempt and the descriptor holds.
+						const [phase] = await tx.execute(sql`
+							select 1 from platform.connection_installation_commands p
+							join platform.connection_installation_commands c on c.authorization_id=p.authorization_id
+								and c.command='confirm' and c.status='sending'
+								and c.attempt_id=p.attempt_id and c.attempt_owner=p.attempt_owner
+								and p.idempotency_key='confirm-phase:' || c.id || ':confirm_binding_readback'
+							where p.id=${command.commandId}`);
+						return phase &&
+							row.status === "confirmed" &&
+							row.registration_state === "registered" &&
+							row.revoke_state === "not_required" &&
+							row.descriptor_digest !== null &&
+							command.descriptorDigest === row.descriptor_digest
+							? allowed()
+							: "denied";
+					}
+					case "confirm_exchange":
+						// Phase 2 verification against the commit receipt arrives with the
+						// Host exchange; until then nothing exchanges.
+						return "denied";
 					case "begin":
 					case "begin_status": {
 						if (

@@ -2,8 +2,10 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { resolveApprovedConnectionSystemAccessV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	type ConnectionInstallCommandResponseV1,
+	type ConnectionInstallConfirmBindingReadbackResponseV1,
 	type ConnectionRegistrationTemplateV1,
 	connectionHostDeploymentIdentityV1,
+	connectionManualConfirmContractV1,
 	type RuntimeOAuthAuthorizedRequestV1,
 	type RuntimeOAuthResponseV1,
 } from "@agent-infra/contracts/runtime";
@@ -33,6 +35,9 @@ type Store = Pick<
 	| "settleRevoke"
 	| "firstBeginContext"
 	| "settleBegin"
+	| "openConfirmPhase"
+	| "commitConfirmPin"
+	| "settleConfirmPhase"
 >;
 
 export interface ConnectionManualInstallationDrainOptionsV1 {
@@ -353,6 +358,81 @@ export function createConnectionManualInstallationDrainV1(
 		return settle(response);
 	}
 
+	/**
+	 * §13.5.6 exception confirm, phase 1: under the logical confirm's attempt the
+	 * Worker commits the phase's sending before it signs and sends, then commits
+	 * the first pin in the Store from this command's own candidate. The exchange
+	 * phase follows once the Host side exists; nothing here exchanges a code.
+	 */
+	async function confirm(
+		claimed: ConnectionManualInstallationClaimV1,
+		signal: AbortSignal,
+	) {
+		const authorizationId = claimed.authorization.authorizationId;
+		const attempt = {
+			attemptId: claimed.command.attemptId,
+			attemptOwner: owner,
+			authorizationId,
+		};
+		const context = await store.firstBeginContext({
+			...attempt,
+			commandId: claimed.command.commandId,
+			command: "confirm",
+		});
+		if (!context) return;
+		const phase = await store.openConfirmPhase({
+			...attempt,
+			confirmCommandId: claimed.command.commandId,
+			phase: "confirm_binding_readback",
+		});
+		if (!phase) return;
+		const request = {
+			confirmCommandId: claimed.command.commandId,
+			commandId: phase.phaseCommandId,
+			attemptId: claimed.command.attemptId,
+			attemptOwner: owner,
+			template: context.template,
+			supplyAttemptId: context.supplyAttemptId,
+			registrationKey: context.registrationKey,
+			descriptor: context.descriptor,
+		};
+		const settle = (outcome: "rejected" | "unknown") =>
+			store.settleConfirmPhase({
+				...attempt,
+				confirmCommandId: claimed.command.commandId,
+				phaseCommandId: phase.phaseCommandId,
+				outcome,
+			});
+		if (
+			!(await store.commitDelivery({
+				...attempt,
+				commandId: phase.phaseCommandId,
+				command: "confirm_binding_readback",
+				deliveryDigest: connectionInstallRequestDigestV1({
+					schemaVersion: 1,
+					contract: connectionManualConfirmContractV1,
+					phase: "binding_readback",
+					...request,
+				}),
+			}))
+		)
+			return;
+		let response: ConnectionInstallConfirmBindingReadbackResponseV1 | undefined;
+		try {
+			response = await host.confirmBindingReadback(request, signal);
+		} catch {
+			response = undefined;
+		}
+		if (response?.outcome === "candidate")
+			return store.commitConfirmPin({
+				...attempt,
+				confirmCommandId: claimed.command.commandId,
+				phaseCommandId: phase.phaseCommandId,
+				candidate: response.candidate,
+			});
+		return settle(response?.outcome === "rejected" ? "rejected" : "unknown");
+	}
+
 	async function begin(
 		claimed: ConnectionManualInstallationClaimV1,
 		kind: "begin" | "begin_status",
@@ -485,9 +565,6 @@ export function createConnectionManualInstallationDrainV1(
 			for (const item of pending) {
 				if (signal.aborted) break;
 				if (!executionIds.includes(item.executionId)) continue;
-				// The two-phase exception confirm drain (§13.5.6) is not delivered yet:
-				// a confirm is never claimed here, so it stays pending and unsent.
-				if (item.command === "confirm") continue;
 				const claimed = await store.claim({
 					commandId: item.commandId,
 					attemptId: randomUUID(),
@@ -507,6 +584,9 @@ export function createConnectionManualInstallationDrainV1(
 						case "begin":
 						case "begin_status":
 							await begin(claimed, claimed.command.command, bounded);
+							break;
+						case "confirm":
+							await confirm(claimed, bounded);
 							break;
 					}
 					drained++;

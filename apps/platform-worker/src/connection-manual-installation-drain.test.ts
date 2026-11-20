@@ -1,4 +1,6 @@
 import { connectionSystemAccessFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import { connectionManualConfirmContractV1 } from "@agent-infra/contracts/runtime";
+import { connectionInstallRequestDigestV1 } from "@agent-infra/contracts/runtime/connection-install-node";
 import { connectionServiceCredentialSecretNameV1 } from "@agent-infra/platform-core";
 import type { ConnectionManualInstallationClaimV1 } from "@agent-infra/platform-store";
 import { describe, expect, it, vi } from "vitest";
@@ -77,6 +79,7 @@ function harness(
 		readonly supply?: () => Promise<void>;
 		readonly commit?: boolean;
 		readonly command?: () => Promise<unknown>;
+		readonly readback?: () => Promise<unknown>;
 	} = {},
 ) {
 	const plaintext = new TextEncoder().encode("conn_consumer_synthetic-0001");
@@ -101,6 +104,9 @@ function harness(
 		settleRevoke: vi.fn(async () => "revoked" as const),
 		firstBeginContext: vi.fn(async () => null),
 		settleBegin: vi.fn(async () => "mapped" as const),
+		openConfirmPhase: vi.fn(async () => ({ phaseCommandId: "phase-a" })),
+		commitConfirmPin: vi.fn(async () => "pinned" as const),
+		settleConfirmPhase: vi.fn(async () => true),
 	};
 	const decryptor = {
 		decrypt: vi.fn(
@@ -120,6 +126,9 @@ function harness(
 		),
 		firstBegin: vi.fn(),
 		beginStatus: vi.fn(),
+		confirmBindingReadback: vi.fn(
+			overrides.readback ?? (async () => Promise.reject(new Error("unset"))),
+		),
 	};
 	const drain = createConnectionManualInstallationDrainV1({
 		store: store as never,
@@ -134,6 +143,44 @@ function harness(
 		attemptOwner: "worker-a",
 	});
 	return { store, decryptor, host, drain, plaintext };
+}
+
+const confirmContext = {
+	template: { synthetic: "template" },
+	configuration: { synthetic: "configuration" },
+	receipt: { synthetic: "receipt" },
+	supplyAttemptId: "supply-attempt-a",
+	registrationKey: `mi-${"a".repeat(43)}`,
+	descriptor: { synthetic: "descriptor" },
+};
+
+function confirmHarness(
+	overrides: {
+		readonly context?: null;
+		readonly phase?: null;
+		readonly commit?: boolean;
+		readonly readback?: () => Promise<unknown>;
+	} = {},
+) {
+	const h = harness({ commit: overrides.commit, readback: overrides.readback });
+	h.store.listPending.mockResolvedValue([
+		{
+			commandId: "confirm-a",
+			command: "confirm" as never,
+			authorizationId: "authorization-a",
+			executionId: "execution-a",
+		},
+	]);
+	h.store.claim.mockResolvedValue({
+		...structuredClone(claim),
+		command: { ...claim.command, commandId: "confirm-a", command: "confirm" },
+	} as never);
+	h.store.firstBeginContext.mockResolvedValue(
+		("context" in overrides ? null : confirmContext) as never,
+	);
+	if ("phase" in overrides)
+		h.store.openConfirmPhase.mockResolvedValue(null as never);
+	return h;
 }
 
 describe("manual install drain", () => {
@@ -230,21 +277,119 @@ describe("manual install drain", () => {
 		expect(await h.drain.drain([], new AbortController().signal)).toBe(0);
 	});
 
-	it("never claims a confirm before its two-phase drain exists", async () => {
-		const h = harness();
-		h.store.listPending.mockResolvedValueOnce([
-			{
-				commandId: "confirm-a",
-				command: "confirm" as never,
-				authorizationId: "authorization-a",
-				executionId: "execution-a",
-			},
-		]);
+	it("commits the binding readback's sending before it sends and pins its own candidate", async () => {
+		const h = confirmHarness({
+			readback: async () => ({
+				schemaVersion: 1,
+				contract: connectionManualConfirmContractV1,
+				outcome: "candidate",
+				commandId: "phase-a",
+				candidate: { synthetic: "candidate" },
+			}),
+		});
 		expect(
 			await h.drain.drain(["execution-a"], new AbortController().signal),
-		).toBe(0);
-		expect(h.store.claim).not.toHaveBeenCalled();
+		).toBe(1);
+		expect(h.store.firstBeginContext).toHaveBeenCalledWith(
+			expect.objectContaining({ commandId: "confirm-a", command: "confirm" }),
+		);
+		expect(h.store.openConfirmPhase).toHaveBeenCalledWith(
+			expect.objectContaining({
+				confirmCommandId: "confirm-a",
+				phase: "confirm_binding_readback",
+			}),
+		);
+		const request = {
+			confirmCommandId: "confirm-a",
+			commandId: "phase-a",
+			attemptId: "attempt-a",
+			attemptOwner: "worker-a",
+			template: confirmContext.template,
+			supplyAttemptId: confirmContext.supplyAttemptId,
+			registrationKey: confirmContext.registrationKey,
+			descriptor: confirmContext.descriptor,
+		};
+		expect(h.store.commitDelivery).toHaveBeenCalledWith({
+			attemptId: "attempt-a",
+			attemptOwner: "worker-a",
+			authorizationId: "authorization-a",
+			commandId: "phase-a",
+			command: "confirm_binding_readback",
+			deliveryDigest: connectionInstallRequestDigestV1({
+				schemaVersion: 1,
+				contract: connectionManualConfirmContractV1,
+				phase: "binding_readback",
+				...request,
+			}),
+		});
+		expect(h.host.confirmBindingReadback).toHaveBeenCalledTimes(1);
+		expect(h.host.confirmBindingReadback).toHaveBeenCalledWith(
+			request,
+			expect.any(AbortSignal),
+		);
+		expect(h.store.commitDelivery.mock.invocationCallOrder[0]).toBeLessThan(
+			h.host.confirmBindingReadback.mock.invocationCallOrder[0] ?? 0,
+		);
+		expect(h.store.commitConfirmPin).toHaveBeenCalledWith(
+			expect.objectContaining({
+				confirmCommandId: "confirm-a",
+				phaseCommandId: "phase-a",
+				authorizationId: "authorization-a",
+				candidate: { synthetic: "candidate" },
+			}),
+		);
+		expect(h.store.settleConfirmPhase).not.toHaveBeenCalled();
+		// Phase 1 never exchanges, begins or sends an install command.
 		expect(h.host.command).not.toHaveBeenCalled();
+		expect(h.host.firstBegin).not.toHaveBeenCalled();
+		expect(h.host.beginStatus).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["a gate-failing readback", "rejected", "rejected"],
+		["an unknown readback", "unknown", "unknown"],
+		["a lost readback response", "throw", "unknown"],
+	] as const)(
+		"settles %s as %s without a pin",
+		async (_name, answer, outcome) => {
+			const h = confirmHarness({
+				readback:
+					answer === "throw"
+						? async () => Promise.reject(new Error("reset"))
+						: async () => ({
+								schemaVersion: 1,
+								contract: connectionManualConfirmContractV1,
+								outcome: answer,
+								commandId: "phase-a",
+							}),
+			});
+			await h.drain.drain(["execution-a"], new AbortController().signal);
+			expect(h.host.confirmBindingReadback).toHaveBeenCalledTimes(1);
+			expect(h.store.commitConfirmPin).not.toHaveBeenCalled();
+			expect(h.store.settleConfirmPhase).toHaveBeenCalledWith(
+				expect.objectContaining({
+					confirmCommandId: "confirm-a",
+					phaseCommandId: "phase-a",
+					outcome,
+				}),
+			);
+		},
+	);
+
+	it.each([
+		["no first-begin context", { context: null }],
+		["no openable phase", { phase: null }],
+		["a lost phase sending commit", { commit: false }],
+	] as const)("sends no binding readback with %s", async (_name, overrides) => {
+		const h = confirmHarness(overrides);
+		await h.drain.drain(["execution-a"], new AbortController().signal);
+		expect(h.host.confirmBindingReadback).not.toHaveBeenCalled();
+		expect(h.store.commitConfirmPin).not.toHaveBeenCalled();
+		expect(h.store.settleConfirmPhase).not.toHaveBeenCalled();
+		if ("context" in overrides)
+			expect(h.store.openConfirmPhase).not.toHaveBeenCalled();
+		if ("phase" in overrides)
+			expect(h.store.commitDelivery).not.toHaveBeenCalled();
 	});
 
 	it("hands its cancellation signal to the bounded recovery pass", async () => {
