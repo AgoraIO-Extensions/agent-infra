@@ -8,9 +8,12 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
-import type {
-	CodexRuntimeDriver,
-	CodexRuntimeDriverOptions,
+import {
+	type CodexDynamicConnectionClientV1,
+	CodexDynamicConnectionRefusalV1,
+	type CodexRuntimeDriver,
+	type CodexRuntimeDriverOptions,
+	codexDynamicConnectionRefusalsV1,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
 import {
@@ -690,3 +693,381 @@ it.each([
 		).toHaveLength(0);
 	},
 );
+
+// #4333 §13.5.6 动态安装的 reader 与可见起点 (ADR-0048): a Thread declares the
+// approved contract's tools at start; each call reads its installation.
+const declaredTools = {
+	contract: { ref: "fixture-mcp-contract", revision: "r1" },
+	tools: [
+		{
+			name: "write_note",
+			description: "Write a note",
+			inputSchema: {
+				type: "object",
+				properties: { text: { type: "string" } },
+				required: ["text"],
+				additionalProperties: false,
+			},
+		},
+	],
+};
+
+async function setupDynamic(
+	declared: CodexDynamicConnectionClientV1["declared"] = declaredTools,
+) {
+	const env = await setup(false);
+	await env.driver.close();
+	closes.pop();
+	const reader = {
+		refusal: "authorization_required" as
+			| "authorization_required"
+			| "unavailable"
+			| undefined,
+		inputRefusal: undefined as
+			| "authorization_required"
+			| "unavailable"
+			| undefined,
+		targets: 0,
+		inputs: 0,
+	};
+	const dynamicConnectionClient: CodexDynamicConnectionClientV1 = {
+		declared,
+		resolveTarget: async () => {
+			reader.targets++;
+			if (reader.refusal)
+				throw new CodexDynamicConnectionRefusalV1(reader.refusal);
+			return env.fixture.target;
+		},
+		resolveInput: async (ref) => {
+			reader.inputs++;
+			if (reader.inputRefusal)
+				throw new CodexDynamicConnectionRefusalV1(reader.inputRefusal);
+			return {
+				...env.fixture.input,
+				scope: {
+					agentId: ref.agentId,
+					conversationId: ref.conversationId,
+					executionId: ref.executionId,
+					sessionGeneration: ref.sessionGeneration,
+				},
+			};
+		},
+		fetch: env.options.standardConnectionClient?.fetch,
+	};
+	const { standardConnectionClient: _standard, ...modelOnly } = env.options;
+	const options: CodexRuntimeDriverOptions = {
+		...modelOnly,
+		path: `${env.path}.dynamic`,
+		dynamicConnectionClient,
+	};
+	const native = new StandardToolNativeFixture();
+	const driver = await openCodexRuntimeDriverForTest(
+		options,
+		async (opened) => {
+			native.options = opened;
+			return native;
+		},
+	);
+	closes.push(() => driver.close());
+	const accepted = await driver.execute(command);
+	expect(accepted.result).toMatchObject({
+		outcome: "accepted",
+		status: "running",
+	});
+	return {
+		...env,
+		native,
+		driver,
+		path: options.path,
+		options,
+		modelOnly: { ...modelOnly, path: options.path },
+		ref: accepted.nativeSessionRef,
+		reader,
+	};
+}
+
+async function settleCall(
+	env: Awaited<ReturnType<typeof setupDynamic>>,
+	replies: number,
+	execution = reference.executionId,
+) {
+	const acknowledged = new Set<string>();
+	await waitFor(async () => {
+		for (const event of (
+			await env.driver.replayEvents(env.ref, execution)
+		).filter((event) => event.type === "operation")) {
+			if (acknowledged.has(event.cursor)) continue;
+			acknowledged.add(event.cursor);
+			await env.driver.acknowledgeEvents(env.ref, execution, event.cursor);
+		}
+		return env.native.replies.length >= replies;
+	});
+	return env.native.replies.at(-1)?.result as {
+		success: boolean;
+		contentItems: { type: string; text: string }[];
+	};
+}
+
+const toolCalls = (env: Awaited<ReturnType<typeof setupDynamic>>) =>
+	env.fixture.trace.filter((request) => request.method === "tools/call").length;
+
+it("declares the contract's tools at thread start without calling the reader", async () => {
+	const env = await setupDynamic();
+	expect(env.native.definitions).toEqual([
+		{
+			type: "namespace",
+			name: "connection",
+			description: "Approved Connection tools",
+			tools: [
+				{
+					type: "function",
+					name: expect.stringMatching(/^mcp_[a-f0-9]{32}$/),
+					description: "write_note: Write a note",
+					inputSchema: declaredTools.tools[0]?.inputSchema,
+				},
+			],
+		},
+	]);
+	expect(env.reader).toMatchObject({ targets: 0, inputs: 0 });
+	expect(env.fixture.trace).toHaveLength(0);
+	expect(
+		JSON.parse(await readFile(env.path, "utf8")).sessions[env.ref]
+			.dynamicConnection,
+	).toEqual({
+		contract: declaredTools.contract,
+		toolsFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+	});
+});
+
+it.each(["authorization_required", "unavailable"] as const)(
+	"answers a %s reader refusal with the fixed result before any Connection request",
+	async (reason) => {
+		const env = await setupDynamic();
+		env.reader.refusal = reason;
+		env.native.call();
+		const reply = await settleCall(env, 1);
+		expect(reply.success).toBe(false);
+		expect(JSON.parse(reply.contentItems[0]?.text ?? "")).toEqual(
+			codexDynamicConnectionRefusalsV1[reason],
+		);
+		expect(reply.contentItems[0]?.text).not.toContain(token);
+		expect(env.reader.targets).toBe(1);
+		expect(env.fixture.trace).toHaveLength(0);
+		expect(
+			(await operationEvents(env.driver, env.ref)).map(
+				(event) => event.payload.phase,
+			),
+		).toEqual(["intent", "failed"]);
+		expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
+			"running",
+		);
+		expect(env.native.closed).toBe(false);
+	},
+);
+
+it("does not retry an unavailable input readback and sends nothing to Connection", async () => {
+	const env = await setupDynamic();
+	env.reader.refusal = undefined;
+	env.reader.inputRefusal = "unavailable";
+	env.native.call();
+	const reply = await settleCall(env, 1);
+	expect(JSON.parse(reply.contentItems[0]?.text ?? "")).toEqual(
+		codexDynamicConnectionRefusalsV1.unavailable,
+	);
+	expect(env.reader).toMatchObject({ targets: 1, inputs: 1 });
+	expect(env.fixture.trace).toHaveLength(0);
+});
+
+it("serves a later call in the same session after the permit is written, then refuses after revocation", async () => {
+	const env = await setupDynamic();
+	env.native.call("call-before", { callId: "call-before" });
+	const before = await settleCall(env, 1);
+	expect(JSON.parse(before.contentItems[0]?.text ?? "")).toEqual(
+		codexDynamicConnectionRefusalsV1.authorization_required,
+	);
+	env.reader.refusal = undefined;
+	env.native.call("call-after", { callId: "call-after" });
+	const after = await settleCall(env, 2);
+	expect(after.success).toBe(true);
+	expect(toolCalls(env)).toBe(1);
+	expect(
+		env.native.sent.filter((frame) => frame.method === "thread/start"),
+	).toHaveLength(1);
+	env.reader.inputRefusal = "authorization_required";
+	env.native.call("call-revoked", { callId: "call-revoked" });
+	const revoked = await settleCall(env, 3);
+	expect(JSON.parse(revoked.contentItems[0]?.text ?? "")).toEqual(
+		codexDynamicConnectionRefusalsV1.authorization_required,
+	);
+	expect(toolCalls(env)).toBe(1);
+	expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
+		"running",
+	);
+});
+
+it("refuses a discovery that differs from the declaration and keeps the declaration", async () => {
+	const env = await setupDynamic({
+		...declaredTools,
+		tools: [
+			{ ...declaredTools.tools[0], description: "Write a draft" },
+		] as typeof declaredTools.tools,
+	});
+	const declared = structuredClone(env.native.definitions);
+	env.reader.refusal = undefined;
+	env.native.call();
+	const reply = await settleCall(env, 1);
+	expect(JSON.parse(reply.contentItems[0]?.text ?? "")).toEqual(
+		codexDynamicConnectionRefusalsV1.unavailable,
+	);
+	expect(toolCalls(env)).toBe(0);
+	expect(env.native.definitions).toEqual(declared);
+	expect(
+		env.native.sent.filter((frame) => frame.method === "thread/start"),
+	).toHaveLength(1);
+});
+
+async function completeTurn(env: Awaited<ReturnType<typeof setupDynamic>>) {
+	env.native.status = "completed";
+	env.native.push({
+		method: "turn/completed",
+		params: {
+			threadId: "fixture-thread",
+			turn: { id: "fixture-turn", status: "completed", items: [] },
+		},
+	});
+	await waitFor(
+		async () =>
+			(await env.driver.getStatus(env.ref, reference.executionId)) ===
+			"completed",
+	);
+	await env.driver.close();
+}
+
+const nextCommand = {
+	...command,
+	executionId: "execution-b",
+	operationId: "execution-b",
+	turnId: "turn-b",
+};
+
+it("does not add declared tools to a Thread started without them", async () => {
+	const env = await setupDynamic();
+	// Start a Thread on a model-only Driver first, then enable the contract.
+	const plain = new StandardToolNativeFixture();
+	const path = `${env.path}.plain`;
+	const before = await openCodexRuntimeDriverForTest(
+		{ ...env.modelOnly, path },
+		async (opened) => {
+			plain.options = opened;
+			return plain;
+		},
+	);
+	closes.push(() => before.close());
+	const accepted = await before.execute(command);
+	await completeTurn({
+		...env,
+		driver: before,
+		native: plain,
+		ref: accepted.nativeSessionRef,
+	});
+	const native = new StandardToolNativeFixture();
+	native.turnId = "fixture-turn-b";
+	const restored = await openCodexRuntimeDriverForTest(
+		{ ...env.options, path },
+		async (opened) => {
+			native.options = opened;
+			return native;
+		},
+	);
+	closes.push(() => restored.close());
+	expect((await restored.execute(nextCommand)).result).toMatchObject({
+		outcome: "accepted",
+		status: "running",
+	});
+	expect(
+		native.sent.filter((frame) => frame.method === "thread/start"),
+	).toHaveLength(0);
+	expect(
+		JSON.parse(await readFile(path, "utf8")).sessions[accepted.nativeSessionRef]
+			.dynamicConnection,
+	).toBeUndefined();
+	expect(env.reader).toMatchObject({ targets: 0, inputs: 0 });
+});
+
+it("keeps a declared Thread usable with fixed refusals after the Host loses the contract", async () => {
+	const env = await setupDynamic();
+	await completeTurn(env);
+	const native = new StandardToolNativeFixture();
+	native.turnId = "fixture-turn-b";
+	native.definitions = structuredClone(env.native.definitions);
+	const restored = await openCodexRuntimeDriverForTest(
+		env.modelOnly,
+		async (opened) => {
+			native.options = opened;
+			return native;
+		},
+	);
+	closes.push(() => restored.close());
+	expect((await restored.execute(nextCommand)).result).toMatchObject({
+		outcome: "accepted",
+		status: "running",
+	});
+	expect(
+		native.sent.filter((frame) => frame.method === "thread/start"),
+	).toHaveLength(0);
+	native.call();
+	const reply = await settleCall(
+		{ ...env, driver: restored, native },
+		1,
+		nextCommand.executionId,
+	);
+	expect(JSON.parse(reply.contentItems[0]?.text ?? "")).toEqual(
+		codexDynamicConnectionRefusalsV1.unavailable,
+	);
+	expect(env.reader).toMatchObject({ targets: 0, inputs: 0 });
+	expect(env.fixture.trace).toHaveLength(0);
+	expect(await restored.getStatus(env.ref, nextCommand.executionId)).toBe(
+		"running",
+	);
+});
+
+it.each([
+	["with a standard client", { standard: true }],
+	["with an empty declaration", { declared: { ...declaredTools, tools: [] } }],
+	[
+		"with an unknown key",
+		{ declared: { ...declaredTools, extra: true } as typeof declaredTools },
+	],
+] as const)("rejects a dynamic client %s", async (_label, variant) => {
+	const env = await setup(true);
+	await env.driver.close();
+	const dynamicConnectionClient = {
+		declared: "declared" in variant ? variant.declared : declaredTools,
+		resolveTarget: async () => env.fixture.target,
+		resolveInput: async () => env.fixture.input,
+	} as CodexDynamicConnectionClientV1;
+	const { standardConnectionClient, ...modelOnly } = env.options;
+	const open = (client: CodexDynamicConnectionClientV1, standard: boolean) =>
+		openCodexRuntimeDriverForTest(
+			{
+				...modelOnly,
+				...(standard ? { standardConnectionClient } : {}),
+				dynamicConnectionClient: client,
+			},
+			async (opened) => {
+				const native = new StandardToolNativeFixture();
+				native.options = opened;
+				return native;
+			},
+		);
+	await expect(
+		open(dynamicConnectionClient, "standard" in variant),
+	).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+	// The same Driver opens with a valid declaration and no standard client.
+	const valid = await open(
+		{ ...dynamicConnectionClient, declared: declaredTools },
+		false,
+	);
+	closes.push(() => valid.close());
+	expect((await valid.getCapabilities()).connection).toBe(true);
+});

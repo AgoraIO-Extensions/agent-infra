@@ -56,6 +56,7 @@ import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createConnectionInstallReadbackClientV1 } from "../../agent-runtime-host/src/connection-install-readback-client.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
+	codexDynamicConnectionClientForReaderV1,
 	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "../../agent-runtime-host/src/connection-install-receiver.js";
@@ -1714,6 +1715,13 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			serverInfo: { name: "connection", version: "1" },
 			tools: [{ name: "search", succeededResultSchema: { type: "object" } }],
 		},
+		toolDeclarations: [
+			{
+				name: "search",
+				description: "Search the connected service",
+				inputSchema: { type: "object" },
+			},
+		],
 	};
 	async function withDynamicPublication(
 		contract: NonNullable<typeof hostDynamicPublication>,
@@ -2089,6 +2097,55 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 				});
 				// Two permit reads around the material; no Connection request.
 				expect(permitReadbacks()).toEqual(["permit:supply", "permit:supply"]);
+				expect(connection.requests).toHaveLength(requests);
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"hands the Codex Driver the contract's declarations, then this session's target and input",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const driverInput = codexDynamicConnectionClientForReaderV1(
+					dynamicReader(),
+				);
+				if (!driverInput) throw new Error("no declarations");
+				expect(driverInput.declared).toEqual({
+					contract: {
+						ref: publicationContract.contract.ref,
+						revision: publicationContract.contract.revision,
+					},
+					tools: publicationContract.toolDeclarations,
+				});
+				const beforeRequests = connection.requests.length;
+				readbacks.length = 0;
+				// Before authorization the target is refused; nothing reaches Connection.
+				const before = await driverInput
+					.resolveTarget(aliceExecution, new AbortController().signal)
+					.then(
+						() => undefined,
+						(error: { name?: string; reason?: string }) => error,
+					);
+				expect(before).toMatchObject({
+					name: "CodexDynamicConnectionRefusalV1",
+					reason: "authorization_required",
+				});
+				expect(permitReadbacks()).toEqual([]);
+				expect(connection.requests).toHaveLength(beforeRequests);
+				await permittedInstall();
+				const requests = connection.requests.length;
+				const target = await driverInput.resolveTarget(
+					aliceExecution,
+					new AbortController().signal,
+				);
+				expect(target).toMatchObject({ status: "available" });
+				const input = (await driverInput.resolveInput(
+					aliceExecution,
+					new AbortController().signal,
+				)) as { resource?: string; contract?: unknown };
+				expect(input.resource).toBe(target.url);
+				expect(input.contract).toEqual(publicationContract.contract);
 				expect(connection.requests).toHaveLength(requests);
 			});
 		},

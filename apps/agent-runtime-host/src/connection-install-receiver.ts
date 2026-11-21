@@ -13,6 +13,8 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+	type CodexDynamicConnectionClientV1,
+	CodexDynamicConnectionRefusalV1,
 	type ConnectionHostSupplyBindingV1,
 	type ConnectionInstallTlsExporterV1,
 	connectionInstallServerExporterV1,
@@ -168,6 +170,10 @@ export type ConnectionInstallReceiverAssemblyV1 =
 			 */
 			readonly dynamicReader?: {
 				readonly contract: RuntimeOAuthDynamicPublicationContractV1;
+				resolveTarget(
+					reference: RuntimeOriginalExecutionRef,
+					signal: AbortSignal,
+				): Promise<ApprovedConnectionConsumerTargetV1>;
 				resolveInput(
 					reference: RuntimeOriginalExecutionRef,
 					signal: AbortSignal,
@@ -177,18 +183,39 @@ export type ConnectionInstallReceiverAssemblyV1 =
 	  };
 
 /**
- * §13.5.6 dynamic reader refusal before any Connection request. It carries no
- * credential, installation or permit identifier; nothing is retried.
+ * §13.5.6 (Codex only, ADR-0048): the Codex Driver input for a receiver's
+ * dynamic reader. The Thread declares the contract's tools; each call reads
+ * its installation through the reader.
  */
-export class ConnectionDynamicReaderRefusalV1 extends Error {
-	constructor(readonly reason: "authorization_required" | "unavailable") {
-		super(
-			reason === "authorization_required"
-				? "Connection authorization on the platform is required"
-				: "Connection is unavailable",
-		);
-		this.name = "ConnectionDynamicReaderRefusalV1";
-	}
+export function codexDynamicConnectionClientForReaderV1(
+	reader: NonNullable<
+		Extract<
+			ConnectionInstallReceiverAssemblyV1,
+			{ status: "available" }
+		>["dynamicReader"]
+	>,
+): CodexDynamicConnectionClientV1 | undefined {
+	const declarations = reader.contract.toolDeclarations;
+	if (!declarations) return undefined;
+	// Live discovery lists tools in the contract's order; declare them the same way.
+	const tools = reader.contract.contract.tools.map((tool) =>
+		declarations.find(
+			(declaration) => declaration.name === (tool as { name?: unknown }).name,
+		),
+	);
+	if (tools.some((tool) => tool === undefined)) return undefined;
+	return {
+		declared: {
+			contract: {
+				ref: reader.contract.contract.ref,
+				revision: reader.contract.contract.revision,
+			},
+			tools: structuredClone(tools as NonNullable<(typeof tools)[number]>[]),
+		},
+		resolveTarget: (reference, signal) =>
+			reader.resolveTarget(reference, signal),
+		resolveInput: (reference, signal) => reader.resolveInput(reference, signal),
+	};
 }
 
 export interface ConnectionInstallReceiverOptionsV1 {
@@ -2191,16 +2218,15 @@ async function assembleConnectionInstallReceiver(
 	 * `unavailable`. Both happen before any Connection request and are never
 	 * retried.
 	 */
-	async function resolveDynamicInput(
+	/**
+	 * Finds this session's fixed installation for the current Execution's
+	 * original binding. Missing is `authorization_required`; a binding or
+	 * template that cannot be read is `unavailable`.
+	 */
+	async function locateDynamic(
 		reference: RuntimeOriginalExecutionRef,
 		signal: AbortSignal,
-	): Promise<unknown> {
-		const required = () => {
-			throw new ConnectionDynamicReaderRefusalV1("authorization_required");
-		};
-		const refuse = () => {
-			throw new ConnectionDynamicReaderRefusalV1("unavailable");
-		};
+	) {
 		let binding: Awaited<
 			ReturnType<InstallStore["resolveOriginalExecutionBinding"]>
 		>;
@@ -2215,7 +2241,7 @@ async function assembleConnectionInstallReceiver(
 			);
 			current();
 		} catch {
-			return refuse();
+			throw new CodexDynamicConnectionRefusalV1("unavailable");
 		}
 		const entry = [...fixed.values()].find(
 			(candidate) =>
@@ -2226,20 +2252,50 @@ async function assembleConnectionInstallReceiver(
 				candidate.template.reference.sessionGeneration ===
 					reference.sessionGeneration,
 		);
-		if (!entry) return required();
+		if (!entry)
+			throw new CodexDynamicConnectionRefusalV1("authorization_required");
+		let consumer: ApprovedConnectionConsumerTargetV1;
+		try {
+			consumer = verifyConnectionRegistrationTemplateV1(
+				entry.template,
+				access,
+				clientName,
+			).target;
+		} catch {
+			throw new CodexDynamicConnectionRefusalV1("unavailable");
+		}
+		return { binding, hostRef, entry, consumer };
+	}
+
+	/** The verified consumer target of the installation `resolveDynamicInput` reads. */
+	async function resolveDynamicTarget(
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	): Promise<ApprovedConnectionConsumerTargetV1> {
+		return structuredClone((await locateDynamic(reference, signal)).consumer);
+	}
+
+	async function resolveDynamicInput(
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	): Promise<unknown> {
+		const required = () => {
+			throw new CodexDynamicConnectionRefusalV1("authorization_required");
+		};
+		const refuse = () => {
+			throw new CodexDynamicConnectionRefusalV1("unavailable");
+		};
+		const { binding, hostRef, entry, consumer } = await locateDynamic(
+			reference,
+			signal,
+		);
 		const template = entry.template;
 		let recorded: Record<string, unknown> | undefined;
-		let consumer: ApprovedConnectionConsumerTargetV1;
 		let target: ReturnType<typeof ConnectionHostInstallTargetV1Schema.parse>;
 		try {
 			recorded = await readRecord(
 				dynamicPublicationRecordName(template.authorizationId),
 			);
-			consumer = verifyConnectionRegistrationTemplateV1(
-				template,
-				access,
-				clientName,
-			).target;
 			target = ConnectionHostInstallTargetV1Schema.parse({
 				...localTarget,
 				hostRef,
@@ -2806,6 +2862,10 @@ async function assembleConnectionInstallReceiver(
 			? {
 					dynamicReader: {
 						contract: structuredClone(dynamicPublication),
+						resolveTarget: (
+							reference: RuntimeOriginalExecutionRef,
+							signal: AbortSignal,
+						) => resolveDynamicTarget(reference, signal),
 						resolveInput: (
 							reference: RuntimeOriginalExecutionRef,
 							signal: AbortSignal,

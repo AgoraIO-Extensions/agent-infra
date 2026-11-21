@@ -621,6 +621,127 @@ import {
 	standardMcpDigest,
 } from "./standard-mcp-client.js";
 
+/**
+ * §13.5.6 动态安装的 reader 与可见起点 (ADR-0048, Codex only). A Thread declares
+ * these tools at `thread/start` before any installation exists; each
+ * Execution then resolves its target and input through the Host's reader. A
+ * refusal answers the call with a fixed result and sends nothing to Connection.
+ */
+export interface CodexDynamicConnectionClientV1 {
+	readonly declared: {
+		readonly contract: { readonly ref: string; readonly revision: string };
+		readonly tools: readonly {
+			readonly name: string;
+			readonly description: string;
+			readonly inputSchema: Readonly<Record<string, unknown>>;
+		}[];
+	};
+	readonly resolveTarget: (
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	) => Promise<StandardMcpClientOptions["target"]>;
+	readonly resolveInput: StandardMcpClientOptions["resolveInput"];
+	readonly fetch?: StandardMcpClientOptions["fetch"];
+}
+
+/**
+ * Thrown by the Host reader (`resolveTarget`/`resolveInput`) before any
+ * Connection request. It carries no credential, installation or permit
+ * identifier; the Driver answers the call with the fixed result and never
+ * retries.
+ */
+export class CodexDynamicConnectionRefusalV1 extends Error {
+	constructor(readonly reason: "authorization_required" | "unavailable") {
+		super(
+			reason === "authorization_required"
+				? "Connection authorization on the platform is required"
+				: "Connection is unavailable",
+		);
+		this.name = "CodexDynamicConnectionRefusalV1";
+	}
+}
+
+/** The fixed results of §13.5.6 for a call no usable installation backs. */
+export const codexDynamicConnectionRefusalsV1 = Object.freeze({
+	authorization_required: Object.freeze({
+		reason: "connection_authorization_required",
+		message: "需要先在平台完成 Connection 授权",
+	}),
+	unavailable: Object.freeze({
+		reason: "connection_unavailable",
+		message: "Connection 暂时不可用",
+	}),
+});
+
+/** Same shape and aliases as `StandardMcpClient.toolDefinitions`. */
+function codexDeclaredConnectionDefinitions(
+	declared: CodexDynamicConnectionClientV1["declared"],
+) {
+	return [
+		{
+			type: "namespace" as const,
+			name: "connection",
+			description: "Approved Connection tools",
+			tools: declared.tools.map((tool) => ({
+				type: "function" as const,
+				name: `mcp_${standardMcpDigest(tool.name).slice(0, 32)}`,
+				description: `${tool.name}: ${tool.description}`,
+				inputSchema: structuredClone(tool.inputSchema) as Record<
+					string,
+					unknown
+				>,
+			})),
+		},
+	];
+}
+
+function codexDeclaredConnectionFingerprint(
+	declared: CodexDynamicConnectionClientV1["declared"],
+) {
+	return standardMcpDigest([
+		codexDeclaredConnectionDefinitions(declared),
+		declared.contract,
+	]);
+}
+
+function isCodexDeclaredConnection(
+	value: unknown,
+): value is CodexDynamicConnectionClientV1["declared"] {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["contract", "tools"]) ||
+		!isPlainRecord(value.contract) ||
+		!hasOnlyKeys(value.contract, ["ref", "revision"]) ||
+		!nonEmptyString(value.contract.ref) ||
+		!nonEmptyString(value.contract.revision) ||
+		!Array.isArray(value.tools) ||
+		value.tools.length < 1 ||
+		value.tools.length > 32
+	)
+		return false;
+	const names = new Set<string>();
+	for (const tool of value.tools as unknown[]) {
+		if (
+			!isPlainRecord(tool) ||
+			!hasOnlyKeys(tool, ["name", "description", "inputSchema"]) ||
+			!nonEmptyString(tool.name) ||
+			typeof tool.description !== "string" ||
+			!isPlainRecord(tool.inputSchema) ||
+			names.has(tool.name)
+		)
+			return false;
+		names.add(tool.name);
+	}
+	try {
+		codexDeclaredConnectionFingerprint(
+			value as CodexDynamicConnectionClientV1["declared"],
+		);
+	} catch {
+		return false;
+	}
+	return true;
+}
+
 export interface ModelTransportFailureObservation
 	extends ModelTransportDiagnostic {
 	readonly agentId: string;
@@ -651,6 +772,8 @@ export interface CodexRuntimeDriverOptions {
 	/** Deployment-owned verified Hub generation mounted at the fixed Runtime root. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly standardConnectionClient?: StandardMcpClientOptions;
+	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
+	readonly dynamicConnectionClient?: CodexDynamicConnectionClientV1;
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
 	readonly nativeLane?: "official-model-only" | "private-callback";
 	readonly path: string;
@@ -947,6 +1070,11 @@ interface CodexSession {
 	standardMcp?: {
 		configFingerprint: string;
 		source: { ref: string; revision: string };
+		toolsFingerprint: string;
+	};
+	/** §13.5.6: tools declared at `thread/start` from the approved contract. */
+	dynamicConnection?: {
+		contract: { ref: string; revision: string };
 		toolsFingerprint: string;
 	};
 	activeExecutionId?: string;
@@ -2879,6 +3007,7 @@ function isCodexSession(
 			"historyMode",
 			"workspaceReadToolVersion",
 			"standardMcp",
+			"dynamicConnection",
 			"activeExecutionId",
 			"acceptanceUncertainOperationKey",
 			"eventSequence",
@@ -2914,6 +3043,20 @@ function isCodexSession(
 				!hasOnlyKeys(value.standardMcp.source, ["ref", "revision"]) ||
 				!nonEmptyString(value.standardMcp.source.ref) ||
 				!nonEmptyString(value.standardMcp.source.revision))) ||
+		(value.dynamicConnection !== undefined &&
+			(value.threadId === undefined ||
+				value.standardMcp !== undefined ||
+				!isPlainRecord(value.dynamicConnection) ||
+				!hasOnlyKeys(value.dynamicConnection, [
+					"contract",
+					"toolsFingerprint",
+				]) ||
+				typeof value.dynamicConnection.toolsFingerprint !== "string" ||
+				!/^[a-f0-9]{64}$/.test(value.dynamicConnection.toolsFingerprint) ||
+				!isPlainRecord(value.dynamicConnection.contract) ||
+				!hasOnlyKeys(value.dynamicConnection.contract, ["ref", "revision"]) ||
+				!nonEmptyString(value.dynamicConnection.contract.ref) ||
+				!nonEmptyString(value.dynamicConnection.contract.revision))) ||
 		(value.activeExecutionId !== undefined &&
 			!nonEmptyString(value.activeExecutionId)) ||
 		(value.acceptanceUncertainOperationKey !== undefined &&
@@ -5176,6 +5319,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly codexInputRootPath?: string,
 		private readonly sessionExecutor?: CodexSessionExecutorAdmissionV1,
 		private readonly observeModelTransportFailure?: CodexRuntimeDriverOptions["observeModelTransportFailure"],
+		private readonly dynamicConnectionOptions?: CodexDynamicConnectionClientV1,
 	) {
 		this.unsubscribeSessionExecutor = sessionExecutor?.onFailure(() =>
 			this.failSessionExecutor(),
@@ -6071,7 +6215,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const cached = this.rpcsByTransport.get(bridge);
 				if (cached?.rpc === rpc) this.rpcsByTransport.delete(bridge);
 			},
-			this.standardConnectionOptions || this.installedSkill
+			this.standardConnectionOptions ||
+				this.dynamicConnectionOptions ||
+				this.installedSkill ||
+				// §13.5.6: a declared Thread keeps answering its calls with the fixed
+				// refusal after the Host loses the dynamic contract.
+				Object.values(this.readState().sessions).some(
+					(session) => session.dynamicConnection !== undefined,
+				)
 				? (params, signal) =>
 						this.handleStandardMcpTool(conversationKey, params, signal)
 				: undefined,
@@ -6278,6 +6429,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						"installedSkill",
 						"skillDirectory",
 						"standardConnectionClient",
+						"dynamicConnectionClient",
 						"nativeLane",
 						"path",
 						"launchPath",
@@ -6336,6 +6488,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					target: structuredClone(options.standardConnectionClient.target),
 				}
 			: undefined;
+		const dynamic = options.dynamicConnectionClient;
+		if (
+			dynamic !== undefined &&
+			(privateLane ||
+				options.standardConnectionClient !== undefined ||
+				!isPlainRecord(dynamic) ||
+				!hasOnlyKeys(dynamic, [
+					"declared",
+					"resolveTarget",
+					"resolveInput",
+					"fetch",
+				]) ||
+				typeof dynamic.resolveTarget !== "function" ||
+				typeof dynamic.resolveInput !== "function" ||
+				(dynamic.fetch !== undefined && typeof dynamic.fetch !== "function") ||
+				!isCodexDeclaredConnection(dynamic.declared))
+		)
+			configurationInvalid();
+		const dynamicConnection: CodexDynamicConnectionClientV1 | undefined =
+			dynamic
+				? {
+						declared: structuredClone(dynamic.declared),
+						resolveTarget: dynamic.resolveTarget,
+						resolveInput: dynamic.resolveInput,
+						...(dynamic.fetch ? { fetch: dynamic.fetch } : {}),
+					}
+				: undefined;
 		const requiredRuntime: CodexRuntimeRequirements = privateLane
 			? privateRuntimeRequirements
 			: {
@@ -6661,6 +6840,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				inputRoot,
 				sessionExecutor,
 				options.observeModelTransportFailure,
+				dynamicConnection,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -9914,7 +10094,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			...capabilities,
 			connection:
 				this.connectionClientOptions !== undefined ||
-				this.standardConnectionOptions !== undefined,
+				this.standardConnectionOptions !== undefined ||
+				this.dynamicConnectionOptions !== undefined,
 			...(skills.length > 0 ? { skills } : {}),
 		};
 	}
@@ -12196,6 +12377,103 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return client;
 	}
 
+	/**
+	 * §13.5.6 per-call reader for a declared Thread. Returns the Execution's
+	 * client, or the fixed refusal decided before any `tools/call`. The reader
+	 * runs before Connection is contacted; a discovery that differs from the
+	 * Thread's declaration is refused without changing the declaration.
+	 */
+	private async dynamicMcpClientFor(
+		nativeSessionRef: string,
+		executionId: string,
+		signal: AbortSignal,
+	): Promise<
+		| { client: StandardMcpClient }
+		| { refusal: keyof typeof codexDynamicConnectionRefusalsV1 }
+	> {
+		if (this.closed) unavailable();
+		const session = this.session(nativeSessionRef);
+		const declaredThread = session.dynamicConnection;
+		if (!declaredThread) unavailable();
+		const options = this.dynamicConnectionOptions;
+		if (
+			!options ||
+			!isDeepStrictEqual(declaredThread.contract, options.declared.contract) ||
+			declaredThread.toolsFingerprint !==
+				codexDeclaredConnectionFingerprint(options.declared)
+		)
+			return { refusal: "unavailable" };
+		if (
+			this.heldStandardExecutions.has(executionId) ||
+			Object.values(session.journals ?? {}).some(standardCallsHeld)
+		)
+			unavailable();
+		const refusal = async (error: unknown, client?: StandardMcpClient) => {
+			if (this.standardMcpClients.get(nativeSessionRef)?.client === client)
+				this.standardMcpClients.delete(nativeSessionRef);
+			await client?.close();
+			if (this.closed) unavailable();
+			return {
+				refusal:
+					error instanceof CodexDynamicConnectionRefusalV1
+						? error.reason
+						: ("unavailable" as const),
+			};
+		};
+		const cached = this.standardMcpClients.get(nativeSessionRef);
+		if (cached?.executionId === executionId) {
+			try {
+				// A permit revoked since the last call refuses before any send.
+				await cached.client.assertCurrent(signal);
+			} catch (error) {
+				return refusal(error, cached.client);
+			}
+			return { client: cached.client };
+		}
+		if (cached) {
+			this.standardMcpClients.delete(nativeSessionRef);
+			await cached.client.close();
+		}
+		const reference: RuntimeOriginalExecutionRef = {
+			agentId: session.agentId,
+			conversationId: session.conversationId,
+			sessionGeneration: session.sessionGeneration,
+			executionId,
+		};
+		let client: StandardMcpClient;
+		try {
+			const target = await options.resolveTarget(
+				structuredClone(reference),
+				signal,
+			);
+			client = await StandardMcpClient.open(
+				{
+					target,
+					resolveInput: options.resolveInput,
+					...(options.fetch ? { fetch: options.fetch } : {}),
+				},
+				reference,
+				signal,
+			);
+		} catch (error) {
+			return refusal(error);
+		}
+		if (
+			!isDeepStrictEqual(client.contractSource, options.declared.contract) ||
+			!isDeepStrictEqual(
+				client.toolDefinitions,
+				codexDeclaredConnectionDefinitions(options.declared),
+			)
+		)
+			return refusal(undefined, client);
+		if (this.closed) {
+			await client.close();
+			unavailable();
+		}
+		this.standardMcpClients.set(nativeSessionRef, { executionId, client });
+		return { client };
+	}
+
 	private async awaitStandardMcpAck(
 		nativeSessionRef: string,
 		executionId: string,
@@ -12382,7 +12660,26 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const root = workspace
 			? this.workspaceReadRoot(initial.nativeSessionRef)
 			: undefined;
-		const cached = this.standardMcpClients.get(initial.nativeSessionRef);
+		const declaredThread =
+			!workspace && initial.session.dynamicConnection !== undefined;
+		const dynamic = declaredThread
+			? await this.dynamicMcpClientFor(
+					initial.nativeSessionRef,
+					initial.execution.executionId,
+					signal,
+				)
+			: undefined;
+		const refusal =
+			dynamic && "refusal" in dynamic ? dynamic.refusal : undefined;
+		const cached =
+			dynamic && "client" in dynamic
+				? {
+						executionId: initial.execution.executionId,
+						client: dynamic.client,
+					}
+				: declaredThread
+					? undefined
+					: this.standardMcpClients.get(initial.nativeSessionRef);
 		const toolArguments = isPlainRecord(input.arguments)
 			? input.arguments
 			: undefined;
@@ -12397,6 +12694,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				: undefined;
 		if (workspace) {
 			if (input.tool !== "read_text_file") protocolInvalid();
+		} else if (refusal) {
+			const declared = this.dynamicConnectionOptions?.declared;
+			if (
+				!/^mcp_[a-f0-9]{32}$/.test(input.tool) ||
+				(declared &&
+					!codexDeclaredConnectionDefinitions(declared)[0]?.tools.some(
+						(tool) => tool.name === input.tool,
+					))
+			)
+				unavailable();
 		} else if (
 			!cached ||
 			!toolArguments ||
@@ -12404,7 +12711,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			!cached.client.validateArguments(input.tool, toolArguments)
 		)
 			unavailable();
-		const client = workspace ? undefined : cached?.client;
+		const client = workspace || refusal ? undefined : cached?.client;
 		const prepared = await this.update((state) => {
 			signal.throwIfAborted();
 			const resolved = locate(state);
@@ -12466,7 +12773,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				phase: "intent",
 				toolId: workspace
 					? "workspace.read_text_file"
-					: `mcp:${standardMcpDigest(client?.toolName(input.tool)).slice(0, 32)}`,
+					: client
+						? `mcp:${standardMcpDigest(client.toolName(input.tool)).slice(0, 32)}`
+						: // The declared alias is `mcp_` plus the same name digest prefix.
+							`mcp:${input.tool.slice(4)}`,
 				...(client
 					? {
 							connection: {
@@ -12669,6 +12979,29 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 											: "workspace_path_invalid",
 								},
 							),
+						},
+					],
+				};
+			} else if (refusal) {
+				// §13.5.6: a deterministic refusal before any Connection request,
+				// never unknown and never retried.
+				const cursor = await save("failed", {
+					finishedAt: new Date().toISOString(),
+					failureCode: "operation_failed",
+				});
+				await this.awaitStandardMcpAck(
+					prepared.nativeSessionRef,
+					prepared.execution.executionId,
+					cursor,
+					signal,
+				);
+				result = {
+					phase: "failed",
+					success: false,
+					contentItems: [
+						{
+							type: "inputText",
+							text: JSON.stringify(codexDynamicConnectionRefusalsV1[refusal]),
 						},
 					],
 				};
@@ -15476,6 +15809,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await this.resumeSession(nativeSessionRef);
 			return this.session(nativeSessionRef);
 		}
+		// §13.5.6: declare the approved contract's tools without calling the
+		// reader; availability is decided per call.
+		const declared = this.dynamicConnectionOptions?.declared;
 		const threadId = await (await this.rpc(nativeSessionRef)).request(
 			"thread/start",
 			{
@@ -15483,11 +15819,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				// #3226：平台固定的文件交换说明（Codex 0.153 ThreadStartParams.developerInstructions）。
 				developerInstructions: SANDBOX_FILE_INSTRUCTIONS_V1,
 				...(standard ||
+				declared ||
 				(this.installedSkill &&
 					this.requiredRuntime.lane === "official-model-only")
 					? {
 							dynamicTools: [
-								...(standard?.toolDefinitions ?? []),
+								...(standard?.toolDefinitions ??
+									(declared
+										? codexDeclaredConnectionDefinitions(declared)
+										: [])),
 								...(this.installedSkill &&
 								this.requiredRuntime.lane === "official-model-only"
 									? [structuredClone(codexWorkspaceReadToolDefinition)]
@@ -15533,6 +15873,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						this.standardConnectionOptions.target.configFingerprint,
 					source: structuredClone(this.standardConnectionOptions.target.source),
 					toolsFingerprint: standard.fingerprint,
+				};
+			else if (declared)
+				stored.dynamicConnection = {
+					contract: structuredClone(declared.contract),
+					toolsFingerprint: codexDeclaredConnectionFingerprint(declared),
 				};
 		});
 		this.resumedSessions.add(nativeSessionRef);
