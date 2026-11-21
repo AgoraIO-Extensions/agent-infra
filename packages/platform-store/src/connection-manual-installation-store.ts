@@ -1380,7 +1380,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	 * the logical confirm, the exchange phase (reference and request digest),
 	 * this confirm's first-pin receipt on an active pin, the descriptor and the
 	 * Host/Pod/Sandbox/generation/resourceFence; it expires with the published
-	 * material or the exception's `notAfter`, whichever is first. Anything else
+	 * material or the exception's `notAfter`, whichever is first. Its id is the
+	 * exchange phase command reference, which the Host already holds for the
+	 * permit read (§13.5.6, ADR-0048). Anything else
 	 * commits nothing.
 	 */
 	async commitPermit(input: {
@@ -1482,7 +1484,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						(id, authorization_id, confirm_command_id, exchange_command_id, exchange_request_digest,
 						 pin_receipt_id, binding, descriptor_digest, commit_digest, claim_owner, claim_fence,
 						 attempt_id, expires_at)
-					select ${randomUUID()}, ${input.authorizationId}, ${input.confirmCommandId}, ${input.exchangeCommandId},
+					select ${input.exchangeCommandId}, ${input.authorizationId}, ${input.confirmCommandId}, ${input.exchangeCommandId},
 						${source.request_digest as string}, ${source.id as string}, ${JSON.stringify(binding)}::jsonb,
 						${row.descriptor_digest as string}, ${input.publication.commitDigest}, ${input.attemptOwner},
 						${template.claim.fence}, ${input.attemptId},

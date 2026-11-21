@@ -3625,10 +3625,13 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			"permitted",
 		);
 		const [permit] = await client`
-			select confirm_command_id, exchange_command_id, pin_receipt_id, binding, commit_digest, claim_owner, claim_fence::int as claim_fence,
+			select id, confirm_command_id, exchange_command_id, pin_receipt_id, binding, commit_digest, claim_owner, claim_fence::int as claim_fence,
 				expires_at <= ${dynamic.principalMapping.notAfter}::timestamptz as bounded
 			from platform.connection_manual_install_permits where authorization_id=${flow.run.authorizationId}`;
 		const template = flow.run.template;
+		// #4333 §13.5.6: the permit's reference is the exchange command reference,
+		// the only one the Host already holds.
+		expect(permit?.id).toBe(done.exchangeCommandId);
 		expect(permit).toMatchObject({
 			confirm_command_id: done.confirmCommandId,
 			exchange_command_id: done.exchangeCommandId,

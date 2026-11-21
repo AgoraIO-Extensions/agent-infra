@@ -20,10 +20,13 @@ import {
 	type FileRuntimeStore,
 	openConnectionHostSupplyV1,
 	RuntimeHostError,
+	type RuntimeOriginalExecutionRef,
 	readConnectionMachineOAuthClientOutcomeV1,
 	readConnectionMachineOAuthClientV1,
 	registerConnectionMachineOAuthClientV1,
 	revokeConnectionMachineOAuthClientV1,
+	validateStandardMcpInput,
+	validateStandardMcpInstallationMetadata,
 	validateStandardMcpToken,
 } from "@agent-infra/agent-runtime";
 import {
@@ -108,6 +111,7 @@ import {
 } from "./runtime-oauth-client.js";
 import {
 	createRuntimeOAuthDynamicPublication,
+	parseRuntimeOAuthDynamicPublicationContractV1,
 	type RuntimeOAuthDynamicPublicationContractV1,
 } from "./runtime-oauth-dynamic-publication.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
@@ -116,6 +120,10 @@ import {
 	openProtectedStandardMcpDirectory,
 	readProtectedStandardMcpBytes,
 } from "./standard-mcp-files.js";
+import {
+	standardMcpInstallationKey,
+	standardMcpMaterialKey,
+} from "./standard-mcp-input.js";
 import {
 	assertProtectedStandardMcpExportCommitted,
 	ensurePrivateDirectory,
@@ -153,8 +161,35 @@ export type ConnectionInstallReceiverAssemblyV1 =
 			readonly cert: string;
 			readonly port: number;
 			readonly runtimeOrigin: string;
+			/**
+			 * §13.5.6 动态安装的 reader (ADR-0048): the Driver's per-Execution
+			 * `resolveInput` for this Host's dynamic manual installations; present
+			 * only with the approved dynamic publication contract.
+			 */
+			readonly dynamicReader?: {
+				readonly contract: RuntimeOAuthDynamicPublicationContractV1;
+				resolveInput(
+					reference: RuntimeOriginalExecutionRef,
+					signal: AbortSignal,
+				): Promise<unknown>;
+			};
 			close(): Promise<void>;
 	  };
+
+/**
+ * §13.5.6 dynamic reader refusal before any Connection request. It carries no
+ * credential, installation or permit identifier; nothing is retried.
+ */
+export class ConnectionDynamicReaderRefusalV1 extends Error {
+	constructor(readonly reason: "authorization_required" | "unavailable") {
+		super(
+			reason === "authorization_required"
+				? "Connection authorization on the platform is required"
+				: "Connection is unavailable",
+		);
+		this.name = "ConnectionDynamicReaderRefusalV1";
+	}
+}
 
 export interface ConnectionInstallReceiverOptionsV1 {
 	readonly environment: NodeJS.ProcessEnv;
@@ -240,6 +275,10 @@ const oauthRoot = [
 	"standard-mcp-oauth",
 ] as const;
 const firstBeginRecord = /^install-first-begin-([a-f0-9]{64})\.json$/;
+/** §13.5.6 permit reference and commit digest of a published dynamic install. */
+function dynamicPublicationRecordName(authorizationId: string) {
+	return `install-dynamic-publication-${createHash("sha256").update(authorizationId).digest("hex")}.json`;
+}
 /** Durable fact that Connection confirmed the revoke of an installation's original key. */
 const revokedRecord = /^install-revoked-([a-f0-9]{64})\.json$/;
 const maxSlots = 8;
@@ -433,9 +472,13 @@ async function assembleConnectionInstallReceiver(
 	const dataDirectory = options.dataDirectory;
 	const now = options.now ?? Date.now;
 	const machineFetch = options.fetch;
+	// §13.5.6: the approved contract comes only from the deployment input at
+	// assembly; present but invalid keeps the whole receiver unavailable.
 	const dynamicPublication = options.dynamicPublication
 		? structuredClone(options.dynamicPublication)
-		: undefined;
+		: parseRuntimeOAuthDynamicPublicationContractV1(
+				environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_PUBLICATION_CONTRACT,
+			);
 	if (
 		!agentInput ||
 		!workerInput ||
@@ -2009,6 +2052,9 @@ async function assembleConnectionInstallReceiver(
 		// sidecar and original record committed) yields the evidence, never a
 		// pending one; the Platform permit then binds its commit digest.
 		const committed = built;
+		const commitDigest = runtimeOAuthPublicationCommitDigestV1(
+			committed.commit,
+		);
 		try {
 			await assertProtectedStandardMcpExportCommitted(
 				join(
@@ -2024,6 +2070,21 @@ async function assembleConnectionInstallReceiver(
 				true,
 			);
 			assertOriginal(template);
+			// §13.5.6 许可引用 (ADR-0048): the dynamic reader reads the permit by this
+			// exchange's command reference and the commit digest, which only this
+			// Host holds; without the record no evidence is returned.
+			await publishMetadata(
+				records,
+				dynamicPublicationRecordName(template.authorizationId),
+				{
+					schemaVersion: 1,
+					authorizationId: template.authorizationId,
+					permitId: body.commandId,
+					delivery: committed.delivery,
+					commitDigest,
+				},
+				{ immutable: true, guard: () => assertOriginal(template) },
+			);
 		} catch {
 			return reply("exchanged");
 		}
@@ -2033,7 +2094,7 @@ async function assembleConnectionInstallReceiver(
 			outcome: "exchanged",
 			commandId: body.commandId,
 			publication: {
-				commitDigest: runtimeOAuthPublicationCommitDigestV1(committed.commit),
+				commitDigest,
 				expiresAt: committed.metadata.expiresAt,
 			},
 		});
@@ -2118,6 +2179,185 @@ async function assembleConnectionInstallReceiver(
 		if (result.expiresAt <= now()) denied();
 		// Read-only: the stored result is returned; no state, PKCE or link is generated.
 		return result;
+	}
+
+	/**
+	 * §13.5.6 动态安装的 reader 与可见起点 (ADR-0048). For the current Execution's
+	 * original binding it finds this session's fixed installation, reads the
+	 * Platform permit by the exchange command reference, checks the local
+	 * publication is committed with the same commit digest, reads the material
+	 * and reads the permit again. A missing installation or a denied permit is
+	 * `authorization_required`; an unavailable or unknown readback is
+	 * `unavailable`. Both happen before any Connection request and are never
+	 * retried.
+	 */
+	async function resolveDynamicInput(
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	): Promise<unknown> {
+		const required = () => {
+			throw new ConnectionDynamicReaderRefusalV1("authorization_required");
+		};
+		const refuse = () => {
+			throw new ConnectionDynamicReaderRefusalV1("unavailable");
+		};
+		let binding: Awaited<
+			ReturnType<InstallStore["resolveOriginalExecutionBinding"]>
+		>;
+		let hostRef: string;
+		try {
+			current();
+			signal.throwIfAborted();
+			binding = await store.resolveOriginalExecutionBinding(reference, now);
+			hostRef = await store.resolveOriginalExecutionHostSessionRef(
+				reference,
+				now,
+			);
+			current();
+		} catch {
+			return refuse();
+		}
+		const entry = [...fixed.values()].find(
+			(candidate) =>
+				isDeepStrictEqual(candidate.template.principal, binding.principal) &&
+				candidate.template.reference.agentId === reference.agentId &&
+				candidate.template.reference.conversationId ===
+					reference.conversationId &&
+				candidate.template.reference.sessionGeneration ===
+					reference.sessionGeneration,
+		);
+		if (!entry) return required();
+		const template = entry.template;
+		let recorded: Record<string, unknown> | undefined;
+		let consumer: ApprovedConnectionConsumerTargetV1;
+		let target: ReturnType<typeof ConnectionHostInstallTargetV1Schema.parse>;
+		try {
+			recorded = await readRecord(
+				dynamicPublicationRecordName(template.authorizationId),
+			);
+			consumer = verifyConnectionRegistrationTemplateV1(
+				template,
+				access,
+				clientName,
+			).target;
+			target = ConnectionHostInstallTargetV1Schema.parse({
+				...localTarget,
+				hostRef,
+			});
+		} catch {
+			return refuse();
+		}
+		const delivery = recorded?.delivery as
+			| { ref?: unknown; revision?: unknown }
+			| undefined;
+		if (
+			!recorded ||
+			Object.keys(recorded).sort().join(",") !==
+				"authorizationId,commitDigest,delivery,permitId,schemaVersion" ||
+			recorded.schemaVersion !== 1 ||
+			recorded.authorizationId !== template.authorizationId ||
+			typeof recorded.permitId !== "string" ||
+			!isDigest(recorded.commitDigest) ||
+			!isRecord(delivery) ||
+			typeof delivery.ref !== "string" ||
+			typeof delivery.revision !== "string"
+		)
+			return required();
+		if (!isDeepStrictEqual(template.target, target)) return required();
+		const permitReadback: ConnectionInstallReadbackInputV1 = {
+			purpose: "permit",
+			target,
+			principal: template.principal,
+			reference,
+			authorizationId: template.authorizationId,
+			confirmationRevision: template.confirmationRevision,
+			templateDigest: connectionRegistrationTemplateDigestV1(template),
+			supply: {
+				ref: template.supply.ref,
+				revision: template.supply.revision,
+				attemptId: entry.supplyAttemptId,
+			},
+			permit: {
+				id: recorded.permitId,
+				commitDigest: recorded.commitDigest as string,
+			},
+		};
+		const permitted = async () => {
+			const outcome = await readbackOutcome(permitReadback);
+			if (outcome === "denied") required();
+			if (outcome !== "allowed") refuse();
+		};
+		await permitted();
+		const source = join(
+			dataDirectory,
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-export",
+			standardMcpExportKey(delivery.ref, delivery.revision),
+		);
+		let input: unknown;
+		try {
+			signal.throwIfAborted();
+			await assertProtectedStandardMcpExportCommitted(source, true);
+			const sidecar: unknown = JSON.parse(
+				await readProtectedStandardMcpBytes(
+					source,
+					".oauth-publication.json",
+					8192,
+					current,
+				),
+			);
+			const expected = isRecord(sidecar) ? sidecar.expected : undefined;
+			if (
+				!isRecord(expected) ||
+				runtimeOAuthPublicationCommitDigestV1(
+					expected as Parameters<
+						typeof runtimeOAuthPublicationCommitDigestV1
+					>[0],
+				) !== recorded.commitDigest
+			)
+				unavailable();
+			const installationKey = standardMcpInstallationKey(
+				binding.principal,
+				reference.agentId,
+				consumer,
+			);
+			if (expected.installationKey !== installationKey) unavailable();
+			const metadataText = await readProtectedStandardMcpBytes(
+				join(source, "bindings"),
+				`${installationKey}.json`,
+				65_536,
+				current,
+			);
+			const metadata = validateStandardMcpInstallationMetadata(
+				JSON.parse(metadataText),
+				consumer,
+			);
+			if (
+				!isDeepStrictEqual(metadata.principal, binding.principal) ||
+				metadata.agentId !== reference.agentId ||
+				!isDeepStrictEqual(metadata.contract, dynamicPublication?.contract)
+			)
+				unavailable();
+			const token = await readProtectedStandardMcpBytes(
+				join(source, "materials"),
+				`${standardMcpMaterialKey(installationKey, metadata.credentialRef, metadata.credentialRevision)}.token`,
+				4096,
+				current,
+			);
+			await assertProtectedStandardMcpExportCommitted(source, true);
+			const { agentId: _agentId, ...publicInput } = metadata;
+			input = validateStandardMcpInput(
+				{ ...publicInput, scope: binding.scope, token },
+				reference,
+				consumer,
+			);
+		} catch {
+			// A sealed, erased, tampered or expired local publication backs nothing.
+			return required();
+		}
+		await permitted();
+		return input;
 	}
 
 	type RevokedFacts = {
@@ -2562,6 +2802,17 @@ async function assembleConnectionInstallReceiver(
 		cert,
 		port,
 		runtimeOrigin: runtime.href,
+		...(dynamicPublication
+			? {
+					dynamicReader: {
+						contract: structuredClone(dynamicPublication),
+						resolveInput: (
+							reference: RuntimeOriginalExecutionRef,
+							signal: AbortSignal,
+						) => resolveDynamicInput(reference, signal),
+					},
+				}
+			: {}),
 		close,
 	};
 }
