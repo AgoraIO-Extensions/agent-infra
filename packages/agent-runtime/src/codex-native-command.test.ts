@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,18 +12,27 @@ import type {
 } from "./codex-runtime-driver.js";
 import { createCodexSessionExecutorBindingV1 } from "./codex-session-executor-binding.js";
 import {
+	CompactModelTransport,
+	startCompactMockModel,
+} from "./compact-model.test-support.js";
+import {
 	MetadataDriver,
 	MetadataTransport,
 } from "./compact-transport.test-support.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { withNativeMetadataTraceV1 } from "./native-metadata-telemetry.js";
 
-const fixtures: { directory: string; driver: CodexRuntimeDriver }[] = [];
+const fixtures: {
+	directory: string;
+	driver: CodexRuntimeDriver;
+	closeModel?: () => Promise<void>;
+}[] = [];
 afterEach(async () => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
-	for (const { directory, driver } of fixtures.splice(0)) {
+	for (const { directory, driver, closeModel } of fixtures.splice(0)) {
 		await driver.close();
+		await closeModel?.();
 		await rm(directory, { recursive: true, force: true });
 	}
 });
@@ -50,14 +59,38 @@ async function fixture(
 	> = {},
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "codex-metadata-unit-"));
+	const transport = stateful
+		? new CompactModelTransport()
+		: new MetadataTransport();
+	if (stateful) {
+		transport.threadId = randomUUID();
+		transport.compactTurnId = randomUUID();
+		transport.compactItemId = randomUUID();
+	}
+	const model = stateful ? await startCompactMockModel() : undefined;
 	const { path, nativeSessionRef, binding } = await seedNativeCommandState(
 		directory,
-		undefined,
+		transport.threadId,
 		stateful,
 	);
-	const transport = new MetadataTransport();
-	const driver = await MetadataDriver.openFixture(path, transport, options);
-	fixtures.push({ directory, driver });
+	const driver = await MetadataDriver.openFixture(path, transport, {
+		...(model
+			? {
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							model: "gpt-5.3-codex",
+							reasoningLevels: ["high"],
+							endpoint: model.endpoint,
+							credential: "synthetic-unit-credential",
+						},
+					],
+					authorizeExternalAction: async () => ({ revalidate: () => {} }),
+				}
+			: {}),
+		...options,
+	});
+	fixtures.push({ directory, driver, closeModel: model?.close });
 	const abort = new AbortController();
 	const read: CodexNativeCommandReadContext = {
 		nativeSessionRef,
@@ -67,6 +100,22 @@ async function fixture(
 		revalidate: async () => binding,
 	};
 	return { directory, path, driver, transport, binding, read, abort };
+}
+
+function compactRead(
+	f: Awaited<ReturnType<typeof fixture>>,
+	command: { executionId: string },
+) {
+	const binding = {
+		...f.binding,
+		scope: { ...f.binding.scope, executionId: command.executionId },
+	};
+	return {
+		...f.read,
+		allowUnboundExecution: true,
+		assertCurrent: () => binding,
+		revalidate: async () => binding,
+	};
 }
 
 async function invokeNativeQuery(
@@ -361,8 +410,15 @@ describe("Codex native command result lifecycle", () => {
 			},
 			authorizationRecordId: "authorization-1",
 		});
-		const record = await f.driver.execute(command, { nativeCommand: f.read });
-		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
+		const record = await f.driver.execute(command, {
+			nativeCommand: compactRead(f, command),
+		});
+		expect(record.result).toEqual({ outcome: "accepted", status: "running" });
+		await expect
+			.poll(() =>
+				f.driver.getStatus(f.read.nativeSessionRef, command.executionId),
+			)
+			.toBe("completed");
 		expect(
 			f.transport.requests.filter(
 				(frame) => frame.method === "thread/compact/start",
@@ -388,9 +444,11 @@ describe("Codex native command result lifecycle", () => {
 			nativeTurnId: f.transport.compactTurnId,
 			nativeCompactionItemId: f.transport.compactItemId,
 		});
-		expect(await f.driver.execute(command, { nativeCommand: f.read })).toEqual(
-			record,
-		);
+		expect(
+			await f.driver.execute(command, {
+				nativeCommand: compactRead(f, command),
+			}),
+		).toMatchObject({ result: { outcome: "accepted", status: "completed" } });
 	});
 
 	it("emits only bounded compact lifecycle stages without private data", async () => {
@@ -433,8 +491,15 @@ describe("Codex native command result lifecycle", () => {
 			},
 			authorizationRecordId: "authorization-1",
 		});
-		const record = await f.driver.execute(command, { nativeCommand: f.read });
-		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
+		const record = await f.driver.execute(command, {
+			nativeCommand: compactRead(f, command),
+		});
+		expect(record.result).toEqual({ outcome: "accepted", status: "running" });
+		await expect
+			.poll(() =>
+				f.driver.getStatus(f.read.nativeSessionRef, command.executionId),
+			)
+			.toBe("completed");
 		expect(stages.map((event) => (event as { stage: string }).stage)).toEqual([
 			"request_sent",
 			"rpc_response",
@@ -497,9 +562,14 @@ describe("Codex native command result lifecycle", () => {
 			authorizationRecordId: "authorization-1",
 		});
 		const record = await f.driver.execute(command, {
-			nativeCommand: f.read,
+			nativeCommand: compactRead(f, command),
 		});
-		expect(record.result.outcome).toBe("unknown");
+		expect(["unknown", "accepted"]).toContain(record.result.outcome);
+		await expect
+			.poll(() =>
+				f.driver.getStatus(f.read.nativeSessionRef, command.executionId),
+			)
+			.toBe("unknown");
 		expect(
 			f.transport.requests.filter(
 				(frame) => frame.method === "thread/compact/start",
@@ -554,7 +624,9 @@ describe("Codex native command result lifecycle", () => {
 			},
 			authorizationRecordId: "authorization-1",
 		});
-		const pending = f.driver.execute(command, { nativeCommand: f.read });
+		const pending = f.driver.execute(command, {
+			nativeCommand: compactRead(f, command),
+		});
 		await vi.waitFor(async () => {
 			const state = JSON.parse(await readFile(f.path, "utf8")) as {
 				operations: Record<
@@ -577,10 +649,16 @@ describe("Codex native command result lifecycle", () => {
 				nativeCompactionItemId: f.transport.compactItemId,
 			});
 		});
+		await expect
+			.poll(() => (f.transport as CompactModelTransport).modelStatuses)
+			.toEqual([200]);
 		await f.driver.close();
 		void pending;
 
 		const recoveredTransport = new MetadataTransport();
+		recoveredTransport.threadId = f.transport.threadId;
+		recoveredTransport.compactTurnId = f.transport.compactTurnId;
+		recoveredTransport.compactItemId = f.transport.compactItemId;
 		recoveredTransport.turns = [
 			{
 				id: recoveredTransport.compactTurnId,
@@ -596,7 +674,7 @@ describe("Codex native command result lifecycle", () => {
 		);
 		fixtures.push({ directory: f.directory, driver: recovered });
 		const record = await recovered.execute(command, {
-			nativeCommand: f.read,
+			nativeCommand: compactRead(f, command),
 		});
 		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
 		expect(
