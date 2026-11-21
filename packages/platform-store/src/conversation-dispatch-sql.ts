@@ -418,6 +418,61 @@ export async function cancelStoppedTurn(
 	);
 }
 
+/** Cancel only never-delivered native work under the original locked ownership. */
+export async function cancelNeverSentNativeForStoppedAgent(
+	transaction: Transaction,
+	outbox: OutboxRow,
+	conversation: ConversationRow,
+	execution: ExecutionRow,
+	payload: ConversationPayload,
+): Promise<boolean> {
+	const native = payload.nativeCapabilityV6 ?? payload.nativeCapability;
+	if (
+		!isNativeOperation(outbox.operation) ||
+		!native ||
+		native.actorId !== execution.actor_id ||
+		native.agentId !== execution.agent_id ||
+		native.channelId !== execution.channel_id ||
+		native.turnId !== execution.turn_id ||
+		!["pending", "retry_scheduled"].includes(outbox.status) ||
+		execution.status !== "submitted" ||
+		outbox.attempt_count !== 0 ||
+		safeCounter(outbox.delivery_fence) !== 0 ||
+		safeCounter(execution.delivery_fence) !== 0 ||
+		execution.runtime_submit_protocol !== null ||
+		execution.original_operation_digest !== null ||
+		execution.original_submit_host_session_ref !== null ||
+		execution.accepted_original_host_session_ref !== null ||
+		execution.last_runtime_cursor !== null ||
+		!bindingMatches(outbox, payload, conversation, execution)
+	)
+		return false;
+	const [stopped] =
+		await transaction`select 1 from platform.agent_applications a
+ join platform.session_sandbox_allocations s on s.agent_id=a.agent_id
+ where a.agent_id=${execution.agent_id} and a.status='stopped' and a.desired_state='stopped'
+ and s.sandbox_id=${execution.sandbox_id} and s.conversation_id=${conversation.id}
+ and s.session_generation=${execution.session_generation}
+ and not coalesce(s.status='ready' and s.desired_state='running' and s.resource_fence>0 and s.resource_observation->>'status'='ready',false) for update of s`;
+	if (!stopped) return false;
+	return failUnsentTurn(
+		transaction,
+		outbox,
+		conversation,
+		execution,
+		payload,
+		"TASK_CANCELLED",
+		"cancelled",
+	);
+}
+
+function isNativeOperation(operation: string) {
+	return (
+		operation === "conversation.native-capability.invoke.v1" ||
+		operation === "conversation.native-capability.invoke.v2"
+	);
+}
+
 /**
  * #4077：Agent 已停止、停用或故障未恢复时，以原因终结已占位但确认未发送的 Turn（Runtime HLD
  * §8.4），不再按 `AUTHORIZATION_UNAVAILABLE` 无限重试。调用方持有 Agent、Conversation、Outbox
@@ -432,6 +487,7 @@ export async function failUnsentTurn(
 	execution: ExecutionRow,
 	payload: ConversationPayload,
 	errorCode: string,
+	terminalStatus: "failed" | "cancelled" = "failed",
 ): Promise<boolean> {
 	const previousFence = safeCounter(outbox.delivery_fence);
 	if (
@@ -445,7 +501,7 @@ export async function failUnsentTurn(
 		return false;
 	const failed = await transaction<{ execution_id: string }[]>`
 		update platform.conversation_executions
-		set status = 'failed', updated_at = clock_timestamp()
+		set status = ${terminalStatus}, updated_at = clock_timestamp()
 		where execution_id = ${execution.execution_id}
 			and conversation_id = ${conversation.id}
 			and session_generation = ${payload.sessionGeneration}
@@ -465,7 +521,7 @@ export async function failUnsentTurn(
 	const fence = previousFence + 1;
 	const closed = await transaction<{ id: string }[]>`
 		update platform.outbox_items
-		set status = 'failed', lease_owner = null, lease_expires_at = null,
+		set status = ${terminalStatus === "cancelled" ? "succeeded" : "failed"}, lease_owner = null, lease_expires_at = null,
 			delivery_fence = ${fence}, updated_at = clock_timestamp()
 		where id = ${outbox.id} and status = ${outbox.status}
 			and delivery_fence = ${outbox.delivery_fence}
@@ -483,7 +539,7 @@ export async function failUnsentTurn(
 		transaction,
 		conversation.id,
 		execution.execution_id,
-		"failed",
+		terminalStatus,
 	);
 	await transaction`
 		insert into platform.persisted_events
@@ -491,7 +547,7 @@ export async function failUnsentTurn(
 			 trace_id, occurred_at)
 		values
 			(${`outbox:${outbox.id}:${fence}`}, ${`outbox:${outbox.id}`}, ${fence},
-			 ${fence}, 'outbox.failed',
+			 ${fence}, ${terminalStatus === "cancelled" ? "outbox.succeeded" : "outbox.failed"},
 			 jsonb_build_object(
 				'attemptCount', ${outbox.attempt_count}::int,
 				'deliveryFence', ${String(fence)}::text,
