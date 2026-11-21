@@ -23,6 +23,7 @@ import type {
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataPublicReaderV1 } from "./http/native-metadata-routes.js";
 import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
+import { NativeMetadataResourceUnavailableV1 } from "./runtime-native-metadata-scope-resolver.js";
 
 const maximumCacheEntries = 128;
 const maximumCacheTtlMs = 30_000;
@@ -235,7 +236,13 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 							),
 					),
 				]);
-				if (!commands || !skills) return { outcome: "unavailable" };
+				if (
+					!commands ||
+					!skills ||
+					commands === NativeMetadataResourceUnavailableV1 ||
+					skills === NativeMetadataResourceUnavailableV1
+				)
+					return { outcome: "unavailable" };
 				const commandProjection = coreProjection(commands);
 				const skillProjection = coreProjection(skills);
 				if (!commandProjection || !skillProjection)

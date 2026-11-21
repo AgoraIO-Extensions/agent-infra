@@ -4,11 +4,12 @@ import {
 } from "@agent-infra/platform-store";
 import { Hono } from "hono";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import type { IdentityContext } from "./http/identity.js";
 import { registerNativeMetadataRoutes } from "./http/native-metadata-routes.js";
 import {
 	createRuntimeNativeMetadataCurrentCheckerV1,
@@ -26,8 +27,6 @@ const identity = {
 	roles: ["employee" as const],
 	authorizationRevision: "pg-metadata-revision",
 };
-const path =
-	"/api/v2/conversations/pg-metadata-conversation/executions/pg-metadata-execution/native-metadata?selector=status";
 const projection = {
 	selector: "status" as const,
 	status: "idle" as const,
@@ -43,7 +42,19 @@ beforeAll(async () => {
 	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values ('personal',${identity.userId},1,1)`;
 	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values ('personal',${identity.userId},1,'pg-synthetic-key',${sql.json({ purpose: "personal", subjectId: identity.userId, keyId: "pg-synthetic-key", keyVersion: 1 })})`;
 	await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version) values ('pg-metadata-execution','pg-metadata-conversation','pg-metadata-agent',${identity.userId},'web','pg-metadata-turn','completed',1,'pg-original-execution-revision',now(),'v4',${"a".repeat(43)},'pg-original-host','web','personal',${identity.userId},'pg-synthetic-key',1)`;
+	for (const [suffix, agentId] of [
+		["other-conversation", "pg-metadata-agent"],
+		["other-agent", "pg-metadata-other-agent"],
+	] as const) {
+		await sql`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,host_session_ref) values (${suffix},${agentId},${identity.userId},'web','active',1,${identity.authorizationRevision},'pg-original-host')`;
+		await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version) select ${suffix},${suffix},${agentId},actor_id,channel_id,${suffix},status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version from platform.conversation_executions where execution_id='pg-metadata-execution'`;
+	}
 }, 120_000);
+afterEach(async () => {
+	const [counts] =
+		await sql`select (select count(*) from platform.conversation_executions)::int as executions,(select count(*) from platform.conversation_events)::int as events,(select count(*) from platform.outbox_items)::int as outbox`;
+	expect(counts).toEqual({ executions: 3, events: 0, outbox: 0 });
+});
 afterAll(async () => {
 	await sql?.end({ timeout: 1 });
 	await database?.stop();
@@ -56,7 +67,17 @@ async function read(
 			| "host"
 			| "current host"
 			| "final host"
-			| "authorization";
+			| "authorization"
+			| "revoked"
+			| "directory"
+			| "database"
+			| "transport"
+			| "deadline"
+			| "missing host";
+		selector?: "status" | "commands" | "skills";
+		projectionVersion?: number;
+		conversationId?: string;
+		executionId?: string;
 		foreignIdentity?: boolean;
 	} = {},
 ) {
@@ -65,15 +86,31 @@ async function read(
 		databaseUrl: database.databaseUrl,
 	});
 	const registry = createRuntimeNativeMetadataRequestRegistryV1();
-	const authorize = async () => ({
-		outcome: "allowed" as const,
-		authority: {
-			actorId: identity.userId,
-			agentId: "pg-metadata-agent",
-			channelId: "web",
-			authorizationRevision: "pg-current-agent-policy-revision",
-		},
-	});
+	let clock = Date.now();
+	const authorize = async (
+		currentIdentity: IdentityContext,
+		request: { conversationId: string },
+	) => {
+		if (options.fault === "directory")
+			return { outcome: "unavailable" as const };
+		if (options.fault === "revoked") return { outcome: "revoked" as const };
+		const target = await query.getAuthorizationTarget(
+			{ actorId: currentIdentity.userId, channelId: "web" },
+			request.conversationId,
+		);
+		if (options.fault === "deadline") clock += 31_000;
+		if (options.fault === "database") await query.close();
+		if (!target) return { outcome: "denied" as const };
+		return {
+			outcome: "allowed" as const,
+			authority: {
+				actorId: currentIdentity.userId,
+				agentId: target.agentId,
+				channelId: "web",
+				authorizationRevision: "pg-current-agent-policy-revision",
+			},
+		};
+	};
 	const checker = createRuntimeNativeMetadataCurrentCheckerV1({
 		registry,
 		authorize,
@@ -84,12 +121,15 @@ async function read(
 		resolveRequest: createRuntimeNativeMetadataScopeResolverV1({
 			query,
 			authorize,
+			now: () => clock,
 		}),
 		requestRegistry: registry,
 		// Identity/Core and Runtime transport are controlled; original scope is actual PostgreSQL.
 		gateway: {
 			read: async (request, signal) => {
 				gatewayCalls++;
+				if (options.fault === "transport")
+					throw new Error("synthetic transport failure");
 				const { apiRequestSourceRef, ...input } = request;
 				const binding = { ...input, originalHostScopeRef: "pg-original-host" };
 				const check = () =>
@@ -111,7 +151,26 @@ async function read(
 					await sql`update platform.conversations set host_session_ref='pg-unrelated-current-host' where id='pg-metadata-conversation'`;
 				const after = await check();
 				outcomes.push(after.outcome);
-				return after.outcome === "allowed" ? { ...binding, projection } : null;
+				const selectedProjection =
+					options.selector === "commands"
+						? {
+								selector: "commands" as const,
+								revision: "a".repeat(64),
+								capabilities: [],
+								...(options.projectionVersion === 2
+									? { schemaVersion: 1 as const, projectionVersion: 2 as const }
+									: {}),
+							}
+						: options.selector === "skills"
+							? {
+									selector: "skills" as const,
+									revision: "a".repeat(64),
+									capabilities: [],
+								}
+							: projection;
+				return after.outcome === "allowed"
+					? { ...binding, projection: selectedProjection }
+					: null;
 			},
 		},
 	});
@@ -134,6 +193,11 @@ async function read(
 		},
 	});
 	try {
+		if (options.fault === "missing host")
+			await sql`update platform.conversation_executions set original_submit_host_session_ref=null where execution_id='pg-metadata-execution'`;
+		const conversationId = options.conversationId ?? "pg-metadata-conversation";
+		const executionId = options.executionId ?? "pg-metadata-execution";
+		const path = `/api/v2/conversations/${conversationId}/executions/${executionId}/native-metadata?selector=${options.selector ?? "status"}${options.projectionVersion === undefined ? "" : `&projectionVersion=${options.projectionVersion}`}`;
 		const response = await app.fetch(
 			new Request(`http://pg-metadata.invalid${path}`),
 		);
@@ -184,3 +248,54 @@ describe("native metadata actual PostgreSQL original-scope lifetime", () => {
 		expect(result.gatewayCalls).toBe(0);
 	});
 });
+
+const directories = [
+	{ selector: "commands" as const, projectionVersion: 2 },
+	{ selector: "commands" as const },
+	{ selector: "skills" as const },
+];
+describe.each(directories)(
+	"native directory HTTP classification: %j",
+	(directory) => {
+		it("returns the Owner directory", async () => {
+			const result = await read(directory);
+			expect(result.status).toBe(200);
+			expect(result.body).toHaveProperty("selector", directory.selector);
+		});
+		it.each([
+			{ name: "other principal", foreignIdentity: true },
+			{ name: "missing Conversation", conversationId: "missing-conversation" },
+			{ name: "missing Execution", executionId: "missing-execution" },
+			{ name: "cross Conversation", executionId: "other-conversation" },
+			{ name: "cross Agent", executionId: "other-agent" },
+		])("returns opaque 404 before transport: $name", async (request) => {
+			const result = await read({ ...directory, ...request });
+			expect(result.gatewayCalls).toBe(0);
+			expect(result.status).toBe(404);
+			expect(result.body).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+				message: "Resource is unavailable.",
+			});
+			expect(result.body).not.toHaveProperty("selector");
+		});
+		it.each([
+			"directory",
+			"database",
+			"transport",
+			"deadline",
+			"missing host",
+			"revoked",
+		] as const)("retains dependency failure semantics: %s", async (fault) => {
+			const result = await read({ ...directory, fault });
+			expect(result.status).toBe(503);
+			expect(result.body).toHaveProperty("code", "DEPENDENCY_UNAVAILABLE");
+			expect(result.body).not.toHaveProperty("selector");
+			if (fault !== "transport") expect(result.gatewayCalls).toBe(0);
+		});
+		it("rejects an unsupported projection version before transport", async () => {
+			const result = await read({ ...directory, projectionVersion: 999 });
+			expect(result.status).toBe(400);
+			expect(result.gatewayCalls).toBe(0);
+		});
+	},
+);

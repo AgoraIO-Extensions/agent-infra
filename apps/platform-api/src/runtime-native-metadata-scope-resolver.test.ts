@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IdentityContext } from "./http/identity.js";
-import { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
+import {
+	createRuntimeNativeMetadataScopeResolverV1,
+	NativeMetadataResourceUnavailableV1,
+} from "./runtime-native-metadata-scope-resolver.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -59,7 +62,9 @@ describe("native metadata Store scope resolver", () => {
 			readStartedAt: 10_000,
 			expiresAt: 40_000,
 		});
-		expect(result?.scope).not.toHaveProperty("originalHostScopeRef");
+		if (!result || result === NativeMetadataResourceUnavailableV1)
+			throw new Error("Expected original scope");
+		expect(result.scope).not.toHaveProperty("originalHostScopeRef");
 		expect(query.readNativeMetadataObjectScopeV1).toHaveBeenCalledWith(
 			expect.objectContaining({
 				conversationId: persistedScope.conversationId,
@@ -110,7 +115,7 @@ describe("native metadata Store scope resolver", () => {
 		expect(query.readNativeMetadataObjectScopeV1).not.toHaveBeenCalled();
 	});
 
-	it("fails closed when the Store scope is unavailable", async () => {
+	it("reports an invisible resource when the Store confirms no original scope", async () => {
 		const query = {
 			readNativeMetadataObjectScopeV1: vi.fn().mockResolvedValue(undefined),
 		};
@@ -126,7 +131,7 @@ describe("native metadata Store scope resolver", () => {
 				selector: "status",
 				signal: new AbortController().signal,
 			}),
-		).resolves.toBeNull();
+		).resolves.toBe(NativeMetadataResourceUnavailableV1);
 		expect(query.readNativeMetadataObjectScopeV1).toHaveBeenCalledWith(
 			expect.objectContaining({
 				executionId: persistedScope.executionId,

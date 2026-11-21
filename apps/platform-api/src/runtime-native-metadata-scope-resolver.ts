@@ -9,6 +9,11 @@ import type { IdentityContext } from "./http/identity.js";
 import type { CurrentAuthorization } from "./runtime-native-metadata-current.js";
 import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
 
+// Internal result only; never serialized into a native metadata response.
+export const NativeMetadataResourceUnavailableV1 = Symbol(
+	"NATIVE_METADATA_RESOURCE_UNAVAILABLE",
+);
+
 type Selector = "status" | "commands" | "skills";
 
 function requestId() {
@@ -57,7 +62,11 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 		readonly projectionVersion?: 2;
 		readonly signal: AbortSignal;
 		readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
-	}): Promise<RuntimeNativeMetadataBindingResponseV1 | null> => {
+	}): Promise<
+		| RuntimeNativeMetadataBindingResponseV1
+		| typeof NativeMetadataResourceUnavailableV1
+		| null
+	> => {
 		try {
 			const now = options.now ?? Date.now;
 			const readStartedAt = input.requestContext?.readStartedAt ?? now();
@@ -76,12 +85,10 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 				operation: "conversation.read",
 				conversationId: input.conversationId,
 			});
-			if (
-				decision.outcome !== "allowed" ||
-				input.signal.aborted ||
-				expiresAt <= now()
-			)
-				return null;
+			if (input.signal.aborted || expiresAt <= now()) return null;
+			if (decision.outcome === "denied")
+				return NativeMetadataResourceUnavailableV1;
+			if (decision.outcome !== "allowed") return null;
 			const scope: NativeMetadataObjectScopeResponseV1 | undefined =
 				await options.query.readNativeMetadataObjectScopeV1({
 					scope: {
@@ -93,18 +100,15 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 					executionId: input.executionId,
 					signal: input.signal,
 				});
-			if (
-				scope?.channelId !== "web" ||
-				input.signal.aborted ||
-				expiresAt <= now()
-			)
-				return null;
+			if (input.signal.aborted || expiresAt <= now()) return null;
+			if (!scope) return NativeMetadataResourceUnavailableV1;
+			if (scope.channelId !== "web") return null;
 			if (
 				decision.authority.actorId !== input.identity.userId ||
 				decision.authority.agentId !== scope.agentId ||
 				decision.authority.channelId !== scope.channelId
 			)
-				return null;
+				return NativeMetadataResourceUnavailableV1;
 			input.requestContext?.confirmPolicy(
 				decision.authority,
 				input.conversationId,

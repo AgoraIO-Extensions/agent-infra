@@ -13,6 +13,7 @@ import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
+import { NativeMetadataResourceUnavailableV1 } from "./runtime-native-metadata-scope-resolver.js";
 
 export interface RuntimeNativeMetadataTransportV1 {
 	read(
@@ -67,7 +68,11 @@ type ResolveRequest = (input: {
 	readonly projectionVersion?: 2;
 	readonly signal: AbortSignal;
 	readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
-}) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
+}) => Promise<
+	| RuntimeNativeMetadataBindingResponseV1
+	| typeof NativeMetadataResourceUnavailableV1
+	| null
+>;
 
 async function prepareRead(
 	resolveRequest: ResolveRequest,
@@ -91,6 +96,7 @@ async function prepareRead(
 	const resolved = await requestContext.run(() =>
 		resolveRequest({ ...input, identity: current }),
 	);
+	if (resolved === NativeMetadataResourceUnavailableV1) return resolved;
 	if (!resolved) throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
 	const binding = RuntimeNativeMetadataBindingResponseV1Schema.parse(resolved);
 	if (
@@ -111,6 +117,7 @@ async function prepareRead(
 		);
 		if (
 			!original ||
+			original === NativeMetadataResourceUnavailableV1 ||
 			!isDeepStrictEqual(original.scope, binding.scope) ||
 			original.originalHostScopeRef !== binding.originalHostScopeRef ||
 			original.readStartedAt !== binding.readStartedAt ||
@@ -138,7 +145,11 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 		readonly projectionVersion?: 2;
 		readonly signal: AbortSignal;
 		readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
-	}) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
+	}) => Promise<
+		| RuntimeNativeMetadataBindingResponseV1
+		| typeof NativeMetadataResourceUnavailableV1
+		| null
+	>;
 	readonly proofIssuer: RuntimeNativeMetadataProofIssuerV1;
 	readonly transport: RuntimeNativeMetadataTransportV1;
 }) {
@@ -156,10 +167,14 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 			selector: "status" | "commands" | "skills",
 			requestContext: RuntimeNativeMetadataRequestContextV1,
 			projectionVersion?: 2,
-		): Promise<NativeMetadataProjectionV1OrV2 | null> {
+		): Promise<
+			| NativeMetadataProjectionV1OrV2
+			| typeof NativeMetadataResourceUnavailableV1
+			| null
+		> {
 			if (!requestContext) return null;
 			try {
-				const { binding, revalidate } = await prepareRead(
+				const prepared = await prepareRead(
 					options.resolveRequest,
 					identity,
 					conversationId,
@@ -168,6 +183,8 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					requestContext,
 					projectionVersion,
 				);
+				if (prepared === NativeMetadataResourceUnavailableV1) return prepared;
+				const { binding, revalidate } = prepared;
 				const proof = RuntimeNativeMetadataProofV1Schema.parse(
 					await requestContext.run((signal) =>
 						options.proofIssuer.issue({
@@ -229,7 +246,11 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 			selector: "status" | "commands" | "skills",
 			requestContext: RuntimeNativeMetadataRequestContextV1,
 			projectionVersion?: 2,
-		): Promise<NativeMetadataProjectionV1OrV2 | null> {
+		): Promise<
+			| NativeMetadataProjectionV1OrV2
+			| typeof NativeMetadataResourceUnavailableV1
+			| null
+		> {
 			if (!requestContext) return null;
 			const registry = options.requestRegistry;
 			if (!registry) {
@@ -239,7 +260,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 			let requestSourceRef: string | undefined;
 			let step: "scope" | "registry" | "gateway" | "delivery" = "scope";
 			try {
-				const { binding, revalidate } = await prepareRead(
+				const prepared = await prepareRead(
 					options.resolveRequest,
 					identity,
 					conversationId,
@@ -248,6 +269,8 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 					requestContext,
 					projectionVersion,
 				);
+				if (prepared === NativeMetadataResourceUnavailableV1) return prepared;
+				const { binding, revalidate } = prepared;
 				const { originalHostScopeRef: _hostScope, ...requestIdentity } =
 					binding;
 				step = "registry";
