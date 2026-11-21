@@ -69,10 +69,17 @@ import {
 } from "./connection-consumer-projection.js";
 import {
 	connectionInstallInitializerV1,
+	connectionInstallPublicationContractEnvironmentV1,
 	connectionInstallReadbackSecretKeyV1,
 	projectSessionSandboxConnectionInstallV1,
 	type SessionSandboxConnectionInstallBootstrapV1,
 } from "./connection-install-bootstrap.js";
+import {
+	connectionManualPublicationDescriptorV1,
+	connectionManualPublicationProofAnnotationV1,
+	connectionManualPublicationProofMatchesV1,
+	parseConnectionManualPublicationContractV1,
+} from "./connection-manual-publication.js";
 import type { ExecutorInstanceControlV2 } from "./executor-instance-startup.js";
 import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -2255,6 +2262,76 @@ function resourceSpecMatches(
 	}
 }
 
+/**
+ * #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host declares the dynamic Connection
+ * tools is decided once, when the Worker creates its Pod (Pod env cannot change afterwards).
+ * When the live Host differs from the current decision, the expected render takes the live
+ * state only if the Pod carries the Worker's proof of exactly that state (contract digest or
+ * none) for this namespace, Sandbox, generation and fence, and a live contract also passes
+ * the Worker's contract check. A later association change or contract withdrawal then keeps
+ * the original declaration without conflict or drift. A Pod cannot prove a contract or a
+ * removal on its own: without the proof, or without the key, it stays a mismatch.
+ */
+function withLivePublicationContract(
+	current: KubernetesObject,
+	expected: KubernetesObject,
+	allocation: SessionSandboxAllocationV1,
+	proofKey: string | undefined,
+): KubernetesObject {
+	const bootstrap = allocation.connectionInstallBootstrap;
+	if (expected.kind !== "Pod" || current.kind !== "Pod" || !bootstrap)
+		return expected;
+	const name = (expected as V1Pod).spec?.containers[0]?.name;
+	const host = (current as V1Pod).spec?.containers.find((c) => c.name === name);
+	const entries =
+		host?.env?.filter(
+			(e) => e.name === connectionInstallPublicationContractEnvironmentV1,
+		) ?? [];
+	const live = entries[0];
+	if (!host || entries.length > 1 || live?.valueFrom !== undefined)
+		return expected;
+	const contract = live?.value;
+	if (contract === bootstrap.publicationContract) return expected;
+	if (
+		proofKey === undefined ||
+		(contract !== undefined &&
+			parseConnectionManualPublicationContractV1(
+				contract,
+				connectionManualPublicationDescriptorV1,
+			).status !== "valid")
+	)
+		return expected;
+	const proof =
+		current.metadata?.annotations?.[
+			connectionManualPublicationProofAnnotationV1
+		];
+	if (
+		!connectionManualPublicationProofMatchesV1(proof, proofKey, {
+			namespace: allocation.namespace,
+			sandboxId: allocation.sandboxId,
+			generation: allocation.generation,
+			resourceFence: allocation.resourceFence,
+			...(contract === undefined ? {} : { contract }),
+		})
+	)
+		return expected;
+	const {
+		publicationContract: _contract,
+		publicationProof: _proof,
+		...rest
+	} = bootstrap;
+	const aligned = sessionSandboxResourcesV1({
+		...allocation,
+		connectionInstallBootstrap: {
+			...rest,
+			publicationProof: proof as string,
+			...(contract === undefined ? {} : { publicationContract: contract }),
+		},
+	}).find((resource) => resource.kind === "Pod");
+	if (!aligned) throw new WorkloadKubernetesError("policy");
+	return aligned;
+}
+
 function withoutOAuthProvisioning<T extends KubernetesObject>(
 	object: T,
 	allocation: SessionSandboxResourceInputV1,
@@ -2411,6 +2488,8 @@ export class SessionExecutorStartupExpiredV1 extends WorkloadKubernetesError {
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly executorIdentityIssuer?: KeyObject;
+	/** #4199 C2: deployment service token keying the declaration proof; absent compares strictly. */
+	readonly connectionPublicationProofKey?: string;
 }) {
 	const ensureExecutorIdentity = async (
 		pod: KubernetesObject,
@@ -2790,7 +2869,17 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					)
 						throw new WorkloadKubernetesError("conflict");
 				} else if (expected.kind === "Pod") {
-					if (!podSpecMatches(current, expected as V1Pod))
+					if (
+						!podSpecMatches(
+							current,
+							withLivePublicationContract(
+								current,
+								expected,
+								allocation,
+								options.connectionPublicationProofKey,
+							) as V1Pod,
+						)
+					)
 						throw new WorkloadKubernetesError("conflict");
 				} else if (expected.kind === "Service") {
 					// Keep the API-assigned address and version on lawful retries.
@@ -3017,7 +3106,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 									: current,
 								purpose === "control"
 									? withoutOAuthProvisioning(expected, allocation)
-									: expected,
+									: withLivePublicationContract(
+											current,
+											expected,
+											allocation,
+											options.connectionPublicationProofKey,
+										),
 							));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {

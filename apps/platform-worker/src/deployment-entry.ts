@@ -13,6 +13,7 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	decideConnectionManualInstallationDeploymentV1,
+	PostgresConnectionManualAssociationReaderV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresSessionOwnerSecretStoreV1,
 	readConnectionManualInstallationEnvironmentV1,
@@ -32,6 +33,11 @@ import {
 	ConnectionManualInstallationWorkerUnavailableErrorV1,
 	connectionManualInstallationBootstrapV1,
 } from "./connection-manual-installation-deployment.js";
+import {
+	type ConnectionManualPublicationV1,
+	connectionManualPublicationContractEnvironmentV1,
+	parseConnectionManualPublicationContractV1,
+} from "./connection-manual-publication.js";
 import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
@@ -620,6 +626,15 @@ const manualInstallationBootstrap =
 				configuredConnectionInstallBootstrap,
 			)
 		: undefined;
+// #4199 C2 (Spec §13.5.6 工具声明): the approved dynamic publication contract reaches a
+// Session Host only through the open gate, and only for an Agent with a verified Owner
+// manual association (decided per Session render). An invalid contract projects nothing.
+const manualPublicationInput = parseConnectionManualPublicationContractV1(
+	process.env[connectionManualPublicationContractEnvironmentV1],
+	manualInstallation.status === "enabled"
+		? manualInstallation.receipt.publicationContract
+		: { ref: "", revision: "" },
+);
 if (manualInstallation.status === "enabled") {
 	if (configuredConnectionInstallWorker === undefined)
 		throw new ConnectionManualInstallationWorkerUnavailableErrorV1();
@@ -630,7 +645,15 @@ if (manualInstallation.status === "enabled") {
 			receipt: manualInstallation.receipt,
 		}),
 	);
+	if (manualPublicationInput.status === "invalid")
+		console.warn(
+			JSON.stringify({
+				service: "platform-worker",
+				code: "CONNECTION_MANUAL_PUBLICATION_CONTRACT_INVALID",
+			}),
+		);
 } else if (
+	process.env[connectionManualPublicationContractEnvironmentV1] !== undefined ||
 	manualExceptionApproval !== undefined ||
 	connectionManualInstallationClientName !== undefined ||
 	configuredConnectionInstallBootstrap !== undefined ||
@@ -1130,6 +1153,19 @@ async function createPreparedOwning(
 			...(authorizedInstallation ?? { authorize: async () => null }),
 			manual: manualWorker.manual,
 		};
+	const manualAssociations =
+		manualWorker && manualPublicationInput.status === "valid"
+			? new PostgresConnectionManualAssociationReaderV1({
+					databaseUrl: workload.databaseUrl,
+				})
+			: undefined;
+	const connectionManualPublication: ConnectionManualPublicationV1 | undefined =
+		manualAssociations && manualPublicationInput.status === "valid"
+			? {
+					contract: manualPublicationInput.contract,
+					associated: (agentId) => manualAssociations.associated(agentId),
+				}
+			: undefined;
 	const evaluationAuthority = evaluationPolicy
 		? new PostgresEvaluationTaskAuthorityV1({
 				databaseUrl: workload.databaseUrl,
@@ -1143,6 +1179,12 @@ async function createPreparedOwning(
 		reservePreparation: {
 			executorIdentityIssuer: signing.privateKey,
 			executorDrainStartupTimeoutMs,
+			// #4199 C2: reserves carry the same empty install receiver as cold Sessions
+			// (Spec §13.5.6); never the publication contract, since Agents that could
+			// declare it are not reserve-eligible.
+			...(manualInstallationBootstrap
+				? { connectionInstallBootstrap: manualInstallationBootstrap }
+				: {}),
 		},
 		conversation: {
 			databaseUrl: workload.databaseUrl,
@@ -1156,6 +1198,7 @@ async function createPreparedOwning(
 				await connectionDelivery?.close();
 				await installationStore?.close();
 				await manualWorker?.close();
+				await manualAssociations?.close();
 				await evaluationAuthority?.close();
 				await sessionOwnerSecrets.close();
 			},
@@ -1190,6 +1233,9 @@ async function createPreparedOwning(
 						oauthProvisioning: configuredConnectionOAuthProvisioning,
 						...(manualInstallationBootstrap
 							? { connectionInstallBootstrap: manualInstallationBootstrap }
+							: {}),
+						...(connectionManualPublication
+							? { connectionManualPublication }
 							: {}),
 						executorDrainStartupTimeoutMs,
 						executorIdentityIssuer: signing.privateKey,

@@ -5,6 +5,7 @@ import {
 	randomUUID,
 	sign,
 } from "node:crypto";
+import { connectionSystemAccessFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	standardTemplateDefinitionsV1,
@@ -19,6 +20,8 @@ import {
 import type { SessionSandboxReserveWorkerClaimV1 } from "@agent-infra/platform-store";
 import type { KubernetesObject, V1Pod } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
+import { codexDynamicConnectionClientForReaderV1 } from "../../agent-runtime-host/src/connection-install-receiver.js";
+import { parseRuntimeOAuthDynamicPublicationContractV1 } from "../../agent-runtime-host/src/runtime-oauth-dynamic-publication.js";
 import { createProductionSessionSandboxReceiverV1 } from "./conversation-deployment.js";
 import {
 	workloadDesiredFixture,
@@ -56,6 +59,10 @@ function fixture(
 	overrides: {
 		readonly policy?: Partial<WorkloadRuntimeOptionsV1["policy"]>;
 		readonly connectionDeliveryCurrent?: WorkloadRuntimeOptionsV1["connectionDeliveryCurrent"];
+		readonly reserve?: Pick<
+			Parameters<typeof createSessionSandboxReserveAdapterV1>[0],
+			"connectionInstallBootstrap"
+		>;
 	} = {},
 ) {
 	const deployment = workloadDesiredFixture(
@@ -146,6 +153,7 @@ function fixture(
 		},
 		serviceToken: sessionSandboxDeploymentTokenFixture,
 		fetch: fetch as typeof globalThis.fetch,
+		...overrides.reserve,
 	};
 	const claim: SessionSandboxReserveWorkerClaimV1 = {
 		sandboxId: randomUUID(),
@@ -356,6 +364,153 @@ describe("Session reserve resource adapter", () => {
 			expect(f.remove).not.toHaveBeenCalled();
 		},
 	);
+	it("keeps reserves undeclared and declares on the cold Session once publication opens (#4199 C2)", async () => {
+		const configuration = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			audience: "connection-api",
+			egressProfile: { ref: "approved-egress", revision: "r1" },
+			issuer: "https://connection.example.test/",
+			oauthCallbackUrl: "https://platform.example.test/connection/callback",
+		};
+		const contract = JSON.stringify({
+			serviceRef: "connection-mcp",
+			contract: {
+				ref: "connection-mcp-publication",
+				revision: "1",
+				serverInfo: { name: "connection", version: "1.0.0" },
+				tools: [{ name: "list_actions", succeededResultSchema: {} }],
+			},
+			toolDeclarations: [
+				{
+					name: "list_actions",
+					description: "List actions.",
+					inputSchema: { type: "object" },
+				},
+			],
+		});
+		const name = "AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_PUBLICATION_CONTRACT";
+		const bootstrapFor = (namespace: string) => ({
+			port: 3443,
+			workerOrigin: `https://install-worker.${namespace}.svc:3444/`,
+			apiSelector: { component: "platform-api" },
+			clientName: "Agent Infra",
+			configuration,
+			approval: {
+				schemaVersion: 1,
+				configFingerprint: connectionSystemAccessFingerprintV1(configuration),
+				egressEnforced: true,
+				source: { ref: "approval", revision: "r1" },
+			},
+			tlsSecretForSandbox: () => ({
+				name: "session-tls",
+				certKey: "tls.crt",
+				keyKey: "tls.key",
+			}),
+			callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+			workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+		});
+		const hostContract = (f: ReturnType<typeof fixture>) =>
+			(
+				f.objects.get(`Pod/sandbox-${f.claim.sandboxId}`) as V1Pod | undefined
+			)?.spec?.containers[0]?.env?.find((e) => e.name === name)?.value;
+		const builderTools = (value: string | undefined) => {
+			const parsed = parseRuntimeOAuthDynamicPublicationContractV1(value);
+			return parsed
+				? codexDynamicConnectionClientForReaderV1({
+						contract: parsed,
+					} as unknown as Parameters<
+						typeof codexDynamicConnectionClientForReaderV1
+					>[0])?.declared.tools.map((tool) => tool.name)
+				: undefined;
+		};
+		const receiverFor = (associated: boolean) => ({
+			connectionInstallBootstrap: bootstrapFor(workloadTestPolicy.namespace),
+			connectionManualPublication: {
+				contract,
+				associated: async () => associated,
+			},
+		});
+		// A reserve prepared while publication was closed: the empty receiver only, with the
+		// Worker's proof that this Host declares nothing. Reserves never carry a contract.
+		const f = fixture("codex", {
+			reserve: {
+				connectionInstallBootstrap: bootstrapFor(workloadTestPolicy.namespace),
+			},
+		});
+		const resources = await f.ready();
+		expect(hostContract(f)).toBeUndefined();
+		const reservePod = f.objects.get(
+			`Pod/sandbox-${f.claim.sandboxId}`,
+		) as V1Pod;
+		expect(
+			reservePod.metadata?.annotations?.[
+				"agent-infra.agora.io/connection-publication-proof"
+			],
+		).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect((await f.adapter.bootstrap(f.claim, resources)).bootstrapReady).toBe(
+			true,
+		);
+		// Publication opens on the same image and the Agent is associated: the Store no longer
+		// offers this reserve (session-sandbox-reserves.test.ts), so the new Session is cold
+		// and its Host declares the contract at its first thread/start.
+		const cold = fixture("codex");
+		for (let retry = 0; retry < 2; retry += 1)
+			await prepareNormalSession(cold, undefined, receiverFor(true));
+		expect(hostContract(cold)).toBe(contract);
+		expect(builderTools(hostContract(cold))).toEqual(["list_actions"]);
+		// A reserve claimed before the association, with the association committed before
+		// this claim: the reserve's proven "none" stays, nothing is created or added.
+		const identities = resources.map(f.identity);
+		f.create.mockClear();
+		for (let retry = 0; retry < 2; retry += 1)
+			expect(
+				await prepareNormalSession(f, identities, receiverFor(true)),
+			).toEqual({
+				status: "ready",
+				resources: expect.arrayContaining(identities),
+			});
+		expect(f.create).not.toHaveBeenCalled();
+		expect(builderTools(hostContract(f))).toBeUndefined();
+		// Cold Sessions through the same production receiver: the first render decides,
+		// later renders after the association ends or starts keep that Pod as created.
+		for (const [first, later] of [
+			[true, false],
+			[false, true],
+		] as const) {
+			const f = fixture("codex");
+			const bootstrap = bootstrapFor(workloadTestPolicy.namespace);
+			let current: boolean = first;
+			const receiver = {
+				connectionInstallBootstrap: bootstrap,
+				connectionManualPublication: {
+					contract,
+					associated: async () => current,
+				},
+			};
+			const created = await prepareNormalSession(f, undefined, receiver);
+			expect(created).toMatchObject({ status: "observed" });
+			expect(hostContract(f)).toBe(first ? contract : undefined);
+			const pod = f.objects.get(`Pod/sandbox-${f.claim.sandboxId}`) as V1Pod;
+			pod.status = {
+				phase: "Running",
+				podIP: "10.0.0.1",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			const previous = [...required(created.resources)];
+			current = later;
+			f.create.mockClear();
+			for (let retry = 0; retry < 2; retry += 1)
+				await expect(
+					prepareNormalSession(f, previous, receiver),
+				).resolves.toMatchObject({
+					resources: expect.arrayContaining(previous),
+				});
+			expect(f.create).not.toHaveBeenCalled();
+			expect(hostContract(f)).toBe(first ? contract : undefined);
+		}
+	});
 	it("preserves the verified read-only Skill generation used by normal Sessions", async () => {
 		const f = fixture();
 		addSkill(f);
@@ -607,6 +762,10 @@ function required<T>(value: T | undefined | null): T {
 async function prepareNormalSession(
 	f: ReturnType<typeof fixture>,
 	resources?: SessionSandboxResourceIdentityV1[],
+	receiver: Omit<
+		Parameters<typeof createProductionSessionSandboxReceiverV1>[1],
+		"serviceToken"
+	> = {},
 ) {
 	const workload: WorkloadRuntimeOptionsV1 = {
 		...f.options.workload,
@@ -626,6 +785,7 @@ async function prepareNormalSession(
 	};
 	const receive = createProductionSessionSandboxReceiverV1(workload, {
 		serviceToken: sessionSandboxDeploymentTokenFixture,
+		...receiver,
 	});
 	return receive(
 		{

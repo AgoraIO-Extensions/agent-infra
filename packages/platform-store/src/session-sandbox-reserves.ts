@@ -51,6 +51,7 @@ import {
 	transitionExecutorInstanceV2,
 } from "@agent-infra/platform-core";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
+import { hasCurrentConnectionManualAssociationV1 } from "./connection-manual-association-reader.js";
 import type { Transaction } from "./conversation-execution-common.js";
 import { lockAgentConfiguration } from "./conversation-execution-sql.js";
 import postgres from "./observed-postgres.js";
@@ -322,6 +323,12 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		return null;
 	const verified = decoded.state.verified;
 	const configuration = agent?.runtimeConfiguration;
+	// #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host declares the dynamic Connection
+	// tools is decided when its Pod is created, from the Agent's current Owner manual
+	// association and the Worker's approved publication contract; a reserve made earlier
+	// cannot carry that decision. Such an Agent is not reserve-eligible: its Sessions take
+	// the cold path, which decides at claim time.
+	if (await hasCurrentConnectionManualAssociationV1(tx, agentId)) return null;
 	// Reserves stay standard-template only (ADR-0038, #3937): custom
 	// platform-adapter Agents keep the original preparation path.
 	if (

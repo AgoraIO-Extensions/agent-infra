@@ -445,6 +445,39 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			});
 		},
 	);
+	it("keeps an Agent with a current Owner manual association off reserves (#4199 C2)", async () => {
+		const associate = (ownerId: string) =>
+			sql`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at) values ('agent','connection-agent',${"c".repeat(64)},1,${ownerId},${sql.json({ schemaVersion: 1, agentId: "agent", ownerId, secretVersion: 1, crypto: { dekFingerprint: "d".repeat(64) } })},now())`;
+		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent',1)`;
+		// A ready reserve made before the association. Whether the Worker had a publication
+		// contract then is not part of any profile, so the reserve cannot prove the Host
+		// declaration a new Session of an associated Agent needs.
+		const before = await ready();
+		await associate("user-a");
+		// The Agent is not reserve-eligible: no new reserve, and a new Session takes the
+		// cold path (the Worker decides the declaration at claim time).
+		expect(await reserves().prepare("agent")).toBeNull();
+		const cold = await create(execution(), "user-a", "web", "create-1");
+		expect(cold.outcome).toBe("accepted");
+		expect(cold).not.toMatchObject({
+			result: { conversationId: before.sessionId },
+		});
+		expect(
+			await sql`select status from platform.session_sandbox_reserves where sandbox_id = ${before.sandboxId}`,
+		).toEqual([{ status: "ready" }]);
+		// When the association no longer counts (Owner replaced; replaceAgentAccess leaves the
+		// row) the Agent is reserve-eligible again and the same reserve is claimed.
+		await sql.begin(async (tx) => {
+			await tx`delete from platform.agent_owners where agent_id = 'agent'`;
+			await tx`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('agent','user-b',now())`;
+		});
+		expect(
+			await create(execution(), "user-b", "web", "create-2"),
+		).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: before.sessionId },
+		});
+	});
 	it("refuses a disabled user or changed full env profile before claim", async () => {
 		const reserve = await ready();
 		await sql`insert into platform.platform_user_disables(user_id) values('user-a')`;
