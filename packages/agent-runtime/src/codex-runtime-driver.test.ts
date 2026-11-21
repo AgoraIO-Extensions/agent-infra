@@ -155,6 +155,11 @@ import {
 } from "./grant-fixture.test-support.js";
 import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
 import {
+	createRuntimeControlObserverV1,
+	type RuntimeControlBindingV1,
+	withRuntimeControlObservationV1,
+} from "./runtime-control-observation.js";
+import {
 	createRuntimeFileBridgeV1,
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -20042,5 +20047,160 @@ describe("Codex supplementary instructions through turn/steer (#3375)", () => {
 			).result,
 		).toEqual({ outcome: "accepted", status: "running" });
 		expect(recoveredBridge.steerRequests()).toEqual([]);
+	});
+});
+
+describe("Codex stop control observation (#4358 I2)", () => {
+	const binding: RuntimeControlBindingV1 = {
+		agentId: "agent-codex",
+		conversationId: "conversation-codex",
+		executionId: "execution-codex",
+		turnId: "turn-codex",
+		sessionGeneration: 1,
+		executionDeliveryFence: 1,
+		stopRequestId: "stop-codex",
+		controlFence: 1,
+		controlPurpose: "control",
+		controlRecordId: "control-codex",
+		controlReason: "authorization_revoked",
+	};
+	function capture() {
+		const lines: string[] = [];
+		const observer = createRuntimeControlObserverV1({
+			output: {
+				write(line) {
+					lines.push(line.trimEnd());
+					return true;
+				},
+			},
+		});
+		const mark = observer.mark();
+		return {
+			lines,
+			records: () => lines.map((line) => JSON.parse(line)),
+			stages: () => lines.map((line) => JSON.parse(line).stage),
+			run: <T>(work: () => Promise<T>) =>
+				withRuntimeControlObservationV1({ observer, binding, mark }, work),
+		};
+	}
+	async function started() {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const submitted = await driver.execute(submitCommand());
+		return { bridge, driver, ref: submitted.nativeSessionRef };
+	}
+
+	it("observes the interrupt write, the native ACK and the original terminal commit", async () => {
+		const { bridge, driver, ref } = await started();
+		const out = capture();
+		bridge.completeOnInterrupt("interrupted");
+		await expect(
+			out.run(() => driver.execute(stopCommand(ref))),
+		).resolves.toMatchObject({ result: { outcome: "accepted" } });
+		if (!out.stages().includes("terminal_commit_confirmed"))
+			await bridge.emitTurnCompleted("interrupted");
+		await vi.waitFor(() =>
+			expect(out.stages()).toContain("terminal_commit_confirmed"),
+		);
+		expect(out.stages()).toEqual([
+			"interrupt_write_accepted",
+			"native_interrupt_ack",
+			"terminal_commit_confirmed",
+		]);
+		const [write, ack, terminal] = out.records();
+		expect(write).toMatchObject({
+			outcome: "observed",
+			interruptTarget: 0,
+			interruptTargets: 1,
+			...binding,
+		});
+		expect(ack.monoSequence).toBeGreaterThan(write.monoSequence);
+		expect(ack.elapsedMonoMs).toBeGreaterThanOrEqual(write.elapsedMonoMs);
+		expect(terminal).toMatchObject({
+			outcome: "observed",
+			terminalStatus: "cancelled",
+			terminalRef: expect.stringMatching(/^codex-cursor-\d+$/),
+		});
+		expect(terminal.reason).toBeUndefined();
+		expect(out.lines.join("\n")).not.toContain(bridge.nativeThreadId);
+		expect(out.lines.join("\n")).not.toContain(bridge.nativeTurnId);
+	});
+
+	it("marks interruption as not required when the original Turn finished first", async () => {
+		const { bridge, driver, ref } = await started();
+		bridge.setTurnStatus("completed");
+		await bridge.emitTurnCompleted("completed");
+		await expect(driver.getStatus(ref, "execution-codex")).resolves.toBe(
+			"completed",
+		);
+		const out = capture();
+		await out.run(() => driver.execute(stopCommand(ref)));
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(0);
+		const records = out.records();
+		expect(
+			records.map(({ stage, outcome, reason }) => [stage, outcome, reason]),
+		).toEqual([
+			["terminal_commit_confirmed", "observed", "natural_terminal"],
+			["interrupt_write_accepted", "not_required", "natural_terminal"],
+			["native_interrupt_ack", "not_required", "natural_terminal"],
+		]);
+		expect(records[0].terminalStatus).toBe("completed");
+	});
+
+	it("records a rejected native ACK with only its numeric RPC code", async () => {
+		const { bridge, driver, ref } = await started();
+		const out = capture();
+		bridge.interruptError = {
+			code: -32000,
+			message: "synthetic interrupt rejection sk-canary",
+		};
+		await expect(
+			out.run(() => driver.execute(stopCommand(ref))),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		const records = out.records();
+		expect(
+			records.slice(0, 2).map(({ stage, outcome }) => [stage, outcome]),
+		).toEqual([
+			["interrupt_write_accepted", "observed"],
+			["native_interrupt_ack", "rejected"],
+		]);
+		expect(records[1]).toMatchObject({
+			reason: "protocol_invalid",
+			rpcCode: -32000,
+		});
+		expect(out.lines.join("\n")).not.toContain("canary");
+		expect(out.lines.join("\n")).not.toContain("synthetic interrupt rejection");
+	});
+
+	it("keeps a lost native ACK unknown and does not resend the interrupt", async () => {
+		const { bridge, driver, ref } = await started();
+		const out = capture();
+		bridge.dropNextInterruptResponse();
+		await expect(
+			out.run(() => driver.execute(stopCommand(ref))),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/interrupt"),
+		).toHaveLength(1);
+		expect(
+			out.records().find((r) => r.stage === "native_interrupt_ack"),
+		).toMatchObject({
+			outcome: "unknown",
+			reason: "disconnected",
+		});
+	});
+
+	it("emits nothing and changes nothing without a Host observation context", async () => {
+		const { bridge, driver, ref } = await started();
+		const out = capture();
+		bridge.completeOnInterrupt("interrupted");
+		await expect(driver.execute(stopCommand(ref))).resolves.toMatchObject({
+			result: { outcome: "accepted" },
+		});
+		expect(out.lines).toEqual([]);
 	});
 });

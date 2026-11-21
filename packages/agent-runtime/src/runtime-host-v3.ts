@@ -56,6 +56,36 @@ import {
 	validateRuntimeExecutionGrantV2,
 } from "./grant-v2.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	type RuntimeControlBindingV1,
+	type RuntimeControlMarkV1,
+	type RuntimeControlObserverV1,
+	runtimeControlRejectionReasonV1,
+	withRuntimeControlObservationV1,
+} from "./runtime-control-observation.js";
+
+function controlBindingV1(
+	request: RuntimeStopRequestV3,
+	claims: RuntimeExecutionGrantClaimsV2,
+): RuntimeControlBindingV1 {
+	return {
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		executionDeliveryFence: request.operation.executionDeliveryFence,
+		stopRequestId: request.operation.id,
+		controlFence: request.operation.deliveryFence,
+		controlPurpose: claims.purpose,
+		...(claims.purpose === "control"
+			? {
+					controlRecordId: claims.controlRecordId,
+					controlReason: claims.reason,
+				}
+			: { authorizationRecordId: claims.authorizationRecordId }),
+	};
+}
 
 interface Options {
 	store: FileRuntimeStore;
@@ -68,6 +98,8 @@ interface Options {
 		context?: RuntimeDriverExecutionContextV1,
 	) => Promise<RuntimeOperationResponseV1 | RuntimeOperationResponseV2>;
 	serialize: <T>(key: string, work: () => Promise<T>) => Promise<T>;
+	/** #4358 I2: observes stop stages only; never consulted for a decision. */
+	controlObserver?: RuntimeControlObserverV1;
 	executeBrowserHandoff?: (
 		request: RuntimeBrowserHandoffRequestV3,
 		claims: RuntimeExecutionGrantClaimsV2,
@@ -854,10 +886,48 @@ export class RuntimeHostV3 {
 		return response;
 	}
 
-	async stop(value: RuntimeStopRequestV3, verification: unknown) {
+	async stop(
+		value: RuntimeStopRequestV3,
+		verification: unknown,
+		received?: RuntimeControlMarkV1,
+	) {
 		this.assertOpen();
-		const request = parseRequest(RuntimeStopRequestV3Schema, value);
-		const claims = this.validate(request, "turn.stop", verification);
+		const observer = this.options.controlObserver;
+		const mark = received ?? observer?.mark();
+		let request: RuntimeStopRequestV3;
+		let claims: RuntimeExecutionGrantClaimsV2;
+		try {
+			request = parseRequest(RuntimeStopRequestV3Schema, value);
+			claims = this.validate(request, "turn.stop", verification);
+		} catch (error) {
+			// An unverified request contributes no identifiers to the record.
+			observer?.emit({
+				stage: "control_received",
+				outcome: "rejected",
+				reason: runtimeControlRejectionReasonV1(error),
+				...(mark ? { mark, atMark: true } : {}),
+			});
+			throw error;
+		}
+		const binding = controlBindingV1(request, claims);
+		const observed = (
+			stage:
+				| "control_received"
+				| "control_validated"
+				| "latch_commit_confirmed"
+				| "original_result_read",
+			error?: unknown,
+		) =>
+			observer?.emit({
+				stage,
+				outcome: error === undefined ? "observed" : "rejected",
+				...(error === undefined
+					? {}
+					: { reason: runtimeControlRejectionReasonV1(error) }),
+				binding,
+				...(mark ? { mark, atMark: stage === "control_received" } : {}),
+			});
+		observed("control_received");
 		const key = this.options.store.sessionQueueKey(request);
 		const recoveryGenerationKey = JSON.stringify([
 			key,
@@ -866,12 +936,18 @@ export class RuntimeHostV3 {
 		]);
 		await this.options.serialize(key, async () => {
 			this.assertOpen();
-			this.validate(request, "turn.stop", verification);
-			await this.options.store.authorizeRequestV3(
-				claims,
-				"query",
-				this.options.grantValidation.now ?? Date.now,
-			);
+			try {
+				this.validate(request, "turn.stop", verification);
+				await this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					this.options.grantValidation.now ?? Date.now,
+				);
+			} catch (error) {
+				observed("control_validated", error);
+				throw error;
+			}
+			observed("control_validated");
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(key, recoveryGenerationKey);
@@ -881,49 +957,68 @@ export class RuntimeHostV3 {
 				async () => {
 					this.assertOpen();
 					this.validate(request, "turn.stop", verification);
-					const prepared = await this.options.store.prepareOperation({
-						authorization: claims,
-						now: this.options.grantValidation.now ?? Date.now,
-						requestedHostSessionRef: request.hostSessionRef,
-						binding: request,
-						operationId: request.operation.id,
-						kind: "stop",
-						scope: `stop:${request.operation.id}`,
-						deliveryFence: request.operation.deliveryFence,
-						executionDeliveryFence: request.operation.executionDeliveryFence,
-						requestDigest: requestDigest({
-							kind: "stop",
-							agentId: request.agentId,
-							conversationId: request.conversationId,
-							executionId: request.executionId,
-							turnId: request.turnId,
-							sessionGeneration: request.sessionGeneration,
-							stopRequestId: request.operation.id,
-						}),
-						command: (nativeSessionRef) => ({
-							schemaVersion: 1,
-							kind: "stop",
+					let prepared: Awaited<
+						ReturnType<FileRuntimeStore["prepareOperation"]>
+					>;
+					try {
+						prepared = await this.options.store.prepareOperation({
+							authorization: claims,
+							now: this.options.grantValidation.now ?? Date.now,
+							requestedHostSessionRef: request.hostSessionRef,
+							binding: request,
 							operationId: request.operation.id,
-							agentId: request.agentId,
-							conversationId: request.conversationId,
-							executionId: request.executionId,
-							turnId: request.turnId,
-							sessionGeneration: request.sessionGeneration,
-							nativeSessionRef:
-								nativeSessionRef ?? nativeRequired("stop:unbound"),
-						}),
-					});
+							kind: "stop",
+							scope: `stop:${request.operation.id}`,
+							deliveryFence: request.operation.deliveryFence,
+							executionDeliveryFence: request.operation.executionDeliveryFence,
+							requestDigest: requestDigest({
+								kind: "stop",
+								agentId: request.agentId,
+								conversationId: request.conversationId,
+								executionId: request.executionId,
+								turnId: request.turnId,
+								sessionGeneration: request.sessionGeneration,
+								stopRequestId: request.operation.id,
+							}),
+							command: (nativeSessionRef) => ({
+								schemaVersion: 1,
+								kind: "stop",
+								operationId: request.operation.id,
+								agentId: request.agentId,
+								conversationId: request.conversationId,
+								executionId: request.executionId,
+								turnId: request.turnId,
+								sessionGeneration: request.sessionGeneration,
+								nativeSessionRef:
+									nativeSessionRef ?? nativeRequired("stop:unbound"),
+							}),
+						});
+					} catch (error) {
+						observed("latch_commit_confirmed", error);
+						throw error;
+					}
+					// The store update above returns only after its durable commit; a
+					// resolved stop is a confirmed replay with no second latch time.
+					observed(
+						prepared.operation.state === "resolved"
+							? "original_result_read"
+							: "latch_commit_confirmed",
+					);
 					return {
-						...(await this.options.dispatch(
-							prepared.session.hostSessionRef,
-							prepared.operation,
-							true,
-							{
-								executorStopAuthorization: {
-									fence: prepared.operation.deliveryFence,
-									expiresAt: claims.expiresAt,
-								},
-							},
+						...(await withRuntimeControlObservationV1(
+							observer && mark ? { observer, binding, mark } : undefined,
+							() =>
+								this.options.dispatch(
+									prepared.session.hostSessionRef,
+									prepared.operation,
+									true,
+									{
+										executorStopAuthorization: {
+											fence: prepared.operation.deliveryFence,
+											expiresAt: claims.expiresAt,
+										},
+									},
+								),
 						)),
 						schemaVersion: 3 as const,
 					};

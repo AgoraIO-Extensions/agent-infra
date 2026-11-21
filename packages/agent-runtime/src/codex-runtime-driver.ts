@@ -171,6 +171,11 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
+import {
+	currentRuntimeControlObservationV1,
+	emitRuntimeControlObservationV1,
+	type RuntimeControlObservationContextV1,
+} from "./runtime-control-observation.js";
 import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileInputV1,
@@ -1169,6 +1174,93 @@ interface PendingRequest {
 	reject: (error: Error) => void;
 	nativeSelectionRejection: boolean;
 	allowHistoryMaterializationRetry: boolean;
+	/** #4358 I2: reports only the numeric JSON-RPC error code to an observer. */
+	onRpcError?: (code: number) => void;
+}
+
+/** #4358 I2: observation of one RPC's local write and native response. */
+interface CodexRpcObserver {
+	written(): void;
+	acknowledged(): void;
+	failed(
+		reason: "write_failed" | "timeout" | "disconnected" | "protocol_invalid",
+		written: boolean,
+		rpcCode?: number,
+	): void;
+}
+
+function observeSafely(work: () => void) {
+	try {
+		work();
+	} catch {
+		// Observation can never change an RPC result.
+	}
+}
+
+function executionTerminalEvent(
+	state: CodexDriverState,
+	executionId: string,
+): CodexJournalCompletedEvent | undefined {
+	const session = Object.values(state.sessions).find(
+		(entry) => ownRecordValue(entry.executions, executionId) !== undefined,
+	);
+	const execution = session && ownRecordValue(session.executions, executionId);
+	const event =
+		session &&
+		execution &&
+		ownRecordValue(session.journals ?? {}, execution.nativeTurnId)?.events.find(
+			(item) => item.type === "completed",
+		);
+	return event?.type === "completed" ? event : undefined;
+}
+
+function emitControlTerminal(
+	observation: RuntimeControlObservationContextV1,
+	event: CodexJournalCompletedEvent,
+	natural: boolean,
+) {
+	emitRuntimeControlObservationV1(observation, {
+		stage: "terminal_commit_confirmed",
+		outcome: "observed",
+		...(natural ? { reason: "natural_terminal" as const } : {}),
+		terminal: {
+			status: event.payload.status,
+			ref: event.cursor,
+			occurredAt: event.occurredAt,
+		},
+	});
+}
+
+function interruptObserver(
+	observation: RuntimeControlObservationContextV1 | undefined,
+	interrupt: { target: number; targets: number },
+): CodexRpcObserver | undefined {
+	if (!observation) return undefined;
+	return {
+		written: () =>
+			emitRuntimeControlObservationV1(observation, {
+				stage: "interrupt_write_accepted",
+				outcome: "observed",
+				interrupt,
+			}),
+		acknowledged: () =>
+			emitRuntimeControlObservationV1(observation, {
+				stage: "native_interrupt_ack",
+				outcome: "observed",
+				interrupt,
+			}),
+		failed: (reason, written, rpcCode) =>
+			emitRuntimeControlObservationV1(observation, {
+				stage: written ? "native_interrupt_ack" : "interrupt_write_accepted",
+				outcome:
+					reason === "protocol_invalid" || reason === "write_failed"
+						? "rejected"
+						: "unknown",
+				reason,
+				...(rpcCode === undefined ? {} : { rpcCode }),
+				interrupt,
+			}),
+	};
 }
 
 type CodexNotificationHandler = (frame: CodexAppServerFrame) => Promise<void>;
@@ -4700,6 +4792,7 @@ class CodexRpc {
 		allowHistoryMaterializationRetry = false,
 		deadlineAt = Date.now() + rpcRequestTimeoutMs,
 		signal?: AbortSignal,
+		observer?: CodexRpcObserver,
 	) {
 		if (this.failed) unavailable();
 		// #3375：带 signal 的历史分页读取（补充指令恢复查询）同样只读：错误或超时只结束本次
@@ -4719,6 +4812,7 @@ class CodexRpc {
 		)
 			unavailable();
 		const id = this.nextRequestId++;
+		let rpcCode: number | undefined;
 		const response = new Promise<T>((resolve, reject) => {
 			this.pending.set(id, {
 				method,
@@ -4727,6 +4821,13 @@ class CodexRpc {
 				reject,
 				nativeSelectionRejection,
 				allowHistoryMaterializationRetry,
+				...(observer
+					? {
+							onRpcError: (code: number) => {
+								rpcCode = code;
+							},
+						}
+					: {}),
 			});
 		});
 		void response.catch(() => {});
@@ -4734,9 +4835,12 @@ class CodexRpc {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let interruptedRead = false;
 		let sent = false;
+		let timedOut = false;
+		let written = false;
 		let onAbort: (() => void) | undefined;
 		const deadline = new Promise<never>((_, reject) => {
 			const interrupt = () => {
+				timedOut = true;
 				if (readOnly) {
 					const pending = this.pending.get(id);
 					if (!pending || pending.abandonedRead) return;
@@ -4770,8 +4874,29 @@ class CodexRpc {
 				// read, but a later genuine send failure must still retire this RPC.
 				void send.catch(() => this.fail(unavailableError()));
 			} else await Promise.race([send, deadline]);
-			return await Promise.race([response, deadline]);
+			if (observer) {
+				written = true;
+				observeSafely(() => observer.written());
+			}
+			const value = await Promise.race([response, deadline]);
+			if (observer) observeSafely(() => observer.acknowledged());
+			return value;
 		} catch (error) {
+			if (observer)
+				observeSafely(() =>
+					observer.failed(
+						timedOut
+							? "timeout"
+							: !written
+								? "write_failed"
+								: error instanceof RuntimeHostError &&
+										error.code === "RUNTIME_CODEX_PROTOCOL_INVALID"
+									? "protocol_invalid"
+									: "disconnected",
+						written,
+						rpcCode,
+					),
+				);
 			if (readOnly && interruptedRead) throw timeoutError;
 			this.pending.delete(id);
 			if (error instanceof CodexReadRejectedError) throw error;
@@ -4974,6 +5099,15 @@ class CodexRpc {
 				this.pending.delete(frame.id);
 				return;
 			}
+			const rpcErrorCode = isPlainRecord(frame.error)
+				? frame.error.code
+				: undefined;
+			if (
+				pending.onRpcError &&
+				typeof rpcErrorCode === "number" &&
+				Number.isSafeInteger(rpcErrorCode)
+			)
+				observeSafely(() => pending.onRpcError?.(rpcErrorCode));
 			this.fail(protocolInvalidError());
 			return;
 		}
@@ -5248,6 +5382,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly admittedPendingSourceTurns = new Map<
 		string,
 		Map<string, number>
+	>();
+	private readonly controlTerminalWatches = new Map<
+		string,
+		RuntimeControlObservationContextV1
 	>();
 	private readonly inFlightOperations = new Map<
 		string,
@@ -9947,6 +10085,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		command: CodexInterruptionCommand,
 		stopAuthorization?: RuntimeDriverExecutionContextV1["executorStopAuthorization"],
 	) {
+		// #4358 I2: Host-supplied observation context for this stop, if any.
+		const observation =
+			command.kind === "stop"
+				? currentRuntimeControlObservationV1()
+				: undefined;
 		const prepared = await this.prepareInterruption(command);
 		const drain = this.sessionExecutor?.drain;
 		if (drain && command.kind === "stop") {
@@ -10000,6 +10143,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			prepared.operation.nativeSessionRef,
 			nativeTurn.turnId,
 		);
+		this.watchControlTerminal(command.executionId, observation);
 		for (const turn of turns) this.revokeModelTurn?.(turn);
 		try {
 			let status: PersistedTurnStatus | "unknown";
@@ -10020,7 +10164,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				status = "unknown";
 			}
 			const results = await Promise.allSettled(
-				turns.map(async (turn) => {
+				turns.map(async (turn, target) => {
+					const interrupt = { target, targets: turns.length };
 					const journal = this.journalView(
 						this.session(prepared.operation.nativeSessionRef),
 						nativeTurn.turnId,
@@ -10048,8 +10193,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								(value) => {
 									if (!isEmptyRecord(value)) protocolInvalid();
 								},
+								false,
+								false,
+								undefined,
+								undefined,
+								interruptObserver(observation, interrupt),
 							);
-						}
+						} else
+							for (const stage of [
+								"interrupt_write_accepted",
+								"native_interrupt_ack",
+							] as const)
+								emitRuntimeControlObservationV1(observation, {
+									stage,
+									outcome: "not_required",
+									reason: "natural_terminal",
+									interrupt,
+								});
 					} finally {
 						await this.terminateNativeBackgroundAttempts(
 							prepared.operation.nativeSessionRef,
@@ -11433,13 +11593,37 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			unavailable();
 	}
 
+	/**
+	 * #4358 I2: report the original terminal of a stopped Execution once its
+	 * durable update returns. A terminal that already exists is reported now.
+	 */
+	private watchControlTerminal(
+		executionId: string,
+		observation: RuntimeControlObservationContextV1 | undefined,
+	) {
+		if (!observation) return;
+		observeSafely(() => {
+			const terminal = executionTerminalEvent(this.readState(), executionId);
+			if (terminal) {
+				emitControlTerminal(observation, terminal, true);
+				return;
+			}
+			this.controlTerminalWatches.delete(executionId);
+			const oldest = this.controlTerminalWatches.keys().next();
+			if (this.controlTerminalWatches.size >= 256 && !oldest.done)
+				this.controlTerminalWatches.delete(oldest.value);
+			this.controlTerminalWatches.set(executionId, observation);
+		});
+	}
+
 	private update<R>(
 		change: (state: CodexDriverState) => R,
 		options?: { readonly skipUnchanged?: boolean },
 	) {
 		const drain = this.sessionExecutor?.drain;
 		const executionId = this.executorExecutionId;
-		if (!drain?.reportTerminal || !executionId) {
+		const reportDrain = Boolean(drain?.reportTerminal && executionId);
+		if (!reportDrain && this.controlTerminalWatches.size === 0) {
 			return this.file.update((state) => {
 				const result = change(state);
 				assertDriverState(state);
@@ -11450,23 +11634,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			.update((state) => {
 				const result = change(state);
 				assertDriverState(state);
-				const session = Object.values(state.sessions).find(
-					(entry) =>
-						ownRecordValue(entry.executions, executionId) !== undefined,
-				);
-				const execution =
-					session && ownRecordValue(session.executions, executionId);
 				const terminal =
-					session &&
-					execution &&
-					ownRecordValue(
-						session.journals ?? {},
-						execution.nativeTurnId,
-					)?.events.find((event) => event.type === "completed");
-				return { result, terminal };
+					reportDrain && executionId
+						? executionTerminalEvent(state, executionId)
+						: undefined;
+				const controls = [...this.controlTerminalWatches.keys()].flatMap(
+					(watched) => {
+						const event = executionTerminalEvent(state, watched);
+						return event ? [{ watched, event }] : [];
+					},
+				);
+				return { result, terminal, controls };
 			}, options)
-			.then(({ result, terminal }) => {
-				if (terminal) drain.reportTerminal?.(executionId, terminal.occurredAt);
+			.then(({ result, terminal, controls }) => {
+				if (terminal && executionId)
+					drain?.reportTerminal?.(executionId, terminal.occurredAt);
+				for (const { watched, event } of controls) {
+					const observation = this.controlTerminalWatches.get(watched);
+					if (!observation) continue;
+					this.controlTerminalWatches.delete(watched);
+					observeSafely(() => emitControlTerminal(observation, event, false));
+				}
 				return result;
 			});
 	}

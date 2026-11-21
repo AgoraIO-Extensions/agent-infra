@@ -157,6 +157,10 @@ import {
 	runtimeAccessDenialCause,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
+import type {
+	RuntimeControlMarkV1,
+	RuntimeControlObserverV1,
+} from "./runtime-control-observation.js";
 import {
 	createRuntimeFileBridgeBindingV1,
 	createRuntimeNativeTextInputBindingV5,
@@ -173,6 +177,8 @@ import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 export interface RuntimeHostOptions {
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
+	/** #4358 I2: fixed stdout observation of stop stages; never an authority. */
+	controlObserver?: RuntimeControlObserverV1;
 	allowLegacyBusiness?: boolean;
 	validateGrantV4?: (request: unknown) => Promise<{
 		request: RuntimeBusinessRequestV4;
@@ -847,6 +853,9 @@ export class RuntimeHost {
 				dispatch: (ref, operation, allowBusinessExecution, context) =>
 					this.dispatch(ref, operation, allowBusinessExecution, context),
 				serialize: (key, work) => this.serialize(key, work),
+				...(options.controlObserver
+					? { controlObserver: options.controlObserver }
+					: {}),
 				executeBrowserHandoff: (request, claims, signal) =>
 					this.executeBrowserHandoffV3(request, claims, signal),
 				executeBrowserSideEffect: (request, claims, signal) =>
@@ -2053,8 +2062,16 @@ export class RuntimeHost {
 			},
 		);
 	}
-	stopV3(value: RuntimeStopRequestV3, verification: unknown) {
-		return this.trustedHost().stop(value, verification);
+	/** #4358 I2: the process-wide stop-stage observer, if the deployment wired one. */
+	get controlObserver() {
+		return this.options.controlObserver;
+	}
+	stopV3(
+		value: RuntimeStopRequestV3,
+		verification: unknown,
+		received?: RuntimeControlMarkV1,
+	) {
+		return this.trustedHost().stop(value, verification, received);
 	}
 	browserHandoff(
 		value: RuntimeBrowserHandoffRequestV3,
