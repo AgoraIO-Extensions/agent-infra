@@ -8,6 +8,7 @@ import {
 	RuntimeModelDirectoryDispatchRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type {
+	ConversationArchiveProjectionV1,
 	ExecutionFailureFactsV1,
 	RecentPersonalConversationsQueryV1,
 } from "@agent-infra/platform-core";
@@ -17,6 +18,7 @@ import {
 	parseConversationOperationEventV2,
 	parseSessionSandboxBindingV1,
 	parseTaskPrincipalV1,
+	projectConversationArchiveV1,
 	type SessionSandboxBindingV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxRuntimeStateV1,
@@ -84,6 +86,7 @@ export interface ConversationQueryMessageV1 {
 }
 
 export interface ConversationQueryExecutionV1 {
+	readonly archive?: ConversationArchiveProjectionV1;
 	readonly executionId: string;
 	readonly conversationId: string;
 	readonly sourceMessageId: string | null;
@@ -345,6 +348,7 @@ interface MessageRow {
 }
 
 interface ExecutionRow extends ExecutionFailureFactRowV1 {
+	readonly archive_state: unknown;
 	readonly execution_id: string;
 	readonly conversation_id: string;
 	readonly source_message_id: string | null;
@@ -767,7 +771,9 @@ function message(row: MessageRow): ConversationQueryMessageV1 {
 }
 
 function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
+	const archive = projectConversationArchiveV1(row.archive_state);
 	return {
+		...(archive ? { archive } : {}),
 		executionId: text(row.execution_id),
 		conversationId: text(row.conversation_id),
 		sourceMessageId:
@@ -976,6 +982,18 @@ async function readExecutions(
 				)
 			`
 			} as has_later_terminal_event,
+			(select a.details->'archive' from platform.audit_events a
+			 where a.target_type='execution' and a.target_id=e.execution_id and a.agent_id=e.agent_id
+			 and a.action='conversation.archive.observed' and a.id >= ('conversation.archive:' || e.execution_id || ':') and a.id < ('conversation.archive:' || e.execution_id || ':~')
+			 and a.details->'binding'->>'conversationId'=e.conversation_id
+			 and a.details->'binding'->>'executionId'=e.execution_id
+			 and a.details->'binding'->'principal'->>'id'=e.actor_id
+			 and a.details->'binding'->'principal'->>'kind'=e.principal_type
+			 and a.details->'binding'->>'generation'=e.session_generation::text
+			 and a.details->'binding'->>'executionFence'=e.delivery_fence::text
+			 and a.details->'binding'->>'hostSessionRef'=coalesce(e.accepted_original_host_session_ref,e.original_submit_host_session_ref)
+			 and a.details->'binding'->>'requestDigest'=e.original_operation_digest
+			 order by a.id desc limit 1) as archive_state,
 			${executionFailureFactsSql(database)}
 		from platform.conversation_executions e
 		join platform.conversations c on c.id = e.conversation_id
@@ -2342,6 +2360,55 @@ export class PostgresConversationQueryV1 {
 			{ executionId: string; conversationId: string }[]
 		>`select e.execution_id as "executionId",e.conversation_id as "conversationId" from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id and c.actor_id=e.actor_id and c.principal_type=e.principal_type and c.agent_id=e.agent_id and c.channel_id=e.channel_id where e.execution_id=${executionId} and c.id=${conversationId} and e.actor_id=${trusted.actorId} and e.principal_type=${trusted.principal.kind} and e.channel_id='eval' and e.execution_source='eval'`;
 		return row;
+	}
+
+	/** Metadata-only archive notifications; the original read scope still authorizes every snapshot. */
+	async getArchives(
+		inputScope: ConversationQueryScopeV1,
+		conversationId: string,
+		signal?: AbortSignal,
+	) {
+		const readScope = scope(inputScope);
+		return this.#readEvaluation(inputScope, conversationId, () =>
+			repeatableRead(
+				this.#client,
+				async (tx, run) => {
+					if (
+						!(await readConversation(
+							tx,
+							readScope,
+							requestText(conversationId),
+							run,
+						))
+					)
+						return undefined;
+					const rows = await run(tx<
+						{ execution_id: string; archive_state: unknown }[]
+					>`
+			 select distinct on (a.target_id) e.execution_id,a.details->'archive' as archive_state
+			 from platform.audit_events a join platform.conversation_executions e on e.execution_id=a.target_id
+			 join platform.conversations c on c.id=e.conversation_id
+			 where a.action='conversation.archive.observed' and a.id >= ('conversation.archive:' || e.execution_id || ':') and a.id < ('conversation.archive:' || e.execution_id || ':~') and a.target_type='execution' and a.agent_id=e.agent_id
+			 and e.conversation_id=${conversationId} and e.actor_id=${readScope.actorId} and e.channel_id=${readScope.channelId}
+			 and e.principal_type=${readScope.principal?.kind ?? "user"}
+			 and a.details->'binding'->>'conversationId'=e.conversation_id
+			 and a.details->'binding'->>'generation'=e.session_generation::text
+			 and a.details->'binding'->>'executionFence'=e.delivery_fence::text
+			 and a.details->'binding'->>'agentId'=e.agent_id
+			 and a.details->'binding'->'principal'->>'id'=e.actor_id
+			 and a.details->'binding'->'principal'->>'kind'=e.principal_type
+			 and a.details->'binding'->>'hostSessionRef'=coalesce(e.accepted_original_host_session_ref,e.original_submit_host_session_ref)
+			 and a.details->'binding'->>'requestDigest'=e.original_operation_digest
+			 order by a.target_id,a.id desc limit 1001`);
+					if (rows.length > 1000) return unavailable();
+					return rows.map((row) => ({
+						executionId: row.execution_id,
+						archive: projectConversationArchiveV1(row.archive_state) ?? null,
+					}));
+				},
+				signal,
+			),
+		);
 	}
 
 	async getExecution(

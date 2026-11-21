@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { ExecutorInstanceMutationV2 } from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
+	advanceConversationArchiveV1,
 	type ConversationDispatchClaimDecisionV1,
 	type ConversationDispatchClaimV1,
 	type ConversationDispatchOperationV1,
@@ -12,6 +14,7 @@ import {
 	conversationQueueWaitMsV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	parseConversationArchiveStateV1,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
@@ -1636,6 +1639,143 @@ export class PostgresConversationDispatchStoreV1
 				outcome === "queued" ? "SUPPLEMENT_QUEUED" : outcome,
 			);
 		});
+	}
+
+	/** Serialized with the original Turn lease; never transitions the business Execution. */
+	async archiveOriginalTurn(input: {
+		claim: ConversationDispatchClaimV1;
+		budgetMs: number;
+		acknowledgedCursor?: string;
+		complete?: true;
+	}): Promise<{
+		status: "pending" | "unavailable" | "complete" | "ineligible";
+		remainingMs: number;
+	} | null> {
+		requireClaim(input.claim);
+		if (!Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1)
+			throw new TypeError("Invalid archive budget");
+		return databaseOperation(() =>
+			this.#client.begin(async (tx) => {
+				const claim = input.claim;
+				const state = await ownedState(tx, claim, true);
+				if (!state) return null;
+				if (
+					!isTurn(claim.operation) ||
+					claim.metadataRecovery ||
+					!["completed", "failed", "cancelled"].includes(
+						state.execution.status,
+					) ||
+					!state.conversation.host_session_ref ||
+					state.execution.accepted_original_host_session_ref !==
+						state.conversation.host_session_ref
+				)
+					return { status: "ineligible" as const, remainingMs: 0 };
+				const original = await originalOperationBinding(tx, state, claim);
+				if (!original || !original.originalOperationDigest) return null;
+				const [allocation] = await tx<
+					{ pvc: unknown }[]
+				>`select (select jsonb_build_object('name',r->>'name','namespace',r->>'namespace','uid',r->>'uid') from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim' limit 1) as pvc from platform.session_sandbox_allocations where sandbox_id=${claim.sandbox?.sandboxId ?? null} and conversation_id=${claim.conversationId}`;
+				const binding = {
+					itemId: claim.itemId,
+					principal: executionPrincipalProjection(state.execution),
+					agentId: claim.agentId,
+					conversationId: claim.conversationId,
+					executionId: claim.executionId,
+					turnId: claim.turnId,
+					channelId: claim.channelId,
+					sandbox: state.conversation.sandbox ?? null,
+					generation: claim.sessionGeneration,
+					executionFence: claim.executionDeliveryFence,
+					hostSessionRef: state.conversation.host_session_ref,
+					requestDigest: original.originalOperationDigest,
+					businessStatus: state.execution.status,
+					pvc: allocation?.pvc ?? null,
+				};
+				const [last] = await tx<
+					{ details: { binding: unknown; archive: unknown; lease?: unknown } }[]
+				>`select details from platform.audit_events
+				where target_type='execution' and target_id=${claim.executionId} and agent_id=${claim.agentId}
+				and action='conversation.archive.observed'
+				and id >= ${`conversation.archive:${claim.executionId}:`} and id < ${`conversation.archive:${claim.executionId}:~`} order by id desc limit 1`;
+				if (last && !isDeepStrictEqual(last.details.binding, binding))
+					return null;
+				const [clock] = await tx<
+					{ now: number }[]
+				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				if (!clock) return null;
+				const previous = last
+					? parseConversationArchiveStateV1(last.details.archive)
+					: undefined;
+				const currentCursor = state.execution.last_runtime_cursor;
+				if (
+					input.acknowledgedCursor !== undefined &&
+					input.acknowledgedCursor !== currentCursor
+				)
+					return null;
+
+				const [terminal] = await tx<
+					{ found: boolean }[]
+				>`select exists(select 1 from platform.conversation_events
+				where execution_id=${claim.executionId} and conversation_id=${claim.conversationId} and source='runtime'
+				and event_type='execution.status' and event_payload->>'status'=${state.execution.status}) as found`;
+				const acknowledgedCursor =
+					input.acknowledgedCursor ?? previous?.acknowledgedCursor ?? null;
+				const completed =
+					terminal?.found === true &&
+					currentCursor !== null &&
+					acknowledgedCursor === currentCursor;
+				if (input.complete && !completed) return null;
+				let archive = advanceConversationArchiveV1({
+					...(previous ? { previous } : {}),
+					ref: previous?.ref ?? randomUUID(),
+					nowMs: clock.now,
+					budgetMs: input.budgetMs,
+					cursor: currentCursor,
+					...(input.acknowledgedCursor
+						? { acknowledgedCursor: input.acknowledgedCursor }
+						: {}),
+					...(input.complete ? { complete: true as const } : {}),
+				});
+				const status = archive.status;
+				if (
+					!previous ||
+					!isDeepStrictEqual(last?.details.lease, {
+						owner: claim.leaseOwner,
+						fence: claim.deliveryFence,
+					}) ||
+					!isDeepStrictEqual(
+						{ ...archive, revision: previous.revision },
+						previous,
+					)
+				) {
+					archive = {
+						...archive,
+						revision: previous ? previous.revision + 1 : 1,
+					};
+					const written = await tx`insert into platform.audit_events
+					(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
+					select ${`conversation.archive:${claim.executionId}:${String(archive.revision).padStart(16, "0")}`},${claim.traceId},'system',${claim.leaseOwner},'conversation.archive.observed','execution',${claim.executionId},${status === "unavailable" ? "failed" : "succeeded"},${claim.requestId},${claim.agentId},
+					${tx.json({ binding, archive, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
+					from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
+					and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp() returning id`;
+					if (written.length !== 1) throw new StaleDispatchLease();
+				}
+				if (status === "unavailable" || status === "complete")
+					await closeOutbox(
+						tx,
+						state,
+						claim,
+						status === "complete" ? "succeeded" : "failed",
+						status === "unavailable"
+							? "RUNTIME_EVENT_ARCHIVE_UNAVAILABLE"
+							: undefined,
+					);
+				return {
+					status,
+					remainingMs: Math.max(0, archive.deadlineAtMs - clock.now),
+				};
+			}),
+		);
 	}
 
 	async finish(input: {

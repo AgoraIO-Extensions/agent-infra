@@ -951,6 +951,11 @@ export type ConversationDetailProjectionV2 = {
     events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1>;
     messages: Array<{
         answerVersion: number | null;
+        archive?: {
+            deadlineAt: string;
+            schemaVersion: 1;
+            status: 'pending' | 'unavailable';
+        };
         createdAt: string;
         error: null;
         executionId: string | null;
@@ -962,6 +967,11 @@ export type ConversationDetailProjectionV2 = {
         text: string;
     } | {
         answerVersion: number | null;
+        archive?: {
+            deadlineAt: string;
+            schemaVersion: 1;
+            status: 'pending' | 'unavailable';
+        };
         createdAt: string;
         error: PilotProtocolErrorV1;
         executionId: string | null;
@@ -985,7 +995,18 @@ export type ConversationEventWindowV1 = {
 
 export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
-export type ConversationSseMessageV2 = PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
+export type ConversationSseMessageV2 = {
+    archive: {
+        deadlineAt: string;
+        schemaVersion: 1;
+        status: 'pending' | 'unavailable';
+    } | null;
+    conversationId: string;
+    executionId: string;
+    kind: 'control';
+    schemaVersion: 1;
+    type: 'execution.archive';
+} | PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type DeploymentConfigurationProjectionV2 = {
     modelCatalog: DeploymentModelCatalogProjectionV2;
@@ -1696,6 +1717,11 @@ export type EvaluationWorklistV1 = {
 };
 
 export type ExecutionDetailProjectionV2 = {
+    archive?: {
+        deadlineAt: string;
+        schemaVersion: 1;
+        status: 'pending' | 'unavailable';
+    };
     conversationId: string;
     error: null;
     events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1>;
@@ -1734,6 +1760,11 @@ export type ExecutionDetailProjectionV2 = {
     startedAt: string | null;
     status: 'submitted' | 'processing' | 'completed' | 'cancelled' | 'unknown';
 } | {
+    archive?: {
+        deadlineAt: string;
+        schemaVersion: 1;
+        status: 'pending' | 'unavailable';
+    };
     conversationId: string;
     error: PilotProtocolErrorV1;
     events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1>;
@@ -7484,6 +7515,9 @@ export type RevokeApplicationMaterialV2Response = RevokeApplicationMaterialV2Res
 
 export type GetConversationV2Data = {
     body?: never;
+    headers?: {
+        'x-platform-conversation-archive'?: '1';
+    };
     path: {
         conversationId: string;
     };
@@ -7539,6 +7573,7 @@ export type StreamConversationEventsV2Data = {
     body?: never;
     headers?: {
         'Last-Event-ID'?: SseEventIdV1;
+        'x-platform-conversation-archive'?: '1';
     };
     path: {
         conversationId: string;
@@ -7589,6 +7624,9 @@ export type StreamConversationEventsV2Response = StreamConversationEventsV2Respo
 
 export type GetExecutionDetailV2Data = {
     body?: never;
+    headers?: {
+        'x-platform-conversation-archive'?: '1';
+    };
     path: {
         conversationId: string;
         executionId: string;

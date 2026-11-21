@@ -3187,3 +3187,108 @@ it("4281 classifies an authorized regeneration missing personal Key", async () =
 		retryable: false,
 	});
 });
+
+it("exposes an archive gap only to negotiated V2 reads and leaves the real finish time missing", async () => {
+	const deps = dependencies();
+	const initial = await deps.query.get(
+		{ actorId: "user-1", channelId: "web" },
+		"conversation-1",
+	);
+	if (!initial) throw new Error("Missing fixture");
+	const archive = {
+		schemaVersion: 1 as const,
+		status: "unavailable" as const,
+		deadlineAt: "2026-11-21T00:00:00.000Z",
+	};
+	vi.mocked(deps.query.get).mockResolvedValue({
+		...initial,
+		events: [],
+		executions: initial.executions.map((e) => ({ ...e, archive })),
+	});
+	vi.mocked(deps.query.getExecution).mockResolvedValue({
+		execution: { ...initial.executions[0]!, archive },
+		events: [],
+	});
+	const { app } = testApp(deps);
+	const old = ConversationDetailProjectionV2Schema.parse(
+		await (await app.request("/api/v2/conversations/conversation-1")).json(),
+	);
+	expect(
+		old.messages.find((m: { role: string }) => m.role === "assistant"),
+	).toMatchObject({ status: "processing" });
+	expect(JSON.stringify(old)).not.toContain('"archive"');
+	const current = ConversationDetailProjectionV2Schema.parse(
+		await (
+			await app.request("/api/v2/conversations/conversation-1", {
+				headers: { "x-platform-conversation-archive": "1" },
+			})
+		).json(),
+	);
+	expect(
+		current.messages.find((m: { role: string }) => m.role === "assistant"),
+	).toMatchObject({ status: "completed", archive });
+	const detail = await (
+		await app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+			{ headers: { "x-platform-conversation-archive": "1" } },
+		)
+	).json();
+	expect(detail).toMatchObject({
+		status: "completed",
+		finishedAt: null,
+		archive,
+	});
+});
+
+it("sends negotiated archive controls without a Runtime cursor after current authorization", async () => {
+	const input = dependencies({ streamPollIntervalMs: 5 });
+	input.query.getArchives = vi.fn().mockResolvedValue([
+		{
+			executionId: "execution-1",
+			archive: {
+				schemaVersion: 1,
+				status: "unavailable",
+				deadlineAt: "2026-11-21T00:00:00.000Z",
+			},
+		},
+	]);
+	const controller = new AbortController();
+	const response = await testApp(input).app.request(
+		"/api/v2/conversations/conversation-1/events",
+		{
+			headers: { "x-platform-conversation-archive": "1" },
+			signal: controller.signal,
+		},
+	);
+	const reader = response.body!.getReader();
+	let text = "";
+	try {
+		for (let i = 0; i < 20 && !text.includes('"execution.archive"'); i++) {
+			const row = await reader.read();
+			if (row.done) break;
+			text += new TextDecoder().decode(row.value);
+		}
+	} finally {
+		controller.abort();
+		await reader.cancel().catch(() => {});
+	}
+	const frame = text
+		.split("\n")
+		.filter((l) => l.startsWith("data:"))
+		.map((l) => JSON.parse(l.slice(5)))
+		.find((x) => x.type === "execution.archive");
+	expect(frame).toMatchObject({
+		schemaVersion: 1,
+		kind: "control",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		archive: { status: "unavailable" },
+	});
+	expect(frame).not.toHaveProperty("conversationCursor");
+	expect(frame).not.toHaveProperty("eventId");
+	expect(input.query.getArchives).toHaveBeenCalledWith(
+		expect.objectContaining({ actorId: "user-1", channelId: "web" }),
+		"conversation-1",
+		expect.any(AbortSignal),
+	);
+});

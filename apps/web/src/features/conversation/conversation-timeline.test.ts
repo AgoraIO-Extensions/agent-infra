@@ -70,6 +70,67 @@ afterEach(() => {
 });
 
 describe("Conversation generated-client data consumer", () => {
+	it("refreshes archive metadata without aborting or advancing the original event stream", async () => {
+		const stream = sse();
+		let reads = 0;
+		const { reader, requests } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			reads++;
+			const value = history();
+			if (reads > 1)
+				value.messages = [
+					{
+						messageId: "assistant:execution-1",
+						role: "assistant",
+						text: "",
+						status: "completed",
+						executionId: "execution-1",
+						createdAt: timestamp,
+						replyToMessageId: null,
+						answerVersion: null,
+						isCurrentAnswer: null,
+						error: null,
+						archive: {
+							schemaVersion: 1,
+							status: "unavailable",
+							deadlineAt: timestamp,
+						},
+					},
+				];
+			return Response.json(value);
+		});
+		await reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(requests.filter((r) => route(r) === "stream")).toHaveLength(1),
+		);
+		stream.send({
+			schemaVersion: 1,
+			kind: "control",
+			type: "execution.archive",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			archive: {
+				schemaVersion: 1,
+				status: "unavailable",
+				deadlineAt: timestamp,
+			},
+		});
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().history?.messages[0]?.archive?.status).toBe(
+				"unavailable",
+			),
+		);
+		expect(requests.find((r) => route(r) === "stream")?.signal.aborted).toBe(
+			false,
+		);
+		stream.send(event(2));
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().events).toEqual([event(1), event(2)]),
+		);
+		expect(requests.filter((r) => route(r) === "stream")).toHaveLength(1);
+		expect(reads).toBe(2);
+	});
+
 	it("loads earlier event pages in order and advances the opaque cursor", async () => {
 		const stream = sse();
 		const recent = windowedHistory("conversation-1", [event(3), event(4)], {

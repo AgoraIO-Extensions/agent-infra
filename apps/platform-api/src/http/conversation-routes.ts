@@ -9,7 +9,7 @@ import {
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
-	type ConversationSseMessageV2Schema,
+	ConversationSseMessageV2Schema,
 	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
 	ExecutionDetailProjectionV2Schema,
@@ -117,6 +117,19 @@ export interface ConversationAuthorization {
 }
 
 export interface ConversationQuery {
+	getArchives?(
+		scope: ConversationQueryScopeV1,
+		conversationId: string,
+		signal?: AbortSignal,
+	): Promise<
+		| readonly {
+				executionId: string;
+				archive:
+					| import("@agent-infra/platform-core").ConversationArchiveProjectionV1
+					| null;
+		  }[]
+		| undefined
+	>;
 	list(
 		scope: ConversationQueryScopeV1,
 		agentId: string,
@@ -690,6 +703,7 @@ export function eventProjectionV1(
 	input: ConversationQueryEventV1,
 ): SseMessage | undefined {
 	const message = eventProjection(input);
+	if (message.type === "execution.archive") return undefined;
 	if (message.type === "task.status") return undefined;
 	if (message.schemaVersion === 1) return message;
 	if (message.type === "result.file") {
@@ -750,9 +764,14 @@ function messageProjections(
 function messageProjections(
 	input: ConversationQueryDetailV1,
 	version: 2,
+	archive?: boolean,
 ): ReturnType<typeof MessageProjectionV2Schema.parse>[];
-function messageProjections(input: ConversationQueryDetailV1, version: 1 | 2) {
-	return projectConversationMessagesV1(input).map(
+function messageProjections(
+	input: ConversationQueryDetailV1,
+	version: 1 | 2,
+	archive = false,
+) {
+	return projectConversationMessagesV1(input, { archive }).map(
 		({
 			failureTraceId,
 			failureCode,
@@ -768,9 +787,19 @@ function messageProjections(input: ConversationQueryDetailV1, version: 1 | 2) {
 						: failure(failureTraceId, failureCode ?? "EXECUTION_FAILED"),
 				createdAt: item.createdAt.toISOString(),
 			};
-			return version === 2 && classified && failureTraceId !== null
-				? MessageProjectionV2Schema.parse({ ...projected, failure: classified })
-				: MessageProjectionV1Schema.parse(projected);
+			return version === 2 && archive
+				? MessageProjectionV2Schema.parse({
+						...projected,
+						...(classified && failureTraceId !== null
+							? { failure: classified }
+							: {}),
+					})
+				: version === 2 && classified && failureTraceId !== null
+					? MessageProjectionV2Schema.parse({
+							...projected,
+							failure: classified,
+						})
+					: MessageProjectionV1Schema.parse(projected);
 		},
 	);
 }
@@ -1212,7 +1241,11 @@ export function registerConversationRoutes(
 							return ConversationDetailProjectionV2Schema.parse({
 								schemaVersion: 2,
 								conversation,
-								messages: messageProjections(detail, 2),
+								messages: messageProjections(
+									detail,
+									2,
+									context.req.header("x-platform-conversation-archive") === "1",
+								),
 								events: detail.events.map(eventProjection),
 								...(detail.eventWindow === undefined
 									? {}
@@ -1660,6 +1693,11 @@ export function registerConversationRoutes(
 									ExecutionDetailProjectionV2Schema.parse({
 										...projection,
 										schemaVersion: 2,
+										...(context.req.header(
+											"x-platform-conversation-archive",
+										) === "1" && result.execution.archive
+											? { archive: result.execution.archive }
+											: {}),
 										events: result.events.map(eventProjection),
 									}),
 								metadata.traceId,
@@ -1829,6 +1867,7 @@ export function registerConversationRoutes(
 								let pending: ConversationReplayResultV1 | undefined =
 									initialReplay;
 								let cursor = initialReplay.resumeCursor;
+								const archiveRevisions = new Map<string, string>();
 								while (!lifetime.signal.aborted) {
 									if (pending) {
 										const batch = pending;
@@ -1865,6 +1904,54 @@ export function registerConversationRoutes(
 													if (message) await writeSseMessage(output, message);
 												}
 												cursor = persisted.conversationCursor;
+											}
+										}
+									}
+									if (
+										v2 &&
+										context.req.header("x-platform-conversation-archive") ===
+											"1" &&
+										dependencies.query.getArchives
+									) {
+										const permission = await check();
+										if (permission === "closed") return;
+										if (permission === "allowed") {
+											const facts = await streamRead(
+												() =>
+													dependencies.query.getArchives!(
+														scope(currentIdentity),
+														conversationId,
+														lifetime.signal,
+													),
+												readTimeoutMs,
+												lifetime.signal,
+											);
+											if (!facts) {
+												await terminate("revoked");
+												return;
+											}
+											// Recheck after the awaited metadata read, before emitting any original-subject fact.
+											if ((await check()) !== "allowed") continue;
+											for (const fact of facts) {
+												const revision = JSON.stringify(fact.archive);
+												if (
+													archiveRevisions.get(fact.executionId) === revision ||
+													(!archiveRevisions.has(fact.executionId) &&
+														fact.archive === null)
+												)
+													continue;
+												await writeSseMessageV2(
+													output,
+													ConversationSseMessageV2Schema.parse({
+														schemaVersion: 1,
+														kind: "control",
+														type: "execution.archive",
+														conversationId,
+														executionId: fact.executionId,
+														archive: fact.archive,
+													}),
+												);
+												archiveRevisions.set(fact.executionId, revision);
 											}
 										}
 									}

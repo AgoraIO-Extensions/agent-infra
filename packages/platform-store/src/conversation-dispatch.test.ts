@@ -11410,6 +11410,39 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		},
 	);
 
+	it.each(["pending", "unavailable", "complete"] as const)(
+		"Files4266archive keeps unproved control occupancy after archive outbox close (%s)",
+		async (status) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "completed",
+				executionFence: 3,
+				hostSessionRef: "original-host",
+			});
+			const sandbox = await prepared(work);
+			await client`update platform.outbox_items set status='failed' where id=${work.itemId}`;
+			await client`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome,details)
+			values (${`conversation.archive:${work.executionId}:0000000000000001`},'archive-test','system','worker','conversation.archive.observed','execution',${work.executionId},'agent-dispatch','failed',${client.json({ binding: { generation: 1, executionFence: 3 }, archive: { schemaVersion: 1, ref: "archive", revision: 1, status, startedAtMs: 1000, deadlineAtMs: 2000, lastProgressAtMs: null, cursor: null, acknowledgedCursor: null } })})`;
+			await reverify();
+			expect(await upgrade()).toBe(1);
+			const store = sandboxStore();
+			try {
+				expect(
+					await store.claimSandboxReconciliation({
+						schemaVersion: 1,
+						itemId: sandbox.itemId,
+						workerId: "archive-drain",
+						leaseDurationMs: 30000,
+					}),
+				).toMatchObject({
+					purpose: "drain",
+					drainComputeAllowed: status === "complete",
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("keeps an idle Sandbox current after a channel-only configuration revision (ADR-0028)", async () => {
 		const idle = await seed("conversation.turn.submit.v1", {
 			executionFence: 2,
@@ -12599,6 +12632,225 @@ describe("terminal original Turn control authority (#4266)", () => {
 		await client`update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id='agent-dispatch'`;
 		return work;
 	}
+	it("Files4266fix2 bounds original terminal recovery when the original Host is absent after Sandbox stop", async () => {
+		const work = await terminalWork();
+		await client`update platform.conversation_executions
+			set last_runtime_cursor='cursor-12',last_event_sequence=12
+			where execution_id=${work.executionId}`;
+		const store = open();
+		let acknowledgements = 0;
+		let submissions = 0;
+		const host: ConversationRuntimeHostPortV1 =
+			new FakeConversationRuntimeHostV1();
+		host.dispatch = async () => {
+			submissions++;
+			throw new Error("Original Turn must not be replayed");
+		};
+		host.acknowledge = async () => {
+			acknowledgements++;
+			throw new ConversationRuntimeHostError(
+				"RUNTIME_WORKLOAD_UNAVAILABLE",
+				true,
+			);
+		};
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				runtimeHost: host,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						if (decision.outcome !== "allowed") return decision;
+						return {
+							...decision,
+							authority: { ...decision.authority, controlOnly: true },
+						};
+					},
+				},
+				events: {
+					async persist() {
+						throw new Error("No original Host event is available");
+					},
+				},
+			},
+			{ retryDelayMs: 0, maxRecoveryAttempts: 3, recoveryBudgetMs: 1 },
+		);
+		try {
+			const outcomes = [];
+			for (let i = 0; i < 6; i++) {
+				outcomes.push(
+					(
+						await useCase.dispatch({
+							schemaVersion: 1,
+							itemId: work.itemId,
+							workerId: "terminal-recovery",
+						})
+					).outcome,
+				);
+			}
+			const [row] =
+				await client`select status, attempt_count from platform.outbox_items where id=${work.itemId}`;
+			expect((await dispatchState(work))?.execution_status).toBe("completed");
+			expect(submissions).toBe(0);
+			expect(
+				await client`select event_id from platform.conversation_events where execution_id=${work.executionId}`,
+			).toHaveLength(0);
+			expect(outcomes).toContain("rejected");
+			expect(row?.status).not.toBe("retry_scheduled");
+		} finally {
+			await store.close();
+		}
+	});
+	it("Files4266archive fixes an absolute budget across claims/restarts and preserves the result and query gap", async () => {
+		const work = await terminalWork();
+		let store = open();
+		try {
+			const first = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "archive-first",
+				leaseDurationMs: 30000,
+			});
+			if (first.outcome !== "claimed")
+				throw new Error("Missing original claim");
+			expect(
+				await store.archiveOriginalTurn({ claim: first.claim, budgetMs: 1000 }),
+			).toMatchObject({ status: "pending" });
+			const read = () =>
+				client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by occurred_at desc,id desc limit 1`;
+			const before = (await read())[0]!.details;
+			await store.retry({
+				claim: first.claim,
+				retryDelayMs: 0,
+				errorCode: "RUNTIME_WORKLOAD_UNAVAILABLE",
+				transition: {},
+			});
+			await store.close();
+			store = open();
+			const second = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "archive-restart",
+				leaseDurationMs: 30000,
+			});
+			if (second.outcome !== "claimed")
+				throw new Error("Missing recovery claim");
+			for (const change of [
+				{ actorId: "other" },
+				{ agentId: "other" },
+				{ conversationId: "other" },
+				{ sessionGeneration: 2 },
+				{ executionDeliveryFence: 2 },
+				{ deliveryFence: second.claim.deliveryFence + 1 },
+			]) {
+				let denied = false;
+				try {
+					denied =
+						(await store.archiveOriginalTurn({
+							claim: { ...second.claim, ...change },
+							budgetMs: 1000,
+						})) === null;
+				} catch (error) {
+					expect(error).toBeInstanceOf(TypeError);
+					denied = true;
+				}
+				expect(denied).toBe(true);
+			}
+			expect(
+				await store.archiveOriginalTurn({
+					claim: second.claim,
+					budgetMs: 86400000,
+				}),
+			).toMatchObject({ status: "pending" });
+			const after = (await read())[0]!.details;
+			expect({ ...after.archive, revision: before.archive.revision }).toEqual(
+				before.archive,
+			);
+			expect(after.binding).toEqual(before.binding);
+			// Spend the actual persisted deadline without altering its record.
+			await client`select pg_sleep(1.05)`;
+			expect(
+				await store.archiveOriginalTurn({
+					claim: second.claim,
+					budgetMs: 86400000,
+				}),
+			).toMatchObject({ status: "unavailable" });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+				execution_fence: 1,
+			});
+			const final = (await read())[0]!.details;
+			expect(final.archive.deadlineAtMs).toBe(before.archive.deadlineAtMs);
+			expect(final.binding).toEqual(before.binding);
+			expect(
+				await client`select event_id from platform.conversation_events where execution_id=${work.executionId}`,
+			).toHaveLength(0);
+			const query = new PostgresConversationQueryV1({ databaseUrl });
+			try {
+				const detail = await query.get(
+					{ actorId: "actor-dispatch", channelId: "web" },
+					work.conversationId,
+				);
+				expect(
+					detail?.executions.find((e) => e.executionId === work.executionId)
+						?.archive?.status,
+				).toBe("unavailable");
+				expect(
+					await query.get(
+						{ actorId: "foreign", channelId: "web" },
+						work.conversationId,
+					),
+				).toBeUndefined();
+			} finally {
+				await query.close();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("Files4266archive rolls back failure disposition when required audit cannot commit", async () => {
+		const work = await terminalWork();
+		const store = open();
+		try {
+			const claimed = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "archive-audit",
+				leaseDurationMs: 30000,
+			});
+			if (claimed.outcome !== "claimed")
+				throw new Error("Missing original claim");
+			await store.archiveOriginalTurn({ claim: claimed.claim, budgetMs: 20 });
+			await client`select pg_sleep(0.04)`;
+			await client.unsafe(
+				"create function platform.archive_audit_failure() returns trigger language plpgsql as $$ begin if NEW.action='conversation.archive.observed' then raise exception 'synthetic audit failure'; end if; return NEW; end $$",
+			);
+			await client.unsafe(
+				"create trigger archive_audit_failure before insert on platform.audit_events for each row execute function platform.archive_audit_failure()",
+			);
+			try {
+				await expect(
+					store.archiveOriginalTurn({ claim: claimed.claim, budgetMs: 20 }),
+				).rejects.toThrow();
+			} finally {
+				await client.unsafe(
+					"drop trigger archive_audit_failure on platform.audit_events",
+				);
+				await client.unsafe("drop function platform.archive_audit_failure()");
+			}
+			expect(await dispatchState(work)).toMatchObject({
+				status: "processing",
+				execution_status: "completed",
+			});
+			expect(
+				await store.archiveOriginalTurn({ claim: claimed.claim, budgetMs: 20 }),
+			).toMatchObject({ status: "unavailable" });
+		} finally {
+			await store.close();
+		}
+	});
 	it("preserves original acceptance, digest and fence while only the outbox lease advances", async () => {
 		const work = await terminalWork();
 		const before = await savedPreparationPins(work.executionId);
