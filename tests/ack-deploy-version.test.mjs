@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { writeNetworkPolicyEvidence } from "./support/networkpolicy-evidence.mjs";
 
 const kubectl = spawnSync("which", ["kubectl"], {
 	encoding: "utf8",
@@ -54,6 +55,12 @@ for (const [name, version, expected] of [
 				}),
 			);
 			await writeFile(values, "{}");
+			// #4351: preflight requires current NetworkPolicy enforcement evidence.
+			const enforcement = await writeNetworkPolicyEvidence(directory, {
+				namespace: "agent-infra",
+				namespaceUid: "33333333-3333-4333-8333-333333333333",
+				kubeSystemNamespaceUid: "11111111-1111-4111-8111-111111111111",
+			});
 			await writeFile(
 				join(directory, "kubectl"),
 				`#!${process.execPath}
@@ -65,6 +72,9 @@ if(args.includes('version')) {
  const result=spawnSync(${JSON.stringify(kubectl)},args,{stdio:'inherit'});
  process.exit(result.status ?? 1);
 }
+const i=args.indexOf('get');
+const data=i>=0?${JSON.stringify(enforcement.responses)}[args[i+1]+'/'+args[i+2]]:undefined;
+if(data) process.stdout.write(JSON.stringify(data));
 `,
 				{ mode: 0o700 },
 			);
@@ -74,7 +84,7 @@ if(args.includes('version')) {
 const fs=require('node:fs');
 const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({tool:'helm',args,config:process.env.KUBECONFIG})+'\\n');
-if(args[0]==='template') process.stdout.write('kind: ConfigMap\\n');
+if(args[0]==='template') process.stdout.write(${JSON.stringify(`kind: ConfigMap\n---\n${enforcement.sessionEci}\n`)});
 `,
 				{ mode: 0o700 },
 			);
@@ -85,6 +95,7 @@ if(args[0]==='template') process.stdout.write('kind: ConfigMap\\n');
 					ACK_KUBECONFIG: config,
 					KUBECONFIG: join(directory, "wrong-config"),
 					ACK_VALUES_FILE: values,
+					...enforcement.env,
 				},
 				stdio: ["ignore", "pipe", "pipe"],
 			});

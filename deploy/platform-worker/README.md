@@ -159,8 +159,9 @@ agentWorkloadPlacement: {
   `restart_agent`）由一次调谐写入 placement。多服务 Agent 的一次 lifecycle 同时更新全部服务；
   未完成的旧迁移 Job 不会被采用，已成功的旧 Job 没有运行中的 Pod，按历史保留。保留态的 Host
   仍在原节点，不视为已隔离。全部 Agent 采用后改为 `reject`，剩余旧对象会按漂移重建。
-- placement 不进入资源配置摘要，`executionCapacityProfiles`、reserve 与 Session 批准不因配置
-  placement 失效；StatefulSet/Deployment 的资源对象指纹包含 placement。
+- `agentWorkloadPlacement` 不进入资源配置摘要，`executionCapacityProfiles`、reserve 与 Session
+  批准不因配置它失效；StatefulSet/Deployment 的资源对象指纹包含它。`codexSessionExecutor.placement`
+  仍按原规则进入摘要，变化后相关批准失配重验。
 
 ## 私有 Registry 镜像拉取
 

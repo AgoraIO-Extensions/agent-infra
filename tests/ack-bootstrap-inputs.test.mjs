@@ -10,6 +10,7 @@ import {
 	checkExistingInputs,
 	requiredInputs,
 } from "../deploy/ack/bootstrap-inputs.ts";
+import { writeNetworkPolicyEvidence } from "./support/networkpolicy-evidence.mjs";
 
 const clusterUid = "11111111-1111-1111-1111-111111111111";
 const installationId = "22222222-2222-2222-2222-222222222222";
@@ -277,6 +278,14 @@ test("preflight resolves renamed dependencies using the server version and never
 	await writeFile(kubeconfig, "", { mode: 0o600 });
 	await writeFile(values, "{}", { mode: 0o600 });
 	const snapshots = Object.fromEntries(f.objects);
+	// #4351: preflight now also requires current NetworkPolicy enforcement evidence.
+	const enforcement = await writeNetworkPolicyEvidence(bin, {
+		namespace: f.config.namespace,
+		namespaceUid: "33333333-3333-4333-8333-333333333333",
+		kubeSystemNamespaceUid: clusterUid,
+	});
+	Object.assign(snapshots, enforcement.responses);
+	const { sessionEci } = enforcement;
 	await writeFile(
 		join(bin, "kubectl"),
 		`#!/usr/bin/env node
@@ -298,7 +307,7 @@ process.exit(1);
 const args=process.argv.slice(2);
 if(args[0]==="lint")process.exit(0);
 if(args[0]==="template" && args[args.indexOf("--kube-version")+1]==="v1.36.1"){
- process.stdout.write(${JSON.stringify(f.rendered)});process.exit(0);
+ process.stdout.write(${JSON.stringify(`${f.rendered}\n---\n${sessionEci}\n`)});process.exit(0);
 }
 process.exit(1);
 `,
@@ -310,11 +319,25 @@ process.exit(1);
 		ACK_KUBECONFIG: kubeconfig,
 		ACK_VALUES_FILE: values,
 		ACK_NAMESPACE: f.config.namespace,
+		...enforcement.env,
 	};
 	const script = join(import.meta.dirname, "../deploy/ack/preflight.sh");
 	const result = spawnSync("bash", [script], { encoding: "utf8", env });
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(JSON.parse(result.stdout).objectCount, 4);
+	assert.match(result.stderr, /"scope":"networkpolicy-enforcement"/);
+	for (const missing of [
+		"ACK_NETWORKPOLICY_EVIDENCE_FILE",
+		"ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE",
+	]) {
+		const unproven = spawnSync("bash", [script], {
+			encoding: "utf8",
+			env: { ...env, [missing]: "" },
+		});
+		assert.equal(unproven.status, 2);
+		assert.equal(unproven.stdout, "");
+		assert.match(unproven.stderr, /NetworkPolicy enforcement evidence/);
+	}
 	const absent = spawnSync("bash", [script], {
 		encoding: "utf8",
 		env: { ...env, ACK_NAMESPACE: "absent-test" },
