@@ -166,9 +166,13 @@ export class PostgresConnectionPrincipalPinAdministrationV1 {
 
 	/**
 	 * Item 4: records the verifier's written conclusion. `consistent` clears the
-	 * "主体待核对" label and resumes a pin suspended by a uniqueness conflict;
-	 * `inconsistent` stops permits, closes and revokes the user's exception
-	 * installations and releases the pin once the revokes settle.
+	 * "主体待核对" label and resumes a pin suspended by a uniqueness conflict,
+	 * but only inside the verification window: once a pending pin's deadline
+	 * has passed on the database clock it is overdue for good, so a late
+	 * `consistent` is refused (`stale`) and the sweep still closes and revokes
+	 * the installations; only the item 6 release remains. `inconsistent` stops
+	 * permits, closes and revokes the user's exception installations and
+	 * releases the pin once the revokes settle.
 	 */
 	async recordVerification(
 		input: ConnectionPrincipalPinAdministrationInputV1 & {
@@ -195,6 +199,7 @@ export class PostgresConnectionPrincipalPinAdministrationV1 {
 						suspended_at=null, rule_revision=rule_revision+1
 					where id=${request.pinId} and rule_revision=${request.expectedRuleRevision}
 						and released_at is null and release_requested_at is null
+						and (verification_state <> 'pending' or verification_deadline > clock_timestamp())
 					returning rule_revision`)
 				: await tx.execute(sql`
 					update platform.connection_principal_pins

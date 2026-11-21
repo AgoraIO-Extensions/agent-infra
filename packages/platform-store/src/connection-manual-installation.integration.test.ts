@@ -4699,13 +4699,15 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		await client`update platform.connection_principal_pins
 			set verification_deadline=clock_timestamp()-interval '1 second' where id=${pin?.id}`;
 		expect(await readback()).toBe("denied");
+		// #4315 r3 MUST 1: a consistent record after the deadline is refused, so
+		// the overdue pin never backs the exchange again (item 4).
 		expect(
 			await admin.recordVerification({
 				...record(pin?.id, 1),
 				result: "consistent",
 			}),
-		).toMatchObject({ outcome: "recorded" });
-		expect(await readback()).toBe("allowed");
+		).toEqual({ outcome: "stale" });
+		expect(await readback()).toBe("denied");
 		const expired = new PostgresConnectionManualInstallationStoreV1({
 			databaseUrl: database.databaseUrl,
 			directory,
@@ -4807,6 +4809,54 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 			},
 		]);
 		expect(await pinOf("bob")).toMatchObject({ overdue: false });
+	});
+
+	// #4315 r3 MUST 1: the verification window is final. A consistent record
+	// that arrives after the deadline, before any sweep, is refused on the
+	// database clock, so the installations pinned before the deadline are still
+	// closed and revoked; only the item 6 release and a new installation remain.
+	it("refuses a consistent record after the deadline, so the sweep still closes the installations (item 4)", async () => {
+		const alice = await pinned();
+		await finish(alice);
+		const pin = await pinOf("alice");
+		await client`update platform.connection_principal_pins
+			set verification_deadline=clock_timestamp()-interval '1 second' where id=${pin?.id}`;
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, 1),
+				result: "consistent",
+			}),
+		).toEqual({ outcome: "stale" });
+		expect(await pinOf("alice")).toMatchObject({
+			rule_revision: 1,
+			verification_state: "pending",
+			verified: false,
+			overdue: false,
+		});
+		expect(await audit(pin?.id)).toEqual([]);
+		await admin.sweep();
+		await admin.sweep();
+		expect(await installation(alice)).toMatchObject({
+			status: "revoked",
+			revoke_state: "pending",
+		});
+		const overdue = await pinOf("alice");
+		expect(overdue).toMatchObject({
+			verification_state: "pending",
+			overdue: true,
+			released: false,
+		});
+		// Still refused at the pin's current rule revision after the sweep.
+		expect(
+			await admin.recordVerification({
+				...record(pin?.id, Number(overdue?.rule_revision)),
+				result: "consistent",
+			}),
+		).toEqual({ outcome: "stale" });
+		expect(await pinOf("alice")).toMatchObject({
+			verification_state: "pending",
+			verified: false,
+		});
 	});
 
 	// #4315 MUST 1: a conflict suspends a "主体待核对" holder without moving its
