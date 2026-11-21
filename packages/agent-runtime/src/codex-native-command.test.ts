@@ -810,9 +810,19 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 		).toEqual({ threadId: "native-thread-private", includeTurns: false });
 	});
 
-	it.each(["bridge", "initialize", "config/read", "thread/read", "projection"])(
-		"awaits fresh remote authority after %s and prevents the next dependency on denial",
-		async (stage) => {
+	it.each(
+		[
+			"bridge",
+			"initialize",
+			"config/read",
+			"thread/read",
+			"projection",
+		].flatMap((stage) =>
+			["directory", "V1"].map((reader) => ({ stage, reader })),
+		),
+	)(
+		"awaits fresh remote authority after $stage in $reader and prevents the next dependency on denial",
+		async ({ stage, reader }) => {
 			const f = await fixture();
 			let projected = false;
 			f.transport.status = {
@@ -837,7 +847,10 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 				}
 				return f.binding;
 			};
-			const query = f.driver.discoverNativeCommands(f.read);
+			const query =
+				reader === "V1"
+					? f.driver.readNativeMetadataV1("commands", f.read)
+					: f.driver.discoverNativeCommands(f.read);
 			const rejected = expect(query).rejects.toMatchObject({
 				code: "RUNTIME_GRANT_INVALID",
 			});
@@ -1025,14 +1038,14 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 			let confirmations = 0;
 			f.read.revalidate = async () => {
 				confirmations++;
-				return confirmations === 1 ? f.binding : held.promise;
+				return held.promise;
 			};
 			const query = f.driver.discoverNativeCommands(f.read);
 			const rejected = expect(query).rejects.toMatchObject({
 				code: "RUNTIME_GRANT_INVALID",
 			});
 			if (kind === "in flight") initialization.resolve();
-			await vi.waitFor(() => expect(confirmations).toBe(2));
+			await vi.waitFor(() => expect(confirmations).toBe(1));
 			f.abort.abort();
 			await rejected;
 			held.resolve(f.binding);
@@ -1346,23 +1359,19 @@ describe("Codex metadata RPC local failure boundaries (scripted unit fixture)", 
 });
 
 describe("Codex native metadata command (scripted unit fixture)", () => {
-	it.each(["commands", "skills"] as const)(
-		"projects native metadata selector %s through the existing directory reader",
+	it.each(["commands", "status"] as const)(
+		"uses one pre-read and one post-projection current query for warm V1 %s",
 		async (selector) => {
 			const f = await fixture();
-			const directory = {
-				revision: "a".repeat(64),
-				capabilities: [],
-			};
-			if (selector === "commands")
-				vi.spyOn(f.driver, "discoverNativeCommands").mockResolvedValue(
-					directory,
-				);
-			else
-				vi.spyOn(f.driver, "discoverNativeSkills").mockResolvedValue(directory);
-			await expect(
-				f.driver.readNativeMetadataV1(selector, f.read),
-			).resolves.toEqual({ selector, ...directory });
+			await f.driver.readNativeMetadataV1(selector, f.read);
+			const revalidate = vi.fn(f.read.revalidate);
+			f.read.revalidate = revalidate;
+			const before = f.transport.requests.length;
+			await f.driver.readNativeMetadataV1(selector, f.read);
+			expect(
+				f.transport.requests.slice(before).map((frame) => frame.method),
+			).toEqual(["thread/read"]);
+			expect(revalidate).toHaveBeenCalledTimes(2);
 		},
 	);
 
