@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AgentApiStateResponseV1Schema } from "@agent-infra/contracts/pilot";
 import { serve } from "@hono/node-server";
 import postgres from "postgres";
 import {
@@ -138,6 +139,7 @@ beforeEach(async () => {
 		await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,management_revision,approval_revision,desired_state,workload_revision,fence,trace_id,request_id,submitted_at)
 		 values(${`application-${agentId}`},${agentId},'same-id','Controlled Agent','Controlled lifecycle state','stopped',2,1,'stopped',1,1,'trace-seed','request-seed',clock_timestamp())`;
 		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values(${agentId},'same-id',clock_timestamp())`;
+		await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'application','same-id')`;
 		if (agentId !== "agent-foreign")
 			for (const grant of ["manage", "use"]) {
 				await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)
@@ -1430,4 +1432,63 @@ describe("#4273 human API management availability", () => {
 			).toBe(404);
 		},
 	);
+});
+
+it("#4283 state metadata and lifecycle require application scope in addition to grant", async () => {
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent-a','application','same-id') on conflict do nothing`;
+	const read = (id: string) =>
+		fetch(`${origin}/api/v2/agents/${id}/state`, {
+			headers: { Authorization: `Bearer ${material.application}` },
+		});
+	const visible = await read("agent-a");
+	expect(visible.status).toBe(200);
+	expect(
+		AgentApiStateResponseV1Schema.parse(await visible.json()).agentId,
+	).toBe("agent-a");
+	await sql`update platform.platform_applications set responsible_user_id='another-responsible' where id='same-id'`;
+	expect((await read("agent-a")).status).toBe(200);
+	await sql`delete from platform.agent_availability where agent_id='agent-a' and target_type='application'`;
+	expect((await read("agent-a")).status).toBe(404);
+	expect((await read("absent-agent")).status).toBe(404);
+	expect(
+		(
+			await request(
+				"agent-a",
+				"start",
+				"4283-scope-denied",
+				material.application,
+			)
+		).status,
+	).toBe(404);
+});
+
+it("#4283 rechecks application scope after a blocked required state audit", async () => {
+	const blocker = postgres(database.databaseUrl, { max: 1 });
+	let pending: Promise<Response> | undefined;
+	try {
+		await blocker`select pg_advisory_lock(4283001)`;
+		await sql`create function platform.pause_application_state_audit() returns trigger language plpgsql as $$ begin
+   if new.action='api.agent.state.read' then perform pg_advisory_xact_lock(4283001); end if; return new; end $$`;
+		await sql`create trigger pause_application_state_audit before insert on platform.audit_events for each row execute function platform.pause_application_state_audit()`;
+		pending = fetch(`${origin}/api/v2/agents/agent-a/state`, {
+			headers: { Authorization: `Bearer ${material.application}` },
+		});
+		await vi.waitFor(async () => {
+			const [row] =
+				await sql`select exists(select 1 from pg_locks where locktype='advisory' and objid=4283001 and not granted) as blocked`;
+			expect(row?.blocked).toBe(true);
+		});
+		await sql`delete from platform.agent_availability where agent_id='agent-a' and target_type='application'`;
+		await blocker`select pg_advisory_unlock(4283001)`;
+		expect((await pending).status).toBe(404);
+		expect(
+			await sql`select id from platform.audit_events where action='api.agent.state.read' and outcome='succeeded'`,
+		).toHaveLength(0);
+	} finally {
+		await blocker`select pg_advisory_unlock_all()`;
+		await pending;
+		await sql`drop trigger if exists pause_application_state_audit on platform.audit_events`;
+		await sql`drop function if exists platform.pause_application_state_audit()`;
+		await blocker.end();
+	}
 });
