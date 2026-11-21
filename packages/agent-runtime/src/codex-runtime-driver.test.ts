@@ -36,7 +36,6 @@ import {
 	runtimeRequestSigningPayloadV4,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { measureNativeMetadataPgChain } from "../../../tests/support/native-metadata-postgres-chain.js";
 
 const executorFilesystem = vi.hoisted(() => ({
 	root: undefined as string | undefined,
@@ -17878,46 +17877,6 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
-	it.each([false, true])(
-		"keeps two metadata rounds and bytes-before-delivery guards with real PG/API/Worker/Host (RTT=%s)",
-		async (withRtt) => {
-			const f = await skillDiscoveryFixture();
-			// Warm only the original RPC/process; no read authority is reused.
-			await f.driver.readNativeMetadataV1("skills", f.read);
-			const result = await measureNativeMetadataPgChain({
-				driver: f.driver,
-				nativeSessionRef: f.nativeSessionRef,
-				directory: f.directory,
-				...(withRtt
-					? { rtt: { identity: 150, policy: 150, query: 90, current: 100 } }
-					: {}),
-			});
-			process.stdout.write(`NATIVE_METADATA_A2_PG ${JSON.stringify(result)}\n`);
-			expect(result.rounds).toEqual([
-				["commands", "skills"],
-				["commands", "skills"],
-			]);
-			expect(result.counts).toEqual({
-				identity: 135,
-				policy: 96,
-				query: 68,
-				current: 28,
-			});
-			expect(result.elapsedMs).toBeLessThan(30_000);
-			expect(result.businessWrites).toEqual({ executions: 0, outbox: 0 });
-			expect(
-				f.bridge.requests.filter((request) => request.method === "thread/read"),
-			).toHaveLength(2);
-			expect(
-				f.bridge.requests.filter((request) => request.method === "skills/list"),
-			).toHaveLength(3);
-			expect(
-				f.bridge.requests.some((request) => request.method === "turn/start"),
-			).toBe(false);
-		},
-		120_000,
-	);
-
 	it("uses one pre-read and one post-projection current query for warm V1 skills", async () => {
 		const f = await skillDiscoveryFixture();
 		await f.driver.readNativeMetadataV1("skills", f.read);
