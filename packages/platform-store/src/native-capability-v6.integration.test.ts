@@ -893,6 +893,7 @@ it.each([
 					if (codex) {
 						try {
 							const response = await codex.host.nativeCapabilityV6(body);
+							codex.model.release();
 							replies.push(response);
 							if (loseResponse)
 								throw new TypeError("Synthetic accepted response lost");
@@ -1021,6 +1022,9 @@ it.each([
 				workerId: "v6-worker",
 			});
 
+			if (mode === "codex-high-high")
+				expect(codex?.transport.modelStatuses).toEqual([200]);
+
 			if (
 				[
 					"denied",
@@ -1073,15 +1077,28 @@ it.each([
 				return;
 			}
 			if (loseResponse || mode === "unknown-result" || remainsUnknown) {
-				expect(decision).toMatchObject({
-					outcome: remainsUnknown ? "unknown" : "retry",
-					errorCode: loseResponse
-						? "RUNTIME_UNAVAILABLE"
-						: "RUNTIME_ACCEPTANCE_UNKNOWN",
-				});
+				// A malformed completion may arrive after the durable running ACK. Both
+				// immediate uncertainty and the later bounded heartbeat path must retain
+				// unknown occupancy and never send compact again.
+				if (mode === "codex-unknown")
+					expect(decision).toMatchObject({
+						outcome: expect.stringMatching(/^(unknown|retry)$/),
+						errorCode: expect.stringMatching(
+							/^(RUNTIME_ACCEPTANCE_UNKNOWN|RUNTIME_HEARTBEAT_INTERRUPTED)$/,
+						),
+					});
+				else
+					expect(decision).toMatchObject({
+						outcome: remainsUnknown ? "unknown" : "retry",
+						errorCode: loseResponse
+							? "RUNTIME_UNAVAILABLE"
+							: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					});
 				const [unknown] =
 					await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
-				expect(unknown?.status).toBe("unknown");
+				if (mode === "codex-unknown")
+					expect(["processing", "unknown"]).toContain(unknown?.status);
+				else expect(unknown?.status).toBe("unknown");
 				await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
 				const recovery = await worker.dispatch({
 					schemaVersion: 1,
@@ -1130,6 +1147,13 @@ it.each([
 				plan: admitted.plan,
 			});
 			if (codex) {
+				expect(replies[0]).toMatchObject({
+					result: { outcome: "accepted", status: "running" },
+				});
+				expect(codex.model.requests).toEqual([
+					{ key: "Bearer synthetic-test-key" },
+				]);
+				expect(codex.transport.modelStatuses).toEqual([200]);
 				expect(
 					codex.transport.requests.filter(
 						(r) => r.method === "thread/compact/start",
@@ -1137,6 +1161,15 @@ it.each([
 				).toHaveLength(1);
 				const events =
 					await client`select event_type,event_payload from platform.conversation_events where execution_id=${input.executionId}`;
+				expect(
+					events
+						.filter((e) => e.event_type === "execution.operation")
+						.map(
+							(e) =>
+								(e.event_payload as { fact: { phase: string } }).fact.phase,
+						),
+				).toEqual(["intent", "started", "completed"]);
+				expect(JSON.stringify(events)).not.toContain("synthetic-test-key");
 				expect(events.map((e) => e.event_type)).toEqual(
 					expect.arrayContaining(["execution.status", "text.delta"]),
 				);

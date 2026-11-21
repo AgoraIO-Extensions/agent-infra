@@ -1452,13 +1452,17 @@ export class RuntimeHost {
 			runtimeAuthorizationDenied();
 		const request = accepted.request;
 		const claims = accepted.claims;
+		let privateKey: ReturnType<typeof validateRuntimePrivateRelayKeyFieldV6>;
 		try {
 			await validateRuntimeBusinessBindingV6(request, claims);
-			validateRuntimePrivateRelayKeyFieldV6(parsed.privateKeyField, {
-				request,
-				grantId: claims.grantId,
-				requestDigest: claims.requestDigest,
-			});
+			privateKey = validateRuntimePrivateRelayKeyFieldV6(
+				parsed.privateKeyField,
+				{
+					request,
+					grantId: claims.grantId,
+					requestDigest: claims.requestDigest,
+				},
+			);
 		} catch {
 			runtimeAuthorizationDenied();
 		}
@@ -1651,11 +1655,48 @@ export class RuntimeHost {
 							});
 						},
 					});
+
+					this.installExecutionKey(
+						pinnedScope,
+						prepared.session.hostSessionRef,
+						privateKey.keyDelivery.relayKey,
+					);
+					const assertBusiness = () => {
+						this.requireLegacyHost();
+						this.options.store.assertOperationAuthorityCurrent(
+							request.executionId,
+							request.executionId,
+							request.sessionGeneration,
+							now,
+						);
+						const original =
+							this.options.store.readOriginalExecutionKeyScopeV4(pinnedScope);
+						if (
+							!original?.scope ||
+							original.hostSessionRef !== request.hostSessionRef ||
+							!isDeepStrictEqual(original.scope, pinnedScope) ||
+							this.options.store.nativeSessionRef(request.hostSessionRef) !==
+								nativeSessionRef
+						)
+							runtimeAuthorizationDenied();
+						return evidence;
+					};
+					const store = this.options.store;
+					const business: RuntimeNativeMetadataReadContextV1 = {
+						nativeSessionRef,
+						allowUnboundExecution: true,
+						signal: this.lifetime.signal,
+						get expiresAt() {
+							return store.currentOperationBusinessDeadline(pinnedScope, now);
+						},
+						assertCurrent: assertBusiness,
+						revalidate: async () => assertBusiness(),
+					};
 					const dispatched = await this.dispatch(
 						prepared.session.hostSessionRef,
 						prepared.operation,
 						true,
-						{ nativeCommand: read },
+						{ nativeCommand: business },
 					);
 					return RuntimeOperationResponseV6Schema.parse({
 						schemaVersion: 6,
@@ -3776,7 +3817,11 @@ export class RuntimeHost {
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
-		if (operation.kind === "native-command") return record.result;
+		if (
+			operation.kind === "native-command" &&
+			record.result.status !== "running"
+		)
+			return record.result;
 		// A terminal generation-cancel receipt proves the durable barrier completed.
 		// The original Turn may remain unknown or unreadable after native Session loss.
 		if (
@@ -3797,6 +3842,8 @@ export class RuntimeHost {
 		}
 		const status = RuntimeStatusV1Schema.safeParse(rawStatus);
 		if (!status.success) driverInvalid();
+		if (operation.kind === "native-command" && status.data === "unknown")
+			return acceptanceUnknown();
 		return {
 			outcome: "accepted" as const,
 			status: status.data,

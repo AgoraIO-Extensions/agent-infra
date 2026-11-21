@@ -1894,6 +1894,28 @@ export class FileRuntimeStore {
 			runtimeAuthorizationDenied();
 	}
 
+	/** Current original business lease; metadata deadlines never extend execution authority. */
+	currentOperationBusinessDeadline(
+		binding: SessionBinding & { executionId: string },
+		readNow: () => number,
+	) {
+		this.assertOperationAuthorityCurrent(
+			binding.executionId,
+			binding.executionId,
+			binding.sessionGeneration,
+			readNow,
+		);
+		const original = this.readOriginalExecutionKeyScopeV4(binding);
+		if (!original) runtimeAuthorizationDenied();
+		const state = this.file.read();
+		const authority =
+			state.sessions[original.hostSessionRef]?.executionAuthorities?.[
+				binding.executionId
+			];
+		if (!authority) runtimeAuthorizationDenied();
+		return authority.expiresAt;
+	}
+
 	/** Read-only admission check for a separately authorized installation command. */
 	assertOriginalExecutionBindingCurrent(
 		reference: RuntimeOriginalExecutionRef,

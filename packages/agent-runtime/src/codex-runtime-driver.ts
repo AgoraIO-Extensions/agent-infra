@@ -3530,6 +3530,32 @@ function upgradeDriverState(value: unknown) {
 		value.schemaVersion = 2;
 }
 
+function executionOperationInState(
+	state: Pick<CodexDriverState, "operations">,
+	session: Pick<
+		CodexSession,
+		"agentId" | "conversationId" | "sessionGeneration"
+	>,
+	executionId: string,
+) {
+	const operations = (["submit-turn", "native-command"] as const).flatMap(
+		(kind) => {
+			const value = ownRecordValue(
+				state.operations,
+				operationKey({ ...session, kind, operationId: executionId }),
+			);
+			// A legacy read-only command may share the original submit's ID;
+			// it never owns that Execution's model journal.
+			return value &&
+				(kind === "submit-turn" || value.effect === "state_changing")
+				? [value]
+				: [];
+		},
+	);
+	if (operations.length !== 1) stateInvalid();
+	return operations[0] as CodexOperation;
+}
+
 function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	if (
 		!isPlainRecord(value) ||
@@ -3554,15 +3580,10 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	}
 	for (const [nativeSessionRef, session] of Object.entries(sessions)) {
 		for (const [executionId, execution] of Object.entries(session.executions)) {
-			const operation = ownRecordValue(
-				operations,
-				operationKey({
-					agentId: session.agentId,
-					conversationId: session.conversationId,
-					sessionGeneration: session.sessionGeneration,
-					kind: "submit-turn",
-					operationId: executionId,
-				}),
+			const operation = executionOperationInState(
+				{ operations },
+				session,
+				executionId,
 			);
 			const record = operation?.record;
 			if (
@@ -4579,13 +4600,17 @@ function turnCompletedNotification(frame: CodexAppServerFrame) {
 }
 
 /** Project the pinned thread/read metadata; never return native thread contents. */
-function parseNativeCommandStatus(value: unknown, threadId: string) {
+function parseNativeCommandStatus(
+	value: unknown,
+	threadId: string,
+	includeTurns = false,
+) {
 	const thread = isPlainRecord(value) ? value.thread : undefined;
 	if (
 		!isPlainRecord(thread) ||
 		thread.id !== threadId ||
 		!Array.isArray(thread.turns) ||
-		thread.turns.length !== 0 ||
+		(!includeTurns && thread.turns.length !== 0) ||
 		!isPlainRecord(thread.status)
 	)
 		protocolInvalid();
@@ -5258,6 +5283,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			readonly conversationId: string;
 			readonly executionId: string;
 			readonly threadId: string;
+			readonly command: Extract<
+				CodexNativeCommandCommand,
+				{ schemaVersion: 2 }
+			>;
+			readonly read: RuntimeNativeMetadataReadContextV1;
+			admission?: CodexModelTurnAdmission;
+			acknowledged: boolean;
+			ready?: boolean;
+			failed?: boolean;
+			nativeFailureStatus?: "failed" | "cancelled";
+			activation?: Promise<void>;
 			itemId?: string;
 			turnId?: string;
 			itemCompleted: boolean;
@@ -6974,6 +7010,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await this.assertSessionExecutorCurrent();
 		const key = operationKey(command);
 		const inFlight = this.inFlightOperations.get(key);
+		if (inFlight && command.kind === "native-command") {
+			const operation = ownRecordValue(this.readState().operations, key);
+			if (operation && !operationMatchesCommand(operation, command))
+				stateInvalid();
+		}
 		if (inFlight) return inFlight;
 		const execution = (async () => {
 			const drain = this.sessionExecutor?.drain;
@@ -8388,6 +8429,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			nativeCommandUnsupported();
 		if (command.parameters.length !== 0) nativeCommandUnsupported();
+		if (
+			!this.beginModelTurnAdmission ||
+			!this.registerModelTurn ||
+			!this.recognizeModelTurn ||
+			binding.authority.scope.agentId !== command.agentId ||
+			binding.authority.scope.conversationId !== command.conversationId ||
+			binding.authority.scope.executionId !== command.executionId ||
+			binding.authority.scope.sessionGeneration !== command.sessionGeneration
+		)
+			nativeCommandUnsupported();
 		const directory = this.nativeCommandDirectoryV2(binding);
 		const capability = directory.capabilities.find(
 			(entry) =>
@@ -8399,7 +8450,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!capability || directory.revision !== command.directoryRevision)
 			nativeCommandUnsupported();
 		const session = this.session(command.nativeSessionRef);
-		if (session.activeExecutionId !== undefined) nativeCommandUnsupported();
+		if (
+			session.activeExecutionId !== undefined &&
+			session.activeExecutionId !== command.executionId
+		)
+			nativeCommandUnsupported();
 		const state = this.readState();
 		const original = Object.entries(state.operations)
 			.filter(([key, candidate]) => {
@@ -8436,22 +8491,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw new RuntimeNativeCommandNotSubmittedError();
 		}
 		const prepared = await this.prepareNativeCommand(command);
-		if (prepared.operation.record) {
-			if (prepared.operation.state !== "resolved") stateInvalid();
+		if (
+			prepared.operation.record?.result.outcome === "accepted" &&
+			prepared.operation.record.result.status === "completed"
+		)
 			return prepared.operation.record;
-		}
 		if (!prepared.created) {
-			if (prepared.operation.nativeCommandResult)
-				return this.resolveNativeCommand(
-					command,
-					command.nativeSessionRef,
-					prepared.operation.nativeCommandResult,
-				);
 			if (
-				!prepared.operation.nativeTurnId ||
-				!prepared.operation.nativeCompactionItemId
+				this.inFlightOperations.has(operationKey(command)) &&
+				this.pendingNativeCompactions.has(operationKey(command))
 			)
-				return this.unknown(command, command.nativeSessionRef);
+				return (
+					prepared.operation.record ??
+					this.unknown(command, command.nativeSessionRef)
+				);
 			return this.recoverStatefulNativeCommand(
 				command,
 				read,
@@ -8461,45 +8514,184 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		read.assertCurrent();
 		const rpc = await this.rpc(command.nativeSessionRef, read.assertCurrent);
+		const selected = this.nativeSelection(command.selection);
+		if (!selected) stateInvalid();
+		const key = operationKey(command);
+		const deadline = Math.min(read.expiresAt, Date.now() + rpcRequestTimeoutMs);
+		const admission = this.beginModelTurnAdmission?.(
+			deadline,
+			selected.model,
+			binding.threadId,
+			selected.effort,
+			this.modelConversationKey(
+				codexConversationKey(this.session(command.nativeSessionRef)),
+			),
+		);
 		const compactStartedAt = performance.now();
-		this.observeCompactStage(command, "request_sent", "waiting");
-		const operationKeyValue = operationKey(command);
-		const completion = new Promise<void>((resolve, reject) => {
-			this.pendingNativeCompactions.set(operationKeyValue, {
-				nativeSessionRef: command.nativeSessionRef,
-				agentId: command.agentId,
-				conversationId: command.conversationId,
-				executionId: command.executionId,
-				threadId: binding.threadId,
-				itemCompleted: false,
-				turnCompleted: false,
-				resolve,
-				reject,
-			});
-		});
-		let completionTimer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			try {
-				await rpc.request(
-					"thread/compact/start",
-					{ threadId: binding.threadId },
-					(value) => {
-						if (!isEmptyRecord(value)) protocolInvalid();
-						return value;
+		const completion = Promise.withResolvers<void>();
+		const pending = {
+			nativeSessionRef: command.nativeSessionRef,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			threadId: binding.threadId,
+			command: structuredClone(command),
+			read,
+			admission,
+			acknowledged: false,
+			itemCompleted: false,
+			turnCompleted: false,
+			resolve: () => completion.resolve(),
+			reject: (error: unknown) => {
+				const current = this.pendingNativeCompactions.get(key);
+				if (current) {
+					current.failed = true;
+					if (current.turnId)
+						this.revokeModelTurn?.({
+							conversationKey: this.modelConversationKey(
+								codexConversationKey(command),
+							),
+							threadId: current.threadId,
+							turnId: current.turnId,
+						});
+				}
+				completion.reject(error);
+			},
+		};
+		this.pendingNativeCompactions.set(key, pending);
+		// Keep ownership of late native receipts; the business context is not the metadata request.
+		void completion.promise
+			.then(async () => {
+				const current = this.nativeCommandOperation(
+					command.nativeSessionRef,
+					command.executionId,
+				);
+				if (!current?.nativeTurnId || !current.nativeCompactionItemId) return;
+				await this.drainModelTurn?.({
+					conversationKey: this.modelConversationKey(
+						codexConversationKey(this.session(command.nativeSessionRef)),
+					),
+					threadId: binding.threadId,
+					turnId: current.nativeTurnId,
+				});
+				read.assertCurrent();
+				const journal = this.journalView(
+					this.session(command.nativeSessionRef),
+					current.nativeTurnId,
+				);
+				const facts = latestOperationAttemptFacts(journal?.events ?? []).filter(
+					(f) => f.kind === "model",
+				);
+				if (!facts.length || facts.some((f) => f.phase !== "completed")) return;
+				const boundedRead = {
+					...read,
+					expiresAt: Math.min(read.expiresAt, Date.now() + rpcRequestTimeoutMs),
+				};
+				const observed = await this.readBoundNativeStatus(
+					boundedRead,
+					binding,
+					this.nativeMetadataRead(boundedRead, binding),
+				);
+				await this.resolveNativeCommand(command, command.nativeSessionRef, {
+					selector: "status",
+					...observed,
+				});
+			})
+			.catch(async () => {
+				const failed = this.pendingNativeCompactions.get(key);
+				if (failed?.turnId)
+					await this.cancelModelTurn?.({
+						conversationKey: this.modelConversationKey(
+							codexConversationKey(command),
+						),
+						threadId: failed.threadId,
+						turnId: failed.turnId,
+					}).catch(() => undefined);
+				await this.update(
+					(state) => {
+						const session = ownRecordValue(
+							state.sessions,
+							command.nativeSessionRef,
+						);
+						const journal =
+							session && failed?.turnId
+								? ownRecordValue(session.journals ?? {}, failed.turnId)
+								: undefined;
+						if (
+							!session ||
+							!journal ||
+							journal.events.some((event) => event.type === "completed")
+						)
+							return;
+						journal.externalActionsBlocked = true;
+						if (failed?.nativeFailureStatus)
+							journal.nativeCompletionStatus ??= failed.nativeFailureStatus;
+						this.appendHeldStatusEvent(session, journal);
 					},
-					false,
-					false,
-					Date.now() + rpcRequestTimeoutMs,
-					read.signal,
+					{ skipUnchanged: true },
+				).catch(() => undefined);
+				this.notifyEventStream(
+					this.eventStreamKey(command.nativeSessionRef, command.executionId),
 				);
 				this.observeCompactStage(
 					command,
-					"rpc_response",
-					"completed",
-					"ok",
+					"final_acceptance",
+					"unknown",
+					"missing_event",
 					Math.round(performance.now() - compactStartedAt),
 				);
-			} catch (error) {
+			})
+			.finally(() => {
+				if (admission) this.abandonModelTurnAdmission?.(admission);
+				this.pendingNativeCompactions.delete(key);
+			});
+		this.observeCompactStage(command, "request_sent", "waiting");
+		try {
+			await rpc.request(
+				"thread/compact/start",
+				{ threadId: binding.threadId },
+				(value) => {
+					if (!isEmptyRecord(value)) protocolInvalid();
+					pending.acknowledged = true;
+					return value;
+				},
+				false,
+				false,
+				deadline,
+				read.signal,
+			);
+			this.observeCompactStage(
+				command,
+				"rpc_response",
+				"completed",
+				"ok",
+				Math.round(performance.now() - compactStartedAt),
+			);
+			await this.activateCompactModel(key);
+			// Wait only for the exact accepted native Turn/item, not its inference terminal.
+			while (Date.now() < deadline) {
+				const current = this.nativeCommandOperation(
+					command.nativeSessionRef,
+					command.executionId,
+				);
+				const completed = this.completedCompactReceipt(command, current);
+				if (completed) return completed;
+				const admission = this.pendingNativeCompactions.get(key);
+				if (
+					current?.record?.result.outcome === "accepted" &&
+					current.record.result.status === "running" &&
+					operationMatchesCommand(current, command) &&
+					admission?.ready &&
+					!admission.failed
+				)
+					return current.record;
+				read.assertCurrent();
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			pending.reject(unavailableError());
+			return this.unknown(command, command.nativeSessionRef);
+		} catch (error) {
+			if (!pending.acknowledged)
 				this.observeCompactStage(
 					command,
 					"rpc_response",
@@ -8509,39 +8701,128 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						: "transport_error",
 					Math.round(performance.now() - compactStartedAt),
 				);
-				throw error;
-			}
-			await Promise.race([
-				completion,
-				new Promise<never>((_, reject) => {
-					completionTimer = setTimeout(
-						() => reject(unavailableError()),
-						rpcRequestTimeoutMs,
-					);
-					completionTimer.unref?.();
-				}),
-			]);
-			return this.resolveNativeCommand(command, command.nativeSessionRef, {
-				selector: "status",
-				...(await this.readBoundNativeStatus(
-					read,
-					binding,
-					this.nativeMetadataRead(read, binding),
-				)),
-			});
-		} catch {
-			this.observeCompactStage(
-				command,
-				"final_acceptance",
-				"unknown",
-				"missing_event",
-				Math.round(performance.now() - compactStartedAt),
-			);
+			pending.reject(unavailableError());
 			return this.unknown(command, command.nativeSessionRef);
-		} finally {
-			if (completionTimer !== undefined) clearTimeout(completionTimer);
-			this.pendingNativeCompactions.delete(operationKeyValue);
 		}
+	}
+
+	/** The committed terminal receipt survives cleanup of transient admission state. */
+	private completedCompactReceipt(
+		command: Extract<CodexNativeCommandCommand, { schemaVersion: 2 }>,
+		operation: CodexOperation | undefined,
+	) {
+		const record = operation?.record;
+		if (
+			!operation ||
+			!record ||
+			!operationMatchesCommand(operation, command) ||
+			record.result.outcome !== "accepted" ||
+			record.result.status !== "completed" ||
+			record.agentId !== command.agentId ||
+			record.conversationId !== command.conversationId ||
+			record.sessionGeneration !== command.sessionGeneration ||
+			record.nativeSessionRef !== command.nativeSessionRef ||
+			!operation.nativeTurnId ||
+			!operation.nativeCompactionItemId ||
+			!operation.nativeCommandResult
+		)
+			return;
+		const session = this.session(command.nativeSessionRef);
+		const execution = ownRecordValue(session.executions, command.executionId);
+		const journal = this.journalView(session, operation.nativeTurnId);
+		if (
+			execution?.status !== "completed" ||
+			execution.turnId !== command.turnId ||
+			execution.nativeTurnId !== operation.nativeTurnId ||
+			journal?.nativeCompletionStatus !== "completed" ||
+			!journal.events.some(
+				(event) =>
+					event.type === "completed" && event.payload.status === "completed",
+			) ||
+			!this.compactModelCompleted(session, operation.nativeTurnId, true) ||
+			(this.sessionExecutor?.drain &&
+				!this.sessionExecutor.drain.proven(command.executionId))
+		)
+			return;
+		return record;
+	}
+
+	private async activateCompactModel(key: string) {
+		const pending = this.pendingNativeCompactions.get(key);
+		if (!pending?.acknowledged || !pending.turnId || !pending.itemId) return;
+		if (pending.activation) return pending.activation;
+		pending.activation = (async () => {
+			if (pending.failed) unavailable();
+			pending.read.assertCurrent();
+			await pending.read.revalidate();
+			const turnId = pending.turnId;
+			const itemId = pending.itemId;
+			if (!turnId || !itemId) unavailable();
+			await this.update((state) => {
+				const op = ownRecordValue(state.operations, key);
+				const session = ownRecordValue(
+					state.sessions,
+					pending.nativeSessionRef,
+				);
+				if (
+					pending.failed ||
+					!op ||
+					!session ||
+					!operationMatchesCommand(op, pending.command) ||
+					op.state !== "prepared" ||
+					session.activeExecutionId !== undefined ||
+					op.nativeTurnId !== turnId ||
+					op.nativeCompactionItemId !== itemId
+				)
+					unavailable();
+				op.record = driverRecord(pending.command, {
+					schemaVersion: 2,
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+					kind: "native-command",
+					operationId: pending.executionId,
+					nativeSessionRef: pending.nativeSessionRef,
+					result: { outcome: "accepted", status: "running" },
+					effect: pending.command.effect,
+					selection: pending.command.selection,
+					keyBinding: pending.command.keyBinding,
+					authorizationRecordId: pending.command.authorizationRecordId,
+				});
+				op.state = "resolved";
+				Object.defineProperty(session.executions, pending.executionId, {
+					value: {
+						executionId: pending.executionId,
+						turnId: pending.command.turnId,
+						nativeTurnId: turnId,
+						status: "running",
+					},
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				});
+				session.activeExecutionId = pending.executionId;
+				const journal = this.ensureJournal(session, turnId);
+				this.appendStatusEvent(session, journal);
+			});
+			pending.read.assertCurrent();
+			if (pending.failed) unavailable();
+			const turn = {
+				conversationKey: this.modelConversationKey(
+					codexConversationKey(this.session(pending.nativeSessionRef)),
+				),
+				threadId: pending.threadId,
+				turnId,
+			};
+			if (
+				!pending.admission ||
+				this.recognizeModelTurn?.(pending.admission, turn) !== true ||
+				this.registerModelTurn?.(pending.admission, turn) !== true
+			)
+				unavailable();
+			pending.ready = true;
+		})();
+		return pending.activation;
 	}
 
 	private async recoverStatefulNativeCommand(
@@ -8552,6 +8833,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		const nativeTurnId = operation.nativeTurnId;
 		const nativeItemId = operation.nativeCompactionItemId;
+		if (
+			!nativeTurnId ||
+			!this.compactModelCompleted(
+				this.session(command.nativeSessionRef),
+				nativeTurnId,
+			)
+		)
+			return this.unknown(command, command.nativeSessionRef);
 		if (!nativeTurnId || !nativeItemId)
 			return this.unknown(command, command.nativeSessionRef);
 		try {
@@ -8643,6 +8932,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 		);
 		if (!operation) return undefined;
+		if (
+			operation.effect === "state_changing" &&
+			ownRecordValue(this.session(nativeSessionRef).executions, executionId)
+		)
+			return undefined;
 		// 还没 settled（prepared/running）的原生命令没有可重放的结果；让调用方回到
 		// journal/wait 流，而不是把「正在执行」误报成不可用（#3359 review）。
 		if (operation.state !== "resolved") return undefined;
@@ -8728,6 +9022,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				...(command.schemaVersion === 2
 					? {
 							effect: command.effect,
+							internalModel: this.nativeSelection(command.selection)?.model,
+							modelOptionId: command.selection.modelOptionId,
+							reasoningLevel: command.selection.reasoningLevel,
 							selection: structuredClone(command.selection),
 							keyBinding: structuredClone(command.keyBinding),
 							authorizationRecordId: command.authorizationRecordId,
@@ -9981,11 +10278,83 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
 		const command = this.nativeCommandOperation(nativeSessionRef, executionId);
-		if (command)
-			return command.record?.result.outcome === "accepted" &&
-				command.record.result.status === "completed"
-				? "completed"
-				: "unknown";
+		if (command) {
+			if (command.record?.result.outcome !== "accepted") return "unknown";
+			if (command.record.result.status !== "running")
+				return command.record.result.status === "completed"
+					? "completed"
+					: command.record.result.status === "failed"
+						? "failed"
+						: command.record.result.status === "cancelled"
+							? "cancelled"
+							: "unknown";
+			const journal = command.nativeTurnId
+				? this.journalView(this.session(nativeSessionRef), command.nativeTurnId)
+				: undefined;
+			const session = this.session(nativeSessionRef);
+			const pending = this.pendingNativeCompactions.get(
+				operationKey({
+					...session,
+					kind: "native-command",
+					operationId: executionId,
+				}),
+			);
+			if (pending)
+				return journal?.externalActionsBlocked ||
+					pending.failed ||
+					!pending.ready ||
+					pending.itemCompleted !== pending.turnCompleted
+					? "unknown"
+					: "running";
+			if (
+				!command.nativeTurnId ||
+				!command.nativeCompactionItemId ||
+				!session.threadId ||
+				!this.compactModelCompleted(session, command.nativeTurnId, true)
+			)
+				return "unknown";
+			try {
+				this.assertExecutionConfiguration(
+					this.readState(),
+					session,
+					ownRecordValue(session.executions, executionId) ?? unavailable(),
+				);
+				const metadata = await (await this.rpc(nativeSessionRef)).request(
+					"thread/read",
+					{ threadId: session.threadId, includeTurns: true },
+					(value) => value,
+					false,
+					false,
+				);
+				if (
+					!hasCompletedNativeCompaction(
+						metadata,
+						session.threadId,
+						command.nativeTurnId,
+						command.nativeCompactionItemId,
+					)
+				)
+					return "unknown";
+				const result = await this.completeCompact(
+					nativeSessionRef,
+					executionId,
+					command.nativeTurnId,
+					command.nativeCompactionItemId,
+					{
+						selector: "status",
+						status: parseNativeCommandStatus(metadata, session.threadId, true),
+						readAt: new Date().toISOString(),
+					},
+					true,
+				);
+				return result?.result.outcome === "accepted" &&
+					result.result.status === "completed"
+					? "completed"
+					: "unknown";
+			} catch {
+				return "unknown";
+			}
+		}
 		const original = this.session(nativeSessionRef);
 		const active = ownRecordValue(original.executions, executionId);
 		if (
@@ -10349,6 +10718,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		// Committed facts remain readable without reopening the old native route.
 		// Sealed executions replay their journal before independent status recovery.
 		if (
+			!this.nativeCommandOperation(nativeSessionRef, executionId) &&
 			!this.journalView(existingSession, existingExecution.nativeTurnId)
 				?.externalActionsBlocked &&
 			!this.hasInterruption(nativeSessionRef, executionId, existingState) &&
@@ -10540,7 +10910,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal?: AbortSignal,
 	): Promise<AsyncIterable<RuntimeEvent>> {
 		const driver = this;
-		if (this.nativeCommandOperation(nativeSessionRef, executionId)) {
+		const nativeOperation = this.nativeCommandOperation(
+			nativeSessionRef,
+			executionId,
+		);
+		if (
+			nativeOperation &&
+			(nativeOperation.effect !== "state_changing" ||
+				!ownRecordValue(this.session(nativeSessionRef).executions, executionId))
+		) {
 			const initialEvents = this.nativeCommandEvents(
 				nativeSessionRef,
 				executionId,
@@ -10990,16 +11368,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		execution: CodexExecution,
 		state: CodexDriverState = this.readState(),
 	) {
-		const operation = ownRecordValue(
-			state.operations,
-			operationKey({
-				agentId: session.agentId,
-				conversationId: session.conversationId,
-				sessionGeneration: session.sessionGeneration,
-				kind: "submit-turn",
-				operationId: execution.executionId,
-			}),
-		);
+		const operation = this.executionOperation(state, session, execution);
 		if (operation?.admissionPending || operation?.admissionRecoveryPending)
 			unavailable();
 	}
@@ -11009,18 +11378,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		session: CodexSession,
 		execution: CodexExecution,
 	) {
-		const operation = ownRecordValue(
-			state.operations,
-			operationKey({
-				agentId: session.agentId,
-				conversationId: session.conversationId,
-				sessionGeneration: session.sessionGeneration,
-				kind: "submit-turn",
-				operationId: execution.executionId,
-			}),
-		);
-		if (!operation) stateInvalid();
-		return operation;
+		return executionOperationInState(state, session, execution.executionId);
 	}
 
 	private executionConfigurationMatches(
@@ -13732,10 +14090,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async recordContextCompactionItem(
 		item: NonNullable<ReturnType<typeof contextCompactionItemNotification>>,
+		conversationKey: string | undefined,
 	) {
 		const pending = [...this.pendingNativeCompactions.values()].find(
 			(candidate) =>
 				candidate.threadId === item.threadId &&
+				(conversationKey === undefined ||
+					codexConversationKey(candidate.command) === conversationKey) &&
 				(candidate.turnId === undefined ||
 					candidate.turnId === item.nativeTurnId),
 		);
@@ -13775,20 +14136,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						}),
 					)
 				: undefined;
-			if (operation?.state !== "prepared") stateInvalid();
+			if (
+				!operation ||
+				(operation.state !== "prepared" &&
+					operation.record?.result.outcome !== "accepted")
+			)
+				stateInvalid();
 			operation.nativeTurnId = pending.turnId;
 			operation.nativeCompactionItemId = pending.itemId;
 		});
+		await this.activateCompactModel(operationKey(pending.command));
 		if (pending.itemCompleted && pending.turnCompleted) pending.resolve();
 		return true;
 	}
 
 	private async recordContextCompactionTurnStarted(
 		turn: NonNullable<ReturnType<typeof turnStartedNotification>>,
+		conversationKey: string | undefined,
 	) {
 		const pending = [...this.pendingNativeCompactions.values()].find(
 			(candidate) =>
-				candidate.threadId === turn.threadId && candidate.turnId === undefined,
+				candidate.threadId === turn.threadId &&
+				(conversationKey === undefined ||
+					codexConversationKey(candidate.command) === conversationKey) &&
+				candidate.turnId === undefined,
 		);
 		if (!pending) return false;
 		pending.turnId = turn.nativeTurnId;
@@ -13818,14 +14189,32 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private recordContextCompactionTurn(
 		turn: NonNullable<ReturnType<typeof turnCompletedNotification>>,
+		conversationKey: string | undefined,
 	) {
 		const pending = [...this.pendingNativeCompactions.values()].find(
 			(candidate) =>
 				candidate.threadId === turn.threadId &&
+				(conversationKey === undefined ||
+					codexConversationKey(candidate.command) === conversationKey) &&
 				candidate.turnId === turn.nativeTurnId,
 		);
-		if (!pending) return false;
+		if (!pending) {
+			const state = this.readState();
+			return Object.values(state.sessions).some(
+				(session) =>
+					session.threadId === turn.threadId &&
+					(conversationKey === undefined ||
+						codexConversationKey(session) === conversationKey) &&
+					Object.values(session.executions).some(
+						(execution) =>
+							execution.nativeTurnId === turn.nativeTurnId &&
+							this.executionOperation(state, session, execution).effect ===
+								"state_changing",
+					),
+			);
+		}
 		if (turn.status !== "completed") {
+			pending.nativeFailureStatus ??= turn.status;
 			this.observeCompactStage(
 				pending,
 				"turn_completed",
@@ -13956,7 +14345,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const started = turnStartedNotification(frame);
 		if (started) {
-			if (await this.recordContextCompactionTurnStarted(started)) return;
+			if (
+				await this.recordContextCompactionTurnStarted(started, conversationKey)
+			)
+				return;
 			const recorded = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -14015,7 +14407,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
-			if (this.recordContextCompactionTurn(completed)) return;
+			if (this.recordContextCompactionTurn(completed, conversationKey)) return;
 			// Every native terminal must join the actual provider handler and its
 			// durable outcome before publishing the original terminal event. Ordinary
 			// completion drains without aborting the native final response.
@@ -14110,7 +14502,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const nativeTool = nativeToolItemNotification(frame);
 		const compactionItem = contextCompactionItemNotification(frame);
 		if (compactionItem) {
-			await this.recordContextCompactionItem(compactionItem);
+			await this.recordContextCompactionItem(compactionItem, conversationKey);
 			return;
 		}
 		if (nativeTool)
@@ -14422,18 +14814,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const execution = Object.values(session.executions).find(
 			(candidate) => candidate.nativeTurnId === nativeTurnId,
 		);
-		const executionOperationKey = execution
-			? operationKey({
-					agentId: session.agentId,
-					conversationId: session.conversationId,
-					sessionGeneration: session.sessionGeneration,
-					kind: "submit-turn",
-					operationId: execution.executionId,
-				})
+		const executionOperation = execution
+			? executionOperationInState(state, session, execution.executionId)
 			: undefined;
-		const executionOperation = executionOperationKey
-			? ownRecordValue(state.operations, executionOperationKey)
-			: undefined;
+		const executionOperationKey =
+			executionOperation && execution
+				? operationKey({
+						...session,
+						kind:
+							executionOperation.effect === "state_changing"
+								? "native-command"
+								: "submit-turn",
+						operationId: execution.executionId,
+					})
+				: undefined;
 		const preparedOperations = Object.entries(state.operations).filter(
 			([, operation]) =>
 				operation.nativeSessionRef === nativeSessionRef &&
@@ -15519,16 +15913,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			: undefined;
 		if (!session || !execution) return false;
 		const journal = ownRecordValue(session.journals ?? {}, nativeTurnId);
-		const result = ownRecordValue(
-			state.operations,
-			operationKey({
-				agentId: session.agentId,
-				conversationId: session.conversationId,
-				sessionGeneration: session.sessionGeneration,
-				kind: "submit-turn",
-				operationId: executionId,
-			}),
-		)?.record?.result;
+		const result = this.executionOperation(state, session, execution).record
+			?.result;
 		return (
 			execution.nativeTurnId === nativeTurnId &&
 			execution.status === "running" &&
@@ -15557,16 +15943,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!session || !execution || execution.nativeTurnId !== nativeTurnId) {
 			stateInvalid();
 		}
-		const operation = ownRecordValue(
-			state.operations,
-			operationKey({
-				agentId: session.agentId,
-				conversationId: session.conversationId,
-				sessionGeneration: session.sessionGeneration,
-				kind: "submit-turn",
-				operationId: executionId,
-			}),
-		);
+		const operation = this.executionOperation(state, session, execution);
 		if (!operation?.record) stateInvalid();
 		if (operation.record.result.outcome !== "accepted") stateInvalid();
 		if (execution.status !== "running") {
@@ -15883,10 +16260,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		state = this.readState(),
 	) {
-		// #3375：补充指令也绑定原 Execution/Turn，但它不是中断，不能封住原 Turn 的模型与工具请求。
+		// Only actual stop/cancel operations seal execution. Supplement and compact also
+		// carry Execution/Turn IDs, but neither is an interruption.
 		return Object.entries(state.operations).some(
 			([key, operation]) =>
-				!isSupplementOperationKey(key) &&
+				(operationKeyKind(key) === "stop" ||
+					operationKeyKind(key) === "generation-cancel") &&
 				operation.nativeSessionRef === nativeSessionRef &&
 				operation.executionId === executionId &&
 				operation.turnId !== undefined,
@@ -16272,11 +16651,107 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return record;
 	}
 
+	private compactModelCompleted(
+		session: CodexSession,
+		nativeTurnId: string,
+		allowSealed = false,
+	) {
+		const journal = this.journalView(session, nativeTurnId);
+		const facts = latestOperationAttemptFacts(journal?.events ?? []).filter(
+			(f) => f.kind === "model",
+		);
+		return (
+			!!journal &&
+			(allowSealed || !journal.externalActionsBlocked) &&
+			facts.length > 0 &&
+			facts.every((f) => f.phase === "completed")
+		);
+	}
+
+	private async completeCompact(
+		nativeSessionRef: string,
+		executionId: string,
+		nativeTurnId: string,
+		nativeItemId: string,
+		result: CodexNativeCommandResult,
+		allowSealed = false,
+	) {
+		if (
+			this.sessionExecutor?.drain &&
+			!(await this.sessionExecutor.drain.confirm(executionId))
+		)
+			return;
+		const record = await this.update((state) => {
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const execution =
+				session && ownRecordValue(session.executions, executionId);
+			if (!session || !execution || execution.nativeTurnId !== nativeTurnId)
+				unavailable();
+			const operation = this.executionOperation(state, session, execution);
+			if (
+				operation.effect !== "state_changing" ||
+				operation.nativeTurnId !== nativeTurnId ||
+				operation.nativeCompactionItemId !== nativeItemId ||
+				operation.record?.result.outcome !== "accepted" ||
+				!this.compactModelCompleted(session, nativeTurnId, allowSealed) ||
+				this.hasInterruption(nativeSessionRef, executionId, state)
+			)
+				unavailable();
+			this.assertExecutionConfiguration(state, session, execution);
+			if (operation.record.result.status !== "running") return operation.record;
+			const journal = this.ensureJournal(session, nativeTurnId);
+			this.appendTextEvent(
+				session,
+				journal,
+				nativeItemId,
+				JSON.stringify({ status: result.status, readAt: result.readAt }),
+			);
+			operation.nativeCommandResult = result;
+			operation.record.result = { outcome: "accepted", status: "completed" };
+			execution.status = "completed";
+			if (session.activeExecutionId === executionId)
+				session.activeExecutionId = undefined;
+			this.appendCompletedEvent(session, journal, "completed");
+			return operation.record;
+		});
+		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
+		return record;
+	}
+
 	private async resolveNativeCommand(
 		command: CodexNativeCommandCommand,
 		nativeSessionRef: string,
 		result: CodexNativeCommandResult,
 	) {
+		if (command.schemaVersion === 2) {
+			const operation = this.nativeCommandOperation(
+				nativeSessionRef,
+				command.executionId,
+			);
+			if (
+				operation?.record?.result.outcome === "accepted" &&
+				operation.record.result.status === "running" &&
+				operation.nativeTurnId &&
+				operation.nativeCompactionItemId
+			) {
+				if (!operationMatchesCommand(operation, command)) stateInvalid();
+				const completed = await this.completeCompact(
+					nativeSessionRef,
+					command.executionId,
+					operation.nativeTurnId,
+					operation.nativeCompactionItemId,
+					result,
+				);
+				if (completed)
+					this.observeCompactStage(
+						command,
+						"final_acceptance",
+						"completed",
+						"ok",
+					);
+				return completed ?? this.unknown(command, nativeSessionRef);
+			}
+		}
 		const drain = this.sessionExecutor?.drain;
 		if (drain) {
 			const candidate = await this.update(

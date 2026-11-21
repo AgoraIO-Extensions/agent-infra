@@ -1,13 +1,14 @@
-import { createHash, type KeyObject } from "node:crypto";
+import { createHash, type KeyObject, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeBusinessGrantClaimsV2Schema } from "@agent-infra/contracts/runtime";
 import { seedNativeCommandState } from "./codex-native-command.test-support.js";
 import {
-	MetadataDriver,
-	MetadataTransport,
-} from "./compact-transport.test-support.js";
+	CompactModelTransport,
+	startCompactMockModel,
+} from "./compact-model.test-support.js";
+import { MetadataDriver } from "./compact-transport.test-support.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import { createRuntimeExecutionGrantVerifierV2 } from "./grant-v2.js";
 import {
@@ -25,7 +26,17 @@ export async function createCompactHostFixture(
 	baselineModel = "gpt-5.3-codex",
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "compact-host-4335-"));
-	const seeded = await seedNativeCommandState(directory, undefined, true);
+	const transport = new CompactModelTransport();
+	transport.threadId = randomUUID();
+	transport.compactTurnId = randomUUID();
+	transport.compactItemId = randomUUID();
+	const model = await startCompactMockModel(true);
+	let host: RuntimeHost | undefined;
+	const seeded = await seedNativeCommandState(
+		directory,
+		transport.threadId,
+		true,
+	);
 	let bytes = await readFile(seeded.path, "utf8");
 	for (const [from, to] of [
 		["agent-1", authority.agentId],
@@ -80,8 +91,11 @@ export async function createCompactHostFixture(
 		bytes = JSON.stringify(state);
 	}
 	await writeFile(seeded.path, bytes);
-	const transport = new MetadataTransport();
 	const driver = await MetadataDriver.openFixture(seeded.path, transport, {
+		authorizeExternalAction: async (action) => {
+			if (!host) throw new Error("Missing Host");
+			return host.authorizeExternalAction(action);
+		},
 		configVersion: "configuration-1-native-fixture",
 		defaultModelOptionId: "model-primary",
 		defaultReasoningLevel: baseline,
@@ -90,8 +104,7 @@ export async function createCompactHostFixture(
 				modelOptionId: "model-primary",
 				model: "gpt-5.3-codex",
 				reasoningLevels: ["medium", "high"],
-				endpoint: "http://127.0.0.1:1/approved/v1",
-				credential: "synthetic-model-credential",
+				endpoint: model.endpoint,
 			},
 		],
 	});
@@ -184,7 +197,7 @@ export async function createCompactHostFixture(
 	});
 	const capability = projection.capabilities.find((c) => c.name === "compact");
 	if (!capability) throw new Error("missing compact");
-	const host = await RuntimeHost.open({
+	host = await RuntimeHost.open({
 		store,
 		driver,
 		grantValidation: { expectedIssuer: "platform-worker" },
@@ -210,12 +223,14 @@ export async function createCompactHostFixture(
 		driver,
 		store,
 		transport,
+		model,
 		hostSessionRef: seed.session.hostSessionRef,
 		capabilityId: capability.id,
 		directoryRevision: projection.revision,
 		capabilitySourceVersion: capability.source.version,
 		async close() {
-			await host.close();
+			await host?.close();
+			await model.close();
 			await store.close();
 			await rm(directory, { recursive: true, force: true });
 		},
