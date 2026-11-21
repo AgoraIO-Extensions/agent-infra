@@ -13,6 +13,8 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+	type CodexDynamicConnectionClientV1,
+	CodexDynamicConnectionRefusalV1,
 	type ConnectionHostSupplyBindingV1,
 	type ConnectionInstallTlsExporterV1,
 	connectionInstallServerExporterV1,
@@ -20,10 +22,13 @@ import {
 	type FileRuntimeStore,
 	openConnectionHostSupplyV1,
 	RuntimeHostError,
+	type RuntimeOriginalExecutionRef,
 	readConnectionMachineOAuthClientOutcomeV1,
 	readConnectionMachineOAuthClientV1,
 	registerConnectionMachineOAuthClientV1,
 	revokeConnectionMachineOAuthClientV1,
+	validateStandardMcpInput,
+	validateStandardMcpInstallationMetadata,
 	validateStandardMcpToken,
 } from "@agent-infra/agent-runtime";
 import {
@@ -108,6 +113,7 @@ import {
 } from "./runtime-oauth-client.js";
 import {
 	createRuntimeOAuthDynamicPublication,
+	parseRuntimeOAuthDynamicPublicationContractV1,
 	type RuntimeOAuthDynamicPublicationContractV1,
 } from "./runtime-oauth-dynamic-publication.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
@@ -116,6 +122,10 @@ import {
 	openProtectedStandardMcpDirectory,
 	readProtectedStandardMcpBytes,
 } from "./standard-mcp-files.js";
+import {
+	standardMcpInstallationKey,
+	standardMcpMaterialKey,
+} from "./standard-mcp-input.js";
 import {
 	assertProtectedStandardMcpExportCommitted,
 	ensurePrivateDirectory,
@@ -153,8 +163,60 @@ export type ConnectionInstallReceiverAssemblyV1 =
 			readonly cert: string;
 			readonly port: number;
 			readonly runtimeOrigin: string;
+			/**
+			 * §13.5.6 动态安装的 reader (ADR-0048): the Driver's per-Execution
+			 * `resolveInput` for this Host's dynamic manual installations; present
+			 * only with the approved dynamic publication contract.
+			 */
+			readonly dynamicReader?: {
+				readonly contract: RuntimeOAuthDynamicPublicationContractV1;
+				resolveTarget(
+					reference: RuntimeOriginalExecutionRef,
+					signal: AbortSignal,
+				): Promise<ApprovedConnectionConsumerTargetV1>;
+				resolveInput(
+					reference: RuntimeOriginalExecutionRef,
+					signal: AbortSignal,
+				): Promise<unknown>;
+			};
 			close(): Promise<void>;
 	  };
+
+/**
+ * §13.5.6 (Codex only, ADR-0048): the Codex Driver input for a receiver's
+ * dynamic reader. The Thread declares the contract's tools; each call reads
+ * its installation through the reader.
+ */
+export function codexDynamicConnectionClientForReaderV1(
+	reader: NonNullable<
+		Extract<
+			ConnectionInstallReceiverAssemblyV1,
+			{ status: "available" }
+		>["dynamicReader"]
+	>,
+): CodexDynamicConnectionClientV1 | undefined {
+	const declarations = reader.contract.toolDeclarations;
+	if (!declarations) return undefined;
+	// Live discovery lists tools in the contract's order; declare them the same way.
+	const tools = reader.contract.contract.tools.map((tool) =>
+		declarations.find(
+			(declaration) => declaration.name === (tool as { name?: unknown }).name,
+		),
+	);
+	if (tools.some((tool) => tool === undefined)) return undefined;
+	return {
+		declared: {
+			contract: {
+				ref: reader.contract.contract.ref,
+				revision: reader.contract.contract.revision,
+			},
+			tools: structuredClone(tools as NonNullable<(typeof tools)[number]>[]),
+		},
+		resolveTarget: (reference, signal) =>
+			reader.resolveTarget(reference, signal),
+		resolveInput: (reference, signal) => reader.resolveInput(reference, signal),
+	};
+}
 
 export interface ConnectionInstallReceiverOptionsV1 {
 	readonly environment: NodeJS.ProcessEnv;
@@ -240,6 +302,10 @@ const oauthRoot = [
 	"standard-mcp-oauth",
 ] as const;
 const firstBeginRecord = /^install-first-begin-([a-f0-9]{64})\.json$/;
+/** §13.5.6 permit reference and commit digest of a published dynamic install. */
+function dynamicPublicationRecordName(authorizationId: string) {
+	return `install-dynamic-publication-${createHash("sha256").update(authorizationId).digest("hex")}.json`;
+}
 /** Durable fact that Connection confirmed the revoke of an installation's original key. */
 const revokedRecord = /^install-revoked-([a-f0-9]{64})\.json$/;
 const maxSlots = 8;
@@ -433,9 +499,13 @@ async function assembleConnectionInstallReceiver(
 	const dataDirectory = options.dataDirectory;
 	const now = options.now ?? Date.now;
 	const machineFetch = options.fetch;
+	// §13.5.6: the approved contract comes only from the deployment input at
+	// assembly; present but invalid keeps the whole receiver unavailable.
 	const dynamicPublication = options.dynamicPublication
 		? structuredClone(options.dynamicPublication)
-		: undefined;
+		: parseRuntimeOAuthDynamicPublicationContractV1(
+				environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_PUBLICATION_CONTRACT,
+			);
 	if (
 		!agentInput ||
 		!workerInput ||
@@ -2009,6 +2079,9 @@ async function assembleConnectionInstallReceiver(
 		// sidecar and original record committed) yields the evidence, never a
 		// pending one; the Platform permit then binds its commit digest.
 		const committed = built;
+		const commitDigest = runtimeOAuthPublicationCommitDigestV1(
+			committed.commit,
+		);
 		try {
 			await assertProtectedStandardMcpExportCommitted(
 				join(
@@ -2024,6 +2097,21 @@ async function assembleConnectionInstallReceiver(
 				true,
 			);
 			assertOriginal(template);
+			// §13.5.6 许可引用 (ADR-0048): the dynamic reader reads the permit by this
+			// exchange's command reference and the commit digest, which only this
+			// Host holds; without the record no evidence is returned.
+			await publishMetadata(
+				records,
+				dynamicPublicationRecordName(template.authorizationId),
+				{
+					schemaVersion: 1,
+					authorizationId: template.authorizationId,
+					permitId: body.commandId,
+					delivery: committed.delivery,
+					commitDigest,
+				},
+				{ immutable: true, guard: () => assertOriginal(template) },
+			);
 		} catch {
 			return reply("exchanged");
 		}
@@ -2033,7 +2121,7 @@ async function assembleConnectionInstallReceiver(
 			outcome: "exchanged",
 			commandId: body.commandId,
 			publication: {
-				commitDigest: runtimeOAuthPublicationCommitDigestV1(committed.commit),
+				commitDigest,
 				expiresAt: committed.metadata.expiresAt,
 			},
 		});
@@ -2118,6 +2206,214 @@ async function assembleConnectionInstallReceiver(
 		if (result.expiresAt <= now()) denied();
 		// Read-only: the stored result is returned; no state, PKCE or link is generated.
 		return result;
+	}
+
+	/**
+	 * §13.5.6 动态安装的 reader 与可见起点 (ADR-0048). For the current Execution's
+	 * original binding it finds this session's fixed installation, reads the
+	 * Platform permit by the exchange command reference, checks the local
+	 * publication is committed with the same commit digest, reads the material
+	 * and reads the permit again. A missing installation or a denied permit is
+	 * `authorization_required`; an unavailable or unknown readback is
+	 * `unavailable`. Both happen before any Connection request and are never
+	 * retried.
+	 */
+	/**
+	 * Finds this session's fixed installation for the current Execution's
+	 * original binding. Missing is `authorization_required`; a binding or
+	 * template that cannot be read is `unavailable`.
+	 */
+	async function locateDynamic(
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	) {
+		let binding: Awaited<
+			ReturnType<InstallStore["resolveOriginalExecutionBinding"]>
+		>;
+		let hostRef: string;
+		try {
+			current();
+			signal.throwIfAborted();
+			binding = await store.resolveOriginalExecutionBinding(reference, now);
+			hostRef = await store.resolveOriginalExecutionHostSessionRef(
+				reference,
+				now,
+			);
+			current();
+		} catch {
+			throw new CodexDynamicConnectionRefusalV1("unavailable");
+		}
+		const entry = [...fixed.values()].find(
+			(candidate) =>
+				isDeepStrictEqual(candidate.template.principal, binding.principal) &&
+				candidate.template.reference.agentId === reference.agentId &&
+				candidate.template.reference.conversationId ===
+					reference.conversationId &&
+				candidate.template.reference.sessionGeneration ===
+					reference.sessionGeneration,
+		);
+		if (!entry)
+			throw new CodexDynamicConnectionRefusalV1("authorization_required");
+		let consumer: ApprovedConnectionConsumerTargetV1;
+		try {
+			consumer = verifyConnectionRegistrationTemplateV1(
+				entry.template,
+				access,
+				clientName,
+			).target;
+		} catch {
+			throw new CodexDynamicConnectionRefusalV1("unavailable");
+		}
+		return { binding, hostRef, entry, consumer };
+	}
+
+	/** The verified consumer target of the installation `resolveDynamicInput` reads. */
+	async function resolveDynamicTarget(
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	): Promise<ApprovedConnectionConsumerTargetV1> {
+		return structuredClone((await locateDynamic(reference, signal)).consumer);
+	}
+
+	async function resolveDynamicInput(
+		reference: RuntimeOriginalExecutionRef,
+		signal: AbortSignal,
+	): Promise<unknown> {
+		const required = () => {
+			throw new CodexDynamicConnectionRefusalV1("authorization_required");
+		};
+		const refuse = () => {
+			throw new CodexDynamicConnectionRefusalV1("unavailable");
+		};
+		const { binding, hostRef, entry, consumer } = await locateDynamic(
+			reference,
+			signal,
+		);
+		const template = entry.template;
+		let recorded: Record<string, unknown> | undefined;
+		let target: ReturnType<typeof ConnectionHostInstallTargetV1Schema.parse>;
+		try {
+			recorded = await readRecord(
+				dynamicPublicationRecordName(template.authorizationId),
+			);
+			target = ConnectionHostInstallTargetV1Schema.parse({
+				...localTarget,
+				hostRef,
+			});
+		} catch {
+			return refuse();
+		}
+		const delivery = recorded?.delivery as
+			| { ref?: unknown; revision?: unknown }
+			| undefined;
+		if (
+			!recorded ||
+			Object.keys(recorded).sort().join(",") !==
+				"authorizationId,commitDigest,delivery,permitId,schemaVersion" ||
+			recorded.schemaVersion !== 1 ||
+			recorded.authorizationId !== template.authorizationId ||
+			typeof recorded.permitId !== "string" ||
+			!isDigest(recorded.commitDigest) ||
+			!isRecord(delivery) ||
+			typeof delivery.ref !== "string" ||
+			typeof delivery.revision !== "string"
+		)
+			return required();
+		if (!isDeepStrictEqual(template.target, target)) return required();
+		const permitReadback: ConnectionInstallReadbackInputV1 = {
+			purpose: "permit",
+			target,
+			principal: template.principal,
+			reference,
+			authorizationId: template.authorizationId,
+			confirmationRevision: template.confirmationRevision,
+			templateDigest: connectionRegistrationTemplateDigestV1(template),
+			supply: {
+				ref: template.supply.ref,
+				revision: template.supply.revision,
+				attemptId: entry.supplyAttemptId,
+			},
+			permit: {
+				id: recorded.permitId,
+				commitDigest: recorded.commitDigest as string,
+			},
+		};
+		const permitted = async () => {
+			const outcome = await readbackOutcome(permitReadback);
+			if (outcome === "denied") required();
+			if (outcome !== "allowed") refuse();
+		};
+		await permitted();
+		const source = join(
+			dataDirectory,
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-export",
+			standardMcpExportKey(delivery.ref, delivery.revision),
+		);
+		let input: unknown;
+		try {
+			signal.throwIfAborted();
+			await assertProtectedStandardMcpExportCommitted(source, true);
+			const sidecar: unknown = JSON.parse(
+				await readProtectedStandardMcpBytes(
+					source,
+					".oauth-publication.json",
+					8192,
+					current,
+				),
+			);
+			const expected = isRecord(sidecar) ? sidecar.expected : undefined;
+			if (
+				!isRecord(expected) ||
+				runtimeOAuthPublicationCommitDigestV1(
+					expected as Parameters<
+						typeof runtimeOAuthPublicationCommitDigestV1
+					>[0],
+				) !== recorded.commitDigest
+			)
+				unavailable();
+			const installationKey = standardMcpInstallationKey(
+				binding.principal,
+				reference.agentId,
+				consumer,
+			);
+			if (expected.installationKey !== installationKey) unavailable();
+			const metadataText = await readProtectedStandardMcpBytes(
+				join(source, "bindings"),
+				`${installationKey}.json`,
+				65_536,
+				current,
+			);
+			const metadata = validateStandardMcpInstallationMetadata(
+				JSON.parse(metadataText),
+				consumer,
+			);
+			if (
+				!isDeepStrictEqual(metadata.principal, binding.principal) ||
+				metadata.agentId !== reference.agentId ||
+				!isDeepStrictEqual(metadata.contract, dynamicPublication?.contract)
+			)
+				unavailable();
+			const token = await readProtectedStandardMcpBytes(
+				join(source, "materials"),
+				`${standardMcpMaterialKey(installationKey, metadata.credentialRef, metadata.credentialRevision)}.token`,
+				4096,
+				current,
+			);
+			await assertProtectedStandardMcpExportCommitted(source, true);
+			const { agentId: _agentId, ...publicInput } = metadata;
+			input = validateStandardMcpInput(
+				{ ...publicInput, scope: binding.scope, token },
+				reference,
+				consumer,
+			);
+		} catch {
+			// A sealed, erased, tampered or expired local publication backs nothing.
+			return required();
+		}
+		await permitted();
+		return input;
 	}
 
 	type RevokedFacts = {
@@ -2562,6 +2858,21 @@ async function assembleConnectionInstallReceiver(
 		cert,
 		port,
 		runtimeOrigin: runtime.href,
+		...(dynamicPublication
+			? {
+					dynamicReader: {
+						contract: structuredClone(dynamicPublication),
+						resolveTarget: (
+							reference: RuntimeOriginalExecutionRef,
+							signal: AbortSignal,
+						) => resolveDynamicTarget(reference, signal),
+						resolveInput: (
+							reference: RuntimeOriginalExecutionRef,
+							signal: AbortSignal,
+						) => resolveDynamicInput(reference, signal),
+					},
+				}
+			: {}),
 		close,
 	};
 }

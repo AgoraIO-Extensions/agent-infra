@@ -72,6 +72,7 @@ import {
 } from "./connection-consumer-profile.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
+	codexDynamicConnectionClientForReaderV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
 import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
@@ -178,6 +179,15 @@ export type RuntimeHostAssemblyOptionsV1 = Pick<
 		readonly profileDigest: string;
 		readonly hostKeyId: string;
 	};
+	/**
+	 * §13.5.6 explicit composition input (Codex only): prepares the install
+	 * receiver on the opened Host store; its dynamic reader backs the Codex
+	 * Driver's declared Connection tools. No production caller supplies this
+	 * while manual installation stays dormant (EP-1123).
+	 */
+	prepareConnectionInstall?: (
+		store: FileRuntimeStore,
+	) => Promise<ConnectionInstallReceiverAssemblyV1 | undefined>;
 };
 
 export interface RuntimeNativeMetadataDeploymentModuleV1 {
@@ -567,6 +577,7 @@ export async function assembleRuntimeHost(
 	let openedStore: FileRuntimeStore | undefined;
 	let modelTelemetry: ReturnType<typeof startObservability> | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
+	let connectionInstall: ConnectionInstallReceiverAssemblyV1 | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
 	let detachSessionExecutorFailure: (() => void) | undefined;
@@ -588,6 +599,8 @@ export async function assembleRuntimeHost(
 				// Cancel native transport before Host waits for active remote work.
 				if (sessionExecutor) await closeDriver?.();
 				if (oauth?.status === "available") await oauth.client.close();
+				if (connectionInstall?.status === "available")
+					await connectionInstall.close();
 			} finally {
 				try {
 					await assembledHost?.close();
@@ -712,6 +725,17 @@ export async function assembleRuntimeHost(
 						}),
 					})
 				: undefined;
+		connectionInstall =
+			binding === "codex"
+				? await options.prepareConnectionInstall?.(store)
+				: undefined;
+		const dynamicReader =
+			connectionInstall?.status === "available"
+				? connectionInstall.dynamicReader
+				: undefined;
+		const dynamicConnectionClient = dynamicReader
+			? codexDynamicConnectionClientForReaderV1(dynamicReader)
+			: undefined;
 		await sessionExecutor?.assertCurrent();
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
@@ -767,6 +791,7 @@ export async function assembleRuntimeHost(
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
 					...(standardConnectionClient ? { standardConnectionClient } : {}),
+					...(dynamicConnectionClient ? { dynamicConnectionClient } : {}),
 					...(connectionProfile && installationRevision === undefined
 						? {
 								connectionClient: createIndependentConnectionClientInput({
@@ -1211,6 +1236,7 @@ export async function assembleRuntimeHost(
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
 			...(oauth ? { oauth } : {}),
+			...(connectionInstall ? { connectionInstall } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
 			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			...(sessionInstanceRead ? { sessionInstanceRead } : {}),
