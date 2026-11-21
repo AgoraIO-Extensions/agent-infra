@@ -14,6 +14,7 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1PodSpec,
 	V1ReplicaSet,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
@@ -2887,6 +2888,85 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 		for (const entry of podTemplates(fake).filter((x) => x.kind !== "Job"))
 			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("arm64");
 	});
+
+	it.each([
+		[
+			"an extra nodeSelector",
+			(spec: V1PodSpec) => {
+				spec.nodeSelector = { ...spec.nodeSelector, pool: "owner" };
+			},
+		],
+		[
+			"a missing provider toleration",
+			(spec: V1PodSpec) => {
+				spec.tolerations = spec.tolerations?.filter(
+					(entry) => entry.key !== "virtual-kubelet.io/provider",
+				);
+			},
+		],
+	])(
+		"repairs %s on members under the original fence by restoring the recorded architecture (round 3)",
+		async (_name, mutate) => {
+			const fake = fakeClient();
+			const value = migrationDesired();
+			const amd64 = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: placedPolicy("reject"),
+			});
+			const identity = await applyReady(amd64, fake, value);
+			const members = () =>
+				[...fake.resources.values()].filter((resource) =>
+					["Deployment", "StatefulSet"].includes(resource.kind ?? ""),
+				) as (V1Deployment | V1StatefulSet)[];
+			for (const member of members()) {
+				if (!member.spec?.template.spec) throw new Error("missing template");
+				mutate(member.spec.template.spec);
+			}
+			const arm64 = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: {
+					...placedPolicy("reject"),
+					agentWorkloadPlacement: {
+						architecture: "arm64",
+						legacyUnplaced: "reject",
+					},
+				} as MultiServiceRuntimePolicyV1,
+			});
+			expect(await arm64.observe(value, identity)).toBe("drifted");
+			const repair = validateAgentWorkloadDesiredV1({
+				...value,
+				workloadRevision: 2,
+			});
+			if (!isMultiService(repair)) throw new Error("invalid fixture");
+			await arm64.apply(repair);
+			expect(members()).toHaveLength(2);
+			for (const member of members()) {
+				expect(member.spec?.template.spec?.nodeSelector).toEqual(
+					eciPlacement.nodeSelector,
+				);
+				expect(member.spec?.template.spec?.tolerations).toEqual(
+					eciPlacement.tolerations,
+				);
+				expect(
+					member.metadata?.annotations?.[
+						"agent-infra.agora.io/agent-workload-placement"
+					],
+				).toBe("amd64");
+			}
+			const restarted = validateAgentWorkloadDesiredV1({
+				...value,
+				requestId: "restart-arm64",
+				workloadRevision: 3,
+				fence: 2,
+			});
+			if (!isMultiService(restarted)) throw new Error("invalid fixture");
+			await arm64.apply(restarted);
+			for (const member of members())
+				expect(
+					member.spec?.template.spec?.nodeSelector?.["kubernetes.io/arch"],
+				).toBe("arm64");
+		},
+	);
 
 	it("treats member ECI fields without the Worker record as drift", async () => {
 		const fake = fakeClient();

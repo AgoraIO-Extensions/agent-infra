@@ -1,4 +1,5 @@
 import type { V1PodSpec, V1Toleration } from "@kubernetes/client-node";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { hasSameStructure } from "./kubernetes-runtime-comparison.js";
 
 /**
@@ -260,8 +261,11 @@ export function isEciProviderPodAnnotationV1(
  * new fence) adopts the deployment value. `sameCommand` is true when the apply
  * reuses the fence under which the controller was last written (drift repair,
  * which only advances the reconciliation revision; recovery; re-applying the
- * same intent): then an accepted recorded placement is kept, so changing the
- * deployment value never rebuilds a Host by itself.
+ * same intent): then the controller's adoption record decides, never its
+ * possibly drifted template. A recorded architecture is restored with its
+ * canonical fields; a pre-placement object stays unplaced while retained.
+ * Anything else under the same command cannot be confirmed and fails closed
+ * instead of adopting the deployment value (Spec §10.1).
  */
 export function effectiveAgentWorkloadPlacementV1(
 	placement: AgentWorkloadPlacementV1 | undefined,
@@ -280,19 +284,23 @@ export function effectiveAgentWorkloadPlacementV1(
 	if (!current || !sameCommand) return placement;
 	const record =
 		current.metadata?.annotations?.[agentWorkloadPlacementAnnotationV1];
-	if (
-		!acceptsAdoptedAgentWorkloadPlacementV1(
-			placement,
-			record,
-			current.spec?.template?.spec,
-			false,
+	if (record === "amd64" || record === "arm64")
+		return {
+			architecture: record,
+			legacyUnplaced: placement?.legacyUnplaced ?? "reject",
+		};
+	if (record === undefined) {
+		// Without a deployment placement nothing is adopted: unchanged behavior.
+		if (placement === undefined) return undefined;
+		if (
+			acceptsAdoptedAgentWorkloadPlacementV1(
+				placement,
+				undefined,
+				current.spec?.template?.spec,
+				false,
+			)
 		)
-	)
-		return placement;
-	return record === "amd64" || record === "arm64"
-		? {
-				architecture: record,
-				legacyUnplaced: placement?.legacyUnplaced ?? "reject",
-			}
-		: undefined;
+			return undefined;
+	}
+	throw new WorkloadKubernetesError("policy");
 }

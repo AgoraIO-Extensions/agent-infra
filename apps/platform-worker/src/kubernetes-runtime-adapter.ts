@@ -1653,6 +1653,27 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}
 			if (current && hasDriftedImmutableStatefulSetSpec(value, current.spec))
 				throw new WorkloadKubernetesError("conflict");
+			// Spec §10.1: only a formal management command (new fence) adopts a changed
+			// deployment placement; drift repair advances only the reconciliation revision.
+			// The fence of the last full write is read from its desired record, which the
+			// lifecycle scale-down step preserves (it rewrites only the fence annotation).
+			// Decided before any write, so an unconfirmable record fails closed in place.
+			let writtenFence: unknown;
+			try {
+				writtenFence = JSON.parse(
+					current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
+				)?.fence;
+			} catch {
+				writtenFence = undefined;
+			}
+			const placement =
+				value.replicas === 0
+					? undefined
+					: effectiveAgentWorkloadPlacementV1(
+							policy.agentWorkloadPlacement,
+							current,
+							writtenFence === value.fence,
+						);
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
 				throw new WorkloadKubernetesError("conflict");
 			const existingCache = existingResources.at(-1);
@@ -1902,23 +1923,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				)
 					throw new WorkloadKubernetesError("conflict");
 			}
-			// Spec §10.1: only a formal management command (new fence) adopts a changed
-			// deployment placement; drift repair advances only the reconciliation revision.
-			// The fence of the last full write is read from its desired record, which the
-			// lifecycle scale-down step preserves (it rewrites only the fence annotation).
-			let writtenFence: unknown;
-			try {
-				writtenFence = JSON.parse(
-					current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
-				)?.fence;
-			} catch {
-				writtenFence = undefined;
-			}
-			const placement = effectiveAgentWorkloadPlacementV1(
-				policy.agentWorkloadPlacement,
-				current,
-				writtenFence === value.fence,
-			);
 			const workload: V1StatefulSet = {
 				apiVersion: "apps/v1",
 				kind: "StatefulSet",

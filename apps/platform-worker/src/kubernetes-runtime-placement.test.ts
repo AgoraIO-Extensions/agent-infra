@@ -1,4 +1,4 @@
-import type { V1Pod, V1StatefulSet } from "@kubernetes/client-node";
+import type { V1Pod, V1PodSpec, V1StatefulSet } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
 	workloadDesiredFixture,
@@ -523,4 +523,96 @@ describe("drift repair is not a lifecycle adoption (#4351 round 2 MUST-3)", () =
 		if (!next || next === "pending") throw new Error("missing identity");
 		expect(arch(f, name)).toEqual(["arm64", "arm64"]);
 	});
+
+	it.each([
+		[
+			"an extra nodeSelector",
+			(spec: V1PodSpec) => {
+				spec.nodeSelector = { ...spec.nodeSelector, pool: "owner" };
+			},
+		],
+		[
+			"a missing provider toleration",
+			(spec: V1PodSpec) => {
+				spec.tolerations = spec.tolerations?.filter(
+					(entry) => entry.key !== providerToleration.key,
+				);
+			},
+		],
+	])(
+		"repairs %s under the original fence by restoring the recorded architecture (round 3)",
+		async (_name, mutate) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const identity = await applyWorkload(
+				adapterFor(f, placedAs("amd64")),
+				desired,
+			);
+			const name = desired.service.name;
+			const changed = adapterFor(f, placedAs("arm64"));
+			const key = `StatefulSet/${name}`;
+			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+			if (!workload.spec?.template.spec) throw new Error("missing template");
+			mutate(workload.spec.template.spec);
+			f.resources.set(key, workload);
+			expect(await changed.observe(desired, identity)).toBe("drifted");
+			const repair = { ...desired, workloadRevision: 2 };
+			let repaired = await changed.apply(repair);
+			if (repaired === "pending") repaired = await changed.apply(repair);
+			if (!repaired || repaired === "pending")
+				throw new Error("missing identity");
+			const template = (f.resources.get(key) as V1StatefulSet).spec?.template
+				.spec;
+			expect(template?.nodeSelector).toEqual(eciSelector);
+			expect(template?.tolerations).toEqual([providerToleration]);
+			expect(arch(f, name)).toEqual(["amd64", "amd64"]);
+			scheduleOnEci(f, name);
+			expect(await changed.observe(repair, repaired)).toBe("healthy");
+			const restarted = { ...repair, workloadRevision: 3, fence: 2 };
+			let next = await changed.apply(restarted);
+			if (next === "pending") next = await changed.apply(restarted);
+			if (!next || next === "pending") throw new Error("missing identity");
+			expect(arch(f, name)).toEqual(["arm64", "arm64"]);
+		},
+	);
+
+	it.each(["missing", "invalid"] as const)(
+		"fails closed under the original fence when the adoption record is %s",
+		async (mode) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			await applyWorkload(adapterFor(f, placedAs("amd64")), desired);
+			const name = desired.service.name;
+			const key = `StatefulSet/${name}`;
+			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+			const annotations = workload.metadata?.annotations ?? {};
+			if (mode === "missing")
+				delete annotations["agent-infra.agora.io/agent-workload-placement"];
+			else
+				annotations["agent-infra.agora.io/agent-workload-placement"] = "s390x";
+			workload.spec?.template.spec?.tolerations?.splice(0);
+			f.resources.set(key, workload);
+			const writes = f.writes.length;
+			const repair = { ...desired, workloadRevision: 2 };
+			const changed = adapterFor(f, placedAs("arm64"));
+			const outcome = async () => {
+				for (let attempt = 0; attempt < 3; attempt++)
+					if ((await changed.apply(repair)) !== "pending") return;
+			};
+			await expect(outcome()).rejects.toMatchObject({ code: "policy" });
+			expect(
+				f.writes
+					.slice(writes)
+					.filter(
+						(write) =>
+							write.kind === "StatefulSet" &&
+							((write as V1StatefulSet).spec?.replicas ?? 0) > 0,
+					),
+			).toEqual([]);
+			expect(
+				(f.resources.get(key) as V1StatefulSet).spec?.template.spec
+					?.nodeSelector,
+			).toEqual(eciSelector);
+		},
+	);
 });
