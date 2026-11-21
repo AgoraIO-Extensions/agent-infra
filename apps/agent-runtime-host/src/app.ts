@@ -59,6 +59,7 @@ import {
 	assertRuntimeConnectionConsumerHeader,
 	type RuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
+import { registerRuntimeSafetyEvidenceRoutesV1 } from "./safety-evidence.js";
 import { readSessionInstanceBodyV1 } from "./session-instance.js";
 
 export const runtimeHostService = "agent-runtime-host";
@@ -115,6 +116,14 @@ interface RuntimeHostAppOptions {
 	 */
 	logDiagnostic?: (entry: Record<string, string>) => void;
 	serviceToken: string;
+	/**
+	 * Safety evidence log of an enabled acceptance window (Spec §18.5.1); absent by default,
+	 * in which case no evidence route exists.
+	 */
+	safetyEvidence?: Pick<
+		import("@agent-infra/agent-runtime").RuntimeSafetyEvidenceLogV1,
+		"read" | "acknowledge"
+	>;
 	/** Deployment-owned native metadata proof verification and Driver read. */
 	nativeMetadataRead?: (
 		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
@@ -208,6 +217,9 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		}
 		await next();
 	});
+
+	if (options.safetyEvidence)
+		registerRuntimeSafetyEvidenceRoutesV1(app, options.safetyEvidence);
 
 	if (options.sessionInstanceRead) {
 		const read = options.sessionInstanceRead;
