@@ -1231,16 +1231,21 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							entry.userId !== userId,
 					);
 				// §13.5.1 item 4: a second user's verified readback on a held
-				// `principalId` suspends the holder's new permits and restarts its
-				// verification window, under this confirm's original claim and fence;
-				// the holder resumes only on a consistent verification record.
+				// `principalId` suspends the holder's new permits under this confirm's
+				// original claim and fence; the holder resumes only on a consistent
+				// verification record. A holder still "主体待核对" keeps the deadline
+				// counted from its first pin (and its overdue mark); only a holder
+				// already verified consistent re-enters verification with a new window.
+				// The CASE arms read the row before this update.
 				if (holder) {
 					const suspended = await tx.execute(sql`
 						update platform.connection_principal_pins
 						set suspended_at=coalesce(suspended_at, clock_timestamp()), verification_state='pending',
 							verified_at=null, verification_actor_id=null, verification_reference=null,
-							verification_deadline=${connectionPrincipalPinDeadlineSql(this.#policy)},
-							overdue_at=null, rule_revision=rule_revision+1
+							verification_deadline=case when verification_state='pending' then verification_deadline
+								else ${connectionPrincipalPinDeadlineSql(this.#policy)} end,
+							overdue_at=case when verification_state='pending' then overdue_at else null end,
+							rule_revision=rule_revision+1
 						where id=${holder.id as string} and released_at is null and release_requested_at is null
 							and ${holds}
 						returning id

@@ -4217,6 +4217,73 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		expect(await pinOf("bob")).toMatchObject({ overdue: false });
 	});
 
+	// #4315 MUST 1: a conflict suspends a "主体待核对" holder without moving its
+	// deadline; the window is always counted from the first pin.
+	it("keeps a pending holder's first-pin deadline when a conflict suspends it (item 4)", async () => {
+		const alice = await pinned();
+		await finish(alice);
+		const pin = await pinOf("alice");
+		// First pinned 23 hours ago, so 1 hour of its window is left.
+		await client`update platform.connection_principal_pins
+			set pinned_at=pinned_at-interval '23 hours', verification_deadline=verification_deadline-interval '23 hours'
+			where id=${pin?.id}`;
+		const [before] =
+			await client`select verification_deadline from platform.connection_principal_pins where id=${pin?.id}`;
+		const bobFlow = await confirmed("bob", "bob", "worker-b");
+		const bobPhase = await bindingReadback(bobFlow);
+		expect(
+			await manual.commitConfirmPin({
+				...bobPhase,
+				candidate: await candidateFor(bobFlow, bobPhase, "principal-a"),
+			}),
+		).toEqual({ outcome: "rejected" });
+		const [after] =
+			await client`select verification_deadline from platform.connection_principal_pins where id=${pin?.id}`;
+		expect(after?.verification_deadline).toEqual(before?.verification_deadline);
+		expect(await pinOf("alice")).toMatchObject({
+			verification_state: "pending",
+			suspended: true,
+			window_seconds: dynamic.principalMapping.verificationWindowHours * 3600,
+		});
+		// 25 hours after the first pin the window has passed: closed and revoked.
+		await client`update platform.connection_principal_pins
+			set pinned_at=pinned_at-interval '2 hours', verification_deadline=verification_deadline-interval '2 hours'
+			where id=${pin?.id}`;
+		await admin.sweep();
+		expect(await installation(alice)).toMatchObject({
+			status: "revoked",
+			revoke_state: "pending",
+		});
+		expect(await pinOf("alice")).toMatchObject({ overdue: true });
+	});
+
+	// #4315 MUST 2: overdue pins already handled leave the candidates, so more
+	// than one batch of overdue pins never starves a later user.
+	it("closes an overdue user's installations behind more than 32 earlier overdue pins (item 4)", async () => {
+		const alice = await pinned();
+		await finish(alice);
+		const pin = await pinOf("alice");
+		await client`update platform.connection_principal_pins
+			set verification_deadline=clock_timestamp()-interval '1 second' where id=${pin?.id}`;
+		// 32 overdue pins of other users whose ids sort before alice's.
+		for (let index = 0; index < 32; index++) {
+			const n = String(index).padStart(2, "0");
+			await client`insert into platform.connection_principal_pins
+				(id, issuer, principal_id, user_id, policy_ref, policy_revision, verification_deadline)
+				values (${`00000000-0000-0000-0000-0000000000${n}`}, ${system.issuer}, ${`principal-overdue-${n}`},
+					${`user-overdue-${n}`}, 'consistency-exception-v1', 'r1', clock_timestamp()-interval '1 second')`;
+		}
+		for (let pass = 0; pass < 3; pass++) await admin.sweep();
+		expect(await installation(alice)).toMatchObject({
+			status: "revoked",
+			revoke_state: "pending",
+		});
+		expect(await pinOf("alice")).toMatchObject({ overdue: true });
+		const [marked] =
+			await client`select count(*)::int as n from platform.connection_principal_pins where overdue_at is not null`;
+		expect(marked?.n).toBe(33);
+	});
+
 	it("closes and revokes every exception installation at notAfter in the drain sweep (item 8)", async () => {
 		const alice = await pinned();
 		const bob = await pinned("bob", "bob", "worker-b", "principal-b");

@@ -42,6 +42,22 @@ export function connectionPrincipalPinDeadlineSql(
 	return sql`clock_timestamp() + make_interval(hours => ${policy.dynamic.principalMapping.verificationWindowHours}::int)`;
 }
 
+/** The installation can still hold a Connection client and is not yet closing. */
+const closable = sql`a.status='confirmed' and m.revoke_state='not_required'
+	and m.registration_state='registered' and m.descriptor_digest is not null`;
+
+/** The pin's user still has an installation this pass can close. */
+const userHasClosable = sql`exists (select 1 from platform.connection_manual_installations m
+	join platform.connection_installation_authorizations a on a.id=m.authorization_id
+	where m.user_id=connection_principal_pins.user_id and ${closable})`;
+
+/** The pin's user still has an installation that is open or has a revoke unsettled. */
+const userHasOutstanding = sql`exists (select 1 from platform.connection_manual_installations m
+	join platform.connection_installation_authorizations a on a.id=m.authorization_id
+	where m.user_id=connection_principal_pins.user_id
+		and (m.revoke_state in ('pending', 'sending', 'unknown')
+			or (a.status='confirmed' and m.registration_state='registered')))`;
+
 /**
  * Closes confirmed exception installations and queues their revoke with the
  * original key (§13.5.7 per-installation revoke), as the refused-candidate
@@ -61,8 +77,7 @@ export async function closeConnectionExceptionInstallationsV1(
 	const closed = await tx.execute(sql`
 		select a.id from platform.connection_installation_authorizations a
 		join platform.connection_manual_installations m on m.authorization_id=a.id
-		where a.status='confirmed' and m.revoke_state='not_required'
-			and m.registration_state='registered' and m.descriptor_digest is not null
+		where ${closable}
 			and (${input.userId ?? null}::text is null or m.user_id=${input.userId ?? null})
 		order by a.id
 		limit ${input.limit ?? 64}
@@ -134,10 +149,13 @@ export async function sweepConnectionPrincipalPinRulesV1(
 		await closeConnectionExceptionInstallationsV1(tx, {
 			reason: "exception-expired",
 		});
+	// An overdue pin already marked and with nothing left to close drops out of
+	// the candidates, so a batch never keeps re-selecting the same pins.
 	const overdue = await tx.execute(sql`
 		select id, user_id, overdue_at from platform.connection_principal_pins
 		where released_at is null and verification_state='pending'
 			and verification_deadline <= clock_timestamp()
+			and (overdue_at is null or ${userHasClosable})
 		order by id limit 32
 		for update skip locked
 	`);
@@ -160,9 +178,12 @@ export async function sweepConnectionPrincipalPinRulesV1(
 			});
 		}
 	}
+	// Only releases this pass can advance: something left to close, or nothing
+	// outstanding. A pin waiting on an unsettled revoke does not hold a slot.
 	const releasing = await tx.execute(sql`
 		select id, user_id, release_reason from platform.connection_principal_pins
 		where released_at is null and release_requested_at is not null
+			and (${userHasClosable} or not ${userHasOutstanding})
 		order by id limit 32
 		for update skip locked
 	`);
@@ -173,13 +194,8 @@ export async function sweepConnectionPrincipalPinRulesV1(
 			reason: "principal-pin-release",
 		});
 		const [outstanding] = await tx.execute(sql`
-			select exists (
-				select 1 from platform.connection_manual_installations m
-				join platform.connection_installation_authorizations a on a.id=m.authorization_id
-				where m.user_id=${userId}
-					and (m.revoke_state in ('pending', 'sending', 'unknown')
-						or (a.status='confirmed' and m.registration_state='registered'))
-			) as open
+			select ${userHasOutstanding} as open
+			from platform.connection_principal_pins where id=${pin.id as string}
 		`);
 		if (outstanding?.open !== false) continue;
 		const released = await tx.execute(sql`
