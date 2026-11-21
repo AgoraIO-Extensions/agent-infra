@@ -1032,6 +1032,68 @@ it("keeps a declared Thread usable with fixed refusals after the Host loses the 
 });
 
 it.each([
+	["renames its tool", { revision: "r2", name: "rename_note" }],
+	["removes its tool", { revision: "r1", name: "list_notes" }],
+] as const)(
+	"keeps a declared Thread usable with fixed refusals after a contract revision %s",
+	async (_label, revised) => {
+		const env = await setupDynamic();
+		await completeTurn(env);
+		const current = env.options.dynamicConnectionClient;
+		if (!current) throw new Error("Missing dynamic client");
+		const native = new StandardToolNativeFixture();
+		native.turnId = "fixture-turn-b";
+		// The Thread still calls the alias it was declared with at thread start.
+		native.definitions = structuredClone(env.native.definitions);
+		const restored = await openCodexRuntimeDriverForTest(
+			{
+				...env.options,
+				dynamicConnectionClient: {
+					...current,
+					declared: {
+						contract: {
+							ref: declaredTools.contract.ref,
+							revision: revised.revision,
+						},
+						tools: [
+							{ ...declaredTools.tools[0], name: revised.name },
+						] as typeof declaredTools.tools,
+					},
+				},
+			},
+			async (opened) => {
+				native.options = opened;
+				return native;
+			},
+		);
+		closes.push(() => restored.close());
+		expect((await restored.execute(nextCommand)).result).toMatchObject({
+			outcome: "accepted",
+			status: "running",
+		});
+		expect(
+			native.sent.filter((frame) => frame.method === "thread/start"),
+		).toHaveLength(0);
+		native.call();
+		const reply = await settleCall(
+			{ ...env, driver: restored, native },
+			1,
+			nextCommand.executionId,
+		);
+		expect(JSON.parse(reply.contentItems[0]?.text ?? "")).toEqual(
+			codexDynamicConnectionRefusalsV1.unavailable,
+		);
+		expect(native.closed).toBe(false);
+		expect(env.reader).toMatchObject({ targets: 0, inputs: 0 });
+		expect(toolCalls(env)).toBe(0);
+		expect(env.fixture.trace).toHaveLength(0);
+		expect(await restored.getStatus(env.ref, nextCommand.executionId)).toBe(
+			"running",
+		);
+	},
+);
+
+it.each([
 	["with a standard client", { standard: true }],
 	["with an empty declaration", { declared: { ...declaredTools, tools: [] } }],
 	[
