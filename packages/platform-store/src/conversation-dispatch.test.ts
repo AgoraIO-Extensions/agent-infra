@@ -12831,6 +12831,87 @@ describe("terminal original Turn control authority (#4266)", () => {
 		}
 	});
 
+	it("Files4266archive completes only after the real terminal event commits and its cursor is ACKed", async () => {
+		const work = await terminalWork();
+		const store = open();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const acknowledged: string[] = [];
+		const host = isolationHost(work, {
+			async *events() {
+				yield {
+					schemaVersion: 1,
+					type: "completed",
+					executionId: work.executionId,
+					adapterEventKey: "real-terminal",
+					cursor: "terminal-cursor",
+					occurredAt: "2026-11-20T23:00:00.000Z",
+					payload: { status: "completed" },
+				};
+			},
+			async acknowledge(request) {
+				const [row] =
+					await client`select last_runtime_cursor from platform.conversation_executions where execution_id=${work.executionId}`;
+				expect(row?.last_runtime_cursor).toBe(request.confirmedCursor);
+				acknowledged.push(request.confirmedCursor);
+			},
+		});
+		try {
+			const useCase = createConversationDispatchUseCaseV1({
+				store,
+				runtimeHost: host,
+				events,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						return decision.outcome === "allowed"
+							? {
+									...decision,
+									authority: { ...decision.authority, controlOnly: true },
+								}
+							: decision;
+					},
+				},
+			});
+			expect(
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "archive-complete",
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			expect(acknowledged).toContain("terminal-cursor");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "completed",
+				execution_fence: 1,
+			});
+			const [record] =
+				await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+			expect(record?.details.archive).toMatchObject({
+				status: "complete",
+				cursor: "terminal-cursor",
+				acknowledgedCursor: "terminal-cursor",
+			});
+			expect(
+				await client`select event_type,event_payload,occurred_at from platform.conversation_events where execution_id=${work.executionId}`,
+			).toEqual([
+				{
+					event_type: "execution.status",
+					event_payload: {
+						type: "execution.status",
+						status: "completed",
+					},
+					occurred_at: new Date("2026-11-20T23:00:00.000Z"),
+				},
+			]);
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
+		}
+	});
+
 	it("Files4266archive rolls back failure disposition when required audit cannot commit", async () => {
 		const work = await terminalWork();
 		const store = open();
