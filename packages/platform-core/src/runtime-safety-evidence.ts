@@ -37,7 +37,7 @@ export interface RuntimeIsolationEvidenceAdmissibleV1 {
 		readonly purposeRef: string;
 		readonly authorization?: {
 			readonly recordId: string;
-			readonly revision: number;
+			readonly revision: string;
 		};
 		readonly sessionGeneration: number;
 		readonly executionDeliveryFence: number;
@@ -45,7 +45,7 @@ export interface RuntimeIsolationEvidenceAdmissibleV1 {
 			readonly ref: string;
 			readonly podUid: string;
 			readonly resourceFence: number;
-			readonly executorEpoch?: number;
+			readonly executorEpoch?: string;
 		};
 		readonly host: { readonly instanceRef: string; readonly startRef: string };
 		readonly producer: {
@@ -84,7 +84,7 @@ export interface RuntimeSafetyEvidenceScopeV1 {
 	readonly purposeRef: string;
 	readonly authorization?: {
 		readonly recordId: string;
-		readonly revision: number;
+		readonly revision: string;
 	};
 	readonly sessionGeneration: number;
 	readonly executionDeliveryFence: number;
@@ -96,7 +96,7 @@ export interface RuntimeSafetyEvidenceScopeV1 {
 		readonly ref: string;
 		readonly podUid: string;
 		readonly resourceFence: number;
-		readonly executorEpoch?: number;
+		readonly executorEpoch?: string;
 	};
 	readonly host: { readonly instanceRef: string; readonly startRef: string };
 	/** The original subject's current permission for this task has been revoked. */

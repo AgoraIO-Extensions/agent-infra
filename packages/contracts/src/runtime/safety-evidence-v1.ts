@@ -14,6 +14,8 @@ const reference = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const positive = z.number().int().positive().safe();
 const nonNegative = z.number().int().nonnegative().safe();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
+/** Platform-owned opaque values (authorization revision, executor epoch), not producer refs. */
+const platformOpaque = OpaqueIdV1Schema.max(256);
 const podUid = z
 	.string()
 	.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -43,8 +45,9 @@ export const RuntimeSafetyEvidenceBindingV1Schema = z.strictObject({
 	operation: z.strictObject({ ref: reference, attemptRef: reference }),
 	principalRef: reference,
 	purposeRef: reference,
+	/** The execution's authorization record and its opaque revision, as the Platform stores them. */
 	authorization: z
-		.strictObject({ recordId: OpaqueIdV1Schema, revision: positive })
+		.strictObject({ recordId: OpaqueIdV1Schema, revision: platformOpaque })
 		.optional(),
 	sessionGeneration: positive,
 	executionDeliveryFence: positive,
@@ -52,7 +55,8 @@ export const RuntimeSafetyEvidenceBindingV1Schema = z.strictObject({
 		ref: reference,
 		podUid,
 		resourceFence: positive,
-		executorEpoch: positive.optional(),
+		/** The independent executor's opaque epoch (§11.2.1); never a counter invented here. */
+		executorEpoch: platformOpaque.optional(),
 	}),
 	host: z.strictObject({
 		instanceRef: reference,

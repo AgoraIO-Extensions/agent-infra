@@ -162,7 +162,10 @@ describe("isolation evidence admission (Spec §18.5.1 共同绑定)", () => {
 		[
 			"an authorization revision the scope does not have",
 			(v: Record<string, any>) => {
-				v.binding.authorization = { recordId: "auth-1", revision: 1 };
+				v.binding.authorization = {
+					recordId: "auth-1",
+					revision: "identity-1",
+				};
 			},
 			"scope_mismatch",
 		],
@@ -197,7 +200,7 @@ describe("isolation evidence admission (Spec §18.5.1 共同绑定)", () => {
 		[
 			"an executor epoch the Sandbox never had",
 			(v: Record<string, any>) => {
-				v.binding.sandbox.executorEpoch = 1;
+				v.binding.sandbox.executorEpoch = "epoch-1";
 			},
 			"stale_binding",
 		],

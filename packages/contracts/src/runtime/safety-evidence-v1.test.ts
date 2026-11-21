@@ -103,6 +103,19 @@ describe("isolation observation record (Spec §18.5.2)", () => {
 		expect(denied.syntheticFile).toBeUndefined();
 	});
 
+	it("keeps the Platform's opaque authorization revision and executor epoch as strings", () => {
+		const parsed = RuntimeIsolationEvidenceV1Schema.parse({
+			...selfWrite,
+			binding: {
+				...binding(),
+				authorization: { recordId: "auth-1", revision: "identity-8" },
+				sandbox: { ...binding().sandbox, executorEpoch: "epoch-2" },
+			},
+		});
+		expect(parsed.binding.authorization?.revision).toBe("identity-8");
+		expect(parsed.binding.sandbox.executorEpoch).toBe("epoch-2");
+	});
+
 	it.each([
 		[
 			"a foreign result with length/hash",
@@ -184,6 +197,16 @@ describe("isolation observation record (Spec §18.5.2)", () => {
 				binding: {
 					...binding(),
 					sandbox: { ...binding().sandbox, executorEpoch: 0 },
+				},
+			},
+		],
+		[
+			"a numeric authorization revision",
+			{
+				...selfWrite,
+				binding: {
+					...binding(),
+					authorization: { recordId: "auth-1", revision: 1 },
 				},
 			},
 		],
