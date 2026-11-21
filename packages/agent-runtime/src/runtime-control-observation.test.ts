@@ -68,13 +68,19 @@ function fullStop(
 		mark,
 		atMark: true,
 	});
+	for (const stage of ["control_validated", "latch_commit_confirmed"] as const)
+		observer.emit({ stage, outcome: "observed", binding: value, mark });
 	for (const stage of [
-		"control_validated",
-		"latch_commit_confirmed",
 		"interrupt_write_accepted",
 		"native_interrupt_ack",
 	] as const)
-		observer.emit({ stage, outcome: "observed", binding: value, mark });
+		observer.emit({
+			stage,
+			outcome: "observed",
+			binding: value,
+			mark,
+			interrupt: { target: 0, targets: 1 },
+		});
 	observer.emit({
 		stage: "terminal_commit_confirmed",
 		outcome: "observed",
@@ -364,5 +370,104 @@ describe("Runtime control observation (#4358 I2)", () => {
 		expect(projectRuntimeControlEvidenceV1(full.lines).timelines).toEqual([
 			expect.objectContaining({ status: "complete" }),
 		]);
+	});
+
+	it("requires every interrupt target's write and ACK before a timeline is complete (#4360 per-target)", () => {
+		const timeline = (
+			targets: ReadonlyArray<
+				readonly [
+					"interrupt_write_accepted" | "native_interrupt_ack",
+					number,
+					"observed" | "not_required",
+				]
+			>,
+			count = 2,
+		) => {
+			const out = sink();
+			const observer = observerFor(out.output);
+			const mark = observer.mark();
+			observer.emit({
+				stage: "control_received",
+				outcome: "observed",
+				binding,
+				mark,
+				atMark: true,
+			});
+			for (const stage of [
+				"control_validated",
+				"latch_commit_confirmed",
+			] as const)
+				observer.emit({ stage, outcome: "observed", binding, mark });
+			const interrupt = (target: number) => ({ target, targets: count });
+			const [first, ...rest] = targets;
+			if (first)
+				observer.emit({
+					stage: first[0],
+					outcome: first[2],
+					binding,
+					mark,
+					interrupt: interrupt(first[1]),
+				});
+			observer.emit({
+				stage: "terminal_commit_confirmed",
+				outcome: "observed",
+				binding,
+				mark,
+				terminal: {
+					status: "cancelled",
+					ref: "codex-cursor-9",
+					occurredAt: "2026-11-21T21:00:00.050Z",
+				},
+			});
+			for (const [stage, target, outcome] of rest)
+				observer.emit({
+					stage,
+					outcome,
+					binding,
+					mark,
+					interrupt: interrupt(target),
+				});
+			return projectRuntimeControlEvidenceV1(out.lines).timelines[0]?.status;
+		};
+		// Target 1's ACK was cut off at the end of the collected log: no gap.
+		expect(
+			timeline([
+				["interrupt_write_accepted", 0, "observed"],
+				["native_interrupt_ack", 0, "observed"],
+				["interrupt_write_accepted", 1, "observed"],
+			]),
+		).toBe("unproven");
+		// Target 1 is missing entirely.
+		expect(
+			timeline([
+				["interrupt_write_accepted", 0, "observed"],
+				["native_interrupt_ack", 0, "observed"],
+			]),
+		).toBe("unproven");
+		// A target outside the declared count does not stand in for a missing one.
+		expect(
+			timeline([
+				["interrupt_write_accepted", 0, "observed"],
+				["native_interrupt_ack", 0, "observed"],
+				["interrupt_write_accepted", 2, "observed"],
+				["native_interrupt_ack", 2, "observed"],
+			]),
+		).toBe("unproven");
+		expect(
+			timeline([
+				["interrupt_write_accepted", 0, "observed"],
+				["native_interrupt_ack", 0, "observed"],
+				["interrupt_write_accepted", 1, "not_required"],
+				["native_interrupt_ack", 1, "not_required"],
+			]),
+		).toBe("complete");
+		expect(
+			timeline([
+				["interrupt_write_accepted", 0, "observed"],
+				["native_interrupt_ack", 0, "observed"],
+				["interrupt_write_accepted", 1, "observed"],
+				["native_interrupt_ack", 1, "observed"],
+			]),
+		).toBe("complete");
 	});
 });

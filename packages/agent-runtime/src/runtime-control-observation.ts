@@ -277,6 +277,41 @@ const requiredStages = [
 	"terminal_commit_confirmed",
 ] as const;
 
+/**
+ * #4360: every native Turn the control interrupted needs its own write and
+ * ACK record. All interrupt records must declare the same target count, and
+ * each target index in that range must carry both stages; one target's
+ * records never stand in for another's.
+ */
+function interruptTargetsComplete(
+	records: readonly RuntimeControlEvidenceV1[],
+) {
+	const interrupts = records.filter(
+		(record) =>
+			record.stage === "interrupt_write_accepted" ||
+			record.stage === "native_interrupt_ack",
+	);
+	const counts = new Set(interrupts.map((record) => record.interruptTargets));
+	const [count] = counts;
+	if (counts.size !== 1 || count === undefined || count < 1) return false;
+	for (let target = 0; target < count; target += 1)
+		for (const stage of [
+			"interrupt_write_accepted",
+			"native_interrupt_ack",
+		] as const)
+			if (
+				!interrupts.some(
+					(record) =>
+						record.stage === stage && record.interruptTarget === target,
+				)
+			)
+				return false;
+	return interrupts.every(
+		(record) =>
+			record.interruptTarget !== undefined && record.interruptTarget < count,
+	);
+}
+
 export interface RuntimeControlTimelineV1 {
 	readonly clockId: string;
 	readonly executionId: string;
@@ -343,7 +378,10 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 		const unknown = ordered.some((r) => r.outcome === "unknown");
 		// #4360 MUST-2: a replayed result read proves nothing about the original
 		// control; only the original latch and every later stage do.
-		const complete = has("latch_commit_confirmed") && requiredStages.every(has);
+		const complete =
+			has("latch_commit_confirmed") &&
+			requiredStages.every(has) &&
+			interruptTargetsComplete(ordered);
 		timelines.push({
 			clockId: first.clockId,
 			executionId: first.executionId as string,
