@@ -8154,6 +8154,148 @@ function hostnameConfiguration(kind: "single" | "multi" = "single") {
 	} as const;
 }
 
+// Synthetic metadata only: these identities belong to SRE, the platform, or another Agent.
+function protectSharedHostnameObjects(f: ReturnType<typeof fixture>) {
+	const sentinels = [
+		["ClusterIssuer", "letsencrypt-http01", undefined],
+		["ClusterIssuer", "letsencrypt-http01-staging", undefined],
+		["Secret", "sre-acme-account", "cert-manager"],
+		["Deployment", "sre-cert-manager", "cert-manager"],
+		["Certificate", "platform-tls", "workload-test"],
+		["Secret", "platform-tls", "workload-test"],
+		["Ingress", "platform-entry", "workload-test"],
+		...[
+			"StatefulSet",
+			"Deployment",
+			"Service",
+			"Certificate",
+			"Secret",
+			"PersistentVolumeClaim",
+		].map((kind) => [kind, "other-agent", "workload-test"] as const),
+		...["Ingress", "Certificate", "Secret"].map(
+			(kind) => [kind, "sre-smoke", "workload-test"] as const,
+		),
+	].map(
+		([kind, name, namespace], index): KubernetesObject => ({
+			apiVersion:
+				kind === "Certificate" || kind === "ClusterIssuer"
+					? "cert-manager.io/v1"
+					: "v1",
+			kind,
+			metadata: {
+				name,
+				namespace,
+				uid: `protected-${index}`,
+				resourceVersion: `protected-rv-${index}`,
+				labels: { "agent-infra.agora.io/agent": "other-agent" },
+			},
+		}),
+	);
+	for (const object of sentinels) f.seed(object);
+	const create = vi.spyOn(f.client, "create");
+	const replace = vi.spyOn(f.client, "replace");
+	const remove = vi.spyOn(f.client, "delete");
+	return () => {
+		for (const object of sentinels) {
+			expect(
+				f.resources.get(`${object.kind}/${object.metadata?.name}`),
+			).toEqual(object);
+			for (const operation of [create, replace, remove])
+				expect(
+					operation.mock.calls.some(
+						([target]) =>
+							target.kind === object.kind &&
+							target.metadata?.name === object.metadata?.name,
+					),
+				).toBe(false);
+		}
+	};
+}
+
+it.each([true, false])(
+	"bounds CA rate-limit waiting across Worker restarts without replaying issuance (Issuing=%s)",
+	async (issuing) => {
+		const f = fixture(
+			{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
+			{ configuration: hostnameConfiguration() },
+		);
+		const assertProtected = protectSharedHostnameObjects(f);
+		const create = vi.spyOn(f.client, "create");
+		await f.tick(4);
+		const certificate = await f.client.read<WorkloadHostnameCertificateV1>(
+			"Certificate",
+			hostnameCertificateName,
+		);
+		assert(certificate);
+		const start = Date.now();
+		// cert-manager owns ACME HTTP retries; only its Certificate status crosses this boundary.
+		f.seed({
+			...certificate,
+			metadata: { ...certificate.metadata, creationTimestamp: new Date(start) },
+			status: {
+				lastFailureTime: new Date(start).toISOString(),
+				conditions: [
+					{
+						type: "Issuing",
+						status: issuing ? "True" : "False",
+						observedGeneration: certificate.metadata?.generation,
+						reason: "RateLimited",
+						message: "provider-canary HTTP 429 Retry-After: 86400",
+					},
+				],
+			},
+		} as KubernetesObject);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+		try {
+			if (issuing) {
+				for (let minute = 0; minute < 240; minute += 30) {
+					clock.mockReturnValue(start + minute * 60_000);
+					await f.tick(1);
+					f.roundTripState();
+					expect(f.state).toMatchObject({
+						phase: "observing",
+						attempts: 0,
+						certificateWait: { attempts: Math.min(minute / 30 + 1, 5) },
+					});
+					expect(
+						await f.client.read("Ingress", hostnameWorkloadName),
+					).toBeNull();
+				}
+				clock.mockReturnValue(start + 240 * 60_000);
+			}
+			await f.tick(1);
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				lastFailure: {
+					kind: "Certificate",
+					verb: issuing ? "certificate-timeout" : "certificate-failed",
+				},
+			});
+			await f.tick(8);
+			expect(f.state?.phase).toBe("failed");
+			expect(JSON.stringify(f.state)).not.toMatch(
+				/provider-canary|429|86400|Retry-After|RateLimited/,
+			);
+			expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+			expect(
+				(await f.client.read("Certificate", hostnameCertificateName))?.metadata
+					?.uid,
+			).toBe(certificate.metadata?.uid);
+			expect(
+				create.mock.calls.filter(([object]) => object.kind === "Certificate"),
+			).toHaveLength(1);
+			expect(
+				create.mock.calls.some(([object]) =>
+					["Order", "CertificateRequest"].includes(object.kind ?? ""),
+				),
+			).toBe(false);
+			assertProtected();
+		} finally {
+			clock.mockRestore();
+		}
+	},
+);
+
 it.each(["single", "multi"] as const)(
 	"publishes the normal %s self-managed hostname only after certificate readiness and closes it on expiry",
 	async (kind) => {
@@ -8162,6 +8304,7 @@ it.each(["single", "multi"] as const)(
 			{ configuration: hostnameConfiguration(kind) },
 		);
 		const create = vi.spyOn(f.client, "create");
+		const assertProtected = protectSharedHostnameObjects(f);
 		await f.tick(4);
 		const name = "agent-a51d7389ba2cb760d233154216317fce-tls";
 		const certificate = await f.client.read("Certificate", name);
@@ -8286,6 +8429,7 @@ it.each(["single", "multi"] as const)(
 		expect((await f.client.read("Certificate", name))?.metadata?.uid).toBe(
 			certificate.metadata?.uid,
 		);
+		assertProtected();
 	},
 );
 
@@ -8303,6 +8447,7 @@ it.each([
 			{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
 			{ configuration: hostnameConfiguration() },
 		);
+		const assertProtected = protectSharedHostnameObjects(f);
 		await f.tick(4);
 		const certificate = f.resources.get(
 			`Certificate/${hostnameCertificateName}`,
@@ -8368,6 +8513,7 @@ it.each([
 			(await f.client.read("Certificate", hostnameCertificateName))?.metadata
 				?.uid,
 		).toBe(certificate.metadata?.uid);
+		assertProtected();
 	},
 );
 
@@ -8378,6 +8524,7 @@ it.each(["incompatible", "compatible", "newer fence"] as const)(
 			{ registry: workloadRegistryFixture() },
 			{ configuration: hostnameConfiguration() },
 		);
+		const assertProtected = protectSharedHostnameObjects(f);
 		await f.tick(8);
 		expect(f.state?.phase).toBe("ready");
 		const initial = f.state;
@@ -8487,6 +8634,7 @@ it.each(["incompatible", "compatible", "newer fence"] as const)(
 				expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
 			} else expect(f.state?.phase).toBe("cleaning");
 		}
+		assertProtected();
 	},
 );
 
