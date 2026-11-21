@@ -2385,10 +2385,13 @@ export class PostgresConversationQueryV1 {
 					const rows = await run(tx<
 						{ execution_id: string; archive_state: unknown }[]
 					>`
-			 select distinct on (a.target_id) e.execution_id,a.details->'archive' as archive_state
-			 from platform.audit_events a join platform.conversation_executions e on e.execution_id=a.target_id
-			 join platform.conversations c on c.id=e.conversation_id
-			 where a.action='conversation.archive.observed' and a.id >= ('conversation.archive:' || e.execution_id || ':') and a.id < ('conversation.archive:' || e.execution_id || ':~') and a.target_type='execution' and a.agent_id=e.agent_id
+			 select e.execution_id,a.details->'archive' as archive_state
+			 from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id
+			 cross join lateral (select ar.details from platform.audit_events ar
+			   where ar.target_type='execution' and ar.target_id=e.execution_id and ar.agent_id=e.agent_id
+			     and ar.action='conversation.archive.observed' and ar.id >= ('conversation.archive:' || e.execution_id || ':') and ar.id < ('conversation.archive:' || e.execution_id || ':~')
+			   order by ar.id desc limit 1) a
+			 where a.details->'archive'->>'status' in ('pending','unavailable')
 			 and e.conversation_id=${conversationId} and e.actor_id=${readScope.actorId} and e.channel_id=${readScope.channelId}
 			 and e.principal_type=${readScope.principal?.kind ?? "user"}
 			 and a.details->'binding'->>'conversationId'=e.conversation_id
@@ -2399,7 +2402,7 @@ export class PostgresConversationQueryV1 {
 			 and a.details->'binding'->'principal'->>'kind'=e.principal_type
 			 and a.details->'binding'->>'hostSessionRef'=coalesce(e.accepted_original_host_session_ref,e.original_submit_host_session_ref)
 			 and a.details->'binding'->>'requestDigest'=e.original_operation_digest
-			 order by a.target_id,a.id desc limit 1001`);
+			 order by e.execution_id limit 1001`);
 					if (rows.length > 1000) return unavailable();
 					return rows.map((row) => ({
 						executionId: row.execution_id,

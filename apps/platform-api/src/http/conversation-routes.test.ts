@@ -3242,16 +3242,24 @@ it("exposes an archive gap only to negotiated V2 reads and leaves the real finis
 
 it("sends negotiated archive controls without a Runtime cursor after current authorization", async () => {
 	const input = dependencies({ streamPollIntervalMs: 5 });
-	input.query.getArchives = vi.fn().mockResolvedValue([
-		{
-			executionId: "execution-1",
-			archive: {
-				schemaVersion: 1,
-				status: "unavailable",
-				deadlineAt: "2026-11-21T00:00:00.000Z",
+	vi.mocked(input.query.replay).mockResolvedValue({
+		outcome: "events",
+		events: [],
+		resumeCursor: "cursor-1",
+	});
+	input.query.getArchives = vi
+		.fn()
+		.mockResolvedValueOnce([
+			{
+				executionId: "execution-1",
+				archive: {
+					schemaVersion: 1,
+					status: "unavailable",
+					deadlineAt: "2026-11-21T00:00:00.000Z",
+				},
 			},
-		},
-	]);
+		])
+		.mockResolvedValue([]);
 	const controller = new AbortController();
 	const response = await testApp(input).app.request(
 		"/api/v2/conversations/conversation-1/events",
@@ -3263,7 +3271,11 @@ it("sends negotiated archive controls without a Runtime cursor after current aut
 	const reader = response.body!.getReader();
 	let text = "";
 	try {
-		for (let i = 0; i < 20 && !text.includes('"execution.archive"'); i++) {
+		for (
+			let i = 0;
+			i < 20 && (text.match(/"execution.archive"/g)?.length ?? 0) < 2;
+			i++
+		) {
 			const row = await reader.read();
 			if (row.done) break;
 			text += new TextDecoder().decode(row.value);
@@ -3286,6 +3298,18 @@ it("sends negotiated archive controls without a Runtime cursor after current aut
 	});
 	expect(frame).not.toHaveProperty("conversationCursor");
 	expect(frame).not.toHaveProperty("eventId");
+	const frames = text
+		.split("\n")
+		.filter((l) => l.startsWith("data:"))
+		.map((l) => JSON.parse(l.slice(5)))
+		.filter((x) => x.type === "execution.archive");
+	expect(frames).toHaveLength(2);
+	expect(frames[1]).toMatchObject({
+		executionId: "execution-1",
+		archive: null,
+	});
+	expect(frames[1]).not.toHaveProperty("conversationCursor");
+	expect(frames[1]).not.toHaveProperty("eventId");
 	expect(input.query.getArchives).toHaveBeenCalledWith(
 		expect.objectContaining({ actorId: "user-1", channelId: "web" }),
 		"conversation-1",

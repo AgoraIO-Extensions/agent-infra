@@ -12937,6 +12937,46 @@ describe("terminal original Turn control authority (#4266)", () => {
 		}
 	});
 
+	it("Files4266archive excludes over 1000 settled executions from the bounded active-gap snapshot", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		const query = new PostgresConversationQueryV1({ databaseUrl });
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 1,
+			});
+			await client`select pg_sleep(0.005)`;
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 1,
+			});
+			await client`insert into platform.conversation_executions
+			 select (jsonb_populate_record(null::platform.conversation_executions,to_jsonb(e)||jsonb_build_object('execution_id',e.execution_id||':settled:'||n,'turn_id',e.turn_id||':settled:'||n))).*
+			 from platform.conversation_executions e cross join generate_series(1,1001) n where e.execution_id=${work.executionId}`;
+			await client`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome,details)
+			 select 'conversation.archive:'||e.execution_id||':0000000000000001','settled-test','system','worker','conversation.archive.observed','execution',e.execution_id,e.agent_id,'succeeded',
+			 jsonb_set(jsonb_set(original.details,'{binding,executionId}',to_jsonb(e.execution_id)),'{archive,status}','"complete"'::jsonb)
+			 from platform.conversation_executions e cross join lateral (select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1) original
+			 where e.conversation_id=${work.conversationId} and e.execution_id<>${work.executionId}`;
+			expect(
+				await query.getArchives(
+					{ actorId: "actor-dispatch", channelId: "web" },
+					work.conversationId,
+				),
+			).toEqual([
+				expect.objectContaining({
+					executionId: work.executionId,
+					archive: expect.objectContaining({ status: "unavailable" }),
+				}),
+			]);
+		} finally {
+			await Promise.all([current.store.close(), query.close()]);
+		}
+	});
+
 	it("Files4266archive rolls back failure disposition when required audit cannot commit", async () => {
 		const work = await terminalWork();
 		const store = open();

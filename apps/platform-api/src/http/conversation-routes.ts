@@ -1932,7 +1932,19 @@ export function registerConversationRoutes(
 											}
 											// Recheck after the awaited metadata read, before emitting any original-subject fact.
 											if ((await check()) !== "allowed") continue;
-											for (const fact of facts) {
+											const currentIds = new Set(
+												facts.map((fact) => fact.executionId),
+											);
+											const updates = [
+												...facts,
+												...[...archiveRevisions.keys()]
+													.filter((id) => !currentIds.has(id))
+													.map((executionId) => ({
+														executionId,
+														archive: null,
+													})),
+											];
+											for (const fact of updates) {
 												const revision = JSON.stringify(fact.archive);
 												if (
 													archiveRevisions.get(fact.executionId) === revision ||
@@ -1951,7 +1963,9 @@ export function registerConversationRoutes(
 														archive: fact.archive,
 													}),
 												);
-												archiveRevisions.set(fact.executionId, revision);
+												if (fact.archive === null)
+													archiveRevisions.delete(fact.executionId);
+												else archiveRevisions.set(fact.executionId, revision);
 											}
 										}
 									}
