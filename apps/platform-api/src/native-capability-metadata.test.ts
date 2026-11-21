@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataPublicReaderV1 } from "./http/native-metadata-routes.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
+import { NativeMetadataResourceUnavailableV1 } from "./runtime-native-metadata-scope-resolver.js";
 import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
 const revision = "a".repeat(64);
@@ -389,6 +390,14 @@ describe("native capability metadata revalidation", () => {
 						}
 					: (null as never),
 		);
+		await expect(
+			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "unavailable" });
+	});
+
+	it("fails closed when a required directory is invisible", async () => {
+		const f = fixture();
+		f.reader.read.mockResolvedValue(NativeMetadataResourceUnavailableV1);
 		await expect(
 			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
 		).resolves.toEqual({ outcome: "unavailable" });
