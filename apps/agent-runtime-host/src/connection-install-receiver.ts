@@ -1262,6 +1262,9 @@ async function assembleConnectionInstallReceiver(
 					}
 				: {}),
 			verifyGrant: (request) => {
+				// §13.5.6: the M1 dynamic path never refreshes; the install expires
+				// with its access token and the user reinstalls.
+				if (exception && request.command === "refresh") denied();
 				if (exception && request.command === "confirm") {
 					// §13.5.6: no standard confirm can stand in for the exchange phase.
 					if (
