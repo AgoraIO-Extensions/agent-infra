@@ -19,6 +19,7 @@ import { measureNativeMetadataPgChain } from "../../../tests/support/native-meta
 class MetadataBridge {
 	readonly requests: CodexAppServerFrame[] = [];
 	options?: CodexAppServerBridgeOptions;
+	onProjection?: () => void;
 	launch?: CodexSkillLaunchProvenance;
 	private readonly queue: CodexAppServerFrame[] = [];
 	private wake?: () => void;
@@ -28,6 +29,7 @@ class MetadataBridge {
 	}
 	async send(frame: CodexAppServerFrame) {
 		this.requests.push(frame);
+		const projected = () => this.onProjection?.();
 		if (frame.method === "initialize") this.respond(frame, {});
 		else if (frame.method === "config/read") {
 			const config: Record<string, unknown> = {
@@ -106,8 +108,10 @@ class MetadataBridge {
 						skills: [
 							{
 								name: "workspace-summary",
-								description:
-									"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
+								get description() {
+									projected();
+									return "显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。";
+								},
 								path: "/opt/codex/agent-infra-skills/workspace-summary/SKILL.md",
 								scope: "user",
 								enabled: true,
@@ -122,7 +126,12 @@ class MetadataBridge {
 			this.respond(frame, {
 				thread: {
 					id: "native-thread-private",
-					status: { type: "notLoaded" },
+					status: {
+						get type() {
+							projected();
+							return "notLoaded";
+						},
+					},
 					turns: [],
 				},
 			});
@@ -264,6 +273,38 @@ function installedSkillDescriptor(configVersion = "synthetic-config-1") {
 }
 
 describe("native metadata completion across API/Worker/Host/Driver", () => {
+	it.each(["revocation", "identity", "agent"] as const)(
+		"rejects %s changed during synchronous projection through the actual current/PG chain",
+		async (fault) => {
+			const f = await fixture();
+			try {
+				await f.driver.readNativeMetadataV1("skills", f.read);
+				const result = await measureNativeMetadataPgChain({
+					driver: f.driver,
+					nativeSessionRef: f.nativeSessionRef,
+					directory: f.directory,
+					fault,
+					onProjection: (mark) => {
+						f.bridge.onProjection = mark;
+					},
+				});
+				expect(result.projected).toBe(true);
+				expect(result.rounds).toEqual([[null, null]]);
+				expect(result.businessWrites).toEqual({ executions: 0, outbox: 0 });
+				expect(
+					f.bridge.requests.some((request) => request.method === "turn/start"),
+				).toBe(false);
+				expect(JSON.stringify(result)).not.toMatch(
+					/foreign-agent|foreign-reader|workspace-summary|native-thread-private/,
+				);
+			} finally {
+				await f.driver.close();
+				await rm(f.directory, { recursive: true, force: true });
+			}
+		},
+		120_000,
+	);
+
 	it.each([false, true])(
 		"keeps two metadata rounds and bytes-before-delivery guards with real PG/API/Worker/Host (RTT=%s)",
 		async (withRtt) => {

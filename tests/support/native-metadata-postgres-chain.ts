@@ -30,6 +30,8 @@ export async function measureNativeMetadataPgChain(input: {
 	readonly driver: CodexRuntimeDriver;
 	readonly nativeSessionRef: string;
 	readonly directory: string;
+	readonly fault?: "revocation" | "identity" | "agent";
+	readonly onProjection?: (mark: () => void) => void;
 	readonly rtt?: {
 		identity: number;
 		policy: number;
@@ -47,6 +49,8 @@ export async function measureNativeMetadataPgChain(input: {
 		| undefined;
 	const counts = { identity: 0, policy: 0, query: 0, current: 0 };
 	const rtt = input.rtt;
+	let projected = false;
+	let changedOriginalScope: Promise<unknown> | undefined;
 	try {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		await sql`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,host_session_ref) values ('conversation-1','agent-1','reader-1','web','active',1,'pg-current','pg-original-host')`;
@@ -69,6 +73,8 @@ export async function measureNativeMetadataPgChain(input: {
 		const authorize = async () => {
 			counts.policy++;
 			if (rtt) await delay(rtt.policy);
+			if (projected && input.fault === "revocation")
+				return { outcome: "revoked" as const };
 			return {
 				outcome: "allowed" as const,
 				authority: {
@@ -174,10 +180,19 @@ export async function measureNativeMetadataPgChain(input: {
 			authenticate: async () => {
 				counts.identity++;
 				if (rtt) await delay(rtt.identity);
-				return identity;
+				if (projected && input.fault === "agent") {
+					changedOriginalScope ??= sql`update platform.conversation_executions set agent_id='foreign-agent' where execution_id='execution-1'`;
+					await changedOriginalScope;
+				}
+				return projected && input.fault === "identity"
+					? { ...identity, userId: "foreign-reader" }
+					: identity;
 			},
 		});
 		const readContext = context;
+		input.onProjection?.(() => {
+			projected = true;
+		});
 		const [before] = await sql<{ executions: number; outbox: number }[]>`
 			select (select count(*)::int from platform.conversation_executions) as executions,
 			(select count(*)::int from platform.outbox_items) as outbox
@@ -213,6 +228,7 @@ export async function measureNativeMetadataPgChain(input: {
 		return {
 			counts,
 			rounds,
+			projected,
 			businessWrites: {
 				executions: after.executions - before.executions,
 				outbox: after.outbox - before.outbox,
