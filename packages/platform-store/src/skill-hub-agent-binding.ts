@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	type SkillHubAppliedReceiptV1,
 	SkillHubAppliedReceiptV1Schema,
@@ -14,6 +15,10 @@ import {
 	type SkillHubAgentBindingRequestV1,
 	type SkillHubAgentBindingStatusPortV1,
 	type SkillHubGrantV1,
+	type SkillSyncAttemptV1,
+	SkillSyncErrorV1,
+	type SkillSyncFailureV1,
+	skillSyncFailureCodeV1,
 } from "@agent-infra/platform-core";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -28,15 +33,21 @@ import {
 } from "./schema-skill-hub.js";
 import { readSkillPackagePublicationV1 } from "./skill-package-publication-reader.js";
 
-export class SkillHubAgentBindingAdmissionErrorV1 extends Error {
+export class SkillHubAgentBindingAdmissionErrorV1 extends SkillSyncErrorV1 {
 	readonly code = "unavailable" as const;
-	constructor() {
-		super("Skill Hub binding admission unavailable");
+	constructor(
+		reason: "dependency_unavailable" | "denied" = "dependency_unavailable",
+	) {
+		super({
+			stage: "binding_admission",
+			reason,
+			retryable: reason === "dependency_unavailable",
+		});
 		this.name = "SkillHubAgentBindingAdmissionErrorV1";
 	}
 }
 
-export class SkillHubAppliedReceiptErrorV1 extends Error {
+export class SkillHubAppliedReceiptErrorV1 extends SkillSyncErrorV1 {
 	readonly code:
 		| "invalid_receipt"
 		| "not_found"
@@ -46,7 +57,18 @@ export class SkillHubAppliedReceiptErrorV1 extends Error {
 		| "persistence_failed";
 
 	constructor(code: SkillHubAppliedReceiptErrorV1["code"]) {
-		super("Skill Hub Applied receipt rejected");
+		super({
+			stage: "applied_persistence",
+			reason:
+				code === "persistence_failed"
+					? "dependency_unavailable"
+					: code === "stale_revision" ||
+							code === "invalid_state" ||
+							code === "not_found"
+						? "stale_binding"
+						: "invalid_binding",
+			retryable: code === "persistence_failed",
+		});
 		this.name = "SkillHubAppliedReceiptErrorV1";
 		this.code = code;
 	}
@@ -110,6 +132,78 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		this.#resolveGrantBoundary = options.resolveGrantBoundary;
 	}
 
+	async captureSyncAttempt(
+		input: Omit<SkillSyncAttemptV1, "bindings">,
+	): Promise<SkillSyncAttemptV1 | null> {
+		const rows = await this.#client<
+			{ skill_version_id: string; sync_revision: number }[]
+		>`
+		 select b.skill_version_id,b.sync_revision::text from platform.agents a
+		 join platform.agent_configuration_revisions cr on cr.agent_id=a.id and cr.revision=a.current_configuration_revision
+		 join platform.agent_applications m on m.agent_id=a.id
+		 join platform.workload_reconciliations w on w.agent_id=a.id
+		 join platform.skill_hub_agent_bindings b on b.agent_id=a.id and b.configuration_revision=coalesce(cr.runtime_revision,a.current_configuration_revision)
+		 where a.id=${input.agentId} and b.agent_version=${input.agentVersion} and b.configuration_revision=${input.configurationRevision}
+		 and w.revision=${input.workloadRevision} and w.state->>'fence'=${String(input.fence)} and w.state->>'phase'='preflight' and w.state->>'sourceConfigurationRevision'=${String(input.configurationRevision)}
+		 and m.fence=${input.fence} and m.desired_state='running'
+		 and ( ${input.isAdministrator} or exists(select 1 from platform.agent_owners ao where ao.agent_id=a.id and ao.owner_id=${input.actorId}))
+		 and b.state='pending_sync' order by b.skill_version_id limit 33`;
+		if (!rows.length || rows.length > 32) return null;
+		return {
+			...input,
+			bindings: rows.map((r) => ({
+				skillVersionId: r.skill_version_id,
+				syncRevision: Number(r.sync_revision),
+			})),
+		};
+	}
+	async recordSyncFailure(input: {
+		attempt: SkillSyncAttemptV1;
+		failure: SkillSyncFailureV1;
+	}): Promise<boolean> {
+		const code = skillSyncFailureCodeV1(input.failure);
+		const a = input.attempt;
+		if (
+			!a.bindings.length ||
+			a.bindings.length > 32 ||
+			new Set(a.bindings.map((b) => b.skillVersionId)).size !==
+				a.bindings.length ||
+			![
+				a.configurationRevision,
+				a.workloadRevision,
+				a.fence,
+				...a.bindings.map((b) => b.syncRevision),
+			].every((n) => Number.isSafeInteger(n) && n > 0)
+		)
+			return false;
+		return this.#client.begin(async (tx) => {
+			const [agent] =
+				await tx`select id from platform.agents where id=${a.agentId} for update`;
+			if (!agent) return false;
+			await tx`select agent_id from platform.agent_applications where agent_id=${a.agentId} for update`;
+			const [work] =
+				await tx`select w.agent_id from platform.workload_reconciliations w join platform.agent_applications m on m.agent_id=w.agent_id join platform.agents ag on ag.id=w.agent_id join platform.agent_configuration_revisions cr on cr.agent_id=ag.id and cr.revision=ag.current_configuration_revision
+		 where w.agent_id=${a.agentId} and w.revision=${a.workloadRevision} and w.state->>'fence'=${String(a.fence)} and w.state->>'phase'='preflight' and w.state->>'sourceConfigurationRevision'=${String(a.configurationRevision)} and m.fence=${a.fence} and m.desired_state='running' and coalesce(cr.runtime_revision,ag.current_configuration_revision)=${a.configurationRevision}
+		 and (${a.isAdministrator} or exists(select 1 from platform.agent_owners ao where ao.agent_id=w.agent_id and ao.owner_id=${a.actorId})) for update of w`;
+			if (!work) return false;
+			const pending: (typeof a.bindings)[number][] = [];
+			for (const b of a.bindings) {
+				const [row] =
+					await tx`select skill_version_id,state,applied_receipt is not null as applied from platform.skill_hub_agent_bindings where agent_id=${a.agentId} and agent_version=${a.agentVersion} and configuration_revision=${a.configurationRevision} and skill_version_id=${b.skillVersionId} and sync_revision=${b.syncRevision} and state in ('pending_sync','synced') for update`;
+				if (!row) return false;
+				if (row.state === "synced") {
+					if (!row.applied) return false;
+				} else pending.push(b);
+			}
+			for (const b of pending) {
+				if (!input.failure.retryable)
+					await tx`update platform.skill_hub_agent_bindings set state='failed',failure_reason=${code},updated_at=clock_timestamp() where agent_id=${a.agentId} and agent_version=${a.agentVersion} and configuration_revision=${a.configurationRevision} and skill_version_id=${b.skillVersionId} and sync_revision=${b.syncRevision} and state='pending_sync'`;
+				await tx`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome,details) values(${randomUUID()},${`skill-sync:${a.agentId}:${a.configurationRevision}:${a.agentVersion}:${b.skillVersionId}:${b.syncRevision}`},'system','platform-worker','skill.binding.sync.failed','skill_binding',${b.skillVersionId},${a.agentId},'failed',${JSON.stringify({ schemaVersion: 1, agentVersion: a.agentVersion, configurationRevision: a.configurationRevision, syncRevision: b.syncRevision, workloadRevision: a.workloadRevision, fence: a.fence, stage: input.failure.stage, reason: input.failure.reason, retryable: input.failure.retryable, code })}::jsonb)`;
+			}
+			return true;
+		});
+	}
+
 	/** Full original publication facts for an already authorized immutable binding. */
 	async readPublication(input: {
 		readonly skillVersionId: string;
@@ -137,6 +231,9 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		}
 		try {
 			return await this.#database.transaction(async (transaction) => {
+				await transaction.execute(
+					sql`select id from platform.agents where id=${receipt.agentId} for update`,
+				);
 				const [row] = await transaction
 					.select({
 						binding: skillHubAgentBindings,
@@ -286,7 +383,26 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 						...input,
 						configurationRevision: runtimeRevision,
 					});
-					return { configurationRevision, bindings };
+					const projected = await Promise.all(
+						bindings.map(async (binding) => {
+							if (binding.state !== "pending_sync") return binding;
+							const latest = await transaction.execute(
+								sql`select details from platform.audit_events where trace_id=${`skill-sync:${input.agentId}:${runtimeRevision}:${input.agentVersion}:${binding.skillVersion.skillVersionId}:${binding.syncRevision}`} and agent_id=${input.agentId} and target_id=${binding.skillVersion.skillVersionId} and action='skill.binding.sync.failed' order by occurred_at desc,id desc limit 1`,
+							);
+							const failure = latest[0]?.details as
+								| (SkillSyncFailureV1 & { code: string })
+								| undefined;
+							if (!failure) return binding;
+							const code = skillSyncFailureCodeV1(failure);
+							if (code !== failure.code) return binding;
+							return SkillHubSyncBindingV1Schema.parse({
+								...binding,
+								state: "failed",
+								failureReason: code,
+							});
+						}),
+					);
+					return { configurationRevision, bindings: projected };
 				},
 				{ isolationLevel: "repeatable read", accessMode: "read only" },
 			);
@@ -303,7 +419,11 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		try {
 			return await this.#resolveSyncBindings(this.#database, input);
 		} catch (error) {
-			if (error instanceof SkillHubAgentBindingAdmissionErrorV1) throw error;
+			if (
+				error instanceof SkillHubAgentBindingAdmissionErrorV1 ||
+				error instanceof SkillSyncErrorV1
+			)
+				throw error;
 			throw new SkillHubAgentBindingAdmissionErrorV1();
 		}
 	}
@@ -452,7 +572,7 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 				boundaryGrant === undefined ||
 				!isSkillHubGrantWithinBoundaryV1(persistedGrant, boundaryGrant)
 			)
-				throw new SkillHubAgentBindingAdmissionErrorV1();
+				throw new SkillHubAgentBindingAdmissionErrorV1("denied");
 			const appliedReceipt =
 				row.binding.state === "synced"
 					? SkillHubAppliedReceiptV1Schema.parse(row.binding.appliedReceipt)

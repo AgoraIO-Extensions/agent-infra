@@ -218,3 +218,44 @@ it("delegates validated Applied receipts to Store", async () => {
 		adapter.recordAppliedReceipt({ ...receipt, targetPath: "/tmp/escape" }),
 	).rejects.toMatchObject({ code: "unavailable" });
 });
+
+it.each([
+	"binding_admission",
+	"package_verification",
+	"applied_persistence",
+] as const)(
+	"preserves a fixed %s dependency classification without upstream text",
+	async (stage) => {
+		const store = storeFixture();
+		const fail = async () => {
+			throw new Error("vendor-key-and-message-must-not-escape");
+		};
+		if (stage === "binding_admission") store.resolveSyncBindings = fail;
+		if (stage === "applied_persistence") store.recordAppliedReceipt = fail;
+		const adapter = adapterFor(
+			store,
+			stage === "package_verification" ? fail : async () => packageObject,
+		);
+		const work =
+			stage === "applied_persistence"
+				? adapter.recordAppliedReceipt({
+						schemaVersion: 1,
+						agentId: "agent-1",
+						agentVersion: "agent-version-1",
+						skillName: "workspace-summary",
+						configurationRevision: 4,
+						syncRevision: 2,
+						skillVersionId: "skill-version-1",
+						generationId: digest("e"),
+						packageDigest: digest("a"),
+						manifestDigest: digest("b"),
+						targetPath: ".agents/skills/workspace-summary",
+						readOnly: true,
+					})
+				: adapter.resolveBindings(input);
+		await expect(work).rejects.toMatchObject({
+			failure: { stage, reason: "dependency_unavailable", retryable: true },
+		});
+		await expect(work).rejects.not.toThrow("vendor-key");
+	},
+);

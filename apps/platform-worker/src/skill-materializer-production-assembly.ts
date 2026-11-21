@@ -10,7 +10,11 @@ import {
 	type SkillPackageConsumerOptionsV1,
 	SkillPackageMaterializerV1,
 } from "@agent-infra/object-storage";
-import type { SkillPackagePublicationObjectV1 } from "@agent-infra/platform-core";
+import {
+	type SkillPackagePublicationObjectV1,
+	type SkillSyncAttemptV1,
+	SkillSyncErrorV1,
+} from "@agent-infra/platform-core";
 import type {
 	WorkloadSkillMaterializationBindingV1,
 	WorkloadSkillMaterializationInputV1,
@@ -21,6 +25,7 @@ import {
 	createSkillHubStoreMaterializationAdapterV1,
 	type SkillHubStoreMaterializationAdapterOptionsV1,
 } from "./skill-materializer-store-adapter.js";
+import { classifySkillSyncFailureV1 } from "./skill-sync-failure.js";
 
 type Materializer = Pick<
 	SkillPackageMaterializerV1,
@@ -157,7 +162,13 @@ export function createDeploymentSkillMaterializerFactoryV1(
 				const materializer: Materializer = new SkillPackageMaterializerV1({
 					assemblyRoot: root,
 					runtimeUid: assembly.runtimeUid,
-					readPackage: (object) => readObject(assembly.storage, object, signal),
+					readPackage: async (object) => {
+						try {
+							return await readObject(assembly.storage, object, signal);
+						} catch (error) {
+							throw classifySkillSyncFailureV1(error, "package_verification");
+						}
+					},
 					verifyAdmission: assembly.verifyAdmission,
 				});
 				return materializer;
@@ -173,19 +184,23 @@ export function createDeploymentSkillMaterializerFactoryV1(
 							const first = result.skills[0];
 							const delivery = assembly.delivery;
 							if (!first || !delivery) return;
-							await writeSkillHubDeliveryV1(
-								delivery.client,
-								{
-									schemaVersion: 1,
-									agentId: input.agentId,
-									agentVersion: first.agentVersion,
-									configurationRevision: input.configurationRevision,
-									generationId: result.generationId,
-									projections: [...result.skills],
-									appliedBindings: [...(result.appliedBindings ?? [])],
-								},
-								rootFor(input),
-							);
+							try {
+								await writeSkillHubDeliveryV1(
+									delivery.client,
+									{
+										schemaVersion: 1,
+										agentId: input.agentId,
+										agentVersion: first.agentVersion,
+										configurationRevision: input.configurationRevision,
+										generationId: result.generationId,
+										projections: [...result.skills],
+										appliedBindings: [...(result.appliedBindings ?? [])],
+									},
+									rootFor(input),
+								);
+							} catch (error) {
+								throw classifySkillSyncFailureV1(error, "delivery");
+							}
 						},
 					}
 				: {}),
@@ -238,68 +253,103 @@ export function createDeploymentSkillHubMaterializerFactoryV1(
 					? AbortSignal.any([input.signal, context.signal])
 					: context.signal;
 				const scopedInput = { ...input, signal };
-				let original:
-					| readonly WorkloadSkillMaterializationBindingV1[]
-					| undefined;
-				const current = async () => {
-					signal.throwIfAborted();
-					const bindings = await adapter.resolveBindings(scopedInput);
-					signal.throwIfAborted();
-					if (original && !isDeepStrictEqual(original, bindings))
-						throw new Error("Skill binding changed");
-					return bindings;
-				};
-				const verifyAdmission = async (
-					item: SkillPackageMaterializationInputV1,
-				) => {
-					const bindings = await current();
-					const binding = bindings.find(
-						(b) =>
-							b.name === item.name &&
-							b.skillVersion.version === item.version &&
-							isDeepStrictEqual(b.packageObject, item.packageObject),
-					);
-					if (!original || !binding)
-						throw new Error("Skill publication binding unavailable");
-					const publication = await consumer.verify({
-						skillVersionId: binding.skillVersion.skillVersionId,
-						packageObjectVersion: binding.skillVersion.packageObjectVersion,
-						signal,
-					});
-					for (const key of [
-						"skillId",
-						"skillVersionId",
-						"provider",
-						"version",
-						"packageObjectVersion",
-						"packageDigest",
-						"manifestDigest",
-						"signatureDigest",
-					] as const)
-						if (publication.version[key] !== binding.skillVersion[key])
-							throw new Error("Skill publication mismatch");
-					if (
-						publication.version.name !== item.name ||
-						publication.version.packageDigest !== item.packageDigest ||
-						publication.version.manifestDigest !== item.manifestDigest
-					)
-						throw new Error("Skill publication mismatch");
-					await current();
-				};
-				const factory = createDeploymentSkillMaterializerFactoryV1({
-					...configuration,
-					resolveBindings: async () => {
-						original = await current();
-						return original;
-					},
-					verifyAdmission,
-					recordAppliedReceipt: async (receipt) => {
+				let attempt: SkillSyncAttemptV1 | null = null;
+				try {
+					attempt = await adapter.captureSyncAttempt(scopedInput);
+				} catch (error) {
+					throw classifySkillSyncFailureV1(error, "binding_admission");
+				}
+				try {
+					let original:
+						| readonly WorkloadSkillMaterializationBindingV1[]
+						| undefined;
+					const current = async () => {
+						signal.throwIfAborted();
+						const bindings = await adapter.resolveBindings(scopedInput);
+						signal.throwIfAborted();
+						if (original && !isDeepStrictEqual(original, bindings))
+							throw new SkillSyncErrorV1({
+								stage: "binding_admission",
+								reason: "stale_binding",
+								retryable: false,
+							});
+						return bindings;
+					};
+					const verifyAdmission = async (
+						item: SkillPackageMaterializationInputV1,
+					) => {
+						const bindings = await current();
+						const binding = bindings.find(
+							(b) =>
+								b.name === item.name &&
+								b.skillVersion.version === item.version &&
+								isDeepStrictEqual(b.packageObject, item.packageObject),
+						);
+						if (!original || !binding)
+							throw new Error("Skill publication binding unavailable");
+						const publication = await consumer
+							.verify({
+								skillVersionId: binding.skillVersion.skillVersionId,
+								packageObjectVersion: binding.skillVersion.packageObjectVersion,
+								signal,
+							})
+							.catch((error: unknown) => {
+								throw classifySkillSyncFailureV1(error, "package_verification");
+							});
+						for (const key of [
+							"skillId",
+							"skillVersionId",
+							"provider",
+							"version",
+							"packageObjectVersion",
+							"packageDigest",
+							"manifestDigest",
+							"signatureDigest",
+						] as const)
+							if (publication.version[key] !== binding.skillVersion[key])
+								throw new SkillSyncErrorV1({
+									stage: "package_verification",
+									reason: "digest_mismatch",
+									retryable: false,
+								});
+						if (
+							publication.version.name !== item.name ||
+							publication.version.packageDigest !== item.packageDigest ||
+							publication.version.manifestDigest !== item.manifestDigest
+						)
+							throw new SkillSyncErrorV1({
+								stage: "package_verification",
+								reason: "digest_mismatch",
+								retryable: false,
+							});
 						await current();
-						await adapter.recordAppliedReceipt(receipt);
-					},
-				});
-				const materializer = await factory({ ...context, signal });
-				return materializer.materialize(scopedInput);
+					};
+					const factory = createDeploymentSkillMaterializerFactoryV1({
+						...configuration,
+						resolveBindings: async () => {
+							original = await current();
+							return original;
+						},
+						verifyAdmission,
+						recordAppliedReceipt: async (receipt) => {
+							await current();
+							await adapter.recordAppliedReceipt(receipt);
+						},
+					});
+					const materializer = await factory({ ...context, signal });
+					return await materializer.materialize(scopedInput);
+				} catch (error) {
+					const classified = classifySkillSyncFailureV1(
+						error,
+						"materialization",
+					);
+					try {
+						await adapter.recordSyncFailure(attempt, classified.failure);
+					} catch {
+						throw classifySkillSyncFailureV1(undefined, "applied_persistence");
+					}
+					throw classified;
+				}
 			},
 		});
 	} catch {

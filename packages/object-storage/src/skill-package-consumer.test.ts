@@ -199,3 +199,12 @@ it("rejects a private signing key supplied to the consumer", async () => {
 		code: "dependency_unavailable",
 	});
 });
+
+it("preserves fixed trust rejection diagnostics while keeping the existing dependency error code", async () => {
+	const f = await publicationFixture();
+	f.setPolicy({ keyState: "revoked" });
+	await expect(f.consumer.verify(f.input)).rejects.toMatchObject({
+		code: "dependency_unavailable",
+		diagnosticCode: "source_untrusted",
+	});
+});

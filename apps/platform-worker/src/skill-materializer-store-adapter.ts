@@ -8,11 +8,16 @@ import {
 import {
 	parseSkillPackagePublicationObjectV1,
 	type SkillPackagePublicationObjectV1,
+	type SkillSyncAttemptV1,
+	SkillSyncErrorV1,
+	type SkillSyncFailureV1,
 } from "@agent-infra/platform-core";
 import type {
 	WorkloadSkillMaterializationBindingV1,
 	WorkloadSkillMaterializationInputV1,
 } from "./skill-materialization.js";
+
+import { classifySkillSyncFailureV1 } from "./skill-sync-failure.js";
 
 /**
  * The narrow Store surface consumed by the deployment adapter.  The concrete
@@ -20,6 +25,13 @@ import type {
  * CAS and receipt persistence; the Worker never receives a database client.
  */
 export interface SkillHubMaterializationStoreV1 {
+	captureSyncAttempt?(
+		input: Omit<SkillSyncAttemptV1, "bindings">,
+	): Promise<SkillSyncAttemptV1 | null>;
+	recordSyncFailure?(input: {
+		attempt: SkillSyncAttemptV1;
+		failure: SkillSyncFailureV1;
+	}): Promise<boolean>;
 	resolveSyncBindings(input: {
 		readonly agentId: string;
 		readonly agentVersion: string;
@@ -61,12 +73,19 @@ export type SkillHubStoreMaterializationAdapterOptionsV1 = Readonly<{
 	readonly resolvePackageObject: SkillHubPackageObjectResolverV1;
 }>;
 
-export class SkillHubMaterializationAdapterErrorV1 extends Error {
+export class SkillHubMaterializationAdapterErrorV1 extends SkillSyncErrorV1 {
 	readonly code = "unavailable" as const;
-
-	constructor(message = "Skill Hub materialization unavailable") {
-		super(message);
+	constructor(
+		message = "Skill Hub materialization unavailable",
+		failure: SkillSyncFailureV1 = {
+			stage: "binding_admission",
+			reason: "invalid_binding",
+			retryable: false,
+		},
+	) {
+		super(failure);
 		this.name = "SkillHubMaterializationAdapterErrorV1";
+		this.message = message;
 	}
 }
 
@@ -83,8 +102,8 @@ function positiveRevision(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
-function reject(message?: string): never {
-	throw new SkillHubMaterializationAdapterErrorV1(message);
+function reject(message?: string, failure?: SkillSyncFailureV1): never {
+	throw new SkillHubMaterializationAdapterErrorV1(message, failure);
 }
 
 function validateActorFacts(actor: SkillHubMaterializationActorFactsV1) {
@@ -131,14 +150,22 @@ function validatePackageObject(
 	try {
 		parsed = parseSkillPackagePublicationObjectV1(object);
 	} catch {
-		reject("Invalid Skill package object");
+		reject("Invalid Skill package object", {
+			stage: "package_verification",
+			reason: "invalid_package",
+			retryable: false,
+		});
 	}
 	if (
 		parsed.version !== skillVersion.packageObjectVersion ||
 		parsed.sha256 !== skillVersion.packageDigest ||
 		parsed.mediaType !== "application/zip"
 	)
-		reject("Skill package object mismatch");
+		reject("Skill package object mismatch", {
+			stage: "package_verification",
+			reason: "digest_mismatch",
+			retryable: false,
+		});
 	return parsed;
 }
 
@@ -192,6 +219,24 @@ export function createSkillHubStoreMaterializationAdapterV1(
 				})();
 
 	return {
+		async captureSyncAttempt(input: WorkloadSkillMaterializationInputV1) {
+			validateInput(input);
+			const actor = validateActorFacts(await actorFor(input));
+			return (
+				options.store.captureSyncAttempt?.({
+					...input,
+					agentVersion: resolveAgentVersion(options.agentVersion, input),
+					...actor,
+				}) ?? null
+			);
+		},
+		async recordSyncFailure(
+			attempt: SkillSyncAttemptV1 | null,
+			failure: SkillSyncFailureV1,
+		) {
+			if (attempt)
+				await options.store.recordSyncFailure?.({ attempt, failure });
+		},
 		async resolveBindings(
 			input: WorkloadSkillMaterializationInputV1,
 		): Promise<readonly WorkloadSkillMaterializationBindingV1[]> {
@@ -212,8 +257,15 @@ export function createSkillHubStoreMaterializationAdapterV1(
 					workloadRevision: input.workloadRevision,
 					fence: input.fence,
 				});
-			} catch {
-				reject("Skill binding admission unavailable");
+			} catch (error) {
+				const classified = classifySkillSyncFailureV1(
+					error,
+					"binding_admission",
+				);
+				throw new SkillHubMaterializationAdapterErrorV1(
+					"Skill binding admission unavailable",
+					classified.failure,
+				);
 			}
 			if (!Array.isArray(bindings) || bindings.length > 10)
 				reject("Invalid Skill binding set");
@@ -231,10 +283,25 @@ export function createSkillHubStoreMaterializationAdapterV1(
 						packageObjectVersion: binding.skillVersion.packageObjectVersion,
 						signal,
 					});
-				} catch {
-					reject("Skill package object unavailable");
+				} catch (error) {
+					const classified = classifySkillSyncFailureV1(
+						error,
+						"package_verification",
+					);
+					throw new SkillHubMaterializationAdapterErrorV1(
+						"Skill package object unavailable",
+						classified.failure,
+					);
 				}
-				if (!object) reject("Skill package object unavailable");
+				if (!object)
+					throw new SkillHubMaterializationAdapterErrorV1(
+						"Skill package object unavailable",
+						{
+							stage: "package_verification",
+							reason: "dependency_unavailable",
+							retryable: true,
+						},
+					);
 				result.push({
 					agentId: binding.agentId,
 					name: binding.skillName,
@@ -254,12 +321,23 @@ export function createSkillHubStoreMaterializationAdapterV1(
 			try {
 				parsed = SkillHubAppliedReceiptV1Schema.parse(receipt);
 			} catch {
-				reject("Invalid Skill Applied receipt");
+				reject("Invalid Skill Applied receipt", {
+					stage: "applied_persistence",
+					reason: "invalid_binding",
+					retryable: false,
+				});
 			}
 			try {
 				await options.store.recordAppliedReceipt(parsed);
-			} catch {
-				reject("Skill Applied receipt unavailable");
+			} catch (error) {
+				const classified = classifySkillSyncFailureV1(
+					error,
+					"applied_persistence",
+				);
+				throw new SkillHubMaterializationAdapterErrorV1(
+					"Skill Applied receipt unavailable",
+					classified.failure,
+				);
 			}
 		},
 	};

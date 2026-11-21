@@ -7,6 +7,7 @@ import {
 	createAgentManagementV1,
 } from "./agent-management.js";
 import type { SecretActivationStorePortV1 } from "./secret-activation.js";
+import { SkillSyncErrorV1 } from "./skill-sync-failure.js";
 import {
 	hasUnverifiedWorkloadSecretRecoveryV1,
 	syncVerifiedWorkloadSecretUidReceiptsV1,
@@ -1171,6 +1172,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 						// 处理，不再消耗重试预算；临时异常仍在预算内重试。
 						const permanent =
 							error instanceof WorkloadPreflightRejectedErrorV1 ||
+							(error instanceof SkillSyncErrorV1 && !error.failure.retryable) ||
 							reason === "kubernetes_policy";
 						if (
 							!permanent &&

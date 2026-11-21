@@ -87,6 +87,70 @@ describe("Agent Skill binding stages (O-02)", () => {
 		).not.toContain("internal sync detail");
 	});
 
+	it.each([
+		[
+			"SKILL_SYNC_BINDING_ADMISSION_DENIED_REJECTED",
+			"绑定准入失败：没有使用权限。",
+		],
+		[
+			"SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED",
+			"包验证失败：发布来源不可信。",
+		],
+		[
+			"SKILL_SYNC_PACKAGE_VERIFICATION_POLICY_MISMATCH_REJECTED",
+			"包验证失败：扫描策略不匹配。",
+		],
+		[
+			"SKILL_SYNC_MATERIALIZATION_INVALID_MATERIALIZATION_REJECTED",
+			"内容物化失败：物化配置无效。",
+		],
+		[
+			"SKILL_SYNC_DELIVERY_DEPENDENCY_UNAVAILABLE_RETRYABLE",
+			"内容交付失败：同步依赖暂不可用。",
+		],
+		[
+			"SKILL_SYNC_APPLIED_PERSISTENCE_CONFLICT_RETRYABLE",
+			"装配确认保存失败：同步状态冲突。",
+		],
+	])(
+		"shows the fixed Skill sync failure reason: %s",
+		(failureReason, expected) => {
+			const binding = {
+				...skillBinding("failed"),
+				state: "failed" as const,
+				failureReason,
+				appliedReceipt: null,
+			};
+			expect(skillBindingView(binding, assembled)).toMatchObject({
+				error: `${expected}这个版本不会在对话中提供。`,
+				usable: false,
+				settling: false,
+			});
+		},
+	);
+
+	it.each([
+		"provider-secret-message",
+		"SKILL_SYNC_PACKAGE_VERIFICATION_PROVIDER_SECRET_REJECTED",
+		"SKILL_SYNC_UNKNOWN_SOURCE_UNTRUSTED_REJECTED",
+		"SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_RETRYABLE",
+		"SKILL_SYNC_DELIVERY_DEPENDENCY_UNAVAILABLE_REJECTED",
+		"SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED\nprivate-detail",
+	])(
+		"does not expose an unrecognized Skill sync failure: %s",
+		(failureReason) => {
+			const binding = {
+				...skillBinding("failed"),
+				state: "failed" as const,
+				failureReason,
+				appliedReceipt: null,
+			};
+			expect(skillBindingView(binding, assembled).error).toBe(
+				"内容同步失败，这个版本不会在对话中提供。",
+			);
+		},
+	);
+
 	it("marks the current stage and the failed stage", () => {
 		const pending = skillBindingView(skillBinding("pending_sync"), undefined);
 		expect(pending.stages?.map((stage) => stage.current)).toEqual([

@@ -207,6 +207,7 @@ export * from "./skill-package-ref.js";
 export * from "./skill-provider-import.js";
 export * from "./skill-provider-registry.js";
 export * from "./skill-provider-registry.js";
+export * from "./skill-sync-failure.js";
 export {
 	classifyStandardTemplateUpgradeCompatibilityV1,
 	fanOutStandardTemplateUpgradeV2,

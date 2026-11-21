@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
+import { SkillSyncErrorV1 } from "./skill-sync-failure.js";
 import {
 	createWorkloadReconciliationV1,
 	WorkloadPreflightRejectedErrorV1,
@@ -663,6 +664,26 @@ describe("durable Workload reconciliation", () => {
 				{ phase: "preflight", attempts: 1, terminal: true },
 			]);
 		});
+		it.each([true, false])(
+			"keeps Skill dependency retryability distinct (retryable=%s)",
+			async (retryable) => {
+				const failures: WorkloadStepFailureV1[] = [];
+				const f = fixture(undefined, (x) => failures.push(x));
+				vi.mocked(f.runtime.preflight).mockRejectedValue(
+					new SkillSyncErrorV1({
+						stage: "package_verification",
+						reason: retryable ? "dependency_unavailable" : "signature_invalid",
+						retryable,
+					}),
+				);
+				await f.tick(2);
+				expect(failures[0]).toMatchObject({
+					phase: "preflight",
+					attempts: 1,
+					terminal: !retryable,
+				});
+			},
+		);
 		it("reports durable cleanup retries without ending the run", async () => {
 			const failures: WorkloadStepFailureV1[] = [];
 			const f = fixture(undefined, (failure) => failures.push(failure));

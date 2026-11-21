@@ -377,6 +377,45 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 			expect(text).not.toContain(raw);
 	});
 
+	it("shows the Owner a fixed sync reason and hides arbitrary failure details", async () => {
+		renderScreen({
+			readBindings: vi.fn(async () => ({
+				schemaVersion: 1 as const,
+				agentId: agent.agentId,
+				agentVersion: "agent-version-1",
+				configurationRevision: 3,
+				bindings: [
+					{
+						...skillBinding("failed", { name: "trust-failure" }),
+						state: "failed" as const,
+						failureReason:
+							"SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED",
+						appliedReceipt: null,
+					},
+					{
+						...skillBinding("failed", { name: "unknown-failure" }),
+						state: "failed" as const,
+						failureReason: "provider-private-detail",
+						appliedReceipt: null,
+					},
+				],
+			})),
+		});
+		const cards = await screen.findAllByRole("article");
+		expect(cards[0]?.textContent).toContain(
+			"包验证失败：发布来源不可信。这个版本不会在对话中提供。",
+		);
+		expect(cards[1]?.textContent).toContain(
+			"内容同步失败，这个版本不会在对话中提供。",
+		);
+		expect(document.body.textContent).not.toMatch(
+			/provider-private-detail|SKILL_SYNC_/,
+		);
+		expect(
+			screen.queryAllByRole("link", { name: /^在对话中选择/ }),
+		).toHaveLength(0);
+	});
+
 	it("confirms a binding and submits the complete collection once", async () => {
 		const { bindVersion } = renderScreen();
 		await screen.findByRole("article");

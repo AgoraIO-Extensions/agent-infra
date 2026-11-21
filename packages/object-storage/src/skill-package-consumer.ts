@@ -54,11 +54,16 @@ export type SkillPackageConsumerOptionsV1 = Readonly<{
 const sha = (bytes: Uint8Array) =>
 	createHash("sha256").update(bytes).digest("hex");
 const canonical = (value: unknown) => Buffer.from(JSON.stringify(value));
-const fail = (): never => {
-	throw new SkillPackageAdmissionErrorV1("dependency_unavailable");
+const fail = (
+	diagnosticCode?: SkillPackageAdmissionErrorV1["diagnosticCode"],
+): never => {
+	throw new SkillPackageAdmissionErrorV1(
+		"dependency_unavailable",
+		diagnosticCode,
+	);
 };
 const equalBytes = (actual: Uint8Array, expected: Uint8Array) => {
-	if (!Buffer.from(actual).equals(expected)) fail();
+	if (!Buffer.from(actual).equals(expected)) fail("digest_mismatch");
 };
 async function readFixed(
 	storage: SkillPackageConsumerOptionsV1["storage"],
@@ -91,7 +96,7 @@ async function readFixed(
 			signal.throwIfAborted();
 			if (next.done) break;
 			size += next.value.byteLength;
-			if (size > object.sizeBytes) fail();
+			if (size > object.sizeBytes) fail("digest_mismatch");
 			chunks.push(next.value);
 		}
 	} finally {
@@ -100,7 +105,8 @@ async function readFixed(
 		reader.releaseLock();
 	}
 	const bytes = Buffer.concat(chunks);
-	if (size !== object.sizeBytes || sha(bytes) !== object.sha256) fail();
+	if (size !== object.sizeBytes || sha(bytes) !== object.sha256)
+		fail("digest_mismatch");
 	return bytes;
 }
 
@@ -171,6 +177,13 @@ export function createSkillPackageConsumerV1(
 				const resolvePolicy = async () => {
 					signal.throwIfAborted();
 					const p = await options.resolveAdmissionPolicy();
+					if (
+						p.keyState !== "active" ||
+						p.trustRevision !== selection.trustRevision
+					)
+						fail("source_untrusted");
+					if (p.policyRevision !== selection.policyRevision)
+						fail("policy_mismatch");
 					if (
 						p.keyState !== "active" ||
 						typeof p.allowInternalWithoutApproval !== "boolean" ||
@@ -359,8 +372,12 @@ export function createSkillPackageConsumerV1(
 					ownerId: state.ownerId,
 					packageObject: zip,
 				});
-			} catch {
-				return fail();
+			} catch (error) {
+				return fail(
+					error instanceof SkillPackageAdmissionErrorV1
+						? (error.diagnosticCode ?? error.code)
+						: undefined,
+				);
 			}
 		},
 	};
