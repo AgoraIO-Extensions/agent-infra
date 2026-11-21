@@ -891,3 +891,486 @@ describe("Skill Hub Agent current binding read", () => {
 		}
 	});
 });
+
+it("records a retryable preflight failure under the original Workload and exposes it without terminating retries", async () => {
+	await client`insert into platform.skill_hub_agent_bindings(agent_id,agent_version,skill_version_id,configuration_revision,"grant",sync_revision,state,created_at,updated_at) values('agent-1','agent-version-1','skill-version-1',7,${client.json({ schemaVersion: 1, tools: [], connections: [], fileRoots: [], networkOrigins: [], scripts: false })},1,'pending_sync',now(),now())`;
+	await client`insert into platform.workload_reconciliations(agent_id,revision,state) values('agent-1',1,${client.json({ schemaVersion: 1, agentId: "agent-1", revision: 1, fence: 1, phase: "preflight", sourceConfigurationRevision: 7 })})`;
+	const store = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: database!.databaseUrl,
+	});
+	try {
+		const attempt = await store.captureSyncAttempt({
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			configurationRevision: 7,
+			workloadRevision: 1,
+			fence: 1,
+			actorId: "owner-1",
+			organizationIds: [],
+			isAdministrator: false,
+		});
+		expect(attempt).toBeDefined();
+		expect(
+			await store.recordSyncFailure({
+				attempt: attempt!,
+				failure: {
+					stage: "package_verification",
+					reason: "dependency_unavailable",
+					retryable: true,
+				},
+			}),
+		).toBe(true);
+		const view = await store.readCurrentBindings({
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			actorId: "owner-1",
+			organizationIds: [],
+			isAdministrator: false,
+		});
+		expect(view.bindings[0]).toMatchObject({
+			state: "failed",
+			failureReason:
+				"SKILL_SYNC_PACKAGE_VERIFICATION_DEPENDENCY_UNAVAILABLE_RETRYABLE",
+			appliedReceipt: null,
+		});
+		expect(
+			(
+				await store.resolveSyncBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					configurationRevision: 7,
+					actorId: "owner-1",
+					organizationIds: [],
+					isAdministrator: false,
+				})
+			)[0],
+		).toMatchObject({ state: "pending_sync", failureReason: null });
+		expect(
+			await client`select state,applied_receipt from platform.skill_hub_agent_bindings where agent_id='agent-1'`,
+		).toEqual([{ state: "pending_sync", applied_receipt: null }]);
+	} finally {
+		await store.close();
+	}
+});
+
+it("normal Worker preflight records a package verification dependency failure through the real Store without creating work", async () => {
+	const { mkdtemp, rm } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const { join } = await import("node:path");
+	const { createDeploymentSkillHubMaterializerFactoryV1 } = await import(
+		"../../../apps/platform-worker/src/skill-materializer-production-assembly.js"
+	);
+	const root = await mkdtemp(join(tmpdir(), "4334-preflight-"));
+	await client`insert into platform.skill_hub_agent_bindings(agent_id,agent_version,skill_version_id,configuration_revision,"grant",sync_revision,state,created_at,updated_at) values('agent-1','agent-version-1','skill-version-1',7,${client.json({ schemaVersion: 1, tools: [], connections: [], fileRoots: [], networkOrigins: [], scripts: false })},1,'pending_sync',now(),now())`;
+	await client`insert into platform.workload_reconciliations(agent_id,revision,state) values('agent-1',1,${client.json({ schemaVersion: 1, agentId: "agent-1", revision: 1, fence: 1, phase: "preflight", sourceConfigurationRevision: 7 })})`;
+	const store = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: database!.databaseUrl,
+	});
+	const factory = createDeploymentSkillHubMaterializerFactoryV1({
+		assemblyRoot: root,
+		runtimeUid: process.geteuid?.() === 1000 ? 1001 : 1000,
+		agentVersion: "agent-version-1",
+		actor: { actorId: "owner-1", organizationIds: [], isAdministrator: false },
+		store: {
+			readPublication: store.readPublication.bind(store),
+			resolveSyncBindings: store.resolveSyncBindings.bind(store),
+			recordAppliedReceipt: store.recordAppliedReceipt.bind(store),
+			captureSyncAttempt: store.captureSyncAttempt.bind(store),
+			recordSyncFailure: store.recordSyncFailure.bind(store),
+		},
+		storage: {
+			download: async () => {
+				throw new Error("upstream-secret-body-must-not-persist");
+			},
+		} as never,
+		resolveAdmissionPolicy: async () => {
+			throw new Error("policy-secret-must-not-persist");
+		},
+		sourceVerifier: {
+			verify: async () => {
+				throw new Error("source-secret");
+			},
+		},
+	});
+	try {
+		if (!factory) throw new Error("Expected production factory");
+		const worker = await factory({
+			databaseUrl: database!.databaseUrl,
+			signal: new AbortController().signal,
+		});
+		await expect(
+			worker.materialize({
+				agentId: "agent-1",
+				configurationRevision: 7,
+				workloadRevision: 1,
+				fence: 1,
+			}),
+		).rejects.toThrow();
+		const view = await store.readCurrentBindings({
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			actorId: "owner-1",
+			organizationIds: [],
+			isAdministrator: false,
+		});
+		expect(view.bindings[0]).toMatchObject({
+			state: "failed",
+			failureReason:
+				"SKILL_SYNC_PACKAGE_VERIFICATION_DEPENDENCY_UNAVAILABLE_RETRYABLE",
+			appliedReceipt: null,
+		});
+		const audits =
+			await client`select details from platform.audit_events where action='skill.binding.sync.failed' and agent_id='agent-1'`;
+		expect(JSON.stringify(audits)).not.toMatch(/secret|body-must-not-persist/);
+		expect(
+			await client`select id from platform.outbox_items where operation like 'conversation.%'`,
+		).toHaveLength(0);
+		expect(
+			await client`select execution_id from platform.conversation_executions where agent_id='agent-1'`,
+		).toHaveLength(0);
+		expect(
+			await client`select id from platform.idempotency_records where scope_type<>'skill_package'`,
+		).toHaveLength(0);
+	} finally {
+		await store.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+async function syncFixture() {
+	await client`insert into platform.skill_hub_agent_bindings(agent_id,agent_version,skill_version_id,configuration_revision,"grant",sync_revision,state,created_at,updated_at) values('agent-1','agent-version-1','skill-version-1',7,${client.json({ schemaVersion: 1, tools: [], connections: [], fileRoots: [], networkOrigins: [], scripts: false })},1,'pending_sync',now(),now())`;
+	await client`insert into platform.workload_reconciliations(agent_id,revision,state) values('agent-1',1,${client.json({ schemaVersion: 1, agentId: "agent-1", revision: 1, fence: 1, phase: "preflight", sourceConfigurationRevision: 7 })})`;
+	const store = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: database!.databaseUrl,
+	});
+	const attempt = await store.captureSyncAttempt({
+		agentId: "agent-1",
+		agentVersion: "agent-version-1",
+		configurationRevision: 7,
+		workloadRevision: 1,
+		fence: 1,
+		actorId: "owner-1",
+		organizationIds: [],
+		isAdministrator: false,
+	});
+	if (!attempt) {
+		await store.close();
+		throw new Error("Expected original attempt");
+	}
+	return { store, attempt };
+}
+it.each([
+	{ actorId: "foreign" },
+	{ agentId: "foreign" },
+	{ agentVersion: "foreign" },
+	{ configurationRevision: 8 },
+	{ workloadRevision: 2 },
+	{ fence: 2 },
+	{ bindings: [{ skillVersionId: "skill-version-1", syncRevision: 2 }] },
+	{ bindings: [{ skillVersionId: "foreign", syncRevision: 1 }] },
+])(
+	"rejects failure writes for changed original identity %j",
+	async (change) => {
+		const { store, attempt } = await syncFixture();
+		try {
+			expect(
+				await store.recordSyncFailure({
+					attempt: { ...attempt, ...change },
+					failure: {
+						stage: "binding_admission",
+						reason: "dependency_unavailable",
+						retryable: true,
+					},
+				}),
+			).toBe(false);
+			expect(
+				await client`select id from platform.audit_events where action='skill.binding.sync.failed'`,
+			).toHaveLength(0);
+			expect(
+				await client`select state from platform.skill_hub_agent_bindings`,
+			).toEqual([{ state: "pending_sync" }]);
+		} finally {
+			await store.close();
+		}
+	},
+);
+it.each(["owner", "sync", "workload", "source", "revoked"] as const)(
+	"rechecks %s after the attempt snapshot before committing failure",
+	async (drift) => {
+		const { store, attempt } = await syncFixture();
+		try {
+			if (drift === "owner")
+				await client`delete from platform.agent_owners where agent_id='agent-1'`;
+			if (drift === "sync")
+				await client`update platform.skill_hub_agent_bindings set sync_revision=2 where agent_id='agent-1'`;
+			if (drift === "workload")
+				await client`update platform.workload_reconciliations set revision=2,state=jsonb_set(state,'{revision}','2'::jsonb) where agent_id='agent-1'`;
+			if (drift === "source")
+				await client`update platform.workload_reconciliations set state=jsonb_set(state,'{sourceConfigurationRevision}','8'::jsonb) where agent_id='agent-1'`;
+			if (drift === "revoked")
+				await client`update platform.skill_hub_agent_bindings set state='revoked' where agent_id='agent-1'`;
+			expect(
+				await store.recordSyncFailure({
+					attempt,
+					failure: {
+						stage: "delivery",
+						reason: "dependency_unavailable",
+						retryable: true,
+					},
+				}),
+			).toBe(false);
+			expect(
+				await client`select id from platform.audit_events where action='skill.binding.sync.failed'`,
+			).toHaveLength(0);
+		} finally {
+			await store.close();
+		}
+	},
+);
+it("records a deterministic rejection without Applied and atomically rolls back when the audit fails", async () => {
+	const { store, attempt } = await syncFixture();
+	try {
+		await client`create function platform.reject_skill_failure() returns trigger language plpgsql as $$begin if NEW.action='skill.binding.sync.failed' then raise exception 'synthetic failure';end if;return NEW;end$$`;
+		await client`create trigger reject_skill_failure before insert on platform.audit_events for each row execute function platform.reject_skill_failure()`;
+		try {
+			await expect(
+				store.recordSyncFailure({
+					attempt,
+					failure: {
+						stage: "package_verification",
+						reason: "signature_invalid",
+						retryable: false,
+					},
+				}),
+			).rejects.toThrow();
+		} finally {
+			await client`drop trigger reject_skill_failure on platform.audit_events`;
+			await client`drop function platform.reject_skill_failure()`;
+		}
+		expect(
+			await client`select state,failure_reason,applied_receipt from platform.skill_hub_agent_bindings`,
+		).toEqual([
+			{ state: "pending_sync", failure_reason: null, applied_receipt: null },
+		]);
+		expect(
+			await store.recordSyncFailure({
+				attempt,
+				failure: {
+					stage: "package_verification",
+					reason: "signature_invalid",
+					retryable: false,
+				},
+			}),
+		).toBe(true);
+		expect(
+			await client`select state,failure_reason,applied_receipt from platform.skill_hub_agent_bindings`,
+		).toEqual([
+			{
+				state: "failed",
+				failure_reason:
+					"SKILL_SYNC_PACKAGE_VERIFICATION_SIGNATURE_INVALID_REJECTED",
+				applied_receipt: null,
+			},
+		]);
+	} finally {
+		await store.close();
+	}
+});
+
+it("clears a transient failure projection only after the matching Applied receipt succeeds", async () => {
+	const { store, attempt } = await syncFixture();
+	try {
+		await store.recordSyncFailure({
+			attempt,
+			failure: {
+				stage: "delivery",
+				reason: "dependency_unavailable",
+				retryable: true,
+			},
+		});
+		await store.recordAppliedReceipt({
+			schemaVersion: 1,
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			skillName: "workspace-summary",
+			configurationRevision: 7,
+			syncRevision: 1,
+			skillVersionId: "skill-version-1",
+			generationId: "e".repeat(64),
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: ".agents/skills/workspace-summary",
+			readOnly: true,
+		});
+		expect(
+			(
+				await store.readCurrentBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					actorId: "owner-1",
+					organizationIds: [],
+					isAdministrator: false,
+				})
+			).bindings[0],
+		).toMatchObject({ state: "synced", failureReason: null });
+		expect(
+			await store.recordSyncFailure({
+				attempt,
+				failure: {
+					stage: "delivery",
+					reason: "dependency_unavailable",
+					retryable: true,
+				},
+			}),
+		).toBe(true);
+		expect(
+			await client`select state from platform.skill_hub_agent_bindings`,
+		).toEqual([{ state: "synced" }]);
+	} finally {
+		await store.close();
+	}
+});
+
+it.each([
+	"success",
+	"signature",
+	"materialization",
+	"delivery",
+	"applied",
+] as const)(
+	"real Store and physical Skill preflight keeps %s evidence and zero executable work",
+	async (mode) => {
+		const { mkdtemp, rm, readdir, chmod } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const { publicationFixture } = await import(
+			"../../object-storage/src/skill-package-consumer.fixture.js"
+		);
+		const { createDeploymentSkillHubMaterializerFactoryV1 } = await import(
+			"../../../apps/platform-worker/src/skill-materializer-production-assembly.js"
+		);
+		const f = await publicationFixture();
+		const root = await mkdtemp(join(tmpdir(), "4334-physical-"));
+		const { store } = await syncFixture();
+		await client`delete from platform.skill_hub_agent_bindings where agent_id='agent-1'`;
+		await client`insert into platform.skill_hub_skills(id,name,owner_id,status,created_at,updated_at) values('skill-a',${f.version.name},'owner-1','active',now(),now())`;
+		await client`insert into platform.skill_hub_versions(id,skill_id,owner_id,version,provider,visibility,state,package_object_version,package_digest,manifest_digest,signature_digest,created_at) values('version-a','skill-a','owner-1',${f.version.version},${f.version.provider},'PRIVATE','published',${f.version.packageObjectVersion},${f.version.packageDigest},${f.version.manifestDigest},${mode === "signature" ? "d".repeat(64) : f.version.signatureDigest},now())`;
+		await client`insert into platform.skill_hub_installations(id,principal_type,principal_id,skill_version_id,state,installed_at,updated_at) values('installation-a','user','owner-1','version-a','installed',now(),now())`;
+		await client`insert into platform.idempotency_records(id,scope_type,scope_id,actor_id,command_type,idempotency_key,request_digest,status,result) values('admission-a','skill_package','version-a','owner-1','skill.package.publish.v1','admission-a',${"f".repeat(64)},'completed',${client.json({ skillVersionId: "version-a" })})`;
+		await client`insert into platform.skill_hub_agent_bindings(agent_id,agent_version,skill_version_id,configuration_revision,"grant",sync_revision,state,created_at,updated_at) values('agent-1','agent-version-1','version-a',7,${client.json({ schemaVersion: 1, tools: [], connections: [], fileRoots: [], networkOrigins: [], scripts: false })},1,'pending_sync',now(),now())`;
+		const factory = createDeploymentSkillHubMaterializerFactoryV1({
+			assemblyRoot: root,
+			runtimeUid:
+				mode === "materialization"
+					? process.geteuid?.() || 1000
+					: process.geteuid?.() === 65534
+						? 65533
+						: 65534,
+			agentVersion: "agent-version-1",
+			actor: {
+				actorId: "owner-1",
+				organizationIds: [],
+				isAdministrator: false,
+			},
+			store: {
+				readPublication: f.options.readPublication,
+				resolveSyncBindings: store.resolveSyncBindings.bind(store),
+				recordAppliedReceipt:
+					mode === "applied"
+						? async () => {
+								throw new Error("secret-upstream-must-not-leak");
+							}
+						: store.recordAppliedReceipt.bind(store),
+				captureSyncAttempt: store.captureSyncAttempt.bind(store),
+				recordSyncFailure: store.recordSyncFailure.bind(store),
+			},
+			storage: f.options.storage,
+			resolveAdmissionPolicy: f.options.resolveAdmissionPolicy,
+			sourceVerifier: f.options.sourceVerifier,
+			...(mode === "delivery"
+				? {
+						delivery: {
+							client: {
+								namespace: "fixture",
+								read: async () => null,
+								create: async () => {
+									throw new Error("secret-api-body");
+								},
+							} as never,
+						},
+					}
+				: {}),
+		});
+		const unseal = async (path: string) => {
+			await chmod(path, 0o700);
+			for (const x of await readdir(path, { withFileTypes: true })) {
+				if (x.isDirectory()) await unseal(join(path, x.name));
+			}
+		};
+		try {
+			if (!factory) throw new Error("Expected physical factory");
+			const worker = await factory({
+				databaseUrl: database!.databaseUrl,
+				signal: new AbortController().signal,
+			});
+			const input = {
+				agentId: "agent-1",
+				configurationRevision: 7,
+				workloadRevision: 1,
+				fence: 1,
+			};
+			if (mode === "success") await worker.materialize(input);
+			else await expect(worker.materialize(input)).rejects.toThrow();
+			const binding = (
+				await store.readCurrentBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					actorId: "owner-1",
+					organizationIds: [],
+					isAdministrator: false,
+				})
+			).bindings[0];
+			if (mode === "success")
+				expect(binding).toMatchObject({
+					state: "synced",
+					failureReason: null,
+					appliedReceipt: expect.objectContaining({
+						configurationRevision: 7,
+						syncRevision: 1,
+						readOnly: true,
+					}),
+				});
+			else {
+				const expected = {
+					signature: "SKILL_SYNC_PACKAGE_VERIFICATION_DIGEST_MISMATCH_REJECTED",
+					materialization:
+						"SKILL_SYNC_MATERIALIZATION_INVALID_MATERIALIZATION_REJECTED",
+					delivery: "SKILL_SYNC_DELIVERY_DEPENDENCY_UNAVAILABLE_RETRYABLE",
+					applied:
+						"SKILL_SYNC_APPLIED_PERSISTENCE_DEPENDENCY_UNAVAILABLE_RETRYABLE",
+				};
+				expect(binding).toMatchObject({
+					state: "failed",
+					failureReason: expected[mode],
+					appliedReceipt: null,
+				});
+			}
+			expect(
+				await client`select execution_id from platform.conversation_executions where agent_id='agent-1'`,
+			).toHaveLength(0);
+			expect(await client`select id from platform.outbox_items`).toHaveLength(
+				0,
+			);
+			expect(f.publications).toBe(1);
+			expect(
+				JSON.stringify(
+					await client`select details from platform.audit_events where action='skill.binding.sync.failed'`,
+				),
+			).not.toMatch(/secret|api-body|upstream/);
+		} finally {
+			await store.close();
+			await unseal(root);
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);

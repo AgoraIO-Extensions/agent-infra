@@ -1,4 +1,6 @@
 import {
+	SkillSyncErrorV1,
+	type SkillSyncFailureV1,
 	WorkloadPreflightRejectedErrorV1,
 	type WorkloadStepFailureV1,
 } from "@agent-infra/platform-core";
@@ -32,10 +34,12 @@ export type WorkloadStepFailureReasonV1 =
 	| "preflight_rejected"
 	| "capabilities_unavailable"
 	| "configuration_mismatch"
-	| "unexpected_error";
+	| "unexpected_error"
+	| "skill_sync_failure";
 
 export interface WorkloadStepFailureClassV1 {
 	readonly reason: WorkloadStepFailureReasonV1;
+	readonly skillSync?: SkillSyncFailureV1;
 	/** Stable preflight boundary, present only for a rejected preflight. */
 	readonly preflightStage?:
 		| "secret-bindings"
@@ -71,6 +75,8 @@ function kubernetesReason(
 export function classifyWorkloadStepFailureV1(
 	error: unknown,
 ): WorkloadStepFailureClassV1 {
+	if (error instanceof SkillSyncErrorV1)
+		return { reason: "skill_sync_failure", skillSync: error.failure };
 	if (error instanceof WorkloadKubernetesError) {
 		const { status, kind, verb } = error.details;
 		return {
@@ -126,7 +132,7 @@ export function createWorkloadStepFailureLoggerV1(options: {
 	return (failure: WorkloadStepFailureV1) => {
 		const at = now();
 		const classified = classifyWorkloadStepFailureV1(failure.error);
-		const key = `${failure.agentId}\0${failure.phase}\0${classified.reason}\0${classified.preflightStage ?? ""}`;
+		const key = `${failure.agentId}\0${failure.phase}\0${classified.reason}\0${classified.preflightStage ?? ""}\0${classified.skillSync?.stage ?? ""}\0${classified.skillSync?.reason ?? ""}`;
 		const previous = seen.get(key);
 		if (
 			!failure.terminal &&
@@ -158,6 +164,7 @@ export function createWorkloadStepFailureLoggerV1(options: {
 				attempts: failure.attempts,
 				terminal: failure.terminal,
 				reason: classified.reason,
+				...(classified.skillSync ? { skillSync: classified.skillSync } : {}),
 				...(classified.preflightStage
 					? { preflightStage: classified.preflightStage }
 					: {}),

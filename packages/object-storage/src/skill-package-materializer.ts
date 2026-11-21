@@ -17,6 +17,7 @@ import { types } from "node:util";
 import {
 	parseSkillPackagePublicationObjectV1,
 	type SkillPackagePublicationObjectV1,
+	SkillSyncErrorV1,
 } from "@agent-infra/platform-core";
 import { prepareSkillPackageV1 } from "./skill-package-admission.js";
 
@@ -665,7 +666,11 @@ export class SkillPackageMaterializerV1 {
 					if (pendingPointer) await rm(pendingPointer, { force: true });
 				})
 				.catch(() => {});
-			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
+			if (
+				error instanceof SkillPackageMaterializerErrorV1 ||
+				error instanceof SkillSyncErrorV1
+			)
+				throw error;
 			fail("unavailable");
 		}
 	}

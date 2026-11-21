@@ -263,3 +263,46 @@ describe("createWorkloadStepFailureLoggerV1 (#2532)", () => {
 		expect(log).toHaveBeenCalledTimes(101);
 	});
 });
+
+it("reports only fixed Skill sync fields and never the source message", async () => {
+	const { SkillSyncErrorV1 } = await import("@agent-infra/platform-core");
+	const error = new SkillSyncErrorV1({
+		stage: "delivery",
+		reason: "dependency_unavailable",
+		retryable: true,
+	});
+	error.message = "secret body must not leak";
+	expect(classifyWorkloadStepFailureV1(error)).toEqual({
+		reason: "skill_sync_failure",
+		skillSync: {
+			stage: "delivery",
+			reason: "dependency_unavailable",
+			retryable: true,
+		},
+	});
+});
+
+it("does not suppress a different fixed Skill substage as a duplicate", async () => {
+	const { SkillSyncErrorV1 } = await import("@agent-infra/platform-core");
+	const logs: string[] = [];
+	const logger = createWorkloadStepFailureLoggerV1({
+		log: (s) => logs.push(s),
+		now: () => 1000,
+	});
+	for (const stage of ["binding_admission", "package_verification"] as const)
+		logger({
+			agentId: "agent-a",
+			phase: "preflight",
+			attempts: 1,
+			terminal: false,
+			error: new SkillSyncErrorV1({
+				stage,
+				reason: "dependency_unavailable",
+				retryable: true,
+			}),
+		});
+	expect(logs.map((s) => JSON.parse(s).skillSync.stage)).toEqual([
+		"binding_admission",
+		"package_verification",
+	]);
+});
