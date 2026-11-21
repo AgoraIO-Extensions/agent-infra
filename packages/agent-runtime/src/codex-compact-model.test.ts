@@ -14,6 +14,7 @@ import {
 
 it.each([
 	"completed",
+	"prototype-execution",
 	"drain-unproven",
 	"restart",
 	"nonempty-rpc",
@@ -32,6 +33,8 @@ it.each([
 ] as const)(
 	"protects the compact model Execution and its terminal proof (%s, #4045)",
 	async (mode) => {
+		const executionId =
+			mode === "prototype-execution" ? "__proto__" : "compact-model";
 		const directory = await mkdtemp(join(tmpdir(), "compact-model-admission-"));
 		const transport = new CompactModelTransport();
 		transport.threadId = randomUUID();
@@ -125,7 +128,7 @@ it.each([
 		try {
 			const binding = {
 				...seeded.binding,
-				scope: { ...seeded.binding.scope, executionId: "compact-model" },
+				scope: { ...seeded.binding.scope, executionId: executionId },
 			};
 			const read = {
 				nativeSessionRef: seeded.nativeSessionRef,
@@ -141,7 +144,7 @@ it.each([
 			const command = driver.createNativeCommandCommandV2({
 				schemaVersion: 2,
 				kind: "native-command",
-				operationId: "compact-model",
+				operationId: executionId,
 				...binding.scope,
 				turnId: "platform-compact-model",
 				nativeSessionRef: seeded.nativeSessionRef,
@@ -264,7 +267,7 @@ it.each([
 				return;
 			}
 
-			if (mode !== "completed") {
+			if (mode !== "completed" && mode !== "prototype-execution") {
 				if (
 					mode === "rpc-timeout" ||
 					mode === "rpc-disconnected" ||
@@ -273,12 +276,10 @@ it.each([
 					expect(result.result.outcome).toBe("unknown");
 				else
 					await expect
-						.poll(() =>
-							driver.getStatus(seeded.nativeSessionRef, "compact-model"),
-						)
+						.poll(() => driver.getStatus(seeded.nativeSessionRef, executionId))
 						.toBe("unknown");
 				const facts = await driver
-					.replayEvents(seeded.nativeSessionRef, "compact-model")
+					.replayEvents(seeded.nativeSessionRef, executionId)
 					.catch(() => []);
 				expect(
 					facts.some(
@@ -306,7 +307,7 @@ it.each([
 			expect(result.result).toEqual({ outcome: "accepted", status: "running" });
 
 			await expect
-				.poll(() => driver.getStatus(seeded.nativeSessionRef, "compact-model"))
+				.poll(() => driver.getStatus(seeded.nativeSessionRef, executionId))
 				.toBe("completed");
 			expect(transport.modelStatuses).toEqual([200]);
 			expect(await driver.lookupOperation(command)).toMatchObject({
@@ -314,10 +315,10 @@ it.each([
 				record: { result: { outcome: "accepted", status: "completed" } },
 			});
 			expect(providerRequests).toBe(1);
-			expect(actions).toEqual(["compact-model"]);
+			expect(actions).toEqual([executionId]);
 			const events = await driver.replayEvents(
 				seeded.nativeSessionRef,
-				"compact-model",
+				executionId,
 			);
 			expect(
 				events

@@ -8682,12 +8682,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					authorizationRecordId: pending.command.authorizationRecordId,
 				});
 				op.state = "resolved";
-				session.executions[pending.executionId] = {
-					executionId: pending.executionId,
-					turnId: pending.command.turnId,
-					nativeTurnId: turnId,
-					status: "running",
-				};
+				Object.defineProperty(session.executions, pending.executionId, {
+					value: {
+						executionId: pending.executionId,
+						turnId: pending.command.turnId,
+						nativeTurnId: turnId,
+						status: "running",
+					},
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				});
 				session.activeExecutionId = pending.executionId;
 				const journal = this.ensureJournal(session, turnId);
 				this.appendStatusEvent(session, journal);
