@@ -16,6 +16,7 @@ import {
 } from "./codex-runtime-driver.js";
 import { createCodexSessionExecutorBindingV1 } from "./codex-session-executor-binding.js";
 import { DurableJsonFile } from "./durable-json.js";
+import { withNativeMetadataTraceV1 } from "./native-metadata-telemetry.js";
 
 class MetadataTransport {
 	readonly requests: CodexAppServerFrame[] = [];
@@ -1840,4 +1841,29 @@ describe("Codex native metadata command (scripted unit fixture)", () => {
 			(await f.driver.discoverNativeCommands(f.read)).capabilities,
 		).toHaveLength(1);
 	});
+});
+
+it("attributes actual Driver thread/read RPC timing without thread or turn contents", async () => {
+	const f = await fixture();
+	const log = vi.spyOn(console, "info").mockImplementation(() => {});
+	try {
+		await withNativeMetadataTraceV1(
+			"12345678-1234-1234-1234-123456789abc",
+			() => f.driver.discoverNativeCommands(f.read),
+		);
+		const rows = log.mock.calls.map(([x]) => JSON.parse(String(x)));
+		expect(rows).toContainEqual(
+			expect.objectContaining({
+				event: "native_metadata_rpc",
+				method: "thread/read",
+				outcome: "ok",
+			}),
+		);
+		expect(JSON.stringify(rows)).not.toContain("native-thread-private");
+		expect(rows.filter((x) => x.event === "native_metadata_rpc")).toHaveLength(
+			1,
+		);
+	} finally {
+		log.mockRestore();
+	}
 });

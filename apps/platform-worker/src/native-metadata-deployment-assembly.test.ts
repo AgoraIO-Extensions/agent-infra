@@ -596,3 +596,68 @@ describe("native metadata deployment assembly", () => {
 		expect(runtimeTarget.resolve).not.toHaveBeenCalled();
 	});
 });
+
+it.each(["scope", "verified", "identity", "route", "cancelled"] as const)(
+	"reports a bounded target.%s failure without private data",
+	async (fault) => {
+		const log = vi.spyOn(console, "info").mockImplementation(() => {});
+		const { apiRequestSourceRef: _source, ...plain } = bindingRequest;
+		const binding = { ...plain, originalHostScopeRef: "host-target" };
+		const current = {
+			agentId: binding.scope.agentId,
+			actorId: binding.scope.principal.id,
+			channelId: binding.scope.channelId,
+			principal: binding.scope.principal,
+			conversationId: binding.scope.conversationId,
+			executionId: binding.scope.executionId,
+			sessionGeneration: binding.scope.sessionGeneration,
+			authorizationRevision: binding.scope.authorizationRevision,
+			originalHostScopeRef: binding.originalHostScopeRef,
+			workloadState: { verified: {} },
+			sandboxResource: null,
+		};
+		const controller = new AbortController();
+		const resolver = createPlatformNativeMetadataRuntimeTargetResolverV1({
+			query: {
+				readNativeMetadataRuntimeTargetScopeV1: vi.fn(async () =>
+					fault === "scope"
+						? undefined
+						: fault === "verified"
+							? { ...current, workloadState: {} }
+							: fault === "identity"
+								? { ...current, agentId: "PRIVATE_CANARY" }
+								: current,
+				),
+			} as never,
+			workload: {
+				policy: {
+					namespace: "fixture",
+					resourceProfileRef: "profile",
+					resources: {
+						requests: { cpu: "1", memory: "1Gi" },
+						limits: { cpu: "1", memory: "1Gi" },
+					},
+				},
+			} as never,
+			resolveConversationRuntimeHost: vi.fn(async () => {
+				if (fault === "cancelled") controller.abort();
+				throw Error("PRIVATE_CANARY");
+			}),
+		});
+		try {
+			expect(
+				await resolver.resolve({ binding, signal: controller.signal }),
+			).toBeNull();
+			const rows = log.mock.calls.map(([x]) => JSON.parse(String(x)));
+			expect(rows.at(-1)).toMatchObject({
+				hop: "worker.read",
+				step: `target.${fault}`,
+				outcome: "unavailable",
+			});
+			expect(rows.at(-1).elapsedMs).toBeGreaterThanOrEqual(0);
+			expect(JSON.stringify(rows)).not.toContain("PRIVATE_CANARY");
+		} finally {
+			log.mockRestore();
+		}
+	},
+);

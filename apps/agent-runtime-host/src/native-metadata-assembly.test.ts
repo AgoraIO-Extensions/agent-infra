@@ -1,5 +1,8 @@
 import type { RuntimeHostNativeMetadataReadContextV1 } from "@agent-infra/agent-runtime";
-import { RuntimeHostError } from "@agent-infra/agent-runtime";
+import {
+	observeNativeMetadataRpcV1,
+	RuntimeHostError,
+} from "@agent-infra/agent-runtime";
 import type {
 	RuntimeNativeMetadataReadRequestV1,
 	RuntimeNativeMetadataReadResponseV1,
@@ -164,4 +167,33 @@ describe("Runtime native metadata Host assembly", () => {
 			),
 		).rejects.toBe(denial);
 	});
+});
+
+it("carries the authenticated Host trace into RPC diagnostics without altering its result", async () => {
+	const log = vi.spyOn(console, "info").mockImplementation(() => {});
+	const traceId = "12345678-1234-1234-1234-123456789abc";
+	const read = createRuntimeNativeMetadataReadV1(
+		{
+			readNativeMetadataV1: async () =>
+				observeNativeMetadataRpcV1("thread/read", async () => response),
+		},
+		{ resolveContext: async ({ signal }) => context(signal) },
+	);
+	try {
+		expect(
+			await read({ ...request, traceId }, new AbortController().signal),
+		).toBe(response);
+		expect(
+			log.mock.calls.map(([line]) => JSON.parse(String(line))),
+		).toContainEqual(
+			expect.objectContaining({
+				event: "native_metadata_rpc",
+				traceId,
+				method: "thread/read",
+				outcome: "ok",
+			}),
+		);
+	} finally {
+		log.mockRestore();
+	}
 });
