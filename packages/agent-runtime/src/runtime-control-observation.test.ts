@@ -292,4 +292,77 @@ describe("Runtime control observation (#4358 I2)", () => {
 			"unavailable",
 		);
 	});
+
+	it("never joins records of different control bindings into one complete timeline (#4360 MUST-1)", () => {
+		const out = sink();
+		const observer = observerFor(out.output);
+		const mark = observer.mark();
+		const renewed = { ...binding, controlFence: 2 };
+		for (const stage of [
+			"control_received",
+			"control_validated",
+			"latch_commit_confirmed",
+		] as const)
+			observer.emit({ stage, outcome: "observed", binding, mark });
+		for (const stage of [
+			"interrupt_write_accepted",
+			"native_interrupt_ack",
+		] as const)
+			observer.emit({ stage, outcome: "observed", binding: renewed, mark });
+		observer.emit({
+			stage: "terminal_commit_confirmed",
+			outcome: "observed",
+			binding: renewed,
+			mark,
+			terminal: {
+				status: "cancelled",
+				ref: "codex-cursor-7",
+				occurredAt: "2026-11-21T21:00:00.050Z",
+			},
+		});
+		for (const replaced of [
+			{ ...binding, sessionGeneration: 2 },
+			{ ...binding, executionDeliveryFence: 2 },
+			{ ...binding, agentId: "agent-b" },
+			{ ...binding, controlRecordId: "control-b" },
+		])
+			observer.emit({
+				stage: "native_interrupt_ack",
+				outcome: "observed",
+				binding: replaced,
+				mark,
+			});
+		const view = projectRuntimeControlEvidenceV1(out.lines);
+		expect(view.timelines.length).toBeGreaterThan(1);
+		expect(view.timelines.every((t) => t.status === "unproven")).toBe(true);
+	});
+
+	it("does not treat a replayed result as the original control timeline (#4360 MUST-2)", () => {
+		const out = sink();
+		const observer = observerFor(out.output);
+		const mark = observer.mark();
+		for (const stage of [
+			"control_received",
+			"control_validated",
+			"original_result_read",
+		] as const)
+			observer.emit({ stage, outcome: "observed", binding, mark });
+		expect(projectRuntimeControlEvidenceV1(out.lines).timelines).toEqual([
+			expect.objectContaining({ status: "unproven" }),
+		]);
+		// With the original trajectory of the same binding present, it is complete.
+		const full = sink();
+		const second = observerFor(full.output);
+		fullStop(second);
+		const replayMark = second.mark();
+		for (const stage of [
+			"control_received",
+			"control_validated",
+			"original_result_read",
+		] as const)
+			second.emit({ stage, outcome: "observed", binding, mark: replayMark });
+		expect(projectRuntimeControlEvidenceV1(full.lines).timelines).toEqual([
+			expect.objectContaining({ status: "complete" }),
+		]);
+	});
 });

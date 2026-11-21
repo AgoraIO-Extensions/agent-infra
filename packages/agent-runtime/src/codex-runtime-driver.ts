@@ -1182,9 +1182,10 @@ interface PendingRequest {
 interface CodexRpcObserver {
 	written(): void;
 	acknowledged(): void;
+	/** `ackStage` is true once the failure concerns the native response. */
 	failed(
 		reason: "write_failed" | "timeout" | "disconnected" | "protocol_invalid",
-		written: boolean,
+		ackStage: boolean,
 		rpcCode?: number,
 	): void;
 }
@@ -1249,9 +1250,9 @@ function interruptObserver(
 				outcome: "observed",
 				interrupt,
 			}),
-		failed: (reason, written, rpcCode) =>
+		failed: (reason, ackStage, rpcCode) =>
 			emitRuntimeControlObservationV1(observation, {
-				stage: written ? "native_interrupt_ack" : "interrupt_write_accepted",
+				stage: ackStage ? "native_interrupt_ack" : "interrupt_write_accepted",
 				outcome:
 					reason === "protocol_invalid" || reason === "write_failed"
 						? "rejected"
@@ -4813,11 +4814,21 @@ class CodexRpc {
 			unavailable();
 		const id = this.nextRequestId++;
 		let rpcCode: number | undefined;
+		let acknowledged = false;
 		const response = new Promise<T>((resolve, reject) => {
 			this.pending.set(id, {
 				method,
 				readOnly,
-				resolve: (value) => resolve(parse(value)),
+				resolve: (value) => {
+					const parsed = parse(value);
+					// #4360 MUST-3: the ACK is the moment the matched response passes
+					// its parser, even when the write callback has not returned yet.
+					if (observer) {
+						acknowledged = true;
+						observeSafely(() => observer.acknowledged());
+					}
+					resolve(parsed);
+				},
 				reject,
 				nativeSelectionRejection,
 				allowHistoryMaterializationRetry,
@@ -4878,25 +4889,30 @@ class CodexRpc {
 				written = true;
 				observeSafely(() => observer.written());
 			}
-			const value = await Promise.race([response, deadline]);
-			if (observer) observeSafely(() => observer.acknowledged());
-			return value;
+			return await Promise.race([response, deadline]);
 		} catch (error) {
-			if (observer)
+			if (observer && acknowledged && !written)
+				// The response was validated but the local write never confirmed.
+				observeSafely(() =>
+					observer.failed(timedOut ? "timeout" : "write_failed", false),
+				);
+			else if (observer && !acknowledged) {
+				const reason = timedOut
+					? "timeout"
+					: error instanceof RuntimeHostError &&
+							error.code === "RUNTIME_CODEX_PROTOCOL_INVALID"
+						? "protocol_invalid"
+						: !written
+							? "write_failed"
+							: "disconnected";
 				observeSafely(() =>
 					observer.failed(
-						timedOut
-							? "timeout"
-							: !written
-								? "write_failed"
-								: error instanceof RuntimeHostError &&
-										error.code === "RUNTIME_CODEX_PROTOCOL_INVALID"
-									? "protocol_invalid"
-									: "disconnected",
-						written,
+						reason,
+						written || reason === "protocol_invalid",
 						rpcCode,
 					),
 				);
+			}
 			if (readOnly && interruptedRead) throw timeoutError;
 			this.pending.delete(id);
 			if (error instanceof CodexReadRejectedError) throw error;

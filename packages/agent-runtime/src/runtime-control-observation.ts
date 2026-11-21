@@ -265,6 +265,10 @@ export function emitRuntimeControlObservationV1(
 	});
 }
 
+const controlBindingKeysV1 = Object.keys(
+	RuntimeControlBindingV1Schema.shape,
+) as Array<keyof RuntimeControlBindingV1>;
+
 const requiredStages = [
 	"control_received",
 	"control_validated",
@@ -313,13 +317,14 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 		seen.add(record.monoSequence);
 		sequences.set(record.clockId, seen);
 	}
+	// #4360 MUST-1: a timeline is one clock domain and one complete original
+	// control binding; records of a renewed fence or a replaced scope never join.
 	const controls = new Map<string, RuntimeControlEvidenceV1[]>();
 	for (const record of records) {
 		if (!record.executionId || !record.stopRequestId) continue;
 		const key = JSON.stringify([
 			record.clockId,
-			record.executionId,
-			record.stopRequestId,
+			...controlBindingKeysV1.map((name) => record[name] ?? null),
 		]);
 		controls.set(key, [...(controls.get(key) ?? []), record]);
 	}
@@ -336,9 +341,9 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 		const has = (stage: string) => ordered.some((r) => r.stage === stage);
 		const rejected = ordered.some((r) => r.outcome === "rejected");
 		const unknown = ordered.some((r) => r.outcome === "unknown");
-		const complete = has("original_result_read")
-			? has("control_received") && has("control_validated")
-			: has("latch_commit_confirmed") && requiredStages.every(has);
+		// #4360 MUST-2: a replayed result read proves nothing about the original
+		// control; only the original latch and every later stage do.
+		const complete = has("latch_commit_confirmed") && requiredStages.every(has);
 		timelines.push({
 			clockId: first.clockId,
 			executionId: first.executionId as string,
