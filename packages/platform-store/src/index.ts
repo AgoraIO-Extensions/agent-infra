@@ -97,6 +97,19 @@ export {
 	type ConnectionManualAssociationMaterialV1,
 	PostgresConnectionManualAssociationReaderV1,
 } from "./connection-manual-association-reader.js";
+export {
+	type ConnectionConfirmedPrincipalsV1,
+	type ConnectionManualInstallationDeploymentV1,
+	type ConnectionManualInstallationDormantReasonV1,
+	type ConnectionManualInstallationReceiptV1,
+	connectionManualClientNameDefaultV1,
+	connectionManualPublicationContractV1,
+	connectionManualReadbackContractV1,
+	isConnectionManualClientNameV1,
+	readConnectionConfirmedPrincipalsV1,
+	readConnectionManualInstallationEnvironmentV1,
+	resolveConnectionManualInstallationDeploymentV1,
+} from "./connection-manual-installation-deployment.js";
 export { PostgresConnectionManualInstallationStoreV1 } from "./connection-manual-installation-store.js";
 export type {
 	ConnectionManualInstallationClaimV1,

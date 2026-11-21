@@ -5,7 +5,13 @@ import {
 	captureConnectionConsumerRegistrationPolicyV1,
 	parseEvaluationAnalysisPolicyV1,
 } from "@agent-infra/platform-core";
-import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
+import {
+	type ConnectionManualInstallationDeploymentV1,
+	PostgresPlatformUserDisablesV1,
+	readConnectionConfirmedPrincipalsV1,
+	readConnectionManualInstallationEnvironmentV1,
+	resolveConnectionManualInstallationDeploymentV1,
+} from "@agent-infra/platform-store";
 import {
 	readConnectionConsumerEnvironmentConfigurationV1,
 	readConnectionSystemAccessEnvironmentConfigurationV1,
@@ -58,6 +64,7 @@ const {
 	connectionSystemAccessApproval,
 	connectionInstallationConfiguration,
 	connectionManualInstallationClientName,
+	connectionConsistencyExceptionApproval,
 	connectionInstallationsByAgent,
 	connectionInstallationsByAgentAndPrincipal,
 	connectionInstallationCallback,
@@ -267,22 +274,62 @@ const browser = createPostgresLdapBrowserDeployment({
 	publicOrigin,
 	trustedProxyToken,
 });
-if (
+// #4199 C2 (Spec §13.5.1): the M1 exception route opens only for the approved
+// one-time system access plus an exception approval record that passes its
+// schema, is bound to that access and has not expired, with the Principals
+// confirmed outside the exception resolved from the Platform DB. The module's
+// `apiInput.connectionInstallation.manualInstallation` is never a source.
+const manualInstallationEnvironment =
+	readConnectionManualInstallationEnvironmentV1(process.env);
+const manualExceptionApproval =
+	connectionConsistencyExceptionApproval ??
+	manualInstallationEnvironment.exceptionApproval;
+const manualInstallationRequested =
+	manualExceptionApproval !== undefined ||
 	connectionManualInstallationClientName !== undefined ||
-	apiInput?.connectionInstallation?.manualInstallation !== undefined
-) {
+	apiInput?.connectionInstallation?.manualInstallation !== undefined;
+const manualInstallation: ConnectionManualInstallationDeploymentV1 =
+	manualExceptionApproval === undefined
+		? { status: "dormant", reason: "exception_approval_missing" }
+		: staticPerAgentConnectionBindings ||
+				connectionInstallationConfiguration !== undefined
+			? { status: "dormant", reason: "standard_installation_configured" }
+			: !resolvedConnectionSystemAccess
+				? { status: "dormant", reason: "system_access_unavailable" }
+				: resolveConnectionManualInstallationDeploymentV1({
+						systemAccess: resolvedConnectionSystemAccess.system,
+						approval: resolvedConnectionSystemAccess.approval,
+						exceptionApproval: manualExceptionApproval,
+						clientName:
+							connectionManualInstallationClientName ??
+							manualInstallationEnvironment.clientName,
+						confirmedPrincipals:
+							await readConnectionConfirmedPrincipalsV1(databaseUrl),
+					});
+if (manualInstallation.status === "enabled")
+	console.info(
+		JSON.stringify({
+			service: "platform-api",
+			code: "CONNECTION_MANUAL_INSTALLATION_ENABLED",
+			receipt: manualInstallation.receipt,
+		}),
+	);
+else if (manualInstallationRequested)
 	console.warn(
 		JSON.stringify({
 			service: "platform-api",
 			code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
-			dependency: "EP-1123",
+			reason: manualInstallation.reason,
 		}),
 	);
-}
+// The callback route forwards every claimed callback, manual ones included, to the
+// original Host with the callback-only credential (Spec §13.5.6); without it the
+// route stays closed.
 const callbackForwarder =
 	connectionInstallationCallback ??
-	(connectionInstallationConfiguration &&
-	!staticPerAgentConnectionBindings &&
+	(((connectionInstallationConfiguration &&
+		!staticPerAgentConnectionBindings) ||
+		manualInstallation.status === "enabled") &&
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
 		? {
 				forward: createProtectedConnectionInstallationForwarder({
@@ -422,6 +469,14 @@ export function createPlatformApiAssemblyInput() {
 					connectionInstallation: {
 						configuration: connectionInstallationConfiguration,
 						publicOrigin,
+					},
+				}
+			: {}),
+		...(manualInstallation.status === "enabled"
+			? {
+					connectionManualInstallation: {
+						publicOrigin,
+						policy: structuredClone(manualInstallation.policy),
 					},
 				}
 			: {}),
