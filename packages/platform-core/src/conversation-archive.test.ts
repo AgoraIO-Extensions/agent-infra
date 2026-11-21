@@ -73,7 +73,7 @@ it("keeps the original absolute deadline across progress, retry and restart", ()
 	});
 });
 
-it("does not turn late ACK/progress into an extended archive budget", () => {
+it("gives proven completion priority over late disposition without extending an unproven ACK budget", () => {
 	const previous = advanceConversationArchiveV1({
 		ref: "original",
 		nowMs: 1000,
@@ -90,5 +90,31 @@ it("does not turn late ACK/progress into an extended archive budget", () => {
 			acknowledgedCursor: "late",
 			complete: true,
 		}).status,
+	).toBe("complete");
+	expect(
+		advanceConversationArchiveV1({
+			previous,
+			ref: "ignored",
+			nowMs: 2000,
+			budgetMs: 999999,
+			cursor: "late",
+			acknowledgedCursor: "late",
+		}).status,
 	).toBe("unavailable");
+});
+
+it("records the first positively confirmed ACK as progress even on the initial checkpoint", () => {
+	expect(
+		advanceConversationArchiveV1({
+			ref: "original",
+			nowMs: 1000,
+			budgetMs: 100,
+			cursor: "cursor-1",
+			acknowledgedCursor: "cursor-1",
+		}),
+	).toMatchObject({
+		lastProgressAtMs: 1000,
+		acknowledgedCursor: "cursor-1",
+		deadlineAtMs: 1100,
+	});
 });

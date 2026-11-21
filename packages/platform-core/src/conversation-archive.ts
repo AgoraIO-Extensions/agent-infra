@@ -92,18 +92,16 @@ export function advanceConversationArchiveV1(input: {
 		input.acknowledgedCursor ?? archive.acknowledgedCursor;
 	return parseConversationArchiveStateV1({
 		...archive,
-		status:
-			input.nowMs >= archive.deadlineAtMs
+		status: input.complete
+			? "complete"
+			: input.nowMs >= archive.deadlineAtMs
 				? "unavailable"
-				: input.complete
-					? "complete"
-					: archive.status,
+				: archive.status,
 		cursor: input.cursor,
 		acknowledgedCursor,
 		lastProgressAtMs:
-			before &&
-			(before.cursor !== input.cursor ||
-				before.acknowledgedCursor !== acknowledgedCursor)
+			(before && before.cursor !== input.cursor) ||
+			archive.acknowledgedCursor !== acknowledgedCursor
 				? input.nowMs
 				: archive.lastProgressAtMs,
 	});

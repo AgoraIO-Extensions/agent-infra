@@ -12701,6 +12701,96 @@ describe("terminal original Turn control authority (#4266)", () => {
 			await store.close();
 		}
 	});
+	it.each([false, true])(
+		"Files4325M1 permits original PVC observation enrichment without resetting archive expiry (prior shape=%s)",
+		async (priorShape) => {
+			const work = await terminalWork();
+			const [original] =
+				await client`select resource_observation->'resources' as resources from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+			const pvc = original!.resources.find(
+				(r: { kind: string }) => r.kind === "PersistentVolumeClaim",
+			);
+			await client`update platform.session_sandbox_allocations set resource_observation=null where conversation_id=${work.conversationId}`;
+			const current = await claim(work.itemId);
+			try {
+				if (current.decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				expect(
+					await current.store.archiveOriginalTurn({
+						claim: current.decision.claim,
+						budgetMs: 300,
+					}),
+				).toMatchObject({ status: "pending" });
+				if (priorShape)
+					await client`update platform.audit_events set details=details #- '{binding,pvcLocation}' where target_id=${work.executionId} and action='conversation.archive.observed'`;
+				const [before] =
+					await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+				await client`update platform.session_sandbox_allocations set resource_observation=${client.json({ status: "stopped", resources: [pvc] })} where conversation_id=${work.conversationId}`;
+				await client`select pg_sleep(0.35)`;
+				expect(
+					await current.store.archiveOriginalTurn({
+						claim: current.decision.claim,
+						budgetMs: 999999,
+					}),
+				).toMatchObject({ status: "unavailable", remainingMs: 0 });
+				const [after] =
+					await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+				expect(after!.details.archive.deadlineAtMs).toBe(
+					before!.details.archive.deadlineAtMs,
+				);
+				expect(after!.details.archive.lastProgressAtMs).toBeNull();
+				expect(after!.details.binding.pvc).toEqual({
+					name: pvc.name,
+					namespace: pvc.namespace,
+					uid: pvc.uid,
+				});
+				expect(await dispatchState(work)).toMatchObject({
+					status: "failed",
+					execution_status: "completed",
+				});
+			} finally {
+				await current.store.close();
+			}
+		},
+	);
+	it.each(["name", "namespace", "uid"] as const)(
+		"Files4325M1 rejects an observed PVC %s replacement",
+		async (field) => {
+			const work = await terminalWork();
+			const current = await claim(work.itemId);
+			try {
+				if (current.decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 1000,
+				});
+				const [allocation] =
+					await client`select resource_observation from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+				const observation = allocation!.resource_observation;
+				observation.resources = observation.resources.map(
+					(r: { kind: string }) =>
+						r.kind === "PersistentVolumeClaim"
+							? { ...r, [field]: "replacement" }
+							: r,
+				);
+				await client`update platform.session_sandbox_allocations set resource_observation=${client.json(observation)} where conversation_id=${work.conversationId}`;
+				expect(
+					await current.store.archiveOriginalTurn({
+						claim: current.decision.claim,
+						budgetMs: 1000,
+					}),
+				).toBeNull();
+				expect(await dispatchState(work)).toMatchObject({
+					status: "processing",
+					execution_status: "completed",
+				});
+			} finally {
+				await current.store.close();
+			}
+		},
+	);
+
 	it("Files4266archive fixes an absolute budget across claims/restarts and preserves the result and query gap", async () => {
 		const work = await terminalWork();
 		let store = open();
@@ -12912,6 +13002,102 @@ describe("terminal original Turn control authority (#4266)", () => {
 		}
 	});
 
+	it("Files4325M2 preserves committed terminal and ACK when final disposition arrives late", async () => {
+		const work = await terminalWork();
+		const store = open();
+		const checkpoint = store.archiveOriginalTurn.bind(store);
+		store.archiveOriginalTurn = async (input) => {
+			if (input.complete) {
+				const [record] =
+					await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+				const [clock] =
+					await client`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				expect(record!.details.archive.acknowledgedCursor).toBe(
+					"terminal-cursor",
+				);
+				expect(clock!.now).toBeLessThan(record!.details.archive.deadlineAtMs);
+				await client`select pg_sleep(0.55)`;
+			}
+			return checkpoint({ ...input, budgetMs: 500 });
+		};
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const acknowledged: string[] = [];
+		const host = isolationHost(work, {
+			async *events() {
+				yield {
+					schemaVersion: 1,
+					type: "completed",
+					executionId: work.executionId,
+					adapterEventKey: "real-terminal",
+					cursor: "terminal-cursor",
+					occurredAt: "2026-11-20T23:00:00.000Z",
+					payload: { status: "completed" },
+				};
+			},
+			async acknowledge(request) {
+				const [row] =
+					await client`select last_runtime_cursor from platform.conversation_executions where execution_id=${work.executionId}`;
+				expect(row?.last_runtime_cursor).toBe(request.confirmedCursor);
+				acknowledged.push(request.confirmedCursor);
+			},
+		});
+		try {
+			const useCase = createConversationDispatchUseCaseV1({
+				store,
+				runtimeHost: host,
+				events,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						return decision.outcome === "allowed"
+							? {
+									...decision,
+									authority: { ...decision.authority, controlOnly: true },
+								}
+							: decision;
+					},
+				},
+			});
+			expect(
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "archive-complete",
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			expect(acknowledged).toContain("terminal-cursor");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "completed",
+				execution_fence: 1,
+			});
+			const [record] =
+				await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+			expect(record?.details.archive).toMatchObject({
+				status: "complete",
+				cursor: "terminal-cursor",
+				acknowledgedCursor: "terminal-cursor",
+			});
+			expect(
+				await client`select event_type,event_payload,occurred_at from platform.conversation_events where execution_id=${work.executionId}`,
+			).toEqual([
+				{
+					event_type: "execution.status",
+					event_payload: {
+						type: "execution.status",
+						status: "completed",
+					},
+					occurred_at: new Date("2026-11-20T23:00:00.000Z"),
+				},
+			]);
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
+		}
+	});
+
 	it("Files4266archive refuses enum-only legacy terminal rows without original Runtime source proof", async () => {
 		const work = await terminalWork();
 		await client`delete from platform.audit_events where id=${`conversation.runtime.terminal:${work.executionId}:1`}`;
@@ -12974,6 +13160,208 @@ describe("terminal original Turn control authority (#4266)", () => {
 			]);
 		} finally {
 			await Promise.all([current.store.close(), query.close()]);
+		}
+	});
+
+	it("Files4325M3 rechecks database time after audit waiting before returning a read budget", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		await client`create function platform.archive_wait_fix1() returns trigger language plpgsql as $$ begin if NEW.action='conversation.archive.observed' then perform pg_sleep(0.15); end if; return NEW; end $$`;
+		await client`create trigger archive_wait_fix1 before insert on platform.audit_events for each row execute function platform.archive_wait_fix1()`;
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			const result = await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 50,
+			});
+			const [row] =
+				await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+			const [clock] =
+				await client`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+			expect(clock!.now).toBeGreaterThanOrEqual(
+				row!.details.archive.deadlineAtMs,
+			);
+			expect(result).toMatchObject({ status: "unavailable", remainingMs: 0 });
+			expect(
+				row!.details.archive.deadlineAtMs - row!.details.archive.startedAtMs,
+			).toBe(50);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+			});
+		} finally {
+			await client`drop trigger archive_wait_fix1 on platform.audit_events`;
+			await client`drop function platform.archive_wait_fix1()`;
+			await current.store.close();
+		}
+	});
+
+	it("Files4325M2 does not accept an unrecorded ACK first supplied after the original deadline", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			const c = current.decision.claim;
+			await current.store.archiveOriginalTurn({ claim: c, budgetMs: 100 });
+			expect(
+				await events.persist({
+					schemaVersion: 1,
+					conversationId: c.conversationId,
+					executionId: c.executionId,
+					sessionGeneration: c.sessionGeneration,
+					deliveryFence: c.executionDeliveryFence,
+					adapterEventKey: "real-terminal",
+					runtimeCursor: "terminal-cursor",
+					occurredAt: "2026-11-20T23:00:00.000Z",
+					event: { type: "execution.status", status: "completed" },
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+					dispatchLease: {
+						schemaVersion: 1,
+						itemId: c.itemId,
+						leaseOwner: c.leaseOwner,
+						deliveryFence: c.deliveryFence,
+					},
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			await client`select pg_sleep(0.12)`;
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: c,
+					budgetMs: 999999,
+					acknowledgedCursor: "terminal-cursor",
+					complete: true,
+				}),
+			).toMatchObject({ status: "unavailable", remainingMs: 0 });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+			});
+		} finally {
+			await Promise.all([current.store.close(), transaction.close()]);
+		}
+	});
+	it("Files4325M1 retains the original known PVC when an observation is temporarily absent", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 300,
+			});
+			const [before] =
+				await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+			await client`update platform.session_sandbox_allocations set resource_observation=null where conversation_id=${work.conversationId}`;
+			await client`select pg_sleep(0.35)`;
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 999999,
+				}),
+			).toMatchObject({ status: "unavailable", remainingMs: 0 });
+			const [after] =
+				await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+			expect(after!.details.binding.pvc).toEqual(before!.details.binding.pvc);
+		} finally {
+			await current.store.close();
+		}
+	});
+
+	it("Files4325M1 refuses a different PVC location even before its first UID observation", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		const [row] =
+			await client`select resource_observation from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+		const pvc = row!.resource_observation.resources.find(
+			(r: { kind: string }) => r.kind === "PersistentVolumeClaim",
+		);
+		await client`update platform.session_sandbox_allocations set resource_observation=null where conversation_id=${work.conversationId}`;
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 1000,
+			});
+			await client`update platform.session_sandbox_allocations set resource_policy=jsonb_set(resource_policy,'{namespace}','"replacement"'::jsonb),resource_observation=${client.json({ status: "stopped", resources: [{ ...pvc, namespace: "replacement" }] })} where conversation_id=${work.conversationId}`;
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 1000,
+				}),
+			).toBeNull();
+		} finally {
+			await current.store.close();
+		}
+	});
+
+	it("Files4325M3 does not start a Runtime read after the checkpoint return consumed its remainder", async () => {
+		const work = await terminalWork();
+		await client`update platform.conversation_executions set last_runtime_cursor='cursor-12',last_event_sequence=12 where execution_id=${work.executionId}`;
+		const store = open();
+		const checkpoint = store.archiveOriginalTurn.bind(store);
+		let acknowledgements = 0;
+		store.archiveOriginalTurn = async (input) => {
+			const result = await checkpoint({ ...input, budgetMs: 50 });
+			if (result?.status === "pending") await client`select pg_sleep(0.15)`;
+			return result;
+		};
+		const host = isolationHost(work, {
+			async acknowledge() {
+				acknowledgements++;
+				throw new ConversationRuntimeHostError(
+					"RUNTIME_WORKLOAD_UNAVAILABLE",
+					true,
+				);
+			},
+		});
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				runtimeHost: host,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						return decision.outcome === "allowed"
+							? {
+									...decision,
+									authority: { ...decision.authority, controlOnly: true },
+								}
+							: decision;
+					},
+				},
+				events: {
+					async persist() {
+						throw new Error("No original event available");
+					},
+				},
+			},
+			{ retryDelayMs: 0 },
+		);
+		try {
+			for (let i = 0; i < 3; i++)
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "archive-return-wait",
+				});
+			expect(acknowledgements).toBe(0);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+			});
+		} finally {
+			await store.close();
 		}
 	});
 

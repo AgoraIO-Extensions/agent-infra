@@ -1716,8 +1716,12 @@ export class PostgresConversationDispatchStoreV1
 				if (!terminalProof?.ref)
 					return { status: "ineligible" as const, remainingMs: 0 };
 				const [allocation] = await tx<
-					{ pvc: unknown }[]
-				>`select (select jsonb_build_object('name',r->>'name','namespace',r->>'namespace','uid',r->>'uid') from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim' limit 1) as pvc from platform.session_sandbox_allocations where sandbox_id=${claim.sandbox?.sandboxId ?? null} and conversation_id=${claim.conversationId}`;
+					{
+						pvc: { name: string; namespace: string; uid: string } | null;
+						name: string;
+						namespace: string | null;
+					}[]
+				>`select resource_name as name, resource_policy->>'namespace' as namespace, (select jsonb_build_object('name',r->>'name','namespace',r->>'namespace','uid',r->>'uid') from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim' limit 1) as pvc from platform.session_sandbox_allocations where sandbox_id=${claim.sandbox?.sandboxId ?? null} and conversation_id=${claim.conversationId}`;
 				const binding = {
 					itemId: claim.itemId,
 					principal: executionPrincipalProjection(state.execution),
@@ -1733,6 +1737,10 @@ export class PostgresConversationDispatchStoreV1
 					requestDigest: original.originalOperationDigest,
 					businessStatus: state.execution.status,
 					terminalSourceRef: terminalProof.ref,
+					pvcLocation: {
+						name: allocation?.name ?? null,
+						namespace: allocation?.namespace ?? null,
+					},
 					pvc: allocation?.pvc ?? null,
 				};
 				const [last] = await tx<
@@ -1741,8 +1749,42 @@ export class PostgresConversationDispatchStoreV1
 				where target_type='execution' and target_id=${claim.executionId} and agent_id=${claim.agentId}
 				and action='conversation.archive.observed'
 				and id >= ${`conversation.archive:${claim.executionId}:`} and id < ${`conversation.archive:${claim.executionId}:~`} order by id desc limit 1`;
-				if (last && !isDeepStrictEqual(last.details.binding, binding))
+				const priorBinding = last?.details.binding as
+					| typeof binding
+					| undefined;
+				if (
+					last &&
+					(!priorBinding ||
+						!isDeepStrictEqual(
+							{
+								...priorBinding,
+								pvcLocation:
+									priorBinding.pvcLocation ??
+									(priorBinding.pvc
+										? {
+												name: priorBinding.pvc.name,
+												namespace: priorBinding.pvc.namespace,
+											}
+										: binding.pvcLocation),
+								pvc: null,
+							},
+							{ ...binding, pvc: null },
+						))
+				)
 					return null;
+				const observed = allocation?.pvc;
+				if (
+					observed &&
+					(!validText(observed.uid) ||
+						observed.name !== allocation.name ||
+						observed.namespace !== allocation.namespace)
+				)
+					return null;
+				const retained = priorBinding?.pvc;
+				if (retained && observed && !isDeepStrictEqual(retained, observed))
+					return null;
+				// Missing observation is not replacement evidence; enrich only the original allocation's PVC.
+				binding.pvc = retained ?? observed ?? null;
 				const [clock] = await tx<
 					{ now: number }[]
 				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
@@ -1769,6 +1811,17 @@ export class PostgresConversationDispatchStoreV1
 					currentCursor !== null &&
 					acknowledgedCursor === currentCursor;
 				if (input.complete && !completed) return null;
+				const committedAckBeforeDeadline =
+					previous?.acknowledgedCursor === currentCursor &&
+					previous?.lastProgressAtMs !== null &&
+					previous?.lastProgressAtMs !== undefined &&
+					previous.lastProgressAtMs < previous.deadlineAtMs;
+				const completionProven =
+					input.complete &&
+					completed &&
+					(!previous ||
+						clock.now < previous.deadlineAtMs ||
+						committedAckBeforeDeadline);
 				let archive = advanceConversationArchiveV1({
 					...(previous ? { previous } : {}),
 					ref: previous?.ref ?? randomUUID(),
@@ -1778,11 +1831,23 @@ export class PostgresConversationDispatchStoreV1
 					...(input.acknowledgedCursor
 						? { acknowledgedCursor: input.acknowledgedCursor }
 						: {}),
-					...(input.complete ? { complete: true as const } : {}),
+					...(completionProven ? { complete: true as const } : {}),
 				});
-				const status = archive.status;
-				if (
+				const writeObservation = async () => {
+					const written = await tx`insert into platform.audit_events
+					(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
+					select ${`conversation.archive:${claim.executionId}:${String(archive.revision).padStart(16, "0")}`},${claim.traceId},'system',${claim.leaseOwner},'conversation.archive.observed','execution',${claim.executionId},${archive.status === "unavailable" ? "failed" : "succeeded"},${claim.requestId},${claim.agentId},
+					${tx.json({ binding, archive, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
+					from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
+					and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()
+					and (${archive.status === "complete"} or
+					 (${archive.status === "pending"} and clock_timestamp()<to_timestamp(${String(archive.deadlineAtMs)}::float8/1000)) or
+					 (${archive.status === "unavailable"} and clock_timestamp()>=to_timestamp(${String(archive.deadlineAtMs)}::float8/1000))) returning id`;
+					return written.length === 1;
+				};
+				const changed =
 					!previous ||
+					!isDeepStrictEqual(last?.details.binding, binding) ||
 					!isDeepStrictEqual(last?.details.lease, {
 						owner: claim.leaseOwner,
 						fence: claim.deliveryFence,
@@ -1790,20 +1855,44 @@ export class PostgresConversationDispatchStoreV1
 					!isDeepStrictEqual(
 						{ ...archive, revision: previous.revision },
 						previous,
-					)
-				) {
+					);
+				let written = false;
+				if (changed) {
 					archive = {
 						...archive,
 						revision: previous ? previous.revision + 1 : 1,
 					};
-					const written = await tx`insert into platform.audit_events
-					(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
-					select ${`conversation.archive:${claim.executionId}:${String(archive.revision).padStart(16, "0")}`},${claim.traceId},'system',${claim.leaseOwner},'conversation.archive.observed','execution',${claim.executionId},${status === "unavailable" ? "failed" : "succeeded"},${claim.requestId},${claim.agentId},
-					${tx.json({ binding, archive, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
-					from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
-					and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp() returning id`;
-					if (written.length !== 1) throw new StaleDispatchLease();
+					written = await writeObservation();
 				}
+				// INSERT/locks may consume the entire remainder. Recheck after every wait,
+				// retaining the original deadline and any earlier proven completion.
+				const [finalClock] = await tx<
+					{ now: number; owned: boolean }[]
+				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now,
+				 exists(select 1 from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
+				 and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()) as owned`;
+				if (!finalClock?.owned) throw new StaleDispatchLease();
+				const settled = advanceConversationArchiveV1({
+					previous: archive,
+					ref: archive.ref,
+					nowMs: finalClock.now,
+					budgetMs: input.budgetMs,
+					cursor: currentCursor,
+					...(input.acknowledgedCursor
+						? { acknowledgedCursor: input.acknowledgedCursor }
+						: {}),
+					...(completionProven ? { complete: true as const } : {}),
+				});
+				if (settled.status !== archive.status) {
+					archive = {
+						...settled,
+						revision: archive.revision + (written ? 1 : 0),
+					};
+					if (!(await writeObservation())) throw new StaleDispatchLease();
+					written = true;
+				}
+				if (changed && !written) throw new StaleDispatchLease();
+				const status = archive.status;
 				if (status === "unavailable" || status === "complete")
 					await closeOutbox(
 						tx,
@@ -1816,7 +1905,10 @@ export class PostgresConversationDispatchStoreV1
 					);
 				return {
 					status,
-					remainingMs: Math.max(0, archive.deadlineAtMs - clock.now),
+					remainingMs:
+						status === "pending"
+							? Math.max(0, archive.deadlineAtMs - finalClock.now)
+							: 0,
 				};
 			}),
 		);

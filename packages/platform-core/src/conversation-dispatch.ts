@@ -356,6 +356,7 @@ export function createConversationDispatchUseCaseV1(
 		const archiveCheckpoint = async (complete = false) => {
 			if (!archiveEligible || !dependencies.store.archiveOriginalTurn)
 				return undefined;
+			const started = performance.now();
 			const result = await dependencies.store.archiveOriginalTurn({
 				claim,
 				budgetMs: recoveryBudgetMs,
@@ -366,7 +367,17 @@ export function createConversationDispatchUseCaseV1(
 			});
 			if (result?.status === "ineligible") return undefined;
 			archiveManaged = true;
-			return result;
+			// Conservatively include the checkpoint round trip; a returned budget
+			// must never start a new Runtime read after the original DB cutoff.
+			return result
+				? {
+						...result,
+						remainingMs: Math.max(
+							0,
+							result.remainingMs - Math.ceil(performance.now() - started),
+						),
+					}
+				: result;
 		};
 		// #4038: a Host that reports the original Turn as unknown (for example a
 		// Runtime-held Execution) may never end its event stream. The drain then
@@ -494,6 +505,15 @@ export function createConversationDispatchUseCaseV1(
 					return { schemaVersion: 1, outcome: "rejected" };
 				if (initialArchive.status === "complete")
 					return { schemaVersion: 1, outcome: "accepted" };
+				if (initialArchive.remainingMs <= 0)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_STREAM_INCOMPLETE",
+						"retry",
+						{},
+					);
 				const deadline = new AbortController();
 				archiveTimer = setTimeout(
 					() => deadline.abort(),
