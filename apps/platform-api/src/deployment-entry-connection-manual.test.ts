@@ -452,4 +452,58 @@ export const connectionInstallationCallback = {
 			}),
 		]);
 	});
+
+	// #4327 round 2 MUST 1: the configuration module is imported at runtime, so
+	// its forwarder counts only with a callable `forward`. A malformed one is
+	// never used: the protected callback-auth file is the fallback, and without
+	// it the route and its callback stay dormant.
+	const malformedForwarders = [
+		["an object without forward", "{}"],
+		["a non-function forward", `{ forward: "forward" }`],
+		["a null forward", "{ forward: null }"],
+		["a non-object forwarder", `"forwarder"`],
+	] as const;
+	it.each(malformedForwarders)(
+		"keeps the route and its callback dormant for a module forwarder with %s and no callback-auth file",
+		async (_name, forwarder) => {
+			vi.stubEnv("PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE", undefined);
+			vi.stubEnv(
+				"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
+				JSON.stringify(exceptionApproval),
+			);
+			const entry = await load(
+				`export const connectionInstallationCallback = ${forwarder};`,
+			);
+			const input = entry.createPlatformApiAssemblyInput();
+			expect(input.connectionInstallation).toBeUndefined();
+			expect(input.connectionInstallationCallback).toBeUndefined();
+			expect(logs()).toEqual([
+				{
+					service: "platform-api",
+					code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+					reason: "callback_delivery_unavailable",
+				},
+			]);
+		},
+	);
+
+	it.each(malformedForwarders)(
+		"uses the protected callback-auth file instead of a module forwarder with %s",
+		async (_name, forwarder) => {
+			vi.stubEnv(
+				"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
+				JSON.stringify(exceptionApproval),
+			);
+			const entry = await load(
+				`export const connectionInstallationCallback = ${forwarder};`,
+			);
+			const input = entry.createPlatformApiAssemblyInput();
+			expect(input.connectionInstallation?.manualInstallation).toBeDefined();
+			const selected = input.connectionInstallationCallback as unknown;
+			expect(typeof (selected as { forward?: unknown })?.forward).toBe(
+				"function",
+			);
+			expect(JSON.stringify([input, logs()])).not.toContain(callbackToken);
+		},
+	);
 });

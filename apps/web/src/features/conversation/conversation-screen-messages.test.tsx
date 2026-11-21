@@ -63,7 +63,13 @@ function message(
 }
 
 function timeline(
-	messages: ReturnType<typeof message>[],
+	messages: (ReturnType<typeof message> & {
+		archive?: {
+			schemaVersion: 1;
+			status: "pending" | "unavailable";
+			deadlineAt: string;
+		};
+	})[],
 	events: ReturnType<typeof fact>[],
 	stopExecution?: string,
 	feedbackIdentity?: string,
@@ -357,3 +363,29 @@ it("binds feedback to the selected historical answer version", async () => {
 		"/api/v2/task-feedback/original",
 	]);
 });
+
+it.each(["pending", "unavailable"] as const)(
+	"shows the %s archive gap without a false complete or processing answer",
+	(status) => {
+		const archive = {
+			schemaVersion: 1 as const,
+			status,
+			deadlineAt: "2026-11-21T00:00:00.000Z",
+		};
+		timeline(
+			[
+				message("question", "user", "Question", "completed", "e"),
+				{
+					...message("answer", "assistant", "", "completed", "e", "question"),
+					archive,
+				},
+			],
+			[],
+		);
+		expect(
+			screen.getByText(status === "pending" ? "归档待核实" : "归档不可得"),
+		).toBeTruthy();
+		expect(screen.queryByText("正在整理结果…")).toBeNull();
+		expect(screen.queryByText("执行完成")).toBeNull();
+	},
+);

@@ -247,6 +247,89 @@ describe("Platform PostgreSQL migration foundation", () => {
 		}
 	}, 120_000);
 
+	// #4315 PR-Agent: a pin released before 0096 has no release request; the
+	// migration backfills one so the new rule constraint holds for history.
+	it("upgrades released 0095 principal pins to the 0096 pin rules without failing", async () => {
+		const database = await startPostgresTestDatabase("principal-pin-upgrade");
+		const client = postgres(database.databaseUrl, { max: 1 });
+		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0095-"));
+		try {
+			const sourceFolder = resolve(
+				import.meta.dirname,
+				"../../../migrations/platform",
+			);
+			await cp(sourceFolder, folder, { recursive: true });
+			const journalPath = resolve(folder, "meta/_journal.json");
+			const journal = JSON.parse(await readFile(journalPath, "utf8"));
+			journal.entries = journal.entries.filter(
+				(entry: { idx: number }) => entry.idx <= 95,
+			);
+			expect(journal.entries.at(-1)).toMatchObject({
+				idx: 95,
+				tag: "0095_connection_manual_permit",
+			});
+			await writeFile(journalPath, JSON.stringify(journal));
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+				migrationsFolder: folder,
+			});
+			await client`insert into platform.connection_principal_pins
+				(id, issuer, principal_id, user_id, policy_ref, policy_revision, released_at, revision)
+				values ('pin-released', 'https://connection.test/', 'principal-a', 'alice',
+					'consistency-exception-v1', 'r1', '2026-11-01T00:00:00Z', 2),
+				('pin-active', 'https://connection.test/', 'principal-a', 'bob',
+					'consistency-exception-v1', 'r1', null, 1)`;
+
+			await builtStore.migratePlatformDatabase({
+				databaseUrl: database.databaseUrl,
+			});
+			expect(
+				await client`select id, revision::int, verification_state, rule_revision::int,
+					release_requested_at = released_at as requested_at_release,
+					release_requested_at is null as not_requested, release_reason,
+					release_actor_id, release_reference, released_at is not null as released
+					from platform.connection_principal_pins order by id`,
+			).toEqual([
+				{
+					id: "pin-active",
+					revision: 1,
+					verification_state: "pending",
+					rule_revision: 1,
+					requested_at_release: null,
+					not_requested: true,
+					release_reason: null,
+					release_actor_id: null,
+					release_reference: null,
+					released: false,
+				},
+				{
+					id: "pin-released",
+					revision: 2,
+					verification_state: "pending",
+					rule_revision: 1,
+					requested_at_release: true,
+					not_requested: false,
+					release_reason: "administrator",
+					release_actor_id: "platform-migration",
+					release_reference: "migration:0096_connection_principal_pin_rules",
+					released: true,
+				},
+			]);
+			// The constraint still refuses a released pin without a request afterwards.
+			await expect(
+				client`update platform.connection_principal_pins
+					set release_requested_at=null, release_reason=null, release_actor_id=null,
+						release_reference=null where id='pin-released'`,
+			).rejects.toMatchObject({
+				constraint_name: "connection_principal_pin_rules",
+			});
+		} finally {
+			await client.end();
+			await database.stop();
+			await rm(folder, { recursive: true, force: true });
+		}
+	}, 120_000);
+
 	it("upgrades the main 0023 history to application targets without rewriting it", async () => {
 		const database = await startPostgresTestDatabase(
 			"migration-0023-application-targets",
@@ -2180,6 +2263,7 @@ describe("published Relay authority migration", () => {
 			93,
 			94,
 			95,
+			96,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2305,9 +2389,13 @@ describe("published Relay authority migration", () => {
 			idx: 94,
 			tag: "0094_connection_manual_confirm",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 95)).toMatchObject({
 			idx: 95,
 			tag: "0095_connection_manual_permit",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 96,
+			tag: "0096_connection_principal_pin_rules",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2948,6 +3036,18 @@ describe("published Relay authority migration", () => {
 					"pinned_at",
 					"released_at",
 					"revision",
+					"verification_state",
+					"verification_deadline",
+					"verified_at",
+					"verification_actor_id",
+					"verification_reference",
+					"suspended_at",
+					"overdue_at",
+					"release_requested_at",
+					"release_reason",
+					"release_actor_id",
+					"release_reference",
+					"rule_revision",
 				].map((name) => `connection_principal_pins:${name}`),
 				...[
 					"id",
@@ -2985,6 +3085,7 @@ describe("published Relay authority migration", () => {
 			);
 			expectedDelta.checks.push(
 				"connection_principal_pins:connection_principal_pin_identity",
+				"connection_principal_pins:connection_principal_pin_rules",
 				"connection_principal_pin_receipts:connection_principal_pin_receipt_digest",
 				"connection_manual_install_permits:connection_manual_install_permit_digest",
 			);

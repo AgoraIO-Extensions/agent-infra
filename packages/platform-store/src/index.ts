@@ -119,6 +119,11 @@ export type {
 	ConnectionManualInstallationPolicyInputV1,
 } from "./connection-manual-installations.js";
 export {
+	type ConnectionPrincipalPinAdministrationInputV1,
+	type ConnectionPrincipalPinAdministrationResultV1,
+	PostgresConnectionPrincipalPinAdministrationV1,
+} from "./connection-principal-pin-administration.js";
+export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
 	type PostgresConversationDispatchOptionsV1,

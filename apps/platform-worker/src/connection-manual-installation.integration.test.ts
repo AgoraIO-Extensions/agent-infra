@@ -1165,8 +1165,11 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		],
 		[
 			"the pin was released",
+			// An item 6 release: the request facts the release CHECK requires.
 			() =>
-				client`update platform.connection_principal_pins set released_at=now()`,
+				client`update platform.connection_principal_pins set released_at=now(),
+					release_requested_at=now(), release_reason='administrator',
+					release_actor_id='admin-1', release_reference='https://example.test/unpin'`,
 		],
 		[
 			"the first-pin receipt expired",
@@ -1177,12 +1180,17 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		"reads nothing back and exchanges nothing in phase 2 once %s",
 		async (_name, change) => {
 			const { projection } = await approvedInstall();
+			// The change itself must apply; a fixture refused by the schema would
+			// fail the readback for another reason and prove nothing.
+			let applied = false;
 			readbackHook = async (request) => {
 				if (request.command?.command !== "confirm_exchange") return;
 				readbackHook = undefined;
 				await change();
+				applied = true;
 			};
 			await tick();
+			expect(applied).toBe(true);
 			const getCount = connection.requests.filter(
 				({ method }) => method === "GET",
 			).length;

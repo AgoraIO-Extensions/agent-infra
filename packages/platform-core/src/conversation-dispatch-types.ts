@@ -252,6 +252,18 @@ export interface ConversationDispatchStateTransitionV1 {
 }
 
 export interface ConversationDispatchStorePortV1 {
+	/** Original accepted terminal Turn archive only; absent on legacy test adapters. */
+	archiveOriginalTurn?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly budgetMs: number;
+		readonly acknowledgedCursor?: string;
+		/** Known delivered event that must persist and be cumulatively acknowledged. */
+		readonly pendingCursor?: string;
+		readonly complete?: true;
+	}): Promise<{
+		readonly status: "pending" | "unavailable" | "complete" | "ineligible";
+		readonly remainingMs: number;
+	} | null>;
 	/** Read-only Browser binding projection from the current Conversation event
 	 * stream while the existing outbox lease is held. */
 	readBrowserHandoffBinding?(input: {

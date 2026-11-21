@@ -292,13 +292,21 @@ const manualInstallationRequested =
 	apiInput?.connectionInstallation?.manualInstallation !== undefined;
 const connectionCallbackAuthFile =
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE;
+// The configuration module is imported at runtime, so its callback forwarder
+// counts only with a callable `forward`; the same value decides readiness and
+// is the one handed to the assembly. A malformed export is never used.
+const moduleCallbackForwarder =
+	typeof (connectionInstallationCallback as { forward?: unknown } | undefined)
+		?.forward === "function"
+		? connectionInstallationCallback
+		: undefined;
 // §13.5.6: a manual installation is confirmed only through its callback, so the
 // route needs a protected delivery to the original Host: the deployment
 // module's forwarder, or a callback-only credential file that passes the
 // forwarder's protected-file checks now. Otherwise the route stays dormant.
 const manualCallbackDelivery =
 	manualExceptionApproval !== undefined &&
-	(connectionInstallationCallback !== undefined ||
+	(moduleCallbackForwarder !== undefined ||
 		(await isProtectedConnectionCallbackAuthFileReadyV1(
 			connectionCallbackAuthFile,
 		)))
@@ -340,7 +348,7 @@ else if (manualInstallationRequested)
 // original Host with the callback-only credential (Spec §13.5.6); without it the
 // route stays closed.
 const callbackForwarder =
-	connectionInstallationCallback ??
+	moduleCallbackForwarder ??
 	(((connectionInstallationConfiguration &&
 		!staticPerAgentConnectionBindings) ||
 		manualInstallation.status === "enabled") &&
