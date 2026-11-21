@@ -67,6 +67,7 @@ import {
 	operationsResourceSnapshots,
 } from "./schema-operations-resources";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+import { runtimeSafetyEvidence } from "./schema-runtime-safety-evidence";
 
 export {
 	operationsResourceIdentities,
@@ -181,6 +182,7 @@ export {
 	taskControlRecords,
 } from "./schema-operations";
 export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+export { runtimeSafetyEvidence } from "./schema-runtime-safety-evidence";
 export { browserSessions } from "./schema-sessions";
 export {
 	skillHubAgentBindings,
@@ -291,6 +293,7 @@ export const platformInfrastructureTables = [
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 	workspaceSnapshotUploadAdmissions,
+	runtimeSafetyEvidence,
 ] as const;
 
 import { sessionSandboxAllocations } from "./schema-session-sandboxes";

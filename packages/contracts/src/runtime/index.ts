@@ -33,6 +33,7 @@ export * from "./native-metadata-v1.ts";
 export * from "./native-metadata-v2.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
+export * from "./safety-evidence-v1.ts";
 export * from "./saved-key-candidates.ts";
 export * from "./skill-hub.ts";
 

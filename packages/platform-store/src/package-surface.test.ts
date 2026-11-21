@@ -95,6 +95,7 @@ describe("platform-store package surface", () => {
 			"PostgresPlatformAuditQueryV1",
 			"PostgresPlatformUserDisablesV1",
 			"PostgresRelayKeyVersionStoreV1",
+			"PostgresRuntimeSafetyEvidenceStoreV1",
 			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
@@ -157,6 +158,7 @@ describe("platform-store package surface", () => {
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
 			"resolveTimedOutUnknownStopInTransactionV1",
 			"runStoreQueryOperation",
+			"runtimeSafetyEvidenceDigestV1",
 			"storeSlowQueryThresholdMs",
 			"validateWecomSetupCredentialRecordV1",
 		]);

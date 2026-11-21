@@ -31,6 +31,10 @@ import {
 	WithdrawCommandRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
+	projectIsolationEvidenceForPrincipalV1,
+	type RuntimePersistedSafetyEvidenceV1,
+} from "@agent-infra/contracts/runtime";
+import {
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionAuthorizationPortV1,
 	ConversationExecutionError,
@@ -187,6 +191,17 @@ export interface ConversationRoutesDependencies {
 	/** Deployment-owned Browser command bridge; the API remains the identity authority. */
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly query: ConversationQuery;
+	/**
+	 * Spec §18.5.1: Worker-validated Runtime safety evidence of an Execution. Absent while the
+	 * deployment has not enabled the reader; the route then answers like an invisible record.
+	 */
+	readonly runtimeEvidence?: {
+		read(input: {
+			readonly conversationId: string;
+			readonly executionId: string;
+			readonly evidenceId: string;
+		}): Promise<RuntimePersistedSafetyEvidenceV1 | undefined>;
+	};
 	/** Idle reauthorization interval, 1–30,000 ms; default 1,000 ms. */
 	readonly streamPollIntervalMs?: number;
 	/** Commit wakeups for open streams (#1561); without it streams only poll. */
@@ -1709,6 +1724,65 @@ export function registerConversationRoutes(
 					);
 				}),
 		);
+
+	// Spec §18.5.1/§18.5.2: the original subject's projection of one isolation observation.
+	// Read permission is the Execution's current read permission, confirmed again after the
+	// evidence read and before responding; a known evidence reference grants nothing.
+	app.get(
+		"/api/v2/conversations/:conversationId/executions/:executionId/runtime-evidence/:evidenceRef",
+		(context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const conversationId = context.req.param("conversationId");
+				const executionId = context.req.param("executionId");
+				const evidenceRef = context.req.param("evidenceRef");
+				const readable = async () => {
+					await effectiveConversation(
+						dependencies.commands(identity),
+						conversationId,
+						metadata.traceId,
+					);
+					return query(
+						() =>
+							dependencies.query.getExecution(
+								scope(identity),
+								conversationId,
+								executionId,
+							),
+						metadata.traceId,
+					);
+				};
+				if (
+					!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(evidenceRef) ||
+					!(await readable())
+				)
+					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				const evidence = dependencies.runtimeEvidence;
+				const record = evidence
+					? await query(
+							() =>
+								evidence.read({
+									conversationId,
+									executionId,
+									evidenceId: evidenceRef,
+								}),
+							metadata.traceId,
+						)
+					: undefined;
+				if (!record || !(await readable()))
+					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				return context.json(
+					project(
+						() => projectIsolationEvidenceForPrincipalV1(record),
+						metadata.traceId,
+					),
+				);
+			}),
+	);
 
 	for (const version of [1, 2] as const)
 		app.get(

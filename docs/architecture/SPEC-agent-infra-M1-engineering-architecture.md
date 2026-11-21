@@ -4703,8 +4703,11 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
   见 §18.5.3。知道 `evidenceId` 不授予读取权；Owner、system_admin 与共享服务身份不替代原主体。
   每个相关真实 I/O 完成后与结果返回前按 §9.3.1 的完成边界重新确认，不跨 await 缓存允许结论，
   也不借用 `native_metadata_read` 的证明扩权。
-- **投影。** 原主体的投影只含固定 outcome、reason、场景、时钟和不透明引用；Pod UID、fence、
-  Host 实例等技术绑定只在运维读取中提供，与 §18.1 的执行详情边界一致。证据不含 Grant、Key、
+- **投影。** 原主体投影与获批运维投影都含固定 outcome、reason、场景、时钟、不透明引用和该类别的
+  固定结果字段；`isolation_observation` 的结果字段见 §18.5.2，包括 `nativeObserved`、本人获准合成
+  文件正例的 `byteLength`/`sha256` 与模型上下文的三个布尔值，原主体投影不能省略它们。Pod UID、
+  fence、Host 实例、producer 等技术绑定只在运维投影中提供，与 §18.1 的执行详情边界一致。两种
+  投影都不含另一主体对象是否存在、长度、摘要或内容。证据不含 Grant、Key、
   Token、请求摘要中含秘密的部分、私有绝对路径、命令、参数、stdout、模型请求或响应正文、
   用户文件或记忆正文。证据回执不是 bearer capability。
 - **载体与版本。** `isolation_observation` 与 `original_admission_check` 由 Worker 校验 producer
@@ -4756,7 +4759,8 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
   - 仅本人获准的合成文件正例带 `byteLength`/`sha256`；负例不返回另一主体对象是否存在、长度、
     摘要或内容；模型上下文只带上述三个布尔值。
 
-  `not_found` 只在独立受信正例确认目标存在且原范围正确后才可解释为拒绝，不能把任意 ENOENT
+  以上结果字段同时出现在原主体投影与获批运维投影中（§18.5.1），共同绑定里的技术字段只进入
+  运维投影。`not_found` 只在独立受信正例确认目标存在且原范围正确后才可解释为拒绝，不能把任意 ENOENT
   当作隔离通过。
 - **时钟。** 叶子实际 I/O 的观察时刻与进程实例的时钟域分开记录，耗时用单调时钟。模型传输的
   “进入发送”“完整写出”“收到响应”分别命名，写出不等于远端收到。采集时间不代替 I/O 时间；

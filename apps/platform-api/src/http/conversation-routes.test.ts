@@ -3316,3 +3316,126 @@ it("sends negotiated archive controls without a Runtime cursor after current aut
 		expect.any(AbortSignal),
 	);
 });
+
+describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
+	const evidencePath =
+		"/api/v2/conversations/conversation-1/executions/execution-1/runtime-evidence/evidence-1";
+	const stored = {
+		schemaVersion: 1,
+		code: "RUNTIME_ISOLATION_EVIDENCE_V1",
+		kind: "isolation_observation",
+		binding: {
+			evidenceId: "evidence-1",
+			scenario: { id: "u1-file", version: 1 },
+			windowRef: "window-1",
+			challengeRef: "challenge-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			operation: { ref: "operation-1", attemptRef: "attempt-1" },
+			principalRef: "principal-1",
+			purposeRef: "purpose-business",
+			sessionGeneration: 1,
+			executionDeliveryFence: 1,
+			sandbox: {
+				ref: "sandbox-1",
+				podUid: "11111111-2222-4333-8444-555555555555",
+				resourceFence: 1,
+			},
+			host: {
+				instanceRef: "host-1",
+				startRef: "start-1",
+				configurationRevision: "config-1",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			producer: { kind: "native_helper", version: "u1-helper-1" },
+			observedAt: "2026-11-22T00:00:00.000Z",
+			clockId: "clock-1",
+			sequence: 1,
+		},
+		resourceClass: "file",
+		actionClass: "write",
+		targetScope: "self",
+		resultClass: "allowed",
+		nativeObserved: true,
+		syntheticFile: { byteLength: 12, sha256: "b".repeat(64) },
+	} as const;
+	const evidence = (record: unknown = stored) => ({
+		read: vi.fn().mockResolvedValue(record),
+	});
+
+	it("returns the subject projection with the fixed results and without technical bindings", async () => {
+		const runtimeEvidence = evidence();
+		const response = await testApp(
+			dependencies({ runtimeEvidence }),
+		).app.request(evidencePath);
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(body).toMatchObject({
+			code: "RUNTIME_ISOLATION_EVIDENCE_V1",
+			evidenceRef: "evidence-1",
+			resultClass: "allowed",
+			nativeObserved: true,
+			syntheticFile: { byteLength: 12, sha256: "b".repeat(64) },
+		});
+		const text = JSON.stringify(body);
+		for (const technical of [
+			"11111111-2222-4333-8444-555555555555",
+			"host-1",
+			"operation-1",
+			"principal-1",
+			"challenge-1",
+		])
+			expect(text).not.toContain(technical);
+		expect(runtimeEvidence.read).toHaveBeenCalledWith({
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			evidenceId: "evidence-1",
+		});
+	});
+
+	it("answers like an invisible record for another subject, a missing record, an invalid reference or a disabled reader", async () => {
+		const denied = dependencies({ runtimeEvidence: evidence() });
+		denied.commands(identity).readConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		const cases = [
+			[denied, evidencePath],
+			[
+				dependencies({
+					runtimeEvidence: { read: vi.fn().mockResolvedValue(undefined) },
+				}),
+				evidencePath,
+			],
+			[
+				dependencies({ runtimeEvidence: evidence() }),
+				evidencePath.replace("evidence-1", "..%2Fetc"),
+			],
+			[dependencies(), evidencePath],
+		] as const;
+		for (const [index, [input, path]] of cases.entries()) {
+			const response = await testApp(input).app.request(path);
+			expect([index, response.status]).toEqual([index, 404]);
+			expect(await response.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+		}
+		expect(denied.runtimeEvidence?.read).not.toHaveBeenCalled();
+	});
+
+	it("re-checks the current read permission after the evidence read and before responding", async () => {
+		const input = dependencies({ runtimeEvidence: evidence() });
+		const visible = await input.query.getExecution(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+			"execution-1",
+		);
+		input.query.getExecution = vi
+			.fn()
+			.mockResolvedValueOnce(visible)
+			.mockResolvedValueOnce(null);
+		const response = await testApp(input).app.request(evidencePath);
+		expect(response.status).toBe(404);
+		expect(input.query.getExecution).toHaveBeenCalledTimes(2);
+	});
+});
