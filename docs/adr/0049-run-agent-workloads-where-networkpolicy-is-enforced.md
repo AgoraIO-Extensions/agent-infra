@@ -45,8 +45,10 @@ fail closed。现存 Agent 只在逐 Agent 的正式 lifecycle 中采用新 plac
   涉及真实用户的 Agent 须先告知用户；顺序与窗口由迁移手册安排，手册不替代实现门槛。
 - 采用前保留态的 Host 仍运行在原节点，不视为已隔离；全部采用后部署关闭保留态。
 - ECI 会新增费用，估算与盘点见 #4351 回执，不是账单上限；上线前须由用户确认费用。
-- placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置摘要，发布不会使这些
-  既有批准整体失效；placement 的变化由 Worker 资源对象指纹与漂移判定承担。
+- 新增的 Agent 级 Host placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置
+  摘要，发布它不会使这些既有批准整体失效；它的变化由 Worker 资源对象指纹与漂移判定承担。
+  既有 `codexSessionExecutor.placement` 等改变 Session 实际 Pod 或授权输入的配置仍按 Spec
+  §10.1.1 进入原摘要并失配重验。
 - ECS 上的平台组件之间仍没有 NetworkPolicy 执行。它们不运行用户代码；对 Agent 级 Workload
   与 Session Sandbox 的阻断依赖来源 Pod 在 ECI 上执行的 egress，并保留应用层鉴权。如果以后
   平台组件需要运行不受信代码或对外暴露新端口，须另行评估执行者覆盖。
