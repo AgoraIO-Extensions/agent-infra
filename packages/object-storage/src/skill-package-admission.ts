@@ -40,7 +40,12 @@ export type SkillPackageAdmissionErrorCodeV1 =
 	| "signature_invalid";
 
 export class SkillPackageAdmissionErrorV1 extends Error {
-	constructor(readonly code: SkillPackageAdmissionErrorCodeV1) {
+	constructor(
+		readonly code: SkillPackageAdmissionErrorCodeV1,
+		readonly diagnosticCode?:
+			| SkillPackageAdmissionErrorCodeV1
+			| "policy_mismatch",
+	) {
 		super("Skill package admission rejected");
 		this.name = "SkillPackageAdmissionErrorV1";
 	}

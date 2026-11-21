@@ -13,11 +13,12 @@ export function classifySkillSyncFailureV1(
 	if (error instanceof SkillSyncErrorV1) return error;
 	let reason: SkillSyncFailureV1["reason"] = "dependency_unavailable";
 	if (error instanceof SkillPackageAdmissionErrorV1) {
-		const code = error.code;
+		const code = error.diagnosticCode ?? error.code;
 		reason =
 			code === "dependency_unavailable" || code === "scan_unavailable"
 				? "dependency_unavailable"
-				: code === "signature_invalid" ||
+				: code === "policy_mismatch" ||
+						code === "signature_invalid" ||
 						code === "digest_mismatch" ||
 						code === "scan_rejected" ||
 						code === "source_untrusted"

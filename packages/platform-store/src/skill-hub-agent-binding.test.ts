@@ -1237,6 +1237,8 @@ it.each([
 	"materialization",
 	"delivery",
 	"applied",
+	"trust",
+	"policy",
 ] as const)(
 	"real Store and physical Skill preflight keeps %s evidence and zero executable work",
 	async (mode) => {
@@ -1250,6 +1252,8 @@ it.each([
 			"../../../apps/platform-worker/src/skill-materializer-production-assembly.js"
 		);
 		const f = await publicationFixture();
+		if (mode === "trust") f.setPolicy({ keyState: "revoked" });
+		if (mode === "policy") f.setPolicy({ policyRevision: "policy-new" });
 		const root = await mkdtemp(join(tmpdir(), "4334-physical-"));
 		const { store } = await syncFixture();
 		await client`delete from platform.skill_hub_agent_bindings where agent_id='agent-1'`;
@@ -1342,6 +1346,8 @@ it.each([
 				});
 			else {
 				const expected = {
+					trust: "SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED",
+					policy: "SKILL_SYNC_PACKAGE_VERIFICATION_POLICY_MISMATCH_REJECTED",
 					signature: "SKILL_SYNC_PACKAGE_VERIFICATION_DIGEST_MISMATCH_REJECTED",
 					materialization:
 						"SKILL_SYNC_MATERIALIZATION_INVALID_MATERIALIZATION_REJECTED",

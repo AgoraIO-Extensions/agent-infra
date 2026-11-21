@@ -16,6 +16,7 @@ export type SkillSyncFailureV1 = Readonly<{
 		| "source_untrusted"
 		| "invalid_package"
 		| "invalid_materialization"
+		| "policy_mismatch"
 		| "conflict"
 		| "stale_binding";
 	retryable: boolean;
@@ -51,6 +52,7 @@ export function skillSyncFailureCodeV1(failure: SkillSyncFailureV1): string {
 			"source_untrusted",
 			"invalid_package",
 			"invalid_materialization",
+			"policy_mismatch",
 			"conflict",
 			"stale_binding",
 		].includes(failure.reason) ||
