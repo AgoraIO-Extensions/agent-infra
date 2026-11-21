@@ -732,8 +732,19 @@ export async function collectOperationsSnapshotV2(input: {
 			),
 		);
 		const owner = mounted[0];
+		const minioClaimConflict =
+			owner?.ownership === "shared" &&
+			controllers.some(
+				(controller) =>
+					metadata(controller).name === "agent-infra-minio" &&
+					metadata(controller).uid === owner.ownerUid,
+			) &&
+			(text(annotations["agent-infra.agora.io/agent-id"]) !== null ||
+				text(annotations["agent-infra.agora.io/session-id"]) !== null ||
+				text(labels["agent-infra.agora.io/sandbox-id"]) !== null);
 		const uniqueOwner =
 			owner &&
+			!minioClaimConflict &&
 			mounted.every(
 				(entry) =>
 					entry.agentId === owner.agentId && entry.ownerUid === owner.ownerUid,

@@ -2216,9 +2216,30 @@ it.each([
 		wrongUid: true,
 		expected: "unknown",
 	},
+	{
+		scenario: "an Agent PVC mounted by platform MinIO",
+		labels: {
+			"app.kubernetes.io/managed-by": "Helm",
+			"app.kubernetes.io/name": "agent-infra",
+			"app.kubernetes.io/component": "skill-object-storage",
+		},
+		agent: false,
+		sandbox: false,
+		wrongUid: false,
+		pvcAgentOnly: true,
+		expected: "shared",
+	},
 ])(
 	"keeps $scenario outside shared ownership",
-	async ({ labels, agent, sandbox, wrongUid, foreignRelease, expected }) => {
+	async ({
+		labels,
+		agent,
+		sandbox,
+		wrongUid,
+		foreignRelease,
+		expected,
+		pvcAgentOnly,
+	}) => {
 		const agentId = "foreign-agent";
 		const session = {
 			agentId,
@@ -2315,7 +2336,9 @@ it.each([
 						namespace: scope.namespace,
 						uid: "same-name-pvc-uid",
 						resourceVersion: "1",
-						annotations: annotation,
+						annotations: pvcAgentOnly
+							? { "agent-infra.agora.io/agent-id": agentId }
+							: annotation,
 					},
 					spec: { resources: { requests: { storage: "1Gi" } } },
 					status: { phase: "Bound" },
@@ -2334,8 +2357,10 @@ it.each([
 		const pvc = snapshot.resources.find((r) => r.name === "same-name-pvc");
 		expect(pod).toMatchObject({ ownership: expected });
 		// Existing Session PVC classification remains unverified here; it is never made shared.
-		expect(pvc?.ownership).toBe(sandbox ? "unknown" : expected);
-		expect([pod, pvc].every((r) => r?.ownership !== "shared")).toBe(true);
+		expect(pvc?.ownership).toBe(pvcAgentOnly || sandbox ? "unknown" : expected);
+		if (pvcAgentOnly)
+			expect(pvc).toMatchObject({ ownership: "unknown", agentId });
+		else expect([pod, pvc].every((r) => r?.ownership !== "shared")).toBe(true);
 		if (agent && !sandbox)
 			for (const resource of [pod, pvc])
 				expect(resource).toMatchObject({ agentId, ownership: "agent" });
