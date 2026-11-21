@@ -3,261 +3,20 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-	CODEX_OFFICIAL_LANE_CONFIG,
-	type CodexAppServerBridgeOptions,
-	type CodexAppServerFrame,
-} from "./codex-app-server-bridge.js";
+import type { CodexAppServerFrame } from "./codex-app-server-bridge.js";
 import { seedNativeCommandState } from "./codex-native-command.test-support.js";
-import {
-	type CodexNativeCommandReadContext,
-	type CodexNativeStatusSelection,
+import type {
+	CodexNativeCommandReadContext,
+	CodexNativeStatusSelection,
 	CodexRuntimeDriver,
 } from "./codex-runtime-driver.js";
 import { createCodexSessionExecutorBindingV1 } from "./codex-session-executor-binding.js";
+import {
+	MetadataDriver,
+	MetadataTransport,
+} from "./compact-transport.test-support.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { withNativeMetadataTraceV1 } from "./native-metadata-telemetry.js";
-
-class MetadataTransport {
-	readonly requests: CodexAppServerFrame[] = [];
-	options?: CodexAppServerBridgeOptions;
-	status: unknown = { type: "notLoaded" };
-	threadId = "native-thread-private";
-	turns: unknown[] = [];
-	error = false;
-	errorCode = -32600;
-	holdReads = false;
-	readonly heldReads: CodexAppServerFrame[] = [];
-	closeCount = 0;
-	openCount = 0;
-	openDelay?: Promise<void>;
-	successor?: MetadataTransport;
-	beforeSend?: (frame: CodexAppServerFrame) => Promise<void>;
-	modelPages = ["gpt-5.3-codex"];
-	readSendFailure?: () => Promise<void>;
-	beforeResponse?: () => void;
-	compactItemId = "context-compaction-item-1";
-	compactStartedItemId?: string;
-	compactCompletedItemId?: string;
-	compactTurnId = "context-compaction-turn-1";
-	holdCompactTerminal = false;
-	returnTurnsOnStatusRead = false;
-	private readonly queue: CodexAppServerFrame[] = [];
-	private wake?: () => void;
-	private closed = false;
-
-	async send(frame: CodexAppServerFrame) {
-		this.requests.push(frame);
-		if (this.beforeSend) await this.beforeSend(frame);
-		if (frame.method === "initialize" || frame.method === "environment/info")
-			this.respond(frame, {});
-		else if (frame.method === "environment/status")
-			this.respond(frame, { status: "ready" });
-		else if (frame.method === "config/read") {
-			const config: Record<string, unknown> = {
-				model: this.options?.model,
-				model_reasoning_effort: "high",
-				mcp_servers: {},
-				plugins: {},
-				marketplaces: {},
-				features: { plugins: false },
-			};
-			const origins: Record<string, unknown> = Object.fromEntries(
-				["model", "model_reasoning_effort", "features.plugins"].map((key) => [
-					key,
-					{ name: { type: "sessionFlags" }, version: "1" },
-				]),
-			);
-			for (const [key, value] of Object.entries(CODEX_OFFICIAL_LANE_CONFIG)) {
-				const parts = key.split(".");
-				let container = config;
-				for (const part of parts.slice(0, -1)) {
-					container[part] ??= {};
-					container = container[part] as Record<string, unknown>;
-				}
-				container[parts.at(-1) as string] = structuredClone(value);
-				// 固定 Codex 按元素记录数组配置的来源。
-				for (const originKey of Array.isArray(value)
-					? value.map((_, index) => `${key}.${index}`)
-					: [key])
-					origins[originKey] = { name: { type: "sessionFlags" }, version: "1" };
-			}
-			const provider = {
-				name: "Agent Infra Active Model",
-				base_url: this.options?.modelAccess?.endpoint,
-				env_key: "AGENT_INFRA_CODEX_MODEL_CREDENTIAL",
-				wire_api: "responses",
-				requires_openai_auth: false,
-				supports_websockets: false,
-				request_max_retries: 0,
-				stream_max_retries: 0,
-				env_key_instructions: null,
-				experimental_bearer_token: null,
-				auth: null,
-				aws: null,
-				query_params: null,
-				http_headers: null,
-				env_http_headers: null,
-				stream_idle_timeout_ms: null,
-				websocket_connect_timeout_ms: null,
-				supports_standalone_web_search: false,
-			};
-			config.model_provider = "agent_infra";
-			config.model_providers = { agent_infra: provider };
-			origins.model_provider = { name: { type: "sessionFlags" }, version: "1" };
-			for (const [key, value] of Object.entries(provider)) {
-				if (value !== null && key !== "supports_standalone_web_search")
-					origins[`model_providers.agent_infra.${key}`] = {
-						name: { type: "sessionFlags" },
-						version: "1",
-					};
-			}
-			this.respond(frame, { config, origins });
-		} else if (frame.method === "model/list") {
-			const params = frame.params as { cursor?: string } | undefined;
-			const page = Number(params?.cursor ?? 0);
-			this.respond(frame, {
-				data: [
-					{
-						model: this.modelPages[page],
-						supportedReasoningEfforts: [{ reasoningEffort: "high" }],
-					},
-				],
-				nextCursor: page + 1 < this.modelPages.length ? String(page + 1) : null,
-			});
-		} else if (frame.method === "thread/read") {
-			if (this.readSendFailure) return this.readSendFailure();
-			if (this.holdReads) {
-				this.heldReads.push(frame);
-				return;
-			}
-			this.releaseRead(frame);
-		} else if (frame.method === "thread/compact/start") {
-			this.respond(frame, {});
-			this.push({
-				method: "turn/started",
-				params: {
-					threadId: this.threadId,
-					turn: { id: this.compactTurnId, status: "inProgress", items: [] },
-				},
-			});
-			this.push({
-				method: "item/started",
-				params: {
-					threadId: this.threadId,
-					turnId: this.compactTurnId,
-					item: {
-						type: "contextCompaction",
-						id: this.compactStartedItemId ?? this.compactItemId,
-					},
-				},
-			});
-			if (!this.holdCompactTerminal) this.completeCompact();
-		} else throw new Error(`Unexpected side effect: ${String(frame.method)}`);
-	}
-
-	completeCompact() {
-		this.push({
-			method: "item/completed",
-			params: {
-				threadId: this.threadId,
-				turnId: this.compactTurnId,
-				item: {
-					type: "contextCompaction",
-					id: this.compactCompletedItemId ?? this.compactItemId,
-				},
-			},
-		});
-		this.push({
-			method: "turn/completed",
-			params: {
-				threadId: this.threadId,
-				turn: { id: this.compactTurnId, status: "completed", items: [] },
-			},
-		});
-	}
-
-	releaseRead(frame = this.heldReads.shift()) {
-		if (!frame) throw new Error("Missing held read");
-		this.beforeResponse?.();
-		if (this.error)
-			this.push({
-				id: frame.id,
-				error: { code: this.errorCode, message: "secret /private/thread/body" },
-			});
-		else
-			this.respond(frame, {
-				thread: {
-					id: this.threadId,
-					status: this.status,
-					turns:
-						(frame.params as { includeTurns?: boolean } | undefined)
-							?.includeTurns === true || this.returnTurnsOnStatusRead
-							? this.turns
-							: [],
-					preview: "private conversation body",
-					path: "/private/native/session",
-					cwd: "/private/workspace",
-					credential: "private-credential",
-				},
-			});
-	}
-
-	private respond(frame: CodexAppServerFrame, result: unknown) {
-		this.push({ id: frame.id, result });
-	}
-	push(frame: CodexAppServerFrame) {
-		this.queue.push(frame);
-		this.wake?.();
-	}
-	async *frames() {
-		while (!this.closed) {
-			const frame = this.queue.shift();
-			if (frame) yield frame;
-			else await new Promise<void>((resolve) => (this.wake = resolve));
-		}
-	}
-	async close() {
-		this.closeCount++;
-		this.closed = true;
-		this.wake?.();
-	}
-}
-
-class MetadataDriver extends CodexRuntimeDriver {
-	static openFixture(path: string, transport: MetadataTransport) {
-		let opened = false;
-		return MetadataDriver.openWithBridge(
-			{
-				path,
-				nativeLane: "official-model-only",
-				configVersion: "config-1",
-				defaultModelOptionId: "primary",
-				defaultReasoningLevel: "high",
-				authorizeExternalAction: async () => {
-					throw new Error("Unexpected model authorization");
-				},
-				modelOptions: [
-					{
-						modelOptionId: "primary",
-						model: "gpt-5.3-codex",
-						reasoningLevels: ["high"],
-						endpoint: "http://127.0.0.1:1/approved/v1",
-						credential: "synthetic-model-credential",
-					},
-				],
-			},
-			async (options: CodexAppServerBridgeOptions) => {
-				const current = opened ? (transport.successor ?? transport) : transport;
-				opened = true;
-				current.openCount++;
-				current.options = options;
-				if (current.openDelay) await current.openDelay;
-				return current;
-			},
-		);
-	}
-}
 
 const fixtures: { directory: string; driver: CodexRuntimeDriver }[] = [];
 afterEach(async () => {
@@ -284,7 +43,12 @@ interface MetadataState {
 	>;
 }
 
-async function fixture(stateful = false) {
+async function fixture(
+	stateful = false,
+	options: Partial<
+		import("./codex-runtime-driver.js").CodexRuntimeDriverOptions
+	> = {},
+) {
 	const directory = await mkdtemp(join(tmpdir(), "codex-metadata-unit-"));
 	const { path, nativeSessionRef, binding } = await seedNativeCommandState(
 		directory,
@@ -292,7 +56,7 @@ async function fixture(stateful = false) {
 		stateful,
 	);
 	const transport = new MetadataTransport();
-	const driver = await MetadataDriver.openFixture(path, transport);
+	const driver = await MetadataDriver.openFixture(path, transport, options);
 	fixtures.push({ directory, driver });
 	const abort = new AbortController();
 	const read: CodexNativeCommandReadContext = {
@@ -629,8 +393,73 @@ describe("Codex native command result lifecycle", () => {
 		);
 	});
 
+	it("emits only bounded compact lifecycle stages without private data", async () => {
+		const stages: unknown[] = [];
+		const f = await fixture(true, {
+			observeNativeCompactStage: (event) => stages.push(event),
+		});
+		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
+		const compact = projection.capabilities.find(
+			(entry) => entry.name === "compact",
+		);
+		if (!compact) throw new Error("Missing compact capability");
+		const command = f.driver.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "compact-telemetry-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "compact-telemetry-1",
+			turnId: "turn-compact-telemetry-1",
+			sessionGeneration: 1,
+			nativeSessionRef: f.read.nativeSessionRef,
+			capabilityId: compact.id,
+			directoryRevision: projection.revision,
+			capabilityName: compact.name,
+			capabilitySourceVersion: compact.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "relay-key-1",
+				version: 1,
+			},
+			authorizationRecordId: "authorization-1",
+		});
+		const record = await f.driver.execute(command, { nativeCommand: f.read });
+		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
+		expect(stages.map((event) => (event as { stage: string }).stage)).toEqual([
+			"request_sent",
+			"rpc_response",
+			"item_started",
+			"item_completed",
+			"turn_completed",
+			"final_acceptance",
+		]);
+		expect(JSON.stringify(stages)).not.toContain("private");
+		expect(JSON.stringify(stages)).not.toContain("relay-key");
+		expect(stages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					operationRef: "native.command.compact",
+					outcome: "completed",
+				}),
+			]),
+		);
+	});
+
 	it("keeps the command unknown when a completion never started for this item", async () => {
-		const f = await fixture(true);
+		const stages: unknown[] = [];
+		const f = await fixture(true, {
+			observeNativeCompactStage: (event) => stages.push(event),
+		});
 		f.transport.compactCompletedItemId = "unrelated-compaction-item";
 		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
 		const compact = projection.capabilities.find(
@@ -676,6 +505,15 @@ describe("Codex native command result lifecycle", () => {
 				(frame) => frame.method === "thread/compact/start",
 			),
 		).toHaveLength(1);
+		expect(stages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					stage: "final_acceptance",
+					outcome: "unknown",
+					code: "missing_event",
+				}),
+			]),
+		);
 	});
 
 	it("recovers a persisted compact item after the Driver restarts without reinvoking", async () => {
@@ -1051,9 +889,19 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 		).toEqual({ threadId: "native-thread-private", includeTurns: false });
 	});
 
-	it.each(["bridge", "initialize", "config/read", "thread/read", "projection"])(
-		"awaits fresh remote authority after %s and prevents the next dependency on denial",
-		async (stage) => {
+	it.each(
+		[
+			"bridge",
+			"initialize",
+			"config/read",
+			"thread/read",
+			"projection",
+		].flatMap((stage) =>
+			["directory", "V1"].map((reader) => ({ stage, reader })),
+		),
+	)(
+		"awaits fresh remote authority after $stage in $reader and prevents the next dependency on denial",
+		async ({ stage, reader }) => {
 			const f = await fixture();
 			let projected = false;
 			f.transport.status = {
@@ -1078,7 +926,10 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 				}
 				return f.binding;
 			};
-			const query = f.driver.discoverNativeCommands(f.read);
+			const query =
+				reader === "V1"
+					? f.driver.readNativeMetadataV1("commands", f.read)
+					: f.driver.discoverNativeCommands(f.read);
 			const rejected = expect(query).rejects.toMatchObject({
 				code: "RUNTIME_GRANT_INVALID",
 			});
@@ -1266,14 +1117,14 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 			let confirmations = 0;
 			f.read.revalidate = async () => {
 				confirmations++;
-				return confirmations === 1 ? f.binding : held.promise;
+				return held.promise;
 			};
 			const query = f.driver.discoverNativeCommands(f.read);
 			const rejected = expect(query).rejects.toMatchObject({
 				code: "RUNTIME_GRANT_INVALID",
 			});
 			if (kind === "in flight") initialization.resolve();
-			await vi.waitFor(() => expect(confirmations).toBe(2));
+			await vi.waitFor(() => expect(confirmations).toBe(1));
 			f.abort.abort();
 			await rejected;
 			held.resolve(f.binding);
@@ -1587,23 +1438,19 @@ describe("Codex metadata RPC local failure boundaries (scripted unit fixture)", 
 });
 
 describe("Codex native metadata command (scripted unit fixture)", () => {
-	it.each(["commands", "skills"] as const)(
-		"projects native metadata selector %s through the existing directory reader",
+	it.each(["commands", "status"] as const)(
+		"uses one pre-read and one post-projection current query for warm V1 %s",
 		async (selector) => {
 			const f = await fixture();
-			const directory = {
-				revision: "a".repeat(64),
-				capabilities: [],
-			};
-			if (selector === "commands")
-				vi.spyOn(f.driver, "discoverNativeCommands").mockResolvedValue(
-					directory,
-				);
-			else
-				vi.spyOn(f.driver, "discoverNativeSkills").mockResolvedValue(directory);
-			await expect(
-				f.driver.readNativeMetadataV1(selector, f.read),
-			).resolves.toEqual({ selector, ...directory });
+			await f.driver.readNativeMetadataV1(selector, f.read);
+			const revalidate = vi.fn(f.read.revalidate);
+			f.read.revalidate = revalidate;
+			const before = f.transport.requests.length;
+			await f.driver.readNativeMetadataV1(selector, f.read);
+			expect(
+				f.transport.requests.slice(before).map((frame) => frame.method),
+			).toEqual(["thread/read"]);
+			expect(revalidate).toHaveBeenCalledTimes(2);
 		},
 	);
 

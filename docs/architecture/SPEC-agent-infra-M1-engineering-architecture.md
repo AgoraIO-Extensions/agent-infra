@@ -725,6 +725,15 @@ Host 将原请求取消、固定 deadline、本机生命周期及当前确认失
 读取不新建业务 Execution、Session 或 Turn，不恢复业务、不写 recovery latch、fence、Key
 或任务状态，不推进 successor。纯原绑定断言独立于旧业务、控制及 evidence-query latch；
 目录不授权后续执行。内部 ref、正文、路径、原始证明和凭证不进入公开投影、审计或遥测。
+
+同一次原生 metadata I/O 可由受信统一完成边界实现：I/O 完成后、结果交付或缓存前，
+仅执行有界、同步且无业务副作用的投影，再显式等待一次真实当前认证、读取政策及原范围复核，
+随后再次核对原配置、进程/Skill epoch、取消与固定期限，才可返回结果。纯 helper 直接尾返回
+该边界的 Promise，不另造人工 await，也不在边界后继续异步工作。调用方等待同一次边界完成
+不产生可复用的授权缓存；后续相关 I/O/await 仍须新的完成边界及真实复核，不能跨 await、
+请求、selector、readId 或原范围复用旧允许结论。同步 `assertCurrent` 不替代远端真实复核，
+原 API 响应 bytes 前确认、两轮 admission metadata 与固定期限保持不变。
+
 具体 Host/Driver 生命周期见 [Runtime HLD §5.2](HLD-agent-runtime-M1.md#52-调用生命周期与兼容)。
 
 ## 10. Agent Workload 与调谐

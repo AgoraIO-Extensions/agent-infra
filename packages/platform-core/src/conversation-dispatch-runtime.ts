@@ -272,7 +272,12 @@ export function parseRuntimeResponse(
 		if (
 			resultInput.status !== undefined ||
 			!isRuntimeRejectionCode(code) ||
-			(expectedVersion !== 2 && code !== "RUNTIME_TURN_NOT_ACTIVE") ||
+			(expectedVersion !== 2 &&
+				code !== "RUNTIME_TURN_NOT_ACTIVE" &&
+				!(
+					claim.operation === "conversation.native-capability.invoke.v2" &&
+					code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
+				)) ||
 			message !== runtimeRejectionMessages[code] ||
 			resultInput.retryable !== false
 		) {

@@ -16,7 +16,6 @@ import {
 import { createServer, type IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-
 import type {
 	RuntimeDriverCommandV1,
 	RuntimeDriverSubmitTurnCommandV2,
@@ -16986,6 +16985,59 @@ describe("Codex structured Skill input", () => {
 		};
 	}
 
+	it("does not cache a Skill result when local authority drifts after the real current query resolves", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.metadata.shortDescription = "next directory";
+		const next = await f.driver.discoverNativeSkills(f.read);
+		delete f.bridge.metadata.shortDescription;
+		const previous = await f.driver.discoverNativeSkills(f.read);
+		expect(next.revision).not.toBe(previous.revision);
+		f.bridge.metadata.shortDescription = "next directory";
+		let projected = false;
+		let currentCompleted = false;
+		let changed = false;
+		let scheduled = false;
+		Object.defineProperty(f.bridge.metadata, "description", {
+			enumerable: true,
+			get() {
+				projected = true;
+				return "显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。";
+			},
+		});
+		f.read.revalidate = async () => {
+			if (projected) currentCompleted = true;
+			return f.binding;
+		};
+		f.read.assertCurrent = () => {
+			if (currentCompleted && !scheduled) {
+				scheduled = true;
+				queueMicrotask(() => {
+					changed = true;
+				});
+			}
+			return changed
+				? {
+						...f.binding,
+						principal: { kind: "user" as const, id: "changed-local-reader" },
+					}
+				: f.binding;
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		expect(changed).toBe(true);
+		// A refused read must not replace the last confirmed directory receipt.
+		expect(() =>
+			f.driver.createNativeSkillCommand(nativeSkillCommand(f, previous)),
+		).not.toThrow();
+		expect(() =>
+			f.driver.createNativeSkillCommand(nativeSkillCommand(f, next)),
+		).toThrow();
+		expect(
+			f.bridge.requests.some((request) => request.method === "turn/start"),
+		).toBe(false);
+	});
+
 	it("binds the verified mounted entry path and version", () => {
 		const root = "/opt/agent-infra-skill-hub";
 		const path = `${root}/.agents/skills/workspace-summary/SKILL.md`;
@@ -17878,6 +17930,20 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it("uses one pre-read and one post-projection current query for warm V1 skills", async () => {
+		const f = await skillDiscoveryFixture();
+		await f.driver.readNativeMetadataV1("skills", f.read);
+		const revalidate = vi.fn(f.read.revalidate);
+		f.read.revalidate = revalidate;
+		await expect(
+			f.driver.readNativeMetadataV1("skills", f.read),
+		).resolves.toMatchObject({
+			selector: "skills",
+			capabilities: [{ kind: "skill" }],
+		});
+		expect(revalidate).toHaveBeenCalledTimes(2);
+	});
+
 	it.each(["command", "skill"] as const)(
 		"invokes the discovered %s through Host V4 under a new Execution",
 		async (kind) => {
@@ -18487,15 +18553,19 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		});
 	});
 
-	it.each([
-		"initialize",
-		"config/read",
-		"skills/extraRoots/set",
-		"skills/list",
-		"projection",
-	])(
-		"awaits async current authority after %s before admitting the next Skill dependency",
-		async (stage) => {
+	it.each(
+		[
+			"initialize",
+			"config/read",
+			"skills/extraRoots/set",
+			"skills/list",
+			"projection",
+		].flatMap((stage) =>
+			["directory", "V1"].map((reader) => ({ stage, reader })),
+		),
+	)(
+		"awaits async current authority after $stage in $reader before admitting the next Skill dependency",
+		async ({ stage, reader }) => {
 			const f = await skillDiscoveryFixture();
 			let projected = false;
 			Object.defineProperty(f.bridge.metadata, "description", {
@@ -18518,7 +18588,10 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 				}
 				return f.binding;
 			};
-			const query = f.driver.discoverNativeSkills(f.read);
+			const query =
+				reader === "V1"
+					? f.driver.readNativeMetadataV1("skills", f.read)
+					: f.driver.discoverNativeSkills(f.read);
 			const rejected = expect(query).rejects.toMatchObject({
 				code: "RUNTIME_GRANT_INVALID",
 			});

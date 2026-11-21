@@ -288,6 +288,18 @@ Skill epoch。范围不会因当前权限扩大而换成另一原执行。原同
 thread/read、skills/list 等等待边界同样受当前读取确认约束，不能只在公开方法尾部补一次。
 等待当前确认也受同一 signal/deadline 约束，不续期、不序列化函数，不返回结果后补验。
 
+同一次 I/O 的完成边界遵循 [Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)。
+metadata Driver 可用私有 guarded-read primitive 完成该序列：I/O 完成后核本机原绑定与限额，
+执行受信同步 finalizer，再显式 await revalidate，核返回原主体/范围及本机状态后才返回。
+finalizer 不得返回 Promise/thenable、执行工具/模型/业务或写持久状态，不得提前交付或缓存结果。
+只做无 I/O 同步解析的 helper 应合入 finalizer，或直接尾返回同一完成边界；有额外异步依赖时
+仍须独立真实复核。已缓存 RPC handle 的 `Promise.resolve` 可改为同步取得 handle 及原同步护栏；
+真实 executor/RPC 初始化、配置/目录读取和最终返回前的当前确认仍保留。
+
+该 primitive 不保存 allowed/revision 闭包或跳过复核标志。同步投影期间发生的当前事实变化，
+由其后的真实查询及原绑定/epoch 比较拦截；范围、配置、进程/Skill epoch 变化、认证/政策不可确认、
+期限或取消仍使原 context 永久失效。不能直接删除投影后的 guard 或只换成 `assertCurrent`。
+
 原生请求失败、撤权/账号或所用凭证失效、期限/abort、等待期间原范围/config/process/epoch
 变化、当前确认依赖失败、返回前拒绝及迟到响应均须有真实入口负向测试。API 结果交付与
 请求关联失效统一遵循 [Spec §9.3.1](SPEC-agent-infra-M1-engineering-architecture.md#931-原生元数据读取授权)，
