@@ -102,6 +102,7 @@ beforeAll(async () => {
 	for (const name of [
 		"hostname-route-configuration",
 		"workload-resource-name",
+		"skill-sync-failure",
 	]) {
 		const compiled = await transform(
 			await readFile(new URL("./" + name + ".ts", import.meta.url), "utf8"),
