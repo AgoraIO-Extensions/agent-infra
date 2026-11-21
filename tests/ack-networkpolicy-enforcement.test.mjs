@@ -550,3 +550,25 @@ process.exit(1);
 		);
 	}
 });
+
+test("formal ACK entries run the gate before reading inputs or creating template Pods", async () => {
+	const gate = "deploy/ack/networkpolicy-enforcement.mjs";
+	const preflight = await readFile(
+		join(import.meta.dirname, "../deploy/ack/preflight.sh"),
+		"utf8",
+	);
+	assert(preflight.indexOf(gate) > preflight.indexOf("helm template"));
+	assert(preflight.indexOf(gate) < preflight.indexOf("bootstrap-inputs.ts"));
+	const redeploy = await readFile(
+		join(import.meta.dirname, "../deploy/ack/redeploy.sh"),
+		"utf8",
+	);
+	const body = redeploy.slice(
+		redeploy.indexOf("template_preflight() {"),
+		redeploy.indexOf("\n}\n", redeploy.indexOf("template_preflight() {")),
+	);
+	assert(body.includes(gate));
+	assert(body.indexOf(gate) < body.indexOf("prepare-template-preflight.ts"));
+	assert(body.indexOf(gate) < body.indexOf("template-model-preflight.mjs"));
+	assert(redeploy.indexOf('"$repo_root/deploy/ack/preflight.sh"') > 0);
+});

@@ -145,7 +145,8 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 ## NetworkPolicy 执行证据门禁
 
 `preflight.sh`（`deploy.sh` 与 `redeploy.sh` 都会调用）在渲染 chart 之后、读取部署依赖之前运行
-`deploy/ack/networkpolicy-enforcement.mjs`，规则见
+`deploy/ack/networkpolicy-enforcement.mjs`；`redeploy.sh template-preflight` 在创建模板 Pod 之前
+也运行它（不含 chart 渲染检查）。规则见
 [工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
 它只读：读取两个仓库外文件，执行 `kubectl get` 读取 namespace、`kube-system`、Node 和带
 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不创建探针，也不写集群。
