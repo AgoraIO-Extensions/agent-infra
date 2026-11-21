@@ -645,6 +645,13 @@
       "when": 1795213659139,
       "tag": "0095_connection_manual_permit",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1795228865475,
+      "tag": "0096_connection_principal_pin_rules",
+      "breakpoints": true
     }
   ]
 }

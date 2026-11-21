@@ -50,6 +50,12 @@ import {
 	manualTemplateMatchesCurrentV1,
 	readConnectionManualInstallationFactsV1,
 } from "./connection-manual-installations.js";
+import {
+	connectionPrincipalPinDeadlineSql,
+	connectionPrincipalPinPermitsSql,
+	insertConnectionPrincipalPinAuditV1,
+	sweepConnectionPrincipalPinRulesV1,
+} from "./connection-principal-pin-rules.js";
 import postgres from "./observed-postgres.js";
 
 type Transaction = Parameters<
@@ -272,6 +278,11 @@ export class PostgresConnectionManualInstallationStoreV1 {
 
 	/** Expired attempts become unknown, including the registration they were sending. */
 	async #sweep(signal?: AbortSignal) {
+		// §13.5.1 exception items 4, 6 and 8: deadlines, expiry and pending releases.
+		await this.#transaction((tx) =>
+			sweepConnectionPrincipalPinRulesV1(tx, this.#policy),
+		);
+		if (signal?.aborted) return;
 		await this.#reopenUnsuppliedPrepares(signal);
 		if (signal?.aborted) return;
 		await this.#transaction((tx) =>
@@ -990,7 +1001,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					? await tx.execute(sql`
 						select r.id, r.revision, r.candidate_digest from platform.connection_principal_pin_receipts r
 						join platform.connection_principal_pins pin on pin.id=r.pin_id and pin.revision=r.pin_revision
-							and pin.released_at is null
+							and pin.released_at is null and ${connectionPrincipalPinPermitsSql("pin", this.#policy)}
 						join platform.connection_installation_commands b on b.authorization_id=r.authorization_id
 							and b.id=r.phase_command_id and b.command='confirm_binding_readback' and b.status='completed'
 						where r.confirm_command_id=${input.confirmCommandId} and r.authorization_id=${input.authorizationId}
@@ -1192,16 +1203,19 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(scope)}, 0))`,
 					);
 				const pins = await tx.execute(sql`
-					select id, revision, principal_id, user_id from platform.connection_principal_pins
+					select id, revision, principal_id, user_id,
+						${connectionPrincipalPinPermitsSql("connection_principal_pins", this.#policy)} as permits
+					from platform.connection_principal_pins
 					where issuer=${issuer} and released_at is null
 						and (principal_id=${principalId} or user_id=${userId})
 					for update
 				`);
 				const own = pins.find((pin) => pin.user_id === userId);
+				const holder = pins.find(
+					(pin) => pin.principal_id === principalId && pin.user_id !== userId,
+				);
 				const conflict =
-					pins.some(
-						(pin) => pin.principal_id === principalId && pin.user_id !== userId,
-					) ||
+					holder !== undefined ||
 					(own !== undefined && own.principal_id !== principalId) ||
 					this.#policy.confirmedPrincipals.some(
 						(entry) =>
@@ -1209,12 +1223,47 @@ export class PostgresConnectionManualInstallationStoreV1 {
 							entry.principalId === principalId &&
 							entry.userId !== userId,
 					);
+				// §13.5.1 item 4: a second user's verified readback on a held
+				// `principalId` suspends the holder's new permits under this confirm's
+				// original claim and fence; the holder resumes only on a consistent
+				// verification record. A holder still "主体待核对" keeps the deadline
+				// counted from its first pin (and its overdue mark); only a holder
+				// already verified consistent re-enters verification with a new window.
+				// The CASE arms read the row before this update.
+				if (holder) {
+					const suspended = await tx.execute(sql`
+						update platform.connection_principal_pins
+						set suspended_at=coalesce(suspended_at, clock_timestamp()), verification_state='pending',
+							verified_at=null, verification_actor_id=null, verification_reference=null,
+							verification_deadline=case when verification_state='pending' then verification_deadline
+								else ${connectionPrincipalPinDeadlineSql(this.#policy)} end,
+							overdue_at=case when verification_state='pending' then overdue_at else null end,
+							rule_revision=rule_revision+1
+						where id=${holder.id as string} and released_at is null and release_requested_at is null
+							and ${holds}
+						returning id
+					`);
+					if (suspended.length === 1)
+						await insertConnectionPrincipalPinAuditV1(tx, {
+							action: "suspended",
+							pinId: holder.id as string,
+							actor: { type: "system", id: "platform-worker" },
+							outcome: "succeeded",
+							details: { userId: holder.user_id, conflictingUserId: userId },
+						});
+				}
 				const [capacity] = own
 					? [{ full: false }]
 					: await tx.execute(sql`
 						select count(*) >= ${exception.maximumPinnedPrincipals} as full
 						from platform.connection_principal_pins where released_at is null`);
-				if (conflict || capacity?.full === true) {
+				// An own pin that no longer backs permits (overdue, inconsistent, being
+				// released or suspended, or past `notAfter`) accepts no new installation.
+				if (
+					conflict ||
+					capacity?.full === true ||
+					(own !== undefined && own.permits !== true)
+				) {
 					if (!(await this.#rejectConfirm(tx, input, holds)))
 						throw uncommitted();
 					return { outcome: "rejected" };
@@ -1223,9 +1272,10 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				if (!own) {
 					const inserted = await tx.execute(sql`
 						insert into platform.connection_principal_pins
-							(id, issuer, principal_id, user_id, policy_ref, policy_revision)
+							(id, issuer, principal_id, user_id, policy_ref, policy_revision, verification_deadline)
 						select ${pinId}, ${issuer}, ${principalId}, ${userId},
-							${exception.policy.ref}, ${exception.policy.revision}
+							${exception.policy.ref}, ${exception.policy.revision},
+							${connectionPrincipalPinDeadlineSql(this.#policy)}
 						where ${holds}
 						returning id
 					`);
@@ -2369,6 +2419,9 @@ export class PostgresConnectionManualInstallationStoreV1 {
 						// with exactly this confirm's first-pin receipt, that receipt is still
 						// committed for the same attempt, claim and fence, its pin is active
 						// at the same revision and phase 1 completed. Nothing here writes.
+						// The pin must still back permits (§13.5.1 items 4, 6 and 8), so a
+						// suspended, overdue, inconsistent, releasing or expired pin
+						// exchanges nothing.
 						const receipt = command.pinReceipt;
 						if (!receipt) return "denied";
 						const [phase] = await tx.execute(sql`
@@ -2385,6 +2438,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 								and r.claim_fence=${template.claim.fence} and r.expires_at > clock_timestamp()
 							join platform.connection_principal_pins pin on pin.id=r.pin_id
 								and pin.revision=r.pin_revision and pin.released_at is null
+								and ${connectionPrincipalPinPermitsSql("pin", this.#policy)}
 							join platform.connection_installation_commands b on b.id=r.phase_command_id
 								and b.authorization_id=p.authorization_id and b.command='confirm_binding_readback'
 								and b.status='completed'

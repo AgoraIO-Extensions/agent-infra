@@ -253,7 +253,17 @@ export const connectionManualInstallations = platformSchema.table(
 /**
  * §13.5.1 exception item 3: one Platform user per Connection issuer and
  * `principalId`, and one pinned `principalId` per user, across every Agent.
- * A pin is released only by the audited unpin operation (item 6).
+ * A pin is released only by the audited unpin operation (item 6), after the
+ * user's exception installations are closed and revoked.
+ *
+ * Item 4/5 facts live only here and in the audit: `verification_state`
+ * `pending` is the "主体待核对" label, due at `verification_deadline` (first
+ * pin + `verificationWindowHours`, database clock); a uniqueness conflict sets
+ * `suspended_at` and reopens the window only for a verified holder;
+ * `release_requested_at` stops new permits until the release completes.
+ * Pins released before migration 0096 carry a backfilled request by
+ * `platform-migration`. `rule_revision` is the CAS for these
+ * administrator records and never changes `revision`, which phase receipts bind.
  */
 export const connectionPrincipalPins = platformSchema.table(
 	"connection_principal_pins",
@@ -269,6 +279,29 @@ export const connectionPrincipalPins = platformSchema.table(
 			.notNull(),
 		releasedAt: timestamp("released_at", { withTimezone: true }),
 		revision: bigint("revision", { mode: "number" }).default(1).notNull(),
+		verificationState: varchar("verification_state", { length: 16 })
+			.default("pending")
+			.notNull(),
+		// Rows that predate the rule are due at once: an unknown window is not a long one.
+		verificationDeadline: timestamp("verification_deadline", {
+			withTimezone: true,
+		})
+			.default(sql`clock_timestamp()`)
+			.notNull(),
+		verifiedAt: timestamp("verified_at", { withTimezone: true }),
+		verificationActorId: text("verification_actor_id"),
+		verificationReference: text("verification_reference"),
+		suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+		overdueAt: timestamp("overdue_at", { withTimezone: true }),
+		releaseRequestedAt: timestamp("release_requested_at", {
+			withTimezone: true,
+		}),
+		releaseReason: varchar("release_reason", { length: 16 }),
+		releaseActorId: text("release_actor_id"),
+		releaseReference: text("release_reference"),
+		ruleRevision: bigint("rule_revision", { mode: "number" })
+			.default(1)
+			.notNull(),
 	},
 	(table) => [
 		uniqueIndex("connection_principal_pin_principal_unique")
@@ -281,6 +314,20 @@ export const connectionPrincipalPins = platformSchema.table(
 			"connection_principal_pin_identity",
 			sql`char_length(${table.issuer}) > 0 and ${table.principalId} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
 				and char_length(${table.userId}) > 0 and ${table.revision} between 1 and 9007199254740991`,
+		),
+		check(
+			"connection_principal_pin_rules",
+			sql`${table.verificationState} in ('pending', 'verified', 'mismatch')
+				and (${table.verificationState} = 'verified') = (${table.verifiedAt} is not null)
+				and (${table.verificationState} = 'pending') = (${table.verificationActorId} is null)
+				and (${table.verificationActorId} is null) = (${table.verificationReference} is null)
+				and (${table.releaseRequestedAt} is null) = (${table.releaseReason} is null)
+				and (${table.releaseReason} is null) = (${table.releaseActorId} is null)
+				and (${table.releaseActorId} is null) = (${table.releaseReference} is null)
+				and (${table.releaseReason} is null or ${table.releaseReason} in ('administrator', 'mismatch'))
+				and (${table.verificationState} <> 'mismatch' or ${table.releaseReason} = 'mismatch')
+				and (${table.releasedAt} is null or ${table.releaseRequestedAt} is not null)
+				and ${table.ruleRevision} between 1 and 9007199254740991`,
 		),
 	],
 );
