@@ -135,6 +135,13 @@ const directory = {
 };
 /** Synthetic Consumer service credential; it may appear only on the Connection request. */
 const credential = `conn_consumer_${randomBytes(24).toString("base64url")}`;
+/** #4199 AC-3: agent-b's own synthetic Consumer service credential. */
+const credentialB = `conn_consumer_${randomBytes(24).toString("base64url")}`;
+/** Each service credential authenticates its own Connection Consumer. */
+const consumers = new Map([
+	[`Bearer ${credential}`, "consumer-internal-a"],
+	[`Bearer ${credentialB}`, "consumer-internal-b"],
+]);
 const deploymentServiceToken = randomBytes(32).toString("base64url");
 const grant = generateKeyPairSync("ed25519");
 const signing = {
@@ -222,8 +229,8 @@ async function connectionFetch(
 		...(key ? { key } : {}),
 		bearer: headers.get("authorization") ?? "",
 	});
-	if (headers.get("authorization") !== `Bearer ${credential}`)
-		return new Response(null, { status: 401 });
+	const consumerId = consumers.get(headers.get("authorization") ?? "");
+	if (!consumerId) return new Response(null, { status: 401 });
 	if (method === "POST" && key) {
 		const body = JSON.parse(String(init?.body));
 		const receipt = {
@@ -232,7 +239,7 @@ async function connectionFetch(
 			clientName: body.clientName,
 			clientStatus: "ACTIVE",
 			configFingerprint: body.configFingerprint,
-			consumerId: "consumer-internal-a",
+			consumerId,
 			createdAt: new Date().toISOString(),
 			instanceId: `instance-${randomBytes(6).toString("hex")}`,
 			instanceStatus: "ACTIVE",
@@ -299,6 +306,8 @@ let dataDirectory: string;
 let startHost: () => Promise<void>;
 let hostOrigin: string;
 let callbackAuth: string;
+/** The Worker's readback origin the Session Hosts call back. */
+let workerOrigin: string;
 let drain: ReturnType<typeof createConnectionManualInstallationDrainV1>;
 let sandboxId: string;
 type HostReference = {
@@ -343,29 +352,38 @@ async function seedAgent(agentId: string) {
 	await client`insert into platform.agent_owners(agent_id,owner_id,created_at) values (${agentId},'owner',now())`;
 }
 
-async function seedExecution(user: string, suffix: string, worker: string) {
+async function seedExecution(
+	user: string,
+	suffix: string,
+	worker: string,
+	agentId = "agent-a",
+) {
 	await client`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values ('personal',${user},1,1) on conflict do nothing`;
 	await client`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values ('personal',${user},1,${`key-${user}`},${client.json({ purpose: "personal", subjectId: user, keyId: `key-${user}`, keyVersion: 1 })}) on conflict do nothing`;
-	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values ('agent-a','user',${user}) on conflict do nothing`;
-	await client`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,host_session_ref) values (${`conversation-${suffix}`},'agent-a',${user},'web','active',1,'agent-r1',${`host-${suffix}`})`;
-	await client`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version,delivery_fence) values (${`execution-${suffix}`},${`conversation-${suffix}`},'agent-a',${user},'web',${`turn-${suffix}`},'processing',1,'agent-r1',now(),'v4',${"a".repeat(43)},${`host-${suffix}`},'web','personal',${user},${`key-${user}`},1,3)`;
-	await client`insert into platform.task_authorization_records(id,execution_id,boundary) values (${`task-${suffix}`},${`execution-${suffix}`},${client.json({ schemaVersion: 1, principal: { kind: "user", id: user }, agentId: "agent-a", channelId: "web", identityRevision: "identity-r1", agentAuthorizationRevision: "agent-r1", accessSources: [{ kind: "user", userId: user }] })})`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values (${agentId},'user',${user}) on conflict do nothing`;
+	await client`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,host_session_ref) values (${`conversation-${suffix}`},${agentId},${user},'web','active',1,'agent-r1',${`host-${suffix}`})`;
+	await client`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version,delivery_fence) values (${`execution-${suffix}`},${`conversation-${suffix}`},${agentId},${user},'web',${`turn-${suffix}`},'processing',1,'agent-r1',now(),'v4',${"a".repeat(43)},${`host-${suffix}`},'web','personal',${user},${`key-${user}`},1,3)`;
+	await client`insert into platform.task_authorization_records(id,execution_id,boundary) values (${`task-${suffix}`},${`execution-${suffix}`},${client.json({ schemaVersion: 1, principal: { kind: "user", id: user }, agentId, channelId: "web", identityRevision: "identity-r1", agentAuthorizationRevision: "agent-r1", accessSources: [{ kind: "user", userId: user }] })})`;
 	await seedSessionSandboxFixture(client, `conversation-${suffix}`);
 	// A live claim carries the same delivery fence on the outbox item and the Execution.
 	await client`insert into platform.outbox_items(id,scope_type,scope_id,operation,payload,status,lease_owner,lease_expires_at,delivery_fence,trace_id) values (${`item-${suffix}`},'conversation',${`conversation-${suffix}`},'conversation.turn.submit.v1',${client.json({ executionId: `execution-${suffix}` })},'processing',${worker},now()+interval '1 hour',3,'trace')`;
 }
 
-async function associate(revision: number) {
-	await client`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent-a',${revision}) on conflict (agent_id) do update set last_revision=excluded.last_revision`;
-	await client`delete from platform.connection_manual_associations where agent_id='agent-a'`;
+async function associate(
+	revision: number,
+	agentId = "agent-a",
+	secret = credential,
+) {
+	await client`insert into platform.connection_association_generations(agent_id,last_revision) values (${agentId},${revision}) on conflict (agent_id) do update set last_revision=excluded.last_revision`;
+	await client`delete from platform.connection_manual_associations where agent_id=${agentId}`;
 	const ciphertext = encryptor.encrypt(
 		connectionServiceCredentialSecretInputV1(
-			{ agentId: "agent-a", ownerId: "owner", associationRevision: revision },
-			credential,
+			{ agentId, ownerId: "owner", associationRevision: revision },
+			secret,
 			new Date().toISOString(),
 		),
 	);
-	await client`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at) values ('agent-a','connection-agent-a',${connectionServiceCredentialFingerprintV1(credential)},${revision},'owner',${client.json(ciphertext as never)},now())`;
+	await client`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at) values (${agentId},${`connection-${agentId}`},${connectionServiceCredentialFingerprintV1(secret)},${revision},'owner',${client.json(ciphertext as never)},now())`;
 }
 
 async function writePrivate(directory: string, name: string, value: string) {
@@ -379,6 +397,9 @@ beforeAll(async () => {
 	await seedAgent("agent-a");
 	await seedExecution("alice", "a", "worker-a");
 	await seedExecution("bob", "bob", "worker-b");
+	// #4199 AC-3: a second user on a second Agent, held by the same Worker.
+	await seedAgent("agent-b");
+	await seedExecution("bob", "pb", "worker-a", "agent-b");
 	const [allocation] =
 		await client`select sandbox_id from platform.session_sandbox_allocations where conversation_id='conversation-a'`;
 	sandboxId = allocation?.sandbox_id as string;
@@ -422,6 +443,7 @@ beforeAll(async () => {
 		},
 	});
 	const workerPort = await readbackServer.listen();
+	workerOrigin = `https://${workerService}:${workerPort}/`;
 	const hostPort = await freePort();
 	hostOrigin = `https://sandbox-${sandboxId}.${namespace}.svc:${hostPort}/`;
 
@@ -587,6 +609,7 @@ beforeEach(async () => {
 	await client`delete from platform.idempotency_records where scope_type='connection_installation'`;
 	await client`update platform.conversation_executions set delivery_fence=3 where execution_id='execution-a'`;
 	await associate(1);
+	await associate(1, "agent-b", credentialB);
 	connection.requests.length = 0;
 	connection.losePost = false;
 	connection.loseGet = false;
@@ -624,9 +647,9 @@ async function begin(user = "alice", suffix = "a") {
 		traceId: "trace",
 	});
 }
-async function status(authorizationId: string) {
+async function status(authorizationId: string, user = "alice") {
 	return use.executeInstallation({
-		userId: "alice",
+		userId: user,
 		identityRevision: "identity-r1",
 		command: "status",
 		authorizationId,
@@ -647,6 +670,9 @@ async function noCredentialStored() {
 	expect(JSON.stringify(rows)).not.toContain(credential);
 	expect(JSON.stringify(rows)).not.toContain(
 		credential.slice("conn_consumer_".length),
+	);
+	expect(JSON.stringify(rows)).not.toContain(
+		credentialB.slice("conn_consumer_".length),
 	);
 }
 
@@ -786,7 +812,10 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 	});
 
 	/** The API's callback delivery to the original Host (code + state; PKCE checked by the fake). */
-	async function deliverHostCallback(authorizationUrl: string) {
+	async function deliverHostCallback(
+		authorizationUrl: string,
+		host = { origin: hostOrigin, ca: hostTls.ca, callback: callbackAuth },
+	) {
 		const link = new URL(authorizationUrl);
 		const code = `synthetic-code-${randomBytes(12).toString("hex")}`;
 		connection.codes.set(code, link.searchParams.get("code_challenge") ?? "");
@@ -798,13 +827,13 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		});
 		return new Promise<number>((resolve, reject) => {
 			const sent = httpsRequest(
-				new URL("/internal/runtime/oauth/v1/callback", hostOrigin),
+				new URL("/internal/runtime/oauth/v1/callback", host.origin),
 				{
 					method: "POST",
-					ca: hostTls.ca,
+					ca: host.ca,
 					lookup,
 					headers: {
-						authorization: `Bearer ${callbackAuth}`,
+						authorization: `Bearer ${host.callback}`,
 						"content-type": "application/json",
 						"content-length": Buffer.byteLength(body),
 					},
@@ -2247,5 +2276,456 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			});
 		},
 		confirmTimeout * 2,
+	);
+
+	// #4199 AC-3: bob's Session on agent-b runs on its own Session Host (Sandbox,
+	// Pod, TLS identity, install token and private data directory). The Worker
+	// drain is the same code over the same Store; a second drain instance only
+	// carries that Host's local listener port.
+	const bobExecution = {
+		agentId: "agent-b",
+		conversationId: "conversation-pb",
+		sessionGeneration: 1,
+		executionId: "execution-pb",
+	};
+	async function startSecondHost() {
+		const [allocation] =
+			await client`select sandbox_id, resource_observation from platform.session_sandbox_allocations where conversation_id='conversation-pb'`;
+		const sandbox = allocation?.sandbox_id as string;
+		const podUid = (
+			(allocation as { resource_observation: unknown })
+				.resource_observation as {
+				resources: { kind: string; uid: string }[];
+			}
+		).resources.find((resource) => resource.kind === "Pod")?.uid as string;
+		const tls = await runtimeTlsFixture({
+			dnsNames: [`sandbox-${sandbox}.${namespace}.svc`],
+		});
+		const port = await freePort();
+		const origin = `https://sandbox-${sandbox}.${namespace}.svc:${port}/`;
+		const directory = await realpath(
+			await mkdtemp(join(tmpdir(), "manual-install-host-b-")),
+		);
+		let path = directory;
+		for (const part of [
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-oauth",
+			"tls",
+		]) {
+			path = join(path, part);
+			await mkdir(path, { mode: 0o700 });
+		}
+		const installToken = sessionSandboxConnectionInstallTokenV1(
+			deploymentServiceToken,
+			namespace,
+			sandbox,
+		);
+		const callback = randomBytes(32).toString("base64url");
+		await writePrivate(path, "server.crt", tls.cert);
+		await writePrivate(path, "server.key", tls.key);
+		await writePrivate(path, "callback.auth", callback);
+		await writePrivate(path, "install.auth", installToken);
+		await writePrivate(path, "worker-ca.crt", workerTls.ca);
+		const original = (reference: HostReference) => {
+			if (reference.executionId !== bobExecution.executionId)
+				throw new Error("denied");
+		};
+		const assembly = await prepareConnectionInstallReceiverV1({
+			environment: {
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN: origin,
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_WORKER_ORIGIN: workerOrigin,
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS:
+					JSON.stringify(system),
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS_APPROVAL:
+					JSON.stringify(approval),
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_CLIENT_NAME: "Agent Infra",
+				AGENT_INFRA_RUNTIME_NAMESPACE: namespace,
+				AGENT_INFRA_RUNTIME_POD_NAME: `sandbox-${sandbox}`,
+				AGENT_INFRA_RUNTIME_POD_UID: podUid,
+				AGENT_INFRA_RUNTIME_RESOURCE_FENCE: "1",
+				AGENT_INFRA_RUNTIME_SANDBOX_ID: sandbox,
+				AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
+				PORT: "3003",
+			},
+			dataDirectory: directory,
+			agentId: "agent-b",
+			workerId: "worker-a",
+			key: grant.publicKey,
+			keyId: signing.keyId,
+			issuer: signing.issuer,
+			serviceToken: randomBytes(32).toString("base64url"),
+			// This Host's journal holds only bob's original Execution on host-pb.
+			store: {
+				resolveOriginalExecutionBinding: async (reference: HostReference) => {
+					original(reference);
+					return {
+						principal: { kind: "user", id: "bob" },
+						scope: {
+							agentId: reference.agentId,
+							conversationId: reference.conversationId,
+							sessionGeneration: reference.sessionGeneration,
+							executionId: reference.executionId,
+						},
+					};
+				},
+				assertOriginalExecutionBindingCurrent: original,
+				resolveOriginalExecutionHostSessionRef: async (
+					reference: HostReference,
+				) => {
+					original(reference);
+					return "host-pb";
+				},
+			} as never,
+			fetch: connectionFetch as never,
+			dynamicPublication: publicationContract,
+			readback: createConnectionInstallReadbackClientV1({
+				origin: workerOrigin,
+				ca: workerTls.ca,
+				installToken,
+				lookup,
+			}),
+		});
+		if (assembly?.status !== "available")
+			throw new Error("second receiver unavailable");
+		const server = startConnectionInstallReceiverServerV1(assembly);
+		await once(server, "listening");
+		const drainB = createConnectionManualInstallationDrainV1({
+			store: manual,
+			decryptor,
+			host: createConnectionInstallHostClientV1({
+				ca: tls.ca,
+				signing,
+				lookup,
+			}),
+			systemAccess: system,
+			approval,
+			clientName: "Agent Infra",
+			namespace,
+			receiverPort: port,
+			deploymentWorkerId: "worker-a",
+			attemptOwner: "worker-a",
+		});
+		return {
+			sandbox,
+			podUid,
+			directory,
+			reader: assembly.dynamicReader,
+			host: { origin, ca: tls.ca, callback },
+			tick: () =>
+				drainB.drain([bobExecution.executionId], new AbortController().signal),
+			async close() {
+				server.closeAllConnections();
+				server.close();
+				await once(server, "close");
+				await assembly.close();
+				await tls.cleanup();
+				await rm(directory, { recursive: true, force: true });
+			},
+		};
+	}
+	const firstBeginRecord = (directory: string, authorizationId: string) =>
+		join(
+			directory,
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-oauth",
+			"records",
+			`install-first-begin-${createHash("sha256").update(authorizationId).digest("hex")}.json`,
+		);
+	const publicationRecord = (
+		directory: string,
+		delivery: { ref: string; revision: string },
+	) =>
+		join(
+			directory,
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-oauth",
+			"publications",
+			`${exportKey(delivery)}.json`,
+		);
+
+	it(
+		"installs two users' Sessions on two Agents independently, each received by its own Host (AC-3)",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const hostB = await startSecondHost();
+				try {
+					const [projectionA, projectionB] = [
+						await begin("alice", "a"),
+						await begin("bob", "pb"),
+					];
+					const pairs = [
+						{
+							user: "alice",
+							suffix: "a",
+							agentId: "agent-a",
+							connectionAgentId: "connection-agent-a",
+							consumerId: "consumer-internal-a",
+							secret: credential,
+							principalId: "principal-a",
+							authorizationId: projectionA.authorizationId,
+							execution: aliceExecution,
+							sandboxId,
+							directory: dataDirectory,
+							host: {
+								origin: hostOrigin,
+								ca: hostTls.ca,
+								callback: callbackAuth,
+							},
+							reader: dynamicReader(),
+							tick: () => tick(),
+						},
+						{
+							user: "bob",
+							suffix: "pb",
+							agentId: "agent-b",
+							connectionAgentId: "connection-agent-b",
+							consumerId: "consumer-internal-b",
+							secret: credentialB,
+							principalId: "principal-b",
+							authorizationId: projectionB.authorizationId,
+							execution: bobExecution,
+							sandboxId: hostB.sandbox,
+							directory: hostB.directory,
+							host: hostB.host,
+							reader: hostB.reader,
+							tick: hostB.tick,
+						},
+					] as const;
+					// Each stage runs for both before either goes on: supply and
+					// registration, the first begin, the user's own OAuth and confirm,
+					// then the exchange, publication and permit.
+					for (const pair of pairs) expect(await pair.tick()).toBe(1);
+					for (const pair of pairs) expect(await pair.tick()).toBe(1);
+					for (const pair of pairs) {
+						const bound = await status(pair.authorizationId, pair.user);
+						expect(
+							await deliverHostCallback(
+								(bound as { authorizationUrl?: string }).authorizationUrl ?? "",
+								pair.host,
+							),
+						).toBe(200);
+						const [mapped] =
+							await client`select binding->'callback'->>'stateHash' as hash from platform.connection_installation_authorizations where id=${pair.authorizationId}`;
+						const claimed = await use.callback.claim({
+							stateHash: mapped?.hash as string,
+							now: Date.now(),
+						});
+						expect(
+							await use.callback.settle({
+								stateHash: mapped?.hash as string,
+								attemptId: claimed?.attemptId as string,
+								now: Date.now(),
+								status: "delivered",
+							}),
+						).toBe(true);
+						expect(
+							await use.executeInstallation({
+								userId: pair.user,
+								identityRevision: "identity-r1",
+								command: "confirm",
+								authorizationId: pair.authorizationId,
+								idempotencyKey: randomUUID(),
+								requestId: "request",
+								traceId: "trace",
+							}),
+						).toMatchObject({ status: "confirmed" });
+					}
+					const rows = await client`
+						select m.authorization_id, m.user_id, m.agent_id, m.association_revision::int,
+							m.connection_agent_id, m.registration_key, m.registration_key_hash,
+							m.client_id, m.consumer_id, m.instance_id, m.supply_attempt_id,
+							m.supply_state, m.registration_state, m.revoke_state, m.template,
+							m.descriptor, m.descriptor_digest
+						from platform.connection_manual_installations m
+						where m.authorization_id in ${client([projectionA.authorizationId, projectionB.authorizationId])}`;
+					const rowOf = (authorizationId: string) => {
+						const row = rows.find(
+							(candidate) => candidate.authorization_id === authorizationId,
+						);
+						if (!row) throw new Error("missing installation");
+						return row;
+					};
+					// The user approved each installation in Connection as their own Principal.
+					for (const pair of pairs) {
+						const key = rowOf(pair.authorizationId).registration_key as string;
+						connection.receipts.set(key, {
+							...(connection.receipts.get(key) as Record<string, unknown>),
+							principalId: pair.principalId,
+						});
+					}
+					for (const pair of pairs) expect(await pair.tick()).toBe(1);
+
+					const states = await client`
+						select a.id, a.status, m.registration_state, m.supply_state, m.revoke_state
+						from platform.connection_installation_authorizations a
+						join platform.connection_manual_installations m on m.authorization_id=a.id`;
+					expect(states).toHaveLength(2);
+					const permits =
+						await client`select id, authorization_id, commit_digest from platform.connection_manual_install_permits`;
+					const pins =
+						await client`select user_id, principal_id from platform.connection_principal_pins order by user_id`;
+					expect(pins).toEqual([
+						{ user_id: "alice", principal_id: "principal-a" },
+						{ user_id: "bob", principal_id: "principal-b" },
+					]);
+					for (const [index, pair] of pairs.entries()) {
+						const other = pairs[1 - index] as (typeof pairs)[number];
+						const row = rowOf(pair.authorizationId);
+						const template = row.template as {
+							principal: { id: string };
+							reference: { agentId: string; executionId: string };
+							association: { connectionAgentId: string; revision: number };
+							registration: { registrationKeyHash: string };
+							target: {
+								sandboxId: string;
+								hostRef: string;
+								runtimeOrigin: string;
+							};
+						};
+						const registered = connection.receipts.get(
+							row.registration_key as string,
+						) as { clientId: string; instanceId: string; consumerId: string };
+						// Store facts: user, Agent, association revision, safe key
+						// reference, client and instance, all from this pair's own receipt.
+						expect(row).toMatchObject({
+							user_id: pair.user,
+							agent_id: pair.agentId,
+							association_revision: 1,
+							connection_agent_id: pair.connectionAgentId,
+							registration_key_hash: template.registration.registrationKeyHash,
+							client_id: registered.clientId,
+							consumer_id: pair.consumerId,
+							instance_id: registered.instanceId,
+						});
+						expect(registered.consumerId).toBe(pair.consumerId);
+						expect(
+							states.find((state) => state.id === pair.authorizationId),
+						).toMatchObject({
+							status: "confirmed",
+							registration_state: "registered",
+							supply_state: "confirmed",
+							revoke_state: "not_required",
+						});
+						// The template binds this user, Agent, association and Host target.
+						expect(template).toMatchObject({
+							principal: { id: pair.user },
+							reference: {
+								agentId: pair.agentId,
+								executionId: pair.execution.executionId,
+							},
+							association: {
+								connectionAgentId: pair.connectionAgentId,
+								revision: 1,
+							},
+							target: {
+								sandboxId: pair.sandboxId,
+								hostRef: `host-${pair.suffix}`,
+								runtimeOrigin: pair.host.origin,
+							},
+						});
+						// Registration went to this Agent's Connection Agent with its own
+						// service credential and this installation's key, once.
+						expect(
+							connection.requests.filter(
+								(request) =>
+									request.method === "POST" &&
+									request.key === row.registration_key,
+							),
+						).toEqual([
+							{
+								method: "POST",
+								path: `/connection/v1/agents/${pair.connectionAgentId}/oauth-clients`,
+								key: row.registration_key,
+								bearer: `Bearer ${pair.secret}`,
+							},
+						]);
+						// Host receipt: only this pair's Host consumed its first begin
+						// with the Store's descriptor and committed its publication.
+						const consumption = JSON.parse(
+							await readFile(
+								firstBeginRecord(pair.directory, pair.authorizationId),
+								"utf8",
+							),
+						);
+						expect(consumption.descriptor).toEqual(row.descriptor);
+						expect(consumption.descriptorDigest).toBe(row.descriptor_digest);
+						expect(
+							await exists(
+								firstBeginRecord(other.directory, pair.authorizationId),
+							),
+						).toBe(false);
+						const delivery = await dynamicDelivery(pair.authorizationId);
+						const publication = JSON.parse(
+							await readFile(
+								publicationRecord(pair.directory, delivery),
+								"utf8",
+							),
+						);
+						expect(publication).toMatchObject({
+							authorizationId: pair.authorizationId,
+							clientId: registered.clientId,
+							connectionPrincipalId: pair.principalId,
+							metadata: {
+								principal: { kind: "user", id: pair.user },
+								agentId: pair.agentId,
+								instanceRef: registered.instanceId,
+							},
+						});
+						expect(
+							await exists(publicationRecord(other.directory, delivery)),
+						).toBe(false);
+						expect(
+							permits.filter(
+								(permit) => permit.authorization_id === pair.authorizationId,
+							),
+						).toHaveLength(1);
+						// Each Host reads only its own installation for its own Execution.
+						const input = (await pair.reader?.resolveInput(
+							pair.execution,
+							new AbortController().signal,
+						)) as { principal?: unknown; instanceRef?: string } | undefined;
+						expect(input).toMatchObject({
+							principal: { kind: "user", id: pair.user },
+							instanceRef: registered.instanceId,
+						});
+						const crossed = await pair.reader
+							?.resolveInput(other.execution, new AbortController().signal)
+							.then(
+								() => "resolved",
+								(error: { reason?: string }) => error.reason,
+							);
+						expect(crossed).toBe("unavailable");
+					}
+					// The two installations share no client, instance, key or supply.
+					for (const field of [
+						"client_id",
+						"instance_id",
+						"registration_key",
+						"registration_key_hash",
+						"supply_attempt_id",
+						"descriptor_digest",
+					])
+						expect(new Set(rows.map((row) => row[field])).size).toBe(2);
+					expect(new Set(permits.map((permit) => permit.id)).size).toBe(2);
+					expect(
+						new Set(permits.map((permit) => permit.commit_digest)).size,
+					).toBe(2);
+					// One exchange per installation, nothing revoked, nothing resent.
+					expect(tokenRequests()).toHaveLength(2);
+					expect(
+						connection.requests.filter(({ method }) => method === "DELETE"),
+					).toEqual([]);
+					for (const pair of pairs) expect(await pair.tick()).toBe(0);
+					await noCredentialStored();
+				} finally {
+					await hostB.close();
+				}
+			});
+		},
+		confirmTimeout * 3,
 	);
 });

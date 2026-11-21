@@ -2839,6 +2839,199 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		});
 	});
 
+	// #4199 AC-4: the current per-install binding (one `connection_manual_installations`
+	// row and its authorization) moves only on accepted transitions; replays,
+	// different input and writes for the retired association revision are refused
+	// by their CAS and leave every non-secret fact and revision as it was.
+	async function bindingFacts(authorizationId: string) {
+		const [row] = await client`
+			select a.status, a.revision::int as authorization_revision,
+				m.agent_id, m.user_id, m.association_revision::int, m.connection_agent_id,
+				m.registration_state, m.supply_state, m.revoke_state, m.revision::int,
+				m.registration_key_hash, m.template_digest, m.client_id, m.consumer_id, m.instance_id,
+				m.descriptor_digest, m.descriptor->>'schemaVersion' as descriptor_schema,
+				m.configuration->>'clientId' as configuration_client,
+				m.configuration->>'configFingerprint' as configuration_fingerprint,
+				m.configuration->'source' as configuration_source
+			from platform.connection_manual_installations m
+			join platform.connection_installation_authorizations a on a.id=m.authorization_id
+			where m.authorization_id=${authorizationId}`;
+		return row;
+	}
+	const installationCount = async () =>
+		(
+			await client`select count(*)::int as n from platform.connection_manual_installations`
+		)[0]?.n;
+
+	it("CAS-advances the per-install binding revision and refuses replays, different input and the retired revision (AC-4)", async () => {
+		const key = randomUUID();
+		const run = await prepareDelivered("alice", "a", "worker-a", key);
+		const delivered = await bindingFacts(run.authorizationId);
+		expect(delivered).toMatchObject({
+			status: "preparing",
+			authorization_revision: 1,
+			agent_id: "agent-a",
+			user_id: "alice",
+			association_revision: 1,
+			connection_agent_id: "connection-agent-a",
+			registration_state: "sending",
+			supply_state: "confirmed",
+			revoke_state: "not_required",
+			revision: 4,
+			registration_key_hash: run.template.registration.registrationKeyHash,
+			template_digest: connectionRegistrationTemplateDigestV1(run.template),
+			client_id: null,
+			descriptor_digest: null,
+		});
+
+		// Initial binding: the receipt CAS fixes client, instance and configuration.
+		const receipt = receiptFor(run.template, run.registrationKey);
+		const settle = (
+			value: ConnectionRegistrationReceiptV1,
+			attemptId = run.prepare.attemptId,
+		) =>
+			manual.settleRegistration({
+				commandId: run.prepare.item.commandId,
+				attemptId,
+				attemptOwner: "worker-a",
+				command: "prepare",
+				authorizationId: run.authorizationId,
+				response: {
+					schemaVersion: 1,
+					outcome: "registered",
+					commandId: run.prepare.item.commandId,
+					receipt: value,
+				},
+			});
+		expect(await settle(receipt)).toBe("registered");
+		const bound = await bindingFacts(run.authorizationId);
+		expect(bound).toEqual({
+			...delivered,
+			status: "awaiting_confirmation",
+			authorization_revision: 2,
+			registration_state: "registered",
+			revision: 5,
+			client_id: receipt.clientId,
+			consumer_id: receipt.consumerId,
+			instance_id: receipt.instanceId,
+			descriptor_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+			descriptor_schema: "1",
+			configuration_client: receipt.clientId,
+			configuration_fingerprint: run.template.registration.configFingerprint,
+			configuration_source: run.template.registration.source,
+		});
+
+		// Same input replayed: the receipt CAS and the begin are idempotent.
+		expect(await settle(receipt)).toBe("stale");
+		expect(await begin("alice", "a", key)).toMatchObject({
+			authorizationId: run.authorizationId,
+			status: "awaiting_confirmation",
+		});
+		expect(await bindingFacts(run.authorizationId)).toEqual(bound);
+		expect(await installationCount()).toBe(1);
+
+		// Different input: another receipt, another attempt or another request
+		// under the same key overwrites nothing.
+		expect(
+			await settle(
+				receiptFor(run.template, run.registrationKey, {
+					clientId: "client-different",
+					instanceId: "instance-different",
+				}),
+			),
+		).toBe("stale");
+		expect(await settle(receipt, randomUUID())).toBe("stale");
+		await expect(begin("alice", "b", key)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(await bindingFacts(run.authorizationId)).toEqual(bound);
+		expect(await installationCount()).toBe(1);
+
+		// Replacement: the Owner association moves to revision 2 and fences the
+		// binding of revision 1 once; its original client facts stay for revoke.
+		const replace = (expectedRevision: number) =>
+			associations.execute((tx) =>
+				tx.saveManual({
+					agentId: "agent-a",
+					ownerId: "owner",
+					connectionAgentId: "connection-agent-new",
+					credentialFingerprint: randomBytes(32).toString("hex"),
+					expectedRevision,
+					encrypt: ({ agentId, ownerId, associationRevision }) => ({
+						schemaVersion: 1,
+						agentId,
+						ownerId,
+						secretVersion: associationRevision,
+						crypto: { dekFingerprint: randomBytes(32).toString("hex") },
+					}),
+				}),
+			);
+		expect(await replace(1)).toBe(2);
+		const replaced = await bindingFacts(run.authorizationId);
+		expect(replaced).toEqual({
+			...bound,
+			status: "revoked",
+			authorization_revision: 3,
+			supply_state: "closed",
+			revoke_state: "unknown",
+			revision: 6,
+		});
+		expect(await manual.readback(run.commandReadback)).toBe("denied");
+
+		// Writes for the retired revision are refused by the association CAS.
+		expect(await replace(1)).toBeNull();
+		expect(
+			await associations.execute((tx) => tx.deleteManual("agent-a", 1)),
+		).toBe(false);
+		expect(await settle(receipt)).toBe("stale");
+		expect(await bindingFacts(run.authorizationId)).toEqual(replaced);
+
+		// The replacement revision starts its own binding from revision 1.
+		const next = await begin("alice", "a");
+		expect(next.authorizationId).not.toBe(run.authorizationId);
+		const fresh = await bindingFacts(next.authorizationId);
+		expect(fresh).toMatchObject({
+			status: "preparing",
+			authorization_revision: 1,
+			association_revision: 2,
+			connection_agent_id: "connection-agent-new",
+			registration_state: "pending",
+			supply_state: "pending",
+			revoke_state: "not_required",
+			revision: 1,
+			registration_key_hash: null,
+			client_id: null,
+		});
+
+		// Unbind: the current revision's binding is fenced once and cannot revive.
+		const [current] =
+			await client`select association_revision::int from platform.connection_manual_associations where agent_id='agent-a'`;
+		const currentRevision = current?.association_revision as number;
+		expect(
+			await associations.execute((tx) =>
+				tx.deleteManual("agent-a", currentRevision),
+			),
+		).toBe(true);
+		const unbound = await bindingFacts(next.authorizationId);
+		expect(unbound).toEqual({
+			...fresh,
+			status: "revoked",
+			authorization_revision: 2,
+			registration_state: "closed",
+			revision: 2,
+		});
+		// The retired revision-1 binding is not touched again.
+		expect(await bindingFacts(run.authorizationId)).toEqual(replaced);
+		expect(
+			await associations.execute((tx) =>
+				tx.deleteManual("agent-a", currentRevision),
+			),
+		).toBe(false);
+		await expect(begin("alice", "a")).rejects.toMatchObject({ code: "denied" });
+		expect(await bindingFacts(next.authorizationId)).toEqual(unbound);
+		expect(await installationCount()).toBe(2);
+	});
+
 	// PR-Agent 46d2b1c86bf3: a prepare claimed but never fixed sent nothing and
 	// reopens for the same installation instead of staying unknown forever.
 	it("reopens a prepare whose attempt expired before fixSupply and finishes the same installation", async () => {
