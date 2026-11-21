@@ -22,6 +22,7 @@ import {
 	standardMcpFixture,
 	token,
 } from "./standard-mcp.fixture.js";
+import { standardMcpDigest } from "./standard-mcp-client.js";
 
 const closes: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -1092,6 +1093,53 @@ it.each([
 		);
 	},
 );
+
+// A well-formed alias the Thread was never declared with.
+const forgedAlias = `mcp_${standardMcpDigest("forged_note").slice(0, 32)}`;
+
+it.each([
+	["a well-formed undeclared alias", forgedAlias, undefined],
+	["a well-formed undeclared alias", forgedAlias, "authorization_required"],
+	["a malformed alias", "write_note", undefined],
+	["a malformed alias", "write_note", "authorization_required"],
+] as const)(
+	"rejects %s on a declared Thread before any reader or Connection traffic (alias %s, reader refusal %s)",
+	async (_label, alias, readerRefusal) => {
+		const env = await setupDynamic();
+		env.reader.refusal = readerRefusal;
+		env.native.call("forged", { tool: alias });
+		await waitFor(() => env.native.closed);
+		expect(env.native.replies).toHaveLength(0);
+		expect(env.reader).toMatchObject({ targets: 0, inputs: 0 });
+		expect(env.fixture.trace).toHaveLength(0);
+		expect(env.fetchMethods).toHaveLength(0);
+		expect(await operationEvents(env.driver, env.ref)).toHaveLength(0);
+	},
+);
+
+it("narrows a declared Thread's aliases to the current list while the contract equals its declaration", async () => {
+	const env = await setupDynamic();
+	// Positive: the declared alias reaches the reader and gets the fixed result.
+	env.native.call("declared", { callId: "declared" });
+	const reply = await settleCall(env, 1);
+	expect(JSON.parse(reply.contentItems[0]?.text ?? "")).toEqual(
+		codexDynamicConnectionRefusalsV1.authorization_required,
+	);
+	expect(env.reader).toMatchObject({ targets: 1 });
+	expect(env.native.closed).toBe(false);
+	// Negative: an alias outside the current list is refused before the reader.
+	env.reader.refusal = undefined;
+	env.native.call("undeclared", { callId: "undeclared", tool: forgedAlias });
+	await waitFor(() => env.native.closed);
+	expect(env.native.replies).toHaveLength(1);
+	expect(env.reader).toMatchObject({ targets: 1, inputs: 0 });
+	expect(env.fixture.trace).toHaveLength(0);
+	expect(
+		(await operationEvents(env.driver, env.ref)).map(
+			(event) => event.payload.phase,
+		),
+	).toEqual(["intent", "failed"]);
+});
 
 it.each([
 	["with a standard client", { standard: true }],
