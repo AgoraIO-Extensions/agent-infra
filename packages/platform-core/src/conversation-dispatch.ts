@@ -346,15 +346,22 @@ export function createConversationDispatchUseCaseV1(
 			renewBusinessAuthority,
 		);
 		let archiveTimer: ReturnType<typeof setTimeout> | undefined;
-		let archiveSignal = eventHeartbeat.signal;
+		const archiveDeadline = new AbortController();
+		const archiveSignal = AbortSignal.any([
+			eventHeartbeat.signal,
+			archiveDeadline.signal,
+		]);
 		let archiveManaged = false;
 		let lastAcknowledgedCursor: string | undefined;
-		const archiveEligible =
+		const archiveEligible = () =>
 			!claim.metadataRecovery &&
 			isTurnOperation(claim.operation) &&
-			responseFinalStatus !== undefined;
-		const archiveCheckpoint = async (complete = false) => {
-			if (!archiveEligible || !dependencies.store.archiveOriginalTurn)
+			terminalCommitPossible;
+		const archiveCheckpoint = async (
+			complete = false,
+			pendingCursor?: string,
+		) => {
+			if (!archiveEligible() || !dependencies.store.archiveOriginalTurn)
 				return undefined;
 			const started = performance.now();
 			const result = await dependencies.store.archiveOriginalTurn({
@@ -363,13 +370,14 @@ export function createConversationDispatchUseCaseV1(
 				...(lastAcknowledgedCursor
 					? { acknowledgedCursor: lastAcknowledgedCursor }
 					: {}),
+				...(pendingCursor ? { pendingCursor } : {}),
 				...(complete ? { complete: true as const } : {}),
 			});
 			if (result?.status === "ineligible") return undefined;
 			archiveManaged = true;
 			// Conservatively include the checkpoint round trip; a returned budget
 			// must never start a new Runtime read after the original DB cutoff.
-			return result
+			const bounded = result
 				? {
 						...result,
 						remainingMs: Math.max(
@@ -378,6 +386,17 @@ export function createConversationDispatchUseCaseV1(
 						),
 					}
 				: result;
+			if (bounded?.status === "pending" && !archiveTimer) {
+				if (bounded.remainingMs <= 0) archiveDeadline.abort();
+				else {
+					archiveTimer = setTimeout(
+						() => archiveDeadline.abort(),
+						bounded.remainingMs,
+					);
+					archiveTimer.unref?.();
+				}
+			}
+			return bounded;
 		};
 		// #4038: a Host that reports the original Turn as unknown (for example a
 		// Runtime-held Execution) may never end its event stream. The drain then
@@ -495,7 +514,7 @@ export function createConversationDispatchUseCaseV1(
 				archiveSignal,
 			);
 			lastAcknowledgedCursor = confirmedCursor;
-			if (archiveManaged) await archiveCheckpoint();
+			await archiveCheckpoint();
 		};
 		try {
 			const initialArchive = await archiveCheckpoint();
@@ -514,16 +533,6 @@ export function createConversationDispatchUseCaseV1(
 						"retry",
 						{},
 					);
-				const deadline = new AbortController();
-				archiveTimer = setTimeout(
-					() => deadline.abort(),
-					initialArchive.remainingMs,
-				);
-				archiveTimer.unref?.();
-				archiveSignal = AbortSignal.any([
-					eventHeartbeat.signal,
-					deadline.signal,
-				]);
 			}
 			// A drain resumed for an accepted Turn follows a gap, such as an
 			// interrupted heartbeat, that may have outlived the Host's 30 s business
@@ -750,6 +759,16 @@ export function createConversationDispatchUseCaseV1(
 							: { schemaVersion: 1, outcome: "stale" };
 					}
 					if (eventFinalStatus) terminalCommitPossible = true;
+					if (connectionMetadata && archiveEligible()) {
+						const obligation = await archiveCheckpoint(
+							false,
+							runtimeEvent.cursor,
+						);
+						if (archiveManaged && !obligation)
+							return { schemaVersion: 1, outcome: "stale" };
+						if (obligation?.status === "unavailable")
+							return { schemaVersion: 1, outcome: "rejected" };
+					}
 					let persisted: ConversationEventDecisionV1;
 					try {
 						persisted = await dependencies.events.persist(

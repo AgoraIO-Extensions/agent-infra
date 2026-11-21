@@ -257,6 +257,8 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly budgetMs: number;
 		readonly acknowledgedCursor?: string;
+		/** Known delivered event that must persist and be cumulatively acknowledged. */
+		readonly pendingCursor?: string;
 		readonly complete?: true;
 	}): Promise<{
 		readonly status: "pending" | "unavailable" | "complete" | "ineligible";

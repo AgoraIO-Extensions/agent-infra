@@ -13197,6 +13197,125 @@ describe("terminal original Turn control authority (#4266)", () => {
 		}
 	});
 
+	it.each([false, true])(
+		"Files4325R2 restores durable completion after Worker restart past the original deadline (known tail=%s)",
+		async (knownTail) => {
+			const work = await terminalWork();
+			let store = open();
+			const transaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
+			});
+			const events = createConversationEventUseCaseV1({ transaction });
+			try {
+				const first = await store.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "before-restart",
+					leaseDurationMs: 30000,
+				});
+				if (first.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				const c = first.claim;
+				await store.archiveOriginalTurn({ claim: c, budgetMs: 500 });
+				expect(
+					await events.persist({
+						schemaVersion: 1,
+						conversationId: c.conversationId,
+						executionId: c.executionId,
+						sessionGeneration: c.sessionGeneration,
+						deliveryFence: c.executionDeliveryFence,
+						adapterEventKey: "real-terminal",
+						runtimeCursor: "terminal-cursor",
+						occurredAt: "2026-11-20T23:00:00.000Z",
+						event: { type: "execution.status", status: "completed" },
+						transition: {
+							executionStatus: "completed",
+							conversationStatus: "ready",
+						},
+						dispatchLease: {
+							schemaVersion: 1,
+							itemId: c.itemId,
+							leaseOwner: c.leaseOwner,
+							deliveryFence: c.deliveryFence,
+						},
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				expect(
+					await store.archiveOriginalTurn({
+						claim: c,
+						budgetMs: 500,
+						acknowledgedCursor: "terminal-cursor",
+					}),
+				).toMatchObject({ status: "pending" });
+				const [before] =
+					await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+				const [clock] =
+					await client`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				expect(before!.details.archive.acknowledgedCursor).toBe(
+					"terminal-cursor",
+				);
+				expect(clock!.now).toBeLessThan(before!.details.archive.deadlineAtMs);
+				if (knownTail) {
+					expect(
+						await store.archiveOriginalTurn({
+							claim: c,
+							budgetMs: 500,
+							pendingCursor: "uncommitted-tail",
+						}),
+					).toMatchObject({ status: "pending" });
+				}
+				await store.retry({
+					claim: c,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_STREAM_INCOMPLETE",
+					transition: {},
+				});
+				await store.close();
+				store = open();
+				await client`select pg_sleep(0.55)`;
+				const next = await store.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "after-restart",
+					leaseDurationMs: 30000,
+				});
+				if (next.outcome !== "claimed")
+					throw new Error("Expected same original key after restart");
+				expect(next.claim.executionDeliveryFence).toBe(
+					c.executionDeliveryFence,
+				);
+				expect(next.claim.deliveryFence).toBeGreaterThan(c.deliveryFence);
+				expect(
+					await store.archiveOriginalTurn({
+						claim: next.claim,
+						budgetMs: 999999,
+					}),
+				).toMatchObject({
+					status: knownTail ? "unavailable" : "complete",
+					remainingMs: 0,
+				});
+				expect(await dispatchState(work)).toMatchObject({
+					status: knownTail ? "failed" : "succeeded",
+					execution_status: "completed",
+					execution_fence: 1,
+				});
+				const [after] =
+					await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+				expect(after!.details.archive.deadlineAtMs).toBe(
+					before!.details.archive.deadlineAtMs,
+				);
+				expect(after!.details.archive.acknowledgedCursor).toBe(
+					"terminal-cursor",
+				);
+				expect(
+					await client`select event_id from platform.conversation_events where execution_id=${work.executionId}`,
+				).toHaveLength(1);
+			} finally {
+				await Promise.all([store.close(), transaction.close()]);
+			}
+		},
+	);
+
 	it("Files4325M2 does not accept an unrecorded ACK first supplied after the original deadline", async () => {
 		const work = await terminalWork();
 		const current = await claim(work.itemId);

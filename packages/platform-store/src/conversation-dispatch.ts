@@ -1678,6 +1678,7 @@ export class PostgresConversationDispatchStoreV1
 		claim: ConversationDispatchClaimV1;
 		budgetMs: number;
 		acknowledgedCursor?: string;
+		pendingCursor?: string;
 		complete?: true;
 	}): Promise<{
 		status: "pending" | "unavailable" | "complete" | "ineligible";
@@ -1744,7 +1745,14 @@ export class PostgresConversationDispatchStoreV1
 					pvc: allocation?.pvc ?? null,
 				};
 				const [last] = await tx<
-					{ details: { binding: unknown; archive: unknown; lease?: unknown } }[]
+					{
+						details: {
+							binding: unknown;
+							archive: unknown;
+							lease?: unknown;
+							pendingCursor?: string | null;
+						};
+					}[]
 				>`select details from platform.audit_events
 				where target_type='execution' and target_id=${claim.executionId} and agent_id=${claim.agentId}
 				and action='conversation.archive.observed'
@@ -1795,7 +1803,8 @@ export class PostgresConversationDispatchStoreV1
 				const currentCursor = state.execution.last_runtime_cursor;
 				if (
 					input.acknowledgedCursor !== undefined &&
-					input.acknowledgedCursor !== currentCursor
+					input.acknowledgedCursor !== currentCursor &&
+					input.acknowledgedCursor !== previous?.acknowledgedCursor
 				)
 					return null;
 
@@ -1806,7 +1815,17 @@ export class PostgresConversationDispatchStoreV1
 				and event_type='execution.status' and event_payload->>'status'=${state.execution.status}) as found`;
 				const acknowledgedCursor =
 					input.acknowledgedCursor ?? previous?.acknowledgedCursor ?? null;
+				let pendingCursor =
+					input.pendingCursor ?? last?.details.pendingCursor ?? null;
+				if (pendingCursor !== null && !validText(pendingCursor, 8192))
+					throw new TypeError("Invalid pending archive cursor");
+				if (
+					input.acknowledgedCursor &&
+					pendingCursor === input.acknowledgedCursor
+				)
+					pendingCursor = null;
 				const completed =
+					pendingCursor === null &&
 					terminal?.found === true &&
 					currentCursor !== null &&
 					acknowledgedCursor === currentCursor;
@@ -1817,11 +1836,10 @@ export class PostgresConversationDispatchStoreV1
 					previous?.lastProgressAtMs !== undefined &&
 					previous.lastProgressAtMs < previous.deadlineAtMs;
 				const completionProven =
-					input.complete &&
 					completed &&
-					(!previous ||
-						clock.now < previous.deadlineAtMs ||
-						committedAckBeforeDeadline);
+					(committedAckBeforeDeadline ||
+						(input.complete &&
+							(!previous || clock.now < previous.deadlineAtMs)));
 				let archive = advanceConversationArchiveV1({
 					...(previous ? { previous } : {}),
 					ref: previous?.ref ?? randomUUID(),
@@ -1837,7 +1855,7 @@ export class PostgresConversationDispatchStoreV1
 					const written = await tx`insert into platform.audit_events
 					(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
 					select ${`conversation.archive:${claim.executionId}:${String(archive.revision).padStart(16, "0")}`},${claim.traceId},'system',${claim.leaseOwner},'conversation.archive.observed','execution',${claim.executionId},${archive.status === "unavailable" ? "failed" : "succeeded"},${claim.requestId},${claim.agentId},
-					${tx.json({ binding, archive, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
+					${tx.json({ binding, archive, pendingCursor, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
 					from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
 					and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()
 					and (${archive.status === "complete"} or
@@ -1847,6 +1865,7 @@ export class PostgresConversationDispatchStoreV1
 				};
 				const changed =
 					!previous ||
+					(last?.details.pendingCursor ?? null) !== pendingCursor ||
 					!isDeepStrictEqual(last?.details.binding, binding) ||
 					!isDeepStrictEqual(last?.details.lease, {
 						owner: claim.leaseOwner,
