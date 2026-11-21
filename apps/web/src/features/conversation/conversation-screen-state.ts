@@ -290,6 +290,37 @@ export function currentExecution(
 	};
 }
 
+/** A Platform rejection is not a Runtime-accepted origin for directory reads. */
+export function nativeMetadataExecution(
+	history: ConversationDetailProjectionV2 | null,
+	events: readonly ConversationTimelineEventV2[],
+	current: ReturnType<typeof currentExecution>,
+): string | undefined {
+	if (current.status !== "failed") return current.executionId;
+	const conversationId =
+		history?.conversation.conversationId ??
+		events.findLast((event) => event.executionId === current.executionId)
+			?.conversationId;
+	if (!conversationId) return undefined;
+	const accepted = events.filter(
+		(event) =>
+			event.conversationId === conversationId &&
+			event.type === "execution.status" &&
+			event.payload.status !== "submitted" &&
+			event.payload.status !== "unknown",
+	);
+	if (accepted.some((event) => event.executionId === current.executionId))
+		return current.executionId;
+	return (
+		accepted.at(-1)?.executionId ??
+		history?.messages.findLast(
+			(message) =>
+				message.role === "assistant" && message.status === "completed",
+		)?.executionId ??
+		undefined
+	);
+}
+
 /** Projection text already contains its persisted deltas. Append only events
  * arriving after that projection, never render both the snapshot and its replay. */
 export function answerText(

@@ -24,6 +24,7 @@ export async function createCompactHostFixture(
 	baseline: "medium" | "high",
 	baselineConfigVersion = "configuration-1-native-fixture",
 	baselineModel = "gpt-5.3-codex",
+	withSkillCatalog = false,
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "compact-host-4335-"));
 	const transport = new CompactModelTransport();
@@ -41,6 +42,8 @@ export async function createCompactHostFixture(
 	for (const [from, to] of [
 		["agent-1", authority.agentId],
 		["conversation-1", authority.conversationId],
+		["execution-1", "seed-execution"],
+		["reader-1", authority.actorId],
 		["primary", "model-primary"],
 		["config-1", baselineConfigVersion],
 		["gpt-5.3-codex", baselineModel],
@@ -72,7 +75,7 @@ export async function createCompactHostFixture(
 		const key = JSON.parse(entry[0]) as string[];
 		key[4] = "earlier-approved-turn";
 		const session = state.sessions["session-private"];
-		const baselineExecution = session?.executions["execution-1"];
+		const baselineExecution = session?.executions["seed-execution"];
 		if (!session || !baselineExecution)
 			throw new Error("missing baseline execution");
 		session.executions["earlier-approved-turn"] = {
@@ -99,6 +102,19 @@ export async function createCompactHostFixture(
 		configVersion: "configuration-1-native-fixture",
 		defaultModelOptionId: "model-primary",
 		defaultReasoningLevel: baseline,
+		...(withSkillCatalog
+			? {
+					skillDirectory: {
+						generationId: "a".repeat(64),
+						nativeRoot: join(directory, "empty-skill-hub"),
+						findSkills: () => [],
+						nativeSkillPaths: () => [],
+						readSkill: async () => {
+							throw new Error("No installed fixture Skill");
+						},
+					},
+				}
+			: {}),
 		modelOptions: [
 			{
 				modelOptionId: "model-primary",

@@ -1,12 +1,21 @@
+import { dirname, join } from "node:path";
 import {
 	CODEX_OFFICIAL_LANE_CONFIG,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
 import { CodexRuntimeDriver } from "./codex-runtime-driver.js";
+import {
+	type CodexSkillLaunchProvenance,
+	codexSkillLaunch,
+} from "./codex-skill-launch.internal.js";
 export class MetadataTransport {
 	readonly requests: CodexAppServerFrame[] = [];
 	options?: CodexAppServerBridgeOptions;
+	skillLaunch?: CodexSkillLaunchProvenance;
+	get [codexSkillLaunch]() {
+		return this.skillLaunch;
+	}
 	status: unknown = { type: "notLoaded" };
 	threadId = "native-thread-private";
 	turns: unknown[] = [];
@@ -98,7 +107,20 @@ export class MetadataTransport {
 						version: "1",
 					};
 			}
+			if (this.options?.disableBundledSkills) {
+				config.skills = { bundled: { enabled: false } };
+				origins["skills.bundled.enabled"] = {
+					name: { type: "sessionFlags" },
+					version: "1",
+				};
+			}
 			this.respond(frame, { config, origins });
+		} else if (frame.method === "skills/extraRoots/set") {
+			this.respond(frame, {});
+		} else if (frame.method === "skills/list") {
+			this.respond(frame, {
+				data: [{ cwd: this.skillLaunch?.cwd, skills: [], errors: [] }],
+			});
 		} else if (frame.method === "model/list") {
 			const params = frame.params as { cursor?: string } | undefined;
 			const page = Number(params?.cursor ?? 0);
@@ -245,6 +267,14 @@ export class MetadataDriver extends CodexRuntimeDriver {
 				opened = true;
 				current.openCount++;
 				current.options = options;
+				if (options.disableBundledSkills)
+					current.skillLaunch = Object.freeze({
+						transport: current,
+						processId: "controlled-compact-skill-process",
+						conversationKey: options.conversationKey,
+						cwd: join(dirname(path), "actual-spawn-workspace"),
+						bundledSkillsDisabled: true,
+					});
 				if (current.openDelay) await current.openDelay;
 				return current;
 			},

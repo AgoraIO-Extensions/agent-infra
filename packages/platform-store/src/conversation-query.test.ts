@@ -1277,6 +1277,7 @@ describe("PostgreSQL current native capability scope", () => {
 				relay_key_id = ${relayKeyId},
 				relay_key_version = 1,
 				original_submit_host_session_ref = 'native-current-host',
+				accepted_original_host_session_ref = 'native-current-host',
 				status = 'completed',
 				session_generation = 1,
 				authorization_revision = 'authorization-1'
@@ -1300,6 +1301,7 @@ describe("PostgreSQL current native capability scope", () => {
 				relay_key_id = null,
 				relay_key_version = null,
 				original_submit_host_session_ref = null,
+				accepted_original_host_session_ref = null,
 				session_generation = 1,
 				authorization_revision = 'authorization-1',
 				status = 'completed'
@@ -1342,6 +1344,27 @@ describe("PostgreSQL current native capability scope", () => {
 			`;
 		}
 	});
+	it.each(["not accepted", "generation", "authorization", "Host"] as const)(
+		"has no native admission anchor after original %s drift",
+		async (fault) => {
+			await client`update platform.conversations set host_session_ref='native-current-host' where id='conversation-1'`;
+			if (fault === "not accepted")
+				await client`update platform.conversation_executions set accepted_original_host_session_ref=null where execution_id='execution-conversation-1'`;
+			if (fault === "generation")
+				await client`update platform.conversations set session_generation=2 where id='conversation-1'`;
+			if (fault === "authorization")
+				await client`update platform.conversations set authorization_revision='next-policy' where id='conversation-1'`;
+			if (fault === "Host")
+				await client`update platform.conversations set host_session_ref='replacement-host' where id='conversation-1'`;
+			expect(
+				await query.readNativeCapabilityCurrentScopeV1({
+					scope: actorOne,
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+				}),
+			).toBeUndefined();
+		},
+	);
 
 	it("selects the latest matching Execution when history shares the same Host", async () => {
 		await client`
@@ -1356,12 +1379,12 @@ describe("PostgreSQL current native capability scope", () => {
 				 authorization_revision, execution_source, relay_key_purpose,
 				 relay_key_subject_id, relay_key_id, relay_key_version,
 				 runtime_submit_protocol, original_operation_digest,
-				 original_submit_host_session_ref, principal_type, created_at, updated_at)
+				 original_submit_host_session_ref, accepted_original_host_session_ref, principal_type, created_at, updated_at)
 			values
 				('execution-conversation-1-latest', 'conversation-1', 'agent-1', 'actor-1',
 				 'web', 'turn-conversation-1-latest', 'completed', 1, 1,
 				 'authorization-1', 'web', 'personal', 'actor-1', ${relayKeyId}, 1,
-				 'v4', ${"b".repeat(43)}, 'native-current-host', 'user',
+				 'v4', ${"b".repeat(43)}, 'native-current-host', 'native-current-host', 'user',
 				 '2026-09-06T00:00:05.000Z', '2026-09-06T00:00:05.000Z')
 		`;
 		try {

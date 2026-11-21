@@ -7,6 +7,7 @@ import {
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { readCatalogAnchorFixture } from "../../../apps/platform-api/src/native-catalog-anchor.test-support.js";
 import { createConversationRuntimeV2 } from "../../../apps/platform-worker/src/conversation-runtime.js";
 import {
 	workloadDesiredFixture,
@@ -21,6 +22,7 @@ import { parseClaim } from "../../platform-core/src/conversation-dispatch-input.
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.js";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
+import { PostgresConversationQueryV1 } from "./conversation-query.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -809,6 +811,7 @@ it.each([
 						? "configuration-old"
 						: "configuration-1-native-fixture",
 					mode === "codex-model-drift" ? "gpt-other" : "gpt-5.3-codex",
+					mode === "codex-medium-high",
 				)
 			: undefined;
 		const remainsUnknown =
@@ -1065,7 +1068,102 @@ it.each([
 					fence: 1,
 				});
 				expect(failed?.events).toBeGreaterThan(0);
-				expect(sent).toHaveLength(mode === "denied" ? 0 : 1);
+				if (mode === "codex-medium-high" && codex) {
+					await client`insert into platform.conversation_executions
+						(execution_id,conversation_id,sandbox_id,agent_id,actor_id,channel_id,turn_id,status,
+						 session_generation,authorization_revision,created_at,updated_at,
+						 runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,
+						 accepted_original_host_session_ref,execution_source,relay_key_purpose,
+						 relay_key_subject_id,relay_key_id,relay_key_version)
+						values ('seed-execution',${authority.conversationId},(select sandbox_id from platform.session_sandbox_allocations where conversation_id=${authority.conversationId}),${authority.agentId},${authority.actorId},
+						 'web','seed-turn','completed',1,${authority.authorizationRevision},
+						 now()-interval '1 minute',now()-interval '1 minute','v4',${"a".repeat(43)},
+						 ${authority.hostSessionRef},${authority.hostSessionRef},'web','personal',
+						 ${authority.actorId},${keyBinding.ciphertextRef},1)`;
+					const query = new PostgresConversationQueryV1({ databaseUrl });
+					try {
+						const anchor = await query.readNativeCapabilityCurrentScopeV1({
+							scope: {
+								actorId: authority.actorId,
+								channelId: "web",
+								principal: authority.principal,
+							},
+							agentId: authority.agentId,
+							conversationId: authority.conversationId,
+						});
+						expect(anchor?.executionId).toBe("seed-execution");
+						if (!anchor) throw new Error("Missing accepted catalog origin");
+						for (let round = 0; round < 2; round++) {
+							for (const selector of ["commands", "skills"] as const) {
+								const response = await readCatalogAnchorFixture({
+									query,
+									host: codex.host,
+									agentId: authority.agentId,
+									conversationId: authority.conversationId,
+									executionId: anchor.executionId,
+									userId: authority.actorId,
+									selector,
+									sandboxPolicy: {
+										namespace: "fixture-sandboxes",
+										resourceConfigurationHash:
+											workloadResourceConfigurationHashV1(workloadTestPolicy),
+									},
+								});
+								expect(response.status).toBe(200);
+								expect(await response.json()).toMatchObject({ selector });
+							}
+						}
+						const next = {
+							...request("medium-after-rejection"),
+							capabilityId: codex.capabilityId,
+							directoryRevision: codex.directoryRevision,
+							capabilitySourceVersion: codex.capabilitySourceVersion,
+							configVersion: "configuration-1-native-fixture",
+							selection: { ...request().selection, reasoningLevel: "medium" },
+						};
+						const accepted = await useCase().admit(next);
+						expect(accepted.outcome).toBe("accepted");
+						if (accepted.outcome !== "accepted")
+							throw new Error("missing successor");
+						await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${accepted.plan.outbox.id}`;
+						expect(
+							await worker.dispatch({
+								schemaVersion: 1,
+								itemId: accepted.plan.outbox.id,
+								workerId: "v6-worker",
+							}),
+						).toMatchObject({ outcome: "accepted" });
+						const [terminal] =
+							await client`select status from platform.conversation_executions where execution_id=${accepted.plan.executionId}`;
+						expect(terminal?.status).toBe("completed");
+						expect(
+							(
+								await query.readNativeCapabilityCurrentScopeV1({
+									scope: {
+										actorId: authority.actorId,
+										channelId: "web",
+										principal: authority.principal,
+									},
+									agentId: authority.agentId,
+									conversationId: authority.conversationId,
+								})
+							)?.executionId,
+						).toBe(accepted.plan.executionId);
+						expect(
+							codex.transport.requests.filter(
+								(frame) => frame.method === "thread/compact/start",
+							),
+						).toHaveLength(1);
+						expect(await useCase().admit(next)).toMatchObject({
+							outcome: "replayed",
+						});
+					} finally {
+						await query.close();
+					}
+				}
+				expect(sent).toHaveLength(
+					mode === "denied" ? 0 : mode === "codex-medium-high" ? 2 : 1,
+				);
 				expect(await useCase().admit(input)).toMatchObject({
 					outcome: "replayed",
 					plan: admitted.plan,

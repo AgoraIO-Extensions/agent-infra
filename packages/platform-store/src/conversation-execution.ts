@@ -980,7 +980,7 @@ export class PostgresConversationExecutionTransactionV1
 				and e.principal_type = ${conversation.principal?.kind ?? "user"}
 				and e.session_generation = ${conversation.sessionGeneration}
 				and e.authorization_revision = ${conversation.authorizationRevision}
-				and coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) = ${conversation.hostSessionRef}
+				and e.accepted_original_host_session_ref = ${conversation.hostSessionRef}
 			order by e.updated_at desc, e.execution_id
 			limit 1
 		`;

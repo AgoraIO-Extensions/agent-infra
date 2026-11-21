@@ -961,6 +961,45 @@ describe("functional conversation screen", () => {
 		).toBe(false);
 	});
 
+	it("keeps the accepted catalog anchor after a rejected native Execution and reload", async () => {
+		const rejected = {
+			...event(3),
+			executionId: "rejected-native",
+			type: "task.status" as const,
+			payload: { status: "failed" as const },
+		};
+		const snapshot = ConversationDetailProjectionV2Schema.parse({
+			...idleHistory(),
+			events: [...idleHistory().events, rejected],
+		});
+		const handler = (request: Request) => {
+			const url = new URL(request.url);
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(snapshot);
+			if (url.pathname.endsWith("/native-metadata"))
+				return url.pathname.includes("/execution-1/")
+					? nativeCatalog(url)
+					: new Response(null, { status: 503 });
+		};
+		for (let reload = 0; reload < 2; reload++) {
+			const view = setup(handler);
+			const input = await composer();
+			fireEvent.change(input, { target: { value: "/" } });
+			await screen.findByRole("option", { name: /workspace-summary/ });
+			const reads = view.requests.filter((request) =>
+				new URL(request.url).pathname.endsWith("/native-metadata"),
+			);
+			expect(reads).toHaveLength(2);
+			expect(
+				reads.every((request) => request.url.includes("/execution-1/")),
+			).toBe(true);
+			expect(view.requests.some((request) => request.method === "POST")).toBe(
+				false,
+			);
+			view.unmount();
+		}
+	});
+
 	it("shows a partial-unavailable notice inside the command menu when one native selector fails", async () => {
 		setup((request) => {
 			const url = new URL(request.url);

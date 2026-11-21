@@ -63,6 +63,7 @@ import {
 	executionStatus,
 	hasWaitingMessages,
 	isTerminal,
+	nativeMetadataExecution,
 	queueStates,
 } from "./conversation-screen-state.js";
 import { useSkillControlFiles } from "./conversation-skill-control-files.js";
@@ -265,7 +266,12 @@ export function ActiveConversation({
 	const catalog = useConversationCapabilityCatalog({
 		identityKey,
 		conversationId,
-		executionId: latestExecution,
+		executionId: nativeMetadataExecution(timeline.history, timeline.events, {
+			executionId: latestExecution,
+			status,
+		}),
+		hasExecution: Boolean(latestExecution),
+		retryAnchor: reader.reconnect,
 		enabled: agent.capabilities.nativeMetadata === true,
 	});
 	function invocationPhase(executionId: string) {
