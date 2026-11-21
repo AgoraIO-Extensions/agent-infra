@@ -36,6 +36,7 @@ import {
 	runtimeRequestSigningPayloadV4,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { executorDriverDrainFixture } from "../../../apps/agent-runtime-host/src/executor-driver-drain.test-support.js";
 
 const executorFilesystem = vi.hoisted(() => ({
 	root: undefined as string | undefined,
@@ -14426,6 +14427,188 @@ describe("Codex verified Session executor", () => {
 			terminal?.occurredAt,
 		);
 	});
+
+	it.each([
+		"late-confirmation",
+		"concurrent-launches",
+		"repeated-stop",
+		"other-execution",
+		"stale-stop-fence",
+		"disconnect",
+		"replacement-generation",
+	])(
+		"keeps tool launch count stable across unresolved drain recovery: %s",
+		async (scenario) => {
+			const f = await fixture();
+			await initializeCodexSessionExecutorWorkspaceV1(f.admission.binding);
+			const executor = await executorDriverDrainFixture(f.admission.binding);
+			const admission = executor.admission();
+			const drain = admission.drain;
+			if (!drain) throw Error("missing drain");
+			const reportTerminal = vi.fn(drain.reportTerminal?.bind(drain));
+			const guarded = {
+				...admission,
+				close: async () => {},
+				drain: { ...drain, reportTerminal },
+			};
+			let driver = await f.start({ sessionExecutor: guarded });
+			try {
+				const original = await driver.execute(submitCommandV2());
+				if (scenario === "concurrent-launches")
+					await Promise.all([
+						executor.launch("tool-a"),
+						executor.launch("tool-b"),
+					]);
+				else await executor.launch("tool-a");
+				const launches = executor.toolStart.mock.calls.filter(
+					([method]) => method === "process/start",
+				).length;
+				expect(launches).toBe(scenario === "concurrent-launches" ? 2 : 1);
+				const stop = stopCommand(original.nativeSessionRef);
+				const auth = {
+					executorStopAuthorization: {
+						fence: 3,
+						expiresAt: Date.now() + 20000,
+					},
+				};
+				f.bridge.setTurnStatus("interrupted");
+				expect((await driver.execute(stop, auth)).result.outcome).toBe(
+					"unknown",
+				);
+				const readJournal = async () => {
+					const files = await readdir(
+						join(executor.directory, "executor-drain"),
+					);
+					if (!files[0]) throw Error("missing original drain journal");
+					return JSON.parse(
+						await readFile(
+							join(executor.directory, "executor-drain", files[0]),
+							"utf8",
+						),
+					);
+				};
+				const before = await readJournal();
+				const originalState = JSON.parse(
+					await readFile(f.path, "utf8"),
+				) as StoredCodexDriverState;
+				const originalExecution =
+					originalState.sessions[original.nativeSessionRef]?.executions?.[
+						"execution-codex"
+					];
+				const originalJournal = Object.values(
+					originalState.sessions[original.nativeSessionRef]?.journals ?? {},
+				).find((j) => j.nativeTurnId === originalExecution?.nativeTurnId);
+				expect(originalExecution?.nativeTurnId).toBeTypeOf("string");
+				expect(originalJournal).toBeDefined();
+				expect(before.confirmed).toBe(false);
+				expect(before.attempts).toHaveLength(launches);
+				if (scenario === "repeated-stop")
+					expect((await driver.execute(stop, auth)).result.outcome).toBe(
+						"unknown",
+					);
+				if (scenario === "other-execution") {
+					await executor.foreignCompletion();
+					expect(await drain.confirm("execution-codex")).toBe(false);
+				}
+				if (scenario === "stale-stop-fence")
+					await expect(
+						drain.sealStop(
+							"execution-codex",
+							stop.operationId,
+							2,
+							auth.executorStopAuthorization.expiresAt,
+						),
+					).rejects.toThrow();
+				if (scenario === "disconnect") executor.disconnect();
+				if (scenario === "replacement-generation")
+					await expect(
+						f.start({
+							sessionExecutor: replacementAdmission(guarded, {
+								sessionGeneration: 2,
+							}),
+						}),
+					).rejects.toThrow();
+				const assertPending = async () => {
+					expect(
+						(
+							await driver.replayEvents(
+								original.nativeSessionRef,
+								"execution-codex",
+							)
+						).some((e) => e.type === "completed"),
+					).toBe(false);
+					expect(reportTerminal).not.toHaveBeenCalled();
+					await expect(
+						driver.execute(
+							submitCommandV2({
+								nativeSessionRef: original.nativeSessionRef,
+								operationId: "next",
+								executionId: "execution-next",
+								turnId: "turn-next",
+							}),
+						),
+					).rejects.toThrow();
+					expect(await driver.lookupOperation(stop, auth)).toMatchObject({
+						state: "unknown",
+					});
+					const after = await readJournal();
+					const state = JSON.parse(
+						await readFile(f.path, "utf8"),
+					) as StoredCodexDriverState;
+					expect(
+						state.sessions[original.nativeSessionRef]?.executions?.[
+							"execution-codex"
+						],
+					).toMatchObject({ nativeTurnId: originalExecution?.nativeTurnId });
+					const journal = Object.values(
+						state.sessions[original.nativeSessionRef]?.journals ?? {},
+					).find((j) => j.nativeTurnId === originalExecution?.nativeTurnId);
+					expect(journal?.events).toEqual(
+						expect.arrayContaining(originalJournal?.events ?? []),
+					);
+					expect(after.scope).toEqual(before.scope);
+					expect(after.attempts).toEqual(before.attempts);
+					expect(after.confirmed).toBe(false);
+					expect(
+						executor.toolStart.mock.calls.filter(
+							([method]) => method === "process/start",
+						),
+					).toHaveLength(launches);
+				};
+				await assertPending();
+				await driver.close();
+				const fresh = new TestCodexBridge(f.bridge.nativeThreadId);
+				fresh.setTurnStatus("interrupted");
+				f.open.mockImplementation(async (launch) => {
+					if (!launch.modelAccess) throw Error("missing model access");
+					fresh.setConfigReadResult(
+						applyOfficialLaneConfig(
+							modelAccessConfigReadResult(launch.modelAccess) as {
+								config: Record<string, unknown>;
+								origins: Record<string, unknown>;
+							},
+						),
+					);
+					return fresh;
+				});
+				driver = await f.start({ sessionExecutor: guarded });
+				await assertPending();
+				executor.prove();
+				expect(await driver.lookupOperation(stop, auth)).toMatchObject({
+					state: "found",
+					record: { result: { outcome: "accepted", status: "cancelled" } },
+				});
+				expect(
+					executor.toolStart.mock.calls.filter(
+						([method]) => method === "process/start",
+					),
+				).toHaveLength(launches);
+			} finally {
+				await driver.close();
+				await executor.close();
+			}
+		},
+	);
 
 	async function failedModelFixture(archived = false) {
 		let upstreamCalls = 0;
