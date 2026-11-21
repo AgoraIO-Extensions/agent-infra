@@ -2747,7 +2747,9 @@ access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产�
 
 固定官方 Codex 通过 `thread/start.dynamicTools` 安装有界工具定义，由 `item/tool/call`
 向 Driver 请求操作并等待工具响应。此字段属于固定版本的 experimental API，须显式 opt-in，
-固定协议/schema，并在最终产物验证；不修改原生 release。定义只来自当前受信 MCP 发现快照，
+固定协议/schema，并在最终产物验证；不修改原生 release。定义只来自当前受信 MCP 发现快照
+（§13.5.6 动态手工安装例外：Thread 开始时按部署批准的工具声明定义，安装可用后的发现快照须与之
+完全一致，见该节“动态安装的 reader 与可见起点”）；
 每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
 不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
 SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空；ACP adapter 的本地 URL 不是 Connection endpoint，
@@ -3331,7 +3333,9 @@ Principal、client/实例和批准的 publication 合同构造同一版本的非
 Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
 启用许可。例外两阶段路径的原 confirm 来源同时绑定逻辑 confirm 和实际 `exchange` 阶段的引用及
 请求摘要，不能以 `binding-readback` 的结果替代兑换和私有发布的提交证明。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
-代次、resourceFence、描述符、提交摘要和许可期限。许可期限取 `exchange` 响应的 `expiresAt`；例外路径再与
+代次、resourceFence、描述符、提交摘要和许可期限。许可以该安装 `exchange` 阶段的命令引用作为自身引用，
+每个安装至多一条许可；Host 已在本地 exchange 记录中持有该引用与 `commitDigest`，许可读取据此定位，
+不使用 Host 无从得知的随机引用。许可期限取 `exchange` 响应的 `expiresAt`；例外路径再与
 `notAfter` 取较早值，即 `min(expiresAt, notAfter)`。M1 的动态路径不刷新：不使用 refresh Token
 续期，也不发布新修订；到期后许可失效、MCP 关闭，用户重新安装，产生新的授权和发布修订。
 原 claim 正常结束后，已提交许可仍可由同一
@@ -3347,6 +3351,36 @@ confirm 结果不明时，原用户只能在有效原 claim 内只读核实同�
 
 refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确认后擦除该事务拥有的
 私有 export/reader 材料副本，不删除其他主体或 Agent 的材料。
+
+**动态安装的 reader 与可见起点。** 可见起点按
+[Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)：使用者在某个
+会话中完成本人授权并写入许可后，该会话后续的 Connection 调用即可使用，不要求新开会话。工具在
+Thread 开始时就已声明，此后只有可用性随许可变化，所以不热改已有 Thread 工具快照。取舍见
+[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段写法针对 Codex
+Driver（`thread/start`、`item/tool/call`），M1 Connection Pilot 只用 Codex 标准模板；其他 Driver
+未满足同等的声明与门禁时保持 `connection:false`。
+
+- **工具声明。** 部署批准的动态发布合同另含每个工具在 Thread 开始时声明的完整定义（名称、说明、
+  输入 schema），与合同的 `tools` 一一对应。Worker 只为当前已有已核实 Owner 手工关联的 Agent，
+  把该合同作为非秘密装配事实交给会话的 Host；Host 只依据它在 `thread/start` 声明这些工具，不从
+  请求、模型或安装 metadata 取得。Thread 开始时不满足条件的会话（包括关联完成或部署启用之前就已
+  开始的会话）不声明，之后也不补加，使用者须新开会话。已声明工具的 Thread 之后即使解除关联、到达
+  `notAfter` 或合同撤回，Host 重新装配或会话恢复时也保留声明：调用一律得到下述固定的需要授权或
+  暂不可用结果，会话其余能力照常可用，不因此整体不可用。
+- **reader 接缝。** Host 为动态手工安装实现 Driver 既有的 per-Execution `resolveInput`。它按当前
+  Execution 的原执行绑定，定位同一用户、Agent 和本会话的固定安装；先做许可读取用途回读，再核对本地
+  publication 已提交（发布锁已解除，sidecar 与原事务记录一致，`commitDigest` 复算一致）并读取材料，
+  最后再做一次许可读取。全部为 `allowed` 才把输入交给 Driver。安装可用后 Driver 照常做 MCP 发现；
+  发现结果须与 Thread 开始时声明的定义及合同完全一致，否则拒绝该次调用，不改声明。
+- **拒绝与不重试。** 没有安装、许可缺失或已到期、回读为 `denied`、本地提交不一致时，Driver 对该次
+  `item/tool/call` 回答固定的“需要先在平台完成 Connection 授权”结果，不含凭据、安装或许可标识。
+  回读为 `unavailable` 或结果不明时，回答固定的暂不可用结果。两者都在任何 Connection 请求之前给出，
+  属于确定拒绝而不是 unknown；不自动重试或重放，不触发安装命令，也不改变 Thread 的工具声明。已经
+  发出的 MCP 请求结果不明时，仍按 [§13.5.4](#1354-runtime-driver-直接消费标准-mcp) 处理。
+- **撤销、封闭与回收。** 撤销或封闭开始时 publication 已持久封闭，reader 的本地提交核对随即失败，
+  许可读取也拒绝，之后的调用一律得到需要授权的结果。会话 Sandbox 空闲回收后重新准备或重建时，
+  Pod UID、Host 或 fence 改变，许可绑定不再成立；使用者须重新授权，产生新的授权与发布修订，
+  Thread 的工具声明保持不变。许可到期后同样须重新授权。
 
 发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。已预组装的启动
 供应及后续安装修订按受控重新装配和固定安装快照规则，由批准配置、原接收器和 resolver
@@ -3746,6 +3780,12 @@ unknown 后立即封闭并按原键撤销，固定保留。固定后、
 能按自己的当前 claim 只读核验并使用已提交许可。原 claim 结束前未提交许可时，后续
 Execution 不得签发或补记。分别验证当前执行未获准、撤权、过期、关联或安装修订变更，
 以及 Host/Pod、Sandbox、代次或 fence 漂移均关闭 MCP。
+动态 reader（本节“动态安装的 reader 与可见起点”）另须覆盖：授权前调用得到需要授权的结果，且
+没有任何 Connection 请求；授权并写入许可后，同一会话的后续调用可用。跨用户、跨 Agent、另一会话
+（另一 Sandbox）、另一 Connection Agent 关联或关联修订的安装与许可均拒绝。许可过期、到达
+`notAfter`、撤销与封闭之后拒绝。许可回读 `unavailable` 或超时时拒绝，且不重试、不重放。发现结果与
+声明不一致时拒绝，且不改 Thread 工具。Thread 开始时未声明的会话不补加工具。Sandbox 回收或重建后
+须重新授权。许可引用等于本安装 `exchange` 的命令引用，另一安装的引用或提交摘要均拒绝。
 
 生产安装验收包括供应方实际输出、可信 SecretRef、合法确认和领取、跨 Session/代次、
 错 state/issuer/resource、重放、撤权及 unknown，以及最终 Linux 文件、内存与 FD 保护。
