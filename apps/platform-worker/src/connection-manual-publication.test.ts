@@ -1,7 +1,9 @@
+import { connectionManualPublicationContractV1 } from "@agent-infra/platform-store";
 import { describe, expect, it } from "vitest";
 import { parseRuntimeOAuthDynamicPublicationContractV1 } from "../../agent-runtime-host/src/runtime-oauth-dynamic-publication.js";
 import type { SessionSandboxConnectionInstallBootstrapV1 } from "./connection-install-bootstrap.js";
 import {
+	connectionManualPublicationDescriptorV1,
 	parseConnectionManualPublicationContractV1,
 	withConnectionManualPublicationV1,
 } from "./connection-manual-publication.js";
@@ -79,6 +81,12 @@ const hostInvalid = [
 ];
 
 describe("#4199 C2 Worker publication contract input", () => {
+	it("binds to the same descriptor contract as the exception gate", () => {
+		expect(connectionManualPublicationDescriptorV1).toEqual(
+			connectionManualPublicationContractV1,
+		);
+	});
+
 	it("accepts exactly what the Host parser accepts, bound to the descriptor contract", () => {
 		const raw = JSON.stringify(valid);
 		expect(parseRuntimeOAuthDynamicPublicationContractV1(raw)).toEqual(valid);

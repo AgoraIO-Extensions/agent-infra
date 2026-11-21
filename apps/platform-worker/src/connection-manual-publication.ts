@@ -1,9 +1,14 @@
-import { connectionManualPublicationContractV1 } from "@agent-infra/platform-store";
 import type { SessionSandboxConnectionInstallBootstrapV1 } from "./connection-install-bootstrap.js";
 
-/** The gate's publication descriptor contract every projected contract is bound to. */
-export const connectionManualPublicationDescriptorV1 =
-	connectionManualPublicationContractV1;
+/**
+ * The gate's publication descriptor contract every projected contract is bound to; equal to
+ * `connectionManualPublicationContractV1` of the Store (tested). Kept here so the Session
+ * adapter does not load the Store package.
+ */
+export const connectionManualPublicationDescriptorV1 = Object.freeze({
+	ref: "connection-mcp-publication",
+	revision: "1",
+});
 
 /** Worker deployment input: the approved dynamic publication contract (non-secret JSON). */
 export const connectionManualPublicationContractEnvironmentV1 =
