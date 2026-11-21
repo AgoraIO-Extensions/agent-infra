@@ -1902,12 +1902,22 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				)
 					throw new WorkloadKubernetesError("conflict");
 			}
-			// Spec §10.1: only a new revision (formal lifecycle) adopts a changed deployment placement.
+			// Spec §10.1: only a formal management command (new fence) adopts a changed
+			// deployment placement; drift repair advances only the reconciliation revision.
+			// The fence of the last full write is read from its desired record, which the
+			// lifecycle scale-down step preserves (it rewrites only the fence annotation).
+			let writtenFence: unknown;
+			try {
+				writtenFence = JSON.parse(
+					current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
+				)?.fence;
+			} catch {
+				writtenFence = undefined;
+			}
 			const placement = effectiveAgentWorkloadPlacementV1(
 				policy.agentWorkloadPlacement,
 				current,
-				current?.spec?.template.metadata?.labels?.[revisionLabel] ===
-					String(value.workloadRevision),
+				writtenFence === value.fence,
 			);
 			const workload: V1StatefulSet = {
 				apiVersion: "apps/v1",

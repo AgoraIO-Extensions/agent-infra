@@ -163,9 +163,11 @@ agentWorkloadScheduling:
   annotation、多余 selector/toleration、`affinity`、`runtimeClassName`、模板上的 `nodeName`，以及
   没有记录或记录不合法的 ECI 字段，都按漂移处理。地域标签仍由 `allowedPodTopologyLabelValues`
   精确放行。
-- 修改部署值（开启、改架构、关闭）本身不重建任何 Host：同一 revision 的再次调谐保留控制器已
-  采用的记录；只有该 Agent 下一次正式 lifecycle（`restart_agent`，或 `stop_agent` 后
-  `restart_agent`）产生的新 revision 才由一次调谐写入新值。多服务 Agent 的一次 lifecycle 同时
+- 修改部署值（开启、改架构、关闭）本身不重建任何 Host：沿用控制器上次完整写入时 fence 的调谐
+  （Core 的漂移修复只推进 reconciliation revision、不换 fence，以及恢复和同一意图的重放）保留
+  已采用的记录；只有该 Agent 的下一次正式管理命令（`restart_agent`，或 `stop_agent` 后
+  `restart_agent`，以及发布，均为带 `expectedRevision` CAS 并签发新 fence 的命令）才由一次调谐
+  写入新值。多服务 Agent 的一次 lifecycle 同时
   更新全部服务；新 revision 不会采用未完成的旧迁移 Job，已成功的旧 Job 没有运行中的 Pod，按历史
   保留。保留态的 Host 仍在原节点，不视为已隔离。全部 Agent 采用后改为 `reject`，剩余旧对象会按
   漂移重建。

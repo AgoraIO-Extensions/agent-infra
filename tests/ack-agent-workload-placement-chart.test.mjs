@@ -65,6 +65,13 @@ test("an enabled value renders the exact Worker env the preflight binds", () => 
 			legacyUnplaced: "reject",
 		},
 	);
+	// Round 2 MUST-1: Session admission keeps its own default architecture
+	// (amd64); the gate reads it and rejects arm64-only evidence for this pair.
+	assert.equal(
+		renderedWorkloadPlacementV1(result.stdout, "tenant-workloads")
+			.sessionArchitecture,
+		"amd64",
+	);
 });
 
 test("the chart schema rejects unsupported placement values", () => {

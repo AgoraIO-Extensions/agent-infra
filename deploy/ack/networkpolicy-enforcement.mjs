@@ -249,6 +249,10 @@ export function validateNetworkPolicyEnforcementV1({
 		rendered.placement.legacyUnplaced !== evidence.placement.legacyUnplaced
 	)
 		fail("WORKER_PLACEMENT_MISMATCH");
+	// Session Sandboxes use the same selector and toleration; with the same
+	// architecture their candidate nodes are exactly the proven Agent candidates.
+	if (rendered.sessionArchitecture !== evidence.placement.architecture)
+		fail("SESSION_PLACEMENT_MISMATCH");
 	if (evidence.enforcer.runtime !== "eci" || evidence.enforcer.component !== "poseidon")
 		fail("ENFORCER_UNSUPPORTED");
 	if (!enforcerConfigBytes) fail("ENFORCER_CONFIG_UNREADABLE");
@@ -343,6 +347,11 @@ export function validateNetworkPolicyEnforcementV1({
 		)
 			fail("PROBE_ORDER_INVALID");
 	}
+
+	// Every node a target may land on needs its own allow→deny→recovery result.
+	const probedNodes = new Set(evidence.probes.map((probe) => probe.destination.nodeName));
+	if ([...candidateNames].some((name) => !probedNodes.has(name)))
+		fail("CANDIDATE_NODE_UNPROBED");
 
 	const key = (kind, name, uid) => `${kind}/${name}/${uid}`;
 	const controllers = (observed.controllers ?? []).map((item) => ({
@@ -450,8 +459,8 @@ export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
 		!["retain-until-lifecycle", "reject"].includes(placement.legacyUnplaced)
 	)
 		fail("WORKER_PLACEMENT_INVALID");
-	assertSessionEciAdmissionRenderedV1(documents, namespace);
-	return { placement, deployment: workers[0].metadata?.name };
+	const sessionArchitecture = assertSessionEciAdmissionRenderedV1(documents, namespace);
+	return { placement, sessionArchitecture, deployment: workers[0].metadata?.name };
 }
 
 /** The chart must render the Session ECI admission, not a RuntimeClass branch. */
@@ -487,6 +496,14 @@ export function assertSessionEciAdmissionRenderedV1(input, namespace) {
 		expressions[0].includes('path:"/spec/runtimeClassName"')
 	)
 		fail("SESSION_PLACEMENT_UNPROVEN");
+	const architectures = [
+		...expressions[0].matchAll(
+			/path:"\/spec\/nodeSelector\/kubernetes\.io~1arch",value:"([a-z0-9]+)"/gu,
+		),
+	].map((match) => match[1]);
+	if (architectures.length !== 1 || !["amd64", "arm64"].includes(architectures[0]))
+		fail("SESSION_PLACEMENT_UNPROVEN");
+	return architectures[0];
 }
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");

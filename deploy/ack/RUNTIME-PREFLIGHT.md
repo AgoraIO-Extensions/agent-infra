@@ -172,7 +172,7 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
 - `nodes`：已证执行的 ECI 虚拟节点 `name` 与 `uid`。
 - `targets`：冻结的 Agent 级 StatefulSet、Deployment 与迁移 Job（`kind`、`name`、`uid`），
   包括停止的副本。
-- `probes`：至少一组探针。`destination` 记录目标 Pod 的 `pod`、`uid`、`nodeName`、`port` 与其
+- `probes`：每个可落节点至少一组探针（目标 Pod 运行在该节点上）。`destination` 记录目标 Pod 的 `pod`、`uid`、`nodeName`、`port` 与其
   控制器 `controller`（`kind`、`name`、`uid`）；`policy` 记录原 NetworkPolicy 的 `name`、`uid`
   和 `specSha256`（`networkPolicySpecSha256V1`，即 spec 规范化 JSON 的 SHA-256）。按顺序记录
   `allow`（Worker 来源连通）、`deny`（施加临时 deny-all 后不通，含该策略 `policyUid`）、
@@ -188,7 +188,7 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
 - 按 placement 的 selector 与 toleration 可落的节点中，有节点不在证据里、UID 变化、缺少
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
-  来源可达，探针目标不在可落节点上，或时间顺序不对。
+  来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
 - 探针目标 Pod 不存在、UID 变化（重建）、不在同一 namespace 或节点、未在运行、控制器不符，
   或没有声明该 TCP 端口；原策略不存在、UID 或有效 spec 变化，或不再选中该 Pod。
 - 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`
@@ -202,7 +202,8 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
 - 渲染结果没有唯一的 Session ECI `MutatingAdmissionPolicy`（`failurePolicy: Fail`，限定本
   namespace 与 `session-sandbox-v1` 标签，唯一的 mutation 含 virtual-kubelet selector 与 provider
   toleration）及指向它的 Binding，或走 RuntimeClass 分支；本 ACK 须开启
-  `sessionRuntimeScheduling` 且不设 `runtimeClassName`。
+  `sessionRuntimeScheduling` 且不设 `runtimeClassName`。Session 准入的架构必须等于证据架构
+  （`SESSION_PLACEMENT_MISMATCH`），使 Session Sandbox 的可落节点与已证的 Agent 可落节点相同。
 - 任一 `kubectl get` 失败，包括权限不足。
 
 通过时 stderr 输出一行摘要，含 `legacyUnplacedActiveTargets` 与

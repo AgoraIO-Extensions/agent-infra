@@ -2849,6 +2849,45 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 		);
 	});
 
+	it("a drift repair (next revision, same fence) keeps the adopted architecture (round 2 MUST-3)", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const amd64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("reject"),
+		});
+		await applyReady(amd64, fake, value);
+		const arm64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...placedPolicy("reject"),
+				agentWorkloadPlacement: {
+					architecture: "arm64",
+					legacyUnplaced: "reject",
+				},
+			} as MultiServiceRuntimePolicyV1,
+		});
+		// Core's ordinary repair advances only the reconciliation revision.
+		const repair = validateAgentWorkloadDesiredV1({
+			...value,
+			workloadRevision: 2,
+		});
+		if (!isMultiService(repair)) throw new Error("invalid fixture");
+		await arm64.apply(repair);
+		for (const entry of podTemplates(fake))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("amd64");
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-arm64",
+			workloadRevision: 3,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		await arm64.apply(restarted);
+		for (const entry of podTemplates(fake).filter((x) => x.kind !== "Job"))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("arm64");
+	});
+
 	it("treats member ECI fields without the Worker record as drift", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({

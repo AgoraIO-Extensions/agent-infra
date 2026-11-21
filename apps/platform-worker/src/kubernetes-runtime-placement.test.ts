@@ -471,3 +471,56 @@ describe("deployment placement source (#4351 MUST-A)", () => {
 			).toThrow("AGENT_WORKLOAD_PLACEMENT_INVALID");
 	});
 });
+
+describe("drift repair is not a lifecycle adoption (#4351 round 2 MUST-3)", () => {
+	const placedAs = (architecture: "amd64" | "arm64") =>
+		({
+			...placed("reject"),
+			agentWorkloadPlacement: { architecture, legacyUnplaced: "reject" },
+		}) as typeof workloadTestPolicy;
+	const arch = (f: ReturnType<typeof fixture>, name: string) => {
+		const workload = f.resources.get(`StatefulSet/${name}`) as V1StatefulSet;
+		return [
+			workload.spec?.template.spec?.nodeSelector?.["kubernetes.io/arch"],
+			workload.metadata?.annotations?.[
+				"agent-infra.agora.io/agent-workload-placement"
+			],
+		];
+	};
+
+	it("repairs an unrelated drift under the original fence without adopting a changed placement", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const identity = await applyWorkload(
+			adapterFor(f, placedAs("amd64")),
+			desired,
+		);
+		const name = desired.service.name;
+		const changed = adapterFor(f, placedAs("arm64"));
+		expect(await changed.observe(desired, identity)).toBe("healthy");
+		// An unrelated env drift on the live controller (Core then repairs it).
+		const key = `StatefulSet/${name}`;
+		const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+		workload.spec?.template.spec?.containers[0]?.env?.push({
+			name: "INJECTED",
+			value: "1",
+		});
+		f.resources.set(key, workload);
+		expect(await changed.observe(desired, identity)).toBe("drifted");
+		// Core's ordinary repair: next reconciliation revision, same fence and request.
+		const repair = { ...desired, workloadRevision: 2 };
+		let repaired = await changed.apply(repair);
+		if (repaired === "pending") repaired = await changed.apply(repair);
+		if (!repaired || repaired === "pending")
+			throw new Error("missing identity");
+		expect(arch(f, name)).toEqual(["amd64", "amd64"]);
+		scheduleOnEci(f, name);
+		expect(await changed.observe(repair, repaired)).toBe("healthy");
+		// Only a formal command (new fence) adopts arm64.
+		const restarted = { ...repair, workloadRevision: 3, fence: 2 };
+		let next = await changed.apply(restarted);
+		if (next === "pending") next = await changed.apply(restarted);
+		if (!next || next === "pending") throw new Error("missing identity");
+		expect(arch(f, name)).toEqual(["arm64", "arm64"]);
+	});
+});

@@ -13,7 +13,11 @@ const policyUid = "66666666-6666-4666-8666-666666666666";
 const controllerUid = "88888888-8888-4888-8888-888888888888";
 
 /** The rendered objects the gate reads: Worker placement env and Session ECI admission. */
-export function renderedEnforcementManifest(namespace, placement) {
+export function renderedEnforcementManifest(
+	namespace,
+	placement,
+	sessionArchitecture = placement?.architecture ?? "amd64",
+) {
 	const name = `${namespace}-session-eci`;
 	const scope = {
 		namespaceSelector: {
@@ -62,8 +66,7 @@ export function renderedEnforcementManifest(namespace, placement) {
 					{
 						patchType: "JSONPatch",
 						jsonPatch: {
-							expression:
-								'[JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"}] + [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}]',
+							expression: `[JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"${sessionArchitecture}"}] + [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}]`,
 						},
 					},
 				],

@@ -102,6 +102,7 @@ function fixture() {
 		controller("Job", "agent-m-migration-a", 13, placement, {
 			status: { succeeded: 1 },
 		}),
+		controller("StatefulSet", "agent-p2", 14, placement),
 	];
 	return {
 		evidence: {
@@ -125,7 +126,21 @@ function fixture() {
 				name: item.metadata.name,
 				uid: item.metadata.uid,
 			})),
-			probes: [probe],
+			// One allow→deny→recovery result per candidate node (i and j).
+			probes: [
+				probe,
+				{
+					...structuredClone(probe),
+					destination: {
+						...probe.destination,
+						pod: "agent-p2-0",
+						uid: uid(42),
+						nodeName: "virtual-kubelet-cn-hangzhou-j",
+						controller: { kind: "StatefulSet", name: "agent-p2", uid: uid(14) },
+					},
+					policy: { ...probe.policy, name: "agent-p2", uid: uid(54) },
+				},
+			],
 			observedAt: at(20),
 			expiresAt: new Date(now + 24 * 60 * 60_000).toISOString(),
 		},
@@ -171,6 +186,37 @@ function fixture() {
 						spec: policySpec,
 					},
 				},
+				{
+					pod: {
+						metadata: {
+							name: "agent-p2-0",
+							uid: uid(42),
+							namespace: "agent-infra",
+							labels: { "agent-infra.agora.io/agent": "agent-p" },
+							ownerReferences: [
+								{
+									kind: "StatefulSet",
+									name: "agent-p2",
+									uid: uid(14),
+									controller: true,
+								},
+							],
+						},
+						spec: {
+							nodeName: "virtual-kubelet-cn-hangzhou-j",
+							containers: [{ name: "agent", ports: [{ containerPort: 3003 }] }],
+						},
+						status: { phase: "Running" },
+					},
+					policy: {
+						metadata: {
+							name: "agent-p2",
+							uid: uid(54),
+							namespace: "agent-infra",
+						},
+						spec: policySpec,
+					},
+				},
 			],
 		},
 		now,
@@ -187,7 +233,8 @@ test("complete current evidence passes without signing field acceptance", () => 
 	const summary = run(fixture());
 	assert.equal(summary.status, "passed");
 	assert.equal(summary.candidateNodes, 2);
-	assert.equal(summary.placedTargets, 4);
+	assert.equal(summary.placedTargets, 5);
+	assert.equal(summary.probes, 2);
 	assert.equal(summary.allAgentWorkloadsOnEnforcedForm, true);
 	assert.equal(summary.fieldAcceptanceSigned, false);
 	assert(!JSON.stringify(summary).includes(uid(2)));
@@ -491,6 +538,37 @@ const cases = [
 		},
 		"EVIDENCE_INVALID",
 	],
+	// Round 2 MUST-2: every candidate node needs its own execution result.
+	[
+		"candidate j without its own probe",
+		(f) => {
+			f.evidence.probes.splice(1, 1);
+			f.observed.probeTargets.splice(1, 1);
+		},
+		"CANDIDATE_NODE_UNPROBED",
+	],
+	// Round 2 MUST-1: Session Sandboxes must land on the proven candidates too.
+	[
+		"Session on another architecture",
+		(f) => {
+			f.renderedManifest = renderedEnforcementManifest(
+				"agent-infra",
+				{ architecture: "amd64", legacyUnplaced: "reject" },
+				"arm64",
+			);
+		},
+		"SESSION_PLACEMENT_MISMATCH",
+	],
+	[
+		"Session admission without an architecture",
+		(f) => {
+			f.renderedManifest = f.renderedManifest.replace(
+				',JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"amd64"}',
+				"",
+			);
+		},
+		"SESSION_PLACEMENT_UNPROVEN",
+	],
 	// MUST-A: the placement must be what the release hands the Worker.
 	[
 		"missingWorkerPlacement",
@@ -754,6 +832,8 @@ test("the entry reads only with get and fails closed on missing input or read fa
 		"statefulsets,deployments,jobs/-l": { items: f.observed.controllers },
 		"pod/agent-p-0": f.observed.probeTargets[0].pod,
 		"networkpolicy/agent-p": f.observed.probeTargets[0].policy,
+		"pod/agent-p2-0": f.observed.probeTargets[1].pod,
+		"networkpolicy/agent-p2": f.observed.probeTargets[1].policy,
 	};
 	const stub = (failing) => {
 		const file = join(directory, failing ? "kubectl-fail" : "kubectl");
@@ -850,4 +930,33 @@ test("formal ACK entries run the gate before reading inputs or creating template
 	assert(body.indexOf(gate) < body.indexOf("prepare-template-preflight.ts"));
 	assert(body.indexOf(gate) < body.indexOf("template-model-preflight.mjs"));
 	assert(redeploy.indexOf('"$repo_root/deploy/ack/preflight.sh"') > 0);
+});
+
+test("a real chart with arm64 Agents and default amd64 Sessions fails arm64-only evidence (round 2 MUST-1)", () => {
+	const rendered = spawnSync(
+		"helm",
+		[
+			"template",
+			"agent-infra",
+			join(import.meta.dirname, "../deploy/ack/chart"),
+			"--namespace",
+			"agent-infra",
+			"--kube-version",
+			"1.36.0",
+			"--set",
+			"agentWorkloadScheduling.enabled=true",
+			"--set",
+			"agentWorkloadScheduling.architecture=arm64",
+			"--set",
+			"agentWorkloadScheduling.legacyUnplaced=reject",
+			"--set",
+			"sessionRuntimeScheduling.enabled=true",
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(rendered.status, 0, rendered.stderr);
+	const f = fixture();
+	f.evidence.placement.architecture = "arm64";
+	f.renderedManifest = rendered.stdout;
+	rejects(f, "SESSION_PLACEMENT_MISMATCH");
 });

@@ -255,10 +255,13 @@ export function isEciProviderPodAnnotationV1(
 }
 
 /**
- * The placement an apply writes. While the controller's revision is unchanged
- * (the same intent re-applied, not a formal lifecycle) an accepted recorded
- * placement is kept, so changing the deployment value never rebuilds a Host;
- * a new revision (restart/stop→restart, publish) adopts the deployment value.
+ * The placement an apply writes. A formal management command (stop_agent,
+ * restart_agent, publish: each a CAS on the management revision that issues a
+ * new fence) adopts the deployment value. `sameCommand` is true when the apply
+ * reuses the fence under which the controller was last written (drift repair,
+ * which only advances the reconciliation revision; recovery; re-applying the
+ * same intent): then an accepted recorded placement is kept, so changing the
+ * deployment value never rebuilds a Host by itself.
  */
 export function effectiveAgentWorkloadPlacementV1(
 	placement: AgentWorkloadPlacementV1 | undefined,
@@ -271,10 +274,10 @@ export function effectiveAgentWorkloadPlacementV1(
 		  }
 		| null
 		| undefined,
-	sameRevision: boolean,
+	sameCommand: boolean,
 ): AgentWorkloadPlacementV1 | undefined {
 	validateAgentWorkloadPlacementV1(placement);
-	if (!current || !sameRevision) return placement;
+	if (!current || !sameCommand) return placement;
 	const record =
 		current.metadata?.annotations?.[agentWorkloadPlacementAnnotationV1];
 	if (

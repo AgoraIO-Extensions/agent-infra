@@ -1231,8 +1231,9 @@ export function createMultiServiceRuntimeOperations(options: {
 		agentWorkloadPlacementShapeV1(placement, spec, false) ===
 		(placement ? "placed" : "unplaced");
 	/**
-	 * Spec §10.1: re-applying the same revision keeps each controller's accepted
-	 * recorded placement; only a new revision (formal lifecycle) adopts a change.
+	 * Spec §10.1: a formal management command (new fence) adopts a changed
+	 * placement; drift repair and re-applies reuse the fence and keep each
+	 * controller's accepted recorded placement.
 	 */
 	const adoptingPolicy = async (
 		kind: "Deployment" | "StatefulSet" | "Job",
@@ -1246,8 +1247,8 @@ export function createMultiServiceRuntimeOperations(options: {
 		const effective = effectiveAgentWorkloadPlacementV1(
 			placement,
 			current && owned(current, value) ? current : null,
-			current?.metadata?.labels?.[revisionLabel] ===
-				String(value.workloadRevision),
+			current?.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+				String(value.fence),
 		);
 		return effective === placement
 			? options.policy
@@ -1517,16 +1518,16 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (object.kind === "Job") {
 			if (!matchesImagePullSecrets((current as V1Job).spec?.template.spec))
 				throw new Error("multi-service migration pull policy drifted");
-			// A Job template is immutable. An unfinished Job is kept for the same
-			// revision only with its accepted recorded placement; a new revision
-			// (formal lifecycle) needs the exact deployment placement. A finished
-			// Job has no running Pod left.
-			const sameRevision =
-				current.metadata?.labels?.[revisionLabel] ===
-				String(value.workloadRevision);
+			// A Job template is immutable. An unfinished Job is kept under the same
+			// fence only with its accepted recorded placement; a formal command (new
+			// fence) needs the exact deployment placement. A finished Job has no
+			// running Pod left.
+			const sameFence =
+				current.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+				String(value.fence);
 			if (
 				!jobSucceeded(current as V1Job) &&
-				!(sameRevision
+				!(sameFence
 					? acceptsPlacement(current as V1Job)
 					: hasExactPlacement((current as V1Job).spec?.template.spec))
 			)
