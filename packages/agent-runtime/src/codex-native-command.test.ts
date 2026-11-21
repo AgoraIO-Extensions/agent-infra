@@ -43,7 +43,12 @@ interface MetadataState {
 	>;
 }
 
-async function fixture(stateful = false) {
+async function fixture(
+	stateful = false,
+	options: Partial<
+		import("./codex-runtime-driver.js").CodexRuntimeDriverOptions
+	> = {},
+) {
 	const directory = await mkdtemp(join(tmpdir(), "codex-metadata-unit-"));
 	const { path, nativeSessionRef, binding } = await seedNativeCommandState(
 		directory,
@@ -51,7 +56,7 @@ async function fixture(stateful = false) {
 		stateful,
 	);
 	const transport = new MetadataTransport();
-	const driver = await MetadataDriver.openFixture(path, transport);
+	const driver = await MetadataDriver.openFixture(path, transport, options);
 	fixtures.push({ directory, driver });
 	const abort = new AbortController();
 	const read: CodexNativeCommandReadContext = {
@@ -388,8 +393,73 @@ describe("Codex native command result lifecycle", () => {
 		);
 	});
 
+	it("emits only bounded compact lifecycle stages without private data", async () => {
+		const stages: unknown[] = [];
+		const f = await fixture(true, {
+			observeNativeCompactStage: (event) => stages.push(event),
+		});
+		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
+		const compact = projection.capabilities.find(
+			(entry) => entry.name === "compact",
+		);
+		if (!compact) throw new Error("Missing compact capability");
+		const command = f.driver.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "compact-telemetry-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "compact-telemetry-1",
+			turnId: "turn-compact-telemetry-1",
+			sessionGeneration: 1,
+			nativeSessionRef: f.read.nativeSessionRef,
+			capabilityId: compact.id,
+			directoryRevision: projection.revision,
+			capabilityName: compact.name,
+			capabilitySourceVersion: compact.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "relay-key-1",
+				version: 1,
+			},
+			authorizationRecordId: "authorization-1",
+		});
+		const record = await f.driver.execute(command, { nativeCommand: f.read });
+		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
+		expect(stages.map((event) => (event as { stage: string }).stage)).toEqual([
+			"request_sent",
+			"rpc_response",
+			"item_started",
+			"item_completed",
+			"turn_completed",
+			"final_acceptance",
+		]);
+		expect(JSON.stringify(stages)).not.toContain("private");
+		expect(JSON.stringify(stages)).not.toContain("relay-key");
+		expect(stages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					operationRef: "native.command.compact",
+					outcome: "completed",
+				}),
+			]),
+		);
+	});
+
 	it("keeps the command unknown when a completion never started for this item", async () => {
-		const f = await fixture(true);
+		const stages: unknown[] = [];
+		const f = await fixture(true, {
+			observeNativeCompactStage: (event) => stages.push(event),
+		});
 		f.transport.compactCompletedItemId = "unrelated-compaction-item";
 		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
 		const compact = projection.capabilities.find(
@@ -435,6 +505,15 @@ describe("Codex native command result lifecycle", () => {
 				(frame) => frame.method === "thread/compact/start",
 			),
 		).toHaveLength(1);
+		expect(stages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					stage: "final_acceptance",
+					outcome: "unknown",
+					code: "missing_event",
+				}),
+			]),
+		);
 	});
 
 	it("recovers a persisted compact item after the Driver restarts without reinvoking", async () => {

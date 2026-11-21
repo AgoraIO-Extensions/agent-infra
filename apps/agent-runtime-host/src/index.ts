@@ -737,6 +737,31 @@ export async function assembleRuntimeHost(
 							executionId: event.executionId,
 						});
 					},
+					observeNativeCompactStage: (event) => {
+						modelTelemetry ??= startObservability({
+							service: "agent-runtime-host",
+							...(environment.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT
+								? {
+										otlpEndpoint:
+											environment.AGENT_INFRA_OBSERVABILITY_OTLP_ENDPOINT,
+									}
+								: {}),
+						});
+						modelTelemetry.record({
+							stage: "runtime",
+							outcome: event.outcome,
+							protocolCode: `NATIVE_COMPACT_${event.stage.toUpperCase()}${
+								event.code ? `_${event.code.toUpperCase()}` : ""
+							}`,
+							...(event.durationMs === undefined
+								? {}
+								: { durationMs: event.durationMs }),
+							operationRef: event.operationRef,
+							agentId: event.agentId,
+							conversationId: event.conversationId,
+							executionId: event.executionId,
+						});
+					},
 					isolationMode: codexIsolationMode,
 					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,

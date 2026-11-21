@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { platform } from "node:process";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -633,10 +634,40 @@ export interface ModelTransportFailureObservation
 	readonly attemptRef: string;
 }
 
+export type NativeCompactStage =
+	| "request_sent"
+	| "rpc_response"
+	| "item_started"
+	| "item_completed"
+	| "turn_completed"
+	| "recovery_read"
+	| "final_acceptance";
+
+export interface NativeCompactStageObservation {
+	readonly stage: NativeCompactStage;
+	readonly outcome: "waiting" | "completed" | "failed" | "unknown";
+	readonly code?:
+		| "ok"
+		| "timeout"
+		| "protocol_error"
+		| "transport_error"
+		| "missing_event"
+		| "recovery_completed";
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly operationRef: "native.command.compact";
+	readonly durationMs?: number;
+}
+
 export interface CodexRuntimeDriverOptions {
 	/** Best-effort operational metadata, never persisted as a Runtime fact. */
 	readonly observeModelTransportFailure?: (
 		event: ModelTransportFailureObservation,
+	) => void;
+	/** Best-effort bounded compact lifecycle metadata; never contains request data or secrets. */
+	readonly observeNativeCompactStage?: (
+		event: NativeCompactStageObservation,
 	) => void;
 	/** Deployment-owned native isolation boundary; defaults to Landlock. */
 	readonly isolationMode?:
@@ -5075,6 +5106,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		{
 			readonly nativeSessionRef: string;
+			readonly agentId: string;
+			readonly conversationId: string;
 			readonly executionId: string;
 			readonly threadId: string;
 			itemId?: string;
@@ -5179,10 +5212,37 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly codexInputRootPath?: string,
 		private readonly sessionExecutor?: CodexSessionExecutorAdmissionV1,
 		private readonly observeModelTransportFailure?: CodexRuntimeDriverOptions["observeModelTransportFailure"],
+		private readonly observeNativeCompactStage?: CodexRuntimeDriverOptions["observeNativeCompactStage"],
 	) {
 		this.unsubscribeSessionExecutor = sessionExecutor?.onFailure(() =>
 			this.failSessionExecutor(),
 		);
+	}
+
+	private observeCompactStage(
+		command: Pick<
+			CodexNativeCommandCommand,
+			"agentId" | "conversationId" | "executionId"
+		>,
+		stage: NativeCompactStage,
+		outcome: NativeCompactStageObservation["outcome"],
+		code?: NativeCompactStageObservation["code"],
+		durationMs?: number,
+	) {
+		try {
+			this.observeNativeCompactStage?.({
+				stage,
+				outcome,
+				...(code ? { code } : {}),
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				executionId: command.executionId,
+				operationRef: "native.command.compact",
+				...(durationMs === undefined ? {} : { durationMs }),
+			});
+		} catch {
+			// Diagnostic capture cannot change the native command result.
+		}
 	}
 
 	private readonly connectionRecoveries = new Map<
@@ -6270,6 +6330,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			typeof options.observeModelTransportFailure !== "function"
 		)
 			configurationInvalid();
+		if (
+			options.observeNativeCompactStage !== undefined &&
+			typeof options.observeNativeCompactStage !== "function"
+		)
+			configurationInvalid();
 		let sessionExecutor: CodexSessionExecutorAdmissionV1 | undefined;
 		if (options.isolationMode === "session-executor") {
 			if (
@@ -6290,6 +6355,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						"modelOptions",
 						"authorizeExternalAction",
 						"observeModelTransportFailure",
+						"observeNativeCompactStage",
 						"connectionClient",
 					].includes(key),
 				)
@@ -6664,6 +6730,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				inputRoot,
 				sessionExecutor,
 				options.observeModelTransportFailure,
+				options.observeNativeCompactStage,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -8139,10 +8206,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		read.assertCurrent();
 		const rpc = await this.rpc(command.nativeSessionRef, read.assertCurrent);
+		const compactStartedAt = performance.now();
+		this.observeCompactStage(command, "request_sent", "waiting");
 		const operationKeyValue = operationKey(command);
 		const completion = new Promise<void>((resolve, reject) => {
 			this.pendingNativeCompactions.set(operationKeyValue, {
 				nativeSessionRef: command.nativeSessionRef,
+				agentId: command.agentId,
+				conversationId: command.conversationId,
 				executionId: command.executionId,
 				threadId: binding.threadId,
 				itemCompleted: false,
@@ -8153,18 +8224,38 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 		let completionTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			await rpc.request(
-				"thread/compact/start",
-				{ threadId: binding.threadId },
-				(value) => {
-					if (!isEmptyRecord(value)) protocolInvalid();
-					return value;
-				},
-				false,
-				false,
-				Date.now() + rpcRequestTimeoutMs,
-				read.signal,
-			);
+			try {
+				await rpc.request(
+					"thread/compact/start",
+					{ threadId: binding.threadId },
+					(value) => {
+						if (!isEmptyRecord(value)) protocolInvalid();
+						return value;
+					},
+					false,
+					false,
+					Date.now() + rpcRequestTimeoutMs,
+					read.signal,
+				);
+				this.observeCompactStage(
+					command,
+					"rpc_response",
+					"completed",
+					"ok",
+					Math.round(performance.now() - compactStartedAt),
+				);
+			} catch (error) {
+				this.observeCompactStage(
+					command,
+					"rpc_response",
+					"failed",
+					error instanceof RuntimeHostError
+						? "protocol_error"
+						: "transport_error",
+					Math.round(performance.now() - compactStartedAt),
+				);
+				throw error;
+			}
 			await Promise.race([
 				completion,
 				new Promise<never>((_, reject) => {
@@ -8184,6 +8275,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				)),
 			});
 		} catch {
+			this.observeCompactStage(
+				command,
+				"final_acceptance",
+				"unknown",
+				"missing_event",
+				Math.round(performance.now() - compactStartedAt),
+			);
 			return this.unknown(command, command.nativeSessionRef);
 		} finally {
 			if (completionTimer !== undefined) clearTimeout(completionTimer);
@@ -8219,8 +8317,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					nativeTurnId,
 					nativeItemId,
 				)
-			)
+			) {
+				this.observeCompactStage(
+					command,
+					"recovery_read",
+					"unknown",
+					"missing_event",
+				);
 				return this.unknown(command, command.nativeSessionRef);
+			}
+			this.observeCompactStage(
+				command,
+				"recovery_read",
+				"completed",
+				"recovery_completed",
+			);
 			const observed = await this.readBoundNativeStatus(
 				read,
 				binding,
@@ -8231,6 +8342,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				...observed,
 			});
 		} catch {
+			this.observeCompactStage(
+				command,
+				"recovery_read",
+				"failed",
+				"transport_error",
+			);
 			return this.unknown(command, command.nativeSessionRef);
 		}
 	}
@@ -13206,12 +13323,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				return true;
 			}
 			pending.itemId = item.nativeItemId;
+			this.observeCompactStage(pending, "item_started", "completed");
 		} else {
 			if (pending.itemId !== item.nativeItemId) {
 				pending.reject(unavailableError());
 				return true;
 			}
 			pending.itemCompleted = true;
+			this.observeCompactStage(pending, "item_completed", "completed");
 		}
 		pending.turnId = item.nativeTurnId;
 		await this.update((state) => {
@@ -13278,9 +13397,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				candidate.turnId === turn.nativeTurnId,
 		);
 		if (!pending) return false;
-		if (turn.status !== "completed") pending.reject(unavailableError());
-		else {
+		if (turn.status !== "completed") {
+			this.observeCompactStage(
+				pending,
+				"turn_completed",
+				"failed",
+				"protocol_error",
+			);
+			pending.reject(unavailableError());
+		} else {
 			pending.turnCompleted = true;
+			this.observeCompactStage(pending, "turn_completed", "completed");
 			if (pending.itemCompleted) pending.resolve();
 		}
 		return true;
@@ -15748,7 +15875,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					}
 				: {}),
 		});
-		return this.update((state) => {
+		const resolved = await this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
 			if (!operation || !operationMatchesCommand(operation, command))
 				stateInvalid();
@@ -15762,6 +15889,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operation.nativeCommandResult ??= result;
 			return record;
 		});
+		if (
+			command.schemaVersion === 2 &&
+			command.kind === "native-command" &&
+			command.effect === "state_changing"
+		)
+			this.observeCompactStage(
+				command,
+				"final_acceptance",
+				resolved.result.outcome === "accepted" ? "completed" : "unknown",
+				resolved.result.outcome === "accepted" ? "ok" : "missing_event",
+			);
+		return resolved;
 	}
 
 	private async resolveInterruption(
