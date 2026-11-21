@@ -9,6 +9,7 @@ import {
 	workloadTestPolicy,
 } from "../../apps/platform-worker/src/kubernetes.fixture.js";
 import { collectOperationsSnapshotV2 } from "../../apps/platform-worker/src/operations-collector.js";
+import { sessionSandboxLabelsV1 } from "../../apps/platform-worker/src/session-workload-adapter.js";
 import {
 	OperationsBudgetV2Schema,
 	OperationsHistoryV2Schema,
@@ -1972,3 +1973,174 @@ it.each(["session_sandbox_budgets", "outbox_items"])(
 		}
 	},
 );
+
+it("classifies only the platform MinIO controller and its mounted PVC as shared", async () => {
+	const minioScope = { ...scope, clusterId: "operations-minio-test" };
+	const minioStore = new PostgresOperationsResourceStoreV2({
+		databaseUrl: database.databaseUrl,
+		scope: minioScope,
+		workloadNamespaceRef: workloadTestPolicy.namespaceRef,
+	});
+	onTestFinished(() => minioStore.close());
+	const helmLabels = {
+		"app.kubernetes.io/managed-by": "Helm",
+		"app.kubernetes.io/component": "skill-object-storage",
+	};
+	const controller = (name: string, agentId?: string) => ({
+		metadata: {
+			name,
+			namespace: scope.namespace,
+			uid: `${name}-controller`,
+			generation: 1,
+			labels: helmLabels,
+			annotations: agentId ? { "agent-infra.agora.io/agent-id": agentId } : {},
+		},
+	});
+	const pod = (name: string, controllerName: string, claim: string) => ({
+		metadata: {
+			name,
+			namespace: scope.namespace,
+			uid: `${name}-uid`,
+			resourceVersion: "1",
+			labels: helmLabels,
+			ownerReferences: [
+				{
+					kind: "ReplicaSet",
+					name: `${controllerName}-rs`,
+					uid: `${controllerName}-rs-uid`,
+					controller: true,
+				},
+			],
+		},
+		spec: {
+			containers: [{ name: "app", image: "fixture@sha256:" + "a".repeat(64) }],
+			volumes: [{ name: "data", persistentVolumeClaim: { claimName: claim } }],
+		},
+		status: {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		},
+	});
+	const replicas = (name: string) => ({
+		metadata: {
+			name: `${name}-rs`,
+			namespace: scope.namespace,
+			uid: `${name}-rs-uid`,
+			ownerReferences: [
+				{
+					kind: "Deployment",
+					name,
+					uid: `${name}-controller`,
+					controller: true,
+				},
+			],
+		},
+	});
+	const names = [
+		"agent-infra-minio",
+		"agent-own",
+		"agent-infra-other-component",
+	];
+	const session = {
+		agentId: "agent-own-id",
+		sessionId: "session-own",
+		sandboxId: "sandbox-own",
+		generation: 1,
+	};
+	const sessionPod = {
+		metadata: {
+			name: "session-own-pod",
+			namespace: scope.namespace,
+			uid: "session-pod-uid",
+			resourceVersion: "1",
+			labels: { ...helmLabels, ...sessionSandboxLabelsV1(session) },
+			annotations: {
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
+				"agent-infra.agora.io/agent-id": session.agentId,
+				"agent-infra.agora.io/session-id": session.sessionId,
+			},
+		},
+		spec: {
+			containers: [
+				{ name: "runtime", image: "fixture@sha256:" + "b".repeat(64) },
+			],
+		},
+		status: { phase: "Running" },
+	};
+	const objects: Record<string, unknown[]> = {
+		deployments: names.map((name) =>
+			controller(name, name === "agent-own" ? "agent-own-id" : undefined),
+		),
+		replicasets: names.map(replicas),
+		pods: [
+			...names.map((name) => pod(`${name}-pod`, name, `${name}-data`)),
+			sessionPod,
+		],
+		volumes: names.map((name) => ({
+			metadata: {
+				name: `${name}-data`,
+				namespace: scope.namespace,
+				uid: `${name}-pvc`,
+				resourceVersion: "1",
+				annotations:
+					name === "agent-own"
+						? { "agent-infra.agora.io/agent-id": "agent-own-id" }
+						: {},
+			},
+			spec: { resources: { requests: { storage: "1Gi" } } },
+			status: { phase: "Bound" },
+		})),
+	};
+	const snapshot = await collectOperationsSnapshotV2({
+		scope: minioScope,
+		readCluster: false,
+		cacheOwner: "fixture",
+		cacheInventoryLimit: 48,
+		bindings: [],
+		read: async (kind) => ({ items: objects[kind] ?? [], truncated: false }),
+	});
+	const resource = (name: string) =>
+		snapshot.resources.find((entry) => entry.name === name);
+	for (const name of ["agent-infra-minio-pod", "agent-infra-minio-data"])
+		expect(resource(name)).toMatchObject({
+			ownership: "shared",
+			ownershipReason: null,
+			agentId: null,
+		});
+	expect(resource("agent-own-pod")).toMatchObject({
+		ownership: "agent",
+		role: "workload",
+		agentId: "agent-own-id",
+	});
+	expect(resource("agent-own-data")).toMatchObject({
+		ownership: "agent",
+		agentId: "agent-own-id",
+	});
+	expect(resource("session-own-pod")).toMatchObject({
+		ownership: "agent",
+		role: "sandbox",
+		agentId: session.agentId,
+		sessionId: session.sessionId,
+	});
+	for (const name of [
+		"agent-infra-other-component-pod",
+		"agent-infra-other-component-data",
+	])
+		expect(resource(name)).toMatchObject({ ownership: "unknown" });
+	// Preserve the shared classification through Store/Core and the normal admin HTTP projection.
+	await minioStore.write({
+		...snapshot,
+		resources: snapshot.resources.filter((entry) =>
+			entry.name.startsWith("agent-infra-minio-"),
+		),
+	});
+	const response = await app(minioStore).request("/api/v2/ops/resources");
+	expect(response.status).toBe(200);
+	const body = OperationsResourcesV2Schema.parse(await response.json());
+	expect(body.resources).toHaveLength(2);
+	expect(
+		body.resources.every(
+			(entry) => entry.ownership === "shared" && entry.ownershipReason === null,
+		),
+	).toBe(true);
+});

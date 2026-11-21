@@ -383,6 +383,7 @@ export async function collectOperationsSnapshotV2(input: {
 		"agent-infra-web": "web",
 		"agent-infra-postgres": "database",
 		"agent-infra-directory": "directory",
+		"agent-infra-minio": "unknown",
 	};
 	const isVirtualNode = (node: ObjectRecord) => {
 		const meta = metadata(node);
