@@ -8828,7 +8828,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 		);
 		if (!operation) return undefined;
-		if (this.session(nativeSessionRef).executions[executionId])
+		if (
+			operation.effect === "state_changing" &&
+			ownRecordValue(this.session(nativeSessionRef).executions, executionId)
+		)
 			return undefined;
 		// 还没 settled（prepared/running）的原生命令没有可重放的结果；让调用方回到
 		// journal/wait 流，而不是把「正在执行」误报成不可用（#3359 review）。
@@ -10209,7 +10212,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.assertExecutionConfiguration(
 					this.readState(),
 					session,
-					session.executions[executionId] ?? unavailable(),
+					ownRecordValue(session.executions, executionId) ?? unavailable(),
 				);
 				const metadata = await (await this.rpc(nativeSessionRef)).request(
 					"thread/read",
@@ -10802,9 +10805,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal?: AbortSignal,
 	): Promise<AsyncIterable<RuntimeEvent>> {
 		const driver = this;
+		const nativeOperation = this.nativeCommandOperation(
+			nativeSessionRef,
+			executionId,
+		);
 		if (
-			this.nativeCommandOperation(nativeSessionRef, executionId) &&
-			!this.session(nativeSessionRef).executions[executionId]
+			nativeOperation &&
+			(nativeOperation.effect !== "state_changing" ||
+				!ownRecordValue(this.session(nativeSessionRef).executions, executionId))
 		) {
 			const initialEvents = this.nativeCommandEvents(
 				nativeSessionRef,
@@ -16560,7 +16568,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return;
 		const record = await this.update((state) => {
 			const session = ownRecordValue(state.sessions, nativeSessionRef);
-			const execution = session?.executions[executionId];
+			const execution =
+				session && ownRecordValue(session.executions, executionId);
 			if (!session || !execution || execution.nativeTurnId !== nativeTurnId)
 				unavailable();
 			const operation = this.executionOperation(state, session, execution);
