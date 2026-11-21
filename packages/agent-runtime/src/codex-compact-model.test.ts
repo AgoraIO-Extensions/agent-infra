@@ -278,6 +278,39 @@ it.each([
 					await expect
 						.poll(() => driver.getStatus(seeded.nativeSessionRef, executionId))
 						.toBe("unknown");
+				if (mode === "failed-turn") {
+					await transport.replayModel();
+					expect(providerRequests).toBe(1);
+					expect(transport.modelStatuses.at(-1)).not.toBe(200);
+					await driver.close();
+					const recoveryTransport = new MetadataTransport();
+					recoveryTransport.threadId = transport.threadId;
+					recoveryTransport.turns = [
+						{
+							id: transport.compactTurnId,
+							status: "completed",
+							items: [
+								{ type: "contextCompaction", id: transport.compactItemId },
+							],
+						},
+					];
+					const recovered = await MetadataDriver.openFixture(
+						seeded.path,
+						recoveryTransport,
+					);
+					try {
+						expect(
+							await recovered.getStatus(seeded.nativeSessionRef, executionId),
+						).toBe("unknown");
+						expect(
+							recoveryTransport.requests.some(
+								(frame) => frame.method === "thread/compact/start",
+							),
+						).toBe(false);
+					} finally {
+						await recovered.close();
+					}
+				}
 				const facts = await driver
 					.replayEvents(seeded.nativeSessionRef, executionId)
 					.catch(() => []);

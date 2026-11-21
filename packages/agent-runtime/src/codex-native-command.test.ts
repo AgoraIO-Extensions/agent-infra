@@ -598,15 +598,17 @@ describe("Codex native command result lifecycle", () => {
 				(frame) => frame.method === "thread/compact/start",
 			),
 		).toHaveLength(1);
-		expect(stages).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					stage: "final_acceptance",
-					outcome: "unknown",
-					code: "missing_event",
-				}),
-			]),
-		);
+		await expect
+			.poll(() => stages)
+			.toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						stage: "final_acceptance",
+						outcome: "unknown",
+						code: "missing_event",
+					}),
+				]),
+			);
 	});
 
 	it("recovers a persisted compact item after the Driver restarts without reinvoking", async () => {

@@ -35,6 +35,9 @@ export class CompactModelTransport extends MetadataTransport {
 		});
 		void this.model().catch(() => this.failed());
 	}
+	async replayModel() {
+		await this.model();
+	}
 	private failed() {
 		this.push({
 			method: "turn/completed",

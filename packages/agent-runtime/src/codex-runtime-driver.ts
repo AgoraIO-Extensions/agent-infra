@@ -5291,6 +5291,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admission?: CodexModelTurnAdmission;
 			acknowledged: boolean;
 			ready?: boolean;
+			failed?: boolean;
+			nativeFailureStatus?: "failed" | "cancelled";
 			activation?: Promise<void>;
 			itemId?: string;
 			turnId?: string;
@@ -8540,7 +8542,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			itemCompleted: false,
 			turnCompleted: false,
 			resolve: () => completion.resolve(),
-			reject: (e: unknown) => completion.reject(e),
+			reject: (error: unknown) => {
+				const current = this.pendingNativeCompactions.get(key);
+				if (current) {
+					current.failed = true;
+					if (current.turnId)
+						this.revokeModelTurn?.({
+							conversationKey: this.modelConversationKey(
+								codexConversationKey(command),
+							),
+							threadId: current.threadId,
+							turnId: current.turnId,
+						});
+				}
+				completion.reject(error);
+			},
 		};
 		this.pendingNativeCompactions.set(key, pending);
 		// Keep ownership of late native receipts; the business context is not the metadata request.
@@ -8581,15 +8597,50 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					...observed,
 				});
 			})
-			.catch(() =>
+			.catch(async () => {
+				const failed = this.pendingNativeCompactions.get(key);
+				if (failed?.turnId)
+					await this.cancelModelTurn?.({
+						conversationKey: this.modelConversationKey(
+							codexConversationKey(command),
+						),
+						threadId: failed.threadId,
+						turnId: failed.turnId,
+					}).catch(() => undefined);
+				await this.update(
+					(state) => {
+						const session = ownRecordValue(
+							state.sessions,
+							command.nativeSessionRef,
+						);
+						const journal =
+							session && failed?.turnId
+								? ownRecordValue(session.journals ?? {}, failed.turnId)
+								: undefined;
+						if (
+							!session ||
+							!journal ||
+							journal.events.some((event) => event.type === "completed")
+						)
+							return;
+						journal.externalActionsBlocked = true;
+						if (failed?.nativeFailureStatus)
+							journal.nativeCompletionStatus ??= failed.nativeFailureStatus;
+						this.appendHeldStatusEvent(session, journal);
+					},
+					{ skipUnchanged: true },
+				).catch(() => undefined);
+				this.notifyEventStream(
+					this.eventStreamKey(command.nativeSessionRef, command.executionId),
+				);
 				this.observeCompactStage(
 					command,
 					"final_acceptance",
 					"unknown",
 					"missing_event",
 					Math.round(performance.now() - compactStartedAt),
-				),
-			)
+				);
+			})
 			.finally(() => {
 				if (admission) this.abandonModelTurnAdmission?.(admission);
 				this.pendingNativeCompactions.delete(key);
@@ -8651,6 +8702,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!pending?.acknowledged || !pending.turnId || !pending.itemId) return;
 		if (pending.activation) return pending.activation;
 		pending.activation = (async () => {
+			if (pending.failed) unavailable();
 			pending.read.assertCurrent();
 			await pending.read.revalidate();
 			const turnId = pending.turnId;
@@ -8663,6 +8715,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					pending.nativeSessionRef,
 				);
 				if (
+					pending.failed ||
 					!op ||
 					!session ||
 					!operationMatchesCommand(op, pending.command) ||
@@ -8703,6 +8756,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.appendStatusEvent(session, journal);
 			});
 			pending.read.assertCurrent();
+			if (pending.failed) unavailable();
 			const turn = {
 				conversationKey: this.modelConversationKey(
 					codexConversationKey(this.session(pending.nativeSessionRef)),
@@ -10197,6 +10251,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			);
 			if (pending)
 				return journal?.externalActionsBlocked ||
+					pending.failed ||
 					!pending.ready ||
 					pending.itemCompleted !== pending.turnCompleted
 					? "unknown"
@@ -14100,6 +14155,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			);
 		}
 		if (turn.status !== "completed") {
+			pending.nativeFailureStatus ??= turn.status;
 			this.observeCompactStage(
 				pending,
 				"turn_completed",
