@@ -5,6 +5,10 @@ import type {
 	RuntimeNativeCapabilityRequestV5,
 } from "@agent-infra/contracts/runtime";
 import {
+	runtimeModelInjectionV4,
+	validateRuntimeModelProjectionV4,
+} from "@agent-infra/model-catalog";
+import {
 	bindInputFileV1,
 	bindNativeTextInputFileV1,
 	type ConversationCommandDecisionV1,
@@ -161,6 +165,7 @@ import {
 } from "./session-sandbox-reserves.js";
 import { writeTaskApiAuditV1 } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
+import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 function legacyWebExecutionBinding(
 	authority: ConversationExecutionAuthorityV1,
@@ -786,6 +791,12 @@ export class PostgresConversationExecutionTransactionV1
 				conversation.hostSessionRef !== input.authority.hostSessionRef
 			)
 				return { outcome: "denied", reason: "authorization_lost" };
+			if (
+				agent.runtimeConfiguration &&
+				agent.runtimeConfiguration.revision !==
+					input.plan.modelConfigurationRevision
+			)
+				return { outcome: "stale" };
 			// Recheck current authority with this transaction's already locked rows.
 			const readAuthorization: NativeCapabilityAdmissionV6AuthorizationReader =
 				(authorization) =>
@@ -828,8 +839,8 @@ export class PostgresConversationExecutionTransactionV1
 			if (!agent.modelConfiguration)
 				return { outcome: "unavailable", reason: "metadata_unavailable" };
 			if (
-				String(agent.runtimeConfiguration?.revision) !==
-					input.plan.configVersion ||
+				agent.runtimeConfiguration?.revision !==
+					input.plan.modelConfigurationRevision ||
 				!isNativeCapabilityModelSelectionCurrentV6(
 					input.plan,
 					agent.modelConfiguration,
@@ -989,6 +1000,33 @@ export class PostgresConversationExecutionTransactionV1
 			!state.modelConfiguration
 		)
 			return null;
+		const [workload] = await transaction<
+			{ state: unknown }[]
+		>`select state from platform.workload_reconciliations where agent_id=${authority.agentId} for share`;
+		const decoded = decodePersistedWorkloadStateV1(
+			workload?.state,
+			authority.agentId,
+		);
+		if (
+			!decoded ||
+			decoded.legacy ||
+			!decoded.state.verified ||
+			decoded.state.sourceConfigurationRevision !==
+				agent.runtimeConfiguration.revision ||
+			decoded.state.verified.configuration.revision !==
+				agent.runtimeConfiguration.revision
+		)
+			return null;
+		const projection = validateRuntimeModelProjectionV4(
+			decoded.state.verified.modelProjection,
+			agent.runtimeConfiguration,
+		);
+		const configVersion = (
+			JSON.parse(runtimeModelInjectionV4(projection).configuration) as {
+				configVersion: string;
+			}
+		).configVersion;
+
 		const keyBinding = executionBinding.relayKeyBinding;
 		return {
 			authority: {
@@ -1019,7 +1057,7 @@ export class PostgresConversationExecutionTransactionV1
 			executionSource: executionBinding.executionSource,
 			sessionGeneration: conversation.sessionGeneration,
 			hostSessionRef: conversation.hostSessionRef,
-			configVersion: String(agent.runtimeConfiguration.revision),
+			configVersion,
 			metadataExecutionId: metadataExecution.execution_id,
 		} satisfies NativeCapabilityAdmissionV6AuthorizationSnapshot;
 	}
