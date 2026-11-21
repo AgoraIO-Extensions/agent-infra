@@ -13,6 +13,8 @@ import {
 	RuntimeOperationResultV1Schema,
 	type RuntimeOperationResultV2,
 	RuntimeOperationResultV2Schema,
+	type RuntimeOriginalAdmissionReasonV1,
+	type RuntimeOriginalAdmissionScopeV1,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimePrincipalV1,
@@ -30,6 +32,7 @@ import { RuntimeHostError } from "./errors.js";
 import {
 	applyRuntimeAuthority,
 	assertSessionAuthority,
+	isExecutionDeliveryFenceRegressed,
 	type RuntimeExecutionAuthority,
 	type RuntimeOriginalExecutionRef,
 	type RuntimeSessionAuthority,
@@ -497,6 +500,80 @@ function assertExecutionBinding(
 			403,
 		);
 	}
+}
+
+export interface RuntimeOriginalAdmissionHostResultV1 {
+	readonly decision: "admissible" | "denied" | "unproven";
+	readonly reason?: RuntimeOriginalAdmissionReasonV1;
+	readonly hostBarrier: "none" | "active" | "confirmed" | "unavailable";
+	readonly hostExecutionFence: number | null;
+}
+
+/**
+ * The original-call admission predicate (#4358 I3). External model and tool
+ * actions throw on any denial; the read-only check reports the first failing
+ * condition, in the same order, as a fixed reason.
+ */
+function originalExecutionAdmission(
+	state: RuntimeStoreState,
+	action: {
+		nativeSessionRef?: string;
+		executionId: string;
+		runtimeOperationId: string;
+	},
+	now: number,
+):
+	| { admissible: true; session: StoredSession }
+	| {
+			admissible: false;
+			reason: RuntimeOriginalAdmissionReasonV1;
+			candidate?: StoredSession;
+	  } {
+	const candidates = Object.values(state.sessions).filter(
+		(entry) =>
+			(entry.operations[action.runtimeOperationId]?.kind === "submit-turn" ||
+				entry.operations[action.runtimeOperationId]?.kind ===
+					"native-command") &&
+			entry.operations[action.runtimeOperationId]?.executionId ===
+				action.executionId &&
+			(action.nativeSessionRef === undefined ||
+				entry.nativeSessionRef === action.nativeSessionRef),
+	);
+	if (candidates.length !== 1)
+		return {
+			admissible: false,
+			reason:
+				candidates.length === 0
+					? "original_binding_unavailable"
+					: "scope_mismatch",
+		};
+	const session = candidates[0];
+	if (!session?.authority)
+		return { admissible: false, reason: "original_binding_unavailable" };
+	const denied = (reason: RuntimeOriginalAdmissionReasonV1) => ({
+		admissible: false as const,
+		reason,
+		candidate: session,
+	});
+	if (session.generationBarrier) return denied("stale_generation");
+	if (
+		action.nativeSessionRef !== undefined &&
+		session.nativeSessionRef !== action.nativeSessionRef
+	)
+		return denied("scope_mismatch");
+	const authority = session.executionAuthorities?.[action.executionId];
+	if (!authority?.authorizationRecordId)
+		return denied("original_binding_unavailable");
+	if (authority.stopped || authority.control !== undefined)
+		return denied("revoked");
+	if (authority.expiresAt <= now || authority.issuedAt > now)
+		return denied("expired");
+	if (
+		authority.executionDeliveryFence !==
+		session.highestFences[`execution:${action.executionId}`]
+	)
+		return denied("stale_fence");
+	return { admissible: true, session };
 }
 
 function originalBindingUnknown(): never {
@@ -2013,38 +2090,71 @@ export class FileRuntimeStore {
 	) {
 		assertStoreState(state);
 		// A queued durable write may outlive the Grant being checked.
-		const now = readNow();
-		const candidates = Object.values(state.sessions).filter(
-			(entry) =>
-				(entry.operations[action.runtimeOperationId]?.kind === "submit-turn" ||
-					entry.operations[action.runtimeOperationId]?.kind ===
-						"native-command") &&
-				entry.operations[action.runtimeOperationId]?.executionId ===
-					action.executionId &&
-				(action.nativeSessionRef === undefined ||
-					entry.nativeSessionRef === action.nativeSessionRef),
+		const result = originalExecutionAdmission(state, action, readNow());
+		if (!result.admissible) runtimeAuthorizationDenied();
+		return result.session;
+	}
+
+	/**
+	 * #4358 I3 (Spec §9.3.2): read-only check of one original accepted
+	 * reference against committed state. It runs the same admission predicate
+	 * as the business path, writes nothing and never reaches the Driver.
+	 */
+	async checkOriginalAdmissionV1(
+		scope: RuntimeOriginalAdmissionScopeV1,
+		platformSessionGeneration: number,
+		readNow: () => number,
+	): Promise<RuntimeOriginalAdmissionHostResultV1> {
+		const state = await this.file.readCommitted();
+		assertStoreState(state);
+		const result = originalExecutionAdmission(
+			state,
+			{
+				executionId: scope.executionId,
+				runtimeOperationId: scope.originalOperationId,
+			},
+			readNow(),
 		);
-		if (candidates.length !== 1) runtimeAuthorizationDenied();
-		const session = candidates[0];
+		const session = result.admissible ? result.session : result.candidate;
+		const facts: Pick<
+			RuntimeOriginalAdmissionHostResultV1,
+			"hostBarrier" | "hostExecutionFence"
+		> = {
+			hostBarrier: !session
+				? "unavailable"
+				: !session.generationBarrier
+					? "none"
+					: session.generationBarrier.state === "confirmed"
+						? "confirmed"
+						: "active",
+			hostExecutionFence:
+				session?.highestFences[`execution:${scope.executionId}`] ?? null,
+		};
+		if (!result.admissible)
+			return { decision: "denied", reason: result.reason, ...facts };
+		const authority = result.session.executionAuthorities?.[scope.executionId];
 		if (
-			!session?.authority ||
-			session.generationBarrier ||
-			(action.nativeSessionRef !== undefined &&
-				session.nativeSessionRef !== action.nativeSessionRef)
+			!authority ||
+			result.session.agentId !== scope.agentId ||
+			result.session.conversationId !== scope.conversationId ||
+			result.session.sessionGeneration !== scope.sessionGeneration ||
+			result.session.authority?.principal.kind !== scope.principal.kind ||
+			result.session.authority.principal.id !== scope.principal.id ||
+			authority.authorizationRecordId !== scope.authorizationRecordId
 		)
-			runtimeAuthorizationDenied();
-		const authority = session.executionAuthorities?.[action.executionId];
+			return { decision: "denied", reason: "scope_mismatch", ...facts };
+		// The business path rejects this as `authority-fence-regressed`.
 		if (
-			!authority?.authorizationRecordId ||
-			authority.stopped ||
-			authority.control !== undefined ||
-			authority.expiresAt <= now ||
-			authority.issuedAt > now ||
-			authority.executionDeliveryFence !==
-				session.highestFences[`execution:${action.executionId}`]
+			isExecutionDeliveryFenceRegressed(scope.executionDeliveryFence, authority)
 		)
-			runtimeAuthorizationDenied();
-		return session;
+			return { decision: "denied", reason: "stale_fence", ...facts };
+		// Platform only raises a generation after this Host confirmed its barrier.
+		if (
+			scope.executionDeliveryFence > authority.executionDeliveryFence ||
+			platformSessionGeneration !== scope.sessionGeneration
+		)
+			return { decision: "unproven", reason: "unknown", ...facts };
+		return { decision: "admissible", ...facts };
 	}
 
 	activateGenerationBarrier(
