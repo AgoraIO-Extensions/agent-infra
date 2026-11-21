@@ -3258,19 +3258,25 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				state: SessionSandboxDeletionProgressV1["state"],
 				result: SessionSandboxDeletionProgressV1["deleteCallResult"],
 				absence?: SessionSandboxDeletionProgressV1["absence"],
+				freshAttempt = false,
 			) => {
 				const previousProgress = progressByKind.get(resource.kind);
 				const progress: SessionSandboxDeletionProgressV1 = {
 					schemaVersion: 1,
 					state,
-					deleteAttemptId: previousProgress?.deleteAttemptId ?? randomUUID(),
+					deleteAttemptId: freshAttempt
+						? randomUUID()
+						: (previousProgress?.deleteAttemptId ?? randomUUID()),
 					deleteAttempted: result !== "not-attempted",
 					deleteCallResult: result,
 					sourceGeneration: context.sourceGeneration ?? allocation.generation,
 					resourceFence:
 						context.sourceResourceFence ?? allocation.resourceFence,
-					managementFence:
-						previousProgress?.managementFence ?? context.managementFence ?? 0,
+					managementFence: freshAttempt
+						? (context.managementFence ?? 0)
+						: (previousProgress?.managementFence ??
+							context.managementFence ??
+							0),
 					resource,
 					preconditions: {
 						uid: resource.uid,
@@ -3296,7 +3302,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				.reverse();
 			for (const expected of resources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
-				const existing = progressByKind.get(kind);
+				let existing = progressByKind.get(kind);
 				const current = await options.client.read(
 					kind,
 					expected.metadata?.name ?? "",
@@ -3359,6 +3365,74 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				)
 					throw new WorkloadKubernetesError("conflict");
 				const currentResourceVersion = current.metadata?.resourceVersion;
+				// Refresh only a known failed conditional delete, after checking the
+				// same original instance and complete control-purpose projection.
+				if (
+					existing?.deleteCallResult === "failed" &&
+					existing.deleteAttempted &&
+					existing.preconditions.resourceVersion !== currentResourceVersion
+				) {
+					const actual = withoutOAuthProvisioning(current, allocation);
+					const wanted = withoutOAuthProvisioning(expected, allocation);
+					const actualPod =
+						kind === "Pod"
+							? runtimeConnectionConsumerControlPodV1(actual as V1Pod).spec
+							: undefined;
+					const wantedPod =
+						kind === "Pod"
+							? runtimeConnectionConsumerControlPodV1(wanted as V1Pod).spec
+							: undefined;
+					const specMatches =
+						kind === "Pod"
+							? !!actualPod &&
+								!!wantedPod &&
+								sessionExecutorPodSpecMatches(
+									{
+										...actualPod,
+										shareProcessNamespace:
+											actualPod.shareProcessNamespace ?? false,
+									},
+									{
+										...wantedPod,
+										shareProcessNamespace:
+											wantedPod.shareProcessNamespace ?? false,
+									},
+								)
+							: resourceSpecMatches(actual, wanted);
+					if (
+						!currentResourceVersion ||
+						current.metadata?.deletionTimestamp ||
+						current.metadata?.namespace !== allocation.namespace ||
+						existing.sourceGeneration !==
+							(context.sourceGeneration ?? allocation.generation) ||
+						existing.resourceFence !==
+							(context.sourceResourceFence ?? allocation.resourceFence) ||
+						existing.resource.uid !== current.metadata?.uid ||
+						existing.resource.name !== prior.name ||
+						existing.resource.namespace !== prior.namespace ||
+						existing.resource.controllerUid !== prior.controllerUid ||
+						typeof context.managementFence !== "number" ||
+						!Number.isSafeInteger(context.managementFence) ||
+						context.managementFence < existing.managementFence ||
+						stableJson(current.metadata?.ownerReferences ?? []) !==
+							stableJson(expected.metadata?.ownerReferences ?? []) ||
+						!specMatches
+					)
+						throw new WorkloadKubernetesError("conflict");
+					await record(
+						{ ...existing.resource, resourceVersion: currentResourceVersion },
+						"delete-requested",
+						"not-attempted",
+						undefined,
+						true,
+					);
+					existing = progressByKind.get(kind);
+				}
+				if (
+					existing?.deleteAttempted &&
+					["unknown", "acknowledged"].includes(existing.deleteCallResult)
+				)
+					throw new WorkloadKubernetesError("unavailable");
 				if (
 					existing &&
 					(existing.resource.uid !== current.metadata?.uid ||
@@ -3500,6 +3574,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 								current.metadata.resourceVersion))
 				)
 					throw new WorkloadKubernetesError("conflict");
+				if (
+					existing?.deleteAttempted &&
+					["unknown", "acknowledged"].includes(existing.deleteCallResult)
+				)
+					throw new WorkloadKubernetesError("unavailable");
 				const identity = existing
 					? existing.resource
 					: {

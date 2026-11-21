@@ -809,3 +809,69 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 		).toEqual({ changed: true, delayMs: 1_000 });
 	});
 });
+
+it("advances only an explicit failure to a new RV intent of the same source instance", () => {
+	const resource = {
+		kind: "Pod" as const,
+		namespace: "sandbox-tests",
+		name: sandbox.resourceName,
+		uid: "pod-original",
+		resourceVersion: "rv-1",
+	};
+	const failed: SessionSandboxDeletionProgressV1 = {
+		schemaVersion: 1,
+		state: "unknown",
+		deleteAttemptId: "failed-original",
+		deleteAttempted: true,
+		deleteCallResult: "failed",
+		sourceGeneration: 1,
+		resourceFence: 2,
+		managementFence: 3,
+		resource,
+		preconditions: {
+			uid: resource.uid,
+			resourceVersion: resource.resourceVersion,
+		},
+	};
+	const next: SessionSandboxDeletionProgressV1 = {
+		...failed,
+		state: "delete-requested",
+		deleteAttemptId: "new-intent",
+		deleteAttempted: false,
+		deleteCallResult: "not-attempted",
+		managementFence: 4,
+		resource: { ...resource, resourceVersion: "rv-2" },
+		preconditions: { uid: resource.uid, resourceVersion: "rv-2" },
+	};
+	expect(canAdvanceSessionSandboxDeletionProgressV1(failed, next)).toBe(true);
+	for (const previous of [
+		{ ...failed, deleteCallResult: "unknown" as const },
+		{ ...failed, deleteCallResult: "acknowledged" as const },
+	]) {
+		expect(canAdvanceSessionSandboxDeletionProgressV1(previous, next)).toBe(
+			false,
+		);
+		expect(
+			canAdvanceSessionSandboxDeletionProgressV1(previous, {
+				...previous,
+				deleteCallResult: "failed",
+			}),
+		).toBe(false);
+	}
+	for (const changed of [
+		{ ...next, sourceGeneration: 2 },
+		{ ...next, resourceFence: 3 },
+		{ ...next, managementFence: 2 },
+		{ ...next, deleteAttemptId: failed.deleteAttemptId },
+		{ ...next, resource: { ...next.resource, controllerUid: "foreign" } },
+		{
+			...next,
+			resource: { ...next.resource, uid: "foreign" },
+			preconditions: { ...next.preconditions, uid: "foreign" },
+		},
+		{ ...next, resource, preconditions: failed.preconditions },
+	])
+		expect(canAdvanceSessionSandboxDeletionProgressV1(failed, changed)).toBe(
+			false,
+		);
+});

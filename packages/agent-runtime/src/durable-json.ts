@@ -19,6 +19,7 @@ export class DurableJsonFile<T> {
 	private closed = false;
 	private closePromise: Promise<void> | undefined;
 	private persistenceFailed = false;
+	private pendingWrites = 0;
 	/** The frozen copy of the committed state, until the next commit replaces it. */
 	private frozen: T | undefined;
 	/** The committed state as last written, kept once an unchanged check needs it. */
@@ -41,6 +42,11 @@ export class DurableJsonFile<T> {
 		const file = new DurableJsonFile(path, state);
 		if (!(await file.exists())) await file.persist(JSON.stringify(state));
 		return file;
+	}
+
+	/** Read-only evidence must not certify an empty state while a mutation is pending. */
+	isQuiescent() {
+		return !this.closed && !this.persistenceFailed && this.pendingWrites === 0;
 	}
 
 	read() {
@@ -82,6 +88,7 @@ export class DurableJsonFile<T> {
 	): Promise<R> {
 		if (this.closed)
 			return Promise.reject(new Error("Durable state is closed"));
+		this.pendingWrites++;
 		const run = this.queue.then(async () => {
 			if (this.persistenceFailed)
 				throw new Error("Durable state requires recovery");
@@ -108,6 +115,14 @@ export class DurableJsonFile<T> {
 			this.frozen = undefined;
 			return result;
 		});
+		void run.then(
+			() => {
+				this.pendingWrites--;
+			},
+			() => {
+				this.pendingWrites--;
+			},
+		);
 		this.queue = run.then(
 			() => undefined,
 			() => undefined,

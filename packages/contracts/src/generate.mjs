@@ -146,6 +146,8 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
+	SessionInstanceEvidenceV1Schema,
+	SessionInstanceReadRequestV1Schema,
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 	WorkloadReadinessV1SchemaDefinitions,
@@ -741,6 +743,14 @@ function buildArtifacts() {
 		info: { title: "Agent Infra RuntimeHost Contract", version: "4.0.0" },
 		security: [{ RuntimeServiceBearer: [] }],
 		paths: {
+			"/internal/runtime/v1/session-instance/read": {
+				post: postOperation(
+					"readSessionInstanceV1",
+					SessionInstanceReadRequestV1Schema,
+					SessionInstanceEvidenceV1Schema,
+					"application/json",
+				),
+			},
 			"/internal/runtime/v2/executor-startup/read": {
 				post: postOperation(
 					"readExecutorStartupAdoptionV2",

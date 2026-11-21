@@ -1127,3 +1127,164 @@ it("cancels a stopped V6 operation before transport without a second execution (
 		await dispatch.close();
 	}
 });
+
+it.each(["v1", "v2"])(
+	"settles stopped Agent never-sent native %s without transport (#4316 AC-2)",
+	async (version) => {
+		await seedDispatchWorkload();
+		const admitted = await admitDispatchFixture();
+		if (admitted.outcome !== "accepted") throw new Error("fixture admission");
+		if (version === "v1") {
+			const input = request();
+			const payload = {
+				schemaVersion: 1,
+				conversationId: input.conversationId,
+				executionId: input.executionId,
+				agentId: input.agentId,
+				actorId: authority.actorId,
+				channelId: input.channelId,
+				turnId: input.turnId,
+				sessionGeneration: input.sessionGeneration,
+				capabilityId: input.capabilityId,
+				capabilityKind: "command",
+				directoryRevision: input.directoryRevision,
+				capabilitySourceVersion: input.capabilitySourceVersion,
+				parameters: input.parameters,
+				parametersDigest: input.parametersDigest,
+			};
+			await client`update platform.outbox_items set operation='conversation.native-capability.invoke.v1',payload=${client.json(payload)} where id=${admitted.plan.outbox.id}`;
+			await client`update platform.conversation_executions set model_configuration_revision=null,model_option_id=null,reasoning_level=null where execution_id=${admitted.plan.executionId}`;
+		}
+
+		await client`update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id=${authority.agentId}`;
+		await client`update platform.session_sandbox_allocations set status='stopped',desired_state='stopped' where conversation_id=${authority.conversationId}`;
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory,
+		});
+		try {
+			expect(await dispatch.findDispatchable({ limit: 20 })).toContainEqual(
+				expect.objectContaining({ itemId: admitted.plan.outbox.id }),
+			);
+			expect(
+				await dispatch.claim({
+					schemaVersion: 1,
+					itemId: admitted.plan.outbox.id,
+					workerId: "stopped-native-worker",
+					leaseDurationMs: 30000,
+				}),
+			).toMatchObject({ outcome: "succeeded" });
+			const [row] =
+				await client`select e.status,e.delivery_fence::int as fence,e.runtime_submit_protocol,e.original_operation_digest,e.last_runtime_cursor,o.status as outbox_status,o.attempt_count,o.lease_owner,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id and v.source='platform' and v.event_type='execution.status' and v.event_payload->>'status'='cancelled') as cancellations from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} where e.execution_id=${admitted.plan.executionId}`;
+			expect(row).toMatchObject({
+				status: "cancelled",
+				fence: 0,
+				runtime_submit_protocol: null,
+				original_operation_digest: null,
+				last_runtime_cursor: null,
+				outbox_status: "succeeded",
+				attempt_count: 0,
+				lease_owner: null,
+				cancellations: 1,
+			});
+			if (version === "v2")
+				expect(await useCase().admit(request())).toMatchObject({
+					outcome: "replayed",
+					plan: admitted.plan,
+				});
+		} finally {
+			await dispatch.close();
+		}
+	},
+);
+
+it.each([
+	"agent-running",
+	"agent-starting",
+	"sandbox-ready",
+	"processing",
+	"unknown",
+	"prepared-submitted",
+	"attempted",
+	"wrong-actor",
+	"wrong-conversation",
+	"wrong-generation",
+	"accepted-host",
+	"runtime-cursor",
+])(
+	"does not cancel %s native work when discovering stopped tasks (#4316 AC-2)",
+	async (change) => {
+		await seedDispatchWorkload();
+		const admitted = await admitDispatchFixture();
+		if (admitted.outcome !== "accepted") throw new Error("fixture admission");
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory,
+		});
+		try {
+			if (
+				[
+					"processing",
+					"unknown",
+					"prepared-submitted",
+					"accepted-host",
+					"attempted",
+				].includes(change)
+			) {
+				const owned = await dispatch.claim({
+					schemaVersion: 1,
+					itemId: admitted.plan.outbox.id,
+					workerId: "before-stop",
+					leaseDurationMs: 30000,
+				});
+				if (owned.outcome !== "claimed") throw new Error("fixture claim");
+				if (change !== "attempted")
+					expect(
+						await dispatch.prepareRuntimeDispatch({
+							claim: owned.claim,
+							leaseDurationMs: 30000,
+						}),
+					).toBe(true);
+				if (change !== "attempted")
+					await client`update platform.conversation_executions set status=${["prepared-submitted", "accepted-host"].includes(change) ? "submitted" : change} where execution_id=${admitted.plan.executionId}`;
+				await client`update platform.outbox_items set status='retry_scheduled',lease_owner=null,lease_expires_at=null,available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
+			}
+			if (change !== "agent-running")
+				await client`update platform.agent_applications set status=${change === "agent-starting" ? "available" : "stopped"},desired_state=${change === "agent-starting" ? "running" : "stopped"},service_availability=${change === "agent-starting" ? "starting" : null} where agent_id=${authority.agentId}`;
+			if (change !== "sandbox-ready")
+				await client`update platform.session_sandbox_allocations set status='stopped',desired_state='stopped' where conversation_id=${authority.conversationId}`;
+			if (change === "wrong-actor")
+				await client`update platform.outbox_items set payload=jsonb_set(payload,'{actorId}','"other-user"') where id=${admitted.plan.outbox.id}`;
+			if (change === "wrong-conversation")
+				await client`update platform.outbox_items set payload=jsonb_set(payload,'{conversationId}','"other-conversation"') where id=${admitted.plan.outbox.id}`;
+			if (change === "wrong-generation")
+				await client`update platform.conversation_executions set session_generation=2 where execution_id=${admitted.plan.executionId}`;
+			if (change === "accepted-host")
+				await client`update platform.conversation_executions set accepted_original_host_session_ref=${authority.hostSessionRef} where execution_id=${admitted.plan.executionId}`;
+			if (change === "runtime-cursor")
+				await client`update platform.conversation_executions set last_runtime_cursor='already-sent' where execution_id=${admitted.plan.executionId}`;
+			const [before] =
+				await client`select status,delivery_fence from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
+			const page = await dispatch.findDispatchable({ limit: 20 });
+			if (!["processing", "unknown", "sandbox-ready"].includes(change))
+				expect(page).not.toContainEqual(
+					expect.objectContaining({ itemId: admitted.plan.outbox.id }),
+				);
+			const decision = await dispatch.claim({
+				schemaVersion: 1,
+				itemId: admitted.plan.outbox.id,
+				workerId: "after-stop",
+				leaseDurationMs: 30000,
+			});
+			expect(decision.outcome).not.toBe("succeeded");
+			const [after] =
+				await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
+			expect(after?.status).toBe(before?.status);
+			const [events] =
+				await client`select count(*)::int as count from platform.conversation_events where execution_id=${admitted.plan.executionId} and event_type='execution.status' and event_payload->>'status'='cancelled'`;
+			expect(events?.count).toBe(0);
+		} finally {
+			await dispatch.close();
+		}
+	},
+);

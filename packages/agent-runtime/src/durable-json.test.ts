@@ -47,6 +47,7 @@ it("refuses stale writes after rename succeeds and directory fsync fails; fresh 
 		fact: "committed-on-disk",
 	});
 	expect(() => file.read()).toThrow("requires recovery");
+	expect(file.isQuiescent()).toBe(false);
 	await expect(
 		file.update((draft) => {
 			draft.fact = "stale overwrite";
@@ -230,4 +231,24 @@ it("keeps an unchanged opt-in update in write order without rewriting the file",
 	const unchanged = await inode();
 	await file.update(() => undefined);
 	expect(await inode()).not.toBe(unchanged);
+});
+
+it("does not certify quiescence during a pending mutation or after close", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-quiescence-"));
+	directories.push(directory);
+	const file = await DurableJsonFile.open(join(directory, "state.json"), {
+		count: 0,
+	});
+	expect(file.isQuiescent()).toBe(true);
+	const release = Promise.withResolvers<void>();
+	const writing = file.update(async (draft) => {
+		await release.promise;
+		draft.count++;
+	});
+	expect(file.isQuiescent()).toBe(false);
+	release.resolve();
+	await writing;
+	expect(file.isQuiescent()).toBe(true);
+	await file.close();
+	expect(file.isQuiescent()).toBe(false);
 });

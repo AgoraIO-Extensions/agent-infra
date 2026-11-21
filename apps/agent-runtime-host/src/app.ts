@@ -47,6 +47,7 @@ import {
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementTransportV4Schema,
+	SessionInstanceEvidenceV1Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
 	WorkloadReadinessRequestV1Schema,
@@ -54,15 +55,21 @@ import {
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-
 import {
 	assertRuntimeConnectionConsumerHeader,
 	type RuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
+import { readSessionInstanceBodyV1 } from "./session-instance.js";
 
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	sessionInstanceRead?: (
+		request: import("@agent-infra/contracts/runtime").SessionInstanceReadRequestV1,
+		signal?: AbortSignal,
+	) => Promise<
+		import("@agent-infra/contracts/runtime").SessionInstanceEvidenceV1
+	>;
 	executorInstanceRead?: (
 		request: ExecutorInstanceAdoptionReadV2,
 	) => Promise<ExecutorInstanceAdoptionV2>;
@@ -201,6 +208,28 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		}
 		await next();
 	});
+
+	if (options.sessionInstanceRead) {
+		const read = options.sessionInstanceRead;
+		app.post("/internal/runtime/v1/session-instance/read", async (context) => {
+			const request = await readSessionInstanceBodyV1(context.req.raw);
+			try {
+				return context.json(
+					SessionInstanceEvidenceV1Schema.parse(
+						await read(request, context.req.raw.signal),
+					),
+				);
+			} catch (error) {
+				if (error instanceof RuntimeHostError) throw error;
+				throw new RuntimeHostError(
+					"RUNTIME_SESSION_INSTANCE_UNAVAILABLE",
+					"Session instance evidence is unavailable",
+					503,
+					true,
+				);
+			}
+		});
+	}
 
 	app.post("/internal/runtime/v2/executor-startup/read", async (context) => {
 		if (!options.executorInstanceRead)

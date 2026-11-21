@@ -1141,6 +1141,10 @@ export async function recordSandboxDeletionProgress(
 							progress.preconditions.resourceVersion &&
 						resource.controllerUid === progress.resource.controllerUid,
 				))) ||
+		(previous &&
+			previous.deleteAttemptId !== progress.deleteAttemptId &&
+			progress.managementFence !==
+				context.lifecycle.authority.managementFence) ||
 		!canAdvanceSessionSandboxDeletionProgressV1(previous, progress)
 	)
 		return { status: "stale" };
@@ -1170,6 +1174,21 @@ export async function recordSandboxDeletionProgress(
 			and lease_expires_at > clock_timestamp()
 		returning id`;
 	if (updated.length !== 1) return { status: "stale" };
+	if (previous && previous.deleteAttemptId !== progress.deleteAttemptId) {
+		// Keep the superseded failure in the same transaction as the new active intent.
+		await transaction`insert into platform.conversation_audit_events
+            (id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+            values (${randomUUID()}, ${claim.sandbox.sessionId}, null, ${claim.sandbox.agentId}, ${claim.sandbox.principal.id},
+                'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),
+                ${transaction.json({
+									checkpoint: "sandbox-deletion-attempt-replaced",
+									sandboxId: claim.sandbox.sandboxId,
+									sourceGeneration: progress.sourceGeneration,
+									resourceFence: progress.resourceFence,
+									previous,
+									next: progress,
+								} as unknown as Parameters<typeof transaction.json>[0])})`;
+	}
 	return {
 		status: "committed",
 		claim: { ...claim, lifecycle },

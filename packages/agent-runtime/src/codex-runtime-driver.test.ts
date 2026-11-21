@@ -2292,6 +2292,31 @@ describe("TestCodexBridge processing receipt", () => {
 });
 
 describe("Codex Runtime Driver", () => {
+	it("reads empty preparation without native business launch and never certifies persisted business work", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const bridge = new TestCodexBridge();
+		class EmptyDriver extends CodexRuntimeDriver {
+			static openEmpty() {
+				return EmptyDriver.openWithBridge(
+					{ ...driverOptions(path), authorizeExternalAction: async () => {} },
+					async () => bridge,
+				);
+			}
+		}
+		const driver = await EmptyDriver.openEmpty();
+		drivers.push(driver);
+		const original = await readFile(path, "utf8");
+		expect(driver.isBusinessStateEmpty()).toBe(true);
+		expect(bridge.requests).toEqual([]);
+		expect(await readFile(path, "utf8")).toBe(original);
+		const executing = driver.execute(submitCommandV2());
+		await vi.waitFor(() => expect(driver.isBusinessStateEmpty()).toBe(false));
+		await executing;
+		expect(driver.isBusinessStateEmpty()).toBe(false);
+		await driver.close();
+		expect(driver.isBusinessStateEmpty()).toBe(false);
+	});
+
 	it.each(["capture", "throw", "reject"] as const)(
 		"correlates safe transport diagnostics without changing persisted unknown facts when telemetry %s",
 		async (sink) => {
@@ -2724,11 +2749,13 @@ describe("Codex Runtime Driver", () => {
 			},
 		);
 		drivers.push(driver);
+		expect(driver.isBusinessStateEmpty()).toBe(true);
 		const before = await readFile(path, "utf8");
 		for (let index = 0; index < 2; index++)
 			expect(
 				await driver.probeReadiness(new AbortController().signal),
 			).toMatchObject({ modelSelection: true });
+		expect(driver.isBusinessStateEmpty()).toBe(true);
 		expect(opened).toHaveLength(2);
 		expect(opened[0]?.dataDirectory).not.toBe(opened[1]?.dataDirectory);
 		for (const [index, options] of opened.entries()) {

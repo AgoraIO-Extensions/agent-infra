@@ -1,10 +1,11 @@
 import { createPublicKey } from "node:crypto";
 import { constants } from "node:fs";
-import { open, unlink, writeFile } from "node:fs/promises";
+import { lstat, open, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	type CodexSessionExecutorBindingV1,
 	codexSessionExecutorBindingDigestV1,
+	type ExecutorIdentityV1,
 	executorIdentityFileRootV1,
 	executorIdentityFileV1,
 	executorIdentityInputRootV1,
@@ -12,6 +13,22 @@ import {
 } from "@agent-infra/agent-runtime";
 import { protectExecutorIdentityProcessV1 } from "./executor-identity-process.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
+
+const consumedIdentities = new WeakSet<object>();
+export function executorIdentityConsumedV1(identity: ExecutorIdentityV1) {
+	return consumedIdentities.has(identity);
+}
+export async function executorIdentityDeliveryRemovedV1(
+	identity: ExecutorIdentityV1,
+) {
+	if (!executorIdentityConsumedV1(identity)) return false;
+	try {
+		await lstat(join(executorIdentityFileRootV1, executorIdentityFileV1));
+		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT";
+	}
+}
 
 type Role = "host" | "runner";
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -116,7 +133,9 @@ export async function consumeExecutorIdentityV1(
 		true,
 	);
 	try {
-		return verifyMaterial(document, role, binding, environment);
+		const identity = verifyMaterial(document, role, binding, environment);
+		consumedIdentities.add(identity);
+		return identity;
 	} finally {
 		document.fill(0);
 	}

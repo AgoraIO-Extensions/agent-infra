@@ -201,6 +201,7 @@ it.each(["key-version", "removed-scope", "added-scope"] as const)(
 		expect(() =>
 			f.store.readOriginalExecutionKeyScopeV4(f.request.binding),
 		).toThrow("Runtime session state is quarantined");
+		expect(f.store.isBusinessStateEmpty()).toBe(false);
 		const quarantined = JSON.parse(await readFile(f.path, "utf8"));
 		expect(quarantined.sessions).toEqual({});
 		expect(quarantined.sessionBindings).toEqual(journal.sessionBindings);
@@ -1176,3 +1177,18 @@ it.each([
 		expect(quarantined.sessions).toEqual({});
 	},
 );
+
+it("reads empty preparation without business writes and refuses pending, stored or quarantined work", async () => {
+	const f = await fixture();
+	const original = await readFile(f.path, "utf8");
+	expect(f.store.isBusinessStateEmpty()).toBe(true);
+	expect(await readFile(f.path, "utf8")).toBe(original);
+	const preparing = f.store.prepareOperation(input());
+	expect(f.store.isBusinessStateEmpty()).toBe(false);
+	await preparing;
+	expect(f.store.isBusinessStateEmpty()).toBe(false);
+	await f.reopen();
+	expect(f.store.isBusinessStateEmpty()).toBe(false);
+	await f.store.close();
+	expect(f.store.isBusinessStateEmpty()).toBe(false);
+});

@@ -10,6 +10,7 @@ if (!output || process.argv.length !== 3)
 await mkdir(output, { recursive: true });
 await build({
 	entryPoints: [
+		resolve(root, "apps/agent-runtime-host/src/session-instance.linux.ts"),
 		resolve(root, "apps/agent-runtime-host/src/executor-instance-pin.linux.ts"),
 		resolve(
 			root,
@@ -37,6 +38,7 @@ await build({
 					loader: "ts",
 					resolveDir: root,
 					contents: [
+						"errors",
 						"codex-session-executor",
 						"codex-executor-bootstrap",
 						"codex-executor-control",
