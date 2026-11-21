@@ -292,6 +292,16 @@ beforeAll(async () => {
 		format: "esm",
 		outfile: join(directory, "codex-session-executor.js"),
 	});
+	await build({
+		entryPoints: [
+			new URL("./agent-workload-placement.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "agent-workload-placement.js"),
+	});
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -1276,6 +1286,46 @@ it("explicit reserve file rejects a conflicting module policy", async () => {
 		);
 	} finally {
 		await writeFile(configurationPath, original);
+	}
+});
+
+it.each([
+	"{",
+	'{"architecture":"amd64"}',
+	'{"architecture":"amd64","legacyUnplaced":"reject","runtimeClassName":"runv"}',
+])(
+	"fails closed on an invalid chart-rendered Agent placement %s (#4351)",
+	(value) => {
+		const result = run({ AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT: value });
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"WORKER_AGENT_WORKLOAD_PLACEMENT_INVALID",
+		);
+	},
+);
+
+it("fails closed when the Worker module supplies its own Agent placement (#4351)", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	try {
+		await writeFile(
+			path,
+			original.replace(
+				"policy: {",
+				'policy: { agentWorkloadPlacement: { architecture: "amd64", legacyUnplaced: "reject" },',
+			),
+		);
+		expect(await readFile(path, "utf8")).not.toBe(original);
+		const result = run({
+			AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT:
+				'{"architecture":"amd64","legacyUnplaced":"reject"}',
+		});
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"WORKER_AGENT_WORKLOAD_PLACEMENT_INVALID",
+		);
+	} finally {
+		await writeFile(path, original);
 	}
 });
 

@@ -131,6 +131,52 @@ Codex 使用 `openai-responses-v1`；Claude、OpenCode（`acp`）与 Pi 使用
 `topology.kubernetes.io/region` 和 `topology.kubernetes.io/zone`。默认不接受额外标签。
 此配置只允许运行中 Pod 携带这些标签，不改变模板、Agent 身份、revision 或 Pod spec 校验。
 
+## Agent 级 Workload placement
+
+Agent 级 Pod 的部署权威调度位置只来自 chart：ACK chart 的 `agentWorkloadScheduling` values
+（`enabled`、`architecture`、`legacyUnplaced`）渲染为 Worker env
+`AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT`，Worker 把它装配为 `policy.agentWorkloadPlacement`。规则见
+[工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
+未开启时保持原行为：模板和 Pod 不带调度字段。
+
+```yaml
+agentWorkloadScheduling:
+  enabled: true
+  architecture: amd64                    # 或 arm64，与 release 镜像架构一致
+  legacyUnplaced: retain-until-lifecycle # 迁移完成后改为 reject
+```
+
+- 配置模块自己设置 `policy.agentWorkloadPlacement`、env 不是合法 JSON、多余键、未知架构或
+  RuntimeClass，都让 Worker 以 `WORKER_AGENT_WORKLOAD_PLACEMENT_INVALID` 或
+  `WORKER_KUBERNETES_CONFIGURATION_INVALID` 在打开数据库前退出。这样部署预检读到的渲染值就是
+  Worker 实际注入的值。
+- Worker 把 `nodeSelector: { type: virtual-kubelet, kubernetes.io/arch }` 与
+  `virtual-kubelet.io/provider=alibabacloud` 的 NoSchedule toleration 写入单服务 StatefulSet、
+  多服务 Deployment/StatefulSet 和迁移 Job 的 Pod 模板（init 与快照准备容器在同一 Pod 内），并在
+  控制器上写 `agent-infra.agora.io/agent-workload-placement: <architecture>` 记录本次采用的值。
+  与 Session ECI 准入使用同一组字段。
+- 观测按控制器上的记录判定，不按当前部署值：有记录时模板与 Pod 必须恰为该架构的 ECI 字段；
+  没有记录时只接受不带任何调度字段的旧形状，且仅在 `retain-until-lifecycle` 下不报漂移。
+  运行中的 Pod 另可带 API server 默认 toleration、ECI 写入的无 `tolerationSeconds` 的
+  not-ready/unreachable toleration、`virtual-kubelet-` 开头的节点名，以及 ECI 调度后写入的状态
+  annotation（实例/请求/ENI/VPC/缓存 ID、规格与平台版本等，逐键校验格式）。EIP、IPv6 分配与其他
+  annotation、多余 selector/toleration、`affinity`、`runtimeClassName`、模板上的 `nodeName`，以及
+  没有记录或记录不合法的 ECI 字段，都按漂移处理。地域标签仍由 `allowedPodTopologyLabelValues`
+  精确放行。
+- 修改部署值（开启、改架构、关闭）本身不重建任何 Host：沿用控制器上次完整写入时 fence 的调谐
+  （Core 的漂移修复只推进 reconciliation revision、不换 fence，以及恢复和同一意图的重放）保留
+  已采用的记录；只有该 Agent 的下一次正式管理命令（`restart_agent`，或 `stop_agent` 后
+  `restart_agent`，以及发布，均为带 `expectedRevision` CAS 并签发新 fence 的命令）才由一次调谐
+  写入新值。多服务 Agent 的一次 lifecycle 同时
+  更新全部服务；新 revision 不会采用未完成的旧迁移 Job，已成功的旧 Job 没有运行中的 Pod，按历史
+  保留。保留态的 Host 仍在原节点，不视为已隔离。全部 Agent 采用后改为 `reject`，剩余旧对象会按
+  漂移重建。
+- 控制器自动重建的旧 Pod（例如驱逐）仍按旧模板落点；新 Pod 必须带 placement 依赖 Helm 的 Pod
+  CREATE 准入兜底，兜底落地前不要开启。
+- `agentWorkloadPlacement` 不进入资源配置摘要，`executionCapacityProfiles`、reserve 与 Session
+  批准不因配置它失效；StatefulSet/Deployment 的资源对象指纹包含它。`codexSessionExecutor.placement`
+  仍按原规则进入摘要，变化后相关批准失配重验。
+
 ## 私有 Registry 镜像拉取
 
 私有镜像需要同时配置 Registry Adapter 的读取认证和 kubelet 的镜像拉取认证。

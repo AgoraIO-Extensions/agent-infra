@@ -38,6 +38,12 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import {
+	type AgentWorkloadPlacementV1,
+	agentWorkloadPlacementRecordV1,
+	agentWorkloadPodPlacementV1,
+	effectiveAgentWorkloadPlacementV1,
+} from "./agent-workload-placement.js";
 import type { CodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
 	type RuntimeConnectionConsumerSnapshotsByAgentV1,
@@ -197,6 +203,11 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly allowedPodTopologyLabelValues?: Readonly<
 		Record<string, readonly string[]>
 	>;
+	/**
+	 * Deployment-authoritative placement for every Agent-level Pod (Spec §10.1,
+	 * ADR-0049). Owner, Manifest and request inputs cannot supply scheduling fields.
+	 */
+	readonly agentWorkloadPlacement?: AgentWorkloadPlacementV1;
 	/** Optional deployment-owned Platform API selector for platform-auth routes. */
 	readonly platformApiSelector?: Readonly<Record<string, string>>;
 	readonly routeNamespace: string;
@@ -372,6 +383,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		hasSafeRoutingMetadata,
 		hasSafeServiceAccount,
 		hasControllingWorkloadOwner,
+		placementRecord,
 		hasSafePodMetadata,
 		hasUnsafePodSpec,
 		hasDriftedImmutableStatefulSetSpec,
@@ -468,7 +480,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			(current.metadata.generation ?? 0) < 1 ||
 			!hasCurrentMetadata(current, value) ||
 			hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
-			hasDriftedStatefulSetSpec(value, current.spec) ||
+			hasDriftedStatefulSetSpec(
+				value,
+				current.spec,
+				placementRecord(current),
+			) ||
 			(value.expectedWorkload.state === "present" &&
 				(current.metadata.uid !== value.expectedWorkload.workloadUid ||
 					(current.metadata.generation ?? 0) <
@@ -553,7 +569,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					(object as V1NetworkPolicy).spec,
 				)) &&
 			(kind !== "StatefulSet" ||
-				!hasDriftedStatefulSetSpec(value, (current as V1StatefulSet).spec)) &&
+				!hasDriftedStatefulSetSpec(
+					value,
+					(current as V1StatefulSet).spec,
+					placementRecord(current as V1StatefulSet),
+				)) &&
 			(kind !== "Ingress" ||
 				matchesIngress(current as V1Ingress, object as V1Ingress))
 		)
@@ -694,7 +714,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.workloadRevision)
 		)
 			return "drifted";
-		if (hasDriftedStatefulSetSpec(value, current.spec)) return "drifted";
+		if (
+			hasDriftedStatefulSetSpec(value, current.spec, placementRecord(current))
+		)
+			return "drifted";
 		const name = workloadResourceNameV1(value.agentId);
 		const serviceAccount = await client.read<V1ServiceAccount>(
 			"ServiceAccount",
@@ -860,7 +883,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		};
 		if (
 			!hasSafePodMetadata(value, pod.metadata, { pod, workload: current }) ||
-			hasUnsafePodSpec(value, pod.spec, expectedPodIdentity)
+			hasUnsafePodSpec(
+				value,
+				pod.spec,
+				expectedPodIdentity,
+				placementRecord(current),
+			)
 		)
 			return "drifted";
 		const container = pod.spec?.containers.find(
@@ -879,7 +907,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			pod.spec?.automountServiceAccountToken !== false
 		)
 			return "unhealthy";
-		if (hasDriftedPodSpec(value, pod.spec, expectedPodIdentity))
+		if (
+			hasDriftedPodSpec(
+				value,
+				pod.spec,
+				expectedPodIdentity,
+				placementRecord(current),
+			)
+		)
 			return "drifted";
 		const snapshot = workspaceSnapshotPodObservationV1(
 			pod,
@@ -1005,14 +1040,22 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				(!hasCurrentMetadata(current, value) &&
 					(!management || !hasRecoveryMetadata(current, value))) ||
 				hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
-				(!canResumeScaledDownStatefulSet(value, current.spec) &&
-					hasDriftedStatefulSetSpec(value, {
-						...normalizeStatefulSetSpecRevision(
-							current.spec,
-							value.workloadRevision,
-						),
-						replicas: value.replicas,
-					} as V1StatefulSet["spec"])) ||
+				(!canResumeScaledDownStatefulSet(
+					value,
+					current.spec,
+					placementRecord(current),
+				) &&
+					hasDriftedStatefulSetSpec(
+						value,
+						{
+							...normalizeStatefulSetSpecRevision(
+								current.spec,
+								value.workloadRevision,
+							),
+							replicas: value.replicas,
+						} as V1StatefulSet["spec"],
+						placementRecord(current),
+					)) ||
 				(identity &&
 					(!identity.uid ||
 						!Number.isSafeInteger(identity.generation) ||
@@ -1610,6 +1653,27 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}
 			if (current && hasDriftedImmutableStatefulSetSpec(value, current.spec))
 				throw new WorkloadKubernetesError("conflict");
+			// Spec §10.1: only a formal management command (new fence) adopts a changed
+			// deployment placement; drift repair advances only the reconciliation revision.
+			// The fence of the last full write is read from its desired record, which the
+			// lifecycle scale-down step preserves (it rewrites only the fence annotation).
+			// Decided before any write, so an unconfirmable record fails closed in place.
+			let writtenFence: unknown;
+			try {
+				writtenFence = JSON.parse(
+					current?.metadata?.annotations?.[desiredAnnotation] ?? "null",
+				)?.fence;
+			} catch {
+				writtenFence = undefined;
+			}
+			const placement =
+				value.replicas === 0
+					? undefined
+					: effectiveAgentWorkloadPlacementV1(
+							policy.agentWorkloadPlacement,
+							current,
+							writtenFence === value.fence,
+						);
 			if (existingPvc && !matchesPersistentVolumeClaimSpec(existingPvc.spec))
 				throw new WorkloadKubernetesError("conflict");
 			const existingCache = existingResources.at(-1);
@@ -1685,10 +1749,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							pod,
 							workload: current,
 						}) ||
-							hasDriftedPodSpec(value, pod.spec, {
-								hostname: `${name}-0`,
-								subdomain: name,
-							})),
+							hasDriftedPodSpec(
+								value,
+								pod.spec,
+								{
+									hostname: `${name}-0`,
+									subdomain: name,
+								},
+								placementRecord(current),
+							)),
 				);
 			const changing =
 				current &&
@@ -1862,6 +1931,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					annotations: {
 						...metadata(value).annotations,
 						[desiredAnnotation]: JSON.stringify(value),
+						...agentWorkloadPlacementRecordV1(placement),
 						...(snapshotCacheUid
 							? { [snapshotCacheUidAnnotation]: snapshotCacheUid }
 							: {}),
@@ -1886,6 +1956,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							serviceAccountName: name,
 							automountServiceAccountToken: false,
 							...workloadImagePullSpecV1(policy.imagePullSecretName),
+							...agentWorkloadPodPlacementV1(placement),
 							securityContext: {
 								runAsNonRoot: true,
 								runAsUser: 1000,

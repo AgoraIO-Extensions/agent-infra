@@ -14,6 +14,7 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1PodSpec,
 	V1ReplicaSet,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
@@ -2572,4 +2573,438 @@ it("publishes a selected multi-service system under one path and rejects manifes
 	});
 	await expect(restricted.apply(contaminated)).rejects.toThrow();
 	expect(rejected.resources.size).toBe(0);
+});
+
+describe("multi-service deployment-authoritative placement (#4351)", () => {
+	const eciPlacement = {
+		nodeSelector: { type: "virtual-kubelet", "kubernetes.io/arch": "amd64" },
+		tolerations: [
+			{
+				key: "virtual-kubelet.io/provider",
+				operator: "Equal",
+				value: "alibabacloud",
+				effect: "NoSchedule",
+			},
+		],
+	};
+	const placedPolicy = (
+		legacyUnplaced: "retain-until-lifecycle" | "reject",
+	): MultiServiceRuntimePolicyV1 =>
+		({
+			...basePolicy,
+			storageSize: "1Gi",
+			agentWorkloadPlacement: { architecture: "amd64", legacyUnplaced },
+		}) as MultiServiceRuntimePolicyV1;
+	const podTemplates = (fake: ReturnType<typeof fakeClient>) =>
+		[...fake.resources.values()]
+			.filter((resource) =>
+				["Deployment", "StatefulSet", "Job"].includes(resource.kind ?? ""),
+			)
+			.map((resource) => ({
+				kind: resource.kind,
+				name: resource.metadata?.name,
+				spec: (resource as V1Deployment | V1StatefulSet | V1Job).spec?.template
+					.spec,
+			}));
+	const migrationDesired = () => {
+		const value = desired(
+			MultiServiceManifestDocumentV1Schema.parse({
+				...statefulManifest,
+				resources: [
+					...statefulManifest.resources,
+					...migrationManifest.resources.filter((r) => r.kind === "Job"),
+				],
+			}),
+		);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		return value;
+	};
+	async function applyReady(
+		operations: ReturnType<typeof createMultiServiceRuntimeOperations>,
+		fake: ReturnType<typeof fakeClient>,
+		value: ReturnType<typeof migrationDesired>,
+	) {
+		await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(r) => r.kind === "Job",
+		) as V1Job;
+		job.status = { succeeded: 1 };
+		const identity = await operations.apply(value);
+		markWorkloadsReady(fake);
+		return identity;
+	}
+
+	it("injects the same ECI placement into every Deployment, StatefulSet and migration Job", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("reject"),
+		});
+		const value = migrationDesired();
+		const identity = await applyReady(operations, fake, value);
+		const templates = podTemplates(fake);
+		expect(templates.map((entry) => entry.kind).sort()).toEqual([
+			"Deployment",
+			"Job",
+			"StatefulSet",
+		]);
+		for (const entry of templates) {
+			expect(entry.spec?.nodeSelector).toEqual(eciPlacement.nodeSelector);
+			expect(entry.spec?.tolerations).toEqual(eciPlacement.tolerations);
+			expect(entry.spec?.affinity).toBeUndefined();
+			expect(entry.spec?.runtimeClassName).toBeUndefined();
+		}
+		expect(await operations.observe(value, identity)).toBe("healthy");
+	});
+
+	it.each([
+		[
+			"extra selector",
+			{ nodeSelector: { ...eciPlacement.nodeSelector, pool: "owner" } },
+		],
+		[
+			"foreign toleration",
+			{ tolerations: [...eciPlacement.tolerations, { operator: "Exists" }] },
+		],
+		["affinity", { affinity: { nodeAffinity: {} } }],
+		["runtimeClassName", { runtimeClassName: "runc" }],
+		["nodeName", { nodeName: "cn-hangzhou.10.0.0.12" }],
+	])(
+		"treats a member template with %s as drift in every mode",
+		async (_name, patch) => {
+			for (const mode of ["retain-until-lifecycle", "reject"] as const) {
+				const fake = fakeClient();
+				const operations = createMultiServiceRuntimeOperations({
+					client: fake.client,
+					policy: placedPolicy(mode),
+				});
+				const value = migrationDesired();
+				const identity = await applyReady(operations, fake, value);
+				const workload = [...fake.resources.values()].find(
+					(resource) => resource.kind === "Deployment",
+				) as V1Deployment;
+				if (!workload.spec?.template.spec) throw new Error("missing template");
+				Object.assign(workload.spec.template.spec, patch);
+				expect(await operations.observe(value, identity)).toBe("drifted");
+			}
+		},
+	);
+
+	it("retains pre-placement services until one Agent lifecycle moves every service once", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const legacy = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+		});
+		const identity = await applyReady(legacy, fake, value);
+		for (const entry of podTemplates(fake)) {
+			expect(entry.spec?.nodeSelector).toBeUndefined();
+			expect(entry.spec?.tolerations).toBeUndefined();
+		}
+		const replaced: string[] = [];
+		const replace = fake.client.replace.bind(fake.client);
+		fake.client.replace = async (object) => {
+			replaced.push(`${object.kind}/${object.metadata?.name}`);
+			return replace(object);
+		};
+		const retained = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("retain-until-lifecycle"),
+		});
+		expect(await retained.observe(value, identity)).toBe("healthy");
+		expect(replaced).toEqual([]);
+		expect(
+			await createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: placedPolicy("reject"),
+			}).observe(value, identity),
+		).toBe("drifted");
+		expect(replaced).toEqual([]);
+
+		// One restart (next revision/fence) drives both member workloads once.
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-1",
+			workloadRevision: 2,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		const next = await retained.apply(restarted);
+		markWorkloadsReady(fake);
+		const members = replaced.filter(
+			(entry) =>
+				entry.startsWith("Deployment/") || entry.startsWith("StatefulSet/"),
+		);
+		const templateWrites = new Map<string, number>();
+		for (const entry of members)
+			templateWrites.set(entry, (templateWrites.get(entry) ?? 0) + 1);
+		const entryName = `${
+			statefulManifest.entryServiceName === "web" ? "StatefulSet" : "Deployment"
+		}/${workloadResourceNameV1(value.agentId)}-web`;
+		// The entry also records the member identity snapshot (metadata only).
+		for (const [name, count] of templateWrites)
+			expect(count).toBe(name === entryName ? 2 : 1);
+		expect([...templateWrites.keys()].sort()).toEqual(
+			podTemplates(fake)
+				.filter((entry) => entry.kind !== "Job")
+				.map((entry) => `${entry.kind}/${entry.name}`)
+				.sort(),
+		);
+		for (const entry of podTemplates(fake).filter((x) => x.kind !== "Job")) {
+			expect(entry.spec?.nodeSelector).toEqual(eciPlacement.nodeSelector);
+			expect(entry.spec?.tolerations).toEqual(eciPlacement.tolerations);
+		}
+		expect(await retained.observe(restarted, next)).toBe("healthy");
+	});
+
+	it("never adopts an unfinished migration Job without the exact placement", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const legacy = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+		});
+		await legacy.apply(value);
+		const job = [...fake.resources.values()].find(
+			(r) => r.kind === "Job",
+		) as V1Job;
+		expect(job.spec?.template.spec?.nodeSelector).toBeUndefined();
+		const placed = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("retain-until-lifecycle"),
+		});
+		// A formal lifecycle (new revision) cannot adopt an unfinished legacy Job.
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-1",
+			workloadRevision: 2,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		await expect(placed.apply(restarted)).rejects.toThrow(
+			"multi-service migration placement drifted",
+		);
+		expect(
+			await createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: placedPolicy("reject"),
+			}).observe(value, "pending"),
+		).toBe("drifted");
+		// A finished legacy Job has no running Pod; it is history, not drift.
+		job.status = { succeeded: 1 };
+		const identity = await placed.apply(restarted);
+		markWorkloadsReady(fake);
+		expect(await placed.observe(restarted, identity)).toBe("healthy");
+	});
+
+	it("an architecture change writes nothing until one Agent lifecycle adopts it (MUST-C)", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const amd64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("reject"),
+		});
+		const identity = await applyReady(amd64, fake, value);
+		const replaced: string[] = [];
+		const replace = fake.client.replace.bind(fake.client);
+		fake.client.replace = async (object) => {
+			replaced.push(`${object.kind}/${object.metadata?.name}`);
+			return replace(object);
+		};
+		const arm64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...placedPolicy("reject"),
+				agentWorkloadPlacement: {
+					architecture: "arm64",
+					legacyUnplaced: "reject",
+				},
+			} as MultiServiceRuntimePolicyV1,
+		});
+		expect(await arm64.observe(value, identity)).toBe("healthy");
+		// Re-applying the same intent (same revision) is not a lifecycle either.
+		await arm64.apply(value);
+		expect(
+			replaced.filter(
+				(entry) =>
+					entry.startsWith("Deployment/") || entry.startsWith("StatefulSet/"),
+			),
+		).toEqual([]);
+		for (const entry of podTemplates(fake))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("amd64");
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-arm64",
+			workloadRevision: 2,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		await arm64.apply(restarted);
+		markWorkloadsReady(fake);
+		for (const entry of podTemplates(fake).filter((x) => x.kind !== "Job"))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("arm64");
+		expect(await arm64.observe(restarted, await arm64.apply(restarted))).toBe(
+			"healthy",
+		);
+	});
+
+	it("a drift repair (next revision, same fence) keeps the adopted architecture (round 2 MUST-3)", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const amd64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("reject"),
+		});
+		await applyReady(amd64, fake, value);
+		const arm64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...placedPolicy("reject"),
+				agentWorkloadPlacement: {
+					architecture: "arm64",
+					legacyUnplaced: "reject",
+				},
+			} as MultiServiceRuntimePolicyV1,
+		});
+		// Core's ordinary repair advances only the reconciliation revision.
+		const repair = validateAgentWorkloadDesiredV1({
+			...value,
+			workloadRevision: 2,
+		});
+		if (!isMultiService(repair)) throw new Error("invalid fixture");
+		await arm64.apply(repair);
+		for (const entry of podTemplates(fake))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("amd64");
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-arm64",
+			workloadRevision: 3,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		await arm64.apply(restarted);
+		for (const entry of podTemplates(fake).filter((x) => x.kind !== "Job"))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("arm64");
+	});
+
+	it.each([
+		[
+			"an extra nodeSelector",
+			(spec: V1PodSpec) => {
+				spec.nodeSelector = { ...spec.nodeSelector, pool: "owner" };
+			},
+		],
+		[
+			"a missing provider toleration",
+			(spec: V1PodSpec) => {
+				spec.tolerations = spec.tolerations?.filter(
+					(entry) => entry.key !== "virtual-kubelet.io/provider",
+				);
+			},
+		],
+	])(
+		"repairs %s on members under the original fence by restoring the recorded architecture (round 3)",
+		async (_name, mutate) => {
+			const fake = fakeClient();
+			const value = migrationDesired();
+			const amd64 = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: placedPolicy("reject"),
+			});
+			const identity = await applyReady(amd64, fake, value);
+			const members = () =>
+				[...fake.resources.values()].filter((resource) =>
+					["Deployment", "StatefulSet"].includes(resource.kind ?? ""),
+				) as (V1Deployment | V1StatefulSet)[];
+			for (const member of members()) {
+				if (!member.spec?.template.spec) throw new Error("missing template");
+				mutate(member.spec.template.spec);
+			}
+			const arm64 = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: {
+					...placedPolicy("reject"),
+					agentWorkloadPlacement: {
+						architecture: "arm64",
+						legacyUnplaced: "reject",
+					},
+				} as MultiServiceRuntimePolicyV1,
+			});
+			expect(await arm64.observe(value, identity)).toBe("drifted");
+			const repair = validateAgentWorkloadDesiredV1({
+				...value,
+				workloadRevision: 2,
+			});
+			if (!isMultiService(repair)) throw new Error("invalid fixture");
+			await arm64.apply(repair);
+			expect(members()).toHaveLength(2);
+			for (const member of members()) {
+				expect(member.spec?.template.spec?.nodeSelector).toEqual(
+					eciPlacement.nodeSelector,
+				);
+				expect(member.spec?.template.spec?.tolerations).toEqual(
+					eciPlacement.tolerations,
+				);
+				expect(
+					member.metadata?.annotations?.[
+						"agent-infra.agora.io/agent-workload-placement"
+					],
+				).toBe("amd64");
+			}
+			const restarted = validateAgentWorkloadDesiredV1({
+				...value,
+				requestId: "restart-arm64",
+				workloadRevision: 3,
+				fence: 2,
+			});
+			if (!isMultiService(restarted)) throw new Error("invalid fixture");
+			await arm64.apply(restarted);
+			for (const member of members())
+				expect(
+					member.spec?.template.spec?.nodeSelector?.["kubernetes.io/arch"],
+				).toBe("arm64");
+		},
+	);
+
+	it("treats member ECI fields without the Worker record as drift", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("retain-until-lifecycle"),
+		});
+		const value = migrationDesired();
+		const identity = await applyReady(operations, fake, value);
+		const workload = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Deployment",
+		) as V1Deployment;
+		delete workload.metadata?.annotations?.[
+			"agent-infra.agora.io/agent-workload-placement"
+		];
+		expect(await operations.observe(value, identity)).toBe("drifted");
+	});
+
+	it("rejects an invalid deployment placement before any client call", () => {
+		const fake = fakeClient();
+		for (const agentWorkloadPlacement of [
+			{ architecture: "amd64" },
+			{
+				architecture: "amd64",
+				legacyUnplaced: "reject",
+				runtimeClassName: "runv",
+			},
+			{ architecture: "riscv64", legacyUnplaced: "reject" },
+		])
+			expect(() =>
+				createMultiServiceRuntimeOperations({
+					client: fake.client,
+					policy: {
+						...basePolicy,
+						agentWorkloadPlacement,
+					} as unknown as MultiServiceRuntimePolicyV1,
+				}),
+			).toThrow("AGENT_WORKLOAD_PLACEMENT_INVALID");
+		expect(fake.resources.size).toBe(0);
+	});
 });

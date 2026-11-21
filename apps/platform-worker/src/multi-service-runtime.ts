@@ -30,6 +30,15 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
+	type AgentWorkloadPlacementV1,
+	acceptsAdoptedAgentWorkloadPlacementV1,
+	agentWorkloadPlacementAnnotationV1,
+	agentWorkloadPlacementRecordV1,
+	agentWorkloadPlacementShapeV1,
+	agentWorkloadPodPlacementV1,
+	effectiveAgentWorkloadPlacementV1,
+} from "./agent-workload-placement.js";
+import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
 } from "./kubernetes-client.js";
@@ -106,6 +115,8 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly nativeMetadataWorkerEgress?: WorkloadEgressPolicyV1["nativeMetadataWorkerEgress"];
 	readonly fileExchangeEgress?: WorkloadEgressPolicyV1["fileExchangeEgress"];
 	readonly dnsEgress?: WorkloadEgressPolicyV1["dnsEgress"];
+	/** Same deployment-authoritative placement as single-service Workloads (Spec §10.1). */
+	readonly agentWorkloadPlacement?: AgentWorkloadPlacementV1;
 }
 
 function applyWorkspaceSnapshotToPodSpecV1(
@@ -463,6 +474,17 @@ function metadata(value: MultiServiceDesired, name: string, service?: string) {
 	};
 }
 
+/** Records the placement this apply injected; observation accepts exactly that (Spec §10.1). */
+function withPlacementRecord(
+	meta: ReturnType<typeof metadata>,
+	policy: MultiServiceRuntimePolicyV1,
+): ReturnType<typeof metadata> {
+	const record = agentWorkloadPlacementRecordV1(policy.agentWorkloadPlacement);
+	return Object.keys(record).length
+		? { ...meta, annotations: { ...meta.annotations, ...record } }
+		: meta;
+}
+
 function owned(resource: KubernetesObject, value: MultiServiceDesired) {
 	return (
 		resource.metadata?.labels?.[ownerLabel] ===
@@ -646,7 +668,10 @@ function deployment(
 	const result: V1Deployment = {
 		apiVersion: "apps/v1",
 		kind: "Deployment",
-		metadata: metadata(value, name, resource.metadata.name),
+		metadata: withPlacementRecord(
+			metadata(value, name, resource.metadata.name),
+			policy,
+		),
 		spec: {
 			replicas: value.replicas,
 			selector: { matchLabels: selector },
@@ -655,6 +680,7 @@ function deployment(
 				spec: {
 					...resource.spec.template.spec,
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
+					...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 					securityContext: agentPodSecurityContext(),
 					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
@@ -752,7 +778,10 @@ function statefulSet(
 	const result: V1StatefulSet = {
 		apiVersion: "apps/v1",
 		kind: "StatefulSet",
-		metadata: metadata(value, name, resource.metadata.name),
+		metadata: withPlacementRecord(
+			metadata(value, name, resource.metadata.name),
+			policy,
+		),
 		spec: {
 			replicas: value.replicas,
 			serviceName,
@@ -766,6 +795,7 @@ function statefulSet(
 				spec: {
 					...resource.spec.template.spec,
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
+					...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 					securityContext: agentPodSecurityContext(),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
@@ -881,7 +911,10 @@ function migrationJob(
 	const result: V1Job = {
 		apiVersion: "batch/v1",
 		kind: "Job",
-		metadata: metadata(value, migrationJobName(value), "migration"),
+		metadata: withPlacementRecord(
+			metadata(value, migrationJobName(value), "migration"),
+			policy,
+		),
 		spec: {
 			backoffLimit: resource.spec.backoffLimit,
 			activeDeadlineSeconds: resource.spec.activeDeadlineSeconds,
@@ -890,6 +923,7 @@ function migrationJob(
 				spec: {
 					...resource.spec.template.spec,
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
+					...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 					securityContext: agentPodSecurityContext(),
 					restartPolicy: "Never",
 					serviceAccountName: workloadResourceNameV1(value.agentId),
@@ -1191,6 +1225,45 @@ export function createMultiServiceRuntimeOperations(options: {
 			.imagePullSecrets ?? [];
 	const matchesImagePullSecrets = (spec: V1PodSpec | undefined) =>
 		!!spec && hasSameStructure(spec.imagePullSecrets ?? [], imagePullSecrets);
+	const placement = options.policy.agentWorkloadPlacement;
+	agentWorkloadPodPlacementV1(placement);
+	const hasExactPlacement = (spec: V1PodSpec | undefined) =>
+		agentWorkloadPlacementShapeV1(placement, spec, false) ===
+		(placement ? "placed" : "unplaced");
+	/**
+	 * Spec §10.1: a formal management command (new fence) adopts a changed
+	 * placement; drift repair and re-applies reuse the fence and keep each
+	 * controller's accepted recorded placement.
+	 */
+	const adoptingPolicy = async (
+		kind: "Deployment" | "StatefulSet" | "Job",
+		name: string,
+		value: MultiServiceDesired,
+	): Promise<MultiServiceRuntimePolicyV1> => {
+		const current = await client.read<V1Deployment | V1StatefulSet | V1Job>(
+			kind as never,
+			name,
+		);
+		const effective = effectiveAgentWorkloadPlacementV1(
+			placement,
+			current && owned(current, value) ? current : null,
+			current?.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+				String(value.fence),
+		);
+		return effective === placement
+			? options.policy
+			: { ...options.policy, agentWorkloadPlacement: effective };
+	};
+	/** Observation accepts the controller's recorded placement until its next lifecycle apply. */
+	const acceptsPlacement = (
+		resource: V1Deployment | V1StatefulSet | V1Job | undefined,
+	) =>
+		acceptsAdoptedAgentWorkloadPlacementV1(
+			placement,
+			resource?.metadata?.annotations?.[agentWorkloadPlacementAnnotationV1],
+			resource?.spec?.template.spec,
+			false,
+		);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
 	async function observeSnapshotPods(
@@ -1445,6 +1518,20 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (object.kind === "Job") {
 			if (!matchesImagePullSecrets((current as V1Job).spec?.template.spec))
 				throw new Error("multi-service migration pull policy drifted");
+			// A Job template is immutable. An unfinished Job is kept under the same
+			// fence only with its accepted recorded placement; a formal command (new
+			// fence) needs the exact deployment placement. A finished Job has no
+			// running Pod left.
+			const sameFence =
+				current.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+				String(value.fence);
+			if (
+				!jobSucceeded(current as V1Job) &&
+				!(sameFence
+					? acceptsPlacement(current as V1Job)
+					: hasExactPlacement((current as V1Job).spec?.template.spec))
+			)
+				throw new Error("multi-service migration placement drifted");
 			return current;
 		}
 		if (
@@ -1802,7 +1889,12 @@ export function createMultiServiceRuntimeOperations(options: {
 					ownership,
 				);
 				const job = await put(
-					migrationJob(value, migration, resources, options.policy),
+					migrationJob(
+						value,
+						migration,
+						resources,
+						await adoptingPolicy("Job", migrationJobName(value), value),
+					),
 					value,
 					ownership,
 				);
@@ -1831,7 +1923,16 @@ export function createMultiServiceRuntimeOperations(options: {
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
 					await put(
-						deployment(value, resource, options.policy, resources),
+						deployment(
+							value,
+							resource,
+							await adoptingPolicy(
+								"Deployment",
+								serviceResourceName(value.agentId, resource.metadata.name),
+								value,
+							),
+							resources,
+						),
 						value,
 						ownership,
 					);
@@ -1849,7 +1950,11 @@ export function createMultiServiceRuntimeOperations(options: {
 						statefulSet(
 							value,
 							resource,
-							options.policy,
+							await adoptingPolicy(
+								"StatefulSet",
+								serviceResourceName(value.agentId, resource.metadata.name),
+								value,
+							),
 							resources,
 							persistentVolumeClaim(
 								value,
@@ -1969,7 +2074,8 @@ export function createMultiServiceRuntimeOperations(options: {
 				}
 				if (
 					!owned(job, value) ||
-					!matchesImagePullSecrets(job.spec?.template.spec)
+					!matchesImagePullSecrets(job.spec?.template.spec) ||
+					(!jobSucceeded(job) && !acceptsPlacement(job))
 				) {
 					await emitHealthDiagnostic(value, "workload_drifted");
 					return "drifted" as const;
@@ -2018,6 +2124,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					!current ||
 					!owned(current, value) ||
 					!matchesImagePullSecrets(current.spec?.template.spec) ||
+					!acceptsPlacement(current) ||
 					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
 				)
 					return "drifted" as const;

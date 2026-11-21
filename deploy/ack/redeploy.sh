@@ -294,6 +294,16 @@ template_preflight() {
 	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
 	prepare_evidence
 	image_cache_gate
+	# Template Pods run the standard runtime; require the same enforcement evidence (#4351).
+	local gate_manifest
+	gate_manifest=$(mktemp)
+	render_manifest "$gate_manifest"
+	if ! KUBECONFIG="$ACK_KUBECONFIG" ACK_NAMESPACE="$namespace" ACK_RENDERED_MANIFEST_FILE="$gate_manifest" \
+		node "$repo_root/deploy/ack/networkpolicy-enforcement.mjs" >&2; then
+		unlink "$gate_manifest"
+		die "NetworkPolicy enforcement evidence is missing or does not match"
+	fi
+	unlink "$gate_manifest"
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
