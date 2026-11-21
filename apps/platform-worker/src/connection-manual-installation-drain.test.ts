@@ -127,7 +127,12 @@ function harness(
 		settleConfirmPhase: vi.fn(
 			async (input: { outcome: string }) => input.outcome as never,
 		),
-		commitPermit: vi.fn(async () => "permitted" as const),
+		commitPermit: vi.fn(
+			async (): Promise<"permitted" | "stale"> => "permitted",
+		),
+		endConfirmWithoutPermit: vi.fn(
+			async (): Promise<"unknown" | "stale"> => "unknown",
+		),
 	};
 	const decryptor = {
 		decrypt: vi.fn(
@@ -437,6 +442,62 @@ describe("manual install drain", () => {
 		expect(h.host.confirmExchange).toHaveBeenCalledTimes(1);
 		expect(h.store.commitPermit).not.toHaveBeenCalled();
 	});
+
+	// C1c-2b-2b: only this attempt may write the permit, so an exchange that
+	// completed without one ends its confirm at once (close and revoke the
+	// original key) rather than waiting for the attempt to lapse.
+	it.each([
+		["no publication evidence", exchangeReply("exchanged"), undefined],
+		[
+			"a permit CAS that no longer holds",
+			async () => ({ ...(await exchangeReply("exchanged")()), publication }),
+			"stale",
+		],
+		[
+			"a permit CAS that failed",
+			async () => ({ ...(await exchangeReply("exchanged")()), publication }),
+			new Error("permit CAS lost"),
+		],
+	] as const)(
+		"ends the confirm under the same attempt after %s",
+		async (_name, exchange, permit) => {
+			const h = confirmHarness({ readback: candidateReply, exchange });
+			if (permit instanceof Error)
+				h.store.commitPermit.mockRejectedValue(permit);
+			else if (permit) h.store.commitPermit.mockResolvedValue(permit as never);
+			await h.drain.drain(["execution-a"], new AbortController().signal);
+			expect(h.host.confirmExchange).toHaveBeenCalledTimes(1);
+			expect(h.store.endConfirmWithoutPermit).toHaveBeenCalledTimes(1);
+			expect(h.store.endConfirmWithoutPermit).toHaveBeenCalledWith({
+				attemptId: "attempt-a",
+				attemptOwner: "worker-a",
+				authorizationId: "authorization-a",
+				confirmCommandId: "confirm-a",
+				exchangeCommandId: "phase-b",
+			});
+		},
+	);
+
+	it.each([
+		["a committed permit", "exchanged", "permitted"],
+		["a rejected exchange", "rejected", undefined],
+		["an unknown exchange", "unknown", undefined],
+	] as const)(
+		"leaves the confirm to its settlement after %s",
+		async (_name, settled, permit) => {
+			const h = confirmHarness({
+				readback: candidateReply,
+				exchange: async () => ({
+					...(await exchangeReply(settled)()),
+					publication,
+				}),
+			});
+			h.store.settleConfirmPhase.mockResolvedValue(settled as never);
+			if (permit) h.store.commitPermit.mockResolvedValue(permit as never);
+			await h.drain.drain(["execution-a"], new AbortController().signal);
+			expect(h.store.endConfirmWithoutPermit).not.toHaveBeenCalled();
+		},
+	);
 
 	it("continues into phase 2 with its own committed receipt and commits before it sends", async () => {
 		const h = confirmHarness({

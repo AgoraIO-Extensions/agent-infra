@@ -3560,11 +3560,14 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 	});
 
 	/** Phases 1 and 2 under one attempt: pinned, exchange sent and settled `exchanged`. */
-	async function exchanged(flow: Awaited<ReturnType<typeof confirmed>>) {
+	async function exchanged(
+		flow: Awaited<ReturnType<typeof confirmed>>,
+		principalId = "principal-a",
+	) {
 		const phase = await bindingReadback(flow);
 		const pinned = await manual.commitConfirmPin({
 			...phase,
-			candidate: await candidateFor(flow, phase),
+			candidate: await candidateFor(flow, phase, principalId),
 		});
 		if (pinned.outcome !== "pinned") throw new Error("not pinned");
 		const attempt = {
@@ -3967,6 +3970,154 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			),
 		).toHaveLength(1);
 		expect(await permitCount(flow.run.authorizationId)).toBe(0);
+	});
+
+	// C1c-2b-2b (§13.5.6 exception recovery): an exchange that completed without
+	// a permit can never be enabled later, so its own attempt ends the logical
+	// confirm unknown at once instead of waiting for the attempt to lapse. The
+	// next sweep closes the installation and queues the original key's revoke
+	// while the original claim still holds; nothing is re-exchanged or re-granted.
+	it("ends an exchanged confirm without a permit at once and queues the original key's revoke", async () => {
+		const flow = await confirmed();
+		const done = await exchanged(flow);
+		expect(await manual.endConfirmWithoutPermit(done)).toBe("unknown");
+		expect((await pinFacts(flow.run.authorizationId))?.confirm).toBe(
+			"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:completed",
+		);
+		const pending = await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "revoked",
+			revoke_state: "pending",
+			confirm:
+				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:completed",
+		});
+		expect(
+			pending
+				.filter((item) => item.authorizationId === flow.run.authorizationId)
+				.map((item) => item.command),
+		).toEqual(["revoke"]);
+		// A replay changes nothing; no permit can follow and no phase reopens.
+		expect(await manual.endConfirmWithoutPermit(done)).toBe("stale");
+		expect(
+			await manual.commitPermit({ ...done, publication: evidence() }),
+		).toBe("stale");
+		expect(
+			await manual.openConfirmPhase({ ...done, phase: "confirm_exchange" }),
+		).toBeNull();
+		expect(await permitCount(flow.run.authorizationId)).toBe(0);
+	});
+
+	it("ends no confirm for another attempt or installation, nor a permitted one", async () => {
+		const alice = await confirmed();
+		const done = await exchanged(alice);
+		const bob = await confirmed("bob", "bob", "worker-b");
+		const bobDone = await exchanged(bob, "principal-b");
+		for (const input of [
+			{ ...done, attemptOwner: "worker-b" },
+			{ ...done, attemptId: randomUUID() },
+			// Another user's installation of the same Agent: its phase, its
+			// authorization or its logical confirm never ends alice's confirm.
+			{ ...done, exchangeCommandId: bobDone.exchangeCommandId },
+			{ ...done, authorizationId: bobDone.authorizationId },
+			{ ...done, confirmCommandId: bobDone.confirmCommandId },
+			{ ...bobDone, authorizationId: done.authorizationId },
+		])
+			expect(await manual.endConfirmWithoutPermit(input)).toBe("stale");
+		expect(
+			await manual.commitPermit({ ...bobDone, publication: evidence() }),
+		).toBe("permitted");
+		expect(await manual.endConfirmWithoutPermit(bobDone)).toBe("stale");
+		expect((await pinFacts(alice.run.authorizationId))?.confirm).toBe(
+			"confirm:sending,confirm_binding_readback:completed,confirm_exchange:completed",
+		);
+		expect(await pinFacts(bob.run.authorizationId)).toMatchObject({
+			status: "confirmed",
+			revoke_state: "not_required",
+			confirm:
+				"confirm:completed,confirm_binding_readback:completed,confirm_exchange:completed",
+		});
+		expect(await permitCount(bob.run.authorizationId)).toBe(1);
+	});
+
+	it("ends no confirm whose exchange is still sending or ended unknown", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...phase,
+					candidate: await candidateFor(flow, phase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const attempt = {
+			confirmCommandId: phase.confirmCommandId,
+			attemptId: phase.attemptId,
+			attemptOwner: phase.attemptOwner,
+			authorizationId: phase.authorizationId,
+		};
+		const exchange = await manual.openConfirmPhase({
+			...attempt,
+			phase: "confirm_exchange",
+		});
+		if (!exchange) throw new Error("phase 2 not opened");
+		const input = { ...attempt, exchangeCommandId: exchange.phaseCommandId };
+		expect(await manual.endConfirmWithoutPermit(input)).toBe("stale");
+		expect(
+			await manual.commitDelivery({
+				commandId: exchange.phaseCommandId,
+				attemptId: phase.attemptId,
+				attemptOwner: phase.attemptOwner,
+				command: "confirm_exchange",
+				authorizationId: phase.authorizationId,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		// Sent but not settled: only the settlement decides it.
+		expect(await manual.endConfirmWithoutPermit(input)).toBe("stale");
+		expect((await pinFacts(flow.run.authorizationId))?.confirm).toBe(
+			"confirm:sending,confirm_binding_readback:completed,confirm_exchange:sending",
+		);
+		expect(
+			await manual.settleConfirmPhase({
+				...attempt,
+				phaseCommandId: exchange.phaseCommandId,
+				phase: "confirm_exchange",
+				outcome: "unknown",
+			}),
+		).toBe("unknown");
+		expect(await manual.endConfirmWithoutPermit(input)).toBe("stale");
+	});
+
+	// Ending a confirm only closes, so it never waits for the original claim. The
+	// revoke it leads to still runs only under that claim: once the fence moved,
+	// the original key is kept unknown for the Connection owner, never sent under
+	// the new claim.
+	it("ends the confirm after the original fence moved but never revokes under the new claim", async () => {
+		const flow = await confirmed();
+		const done = await exchanged(flow);
+		await client`update platform.outbox_items set delivery_fence=4 where id='item-a'`;
+		await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+		expect(await manual.endConfirmWithoutPermit(done)).toBe("unknown");
+		await manual.listPending(32, ["execution-a"]);
+		const [revoke] =
+			await client`select id from platform.connection_installation_commands where authorization_id=${flow.run.authorizationId} and command='revoke'`;
+		expect(
+			await manual.claim({
+				commandId: revoke?.id as string,
+				attemptId: randomUUID(),
+				attemptOwner: "worker-a",
+			}),
+		).toBeNull();
+		expect(await pinFacts(flow.run.authorizationId)).toMatchObject({
+			status: "revoked",
+			revoke_state: "unknown",
+		});
+		const [command] =
+			await client`select status from platform.connection_installation_commands where id=${revoke?.id as string}`;
+		expect(command?.status).toBe("unknown");
 	});
 
 	it("keeps a permitted install open after its confirm attempt and claim end", async () => {

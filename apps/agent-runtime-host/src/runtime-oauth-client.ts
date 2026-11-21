@@ -308,6 +308,109 @@ async function writeRecord(path: string, name: string, value: unknown) {
 	}
 }
 
+/** Material files a transaction may own: the code, the verifier and its Token copies. */
+const transactionMaterialSuffixes = [
+	"access",
+	"refresh",
+	"code",
+	"verifier",
+] as const;
+
+/**
+ * §13.5.6/§13.5.7: after Connection confirmed the revoke of the original key,
+ * erases one installation revision's Host copies (code, verifier, access and
+ * refresh Token, and its private export) without any remote request. The
+ * publication is closed before any copy is removed; the transaction record
+ * keeps only its non-secret facts. Only records of this principal, Agent,
+ * authorization and confirmation revision are touched. Returns how many
+ * transactions were erased.
+ */
+export async function eraseRuntimeOAuthInstallationMaterials(options: {
+	dataDirectory: string;
+	principal: RuntimePrincipalV1;
+	agentId: string;
+	authorizationId: string;
+	confirmationRevision: string;
+}) {
+	assertStandardMcpProcessProtection();
+	const root = join(
+		options.dataDirectory,
+		"codex-driver.json.native",
+		"conversations",
+		"standard-mcp-oauth",
+	);
+	const records = join(root, "records");
+	const materials = join(root, "materials");
+	return withProtectedStandardMcpMaterialLock(materials, async () => {
+		const owned: { key: string; record: Transaction }[] = [];
+		const recordDirectory = await openProtectedStandardMcpDirectory(records);
+		try {
+			const names = (
+				await readdir(
+					process.platform === "linux"
+						? `/proc/self/fd/${recordDirectory.fd}`
+						: records,
+				)
+			).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+			for (const name of names) {
+				const text = await readProtectedStandardMcpBytes(records, name, 16_384);
+				let record: Transaction;
+				try {
+					record = parseTransaction(text);
+				} catch {
+					// Not a transaction this function may own.
+					continue;
+				}
+				if (
+					record.authorizationId === options.authorizationId &&
+					record.confirmationRevision === options.confirmationRevision &&
+					record.scope.agentId === options.agentId &&
+					isDeepStrictEqual(record.principal, options.principal)
+				)
+					owned.push({ key: name.slice(0, -5), record });
+			}
+			await assertProtectedStandardMcpDirectoryCurrent(
+				records,
+				recordDirectory,
+			);
+		} finally {
+			await recordDirectory.close();
+		}
+		for (const { key, record } of owned)
+			if (record.publication && record.publication.state !== "pending") {
+				record.publication.state = "pending";
+				await writeRecord(records, `${key}.json`, record);
+			}
+		const directory = await openProtectedStandardMcpDirectory(materials);
+		try {
+			for (const { key } of owned)
+				for (const suffix of transactionMaterialSuffixes) {
+					assertStandardMcpProcessProtection();
+					await assertProtectedStandardMcpDirectoryCurrent(
+						materials,
+						directory,
+					);
+					await unlink(
+						protectedStandardMcpPath(directory, materials, `${key}.${suffix}`),
+					).catch((error: NodeJS.ErrnoException) => {
+						if (error.code !== "ENOENT") throw error;
+					});
+				}
+			await directory.sync();
+			await assertProtectedStandardMcpDirectoryCurrent(materials, directory);
+		} finally {
+			await directory.close();
+		}
+		for (const { record } of owned)
+			if (record.publication)
+				await eraseProtectedRuntimeOAuthPublication({
+					dataDirectory: options.dataDirectory,
+					publication: record.publication,
+				});
+		return owned.length;
+	});
+}
+
 export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
