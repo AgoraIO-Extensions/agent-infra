@@ -942,6 +942,8 @@ async function createPreparedOwning(
 	if (
 		process.env.PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED === "true" &&
 		(!skillMaterialization?.delivery ||
+			typeof skillMaterialization.store?.captureSyncAttempt !== "function" ||
+			typeof skillMaterialization.store?.recordSyncFailure !== "function" ||
 			skillMaterialization.delivery.client.namespace !== namespace ||
 			skillMaterialization.agentVersion !==
 				process.env.AGENT_INFRA_AGENT_VERSION ||

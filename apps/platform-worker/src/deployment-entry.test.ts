@@ -1681,6 +1681,58 @@ it("keeps ordinary Workload startup when optional Skill input is incomplete", as
 	}
 });
 
+it.each(["captureSyncAttempt", "recordSyncFailure", "complete"] as const)(
+	"requires failure persistence ports when Skill materialization is enabled: %s",
+	async (missing) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const image = `registry.example.test/skill-init@sha256:${"a".repeat(64)}`;
+		await writeFile(
+			path,
+			`${original}
+workloadInput.policy.skillDeliveryImage = ${JSON.stringify(image)};
+export const skillMaterialization = {
+ storage: { download: async () => new ReadableStream() },
+ assemblyRoot: "/var/lib/agent-infra/skills", runtimeUid: 65534,
+ delivery: { client: { namespace: "worker-binding", read: async () => null, create: async () => null } },
+ agentVersion: "agent-version-1",
+ actor: { actorId: "deployment-actor", organizationIds: [], isAdministrator: false },
+ store: {
+  resolveSyncBindings: async () => [], readPublication: async () => null,
+  recordAppliedReceipt: async (receipt) => receipt,
+  ${missing === "captureSyncAttempt" ? "" : "captureSyncAttempt: async () => null,"}
+  ${missing === "recordSyncFailure" ? "" : "recordSyncFailure: async () => true,"}
+ },
+ resolveAdmissionPolicy: async () => { throw new Error("no package"); },
+ sourceVerifier: { verify: async () => { throw new Error("no package"); } },
+};
+`,
+		);
+		try {
+			const result = run({
+				RUN_SKILL_CHECK: "true",
+				PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED: "true",
+				PLATFORM_WORKER_SKILL_ASSEMBLY_ROOT: "/var/lib/agent-infra/skills",
+				PLATFORM_WORKER_SKILL_INIT_IMAGE: image,
+				AGENT_INFRA_AGENT_VERSION: "agent-version-1",
+			});
+			if (missing === "complete") {
+				expect(result.status, result.stderr).toBe(0);
+				expect(JSON.parse(result.stdout)).toEqual({
+					skillMaterializer: "function",
+				});
+			} else {
+				expect(result.status).not.toBe(0);
+				expect(result.stdout).toContain(
+					"SKILL_MATERIALIZER_CONFIGURATION_INVALID",
+				);
+			}
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+
 it("rejects explicitly enabled Skill materialization when its configuration is absent", () => {
 	const result = run({
 		PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED: "true",
