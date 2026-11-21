@@ -625,7 +625,20 @@ export async function collectOperationsSnapshotV2(input: {
 				limits: quantities(object(container.resources).limits),
 			};
 		});
-		const sharedRole = shared[String(controlMeta.name)];
+		// Only this platform MinIO entry needs new provenance checks; legacy shared entries are unchanged.
+		const sharedRole =
+			controlMeta.name === "agent-infra-minio" &&
+			(agentId !== null ||
+				isSandbox ||
+				controlLabels["app.kubernetes.io/managed-by"] !== "Helm" ||
+				controlLabels["app.kubernetes.io/name"] !== "agent-infra" ||
+				controlLabels["app.kubernetes.io/component"] !==
+					"skill-object-storage" ||
+				controlAnnotations["meta.helm.sh/release-name"] !== "agent-infra" ||
+				controlAnnotations["meta.helm.sh/release-namespace"] !==
+					input.scope.namespace)
+				? undefined
+				: shared[String(controlMeta.name)];
 		const observationTime = date(metric?.timestamp) ?? now;
 		snapshot.resources.push({
 			kind: "Pod",

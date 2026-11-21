@@ -1984,6 +1984,7 @@ it("classifies only the platform MinIO controller and its mounted PVC as shared"
 	onTestFinished(() => minioStore.close());
 	const helmLabels = {
 		"app.kubernetes.io/managed-by": "Helm",
+		"app.kubernetes.io/name": "agent-infra",
 		"app.kubernetes.io/component": "skill-object-storage",
 	};
 	const controller = (name: string, agentId?: string) => ({
@@ -1993,7 +1994,11 @@ it("classifies only the platform MinIO controller and its mounted PVC as shared"
 			uid: `${name}-controller`,
 			generation: 1,
 			labels: helmLabels,
-			annotations: agentId ? { "agent-infra.agora.io/agent-id": agentId } : {},
+			annotations: {
+				"meta.helm.sh/release-name": "agent-infra",
+				"meta.helm.sh/release-namespace": scope.namespace,
+				...(agentId ? { "agent-infra.agora.io/agent-id": agentId } : {}),
+			},
 		},
 	});
 	const pod = (name: string, controllerName: string, claim: string) => ({
@@ -2144,3 +2149,201 @@ it("classifies only the platform MinIO controller and its mounted PVC as shared"
 		),
 	).toBe(true);
 });
+
+it.each([
+	{
+		scenario: "same-name Agent without platform labels",
+		labels: {},
+		agent: true,
+		sandbox: false,
+		wrongUid: false,
+		expected: "agent",
+	},
+	{
+		scenario: "same-name Agent with matching platform labels",
+		labels: {
+			"app.kubernetes.io/managed-by": "Helm",
+			"app.kubernetes.io/name": "agent-infra",
+			"app.kubernetes.io/component": "skill-object-storage",
+		},
+		agent: true,
+		sandbox: false,
+		wrongUid: false,
+		expected: "agent",
+	},
+	{
+		scenario: "same-name Session with matching platform labels",
+		labels: {
+			"app.kubernetes.io/managed-by": "Helm",
+			"app.kubernetes.io/name": "agent-infra",
+			"app.kubernetes.io/component": "skill-object-storage",
+		},
+		agent: true,
+		sandbox: true,
+		wrongUid: false,
+		expected: "agent",
+	},
+	{
+		scenario: "same-name controller without platform labels",
+		labels: {},
+		agent: false,
+		sandbox: false,
+		wrongUid: false,
+		expected: "unknown",
+	},
+	{
+		scenario: "same-name controller with foreign Helm release",
+		labels: {
+			"app.kubernetes.io/managed-by": "Helm",
+			"app.kubernetes.io/name": "agent-infra",
+			"app.kubernetes.io/component": "skill-object-storage",
+		},
+		agent: false,
+		sandbox: false,
+		wrongUid: false,
+		foreignRelease: true,
+		expected: "unknown",
+	},
+	{
+		scenario: "same-name controller with wrong UID",
+		labels: {
+			"app.kubernetes.io/managed-by": "Helm",
+			"app.kubernetes.io/name": "agent-infra",
+			"app.kubernetes.io/component": "skill-object-storage",
+		},
+		agent: false,
+		sandbox: false,
+		wrongUid: true,
+		expected: "unknown",
+	},
+])(
+	"keeps $scenario outside shared ownership",
+	async ({ labels, agent, sandbox, wrongUid, foreignRelease, expected }) => {
+		const agentId = "foreign-agent";
+		const session = {
+			agentId,
+			sessionId: "foreign-session",
+			sandboxId: "foreign-sandbox",
+			generation: 1,
+		};
+		const annotation = agent
+			? { "agent-infra.agora.io/agent-id": agentId }
+			: {};
+		const objects: Record<string, unknown[]> = {
+			deployments: [
+				{
+					metadata: {
+						name: "agent-infra-minio",
+						namespace: scope.namespace,
+						uid: "foreign-controller",
+						generation: 1,
+						labels,
+						annotations: {
+							...annotation,
+							"meta.helm.sh/release-name": foreignRelease
+								? "foreign-release"
+								: "agent-infra",
+							"meta.helm.sh/release-namespace": scope.namespace,
+						},
+					},
+				},
+			],
+			replicasets: [
+				{
+					metadata: {
+						name: "minio-rs",
+						namespace: scope.namespace,
+						uid: "minio-rs-uid",
+						ownerReferences: [
+							{
+								name: "agent-infra-minio",
+								uid: wrongUid ? "replacement-controller" : "foreign-controller",
+								kind: "Deployment",
+								controller: true,
+							},
+						],
+					},
+				},
+			],
+			pods: [
+				{
+					metadata: {
+						name: "same-name-pod",
+						namespace: scope.namespace,
+						uid: "same-name-pod-uid",
+						resourceVersion: "1",
+						labels: {
+							...labels,
+							...(sandbox ? sessionSandboxLabelsV1(session) : {}),
+						},
+						annotations: {
+							...annotation,
+							...(sandbox
+								? {
+										"agent-infra.agora.io/managed": "session-sandbox-v1",
+										"agent-infra.agora.io/session-id": session.sessionId,
+									}
+								: {}),
+						},
+						ownerReferences: [
+							{
+								name: "minio-rs",
+								uid: "minio-rs-uid",
+								kind: "ReplicaSet",
+								controller: true,
+							},
+						],
+					},
+					spec: {
+						containers: [
+							{ name: "app", image: "fixture@sha256:" + "a".repeat(64) },
+						],
+						volumes: [
+							{
+								name: "data",
+								persistentVolumeClaim: { claimName: "same-name-pvc" },
+							},
+						],
+					},
+					status: { phase: "Running" },
+				},
+			],
+			volumes: [
+				{
+					metadata: {
+						name: "same-name-pvc",
+						namespace: scope.namespace,
+						uid: "same-name-pvc-uid",
+						resourceVersion: "1",
+						annotations: annotation,
+					},
+					spec: { resources: { requests: { storage: "1Gi" } } },
+					status: { phase: "Bound" },
+				},
+			],
+		};
+		const snapshot = await collectOperationsSnapshotV2({
+			scope,
+			readCluster: false,
+			cacheOwner: "fixture",
+			cacheInventoryLimit: 48,
+			bindings: [],
+			read: async (kind) => ({ items: objects[kind] ?? [], truncated: false }),
+		});
+		const pod = snapshot.resources.find((r) => r.name === "same-name-pod");
+		const pvc = snapshot.resources.find((r) => r.name === "same-name-pvc");
+		expect(pod).toMatchObject({ ownership: expected });
+		// Existing Session PVC classification remains unverified here; it is never made shared.
+		expect(pvc?.ownership).toBe(sandbox ? "unknown" : expected);
+		expect([pod, pvc].every((r) => r?.ownership !== "shared")).toBe(true);
+		if (agent && !sandbox)
+			for (const resource of [pod, pvc])
+				expect(resource).toMatchObject({ agentId, ownership: "agent" });
+		if (sandbox)
+			expect(pod).toMatchObject({
+				agentId,
+				sessionId: session.sessionId,
+				role: "sandbox",
+			});
+	},
+);
