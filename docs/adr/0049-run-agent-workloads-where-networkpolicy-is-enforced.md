@@ -12,30 +12,20 @@
 ## 问题
 
 工程 Spec §8.3 要求 Agent 级 Workload 与 Session Sandbox 的原业务、控制和就绪端口只对 Worker
-开放，并以 NetworkPolicy 实现。2026-11-21 生产新 lane 的只读回读和受限探针表明：
-
-- ACK 集群的 ECS 节点只有 flannel，没有 NetworkPolicy 执行者。
-- 同 namespace 的普通 Pod 能直连 self-managed 样本 P 的正式 Service 端口，并拿到 HTTP 200。
-
-当时 15 个 Agent 级 Host Pod 都在 ECS 上，包括运行用户镜像的 P 和 M。NetworkPolicy 对象
-都存在，但这些 Pod 上没有生效。
+开放，并以 NetworkPolicy 实现。#4351 的现场回读表明，ACK 集群的 ECS 节点只有 flannel，
+没有 NetworkPolicy 执行者；运行在这些节点上的 Agent 级 Host 虽有 NetworkPolicy 对象，
+同 namespace 的普通 Pod 仍能直连其正式端口。盘点与探针结果以 Issue 回执为准。
 
 Spec 和 HLD 原先只写了策略规则，没有写“策略必须实际被执行”，也没有写 Agent 级 Workload
-运行在哪里。部署文档只要求按会话创建的 Session Pod 使用 ECI（由 chart 准入注入），Agent
-级 Workload 默认落在普通节点。部署预检也只检查 NetworkPolicy 对象存在。
+运行在哪里。部署预检也只检查 NetworkPolicy 对象存在。
 
 ## 决策
 
-1. **运行形态门槛。** Worker 为 Agent 创建的全部 Pod，以及 Session Sandbox，只运行在已证实际
-   执行 NetworkPolicy 的运行形态上。全部 Pod 指单服务、多服务、发布前迁移 Job、init 与快照
-   准备 Pod。没有满足条件的运行形态时不创建、不准入，不回退到其他节点。
-2. **部署权威 placement。** 调度位置由受信部署配置给出，Worker 统一注入并纳入期望规格、漂移、
-   恢复与资源配置摘要。Owner、Manifest、多服务资源描述和模型都不能提供或覆盖调度字段，
-   非部署注入的调度字段按漂移处理。
-3. **预检 fail closed。** 正式部署入口只读回读已批准的当期执行证据，缺失、过期或不完整时拒绝
-   发布，不在生产自动造探针。
-4. **ACK 取值。** Agent 级 Workload 与 Session Sandbox 都使用由 ACK Poseidon 执行
-   NetworkPolicy 的 ECI，ECS 节点只承载平台组件。
+Agent 级 Workload 与 Session Sandbox 一样，只运行在已证实际执行 NetworkPolicy 的运行形态上；
+在 ACK 上即由 Poseidon 执行策略的 ECI，ECS 只承载平台组件。调度位置是部署权威输入，由
+Worker 注入并参与漂移判定，Owner 等输入不能提供调度字段。部署预检在没有当期执行证据时
+fail closed。现存 Agent 只在逐 Agent 的正式 lifecycle 中采用新 placement，发布本身不触发
+全量重建。完整规则见 Spec §10.1。
 
 ## 备选
 
@@ -46,15 +36,17 @@ Spec 和 HLD 原先只写了策略规则，没有写“策略必须实际被执�
 - **只在 chart 准入里注入 ECI 调度，不改 Worker。** 与 Session 现有做法一致、改动小，但 Worker
   会把准入注入的调度字段当作漂移；而且准入缺失或绑定失效时，Pod 会静默落到 ECS。可以作为
   兜底，但不作为唯一权威。
+- **发布后由 Worker 按漂移自动迁移全部 Host。** 实现最简单，但一次发布会同时重建全部 Host，
+  无法逐个排空、核对原 PVC 与 fence，也无法控制批次。不采用。
 
 ## 后果
 
-- 迁移时每个 Agent Host 重启一次，原 PVC 与数据保留，云盘须与 ECI 同可用区。涉及真实用户
-  的 Agent，迁移前先列出并告知用户；迁移手册另行编写。
-- ECI 计费会新增费用。Ops4178 按官方单价估算：15 个 Pod 的计算费每月新增约 ¥2,414.87–3,219.83，
-  加上手工缓存盘后合计约 ¥2,874.77–3,909.68/月，不是账单上限。上线前须由用户确认费用。
-- placement 进入资源配置摘要后，依赖原摘要的已采用证据（例如执行容量 profile、reserve 批准）
-  按现有规则重新采用，不沿用旧摘要。
+- 每个 Agent Host 在其正式 lifecycle 中重建一次，原 PVC 与数据保留，云盘须与 ECI 同可用区。
+  涉及真实用户的 Agent 须先告知用户；顺序与窗口由迁移手册安排，手册不替代实现门槛。
+- 采用前保留态的 Host 仍运行在原节点，不视为已隔离；全部采用后部署关闭保留态。
+- ECI 会新增费用，估算与盘点见 #4351 回执，不是账单上限；上线前须由用户确认费用。
+- placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置摘要，发布不会使这些
+  既有批准整体失效；placement 的变化由 Worker 资源对象指纹与漂移判定承担。
 - ECS 上的平台组件之间仍没有 NetworkPolicy 执行。它们不运行用户代码；对 Agent 级 Workload
   与 Session Sandbox 的阻断依赖来源 Pod 在 ECI 上执行的 egress，并保留应用层鉴权。如果以后
   平台组件需要运行不受信代码或对外暴露新端口，须另行评估执行者覆盖。
