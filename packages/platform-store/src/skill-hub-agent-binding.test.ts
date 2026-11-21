@@ -1239,6 +1239,8 @@ it.each([
 	"applied",
 	"trust",
 	"policy",
+	"trust-after-binding-check",
+	"policy-after-binding-check",
 ] as const)(
 	"real Store and physical Skill preflight keeps %s evidence and zero executable work",
 	async (mode) => {
@@ -1262,6 +1264,7 @@ it.each([
 		await client`insert into platform.skill_hub_installations(id,principal_type,principal_id,skill_version_id,state,installed_at,updated_at) values('installation-a','user','owner-1','version-a','installed',now(),now())`;
 		await client`insert into platform.idempotency_records(id,scope_type,scope_id,actor_id,command_type,idempotency_key,request_digest,status,result) values('admission-a','skill_package','version-a','owner-1','skill.package.publish.v1','admission-a',${"f".repeat(64)},'completed',${client.json({ skillVersionId: "version-a" })})`;
 		await client`insert into platform.skill_hub_agent_bindings(agent_id,agent_version,skill_version_id,configuration_revision,"grant",sync_revision,state,created_at,updated_at) values('agent-1','agent-version-1','version-a',7,${client.json({ schemaVersion: 1, tools: [], connections: [], fileRoots: [], networkOrigins: [], scripts: false })},1,'pending_sync',now(),now())`;
+		let publicationReads = 0;
 		const factory = createDeploymentSkillHubMaterializerFactoryV1({
 			assemblyRoot: root,
 			runtimeUid:
@@ -1277,7 +1280,18 @@ it.each([
 				isAdministrator: false,
 			},
 			store: {
-				readPublication: f.options.readPublication,
+				readPublication: async () => {
+					publicationReads++;
+					// Two complete binding checks have each read the publication before/after verification.
+					// Revoke at the materializer's independent package-verification boundary.
+					if (publicationReads === 5) {
+						if (mode === "trust-after-binding-check")
+							f.setPolicy({ keyState: "revoked" });
+						if (mode === "policy-after-binding-check")
+							f.setPolicy({ policyRevision: "policy-new" });
+					}
+					return f.options.readPublication();
+				},
 				resolveSyncBindings: store.resolveSyncBindings.bind(store),
 				recordAppliedReceipt:
 					mode === "applied"
@@ -1347,6 +1361,10 @@ it.each([
 			else {
 				const expected = {
 					trust: "SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED",
+					"trust-after-binding-check":
+						"SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED",
+					"policy-after-binding-check":
+						"SKILL_SYNC_PACKAGE_VERIFICATION_POLICY_MISMATCH_REJECTED",
 					policy: "SKILL_SYNC_PACKAGE_VERIFICATION_POLICY_MISMATCH_REJECTED",
 					signature: "SKILL_SYNC_PACKAGE_VERIFICATION_DIGEST_MISMATCH_REJECTED",
 					materialization:
@@ -1367,6 +1385,8 @@ it.each([
 			expect(await client`select id from platform.outbox_items`).toHaveLength(
 				0,
 			);
+			if (mode.endsWith("-after-binding-check"))
+				expect(publicationReads).toBe(5);
 			expect(f.publications).toBe(1);
 			expect(
 				JSON.stringify(

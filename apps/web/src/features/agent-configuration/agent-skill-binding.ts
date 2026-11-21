@@ -72,6 +72,47 @@ export function isSkillBindingAssembled(
 	);
 }
 
+const skillSyncStageLabels: Readonly<Record<string, string>> = {
+	BINDING_ADMISSION: "绑定准入失败",
+	PACKAGE_VERIFICATION: "包验证失败",
+	MATERIALIZATION: "内容物化失败",
+	DELIVERY: "内容交付失败",
+	APPLIED_PERSISTENCE: "装配确认保存失败",
+};
+const skillSyncReasonLabels: Readonly<Record<string, string>> = {
+	DEPENDENCY_UNAVAILABLE: "同步依赖暂不可用",
+	DENIED: "没有使用权限",
+	INVALID_BINDING: "绑定信息无效",
+	DIGEST_MISMATCH: "包摘要不一致",
+	SIGNATURE_INVALID: "签名无效",
+	SCAN_REJECTED: "安全扫描未通过",
+	SOURCE_UNTRUSTED: "发布来源不可信",
+	INVALID_PACKAGE: "包内容无效",
+	INVALID_MATERIALIZATION: "物化配置无效",
+	POLICY_MISMATCH: "扫描策略不匹配",
+	CONFLICT: "同步状态冲突",
+	STALE_BINDING: "绑定修订已变化",
+};
+
+function skillSyncFailureMessage(code: string) {
+	const fallback = "内容同步失败，这个版本不会在对话中提供。";
+	const match =
+		/^SKILL_SYNC_(BINDING_ADMISSION|PACKAGE_VERIFICATION|MATERIALIZATION|DELIVERY|APPLIED_PERSISTENCE)_([A-Z_]+)_(RETRYABLE|REJECTED)$/.exec(
+			code,
+		);
+	if (!match || match[0] !== code) return fallback;
+	const [, stage = "", reason = "", disposition] = match;
+	if (
+		!Object.hasOwn(skillSyncStageLabels, stage) ||
+		!Object.hasOwn(skillSyncReasonLabels, reason)
+	)
+		return fallback;
+	const retryable =
+		reason === "DEPENDENCY_UNAVAILABLE" || reason === "CONFLICT";
+	if (disposition !== (retryable ? "RETRYABLE" : "REJECTED")) return fallback;
+	return `${skillSyncStageLabels[stage]}：${skillSyncReasonLabels[reason]}。这个版本不会在对话中提供。`;
+}
+
 export function skillBindingView(
 	binding: SkillBindingStatus,
 	runtimeSkills: readonly RuntimeSkill[] | undefined,
@@ -99,11 +140,10 @@ export function skillBindingView(
 						settling: true,
 					};
 		case "failed":
-			// failureReason 是否可直接展示待确认，确认前只给固定文案。
 			return {
 				chip: { label: "同步失败", tone: "red" },
 				stages: stages(["完成", "失败", "未开始", "未开始"], 1),
-				error: "内容同步失败，这个版本不会在对话中提供。",
+				error: skillSyncFailureMessage(binding.failureReason),
 				usable: false,
 				settling: false,
 			};

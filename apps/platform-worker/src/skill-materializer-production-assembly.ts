@@ -287,11 +287,15 @@ export function createDeploymentSkillHubMaterializerFactoryV1(
 						);
 						if (!original || !binding)
 							throw new Error("Skill publication binding unavailable");
-						const publication = await consumer.verify({
-							skillVersionId: binding.skillVersion.skillVersionId,
-							packageObjectVersion: binding.skillVersion.packageObjectVersion,
-							signal,
-						});
+						const publication = await consumer
+							.verify({
+								skillVersionId: binding.skillVersion.skillVersionId,
+								packageObjectVersion: binding.skillVersion.packageObjectVersion,
+								signal,
+							})
+							.catch((error: unknown) => {
+								throw classifySkillSyncFailureV1(error, "package_verification");
+							});
 						for (const key of [
 							"skillId",
 							"skillVersionId",
