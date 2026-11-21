@@ -383,6 +383,7 @@ export async function collectOperationsSnapshotV2(input: {
 		"agent-infra-web": "web",
 		"agent-infra-postgres": "database",
 		"agent-infra-directory": "directory",
+		"agent-infra-minio": "unknown",
 	};
 	const isVirtualNode = (node: ObjectRecord) => {
 		const meta = metadata(node);
@@ -624,7 +625,20 @@ export async function collectOperationsSnapshotV2(input: {
 				limits: quantities(object(container.resources).limits),
 			};
 		});
-		const sharedRole = shared[String(controlMeta.name)];
+		// Only this platform MinIO entry needs new provenance checks; legacy shared entries are unchanged.
+		const sharedRole =
+			controlMeta.name === "agent-infra-minio" &&
+			(agentId !== null ||
+				isSandbox ||
+				controlLabels["app.kubernetes.io/managed-by"] !== "Helm" ||
+				controlLabels["app.kubernetes.io/name"] !== "agent-infra" ||
+				controlLabels["app.kubernetes.io/component"] !==
+					"skill-object-storage" ||
+				controlAnnotations["meta.helm.sh/release-name"] !== "agent-infra" ||
+				controlAnnotations["meta.helm.sh/release-namespace"] !==
+					input.scope.namespace)
+				? undefined
+				: shared[String(controlMeta.name)];
 		const observationTime = date(metric?.timestamp) ?? now;
 		snapshot.resources.push({
 			kind: "Pod",
@@ -718,8 +732,19 @@ export async function collectOperationsSnapshotV2(input: {
 			),
 		);
 		const owner = mounted[0];
+		const minioClaimConflict =
+			owner?.ownership === "shared" &&
+			controllers.some(
+				(controller) =>
+					metadata(controller).name === "agent-infra-minio" &&
+					metadata(controller).uid === owner.ownerUid,
+			) &&
+			(text(annotations["agent-infra.agora.io/agent-id"]) !== null ||
+				text(annotations["agent-infra.agora.io/session-id"]) !== null ||
+				text(labels["agent-infra.agora.io/sandbox-id"]) !== null);
 		const uniqueOwner =
 			owner &&
+			!minioClaimConflict &&
 			mounted.every(
 				(entry) =>
 					entry.agentId === owner.agentId && entry.ownerUid === owner.ownerUid,
