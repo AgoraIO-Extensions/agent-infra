@@ -284,6 +284,45 @@ describe.each([
 	},
 );
 
+it("accepts only the exact selection refusal for a V6 native response (#4335)", () => {
+	const refusal = {
+		outcome: "rejected",
+		code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+		message: "Runtime model selection is unsupported",
+		retryable: false,
+	};
+	const response = {
+		schemaVersion: 1,
+		hostSessionRef: "host-session-conversation-1",
+		operationId: "execution-1",
+		result: refusal,
+	};
+	expect(
+		parseRuntimeResponse(
+			response,
+			claim({ operation: "conversation.native-capability.invoke.v2" }),
+		).result,
+	).toEqual(refusal);
+	for (const operation of [
+		"conversation.native-capability.invoke.v1",
+		"conversation.turn.supplement.v1",
+	] as const)
+		expect(() =>
+			parseRuntimeResponse(response, claim({ operation })),
+		).toThrow();
+	for (const result of [
+		{ ...refusal, retryable: true },
+		{ ...refusal, message: "free text" },
+		{ ...refusal, code: "RUNTIME_DRIVER_INVALID" },
+	])
+		expect(() =>
+			parseRuntimeResponse(
+				{ ...response, result },
+				claim({ operation: "conversation.native-capability.invoke.v2" }),
+			),
+		).toThrow();
+});
+
 function claim(
 	overrides: Partial<ConversationDispatchClaimV1> = {},
 ): ConversationDispatchClaimV1 {

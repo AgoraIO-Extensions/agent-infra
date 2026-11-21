@@ -160,7 +160,10 @@ import type {
 	RuntimeOriginalEvidenceRecoveryRef,
 } from "./driver.js";
 import { DurableJsonFile, deepFreeze } from "./durable-json.js";
-import { RuntimeHostError } from "./errors.js";
+import {
+	RuntimeHostError,
+	RuntimeNativeCommandNotSubmittedError,
+} from "./errors.js";
 import type { ModelTransportDiagnostic } from "./model-transport-diagnostic.js";
 import { observeNativeMetadataRpcV1 } from "./native-metadata-telemetry.js";
 import {
@@ -8107,7 +8110,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				original.reasoningLevel ||
 			original.configVersion !== this.configVersion
 		) {
-			nativeCommandUnsupported();
+			// No prepareNativeCommand record or compact RPC exists at this boundary.
+			throw new RuntimeNativeCommandNotSubmittedError();
 		}
 		const prepared = await this.prepareNativeCommand(command);
 		if (prepared.operation.record) {

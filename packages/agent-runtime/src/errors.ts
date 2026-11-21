@@ -47,6 +47,18 @@ export class RuntimeHostError extends Error {
 	}
 }
 
+/** Only a Driver's pre-prepare selection check may declare a native command unsent. */
+export class RuntimeNativeCommandNotSubmittedError extends RuntimeHostError {
+	constructor() {
+		super(
+			"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+			"Native command execution is unavailable for this runtime",
+			409,
+		);
+		this.name = "RuntimeNativeCommandNotSubmittedError";
+	}
+}
+
 /**
  * #3373：Driver 在原生提交点之前声明本次 Turn 未提交。错误只携带固定阶段，不含原始错误、
  * 凭据、URL、Grant 或平台响应正文；原始错误只作为 `cause` 留在进程内。
