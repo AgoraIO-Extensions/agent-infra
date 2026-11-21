@@ -7348,6 +7348,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				// Query real authority AFTER the I/O and its synchronous projection.
 				await revalidate();
 			}
+			// The awaited query can yield to local config/process changes before resuming here.
+			assertCurrent();
 			// Only the Skill directory's in-memory receipt is committed here, never a permit.
 			afterValidation?.();
 			assertCurrent();
