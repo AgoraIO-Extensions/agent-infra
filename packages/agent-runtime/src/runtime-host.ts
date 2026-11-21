@@ -135,6 +135,7 @@ import type {
 import {
 	type NativeSessionUnavailableDiagnostic,
 	RuntimeHostError,
+	RuntimeNativeCommandNotSubmittedError,
 	RuntimeTurnNotSubmittedError,
 	type RuntimeTurnNotSubmittedReason,
 } from "./errors.js";
@@ -662,6 +663,17 @@ async function callDriverWithUncertainty<T>(work: () => Promise<T>) {
 }
 
 const driverFileInputRejected = Symbol("driverFileInputRejected");
+const driverNativeCommandNotSubmitted = Symbol(
+	"driverNativeCommandNotSubmitted",
+);
+function nativeSelectionRejected() {
+	return {
+		outcome: "rejected" as const,
+		code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED" as const,
+		message: "Runtime model selection is unsupported" as const,
+		retryable: false as const,
+	};
+}
 
 /** #3373：Driver 在原生提交点之前声明本次 Turn 未提交，携带固定阶段。 */
 class DriverTurnNotSubmitted {
@@ -677,6 +689,8 @@ async function callDriverExecute<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch (error) {
+		if (error instanceof RuntimeNativeCommandNotSubmittedError)
+			return driverNativeCommandNotSubmitted;
 		if (
 			error instanceof RuntimeHostError &&
 			error.driverFailureKind === "file_input_rejected"
@@ -3545,6 +3559,12 @@ export class RuntimeHost {
 			const executed = await callDriverExecute(() =>
 				this.options.driver.execute(operation.command, executionContext),
 			);
+			if (executed === driverNativeCommandNotSubmitted)
+				return this.resolveUnsubmittedTurn(
+					hostSessionRef,
+					operation,
+					nativeSelectionRejected(),
+				);
 			if (executed === driverFileInputRejected)
 				return this.resolveUnsubmittedTurn(
 					hostSessionRef,
@@ -3605,7 +3625,8 @@ export class RuntimeHost {
 	 * #3314：Driver 声明附件读取在任何原生副作用之前被平台明确拒绝；#3373：Driver 声明本次 Turn
 	 * 在原生提交点之前未提交。Host 先按同一操作只读核实 Driver 没有该操作的记录，再把结果与该
 	 * 操作持久化，相同 fence 的重放直接返回原结果。只有 submit V2 及以上的结果枚举包含这两个
-	 * 成员；其他操作、或 Driver 已有记录、查询不确定时都无法排除副作用，仍按原有的可重试失败
+	 * 成员；V6 native 的 typed selection 拒绝也必须核实原操作 missing，才记入稳定拒绝。
+	 * 其他操作、或 Driver 已有记录、查询不确定时都无法排除副作用，仍按原有的可重试失败
 	 * 处理，不推断为失败或未提交。
 	 */
 	private async resolveUnsubmittedTurn(
@@ -3613,11 +3634,14 @@ export class RuntimeHost {
 		operation: StoredOperation,
 		result:
 			| ReturnType<typeof fileInputRejected>
-			| ReturnType<typeof turnNotSubmitted>,
+			| ReturnType<typeof turnNotSubmitted>
+			| ReturnType<typeof nativeSelectionRejected>,
 	): Promise<RuntimeOperationResponse> {
 		if (
-			operation.kind !== "submit-turn" ||
-			operation.command.schemaVersion !== 2
+			operation.command.schemaVersion !== 2 ||
+			(result.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
+				? operation.kind !== "native-command"
+				: operation.kind !== "submit-turn")
 		)
 			driverInvalid();
 		const lookup = await callDriverWithUncertainty(() =>
