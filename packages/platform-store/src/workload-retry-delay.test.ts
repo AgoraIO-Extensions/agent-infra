@@ -29,13 +29,13 @@ describe("Workload durable retry delay (#2532)", () => {
 			);
 	});
 
-	it("backs off Certificate issuance reads independently of health attempts", () => {
+	it("caps persisted CA rate-limit Certificate polling backoff independently of health attempts", () => {
 		const delays = [1, 2, 3, 4, 5, 60].map((attempts) =>
 			workloadRetryDelayMsV1(
 				{
 					phase: "observing",
 					attempts: 0,
-					certificateWait: { attempts },
+					certificateWait: JSON.parse(JSON.stringify({ attempts })),
 				},
 				1_000,
 			),

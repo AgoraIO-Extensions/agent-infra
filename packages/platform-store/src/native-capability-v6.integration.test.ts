@@ -13,6 +13,8 @@ import {
 	workloadTestPolicy,
 } from "../../../apps/platform-worker/src/kubernetes.fixture.ts";
 import { workloadResourceConfigurationHashV1 } from "../../../apps/platform-worker/src/workload-runtime.ts";
+import { createCompactHostFixture } from "../../agent-runtime/src/compact-host.test-support.js";
+import { RuntimeHostError } from "../../agent-runtime/src/errors.js";
 import { RuntimeNativeCapabilityRequestV6Schema } from "../../contracts/src/runtime/host-v6.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.js";
 import { parseClaim } from "../../platform-core/src/conversation-dispatch-input.js";
@@ -77,7 +79,7 @@ const configuration = {
 		options: model.options.map(({ credential: _credential, ...option }) => ({
 			...option,
 			optionId: "model-primary",
-			reasoningLevels: ["high"],
+			reasoningLevels: ["medium", "high"],
 		})),
 	},
 };
@@ -781,15 +783,65 @@ it.each([
 	"reclaimed",
 	"lost",
 	"unknown-result",
+	"codex-medium-high",
+	"codex-medium-medium",
+	"codex-high-high",
+	"codex-config-drift",
+	"codex-model-drift",
+	"codex-lost",
+	"codex-unknown",
+	"codex-disconnected",
 	"denied",
 	"busy",
 	"rejected",
 ])(
 	"runs V3 through the default Worker to terminal events (mode=%s, #4255)",
 	async (mode) => {
-		const loseResponse = mode === "lost";
+		const loseResponse = mode === "lost" || mode === "codex-lost";
 		await seedDispatchWorkload();
-		const admitted = await admitDispatchFixture();
+		const keys = generateKeyPairSync("ed25519");
+		const codex = mode.startsWith("codex-")
+			? await createCompactHostFixture(
+					authority,
+					keys.publicKey,
+					mode.startsWith("codex-medium-") ? "medium" : "high",
+					mode === "codex-config-drift"
+						? "configuration-old"
+						: "configuration-1-native-fixture",
+					mode === "codex-model-drift" ? "gpt-other" : "gpt-5.3-codex",
+				)
+			: undefined;
+		const remainsUnknown =
+			mode === "codex-unknown" || mode === "codex-disconnected";
+		if (codex && mode === "codex-unknown")
+			codex.transport.compactCompletedItemId = "unrelated-item";
+		if (codex && mode === "codex-disconnected")
+			codex.transport.beforeSend = async (frame) => {
+				if (frame.method === "thread/compact/start")
+					throw new TypeError("Synthetic compact ACK lost");
+			};
+		const originalHost = authority.hostSessionRef;
+		if (codex) {
+			authority.hostSessionRef = codex.hostSessionRef;
+			await client`update platform.conversations set host_session_ref=${codex.hostSessionRef} where id=${authority.conversationId}`;
+		}
+		const input = {
+			...request(),
+			...(mode === "codex-medium-medium"
+				? { selection: { ...request().selection, reasoningLevel: "medium" } }
+				: {}),
+			...(codex
+				? {
+						capabilityId: codex.capabilityId,
+						directoryRevision: codex.directoryRevision,
+						capabilitySourceVersion: codex.capabilitySourceVersion,
+						configVersion: "configuration-1-native-fixture",
+					}
+				: {}),
+		};
+		const admitted = await useCase().admit(input);
+		if (admitted.outcome === "accepted")
+			await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
 		if (admitted.outcome !== "accepted") throw new Error("expected admission");
 		const dispatch = new PostgresConversationDispatchStoreV1({
 			databaseUrl,
@@ -800,13 +852,14 @@ it.each([
 			databaseUrl,
 		});
 		const sent: unknown[] = [];
+		const replies: unknown[] = [];
 		const runtime = createConversationRuntimeV2({
 			workerId: "v6-worker",
 			signing: {
 				issuer: "platform-worker",
 				workerId: "v6-worker",
 				keyId: "synthetic",
-				privateKey: generateKeyPairSync("ed25519").privateKey,
+				privateKey: keys.privateKey,
 			},
 			directory: userDirectory,
 			taskAuthorizationStore: authorization,
@@ -830,12 +883,35 @@ it.each([
 			},
 			fetch: async (url, init) => {
 				const path = new URL(String(url)).pathname;
+
 				const body = JSON.parse(init?.body as string);
 				if (path.endsWith("/native-capability")) {
 					const wire = RuntimeNativeCapabilityRequestV6Schema.parse(
 						body.businessRequest,
 					);
 					sent.push(wire);
+					if (codex) {
+						try {
+							const response = await codex.host.nativeCapabilityV6(body);
+							replies.push(response);
+							if (loseResponse)
+								throw new TypeError("Synthetic accepted response lost");
+							return Response.json(response);
+						} catch (error) {
+							if (error instanceof RuntimeHostError)
+								return Response.json(
+									{
+										schemaVersion: 1,
+										code: error.code,
+										message: error.message,
+										retryable: error.retryable,
+										traceId: wire.traceId,
+									},
+									{ status: error.httpStatus },
+								);
+							throw error;
+						}
+					}
 					const result =
 						mode === "busy"
 							? { outcome: "busy" }
@@ -864,6 +940,23 @@ it.each([
 						operationId: wire.executionId,
 						result: { outcome: "accepted", status: "running" },
 					});
+				}
+				if (codex) {
+					if (path.endsWith("/events/read"))
+						return Response.json(
+							await codex.host.readEventsV4(body, codex.verify(body.grant)),
+						);
+					if (path.endsWith("/events/ack"))
+						return Response.json(
+							await codex.host.acknowledgeEventsV4(
+								body,
+								codex.verify(body.grant),
+							),
+						);
+					if (path.endsWith("/status"))
+						return Response.json(
+							await codex.host.recoverStatusV3(body, codex.verify(body.grant)),
+						);
 				}
 				if (path.endsWith("/status"))
 					return Response.json({
@@ -928,32 +1021,60 @@ it.each([
 				workerId: "v6-worker",
 			});
 
-			if (["denied", "busy", "rejected"].includes(mode)) {
+			if (
+				[
+					"denied",
+					"busy",
+					"rejected",
+					"codex-medium-high",
+					"codex-config-drift",
+					"codex-model-drift",
+				].includes(mode)
+			) {
 				expect(decision).toMatchObject({ outcome: "rejected" });
+				if (codex)
+					expect(replies).toEqual([
+						expect.objectContaining({
+							operationId: input.executionId,
+							result: {
+								outcome: "rejected",
+								code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+								message: "Runtime model selection is unsupported",
+								retryable: false,
+							},
+						}),
+					]);
+				if (codex)
+					expect(
+						codex.transport.requests.filter(
+							(r) => r.method === "thread/compact/start",
+						),
+					).toHaveLength(0);
 				const [failed] =
-					await client`select e.status,e.delivery_fence::int as fence,o.status as outbox_status,o.lease_owner,c.status as conversation_status,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id) as events from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} join platform.conversations c on c.id=e.conversation_id where e.execution_id=${admitted.plan.executionId}`;
+					await client`select e.status,e.delivery_fence::int as fence,o.status as outbox_status,o.attempt_count,o.lease_owner,c.status as conversation_status,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id) as events from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} join platform.conversations c on c.id=e.conversation_id where e.execution_id=${admitted.plan.executionId}`;
 				expect(failed).toMatchObject({
 					status: "failed",
 					outbox_status: "failed",
 					conversation_status: "ready",
+					attempt_count: 1,
 					lease_owner: null,
 					fence: 1,
 				});
 				expect(failed?.events).toBeGreaterThan(0);
 				expect(sent).toHaveLength(mode === "denied" ? 0 : 1);
-				expect(await useCase().admit(request())).toMatchObject({
+				expect(await useCase().admit(input)).toMatchObject({
 					outcome: "replayed",
 					plan: admitted.plan,
 				});
-				if (mode !== "blocked")
+				if (!codex)
 					expect(
 						await useCase().admit(request("next-after-failure")),
 					).toMatchObject({ outcome: "accepted" });
 				return;
 			}
-			if (loseResponse || mode === "unknown-result") {
+			if (loseResponse || mode === "unknown-result" || remainsUnknown) {
 				expect(decision).toMatchObject({
-					outcome: "retry",
+					outcome: remainsUnknown ? "unknown" : "retry",
 					errorCode: loseResponse
 						? "RUNTIME_UNAVAILABLE"
 						: "RUNTIME_ACCEPTANCE_UNKNOWN",
@@ -962,13 +1083,30 @@ it.each([
 					await client`select status from platform.conversation_executions where execution_id=${admitted.plan.executionId}`;
 				expect(unknown?.status).toBe("unknown");
 				await client`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${admitted.plan.outbox.id}`;
-				expect(
-					await worker.dispatch({
-						schemaVersion: 1,
-						itemId: admitted.plan.outbox.id,
-						workerId: "v6-worker",
-					}),
-				).toMatchObject({ outcome: "accepted" });
+				const recovery = await worker.dispatch({
+					schemaVersion: 1,
+					itemId: admitted.plan.outbox.id,
+					workerId: "v6-worker",
+				});
+				expect(recovery).toMatchObject({
+					outcome: remainsUnknown ? "retry" : "accepted",
+				});
+				if (remainsUnknown) {
+					expect(sent).toHaveLength(1);
+					expect(
+						codex?.transport.requests.filter(
+							(r) => r.method === "thread/compact/start",
+						),
+					).toHaveLength(1);
+					const [pending] =
+						await client`select e.status,o.status as outbox_status,o.attempt_count from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} where e.execution_id=${input.executionId}`;
+					expect(pending).toMatchObject({
+						status: "unknown",
+						outbox_status: "retry_scheduled",
+						attempt_count: 2,
+					});
+					return;
+				}
 			} else expect(decision).toMatchObject({ outcome: "accepted" });
 			expect(sent).toHaveLength(1);
 			expect(sent[0]).toMatchObject({
@@ -978,7 +1116,7 @@ it.each([
 					deliveryFence: mode === "reclaimed" ? 2 : 1,
 					executionDeliveryFence: mode === "reclaimed" ? 2 : 1,
 				},
-				selection: request().selection,
+				selection: input.selection,
 			});
 			const [terminal] =
 				await client`select e.status,o.status as outbox_status,(select count(*)::int from platform.conversation_events v where v.execution_id=e.execution_id) as events from platform.conversation_executions e join platform.outbox_items o on o.id=${admitted.plan.outbox.id} where e.execution_id=${admitted.plan.executionId}`;
@@ -987,20 +1125,47 @@ it.each([
 				outbox_status: "succeeded",
 			});
 			expect(terminal?.events).toBeGreaterThan(0);
-			expect(await useCase().admit(request())).toMatchObject({
+			expect(await useCase().admit(input)).toMatchObject({
 				outcome: "replayed",
 				plan: admitted.plan,
 			});
+			if (codex) {
+				expect(
+					codex.transport.requests.filter(
+						(r) => r.method === "thread/compact/start",
+					),
+				).toHaveLength(1);
+				const events =
+					await client`select event_type,event_payload from platform.conversation_events where execution_id=${input.executionId}`;
+				expect(events.map((e) => e.event_type)).toEqual(
+					expect.arrayContaining(["execution.status", "text.delta"]),
+				);
+				expect(events).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							event_type: "execution.status",
+							event_payload: expect.objectContaining({ status: "completed" }),
+						}),
+					]),
+				);
+			}
 		} finally {
 			await runtime.close();
+			await codex?.close();
+			authority.hostSessionRef = originalHost;
 			await authorization.close();
 			await eventTransaction.close();
 			await dispatch.close();
 		}
 	},
+	30_000,
 );
 
 it.each([
+	["actorId", "other-actor"],
+	["agentId", "other-agent"],
+	["conversationId", "other-conversation"],
+	["sessionGeneration", 2],
 	["modelOptionId", "other-model"],
 	["modelConfigurationRevision", 2],
 	["reasoningLevel", "low"],
