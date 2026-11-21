@@ -40,6 +40,7 @@ export {
 	openConnectionHostSupplyV1,
 	sealConnectionHostSupplyV1,
 } from "./host-supply-crypto.js";
+export * from "./native-metadata-telemetry.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
 export * from "./pi-bootstrap.js";
