@@ -10,11 +10,15 @@ export function useConversationCapabilityCatalog({
 	identityKey,
 	conversationId,
 	executionId,
+	hasExecution = executionId !== undefined,
+	retryAnchor,
 	enabled,
 }: {
 	identityKey: string;
 	conversationId: string;
 	executionId: string | undefined;
+	hasExecution?: boolean;
+	retryAnchor: () => void;
 	enabled: boolean;
 }): CapabilityCatalog {
 	const commands = useConversationNativeMetadata({
@@ -40,7 +44,10 @@ export function useConversationCapabilityCatalog({
 	const refetchSkills = skills.refetch;
 	return useMemo((): CapabilityCatalog => {
 		if (!enabled) return { status: "unsupported" };
-		if (executionId === undefined) return { status: "no-execution" };
+		if (executionId === undefined)
+			return hasExecution
+				? { status: "error", retry: retryAnchor }
+				: { status: "no-execution" };
 		if (commands.available && skills.available)
 			return { status: "ready", capabilities };
 		if (commands.isPending || skills.isPending) return { status: "loading" };
@@ -56,6 +63,8 @@ export function useConversationCapabilityCatalog({
 	}, [
 		enabled,
 		executionId,
+		hasExecution,
+		retryAnchor,
 		commands.available,
 		skills.available,
 		commands.isPending,

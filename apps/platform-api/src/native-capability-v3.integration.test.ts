@@ -274,10 +274,10 @@ beforeEach(async () => {
 		values ('personal',${identity.userId},1,'v3-key-ref',${db.json({ purpose: "personal", subjectId: identity.userId, keyId: "v3-key-ref", keyVersion: 1 })})`;
 	await db`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,
 		actor_id,principal_type,channel_id,turn_id,status,session_generation,authorization_revision,
-		runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,created_at,updated_at,
+		runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,accepted_original_host_session_ref,created_at,updated_at,
 		execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version)
 		values (${originalExecutionId},${conversationId},${agentId},${identity.userId},'user','web',
-		'v3-original-turn','completed',1,${agentAuthorizationRevision},'v4',${"a".repeat(43)},'v3-host',now(),now(),'web','personal',${identity.userId},'v3-key-ref',1)`;
+		'v3-original-turn','completed',1,${agentAuthorizationRevision},'v4',${"a".repeat(43)},'v3-host','v3-host',now(),now(),'web','personal',${identity.userId},'v3-key-ref',1)`;
 	if (configuration.source.kind !== "standard")
 		throw new Error("standard fixture expected");
 	const model = configuration.modelConfiguration;
@@ -361,6 +361,23 @@ async function durableCounts() {
 		(select count(*)::int from platform.idempotency_records where command_type='native-capability.invoke.v2') as idempotency`;
 	return counts;
 }
+
+it("revalidates V3 directories against the accepted origin after a rejected compact", async () => {
+	await db`insert into platform.conversation_executions
+		(execution_id,conversation_id,sandbox_id,agent_id,actor_id,principal_type,channel_id,turn_id,status,
+		 session_generation,authorization_revision,runtime_submit_protocol,original_operation_digest,
+		 original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,
+		 relay_key_id,relay_key_version,created_at,updated_at)
+		values ('rejected-native',${conversationId},(select sandbox_id from platform.session_sandbox_allocations where conversation_id=${conversationId}),${agentId},${identity.userId},'user','web',
+		 'rejected-turn','failed',1,${agentAuthorizationRevision},'v4',${"b".repeat(43)},
+		 'v3-host','web','personal',${identity.userId},'v3-key-ref',1,
+		 clock_timestamp()+interval '1 second',clock_timestamp()+interval '1 second')`;
+	expect(await invoke()).toMatchObject({
+		status: 202,
+		body: { outcome: "accepted" },
+	});
+	expect(directoryReads).toBe(1);
+});
 
 it("denies a grant revoked after directory discovery without reserving the operation", async () => {
 	afterDirectoryRead = async () => {

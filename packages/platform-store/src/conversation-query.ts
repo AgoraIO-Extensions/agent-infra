@@ -1633,7 +1633,7 @@ export class PostgresConversationQueryV1 {
 								and e.principal_type = c.principal_type
 								and e.session_generation = c.session_generation
 								and e.authorization_revision = c.authorization_revision
-								and coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) = c.host_session_ref
+								and e.accepted_original_host_session_ref = c.host_session_ref
 							where c.id = ${conversationId}
 								and c.agent_id = ${agentId}
 								and c.actor_id = ${readScope.actorId}

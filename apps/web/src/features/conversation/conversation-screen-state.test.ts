@@ -13,11 +13,53 @@ import {
 	executionPhase,
 	executionPhaseLabel,
 	isTerminal,
+	nativeMetadataExecution,
 	reasoningTexts,
 } from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
 describe("current conversation execution", () => {
+	it.each(["failed", "unknown"] as const)(
+		"keeps controls on %s while only rejected work may use an older metadata anchor",
+		(status) => {
+			const baseline = PersistedConversationEventV1Schema.parse({
+				...event(1),
+				type: "execution.status" as const,
+				payload: { status: "completed" as const },
+			});
+			const latest = TaskStatusEventV1Schema.parse({
+				...event(2),
+				executionId: "latest",
+				type: "task.status" as const,
+				payload:
+					status === "unknown"
+						? { status, reason: "STOP_CONFIRMATION_TIMEOUT" }
+						: { status },
+			});
+			const current = currentExecution(null, [baseline, latest]);
+			expect(current).toEqual({ executionId: "latest", status });
+			expect(nativeMetadataExecution(null, [baseline, latest], current)).toBe(
+				status === "failed" ? "execution-1" : "latest",
+			);
+		},
+	);
+	it("keeps an accepted Runtime failure as its own metadata origin", () => {
+		const events = [
+			PersistedConversationEventV1Schema.parse({
+				...event(1),
+				executionId: "accepted-failed",
+				type: "execution.status" as const,
+				payload: { status: "failed" as const },
+			}),
+		];
+		expect(
+			nativeMetadataExecution(null, events, currentExecution(null, events)),
+		).toBe("accepted-failed");
+	});
+	it("has no metadata origin for a rejection with no accepted predecessor", () => {
+		const current = { executionId: "rejected", status: "failed" as const };
+		expect(nativeMetadataExecution(null, [], current)).toBeUndefined();
+	});
 	it.each(["failed", "cancelled", "completed"] as const)(
 		"keeps stop timeout uncertain until a persisted %s event arrives",
 		(status) => {
