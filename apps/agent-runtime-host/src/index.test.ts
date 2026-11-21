@@ -34,6 +34,7 @@ import {
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
+	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	type SessionInstanceReadRequestV1,
 	sessionInstanceReadSigningPayloadV1,
@@ -51,6 +52,7 @@ import {
 	standardMcpFixture,
 	token,
 } from "../../../packages/agent-runtime/src/standard-mcp.fixture.js";
+import { createNativeCapabilityAdmissionUseCaseV6 } from "../../../packages/platform-core/src/native-capability-admission-v6.js";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
@@ -2027,6 +2029,142 @@ describe("RuntimeHost environment assembly", () => {
 					keyId: "synthetic-key",
 					privateKey,
 				});
+				const nativeContext = {
+					schemaVersion: 6 as const,
+					requestId: "compact-request",
+					traceId: "compact-trace",
+					principal: { kind: "user" as const, id: "synthetic-user" },
+					executionSource: "web" as const,
+					agentId: "synthetic-agent",
+					channelId: "web",
+					conversationId: "compact-conversation",
+					executionId: "compact-execution",
+					turnId: "compact-turn",
+					sessionGeneration: 1,
+					hostSessionRef: "compact-host",
+					operation: {
+						kind: "execution" as const,
+						id: "compact-execution",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+					keyBinding: {
+						purpose: "personal" as const,
+						subjectId: "synthetic-user",
+						ciphertextRef: "synthetic-key-ref",
+						version: 1,
+					},
+					capabilityId: "c".repeat(64),
+					capabilityKind: "command" as const,
+					directoryRevision: "d".repeat(64),
+					parameters: "",
+					parametersDigest: createHash("sha256").update("").digest("hex"),
+					capabilitySourceVersion: "0.153.0",
+					selection: {
+						schemaVersion: 1 as const,
+						modelOptionId: "model-option-primary",
+						reasoningLevel: "high",
+					},
+					configVersion: "configuration-4-fingerprint",
+				};
+				const boundary = {
+					schemaVersion: 1 as const,
+					principal: nativeContext.principal,
+					agentId: nativeContext.agentId,
+					channelId: "web",
+					agentAuthorizationRevision: "auth-4",
+					identityRevision: "identity-4",
+					accessSources: [{ kind: "user" as const, userId: "synthetic-user" }],
+				};
+				const authority = {
+					conversationId: nativeContext.conversationId,
+					principal: nativeContext.principal,
+					executionSource: nativeContext.executionSource,
+					agentId: nativeContext.agentId,
+					actorId: nativeContext.principal.id,
+					channelId: "web",
+					authorizationRevision: "auth-4",
+					sessionGeneration: 1,
+					hostSessionRef: nativeContext.hostSessionRef,
+				};
+				const useCase = createNativeCapabilityAdmissionUseCaseV6({
+					authorization: {
+						authorize: async () => ({
+							outcome: "allowed",
+							authority,
+							taskAuthority: {
+								schemaVersion: 1,
+								actorId: authority.actorId,
+								agentId: authority.agentId,
+								channelId: "web",
+								authorizationRevision: "auth-4",
+								supportsSupplementaryInstruction: false,
+								taskBoundary: boundary,
+							},
+							keyBinding: nativeContext.keyBinding,
+							modelConfigurationRevision: 4,
+						}),
+					},
+					transaction: {
+						admitNativeCapabilityV6: async (input) => ({
+							outcome: "accepted",
+							plan: input.plan,
+						}),
+					},
+				});
+				const admitted = await useCase.admit(nativeContext, {
+					schemaVersion: 3,
+					conversationId: nativeContext.conversationId,
+					capabilityId: nativeContext.capabilityId,
+					directoryRevision: nativeContext.directoryRevision,
+					parameters: "",
+					selection: nativeContext.selection,
+					idempotencyKey: "compact-key",
+					requestId: nativeContext.requestId,
+					traceId: nativeContext.traceId,
+				});
+				if (admitted.outcome !== "accepted")
+					throw new Error("expected compact plan");
+				expect(admitted.plan.configVersion).toBe("configuration-4-fingerprint");
+				expect(admitted.plan.modelConfigurationRevision).toBe(4);
+				const native = RuntimeNativeCapabilityRequestV6Schema.parse({
+					...nativeContext,
+					configVersion: admitted.plan.configVersion,
+					grant: {
+						schemaVersion: 6,
+						format: "runtime-execution-jws",
+						token: "a.b.c",
+					},
+				});
+				const signedNative = {
+					...native,
+					grant: await signer.signV6(native, "synthetic-authorization"),
+				};
+				await expect(
+					runtime.verifyGrantV6?.(signedNative),
+				).resolves.toMatchObject({
+					request: { configVersion: "configuration-4-fingerprint" },
+				});
+				for (const configVersion of [
+					"4",
+					"configuration-3-old",
+					"configuration-4-wrong",
+				]) {
+					const wrong = { ...native, configVersion };
+					await expect(
+						runtime.verifyGrantV6?.({
+							...wrong,
+							grant: await signer.signV6(wrong, "synthetic-authorization"),
+						}),
+					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				}
+				await expect(
+					runtime.verifyGrantV6?.({
+						...signedNative,
+						conversationId: "other-conversation",
+					}),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+
 				const signed = (request: typeof invalidGrantRequest) => ({
 					...request,
 					grant: signer.sign(request, "synthetic-authorization"),

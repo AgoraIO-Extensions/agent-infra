@@ -4,6 +4,11 @@ import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
 } from "@agent-infra/identity";
+import {
+	createFakeModelCatalogAdapterV1,
+	projectRuntimeModelConfigurationV4,
+	runtimeModelInjectionV4,
+} from "@agent-infra/model-catalog";
 import type { OperationalEvent } from "@agent-infra/observability";
 import { currentRequestMetadata } from "@agent-infra/observability/http";
 import {
@@ -20,6 +25,7 @@ import {
 	onTestFinished,
 	vi,
 } from "vitest";
+import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
 import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.js";
 import {
 	openPostgresTestClient,
@@ -27,6 +33,7 @@ import {
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { seedSessionSandboxFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
+import { workloadDesiredFixture } from "../../platform-worker/src/kubernetes.fixture.js";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
@@ -271,6 +278,35 @@ beforeEach(async () => {
 		execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version)
 		values (${originalExecutionId},${conversationId},${agentId},${identity.userId},'user','web',
 		'v3-original-turn','completed',1,${agentAuthorizationRevision},'v4',${"a".repeat(43)},'v3-host',now(),now(),'web','personal',${identity.userId},'v3-key-ref',1)`;
+	if (configuration.source.kind !== "standard")
+		throw new Error("standard fixture expected");
+	const model = configuration.modelConfiguration;
+	const catalog = catalogFixture();
+	const projection = await projectRuntimeModelConfigurationV4({
+		configuration: { ...configuration, secrets: [], environment: [] },
+		catalog: createFakeModelCatalogAdapterV1({
+			...catalog,
+			revision: model.catalogRevision,
+			endpoints: model.options.map((o) => ({
+				...catalog.endpoints[0],
+				endpointId: o.endpointId,
+			})),
+		}),
+		standardTemplateBinding: {
+			templateId: configuration.source.templateId!,
+			imageDigest: configuration.source.imageDigest,
+			driver: "codex",
+			protocol: "openai-responses-v1",
+		},
+		signal: AbortSignal.timeout(1000),
+	});
+	const version = {
+		configuration,
+		deployment: workloadDesiredFixture(1, agentId, "internal-only"),
+		modelProjection: projection,
+	};
+	await db`insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values(${agentId},1,${db.json({ schemaVersion: 1, agentId, sourceConfigurationRevision: 1, sourceLifecycleRevision: 1, revision: 1, fence: 1, phase: "ready", candidate: version, verified: version, verifiedRevision: 1, identity: { uid: "v3-workload", generation: 1 }, rollback: false, failureCode: null, attempts: 0 } as unknown as postgres.JSONValue)},now())`;
+
 	await seedSessionSandboxFixture(db, conversationId);
 });
 
@@ -437,6 +473,45 @@ async function moveRuntimeConfiguration() {
 			(agent_id,revision,source_reference,created_at,configuration)
 			values (${agentId},2,'fixture',now(),${db.json({ ...configuration, revision: 2 } as unknown as postgres.JSONValue)})`;
 		await transaction`update platform.agents set current_configuration_revision=2 where id=${agentId}`;
+		const [row] =
+			await transaction`select state from platform.workload_reconciliations where agent_id=${agentId}`;
+		const state = row!.state;
+		if (configuration.source.kind !== "standard")
+			throw new Error("standard fixture expected");
+		const model = configuration.modelConfiguration;
+		const catalog = catalogFixture();
+		const projection = await projectRuntimeModelConfigurationV4({
+			configuration: {
+				...configuration,
+				revision: 2,
+				secrets: [],
+				environment: [],
+			},
+			catalog: createFakeModelCatalogAdapterV1({
+				...catalog,
+				revision: model.catalogRevision,
+				endpoints: model.options.map((o) => ({
+					...catalog.endpoints[0],
+					endpointId: o.endpointId,
+				})),
+			}),
+			standardTemplateBinding: {
+				templateId: configuration.source.templateId!,
+				imageDigest: configuration.source.imageDigest,
+				driver: "codex",
+				protocol: "openai-responses-v1",
+			},
+			signal: AbortSignal.timeout(1000),
+		});
+
+		state.sourceConfigurationRevision = 2;
+		state.verified.deployment.configRevision = 2;
+		state.candidate.deployment.configRevision = 2;
+		state.verified.configuration.revision = 2;
+		state.candidate.configuration.revision = 2;
+		state.verified.modelProjection = projection;
+		state.candidate.modelProjection = projection;
+		await transaction`update platform.workload_reconciliations set state=${transaction.json(state)} where agent_id=${agentId}`;
 	});
 }
 
@@ -847,5 +922,38 @@ it.each(["foreign-actor", "foreign-agent"] as const)(
 		expect(await db`select id from platform.idempotency_records`).toHaveLength(
 			0,
 		);
+	},
+);
+
+it("keeps the adopted full model config version separate from its numeric revision (#4255)", async () => {
+	const response = await invoke();
+	expect(response.status).toBe(202);
+	const [row] =
+		await db`select o.payload,w.state->'verified'->'modelProjection' as projection from platform.outbox_items o join platform.workload_reconciliations w on w.agent_id=${agentId} where o.operation='conversation.native-capability.invoke.v2'`;
+	const expected = JSON.parse(
+		runtimeModelInjectionV4(row!.projection).configuration,
+	).configVersion;
+	expect(expected).toMatch(/^configuration-1-[a-f0-9]{64}$/);
+	expect(row?.payload.configVersion).toBe(expected);
+	expect(row?.payload.modelConfigurationRevision).toBe(1);
+});
+
+it.each(["missing", "other-agent", "old-revision"])(
+	"rejects %s adopted model projection before V6 persistence (#4255)",
+	async (change) => {
+		const [row] =
+			await db`select state from platform.workload_reconciliations where agent_id=${agentId}`;
+		const state = row!.state;
+		if (change === "missing") delete state.verified.modelProjection;
+		else if (change === "other-agent")
+			state.verified.modelProjection.agentId = "other-agent";
+		else state.sourceConfigurationRevision = 2;
+		await db`update platform.workload_reconciliations set state=${db.json(state)} where agent_id=${agentId}`;
+		expect((await invoke()).status).not.toBe(202);
+		expect(await durableCounts()).toEqual({
+			executions: 0,
+			outbox: 0,
+			idempotency: 0,
+		});
 	},
 );
