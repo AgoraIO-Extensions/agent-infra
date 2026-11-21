@@ -16,7 +16,10 @@ import {
 	readConnectionConsumerEnvironmentConfigurationV1,
 	readConnectionSystemAccessEnvironmentConfigurationV1,
 } from "./connection-consumer-environment.js";
-import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
+import {
+	createProtectedConnectionInstallationForwarder,
+	isProtectedConnectionCallbackAuthFileReadyV1,
+} from "./connection-installation-callback-forwarder.js";
 import {
 	createProductionNativeMetadataReaderFromWorkerV1,
 	inspectProductionRelayKeyPolicyV1,
@@ -288,6 +291,20 @@ const manualInstallationRequested =
 	manualExceptionApproval !== undefined ||
 	connectionManualInstallationClientName !== undefined ||
 	apiInput?.connectionInstallation?.manualInstallation !== undefined;
+const connectionCallbackAuthFile =
+	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE;
+// §13.5.6: a manual installation is confirmed only through its callback, so the
+// route needs a protected delivery to the original Host: the deployment
+// module's forwarder, or a callback-only credential file that passes the
+// forwarder's protected-file checks now. Otherwise the route stays dormant.
+const manualCallbackDelivery =
+	manualExceptionApproval !== undefined &&
+	(connectionInstallationCallback !== undefined ||
+		(await isProtectedConnectionCallbackAuthFileReadyV1(
+			connectionCallbackAuthFile,
+		)))
+		? "ready"
+		: "unavailable";
 const manualInstallation: ConnectionManualInstallationDeploymentV1 =
 	manualExceptionApproval === undefined
 		? { status: "dormant", reason: "exception_approval_missing" }
@@ -305,6 +322,7 @@ const manualInstallation: ConnectionManualInstallationDeploymentV1 =
 							manualInstallationEnvironment.clientName,
 						confirmedPrincipals:
 							await readConnectionConfirmedPrincipalsV1(databaseUrl),
+						callbackDelivery: manualCallbackDelivery,
 					});
 if (manualInstallation.status === "enabled")
 	console.info(
@@ -330,10 +348,10 @@ const callbackForwarder =
 	(((connectionInstallationConfiguration &&
 		!staticPerAgentConnectionBindings) ||
 		manualInstallation.status === "enabled") &&
-	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
+	connectionCallbackAuthFile
 		? {
 				forward: createProtectedConnectionInstallationForwarder({
-					authFile: process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE,
+					authFile: connectionCallbackAuthFile,
 				}),
 			}
 		: undefined);

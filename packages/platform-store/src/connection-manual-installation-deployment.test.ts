@@ -51,8 +51,9 @@ function resolve(overrides: Record<string, unknown> = {}) {
 		approval,
 		exceptionApproval,
 		confirmedPrincipals: complete,
+		callbackDelivery: "ready",
 		...overrides,
-	});
+	} as Parameters<typeof resolveConnectionManualInstallationDeploymentV1>[0]);
 }
 
 describe("#4199 C2 exception route deployment gate (§13.5.1)", () => {
@@ -209,6 +210,17 @@ describe("#4199 C2 exception route deployment gate (§13.5.1)", () => {
 			"an unresolvable Principal set",
 			{ confirmedPrincipals: { status: "unresolvable" } },
 			"confirmed_principals_unresolvable",
+		],
+		// #4327 MUST 1 (§13.5.6): no protected callback delivery to the Host.
+		[
+			"an unavailable callback delivery",
+			{ callbackDelivery: "unavailable" },
+			"callback_delivery_unavailable",
+		],
+		[
+			"an unstated callback delivery",
+			{ callbackDelivery: undefined },
+			"callback_delivery_unavailable",
 		],
 	] as const)("stays dormant for %s", (_name, overrides, reason) => {
 		expect(resolve(overrides)).toEqual({ status: "dormant", reason });

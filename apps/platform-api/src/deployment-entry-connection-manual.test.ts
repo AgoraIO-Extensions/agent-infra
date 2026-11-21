@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -365,5 +365,91 @@ apiInput.connectionInstallation = { publicOrigin, manualInstallation: { systemAc
 		expect(
 			entry.createPlatformApiAssemblyInput().connectionInstallation,
 		).toBeUndefined();
+	});
+
+	// #4327 MUST 1 (Spec §13.5.6): the route opens only with a protected callback
+	// delivery to the original Host. Without one a confirmed installation would
+	// wait forever for a callback that is never forwarded.
+	it.each<[string, () => Promise<string | undefined>]>([
+		["no callback-auth file", async () => undefined],
+		[
+			"a missing callback-auth file",
+			async () => join(directory, "absent.auth"),
+		],
+		[
+			"a callback-auth file readable by others",
+			async () => {
+				const path = join(directory, "open.auth");
+				await writeFile(path, callbackToken, { mode: 0o644 });
+				return path;
+			},
+		],
+		[
+			"a callback-auth file with a short token",
+			async () => {
+				const path = join(directory, "short.auth");
+				await writeFile(path, "short", { mode: 0o600 });
+				return path;
+			},
+		],
+		[
+			"a symlinked callback-auth file",
+			async () => {
+				const path = join(directory, "linked.auth");
+				await symlink(join(directory, "callback.auth"), path);
+				return path;
+			},
+		],
+		["a relative callback-auth path", async () => "callback.auth"],
+	])(
+		"keeps the route and its callback dormant with %s",
+		async (_name, authFile) => {
+			vi.stubEnv(
+				"PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE",
+				await authFile(),
+			);
+			vi.stubEnv(
+				"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
+				JSON.stringify(exceptionApproval),
+			);
+			const entry = await load();
+			const input = entry.createPlatformApiAssemblyInput();
+			expect(input.connectionInstallation).toBeUndefined();
+			expect(input.connectionInstallationCallback).toBeUndefined();
+			expect(logs()).toEqual([
+				{
+					service: "platform-api",
+					code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+					reason: "callback_delivery_unavailable",
+				},
+			]);
+			expect(JSON.stringify([input, logs()])).not.toContain(callbackToken);
+		},
+	);
+
+	it("opens the route with the deployment module's callback forwarder and no callback-auth file", async () => {
+		vi.stubEnv("PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE", undefined);
+		vi.stubEnv(
+			"AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL",
+			JSON.stringify(exceptionApproval),
+		);
+		const entry = await load(`
+export const connectionInstallationCallback = {
+  forward: async ({ target }) => { globalThis.__manualCallbackForwarded = target.authorizationId; },
+};`);
+		const input = entry.createPlatformApiAssemblyInput();
+		expect(input.connectionInstallation?.manualInstallation).toBeDefined();
+		await input.connectionInstallationCallback?.forward?.({
+			target: { authorizationId: "authorization-a" },
+		} as never);
+		expect(
+			(globalThis as { __manualCallbackForwarded?: string })
+				.__manualCallbackForwarded,
+		).toBe("authorization-a");
+		expect(logs()).toEqual([
+			expect.objectContaining({
+				code: "CONNECTION_MANUAL_INSTALLATION_ENABLED",
+			}),
+		]);
 	});
 });
