@@ -605,6 +605,7 @@ export const ConnectionInstallConfirmExchangeResponseV1Schema = z.strictObject({
 	contract: z.literal(connectionManualConfirmContractV1),
 	outcome: z.enum(["exchanged", "rejected", "unknown"]),
 	commandId: OpaqueIdV1Schema,
+	/** `expiresAt` is in epoch milliseconds. */
 	publication: z
 		.strictObject({ commitDigest: hex64, expiresAt: positive })
 		.optional(),

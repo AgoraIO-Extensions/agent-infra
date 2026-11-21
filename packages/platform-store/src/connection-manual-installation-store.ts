@@ -29,6 +29,7 @@ import {
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
 	matchConnectionRegistrationReceiptV1,
+	verifyConnectionRegistrationTemplateV1,
 } from "@agent-infra/contracts/runtime/connection-install-node";
 import {
 	ConnectionInstallationErrorV1,
@@ -334,6 +335,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and b.command='confirm_binding_readback' and b.status='completed'
 					and b.idempotency_key='confirm-phase:' || c.id || ':confirm_binding_readback'
 				where a.status='confirmed' and m.revoke_state='not_required'
+					-- Defensive: commitPermit completes the confirm in the same CAS, so
+					-- a permitted installation never reaches here with an unknown confirm.
 					and not exists (select 1 from platform.connection_manual_install_permits t
 						where t.authorization_id=a.id)
 				order by a.id
@@ -1350,6 +1353,7 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		readonly authorizationId: string;
 		readonly publication: {
 			readonly commitDigest: string;
+			/** Epoch milliseconds. */
 			readonly expiresAt: number;
 		};
 	}): Promise<"permitted" | "stale"> {
@@ -2040,6 +2044,17 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		if (!row?.associationLocked || !row.template || !row.descriptor_digest)
 			return "denied";
 		const template = ConnectionRegistrationTemplateV1Schema.parse(row.template);
+		// Every readback purpose checks the deployment's current system access
+		// approval (§13.5.6 Worker 权威回读), the permit read included.
+		try {
+			verifyConnectionRegistrationTemplateV1(
+				template,
+				this.#policy.access,
+				this.#policy.clientName,
+			);
+		} catch {
+			return "denied";
+		}
 		const reference = request.reference;
 		if (
 			row.user_id !== request.principal.id ||

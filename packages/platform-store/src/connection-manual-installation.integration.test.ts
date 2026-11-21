@@ -206,7 +206,7 @@ beforeEach(async () => {
 	// Restore the seeded original claims that claim and fence regressions move.
 	await client`delete from platform.outbox_items where id not in ('item-a','item-b','item-bob')`;
 	await client`update platform.outbox_items set status='processing', lease_expires_at=now()+interval '1 hour', delivery_fence=3`;
-	await client`update platform.conversation_executions set delivery_fence=3`;
+	await client`update platform.conversation_executions set delivery_fence=3, status='processing'`;
 	await associate("agent-a", "connection-agent-a", 1);
 	await associate("agent-b", "connection-agent-b", 1);
 });
@@ -3670,6 +3670,17 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			() =>
 				client`update platform.connection_installation_authorizations set status='revoked'`,
 		],
+		[
+			"the confirm attempt lapsed while still sending",
+			() =>
+				client`update platform.connection_installation_commands
+					set attempt_expires_at=clock_timestamp()-interval '1 second' where status='sending'`,
+		],
+		[
+			"the original Execution stopped processing",
+			() =>
+				client`update platform.conversation_executions set status='unknown' where execution_id='execution-a'`,
+		],
 	])("writes no permit once %s", async (_name, change) => {
 		const flow = await confirmed();
 		const done = await exchanged(flow);
@@ -3866,6 +3877,67 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 			expect(await late.readback(request)).toBe("denied");
 		} finally {
 			await late.close();
+		}
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	// #4314 MUST 1: like every other readback purpose, the permit read checks
+	// the template against the deployment's current system access approval.
+	it("stops the permit once the deployment's system access approval changed", async () => {
+		const { request } = await permitted();
+		const source = { ref: "platform-deployment", revision: "r2" };
+		const reapproved = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: {
+				...policy,
+				approval: { ...systemApproval, source },
+				dynamic: {
+					...dynamic,
+					principalMapping: {
+						...dynamic.principalMapping,
+						approvalSource: source,
+					},
+				},
+			},
+		});
+		try {
+			expect(await reapproved.readback(request)).toBe("denied");
+		} finally {
+			await reapproved.close();
+		}
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	// #4314 S2: the current Execution's actual Pod and resource fence come from
+	// the Store, not from the request; a drift there stops the permit too.
+	it.each([
+		[
+			"the current Pod UID",
+			() =>
+				client`update platform.session_sandbox_allocations set resource_observation=jsonb_set(resource_observation,
+					'{resources}', (select jsonb_agg(case when r->>'kind'='Pod' then jsonb_set(r, '{uid}', '"pod-replaced"') else r end)
+						from jsonb_array_elements(resource_observation->'resources') r))
+					where conversation_id='conversation-a'`,
+		],
+		[
+			"the Sandbox resource fence",
+			() =>
+				client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1
+					where conversation_id='conversation-a'`,
+		],
+	])("stops the permit once %s moved in the Store", async (_name, change) => {
+		const { request } = await permitted();
+		const [saved] =
+			await client`select resource_observation, resource_fence from platform.session_sandbox_allocations
+				where conversation_id='conversation-a'`;
+		try {
+			await change();
+			expect(await manual.readback(request)).toBe("denied");
+		} finally {
+			await client`update platform.session_sandbox_allocations
+				set resource_observation=${client.json(saved?.resource_observation as never)}, resource_fence=${saved?.resource_fence as string}
+				where conversation_id='conversation-a'`;
 		}
 		expect(await manual.readback(request)).toBe("allowed");
 	});
