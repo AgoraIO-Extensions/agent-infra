@@ -595,6 +595,13 @@ const manualInstallation = await decideConnectionManualInstallationDeploymentV1(
 		standardInstallationConfigured:
 			staticPerAgentConnectionBindings ||
 			configuredConnectionInstallation !== undefined,
+		// The Worker cannot attest the API's callback credential file; the shared
+		// premises decide here. An enabled decision then requires this Worker's own
+		// install transport, including the same callback Secret reference for the
+		// Host, or the Worker does not start. So whenever the API opens the route
+		// this Worker carries it; an API kept dormant only by its callback file
+		// accepts no installation for this Worker to drain.
+		callbackDelivery: "ready",
 		...(manualSystemAccess
 			? {
 					systemAccess: {

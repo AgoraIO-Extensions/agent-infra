@@ -53,6 +53,8 @@ export type ConnectionManualInstallationDormantReasonV1 =
 	| "approval_source_mismatch"
 	| "client_name_invalid"
 	| "confirmed_principals_unresolvable"
+	/** No protected callback delivery to the original Host (§13.5.6). */
+	| "callback_delivery_unavailable"
 	/** A static or standard installation input shares the deployment; never mixed. */
 	| "standard_installation_configured"
 	| "policy_invalid";
@@ -101,8 +103,11 @@ export type ConnectionConfirmedPrincipalsV1 =
  * `ConnectionConsistencyExceptionApprovalV1`, is bound to that system access
  * fingerprint and approval source, names a Connection release and has not
  * reached `notAfter`, and the Platform DB yields the complete set of
- * Principals confirmed outside the exception. Anything else keeps the route
- * dormant with one reason; nothing is defaulted or inferred.
+ * Principals confirmed outside the exception, and the deployment has a
+ * protected callback delivery to the original Host (§13.5.6: without it a
+ * confirmed installation would wait for a callback that is never forwarded).
+ * Anything else keeps the route dormant with one reason; nothing is defaulted
+ * or inferred.
  *
  * The readback and publication contracts are fixed here, not deployment
  * input; the store still enforces `notAfter` on the database clock.
@@ -113,6 +118,11 @@ export function resolveConnectionManualInstallationDeploymentV1(input: {
 	readonly exceptionApproval: unknown;
 	readonly clientName?: unknown;
 	readonly confirmedPrincipals: ConnectionConfirmedPrincipalsV1;
+	/**
+	 * `ready` only when the deployment entry verified the callback-only
+	 * credential file or has the deployment module's callback forwarder.
+	 */
+	readonly callbackDelivery: "ready" | "unavailable";
 	readonly now?: number;
 }): ConnectionManualInstallationDeploymentV1 {
 	const dormant = (reason: ConnectionManualInstallationDormantReasonV1) =>
@@ -147,6 +157,8 @@ export function resolveConnectionManualInstallationDeploymentV1(input: {
 		return dormant("client_name_invalid");
 	if (input.confirmedPrincipals.status !== "complete")
 		return dormant("confirmed_principals_unresolvable");
+	if (input.callbackDelivery !== "ready")
+		return dormant("callback_delivery_unavailable");
 	const policy: ConnectionManualInstallationPolicyInputV1 = {
 		systemAccess: structuredClone(input.systemAccess),
 		approval: structuredClone(input.approval),
@@ -344,6 +356,8 @@ export async function decideConnectionManualInstallationDeploymentV1(input: {
 		readonly system: unknown;
 		readonly approval: unknown;
 	};
+	/** The protected callback delivery this process can attest (§13.5.6). */
+	readonly callbackDelivery: "ready" | "unavailable";
 	readonly databaseUrl: string;
 	readonly now?: number;
 }): Promise<ConnectionManualInstallationDeploymentV1> {
@@ -361,6 +375,7 @@ export async function decideConnectionManualInstallationDeploymentV1(input: {
 		confirmedPrincipals: await readConnectionConfirmedPrincipalsV1(
 			input.databaseUrl,
 		),
+		callbackDelivery: input.callbackDelivery,
 		...(input.now === undefined ? {} : { now: input.now }),
 	});
 }

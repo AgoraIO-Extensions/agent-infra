@@ -3041,6 +3041,7 @@ export const serviceToken = ${JSON.stringify(serviceToken)};`,
 				exceptionApproval: record,
 				standardInstallationConfigured: false,
 				systemAccess: { system: systemAccess, approval },
+				callbackDelivery: "ready",
 				databaseUrl: realDatabase.databaseUrl,
 			});
 		const lastLine = (stdout: string) =>
