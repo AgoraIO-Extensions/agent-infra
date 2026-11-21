@@ -12,7 +12,10 @@ import {
 } from "../../apps/platform-api/src/runtime-native-metadata-current.js";
 import { createRuntimeNativeMetadataWorkerReaderV1 } from "../../apps/platform-api/src/runtime-native-metadata-reader.js";
 import { createRuntimeNativeMetadataRequestContextV1 } from "../../apps/platform-api/src/runtime-native-metadata-request-context.js";
-import { createRuntimeNativeMetadataScopeResolverV1 } from "../../apps/platform-api/src/runtime-native-metadata-scope-resolver.js";
+import {
+	createRuntimeNativeMetadataScopeResolverV1,
+	NativeMetadataResourceUnavailableV1,
+} from "../../apps/platform-api/src/runtime-native-metadata-scope-resolver.js";
 import { createWorkerRuntimeNativeMetadataGatewayV1 } from "../../apps/platform-worker/src/runtime-native-metadata-gateway.js";
 import { createWorkerRuntimeNativeMetadataProofIssuerV1 } from "../../apps/platform-worker/src/runtime-native-metadata-proof.js";
 import type { CodexRuntimeDriver } from "../../packages/agent-runtime/src/codex-runtime-driver.js";
@@ -213,8 +216,20 @@ export async function measureNativeMetadataPgChain(input: {
 					),
 				),
 			);
-			rounds.push(directories.map((directory) => directory?.selector ?? null));
-			if (directories.some((directory) => !directory)) break;
+			rounds.push(
+				directories.map((directory) =>
+					directory && directory !== NativeMetadataResourceUnavailableV1
+						? directory.selector
+						: null,
+				),
+			);
+			if (
+				directories.some(
+					(directory) =>
+						!directory || directory === NativeMetadataResourceUnavailableV1,
+				)
+			)
+				break;
 		}
 		// Preserve the real response-bytes guard; no business Turn is submitted by this test.
 		if (rounds.length === 2 && rounds.flat().every(Boolean))
