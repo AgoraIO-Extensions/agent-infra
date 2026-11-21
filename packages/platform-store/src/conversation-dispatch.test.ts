@@ -11412,6 +11412,39 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		},
 	);
 
+	it.each(["pending", "unavailable", "complete"] as const)(
+		"Files4266archive keeps unproved control occupancy after archive outbox close (%s)",
+		async (status) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "completed",
+				executionFence: 3,
+				hostSessionRef: "original-host",
+			});
+			const sandbox = await prepared(work);
+			await client`update platform.outbox_items set status='failed' where id=${work.itemId}`;
+			await client`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome,details)
+			values (${`conversation.archive:${work.executionId}:0000000000000001`},'archive-test','system','worker','conversation.archive.observed','execution',${work.executionId},'agent-dispatch','failed',${client.json({ binding: { generation: 1, executionFence: 3 }, archive: { schemaVersion: 1, ref: "archive", revision: 1, status, startedAtMs: 1000, deadlineAtMs: 2000, lastProgressAtMs: null, cursor: null, acknowledgedCursor: null } })})`;
+			await reverify();
+			expect(await upgrade()).toBe(1);
+			const store = sandboxStore();
+			try {
+				expect(
+					await store.claimSandboxReconciliation({
+						schemaVersion: 1,
+						itemId: sandbox.itemId,
+						workerId: "archive-drain",
+						leaseDurationMs: 30000,
+					}),
+				).toMatchObject({
+					purpose: "drain",
+					drainComputeAllowed: status === "complete",
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("keeps an idle Sandbox current after a channel-only configuration revision (ADR-0028)", async () => {
 		const idle = await seed("conversation.turn.submit.v1", {
 			executionFence: 2,
@@ -12601,6 +12634,899 @@ describe("terminal original Turn control authority (#4266)", () => {
 		await client`update platform.agent_applications set status='stopped',desired_state='stopped',service_availability=null where agent_id='agent-dispatch'`;
 		return work;
 	}
+	it("Files4266fix2 bounds original terminal recovery when the original Host is absent after Sandbox stop", async () => {
+		const work = await terminalWork();
+		await client`update platform.conversation_executions
+			set last_runtime_cursor='cursor-12',last_event_sequence=12
+			where execution_id=${work.executionId}`;
+		const store = open();
+		let acknowledgements = 0;
+		let submissions = 0;
+		const host: ConversationRuntimeHostPortV1 =
+			new FakeConversationRuntimeHostV1();
+		host.dispatch = async () => {
+			submissions++;
+			throw new Error("Original Turn must not be replayed");
+		};
+		host.acknowledge = async () => {
+			acknowledgements++;
+			throw new ConversationRuntimeHostError(
+				"RUNTIME_WORKLOAD_UNAVAILABLE",
+				true,
+			);
+		};
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				runtimeHost: host,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						if (decision.outcome !== "allowed") return decision;
+						return {
+							...decision,
+							authority: { ...decision.authority, controlOnly: true },
+						};
+					},
+				},
+				events: {
+					async persist() {
+						throw new Error("No original Host event is available");
+					},
+				},
+			},
+			{ retryDelayMs: 0, maxRecoveryAttempts: 3, recoveryBudgetMs: 1 },
+		);
+		try {
+			const outcomes = [];
+			for (let i = 0; i < 6; i++) {
+				outcomes.push(
+					(
+						await useCase.dispatch({
+							schemaVersion: 1,
+							itemId: work.itemId,
+							workerId: "terminal-recovery",
+						})
+					).outcome,
+				);
+			}
+			const [row] =
+				await client`select status, attempt_count from platform.outbox_items where id=${work.itemId}`;
+			expect((await dispatchState(work))?.execution_status).toBe("completed");
+			expect(submissions).toBe(0);
+			expect(
+				await client`select event_id from platform.conversation_events where execution_id=${work.executionId}`,
+			).toHaveLength(0);
+			expect(outcomes).toContain("rejected");
+			expect(row?.status).not.toBe("retry_scheduled");
+		} finally {
+			await store.close();
+		}
+	});
+	it.each([false, true])(
+		"Files4325M1 permits original PVC observation enrichment without resetting archive expiry (prior shape=%s)",
+		async (priorShape) => {
+			const work = await terminalWork();
+			const [original] =
+				await client`select resource_observation->'resources' as resources from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+			const pvc = original!.resources.find(
+				(r: { kind: string }) => r.kind === "PersistentVolumeClaim",
+			);
+			await client`update platform.session_sandbox_allocations set resource_observation=null where conversation_id=${work.conversationId}`;
+			const current = await claim(work.itemId);
+			try {
+				if (current.decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				expect(
+					await current.store.archiveOriginalTurn({
+						claim: current.decision.claim,
+						budgetMs: 300,
+					}),
+				).toMatchObject({ status: "pending" });
+				if (priorShape)
+					await client`update platform.audit_events set details=details #- '{binding,pvcLocation}' where target_id=${work.executionId} and action='conversation.archive.observed'`;
+				const [before] =
+					await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+				await client`update platform.session_sandbox_allocations set resource_observation=${client.json({ status: "stopped", resources: [pvc] })} where conversation_id=${work.conversationId}`;
+				await client`select pg_sleep(0.35)`;
+				expect(
+					await current.store.archiveOriginalTurn({
+						claim: current.decision.claim,
+						budgetMs: 999999,
+					}),
+				).toMatchObject({ status: "unavailable", remainingMs: 0 });
+				const [after] =
+					await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+				expect(after!.details.archive.deadlineAtMs).toBe(
+					before!.details.archive.deadlineAtMs,
+				);
+				expect(after!.details.archive.lastProgressAtMs).toBeNull();
+				expect(after!.details.binding.pvc).toEqual({
+					name: pvc.name,
+					namespace: pvc.namespace,
+					uid: pvc.uid,
+				});
+				expect(await dispatchState(work)).toMatchObject({
+					status: "failed",
+					execution_status: "completed",
+				});
+			} finally {
+				await current.store.close();
+			}
+		},
+	);
+	it.each(["name", "namespace", "uid"] as const)(
+		"Files4325M1 rejects an observed PVC %s replacement",
+		async (field) => {
+			const work = await terminalWork();
+			const current = await claim(work.itemId);
+			try {
+				if (current.decision.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 1000,
+				});
+				const [allocation] =
+					await client`select resource_observation from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+				const observation = allocation!.resource_observation;
+				observation.resources = observation.resources.map(
+					(r: { kind: string }) =>
+						r.kind === "PersistentVolumeClaim"
+							? { ...r, [field]: "replacement" }
+							: r,
+				);
+				await client`update platform.session_sandbox_allocations set resource_observation=${client.json(observation)} where conversation_id=${work.conversationId}`;
+				expect(
+					await current.store.archiveOriginalTurn({
+						claim: current.decision.claim,
+						budgetMs: 1000,
+					}),
+				).toBeNull();
+				expect(await dispatchState(work)).toMatchObject({
+					status: "processing",
+					execution_status: "completed",
+				});
+			} finally {
+				await current.store.close();
+			}
+		},
+	);
+
+	it("Files4266archive fixes an absolute budget across claims/restarts and preserves the result and query gap", async () => {
+		const work = await terminalWork();
+		let store = open();
+		try {
+			const first = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "archive-first",
+				leaseDurationMs: 30000,
+			});
+			if (first.outcome !== "claimed")
+				throw new Error("Missing original claim");
+			expect(
+				await store.archiveOriginalTurn({ claim: first.claim, budgetMs: 1000 }),
+			).toMatchObject({ status: "pending" });
+			const read = () =>
+				client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by occurred_at desc,id desc limit 1`;
+			const before = (await read())[0]!.details;
+			await store.retry({
+				claim: first.claim,
+				retryDelayMs: 0,
+				errorCode: "RUNTIME_WORKLOAD_UNAVAILABLE",
+				transition: {},
+			});
+			await store.close();
+			store = open();
+			const second = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "archive-restart",
+				leaseDurationMs: 30000,
+			});
+			if (second.outcome !== "claimed")
+				throw new Error("Missing recovery claim");
+			for (const change of [
+				{ actorId: "other" },
+				{ agentId: "other" },
+				{ conversationId: "other" },
+				{ sessionGeneration: 2 },
+				{ executionDeliveryFence: 2 },
+				{ deliveryFence: second.claim.deliveryFence + 1 },
+			]) {
+				let denied = false;
+				try {
+					denied =
+						(await store.archiveOriginalTurn({
+							claim: { ...second.claim, ...change },
+							budgetMs: 1000,
+						})) === null;
+				} catch (error) {
+					expect(error).toBeInstanceOf(TypeError);
+					denied = true;
+				}
+				expect(denied).toBe(true);
+			}
+			expect(
+				await store.archiveOriginalTurn({
+					claim: second.claim,
+					budgetMs: 86400000,
+				}),
+			).toMatchObject({ status: "pending" });
+			const after = (await read())[0]!.details;
+			expect({ ...after.archive, revision: before.archive.revision }).toEqual(
+				before.archive,
+			);
+			expect(after.binding).toEqual(before.binding);
+			// Spend the actual persisted deadline without altering its record.
+			await client`select pg_sleep(1.05)`;
+			expect(
+				await store.archiveOriginalTurn({
+					claim: second.claim,
+					budgetMs: 86400000,
+				}),
+			).toMatchObject({ status: "unavailable" });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+				execution_fence: 1,
+			});
+			const final = (await read())[0]!.details;
+			expect(final.archive.deadlineAtMs).toBe(before.archive.deadlineAtMs);
+			expect(final.binding).toEqual(before.binding);
+			expect(
+				await client`select event_id from platform.conversation_events where execution_id=${work.executionId}`,
+			).toHaveLength(0);
+			const query = new PostgresConversationQueryV1({ databaseUrl });
+			try {
+				const detail = await query.get(
+					{ actorId: "actor-dispatch", channelId: "web" },
+					work.conversationId,
+				);
+				expect(
+					detail?.executions.find((e) => e.executionId === work.executionId)
+						?.archive?.status,
+				).toBe("unavailable");
+				expect(
+					await query.get(
+						{ actorId: "foreign", channelId: "web" },
+						work.conversationId,
+					),
+				).toBeUndefined();
+				expect(
+					await query.getArchives(
+						{ actorId: "actor-dispatch", channelId: "web" },
+						work.conversationId,
+					),
+				).toEqual([
+					{
+						executionId: work.executionId,
+						archive: {
+							schemaVersion: 1,
+							status: "unavailable",
+							deadlineAt: new Date(final.archive.deadlineAtMs).toISOString(),
+						},
+					},
+				]);
+				expect(
+					await query.getArchives(
+						{ actorId: "foreign", channelId: "web" },
+						work.conversationId,
+					),
+				).toBeUndefined();
+			} finally {
+				await query.close();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("Files4266archive completes only after the real terminal event commits and its cursor is ACKed", async () => {
+		const work = await terminalWork();
+		const store = open();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const acknowledged: string[] = [];
+		const host = isolationHost(work, {
+			async *events() {
+				yield {
+					schemaVersion: 1,
+					type: "completed",
+					executionId: work.executionId,
+					adapterEventKey: "real-terminal",
+					cursor: "terminal-cursor",
+					occurredAt: "2026-11-20T23:00:00.000Z",
+					payload: { status: "completed" },
+				};
+			},
+			async acknowledge(request) {
+				const [row] =
+					await client`select last_runtime_cursor from platform.conversation_executions where execution_id=${work.executionId}`;
+				expect(row?.last_runtime_cursor).toBe(request.confirmedCursor);
+				acknowledged.push(request.confirmedCursor);
+			},
+		});
+		try {
+			const useCase = createConversationDispatchUseCaseV1({
+				store,
+				runtimeHost: host,
+				events,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						return decision.outcome === "allowed"
+							? {
+									...decision,
+									authority: { ...decision.authority, controlOnly: true },
+								}
+							: decision;
+					},
+				},
+			});
+			expect(
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "archive-complete",
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			expect(acknowledged).toContain("terminal-cursor");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "completed",
+				execution_fence: 1,
+			});
+			const [record] =
+				await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+			expect(record?.details.archive).toMatchObject({
+				status: "complete",
+				cursor: "terminal-cursor",
+				acknowledgedCursor: "terminal-cursor",
+			});
+			expect(
+				await client`select event_type,event_payload,occurred_at from platform.conversation_events where execution_id=${work.executionId}`,
+			).toEqual([
+				{
+					event_type: "execution.status",
+					event_payload: {
+						type: "execution.status",
+						status: "completed",
+					},
+					occurred_at: new Date("2026-11-20T23:00:00.000Z"),
+				},
+			]);
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
+		}
+	});
+
+	it("Files4325M2 preserves committed terminal and ACK when final disposition arrives late", async () => {
+		const work = await terminalWork();
+		const store = open();
+		const checkpoint = store.archiveOriginalTurn.bind(store);
+		store.archiveOriginalTurn = async (input) => {
+			if (input.complete) {
+				const [record] =
+					await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+				const [clock] =
+					await client`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				expect(record!.details.archive.acknowledgedCursor).toBe(
+					"terminal-cursor",
+				);
+				expect(clock!.now).toBeLessThan(record!.details.archive.deadlineAtMs);
+				await client`select pg_sleep(0.55)`;
+			}
+			return checkpoint({ ...input, budgetMs: 500 });
+		};
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const acknowledged: string[] = [];
+		const host = isolationHost(work, {
+			async *events() {
+				yield {
+					schemaVersion: 1,
+					type: "completed",
+					executionId: work.executionId,
+					adapterEventKey: "real-terminal",
+					cursor: "terminal-cursor",
+					occurredAt: "2026-11-20T23:00:00.000Z",
+					payload: { status: "completed" },
+				};
+			},
+			async acknowledge(request) {
+				const [row] =
+					await client`select last_runtime_cursor from platform.conversation_executions where execution_id=${work.executionId}`;
+				expect(row?.last_runtime_cursor).toBe(request.confirmedCursor);
+				acknowledged.push(request.confirmedCursor);
+			},
+		});
+		try {
+			const useCase = createConversationDispatchUseCaseV1({
+				store,
+				runtimeHost: host,
+				events,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						return decision.outcome === "allowed"
+							? {
+									...decision,
+									authority: { ...decision.authority, controlOnly: true },
+								}
+							: decision;
+					},
+				},
+			});
+			expect(
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "archive-complete",
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			expect(acknowledged).toContain("terminal-cursor");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "completed",
+				execution_fence: 1,
+			});
+			const [record] =
+				await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+			expect(record?.details.archive).toMatchObject({
+				status: "complete",
+				cursor: "terminal-cursor",
+				acknowledgedCursor: "terminal-cursor",
+			});
+			expect(
+				await client`select event_type,event_payload,occurred_at from platform.conversation_events where execution_id=${work.executionId}`,
+			).toEqual([
+				{
+					event_type: "execution.status",
+					event_payload: {
+						type: "execution.status",
+						status: "completed",
+					},
+					occurred_at: new Date("2026-11-20T23:00:00.000Z"),
+				},
+			]);
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
+		}
+	});
+
+	it("Files4266archive refuses enum-only legacy terminal rows without original Runtime source proof", async () => {
+		const work = await terminalWork();
+		await client`delete from platform.audit_events where id=${`conversation.runtime.terminal:${work.executionId}:1`}`;
+		const current = await claim(work.itemId);
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 1,
+				}),
+			).toMatchObject({ status: "ineligible" });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "processing",
+				execution_status: "completed",
+			});
+			expect(
+				await client`select id from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId}`,
+			).toHaveLength(0);
+		} finally {
+			await current.store.close();
+		}
+	});
+
+	it("Files4266archive excludes over 1000 settled executions from the bounded active-gap snapshot", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		const query = new PostgresConversationQueryV1({ databaseUrl });
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 1,
+			});
+			await client`select pg_sleep(0.005)`;
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 1,
+			});
+			await client`insert into platform.conversation_executions
+			 select (jsonb_populate_record(null::platform.conversation_executions,to_jsonb(e)||jsonb_build_object('execution_id',e.execution_id||':settled:'||n,'turn_id',e.turn_id||':settled:'||n))).*
+			 from platform.conversation_executions e cross join generate_series(1,1001) n where e.execution_id=${work.executionId}`;
+			await client`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,agent_id,outcome,details)
+			 select 'conversation.archive:'||e.execution_id||':0000000000000001','settled-test','system','worker','conversation.archive.observed','execution',e.execution_id,e.agent_id,'succeeded',
+			 jsonb_set(jsonb_set(original.details,'{binding,executionId}',to_jsonb(e.execution_id)),'{archive,status}','"complete"'::jsonb)
+			 from platform.conversation_executions e cross join lateral (select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1) original
+			 where e.conversation_id=${work.conversationId} and e.execution_id<>${work.executionId}`;
+			expect(
+				await query.getArchives(
+					{ actorId: "actor-dispatch", channelId: "web" },
+					work.conversationId,
+				),
+			).toEqual([
+				expect.objectContaining({
+					executionId: work.executionId,
+					archive: expect.objectContaining({ status: "unavailable" }),
+				}),
+			]);
+		} finally {
+			await Promise.all([current.store.close(), query.close()]);
+		}
+	});
+
+	it("Files4325M3 rechecks database time after audit waiting before returning a read budget", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		await client`create function platform.archive_wait_fix1() returns trigger language plpgsql as $$ begin if NEW.action='conversation.archive.observed' then perform pg_sleep(0.15); end if; return NEW; end $$`;
+		await client`create trigger archive_wait_fix1 before insert on platform.audit_events for each row execute function platform.archive_wait_fix1()`;
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			const result = await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 50,
+			});
+			const [row] =
+				await client`select details from platform.audit_events where target_id=${work.executionId} and action='conversation.archive.observed' order by id desc limit 1`;
+			const [clock] =
+				await client`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+			expect(clock!.now).toBeGreaterThanOrEqual(
+				row!.details.archive.deadlineAtMs,
+			);
+			expect(result).toMatchObject({ status: "unavailable", remainingMs: 0 });
+			expect(
+				row!.details.archive.deadlineAtMs - row!.details.archive.startedAtMs,
+			).toBe(50);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+			});
+		} finally {
+			await client`drop trigger archive_wait_fix1 on platform.audit_events`;
+			await client`drop function platform.archive_wait_fix1()`;
+			await current.store.close();
+		}
+	});
+
+	it.each([false, true])(
+		"Files4325R2 restores durable completion after Worker restart past the original deadline (known tail=%s)",
+		async (knownTail) => {
+			const work = await terminalWork();
+			let store = open();
+			const transaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
+			});
+			const events = createConversationEventUseCaseV1({ transaction });
+			try {
+				const first = await store.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "before-restart",
+					leaseDurationMs: 30000,
+				});
+				if (first.outcome !== "claimed")
+					throw new Error("Expected original claim");
+				const c = first.claim;
+				await store.archiveOriginalTurn({ claim: c, budgetMs: 500 });
+				expect(
+					await events.persist({
+						schemaVersion: 1,
+						conversationId: c.conversationId,
+						executionId: c.executionId,
+						sessionGeneration: c.sessionGeneration,
+						deliveryFence: c.executionDeliveryFence,
+						adapterEventKey: "real-terminal",
+						runtimeCursor: "terminal-cursor",
+						occurredAt: "2026-11-20T23:00:00.000Z",
+						event: { type: "execution.status", status: "completed" },
+						transition: {
+							executionStatus: "completed",
+							conversationStatus: "ready",
+						},
+						dispatchLease: {
+							schemaVersion: 1,
+							itemId: c.itemId,
+							leaseOwner: c.leaseOwner,
+							deliveryFence: c.deliveryFence,
+						},
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				expect(
+					await store.archiveOriginalTurn({
+						claim: c,
+						budgetMs: 500,
+						acknowledgedCursor: "terminal-cursor",
+					}),
+				).toMatchObject({ status: "pending" });
+				const [before] =
+					await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+				const [clock] =
+					await client`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				expect(before!.details.archive.acknowledgedCursor).toBe(
+					"terminal-cursor",
+				);
+				expect(clock!.now).toBeLessThan(before!.details.archive.deadlineAtMs);
+				if (knownTail) {
+					expect(
+						await store.archiveOriginalTurn({
+							claim: c,
+							budgetMs: 500,
+							pendingCursor: "uncommitted-tail",
+						}),
+					).toMatchObject({ status: "pending" });
+				}
+				await store.retry({
+					claim: c,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_STREAM_INCOMPLETE",
+					transition: {},
+				});
+				await store.close();
+				store = open();
+				await client`select pg_sleep(0.55)`;
+				const next = await store.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "after-restart",
+					leaseDurationMs: 30000,
+				});
+				if (next.outcome !== "claimed")
+					throw new Error("Expected same original key after restart");
+				expect(next.claim.executionDeliveryFence).toBe(
+					c.executionDeliveryFence,
+				);
+				expect(next.claim.deliveryFence).toBeGreaterThan(c.deliveryFence);
+				expect(
+					await store.archiveOriginalTurn({
+						claim: next.claim,
+						budgetMs: 999999,
+					}),
+				).toMatchObject({
+					status: knownTail ? "unavailable" : "complete",
+					remainingMs: 0,
+				});
+				expect(await dispatchState(work)).toMatchObject({
+					status: knownTail ? "failed" : "succeeded",
+					execution_status: "completed",
+					execution_fence: 1,
+				});
+				const [after] =
+					await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+				expect(after!.details.archive.deadlineAtMs).toBe(
+					before!.details.archive.deadlineAtMs,
+				);
+				expect(after!.details.archive.acknowledgedCursor).toBe(
+					"terminal-cursor",
+				);
+				expect(
+					await client`select event_id from platform.conversation_events where execution_id=${work.executionId}`,
+				).toHaveLength(1);
+			} finally {
+				await Promise.all([store.close(), transaction.close()]);
+			}
+		},
+	);
+
+	it("Files4325M2 does not accept an unrecorded ACK first supplied after the original deadline", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			const c = current.decision.claim;
+			await current.store.archiveOriginalTurn({ claim: c, budgetMs: 100 });
+			expect(
+				await events.persist({
+					schemaVersion: 1,
+					conversationId: c.conversationId,
+					executionId: c.executionId,
+					sessionGeneration: c.sessionGeneration,
+					deliveryFence: c.executionDeliveryFence,
+					adapterEventKey: "real-terminal",
+					runtimeCursor: "terminal-cursor",
+					occurredAt: "2026-11-20T23:00:00.000Z",
+					event: { type: "execution.status", status: "completed" },
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+					dispatchLease: {
+						schemaVersion: 1,
+						itemId: c.itemId,
+						leaseOwner: c.leaseOwner,
+						deliveryFence: c.deliveryFence,
+					},
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			await client`select pg_sleep(0.12)`;
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: c,
+					budgetMs: 999999,
+					acknowledgedCursor: "terminal-cursor",
+					complete: true,
+				}),
+			).toMatchObject({ status: "unavailable", remainingMs: 0 });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+			});
+		} finally {
+			await Promise.all([current.store.close(), transaction.close()]);
+		}
+	});
+	it("Files4325M1 retains the original known PVC when an observation is temporarily absent", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 300,
+			});
+			const [before] =
+				await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+			await client`update platform.session_sandbox_allocations set resource_observation=null where conversation_id=${work.conversationId}`;
+			await client`select pg_sleep(0.35)`;
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 999999,
+				}),
+			).toMatchObject({ status: "unavailable", remainingMs: 0 });
+			const [after] =
+				await client`select details from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId} order by id desc limit 1`;
+			expect(after!.details.binding.pvc).toEqual(before!.details.binding.pvc);
+		} finally {
+			await current.store.close();
+		}
+	});
+
+	it("Files4325M1 refuses a different PVC location even before its first UID observation", async () => {
+		const work = await terminalWork();
+		const current = await claim(work.itemId);
+		const [row] =
+			await client`select resource_observation from platform.session_sandbox_allocations where conversation_id=${work.conversationId}`;
+		const pvc = row!.resource_observation.resources.find(
+			(r: { kind: string }) => r.kind === "PersistentVolumeClaim",
+		);
+		await client`update platform.session_sandbox_allocations set resource_observation=null where conversation_id=${work.conversationId}`;
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			await current.store.archiveOriginalTurn({
+				claim: current.decision.claim,
+				budgetMs: 1000,
+			});
+			await client`update platform.session_sandbox_allocations set resource_policy=jsonb_set(resource_policy,'{namespace}','"replacement"'::jsonb),resource_observation=${client.json({ status: "stopped", resources: [{ ...pvc, namespace: "replacement" }] })} where conversation_id=${work.conversationId}`;
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 1000,
+				}),
+			).toBeNull();
+		} finally {
+			await current.store.close();
+		}
+	});
+
+	it("Files4325M3 does not start a Runtime read after the checkpoint return consumed its remainder", async () => {
+		const work = await terminalWork();
+		await client`update platform.conversation_executions set last_runtime_cursor='cursor-12',last_event_sequence=12 where execution_id=${work.executionId}`;
+		const store = open();
+		const checkpoint = store.archiveOriginalTurn.bind(store);
+		let acknowledgements = 0;
+		store.archiveOriginalTurn = async (input) => {
+			const result = await checkpoint({ ...input, budgetMs: 50 });
+			if (result?.status === "pending") await client`select pg_sleep(0.15)`;
+			return result;
+		};
+		const host = isolationHost(work, {
+			async acknowledge() {
+				acknowledgements++;
+				throw new ConversationRuntimeHostError(
+					"RUNTIME_WORKLOAD_UNAVAILABLE",
+					true,
+				);
+			},
+		});
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				runtimeHost: host,
+				authorization: {
+					async authorize(input) {
+						const decision = await isolationAuthorization.authorize(input);
+						return decision.outcome === "allowed"
+							? {
+									...decision,
+									authority: { ...decision.authority, controlOnly: true },
+								}
+							: decision;
+					},
+				},
+				events: {
+					async persist() {
+						throw new Error("No original event available");
+					},
+				},
+			},
+			{ retryDelayMs: 0 },
+		);
+		try {
+			for (let i = 0; i < 3; i++)
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "archive-return-wait",
+				});
+			expect(acknowledgements).toBe(0);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "completed",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("Files4266archive rolls back failure disposition when required audit cannot commit", async () => {
+		const work = await terminalWork();
+		const store = open();
+		try {
+			const claimed = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "archive-audit",
+				leaseDurationMs: 30000,
+			});
+			if (claimed.outcome !== "claimed")
+				throw new Error("Missing original claim");
+			await store.archiveOriginalTurn({ claim: claimed.claim, budgetMs: 20 });
+			await client`select pg_sleep(0.04)`;
+			await client.unsafe(
+				"create function platform.archive_audit_failure() returns trigger language plpgsql as $$ begin if NEW.action='conversation.archive.observed' then raise exception 'synthetic audit failure'; end if; return NEW; end $$",
+			);
+			await client.unsafe(
+				"create trigger archive_audit_failure before insert on platform.audit_events for each row execute function platform.archive_audit_failure()",
+			);
+			try {
+				await expect(
+					store.archiveOriginalTurn({ claim: claimed.claim, budgetMs: 20 }),
+				).rejects.toThrow();
+			} finally {
+				await client.unsafe(
+					"drop trigger archive_audit_failure on platform.audit_events",
+				);
+				await client.unsafe("drop function platform.archive_audit_failure()");
+			}
+			expect(await dispatchState(work)).toMatchObject({
+				status: "processing",
+				execution_status: "completed",
+			});
+			expect(
+				await store.archiveOriginalTurn({ claim: claimed.claim, budgetMs: 20 }),
+			).toMatchObject({ status: "unavailable" });
+		} finally {
+			await store.close();
+		}
+	});
 	it("preserves original acceptance, digest and fence while only the outbox lease advances", async () => {
 		const work = await terminalWork();
 		const before = await savedPreparationPins(work.executionId);

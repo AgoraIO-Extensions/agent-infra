@@ -288,6 +288,7 @@ export function ConversationMessages({
 		regenerate,
 		regeneratePending,
 		versionControl,
+		archive,
 	}: {
 		key: string;
 		executionId: string | null;
@@ -303,6 +304,7 @@ export function ConversationMessages({
 		regenerate?: () => void;
 		regeneratePending?: boolean;
 		versionControl?: ReactNode;
+		archive?: "pending" | "unavailable";
 	}) => (
 		<AssistantReply
 			key={key}
@@ -310,6 +312,7 @@ export function ConversationMessages({
 			agentName={agentName}
 			executionId={executionId}
 			status={status}
+			archive={archive}
 			text={text}
 			bodyKind={bodyKind}
 			createdAt={createdAt}
@@ -468,6 +471,7 @@ export function ConversationMessages({
 					(selected.answerVersion ?? 1) > 1
 						? selected.createdAt
 						: message.createdAt,
+				archive: selected.archive?.status,
 				error: selected.error,
 				failure: selected.status === "failed" ? selected.failure : undefined,
 				objectName,
@@ -634,6 +638,7 @@ export function ConversationMessages({
 						createdAt: answer.createdAt,
 						startedAt: answer.createdAt,
 						objectName: `Skill 回复 ${index + 1}`,
+						archive: answer.archive?.status,
 						error: answer.error,
 						failure: answer.status === "failed" ? answer.failure : undefined,
 					})}
@@ -790,6 +795,7 @@ function AssistantReply({
 	agentName,
 	executionId,
 	status,
+	archive,
 	text,
 	bodyKind,
 	createdAt,
@@ -814,6 +820,7 @@ function AssistantReply({
 	agentName: string;
 	executionId: string | null;
 	status: ExecutionStatus | undefined;
+	archive?: "pending" | "unavailable";
 	text: string;
 	bodyKind: "text" | "empty" | "not_loaded";
 	createdAt?: string;
@@ -844,7 +851,8 @@ function AssistantReply({
 	feedback?: ReactNode;
 }) {
 	const pending =
-		status === "waiting" || status === "submitted" || status === "processing";
+		!archive &&
+		(status === "waiting" || status === "submitted" || status === "processing");
 	const answered = bodyKind === "text" && Boolean(text);
 	const preview = useResultFilePreview(files);
 	// #3228：回答中已显示为图片或文件卡的结果文件（按 fileId 计数，StrictMode 重复挂载也成对）。
@@ -902,7 +910,13 @@ function AssistantReply({
 			{executionStatusLabels[value]}
 		</span>
 	);
-	if (status === "completed") {
+	if (archive) {
+		segments.push(
+			<span key="archive" role="status">
+				{archive === "pending" ? "归档待核实" : "归档不可得"}
+			</span>,
+		);
+	} else if (status === "completed") {
 		segments.push(label(status));
 		if (bodyKind === "not_loaded") segments.push("正文在更早的记录中");
 	} else if (status === "failed") {
@@ -989,7 +1003,7 @@ function AssistantReply({
 				<AssistantMarkdown references={references}>{text}</AssistantMarkdown>
 			) : pending ? (
 				<p className="message-pending">正在整理结果…</p>
-			) : bodyKind !== "not_loaded" && status === "completed" ? (
+			) : !archive && bodyKind !== "not_loaded" && status === "completed" ? (
 				<AssistantMarkdown>{answerNotWrittenYet}</AssistantMarkdown>
 			) : null}
 			{parts.length > 0 && (

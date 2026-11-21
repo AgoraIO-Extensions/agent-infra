@@ -243,7 +243,21 @@ const conversationEvents = z.array(
 	]),
 );
 
+export const ConversationArchiveProjectionV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	status: z.enum(["pending", "unavailable"]),
+	deadlineAt: z.string().datetime(),
+});
+export const ConversationArchiveSignalV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	kind: z.literal("control"),
+	type: z.literal("execution.archive"),
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	archive: ConversationArchiveProjectionV1Schema.nullable(),
+});
 export const ConversationSseMessageV2Schema = z.union([
+	ConversationArchiveSignalV1Schema,
 	PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2Schema,
 	TaskStatusEventV1Schema,
@@ -294,9 +308,12 @@ export const QueuedMessageStateV2Schema = z.discriminatedUnion("status", [
  * 按已持久的受限原因给出，与企微读取同一结果；旧服务端不返回该字段，用户消息也不带它。
  */
 export const MessageProjectionV2Schema = z.discriminatedUnion("status", [
-	MessageProjectionV1Schema.options[0],
+	MessageProjectionV1Schema.options[0].extend({
+		archive: ConversationArchiveProjectionV1Schema.optional(),
+	}),
 	MessageProjectionV1Schema.options[1].extend({
 		failure: ExecutionFailureProjectionV1Schema.optional(),
+		archive: ConversationArchiveProjectionV1Schema.optional(),
 	}),
 ]);
 
@@ -324,8 +341,14 @@ const executionAdditions = {
 export const ExecutionDetailProjectionV2Schema = z.discriminatedUnion(
 	"status",
 	[
-		ExecutionDetailProjectionV1Schema.options[0].extend(executionAdditions),
-		ExecutionDetailProjectionV1Schema.options[1].extend(executionAdditions),
+		ExecutionDetailProjectionV1Schema.options[0].extend({
+			...executionAdditions,
+			archive: ConversationArchiveProjectionV1Schema.optional(),
+		}),
+		ExecutionDetailProjectionV1Schema.options[1].extend({
+			...executionAdditions,
+			archive: ConversationArchiveProjectionV1Schema.optional(),
+		}),
 	],
 );
 
@@ -392,6 +415,9 @@ export const pilotOperationOpenApiPathsV2 = {
 			operationId: "getConversationV2",
 			requestParams: {
 				...conversationRead.requestParams,
+				header: z.object({
+					"x-platform-conversation-archive": z.literal("1").optional(),
+				}),
 				query: z.strictObject({
 					beforeCursor: OpaqueCursorV1Schema.optional(),
 				}),
@@ -414,6 +440,12 @@ export const pilotOperationOpenApiPathsV2 = {
 		get: {
 			...executionRead,
 			operationId: "getExecutionDetailV2",
+			requestParams: {
+				...executionRead.requestParams,
+				header: z.object({
+					"x-platform-conversation-archive": z.literal("1").optional(),
+				}),
+			},
 			responses: {
 				...executionRead.responses,
 				"200": {
@@ -430,6 +462,12 @@ export const pilotOperationOpenApiPathsV2 = {
 		get: {
 			...streamRead,
 			operationId: "streamConversationEventsV2",
+			requestParams: {
+				...streamRead.requestParams,
+				header: streamRead.requestParams.header.extend({
+					"x-platform-conversation-archive": z.literal("1").optional(),
+				}),
+			},
 			responses: {
 				...streamRead.responses,
 				"404": conversationRead.responses["404"],

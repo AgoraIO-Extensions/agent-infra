@@ -1,3 +1,4 @@
+import type { ConversationArchiveProjectionV1 } from "./conversation-archive.js";
 import {
 	type ConversationEventStatusV1,
 	parseConversationPersistedEventPayloadV1,
@@ -22,6 +23,7 @@ export interface ConversationReadMessageV1 {
 }
 
 export interface ConversationReadExecutionV1 {
+	readonly archive?: ConversationArchiveProjectionV1;
 	readonly executionId: string;
 	readonly conversationId: string;
 	readonly sourceMessageId: string | null;
@@ -71,6 +73,7 @@ export interface ConversationMessageReadModelV1 {
 }
 
 export interface ConversationMessageProjectionV1 {
+	readonly archive?: ConversationArchiveProjectionV1;
 	readonly messageId: string;
 	readonly role: "user" | "assistant";
 	readonly text: string;
@@ -237,6 +240,7 @@ function eventSequence(input: ConversationReadEventV1): number {
 
 export function projectConversationMessagesV1(
 	input: ConversationMessageReadModelV1,
+	options: { readonly archive?: boolean } = {},
 ): readonly ConversationMessageProjectionV1[] {
 	const traceByExecution = new Map(
 		input.executions.map(({ executionId, traceId }) => [executionId, traceId]),
@@ -388,11 +392,14 @@ export function projectConversationMessagesV1(
 				return payload.type === "execution.status" && payload.status === status;
 			});
 			const projectedStatus =
-				status === "completed" && !terminalEventPersisted
+				status === "completed" &&
+				!terminalEventPersisted &&
+				!(options.archive && item.archive)
 					? ("processing" as const)
 					: messageStatus(status);
 			return [
 				{
+					...(options.archive && item.archive ? { archive: item.archive } : {}),
 					messageId: `assistant:${item.executionId}`,
 					role: "assistant" as const,
 					text,

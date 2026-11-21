@@ -456,12 +456,7 @@ Agent 资源授权修订与逐主体的 manage/use 授权修订属于不同版�
 [平台 PRD §7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)和本节撤权规则执行；
 浏览器发现与 Owner 读取仍按既有规则。
 
-**应用限时过渡。** 在 [#4283](https://github.com/AgoraIO-Extensions/agent-infra/issues/4283)
-合入并正式上线前，应用的目标 Agent API 权限沿现有路径只按对应显式 API grant 判定，暂不要求尚未
-落地的应用可用范围；当前可信主体、凭证范围/有效期、任务原提交主体绑定、创建许可及其他独立
-门禁不变。不新增调用入口或授权，不扩大任何现有调用方权限，不继承责任人的范围或权限，也不把
-同一 grant 当作两份独立事实。#4283 合入并上线后必须删除本段，应用转为 PRD §7.1 的统一可用范围
-与显式 API grant 交集（规则见 [§9.2.2](#922-独立应用的可用范围)）；只合入未上线不能提前结束过渡，上线后不得继续沿本段绕过应用范围校验。
+独立应用的可用范围及 API 授权交集按 [§9.2.2](#922-独立应用的可用范围)执行。
 
 个人凭证自查使用 `GET /api/v2/me/api-identity`，仅接受当前个人 Bearer，不接受 Cookie、
 其他凭证类型或调用方选择主体。返回 `schemaVersion: 1`、`principal: { kind: "user", id }`、
@@ -593,8 +588,6 @@ credential/attempt 引用、grant 修订、阶段、时间和固定原因码；�
 
 [平台 PRD §7.1](../prd/PRD-agent-platform-M1.md#71-可用范围)规定每个 Agent 只维护一套可用范围，可包含
 指定员工、公司组织和独立应用。本节是应用条目及其校验的唯一表述；用户与组织条目的规则不变。
-本节在 [#4283](https://github.com/AgoraIO-Extensions/agent-infra/issues/4283) 的实现正式上线后生效，
-上线前应用沿 §9.2 的应用限时过渡判定；上线后删除该过渡段（#4283 AC-6），应用只按本节判定。
 
 - **条目身份。** 应用条目为 `{ kind: "application", applicationId }`，`applicationId` 是 Access 模块
   登记的稳定应用 ID。条目与用户、组织条目同存于该 Agent 的 `agent_availability`

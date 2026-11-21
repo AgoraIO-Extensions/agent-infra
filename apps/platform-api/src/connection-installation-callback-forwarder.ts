@@ -69,6 +69,24 @@ export type ProtectedConnectionInstallationForwarder = NonNullable<
 >;
 
 /**
+ * Whether the callback-only credential file passes the same protected-file
+ * checks the forwarder applies on every callback (absolute path, regular
+ * file, no symlink, owner-only `0600`, bounded printable token). The token is
+ * read only to validate it and is never returned, logged or kept.
+ */
+export async function isProtectedConnectionCallbackAuthFileReadyV1(
+	path: string | undefined,
+): Promise<boolean> {
+	if (path === undefined || path === "") return false;
+	try {
+		await readProtectedCallbackToken(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Platform-owned callback-only transport. The SecretRef contains only the
  * Host callback service credential; it is never persisted or returned.
  */

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import {
@@ -123,6 +124,15 @@ export interface ProductionPlatformApiInputV1
 	>;
 	/** Deployment-owned protected callback forwarder; absent keeps OAuth unavailable. */
 	readonly connectionInstallationCallback?: PlatformApiAssemblyInput["connectionInstallationCallback"];
+	/**
+	 * #4199 C2: the §13.5.1 exception route policy, set only by the deployment entry
+	 * from `resolveConnectionManualInstallationDeploymentV1`. It is used only with the
+	 * same approved system access and never alongside a static installation.
+	 */
+	readonly connectionManualInstallation?: {
+		readonly publicOrigin: string;
+		readonly policy: import("@agent-infra/platform-store").ConnectionManualInstallationPolicyInputV1;
+	};
 	/** Deployment-owned recipient for one-time application credential material. */
 	readonly applicationCredentialDelivery?: PlatformApiAssemblyInput["applicationCredentialDelivery"];
 	readonly applicationCredentialMaterialDelivery?: PlatformApiAssemblyInput["applicationCredentialMaterialDelivery"];
@@ -527,6 +537,22 @@ export function createProductionPlatformApiAssemblyInputV1(
 		)
 			standardInstallation = candidate;
 	}
+	// The exception route only rides the same approved system access, never a
+	// static installation or the legacy Consumer profile.
+	const manualInstallation =
+		systemAccessMode &&
+		!standardInstallation &&
+		input.connectionManualInstallation &&
+		isDeepStrictEqual(
+			input.connectionManualInstallation.policy.systemAccess,
+			input.connectionSystemAccess,
+		) &&
+		isDeepStrictEqual(
+			input.connectionManualInstallation.policy.approval,
+			input.connectionSystemAccessApproval,
+		)
+			? input.connectionManualInstallation
+			: undefined;
 	const connectionCapability: ReturnType<typeof createConnectionCapability> =
 		!systemAccessMode
 			? createConnectionCapability(
@@ -651,7 +677,14 @@ export function createProductionPlatformApiAssemblyInputV1(
 								}),
 					},
 				}
-			: {}),
+			: manualInstallation
+				? {
+						connectionInstallation: {
+							publicOrigin: manualInstallation.publicOrigin,
+							manualInstallation: manualInstallation.policy,
+						},
+					}
+				: {}),
 		...(input.connectionInstallationCallback
 			? { connectionInstallationCallback: input.connectionInstallationCallback }
 			: {}),
