@@ -343,24 +343,12 @@ export class PostgresConnectionManualInstallationStoreV1 {
 				limit 32
 				for update of a, m
 			`);
-			for (const { id } of stranded) {
-				const authorizationId = id as string;
-				await tx.execute(sql`
-					update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
-						updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'
-				`);
-				await tx.execute(sql`
-					update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,
-						updated_at=clock_timestamp() where authorization_id=${authorizationId} and revoke_state='not_required'
-				`);
-				await tx.execute(sql`
-					insert into platform.connection_installation_commands
-						(id, authorization_id, command, idempotency_key, request_digest, status)
-					values (${randomUUID()}, ${authorizationId}, 'revoke', ${`manual-revoke:${authorizationId}`},
-						${sha256(JSON.stringify(["revoke", "confirm-stranded", authorizationId]))}, 'pending')
-					on conflict (authorization_id, command, idempotency_key) do nothing
-				`);
-			}
+			for (const { id } of stranded)
+				await this.#closeForOriginalKeyRevoke(
+					tx,
+					id as string,
+					"confirm-stranded",
+				);
 		});
 	}
 
@@ -1466,6 +1454,79 @@ export class PostgresConnectionManualInstallationStoreV1 {
 			if (error instanceof Uncommitted) return "stale";
 			throw error;
 		}
+	}
+
+	/**
+	 * §13.5.6 exception recovery after the exchange (C1c-2b-2b): an `exchange`
+	 * that completed without a permit can never be enabled later, because only
+	 * this attempt may write the permit and nothing is re-exchanged. Its own
+	 * attempt therefore ends the logical confirm unknown at once, closes the
+	 * installation and queues the revoke of the original key, instead of
+	 * leaving the confirm open until its attempt lapses. Closing never waits
+	 * for the original claim; the revoke itself is still sent only under it.
+	 * Another attempt, another installation's phase, an exchange that did not
+	 * complete or a permitted confirm commits nothing.
+	 */
+	async endConfirmWithoutPermit(input: {
+		readonly confirmCommandId: string;
+		readonly exchangeCommandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+	}): Promise<"unknown" | "stale"> {
+		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			if (!row?.template) return "stale";
+			const [ended] = await tx.execute(sql`
+				update platform.connection_installation_commands c set status='unknown', updated_at=clock_timestamp()
+				where c.id=${input.confirmCommandId} and c.authorization_id=${input.authorizationId}
+					and c.command='confirm' and c.status='sending'
+					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and exists (select 1 from platform.connection_installation_commands e
+						where e.id=${input.exchangeCommandId} and e.authorization_id=c.authorization_id
+							and e.command='confirm_exchange' and e.status='completed'
+							and e.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange')
+					and not exists (select 1 from platform.connection_manual_install_permits t
+						where t.authorization_id=c.authorization_id)
+				returning c.id
+			`);
+			if (!ended) return "stale";
+			await this.#closeForOriginalKeyRevoke(
+				tx,
+				input.authorizationId,
+				"confirm-exchanged-without-permit",
+			);
+			return "unknown";
+		});
+	}
+
+	/**
+	 * Closes a confirmed installation and queues the revoke of its original key
+	 * (§13.5.7 逐安装撤销); the pin stays (exception item 6). An installation
+	 * whose revoke is already pending, sent or settled gets no second command.
+	 */
+	async #closeForOriginalKeyRevoke(
+		tx: Transaction,
+		authorizationId: string,
+		reason: string,
+	) {
+		await tx.execute(sql`
+			update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
+				updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'
+		`);
+		const queued = await tx.execute(sql`
+			update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,
+				updated_at=clock_timestamp() where authorization_id=${authorizationId} and revoke_state='not_required'
+			returning authorization_id
+		`);
+		if (queued.length !== 1) return;
+		await tx.execute(sql`
+			insert into platform.connection_installation_commands
+				(id, authorization_id, command, idempotency_key, request_digest, status)
+			values (${randomUUID()}, ${authorizationId}, 'revoke', ${`manual-revoke:${authorizationId}`},
+				${sha256(JSON.stringify(["revoke", reason, authorizationId]))}, 'pending')
+			on conflict (authorization_id, command, idempotency_key) do nothing
+		`);
 	}
 
 	/** Refused principal (§13.5.1 item 2): no exchange; close and revoke the original key. */

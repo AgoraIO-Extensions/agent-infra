@@ -102,6 +102,7 @@ import {
 } from "./connection-install-readback-client.js";
 import {
 	createProtectedRuntimeOAuthClient,
+	eraseRuntimeOAuthInstallationMaterials,
 	type ProtectedRuntimeOAuthClient,
 } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
@@ -220,6 +221,8 @@ const oauthRoot = [
 	"standard-mcp-oauth",
 ] as const;
 const firstBeginRecord = /^install-first-begin-([a-f0-9]{64})\.json$/;
+/** Durable fact that Connection confirmed the revoke of an installation's original key. */
+const revokedRecord = /^install-revoked-([a-f0-9]{64})\.json$/;
 const maxSlots = 8;
 const maxFixedInstallations = 8;
 const maxGrants = 4096;
@@ -541,6 +544,8 @@ async function assembleConnectionInstallReceiver(
 	const closedSlots = new Set<string>();
 	const ledgers = new Map<string, RegistrationLedger>();
 	const fixed = new Map<string, FixedInstallation>();
+	/** Revoked installations whose local erase is still to be retried. */
+	const unerased = new Map<string, RevokedFacts>();
 
 	function closeSlot(authorizationId: string) {
 		const slot = slots.get(authorizationId);
@@ -1114,6 +1119,9 @@ async function assembleConnectionInstallReceiver(
 			// After a revoke attempt the credential has no further use here.
 			if (body.command === "revoke") closeSlot(authorizationId);
 		}
+		// Connection confirmed the revoke of the original key; only now are this
+		// installation's Host copies erased. An unconfirmed revoke never gets here.
+		if (body.command === "revoke") await eraseRevokedInstallation(template);
 		const confirmed = await readbackOutcome(readbackInput);
 		try {
 			assertOriginal(template);
@@ -1996,6 +2004,81 @@ async function assembleConnectionInstallReceiver(
 		return result;
 	}
 
+	type RevokedFacts = {
+		readonly schemaVersion: 1;
+		readonly authorizationId: string;
+		readonly confirmationRevision: string;
+		readonly principal: Template["principal"];
+	};
+	function revokedFacts(template: Template): RevokedFacts {
+		return {
+			schemaVersion: 1,
+			authorizationId: template.authorizationId,
+			confirmationRevision: template.confirmationRevision,
+			principal: template.principal,
+		};
+	}
+	function parseRevokedFacts(
+		value: Record<string, unknown> | undefined,
+		hash: string,
+	): RevokedFacts {
+		const principal = value?.principal;
+		if (
+			!value ||
+			Object.keys(value).sort().join(",") !==
+				"authorizationId,confirmationRevision,principal,schemaVersion" ||
+			value.schemaVersion !== 1 ||
+			typeof value.authorizationId !== "string" ||
+			sha256Hex(value.authorizationId) !== hash ||
+			typeof value.confirmationRevision !== "string" ||
+			!isRecord(principal) ||
+			Object.keys(principal).sort().join(",") !== "id,kind" ||
+			principal.kind !== "user" ||
+			typeof principal.id !== "string"
+		)
+			unavailable();
+		return value as unknown as RevokedFacts;
+	}
+	/** Local erase only; `false` keeps the installation for a later retry. */
+	async function eraseRevokedCopies(facts: RevokedFacts) {
+		try {
+			await eraseRuntimeOAuthInstallationMaterials({
+				dataDirectory,
+				principal: facts.principal,
+				agentId,
+				authorizationId: facts.authorizationId,
+				confirmationRevision: facts.confirmationRevision,
+			});
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	/**
+	 * §13.5.6 撤销 / §13.5.7 逐安装撤销: once Connection confirmed the revoke of
+	 * the original key, this Host closes the installation and erases its
+	 * revision's code, verifier and Token copies without any remote request.
+	 * The durable marker comes first, so a Host that stops before the erase
+	 * finishes it at the next start; a failed erase is retried and never
+	 * changes the remote result.
+	 */
+	async function eraseRevokedInstallation(template: Template) {
+		const id = template.authorizationId;
+		const entry = fixed.get(id);
+		if (entry) {
+			fixed.delete(id);
+			await entry.client.close();
+		}
+		const facts = revokedFacts(template);
+		await publishMetadata(
+			records,
+			`install-revoked-${sha256Hex(id)}.json`,
+			facts,
+			{ immutable: true },
+		).catch(() => undefined);
+		if (!(await eraseRevokedCopies(facts))) unerased.set(id, facts);
+	}
+
 	async function reloadFixedInstallation(name: string) {
 		const recordKey = firstBeginRecord.exec(name)?.[1];
 		const consumed = await readRecord(name);
@@ -2077,20 +2160,37 @@ async function assembleConnectionInstallReceiver(
 	}
 	async function reloadFixedInstallations() {
 		const directory = await openProtectedStandardMcpDirectory(records);
-		let names: string[];
+		let all: string[];
 		try {
-			names = (
+			all = (
 				await readdir(
 					process.platform === "linux"
 						? `/proc/self/fd/${directory.fd}`
 						: records,
 				)
-			)
-				.filter((name) => firstBeginRecord.test(name))
-				.sort();
+			).sort();
 		} finally {
 			await directory.close();
 		}
+		// A Host that stopped between Connection's confirmed revoke and the local
+		// erase finishes the erase first and never reopens that installation.
+		const revoked = new Set<string>();
+		for (const name of all) {
+			const hash = revokedRecord.exec(name)?.[1];
+			if (!hash) continue;
+			revoked.add(hash);
+			try {
+				const facts = parseRevokedFacts(await readRecord(name), hash);
+				if (!(await eraseRevokedCopies(facts)))
+					unerased.set(facts.authorizationId, facts);
+			} catch {
+				// A malformed marker still keeps its installation closed.
+			}
+		}
+		const names = all.filter((name) => {
+			const hash = firstBeginRecord.exec(name)?.[1];
+			return hash !== undefined && !revoked.has(hash);
+		});
 		for (const name of names) {
 			if (fixed.size >= maxFixedInstallations) break;
 			try {
@@ -2127,6 +2227,8 @@ async function assembleConnectionInstallReceiver(
 	}
 
 	async function reclaimFixedInstallations() {
+		for (const [id, facts] of unerased)
+			if (await eraseRevokedCopies(facts)) unerased.delete(id);
 		for (const entry of fixed.values()) {
 			try {
 				await assertFixedCurrent(entry);
