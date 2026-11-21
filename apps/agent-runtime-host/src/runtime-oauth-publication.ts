@@ -32,6 +32,45 @@ import {
 	standardMcpExportKey,
 } from "./standard-mcp-installation.js";
 
+/**
+ * §13.5.6 dynamic publication receipt: the receipt keys of the static path plus
+ * the exception mark, whose Connection Principal comes from the pinned
+ * candidate, never from the transaction.
+ */
+export interface RuntimeOAuthDynamicPrincipalMappingV1 {
+	readonly kind: "consistency-exception-v1";
+	readonly connectionPrincipalId: string;
+}
+
+const staticReceiptKeys =
+	"authorizationId,clientId,configurationFingerprint,confirmationRevision,connectionPrincipalId,delivery,metadata,reference,schemaVersion,scope";
+const dynamicReceiptKeys =
+	"authorizationId,clientId,configurationFingerprint,confirmationRevision,connectionPrincipalId,delivery,metadata,principalMapping,reference,schemaVersion,scope";
+
+/**
+ * §13.5.6 提交证据: SHA-256 hex of the JSON array
+ * `[delivery.ref, delivery.revision, materialKey, installationKey, metadataDigest]`,
+ * recomputed in the same order at publication and at every reader check.
+ */
+export function runtimeOAuthPublicationCommitDigestV1(commit: {
+	readonly delivery: { readonly ref: string; readonly revision: string };
+	readonly materialKey: string;
+	readonly installationKey: string;
+	readonly metadataDigest: string;
+}) {
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				commit.delivery.ref,
+				commit.delivery.revision,
+				commit.materialKey,
+				commit.installationKey,
+				commit.metadataDigest,
+			]),
+		)
+		.digest("hex");
+}
+
 /** Consume actual-binding approval, never a planned OAuth account or local ID. */
 export async function readProtectedRuntimeOAuthPublication(options: {
 	dataDirectory: string;
@@ -47,6 +86,12 @@ export async function readProtectedRuntimeOAuthPublication(options: {
 		scope: RuntimeOAuthScopeV1;
 		reference: RuntimeOAuthAuthorizedRequestV1["reference"];
 	};
+	/**
+	 * Dynamic path only: the receipt must carry exactly this mark beyond the
+	 * static keys. Without it the static key set applies and a marked receipt
+	 * is refused.
+	 */
+	principalMapping?: RuntimeOAuthDynamicPrincipalMappingV1;
 	assertCurrent: () => void;
 }) {
 	if (options.revision === undefined) return undefined;
@@ -89,16 +134,23 @@ export async function readProtectedRuntimeOAuthPublication(options: {
 			unavailable();
 		const receipt = value as Record<string, unknown>;
 		const transaction = options.transaction;
+		const mapping = options.principalMapping;
+		const connectionPrincipalId = mapping
+			? mapping.connectionPrincipalId
+			: transaction.connectionPrincipalId;
 		if (
 			Object.keys(receipt).sort().join(",") !==
-				"authorizationId,clientId,configurationFingerprint,confirmationRevision,connectionPrincipalId,delivery,metadata,reference,schemaVersion,scope" ||
+				(mapping ? dynamicReceiptKeys : staticReceiptKeys) ||
+			(mapping &&
+				(mapping.kind !== "consistency-exception-v1" ||
+					receipt.principalMapping !== mapping.kind)) ||
 			receipt.schemaVersion !== 1 ||
 			receipt.authorizationId !== transaction.authorizationId ||
 			receipt.confirmationRevision !== transaction.confirmationRevision ||
 			receipt.clientId !== options.clientId ||
 			receipt.configurationFingerprint !== options.configurationFingerprint ||
-			!transaction.connectionPrincipalId ||
-			receipt.connectionPrincipalId !== transaction.connectionPrincipalId ||
+			!connectionPrincipalId ||
+			receipt.connectionPrincipalId !== connectionPrincipalId ||
 			!isDeepStrictEqual(receipt.delivery, delivery) ||
 			!isDeepStrictEqual(receipt.scope, transaction.scope) ||
 			!isDeepStrictEqual(receipt.reference, transaction.reference)

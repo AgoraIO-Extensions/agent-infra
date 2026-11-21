@@ -37,7 +37,6 @@ import {
 	publishProtectedRuntimeOAuthInstallation,
 	readProtectedRuntimeOAuthPublication,
 } from "./runtime-oauth-publication.js";
-import type { createProtectedRuntimeOAuthPublicationVerifier } from "./runtime-oauth-publication-verifier.js";
 import {
 	assertProtectedStandardMcpDirectoryCurrent,
 	openProtectedStandardMcpDirectory,
@@ -316,6 +315,96 @@ const transactionMaterialSuffixes = [
 	"verifier",
 ] as const;
 
+interface RuntimeOAuthInstallationRevisionV1 {
+	dataDirectory: string;
+	principal: RuntimePrincipalV1;
+	agentId: string;
+	authorizationId: string;
+	confirmationRevision: string;
+}
+
+function runtimeOAuthPaths(dataDirectory: string) {
+	const root = join(
+		dataDirectory,
+		"codex-driver.json.native",
+		"conversations",
+		"standard-mcp-oauth",
+	);
+	return { records: join(root, "records"), materials: join(root, "materials") };
+}
+
+/**
+ * The transaction records owned by one installation revision: same principal,
+ * Agent, authorization and confirmation revision. Anything else is skipped.
+ */
+async function ownedTransactions(
+	records: string,
+	options: RuntimeOAuthInstallationRevisionV1,
+) {
+	const owned: { key: string; record: Transaction }[] = [];
+	const recordDirectory = await openProtectedStandardMcpDirectory(records);
+	try {
+		const names = (
+			await readdir(
+				process.platform === "linux"
+					? `/proc/self/fd/${recordDirectory.fd}`
+					: records,
+			)
+		).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+		for (const name of names) {
+			const text = await readProtectedStandardMcpBytes(records, name, 16_384);
+			let record: Transaction;
+			try {
+				record = parseTransaction(text);
+			} catch {
+				// Not a transaction this installation may own.
+				continue;
+			}
+			if (
+				record.authorizationId === options.authorizationId &&
+				record.confirmationRevision === options.confirmationRevision &&
+				record.scope.agentId === options.agentId &&
+				isDeepStrictEqual(record.principal, options.principal)
+			)
+				owned.push({ key: name.slice(0, -5), record });
+		}
+		await assertProtectedStandardMcpDirectoryCurrent(records, recordDirectory);
+	} finally {
+		await recordDirectory.close();
+	}
+	return owned;
+}
+
+async function sealOwnedPublications(
+	records: string,
+	owned: readonly { key: string; record: Transaction }[],
+) {
+	for (const { key, record } of owned)
+		if (record.publication && record.publication.state !== "pending") {
+			record.publication.state = "pending";
+			await writeRecord(records, `${key}.json`, record);
+		}
+}
+
+/**
+ * §13.5.6 “refresh/revoke 开始前先持久封闭旧 publication”: before the revoke of
+ * the original key is sent, one installation revision's committed publication
+ * is durably marked pending, so every reader refuses it from then on. No copy
+ * is removed and no remote request is made; whether the revoke is confirmed
+ * or stays unknown, the publication never reopens.
+ */
+export async function sealRuntimeOAuthInstallationPublication(
+	options: RuntimeOAuthInstallationRevisionV1,
+) {
+	assertStandardMcpProcessProtection();
+	const { records, materials } = runtimeOAuthPaths(options.dataDirectory);
+	return withProtectedStandardMcpMaterialLock(materials, async () => {
+		const owned = await ownedTransactions(records, options);
+		await sealOwnedPublications(records, owned);
+		return owned.length;
+	});
+}
+
 /**
  * §13.5.6/§13.5.7: after Connection confirmed the revoke of the original key,
  * erases one installation revision's Host copies (code, verifier, access and
@@ -325,62 +414,16 @@ const transactionMaterialSuffixes = [
  * authorization and confirmation revision are touched. Returns how many
  * transactions were erased.
  */
-export async function eraseRuntimeOAuthInstallationMaterials(options: {
-	dataDirectory: string;
-	principal: RuntimePrincipalV1;
-	agentId: string;
-	authorizationId: string;
-	confirmationRevision: string;
-}) {
+export async function eraseRuntimeOAuthInstallationMaterials(
+	options: RuntimeOAuthInstallationRevisionV1,
+) {
 	assertStandardMcpProcessProtection();
-	const root = join(
-		options.dataDirectory,
-		"codex-driver.json.native",
-		"conversations",
-		"standard-mcp-oauth",
-	);
-	const records = join(root, "records");
-	const materials = join(root, "materials");
+	const { records, materials } = runtimeOAuthPaths(options.dataDirectory);
 	return withProtectedStandardMcpMaterialLock(materials, async () => {
-		const owned: { key: string; record: Transaction }[] = [];
-		const recordDirectory = await openProtectedStandardMcpDirectory(records);
-		try {
-			const names = (
-				await readdir(
-					process.platform === "linux"
-						? `/proc/self/fd/${recordDirectory.fd}`
-						: records,
-				)
-			).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
-			for (const name of names) {
-				const text = await readProtectedStandardMcpBytes(records, name, 16_384);
-				let record: Transaction;
-				try {
-					record = parseTransaction(text);
-				} catch {
-					// Not a transaction this function may own.
-					continue;
-				}
-				if (
-					record.authorizationId === options.authorizationId &&
-					record.confirmationRevision === options.confirmationRevision &&
-					record.scope.agentId === options.agentId &&
-					isDeepStrictEqual(record.principal, options.principal)
-				)
-					owned.push({ key: name.slice(0, -5), record });
-			}
-			await assertProtectedStandardMcpDirectoryCurrent(
-				records,
-				recordDirectory,
-			);
-		} finally {
-			await recordDirectory.close();
-		}
-		for (const { key, record } of owned)
-			if (record.publication && record.publication.state !== "pending") {
-				record.publication.state = "pending";
-				await writeRecord(records, `${key}.json`, record);
-			}
+		const owned = await ownedTransactions(records, options);
+		await sealOwnedPublications(records, owned);
+		// An installation that never opened a transaction has nothing to erase.
+		if (owned.length === 0) return 0;
 		const directory = await openProtectedStandardMcpDirectory(materials);
 		try {
 			for (const { key } of owned)
@@ -415,8 +458,20 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
 	publicationRevision?: string;
-	publicationVerifier?: Awaited<
-		ReturnType<typeof createProtectedRuntimeOAuthPublicationVerifier>
+	/**
+	 * Builds the publication before the exchange and commits it after; the
+	 * static receipt verifier, or the exception path's dynamic publication.
+	 * Resolving to `undefined` publishes nothing for this exchange.
+	 */
+	publicationVerifier?: (input: {
+		transaction: Transaction;
+		signal: AbortSignal;
+		assertCurrent: () => void;
+	}) => Promise<
+		| ((
+				expiresAt: number,
+		  ) => ReturnType<typeof readProtectedRuntimeOAuthPublication>)
+		| undefined
 	>;
 	patBindingSecret?: string;
 	target: ApprovedConnectionConsumerTargetV1 & {

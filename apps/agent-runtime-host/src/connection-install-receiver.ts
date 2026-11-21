@@ -104,15 +104,23 @@ import {
 	createProtectedRuntimeOAuthClient,
 	eraseRuntimeOAuthInstallationMaterials,
 	type ProtectedRuntimeOAuthClient,
+	sealRuntimeOAuthInstallationPublication,
 } from "./runtime-oauth-client.js";
+import {
+	createRuntimeOAuthDynamicPublication,
+	type RuntimeOAuthDynamicPublicationContractV1,
+} from "./runtime-oauth-dynamic-publication.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
+import { runtimeOAuthPublicationCommitDigestV1 } from "./runtime-oauth-publication.js";
 import {
 	openProtectedStandardMcpDirectory,
 	readProtectedStandardMcpBytes,
 } from "./standard-mcp-files.js";
 import {
+	assertProtectedStandardMcpExportCommitted,
 	ensurePrivateDirectory,
 	publishMetadata,
+	standardMcpExportKey,
 } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
@@ -164,6 +172,12 @@ export interface ConnectionInstallReceiverOptionsV1 {
 	readonly fetch?: MachineFetch;
 	readonly readback?: ConnectionInstallReadbackClientV1;
 	readonly now?: () => number;
+	/**
+	 * §13.5.6 deployment-approved dynamic publication contract (`serviceRef`,
+	 * `contract`), from the protected deployment input at assembly only. Absent,
+	 * an exception exchange publishes nothing and its install is closed.
+	 */
+	readonly dynamicPublication?: RuntimeOAuthDynamicPublicationContractV1;
 }
 
 interface SupplySlot {
@@ -196,8 +210,13 @@ interface FixedInstallation extends FixedInstallationBinding {
 	readonly exchangeOnce: (
 		request: RuntimeOAuthAuthorizedRequestV1,
 		claims: RuntimeOAuthGrantClaimsV1,
+		publication?: DynamicPublication,
 	) => Promise<RuntimeOAuthResponseV1>;
 }
+
+type DynamicPublication = ReturnType<
+	typeof createRuntimeOAuthDynamicPublication
+>;
 
 interface FirstBeginConsumption {
 	readonly schemaVersion: 1;
@@ -414,6 +433,9 @@ async function assembleConnectionInstallReceiver(
 	const dataDirectory = options.dataDirectory;
 	const now = options.now ?? Date.now;
 	const machineFetch = options.fetch;
+	const dynamicPublication = options.dynamicPublication
+		? structuredClone(options.dynamicPublication)
+		: undefined;
 	if (
 		!agentInput ||
 		!workerInput ||
@@ -1054,6 +1076,16 @@ async function assembleConnectionInstallReceiver(
 		} catch {
 			return reply("rejected");
 		}
+		// §13.5.6: before the revoke of the original key is sent, this installation
+		// stops serving and its publication is durably closed; a revoke that cannot
+		// close it first sends nothing.
+		if (body.command === "revoke")
+			try {
+				await sealRevokingInstallation(template);
+				assertCurrent();
+			} catch {
+				return reply("rejected");
+			}
 		const entry: RegistrationLedger = ledger ?? {
 			phase: body.command === "prepare" ? "sending" : "unknown",
 			commands: new Map(),
@@ -1212,6 +1244,7 @@ async function assembleConnectionInstallReceiver(
 		let exchangeGrant:
 			| { readonly token: string; readonly claims: RuntimeOAuthGrantClaimsV1 }
 			| undefined;
+		let exchangePublication: DynamicPublication | undefined;
 		const client = await createProtectedRuntimeOAuthClient({
 			dataDirectory,
 			configuration,
@@ -1220,7 +1253,18 @@ async function assembleConnectionInstallReceiver(
 			scope,
 			store,
 			...(machineFetch ? { fetch: machineFetch } : {}),
+			// §13.5.6: only the exception `exchange` phase publishes, with the
+			// dynamic publication its own confirm built from the pinned candidate.
+			...(exception
+				? {
+						publicationVerifier: async (input) =>
+							exchangePublication ? exchangePublication(input) : undefined,
+					}
+				: {}),
 			verifyGrant: (request) => {
+				// §13.5.6: the M1 dynamic path never refreshes; the install expires
+				// with its access token and the user reinstalls.
+				if (exception && request.command === "refresh") denied();
 				if (exception && request.command === "confirm") {
 					// §13.5.6: no standard confirm can stand in for the exchange phase.
 					if (
@@ -1247,13 +1291,16 @@ async function assembleConnectionInstallReceiver(
 			exchangeOnce: async (
 				request: RuntimeOAuthAuthorizedRequestV1,
 				claims: RuntimeOAuthGrantClaimsV1,
+				publication?: DynamicPublication,
 			) => {
 				if (!exception || request.command !== "confirm") denied();
 				exchangeGrant = { token: request.grant.token, claims };
+				exchangePublication = publication;
 				try {
 					return await client.authorized(request);
 				} finally {
 					exchangeGrant = undefined;
+					exchangePublication = undefined;
 				}
 			},
 		};
@@ -1880,6 +1927,43 @@ async function assembleConnectionInstallReceiver(
 			template,
 			RuntimeOAuthConfigurationV1Schema.parse(consumption.configuration),
 		);
+		// §13.5.6 动态安装的同一 Host 发布: with the deployment-approved contract,
+		// this one exchange publishes from the pinned candidate, the fixed
+		// configuration and the Owner-association Consumer target.
+		const fixedConfiguration = RuntimeOAuthConfigurationV1Schema.parse(
+			consumption.configuration,
+		);
+		let built:
+			| NonNullable<
+					Awaited<ReturnType<Awaited<ReturnType<DynamicPublication>>>>
+			  >
+			| undefined;
+		const dynamic = dynamicPublication
+			? createRuntimeOAuthDynamicPublication({
+					dataDirectory,
+					target: admitted.consumer,
+					principal: template.principal,
+					clientId: fixedConfiguration.clientId,
+					issuer: fixedConfiguration.issuer,
+					resource: fixedConfiguration.resource,
+					descriptorContract: body.descriptor.publicationContract,
+					contract: dynamicPublication,
+					candidate: {
+						principalId: pinned.verified.principalId,
+						instanceId: pinned.verified.instanceId,
+					},
+				})
+			: undefined;
+		const publication: DynamicPublication | undefined = dynamic
+			? async (input) => {
+					const commit = await dynamic(input);
+					return async (expiresAt) => {
+						const read = await commit(expiresAt);
+						built = read;
+						return read;
+					};
+				}
+			: undefined;
 		const issuedAt = now();
 		const request = RuntimeOAuthAuthorizedRequestV1Schema.parse({
 			...scope,
@@ -1917,10 +2001,42 @@ async function assembleConnectionInstallReceiver(
 					canonicalRuntimeRequestSigningPayload(request),
 				),
 			}),
+			publication,
 		);
-		return reply(
-			result.phase === "awaiting_verification" ? "exchanged" : "unknown",
-		);
+		if (result.phase !== "awaiting_verification") return reply("unknown");
+		if (!built) return reply("exchanged");
+		// §13.5.6 提交证据: only a committed private publication (lock released,
+		// sidecar and original record committed) yields the evidence, never a
+		// pending one; the Platform permit then binds its commit digest.
+		const committed = built;
+		try {
+			await assertProtectedStandardMcpExportCommitted(
+				join(
+					dataDirectory,
+					"codex-driver.json.native",
+					"conversations",
+					"standard-mcp-export",
+					standardMcpExportKey(
+						committed.delivery.ref,
+						committed.delivery.revision,
+					),
+				),
+				true,
+			);
+			assertOriginal(template);
+		} catch {
+			return reply("exchanged");
+		}
+		return ConnectionInstallConfirmExchangeResponseV1Schema.parse({
+			schemaVersion: 1,
+			contract: connectionManualConfirmContractV1,
+			outcome: "exchanged",
+			commandId: body.commandId,
+			publication: {
+				commitDigest: runtimeOAuthPublicationCommitDigestV1(committed.commit),
+				expiresAt: committed.metadata.expiresAt,
+			},
+		});
 	}
 
 	async function beginStatus(
@@ -2053,6 +2169,26 @@ async function assembleConnectionInstallReceiver(
 		} catch {
 			return false;
 		}
+	}
+	/**
+	 * §13.5.6 “refresh/revoke 开始前先持久封闭旧 publication”: the installation's
+	 * fixed client stops and its committed publication is durably marked
+	 * pending before the revoke is sent. Nothing is erased yet.
+	 */
+	async function sealRevokingInstallation(template: Template) {
+		const id = template.authorizationId;
+		const entry = fixed.get(id);
+		if (entry) {
+			fixed.delete(id);
+			await entry.client.close();
+		}
+		await sealRuntimeOAuthInstallationPublication({
+			dataDirectory,
+			principal: template.principal,
+			agentId,
+			authorizationId: id,
+			confirmationRevision: template.confirmationRevision,
+		});
 	}
 	/**
 	 * §13.5.6 撤销 / §13.5.7 逐安装撤销: once Connection confirmed the revoke of

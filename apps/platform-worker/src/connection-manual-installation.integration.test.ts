@@ -32,6 +32,7 @@ import {
 	PostgresAgentConnectionAssociationStoreV1,
 	PostgresConnectionInstallationAuthorizationTransactionV1,
 	PostgresConnectionManualInstallationStoreV1,
+	PostgresConnectionPrincipalPinAdministrationV1,
 } from "@agent-infra/platform-store";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
@@ -58,6 +59,7 @@ import {
 	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "../../agent-runtime-host/src/connection-install-receiver.js";
+import { readProtectedRuntimeOAuthPublication } from "../../agent-runtime-host/src/runtime-oauth-publication.js";
 import { createConnectionInstallHostClientV1 } from "./connection-install-host-client.js";
 import {
 	createConnectionInstallReadbackServerV1,
@@ -261,6 +263,7 @@ async function connectionFetch(
 				: { registrationVersion: 1, outcome: "UNKNOWN", registration: null },
 		);
 	if (method === "DELETE" && known) {
+		await deleteHook?.();
 		const revoked = {
 			...known,
 			status: "REVOKED",
@@ -308,6 +311,14 @@ let readbackHook:
 	| undefined;
 const readbacks: string[] = [];
 let loseSupply: "before_host" | "after_host" | undefined;
+/** §13.5.6 deployment-approved dynamic publication contract given to the Host. */
+let hostDynamicPublication:
+	| Parameters<
+			typeof prepareConnectionInstallReceiverV1
+	  >[0]["dynamicPublication"]
+	| undefined;
+/** Runs when the fake Connection receives a DELETE, before it answers. */
+let deleteHook: (() => Promise<void>) | undefined;
 /** The Host exchanged, but its answer never reaches the Worker. */
 let loseExchange = false;
 let supplyCalls = 0;
@@ -498,6 +509,9 @@ beforeAll(async () => {
 				},
 			} as never,
 			fetch: connectionFetch as never,
+			...(hostDynamicPublication
+				? { dynamicPublication: hostDynamicPublication }
+				: {}),
 			readback: createConnectionInstallReadbackClientV1({
 				origin: `https://${workerService}:${workerPort}/`,
 				ca: workerTls.ca,
@@ -577,6 +591,7 @@ beforeEach(async () => {
 	connection.loseGet = false;
 	connection.loseDelete = false;
 	loseExchange = false;
+	deleteHook = undefined;
 	connection.codes.clear();
 	readbacks.length = 0;
 	readbackHook = undefined;
@@ -1689,4 +1704,339 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			"POST",
 		]);
 	});
+
+	// #4199 Host dynamic publication (§13.5.6 动态安装的同一 Host 发布,
+	// 动态发布回执的字段, 动态安装的启用许可).
+	const publicationContract = {
+		serviceRef: "connection-mcp",
+		contract: {
+			...dynamic.publicationContract,
+			serverInfo: { name: "connection", version: "1" },
+			tools: [{ name: "search", succeededResultSchema: { type: "object" } }],
+		},
+	};
+	async function withDynamicPublication(
+		contract: NonNullable<typeof hostDynamicPublication>,
+		run: () => Promise<void>,
+	) {
+		hostDynamicPublication = contract;
+		await restartHost();
+		try {
+			await run();
+		} finally {
+			hostDynamicPublication = undefined;
+			await restartHost();
+		}
+	}
+	const conversationsRoot = () =>
+		join(dataDirectory, "codex-driver.json.native", "conversations");
+	async function dynamicDelivery(authorizationId: string) {
+		const [row] =
+			await client`select confirmation_revision from platform.connection_installation_authorizations where id=${authorizationId}`;
+		return {
+			ref: "connection-manual-install",
+			revision: createHash("sha256")
+				.update(
+					JSON.stringify([
+						authorizationId,
+						row?.confirmation_revision as string,
+					]),
+				)
+				.digest("hex"),
+		};
+	}
+	const exportKey = (delivery: { ref: string; revision: string }) =>
+		createHash("sha256")
+			.update(JSON.stringify([delivery.ref, delivery.revision]))
+			.digest("hex");
+	async function readPrivateJson(path: string) {
+		return JSON.parse(await readFile(path, "utf8"));
+	}
+	const exists = (path: string) =>
+		readFile(path).then(
+			() => true,
+			() => false,
+		);
+	/** Exchanged and published with the approved contract; the permit is written. */
+	async function permittedInstall() {
+		const installed = await approvedInstall();
+		expect(await tick()).toBe(1);
+		return installed;
+	}
+
+	it(
+		"publishes the exchange once from the pinned candidate and writes the permit from its evidence",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const { projection, registrationKey } = await permittedInstall();
+				const authorizationId = projection.authorizationId;
+				expect((await confirmState(authorizationId))[0]).toEqual({
+					pins: 1,
+					receipts: 1,
+					status: "confirmed",
+					commands:
+						"confirm:completed,confirm_binding_readback:completed,confirm_exchange:completed",
+				});
+				const delivery = await dynamicDelivery(authorizationId);
+				const receiptPath = join(
+					conversationsRoot(),
+					"standard-mcp-oauth",
+					"publications",
+					`${exportKey(delivery)}.json`,
+				);
+				const receiptText = await readFile(receiptPath, "utf8");
+				expect(receiptText).not.toContain("synthetic-access");
+				const receipt = JSON.parse(receiptText);
+				const instance = connection.receipts.get(registrationKey) as {
+					instanceId: string;
+				};
+				expect(receipt).toMatchObject({
+					schemaVersion: 1,
+					authorizationId,
+					principalMapping: "consistency-exception-v1",
+					connectionPrincipalId: "principal-a",
+					delivery,
+					metadata: {
+						principal: { kind: "user", id: "alice" },
+						agentId: "agent-a",
+						serviceRef: "connection-mcp",
+						instanceRef: instance.instanceId,
+						credentialRef: `oauth-${createHash("sha256").update(authorizationId).digest("hex")}`,
+						contract: publicationContract.contract,
+					},
+				});
+				// The private export is committed: lock released, token published.
+				const source = join(
+					conversationsRoot(),
+					"standard-mcp-export",
+					exportKey(delivery),
+				);
+				expect(await exists(join(source, ".publish.lock"))).toBe(false);
+				const sidecar = await readPrivateJson(
+					join(source, ".oauth-publication.json"),
+				);
+				const commitDigest = createHash("sha256")
+					.update(
+						JSON.stringify([
+							sidecar.expected.delivery.ref,
+							sidecar.expected.delivery.revision,
+							sidecar.expected.materialKey,
+							sidecar.expected.installationKey,
+							sidecar.expected.metadataDigest,
+						]),
+					)
+					.digest("hex");
+				expect(
+					await exists(
+						join(source, "materials", `${sidecar.expected.materialKey}.token`),
+					),
+				).toBe(true);
+				// §13.5.6: the permit binds that commit digest and min(expiresAt, notAfter).
+				const [permit] = await client`
+					select commit_digest, (extract(epoch from expires_at) * 1000)::bigint as expires_at
+					from platform.connection_manual_install_permits where authorization_id=${authorizationId}`;
+				expect(permit?.commit_digest).toBe(commitDigest);
+				expect(Number(permit?.expires_at)).toBe(receipt.metadata.expiresAt);
+				// The static reader refuses the marked receipt; only the dynamic
+				// reader with the same mark admits it.
+				const read = (principalMapping?: {
+					kind: "consistency-exception-v1";
+					connectionPrincipalId: string;
+				}) =>
+					readProtectedRuntimeOAuthPublication({
+						dataDirectory,
+						revision: JSON.stringify([delivery.ref, delivery.revision]),
+						target:
+							receipt.metadata &&
+							({
+								profile: {
+									consumerId: receipt.metadata.consumerId,
+									audience: receipt.metadata.audience,
+									publicOrigin: receipt.metadata.issuer.replace(/\/$/, ""),
+								},
+								url: receipt.metadata.resource,
+								configFingerprint: receipt.metadata.configFingerprint,
+								source: receipt.metadata.source,
+							} as never),
+						clientId: receipt.clientId,
+						configurationFingerprint: receipt.configurationFingerprint,
+						transaction: {
+							authorizationId,
+							confirmationRevision: receipt.confirmationRevision,
+							principal: receipt.metadata.principal,
+							scope: receipt.scope,
+							reference: receipt.reference,
+						},
+						...(principalMapping ? { principalMapping } : {}),
+						assertCurrent: () => {},
+					});
+				await expect(read()).rejects.toThrow();
+				await expect(
+					read({
+						kind: "consistency-exception-v1",
+						connectionPrincipalId: "principal-b",
+					}),
+				).rejects.toThrow();
+				expect(
+					(
+						await read({
+							kind: "consistency-exception-v1",
+							connectionPrincipalId: "principal-a",
+						})
+					)?.commit,
+				).toEqual(sidecar.expected);
+				// Exchanged and published once; nothing is resent or revoked.
+				expect(await tick()).toBe(0);
+				expect(tokenRequests()).toHaveLength(1);
+				expect(
+					connection.requests.filter(({ method }) => method === "DELETE"),
+				).toEqual([]);
+				await noCredentialStored();
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"exchanges nothing when the approved contract differs from the descriptor's",
+		async () => {
+			await withDynamicPublication(
+				{
+					...publicationContract,
+					contract: { ...publicationContract.contract, revision: "2" },
+				},
+				async () => {
+					const { projection, registrationKey } = await approvedInstall();
+					await tick();
+					expect(tokenRequests()).toEqual([]);
+					await tick();
+					expect(connection.requests.at(-1)).toMatchObject({
+						method: "DELETE",
+						path: `/connection/v1/agents/connection-agent-a/oauth-clients/${encodeURIComponent(registrationKey)}`,
+					});
+					const [permits] =
+						await client`select count(*)::int as n from platform.connection_manual_install_permits where authorization_id=${projection.authorizationId}`;
+					expect(permits?.n).toBe(0);
+					const delivery = await dynamicDelivery(projection.authorizationId);
+					expect(
+						await exists(
+							join(
+								conversationsRoot(),
+								"standard-mcp-oauth",
+								"publications",
+								`${exportKey(delivery)}.json`,
+							),
+						),
+					).toBe(false);
+				},
+			);
+		},
+		confirmTimeout * 2,
+	);
+
+	// #4326 SHOULD S2 (§13.5.6 “refresh/revoke 开始前先持久封闭旧 publication”).
+	async function revokePermitted() {
+		const admin = new PostgresConnectionPrincipalPinAdministrationV1({
+			databaseUrl: database.databaseUrl,
+			policy,
+		});
+		try {
+			const [pin] =
+				await client`select id, rule_revision::int from platform.connection_principal_pins where user_id='alice'`;
+			expect(
+				await admin.recordVerification({
+					pinId: pin?.id as string,
+					expectedRuleRevision: pin?.rule_revision as number,
+					administratorId: "admin-1",
+					reference:
+						"https://github.com/AgoraIO-Extensions/agent-infra/issues/4199",
+					requestId: "request-admin",
+					traceId: "trace-admin",
+					result: "inconsistent",
+				}),
+			).toMatchObject({ outcome: "recorded", closed: 1 });
+		} finally {
+			await admin.close();
+		}
+	}
+	async function hostPublicationState(authorizationId: string) {
+		const key = await hostTransactionKey(authorizationId);
+		return (
+			await readPrivateJson(join(hostOAuthRoot(), "records", `${key}.json`))
+		).publication?.state;
+	}
+
+	it(
+		"seals the publication before the revoke DELETE and erases it once Connection confirms",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const { projection } = await permittedInstall();
+				const authorizationId = projection.authorizationId;
+				expect(await hostPublicationState(authorizationId)).toBe("committed");
+				const delivery = await dynamicDelivery(authorizationId);
+				const source = join(
+					conversationsRoot(),
+					"standard-mcp-export",
+					exportKey(delivery),
+				);
+				const sidecar = await readPrivateJson(
+					join(source, ".oauth-publication.json"),
+				);
+				const exported = join(
+					source,
+					"materials",
+					`${sidecar.expected.materialKey}.token`,
+				);
+				await revokePermitted();
+				let atDelete: unknown;
+				deleteHook = async () => {
+					atDelete = await hostPublicationState(authorizationId);
+				};
+				expect(await tick()).toBe(1);
+				// Closed before Connection saw the DELETE, not after its answer.
+				expect(atDelete).toBe("pending");
+				const [row] =
+					await client`select revoke_state from platform.connection_manual_installations where authorization_id=${authorizationId}`;
+				expect(row?.revoke_state).toBe("revoked");
+				expect(await exists(exported)).toBe(false);
+				expect(await hostMaterials(authorizationId)).toEqual([]);
+				expect(await hostPublicationState(authorizationId)).toBe("pending");
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"keeps the publication sealed and its copies when the DELETE answer is lost",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const { projection } = await permittedInstall();
+				const authorizationId = projection.authorizationId;
+				const delivery = await dynamicDelivery(authorizationId);
+				const source = join(
+					conversationsRoot(),
+					"standard-mcp-export",
+					exportKey(delivery),
+				);
+				const sidecar = await readPrivateJson(
+					join(source, ".oauth-publication.json"),
+				);
+				await revokePermitted();
+				connection.loseDelete = true;
+				expect(await tick()).toBe(1);
+				const [row] =
+					await client`select revoke_state from platform.connection_manual_installations where authorization_id=${authorizationId}`;
+				expect(row?.revoke_state).toBe("unknown");
+				// Sealed, never reopened, and nothing claims the remote revoke.
+				expect(await hostPublicationState(authorizationId)).toBe("pending");
+				expect(
+					await exists(
+						join(source, "materials", `${sidecar.expected.materialKey}.token`),
+					),
+				).toBe(true);
+				expect(await hostMaterials(authorizationId)).toContain("access");
+			});
+		},
+		confirmTimeout * 2,
+	);
 });

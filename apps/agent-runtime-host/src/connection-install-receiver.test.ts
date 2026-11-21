@@ -1833,6 +1833,17 @@ describe("Connection first begin", () => {
 				)
 			).status,
 		).toBe(403);
+		// §13.5.6: the M1 dynamic path never refreshes, even with a valid grant.
+		expect(
+			(
+				await exchange(
+					f,
+					"/internal/runtime/oauth/v1/refresh",
+					() => standardRequest(f, "refresh"),
+					{ authorization: `Bearer ${serviceToken}` },
+				)
+			).status,
+		).toBe(403);
 		expect(
 			await exchange(
 				f,
