@@ -3180,13 +3180,7 @@ describe("published Relay authority migration", () => {
 				].map((name) => `runtime_safety_evidence:${name}`),
 			);
 			expectedDelta.checks.push(
-				...[
-					"code",
-					"digest",
-					"kind",
-					"record_object",
-					"references",
-				].map(
+				...["code", "digest", "kind", "record_object", "references"].map(
 					(name) => `runtime_safety_evidence:runtime_safety_evidence_${name}`,
 				),
 			);
