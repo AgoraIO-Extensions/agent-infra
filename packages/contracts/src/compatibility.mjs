@@ -7596,6 +7596,89 @@ function normalizeMaterialDelivery4264(document) {
 	return invalid ? document : copy;
 }
 
+// #4266: only the explicitly negotiated archive projection/control addition.
+// Pin the new leaves; all existing authority, cursor and response fields still
+// pass through the historical compatibility checks below.
+function normalizeConversationArchive4266(document) {
+	const copy = structuredClone(document);
+	const schemas = copy.components?.schemas ?? copy.$defs ?? {};
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	let found = false;
+	const leaves = [];
+	let invalid = false;
+	function visit(value, host) {
+		if (!value || typeof value !== "object") return value;
+		if (Array.isArray(value)) return value.map((v) => visit(v, host));
+		if (value.properties?.archive !== undefined) {
+			if (
+				![
+					"ConversationDetailProjectionV2",
+					"ExecutionDetailProjectionV2",
+				].includes(host) ||
+				value.required?.includes("archive") ||
+				digest(value.properties.archive) !==
+					"2fb4b60bf6324552aca212422c4284778c1cd75f61a16b8cc4a2e9e18ad95b1a"
+			) {
+				invalid = true;
+			} else {
+				delete value.properties.archive;
+				leaves.push(host);
+				found = true;
+			}
+		}
+		for (const [key, child] of Object.entries(value))
+			value[key] = visit(child, host);
+		return value;
+	}
+	for (const name of [
+		"ConversationDetailProjectionV2",
+		"ExecutionDetailProjectionV2",
+	])
+		if (schemas[name]) visit(schemas[name], name);
+	const stream = schemas.ConversationSseMessageV2;
+	if (stream?.anyOf) {
+		stream.anyOf = stream.anyOf.filter((option) => {
+			if (option.properties?.type?.const !== "execution.archive") return true;
+			if (
+				digest(option) !==
+				"2d0c44f22fd44128ee7f96a41eba0c3735312b94d257b52ca04e0bced00ead94"
+			) {
+				invalid = true;
+				return true;
+			}
+			found = true;
+			leaves.push("control");
+			return false;
+		});
+	}
+	for (const path of [
+		"/api/v2/conversations/{conversationId}",
+		"/api/v2/conversations/{conversationId}/events",
+		"/api/v2/conversations/{conversationId}/executions/{executionId}",
+	]) {
+		const operation = copy.paths?.[path]?.get;
+		if (!operation?.parameters) continue;
+		operation.parameters = operation.parameters.filter((parameter) => {
+			if (parameter.name !== "x-platform-conversation-archive") return true;
+			if (
+				!sameValue(parameter, {
+					in: "header",
+					name: "x-platform-conversation-archive",
+					schema: { const: "1", type: "string" },
+				})
+			) {
+				invalid = true;
+				return true;
+			}
+			found = true;
+			leaves.push(path);
+			return false;
+		});
+	}
+	return { document: copy, found, leaves, invalid };
+}
+
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	// Once published, the added endpoints/actions cannot be removed through normalization.
 	const prefix4264 =
@@ -7622,8 +7705,17 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	)
 		return ["removed published application material audit action"];
 
-	let previousValue = normalizeMaterialDelivery4264(originalPrevious);
-	let currentValue = normalizeMaterialDelivery4264(originalCurrent);
+	const beforeArchive = normalizeConversationArchive4266(originalPrevious);
+	const afterArchive = normalizeConversationArchive4266(originalCurrent);
+	if (
+		beforeArchive.invalid ||
+		afterArchive.invalid ||
+		(beforeArchive.found &&
+			!sameValue(beforeArchive.leaves, afterArchive.leaves))
+	)
+		return ["removed or changed negotiated Conversation archive contract"];
+	let previousValue = normalizeMaterialDelivery4264(beforeArchive.document);
+	let currentValue = normalizeMaterialDelivery4264(afterArchive.document);
 	// #4236: allow the reviewed additive operations query and keep the rest of
 	// the document under its existing historical compatibility checks.
 	const taskPath = "/api/v2/ops/tasks";

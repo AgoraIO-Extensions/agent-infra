@@ -1152,6 +1152,9 @@ export class PostgresConversationExecutionTransactionV1
 					and o.payload->>'turnId' = e.turn_id and e.delivery_fence > 0 and e.last_runtime_cursor is not null
 					and e.status in ('completed', 'failed', 'cancelled')
 					and (o.status in ('succeeded', 'failed') or o.payload ? 'metadataRecovery')
+					and not coalesce((select ar.details->'archive'->>'status' from platform.audit_events ar
+					 where ar.target_type='execution' and ar.target_id=e.execution_id and ar.action='conversation.archive.observed' and ar.id >= ('conversation.archive:' || e.execution_id || ':') and ar.id < ('conversation.archive:' || e.execution_id || ':~')
+					 order by ar.id desc limit 1) in ('pending','unavailable'),false)
 					and (${request.query.executionId ?? null}::text is null or e.execution_id = ${request.query.executionId ?? null})
 					and exists (select 1 from platform.conversation_events ev where ev.execution_id = e.execution_id
 						and ev.source = 'runtime' and ev.event_type = 'execution.operation'

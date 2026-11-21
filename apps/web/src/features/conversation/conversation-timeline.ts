@@ -338,10 +338,12 @@ export function createConversationTimeline({
 		if (transientFailure(failure)) scheduleSlowRetry(session);
 	}
 
-	async function readHistory(session: ReadingSession) {
+	async function readHistory(session: ReadingSession, restartStream = true) {
 		if (current !== session) return;
-		cancelReconnect(session);
-		session.stream?.abort();
+		if (restartStream) {
+			cancelReconnect(session);
+			session.stream?.abort();
+		}
 		session.historyRequest?.abort();
 		session.earlierRequest?.abort();
 		session.earlierRequest = undefined;
@@ -359,6 +361,7 @@ export function createConversationTimeline({
 		try {
 			result = await getConversationV2({
 				client,
+				headers: { "x-platform-conversation-archive": "1" },
 				path: { conversationId: session.conversationId },
 				signal: request.signal,
 				responseStyle: "fields",
@@ -397,14 +400,16 @@ export function createConversationTimeline({
 			state.conversationId === session.conversationId ? state.events : [],
 			history.events,
 		);
-		session.cursor =
-			history.conversation.lastConversationCursor ??
-			history.events.at(-1)?.conversationCursor ??
-			session.reloadCursor ??
-			null;
-		session.seenCursors = new Set(
-			session.cursor === null ? [] : [session.cursor],
-		);
+		if (restartStream) {
+			session.cursor =
+				history.conversation.lastConversationCursor ??
+				history.events.at(-1)?.conversationCursor ??
+				session.reloadCursor ??
+				null;
+			session.seenCursors = new Set(
+				session.cursor === null ? [] : [session.cursor],
+			);
+		}
 		session.needsHistory = false;
 		session.reconnectAttempts = 0;
 		publish({
@@ -427,7 +432,7 @@ export function createConversationTimeline({
 			earlierLoading: false,
 			earlierFailure: null,
 		});
-		void readStream(session);
+		if (restartStream) void readStream(session);
 	}
 
 	async function loadEarlier(session: ReadingSession) {
@@ -447,6 +452,7 @@ export function createConversationTimeline({
 		try {
 			result = await getConversationV2({
 				client,
+				headers: { "x-platform-conversation-archive": "1" },
 				path: { conversationId: session.conversationId },
 				query: { beforeCursor },
 				signal: request.signal,
@@ -527,6 +533,7 @@ export function createConversationTimeline({
 		try {
 			const { stream } = await streamConversationEventsV2({
 				client,
+				headers: { "x-platform-conversation-archive": "1" },
 				path: { conversationId: session.conversationId },
 				query: session.cursor === null ? undefined : { cursor: session.cursor },
 				signal: request.signal,
@@ -582,6 +589,12 @@ export function createConversationTimeline({
 					throw new ConversationReadError({ kind: "invalid" });
 				const message = parsed.data;
 				if (message.kind === "control") {
+					if (message.type === "execution.archive") {
+						if (message.conversationId !== session.conversationId)
+							throw new ConversationReadError({ kind: "invalid" });
+						await readHistory(session, false);
+						continue;
+					}
 					if (message.type === "authorization.revoked") {
 						fail(session, { kind: "authorization" });
 						return;

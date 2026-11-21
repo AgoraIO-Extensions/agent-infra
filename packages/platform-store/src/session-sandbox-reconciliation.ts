@@ -277,6 +277,15 @@ async function lockedContext(
                         and o.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
                         and o.status in ('pending', 'processing', 'retry_scheduled')
                         and not (o.payload ? 'metadataRecovery')
+                ) or exists (
+                    select 1 from platform.conversation_executions e
+                    where e.conversation_id = ${sandbox.sessionId}
+                        and (select a.details->'archive'->>'status' from platform.audit_events a
+                            where a.target_type='execution' and a.target_id=e.execution_id and a.agent_id=e.agent_id
+                                and a.action='conversation.archive.observed' and a.id >= ('conversation.archive:' || e.execution_id || ':') and a.id < ('conversation.archive:' || e.execution_id || ':~')
+                                and a.details->'binding'->>'generation'=e.session_generation::text
+                                and a.details->'binding'->>'executionFence'=e.delivery_fence::text
+                            order by a.id desc limit 1) in ('pending','unavailable')
                 ) as events_pending,
                 exists (
                     select 1 from platform.conversation_stops s

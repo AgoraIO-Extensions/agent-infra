@@ -345,6 +345,59 @@ export function createConversationDispatchUseCaseV1(
 			leaseDurationMs,
 			renewBusinessAuthority,
 		);
+		let archiveTimer: ReturnType<typeof setTimeout> | undefined;
+		const archiveDeadline = new AbortController();
+		const archiveSignal = AbortSignal.any([
+			eventHeartbeat.signal,
+			archiveDeadline.signal,
+		]);
+		let archiveManaged = false;
+		let lastAcknowledgedCursor: string | undefined;
+		const archiveEligible = () =>
+			!claim.metadataRecovery &&
+			isTurnOperation(claim.operation) &&
+			terminalCommitPossible;
+		const archiveCheckpoint = async (
+			complete = false,
+			pendingCursor?: string,
+		) => {
+			if (!archiveEligible() || !dependencies.store.archiveOriginalTurn)
+				return undefined;
+			const started = performance.now();
+			const result = await dependencies.store.archiveOriginalTurn({
+				claim,
+				budgetMs: recoveryBudgetMs,
+				...(lastAcknowledgedCursor
+					? { acknowledgedCursor: lastAcknowledgedCursor }
+					: {}),
+				...(pendingCursor ? { pendingCursor } : {}),
+				...(complete ? { complete: true as const } : {}),
+			});
+			if (result?.status === "ineligible") return undefined;
+			archiveManaged = true;
+			// Conservatively include the checkpoint round trip; a returned budget
+			// must never start a new Runtime read after the original DB cutoff.
+			const bounded = result
+				? {
+						...result,
+						remainingMs: Math.max(
+							0,
+							result.remainingMs - Math.ceil(performance.now() - started),
+						),
+					}
+				: result;
+			if (bounded?.status === "pending" && !archiveTimer) {
+				if (bounded.remainingMs <= 0) archiveDeadline.abort();
+				else {
+					archiveTimer = setTimeout(
+						() => archiveDeadline.abort(),
+						bounded.remainingMs,
+					);
+					archiveTimer.unref?.();
+				}
+			}
+			return bounded;
+		};
 		// #4038: a Host that reports the original Turn as unknown (for example a
 		// Runtime-held Execution) may never end its event stream. The drain then
 		// keeps its lease, so the #3373 budget is never checked again. Stop
@@ -395,7 +448,7 @@ export function createConversationDispatchUseCaseV1(
 							hostSessionRef,
 							runtimeGrant: authority.runtimeGrant,
 						},
-						eventHeartbeat.signal,
+						archiveSignal,
 					),
 					{ ...claim, hostSessionRef },
 				);
@@ -458,10 +511,29 @@ export function createConversationDispatchUseCaseV1(
 			unacknowledgedEvents = 0;
 			await dependencies.runtimeHost.acknowledge(
 				{ ...eventRequest, confirmedCursor },
-				eventHeartbeat.signal,
+				archiveSignal,
 			);
+			lastAcknowledgedCursor = confirmedCursor;
+			await archiveCheckpoint();
 		};
 		try {
+			const initialArchive = await archiveCheckpoint();
+			if (archiveManaged) {
+				if (!initialArchive) return { schemaVersion: 1, outcome: "stale" };
+				if (initialArchive.status === "unavailable")
+					return { schemaVersion: 1, outcome: "rejected" };
+				if (initialArchive.status === "complete")
+					return { schemaVersion: 1, outcome: "accepted" };
+				if (initialArchive.remainingMs <= 0)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_STREAM_INCOMPLETE",
+						"retry",
+						{},
+					);
+			}
 			// A drain resumed for an accepted Turn follows a gap, such as an
 			// interrupted heartbeat, that may have outlived the Host's 30 s business
 			// authority. Renew it before the first event request, so an expired
@@ -474,7 +546,7 @@ export function createConversationDispatchUseCaseV1(
 					claim.executionStatus === "processing" ||
 					claim.executionStatus === "unknown"
 				)
-					await renewBusinessAuthority?.(eventHeartbeat.signal);
+					await renewBusinessAuthority?.(archiveSignal);
 			} catch (error) {
 				// Business authority is no longer current, for example after a
 				// stop or revocation: the drain continues under its control Grant.
@@ -494,11 +566,14 @@ export function createConversationDispatchUseCaseV1(
 				return retryInterruptedDrain();
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
-			if (claim.runtimeCursor)
-				await dependencies.runtimeHost.acknowledge?.(
+			if (claim.runtimeCursor && dependencies.runtimeHost.acknowledge) {
+				await dependencies.runtimeHost.acknowledge(
 					{ ...eventRequest, confirmedCursor: claim.runtimeCursor },
-					eventHeartbeat.signal,
+					archiveSignal,
 				);
+				lastAcknowledgedCursor = claim.runtimeCursor;
+				if (archiveManaged) await archiveCheckpoint();
+			}
 			const dispatchLease = {
 				schemaVersion: 1 as const,
 				itemId: claim.itemId,
@@ -584,8 +659,8 @@ export function createConversationDispatchUseCaseV1(
 				.events(
 					eventRequest,
 					recoveryDeadline
-						? AbortSignal.any([eventHeartbeat.signal, recoveryDeadline.signal])
-						: eventHeartbeat.signal,
+						? AbortSignal.any([archiveSignal, recoveryDeadline.signal])
+						: archiveSignal,
 					batching ? { beforeRead } : {},
 				)
 				[Symbol.asyncIterator]();
@@ -684,6 +759,16 @@ export function createConversationDispatchUseCaseV1(
 							: { schemaVersion: 1, outcome: "stale" };
 					}
 					if (eventFinalStatus) terminalCommitPossible = true;
+					if (connectionMetadata && archiveEligible()) {
+						const obligation = await archiveCheckpoint(
+							false,
+							runtimeEvent.cursor,
+						);
+						if (archiveManaged && !obligation)
+							return { schemaVersion: 1, outcome: "stale" };
+						if (obligation?.status === "unavailable")
+							return { schemaVersion: 1, outcome: "rejected" };
+					}
 					let persisted: ConversationEventDecisionV1;
 					try {
 						persisted = await dependencies.events.persist(
@@ -728,6 +813,14 @@ export function createConversationDispatchUseCaseV1(
 			await acknowledgeCommitted();
 		} catch (error) {
 			const current = await eventHeartbeat.stop();
+			if (archiveManaged && current) {
+				const archive = await archiveCheckpoint();
+				if (!archive) return { schemaVersion: 1, outcome: "stale" };
+				if (archive.status === "unavailable")
+					return { schemaVersion: 1, outcome: "rejected" };
+				if (archive.status === "complete")
+					return { schemaVersion: 1, outcome: "accepted" };
+			}
 			// An unresolved refusal keeps today's recovery path; it never turns
 			// an expired business read into a failed Turn.
 			if (!current || (renewalRefused && !terminalCommitPossible))
@@ -762,12 +855,10 @@ export function createConversationDispatchUseCaseV1(
 					);
 		} finally {
 			clearTimeout(recoveryTimer);
+			clearTimeout(archiveTimer);
 			await eventHeartbeat.stop();
 		}
-		if (
-			eventHeartbeat.signal.aborted ||
-			(renewalRefused && !terminalCommitPossible)
-		) {
+		if (archiveSignal.aborted || (renewalRefused && !terminalCommitPossible)) {
 			return retryInterruptedDrain();
 		}
 		if (!finalStatus) {
@@ -791,6 +882,14 @@ export function createConversationDispatchUseCaseV1(
 				"retry",
 				{},
 			);
+		}
+		if (archiveManaged) {
+			const archive = await archiveCheckpoint(true);
+			return archive?.status === "complete"
+				? { schemaVersion: 1, outcome: "accepted" }
+				: archive?.status === "unavailable"
+					? { schemaVersion: 1, outcome: "rejected" }
+					: { schemaVersion: 1, outcome: "stale" };
 		}
 		const finished = await dependencies.store.finish({
 			claim,

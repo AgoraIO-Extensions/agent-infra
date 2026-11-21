@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { ExecutorInstanceMutationV2 } from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
+	advanceConversationArchiveV1,
 	type ConversationDispatchClaimDecisionV1,
 	type ConversationDispatchClaimV1,
 	type ConversationDispatchOperationV1,
@@ -12,6 +14,7 @@ import {
 	conversationQueueWaitMsV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	parseConversationArchiveStateV1,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
@@ -1591,6 +1594,38 @@ export class PostgresConversationDispatchStoreV1
 				if (accepted.length !== 1) throw new StaleDispatchLease();
 			}
 			await applyTransition(transaction, state, input.claim, input.transition);
+			if (
+				isTurn(input.claim.operation) &&
+				["completed", "failed", "cancelled"].includes(
+					input.transition.executionStatus ?? "",
+				)
+			) {
+				// Only this positive Runtime response transaction can attest its source.
+				// Legacy enum-only rows never acquire a fabricated source on re-claim.
+				const proofId = `conversation.runtime.terminal:${input.claim.executionId}:${input.claim.executionDeliveryFence}`;
+				const proof = {
+					schemaVersion: 1,
+					hostSessionRef: input.hostSessionRef,
+					status: input.transition.executionStatus,
+					generation: input.claim.sessionGeneration,
+					executionFence: input.claim.executionDeliveryFence,
+					requestDigest: state.execution.original_operation_digest,
+				};
+				if (
+					state.execution.original_operation_digest &&
+					(input.originalOperationAccepted ||
+						state.execution.accepted_original_host_session_ref ===
+							input.hostSessionRef)
+				) {
+					await transaction`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
+					values (${proofId},${input.claim.traceId},'system',${input.claim.leaseOwner},'conversation.runtime.terminal.observed','execution',${input.claim.executionId},'succeeded',${input.claim.requestId},${input.claim.agentId},${transaction.json(proof)}) on conflict(id) do nothing`;
+					const [saved] = await transaction<
+						{ details: unknown }[]
+					>`select details from platform.audit_events where id=${proofId} and action='conversation.runtime.terminal.observed' and target_id=${input.claim.executionId} and agent_id=${input.claim.agentId}`;
+					if (!saved || !isDeepStrictEqual(saved.details, proof))
+						throw new StaleDispatchLease();
+				}
+			}
 			const rows = await transaction<{ id: string }[]>`
 				update platform.conversations
 				set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp()
@@ -1636,6 +1671,266 @@ export class PostgresConversationDispatchStoreV1
 				outcome === "queued" ? "SUPPLEMENT_QUEUED" : outcome,
 			);
 		});
+	}
+
+	/** Serialized with the original Turn lease; never transitions the business Execution. */
+	async archiveOriginalTurn(input: {
+		claim: ConversationDispatchClaimV1;
+		budgetMs: number;
+		acknowledgedCursor?: string;
+		pendingCursor?: string;
+		complete?: true;
+	}): Promise<{
+		status: "pending" | "unavailable" | "complete" | "ineligible";
+		remainingMs: number;
+	} | null> {
+		requireClaim(input.claim);
+		if (!Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1)
+			throw new TypeError("Invalid archive budget");
+		return databaseOperation(() =>
+			this.#client.begin(async (tx) => {
+				const claim = input.claim;
+				const state = await ownedState(tx, claim, true);
+				if (!state) return null;
+				if (
+					!isTurn(claim.operation) ||
+					claim.metadataRecovery ||
+					!["completed", "failed", "cancelled"].includes(
+						state.execution.status,
+					) ||
+					!state.conversation.host_session_ref ||
+					state.execution.accepted_original_host_session_ref !==
+						state.conversation.host_session_ref
+				)
+					return { status: "ineligible" as const, remainingMs: 0 };
+				const original = await originalOperationBinding(tx, state, claim);
+				if (!original || !original.originalOperationDigest) return null;
+				const [terminalProof] = await tx<
+					{ ref: string | null }[]
+				>`select coalesce(
+					(select id from platform.audit_events where id=${`conversation.runtime.terminal:${claim.executionId}:${claim.executionDeliveryFence}`}
+						and action='conversation.runtime.terminal.observed' and target_type='execution' and target_id=${claim.executionId} and agent_id=${claim.agentId}
+						and details->>'hostSessionRef'=${state.conversation.host_session_ref} and details->>'requestDigest'=${original.originalOperationDigest}
+						and details->>'generation'=${String(claim.sessionGeneration)} and details->>'executionFence'=${String(claim.executionDeliveryFence)} and details->>'status'=${state.execution.status}),
+					(select event_id from platform.conversation_events where execution_id=${claim.executionId} and conversation_id=${claim.conversationId} and source='runtime'
+						and event_type='execution.status' and event_payload->>'status'=${state.execution.status} order by sequence limit 1)) as ref`;
+				if (!terminalProof?.ref)
+					return { status: "ineligible" as const, remainingMs: 0 };
+				const [allocation] = await tx<
+					{
+						pvc: { name: string; namespace: string; uid: string } | null;
+						name: string;
+						namespace: string | null;
+					}[]
+				>`select resource_name as name, resource_policy->>'namespace' as namespace, (select jsonb_build_object('name',r->>'name','namespace',r->>'namespace','uid',r->>'uid') from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim' limit 1) as pvc from platform.session_sandbox_allocations where sandbox_id=${claim.sandbox?.sandboxId ?? null} and conversation_id=${claim.conversationId}`;
+				const binding = {
+					itemId: claim.itemId,
+					principal: executionPrincipalProjection(state.execution),
+					agentId: claim.agentId,
+					conversationId: claim.conversationId,
+					executionId: claim.executionId,
+					turnId: claim.turnId,
+					channelId: claim.channelId,
+					sandbox: state.conversation.sandbox ?? null,
+					generation: claim.sessionGeneration,
+					executionFence: claim.executionDeliveryFence,
+					hostSessionRef: state.conversation.host_session_ref,
+					requestDigest: original.originalOperationDigest,
+					businessStatus: state.execution.status,
+					terminalSourceRef: terminalProof.ref,
+					pvcLocation: {
+						name: allocation?.name ?? null,
+						namespace: allocation?.namespace ?? null,
+					},
+					pvc: allocation?.pvc ?? null,
+				};
+				const [last] = await tx<
+					{
+						details: {
+							binding: unknown;
+							archive: unknown;
+							lease?: unknown;
+							pendingCursor?: string | null;
+						};
+					}[]
+				>`select details from platform.audit_events
+				where target_type='execution' and target_id=${claim.executionId} and agent_id=${claim.agentId}
+				and action='conversation.archive.observed'
+				and id >= ${`conversation.archive:${claim.executionId}:`} and id < ${`conversation.archive:${claim.executionId}:~`} order by id desc limit 1`;
+				const priorBinding = last?.details.binding as
+					| typeof binding
+					| undefined;
+				if (
+					last &&
+					(!priorBinding ||
+						!isDeepStrictEqual(
+							{
+								...priorBinding,
+								pvcLocation:
+									priorBinding.pvcLocation ??
+									(priorBinding.pvc
+										? {
+												name: priorBinding.pvc.name,
+												namespace: priorBinding.pvc.namespace,
+											}
+										: binding.pvcLocation),
+								pvc: null,
+							},
+							{ ...binding, pvc: null },
+						))
+				)
+					return null;
+				const observed = allocation?.pvc;
+				if (
+					observed &&
+					(!validText(observed.uid) ||
+						observed.name !== allocation.name ||
+						observed.namespace !== allocation.namespace)
+				)
+					return null;
+				const retained = priorBinding?.pvc;
+				if (retained && observed && !isDeepStrictEqual(retained, observed))
+					return null;
+				// Missing observation is not replacement evidence; enrich only the original allocation's PVC.
+				binding.pvc = retained ?? observed ?? null;
+				const [clock] = await tx<
+					{ now: number }[]
+				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now`;
+				if (!clock) return null;
+				const previous = last
+					? parseConversationArchiveStateV1(last.details.archive)
+					: undefined;
+				const currentCursor = state.execution.last_runtime_cursor;
+				if (
+					input.acknowledgedCursor !== undefined &&
+					input.acknowledgedCursor !== currentCursor &&
+					input.acknowledgedCursor !== previous?.acknowledgedCursor
+				)
+					return null;
+
+				const [terminal] = await tx<
+					{ found: boolean }[]
+				>`select exists(select 1 from platform.conversation_events
+				where execution_id=${claim.executionId} and conversation_id=${claim.conversationId} and source='runtime'
+				and event_type='execution.status' and event_payload->>'status'=${state.execution.status}) as found`;
+				const acknowledgedCursor =
+					input.acknowledgedCursor ?? previous?.acknowledgedCursor ?? null;
+				let pendingCursor =
+					input.pendingCursor ?? last?.details.pendingCursor ?? null;
+				if (pendingCursor !== null && !validText(pendingCursor, 8192))
+					throw new TypeError("Invalid pending archive cursor");
+				if (
+					input.acknowledgedCursor &&
+					pendingCursor === input.acknowledgedCursor
+				)
+					pendingCursor = null;
+				const completed =
+					pendingCursor === null &&
+					terminal?.found === true &&
+					currentCursor !== null &&
+					acknowledgedCursor === currentCursor;
+				if (input.complete && !completed) return null;
+				const committedAckBeforeDeadline =
+					previous?.acknowledgedCursor === currentCursor &&
+					previous?.lastProgressAtMs !== null &&
+					previous?.lastProgressAtMs !== undefined &&
+					previous.lastProgressAtMs < previous.deadlineAtMs;
+				const completionProven =
+					completed &&
+					(committedAckBeforeDeadline ||
+						(input.complete &&
+							(!previous || clock.now < previous.deadlineAtMs)));
+				let archive = advanceConversationArchiveV1({
+					...(previous ? { previous } : {}),
+					ref: previous?.ref ?? randomUUID(),
+					nowMs: clock.now,
+					budgetMs: input.budgetMs,
+					cursor: currentCursor,
+					...(input.acknowledgedCursor
+						? { acknowledgedCursor: input.acknowledgedCursor }
+						: {}),
+					...(completionProven ? { complete: true as const } : {}),
+				});
+				const writeObservation = async () => {
+					const written = await tx`insert into platform.audit_events
+					(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
+					select ${`conversation.archive:${claim.executionId}:${String(archive.revision).padStart(16, "0")}`},${claim.traceId},'system',${claim.leaseOwner},'conversation.archive.observed','execution',${claim.executionId},${archive.status === "unavailable" ? "failed" : "succeeded"},${claim.requestId},${claim.agentId},
+					${tx.json({ binding, archive, pendingCursor, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
+					from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
+					and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()
+					and (${archive.status === "complete"} or
+					 (${archive.status === "pending"} and clock_timestamp()<to_timestamp(${String(archive.deadlineAtMs)}::float8/1000)) or
+					 (${archive.status === "unavailable"} and clock_timestamp()>=to_timestamp(${String(archive.deadlineAtMs)}::float8/1000))) returning id`;
+					return written.length === 1;
+				};
+				const changed =
+					!previous ||
+					(last?.details.pendingCursor ?? null) !== pendingCursor ||
+					!isDeepStrictEqual(last?.details.binding, binding) ||
+					!isDeepStrictEqual(last?.details.lease, {
+						owner: claim.leaseOwner,
+						fence: claim.deliveryFence,
+					}) ||
+					!isDeepStrictEqual(
+						{ ...archive, revision: previous.revision },
+						previous,
+					);
+				let written = false;
+				if (changed) {
+					archive = {
+						...archive,
+						revision: previous ? previous.revision + 1 : 1,
+					};
+					written = await writeObservation();
+				}
+				// INSERT/locks may consume the entire remainder. Recheck after every wait,
+				// retaining the original deadline and any earlier proven completion.
+				const [finalClock] = await tx<
+					{ now: number; owned: boolean }[]
+				>`select floor(extract(epoch from clock_timestamp())*1000)::float8 as now,
+				 exists(select 1 from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
+				 and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()) as owned`;
+				if (!finalClock?.owned) throw new StaleDispatchLease();
+				const settled = advanceConversationArchiveV1({
+					previous: archive,
+					ref: archive.ref,
+					nowMs: finalClock.now,
+					budgetMs: input.budgetMs,
+					cursor: currentCursor,
+					...(input.acknowledgedCursor
+						? { acknowledgedCursor: input.acknowledgedCursor }
+						: {}),
+					...(completionProven ? { complete: true as const } : {}),
+				});
+				if (settled.status !== archive.status) {
+					archive = {
+						...settled,
+						revision: archive.revision + (written ? 1 : 0),
+					};
+					if (!(await writeObservation())) throw new StaleDispatchLease();
+					written = true;
+				}
+				if (changed && !written) throw new StaleDispatchLease();
+				const status = archive.status;
+				if (status === "unavailable" || status === "complete")
+					await closeOutbox(
+						tx,
+						state,
+						claim,
+						status === "complete" ? "succeeded" : "failed",
+						status === "unavailable"
+							? "RUNTIME_EVENT_ARCHIVE_UNAVAILABLE"
+							: undefined,
+					);
+				return {
+					status,
+					remainingMs:
+						status === "pending"
+							? Math.max(0, archive.deadlineAtMs - finalClock.now)
+							: 0,
+				};
+			}),
+		);
 	}
 
 	async finish(input: {
