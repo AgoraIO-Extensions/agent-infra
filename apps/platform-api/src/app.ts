@@ -56,6 +56,10 @@ import {
 	registerConnectionInstallationRoutesV1,
 } from "./http/connection-installation-routes.js";
 import {
+	type ConnectionPrincipalPinRouteDependenciesV1,
+	registerConnectionPrincipalPinRoutesV1,
+} from "./http/connection-principal-pin-routes.js";
+import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
@@ -242,6 +246,8 @@ export interface PlatformAppDependencies {
 	readonly nativeCapabilityInvocation?: NativeCapabilityInvocationRouteDependenciesV1;
 	readonly tasks?: TaskRoutesDependencies;
 	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
+	/** §13.5.1 exception items 4/6 operations entry; assembled only with an approved exception. */
+	readonly connectionPrincipalPins?: ConnectionPrincipalPinRouteDependenciesV1;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly agentDefaultRelayKeys?: AgentDefaultRelayKeyRoutesDependencies;
@@ -439,6 +445,11 @@ export function createPlatformApp(
 		registerUnknownStopOperationsRoutes(
 			app,
 			dependencies.unknownStopOperations,
+		);
+	if (dependencies.connectionPrincipalPins)
+		registerConnectionPrincipalPinRoutesV1(
+			app,
+			dependencies.connectionPrincipalPins,
 		);
 	registerSessionAuditRoutes(app, {
 		...dependencies.sessionAudit,

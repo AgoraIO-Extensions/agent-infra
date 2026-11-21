@@ -28,6 +28,35 @@ export interface ConnectionPrincipalPinAdministrationInputV1 {
 	readonly reference: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	/**
+	 * The entry's final check of the current administrator, run inside the
+	 * transaction after every write and before commit. Whatever it throws rolls
+	 * the record, its closures and its audit back and reaches the caller as is.
+	 */
+	readonly beforeCommit?: () => Promise<void>;
+}
+
+/** One pin as the operations entry reads it; never a credential or session. */
+export interface ConnectionPrincipalPinRecordV1 {
+	readonly pinId: string;
+	readonly userId: string;
+	readonly issuer: string;
+	readonly principalId: string;
+	readonly verificationState: "pending" | "verified" | "mismatch";
+	readonly verificationDeadline: string;
+	readonly suspended: boolean;
+	readonly overdue: boolean;
+	readonly releasing: boolean;
+	readonly releaseReason: "administrator" | "mismatch" | null;
+	readonly released: boolean;
+	readonly ruleRevision: number;
+}
+
+/** Raised by the caller's final check; carries its error past the rollback. */
+class CommitVetoed extends Error {
+	constructor(readonly reason: unknown) {
+		super("Connection principal pin record was not committed");
+	}
 }
 
 export type ConnectionPrincipalPinAdministrationResultV1 =
@@ -97,9 +126,54 @@ export class PostgresConnectionPrincipalPinAdministrationV1 {
 				{ isolationLevel: "read committed" },
 			);
 		} catch (error) {
+			if (error instanceof CommitVetoed) throw error.reason;
 			if (error instanceof ConnectionInstallationErrorV1) throw error;
 			throw new ConnectionInstallationErrorV1("unavailable");
 		}
+	}
+
+	async #beforeCommit(input: ConnectionPrincipalPinAdministrationInputV1) {
+		if (!input.beforeCommit) return;
+		try {
+			await input.beforeCommit();
+		} catch (error) {
+			throw new CommitVetoed(error);
+		}
+	}
+
+	/** The user's pins, newest first, including released ones. */
+	async read(
+		userId: string,
+	): Promise<readonly ConnectionPrincipalPinRecordV1[]> {
+		if (!text(userId)) throw new ConnectionInstallationErrorV1("invalid_input");
+		const rows = await this.#transaction((tx) =>
+			tx.execute(sql`
+				select id, user_id, issuer, principal_id, verification_state,
+					to_char(verification_deadline at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as deadline,
+					suspended_at is not null as suspended, overdue_at is not null as overdue,
+					release_requested_at is not null as releasing, release_reason,
+					released_at is not null as released, rule_revision
+				from platform.connection_principal_pins where user_id=${userId}
+				order by pinned_at desc, id limit 16
+			`),
+		);
+		return rows.map((row: Record<string, unknown>) => ({
+			pinId: row.id as string,
+			userId: row.user_id as string,
+			issuer: row.issuer as string,
+			principalId: row.principal_id as string,
+			verificationState:
+				row.verification_state as ConnectionPrincipalPinRecordV1["verificationState"],
+			verificationDeadline: row.deadline as string,
+			suspended: row.suspended === true,
+			overdue: row.overdue === true,
+			releasing: row.releasing === true,
+			releaseReason:
+				(row.release_reason as ConnectionPrincipalPinRecordV1["releaseReason"]) ??
+				null,
+			released: row.released === true,
+			ruleRevision: Number(row.rule_revision),
+		}));
 	}
 
 	async #lock(tx: ConnectionPrincipalPinTransactionV1, pinId: string) {
@@ -156,6 +230,7 @@ export class PostgresConnectionPrincipalPinAdministrationV1 {
 					closedInstallations: closed,
 				},
 			});
+			await this.#beforeCommit(input);
 			return {
 				outcome: "recorded",
 				ruleRevision: Number(updated.rule_revision),
@@ -232,6 +307,7 @@ export class PostgresConnectionPrincipalPinAdministrationV1 {
 					closedInstallations: closed,
 				},
 			});
+			await this.#beforeCommit(input);
 			return {
 				outcome: "recorded",
 				ruleRevision: Number(updated.rule_revision),

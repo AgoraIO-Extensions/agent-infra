@@ -80,6 +80,7 @@ export * from "./browser-handoff-admission.js";
 export * from "./connection-consumer-disable.js";
 export * from "./connection-consumer-registration.js";
 export * from "./connection-installation.js";
+export * from "./connection-principal-pin-administration.js";
 export * from "./conversation-archive.js";
 export * from "./conversation-browser-action.js";
 export * from "./conversation-dispatch.js";

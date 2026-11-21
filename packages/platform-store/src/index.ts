@@ -118,6 +118,7 @@ export type {
 export {
 	type ConnectionPrincipalPinAdministrationInputV1,
 	type ConnectionPrincipalPinAdministrationResultV1,
+	type ConnectionPrincipalPinRecordV1,
 	PostgresConnectionPrincipalPinAdministrationV1,
 } from "./connection-principal-pin-administration.js";
 export {
