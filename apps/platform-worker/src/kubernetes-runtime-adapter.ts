@@ -38,6 +38,10 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import {
+	type AgentWorkloadPlacementV1,
+	agentWorkloadPodPlacementV1,
+} from "./agent-workload-placement.js";
 import type { CodexSessionExecutorPolicyV1 } from "./codex-session-executor.js";
 import {
 	type RuntimeConnectionConsumerSnapshotsByAgentV1,
@@ -197,6 +201,11 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly allowedPodTopologyLabelValues?: Readonly<
 		Record<string, readonly string[]>
 	>;
+	/**
+	 * Deployment-authoritative placement for every Agent-level Pod (Spec §10.1,
+	 * ADR-0049). Owner, Manifest and request inputs cannot supply scheduling fields.
+	 */
+	readonly agentWorkloadPlacement?: AgentWorkloadPlacementV1;
 	/** Optional deployment-owned Platform API selector for platform-auth routes. */
 	readonly platformApiSelector?: Readonly<Record<string, string>>;
 	readonly routeNamespace: string;
@@ -1886,6 +1895,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							serviceAccountName: name,
 							automountServiceAccountToken: false,
 							...workloadImagePullSpecV1(policy.imagePullSecretName),
+							...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 							securityContext: {
 								runAsNonRoot: true,
 								runAsUser: 1000,

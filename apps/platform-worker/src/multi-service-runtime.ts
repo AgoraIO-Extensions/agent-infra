@@ -30,6 +30,12 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
+	type AgentWorkloadPlacementV1,
+	acceptsAgentWorkloadPlacementV1,
+	agentWorkloadPlacementShapeV1,
+	agentWorkloadPodPlacementV1,
+} from "./agent-workload-placement.js";
+import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
 } from "./kubernetes-client.js";
@@ -106,6 +112,8 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly nativeMetadataWorkerEgress?: WorkloadEgressPolicyV1["nativeMetadataWorkerEgress"];
 	readonly fileExchangeEgress?: WorkloadEgressPolicyV1["fileExchangeEgress"];
 	readonly dnsEgress?: WorkloadEgressPolicyV1["dnsEgress"];
+	/** Same deployment-authoritative placement as single-service Workloads (Spec §10.1). */
+	readonly agentWorkloadPlacement?: AgentWorkloadPlacementV1;
 }
 
 function applyWorkspaceSnapshotToPodSpecV1(
@@ -655,6 +663,7 @@ function deployment(
 				spec: {
 					...resource.spec.template.spec,
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
+					...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 					securityContext: agentPodSecurityContext(),
 					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
@@ -766,6 +775,7 @@ function statefulSet(
 				spec: {
 					...resource.spec.template.spec,
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
+					...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 					securityContext: agentPodSecurityContext(),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
@@ -890,6 +900,7 @@ function migrationJob(
 				spec: {
 					...resource.spec.template.spec,
 					...workloadImagePullSpecV1(policy.imagePullSecretName),
+					...agentWorkloadPodPlacementV1(policy.agentWorkloadPlacement),
 					securityContext: agentPodSecurityContext(),
 					restartPolicy: "Never",
 					serviceAccountName: workloadResourceNameV1(value.agentId),
@@ -1191,6 +1202,14 @@ export function createMultiServiceRuntimeOperations(options: {
 			.imagePullSecrets ?? [];
 	const matchesImagePullSecrets = (spec: V1PodSpec | undefined) =>
 		!!spec && hasSameStructure(spec.imagePullSecrets ?? [], imagePullSecrets);
+	const placement = options.policy.agentWorkloadPlacement;
+	agentWorkloadPodPlacementV1(placement);
+	const hasExactPlacement = (spec: V1PodSpec | undefined) =>
+		agentWorkloadPlacementShapeV1(placement, spec, false) ===
+		(placement ? "placed" : "unplaced");
+	/** Observation keeps a retained pre-placement template until its next lifecycle apply. */
+	const acceptsPlacement = (spec: V1PodSpec | undefined) =>
+		acceptsAgentWorkloadPlacementV1(placement, spec, false);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
 	async function observeSnapshotPods(
@@ -1445,6 +1464,13 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (object.kind === "Job") {
 			if (!matchesImagePullSecrets((current as V1Job).spec?.template.spec))
 				throw new Error("multi-service migration pull policy drifted");
+			// A Job template is immutable: an unfinished Job must already carry the
+			// exact deployment placement; a finished one has no running Pod left.
+			if (
+				!jobSucceeded(current as V1Job) &&
+				!hasExactPlacement((current as V1Job).spec?.template.spec)
+			)
+				throw new Error("multi-service migration placement drifted");
 			return current;
 		}
 		if (
@@ -1969,7 +1995,8 @@ export function createMultiServiceRuntimeOperations(options: {
 				}
 				if (
 					!owned(job, value) ||
-					!matchesImagePullSecrets(job.spec?.template.spec)
+					!matchesImagePullSecrets(job.spec?.template.spec) ||
+					(!jobSucceeded(job) && !acceptsPlacement(job.spec?.template.spec))
 				) {
 					await emitHealthDiagnostic(value, "workload_drifted");
 					return "drifted" as const;
@@ -2018,6 +2045,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					!current ||
 					!owned(current, value) ||
 					!matchesImagePullSecrets(current.spec?.template.spec) ||
+					!acceptsPlacement(current.spec?.template.spec) ||
 					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
 				)
 					return "drifted" as const;

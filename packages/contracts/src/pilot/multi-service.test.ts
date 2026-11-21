@@ -409,3 +409,38 @@ describe("multi-service Agent contract seam", () => {
 		});
 	});
 });
+
+// #4351: scheduling is deployment-authoritative (Engineering Spec §10.1); an
+// Owner-supplied System Manifest can never carry it.
+describe("multi-service manifest scheduling fields", () => {
+	const statefulSet = {
+		...deployment,
+		kind: "StatefulSet",
+		spec: { ...deployment.spec, serviceName: "api" },
+	};
+	it.each(
+		[
+			["nodeSelector", { type: "virtual-kubelet" }],
+			["tolerations", [{ operator: "Exists" }]],
+			["affinity", { nodeAffinity: {} }],
+			["nodeName", "virtual-kubelet-cn-hangzhou-i"],
+			["runtimeClassName", "runc"],
+			["topologySpreadConstraints", []],
+			["schedulerName", "default-scheduler"],
+			["priorityClassName", "system-node-critical"],
+		].flatMap(([field, value]) =>
+			[deployment, statefulSet, migrationJob].map(
+				(resource) => [resource.kind, field, value] as const,
+			),
+		),
+	)("rejects %s pod template %s", (_kind, field, value) => {
+		const resource = [deployment, statefulSet, migrationJob].find(
+			(entry) => entry.kind === _kind,
+		);
+		if (!resource) throw new Error("missing fixture");
+		const changed = structuredClone(resource);
+		Object.assign(changed.spec.template.spec, { [field as string]: value });
+		expect(MultiServiceResourceV1Schema.safeParse(resource).success).toBe(true);
+		expect(MultiServiceResourceV1Schema.safeParse(changed).success).toBe(false);
+	});
+});

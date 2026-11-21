@@ -8,6 +8,11 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
+	acceptsAgentWorkloadPlacementV1,
+	isEciProviderPodAnnotationV1,
+	validateAgentWorkloadPlacementV1,
+} from "./agent-workload-placement.js";
+import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerSnapshotForAgentV1,
@@ -51,6 +56,11 @@ export function createKubernetesPodValidationV1(dependencies: {
 }) {
 	const { policy, imageRepository, workloadEnvironment, environmentSecrets } =
 		dependencies;
+	try {
+		validateAgentWorkloadPlacementV1(policy.agentWorkloadPlacement);
+	} catch {
+		throw new WorkloadKubernetesError("policy");
+	}
 	const withoutSkillDelivery = (
 		value: AgentWorkloadDesiredV1,
 		spec: V1PodSpec | undefined,
@@ -190,6 +200,15 @@ export function createKubernetesPodValidationV1(dependencies: {
 						content.split(",").every(validCidr) &&
 						(cidrs.length === 0 || content === cidrs.join(",")))
 				);
+			if (
+				isEciProviderPodAnnotationV1(
+					policy.agentWorkloadPlacement,
+					live.pod.spec,
+					key,
+					content,
+				)
+			)
+				return true;
 			return false;
 		});
 	}
@@ -276,36 +295,17 @@ export function createKubernetesPodValidationV1(dependencies: {
 			(pod?.priority !== undefined && pod.priority !== 0) ||
 			(pod?.preemptionPolicy !== undefined &&
 				pod.preemptionPolicy !== "PreemptLowerPriority") ||
-			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
-			pod?.affinity !== undefined ||
-			pod?.runtimeClassName !== undefined ||
+			// Only the deployment placement (or a retained pre-placement object) is
+			// accepted; a live Pod additionally carries API-server default tolerations.
+			!acceptsAgentWorkloadPlacementV1(
+				policy.agentWorkloadPlacement,
+				pod,
+				expectedIdentity !== undefined,
+			) ||
 			Object.keys(pod?.overhead ?? {}).length > 0 ||
 			(pod?.resourceClaims?.length ?? 0) > 0 ||
 			(pod?.schedulingGates?.length ?? 0) > 0 ||
 			(pod?.topologySpreadConstraints?.length ?? 0) > 0 ||
-			(pod?.tolerations ?? []).some(
-				(toleration) =>
-					!expectedIdentity ||
-					![
-						{
-							key: "node.kubernetes.io/memory-pressure",
-							operator: "Exists",
-							effect: "NoSchedule",
-						},
-						{
-							key: "node.kubernetes.io/not-ready",
-							operator: "Exists",
-							effect: "NoExecute",
-							tolerationSeconds: 300,
-						},
-						{
-							key: "node.kubernetes.io/unreachable",
-							operator: "Exists",
-							effect: "NoExecute",
-							tolerationSeconds: 300,
-						},
-					].some((expected) => hasSameStructure(toleration, expected)),
-			) ||
 			hasUnexpectedIdentity ||
 			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
 			!hasSameStructure(
@@ -489,11 +489,11 @@ export function createKubernetesPodValidationV1(dependencies: {
 					? [{ name: policy.imagePullSecretName }]
 					: [],
 			) ||
-			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
-			(pod?.tolerations?.length ?? 0) > 0 ||
-			pod?.affinity !== undefined ||
-			pod?.runtimeClassName !== undefined ||
-			pod?.nodeName !== undefined ||
+			!acceptsAgentWorkloadPlacementV1(
+				policy.agentWorkloadPlacement,
+				pod,
+				false,
+			) ||
 			container?.image !== `${imageRepository}@${value.imageDigest}` ||
 			pod?.automountServiceAccountToken !== false
 		);

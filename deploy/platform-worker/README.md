@@ -131,6 +131,37 @@ Codex 使用 `openai-responses-v1`；Claude、OpenCode（`acp`）与 Pi 使用
 `topology.kubernetes.io/region` 和 `topology.kubernetes.io/zone`。默认不接受额外标签。
 此配置只允许运行中 Pod 携带这些标签，不改变模板、Agent 身份、revision 或 Pod spec 校验。
 
+## Agent 级 Workload placement
+
+`workloadInput.policy.agentWorkloadPlacement` 是 Agent 级 Pod 的部署权威调度位置，规则见
+[工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
+未配置时保持原行为：模板和 Pod 不带调度字段。配置时只接受下面两个键：
+
+```typescript
+agentWorkloadPlacement: {
+  architecture: "amd64", // 或 "arm64"，与 release 镜像架构一致
+  legacyUnplaced: "retain-until-lifecycle", // 迁移完成后改为 "reject"
+}
+```
+
+- Worker 把 `nodeSelector: { type: virtual-kubelet, kubernetes.io/arch }` 与
+  `virtual-kubelet.io/provider=alibabacloud` 的 NoSchedule toleration 写入单服务 StatefulSet、
+  多服务 Deployment/StatefulSet 和迁移 Job 的 Pod 模板；init 与快照准备容器在同一 Pod 内。
+  与 Session ECI 准入使用同一组字段。其他键、未知架构或 RuntimeClass 让 Worker 在打开数据库前
+  以 `WORKER_KUBERNETES_CONFIGURATION_INVALID` 退出。
+- 漂移判定只接受这组精确字段。运行中的 Pod 另可带 API server 默认 toleration、ECI 写入的
+  无 `tolerationSeconds` 的 not-ready/unreachable toleration、`virtual-kubelet-` 开头的节点名，
+  以及 ECI 调度后写入的状态 annotation（实例/请求/ENI/VPC/缓存 ID、规格与平台版本等，逐键校验
+  格式）。EIP、IPv6 分配与其他 annotation、多余 selector/toleration、`affinity`、`runtimeClassName`
+  以及模板上的 `nodeName` 都按漂移处理。地域标签仍由 `allowedPodTopologyLabelValues` 精确放行。
+- `retain-until-lifecycle` 是迁移过渡态：与配置前形状完全一致、不带任何调度字段的既有对象不按
+  漂移自动重建，直到该 Agent 下一次正式 lifecycle（`restart_agent`，或 `stop_agent` 后
+  `restart_agent`）由一次调谐写入 placement。多服务 Agent 的一次 lifecycle 同时更新全部服务；
+  未完成的旧迁移 Job 不会被采用，已成功的旧 Job 没有运行中的 Pod，按历史保留。保留态的 Host
+  仍在原节点，不视为已隔离。全部 Agent 采用后改为 `reject`，剩余旧对象会按漂移重建。
+- placement 不进入资源配置摘要，`executionCapacityProfiles`、reserve 与 Session 批准不因配置
+  placement 失效；StatefulSet/Deployment 的资源对象指纹包含 placement。
+
 ## 私有 Registry 镜像拉取
 
 私有镜像需要同时配置 Registry Adapter 的读取认证和 kubelet 的镜像拉取认证。
