@@ -1241,6 +1241,7 @@ it.each([
 	"policy",
 	"trust-after-binding-check",
 	"policy-after-binding-check",
+	"version-revoked",
 ] as const)(
 	"real Store and physical Skill preflight keeps %s evidence and zero executable work",
 	async (mode) => {
@@ -1327,27 +1328,83 @@ it.each([
 		};
 		try {
 			if (!factory) throw new Error("Expected physical factory");
-			const worker = await factory({
+			const context = {
 				databaseUrl: database!.databaseUrl,
 				signal: new AbortController().signal,
-			});
+			};
+			const worker = await factory(context);
 			const input = {
 				agentId: "agent-1",
 				configurationRevision: 7,
 				workloadRevision: 1,
 				fence: 1,
 			};
-			if (mode === "success") await worker.materialize(input);
-			else await expect(worker.materialize(input)).rejects.toThrow();
-			const binding = (
-				await store.readCurrentBindings({
+			if (mode === "version-revoked") {
+				const query = {
 					agentId: "agent-1",
 					agentVersion: "agent-version-1",
+					configurationRevision: 7,
 					actorId: "owner-1",
 					organizationIds: [],
 					isAdministrator: false,
-				})
-			).bindings[0];
+				};
+				expect(await store.resolveSyncBindings(query)).toMatchObject([
+					{
+						state: "pending_sync",
+						syncRevision: 1,
+						skillVersion: { skillVersionId: "version-a" },
+					},
+				]);
+				const before =
+					await client`select agent_id,agent_version,skill_version_id,configuration_revision,sync_revision,"grant" from platform.skill_hub_agent_bindings where agent_id='agent-1'`;
+				// Only the Version is withdrawn: the existing binding and active signing key remain.
+				expect(
+					await client`update platform.skill_hub_versions set state='revoked',revoked_at=clock_timestamp() where id='version-a' and state='published' returning id,state`,
+				).toMatchObject([{ id: "version-a", state: "revoked" }]);
+				expect(
+					await client`select state,applied_receipt from platform.skill_hub_agent_bindings where agent_id='agent-1'`,
+				).toMatchObject([{ state: "pending_sync", applied_receipt: null }]);
+				for (let attempt = 0; attempt < 2; attempt++) {
+					const currentWorker = attempt === 0 ? worker : await factory(context);
+					await expect(currentWorker.materialize(input)).rejects.toMatchObject({
+						failure: {
+							stage: "binding_admission",
+							reason: "denied",
+							retryable: false,
+						},
+					});
+					expect(
+						await client`select agent_id,agent_version,skill_version_id,configuration_revision,sync_revision,"grant" from platform.skill_hub_agent_bindings where agent_id='agent-1'`,
+					).toEqual(before);
+					expect(
+						await client`select state,failure_reason,applied_receipt from platform.skill_hub_agent_bindings where agent_id='agent-1'`,
+					).toMatchObject([
+						{
+							state: "failed",
+							failure_reason: "SKILL_SYNC_BINDING_ADMISSION_DENIED_REJECTED",
+							applied_receipt: null,
+						},
+					]);
+				}
+				expect(await f.options.resolveAdmissionPolicy()).toMatchObject({
+					keyState: "active",
+					policyRevision: "policy-1",
+				});
+				expect(publicationReads).toBe(0);
+			} else if (mode === "success") await worker.materialize(input);
+			else await expect(worker.materialize(input)).rejects.toThrow();
+			const binding =
+				mode === "version-revoked"
+					? null
+					: (
+							await store.readCurrentBindings({
+								agentId: "agent-1",
+								agentVersion: "agent-version-1",
+								actorId: "owner-1",
+								organizationIds: [],
+								isAdministrator: false,
+							})
+						).bindings[0];
 			if (mode === "success")
 				expect(binding).toMatchObject({
 					state: "synced",
@@ -1358,7 +1415,7 @@ it.each([
 						readOnly: true,
 					}),
 				});
-			else {
+			else if (mode !== "version-revoked") {
 				const expected = {
 					trust: "SKILL_SYNC_PACKAGE_VERIFICATION_SOURCE_UNTRUSTED_REJECTED",
 					"trust-after-binding-check":
