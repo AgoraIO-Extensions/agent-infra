@@ -43,6 +43,8 @@ type Store = Pick<
 	| "openConfirmPhase"
 	| "commitConfirmPin"
 	| "settleConfirmPhase"
+	| "commitPermit"
+	| "endConfirmWithoutPermit"
 >;
 
 export interface ConnectionManualInstallationDrainOptionsV1 {
@@ -503,7 +505,7 @@ export function createConnectionManualInstallationDrainV1(
 		} catch {
 			response = undefined;
 		}
-		return store.settleConfirmPhase({
+		const settled = await store.settleConfirmPhase({
 			...attempt,
 			confirmCommandId: fixedInput.confirmCommandId,
 			phaseCommandId: phase.phaseCommandId,
@@ -513,6 +515,25 @@ export function createConnectionManualInstallationDrainV1(
 					? response.outcome
 					: "unknown",
 		});
+		// §13.5.6 启用许可: only this exchange's own committed publication
+		// evidence, while the same attempt and original claim still hold.
+		if (settled !== "exchanged") return settled;
+		const source = {
+			...attempt,
+			confirmCommandId: fixedInput.confirmCommandId,
+			exchangeCommandId: phase.phaseCommandId,
+		};
+		if (response?.publication) {
+			const permitted = await store
+				.commitPermit({ ...source, publication: response.publication })
+				.catch(() => undefined);
+			if (permitted === "permitted") return permitted;
+		}
+		// Only this attempt may write the permit and nothing is re-exchanged, so
+		// without one now none can follow: end the confirm at once so the
+		// original key is revoked while the original claim still holds.
+		await store.endConfirmWithoutPermit(source);
+		return settled;
 	}
 
 	async function begin(

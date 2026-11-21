@@ -162,6 +162,7 @@ import type {
 import { DurableJsonFile, deepFreeze } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import type { ModelTransportDiagnostic } from "./model-transport-diagnostic.js";
+import { observeNativeMetadataRpcV1 } from "./native-metadata-telemetry.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -7440,18 +7441,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		metadataRead.bindRpc(rpc);
 		await metadataRead.revalidate();
 		const metadata = await metadataRead.wait(
-			rpc.request(
-				"thread/read",
-				{
-					threadId: binding.threadId,
-					includeTurns:
-						"includeTurns" in parameters ? parameters.includeTurns : false,
-				},
-				(value) => value,
-				false,
-				false,
-				Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
-				read.signal,
+			observeNativeMetadataRpcV1("thread/read", () =>
+				rpc.request(
+					"thread/read",
+					{
+						threadId: binding.threadId,
+						includeTurns:
+							"includeTurns" in parameters ? parameters.includeTurns : false,
+					},
+					(value) => value,
+					false,
+					false,
+					Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
+					read.signal,
+				),
 			),
 		);
 		const result = {
@@ -7692,14 +7695,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		await metadataRead.revalidate();
 		const response = await metadataRead.wait(
-			rpc.request(
-				"skills/list",
-				{ cwds: [process.launch.cwd], forceReload: true },
-				(value) => value,
-				false,
-				false,
-				Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
-				read.signal,
+			observeNativeMetadataRpcV1("skills/list", () =>
+				rpc.request(
+					"skills/list",
+					{ cwds: [process.launch.cwd], forceReload: true },
+					(value) => value,
+					false,
+					false,
+					Math.min(metadataRead.expiresAt, Date.now() + rpcRequestTimeoutMs),
+					read.signal,
+				),
 			),
 		);
 		const approved = approveCombinedSkillResponse(

@@ -1929,6 +1929,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		const reserve = await ready();
 		const material = `papi_${"A".repeat(43)}`;
 		await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('api-app','Synthetic','user-a','app-1')`;
+		await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','application','api-app')`;
 		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent','application','api-app','use','use-1')`;
 		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('api-credential','application','api-app',${createHash("sha256").update(material).digest("hex")},${sql.json(["agent:use"])})`;
 		await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default','agent',1,1)`;

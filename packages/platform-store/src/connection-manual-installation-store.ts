@@ -29,6 +29,7 @@ import {
 	connectionRegistrationReceiptDigestV1,
 	connectionRegistrationTemplateDigestV1,
 	matchConnectionRegistrationReceiptV1,
+	verifyConnectionRegistrationTemplateV1,
 } from "@agent-infra/contracts/runtime/connection-install-node";
 import {
 	ConnectionInstallationErrorV1,
@@ -325,11 +326,14 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/**
-	 * §13.5.6 (#4309 S2): a logical confirm that ended unknown after phase 1
-	 * committed its pin but before its `exchange` phase ever opened can no
-	 * longer send it: only the original attempt drives the phases and an
-	 * unknown confirm is never resent. The installation is closed and the
-	 * original key revoked; the pin stays (exception item 6).
+	 * §13.5.6 (#4309 S2, #4312 S1): a logical confirm that ended unknown after
+	 * phase 1 committed its pin, without a permit, is closed at once and its
+	 * original key queued for revocation at Connection, whether its `exchange`
+	 * never opened, completed or stayed unknown. Only the original attempt drives
+	 * the phases, so nothing is resent or re-granted; the pin stays (exception
+	 * item 6). Closing at once, not when the original claim ends, is what lets
+	 * the revoke still reach Connection: every install command, the revoke
+	 * included, runs only under that original claim.
 	 */
 	async #closeStrandedConfirms() {
 		await this.#transaction(async (tx) => {
@@ -342,31 +346,20 @@ export class PostgresConnectionManualInstallationStoreV1 {
 					and b.command='confirm_binding_readback' and b.status='completed'
 					and b.idempotency_key='confirm-phase:' || c.id || ':confirm_binding_readback'
 				where a.status='confirmed' and m.revoke_state='not_required'
-					and not exists (select 1 from platform.connection_installation_commands x
-						where x.authorization_id=a.id
-							and x.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange')
+					-- Defensive: commitPermit completes the confirm in the same CAS, so
+					-- a permitted installation never reaches here with an unknown confirm.
+					and not exists (select 1 from platform.connection_manual_install_permits t
+						where t.authorization_id=a.id)
 				order by a.id
 				limit 32
 				for update of a, m
 			`);
-			for (const { id } of stranded) {
-				const authorizationId = id as string;
-				await tx.execute(sql`
-					update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
-						updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'
-				`);
-				await tx.execute(sql`
-					update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,
-						updated_at=clock_timestamp() where authorization_id=${authorizationId} and revoke_state='not_required'
-				`);
-				await tx.execute(sql`
-					insert into platform.connection_installation_commands
-						(id, authorization_id, command, idempotency_key, request_digest, status)
-					values (${randomUUID()}, ${authorizationId}, 'revoke', ${`manual-revoke:${authorizationId}`},
-						${sha256(JSON.stringify(["revoke", "confirm-stranded", authorizationId]))}, 'pending')
-					on conflict (authorization_id, command, idempotency_key) do nothing
-				`);
-			}
+			for (const { id } of stranded)
+				await this.#closeForOriginalKeyRevoke(
+					tx,
+					id as string,
+					"confirm-stranded",
+				);
 		});
 	}
 
@@ -1379,6 +1372,213 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		});
 	}
 
+	/**
+	 * §13.5.6 动态安装的启用许可: after a completed `exchange`, while the same
+	 * attempt, the original claim and every binding still hold at the database
+	 * clock, one installation CAS writes the permit from the Host's committed
+	 * publication evidence and completes the logical confirm. The permit binds
+	 * the logical confirm, the exchange phase (reference and request digest),
+	 * this confirm's first-pin receipt on an active pin, the descriptor and the
+	 * Host/Pod/Sandbox/generation/resourceFence; it expires with the published
+	 * material or the exception's `notAfter`, whichever is first. Anything else
+	 * commits nothing.
+	 */
+	async commitPermit(input: {
+		readonly confirmCommandId: string;
+		readonly exchangeCommandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+		readonly publication: {
+			readonly commitDigest: string;
+			/** Epoch milliseconds. */
+			readonly expiresAt: number;
+		};
+	}): Promise<"permitted" | "stale"> {
+		if (
+			!/^[a-f0-9]{64}$/.test(input.publication.commitDigest) ||
+			!Number.isSafeInteger(input.publication.expiresAt) ||
+			input.publication.expiresAt < 1
+		)
+			throw new ConnectionInstallationErrorV1("unavailable");
+		// Rolls the whole CAS back; #transaction rethrows Connection errors as-is.
+		class Uncommitted extends ConnectionInstallationErrorV1 {
+			constructor() {
+				super("unavailable");
+			}
+		}
+		const uncommitted = () => new Uncommitted();
+		try {
+			return await this.#transaction(async (tx) => {
+				const row = await this.#lockInstallation(tx, input.authorizationId);
+				if (!row?.associationLocked || !row.template || !row.descriptor_digest)
+					throw uncommitted();
+				const template = ConnectionRegistrationTemplateV1Schema.parse(
+					row.template,
+				);
+				const exception = this.#policy.dynamic.principalMapping;
+				const holds = sql`exists (select 1 from platform.connection_installation_commands p
+					join platform.connection_installation_commands c on c.id=${input.confirmCommandId}
+						and c.authorization_id=p.authorization_id
+					join platform.connection_installation_authorizations a on a.id=p.authorization_id
+					join platform.connection_manual_installations m on m.authorization_id=a.id
+					join platform.conversation_executions e on e.execution_id=a.execution_id
+					where p.id=${input.exchangeCommandId} and p.command='confirm_exchange' and p.status='completed'
+						and p.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange'
+						and p.attempt_id=${input.attemptId} and p.attempt_owner=${input.attemptOwner}
+						and c.command='confirm' and c.status='sending'
+						and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+						and c.attempt_expires_at > clock_timestamp()
+						and a.id=${input.authorizationId} and a.status='confirmed' and a.expires_at > clock_timestamp()
+						and e.status='processing'
+						and m.registration_state='registered' and m.supply_state='confirmed'
+						and m.revoke_state='not_required' and m.descriptor_digest=${row.descriptor_digest as string}
+						and ${connectionManualExceptionLiveV1(this.#policy)}
+						and ${originalClaimHolds(template.reference, template.claim)})`;
+				// The receipt the exchange phase was opened with, still on its active pin.
+				const [source] = await tx.execute(sql`
+					select r.id, r.candidate_digest, p.request_digest
+					from platform.connection_installation_commands p
+					join platform.connection_principal_pin_receipts r on r.confirm_command_id=${input.confirmCommandId}
+						and r.authorization_id=p.authorization_id and r.attempt_id=p.attempt_id
+						and r.claim_owner=p.attempt_owner and r.claim_fence=${template.claim.fence}
+					join platform.connection_principal_pins pin on pin.id=r.pin_id
+						and pin.revision=r.pin_revision and pin.released_at is null
+					where p.id=${input.exchangeCommandId} and p.authorization_id=${input.authorizationId}
+						and p.command='confirm_exchange'
+					for share of r, pin
+				`);
+				if (
+					!source ||
+					source.request_digest !==
+						sha256(
+							JSON.stringify([
+								"confirm_exchange",
+								input.confirmCommandId,
+								input.authorizationId,
+								source.id,
+								source.candidate_digest,
+							]),
+						)
+				)
+					throw uncommitted();
+				const binding = {
+					schemaVersion: 1,
+					principal: template.principal,
+					agentId: template.reference.agentId,
+					conversationId: template.reference.conversationId,
+					association: template.association,
+					target: {
+						hostRef: template.target.hostRef,
+						sandboxId: template.target.sandboxId,
+						podUid: template.target.podUid,
+						sessionGeneration: template.target.sessionGeneration,
+						resourceFence: template.target.resourceFence,
+					},
+				};
+				const expiresAt = new Date(input.publication.expiresAt).toISOString();
+				const inserted = await tx.execute(sql`
+					insert into platform.connection_manual_install_permits
+						(id, authorization_id, confirm_command_id, exchange_command_id, exchange_request_digest,
+						 pin_receipt_id, binding, descriptor_digest, commit_digest, claim_owner, claim_fence,
+						 attempt_id, expires_at)
+					select ${randomUUID()}, ${input.authorizationId}, ${input.confirmCommandId}, ${input.exchangeCommandId},
+						${source.request_digest as string}, ${source.id as string}, ${JSON.stringify(binding)}::jsonb,
+						${row.descriptor_digest as string}, ${input.publication.commitDigest}, ${input.attemptOwner},
+						${template.claim.fence}, ${input.attemptId},
+						least(${expiresAt}::timestamptz, ${exception.notAfter}::timestamptz)
+					where ${holds} and least(${expiresAt}::timestamptz, ${exception.notAfter}::timestamptz) > clock_timestamp()
+					on conflict (authorization_id) do nothing
+					returning id
+				`);
+				const done = await tx.execute(sql`
+					update platform.connection_installation_commands set status='completed', updated_at=clock_timestamp()
+					where id=${input.confirmCommandId} and status='sending' and ${holds}
+					returning id
+				`);
+				if (inserted.length !== 1 || done.length !== 1) throw uncommitted();
+				return "permitted" as const;
+			});
+		} catch (error) {
+			// No partial permit or completed confirm survives a failed CAS.
+			if (error instanceof Uncommitted) return "stale";
+			throw error;
+		}
+	}
+
+	/**
+	 * §13.5.6 exception recovery after the exchange (C1c-2b-2b): an `exchange`
+	 * that completed without a permit can never be enabled later, because only
+	 * this attempt may write the permit and nothing is re-exchanged. Its own
+	 * attempt therefore ends the logical confirm unknown at once, closes the
+	 * installation and queues the revoke of the original key, instead of
+	 * leaving the confirm open until its attempt lapses. Closing never waits
+	 * for the original claim; the revoke itself is still sent only under it.
+	 * Another attempt, another installation's phase, an exchange that did not
+	 * complete or a permitted confirm commits nothing.
+	 */
+	async endConfirmWithoutPermit(input: {
+		readonly confirmCommandId: string;
+		readonly exchangeCommandId: string;
+		readonly attemptId: string;
+		readonly attemptOwner: string;
+		readonly authorizationId: string;
+	}): Promise<"unknown" | "stale"> {
+		return this.#transaction(async (tx) => {
+			const row = await this.#lockInstallation(tx, input.authorizationId);
+			if (!row?.template) return "stale";
+			const [ended] = await tx.execute(sql`
+				update platform.connection_installation_commands c set status='unknown', updated_at=clock_timestamp()
+				where c.id=${input.confirmCommandId} and c.authorization_id=${input.authorizationId}
+					and c.command='confirm' and c.status='sending'
+					and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					and exists (select 1 from platform.connection_installation_commands e
+						where e.id=${input.exchangeCommandId} and e.authorization_id=c.authorization_id
+							and e.command='confirm_exchange' and e.status='completed'
+							and e.idempotency_key='confirm-phase:' || c.id || ':confirm_exchange')
+					and not exists (select 1 from platform.connection_manual_install_permits t
+						where t.authorization_id=c.authorization_id)
+				returning c.id
+			`);
+			if (!ended) return "stale";
+			await this.#closeForOriginalKeyRevoke(
+				tx,
+				input.authorizationId,
+				"confirm-exchanged-without-permit",
+			);
+			return "unknown";
+		});
+	}
+
+	/**
+	 * Closes a confirmed installation and queues the revoke of its original key
+	 * (§13.5.7 逐安装撤销); the pin stays (exception item 6). An installation
+	 * whose revoke is already pending, sent or settled gets no second command.
+	 */
+	async #closeForOriginalKeyRevoke(
+		tx: Transaction,
+		authorizationId: string,
+		reason: string,
+	) {
+		await tx.execute(sql`
+			update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
+				updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'
+		`);
+		const queued = await tx.execute(sql`
+			update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,
+				updated_at=clock_timestamp() where authorization_id=${authorizationId} and revoke_state='not_required'
+			returning authorization_id
+		`);
+		if (queued.length !== 1) return;
+		await tx.execute(sql`
+			insert into platform.connection_installation_commands
+				(id, authorization_id, command, idempotency_key, request_digest, status)
+			values (${randomUUID()}, ${authorizationId}, 'revoke', ${`manual-revoke:${authorizationId}`},
+				${sha256(JSON.stringify(["revoke", reason, authorizationId]))}, 'pending')
+			on conflict (authorization_id, command, idempotency_key) do nothing
+		`);
+	}
+
 	/** Refused principal (§13.5.1 item 2): no exchange; close and revoke the original key. */
 	async #rejectConfirm(
 		tx: Transaction,
@@ -1930,6 +2130,136 @@ export class PostgresConnectionManualInstallationStoreV1 {
 	}
 
 	/**
+	 * §13.5.6 已提交许可读取 (read-only). A currently approved Execution of the
+	 * same installation — same user, Agent, Conversation, Session generation,
+	 * Host/Pod/Sandbox and resourceFence, with a live claim of its own — reads
+	 * the committed permit. The original confirm's claim is only the permit's
+	 * source and need not still hold; the original command need not be
+	 * sending. It never issues, records or extends a permit.
+	 *
+	 * Interface for exception items 4/6/8 (C1d): every condition that stops a
+	 * permit from being used lives in `#permitUsable`; the pin and `notAfter`
+	 * checks are there already, and further stop conditions belong there too.
+	 */
+	async #permitReadback(
+		tx: Transaction,
+		request: ConnectionInstallReadbackRequestV1,
+	): Promise<"allowed" | "denied"> {
+		const permit = request.permit;
+		if (!permit || request.command) return "denied";
+		const row = await this.#lockInstallation(
+			tx,
+			request.authorizationId,
+			"share",
+		);
+		if (!row?.associationLocked || !row.template || !row.descriptor_digest)
+			return "denied";
+		const template = ConnectionRegistrationTemplateV1Schema.parse(row.template);
+		// Every readback purpose checks the deployment's current system access
+		// approval (§13.5.6 Worker 权威回读), the permit read included.
+		try {
+			verifyConnectionRegistrationTemplateV1(
+				template,
+				this.#policy.access,
+				this.#policy.clientName,
+			);
+		} catch {
+			return "denied";
+		}
+		const reference = request.reference;
+		if (
+			row.user_id !== request.principal.id ||
+			!isDeepStrictEqual(template.principal, request.principal) ||
+			row.confirmation_revision !== request.confirmationRevision ||
+			row.template_digest !== request.templateDigest ||
+			connectionRegistrationTemplateDigestV1(template) !==
+				request.templateDigest ||
+			!isDeepStrictEqual(template.target, request.target) ||
+			row.supply_attempt_id !== request.supply.attemptId ||
+			template.supply.ref !== request.supply.ref ||
+			template.supply.revision !== request.supply.revision ||
+			reference.agentId !== template.reference.agentId ||
+			reference.conversationId !== template.reference.conversationId ||
+			reference.sessionGeneration !== template.reference.sessionGeneration
+		)
+			return "denied";
+		const current = await this.#facts(
+			tx,
+			request.principal.id,
+			reference.executionId,
+		);
+		if (
+			!current ||
+			!isDeepStrictEqual(current.reference, reference) ||
+			current.preparation.hostRef !== template.target.hostRef ||
+			current.preparation.sandboxId !== template.target.sandboxId ||
+			current.preparation.podUid !== template.target.podUid ||
+			current.preparation.sessionGeneration !==
+				template.target.sessionGeneration ||
+			current.preparation.resourceFence !== template.target.resourceFence ||
+			current.preparation.association.connectionAgentId !==
+				template.association.connectionAgentId ||
+			current.preparation.association.revision !== template.association.revision
+		)
+			return "denied";
+		const [found] = await tx.execute(sql`
+			select binding from platform.connection_manual_install_permits
+			where id=${permit.id} and authorization_id=${request.authorizationId}
+				and commit_digest=${permit.commitDigest} and descriptor_digest=${row.descriptor_digest as string}
+		`);
+		if (
+			!found ||
+			!isDeepStrictEqual(found.binding, {
+				schemaVersion: 1,
+				principal: template.principal,
+				agentId: template.reference.agentId,
+				conversationId: template.reference.conversationId,
+				association: template.association,
+				target: {
+					hostRef: template.target.hostRef,
+					sandboxId: template.target.sandboxId,
+					podUid: template.target.podUid,
+					sessionGeneration: template.target.sessionGeneration,
+					resourceFence: template.target.resourceFence,
+				},
+			})
+		)
+			return "denied";
+		// The directory read may have outlasted the permit or the current claim.
+		const [final] = await tx.execute(sql`
+			select ${this.#permitUsable(permit.id, request.authorizationId)}
+				and ${originalClaimHolds(current.reference, current.claim)} as live
+		`);
+		return final?.live === true ? "allowed" : "denied";
+	}
+
+	/**
+	 * When a committed permit may be used, at the database clock: it has not
+	 * expired, the installation is still confirmed, registered, supplied and not
+	 * being revoked, the logical confirm and its exchange completed, the
+	 * first-pin receipt's pin is still active at the same revision (item 6) and
+	 * the exception is live (item 8 `notAfter`).
+	 */
+	#permitUsable(permitId: string, authorizationId: string) {
+		return sql`exists (select 1 from platform.connection_manual_install_permits t
+			join platform.connection_installation_authorizations a on a.id=t.authorization_id
+			join platform.connection_manual_installations m on m.authorization_id=a.id
+			join platform.connection_installation_commands c on c.id=t.confirm_command_id
+				and c.authorization_id=a.id and c.command='confirm' and c.status='completed'
+			join platform.connection_installation_commands x on x.id=t.exchange_command_id
+				and x.authorization_id=a.id and x.command='confirm_exchange' and x.status='completed'
+			join platform.connection_principal_pin_receipts r on r.id=t.pin_receipt_id and r.authorization_id=a.id
+			join platform.connection_principal_pins pin on pin.id=r.pin_id
+				and pin.revision=r.pin_revision and pin.released_at is null
+			where t.id=${permitId} and t.authorization_id=${authorizationId}
+				and t.expires_at > clock_timestamp()
+				and a.status='confirmed' and m.registration_state='registered'
+				and m.supply_state='confirmed' and m.revoke_state='not_required'
+				and m.descriptor_digest=t.descriptor_digest
+				and ${connectionManualExceptionLiveV1(this.#policy)})`;
+	}
+
+	/**
 	 * Host→Worker authoritative readback (§13.5.6). Read-only: purpose `supply`
 	 * matches the original persisted supply attempt; purpose `command` matches the
 	 * signed command's own persisted `sending` record and wire digest.
@@ -1945,6 +2275,8 @@ export class PostgresConnectionManualInstallationStoreV1 {
 		}
 		try {
 			return await this.#transaction(async (tx) => {
+				if (request.purpose === "permit")
+					return this.#permitReadback(tx, request);
 				const row = await this.#lockInstallation(
 					tx,
 					request.authorizationId,

@@ -1,6 +1,6 @@
 {
-  "id": "98e24db6-81c9-497a-b0f1-777518e18687",
-  "prevId": "e8d111c3-dc73-44e6-878e-d1e6e3a0610c",
+  "id": "358e6e11-201d-41af-bc81-4122a221cd7a",
+  "prevId": "a214d994-8dad-472e-998c-2134e9c8f0f8",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2422,6 +2422,161 @@
         "connection_manual_association_ciphertext": {
           "name": "connection_manual_association_ciphertext",
           "value": "jsonb_typeof(\"platform\".\"connection_manual_associations\".\"credential_ciphertext\") = 'object'\n\t\t\t\tand \"platform\".\"connection_manual_associations\".\"credential_ciphertext\" @> jsonb_build_object('schemaVersion', 1,\n\t\t\t\t\t'agentId', \"platform\".\"connection_manual_associations\".\"agent_id\", 'ownerId', \"platform\".\"connection_manual_associations\".\"owner_id\",\n\t\t\t\t\t'secretVersion', \"platform\".\"connection_manual_associations\".\"association_revision\")\n\t\t\t\tand \"platform\".\"connection_manual_associations\".\"credential_ciphertext\"->'crypto'->>'dekFingerprint' ~ '^[a-f0-9]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.connection_manual_install_permits": {
+      "name": "connection_manual_install_permits",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "authorization_id": {
+          "name": "authorization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confirm_command_id": {
+          "name": "confirm_command_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "exchange_command_id": {
+          "name": "exchange_command_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "exchange_request_digest": {
+          "name": "exchange_request_digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pin_receipt_id": {
+          "name": "pin_receipt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding": {
+          "name": "binding",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "descriptor_digest": {
+          "name": "descriptor_digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "commit_digest": {
+          "name": "commit_digest",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claim_owner": {
+          "name": "claim_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claim_fence": {
+          "name": "claim_fence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "connection_manual_install_permit_authorization_unique": {
+          "name": "connection_manual_install_permit_authorization_unique",
+          "columns": [
+            {
+              "expression": "authorization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "connection_manual_install_permit_authorization_fk": {
+          "name": "connection_manual_install_permit_authorization_fk",
+          "tableFrom": "connection_manual_install_permits",
+          "tableTo": "connection_installation_authorizations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "authorization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "connection_manual_install_permit_receipt_fk": {
+          "name": "connection_manual_install_permit_receipt_fk",
+          "tableFrom": "connection_manual_install_permits",
+          "tableTo": "connection_principal_pin_receipts",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "pin_receipt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "connection_manual_install_permit_digest": {
+          "name": "connection_manual_install_permit_digest",
+          "value": "\"platform\".\"connection_manual_install_permits\".\"exchange_request_digest\" ~ '^[a-f0-9]{64}$' and \"platform\".\"connection_manual_install_permits\".\"descriptor_digest\" ~ '^[a-f0-9]{64}$'\n\t\t\t\tand \"platform\".\"connection_manual_install_permits\".\"commit_digest\" ~ '^[a-f0-9]{64}$' and \"platform\".\"connection_manual_install_permits\".\"revision\" between 1 and 9007199254740991"
         }
       },
       "isRLSEnabled": false

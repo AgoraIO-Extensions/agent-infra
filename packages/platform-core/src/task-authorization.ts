@@ -605,7 +605,8 @@ export function captureTaskApplicationAuthorizationBoundaryV1(input: {
 		application.status !== "active" ||
 		!grant ||
 		grant.revoked ||
-		grant.agentId !== agent.agentId
+		grant.agentId !== agent.agentId ||
+		!isAgentApiPrincipalAvailableV1(agent, subject)
 	)
 		return null;
 	return parseTaskAuthorizationBoundaryV1({
@@ -678,6 +679,7 @@ export function isTaskApplicationAuthorizationCurrentV1(input: {
 		boundary.agentId === agent.agentId &&
 		application.status === "active" &&
 		boundary.identityRevision === application.authorizationRevision &&
+		isAgentApiPrincipalAvailableV1(agent, boundary.principal) &&
 		apiUseCurrent(boundary, application.useGrant)
 	);
 }

@@ -37,7 +37,10 @@ const agent: AgentManagementStateV1 = {
 	workloadRevision: 1,
 	fence: 1,
 	ownerIds: ["owner-a"],
-	availability: [{ kind: "organization", organizationId: "team-a" }],
+	availability: [
+		{ kind: "organization", organizationId: "team-a" },
+		{ kind: "application", applicationId: "user-a" },
+	],
 	failureCode: null,
 };
 
@@ -477,7 +480,7 @@ function applicationBoundary(current = application) {
 }
 
 describe("original application API Task authority", () => {
-	it("captures an explicit application use grant without inheriting Owner or availability", () => {
+	it("captures an explicit application use grant only alongside its application scope, without inheriting Owner", () => {
 		const boundary = applicationBoundary();
 		expect(boundary.accessSources).toEqual([
 			{ kind: "api-use", useGrantRevision: "app-use-3" },
@@ -488,7 +491,7 @@ describe("original application API Task authority", () => {
 				application,
 				agent: { ...agent, availability: [] },
 			}),
-		).toBe(true);
+		).toBe(false);
 		expect(isTaskAuthorizationCurrentV1({ boundary, user, agent })).toBe(false);
 		expect(capture({ principal: boundary.principal })).toBeNull();
 	});
@@ -771,5 +774,67 @@ describe("human API availability intersection (#4273)", () => {
 				agent: { ...agent, availability: [] },
 			}),
 		).toBe(false);
+	});
+});
+
+describe("#4283 independent application scope and grant", () => {
+	it("requires the exact application entry without borrowing a user, organization or Owner", () => {
+		const scoped = {
+			...agent,
+			availability: [
+				{
+					kind: "application" as const,
+					applicationId: application.applicationId,
+				},
+			],
+		};
+		const capture = (
+			currentAgent: AgentManagementStateV1,
+			currentApplication = application,
+		) =>
+			captureTaskApplicationAuthorizationBoundaryV1({
+				principal: { kind: "application", id: application.applicationId },
+				application: currentApplication,
+				agent: currentAgent,
+				channelId: "api",
+				agentAuthorizationRevision: "agent-access-4",
+			});
+		const allowed = capture(scoped);
+		expect(allowed).not.toBeNull();
+		if (!allowed) throw new Error("Missing scoped authority");
+		for (const outside of [
+			{ ...agent, ownerIds: [application.applicationId], availability: [] },
+			{
+				...agent,
+				availability: [
+					{ kind: "user" as const, userId: application.applicationId },
+				],
+			},
+			{
+				...agent,
+				availability: [
+					{
+						kind: "organization" as const,
+						organizationId: application.applicationId,
+					},
+				],
+			},
+			{
+				...agent,
+				availability: [
+					{ kind: "application" as const, applicationId: "another-app" },
+				],
+			},
+		]) {
+			expect(capture(outside)).toBeNull();
+			expect(
+				isTaskApplicationAuthorizationCurrentV1({
+					boundary: allowed,
+					application,
+					agent: outside,
+				}),
+			).toBe(false);
+		}
+		expect(capture(scoped, { ...application, useGrant: null })).toBeNull();
 	});
 });

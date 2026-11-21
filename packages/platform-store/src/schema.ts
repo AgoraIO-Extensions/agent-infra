@@ -25,6 +25,7 @@ import {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
 	connectionManualInstallations,
+	connectionManualInstallPermits,
 	connectionPrincipalPinReceipts,
 	connectionPrincipalPins,
 } from "./schema-connection-installation.js";
@@ -91,6 +92,7 @@ export {
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
 	connectionManualInstallations,
+	connectionManualInstallPermits,
 	connectionPrincipalPinReceipts,
 	connectionPrincipalPins,
 } from "./schema-connection-installation.js";
@@ -230,6 +232,7 @@ export const platformInfrastructureTables = [
 	connectionManualInstallations,
 	connectionPrincipalPins,
 	connectionPrincipalPinReceipts,
+	connectionManualInstallPermits,
 	platformUserDisables,
 	ldapIdentityIds,
 	browserSessions,

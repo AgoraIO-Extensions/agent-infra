@@ -643,6 +643,9 @@ RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience
 
 平台来源的停止、恢复核实及代次隔离复用同一签名机制，使用与业务执行显式区分的控制用途 Grant。Core 依据已持久化的撤权、停止、隔离记录或经可信历史证明后提交的系统迁移审计及目标当前状态签发，绑定原主体、Agent、Conversation、适用的 Execution、Session 代次、控制操作引用与命令范围；原主体保留为目标和审计归属，不要求其仍具备业务使用权。Host 必须校验控制用途与上述绑定，并继续执行该操作的租约、fence 和屏障规则。控制用途只允许停止、无正文状态核实、必要代次屏障，以及原执行未确认事件向平台持久化处理器的续传与确认。业务 Grant 只在原执行运行中续期；原执行在其事件读完前结束时，Worker 须经状态核实取得 Host 对终态的正面证明，并在同一租约内将该终态持久化，之后才在同一次认领中改用控制用途 Grant 续传至终态事件，不重新排队，也不恢复业务权限。续期被拒本身不证明终态，无法证明时沿原恢复路径重新认领。事件续传须绑定原 Execution、代次、当前 fence 和持久确认游标，由处理器按原任务隔离保存；该通道不授予用户查询或正文回放权限。控制 Grant 不能提交或补充 Turn、发起模型/工具调用、读取附件或向用户返回正文，也不能用于 Connection 授权。服务身份或调用方自报撤权不能替代该 Grant；过期后仅能沿同一持久控制记录重新校验签发，不能借此恢复业务权限。
 
+已可靠终态原 Turn 的控制归档、失败处置及正常控制续接，统一见
+[Runtime HLD §8.2.1](HLD-agent-runtime-M1.md#821-已终态原-turn-的有界控制归档)。
+
 Worker 的控制请求仍须对原 verified 目标完成完整签名 readiness，不能使用业务探测缓存代替。
 同一次准备中的前置路由核对与最终签名探测按
 [Runtime HLD §8.2](HLD-agent-runtime-M1.md#82-事件去重) 分工；前置观测不是授权或就绪证明，
@@ -2358,6 +2361,8 @@ sequenceDiagram
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
 - Runtime 明确报告本次 Turn 在原生提交点之前未提交（`RUNTIME_TURN_NOT_SUBMITTED`）时，Worker 把 Execution 退回投递前的状态，用新的 Grant 重新投递同一 Execution：2 分钟内最多 3 次，之后以 `RUNTIME_FILE_INPUT_UNAVAILABLE` 或 `RUNTIME_SESSION_PREPARATION_FAILED` 明确失败。接受结果不确定的恢复按墙钟预算收敛，默认 5 分钟，由部署配置（Worker 环境变量 `PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS`），用尽时以 `RUNTIME_RECOVERY_TIMEOUT` 失败。独立 executor 精确 Stop 的排空屏障按 [§11.2.1](#1121-codex-session-独立-executor提案) 处理。只核实状态的恢复不以 Session Sandbox 就绪为前置。完整契约见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract) 与 [§7.3](HLD-agent-runtime-M1.md#73-重启恢复)，决策见 [ADR-0034](../adr/0034-not-submitted-turns-and-wall-clock-recovery-budget.md)。
 - 用户可见结果以 [Agent Platform PRD 11.2](../prd/PRD-agent-platform-M1.md#112-对话能力) 为准；幂等键、事务分支、outbox 状态迁移、Runtime 接受竞态和失败收敛的完整工程契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)。
+- 已可靠终态原 Turn 的控制归档预算、失败与读取投影遵循
+  [Runtime HLD §8.2.1](HLD-agent-runtime-M1.md#821-已终态原-turn-的有界控制归档)。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
 - Connection 的外部调用幂等、未知结果与恢复由 Connection 负责；平台不能通过重投整个任务来绕过原调用对账。
 
@@ -3160,14 +3165,15 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 
 候选响应、固定提交或其响应丢失时，保留原阶段键/摘要和 unknown；原用户只能在有效原 claim 内
 请求既有只读 status。Host 仅返回同一原阶段已持久的非秘密结果；Worker 只核实原 Store 固定及
-本次回执，确定未提交时才在第 2 步的完整谓词下幂等补提交。无法区分未提交与已提交时仍关闭兑换。
-只有确定本阶段从未进入 sending、原固定提交已确认且原 claim 仍有效，才允许 `exchange` 的首次
-发送；已 sending/unknown 的任何阶段不自动重发 confirm。Host 的 status 响应只读；核实后若条件
-满足，只能由原 Worker 沿原 confirm 意图继续首次发送尚未 sending 的 exchange，不能在 status
-处理中兑换。原 claim 结束、旧 fence、过期或撤权后只保留事实并沿原封闭/撤销处理，不续租或借
-新 claim 继续。固定已提交
-但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。换码已经 sending 的未知
-结果沿既有原 Host 只读核实和启用许可规则收口，不重兑 code、不重放回跳，也不抹除已确认提交。
+本次回执，确定未提交时才在第 2 步的完整谓词下幂等补提交；无法区分未提交与已提交时保持 unknown。
+status 只核实并补记第一阶段，不打开、不继续 `exchange`，Host 也不在 status 处理中兑换；任何
+已 sending/unknown 的阶段都不自动重发，逻辑 confirm 也不重发。
+原 claim 结束、旧 fence、过期或撤权后只保留事实并沿原封闭/撤销处理，不续租或借新 claim 继续。
+固定已提交但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。例外两阶段路径
+也不使用下文“动态安装的启用许可”中的只读补记：逻辑 confirm 在首次固定之后、写入启用许可之前
+结束为 unknown 时，不论 `exchange` 从未打开、已完成还是结果不明，都立即封闭该安装并按原键撤销，
+不重兑 code、不重放回跳，固定保留。原因是包括撤销在内的每个安装命令都只能在原 claim 下发送；
+等原 claim 结束再封闭，撤销只能记为 unknown，已换到的 Token 会一直有效。用户可以重新安装。
 
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
@@ -3289,11 +3295,44 @@ Principal、client/实例和批准的 publication 合同构造同一版本的非
 调用既有私有发布事务，执行相同的材料持久化、发布锁、提交及 reader 核验。动态路径以该描述符
 为发布输入。启动时只需受保护入口及部署信任，不要求预装完整 client 配置或静态回执文件。
 
+**动态发布回执的字段。** 回执沿用既有私有 publication 回执及 metadata 的字段集，只在回执顶层
+另加 §13.5.1 例外第 7 项要求的标记 `principalMapping`（值为 `consistency-exception-v1`），各字段按下列
+规则取值。每项只来自固定描述符、原安装事务、阶段 2 复读一致的候选、本次 token 响应或部署批准输入，
+不从请求、回跳、Connection 响应自报字段或模型取得；任一项缺失或不一致时不发布。
+
+- 回执解析按路径使用各自的固定键集：静态路径沿用既有键集，不改变；带 `principalMapping` 的回执
+  不能通过静态解析。动态 reader 只接受在既有键集之外恰好多出该标记且取值为
+  `consistency-exception-v1` 的回执；缺少标记、取值不同或另有其他键时都不使用材料。
+- 发布修订按安装区分：`delivery.ref` 固定为 `connection-manual-install`；`delivery.revision` 为
+  原 `authorizationId` 与 `confirmationRevision` 的 JSON 数组的 SHA-256 hex。每个安装只发布这一个
+  修订一次；重新安装产生新的授权和修订，不复用、不覆盖旧修订或其发布锁。
+- 回执顶层的 `authorizationId`、`confirmationRevision`、`reference`、`scope` 取原安装事务；
+  `clientId` 与 `configurationFingerprint` 取固定配置；`connectionPrincipalId` 按 §13.5.1 例外
+  第 7 项取候选的 `principalId`。
+- metadata 的 `principal`、`agentId` 取原安装；`consumerId`、`issuer`、`resource`、`audience`、
+  `configFingerprint`、`source` 取本安装由 Owner 关联派生的 Consumer target，其中 `consumerId`
+  是关联的 Connection Agent 标识。EP-1060 回读的实际 Consumer 只由描述符和候选绑定，不写入 metadata。
+- `instanceRef` 取候选中已核实的 DEVICE 实例 `instanceId`，即本次 OAuth client installation 的
+  独立 ConsumerInstance（[Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)）。
+- `serviceRef` 与 `contract`（`ref`、`revision`、`serverInfo`、工具策略）取部署批准的动态发布合同。
+  Host 只在装配时从受保护部署输入取得，并要求其 `ref/revision` 与描述符的 publication 合同一致。
+- `credentialRef` 为 `oauth-` 加原 `authorizationId` 的 SHA-256 hex；`credentialRevision` 为原
+  `authorizationId`、`confirmationRevision` 与固定配置指纹的 JSON 数组的 SHA-256 hex。二者只是
+  Host 本次材料的不可变引用，不是 Connection token ID、Grant 或权限修订。`expiresAt` 为 epoch
+  毫秒（与 [§13.5.5](#1355-受保护安装交付) 相同），取本次 token 响应中 access token 的实际到期时刻。
+- 提交证据：发布提交后，`exchange` 阶段的响应带回非秘密的 `commitDigest` 和上述 `expiresAt`，
+  作为下段启用许可的输入；不带回 Token、metadata 正文或文件路径。`commitDigest` 为发布提交记录
+  `[delivery.ref, delivery.revision, materialKey, installationKey, metadataDigest]` 这一 JSON
+  数组的 SHA-256 hex；Host 在发布和每次 reader 核对时按同一顺序复算。
+
 **动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
 Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
 启用许可。例外两阶段路径的原 confirm 来源同时绑定逻辑 confirm 和实际 `exchange` 阶段的引用及
 请求摘要，不能以 `binding-readback` 的结果替代兑换和私有发布的提交证明。许可固定原用户、Agent、安装及修订、原 confirm 与原 claim 来源、Host/Pod、Sandbox、
-代次、resourceFence、描述符、提交摘要和许可期限。原 claim 正常结束后，已提交许可仍可由同一
+代次、resourceFence、描述符、提交摘要和许可期限。许可期限取 `exchange` 响应的 `expiresAt`；例外路径再与
+`notAfter` 取较早值，即 `min(expiresAt, notAfter)`。M1 的动态路径不刷新：不使用 refresh Token
+续期，也不发布新修订；到期后许可失效、MCP 关闭，用户重新安装，产生新的授权和发布修订。
+原 claim 正常结束后，已提交许可仍可由同一
 安装的后续获准 Execution 使用，按本节“Worker 权威回读”复核当前执行与许可绑定。动态 reader
 必须同时通过许可回读、既有本地提交和授权校验，才可使用 MCP 材料。Host 本地提交已成而 Platform
 尚未记许可时，保留本地提交，MCP 保持关闭。许可已持久化而回包丢失时，以当前许可和原 Host 的
@@ -3413,7 +3452,7 @@ EP-1060 已发送后失去确认，按 [§13.5.7](#1357-agent-关联与-oauth-�
 不自动重发授权码、refresh 或业务调用；只按实际已发布的恢复合同核实，否则由原主体重新
 确认新的安装，旧事务不变为已成功。过期/撤销/保护失效时封闭新 MCP 发送，原控制、持久
 事实及只读恢复保留。刷新只消费实际发布的 token 合同与 rotation/replay 语义，先持久确认
-新修订再选择；远端撤销只消费固定 revoke 合同。停止 Session、本地关闭、删文件或请求
+新修订再选择；动态路径在 M1 不刷新，见上文“动态安装的启用许可”。远端撤销只消费固定 revoke 合同。停止 Session、本地关闭、删文件或请求
 revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权检查，也不启动同步循环。
 
 首次实施必须具名列出 Consumer/client/callback 的批准来源、受保护回跳通道的接收函数、
@@ -3690,14 +3729,16 @@ code/verifier 或换码，既有已确认固定保留。分别暂停 EP-1060
 响应、Core 授权复核及数据库锁等待，在等待中终结原执行、撤权、替换 claim/fence 或越过命令/授权期限与
 notAfter，证明最终数据库时钟谓词拒绝迟到提交和第二阶段发送。模拟候选响应丢失、固定提交
 成功而响应丢失、提交结果不明、exchange 的 sending/响应丢失及 Worker 崩溃：只核实原键，
-不自动重发任一未知阶段；仅确定未发送的 exchange 可在仍有效原 claim 下首次发送。固定后、
+不自动重发任一未知阶段，也不打开或继续 exchange；首次固定已提交的，断言逻辑 confirm 结束为
+unknown 后立即封闭并按原键撤销，固定保留。固定后、
 换码前解除固定或改变批准修订时拒绝；固定已提交而安装失败不自动解除固定或释放容量；相同固定
 的一致检查和恢复不重置首次固定时间或人工核对期限。
 正例须证明原用户只确认一次、相同原 claim/fence 串起两阶段，固定提交先于任何 code/verifier
 读取及换码，且三种只读回读用途没有写副作用。
 换码后分别覆盖本地发布未提交、Host 已提交但 Platform 许可未提交、许可已提交但响应丢失。
 首种保持不可用。次种保留真实提交且保持关闭，原主体只读核实并由服务端成功 CAS 补记后才
-可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。覆盖只读核实失败和
+可用。末种仅在 reader 读到仍有效的同一许可且通过本地提交复核时可用。例外两阶段路径的次种
+不补记，断言立即封闭并按原键撤销。覆盖只读核实失败和
 补记冲突，断言保持 unknown、无许可时不可用、各分支均不重复换码。
 原 confirm 的 claim 正常结束后，验证同一安装及原 Host/Sandbox 上的后续获准 Execution
 能按自己的当前 claim 只读核验并使用已提交许可。原 claim 结束前未提交许可时，后续

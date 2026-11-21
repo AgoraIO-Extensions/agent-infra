@@ -1217,6 +1217,23 @@ export function assemblePlatformApi(
 								return { outcome: "stale" as const };
 							if (capability.effect !== "state_changing")
 								return { outcome: "unsupported" as const };
+							const refreshedAuthority = await currentAuthority();
+							if (!refreshedAuthority) return { outcome: "denied" as const };
+							const refreshed =
+								await conversationTransaction.readNativeCapabilityV6Authorization(
+									{
+										authority: refreshedAuthority,
+										conversationId: request.conversationId,
+									},
+								);
+							if (!refreshed) return { outcome: "denied" as const };
+							if (
+								refreshed.configVersion !== first.configVersion ||
+								refreshed.modelConfigurationRevision !==
+									first.modelConfigurationRevision
+							)
+								return { outcome: "stale" as const };
+
 							const executionId = randomUUID();
 							const runtimeRequest = {
 								schemaVersion: 6 as const,
@@ -1265,6 +1282,8 @@ export function assemblePlatformApi(
 											conversationId: request.conversationId,
 										});
 										if (!next) return { outcome: "denied" as const };
+										if (next.configVersion !== first.configVersion)
+											return { outcome: "denied" as const };
 										// Check the original browser session again after the awaited Store checks.
 										if (readAuthorization)
 											await requestContext.revalidate(identity);

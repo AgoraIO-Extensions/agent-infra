@@ -182,6 +182,7 @@ const connection = {
 	receipts: new Map<string, Record<string, unknown>>(),
 	losePost: false,
 	loseGet: false,
+	loseDelete: false,
 	/** Codes the fake token endpoint accepts exactly once (PKCE checked by S256). */
 	codes: new Map<string, string>(),
 };
@@ -267,6 +268,8 @@ async function connectionFetch(
 			instanceStatus: "REVOKED",
 		};
 		connection.receipts.set(registrationKey, revoked);
+		// Connection revoked it, but its answer never reaches the Host.
+		if (connection.loseDelete) throw new TypeError("connection reset");
 		return Response.json({
 			registrationVersion: 1,
 			outcome: "KNOWN",
@@ -305,6 +308,8 @@ let readbackHook:
 	| undefined;
 const readbacks: string[] = [];
 let loseSupply: "before_host" | "after_host" | undefined;
+/** The Host exchanged, but its answer never reaches the Worker. */
+let loseExchange = false;
 let supplyCalls = 0;
 let decryptCalls = 0;
 
@@ -527,6 +532,11 @@ beforeAll(async () => {
 				await host.supply(input, signal);
 				if (loseSupply === "after_host") throw new Error("confirmation lost");
 			},
+			async confirmExchange(input, signal) {
+				const answer = await host.confirmExchange(input, signal);
+				if (loseExchange) throw new Error("answer lost");
+				return answer;
+			},
 		},
 		systemAccess: system,
 		approval,
@@ -553,6 +563,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	await client`delete from platform.connection_manual_install_permits`;
 	await client`delete from platform.connection_principal_pin_receipts`;
 	await client`delete from platform.connection_principal_pins`;
 	await client`delete from platform.connection_manual_installations`;
@@ -564,6 +575,8 @@ beforeEach(async () => {
 	connection.requests.length = 0;
 	connection.losePost = false;
 	connection.loseGet = false;
+	connection.loseDelete = false;
+	loseExchange = false;
 	connection.codes.clear();
 	readbacks.length = 0;
 	readbackHook = undefined;
@@ -619,6 +632,34 @@ async function noCredentialStored() {
 	expect(JSON.stringify(rows)).not.toContain(
 		credential.slice("conn_consumer_".length),
 	);
+}
+
+const hostOAuthRoot = () =>
+	join(
+		dataDirectory,
+		"codex-driver.json.native",
+		"conversations",
+		"standard-mcp-oauth",
+	);
+/** The Host's private OAuth transaction key of one installation. */
+async function hostTransactionKey(authorizationId: string) {
+	const records = join(hostOAuthRoot(), "records");
+	for (const name of await readdir(records)) {
+		if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
+		const record = JSON.parse(await readFile(join(records, name), "utf8"));
+		if (record.authorizationId === authorizationId) return name.slice(0, -5);
+	}
+	throw new Error("no Host OAuth transaction");
+}
+/** The Host's private material files (code, verifier, Token copies) of a transaction. */
+async function hostMaterialsOf(key: string) {
+	return (await readdir(join(hostOAuthRoot(), "materials")))
+		.filter((name) => name.startsWith(`${key}.`))
+		.map((name) => name.slice(key.length + 1))
+		.sort();
+}
+async function hostMaterials(authorizationId: string) {
+	return hostMaterialsOf(await hostTransactionKey(authorizationId));
 }
 
 /** Runs the first begin while the callback mapping CAS is rejected: begin stays unknown. */
@@ -828,15 +869,16 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			});
 			readbacks.length = 0;
 			expect(await tick()).toBe(1);
-			// Phase 2 completed; the logical confirm stays open for the publication
-			// permit, so MCP remains closed.
+			// Phase 2 completed without publication evidence, so no permit: the
+			// same attempt ends the logical confirm at once and queues the revoke
+			// of the original key; MCP stays closed.
 			expect(await confirmState(projection.authorizationId)).toEqual([
 				{
 					pins: 1,
 					receipts: 1,
-					status: "confirmed",
+					status: "revoked",
 					commands:
-						"confirm:sending,confirm_binding_readback:completed,confirm_exchange:completed",
+						"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:completed,revoke:pending",
 				},
 			]);
 			const [pin] =
@@ -865,10 +907,19 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
 				"POST /oauth/token",
 			]);
-			// The code was used once; the next tick sends nothing and resends nothing.
+			// The code was used once; the next tick only revokes the original key and
+			// never exchanges again.
 			expect(connection.codes.size).toBe(0);
+			expect(await tick()).toBe(1);
+			expect(
+				connection.requests
+					.slice(4)
+					.map(({ method, path }) => `${method} ${path}`),
+			).toEqual([
+				`DELETE /connection/v1/agents/connection-agent-a/oauth-clients/${encodeURIComponent(registrationKey)}`,
+			]);
 			expect(await tick()).toBe(0);
-			expect(connection.requests).toHaveLength(4);
+			expect(connection.requests).toHaveLength(5);
 			await noCredentialStored();
 		},
 		confirmTimeout,
@@ -891,6 +942,187 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		expect(
 			connection.requests.filter(({ path }) => path === "/oauth/token"),
 		).toEqual([]);
+
+	const deleteOriginal = (registrationKey: string) =>
+		`DELETE /connection/v1/agents/connection-agent-a/oauth-clients/${encodeURIComponent(registrationKey)}`;
+	const tokenRequests = () =>
+		connection.requests.filter(({ path }) => path === "/oauth/token");
+
+	it(
+		"closes an exchanged install without a permit at once, deletes its original key and erases the Host's Token copy",
+		async () => {
+			const { projection, registrationKey } = await approvedInstall();
+			expect(await tick()).toBe(1);
+			// No publication evidence yet, so no permit: the confirm ends at once,
+			// without waiting for its attempt to lapse.
+			expect((await confirmState(projection.authorizationId))[0]).toMatchObject(
+				{
+					status: "revoked",
+					commands:
+						"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:completed,revoke:pending",
+				},
+			);
+			expect(await hostMaterials(projection.authorizationId)).toContain(
+				"access",
+			);
+			expect(await tick()).toBe(1);
+			const [row] =
+				await client`select revoke_state from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
+			expect(row?.revoke_state).toBe("revoked");
+			expect(
+				connection.requests.map(({ method, path }) => `${method} ${path}`),
+			).toEqual([
+				"POST /connection/v1/agents/connection-agent-a/oauth-clients",
+				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+				`GET /connection/v1/agents/connection-agent-a/oauth-clients/${registrationKey}`,
+				"POST /oauth/token",
+				deleteOriginal(registrationKey),
+			]);
+			expect(
+				(connection.receipts.get(registrationKey) as { status?: string })
+					.status,
+			).toBe("REVOKED");
+			// Connection confirmed the revoke of the original key, so the Host
+			// erased this installation's code, verifier and Token copies.
+			expect(await hostMaterials(projection.authorizationId)).toEqual([]);
+			expect(await tick()).toBe(0);
+			await noCredentialStored();
+		},
+		confirmTimeout,
+	);
+
+	it(
+		"keeps a lost exchange answer unknown, never exchanges again, and revokes and erases by the original key",
+		async () => {
+			const { projection, registrationKey } = await approvedInstall();
+			loseExchange = true;
+			expect(await tick()).toBe(1);
+			loseExchange = false;
+			expect(tokenRequests()).toHaveLength(1);
+			expect((await confirmState(projection.authorizationId))[0]).toMatchObject(
+				{
+					commands:
+						"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:unknown",
+				},
+			);
+			expect(await tick()).toBe(1);
+			expect((await confirmState(projection.authorizationId))[0]).toMatchObject(
+				{
+					status: "revoked",
+					commands:
+						"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:unknown,revoke:completed",
+				},
+			);
+			expect(connection.requests.at(-1)).toMatchObject({
+				method: "DELETE",
+				path: `/connection/v1/agents/connection-agent-a/oauth-clients/${encodeURIComponent(registrationKey)}`,
+			});
+			expect(await hostMaterials(projection.authorizationId)).toEqual([]);
+			// Nothing is resent: one exchange, one DELETE.
+			expect(await tick()).toBe(0);
+			expect(tokenRequests()).toHaveLength(1);
+			expect(
+				connection.requests.filter(({ method }) => method === "DELETE"),
+			).toHaveLength(1);
+		},
+		confirmTimeout,
+	);
+
+	it(
+		"keeps the Host's Token copy and the revoke unknown when Connection's DELETE answer is lost",
+		async () => {
+			const { projection, registrationKey } = await approvedInstall();
+			expect(await tick()).toBe(1);
+			connection.loseDelete = true;
+			expect(await tick()).toBe(1);
+			const [row] =
+				await client`select revoke_state from platform.connection_manual_installations where authorization_id=${projection.authorizationId}`;
+			expect(row?.revoke_state).toBe("unknown");
+			// The remote revoke is unconfirmed: nothing claims it, and the local
+			// copy stays for the Connection owner's verification of the original key.
+			expect(await hostMaterials(projection.authorizationId)).toContain(
+				"access",
+			);
+			connection.loseDelete = false;
+			expect(await tick()).toBe(0);
+			expect(
+				connection.requests.filter(({ method }) => method === "DELETE"),
+			).toEqual([
+				expect.objectContaining({
+					path: `/connection/v1/agents/connection-agent-a/oauth-clients/${encodeURIComponent(registrationKey)}`,
+				}),
+			]);
+			expect(tokenRequests()).toHaveLength(1);
+		},
+		confirmTimeout,
+	);
+
+	it(
+		"finishes erasing a revoked installation's Token copy after the Host restarts",
+		async () => {
+			const { projection } = await approvedInstall();
+			expect(await tick()).toBe(1);
+			expect(await tick()).toBe(1);
+			expect(await hostMaterials(projection.authorizationId)).toEqual([]);
+			// A crash after the confirmed DELETE left a copy behind.
+			const key = await hostTransactionKey(projection.authorizationId);
+			await writePrivate(
+				join(hostOAuthRoot(), "materials"),
+				`${key}.access`,
+				"synthetic-leftover",
+			);
+			await restartHost();
+			expect(await hostMaterials(projection.authorizationId)).toEqual([]);
+			expect(tokenRequests()).toHaveLength(1);
+		},
+		confirmTimeout,
+	);
+
+	it(
+		"erases only the revoked installation revision's copies, never another installation's or user's",
+		async () => {
+			const { projection } = await approvedInstall();
+			expect(await tick()).toBe(1);
+			const key = await hostTransactionKey(projection.authorizationId);
+			const records = join(hostOAuthRoot(), "records");
+			const materials = join(hostOAuthRoot(), "materials");
+			const record = JSON.parse(
+				await readFile(join(records, `${key}.json`), "utf8"),
+			);
+			// Valid transactions of another installation, another user, another
+			// Agent and another confirmation revision, each with its own Token copy.
+			const decoys = [
+				{ ...record, authorizationId: randomUUID() },
+				{ ...record, principal: { kind: "user", id: "bob" } },
+				{ ...record, scope: { ...record.scope, agentId: "agent-b" } },
+				{ ...record, confirmationRevision: `${record.confirmationRevision}-2` },
+			].map((value) => ({ key: randomBytes(32).toString("hex"), value }));
+			try {
+				for (const decoy of decoys) {
+					await writePrivate(
+						records,
+						`${decoy.key}.json`,
+						JSON.stringify(decoy.value),
+					);
+					await writePrivate(
+						materials,
+						`${decoy.key}.access`,
+						"synthetic-other",
+					);
+				}
+				expect(await tick()).toBe(1);
+				expect(await hostMaterialsOf(key)).toEqual([]);
+				for (const decoy of decoys)
+					expect(await hostMaterialsOf(decoy.key)).toEqual(["access"]);
+			} finally {
+				for (const decoy of decoys) {
+					await rm(join(records, `${decoy.key}.json`), { force: true });
+					await rm(join(materials, `${decoy.key}.access`), { force: true });
+				}
+			}
+		},
+		confirmTimeout,
+	);
 
 	it(
 		"refuses phase 2 and revokes when the binding drifted after the pin",
@@ -933,8 +1165,11 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		],
 		[
 			"the pin was released",
+			// An item 6 release: the request facts the release CHECK requires.
 			() =>
-				client`update platform.connection_principal_pins set released_at=now()`,
+				client`update platform.connection_principal_pins set released_at=now(),
+					release_requested_at=now(), release_reason='administrator',
+					release_actor_id='admin-1', release_reference='https://example.test/unpin'`,
 		],
 		[
 			"the first-pin receipt expired",
@@ -945,12 +1180,17 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 		"reads nothing back and exchanges nothing in phase 2 once %s",
 		async (_name, change) => {
 			const { projection } = await approvedInstall();
+			// The change itself must apply; a fixture refused by the schema would
+			// fail the readback for another reason and prove nothing.
+			let applied = false;
 			readbackHook = async (request) => {
 				if (request.command?.command !== "confirm_exchange") return;
 				readbackHook = undefined;
 				await change();
+				applied = true;
 			};
 			await tick();
+			expect(applied).toBe(true);
 			const getCount = connection.requests.filter(
 				({ method }) => method === "GET",
 			).length;
