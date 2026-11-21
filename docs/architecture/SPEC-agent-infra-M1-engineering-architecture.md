@@ -3166,8 +3166,11 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
 满足，只能由原 Worker 沿原 confirm 意图继续首次发送尚未 sending 的 exchange，不能在 status
 处理中兑换。原 claim 结束、旧 fence、过期或撤权后只保留事实并沿原封闭/撤销处理，不续租或借
 新 claim 继续。固定已提交
-但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。换码已经 sending 的未知
-结果沿既有原 Host 只读核实和启用许可规则收口，不重兑 code、不重放回跳，也不抹除已确认提交。
+但后续失败，不自动删除全局固定或腾出容量；解除固定仍只按例外第 6 项。例外两阶段路径不使用上述
+继续发送和下文“动态安装的启用许可”中的只读补记：逻辑 confirm 在首次固定之后、写入启用许可之前
+结束为 unknown 时，不论 `exchange` 从未打开、已完成还是结果不明，都立即封闭该安装并按原键撤销，
+不重兑 code、不重放回跳，固定保留。原因是包括撤销在内的每个安装命令都只能在原 claim 下发送；
+等原 claim 结束再封闭，撤销只能记为 unknown，已换到的 Token 会一直有效。用户可以重新安装。
 
 `createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
 `createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
