@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
 	connectionManualPublicationContractV1,
 	connectionManualReadbackContractV1,
+	decideConnectionManualInstallationDeploymentV1,
 	readConnectionConfirmedPrincipalsV1,
 	readConnectionManualInstallationEnvironmentV1,
 	resolveConnectionManualInstallationDeploymentV1,
@@ -244,6 +245,40 @@ describe("#4199 C2 exception route deployment gate (§13.5.1)", () => {
 			status: "dormant",
 			reason: "exception_approval_invalid",
 		});
+	});
+});
+
+describe("one gate decision for the API and the Worker (#4199 C2)", () => {
+	// The DB is never read before these: an unreachable URL proves it.
+	const databaseUrl = "postgres://user:never@127.0.0.1:1/platform";
+	it.each([
+		[
+			"no approval record",
+			{ exceptionApproval: undefined },
+			"exception_approval_missing",
+		],
+		[
+			"a static or standard installation input",
+			{ standardInstallationConfigured: true },
+			"standard_installation_configured",
+		],
+		[
+			"no projected system access",
+			{ systemAccess: undefined },
+			"system_access_unavailable",
+		],
+		["an unreadable Platform DB", {}, "confirmed_principals_unresolvable"],
+	] as const)("stays dormant for %s", async (_name, overrides, reason) => {
+		expect(
+			await decideConnectionManualInstallationDeploymentV1({
+				exceptionApproval,
+				standardInstallationConfigured: false,
+				systemAccess: { system, approval },
+				callbackDelivery: "ready",
+				databaseUrl,
+				...overrides,
+			}),
+		).toEqual({ status: "dormant", reason });
 	});
 });
 

@@ -7,10 +7,9 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	type ConnectionManualInstallationDeploymentV1,
+	decideConnectionManualInstallationDeploymentV1,
 	PostgresPlatformUserDisablesV1,
-	readConnectionConfirmedPrincipalsV1,
 	readConnectionManualInstallationEnvironmentV1,
-	resolveConnectionManualInstallationDeploymentV1,
 } from "@agent-infra/platform-store";
 import {
 	readConnectionConsumerEnvironmentConfigurationV1,
@@ -313,25 +312,22 @@ const manualCallbackDelivery =
 		)))
 		? "ready"
 		: "unavailable";
+// The Worker entry takes the same decision from the same inputs (#4199 C2).
 const manualInstallation: ConnectionManualInstallationDeploymentV1 =
-	manualExceptionApproval === undefined
-		? { status: "dormant", reason: "exception_approval_missing" }
-		: staticPerAgentConnectionBindings ||
-				connectionInstallationConfiguration !== undefined
-			? { status: "dormant", reason: "standard_installation_configured" }
-			: !resolvedConnectionSystemAccess
-				? { status: "dormant", reason: "system_access_unavailable" }
-				: resolveConnectionManualInstallationDeploymentV1({
-						systemAccess: resolvedConnectionSystemAccess.system,
-						approval: resolvedConnectionSystemAccess.approval,
-						exceptionApproval: manualExceptionApproval,
-						clientName:
-							connectionManualInstallationClientName ??
-							manualInstallationEnvironment.clientName,
-						confirmedPrincipals:
-							await readConnectionConfirmedPrincipalsV1(databaseUrl),
-						callbackDelivery: manualCallbackDelivery,
-					});
+	await decideConnectionManualInstallationDeploymentV1({
+		exceptionApproval: manualExceptionApproval,
+		clientName:
+			connectionManualInstallationClientName ??
+			manualInstallationEnvironment.clientName,
+		standardInstallationConfigured:
+			staticPerAgentConnectionBindings ||
+			connectionInstallationConfiguration !== undefined,
+		...(resolvedConnectionSystemAccess
+			? { systemAccess: resolvedConnectionSystemAccess }
+			: {}),
+		callbackDelivery: manualCallbackDelivery,
+		databaseUrl,
+	});
 if (manualInstallation.status === "enabled")
 	console.info(
 		JSON.stringify({

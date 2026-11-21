@@ -12,8 +12,11 @@ import {
 	sessionSandboxReserveDigestV1,
 } from "@agent-infra/platform-core";
 import {
+	decideConnectionManualInstallationDeploymentV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresSessionOwnerSecretStoreV1,
+	readConnectionManualInstallationEnvironmentV1,
+	readConnectionSystemAccessEnvironmentConfigurationV1,
 } from "@agent-infra/platform-store";
 import {
 	sessionSandboxResourceCostsV1,
@@ -24,6 +27,11 @@ import {
 	createRuntimeConnectionInstallationRevisionV1,
 } from "./connection-consumer-projection.js";
 import { createConnectionInstallationPrincipalBindingsV1 } from "./connection-installation-principal-bindings.js";
+import {
+	assembleConnectionManualInstallationWorkerV1,
+	ConnectionManualInstallationWorkerUnavailableErrorV1,
+	connectionManualInstallationBootstrapV1,
+} from "./connection-manual-installation-deployment.js";
 import {
 	bindCurrentConnectionInstallationAuthorizationV1,
 	type ConnectionConsumerBindingsResolverV1,
@@ -121,7 +129,15 @@ type DeploymentConfiguration = {
 	readonly ownerConnectionBindingConfiguration?: unknown;
 	/** Optional single-Session OAuth bootstrap; selected only for matching claim scope. */
 	readonly connectionOAuthProvisioning?: import("./session-workload-adapter.js").SessionSandboxOAuthProvisioningV1;
-	readonly connectionInstallBootstrap?: import("./connection-install-bootstrap.js").ConnectionInstallBootstrapDeploymentV1;
+	/**
+	 * #4199 C2: Session Sandbox install transport only (port, Worker origin, API
+	 * selector, Secret references). System access, approval and `clientName` come
+	 * from the exception gate, never from here.
+	 */
+	readonly connectionInstallBootstrap?: unknown;
+	/** #4199 C2: the §13.5.1 exception approval record; the env projection is the fallback. */
+	readonly connectionConsistencyExceptionApproval?: unknown;
+	readonly connectionManualInstallationClientName?: unknown;
 	readonly connectionInstallWorker?: {
 		readonly hostCaFile: string;
 		readonly readbackCertFile: string;
@@ -264,6 +280,8 @@ const {
 	connectionOAuthProvisioning: configuredConnectionOAuthProvisioning,
 	connectionInstallBootstrap: configuredConnectionInstallBootstrap,
 	connectionInstallWorker: configuredConnectionInstallWorker,
+	connectionConsistencyExceptionApproval,
+	connectionManualInstallationClientName,
 	createSkillMaterializer,
 	skillMaterialization,
 	nativeMetadataGateway: configuredNativeMetadataGateway,
@@ -273,19 +291,6 @@ const {
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
-
-if (
-	configuredConnectionInstallBootstrap !== undefined ||
-	configuredConnectionInstallWorker !== undefined
-) {
-	console.warn(
-		JSON.stringify({
-			service: "platform-worker",
-			code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
-			dependency: "EP-1123",
-		}),
-	);
-}
 
 if (
 	ownerConnectionBindings !== undefined ||
@@ -567,6 +572,77 @@ const staticPerAgentConnectionBindings =
 			"configurationsByAgentAndPrincipal",
 			"principalBindingsByAgentAndPrincipal",
 		].some((key) => Object.hasOwn(configuredConnectionInstallation, key)));
+// #4199 C2 (Spec §13.5.1): the same gate decision as the API entry, from the same
+// projected inputs, so the exception route opens and closes together. When it
+// opens, this Worker must carry it (install transport and readback trust) or it
+// does not start: an API that accepts installs no Worker drains cannot run.
+const manualInstallationEnvironment =
+	readConnectionManualInstallationEnvironmentV1(process.env);
+const manualExceptionApproval =
+	connectionConsistencyExceptionApproval ??
+	manualInstallationEnvironment.exceptionApproval;
+const manualSystemAccess =
+	connectionConsumerProfile !== undefined ||
+	connectionConsumerApproval !== undefined
+		? undefined
+		: readConnectionSystemAccessEnvironmentConfigurationV1(process.env);
+const manualInstallation = await decideConnectionManualInstallationDeploymentV1(
+	{
+		exceptionApproval: manualExceptionApproval,
+		clientName:
+			connectionManualInstallationClientName ??
+			manualInstallationEnvironment.clientName,
+		standardInstallationConfigured:
+			staticPerAgentConnectionBindings ||
+			configuredConnectionInstallation !== undefined,
+		// The Worker cannot attest the API's callback credential file; the shared
+		// premises decide here. An enabled decision then requires this Worker's own
+		// install transport, including the same callback Secret reference for the
+		// Host, or the Worker does not start. So whenever the API opens the route
+		// this Worker carries it; an API kept dormant only by its callback file
+		// accepts no installation for this Worker to drain.
+		callbackDelivery: "ready",
+		...(manualSystemAccess
+			? {
+					systemAccess: {
+						system: manualSystemAccess.system,
+						approval: manualSystemAccess.approval,
+					},
+				}
+			: {}),
+		databaseUrl: process.env.PLATFORM_DATABASE_URL ?? "",
+	},
+);
+const manualInstallationBootstrap =
+	manualInstallation.status === "enabled"
+		? connectionManualInstallationBootstrapV1(
+				manualInstallation,
+				configuredConnectionInstallBootstrap,
+			)
+		: undefined;
+if (manualInstallation.status === "enabled") {
+	if (configuredConnectionInstallWorker === undefined)
+		throw new ConnectionManualInstallationWorkerUnavailableErrorV1();
+	console.info(
+		JSON.stringify({
+			service: "platform-worker",
+			code: "CONNECTION_MANUAL_INSTALLATION_ENABLED",
+			receipt: manualInstallation.receipt,
+		}),
+	);
+} else if (
+	manualExceptionApproval !== undefined ||
+	connectionManualInstallationClientName !== undefined ||
+	configuredConnectionInstallBootstrap !== undefined ||
+	configuredConnectionInstallWorker !== undefined
+)
+	console.warn(
+		JSON.stringify({
+			service: "platform-worker",
+			code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+			reason: manualInstallation.reason,
+		}),
+	);
 const perAgentConsumerSelection =
 	automaticRegistrationPolicy !== undefined ||
 	resolveConnectionConsumerBindingsByAgent !== undefined;
@@ -1035,6 +1111,25 @@ async function createPreparedOwning(
 			...(installationStore ? { commandStore: installationStore } : {}),
 		};
 	}
+	const manualWorker =
+		manualInstallation.status === "enabled" && manualInstallationBootstrap
+			? await assembleConnectionManualInstallationWorkerV1({
+					decision: manualInstallation,
+					bootstrap: manualInstallationBootstrap,
+					worker: configuredConnectionInstallWorker,
+					databaseUrl: workload.databaseUrl,
+					directory,
+					namespace: workload.policy.namespace,
+					signing,
+					serviceToken,
+					attemptOwner: instanceId,
+				})
+			: undefined;
+	if (manualWorker)
+		authorizedInstallation = {
+			...(authorizedInstallation ?? { authorize: async () => null }),
+			manual: manualWorker.manual,
+		};
 	const evaluationAuthority = evaluationPolicy
 		? new PostgresEvaluationTaskAuthorityV1({
 				databaseUrl: workload.databaseUrl,
@@ -1060,6 +1155,7 @@ async function createPreparedOwning(
 			closeDeployment: async () => {
 				await connectionDelivery?.close();
 				await installationStore?.close();
+				await manualWorker?.close();
 				await evaluationAuthority?.close();
 				await sessionOwnerSecrets.close();
 			},
@@ -1092,6 +1188,9 @@ async function createPreparedOwning(
 					{
 						serviceToken,
 						oauthProvisioning: configuredConnectionOAuthProvisioning,
+						...(manualInstallationBootstrap
+							? { connectionInstallBootstrap: manualInstallationBootstrap }
+							: {}),
 						executorDrainStartupTimeoutMs,
 						executorIdentityIssuer: signing.privateKey,
 					},
@@ -1396,6 +1495,9 @@ export async function readPlatformSessionDemandImagesV1(request: unknown) {
 			},
 			serviceToken,
 			oauthProvisioning: configuredConnectionOAuthProvisioning,
+			...(manualInstallationBootstrap
+				? { connectionInstallBootstrap: manualInstallationBootstrap }
+				: {}),
 			configurationModule: new URL("./configuration.mjs", import.meta.url),
 			// The same mounted reserve file field the reserve deployment readback reports.
 			configurationSourceSha: (

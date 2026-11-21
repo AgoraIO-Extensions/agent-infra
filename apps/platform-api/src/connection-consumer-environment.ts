@@ -60,81 +60,8 @@ export function readConnectionConsumerEnvironmentConfigurationV1(
 	return { profile, approval, configVersion, webPath };
 }
 
-const systemAccessEnvironment = "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS";
-const systemAccessApprovalEnvironment =
-	"AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL";
-
-export interface ConnectionSystemAccessEnvironmentConfigurationV1 {
-	readonly system: unknown;
-	readonly approval: unknown;
-	readonly configVersion: string | undefined;
-	readonly webPath: string | undefined;
-}
-
-function parseJson(value: string | undefined): unknown {
-	try {
-		return JSON.parse(value ?? "");
-	} catch {
-		return undefined;
-	}
-}
-
-/**
- * Read the one-time system access projected by Helm (Spec §13.5.7). It names no
- * Consumer; per-Agent Consumers come only from associations in the Platform DB.
- *
- * The approval is the deployment's explicit, fingerprint-bound attestation
- * (`AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL`), passed through unchanged so the
- * contract check decides it. Nothing is inferred from metadata: an absent approval, an
- * `egressEnforced` that is not literally true, or a fingerprint that does not match the
- * fields keeps Connection unavailable (Spec §13.5.2).
- */
-export function readConnectionSystemAccessEnvironmentConfigurationV1(
-	environment: NodeJS.ProcessEnv,
-): ConnectionSystemAccessEnvironmentConfigurationV1 | undefined {
-	const raw = environment[systemAccessEnvironment];
-	if (raw === undefined || raw === "") return undefined;
-	const configVersion = environment[versionEnvironment];
-	const approval = parseJson(environment[systemAccessApprovalEnvironment]);
-	const approvedFingerprint =
-		approval !== null &&
-		typeof approval === "object" &&
-		typeof (approval as { configFingerprint?: unknown }).configFingerprint ===
-			"string"
-			? (approval as { configFingerprint: string }).configFingerprint
-			: undefined;
-	const separateFingerprint = environment[fingerprintEnvironment];
-	const approvedSource =
-		approval !== null && typeof approval === "object"
-			? (approval as { source?: { ref?: unknown; revision?: unknown } }).source
-			: undefined;
-	// Separately projected source variables, when present, must name the same approval.
-	const sourceDisagrees = (
-		[
-			[sourceRefEnvironment, approvedSource?.ref],
-			[sourceRevisionEnvironment, approvedSource?.revision],
-		] as const
-	).some(
-		([name, approved]) =>
-			(environment[name] ?? "") !== "" && environment[name] !== approved,
-	);
-	let system = parseJson(raw);
-	if (
-		approvedFingerprint === undefined ||
-		configVersion !== `1-${approvedFingerprint}` ||
-		// A separately projected fingerprint must name the same approval.
-		(separateFingerprint !== undefined &&
-			separateFingerprint !== "" &&
-			separateFingerprint !== approvedFingerprint) ||
-		sourceDisagrees ||
-		// A legacy Consumer profile in the same environment is ambiguous; close Connection.
-		(environment[profileEnvironment] ?? "") !== ""
-	)
-		system = null;
-	return {
-		system,
-		approval,
-		configVersion,
-		webPath: environment[webPathEnvironment],
-	};
-}
+// Shared with the Worker (#4199 C2 S3): both read the same projected variables.
+export {
+	type ConnectionSystemAccessEnvironmentConfigurationV1,
+	readConnectionSystemAccessEnvironmentConfigurationV1,
+} from "@agent-infra/platform-store";

@@ -253,3 +253,129 @@ export function readConnectionManualInstallationEnvironmentV1(
 		...(clientName !== undefined && clientName !== "" ? { clientName } : {}),
 	};
 }
+
+const profileEnvironment = "AGENT_INFRA_CONNECTION_PROFILE";
+const versionEnvironment = "AGENT_INFRA_CONNECTION_CONFIG_VERSION";
+const fingerprintEnvironment = "AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT";
+const sourceRefEnvironment = "AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF";
+const sourceRevisionEnvironment =
+	"AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION";
+const webPathEnvironment = "AGENT_INFRA_CONNECTION_WEB_PATH";
+const systemAccessEnvironment = "AGENT_INFRA_CONNECTION_SYSTEM_ACCESS";
+const systemAccessApprovalEnvironment =
+	"AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL";
+
+export interface ConnectionSystemAccessEnvironmentConfigurationV1 {
+	readonly system: unknown;
+	readonly approval: unknown;
+	readonly configVersion: string | undefined;
+	readonly webPath: string | undefined;
+}
+
+function parseJson(value: string | undefined): unknown {
+	try {
+		return JSON.parse(value ?? "");
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Read the one-time system access projected by Helm (Spec §13.5.7). It names no
+ * Consumer; per-Agent Consumers come only from associations in the Platform DB.
+ *
+ * The approval is the deployment's explicit, fingerprint-bound attestation
+ * (`AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL`), passed through unchanged so the
+ * contract check decides it. Nothing is inferred from metadata: an absent approval, an
+ * `egressEnforced` that is not literally true, or a fingerprint that does not match the
+ * fields keeps Connection unavailable (Spec §13.5.2).
+ */
+export function readConnectionSystemAccessEnvironmentConfigurationV1(
+	environment: NodeJS.ProcessEnv,
+): ConnectionSystemAccessEnvironmentConfigurationV1 | undefined {
+	const raw = environment[systemAccessEnvironment];
+	if (raw === undefined || raw === "") return undefined;
+	const configVersion = environment[versionEnvironment];
+	const approval = parseJson(environment[systemAccessApprovalEnvironment]);
+	const approvedFingerprint =
+		approval !== null &&
+		typeof approval === "object" &&
+		typeof (approval as { configFingerprint?: unknown }).configFingerprint ===
+			"string"
+			? (approval as { configFingerprint: string }).configFingerprint
+			: undefined;
+	const separateFingerprint = environment[fingerprintEnvironment];
+	const approvedSource =
+		approval !== null && typeof approval === "object"
+			? (approval as { source?: { ref?: unknown; revision?: unknown } }).source
+			: undefined;
+	// Separately projected source variables, when present, must name the same approval.
+	const sourceDisagrees = (
+		[
+			[sourceRefEnvironment, approvedSource?.ref],
+			[sourceRevisionEnvironment, approvedSource?.revision],
+		] as const
+	).some(
+		([name, approved]) =>
+			(environment[name] ?? "") !== "" && environment[name] !== approved,
+	);
+	let system = parseJson(raw);
+	if (
+		approvedFingerprint === undefined ||
+		configVersion !== `1-${approvedFingerprint}` ||
+		// A separately projected fingerprint must name the same approval.
+		(separateFingerprint !== undefined &&
+			separateFingerprint !== "" &&
+			separateFingerprint !== approvedFingerprint) ||
+		sourceDisagrees ||
+		// A legacy Consumer profile in the same environment is ambiguous; close Connection.
+		(environment[profileEnvironment] ?? "") !== ""
+	)
+		system = null;
+	return {
+		system,
+		approval,
+		configVersion,
+		webPath: environment[webPathEnvironment],
+	};
+}
+
+/**
+ * #4199 C2: the one gate decision the API and the Worker entry both take from
+ * the same deployment-projected inputs, so the exception route opens and closes
+ * together in both processes. A static, standard or legacy-profile installation
+ * input in the same deployment, or no approved one-time system access, keeps
+ * the route dormant; the Platform DB is read only once an approval record is
+ * present.
+ */
+export async function decideConnectionManualInstallationDeploymentV1(input: {
+	readonly exceptionApproval: unknown;
+	readonly clientName?: unknown;
+	readonly standardInstallationConfigured: boolean;
+	readonly systemAccess?: {
+		readonly system: unknown;
+		readonly approval: unknown;
+	};
+	/** The protected callback delivery this process can attest (§13.5.6). */
+	readonly callbackDelivery: "ready" | "unavailable";
+	readonly databaseUrl: string;
+	readonly now?: number;
+}): Promise<ConnectionManualInstallationDeploymentV1> {
+	if (input.exceptionApproval === undefined)
+		return { status: "dormant", reason: "exception_approval_missing" };
+	if (input.standardInstallationConfigured)
+		return { status: "dormant", reason: "standard_installation_configured" };
+	if (!input.systemAccess)
+		return { status: "dormant", reason: "system_access_unavailable" };
+	return resolveConnectionManualInstallationDeploymentV1({
+		systemAccess: input.systemAccess.system,
+		approval: input.systemAccess.approval,
+		exceptionApproval: input.exceptionApproval,
+		clientName: input.clientName,
+		confirmedPrincipals: await readConnectionConfirmedPrincipalsV1(
+			input.databaseUrl,
+		),
+		callbackDelivery: input.callbackDelivery,
+		...(input.now === undefined ? {} : { now: input.now }),
+	});
+}
