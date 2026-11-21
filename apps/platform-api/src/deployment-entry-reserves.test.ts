@@ -315,11 +315,12 @@ export const connectionInstallationConfiguration = ${JSON.stringify(standard)};`
 					value.includes("CONNECTION_MANUAL_INSTALLATION_DORMANT"),
 			);
 		expect(warnings).toHaveLength(mode === "unconfigured" ? 0 : 2);
+		// #4199 C2: without an exception approval record the route stays dormant.
 		for (const warning of warnings)
 			expect(JSON.parse(String(warning))).toEqual({
 				service: "platform-api",
 				code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
-				dependency: "EP-1123",
+				reason: "exception_approval_missing",
 			});
 	},
 );
