@@ -141,7 +141,8 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 Worker 到 RuntimeHost 的原业务、控制和就绪检查沿既有 Workload Service、端口和 Manifest，
 使用 [工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口) 的集群内
 HTTP。执行授权由 service token、signed readiness 与业务/控制 Grant 承担，NetworkPolicy
-ingress 只放行 Worker。Connection 安装使用
+ingress 只放行 Worker，且只在已证执行 NetworkPolicy 的运行形态上成立（工程 Spec
+[§10.1“运行形态与调度”](SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)）。Connection 安装使用
 [工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
 限定的 HTTPS listener 及 Worker TLS 回读。
 
@@ -155,7 +156,7 @@ ingress 只放行 Worker。Connection 安装使用
 
 准确消费者为 `createProductionConversationRuntimeResolverV2`（[conversation resolver](../../apps/platform-worker/src/conversation-deployment.ts)）、`createWorkloadRuntimeProbeV1`（[readiness 装配](../../apps/platform-worker/src/workload-deployment.ts)）及 `createKubernetesRuntimeAdapterV1`（[Kubernetes Adapter](../../apps/platform-worker/src/kubernetes-runtime-adapter.ts)）。Adapter 已创建 `N` 和 `N-probe` 两个 ClusterIP Service，共用 Workload 的 `service.port`；候选阶段 `N` selector 为 `closed`，`N-probe` 选中候选 Pod。`closeAgentAtFence`（[cleanup](../../apps/platform-worker/src/kubernetes-runtime-cleanup.ts)）关闭主路由时保留合规的内部 probe 路由；probe 漂移可被移除，不能保证任意故障下 control 都可达。verified 观测失败必须继续 unavailable/unknown，不能把候选误当旧执行目标。
 
-**kubelet 探针与 Worker 验证分离。** Adapter 的 `readinessProbe.httpGet` 使用 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）按 HTTP 比较 scheme、原 path/port 与禁止覆盖项。该探针只判断容器可用性，不携带 service token 或 Grant；promotion 和 Runtime 调用仍须经过 Worker 的精确 origin 与 signed readiness。
+**kubelet 探针与 Worker 验证分离。** Adapter 的 `readinessProbe.httpGet` 使用 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）按 HTTP 比较 scheme、原 path/port 与禁止覆盖项；部署注入的固定 placement 属于期望规格，其他来源的调度字段仍按漂移处理。该探针只判断容器可用性，不携带 service token 或 Grant；promotion 和 Runtime 调用仍须经过 Worker 的精确 origin 与 signed readiness。
 
 **业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；六类必需资源（#1466 增加该 Sandbox 专属 Secret）及可选 StatefulSet 的澄清归 #1322。Worker 只消费该分配已有 Service 的实际 DNS/端口 `http://<sandbox Service>.NS.svc:P` 与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享后端。缺少有效分配时拒绝该路由，不能回退到 Agent 级 Service。
 
