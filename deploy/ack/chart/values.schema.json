@@ -183,6 +183,16 @@
     },
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
     "scheduling": {"type": "object"},
+    "agentWorkloadScheduling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "architecture", "legacyUnplaced"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
+        "legacyUnplaced": {"type": "string", "enum": ["retain-until-lifecycle", "reject"]}
+      }
+    },
     "sessionRuntimeScheduling": {
       "type": "object",
       "additionalProperties": false,

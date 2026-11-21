@@ -116,12 +116,50 @@ export function agentWorkloadPodPlacementV1(
 		: {};
 }
 
-/**
- * Classifies scheduling fields. `live` admits the API-server default
- * tolerations and the scheduled node; a template admits neither.
- */
-export function agentWorkloadPlacementShapeV1(
+/** Controller annotation recording the placement the Worker last wrote for this Agent. */
+export const agentWorkloadPlacementAnnotationV1 =
+	"agent-infra.agora.io/agent-workload-placement";
+
+/** Chart-rendered Worker env; the only source of the deployment placement. */
+export const agentWorkloadPlacementEnvironmentV1 =
+	"AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT";
+
+/** Metadata the Worker writes with the injected fields on each Agent controller. */
+export function agentWorkloadPlacementRecordV1(
 	placement: AgentWorkloadPlacementV1 | undefined,
+): Record<string, string> {
+	validateAgentWorkloadPlacementV1(placement);
+	return placement
+		? { [agentWorkloadPlacementAnnotationV1]: placement.architecture }
+		: {};
+}
+
+/**
+ * Reads the deployment placement from the chart-rendered env (JSON). A Worker
+ * module that sets `policy.agentWorkloadPlacement` itself is rejected, so the
+ * preflight can bind the exact value the release renders.
+ */
+export function agentWorkloadPlacementFromEnvironmentV1(
+	value: string | undefined,
+	configuredInModule: boolean,
+): AgentWorkloadPlacementV1 | undefined {
+	if (configuredInModule)
+		throw new TypeError("AGENT_WORKLOAD_PLACEMENT_INVALID");
+	if (value === undefined) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new TypeError("AGENT_WORKLOAD_PLACEMENT_INVALID");
+	}
+	if (parsed === undefined || parsed === null)
+		throw new TypeError("AGENT_WORKLOAD_PLACEMENT_INVALID");
+	validateAgentWorkloadPlacementV1(parsed);
+	return parsed;
+}
+
+function shapeFor(
+	architecture: string | undefined,
 	spec: V1PodSpec | undefined,
 	live: boolean,
 ): AgentWorkloadPlacementShapeV1 {
@@ -142,13 +180,15 @@ export function agentWorkloadPlacementShapeV1(
 		return without(defaultLiveTolerations).length === 0
 			? "unplaced"
 			: "foreign";
-	const expected = agentWorkloadPodPlacementV1(placement);
 	if (
-		!placement ||
-		!hasSameStructure(selector, expected.nodeSelector) ||
+		(architecture !== "amd64" && architecture !== "arm64") ||
+		!hasSameStructure(selector, {
+			type: "virtual-kubelet",
+			"kubernetes.io/arch": architecture,
+		}) ||
 		!hasSameStructure(
 			without([...defaultLiveTolerations, ...eciLiveTolerations]),
-			expected.tolerations,
+			[providerToleration],
 		) ||
 		(live &&
 			spec?.nodeName !== undefined &&
@@ -158,23 +198,48 @@ export function agentWorkloadPlacementShapeV1(
 	return "placed";
 }
 
-/** Exact deployment placement, or a retained pre-placement object during transition. */
-export function acceptsAgentWorkloadPlacementV1(
+/**
+ * Classifies scheduling fields against the current deployment placement.
+ * `live` admits the API-server default tolerations and the scheduled node; a
+ * template admits neither.
+ */
+export function agentWorkloadPlacementShapeV1(
 	placement: AgentWorkloadPlacementV1 | undefined,
 	spec: V1PodSpec | undefined,
 	live: boolean,
-): boolean {
-	const shape = agentWorkloadPlacementShapeV1(placement, spec, live);
-	return placement
-		? shape === "placed" ||
-				(shape === "unplaced" &&
-					placement.legacyUnplaced === "retain-until-lifecycle")
-		: shape === "unplaced";
+): AgentWorkloadPlacementShapeV1 {
+	validateAgentWorkloadPlacementV1(placement);
+	return shapeFor(placement?.architecture, spec, live);
 }
 
-/** Provider status annotation on a Pod that actually carries the ECI placement. */
-export function isEciProviderPodAnnotationV1(
+/**
+ * Observation accepts what this Agent last adopted: the exact placement
+ * recorded on its controller, or (without a record) a pre-placement object while
+ * the deployment retains them. The current policy only decides what the next
+ * formal lifecycle apply writes, so changing it never rebuilds a Host.
+ */
+export function acceptsAdoptedAgentWorkloadPlacementV1(
 	placement: AgentWorkloadPlacementV1 | undefined,
+	record: string | undefined,
+	spec: V1PodSpec | undefined,
+	live: boolean,
+): boolean {
+	validateAgentWorkloadPlacementV1(placement);
+	if (record === undefined)
+		return (
+			shapeFor(undefined, spec, live) === "unplaced" &&
+			(placement === undefined ||
+				placement.legacyUnplaced === "retain-until-lifecycle")
+		);
+	return (
+		(record === "amd64" || record === "arm64") &&
+		shapeFor(record, spec, live) === "placed"
+	);
+}
+
+/** Provider status annotation on a Pod that carries its controller's recorded ECI placement. */
+export function isEciProviderPodAnnotationV1(
+	record: string | undefined,
 	spec: V1PodSpec | undefined,
 	key: string,
 	value: string,
@@ -184,6 +249,47 @@ export function isEciProviderPodAnnotationV1(
 		: undefined;
 	return (
 		pattern?.test(value) === true &&
-		agentWorkloadPlacementShapeV1(placement, spec, true) === "placed"
+		(record === "amd64" || record === "arm64") &&
+		shapeFor(record, spec, true) === "placed"
 	);
+}
+
+/**
+ * The placement an apply writes. While the controller's revision is unchanged
+ * (the same intent re-applied, not a formal lifecycle) an accepted recorded
+ * placement is kept, so changing the deployment value never rebuilds a Host;
+ * a new revision (restart/stop→restart, publish) adopts the deployment value.
+ */
+export function effectiveAgentWorkloadPlacementV1(
+	placement: AgentWorkloadPlacementV1 | undefined,
+	current:
+		| {
+				readonly metadata?: {
+					readonly annotations?: Readonly<Record<string, string>>;
+				};
+				readonly spec?: { readonly template?: { readonly spec?: V1PodSpec } };
+		  }
+		| null
+		| undefined,
+	sameRevision: boolean,
+): AgentWorkloadPlacementV1 | undefined {
+	validateAgentWorkloadPlacementV1(placement);
+	if (!current || !sameRevision) return placement;
+	const record =
+		current.metadata?.annotations?.[agentWorkloadPlacementAnnotationV1];
+	if (
+		!acceptsAdoptedAgentWorkloadPlacementV1(
+			placement,
+			record,
+			current.spec?.template?.spec,
+			false,
+		)
+	)
+		return placement;
+	return record === "amd64" || record === "arm64"
+		? {
+				architecture: record,
+				legacyUnplaced: placement?.legacyUnplaced ?? "reject",
+			}
+		: undefined;
 }

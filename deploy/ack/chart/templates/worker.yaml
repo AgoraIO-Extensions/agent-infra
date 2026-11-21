@@ -115,6 +115,10 @@ spec:
             {{- with .Values.agentVersion }}
             - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
             {{- end }}
+            {{- if .Values.agentWorkloadScheduling.enabled }}
+            - name: AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT
+              value: {{ dict "architecture" .Values.agentWorkloadScheduling.architecture "legacyUnplaced" .Values.agentWorkloadScheduling.legacyUnplaced | toJson | quote }}
+            {{- end }}
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/ca.crt}
             {{- if $skillHub.enabled }}
             - {name: PLATFORM_WORKER_SKILL_MATERIALIZATION_REQUIRED, value: "true"}

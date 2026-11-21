@@ -324,3 +324,150 @@ describe("deployment-authoritative Agent workload placement", () => {
 		},
 	);
 });
+
+describe("adopted placement is fixed per Agent until its next lifecycle (#4351 MUST-C)", () => {
+	const placedAs = (architecture: "amd64" | "arm64") =>
+		({
+			...placed("reject"),
+			agentWorkloadPlacement: { architecture, legacyUnplaced: "reject" },
+		}) as typeof workloadTestPolicy;
+
+	it("records the injected placement on the StatefulSet", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		await applyWorkload(adapterFor(f, placedAs("amd64")), desired);
+		const workload = f.resources.get(
+			`StatefulSet/${desired.service.name}`,
+		) as V1StatefulSet;
+		expect(
+			workload.metadata?.annotations?.[
+				"agent-infra.agora.io/agent-workload-placement"
+			],
+		).toBe("amd64");
+	});
+
+	it.each(["arm64 placement", "no placement"] as const)(
+		"a configuration change to %s writes nothing until one lifecycle adopts it",
+		async (change) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const identity = await applyWorkload(
+				adapterFor(f, placedAs("amd64")),
+				desired,
+			);
+			const name = desired.service.name;
+			scheduleOnEci(f, name);
+			const pod = (f.resources.get(`Pod/${name}-0`) as V1Pod).metadata?.uid;
+			const changed = adapterFor(
+				f,
+				change === "arm64 placement"
+					? placedAs("arm64")
+					: ({
+							...placed("reject"),
+							agentWorkloadPlacement: undefined,
+						} as typeof workloadTestPolicy),
+			);
+			const writes = f.writes.length;
+			expect(await changed.observe(desired, identity)).toBe("healthy");
+			// The original intent (same revision and fence) is also not a rebuild.
+			await changed.apply(desired);
+			expect(f.writes).toHaveLength(writes);
+			expect((f.resources.get(`Pod/${name}-0`) as V1Pod).metadata?.uid).toBe(
+				pod,
+			);
+			if (change === "no placement") return;
+			const restarted = {
+				...desired,
+				workloadRevision: 2,
+				fence: 2,
+				requestId: "restart-arm64",
+			};
+			let next = await changed.apply(restarted);
+			if (next === "pending") next = await changed.apply(restarted);
+			if (!next || next === "pending") throw new Error("missing identity");
+			const templates = f.writes
+				.slice(writes)
+				.filter(
+					(write) =>
+						write.kind === "StatefulSet" &&
+						((write as V1StatefulSet).spec?.replicas ?? 0) > 0,
+				)
+				.map((write) =>
+					JSON.stringify((write as V1StatefulSet).spec?.template.spec),
+				);
+			expect(new Set(templates).size).toBe(1);
+			const workload = f.resources.get(`StatefulSet/${name}`) as V1StatefulSet;
+			expect(workload.spec?.template.spec?.nodeSelector).toEqual({
+				type: "virtual-kubelet",
+				"kubernetes.io/arch": "arm64",
+			});
+			expect(
+				workload.metadata?.annotations?.[
+					"agent-infra.agora.io/agent-workload-placement"
+				],
+			).toBe("arm64");
+		},
+	);
+
+	it.each([
+		"missing record",
+		"record for another architecture",
+		"invalid record",
+	] as const)(
+		"treats ECI fields with a %s as drift (no kubectl patch adoption)",
+		async (mode) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const identity = await applyWorkload(
+				adapterFor(f, placedAs("amd64")),
+				desired,
+			);
+			const key = `StatefulSet/${desired.service.name}`;
+			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+			const annotations = workload.metadata?.annotations ?? {};
+			if (mode === "missing record")
+				delete annotations["agent-infra.agora.io/agent-workload-placement"];
+			else
+				annotations["agent-infra.agora.io/agent-workload-placement"] =
+					mode === "invalid record" ? "s390x" : "arm64";
+			f.resources.set(key, workload);
+			expect(
+				await adapterFor(f, placedAs("amd64")).observe(desired, identity),
+			).toBe("drifted");
+		},
+	);
+});
+
+describe("deployment placement source (#4351 MUST-A)", () => {
+	it("reads only the chart-rendered env and rejects a module-supplied value", async () => {
+		const { agentWorkloadPlacementFromEnvironmentV1 } = await import(
+			"./agent-workload-placement.js"
+		);
+		expect(agentWorkloadPlacementFromEnvironmentV1(undefined, false)).toBe(
+			undefined,
+		);
+		expect(
+			agentWorkloadPlacementFromEnvironmentV1(
+				'{"architecture":"amd64","legacyUnplaced":"retain-until-lifecycle"}',
+				false,
+			),
+		).toEqual({
+			architecture: "amd64",
+			legacyUnplaced: "retain-until-lifecycle",
+		});
+		for (const [value, configuredInModule] of [
+			[undefined, true],
+			['{"architecture":"amd64","legacyUnplaced":"reject"}', true],
+			["{", false],
+			["null", false],
+			['{"architecture":"amd64"}', false],
+			[
+				'{"architecture":"amd64","legacyUnplaced":"reject","runtimeClassName":"runv"}',
+				false,
+			],
+		] as const)
+			expect(() =>
+				agentWorkloadPlacementFromEnvironmentV1(value, configuredInModule),
+			).toThrow("AGENT_WORKLOAD_PLACEMENT_INVALID");
+	});
+});

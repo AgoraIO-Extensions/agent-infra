@@ -146,16 +146,18 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 
 `preflight.sh`（`deploy.sh` 与 `redeploy.sh` 都会调用）在渲染 chart 之后、读取部署依赖之前运行
 `deploy/ack/networkpolicy-enforcement.mjs`；`redeploy.sh template-preflight` 在创建模板 Pod 之前
-也运行它（不含 chart 渲染检查）。规则见
+先渲染 chart 再运行它。规则见
 [工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
-它只读：读取两个仓库外文件，执行 `kubectl get` 读取 namespace、`kube-system`、Node 和带
-`agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不创建探针，也不写集群。
+它只读：读取两个仓库外文件和本次渲染结果，执行 `kubectl get` 读取 namespace、`kube-system`、
+Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，以及每个探针的目标 Pod
+（经 ReplicaSet 时连同 ReplicaSet）和原 NetworkPolicy。它不创建探针，也不写集群。
 任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
 
 | 环境变量 | 内容 |
 | --- | --- |
 | `ACK_NETWORKPOLICY_EVIDENCE_FILE` | 已批准的执行证据，`kind: agent-infra-networkpolicy-enforcement-evidence` |
 | `ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE` | 部署 owner 或集群管理员回读的 Poseidon 配置，`kind: ack-poseidon-config-readback` |
+| `ACK_RENDERED_MANIFEST_FILE` | 本次 `helm template` 结果；`preflight.sh` 与 `template-preflight` 自动传入 |
 
 配置回读文件字段：`schemaVersion: 1`、`kind`、`clusterId`、`component: poseidon`、`version`、
 `eciNetworkPolicyEnabled`、`readAt`。证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
@@ -163,15 +165,19 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 - `cluster`：`kubeSystemNamespaceUid` 与 `clusterId`；`namespace`：`name` 与 `uid`。
 - `enforcer`：`runtime: eci`、`component: poseidon`、`version` 和配置回读文件字节的
   `configSha256`。
-- `placement`：与 Worker `agentWorkloadPlacement` 相同的 `architecture` 与 `legacyUnplaced`
-  （见 [Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)）。
+- `placement`：`architecture` 与 `legacyUnplaced`，必须等于渲染结果中 Worker 容器的
+  `AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT`（即 values `agentWorkloadScheduling`，见
+  [Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)）。Worker 拒绝配置
+  模块自带 placement，所以这一项绑定的就是 Worker 实际注入的值。
 - `nodes`：已证执行的 ECI 虚拟节点 `name` 与 `uid`。
 - `targets`：冻结的 Agent 级 StatefulSet、Deployment 与迁移 Job（`kind`、`name`、`uid`），
   包括停止的副本。
-- `probes`：至少一组探针，绑定目标 Pod（`pod`、`uid`、`nodeName`、`port`）与其
-  NetworkPolicy `policyUid`，按顺序记录 `allow`（Worker 来源连通）、`deny`（施加 deny-all
-  后不通，含该策略 `policyUid`）、`recovery`（恢复后连通），另记 `nonWorker`（非 Worker
-  来源在原策略下不通）。
+- `probes`：至少一组探针。`destination` 记录目标 Pod 的 `pod`、`uid`、`nodeName`、`port` 与其
+  控制器 `controller`（`kind`、`name`、`uid`）；`policy` 记录原 NetworkPolicy 的 `name`、`uid`
+  和 `specSha256`（`networkPolicySpecSha256V1`，即 spec 规范化 JSON 的 SHA-256）。按顺序记录
+  `allow`（Worker 来源连通）、`deny`（施加临时 deny-all 后不通，含该策略 `policyUid`）、
+  `recovery`（恢复后连通），另记 `nonWorker`（非 Worker 来源在原策略下不通）。目标 Pod 与原
+  策略在预检时必须仍存在且未变；临时 deny-all 在恢复后可以已删除。
 - `observedAt` 与 `expiresAt`：有效期不超过 7 天。
 
 以下情况都拒绝发布：
@@ -183,12 +189,20 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对。
+- 探针目标 Pod 不存在、UID 变化（重建）、不在同一 namespace 或节点、未在运行、控制器不符，
+  或没有声明该 TCP 端口；原策略不存在、UID 或有效 spec 变化，或不再选中该 Pod。
+- 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`
+  不一致；渲染结果不可解析或 Worker Deployment 不唯一。
 - 现场 Agent 级 StatefulSet、Deployment、Job 集合与 `targets` 不一致（漏列一个服务或 Job，
   或对象已重建）。
-- 现场模板带非部署注入的调度字段；`legacyUnplaced: reject` 时仍有未采用 placement 的
-  运行中 StatefulSet/Deployment 或未完成的 Job。
-- 渲染结果没有 Session 的 ECI `MutatingAdmissionPolicy` 与 Binding，或走 RuntimeClass 分支；
-  本 ACK 须开启 `sessionRuntimeScheduling` 且不设 `runtimeClassName`。
+- 现场控制器带非部署注入的调度字段（包括没有 Worker 记录
+  `agent-infra.agora.io/agent-workload-placement` 的 ECI 字段）；控制器记录的架构不是证据的
+  架构（其可落节点未被证明）；`legacyUnplaced: reject` 时仍有未采用 placement 的运行中
+  StatefulSet/Deployment 或未完成的 Job。
+- 渲染结果没有唯一的 Session ECI `MutatingAdmissionPolicy`（`failurePolicy: Fail`，限定本
+  namespace 与 `session-sandbox-v1` 标签，唯一的 mutation 含 virtual-kubelet selector 与 provider
+  toleration）及指向它的 Binding，或走 RuntimeClass 分支；本 ACK 须开启
+  `sessionRuntimeScheduling` 且不设 `runtimeClassName`。
 - 任一 `kubectl get` 失败，包括权限不足。
 
 通过时 stderr 输出一行摘要，含 `legacyUnplacedActiveTargets` 与

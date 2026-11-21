@@ -84,7 +84,7 @@ if(data) process.stdout.write(JSON.stringify(data));
 const fs=require('node:fs');
 const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({tool:'helm',args,config:process.env.KUBECONFIG})+'\\n');
-if(args[0]==='template') process.stdout.write(${JSON.stringify(`kind: ConfigMap\n---\n${enforcement.sessionEci}\n`)});
+if(args[0]==='template') process.stdout.write(${JSON.stringify(`kind: ConfigMap\n---\n${enforcement.rendered}\n`)});
 `,
 				{ mode: 0o700 },
 			);

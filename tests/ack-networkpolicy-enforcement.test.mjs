@@ -5,12 +5,15 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parseAllDocuments, stringify } from "yaml";
 import {
 	assertSessionEciAdmissionRenderedV1,
 	eciPlacementFieldsV1,
 	maxEvidenceAgeMs,
+	networkPolicySpecSha256V1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
+import { renderedEnforcementManifest } from "./support/networkpolicy-evidence.mjs";
 
 // #4351 / prep §4.6: every incomplete or mismatched input fails closed.
 const now = Date.parse("2026-11-21T18:00:00.000Z");
@@ -38,12 +41,15 @@ const ecsNode = {
 	},
 	spec: {},
 };
+const record = "agent-infra.agora.io/agent-workload-placement";
 const controller = (kind, name, n, spec, extra = {}) => ({
 	kind,
 	metadata: {
 		name,
 		uid: uid(n),
 		labels: { "agent-infra.agora.io/agent": name },
+		// The Worker records the placement it injected on each controller.
+		...(spec === placement ? { annotations: { [record]: "amd64" } } : {}),
 	},
 	spec: {
 		replicas: 1,
@@ -66,14 +72,24 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 
 function fixture() {
 	const enforcerConfigBytes = bytes(config());
+	const policySpec = {
+		podSelector: { matchLabels: { "agent-infra.agora.io/agent": "agent-p" } },
+		policyTypes: ["Ingress"],
+		ingress: [{ ports: [{ port: 3003, protocol: "TCP" }] }],
+	};
 	const probe = {
 		destination: {
 			pod: "agent-p-0",
 			uid: uid(40),
 			nodeName: "virtual-kubelet-cn-hangzhou-i",
 			port: 3003,
+			controller: { kind: "StatefulSet", name: "agent-p", uid: uid(10) },
 		},
-		policyUid: uid(50),
+		policy: {
+			name: "agent-p",
+			uid: uid(50),
+			specSha256: networkPolicySpecSha256V1(policySpec),
+		},
 		allow: { at: at(25), outcome: "connected" },
 		deny: { at: at(24), outcome: "timeout", policyUid: uid(51) },
 		recovery: { at: at(23), outcome: "connected" },
@@ -114,11 +130,48 @@ function fixture() {
 			expiresAt: new Date(now + 24 * 60 * 60_000).toISOString(),
 		},
 		enforcerConfigBytes,
+		renderedManifest: renderedEnforcementManifest("agent-infra", {
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+		}),
 		observed: {
 			namespace: { name: "agent-infra", uid: uid(2) },
 			kubeSystemNamespaceUid: uid(1),
 			nodes: [virtualNode("i", 20), virtualNode("j", 21), ecsNode],
 			controllers,
+			probeTargets: [
+				{
+					pod: {
+						metadata: {
+							name: "agent-p-0",
+							uid: uid(40),
+							namespace: "agent-infra",
+							labels: { "agent-infra.agora.io/agent": "agent-p" },
+							ownerReferences: [
+								{
+									kind: "StatefulSet",
+									name: "agent-p",
+									uid: uid(10),
+									controller: true,
+								},
+							],
+						},
+						spec: {
+							nodeName: "virtual-kubelet-cn-hangzhou-i",
+							containers: [{ name: "agent", ports: [{ containerPort: 3003 }] }],
+						},
+						status: { phase: "Running" },
+					},
+					policy: {
+						metadata: {
+							name: "agent-p",
+							uid: uid(50),
+							namespace: "agent-infra",
+						},
+						spec: policySpec,
+					},
+				},
+			],
 		},
 		now,
 	};
@@ -142,12 +195,21 @@ test("complete current evidence passes without signing field acceptance", () => 
 
 test("retained pre-placement Hosts pass only in the transition mode and stay unisolated", () => {
 	const f = fixture();
-	f.evidence.placement.legacyUnplaced = "retain-until-lifecycle";
+	const retain = {
+		architecture: "amd64",
+		legacyUnplaced: "retain-until-lifecycle",
+	};
+	f.evidence.placement = { ...retain };
+	f.renderedManifest = renderedEnforcementManifest("agent-infra", retain);
 	f.observed.controllers[0] = controller("StatefulSet", "agent-p", 10, {});
 	const summary = run(f);
 	assert.equal(summary.legacyUnplacedActiveTargets, 1);
 	assert.equal(summary.allAgentWorkloadsOnEnforcedForm, false);
 	f.evidence.placement.legacyUnplaced = "reject";
+	f.renderedManifest = renderedEnforcementManifest("agent-infra", {
+		architecture: "amd64",
+		legacyUnplaced: "reject",
+	});
 	rejects(f, "LEGACY_UNPLACED_REMAINS");
 	// A finished legacy Job has no running Pod.
 	const g = fixture();
@@ -429,6 +491,171 @@ const cases = [
 		},
 		"EVIDENCE_INVALID",
 	],
+	// MUST-A: the placement must be what the release hands the Worker.
+	[
+		"missingWorkerPlacement",
+		(f) => {
+			f.renderedManifest = renderedEnforcementManifest(
+				"agent-infra",
+				undefined,
+			);
+		},
+		"WORKER_PLACEMENT_MISSING",
+	],
+	[
+		"mismatchedWorkerArchitecture",
+		(f) => {
+			f.renderedManifest = renderedEnforcementManifest("agent-infra", {
+				architecture: "arm64",
+				legacyUnplaced: "reject",
+			});
+		},
+		"WORKER_PLACEMENT_MISMATCH",
+	],
+	[
+		"mismatchedWorkerTransitionMode",
+		(f) => {
+			f.renderedManifest = renderedEnforcementManifest("agent-infra", {
+				architecture: "amd64",
+				legacyUnplaced: "retain-until-lifecycle",
+			});
+		},
+		"WORKER_PLACEMENT_MISMATCH",
+	],
+	[
+		"malformed Worker placement",
+		(f) => {
+			f.renderedManifest = f.renderedManifest.replace(
+				'"architecture":"amd64"',
+				'"architecture":"amd64","runtimeClassName":"runv"',
+			);
+		},
+		"WORKER_PLACEMENT_INVALID",
+	],
+	[
+		"no rendered manifest",
+		(f) => {
+			delete f.renderedManifest;
+		},
+		"RENDERED_MANIFEST_REQUIRED",
+	],
+	[
+		"two Worker Deployments",
+		(f) => {
+			f.renderedManifest = `${f.renderedManifest}---\n${f.renderedManifest}`;
+		},
+		"RENDERED_MANIFEST_INVALID",
+	],
+	// MUST-B: the probed Pod and its original policy must still be those objects.
+	[
+		"probe target Pod gone",
+		(f) => {
+			f.observed.probeTargets[0].pod = undefined;
+		},
+		"PROBE_TARGET_MISSING",
+	],
+	[
+		"probe target Pod recreated (new UID)",
+		(f) => {
+			f.observed.probeTargets[0].pod.metadata.uid = uid(41);
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"evidence names an unrelated Pod",
+		(f) => {
+			f.evidence.probes[0].destination.pod = "unrelated-pod";
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"probe port not served by the Pod",
+		(f) => {
+			f.evidence.probes[0].destination.port = 65_535;
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"probe target moved node",
+		(f) => {
+			f.observed.probeTargets[0].pod.spec.nodeName =
+				"virtual-kubelet-cn-hangzhou-j";
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"probe target owned by another controller",
+		(f) => {
+			f.observed.probeTargets[0].pod.metadata.ownerReferences[0].uid = uid(18);
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"probe target in another namespace",
+		(f) => {
+			f.observed.probeTargets[0].pod.metadata.namespace = "other";
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"probe target not running",
+		(f) => {
+			f.observed.probeTargets[0].pod.status.phase = "Pending";
+		},
+		"PROBE_TARGET_MISMATCH",
+	],
+	[
+		"original policy replaced (new UID)",
+		(f) => {
+			f.observed.probeTargets[0].policy.metadata.uid = uid(52);
+		},
+		"PROBE_POLICY_MISMATCH",
+	],
+	[
+		"evidence names another policyUid",
+		(f) => {
+			f.evidence.probes[0].policy.uid = uid(53);
+		},
+		"PROBE_POLICY_MISMATCH",
+	],
+	[
+		"original policy spec changed",
+		(f) => {
+			f.observed.probeTargets[0].policy.spec.ingress = [{}];
+		},
+		"PROBE_POLICY_MISMATCH",
+	],
+	[
+		"original policy gone",
+		(f) => {
+			f.observed.probeTargets[0].policy = undefined;
+		},
+		"PROBE_POLICY_MISMATCH",
+	],
+	[
+		"policy no longer selects the Pod",
+		(f) => {
+			f.observed.probeTargets[0].pod.metadata.labels = { app: "other" };
+		},
+		"PROBE_POLICY_MISMATCH",
+	],
+	// MUST-C: a controller is judged by the placement recorded on it.
+	[
+		"ECI fields without the Worker record",
+		(f) => {
+			delete f.observed.controllers[0].metadata.annotations;
+		},
+		"FOREIGN_PLACEMENT",
+	],
+	[
+		"controller adopted another architecture",
+		(f) => {
+			const arm = eciPlacementFieldsV1("arm64");
+			Object.assign(f.observed.controllers[1].spec.template.spec, arm);
+			f.observed.controllers[1].metadata.annotations[record] = "arm64";
+		},
+		"TARGET_PLACEMENT_UNPROVEN",
+	],
 ];
 for (const [name, mutate, code] of cases)
 	test(`fails closed on ${name}`, () => {
@@ -437,21 +664,62 @@ for (const [name, mutate, code] of cases)
 		rejects(f, code);
 	});
 
+test("the temporary deny-all policy need not exist after recovery", () => {
+	const f = fixture();
+	f.evidence.probes[0].deny.policyUid = uid(99);
+	assert.equal(run(f).status, "passed");
+});
+
 test("requires the rendered Session ECI admission rather than a RuntimeClass branch", () => {
-	const eci = [
-		"kind: MutatingAdmissionPolicy",
-		"metadata:",
-		"  name: agent-infra-session-eci",
-		'expression: JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"}',
-		"---",
-		"kind: MutatingAdmissionPolicyBinding",
-	].join("\n");
-	assertSessionEciAdmissionRenderedV1(eci, "agent-infra");
+	const valid = renderedEnforcementManifest("agent-infra", {
+		architecture: "amd64",
+		legacyUnplaced: "reject",
+	});
+	assertSessionEciAdmissionRenderedV1(valid, "agent-infra");
+	const documents = () =>
+		parseAllDocuments(valid).map((document) => document.toJS());
+	const variant = (change) => {
+		const [worker, policy, binding] = documents();
+		change(policy, binding);
+		return [worker, policy, binding]
+			.filter(Boolean)
+			.map((document) => stringify(document))
+			.join("---\n");
+	};
+	const expression = (policy) => policy.spec.mutations[0].jsonPatch;
 	for (const rendered of [
-		"kind: Deployment\n",
-		eci.replace("agent-infra-session-eci", "other-session-eci"),
-		eci.replace("kind: MutatingAdmissionPolicyBinding", ""),
-		`${eci}\nJSONPatch{op:"add",path:"/spec/runtimeClassName",value:"runv"}`,
+		variant((policy) => Object.assign(policy, { kind: "ConfigMap" })),
+		variant((policy, binding) => {
+			policy.metadata.name = "other-session-eci";
+			binding.metadata.name = "other-session-eci";
+			binding.spec.policyName = "other-session-eci";
+		}),
+		variant((_policy, binding) =>
+			Object.assign(binding, { kind: "ConfigMap" }),
+		),
+		// The patch only in a comment-like field, an empty mutation list, or a Binding to another policy.
+		variant((policy) => {
+			policy.metadata.annotations = {
+				note: 'path:"/spec/nodeSelector/type",value:"virtual-kubelet"',
+			};
+			expression(policy).expression = "[]";
+		}),
+		variant((policy) => {
+			policy.spec.mutations = [];
+		}),
+		variant((_policy, binding) => {
+			binding.spec.policyName = "other";
+		}),
+		variant((policy) => {
+			expression(policy).expression =
+				`[JSONPatch{op:"add",path:"/spec/runtimeClassName",value:"runv"}] + ${expression(policy).expression}`;
+		}),
+		variant((policy) => {
+			policy.spec.failurePolicy = "Ignore";
+		}),
+		variant((policy) => {
+			policy.spec.matchConstraints.objectSelector.matchLabels = {};
+		}),
 	])
 		assert.throws(
 			() => assertSessionEciAdmissionRenderedV1(rendered, "agent-infra"),
@@ -474,14 +742,18 @@ test("the entry reads only with get and fails closed on missing input or read fa
 	f.evidence.enforcer.configSha256 = sha(configBytes);
 	const evidenceFile = join(directory, "evidence.json");
 	const configFile = join(directory, "config.json");
+	const renderedFile = join(directory, "rendered.yaml");
 	const calls = join(directory, "calls.log");
 	await writeFile(evidenceFile, JSON.stringify(f.evidence));
 	await writeFile(configFile, configBytes);
+	await writeFile(renderedFile, f.renderedManifest);
 	const responses = {
 		"namespace/agent-infra": { metadata: { name: "agent-infra", uid: uid(2) } },
 		"namespace/kube-system": { metadata: { name: "kube-system", uid: uid(1) } },
 		"nodes/-o": { items: f.observed.nodes },
 		"statefulsets,deployments,jobs/-l": { items: f.observed.controllers },
+		"pod/agent-p-0": f.observed.probeTargets[0].pod,
+		"networkpolicy/agent-p": f.observed.probeTargets[0].policy,
 	};
 	const stub = (failing) => {
 		const file = join(directory, failing ? "kubectl-fail" : "kubectl");
@@ -508,6 +780,7 @@ process.exit(1);
 		KUBECTL_BIN: await stub(false),
 		ACK_NETWORKPOLICY_EVIDENCE_FILE: evidenceFile,
 		ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE: configFile,
+		ACK_RENDERED_MANIFEST_FILE: renderedFile,
 	};
 	const passed = spawnSync(process.execPath, [script], {
 		encoding: "utf8",
@@ -531,6 +804,12 @@ process.exit(1);
 	});
 	assert.equal(noConfig.status, 2);
 	assert.equal(code(noConfig), "ENFORCER_CONFIG_UNREADABLE");
+	const noRender = spawnSync(process.execPath, [script], {
+		encoding: "utf8",
+		env: { ...env, ACK_RENDERED_MANIFEST_FILE: "" },
+	});
+	assert.equal(noRender.status, 2);
+	assert.equal(code(noRender), "RENDERED_MANIFEST_REQUIRED");
 	const forbidden = spawnSync(process.execPath, [script], {
 		encoding: "utf8",
 		env: { ...env, KUBECTL_BIN: await stub(true) },

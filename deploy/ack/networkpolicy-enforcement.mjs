@@ -5,9 +5,13 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parseAllDocuments } from "yaml";
 
 export const maxEvidenceAgeMs = 7 * 24 * 60 * 60 * 1000;
 const ownerLabel = "agent-infra.agora.io/agent";
+// Written by the Worker with the placement it injected (apps/platform-worker agent-workload-placement.ts).
+const placementAnnotation = "agent-infra.agora.io/agent-workload-placement";
+const placementEnvironment = "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT";
 const uidPattern =
 	/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const namePattern = /^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/;
@@ -68,21 +72,31 @@ export function eciPlacementFieldsV1(architecture) {
 	};
 }
 
-function templateShape(spec, fields) {
+/** Same rule as the Worker: a controller is judged by the placement recorded on it. */
+function templateShape(item) {
+	const spec = item.spec?.template?.spec;
+	const record = item.metadata?.annotations?.[placementAnnotation];
 	if (
 		spec?.affinity !== undefined ||
 		spec?.runtimeClassName !== undefined ||
 		spec?.nodeName !== undefined
 	)
-		return "foreign";
+		return { shape: "foreign" };
 	const selector = spec?.nodeSelector ?? {};
 	const tolerations = spec?.tolerations ?? [];
-	if (Object.keys(selector).length === 0 && tolerations.length === 0)
-		return "unplaced";
+	if (record === undefined)
+		return {
+			shape:
+				Object.keys(selector).length === 0 && tolerations.length === 0
+					? "unplaced"
+					: "foreign",
+		};
+	if (!["amd64", "arm64"].includes(record)) return { shape: "foreign" };
+	const fields = eciPlacementFieldsV1(record);
 	return same(selector, fields.nodeSelector) &&
 		same(tolerations, fields.tolerations)
-		? "placed"
-		: "foreign";
+		? { shape: "placed", architecture: record }
+		: { shape: "foreign" };
 }
 
 function tolerated(taint, tolerations) {
@@ -155,10 +169,14 @@ function parseEvidence(value) {
 	for (const probe of evidence.probes) {
 		record(
 			probe,
-			["destination", "policyUid", "allow", "deny", "recovery", "nonWorker"],
+			["destination", "policy", "allow", "deny", "recovery", "nonWorker"],
 			"EVIDENCE_INVALID",
 		);
-		record(probe.destination, ["pod", "uid", "nodeName", "port"], "EVIDENCE_INVALID");
+		record(
+			probe.destination,
+			["pod", "uid", "nodeName", "port", "controller"],
+			"EVIDENCE_INVALID",
+		);
 		text(probe.destination.pod, namePattern, "EVIDENCE_INVALID");
 		text(probe.destination.uid, uidPattern, "EVIDENCE_INVALID");
 		text(probe.destination.nodeName, namePattern, "EVIDENCE_INVALID");
@@ -168,7 +186,15 @@ function parseEvidence(value) {
 			probe.destination.port > 65_535
 		)
 			fail("EVIDENCE_INVALID");
-		text(probe.policyUid, uidPattern, "EVIDENCE_INVALID");
+		record(probe.destination.controller, ["kind", "name", "uid"], "EVIDENCE_INVALID");
+		if (!["StatefulSet", "Deployment", "Job"].includes(probe.destination.controller.kind))
+			fail("EVIDENCE_INVALID");
+		text(probe.destination.controller.name, namePattern, "EVIDENCE_INVALID");
+		text(probe.destination.controller.uid, uidPattern, "EVIDENCE_INVALID");
+		record(probe.policy, ["name", "uid", "specSha256"], "EVIDENCE_INVALID");
+		text(probe.policy.name, namePattern, "EVIDENCE_INVALID");
+		text(probe.policy.uid, uidPattern, "EVIDENCE_INVALID");
+		text(probe.policy.specSha256, /^[a-f0-9]{64}$/, "EVIDENCE_INVALID");
 		for (const step of ["allow", "recovery", "nonWorker"])
 			if (probe[step] !== null) record(probe[step], ["at", "outcome"], "EVIDENCE_INVALID");
 		if (probe.deny !== null)
@@ -209,10 +235,20 @@ function parseEnforcerConfig(bytes) {
 export function validateNetworkPolicyEnforcementV1({
 	evidence: input,
 	enforcerConfigBytes,
+	renderedManifest,
 	observed,
 	now = Date.now(),
 }) {
 	const evidence = parseEvidence(input);
+	const rendered = renderedWorkloadPlacementV1(
+		renderedManifest,
+		evidence.namespace.name,
+	);
+	if (
+		rendered.placement.architecture !== evidence.placement.architecture ||
+		rendered.placement.legacyUnplaced !== evidence.placement.legacyUnplaced
+	)
+		fail("WORKER_PLACEMENT_MISMATCH");
 	if (evidence.enforcer.runtime !== "eci" || evidence.enforcer.component !== "poseidon")
 		fail("ENFORCER_UNSUPPORTED");
 	if (!enforcerConfigBytes) fail("ENFORCER_CONFIG_UNREADABLE");
@@ -280,8 +316,9 @@ export function validateNetworkPolicyEnforcementV1({
 
 	if (evidence.probes.length === 0) fail("PROBE_POSITIVE_MISSING");
 	const candidateNames = new Set(candidates.map((node) => node.metadata?.name));
-	for (const probe of evidence.probes) {
+	for (const [index, probe] of evidence.probes.entries()) {
 		if (!candidateNames.has(probe.destination.nodeName)) fail("PROBE_SCOPE_MISMATCH");
+		assertProbeTargetCurrent(probe, observed.probeTargets?.[index], evidence.namespace.name);
 		if (
 			probe.allow?.outcome !== "connected" ||
 			probe.recovery?.outcome !== "connected"
@@ -327,9 +364,12 @@ export function validateNetworkPolicyEnforcementV1({
 	let placed = 0;
 	let legacyActive = 0;
 	for (const { kind, item } of controllers) {
-		const shape = templateShape(item.spec?.template?.spec, fields);
+		const { shape, architecture } = templateShape(item);
 		if (shape === "foreign") fail("FOREIGN_PLACEMENT");
 		if (shape === "placed") {
+			// Its candidate nodes are only proven for the evidence architecture.
+			if (architecture !== evidence.placement.architecture)
+				fail("TARGET_PLACEMENT_UNPROVEN");
 			placed++;
 			continue;
 		}
@@ -347,6 +387,13 @@ export function validateNetworkPolicyEnforcementV1({
 		namespaceUidSha256: createHash("sha256").update(evidence.namespace.uid).digest("hex"),
 		enforcer: { runtime: "eci", component: "poseidon", version: evidence.enforcer.version },
 		placement: evidence.placement,
+		workerPlacementSource: {
+			deployment: rendered.deployment,
+			env: placementEnvironment,
+			renderedManifestSha256: createHash("sha256")
+				.update(renderedManifest)
+				.digest("hex"),
+		},
 		candidateNodes: candidates.length,
 		probes: evidence.probes.length,
 		targets: controllers.length,
@@ -358,23 +405,180 @@ export function validateNetworkPolicyEnforcementV1({
 	};
 }
 
-/** The chart must render the Session ECI admission, not a RuntimeClass branch. */
-export function assertSessionEciAdmissionRenderedV1(rendered, namespace) {
+function renderedDocuments(renderedManifest) {
+	if (typeof renderedManifest !== "string" || !renderedManifest)
+		fail("RENDERED_MANIFEST_REQUIRED");
+	try {
+		return parseAllDocuments(renderedManifest).map((document) => {
+			if (document.errors.length) throw new Error();
+			return document.toJS();
+		}).filter(Boolean);
+	} catch {
+		fail("RENDERED_MANIFEST_INVALID");
+	}
+}
+
+/**
+ * The placement the release will hand the Worker: its chart-rendered env, the
+ * Worker's only placement source (it refuses a module-supplied one at startup).
+ */
+export function renderedWorkloadPlacementV1(renderedManifest, namespace) {
+	const documents = renderedDocuments(renderedManifest);
+	const workers = documents.filter(
+		(item) =>
+			item.kind === "Deployment" &&
+			item.spec?.template?.metadata?.labels?.["app.kubernetes.io/component"] ===
+				"platform-worker",
+	);
+	if (workers.length !== 1) fail("RENDERED_MANIFEST_INVALID");
+	const container = workers[0].spec.template.spec?.containers?.find(
+		(entry) => entry.name === "platform-worker",
+	);
+	const env = (container?.env ?? []).filter((entry) => entry.name === placementEnvironment);
+	if (env.length === 0) fail("WORKER_PLACEMENT_MISSING");
+	if (env.length !== 1 || typeof env[0].value !== "string" || env[0].valueFrom !== undefined)
+		fail("WORKER_PLACEMENT_INVALID");
+	let placement;
+	try {
+		placement = JSON.parse(env[0].value);
+	} catch {
+		fail("WORKER_PLACEMENT_INVALID");
+	}
+	record(placement, ["architecture", "legacyUnplaced"], "WORKER_PLACEMENT_INVALID");
 	if (
-		typeof rendered !== "string" ||
-		!/^kind: MutatingAdmissionPolicy$/m.test(rendered) ||
-		!/^kind: MutatingAdmissionPolicyBinding$/m.test(rendered) ||
-		!rendered.includes(`name: ${namespace}-session-eci`) ||
-		!rendered.includes('path:"/spec/nodeSelector/type",value:"virtual-kubelet"') ||
-		/path:"\/spec\/runtimeClassName"/.test(rendered)
+		!["amd64", "arm64"].includes(placement.architecture) ||
+		!["retain-until-lifecycle", "reject"].includes(placement.legacyUnplaced)
+	)
+		fail("WORKER_PLACEMENT_INVALID");
+	assertSessionEciAdmissionRenderedV1(documents, namespace);
+	return { placement, deployment: workers[0].metadata?.name };
+}
+
+/** The chart must render the Session ECI admission, not a RuntimeClass branch. */
+export function assertSessionEciAdmissionRenderedV1(input, namespace) {
+	const documents = typeof input === "string" ? renderedDocuments(input) : input;
+	const name = `${namespace}-session-eci`;
+	const policies = documents.filter(
+		(item) => item.kind === "MutatingAdmissionPolicy" && item.metadata?.name === name,
+	);
+	const bindings = documents.filter(
+		(item) =>
+			item.kind === "MutatingAdmissionPolicyBinding" &&
+			item.spec?.policyName === name,
+	);
+	const policy = policies[0];
+	const expressions = (policy?.spec?.mutations ?? []).map(
+		(mutation) => mutation?.jsonPatch?.expression ?? "",
+	);
+	const scoped = (selector) =>
+		selector?.objectSelector?.matchLabels?.["agent-infra.agora.io/managed"] ===
+			"session-sandbox-v1" &&
+		selector?.namespaceSelector?.matchLabels?.["kubernetes.io/metadata.name"] ===
+			namespace;
+	if (
+		policies.length !== 1 ||
+		bindings.length !== 1 ||
+		policy.spec?.failurePolicy !== "Fail" ||
+		!scoped(policy.spec?.matchConstraints) ||
+		!scoped(bindings[0].spec?.matchResources) ||
+		expressions.length !== 1 ||
+		!expressions[0].includes('path:"/spec/nodeSelector/type",value:"virtual-kubelet"') ||
+		!expressions[0].includes('"key":"virtual-kubelet.io/provider"') ||
+		expressions[0].includes('path:"/spec/runtimeClassName"')
 	)
 		fail("SESSION_PLACEMENT_UNPROVEN");
 }
 
-function collect(namespace, kubectl) {
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+/** Hash of a NetworkPolicy's effective spec, as recorded by the evidence producer. */
+export function networkPolicySpecSha256V1(spec) {
+	return sha256(JSON.stringify(canonical(spec ?? {})));
+}
+
+/**
+ * The probed Pod and its original NetworkPolicy must still be the very objects
+ * the evidence observed: same Pod UID, namespace, node, controller and declared
+ * port, and the same policy UID and effective spec selecting that Pod. The
+ * temporary deny-all policy may already be gone.
+ */
+function assertProbeTargetCurrent(probe, live, namespace) {
+	const pod = live?.pod;
+	if (!pod) fail("PROBE_TARGET_MISSING");
+	const destination = probe.destination;
+	const owners = (pod.metadata?.ownerReferences ?? []).filter(
+		(owner) => owner.controller === true,
+	);
+	const owner = owners[0];
+	let controller = owner;
+	if (owner?.kind === "ReplicaSet") {
+		const parents = (live.replicaSet?.metadata?.ownerReferences ?? []).filter(
+			(parent) => parent.controller === true,
+		);
+		controller =
+			live.replicaSet?.metadata?.uid === owner.uid &&
+			live.replicaSet?.metadata?.name === owner.name &&
+			parents.length === 1
+				? parents[0]
+				: undefined;
+	}
+	if (
+		pod.metadata?.name !== destination.pod ||
+		pod.metadata?.uid !== destination.uid ||
+		pod.metadata?.namespace !== namespace ||
+		pod.metadata?.deletionTimestamp !== undefined ||
+		pod.spec?.nodeName !== destination.nodeName ||
+		pod.status?.phase !== "Running" ||
+		owners.length !== 1 ||
+		controller?.kind !== destination.controller.kind ||
+		controller?.name !== destination.controller.name ||
+		controller?.uid !== destination.controller.uid ||
+		!(pod.spec?.containers ?? []).some((container) =>
+			(container.ports ?? []).some(
+				(port) =>
+					port.containerPort === destination.port &&
+					(port.protocol ?? "TCP") === "TCP",
+			),
+		)
+	)
+		fail("PROBE_TARGET_MISMATCH");
+	const policy = live.policy;
+	const selector = policy?.spec?.podSelector ?? {};
+	const labels = pod.metadata?.labels ?? {};
+	if (
+		!policy ||
+		policy.metadata?.name !== probe.policy.name ||
+		policy.metadata?.uid !== probe.policy.uid ||
+		policy.metadata?.namespace !== namespace ||
+		policy.metadata?.deletionTimestamp !== undefined ||
+		networkPolicySpecSha256V1(policy.spec) !== probe.policy.specSha256 ||
+		(selector.matchExpressions?.length ?? 0) > 0 ||
+		!Object.entries(selector.matchLabels ?? {}).every(
+			([key, value]) => labels[key] === value,
+		)
+	)
+		fail("PROBE_POLICY_MISMATCH");
+}
+
+function collect(namespace, kubectl, evidence) {
 	const read = (args) => {
 		try {
 			return JSON.parse(kubectl(args));
+		} catch {
+			fail("READ_FAILED");
+		}
+	};
+	// NotFound is an empty answer (the target is gone); any other failure is READ_FAILED.
+	const readOptional = (kind, name) => {
+		let raw;
+		try {
+			raw = kubectl(["get", kind, name, "--ignore-not-found", "-o", "json"]);
+		} catch {
+			fail("READ_FAILED");
+		}
+		if (!raw.trim()) return undefined;
+		try {
+			return JSON.parse(raw);
 		} catch {
 			fail("READ_FAILED");
 		}
@@ -392,7 +596,21 @@ function collect(namespace, kubectl) {
 	]);
 	if (!Array.isArray(nodes?.items) || !Array.isArray(controllers?.items))
 		fail("READ_FAILED");
+	const names = (value) =>
+		typeof value === "string" && namePattern.test(value) ? value : fail("EVIDENCE_INVALID");
+	const probeTargets = (Array.isArray(evidence?.probes) ? evidence.probes : []).map((probe) => {
+		const pod = readOptional("pod", names(probe?.destination?.pod));
+		const owner = (pod?.metadata?.ownerReferences ?? []).find(
+			(entry) => entry.controller === true && entry.kind === "ReplicaSet",
+		);
+		return {
+			pod,
+			replicaSet: owner ? readOptional("replicaset", names(owner.name)) : undefined,
+			policy: readOptional("networkpolicy", names(probe?.policy?.name)),
+		};
+	});
 	return {
+		probeTargets,
 		namespace: { name: namespaceObject?.metadata?.name, uid: namespaceObject?.metadata?.uid },
 		kubeSystemNamespaceUid: kubeSystem?.metadata?.uid,
 		nodes: nodes.items,
@@ -418,11 +636,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		} catch {
 			fail("ENFORCER_CONFIG_UNREADABLE");
 		}
-		if (process.env.ACK_RENDERED_MANIFEST_FILE)
-			assertSessionEciAdmissionRenderedV1(
-				readFileSync(process.env.ACK_RENDERED_MANIFEST_FILE, "utf8"),
-				namespace,
-			);
+		let renderedManifest;
+		try {
+			renderedManifest = process.env.ACK_RENDERED_MANIFEST_FILE
+				? readFileSync(process.env.ACK_RENDERED_MANIFEST_FILE, "utf8")
+				: undefined;
+		} catch {
+			fail("RENDERED_MANIFEST_REQUIRED");
+		}
+		if (!renderedManifest) fail("RENDERED_MANIFEST_REQUIRED");
 		const kubectl = (args) =>
 			execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
 				"--request-timeout=20s",
@@ -433,7 +655,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const summary = validateNetworkPolicyEnforcementV1({
 			evidence,
 			enforcerConfigBytes,
-			observed: collect(namespace, kubectl),
+			renderedManifest,
+			observed: collect(namespace, kubectl, evidence),
 		});
 		process.stdout.write(`${JSON.stringify(summary)}\n`);
 	} catch (error) {

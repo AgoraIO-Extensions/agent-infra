@@ -485,6 +485,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		);
 	}
 	const {
+		placementRecord,
 		hasSafePodMetadata,
 		hasUnsafePodSpec,
 		hasDriftedImmutableStatefulSetSpec,
@@ -691,6 +692,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		hasSafeRoutingMetadata,
 		hasSafeServiceAccount,
 		hasControllingWorkloadOwner,
+		placementRecord,
 		hasSafePodMetadata,
 		hasUnsafePodSpec,
 		hasDriftedImmutableStatefulSetSpec,

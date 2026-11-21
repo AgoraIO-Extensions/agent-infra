@@ -8,7 +8,8 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
-	acceptsAgentWorkloadPlacementV1,
+	acceptsAdoptedAgentWorkloadPlacementV1,
+	agentWorkloadPlacementAnnotationV1,
 	isEciProviderPodAnnotationV1,
 	validateAgentWorkloadPlacementV1,
 } from "./agent-workload-placement.js";
@@ -61,6 +62,8 @@ export function createKubernetesPodValidationV1(dependencies: {
 	} catch {
 		throw new WorkloadKubernetesError("policy");
 	}
+	const placementRecord = (controller: V1StatefulSet | undefined) =>
+		controller?.metadata?.annotations?.[agentWorkloadPlacementAnnotationV1];
 	const withoutSkillDelivery = (
 		value: AgentWorkloadDesiredV1,
 		spec: V1PodSpec | undefined,
@@ -202,7 +205,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 				);
 			if (
 				isEciProviderPodAnnotationV1(
-					policy.agentWorkloadPlacement,
+					placementRecord(live.workload),
 					live.pod.spec,
 					key,
 					content,
@@ -216,10 +219,14 @@ export function createKubernetesPodValidationV1(dependencies: {
 	function hasUnsafePodSpec(
 		value: AgentWorkloadDesiredV1,
 		podInput: V1PodSpec | undefined,
-		expectedIdentity?: {
-			readonly hostname: string;
-			readonly subdomain: string;
-		},
+		expectedIdentity:
+			| {
+					readonly hostname: string;
+					readonly subdomain: string;
+			  }
+			| undefined,
+		/** Controller's recorded placement (Spec §10.1: adopted per lifecycle). */
+		record: string | undefined,
 	) {
 		const projectedPod = withoutVerifiedWorkspaceSnapshotProjectionV1(
 			withoutSkillDelivery(value, podInput),
@@ -297,8 +304,9 @@ export function createKubernetesPodValidationV1(dependencies: {
 				pod.preemptionPolicy !== "PreemptLowerPriority") ||
 			// Only the deployment placement (or a retained pre-placement object) is
 			// accepted; a live Pod additionally carries API-server default tolerations.
-			!acceptsAgentWorkloadPlacementV1(
+			!acceptsAdoptedAgentWorkloadPlacementV1(
 				policy.agentWorkloadPlacement,
+				record,
 				pod,
 				expectedIdentity !== undefined,
 			) ||
@@ -387,11 +395,12 @@ export function createKubernetesPodValidationV1(dependencies: {
 	function hasDriftedStatefulSetSpec(
 		value: AgentWorkloadDesiredV1,
 		spec: V1StatefulSet["spec"],
+		record: string | undefined,
 	) {
 		if (!spec) return true;
 		const { template, ...controller } = spec;
 		return (
-			hasDriftedStatefulSetTemplate(value, template) ||
+			hasDriftedStatefulSetTemplate(value, template, record) ||
 			!hasSameStructure(
 				{
 					...controller,
@@ -464,6 +473,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 	function canResumeScaledDownStatefulSet(
 		value: AgentWorkloadDesiredV1,
 		spec: V1StatefulSet["spec"],
+		record: string | undefined,
 	) {
 		return Boolean(
 			spec?.replicas === 0 &&
@@ -471,26 +481,29 @@ export function createKubernetesPodValidationV1(dependencies: {
 				!hasDriftedStatefulSetSpec(
 					value,
 					normalizeStatefulSetSpecRevision(spec, value.workloadRevision),
+					record,
 				),
 		);
 	}
 	function hasDriftedStatefulSetTemplate(
 		value: AgentWorkloadDesiredV1,
 		template: NonNullable<V1StatefulSet["spec"]>["template"] | undefined,
+		record: string | undefined,
 	) {
 		const pod = template?.spec;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		return (
 			!hasSafePodMetadata(value, template?.metadata) ||
-			hasDriftedPodSpec(value, pod) ||
+			hasDriftedPodSpec(value, pod, undefined, record) ||
 			!hasSameStructure(
 				pod?.imagePullSecrets ?? [],
 				policy.imagePullSecretName
 					? [{ name: policy.imagePullSecretName }]
 					: [],
 			) ||
-			!acceptsAgentWorkloadPlacementV1(
+			!acceptsAdoptedAgentWorkloadPlacementV1(
 				policy.agentWorkloadPlacement,
+				record,
 				pod,
 				false,
 			) ||
@@ -501,15 +514,19 @@ export function createKubernetesPodValidationV1(dependencies: {
 	function hasDriftedPodSpec(
 		value: AgentWorkloadDesiredV1,
 		specInput: V1PodSpec | undefined,
-		expectedIdentity?: {
-			readonly hostname: string;
-			readonly subdomain: string;
-		},
+		expectedIdentity:
+			| {
+					readonly hostname: string;
+					readonly subdomain: string;
+			  }
+			| undefined,
+		record: string | undefined,
 	) {
 		const projectedPod = dependencies.connectionConsumerControl
 			? runtimeConnectionConsumerControlPodV1({ spec: specInput }).spec
 			: specInput;
-		if (hasUnsafePodSpec(value, projectedPod, expectedIdentity)) return true;
+		if (hasUnsafePodSpec(value, projectedPod, expectedIdentity, record))
+			return true;
 		const pod = withoutVerifiedWorkspaceSnapshotProjectionV1(
 			withoutSkillDelivery(value, projectedPod),
 			workspaceSnapshotWorkloadProjectionV1(
@@ -668,6 +685,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 		);
 	}
 	return {
+		placementRecord,
 		hasSafePodMetadata,
 		hasUnsafePodSpec,
 		hasDriftedImmutableStatefulSetSpec,

@@ -115,6 +115,15 @@ scheduling:
         operator: Equal
         value: alibabacloud
         effect: NoSchedule
+# Deployment-authoritative ECI placement for Agent-level Pods (Engineering Spec
+# §10.1, ADR-0049). When enabled the Worker receives it as
+# AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT and injects it at each Agent's next formal
+# lifecycle; publishing it does not rebuild running Hosts. Keep
+# retain-until-lifecycle while pre-placement Hosts remain, then switch to reject.
+agentWorkloadScheduling:
+  enabled: false
+  architecture: amd64
+  legacyUnplaced: retain-until-lifecycle
 sessionRuntimeScheduling:
   enabled: false
   architecture: amd64

@@ -2774,7 +2774,15 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 			client: fake.client,
 			policy: placedPolicy("retain-until-lifecycle"),
 		});
-		await expect(placed.apply(value)).rejects.toThrow(
+		// A formal lifecycle (new revision) cannot adopt an unfinished legacy Job.
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-1",
+			workloadRevision: 2,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		await expect(placed.apply(restarted)).rejects.toThrow(
 			"multi-service migration placement drifted",
 		);
 		expect(
@@ -2785,9 +2793,77 @@ describe("multi-service deployment-authoritative placement (#4351)", () => {
 		).toBe("drifted");
 		// A finished legacy Job has no running Pod; it is history, not drift.
 		job.status = { succeeded: 1 };
-		const identity = await placed.apply(value);
+		const identity = await placed.apply(restarted);
 		markWorkloadsReady(fake);
-		expect(await placed.observe(value, identity)).toBe("healthy");
+		expect(await placed.observe(restarted, identity)).toBe("healthy");
+	});
+
+	it("an architecture change writes nothing until one Agent lifecycle adopts it (MUST-C)", async () => {
+		const fake = fakeClient();
+		const value = migrationDesired();
+		const amd64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("reject"),
+		});
+		const identity = await applyReady(amd64, fake, value);
+		const replaced: string[] = [];
+		const replace = fake.client.replace.bind(fake.client);
+		fake.client.replace = async (object) => {
+			replaced.push(`${object.kind}/${object.metadata?.name}`);
+			return replace(object);
+		};
+		const arm64 = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...placedPolicy("reject"),
+				agentWorkloadPlacement: {
+					architecture: "arm64",
+					legacyUnplaced: "reject",
+				},
+			} as MultiServiceRuntimePolicyV1,
+		});
+		expect(await arm64.observe(value, identity)).toBe("healthy");
+		// Re-applying the same intent (same revision) is not a lifecycle either.
+		await arm64.apply(value);
+		expect(
+			replaced.filter(
+				(entry) =>
+					entry.startsWith("Deployment/") || entry.startsWith("StatefulSet/"),
+			),
+		).toEqual([]);
+		for (const entry of podTemplates(fake))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("amd64");
+		const restarted = validateAgentWorkloadDesiredV1({
+			...value,
+			requestId: "restart-arm64",
+			workloadRevision: 2,
+			fence: 2,
+		});
+		if (!isMultiService(restarted)) throw new Error("invalid fixture");
+		await arm64.apply(restarted);
+		markWorkloadsReady(fake);
+		for (const entry of podTemplates(fake).filter((x) => x.kind !== "Job"))
+			expect(entry.spec?.nodeSelector?.["kubernetes.io/arch"]).toBe("arm64");
+		expect(await arm64.observe(restarted, await arm64.apply(restarted))).toBe(
+			"healthy",
+		);
+	});
+
+	it("treats member ECI fields without the Worker record as drift", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: placedPolicy("retain-until-lifecycle"),
+		});
+		const value = migrationDesired();
+		const identity = await applyReady(operations, fake, value);
+		const workload = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Deployment",
+		) as V1Deployment;
+		delete workload.metadata?.annotations?.[
+			"agent-infra.agora.io/agent-workload-placement"
+		];
+		expect(await operations.observe(value, identity)).toBe("drifted");
 	});
 
 	it("rejects an invalid deployment placement before any client call", () => {

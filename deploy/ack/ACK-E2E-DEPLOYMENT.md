@@ -52,8 +52,8 @@ Skill 与 Session 工作区的存储分别验证，不将 RWO 云盘视为跨节
 
 `scheduling.worker` 只决定 `platform-worker` 调度服务本身的位置，不决定它创建的 Session
 Runtime Pod。常驻平台服务可以使用同一集群的普通节点，按会话创建的执行 Pod 使用 ECI。
-Agent 级 Workload（单服务 Host、多服务 Deployment/StatefulSet 与迁移 Job）由 Worker 按部署
-策略 `agentWorkloadPlacement` 注入同一组 ECI 字段，见
+Agent 级 Workload（单服务 Host、多服务 Deployment/StatefulSet 与迁移 Job）由 Worker 按 values
+`agentWorkloadScheduling`（渲染为 Worker env）注入同一组 ECI 字段，见
 [Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)；本 ACK 的 ECS 节点
 不执行 NetworkPolicy，这些 Pod 不落 ECS。现存 Agent 逐个经正式 lifecycle 采用，发布 chart 或
 Worker 配置本身不重建它们。`preflight.sh` 的执行证据门禁见

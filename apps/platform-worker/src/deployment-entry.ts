@@ -20,6 +20,10 @@ import {
 	readConnectionSystemAccessEnvironmentConfigurationV1,
 } from "@agent-infra/platform-store";
 import {
+	agentWorkloadPlacementEnvironmentV1,
+	agentWorkloadPlacementFromEnvironmentV1,
+} from "./agent-workload-placement.js";
+import {
 	sessionSandboxResourceCostsV1,
 	validateSessionExecutorResourceCostsV1,
 } from "./codex-session-executor.js";
@@ -525,12 +529,26 @@ if (
 	retainedPvcIdentityWrites !== "true"
 )
 	throw new Error("WORKER_RETAINED_PVC_IDENTITY_CONFIGURATION_INVALID");
+// #4351 (Spec §10.1): the chart-rendered env is the only placement source, so the
+// deployment preflight binds exactly what this Worker injects.
+let agentWorkloadPlacement: ReturnType<
+	typeof agentWorkloadPlacementFromEnvironmentV1
+>;
+try {
+	agentWorkloadPlacement = agentWorkloadPlacementFromEnvironmentV1(
+		process.env[agentWorkloadPlacementEnvironmentV1],
+		Object.hasOwn(configuredWorkloadInput.policy, "agentWorkloadPlacement"),
+	);
+} catch {
+	throw new Error("WORKER_AGENT_WORKLOAD_PLACEMENT_INVALID");
+}
 const workloadInput = {
 	...configuredWorkloadInput,
 	certificateReconciliationWrites: certificateReconciliationWrites === "true",
 	retainedPvcIdentityWrites: retainedPvcIdentityWrites === "true",
 	policy: {
 		...configuredWorkloadInput.policy,
+		...(agentWorkloadPlacement ? { agentWorkloadPlacement } : {}),
 		...(process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE &&
 		configuredWorkloadInput.policy.skillDeliveryImage === undefined
 			? { skillDeliveryImage: process.env.PLATFORM_WORKER_SKILL_INIT_IMAGE }

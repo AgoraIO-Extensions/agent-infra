@@ -31,9 +31,12 @@ import type {
 } from "@kubernetes/client-node";
 import {
 	type AgentWorkloadPlacementV1,
-	acceptsAgentWorkloadPlacementV1,
+	acceptsAdoptedAgentWorkloadPlacementV1,
+	agentWorkloadPlacementAnnotationV1,
+	agentWorkloadPlacementRecordV1,
 	agentWorkloadPlacementShapeV1,
 	agentWorkloadPodPlacementV1,
+	effectiveAgentWorkloadPlacementV1,
 } from "./agent-workload-placement.js";
 import {
 	type WorkerKubernetesClientV1,
@@ -471,6 +474,17 @@ function metadata(value: MultiServiceDesired, name: string, service?: string) {
 	};
 }
 
+/** Records the placement this apply injected; observation accepts exactly that (Spec §10.1). */
+function withPlacementRecord(
+	meta: ReturnType<typeof metadata>,
+	policy: MultiServiceRuntimePolicyV1,
+): ReturnType<typeof metadata> {
+	const record = agentWorkloadPlacementRecordV1(policy.agentWorkloadPlacement);
+	return Object.keys(record).length
+		? { ...meta, annotations: { ...meta.annotations, ...record } }
+		: meta;
+}
+
 function owned(resource: KubernetesObject, value: MultiServiceDesired) {
 	return (
 		resource.metadata?.labels?.[ownerLabel] ===
@@ -654,7 +668,10 @@ function deployment(
 	const result: V1Deployment = {
 		apiVersion: "apps/v1",
 		kind: "Deployment",
-		metadata: metadata(value, name, resource.metadata.name),
+		metadata: withPlacementRecord(
+			metadata(value, name, resource.metadata.name),
+			policy,
+		),
 		spec: {
 			replicas: value.replicas,
 			selector: { matchLabels: selector },
@@ -761,7 +778,10 @@ function statefulSet(
 	const result: V1StatefulSet = {
 		apiVersion: "apps/v1",
 		kind: "StatefulSet",
-		metadata: metadata(value, name, resource.metadata.name),
+		metadata: withPlacementRecord(
+			metadata(value, name, resource.metadata.name),
+			policy,
+		),
 		spec: {
 			replicas: value.replicas,
 			serviceName,
@@ -891,7 +911,10 @@ function migrationJob(
 	const result: V1Job = {
 		apiVersion: "batch/v1",
 		kind: "Job",
-		metadata: metadata(value, migrationJobName(value), "migration"),
+		metadata: withPlacementRecord(
+			metadata(value, migrationJobName(value), "migration"),
+			policy,
+		),
 		spec: {
 			backoffLimit: resource.spec.backoffLimit,
 			activeDeadlineSeconds: resource.spec.activeDeadlineSeconds,
@@ -1207,9 +1230,39 @@ export function createMultiServiceRuntimeOperations(options: {
 	const hasExactPlacement = (spec: V1PodSpec | undefined) =>
 		agentWorkloadPlacementShapeV1(placement, spec, false) ===
 		(placement ? "placed" : "unplaced");
-	/** Observation keeps a retained pre-placement template until its next lifecycle apply. */
-	const acceptsPlacement = (spec: V1PodSpec | undefined) =>
-		acceptsAgentWorkloadPlacementV1(placement, spec, false);
+	/**
+	 * Spec §10.1: re-applying the same revision keeps each controller's accepted
+	 * recorded placement; only a new revision (formal lifecycle) adopts a change.
+	 */
+	const adoptingPolicy = async (
+		kind: "Deployment" | "StatefulSet" | "Job",
+		name: string,
+		value: MultiServiceDesired,
+	): Promise<MultiServiceRuntimePolicyV1> => {
+		const current = await client.read<V1Deployment | V1StatefulSet | V1Job>(
+			kind as never,
+			name,
+		);
+		const effective = effectiveAgentWorkloadPlacementV1(
+			placement,
+			current && owned(current, value) ? current : null,
+			current?.metadata?.labels?.[revisionLabel] ===
+				String(value.workloadRevision),
+		);
+		return effective === placement
+			? options.policy
+			: { ...options.policy, agentWorkloadPlacement: effective };
+	};
+	/** Observation accepts the controller's recorded placement until its next lifecycle apply. */
+	const acceptsPlacement = (
+		resource: V1Deployment | V1StatefulSet | V1Job | undefined,
+	) =>
+		acceptsAdoptedAgentWorkloadPlacementV1(
+			placement,
+			resource?.metadata?.annotations?.[agentWorkloadPlacementAnnotationV1],
+			resource?.spec?.template.spec,
+			false,
+		);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
 	async function observeSnapshotPods(
@@ -1464,11 +1517,18 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (object.kind === "Job") {
 			if (!matchesImagePullSecrets((current as V1Job).spec?.template.spec))
 				throw new Error("multi-service migration pull policy drifted");
-			// A Job template is immutable: an unfinished Job must already carry the
-			// exact deployment placement; a finished one has no running Pod left.
+			// A Job template is immutable. An unfinished Job is kept for the same
+			// revision only with its accepted recorded placement; a new revision
+			// (formal lifecycle) needs the exact deployment placement. A finished
+			// Job has no running Pod left.
+			const sameRevision =
+				current.metadata?.labels?.[revisionLabel] ===
+				String(value.workloadRevision);
 			if (
 				!jobSucceeded(current as V1Job) &&
-				!hasExactPlacement((current as V1Job).spec?.template.spec)
+				!(sameRevision
+					? acceptsPlacement(current as V1Job)
+					: hasExactPlacement((current as V1Job).spec?.template.spec))
 			)
 				throw new Error("multi-service migration placement drifted");
 			return current;
@@ -1828,7 +1888,12 @@ export function createMultiServiceRuntimeOperations(options: {
 					ownership,
 				);
 				const job = await put(
-					migrationJob(value, migration, resources, options.policy),
+					migrationJob(
+						value,
+						migration,
+						resources,
+						await adoptingPolicy("Job", migrationJobName(value), value),
+					),
 					value,
 					ownership,
 				);
@@ -1857,7 +1922,16 @@ export function createMultiServiceRuntimeOperations(options: {
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
 					await put(
-						deployment(value, resource, options.policy, resources),
+						deployment(
+							value,
+							resource,
+							await adoptingPolicy(
+								"Deployment",
+								serviceResourceName(value.agentId, resource.metadata.name),
+								value,
+							),
+							resources,
+						),
 						value,
 						ownership,
 					);
@@ -1875,7 +1949,11 @@ export function createMultiServiceRuntimeOperations(options: {
 						statefulSet(
 							value,
 							resource,
-							options.policy,
+							await adoptingPolicy(
+								"StatefulSet",
+								serviceResourceName(value.agentId, resource.metadata.name),
+								value,
+							),
 							resources,
 							persistentVolumeClaim(
 								value,
@@ -1996,7 +2074,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				if (
 					!owned(job, value) ||
 					!matchesImagePullSecrets(job.spec?.template.spec) ||
-					(!jobSucceeded(job) && !acceptsPlacement(job.spec?.template.spec))
+					(!jobSucceeded(job) && !acceptsPlacement(job))
 				) {
 					await emitHealthDiagnostic(value, "workload_drifted");
 					return "drifted" as const;
@@ -2045,7 +2123,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					!current ||
 					!owned(current, value) ||
 					!matchesImagePullSecrets(current.spec?.template.spec) ||
-					!acceptsPlacement(current.spec?.template.spec) ||
+					!acceptsPlacement(current) ||
 					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
 				)
 					return "drifted" as const;

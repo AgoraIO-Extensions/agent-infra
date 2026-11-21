@@ -285,7 +285,7 @@ test("preflight resolves renamed dependencies using the server version and never
 		kubeSystemNamespaceUid: clusterUid,
 	});
 	Object.assign(snapshots, enforcement.responses);
-	const { sessionEci } = enforcement;
+	const { rendered: enforcementObjects } = enforcement;
 	await writeFile(
 		join(bin, "kubectl"),
 		`#!/usr/bin/env node
@@ -307,7 +307,7 @@ process.exit(1);
 const args=process.argv.slice(2);
 if(args[0]==="lint")process.exit(0);
 if(args[0]==="template" && args[args.indexOf("--kube-version")+1]==="v1.36.1"){
- process.stdout.write(${JSON.stringify(`${f.rendered}\n---\n${sessionEci}\n`)});process.exit(0);
+ process.stdout.write(${JSON.stringify(`${f.rendered}\n---\n${enforcementObjects}\n`)});process.exit(0);
 }
 process.exit(1);
 `,
