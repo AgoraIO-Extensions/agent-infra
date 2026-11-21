@@ -536,6 +536,21 @@ export function assemblePlatformApi(
 	})();
 	const installationCallbackConfiguration =
 		installationStore?.callbackConfiguration;
+	// §13.5.1 exception items 4 and 6: the operations entry exists only with the
+	// same approved exception that opens the manual route; production deployment
+	// drops that approval while the exception stays dormant (#4199 C2).
+	const principalPinStore = (() => {
+		const policy = input.connectionInstallation?.manualInstallation;
+		if (!policy) return undefined;
+		try {
+			return new PostgresConnectionPrincipalPinAdministrationV1({
+				databaseUrl: input.databaseUrl,
+				policy,
+			});
+		} catch {
+			return undefined;
+		}
+	})();
 	const installationCallbackTarget =
 		installationCallbackConfiguration ??
 		(installationStore && input.connectionInstallation?.manualInstallation
@@ -1552,6 +1567,22 @@ export function assemblePlatformApi(
 			resolveTimedOutUnknownStop: (request) =>
 				taskAuthorization.resolveTimedOutUnknownStop(request),
 		},
+		...(principalPinStore
+			? {
+					connectionPrincipalPins: {
+						identity: input.identity,
+						pins: createConnectionPrincipalPinAdministrationV1({
+							store: principalPinStore,
+							resolveCurrentOperator: (userId) =>
+								resolveCurrentMaterialGrantActor(
+									input.identity,
+									userId,
+									randomUUID(),
+								),
+						}),
+					},
+				}
+			: {}),
 		...(agentApiCreation
 			? {
 					agentApiCreation: {
@@ -1911,6 +1942,7 @@ export function assemblePlatformApi(
 		...(evaluationTaskAuthority ? [evaluationTaskAuthority] : []),
 		...(input.evaluation?.close ? [{ close: input.evaluation.close }] : []),
 		...(installationStore ? [installationStore] : []),
+		...(principalPinStore ? [principalPinStore] : []),
 		...(browserCommandStore ? [browserCommandStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(connectionAssociationStore ? [connectionAssociationStore] : []),
@@ -1950,9 +1982,13 @@ export function assemblePlatformApi(
 }
 
 import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
-import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
+import {
+	createConnectionInstallationAuthorizationV1,
+	createConnectionPrincipalPinAdministrationV1,
+} from "@agent-infra/platform-core";
 import {
 	PostgresConnectionInstallationAuthorizationTransactionV1,
+	PostgresConnectionPrincipalPinAdministrationV1,
 	PostgresOperationsResourceStoreV2,
 } from "@agent-infra/platform-store";
 import { createOperationsQueryV2 } from "./operations-query.js";

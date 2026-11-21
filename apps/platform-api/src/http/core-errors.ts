@@ -5,6 +5,7 @@ import {
 	ApplicationMaterialGrantErrorV1,
 	ApplicationRegistrationErrorV1,
 	ApplicationRevisionError,
+	ConnectionPrincipalPinAdministrationErrorV1,
 	FileLimitDeclarationErrorV1,
 	PersonalApiCredentialErrorV1,
 	PersonalRelayKeyErrorV1,
@@ -78,6 +79,17 @@ export function mapCoreError(
 			forbidden: "AUTHORIZATION_REVOKED",
 			not_found: "RESOURCE_UNAVAILABLE",
 			idempotency_conflict: "CONFLICT",
+			unavailable: "DEPENDENCY_UNAVAILABLE",
+		} as const;
+		return new HttpProtocolError(codes[error.code], traceId);
+	}
+	if (error instanceof ConnectionPrincipalPinAdministrationErrorV1) {
+		const codes = {
+			invalid_input: "INVALID_REQUEST",
+			authentication_required: "AUTHENTICATION_REQUIRED",
+			forbidden: "FORBIDDEN",
+			not_found: "RESOURCE_UNAVAILABLE",
+			conflict: "CONFLICT",
 			unavailable: "DEPENDENCY_UNAVAILABLE",
 		} as const;
 		return new HttpProtocolError(codes[error.code], traceId);
