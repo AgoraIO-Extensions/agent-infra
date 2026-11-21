@@ -12856,17 +12856,45 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const root = workspace
 			? this.workspaceReadRoot(initial.nativeSessionRef)
 			: undefined;
-		const declaredThread =
-			!workspace && initial.session.dynamicConnection !== undefined;
-		const dynamic = declaredThread
-			? await this.dynamicMcpClientFor(
-					initial.nativeSessionRef,
-					initial.execution.executionId,
-					signal,
-				)
-			: undefined;
+		const declaredThread = workspace
+			? undefined
+			: initial.session.dynamicConnection;
+		// §13.5.6: check the alias against the Thread's declaration before the
+		// reader runs, so a forged call causes no reader or Connection traffic.
+		// Only a current contract equal to that declaration narrows the aliases;
+		// a revised or withdrawn contract keeps the shape check and answers the
+		// fixed result without reading the installation.
+		let declaredRefusal: "unavailable" | undefined;
+		if (declaredThread) {
+			const current = this.dynamicConnectionOptions?.declared;
+			const declared =
+				current &&
+				isDeepStrictEqual(declaredThread.contract, current.contract) &&
+				declaredThread.toolsFingerprint ===
+					codexDeclaredConnectionFingerprint(current)
+					? current
+					: undefined;
+			if (
+				!/^mcp_[a-f0-9]{32}$/.test(input.tool) ||
+				(declared &&
+					!codexDeclaredConnectionDefinitions(declared)[0]?.tools.some(
+						(tool) => tool.name === input.tool,
+					))
+			)
+				unavailable();
+			if (!declared) declaredRefusal = "unavailable";
+		}
+		const dynamic =
+			declaredThread && !declaredRefusal
+				? await this.dynamicMcpClientFor(
+						initial.nativeSessionRef,
+						initial.execution.executionId,
+						signal,
+					)
+				: undefined;
 		const refusal =
-			dynamic && "refusal" in dynamic ? dynamic.refusal : undefined;
+			declaredRefusal ??
+			(dynamic && "refusal" in dynamic ? dynamic.refusal : undefined);
 		const cached =
 			dynamic && "client" in dynamic
 				? {
@@ -12890,32 +12918,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				: undefined;
 		if (workspace) {
 			if (input.tool !== "read_text_file") protocolInvalid();
-		} else if (refusal) {
-			// §13.5.6: the Thread keeps the tools it was declared with. Only a
-			// current contract equal to that declaration narrows the aliases; a
-			// revised or withdrawn contract still answers the fixed result.
-			const current = this.dynamicConnectionOptions?.declared;
-			const thread = initial.session.dynamicConnection;
-			const declared =
-				current &&
-				thread &&
-				isDeepStrictEqual(thread.contract, current.contract) &&
-				thread.toolsFingerprint === codexDeclaredConnectionFingerprint(current)
-					? current
-					: undefined;
-			if (
-				!/^mcp_[a-f0-9]{32}$/.test(input.tool) ||
-				(declared &&
-					!codexDeclaredConnectionDefinitions(declared)[0]?.tools.some(
-						(tool) => tool.name === input.tool,
-					))
-			)
-				unavailable();
 		} else if (
-			!cached ||
-			!toolArguments ||
-			cached.executionId !== initial.execution.executionId ||
-			!cached.client.validateArguments(input.tool, toolArguments)
+			// A refused call's alias was checked against the declaration above.
+			!refusal &&
+			(!cached ||
+				!toolArguments ||
+				cached.executionId !== initial.execution.executionId ||
+				!cached.client.validateArguments(input.tool, toolArguments))
 		)
 			unavailable();
 		const client = workspace || refusal ? undefined : cached?.client;
