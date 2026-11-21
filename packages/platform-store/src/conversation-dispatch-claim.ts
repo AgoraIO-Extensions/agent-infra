@@ -20,6 +20,7 @@ import {
 import { originalOperationBinding } from "./conversation-dispatch-operation-binding.js";
 import {
 	bindingMatches,
+	cancelNeverSentNativeForStoppedAgent,
 	cancelStoppedTurn,
 	failUnsentTurn,
 	isolationProjection,
@@ -201,6 +202,27 @@ export async function claimWork(
 	) {
 		return { outcome: "stale" };
 	}
+	if (
+		!isolation &&
+		stop?.status !== "submitted" &&
+		(await cancelNeverSentNativeForStoppedAgent(
+			transaction,
+			outbox,
+			conversation,
+			execution,
+			payload,
+		))
+	) {
+		await recordTaskStatus(
+			transaction,
+			{ outbox, conversation, execution },
+			"cancelled",
+			input.workerId,
+			"TASK_CANCELLED",
+		);
+		return { outcome: "succeeded" };
+	}
+
 	if (
 		isBrowserHandoff(selectedOperation) &&
 		execution.status !== "submitted" &&
