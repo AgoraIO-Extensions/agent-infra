@@ -1594,6 +1594,38 @@ export class PostgresConversationDispatchStoreV1
 				if (accepted.length !== 1) throw new StaleDispatchLease();
 			}
 			await applyTransition(transaction, state, input.claim, input.transition);
+			if (
+				isTurn(input.claim.operation) &&
+				["completed", "failed", "cancelled"].includes(
+					input.transition.executionStatus ?? "",
+				)
+			) {
+				// Only this positive Runtime response transaction can attest its source.
+				// Legacy enum-only rows never acquire a fabricated source on re-claim.
+				const proofId = `conversation.runtime.terminal:${input.claim.executionId}:${input.claim.executionDeliveryFence}`;
+				const proof = {
+					schemaVersion: 1,
+					hostSessionRef: input.hostSessionRef,
+					status: input.transition.executionStatus,
+					generation: input.claim.sessionGeneration,
+					executionFence: input.claim.executionDeliveryFence,
+					requestDigest: state.execution.original_operation_digest,
+				};
+				if (
+					state.execution.original_operation_digest &&
+					(input.originalOperationAccepted ||
+						state.execution.accepted_original_host_session_ref ===
+							input.hostSessionRef)
+				) {
+					await transaction`insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
+					values (${proofId},${input.claim.traceId},'system',${input.claim.leaseOwner},'conversation.runtime.terminal.observed','execution',${input.claim.executionId},'succeeded',${input.claim.requestId},${input.claim.agentId},${transaction.json(proof)}) on conflict(id) do nothing`;
+					const [saved] = await transaction<
+						{ details: unknown }[]
+					>`select details from platform.audit_events where id=${proofId} and action='conversation.runtime.terminal.observed' and target_id=${input.claim.executionId} and agent_id=${input.claim.agentId}`;
+					if (!saved || !isDeepStrictEqual(saved.details, proof))
+						throw new StaleDispatchLease();
+				}
+			}
 			const rows = await transaction<{ id: string }[]>`
 				update platform.conversations
 				set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp()
@@ -1672,6 +1704,17 @@ export class PostgresConversationDispatchStoreV1
 					return { status: "ineligible" as const, remainingMs: 0 };
 				const original = await originalOperationBinding(tx, state, claim);
 				if (!original || !original.originalOperationDigest) return null;
+				const [terminalProof] = await tx<
+					{ ref: string | null }[]
+				>`select coalesce(
+					(select id from platform.audit_events where id=${`conversation.runtime.terminal:${claim.executionId}:${claim.executionDeliveryFence}`}
+						and action='conversation.runtime.terminal.observed' and target_type='execution' and target_id=${claim.executionId} and agent_id=${claim.agentId}
+						and details->>'hostSessionRef'=${state.conversation.host_session_ref} and details->>'requestDigest'=${original.originalOperationDigest}
+						and details->>'generation'=${String(claim.sessionGeneration)} and details->>'executionFence'=${String(claim.executionDeliveryFence)} and details->>'status'=${state.execution.status}),
+					(select event_id from platform.conversation_events where execution_id=${claim.executionId} and conversation_id=${claim.conversationId} and source='runtime'
+						and event_type='execution.status' and event_payload->>'status'=${state.execution.status} order by sequence limit 1)) as ref`;
+				if (!terminalProof?.ref)
+					return { status: "ineligible" as const, remainingMs: 0 };
 				const [allocation] = await tx<
 					{ pvc: unknown }[]
 				>`select (select jsonb_build_object('name',r->>'name','namespace',r->>'namespace','uid',r->>'uid') from jsonb_array_elements(resource_observation->'resources') r where r->>'kind'='PersistentVolumeClaim' limit 1) as pvc from platform.session_sandbox_allocations where sandbox_id=${claim.sandbox?.sandboxId ?? null} and conversation_id=${claim.conversationId}`;
@@ -1689,6 +1732,7 @@ export class PostgresConversationDispatchStoreV1
 					hostSessionRef: state.conversation.host_session_ref,
 					requestDigest: original.originalOperationDigest,
 					businessStatus: state.execution.status,
+					terminalSourceRef: terminalProof.ref,
 					pvc: allocation?.pvc ?? null,
 				};
 				const [last] = await tx<

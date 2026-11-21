@@ -12912,6 +12912,31 @@ describe("terminal original Turn control authority (#4266)", () => {
 		}
 	});
 
+	it("Files4266archive refuses enum-only legacy terminal rows without original Runtime source proof", async () => {
+		const work = await terminalWork();
+		await client`delete from platform.audit_events where id=${`conversation.runtime.terminal:${work.executionId}:1`}`;
+		const current = await claim(work.itemId);
+		try {
+			if (current.decision.outcome !== "claimed")
+				throw new Error("Expected original claim");
+			expect(
+				await current.store.archiveOriginalTurn({
+					claim: current.decision.claim,
+					budgetMs: 1,
+				}),
+			).toMatchObject({ status: "ineligible" });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "processing",
+				execution_status: "completed",
+			});
+			expect(
+				await client`select id from platform.audit_events where action='conversation.archive.observed' and target_id=${work.executionId}`,
+			).toHaveLength(0);
+		} finally {
+			await current.store.close();
+		}
+	});
+
 	it("Files4266archive rolls back failure disposition when required audit cannot commit", async () => {
 		const work = await terminalWork();
 		const store = open();
