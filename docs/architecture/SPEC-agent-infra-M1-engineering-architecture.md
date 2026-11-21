@@ -3347,13 +3347,17 @@ refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确
 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)：使用者在某个
 会话中完成本人授权并写入许可后，该会话后续的 Connection 调用即可使用，不要求新开会话。工具在
 Thread 开始时就已声明，此后只有可用性随许可变化，所以不热改已有 Thread 工具快照。取舍见
-[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。
+[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段写法针对 Codex
+Driver（`thread/start`、`item/tool/call`），M1 Connection Pilot 只用 Codex 标准模板；其他 Driver
+未满足同等的声明与门禁时保持 `connection:false`。
 
 - **工具声明。** 部署批准的动态发布合同另含每个工具在 Thread 开始时声明的完整定义（名称、说明、
   输入 schema），与合同的 `tools` 一一对应。Worker 只为当前已有已核实 Owner 手工关联的 Agent，
   把该合同作为非秘密装配事实交给会话的 Host；Host 只依据它在 `thread/start` 声明这些工具，不从
   请求、模型或安装 metadata 取得。Thread 开始时不满足条件的会话（包括关联完成或部署启用之前就已
-  开始的会话）不声明，之后也不补加，使用者须新开会话。
+  开始的会话）不声明，之后也不补加，使用者须新开会话。已声明工具的 Thread 之后即使解除关联、到达
+  `notAfter` 或合同撤回，Host 重新装配或会话恢复时也保留声明：调用一律得到下述固定的需要授权或
+  暂不可用结果，会话其余能力照常可用，不因此整体不可用。
 - **reader 接缝。** Host 为动态手工安装实现 Driver 既有的 per-Execution `resolveInput`。它按当前
   Execution 的原执行绑定，定位同一用户、Agent 和本会话的固定安装；先做许可读取用途回读，再核对本地
   publication 已提交（发布锁已解除，sidecar 与原事务记录一致，`commitDigest` 复算一致）并读取材料，
