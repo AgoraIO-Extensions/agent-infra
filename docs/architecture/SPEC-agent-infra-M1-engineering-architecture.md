@@ -736,6 +736,63 @@ Host 将原请求取消、固定 deadline、本机生命周期及当前确认失
 
 具体 Host/Driver 生命周期见 [Runtime HLD §5.2](HLD-agent-runtime-M1.md#52-调用生命周期与兼容)。
 
+#### 9.3.2 原调用准入核验授权
+
+安全验收需要证明旧 generation 或旧 fence 的原调用已被拒绝时，使用独立版本化用途
+`original_admission_check`。它只核对一条已获批的原受理引用在当前持久状态下是否仍可准入，
+不发送原业务请求，不 dispatch，不调用 Driver、模型、工具或 Connection。它不授予业务、控制、
+恢复、readiness 或 `native_metadata_read` 权限，这些许可也不能转换成本用途。
+`authorizeExternalAction`、V3 status、原绑定读取和事件 ACK 都可能绑定、恢复或推进状态，
+不能挪作本用途；验收方也不能取得或重放旧 Grant、Key 或 Token。
+
+- **样本。** 原引用必须来自原真实主体经正式入口受理、原持久记录可核实已被准入的合成
+  Execution。验收前固定样本与窗口，失败后不换样本。旧 generation 只来自
+  [Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复) 的真实恢复失败及已确认的 generation
+  tombstone；普通重启不提升 generation。不能修改 DB generation、手签 Grant、改写期限或把网络
+  超时当作原生拒绝来制造样本。原授权已到期时只能得到 `expired`，不能续期或改用新授权。
+  需要专门产生样本的合成故障窗口由唯一生产 writer 另行批准，本节不授权故障注入。没有合法
+  样本时，该项验收保持阻塞。
+- **范围。** 调用方只提交原 Conversation/Execution 路径、其有权读取的原操作引用和当期验收场景；
+  其余绑定由 API/Core 从持久记录解析：主体与用途、Agent、Conversation、原 Execution、
+  operation/attempt、`authorizationRecordId`/`authorizationRevision`、原 `sessionGeneration`、
+  Execution deliveryFence、Sandbox、实际 Pod UID 和原 Host 实例引用。调用方不能选择 URL、Pod、
+  native ref、代次、fence 或 RPC。读取身份沿 [§9.3.1](#931-原生元数据读取授权) 的原任务读取政策，
+  或使用另获批的精确运维窗口；Owner、system_admin 与共享服务身份不替代原主体。跨主体、
+  跨 Agent 或引用替换统一返回不可见，不泄漏对象是否存在。
+- **证明与投递。** API/Core 确认读取权与原范围后，在一个事务中保存核验请求与 challenge；这是本
+  用途唯一新增的持久写，不触及业务记录。Worker 按既有 durable lease 认领该请求，从已提交的
+  Platform 记录回读当前 generation 与 resource fence，沿受认证内部链只向持久映射的原 Host 投递
+  证明，并把结果写成证据。本用途不新增 API↔Worker 同步 RPC（[§4.1](#41-部署单元)），调用方按
+  §18.5.1 读取结果。证明绑定本用途、可信 issuer、专用 RuntimeHost 核验
+  audience、keyVersion、唯一 checkId、challenge、issuedAt/expiresAt、上述原范围与当前平台修订，
+  不含 Grant、Key、Token 或正文。期限不超过 30 秒，也不晚于可信上游 deadline；它不覆盖或
+  延长原业务授权期限。复用既有信任根时按用途域分隔。Host 不直连 Platform DB，也不自行推断
+  Platform 已提升代次。
+- **判定。** Host 校验服务身份、签名与全部绑定后，只读核对原持久记录、已提交的 barrier、
+  原操作最高 fence 和原调用准入谓词。该谓词与业务路径共用同一纯检查实现，不维护第二份
+  授权算法；不调用 prepare、resolve、bind、renew、recover、Driver execute、模型或工具，需要原生
+  绑定时只读已保存的原绑定。响应包含：
+  - `decision = admissible | denied | unproven`；
+  - `reason`，限于 `stale_generation | stale_fence | expired | revoked | scope_mismatch |
+    original_binding_unavailable | unknown`；
+  - 固定为原调用准入谓词的 `checkedSurface`，原/当前 generation 与 fence 的安全投影，
+    `checkedAt` 与 `clockId`；
+  - 来自无 dispatch 依赖接口的 `dispatchAttempted: false`，不采信请求方或模型自报。
+
+  只有拒绝点确实是原代次 barrier、当前 generation 或 fence 时才记 `stale_generation` 或
+  `stale_fence`；签名错误、过期、目标不存在、服务凭证错误或网络失败都不算旧代次拒绝。
+  当前仍合法的对照引用必须通过同一核验。核对期间原事实变化时重新核对或返回 `unproven`。
+  原 Host 已退休且没有可受信的原状态时只能返回 `unproven`（`original_binding_unavailable`），
+  不能转送当前 Pod 冒充旧 Host 拒绝。
+- **只读。** 除上述核验请求、challenge 与速率状态的有界记录外，核验不改变业务授权、Session、
+  Execution、Key、barrier、ACK、游标或工具状态，不续期业务租约。重复 challenge 拒绝或只返回原结果。
+  原控制续读、Stop、journal 与 ACK 查询照常工作，不被核验阻断。
+
+结果按 [§18.5](#185-runtime-安全验收证据) 保存为 `original_admission_check` 证据。实际 wire、
+公开入口与字段编码由实现 primary 在本节约束内固定。实现时序见
+[Runtime HLD §8.5.6](HLD-agent-runtime-M1.md#856-安全验收证据的实现时序)，取舍见
+[ADR-0050](../adr/0050-export-fixed-safety-evidence-without-native-content-or-replay.md)。
+
 ## 10. Agent Workload 与调谐
 
 ### 10.1 Workload 形态
@@ -1761,7 +1818,8 @@ allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿�
   当前授权执行，不另记工具事实。两者的规则见 §15.4.4。原生工具对工作区内已物化附件和待交付文件的
   读写仍是 Sandbox 内本地操作。
 - **不变。** 跨 Conversation 与跨 Session 隔离及其负向验收、§10.8 的模型错误脱敏、Connection 授权，
-  以及 §10.11 对私有 lane 的要求（只用于平台中介调用）均保持不变。
+  以及 §10.11 对私有 lane 的要求（只用于平台中介调用）均保持不变。安全验收的原生隔离观察只在
+  [§18.5.2](#1852-原生隔离观察) 的获批合成场景中运行，不改变本节准入，也不增加执行前屏障。
 
 ### 10.15 工作区快照（M1.1）
 
@@ -4223,6 +4281,8 @@ Zod 和 Core 语义校验执行，不能以生成产物校验成功替代上述�
 
 调用方的执行详情从平台业务事件读取，按 PRD 展示受理、等待、执行、模型/工具和结果阶段；技术组件、主机与依赖定位属于运维后端。详情与结果内容使用原任务权限。日志、指标和 Trace 仅含必要元数据及脱敏错误，不含任务/Eval 正文、附件、思考、调用证明或凭证。
 
+安全验收专用的受限证据按 [§18.5](#185-runtime-安全验收证据) 独立记录，不进入本节的业务事实或执行详情。
+
 ### 18.2 运行指标与故障
 
 部署提供日志、指标、Trace 的采集/查询后端及告警出口；M1 不绑定具体观测厂商。覆盖：
@@ -4603,6 +4663,159 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
 文档与受控回归完成不等于 Eval 完整交付。正式验收仍须对四个标准模板运行获授权固定集中的回答与
 受控工具样本，以两组模型/配置完成实验、三类评分/复核及新版本再跑，记录准确源码、镜像、实际版本、
 命令、结果和限制。任一 lane 或真实矩阵缺失均保留为未完成，不用反馈功能、Fake 分数或空态页面代签。
+
+### 18.5 Runtime 安全验收证据
+
+本节是 Session 隔离、撤权控制时序与旧代次拒绝三类安全验收证据的唯一工程权威，服务
+[PRD §7.2](../prd/PRD-agent-platform-M1.md#72-多用户隔离) 与验收矩阵“权限与隔离”的现场取证。
+隔离观察与准入核验只在获批的合成验收场景中产生，控制时序诊断对每次正式控制输出固定元数据。
+这些证据只有固定结果，不是业务事实、授权来源或通用原生输出接口，不改变 §10.14 的原生工具准入，
+也不增加执行前屏障。取舍见
+[ADR-0050](../adr/0050-export-fixed-safety-evidence-without-native-content-or-replay.md)，实现时序见
+[Runtime HLD §8.5.6](HLD-agent-runtime-M1.md#856-安全验收证据的实现时序)，验证矩阵见
+[Runtime HLD §11.1](HLD-agent-runtime-M1.md#111-通用-runtime-与-driver-验证)。
+
+#### 18.5.1 共同原则
+
+- **记录族。** 版本化记录族 `RuntimeSafetyEvidenceV1` 分三类：`isolation_observation`
+  （§18.5.2）、`control_observation`（§18.5.3）与 `original_admission_check`（§18.5.4）。三类
+  producer 的权限与语义分别验证，不提供通用的执行脚本、读路径或代理 RPC 接口。
+- **验收场景。** `isolation_observation` 与 `original_admission_check` 只在验收场景中产生。场景目录
+  随 producer 版本固定，每个场景有 `scenarioId`/`scenarioVersion`、允许的资源与动作类别及非秘密
+  合成夹具。部署以默认关闭的配置为一个有界窗口启用场景，并限定可产生证据的测试主体与 Agent，
+  窗口有 `windowRef`。窗口外或范围外的请求只得到 `unsupported`，不产生证据。场景与窗口不授予
+  读取、执行或业务权限。`control_observation` 对每次正式控制输出，不依赖场景（§18.5.3）。
+- **共同绑定。** 绑定全部由服务端解析并在产生时固定，不适用的字段明确缺省：
+  - `evidenceId`、`scenarioId`/`scenarioVersion`、`windowRef`、`challengeRef`；
+  - 原 operation/attempt、原 Execution、Agent、Conversation，原主体与用途的安全引用，适用时的
+    `authorizationRecordId`/`authorizationRevision`、`sessionGeneration` 与 Execution deliveryFence；
+  - Sandbox、实际 Pod UID、resource fence、Host 实例与启动引用、配置与镜像来源；只有独立
+    executor（§11.2.1）才带其 epoch，其他 Runtime 不造 epoch；
+  - `producerKind`/`producerVersion`、固定 outcome/reason、`observedAt`、`clockId` 与本时钟域的
+    单调 sequence。
+
+  native session、Turn、item 及其映射只在 Host 内核对，对外只给受控不透明引用。缺失、中断或
+  采集不完整的结果明确记为 `UNPROVEN`，不补 false 或 0。
+- **读取。** 持久证据（`isolation_observation` 与 `original_admission_check`）由原主体读取时，须具备
+  原任务的当前读取权：Web 沿原用户读取规则，API/应用仅在其当前读取合同已接入时启用。运维读取
+  只在另获批的精确窗口内，由系统管理员经独立的运维只读入口执行，沿 §18.2.3 的系统管理员与部署
+  范围校验，不扩大 §18.2.3 会话任务诊断的权限；`control_observation` 的读取
+  见 §18.5.3。知道 `evidenceId` 不授予读取权；Owner、system_admin 与共享服务身份不替代原主体。
+  每个相关真实 I/O 完成后与结果返回前按 §9.3.1 的完成边界重新确认，不跨 await 缓存允许结论，
+  也不借用 `native_metadata_read` 的证明扩权。
+- **投影。** 原主体的投影只含固定 outcome、reason、场景、时钟和不透明引用；Pod UID、fence、
+  Host 实例等技术绑定只在运维读取中提供，与 §18.1 的执行详情边界一致。证据不含 Grant、Key、
+  Token、请求摘要中含秘密的部分、私有绝对路径、命令、参数、stdout、模型请求或响应正文、
+  用户文件或记忆正文。证据回执不是 bearer capability。
+- **载体与版本。** `isolation_observation` 与 `original_admission_check` 由 Worker 校验 producer
+  版本、原范围、绑定与去重后，写入 Platform DB 中独立、只追加的受限证据记录；不写入
+  `conversation_events`、SSE、会话历史或审计正文，也不塞进 RuntimeEvent V2 的严格 payload。
+  Host 侧证据使用独立于业务事件的版本化日志与确认游标，经能力协商后交付；证据保存失败或
+  旧端不支持时，业务事件、终态与 ACK 照常进行，对应证据为 `UNPROVEN`。升级先部署 Worker、
+  Core 与 Store 的接收与校验，再发布 producer；旧读取端遇到未知类别显式拒绝，不静默丢弃
+  字段。重复投递与 ACK 丢失只回读原记录。新增表只做追加迁移，编号在合入时按 main 重新生成。
+- **不改写业务。** 证据缺失或未确认不能把已确认的业务终态改成 unknown，读取证据也不能重放
+  业务。原权限撤销，或 Pod UID、epoch、generation、fence 变化后，晚到的证据不能签到新执行。
+  证据读取与核验属于 API 访问，按 §18.3 记录必要审计元数据。
+
+#### 18.5.2 原生隔离观察
+
+本类只用于获批合成场景中的 file、env、proc、workspace、memory 文件与模型上下文隔离，
+不做通用原生工具输出浏览器。网络隔离子项由
+[#4351](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351) 负责，不在本节设计 probe 或 CNI。
+
+- **原生验证叶子。** file、env、proc、workspace 与 `.memory/MEMORY.md` 等 memory 文件由固定版本的
+  极小 helper 产生结果。helper 随自有镜像只读安装在工作区外，由原生工具在实际业务 UID、
+  挂载与进程视图、Landlock/namespace、环境与 FD 限制下执行；open、read、stat、write 的结果、
+  errno 类别、长度与 hash 都由该叶子产生，Host 不以更高权限读取目标。调用必须经过既有固定的
+  native、exec-server 或 ACP 接缝，绑定真实 operation/attempt 与 native item。旁路 Host probe 或
+  自有 MCP 工具不能冒称原 built-in 已验证（§10.11、§10.13）。模型只能在原生工具中执行 helper
+  并选择场景标识，目标由 producer 按场景与原绑定在内部解析，不接受路径参数。
+- **结果可信。** 验收前冻结 helper artifact、场景与目标类别。受保护的 Driver 或 runner 把固定
+  helper artifact、内核进程实例（不能只用可复用的 PID/PGID）、原 native 协议句柄与
+  operation/attempt 关联起来，并证明同 UID 子进程不能改写 producer 或结果通道。签名或受认证
+  运输材料只留在受保护的 Host/runner，不交给业务子进程。普通模型文本、任意输出的同形 JSON、
+  工具自选路径或自报 ID 都不能成为证据。关联须在正式镜像的执行准入中验证；做不到的 Adapter
+  标为 `UNPROVEN` 或不支持，不降低判据，也不补上游补丁（§10.11）。
+- **夹具。** 只用批准的非秘密合成夹具。原主体经正常入口在本人 Conversation 建立正例，固定同一
+  C/E/Sandbox/PVC 与 hash，再由另一合法样本尝试访问。env 只测无秘密 marker 与环境类别，proc
+  只测批准的自身进程与合成兄弟进程；不读取真实 Key、Host environ、私有 journal 或普通用户数据。
+  私有路径只在 producer 内部解析，不进入参数记录、日志、证据或模型。Host 不能向业务子进程
+  传入预先打开的 FD 来绕过被测的文件限制。
+- **模型上下文。** 模型上下文与 memory 文件分开验证。既有受保护模型传输（§10.8、§10.10）在内存中
+  检查本次执行实际发出的请求，覆盖承载该执行上下文的全部请求，适用时包括 count-tokens 与辅助
+  请求；只输出 `selfMarkerPresent`、`foreignMarkerAbsent` 与 `observationComplete` 三个布尔值。
+  marker 是场景目录中的非秘密合成值，只在传输内存中比对，不写入证据。映射缺失、压缩、重连或
+  观察有缺口时记为 `UNPROVEN`；不记录正文，不以模型回答作证。它只证明受控场景的实际出站上下文
+  隔离，不证明供应商内部记忆，也不改变 §11.6 的 Skill 实际加载 `LOAD_UNPROVEN` 结论。
+- **字段。** 固定 `code = RUNTIME_ISOLATION_EVIDENCE_V1`，带共同绑定与：
+  - `resourceClass = file | env | proc | workspace | memory_file | model_context`，以及场景固定的
+    `actionClass`；
+  - `resultClass = allowed | denied | unproven | isolation_violation` 与 `nativeObserved`；
+  - `failureClass = permission_denied | not_found | policy_denied | io_unavailable | unsupported | unknown`；
+  - 仅本人获准的合成文件正例带 `byteLength`/`sha256`；负例不返回另一主体对象是否存在、长度、
+    摘要或内容；模型上下文只带上述三个布尔值。
+
+  `not_found` 只在独立受信正例确认目标存在且原范围正确后才可解释为拒绝，不能把任意 ENOENT
+  当作隔离通过。
+- **时钟。** 叶子实际 I/O 的观察时刻与进程实例的时钟域分开记录，耗时用单调时钟。模型传输的
+  “进入发送”“完整写出”“收到响应”分别命名，写出不等于远端收到。采集时间不代替 I/O 时间；
+  跨进程未标定时只给有向因果序或不确定区间。正例必须有实际原生动作与完整绑定，只见镜像或
+  Pod 拓扑不能签收。
+- **写入与读取。** 受保护 producer 产生不可变证据，经 Host 证据日志交给 Worker 校验并持久化，
+  API 按 §18.5.1 投影；原主体读取入口位于原 Conversation/Execution 之下，实际 wire 由实现 primary
+  固定。验收方读取原证据引用并独立核对合成正例与负例。运维只采用受审的固定计划与已获批的
+  采集方式，管理员读盘不能升级为证据 producer。响应或证据提交结果不明时只按同一引用查询，
+  不重跑原生写入。
+
+#### 18.5.3 控制时序诊断
+
+本类只观察撤权或停止控制的实际阶段，对每次正式控制输出，不依赖验收场景。它不是新业务命令
+或授权，不是通用日志导出接口，也不建立数据库证据服务。它不改变业务 Grant、命令、准入、取消或
+原生协议，因此不升级业务 Runtime wire。若以后需要新增跨进程身份字段、控制用途或公开读取接口，
+即属于 Runtime Contract 或身份传递变化，须先修订本 Spec。
+
+- **阶段白名单。** 每个阶段只在真实观察点输出一次：
+  - `control_received`：Host 控制 handler 入口取时间，服务认证、请求形状与原绑定核实后才输出；
+    无效输入只输出固定拒绝，自报 ID 不记作可信绑定。“收到”指 handler 收到，不是网卡第一字节。
+  - `control_validated`：校验及原授权当前状态复核通过后。
+  - `latch_commit_confirmed`：原控制记录的持久封闭（Runtime HLD §8.1 的 durable commit）返回后；
+    不能用更新回调内的时间冒充落盘完成。已确认的重放只记 `original_result_read`，不造第二次
+    latch 时间。
+  - `interrupt_write_accepted`：interrupt 请求在实际 bridge 发送或写入被接受时；只调用请求函数
+    不算发送，这一阶段也只表示本地运输接受，不表示原生收到。
+  - `native_interrupt_ack`：原 response id 匹配且空结果通过既有协议校验后。超时、断连或不合协议
+    记固定拒绝或 unknown，不输出 error message、stack 或 RPC 正文，也不重发 interrupt。原生 ACK
+    不证明工具已排空。
+  - `terminal_commit_confirmed`：原终态持久更新完成后，带实际观察时刻、原终态引用与有限状态。
+    适用时实际进程组退出继续由
+    [Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案) 的既有排空码证明，
+    本节不重复定义。
+
+  自然终态先到或无需 interrupt 时如实记 `not_required`，不补发控制来制造轨迹；协议本身没有某个
+  阶段时记 `not_applicable`，不用其他事件代替。
+- **字段。** `schemaVersion = 1`、`code = RUNTIME_CONTROL_EVIDENCE_V1`、`stage`、有限的
+  outcome/reason，只在确有数值 RPC 错误时带 `rpcCode`（与 HTTP status 分列）；共同绑定外另带原
+  `controlRecordId`、`stopRequestId`、`controlFence` 与 `controlReason`；时钟字段为 `observedAtUtc`、
+  `clockId`（Pod UID 与进程启动实例的安全引用）、`monoSequence` 和 `elapsedMonoMs`（自该控制首次
+  收到起、同一 `clockId` 内的非负安全整数毫秒）。
+- **时钟域。** Host 与同进程 Driver 可用内部观察上下文关联，它只用于观测，不是身份或授权
+  来源；不把 Grant 或 Key 放进命令、环境或子进程。runner 是另一时钟域，跨域先后只用经认证的
+  原请求与回执关系、各自的 `clockId`/sequence 和有界观察区间判断，不用 UTC 数值比较亚毫秒先后。
+  Kubernetes 日志时间戳只表示运输与采集。`monoSequence` 缺号、截断、进程重启或日志丢失时，
+  该控制的时序为 `UNPROVEN`，不能把日志缺失当作没有操作。原生工具 `startedAt` 未区分原生报告
+  与 Host 回退来源时，不能用它证明“撤权后零调用”。
+- **写入与读取。** Host/Driver 在可信源码点向 stdout 写封闭 schema，复用既有日志白名单与背压
+  处理。日志写入失败不改变控制或停止结果，不重新授权，不延长租约。部署负责人在获批的运维
+  读取窗口内采集单个原 Pod 或实例的这些元数据；验收方只读白名单投影及其 SHA-256，不新增容器
+  exec 或私有文件权限。读取不要求已撤权的原主体仍有业务权限，也不借 Owner 代执行。历史场景
+  不补造这些时序，新版本上线后只在获批新场景中取新事实。
+
+#### 18.5.4 原调用准入核验记录
+
+旧 generation 与旧 fence 的拒绝证据由 [§9.3.2](#932-原调用准入核验授权) 的只读核验产生；用途、
+样本、判定与只读约束只在该节维护。核验结果按 §18.5.1 保存为 `original_admission_check` 证据并
+投影，不写业务事件，不推进游标，也不成为业务 Grant。
 
 ## 19. 测试策略
 

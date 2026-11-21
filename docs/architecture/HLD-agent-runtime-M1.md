@@ -473,6 +473,9 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 - [独立 executor 精确 Stop 的排空屏障](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)
   继续约束本节的普通恢复预算到期和代次隔离流程。恢复先读取原 Stop、屏障及适用 fence。
+- 旧代次准入核验（[工程 Spec §9.3.2](SPEC-agent-infra-M1-engineering-architecture.md#932-原调用准入核验授权)）
+  只能使用本节真实恢复失败与已确认 generation tombstone 产生的原引用。普通重启、
+  `RUNTIME_SESSION_BLOCKED` 与单次 unknown 都不提升 generation，不构成该样本。
 
 ## 8. 消息、事件与 SSE 可靠性
 
@@ -967,6 +970,63 @@ Session 约束。仍无完整参数时由原授权器按当前输入判断，不
   事实中不含路径和文件内容。
 - 能力声明：Driver 通过 conformance 之后，才把附件与结果文件 capability 设为可用。
   conformance 须覆盖物化、引用发布、恢复、越界与符号链接负向用例。
+
+#### 8.5.6 安全验收证据的实现时序
+
+证据类别、字段、读取授权、隐私与版本以工程 Spec
+[§18.5](SPEC-agent-infra-M1-engineering-architecture.md#185-runtime-安全验收证据) 和
+[§9.3.2](SPEC-agent-infra-M1-engineering-architecture.md#932-原调用准入核验授权) 为准；本节只维护
+Host、Driver、Worker 与 API 的观察点、交付顺序和升级回滚。
+
+原生隔离观察：
+
+1. 部署启用验收窗口后，Host 按部署注入的窗口配置与本次业务 Grant 的主体、Agent 判断该 Execution
+   是否在窗口内，不为此新增 Turn 提交字段；不在窗口内时 helper 只得到 `unsupported`。
+2. 模型在原生工具中执行固定 helper，只传场景标识。受保护 launcher 或 runner 确认实际执行的是冻结
+   的 helper artifact，记录其内核进程实例，并建立只与该实例绑定的结果通道；同 UID 子进程无法写入
+   或冒充该通道须由实现证明，否则对应 Adapter 为 `UNPROVEN`。目标由 producer 按场景与原绑定在
+   内部解析。
+3. Driver 把 helper 结果与同一 native item 的开始和终态、operation/attempt 关联，生成不可变证据，
+   在 Host 证据日志中完成 durable commit。证据日志与业务 journal 分开，有独立游标和 ACK。
+4. Worker 按已协商的证据能力续读证据日志，复核窗口、场景、producer 版本、原范围与绑定后写入受限
+   证据记录，提交后才确认证据游标。重复投递返回原记录；保存失败只重试证据，不影响业务事件、
+   终态或 ACK。
+5. 模型上下文由 Codex 与 OpenCode 的既有受保护模型传输分别在原 admission 与 model attempt 绑定处
+   观察：每个实际发出的请求在内存中比对合成 marker，执行结束时只有全部承载上下文的请求都已映射
+   且无观察缺口，`observationComplete` 才为真。marker 值、请求与响应正文不进入日志或证据。
+6. API 读取时按 Spec §18.5.1 重新确认当前读取权与原范围，在写出响应前再次复核。
+
+控制时序诊断：
+
+1. Host 控制 handler 入口取时间并为该控制分配 `monoSequence` 起点；服务认证、请求形状与原绑定
+   核实后输出 `control_received`，校验与当前授权复核后输出 `control_validated`。
+2. 原控制记录的 durable commit（[8.1](#81-消息与命令幂等)）返回后输出 `latch_commit_confirmed`；
+   已确认的重放只输出 `original_result_read`。
+3. Driver 进入既有 interrupt 路径。Codex 在 RPC bridge 的实际写入被接受时输出
+   `interrupt_write_accepted`，原 response id 匹配且空结果通过协议校验后输出 `native_interrupt_ack`。
+   协议没有中断响应的 Driver（例如 ACP 的 cancel 通知）对该阶段记 `not_applicable`，不用其他事件
+   代替。
+4. 原终态持久更新完成后输出 `terminal_commit_confirmed`；独立 executor 的进程组退出仍以
+   [10.3](#103-codex-session-独立-executor-提案) 的排空码为准。
+5. 诊断经既有 stdout 日志白名单与背压处理写出，写入失败不进入控制路径的错误分支。runner 的
+   观察使用自己的 `clockId`，与 Host 之间只按经认证的请求与回执关系排序。
+
+原调用准入核验：
+
+1. API 收到原主体或获批运维窗口的核验请求，Core 按当前读取政策与原持久记录解析 Spec §9.3.2
+   的原范围，不可见与不存在同形返回；通过后在一个事务中保存核验请求与 challenge，不写业务记录。
+2. Worker 以 durable lease 认领核验请求，回读已提交的当前 generation 与 resource fence，签发核验
+   证明，只向持久映射的原 Host 投递；原 Host 不可达或已退休时记 `unproven`，不改投当前 Pod。
+3. Host 校验证明后调用与业务路径共用的纯准入检查：原操作与 native 映射唯一、generation barrier、
+   原授权、停止与控制状态、期限和原操作最高执行 fence。该检查没有 Driver、模型、工具或持久写依赖；
+   challenge 与速率状态单独有界保存。
+4. Worker 校验响应绑定后写入 `original_admission_check` 证据。调用方按 Spec §18.5.1 读取结果，API
+   在写出响应前复核当前读取权与原范围。核验期间原事实变化时重新核验或记 `unproven`。
+
+升级与回滚：先部署 Worker、Core 与 Store 的证据接收、校验与读取，再发布 Host/Driver producer。
+Host 只在 Worker 声明对应证据能力后产生隔离证据与核验结果，否则返回 `unsupported`。控制时序
+诊断没有消费者依赖，可单独发布。回滚后旧 producer 不再产生证据，已保存证据保持可读；旧读取端
+遇到未知证据类别显式拒绝。回滚不删除证据，未确认的证据日志随 Session 正常清理，不影响业务。
 
 ### 8.6 Eval 复用
 
@@ -1485,6 +1545,21 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
   - 故障：停止能中断运行中的命令；进程或 Driver 崩溃后原工具不重放，Turn 收敛为真实终态或 `unknown`。
   - 入口：固定 E2E 中 Web 与企微各完成一次真实 shell 与文件编辑。
 - 意图提交前后、外部响应前后、事件/必要审计提交前后和游标确认前后注入故障；验证未开始操作被阻止、未知不盲重放、事件/审计不丢失、不重复计数，正文/凭证不进入元数据。单独关闭/故障化遥测 exporter 不得改变业务结果，必要审计失败不能返回虚假成功。
+- 安全验收证据（[8.5.6](#856-安全验收证据的实现时序)）的每个实现增量按适用范围覆盖共同负例：
+  另一主体、Agent、Conversation、Execution、operation/attempt 或用途替换；同名 Pod 换 UID 及旧
+  epoch、generation、fence；过期或未来证明与 challenge 重放；模型或工具伪造同形 JSON，helper 或
+  原生绑定不明；读取期间权限撤销或原事实变化；正文、参数、Key、Token、私有路径 canary 不进入
+  stdout、OTLP 或 Store 投影；响应或记录丢失时只读原结果、不换操作；旧消费者与回滚不吞事实或
+  ACK，证据缺失不改写已确认业务结果。
+  - 原生隔离观察另验本人合成文件写读 hash 与跨域拒绝、memory 文件与模型上下文分别由各自
+    producer 产生、替代工具不冒充原 built-in，以及无法确认时为 `UNPROVEN`；Codex 与至少一个其他
+    真实 Runtime 分别证明。
+  - 控制时序诊断另验快 ACK、自然完成先到、重复 Stop、日志背压、进程重启与跨时钟域，日志写入
+    失败不改变控制结果。
+  - 原调用准入核验以 spy 和真实 PostgreSQL 前后摘要证明零 Driver、模型、工具调用与零业务写入、
+    续期、ACK 推进，原控制续读仍可进行；没有合法旧引用或墓碑时不生成现场 PASS。
+  - 离线 fixture 只证明 producer 与拒绝路径；现场证据由非实现方在获批窗口、固定版本与合法样本下
+    取得。
 - Eval 以获授权固定集执行回答及受控工具样本，基线/候选保留实际执行引用与版本，取消/恢复复用任务路径；数据撤权阻止后续投递/读取，评分器故障不重放业务任务。自定义未验证能力和 self-managed 声明不能开放任务/观测/Eval。
 - Codex Linux 启动准入覆盖可信工具缺失、权限能力不足、安装失败、异常退出和超时，验证拒绝发生在 `app-server` 启动及向子进程注入模型凭证之前。正式镜像在工程 Spec 规定的容器安全约束下，通过真实 Host/Driver/Bridge 验证工具执行的退出码、stdout 与受限写入结果，并以预先存在的兄弟 Conversation 目录验证读取、列举与写入被拒绝而本人 workspace 写入成功；该兼容性检查不替代多用户隔离验收。
 - Codex 多用户隔离验收使用真实 pinned Codex 与正式 Host/Driver/Bridge，为同一 Agent 的两个用户建立各自 Conversation，验证本人文件与运行上下文访问成功，而跨 Conversation 的读取、列举、搜索、修改、历史扫描与模型输入/结果均被该平台的文件边界拒绝；覆盖并发、进程重启与原 Session 恢复。工具普遍不可用或平台能力关闭都不构成通过。
