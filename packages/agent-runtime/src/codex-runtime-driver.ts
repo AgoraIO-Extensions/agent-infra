@@ -241,6 +241,11 @@ interface NativeMetadataReadBoundary {
 	assertCurrent(): void;
 	revalidate(): Promise<void>;
 	wait<T>(pending: Promise<T>): Promise<T>;
+	wait<T, R>(
+		pending: Promise<T>,
+		project: (value: T) => R,
+		afterValidation?: () => undefined,
+	): Promise<R>;
 }
 
 export interface CodexNativeStatusSelection {
@@ -5884,10 +5889,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		this.assertRuntimeRequirements(this.session(nativeSessionRef));
 		const key = this.conversationKeyFor(nativeSessionRef);
 		const existing = this.conversationRpcs.get(key);
-		if (existing)
-			return metadataRead
-				? metadataRead.wait(Promise.resolve(existing))
-				: existing;
+		// The real executor/current checks above cover this synchronous cache lookup.
+		if (existing) return existing;
 		const inFlight = this.inFlightConversationRpcs.get(key);
 		if (inFlight) return metadataRead ? metadataRead.wait(inFlight) : inFlight;
 		const opening = this.openConversationRpc(key, assertCurrent, metadataRead);
@@ -7318,6 +7321,38 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// Local original config/process/epoch can change while policy is pending.
 			assertCurrent();
 		};
+		function wait<T>(pending: Promise<T>): Promise<T>;
+		function wait<T, R>(
+			pending: Promise<T>,
+			project: (value: T) => R,
+			afterValidation?: () => undefined,
+		): Promise<R>;
+		async function wait<T, R>(
+			pending: Promise<T>,
+			project?: (value: T) => R,
+			afterValidation?: () => undefined,
+		): Promise<T | R> {
+			let result: T | R;
+			try {
+				const value = await bounded(pending);
+				assertCurrent();
+				result = project ? project(value) : value;
+				// Private finalizers may only perform bounded synchronous projection.
+				if (
+					project &&
+					result &&
+					typeof (result as { then?: unknown }).then === "function"
+				)
+					invalidate();
+			} finally {
+				// Query real authority AFTER the I/O and its synchronous projection.
+				await revalidate();
+			}
+			// Only the Skill directory's in-memory receipt is committed here, never a permit.
+			afterValidation?.();
+			assertCurrent();
+			return result;
+		}
 		return {
 			expiresAt,
 			bindRpc: (rpc) => {
@@ -7327,13 +7362,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			},
 			assertCurrent,
 			revalidate,
-			async wait<T>(pending: Promise<T>) {
-				try {
-					return await bounded(pending);
-				} finally {
-					await revalidate();
-				}
-			},
+			wait,
 		};
 	}
 
@@ -7427,11 +7456,34 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
-	private async readBoundNativeStatus(
+	private readBoundNativeStatus(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+		metadataRead: NativeMetadataReadBoundary,
+		parameters?: CodexNativeStatusSelection["parameters"],
+	): Promise<{
+		status: ReturnType<typeof parseNativeCommandStatus>;
+		readAt: string;
+	}>;
+	private readBoundNativeStatus<R>(
+		read: CodexNativeCommandReadContext,
+		binding: NativeCommandBinding,
+		metadataRead: NativeMetadataReadBoundary,
+		parameters: CodexNativeStatusSelection["parameters"] | undefined,
+		project: (status: {
+			status: ReturnType<typeof parseNativeCommandStatus>;
+			readAt: string;
+		}) => R,
+	): Promise<R>;
+	private async readBoundNativeStatus<R>(
 		read: CodexNativeCommandReadContext,
 		binding: NativeCommandBinding,
 		metadataRead: NativeMetadataReadBoundary,
 		parameters: CodexNativeStatusSelection["parameters"] = {},
+		project?: (status: {
+			status: ReturnType<typeof parseNativeCommandStatus>;
+			readAt: string;
+		}) => R,
 	) {
 		const rpc = await this.rpc(
 			binding.nativeSessionRef,
@@ -7439,8 +7491,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			metadataRead,
 		);
 		metadataRead.bindRpc(rpc);
-		await metadataRead.revalidate();
-		const metadata = await metadataRead.wait(
+		metadataRead.assertCurrent();
+		return metadataRead.wait(
 			observeNativeMetadataRpcV1("thread/read", () =>
 				rpc.request(
 					"thread/read",
@@ -7456,13 +7508,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					read.signal,
 				),
 			),
+			(metadata) => {
+				const result = {
+					status: parseNativeCommandStatus(metadata, binding.threadId),
+					readAt: new Date().toISOString(),
+				};
+				return project ? project(result) : result;
+			},
 		);
-		const result = {
-			status: parseNativeCommandStatus(metadata, binding.threadId),
-			readAt: new Date().toISOString(),
-		};
-		await metadataRead.revalidate();
-		return result;
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
@@ -7579,33 +7632,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		selector: NativeMetadataSelectorV1,
 		read: CodexNativeCommandReadContext,
 	): Promise<NativeMetadataProjectionV1> {
-		if (selector === "commands") {
-			const directory = await this.discoverNativeCommands(read);
-			return NativeMetadataProjectionV1Schema.parse({
-				selector,
-				...directory,
-			});
-		}
-		if (selector === "skills") {
-			const directory = await this.discoverNativeSkills(read);
-			return NativeMetadataProjectionV1Schema.parse({
-				selector,
-				...directory,
-			});
-		}
+		if (selector === "skills")
+			return this.readNativeSkillDirectory(read, (directory) =>
+				NativeMetadataProjectionV1Schema.parse({ selector, ...directory }),
+			);
 		const binding = this.nativeCommandBinding(read);
 		const metadataRead = this.nativeMetadataRead(read, binding);
-		const status = await this.readBoundNativeStatus(
+		return this.readBoundNativeStatus(
 			read,
 			binding,
 			metadataRead,
+			undefined,
+			(status) =>
+				NativeMetadataProjectionV1Schema.parse({
+					selector,
+					...(selector === "commands"
+						? this.nativeCommandDirectory(binding)
+						: status),
+				}),
 		);
-		const projection = NativeMetadataProjectionV1Schema.parse({
-			selector,
-			...status,
-		});
-		await metadataRead.revalidate();
-		return projection;
 	}
 
 	async readNativeMetadataV2(
@@ -7615,22 +7660,40 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (selector !== "commands") nativeCommandUnsupported();
 		const binding = this.nativeCommandBinding(read);
 		const metadataRead = this.nativeMetadataRead(read, binding);
-		await this.readBoundNativeStatus(read, binding, metadataRead);
-		const projection = this.nativeCommandDirectoryV2(binding);
-		await metadataRead.revalidate();
-		return projection;
+		return this.readBoundNativeStatus(
+			read,
+			binding,
+			metadataRead,
+			undefined,
+			() => this.nativeCommandDirectoryV2(binding),
+		);
 	}
 
 	async discoverNativeCommands(read: CodexNativeCommandReadContext) {
 		const binding = this.nativeCommandBinding(read);
 		const metadataRead = this.nativeMetadataRead(read, binding);
-		await this.readBoundNativeStatus(read, binding, metadataRead);
-		const directory = this.nativeCommandDirectory(binding);
-		await metadataRead.revalidate();
-		return directory;
+		return this.readBoundNativeStatus(
+			read,
+			binding,
+			metadataRead,
+			undefined,
+			() => this.nativeCommandDirectory(binding),
+		);
 	}
 
 	async discoverNativeSkills(read: CodexNativeCommandReadContext) {
+		return this.readNativeSkillDirectory(read, (directory) => directory);
+	}
+
+	private async readNativeSkillDirectory<R>(
+		read: CodexNativeCommandReadContext,
+		project: (
+			directory: Omit<
+				Extract<NativeMetadataProjectionV1, { selector: "skills" }>,
+				"selector"
+			>,
+		) => R,
+	) {
 		const binding = this.nativeCommandBinding(read);
 		const descriptor = this.installedSkill;
 		const mountedEntries = this.skillDirectory?.findSkills();
@@ -7661,9 +7724,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			unavailable();
 		let assertProcess: (() => void) | undefined;
-		const metadataRead = this.nativeMetadataRead(read, binding, () =>
-			assertProcess?.(),
-		);
+		const metadataRead = this.nativeMetadataRead(read, binding, () => {
+			assertMountedCurrent();
+			assertProcess?.();
+		});
 		const rpc = await this.rpc(
 			binding.nativeSessionRef,
 			metadataRead.assertCurrent,
@@ -7693,8 +7757,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					409,
 				);
 		};
-		await metadataRead.revalidate();
-		const response = await metadataRead.wait(
+		metadataRead.assertCurrent();
+		let receipt: { revision: string; snapshot: string } | undefined;
+		return metadataRead.wait(
 			observeNativeMetadataRpcV1("skills/list", () =>
 				rpc.request(
 					"skills/list",
@@ -7706,87 +7771,95 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					read.signal,
 				),
 			),
-		);
-		const approved = approveCombinedSkillResponse(
-			response,
-			process.launch.cwd,
-			descriptor,
-			mountedEntries,
-		);
-		assertMountedCurrent();
-		// Selection survives admission of a new Execution; read guards keep its full scope.
-		const { executionId: _executionId, ...directoryScope } =
-			binding.authority.scope;
-		const revision = createHash("sha256")
-			.update(
-				JSON.stringify([
-					"codex-installed-skill-directory-v2",
-					{
-						...binding,
-						authority: { ...binding.authority, scope: directoryScope },
-					},
-					binding.requiredRuntime,
-					{ fixed: descriptor ?? null, hub: mountedEntries ?? null },
-					mountedGenerationId,
-					process.launch.processId,
+			(response) => {
+				const approved = approveCombinedSkillResponse(
+					response,
 					process.launch.cwd,
-					epoch,
-					approved.digest,
-				]),
-			)
-			.digest("hex");
-		const capabilities = [
-			...(descriptor
-				? [
-						{
-							id: createHash("sha256")
-								.update(`installed-skill:${revision}`)
-								.digest("hex"),
-							kind: "skill" as const,
-							name: descriptor.manifest.name,
-							description:
-								approved.descriptionByName.get(descriptor.manifest.name) ?? "",
-							source: {
-								name: descriptor.manifest.source.repository,
-								version: descriptor.manifest.version,
-							},
-							availability: "discovered" as const,
-						},
-					]
-				: []),
-			...(mountedEntries ?? []).map((entry) => ({
-				id: createHash("sha256")
-					.update(`mounted-skill:${revision}:${entry.name}`)
-					.digest("hex"),
-				kind: "skill" as const,
-				name: entry.name,
-				description: approved.descriptionByName.get(entry.name) ?? "",
-				source: { name: "agent-infra-skill-hub", version: entry.version },
-				availability: "discovered" as const,
-			})),
-		];
-		if (
-			new Set(capabilities.map((capability) => capability.name)).size !==
-			capabilities.length
-		)
-			skillDirectoryInvalid();
-		const directory = {
-			revision,
-			capabilities,
-		};
-		await metadataRead.revalidate();
-		assertMountedCurrent();
-		if (descriptor || mountedEntries) {
-			this.nativeSkillDirectoryReceipts.set(binding.nativeSessionRef, {
-				revision,
-				snapshot: nativeSkillSnapshot(
-					this.installedSkill,
-					mountedGenerationId,
+					descriptor,
 					mountedEntries,
-				),
-			});
-		}
-		return directory;
+				);
+				assertMountedCurrent();
+				// Selection survives admission of a new Execution; read guards keep its full scope.
+				const { executionId: _executionId, ...directoryScope } =
+					binding.authority.scope;
+				const revision = createHash("sha256")
+					.update(
+						JSON.stringify([
+							"codex-installed-skill-directory-v2",
+							{
+								...binding,
+								authority: { ...binding.authority, scope: directoryScope },
+							},
+							binding.requiredRuntime,
+							{ fixed: descriptor ?? null, hub: mountedEntries ?? null },
+							mountedGenerationId,
+							process.launch.processId,
+							process.launch.cwd,
+							epoch,
+							approved.digest,
+						]),
+					)
+					.digest("hex");
+				const capabilities = [
+					...(descriptor
+						? [
+								{
+									id: createHash("sha256")
+										.update(`installed-skill:${revision}`)
+										.digest("hex"),
+									kind: "skill" as const,
+									name: descriptor.manifest.name,
+									description:
+										approved.descriptionByName.get(descriptor.manifest.name) ??
+										"",
+									source: {
+										name: descriptor.manifest.source.repository,
+										version: descriptor.manifest.version,
+									},
+									availability: "discovered" as const,
+								},
+							]
+						: []),
+					...(mountedEntries ?? []).map((entry) => ({
+						id: createHash("sha256")
+							.update(`mounted-skill:${revision}:${entry.name}`)
+							.digest("hex"),
+						kind: "skill" as const,
+						name: entry.name,
+						description: approved.descriptionByName.get(entry.name) ?? "",
+						source: { name: "agent-infra-skill-hub", version: entry.version },
+						availability: "discovered" as const,
+					})),
+				];
+				if (
+					new Set(capabilities.map((capability) => capability.name)).size !==
+					capabilities.length
+				)
+					skillDirectoryInvalid();
+				const directory = {
+					revision,
+					capabilities,
+				};
+				if (descriptor || mountedEntries) {
+					receipt = {
+						revision,
+						snapshot: nativeSkillSnapshot(
+							descriptor,
+							mountedGenerationId,
+							mountedEntries,
+						),
+					};
+				}
+				return project(directory);
+			},
+			() => {
+				if (receipt)
+					this.nativeSkillDirectoryReceipts.set(
+						binding.nativeSessionRef,
+						receipt,
+					);
+			},
+		);
 	}
 
 	/** Read one manifest-listed Hub resource without creating a native Turn. */
