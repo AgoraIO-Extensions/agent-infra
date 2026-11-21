@@ -142,6 +142,64 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 启用组件，并实际验证已知可达目标在 deny-all 后不可达、放行后恢复。仅创建 NetworkPolicy
 对象不能证明隔离成立。ESSD 持久卷还须满足 StorageClass 最小容量及 namespace quota。
 
+## NetworkPolicy 执行证据门禁
+
+`preflight.sh`（`deploy.sh` 与 `redeploy.sh` 都会调用）在渲染 chart 之后、读取部署依赖之前运行
+`deploy/ack/networkpolicy-enforcement.mjs`，规则见
+[工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
+它只读：读取两个仓库外文件，执行 `kubectl get` 读取 namespace、`kube-system`、Node 和带
+`agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不创建探针，也不写集群。
+任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
+
+| 环境变量 | 内容 |
+| --- | --- |
+| `ACK_NETWORKPOLICY_EVIDENCE_FILE` | 已批准的执行证据，`kind: agent-infra-networkpolicy-enforcement-evidence` |
+| `ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE` | 部署 owner 或集群管理员回读的 Poseidon 配置，`kind: ack-poseidon-config-readback` |
+
+配置回读文件字段：`schemaVersion: 1`、`kind`、`clusterId`、`component: poseidon`、`version`、
+`eciNetworkPolicyEnabled`、`readAt`。证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
+
+- `cluster`：`kubeSystemNamespaceUid` 与 `clusterId`；`namespace`：`name` 与 `uid`。
+- `enforcer`：`runtime: eci`、`component: poseidon`、`version` 和配置回读文件字节的
+  `configSha256`。
+- `placement`：与 Worker `agentWorkloadPlacement` 相同的 `architecture` 与 `legacyUnplaced`
+  （见 [Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)）。
+- `nodes`：已证执行的 ECI 虚拟节点 `name` 与 `uid`。
+- `targets`：冻结的 Agent 级 StatefulSet、Deployment 与迁移 Job（`kind`、`name`、`uid`），
+  包括停止的副本。
+- `probes`：至少一组探针，绑定目标 Pod（`pod`、`uid`、`nodeName`、`port`）与其
+  NetworkPolicy `policyUid`，按顺序记录 `allow`（Worker 来源连通）、`deny`（施加 deny-all
+  后不通，含该策略 `policyUid`）、`recovery`（恢复后连通），另记 `nonWorker`（非 Worker
+  来源在原策略下不通）。
+- `observedAt` 与 `expiresAt`：有效期不超过 7 天。
+
+以下情况都拒绝发布：
+
+- 执行组件不是 ECI 上的 Poseidon（包括 ECS 的 flannel），配置回读缺失、字节与摘要不符、
+  不可解析、来自其他集群或 `eciNetworkPolicyEnabled` 不是 `true`。
+- 证据或配置回读超过 7 天、已过期或时间在未来；cluster、namespace 名称或 UID 与现场不符。
+- 按 placement 的 selector 与 toleration 可落的节点中，有节点不在证据里、UID 变化、缺少
+  `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
+- 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
+  来源可达，探针目标不在可落节点上，或时间顺序不对。
+- 现场 Agent 级 StatefulSet、Deployment、Job 集合与 `targets` 不一致（漏列一个服务或 Job，
+  或对象已重建）。
+- 现场模板带非部署注入的调度字段；`legacyUnplaced: reject` 时仍有未采用 placement 的
+  运行中 StatefulSet/Deployment 或未完成的 Job。
+- 渲染结果没有 Session 的 ECI `MutatingAdmissionPolicy` 与 Binding，或走 RuntimeClass 分支；
+  本 ACK 须开启 `sessionRuntimeScheduling` 且不设 `runtimeClassName`。
+- 任一 `kubectl get` 失败，包括权限不足。
+
+通过时 stderr 输出一行摘要，含 `legacyUnplacedActiveTargets` 与
+`allAgentWorkloadsOnEnforcedForm`。保留态（`retain-until-lifecycle`）下尚未采用的 Host
+计入前者，后者为 `false`，表示这些 Host 尚未隔离。摘要的 `fieldAcceptanceSigned` 恒为
+`false`：预检只证明发布前提，不代签部署后的现场正负矩阵。
+
+证据由部署 owner 在获批窗口内用已评审的探针包产生，并由非实现 lane 复核。缺少当期证据时
+预检直接失败，不在生产自动补造探针。
+
+## 验收顺序
+
 完整验收顺序：目标节点隔离与网络检查、同一不可变镜像的真实模型验证、浏览器申请/审批、
 Worker 创建 Session Pod/PVC、实际回复和 SSE 回读。组件 readiness 与受控 fixture 均不能
 替代后续步骤。
