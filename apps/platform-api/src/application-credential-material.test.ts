@@ -15,6 +15,7 @@ import {
 } from "../../../packages/platform-store/src/postgres-test.ts";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
+import { startPlatformApi } from "./index.js";
 
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -110,10 +111,10 @@ beforeAll(async () => {
 		},
 	};
 	assembly = assemblePlatformApi(assemblyInput);
-	server = serve({
-		fetch: createPlatformApp(assembly.dependencies).fetch,
-		hostname: "127.0.0.1",
+	server = startPlatformApi({
+		dependencies: assembly.dependencies,
 		port: 0,
+		log: () => {},
 	});
 	await once(server, "listening");
 	const address = server.address();
@@ -190,6 +191,25 @@ it("registers a grant-bound intent through the default assembly without creating
 	expect(
 		(await post(path, { ...command, scopes: ["agent:manage"] })).status,
 	).toBe(409);
+});
+
+it("carries the authorized material response through the production Node listener", async () => {
+	const intent = ApplicationCredentialMaterialMetadataV1Schema.parse(
+		await (await post(path, command)).json(),
+	);
+	const response = await post(
+		`${path}/${intent.attemptId}/receive`,
+		{ schemaVersion: 1 },
+		"recipient",
+	);
+	expect(response.status).toBe(200);
+	const body = ApplicationCredentialMaterialResponseV1Schema.parse(
+		await response.json(),
+	);
+	expect(body.kind).toBe("material");
+	expect(
+		await sql`select id from platform.platform_api_credentials`,
+	).toHaveLength(1);
 });
 
 it("sends material only to the authenticated grantee once, then requires a separate confirmation", async () => {

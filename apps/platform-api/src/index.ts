@@ -193,7 +193,10 @@ export function startPlatformApi(options: StartOptions) {
 	// 避免部署漏装后被普通路由意外承接（fail closed，契约见 #3234）。
 	const releaseNamespace = "/internal/ops/standard-template-releases";
 	const releasePrefix = `${releaseNamespace}/`;
-	const fetch = async (request: Request) => {
+	const fetch: Parameters<typeof serve>[0]["fetch"] = async (
+		request,
+		bindings,
+	) => {
 		const path = new URL(request.url).pathname;
 		if (path === releaseNamespace || path.startsWith(releasePrefix)) {
 			if (standardTemplateReleaseApp)
@@ -203,7 +206,7 @@ export function startPlatformApi(options: StartOptions) {
 				headers: { "Cache-Control": "no-store" },
 			});
 		}
-		return app.fetch(request);
+		return app.fetch(request, bindings);
 	};
 	return serve(
 		{
