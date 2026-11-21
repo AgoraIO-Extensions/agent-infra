@@ -510,7 +510,7 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 - 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey` 和可持久化的 Runtime 事件恢复游标。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID 和重放，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化事件日志并分配单调事件 ID，保留未确认事件并支持按该 ID 重放。禁止使用重连后可能重置或重新分块的流内序号派生。
 - Platform DB 对 Runtime 来源事件的 `(executionId, adapterEventKey)` 建立唯一约束，并在处理事件时先查找该键。已保存的重复事件直接返回原 `eventId`、`sequence` 和 `conversationCursor`，不再次写入或推进游标；只有新事件才校验当前 `sessionGeneration` 和 `deliveryFence`，旧 token 产生的新事件或状态写必须拒绝。新事件首次插入成功时，平台通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件、推进该 Execution 的已确认 Runtime 事件游标，并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败或 token 过期不产生可见事件、游标推进或平台确认。
 - Runtime 来源与 Platform 来源事件共享 Execution `sequence` 和 Conversation `conversationCursor`，数据库保存不可由 Runtime 命令选择的来源判别。Runtime 来源必须保存非空 Runtime cursor，且 Runtime 事件 Interface 不接受 Platform 来源类型。平台任务的受理、等待、取消请求/确认、失败和待核实等状态事件，以及 `model.selection.fell_back`，只由 Core 的对应事务写入并保存空 Runtime cursor（Worker 失败/待核实收敛见 [8.1](#81-消息与命令幂等)）；Platform 操作的每次持久状态转换生成稳定事件引用，重试复用原引用，不同事件类型或不同状态转换不能共用去重键，也不能伪造 Runtime cursor。标准模板所选模型或推理强度失效时，消息准入事务将 notice 和对应审计绑定到本次消息的 Execution：初始消息与重新生成绑定事务内新建 Execution，补充指令绑定已锁定的活跃 Execution；payload 只保存实际采用的 `modelOptionId`、`reasoningLevel`、固定 `selection_unavailable` 原因，以及会话原所选选项的 ID 与受理时的显示名（取值与事件版本见[工程 Spec §8.2](SPEC-agent-infra-M1-engineering-architecture.md#82-sse)）。该事务同时分配并推进下一 Execution `sequence` 和 Conversation `conversationCursor`，但不改变最后确认的 Runtime cursor；幂等重放返回原消息结果且不重复事件，后续或并发 Runtime 事件从已推进的平台计数器继续分配。事件、审计、消息、Execution、outbox、幂等记录或任一计数器写入失败时全部回滚。
-- Turn 的事件 outbox 只有在 Runtime 终态事件已持久化后才能完成。状态查询返回的终态只证明 Runtime 已结束，不代替事件流排空；Host 按页回放事件时，Worker 在读到终态事件前持续续读，不能因 Platform DB 已记录终态而提前结束。
+- Turn 的事件 outbox 只有在 Runtime 终态事件已持久化、且既有 ACK 义务完成后才能成功（`succeeded`）。状态查询返回的终态只证明 Runtime 已结束，不代替事件流排空；Host 按页回放事件时，Worker 在读到终态事件前持续续读，不能因 Platform DB 已记录终态而提前结束。已可靠终态但事件归档不可得时，按 [8.2.1](#821-已终态原-turn-的有界控制归档) 有界终结自动归档工作，不作为归档成功。
 - 同一次认领的续读与 ACK 沿用排空已完成的准备：每次请求离开 Worker 前，仍从 Platform DB 重读租约、fence、Session 状态与授权记录并重新评估当前授权，除已确认游标外任一状态变化都重新完整准备，授权或路由记录变化即拒绝或改签控制用途 Grant。只有对 Workload 与 Session Service 的 Kubernetes 实际路由观测可以复用：授权评估后距上次观测开始不足 2 秒即沿用，否则重新观测，观测结果变化或不可用时不发送；Turn 提交、补充指令和 Connection 安装请求不复用该观测。业务用途的事件续读、ACK 与执行续期重新观测时，签名 readiness 可沿用同一 Worker 进程内 Workload 监测或完整观测最近一次通过的结果：该结果绑定同一 Workload UID/generation、Workload revision 和 fence，距通过不超过一个监测周期（30 秒），且 Workload 当前为 ready、无未消化的探测失败；此时仍核对 Kubernetes 实际路由、漂移、Pod 就绪与 `/healthz`。任一条件不满足、或任何一次完整观测未通过时，回到完整签名 readiness。Turn 提交、补充指令、状态核实和 Connection 安装的每次准备在最后一次路由解析执行完整签名 readiness；同一次准备中此前用于核对路由记录的解析，以及发送前的复核，可沿用同一 Pod 的该次结果。
 - 控制用途的每次完整准备在最后一次路由解析执行完整签名 readiness，绑定原已核实 Workload 的 UID/generation、revision、fence、镜像 Digest 和当前 Pod；不消费业务 readiness 缓存，也不复用其他控制准备的签名探测结果。同次准备固定为有界三阶段：前两次只核对 verified Workload 的实际所有权、UID/generation、revision、Digest、当前 Pod、Service、漂移、Pod 就绪、`/healthz` 与精确路由，并在每次返回前重读当前授权、`agentId`、`conversationId`、`executionId`、`sessionGeneration`、Host Session Ref、Native Session ID、Sandbox ID/PVC、Turn、operation/attempt、Execution deliveryFence、`stopRequestId` 及独立 stop fence；前两次不产生 readiness Grant。第三次（发送前）必须以新生成的 readiness `requestId`/`grantId` 完成完整签名探测，探测后再次复核上述绑定、租约和 fence。每次准备独立消费本次探测结果；Readiness Grant 继续遵循工程 Spec §9.3 的独立用途，不增加 Conversation/Execution/Action 或 stop 字段，控制对象绑定仍由 control Grant 与既有 Store/Host 校验完成。探测缺失、失败、超时、不可达或任一绑定变化只结束本次 prepare：按原 lease/CAS 条件进入重试或恢复，保留原 stop intent、stop barrier 和 Session/Execution 占用，运行中停止进入 pending/unknown 并按原执行恢复，未开始停止沿原未投递取消路径收敛；若最终探测后到发送前自然完成、generation tombstone 或 cancellation barrier 变化，保留实际终态/unknown，不以迟到 stop 覆盖；不得发 stopReceipt、释放占用、创建新 Session/Execution 或开始下一任务。续读与 ACK 仍仅按上一条的同认领、同状态和 2 秒实际路由观测边界复用已完成的准备；需要重新完整准备时，必须重新完成控制签名 readiness。并发控制请求各自满足这一门禁，不能合并为一次跨请求许可，也不能读取业务 readiness ledger。
 - Runtime 在事件读完前结束时，Host 不再续期原业务授权。Worker 以状态核实取得终态证明并在同一租约内持久化后，于同一次认领中改用控制用途 Grant 续读至终态事件，outbox 不重新排队（工程 Spec 9.3）；续期被拒但无法证明终态时，沿原恢复路径重新认领。每次认领在首个事件读取或确认前先续期一次业务授权：中断后重新认领时，原授权可能已过期，此时只续期仍在运行的原执行，并按上述规则处理续期被拒；业务授权已因停止或撤权失效时不续期，只经控制用途的状态核实闩住 Host，并用控制用途 Grant 续读；续期请求本身失败时重新认领，不把该 Turn 判为失败。
@@ -524,6 +524,82 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
   - 流式增量没有覆盖的部分，按完成的 reasoning item 补齐；完成内容与已输出的增量不一致时，按协议无效处理。
 - Codex Runtime Driver 把已结束 Turn 的 journal 移出主状态文件：Worker 确认到该 Turn 的终态事件时，或 Driver 启动时，先把 journal 原样写入独立文件并同步落盘，再以一次持久提交删除主状态中的 journal 并记录固定大小的索引项（字节数、SHA-256、事件数、游标序列范围与终态）。只归档终态唯一、不可能再追加的 journal：没有待定操作、原生工具 attempt、子执行源、Connection 恢复、未结束的标准 MCP 调用或中断。两步之间失败或崩溃只保留原 journal，之后重复归档。启动时按索引读取并校验全部归档文件，缺失或不一致按 §7.3 拒绝恢复。回放、游标、事件字节与 ACK 语义不变，归档后的 ACK 只校验游标、不再写入；主状态只随未结束 Turn 的事件与每个 Turn 的固定索引项增长。
 - Runtime 的 `execution.detail` 只作为 Agent 提供的过程摘要，浏览器标明其来源。自由文本或摘要中自报的 `callId` 不能建立可信外部调用绑定，也不能据此补齐模型、Provider、账号或结果。实际模型/工具事实走 8.5 的结构化事件；平台对 Connection 只保存按第 9 节核实的关联引用，不建立 Connection 状态或审计投影。
+
+#### 8.2.1 已终态原 Turn 的有界控制归档
+
+本节只适用于原 Turn 已被 Runtime 接受、业务可靠终态已按原 Host 的正面证明持久化，但原事件
+或 ACK 尚未收口的 `conversation.turn.submit.v1` / `conversation.turn.regenerate.v1` outbox。
+原主体、接受事实与终态来源沿原持久事务核实；不能仅凭数据库状态枚举、进程退出、stop ACK 或
+Pod 不存在补造可靠终态。业务仍为 `unknown`、接受未确认、未完成的 stop、代次或独立 executor
+屏障继续遵守 [7.3](#73-重启恢复) 和各自合同，不转入本节来释放占用。Pod/Service 已回收只表示
+当前控制目标不可用，不证明原 PVC journal 永久丢失；本节不因此宣告原结果丢失。
+
+**预算与进展。** Worker 首次认领此类原 Turn 时，在原 Conversation/outbox 锁和当前 lease 的
+事务内保存版本化的控制归档记录，绑定原 outbox、Execution 和可靠终态来源。预算时长取当次部署
+`PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS` 的有效值（默认 5 分钟），与开始时间和绝对截止
+一同固定；数据库 `clock_timestamp()` 为时钟权威，与业务 `unknown_since` 独立。历史记录缺少
+此事实时，由首次合法控制认领持久化，不推测旧重试何时开始，也不把原 outbox 全生命周期的
+attempt 数当作归档预算。实际进展只指新 Runtime 事件及其原游标成功提交，或原已提交游标的累计
+ACK 得到确认并记录；重复事件、空页、HTTP 成功但未提交、探测成功和再次认领都不构成进展。
+记录最后进展和当前缺口，但进展、Worker/Host 重启、租约更换及同键重试均不重置或延长绝对截止。
+截止内按原退避规则恢复，单次网络调用与等待受剩余预算约束，不再开始跨越截止的新读取或 ACK。
+
+**有界失败。** 截止到达且归档义务仍未完整时，Core 在原 Store 事务内复核当前业务终态、原始
+绑定、控制用途、lease/fence、游标和最新进展，再以最终数据库时钟谓词提交“控制归档不可得”。
+同一事务将原 outbox 置为 `failed`、清除其租约并停止自动 `retry_scheduled`，写入必要审计和
+独立的归档事实；审计或 CAS 失败则整笔回滚，不以进程内计数代替持久结论。该失败只描述本轮
+归档工作，不能改变 Execution 的可靠 `completed` / `failed` / `cancelled`，不能生成对应业务
+失败或合成 Runtime 终态。若并发事务已持久化真正终态事件并完成既有 ACK 义务，按真实进展成功
+收口，不以迟到的超时处置覆盖它；旧 lease 或漂移绑定不得写入归档失败。
+
+归档记录及每轮历史保留原主体类型/稳定 ID、Agent、渠道、Conversation、Execution/Turn、
+Session/Sandbox/PVC 归属与已核实 UID、generation、原 Execution fence、当前控制 lease/fence、
+Host Session Ref、原请求摘要、原接受/终态证明引用、持久 Runtime cursor、ACK 进展、预算及受限
+失败原因。它们来自原权威记录，不能从当前 Owner、调用方字段或新 Session 回填；已有事件、未知
+工具事实、原 outbox 键和原提交幂等记录不删除。仅保存固定错误类别与控制引用，不保存凭据、
+Grant、会话正文或任意供应商错误。没有可靠归属的事实保持缺失并拒绝续接，不靠本节补造。
+
+失败收口不 ACK 未持久的事件、不移动未确认的 Runtime 游标，不回收未确认的 Host journal，
+也不发 stopReceipt、确认屏障或清除 `executorDrainPending`。原 stop、generation 或 executor
+排空义务仍各自占用并按原合同收敛；归档失败本身不能证明无剩余副作用、开放下一任务、切换代次，
+也不能触发新 Turn、模型/工具调用、改 Key 或替代 Session。未知业务结果的恢复预算和现有
+Connection 工具元数据补证不使用此记录冒充各自前提。
+
+**正常控制续接。** 原 Host 或同一原 PVC 上的合法恢复实例重新可用后，沿 Core 现有恢复用例
+`requestMetadataRecovery` 增加显式版本化的“原 Turn 控制归档”用途，与既有 Connection 工具
+元数据用途区分；不能把缺失原终态事件的记录按旧用途解释成已见终态。请求先校验原主体当前的
+会话读取权限和原任务归属；平台来源的恢复则仅沿既有持久控制记录授权，不能用管理员/Owner
+角色替代原主体或补造业务使用权。只读历史 GET、轮询、重启及路由恢复本身均不得重开预算。
+
+一次显式续接以独立的持久控制意图及幂等键绑定原归档失败引用/修订；不生成新 Message、Execution、
+Turn 或提交键。原绑定、当前控制来源和新鲜的合法原目标证明全部核实后，Store 在与原归档失败
+互斥的锁/CAS 边界内，把同一原 outbox 重开为独立记录的一轮控制续接，并固定该轮预算；同意图
+重放返回原轮，不延长期限，不并行认领。新目标仍须经过本节的精确路由及签名 readiness，并由
+原 Host 持久映射核实同一操作；同 PVC 或 Pod Ready 不能单独代替该证明。复核期间的每次等待后
+在提交前重验权限、绑定、lease/fence 和原失败修订；缺失、跨主体/Agent/Conversation、旧
+代次/fence、换 HostRef/PVC 或无法核实原操作均拒绝，不改旧事实。
+
+续接只从原已持久游标读原 journal、去重保存并确认已保存事件；保留原 Execution fence 和请求
+摘要，不重发 submit、补充指令、模型或工具。每轮失败历史与缺口保留，后来取得真正终态与 ACK
+后追加已核实的归档完成事实，不抹掉旧失败，也不按后来到达的时间改写原事件发生时间。
+
+**历史读取。** 归档状态作为独立的受授权读取事实与过程提示，不增加业务 Execution 状态。
+已可靠终态但归档未完整时明确显示“归档待核实”；本轮有界失败后显示“归档不可得”，保留已有
+输出、原执行标识和受限原因，不再给出空的运行中 `processing` 回答，也不显示成完整成功回答或
+业务失败。它不是平台来源的 `execution.status: failed/unknown`，不得占用 Runtime cursor 或
+冒充 Runtime 事件；公共读取投影及该事实的增量通知须随实现版本化并保持原主体隔离。缺可靠
+Runtime 终态事件时，Execution 的 `finishedAt` 仍为 `null`，不得取预算截止、归档失败时间或
+`terminal_observed_at` 代填。后来取得的终态事件继续以真实 `occurredAt` 计算；仅 ACK 未完成而
+终态事件已持久化时，不清空该真实完成时间。上述表达遵循
+[Platform PRD 的过程与结果](../prd/PRD-agent-platform-M1.md#104-agent-api-与后台任务)和
+[会话历史](../prd/PRD-agent-platform-M1.md#122-会话历史)，不是新的任务结果或恢复业务权限。
+
+验收覆盖：可靠终态先于事件/ACK、原 Host/Service 不存在与 Agent stopped、空页/超时、跨认领
+及 Worker 重启、进展不延期、截止与终态提交竞态、ACK 丢响应、审计/CAS 失败；有界失败后历史
+不空转、业务终态与未知工具不变；原主体显式同键续接、保留旧失败、后来可靠终态的真实时间；
+跨主体/Agent/Conversation/Sandbox/PVC、generation/fence/HostRef/请求摘要错配拒绝。每项证明
+没有 submit/模型/工具重放、未确认事件 ACK、屏障或占用的无证释放。源码测试不代替 ACK 原样本
+的持久结果验收。
 
 ### 8.3 SSE 补发
 
