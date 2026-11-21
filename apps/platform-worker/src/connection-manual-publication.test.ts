@@ -4,6 +4,8 @@ import { parseRuntimeOAuthDynamicPublicationContractV1 } from "../../agent-runti
 import type { SessionSandboxConnectionInstallBootstrapV1 } from "./connection-install-bootstrap.js";
 import {
 	connectionManualPublicationDescriptorV1,
+	connectionManualPublicationProofMatchesV1,
+	connectionManualPublicationProofV1,
 	parseConnectionManualPublicationContractV1,
 	withConnectionManualPublicationV1,
 } from "./connection-manual-publication.js";
@@ -81,6 +83,43 @@ const hostInvalid = [
 ];
 
 describe("#4199 C2 Worker publication contract input", () => {
+	it("proves one decision for one Sandbox incarnation under the deployment key", () => {
+		const binding = {
+			namespace: "workload-test",
+			sandboxId: "sandbox-a",
+			generation: 2,
+			resourceFence: 3,
+			contract: JSON.stringify(valid),
+		};
+		const proof = connectionManualPublicationProofV1("key-a", binding);
+		expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(
+			connectionManualPublicationProofMatchesV1(proof, "key-a", binding),
+		).toBe(true);
+		const { contract: _contract, ...none } = binding;
+		for (const [key, other] of [
+			["key-b", binding],
+			["key-a", none],
+			[
+				"key-a",
+				{
+					...binding,
+					contract: variant((v) => ({ ...v, serviceRef: "other" })),
+				},
+			],
+			["key-a", { ...binding, namespace: "other" }],
+			["key-a", { ...binding, sandboxId: "sandbox-b" }],
+			["key-a", { ...binding, generation: 3 }],
+			["key-a", { ...binding, resourceFence: 4 }],
+		] as const)
+			expect(connectionManualPublicationProofMatchesV1(proof, key, other)).toBe(
+				false,
+			);
+		expect(
+			connectionManualPublicationProofMatchesV1(undefined, "key-a", binding),
+		).toBe(false);
+	});
+
 	it("binds to the same descriptor contract as the exception gate", () => {
 		expect(connectionManualPublicationDescriptorV1).toEqual(
 			connectionManualPublicationContractV1,
@@ -137,28 +176,56 @@ describe("#4199 C2 Worker publication contract input", () => {
 			desiredState: "running",
 			requireCurrentTemplateTrust: true,
 		} as const;
+		const key = "fixture-deployment-token";
+		const where = {
+			namespace: "workload-test",
+			sandboxId: "sandbox-a",
+			generation: 2,
+			resourceFence: 3,
+		};
 		const projected = await withConnectionManualPublicationV1(
-			{ agentId: "agent-associated", connectionInstallBootstrap: bootstrap },
+			{
+				...where,
+				agentId: "agent-associated",
+				connectionInstallBootstrap: bootstrap,
+			},
 			publication,
 			running,
 			unavailable,
+			key,
 		);
 		expect(projected.connectionInstallBootstrap?.publicationContract).toBe(
 			contract,
 		);
+		// The decision proof binds this contract to this Sandbox incarnation.
+		expect(projected.connectionInstallBootstrap?.publicationProof).toBe(
+			connectionManualPublicationProofV1(key, { ...where, contract }),
+		);
 		expect(bootstrap).not.toHaveProperty("publicationContract");
 		for (const [allocation, render] of [
 			[
-				{ agentId: "agent-other", connectionInstallBootstrap: bootstrap },
+				{
+					...where,
+					agentId: "agent-other",
+					connectionInstallBootstrap: bootstrap,
+				},
 				running,
 			],
-			[{ agentId: "agent-associated" }, running],
+			[{ ...where, agentId: "agent-associated" }, running],
 			[
-				{ agentId: "agent-associated", connectionInstallBootstrap: bootstrap },
+				{
+					...where,
+					agentId: "agent-associated",
+					connectionInstallBootstrap: bootstrap,
+				},
 				{ desiredState: "stopped", requireCurrentTemplateTrust: true },
 			],
 			[
-				{ agentId: "agent-associated", connectionInstallBootstrap: bootstrap },
+				{
+					...where,
+					agentId: "agent-associated",
+					connectionInstallBootstrap: bootstrap,
+				},
 				{ desiredState: "running", requireCurrentTemplateTrust: false },
 			],
 		] as const) {
@@ -167,15 +234,24 @@ describe("#4199 C2 Worker publication contract input", () => {
 				publication,
 				render,
 				unavailable,
+				key,
 			);
-			expect(result.connectionInstallBootstrap?.publicationContract).toBe(
-				undefined,
-			);
+			expect(
+				(
+					result as {
+						connectionInstallBootstrap?: { publicationContract?: string };
+					}
+				).connectionInstallBootstrap?.publicationContract,
+			).toBe(undefined);
 		}
 		expect(reads).toEqual(["agent-associated", "agent-other"]);
 		await expect(
 			withConnectionManualPublicationV1(
-				{ agentId: "agent-associated", connectionInstallBootstrap: bootstrap },
+				{
+					...where,
+					agentId: "agent-associated",
+					connectionInstallBootstrap: bootstrap,
+				},
 				{
 					contract,
 					associated: async () => {
@@ -184,9 +260,11 @@ describe("#4199 C2 Worker publication contract input", () => {
 				},
 				running,
 				unavailable,
+				key,
 			),
 		).rejects.toThrow("unavailable");
 		const untouched = {
+			...where,
 			agentId: "agent-associated",
 			connectionInstallBootstrap: bootstrap,
 		};
@@ -196,6 +274,7 @@ describe("#4199 C2 Worker publication contract input", () => {
 				undefined,
 				running,
 				unavailable,
+				key,
 			),
 		).toBe(untouched);
 	});

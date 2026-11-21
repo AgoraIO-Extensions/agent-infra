@@ -1,3 +1,4 @@
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { SessionSandboxConnectionInstallBootstrapV1 } from "./connection-install-bootstrap.js";
 
 /**
@@ -99,6 +100,56 @@ export function parseConnectionManualPublicationContractV1(
 	return { status: "valid", contract: raw };
 }
 
+/** Session Pod annotation carrying `connectionManualPublicationProofV1`. */
+export const connectionManualPublicationProofAnnotationV1 =
+	"agent-infra.agora.io/connection-publication-proof";
+
+/**
+ * #4199 C2 (Spec §13.5.6 工具声明): the Worker's proof of the declaration decision it made for
+ * one Session Pod: the approved contract's digest, or none, bound to the namespace, Sandbox,
+ * generation and resource fence, keyed by the Worker's deployment service token. A Pod cannot
+ * prove a contract the Worker did not decide for that Sandbox incarnation.
+ */
+export function connectionManualPublicationProofV1(
+	key: string,
+	binding: {
+		readonly namespace: string;
+		readonly sandboxId: string;
+		readonly generation: number;
+		readonly resourceFence: number;
+		readonly contract?: string;
+	},
+) {
+	return createHmac("sha256", key)
+		.update(
+			JSON.stringify([
+				"connection-publication-proof/v1",
+				binding.namespace,
+				binding.sandboxId,
+				binding.generation,
+				binding.resourceFence,
+				binding.contract === undefined
+					? null
+					: createHash("sha256").update(binding.contract).digest("hex"),
+			]),
+		)
+		.digest("base64url");
+}
+
+/** Constant-time check of a live Pod's proof. */
+export function connectionManualPublicationProofMatchesV1(
+	proof: unknown,
+	key: string,
+	binding: Parameters<typeof connectionManualPublicationProofV1>[1],
+) {
+	if (typeof proof !== "string") return false;
+	const expected = Buffer.from(
+		connectionManualPublicationProofV1(key, binding),
+	);
+	const actual = Buffer.from(proof);
+	return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
 /** The per-Agent fact the projection needs; never the association's credential. */
 export interface ConnectionManualPublicationV1 {
 	readonly contract: string;
@@ -115,6 +166,10 @@ export interface ConnectionManualPublicationV1 {
 export async function withConnectionManualPublicationV1<
 	T extends {
 		readonly agentId: string;
+		readonly namespace: string;
+		readonly sandboxId: string;
+		readonly generation: number;
+		readonly resourceFence: number;
 		readonly connectionInstallBootstrap?: SessionSandboxConnectionInstallBootstrapV1;
 	},
 >(
@@ -125,6 +180,8 @@ export async function withConnectionManualPublicationV1<
 		readonly requireCurrentTemplateTrust: boolean;
 	},
 	unavailable: () => never,
+	/** The deployment service token the decision proof is keyed by. */
+	proofKey: string,
 ): Promise<T> {
 	const bootstrap = allocation.connectionInstallBootstrap;
 	if (
@@ -146,6 +203,13 @@ export async function withConnectionManualPublicationV1<
 		connectionInstallBootstrap: {
 			...bootstrap,
 			publicationContract: publication.contract,
+			publicationProof: connectionManualPublicationProofV1(proofKey, {
+				namespace: allocation.namespace,
+				sandboxId: allocation.sandboxId,
+				generation: allocation.generation,
+				resourceFence: allocation.resourceFence,
+				contract: publication.contract,
+			}),
 		},
 	};
 }

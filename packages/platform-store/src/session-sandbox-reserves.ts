@@ -323,6 +323,12 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		return null;
 	const verified = decoded.state.verified;
 	const configuration = agent?.runtimeConfiguration;
+	// #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host declares the dynamic Connection
+	// tools is decided when its Pod is created, from the Agent's current Owner manual
+	// association and the Worker's approved publication contract; a reserve made earlier
+	// cannot carry that decision. Such an Agent is not reserve-eligible: its Sessions take
+	// the cold path, which decides at claim time.
+	if (await hasCurrentConnectionManualAssociationV1(tx, agentId)) return null;
 	// Reserves stay standard-template only (ADR-0038, #3937): custom
 	// platform-adapter Agents keep the original preparation path.
 	if (
@@ -367,14 +373,6 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		const modelProjectionDigest = sessionSandboxReserveDigestV1(projection);
 		const environmentDigest = sessionSandboxReserveDigestV1(deployment.env);
 		const skillsDigest = sessionSandboxReserveDigestV1(deployment.skills ?? []);
-		// #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host may declare the dynamic
-		// Connection tools is fixed when its Pod is created, so a reserve carries the Agent's
-		// Owner manual association fact of its creation and is claimed only while it still holds.
-		// Present only when true, so other Agents keep their existing profile and digest.
-		const connectionManualAssociation =
-			(await hasCurrentConnectionManualAssociationV1(tx, agentId))
-				? ({ connectionManualAssociation: true } as const)
-				: {};
 		const profile: SessionSandboxReserveProfileV1 = {
 			schemaVersion: 1,
 			agentId,
@@ -390,7 +388,6 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 			signingConfigurationVersion: approved.signingConfigurationVersion,
 			transportConfigurationVersion: approved.transportConfigurationVersion,
 			storageConfigurationVersion: approved.storageConfigurationVersion,
-			...connectionManualAssociation,
 			digest: sessionSandboxReserveDigestV1({
 				policy,
 				approved,
@@ -399,7 +396,6 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 				environmentDigest,
 				skillsDigest,
 				configurationRevision: config.revision,
-				...connectionManualAssociation,
 			}),
 		};
 		return { profile, deployment, modelProjection: projection };

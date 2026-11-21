@@ -52,6 +52,7 @@ import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-instal
 import { sessionSandboxConnectionInstallTokenV1 } from "./connection-install-readback-server.js";
 import {
 	type ConnectionManualPublicationV1,
+	connectionManualPublicationProofV1,
 	withConnectionManualPublicationV1,
 } from "./connection-manual-publication.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
@@ -904,6 +905,17 @@ export function createSessionSandboxResourceInputResolverV1(
 								policy.namespace,
 								binding.sandboxId,
 							),
+							// #4199 C2: this Pod declares no dynamic tools unless the claim-time
+							// decision replaces this proof (withConnectionManualPublicationV1).
+							publicationProof: connectionManualPublicationProofV1(
+								options.serviceToken,
+								{
+									namespace: policy.namespace,
+									sandboxId: binding.sandboxId,
+									generation,
+									resourceFence,
+								},
+							),
 						},
 					}
 				: {}),
@@ -1287,6 +1299,7 @@ function createSessionSandboxAllocationResolverV1(
 				() => {
 					throw new WorkloadKubernetesError("unavailable");
 				},
+				options.serviceToken,
 			);
 		if (
 			allocation.runtime?.custom &&
@@ -1352,6 +1365,7 @@ export function createProductionSessionSandboxReceiverV1(
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
 		executorIdentityIssuer: options.executorIdentityIssuer,
+		connectionPublicationProofKey: options.serviceToken,
 	});
 	const allocationFor = createSessionSandboxAllocationResolverV1(
 		workload,

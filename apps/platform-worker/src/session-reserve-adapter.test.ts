@@ -61,9 +61,8 @@ function fixture(
 		readonly connectionDeliveryCurrent?: WorkloadRuntimeOptionsV1["connectionDeliveryCurrent"];
 		readonly reserve?: Pick<
 			Parameters<typeof createSessionSandboxReserveAdapterV1>[0],
-			"connectionInstallBootstrap" | "connectionManualPublicationContract"
+			"connectionInstallBootstrap"
 		>;
-		readonly connectionManualAssociation?: true;
 	} = {},
 ) {
 	const deployment = workloadDesiredFixture(
@@ -183,9 +182,6 @@ function fixture(
 			signingConfigurationVersion: "s1",
 			transportConfigurationVersion: "t1",
 			storageConfigurationVersion: "v1",
-			...(overrides.connectionManualAssociation
-				? { connectionManualAssociation: true as const }
-				: {}),
 			resources: {
 				cpuMillis: 100,
 				memoryBytes: 128 * 1024 ** 2,
@@ -368,7 +364,7 @@ describe("Session reserve resource adapter", () => {
 			expect(f.remove).not.toHaveBeenCalled();
 		},
 	);
-	it("carries the publication contract from reserve through claim to the Host's first thread/start (#4199 C2)", async () => {
+	it("keeps reserves undeclared and declares on the cold Session once publication opens (#4199 C2)", async () => {
 		const configuration = {
 			schemaVersion: 1 as const,
 			publicOrigin: "https://connection.example.test",
@@ -419,64 +415,64 @@ describe("Session reserve resource adapter", () => {
 			(
 				f.objects.get(`Pod/sandbox-${f.claim.sandboxId}`) as V1Pod | undefined
 			)?.spec?.containers[0]?.env?.find((e) => e.name === name)?.value;
-		for (const [reserveFact, claimFact] of [
-			[true, true],
-			// The association ended between admission and this claim: the reserve Pod was
-			// created with the contract, which is its fixed fact (Spec §13.5.6).
-			[true, false],
-			// Store admission never claims this reserve for an associated Agent (Store test);
-			// a claim that does reach it keeps the reserve's fact.
-			[false, true],
-		] as const) {
-			const namespace = workloadTestPolicy.namespace;
-			const bootstrap = bootstrapFor(namespace);
-			const f = fixture("codex", {
-				reserve: {
-					connectionInstallBootstrap: bootstrap,
-					connectionManualPublicationContract: contract,
-				},
-				...(reserveFact ? { connectionManualAssociation: true } : {}),
-			});
-			const resources = await f.ready();
-			expect(hostContract(f)).toBe(reserveFact ? contract : undefined);
-			expect(
-				(await f.adapter.bootstrap(f.claim, resources)).bootstrapReady,
-			).toBe(true);
-			const identities = resources.map(f.identity);
-			f.create.mockClear();
-			const reads: string[] = [];
-			const receiver = {
-				connectionInstallBootstrap: bootstrap,
-				connectionManualPublication: {
-					contract,
-					associated: async (agentId: string) => {
-						reads.push(agentId);
-						return claimFact;
-					},
-				},
-			};
-			for (let retry = 0; retry < 2; retry += 1)
-				expect(await prepareNormalSession(f, identities, receiver)).toEqual({
-					status: "ready",
-					resources: expect.arrayContaining(identities),
-				});
-			// The claim adopted the reserve: nothing was created or replaced.
-			expect(f.create).not.toHaveBeenCalled();
-			expect(reads).toEqual([f.claim.agentId, f.claim.agentId]);
-			expect(hostContract(f)).toBe(reserveFact ? contract : undefined);
-			// What the Host declares at its first thread/start (#4337 Host parser and builder).
-			const parsed = parseRuntimeOAuthDynamicPublicationContractV1(
-				hostContract(f),
-			);
-			const declared = parsed
+		const builderTools = (value: string | undefined) => {
+			const parsed = parseRuntimeOAuthDynamicPublicationContractV1(value);
+			return parsed
 				? codexDynamicConnectionClientForReaderV1({
 						contract: parsed,
 					} as unknown as Parameters<
 						typeof codexDynamicConnectionClientForReaderV1
 					>[0])?.declared.tools.map((tool) => tool.name)
 				: undefined;
-			expect(declared).toEqual(reserveFact ? ["list_actions"] : undefined);
-		}
+		};
+		const receiverFor = (associated: boolean) => ({
+			connectionInstallBootstrap: bootstrapFor(workloadTestPolicy.namespace),
+			connectionManualPublication: {
+				contract,
+				associated: async () => associated,
+			},
+		});
+		// A reserve prepared while publication was closed: the empty receiver only, with the
+		// Worker's proof that this Host declares nothing. Reserves never carry a contract.
+		const f = fixture("codex", {
+			reserve: {
+				connectionInstallBootstrap: bootstrapFor(workloadTestPolicy.namespace),
+			},
+		});
+		const resources = await f.ready();
+		expect(hostContract(f)).toBeUndefined();
+		const reservePod = f.objects.get(
+			`Pod/sandbox-${f.claim.sandboxId}`,
+		) as V1Pod;
+		expect(
+			reservePod.metadata?.annotations?.[
+				"agent-infra.agora.io/connection-publication-proof"
+			],
+		).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect((await f.adapter.bootstrap(f.claim, resources)).bootstrapReady).toBe(
+			true,
+		);
+		// Publication opens on the same image and the Agent is associated: the Store no longer
+		// offers this reserve (session-sandbox-reserves.test.ts), so the new Session is cold
+		// and its Host declares the contract at its first thread/start.
+		const cold = fixture("codex");
+		for (let retry = 0; retry < 2; retry += 1)
+			await prepareNormalSession(cold, undefined, receiverFor(true));
+		expect(hostContract(cold)).toBe(contract);
+		expect(builderTools(hostContract(cold))).toEqual(["list_actions"]);
+		// A reserve claimed before the association, with the association committed before
+		// this claim: the reserve's proven "none" stays, nothing is created or added.
+		const identities = resources.map(f.identity);
+		f.create.mockClear();
+		for (let retry = 0; retry < 2; retry += 1)
+			expect(
+				await prepareNormalSession(f, identities, receiverFor(true)),
+			).toEqual({
+				status: "ready",
+				resources: expect.arrayContaining(identities),
+			});
+		expect(f.create).not.toHaveBeenCalled();
+		expect(builderTools(hostContract(f))).toBeUndefined();
 		// Cold Sessions through the same production receiver: the first render decides,
 		// later renders after the association ends or starts keep that Pod as created.
 		for (const [first, later] of [
@@ -514,15 +510,6 @@ describe("Session reserve resource adapter", () => {
 			expect(f.create).not.toHaveBeenCalled();
 			expect(hostContract(f)).toBe(first ? contract : undefined);
 		}
-		// Without the profile fact or without the deployment contract, the reserve declares nothing.
-		const unconfigured = fixture("codex", {
-			reserve: {
-				connectionInstallBootstrap: bootstrapFor(workloadTestPolicy.namespace),
-			},
-			connectionManualAssociation: true,
-		});
-		await unconfigured.ready();
-		expect(hostContract(unconfigured)).toBeUndefined();
 	});
 	it("preserves the verified read-only Skill generation used by normal Sessions", async () => {
 		const f = fixture();

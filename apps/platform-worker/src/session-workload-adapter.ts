@@ -76,6 +76,8 @@ import {
 } from "./connection-install-bootstrap.js";
 import {
 	connectionManualPublicationDescriptorV1,
+	connectionManualPublicationProofAnnotationV1,
+	connectionManualPublicationProofMatchesV1,
 	parseConnectionManualPublicationContractV1,
 } from "./connection-manual-publication.js";
 import type { ExecutorInstanceControlV2 } from "./executor-instance-startup.js";
@@ -2261,17 +2263,20 @@ function resourceSpecMatches(
 }
 
 /**
- * #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host may declare the dynamic Connection
- * tools is fixed when its Pod is created, and Pod env cannot change afterwards. For an
- * existing Pod the expected render therefore takes the live Host's fact: no contract, or a
- * contract this Worker accepts for the gate's descriptor. A later association change then
- * neither conflicts in `apply` nor drifts in `observe`, and the already started Thread keeps
- * its declaration. Any other value or any other difference is still a mismatch.
+ * #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host declares the dynamic Connection
+ * tools is decided once, when the Worker creates its Pod (Pod env cannot change afterwards).
+ * When the live Host differs from the current decision, the expected render takes the live
+ * state only if the Pod carries the Worker's proof of exactly that state (contract digest or
+ * none) for this namespace, Sandbox, generation and fence, and a live contract also passes
+ * the Worker's contract check. A later association change or contract withdrawal then keeps
+ * the original declaration without conflict or drift. A Pod cannot prove a contract or a
+ * removal on its own: without the proof, or without the key, it stays a mismatch.
  */
 function withLivePublicationContract(
 	current: KubernetesObject,
 	expected: KubernetesObject,
 	allocation: SessionSandboxAllocationV1,
+	proofKey: string | undefined,
 ): KubernetesObject {
 	const bootstrap = allocation.connectionInstallBootstrap;
 	if (expected.kind !== "Pod" || current.kind !== "Pod" || !bootstrap)
@@ -2283,25 +2288,45 @@ function withLivePublicationContract(
 			(e) => e.name === connectionInstallPublicationContractEnvironmentV1,
 		) ?? [];
 	const live = entries[0];
+	if (!host || entries.length > 1 || live?.valueFrom !== undefined)
+		return expected;
+	const contract = live?.value;
+	if (contract === bootstrap.publicationContract) return expected;
 	if (
-		!host ||
-		entries.length > 1 ||
-		(live !== undefined &&
-			(live.valueFrom !== undefined ||
-				parseConnectionManualPublicationContractV1(
-					live.value,
-					connectionManualPublicationDescriptorV1,
-				).status !== "valid"))
+		proofKey === undefined ||
+		(contract !== undefined &&
+			parseConnectionManualPublicationContractV1(
+				contract,
+				connectionManualPublicationDescriptorV1,
+			).status !== "valid")
 	)
 		return expected;
-	if (live?.value === bootstrap.publicationContract) return expected;
-	const { publicationContract: _current, ...rest } = bootstrap;
+	const proof =
+		current.metadata?.annotations?.[
+			connectionManualPublicationProofAnnotationV1
+		];
+	if (
+		!connectionManualPublicationProofMatchesV1(proof, proofKey, {
+			namespace: allocation.namespace,
+			sandboxId: allocation.sandboxId,
+			generation: allocation.generation,
+			resourceFence: allocation.resourceFence,
+			...(contract === undefined ? {} : { contract }),
+		})
+	)
+		return expected;
+	const {
+		publicationContract: _contract,
+		publicationProof: _proof,
+		...rest
+	} = bootstrap;
 	const aligned = sessionSandboxResourcesV1({
 		...allocation,
-		connectionInstallBootstrap:
-			live?.value === undefined
-				? rest
-				: { ...rest, publicationContract: live.value },
+		connectionInstallBootstrap: {
+			...rest,
+			publicationProof: proof as string,
+			...(contract === undefined ? {} : { publicationContract: contract }),
+		},
 	}).find((resource) => resource.kind === "Pod");
 	if (!aligned) throw new WorkloadKubernetesError("policy");
 	return aligned;
@@ -2463,6 +2488,8 @@ export class SessionExecutorStartupExpiredV1 extends WorkloadKubernetesError {
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly executorIdentityIssuer?: KeyObject;
+	/** #4199 C2: deployment service token keying the declaration proof; absent compares strictly. */
+	readonly connectionPublicationProofKey?: string;
 }) {
 	const ensureExecutorIdentity = async (
 		pod: KubernetesObject,
@@ -2849,6 +2876,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 								current,
 								expected,
 								allocation,
+								options.connectionPublicationProofKey,
 							) as V1Pod,
 						)
 					)
@@ -3078,7 +3106,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 									: current,
 								purpose === "control"
 									? withoutOAuthProvisioning(expected, allocation)
-									: withLivePublicationContract(current, expected, allocation),
+									: withLivePublicationContract(
+											current,
+											expected,
+											allocation,
+											options.connectionPublicationProofKey,
+										),
 							));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {

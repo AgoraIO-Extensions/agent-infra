@@ -8,6 +8,7 @@ import type {
 	V1Service,
 	V1Volume,
 } from "@kubernetes/client-node";
+import { connectionManualPublicationProofAnnotationV1 } from "./connection-manual-publication.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { agentContainerSecurityContext } from "./kubernetes-runtime-comparison.js";
 
@@ -53,13 +54,18 @@ export interface SessionSandboxConnectionInstallBootstrapV1 {
 	 * for a Session of an Agent with a verified Owner manual association.
 	 */
 	readonly publicationContract?: string;
+	/**
+	 * #4199 C2: the Worker's proof of this Pod's declaration decision (contract or none),
+	 * written to the Pod as an annotation; see `connectionManualPublicationProofV1`.
+	 */
+	readonly publicationProof?: string;
 }
 
 /** Once-per-deployment trust. Sandbox-specific material is selected by the Worker. */
 export interface ConnectionInstallBootstrapDeploymentV1
 	extends Omit<
 		SessionSandboxConnectionInstallBootstrapV1,
-		"installToken" | "tlsSecretRef" | "publicationContract"
+		"installToken" | "tlsSecretRef" | "publicationContract" | "publicationProof"
 	> {
 	readonly tlsSecretForSandbox: (
 		resourceName: string,
@@ -181,6 +187,9 @@ export function projectSessionSandboxConnectionInstallV1(
 			(typeof input.publicationContract !== "string" ||
 				input.publicationContract === "" ||
 				Buffer.byteLength(input.publicationContract) > 65_536)) ||
+		(input.publicationProof !== undefined &&
+			(typeof input.publicationProof !== "string" ||
+				!/^[A-Za-z0-9_-]{43}$/.test(input.publicationProof))) ||
 		resolveApprovedConnectionSystemAccessV1(input.configuration, input.approval)
 			.status !== "available"
 	)
@@ -238,6 +247,14 @@ export function projectSessionSandboxConnectionInstallV1(
 		hostEnv.set(item.name, item);
 	}
 	host.env = [...hostEnv.values()];
+	if (input.publicationProof !== undefined)
+		pod.metadata = {
+			...pod.metadata,
+			annotations: {
+				...pod.metadata?.annotations,
+				[connectionManualPublicationProofAnnotationV1]: input.publicationProof,
+			},
+		};
 	host.ports = [
 		...(host.ports ?? []),
 		{ name: "oauth", containerPort: input.port },

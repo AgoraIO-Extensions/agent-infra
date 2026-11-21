@@ -61,6 +61,10 @@ import {
 	runtimeConnectionInstallationRevisionEnvironment,
 	runtimeConnectionOAuthPublicationEnvironment,
 } from "./connection-consumer-projection.js";
+import {
+	connectionManualPublicationProofV1,
+	parseConnectionManualPublicationContractV1,
+} from "./connection-manual-publication.js";
 import type {
 	WorkerKubernetesClientV1,
 	WorkloadResourceKind,
@@ -270,7 +274,7 @@ it("keeps the empty installation receiver on both cold and reserve Hosts", () =>
 	).toThrow();
 });
 
-it("hands the publication contract to the Host only when the render carries it, and keeps a running Pod", async () => {
+describe("#4199 C2 publication contract on the Session Host", () => {
 	const configuration = {
 		schemaVersion: 1 as const,
 		publicOrigin: "https://connection.example.test",
@@ -331,88 +335,239 @@ it("hands the publication contract to the Host only when the render carries it, 
 	};
 	const hostEnv = (selected: SessionSandboxAllocationV1) =>
 		sessionSandboxResourcesV1(selected)[5].spec?.containers[0]?.env ?? [];
-	const value = hostEnv(declared).find((e) => e.name === name)?.value;
-	expect(value).toBe(publicationContract);
-	// The Host takes exactly this value as its deployment contract (#4337 parser).
-	expect(parseRuntimeOAuthDynamicPublicationContractV1(value)).toEqual(
-		JSON.parse(publicationContract),
-	);
-	expect(hostEnv(undeclared).some((e) => e.name === name)).toBe(false);
-	for (const pod of [declared, undeclared].map(
-		(selected) => sessionSandboxResourcesV1(selected)[5],
-	))
-		expect(
-			pod.spec?.initContainers?.some((c) =>
-				c.env?.some((e) => e.name === name),
-			),
-		).toBe(false);
-	expect(() =>
-		sessionSandboxResourcesV1({
-			...declared,
-			connectionInstallBootstrap: {
-				...connectionInstallBootstrap,
-				publicationContract: "x".repeat(65_537),
-			},
-		}),
-	).toThrow();
+	it("hands the contract to the Host only when the render carries it", () => {
+		const value = hostEnv(declared).find((e) => e.name === name)?.value;
+		expect(value).toBe(publicationContract);
+		// The Host takes exactly this value as its deployment contract (#4337 parser).
+		expect(parseRuntimeOAuthDynamicPublicationContractV1(value)).toEqual(
+			JSON.parse(publicationContract),
+		);
+		expect(hostEnv(undeclared).some((e) => e.name === name)).toBe(false);
+		for (const pod of [declared, undeclared].map(
+			(selected) => sessionSandboxResourcesV1(selected)[5],
+		))
+			expect(
+				pod.spec?.initContainers?.some((c) =>
+					c.env?.some((e) => e.name === name),
+				),
+			).toBe(false);
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...declared,
+				connectionInstallBootstrap: {
+					...connectionInstallBootstrap,
+					publicationContract: "x".repeat(65_537),
+				},
+			}),
+		).toThrow();
+	});
 
-	// Whether a Host may declare is fixed when its Pod is created (Pod env is immutable).
-	// A later association change is applied and observed against that fact in the
-	// production order (apply, then observe): no conflict, no drift, nothing added or removed.
+	// The Worker decides once, when it creates the Pod, and proves that decision on the Pod
+	// for this Sandbox incarnation (connectionManualPublicationProofV1). Production order:
+	// apply, then observe; retries without a recorded Pod UID take the same path.
+	const key = "fixture-deployment-service-token";
+	const where = {
+		namespace: allocation.namespace,
+		sandboxId: allocation.sandboxId,
+		generation: allocation.generation,
+		resourceFence: allocation.resourceFence,
+	};
+	const proven = (contract?: string): SessionSandboxAllocationV1 => ({
+		...allocation,
+		connectionInstallBootstrap: {
+			...connectionInstallBootstrap,
+			...(contract === undefined ? {} : { publicationContract: contract }),
+			publicationProof: connectionManualPublicationProofV1(key, {
+				...where,
+				...(contract === undefined ? {} : { contract }),
+			}),
+		},
+	});
+	const changed = (edit: (value: Record<string, any>) => void) => {
+		const value = JSON.parse(publicationContract);
+		edit(value);
+		const text = JSON.stringify(value);
+		// Each variant is a well-formed contract the Worker would accept on its own.
+		expect(
+			parseConnectionManualPublicationContractV1(text, {
+				ref: "connection-mcp-publication",
+				revision: "1",
+			}).status,
+		).toBe("valid");
+		return text;
+	};
+	const declaredHost = proven(publicationContract);
+	const undeclaredHost = proven();
 	const contractOf = (pod: V1Pod | null) =>
 		pod?.spec?.containers[0]?.env?.find((e) => e.name === name)?.value;
-	for (const [created, later] of [
-		[declared, undeclared],
-		[undeclared, declared],
-	] as const) {
-		const client = api();
-		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
-		await adapter.apply(created);
+	const runningPod = async (
+		client: ReturnType<typeof api>,
+		created: SessionSandboxAllocationV1,
+	) => {
 		const pod = await client.read<V1Pod>("Pod", created.podName);
 		if (!pod) throw Error("Missing Pod");
 		pod.status = {
 			phase: "Running",
 			conditions: [{ type: "Ready", status: "True" }],
 		};
-		const uid = pod.metadata?.uid;
-		expect((await adapter.observe(created)).status).toBe("ready");
-		for (let retry = 0; retry < 2; retry += 1) {
-			await adapter.apply(later);
-			expect((await adapter.observe(later)).status).toBe("ready");
+		return pod;
+	};
+	it("keeps the Pod's proven decision through unbinding, association and contract withdrawal", async () => {
+		expect(
+			(sessionSandboxResourcesV1(declaredHost)[5] as V1Pod).metadata
+				?.annotations?.["agent-infra.agora.io/connection-publication-proof"],
+		).toBe(declaredHost.connectionInstallBootstrap?.publicationProof);
+
+		// Kept: unbinding, a later association, and a withdrawn or changed deployment contract
+		// leave the Pod as created (Spec §13.5.6: the original Thread keeps its declaration).
+		for (const [created, laters] of [
+			[
+				declaredHost,
+				[
+					undeclaredHost,
+					proven(changed((v) => (v.serviceRef = "next-release"))),
+				],
+			],
+			[undeclaredHost, [declaredHost]],
+		] as const) {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({
+				client,
+				connectionPublicationProofKey: key,
+			});
+			await adapter.apply(created);
+			const pod = await runningPod(client, created);
+			const uid = pod.metadata?.uid;
+			expect((await adapter.observe(created)).status).toBe("ready");
+			for (const later of laters)
+				for (let retry = 0; retry < 2; retry += 1) {
+					await adapter.apply(later, []);
+					expect((await adapter.observe(later)).status).toBe("ready");
+				}
+			const kept = await client.read<V1Pod>("Pod", created.podName);
+			expect(kept?.metadata?.uid).toBe(uid);
+			expect(contractOf(kept)).toBe(
+				created.connectionInstallBootstrap?.publicationContract,
+			);
+			// Any other drift of the same Pod is still found.
+			const host = pod.spec?.containers[0];
+			if (!host) throw Error("Missing Host");
+			host.env = [...(host.env ?? []), { name: "FORGED", value: "1" }];
+			expect((await adapter.observe(laters[0])).status).toBe("unknown");
+			await expect(adapter.apply(laters[0])).rejects.toThrow();
 		}
-		const kept = await client.read<V1Pod>("Pod", created.podName);
-		expect(kept?.metadata?.uid).toBe(uid);
-		expect(contractOf(kept)).toBe(
-			created.connectionInstallBootstrap?.publicationContract,
-		);
-		// Any other drift of the same Pod is still found.
-		const host = pod.spec?.containers[0];
-		if (!host) throw Error("Missing Host");
-		host.env = [...(host.env ?? []), { name: "FORGED", value: "1" }];
-		expect((await adapter.observe(later)).status).toBe("unknown");
-		await expect(adapter.apply(later)).rejects.toThrow();
-	}
-	// A live contract the Worker would not accept is drift, not a fact to keep.
-	for (const forged of [
-		"{}",
-		publicationContract.replace('"revision":"1"', '"revision":"2"'),
-	]) {
-		const client = api();
-		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
-		await adapter.apply(declared);
-		const pod = await client.read<V1Pod>("Pod", declared.podName);
-		const entry = pod?.spec?.containers[0]?.env?.find((e) => e.name === name);
-		if (!pod || !entry) throw Error("Missing contract");
-		entry.value = forged;
-		pod.status = {
-			phase: "Running",
-			conditions: [{ type: "Ready", status: "True" }],
-		};
-		for (const selected of [declared, undeclared]) {
-			await expect(adapter.apply(selected)).rejects.toThrow();
-			expect((await adapter.observe(selected)).status).toBe("unknown");
+	});
+
+	it("refuses a contract or a removal the live Pod cannot prove", async () => {
+		// Refused: a same-owned Pod rebuilt under a new UID before any Pod UID was recorded,
+		// carrying the original proof but another well-formed contract, or no contract.
+		for (const forge of [
+			changed((v) => (v.serviceRef = "other-service")),
+			changed((v) => {
+				v.contract.tools[0].name = "run_anything";
+				v.toolDeclarations[0].name = "run_anything";
+			}),
+			changed((v) => {
+				v.toolDeclarations[0].inputSchema = {
+					type: "object",
+					properties: { command: { type: "string" } },
+				};
+			}),
+			changed((v) => {
+				v.contract.tools[0].succeededResultSchema = { type: "string" };
+			}),
+			undefined,
+		]) {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({
+				client,
+				connectionPublicationProofKey: key,
+			});
+			await adapter.apply(declaredHost);
+			const pod = await runningPod(client, declaredHost);
+			const forged = structuredClone(pod);
+			const host = forged.spec?.containers[0];
+			if (!host) throw Error("Missing Host");
+			host.env = (host.env ?? []).flatMap((e) =>
+				e.name !== name
+					? [e]
+					: forge === undefined
+						? []
+						: [{ name, value: forge }],
+			);
+			await client.delete(pod);
+			await client.create({
+				...forged,
+				metadata: {
+					...forged.metadata,
+					uid: "uid-forged",
+					resourceVersion: "9",
+				},
+			});
+			for (const later of forge === undefined
+				? [declaredHost]
+				: [declaredHost, undeclaredHost]) {
+				await expect(adapter.apply(later, [])).rejects.toThrow();
+				expect((await adapter.observe(later)).status).toBe("unknown");
+			}
 		}
-	}
+
+		// A proof made for another Sandbox incarnation or under another key proves nothing,
+		// and without the key the comparison stays strict.
+		for (const [proofKey, binding] of [
+			[key, { ...where, resourceFence: where.resourceFence + 1 }],
+			["another-deployment-token", where],
+		] as const) {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({
+				client,
+				connectionPublicationProofKey: key,
+			});
+			await adapter.apply({
+				...declaredHost,
+				connectionInstallBootstrap: {
+					...connectionInstallBootstrap,
+					publicationContract,
+					publicationProof: connectionManualPublicationProofV1(proofKey, {
+						...binding,
+						contract: publicationContract,
+					}),
+				},
+			});
+			await runningPod(client, declaredHost);
+			await expect(adapter.apply(undeclaredHost, [])).rejects.toThrow();
+		}
+		{
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(declaredHost);
+			await runningPod(client, declaredHost);
+			await expect(adapter.apply(undeclaredHost)).rejects.toThrow();
+		}
+		// A recorded Pod UID still pins the instance: a replaced Pod is refused as before.
+		{
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({
+				client,
+				connectionPublicationProofKey: key,
+			});
+			await adapter.apply(declaredHost);
+			const pod = await runningPod(client, declaredHost);
+			const observed = await adapter.observe(declaredHost);
+			await client.delete(pod);
+			await client.create({
+				...structuredClone(pod),
+				metadata: {
+					...pod.metadata,
+					uid: "uid-replaced",
+					resourceVersion: "9",
+				},
+			});
+			await expect(
+				adapter.apply(undeclaredHost, observed.resources),
+			).rejects.toThrow();
+		}
+	});
 });
 
 describe("image-only Session layout", () => {
