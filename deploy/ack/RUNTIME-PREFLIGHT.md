@@ -39,6 +39,12 @@ selector、toleration 或 RuntimeClass。沿既有 `expectedNodePrefix` 字段�
 完整节点名；该分支要求实际调度节点精确匹配，并回读其 UID、Linux/amd64 架构。调度到其他
 节点或被注入 ECI 字段均拒绝；显式 ECI 分支保持原 selector、provider toleration 和缓存门禁。
 
+普通节点分支和下文的 RuntimeClass 分支是通用能力，只适用于已证实际执行 NetworkPolicy 的
+环境。本 ACK 的 ECS 节点使用 flannel，不执行 NetworkPolicy，不能用于正式 Agent 或 Session
+的准备与采用；正式 job、executor policy 和 Worker placement 都使用显式 ECI 分支，并满足
+[工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)
+的执行证据门禁。
+
 正式 `template-preflight` 的四个 job 与容量输入必须声明相同的 `resourceProfileRef`、
 `resources`、`codexSessionExecutor`、`storageSize` 和 `storageClassName`；已有
 `workspaceSnapshotEgress` 也属于资源摘要，不能在发布时省略。未声明 executor 的旧 job
@@ -90,7 +96,8 @@ Sandbox 选择一个由集群管理员提供的 `RuntimeClass`（例如 ACK Sand
 在私有 values 中设置 `sessionRuntimeScheduling.runtimeClassName` 后，Admission Policy 会给
 受管 Session Pod 注入该 RuntimeClass 和架构 selector，并跳过 ECI `virtual-kubelet` selector
 与 toleration。Chart 不创建或伪造 RuntimeClass handler；handler、专用节点池、RuntimeClass
-调度规则和 NetworkPolicy 能力由 SRE 提供。
+调度规则和 NetworkPolicy 能力由 SRE 提供。RuntimeClass 节点池同样须满足上文的执行证据门禁，
+提供方证明前不作为本 ACK 的正式运行形态。
 
 启用前须核对 RuntimeClass 提供方支持的集群版本。
 [ACK runV 支持范围](https://www.alibabacloud.com/help/en/ack/ack-managed-and-ack-dedicated/user-guide/overview-10/)

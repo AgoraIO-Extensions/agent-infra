@@ -379,7 +379,7 @@ Worker 到 RuntimeHost 的原业务、控制和就绪检查适用下列集群内
 | 要求 | 机制及边界 |
 | --- | --- |
 | Worker 只访问获准 Host | 只连接服务端从持久 Workload 或 Session 分配解析出的精确 origin `http://<Service>.<namespace>.svc:<port>`；拒绝其他 scheme、userinfo、query、hash 与 redirect，调用方不能覆盖 origin。 |
-| 限定访问面 | Agent 级 Workload 与 Session Sandbox 的原业务、控制和就绪端口的 NetworkPolicy ingress 只放行 Worker 选择器。healthz 或 Service 存在不证明隔离。安装专用端口见 [§13.5.6](#1356-标准-oauth-安装供应)。 |
+| 限定访问面 | Agent 级 Workload 与 Session Sandbox 的原业务、控制和就绪端口的 NetworkPolicy ingress 只放行 Worker 选择器。healthz 或 Service 存在不证明隔离。这些 Pod 只运行在已证实际执行 NetworkPolicy 的运行形态上，见 [§10.1“运行形态与调度”](#101-workload-形态)；NetworkPolicy 对象、执行组件存在或一次 timeout 都不证明执行。安装专用端口见 [§13.5.6](#1356-标准-oauth-安装供应)。 |
 | Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。部署控制其发布、访问、轮换和撤销；Host 所持 token 不能取得 Grant 签名私钥。 |
 | Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。 |
 
@@ -751,6 +751,15 @@ Web 与 `platform-api` 是位置无关的 Platform 服务；`platform-worker`、
 - ServiceAccount 默认没有 Kubernetes API 权限。
 - Agent Service 只提供集群内部地址，Pod 或 Service 地址不作为用户入口。Pod、可选 StatefulSet、Service、ServiceAccount、PVC、部署访问路由和 NetworkPolicy 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐，Agent 与 Owner 都不能直接创建或修改这些资源。
 - 平台配置、对话和 Connection 授权不保存在 Pod 本地。
+
+**运行形态与调度。** 取舍见 [ADR-0049](../adr/0049-run-agent-workloads-where-networkpolicy-is-enforced.md)。
+
+- Worker 为 Agent 创建的全部 Pod 只运行在已证实际执行 NetworkPolicy 的运行形态上，包括单服务 StatefulSet、多服务 Deployment/StatefulSet、发布前迁移 Job、init 与工作区快照准备 Pod，以及 Session Sandbox。没有满足条件的运行形态时，不创建、不准入，也不回退到其他节点。
+- 调度位置是部署权威输入。Worker 从受信部署配置取得固定 placement，统一注入上述资源的 Pod 模板，并纳入期望规格、漂移判定、恢复与 Worker 资源对象指纹。Owner、Runtime Manifest、多服务资源描述、请求或模型都不能提供或覆盖 `nodeSelector`、`tolerations`、`affinity`、`nodeName`、`runtimeClassName`，带这些字段的输入在准入时拒绝。实际对象上出现非部署注入的调度字段按漂移处理，不静默忽略。本节新增的 Agent 级 Host placement 不进入 Session Sandbox、reserve 与执行容量共用的资源配置摘要，发布它不使这些既有批准整体失效；既有 `codexSessionExecutor.placement` 及其他改变 Session 实际 Pod 或授权输入的配置，仍按 [§10.1.1](#1011-session-owned-sandbox-权威与资源绑定) 的原摘要、失配与重验规则。
+- 发布或修改 placement 本身不重建、不迁移既有 Agent 级 Workload。现存 Agent 只在批准的逐 Agent 正式 lifecycle（`stop_agent`/`restart_agent`，带幂等键与 `expectedRevision` CAS）中采用：沿该 lifecycle 已有的准入封闭新投递，原业务与控制操作排空或按原规则收口，核对原 Workload UID、PVC UID 与 fence 后由一次调谐写入 placement。每个 Host 只重建一次；多服务 Agent 的一次 lifecycle 覆盖全部服务与迁移 Job。结果不明时沿原命令与幂等键查询收口，不自动换键或再次重启。
+- 采用前，部署可显式开启保留态：与部署前形状完全一致、不带任何调度字段的既有对象不按漂移自动重建，但也不计为运行在已证执行者上；其他调度形状仍按漂移处理。Owner 无法提供调度字段，Owner 触发的调谐同样写入 placement，因此不能借保留态留在原节点。全部采用后部署关闭保留态，剩余旧对象按漂移处理。分批采用不豁免本节其他门槛：新创建的 Pod 必须带 placement，预检仍须当期证据，保留态 Host 在采用前不视为已隔离。
+- 部署预检在没有可证执行者时 fail closed。它只读回读已批准的当期证据：执行组件的配置回执，以及绑定真实 cluster、namespace 和目标 Pod 集合的 allow→deny→recovery 结果。证据缺失、过期或与目标不符，只有 NetworkPolicy 对象、组件或 timeout，或可落节点中混有无执行者的节点，都拒绝发布。预检不在生产自动创建探针。
+- ACK 部署中，flannel 的 ECS 节点不执行 NetworkPolicy（[#4351](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351)）。Agent 级 Workload 与 Session Sandbox 都运行在由 ACK Poseidon 执行 NetworkPolicy 的 ECI 上，ECS 节点只承载平台组件。平台组件不运行用户代码；它们的内部端口对上述 Pod 的阻断由来源 Pod 在 ECI 上执行的 egress NetworkPolicy 承担，并继续保留应用层鉴权。阻断未经批准的平台端口不取消原合同的必要链路：Worker 访问 Host、Sandbox 出站的集群 DNS 与获准目标（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）、多服务同一 Agent 内互访（[§10.12](#1012-builder-与多服务自定义-agent)）和安装回调 listener（[§13.5.6](#1356-标准-oauth-安装供应)）照旧，本节不新增或扩大例外。参数与证据流程见 [ACK Runtime 隔离预检](../../deploy/ack/RUNTIME-PREFLIGHT.md)。
 - ACK 部署可为 ECI Session 启用镜像缓存准入：部署运维身份（非产品服务身份）预先准备不可变镜像集合并回读缓存
   Ready，再发布 namespace 及 Session 标签双重限定的创建准入策略，绑定精确镜像集合与缓存 ID。
   未登记镜像不得创建新 Session Pod；准入把全部容器的拉取策略收紧为 `Never`，缓存失效不能
@@ -1633,7 +1642,7 @@ Builder 是标准模板上的普通 Agent，复用 Platform 的 IdentityContext�
 
 Builder 可以生成 Dockerfile 和受平台约束的多服务 System Manifest。多服务系统在 Platform DB 中仍表示为一个 Agent 管理对象，只支持 self-managed 模式；平台不创建多 Agent 生命周期，不把 Compose 作为请求格式，也不渲染 Helm。服务集合、入口服务、镜像 Digest、配置和版本整体管理，不承诺服务切换具有分布式原子性；数据库迁移、持久业务数据兼容和恢复由系统部署流程与 System Owner 负责。
 
-多服务版本只接受受限的标准 Kubernetes 资源描述：Deployment 或 StatefulSet、Service、ConfigMap、PVC 和发布前迁移 Job。请求以内联 YAML 提交并作为不可变版本的一部分保存。字段白名单、资源规格档位、单 Agent 总量上限和固定入口 annotation 是契约的一部分；平台注入名称、标签、ServiceAccount、NetworkPolicy、入口路由和规格档位。平台拒绝 privileged、hostNetwork、hostPath、自带 ServiceAccount 或 RBAC、未经批准的 Secret 引用、未获准 Registry 和非 Digest 镜像。
+多服务版本只接受受限的标准 Kubernetes 资源描述：Deployment 或 StatefulSet、Service、ConfigMap、PVC 和发布前迁移 Job。请求以内联 YAML 提交并作为不可变版本的一部分保存。字段白名单、资源规格档位、单 Agent 总量上限和固定入口 annotation 是契约的一部分；平台注入名称、标签、ServiceAccount、NetworkPolicy、入口路由、规格档位和 [§10.1](#101-workload-形态) 的部署 placement。平台拒绝 privileged、hostNetwork、hostPath、自带 ServiceAccount 或 RBAC、自带调度字段、未经批准的 Secret 引用、未获准 Registry 和非 Digest 镜像。
 
 平台在绑定 Agent 版本和实际调谐前，按最终资源内容执行准入。所有服务通过准入和真实就绪检查后，才创建或切换版本；实际资源只能由 platform-worker 调谐，并且必须与已准入内容一致，内容变化必须重新准入。入口服务是唯一对外路由，非入口服务只在同一 Agent 内可达。任一服务失败时返回受控失败原因，旧版本继续提供服务；失败原因不含日志正文、凭证、内部地址或用户输入。
 
