@@ -595,6 +595,18 @@ export const createProductionSessionSandboxReceiverV1 = (workload, options) => {
 export const createWecomDeploymentCoordinatorV1 = (input) => { globalThis.calls.push('wecom'); globalThis.wecomDatabase = input.databaseUrl; return {}; };
 `,
 	);
+	// #4199 C2: the real Worker assembly of the exception route.
+	await build({
+		entryPoints: [
+			new URL("./connection-manual-installation-deployment.ts", import.meta.url)
+				.pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "connection-manual-installation-deployment.js"),
+	});
 	// #3289：使用真实的 origin/egress 解析，覆盖写入任何 Kubernetes 资源之前的配置拒绝。
 	await build({
 		entryPoints: [
@@ -701,6 +713,12 @@ try {
    process.exit(0);
  }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+	if (process.env.RUN_MANUAL_ENABLED) {
+	 const bootstrap = globalThis.manualBootstrap;
+	 console.log(JSON.stringify({ manualDrain: typeof conversation.connectionInstallation?.manual?.drain === 'function', standard: conversation.connectionInstallation?.configuration?.clientId ?? null, bootstrap: bootstrap ? { port: bootstrap.port, workerOrigin: bootstrap.workerOrigin, clientName: bootstrap.clientName, configuration: bootstrap.configuration, approval: bootstrap.approval } : null }));
+	 await conversation.closeDeployment?.();
+	 process.exit(0);
+	}
 	if (process.env.RUN_MANUAL_DORMANCY) {
 	 console.log(JSON.stringify({ manualDrain: !!conversation.connectionInstallation?.manual, manualBootstrap: !!globalThis.manualBootstrap, standard: conversation.connectionInstallation?.configuration?.clientId ?? null }));
 	 await conversation.closeDeployment?.();
@@ -1855,7 +1873,8 @@ delete connectionInstallation.configuration.patBinding;`
 						: JSON.stringify({
 								service: "platform-worker",
 								code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
-								dependency: "EP-1123",
+								// #4199 C2: without an exception approval record the route stays dormant.
+								reason: "exception_approval_missing",
 							}),
 				);
 			}
@@ -2919,3 +2938,224 @@ it("loads a scoped hostname declaration without rewriting legacy Worker configur
 		await rm(file, { force: true });
 	}
 });
+
+// #4199 C2 D5/S3: the Worker takes the same exception gate decision as the API
+// from the same projected inputs, and carries an enabled route or does not start.
+it("assembles the exception route exactly when the shared gate opens it", async () => {
+	const { generateKeyPairSync, randomBytes } = await import("node:crypto");
+	const { connectionSystemAccessFingerprintV1: fingerprintOf } = await import(
+		"@agent-infra/contracts/connection-consumer-profile"
+	);
+	const {
+		decideConnectionManualInstallationDeploymentV1,
+		migratePlatformDatabase,
+	} = await import("@agent-infra/platform-store");
+	const { startPostgresTestDatabase } = await import(
+		"../../../packages/platform-store/src/postgres-test.js"
+	);
+	const { runtimeTlsFixture } = await import(
+		"../../../tests/runtime-tls-fixture.js"
+	);
+	const postgres = (await import("postgres")).default;
+	const realDatabase = await startPostgresTestDatabase(
+		"worker-entry-manual-route",
+	);
+	const tls = await runtimeTlsFixture({
+		dnsNames: ["worker.worker-binding.svc"],
+	});
+	const sql = postgres(realDatabase.databaseUrl, {
+		max: 1,
+		onnotice: () => {},
+	});
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	try {
+		await migratePlatformDatabase({ databaseUrl: realDatabase.databaseUrl });
+		const systemAccess = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			audience: "https://connection.example.test/mcp",
+			egressProfile: { ref: "fixture-egress", revision: "r1" },
+			issuer: "https://connection.example.test/",
+			oauthCallbackUrl: "https://platform.example.test/connection/callback",
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: fingerprintOf(systemAccess),
+			egressEnforced: true,
+			source: { ref: "user-authorized-2026-11-18T08:37Z", revision: "1" },
+		};
+		const exceptionApproval = {
+			schemaVersion: 1,
+			kind: "consistency-exception-v1",
+			policy: { ref: "consistency-exception-v1", revision: "1" },
+			notAfter: "2099-01-01T00:00:00Z",
+			maximumPinnedPrincipals: 2,
+			verificationWindowHours: 24,
+			connectionRelease: "agora-connector-734dafc9",
+			systemAccessFingerprint: approval.configFingerprint,
+			approvalSource: approval.source,
+		};
+		const serviceToken = `service-${randomBytes(16).toString("hex")}`;
+		const keyringKey = generateKeyPairSync("rsa", { modulusLength: 3072 })
+			.privateKey.export({ format: "der", type: "pkcs8" })
+			.toString("base64");
+		const readbackPort = 40_000 + Math.floor(Math.random() * 20_000);
+		// The legacy shared profile is not part of system access mode.
+		const base = original
+			.replace(/export const connectionConsumerProfile = [^\n]*\n/, "")
+			.replace(/export const connectionConsumerApproval = [^\n]*\n/, "")
+			.replace(
+				"export const signing = { workerId: 'worker' };",
+				`import { generateKeyPairSync } from 'node:crypto';
+export const signing = { workerId: 'worker', issuer: 'worker-issuer', keyId: 'worker-key', privateKey: generateKeyPairSync('ed25519').privateKey };
+export const serviceToken = ${JSON.stringify(serviceToken)};`,
+			);
+		const transport = {
+			bootstrap: `export const connectionInstallBootstrap = {
+	port: 3445, workerOrigin: "https://worker.worker-binding.svc:${readbackPort}/",
+	tlsSecretForSandbox: () => ({ name: "fixture-tls", certKey: "tls.crt", keyKey: "tls.key" }),
+	callbackAuthSecretRef: { name: "fixture-callback", key: "callback.auth" },
+	workerCaSecretRef: { name: "fixture-worker-ca", key: "ca.crt" },
+	apiSelector: { component: "platform-api" },
+};`,
+			worker: `export const connectionInstallWorker = {
+	hostCaFile: ${JSON.stringify(join(tls.directory, "ca.crt"))},
+	readbackCertFile: ${JSON.stringify(join(tls.directory, "tls.crt"))},
+	readbackKeyFile: ${JSON.stringify(join(tls.directory, "tls.key"))},
+	keyring: { keys: [{ keyVersion: "key-1", privateKeyPkcs8DerBase64: ${JSON.stringify(keyringKey)} }] },
+};`,
+		};
+		const environment = (record: unknown) => ({
+			RUN_MANUAL_ENABLED: "true",
+			PLATFORM_DATABASE_URL: realDatabase.databaseUrl,
+			AGENT_INFRA_CONNECTION_SYSTEM_ACCESS: JSON.stringify(systemAccess),
+			AGENT_INFRA_CONNECTION_SYSTEM_ACCESS_APPROVAL: JSON.stringify(approval),
+			AGENT_INFRA_CONNECTION_CONFIG_VERSION: `1-${approval.configFingerprint}`,
+			AGENT_INFRA_CONNECTION_EXCEPTION_APPROVAL:
+				record === undefined ? undefined : JSON.stringify(record),
+		});
+		const sameAsApi = (record: unknown) =>
+			decideConnectionManualInstallationDeploymentV1({
+				exceptionApproval: record,
+				standardInstallationConfigured: false,
+				systemAccess: { system: systemAccess, approval },
+				databaseUrl: realDatabase.databaseUrl,
+			});
+		const lastLine = (stdout: string) =>
+			JSON.parse(stdout.trim().split("\n").at(-1) ?? "null");
+		const secrets = [serviceToken, keyringKey, tls.key];
+
+		// Enabled: the drain is wired and the Sandbox bootstrap carries the gate's values.
+		await writeFile(
+			path,
+			`${base}\n${transport.bootstrap}\n${transport.worker}`,
+		);
+		expect((await sameAsApi(exceptionApproval)).status).toBe("enabled");
+		const enabled = run(environment(exceptionApproval));
+		expect(enabled.status, enabled.stderr).toBe(0);
+		expect(lastLine(enabled.stdout)).toEqual({
+			manualDrain: true,
+			standard: null,
+			bootstrap: {
+				port: 3445,
+				workerOrigin: `https://worker.worker-binding.svc:${readbackPort}/`,
+				clientName: "Agent Infra",
+				configuration: systemAccess,
+				approval,
+			},
+		});
+		expect(enabled.stdout).toContain("CONNECTION_MANUAL_INSTALLATION_ENABLED");
+		for (const secret of secrets) {
+			expect(enabled.stdout).not.toContain(secret);
+			expect(enabled.stderr).not.toContain(secret);
+		}
+
+		// The gate opened it but this Worker cannot carry it: it does not start.
+		for (const module of [
+			`${base}\n${transport.bootstrap}`,
+			`${base}\n${transport.worker}`,
+			`${base}\n${transport.bootstrap.replace("port: 3445,", 'port: 3445, clientName: "forged",')}\n${transport.worker}`,
+			`${base}\n${transport.bootstrap}\n${transport.worker.replace(join(tls.directory, "tls.key"), "/missing/tls.key")}`,
+		]) {
+			await writeFile(path, module);
+			const refused = run(environment(exceptionApproval));
+			expect(refused.status).not.toBe(0);
+			expect(lastLine(refused.stdout)).toMatchObject({
+				error: "CONNECTION_MANUAL_INSTALLATION_WORKER_UNAVAILABLE",
+			});
+			for (const secret of [...secrets, "/missing/tls.key"]) {
+				expect(refused.stdout).not.toContain(secret);
+				expect(refused.stderr).not.toContain(secret);
+			}
+		}
+
+		// Dormant exactly when the API is: nothing is assembled and the reason is logged.
+		await writeFile(
+			path,
+			`${base}\n${transport.bootstrap}\n${transport.worker}`,
+		);
+		const dormant = [
+			[undefined, "exception_approval_missing"],
+			[
+				{ ...exceptionApproval, notAfter: "2026-01-01T00:00:00Z" },
+				"exception_expired",
+			],
+			[
+				{ ...exceptionApproval, systemAccessFingerprint: "0".repeat(64) },
+				"system_access_fingerprint_mismatch",
+			],
+			[
+				{ ...exceptionApproval, maximumPinnedPrincipals: 0 },
+				"exception_approval_invalid",
+			],
+		] as const;
+		for (const [record, reason] of dormant) {
+			expect(await sameAsApi(record)).toEqual({ status: "dormant", reason });
+			const result = run(environment(record));
+			expect(result.status, result.stderr).toBe(0);
+			expect(lastLine(result.stdout)).toEqual({
+				manualDrain: false,
+				standard: null,
+				bootstrap: null,
+			});
+			expect(result.stderr.trim()).toBe(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
+					reason,
+				}),
+			);
+		}
+
+		// Cross-user, cross-Agent: another user's confirmed standard installation on
+		// another Agent closes the route for every user in both processes.
+		await sql`insert into platform.agents(id,authorization_revision) values ('agent-b','agent-r1')`;
+		await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values ('personal','bob',1,1)`;
+		await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values ('personal','bob',1,'fixture-key-bob',${sql.json({ purpose: "personal", subjectId: "bob", keyId: "fixture-key-bob", keyVersion: 1 })})`;
+		await sql`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,host_session_ref) values ('conversation-b','agent-b','bob','web','active',1,'agent-r1','host-b')`;
+		await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,runtime_submit_protocol,original_operation_digest,original_submit_host_session_ref,execution_source,relay_key_purpose,relay_key_subject_id,relay_key_id,relay_key_version,delivery_fence) values ('execution-b','conversation-b','agent-b','bob','web','turn-b','processing',1,'agent-r1',now(),'v4',${"a".repeat(43)},'host-b','web','personal','bob','fixture-key-bob',1,3)`;
+		await sql`insert into platform.connection_installation_authorizations
+			(id, execution_id, user_id, confirmation_revision, binding, identity_revision,
+			 agent_authorization_revision, status, expires_at)
+			values ('standard-bob', 'execution-b', 'bob', 'confirmation-r1',
+				${sql.json({ principal: { kind: "user", id: "bob" }, reference: { executionId: "execution-b" } })},
+				'identity-r1', 'agent-r1', 'confirmed', clock_timestamp() + interval '1 hour')`;
+		expect(await sameAsApi(exceptionApproval)).toEqual({
+			status: "dormant",
+			reason: "confirmed_principals_unresolvable",
+		});
+		const unresolved = run(environment(exceptionApproval));
+		expect(unresolved.status, unresolved.stderr).toBe(0);
+		expect(lastLine(unresolved.stdout)).toMatchObject({
+			manualDrain: false,
+			bootstrap: null,
+		});
+	} finally {
+		await writeFile(path, original);
+		await sql.end();
+		await tls.cleanup();
+		await realDatabase.stop();
+	}
+}, 240_000);

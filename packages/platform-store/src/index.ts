@@ -102,12 +102,15 @@ export {
 	type ConnectionManualInstallationDeploymentV1,
 	type ConnectionManualInstallationDormantReasonV1,
 	type ConnectionManualInstallationReceiptV1,
+	type ConnectionSystemAccessEnvironmentConfigurationV1,
 	connectionManualClientNameDefaultV1,
 	connectionManualPublicationContractV1,
 	connectionManualReadbackContractV1,
+	decideConnectionManualInstallationDeploymentV1,
 	isConnectionManualClientNameV1,
 	readConnectionConfirmedPrincipalsV1,
 	readConnectionManualInstallationEnvironmentV1,
+	readConnectionSystemAccessEnvironmentConfigurationV1,
 	resolveConnectionManualInstallationDeploymentV1,
 } from "./connection-manual-installation-deployment.js";
 export { PostgresConnectionManualInstallationStoreV1 } from "./connection-manual-installation-store.js";
