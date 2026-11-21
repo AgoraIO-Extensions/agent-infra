@@ -5,6 +5,7 @@ import {
 	createRuntimeNativeMetadataRequestContextV1,
 	type RuntimeNativeMetadataRequestContextV1,
 } from "../runtime-native-metadata-request-context.js";
+import { NativeMetadataResourceUnavailableV1 } from "../runtime-native-metadata-scope-resolver.js";
 
 import {
 	HttpProtocolError,
@@ -25,7 +26,11 @@ export interface RuntimeNativeMetadataPublicReaderV1 {
 		selector: "status" | "commands" | "skills",
 		requestContext: RuntimeNativeMetadataRequestContextV1,
 		projectionVersion?: 2,
-	): Promise<NativeMetadataProjectionV1OrV2 | null>;
+	): Promise<
+		| NativeMetadataProjectionV1OrV2
+		| typeof NativeMetadataResourceUnavailableV1
+		| null
+	>;
 }
 
 export interface NativeMetadataRoutesDependenciesV1 {
@@ -97,6 +102,8 @@ export function registerNativeMetadataRoutes(
 						selected.projectionVersion,
 					),
 				);
+				if (projection === NativeMetadataResourceUnavailableV1)
+					throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 				if (!projection)
 					throw new HttpProtocolError(
 						"DEPENDENCY_UNAVAILABLE",
