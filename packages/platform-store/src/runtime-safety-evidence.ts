@@ -4,7 +4,8 @@ import {
 	type RuntimePersistedSafetyEvidenceV1,
 	RuntimePersistedSafetyEvidenceV1Schema,
 } from "@agent-infra/contracts/runtime";
-import postgres from "postgres";
+
+import postgres from "./observed-postgres.js";
 
 /** Key order independent; the stored digest identifies the exact accepted record. */
 function canonical(value: unknown): unknown {
