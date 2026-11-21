@@ -3289,6 +3289,32 @@ Principal、client/实例和批准的 publication 合同构造同一版本的非
 调用既有私有发布事务，执行相同的材料持久化、发布锁、提交及 reader 核验。动态路径以该描述符
 为发布输入。启动时只需受保护入口及部署信任，不要求预装完整 client 配置或静态回执文件。
 
+**动态发布回执的字段。** 回执沿用既有私有 publication 回执及 metadata 的字段集，只在回执顶层
+另加 §13.5.1 例外第 7 项要求的标记 `principalMapping`（值为 `consistency-exception-v1`），各字段按下列
+规则取值。每项只来自固定描述符、原安装事务、阶段 2 复读一致的候选、本次 token 响应或部署批准输入，
+不从请求、回跳、Connection 响应自报字段或模型取得；任一项缺失或不一致时不发布。
+
+- 发布修订按安装区分：`delivery.ref` 固定为 `connection-manual-install`；`delivery.revision` 为
+  原 `authorizationId` 与 `confirmationRevision` 的 JSON 数组的 SHA-256 hex。每个安装只发布这一个
+  修订一次；重新安装产生新的授权和修订，不复用、不覆盖旧修订或其发布锁。
+- 回执顶层的 `authorizationId`、`confirmationRevision`、`reference`、`scope` 取原安装事务；
+  `clientId` 与 `configurationFingerprint` 取固定配置；`connectionPrincipalId` 按 §13.5.1 例外
+  第 7 项取候选的 `principalId`。
+- metadata 的 `principal`、`agentId` 取原安装；`consumerId`、`issuer`、`resource`、`audience`、
+  `configFingerprint`、`source` 取本安装由 Owner 关联派生的 Consumer target，其中 `consumerId`
+  是关联的 Connection Agent 标识。EP-1060 回读的实际 Consumer 只由描述符和候选绑定，不写入 metadata。
+- `instanceRef` 取候选中已核实的 DEVICE 实例 `instanceId`，即本次 OAuth client installation 的
+  独立 ConsumerInstance（[Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)）。
+- `serviceRef` 与 `contract`（`ref`、`revision`、`serverInfo`、工具策略）取部署批准的动态发布合同。
+  Host 只在装配时从受保护部署输入取得，并要求其 `ref/revision` 与描述符的 publication 合同一致。
+- `credentialRef` 为 `oauth-` 加原 `authorizationId` 的 SHA-256 hex；`credentialRevision` 为原
+  `authorizationId`、`confirmationRevision` 与固定配置指纹的 JSON 数组的 SHA-256 hex。二者只是
+  Host 本次材料的不可变引用，不是 Connection token ID、Grant 或权限修订。`expiresAt` 取本次
+  token 响应的实际 expiry。
+- 提交证据：发布提交后，`exchange` 阶段的响应带回非秘密的 `commitDigest`（发布提交记录
+  `delivery`、`materialKey`、`installationKey`、`metadataDigest` 的 JSON 的 SHA-256 hex）和
+  上述 `expiresAt`，作为下段启用许可的输入；不带回 Token、metadata 正文或文件路径。
+
 **动态安装的启用许可。** Host 私有 publication 的已提交记录和发布锁状态是实际提交证据。
 Platform Store 在原 confirm 的 claim 仍有效时，核实原 confirm 及该证据，用原安装 CAS 持久写入
 启用许可。例外两阶段路径的原 confirm 来源同时绑定逻辑 confirm 和实际 `exchange` 阶段的引用及
