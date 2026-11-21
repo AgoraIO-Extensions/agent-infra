@@ -42,29 +42,39 @@ export function connectionPrincipalPinDeadlineSql(
 	return sql`clock_timestamp() + make_interval(hours => ${policy.dynamic.principalMapping.verificationWindowHours}::int)`;
 }
 
-/** The installation can still hold a Connection client and is not yet closing. */
-const closable = sql`a.status='confirmed' and m.revoke_state='not_required'
-	and m.registration_state='registered' and m.descriptor_digest is not null`;
+/**
+ * The installation holds a registered Connection client and is not yet
+ * closing: confirmed, or still awaiting the original user's confirmation.
+ */
+const closable = sql`a.status in ('awaiting_confirmation', 'confirmed') and m.revoke_state='not_required'
+	and m.registration_state='registered'`;
 
 /** The pin's user still has an installation this pass can close. */
 const userHasClosable = sql`exists (select 1 from platform.connection_manual_installations m
 	join platform.connection_installation_authorizations a on a.id=m.authorization_id
 	where m.user_id=connection_principal_pins.user_id and ${closable})`;
 
-/** The pin's user still has an installation that is open or has a revoke unsettled. */
+/**
+ * The pin's user still has an installation that may hold a client without a
+ * settled revoke: an unsettled revoke, or a live installation whose
+ * registration is in flight, unknown or registered. An unknown registration
+ * waits for its original-key status verification; it never counts as absent.
+ */
 const userHasOutstanding = sql`exists (select 1 from platform.connection_manual_installations m
 	join platform.connection_installation_authorizations a on a.id=m.authorization_id
 	where m.user_id=connection_principal_pins.user_id
 		and (m.revoke_state in ('pending', 'sending', 'unknown')
-			or (a.status='confirmed' and m.registration_state='registered')))`;
+			or (m.revoke_state='not_required' and m.registration_state in ('sending', 'registered', 'unknown')
+				and a.status in ('preparing', 'awaiting_confirmation', 'confirmed'))))`;
 
 /**
- * Closes confirmed exception installations and queues their revoke with the
- * original key (§13.5.7 per-installation revoke), as the refused-candidate
- * path does. Only installations that can hold a Connection client are
- * touched; in-flight preparations meet the pin rules at their own phase-1
- * CAS. The Worker drain sends the DELETE; an unknown result is only verified
- * with the same key, never resent under a new one.
+ * Closes exception installations that hold a registered client and queues
+ * their revoke with the original key (§13.5.7 per-installation revoke), as the
+ * refused-candidate path does. Commands of the installation that were never
+ * claimed are refused so they cannot hold the revoke behind them; a claimed
+ * one settles or expires first. In-flight preparations meet the pin rules at
+ * their own phase-1 CAS. The Worker drain sends the DELETE; an unknown result
+ * is only verified with the same key, never resent under a new one.
  */
 export async function closeConnectionExceptionInstallationsV1(
 	tx: Transaction,
@@ -87,7 +97,12 @@ export async function closeConnectionExceptionInstallationsV1(
 		const authorizationId = id as string;
 		await tx.execute(sql`
 			update platform.connection_installation_authorizations set status='revoked', revision=revision+1,
-				updated_at=clock_timestamp() where id=${authorizationId} and status='confirmed'
+				updated_at=clock_timestamp() where id=${authorizationId} and status in ('awaiting_confirmation', 'confirmed')
+		`);
+		await tx.execute(sql`
+			update platform.connection_installation_commands set status='rejected', updated_at=clock_timestamp()
+			where authorization_id=${authorizationId} and status='pending' and attempt_id is null
+				and command <> 'revoke'
 		`);
 		await tx.execute(sql`
 			update platform.connection_manual_installations set revoke_state='pending', revision=revision+1,

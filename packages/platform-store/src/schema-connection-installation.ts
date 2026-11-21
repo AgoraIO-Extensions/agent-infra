@@ -259,8 +259,10 @@ export const connectionManualInstallations = platformSchema.table(
  * Item 4/5 facts live only here and in the audit: `verification_state`
  * `pending` is the "主体待核对" label, due at `verification_deadline` (first
  * pin + `verificationWindowHours`, database clock); a uniqueness conflict sets
- * `suspended_at` and restarts the window; `release_requested_at` stops new
- * permits until the release completes. `rule_revision` is the CAS for these
+ * `suspended_at` and reopens the window only for a verified holder;
+ * `release_requested_at` stops new permits until the release completes.
+ * Pins released before migration 0096 carry a backfilled request by
+ * `platform-migration`. `rule_revision` is the CAS for these
  * administrator records and never changes `revision`, which phase receipts bind.
  */
 export const connectionPrincipalPins = platformSchema.table(
