@@ -12695,7 +12695,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (workspace) {
 			if (input.tool !== "read_text_file") protocolInvalid();
 		} else if (refusal) {
-			const declared = this.dynamicConnectionOptions?.declared;
+			// §13.5.6: the Thread keeps the tools it was declared with. Only a
+			// current contract equal to that declaration narrows the aliases; a
+			// revised or withdrawn contract still answers the fixed result.
+			const current = this.dynamicConnectionOptions?.declared;
+			const thread = initial.session.dynamicConnection;
+			const declared =
+				current &&
+				thread &&
+				isDeepStrictEqual(thread.contract, current.contract) &&
+				thread.toolsFingerprint === codexDeclaredConnectionFingerprint(current)
+					? current
+					: undefined;
 			if (
 				!/^mcp_[a-f0-9]{32}$/.test(input.tool) ||
 				(declared &&
