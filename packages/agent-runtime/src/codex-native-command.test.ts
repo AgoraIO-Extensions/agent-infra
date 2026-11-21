@@ -436,7 +436,10 @@ describe("Codex native command result lifecycle", () => {
 		const record = await f.driver.execute(command, {
 			nativeCommand: compactRead(f, command),
 		});
-		expect(record.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(record.result).toMatchObject({
+			outcome: "accepted",
+			status: expect.stringMatching(/^(running|completed)$/),
+		});
 		await expect
 			.poll(() =>
 				f.driver.getStatus(f.read.nativeSessionRef, command.executionId),
@@ -517,7 +520,10 @@ describe("Codex native command result lifecycle", () => {
 		const record = await f.driver.execute(command, {
 			nativeCommand: compactRead(f, command),
 		});
-		expect(record.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(record.result).toMatchObject({
+			outcome: "accepted",
+			status: expect.stringMatching(/^(running|completed)$/),
+		});
 		await expect
 			.poll(() =>
 				f.driver.getStatus(f.read.nativeSessionRef, command.executionId),

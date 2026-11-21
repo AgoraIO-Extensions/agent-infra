@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { seedNativeCommandState } from "./codex-native-command.test-support.js";
 import { createCodexSessionExecutorBindingV1 } from "./codex-session-executor-binding.js";
 import { CompactModelTransport } from "./compact-model.test-support.js";
@@ -14,6 +14,8 @@ import {
 
 it.each([
 	"completed",
+	"completed-before-poll",
+	"completed-between-polls",
 	"prototype-execution",
 	"drain-unproven",
 	"restart",
@@ -40,6 +42,14 @@ it.each([
 		transport.threadId = randomUUID();
 		transport.compactTurnId = randomUUID();
 		transport.compactItemId = randomUUID();
+		const completed = Promise.withResolvers<void>();
+		let rpcAccepted = false;
+		let delayedStart = false;
+		let restoreSchedule = () => {};
+		let heldTimer: ReturnType<typeof setTimeout> | undefined;
+		const realTimeout = globalThis.setTimeout;
+		const realClearTimeout = globalThis.clearTimeout;
+		if (mode === "completed-between-polls") transport.deferStart = true;
 		let providerRequests = 0;
 		let current = true;
 		const drainConfirmed = false;
@@ -102,7 +112,13 @@ it.each([
 		const actions: string[] = [];
 		const observations: unknown[] = [];
 		const driver = await MetadataDriver.openFixture(seeded.path, transport, {
-			observeNativeCompactStage: (event) => observations.push(event),
+			observeNativeCompactStage: (event) => {
+				observations.push(event);
+				if (event.stage === "rpc_response" && event.outcome === "completed")
+					rpcAccepted = true;
+				if (event.stage === "final_acceptance" && event.outcome === "completed")
+					completed.resolve();
+			},
 			observeModelTransportFailure: (event) => observations.push(event),
 			modelOptions: [
 				{
@@ -125,6 +141,55 @@ it.each([
 				};
 			},
 		});
+		if (mode === "completed-before-poll") {
+			const view = driver as unknown as {
+				activateCompactModel: (key: string) => Promise<void>;
+			};
+			const activate = view.activateCompactModel.bind(driver);
+			view.activateCompactModel = async (key) => {
+				const executeCaller = new Error().stack
+					?.split("\n")[2]
+					?.includes("executeStatefulNativeCommand");
+				await activate(key);
+				if (executeCaller) {
+					await completed.promise;
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				}
+			};
+		}
+		if (mode === "completed-between-polls") {
+			let held = false;
+			const scheduler = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+				...args: Parameters<typeof setTimeout>
+			) => {
+				if (
+					!held &&
+					args[1] === 5 &&
+					new Error().stack?.includes("executeStatefulNativeCommand")
+				) {
+					held = true;
+					let released = false;
+					const release = () => {
+						if (released) return;
+						released = true;
+						if (heldTimer) realClearTimeout(heldTimer);
+						Reflect.apply(realTimeout, globalThis, [
+							args[0],
+							0,
+							...args.slice(2),
+						]);
+					};
+					heldTimer = realTimeout(release, 4500);
+					void completed.promise.then(async () => {
+						await new Promise<void>((resolve) => setImmediate(resolve));
+						release();
+					});
+					return heldTimer;
+				}
+				return Reflect.apply(realTimeout, globalThis, args);
+			}) as typeof setTimeout);
+			restoreSchedule = () => scheduler.mockRestore();
+		}
 		try {
 			const binding = {
 				...seeded.binding,
@@ -135,7 +200,17 @@ it.each([
 				allowUnboundExecution: true,
 				signal: AbortSignal.timeout(mode === "rpc-timeout" ? 75 : 5000),
 				expiresAt: Date.now() + (mode === "rpc-timeout" ? 75 : 5000),
-				assertCurrent: () => binding,
+				assertCurrent: () => {
+					if (
+						mode === "completed-between-polls" &&
+						rpcAccepted &&
+						!delayedStart
+					) {
+						delayedStart = true;
+						transport.startCompact();
+					}
+					return binding;
+				},
 				revalidate: async () => binding,
 			};
 			const catalog = await driver.readNativeMetadataV2("commands", read);
@@ -267,7 +342,12 @@ it.each([
 				return;
 			}
 
-			if (mode !== "completed" && mode !== "prototype-execution") {
+			if (
+				mode !== "completed" &&
+				mode !== "prototype-execution" &&
+				mode !== "completed-before-poll" &&
+				mode !== "completed-between-polls"
+			) {
 				if (
 					mode === "rpc-timeout" ||
 					mode === "rpc-disconnected" ||
@@ -337,7 +417,23 @@ it.each([
 				return;
 			}
 
-			expect(result.result).toEqual({ outcome: "accepted", status: "running" });
+			if (
+				mode === "completed-before-poll" ||
+				mode === "completed-between-polls"
+			) {
+				expect(result.result).toEqual({
+					outcome: "accepted",
+					status: "completed",
+				});
+				expect(await driver.lookupOperation(command)).toEqual({
+					state: "found",
+					record: result,
+				});
+			} else
+				expect(result.result).toMatchObject({
+					outcome: "accepted",
+					status: expect.stringMatching(/^(running|completed)$/),
+				});
 
 			await expect
 				.poll(() => driver.getStatus(seeded.nativeSessionRef, executionId))
@@ -362,6 +458,8 @@ it.each([
 				transport.requests.filter((r) => r.method === "thread/compact/start"),
 			).toHaveLength(1);
 		} finally {
+			restoreSchedule();
+			if (heldTimer) realClearTimeout(heldTimer);
 			const persisted = await readFile(seeded.path, "utf8");
 			expect(persisted).not.toContain(key);
 			expect(persisted).not.toContain("Synthetic summary input");

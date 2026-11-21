@@ -8674,7 +8674,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					command.nativeSessionRef,
 					command.executionId,
 				);
-				if (current?.record && this.pendingNativeCompactions.get(key)?.ready)
+				const completed = this.completedCompactReceipt(command, current);
+				if (completed) return completed;
+				const admission = this.pendingNativeCompactions.get(key);
+				if (
+					current?.record?.result.outcome === "accepted" &&
+					current.record.result.status === "running" &&
+					operationMatchesCommand(current, command) &&
+					admission?.ready &&
+					!admission.failed
+				)
 					return current.record;
 				read.assertCurrent();
 				await new Promise((resolve) => setTimeout(resolve, 5));
@@ -8695,6 +8704,47 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			pending.reject(unavailableError());
 			return this.unknown(command, command.nativeSessionRef);
 		}
+	}
+
+	/** The committed terminal receipt survives cleanup of transient admission state. */
+	private completedCompactReceipt(
+		command: Extract<CodexNativeCommandCommand, { schemaVersion: 2 }>,
+		operation: CodexOperation | undefined,
+	) {
+		const record = operation?.record;
+		if (
+			!operation ||
+			!record ||
+			!operationMatchesCommand(operation, command) ||
+			record.result.outcome !== "accepted" ||
+			record.result.status !== "completed" ||
+			record.agentId !== command.agentId ||
+			record.conversationId !== command.conversationId ||
+			record.sessionGeneration !== command.sessionGeneration ||
+			record.nativeSessionRef !== command.nativeSessionRef ||
+			!operation.nativeTurnId ||
+			!operation.nativeCompactionItemId ||
+			!operation.nativeCommandResult
+		)
+			return;
+		const session = this.session(command.nativeSessionRef);
+		const execution = ownRecordValue(session.executions, command.executionId);
+		const journal = this.journalView(session, operation.nativeTurnId);
+		if (
+			execution?.status !== "completed" ||
+			execution.turnId !== command.turnId ||
+			execution.nativeTurnId !== operation.nativeTurnId ||
+			journal?.nativeCompletionStatus !== "completed" ||
+			!journal.events.some(
+				(event) =>
+					event.type === "completed" && event.payload.status === "completed",
+			) ||
+			!this.compactModelCompleted(session, operation.nativeTurnId, true) ||
+			(this.sessionExecutor?.drain &&
+				!this.sessionExecutor.drain.proven(command.executionId))
+		)
+			return;
+		return record;
 	}
 
 	private async activateCompactModel(key: string) {

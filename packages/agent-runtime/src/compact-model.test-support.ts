@@ -7,6 +7,7 @@ export class CompactModelTransport extends MetadataTransport {
 	readonly modelStatuses: number[] = [];
 	rpcMode: "normal" | "nonempty" | "timeout" | "disconnect" = "normal";
 	completionMode: "both" | "item-only" | "turn-only" | "failed" = "both";
+	deferStart = false;
 	override async send(frame: CodexAppServerFrame) {
 		if (frame.method !== "thread/compact/start") return super.send(frame);
 		this.requests.push(frame);
@@ -18,6 +19,9 @@ export class CompactModelTransport extends MetadataTransport {
 			id: frame.id,
 			result: this.rpcMode === "nonempty" ? { unexpected: true } : {},
 		});
+		if (!this.deferStart) this.startCompact();
+	}
+	startCompact() {
 		this.push({
 			method: "turn/started",
 			params: {
