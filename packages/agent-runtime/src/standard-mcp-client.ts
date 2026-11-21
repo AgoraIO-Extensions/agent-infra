@@ -607,6 +607,13 @@ export class StandardMcpClient {
 	get fingerprint() {
 		return standardMcpDigest([this.toolDefinitions, this.#input.contract]);
 	}
+	/** The resolved installation's service contract reference. */
+	get contractSource() {
+		return {
+			ref: this.#input.contract.ref,
+			revision: this.#input.contract.revision,
+		};
+	}
 	toolName(alias: string) {
 		return this.#tools.get(alias)?.name;
 	}

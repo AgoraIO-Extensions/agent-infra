@@ -56,6 +56,7 @@ import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createConnectionInstallReadbackClientV1 } from "../../agent-runtime-host/src/connection-install-readback-client.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
+	codexDynamicConnectionClientForReaderV1,
 	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "../../agent-runtime-host/src/connection-install-receiver.js";
@@ -1714,6 +1715,13 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 			serverInfo: { name: "connection", version: "1" },
 			tools: [{ name: "search", succeededResultSchema: { type: "object" } }],
 		},
+		toolDeclarations: [
+			{
+				name: "search",
+				description: "Search the connected service",
+				inputSchema: { type: "object" },
+			},
+		],
 	};
 	async function withDynamicPublication(
 		contract: NonNullable<typeof hostDynamicPublication>,
@@ -2035,6 +2043,207 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 					),
 				).toBe(true);
 				expect(await hostMaterials(authorizationId)).toContain("access");
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	// #4333 §13.5.6 动态安装的 reader 与可见起点 (ADR-0048).
+	const aliceExecution = {
+		agentId: "agent-a",
+		conversationId: "conversation-a",
+		sessionGeneration: 1,
+		executionId: "execution-a",
+	};
+	function dynamicReader() {
+		const reader =
+			receiver?.status === "available" ? receiver.dynamicReader : undefined;
+		if (!reader) throw new Error("no dynamic reader");
+		return reader;
+	}
+	async function refusal(reference = aliceExecution) {
+		try {
+			await dynamicReader().resolveInput(
+				reference,
+				new AbortController().signal,
+			);
+		} catch (error) {
+			expect(String(error)).not.toContain("synthetic-access");
+			return (error as { reason?: string }).reason;
+		}
+		throw new Error("resolved");
+	}
+	const permitReadbacks = () =>
+		readbacks.filter((entry) => entry.startsWith("permit:"));
+
+	it(
+		"reads a permitted installation only through its permit, before and after the material",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const { registrationKey } = await permittedInstall();
+				readbacks.length = 0;
+				const requests = connection.requests.length;
+				const input = (await dynamicReader().resolveInput(
+					aliceExecution,
+					new AbortController().signal,
+				)) as Record<string, unknown>;
+				expect(String(input.token)).toMatch(/^synthetic-access-/);
+				expect(input).toMatchObject({
+					serviceRef: "connection-mcp",
+					instanceRef: (
+						connection.receipts.get(registrationKey) as { instanceId: string }
+					).instanceId,
+					contract: publicationContract.contract,
+				});
+				// Two permit reads around the material; no Connection request.
+				expect(permitReadbacks()).toEqual(["permit:supply", "permit:supply"]);
+				expect(connection.requests).toHaveLength(requests);
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"hands the Codex Driver the contract's declarations, then this session's target and input",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const driverInput = codexDynamicConnectionClientForReaderV1(
+					dynamicReader(),
+				);
+				if (!driverInput) throw new Error("no declarations");
+				expect(driverInput.declared).toEqual({
+					contract: {
+						ref: publicationContract.contract.ref,
+						revision: publicationContract.contract.revision,
+					},
+					tools: publicationContract.toolDeclarations,
+				});
+				const beforeRequests = connection.requests.length;
+				readbacks.length = 0;
+				// Before authorization the target is refused; nothing reaches Connection.
+				const before = await driverInput
+					.resolveTarget(aliceExecution, new AbortController().signal)
+					.then(
+						() => undefined,
+						(error: { name?: string; reason?: string }) => error,
+					);
+				expect(before).toMatchObject({
+					name: "CodexDynamicConnectionRefusalV1",
+					reason: "authorization_required",
+				});
+				expect(permitReadbacks()).toEqual([]);
+				expect(connection.requests).toHaveLength(beforeRequests);
+				await permittedInstall();
+				const requests = connection.requests.length;
+				const target = await driverInput.resolveTarget(
+					aliceExecution,
+					new AbortController().signal,
+				);
+				expect(target).toMatchObject({ status: "available" });
+				const input = (await driverInput.resolveInput(
+					aliceExecution,
+					new AbortController().signal,
+				)) as { resource?: string; contract?: unknown };
+				expect(input.resource).toBe(target.url);
+				expect(input.contract).toEqual(publicationContract.contract);
+				expect(connection.requests).toHaveLength(requests);
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"requires authorization without an installation, for another session or Agent, and once revoked",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				readbacks.length = 0;
+				expect(await refusal()).toBe("authorization_required");
+				expect(permitReadbacks()).toEqual([]);
+				await permittedInstall();
+				readbacks.length = 0;
+				expect(
+					await refusal({
+						...aliceExecution,
+						conversationId: "conversation-x",
+					}),
+				).toBe("authorization_required");
+				expect(await refusal({ ...aliceExecution, agentId: "agent-b" })).toBe(
+					"authorization_required",
+				);
+				// Another user's Execution has no original binding on this Host.
+				expect(
+					await refusal({ ...aliceExecution, executionId: "execution-bob" }),
+				).toBe("unavailable");
+				expect(permitReadbacks()).toEqual([]);
+				await revokePermitted();
+				expect(await tick()).toBe(1);
+				expect(await refusal()).toBe("authorization_required");
+				expect(permitReadbacks()).toEqual([]);
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"refuses an expired, unavailable or late-denied permit and never retries",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const { projection } = await permittedInstall();
+				const authorizationId = projection.authorizationId;
+				// The Platform readback is unavailable: refused once, never retried.
+				readbacks.length = 0;
+				readbackHook = async (request) => {
+					if (request.purpose === "permit") throw new Error("unavailable");
+				};
+				expect(await refusal()).toBe("unavailable");
+				expect(permitReadbacks()).toEqual(["permit:supply"]);
+				// Denied on the second read, after the material was read.
+				readbacks.length = 0;
+				let reads = 0;
+				readbackHook = async (request) => {
+					if (request.purpose === "permit" && ++reads === 2)
+						await client`update platform.connection_installation_authorizations set status='revoked' where id=${authorizationId}`;
+				};
+				expect(await refusal()).toBe("authorization_required");
+				expect(permitReadbacks()).toEqual(["permit:supply", "permit:supply"]);
+				readbackHook = undefined;
+				await client`update platform.connection_installation_authorizations set status='confirmed' where id=${authorizationId}`;
+				// An expired permit is denied at the database clock.
+				await client`update platform.connection_manual_install_permits set expires_at=clock_timestamp()-interval '1 second'
+					where authorization_id=${authorizationId}`;
+				readbacks.length = 0;
+				expect(await refusal()).toBe("authorization_required");
+				expect(permitReadbacks()).toEqual(["permit:supply"]);
+			});
+		},
+		confirmTimeout * 2,
+	);
+
+	it(
+		"refuses a local publication that is no longer committed",
+		async () => {
+			await withDynamicPublication(publicationContract, async () => {
+				const { projection } = await permittedInstall();
+				const delivery = await dynamicDelivery(projection.authorizationId);
+				const lock = join(
+					conversationsRoot(),
+					"standard-mcp-export",
+					exportKey(delivery),
+					".publish.lock",
+				);
+				await writeFile(lock, "", { mode: 0o600 });
+				try {
+					expect(await refusal()).toBe("authorization_required");
+				} finally {
+					await rm(lock, { force: true });
+				}
+				// Committed again, the same installation reads back.
+				expect(
+					await dynamicReader().resolveInput(
+						aliceExecution,
+						new AbortController().signal,
+					),
+				).toBeDefined();
 			});
 		},
 		confirmTimeout * 2,
