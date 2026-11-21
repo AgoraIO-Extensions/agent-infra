@@ -594,15 +594,21 @@ export type ConnectionInstallConfirmExchangeRequestV1 = z.infer<
 >;
 /**
  * `exchanged`: the Host exchanged the original code once and holds the
- * material in its private transaction; nothing is published and MCP stays
- * closed until the publication and the Platform permit exist. `rejected`: the
- * binding no longer matches the pinned candidate, nothing was exchanged.
+ * material in its private transaction. `publication` is present only once the
+ * Host's private publication committed: the non-secret commit digest and the
+ * published material's expiry are the evidence the Platform permit binds; MCP
+ * stays closed until that permit exists. `rejected`: the binding no longer
+ * matches the pinned candidate, nothing was exchanged.
  */
 export const ConnectionInstallConfirmExchangeResponseV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	contract: z.literal(connectionManualConfirmContractV1),
 	outcome: z.enum(["exchanged", "rejected", "unknown"]),
 	commandId: OpaqueIdV1Schema,
+	/** `expiresAt` is in epoch milliseconds. */
+	publication: z
+		.strictObject({ commitDigest: hex64, expiresAt: positive })
+		.optional(),
 });
 export type ConnectionInstallConfirmExchangeResponseV1 = z.infer<
 	typeof ConnectionInstallConfirmExchangeResponseV1Schema
@@ -612,6 +618,12 @@ export const ConnectionInstallReadbackPurposeV1Schema = z.enum([
 	"supply",
 	"supply_delivery",
 	"command",
+	/**
+	 * §13.5.6 已提交许可读取: a currently approved Execution of the same
+	 * installation reads its committed Platform permit; `reference` names that
+	 * Execution, not the original one, and the original claim need not live.
+	 */
+	"permit",
 ]);
 
 export const ConnectionInstallReadbackRequestV1Schema = z.strictObject({
@@ -652,6 +664,10 @@ export const ConnectionInstallReadbackRequestV1Schema = z.strictObject({
 				.strictObject({ id: OpaqueIdV1Schema, candidateDigest: hex64 })
 				.optional(),
 		})
+		.optional(),
+	/** `permit` purpose only: the committed permit and its publication commit digest. */
+	permit: z
+		.strictObject({ id: OpaqueIdV1Schema, commitDigest: hex64 })
 		.optional(),
 	nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 	issuedAt: z.number().int().nonnegative().safe(),

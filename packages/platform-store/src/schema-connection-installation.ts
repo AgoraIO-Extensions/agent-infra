@@ -330,3 +330,57 @@ export const connectionPrincipalPinReceipts = platformSchema.table(
 		),
 	],
 );
+
+/**
+ * §13.5.6 动态安装的启用许可: written once by the original installation CAS
+ * while the original confirm's claim still holds, from the Host's committed
+ * private publication evidence. Its source binds the logical confirm and the
+ * actual `exchange` phase (reference and request digest) and the first-pin
+ * receipt; `binding` fixes the user, Agent, installation association and the
+ * Host/Pod/Sandbox/generation/resourceFence. Later approved Executions of the
+ * same installation read it; it never issues, extends or re-records itself.
+ */
+export const connectionManualInstallPermits = platformSchema.table(
+	"connection_manual_install_permits",
+	{
+		id: text("id").primaryKey(),
+		revision: bigint("revision", { mode: "number" }).default(1).notNull(),
+		authorizationId: text("authorization_id").notNull(),
+		confirmCommandId: text("confirm_command_id").notNull(),
+		exchangeCommandId: text("exchange_command_id").notNull(),
+		exchangeRequestDigest: varchar("exchange_request_digest", {
+			length: 64,
+		}).notNull(),
+		pinReceiptId: text("pin_receipt_id").notNull(),
+		binding: jsonb("binding").notNull(),
+		descriptorDigest: varchar("descriptor_digest", { length: 64 }).notNull(),
+		commitDigest: varchar("commit_digest", { length: 64 }).notNull(),
+		claimOwner: text("claim_owner").notNull(),
+		claimFence: bigint("claim_fence", { mode: "number" }).notNull(),
+		attemptId: text("attempt_id").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.authorizationId],
+			foreignColumns: [connectionInstallationAuthorizations.id],
+			name: "connection_manual_install_permit_authorization_fk",
+		}),
+		foreignKey({
+			columns: [table.pinReceiptId],
+			foreignColumns: [connectionPrincipalPinReceipts.id],
+			name: "connection_manual_install_permit_receipt_fk",
+		}),
+		uniqueIndex("connection_manual_install_permit_authorization_unique").on(
+			table.authorizationId,
+		),
+		check(
+			"connection_manual_install_permit_digest",
+			sql`${table.exchangeRequestDigest} ~ '^[a-f0-9]{64}$' and ${table.descriptorDigest} ~ '^[a-f0-9]{64}$'
+				and ${table.commitDigest} ~ '^[a-f0-9]{64}$' and ${table.revision} between 1 and 9007199254740991`,
+		),
+	],
+);

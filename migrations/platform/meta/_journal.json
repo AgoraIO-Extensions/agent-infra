@@ -638,6 +638,13 @@
       "when": 1795186438700,
       "tag": "0094_connection_manual_confirm",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1795213659139,
+      "tag": "0095_connection_manual_permit",
+      "breakpoints": true
     }
   ]
 }
