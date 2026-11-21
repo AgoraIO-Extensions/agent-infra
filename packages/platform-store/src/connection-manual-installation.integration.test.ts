@@ -3776,10 +3776,16 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 	}
 
 	/** The Worker's DELETE of the original key; without a response it stays unknown. */
-	async function revoke(
-		{ flow }: Awaited<ReturnType<typeof pinned>>,
-		revoked = true,
-	) {
+	/** Any installation of a fixture Execution, pinned or not yet confirmed. */
+	type Installed = {
+		readonly flow: {
+			readonly run: { readonly authorizationId: string };
+			readonly suffix: string;
+			readonly worker: string;
+		};
+	};
+
+	async function revoke({ flow }: Installed, revoked = true) {
 		const { item, attemptId } = await claimFirst(
 			"revoke",
 			`execution-${flow.suffix}`,
@@ -3824,7 +3830,7 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 		return row;
 	}
 
-	async function installation({ flow }: Awaited<ReturnType<typeof pinned>>) {
+	async function installation({ flow }: Installed) {
 		const [row] = await client`select a.status, m.revoke_state,
 			(select string_agg(c.idempotency_key || ':' || c.status, ',') from platform.connection_installation_commands c
 				where c.authorization_id=a.id and c.command='revoke') as revoke
@@ -3931,6 +3937,88 @@ describe("exception pin rules: verification, unpin and notAfter (§13.5.1 items 
 			releasing: false,
 			released: false,
 		});
+	});
+
+	// #4315 PR-Agent: a registered installation still awaiting the user's
+	// confirmation holds a Connection client too, so the unpin closes and
+	// revokes it with the original key before it writes `released_at`.
+	it("closes a registered installation still awaiting confirmation before it unpins (item 6)", async () => {
+		const aliceA = await pinned();
+		await finish(aliceA);
+		const { run } = await mapFirstBegin("alice", "b");
+		const aliceB = { flow: { run, suffix: "b", worker: "worker-a" } };
+		expect(await installation(aliceB)).toMatchObject({
+			status: "awaiting_confirmation",
+			revoke_state: "not_required",
+		});
+		const pin = await pinOf("alice");
+		expect(await admin.requestRelease(record(pin?.id, 1))).toEqual({
+			outcome: "recorded",
+			ruleRevision: 2,
+			closed: 2,
+		});
+		expect(await installation(aliceB)).toEqual({
+			status: "revoked",
+			revoke_state: "pending",
+			revoke: `manual-revoke:${run.authorizationId}:pending`,
+		});
+		expect(await revoke(aliceA)).toBe("revoked");
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({
+			releasing: true,
+			released: false,
+		});
+		expect(await revoke(aliceB)).toBe("revoked");
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({ released: true });
+	});
+
+	// A confirmed installation whose logical confirm was never claimed must not
+	// keep its own revoke behind that unsent command.
+	it("revokes a closed installation whose confirm was never sent (item 6)", async () => {
+		const aliceA = await pinned();
+		await finish(aliceA);
+		const flow = await confirmed("alice", "b");
+		const aliceB = { flow };
+		const pin = await pinOf("alice");
+		expect(await admin.requestRelease(record(pin?.id, 1))).toMatchObject({
+			outcome: "recorded",
+			closed: 2,
+		});
+		const [confirm] =
+			await client`select status from platform.connection_installation_commands
+				where authorization_id=${flow.run.authorizationId} and command='confirm'`;
+		expect(confirm?.status).toBe("rejected");
+		expect(await revoke(aliceA)).toBe("revoked");
+		expect(await revoke(aliceB)).toBe("revoked");
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({ released: true });
+	});
+
+	// An installation that may already hold a client but has not settled its
+	// registration keeps the unpin waiting; it is never released past it.
+	it("keeps the unpin waiting while an installation's registration is unsettled (item 6)", async () => {
+		const aliceA = await pinned();
+		await finish(aliceA);
+		const run = await prepareDelivered("alice", "b");
+		await client`update platform.connection_manual_installations set registration_state='unknown'
+			where authorization_id=${run.authorizationId}`;
+		const pin = await pinOf("alice");
+		expect(await admin.requestRelease(record(pin?.id, 1))).toMatchObject({
+			outcome: "recorded",
+			closed: 1,
+		});
+		expect(await revoke(aliceA)).toBe("revoked");
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({
+			releasing: true,
+			released: false,
+		});
+		// Verified with the original key as never registered: nothing holds a client.
+		await client`update platform.connection_manual_installations set registration_state='failed'
+			where authorization_id=${run.authorizationId}`;
+		await admin.sweep();
+		expect(await pinOf("alice")).toMatchObject({ released: true });
 	});
 
 	it("keeps the pin while a revoke result is unknown and never re-sends it", async () => {

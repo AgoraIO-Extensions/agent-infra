@@ -1778,7 +1778,7 @@ describe("session sandbox workload adapter", () => {
 		).rejects.toMatchObject({ code: "conflict" });
 	});
 
-	it("does not downgrade an acknowledged delete after a later call error", async () => {
+	it("only observes an acknowledged delete without resending or downgrading it", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
@@ -1798,10 +1798,11 @@ describe("session sandbox workload adapter", () => {
 			preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
 		};
 		const originalDeleteResult = client.deleteResult;
-		client.deleteResult = async (resource) => {
+		const attempted = vi.fn(async (resource: KubernetesObject) => {
 			if (resource.kind === "Pod") throw new Error("delete transport lost");
 			return originalDeleteResult(resource);
-		};
+		});
+		client.deleteResult = attempted;
 		const progress: SessionSandboxDeletionProgressV1[] = [];
 		await expect(
 			adapter.cleanup(allocation, observed.resources, {
@@ -1812,7 +1813,8 @@ describe("session sandbox workload adapter", () => {
 					return "committed";
 				},
 			}),
-		).rejects.toThrow("delete transport lost");
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(attempted).not.toHaveBeenCalled();
 		expect(
 			progress.every((entry) => entry.deleteCallResult === "acknowledged"),
 		).toBe(true);

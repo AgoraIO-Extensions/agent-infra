@@ -639,6 +639,17 @@ export class PostgresConversationDispatchStoreV1
 					and (
 						-- Control and terminal recovery are never gated on business readiness.
 						operation = 'conversation.turn.stop.v1'
+ or (operation in ('conversation.native-capability.invoke.v1','conversation.native-capability.invoke.v2')
+ and status in ('pending','retry_scheduled') and attempt_count=0 and delivery_fence=0
+ and exists(select 1 from platform.conversation_executions e
+ join platform.conversations c on c.id=e.conversation_id and c.agent_id=e.agent_id and c.actor_id=e.actor_id and c.principal_type=e.principal_type and c.channel_id=e.channel_id and c.session_generation=e.session_generation
+ join platform.agent_applications a on a.agent_id=e.agent_id
+ join platform.session_sandbox_allocations s on s.sandbox_id=e.sandbox_id and s.conversation_id=e.conversation_id and s.session_generation=e.session_generation
+ where e.execution_id=outbox_items.payload->>'executionId' and e.conversation_id=outbox_items.scope_id
+ and outbox_items.payload->>'conversationId'=c.id and outbox_items.payload->>'actorId'=e.actor_id and e.status='submitted' and e.delivery_fence=0 and e.runtime_submit_protocol is null
+ and e.original_operation_digest is null and e.original_submit_host_session_ref is null and e.accepted_original_host_session_ref is null and e.last_runtime_cursor is null
+ and a.status='stopped' and a.desired_state='stopped'
+ and not coalesce(s.status='ready' and s.desired_state='running' and s.resource_fence>0 and s.resource_observation->>'status'='ready',false)))
 						or (status = 'processing' and lease_expires_at <= now())
 						or (status in ('succeeded', 'failed') and exists (
 							select 1 from platform.conversation_generation_tombstones t
