@@ -3104,11 +3104,13 @@ export const serviceToken = ${JSON.stringify(serviceToken)};`,
 		});
 		const associate = async (agentId: string, ownerId: string, n: number) => {
 			await sql`insert into platform.agents(id,authorization_revision) values (${agentId},'agent-r1') on conflict do nothing`;
+			await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values (${agentId},${ownerId},now()) on conflict do nothing`;
 			await sql`insert into platform.connection_association_generations(agent_id,last_revision) values (${agentId},1) on conflict do nothing`;
 			await sql`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at) values (${agentId},${`connection-${agentId}`},${String(n).repeat(64)},1,${ownerId},${sql.json({ schemaVersion: 1, agentId, ownerId, secretVersion: 1, crypto: { dekFingerprint: String(n + 1).repeat(64) } })},now())`;
 		};
 		await associate("agent-alice", "alice", 1);
 		await sql`insert into platform.agents(id,authorization_revision) values ('agent-bob','agent-r1')`;
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('agent-bob','bob',now())`;
 		const published = (
 			record: unknown,
 			value: string | undefined,
@@ -3138,6 +3140,14 @@ export const serviceToken = ${JSON.stringify(serviceToken)};`,
 				.publication,
 		).toEqual({ contract, associated: false });
 		await associate("agent-alice", "alice", 3);
+		// A replaced Owner (replaceAgentAccess leaves the association row) is not current.
+		await sql`delete from platform.agent_owners where agent_id='agent-alice'`;
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('agent-alice','bob',now())`;
+		expect(
+			lastLine(published(exceptionApproval, contract, "agent-alice").stdout)
+				.publication,
+		).toEqual({ contract, associated: false });
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('agent-alice','alice',now())`;
 		// An invalid contract, or one bound to another descriptor contract, is never handed on.
 		for (const invalid of [
 			"{",
@@ -3169,6 +3179,7 @@ export const serviceToken = ${JSON.stringify(serviceToken)};`,
 		});
 		expect(closed.stderr).toContain("CONNECTION_MANUAL_INSTALLATION_DORMANT");
 		await sql`delete from platform.connection_manual_associations`;
+		await sql`delete from platform.agent_owners where agent_id in ('agent-alice','agent-bob')`;
 
 		// The gate opened it but this Worker cannot carry it: it does not start.
 		for (const module of [

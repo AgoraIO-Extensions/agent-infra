@@ -1179,6 +1179,17 @@ async function createPreparedOwning(
 		reservePreparation: {
 			executorIdentityIssuer: signing.privateKey,
 			executorDrainStartupTimeoutMs,
+			// #4199 C2: reserves carry the same empty install receiver as cold Sessions
+			// (Spec §13.5.6), and the publication contract per their profile's fact.
+			...(manualInstallationBootstrap
+				? { connectionInstallBootstrap: manualInstallationBootstrap }
+				: {}),
+			...(connectionManualPublication
+				? {
+						connectionManualPublicationContract:
+							connectionManualPublication.contract,
+					}
+				: {}),
 		},
 		conversation: {
 			databaseUrl: workload.databaseUrl,

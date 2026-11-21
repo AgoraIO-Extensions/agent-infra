@@ -75,6 +75,11 @@ export interface SessionSandboxReserveProfileV1 {
 	readonly signingConfigurationVersion: string;
 	readonly transportConfigurationVersion: string;
 	readonly storageConfigurationVersion: string;
+	/**
+	 * #4199 C2: the Agent had a current verified Owner manual association when the reserve
+	 * profile was read; absent otherwise. Part of the digest.
+	 */
+	readonly connectionManualAssociation?: true;
 	readonly configurationRevision: number;
 	readonly policy: SessionSandboxVerifiedPolicyV1;
 	readonly resources: SessionSandboxResourceBudgetV1;

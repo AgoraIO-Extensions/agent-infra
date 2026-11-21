@@ -1,4 +1,9 @@
+import { connectionManualPublicationContractV1 } from "@agent-infra/platform-store";
 import type { SessionSandboxConnectionInstallBootstrapV1 } from "./connection-install-bootstrap.js";
+
+/** The gate's publication descriptor contract every projected contract is bound to. */
+export const connectionManualPublicationDescriptorV1 =
+	connectionManualPublicationContractV1;
 
 /** Worker deployment input: the approved dynamic publication contract (non-secret JSON). */
 export const connectionManualPublicationContractEnvironmentV1 =

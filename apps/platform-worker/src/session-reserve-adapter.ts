@@ -64,6 +64,12 @@ export interface SessionSandboxReserveAdapterOptionsV1 {
 	>;
 	readonly serviceToken: string;
 	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
+	/**
+	 * #4199 C2: the approved dynamic publication contract. A reserve's Host gets it exactly
+	 * when the reserve profile records the Agent's current Owner manual association; the
+	 * Store claims a reserve only while that fact still matches (Spec §13.5.6 工具声明).
+	 */
+	readonly connectionManualPublicationContract?: string;
 	readonly fetch?: typeof fetch;
 }
 
@@ -221,7 +227,7 @@ function reserveResourceInput(
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	return createSessionSandboxResourceInputResolverV1(options.workload, {
+	const input = createSessionSandboxResourceInputResolverV1(options.workload, {
 		serviceToken: options.serviceToken,
 		...(options.executorDrainStartupTimeoutMs === undefined
 			? {}
@@ -248,6 +254,18 @@ function reserveResourceInput(
 		1,
 		1,
 	);
+	const bootstrap = input.connectionInstallBootstrap;
+	return bootstrap &&
+		options.connectionManualPublicationContract !== undefined &&
+		claim.profile.connectionManualAssociation === true
+		? {
+				...input,
+				connectionInstallBootstrap: {
+					...bootstrap,
+					publicationContract: options.connectionManualPublicationContract,
+				},
+			}
+		: input;
 }
 
 export function createSessionSandboxReserveResourceInputV1(

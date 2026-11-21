@@ -74,6 +74,10 @@ import {
 	projectSessionSandboxConnectionInstallV1,
 	type SessionSandboxConnectionInstallBootstrapV1,
 } from "./connection-install-bootstrap.js";
+import {
+	connectionManualPublicationDescriptorV1,
+	parseConnectionManualPublicationContractV1,
+} from "./connection-manual-publication.js";
 import type { ExecutorInstanceControlV2 } from "./executor-instance-startup.js";
 import { immutableImagePullPolicyMatches } from "./immutable-image-pull-policy.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -2257,23 +2261,50 @@ function resourceSpecMatches(
 }
 
 /**
- * #4199 C2 (Spec §13.5.6 工具声明): whether a Session's Host got the publication contract
- * is fixed when its Pod is created. A later association change, deadline or contract
- * withdrawal keeps the Thread's declaration and leaves the rest of the Session usable,
- * so the business comparison does not tie a running Pod to the current decision.
+ * #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host may declare the dynamic Connection
+ * tools is fixed when its Pod is created, and Pod env cannot change afterwards. For an
+ * existing Pod the expected render therefore takes the live Host's fact: no contract, or a
+ * contract this Worker accepts for the gate's descriptor. A later association change then
+ * neither conflicts in `apply` nor drifts in `observe`, and the already started Thread keeps
+ * its declaration. Any other value or any other difference is still a mismatch.
  */
-function withoutPublicationContract<T extends KubernetesObject>(
-	object: T,
-	allocation: SessionSandboxResourceInputV1,
-): T {
-	if (object.kind !== "Pod" || !allocation.connectionInstallBootstrap)
-		return object;
-	const copy = structuredClone(object);
-	for (const container of (copy as V1Pod).spec?.containers ?? [])
-		container.env = container.env?.filter(
-			(e) => e.name !== connectionInstallPublicationContractEnvironmentV1,
-		);
-	return copy;
+function withLivePublicationContract(
+	current: KubernetesObject,
+	expected: KubernetesObject,
+	allocation: SessionSandboxAllocationV1,
+): KubernetesObject {
+	const bootstrap = allocation.connectionInstallBootstrap;
+	if (expected.kind !== "Pod" || current.kind !== "Pod" || !bootstrap)
+		return expected;
+	const name = (expected as V1Pod).spec?.containers[0]?.name;
+	const host = (current as V1Pod).spec?.containers.find((c) => c.name === name);
+	const entries =
+		host?.env?.filter(
+			(e) => e.name === connectionInstallPublicationContractEnvironmentV1,
+		) ?? [];
+	const live = entries[0];
+	if (
+		!host ||
+		entries.length > 1 ||
+		(live !== undefined &&
+			(live.valueFrom !== undefined ||
+				parseConnectionManualPublicationContractV1(
+					live.value,
+					connectionManualPublicationDescriptorV1,
+				).status !== "valid"))
+	)
+		return expected;
+	if (live?.value === bootstrap.publicationContract) return expected;
+	const { publicationContract: _current, ...rest } = bootstrap;
+	const aligned = sessionSandboxResourcesV1({
+		...allocation,
+		connectionInstallBootstrap:
+			live?.value === undefined
+				? rest
+				: { ...rest, publicationContract: live.value },
+	}).find((resource) => resource.kind === "Pod");
+	if (!aligned) throw new WorkloadKubernetesError("policy");
+	return aligned;
 }
 
 function withoutOAuthProvisioning<T extends KubernetesObject>(
@@ -2811,7 +2842,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					)
 						throw new WorkloadKubernetesError("conflict");
 				} else if (expected.kind === "Pod") {
-					if (!podSpecMatches(current, expected as V1Pod))
+					if (
+						!podSpecMatches(
+							current,
+							withLivePublicationContract(
+								current,
+								expected,
+								allocation,
+							) as V1Pod,
+						)
+					)
 						throw new WorkloadKubernetesError("conflict");
 				} else if (expected.kind === "Service") {
 					// Keep the API-assigned address and version on lawful retries.
@@ -3035,10 +3075,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						: resourceSpecMatches(
 								purpose === "control"
 									? withoutOAuthProvisioning(current, allocation)
-									: withoutPublicationContract(current, allocation),
+									: current,
 								purpose === "control"
 									? withoutOAuthProvisioning(expected, allocation)
-									: withoutPublicationContract(expected, allocation),
+									: withLivePublicationContract(current, expected, allocation),
 							));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {

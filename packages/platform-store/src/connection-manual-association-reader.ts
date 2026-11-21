@@ -1,7 +1,31 @@
-import { eq, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import { connectionManualAssociations } from "./schema-connection-registration.js";
+
+type Query = (
+	template: TemplateStringsArray,
+	...values: string[]
+) => PromiseLike<readonly unknown[]>;
+
+/**
+ * #4199 C2 (Spec §13.5.6 工具声明): the Agent has a verified Owner manual association whose
+ * Owner is still a current, enabled Owner of that Agent. Replacing or removing the Owner does
+ * not delete the association row, so its existence alone is not enough. Selects no credential.
+ */
+export async function hasCurrentConnectionManualAssociationV1(
+	query: Query,
+	agentId: string,
+) {
+	const rows =
+		await query`select a.agent_id from platform.connection_manual_associations a
+		join platform.agent_owners own on own.agent_id = a.agent_id and own.owner_id = a.owner_id
+		where a.agent_id = ${agentId}
+			and not exists(select 1 from platform.platform_user_disables disabled
+				where disabled.user_id = a.owner_id)
+		limit 1`;
+	return rows.length === 1;
+}
 
 export interface ConnectionManualAssociationMaterialV1 {
 	readonly agentId: string;
@@ -48,14 +72,12 @@ export class PostgresConnectionManualAssociationReaderV1 {
 		const result = await this.current([agentId]);
 		return result[agentId];
 	}
-	/** #4199 C2: whether the Agent has a current verified association; reads no credential. */
+	/** #4199 C2: see `hasCurrentConnectionManualAssociationV1`; reads no credential. */
 	async associated(agentId: string) {
-		const rows = await this.#database
-			.select({ agentId: connectionManualAssociations.agentId })
-			.from(connectionManualAssociations)
-			.where(eq(connectionManualAssociations.agentId, agentId))
-			.limit(1);
-		return rows.length === 1;
+		return hasCurrentConnectionManualAssociationV1(
+			(template, ...values) => this.#client(template, ...values),
+			agentId,
+		);
 	}
 	async close() {
 		await this.#client.end();

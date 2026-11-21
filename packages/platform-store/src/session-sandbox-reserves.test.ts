@@ -445,6 +445,57 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			});
 		},
 	);
+	it("claims a reserve only while its Owner manual association fact still holds (#4199 C2)", async () => {
+		const associate = (ownerId: string) =>
+			sql`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at) values ('agent','connection-agent',${"c".repeat(64)},1,${ownerId},${sql.json({ schemaVersion: 1, agentId: "agent", ownerId, secretVersion: 1, crypto: { dekFingerprint: "d".repeat(64) } })},now())`;
+		const profileOf = async (sandboxId: string) =>
+			(
+				await sql<
+					{ profile: Record<string, unknown> }[]
+				>`select profile from platform.session_sandbox_reserves where sandbox_id = ${sandboxId}`
+			)[0]?.profile;
+		await sql`insert into platform.connection_association_generations(agent_id,last_revision) values ('agent',1)`;
+		// Prepared before the association: no fact, and the Agent's digest is unchanged.
+		const before = await ready();
+		const unassociated = await profileOf(before.sandboxId);
+		expect(unassociated).not.toHaveProperty("connectionManualAssociation");
+		// Once the Agent is associated, a new Session takes a cold Sandbox, not that reserve.
+		await associate("user-a");
+		const cold = await create(execution(), "user-a", "web", "create-1");
+		expect(cold.outcome).toBe("accepted");
+		expect(cold).not.toMatchObject({
+			result: { conversationId: before.sessionId },
+		});
+		// A reserve prepared while associated records the fact in its profile and digest,
+		// and is claimed while the fact holds.
+		await sql`delete from platform.session_sandbox_reserves where sandbox_id = ${before.sandboxId}`;
+		await sql`delete from platform.session_sandbox_resource_charges where sandbox_id = ${before.sandboxId}`;
+		const associated = await ready();
+		const profile = await profileOf(associated.sandboxId);
+		expect(profile).toMatchObject({ connectionManualAssociation: true });
+		expect(profile?.digest).not.toBe(unassociated?.digest);
+		expect(
+			await create(execution(), "user-a", "web", "create-2"),
+		).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: associated.sessionId },
+		});
+		// Replacing the Owner (replaceAgentAccess leaves the association row) ends the fact:
+		// a reserve prepared while associated is no longer claimed.
+		const stale = await ready();
+		await sql.begin(async (tx) => {
+			await tx`delete from platform.agent_owners where agent_id = 'agent'`;
+			await tx`insert into platform.agent_owners(agent_id,owner_id,created_at) values ('agent','user-b',now())`;
+		});
+		const replaced = await create(execution(), "user-b", "web", "create-3");
+		expect(replaced.outcome).toBe("accepted");
+		expect(replaced).not.toMatchObject({
+			result: { conversationId: stale.sessionId },
+		});
+		expect(
+			await sql`select status from platform.session_sandbox_reserves where sandbox_id = ${stale.sandboxId}`,
+		).toEqual([{ status: "ready" }]);
+	});
 	it("refuses a disabled user or changed full env profile before claim", async () => {
 		const reserve = await ready();
 		await sql`insert into platform.platform_user_disables(user_id) values('user-a')`;

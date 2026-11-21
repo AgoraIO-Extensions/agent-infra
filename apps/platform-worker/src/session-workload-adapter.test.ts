@@ -356,8 +356,11 @@ it("hands the publication contract to the Host only when the render carries it, 
 		}),
 	).toThrow();
 
-	// Whether a Pod got the contract is fixed at creation: an association change
-	// later neither drifts the running Session nor adds the contract to it.
+	// Whether a Host may declare is fixed when its Pod is created (Pod env is immutable).
+	// A later association change is applied and observed against that fact in the
+	// production order (apply, then observe): no conflict, no drift, nothing added or removed.
+	const contractOf = (pod: V1Pod | null) =>
+		pod?.spec?.containers[0]?.env?.find((e) => e.name === name)?.value;
 	for (const [created, later] of [
 		[declared, undeclared],
 		[undeclared, declared],
@@ -371,13 +374,44 @@ it("hands the publication contract to the Host only when the render carries it, 
 			phase: "Running",
 			conditions: [{ type: "Ready", status: "True" }],
 		};
+		const uid = pod.metadata?.uid;
 		expect((await adapter.observe(created)).status).toBe("ready");
-		expect((await adapter.observe(later)).status).toBe("ready");
+		for (let retry = 0; retry < 2; retry += 1) {
+			await adapter.apply(later);
+			expect((await adapter.observe(later)).status).toBe("ready");
+		}
+		const kept = await client.read<V1Pod>("Pod", created.podName);
+		expect(kept?.metadata?.uid).toBe(uid);
+		expect(contractOf(kept)).toBe(
+			created.connectionInstallBootstrap?.publicationContract,
+		);
 		// Any other drift of the same Pod is still found.
 		const host = pod.spec?.containers[0];
 		if (!host) throw Error("Missing Host");
 		host.env = [...(host.env ?? []), { name: "FORGED", value: "1" }];
 		expect((await adapter.observe(later)).status).toBe("unknown");
+		await expect(adapter.apply(later)).rejects.toThrow();
+	}
+	// A live contract the Worker would not accept is drift, not a fact to keep.
+	for (const forged of [
+		"{}",
+		publicationContract.replace('"revision":"1"', '"revision":"2"'),
+	]) {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(declared);
+		const pod = await client.read<V1Pod>("Pod", declared.podName);
+		const entry = pod?.spec?.containers[0]?.env?.find((e) => e.name === name);
+		if (!pod || !entry) throw Error("Missing contract");
+		entry.value = forged;
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		for (const selected of [declared, undeclared]) {
+			await expect(adapter.apply(selected)).rejects.toThrow();
+			expect((await adapter.observe(selected)).status).toBe("unknown");
+		}
 	}
 });
 

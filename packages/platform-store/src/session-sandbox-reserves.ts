@@ -51,6 +51,7 @@ import {
 	transitionExecutorInstanceV2,
 } from "@agent-infra/platform-core";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
+import { hasCurrentConnectionManualAssociationV1 } from "./connection-manual-association-reader.js";
 import type { Transaction } from "./conversation-execution-common.js";
 import { lockAgentConfiguration } from "./conversation-execution-sql.js";
 import postgres from "./observed-postgres.js";
@@ -366,6 +367,14 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 		const modelProjectionDigest = sessionSandboxReserveDigestV1(projection);
 		const environmentDigest = sessionSandboxReserveDigestV1(deployment.env);
 		const skillsDigest = sessionSandboxReserveDigestV1(deployment.skills ?? []);
+		// #4199 C2 (Spec §13.5.6 工具声明): whether a Session Host may declare the dynamic
+		// Connection tools is fixed when its Pod is created, so a reserve carries the Agent's
+		// Owner manual association fact of its creation and is claimed only while it still holds.
+		// Present only when true, so other Agents keep their existing profile and digest.
+		const connectionManualAssociation =
+			(await hasCurrentConnectionManualAssociationV1(tx, agentId))
+				? ({ connectionManualAssociation: true } as const)
+				: {};
 		const profile: SessionSandboxReserveProfileV1 = {
 			schemaVersion: 1,
 			agentId,
@@ -381,6 +390,7 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 			signingConfigurationVersion: approved.signingConfigurationVersion,
 			transportConfigurationVersion: approved.transportConfigurationVersion,
 			storageConfigurationVersion: approved.storageConfigurationVersion,
+			...connectionManualAssociation,
 			digest: sessionSandboxReserveDigestV1({
 				policy,
 				approved,
@@ -389,6 +399,7 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 				environmentDigest,
 				skillsDigest,
 				configurationRevision: config.revision,
+				...connectionManualAssociation,
 			}),
 		};
 		return { profile, deployment, modelProjection: projection };
