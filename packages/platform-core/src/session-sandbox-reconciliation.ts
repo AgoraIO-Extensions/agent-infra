@@ -247,7 +247,7 @@ export function isSessionSandboxDeletionProgressValidV1(
 	});
 }
 
-/** One durable intent precedes all call/absence evidence and cannot be replaced. */
+/** Each intent is immutable; only a definitively failed attempt permits a fresh fenced intent. */
 export function canAdvanceSessionSandboxDeletionProgressV1(
 	previous: SessionSandboxDeletionProgressV1 | undefined,
 	next: SessionSandboxDeletionProgressV1,
@@ -256,6 +256,32 @@ export function canAdvanceSessionSandboxDeletionProgressV1(
 	if (!previous)
 		return next.state === "delete-requested" && !next.deleteAttempted;
 	if (!isSessionSandboxDeletionProgressValidV1([previous])) return false;
+	if (
+		previous.deleteAttempted &&
+		previous.deleteCallResult === "unknown" &&
+		next.deleteCallResult !== "unknown"
+	)
+		return false;
+	// A changed RV may only replace an explicit failure, never an unknown/ACK.
+	if (previous.deleteAttemptId !== next.deleteAttemptId)
+		return (
+			previous.state === "unknown" &&
+			previous.deleteAttempted &&
+			previous.deleteCallResult === "failed" &&
+			next.state === "delete-requested" &&
+			!next.deleteAttempted &&
+			next.deleteCallResult === "not-attempted" &&
+			previous.sourceGeneration === next.sourceGeneration &&
+			previous.resourceFence === next.resourceFence &&
+			next.managementFence >= previous.managementFence &&
+			previous.resource.kind === next.resource.kind &&
+			previous.resource.namespace === next.resource.namespace &&
+			previous.resource.name === next.resource.name &&
+			previous.resource.uid === next.resource.uid &&
+			previous.resource.controllerUid === next.resource.controllerUid &&
+			previous.preconditions.resourceVersion !==
+				next.preconditions.resourceVersion
+		);
 	return (
 		previous.deleteAttemptId === next.deleteAttemptId &&
 		previous.sourceGeneration === next.sourceGeneration &&
