@@ -169,7 +169,9 @@ function harness(
 				{
 					agent_id: apiAuthority.agentId,
 					owner_ids: ["owner"],
-					availability: [{ kind: "user", userId: identity.userId }],
+					availability: options.application
+						? [{ kind: "application", applicationId: identity.userId }]
+						: [{ kind: "user", userId: identity.userId }],
 				},
 			];
 		if (statement.includes("from platform.agent_principal_grants"))

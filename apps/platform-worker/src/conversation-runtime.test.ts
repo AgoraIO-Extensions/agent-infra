@@ -3400,3 +3400,63 @@ describe("#4273 personal API business-to-control boundary", () => {
 		}
 	});
 });
+
+it("#4283 stops application business dispatch and renewal after its own scope is removed", async () => {
+	const h = harness(1, async () => true, {
+		resolveCurrentApplication: async () => ({
+			schemaVersion: 1,
+			applicationId: "user",
+			status: "active",
+			authorizationRevision: "app-1",
+			useGrant: {
+				principal: { kind: "application", id: "user" },
+				agentId: "agent",
+				grantType: "use",
+				authorizationRevision: "app-use-1",
+				revoked: false,
+			},
+		}),
+	});
+	const record = h.record();
+	if (!record) throw new Error("Missing original authority");
+	Object.assign(h.claim, { channelId: "api" });
+	Object.assign(record.boundary, {
+		principal: { kind: "application", id: "user" },
+		channelId: "api",
+		identityRevision: "app-1",
+		accessSources: [{ kind: "api-use", useGrantRevision: "app-use-1" }],
+	});
+	record.agent = {
+		...record.agent,
+		availability: [{ kind: "application", applicationId: "user" }],
+	};
+	try {
+		const grant = await h.authorize();
+		record.agent = {
+			...record.agent,
+			availability: [{ kind: "user", userId: "user" }],
+		};
+		await expect(
+			h.runtime.runtimeHost.dispatch(h.request(grant)),
+		).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+		await expect(
+			h.runtime.runtimeHost.renewAuthorization?.(h.events(grant)),
+		).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+		expect(
+			h.fetcher.mock.calls.some(
+				([url]) =>
+					String(url).endsWith("/turns") ||
+					String(url).endsWith("/authorizations/renew"),
+			),
+		).toBe(false);
+		expect(h.sent().claims).toMatchObject({
+			principal: { kind: "application", id: "user" },
+			purpose: "control",
+			reason: "authorization_revoked",
+		});
+		expect(h.sent().body).not.toHaveProperty("input");
+		expect(h.directory.resolveUser).not.toHaveBeenCalled();
+	} finally {
+		h.runtime.close();
+	}
+});

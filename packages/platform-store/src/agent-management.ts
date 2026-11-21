@@ -782,22 +782,19 @@ export class PostgresAgentManagementTransactionV1
 				await authenticated.revalidate();
 				if (!sameValue(await currentGrants(), grants))
 					throw new PersonalApiCredentialErrorV1("unavailable");
-				if (principal.kind === "user") {
-					const current = await readAgentManagementState(
-						transaction,
-						request.agentId,
-					);
-					if (
-						!current ||
-						!isAgentApiPrincipalAvailableV1(
-							current,
-							principal,
-							authenticated.identity.user,
-						)
+				const current = await readAgentManagementState(
+					transaction,
+					request.agentId,
+				);
+				if (
+					!current ||
+					!isAgentApiPrincipalAvailableV1(
+						current,
+						principal,
+						authenticated.identity.user,
 					)
-						throw new PersonalApiCredentialErrorV1("not_found");
-				}
-
+				)
+					throw new PersonalApiCredentialErrorV1("not_found");
 				return result;
 			});
 		} catch (error) {

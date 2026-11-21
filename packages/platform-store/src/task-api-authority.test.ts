@@ -62,6 +62,7 @@ beforeEach(async () => {
 	await client`truncate platform.platform_api_credentials, platform.platform_user_disables, platform.platform_applications, platform.agents, platform.conversations cascade`;
 	await client`insert into platform.agents(id,authorization_revision) values('agent','agent-1')`;
 	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same-id')`;
+	await client`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','application','same-id')`;
 	await client`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('same-id','Fixture','owner','app-1')`;
 	for (const kind of ["user", "application"] as const) {
 		await client`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent',${kind},'same-id','use',${`use-${kind}`})`;

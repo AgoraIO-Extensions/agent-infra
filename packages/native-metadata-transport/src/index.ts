@@ -125,7 +125,13 @@ export function logNativeMetadataHop(
 		| "replica"
 		| "transport"
 		| "context"
-		| "driver",
+		| "driver"
+		| "target.parse"
+		| "target.scope"
+		| "target.verified"
+		| "target.identity"
+		| "target.route"
+		| "target.cancelled",
 	traceId: unknown,
 	outcome: "ok" | "unavailable" | "started",
 	elapsedMs?: number,

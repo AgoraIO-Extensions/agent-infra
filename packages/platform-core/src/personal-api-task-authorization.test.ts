@@ -285,6 +285,10 @@ const appAuthority: PersonalApiTaskAdmissionAuthorityV1 = {
 };
 const appFacts = {
 	...facts,
+	agent: {
+		...facts.agent,
+		availability: [{ kind: "application" as const, applicationId: "user_1" }],
+	},
 	authority: appAuthority,
 	user: null,
 	credential: { ...facts.credential, principalType: "application" },

@@ -2,7 +2,10 @@ import type {
 	RuntimeHost,
 	RuntimeHostNativeMetadataReadContextV1,
 } from "@agent-infra/agent-runtime";
-import { RuntimeHostError } from "@agent-infra/agent-runtime";
+import {
+	RuntimeHostError,
+	withNativeMetadataTraceV1,
+} from "@agent-infra/agent-runtime";
 import {
 	type NativeMetadataCurrentRequestV1,
 	NativeMetadataCurrentRequestV1Schema,
@@ -175,10 +178,12 @@ export function createRuntimeNativeMetadataReadV1(
 			const context = await assembly.resolveContext({ request, signal });
 			if (!context) throw unavailable();
 			step = "driver";
-			const response = await host.readNativeMetadataV1(request, {
-				...context,
-				signal,
-			});
+			const response = await withNativeMetadataTraceV1(request.traceId, () =>
+				host.readNativeMetadataV1(request, {
+					...context,
+					signal,
+				}),
+			);
 			logNativeMetadataHop("host.read", step, request.traceId, "ok");
 			return response;
 		} catch (error) {

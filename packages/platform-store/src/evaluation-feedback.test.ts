@@ -64,6 +64,7 @@ beforeAll(async () => {
 }, 120000);
 beforeEach(async () => {
 	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','user','same') on conflict do nothing`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values('agent','application','same') on conflict do nothing`;
 });
 afterAll(async () => {
 	await store?.close();

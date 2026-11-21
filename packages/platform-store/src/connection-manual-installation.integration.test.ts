@@ -197,6 +197,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	await client`delete from platform.connection_manual_install_permits`;
 	await client`delete from platform.connection_principal_pin_receipts`;
 	await client`delete from platform.connection_principal_pins`;
 	await client`delete from platform.connection_manual_installations`;
@@ -206,7 +207,7 @@ beforeEach(async () => {
 	// Restore the seeded original claims that claim and fence regressions move.
 	await client`delete from platform.outbox_items where id not in ('item-a','item-b','item-bob')`;
 	await client`update platform.outbox_items set status='processing', lease_expires_at=now()+interval '1 hour', delivery_fence=3`;
-	await client`update platform.conversation_executions set delivery_fence=3`;
+	await client`update platform.conversation_executions set delivery_fence=3, status='processing'`;
 	await associate("agent-a", "connection-agent-a", 1);
 	await associate("agent-b", "connection-agent-b", 1);
 });
@@ -3563,6 +3564,509 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(await readback(own)).toBe("denied");
 	});
 
+	/** Phases 1 and 2 under one attempt: pinned, exchange sent and settled `exchanged`. */
+	async function exchanged(flow: Awaited<ReturnType<typeof confirmed>>) {
+		const phase = await bindingReadback(flow);
+		const pinned = await manual.commitConfirmPin({
+			...phase,
+			candidate: await candidateFor(flow, phase),
+		});
+		if (pinned.outcome !== "pinned") throw new Error("not pinned");
+		const attempt = {
+			confirmCommandId: phase.confirmCommandId,
+			attemptId: phase.attemptId,
+			attemptOwner: phase.attemptOwner,
+			authorizationId: phase.authorizationId,
+		};
+		const exchange = await manual.openConfirmPhase({
+			...attempt,
+			phase: "confirm_exchange",
+		});
+		if (!exchange?.receipt) throw new Error("phase 2 not opened");
+		expect(
+			await manual.commitDelivery({
+				commandId: exchange.phaseCommandId,
+				attemptId: phase.attemptId,
+				attemptOwner: phase.attemptOwner,
+				command: "confirm_exchange",
+				authorizationId: phase.authorizationId,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		expect(
+			await manual.settleConfirmPhase({
+				...attempt,
+				phaseCommandId: exchange.phaseCommandId,
+				phase: "confirm_exchange",
+				outcome: "exchanged",
+			}),
+		).toBe("exchanged");
+		return { ...attempt, exchangeCommandId: exchange.phaseCommandId, exchange };
+	}
+	const evidence = (expiresIn = 3_600_000) => ({
+		commitDigest: randomBytes(32).toString("hex"),
+		expiresAt: Date.now() + expiresIn,
+	});
+	const permitCount = async (authorizationId: string) => {
+		const [row] =
+			await client`select count(*)::int as n from platform.connection_manual_install_permits where authorization_id=${authorizationId}`;
+		return row?.n;
+	};
+
+	// §13.5.6 动态安装的启用许可.
+	it("writes the permit once from the exchange's own evidence and completes the confirm", async () => {
+		const flow = await confirmed();
+		const done = await exchanged(flow);
+		const publication = evidence();
+		expect(await manual.commitPermit({ ...done, publication })).toBe(
+			"permitted",
+		);
+		const [permit] = await client`
+			select confirm_command_id, exchange_command_id, pin_receipt_id, binding, commit_digest, claim_owner, claim_fence::int as claim_fence,
+				expires_at <= ${dynamic.principalMapping.notAfter}::timestamptz as bounded
+			from platform.connection_manual_install_permits where authorization_id=${flow.run.authorizationId}`;
+		const template = flow.run.template;
+		expect(permit).toMatchObject({
+			confirm_command_id: done.confirmCommandId,
+			exchange_command_id: done.exchangeCommandId,
+			pin_receipt_id: done.exchange.receipt?.id,
+			commit_digest: publication.commitDigest,
+			claim_owner: "worker-a",
+			claim_fence: 3,
+			bounded: true,
+			binding: {
+				schemaVersion: 1,
+				principal: template.principal,
+				agentId: "agent-a",
+				conversationId: template.reference.conversationId,
+				association: template.association,
+				target: {
+					hostRef: template.target.hostRef,
+					sandboxId: template.target.sandboxId,
+					podUid: template.target.podUid,
+					sessionGeneration: template.target.sessionGeneration,
+					resourceFence: template.target.resourceFence,
+				},
+			},
+		});
+		expect((await pinFacts(flow.run.authorizationId))?.confirm).toBe(
+			"confirm:completed,confirm_binding_readback:completed,confirm_exchange:completed",
+		);
+		// Written once; a replay or another evidence never re-records it.
+		expect(
+			await manual.commitPermit({ ...done, publication: evidence() }),
+		).toBe("stale");
+		expect(await permitCount(flow.run.authorizationId)).toBe(1);
+	});
+
+	it.each([
+		[
+			"the original fence moved",
+			() =>
+				client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`,
+		],
+		[
+			"the pin was released",
+			() =>
+				client`update platform.connection_principal_pins set released_at=now(),
+					release_requested_at=now(), release_reason='administrator',
+					release_actor_id='admin-1', release_reference='https://example.test/unpin'`,
+		],
+		[
+			"the authorization was revoked",
+			() =>
+				client`update platform.connection_installation_authorizations set status='revoked'`,
+		],
+		[
+			"the confirm attempt lapsed while still sending",
+			() =>
+				client`update platform.connection_installation_commands
+					set attempt_expires_at=clock_timestamp()-interval '1 second' where status='sending'`,
+		],
+		[
+			"the original Execution stopped processing",
+			() =>
+				client`update platform.conversation_executions set status='unknown' where execution_id='execution-a'`,
+		],
+	])("writes no permit once %s", async (_name, change) => {
+		const flow = await confirmed();
+		const done = await exchanged(flow);
+		await change();
+		expect(
+			await manual.commitPermit({ ...done, publication: evidence() }),
+		).toBe("stale");
+		expect(await permitCount(flow.run.authorizationId)).toBe(0);
+	});
+
+	it("writes no permit for another attempt, an unsettled exchange or expired evidence", async () => {
+		const flow = await confirmed();
+		const phase = await bindingReadback(flow);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...phase,
+					candidate: await candidateFor(flow, phase),
+				})
+			).outcome,
+		).toBe("pinned");
+		const attempt = {
+			confirmCommandId: phase.confirmCommandId,
+			attemptId: phase.attemptId,
+			attemptOwner: phase.attemptOwner,
+			authorizationId: phase.authorizationId,
+		};
+		const exchange = await manual.openConfirmPhase({
+			...attempt,
+			phase: "confirm_exchange",
+		});
+		if (!exchange) throw new Error("phase 2 not opened");
+		const input = { ...attempt, exchangeCommandId: exchange.phaseCommandId };
+		// The exchange was opened but never settled `exchanged`.
+		expect(
+			await manual.commitPermit({ ...input, publication: evidence() }),
+		).toBe("stale");
+		await client`update platform.connection_installation_commands set status='completed' where id=${exchange.phaseCommandId}`;
+		expect(
+			await manual.commitPermit({
+				...input,
+				attemptOwner: "worker-b",
+				publication: evidence(),
+			}),
+		).toBe("stale");
+		expect(
+			await manual.commitPermit({ ...input, publication: evidence(-1000) }),
+		).toBe("stale");
+		expect(await permitCount(flow.run.authorizationId)).toBe(0);
+		expect(
+			await manual.commitPermit({ ...input, publication: evidence() }),
+		).toBe("permitted");
+	});
+
+	/** The permit read of a currently approved Execution of the same installation. */
+	async function permitted() {
+		const flow = await confirmed();
+		const done = await exchanged(flow);
+		const publication = evidence();
+		expect(await manual.commitPermit({ ...done, publication })).toBe(
+			"permitted",
+		);
+		const [row] =
+			await client`select id from platform.connection_manual_install_permits where authorization_id=${flow.run.authorizationId}`;
+		const { command: _command, ...base } = flow.run.commandReadback;
+		const request = {
+			...base,
+			purpose: "permit" as const,
+			permit: { id: row?.id as string, commitDigest: publication.commitDigest },
+		};
+		return { flow, request };
+	}
+
+	it("lets the same installation's current Execution read its permit after the original claim ended", async () => {
+		const { request } = await permitted();
+		expect(await manual.readback(request)).toBe("allowed");
+		// The original claim ends; the same Execution is claimed again at fence 4.
+		await client`update platform.outbox_items set delivery_fence=4 where id='item-a'`;
+		await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+		expect(await manual.readback(request)).toBe("allowed");
+		// Without a live claim of its own the current Execution reads nothing.
+		await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id='item-a'`;
+		expect(await manual.readback(request)).toBe("denied");
+	});
+
+	it("reads no permit when the current claim lapses during the directory read", async () => {
+		const { request } = await permitted();
+		beforeResolveUser = async () => {
+			beforeResolveUser = undefined;
+			await client`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where id='item-a'`;
+		};
+		expect(await manual.readback(request)).toBe("denied");
+	});
+
+	it.each([
+		[
+			"another commit digest",
+			(r: Record<string, unknown>) => ({
+				...r,
+				permit: { ...(r.permit as object), commitDigest: "9".repeat(64) },
+			}),
+		],
+		[
+			"another user",
+			(r: Record<string, unknown>) => ({
+				...r,
+				principal: { kind: "user", id: "bob" },
+			}),
+		],
+		[
+			"another Agent",
+			(r: Record<string, unknown>) => ({
+				...r,
+				reference: { ...(r.reference as object), agentId: "agent-b" },
+			}),
+		],
+		[
+			"another Execution",
+			(r: Record<string, unknown>) => ({
+				...r,
+				reference: { ...(r.reference as object), executionId: "execution-bob" },
+			}),
+		],
+		[
+			"another Sandbox target",
+			(r: Record<string, unknown>) => ({
+				...r,
+				target: { ...(r.target as object), resourceFence: 9 },
+			}),
+		],
+		[
+			"an install command",
+			(r: Record<string, unknown>) => ({
+				...r,
+				command: {
+					commandId: "command-x",
+					attemptId: "attempt-x",
+					attemptOwner: "worker-a",
+					command: "status",
+					requestDigest: "1".repeat(64),
+					registrationKeyHash: "2".repeat(64),
+				},
+			}),
+		],
+	])("refuses a permit read naming %s", async (_name, alter) => {
+		const { request } = await permitted();
+		expect(await manual.readback(alter(request) as never)).toBe("denied");
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	it.each([
+		[
+			"the pin was released (item 6)",
+			() =>
+				client`update platform.connection_principal_pins set released_at=now(),
+					release_requested_at=now(), release_reason='administrator',
+					release_actor_id='admin-1', release_reference='https://example.test/unpin'`,
+		],
+		[
+			"the installation is being revoked",
+			() =>
+				client`update platform.connection_manual_installations set revoke_state='pending'`,
+		],
+		[
+			"the permit expired",
+			() =>
+				client`update platform.connection_manual_install_permits set expires_at=clock_timestamp()-interval '1 second'`,
+		],
+		[
+			"the Owner association moved to a new revision",
+			() => associate("agent-a", "connection-agent-a", 2),
+		],
+	])("stops the permit once %s", async (_name, change) => {
+		const { request } = await permitted();
+		await change();
+		expect(await manual.readback(request)).toBe("denied");
+	});
+
+	it("stops the permit at the exception's notAfter (item 8)", async () => {
+		const { request } = await permitted();
+		const late = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: {
+				...policy,
+				dynamic: {
+					...dynamic,
+					principalMapping: {
+						...dynamic.principalMapping,
+						notAfter: "2026-01-01T00:00:00Z",
+					},
+				},
+			},
+		});
+		try {
+			expect(await late.readback(request)).toBe("denied");
+		} finally {
+			await late.close();
+		}
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	// #4314 MUST 1: like every other readback purpose, the permit read checks
+	// the template against the deployment's current system access approval.
+	it("stops the permit once the deployment's system access approval changed", async () => {
+		const { request } = await permitted();
+		const source = { ref: "platform-deployment", revision: "r2" };
+		const reapproved = new PostgresConnectionManualInstallationStoreV1({
+			databaseUrl: database.databaseUrl,
+			directory,
+			policy: {
+				...policy,
+				approval: { ...systemApproval, source },
+				dynamic: {
+					...dynamic,
+					principalMapping: {
+						...dynamic.principalMapping,
+						approvalSource: source,
+					},
+				},
+			},
+		});
+		try {
+			expect(await reapproved.readback(request)).toBe("denied");
+		} finally {
+			await reapproved.close();
+		}
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	// #4314 S2: the current Execution's actual Pod and resource fence come from
+	// the Store, not from the request; a drift there stops the permit too.
+	it.each([
+		[
+			"the current Pod UID",
+			() =>
+				client`update platform.session_sandbox_allocations set resource_observation=jsonb_set(resource_observation,
+					'{resources}', (select jsonb_agg(case when r->>'kind'='Pod' then jsonb_set(r, '{uid}', '"pod-replaced"') else r end)
+						from jsonb_array_elements(resource_observation->'resources') r))
+					where conversation_id='conversation-a'`,
+		],
+		[
+			"the Sandbox resource fence",
+			() =>
+				client`update platform.session_sandbox_allocations set resource_fence=resource_fence+1
+					where conversation_id='conversation-a'`,
+		],
+	])("stops the permit once %s moved in the Store", async (_name, change) => {
+		const { request } = await permitted();
+		const [saved] =
+			await client`select resource_observation, resource_fence from platform.session_sandbox_allocations
+				where conversation_id='conversation-a'`;
+		try {
+			await change();
+			expect(await manual.readback(request)).toBe("denied");
+		} finally {
+			await client`update platform.session_sandbox_allocations
+				set resource_observation=${client.json(saved?.resource_observation as never)}, resource_fence=${saved?.resource_fence as string}
+				where conversation_id='conversation-a'`;
+		}
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	// #4312 S1: a confirm that ends without a permit is closed at once and its
+	// original key revoked while the original claim can still carry the revoke.
+	it("closes an exchanged confirm without a permit as soon as its attempt lapses", async () => {
+		const flow = await confirmed();
+		await exchanged(flow);
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+			where authorization_id=${flow.run.authorizationId} and status='sending'`;
+		const pending = await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toEqual({
+			pins: 1,
+			receipts: 1,
+			status: "revoked",
+			revoke_state: "pending",
+			confirm:
+				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:completed",
+		});
+		// The revoke is listed for the original Execution, whose claim still holds.
+		expect(
+			pending.filter(
+				(item) =>
+					item.authorizationId === flow.run.authorizationId &&
+					item.command === "revoke",
+			),
+		).toHaveLength(1);
+		expect(await permitCount(flow.run.authorizationId)).toBe(0);
+	});
+
+	it("keeps a permitted install open after its confirm attempt and claim end", async () => {
+		const { flow, request } = await permitted();
+		await client`update platform.connection_installation_commands set attempt_expires_at=clock_timestamp()-interval '1 second'
+			where authorization_id=${flow.run.authorizationId}`;
+		await client`update platform.outbox_items set delivery_fence=4 where id='item-a'`;
+		await client`update platform.conversation_executions set delivery_fence=4 where execution_id='execution-a'`;
+		await manual.listPending(32, ["execution-a"]);
+		expect(await pinFacts(flow.run.authorizationId)).toMatchObject({
+			status: "confirmed",
+			revoke_state: "not_required",
+		});
+		expect(await manual.readback(request)).toBe("allowed");
+	});
+
+	// #4312 S2: the exchange readback refuses another installation's receipt,
+	// another Agent and a moved Owner association.
+	it("refuses an exchange readback with another installation's receipt, another Agent or a moved association", async () => {
+		const alice = await confirmed();
+		const alicePhase = await bindingReadback(alice);
+		expect(
+			(
+				await manual.commitConfirmPin({
+					...alicePhase,
+					candidate: await candidateFor(alice, alicePhase),
+				})
+			).outcome,
+		).toBe("pinned");
+		// Another user's installation of the same Agent, with its own receipt.
+		const other = await confirmed("bob", "bob", "worker-b");
+		const otherPhase = await bindingReadback(other);
+		const otherPinned = await manual.commitConfirmPin({
+			...otherPhase,
+			candidate: await candidateFor(other, otherPhase, "principal-b"),
+		});
+		if (otherPinned.outcome !== "pinned") throw new Error("other not pinned");
+		const exchange = await manual.openConfirmPhase({
+			confirmCommandId: alicePhase.confirmCommandId,
+			attemptId: alicePhase.attemptId,
+			attemptOwner: alicePhase.attemptOwner,
+			authorizationId: alicePhase.authorizationId,
+			phase: "confirm_exchange",
+		});
+		if (!exchange?.receipt) throw new Error("phase 2 not opened");
+		expect(
+			await manual.commitDelivery({
+				commandId: exchange.phaseCommandId,
+				attemptId: alicePhase.attemptId,
+				attemptOwner: alicePhase.attemptOwner,
+				command: "confirm_exchange",
+				authorizationId: alicePhase.authorizationId,
+				deliveryDigest: "7".repeat(64),
+			}),
+		).toBe(true);
+		const [row] =
+			await client`select descriptor_digest from platform.connection_manual_installations where authorization_id=${alice.run.authorizationId}`;
+		const readback = (
+			pinReceipt: { id: string; candidateDigest: string },
+			agentId = "agent-a",
+		) =>
+			manual.readback({
+				...alice.run.commandReadback,
+				reference: { ...alice.run.commandReadback.reference, agentId },
+				command: {
+					...alice.run.commandReadback.command,
+					commandId: exchange.phaseCommandId,
+					attemptId: alicePhase.attemptId,
+					attemptOwner: alicePhase.attemptOwner,
+					command: "confirm_exchange",
+					requestDigest: "7".repeat(64),
+					descriptorDigest: row?.descriptor_digest as string,
+					pinReceipt,
+				},
+			});
+		const own = {
+			id: exchange.receipt.id,
+			candidateDigest: exchange.receipt.candidateDigest,
+		};
+		expect(await readback(own)).toBe("allowed");
+		expect(
+			await readback({
+				id: otherPinned.receipt.id,
+				candidateDigest: otherPinned.receipt.candidateDigest,
+			}),
+		).toBe("denied");
+		expect(await readback(own, "agent-b")).toBe("denied");
+		await associate("agent-a", "connection-agent-a", 2);
+		expect(await readback(own)).toBe("denied");
+	});
+
 	// #4309 S2 (§13.5.6): only the original attempt drives the phases and an
 	// unknown confirm is never resent, so a confirm that lapsed after its pin but
 	// before its exchange opened is closed and its original key revoked.
@@ -3597,7 +4101,7 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		).toBeNull();
 	});
 
-	it("leaves an unknown confirm whose exchange was already sent for read-only verification", async () => {
+	it("also closes an unknown confirm whose exchange was sent but never settled", async () => {
 		const flow = await confirmed();
 		const phase = await bindingReadback(flow);
 		const candidate = await candidateFor(flow, phase);
@@ -3618,8 +4122,8 @@ describe("manual Owner EP-1060 install Store (§13.5.5–§13.5.7)", () => {
 		expect(await pinFacts(flow.run.authorizationId)).toEqual({
 			pins: 1,
 			receipts: 1,
-			status: "confirmed",
-			revoke_state: "not_required",
+			status: "revoked",
+			revoke_state: "pending",
 			confirm:
 				"confirm:unknown,confirm_binding_readback:completed,confirm_exchange:unknown",
 		});

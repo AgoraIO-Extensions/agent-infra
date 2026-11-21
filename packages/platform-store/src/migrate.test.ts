@@ -249,10 +249,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 
 	// #4315 PR-Agent: a pin released before 0096 has no release request; the
 	// migration backfills one so the new rule constraint holds for history.
-	it("upgrades released 0094 principal pins to the 0096 pin rules without failing", async () => {
+	it("upgrades released 0095 principal pins to the 0096 pin rules without failing", async () => {
 		const database = await startPostgresTestDatabase("principal-pin-upgrade");
 		const client = postgres(database.databaseUrl, { max: 1 });
-		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0094-"));
+		const folder = await mkdtemp(resolve(tmpdir(), "platform-through-0095-"));
 		try {
 			const sourceFolder = resolve(
 				import.meta.dirname,
@@ -262,11 +262,11 @@ describe("Platform PostgreSQL migration foundation", () => {
 			const journalPath = resolve(folder, "meta/_journal.json");
 			const journal = JSON.parse(await readFile(journalPath, "utf8"));
 			journal.entries = journal.entries.filter(
-				(entry: { idx: number }) => entry.idx <= 94,
+				(entry: { idx: number }) => entry.idx <= 95,
 			);
 			expect(journal.entries.at(-1)).toMatchObject({
-				idx: 94,
-				tag: "0094_connection_manual_confirm",
+				idx: 95,
+				tag: "0095_connection_manual_permit",
 			});
 			await writeFile(journalPath, JSON.stringify(journal));
 			await builtStore.migratePlatformDatabase({
@@ -949,7 +949,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 			// The Owner manual association holds only the Consumer service credential as ADR 0002
 			// ciphertext plus a reuse fingerprint (Spec §13.5.3 exception), never Provider credentials.
 			// The §13.5.1 exception pins and their receipts hold only non-secret Principal ids
-			// and the Host's candidate facts.
+			// and the Host's candidate facts; the §13.5.6 install permits hold only
+			// references, digests, the non-secret binding and their expiry.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
 				"connection_association_generations",
@@ -963,6 +964,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_manual_associations.connection_agent_id",
 				"connection_manual_associations.credential_ciphertext",
 				"connection_manual_associations.credential_fingerprint",
+				"connection_manual_install_permits",
 				"connection_manual_installations",
 				"connection_manual_installations.connection_agent_id",
 				"connection_principal_pin_receipts",
@@ -2260,7 +2262,7 @@ describe("published Relay authority migration", () => {
 			92,
 			93,
 			94,
-			// 95 is reserved for #4314 (0095_connection_manual_permit).
+			95,
 			96,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
@@ -2386,6 +2388,10 @@ describe("published Relay authority migration", () => {
 		expect(journal.entries.find((entry) => entry.idx === 94)).toMatchObject({
 			idx: 94,
 			tag: "0094_connection_manual_confirm",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 95)).toMatchObject({
+			idx: 95,
+			tag: "0095_connection_manual_permit",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
 			idx: 96,
@@ -3059,11 +3065,29 @@ describe("published Relay authority migration", () => {
 					"expires_at",
 					"created_at",
 				].map((name) => `connection_principal_pin_receipts:${name}`),
+				...[
+					"id",
+					"revision",
+					"authorization_id",
+					"confirm_command_id",
+					"exchange_command_id",
+					"exchange_request_digest",
+					"pin_receipt_id",
+					"binding",
+					"descriptor_digest",
+					"commit_digest",
+					"claim_owner",
+					"claim_fence",
+					"attempt_id",
+					"expires_at",
+					"created_at",
+				].map((name) => `connection_manual_install_permits:${name}`),
 			);
 			expectedDelta.checks.push(
 				"connection_principal_pins:connection_principal_pin_identity",
 				"connection_principal_pins:connection_principal_pin_rules",
 				"connection_principal_pin_receipts:connection_principal_pin_receipt_digest",
+				"connection_manual_install_permits:connection_manual_install_permit_digest",
 			);
 			expectedDelta.indexes.push(
 				"connection_principal_pins:connection_principal_pins_pkey",
@@ -3071,6 +3095,8 @@ describe("published Relay authority migration", () => {
 				"connection_principal_pins:connection_principal_pin_user_unique",
 				"connection_principal_pin_receipts:connection_principal_pin_receipts_pkey",
 				"connection_principal_pin_receipts:connection_principal_pin_receipt_confirm_unique",
+				"connection_manual_install_permits:connection_manual_install_permits_pkey",
+				"connection_manual_install_permits:connection_manual_install_permit_authorization_unique",
 			);
 			expectedDelta.columns.push(
 				...["agent_id", "last_revision", "updated_at"].map(

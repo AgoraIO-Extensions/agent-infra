@@ -3,6 +3,7 @@ import {
 	type RuntimeNativeMetadataBindingResponseV1,
 	RuntimeNativeMetadataBindingResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { logNativeMetadataHop } from "@agent-infra/native-metadata-transport";
 import {
 	type NativeMetadataRuntimeTargetScopeResponseV1,
 	PostgresConversationQueryV1,
@@ -262,10 +263,37 @@ export function createPlatformNativeMetadataRuntimeTargetResolverV1(options: {
 			readonly binding: RuntimeNativeMetadataBindingResponseV1;
 			readonly signal: AbortSignal;
 		}): Promise<PlatformNativeMetadataRuntimeTargetV1 | null> {
+			let step:
+				| "target.parse"
+				| "target.scope"
+				| "target.verified"
+				| "target.identity"
+				| "target.route"
+				| "target.cancelled" = "target.parse";
+			let began = performance.now();
+			const log = (outcome: "ok" | "unavailable") =>
+				logNativeMetadataHop(
+					"worker.read",
+					step,
+					input.binding?.traceId,
+					outcome,
+					Math.max(0, Math.round(performance.now() - began)),
+				);
+			const advance = (next: typeof step) => {
+				log("ok");
+				step = next;
+				began = performance.now();
+			};
+			const fail = () => {
+				if (input.signal.aborted) step = "target.cancelled";
+				log("unavailable");
+				return null;
+			};
 			try {
 				const binding = RuntimeNativeMetadataBindingResponseV1Schema.parse(
 					input.binding,
 				);
+				advance("target.scope");
 				const current =
 					await options.query.readNativeMetadataRuntimeTargetScopeV1({
 						scope: {
@@ -284,13 +312,12 @@ export function createPlatformNativeMetadataRuntimeTargetResolverV1(options: {
 						},
 						signal: input.signal,
 					});
-				if (
-					input.signal.aborted ||
-					!current ||
-					!current.workloadState.verified ||
-					!sameRuntimeTargetScope(current, binding)
-				)
-					return null;
+				if (input.signal.aborted || !current) return fail();
+				advance("target.verified");
+				if (!current.workloadState.verified) return fail();
+				advance("target.identity");
+				if (!sameRuntimeTargetScope(current, binding)) return fail();
+				advance("target.route");
 				const host = await options.resolveConversationRuntimeHost({
 					agentId: current.agentId,
 					...(current.sandboxResource
@@ -311,14 +338,14 @@ export function createPlatformNativeMetadataRuntimeTargetResolverV1(options: {
 					purpose: "control",
 					command: "session.status",
 				});
-				if (input.signal.aborted) return null;
+				if (input.signal.aborted) return fail();
+				log("ok");
 				return {
 					baseUrl: host.baseUrl,
 					serviceToken: host.serviceToken,
 				};
 			} catch {
-				if (input.signal.aborted) return null;
-				return null;
+				return fail();
 			}
 		},
 	};

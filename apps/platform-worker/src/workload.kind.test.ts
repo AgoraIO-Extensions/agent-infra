@@ -905,6 +905,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)
 					values (${seed.agentId},'user','selector-host-owner','manage','user-manage'),
 						(${seed.agentId},'application','api-workload-application','manage','app-manage')`;
+				// Application management requires an independent availability entry too.
+				await sql`insert into platform.agent_availability(agent_id,target_type,target_id)
+					values (${seed.agentId},'application','api-workload-application')`;
 				const unused = async (): Promise<never> => {
 					throw new Error("Unused API dependency");
 				};

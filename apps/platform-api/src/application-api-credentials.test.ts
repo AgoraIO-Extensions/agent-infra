@@ -410,6 +410,16 @@ it("uses the actually delivered application Token to create two Agents and read 
 		),
 	).toBe(true);
 	for (const agentId of [first.agentId, second.agentId]) {
+		// Creation/grants do not imply scope. Consumer fixture prepares an explicit
+		// application entry; production uses the normal Owner entry from AC-2.
+		expect(
+			(
+				await fetch(`${baseUrl}/api/v2/agents/${agentId}/state`, {
+					headers: { Authorization: `Bearer ${issued}` },
+				})
+			).status,
+		).toBe(404);
+		await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agentId},'application','app-1')`;
 		const state = await fetch(`${baseUrl}/api/v2/agents/${agentId}/state`, {
 			headers: { Authorization: `Bearer ${issued}` },
 		});
@@ -633,6 +643,7 @@ it("lists and revokes with current browser authority, then rejects only that cre
 		await sql`select agent_id from platform.agent_applications order by agent_id limit 1`;
 	expect(agent?.agent_id).toBeTruthy();
 	await sql`insert into platform.agent_principal_grants (agent_id,principal_type,principal_id,grant_type,authorization_revision) values (${agent?.agent_id},'application',${applicationId},'manage','v1')`;
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id) values(${agent?.agent_id},'application',${applicationId})`;
 	const outboxBefore =
 		await sql`select * from platform.outbox_items order by id`;
 	const authenticate = (credential: string) =>

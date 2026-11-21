@@ -43,6 +43,7 @@ type Store = Pick<
 	| "openConfirmPhase"
 	| "commitConfirmPin"
 	| "settleConfirmPhase"
+	| "commitPermit"
 >;
 
 export interface ConnectionManualInstallationDrainOptionsV1 {
@@ -503,7 +504,7 @@ export function createConnectionManualInstallationDrainV1(
 		} catch {
 			response = undefined;
 		}
-		return store.settleConfirmPhase({
+		const settled = await store.settleConfirmPhase({
 			...attempt,
 			confirmCommandId: fixedInput.confirmCommandId,
 			phaseCommandId: phase.phaseCommandId,
@@ -512,6 +513,15 @@ export function createConnectionManualInstallationDrainV1(
 				response?.outcome === "exchanged" || response?.outcome === "rejected"
 					? response.outcome
 					: "unknown",
+		});
+		// §13.5.6 启用许可: only this exchange's own committed publication
+		// evidence, while the same attempt and original claim still hold.
+		if (settled !== "exchanged" || !response?.publication) return settled;
+		return store.commitPermit({
+			...attempt,
+			confirmCommandId: fixedInput.confirmCommandId,
+			exchangeCommandId: phase.phaseCommandId,
+			publication: response.publication,
 		});
 	}
 
