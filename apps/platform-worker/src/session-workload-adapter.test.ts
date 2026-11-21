@@ -40,6 +40,7 @@ import type {
 } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { parseRuntimeOAuthDynamicPublicationContractV1 } from "../../agent-runtime-host/src/runtime-oauth-dynamic-publication.js";
 
 function required<T>(value: T | null | undefined): T {
 	if (value === undefined || value === null)
@@ -267,6 +268,117 @@ it("keeps the empty installation receiver on both cold and reserve Hosts", () =>
 			},
 		}),
 	).toThrow();
+});
+
+it("hands the publication contract to the Host only when the render carries it, and keeps a running Pod", async () => {
+	const configuration = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "approved-egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/connection/callback",
+	};
+	const connectionInstallBootstrap = {
+		port: 3443,
+		workerOrigin: "https://install-worker.workload-test.svc:3444/",
+		apiSelector: { component: "platform-api" },
+		clientName: "Agent platform",
+		configuration,
+		approval: {
+			schemaVersion: 1,
+			configFingerprint: connectionSystemAccessFingerprintV1(configuration),
+			egressEnforced: true,
+			source: { ref: "approval", revision: "r1" },
+		},
+		installToken: "install-readback-canary-Z9Z9Z9Z9Z9Z9Z9Z9Z9Z",
+		tlsSecretRef: {
+			name: "session-tls",
+			certKey: "tls.crt",
+			keyKey: "tls.key",
+		},
+		callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+		workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+	};
+	const publicationContract = JSON.stringify({
+		serviceRef: "connection-mcp",
+		contract: {
+			ref: "connection-mcp-publication",
+			revision: "1",
+			serverInfo: { name: "connection", version: "1.0.0" },
+			tools: [{ name: "list_actions", succeededResultSchema: {} }],
+		},
+		toolDeclarations: [
+			{
+				name: "list_actions",
+				description: "List actions.",
+				inputSchema: { type: "object" },
+			},
+		],
+	});
+	const name = "AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_PUBLICATION_CONTRACT";
+	const declared: SessionSandboxAllocationV1 = {
+		...allocation,
+		connectionInstallBootstrap: {
+			...connectionInstallBootstrap,
+			publicationContract,
+		},
+	};
+	const undeclared: SessionSandboxAllocationV1 = {
+		...allocation,
+		connectionInstallBootstrap,
+	};
+	const hostEnv = (selected: SessionSandboxAllocationV1) =>
+		sessionSandboxResourcesV1(selected)[5].spec?.containers[0]?.env ?? [];
+	const value = hostEnv(declared).find((e) => e.name === name)?.value;
+	expect(value).toBe(publicationContract);
+	// The Host takes exactly this value as its deployment contract (#4337 parser).
+	expect(parseRuntimeOAuthDynamicPublicationContractV1(value)).toEqual(
+		JSON.parse(publicationContract),
+	);
+	expect(hostEnv(undeclared).some((e) => e.name === name)).toBe(false);
+	for (const pod of [declared, undeclared].map(
+		(selected) => sessionSandboxResourcesV1(selected)[5],
+	))
+		expect(
+			pod.spec?.initContainers?.some((c) =>
+				c.env?.some((e) => e.name === name),
+			),
+		).toBe(false);
+	expect(() =>
+		sessionSandboxResourcesV1({
+			...declared,
+			connectionInstallBootstrap: {
+				...connectionInstallBootstrap,
+				publicationContract: "x".repeat(65_537),
+			},
+		}),
+	).toThrow();
+
+	// Whether a Pod got the contract is fixed at creation: an association change
+	// later neither drifts the running Session nor adds the contract to it.
+	for (const [created, later] of [
+		[declared, undeclared],
+		[undeclared, declared],
+	] as const) {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(created);
+		const pod = await client.read<V1Pod>("Pod", created.podName);
+		if (!pod) throw Error("Missing Pod");
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		expect((await adapter.observe(created)).status).toBe("ready");
+		expect((await adapter.observe(later)).status).toBe("ready");
+		// Any other drift of the same Pod is still found.
+		const host = pod.spec?.containers[0];
+		if (!host) throw Error("Missing Host");
+		host.env = [...(host.env ?? []), { name: "FORGED", value: "1" }];
+		expect((await adapter.observe(later)).status).toBe("unknown");
+	}
 });
 
 describe("image-only Session layout", () => {

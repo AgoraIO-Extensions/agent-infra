@@ -586,7 +586,7 @@ export const createWorkloadReadinessLedgerV1 = () => ({});`,
 		join(directory, "conversation-deployment.js"),
 		`
 export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; return async () => 'original-control'; };
-export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; globalThis.manualBootstrap = options.connectionInstallBootstrap; return async () => ({ status: 'observed', resources: [] }); };
+export const createProductionSessionSandboxReceiverV1 = (workload, options) => { globalThis.calls.push('sandbox'); globalThis.oauthProvisioning = options.oauthProvisioning ?? null; globalThis.manualBootstrap = options.connectionInstallBootstrap; globalThis.manualPublication = options.connectionManualPublication; return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
 	await writeFile(
@@ -606,6 +606,17 @@ export const createWecomDeploymentCoordinatorV1 = (input) => { globalThis.calls.
 		platform: "node",
 		format: "esm",
 		outfile: join(directory, "connection-manual-installation-deployment.js"),
+	});
+	// #4199 C2: the real publication contract parser and projection decision.
+	await build({
+		entryPoints: [
+			new URL("./connection-manual-publication.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "connection-manual-publication.js"),
 	});
 	// #3289：使用真实的 origin/egress 解析，覆盖写入任何 Kubernetes 资源之前的配置拒绝。
 	await build({
@@ -715,12 +726,12 @@ try {
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
 	if (process.env.RUN_MANUAL_ENABLED) {
 	 const bootstrap = globalThis.manualBootstrap;
-	 console.log(JSON.stringify({ manualDrain: typeof conversation.connectionInstallation?.manual?.drain === 'function', standard: conversation.connectionInstallation?.configuration?.clientId ?? null, bootstrap: bootstrap ? { port: bootstrap.port, workerOrigin: bootstrap.workerOrigin, clientName: bootstrap.clientName, configuration: bootstrap.configuration, approval: bootstrap.approval } : null }));
+	 console.log(JSON.stringify({ manualDrain: typeof conversation.connectionInstallation?.manual?.drain === 'function', standard: conversation.connectionInstallation?.configuration?.clientId ?? null, bootstrap: bootstrap ? { port: bootstrap.port, workerOrigin: bootstrap.workerOrigin, clientName: bootstrap.clientName, configuration: bootstrap.configuration, approval: bootstrap.approval } : null, ...(globalThis.manualPublication ? { publication: { contract: globalThis.manualPublication.contract, associated: await globalThis.manualPublication.associated(process.env.RUN_PUBLICATION_AGENT ?? 'none') } } : {}) }));
 	 await conversation.closeDeployment?.();
 	 process.exit(0);
 	}
 	if (process.env.RUN_MANUAL_DORMANCY) {
-	 console.log(JSON.stringify({ manualDrain: !!conversation.connectionInstallation?.manual, manualBootstrap: !!globalThis.manualBootstrap, standard: conversation.connectionInstallation?.configuration?.clientId ?? null }));
+	 console.log(JSON.stringify({ manualDrain: !!conversation.connectionInstallation?.manual, manualBootstrap: !!globalThis.manualBootstrap, standard: conversation.connectionInstallation?.configuration?.clientId ?? null, ...(globalThis.manualPublication ? { manualPublication: true } : {}) }));
 	 await conversation.closeDeployment?.();
 	 process.exit(0);
 	}
@@ -3072,6 +3083,92 @@ export const serviceToken = ${JSON.stringify(serviceToken)};`,
 			expect(enabled.stdout).not.toContain(secret);
 			expect(enabled.stderr).not.toContain(secret);
 		}
+
+		// #4199 C2 publication contract: only through the open gate, only for an Agent with a
+		// current verified Owner manual association (real PG), and never an invalid contract.
+		const contract = JSON.stringify({
+			serviceRef: "connection-mcp",
+			contract: {
+				ref: "connection-mcp-publication",
+				revision: "1",
+				serverInfo: { name: "connection", version: "1.0.0" },
+				tools: [{ name: "list_actions", succeededResultSchema: {} }],
+			},
+			toolDeclarations: [
+				{
+					name: "list_actions",
+					description: "List Connection actions.",
+					inputSchema: { type: "object" },
+				},
+			],
+		});
+		const associate = async (agentId: string, ownerId: string, n: number) => {
+			await sql`insert into platform.agents(id,authorization_revision) values (${agentId},'agent-r1') on conflict do nothing`;
+			await sql`insert into platform.connection_association_generations(agent_id,last_revision) values (${agentId},1) on conflict do nothing`;
+			await sql`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at) values (${agentId},${`connection-${agentId}`},${String(n).repeat(64)},1,${ownerId},${sql.json({ schemaVersion: 1, agentId, ownerId, secretVersion: 1, crypto: { dekFingerprint: String(n + 1).repeat(64) } })},now())`;
+		};
+		await associate("agent-alice", "alice", 1);
+		await sql`insert into platform.agents(id,authorization_revision) values ('agent-bob','agent-r1')`;
+		const published = (
+			record: unknown,
+			value: string | undefined,
+			agent: string,
+		) =>
+			run({
+				...environment(record),
+				AGENT_INFRA_CONNECTION_MANUAL_PUBLICATION_CONTRACT: value,
+				RUN_PUBLICATION_AGENT: agent,
+			});
+		const associatedRun = published(exceptionApproval, contract, "agent-alice");
+		expect(associatedRun.status, associatedRun.stderr).toBe(0);
+		expect(lastLine(associatedRun.stdout).publication).toEqual({
+			contract,
+			associated: true,
+		});
+		// Another user's Agent and an Agent nobody associated get nothing.
+		for (const agent of ["agent-bob", "agent-unknown"])
+			expect(
+				lastLine(published(exceptionApproval, contract, agent).stdout)
+					.publication,
+			).toEqual({ contract, associated: false });
+		// Removing the association stops the projection for new renders.
+		await sql`delete from platform.connection_manual_associations where agent_id='agent-alice'`;
+		expect(
+			lastLine(published(exceptionApproval, contract, "agent-alice").stdout)
+				.publication,
+		).toEqual({ contract, associated: false });
+		await associate("agent-alice", "alice", 3);
+		// An invalid contract, or one bound to another descriptor contract, is never handed on.
+		for (const invalid of [
+			"{",
+			JSON.stringify({ ...JSON.parse(contract), toolDeclarations: [] }),
+			contract.replace('"revision":"1"', '"revision":"2"'),
+		]) {
+			const refused = published(exceptionApproval, invalid, "agent-alice");
+			expect(refused.status, refused.stderr).toBe(0);
+			expect(lastLine(refused.stdout)).not.toHaveProperty("publication");
+			expect(refused.stderr).toContain(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "CONNECTION_MANUAL_PUBLICATION_CONTRACT_INVALID",
+				}),
+			);
+			expect(refused.stderr).not.toContain("list_actions");
+		}
+		// A closed gate projects nothing even with the contract set.
+		const closed = published(
+			{ ...exceptionApproval, notAfter: "2026-01-01T00:00:00Z" },
+			contract,
+			"agent-alice",
+		);
+		expect(closed.status, closed.stderr).toBe(0);
+		expect(lastLine(closed.stdout)).toEqual({
+			manualDrain: false,
+			standard: null,
+			bootstrap: null,
+		});
+		expect(closed.stderr).toContain("CONNECTION_MANUAL_INSTALLATION_DORMANT");
+		await sql`delete from platform.connection_manual_associations`;
 
 		// The gate opened it but this Worker cannot carry it: it does not start.
 		for (const module of [

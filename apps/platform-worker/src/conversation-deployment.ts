@@ -50,6 +50,10 @@ import {
 } from "./connection-consumer-projection.js";
 import type { ConnectionInstallBootstrapDeploymentV1 } from "./connection-install-bootstrap.js";
 import { sessionSandboxConnectionInstallTokenV1 } from "./connection-install-readback-server.js";
+import {
+	type ConnectionManualPublicationV1,
+	withConnectionManualPublicationV1,
+} from "./connection-manual-publication.js";
 import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js";
@@ -1142,6 +1146,7 @@ function createSessionSandboxAllocationResolverV1(
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
 		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
+		readonly connectionManualPublication?: ConnectionManualPublicationV1;
 		readonly executorDrainStartupTimeoutMs?: number;
 	},
 ) {
@@ -1255,26 +1260,34 @@ function createSessionSandboxAllocationResolverV1(
 			desiredState,
 			provisioning,
 		);
-		const allocation: SessionSandboxAllocationV1 = {
-			...(selectedProvisioning
-				? { oauthProvisioning: structuredClone(selectedProvisioning) }
-				: {}),
-			...(snapshotProjection
-				? { workspaceSnapshotProjection: snapshotProjection }
-				: {}),
-			...resourceFor(
-				binding,
-				policy,
-				deployment,
-				modelProjection,
-				desiredState,
-				generation,
-				resourceFence,
-				requireCurrentTemplateTrust,
-			),
-			principal: binding.principal,
-			channelId: binding.channelId,
-		};
+		const allocation: SessionSandboxAllocationV1 =
+			await withConnectionManualPublicationV1(
+				{
+					...(selectedProvisioning
+						? { oauthProvisioning: structuredClone(selectedProvisioning) }
+						: {}),
+					...(snapshotProjection
+						? { workspaceSnapshotProjection: snapshotProjection }
+						: {}),
+					...resourceFor(
+						binding,
+						policy,
+						deployment,
+						modelProjection,
+						desiredState,
+						generation,
+						resourceFence,
+						requireCurrentTemplateTrust,
+					),
+					principal: binding.principal,
+					channelId: binding.channelId,
+				},
+				options.connectionManualPublication,
+				{ desiredState, requireCurrentTemplateTrust },
+				() => {
+					throw new WorkloadKubernetesError("unavailable");
+				},
+			);
 		if (
 			allocation.runtime?.custom &&
 			desiredState === "running" &&
@@ -1324,6 +1337,8 @@ export function createProductionSessionSandboxReceiverV1(
 		readonly serviceToken: string;
 		readonly oauthProvisioning?: SessionSandboxOAuthProvisioningV1;
 		readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
+		/** #4199 C2: the approved publication contract and the per-Agent association read. */
+		readonly connectionManualPublication?: ConnectionManualPublicationV1;
 		readonly executorDrainStartupTimeoutMs?: number;
 		readonly executorIdentityIssuer?: ConversationRuntimeOptionsV2["signing"]["privateKey"];
 	},

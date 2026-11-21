@@ -1,4 +1,4 @@
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import { connectionManualAssociations } from "./schema-connection-registration.js";
@@ -47,6 +47,15 @@ export class PostgresConnectionManualAssociationReaderV1 {
 	async currentOne(agentId: string) {
 		const result = await this.current([agentId]);
 		return result[agentId];
+	}
+	/** #4199 C2: whether the Agent has a current verified association; reads no credential. */
+	async associated(agentId: string) {
+		const rows = await this.#database
+			.select({ agentId: connectionManualAssociations.agentId })
+			.from(connectionManualAssociations)
+			.where(eq(connectionManualAssociations.agentId, agentId))
+			.limit(1);
+		return rows.length === 1;
 	}
 	async close() {
 		await this.#client.end();

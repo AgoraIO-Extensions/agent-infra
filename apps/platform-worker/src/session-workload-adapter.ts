@@ -69,6 +69,7 @@ import {
 } from "./connection-consumer-projection.js";
 import {
 	connectionInstallInitializerV1,
+	connectionInstallPublicationContractEnvironmentV1,
 	connectionInstallReadbackSecretKeyV1,
 	projectSessionSandboxConnectionInstallV1,
 	type SessionSandboxConnectionInstallBootstrapV1,
@@ -2255,6 +2256,26 @@ function resourceSpecMatches(
 	}
 }
 
+/**
+ * #4199 C2 (Spec §13.5.6 工具声明): whether a Session's Host got the publication contract
+ * is fixed when its Pod is created. A later association change, deadline or contract
+ * withdrawal keeps the Thread's declaration and leaves the rest of the Session usable,
+ * so the business comparison does not tie a running Pod to the current decision.
+ */
+function withoutPublicationContract<T extends KubernetesObject>(
+	object: T,
+	allocation: SessionSandboxResourceInputV1,
+): T {
+	if (object.kind !== "Pod" || !allocation.connectionInstallBootstrap)
+		return object;
+	const copy = structuredClone(object);
+	for (const container of (copy as V1Pod).spec?.containers ?? [])
+		container.env = container.env?.filter(
+			(e) => e.name !== connectionInstallPublicationContractEnvironmentV1,
+		);
+	return copy;
+}
+
 function withoutOAuthProvisioning<T extends KubernetesObject>(
 	object: T,
 	allocation: SessionSandboxResourceInputV1,
@@ -3014,10 +3035,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						: resourceSpecMatches(
 								purpose === "control"
 									? withoutOAuthProvisioning(current, allocation)
-									: current,
+									: withoutPublicationContract(current, allocation),
 								purpose === "control"
 									? withoutOAuthProvisioning(expected, allocation)
-									: expected,
+									: withoutPublicationContract(expected, allocation),
 							));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {

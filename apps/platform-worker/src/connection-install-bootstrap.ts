@@ -20,6 +20,9 @@ const names = {
 } as const;
 export const connectionInstallReadbackSecretKeyV1 =
 	"connection-install-readback-token";
+/** Host env the Host parses into its dynamic publication contract (#4337). */
+export const connectionInstallPublicationContractEnvironmentV1 =
+	"AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_PUBLICATION_CONTRACT";
 const dnsLabel = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const secretName = /^[a-z0-9](?:[-.a-z0-9]{0,251}[a-z0-9])?$/;
 const secretKey = /^[-._A-Za-z0-9]{1,253}$/;
@@ -45,13 +48,18 @@ export interface SessionSandboxConnectionInstallBootstrapV1 {
 	readonly workerCaSecretRef: { readonly name: string; readonly key: string };
 	/** Derived install-only transport identity for this Sandbox. */
 	readonly installToken: string;
+	/**
+	 * #4199 C2: the approved dynamic publication contract (non-secret JSON), present only
+	 * for a Session of an Agent with a verified Owner manual association.
+	 */
+	readonly publicationContract?: string;
 }
 
 /** Once-per-deployment trust. Sandbox-specific material is selected by the Worker. */
 export interface ConnectionInstallBootstrapDeploymentV1
 	extends Omit<
 		SessionSandboxConnectionInstallBootstrapV1,
-		"installToken" | "tlsSecretRef"
+		"installToken" | "tlsSecretRef" | "publicationContract"
 	> {
 	readonly tlsSecretForSandbox: (
 		resourceName: string,
@@ -169,6 +177,10 @@ export function projectSessionSandboxConnectionInstallV1(
 		!validSelector(location.authorizedIngressSelector) ||
 		!/^[\x20-\x7e]{1,100}$/.test(input.clientName) ||
 		!/^[A-Za-z0-9_-]{43}$/.test(input.installToken) ||
+		(input.publicationContract !== undefined &&
+			(typeof input.publicationContract !== "string" ||
+				input.publicationContract === "" ||
+				Buffer.byteLength(input.publicationContract) > 65_536)) ||
 		resolveApprovedConnectionSystemAccessV1(input.configuration, input.approval)
 			.status !== "available"
 	)
@@ -197,6 +209,14 @@ export function projectSessionSandboxConnectionInstallV1(
 			name: "AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_CLIENT_NAME",
 			value: input.clientName,
 		},
+		...(input.publicationContract === undefined
+			? []
+			: [
+					{
+						name: connectionInstallPublicationContractEnvironmentV1,
+						value: input.publicationContract,
+					},
+				]),
 		{ name: "AGENT_INFRA_RUNTIME_SANDBOX_ID", value: location.sandboxId },
 		{
 			name: "AGENT_INFRA_RUNTIME_SESSION_GENERATION",
