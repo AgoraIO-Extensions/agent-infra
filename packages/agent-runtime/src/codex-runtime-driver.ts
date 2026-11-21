@@ -3544,7 +3544,12 @@ function executionOperationInState(
 				state.operations,
 				operationKey({ ...session, kind, operationId: executionId }),
 			);
-			return value ? [value] : [];
+			// A legacy read-only command may share the original submit's ID;
+			// it never owns that Execution's model journal.
+			return value &&
+				(kind === "submit-turn" || value.effect === "state_changing")
+				? [value]
+				: [];
 		},
 	);
 	if (operations.length !== 1) stateInvalid();

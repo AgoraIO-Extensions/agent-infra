@@ -156,6 +156,18 @@ async function invokeNativeQuery(
 }
 
 describe("Codex native command result lifecycle", () => {
+	it("preserves a legacy read receipt beside a submit with the same operation id", async () => {
+		const f = await fixture();
+		const { record } = await invokeNativeQuery(f, "execution-1");
+		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
+		expect(
+			f.transport.requests.some(
+				(frame) =>
+					frame.method === "thread/compact/start" ||
+					frame.method === "turn/start",
+			),
+		).toBe(false);
+	});
 	it("keeps a baseline-readable file if the default native command result commit is interrupted", async () => {
 		const f = await fixture();
 		const key = JSON.stringify([
