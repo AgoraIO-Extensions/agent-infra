@@ -12802,6 +12802,27 @@ describe("terminal original Turn control authority (#4266)", () => {
 						work.conversationId,
 					),
 				).toBeUndefined();
+				expect(
+					await query.getArchives(
+						{ actorId: "actor-dispatch", channelId: "web" },
+						work.conversationId,
+					),
+				).toEqual([
+					{
+						executionId: work.executionId,
+						archive: {
+							schemaVersion: 1,
+							status: "unavailable",
+							deadlineAt: new Date(final.archive.deadlineAtMs).toISOString(),
+						},
+					},
+				]);
+				expect(
+					await query.getArchives(
+						{ actorId: "foreign", channelId: "web" },
+						work.conversationId,
+					),
+				).toBeUndefined();
 			} finally {
 				await query.close();
 			}
