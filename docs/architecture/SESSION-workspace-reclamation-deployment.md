@@ -25,7 +25,7 @@ node dist/sessionWorkspaceReclamation.mjs dry-run /private/retention-policy.json
 
 输出候选携带精确 Agent/Session/Sandbox、namespace、PVC name/UID/resourceVersion。
 本命令不写 DB 或 Kubernetes；不列出缺少可核实 PVC 的对象。不要从空清单推断已回收。
-Ho 把候选交 Kiro 确认后，逐个把获准的候选对象原样保存为受保护的 JSON 文件。
+生产写入方把候选交负责人确认后，逐个把获准的候选对象原样保存为受保护的 JSON 文件。
 
 ### 生产 dry-run 数据库身份
 
@@ -173,6 +173,6 @@ node dist/sessionWorkspaceReclamation.mjs inspect /private/retention-policy.json
 审计来自 `platform.audit_events` 的 `conversation.workspace.reclamation.started/completed`
 按 Session target 回读（仅走正式只读入口），不得手工改表。
 
-AC-3 只由 Ho 执行：先存 dry-run 清单与负责人确认，再有限逐 ID 执行；
+AC-3 由当前唯一的生产写入方执行：先存 dry-run 清单与负责人确认，再有限逐 ID 执行；
 回读 PVC 不存在、charge released、开始/完成审计，以及保留样本完全不变。
 源码测试或合入不能代签现场回收。
