@@ -416,6 +416,31 @@ describe("production Worker deployment", () => {
 		},
 	);
 
+	it.each([
+		{ architecture: "amd64" },
+		{ architecture: "amd64", legacyUnplaced: "keep" },
+		{
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+			runtimeClassName: "runv",
+		},
+		{ architecture: "ppc64le", legacyUnplaced: "reject" },
+	])(
+		"fails Worker assembly on invalid Agent workload placement %j (#4351)",
+		async (agentWorkloadPlacement) => {
+			const deployment = await input();
+			await expect(
+				createProductionWorkloadWorkerOptionsV1({
+					...deployment,
+					policy: {
+						...deployment.policy,
+						agentWorkloadPlacement,
+					} as typeof deployment.policy,
+				}),
+			).rejects.toThrow("WORKER_KUBERNETES_CONFIGURATION_INVALID");
+		},
+	);
+
 	it("uses the explicitly selected namespace client rather than kubeconfig current-context", async () => {
 		const requests: { url?: string; authorization?: string }[] = [];
 		const server = createServer((request, response) => {

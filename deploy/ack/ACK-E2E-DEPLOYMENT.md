@@ -27,7 +27,7 @@ Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，
 
 Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi 请求存储、30 个 Pod 和 50 个 Service，覆盖保留的 Session Sandbox PVC。接管已有 namespace 前必须核对 quota 的 `hard/used`，不能用默认值覆盖其他租户的预算；Chart 不删除历史 PVC，回收由 Session Sandbox 生命周期负责。
 
-可复用入口为 [`preflight.sh`](./preflight.sh) 和 [`deploy.sh`](./deploy.sh)，环境变量模板为 [`ack.env.example`](./ack.env.example)，值文件模板为 [`values.ack.example.yaml`](./values.ack.example.yaml)。`preflight.sh` 会检查 ACK 访问、Helm chart、所有 E2E Secret 和目录 source ConfigMap，不会打印 Secret 内容。
+可复用入口为 [`preflight.sh`](./preflight.sh) 和 [`deploy.sh`](./deploy.sh)，环境变量模板为 [`ack.env.example`](./ack.env.example)，值文件模板为 [`values.ack.example.yaml`](./values.ack.example.yaml)。`preflight.sh` 会检查 ACK 访问、Helm chart、NetworkPolicy 执行证据、所有 E2E Secret 和目录 source ConfigMap，不会打印 Secret 内容。
 
 加密版本由 private values 的 `encryption.keyVersion` 和 `worker.keyVersions` 显式提供，默认仍为 `key-v1`；values schema 会拒绝空值、非法字符和不完整的 worker 版本列表。wrapper 不生成或替换任何密钥。
 
@@ -52,6 +52,12 @@ Skill 与 Session 工作区的存储分别验证，不将 RWO 云盘视为跨节
 
 `scheduling.worker` 只决定 `platform-worker` 调度服务本身的位置，不决定它创建的 Session
 Runtime Pod。常驻平台服务可以使用同一集群的普通节点，按会话创建的执行 Pod 使用 ECI。
+Agent 级 Workload（单服务 Host、多服务 Deployment/StatefulSet 与迁移 Job）由 Worker 按 values
+`agentWorkloadScheduling`（渲染为 Worker env）注入同一组 ECI 字段，见
+[Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)；本 ACK 的 ECS 节点
+不执行 NetworkPolicy，这些 Pod 不落 ECS。现存 Agent 逐个经正式 lifecycle 采用，发布 chart 或
+Worker 配置本身不重建它们。`preflight.sh` 的执行证据门禁见
+[ACK Runtime 隔离预检](RUNTIME-PREFLIGHT.md#networkpolicy-执行证据门禁)。
 
 Kubernetes 1.36 及以上可在仓库外 private values 显式开启：
 
