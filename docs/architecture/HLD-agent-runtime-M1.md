@@ -1100,6 +1100,15 @@ Connection 仍在每次请求及 Dispatch 边界独立鉴权。Owner、应用责
 不能读取文件、内存或继承凭据。仅有普通配置 Header、环境变量名或文件权限声明不能证明
 隔离；当前官方版本不具备所需保护时，该能力保持未通过，不通过新增代理或 token 暴露绕过。
 
+受保护 Host 的进程准入（内存访问保护二选一、各自前提、适用的 Pod 形态与最终镜像负例）只在
+工程 Spec
+[§13.5.4](SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
+的“初始受保护 Host profile”定义，取舍见
+[ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。Host 与安装
+供应 initializer 在每次读取受保护材料前按该段复核；不满足、不可核实或状态变化时以固定错误码
+`CONNECTION_STANDARD_CLIENT_UNAVAILABLE` 封闭标准客户端能力，不读取受保护材料、不领取新 token，
+原控制与只读恢复不受影响，也不回退到普通 Secret/env 或其他 profile。
+
 Runtime 可按工程 Spec
 [§13.5.4](SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
 选择 Driver 作为直接标准 MCP 客户端：token 保留在 Host/Driver 受保护边界，原生只通过

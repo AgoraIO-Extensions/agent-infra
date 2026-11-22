@@ -2855,11 +2855,30 @@ trace、dump 与诊断不能把秘密输出给模型或持久记录。关闭或�
 
 初始受保护 Host profile 限 Linux：真实非 root UID、无有效/许可/继承/ambient capabilities、
 `no_new_privs`、原有无 inspector/loader/dump 的进程准入，以及对 native/tool 子进程落实的
-文件边界须同时有效。另须从可信内核读取 Yama `ptrace_scope=2` 或 `3`，以阻止同 UID
-进程的 attach-mode 内存访问及 `pidfd_getfd`；proc FD/link/fdinfo 读取与重开另由真实
-文件边界限制，不能以 Yama 数值代替。最终镜像须分别验证 `ptrace`、`process_vm_readv`、
-`/proc/*/mem`、`pidfd_getfd`、`/proc/*/fd`、`fdinfo` 重开与继承攻击实际被拒绝。缺失、不可核实或
-策略变化时，先封闭该能力且不读取/领取新 token；原控制与只读恢复仍沿原执行可用。
+文件边界须同时有效。另须满足下列内存访问保护之一，以阻止同 UID 进程对凭据持有进程的
+attach-mode 内存访问及 `pidfd_getfd`：
+
+1. 从可信内核读取 Yama `ptrace_scope=2` 或 `3`。
+2. 凭据持有进程（Runtime Host 与 [§13.5.6](#1356-标准-oauth-安装供应) 的安装供应
+   initializer）在读取任何受保护材料、创建任何子进程之前以 `PR_SET_DUMPABLE=0` 设为
+   non-dumpable，并在每次读取受保护材料前回读确认仍为 non-dumpable。同时须满足：从可信
+   内核读取的 `fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程由 Pod 直接启动，不运行
+   在由工具 UID 创建的 user namespace 中。
+
+第 2 项只保护设置了它的凭据持有进程本身，因此只在该进程所在 Pod 只属于一个 Session 时
+适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)），其他 Pod 形态仍须满足第 1 项。
+同一 Pod 内的其他同 UID 原生进程不受第 2 项保护：`container-boundary` 模式下，同一 Session
+的工具能读取 app-server 的内存，取得本次执行的本地 bearer 与模型 loopback token，影响限于
+同一用户、同一会话。这是已接受的残余风险，取舍与等价性依据见
+[ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。独立
+executor 的工具启动隔离不适用第 2 项，仍按 [§11.2.1](#1121-codex-session-独立-executor提案)
+要求 Yama。
+
+proc FD/link/fdinfo 读取与重开另由真实文件边界限制，不能以 Yama 数值或 dumpable 状态代替。
+最终镜像须在目标放置上分别验证 `ptrace`（ATTACH 与 SEIZE）、`process_vm_readv`、
+`/proc/*/mem`、`pidfd_getfd`、`/proc/*/fd`、`fdinfo` 重开、经 unprivileged user namespace
+的同类尝试与继承攻击实际被拒绝。两项都不成立（第 2 项的任一前提缺失即不成立）、不可核实
+或策略变化时，先封闭该能力且不读取/领取新 token；原控制与只读恢复仍沿原执行可用。
 Runtime 不修改节点 sysctl、不提升权限、不接受 env 的保护声明，不回退另一 OS/profile。
 
 **执行与确认。** 每次工具请求严格复用原 Driver/Host 的 journal、fence、事务/游标和
