@@ -312,6 +312,42 @@ function interruptTargetsComplete(
 	);
 }
 
+/**
+ * #4360 round 3: a stage name alone is not proof (Spec §18.5.3). Receipt,
+ * validation, the durable latch and the original terminal must be actually
+ * observed, and the terminal must carry the original finite status, event
+ * reference and time. An interrupt write or ACK may instead be `not_required`
+ * only for a natural terminal, and only the ACK may be `not_applicable` (a
+ * protocol without an interrupt response). Every record needs its control's
+ * elapsed monotonic time.
+ */
+function provesStage(record: RuntimeControlEvidenceV1) {
+	if (record.elapsedMonoMs === undefined) return false;
+	switch (record.stage) {
+		case "control_received":
+		case "control_validated":
+		case "latch_commit_confirmed":
+		case "original_result_read":
+			return record.outcome === "observed";
+		case "terminal_commit_confirmed":
+			return (
+				record.outcome === "observed" &&
+				record.terminalStatus !== undefined &&
+				record.terminalRef !== undefined &&
+				record.terminalOccurredAtUtc !== undefined
+			);
+		case "interrupt_write_accepted":
+		case "native_interrupt_ack":
+			return (
+				record.outcome === "observed" ||
+				(record.outcome === "not_required" &&
+					record.reason === "natural_terminal") ||
+				(record.outcome === "not_applicable" &&
+					record.stage === "native_interrupt_ack")
+			);
+	}
+}
+
 export interface RuntimeControlTimelineV1 {
 	readonly clockId: string;
 	readonly executionId: string;
@@ -381,6 +417,7 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 		const complete =
 			has("latch_commit_confirmed") &&
 			requiredStages.every(has) &&
+			ordered.every(provesStage) &&
 			interruptTargetsComplete(ordered);
 		timelines.push({
 			clockId: first.clockId,

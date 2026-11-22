@@ -382,6 +382,7 @@ describe("Runtime control observation (#4358 I2)", () => {
 				]
 			>,
 			count = 2,
+			natural = true,
 		) => {
 			const out = sink();
 			const observer = observerFor(out.output);
@@ -404,6 +405,9 @@ describe("Runtime control observation (#4358 I2)", () => {
 				observer.emit({
 					stage: first[0],
 					outcome: first[2],
+					...(first[2] === "not_required" && natural
+						? { reason: "natural_terminal" as const }
+						: {}),
 					binding,
 					mark,
 					interrupt: interrupt(first[1]),
@@ -423,6 +427,9 @@ describe("Runtime control observation (#4358 I2)", () => {
 				observer.emit({
 					stage,
 					outcome,
+					...(outcome === "not_required" && natural
+						? { reason: "natural_terminal" as const }
+						: {}),
 					binding,
 					mark,
 					interrupt: interrupt(target),
@@ -461,6 +468,19 @@ describe("Runtime control observation (#4358 I2)", () => {
 				["native_interrupt_ack", 1, "not_required"],
 			]),
 		).toBe("complete");
+		// #4360 round 3: not_required without a natural terminal basis.
+		expect(
+			timeline(
+				[
+					["interrupt_write_accepted", 0, "observed"],
+					["native_interrupt_ack", 0, "observed"],
+					["interrupt_write_accepted", 1, "not_required"],
+					["native_interrupt_ack", 1, "not_required"],
+				],
+				2,
+				false,
+			),
+		).toBe("unproven");
 		expect(
 			timeline([
 				["interrupt_write_accepted", 0, "observed"],
@@ -469,5 +489,62 @@ describe("Runtime control observation (#4358 I2)", () => {
 				["native_interrupt_ack", 1, "observed"],
 			]),
 		).toBe("complete");
+	});
+
+	it("does not sign stages that were not actually proven (#4360 round 3)", () => {
+		const project = (
+			outcome: "observed" | "not_applicable",
+			terminal: boolean,
+		) => {
+			const out = sink();
+			const observer = observerFor(out.output);
+			const mark = observer.mark();
+			observer.emit({
+				stage: "control_received",
+				outcome: "observed",
+				binding,
+				mark,
+				atMark: true,
+			});
+			for (const stage of [
+				"control_validated",
+				"latch_commit_confirmed",
+			] as const)
+				observer.emit({ stage, outcome, binding, mark });
+			for (const stage of [
+				"interrupt_write_accepted",
+				"native_interrupt_ack",
+			] as const)
+				observer.emit({
+					stage,
+					outcome: "observed",
+					binding,
+					mark,
+					interrupt: { target: 0, targets: 1 },
+				});
+			observer.emit({
+				stage: "terminal_commit_confirmed",
+				outcome,
+				binding,
+				mark,
+				...(terminal
+					? {
+							terminal: {
+								status: "cancelled" as const,
+								ref: "codex-cursor-7",
+								occurredAt: "2026-11-21T21:00:00.050Z",
+							},
+						}
+					: {}),
+			});
+			const view = projectRuntimeControlEvidenceV1(out.lines);
+			expect(view.rejectedLines).toBe(0);
+			return view.timelines[0]?.status;
+		};
+		// Validated, latch and terminal declared not_applicable, no terminal result.
+		expect(project("not_applicable", false)).toBe("unproven");
+		// Every stage observed, but the terminal carries no original result.
+		expect(project("observed", false)).toBe("unproven");
+		expect(project("observed", true)).toBe("complete");
 	});
 });
