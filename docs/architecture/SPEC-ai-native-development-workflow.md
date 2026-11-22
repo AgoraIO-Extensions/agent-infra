@@ -193,11 +193,19 @@ Secret 未离开集群的证明。
 运维入口核验 namespace 与 registry Secret 的类型、身份及删除状态，不向 GitHub 传递 Secret。
 退休必须显式确认，规则与权限见 [ACK 镜像缓存](../../deploy/ack/IMAGE-CACHE.md#退休旧缓存)。已批准的
 Custom 最终镜像与 init 容器组合由原部署入口生成有界不可变计划，不经 GitHub 传递生产材料。
-部署入口每次启用镜像前实时核对缓存身份、Ready、到期时间及精确镜像集合；缓存未完成、失败、
-过期或来源不符时不启用新镜像，现有运行实例保持不变。GitHub 发布后尚未执行部署预热时，
+部署入口每次启用镜像前核对冻结发布的 source、架构与不可变 digest，并按精确镜像组在部署回执中
+报告 ECI ImageCache 与 ECS 适用节点的覆盖情况，包括未覆盖的消费者与镜像组、缓存 ID、Ready
+及到期状态；缓存覆盖的来源不可确认或证据缺失须明确记录，不能用 Pod Ready 或截断库存代替覆盖证据。
+未启用严格 ECI 缓存准入时，缓存未完成、失败、过期或覆盖不全不阻止启用新镜像，也不使部署
+或验收失败；冷拉如实记录。source/digest 校验不放宽，来源不符或错 digest 仍拒绝采用或判验收失败。
+启用严格准入时，仍须按[工程 Spec 的 ECI 缓存准入约束](SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)
+实时核对精确完整镜像集合、缓存 ID、Ready 与到期时间；缓存未就绪或失效不启用新镜像，
+保持 `Never` 且不能回退冷拉，既有 Pod 不受创建准入策略影响。GitHub 发布后尚未执行部署预热时，
 不能宣称无人值守预热已完成。
 
-缓存 Ready 不代表 Pod 实际使用缓存；验收还需同 Pod UID 的镜像身份、完全命中及启动事件。
+缓存 Ready 不代表 Pod 实际使用缓存。部署后抽样按同 Pod UID 核对 Worker/Session 的期望镜像与
+实际 imageID 一致，分别记录缓存 ID、命中证据或冷拉以及启动结果；缺失证据如实标未知，
+错 digest 仍算失败。未启用严格准入时不以完全命中作为验收条件；严格准入的失败条件仍按工程 Spec。
 缓存不是 Session reserve，不包含用户凭据、会话、PVC 或原生进程状态。
 
 ### 10.2 现场 AC 签收与版本回归

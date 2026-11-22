@@ -2805,3 +2805,82 @@ it("keeps production evidence absent and explicitly assembles it from consumed V
 		transport.mockRestore();
 	}
 });
+
+describe("safety evidence window assembly (#4358 I1b, default off)", () => {
+	const window = {
+		schemaVersion: 1,
+		windowRef: "window-1",
+		opensAt: "2026-11-22T00:00:00.000Z",
+		closesAt: "2026-11-22T02:00:00.000Z",
+		agentIds: ["agent-1"],
+		principalRefs: ["p1-principal"],
+		scenarios: [
+			{
+				id: "u1-file",
+				version: 1,
+				resourceClasses: ["file"],
+				actionClasses: ["read"],
+			},
+		],
+		producers: [{ kind: "native_helper", version: "u1-helper-1" }],
+	};
+
+	it("assembles no evidence log without a window", async () => {
+		const { readdir } = await import("node:fs/promises");
+		const values = await environment();
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			expect(runtime.safetyEvidence).toBeUndefined();
+			expect(await readdir(values.AGENT_INFRA_RUNTIME_DATA_DIR)).not.toContain(
+				"safety-evidence.json",
+			);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("opens a separate log for a valid window and stays up with evidence off for an invalid one", async () => {
+		const { readdir } = await import("node:fs/promises");
+		const enabled = await environment();
+		const runtime = await assembleRuntimeHost({
+			...enabled,
+			AGENT_INFRA_RUNTIME_SAFETY_EVIDENCE_WINDOW: JSON.stringify(window),
+		});
+		try {
+			expect(runtime.safetyEvidence).toBeDefined();
+			expect(await readdir(enabled.AGENT_INFRA_RUNTIME_DATA_DIR)).toEqual(
+				expect.arrayContaining(["host.json", "safety-evidence.json"]),
+			);
+		} finally {
+			await runtime.close();
+		}
+		const warnings: unknown[] = [];
+		const warn = vi
+			.spyOn(console, "warn")
+			.mockImplementation((value) => warnings.push(value));
+		try {
+			const invalid = await environment();
+			const degraded = await assembleRuntimeHost({
+				...invalid,
+				AGENT_INFRA_RUNTIME_SAFETY_EVIDENCE_WINDOW: JSON.stringify({
+					...window,
+					windowRef: "canary-window-ref",
+					closesAt: window.opensAt,
+				}),
+			});
+			try {
+				expect(degraded.safetyEvidence).toBeUndefined();
+			} finally {
+				await degraded.close();
+			}
+		} finally {
+			warn.mockRestore();
+		}
+		expect(warnings).toEqual([
+			JSON.stringify({
+				service: "agent-runtime-host",
+				code: "RUNTIME_SAFETY_EVIDENCE_WINDOW_INVALID",
+			}),
+		]);
+	});
+});

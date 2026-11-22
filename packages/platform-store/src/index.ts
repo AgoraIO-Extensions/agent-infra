@@ -235,6 +235,7 @@ export {
 export { PostgresRelayKeyVersionStoreV1 } from "./relay-key-versions.ts";
 export {
 	PostgresRuntimeSafetyEvidenceStoreV1,
+	type RuntimeSafetyEvidenceOriginalScopeV1,
 	runtimeSafetyEvidenceDigestV1,
 } from "./runtime-safety-evidence.js";
 export {

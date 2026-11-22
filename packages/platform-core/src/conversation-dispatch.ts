@@ -353,6 +353,7 @@ export function createConversationDispatchUseCaseV1(
 		]);
 		let archiveManaged = false;
 		let lastAcknowledgedCursor: string | undefined;
+		let targetUnavailable: boolean | undefined;
 		const archiveEligible = () =>
 			!claim.metadataRecovery &&
 			isTurnOperation(claim.operation) &&
@@ -367,6 +368,7 @@ export function createConversationDispatchUseCaseV1(
 			const result = await dependencies.store.archiveOriginalTurn({
 				claim,
 				budgetMs: recoveryBudgetMs,
+				...(targetUnavailable !== undefined ? { targetUnavailable } : {}),
 				...(lastAcknowledgedCursor
 					? { acknowledgedCursor: lastAcknowledgedCursor }
 					: {}),
@@ -533,6 +535,50 @@ export function createConversationDispatchUseCaseV1(
 						"retry",
 						{},
 					);
+			}
+			// HLD §8.2.1: source-unconfirmed rows fix their budget before any original-target I/O.
+			// Only a positive original status response can unlock the existing event/ACK path.
+			if (initialArchive?.terminalSourceVerified === false) {
+				const recover = dependencies.runtimeHost.recoverOriginalStatus;
+				if (!recover)
+					throw new ConversationRuntimeHostError(
+						"RUNTIME_ACCEPTANCE_UNKNOWN",
+						true,
+					);
+				const status = parseRuntimeStatusResponse(
+					await recover(
+						{
+							...eventRequest,
+							schemaVersion: 2,
+						},
+						archiveSignal,
+					),
+					claim,
+				);
+				targetUnavailable = false;
+				if (
+					status.outcome !== "found" ||
+					status.operationOutcome === "busy" ||
+					status.status !== claim.executionStatus
+				)
+					throw new ConversationRuntimeHostError(
+						"RUNTIME_ACCEPTANCE_UNKNOWN",
+						true,
+					);
+				if (
+					!(await dependencies.store.recordRuntimeResponse({
+						claim,
+						hostSessionRef,
+						transition: { executionStatus: claim.executionStatus },
+					}))
+				)
+					return { schemaVersion: 1, outcome: "stale" };
+				const verified = await archiveCheckpoint();
+				if (!verified) return { schemaVersion: 1, outcome: "stale" };
+				if (verified.status === "unavailable")
+					return { schemaVersion: 1, outcome: "rejected" };
+				if (verified.status === "complete")
+					return { schemaVersion: 1, outcome: "accepted" };
 			}
 			// A drain resumed for an accepted Turn follows a gap, such as an
 			// interrupted heartbeat, that may have outlived the Host's 30 s business
@@ -813,6 +859,11 @@ export function createConversationDispatchUseCaseV1(
 			await acknowledgeCommitted();
 		} catch (error) {
 			const current = await eventHeartbeat.stop();
+			if (
+				error instanceof ConversationRuntimeHostError &&
+				error.code === "RUNTIME_WORKLOAD_UNAVAILABLE"
+			)
+				targetUnavailable = true;
 			if (archiveManaged && current) {
 				const archive = await archiveCheckpoint();
 				if (!archive) return { schemaVersion: 1, outcome: "stale" };
