@@ -39,7 +39,9 @@ merge 是 `389b2b30890399270c645a32cd21ddf3a81dd41e`。入口固定核验后者�
   sandbox、审批、HOME、cwd、文件工具或 Bridge。模型替身不直接读写合成用户文件。
 - #406 的部署侧 model-input 接口尚未形成验收依据，也不会由此入口读取 endpoint 或 credential。
   待其最终 committed head 集成后，必须保留原生 sandbox/cwd/HOME、不得加入 status fallback 或替换
-  native 回包，并在该组合版本重跑全部 #404 原生验收；配置解析或 fixture 通过不能代替重跑。
+  native 回包；现场签收及后续版本回归遵循
+  [工作流 Spec §10.2](../architecture/SPEC-ai-native-development-workflow.md#102-现场-ac-签收与版本回归)，
+  配置解析或 fixture 通过不能代替现场证据。
 - #403 的正式装配由 `CodexRuntimeDriver.open` 从 `path` 派生 `dataDirectory: path + ".native"`，
   并传入已验证的 model、reasoning effort 和 pinned provenance。Driver 按可信
   `agentId`/`conversationId`/`sessionGeneration` 派生存储键，为每个 Conversation 代次单独启动原生进程，
@@ -122,7 +124,8 @@ fence、事件归属、配置隔离与模拟恢复。`codex-isolation-fixture.te
 跨 probe 注入标记且不会伪造工具输出，不能替代原生验收。
 
 若原生历史 API 阻塞正向对照，先由维护者确认存储初始化与兼容性修复范围：在现有 pinned
-版本内修正存储查询路径，或独立批准版本变更并重做 provenance、恢复和隔离验收。实际文件/上下文
+版本内修正存储查询路径，或独立批准版本变更；provenance、恢复与隔离的现场签收及版本回归遵循
+[工作流 Spec §10.2](../architecture/SPEC-ai-native-development-workflow.md#102-现场-ac-签收与版本回归)。实际文件/上下文
 失败后才讨论相应最小隔离修复。本入口不改变部署单元、Runtime Contract 或引入平台统一 Sandbox；
 按 Conversation 划分原生进程与持久目录是 #404 已授权的修复，取舍见
 [ADR 0008](../adr/0008-isolate-codex-native-processes-per-conversation.md)。
