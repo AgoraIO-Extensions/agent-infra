@@ -1855,14 +1855,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			}
 			const fact = toolFacts.get(toolCallId);
 			if (!fact) return;
+			const finishedAt = Math.max(fact.startedAt, Date.now());
 			await this.recordFact(file, command.executionId, {
 				kind: "tool",
 				operationRef: fact.operationRef,
 				attemptRef: fact.attemptRef,
 				phase,
 				startedAt: new Date(fact.startedAt).toISOString(),
-				finishedAt: new Date().toISOString(),
-				durationMs: Math.max(0, Date.now() - fact.startedAt),
+				finishedAt: new Date(finishedAt).toISOString(),
+				durationMs: finishedAt - fact.startedAt,
 				...(phase === "failed"
 					? { failureCode: "operation_failed" as const }
 					: {}),

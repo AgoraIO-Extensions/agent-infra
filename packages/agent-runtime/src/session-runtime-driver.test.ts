@@ -2566,3 +2566,70 @@ it.each(["captured", "initial-failure"] as const)(
 		}
 	},
 );
+
+it.each(["completed", "failed"] as const)(
+	"keeps a tool %s terminal valid after wall-clock rollback (S2 #4377)",
+	async (phase) => {
+		const path = await mkdtemp(join(tmpdir(), "session-tool-clock-"));
+		const startedAt = "2026-11-22T00:00:00.000Z";
+		let runtime: SessionRuntimeDriver | undefined;
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date(startedAt));
+		try {
+			runtime = await driver(path, async (options) => ({
+				nativeId: "native-tool-clock",
+				select: async () => {},
+				prompt: async () => {
+					await options.admit();
+					await options.recordToolOperation?.(
+						"original-tool",
+						"pi.read",
+						"started",
+					);
+					vi.setSystemTime(new Date("2026-11-21T23:59:00.000Z"));
+					await options.recordToolOperation?.(
+						"original-tool",
+						"pi.read",
+						phase,
+					);
+					return { stopReason: "completed" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			}));
+			const activeRuntime = runtime;
+			const result = await activeRuntime.execute(command([]));
+			await vi.waitFor(async () =>
+				expect(
+					await activeRuntime.getStatus(result.nativeSessionRef, "execution-a"),
+				).toBe("completed"),
+			);
+			const events = await activeRuntime.replayEvents(
+				result.nativeSessionRef,
+				"execution-a",
+			);
+			const facts = events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(facts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				phase,
+			]);
+			expect(facts.at(-1)).toMatchObject({
+				phase,
+				operationRef: facts[1]?.operationRef,
+				attemptRef: facts[1]?.attemptRef,
+				startedAt,
+				finishedAt: startedAt,
+				durationMs: 0,
+			});
+		} finally {
+			vi.useRealTimers();
+			await runtime?.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
