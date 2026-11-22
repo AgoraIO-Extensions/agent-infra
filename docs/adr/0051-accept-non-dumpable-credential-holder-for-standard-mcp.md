@@ -5,7 +5,7 @@
 提案，归属 [#4199](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199)，同属
 [#4157](https://github.com/AgoraIO-Extensions/agent-infra/issues/4157) 与
 [#4155](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155) 的交付线。用户于
-2026-11-22T09:3xZ 选定（[#4199 评论 7077345348](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199#issuecomment-7077345348)）。
+2026-11-22T09:3xZ 选定内存访问保护二选一（[#4199 评论 7077345348](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199#issuecomment-7077345348)）。
 须经非实现方独立评审后合入。完整条件只在
 [工程 Spec §13.5.4“初始受保护 Host profile”](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
 维护；本 ADR 只记录取舍、等价性依据和残余风险，不单独覆盖两份 PRD、工程 Spec 或 HLD。
@@ -30,9 +30,12 @@ Host 因此按原规则 fail closed，ECI Session 上的 Connection 安装与调
 2. 凭据持有进程（Runtime Host 与安装供应 initializer）在读取任何受保护材料、创建任何子进程
    之前设为 non-dumpable，并在每次读取前回读。
 
-第 2 项另有三个前提：`fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程不运行在由工具
-UID 创建的 user namespace 中。第 2 项只在 Pod 只属于一个 Session 时适用。两项都不成立时，
-仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
+第 2 项另有前提：`fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程不运行在由工具
+UID 创建的 user namespace 中；Pod 不共享 PID namespace。核实方法见工程 Spec §13.5.4。
+第 2 项只在 Pod 只属于一个 Session 时适用，该条件必须由 Worker 签发、Host 已验证的 scope
+证明（Codex `container-boundary` 的 HMAC attestation 或 `session-executor` 绑定）。只有
+Agent 级 scope、没有 attestation 或普通 env 不够，非 Codex 模板目前也没有 attestation，这些
+情形只能用第 1 项。两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
 
 独立 executor 的工具启动隔离（工程 Spec §11.2.1）不在本决定范围内。它要保护的 upstream
 `exec-server` 由 execve 启动，启动后恢复 dumpable，Host 设置的 non-dumpable 管不到它。该路径
@@ -79,7 +82,8 @@ UID 创建的 user namespace 中。第 2 项只在 Pod 只属于一个 Session �
 - **由 Runtime 修改 sysctl 开启 Yama。** 工程 Spec §13.5.4 禁止 Runtime 修改节点 sysctl 或提升
   权限。未采用。
 - **让 non-dumpable 同时覆盖 app-server。** app-server 是 upstream Codex 二进制，由 execve 启动
-  后恢复 dumpable。要覆盖它，需要走工程 Spec §10.11 的 upstream 原生补丁受控例外，或让二进制
+  后恢复 dumpable，同 Session 的工具因此能读取它的 loopback token 并重开 Driver 协议管道。
+  要覆盖它，需要走工程 Spec §10.11 的 upstream 原生补丁受控例外，或让二进制
   对执行者不可读，两者都需另行设计。本决定不包含这一项。
 
 ## 后果
@@ -89,10 +93,14 @@ UID 创建的 user namespace 中。第 2 项只在 Pod 只属于一个 Session �
 - 回归测试用真实的同 UID 攻击子进程做负例。ECI 负例在目标放置上逐项验证工程 Spec §13.5.4
   列出的访问，并回读 `fs.suid_dumpable`、`/sys/kernel/security/lsm`、Seccomp 状态，以及
   unprivileged user namespace 能否创建。
-- **残余风险（用户已知并接受）：** 第 2 项只保护凭据持有进程本身。`container-boundary` 模式下，
-  同一 Session 的工具能读取 app-server 的内存，取得本次执行的本地 bearer 与模型 loopback token。
-  影响限于同一用户、同一会话。在 Yama `2` 或 `3` 的内核上没有这一风险。
-- 第 2 项只用于只属于一个 Session 的 Pod，使上面的风险不超出同一用户、同一会话；其他 Pod 形态
-  仍须 Yama `2` 或 `3`。
+- **残余风险：** 第 2 项只保护凭据持有进程本身。`container-boundary` 模式下，同一 Session 的
+  工具进程能读取 app-server 的 loopback token（`/proc/<pid>/environ`，READ mode），也能重开
+  app-server 的 Driver 协议管道，伪造该次执行的 `item/tool/call` 与原生事件。这一暴露由
+  `container-boundary` 本身产生，与内核是否有 Yama 无关（Yama 只限制 ATTACH mode），选第 2 项
+  也不改变它。Relay Key、Connection token、service token 与 Host 内的 OAuth 材料仍受
+  non-dumpable 保护。影响限于同一用户、同一会话，这是 #4199 中用户选定的范围。与工程 Spec
+  §10.14 的关系待用户确认，见 [#4199](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199)。
+- 第 2 项只用于经验证的只属于一个 Session 的 Pod，使上面的暴露不超出同一用户、同一会话；
+  其他 Pod 形态仍须 Yama `2` 或 `3`。
 - 回退方式是重新只认 Yama。代价是 ECI 上的 Connection 再次不可用。已安装的材料按原有的
   fail closed 规则处理，不需要数据迁移。

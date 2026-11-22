@@ -2865,14 +2865,36 @@ attach-mode 内存访问及 `pidfd_getfd`：
    内核读取的 `fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程由 Pod 直接启动，不运行
    在由工具 UID 创建的 user namespace 中。
 
+第 2 项的前提按下列方式核实，任一项无法核实即视为不成立：
+
+- 不在工具 UID 创建的 user namespace 中：比对 `/proc/self/uid_map` 与初始映射，或用
+  `NS_GET_OWNER_UID` 确认 user namespace 属主不是本进程的 UID。
+- 每次读取前回读 non-dumpable 时，同时确认 `/proc/self/fd` 的属主为 uid 0。
+- Pod 不与其他容器共享 PID namespace（没有 `shareProcessNamespace`）。这与“设置早于任何
+  不受信同 UID 进程出现”一起，保证 Host 设置完成时没有已持有其内存或 FD 的外部进程。
+
 第 2 项只保护设置了它的凭据持有进程本身，因此只在该进程所在 Pod 只属于一个 Session 时
-适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)），其他 Pod 形态仍须满足第 1 项。
-同一 Pod 内的其他同 UID 原生进程不受第 2 项保护：`container-boundary` 模式下，同一 Session
-的工具能读取 app-server 的内存，取得本次执行的本地 bearer 与模型 loopback token，影响限于
-同一用户、同一会话。这是已接受的残余风险，取舍与等价性依据见
-[ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。独立
-executor 的工具启动隔离不适用第 2 项，仍按 [§11.2.1](#1121-codex-session-独立-executor提案)
-要求 Yama。
+适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）。“只属于一个 Session”只能
+建立在 Worker 签发、Host 已验证的 scope 上：Codex `container-boundary` 的
+`agentId\0sessionId` HMAC attestation（`apps/agent-runtime-host/src/configuration.ts` 的
+`readCodexIsolationMode`），或 `session-executor` 的绑定。每次读取受保护材料前，原执行的
+Session/Sandbox 必须等于该 scope。只有 Agent 级 scope、没有 attestation，或普通 env
+（例如 `AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。非 Codex
+模板（例如 Claude）目前没有这类 attestation，因此同样只能满足第 1 项。
+
+第 2 项不保护同一 Pod 内的其他同 UID 进程。`container-boundary` 模式下，同一 Session 的
+工具进程能读取 app-server 的 loopback token（经 `/proc/<pid>/environ`，READ mode），
+也能重开 app-server 的 Driver 协议管道（经 `/proc/<pid>/fd`），从而伪造该次执行的
+`item/tool/call` 与原生事件。这一暴露由 `container-boundary` 本身产生，与内核是否有 Yama
+无关（Yama 只限制 ATTACH mode），选第 2 项也不改变它。Relay Key、Connection token、service
+token 与 Host 内的 OAuth 材料仍受 non-dumpable 保护。影响限于同一用户、同一会话。取舍与
+等价性依据见
+[ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。与
+[§10.14](#1014-标准模板-session-sandbox-原生工具) 的关系待用户确认，见
+[#4199](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199)。
+
+独立 executor 的工具启动隔离不适用第 2 项，仍按
+[§11.2.1](#1121-codex-session-独立-executor提案) 要求 Yama。
 
 proc FD/link/fdinfo 读取与重开另由真实文件边界限制，不能以 Yama 数值或 dumpable 状态代替。
 最终镜像须在目标放置上分别验证 `ptrace`（ATTACH 与 SEIZE）、`process_vm_readv`、
