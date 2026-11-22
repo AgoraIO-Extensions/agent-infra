@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createRuntimeSafetyEvidenceReaderV1,
 	type RuntimeSafetyEvidenceDrainV1,
+	type RuntimeSafetyEvidenceOriginalFactsV1,
 } from "./runtime-safety-evidence-reader.js";
 import {
 	readWorkerRuntimeSafetyEvidenceWindowV1,
@@ -47,9 +48,6 @@ const drain: RuntimeSafetyEvidenceDrainV1 = {
 		executionDeliveryFence: 3,
 		authorizationRevision: "identity-8",
 	},
-	principal,
-	authorizationRecordId: "auth-1",
-	revoked: false,
 	sandboxResource: {
 		sandbox: {
 			schemaVersion: 1,
@@ -229,11 +227,75 @@ function store() {
 				return "recorded";
 			},
 		),
-		readExecutionOperationAttempts: vi.fn(async () => [
-			{ ref: "operation-1", attemptRef: "attempt-1" },
-		]),
+		/** Committed original binding of each Execution of the Session. */
+		readOriginalScope: vi.fn(
+			async (input: { conversationId: string; executionId: string }) =>
+				input.conversationId === "conversation-1"
+					? originalFacts[input.executionId]
+					: undefined,
+		),
 	};
 }
+
+const originalFacts: Record<string, RuntimeSafetyEvidenceOriginalFactsV1> = {
+	"execution-1": {
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		principal,
+		authorizationRecordId: "auth-1",
+		authorizationRevision: "identity-8",
+		revoked: false,
+		sessionGeneration: 2,
+		executionDeliveryFence: 3,
+		sandbox: {
+			ref: "sandbox-1",
+			resourceFence: 4,
+			podUid,
+			configurationRevision: 7,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+		operations: [{ ref: "operation-1", attemptRef: "attempt-1" }],
+	},
+	"execution-2": {
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-2",
+		principal,
+		authorizationRecordId: "auth-2",
+		authorizationRevision: "identity-8",
+		revoked: false,
+		sessionGeneration: 2,
+		executionDeliveryFence: 5,
+		sandbox: {
+			ref: "sandbox-1",
+			resourceFence: 4,
+			podUid,
+			configurationRevision: 7,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+		operations: [{ ref: "operation-2", attemptRef: "attempt-2" }],
+	},
+};
+
+/** A record of the second Execution of the same Session. */
+const secondExecution = (value: Record<string, any>) => {
+	value.binding.executionId = "execution-2";
+	value.binding.authorization = { recordId: "auth-2", revision: "identity-8" };
+	value.binding.executionDeliveryFence = 5;
+	value.binding.operation = { ref: "operation-2", attemptRef: "attempt-2" };
+};
+const drainOf = (executionId: "execution-1" | "execution-2") =>
+	executionId === "execution-1"
+		? drain
+		: {
+				...drain,
+				claim: {
+					...drain.claim,
+					executionId,
+					executionDeliveryFence: 5,
+				},
+			};
 
 const now = () => new Date("2026-11-22T00:40:00.000Z");
 
@@ -345,18 +407,6 @@ describe("Worker evidence reader (Spec §18.5.1, HLD §8.5.6 step 4)", () => {
 			},
 		],
 		[
-			"another Conversation",
-			(v: Record<string, any>) => {
-				v.binding.conversationId = "conversation-2";
-			},
-		],
-		[
-			"another Execution",
-			(v: Record<string, any>) => {
-				v.binding.executionId = "execution-2";
-			},
-		],
-		[
 			"another operation",
 			(v: Record<string, any>) => {
 				v.binding.operation.ref = "operation-2";
@@ -443,8 +493,8 @@ describe("Worker evidence reader (Spec §18.5.1, HLD §8.5.6 step 4)", () => {
 		expect(h.pending()).toEqual([]);
 	});
 
-	it("refuses evidence of a revoked subject", async () => {
-		const h = host([record()]);
+	it("stores another Execution's record of the same Session under its own original scope (#4367 MUST 1)", async () => {
+		const h = host([record(secondExecution)]);
 		const s = store();
 		const reader = createRuntimeSafetyEvidenceReaderV1({
 			window,
@@ -452,10 +502,122 @@ describe("Worker evidence reader (Spec §18.5.1, HLD §8.5.6 step 4)", () => {
 			fetch: h.fetcher,
 			now,
 		});
-		expect(await reader.drain({ ...drain, revoked: true })).toMatchObject({
+		// The drain was triggered by the first Execution's business ACK.
+		expect(await reader.drain(drainOf("execution-1"))).toEqual({
+			status: "drained",
+			recorded: 1,
+			duplicates: 0,
+			rejected: 0,
+		});
+		expect(s.records.size).toBe(1);
+		expect(h.pending()).toEqual([]);
+	});
+
+	it("keeps the last record of an Execution whose drain was skipped until a later drain stores it (#4367 MUST 1)", async () => {
+		const h = host([]);
+		const s = store();
+		const reader = createRuntimeSafetyEvidenceReaderV1({
+			window,
+			store: s,
+			fetch: h.fetcher,
+			now,
+		});
+		reader.afterAcknowledge(drainOf("execution-1"));
+		await reader.settled();
+		h.append(record());
+		// Its terminal ACK falls inside the interval; the next drain comes from Execution 2.
+		reader.afterAcknowledge(drainOf("execution-1"));
+		expect(await reader.drain(drainOf("execution-2"))).toMatchObject({
+			recorded: 1,
+			rejected: 0,
+		});
+		expect(s.records.size).toBe(1);
+		expect(h.pending()).toEqual([]);
+		await reader.close();
+	});
+
+	it("runs a trailing drain for an ACK that arrived during the interval", async () => {
+		const h = host([]);
+		const s = store();
+		const reader = createRuntimeSafetyEvidenceReaderV1({
+			window,
+			store: s,
+			fetch: h.fetcher,
+			now,
+			intervalMs: 20,
+		});
+		reader.afterAcknowledge(drainOf("execution-1"));
+		await reader.settled();
+		h.append(record());
+		reader.afterAcknowledge(drainOf("execution-1"));
+		await vi.waitFor(async () => {
+			await reader.settled();
+			expect(s.records.size).toBe(1);
+		});
+		expect(h.pending()).toEqual([]);
+		await reader.close();
+	});
+
+	it.each([
+		[
+			"an Execution without a committed original binding",
+			(v: Record<string, any>) => {
+				v.binding.executionId = "execution-9";
+			},
+		],
+		[
+			"another Conversation",
+			(v: Record<string, any>) => {
+				v.binding.conversationId = "conversation-2";
+			},
+		],
+		[
+			"another Sandbox",
+			(v: Record<string, any>) => {
+				v.binding.sandbox.ref = "sandbox-2";
+			},
+		],
+	])(
+		"stops before a record of %s and confirms nothing (#4367 MUST 1)",
+		async (_name, change) => {
+			const h = host([record(change), record()]);
+			const s = store();
+			const reader = createRuntimeSafetyEvidenceReaderV1({
+				window,
+				store: s,
+				fetch: h.fetcher,
+				now,
+			});
+			expect(await reader.drain(drain)).toEqual({
+				status: "unresolved",
+				recorded: 0,
+				duplicates: 0,
+				rejected: 0,
+			});
+			expect(s.records.size).toBe(0);
+			expect(h.pending()).toHaveLength(2);
+			expect(h.calls.some((call) => call.path.endsWith("/ack"))).toBe(false);
+		},
+	);
+
+	it("refuses evidence of a subject revoked in the committed binding", async () => {
+		const h = host([record()]);
+		const s = store();
+		s.readOriginalScope.mockResolvedValueOnce({
+			...originalFacts["execution-1"],
+			revoked: true,
+		} as RuntimeSafetyEvidenceOriginalFactsV1);
+		const reader = createRuntimeSafetyEvidenceReaderV1({
+			window,
+			store: s,
+			fetch: h.fetcher,
+			now,
+		});
+		expect(await reader.drain(drain)).toMatchObject({
 			recorded: 0,
 			rejected: 1,
 		});
+		expect(h.pending()).toEqual([]);
 	});
 
 	it("stops before a record it does not understand and never drops it", async () => {
@@ -515,13 +677,24 @@ describe("Worker evidence reader (Spec §18.5.1, HLD §8.5.6 step 4)", () => {
 			intervalMs: 0,
 			observe: (outcome) => observed.push(outcome),
 		});
+		// Two Executions of the same Session route: one drain at a time, later ACKs coalesce
+		// into a single trailing drain.
 		reader.afterAcknowledge(drain);
 		reader.afterAcknowledge(drain);
+		reader.afterAcknowledge({
+			...drain,
+			claim: { ...drain.claim, executionId: "execution-2" },
+		});
 		release();
+		await vi.waitFor(() => expect(observed).toHaveLength(2));
 		await reader.settled();
 		expect(observed).toEqual([
 			{ status: "drained", recorded: 1, duplicates: 0, rejected: 0 },
+			{ status: "drained", recorded: 0, duplicates: 0, rejected: 0 },
 		]);
+		expect(
+			fetcher.mock.calls.filter(([url]) => String(url).endsWith("/read")),
+		).toHaveLength(2);
 		await reader.close();
 		const throwing = createRuntimeSafetyEvidenceReaderV1({
 			window,

@@ -1312,7 +1312,7 @@ export function createConversationRuntimeV2(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 	) {
 		const reader = options.safetyEvidence;
-		const { context, state, authority, target } = prepared;
+		const { context, state, target } = prepared;
 		if (
 			!reader ||
 			context.kind !== "business" ||
@@ -1333,11 +1333,6 @@ export function createConversationRuntimeV2(
 					executionDeliveryFence: context.claim.executionDeliveryFence,
 					authorizationRevision: context.claim.authorizationRevision,
 				},
-				principal: context.principal,
-				authorizationRecordId: context.authorizationRecordId,
-				revoked:
-					authority.purpose === "control" &&
-					authority.reason === "authorization_revoked",
 				sandboxResource: state.sandboxResource,
 			});
 		} catch {

@@ -24,7 +24,10 @@ import {
  * evidence cursor. Evidence is best effort: nothing here can fail, delay or reorder business
  * events, terminals or their ACK. Absent a valid window this module is never assembled.
  */
-/** Committed facts of one business Execution drain; the only source of its original scope. */
+/**
+ * The business Execution drain that triggered the read: its Session route, Conversation and
+ * Sandbox. Each record's scope is resolved from its own Execution's committed binding.
+ */
 export interface RuntimeSafetyEvidenceDrainV1 {
 	/** The resolved Session route and its sandbox-bound service token, as used for events. */
 	readonly baseUrl: string;
@@ -38,10 +41,6 @@ export interface RuntimeSafetyEvidenceDrainV1 {
 		readonly executionDeliveryFence: number;
 		readonly authorizationRevision: string;
 	};
-	readonly principal: TaskPrincipalV1;
-	readonly authorizationRecordId: string;
-	/** The original subject's current permission for the task was revoked. */
-	readonly revoked: boolean;
 	readonly sandboxResource: SessionSandboxRuntimeStateV1;
 }
 
@@ -53,55 +52,86 @@ function observedPodUid(resource: SessionSandboxRuntimeStateV1) {
 	);
 }
 
+/** The committed original binding of one Execution, read by the Store. */
+export interface RuntimeSafetyEvidenceOriginalFactsV1 {
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly principal: TaskPrincipalV1;
+	readonly authorizationRecordId: string;
+	readonly authorizationRevision: string;
+	readonly revoked: boolean;
+	readonly sessionGeneration: number;
+	readonly executionDeliveryFence: number;
+	readonly sandbox: {
+		readonly ref: string;
+		readonly resourceFence: number;
+		readonly podUid: string;
+		readonly executorEpoch?: string;
+		readonly configurationRevision: number;
+		readonly imageDigest: string;
+	};
+	readonly operations: readonly {
+		readonly ref: string;
+		readonly attemptRef: string;
+	}[];
+}
+
 /**
- * The original scope of the drained Execution. A record of any other Execution has no scope here
- * and is rejected (`scope_mismatch`): late evidence never signs into a newer Execution. The Host
- * instance and start references are accepted from the record only because it was read through
- * the route bound to the Pod UID the Platform observed; the Pod UID, fences, epoch, configuration
- * revision and image digest come from the committed Session Sandbox state.
+ * The original scope of the record's own Execution (#4367). The Host log is shared by every
+ * Execution of the Session, so a record is never judged by the Execution whose ACK triggered
+ * the drain. Undefined, and the batch stops before the record, when the record does not
+ * belong to this Session route or its Execution's binding is not committed.
+ *
+ * The Host instance and start references are taken from the record only because it was read
+ * through the route bound to this Session Sandbox; the Pod UID, fences, epoch, configuration
+ * revision and image come from the committed Sandbox state, so a record of another Pod is
+ * rejected as stale.
  */
-export async function runtimeSafetyEvidenceScopeFromDrainV1(
-	drain: RuntimeSafetyEvidenceDrainV1,
+export async function runtimeSafetyEvidenceScopeFromOriginalV1(
+	drain: Pick<RuntimeSafetyEvidenceDrainV1, "claim" | "sandboxResource">,
 	record: RuntimePersistedSafetyEvidenceV1,
-	operations: readonly { readonly ref: string; readonly attemptRef: string }[],
+	facts: RuntimeSafetyEvidenceOriginalFactsV1 | undefined,
 ): Promise<RuntimeSafetyEvidenceScopeV1 | undefined> {
-	const { claim, sandboxResource } = drain;
-	const podUid = observedPodUid(sandboxResource);
-	const policy = sandboxResource.policy;
+	const { binding } = record;
 	if (
-		record.binding.executionId !== claim.executionId ||
-		record.binding.conversationId !== claim.conversationId ||
-		!podUid ||
-		!policy
+		binding.conversationId !== drain.claim.conversationId ||
+		binding.sandbox.ref !== drain.sandboxResource.sandbox.sandboxId ||
+		!observedPodUid(drain.sandboxResource) ||
+		!facts ||
+		facts.executionId !== binding.executionId ||
+		facts.conversationId !== binding.conversationId ||
+		facts.sandbox.ref !== binding.sandbox.ref
 	)
 		return undefined;
-	const executorEpoch = sandboxResource.observation?.executorInstance?.epoch;
 	return {
-		agentId: claim.agentId,
-		conversationId: claim.conversationId,
-		executionId: claim.executionId,
-		principalRef: await runtimeSafetyEvidencePrincipalRefV1(drain.principal),
+		agentId: facts.agentId,
+		conversationId: facts.conversationId,
+		executionId: facts.executionId,
+		principalRef: await runtimeSafetyEvidencePrincipalRefV1(facts.principal),
 		purposeRef: runtimeSafetyEvidenceBusinessPurposeRefV1,
 		authorization: {
-			recordId: drain.authorizationRecordId,
-			revision: claim.authorizationRevision,
+			recordId: facts.authorizationRecordId,
+			revision: facts.authorizationRevision,
 		},
-		sessionGeneration: claim.sessionGeneration,
-		executionDeliveryFence: claim.executionDeliveryFence,
-		operations,
+		sessionGeneration: facts.sessionGeneration,
+		executionDeliveryFence: facts.executionDeliveryFence,
+		operations: facts.operations,
 		sandbox: {
-			ref: sandboxResource.sandbox.sandboxId,
-			podUid,
-			resourceFence: sandboxResource.resourceFence,
-			...(executorEpoch === undefined ? {} : { executorEpoch }),
+			ref: facts.sandbox.ref,
+			podUid: facts.sandbox.podUid,
+			resourceFence: facts.sandbox.resourceFence,
+			...(facts.sandbox.executorEpoch === undefined
+				? {}
+				: { executorEpoch: facts.sandbox.executorEpoch }),
 		},
 		host: {
-			instanceRef: record.binding.host.instanceRef,
-			startRef: record.binding.host.startRef,
-			configurationRevision: String(policy.configurationRevision),
-			imageDigest: policy.imageDigest,
+			instanceRef: binding.host.instanceRef,
+			startRef: binding.host.startRef,
+			configurationRevision: String(facts.sandbox.configurationRevision),
+			imageDigest: facts.sandbox.imageDigest,
 		},
-		revoked: drain.revoked,
+		revoked: facts.revoked,
 	};
 }
 
@@ -109,6 +139,8 @@ export type RuntimeSafetyEvidenceDrainOutcomeV1 = {
 	readonly status:
 		| "drained"
 		| "unsupported"
+		/** Stopped before a record whose own Execution scope is not resolvable yet. */
+		| "unresolved"
 		| "host_unavailable"
 		| "store_unavailable"
 		| "interrupted";
@@ -133,10 +165,10 @@ export interface RuntimeSafetyEvidenceReaderStoreV1 {
 		| "stale_binding"
 		| "scope_mismatch"
 	>;
-	readExecutionOperationAttempts(input: {
+	readOriginalScope(input: {
 		readonly conversationId: string;
 		readonly executionId: string;
-	}): Promise<readonly { readonly ref: string; readonly attemptRef: string }[]>;
+	}): Promise<RuntimeSafetyEvidenceOriginalFactsV1 | undefined>;
 }
 
 export function createRuntimeSafetyEvidenceReaderV1(options: {
@@ -160,6 +192,46 @@ export function createRuntimeSafetyEvidenceReaderV1(options: {
 	const lifetime = new AbortController();
 	const running = new Map<string, Promise<void>>();
 	const lastStarted = new Map<string, number>();
+	/** The latest ACK per route waiting for its drain; a later ACK replaces it. */
+	const pending = new Map<string, RuntimeSafetyEvidenceDrainV1>();
+	const timers = new Map<string, ReturnType<typeof setTimeout>>();
+	/**
+	 * Starts the waiting drain of a route unless one runs or the interval has not passed; in
+	 * that case it runs afterwards (a trailing drain), so the last ACK is never skipped.
+	 */
+	const pump = (key: string): void => {
+		if (lifetime.signal.aborted || running.has(key) || timers.has(key)) return;
+		const input = pending.get(key);
+		if (!input) return;
+		const wait = intervalMs - (Date.now() - (lastStarted.get(key) ?? 0));
+		if (wait > 0) {
+			const timer = setTimeout(() => {
+				timers.delete(key);
+				pump(key);
+			}, wait);
+			timer.unref?.();
+			timers.set(key, timer);
+			return;
+		}
+		pending.delete(key);
+		const startedAt = Date.now();
+		if (lastStarted.size >= 1_024)
+			for (const [entry, at] of lastStarted)
+				if (startedAt - at >= intervalMs && !pending.has(entry))
+					lastStarted.delete(entry);
+		lastStarted.set(key, startedAt);
+		const task = drain(input)
+			.then(
+				(result) => options.observe?.(result),
+				() => undefined,
+			)
+			.catch(() => undefined)
+			.finally(() => {
+				running.delete(key);
+				pump(key);
+			});
+		running.set(key, task);
+	};
 	const parse = (value: unknown) => {
 		const parsed = RuntimePersistedSafetyEvidenceV1Schema.safeParse(value);
 		return parsed.success ? parsed.data : undefined;
@@ -191,9 +263,10 @@ export function createRuntimeSafetyEvidenceReaderV1(options: {
 			duplicates,
 			rejected,
 		});
-		let operations:
-			| readonly { readonly ref: string; readonly attemptRef: string }[]
-			| undefined;
+		const original = new Map<
+			string,
+			Promise<RuntimeSafetyEvidenceOriginalFactsV1 | undefined>
+		>();
 		for (let page = 0; page < maximumPages; page++) {
 			let entries: Awaited<ReturnType<typeof readRuntimeSafetyEvidenceV1>>;
 			try {
@@ -215,14 +288,21 @@ export function createRuntimeSafetyEvidenceReaderV1(options: {
 					parse,
 					window: options.window,
 					resolveScope: async (record) => {
-						operations ??= await options.store.readExecutionOperationAttempts({
-							conversationId: input.claim.conversationId,
-							executionId: input.claim.executionId,
-						});
-						return runtimeSafetyEvidenceScopeFromDrainV1(
+						if (record.binding.conversationId !== input.claim.conversationId)
+							return undefined;
+						const executionId = record.binding.executionId;
+						let facts = original.get(executionId);
+						if (!facts) {
+							facts = options.store.readOriginalScope({
+								conversationId: input.claim.conversationId,
+								executionId,
+							});
+							original.set(executionId, facts);
+						}
+						return runtimeSafetyEvidenceScopeFromOriginalV1(
 							input,
 							record,
-							operations,
+							await facts,
 						);
 					},
 					store: options.store,
@@ -251,7 +331,8 @@ export function createRuntimeSafetyEvidenceReaderV1(options: {
 					return outcome(active.aborted ? "interrupted" : "host_unavailable");
 				}
 			}
-			// The batch stopped before a record this reader does not understand.
+			// The batch stopped before an entry that stays in the Host log.
+			if (result.stopped) return outcome(result.stopped);
 			if (result.ackCursor !== entries.at(-1)?.cursor)
 				return outcome("unsupported");
 			if (entries.length < pageLimit) return outcome("drained");
@@ -267,24 +348,10 @@ export function createRuntimeSafetyEvidenceReaderV1(options: {
 		 */
 		afterAcknowledge(input: RuntimeSafetyEvidenceDrainV1): void {
 			if (lifetime.signal.aborted) return;
-			const key = `${input.baseUrl}\n${input.claim.executionId}`;
-			if (running.has(key)) return;
-			const startedAt = Date.now();
-			if (startedAt - (lastStarted.get(key) ?? 0) < intervalMs) return;
-			if (lastStarted.size >= 1_024)
-				for (const [entry, at] of lastStarted)
-					if (startedAt - at >= intervalMs) lastStarted.delete(entry);
-			lastStarted.set(key, startedAt);
-			const task = drain(structuredClone(input))
-				.then(
-					(result) => options.observe?.(result),
-					() => undefined,
-				)
-				.catch(() => undefined)
-				.finally(() => {
-					running.delete(key);
-				});
-			running.set(key, task);
+			// One reader per Session route: the Host log and its cursor belong to the route.
+			const key = input.baseUrl;
+			pending.set(key, structuredClone(input));
+			pump(key);
 		},
 		/** Waits for the background drains already started, without interrupting them. */
 		async settled(): Promise<void> {
@@ -293,6 +360,9 @@ export function createRuntimeSafetyEvidenceReaderV1(options: {
 		/** Interrupts background drains; unconfirmed entries stay in the Host log. */
 		async close(): Promise<void> {
 			lifetime.abort();
+			for (const timer of timers.values()) clearTimeout(timer);
+			timers.clear();
+			pending.clear();
 			await Promise.allSettled([...running.values()]);
 		},
 	};

@@ -919,8 +919,6 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 						executionDeliveryFence: 2,
 						authorizationRevision: "agent-7",
 					},
-					principal: { kind: "user", id: "user" },
-					revoked: false,
 					sandboxResource: { resourceFence: 1 },
 				});
 				// The business path itself sends nothing to the evidence log.

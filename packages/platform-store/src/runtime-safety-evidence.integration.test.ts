@@ -94,7 +94,10 @@ async function seedOriginalBinding() {
 			)`;
 		await transaction`
 			insert into platform.task_authorization_records (id, execution_id, boundary)
-			values ('auth-1', 'execution-1', ${transaction.json({ schemaVersion: 1 })})`;
+			values ('auth-1', 'execution-1', ${transaction.json({
+				schemaVersion: 1,
+				principal: { kind: "user", id: "user-1" },
+			})})`;
 		await transaction`
 			insert into platform.session_sandbox_allocations (
 				sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id,
@@ -485,4 +488,54 @@ it("stores the evidence when the original binding is unchanged (S1)", async () =
 		recorded: 1,
 		rejected: [],
 	});
+});
+
+it("reads the committed original binding of one Execution for its own scope (#4367)", async () => {
+	expect(
+		await store.readOriginalScope({
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		}),
+	).toEqual({
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		principal: { kind: "user", id: "user-1" },
+		authorizationRecordId: "auth-1",
+		authorizationRevision: "identity-8",
+		revoked: false,
+		sessionGeneration: 1,
+		executionDeliveryFence: 1,
+		sandbox: {
+			ref: sandboxId,
+			resourceFence: 1,
+			podUid,
+			configurationRevision: 7,
+			imageDigest,
+		},
+		// The operation facts of this Execution, as read by readExecutionOperationAttempts.
+		operations: expect.any(Array),
+	});
+	for (const other of [
+		{ conversationId: "conversation-1", executionId: "execution-9" },
+		{ conversationId: "conversation-2", executionId: "execution-1" },
+	])
+		expect(await store.readOriginalScope(other)).toBeUndefined();
+	await sql`update platform.session_sandbox_allocations set resource_observation = null where sandbox_id = ${sandboxId}`;
+	expect(
+		await store.readOriginalScope({
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		}),
+	).toBeUndefined();
+});
+
+it("gives up the evidence write instead of waiting on a business lock (#4367 S1)", async () => {
+	await sql.begin(async (business) => {
+		await business`select execution_id from platform.conversation_executions where execution_id = 'execution-1' for update`;
+		const startedAt = Date.now();
+		await expect(store.recordOnce(record())).rejects.toThrow();
+		expect(Date.now() - startedAt).toBeLessThan(5_000);
+	});
+	expect(await store.recordOnce(record())).toBe("recorded");
 });
