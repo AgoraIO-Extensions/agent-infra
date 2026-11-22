@@ -96,6 +96,10 @@ import {
 	readCodexJournalArchive,
 	writeCodexJournalArchive,
 } from "./codex-journal-archive.js";
+import type {
+	CodexModelContextObservationV1,
+	CodexModelContextReceiptV1,
+} from "./codex-model-context-observation.js";
 import {
 	type CodexModelRequestContext,
 	type CodexModelRequestJournal,
@@ -787,6 +791,20 @@ export interface NativeCompactStageObservation {
 }
 
 export interface CodexRuntimeDriverOptions {
+	/**
+	 * Default off (Spec §18.5.2 模型上下文, HLD §8.5.6 step 5): read-only observation of the
+	 * requests sent through the protected model transport. Receipts are handed over once per
+	 * Execution after the existing provider drain, one per model attempt. Never changes
+	 * admission, journal, fetch or terminals.
+	 */
+	readonly modelContextEvidence?: {
+		readonly observation: CodexModelContextObservationV1;
+		readonly receipts: (input: {
+			readonly conversationKey: string;
+			readonly executionId: string;
+			readonly receipts: readonly CodexModelContextReceiptV1[];
+		}) => void;
+	};
 	/** Best-effort operational metadata, never persisted as a Runtime fact. */
 	readonly observeModelTransportFailure?: (
 		event: ModelTransportFailureObservation,
@@ -5157,6 +5175,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private sessionExecutorFailed = false;
+	private modelContextEvidence: CodexRuntimeDriverOptions["modelContextEvidence"];
 	private unsubscribeSessionExecutor?: () => void;
 
 	private assertSessionExecutorBinding(binding: {
@@ -6712,6 +6731,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								if (!driver) unavailable();
 								return driver.prepareModelRequest(context, signal);
 							},
+							...(options.modelContextEvidence
+								? {
+										contextObservation:
+											options.modelContextEvidence.observation,
+									}
+								: {}),
 						})
 					: undefined;
 			assertInstalledSkillCurrent();
@@ -6956,6 +6981,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await file.close().catch(() => {});
 			throw error;
 		}
+		driver.modelContextEvidence = options.modelContextEvidence;
 		try {
 			await driver.loadArchivedJournals(codexJournalArchiveRoot(options.path));
 			const executorRebound = await driver.receiveSessionExecutorReplacement();
@@ -13699,6 +13725,65 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
+	private observeModelContextSessionGap(
+		threadId: string,
+		conversationKey: string | undefined,
+	) {
+		const evidence = this.modelContextEvidence;
+		if (!evidence) return;
+		try {
+			for (const session of Object.values(this.readState().sessions))
+				if (
+					session.threadId === threadId &&
+					(conversationKey === undefined ||
+						codexConversationKey(session) === conversationKey)
+				)
+					evidence.observation.sessionGap(
+						this.modelConversationKey(codexConversationKey(session)),
+					);
+		} catch {
+			// Observation is read-only; a failure leaves it incomplete.
+		}
+	}
+
+	/**
+	 * Fixes the model context receipts of the Execution whose root native Turn just drained.
+	 * The attempt set is the Driver's committed model facts of that Turn; anything the
+	 * observation saw beyond it (a descendant Turn, a recovered history) leaves it incomplete.
+	 */
+	private closeModelContextObservation(
+		conversationKey: string,
+		resolved: ReturnType<CodexRuntimeDriver["resolveNotificationJournal"]>,
+		drained: boolean,
+	) {
+		const evidence = this.modelContextEvidence;
+		const execution = resolved?.execution;
+		if (!evidence || !execution || !resolved) return;
+		try {
+			const attempts = latestOperationAttemptFacts(resolved.journal.events)
+				.filter((fact) => fact.kind === "model")
+				.map((fact) => ({
+					operationRef: fact.operationRef,
+					attemptRef: fact.attemptRef,
+				}));
+			const receipts = evidence.observation.closeExecution({
+				conversationKey,
+				executionId: execution.executionId,
+				attempts,
+				drained,
+				recovered: false,
+			});
+			const handed: unknown = evidence.receipts({
+				conversationKey,
+				executionId: execution.executionId,
+				receipts,
+			});
+			void Promise.resolve(handed).catch(() => {});
+		} catch {
+			// Evidence stays UNPROVEN; the terminal is published as before.
+		}
+	}
+
 	private async prepareModelRequest(
 		context: CodexModelRequestContext,
 		signal: AbortSignal,
@@ -13963,6 +14048,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				? {}
 				: { credential: authorization.relayKey }),
 			assertCurrent,
+			observation: {
+				executionId: prepared.executionId,
+				operationRef: prepared.fact.operationRef,
+				attemptRef: prepared.fact.attemptRef,
+			},
 			started: (startedAt) => record("started", { startedAt }),
 			finish: async (outcome) => {
 				await record(
@@ -14407,7 +14497,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
-			if (this.recordContextCompactionTurn(completed, conversationKey)) return;
+			if (this.recordContextCompactionTurn(completed, conversationKey)) {
+				// A compaction rewrites the context outside any one request: no Execution of
+				// this Session may close its context observation as complete.
+				this.observeModelContextSessionGap(completed.threadId, conversationKey);
+				return;
+			}
 			// Every native terminal must join the actual provider handler and its
 			// durable outcome before publishing the original terminal event. Ordinary
 			// completion drains without aborting the native final response.
@@ -14435,9 +14530,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
 				};
-				if (completed.status === "cancelled" || admissionPending)
-					await this.cancelModelTurn?.(turn);
-				else await this.drainModelTurn?.(turn);
+				let drained = false;
+				try {
+					if (completed.status === "cancelled" || admissionPending)
+						await this.cancelModelTurn?.(turn);
+					else {
+						await this.drainModelTurn?.(turn);
+						drained = this.drainModelTurn !== undefined;
+					}
+				} finally {
+					// The provider drain above is the Execution's collection point.
+					this.closeModelContextObservation(
+						turn.conversationKey,
+						resolvedCompleted,
+						drained,
+					);
+				}
 			}
 			if (resolvedCompleted?.execution)
 				await this.sessionExecutor?.drain?.confirm(

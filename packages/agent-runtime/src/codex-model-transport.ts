@@ -13,6 +13,11 @@ import {
 	type CodexModelAccess,
 	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
+import type {
+	CodexModelContextAttemptV1,
+	CodexModelContextGapV1,
+	CodexModelContextTicketV1,
+} from "./codex-model-context-observation.js";
 import { createCredentialMatcher } from "./model-credential-matcher.js";
 import {
 	type ModelTransportDiagnostic,
@@ -99,6 +104,8 @@ export interface CodexModelRequestJournal {
 	started(startedAt: string): Promise<void>;
 	/** Must commit before a terminal response can be published to native. */
 	finish(outcome: CodexModelRequestOutcome): Promise<void>;
+	/** The persisted model operation/attempt of this request, for context observation only. */
+	readonly observation?: CodexModelContextAttemptV1;
 }
 
 function assertCurrentModelRequest(journal: CodexModelRequestJournal): void {
@@ -121,6 +128,13 @@ export interface CodexModelTransportObserver {
 		context: CodexModelRequestContext,
 		signal: AbortSignal,
 	): Promise<CodexModelRequestJournal>;
+	/**
+	 * Default off (Spec §18.5.2 模型上下文): read-only observation of every authenticated
+	 * request. It never changes admission, the journal, fetch or the response.
+	 */
+	readonly contextObservation?: {
+		inbound(conversationKey: string): CodexModelContextTicketV1 | undefined;
+	};
 }
 
 declare const codexModelTurnAdmissionBrand: unique symbol;
@@ -1183,17 +1197,16 @@ function routedRequest(
 	const route = routes.get(admittedModel.internalModel);
 	if (!route) return;
 	if (value.reasoning !== undefined && !isPlainRecord(value.reasoning)) return;
-	const body = Buffer.from(
-		JSON.stringify({
-			...value,
-			model: route.model,
-			reasoning: {
-				...(value.reasoning as Record<string, unknown> | undefined),
-				effort: admittedModel.reasoningLevel,
-			},
-		}),
-	);
-	return { route, body: encodeRequestBody(body, encoding) };
+	const final = {
+		...value,
+		model: route.model,
+		reasoning: {
+			...(value.reasoning as Record<string, unknown> | undefined),
+			effort: admittedModel.reasoningLevel,
+		},
+	};
+	const body = Buffer.from(JSON.stringify(final));
+	return { route, body: encodeRequestBody(body, encoding), final };
 }
 
 function onlyClientToolDeclarations(value: unknown, depth = 0): boolean {
@@ -1468,7 +1481,28 @@ export async function openCodexModelTransport(
 			reject(response, 401);
 			return;
 		}
+		// Every authenticated request is numbered before admission, so a rejected or failed
+		// request is a visible gap instead of a silent omission (Spec §18.5.2 模型上下文).
+		let ticket: CodexModelContextTicketV1 | undefined;
+		try {
+			ticket = observer.contextObservation?.inbound(authenticated[0]);
+		} catch {
+			ticket = undefined;
+		}
+		const observe = (run: (current: CodexModelContextTicketV1) => void) => {
+			if (!ticket) return;
+			try {
+				run(ticket);
+			} catch {
+				// Observation is read-only; it never alters the request.
+			}
+		};
+		const gap = (reason: CodexModelContextGapV1) =>
+			observe((current) => current.gap(reason));
+		let observedSend = false;
 		if (request.method !== "POST" || request.url !== "/responses") {
+			gap("endpoint_unknown");
+			observe((current) => current.finish());
 			reject(response, 404);
 			return;
 		}
@@ -1479,6 +1513,8 @@ export async function openCodexModelTransport(
 				contentEncoding !== "gzip" &&
 				contentEncoding !== "zstd")
 		) {
+			gap("body_invalid");
+			observe((current) => current.finish());
 			reject(response, 400);
 			return;
 		}
@@ -1487,6 +1523,8 @@ export async function openCodexModelTransport(
 			request.headers["x-client-request-id"],
 		);
 		if (!nativeTurn) {
+			gap("turn_unmapped");
+			observe((current) => current.finish());
 			reject(response, 400);
 			return;
 		}
@@ -1498,6 +1536,8 @@ export async function openCodexModelTransport(
 			revokedTurns.has(turnKey) &&
 			boundThreads.has(nativeThreadKey(conversationKey, nativeTurn.threadId))
 		) {
+			gap("admission_rejected");
+			observe((current) => current.finish());
 			reject(response, 409);
 			return;
 		}
@@ -1506,9 +1546,13 @@ export async function openCodexModelTransport(
 		if (
 			!boundThreads.has(nativeThreadKey(conversationKey, nativeTurn.threadId))
 		) {
+			gap("turn_unmapped");
+			observe((current) => current.finish());
 			reject(response, 403);
 			return;
 		}
+		// The header candidate counts only after the server-side thread binding above.
+		observe((current) => current.mapped({ ...nativeTurn, conversationKey }));
 		const controller = new AbortController();
 		let completeRequest: (() => void) | undefined;
 		const completion = new Promise<void>((resolve) => {
@@ -1592,6 +1636,7 @@ export async function openCodexModelTransport(
 		try {
 			const admittedModel = await waitForAdmission(turnKey, controller.signal);
 			if (admittedModel === undefined) {
+				gap("admission_rejected");
 				settleModelRequestWaiters(turnKey, false);
 				reject(response, 409);
 				return;
@@ -1606,6 +1651,7 @@ export async function openCodexModelTransport(
 			}
 			if (controller.signal.aborted) throw new Error();
 			if (revokedTurns.has(turnKey)) {
+				gap("admission_rejected");
 				reject(response, 409);
 				return;
 			}
@@ -1617,6 +1663,7 @@ export async function openCodexModelTransport(
 				officialLane,
 			);
 			if (!routed) {
+				gap("body_invalid");
 				reject(response, 400);
 				return;
 			}
@@ -1629,6 +1676,8 @@ export async function openCodexModelTransport(
 				controller.signal,
 			);
 			journal = await awaitPersistence(journalPromise, controller.signal);
+			const persisted = journal;
+			observe((current) => current.bind(persisted.observation));
 			const credential = keyed ? journal.credential : routed.route.credential;
 			if (
 				(keyed && typeof journal.assertCurrent !== "function") ||
@@ -1652,6 +1701,7 @@ export async function openCodexModelTransport(
 					phase: "failed",
 					failureCode: "request_not_started",
 				});
+				gap("admission_rejected");
 				reject(response, 409);
 				return;
 			}
@@ -1673,10 +1723,14 @@ export async function openCodexModelTransport(
 					phase: "failed",
 					failureCode: "request_not_started",
 				});
+				gap("admission_rejected");
 				reject(response, 409);
 				return;
 			}
 			startedAt = performance.now();
+			// The final JSON, after rewriting, is what this request actually sends.
+			observe((current) => current.inspect(routed.final));
+			observedSend = true;
 			const requestBegan = startedAt;
 			const upstreamAbort = new AbortController();
 			let headerTimedOut = false;
@@ -1755,6 +1809,9 @@ export async function openCodexModelTransport(
 				upstream.status,
 			);
 		} catch {
+			// Only a request that never reached its send is an observation gap.
+			if (!observedSend)
+				gap(controller.signal.aborted ? "cancelled" : "body_invalid");
 			responseFailed = outcomeReported || outcomeReport !== undefined;
 			const interrupted = controller.signal.aborted;
 			controller.abort();
@@ -1782,6 +1839,7 @@ export async function openCodexModelTransport(
 			// and durable write until they settle, without blocking cancel/close.
 			if (journalPromise && (!outcomeReported || responseFailed))
 				failedDrains.add(turnKey);
+			observe((current) => current.finish());
 			request.off("aborted", terminate);
 			response.off("close", terminate);
 			active.delete(activeTurn);

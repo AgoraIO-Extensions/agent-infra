@@ -115,6 +115,10 @@ import {
 	readCodexJournalArchive,
 	writeCodexJournalArchive,
 } from "./codex-journal-archive.js";
+import {
+	codexModelContextScenarioV1,
+	createCodexModelContextObservationV1,
+} from "./codex-model-context-observation.js";
 import type {
 	CodexModelTurn,
 	CodexModelTurnAdmission,
@@ -1003,6 +1007,7 @@ function openDriverWithModelEndpoint(
 	authorizeExternalAction?: CodexRuntimeDriverOptions["authorizeExternalAction"],
 	waitForInitialModelRequest = false,
 	observeModelTransportFailure?: CodexRuntimeDriverOptions["observeModelTransportFailure"],
+	extra: Pick<CodexRuntimeDriverOptions, "modelContextEvidence"> = {},
 ) {
 	modelTransportTestHooks.waitForInitialModelRequest =
 		waitForInitialModelRequest;
@@ -1011,6 +1016,7 @@ function openDriverWithModelEndpoint(
 			...driverOptions(path, configVersion),
 			...(authorizeExternalAction ? { authorizeExternalAction } : {}),
 			...(observeModelTransportFailure ? { observeModelTransportFailure } : {}),
+			...extra,
 			modelOptions: driverOptions(path).modelOptions.map((option) => ({
 				...option,
 				endpoint,
@@ -2392,6 +2398,118 @@ describe("Codex Runtime Driver", () => {
 			expect(observed).toHaveLength(1);
 		},
 	);
+
+	it("hands one model context receipt per attempt to its consumer after the provider drain (#4358 I1c)", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const sent: string[] = [];
+		const endpoint = await listen(
+			createServer((request, response) => {
+				let body = "";
+				request.on("data", (chunk) => {
+					body += chunk;
+				});
+				request.on("end", () => {
+					sent.push(body);
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				});
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		const handed: Parameters<
+			NonNullable<CodexRuntimeDriverOptions["modelContextEvidence"]>["receipts"]
+		>[0][] = [];
+		const observation = createCodexModelContextObservationV1({
+			scenario: codexModelContextScenarioV1,
+			observes: () => true,
+		});
+		const driver = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+			undefined,
+			upstreamModelAccess.credential,
+			vi.fn(async () => undefined),
+			false,
+			undefined,
+			{
+				modelContextEvidence: {
+					observation,
+					receipts: (input) => {
+						handed.push(input);
+					},
+				},
+			},
+		);
+		drivers.push(driver);
+		const accepted = await driver.execute(submitCommandV2());
+		if (!loopback) throw new Error("missing model access");
+		const response = await fetch(`${loopback.endpoint}/responses`, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${loopback.credential}`,
+				"x-client-request-id": bridge.nativeThreadId,
+				"x-codex-turn-metadata": JSON.stringify({
+					thread_id: bridge.nativeThreadId,
+					turn_id: bridge.nativeTurnId,
+				}),
+			},
+			body: JSON.stringify({
+				model: internalModel("model-option-primary", "gpt-5.3-codex"),
+				stream: true,
+				input: [
+					{
+						type: "message",
+						role: "user",
+						content: [
+							{
+								type: "input_text",
+								text: `hello ${codexModelContextScenarioV1.selfMarker}`,
+							},
+						],
+					},
+				],
+			}),
+		});
+		expect(await response.text()).toContain("response.completed");
+		// Nothing is fixed before the Execution's provider drain.
+		expect(handed).toEqual([]);
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(() => expect(handed).toHaveLength(1));
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-codex",
+		);
+		const fact = events
+			.filter((event) => event.type === "operation")
+			.map((event) => event.payload as RuntimeOperationFactV2)
+			.find((value) => value.kind === "model");
+		expect(handed[0]).toEqual({
+			conversationKey: expect.stringMatching(/^[a-f0-9]{64}$/),
+			executionId: "execution-codex",
+			receipts: [
+				{
+					operationRef: fact?.operationRef,
+					attemptRef: fact?.attemptRef,
+					challengeRef: expect.any(String),
+					selfMarkerPresent: true,
+					foreignMarkerAbsent: true,
+					observationComplete: true,
+					observed: true,
+				},
+			],
+		});
+		// Observation is read-only: the provider received the rewritten request as before.
+		expect(JSON.parse(sent[0] ?? "{}")).toMatchObject({
+			model: "gpt-5.3-codex",
+		});
+		const persisted = await readFile(path, "utf8");
+		expect(persisted).not.toContain(codexModelContextScenarioV1.selfMarker);
+	});
 
 	it("persists actual model intent before HTTP, preserves facts across ack/restart, and rejects foreign cursors", async () => {
 		const path = join(await runtimeDirectory(), "driver.json");

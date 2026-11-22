@@ -3861,3 +3861,157 @@ describe("Codex model started persistence guard", () => {
 		},
 	);
 });
+
+describe("model context observation inside the transport (#4358 I1c, Spec §18.5.2)", () => {
+	type Call = [string, unknown?];
+	function recorder(options: { throwing?: boolean } = {}) {
+		const inbound: string[] = [];
+		const calls: Call[] = [];
+		const observer: CodexModelTransportObserver = {
+			beforeRequest: async () => ({
+				started: async () => {},
+				finish: async () => {},
+				observation: {
+					executionId: "execution-1",
+					operationRef: "operation-1",
+					attemptRef: "attempt-1",
+				},
+			}),
+			contextObservation: {
+				inbound: (conversationKey) => {
+					inbound.push(conversationKey);
+					const record =
+						(name: string) =>
+						(value?: unknown): void => {
+							calls.push([name, value]);
+							if (options.throwing) throw new Error("observer failure");
+						};
+					return {
+						mapped: record("mapped"),
+						bind: record("bind"),
+						inspect: record("inspect"),
+						gap: record("gap"),
+						finish: record("finish"),
+					};
+				},
+			},
+		};
+		return { observer, inbound, calls };
+	}
+	const streamingTarget = () =>
+		listen(
+			createServer((incoming, response) => {
+				let body = "";
+				incoming.on("data", (chunk) => {
+					body += chunk;
+				});
+				incoming.on("end", () => {
+					received.push(body);
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				});
+			}),
+		);
+	const received: string[] = [];
+	afterEach(() => {
+		received.splice(0);
+	});
+
+	it("numbers no request that fails the transport credential", async () => {
+		const { observer, inbound } = recorder();
+		const value = await transport(await streamingTarget(), true, observer);
+		const response = await request(value.modelAccess, {
+			headers: { authorization: "Bearer wrong" },
+		});
+		expect(response.status).toBe(401);
+		await response.body?.cancel();
+		expect(inbound).toEqual([]);
+	});
+
+	it("records a rejected authenticated request as a gap before any admission", async () => {
+		const { observer, inbound, calls } = recorder();
+		const value = await transport(await streamingTarget(), true, observer);
+		const response = await request(
+			value.modelAccess,
+			{},
+			{
+				threadId: "thread-unbound",
+				turnId: "turn-synthetic",
+			},
+		);
+		expect(response.status).toBe(403);
+		await response.body?.cancel();
+		expect(inbound).toEqual([testConversationKey]);
+		expect(calls).toEqual([
+			["gap", "turn_unmapped"],
+			["finish", undefined],
+		]);
+	});
+
+	it("maps, binds and inspects the final rewritten JSON of a sent request", async () => {
+		const { observer, calls } = recorder();
+		const value = await transport(await streamingTarget(), true, observer);
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({
+				model: selectedInternalModel,
+				input: [{ type: "message", role: "user", content: "synthetic" }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		await vi.waitFor(() =>
+			expect(calls.map(([name]) => name)).toContain("finish"),
+		);
+		expect(calls.map(([name]) => name)).toEqual([
+			"mapped",
+			"bind",
+			"inspect",
+			"finish",
+		]);
+		expect(calls[0]?.[1]).toEqual({
+			conversationKey: testConversationKey,
+			...defaultNativeTurn,
+		});
+		expect(calls[1]?.[1]).toEqual({
+			executionId: "execution-1",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+		});
+		// The inspected value is exactly what was sent upstream, after rewriting.
+		expect(calls[2]?.[1]).toMatchObject({
+			model: "synthetic-selected",
+			reasoning: { effort: "high" },
+		});
+		expect(JSON.parse(received[0] ?? "{}")).toEqual(calls[2]?.[1]);
+	});
+
+	it("keeps the request and its response unchanged when the observer fails", async () => {
+		const failing = recorder({ throwing: true });
+		const value = await transport(
+			await streamingTarget(),
+			true,
+			failing.observer,
+		);
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({ model: selectedInternalModel, input: [] }),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("response.completed");
+		expect(JSON.parse(received[0] ?? "{}")).toMatchObject({
+			model: "synthetic-selected",
+		});
+		const throwingInbound = await transport(await streamingTarget(), true, {
+			...testObserver,
+			contextObservation: {
+				inbound: () => {
+					throw new Error("broken");
+				},
+			},
+		});
+		const second = await request(throwingInbound.modelAccess, {
+			body: JSON.stringify({ model: selectedInternalModel, input: [] }),
+		});
+		expect(second.status).toBe(200);
+		await second.text();
+	});
+});

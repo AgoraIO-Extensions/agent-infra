@@ -19,6 +19,9 @@ export * from "./codex-executor-bootstrap.js";
 export * from "./codex-executor-control.js";
 export * from "./codex-executor-drain-journal.js";
 export * from "./codex-installation.js";
+export * from "./codex-model-context-evidence.js";
+export * from "./codex-model-context-observation.js";
+export * from "./codex-native-isolation-leaf.js";
 export * from "./codex-runtime-driver.js";
 export * from "./codex-session-executor.js";
 export {
