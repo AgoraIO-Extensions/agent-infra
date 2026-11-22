@@ -116,6 +116,68 @@ describe("isolation observation record (Spec §18.5.2)", () => {
 		expect(parsed.binding.sandbox.executorEpoch).toBe("epoch-2");
 	});
 
+	it.each(
+		["file", "workspace", "memory_file"].flatMap((resourceClass) =>
+			["read", "write"].map((actionClass) => [resourceClass, actionClass]),
+		),
+	)(
+		"requires the own %s %s positive to carry its length and hash",
+		(resourceClass, actionClass) => {
+			const incomplete = {
+				...selfWrite,
+				resourceClass,
+				actionClass,
+				syntheticFile: undefined,
+			};
+			expect(
+				RuntimeIsolationEvidenceV1Schema.safeParse(incomplete).success,
+			).toBe(false);
+			const { binding: _binding, code: _code, ...fields } = incomplete;
+			expect(
+				RuntimeIsolationEvidencePrincipalProjectionV1Schema.safeParse({
+					...fields,
+					code: "RUNTIME_ISOLATION_EVIDENCE_V1",
+					evidenceRef: "evidence-1",
+					scenario: { id: "u1-file-self", version: 1 },
+					windowRef: "window-1",
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+					observedAt: "2026-11-22T00:00:00.000Z",
+					clockId: "clock-1",
+					sequence: 3,
+				}).success,
+			).toBe(false);
+			// A result that cannot be confirmed is UNPROVEN, not an incomplete positive.
+			expect(
+				RuntimeIsolationEvidenceV1Schema.safeParse({
+					...incomplete,
+					resultClass: "unproven",
+					failureClass: "io_unavailable",
+				}).success,
+			).toBe(true);
+		},
+	);
+
+	it("does not require length or hash where they do not apply", () => {
+		for (const actionClass of ["open", "stat", "list"])
+			expect(
+				RuntimeIsolationEvidenceV1Schema.safeParse({
+					...selfWrite,
+					actionClass,
+					syntheticFile: undefined,
+				}).success,
+			).toBe(true);
+		for (const resourceClass of ["env", "proc"])
+			expect(
+				RuntimeIsolationEvidenceV1Schema.safeParse({
+					...selfWrite,
+					resourceClass,
+					actionClass: "read",
+					syntheticFile: undefined,
+				}).success,
+			).toBe(true);
+	});
+
 	it.each([
 		[
 			"a foreign result with length/hash",
