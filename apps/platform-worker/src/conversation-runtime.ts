@@ -63,6 +63,7 @@ import {
 	sendRuntimeOAuthRequest,
 	type WorkerConnectionInstallationOptions,
 } from "./runtime-oauth-request.js";
+import type { RuntimeSafetyEvidenceDrainV1 } from "./runtime-safety-evidence-reader.js";
 import type { SessionHostSourceConfirmationV1 } from "./session-host-source.js";
 
 export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
@@ -207,6 +208,14 @@ export interface ConversationRuntimeOptionsV2 {
 	 */
 	readonly hostSource?: {
 		afterAcknowledge(input: SessionHostSourceConfirmationV1): void;
+	};
+	/**
+	 * Default off (Spec §18.5.1): after a business event ACK of a Session Sandbox Execution, hand
+	 * the same resolved route and committed scope to the evidence reader. It never throws into or
+	 * waits on the business path.
+	 */
+	readonly safetyEvidence?: {
+		afterAcknowledge(input: RuntimeSafetyEvidenceDrainV1): void;
 	};
 	readonly fetch?: typeof fetch;
 	readonly reconnectDelayMs?: number;
@@ -1334,6 +1343,37 @@ export function createConversationRuntimeV2(
 			// The Host source stays unconfirmed; the business ACK already succeeded.
 		}
 	}
+	function continueSafetyEvidence(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+	) {
+		const reader = options.safetyEvidence;
+		const { context, state, target } = prepared;
+		if (
+			!reader ||
+			context.kind !== "business" ||
+			!state.sandboxResource ||
+			state.runtimeSubmitProtocol !== "v4"
+		)
+			return;
+		try {
+			reader.afterAcknowledge({
+				baseUrl: target.baseUrl,
+				serviceToken: target.serviceToken,
+				traceId: context.claim.traceId,
+				claim: {
+					agentId: context.claim.agentId,
+					conversationId: context.claim.conversationId,
+					executionId: context.claim.executionId,
+					sessionGeneration: context.claim.sessionGeneration,
+					executionDeliveryFence: context.claim.executionDeliveryFence,
+					authorizationRevision: context.claim.authorizationRevision,
+				},
+				sandboxResource: state.sandboxResource,
+			});
+		} catch {
+			// Evidence stays UNPROVEN; the business ACK already succeeded.
+		}
+	}
 	async function acknowledgePrepared(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 		confirmedCursor: string,
@@ -1972,6 +2012,7 @@ export function createConversationRuntimeV2(
 					);
 					drains.set(prepared.context, prepared);
 					confirmHostSource(prepared);
+					continueSafetyEvidence(prepared);
 					return;
 				} catch (error) {
 					// Nothing was sent. A changed authority, such as a revocation or a
@@ -1989,6 +2030,7 @@ export function createConversationRuntimeV2(
 				try {
 					await acknowledgePrepared(prepared, request.confirmedCursor, active);
 					confirmHostSource(prepared);
+					continueSafetyEvidence(prepared);
 					return;
 				} catch (error) {
 					// The pre-send check failed, so nothing was sent; a stop that landed

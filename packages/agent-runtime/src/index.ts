@@ -51,6 +51,7 @@ export type { RuntimeOriginalExecutionRef } from "./runtime-authorization.js";
 export * from "./runtime-control-observation.js";
 export * from "./runtime-file-bridge.js";
 export * from "./runtime-host.js";
+export * from "./safety-evidence-log.js";
 export * from "./skill-hub-directory.js";
 export * from "./standard-mcp-acp-bridge.js";
 export * from "./standard-mcp-client.js";

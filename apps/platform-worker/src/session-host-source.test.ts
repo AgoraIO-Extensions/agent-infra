@@ -4,6 +4,7 @@ import { createConversationRuntimeV2 } from "./conversation-runtime.js";
 import {
 	createSessionHostSourceRecorderV1,
 	type SessionHostSourceConfirmationV1,
+	type SessionHostSourceStoreV1,
 } from "./session-host-source.js";
 import { runtimeV4Harness } from "./test-support/runtime-v4.js";
 
@@ -74,9 +75,9 @@ const echo = (body: Record<string, unknown>) =>
 
 function store() {
 	return {
-		recordSessionSandboxHostSourceV1: vi.fn(
-			async (): Promise<"recorded" | "unchanged"> => "recorded",
-		),
+		recordSessionSandboxHostSourceV1: vi.fn<
+			SessionHostSourceStoreV1["recordSessionSandboxHostSourceV1"]
+		>(async () => "recorded"),
 	};
 }
 

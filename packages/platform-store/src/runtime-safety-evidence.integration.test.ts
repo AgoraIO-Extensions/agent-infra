@@ -2,6 +2,7 @@ import {
 	type RuntimeIsolationEvidenceV1,
 	RuntimePersistedSafetyEvidenceV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { ingestRuntimeSafetyEvidenceBatchV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 
@@ -11,6 +12,10 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
 import { PostgresRuntimeSafetyEvidenceStoreV1 } from "./runtime-safety-evidence.js";
+
+const sandboxId = "0a0b0c0d-1111-4222-8333-444455556666";
+const podUid = "11111111-2222-4333-8444-555555555555";
+const imageDigest = `sha256:${"a".repeat(64)}`;
 
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -34,18 +39,15 @@ const record = (
 			operation: { ref: "operation-1", attemptRef: "attempt-1" },
 			principalRef: "principal-1",
 			purposeRef: "purpose-business",
+			authorization: { recordId: "auth-1", revision: "identity-8" },
 			sessionGeneration: 1,
 			executionDeliveryFence: 1,
-			sandbox: {
-				ref: "sandbox-1",
-				podUid: "11111111-2222-4333-8444-555555555555",
-				resourceFence: 1,
-			},
+			sandbox: { ref: sandboxId, podUid, resourceFence: 1 },
 			host: {
 				instanceRef: "host-1",
 				startRef: "start-1",
-				configurationRevision: "config-1",
-				imageDigest: `sha256:${"a".repeat(64)}`,
+				configurationRevision: "7",
+				imageDigest,
 			},
 			producer: { kind: "native_helper", version: "u1-helper-1" },
 			observedAt: "2026-11-22T00:00:00.000Z",
@@ -72,8 +74,58 @@ beforeAll(async () => {
 	});
 }, 120_000);
 
+/**
+ * The Execution's committed original binding. Foreign keys to the Conversation and Agent
+ * fixtures are skipped; the evidence store only reads these rows.
+ */
+async function seedOriginalBinding() {
+	await sql.begin(async (transaction) => {
+		await transaction`set local session_replication_role = replica`;
+		await transaction`delete from platform.task_authorization_records where execution_id = 'execution-1'`;
+		await transaction`delete from platform.conversation_executions where execution_id = 'execution-1'`;
+		await transaction`delete from platform.session_sandbox_allocations where sandbox_id = ${sandboxId}`;
+		await transaction`
+			insert into platform.conversation_executions (
+				execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status,
+				session_generation, delivery_fence, authorization_revision, created_at, sandbox_id
+			) values (
+				'execution-1', 'conversation-1', 'agent-1', 'user-1', 'web', 'turn-1', 'processing',
+				1, 1, 'identity-8', now(), ${sandboxId}
+			)`;
+		await transaction`
+			insert into platform.task_authorization_records (id, execution_id, boundary)
+			values ('auth-1', 'execution-1', ${transaction.json({
+				schemaVersion: 1,
+				principal: { kind: "user", id: "user-1" },
+			})})`;
+		await transaction`
+			insert into platform.session_sandbox_allocations (
+				sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id,
+				session_generation, resource_name, workspace_scope, status, created_at, updated_at,
+				resource_fence, resource_policy, resource_observation
+			) values (
+				${sandboxId}, 'conversation-1', 'agent-1', 'user-1', 'user', 'web', 1,
+				${`sandbox-${sandboxId}`}, ${sandboxId}, 'ready', now(), now(), 1,
+				${transaction.json({ configurationRevision: 7, imageDigest })},
+				${transaction.json({
+					status: "ready",
+					resources: [
+						{
+							kind: "Pod",
+							namespace: "agents",
+							name: `sandbox-${sandboxId}-0`,
+							uid: podUid,
+							resourceVersion: "1",
+						},
+					],
+				})}
+			)`;
+	});
+}
+
 beforeEach(async () => {
 	await sql`truncate platform.runtime_safety_evidence`;
+	await seedOriginalBinding();
 });
 
 afterAll(async () => {
@@ -242,4 +294,248 @@ it("persists the necessary read audit with the trusted subject, confirmed scope 
 			reason: "RESOURCE_UNAVAILABLE",
 		}),
 	).rejects.toThrow();
+});
+
+it("reads the original operation/attempt pairs of one Execution from its committed Runtime facts", async () => {
+	const rows = [
+		[
+			"event-1",
+			"execution-1",
+			"operation-1",
+			"attempt-1",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-2",
+			"execution-1",
+			"operation-1",
+			"attempt-1",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-3",
+			"execution-1",
+			"operation-1",
+			"attempt-2",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-4",
+			"execution-2",
+			"operation-9",
+			"attempt-9",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-6",
+			"execution-1",
+			"operation-7",
+			"attempt-7",
+			"runtime",
+			"message.delta",
+		],
+	] as const;
+	// Only the evidence query is under test, so the Conversation and Execution fixtures are
+	// skipped by disabling the foreign-key triggers for this transaction.
+	await sql.begin(async (transaction) => {
+		await transaction`set local session_replication_role = replica`;
+		await transaction`delete from platform.conversation_events where conversation_id = 'conversation-1'`;
+		for (const [
+			index,
+			[eventId, executionId, operationRef, attemptRef, source, eventType],
+		] of rows.entries())
+			await transaction`
+				insert into platform.conversation_events (
+					event_id, conversation_id, execution_id, adapter_event_key, sequence,
+					conversation_cursor, event_type, event_payload, event_digest, runtime_cursor,
+					occurred_at, source
+				) values (
+					${eventId}, 'conversation-1', ${executionId}, ${eventId}, ${index + 1},
+					${index + 1}, ${eventType},
+					${transaction.json({ fact: { operationRef, attemptRef } })}, ${"d".repeat(64)},
+					${eventId}, now(), ${source}
+				)`;
+	});
+	const pairs = await store.readExecutionOperationAttempts({
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+	});
+	expect(
+		[...pairs].sort((a, b) => a.attemptRef.localeCompare(b.attemptRef)),
+	).toEqual([
+		{ ref: "operation-1", attemptRef: "attempt-1" },
+		{ ref: "operation-1", attemptRef: "attempt-2" },
+	]);
+	expect(
+		await store.readExecutionOperationAttempts({
+			conversationId: "conversation-2",
+			executionId: "execution-1",
+		}),
+	).toEqual([]);
+});
+
+/** Worker ingest exactly as wired: the scope was read, then the original binding moves. */
+async function ingestAfterScopeRead(change: () => Promise<void>) {
+	const window = {
+		windowRef: "window-1",
+		opensAt: "2026-11-21T00:00:00.000Z",
+		closesAt: "2026-11-22T12:00:00.000Z",
+		agentIds: ["agent-1"],
+		principalRefs: ["principal-1"],
+		scenarios: [
+			{
+				id: "u1-file",
+				version: 1,
+				resourceClasses: ["file" as const],
+				actionClasses: ["write" as const],
+			},
+		],
+		producers: [{ kind: "native_helper" as const, version: "u1-helper-1" }],
+	};
+	return ingestRuntimeSafetyEvidenceBatchV1({
+		entries: [{ cursor: "se1-1", record: record() }],
+		parse: (value) => RuntimePersistedSafetyEvidenceV1Schema.parse(value),
+		window,
+		resolveScope: async (value) => {
+			const scope = {
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				principalRef: "principal-1",
+				purposeRef: "purpose-business",
+				authorization: { recordId: "auth-1", revision: "identity-8" },
+				sessionGeneration: 1,
+				executionDeliveryFence: 1,
+				operations: [{ ref: "operation-1", attemptRef: "attempt-1" }],
+				sandbox: { ref: sandboxId, podUid, resourceFence: 1 },
+				host: { ...value.binding.host },
+				revoked: false,
+			};
+			await change();
+			return scope;
+		},
+		store,
+		now: () => new Date("2026-11-22T00:10:00.000Z"),
+	});
+}
+
+it.each([
+	[
+		"the subject's permission is revoked",
+		() =>
+			sql`update platform.task_authorization_records set revoked_at = now() where id = 'auth-1'`,
+		"revoked",
+	],
+	[
+		"the Execution delivery fence advances",
+		() =>
+			sql`update platform.conversation_executions set delivery_fence = 2 where execution_id = 'execution-1'`,
+		"stale_binding",
+	],
+	[
+		"the Session generation advances",
+		() =>
+			sql`update platform.conversation_executions set session_generation = 2 where execution_id = 'execution-1'`,
+		"stale_binding",
+	],
+	[
+		"the Sandbox resource fence advances",
+		() =>
+			sql`update platform.session_sandbox_allocations set resource_fence = 2 where sandbox_id = ${sandboxId}`,
+		"stale_binding",
+	],
+	[
+		"the Sandbox is recreated with another Pod",
+		() =>
+			sql`update platform.session_sandbox_allocations set resource_observation = jsonb_set(resource_observation, '{resources,0,uid}', '"99999999-2222-4333-8444-555555555555"') where sandbox_id = ${sandboxId}`,
+		"stale_binding",
+	],
+	[
+		"the Sandbox runs another image",
+		() =>
+			sql`update platform.session_sandbox_allocations set resource_policy = jsonb_set(resource_policy, '{imageDigest}', ${JSON.stringify(`sha256:${"b".repeat(64)}`)}::jsonb) where sandbox_id = ${sandboxId}`,
+		"stale_binding",
+	],
+	[
+		"the authorization revision changes",
+		() =>
+			sql`update platform.conversation_executions set authorization_revision = 'identity-9' where execution_id = 'execution-1'`,
+		"scope_mismatch",
+	],
+])(
+	"does not store evidence when %s after the scope was read (S1)",
+	async (_name, change, reason) => {
+		const result = await ingestAfterScopeRead(async () => {
+			await change();
+		});
+		expect(result).toMatchObject({
+			ackCursor: "se1-1",
+			recorded: 0,
+			rejected: [{ cursor: "se1-1", reason }],
+		});
+		const rows = await sql<{ count: string }[]>`
+		select count(*)::text as count from platform.runtime_safety_evidence`;
+		expect(rows[0]?.count).toBe("0");
+	},
+);
+
+it("stores the evidence when the original binding is unchanged (S1)", async () => {
+	expect(await ingestAfterScopeRead(async () => {})).toMatchObject({
+		recorded: 1,
+		rejected: [],
+	});
+});
+
+it("reads the committed original binding of one Execution for its own scope (#4367)", async () => {
+	expect(
+		await store.readOriginalScope({
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		}),
+	).toEqual({
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		principal: { kind: "user", id: "user-1" },
+		authorizationRecordId: "auth-1",
+		authorizationRevision: "identity-8",
+		revoked: false,
+		sessionGeneration: 1,
+		executionDeliveryFence: 1,
+		sandbox: {
+			ref: sandboxId,
+			resourceFence: 1,
+			podUid,
+			configurationRevision: 7,
+			imageDigest,
+		},
+		// The operation facts of this Execution, as read by readExecutionOperationAttempts.
+		operations: expect.any(Array),
+	});
+	for (const other of [
+		{ conversationId: "conversation-1", executionId: "execution-9" },
+		{ conversationId: "conversation-2", executionId: "execution-1" },
+	])
+		expect(await store.readOriginalScope(other)).toBeUndefined();
+	await sql`update platform.session_sandbox_allocations set resource_observation = null where sandbox_id = ${sandboxId}`;
+	expect(
+		await store.readOriginalScope({
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		}),
+	).toBeUndefined();
+});
+
+it("gives up the evidence write instead of waiting on a business lock (#4367 S1)", async () => {
+	await sql.begin(async (business) => {
+		await business`select execution_id from platform.conversation_executions where execution_id = 'execution-1' for update`;
+		const startedAt = Date.now();
+		await expect(store.recordOnce(record())).rejects.toThrow();
+		expect(Date.now() - startedAt).toBeLessThan(5_000);
+	});
+	expect(await store.recordOnce(record())).toBe("recorded");
 });

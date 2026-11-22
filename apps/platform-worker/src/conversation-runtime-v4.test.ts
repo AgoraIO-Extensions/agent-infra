@@ -7,6 +7,7 @@ import {
 	createConversationDispatchUseCaseV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeSafetyEvidenceDrainV1 } from "./runtime-safety-evidence-reader.js";
 import {
 	grantSigner,
 	keySentinel,
@@ -882,6 +883,72 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			h: ReturnType<typeof runtimeV4Harness>,
 			from: number,
 		) => h.resolveRuntimeHost.mock.calls.slice(from).map(([input]) => input);
+
+		it("hands the same Session route to the evidence reader after a business ACK and never lets it fail the ACK (#4358 I1b)", async () => {
+			const afterAcknowledge = vi.fn((_input: RuntimeSafetyEvidenceDrainV1) => {
+				throw new Error("evidence reader down");
+			});
+			const h = runtimeV4Harness("submit", {
+				safetyEvidence: { afterAcknowledge },
+			});
+			try {
+				Object.assign(h.state, {
+					sandboxResource: sandboxResource(),
+					runtimeCursor: "model-cursor",
+				});
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).resolves.toMatchObject({ result: { outcome: "accepted" } });
+				await expect(
+					h.runtime.runtimeHost.acknowledge?.({
+						...h.events(reference),
+						confirmedCursor: "model-cursor",
+					}),
+				).resolves.toBeUndefined();
+				expect(afterAcknowledge).toHaveBeenCalledTimes(1);
+				expect(afterAcknowledge.mock.calls[0]?.[0]).toMatchObject({
+					baseUrl: "http://runtime.test",
+					serviceToken: "synthetic-service-token",
+					traceId: "trace",
+					claim: {
+						agentId: "agent",
+						conversationId: "conversation",
+						executionId: "execution",
+						sessionGeneration: 1,
+						executionDeliveryFence: 2,
+						authorizationRevision: "agent-7",
+					},
+					sandboxResource: { resourceFence: 1 },
+				});
+				// The business path itself sends nothing to the evidence log.
+				expect(
+					h.fetcher.mock.calls.some(([url]) =>
+						String(url).includes("safety-evidence"),
+					),
+				).toBe(false);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("does not continue evidence for a route without a Session Sandbox", async () => {
+			const afterAcknowledge = vi.fn();
+			const h = runtimeV4Harness("submit", {
+				safetyEvidence: { afterAcknowledge },
+			});
+			try {
+				Object.assign(h.state, { runtimeCursor: "model-cursor" });
+				const reference = await h.authorize();
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "model-cursor",
+				});
+				expect(afterAcknowledge).not.toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		});
 
 		it("runs full signed readiness on the reused second resolution", async () => {
 			const h = runtimeV4Harness();

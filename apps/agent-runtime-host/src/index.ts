@@ -109,6 +109,10 @@ import {
 	prepareRuntimeOAuth,
 	type RuntimeOAuthAssembly,
 } from "./runtime-oauth.js";
+import {
+	openRuntimeSafetyEvidenceV1,
+	type RuntimeSafetyEvidenceAssemblyV1,
+} from "./safety-evidence.js";
 import { createSessionInstanceReaderV1 } from "./session-instance.js";
 import {
 	readRuntimeSkillHubBindingV1,
@@ -168,6 +172,8 @@ interface StartOptions {
 		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
 		signal: AbortSignal,
 	) => Promise<unknown>;
+	/** Evidence log of an enabled acceptance window; absent by default (Spec §18.5.1). */
+	safetyEvidence?: RuntimeSafetyEvidenceAssemblyV1["log"];
 	/** #4358 I3: present only when the deployment enables the check. */
 	originalAdmissionCheck?: RuntimeOriginalAdmissionCheckV1;
 	/** #4358 I3b1: present only when the Host knows its own Pod UID. */
@@ -589,6 +595,7 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	let safetyEvidence: RuntimeSafetyEvidenceAssemblyV1 | undefined;
 	let modelTelemetry: ReturnType<typeof startObservability> | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
 	let connectionInstall: ConnectionInstallReceiverAssemblyV1 | undefined;
@@ -625,6 +632,7 @@ export async function assembleRuntimeHost(
 						try {
 							await openedStore?.close();
 						} finally {
+							await safetyEvidence?.log.close().catch(() => {});
 							await modelTelemetry?.close().catch(() => {});
 						}
 					}
@@ -690,6 +698,12 @@ export async function assembleRuntimeHost(
 		}
 		const store = await FileRuntimeStore.open(storePath);
 		openedStore = store;
+		// A separate file with its own cursor and ACK; never the business journal (HLD §8.5.6).
+		safetyEvidence = await openRuntimeSafetyEvidenceV1({
+			environment,
+			path: join(dataDirectory, "safety-evidence.json"),
+			logDiagnostic: (entry) => console.warn(JSON.stringify(entry)),
+		});
 		await legacyMigration?.apply(store);
 		oauth = await prepareRuntimeOAuth({
 			environment,
@@ -1297,6 +1311,7 @@ export async function assembleRuntimeHost(
 			...(hostSourceRead ? { hostSourceRead } : {}),
 			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			...(sessionInstanceRead ? { sessionInstanceRead } : {}),
+			...(safetyEvidence ? { safetyEvidence: safetyEvidence.log } : {}),
 			serviceToken,
 			port,
 			close,

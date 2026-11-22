@@ -62,6 +62,7 @@ import {
 	assertRuntimeConnectionConsumerHeader,
 	type RuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
+import { registerRuntimeSafetyEvidenceRoutesV1 } from "./safety-evidence.js";
 import { readSessionInstanceBodyV1 } from "./session-instance.js";
 
 export const runtimeHostService = "agent-runtime-host";
@@ -123,6 +124,14 @@ interface RuntimeHostAppOptions {
 	 * confirmation. Present only when the Host knows its own Pod UID.
 	 */
 	hostSourceRead?: { read(value: unknown): Promise<unknown> };
+	/**
+	 * Safety evidence log of an enabled acceptance window (Spec §18.5.1); absent by default,
+	 * in which case no evidence route exists.
+	 */
+	safetyEvidence?: Pick<
+		import("@agent-infra/agent-runtime").RuntimeSafetyEvidenceLogV1,
+		"read" | "acknowledge"
+	>;
 	/**
 	 * #4358 I3: deployment-enabled read-only original admission check; absent
 	 * by default, in which case its route does not exist.
@@ -223,6 +232,9 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		}
 		await next();
 	});
+
+	if (options.safetyEvidence)
+		registerRuntimeSafetyEvidenceRoutesV1(app, options.safetyEvidence);
 
 	if (options.sessionInstanceRead) {
 		const read = options.sessionInstanceRead;
