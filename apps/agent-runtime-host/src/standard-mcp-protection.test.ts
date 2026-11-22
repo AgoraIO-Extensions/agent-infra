@@ -12,7 +12,10 @@ vi.mock("node:fs", async (importOriginal) => ({
 	readFileSync: mocks.fs,
 	statSync: mocks.stat,
 }));
-vi.mock("./credential-holder-protection.js", () => ({
+vi.mock("./credential-holder-protection.js", async (importOriginal) => ({
+	isSessionLevelScopeV1: (
+		await importOriginal<typeof import("./credential-holder-protection.js")>()
+	).isSessionLevelScopeV1,
 	readProcessDumpableV1: mocks.dumpable,
 	credentialHolderSessionScopeV1: mocks.scope,
 }));
@@ -109,6 +112,7 @@ const STATUS =
 	"Uid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\nNoNewPrivs:\t1\nCapInh:\t00000000\nCapPrm:\t00000000\nCapEff:\t00000000\nCapAmb:\t00000000\n";
 const SCOPE = {
 	kind: "container-boundary",
+	agentId: "agent-1",
 	scope: "agent-1:session-1",
 } as const;
 
@@ -157,6 +161,36 @@ describe("non-dumpable choice without Yama", () => {
 
 	it.each([
 		["no verified Session scope", { scope: undefined }],
+		[
+			"an Agent-level container-boundary scope",
+			{
+				scope: {
+					kind: "container-boundary",
+					agentId: "agent-1",
+					scope: "agent-1",
+				},
+			},
+		],
+		[
+			"a scope of another Agent",
+			{
+				scope: {
+					kind: "container-boundary",
+					agentId: "agent-1",
+					scope: "agent-2:session-1",
+				},
+			},
+		],
+		[
+			"an empty Session part",
+			{
+				scope: {
+					kind: "container-boundary",
+					agentId: "agent-1",
+					scope: "agent-1:",
+				},
+			},
+		],
 		["a still-dumpable process", { dumpable: 1 }],
 		["an unreadable dumpable state", { dumpable: undefined }],
 		["fs.suid_dumpable=1", { suid: "1\n" }],
@@ -215,7 +249,13 @@ describe("original Execution Session", () => {
 				conversationId: "session-2",
 			}),
 		).toThrow("protection is unavailable");
-		nonDumpable({ scope: { kind: "container-boundary", scope: "agent-1" } });
+		nonDumpable({
+			scope: {
+				kind: "container-boundary",
+				agentId: "agent-1",
+				scope: "agent-1",
+			},
+		});
 		expect(() => assertStandardMcpOriginalSessionV1(original)).toThrow(
 			"protection is unavailable",
 		);

@@ -3,6 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { RuntimeHostError } from "@agent-infra/agent-runtime";
 import {
 	credentialHolderSessionScopeV1,
+	isSessionLevelScopeV1,
 	readProcessDumpableV1,
 } from "./credential-holder-protection.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
@@ -40,7 +41,13 @@ function nonDumpableProtects(status: string) {
 	const unchanged = (values: string[] | undefined) =>
 		values?.length === 4 && values.every((value) => value === values[0]);
 	if (
-		!credentialHolderSessionScopeV1() ||
+		// An Agent-level scope cannot admit this choice (Spec §13.5.4).
+		// `provisioning-init` keeps its prior admission; its Spec basis is a
+		// separate documentation change.
+		!(
+			credentialHolderSessionScopeV1()?.kind === "provisioning-init" ||
+			isSessionLevelScopeV1(credentialHolderSessionScopeV1())
+		) ||
 		readProcessDumpableV1() !== 0 ||
 		// Re-reading a changed credential would restore dumpable.
 		readFileSync("/proc/sys/fs/suid_dumpable", "utf8").trim() === "1" ||

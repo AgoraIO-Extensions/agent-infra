@@ -1,43 +1,21 @@
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const run = promisify(execFile);
-const target = new URL(
-	"./credential-holder-target.test-support.mjs",
-	import.meta.url,
-).pathname;
 const attacker = new URL(
 	"./credential-holder-attack.test-support.mjs",
 	import.meta.url,
 ).pathname;
 const denied = ["EPERM", "EACCES"];
-const children: ChildProcess[] = [];
 
-afterEach(() => {
-	for (const child of children.splice(0)) child.kill("SIGKILL");
-});
-
-async function startTarget(mode: "protect" | "plain") {
-	const child = spawn(process.execPath, [target, mode], {
-		stdio: ["ignore", "pipe", "ignore"],
-	});
-	children.push(child);
-	const line = await new Promise<string>((resolve, reject) => {
-		let text = "";
-		child.stdout.on("data", (chunk) => {
-			text += chunk;
-			if (text.includes("\n")) resolve(text);
-		});
-		child.once("exit", (code) => reject(new Error(`target exited ${code}`)));
-	});
-	const [, pid, dumpable] = line.trim().split(" ");
-	return { pid: Number(pid), dumpable: Number(dumpable) };
-}
-
-async function attack(pid: number) {
-	const { stdout } = await run(process.execPath, [attacker, String(pid)]);
-	return JSON.parse(stdout) as Record<string, string>;
+/** The attacker starts the target, so it is the target's parent. */
+async function attack(mode: "protect" | "plain") {
+	const { stdout } = await run(process.execPath, [attacker, mode]);
+	return JSON.parse(stdout) as {
+		dumpable: number;
+		report: Record<string, string>;
+	};
 }
 
 // The kernel's dumpable gate is Linux only; macOS has no equivalent procfs/prctl.
@@ -45,9 +23,8 @@ describe.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
 	"same-UID access to a credential holder",
 	() => {
 		it("kernel refuses every access to a non-dumpable process", async () => {
-			const holder = await startTarget("protect");
-			expect(holder.dumpable).toBe(0);
-			const result = await attack(holder.pid);
+			const { dumpable, report: result } = await attack("protect");
+			expect(dumpable).toBe(0);
 			expect(Object.keys(result).sort()).toEqual([
 				"pidfdGetfd",
 				"procEnviron",
@@ -62,11 +39,10 @@ describe.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
 		});
 
 		it("control: the same accesses are not all refused for a dumpable process", async () => {
-			const plain = await startTarget("plain");
-			expect(plain.dumpable).toBe(1);
-			const result = await attack(plain.pid);
-			// Yama may still refuse ATTACH-mode accesses; the READ-mode ones prove
-			// the refusal above comes from the dumpable setting.
+			const { dumpable, report: result } = await attack("plain");
+			expect(dumpable).toBe(1);
+			// The target is the attacker's child, so Yama 1 does not refuse these
+			// either: the refusal above comes from the dumpable setting.
 			expect(result.procEnviron).toBe("OK");
 			expect(result.procFdList).toBe("OK");
 		});

@@ -540,6 +540,7 @@ export async function assembleRuntimeHost(
 			: codexIsolationMode === "container-boundary"
 				? {
 						kind: "container-boundary",
+						agentId: required("AGENT_INFRA_RUNTIME_AGENT_ID"),
 						scope: required("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE"),
 					}
 				: undefined,

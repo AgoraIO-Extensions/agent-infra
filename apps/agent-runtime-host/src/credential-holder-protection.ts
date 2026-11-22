@@ -76,13 +76,14 @@ export function protectCredentialHolderProcessV1(): boolean {
 
 /**
  * Worker-issued, Host-verified proof that this Pod belongs to one Session.
- * - `container-boundary`: the HMAC-attested `agentId:sessionId` scope.
+ * - `container-boundary`: the HMAC-attested scope. Only `agentId:sessionId` is
+ *   Session-level; an Agent-level scope (the bare `agentId`) never is.
  * - `session-executor`: the verified Session binding.
  * - `provisioning-init`: the initializer runs before any tool process exists in
  *   its PID namespace; it has no Session of its own to verify.
  */
 export type CredentialHolderSessionScopeV1 =
-	| { kind: "container-boundary"; scope: string }
+	| { kind: "container-boundary"; agentId: string; scope: string }
 	| {
 			kind: "session-executor";
 			agentId: string;
@@ -101,4 +102,16 @@ export function establishCredentialHolderSessionScopeV1(
 
 export function credentialHolderSessionScopeV1() {
 	return sessionScope;
+}
+
+/** True only for a scope that names one Session of the Pod's own Agent. */
+export function isSessionLevelScopeV1(
+	scope: CredentialHolderSessionScopeV1 | undefined,
+) {
+	if (scope?.kind === "session-executor") return true;
+	return (
+		scope?.kind === "container-boundary" &&
+		scope.scope.length > scope.agentId.length + 1 &&
+		scope.scope.startsWith(`${scope.agentId}:`)
+	);
 }

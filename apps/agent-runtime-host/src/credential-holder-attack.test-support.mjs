@@ -1,13 +1,32 @@
-// Same-UID attacker for credential-holder-attack.test.ts. It only reports the
+// Same-UID attacker for credential-holder-attack.test.ts. It starts the target
+// itself, so the target is its descendant and Yama ptrace_scope 1 would permit
+// ATTACH: any refusal then comes from the dumpable state. It only reports the
 // errno of each access attempt. It never reads or prints target memory,
 // environment or file contents.
 
+import { spawn } from "node:child_process";
 import { closeSync, openSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants } from "node:os";
 
 const koffi = createRequire(import.meta.url)("koffi");
-const pid = Number(process.argv[2]);
+const targetPath = new URL(
+	"./credential-holder-target.test-support.mjs",
+	import.meta.url,
+).pathname;
+const child = spawn(process.execPath, [targetPath, process.argv[2]], {
+	stdio: ["ignore", "pipe", "ignore"],
+});
+const ready = await new Promise((resolve, reject) => {
+	let text = "";
+	child.stdout.on("data", (chunk) => {
+		text += chunk;
+		if (text.includes("\n")) resolve(text);
+	});
+	child.once("exit", (code) => reject(new Error(`target exited ${code}`)));
+});
+const [, targetPid, dumpable] = ready.trim().split(" ");
+const pid = Number(targetPid);
 const names = new Map(
 	Object.entries(constants.errno).map(([name, value]) => [value, name]),
 );
@@ -16,8 +35,9 @@ const ptrace = libc.func(
 	"long ptrace(int request, int pid, void *addr, void *data)",
 );
 const syscall = libc.func("long syscall(long number, ...)");
-const local = koffi.struct("iovec_local", { base: "void *", len: "size_t" });
-const remote = koffi.struct("iovec_remote", {
+// Registered by name for the process_vm_readv signature below.
+koffi.struct("iovec_local", { base: "void *", len: "size_t" });
+koffi.struct("iovec_remote", {
 	base: "uintptr_t",
 	len: "size_t",
 });
@@ -79,4 +99,7 @@ const report = {
 		return code;
 	}),
 };
-process.stdout.write(`${JSON.stringify(report)}\n`);
+child.kill("SIGKILL");
+process.stdout.write(
+	`${JSON.stringify({ dumpable: Number(dumpable), report })}\n`,
+);
