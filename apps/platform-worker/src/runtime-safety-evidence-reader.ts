@@ -118,10 +118,20 @@ export type RuntimeSafetyEvidenceDrainOutcomeV1 = {
 };
 
 export interface RuntimeSafetyEvidenceReaderStoreV1 {
+	/**
+	 * Stores the record only if the committed original binding still matches it in the same
+	 * write transaction (#4358 S1); otherwise it reports the rejection.
+	 */
 	recordOnce(
 		record: RuntimePersistedSafetyEvidenceV1,
 	): Promise<
-		"recorded" | "duplicate" | "challenge_replay" | "evidence_conflict"
+		| "recorded"
+		| "duplicate"
+		| "challenge_replay"
+		| "evidence_conflict"
+		| "revoked"
+		| "stale_binding"
+		| "scope_mismatch"
 	>;
 	readExecutionOperationAttempts(input: {
 		readonly conversationId: string;

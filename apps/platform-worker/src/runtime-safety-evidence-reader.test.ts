@@ -204,19 +204,31 @@ function store() {
 		fail: (value: boolean) => {
 			failing = value;
 		},
-		recordOnce: vi.fn(async (value: { binding: Record<string, any> }) => {
-			if (failing) throw new Error("store down");
-			const parsed = RuntimePersistedSafetyEvidenceV1Schema.parse(value);
-			const text = JSON.stringify(parsed);
-			const existing = records.get(parsed.binding.evidenceId);
-			if (existing)
-				return existing === text ? "duplicate" : "evidence_conflict";
-			if (challenges.has(parsed.binding.challengeRef))
-				return "challenge_replay";
-			records.set(parsed.binding.evidenceId, text);
-			challenges.add(parsed.binding.challengeRef);
-			return "recorded";
-		}),
+		recordOnce: vi.fn(
+			async (value: {
+				binding: Record<string, any>;
+			}): Promise<
+				| "recorded"
+				| "duplicate"
+				| "challenge_replay"
+				| "evidence_conflict"
+				| "revoked"
+				| "stale_binding"
+				| "scope_mismatch"
+			> => {
+				if (failing) throw new Error("store down");
+				const parsed = RuntimePersistedSafetyEvidenceV1Schema.parse(value);
+				const text = JSON.stringify(parsed);
+				const existing = records.get(parsed.binding.evidenceId);
+				if (existing)
+					return existing === text ? "duplicate" : "evidence_conflict";
+				if (challenges.has(parsed.binding.challengeRef))
+					return "challenge_replay";
+				records.set(parsed.binding.evidenceId, text);
+				challenges.add(parsed.binding.challengeRef);
+				return "recorded";
+			},
+		),
 		readExecutionOperationAttempts: vi.fn(async () => [
 			{ ref: "operation-1", attemptRef: "attempt-1" },
 		]),
@@ -408,6 +420,26 @@ describe("Worker evidence reader (Spec §18.5.1, HLD §8.5.6 step 4)", () => {
 			rejected: 1,
 		});
 		expect(s.records.size).toBe(1);
+		expect(h.pending()).toEqual([]);
+	});
+
+	it("acknowledges a record the store refused after the scope was read (#4358 S1)", async () => {
+		const h = host([record()]);
+		const s = store();
+		s.recordOnce.mockResolvedValueOnce("stale_binding");
+		const reader = createRuntimeSafetyEvidenceReaderV1({
+			window,
+			store: s,
+			fetch: h.fetcher,
+			now,
+		});
+		expect(await reader.drain(drain)).toEqual({
+			status: "drained",
+			recorded: 0,
+			duplicates: 0,
+			rejected: 1,
+		});
+		expect(s.records.size).toBe(0);
 		expect(h.pending()).toEqual([]);
 	});
 

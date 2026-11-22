@@ -222,15 +222,22 @@ export function admitIsolationEvidenceV1(input: {
 /**
  * Append-only persistence (§18.5.1 载体与版本). `duplicate` is the same record delivered again;
  * `challenge_replay` is another record for an already used challenge; `evidence_conflict` is a
- * different record under an existing evidence ID. Only `recorded` stores anything.
+ * different record under an existing evidence ID; `revoked`/`stale_binding`/`scope_mismatch`
+ * mean the store re-checked the committed original binding in its own write transaction and
+ * found it changed since the scope was read. Only `recorded` stores anything.
  */
 export interface RuntimeSafetyEvidenceStoreV1<
 	TRecord extends RuntimeIsolationEvidenceAdmissibleV1,
 > {
-	recordOnce(
-		record: TRecord,
-	): Promise<
-		"recorded" | "duplicate" | "challenge_replay" | "evidence_conflict"
+	recordOnce(record: TRecord): Promise<
+		| "recorded"
+		| "duplicate"
+		| "challenge_replay"
+		| "evidence_conflict"
+		/** The original binding changed after the scope was read (#4358 S1). */
+		| "revoked"
+		| "stale_binding"
+		| "scope_mismatch"
 	>;
 }
 

@@ -124,6 +124,13 @@ interface RuntimeHostAppOptions {
 		import("@agent-infra/agent-runtime").RuntimeSafetyEvidenceLogV1,
 		"read" | "acknowledge"
 	>;
+	/**
+	 * #4358 I3: deployment-enabled read-only original admission check; absent
+	 * by default, in which case its route does not exist.
+	 */
+	originalAdmissionCheck?: {
+		check(input: unknown): Promise<unknown>;
+	};
 	/** Deployment-owned native metadata proof verification and Driver read. */
 	nativeMetadataRead?: (
 		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
@@ -712,6 +719,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			await options.host.readEventsV4(request, await verifyV2(request.grant)),
 		);
 	});
+	if (options.originalAdmissionCheck) {
+		const admission = options.originalAdmissionCheck;
+		app.post(
+			"/internal/runtime/v1/evidence/original-admission/check",
+			async (context) =>
+				context.json(
+					await admission.check(
+						await context.req.raw.json().catch(() => undefined),
+					),
+				),
+		);
+	}
 	app.post("/internal/runtime/v4/events/ack", async (context) => {
 		const request = await parseBody(
 			context.req.raw,

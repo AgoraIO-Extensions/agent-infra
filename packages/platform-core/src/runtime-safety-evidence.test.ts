@@ -350,6 +350,29 @@ describe("evidence log ingestion (Spec §18.5.1 载体与版本)", () => {
 		expect([...stored.keys()]).toEqual(["evidence-1"]);
 	});
 
+	it("acknowledges a record the store refused because the original binding changed in between (#4358 S1)", async () => {
+		for (const reason of [
+			"revoked",
+			"stale_binding",
+			"scope_mismatch",
+		] as const) {
+			const result = await ingestRuntimeSafetyEvidenceBatchV1({
+				entries: [{ cursor: "c1", record: record() }],
+				parse,
+				window,
+				resolveScope: async () => scope(),
+				store: { recordOnce: async () => reason },
+				now: () => now,
+			});
+			expect(result).toEqual({
+				ackCursor: "c1",
+				recorded: 0,
+				duplicates: 0,
+				rejected: [{ cursor: "c1", reason }],
+			});
+		}
+	});
+
 	it("acknowledges a challenge replay or a conflicting record under an existing ID without storing it", async () => {
 		const result = await ingestRuntimeSafetyEvidenceBatchV1({
 			entries: [
