@@ -138,7 +138,7 @@ export interface OperationalEvent {
 	/**
 	 * 响应里的协议错误码（如 `DEPENDENCY_UNAVAILABLE`），用于 `http` 阶段；`runtime` 阶段
 	 * 记录 Runtime Host 返回的稳定错误码（#3276）；`task_dispatch` 阶段记录已排期重试的
-	 * 原因码（#3960）。只记码，不是错误正文。
+	 * 原因码（#3960）；`result_persist` 只接收固定的保存失败原因。只记码，不是错误正文。
 	 */
 	readonly protocolCode?: string;
 	/** Bounded server-side failure stage, never a free-form error message. */
@@ -372,6 +372,15 @@ const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const operationIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const protocolCodePattern = /^[A-Z][A-Z0-9_]{2,63}$/;
+// #4377: a format check alone must not admit exception text as a persistence reason.
+const persistenceProtocolCodes = new Set<string>([
+	"EVENT_OPERATION_SUCCESSOR_INVALID",
+	"EVENT_DATABASE_CONSTRAINT",
+	"EVENT_DATABASE_DATA_INVALID",
+	"EVENT_DATABASE_TRANSACTION",
+	"EVENT_DATABASE_UNAVAILABLE",
+	"EVENT_PERSISTENCE_UNKNOWN",
+]);
 
 function safeId(value: unknown) {
 	return typeof value === "string" && identifier.test(value)
@@ -810,7 +819,7 @@ export function startObservability(options: ObservabilityOptions) {
 					...(code && codes.has(code) ? { code } : {}),
 					// 状态码只对 http 阶段有意义；协议错误码对 http、runtime（Runtime Host 返回的
 					// 稳定错误码，#3276）与 task_dispatch（已排期重试的原因码，#3960）阶段有意义。
-					// 两者都必须是有界的值，其余一律丢弃。
+					// result_persist 只接收封闭白名单；其他阶段仍沿用原过滤。
 					...(stage === "http" &&
 					Number.isInteger(status) &&
 					(status as number) >= 100 &&
@@ -819,7 +828,9 @@ export function startObservability(options: ObservabilityOptions) {
 						: {}),
 					...((stage === "http" ||
 						stage === "runtime" ||
-						stage === "task_dispatch") &&
+						stage === "task_dispatch" ||
+						(stage === "result_persist" &&
+							persistenceProtocolCodes.has(protocolCode ?? ""))) &&
 					typeof protocolCode === "string" &&
 					protocolCodePattern.test(protocolCode)
 						? { protocolCode }

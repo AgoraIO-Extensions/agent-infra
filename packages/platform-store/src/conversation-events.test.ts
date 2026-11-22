@@ -13,8 +13,8 @@ import {
 import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-
 import { GenericAcpRuntimeDriver } from "../../agent-runtime/src/acp-runtime-driver.ts";
+import { PiRuntimeDriver } from "../../agent-runtime/src/pi-runtime-driver.ts";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import {
 	normalizedEvent,
@@ -490,6 +490,130 @@ async function customDefaultOperationFixture() {
 }
 
 describe("PostgreSQL actual operation facts and necessary audits", () => {
+	it.each(["result-file", "result-file-negative"])(
+		"persists the actual Pi %s tool lifecycle without losing the original start (#4377)",
+		async (mode) => {
+			const fixture = await operationFixture();
+			const path = await mkdtemp(join(tmpdir(), "pi-event-store-"));
+			const driver = await PiRuntimeDriver.open({
+				path,
+				configVersion: "revision-1",
+				defaultModelOptionId: "option-1",
+				defaultReasoningLevel: "medium",
+				modelOptions: [
+					{
+						modelOptionId: "option-1",
+						nativeModelId: "configured/model",
+						reasoningLevels: ["medium"],
+					},
+				],
+				launch: async () => ({
+					command: process.execPath,
+					args: [
+						fileURLToPath(
+							new URL(
+								"../../agent-runtime/src/pi-peer.test-support.mjs",
+								import.meta.url,
+							),
+						),
+					],
+					env: { PI_PEER_MODE: mode },
+				}),
+			});
+			try {
+				const [version] = await client`show server_version`;
+				expect(version?.server_version).toMatch(/^16\./);
+				const accepted = await driver.execute({
+					schemaVersion: 2,
+					kind: "submit-turn",
+					agentId: "agent_event",
+					conversationId: fixture.conversationId,
+					sessionGeneration: 3,
+					executionId: fixture.executionId,
+					turnId: "turn_event",
+					operationId: "pi-original-operation",
+					input: { text: "synthetic prompt", attachments: [] },
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "option-1",
+						reasoningLevel: "medium",
+					},
+				});
+				await vi.waitFor(
+					async () =>
+						expect(
+							await driver.getStatus(
+								accepted.nativeSessionRef,
+								fixture.executionId,
+							),
+						).toBe("completed"),
+					{ timeout: 10_000 },
+				);
+				const runtimeEvents = await driver.replayEvents(
+					accepted.nativeSessionRef,
+					fixture.executionId,
+				);
+				let terminalToolCount = 0;
+				for (const [index, runtimeEvent] of runtimeEvents.entries()) {
+					const event = normalizedEvent(
+						runtimeEvent.type === "operation"
+							? {
+									...runtimeEvent,
+									payload: parseConversationOperationFactV2(
+										runtimeEvent.payload,
+									),
+								}
+							: runtimeEvent,
+					);
+					const transition = transitionFromEvent(event);
+					const command = {
+						...eventInput(
+							fixture.conversationId,
+							fixture.executionId,
+							runtimeEvent.cursor,
+						),
+						runtimeCursor: runtimeEvent.cursor,
+						occurredAt: runtimeEvent.occurredAt,
+						event,
+						...(transition ? { transition } : {}),
+					};
+					await expect(
+						fixture.events.persist(command).catch(() => {
+							throw new Error(
+								`PI_EVENT_PERSIST_FAILED:${index + 1}:${event.type}${event.type === "execution.operation" ? `:${event.fact.kind}:${event.fact.phase}` : ""}`,
+							);
+						}),
+						`${index + 1}:${event.type}${event.type === "execution.operation" ? `:${event.fact.kind}:${event.fact.phase}` : ""}`,
+					).resolves.toMatchObject({
+						outcome: "accepted",
+						event: { sequence: index + 1 },
+					});
+					await expect(fixture.events.persist(command)).resolves.toMatchObject({
+						outcome: "replayed",
+						event: { sequence: index + 1 },
+					});
+					if (
+						event.type === "execution.operation" &&
+						event.fact.kind === "tool" &&
+						["completed", "failed"].includes(event.fact.phase)
+					)
+						terminalToolCount++;
+				}
+				expect(terminalToolCount).toBeGreaterThan(0);
+				const [execution] =
+					await client`select status, last_runtime_cursor from platform.conversation_executions where execution_id = ${fixture.executionId}`;
+				expect(execution).toEqual({
+					status: "completed",
+					last_runtime_cursor: runtimeEvents.at(-1)?.cursor,
+				});
+			} finally {
+				await driver.close();
+				await fixture.close();
+				await rm(path, { recursive: true, force: true });
+			}
+		},
+		15_000,
+	);
 	it("persists a custom Runtime default-model fact without inventing Platform selection", async () => {
 		const fixture = await customDefaultOperationFixture();
 		const path = await mkdtemp(join(tmpdir(), "custom-acp-store-"));
@@ -2363,3 +2487,44 @@ it("persists result.file V2 only when its workspace reference matches the file r
 		await runtime.close();
 	}
 });
+
+it.each([
+	["23514", "EVENT_DATABASE_CONSTRAINT"],
+	["22001", "EVENT_DATABASE_DATA_INVALID"],
+	["40001", "EVENT_DATABASE_TRANSACTION"],
+	["08006", "EVENT_DATABASE_UNAVAILABLE"],
+	["P0001", undefined],
+])(
+	"classifies PostgreSQL %s without retaining a constraint, query or message (#4377)",
+	async (sqlState, reason) => {
+		const ids = await seedConversation();
+		const adapter = openEvents(`${ids.executionId}-failure`);
+		try {
+			await client.unsafe(
+				`create function platform.event_diagnostic_failure() returns trigger language plpgsql as $$ begin raise exception using errcode = '${sqlState}', constraint = 'PRIVATE_CONSTRAINT_SENTINEL', message = 'PRIVATE_MESSAGE_SENTINEL', detail = 'PRIVATE_PARAMETER_SENTINEL'; end $$`,
+			);
+			await client.unsafe(
+				"create trigger event_diagnostic_failure before update on platform.conversation_executions for each row execute function platform.event_diagnostic_failure()",
+			);
+			const error = await adapter.events
+				.persist(eventInput(ids.conversationId, ids.executionId))
+				.catch((error: unknown) => error);
+			expect(error).toMatchObject({
+				code: "unavailable",
+				persistenceReason: reason,
+			});
+			expect(JSON.stringify(error)).not.toContain("SENTINEL");
+			const [row] =
+				await client`select last_event_sequence::int as sequence, last_runtime_cursor from platform.conversation_executions where execution_id = ${ids.executionId}`;
+			expect(row).toMatchObject({ sequence: 0, last_runtime_cursor: null });
+		} finally {
+			await client.unsafe(
+				"drop trigger if exists event_diagnostic_failure on platform.conversation_executions",
+			);
+			await client.unsafe(
+				"drop function if exists platform.event_diagnostic_failure()",
+			);
+			await adapter.close();
+		}
+	},
+);

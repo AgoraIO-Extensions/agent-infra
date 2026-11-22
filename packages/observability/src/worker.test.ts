@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import { Writable } from "node:stream";
 import {
 	type ConversationEventCommandV1,
 	type ConversationEventDecisionV1,
@@ -7,7 +9,11 @@ import {
 	type ConversationOperationFactV2,
 } from "@agent-infra/platform-core";
 import { expect, it } from "vitest";
-import type { ModelTokenUsage, OperationalEvent } from "./index.js";
+import {
+	type ModelTokenUsage,
+	type OperationalEvent,
+	startObservability,
+} from "./index.js";
 import { createObservedConversationEvents } from "./worker.js";
 
 const command: ConversationEventCommandV1 = {
@@ -180,6 +186,7 @@ it.each(["commit failure", "decision mismatch"])(
 				stage: "result_persist",
 				outcome: "failed",
 				code: "PERSISTENCE_UNAVAILABLE",
+				protocolCode: "EVENT_PERSISTENCE_UNKNOWN",
 				operationRef: "drain.persist",
 				durationMs: expect.any(Number),
 				conversationId: command.conversationId,
@@ -694,6 +701,7 @@ it("does not publish a computed tool result before Core validates the committed 
 			stage: "result_persist",
 			outcome: "failed",
 			code: "PERSISTENCE_UNAVAILABLE",
+			protocolCode: "EVENT_PERSISTENCE_UNKNOWN",
 			operationRef: "drain.persist",
 			durationMs: expect.any(Number),
 			conversationId: command.conversationId,
@@ -768,4 +776,144 @@ it("records one bounded batch observation without body or cursor (#3378)", async
 		code: "PERSISTENCE_UNAVAILABLE",
 		operationRef: "drain.persist_batch",
 	});
+});
+
+// #4377: diagnostics keep the failure reason, never the original event or exception.
+it("reports a rejected operation successor with a fixed persistence reason (#4377)", async () => {
+	const fixture = transactionFixture();
+	const observations: OperationalEvent[] = [];
+	const events = createObservedConversationEvents({
+		transaction: fixture.transaction,
+		telemetry: { record: (event) => observations.push(event) },
+	});
+	const fact: ConversationOperationFactV2 = {
+		kind: "tool",
+		operationRef: "tool-original",
+		attemptRef: "attempt-original",
+		toolId: "pi.read",
+		phase: "intent",
+	};
+	const next = (phase: "intent" | "started" | "completed", key: string) => ({
+		...command,
+		adapterEventKey: key,
+		runtimeCursor: key,
+		event: {
+			type: "execution.operation" as const,
+			schemaVersion: 2 as const,
+			fact: {
+				...fact,
+				phase,
+				...(phase === "started" ? { startedAt: command.occurredAt } : {}),
+				...(phase === "completed"
+					? { finishedAt: command.occurredAt, durationMs: 0 }
+					: {}),
+			},
+		},
+	});
+	await events.persist(next("intent", "tool-intent"));
+	await events.persist(next("started", "tool-started"));
+	await expect(
+		events.persist(next("completed", "tool-end")),
+	).rejects.toMatchObject({ code: "unavailable" });
+	expect(observations.at(-1)).toMatchObject({
+		stage: "result_persist",
+		outcome: "failed",
+		code: "PERSISTENCE_UNAVAILABLE",
+		protocolCode: "EVENT_OPERATION_SUCCESSOR_INVALID",
+		operationRef: "drain.persist",
+		executionId: command.executionId,
+	});
+	expect(JSON.stringify(observations)).not.toContain("SENTINEL");
+	expect(fixture.snapshot().events).toHaveLength(2);
+});
+
+it("exports only fixed persistence reasons to real Pino and OTLP (#4377)", async () => {
+	const exported: Buffer[] = [];
+	const logs: string[] = [];
+	const collector = createServer(async (request, response) => {
+		const chunks: Buffer[] = [];
+		for await (const chunk of request) chunks.push(Buffer.from(chunk));
+		exported.push(Buffer.concat(chunks));
+		response.end();
+	});
+	await new Promise<void>((resolve) =>
+		collector.listen(0, "127.0.0.1", resolve),
+	);
+	const address = collector.address();
+	if (!address || typeof address === "string")
+		throw new Error("Missing local collector");
+	const telemetry = startObservability({
+		service: "platform-worker",
+		otlpEndpoint: `http://127.0.0.1:${address.port}`,
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				logs.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	const canaries = [
+		"PRIVATE_MESSAGE",
+		"PRIVATE_QUERY",
+		"PRIVATE_PARAMETERS",
+		"PRIVATE_CONSTRAINT",
+		"PRIVATE_KEY",
+		"PRIVATE_TOKEN",
+		"PRIVATE_PATH",
+		"PRIVATE_STDOUT",
+		"PRIVATE_REASON",
+	];
+	const reasons = [
+		"EVENT_OPERATION_SUCCESSOR_INVALID",
+		"EVENT_DATABASE_CONSTRAINT",
+		"EVENT_DATABASE_DATA_INVALID",
+		"EVENT_DATABASE_TRANSACTION",
+		"EVENT_DATABASE_UNAVAILABLE",
+	] as const;
+	try {
+		for (const reason of [...reasons, undefined]) {
+			const events = createObservedConversationEvents({
+				transaction: {
+					async persistEvent() {
+						const error = new ConversationEventError("unavailable", reason);
+						Object.assign(error, {
+							message: canaries[0],
+							cause: canaries,
+							parameters: canaries,
+							...(reason === undefined
+								? { persistenceReason: canaries[8] }
+								: {}),
+						});
+						throw error;
+					},
+				},
+				telemetry,
+			});
+			await expect(events.persist(command)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+		}
+		telemetry.record({
+			stage: "result_persist",
+			outcome: "failed",
+			code: "PERSISTENCE_UNAVAILABLE",
+			protocolCode: "PRIVATE_REASON",
+		});
+	} finally {
+		await telemetry.close();
+		await new Promise<void>((resolve) => collector.close(() => resolve()));
+	}
+	const stdout = logs.join("");
+	const otlp = Buffer.concat(exported).toString();
+	for (const output of [stdout, otlp]) {
+		for (const reason of [...reasons, "EVENT_PERSISTENCE_UNKNOWN"])
+			expect(output).toContain(reason);
+		expect(output).toContain(command.executionId);
+		for (const canary of [
+			...canaries,
+			"PRIVATE_BODY_SENTINEL",
+			"PRIVATE_CURSOR_SENTINEL",
+		])
+			expect(output).not.toContain(canary);
+	}
 });
