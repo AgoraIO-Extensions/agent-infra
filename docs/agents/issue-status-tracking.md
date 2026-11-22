@@ -32,7 +32,7 @@
 | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) | 原网络调查范围仅为只读筹备，未交接共享 CNI 写权 | 需要受支持网络策略执行环境及云侧 addon 证据，再运行 allow/deny/recovery；不原地切换共享 CNI。 |
 | [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) | ACK 资源 owner，原生依赖 #3295 | 网络外的 StorageClass/PVC、Registry、RBAC、DNS/TLS 和入口也需当前回读；不以已存在集群代替资源验收。 |
 | [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) | ready-for-human；协调者持有文件验收筹备 | 上次 FileLimits 读取为 404，需重新确认批准声明及固定环境，再验证 Web/企微文件矩阵；不接管 Skill Harness。 |
-| [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) | 原 owner 已释放执行范围，协调者持有恢复验收筹备 | #3734 诊断代码已合入；仍需原 retained Conversation/Session/PVC 与当前部署 tuple，不能用新会话代签旧恢复。 |
+| [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) | 原 owner 已释放执行范围，协调者持有恢复验收筹备 | #3734 诊断代码已合入；仍需原 retained Conversation/Session/PVC，不能用新会话代签旧恢复；验收版本绑定遵循[工作流 Spec §10.2](../architecture/SPEC-ai-native-development-workflow.md#102-现场-ac-签收与版本回归)。 |
 | [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) | 协调者持有输入核查，旧执行租约已释放 | 缺获准企微主体、官方扫码窗口和机器人计数/标识读取权限；不以 mock、旧 Cookie 或历史扫码签收。 |
 | [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) | ready-for-human；协调者仅持有验收筹备 | 待正式 allowedModels/配置及真实 Web、企微 reasoning 矩阵；不改共享 catalog/Secret，不以其他 Runtime 的 thinking 替代。 |
 | [#2858](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858) | 协调者持有管理 Web 验收筹备 | 登录和授权读取的历史结果保留，模板 readiness/revision 需按当前部署重读，再验证申请、修改、驳回、重提、撤回及跨主体矩阵。 |

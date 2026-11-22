@@ -270,6 +270,7 @@ Workload 就绪分别记录，只有真实业务操作完成才能证明该用�
 此入口不扩大 Token `/commands` 的能力或认证范围。
 
 `99971f2222ed23f30418255a03838023cb154388`、`a17531d4c937575de272c785b70bc040c7d16345`
-的成功回执保留为历史，不替代本轮目标源码的验收。
+的成功回执保留为历史；后续现场签收和版本回归遵循
+[工作流 Spec §10.2](../architecture/SPEC-ai-native-development-workflow.md#102-现场-ac-签收与版本回归)。
 [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) 已按三条 retained 恢复路径
 物理不可恢复的处置结论关闭；原失败与不可恢复证据保留，不把新会话成功记为原会话恢复。
