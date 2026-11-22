@@ -4,6 +4,7 @@ import {
 	type RuntimeBrowserCapabilityAssemblyV1,
 	type RuntimeHost,
 	RuntimeHostError,
+	runtimeControlRejectionReasonV1,
 	runtimeHostErrorDiagnostic,
 } from "@agent-infra/agent-runtime";
 import {
@@ -39,6 +40,7 @@ import {
 	RuntimeStatusRequestV2Schema,
 	RuntimeStatusRequestV3Schema,
 	RuntimeStopRequestV1Schema,
+	type RuntimeStopRequestV3,
 	RuntimeStopRequestV3Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
@@ -731,9 +733,29 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			),
 		);
 	});
-	v3Route("stops", RuntimeStopRequestV3Schema, (request, verification) =>
-		options.host.stopV3(request, verification),
-	);
+	// #4358 I2: the stop handler entry is the `control_received` instant; an
+	// unparsable or unverifiable request is recorded only as a fixed rejection.
+	app.post("/internal/runtime/v3/stops", async (context) => {
+		const observer = options.host.controlObserver;
+		const received = observer?.mark();
+		let request: RuntimeStopRequestV3;
+		let verification: VerifiedRuntimeExecutionGrantV2;
+		try {
+			request = await parseBody(context.req.raw, RuntimeStopRequestV3Schema);
+			verification = await verifyV2(request.grant);
+		} catch (error) {
+			observer?.emit({
+				stage: "control_received",
+				outcome: "rejected",
+				reason: runtimeControlRejectionReasonV1(error),
+				...(received ? { mark: received, atMark: true } : {}),
+			});
+			throw error;
+		}
+		return context.json(
+			await options.host.stopV3(request, verification, received),
+		);
+	});
 	v3Route(
 		"status",
 		RuntimeStatusRequestV3Schema,
