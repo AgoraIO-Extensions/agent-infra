@@ -16,6 +16,7 @@ vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: () => {
 		if (faults.lost) throw new Error("private-protection-diagnostic");
 	},
+	assertStandardMcpOriginalSessionV1: () => {},
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const fs = await importOriginal<typeof import("node:fs/promises")>();

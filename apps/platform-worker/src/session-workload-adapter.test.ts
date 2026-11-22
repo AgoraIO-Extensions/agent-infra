@@ -52,6 +52,7 @@ import { provisionRuntimeOAuthFiles } from "../../agent-runtime-host/src/runtime
 
 vi.mock("../../agent-runtime-host/src/standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: () => undefined,
+	assertStandardMcpOriginalSessionV1: () => {},
 }));
 
 import {

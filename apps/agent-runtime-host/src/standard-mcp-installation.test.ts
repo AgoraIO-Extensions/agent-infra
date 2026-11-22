@@ -39,6 +39,7 @@ const faults = vi.hoisted(() => ({
 }));
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: faults.protection,
+	assertStandardMcpOriginalSessionV1: vi.fn(),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const fs = await importOriginal<typeof import("node:fs/promises")>();
