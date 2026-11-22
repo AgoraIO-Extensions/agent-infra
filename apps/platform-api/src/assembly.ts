@@ -80,6 +80,7 @@ import {
 	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
 	type PostgresPlatformUserDisablesV1,
+	PostgresRuntimeSafetyEvidenceStoreV1,
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresSkillHubAgentBindingAdmissionV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -763,6 +764,11 @@ export function assemblePlatformApi(
 				? { readRequestedModelDisplayName: input.readRequestedModelDisplayName }
 				: {}),
 		});
+	// Spec §18.5.1: read side of Worker-validated Runtime safety evidence. It only reads rows
+	// the Worker appended; without an enabled acceptance window there are none.
+	const runtimeSafetyEvidence = new PostgresRuntimeSafetyEvidenceStoreV1({
+		databaseUrl: input.databaseUrl,
+	});
 	const conversationQuery = new PostgresConversationQueryV1({
 		evaluationCurrent: evaluationTaskAuthority
 			? evaluationTaskAuthority.conversationCurrent.bind(
@@ -1837,6 +1843,7 @@ export function assemblePlatformApi(
 					},
 				),
 			query: conversationQuery,
+			runtimeEvidence: runtimeSafetyEvidence,
 			eventWake: conversationEventWake,
 			recent: createRecentPersonalConversationsUseCaseV1({
 				query: conversationQuery,
@@ -1942,6 +1949,7 @@ export function assemblePlatformApi(
 		configurationQuery,
 		conversationTransaction,
 		conversationQuery,
+		runtimeSafetyEvidence,
 		conversationWakeups,
 		auditQuery,
 		scopedAuditQuery,

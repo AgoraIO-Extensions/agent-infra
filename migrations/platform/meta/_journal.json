@@ -652,6 +652,13 @@
       "when": 1795228865475,
       "tag": "0096_connection_principal_pin_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1795299591558,
+      "tag": "0097_runtime_safety_evidence",
+      "breakpoints": true
     }
   ]
 }

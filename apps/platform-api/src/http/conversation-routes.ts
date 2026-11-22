@@ -31,6 +31,10 @@ import {
 	WithdrawCommandRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
+	projectIsolationEvidenceForPrincipalV1,
+	type RuntimePersistedSafetyEvidenceV1,
+} from "@agent-infra/contracts/runtime";
+import {
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionAuthorizationPortV1,
 	ConversationExecutionError,
@@ -43,6 +47,8 @@ import {
 	projectConversationMessagesV1,
 	RecentPersonalConversationsError,
 	type RecentPersonalConversationsUseCaseV1,
+	type RuntimeSafetyEvidenceReadAuditV1,
+	runtimeSafetyEvidenceReadAuditV1,
 } from "@agent-infra/platform-core";
 import type {
 	ConversationExecutionDetailV1,
@@ -187,6 +193,19 @@ export interface ConversationRoutesDependencies {
 	/** Deployment-owned Browser command bridge; the API remains the identity authority. */
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly query: ConversationQuery;
+	/**
+	 * Spec §18.5.1: Worker-validated Runtime safety evidence of an Execution. Absent while the
+	 * deployment has not enabled the reader; the route then answers like an invisible record.
+	 */
+	readonly runtimeEvidence?: {
+		read(input: {
+			readonly conversationId: string;
+			readonly executionId: string;
+			readonly evidenceId: string;
+		}): Promise<RuntimePersistedSafetyEvidenceV1 | undefined>;
+		/** Necessary persistent audit (§18.3); a failure means no 200 and no plain 404. */
+		recordReadAudit(event: RuntimeSafetyEvidenceReadAuditV1): Promise<void>;
+	};
 	/** Idle reauthorization interval, 1–30,000 ms; default 1,000 ms. */
 	readonly streamPollIntervalMs?: number;
 	/** Commit wakeups for open streams (#1561); without it streams only poll. */
@@ -1709,6 +1728,124 @@ export function registerConversationRoutes(
 					);
 				}),
 		);
+
+	// Spec §18.5.1/§18.5.2: the original subject's projection of one isolation observation.
+	// Read permission is the Execution's current read permission, confirmed again after the
+	// evidence read and before responding; a known evidence reference grants nothing. Every
+	// answer is preceded by its necessary persistent audit (§18.3); none is sent without it.
+	app.get(
+		"/api/v2/conversations/:conversationId/executions/:executionId/runtime-evidence/:evidenceRef",
+		(context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const evidence = dependencies.runtimeEvidence;
+				if (!evidence) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				const conversationId = context.req.param("conversationId");
+				const executionId = context.req.param("executionId");
+				const evidenceRef = context.req.param("evidenceRef");
+				const principal = { kind: "user" as const, id: identity.userId };
+				// One audit per request; an audit failure is never followed by a second record.
+				let audited = false;
+				const audit = async (
+					event: Parameters<typeof runtimeSafetyEvidenceReadAuditV1>[0],
+				) => {
+					audited = true;
+					try {
+						await evidence.recordReadAudit(
+							runtimeSafetyEvidenceReadAuditV1(event),
+						);
+					} catch {
+						fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+					}
+				};
+				const common = {
+					traceId: metadata.traceId,
+					requestId: metadata.requestId,
+					principal,
+				};
+				const reject = async (): Promise<never> => {
+					await audit({ ...common, outcome: "rejected" });
+					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				};
+				const readable = async () => {
+					await effectiveConversation(
+						dependencies.commands(identity),
+						conversationId,
+						metadata.traceId,
+					);
+					return query(
+						() =>
+							dependencies.query.getExecution(
+								scope(identity),
+								conversationId,
+								executionId,
+							),
+						metadata.traceId,
+					);
+				};
+				const failedOutcome = (error: unknown) =>
+					error instanceof HttpProtocolError &&
+					error.body.code !== "DEPENDENCY_UNAVAILABLE"
+						? ("rejected" as const)
+						: ("failed" as const);
+				let record: RuntimePersistedSafetyEvidenceV1 | undefined;
+				let projection: ReturnType<
+					typeof projectIsolationEvidenceForPrincipalV1
+				>;
+				try {
+					if (
+						!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(evidenceRef) ||
+						!(await readable())
+					)
+						return await reject();
+					record = await query(
+						() =>
+							evidence.read({
+								conversationId,
+								executionId,
+								evidenceId: evidenceRef,
+							}),
+						metadata.traceId,
+					);
+					if (!record || !(await readable())) return await reject();
+					const confirmed = record;
+					projection = project(
+						() => projectIsolationEvidenceForPrincipalV1(confirmed),
+						metadata.traceId,
+					);
+				} catch (error) {
+					if (!audited)
+						await audit({ ...common, outcome: failedOutcome(error) });
+					throw error;
+				}
+				await audit({
+					...common,
+					outcome: "succeeded",
+					target: {
+						evidenceRef: record.binding.evidenceId,
+						agentId: record.binding.agentId,
+						conversationId: record.binding.conversationId,
+						executionId: record.binding.executionId,
+					},
+				});
+				// The audit write is the last I/O before the answer, so the permission is confirmed
+				// once more (§18.5.1 读取). A revocation that landed meanwhile answers like an
+				// invisible record and is recorded as a second, rejected entry.
+				let stillReadable: unknown;
+				try {
+					stillReadable = await readable();
+				} catch (error) {
+					await audit({ ...common, outcome: failedOutcome(error) });
+					throw error;
+				}
+				if (!stillReadable) return await reject();
+				return context.json(projection);
+			}),
+	);
 
 	for (const version of [1, 2] as const)
 		app.get(
