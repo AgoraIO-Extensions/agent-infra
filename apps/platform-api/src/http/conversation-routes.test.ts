@@ -3594,6 +3594,34 @@ describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
 			expect(rejection.status).toBe(503);
 		});
 
+		it("re-confirms the read permission after the audit write and before answering", async () => {
+			const runtimeEvidence = audited();
+			const input = dependencies({ runtimeEvidence });
+			const visible = await input.query.getExecution(
+				{ actorId: identity.userId, channelId: "web" },
+				"conversation-1",
+				"execution-1",
+			);
+			// Visible before and after the evidence read; revoked while the audit is written.
+			input.query.getExecution = vi
+				.fn()
+				.mockResolvedValueOnce(visible)
+				.mockResolvedValueOnce(visible)
+				.mockResolvedValueOnce(null);
+			const response = await testApp(input).app.request(evidencePath);
+			expect(response.status).toBe(404);
+			expect(input.query.getExecution).toHaveBeenCalledTimes(3);
+			expect(
+				runtimeEvidence.recordReadAudit.mock.calls.map(([event]) => [
+					event.outcome,
+					event.target === null,
+				]),
+			).toEqual([
+				["succeeded", false],
+				["rejected", true],
+			]);
+		});
+
 		it("records a dependency failure of the evidence read as failed", async () => {
 			const broken = audited();
 			broken.read.mockRejectedValue(new Error("store down"));
