@@ -4698,6 +4698,37 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
 
   native session、Turn、item 及其映射只在 Host 内核对，对外只给受控不透明引用。缺失、中断或
   采集不完整的结果明确记为 `UNPROVEN`，不补 false 或 0。
+
+- **证据绑定来源与原操作引用。** `RuntimeSafetyEvidenceBindingV1` 的字段必须来自下列权威
+  来源；producer 或调用方自报的同名字段不能替代它们：
+  - `sandboxId`、PVC 引用、generation、resource fence 和实际 `podUid` 来自 Platform 已提交的
+      `session_sandbox_allocations` 观察记录。只有观察记录与本次原 Execution 的 Agent、Conversation、
+      Session generation、resource fence 和 Workload/PVC 绑定一致，且仍是当前可核实记录时才可使用；
+      最新观察缺失、过期、冲突或尚未提交时，绑定缺失并记 `UNPROVEN`，不能从 Kubernetes 同名资源或
+      Host 自报 UID 回填。
+  - `host.instanceRef`、`host.startRef` 是 Host 实例产生的不透明引用，但权威接受来源是受保护的、
+      已绑定上述 `podUid` 的 Host 路由。Worker/Host 必须在同一请求中核对服务身份、Pod UID、Session
+      generation、resource fence、原 Host Session Ref 和启动引用；仅有 Host 自报值、环境变量、普通
+      文件或业务 HTTP 响应不能建立绑定。路由不可达、回读结果不明或绑定任一变化时保持 `UNPROVEN`。
+  - `configurationRevision` 与 `imageDigest` 来自 Platform 已提交的该 Sandbox/Workload 配置和
+      镜像来源记录；Host 返回值只能作为受保护路由上的一致性回读，不能成为新来源。实际值与已提交
+      记录不一致、记录缺失或镜像来源未固定时拒绝该证据。独立 executor 才可另带其已核实 epoch；
+      普通 Runtime 不造 epoch。
+
+  U3 `originalOperationRef` 定义为 Platform 持久化的原始 Runtime 操作引用：初始 Turn 使用原
+    submit/native-command 对应的 `operationRef`，不是 native item ID、临时 callback ID 或当前查询
+    请求 ID。`attemptRef` 只有在该原始操作确实持久化了 attempt 时才适用；不适用时必须显式写
+    `attemptRef: null` 与 `attemptApplicability: "not_applicable"`，未知或无法判断时不得使用该缺省值，
+    而应为 `UNPROVEN`。若需要关联具体原生工具 attempt，必须使用同一原始 operation 下已持久化且由
+    Host/Worker 共同核实的 `attemptRef`；不能用 Driver 临时生成或模型自报的引用。I1 的 binding
+    合同按此语义调整字段，缺失的原始 operation 或不适用的 attempt 不得被另一 Execution、Agent、
+    generation 或 fence 的引用替代。
+
+  Session Pod 的证据窗口注入属于 `#4358` I1、AC-3（以及适用的 AC-5 共同负例）的实现装配，
+    不是平台数据库来源。它必须通过独立、默认关闭的 App PR 按获批 window/主体/Agent/Execution
+    范围注入 Host 容器配置；窗口外不创建 producer 或返回 `unsupported`。若需要新 volume、权限、
+    Pod 字段或 Helm 接线，另开默认关闭的配置 PR 并独立复审，不能由证据 binding 字段或 Host 自报
+    值隐式开启。实现与现场验收前，Platform/Worker 仍按上述提交观察和受保护路由核对来源。
 - **读取。** 持久证据（`isolation_observation` 与 `original_admission_check`）由原主体读取时，须具备
   原任务的当前读取权：Web 沿原用户读取规则，API/应用仅在其当前读取合同已接入时启用。运维读取
   只在另获批的精确窗口内，由系统管理员经独立的运维只读入口执行，沿 §18.2.3 的系统管理员与部署
