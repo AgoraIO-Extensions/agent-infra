@@ -54,3 +54,26 @@ fail closed。现存 Agent 只在逐 Agent 的正式 lifecycle 中采用新 plac
   平台组件需要运行不受信代码或对外暴露新端口，须另行评估执行者覆盖。
 - 回退不能回到不执行 NetworkPolicy 的 ECS 继续运行不受信代码并声称安全。安全回退只能保留
   ECI，或者暂停相关 Workload。
+
+## 增补（2026-11-22）：以行为证据和每周探针作为部署门禁
+
+用户于 2026-11-22T12:2xZ 采纳（[#4351 评论 7079129662](https://github.com/AgoraIO-Extensions/agent-infra/issues/4351#issuecomment-7079129662)）。
+原部署预检要求回读 Poseidon 配置，并要求证据的目标集合等于部署时全部 Agent 级控制器、
+目标 Pod 在部署时仍存在。核实后，前一项在集群内读不到（`version` 与
+`eciNetworkPolicyEnabled` 由托管侧持有，没有只读云 API 身份），后一项让每次 accept 之后都
+要在部署前紧挨着重跑全量探针。
+
+决定：门禁以每个可落 ECI 节点上的 allow、deny、recovery 与非 Worker 来源被拒为行为证据，
+不回读托管侧配置；探针只在触发条件出现时重跑，其余部署只做只读静态检查，缺证据、过期或检查不符仍
+fail closed。触发条件、静态检查和残余风险只在
+[工程 Spec §10.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)
+“部署预检”条维护，证据格式见 [ACK Runtime 隔离预检](../../deploy/ack/RUNTIME-PREFLIGHT.md#networkpolicy-执行证据门禁)。
+
+未采纳：每 7 天由用户或管理员查看控制台回读；新建只读 RAM 身份读取配置；每次部署前重跑全量探针。
+代价是托管侧 Poseidon 在两次探针之间失效时，门禁最长约 7 天发现不了，该风险由用户接受，
+不在本 ADR 重复限定。
+
+NetworkPolicy 摘要比较的是去掉 Agent 个体值（Agent 选择器值、端口、服务名）的规范化模板，部署级出站与入站来源全部纳入，而不是任一 Agent 的整份 spec：
+Agent 级 NetworkPolicy 随 Agent 渲染，部署时没有可比较的现场对象，探针对象也已删除。探针对象用替换表实例化，其标签条件由 Spec 同条规定。模板的
+定义只在工程 Spec 同条维护。未采纳：选一个代表 Agent 的整份 spec 作摘要，它既与探针策略不等，
+也会让部署永远失败或被迫放宽比较。
