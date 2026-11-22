@@ -222,15 +222,22 @@ export function admitIsolationEvidenceV1(input: {
 /**
  * Append-only persistence (§18.5.1 载体与版本). `duplicate` is the same record delivered again;
  * `challenge_replay` is another record for an already used challenge; `evidence_conflict` is a
- * different record under an existing evidence ID. Only `recorded` stores anything.
+ * different record under an existing evidence ID; `revoked`/`stale_binding`/`scope_mismatch`
+ * mean the store re-checked the committed original binding in its own write transaction and
+ * found it changed since the scope was read. Only `recorded` stores anything.
  */
 export interface RuntimeSafetyEvidenceStoreV1<
 	TRecord extends RuntimeIsolationEvidenceAdmissibleV1,
 > {
-	recordOnce(
-		record: TRecord,
-	): Promise<
-		"recorded" | "duplicate" | "challenge_replay" | "evidence_conflict"
+	recordOnce(record: TRecord): Promise<
+		| "recorded"
+		| "duplicate"
+		| "challenge_replay"
+		| "evidence_conflict"
+		/** The original binding changed after the scope was read (#4358 S1). */
+		| "revoked"
+		| "stale_binding"
+		| "scope_mismatch"
 	>;
 }
 
@@ -250,13 +257,22 @@ export interface RuntimeSafetyEvidenceIngestResultV1 {
 		readonly cursor: string;
 		readonly reason: RuntimeSafetyEvidenceRejectionV1;
 	}[];
+	/**
+	 * The batch stopped before an entry that stays unconfirmed in the Host log: a record the
+	 * reader cannot parse, or one whose own original scope cannot be resolved yet.
+	 */
+	readonly stopped?: "unsupported" | "unresolved";
 }
 
 /**
  * Reads one Host evidence log batch in order. A record this reader cannot parse stops the
- * batch before its cursor (upgrade first, never drop fields). A record outside the window or
- * original scope is acknowledged without being stored. Storage failures propagate before the
- * cursor advances, so the Host keeps the entry; business events are never touched.
+ * batch before its cursor (upgrade first, never drop fields). A record outside the window is
+ * acknowledged without being stored. Inside the window each record is checked against its own
+ * Execution's original scope; when that scope cannot be resolved the batch stops before it,
+ * so nothing is confirmed that was never committed (HLD §8.5.6 step 4, #4367). A record whose
+ * resolved scope does not match is acknowledged without being stored. Storage failures
+ * propagate before the cursor advances, so the Host keeps the entry; business events are
+ * never touched.
  */
 export async function ingestRuntimeSafetyEvidenceBatchV1<
 	TRecord extends RuntimeIsolationEvidenceAdmissibleV1,
@@ -268,6 +284,7 @@ export async function ingestRuntimeSafetyEvidenceBatchV1<
 	/** Strict reader schema; undefined for a kind or shape this reader does not understand. */
 	readonly parse: (record: unknown) => TRecord | undefined;
 	readonly window: RuntimeSafetyEvidenceWindowV1 | undefined;
+	/** The record's own Execution; undefined when it cannot be resolved (the batch stops). */
 	readonly resolveScope: (
 		record: TRecord,
 	) => Promise<RuntimeSafetyEvidenceScopeV1 | undefined>;
@@ -281,17 +298,39 @@ export async function ingestRuntimeSafetyEvidenceBatchV1<
 		cursor: string;
 		reason: RuntimeSafetyEvidenceRejectionV1;
 	}[] = [];
+	let stopped: "unsupported" | "unresolved" | undefined;
 	for (const entry of input.entries) {
 		const record = input.parse(entry.record);
 		if (record === undefined) {
 			if (ackCursor === null)
 				throw new RuntimeSafetyEvidenceUnsupportedErrorV1();
+			stopped = "unsupported";
+			break;
+		}
+		// Window, scenario and producer do not depend on the scope; they are final.
+		const windowAdmission = admitIsolationEvidenceV1({
+			record,
+			window: input.window,
+			scope: undefined,
+			now: input.now(),
+		});
+		if (
+			!windowAdmission.accepted &&
+			windowAdmission.reason !== "scope_mismatch"
+		) {
+			rejected.push({ cursor: entry.cursor, reason: windowAdmission.reason });
+			ackCursor = entry.cursor;
+			continue;
+		}
+		const scope = await input.resolveScope(record);
+		if (scope === undefined) {
+			stopped = "unresolved";
 			break;
 		}
 		const admission = admitIsolationEvidenceV1({
 			record,
 			window: input.window,
-			scope: await input.resolveScope(record),
+			scope,
 			now: input.now(),
 		});
 		if (admission.accepted) {
@@ -302,7 +341,13 @@ export async function ingestRuntimeSafetyEvidenceBatchV1<
 		} else rejected.push({ cursor: entry.cursor, reason: admission.reason });
 		ackCursor = entry.cursor;
 	}
-	return { ackCursor, recorded, duplicates, rejected };
+	return {
+		ackCursor,
+		recorded,
+		duplicates,
+		rejected,
+		...(stopped ? { stopped } : {}),
+	};
 }
 
 /**

@@ -35,6 +35,7 @@ export const signing = {
 export const grantSigner = createWorkerRuntimeGrantSignerV4(signing);
 export function runtimeV4Harness(
 	operation: "submit" | "supplement" | "stop" = "submit",
+	extra: Partial<Pick<ConversationRuntimeOptionsV2, "safetyEvidence">> = {},
 ) {
 	let clock = time;
 	const instanceSigning = { ...signing, now: () => clock };
@@ -278,6 +279,7 @@ export function runtimeV4Harness(
 		relayKeyDecryptor,
 		fetch: fetcher,
 		reconnectDelayMs: 1,
+		...extra,
 	};
 	const runtime = createConversationRuntimeV2(options);
 	function request(

@@ -350,6 +350,65 @@ describe("evidence log ingestion (Spec §18.5.1 载体与版本)", () => {
 		expect([...stored.keys()]).toEqual(["evidence-1"]);
 	});
 
+	it("stops before a record whose own scope cannot be resolved and confirms nothing after it (#4367)", async () => {
+		const { stored, store } = memory();
+		const outside = record((v) => {
+			v.binding.evidenceId = "evidence-0";
+			v.binding.challengeRef = "challenge-0";
+			v.binding.agentId = "agent-2";
+		});
+		const unresolved = record((v) => {
+			v.binding.evidenceId = "evidence-2";
+			v.binding.challengeRef = "challenge-2";
+			v.binding.executionId = "execution-2";
+		});
+		const result = await ingestRuntimeSafetyEvidenceBatchV1({
+			entries: [
+				{ cursor: "c0", record: outside },
+				{ cursor: "c1", record: record() },
+				{ cursor: "c2", record: unresolved },
+				{ cursor: "c3", record: record() },
+			],
+			parse,
+			window,
+			resolveScope: async (value) =>
+				value.binding.executionId === "execution-1" ? scope() : undefined,
+			store,
+			now: () => now,
+		});
+		expect(result).toEqual({
+			ackCursor: "c1",
+			recorded: 1,
+			duplicates: 0,
+			rejected: [{ cursor: "c0", reason: "out_of_window_scope" }],
+			stopped: "unresolved",
+		});
+		expect([...stored.keys()]).toEqual(["evidence-1"]);
+	});
+
+	it("acknowledges a record the store refused because the original binding changed in between (#4358 S1)", async () => {
+		for (const reason of [
+			"revoked",
+			"stale_binding",
+			"scope_mismatch",
+		] as const) {
+			const result = await ingestRuntimeSafetyEvidenceBatchV1({
+				entries: [{ cursor: "c1", record: record() }],
+				parse,
+				window,
+				resolveScope: async () => scope(),
+				store: { recordOnce: async () => reason },
+				now: () => now,
+			});
+			expect(result).toEqual({
+				ackCursor: "c1",
+				recorded: 0,
+				duplicates: 0,
+				rejected: [{ cursor: "c1", reason }],
+			});
+		}
+	});
+
 	it("acknowledges a challenge replay or a conflicting record under an existing ID without storing it", async () => {
 		const result = await ingestRuntimeSafetyEvidenceBatchV1({
 			entries: [
