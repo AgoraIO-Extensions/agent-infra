@@ -4699,36 +4699,44 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
   native session、Turn、item 及其映射只在 Host 内核对，对外只给受控不透明引用。缺失、中断或
   采集不完整的结果明确记为 `UNPROVEN`，不补 false 或 0。
 
-- **证据绑定来源与原操作引用。** `RuntimeSafetyEvidenceBindingV1` 的字段必须来自下列权威
-  来源；producer 或调用方自报的同名字段不能替代它们：
-  - `sandboxId`、PVC 引用、generation、resource fence 和实际 `podUid` 来自 Platform 已提交的
-      `session_sandbox_allocations` 观察记录。只有观察记录与本次原 Execution 的 Agent、Conversation、
-      Session generation、resource fence 和 Workload/PVC 绑定一致，且仍是当前可核实记录时才可使用；
-      最新观察缺失、过期、冲突或尚未提交时，绑定缺失并记 `UNPROVEN`，不能从 Kubernetes 同名资源或
-      Host 自报 UID 回填。
-  - `host.instanceRef`、`host.startRef` 是 Host 实例产生的不透明引用，但权威接受来源是受保护的、
-      已绑定上述 `podUid` 的 Host 路由。Worker/Host 必须在同一请求中核对服务身份、Pod UID、Session
-      generation、resource fence、原 Host Session Ref 和启动引用；仅有 Host 自报值、环境变量、普通
-      文件或业务 HTTP 响应不能建立绑定。路由不可达、回读结果不明或绑定任一变化时保持 `UNPROVEN`。
-  - `configurationRevision` 与 `imageDigest` 来自 Platform 已提交的该 Sandbox/Workload 配置和
-      镜像来源记录；Host 返回值只能作为受保护路由上的一致性回读，不能成为新来源。实际值与已提交
-      记录不一致、记录缺失或镜像来源未固定时拒绝该证据。独立 executor 才可另带其已核实 epoch；
-      普通 Runtime 不造 epoch。
+- **证据绑定来源与原操作引用。** `RuntimeSafetyEvidenceBindingV1` 的字段必须来自权威记录；
+  producer 或调用方自报的同名字段不能替代它们。U1/U2 继续使用 §18.5.2 与 HLD §8.5.6
+  规定的原生 item、operation/attempt 和产生时的 Pod/Host 绑定；下列旧代次规则只适用于 U3
+  `original_admission_check`。
 
-  U3 `originalOperationRef` 定义为 Platform 持久化的原始 Runtime 操作引用：初始 Turn 使用原
-    submit/native-command 对应的 `operationRef`，不是 native item ID、临时 callback ID 或当前查询
-    请求 ID。`attemptRef` 只有在该原始操作确实持久化了 attempt 时才适用；不适用时必须显式写
-    `attemptRef: null` 与 `attemptApplicability: "not_applicable"`，未知或无法判断时不得使用该缺省值，
-    而应为 `UNPROVEN`。若需要关联具体原生工具 attempt，必须使用同一原始 operation 下已持久化且由
-    Host/Worker 共同核实的 `attemptRef`；不能用 Driver 临时生成或模型自报的引用。I1 的 binding
-    合同按此语义调整字段，缺失的原始 operation 或不适用的 attempt 不得被另一 Execution、Agent、
-    generation 或 fence 的引用替代。
+  - **U3 的旧代次来源。** U3 的 `sandbox.ref`、`sandbox.resourceFence`、`sessionGeneration`、
+    原 Pod UID、原 Host Session Ref、配置修订和镜像 digest 必须来自旧代次的版本化
+    `sourceSnapshot`，不能从 `session_sandbox_allocations` 当前行、当前 Pod 或新的 Execution 回填。
+    代次推进前，Worker 在与 generation/fence 更新相同的 Store 事务中，把原 Sandbox 的已提交
+    observation、policy（含 `configurationRevision`/`imageDigest`）和 Host 来源写入
+    `sourceSnapshot`；该快照属于原 reconcile outbox 的不可变来源，后续重试只能复用，不能覆盖旧代次
+    字段。当前已提交 observation 只用于判断原 Pod UID 是否仍可达和是否可向同一原 Host 路由；Pod
+    UID 不同、路由不可达、来源缺失或回读不明时保持阻塞/`UNPROVEN`，绝不改投当前 Pod。旧版本
+    `sourceSnapshot` 没有 Host 来源字段时，U3 对该样本保持阻塞，不取当前观察冒充原绑定。
+  - **Host 来源写入。** `sourceSnapshot` 的版本 2 在其 `observation` 中保存 `host.instanceRef`、
+    `host.startRef`、原 Host Session Ref 和绑定的 `podUid`（独立 executor 适用时另保存已核实 epoch）。
+    Worker 首次通过受保护 Host 路由确认时，先核对服务身份、同一 Pod UID、Session generation、
+    resource fence、原 Host Session Ref、启动引用以及 executor epoch；核对成功后才把 Host 自报值
+    写入已提交 observation。Host 自报值、环境变量、普通文件或业务 HTTP 响应不能单独成为来源。
+    Pod UID 换值时必须清空旧 Host instance/start/Session/epoch 并重新确认；失败、冲突或结果不明时
+    不写入新值。`configurationRevision`/`imageDigest` 仍以快照中的 Platform policy 和镜像来源为准，
+    Host 回读只做一致性核对。
+  - **快照版本与兼容。** `sourceSnapshot.schemaVersion: 2` 是 U3 使用上述 Host 来源的最低版本；
+    旧版本快照只允许历史读取和诊断，不能签发 U3 通过证据。U1/U2 不依赖该旧代次快照，仍按原
+    产生时绑定规则工作。I3b（kconn）负责 sourceSnapshot 版本和 observation 写入；本 PR 不新增
+    持久表或隐式补写路径。
+  - **U3 原操作引用。** `originalOperationRef` 只用于 U3，序列化为
+    `RuntimeOriginalAdmissionScopeV1.originalOperationId`，Host 的 `runtimeOperationId` 必须与其
+    相等；它指该 Execution 的原始 `submit-turn`/`native-command` 持久 operation，不是 native item
+    ID、临时 callback ID 或当前核验请求 ID。U1/U2 的 operation/attempt 仍指原生工具或模型实际
+    operation/attempt。U3 没有持久化 attempt 时显式使用 `attemptRef: null` 与
+    `attemptApplicability: "not_applicable"`；未知或无法判断时不得使用该缺省值，必须为
+    `UNPROVEN`。有 attempt 时只能使用同一原始 operation 下已持久化、经 Host/Worker 核实的引用。
 
-  Session Pod 的证据窗口注入属于 `#4358` I1、AC-3（以及适用的 AC-5 共同负例）的实现装配，
-    不是平台数据库来源。它必须通过独立、默认关闭的 App PR 按获批 window/主体/Agent/Execution
-    范围注入 Host 容器配置；窗口外不创建 producer 或返回 `unsupported`。若需要新 volume、权限、
-    Pod 字段或 Helm 接线，另开默认关闭的配置 PR 并独立复审，不能由证据 binding 字段或 Host 自报
-    值隐式开启。实现与现场验收前，Platform/Worker 仍按上述提交观察和受保护路由核对来源。
+  Session Pod 的证据窗口注入属于 `#4358` I1、AC-3（及适用的 AC-5 共同负例）的实现装配，不是
+  Platform 来源。它必须通过独立、默认关闭的 App PR 按获批 window/主体/Agent/Execution 范围注入
+  Host 容器配置；窗口外不创建 producer 或返回 `unsupported`。若需要新 volume、权限、Pod 字段或
+  Helm 接线，另开默认关闭的配置 PR 并独立复审；binding 字段或 Host 自报值不能隐式开启窗口。
 - **读取。** 持久证据（`isolation_observation` 与 `original_admission_check`）由原主体读取时，须具备
   原任务的当前读取权：Web 沿原用户读取规则，API/应用仅在其当前读取合同已接入时启用。运维读取
   只在另获批的精确窗口内，由系统管理员经独立的运维只读入口执行，沿 §18.2.3 的系统管理员与部署
