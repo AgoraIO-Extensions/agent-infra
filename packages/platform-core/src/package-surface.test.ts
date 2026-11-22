@@ -277,6 +277,7 @@ describe("platform-core package surface", () => {
 			"nativeCapabilityOperationDigestV6",
 			"nativeCapabilityParametersDigestV1",
 			"nativeTextInputLimitV1",
+			"networkPolicyEvidenceSha256V1",
 			"networkPolicySpecSha256V1",
 			"networkPolicySpecV1",
 			"networkPolicyTemplateDigestsV1",

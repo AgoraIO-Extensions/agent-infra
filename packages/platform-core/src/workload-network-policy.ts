@@ -484,10 +484,16 @@ export const networkPolicyBaseVariantsV1 = [
 ] as const;
 export type NetworkPolicyBaseVariantV1 =
 	(typeof networkPolicyBaseVariantsV1)[number];
-/** `<base>` or `<base>+snapshot` (workspace snapshot projection and egress both deployed). */
+/**
+ * `<base>[+snapshot][+no-native]`. `+snapshot`: workspace snapshot projection and
+ * egress both deployed. `+no-native`: a single-service Agent without a standard
+ * template binding, whose Worker drops `nativeEgress` before rendering.
+ */
 export type NetworkPolicyVariantV1 =
 	| NetworkPolicyBaseVariantV1
-	| `${NetworkPolicyBaseVariantV1}+snapshot`;
+	| `${NetworkPolicyBaseVariantV1}+snapshot`
+	| `${NetworkPolicyBaseVariantV1}+no-native`
+	| `${NetworkPolicyBaseVariantV1}+snapshot+no-native`;
 
 export interface NetworkPolicyDeploymentConfigV1 {
 	/** Required by single-service variants; multi-service policies have no Worker source. */
@@ -522,6 +528,7 @@ export interface NetworkPolicySpecV1 {
 }
 
 const snapshotSuffix = "+snapshot";
+const noNativeSuffix = "+no-native";
 const isSingle = (base: NetworkPolicyBaseVariantV1) =>
 	base === "internal-only" ||
 	base === "self-managed" ||
@@ -530,12 +537,18 @@ const isSingle = (base: NetworkPolicyBaseVariantV1) =>
 export function splitNetworkPolicyVariantV1(variant: string): {
 	base: NetworkPolicyBaseVariantV1;
 	snapshot: boolean;
+	noNative: boolean;
 } {
-	const snapshot = variant.endsWith(snapshotSuffix);
-	const base = snapshot ? variant.slice(0, -snapshotSuffix.length) : variant;
-	if (!(networkPolicyBaseVariantsV1 as readonly string[]).includes(base))
+	const noNative = variant.endsWith(noNativeSuffix);
+	const rest = noNative ? variant.slice(0, -noNativeSuffix.length) : variant;
+	const snapshot = rest.endsWith(snapshotSuffix);
+	const base = snapshot ? rest.slice(0, -snapshotSuffix.length) : rest;
+	if (
+		!(networkPolicyBaseVariantsV1 as readonly string[]).includes(base) ||
+		(noNative && !isSingle(base as NetworkPolicyBaseVariantV1))
+	)
 		throw new WorkloadEgressPolicyError();
-	return { base: base as NetworkPolicyBaseVariantV1, snapshot };
+	return { base: base as NetworkPolicyBaseVariantV1, snapshot, noNative };
 }
 
 /** Every form the Worker can render for this deployment configuration. */
@@ -545,10 +558,16 @@ export function networkPolicyVariantsV1(
 	const snapshot =
 		config.workspaceSnapshotProjection === true &&
 		(config.egress.workspaceSnapshotEgress?.length ?? 0) > 0;
-	return networkPolicyBaseVariantsV1.flatMap((base) => [
-		base,
-		...(snapshot ? [`${base}${snapshotSuffix}` as const] : []),
-	]);
+	const native = config.egress.nativeEgress !== undefined;
+	return networkPolicyBaseVariantsV1.flatMap((base) => {
+		const forms = [base, ...(snapshot ? [`${base}${snapshotSuffix}`] : [])];
+		return [
+			...forms,
+			...(native && isSingle(base)
+				? forms.map((f) => `${f}${noNativeSuffix}`)
+				: []),
+		] as NetworkPolicyVariantV1[];
+	});
 }
 
 const selectorMap = (value: unknown, required: boolean) => {
@@ -656,7 +675,9 @@ export function networkPolicySpecV1(input: {
 	readonly substitutions?: NetworkPolicySubstitutionsV1;
 	readonly egress?: readonly NetworkPolicyEgressRuleV1[];
 }): NetworkPolicySpecV1 {
-	const { base, snapshot } = splitNetworkPolicyVariantV1(input.variant);
+	const { base, snapshot, noNative } = splitNetworkPolicyVariantV1(
+		input.variant,
+	);
 	const { config } = input;
 	const substitutions = input.substitutions ?? {};
 	const agent = substitutions.agentSelector ?? {
@@ -675,8 +696,11 @@ export function networkPolicySpecV1(input: {
 		throw new WorkloadEgressPolicyError();
 	const withSnapshot = (
 		policy: WorkloadEgressPolicyV1,
-	): WorkloadEgressPolicyV1 =>
-		snapshot ? policy : { ...policy, workspaceSnapshotEgress: undefined };
+	): WorkloadEgressPolicyV1 => ({
+		...policy,
+		...(snapshot ? {} : { workspaceSnapshotEgress: undefined }),
+		...(noNative ? { nativeEgress: undefined } : {}),
+	});
 
 	if (single) {
 		const port = substitutions.port ?? portPlaceholderV1;
@@ -823,6 +847,29 @@ export function networkPolicySpecSha256V1(spec: unknown): string {
 		.digest("hex");
 }
 
+/**
+ * Evidence digest of one NetworkPolicy: the canonical effective spec plus the
+ * native tool egress protected networks the compiler checked it against. The
+ * protected networks are inputs that never appear in the spec, so a hash of the
+ * spec alone would not change when they change (Spec §10.1).
+ */
+export function networkPolicyEvidenceSha256V1(
+	spec: unknown,
+	config: NetworkPolicyDeploymentConfigV1,
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify(
+				canonicalJsonValueV1({
+					spec: spec ?? {},
+					protectedNetworks:
+						config.egress.nativeEgress?.protectedNetworks ?? null,
+				}),
+			),
+		)
+		.digest("hex");
+}
+
 /** Digest of every variant's normalized template (empty substitution table). */
 export function networkPolicyTemplateDigestsV1(
 	config: NetworkPolicyDeploymentConfigV1,
@@ -830,7 +877,10 @@ export function networkPolicyTemplateDigestsV1(
 	return Object.fromEntries(
 		networkPolicyVariantsV1(config).map((variant) => [
 			variant,
-			networkPolicySpecSha256V1(networkPolicySpecV1({ variant, config })),
+			networkPolicyEvidenceSha256V1(
+				networkPolicySpecV1({ variant, config }),
+				config,
+			),
 		]),
 	);
 }

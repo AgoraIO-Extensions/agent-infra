@@ -1,11 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify } from "yaml";
+import { placementSelectorSha256V1 } from "../../deploy/ack/networkpolicy-enforcement.mjs";
 import {
-	networkPolicySpecSha256V1,
-	placementSelectorSha256V1,
-} from "../../deploy/ack/networkpolicy-enforcement.mjs";
-import {
+	networkPolicyEvidenceSha256V1,
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
@@ -36,6 +34,15 @@ export const networkPolicyDeploymentConfig = () => ({
 		],
 	},
 });
+/** A Worker `configuration.mjs` whose `workloadInput` carries exactly this configuration. */
+export function workerConfigurationSource(config) {
+	const { workspaceSnapshotProjection, egress, ...selectors } = config;
+	return `export const workloadInput = {
+	policy: ${JSON.stringify({ ...selectors, ...egress })},
+	${workspaceSnapshotProjection ? "workspaceSnapshotResolver: { project() { return {}; } }," : ""}
+};
+`;
+}
 export const probeAgentKey = "np-probe.agent-infra.agora.io/agent";
 
 /** Probe-only substitution table and Pod labels for one variant (never production labels). */
@@ -45,6 +52,7 @@ export function probePolicyEvidence(
 	port = 3003,
 ) {
 	const multi = variant.startsWith("multi-service-");
+	const migration = variant.startsWith("multi-service-migration");
 	const substitutions = {
 		agentSelector: { key: probeAgentKey, value: "probe-a" },
 		...(multi
@@ -56,13 +64,27 @@ export function probePolicyEvidence(
 	return {
 		variant,
 		substitutions,
+		// Targets carry the full instantiated podSelector; an allowed multi-service
+		// source is a sibling of the same probe Agent.
 		podLabels: {
-			target: { [probeAgentKey]: "probe-a" },
-			workerSource: { "np-probe/source": "worker" },
+			target: {
+				[probeAgentKey]: "probe-a",
+				...(multi
+					? {
+							"agent-infra.agora.io/service": migration
+								? "migration"
+								: "probe-svc",
+						}
+					: {}),
+			},
+			workerSource: multi
+				? { [probeAgentKey]: "probe-a", "np-probe/source": "worker" }
+				: { "np-probe/source": "worker" },
 			nonWorkerSource: { "np-probe/source": "other" },
 		},
-		instantiatedSha256: networkPolicySpecSha256V1(
+		instantiatedSha256: networkPolicyEvidenceSha256V1(
 			networkPolicySpecV1({ variant, config, substitutions }),
+			config,
 		),
 	};
 }
@@ -97,14 +119,34 @@ export function renderedEnforcementManifest(
 						containers: [
 							{
 								name: "platform-worker",
-								env: placement
-									? [
-											{
-												name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
-												value: JSON.stringify(placement),
-											},
-										]
-									: [],
+								env: [
+									...(placement
+										? [
+												{
+													name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+													value: JSON.stringify(placement),
+												},
+											]
+										: []),
+									{
+										name: "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+										value: "file:///app/dist/deployment.mjs",
+									},
+								],
+								volumeMounts: [
+									{
+										name: "configuration",
+										mountPath: "/app/dist/configuration.mjs",
+										subPath: "configuration.mjs",
+										readOnly: true,
+									},
+								],
+							},
+						],
+						volumes: [
+							{
+								name: "configuration",
+								secret: { secretName: "np-gate-worker-config" },
 							},
 						],
 					},
@@ -153,8 +195,25 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 		new Date(Date.now() - minutes * 60_000).toISOString();
 	const config = networkPolicyDeploymentConfig();
 	const evidenceFile = join(directory, "networkpolicy-evidence.json");
-	const configFile = join(directory, "networkpolicy-deployment-config.json");
-	await writeFile(configFile, JSON.stringify(config), { mode: 0o600 });
+	const configFile = join(directory, "configuration.mjs");
+	await writeFile(configFile, workerConfigurationSource(config), {
+		mode: 0o600,
+	});
+	const bootstrapFile = join(directory, "bootstrap-inputs.json");
+	await writeFile(
+		bootstrapFile,
+		JSON.stringify({
+			schemaVersion: 1,
+			objects: [
+				{
+					kind: "Secret",
+					name: "np-gate-worker-config",
+					files: { "configuration.mjs": configFile },
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
 	await writeFile(
 		evidenceFile,
 		JSON.stringify({
@@ -209,9 +268,16 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 	return {
 		env: {
 			ACK_NETWORKPOLICY_EVIDENCE_FILE: evidenceFile,
-			ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: configFile,
+			ACK_BOOTSTRAP_INPUTS_FILE: bootstrapFile,
 		},
+		configFile,
 		responses: {
+			// The mounted Worker configuration Secret that dependency readback also checks.
+			"Secret/np-gate-worker-config": {
+				kind: "Secret",
+				metadata: { name: "np-gate-worker-config", namespace },
+				data: { "configuration.mjs": "" },
+			},
 			[`namespace/${namespace}`]: {
 				metadata: { name: namespace, uid: namespaceUid },
 			},

@@ -324,11 +324,11 @@ process.exit(1);
 	const script = join(import.meta.dirname, "../deploy/ack/preflight.sh");
 	const result = spawnSync("bash", [script], { encoding: "utf8", env });
 	assert.equal(result.status, 0, result.stderr);
-	assert.equal(JSON.parse(result.stdout).objectCount, 4);
+	assert.equal(JSON.parse(result.stdout).objectCount, 5);
 	assert.match(result.stderr, /"scope":"networkpolicy-enforcement"/);
 	for (const missing of [
 		"ACK_NETWORKPOLICY_EVIDENCE_FILE",
-		"ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE",
+		"ACK_BOOTSTRAP_INPUTS_FILE",
 	]) {
 		const unproven = spawnSync("bash", [script], {
 			encoding: "utf8",

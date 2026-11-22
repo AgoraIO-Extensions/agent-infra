@@ -250,6 +250,7 @@ export {
 	type NetworkPolicySpecV1,
 	type NetworkPolicySubstitutionsV1,
 	type NetworkPolicyVariantV1,
+	networkPolicyEvidenceSha256V1,
 	networkPolicySpecSha256V1,
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,

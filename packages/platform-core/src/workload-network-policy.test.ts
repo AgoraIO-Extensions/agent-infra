@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	agentNetworkPolicyOwnerLabelV1,
+	networkPolicyEvidenceSha256V1,
 	networkPolicySpecSha256V1,
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
@@ -237,5 +238,72 @@ describe("Agent NetworkPolicy template (#4351)", () => {
 		expect(() =>
 			parseNetworkPolicyDeploymentConfigV1(mutate({ ...config() })),
 		).toThrow();
+	});
+
+	const native = (platformDatabase: string) => ({
+		destinations: [{ destination: { ip: "8.8.8.8" }, port: 443 }] as [
+			{ destination: { ip: string }; port: number },
+		],
+		protectedNetworks: {
+			platformDatabase: [platformDatabase],
+			connectionDatabase: ["10.1.0.0/24"],
+			kubernetesApi: ["9.9.9.9"],
+			sandboxPodNetworks: ["10.2.0.0/16"],
+		},
+	});
+	it("lists a no-native form of every single-service variant only when nativeEgress is deployed (#4385 M4)", () => {
+		const base = config();
+		expect(
+			networkPolicyVariantsV1(base).some((v) => v.endsWith("+no-native")),
+		).toBe(false);
+		const withNative = {
+			...withSnapshot(),
+			egress: { ...withSnapshot().egress, nativeEgress: native("10.0.0.0/24") },
+		};
+		const variants = networkPolicyVariantsV1(withNative);
+		expect(variants.filter((v) => v.endsWith("+no-native")).sort()).toEqual([
+			"internal-only+no-native",
+			"internal-only+snapshot+no-native",
+			"platform-auth+no-native",
+			"platform-auth+snapshot+no-native",
+			"self-managed+no-native",
+			"self-managed+snapshot+no-native",
+		]);
+		// The no-native form really is the one without the native egress rules.
+		const egressOf = (variant: string) =>
+			JSON.stringify(
+				networkPolicySpecV1({ variant: variant as never, config: withNative })
+					.egress,
+			);
+		expect(egressOf("self-managed")).toContain("8.8.8.8");
+		expect(egressOf("self-managed+no-native")).not.toContain("8.8.8.8");
+		expect(() =>
+			networkPolicySpecV1({
+				variant: "multi-service-entry+no-native" as never,
+				config: withNative,
+			}),
+		).toThrow();
+	});
+	it("binds the protected networks into every evidence digest although they never appear in the spec (#4385 M3)", () => {
+		const at = (platformDatabase: string) => ({
+			...config(),
+			egress: { ...config().egress, nativeEgress: native(platformDatabase) },
+		});
+		const a = at("10.0.0.0/24");
+		const b = at("10.5.0.0/16");
+		expect(networkPolicySpecV1({ variant: "self-managed", config: a })).toEqual(
+			networkPolicySpecV1({ variant: "self-managed", config: b }),
+		);
+		const digestsA = networkPolicyTemplateDigestsV1(a);
+		const digestsB = networkPolicyTemplateDigestsV1(b);
+		for (const variant of Object.keys(digestsA))
+			expect(digestsB[variant]).not.toBe(digestsA[variant]);
+		const spec = networkPolicySpecV1({ variant: "self-managed", config: a });
+		expect(networkPolicyEvidenceSha256V1(spec, a)).not.toBe(
+			networkPolicyEvidenceSha256V1(spec, b),
+		);
+		expect(networkPolicyEvidenceSha256V1(spec, a)).not.toBe(
+			networkPolicySpecSha256V1(spec),
+		);
 	});
 });

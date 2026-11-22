@@ -159,7 +159,7 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 | 环境变量 | 内容 |
 | --- | --- |
 | `ACK_NETWORKPOLICY_EVIDENCE_FILE` | 已批准的执行证据，`kind: agent-infra-networkpolicy-enforcement-evidence` |
-| `ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE` | Worker 渲染 Agent 级 NetworkPolicy 所用的部署配置（JSON）：`workerSelector`、`routeNamespace`、`routeSelector`、可选 `platformApiSelector`、`workspaceSnapshotProjection` 与 `egress`（模型、Connection、原生元数据回调、文件交换、快照与 DNS 出站，字段同 Worker 的 `WorkloadEgressPolicyV1`，原生工具出站含 `nativeEgress`）。Helm 渲染结果不含这些值，它们在 Worker 的私有 `configuration.mjs` 中，由部署 owner 从同一来源导出；预检用 Worker 的同一纯函数复算全部模板摘要 |
+| `ACK_BOOTSTRAP_INPUTS_FILE` | 私有 Secret/ConfigMap 文件引用包（与 `redeploy.sh` 相同的输入）。预检按渲染结果里 Worker 的 `PLATFORM_WORKER_DEPLOYMENT_MODULE` 与 `configuration.mjs` 只读挂载找到本次要部署的 Worker `configuration.mjs`，在无网络、无子进程、只能读该文件副本的隔离子进程里加载它，只取 `workloadInput.policy` 的 `workerSelector`、`routeNamespace`、`routeSelector`、`platformApiSelector` 与模型、Connection、原生元数据回调、文件交换、快照、DNS 和原生工具出站字段，以及是否配置了 `workloadInput.workspaceSnapshotResolver.project`；没有独立维护的副本，通过时摘要里记录该文件的 `workerConfigurationSha256`。读取、加载或字段校验失败一律拒绝（模块依赖了隔离环境读不到的文件或包也属于此类） |
 | `ACK_RENDERED_MANIFEST_FILE` | 本次 `helm template` 结果；`preflight.sh` 与 `template-preflight` 自动传入 |
 
 证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
@@ -182,7 +182,7 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
   Pod、临时 deny-all 与探针来源在探针结束后按 UID 删除；预检不要求它们仍存在，也不要求
   `probes` 覆盖现场全部 Agent 级控制器。
 - `networkPolicy`：`templateSha256`，按变体名记录全部规范化模板摘要（单服务三种 `route.exposure`，
-  多服务入口、非入口与迁移，及其带快照与不带快照的形态）。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
+  多服务入口、非入口与迁移，及其带快照与不带快照的形态；部署配置含 `nativeEgress` 时，单服务另有未绑定标准模板的 `+no-native` 形态）。摘要是“有效 spec 加原生工具出站受保护网段”的规范化 SHA-256。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
   “NetworkPolicy 规范化模板”维护。
 - `observedAt` 与 `expiresAt`：有效期不超过 7 天。
 
@@ -194,7 +194,7 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
-- 证据自相矛盾：探针记录的 Pod 的 `nodeName` 不是该探针所属的可落节点，或替换表的端口不是探针的 `destination.port`；缺少部署配置文件或其不合法，或部署配置的 `workerSelector` 不被渲染结果中的 Worker Pod 满足；预检用部署配置
+- 证据自相矛盾：探针记录的 Pod 的 `nodeName` 不是该探针所属的可落节点，或替换表的端口不是探针的 `destination.port`；缺少 `ACK_BOOTSTRAP_INPUTS_FILE`（`WORKER_CONFIGURATION_REQUIRED`），Worker `configuration.mjs` 不可读取、不可加载或缺少 `workloadInput.policy`（`WORKER_CONFIGURATION_UNVERIFIABLE`），派生出的部署配置不合法，或其 `workerSelector` 不被渲染结果中的 Worker Pod 满足；预检用部署配置
   重新计算的全部规范化模板摘要，与证据 `networkPolicy.templateSha256` 的变体集合或任一摘要不一致；探针记录的
   `policy.instantiatedSha256` 与预检按其 `variant` 和 `substitutions` 复算的结果不同，或任一探针 Pod 的 `podLabels` 不满足 Spec 同条的标签条件；Worker placement 的 selector
   与 toleration 摘要与证据 `placement.selectorSha256` 不一致。

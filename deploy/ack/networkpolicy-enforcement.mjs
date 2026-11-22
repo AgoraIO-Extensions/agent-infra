@@ -3,12 +3,16 @@
 // It never creates probes or writes to the cluster; it only checks approved evidence.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
+import { workerConfigurationBytes } from "./configuration-source-preflight.ts";
 import {
 	agentNetworkPolicyOwnerLabelV1,
 	canonicalJsonValueV1,
+	networkPolicyEvidenceSha256V1,
 	networkPolicySpecSha256V1,
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
@@ -421,6 +425,78 @@ function parseEvidence(value) {
 	return evidence;
 }
 
+
+const egressKeys = [
+	"nativeEgress",
+	"modelEgress",
+	"connectionEgress",
+	"nativeMetadataWorkerEgress",
+	"fileExchangeEgress",
+	"workspaceSnapshotEgress",
+	"dnsEgress",
+];
+// Runs in an isolated child: no network, no child processes, only the copied module readable.
+const projectionScript = (file) => `
+const module = await import(${JSON.stringify(pathToFileURL(file).href)});
+const policy = module.workloadInput?.policy;
+if (!policy || typeof policy !== "object") process.exit(3);
+const egress = {};
+for (const key of ${JSON.stringify(egressKeys)}) if (policy[key] !== undefined) egress[key] = policy[key];
+process.stdout.write(JSON.stringify({
+	workerSelector: policy.workerSelector,
+	routeNamespace: policy.routeNamespace,
+	routeSelector: policy.routeSelector,
+	platformApiSelector: policy.platformApiSelector,
+	workspaceSnapshotProjection: typeof module.workloadInput?.workspaceSnapshotResolver?.project === "function",
+	egress,
+}));
+process.exit(0);
+`;
+
+/**
+ * Derives the NetworkPolicy deployment configuration from the Worker
+ * `configuration.mjs` the rendered chart mounts, i.e. the exact bytes the deployment
+ * is about to run (Spec §10.1). There is no independently authored copy to go
+ * stale. Anything that cannot be read or evaluated is rejected.
+ */
+export async function deriveNetworkPolicyDeploymentConfigV1({
+	bootstrapInputsFile,
+	renderedManifest,
+}) {
+	if (!bootstrapInputsFile) fail("WORKER_CONFIGURATION_REQUIRED");
+	let bytes;
+	try {
+		bytes = Buffer.from(await workerConfigurationBytes(bootstrapInputsFile, renderedManifest));
+	} catch {
+		fail("WORKER_CONFIGURATION_UNVERIFIABLE");
+	}
+	const directory = mkdtempSync(join(realpathSync(tmpdir()), "agent-infra-np-config-"));
+	let projected;
+	try {
+		chmodSync(directory, 0o700);
+		const file = join(directory, "configuration.mjs");
+		writeFileSync(file, bytes, { mode: 0o600 });
+		projected = JSON.parse(
+			execFileSync(
+				process.execPath,
+				["--permission", `--allow-fs-read=${directory}`, "--input-type=module", "-e", projectionScript(file)],
+				{ encoding: "utf8", timeout: 20_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], env: {} },
+			),
+		);
+	} catch {
+		fail("WORKER_CONFIGURATION_UNVERIFIABLE");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+	let config;
+	try {
+		config = parseNetworkPolicyDeploymentConfigV1(projected);
+	} catch {
+		fail("NETWORKPOLICY_CONFIG_INVALID");
+	}
+	return { config, workerConfigurationSha256: sha256(bytes) };
+}
+
 /** The Worker pod labels, rendered Deployment selector and every Service that selects the Worker. */
 function workerSelectors(rendered) {
 	const podLabels = rendered.worker.spec?.template?.metadata?.labels ?? {};
@@ -568,21 +644,31 @@ export function validateNetworkPolicyEnforcementV1({
 			fail("PROBE_SUBSTITUTION_INVALID");
 		if ("port" in substitutions && substitutions.port !== probe.destination.port)
 			fail("PROBE_SUBSTITUTION_INVALID");
-		let instantiated;
+		let spec;
 		try {
-			instantiated = networkPolicySpecSha256V1(
-				networkPolicySpecV1({ variant, config, substitutions }),
-			);
+			spec = networkPolicySpecV1({ variant, config, substitutions });
 		} catch {
 			fail("PROBE_SUBSTITUTION_INVALID");
 		}
-		if (instantiated !== probe.policy.instantiatedSha256)
+		// The digest also binds the protected networks the compiler checked the spec against.
+		if (networkPolicyEvidenceSha256V1(spec, config) !== probe.policy.instantiatedSha256)
 			fail("PROBE_POLICY_MISMATCH");
 		for (const labels of Object.values(podLabels))
 			if (forbiddenLabels(labels)) fail("PROBE_LABELS_FORBIDDEN");
 		const { agentSelector } = substitutions;
+		// Judge sources and target against the instantiated policy itself: the target
+		// must be selected by the full podSelector (including the service label) and
+		// the sources by the variant's real same-namespace ingress peers.
+		const peers = (spec.ingress ?? [])
+			.flatMap((rule) => rule.from ?? [])
+			.filter((peer) => peer.namespaceSelector === undefined);
+		const selectsSource = (labels) =>
+			peers.some((peer) => labelsSatisfySelectorV1(labels, peer.podSelector));
 		if (
 			podLabels.target[agentSelector.key] !== agentSelector.value ||
+			!labelsSatisfySelectorV1(podLabels.target, spec.podSelector) ||
+			(peers.length > 0 && !selectsSource(podLabels.workerSource)) ||
+			selectsSource(podLabels.nonWorkerSource) ||
 			("workerSource" in substitutions &&
 				(!labelsSatisfySelectorV1(podLabels.workerSource, substitutions.workerSource) ||
 					labelsSatisfySelectorV1(podLabels.nonWorkerSource, substitutions.workerSource)))
@@ -702,20 +788,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	const namespace = process.env.ACK_NAMESPACE ?? "agent-infra";
 	try {
 		const evidenceFile = process.env.ACK_NETWORKPOLICY_EVIDENCE_FILE;
-		const configFile = process.env.ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE;
 		if (!evidenceFile) fail("EVIDENCE_REQUIRED");
 		let evidence;
 		try {
 			evidence = JSON.parse(readFileSync(evidenceFile, "utf8"));
 		} catch {
 			fail("EVIDENCE_INVALID");
-		}
-		if (!configFile) fail("NETWORKPOLICY_CONFIG_REQUIRED");
-		let deploymentConfig;
-		try {
-			deploymentConfig = JSON.parse(readFileSync(configFile, "utf8"));
-		} catch {
-			fail("NETWORKPOLICY_CONFIG_INVALID");
 		}
 		let renderedManifest;
 		try {
@@ -726,6 +804,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			fail("RENDERED_MANIFEST_REQUIRED");
 		}
 		if (!renderedManifest) fail("RENDERED_MANIFEST_REQUIRED");
+		const { config: deploymentConfig, workerConfigurationSha256 } =
+			await deriveNetworkPolicyDeploymentConfigV1({
+				bootstrapInputsFile: process.env.ACK_BOOTSTRAP_INPUTS_FILE,
+				renderedManifest,
+			});
 		const kubectl = (args) =>
 			execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
 				"--request-timeout=20s",
@@ -739,7 +822,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			renderedManifest,
 			observed: collect(namespace, kubectl),
 		});
-		process.stdout.write(`${JSON.stringify(summary)}\n`);
+		process.stdout.write(`${JSON.stringify({ ...summary, workerConfigurationSha256 })}\n`);
 	} catch (error) {
 		const code =
 			error instanceof NetworkPolicyEnforcementError ? error.code : "READ_FAILED";

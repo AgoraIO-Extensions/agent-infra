@@ -10,11 +10,11 @@ import {
 	eciPlacementFieldsV1,
 	labelsSatisfySelectorV1,
 	maxEvidenceAgeMs,
-	networkPolicySpecSha256V1,
 	placementSelectorSha256V1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
 import {
+	networkPolicyEvidenceSha256V1,
 	networkPolicySpecV1,
 	networkPolicyTemplateDigestsV1,
 } from "../packages/platform-core/src/workload-network-policy.ts";
@@ -23,6 +23,7 @@ import {
 	probeAgentKey,
 	probePolicyEvidence,
 	renderedEnforcementManifest,
+	workerConfigurationSource,
 	workerPodLabels,
 } from "./support/networkpolicy-evidence.mjs";
 
@@ -78,12 +79,13 @@ function resign(f) {
 		f.deploymentConfig,
 	);
 	for (const probe of f.evidence.probes)
-		probe.policy.instantiatedSha256 = networkPolicySpecSha256V1(
+		probe.policy.instantiatedSha256 = networkPolicyEvidenceSha256V1(
 			networkPolicySpecV1({
 				variant: probe.policy.variant,
 				config: f.deploymentConfig,
 				substitutions: probe.policy.substitutions,
 			}),
+			f.deploymentConfig,
 		);
 }
 
@@ -786,12 +788,13 @@ const cases = [
 				"agent-infra.agora.io/agent": "probe-a",
 			};
 			f.evidence.probes[0].policy.instantiatedSha256 =
-				networkPolicySpecSha256V1(
+				networkPolicyEvidenceSha256V1(
 					networkPolicySpecV1({
 						variant: "self-managed",
 						config: f.deploymentConfig,
 						substitutions: f.evidence.probes[0].policy.substitutions,
 					}),
+					f.deploymentConfig,
 				);
 		},
 		"PROBE_SUBSTITUTION_INVALID",
@@ -1060,11 +1063,28 @@ test("the entry reads only with get and fails closed on missing input or read fa
 		for (const step of ["allow", "deny", "recovery", "nonWorker"])
 			probe[step].at = move(probe[step].at);
 	const evidenceFile = join(directory, "evidence.json");
-	const configFile = join(directory, "config.json");
+	const configFile = join(directory, "configuration.mjs");
+	const bootstrapFile = join(directory, "bootstrap-inputs.json");
 	const renderedFile = join(directory, "rendered.yaml");
 	const calls = join(directory, "calls.log");
 	await writeFile(evidenceFile, JSON.stringify(f.evidence));
-	await writeFile(configFile, JSON.stringify(f.deploymentConfig));
+	await writeFile(configFile, workerConfigurationSource(f.deploymentConfig), {
+		mode: 0o600,
+	});
+	await writeFile(
+		bootstrapFile,
+		JSON.stringify({
+			schemaVersion: 1,
+			objects: [
+				{
+					kind: "Secret",
+					name: "np-gate-worker-config",
+					files: { "configuration.mjs": configFile },
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
 	await writeFile(renderedFile, f.renderedManifest);
 	const responses = {
 		"namespace/agent-infra": { metadata: { name: "agent-infra", uid: uid(2) } },
@@ -1096,7 +1116,7 @@ process.exit(1);
 		ACK_NAMESPACE: "agent-infra",
 		KUBECTL_BIN: await stub(false),
 		ACK_NETWORKPOLICY_EVIDENCE_FILE: evidenceFile,
-		ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: configFile,
+		ACK_BOOTSTRAP_INPUTS_FILE: bootstrapFile,
 		ACK_RENDERED_MANIFEST_FILE: renderedFile,
 	};
 	const passed = spawnSync(process.execPath, [script], {
@@ -1116,13 +1136,41 @@ process.exit(1);
 		return result;
 	};
 	failing({ ACK_NETWORKPOLICY_EVIDENCE_FILE: "" }, "EVIDENCE_REQUIRED");
+	failing({ ACK_BOOTSTRAP_INPUTS_FILE: "" }, "WORKER_CONFIGURATION_REQUIRED");
 	failing(
-		{ ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: "" },
-		"NETWORKPOLICY_CONFIG_REQUIRED",
+		{ ACK_BOOTSTRAP_INPUTS_FILE: join(directory, "absent") },
+		"WORKER_CONFIGURATION_UNVERIFIABLE",
 	);
-	failing(
-		{ ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: join(directory, "absent") },
-		"NETWORKPOLICY_CONFIG_INVALID",
+	// #4385 M1: the configuration is derived from the Worker module the render mounts,
+	// so a stale copy of an older configuration can no longer pass.
+	const original = await readFile(configFile, "utf8");
+	const widened = structuredClone(f.deploymentConfig);
+	widened.egress.modelEgress = [
+		{ destination: { cidr: "8.8.0.0/16" }, port: 443 },
+	];
+	await writeFile(configFile, workerConfigurationSource(widened), {
+		mode: 0o600,
+	});
+	failing({}, "NETWORKPOLICY_TEMPLATE_MISMATCH");
+	for (const source of [
+		"export const unrelated = 1;\n",
+		'import "./absent-sibling.mjs";\nexport const workloadInput = { policy: {} };\n',
+		'import { readFileSync } from "node:fs";\nreadFileSync("/etc/hosts");\n' +
+			original,
+		'import { execSync } from "node:child_process";\nexecSync("true");\n' +
+			original,
+		'await fetch("http://127.0.0.1:9");\n' + original,
+		"throw new Error('boom');\n",
+	]) {
+		await writeFile(configFile, source, { mode: 0o600 });
+		failing({}, "WORKER_CONFIGURATION_UNVERIFIABLE");
+	}
+	await writeFile(configFile, original, { mode: 0o600 });
+	assert.equal(
+		JSON.parse(
+			spawnSync(process.execPath, [script], { encoding: "utf8", env }).stdout,
+		).status,
+		"passed",
 	);
 	failing({ ACK_RENDERED_MANIFEST_FILE: "" }, "RENDERED_MANIFEST_REQUIRED");
 	const forbidden = failing({ KUBECTL_BIN: await stub(true) }, "READ_FAILED");
@@ -1206,4 +1254,176 @@ test("a real chart with arm64 Agents and default amd64 Sessions fails arm64-only
 	f.evidence.placement.selectorSha256 = placementSelectorSha256V1("arm64");
 	f.renderedManifest = rendered.stdout;
 	rejects(f, "SESSION_PLACEMENT_MISMATCH");
+});
+
+// ---- #4385 review MUST 2: probe Pods are judged against the instantiated policy ----
+const extraProbe = (f, variant, node = "j") => {
+	const base = f.evidence.probes[1];
+	const probe = structuredClone(base);
+	probe.policy = {
+		...base.policy,
+		...probePolicyEvidence(f.deploymentConfig, variant),
+	};
+	f.evidence.probes.push({
+		...probe,
+		destination: {
+			...probe.destination,
+			pod: `x-${node}-0`,
+			uid: uid(60),
+			nodeName: `virtual-kubelet-cn-hangzhou-${node}`,
+			controller: { kind: "StatefulSet", name: "agent-p2", uid: uid(14) },
+		},
+	});
+	return f.evidence.probes.at(-1);
+};
+const inconsistent = (name, mutate, variant = "multi-service-entry") =>
+	test(`fails closed on ${name}`, () => {
+		const f = fixture();
+		const probe =
+			variant === "multi-service-entry"
+				? f.evidence.probes[1]
+				: extraProbe(f, variant);
+		mutate(probe.policy.podLabels);
+		rejects(f, "PROBE_LABELS_INCONSISTENT");
+	});
+const serviceLabel = "agent-infra.agora.io/service";
+inconsistent(
+	"a multi-service target that lacks the service label",
+	(labels) => {
+		delete labels.target[serviceLabel];
+	},
+);
+inconsistent("a multi-service target with another service value", (labels) => {
+	labels.target[serviceLabel] = "other-svc";
+});
+inconsistent(
+	"a multi-service target not carrying the probe agent label",
+	(labels) => {
+		labels.target = { [serviceLabel]: "probe-svc" };
+	},
+);
+inconsistent(
+	"a multi-service allowed source that is not a sibling of the target",
+	(labels) => {
+		labels.workerSource = { "np-probe/source": "worker" };
+	},
+);
+inconsistent(
+	"a multi-service non-allowed source that is a sibling of the target",
+	(labels) => {
+		labels.nonWorkerSource = { [probeAgentKey]: "probe-a" };
+	},
+);
+inconsistent(
+	"a migration target without the fixed migration service label",
+	(labels) => {
+		delete labels.target[serviceLabel];
+	},
+	"multi-service-migration",
+);
+inconsistent(
+	"a migration target with a non-migration service value",
+	(labels) => {
+		labels.target[serviceLabel] = "probe-svc";
+	},
+	"multi-service-migration",
+);
+test("a complete migration probe whose target carries the fixed service label passes", () => {
+	const f = fixture();
+	extraProbe(f, "multi-service-migration");
+	assert.equal(run(f).status, "passed");
+});
+
+// ---- #4385 review MUST 3: protected networks are bound into every digest ----
+const nativeEgress = (platformDatabase) => ({
+	destinations: [{ destination: { ip: "8.8.8.8" }, port: 443 }],
+	protectedNetworks: {
+		platformDatabase: [platformDatabase],
+		connectionDatabase: ["10.1.0.0/24"],
+		kubernetesApi: ["9.9.9.9"],
+		sandboxPodNetworks: ["10.2.0.0/16"],
+	},
+});
+const withNative = (f) => {
+	f.deploymentConfig.egress.nativeEgress = nativeEgress("10.0.0.0/24");
+	f.evidence.probes.forEach((probe) => {
+		probe.policy.podLabels = probePolicyEvidence(
+			f.deploymentConfig,
+			probe.policy.variant,
+		).podLabels;
+	});
+	resign(f);
+};
+test("evidence with native egress passes and lists the no-native forms", () => {
+	const f = fixture();
+	withNative(f);
+	const summary = run(f);
+	assert.equal(summary.status, "passed");
+	assert(
+		Object.hasOwn(summary.networkPolicyTemplates, "self-managed+no-native"),
+	);
+});
+test("fails closed when only the protected networks change", () => {
+	const f = fixture();
+	withNative(f);
+	const before = networkPolicyTemplateDigestsV1(f.deploymentConfig);
+	f.deploymentConfig.egress.nativeEgress = nativeEgress("10.5.0.0/16");
+	// The effective specs are byte-identical; the protected input is what changed.
+	assert.deepEqual(
+		networkPolicySpecV1({
+			variant: "self-managed",
+			config: f.deploymentConfig,
+		}),
+		networkPolicySpecV1({
+			variant: "self-managed",
+			config: {
+				...f.deploymentConfig,
+				egress: {
+					...f.deploymentConfig.egress,
+					nativeEgress: nativeEgress("10.0.0.0/24"),
+				},
+			},
+		}),
+	);
+	assert.notDeepEqual(
+		networkPolicyTemplateDigestsV1(f.deploymentConfig),
+		before,
+	);
+	rejects(f, "NETWORKPOLICY_TEMPLATE_MISMATCH");
+	// Templates re-signed but the probe policy digest left old: the probe is rejected.
+	f.evidence.networkPolicy.templateSha256 = networkPolicyTemplateDigestsV1(
+		f.deploymentConfig,
+	);
+	rejects(f, "PROBE_POLICY_MISMATCH");
+	resign(f);
+	assert.equal(run(f).status, "passed");
+});
+
+// ---- #4385 review MUST 4: Agents without a template binding have their own forms ----
+test("fails closed when evidence omits the no-native forms of a native deployment", () => {
+	const f = fixture();
+	withNative(f);
+	for (const variant of Object.keys(f.evidence.networkPolicy.templateSha256))
+		if (variant.endsWith("+no-native"))
+			delete f.evidence.networkPolicy.templateSha256[variant];
+	rejects(f, "NETWORKPOLICY_TEMPLATE_MISMATCH");
+});
+test("a probe for the no-native form is accepted and its digest is checked", () => {
+	const f = fixture();
+	withNative(f);
+	f.evidence.probes[0].policy = {
+		...f.evidence.probes[0].policy,
+		...probePolicyEvidence(f.deploymentConfig, "self-managed+no-native", 3003),
+	};
+	assert.equal(run(f).status, "passed");
+	f.evidence.probes[0].policy.instantiatedSha256 = "0".repeat(64);
+	rejects(f, "PROBE_POLICY_MISMATCH");
+});
+test("a no-native form is not offered by a deployment without native egress", () => {
+	const f = fixture();
+	f.evidence.probes[0].policy = {
+		...f.evidence.probes[0].policy,
+		...probePolicyEvidence(f.deploymentConfig, "self-managed+no-native", 3003),
+	};
+	rejects(f, "PROBE_POLICY_MISMATCH");
 });
