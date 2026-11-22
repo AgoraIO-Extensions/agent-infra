@@ -4,6 +4,7 @@ import {
 	type ConversationEventCommandV1,
 	type ConversationEventDecisionV1,
 	ConversationEventError,
+	type ConversationEventPersistenceReasonV1,
 	type ConversationEventStateV1,
 	type ConversationEventTransactionPortV1,
 	type ConversationEventWritePlanV1,
@@ -1157,7 +1158,28 @@ export class PostgresConversationEventTransactionV1
 			})) as T;
 		} catch (error) {
 			if (error instanceof ConversationEventError) throw error;
-			return unavailable();
+			// Never retain the server message, constraint, query, parameters or cause.
+			let reason: ConversationEventPersistenceReasonV1 | undefined;
+			if (error instanceof postgres.PostgresError) {
+				switch (error.code.slice(0, 2)) {
+					case "23":
+						reason = "EVENT_DATABASE_CONSTRAINT";
+						break;
+					case "22":
+						reason = "EVENT_DATABASE_DATA_INVALID";
+						break;
+					case "40":
+					case "55":
+						reason = "EVENT_DATABASE_TRANSACTION";
+						break;
+					case "08":
+					case "53":
+					case "57":
+						reason = "EVENT_DATABASE_UNAVAILABLE";
+						break;
+				}
+			}
+			throw new ConversationEventError("unavailable", reason);
 		}
 	}
 }

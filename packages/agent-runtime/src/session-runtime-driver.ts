@@ -1860,6 +1860,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				operationRef: fact.operationRef,
 				attemptRef: fact.attemptRef,
 				phase,
+				startedAt: new Date(fact.startedAt).toISOString(),
 				finishedAt: new Date().toISOString(),
 				durationMs: Math.max(0, Date.now() - fact.startedAt),
 				...(phase === "failed"

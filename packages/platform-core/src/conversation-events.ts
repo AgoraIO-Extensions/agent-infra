@@ -382,10 +382,31 @@ export interface ConversationEventUseCaseOptionsV1 {
 	readonly newId?: () => string;
 }
 
+/** Internal diagnostics only; never changes the event wire, ACK or retry decision. */
+export type ConversationEventPersistenceReasonV1 =
+	| "EVENT_OPERATION_SUCCESSOR_INVALID"
+	| "EVENT_DATABASE_CONSTRAINT"
+	| "EVENT_DATABASE_DATA_INVALID"
+	| "EVENT_DATABASE_TRANSACTION"
+	| "EVENT_DATABASE_UNAVAILABLE";
+
+const persistenceReasons = new Set<string>([
+	"EVENT_OPERATION_SUCCESSOR_INVALID",
+	"EVENT_DATABASE_CONSTRAINT",
+	"EVENT_DATABASE_DATA_INVALID",
+	"EVENT_DATABASE_TRANSACTION",
+	"EVENT_DATABASE_UNAVAILABLE",
+]);
+
 export class ConversationEventError extends Error {
 	readonly code: "invalid_input" | "unavailable";
 
-	constructor(code: "invalid_input" | "unavailable") {
+	readonly persistenceReason?: ConversationEventPersistenceReasonV1;
+
+	constructor(
+		code: "invalid_input" | "unavailable",
+		persistenceReason?: ConversationEventPersistenceReasonV1,
+	) {
 		super(
 			code === "invalid_input"
 				? "Invalid conversation event"
@@ -393,6 +414,12 @@ export class ConversationEventError extends Error {
 		);
 		this.name = "ConversationEventError";
 		this.code = code;
+		if (
+			code === "unavailable" &&
+			persistenceReason &&
+			persistenceReasons.has(persistenceReason)
+		)
+			this.persistenceReason = persistenceReason;
 	}
 }
 
@@ -1261,11 +1288,18 @@ function decideEvent(
 	}
 	if (command.event.type === "execution.operation") {
 		if (state.operationHistory === undefined) return unavailable();
-		requireConversationOperationSuccessorV2(
-			state.operationHistory,
-			command.event.fact,
-			command.operationMetadataOnly,
-		);
+		try {
+			requireConversationOperationSuccessorV2(
+				state.operationHistory,
+				command.event.fact,
+				command.operationMetadataOnly,
+			);
+		} catch {
+			throw new ConversationEventError(
+				"unavailable",
+				"EVENT_OPERATION_SUCCESSOR_INVALID",
+			);
+		}
 	}
 	const event: PersistedRuntimeConversationEventV1 = {
 		schemaVersion: 1,
@@ -1313,8 +1347,13 @@ export function createConversationEventUseCaseV1(
 					},
 				);
 				return normalizeDecision(decision, expected);
-			} catch {
-				return unavailable();
+			} catch (error) {
+				throw new ConversationEventError(
+					"unavailable",
+					error instanceof ConversationEventError
+						? error.persistenceReason
+						: undefined,
+				);
 			}
 		},
 		async persistBatch(commandInputs) {
@@ -1373,8 +1412,13 @@ export function createConversationEventUseCaseV1(
 				return decisions.map((decision, index) =>
 					normalizeDecision(decision, expected[index]),
 				);
-			} catch {
-				return unavailable();
+			} catch (error) {
+				throw new ConversationEventError(
+					"unavailable",
+					error instanceof ConversationEventError
+						? error.persistenceReason
+						: undefined,
+				);
 			}
 		},
 	};

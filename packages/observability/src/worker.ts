@@ -218,6 +218,9 @@ export function createObservedConversationEvents(
 						stage: "result_persist",
 						outcome: "failed",
 						code: "PERSISTENCE_UNAVAILABLE",
+						protocolCode:
+							new ConversationEventError("unavailable", error.persistenceReason)
+								.persistenceReason ?? "EVENT_PERSISTENCE_UNKNOWN",
 						durationMs: performance.now() - began,
 						operationRef: "drain.persist",
 						...correlation,
@@ -270,6 +273,9 @@ export function createObservedConversationEvents(
 						stage: "result_persist",
 						outcome: "failed",
 						code: "PERSISTENCE_UNAVAILABLE",
+						protocolCode:
+							new ConversationEventError("unavailable", error.persistenceReason)
+								.persistenceReason ?? "EVENT_PERSISTENCE_UNKNOWN",
 						durationMs: performance.now() - began,
 						operationRef: "drain.persist_batch",
 						...(first

@@ -523,7 +523,14 @@ it("keeps overlapping same-tool operation facts bound to each call id", async ()
 			),
 		) as {
 			turns: {
-				operationFacts?: { kind: string; phase: string; toolId?: string }[];
+				operationFacts?: {
+					kind: string;
+					phase: string;
+					toolId?: string;
+					operationRef: string;
+					attemptRef: string;
+					startedAt?: string;
+				}[];
 			}[];
 		};
 		expect(
@@ -538,6 +545,19 @@ it("keeps overlapping same-tool operation facts bound to each call id", async ()
 			"completed",
 			"completed",
 		]);
+		const facts = state.turns[0]?.operationFacts ?? [];
+		for (const terminal of facts.filter(
+			(fact) => fact.kind === "tool" && fact.phase === "completed",
+		)) {
+			const original = facts.find(
+				(fact) =>
+					fact.phase === "started" &&
+					fact.operationRef === terminal.operationRef &&
+					fact.attemptRef === terminal.attemptRef,
+			);
+			expect(original?.startedAt).toEqual(expect.any(String));
+			expect(terminal.startedAt).toBe(original?.startedAt);
+		}
 	} finally {
 		await f.close();
 	}
