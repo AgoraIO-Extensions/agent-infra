@@ -674,4 +674,158 @@ describe("Runtime control observation (#4358 I2)", () => {
 			).toEqual(["unproven"]);
 		}
 	});
+
+	it("bounds the reader's work by the records it read, never by their numbers (#4360 round 5)", () => {
+		const parse = (lines: readonly string[]) =>
+			lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+		const project = (records: ReadonlyArray<Record<string, unknown>>) => {
+			const started = performance.now();
+			const view = projectRuntimeControlEvidenceV1(
+				records.map((record) => JSON.stringify(record)),
+			);
+			return {
+				statuses: view.timelines.map((timeline) => timeline.status),
+				elapsedMs: performance.now() - started,
+			};
+		};
+		const out = sink();
+		fullStop(observerFor(out.output));
+		const complete = parse(out.lines);
+		expect(project(complete).statuses).toEqual(["complete"]);
+
+		// A declared sequence at the end of the safe-integer range is a gap to
+		// report, not a span to walk; a gap-free span there is still complete.
+		const spread = project(
+			complete.map((record, position) =>
+				position === complete.length - 1
+					? { ...record, monoSequence: Number.MAX_SAFE_INTEGER }
+					: record,
+			),
+		);
+		expect(spread.statuses).toEqual(["unproven"]);
+		expect(spread.elapsedMs).toBeLessThan(1_000);
+		expect(
+			project(
+				complete.map((record, position) => ({
+					...record,
+					monoSequence:
+						Number.MAX_SAFE_INTEGER - complete.length + 1 + position,
+				})),
+			).statuses,
+		).toEqual(["complete"]);
+
+		// Normal gap detection is unchanged: another control's record dropped
+		// inside this control's span still leaves it unproven.
+		const shared = sink();
+		const observer = observerFor(shared.output);
+		const other = {
+			...binding,
+			executionId: "execution-b",
+			stopRequestId: "stop-b",
+		};
+		const mark = observer.mark();
+		observer.emit({
+			stage: "control_received",
+			outcome: "observed",
+			binding,
+			mark,
+			atMark: true,
+		});
+		observer.emit({
+			stage: "control_received",
+			outcome: "observed",
+			binding: other,
+		});
+		for (const stage of [
+			"control_validated",
+			"latch_commit_confirmed",
+		] as const)
+			observer.emit({ stage, outcome: "observed", binding, mark });
+		for (const stage of [
+			"interrupt_write_accepted",
+			"native_interrupt_ack",
+		] as const)
+			observer.emit({
+				stage,
+				outcome: "observed",
+				binding,
+				mark,
+				interrupt: { target: 0, targets: 1 },
+			});
+		observer.emit({
+			stage: "terminal_commit_confirmed",
+			outcome: "observed",
+			binding,
+			mark,
+			terminal: {
+				status: "cancelled",
+				ref: "codex-cursor-7",
+				occurredAt: "2026-11-21T21:00:00.050Z",
+			},
+		});
+		const interleaved = parse(shared.lines);
+		const statusOf = (records: ReadonlyArray<Record<string, unknown>>) =>
+			projectRuntimeControlEvidenceV1(
+				records.map((record) => JSON.stringify(record)),
+			).timelines.find((timeline) => timeline.stopRequestId === "stop-a")
+				?.status;
+		expect(statusOf(interleaved)).toBe("complete");
+		expect(
+			statusOf(
+				interleaved.filter((record) => record.stopRequestId !== "stop-b"),
+			),
+		).toBe("unproven");
+
+		// A huge declared target count is compared with the records read, not
+		// iterated, and many real targets stay linear.
+		expect(
+			project(
+				complete.map((record) =>
+					record.interruptTargets === undefined
+						? record
+						: { ...record, interruptTargets: Number.MAX_SAFE_INTEGER },
+				),
+			).statuses,
+		).toEqual(["unproven"]);
+		const many = sink();
+		const wide = observerFor(many.output);
+		const wideMark = wide.mark();
+		wide.emit({
+			stage: "control_received",
+			outcome: "observed",
+			binding,
+			mark: wideMark,
+			atMark: true,
+		});
+		for (const stage of [
+			"control_validated",
+			"latch_commit_confirmed",
+		] as const)
+			wide.emit({ stage, outcome: "observed", binding, mark: wideMark });
+		const targets = 2_000;
+		for (let target = 0; target < targets; target += 1)
+			for (const stage of [
+				"interrupt_write_accepted",
+				"native_interrupt_ack",
+			] as const)
+				wide.emit({
+					stage,
+					outcome: "observed",
+					binding,
+					mark: wideMark,
+					interrupt: { target, targets },
+				});
+		wide.emit({
+			stage: "terminal_commit_confirmed",
+			outcome: "observed",
+			binding,
+			mark: wideMark,
+			terminal: {
+				status: "cancelled",
+				ref: "codex-cursor-7",
+				occurredAt: "2026-11-21T21:00:00.050Z",
+			},
+		});
+		expect(project(parse(many.lines)).statuses).toEqual(["complete"]);
+	});
 });

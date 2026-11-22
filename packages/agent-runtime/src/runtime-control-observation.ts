@@ -281,7 +281,8 @@ const requiredStages = [
  * #4360: every native Turn the control interrupted needs its own write and
  * ACK record. All interrupt records must declare the same target count, and
  * each target index in that range must carry both stages; one target's
- * records never stand in for another's.
+ * records never stand in for another's. #4360 round 5: the work is linear in
+ * the records read; the declared count is only compared, never iterated.
  */
 function interruptTargetsComplete(
 	records: readonly RuntimeControlEvidenceV1[],
@@ -294,22 +295,34 @@ function interruptTargetsComplete(
 	const counts = new Set(interrupts.map((record) => record.interruptTargets));
 	const [count] = counts;
 	if (counts.size !== 1 || count === undefined || count < 1) return false;
-	for (let target = 0; target < count; target += 1)
-		for (const stage of [
-			"interrupt_write_accepted",
-			"native_interrupt_ack",
-		] as const)
-			if (
-				!interrupts.some(
-					(record) =>
-						record.stage === stage && record.interruptTarget === target,
-				)
-			)
-				return false;
-	return interrupts.every(
-		(record) =>
-			record.interruptTarget !== undefined && record.interruptTarget < count,
+	if (
+		!interrupts.every(
+			(record) =>
+				record.interruptTarget !== undefined && record.interruptTarget < count,
+		)
+	)
+		return false;
+	// Every index is in [0, count), so `count` distinct indexes are all of them.
+	return (["interrupt_write_accepted", "native_interrupt_ack"] as const).every(
+		(stage) =>
+			new Set(
+				interrupts
+					.filter((record) => record.stage === stage)
+					.map((record) => record.interruptTarget),
+			).size === count,
 	);
+}
+
+/** First index of a sorted array whose value is not below `target`. */
+function lowerBound(values: readonly number[], target: number) {
+	let low = 0;
+	let high = values.length;
+	while (low < high) {
+		const middle = (low + high) >>> 1;
+		if ((values[middle] ?? Number.POSITIVE_INFINITY) < target) low = middle + 1;
+		else high = middle;
+	}
+	return low;
 }
 
 const controlBindingCommonV1 = RuntimeControlBindingV1Schema.omit({
@@ -453,6 +466,14 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 		seen.add(record.monoSequence);
 		sequences.set(record.clockId, seen);
 	}
+	// #4360 round 5: the distinct sequences each clock domain actually wrote,
+	// sorted once; a span is checked by counting them, never by walking it.
+	const sortedSequences = new Map<string, number[]>();
+	for (const [clockId, seen] of sequences)
+		sortedSequences.set(
+			clockId,
+			[...seen].sort((a, b) => a - b),
+		);
 	// #4360 MUST-1: a timeline is one clock domain and one complete original
 	// control binding; records of a renewed fence or a replaced scope never join.
 	const controls = new Map<string, RuntimeControlEvidenceV1[]>();
@@ -462,7 +483,9 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 			record.clockId,
 			...controlBindingKeysV1.map((name) => record[name] ?? null),
 		]);
-		controls.set(key, [...(controls.get(key) ?? []), record]);
+		const group = controls.get(key);
+		if (group) group.push(record);
+		else controls.set(key, [record]);
 	}
 	const timelines: RuntimeControlTimelineV1[] = [];
 	for (const group of controls.values()) {
@@ -470,10 +493,13 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 		const first = ordered[0];
 		const last = ordered.at(-1);
 		if (!first || !last) continue;
-		const seen = sequences.get(first.clockId) ?? new Set<number>();
-		let gap = false;
-		for (let item = first.monoSequence; item <= last.monoSequence; item += 1)
-			if (!seen.has(item)) gap = true;
+		// The span is gap-free only if its clock domain wrote every sequence in
+		// it: the count of distinct written sequences inside equals its width.
+		const written = sortedSequences.get(first.clockId) ?? [];
+		const gap =
+			lowerBound(written, last.monoSequence + 1) -
+				lowerBound(written, first.monoSequence) !==
+			last.monoSequence - first.monoSequence + 1;
 		const has = (stage: string) => ordered.some((r) => r.stage === stage);
 		const rejected = ordered.some((r) => r.outcome === "rejected");
 		const unknown = ordered.some((r) => r.outcome === "unknown");
