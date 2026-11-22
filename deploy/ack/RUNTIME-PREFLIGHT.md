@@ -149,9 +149,9 @@ ECI 的 NetworkPolicy 需要 ACK 的 Poseidon 支持，ECS 的 Terway 配置不�
 `deploy/ack/networkpolicy-enforcement.mjs`；`redeploy.sh template-preflight` 在创建模板 Pod 之前
 先渲染 chart 再运行它。规则见
 [工程 Spec §10.1“运行形态与调度”](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#101-workload-形态)。
-它只读：读取两个仓库外文件和本次渲染结果，执行 `kubectl get` 读取 namespace、`kube-system`、
-Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，以及每个探针的目标 Pod
-（经 ReplicaSet 时连同 ReplicaSet）和原 NetworkPolicy。它不创建探针，也不写集群。
+它只读：读取证据文件和本次渲染结果，执行 `kubectl get` 读取 namespace、`kube-system`、
+Node 与带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job。它不读取探针目标
+Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不写集群。
 任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
 
 探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
@@ -168,18 +168,23 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
 - `cluster`：`kubeSystemNamespaceUid` 与 `clusterId`；`namespace`：`name` 与 `uid`。
 - `enforcer`：`runtime: eci`、`component: poseidon`、`version: "unobservable"`（托管侧不可见，
   没有配置回读，也没有 `configSha256`）。
-- `placement`：`architecture` 与 `legacyUnplaced`，必须等于渲染结果中 Worker 容器的
+- `placement`：`architecture`、`legacyUnplaced` 与 `selectorSha256`（Worker placement 的
+  `nodeSelector` 与 `tolerations` 规范化 JSON 的 SHA-256），必须等于渲染结果中 Worker 容器的
   `AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT`（即 values `agentWorkloadScheduling`，见
   [Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)）。Worker 拒绝配置
   模块自带 placement，所以这一项绑定的就是 Worker 实际注入的值。
 - `nodes`：已证执行的 ECI 虚拟节点 `name` 与 `uid`。
 - `probes`：每个可落节点至少一组探针（目标 Pod 运行在该节点上）。`destination` 记录目标 Pod 的 `pod`、`uid`、`nodeName`、`port` 与其
-  控制器 `controller`（`kind`、`name`、`uid`）；`policy` 记录原 NetworkPolicy 的 `name`、`uid`
-  和 `specSha256`（`networkPolicySpecSha256V1`，即 spec 规范化 JSON 的 SHA-256）。按顺序记录
+  控制器 `controller`（`kind`、`name`、`uid`）；`policy` 记录原 NetworkPolicy 的 `name`、`uid`、
+  所选 `exposure` 与 `templateSha256`（等于下面 `networkPolicy.templateSha256` 中该 exposure 的值；
+  探针包在产生证据时核对原策略归一化后的摘要）。按顺序记录
   `allow`（Worker 来源连通）、`deny`（施加临时 deny-all 后不通，含该策略 `policyUid`）、
   `recovery`（恢复后连通），另记 `nonWorker`（非 Worker 来源在原策略下不通）。探针目标
   Pod、临时 deny-all 与探针来源在探针结束后按 UID 删除；预检不要求它们仍存在，也不要求
   `probes` 覆盖现场全部 Agent 级控制器。
+- `networkPolicy`：`templateSha256`，含 `internal-only`、`self-managed`、`platform-auth` 三份
+  规范化模板摘要。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
+  “NetworkPolicy 规范化模板”维护。
 - `observedAt` 与 `expiresAt`：有效期不超过 7 天。
 
 以下情况都拒绝发布：
@@ -190,9 +195,10 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
-- 探针记录的 Pod 与控制器不在同一 namespace 或节点，或没有声明该 TCP 端口；探针记录的原策略
-  有效 spec 摘要，与 Worker 将为 Agent 级 Workload 渲染的 NetworkPolicy 有效 spec 摘要不一致
-  （同一 `networkPolicySpecSha256V1`）。
+- 证据自相矛盾：探针记录的 Pod 与其控制器不在证据的 namespace，Pod 的 `nodeName` 不是该探针所属的可落节点，或没有声明该 TCP 端口；预检用渲染结果
+  重新计算的三份规范化模板摘要，与证据 `networkPolicy.templateSha256` 任一不一致；探针记录的
+  `policy.templateSha256` 不等于其 `exposure` 对应的模板摘要；Worker placement 的 selector
+  与 toleration 摘要与证据 `placement.selectorSha256` 不一致。
 - 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`
   不一致；渲染结果不可解析或 Worker Deployment 不唯一。
 - 现场控制器带非部署注入的调度字段（包括没有 Worker 记录
