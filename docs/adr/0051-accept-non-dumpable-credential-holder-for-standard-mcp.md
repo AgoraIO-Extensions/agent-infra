@@ -6,6 +6,7 @@
 [#4157](https://github.com/AgoraIO-Extensions/agent-infra/issues/4157) 与
 [#4155](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155) 的交付线。用户于
 2026-11-22T09:3xZ 选定内存访问保护二选一（[#4199 评论 7077345348](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199#issuecomment-7077345348)）。
+§10.14 对 `container-boundary` 的限定例外按 2026-11-22T11:0xZ 的用户决定写入，见“后果”。
 须经非实现方独立评审后合入。完整条件只在
 [工程 Spec §13.5.4“初始受保护 Host profile”](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
 维护；本 ADR 只记录取舍、等价性依据和残余风险，不单独覆盖两份 PRD、工程 Spec 或 HLD。
@@ -82,7 +83,7 @@ Agent 级 scope、没有 attestation 或普通 env 不够，非 Codex 模板目�
 - **由 Runtime 修改 sysctl 开启 Yama。** 工程 Spec §13.5.4 禁止 Runtime 修改节点 sysctl 或提升
   权限。未采用。
 - **让 non-dumpable 同时覆盖 app-server。** app-server 是 upstream Codex 二进制，由 execve 启动
-  后恢复 dumpable，同 Session 的工具因此能读取它的 loopback token 并重开 Driver 协议管道。
+  后恢复 dumpable，non-dumpable 管不到它，暴露见工程 Spec §10.14 的限定例外。
   要覆盖它，需要走工程 Spec §10.11 的 upstream 原生补丁受控例外，或让二进制
   对执行者不可读，两者都需另行设计。本决定不包含这一项。
 
@@ -93,13 +94,16 @@ Agent 级 scope、没有 attestation 或普通 env 不够，非 Codex 模板目�
 - 回归测试用真实的同 UID 攻击子进程做负例。ECI 负例在目标放置上逐项验证工程 Spec §13.5.4
   列出的访问，并回读 `fs.suid_dumpable`、`/sys/kernel/security/lsm`、Seccomp 状态，以及
   unprivileged user namespace 能否创建。
-- **残余风险：** 第 2 项只保护凭据持有进程本身。`container-boundary` 模式下，同一 Session 的
-  工具进程能读取 app-server 的 loopback token（`/proc/<pid>/environ`，READ mode），也能重开
-  app-server 的 Driver 协议管道，伪造该次执行的 `item/tool/call` 与原生事件。这一暴露由
-  `container-boundary` 本身产生，与内核是否有 Yama 无关（Yama 只限制 ATTACH mode），选第 2 项
-  也不改变它。Relay Key、Connection token、service token 与 Host 内的 OAuth 材料仍受
-  non-dumpable 保护。影响限于同一用户、同一会话，这是 #4199 中用户选定的范围。与工程 Spec
-  §10.14 的关系待用户确认，见 [#4199](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199)。
+- **残余风险：** 第 2 项只保护凭据持有进程本身。`container-boundary` 下同一 Session 的工具进程
+  对 app-server 的 loopback token 与 Driver 协议管道的暴露，与选用 Yama 还是 non-dumpable
+  无关（Yama 只限制 ATTACH mode），由 `container-boundary` 本身产生。用户于 2026-11-22T11:0xZ
+  选方案 (c)（[#4199 评论 7078202782](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199#issuecomment-7078202782)）：
+  M1 把它记为限定例外，写入工程 Spec §10.14（范围只以该处为准），根治移到
+  [#4381](https://github.com/AgoraIO-Extensions/agent-infra/issues/4381)。取舍：
+  - 采用 (c)：同一用户、同一 Session、本次执行的范围内接受暴露，Codex 的 shell 与文件编辑照常可用。
+  - 未采用 (b)：按 §10.14 在 `container-boundary` 下关闭受影响的原生工具。M1 的 Codex 基本不能
+    运行 shell 与文件编辑。
+  Relay Key、Connection token、service token 与 Host 内的 OAuth 材料仍受 non-dumpable 保护。
 - 第 2 项只用于经验证的只属于一个 Session 的 Pod，使上面的暴露不超出同一用户、同一会话；
   其他 Pod 形态仍须 Yama `2` 或 `3`。
 - 回退方式是重新只认 Yama。代价是 ECI 上的 Connection 再次不可用。已安装的材料按原有的

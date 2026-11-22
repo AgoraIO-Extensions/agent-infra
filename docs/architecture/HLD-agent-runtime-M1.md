@@ -954,7 +954,8 @@ Session 约束。仍无完整参数时由原授权器按当前输入判断，不
 - 凭证：模型传输 token、Connection/MCP/Browser token 和 `AGENT_INFRA_*` 变量不进入工具子进程的
   环境（Codex 通过 shell 环境策略排除，Claude、OpenCode、Pi 由 Driver 在启动原生进程时移出或改经
   受保护通道交付），`/proc` 读取继续按工程 Spec §10.9 拒绝。某个 Driver 无法证明隔离时，只保持对应
-  工具关闭并记录缺口。
+  工具关闭并记录缺口。Codex `container-boundary` 下同 Session 的 loopback token 与 Driver 事件
+  暴露是工程 Spec §10.14 的限定例外，范围与期限只以该处为准，本节不扩大。
 - 事实：工具开始与终态沿 8.2 的日志、游标与重放确认发布，复用 8.5 的操作类别、稳定引用和受限
   失败原因；命令、参数、输出和文件内容不进入事实。一次工具失败只是工具结果，不使 Turn 失败或
   触发协议错误。
@@ -1577,7 +1578,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 四模板逐一用真实模型与受控工具操作验证开始/终态/耗时/实际选择/可得用量及原执行关联；摘要、自报 callId、缺失字段、零耗时推断不能冒充事实。Connection 按 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) 的模板范围验收，直连与两侧独立鉴权按上位 Spec 验证，覆盖同主体/Agent 的跨 Execution 真实引用调换、伪造响应及丢响应后的只读核实；原生核心 conformance 通过不替代整装验收。
 - 四模板的 Session Sandbox 原生工具（[8.5.4](#854-session-sandbox-原生工具)）各用真实镜像、Host/Driver 与模型链路验证：
   - 正向：在本人 Conversation 内执行 shell（`ls`、`find`、运行脚本）、编辑文件、列举与搜索目录；工具事实可见，工具调用不使 Turn 失败。
-  - 负向：读取、列举或修改兄弟 Conversation 目录被拒绝；`env`、`/proc` 和文件中读不到 Relay Key、模型传输 token、Connection/MCP/Browser token；到出站策略外目标的连接被拒绝，策略内目标可达。
+  - 负向：读取、列举或修改兄弟 Conversation 目录被拒绝；`env`、`/proc` 和文件中读不到 Relay Key、模型传输 token、Connection/MCP/Browser token；到出站策略外目标的连接被拒绝，策略内目标可达。Codex `container-boundary` 的模型 loopback token 与 Driver 管道按工程 Spec §10.14 的限定例外处理：该两项读到不判失败，但验收须如实记录读到的结果，不得据此声称无暴露；其余凭证仍须读不到。
   - 故障：停止能中断运行中的命令；进程或 Driver 崩溃后原工具不重放，Turn 收敛为真实终态或 `unknown`。
   - 入口：固定 E2E 中 Web 与企微各完成一次真实 shell 与文件编辑。
 - 意图提交前后、外部响应前后、事件/必要审计提交前后和游标确认前后注入故障；验证未开始操作被阻止、未知不盲重放、事件/审计不丢失、不重复计数，正文/凭证不进入元数据。单独关闭/故障化遥测 exporter 不得改变业务结果，必要审计失败不能返回虚假成功。
