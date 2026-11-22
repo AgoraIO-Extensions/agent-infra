@@ -1,4 +1,4 @@
-/** HLD §8.2.1: archive delivery is independent of the reliable business result. */
+/** HLD §8.2.1: archive work never changes the persisted business result. */
 export interface ConversationArchiveStateV1 {
 	readonly schemaVersion: 1;
 	readonly ref: string;
@@ -75,6 +75,9 @@ export function advanceConversationArchiveV1(input: {
 	readonly cursor: string | null;
 	readonly acknowledgedCursor?: string;
 	readonly complete?: true;
+	/** HLD §8.2.1: an enum-only result may expire only with original-target unavailability. */
+	readonly terminalSourceVerified?: boolean;
+	readonly targetUnavailable?: boolean;
 }): ConversationArchiveStateV1 {
 	const before = input.previous;
 	const archive: ConversationArchiveStateV1 = before ?? {
@@ -94,7 +97,9 @@ export function advanceConversationArchiveV1(input: {
 		...archive,
 		status: input.complete
 			? "complete"
-			: input.nowMs >= archive.deadlineAtMs
+			: input.nowMs >= archive.deadlineAtMs &&
+					(input.terminalSourceVerified !== false ||
+						input.targetUnavailable === true)
 				? "unavailable"
 				: archive.status,
 		cursor: input.cursor,
