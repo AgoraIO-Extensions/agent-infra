@@ -96,6 +96,7 @@ vi.mock("./process-protection.js", () => ({
 
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
+	assertStandardMcpOriginalSessionV1: vi.fn(),
 }));
 const decryption = vi.hoisted(() => ({
 	opened: 0,

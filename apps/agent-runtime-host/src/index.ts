@@ -77,6 +77,10 @@ import {
 	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
+import {
+	establishCredentialHolderSessionScopeV1,
+	protectCredentialHolderProcessV1,
+} from "./credential-holder-protection.js";
 import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
 import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
 import {
@@ -523,6 +527,23 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE === "session-executor"
 	)
 		runtimeConfigurationInvalid();
+	// Only Worker-issued, Host-verified Session scope can admit non-dumpable
+	// protection (ADR-0051); an Agent-level or unattested Pod never does.
+	establishCredentialHolderSessionScopeV1(
+		sessionExecutorBinding
+			? {
+					kind: "session-executor",
+					agentId: sessionExecutorBinding.agentId,
+					conversationId: sessionExecutorBinding.conversationId,
+					sessionGeneration: sessionExecutorBinding.sessionGeneration,
+				}
+			: codexIsolationMode === "container-boundary"
+				? {
+						kind: "container-boundary",
+						scope: required("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE"),
+					}
+				: undefined,
+	);
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
@@ -1382,6 +1403,8 @@ export async function closeRuntimeHost(
 }
 
 async function startFromEnvironment() {
+	// First, before any protected material or child process (ADR-0051).
+	protectCredentialHolderProcessV1();
 	assertRuntimeProcessProtection();
 	const runtime = await assembleRuntimeHost(process.env);
 	let server: ReturnType<typeof startRuntimeHost>;

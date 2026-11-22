@@ -72,6 +72,7 @@ import { createConnectionManualInstallationDrainV1 } from "./connection-manual-i
 // acceptance-only and is exercised by the Host's own image tests.
 vi.mock("../../agent-runtime-host/src/standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: () => {},
+	assertStandardMcpOriginalSessionV1: () => {},
 }));
 
 const namespace = "fixture-sandboxes";

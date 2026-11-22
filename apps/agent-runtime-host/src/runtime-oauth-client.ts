@@ -54,7 +54,10 @@ import {
 	type StandardMcpOAuthPublicationState,
 	withProtectedStandardMcpMaterialLock,
 } from "./standard-mcp-installation.js";
-import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
+import {
+	assertStandardMcpOriginalSessionV1,
+	assertStandardMcpProcessProtection,
+} from "./standard-mcp-protection.js";
 
 interface Transaction {
 	schemaVersion: 1;
@@ -870,6 +873,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			Date.now,
 		);
 		current();
+		assertStandardMcpOriginalSessionV1(binding.scope);
 		if (
 			!isDeepStrictEqual(binding.principal, principal) ||
 			!isDeepStrictEqual(binding.scope, reference)

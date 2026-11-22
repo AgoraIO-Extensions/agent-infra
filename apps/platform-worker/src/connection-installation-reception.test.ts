@@ -20,6 +20,7 @@ import {
 // Controlled format interoperability only; real Linux protection remains #851.
 vi.mock("../../agent-runtime-host/src/standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: vi.fn(),
+	assertStandardMcpOriginalSessionV1: () => {},
 }));
 
 it("delivers the projected supply tuple to the merged Host's actual receiver", async () => {

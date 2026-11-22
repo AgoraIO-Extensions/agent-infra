@@ -17,7 +17,10 @@ import {
 	standardMcpInputUnavailable as unavailable,
 } from "./standard-mcp-files.js";
 import type { StandardMcpInstallationDelivery } from "./standard-mcp-installation.js";
-import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
+import {
+	assertStandardMcpOriginalSessionV1,
+	assertStandardMcpProcessProtection,
+} from "./standard-mcp-protection.js";
 
 /** Public lookup key, derived only from authenticated original binding/profile. */
 export function standardMcpInstallationKey(
@@ -137,6 +140,7 @@ export async function createProtectedStandardMcpInput(options: {
 				);
 				signal.throwIfAborted();
 				assertStandardMcpProcessProtection();
+				assertStandardMcpOriginalSessionV1(original.scope);
 				const key = standardMcpInstallationKey(
 					original.principal,
 					original.scope.agentId,

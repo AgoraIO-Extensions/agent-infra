@@ -112,6 +112,7 @@ vi.mock("./process-protection.js", () => ({
 // Assembly tests exercise real private file reception, not Linux acceptance.
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: vi.fn(),
+	assertStandardMcpOriginalSessionV1: vi.fn(),
 }));
 
 vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
