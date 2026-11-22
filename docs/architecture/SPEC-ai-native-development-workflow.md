@@ -210,6 +210,8 @@ Custom 最终镜像与 init 容器组合由原部署入口生成有界不可变�
 
 ### 10.2 现场 AC 签收与版本回归
 
+现场 AC 只能由非实现验收方在 ACK 生产新 lane（namespace/release 均为 `agent-infra`）验证并签收；
+CI、单元测试、本地 Harness、kind 或 fixture 不能代替该现场 AC。
 现场 AC 绑定包含所需修复的**具名正式发布版本及其已部署的 Helm revision**签收。验收前回读
 正式发布回执和实际部署，确认修复包含关系，记录发布版本标识、不可变 source/image 引用、
 目标环境与 Helm revision；逐 AC 关联适用的样本/Execution 标识和可回读证据。`origin/main` 的后续提交
