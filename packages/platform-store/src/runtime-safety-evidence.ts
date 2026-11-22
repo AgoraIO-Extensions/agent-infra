@@ -45,35 +45,60 @@ export class PostgresRuntimeSafetyEvidenceStoreV1 {
 		this.#client = postgres(input.databaseUrl, { max: 2 });
 	}
 
+	/**
+	 * Stores one Worker-admitted record if, in the same transaction, the Execution's committed
+	 * original binding still matches it (#4358 S1). The authorization, Execution and Session
+	 * Sandbox rows are read `FOR SHARE`, so a revocation or a generation/fence change either
+	 * commits first and the record is refused, or waits until the record is stored. The Host
+	 * configuration and image come from the Sandbox's verified policy, never the Agent's
+	 * current configuration. A record already stored identically stays a duplicate.
+	 */
 	async recordOnce(
 		value: RuntimePersistedSafetyEvidenceV1,
 	): Promise<
-		"recorded" | "duplicate" | "challenge_replay" | "evidence_conflict"
+		| "recorded"
+		| "duplicate"
+		| "challenge_replay"
+		| "evidence_conflict"
+		| "revoked"
+		| "stale_binding"
+		| "scope_mismatch"
 	> {
 		const record = RuntimePersistedSafetyEvidenceV1Schema.parse(value);
 		const digest = runtimeSafetyEvidenceDigestV1(record);
 		const { binding } = record;
-		const inserted = await this.#client<{ evidence_id: string }[]>`
-			insert into platform.runtime_safety_evidence (
-				evidence_id, kind, code, agent_id, conversation_id, execution_id,
-				challenge_ref, record, record_sha256
-			) values (
-				${binding.evidenceId}, ${record.kind}, ${record.code}, ${binding.agentId},
-				${binding.conversationId}, ${binding.executionId}, ${binding.challengeRef},
-				${this.#client.json(canonical(record) as postgres.JSONValue)}, ${digest}
-			)
-			on conflict do nothing
-			returning evidence_id
-		`;
-		if (inserted.length === 1) return "recorded";
-		const [existing] = await this.#client<{ record_sha256: string }[]>`
-			select record_sha256 from platform.runtime_safety_evidence
-			where evidence_id = ${binding.evidenceId}
-		`;
-		if (!existing) return "challenge_replay";
-		return existing.record_sha256 === digest
-			? "duplicate"
-			: "evidence_conflict";
+		return this.#client.begin(async (transaction) => {
+			const existing = async () => {
+				const [row] = await transaction<{ record_sha256: string }[]>`
+					select record_sha256 from platform.runtime_safety_evidence
+					where evidence_id = ${binding.evidenceId}
+				`;
+				return row;
+			};
+			const issue = await originalBindingIssue(transaction, binding);
+			if (issue) {
+				const stored = await existing();
+				return stored?.record_sha256 === digest ? "duplicate" : issue;
+			}
+			const inserted = await transaction<{ evidence_id: string }[]>`
+				insert into platform.runtime_safety_evidence (
+					evidence_id, kind, code, agent_id, conversation_id, execution_id,
+					challenge_ref, record, record_sha256
+				) values (
+					${binding.evidenceId}, ${record.kind}, ${record.code}, ${binding.agentId},
+					${binding.conversationId}, ${binding.executionId}, ${binding.challengeRef},
+					${transaction.json(canonical(record) as postgres.JSONValue)}, ${digest}
+				)
+				on conflict do nothing
+				returning evidence_id
+			`;
+			if (inserted.length === 1) return "recorded";
+			const stored = await existing();
+			if (!stored) return "challenge_replay";
+			return stored.record_sha256 === digest
+				? "duplicate"
+				: "evidence_conflict";
+		});
 	}
 
 	/**
@@ -172,4 +197,110 @@ export class PostgresRuntimeSafetyEvidenceStoreV1 {
 	async close(): Promise<void> {
 		await this.#client.end({ timeout: 5 });
 	}
+}
+
+type Transaction = postgres.TransactionSql;
+
+function sandboxPodUid(observation: unknown): string | undefined {
+	if (!observation || typeof observation !== "object") return undefined;
+	const value = observation as {
+		executorInstance?: { podUid?: unknown };
+		resources?: unknown;
+	};
+	if (typeof value.executorInstance?.podUid === "string")
+		return value.executorInstance.podUid;
+	if (!Array.isArray(value.resources)) return undefined;
+	const pod = value.resources.find(
+		(entry) =>
+			entry &&
+			typeof entry === "object" &&
+			(entry as { kind?: unknown }).kind === "Pod",
+	) as { uid?: unknown } | undefined;
+	return typeof pod?.uid === "string" ? pod.uid : undefined;
+}
+
+function sandboxEpoch(observation: unknown): string | undefined {
+	if (!observation || typeof observation !== "object") return undefined;
+	const epoch = (observation as { executorInstance?: { epoch?: unknown } })
+		.executorInstance?.epoch;
+	return typeof epoch === "string" ? epoch : undefined;
+}
+
+/** Compares a record's binding with the Execution's committed original binding. */
+async function originalBindingIssue(
+	transaction: Transaction,
+	binding: RuntimePersistedSafetyEvidenceV1["binding"],
+): Promise<"revoked" | "stale_binding" | "scope_mismatch" | undefined> {
+	const [execution] = await transaction<
+		{
+			conversation_id: string;
+			agent_id: string;
+			session_generation: string;
+			delivery_fence: string;
+			authorization_revision: string;
+			sandbox_id: string | null;
+		}[]
+	>`
+		select conversation_id, agent_id, session_generation::text, delivery_fence::text,
+			authorization_revision, sandbox_id
+		from platform.conversation_executions
+		where execution_id = ${binding.executionId}
+		for share
+	`;
+	if (
+		!execution ||
+		execution.conversation_id !== binding.conversationId ||
+		execution.agent_id !== binding.agentId ||
+		!binding.authorization ||
+		execution.authorization_revision !== binding.authorization.revision
+	)
+		return "scope_mismatch";
+	const [authorization] = await transaction<{ id: string; revoked: boolean }[]>`
+		select id, revoked_at is not null as revoked
+		from platform.task_authorization_records
+		where execution_id = ${binding.executionId}
+		for share
+	`;
+	if (!authorization || authorization.id !== binding.authorization.recordId)
+		return "scope_mismatch";
+	if (authorization.revoked) return "revoked";
+	if (
+		execution.session_generation !== String(binding.sessionGeneration) ||
+		execution.delivery_fence !== String(binding.executionDeliveryFence) ||
+		execution.sandbox_id !== binding.sandbox.ref
+	)
+		return "stale_binding";
+	const [sandbox] = await transaction<
+		{
+			session_generation: string;
+			resource_fence: string;
+			resource_policy: unknown;
+			resource_observation: unknown;
+		}[]
+	>`
+		select session_generation::text, resource_fence::text, resource_policy,
+			resource_observation
+		from platform.session_sandbox_allocations
+		where sandbox_id = ${binding.sandbox.ref}
+			and conversation_id = ${binding.conversationId}
+		for share
+	`;
+	const policy = sandbox?.resource_policy as
+		| { configurationRevision?: unknown; imageDigest?: unknown }
+		| null
+		| undefined;
+	if (
+		!sandbox ||
+		sandbox.session_generation !== String(binding.sessionGeneration) ||
+		sandbox.resource_fence !== String(binding.sandbox.resourceFence) ||
+		sandboxPodUid(sandbox.resource_observation) !== binding.sandbox.podUid ||
+		sandboxEpoch(sandbox.resource_observation) !==
+			binding.sandbox.executorEpoch ||
+		typeof policy?.configurationRevision !== "number" ||
+		String(policy.configurationRevision) !==
+			binding.host.configurationRevision ||
+		policy.imageDigest !== binding.host.imageDigest
+	)
+		return "stale_binding";
+	return undefined;
 }
