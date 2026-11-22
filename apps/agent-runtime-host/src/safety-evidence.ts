@@ -21,7 +21,10 @@ export type RuntimeSafetyEvidenceWindowConfigurationV1 =
 	| { readonly status: "disabled" }
 	/** Fixed diagnostic only: the Host keeps serving business with evidence off. */
 	| { readonly status: "invalid" }
-	| { readonly status: "enabled"; readonly window: RuntimeSafetyEvidenceWindowV1 };
+	| {
+			readonly status: "enabled";
+			readonly window: RuntimeSafetyEvidenceWindowV1;
+	  };
 
 export function readRuntimeSafetyEvidenceWindowV1(
 	environment: NodeJS.ProcessEnv,
