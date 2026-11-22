@@ -71,6 +71,8 @@ GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
 开发 PR 的准确状态、日期、head SHA、merge SHA、Issue AC 链接统一见
 [开发 PR 回读](issue-status-tracking.md#开发-pr-回读)，不在此重复维护历史 SHA。
 发现代码遗漏或回归继续修复并恢复跟踪，不把真实验收延期当成代码缺口已完成。
+现场 AC 的版本绑定、签收和后续回归遵循
+[工作流 Spec §10.2](../architecture/SPEC-ai-native-development-workflow.md#102-现场-ac-签收与版本回归)。
 验收前回读 PRD/Spec 及适用 ADR 的当前范围，核对真实输入和部署来源；错误模板、旧协议或
 缺声明导致的失败先定位并保留，不扩大需求或绕过准入来取得通过。
 

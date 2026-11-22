@@ -644,6 +644,30 @@ export class PostgresConversationDispatchStoreV1
 					and (
 						-- Control and terminal recovery are never gated on business readiness.
 						operation = 'conversation.turn.stop.v1'
+						or (operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+							and not (payload ? 'metadataRecovery')
+							-- HLD §8.4: discover local never-sent settlement even after Sandbox stop.
+							and exists (
+								select 1 from platform.conversation_executions e
+								join platform.conversations c on c.id=e.conversation_id
+									and c.agent_id=e.agent_id and c.actor_id=e.actor_id
+									and c.principal_type=e.principal_type and c.channel_id=e.channel_id
+									and c.session_generation=e.session_generation
+								join platform.agent_applications a on a.agent_id=e.agent_id
+								join platform.session_sandbox_allocations s on s.sandbox_id=e.sandbox_id
+									and s.conversation_id=c.id and s.agent_id=e.agent_id and s.session_generation=e.session_generation
+								where e.execution_id=outbox_items.payload->>'executionId' and c.id=outbox_items.scope_id
+									and outbox_items.payload->>'conversationId'=c.id
+									and outbox_items.payload->>'sessionGeneration'=e.session_generation::text
+									and c.authorization_revision=e.authorization_revision and c.status<>'unavailable'
+									and e.status='submitted' and e.delivery_fence=outbox_items.delivery_fence
+									and a.status in ('stopped','disabled') and a.desired_state='stopped'
+									and e.accepted_original_host_session_ref is null and e.last_runtime_cursor is null
+									and (e.original_submit_host_session_ref is null or e.original_submit_host_session_ref=c.host_session_ref)
+									and ((e.runtime_submit_protocol is null and e.original_operation_digest is null and e.original_submit_host_session_ref is null)
+										or (e.runtime_submit_protocol in ('v2','v4') and length(e.original_operation_digest)>0))
+									and not exists (select 1 from platform.conversation_stops st where st.execution_id=e.execution_id and st.status='submitted')
+							))
  or (operation in ('conversation.native-capability.invoke.v1','conversation.native-capability.invoke.v2')
  and status in ('pending','retry_scheduled') and attempt_count=0 and delivery_fence=0
  and exists(select 1 from platform.conversation_executions e
@@ -1740,14 +1764,21 @@ export class PostgresConversationDispatchStoreV1
 		budgetMs: number;
 		acknowledgedCursor?: string;
 		pendingCursor?: string;
+		targetUnavailable?: boolean;
 		complete?: true;
 	}): Promise<{
 		status: "pending" | "unavailable" | "complete" | "ineligible";
 		remainingMs: number;
+		terminalSourceVerified?: boolean;
 	} | null> {
 		requireClaim(input.claim);
 		if (!Number.isSafeInteger(input.budgetMs) || input.budgetMs < 1)
 			throw new TypeError("Invalid archive budget");
+		if (
+			input.targetUnavailable !== undefined &&
+			typeof input.targetUnavailable !== "boolean"
+		)
+			throw new TypeError("Invalid archive target observation");
 		return databaseOperation(() =>
 			this.#client.begin(async (tx) => {
 				const claim = input.claim;
@@ -1775,8 +1806,14 @@ export class PostgresConversationDispatchStoreV1
 						and details->>'generation'=${String(claim.sessionGeneration)} and details->>'executionFence'=${String(claim.executionDeliveryFence)} and details->>'status'=${state.execution.status}),
 					(select event_id from platform.conversation_events where execution_id=${claim.executionId} and conversation_id=${claim.conversationId} and source='runtime'
 						and event_type='execution.status' and event_payload->>'status'=${state.execution.status} order by sequence limit 1)) as ref`;
-				if (!terminalProof?.ref)
-					return { status: "ineligible" as const, remainingMs: 0 };
+				// HLD §8.2.1: missing source fixes a control budget, never an event/ACK permission.
+				if (
+					!terminalProof?.ref &&
+					(input.acknowledgedCursor !== undefined ||
+						input.pendingCursor !== undefined ||
+						input.complete)
+				)
+					return null;
 				const [allocation] = await tx<
 					{
 						pvc: { name: string; namespace: string; uid: string } | null;
@@ -1798,7 +1835,7 @@ export class PostgresConversationDispatchStoreV1
 					hostSessionRef: state.conversation.host_session_ref,
 					requestDigest: original.originalOperationDigest,
 					businessStatus: state.execution.status,
-					terminalSourceRef: terminalProof.ref,
+					terminalSourceRef: terminalProof?.ref ?? null,
 					pvcLocation: {
 						name: allocation?.name ?? null,
 						namespace: allocation?.namespace ?? null,
@@ -1812,6 +1849,7 @@ export class PostgresConversationDispatchStoreV1
 							archive: unknown;
 							lease?: unknown;
 							pendingCursor?: string | null;
+							targetUnavailable?: boolean;
 						};
 					}[]
 				>`select details from platform.audit_events
@@ -1836,11 +1874,20 @@ export class PostgresConversationDispatchStoreV1
 											}
 										: binding.pvcLocation),
 								pvc: null,
+								terminalSourceRef: null,
 							},
-							{ ...binding, pvc: null },
+							{ ...binding, pvc: null, terminalSourceRef: null },
 						))
 				)
 					return null;
+				// A real source may enrich the original missing fact, never replace a previously pinned source.
+				if (
+					priorBinding?.terminalSourceRef &&
+					priorBinding.terminalSourceRef !== binding.terminalSourceRef
+				)
+					return null;
+				const targetUnavailable =
+					input.targetUnavailable ?? last?.details.targetUnavailable === true;
 				const observed = allocation?.pvc;
 				if (
 					observed &&
@@ -1901,7 +1948,13 @@ export class PostgresConversationDispatchStoreV1
 					(committedAckBeforeDeadline ||
 						(input.complete &&
 							(!previous || clock.now < previous.deadlineAtMs)));
+				const sourceFacts = {
+					terminalSourceVerified: binding.terminalSourceRef !== null,
+					targetUnavailable,
+				};
+				let decisionAt = clock.now;
 				let archive = advanceConversationArchiveV1({
+					...sourceFacts,
 					...(previous ? { previous } : {}),
 					ref: previous?.ref ?? randomUUID(),
 					nowMs: clock.now,
@@ -1916,17 +1969,18 @@ export class PostgresConversationDispatchStoreV1
 					const written = await tx`insert into platform.audit_events
 					(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
 					select ${`conversation.archive:${claim.executionId}:${String(archive.revision).padStart(16, "0")}`},${claim.traceId},'system',${claim.leaseOwner},'conversation.archive.observed','execution',${claim.executionId},${archive.status === "unavailable" ? "failed" : "succeeded"},${claim.requestId},${claim.agentId},
-					${tx.json({ binding, archive, pendingCursor, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
+					${tx.json({ binding, archive, pendingCursor, targetUnavailable, lease: { owner: claim.leaseOwner, fence: claim.deliveryFence } } as unknown as Parameters<typeof tx.json>[0])}
 					from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
 					and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()
 					and (${archive.status === "complete"} or
-					 (${archive.status === "pending"} and clock_timestamp()<to_timestamp(${String(archive.deadlineAtMs)}::float8/1000)) or
+					 (${archive.status === "pending"} and (clock_timestamp()<to_timestamp(${String(archive.deadlineAtMs)}::float8/1000) or ${decisionAt >= archive.deadlineAtMs})) or
 					 (${archive.status === "unavailable"} and clock_timestamp()>=to_timestamp(${String(archive.deadlineAtMs)}::float8/1000))) returning id`;
 					return written.length === 1;
 				};
 				const changed =
 					!previous ||
 					(last?.details.pendingCursor ?? null) !== pendingCursor ||
+					(last?.details.targetUnavailable ?? false) !== targetUnavailable ||
 					!isDeepStrictEqual(last?.details.binding, binding) ||
 					!isDeepStrictEqual(last?.details.lease, {
 						owner: claim.leaseOwner,
@@ -1952,7 +2006,9 @@ export class PostgresConversationDispatchStoreV1
 				 exists(select 1 from platform.outbox_items where id=${claim.itemId} and status='processing' and lease_owner=${claim.leaseOwner}
 				 and delivery_fence=${claim.deliveryFence} and lease_expires_at>clock_timestamp()) as owned`;
 				if (!finalClock?.owned) throw new StaleDispatchLease();
+				decisionAt = finalClock.now;
 				const settled = advanceConversationArchiveV1({
+					...sourceFacts,
 					previous: archive,
 					ref: archive.ref,
 					nowMs: finalClock.now,
@@ -1963,7 +2019,7 @@ export class PostgresConversationDispatchStoreV1
 						: {}),
 					...(completionProven ? { complete: true as const } : {}),
 				});
-				if (settled.status !== archive.status) {
+				if (settled.status !== archive.status || (changed && !written)) {
 					archive = {
 						...settled,
 						revision: archive.revision + (written ? 1 : 0),
@@ -1985,6 +2041,7 @@ export class PostgresConversationDispatchStoreV1
 					);
 				return {
 					status,
+					terminalSourceVerified: sourceFacts.terminalSourceVerified,
 					remainingMs:
 						status === "pending"
 							? Math.max(0, archive.deadlineAtMs - finalClock.now)
