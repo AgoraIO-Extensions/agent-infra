@@ -2886,8 +2886,9 @@ attach-mode 内存访问及 `pidfd_getfd`：
   不受信同 UID 进程出现”一起，保证 Host 设置完成时没有已持有其内存或 FD 的外部进程。
 
 第 2 项只保护设置了它的凭据持有进程本身，因此只在该进程所在 Pod 只属于一个 Session 时
-适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）。“只属于一个 Session”只能
-建立在 Worker 签发、Host 已验证的 scope 上：Codex `container-boundary` 的 HMAC attestation
+适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）。对 Runtime Host，“只属于一个
+Session”只能建立在 Worker 签发、Host 已验证的 scope 上；安装供应 initializer 不是 Host，
+依据见下一段。Host 的 scope 为：Codex `container-boundary` 的 HMAC attestation
 （`apps/agent-runtime-host/src/configuration.ts` 的 `readCodexIsolationMode`），或
 `session-executor` 的绑定。Session 级 `container-boundary` 的 scope 是可打印的
 `agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
@@ -2904,7 +2905,8 @@ scope 恒不满足。每次读取受保护材料前，另要求该 scope 逐字�
 scope。它只在 Worker 为 Session Sandbox 创建的 init container 中运行（[§13.5.6](#1356-标准-oauth-安装供应)），
 先于 Pod 内任何工具进程，其 PID namespace 内没有同 UID 的不受信进程；它因此只通过进程级判定，
 放置依据是该 Pod 由 Worker 只为一个 Session 创建，而不是 scope 验证。它不读取原 Execution 的
-材料，不通过上一段的逐次 Session 比较。
+材料，没有可与 scope 比较的原执行，所以不适用上一段“每次读取前比较 scope”的要求。它是
+普通 init container（不是 sidecar），运行结束后才启动 Pod 内的其他容器。
 
 第 2 项不保护同一 Pod 内的其他同 UID 进程。`container-boundary` 下同一 Session 的工具进程
 对 app-server 的暴露，由 [§10.14](#1014-标准模板-session-sandbox-原生工具) 的限定例外统一
