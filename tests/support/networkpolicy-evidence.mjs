@@ -94,6 +94,7 @@ export function renderedEnforcementManifest(
 	namespace,
 	placement,
 	sessionArchitecture = placement?.architecture ?? "amd64",
+	workerEnvironment = [],
 ) {
 	const name = `${namespace}-session-eci`;
 	const scope = {
@@ -132,6 +133,7 @@ export function renderedEnforcementManifest(
 										name: "PLATFORM_WORKER_DEPLOYMENT_MODULE",
 										value: "file:///app/dist/deployment.mjs",
 									},
+									...workerEnvironment,
 								],
 								volumeMounts: [
 									{
@@ -310,5 +312,39 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 			"statefulsets,deployments,jobs/-l": { items: [] },
 		},
 		rendered: renderedEnforcementManifest(namespace, placement),
+	};
+}
+
+/** A bootstrap input file plus rendered chart mounting `source` as the Worker configuration.mjs. */
+export async function workerConfigurationInputs(
+	directory,
+	source,
+	options = {},
+) {
+	const configFile = join(directory, "configuration.mjs");
+	await writeFile(configFile, source, { mode: 0o600 });
+	const bootstrapInputsFile = join(directory, "bootstrap-inputs.json");
+	await writeFile(
+		bootstrapInputsFile,
+		JSON.stringify({
+			schemaVersion: 1,
+			objects: [
+				{
+					kind: "Secret",
+					name: "np-gate-worker-config",
+					files: { "configuration.mjs": configFile },
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
+	return {
+		bootstrapInputsFile,
+		renderedManifest: renderedEnforcementManifest(
+			options.namespace ?? "agent-infra",
+			{ architecture: "amd64", legacyUnplaced: "reject" },
+			"amd64",
+			options.workerEnvironment ?? [],
+		),
 	};
 }

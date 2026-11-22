@@ -7,6 +7,7 @@ import {
 	networkPolicyTemplateDigestsV1,
 	networkPolicyVariantsV1,
 	parseNetworkPolicyDeploymentConfigV1,
+	resolveWorkerEffectiveEgressV1,
 } from "./workload-network-policy.js";
 
 const owner = agentNetworkPolicyOwnerLabelV1;
@@ -305,5 +306,49 @@ describe("Agent NetworkPolicy template (#4351)", () => {
 		expect(networkPolicyEvidenceSha256V1(spec, a)).not.toBe(
 			networkPolicySpecSha256V1(spec),
 		);
+	});
+	it("resolves the Worker's final egress from the module and its fixed environment (#4385 R2-M1)", () => {
+		const policy = { ...config().egress, runtimeAuth: {} };
+		const environment = {
+			PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: "https://files.example.test",
+			PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: JSON.stringify({
+				ip: "198.51.100.7",
+			}),
+			PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "true",
+			PLATFORM_WORKER_NAMESPACE: "agent-infra",
+			PLATFORM_WORKER_RELEASE_NAME: "ack",
+		};
+		const result = resolveWorkerEffectiveEgressV1({ policy, environment });
+		expect(result.nativeMetadataGatewayPort).toBe(3004);
+		expect(result.fileExchangeOrigin).toBe("https://files.example.test");
+		expect(result.policy.fileExchangeEgress).toEqual([
+			{ destination: { ip: "198.51.100.7" }, port: 443 },
+		]);
+		expect(result.policy.nativeMetadataWorkerEgress?.[0]?.destination).toEqual({
+			namespace: "agent-infra",
+			podLabels: {
+				"app.kubernetes.io/component": "platform-worker",
+				"app.kubernetes.io/instance": "ack",
+			},
+		});
+		// A gateway without a release name, or an egress without an origin, is refused.
+		expect(() =>
+			resolveWorkerEffectiveEgressV1({
+				policy,
+				environment: {
+					...environment,
+					PLATFORM_WORKER_RELEASE_NAME: undefined,
+				},
+			}),
+		).toThrow();
+		expect(() =>
+			resolveWorkerEffectiveEgressV1({
+				policy,
+				environment: {
+					PLATFORM_WORKER_FILE_EXCHANGE_EGRESS:
+						environment.PLATFORM_WORKER_FILE_EXCHANGE_EGRESS,
+				},
+			}),
+		).toThrow();
 	});
 });

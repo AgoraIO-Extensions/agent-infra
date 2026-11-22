@@ -884,3 +884,252 @@ export function networkPolicyTemplateDigestsV1(
 		]),
 	);
 }
+
+// ---------------------------------------------------------------------------
+// Worker final network configuration. The Worker deployment entry and the ACK
+// preflight both resolve the file exchange and native metadata egress through
+// these functions, so the preflight digests what the Worker actually renders.
+// ---------------------------------------------------------------------------
+
+const DNS_NAME =
+	/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/i;
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/** Exact HTTP(S) origin without credentials, path, query or fragment. */
+export function isFileExchangeOriginV1(value: unknown): value is string {
+	if (typeof value !== "string" || value.length > 512) return false;
+	let origin: URL;
+	try {
+		origin = new URL(value);
+	} catch {
+		return false;
+	}
+	if (
+		(origin.protocol !== "http:" && origin.protocol !== "https:") ||
+		origin.origin !== value ||
+		origin.username !== "" ||
+		origin.password !== "" ||
+		(origin.pathname !== "/" && origin.pathname !== "") ||
+		origin.search !== "" ||
+		origin.hash !== ""
+	)
+		return false;
+	// In-cluster cleartext is limited to DNS Service names. HTTPS may also use
+	// a deployment-approved external address.
+	return (
+		origin.protocol === "https:" ||
+		(DNS_NAME.test(origin.hostname) &&
+			!IPV4.test(origin.hostname) &&
+			!origin.hostname.startsWith("["))
+	);
+}
+
+/**
+ * Resolve the optional file exchange origin from the mounted deployment module
+ * and the fixed environment seam. The mounted module stays authoritative; a
+ * duplicate, an origin without Runtime auth, or an invalid origin fails closed
+ * before any Kubernetes resource is written.
+ */
+export function resolveWorkloadFileExchangeOriginV1(input: {
+	readonly configured?: string;
+	readonly environment?: string;
+	readonly hasRuntimeAuth: boolean;
+}): string | undefined {
+	const environment =
+		input.environment === undefined || input.environment === ""
+			? undefined
+			: input.environment;
+	if (input.configured !== undefined && environment !== undefined)
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
+	if (environment !== undefined) {
+		if (!input.hasRuntimeAuth || !isFileExchangeOriginV1(environment))
+			throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+		return environment;
+	}
+	return input.configured;
+}
+
+/** TCP port an exact file exchange origin connects to (explicit or scheme default). */
+export function fileExchangeOriginPortV1(origin: string): number {
+	const url = new URL(origin);
+	return url.port === ""
+		? url.protocol === "https:"
+			? 443
+			: 80
+		: Number(url.port);
+}
+
+/**
+ * #3289：文件交换 egress 与 origin 必须同时存在或同时缺失；存在时只有一条、只到部署
+ * 声明的单一目的地（精确 IP 或 namespace/Pod 选择器），端口等于 origin 的端口。
+ */
+export function isWorkloadFileExchangeEgressCurrentV1(
+	origin: string | undefined,
+	egress: WorkloadEgressPolicyV1["fileExchangeEgress"],
+): boolean {
+	if (origin === undefined) return egress === undefined;
+	if (
+		!isFileExchangeOriginV1(origin) ||
+		!Array.isArray(egress) ||
+		egress.length !== 1 ||
+		egress[0]?.port !== fileExchangeOriginPortV1(origin)
+	)
+		return false;
+	try {
+		compileWorkloadEgressRulesV1({ fileExchangeEgress: egress });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Resolve the file exchange egress from the mounted deployment module
+ * (`policy.fileExchangeEgress`) or the fixed environment seam
+ * (`PLATFORM_WORKER_FILE_EXCHANGE_EGRESS`, a JSON destination). The port is
+ * always the origin's port. A duplicate source, an egress without origin, an
+ * origin without egress, or an invalid destination fails closed before any
+ * Kubernetes resource is written.
+ */
+export function resolveWorkloadFileExchangeEgressV1(input: {
+	readonly origin?: string;
+	readonly configured?: WorkloadEgressPolicyV1["fileExchangeEgress"];
+	readonly environment?: string;
+}): WorkloadEgressPolicyV1["fileExchangeEgress"] {
+	const environment =
+		input.environment === undefined || input.environment === ""
+			? undefined
+			: input.environment;
+	if (input.configured !== undefined && environment !== undefined)
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
+	if (input.origin !== undefined && !isFileExchangeOriginV1(input.origin))
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+	let egress = input.configured;
+	if (environment !== undefined) {
+		if (input.origin === undefined || environment.length > 4096)
+			throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+		let destination: WorkloadEgressDestinationV1;
+		try {
+			destination = JSON.parse(environment);
+		} catch {
+			throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+		}
+		egress = [{ destination, port: fileExchangeOriginPortV1(input.origin) }];
+	}
+	if (!isWorkloadFileExchangeEgressCurrentV1(input.origin, egress))
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+	return egress;
+}
+
+/** Port of the native metadata gateway: module value, else the environment, else 3004. */
+export function resolveNativeMetadataGatewayPortV1(input: {
+	/** `nativeMetadataGateway` exported by the deployment module, if any. */
+	readonly configured?: { readonly port?: number };
+	readonly environment: Readonly<Record<string, string | undefined>>;
+	readonly hasRuntimeAuth: boolean;
+}): number | undefined {
+	const invalid = () =>
+		new Error("PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID");
+	const enabled =
+		input.environment.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED;
+	let fromEnvironment: number | undefined;
+	if (enabled !== undefined && enabled !== "false") {
+		if (enabled !== "true") throw invalid();
+		const port = Number(
+			input.environment.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT ?? "3004",
+		);
+		if (!Number.isSafeInteger(port) || port < 1 || port > 65_535)
+			throw invalid();
+		fromEnvironment = port;
+	}
+	const enabledAny =
+		input.configured !== undefined || fromEnvironment !== undefined;
+	const port =
+		input.configured?.port ??
+		fromEnvironment ??
+		(enabledAny ? 3004 : undefined);
+	if (enabledAny && !input.hasRuntimeAuth) throw invalid();
+	return port;
+}
+
+/** Egress to the Worker native metadata gateway, derived when the module declares none. */
+export function nativeMetadataWorkerEgressV1(input: {
+	readonly port: number;
+	readonly namespace: string;
+	readonly releaseName: string | undefined;
+}): NonNullable<WorkloadEgressPolicyV1["nativeMetadataWorkerEgress"]> {
+	if (
+		!input.releaseName ||
+		!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(input.releaseName)
+	)
+		throw new Error(
+			"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+		);
+	return [
+		{
+			destination: {
+				namespace: input.namespace,
+				podLabels: {
+					"app.kubernetes.io/component": "platform-worker",
+					"app.kubernetes.io/instance": input.releaseName,
+				},
+			},
+			port: input.port,
+		},
+	];
+}
+
+/**
+ * The Worker's final egress inputs: the deployment module policy merged with the
+ * file exchange and native metadata gateway values the Worker resolves from its
+ * fixed environment seams (`deployment-entry.ts` calls exactly this).
+ */
+export function resolveWorkerEffectiveEgressV1(input: {
+	readonly policy: WorkloadEgressPolicyV1 & {
+		readonly runtimeAuth?: { readonly fileExchangeOrigin?: string };
+	};
+	readonly nativeMetadataGateway?: { readonly port?: number };
+	/** The Worker container environment (`process.env` in the Worker). */
+	readonly environment: Readonly<Record<string, string | undefined>>;
+}): {
+	readonly policy: WorkloadEgressPolicyV1;
+	readonly fileExchangeOrigin: string | undefined;
+	readonly nativeMetadataGatewayPort: number | undefined;
+} {
+	const { policy, environment } = input;
+	const nativeMetadataGatewayPort = resolveNativeMetadataGatewayPortV1({
+		configured: input.nativeMetadataGateway,
+		environment,
+		hasRuntimeAuth: policy.runtimeAuth !== undefined,
+	});
+	const fileExchangeOrigin = resolveWorkloadFileExchangeOriginV1({
+		configured: policy.runtimeAuth?.fileExchangeOrigin,
+		environment: environment.PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN,
+		hasRuntimeAuth: policy.runtimeAuth !== undefined,
+	});
+	const fileExchangeEgress = resolveWorkloadFileExchangeEgressV1({
+		origin: fileExchangeOrigin,
+		configured: policy.fileExchangeEgress,
+		environment: environment.PLATFORM_WORKER_FILE_EXCHANGE_EGRESS,
+	});
+	// Validated whenever the gateway is enabled, even if the module declares its own egress.
+	const derived =
+		nativeMetadataGatewayPort === undefined
+			? undefined
+			: nativeMetadataWorkerEgressV1({
+					port: nativeMetadataGatewayPort,
+					namespace: environment.PLATFORM_WORKER_NAMESPACE ?? "",
+					releaseName: environment.PLATFORM_WORKER_RELEASE_NAME,
+				});
+	return {
+		policy: {
+			...policy,
+			...(fileExchangeEgress ? { fileExchangeEgress } : {}),
+			...(derived && policy.nativeMetadataWorkerEgress === undefined
+				? { nativeMetadataWorkerEgress: derived }
+				: {}),
+		},
+		fileExchangeOrigin,
+		nativeMetadataGatewayPort,
+	};
+}

@@ -18,6 +18,7 @@ import {
 	networkPolicyTemplateDigestsV1,
 	networkPolicyVariantsV1,
 	parseNetworkPolicyDeploymentConfigV1,
+	resolveWorkerEffectiveEgressV1,
 	splitNetworkPolicyVariantV1,
 } from "../../packages/platform-core/src/workload-network-policy.ts";
 
@@ -437,11 +438,37 @@ const egressKeys = [
 ];
 // Runs in an isolated child: no network, no child processes, only the copied module readable.
 const projectionScript = (file) => `
+// Node 24's permission model has no network switch, and the loaded module is
+// deployment code: close every network entry point before importing it. Native
+// bindings, addons, child processes and workers are already denied by --permission.
+const { createRequire } = await import("node:module");
+const require = createRequire(import.meta.url);
+const refuse = () => { throw new Error("NETWORK_DENIED"); };
+const lock = (target, key) => {
+	if (target && typeof target[key] === "function")
+		Object.defineProperty(target, key, { value: refuse, writable: false, configurable: false });
+};
+const net = require("node:net");
+lock(net.Socket.prototype, "connect");
+for (const key of ["listen", "listenFd"]) lock(net.Server.prototype, key);
+for (const key of ["connect", "createConnection"]) lock(net, key);
+const dgram = require("node:dgram");
+for (const key of ["bind", "connect", "send"]) lock(dgram.Socket.prototype, key);
+for (const name of ["node:dns", "node:dns/promises"]) {
+	const dns = require(name);
+	for (const key of Object.keys(dns)) lock(dns, key);
+	for (const key of Object.getOwnPropertyNames(dns.Resolver?.prototype ?? {})) lock(dns.Resolver.prototype, key);
+}
+for (const name of ["connect"]) { lock(require("node:tls"), name); lock(require("node:http2"), name); }
+for (const name of ["fetch", "WebSocket", "EventSource"]) {
+	if (name in globalThis) Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false });
+}
 const module = await import(${JSON.stringify(pathToFileURL(file).href)});
 const policy = module.workloadInput?.policy;
 if (!policy || typeof policy !== "object") process.exit(3);
 const egress = {};
 for (const key of ${JSON.stringify(egressKeys)}) if (policy[key] !== undefined) egress[key] = policy[key];
+const gateway = module.nativeMetadataGateway;
 process.stdout.write(JSON.stringify({
 	workerSelector: policy.workerSelector,
 	routeNamespace: policy.routeNamespace,
@@ -449,9 +476,42 @@ process.stdout.write(JSON.stringify({
 	platformApiSelector: policy.platformApiSelector,
 	workspaceSnapshotProjection: typeof module.workloadInput?.workspaceSnapshotResolver?.project === "function",
 	egress,
+	runtimeAuth: policy.runtimeAuth === undefined ? undefined : { fileExchangeOrigin: policy.runtimeAuth.fileExchangeOrigin },
+	nativeMetadataGateway: gateway === undefined || gateway === null ? undefined : { port: gateway.port },
 }));
 process.exit(0);
 `;
+
+// Environment names the Worker's final network configuration reads (resolveWorkerEffectiveEgressV1).
+const workerNetworkEnvironment = [
+	"PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN",
+	"PLATFORM_WORKER_FILE_EXCHANGE_EGRESS",
+	"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED",
+	"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT",
+	"PLATFORM_WORKER_NAMESPACE",
+	"PLATFORM_WORKER_RELEASE_NAME",
+];
+function workerNetworkEnvironmentV1(rendered, namespace) {
+	const container = rendered.worker.spec?.template?.spec?.containers?.find(
+		(entry) => entry.name === "platform-worker",
+	);
+	if (!container || container.envFrom !== undefined)
+		fail("WORKER_CONFIGURATION_UNVERIFIABLE");
+	const environment = {};
+	for (const entry of container.env ?? []) {
+		if (!workerNetworkEnvironment.includes(entry.name)) continue;
+		if (Object.hasOwn(environment, entry.name)) fail("WORKER_CONFIGURATION_UNVERIFIABLE");
+		if (typeof entry.value === "string" && entry.valueFrom === undefined)
+			environment[entry.name] = entry.value;
+		else if (
+			entry.valueFrom?.fieldRef?.fieldPath === "metadata.namespace" &&
+			entry.value === undefined
+		)
+			environment[entry.name] = namespace;
+		else fail("WORKER_CONFIGURATION_UNVERIFIABLE");
+	}
+	return environment;
+}
 
 /**
  * Derives the NetworkPolicy deployment configuration from the Worker
@@ -462,6 +522,7 @@ process.exit(0);
 export async function deriveNetworkPolicyDeploymentConfigV1({
 	bootstrapInputsFile,
 	renderedManifest,
+	namespace,
 }) {
 	if (!bootstrapInputsFile) fail("WORKER_CONFIGURATION_REQUIRED");
 	let bytes;
@@ -488,9 +549,20 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+	// Merge the file exchange and native metadata gateway egress exactly as the Worker
+	// does: same function, and the rendered Worker container environment.
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const environment = workerNetworkEnvironmentV1(rendered, namespace);
 	let config;
 	try {
-		config = parseNetworkPolicyDeploymentConfigV1(projected);
+		const { runtimeAuth, nativeMetadataGateway, ...base } = projected;
+		const effective = resolveWorkerEffectiveEgressV1({
+			policy: { ...base.egress, ...(runtimeAuth ? { runtimeAuth } : {}) },
+			nativeMetadataGateway,
+			environment,
+		});
+		const { runtimeAuth: _runtimeAuth, ...egress } = effective.policy;
+		config = parseNetworkPolicyDeploymentConfigV1({ ...base, egress });
 	} catch {
 		fail("NETWORKPOLICY_CONFIG_INVALID");
 	}
@@ -659,15 +731,17 @@ export function validateNetworkPolicyEnforcementV1({
 		// Judge sources and target against the instantiated policy itself: the target
 		// must be selected by the full podSelector (including the service label) and
 		// the sources by the variant's real same-namespace ingress peers.
-		const peers = (spec.ingress ?? [])
-			.flatMap((rule) => rule.from ?? [])
-			.filter((peer) => peer.namespaceSelector === undefined);
+		const allPeers = (spec.ingress ?? []).flatMap((rule) => rule.from ?? []);
+		// A policy that admits no ingress source (migration) cannot show an allowed
+		// source connecting before deny-all or after recovery, so it is no probe.
+		if (allPeers.length === 0) fail("PROBE_VARIANT_NO_INGRESS");
+		const peers = allPeers.filter((peer) => peer.namespaceSelector === undefined);
 		const selectsSource = (labels) =>
 			peers.some((peer) => labelsSatisfySelectorV1(labels, peer.podSelector));
 		if (
 			podLabels.target[agentSelector.key] !== agentSelector.value ||
 			!labelsSatisfySelectorV1(podLabels.target, spec.podSelector) ||
-			(peers.length > 0 && !selectsSource(podLabels.workerSource)) ||
+			!selectsSource(podLabels.workerSource) ||
 			selectsSource(podLabels.nonWorkerSource) ||
 			("workerSource" in substitutions &&
 				(!labelsSatisfySelectorV1(podLabels.workerSource, substitutions.workerSource) ||
@@ -808,6 +882,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			await deriveNetworkPolicyDeploymentConfigV1({
 				bootstrapInputsFile: process.env.ACK_BOOTSTRAP_INPUTS_FILE,
 				renderedManifest,
+				namespace,
 			});
 		const kubectl = (args) =>
 			execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [

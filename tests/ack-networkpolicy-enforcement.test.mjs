@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parseAllDocuments, stringify } from "yaml";
 import {
 	assertSessionEciAdmissionRenderedV1,
+	deriveNetworkPolicyDeploymentConfigV1,
 	eciPlacementFieldsV1,
 	labelsSatisfySelectorV1,
 	maxEvidenceAgeMs,
@@ -23,6 +25,7 @@ import {
 	probeAgentKey,
 	probePolicyEvidence,
 	renderedEnforcementManifest,
+	workerConfigurationInputs,
 	workerConfigurationSource,
 	workerPodLabels,
 } from "./support/networkpolicy-evidence.mjs";
@@ -1314,24 +1317,15 @@ inconsistent(
 		labels.nonWorkerSource = { [probeAgentKey]: "probe-a" };
 	},
 );
-inconsistent(
-	"a migration target without the fixed migration service label",
-	(labels) => {
-		delete labels.target[serviceLabel];
-	},
-	"multi-service-migration",
-);
-inconsistent(
-	"a migration target with a non-migration service value",
-	(labels) => {
-		labels.target[serviceLabel] = "probe-svc";
-	},
-	"multi-service-migration",
-);
-test("a complete migration probe whose target carries the fixed service label passes", () => {
+test("a migration probe is rejected even with fully correct labels: its policy admits no source (R2-M2)", () => {
 	const f = fixture();
-	extraProbe(f, "multi-service-migration");
-	assert.equal(run(f).status, "passed");
+	const probe = extraProbe(f, "multi-service-migration");
+	assert.equal(probe.policy.podLabels.target[serviceLabel], "migration");
+	rejects(f, "PROBE_VARIANT_NO_INGRESS");
+	// The same shape on a variant that does admit a sibling source is accepted.
+	const g = fixture();
+	extraProbe(g, "multi-service-service");
+	assert.equal(run(g).status, "passed");
 });
 
 // ---- #4385 review MUST 3: protected networks are bound into every digest ----
@@ -1426,4 +1420,153 @@ test("a no-native form is not offered by a deployment without native egress", ()
 		...probePolicyEvidence(f.deploymentConfig, "self-managed+no-native", 3003),
 	};
 	rejects(f, "PROBE_POLICY_MISMATCH");
+});
+
+// ---- #4385 round 2: the Worker's final network configuration ----
+const configurationModule = (config) =>
+	workerConfigurationSource(config).replace(
+		"policy: {",
+		"policy: { runtimeAuth: {},",
+	);
+const envEntry = (name, value) => ({ name, value });
+const digestsFor = async (directory, source, workerEnvironment = []) => {
+	const inputs = await workerConfigurationInputs(directory, source, {
+		workerEnvironment,
+	});
+	const { config } = await deriveNetworkPolicyDeploymentConfigV1({
+		...inputs,
+		namespace: "agent-infra",
+	});
+	return networkPolicyTemplateDigestsV1(config);
+};
+
+test("the derived configuration follows the Worker's file exchange and gateway environment (R2-M1)", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-np-effective-"));
+	const source = configurationModule(networkPolicyDeploymentConfig());
+	const exchange = (ip) => [
+		envEntry(
+			"PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN",
+			"https://files.example.test",
+		),
+		envEntry("PLATFORM_WORKER_FILE_EXCHANGE_EGRESS", JSON.stringify({ ip })),
+	];
+	const plain = await digestsFor(directory, source);
+	const seven = await digestsFor(directory, source, exchange("198.51.100.7"));
+	const eight = await digestsFor(directory, source, exchange("198.51.100.8"));
+	// Same module bytes; only the rendered Worker environment changes.
+	assert.notDeepEqual(plain, seven);
+	assert.notDeepEqual(seven, eight);
+	// Module-level gateway port, with the release name from the environment.
+	const gateway = (port) =>
+		digestsFor(
+			directory,
+			`${source}export const nativeMetadataGateway = { port: ${port} };\n`,
+			[
+				envEntry("PLATFORM_WORKER_NAMESPACE", "agent-infra"),
+				envEntry("PLATFORM_WORKER_RELEASE_NAME", "agent-infra-ack"),
+			],
+		);
+	assert.notDeepEqual(await gateway(3005), await gateway(3006));
+	assert.notDeepEqual(await gateway(3005), plain);
+	// The ACK chart's namespace fieldRef resolves to the deployment namespace.
+	const viaFieldRef = await workerConfigurationInputs(directory, source, {
+		workerEnvironment: [
+			{
+				name: "PLATFORM_WORKER_NAMESPACE",
+				valueFrom: { fieldRef: { fieldPath: "metadata.namespace" } },
+			},
+		],
+	});
+	await deriveNetworkPolicyDeploymentConfigV1({
+		...viaFieldRef,
+		namespace: "agent-infra",
+	});
+	// Anything the preflight cannot read from the render, or the Worker rejects, is refused.
+	for (const workerEnvironment of [
+		[
+			{
+				name: "PLATFORM_WORKER_FILE_EXCHANGE_EGRESS",
+				valueFrom: { secretKeyRef: { name: "x", key: "y" } },
+			},
+		],
+		[
+			envEntry(
+				"PLATFORM_WORKER_FILE_EXCHANGE_EGRESS",
+				JSON.stringify({ ip: "198.51.100.7" }),
+			),
+		],
+		[envEntry("PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED", "true")],
+	]) {
+		const inputs = await workerConfigurationInputs(directory, source, {
+			workerEnvironment,
+		});
+		await assert.rejects(
+			deriveNetworkPolicyDeploymentConfigV1({
+				...inputs,
+				namespace: "agent-infra",
+			}),
+			(error) =>
+				[
+					"WORKER_CONFIGURATION_UNVERIFIABLE",
+					"NETWORKPOLICY_CONFIG_INVALID",
+				].includes(error.code),
+		);
+	}
+});
+
+// ---- #4385 round 2: loading deployment code must not reach the network (R2-N1) ----
+test("the module loader reaches no listener over any network API", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-np-network-"));
+	let connections = 0;
+	const server = createServer((socket) => {
+		connections++;
+		socket.destroy();
+	});
+	let datagrams = 0;
+	const { createSocket } = await import("node:dgram");
+	const udp = createSocket("udp4");
+	udp.on("message", () => datagrams++);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	await new Promise((resolve) => udp.bind(0, "127.0.0.1", resolve));
+	const { port } = server.address();
+	const udpPort = udp.address().port;
+	const attempts = `
+import net from "node:net";
+import http from "node:http";
+import https from "node:https";
+import tls from "node:tls";
+import http2 from "node:http2";
+import dgram from "node:dgram";
+const attempt = async (run) => { try { await run(); } catch {} };
+await attempt(() => net.connect(${port}, "127.0.0.1"));
+await attempt(() => net.createConnection({ port: ${port}, host: "127.0.0.1" }));
+await attempt(() => new net.Socket().connect(${port}, "127.0.0.1"));
+await attempt(() => http.get("http://127.0.0.1:${port}/").on("error", () => {}));
+await attempt(() => https.get("https://127.0.0.1:${port}/").on("error", () => {}));
+await attempt(() => tls.connect(${port}, "127.0.0.1").on("error", () => {}));
+await attempt(() => http2.connect("http://127.0.0.1:${port}/").on("error", () => {}));
+await attempt(() => fetch("http://127.0.0.1:${port}/"));
+await attempt(() => new WebSocket("ws://127.0.0.1:${port}/"));
+await attempt(() => dgram.createSocket("udp4").send("x", ${udpPort}, "127.0.0.1"));
+await new Promise((resolve) => setTimeout(resolve, 200));
+`;
+	// Positive control: the same module still yields its configuration.
+	const config = networkPolicyDeploymentConfig();
+	const accepted = await workerConfigurationInputs(
+		directory,
+		`${attempts}${workerConfigurationSource(config)}`,
+	);
+	const derived = await deriveNetworkPolicyDeploymentConfigV1({
+		...accepted,
+		namespace: "agent-infra",
+	});
+	assert.deepEqual(
+		networkPolicyTemplateDigestsV1(derived.config),
+		networkPolicyTemplateDigestsV1(config),
+	);
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	server.close();
+	udp.close();
+	assert.equal(connections, 0);
+	assert.equal(datagrams, 0);
 });
