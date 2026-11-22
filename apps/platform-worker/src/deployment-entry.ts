@@ -1055,6 +1055,10 @@ async function createPreparedOwning(
 			signing,
 			serviceToken,
 			executorDrainStartupTimeoutMs,
+			// #4199: route the same install receiver the Session receiver renders.
+			...(manualInstallationBootstrap
+				? { connectionInstallBootstrap: manualInstallationBootstrap }
+				: {}),
 			connectionConsumerProfile: selectedSharedConsumer?.profile,
 			connectionConsumerApproval: selectedSharedConsumer?.approval,
 			...(resolvedProfilesByAgent
@@ -1433,6 +1437,9 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 					workload: deployment.workload,
 					signing,
 					serviceToken,
+					...(manualInstallationBootstrap
+						? { connectionInstallBootstrap: manualInstallationBootstrap }
+						: {}),
 					connectionConsumerProfile: connectionConsumer?.profile,
 					connectionConsumerApproval: connectionConsumer?.approval,
 				}),
@@ -1485,6 +1492,9 @@ export async function createPlatformRuntimeModelDirectoryOptionsV1(
 					workload: prepared.workload,
 					signing,
 					serviceToken,
+					...(manualInstallationBootstrap
+						? { connectionInstallBootstrap: manualInstallationBootstrap }
+						: {}),
 					connectionConsumerProfile: connectionConsumer?.profile,
 					connectionConsumerApproval: connectionConsumer?.approval,
 				});

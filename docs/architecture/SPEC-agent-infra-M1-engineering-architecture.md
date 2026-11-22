@@ -636,7 +636,7 @@ RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience
 
 平台来源的停止、恢复核实及代次隔离复用同一签名机制，使用与业务执行显式区分的控制用途 Grant。Core 依据已持久化的撤权、停止、隔离记录或经可信历史证明后提交的系统迁移审计及目标当前状态签发，绑定原主体、Agent、Conversation、适用的 Execution、Session 代次、控制操作引用与命令范围；原主体保留为目标和审计归属，不要求其仍具备业务使用权。Host 必须校验控制用途与上述绑定，并继续执行该操作的租约、fence 和屏障规则。控制用途只允许停止、无正文状态核实、必要代次屏障，以及原执行未确认事件向平台持久化处理器的续传与确认。业务 Grant 只在原执行运行中续期；原执行在其事件读完前结束时，Worker 须经状态核实取得 Host 对终态的正面证明，并在同一租约内将该终态持久化，之后才在同一次认领中改用控制用途 Grant 续传至终态事件，不重新排队，也不恢复业务权限。续期被拒本身不证明终态，无法证明时沿原恢复路径重新认领。事件续传须绑定原 Execution、代次、当前 fence 和持久确认游标，由处理器按原任务隔离保存；该通道不授予用户查询或正文回放权限。控制 Grant 不能提交或补充 Turn、发起模型/工具调用、读取附件或向用户返回正文，也不能用于 Connection 授权。服务身份或调用方自报撤权不能替代该 Grant；过期后仅能沿同一持久控制记录重新校验签发，不能借此恢复业务权限。
 
-已可靠终态原 Turn 的控制归档、失败处置及正常控制续接，统一见
+业务已记终态原 Turn 的可靠归档、缺来源有界核实、失败处置及正常控制续接，统一见
 [Runtime HLD §8.2.1](HLD-agent-runtime-M1.md#821-已终态原-turn-的有界控制归档)。
 
 Worker 的控制请求仍须对原 verified 目标完成完整签名 readiness，不能使用业务探测缓存代替。
@@ -759,8 +759,10 @@ Host 将原请求取消、固定 deadline、本机生命周期及当前确认失
   native ref、代次、fence 或 RPC。读取身份沿 [§9.3.1](#931-原生元数据读取授权) 的原任务读取政策，
   或使用另获批的精确运维窗口；Owner、system_admin 与共享服务身份不替代原主体。跨主体、
   跨 Agent 或引用替换统一返回不可见，不泄漏对象是否存在。
-- **证明与投递。** API/Core 确认读取权与原范围后，在一个事务中保存核验请求与 challenge；这是本
-  用途唯一新增的持久写，不触及业务记录。Worker 按既有 durable lease 认领该请求，从已提交的
+- **证明与投递。** API/Core 确认读取权与原范围后，在一个事务中保存核验请求与 challenge；这是
+  API 受理阶段新增的持久写，不触及业务记录。核验结果另按
+  [§18.5.1](#1851-共同原则) 的载体规则保存为证据记录，Host 只有下文“只读”所列的有界防重放状态。
+  Worker 按既有 durable lease 认领该请求，从已提交的
   Platform 记录回读当前 generation 与 resource fence，沿受认证内部链只向持久映射的原 Host 投递
   证明，并把结果写成证据。本用途不新增 API↔Worker 同步 RPC（[§4.1](#41-部署单元)），调用方按
   §18.5.1 读取结果。证明绑定本用途、可信 issuer、专用 RuntimeHost 核验
@@ -2430,7 +2432,7 @@ sequenceDiagram
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
 - Runtime 明确报告本次 Turn 在原生提交点之前未提交（`RUNTIME_TURN_NOT_SUBMITTED`）时，Worker 把 Execution 退回投递前的状态，用新的 Grant 重新投递同一 Execution：2 分钟内最多 3 次，之后以 `RUNTIME_FILE_INPUT_UNAVAILABLE` 或 `RUNTIME_SESSION_PREPARATION_FAILED` 明确失败。接受结果不确定的恢复按墙钟预算收敛，默认 5 分钟，由部署配置（Worker 环境变量 `PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS`），用尽时以 `RUNTIME_RECOVERY_TIMEOUT` 失败。独立 executor 精确 Stop 的排空屏障按 [§11.2.1](#1121-codex-session-独立-executor提案) 处理。只核实状态的恢复不以 Session Sandbox 就绪为前置。完整契约见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract) 与 [§7.3](HLD-agent-runtime-M1.md#73-重启恢复)，决策见 [ADR-0034](../adr/0034-not-submitted-turns-and-wall-clock-recovery-budget.md)。
 - 用户可见结果以 [Agent Platform PRD 11.2](../prd/PRD-agent-platform-M1.md#112-对话能力) 为准；幂等键、事务分支、outbox 状态迁移、Runtime 接受竞态和失败收敛的完整工程契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)。
-- 已可靠终态原 Turn 的控制归档预算、失败与读取投影遵循
+- 业务已记终态原 Turn 的可靠归档、缺来源有界核实、预算与读取投影遵循
   [Runtime HLD §8.2.1](HLD-agent-runtime-M1.md#821-已终态原-turn-的有界控制归档)。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
 - Connection 的外部调用幂等、未知结果与恢复由 Connection 负责；平台不能通过重投整个任务来绕过原调用对账。

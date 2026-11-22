@@ -19,7 +19,10 @@ import {
 	verifyExecutorControlV1,
 	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	type ExecutorInstanceMutationV2,
 	type ExecutorInstanceStateV2,
@@ -4273,3 +4276,119 @@ it("never provisions a startup shared Consumer snapshot after the Agent is assoc
 		await database.stop();
 	}
 }, 180_000);
+
+it("routes the original Session the production receiver rendered with the install listener (#4199)", async () => {
+	const f = fixture();
+	const signal = new AbortController().signal;
+	const installConfiguration = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "approved-egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/connection/callback",
+	};
+	const install = {
+		port: 9443,
+		workerOrigin: "https://install-worker.workload-test.svc:9444/",
+		apiSelector: { component: "platform-api" },
+		clientName: "Agent platform",
+		configuration: installConfiguration,
+		approval: {
+			schemaVersion: 1 as const,
+			configFingerprint:
+				connectionSystemAccessFingerprintV1(installConfiguration),
+			egressEnforced: true as const,
+			source: { ref: "approval", revision: "r1" },
+		},
+		callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+		workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+		tlsSecretForSandbox: () => ({
+			name: "session-tls",
+			certKey: "tls.crt",
+			keyKey: "tls.key",
+		}),
+	};
+	// The Agent has no Connection association; the receiver still renders the
+	// empty install receiver for every eligible Codex Session (Spec §13.5.6).
+	const receive = createProductionSessionSandboxReceiverV1(f.options, {
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+		connectionInstallBootstrap: install,
+	});
+	const observation = await receive(f.claim, signal);
+	const service = await f.client.read<V1Service>(
+		"Service",
+		f.claim.sandbox.resourceName,
+	);
+	expect(service?.spec?.ports).toEqual([
+		expect.objectContaining({ name: "runtime" }),
+		{ name: "oauth", port: 9443, targetPort: 9443 },
+	]);
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "install-port-test",
+		privateKey: keys.privateKey,
+	};
+	const workload = {
+		...f.options,
+		policy: {
+			...f.options.policy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+				nativeMetadataWorkerOrigin: "http://platform-worker-native-metadata",
+			},
+		},
+	};
+	const request = {
+		agentId: f.claim.sandbox.agentId,
+		conversationId: f.claim.sandbox.sessionId,
+		sessionGeneration: f.claim.sandbox.generation,
+		purpose: "control" as const,
+		command: "session.status" as const,
+		workload: null,
+		signal,
+		sandboxResource: {
+			sandbox: f.claim.sandbox,
+			resourceFence: f.claim.resourceFence + 1,
+			desiredState: "stopped" as const,
+			status: "observed" as const,
+			policy: f.claim.policy,
+			observation,
+			controlSource: {
+				sandbox: f.claim.sandbox,
+				resourceFence: f.claim.resourceFence,
+				policy: f.claim.policy,
+				observation,
+				deployment: f.claim.deployment,
+				modelProjection: f.claim.modelProjection,
+			},
+		},
+	};
+	const enabled = createProductionConversationRuntimeResolverV2({
+		workload,
+		signing,
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+		connectionInstallBootstrap: install,
+	});
+	await expect(enabled(request)).resolves.toMatchObject({
+		baseUrl: `http://${f.claim.sandbox.resourceName}.${f.claim.policy.namespace}.svc:8080`,
+	});
+	// With the install route off the resolver keeps the single-port contract.
+	const disabled = createProductionConversationRuntimeResolverV2({
+		workload,
+		signing,
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+	});
+	await expect(disabled(request)).rejects.toMatchObject({
+		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+	});
+});

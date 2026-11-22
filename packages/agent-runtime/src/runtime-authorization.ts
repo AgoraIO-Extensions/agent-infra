@@ -51,6 +51,17 @@ export interface RuntimeExecutionAuthority {
 }
 
 /**
+ * #4358 I3: the one Execution fence regression rule, shared by business
+ * admission and the read-only original admission check.
+ */
+export function isExecutionDeliveryFenceRegressed(
+	claimedFence: number,
+	current: Pick<RuntimeExecutionAuthority, "executionDeliveryFence">,
+) {
+	return claimedFence < current.executionDeliveryFence;
+}
+
+/**
  * Uniform denial. `reason` is a fixed internal diagnostic (#1888); callers
  * still only see the same code, message and status.
  */
@@ -234,7 +245,10 @@ export function applyRuntimeAuthority(
 		runtimeAuthorizationDenied("authority-worker-mismatch");
 	if (
 		current &&
-		claims.operation.executionDeliveryFence < current.executionDeliveryFence
+		isExecutionDeliveryFenceRegressed(
+			claims.operation.executionDeliveryFence,
+			current,
+		)
 	)
 		runtimeAuthorizationDenied("authority-fence-regressed");
 	if (

@@ -35,7 +35,11 @@ type LimitsMode = "ready" | "pending" | "error" | "no-text";
  */
 async function skillControlFileFixture(
 	page: Page,
-	{ attachments, limits }: { attachments: boolean; limits: LimitsMode },
+	{
+		attachments,
+		limits,
+		rejectedRuntime = false,
+	}: { attachments: boolean; limits: LimitsMode; rejectedRuntime?: boolean },
 ) {
 	const requests: string[] = [];
 	const unexpected: string[] = [];
@@ -71,6 +75,19 @@ async function skillControlFileFixture(
 				type: "execution.status" as const,
 				payload: { status: "completed" as const },
 			},
+			...(rejectedRuntime
+				? [
+						{
+							...event(1),
+							schemaVersion: 1 as const,
+							eventId: "rejected-terminal",
+							conversationCursor: "cursor-after-baseline",
+							executionId: "rejected-native",
+							type: "execution.status" as const,
+							payload: { status: "failed" as const },
+						},
+					]
+				: []),
 		]),
 		conversation: { ...history().conversation, status: "ready" },
 	});
@@ -165,9 +182,17 @@ async function skillControlFileFixture(
 				body: ": heartbeat\n\n",
 			});
 		if (request.method() === "GET" && path.endsWith("/native-metadata")) {
+			if (!path.includes("/executions/execution-1/"))
+				return route.fulfill({
+					status: 503,
+					json: { code: "DEPENDENCY_UNAVAILABLE" },
+				});
 			const commands = url.searchParams.get("selector") === "commands";
 			return route.fulfill({
 				json: {
+					...(commands && url.searchParams.get("projectionVersion") === "2"
+						? { schemaVersion: 1, projectionVersion: 2 }
+						: {}),
 					selector: commands ? "commands" : "skills",
 					revision: (commands ? "c" : "d").repeat(64),
 					capabilities: commands
@@ -623,3 +648,31 @@ for (const viewport of viewports) {
 		expect(fixture.unexpected).toEqual([]);
 	});
 }
+
+test("keeps the accepted catalog after a failed V3 Runtime event on reload (#4335)", async ({
+	page,
+}) => {
+	const fixture = await skillControlFileFixture(page, {
+		attachments: false,
+		limits: "ready",
+		rejectedRuntime: true,
+	});
+	await page.reload();
+	const input = page.getByLabel("消息", { exact: true });
+	await expect(input).toBeEnabled();
+	await input.fill("/summary");
+	await expect(
+		page.getByRole("option", { name: /workspace-summary/ }),
+	).toBeVisible();
+	const reads = fixture.requests.filter((path) =>
+		path.endsWith("/native-metadata"),
+	);
+	expect(reads.length).toBeGreaterThanOrEqual(4);
+	expect(reads.every((path) => path.includes("/executions/execution-1/"))).toBe(
+		true,
+	);
+	expect(fixture.requests.filter((path) => path.startsWith("POST "))).toEqual(
+		[],
+	);
+	expect(fixture.unexpected).toEqual([]);
+});

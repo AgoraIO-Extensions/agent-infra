@@ -92,6 +92,10 @@ import {
 } from "./native-metadata-assembly.js";
 import { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-current-client.js";
 import { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
+import {
+	createRuntimeOriginalAdmissionCheckV1,
+	type RuntimeOriginalAdmissionCheckV1,
+} from "./original-admission-check.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 import {
@@ -164,6 +168,8 @@ interface StartOptions {
 	) => Promise<unknown>;
 	/** Evidence log of an enabled acceptance window; absent by default (Spec §18.5.1). */
 	safetyEvidence?: RuntimeSafetyEvidenceAssemblyV1["log"];
+	/** #4358 I3: present only when the deployment enables the check. */
+	originalAdmissionCheck?: RuntimeOriginalAdmissionCheckV1;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -1141,6 +1147,29 @@ export async function assembleRuntimeHost(
 		const nativeMetadataRead = nativeMetadataAssembly
 			? createRuntimeNativeMetadataReadV1(host, nativeMetadataAssembly)
 			: undefined;
+		// #4358 I3: default off. The proof reuses the deployment Grant trust
+		// root under its own JWS type, purpose and audience.
+		let originalAdmissionCheck: RuntimeOriginalAdmissionCheckV1 | undefined;
+		if (
+			environment.AGENT_INFRA_RUNTIME_ORIGINAL_ADMISSION_CHECK !== undefined
+		) {
+			const admissionPodUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
+			if (
+				environment.AGENT_INFRA_RUNTIME_ORIGINAL_ADMISSION_CHECK !==
+					"enabled" ||
+				!admissionPodUid ||
+				!runtimeWorkerId
+			)
+				runtimeConfigurationInvalid();
+			originalAdmissionCheck = createRuntimeOriginalAdmissionCheckV1({
+				host,
+				publicKey,
+				issuer: expectedIssuer,
+				workerId: runtimeWorkerId,
+				keyVersion: keyId,
+				podUid: admissionPodUid,
+			});
+		}
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
 			new Map([[keyId, publicKey]]),
 		);
@@ -1252,6 +1281,7 @@ export async function assembleRuntimeHost(
 			...(oauth ? { oauth } : {}),
 			...(connectionInstall ? { connectionInstall } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
+			...(originalAdmissionCheck ? { originalAdmissionCheck } : {}),
 			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			...(sessionInstanceRead ? { sessionInstanceRead } : {}),
 			...(safetyEvidence ? { safetyEvidence: safetyEvidence.log } : {}),

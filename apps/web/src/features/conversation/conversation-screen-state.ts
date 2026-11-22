@@ -290,7 +290,7 @@ export function currentExecution(
 	};
 }
 
-/** A Platform rejection is not a Runtime-accepted origin for directory reads. */
+/** A terminal failure alone does not prove an accepted Runtime metadata origin. */
 export function nativeMetadataExecution(
 	history: ConversationDetailProjectionV2 | null,
 	events: readonly ConversationTimelineEventV2[],
@@ -306,8 +306,8 @@ export function nativeMetadataExecution(
 		(event) =>
 			event.conversationId === conversationId &&
 			event.type === "execution.status" &&
-			event.payload.status !== "submitted" &&
-			event.payload.status !== "unknown",
+			(event.payload.status === "processing" ||
+				event.payload.status === "completed"),
 	);
 	if (accepted.some((event) => event.executionId === current.executionId))
 		return current.executionId;
