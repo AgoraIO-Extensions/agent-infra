@@ -176,14 +176,14 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 - `nodes`：已证执行的 ECI 虚拟节点 `name` 与 `uid`。
 - `probes`：每个可落节点至少一组探针（目标 Pod 运行在该节点上）。`destination` 记录目标 Pod 的 `pod`、`uid`、`nodeName`、`port` 与其
   控制器 `controller`（`kind`、`name`、`uid`）；`policy` 记录原 NetworkPolicy 的 `name`、`uid`、
-  所选 `exposure` 与 `templateSha256`（等于下面 `networkPolicy.templateSha256` 中该 exposure 的值；
-  探针包在产生证据时核对原策略归一化后的摘要）。按顺序记录
+  所选模板变体 `variant`、替换表 `substitutions`（探针专用的 Agent 选择器与 Worker 来源标签，
+  不得使用生产标签）与 `instantiatedSha256`（该变体按替换表实例化后的摘要，预检复算）。按顺序记录
   `allow`（Worker 来源连通）、`deny`（施加临时 deny-all 后不通，含该策略 `policyUid`）、
   `recovery`（恢复后连通），另记 `nonWorker`（非 Worker 来源在原策略下不通）。探针目标
   Pod、临时 deny-all 与探针来源在探针结束后按 UID 删除；预检不要求它们仍存在，也不要求
   `probes` 覆盖现场全部 Agent 级控制器。
-- `networkPolicy`：`templateSha256`，含 `internal-only`、`self-managed`、`platform-auth` 三份
-  规范化模板摘要。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
+- `networkPolicy`：`templateSha256`，按变体名记录全部规范化模板摘要（单服务三种 `route.exposure`，
+  多服务入口、非入口与迁移，及其带快照与不带快照的形态）。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
   “NetworkPolicy 规范化模板”维护。
 - `observedAt` 与 `expiresAt`：有效期不超过 7 天。
 
@@ -196,8 +196,9 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
 - 证据自相矛盾：探针记录的 Pod 与其控制器不在证据的 namespace，Pod 的 `nodeName` 不是该探针所属的可落节点，或没有声明该 TCP 端口；预检用渲染结果
-  重新计算的三份规范化模板摘要，与证据 `networkPolicy.templateSha256` 任一不一致；探针记录的
-  `policy.templateSha256` 不等于其 `exposure` 对应的模板摘要；Worker placement 的 selector
+  重新计算的全部规范化模板摘要，与证据 `networkPolicy.templateSha256` 任一不一致；探针记录的
+  `policy.instantiatedSha256` 与预检按其 `variant` 和 `substitutions` 复算的结果不同，或替换表使用了
+  生产的 Agent 标签键或 Worker Pod 选择器；Worker placement 的 selector
   与 toleration 摘要与证据 `placement.selectorSha256` 不一致。
 - 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`
   不一致；渲染结果不可解析或 Worker Deployment 不唯一。

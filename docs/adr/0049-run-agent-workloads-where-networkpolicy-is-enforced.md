@@ -73,7 +73,7 @@ fail closed。触发条件、静态检查和残余风险只在
 代价是托管侧 Poseidon 在两次探针之间失效时，门禁最长约 7 天发现不了，该风险由用户接受，
 不在本 ADR 重复限定。
 
-NetworkPolicy 摘要比较的是与 Agent 无关的规范化模板，而不是任一 Agent 的整份 spec：
-Agent 级 NetworkPolicy 随 Agent 渲染，部署时没有可比较的现场对象，探针对象也已删除。模板的
+NetworkPolicy 摘要比较的是去掉 Agent 个体值（Agent 选择器值、端口、服务名）的规范化模板，部署级出站与入站来源全部纳入，而不是任一 Agent 的整份 spec：
+Agent 级 NetworkPolicy 随 Agent 渲染，部署时没有可比较的现场对象，探针对象也已删除。探针对象用替换表实例化，不带生产标签。模板的
 定义只在工程 Spec 同条维护。未采纳：选一个代表 Agent 的整份 spec 作摘要，它既与探针策略不等，
 也会让部署永远失败或被迫放宽比较。
