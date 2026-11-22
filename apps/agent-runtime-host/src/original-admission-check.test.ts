@@ -159,6 +159,17 @@ describe("original admission check (#4358 I3)", () => {
 				decision: "denied",
 				reason: "revoked",
 			});
+			// A replaced principal is not that Stop's revocation (#4363 MUST 1).
+			await expect(
+				env.check.check(
+					env.request({ principal: { kind: "user", id: "user-other" } }),
+				),
+			).resolves.toMatchObject({
+				decision: "denied",
+				reason: "scope_mismatch",
+				current: { hostBarrier: "unavailable", hostExecutionFence: null },
+				dispatchAttempted: false,
+			});
 		} finally {
 			await env.host.close();
 		}
@@ -196,6 +207,25 @@ describe("original admission check (#4358 I3)", () => {
 					decision: "denied",
 					reason: "stale_generation",
 					current: { hostBarrier: "confirmed", hostExecutionFence: 2 },
+					dispatchAttempted: false,
+				});
+			// A replaced scope is not the original generation's barrier denial
+			// and carries none of this Session's facts (#4363 MUST 1).
+			for (const overrides of [
+				{ principal: { kind: "user" as const, id: "user-other" } },
+				{ agentId: "agent-other" },
+				{ conversationId: "conversation-other" },
+				{ authorizationRecordId: "authorization-other" },
+				{ sessionGeneration: 2 },
+			])
+				await expect(
+					env.check.check(
+						env.request(overrides, { sessionGeneration: 2, resourceFence: 1 }),
+					),
+				).resolves.toMatchObject({
+					decision: "denied",
+					reason: "scope_mismatch",
+					current: { hostBarrier: "unavailable", hostExecutionFence: null },
 					dispatchAttempted: false,
 				});
 			expect(execute).not.toHaveBeenCalled();

@@ -2116,33 +2116,49 @@ export class FileRuntimeStore {
 			readNow(),
 		);
 		const session = result.admissible ? result.session : result.candidate;
+		// Spec §9.3.2: the whole original scope is confirmed before any predicate
+		// denial or Host fact is reported, so a replaced scope never reads as the
+		// original generation's barrier or fence rejection.
+		const unverified = (
+			reason: "scope_mismatch" | "original_binding_unavailable",
+		): RuntimeOriginalAdmissionHostResultV1 => ({
+			decision: "denied",
+			reason,
+			hostBarrier: "unavailable",
+			hostExecutionFence: null,
+		});
+		if (!session)
+			return unverified(
+				!result.admissible && result.reason === "scope_mismatch"
+					? "scope_mismatch"
+					: "original_binding_unavailable",
+			);
+		const authority = session.executionAuthorities?.[scope.executionId];
+		if (!session.authority || !authority?.authorizationRecordId)
+			return unverified("original_binding_unavailable");
+		if (
+			session.agentId !== scope.agentId ||
+			session.conversationId !== scope.conversationId ||
+			session.sessionGeneration !== scope.sessionGeneration ||
+			session.authority.principal.kind !== scope.principal.kind ||
+			session.authority.principal.id !== scope.principal.id ||
+			authority.authorizationRecordId !== scope.authorizationRecordId
+		)
+			return unverified("scope_mismatch");
 		const facts: Pick<
 			RuntimeOriginalAdmissionHostResultV1,
 			"hostBarrier" | "hostExecutionFence"
 		> = {
-			hostBarrier: !session
-				? "unavailable"
-				: !session.generationBarrier
-					? "none"
-					: session.generationBarrier.state === "confirmed"
-						? "confirmed"
-						: "active",
+			hostBarrier: !session.generationBarrier
+				? "none"
+				: session.generationBarrier.state === "confirmed"
+					? "confirmed"
+					: "active",
 			hostExecutionFence:
-				session?.highestFences[`execution:${scope.executionId}`] ?? null,
+				session.highestFences[`execution:${scope.executionId}`] ?? null,
 		};
 		if (!result.admissible)
 			return { decision: "denied", reason: result.reason, ...facts };
-		const authority = result.session.executionAuthorities?.[scope.executionId];
-		if (
-			!authority ||
-			result.session.agentId !== scope.agentId ||
-			result.session.conversationId !== scope.conversationId ||
-			result.session.sessionGeneration !== scope.sessionGeneration ||
-			result.session.authority?.principal.kind !== scope.principal.kind ||
-			result.session.authority.principal.id !== scope.principal.id ||
-			authority.authorizationRecordId !== scope.authorizationRecordId
-		)
-			return { decision: "denied", reason: "scope_mismatch", ...facts };
 		// The business path rejects this as `authority-fence-regressed`.
 		if (
 			isExecutionDeliveryFenceRegressed(scope.executionDeliveryFence, authority)
