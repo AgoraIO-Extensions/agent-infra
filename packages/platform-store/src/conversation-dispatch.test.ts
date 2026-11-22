@@ -19,6 +19,7 @@ import {
 	emptyOperationsResourcesV2,
 	projectConversationExecutionV1,
 	type SessionSandboxReconciliationClaimV1,
+	sessionSandboxSourceHostV1,
 } from "@agent-infra/platform-core";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
@@ -9012,6 +9013,177 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 				eventTransaction.close(),
 			]);
 		}
+	});
+
+	describe("Session Sandbox Host source (Spec §18.5.1, #4358 I3b1)", () => {
+		const allocation = async (conversationId: string) =>
+			(
+				await client<
+					{
+						sandbox_id: string;
+						fence: number;
+						generation: number;
+						observation: {
+							resources: { kind: string; uid: string }[];
+							hostSource?: unknown;
+						};
+					}[]
+				>`select sandbox_id, resource_fence::int as fence, session_generation::int as generation,
+					resource_observation as observation
+					from platform.session_sandbox_allocations where conversation_id = ${conversationId}`
+			)[0];
+		const confirmed = async (work: Awaited<ReturnType<typeof seed>>) => {
+			const row = await allocation(work.conversationId);
+			if (!row) throw new Error("Expected a Sandbox");
+			const podUid = row.observation.resources.find(
+				(resource) => resource.kind === "Pod",
+			)?.uid;
+			if (!podUid) throw new Error("Expected a Pod");
+			const input = {
+				sandboxId: row.sandbox_id,
+				conversationId: work.conversationId,
+				agentId: "agent-dispatch",
+				principal: { kind: "user", id: "actor-dispatch" },
+				sessionGeneration: row.generation,
+				resourceFence: row.fence,
+				hostSource: {
+					schemaVersion: 1 as const,
+					podUid,
+					instanceRef: "hi1-original",
+					startRef: "hs1-original",
+					hostSessionRef: "original-host",
+					sessionGeneration: row.generation,
+				},
+			};
+			return { row, podUid, input };
+		};
+
+		it("writes the confirmed Host source once, only for the same principal, Agent, Conversation, generation, fence and Pod", async () => {
+			const work = await seed();
+			const { input } = await confirmed(work);
+			const store = open();
+			try {
+				for (const changed of [
+					{ ...input, principal: { kind: "user", id: "actor-other" } },
+					{
+						...input,
+						principal: { kind: "application", id: "actor-dispatch" },
+					},
+					{ ...input, agentId: "agent-other" },
+					{ ...input, conversationId: "conversation-other" },
+					{ ...input, resourceFence: input.resourceFence + 1 },
+					{
+						...input,
+						sessionGeneration: input.sessionGeneration + 1,
+						hostSource: {
+							...input.hostSource,
+							sessionGeneration: input.sessionGeneration + 1,
+						},
+					},
+					// A Pod of the same name with another UID.
+					{
+						...input,
+						hostSource: { ...input.hostSource, podUid: "pod-replaced" },
+					},
+					{
+						...input,
+						hostSource: { ...input.hostSource, epoch: "epoch-invented" },
+					},
+				])
+					expect(await store.recordSessionSandboxHostSourceV1(changed)).toBe(
+						"unchanged",
+					);
+				expect(
+					(await allocation(work.conversationId))?.observation.hostSource,
+				).toBeUndefined();
+				expect(await store.recordSessionSandboxHostSourceV1(input)).toBe(
+					"recorded",
+				);
+				// A later or restarted confirmation never rewrites the first one.
+				expect(
+					await store.recordSessionSandboxHostSourceV1({
+						...input,
+						hostSource: { ...input.hostSource, startRef: "hs1-restarted" },
+					}),
+				).toBe("unchanged");
+				expect(
+					(await allocation(work.conversationId))?.observation.hostSource,
+				).toEqual(input.hostSource);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("fixes the old generation's Host source into a version 2 snapshot in the generation advance", async () => {
+			const work = await seedIsolation();
+			const resourceItemId = `conversation:sandbox:${work.conversationId}:1`;
+			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id, status, lease_owner, lease_expires_at)
+				values (${resourceItemId}, 'conversation', ${work.conversationId}, 'conversation.sandbox.reconcile.v1',
+				${client.json({ schemaVersion: 1, conversationId: work.conversationId, sessionGeneration: 1 })}, 'resource-trace', 'resource-request',
+				'processing', 'old-resource-worker', clock_timestamp() + interval '1 minute')`;
+			const { input } = await confirmed(work);
+			const writer = open();
+			try {
+				expect(await writer.recordSessionSandboxHostSourceV1(input)).toBe(
+					"recorded",
+				);
+			} finally {
+				await writer.close();
+			}
+			const before = await allocation(work.conversationId);
+			const first = await claim(work.itemId, "first");
+			try {
+				if (first.decision.outcome !== "claimed")
+					throw new Error("Expected claim");
+				await first.store.beginGenerationIsolation({
+					claim: first.decision.claim,
+					hostSessionRef: "original-host",
+					failureCode: "RUNTIME_SESSION_RECOVERY_FAILED",
+				});
+			} finally {
+				await first.store.close();
+			}
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${work.itemId}`;
+			const second = await claim(work.itemId, "second");
+			try {
+				if (second.decision.outcome !== "claimed")
+					throw new Error("Expected the isolation claim");
+				expect(
+					await second.store.confirmGenerationIsolation({
+						claim: second.decision.claim,
+						operationId: `generation:${work.conversationId}:1`,
+						hostSessionRef: "original-host",
+					}),
+				).toBe(true);
+			} finally {
+				await second.store.close();
+			}
+			const [intent] =
+				await client`select payload from platform.outbox_items where id = ${resourceItemId}`;
+			const snapshot = intent?.payload.sourceSnapshot;
+			expect(snapshot).toMatchObject({
+				schemaVersion: 2,
+				sandbox: { generation: 1 },
+				resourceFence: before?.fence,
+				observation: { hostSource: input.hostSource },
+			});
+			expect(snapshot.observation).toEqual(before?.observation);
+			const after = await allocation(work.conversationId);
+			expect(after).toMatchObject({
+				generation: 2,
+				fence: Number(before?.fence) + 1,
+			});
+			expect(sessionSandboxSourceHostV1(snapshot)).toMatchObject({
+				sessionGeneration: 1,
+				resourceFence: before?.fence,
+				podUid: input.hostSource.podUid,
+				instanceRef: "hi1-original",
+				startRef: "hs1-original",
+				hostSessionRef: "original-host",
+				imageDigest: snapshot.policy.imageDigest,
+				configurationRevision: snapshot.policy.configurationRevision,
+			});
+		});
 	});
 
 	it("survives restart and two Workers with the same tombstone and rolls back every confirmation write when audit fails", async () => {

@@ -2063,6 +2063,14 @@ export class RuntimeHost {
 			},
 		);
 	}
+	/**
+	 * #4358 I3b1 (Spec §18.5.1): the committed binding of one Host Session, read only; never
+	 * dispatches, binds or recovers.
+	 */
+	readHostSessionBindingV1(hostSessionRef: string) {
+		if (this.closed) runtimeAuthorizationDenied();
+		return this.options.store.readHostSessionBindingV1(hostSessionRef);
+	}
 	/** #4358 I2: the process-wide stop-stage observer, if the deployment wired one. */
 	get controlObserver() {
 		return this.options.controlObserver;

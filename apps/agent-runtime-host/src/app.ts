@@ -49,6 +49,7 @@ import {
 	RuntimeSupplementRequestV1Schema,
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeHostSourceReadPathV1,
 	SessionInstanceEvidenceV1Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
@@ -117,6 +118,11 @@ interface RuntimeHostAppOptions {
 	 */
 	logDiagnostic?: (entry: Record<string, string>) => void;
 	serviceToken: string;
+	/**
+	 * #4358 I3b1 (Spec §18.5.1): the Host instance and start of this Pod for the Worker's
+	 * confirmation. Present only when the Host knows its own Pod UID.
+	 */
+	hostSourceRead?: { read(value: unknown): Promise<unknown> };
 	/**
 	 * #4358 I3: deployment-enabled read-only original admission check; absent
 	 * by default, in which case its route does not exist.
@@ -709,6 +715,16 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			await options.host.readEventsV4(request, await verifyV2(request.grant)),
 		);
 	});
+	if (options.hostSourceRead) {
+		const hostSource = options.hostSourceRead;
+		app.post(runtimeHostSourceReadPathV1, async (context) =>
+			context.json(
+				await hostSource.read(
+					await context.req.raw.json().catch(() => undefined),
+				),
+			),
+		);
+	}
 	if (options.originalAdmissionCheck) {
 		const admission = options.originalAdmissionCheck;
 		app.post(

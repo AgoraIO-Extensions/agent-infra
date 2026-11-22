@@ -34,6 +34,10 @@ import {
 	type RuntimeEventV2,
 	type RuntimeGenerationCancelRequestV3,
 	RuntimeGenerationCancelRequestV3Schema,
+	type RuntimeHostSourceReadRequestV1,
+	RuntimeHostSourceReadRequestV1Schema,
+	type RuntimeHostSourceReadResponseV1,
+	RuntimeHostSourceReadResponseV1Schema,
 	type RuntimeModelDirectoryRequestV1,
 	RuntimeModelDirectoryRequestV1Schema,
 	type RuntimeModelDirectoryResponseV1,
@@ -98,6 +102,7 @@ import {
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeHostSourceReadPathV1,
 	runtimeOperationDigestInputV6,
 	runtimeOperationDigestV6,
 	validateRuntimeBusinessBindingV4,
@@ -526,6 +531,51 @@ async function post(
 	}
 	if (!response.ok) return responseFailure(response);
 	return response;
+}
+
+/**
+ * #4358 I3b1 (Engineering Spec §18.5.1 Host 来源写入): reads the Host instance and start on the
+ * Session's resolved, sandbox-bound route. The Host answers only for its own Pod UID and the
+ * committed Host Session of the same Agent, Conversation and Session generation; the answer
+ * must echo every bound field, or it is not a confirmation.
+ */
+export async function readRuntimeHostSourceV1(
+	target: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly traceId: string;
+		readonly fetch?: typeof fetch;
+	},
+	request: RuntimeHostSourceReadRequestV1,
+	signal?: AbortSignal,
+): Promise<RuntimeHostSourceReadResponseV1> {
+	const body = RuntimeHostSourceReadRequestV1Schema.parse(request);
+	const response = await post(
+		target.fetch ?? runtimeFetch,
+		endpoint(target.baseUrl, runtimeHostSourceReadPathV1),
+		target.serviceToken,
+		target.traceId,
+		body,
+		signal,
+	);
+	let parsed: RuntimeHostSourceReadResponseV1;
+	try {
+		parsed = RuntimeHostSourceReadResponseV1Schema.parse(
+			JSON.parse(await boundedResponseText(response)),
+		);
+	} catch (error) {
+		if (error instanceof ConversationRuntimeHostError) throw error;
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+	if (
+		parsed.podUid !== body.podUid ||
+		parsed.agentId !== body.agentId ||
+		parsed.conversationId !== body.conversationId ||
+		parsed.hostSessionRef !== body.hostSessionRef ||
+		parsed.sessionGeneration !== body.sessionGeneration
+	)
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	return parsed;
 }
 
 function grant(value: unknown) {

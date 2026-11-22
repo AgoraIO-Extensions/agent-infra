@@ -5,6 +5,7 @@ import type {
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	isSessionSandboxDeletionProgressValidV1,
+	isSessionSandboxHostSourceValidV1,
 	isSessionSandboxObservationValidV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
@@ -12,8 +13,14 @@ import {
 	type SessionSandboxVerifiedPolicyV1,
 } from "./session-sandbox-reconciliation.js";
 
-/** Immutable source evidence survives changes to the target management intent. */
+/**
+ * Immutable source evidence survives changes to the target management intent. A snapshot taken
+ * when the Session generation advances carries `schemaVersion: 2` (Spec §18.5.1 快照版本与兼容):
+ * its observation then holds any Host source the Worker had confirmed. An unversioned (1)
+ * snapshot has no Host source and is read for history and diagnostics only.
+ */
 export interface SessionSandboxSourceV1 {
+	readonly schemaVersion?: 2;
 	readonly sandbox: SessionSandboxBindingV1;
 	readonly resourceFence: number;
 	readonly policy: SessionSandboxVerifiedPolicyV1 | null;
@@ -74,6 +81,60 @@ export interface SessionSandboxLifecycleV1 {
 	readonly preparation?: {
 		readonly generation: number;
 		readonly resourceFence: number;
+	};
+}
+
+/**
+ * The original Host source of an old generation's snapshot (Spec §18.5.1 U3 的旧代次来源), or
+ * undefined when it cannot be proven: an unversioned snapshot, a missing or mismatched Host
+ * source, or a policy without its configuration revision and image. Never filled from the
+ * current Sandbox row.
+ */
+export function sessionSandboxSourceHostV1(source: unknown):
+	| {
+			readonly sandboxRef: string;
+			readonly resourceFence: number;
+			readonly sessionGeneration: number;
+			readonly podUid: string;
+			readonly instanceRef: string;
+			readonly startRef: string;
+			readonly hostSessionRef: string;
+			readonly epoch?: string;
+			readonly configurationRevision: number;
+			readonly imageDigest: string;
+	  }
+	| undefined {
+	if (!source || typeof source !== "object") return undefined;
+	const value = source as Partial<SessionSandboxSourceV1>;
+	const observation = value.observation;
+	const host = observation?.hostSource;
+	const policy = value.policy as
+		| { configurationRevision?: unknown; imageDigest?: unknown }
+		| null
+		| undefined;
+	if (
+		value.schemaVersion !== 2 ||
+		!value.sandbox ||
+		!observation ||
+		!host ||
+		!Number.isSafeInteger(value.resourceFence) ||
+		!isSessionSandboxHostSourceValidV1(observation, value.sandbox.generation) ||
+		!Number.isSafeInteger(policy?.configurationRevision) ||
+		typeof policy?.imageDigest !== "string" ||
+		!/^sha256:[a-f0-9]{64}$/.test(policy.imageDigest)
+	)
+		return undefined;
+	return {
+		sandboxRef: value.sandbox.sandboxId,
+		resourceFence: value.resourceFence as number,
+		sessionGeneration: value.sandbox.generation,
+		podUid: host.podUid,
+		instanceRef: host.instanceRef,
+		startRef: host.startRef,
+		hostSessionRef: host.hostSessionRef,
+		...(host.epoch === undefined ? {} : { epoch: host.epoch }),
+		configurationRevision: policy.configurationRevision as number,
+		imageDigest: policy.imageDigest,
 	};
 }
 

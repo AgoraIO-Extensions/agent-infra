@@ -79,6 +79,11 @@ import {
 import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
 import { consumeExecutorIdentityV1 } from "./executor-identity-startup.js";
 import {
+	createRuntimeHostSourceReadV1,
+	type RuntimeHostSourceReadV1,
+	runtimeHostSourceIdentityV1,
+} from "./host-source.js";
+import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
 } from "./legacy-migration.js";
@@ -165,6 +170,8 @@ interface StartOptions {
 	) => Promise<unknown>;
 	/** #4358 I3: present only when the deployment enables the check. */
 	originalAdmissionCheck?: RuntimeOriginalAdmissionCheckV1;
+	/** #4358 I3b1: present only when the Host knows its own Pod UID. */
+	hostSourceRead?: RuntimeHostSourceReadV1;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -1161,6 +1168,20 @@ export async function assembleRuntimeHost(
 				podUid: admissionPodUid,
 			});
 		}
+		// #4358 I3b1 (Spec §18.5.1): the Worker confirms this Host's instance and start on a
+		// route bound to the Pod UID. A Host that does not know its Pod UID offers no route,
+		// so its Sandbox keeps no Host source and U3 stays blocked for it.
+		const hostSourceRead =
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+				podUid ?? "",
+			)
+				? createRuntimeHostSourceReadV1({
+						podUid: podUid as string,
+						identity: runtimeHostSourceIdentityV1(podUid as string),
+						readHostSessionBinding: (hostSessionRef) =>
+							host.readHostSessionBindingV1(hostSessionRef),
+					})
+				: undefined;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
 			new Map([[keyId, publicKey]]),
 		);
@@ -1273,6 +1294,7 @@ export async function assembleRuntimeHost(
 			...(connectionInstall ? { connectionInstall } : {}),
 			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
 			...(originalAdmissionCheck ? { originalAdmissionCheck } : {}),
+			...(hostSourceRead ? { hostSourceRead } : {}),
 			...(executorInstanceRead ? { executorInstanceRead } : {}),
 			...(sessionInstanceRead ? { sessionInstanceRead } : {}),
 			serviceToken,

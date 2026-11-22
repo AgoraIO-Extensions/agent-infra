@@ -14,6 +14,7 @@ import {
 	conversationQueueWaitMsV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	isSessionSandboxHostSourceValidV1,
 	parseConversationArchiveStateV1,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
@@ -21,6 +22,7 @@ import {
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
 	type SessionSandboxDeletionProgressV1,
+	type SessionSandboxHostSourceV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -1007,8 +1009,11 @@ export class PostgresConversationDispatchStoreV1
       `;
 			// Capture the source before changing the allocation generation/fence. The
 			// same durable intent is resumed by later management; no second allocation.
+			// #4358 I3b1 (Spec §18.5.1 快照版本与兼容): version 2 keeps the committed
+			// observation with any confirmed Host source, and the policy with its configuration
+			// revision and image, in this same transaction; later retries only reuse it.
 			await transaction`update platform.outbox_items o set payload = o.payload || jsonb_build_object('sourceSnapshot',
-				jsonb_build_object('sandbox', ${transaction.json(claim.sandbox as unknown as Parameters<typeof transaction.json>[0])},
+				jsonb_build_object('schemaVersion', 2, 'sandbox', ${transaction.json(claim.sandbox as unknown as Parameters<typeof transaction.json>[0])},
 					'resourceFence', a.resource_fence, 'policy', a.resource_policy, 'observation', a.resource_observation, 'deployment', o.payload->'deployment',
 					'modelProjection', o.payload->'modelProjection'))
 				from platform.session_sandbox_allocations a where a.conversation_id = ${claim.conversationId}
@@ -1044,6 +1049,62 @@ export class PostgresConversationDispatchStoreV1
 						sessionGeneration: plan.nextGeneration,
 					})})
       `;
+		});
+	}
+
+	/**
+	 * #4358 I3b1 (Engineering Spec §18.5.1 Host 来源写入): writes the Host source the Worker
+	 * confirmed on the protected Host route into the Sandbox's committed observation. It writes
+	 * only once per Pod UID, and only while the Sandbox still belongs to the same principal,
+	 * Agent, Conversation, Session generation and resource fence, is ready, and still observes
+	 * the confirmed Pod UID (and executor epoch). Anything else changes nothing.
+	 */
+	async recordSessionSandboxHostSourceV1(input: {
+		readonly sandboxId: string;
+		readonly conversationId: string;
+		readonly agentId: string;
+		readonly principal: { readonly kind: string; readonly id: string };
+		readonly sessionGeneration: number;
+		readonly resourceFence: number;
+		readonly hostSource: SessionSandboxHostSourceV1;
+	}): Promise<"recorded" | "unchanged"> {
+		const { hostSource } = input;
+		if (
+			hostSource.sessionGeneration !== input.sessionGeneration ||
+			!Number.isSafeInteger(input.resourceFence) ||
+			input.resourceFence < 1
+		)
+			return "unchanged";
+		return this.#client.begin(async (transaction) => {
+			const [row] = await transaction<
+				{ resource_observation: SessionSandboxObservationV1 | null }[]
+			>`select resource_observation from platform.session_sandbox_allocations
+				where sandbox_id = ${input.sandboxId} and conversation_id = ${input.conversationId}
+					and agent_id = ${input.agentId} and actor_id = ${input.principal.id}
+					and principal_type = ${input.principal.kind}
+					and session_generation = ${input.sessionGeneration}
+					and resource_fence = ${input.resourceFence}
+					and status = 'ready' and desired_state = 'running'
+				for update`;
+			const observation = row?.resource_observation;
+			if (
+				observation?.status !== "ready" ||
+				observation.hostSource !== undefined ||
+				!isSessionSandboxHostSourceValidV1(
+					{ ...observation, hostSource },
+					input.sessionGeneration,
+				)
+			)
+				return "unchanged";
+			const updated =
+				await transaction`update platform.session_sandbox_allocations
+				set resource_observation = resource_observation || jsonb_build_object('hostSource', ${transaction.json(hostSource as unknown as Parameters<typeof transaction.json>[0])}::jsonb),
+					updated_at = clock_timestamp()
+				where sandbox_id = ${input.sandboxId} and resource_fence = ${input.resourceFence}
+					and session_generation = ${input.sessionGeneration}
+					and not (resource_observation ? 'hostSource')
+				returning sandbox_id`;
+			return updated.length === 1 ? "recorded" : "unchanged";
 		});
 	}
 

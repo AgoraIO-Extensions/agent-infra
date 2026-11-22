@@ -183,9 +183,87 @@ export interface SessionSandboxObservationV1 {
 		// #3985：准备认领读回记录的 Pod 已不存在；只作为一次观测的证据，不写入分配。
 		| "sandbox.pod_lost";
 	readonly workspaceSnapshot?: WorkspaceSnapshotObservationV1;
+	/**
+	 * Engineering Spec §18.5.1 (Host 来源写入): the Host instance and start the Worker confirmed
+	 * on the protected Host route bound to this Pod UID, with the Host Session Ref and Session
+	 * generation it checked. Written once per Pod UID; a new Pod starts without it.
+	 */
+	readonly hostSource?: SessionSandboxHostSourceV1;
 	readonly sourceStop?: SessionSandboxStopReceiptV1;
 	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
+}
+
+/** Spec §18.5.1: Host-produced opaque references, confirmed for one Pod UID. */
+export interface SessionSandboxHostSourceV1 {
+	readonly schemaVersion: 1;
+	readonly podUid: string;
+	readonly instanceRef: string;
+	readonly startRef: string;
+	readonly hostSessionRef: string;
+	readonly sessionGeneration: number;
+	/** Only an independent executor carries its verified epoch (§11.2.1). */
+	readonly epoch?: string;
+}
+
+const hostSourceReference = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const hostSourceOpaqueId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+
+/** The Pod UID an observation records, or undefined when none is observed. */
+export function sessionSandboxObservedPodUidV1(
+	observation: SessionSandboxObservationV1 | null | undefined,
+): string | undefined {
+	if (!observation || !Array.isArray(observation.resources)) return undefined;
+	const pods = observation.resources.filter(
+		(resource) => resource?.kind === "Pod",
+	);
+	return pods.length === 1 && typeof pods[0]?.uid === "string"
+		? pods[0].uid
+		: undefined;
+}
+
+/**
+ * A Host source is valid only for the Pod UID, executor epoch and Session generation of the
+ * observation it sits in; it never outlives a Pod replacement.
+ */
+export function isSessionSandboxHostSourceValidV1(
+	observation: SessionSandboxObservationV1,
+	sessionGeneration?: number,
+): boolean {
+	const source = observation.hostSource;
+	if (source === undefined) return true;
+	if (!source || typeof source !== "object") return false;
+	const keys = Object.keys(source);
+	return (
+		keys.every((key) =>
+			[
+				"schemaVersion",
+				"podUid",
+				"instanceRef",
+				"startRef",
+				"hostSessionRef",
+				"sessionGeneration",
+				"epoch",
+			].includes(key),
+		) &&
+		source.schemaVersion === 1 &&
+		typeof source.podUid === "string" &&
+		source.podUid === sessionSandboxObservedPodUidV1(observation) &&
+		typeof source.instanceRef === "string" &&
+		hostSourceReference.test(source.instanceRef) &&
+		typeof source.startRef === "string" &&
+		hostSourceReference.test(source.startRef) &&
+		typeof source.hostSessionRef === "string" &&
+		hostSourceOpaqueId.test(source.hostSessionRef) &&
+		Number.isSafeInteger(source.sessionGeneration) &&
+		source.sessionGeneration >= 1 &&
+		(sessionGeneration === undefined ||
+			source.sessionGeneration === sessionGeneration) &&
+		(observation.executorInstance
+			? source.epoch === observation.executorInstance.epoch &&
+				observation.executorInstance.podUid === source.podUid
+			: source.epoch === undefined)
+	);
 }
 
 export function isSessionSandboxDeletionProgressValidV1(
@@ -351,6 +429,8 @@ export function isSessionSandboxObservationValidV1(
 		return false;
 	if (!isSessionSandboxDeletionProgressValidV1(observation.deletionProgress))
 		return false;
+	if (!isSessionSandboxHostSourceValidV1(observation, claim.sandbox.generation))
+		return false;
 	const required = new Set([
 		"Pod",
 		"Service",
@@ -486,9 +566,20 @@ export function decideSessionSandboxObservationV1(
 		) ?? false;
 	const unknown =
 		observation.status === "unknown" || identityChanged || resurrectedSource;
+	// Spec §18.5.1: a confirmed Host source stays with its Pod UID and epoch. A re-observation
+	// of the same Pod keeps it; a replaced Pod starts without it and is confirmed again.
+	const carried =
+		!observation.hostSource &&
+		previous?.hostSource &&
+		isSessionSandboxHostSourceValidV1(
+			{ ...observation, hostSource: previous.hostSource },
+			claim.sandbox.generation,
+		)
+			? { ...observation, hostSource: previous.hostSource }
+			: observation;
 	return {
 		status: unknown ? ("unknown" as const) : observation.status,
-		observation: unknown && previous ? previous : observation,
+		observation: unknown && previous ? previous : carried,
 		finished:
 			!unknown &&
 			(observation.status === "ready" || observation.status === "stopped"),

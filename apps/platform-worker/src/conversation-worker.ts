@@ -49,6 +49,7 @@ import {
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import { createSessionHostSourceRecorderV1 } from "./session-host-source.js";
 import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observation.js";
 
 export interface PlatformConversationWorkerOptionsV2
@@ -324,6 +325,12 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	// #4358 I3b1 (Spec §18.5.1 Host 来源写入): confirm each Session Sandbox Pod's Host source
+	// once, after a business ACK, through the dispatch store's committed fence and Pod checks.
+	const hostSource = createSessionHostSourceRecorderV1({
+		store,
+		...(options.fetch ? { fetch: options.fetch } : {}),
+	});
 	const observeSnapshot = createWorkspaceSnapshotObserverV1((event) => {
 		if (options.observability) record(options.observability, event);
 	});
@@ -342,6 +349,7 @@ export function createPlatformConversationWorkerV2(
 		const telemetry = options.observability;
 		runtime = createConversationRuntimeV2({
 			...options,
+			hostSource,
 			signal,
 			recordDrainStage: telemetry
 				? (observation) =>
@@ -648,7 +656,10 @@ export function createPlatformConversationWorkerV2(
 				? [Promise.resolve().then(() => runtimeForCleanup.close())]
 				: []),
 			Promise.resolve().then(() => transaction.close()),
-			Promise.resolve().then(() => store.close()),
+			Promise.resolve().then(async () => {
+				await hostSource.close();
+				await store.close();
+			}),
 			Promise.resolve().then(() => taskAuthorizationStore.close()),
 			Promise.resolve().then(() => legacyControlStore.close()),
 			Promise.resolve().then(() => options.closeDeployment?.()),
@@ -1334,7 +1345,10 @@ export function createPlatformConversationWorkerV2(
 				const closeResults = await Promise.allSettled([
 					Promise.resolve().then(() => wakeups?.close()),
 					Promise.resolve().then(() => transaction.close()),
-					Promise.resolve().then(() => store.close()),
+					Promise.resolve().then(async () => {
+						await hostSource.close();
+						await store.close();
+					}),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),
 					Promise.resolve().then(() => legacyControlStore.close()),
 					Promise.resolve().then(() => options.closeDeployment?.()),

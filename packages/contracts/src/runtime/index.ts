@@ -20,6 +20,7 @@ export * from "./events-v2.ts";
 export * from "./grant.ts";
 export * from "./grant-v2.ts";
 export * from "./host.ts";
+export * from "./host-source-v1.ts";
 export * from "./host-v3.ts";
 export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";

@@ -63,6 +63,7 @@ import {
 	sendRuntimeOAuthRequest,
 	type WorkerConnectionInstallationOptions,
 } from "./runtime-oauth-request.js";
+import type { SessionHostSourceConfirmationV1 } from "./session-host-source.js";
 
 export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
 	/** Immutable Store pin; absent on historical, Key-free control recovery. */
@@ -199,6 +200,14 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly readAcceptedExecutionV6?: WorkerExecutionKeyReaderV6["readAcceptedExecution"];
 	};
 	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;
+	/**
+	 * #4358 I3b1 (Spec §18.5.1 Host 来源写入): after a business event ACK of a Session Sandbox
+	 * Execution, confirm the Host source once per Pod UID on the same route. It never throws
+	 * into or waits on the business path.
+	 */
+	readonly hostSource?: {
+		afterAcknowledge(input: SessionHostSourceConfirmationV1): void;
+	};
 	readonly fetch?: typeof fetch;
 	readonly reconnectDelayMs?: number;
 	readonly signal?: AbortSignal;
@@ -1299,6 +1308,32 @@ export function createConversationRuntimeV2(
 		).readEvents({ ...request, grant }, signal);
 		yield* replay.events;
 	}
+	function confirmHostSource(prepared: Awaited<ReturnType<typeof prepare>>) {
+		const recorder = options.hostSource;
+		const { context, state, target } = prepared;
+		if (
+			!recorder ||
+			context.kind !== "business" ||
+			!state.sandboxResource ||
+			!state.hostSessionRef
+		)
+			return;
+		try {
+			recorder.afterAcknowledge({
+				baseUrl: target.baseUrl,
+				serviceToken: target.serviceToken,
+				traceId: context.claim.traceId,
+				agentId: context.claim.agentId,
+				conversationId: context.claim.conversationId,
+				sessionGeneration: context.claim.sessionGeneration,
+				principal: context.principal,
+				hostSessionRef: state.hostSessionRef,
+				sandboxResource: state.sandboxResource,
+			});
+		} catch {
+			// The Host source stays unconfirmed; the business ACK already succeeded.
+		}
+	}
 	async function acknowledgePrepared(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 		confirmedCursor: string,
@@ -1936,6 +1971,7 @@ export function createConversationRuntimeV2(
 							),
 					);
 					drains.set(prepared.context, prepared);
+					confirmHostSource(prepared);
 					return;
 				} catch (error) {
 					// Nothing was sent. A changed authority, such as a revocation or a
@@ -1952,6 +1988,7 @@ export function createConversationRuntimeV2(
 				drains.set(prepared.context, prepared);
 				try {
 					await acknowledgePrepared(prepared, request.confirmedCursor, active);
+					confirmHostSource(prepared);
 					return;
 				} catch (error) {
 					// The pre-send check failed, so nothing was sent; a stop that landed

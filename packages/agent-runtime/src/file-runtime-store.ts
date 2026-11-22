@@ -2100,6 +2100,31 @@ export class FileRuntimeStore {
 	 * reference against committed state. It runs the same admission predicate
 	 * as the business path, writes nothing and never reaches the Driver.
 	 */
+	/**
+	 * #4358 I3b1 (Spec §18.5.1 Host 来源写入): the committed binding of one Host Session, read
+	 * only. A quarantined or unknown Session has none.
+	 */
+	async readHostSessionBindingV1(hostSessionRef: string): Promise<
+		| {
+				readonly agentId: string;
+				readonly conversationId: string;
+				readonly sessionGeneration: number;
+		  }
+		| undefined
+	> {
+		const state = await this.file.readCommitted();
+		assertStoreState(state);
+		if (!Object.hasOwn(state.sessions, hostSessionRef)) return undefined;
+		const session = state.sessions[hostSessionRef];
+		return session && session.hostSessionRef === hostSessionRef
+			? {
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+				}
+			: undefined;
+	}
+
 	async checkOriginalAdmissionV1(
 		scope: RuntimeOriginalAdmissionScopeV1,
 		platformSessionGeneration: number,

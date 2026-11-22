@@ -73,6 +73,12 @@ vi.mock("./conversation-runtime.js", () => ({
 		return { authorization: {}, runtimeHost: {}, close: mocks.runtimeClose };
 	},
 }));
+vi.mock("./session-host-source.js", () => ({
+	createSessionHostSourceRecorderV1: () => ({
+		afterAcknowledge: () => {},
+		close: async () => {},
+	}),
+}));
 
 import { createPlatformConversationWorkerV2 } from "./conversation-worker.js";
 
