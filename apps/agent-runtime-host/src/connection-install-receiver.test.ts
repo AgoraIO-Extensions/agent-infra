@@ -23,6 +23,8 @@ import { isDeepStrictEqual } from "node:util";
 import {
 	type ConnectionInstallTlsExporterV1,
 	encodeConnectionHostSupplyAadV1,
+	FakeRuntimeDriver,
+	FileRuntimeStore,
 	RuntimeHostError,
 	requestOverConnectionInstallTlsV1,
 	sealConnectionHostSupplyV1,
@@ -99,11 +101,17 @@ const decryption = vi.hoisted(() => ({
 	opened: 0,
 	capture: undefined as Buffer[] | undefined,
 }));
+// Production Host entry tests open the Codex binding over a fake native driver.
+const codex = vi.hoisted(() => ({ open: vi.fn(), verify: vi.fn() }));
 vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@agent-infra/agent-runtime")>();
+	class CodexRuntimeDriver extends actual.CodexRuntimeDriver {}
+	Object.defineProperty(CodexRuntimeDriver, "open", { value: codex.open });
 	return {
 		...actual,
+		CodexRuntimeDriver,
+		verifyCodexPilotInstallation: codex.verify,
 		openConnectionHostSupplyV1: (
 			...args: Parameters<typeof actual.openConnectionHostSupplyV1>
 		) => {
@@ -2185,8 +2193,88 @@ describe("Connection first begin", () => {
 });
 
 describe("Connection install listener wiring", () => {
+	const unavailableLine = JSON.stringify({
+		service: "agent-runtime-host",
+		code: "CONNECTION_INSTALL_RECEIVER_UNAVAILABLE",
+	});
+
+	function codexHostEnvironment(
+		directory: string,
+		receiverEnvironment: NodeJS.ProcessEnv,
+	): NodeJS.ProcessEnv {
+		return {
+			...receiverEnvironment,
+			AGENT_INFRA_RUNTIME_DRIVER: "codex",
+			AGENT_INFRA_RUNTIME_DATA_DIR: directory,
+			AGENT_INFRA_RUNTIME_AGENT_ID: "agent-a",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-a",
+			AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+			AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "worker-key",
+			AGENT_INFRA_RUNTIME_GRANT_ISSUER: "platform",
+			AGENT_INFRA_RUNTIME_SERVICE_TOKEN: serviceToken,
+			AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY:
+				"synthetic-model-credential",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 2,
+				configVersion: "install-wiring",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						model: "synthetic-model",
+						reasoningLevels: ["high"],
+						endpoint: "https://models.example.test",
+						credentialEnvironmentVariable:
+							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+					},
+				],
+			}),
+		};
+	}
+
+	/** Two distinct free ports: the Host business port and the install port. */
+	async function hostPorts() {
+		const port = await freePort();
+		let mainPort = await freePort();
+		while (mainPort === port) mainPort = await freePort();
+		return { port, mainPort };
+	}
+
+	function openCodexDriver(directory: string) {
+		codex.verify.mockResolvedValue({
+			protocolVersion: 2,
+			codexVersion: "synthetic-codex",
+			upstreamTag: "synthetic-tag",
+			upstreamCommit: "synthetic-commit",
+			schemaSha256: "synthetic-schema",
+		});
+		codex.open.mockReset();
+		codex.open.mockImplementation(async () =>
+			FakeRuntimeDriver.open(join(directory, "codex-fixture-driver.json")),
+		);
+	}
+
+	async function listening(port: number) {
+		return new Promise<boolean>((resolve) => {
+			const socket = connect(port, "127.0.0.1");
+			socket.once("connect", () => {
+				socket.destroy();
+				resolve(true);
+			});
+			socket.once("error", () => resolve(false));
+		});
+	}
+
+	async function healthy(mainPort: number) {
+		const response = await fetch(`http://127.0.0.1:${mainPort}/healthz`);
+		return { status: response.status, body: await response.json() };
+	}
+
 	it.each(["unconfigured", "manual", "full"] as const)(
-		"keeps the manual receiver dormant in the Host production assembly with %s configuration",
+		"reports a fixed code instead of a receiver for a driver without one with %s configuration",
 		async (mode) => {
 			const directory = await privateDirectory();
 			const port = await freePort();
@@ -2214,17 +2302,7 @@ describe("Connection install listener wiring", () => {
 				try {
 					expect(runtime).not.toHaveProperty("connectionInstall");
 					expect(warning.mock.calls).toEqual(
-						mode === "unconfigured"
-							? []
-							: [
-									[
-										JSON.stringify({
-											service: "agent-runtime-host",
-											code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
-											dependency: "EP-1123",
-										}),
-									],
-								],
+						mode === "unconfigured" ? [] : [[unavailableLine]],
 					);
 				} finally {
 					await runtime.close();
@@ -2234,6 +2312,221 @@ describe("Connection install listener wiring", () => {
 			}
 		},
 	);
+
+	it("opens the install receiver from the production Host entry and completes one supply and registration", async () => {
+		const workerName = "localhost";
+		const workerTls = await runtimeTlsFixture({ dnsNames: [workerName] });
+		cleanups.push(workerTls.cleanup);
+		let workerReadbacks = 0;
+		const worker = createConnectionInstallReadbackServerV1({
+			key: workerTls.key,
+			cert: workerTls.cert,
+			port: 0,
+			host: workerName,
+			deploymentServiceToken: serviceToken,
+			deploymentIdentity,
+			namespace,
+			readback: async () => {
+				workerReadbacks++;
+				return "allowed";
+			},
+		});
+		cleanups.push(() => worker.close());
+		const workerPort = await worker.listen();
+		// The Worker-rendered private TLS volume (connection-install-bootstrap.ts).
+		const directory = await privateDirectory({
+			"install.auth": sessionSandboxConnectionInstallTokenV1(
+				serviceToken,
+				namespace,
+				sandboxId,
+			),
+			"worker-ca.crt": workerTls.ca,
+		});
+		const { port, mainPort } = await hostPorts();
+		const runtimeOrigin = `https://${host}:${port}/`;
+		const environment = codexHostEnvironment(
+			directory,
+			environmentFor(runtimeOrigin, {
+				PORT: String(mainPort),
+				AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_WORKER_ORIGIN: `https://${workerName}:${workerPort}/`,
+			}),
+		);
+		openCodexDriver(directory);
+		// Only the original Execution facts come from a fake; the receiver is
+		// prepared on the Host's own opened FileRuntimeStore.
+		const facts = createStore();
+		const resolveBinding = vi
+			.spyOn(FileRuntimeStore.prototype, "resolveOriginalExecutionBinding")
+			.mockImplementation((value) =>
+				facts.resolveOriginalExecutionBinding(value as typeof reference),
+			);
+		vi.spyOn(
+			FileRuntimeStore.prototype,
+			"assertOriginalExecutionBindingCurrent",
+		).mockImplementation((value, principal) =>
+			facts.assertOriginalExecutionBindingCurrent(
+				value as typeof reference,
+				principal,
+			),
+		);
+		vi.spyOn(
+			FileRuntimeStore.prototype,
+			"resolveOriginalExecutionHostSessionRef",
+		).mockImplementation((value) =>
+			facts.resolveOriginalExecutionHostSessionRef(value as typeof reference),
+		);
+		const connection = createConnection();
+		const ready: string[] = [];
+		// The same calls as startFromEnvironment(): no composition options.
+		const runtime = await assembleRuntimeHost(environment);
+		const server = startRuntimeHost({
+			...runtime,
+			log: (line) => ready.push(line),
+		});
+		let closed = false;
+		const stop = async () => {
+			if (closed) return;
+			closed = true;
+			await closeRuntimeHost(server, runtime.close);
+		};
+		cleanups.push(stop);
+		try {
+			expect(runtime.connectionInstall?.status).toBe("available");
+			if (!server.listening) await once(server, "listening");
+			await waitForPort(port);
+			expect(ready).toContain(
+				JSON.stringify({
+					service: "agent-runtime-host",
+					code: "CONNECTION_INSTALL_RECEIVER_LISTENING",
+					port,
+				}),
+			);
+			// Dual-port Host: the business port keeps serving the ordinary Host app.
+			expect(await healthy(mainPort)).toEqual({
+				status: 200,
+				body: { service: "agent-runtime-host", status: "ok" },
+			});
+			const f = { runtimeOrigin, port, template: templateFor(runtimeOrigin) };
+			vi.stubGlobal("fetch", connection.fetch);
+			const supplied = await supply(f as Receiver);
+			expect(supplied.status).toBe(200);
+			expect(supplied.body.outcome).toBe("confirmed");
+			const prepared = await command(f as Receiver, "prepare");
+			expect(prepared.status).toBe(200);
+			expect(prepared.body.outcome).toBe("registered");
+			expect(connection.calls.map(({ method, url }) => [method, url])).toEqual([
+				[
+					"POST",
+					connectionMachineRegistrationEndpointV1(access, "conn-agent-a"),
+				],
+			]);
+			expect(workerReadbacks).toBeGreaterThan(0);
+			expect(resolveBinding).toHaveBeenCalled();
+			expect(
+				resolveBinding.mock.contexts.every(
+					(context) => context instanceof FileRuntimeStore,
+				),
+			).toBe(true);
+			// Codex keeps its ordinary driver; the receiver only adds its reader.
+			expect(codex.open).toHaveBeenCalledTimes(1);
+			await stop();
+			await expect(supply(f as Receiver)).rejects.toThrow(
+				"CONNECTION_INSTALL_TRANSPORT_UNAVAILABLE",
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	}, 30_000);
+
+	it.each([
+		["unconfigured", undefined],
+		["a missing receiver switch", "switch"],
+		["a missing TLS key", "key"],
+		["a missing Worker readback credential", "install"],
+		["the Host business port", "port"],
+	] as const)(
+		"keeps an ordinary Codex Host with %s",
+		async (_name, missing) => {
+			const directory = await privateDirectory({
+				...(missing === "key" ? { "server.key": undefined } : {}),
+				...(missing === "install" ? { "install.auth": undefined } : {}),
+			});
+			const { port, mainPort } = await hostPorts();
+			const receiverEnvironment =
+				missing === undefined
+					? { PORT: String(mainPort) }
+					: environmentFor(
+							`https://${host}:${missing === "port" ? mainPort : port}/`,
+							{
+								PORT: String(mainPort),
+								...(missing === "switch"
+									? {
+											AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER:
+												undefined,
+										}
+									: {}),
+							},
+						);
+			openCodexDriver(directory);
+			const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const runtime = await assembleRuntimeHost(
+				codexHostEnvironment(directory, receiverEnvironment),
+			);
+			const server = startRuntimeHost({ ...runtime, log: () => undefined });
+			try {
+				if (!server.listening) await once(server, "listening");
+				expect(runtime.connectionInstall?.status).not.toBe("available");
+				expect(warning.mock.calls).toEqual(
+					missing === undefined ? [] : [[unavailableLine]],
+				);
+				const options = codex.open.mock.calls[0]?.[0] as Record<
+					string,
+					unknown
+				>;
+				expect(codex.open).toHaveBeenCalledTimes(1);
+				expect(options).not.toHaveProperty("dynamicConnectionClient");
+				expect(await healthy(mainPort)).toEqual({
+					status: 200,
+					body: { service: "agent-runtime-host", status: "ok" },
+				});
+				if (missing !== "port") expect(await listening(port)).toBe(false);
+			} finally {
+				await closeRuntimeHost(server, runtime.close);
+				warning.mockRestore();
+			}
+		},
+	);
+
+	it("reports a fixed code when the install listener cannot bind its port", async () => {
+		const f = await receiver({ listen: false });
+		const occupied = createNetServer();
+		await new Promise<void>((resolve) => occupied.listen(f.port, resolve));
+		cleanups.push(
+			() => new Promise<void>((resolve) => occupied.close(() => resolve())),
+		);
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const server = startRuntimeHost({
+			connectionInstall: f.assembly,
+			port: 0,
+			serviceToken,
+			host: {} as never,
+			verifyGrant: () => {
+				throw Error("Not used");
+			},
+			log: () => undefined,
+		});
+		try {
+			if (!server.listening) await once(server, "listening");
+			for (let attempt = 0; attempt < 100; attempt++) {
+				if (warning.mock.calls.length > 0) break;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			expect(warning.mock.calls).toEqual([[unavailableLine]]);
+		} finally {
+			await closeRuntimeHost(server, f.assembly.close);
+			warning.mockRestore();
+		}
+	});
 
 	it("starts and closes the install listener with the Runtime Host", async () => {
 		const f = await receiver({ listen: false });
