@@ -464,6 +464,7 @@ describe("platform-core package surface", () => {
 			"revokeSkillHubVersionV1",
 			"runSkillProviderBatchV1",
 			"runtimeSafetyEvidenceClockSkewMsV1",
+			"runtimeSafetyEvidenceReadAuditV1",
 			"sameWecomConnectionAuthorizationFactV1",
 			"scoreEvaluationRuleV1",
 			"sessionSandboxAllocationRefV1",

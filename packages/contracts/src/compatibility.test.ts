@@ -5610,6 +5610,8 @@ describe("contract compatibility command", () => {
 			"TaskStatusEventV1",
 			// 该基线早于 #3226 的结果文件事件 V2。
 			"ResultFileEventV2",
+			// 该基线早于 #4358 的原主体隔离证据读取。
+			"RuntimeIsolationEvidencePrincipalProjectionV1",
 		])
 			delete previous.components.schemas[name];
 		const directory = await mkdtemp(
@@ -6587,6 +6589,58 @@ it("accepts only the exact optional sandbox-local tool classification addition",
 			);
 			if (variant === "exact")
 				expect(comparePaths(before, after).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("accepts only the reviewed #4358 Runtime evidence read addition", async () => {
+	const path =
+		"/api/v2/conversations/{conversationId}/executions/{executionId}/runtime-evidence/{evidenceRef}";
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const previous = structuredClone(current);
+	delete previous.paths[path];
+	delete previous.components.schemas
+		.RuntimeIsolationEvidencePrincipalProjectionV1;
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "agent-infra-runtime-evidence-"),
+	);
+	const previousPath = resolve(directory, "previous.json");
+	const currentPath = resolve(directory, "current.json");
+	try {
+		await writeFile(previousPath, JSON.stringify(previous));
+		await writeFile(currentPath, JSON.stringify(current));
+		expect(comparePaths(currentPath, previousPath).status).toBe(0);
+		for (const mutate of [
+			(document: typeof current) => {
+				document.paths[path].get.operationId = "changed";
+			},
+			(document: typeof current) => {
+				document.paths[path].get.security = [];
+			},
+			(document: typeof current) => {
+				document.paths[path].post = document.paths[path].get;
+			},
+			(document: typeof current) => {
+				document.paths["/api/v2/conversations/unreviewed"] = {};
+			},
+			(document: typeof current) => {
+				delete document.paths["/api/v2/conversations/{conversationId}/events"];
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).not.toBe(0);
 		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });

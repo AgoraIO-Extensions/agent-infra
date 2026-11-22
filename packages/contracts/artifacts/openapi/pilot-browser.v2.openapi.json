@@ -16297,6 +16297,188 @@
         ],
         "type": "object"
       },
+      "RuntimeIsolationEvidencePrincipalProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "actionClass": {
+            "enum": [
+              "open",
+              "read",
+              "write",
+              "stat",
+              "list",
+              "signal",
+              "model_request"
+            ],
+            "type": "string"
+          },
+          "clockId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "code": {
+            "const": "RUNTIME_ISOLATION_EVIDENCE_V1",
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "durationMonoMs": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "evidenceRef": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "failureClass": {
+            "enum": [
+              "permission_denied",
+              "not_found",
+              "policy_denied",
+              "io_unavailable",
+              "unsupported",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "const": "isolation_observation",
+            "type": "string"
+          },
+          "modelContext": {
+            "additionalProperties": false,
+            "properties": {
+              "foreignMarkerAbsent": {
+                "type": "boolean"
+              },
+              "observationComplete": {
+                "type": "boolean"
+              },
+              "selfMarkerPresent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "selfMarkerPresent",
+              "foreignMarkerAbsent",
+              "observationComplete"
+            ],
+            "type": "object"
+          },
+          "nativeObserved": {
+            "type": "boolean"
+          },
+          "observedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "resourceClass": {
+            "enum": [
+              "file",
+              "env",
+              "proc",
+              "workspace",
+              "memory_file",
+              "model_context"
+            ],
+            "type": "string"
+          },
+          "resultClass": {
+            "enum": [
+              "allowed",
+              "denied",
+              "unproven",
+              "isolation_violation"
+            ],
+            "type": "string"
+          },
+          "scenario": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "type": "string"
+              },
+              "version": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "sequence": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "syntheticFile": {
+            "additionalProperties": false,
+            "properties": {
+              "byteLength": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "sha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "byteLength",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "targetScope": {
+            "enum": [
+              "self",
+              "foreign"
+            ],
+            "type": "string"
+          },
+          "windowRef": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "code",
+          "kind",
+          "evidenceRef",
+          "scenario",
+          "windowRef",
+          "conversationId",
+          "executionId",
+          "resourceClass",
+          "actionClass",
+          "targetScope",
+          "resultClass",
+          "nativeObserved",
+          "observedAt",
+          "clockId",
+          "sequence"
+        ],
+        "type": "object"
+      },
       "RuntimeOperationFactV2": {
         "oneOf": [
           {
@@ -31171,6 +31353,97 @@
               }
             },
             "description": "Native metadata is unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/conversations/{conversationId}/executions/{executionId}/runtime-evidence/{evidenceRef}": {
+      "get": {
+        "operationId": "readConversationRuntimeEvidenceV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "executionId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "evidenceRef",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeIsolationEvidencePrincipalProjectionV1"
+                }
+              }
+            },
+            "description": "The original subject's projection of the isolation observation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Evidence is unavailable"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Evidence or its required audit is unavailable"
           }
         },
         "security": [

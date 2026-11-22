@@ -1,9 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
 	type RuntimePersistedSafetyEvidenceV1,
 	RuntimePersistedSafetyEvidenceV1Schema,
 } from "@agent-infra/contracts/runtime";
+import {
+	type RuntimeSafetyEvidenceReadAuditV1,
+	runtimeSafetyEvidenceReadAuditV1,
+} from "@agent-infra/platform-core";
 
 import postgres from "./observed-postgres.js";
 
@@ -94,6 +98,42 @@ export class PostgresRuntimeSafetyEvidenceStoreV1 {
 		if (runtimeSafetyEvidenceDigestV1(record) !== row.record_sha256)
 			throw new Error("RUNTIME_SAFETY_EVIDENCE_DIGEST_MISMATCH");
 		return record;
+	}
+
+	/**
+	 * Engineering Spec §18.3: the necessary audit of one evidence read, written before the API
+	 * responds. A failure propagates, so the read never answers 200 without its audit. Only the
+	 * trusted subject, the confirmed original scope and the fixed result are stored.
+	 */
+	async recordReadAudit(
+		event: RuntimeSafetyEvidenceReadAuditV1,
+	): Promise<void> {
+		const audit = runtimeSafetyEvidenceReadAuditV1(
+			event.outcome === "succeeded" && event.target
+				? { ...event, outcome: "succeeded", target: event.target }
+				: {
+						...event,
+						outcome: event.outcome === "failed" ? "failed" : "rejected",
+					},
+		);
+		const details = audit.target
+			? {
+					schemaVersion: 1,
+					conversationId: audit.target.conversationId,
+					executionId: audit.target.executionId,
+				}
+			: { schemaVersion: 1, reason: audit.reason };
+		await this.#client`
+			insert into platform.audit_events (
+				id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id,
+				outcome, agent_id, details
+			) values (
+				${randomUUID()}, ${audit.traceId}, ${audit.requestId}, ${audit.principal.kind},
+				${audit.principal.id}, ${audit.action}, 'runtime_evidence',
+				${audit.target?.evidenceRef ?? "unconfirmed"}, ${audit.outcome},
+				${audit.target?.agentId ?? null}, ${this.#client.json(details as postgres.JSONValue)}
+			)
+		`;
 	}
 
 	async close(): Promise<void> {

@@ -171,7 +171,14 @@ function isolationIssue(value: IsolationFields): string | undefined {
 			!value.nativeObserved
 		)
 			return "byteLength/sha256 only for the subject's own observed synthetic file read or write";
-	}
+	} else if (
+		value.targetScope === "self" &&
+		value.resultClass === "allowed" &&
+		fileResources.has(value.resourceClass) &&
+		(value.actionClass === "read" || value.actionClass === "write")
+	)
+		// The subject projection cannot omit them (§18.5.1 投影); unconfirmed is UNPROVEN.
+		return "the subject's own synthetic file read or write positive carries byteLength/sha256";
 	if (value.targetScope === "foreign" && value.resultClass === "allowed")
 		return "a foreign access that succeeded is an isolation_violation";
 	if (

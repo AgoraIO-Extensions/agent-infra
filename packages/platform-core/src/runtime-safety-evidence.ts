@@ -47,7 +47,12 @@ export interface RuntimeIsolationEvidenceAdmissibleV1 {
 			readonly resourceFence: number;
 			readonly executorEpoch?: string;
 		};
-		readonly host: { readonly instanceRef: string; readonly startRef: string };
+		readonly host: {
+			readonly instanceRef: string;
+			readonly startRef: string;
+			readonly configurationRevision: string;
+			readonly imageDigest: string;
+		};
 		readonly producer: {
 			readonly kind: "native_helper" | "model_transport";
 			readonly version: string;
@@ -98,7 +103,16 @@ export interface RuntimeSafetyEvidenceScopeV1 {
 		readonly resourceFence: number;
 		readonly executorEpoch?: string;
 	};
-	readonly host: { readonly instanceRef: string; readonly startRef: string };
+	/**
+	 * The Host instance and the configuration and image the execution was originally bound to,
+	 * from its persisted binding; never the Agent's current configuration (§18.5.1 共同绑定).
+	 */
+	readonly host: {
+		readonly instanceRef: string;
+		readonly startRef: string;
+		readonly configurationRevision: string;
+		readonly imageDigest: string;
+	};
 	/** The original subject's current permission for this task has been revoked. */
 	readonly revoked: boolean;
 }
@@ -186,7 +200,8 @@ export function admitIsolationEvidenceV1(input: {
 		)
 	)
 		return reject("scope_mismatch");
-	// A changed Pod UID, epoch, generation or fence means late evidence of an older execution.
+	// A changed Pod UID, epoch, generation, fence, Host configuration or image means late
+	// evidence of an older execution.
 	if (
 		scope.sessionGeneration !== binding.sessionGeneration ||
 		scope.executionDeliveryFence !== binding.executionDeliveryFence ||
@@ -195,7 +210,9 @@ export function admitIsolationEvidenceV1(input: {
 		scope.sandbox.resourceFence !== binding.sandbox.resourceFence ||
 		scope.sandbox.executorEpoch !== binding.sandbox.executorEpoch ||
 		scope.host.instanceRef !== binding.host.instanceRef ||
-		scope.host.startRef !== binding.host.startRef
+		scope.host.startRef !== binding.host.startRef ||
+		scope.host.configurationRevision !== binding.host.configurationRevision ||
+		scope.host.imageDigest !== binding.host.imageDigest
 	)
 		return reject("stale_binding");
 	if (scope.revoked) return reject("revoked");
@@ -286,4 +303,96 @@ export async function ingestRuntimeSafetyEvidenceBatchV1<
 		ackCursor = entry.cursor;
 	}
 	return { ackCursor, recorded, duplicates, rejected };
+}
+
+/**
+ * §18.5.1 读取 and §18.3: the necessary persistent audit of one evidence read by the original
+ * subject. The principal is the server-resolved identity; the original scope is recorded only
+ * once it is confirmed (a success). A rejection or failure records a fixed reason and never the
+ * caller's references. The evidence body, its results, length and hash are never audited.
+ */
+export interface RuntimeSafetyEvidenceReadAuditV1 {
+	readonly action: "runtime_evidence.read";
+	readonly traceId: string;
+	readonly requestId: string;
+	readonly principal: {
+		readonly kind: "user" | "application";
+		readonly id: string;
+	};
+	readonly outcome: "succeeded" | "rejected" | "failed";
+	readonly target: {
+		readonly evidenceRef: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+	} | null;
+	readonly reason?: "RESOURCE_UNAVAILABLE" | "DEPENDENCY_UNAVAILABLE";
+}
+
+const nonEmpty = (value: unknown): value is string =>
+	typeof value === "string" && value.length > 0 && value.length <= 256;
+
+export function runtimeSafetyEvidenceReadAuditV1(
+	input:
+		| {
+				readonly traceId: string;
+				readonly requestId: string;
+				readonly principal: RuntimeSafetyEvidenceReadAuditV1["principal"];
+				readonly outcome: "succeeded";
+				readonly target: NonNullable<
+					RuntimeSafetyEvidenceReadAuditV1["target"]
+				>;
+		  }
+		| {
+				readonly traceId: string;
+				readonly requestId: string;
+				readonly principal: RuntimeSafetyEvidenceReadAuditV1["principal"];
+				readonly outcome: "rejected" | "failed";
+		  },
+): RuntimeSafetyEvidenceReadAuditV1 {
+	if (
+		!nonEmpty(input.traceId) ||
+		!nonEmpty(input.requestId) ||
+		(input.principal?.kind !== "user" &&
+			input.principal?.kind !== "application") ||
+		!nonEmpty(input.principal.id)
+	)
+		throw new TypeError("Runtime safety evidence read audit is invalid");
+	const common = {
+		action: "runtime_evidence.read" as const,
+		traceId: input.traceId,
+		requestId: input.requestId,
+		principal: { kind: input.principal.kind, id: input.principal.id },
+	};
+	if (input.outcome !== "succeeded")
+		return {
+			...common,
+			outcome: input.outcome,
+			target: null,
+			reason:
+				input.outcome === "rejected"
+					? "RESOURCE_UNAVAILABLE"
+					: "DEPENDENCY_UNAVAILABLE",
+		};
+	const target = (input as { readonly target?: unknown }).target as
+		| Record<string, unknown>
+		| undefined;
+	if (
+		!target ||
+		!nonEmpty(target.evidenceRef) ||
+		!nonEmpty(target.agentId) ||
+		!nonEmpty(target.conversationId) ||
+		!nonEmpty(target.executionId)
+	)
+		throw new TypeError("Runtime safety evidence read audit is invalid");
+	return {
+		...common,
+		outcome: "succeeded",
+		target: {
+			evidenceRef: target.evidenceRef,
+			agentId: target.agentId,
+			conversationId: target.conversationId,
+			executionId: target.executionId,
+		},
+	};
 }
