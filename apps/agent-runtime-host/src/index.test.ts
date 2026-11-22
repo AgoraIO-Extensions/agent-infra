@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { once } from "node:events";
 import {
 	cp,
 	mkdir,
@@ -9,11 +10,16 @@ import {
 	stat,
 	writeFile,
 } from "node:fs/promises";
-import { createServer as createCollector } from "node:http";
+import { createServer as createCollector, get as httpGet } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { type AddressInfo, createServer as createNetServer } from "node:net";
+import {
+	type AddressInfo,
+	createServer as createNetServer,
+	connect as netConnect,
+} from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect as tlsConnect } from "node:tls";
 import { pathToFileURL } from "node:url";
 import {
 	type ClaudeRuntimeDriverOptions,
@@ -32,7 +38,10 @@ import {
 	verifyExecutorControlV1,
 	verifyExecutorStartIdentityV1,
 } from "@agent-infra/agent-runtime";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimeSubmitTurnRequestV4Schema,
@@ -2883,4 +2892,290 @@ describe("safety evidence window assembly (#4358 I1b, default off)", () => {
 			}),
 		]);
 	});
+});
+
+// #4199: the independent executor window renders the §13.5.6 receiver into the
+// same Host container (connection-install-bootstrap.ts); the Host must start in
+// both executor admission modes, with or without the initializer's materials.
+describe("Connection install receiver in the Session executor window", () => {
+	const unavailableLine = JSON.stringify({
+		service: "agent-runtime-host",
+		code: "CONNECTION_INSTALL_RECEIVER_UNAVAILABLE",
+	});
+
+	async function freePort(exclude?: number) {
+		for (;;) {
+			const reserve = createNetServer();
+			await new Promise<void>((resolve) =>
+				reserve.listen(0, "127.0.0.1", resolve),
+			);
+			const { port } = reserve.address() as AddressInfo;
+			await new Promise<void>((resolve) => reserve.close(() => resolve()));
+			if (port !== exclude) return port;
+		}
+	}
+
+	function portOpen(port: number) {
+		return new Promise<boolean>((resolve) => {
+			const socket = netConnect(port, "127.0.0.1");
+			socket.once("connect", () => {
+				socket.destroy();
+				resolve(true);
+			});
+			socket.once("error", () => resolve(false));
+		});
+	}
+
+	async function waitForPort(port: number) {
+		for (let attempt = 0; attempt < 100; attempt++) {
+			if (await portOpen(port)) return;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		throw new Error("install listener did not start");
+	}
+
+	function healthz(port: number) {
+		return new Promise<number>((resolve, reject) => {
+			httpGet(
+				{ host: "127.0.0.1", port, path: "/healthz", agent: false },
+				(response) => {
+					response.resume();
+					response.on("end", () => resolve(response.statusCode ?? 0));
+				},
+			).once("error", reject);
+		});
+	}
+
+	/** TLS 1.3 handshake that verifies the deployment certificate for the Sandbox Service name. */
+	function handshake(port: number, servername: string, ca: string) {
+		return new Promise<boolean>((resolve) => {
+			const socket = tlsConnect(
+				{ host: "127.0.0.1", port, servername, ca, minVersion: "TLSv1.3" },
+				() => {
+					const authorized = socket.authorized;
+					socket.destroy();
+					resolve(authorized);
+				},
+			);
+			socket.once("error", () => resolve(false));
+		});
+	}
+
+	async function executorWindow(identity: "admission" | "startup-v2") {
+		const f = await sessionExecutorFixture();
+		// Protected Host files require a canonical data directory (macOS tmpdir is a symlink).
+		const directory = await realpath(
+			f.values.AGENT_INFRA_RUNTIME_DATA_DIR as string,
+		);
+		f.values.AGENT_INFRA_RUNTIME_DATA_DIR = directory;
+		const binding = f.admission.binding;
+		const podUid = f.values.AGENT_INFRA_RUNTIME_POD_UID as string;
+		const admission = { ...f.admission, podUid };
+		runtimeAssemblyMocks.openCodexSessionExecutorAdmission.mockResolvedValue(
+			admission,
+		);
+		let restore = () => {};
+		if (identity === "startup-v2") {
+			const start = {
+				schemaVersion: 2 as const,
+				purpose: "executor-instance-startup-v2" as const,
+				podUid,
+				startupRef: "receiver-window-start",
+				bindingDigest: codexSessionExecutorBindingDigestV1(binding),
+				expiresAt: Date.now() + 60_000,
+				instance: {
+					attemptId: randomUUID(),
+					recordRef: randomUUID(),
+					sandboxId: binding.sandboxId,
+					configurationRevision: 1,
+					configurationVersion: "session-executor-fixture",
+					generation: binding.sessionGeneration,
+					resourceFence: binding.resourceFence,
+				},
+			};
+			const material = issueExecutorStartIdentityV1(start, privateKey);
+			const runner = verifyExecutorStartIdentityV1(material.runner, {
+				...start,
+				issuerKey: publicKey,
+				role: "runner",
+				now: Date.now(),
+			});
+			const identityPath = join(directory, "receiver-window-startup.json");
+			await writeFile(identityPath, JSON.stringify(material.host), {
+				mode: 0o400,
+			});
+			executorIdentityPaths.set(
+				join(executorIdentityFileRootV1, executorIdentityFileV1),
+				identityPath,
+			);
+			Object.assign(f.values, {
+				AGENT_INFRA_EXECUTOR_STARTUP_REF: start.startupRef,
+				AGENT_INFRA_EXECUTOR_STARTUP_DEADLINE: String(start.expiresAt),
+			});
+			const transport = vi
+				.spyOn(globalThis, "fetch")
+				.mockImplementation(async (url, options) => {
+					const path = new URL(String(url)).pathname;
+					const request = verifyExecutorControlV1(
+						runner,
+						path,
+						JSON.parse(String(options?.body)),
+					);
+					if (!request) throw new Error("invalid runner channel");
+					return Response.json(
+						signExecutorControlV1(
+							runner,
+							`${path}/result`,
+							{
+								epoch: admission.epoch,
+								runnerIdentityConsumed: true,
+								deliveryFilesRemoved: true,
+								executorReady: true,
+								emptyBusinessState: true,
+							},
+							request.requestId,
+							request.deadline,
+						),
+					);
+				});
+			restore = () => {
+				executorIdentityPaths.clear();
+				transport.mockRestore();
+			};
+		}
+		return { f, directory, binding, admission, restore };
+	}
+
+	/** The Worker-rendered receiver input for this Sandbox (connection-install-bootstrap.ts). */
+	function receiverEnvironment(
+		binding: { podName: string; namespace: string; sandboxId: string } & {
+			sessionGeneration: number;
+			resourceFence: number;
+		},
+		port: number,
+		mainPort: number,
+	) {
+		const system = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp/agents",
+			audience: "connection-mcp",
+			egressProfile: { ref: "connection-egress", revision: "r1" },
+			issuer: "https://connection.example.test/",
+			oauthCallbackUrl:
+				"https://platform.example.test/api/v1/connection/oauth/callback",
+		};
+		return {
+			PORT: String(mainPort),
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN: `https://${binding.podName}.${binding.namespace}.svc:${port}/`,
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_WORKER_ORIGIN: `https://platform-worker.${binding.namespace}.svc:8443/`,
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS:
+				JSON.stringify(system),
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_SYSTEM_ACCESS_APPROVAL:
+				JSON.stringify({
+					schemaVersion: 1,
+					configFingerprint: connectionSystemAccessFingerprintV1(system),
+					egressEnforced: true,
+					source: { ref: "connection-system-access", revision: "r1" },
+				}),
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_CLIENT_NAME: "Agent Infra",
+			AGENT_INFRA_RUNTIME_SANDBOX_ID: binding.sandboxId,
+			AGENT_INFRA_RUNTIME_SESSION_GENERATION: String(binding.sessionGeneration),
+			AGENT_INFRA_RUNTIME_RESOURCE_FENCE: String(binding.resourceFence),
+		};
+	}
+
+	it.each([
+		["executor admission", "complete", "admission"],
+		["a V2 startup identity", "complete", "startup-v2"],
+		["executor admission", "missing", "admission"],
+		["a V2 startup identity", "missing", "startup-v2"],
+	] as const)(
+		"starts the runtime container with %s and %s receiver materials",
+		async (_name, materials, identity) => {
+			const window = await executorWindow(identity);
+			const { f, directory, binding, admission } = window;
+			const serviceName = `${binding.podName}.${binding.namespace}.svc`;
+			const tls = await runtimeTlsFixture({ dnsNames: [serviceName] });
+			const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+			try {
+				const port = await freePort();
+				const mainPort = await freePort(port);
+				const tlsDirectory = join(
+					directory,
+					"codex-driver.json.native",
+					"conversations",
+					"standard-mcp-oauth",
+					"tls",
+				);
+				if (materials === "complete") {
+					await mkdir(tlsDirectory, { recursive: true, mode: 0o700 });
+					for (const [name, text] of Object.entries({
+						"server.crt": tls.cert,
+						"server.key": tls.key,
+						"callback.auth": "synthetic-window-callback-token-0001",
+						"install.auth": "synthetic-window-install-token-0001-abcdef",
+						"worker-ca.crt": tls.ca,
+					}))
+						await writeFile(join(tlsDirectory, name), text, { mode: 0o600 });
+				} else {
+					// The initializer reported RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE and
+					// wrote nothing; the Host only sees the bare mount point.
+					await mkdir(tlsDirectory, { recursive: true, mode: 0o755 });
+				}
+				Object.assign(f.values, receiverEnvironment(binding, port, mainPort));
+				const ready: string[] = [];
+				// Production composition: the same call startFromEnvironment() makes.
+				const runtime = await assembleRuntimeHost(f.values);
+				const server = startRuntimeHost({
+					...runtime,
+					log: (line) => ready.push(line),
+				});
+				try {
+					if (!server.listening) await once(server, "listening");
+					expect(
+						runtimeAssemblyMocks.openCodexRuntimeDriver,
+					).toHaveBeenCalledWith(
+						expect.objectContaining({
+							sessionExecutor: expect.objectContaining({
+								epoch: admission.epoch,
+							}),
+						}),
+					);
+					expect(f.assertCurrent).toHaveBeenCalled();
+					expect(await healthz(mainPort)).toBe(200);
+					const receiverLines = warning.mock.calls
+						.map(([line]) => String(line))
+						.filter((line) => line.includes("CONNECTION_INSTALL_RECEIVER"));
+					if (materials === "complete") {
+						expect(runtime.connectionInstall?.status).toBe("available");
+						await waitForPort(port);
+						expect(await handshake(port, serviceName, tls.ca)).toBe(true);
+						expect(ready).toContain(
+							JSON.stringify({
+								service: "agent-runtime-host",
+								code: "CONNECTION_INSTALL_RECEIVER_LISTENING",
+								port,
+							}),
+						);
+						expect(receiverLines).toEqual([]);
+					} else {
+						expect(runtime.connectionInstall?.status).toBe("unavailable");
+						expect(receiverLines).toEqual([unavailableLine]);
+						expect(await portOpen(port)).toBe(false);
+					}
+				} finally {
+					await closeRuntimeHost(server, runtime.close);
+				}
+				expect(f.closeAdmission).toHaveBeenCalled();
+				expect(await portOpen(port)).toBe(false);
+			} finally {
+				warning.mockRestore();
+				window.restore();
+				await tls.cleanup();
+			}
+		},
+		30_000,
+	);
 });

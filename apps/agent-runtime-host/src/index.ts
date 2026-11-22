@@ -74,6 +74,7 @@ import {
 import {
 	type ConnectionInstallReceiverAssemblyV1,
 	codexDynamicConnectionClientForReaderV1,
+	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
 import { openExecutorDrainHostV1 } from "./executor-drain-host.js";
@@ -193,10 +194,10 @@ export type RuntimeHostAssemblyOptionsV1 = Pick<
 		readonly hostKeyId: string;
 	};
 	/**
-	 * §13.5.6 explicit composition input (Codex only): prepares the install
-	 * receiver on the opened Host store; its dynamic reader backs the Codex
-	 * Driver's declared Connection tools. No production caller supplies this
-	 * while manual installation stays dormant (EP-1123).
+	 * §13.5.6 install receiver preparation (Codex only) on the opened Host
+	 * store; its dynamic reader backs the Codex Driver's declared Connection
+	 * tools. Absent, the production entry prepares the receiver from the
+	 * Worker-rendered deployment input (#4199); callers override it only in tests.
 	 */
 	prepareConnectionInstall?: (
 		store: FileRuntimeStore,
@@ -370,6 +371,13 @@ export function startRuntimeHost(options: StartOptions) {
 		void options.oauth.client.close().catch(() => undefined);
 	let connectionInstallServer: ReturnType<typeof createHttpsServer> | undefined;
 	const connectionInstall = options.connectionInstall;
+	const connectionInstallUnavailable = () =>
+		console.warn(
+			JSON.stringify({
+				service: runtimeHostService,
+				code: "CONNECTION_INSTALL_RECEIVER_UNAVAILABLE",
+			}),
+		);
 	if (connectionInstall?.status === "available") {
 		if (
 			connectionInstall.port !== port &&
@@ -379,12 +387,27 @@ export function startRuntimeHost(options: StartOptions) {
 			)
 		) {
 			try {
-				connectionInstallServer =
+				const started =
 					startConnectionInstallReceiverServerV1(connectionInstall);
+				started.once("error", connectionInstallUnavailable);
+				started.once("listening", () =>
+					log(
+						JSON.stringify({
+							service: runtimeHostService,
+							code: "CONNECTION_INSTALL_RECEIVER_LISTENING",
+							port: connectionInstall.port,
+						}),
+					),
+				);
+				connectionInstallServer = started;
 			} catch {
+				connectionInstallUnavailable();
 				void connectionInstall.close().catch(() => undefined);
 			}
-		} else void connectionInstall.close().catch(() => undefined);
+		} else {
+			connectionInstallUnavailable();
+			void connectionInstall.close().catch(() => undefined);
+		}
 	}
 	const server = serve(
 		{
@@ -710,21 +733,13 @@ export async function assembleRuntimeHost(
 			keyId,
 			issuer: expectedIssuer,
 		});
-		if (
-			Object.keys(environment).some(
-				(key) =>
-					key.startsWith("AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_") &&
-					environment[key] !== undefined,
-			)
-		) {
-			console.warn(
-				JSON.stringify({
-					service: "agent-runtime-host",
-					code: "CONNECTION_MANUAL_INSTALLATION_DORMANT",
-					dependency: "EP-1123",
-				}),
-			);
-		}
+		// §13.5.6: any Worker-rendered receiver input asks this Host for the
+		// install receiver; reported below when it cannot be opened.
+		const connectionInstallRequested = Object.keys(environment).some(
+			(key) =>
+				key.startsWith("AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_") &&
+				environment[key] !== undefined,
+		);
 		// Protected Standard MCP is assembled only for a pinned, explicitly gated
 		// native transport. Connection credentials remain in this Host client.
 		const standardConnectionClient =
@@ -746,10 +761,30 @@ export async function assembleRuntimeHost(
 						}),
 					})
 				: undefined;
+		const prepareConnectionInstall =
+			options.prepareConnectionInstall ??
+			((opened: FileRuntimeStore) =>
+				prepareConnectionInstallReceiverV1({
+					environment,
+					dataDirectory,
+					agentId,
+					workerId: runtimeWorkerId,
+					key: publicKey,
+					keyId,
+					issuer: expectedIssuer,
+					serviceToken,
+					store: opened,
+				}));
 		connectionInstall =
-			binding === "codex"
-				? await options.prepareConnectionInstall?.(store)
-				: undefined;
+			binding === "codex" ? await prepareConnectionInstall(store) : undefined;
+		// Missing or invalid input closes only this receiver; ordinary Sessions keep running.
+		if (connectionInstallRequested && connectionInstall?.status !== "available")
+			console.warn(
+				JSON.stringify({
+					service: runtimeHostService,
+					code: "CONNECTION_INSTALL_RECEIVER_UNAVAILABLE",
+				}),
+			);
 		const dynamicReader =
 			connectionInstall?.status === "available"
 				? connectionInstall.dynamicReader
