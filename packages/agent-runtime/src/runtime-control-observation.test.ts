@@ -828,4 +828,78 @@ describe("Runtime control observation (#4358 I2)", () => {
 		});
 		expect(project(parse(many.lines)).statuses).toEqual(["complete"]);
 	});
+
+	it("bounds time fields, each line and the whole input before reading them (#4360 round 6)", () => {
+		const out = sink();
+		fullStop(observerFor(out.output));
+		const complete = out.lines.map(
+			(line) => JSON.parse(line) as Record<string, unknown>,
+		);
+		const view = (records: ReadonlyArray<unknown>, extra: string[] = []) => {
+			const result = projectRuntimeControlEvidenceV1([
+				...records.map((record) => JSON.stringify(record)),
+				...extra,
+			]);
+			return {
+				rejectedLines: result.rejectedLines,
+				truncated: result.truncated,
+				statuses: result.timelines.map((timeline) => timeline.status),
+			};
+		};
+		expect(view(complete)).toEqual({
+			rejectedLines: 0,
+			truncated: false,
+			statuses: ["complete"],
+		});
+		const terminalIndex = complete.findIndex(
+			(record) => record.stage === "terminal_commit_confirmed",
+		);
+		const withField = (index: number, field: string, value: string) =>
+			complete.map((record, position) =>
+				position === index ? { ...record, [field]: value } : record,
+			);
+		// Up to nanosecond precision is a legal UTC instant.
+		expect(
+			view(withField(0, "observedAtUtc", "2026-11-21T21:00:00.123456789Z")),
+		).toMatchObject({ rejectedLines: 0, statuses: ["complete"] });
+		// A longer fraction is never a fixed U2 time field: the line is dropped.
+		for (const [index, field] of [
+			[0, "observedAtUtc"],
+			[terminalIndex, "terminalOccurredAtUtc"],
+		] as const)
+			for (const digits of [10, 1_000_000])
+				expect(
+					view(
+						withField(
+							index,
+							field,
+							`2026-11-21T21:00:00.${"9".repeat(digits)}Z`,
+						),
+					),
+				).toMatchObject({ rejectedLines: 1, statuses: ["unproven"] });
+		// An over-long evidence line is dropped before parsing; other long log
+		// lines are not evidence and are not counted.
+		const padded = JSON.stringify({
+			...complete[1],
+			padding: "x".repeat(5_000),
+		});
+		expect(
+			view(
+				complete.filter((_, position) => position !== 1),
+				[padded, `{"code":"OTHER_LOG","text":"${"y".repeat(5_000)}"}`],
+			),
+		).toMatchObject({ rejectedLines: 1, statuses: ["unproven"] });
+		// Input beyond the overall limit is not read; nothing is signed from a
+		// truncated log, not even a timeline that came first.
+		const filler = "z".repeat(4_000);
+		const flooded = view(
+			complete,
+			Array.from({ length: 4_300 }, () => filler),
+		);
+		expect(flooded).toEqual({
+			rejectedLines: 0,
+			truncated: true,
+			statuses: ["unproven"],
+		});
+	});
 });

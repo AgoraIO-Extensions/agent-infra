@@ -41,6 +41,22 @@ export const RuntimeControlReasonV1Schema = z.enum([
 
 const ref = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const count = z.number().int().nonnegative().safe();
+/**
+ * #4360 round 6: a fixed U2 time field (Spec §18.5.3) is a UTC instant with at
+ * most nanosecond precision, at most 30 characters. The writer emits
+ * `Date#toISOString()` (24 characters).
+ */
+const utcInstant = z.iso.datetime().max(30);
+
+/**
+ * #4360 round 6: the reader's fixed input limits. The largest record the
+ * closed schema admits (every reference at 128 characters, every optional
+ * field present) serializes to under 1,900 characters, so a longer line is
+ * never a U2 record. The overall limit bounds one collected Pod or instance
+ * log; past it the reader stops and signs nothing.
+ */
+export const runtimeControlEvidenceMaxLineCharsV1 = 4_096;
+export const runtimeControlEvidenceMaxInputCharsV1 = 16 * 1024 * 1024;
 
 const RuntimeControlBindingV1Schema = z.strictObject({
 	agentId: ref,
@@ -82,14 +98,14 @@ export const RuntimeControlEvidenceV1Schema = z.strictObject({
 		.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
 		.optional(),
 	monoSequence: z.number().int().positive().safe(),
-	observedAtUtc: z.iso.datetime(),
+	observedAtUtc: utcInstant,
 	elapsedMonoMs: count.optional(),
 	...RuntimeControlBindingV1Schema.partial().shape,
 	interruptTarget: count.optional(),
 	interruptTargets: count.optional(),
 	terminalStatus: z.enum(["completed", "failed", "cancelled"]).optional(),
 	terminalRef: ref.optional(),
-	terminalOccurredAtUtc: z.iso.datetime().optional(),
+	terminalOccurredAtUtc: utcInstant.optional(),
 });
 export type RuntimeControlEvidenceV1 = z.infer<
 	typeof RuntimeControlEvidenceV1Schema
@@ -443,7 +459,18 @@ export interface RuntimeControlTimelineV1 {
 export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 	const records: RuntimeControlEvidenceV1[] = [];
 	let rejectedLines = 0;
+	let inputChars = 0;
+	let truncated = false;
 	for (const line of lines) {
+		inputChars += line.length;
+		if (inputChars > runtimeControlEvidenceMaxInputCharsV1) {
+			truncated = true;
+			break;
+		}
+		if (line.length > runtimeControlEvidenceMaxLineCharsV1) {
+			if (line.includes(runtimeControlEvidenceCodeV1)) rejectedLines += 1;
+			continue;
+		}
 		let value: unknown;
 		try {
 			value = JSON.parse(line);
@@ -515,7 +542,7 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 			executionId: first.executionId as string,
 			stopRequestId: first.stopRequestId as string,
 			status:
-				gap || unknown
+				truncated || gap || unknown
 					? "unproven"
 					: rejected
 						? "rejected"
@@ -525,5 +552,5 @@ export function projectRuntimeControlEvidenceV1(lines: Iterable<string>) {
 			records: ordered,
 		});
 	}
-	return { records, rejectedLines, timelines };
+	return { records, rejectedLines, truncated, timelines };
 }
