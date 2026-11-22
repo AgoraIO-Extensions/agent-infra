@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,13 +8,25 @@ import { parseAllDocuments, stringify } from "yaml";
 import {
 	assertSessionEciAdmissionRenderedV1,
 	eciPlacementFieldsV1,
+	labelsSatisfySelectorV1,
 	maxEvidenceAgeMs,
 	networkPolicySpecSha256V1,
+	placementSelectorSha256V1,
 	validateNetworkPolicyEnforcementV1,
 } from "../deploy/ack/networkpolicy-enforcement.mjs";
-import { renderedEnforcementManifest } from "./support/networkpolicy-evidence.mjs";
+import {
+	networkPolicySpecV1,
+	networkPolicyTemplateDigestsV1,
+} from "../packages/platform-core/src/workload-network-policy.ts";
+import {
+	networkPolicyDeploymentConfig,
+	probeAgentKey,
+	probePolicyEvidence,
+	renderedEnforcementManifest,
+	workerPodLabels,
+} from "./support/networkpolicy-evidence.mjs";
 
-// #4351 / prep §4.6: every incomplete or mismatched input fails closed.
+// #4351 / #4383: every incomplete or mismatched input fails closed.
 const now = Date.parse("2026-11-21T18:00:00.000Z");
 const at = (minutes) => new Date(now - minutes * 60_000).toISOString();
 const uid = (n) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
@@ -57,26 +68,27 @@ const controller = (kind, name, n, spec, extra = {}) => ({
 	},
 	...extra,
 });
-const config = (change = {}) => ({
-	schemaVersion: 1,
-	kind: "ack-poseidon-config-readback",
-	clusterId: "c0ffee0000",
-	component: "poseidon",
-	version: "v0.8.0",
-	eciNetworkPolicyEnabled: true,
-	readAt: at(30),
-	...change,
-});
-const bytes = (value) => Buffer.from(JSON.stringify(value));
-const sha = (value) => createHash("sha256").update(value).digest("hex");
+const render = (
+	placementValue = { architecture: "amd64", legacyUnplaced: "reject" },
+) => renderedEnforcementManifest("agent-infra", placementValue);
+
+/** Recompute everything the evidence producer derives from the deployment configuration. */
+function resign(f) {
+	f.evidence.networkPolicy.templateSha256 = networkPolicyTemplateDigestsV1(
+		f.deploymentConfig,
+	);
+	for (const probe of f.evidence.probes)
+		probe.policy.instantiatedSha256 = networkPolicySpecSha256V1(
+			networkPolicySpecV1({
+				variant: probe.policy.variant,
+				config: f.deploymentConfig,
+				substitutions: probe.policy.substitutions,
+			}),
+		);
+}
 
 function fixture() {
-	const enforcerConfigBytes = bytes(config());
-	const policySpec = {
-		podSelector: { matchLabels: { "agent-infra.agora.io/agent": "agent-p" } },
-		policyTypes: ["Ingress"],
-		ingress: [{ ports: [{ port: 3003, protocol: "TCP" }] }],
-	};
+	const deploymentConfig = networkPolicyDeploymentConfig();
 	const probe = {
 		destination: {
 			pod: "agent-p-0",
@@ -88,7 +100,7 @@ function fixture() {
 		policy: {
 			name: "agent-p",
 			uid: uid(50),
-			specSha256: networkPolicySpecSha256V1(policySpec),
+			...probePolicyEvidence(deploymentConfig, "self-managed", 3003),
 		},
 		allow: { at: at(25), outcome: "connected" },
 		deny: { at: at(24), outcome: "timeout", policyUid: uid(51) },
@@ -105,6 +117,7 @@ function fixture() {
 		controller("StatefulSet", "agent-p2", 14, placement),
 	];
 	return {
+		deploymentConfig,
 		evidence: {
 			schemaVersion: 1,
 			kind: "agent-infra-networkpolicy-enforcement-evidence",
@@ -113,19 +126,20 @@ function fixture() {
 			enforcer: {
 				runtime: "eci",
 				component: "poseidon",
-				version: "v0.8.0",
-				configSha256: sha(enforcerConfigBytes),
+				version: "unobservable",
 			},
-			placement: { architecture: "amd64", legacyUnplaced: "reject" },
+			placement: {
+				architecture: "amd64",
+				legacyUnplaced: "reject",
+				selectorSha256: placementSelectorSha256V1("amd64"),
+			},
 			nodes: [
 				{ name: "virtual-kubelet-cn-hangzhou-i", uid: uid(20) },
 				{ name: "virtual-kubelet-cn-hangzhou-j", uid: uid(21) },
 			],
-			targets: controllers.map((item) => ({
-				kind: item.kind,
-				name: item.metadata.name,
-				uid: item.metadata.uid,
-			})),
+			networkPolicy: {
+				templateSha256: networkPolicyTemplateDigestsV1(deploymentConfig),
+			},
 			// One allow→deny→recovery result per candidate node (i and j).
 			probes: [
 				probe,
@@ -138,91 +152,31 @@ function fixture() {
 						nodeName: "virtual-kubelet-cn-hangzhou-j",
 						controller: { kind: "StatefulSet", name: "agent-p2", uid: uid(14) },
 					},
-					policy: { ...probe.policy, name: "agent-p2", uid: uid(54) },
+					policy: {
+						name: "agent-p2",
+						uid: uid(54),
+						...probePolicyEvidence(deploymentConfig, "multi-service-entry"),
+					},
 				},
 			],
 			observedAt: at(20),
 			expiresAt: new Date(now + 24 * 60 * 60_000).toISOString(),
 		},
-		enforcerConfigBytes,
-		renderedManifest: renderedEnforcementManifest("agent-infra", {
-			architecture: "amd64",
-			legacyUnplaced: "reject",
-		}),
+		renderedManifest: render(),
 		observed: {
 			namespace: { name: "agent-infra", uid: uid(2) },
 			kubeSystemNamespaceUid: uid(1),
 			nodes: [virtualNode("i", 20), virtualNode("j", 21), ecsNode],
 			controllers,
-			probeTargets: [
-				{
-					pod: {
-						metadata: {
-							name: "agent-p-0",
-							uid: uid(40),
-							namespace: "agent-infra",
-							labels: { "agent-infra.agora.io/agent": "agent-p" },
-							ownerReferences: [
-								{
-									kind: "StatefulSet",
-									name: "agent-p",
-									uid: uid(10),
-									controller: true,
-								},
-							],
-						},
-						spec: {
-							nodeName: "virtual-kubelet-cn-hangzhou-i",
-							containers: [{ name: "agent", ports: [{ containerPort: 3003 }] }],
-						},
-						status: { phase: "Running" },
-					},
-					policy: {
-						metadata: {
-							name: "agent-p",
-							uid: uid(50),
-							namespace: "agent-infra",
-						},
-						spec: policySpec,
-					},
-				},
-				{
-					pod: {
-						metadata: {
-							name: "agent-p2-0",
-							uid: uid(42),
-							namespace: "agent-infra",
-							labels: { "agent-infra.agora.io/agent": "agent-p" },
-							ownerReferences: [
-								{
-									kind: "StatefulSet",
-									name: "agent-p2",
-									uid: uid(14),
-									controller: true,
-								},
-							],
-						},
-						spec: {
-							nodeName: "virtual-kubelet-cn-hangzhou-j",
-							containers: [{ name: "agent", ports: [{ containerPort: 3003 }] }],
-						},
-						status: { phase: "Running" },
-					},
-					policy: {
-						metadata: {
-							name: "agent-p2",
-							uid: uid(54),
-							namespace: "agent-infra",
-						},
-						spec: policySpec,
-					},
-				},
-			],
 		},
 		now,
 	};
 }
-const run = (input) => validateNetworkPolicyEnforcementV1(input);
+const run = (input) =>
+	validateNetworkPolicyEnforcementV1({
+		...input,
+		deploymentConfig: input.deploymentConfig,
+	});
 const rejects = (input, code) =>
 	assert.throws(
 		() => run(input),
@@ -238,6 +192,25 @@ test("complete current evidence passes without signing field acceptance", () => 
 	assert.equal(summary.allAgentWorkloadsOnEnforcedForm, true);
 	assert.equal(summary.fieldAcceptanceSigned, false);
 	assert(!JSON.stringify(summary).includes(uid(2)));
+	assert.deepEqual(Object.keys(summary.networkPolicyTemplates).sort(), [
+		"internal-only",
+		"multi-service-entry",
+		"multi-service-migration",
+		"multi-service-service",
+		"platform-auth",
+		"self-managed",
+	]);
+});
+
+test("the Poseidon configuration readback and the full controller list are no longer required", () => {
+	const f = fixture();
+	// An Agent accepted after the probes is not in the evidence and may exist.
+	f.observed.controllers.push(
+		controller("StatefulSet", "agent-new", 15, placement),
+	);
+	assert.equal(run(f).status, "passed");
+	// The probe Pods and original policies are not read, so nothing about them is observed.
+	assert.equal(f.observed.probeTargets, undefined);
 });
 
 test("retained pre-placement Hosts pass only in the transition mode and stay unisolated", () => {
@@ -246,17 +219,14 @@ test("retained pre-placement Hosts pass only in the transition mode and stay uni
 		architecture: "amd64",
 		legacyUnplaced: "retain-until-lifecycle",
 	};
-	f.evidence.placement = { ...retain };
-	f.renderedManifest = renderedEnforcementManifest("agent-infra", retain);
+	f.evidence.placement.legacyUnplaced = "retain-until-lifecycle";
+	f.renderedManifest = render(retain);
 	f.observed.controllers[0] = controller("StatefulSet", "agent-p", 10, {});
 	const summary = run(f);
 	assert.equal(summary.legacyUnplacedActiveTargets, 1);
 	assert.equal(summary.allAgentWorkloadsOnEnforcedForm, false);
 	f.evidence.placement.legacyUnplaced = "reject";
-	f.renderedManifest = renderedEnforcementManifest("agent-infra", {
-		architecture: "amd64",
-		legacyUnplaced: "reject",
-	});
+	f.renderedManifest = render();
 	rejects(f, "LEGACY_UNPLACED_REMAINS");
 	// A finished legacy Job has no running Pod.
 	const g = fixture();
@@ -274,6 +244,20 @@ test("retained pre-placement Hosts pass only in the transition mode and stay uni
 	rejects(g, "LEGACY_UNPLACED_REMAINS");
 });
 
+/** Rendered Worker manifest with a changed Deployment selector or extra Service. */
+const withWorker = (change) => {
+	const documents = parseAllDocuments(render()).map((document) =>
+		document.toJS(),
+	);
+	change(documents);
+	return documents.map((document) => stringify(document)).join("---\n");
+};
+const setLabels = (f, labels) => {
+	f.evidence.probes[0].policy.podLabels.target = {
+		...f.evidence.probes[0].policy.podLabels.target,
+		...labels,
+	};
+};
 const cases = [
 	["no enforcer", (f) => delete f.evidence.enforcer, "EVIDENCE_INVALID"],
 	[
@@ -291,40 +275,25 @@ const cases = [
 		"ENFORCER_UNSUPPORTED",
 	],
 	[
-		"ECI NetworkPolicy switch off",
+		"a claimed Poseidon version",
 		(f) => {
-			f.enforcerConfigBytes = bytes(config({ eciNetworkPolicyEnabled: false }));
-			f.evidence.enforcer.configSha256 = sha(f.enforcerConfigBytes);
+			f.evidence.enforcer.version = "v0.8.0";
 		},
-		"ENFORCER_DISABLED",
+		"EVIDENCE_INVALID",
 	],
 	[
-		"unreadable ECI config",
-		(f) => delete f.enforcerConfigBytes,
-		"ENFORCER_CONFIG_UNREADABLE",
+		"a leftover configuration digest",
+		(f) => {
+			f.evidence.enforcer.configSha256 = "a".repeat(64);
+		},
+		"EVIDENCE_INVALID",
 	],
 	[
-		"config bytes changed",
+		"the retired targets list",
 		(f) => {
-			f.enforcerConfigBytes = bytes(config({ version: "v0.8.1" }));
+			f.evidence.targets = [];
 		},
-		"ENFORCER_CONFIG_UNREADABLE",
-	],
-	[
-		"malformed config",
-		(f) => {
-			f.enforcerConfigBytes = Buffer.from("{");
-			f.evidence.enforcer.configSha256 = sha(f.enforcerConfigBytes);
-		},
-		"ENFORCER_CONFIG_UNREADABLE",
-	],
-	[
-		"config from another cluster",
-		(f) => {
-			f.enforcerConfigBytes = bytes(config({ clusterId: "other" }));
-			f.evidence.enforcer.configSha256 = sha(f.enforcerConfigBytes);
-		},
-		"ENFORCER_CONFIG_MISMATCH",
+		"EVIDENCE_INVALID",
 	],
 	[
 		"wrong cluster",
@@ -412,16 +381,6 @@ const cases = [
 		"EVIDENCE_EXPIRED",
 	],
 	[
-		"stale config readback",
-		(f) => {
-			f.enforcerConfigBytes = bytes(
-				config({ readAt: new Date(now - maxEvidenceAgeMs - 1).toISOString() }),
-			);
-			f.evidence.enforcer.configSha256 = sha(f.enforcerConfigBytes);
-		},
-		"EVIDENCE_EXPIRED",
-	],
-	[
 		"no probes",
 		(f) => {
 			f.evidence.probes = [];
@@ -485,27 +444,6 @@ const cases = [
 		"PROBE_ORDER_INVALID",
 	],
 	[
-		"one service missing",
-		(f) => {
-			f.evidence.targets.splice(1, 1);
-		},
-		"TARGET_SET_MISMATCH",
-	],
-	[
-		"migration Job missing",
-		(f) => {
-			f.evidence.targets.splice(3, 1);
-		},
-		"TARGET_SET_MISMATCH",
-	],
-	[
-		"recreated controller",
-		(f) => {
-			f.observed.controllers[0].metadata.uid = uid(19);
-		},
-		"TARGET_SET_MISMATCH",
-	],
-	[
 		"Owner selector on a member",
 		(f) => {
 			f.observed.controllers[1].spec.template.spec.nodeSelector = {
@@ -538,16 +476,15 @@ const cases = [
 		},
 		"EVIDENCE_INVALID",
 	],
-	// Round 2 MUST-2: every candidate node needs its own execution result.
+	// Every candidate node needs its own execution result.
 	[
 		"candidate j without its own probe",
 		(f) => {
 			f.evidence.probes.splice(1, 1);
-			f.observed.probeTargets.splice(1, 1);
 		},
 		"CANDIDATE_NODE_UNPROBED",
 	],
-	// Round 2 MUST-1: Session Sandboxes must land on the proven candidates too.
+	// Session Sandboxes must land on the proven candidates too.
 	[
 		"Session on another architecture",
 		(f) => {
@@ -569,7 +506,7 @@ const cases = [
 		},
 		"SESSION_PLACEMENT_UNPROVEN",
 	],
-	// MUST-A: the placement must be what the release hands the Worker.
+	// The placement must be what the release hands the Worker.
 	[
 		"missingWorkerPlacement",
 		(f) => {
@@ -583,7 +520,7 @@ const cases = [
 	[
 		"mismatchedWorkerArchitecture",
 		(f) => {
-			f.renderedManifest = renderedEnforcementManifest("agent-infra", {
+			f.renderedManifest = render({
 				architecture: "arm64",
 				legacyUnplaced: "reject",
 			});
@@ -593,7 +530,7 @@ const cases = [
 	[
 		"mismatchedWorkerTransitionMode",
 		(f) => {
-			f.renderedManifest = renderedEnforcementManifest("agent-infra", {
+			f.renderedManifest = render({
 				architecture: "amd64",
 				legacyUnplaced: "retain-until-lifecycle",
 			});
@@ -624,100 +561,364 @@ const cases = [
 		},
 		"RENDERED_MANIFEST_INVALID",
 	],
-	// MUST-B: the probed Pod and its original policy must still be those objects.
+	// ---- #4383: placement selector digest ----
 	[
-		"probe target Pod gone",
+		"selector digest of another architecture",
 		(f) => {
-			f.observed.probeTargets[0].pod = undefined;
+			f.evidence.placement.selectorSha256 = placementSelectorSha256V1("arm64");
 		},
-		"PROBE_TARGET_MISSING",
+		"PLACEMENT_SELECTOR_MISMATCH",
 	],
 	[
-		"probe target Pod recreated (new UID)",
+		"missing selector digest",
 		(f) => {
-			f.observed.probeTargets[0].pod.metadata.uid = uid(41);
+			delete f.evidence.placement.selectorSha256;
 		},
-		"PROBE_TARGET_MISMATCH",
+		"EVIDENCE_INVALID",
+	],
+	// ---- #4383: normalized NetworkPolicy template digests ----
+	[
+		"no networkPolicy section",
+		(f) => {
+			delete f.evidence.networkPolicy;
+		},
+		"EVIDENCE_INVALID",
 	],
 	[
-		"evidence names an unrelated Pod",
+		"one template digest differs",
 		(f) => {
-			f.evidence.probes[0].destination.pod = "unrelated-pod";
+			f.evidence.networkPolicy.templateSha256["self-managed"] = "b".repeat(64);
 		},
-		"PROBE_TARGET_MISMATCH",
+		"NETWORKPOLICY_TEMPLATE_MISMATCH",
 	],
 	[
-		"probe port not served by the Pod",
+		"a template variant is missing from the evidence",
 		(f) => {
-			f.evidence.probes[0].destination.port = 65_535;
+			delete f.evidence.networkPolicy.templateSha256["multi-service-migration"];
 		},
-		"PROBE_TARGET_MISMATCH",
+		"NETWORKPOLICY_TEMPLATE_MISMATCH",
 	],
 	[
-		"probe target moved node",
+		"the evidence records a variant the deployment cannot render",
 		(f) => {
-			f.observed.probeTargets[0].pod.spec.nodeName =
-				"virtual-kubelet-cn-hangzhou-j";
+			f.evidence.networkPolicy.templateSha256["internal-only+snapshot"] =
+				"c".repeat(64);
 		},
-		"PROBE_TARGET_MISMATCH",
+		"NETWORKPOLICY_TEMPLATE_MISMATCH",
 	],
 	[
-		"probe target owned by another controller",
+		"deployment egress CIDR widened after the probes",
 		(f) => {
-			f.observed.probeTargets[0].pod.metadata.ownerReferences[0].uid = uid(18);
+			f.deploymentConfig.egress.modelEgress = [
+				{ destination: { cidr: "8.8.0.0/16" }, port: 443 },
+			];
 		},
-		"PROBE_TARGET_MISMATCH",
+		"NETWORKPOLICY_TEMPLATE_MISMATCH",
 	],
 	[
-		"probe target in another namespace",
+		"deployment Worker source selector changed after the probes",
 		(f) => {
-			f.observed.probeTargets[0].pod.metadata.namespace = "other";
+			f.deploymentConfig.workerSelector = {
+				...workerPodLabels,
+				"app.kubernetes.io/instance": "other",
+			};
+			f.renderedManifest = withWorker((documents) => {
+				const worker = documents.find((item) => item.kind === "Deployment");
+				worker.spec.template.metadata.labels["app.kubernetes.io/instance"] =
+					"other";
+			});
 		},
-		"PROBE_TARGET_MISMATCH",
+		"NETWORKPOLICY_TEMPLATE_MISMATCH",
 	],
 	[
-		"probe target not running",
+		"snapshot egress newly deployed",
 		(f) => {
-			f.observed.probeTargets[0].pod.status.phase = "Pending";
+			f.deploymentConfig.workspaceSnapshotProjection = true;
+			f.deploymentConfig.egress.workspaceSnapshotEgress = [
+				{ destination: { ip: "198.51.100.20" }, port: 9000 },
+			];
 		},
-		"PROBE_TARGET_MISMATCH",
+		"NETWORKPOLICY_TEMPLATE_MISMATCH",
 	],
 	[
-		"original policy replaced (new UID)",
+		"missing deployment configuration",
 		(f) => {
-			f.observed.probeTargets[0].policy.metadata.uid = uid(52);
+			f.deploymentConfig = undefined;
+		},
+		"NETWORKPOLICY_CONFIG_REQUIRED",
+	],
+	[
+		"malformed deployment configuration",
+		(f) => {
+			f.deploymentConfig = { ...f.deploymentConfig, extra: true };
+		},
+		"NETWORKPOLICY_CONFIG_INVALID",
+	],
+	[
+		"empty Worker selector in the deployment configuration",
+		(f) => {
+			f.deploymentConfig.workerSelector = {};
+		},
+		"NETWORKPOLICY_CONFIG_INVALID",
+	],
+	[
+		"deployment Worker selector the rendered Worker does not satisfy",
+		(f) => {
+			f.deploymentConfig.workerSelector = {
+				"app.kubernetes.io/name": "somebody-else",
+			};
+		},
+		"WORKER_SELECTOR_MISMATCH",
+	],
+	// ---- #4383: probe policy instantiation ----
+	[
+		"policy without a variant",
+		(f) => {
+			delete f.evidence.probes[0].policy.variant;
+		},
+		"EVIDENCE_INVALID",
+	],
+	[
+		"policy without substitutions",
+		(f) => {
+			delete f.evidence.probes[0].policy.substitutions;
+		},
+		"EVIDENCE_INVALID",
+	],
+	[
+		"policy without Pod labels",
+		(f) => {
+			delete f.evidence.probes[0].policy.podLabels;
+		},
+		"EVIDENCE_INVALID",
+	],
+	[
+		"policy without an instantiated digest",
+		(f) => {
+			delete f.evidence.probes[0].policy.instantiatedSha256;
+		},
+		"EVIDENCE_INVALID",
+	],
+	[
+		"the retired spec digest field",
+		(f) => {
+			f.evidence.probes[0].policy.specSha256 = "d".repeat(64);
+		},
+		"EVIDENCE_INVALID",
+	],
+	[
+		"substitution without the Agent selector",
+		(f) => {
+			delete f.evidence.probes[0].policy.substitutions.agentSelector;
+		},
+		"PROBE_SUBSTITUTION_INVALID",
+	],
+	[
+		"single-service substitution without the Worker source",
+		(f) => {
+			delete f.evidence.probes[0].policy.substitutions.workerSource;
+		},
+		"PROBE_SUBSTITUTION_INVALID",
+	],
+	[
+		"multi-service substitution without the service",
+		(f) => {
+			delete f.evidence.probes[1].policy.substitutions.service;
+		},
+		"PROBE_SUBSTITUTION_INVALID",
+	],
+	[
+		"substitution port is not the probed port",
+		(f) => {
+			f.evidence.probes[0].policy.substitutions.port = 3004;
+		},
+		"PROBE_SUBSTITUTION_INVALID",
+	],
+	[
+		"unknown variant",
+		(f) => {
+			f.evidence.probes[0].policy.variant = "self-managed-v2";
 		},
 		"PROBE_POLICY_MISMATCH",
 	],
 	[
-		"evidence names another policyUid",
+		"variant the deployment cannot render (snapshot)",
 		(f) => {
-			f.evidence.probes[0].policy.uid = uid(53);
+			f.evidence.probes[0].policy.variant = "self-managed+snapshot";
 		},
 		"PROBE_POLICY_MISMATCH",
 	],
 	[
-		"original policy spec changed",
+		"instantiated digest does not match",
 		(f) => {
-			f.observed.probeTargets[0].policy.spec.ingress = [{}];
+			f.evidence.probes[0].policy.instantiatedSha256 = "e".repeat(64);
 		},
 		"PROBE_POLICY_MISMATCH",
 	],
 	[
-		"original policy gone",
+		"substitutions changed after the digest was taken",
 		(f) => {
-			f.observed.probeTargets[0].policy = undefined;
+			f.evidence.probes[0].policy.substitutions.workerSource = {
+				"np-probe/source": "someone-else",
+			};
+			f.evidence.probes[0].policy.podLabels.workerSource = {
+				"np-probe/source": "someone-else",
+			};
+			f.evidence.probes[0].policy.podLabels.nonWorkerSource = {
+				"np-probe/source": "other",
+			};
 		},
 		"PROBE_POLICY_MISMATCH",
 	],
 	[
-		"policy no longer selects the Pod",
+		"digest of a different variant",
 		(f) => {
-			f.observed.probeTargets[0].pod.metadata.labels = { app: "other" };
+			f.evidence.probes[0].policy.variant = "internal-only";
 		},
 		"PROBE_POLICY_MISMATCH",
 	],
-	// MUST-C: a controller is judged by the placement recorded on it.
+	[
+		"probe policy uses the production Agent label key",
+		(f) => {
+			f.evidence.probes[0].policy.substitutions.agentSelector.key =
+				"agent-infra.agora.io/agent";
+			f.evidence.probes[0].policy.podLabels.target = {
+				"agent-infra.agora.io/agent": "probe-a",
+			};
+			f.evidence.probes[0].policy.instantiatedSha256 =
+				networkPolicySpecSha256V1(
+					networkPolicySpecV1({
+						variant: "self-managed",
+						config: f.deploymentConfig,
+						substitutions: f.evidence.probes[0].policy.substitutions,
+					}),
+				);
+		},
+		"PROBE_SUBSTITUTION_INVALID",
+	],
+	// ---- #4383: probe Pod labels judged on what the Pods actually carry ----
+	[
+		"target Pod carries the production Agent key",
+		(f) => setLabels(f, { "agent-infra.agora.io/agent": "agent-p" }),
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"Worker source Pod carries a superset of the Worker selector",
+		(f) => {
+			f.evidence.probes[0].policy.podLabels.workerSource = {
+				...workerPodLabels,
+				"np-probe/source": "worker",
+			};
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"non-Worker source Pod carries a superset of the Worker selector",
+		(f) => {
+			f.evidence.probes[0].policy.podLabels.nonWorkerSource = {
+				...workerPodLabels,
+				probe: "1",
+			};
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"target Pod satisfies the Worker selector",
+		(f) => setLabels(f, workerPodLabels),
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"Pod satisfies the Worker Deployment selector but not the configured selector",
+		(f) => {
+			f.renderedManifest = withWorker((documents) => {
+				const worker = documents.find((item) => item.kind === "Deployment");
+				worker.spec.selector = { matchLabels: { "np/deploy": "worker" } };
+				worker.spec.template.metadata.labels["np/deploy"] = "worker";
+			});
+			setLabels(f, { "np/deploy": "worker" });
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"Pod satisfies the Worker Service selector but not the configured selector",
+		(f) => {
+			f.renderedManifest = withWorker((documents) => {
+				const worker = documents.find((item) => item.kind === "Deployment");
+				worker.spec.template.metadata.labels["np/service"] = "worker";
+				documents.find((item) => item.kind === "Service").spec.selector = {
+					"np/service": "worker",
+				};
+			});
+			setLabels(f, { "np/service": "worker" });
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"Pod satisfies a Deployment selector written with matchExpressions",
+		(f) => {
+			f.renderedManifest = withWorker((documents) => {
+				const worker = documents.find((item) => item.kind === "Deployment");
+				worker.spec.selector = {
+					matchExpressions: [
+						{ key: "np/tier", operator: "In", values: ["a", "b"] },
+					],
+				};
+				worker.spec.template.metadata.labels["np/tier"] = "a";
+			});
+			setLabels(f, { "np/tier": "b" });
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"a selector with an operator the gate cannot judge counts as satisfied",
+		(f) => {
+			f.renderedManifest = withWorker((documents) => {
+				const worker = documents.find((item) => item.kind === "Deployment");
+				worker.spec.selector = {
+					matchExpressions: [{ key: "np/tier", operator: "Gt", values: ["1"] }],
+				};
+			});
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"Pod satisfies the Platform API source selector (same namespace)",
+		(f) => setLabels(f, f.deploymentConfig.platformApiSelector),
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"Pod satisfies the route source selector when the route namespace is the Agent namespace",
+		(f) => {
+			f.deploymentConfig.routeNamespace = "agent-infra";
+			resign(f);
+			setLabels(f, f.deploymentConfig.routeSelector);
+		},
+		"PROBE_LABELS_FORBIDDEN",
+	],
+	[
+		"target Pod is not selected by the instantiated policy",
+		(f) => {
+			f.evidence.probes[0].policy.podLabels.target = { other: "x" };
+		},
+		"PROBE_LABELS_INCONSISTENT",
+	],
+	[
+		"Worker source Pod does not carry the substituted source labels",
+		(f) => {
+			f.evidence.probes[0].policy.podLabels.workerSource = { other: "x" };
+		},
+		"PROBE_LABELS_INCONSISTENT",
+	],
+	[
+		"non-Worker source Pod carries the substituted source labels",
+		(f) => {
+			f.evidence.probes[0].policy.podLabels.nonWorkerSource = {
+				"np-probe/source": "worker",
+			};
+		},
+		"PROBE_LABELS_INCONSISTENT",
+	],
+	// A controller is judged by the placement recorded on it.
 	[
 		"ECI fields without the Worker record",
 		(f) => {
@@ -742,6 +943,48 @@ for (const [name, mutate, code] of cases)
 		rejects(f, code);
 	});
 
+test("a probe-only label set below the Worker selector is allowed", () => {
+	const f = fixture();
+	// Subset of the Worker labels is not the Worker: it does not satisfy the selector.
+	f.evidence.probes[0].policy.podLabels.nonWorkerSource = {
+		"app.kubernetes.io/name": "agent-infra",
+	};
+	assert.equal(run(f).status, "passed");
+});
+
+test("snapshot forms are required once the deployment enables snapshot projection and egress", () => {
+	const f = fixture();
+	f.deploymentConfig.workspaceSnapshotProjection = true;
+	f.deploymentConfig.egress.workspaceSnapshotEgress = [
+		{ destination: { ip: "198.51.100.20" }, port: 9000 },
+	];
+	resign(f);
+	assert.equal(Object.keys(f.evidence.networkPolicy.templateSha256).length, 12);
+	f.evidence.probes[0].policy.variant = "self-managed+snapshot";
+	resign(f);
+	assert.equal(run(f).status, "passed");
+	delete f.evidence.networkPolicy.templateSha256["self-managed+snapshot"];
+	rejects(f, "NETWORKPOLICY_TEMPLATE_MISMATCH");
+});
+
+test("selectors are judged with full LabelSelector semantics", () => {
+	const labels = { a: "1", b: "2" };
+	assert.equal(labelsSatisfySelectorV1(labels, { a: "1" }), true);
+	assert.equal(labelsSatisfySelectorV1(labels, { a: "2" }), false);
+	const expr = (operator, values) => ({
+		matchExpressions: [{ key: "a", operator, values }],
+	});
+	assert.equal(labelsSatisfySelectorV1(labels, expr("In", ["1"])), true);
+	assert.equal(labelsSatisfySelectorV1(labels, expr("In", ["2"])), false);
+	assert.equal(labelsSatisfySelectorV1(labels, expr("NotIn", ["2"])), true);
+	assert.equal(labelsSatisfySelectorV1(labels, expr("NotIn", ["1"])), false);
+	assert.equal(labelsSatisfySelectorV1(labels, expr("Exists")), true);
+	assert.equal(labelsSatisfySelectorV1({}, expr("Exists")), false);
+	assert.equal(labelsSatisfySelectorV1({}, expr("DoesNotExist")), true);
+	assert.equal(labelsSatisfySelectorV1(labels, expr("Gt", ["0"])), true);
+	assert.notEqual(probeAgentKey, "agent-infra.agora.io/agent");
+});
+
 test("the temporary deny-all policy need not exist after recovery", () => {
 	const f = fixture();
 	f.evidence.probes[0].deny.policyUid = uid(99);
@@ -757,9 +1000,9 @@ test("requires the rendered Session ECI admission rather than a RuntimeClass bra
 	const documents = () =>
 		parseAllDocuments(valid).map((document) => document.toJS());
 	const variant = (change) => {
-		const [worker, policy, binding] = documents();
+		const [worker, service, policy, binding] = documents();
 		change(policy, binding);
-		return [worker, policy, binding]
+		return [worker, service, policy, binding]
 			.filter(Boolean)
 			.map((document) => stringify(document))
 			.join("---\n");
@@ -816,24 +1059,18 @@ test("the entry reads only with get and fails closed on missing input or read fa
 	for (const probe of f.evidence.probes)
 		for (const step of ["allow", "deny", "recovery", "nonWorker"])
 			probe[step].at = move(probe[step].at);
-	const configBytes = bytes(config({ readAt: move(config().readAt) }));
-	f.evidence.enforcer.configSha256 = sha(configBytes);
 	const evidenceFile = join(directory, "evidence.json");
 	const configFile = join(directory, "config.json");
 	const renderedFile = join(directory, "rendered.yaml");
 	const calls = join(directory, "calls.log");
 	await writeFile(evidenceFile, JSON.stringify(f.evidence));
-	await writeFile(configFile, configBytes);
+	await writeFile(configFile, JSON.stringify(f.deploymentConfig));
 	await writeFile(renderedFile, f.renderedManifest);
 	const responses = {
 		"namespace/agent-infra": { metadata: { name: "agent-infra", uid: uid(2) } },
 		"namespace/kube-system": { metadata: { name: "kube-system", uid: uid(1) } },
 		"nodes/-o": { items: f.observed.nodes },
 		"statefulsets,deployments,jobs/-l": { items: f.observed.controllers },
-		"pod/agent-p-0": f.observed.probeTargets[0].pod,
-		"networkpolicy/agent-p": f.observed.probeTargets[0].policy,
-		"pod/agent-p2-0": f.observed.probeTargets[1].pod,
-		"networkpolicy/agent-p2": f.observed.probeTargets[1].policy,
 	};
 	const stub = (failing) => {
 		const file = join(directory, failing ? "kubectl-fail" : "kubectl");
@@ -859,7 +1096,7 @@ process.exit(1);
 		ACK_NAMESPACE: "agent-infra",
 		KUBECTL_BIN: await stub(false),
 		ACK_NETWORKPOLICY_EVIDENCE_FILE: evidenceFile,
-		ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE: configFile,
+		ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: configFile,
 		ACK_RENDERED_MANIFEST_FILE: renderedFile,
 	};
 	const passed = spawnSync(process.execPath, [script], {
@@ -869,42 +1106,51 @@ process.exit(1);
 	assert.equal(passed.status, 0, passed.stderr);
 	assert.equal(JSON.parse(passed.stdout).status, "passed");
 	const code = (result) => JSON.parse(result.stderr.trim()).code;
-	const missing = spawnSync(process.execPath, [script], {
-		encoding: "utf8",
-		env: { ...env, ACK_NETWORKPOLICY_EVIDENCE_FILE: "" },
-	});
-	assert.equal(missing.status, 2);
-	assert.equal(code(missing), "EVIDENCE_REQUIRED");
-	const noConfig = spawnSync(process.execPath, [script], {
+	const failing = (override, expected) => {
+		const result = spawnSync(process.execPath, [script], {
+			encoding: "utf8",
+			env: { ...env, ...override },
+		});
+		assert.equal(result.status, 2);
+		assert.equal(code(result), expected);
+		return result;
+	};
+	failing({ ACK_NETWORKPOLICY_EVIDENCE_FILE: "" }, "EVIDENCE_REQUIRED");
+	failing(
+		{ ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: "" },
+		"NETWORKPOLICY_CONFIG_REQUIRED",
+	);
+	failing(
+		{ ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE: join(directory, "absent") },
+		"NETWORKPOLICY_CONFIG_INVALID",
+	);
+	failing({ ACK_RENDERED_MANIFEST_FILE: "" }, "RENDERED_MANIFEST_REQUIRED");
+	const forbidden = failing({ KUBECTL_BIN: await stub(true) }, "READ_FAILED");
+	assert(!forbidden.stderr.includes("forbidden"));
+	// The retired Poseidon readback input is ignored rather than consulted.
+	const retired = spawnSync(process.execPath, [script], {
 		encoding: "utf8",
 		env: {
 			...env,
 			ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE: join(directory, "absent"),
 		},
 	});
-	assert.equal(noConfig.status, 2);
-	assert.equal(code(noConfig), "ENFORCER_CONFIG_UNREADABLE");
-	const noRender = spawnSync(process.execPath, [script], {
-		encoding: "utf8",
-		env: { ...env, ACK_RENDERED_MANIFEST_FILE: "" },
-	});
-	assert.equal(noRender.status, 2);
-	assert.equal(code(noRender), "RENDERED_MANIFEST_REQUIRED");
-	const forbidden = spawnSync(process.execPath, [script], {
-		encoding: "utf8",
-		env: { ...env, KUBECTL_BIN: await stub(true) },
-	});
-	assert.equal(forbidden.status, 2);
-	assert.equal(code(forbidden), "READ_FAILED");
-	assert(!forbidden.stderr.includes("forbidden"));
-	for (const args of (await readFile(calls, "utf8"))
+	assert.equal(retired.status, 0, retired.stderr);
+	const read = (await readFile(calls, "utf8"))
 		.trim()
 		.split("\n")
-		.map((line) => JSON.parse(line))) {
+		.map((line) => JSON.parse(line));
+	for (const args of read) {
 		assert(args.includes("get"));
 		assert(
 			!args.some((word) =>
 				["create", "apply", "patch", "delete", "exec", "run"].includes(word),
+			),
+		);
+		// Probe Pods and original NetworkPolicies no longer exist at deploy time.
+		assert(
+			!args.some((word) =>
+				["pod", "replicaset", "networkpolicy"].includes(word),
 			),
 		);
 	}
@@ -957,6 +1203,7 @@ test("a real chart with arm64 Agents and default amd64 Sessions fails arm64-only
 	assert.equal(rendered.status, 0, rendered.stderr);
 	const f = fixture();
 	f.evidence.placement.architecture = "arm64";
+	f.evidence.placement.selectorSha256 = placementSelectorSha256V1("arm64");
 	f.renderedManifest = rendered.stdout;
 	rejects(f, "SESSION_PLACEMENT_MISMATCH");
 });

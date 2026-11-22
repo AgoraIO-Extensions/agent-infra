@@ -328,7 +328,7 @@ process.exit(1);
 	assert.match(result.stderr, /"scope":"networkpolicy-enforcement"/);
 	for (const missing of [
 		"ACK_NETWORKPOLICY_EVIDENCE_FILE",
-		"ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE",
+		"ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE",
 	]) {
 		const unproven = spawnSync("bash", [script], {
 			encoding: "utf8",

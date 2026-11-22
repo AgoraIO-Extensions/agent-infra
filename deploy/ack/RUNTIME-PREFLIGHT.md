@@ -155,12 +155,11 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
 
 探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
-本节描述目标门禁；`networkpolicy-enforcement.mjs` 的实现 PR 合入前，脚本仍按旧规则要求 Poseidon 配置回读
-和 `targets` 等于全部控制器，因此不能用本节的证据格式通过现有脚本。
 
 | 环境变量 | 内容 |
 | --- | --- |
 | `ACK_NETWORKPOLICY_EVIDENCE_FILE` | 已批准的执行证据，`kind: agent-infra-networkpolicy-enforcement-evidence` |
+| `ACK_NETWORKPOLICY_DEPLOYMENT_CONFIG_FILE` | Worker 渲染 Agent 级 NetworkPolicy 所用的部署配置（JSON）：`workerSelector`、`routeNamespace`、`routeSelector`、可选 `platformApiSelector`、`workspaceSnapshotProjection` 与 `egress`（模型、Connection、原生元数据回调、文件交换、快照与 DNS 出站，字段同 Worker 的 `WorkloadEgressPolicyV1`，原生工具出站含 `nativeEgress`）。Helm 渲染结果不含这些值，它们在 Worker 的私有 `configuration.mjs` 中，由部署 owner 从同一来源导出；预检用 Worker 的同一纯函数复算全部模板摘要 |
 | `ACK_RENDERED_MANIFEST_FILE` | 本次 `helm template` 结果；`preflight.sh` 与 `template-preflight` 自动传入 |
 
 证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
@@ -195,8 +194,8 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
-- 证据自相矛盾：探针记录的 Pod 与其控制器不在证据的 namespace，Pod 的 `nodeName` 不是该探针所属的可落节点，或没有声明该 TCP 端口；预检用渲染结果
-  重新计算的全部规范化模板摘要，与证据 `networkPolicy.templateSha256` 任一不一致；探针记录的
+- 证据自相矛盾：探针记录的 Pod 的 `nodeName` 不是该探针所属的可落节点，或替换表的端口不是探针的 `destination.port`；缺少部署配置文件或其不合法，或部署配置的 `workerSelector` 不被渲染结果中的 Worker Pod 满足；预检用部署配置
+  重新计算的全部规范化模板摘要，与证据 `networkPolicy.templateSha256` 的变体集合或任一摘要不一致；探针记录的
   `policy.instantiatedSha256` 与预检按其 `variant` 和 `substitutions` 复算的结果不同，或任一探针 Pod 的 `podLabels` 不满足 Spec 同条的标签条件；Worker placement 的 selector
   与 toleration 摘要与证据 `placement.selectorSha256` 不一致。
 - 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`

@@ -241,6 +241,22 @@ export type {
 } from "./wecom-reply-media.js";
 export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
+export {
+	compileWorkloadEgressRulesV1,
+	type NativeEgressPolicyV1,
+	type NetworkPolicyDeploymentConfigV1,
+	type NetworkPolicyEgressRuleV1,
+	type NetworkPolicyPeerV1,
+	type NetworkPolicySpecV1,
+	type NetworkPolicySubstitutionsV1,
+	type NetworkPolicyVariantV1,
+	networkPolicySpecSha256V1,
+	networkPolicySpecV1,
+	networkPolicyTemplateDigestsV1,
+	type WorkloadEgressDestinationV1,
+	WorkloadEgressPolicyError,
+	type WorkloadEgressPolicyV1,
+} from "./workload-network-policy.js";
 export * from "./workload-reconciliation.js";
 export {
 	type CodexSessionExecutorResourcePolicyV1,

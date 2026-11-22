@@ -10,6 +10,11 @@ import type {
 	runtimeModelInjectionV4,
 	StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
+import {
+	type NetworkPolicyEgressRuleV1,
+	type NetworkPolicyVariantV1,
+	networkPolicySpecV1,
+} from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1Ingress,
@@ -48,6 +53,7 @@ import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-valida
 import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
 	nativeEgressPolicyAnnotationsV1,
+	toClientNetworkPolicySpecV1,
 	type workloadEgressRulesV1,
 } from "./workload-network.js";
 import {
@@ -617,14 +623,29 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		};
 	}
 	function networkPolicy(value: AgentWorkloadDesiredV1): V1NetworkPolicy {
-		const peer = (
-			namespace: string,
-			labels: Readonly<Record<string, string>>,
-		) => ({
-			namespaceSelector: {
-				matchLabels: { "kubernetes.io/metadata.name": namespace },
+		// Spec §10.1: the same pure function the deployment preflight digests.
+		const spec = networkPolicySpecV1({
+			variant: (dependencies.workspaceSnapshotProjection
+				? `${value.route.exposure}+snapshot`
+				: value.route.exposure) as NetworkPolicyVariantV1,
+			config: {
+				workerSelector: policy.workerSelector,
+				routeNamespace: policy.routeNamespace,
+				routeSelector: policy.routeSelector,
+				platformApiSelector: policy.platformApiSelector,
+				workspaceSnapshotProjection: Boolean(
+					dependencies.workspaceSnapshotProjection,
+				),
+				egress: policy,
 			},
-			podSelector: { matchLabels: { ...labels } },
+			substitutions: {
+				agentSelector: {
+					key: ownerLabel,
+					value: workloadResourceNameV1(value.agentId),
+				},
+				port: value.service.port,
+			},
+			egress: egress as unknown as NetworkPolicyEgressRuleV1[],
 		});
 		return {
 			apiVersion: "networking.k8s.io/v1",
@@ -636,43 +657,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 					...nativeEgressPolicyAnnotationsV1(policy.nativeEgress),
 				},
 			},
-			spec: {
-				podSelector: {
-					matchLabels: { [ownerLabel]: workloadResourceNameV1(value.agentId) },
-				},
-				policyTypes: ["Ingress", "Egress"],
-				ingress: [
-					{
-						_from: [
-							{ podSelector: { matchLabels: { ...policy.workerSelector } } },
-						],
-						ports: [{ protocol: "TCP", port: value.service.port }],
-					},
-					...(value.route.exposure === "internal-only"
-						? []
-						: [
-								{
-									_from: [
-										peer(policy.routeNamespace, policy.routeSelector),
-										...(value.route.exposure === "platform-auth" &&
-										policy.platformApiSelector
-											? [
-													{
-														podSelector: {
-															matchLabels: {
-																...policy.platformApiSelector,
-															},
-														},
-													},
-												]
-											: []),
-									],
-									ports: [{ protocol: "TCP", port: value.service.port }],
-								},
-							]),
-				],
-				egress: structuredClone(egress),
-			},
+			spec: toClientNetworkPolicySpecV1(spec),
 		};
 	}
 	return {

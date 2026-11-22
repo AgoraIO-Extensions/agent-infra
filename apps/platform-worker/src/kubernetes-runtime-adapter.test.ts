@@ -3,6 +3,11 @@ import {
 	SkillWorkloadProjectionV1Schema,
 } from "@agent-infra/contracts";
 import { runtimeSkillHubBindingEnvironmentNameV1 } from "@agent-infra/contracts/runtime";
+import {
+	networkPolicySpecSha256V1,
+	networkPolicySpecV1,
+	networkPolicyTemplateDigestsV1,
+} from "@agent-infra/platform-core";
 import type {
 	V1Ingress,
 	V1NetworkPolicy,
@@ -24,8 +29,11 @@ import {
 } from "./kubernetes-runtime-adapter.js";
 import {
 	fingerprintAnnotation,
+	ownerLabel,
 	resourceFingerprint,
+	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import { toClientNetworkPolicySpecV1 } from "./workload-network.js";
 
 async function legacyReadinessFixture(periodSeconds?: 10) {
 	const f = fixture();
@@ -264,6 +272,60 @@ describe("GA Kubernetes Workload adapter", () => {
 			),
 		).toBe(false);
 	});
+	it.each(["internal-only", "self-managed", "platform-auth"] as const)(
+		"renders the %s NetworkPolicy through the shared template the deployment preflight digests",
+		async (exposure) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture(1, "agent-a", exposure);
+			const identity = await f.adapter().apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const network = await f.client.read<V1NetworkPolicy>(
+				"NetworkPolicy",
+				desired.service.name,
+			);
+			const config = {
+				workerSelector: workloadTestPolicy.workerSelector,
+				routeNamespace: workloadTestPolicy.routeNamespace,
+				routeSelector: workloadTestPolicy.routeSelector,
+				platformApiSelector: workloadTestPolicy.platformApiSelector,
+				egress: workloadTestPolicy,
+			};
+			const actual = structuredClone(network?.spec) as V1NetworkPolicy["spec"];
+			// The Worker's real values are exactly the template's three placeholders.
+			expect(actual?.podSelector?.matchLabels).toEqual({
+				[ownerLabel]: workloadResourceNameV1(desired.agentId),
+			});
+			expect(actual).toEqual(
+				toClientNetworkPolicySpecV1(
+					networkPolicySpecV1({
+						variant: exposure,
+						config,
+						substitutions: {
+							agentSelector: {
+								key: ownerLabel,
+								value: workloadResourceNameV1(desired.agentId),
+							},
+							port: desired.service.port,
+						},
+					}),
+				),
+			);
+			if (!actual?.podSelector?.matchLabels) throw new Error();
+			actual.podSelector.matchLabels[ownerLabel] = "<agent>";
+			for (const rule of actual.ingress ?? [])
+				for (const port of rule.ports ?? [])
+					(port as { port: unknown }).port = "<port>";
+			expect(
+				networkPolicySpecSha256V1({
+					...actual,
+					ingress: actual.ingress?.map(({ _from, ...rule }) => ({
+						...rule,
+						from: _from,
+					})),
+				}),
+			).toBe(networkPolicyTemplateDigestsV1(config)[exposure]);
+		},
+	);
 	it.each([{}, { "bad key!": "value" }] as unknown as Readonly<
 		Record<string, string>
 	>[])("rejects an unsafe Platform API selector %j", (platformApiSelector) => {
