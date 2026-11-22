@@ -20261,4 +20261,74 @@ describe("Codex stop control observation (#4358 I2)", () => {
 		expect(ack).toMatchObject({ outcome: "observed", elapsedMonoMs: 0 });
 		expect(write).toMatchObject({ outcome: "observed", elapsedMonoMs: 1000 });
 	});
+
+	it("records a matched JSON-RPC rejection at once, not when the write callback returns (#4360 round 6)", async () => {
+		class SlowWriteBridge extends TestCodexBridge {
+			gate?: Promise<void>;
+			override async send(frame: CodexAppServerFrame) {
+				await super.send(frame);
+				if (frame.method === "turn/interrupt" && this.gate) await this.gate;
+			}
+		}
+		const directory = await runtimeDirectory();
+		const bridge = new SlowWriteBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const submitted = await driver.execute(submitCommand());
+		bridge.interruptError = {
+			code: -32000,
+			message: "synthetic interrupt rejection sk-canary",
+		};
+		let release: (() => void) | undefined;
+		bridge.gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let mono = 0;
+		const lines: string[] = [];
+		const observer = createRuntimeControlObserverV1({
+			output: {
+				write(line) {
+					lines.push(line.trimEnd());
+					return true;
+				},
+			},
+			monotonic: () => mono,
+		});
+		const mark = observer.mark();
+		const stopping = withRuntimeControlObservationV1(
+			{ observer, binding, mark },
+			() => driver.execute(stopCommand(submitted.nativeSessionRef)),
+		);
+		void stopping.catch(() => {});
+		// The error response arrived while the write callback is still pending.
+		await vi.waitFor(
+			() =>
+				expect(lines.map((line) => JSON.parse(line).stage)).toContain(
+					"native_interrupt_ack",
+				),
+			{ timeout: 2000 },
+		);
+		mono = 1000;
+		release?.();
+		await expect(stopping).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+		});
+		const records = lines.map((line) => JSON.parse(line));
+		const acks = records.filter((r) => r.stage === "native_interrupt_ack");
+		expect(acks).toEqual([
+			expect.objectContaining({
+				outcome: "rejected",
+				reason: "protocol_invalid",
+				rpcCode: -32000,
+				elapsedMonoMs: 0,
+			}),
+		]);
+		// The write stage keeps its own, later observation.
+		expect(
+			records.filter((r) => r.stage === "interrupt_write_accepted"),
+		).toEqual([
+			expect.objectContaining({ outcome: "observed", elapsedMonoMs: 1000 }),
+		]);
+		expect(lines.join("\n")).not.toContain("canary");
+	});
 });

@@ -4815,6 +4815,7 @@ class CodexRpc {
 		const id = this.nextRequestId++;
 		let rpcCode: number | undefined;
 		let acknowledged = false;
+		let rejected = false;
 		const response = new Promise<T>((resolve, reject) => {
 			this.pending.set(id, {
 				method,
@@ -4836,6 +4837,13 @@ class CodexRpc {
 					? {
 							onRpcError: (code: number) => {
 								rpcCode = code;
+								// #4360 round 6: a matched JSON-RPC error with a numeric
+								// code is the native rejection; it is recorded now, not
+								// when the write callback returns.
+								rejected = true;
+								observeSafely(() =>
+									observer?.failed("protocol_invalid", true, code),
+								);
 							},
 						}
 					: {}),
@@ -4891,12 +4899,12 @@ class CodexRpc {
 			}
 			return await Promise.race([response, deadline]);
 		} catch (error) {
-			if (observer && acknowledged && !written)
-				// The response was validated but the local write never confirmed.
+			if (observer && (acknowledged || rejected) && !written)
+				// The response was matched but the local write never confirmed.
 				observeSafely(() =>
 					observer.failed(timedOut ? "timeout" : "write_failed", false),
 				);
-			else if (observer && !acknowledged) {
+			else if (observer && !acknowledged && !rejected) {
 				const reason = timedOut
 					? "timeout"
 					: error instanceof RuntimeHostError &&
