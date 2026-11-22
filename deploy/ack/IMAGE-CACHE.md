@@ -1,10 +1,15 @@
 # ACK Agent 镜像缓存
 
 本流程把 GHCR 镜像准备移到发布和部署阶段。缓存是镜像层快照，不保存用户会话、凭据或 PVC，
-不等于 Session reserve。当前生产准入范围是 ECI Session Pod；ECS 上的 Agent 级 Workload
+不等于 Session reserve。严格缓存准入范围是 ECI Session Pod；ECS 上的 Agent 级 Workload
 与 self-managed 服务不因此迁移到 ECI，也不宣称使用 ECI 缓存。
 
 ## 发布与部署
+
+部署入口的缓存报告与验收口径以[工作流 Spec §10.1](../../docs/architecture/SPEC-ai-native-development-workflow.md#101-ack-镜像缓存部署)为准。
+未启用严格 ECI 缓存准入时按该报告模式交付，不以覆盖不全或冷拉判失败；source/digest 校验保持。
+下文的实时 Ready 检查、启用新镜像门禁与禁止冷拉要求，仅适用于显式启用严格缓存准入的路径。
+缓存准备工具自身失败仍保留失败回执，不代表预热完成，也不自动改变业务部署模式。
 
 1. 正式 `Publish images` 成功后，独立 `ACK image cache plan` workflow 校验同 run/attempt 的六镜像
    index 回执，选择 `linux/amd64` child digest，上传不可变 cache plan artifact；workflow 不取得
@@ -14,7 +19,7 @@
    Custom 最终镜像请求生成清单，由受控 ACK 运维机使用既有 kubeconfig/RBAC 调用
    `ImageCache` CR，复用集群内 `imagePullSecret`，等待 Ready 并实时回读。发布后的预热
    不能替代这一步。
-3. `all`、独立配置初始化、预检、配置发布和 provision 均在启用镜像前检查缓存。
+3. 严格准入模式下，`all`、独立配置初始化、预检、配置发布和 provision 均在启用镜像前检查缓存。
    每次均实时查询 CR，并在全部组就绪后再次回读。回执必须匹配完整镜像集合与 source；
    磁盘旧回执不能代替实时查询。没有成功的当前回执，不发布新镜像配置。
 4. `deploy` 分两阶段：先保持现场旧准入不变完成 Helm/Worker rollout，核对全部 Worker Pod
@@ -40,7 +45,7 @@
 
 带 workspace snapshot 或其他 init 容器时，额外提供 `ACK_IMAGE_CACHE_EXTRA_GROUPS_FILE`，
 声明实际 Pod 的完整镜像组合；不能只缓存主容器或 custom base。格式与下方计划相同。
-新 Custom 镜像经正常部署入口预热并登记后才可创建 Session；绕过部署入口直接通过 API
+严格准入下，新 Custom 镜像经正常部署入口预热并登记后才可创建 Session；绕过部署入口直接通过 API
 采用未登记镜像，会被准入拒绝，不自动退回冷启动。
 
 ## 一次性运维身份配置
@@ -98,7 +103,7 @@ source 和 cache 数量；计划和 receipt 写入 0700 状态目录。`systemct
 可手动运行一次，`journalctl -u ack-image-cache-prewarm.service` 可查看结果。
 
 GitHub workflow 绿灯仍只代表 plan artifact 成功；systemd 服务成功且 receipt 为 Ready 才代表
-预热完成。部署入口仍需实时 `check` 并通过严格准入，不能把轮询成功当作业务验收。
+预热完成。启用严格准入的部署入口仍需实时 `check` 并通过准入，不能把轮询成功当作业务验收。
 
 使用 Node.js 24，在受控代码 checkout 中执行。先核对 `ACK image cache plan` 运行来自本仓
 受保护 main、结论成功，回读其触发的 Publish images run/attempt 和 source。以下变量由本次
@@ -122,7 +127,7 @@ node deploy/ack/image-cache.ts check \
 ```
 
 `ensure` 创建或复用缓存并等待，`check` 只读且不会创建。失败回执包含安全错误码和已经完成的
-组，不能用于启用新镜像。计划 artifact 不是 Ready 回执；即使预热成功，仍需通过正常部署入口
+组，不能用于严格模式启用新镜像。计划 artifact 不是 Ready 回执；即使预热成功，严格模式仍需通过正常部署入口
 设置 `ACK_IMAGE_CACHE_REQUIRED=true`，从同源 manifest/Custom 请求生成完整计划并实时验证。
 这一步会覆盖实际 Session 的 init/sidecar 镜像组合，并生成严格准入配置。单独运行 `ensure`
 不会修改业务 Pod、Agent 配置或准入策略。
@@ -178,6 +183,9 @@ ACK_IMAGE_CACHE_RETIRE_CONFIRM=RETIRE_OWNED_IMAGE_CACHES node deploy/ack/image-c
 回退为直接拉取；仍需依赖严格准入的旧 Agent 要先恢复准入登记或保留其缓存，再执行 `retire`。
 
 ## 验收与恢复
+
+未启用严格准入时，按[工作流 Spec §10.1](../../docs/architecture/SPEC-ai-native-development-workflow.md#101-ack-镜像缓存部署)
+抽样核对同 Pod UID 的镜像身份，记录覆盖、命中、冷拉和缺失证据；以下完全命中及恢复门禁只用于严格准入模式。
 
 回读同 Pod UID 的实际 imageID、ECI 节点、`SuccessfulHitImageCache` 及精确镜像的
 `Pulled ... already present`。部分命中、仍有 `Pulling`、事件缺失或缓存失败都不能算验收通过。

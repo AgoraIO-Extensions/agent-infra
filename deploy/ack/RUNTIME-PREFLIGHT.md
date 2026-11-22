@@ -37,7 +37,8 @@ API/Worker/Runtime 镜像和配置仍沿正式 bootstrap/deploy/runtime-inputs �
 保持普通节点继承调度时，四个预检 job 与 executor policy 均省略 `placement`，不临时增加
 selector、toleration 或 RuntimeClass。沿既有 `expectedNodePrefix` 字段填写本次可信目标的
 完整节点名；该分支要求实际调度节点精确匹配，并回读其 UID、Linux/amd64 架构。调度到其他
-节点或被注入 ECI 字段均拒绝；显式 ECI 分支保持原 selector、provider toleration 和缓存门禁。
+节点或被注入 ECI 字段均拒绝；显式 ECI 分支保持原 selector、provider toleration 和已启用的严格缓存准入门禁；
+未启用严格缓存准入时的报告口径见[工作流 Spec §10.1](../../docs/architecture/SPEC-ai-native-development-workflow.md#101-ack-镜像缓存部署)。
 
 普通节点分支和下文的 RuntimeClass 分支是通用能力，只适用于已证实际执行 NetworkPolicy 的
 环境。本 ACK 的 ECS 节点使用 flannel，不执行 NetworkPolicy，不能用于正式 Agent 或 Session
