@@ -47,6 +47,20 @@ function configurationFile(input: any, documents: any[], component: "api" | "wor
 	return file;
 }
 
+function renderedDocuments(rendered: string) {
+	return parseAllDocuments(rendered).map((document) => {
+		assert(document.errors.length === 0);
+		return document.toJSON();
+	});
+}
+
+/** Exact bytes of the Worker `configuration.mjs` the rendered chart mounts from the private bootstrap input. */
+export async function workerConfigurationBytes(bootstrapFile: string, rendered: string) {
+	const bootstrap = await privateJson(bootstrapFile);
+	assert(bootstrap.schemaVersion === 1);
+	return privateBytes(configurationFile(bootstrap, renderedDocuments(rendered), "worker"));
+}
+
 export async function validateConfigurationSourceBindings(
 	bootstrapFile: string,
 	runtimeManifestFile: string,

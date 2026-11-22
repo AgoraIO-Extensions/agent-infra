@@ -1,0 +1,354 @@
+import { describe, expect, it } from "vitest";
+import {
+	agentNetworkPolicyOwnerLabelV1,
+	networkPolicyEvidenceSha256V1,
+	networkPolicySpecSha256V1,
+	networkPolicySpecV1,
+	networkPolicyTemplateDigestsV1,
+	networkPolicyVariantsV1,
+	parseNetworkPolicyDeploymentConfigV1,
+	resolveWorkerEffectiveEgressV1,
+} from "./workload-network-policy.js";
+
+const owner = agentNetworkPolicyOwnerLabelV1;
+const config = () => ({
+	workerSelector: { "app.kubernetes.io/component": "platform-worker" },
+	routeNamespace: "ingress-nginx",
+	routeSelector: { "app.kubernetes.io/name": "ingress-nginx" },
+	platformApiSelector: { "app.kubernetes.io/component": "platform-api" },
+	workspaceSnapshotProjection: false,
+	egress: {
+		modelEgress: [{ destination: { ip: "198.51.100.10" }, port: 443 }],
+		dnsEgress: [
+			{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+		],
+	},
+});
+const withSnapshot = () => ({
+	...config(),
+	workspaceSnapshotProjection: true,
+	egress: {
+		...config().egress,
+		workspaceSnapshotEgress: [
+			{ destination: { ip: "198.51.100.20" }, port: 9000 },
+		],
+	},
+});
+
+describe("Agent NetworkPolicy template (#4351)", () => {
+	it("lists the single-service and multi-service forms, with snapshot forms only when deployed", () => {
+		expect(networkPolicyVariantsV1(config())).toEqual([
+			"internal-only",
+			"self-managed",
+			"platform-auth",
+			"multi-service-entry",
+			"multi-service-service",
+			"multi-service-migration",
+		]);
+		expect(networkPolicyVariantsV1(withSnapshot())).toHaveLength(12);
+		// Snapshot egress without the projection is not a snapshot form.
+		expect(
+			networkPolicyVariantsV1({
+				...withSnapshot(),
+				workspaceSnapshotProjection: false,
+			}),
+		).toHaveLength(6);
+	});
+
+	it("normalizes only the Agent value, port and service", () => {
+		const spec = networkPolicySpecV1({
+			variant: "platform-auth",
+			config: config(),
+		});
+		expect(spec.podSelector.matchLabels).toEqual({ [owner]: "<agent>" });
+		expect(spec.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(spec.ingress).toEqual([
+			{
+				from: [{ podSelector: { matchLabels: config().workerSelector } }],
+				ports: [{ protocol: "TCP", port: "<port>" }],
+			},
+			{
+				from: [
+					{
+						namespaceSelector: {
+							matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" },
+						},
+						podSelector: { matchLabels: config().routeSelector },
+					},
+					{ podSelector: { matchLabels: config().platformApiSelector } },
+				],
+				ports: [{ protocol: "TCP", port: "<port>" }],
+			},
+		]);
+		// Egress is carried verbatim from the deployment configuration.
+		expect(spec.egress).toHaveLength(2);
+		expect(JSON.stringify(spec.egress)).toContain("198.51.100.10");
+	});
+
+	it("keeps the Platform API source only for platform-auth and drops the route for internal-only", () => {
+		const internal = networkPolicySpecV1({
+			variant: "internal-only",
+			config: config(),
+		});
+		expect(internal.ingress).toHaveLength(1);
+		const selfManaged = networkPolicySpecV1({
+			variant: "self-managed",
+			config: config(),
+		});
+		expect(JSON.stringify(selfManaged.ingress)).not.toContain("platform-api");
+		const noApi = { ...config(), platformApiSelector: undefined };
+		expect(
+			networkPolicySpecV1({ variant: "platform-auth", config: noApi })
+				.ingress[1]?.from,
+		).toHaveLength(1);
+	});
+
+	it("multi-service variants replace the Agent value in the Pod selector and in every ingress peer", () => {
+		const substitutions = {
+			agentSelector: { key: "np-probe/agent", value: "probe-a" },
+			service: "probe-svc",
+		};
+		const entry = networkPolicySpecV1({
+			variant: "multi-service-entry",
+			config: config(),
+			substitutions,
+		});
+		expect(entry.podSelector.matchLabels).toEqual({
+			"np-probe/agent": "probe-a",
+			"agent-infra.agora.io/service": "probe-svc",
+		});
+		expect(entry.policyTypes).toEqual(["Ingress"]);
+		expect(entry.egress).toBeUndefined();
+		expect(entry.ingress[0]?.from).toHaveLength(2);
+		expect(JSON.stringify(entry)).not.toContain(owner);
+		const service = networkPolicySpecV1({
+			variant: "multi-service-service",
+			config: config(),
+			substitutions,
+		});
+		expect(service.ingress[0]?.from).toEqual([
+			{ podSelector: { matchLabels: { "np-probe/agent": "probe-a" } } },
+		]);
+		const migration = networkPolicySpecV1({
+			variant: "multi-service-migration",
+			config: config(),
+		});
+		expect(migration.ingress).toEqual([]);
+		expect(migration.podSelector.matchLabels).toEqual({
+			[owner]: "<agent>",
+			"agent-infra.agora.io/service": "migration",
+		});
+	});
+
+	it("multi-service snapshot forms add Egress with the deployment destinations and same-Agent peers", () => {
+		const spec = networkPolicySpecV1({
+			variant: "multi-service-entry+snapshot",
+			config: withSnapshot(),
+		});
+		expect(spec.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(JSON.stringify(spec.egress)).toContain("198.51.100.20");
+		expect(spec.egress?.at(-1)).toEqual({
+			to: [{ podSelector: { matchLabels: { [owner]: "<agent>" } } }],
+		});
+		expect(() =>
+			networkPolicySpecV1({
+				variant: "multi-service-entry+snapshot",
+				config: config(),
+			}),
+		).toThrow();
+	});
+
+	it("the probe table swaps the Agent selector and Worker source and leaves the rest verbatim", () => {
+		const template = networkPolicySpecV1({
+			variant: "self-managed",
+			config: config(),
+		});
+		const probe = networkPolicySpecV1({
+			variant: "self-managed",
+			config: config(),
+			substitutions: {
+				agentSelector: { key: "np-probe/agent", value: "probe-a" },
+				workerSource: { "np-probe/source": "worker" },
+				port: 3003,
+			},
+		});
+		expect(probe.podSelector.matchLabels).toEqual({
+			"np-probe/agent": "probe-a",
+		});
+		expect(probe.ingress[0]?.from).toEqual([
+			{ podSelector: { matchLabels: { "np-probe/source": "worker" } } },
+		]);
+		expect(probe.ingress[0]?.ports).toEqual([{ protocol: "TCP", port: 3003 }]);
+		expect(probe.ingress[1]?.from).toEqual(template.ingress[1]?.from);
+		expect(probe.egress).toEqual(template.egress);
+	});
+
+	it("digests change with every deployment-owned field and never with probe values", () => {
+		const base = networkPolicyTemplateDigestsV1(config());
+		const widened = networkPolicyTemplateDigestsV1({
+			...config(),
+			egress: {
+				...config().egress,
+				modelEgress: [{ destination: { cidr: "8.8.0.0/16" }, port: 443 }],
+			},
+		});
+		const reroute = networkPolicyTemplateDigestsV1({
+			...config(),
+			routeSelector: { "app.kubernetes.io/name": "other" },
+		});
+		for (const variant of ["internal-only", "self-managed", "platform-auth"])
+			expect(widened[variant]).not.toBe(base[variant]);
+		// Multi-service forms without snapshots carry no egress, so a model CIDR does not change them.
+		expect(widened["multi-service-entry"]).toBe(base["multi-service-entry"]);
+		expect(reroute["multi-service-entry"]).not.toBe(
+			base["multi-service-entry"],
+		);
+		expect(reroute["self-managed"]).not.toBe(base["self-managed"]);
+		expect(reroute["internal-only"]).toBe(base["internal-only"]);
+		expect(networkPolicySpecSha256V1({ b: 1, a: [{ d: 1, c: 2 }] })).toBe(
+			networkPolicySpecSha256V1({ a: [{ c: 2, d: 1 }], b: 1 }),
+		);
+	});
+
+	it.each([
+		[
+			"unknown key",
+			(value: Record<string, unknown>) => ({ ...value, extra: 1 }),
+		],
+		[
+			"empty Worker selector",
+			(value: Record<string, unknown>) => ({ ...value, workerSelector: {} }),
+		],
+		[
+			"no route namespace",
+			(value: Record<string, unknown>) => ({
+				...value,
+				routeNamespace: undefined,
+			}),
+		],
+		[
+			"CIDR overlapping a reserved range",
+			(value: Record<string, unknown>) => ({
+				...value,
+				egress: {
+					modelEgress: [{ destination: { cidr: "10.0.0.0/16" }, port: 443 }],
+				},
+			}),
+		],
+	])("rejects deployment configuration with %s", (_name, mutate) => {
+		expect(() =>
+			parseNetworkPolicyDeploymentConfigV1(mutate({ ...config() })),
+		).toThrow();
+	});
+
+	const native = (platformDatabase: string) => ({
+		destinations: [{ destination: { ip: "8.8.8.8" }, port: 443 }] as [
+			{ destination: { ip: string }; port: number },
+		],
+		protectedNetworks: {
+			platformDatabase: [platformDatabase],
+			connectionDatabase: ["10.1.0.0/24"],
+			kubernetesApi: ["9.9.9.9"],
+			sandboxPodNetworks: ["10.2.0.0/16"],
+		},
+	});
+	it("lists a no-native form of every single-service variant only when nativeEgress is deployed (#4385 M4)", () => {
+		const base = config();
+		expect(
+			networkPolicyVariantsV1(base).some((v) => v.endsWith("+no-native")),
+		).toBe(false);
+		const withNative = {
+			...withSnapshot(),
+			egress: { ...withSnapshot().egress, nativeEgress: native("10.0.0.0/24") },
+		};
+		const variants = networkPolicyVariantsV1(withNative);
+		expect(variants.filter((v) => v.endsWith("+no-native")).sort()).toEqual([
+			"internal-only+no-native",
+			"internal-only+snapshot+no-native",
+			"platform-auth+no-native",
+			"platform-auth+snapshot+no-native",
+			"self-managed+no-native",
+			"self-managed+snapshot+no-native",
+		]);
+		// The no-native form really is the one without the native egress rules.
+		const egressOf = (variant: string) =>
+			JSON.stringify(
+				networkPolicySpecV1({ variant: variant as never, config: withNative })
+					.egress,
+			);
+		expect(egressOf("self-managed")).toContain("8.8.8.8");
+		expect(egressOf("self-managed+no-native")).not.toContain("8.8.8.8");
+		expect(() =>
+			networkPolicySpecV1({
+				variant: "multi-service-entry+no-native" as never,
+				config: withNative,
+			}),
+		).toThrow();
+	});
+	it("binds the protected networks into every evidence digest although they never appear in the spec (#4385 M3)", () => {
+		const at = (platformDatabase: string) => ({
+			...config(),
+			egress: { ...config().egress, nativeEgress: native(platformDatabase) },
+		});
+		const a = at("10.0.0.0/24");
+		const b = at("10.5.0.0/16");
+		expect(networkPolicySpecV1({ variant: "self-managed", config: a })).toEqual(
+			networkPolicySpecV1({ variant: "self-managed", config: b }),
+		);
+		const digestsA = networkPolicyTemplateDigestsV1(a);
+		const digestsB = networkPolicyTemplateDigestsV1(b);
+		for (const variant of Object.keys(digestsA))
+			expect(digestsB[variant]).not.toBe(digestsA[variant]);
+		const spec = networkPolicySpecV1({ variant: "self-managed", config: a });
+		expect(networkPolicyEvidenceSha256V1(spec, a)).not.toBe(
+			networkPolicyEvidenceSha256V1(spec, b),
+		);
+		expect(networkPolicyEvidenceSha256V1(spec, a)).not.toBe(
+			networkPolicySpecSha256V1(spec),
+		);
+	});
+	it("resolves the Worker's final egress from the module and its fixed environment (#4385 R2-M1)", () => {
+		const policy = { ...config().egress, runtimeAuth: {} };
+		const environment = {
+			PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: "https://files.example.test",
+			PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: JSON.stringify({
+				ip: "198.51.100.7",
+			}),
+			PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "true",
+			PLATFORM_WORKER_NAMESPACE: "agent-infra",
+			PLATFORM_WORKER_RELEASE_NAME: "ack",
+		};
+		const result = resolveWorkerEffectiveEgressV1({ policy, environment });
+		expect(result.nativeMetadataGatewayPort).toBe(3004);
+		expect(result.fileExchangeOrigin).toBe("https://files.example.test");
+		expect(result.policy.fileExchangeEgress).toEqual([
+			{ destination: { ip: "198.51.100.7" }, port: 443 },
+		]);
+		expect(result.policy.nativeMetadataWorkerEgress?.[0]?.destination).toEqual({
+			namespace: "agent-infra",
+			podLabels: {
+				"app.kubernetes.io/component": "platform-worker",
+				"app.kubernetes.io/instance": "ack",
+			},
+		});
+		// A gateway without a release name, or an egress without an origin, is refused.
+		expect(() =>
+			resolveWorkerEffectiveEgressV1({
+				policy,
+				environment: {
+					...environment,
+					PLATFORM_WORKER_RELEASE_NAME: undefined,
+				},
+			}),
+		).toThrow();
+		expect(() =>
+			resolveWorkerEffectiveEgressV1({
+				policy,
+				environment: {
+					PLATFORM_WORKER_FILE_EXCHANGE_EGRESS:
+						environment.PLATFORM_WORKER_FILE_EXCHANGE_EGRESS,
+				},
+			}),
+		).toThrow();
+	});
+});

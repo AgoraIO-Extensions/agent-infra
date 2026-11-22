@@ -10,7 +10,10 @@ import {
 	parseMultiServiceResourceConfigurationV1,
 } from "@agent-infra/contracts/pilot";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import { WorkloadPreflightRejectedErrorV1 } from "@agent-infra/platform-core";
+import {
+	networkPolicySpecV1,
+	WorkloadPreflightRejectedErrorV1,
+} from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1ConfigMap,
@@ -65,6 +68,7 @@ import { workloadPodImagesV1 } from "./workload-image-projection.js";
 import {
 	hasAdditionalEgressPolicyV1,
 	requireWorkspaceSnapshotEgressV1,
+	toClientNetworkPolicySpecV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -337,20 +341,6 @@ function memberSelector(
 				.map(([key, expected]) => `${key}=${expected}`)
 				.join(",")
 		: undefined;
-}
-
-function routePeer(policy: MultiServiceRuntimePolicyV1) {
-	const podSelector = { podSelector: { matchLabels: policy.routeSelector } };
-	return policy.routeNamespace
-		? {
-				...podSelector,
-				namespaceSelector: {
-					matchLabels: {
-						"kubernetes.io/metadata.name": policy.routeNamespace,
-					},
-				},
-			}
-		: podSelector;
 }
 
 function fingerprint(value: unknown): string {
@@ -967,48 +957,47 @@ function migrationNetworkPolicy(
 		apiVersion: "networking.k8s.io/v1",
 		kind: "NetworkPolicy",
 		metadata: metadata(value, `${name}-network`, "migration"),
-		spec: {
-			podSelector: {
-				matchLabels: {
-					[ownerLabel]: workloadResourceNameV1(value.agentId),
-					"agent-infra.agora.io/service": "migration",
-				},
-			},
-			...(value.workspaceSnapshots?.length &&
-			policy?.workspaceSnapshotProjection &&
-			policy.workspaceSnapshotEgress
-				? { policyTypes: ["Ingress", "Egress"] as const }
-				: { policyTypes: ["Ingress"] as const }),
-			ingress: [],
-			...(value.workspaceSnapshots?.length &&
-			policy?.workspaceSnapshotProjection &&
-			policy.workspaceSnapshotEgress
-				? {
-						egress: [
-							...workloadEgressRulesV1({
-								modelEgress: policy.modelEgress,
-								connectionEgress: policy.connectionEgress,
-								nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress,
-								fileExchangeEgress: policy.fileExchangeEgress,
-								workspaceSnapshotEgress: policy.workspaceSnapshotEgress,
-								dnsEgress: policy.dnsEgress,
-							}),
-							{
-								to: [
-									{
-										podSelector: {
-											matchLabels: {
-												[ownerLabel]: workloadResourceNameV1(value.agentId),
-											},
-										},
-									},
-								],
-							},
-						],
-					}
-				: {}),
-		},
+		spec: multiServiceNetworkPolicySpec(
+			"multi-service-migration",
+			value,
+			policy,
+		),
 	};
+}
+
+/** Same pure function the deployment preflight digests (Spec §10.1). */
+function multiServiceNetworkPolicySpec(
+	base:
+		| "multi-service-entry"
+		| "multi-service-service"
+		| "multi-service-migration",
+	value: MultiServiceDesired,
+	policy: MultiServiceRuntimePolicyV1 | undefined,
+	service?: string,
+): V1NetworkPolicy["spec"] {
+	const snapshot = Boolean(
+		value.workspaceSnapshots?.length &&
+			policy?.workspaceSnapshotProjection &&
+			policy.workspaceSnapshotEgress,
+	);
+	return toClientNetworkPolicySpecV1(
+		networkPolicySpecV1({
+			variant: snapshot ? `${base}+snapshot` : base,
+			config: {
+				routeNamespace: policy?.routeNamespace,
+				routeSelector: policy?.routeSelector ?? {},
+				workspaceSnapshotProjection: snapshot,
+				egress: policy ?? {},
+			},
+			substitutions: {
+				agentSelector: {
+					key: ownerLabel,
+					value: workloadResourceNameV1(value.agentId),
+				},
+				...(service === undefined ? {} : { service }),
+			},
+		}),
+	);
 }
 
 function service(
@@ -1055,60 +1044,12 @@ function networkPolicy(
 		apiVersion: "networking.k8s.io/v1",
 		kind: "NetworkPolicy",
 		metadata: metadata(value, `${name}-network`),
-		spec: {
-			podSelector: {
-				matchLabels: {
-					[ownerLabel]: workloadResourceNameV1(value.agentId),
-					"agent-infra.agora.io/service": serviceLabel(resource.metadata.name),
-				},
-			},
-			...(value.workspaceSnapshots?.length &&
-			policy.workspaceSnapshotProjection &&
-			policy.workspaceSnapshotEgress
-				? { policyTypes: ["Ingress", "Egress"] as const }
-				: { policyTypes: ["Ingress"] as const }),
-			ingress: [
-				{
-					_from: [
-						{
-							podSelector: {
-								matchLabels: {
-									[ownerLabel]: workloadResourceNameV1(value.agentId),
-								},
-							},
-						},
-						...(entry ? [routePeer(policy)] : []),
-					],
-				},
-			],
-			...(value.workspaceSnapshots?.length &&
-			policy.workspaceSnapshotProjection &&
-			policy.workspaceSnapshotEgress
-				? {
-						egress: [
-							...workloadEgressRulesV1({
-								modelEgress: policy.modelEgress,
-								connectionEgress: policy.connectionEgress,
-								nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress,
-								fileExchangeEgress: policy.fileExchangeEgress,
-								workspaceSnapshotEgress: policy.workspaceSnapshotEgress,
-								dnsEgress: policy.dnsEgress,
-							}),
-							{
-								to: [
-									{
-										podSelector: {
-											matchLabels: {
-												[ownerLabel]: workloadResourceNameV1(value.agentId),
-											},
-										},
-									},
-								],
-							},
-						],
-					}
-				: {}),
-		},
+		spec: multiServiceNetworkPolicySpec(
+			entry ? "multi-service-entry" : "multi-service-service",
+			value,
+			policy,
+			serviceLabel(resource.metadata.name),
+		),
 	};
 }
 

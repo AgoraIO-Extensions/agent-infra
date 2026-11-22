@@ -1,8 +1,12 @@
-import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { networkPolicySpecSha256V1 } from "../../deploy/ack/networkpolicy-enforcement.mjs";
+import { placementSelectorSha256V1 } from "../../deploy/ack/networkpolicy-enforcement.mjs";
+import {
+	networkPolicyEvidenceSha256V1,
+	networkPolicySpecV1,
+	networkPolicyTemplateDigestsV1,
+} from "../../packages/platform-core/src/workload-network-policy.ts";
 
 // Synthetic, credential-free inputs that satisfy deploy/ack/networkpolicy-enforcement.mjs
 // for script-level tests of ACK entries that now require current evidence (#4351).
@@ -12,11 +16,85 @@ const podUid = "55555555-5555-4555-8555-555555555555";
 const policyUid = "66666666-6666-4666-8666-666666666666";
 const controllerUid = "88888888-8888-4888-8888-888888888888";
 
+export const workerPodLabels = {
+	"app.kubernetes.io/name": "agent-infra",
+	"app.kubernetes.io/component": "platform-worker",
+};
+/** Synthetic Worker NetworkPolicy deployment configuration (no real destinations). */
+export const networkPolicyDeploymentConfig = () => ({
+	workerSelector: { ...workerPodLabels },
+	routeNamespace: "ingress-nginx",
+	routeSelector: { "app.kubernetes.io/name": "ingress-nginx" },
+	platformApiSelector: { "app.kubernetes.io/component": "platform-api" },
+	workspaceSnapshotProjection: false,
+	egress: {
+		modelEgress: [{ destination: { ip: "198.51.100.10" }, port: 443 }],
+		dnsEgress: [
+			{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+		],
+	},
+});
+/** A Worker `configuration.mjs` whose `workloadInput` carries exactly this configuration. */
+export function workerConfigurationSource(config) {
+	const { workspaceSnapshotProjection, egress, ...selectors } = config;
+	return `export const workloadInput = {
+	policy: ${JSON.stringify({ ...selectors, ...egress })},
+	${workspaceSnapshotProjection ? "workspaceSnapshotResolver: { project() { return {}; } }," : ""}
+};
+`;
+}
+export const probeAgentKey = "np-probe.agent-infra.agora.io/agent";
+
+/** Probe-only substitution table and Pod labels for one variant (never production labels). */
+export function probePolicyEvidence(
+	config,
+	variant = "self-managed",
+	port = 3003,
+) {
+	const multi = variant.startsWith("multi-service-");
+	const migration = variant.startsWith("multi-service-migration");
+	const substitutions = {
+		agentSelector: { key: probeAgentKey, value: "probe-a" },
+		...(multi
+			? variant.startsWith("multi-service-migration")
+				? {}
+				: { service: "probe-svc" }
+			: { workerSource: { "np-probe/source": "worker" }, port }),
+	};
+	return {
+		variant,
+		substitutions,
+		// Targets carry the full instantiated podSelector; an allowed multi-service
+		// source is a sibling of the same probe Agent.
+		podLabels: {
+			target: {
+				[probeAgentKey]: "probe-a",
+				...(multi
+					? {
+							"agent-infra.agora.io/service": migration
+								? "migration"
+								: "probe-svc",
+						}
+					: {}),
+			},
+			workerSource: multi
+				? { [probeAgentKey]: "probe-a", "np-probe/source": "worker" }
+				: { "np-probe/source": "worker" },
+			nonWorkerSource: { "np-probe/source": "other" },
+		},
+		instantiatedSha256: networkPolicyEvidenceSha256V1(
+			networkPolicySpecV1({ variant, config, substitutions }),
+			config,
+		),
+	};
+}
+
 /** The rendered objects the gate reads: Worker placement env and Session ECI admission. */
 export function renderedEnforcementManifest(
 	namespace,
 	placement,
 	sessionArchitecture = placement?.architecture ?? "amd64",
+	workerEnvironment = [],
 ) {
 	const name = `${namespace}-session-eci`;
 	const scope = {
@@ -33,27 +111,55 @@ export function renderedEnforcementManifest(
 			kind: "Deployment",
 			metadata: { name: "agent-infra-worker" },
 			spec: {
+				selector: { matchLabels: { ...workerPodLabels } },
 				template: {
 					metadata: {
-						labels: { "app.kubernetes.io/component": "platform-worker" },
+						labels: { ...workerPodLabels },
 					},
 					spec: {
 						containers: [
 							{
 								name: "platform-worker",
-								env: placement
-									? [
-											{
-												name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
-												value: JSON.stringify(placement),
-											},
-										]
-									: [],
+								env: [
+									...(placement
+										? [
+												{
+													name: "AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT",
+													value: JSON.stringify(placement),
+												},
+											]
+										: []),
+									{
+										name: "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+										value: "file:///app/dist/deployment.mjs",
+									},
+									...workerEnvironment,
+								],
+								volumeMounts: [
+									{
+										name: "configuration",
+										mountPath: "/app/dist/configuration.mjs",
+										subPath: "configuration.mjs",
+										readOnly: true,
+									},
+								],
+							},
+						],
+						volumes: [
+							{
+								name: "configuration",
+								secret: { secretName: "np-gate-worker-config" },
 							},
 						],
 					},
 				},
 			},
+		},
+		{
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: { name: "agent-infra-worker" },
+			spec: { selector: { ...workerPodLabels } },
 		},
 		{
 			apiVersion: "admissionregistration.k8s.io/v1",
@@ -89,24 +195,27 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 	const placement = { architecture: "amd64", legacyUnplaced: "reject" };
 	const minutesAgo = (minutes) =>
 		new Date(Date.now() - minutes * 60_000).toISOString();
-	const enforcerConfig = Buffer.from(
+	const config = networkPolicyDeploymentConfig();
+	const evidenceFile = join(directory, "networkpolicy-evidence.json");
+	const configFile = join(directory, "configuration.mjs");
+	await writeFile(configFile, workerConfigurationSource(config), {
+		mode: 0o600,
+	});
+	const bootstrapFile = join(directory, "bootstrap-inputs.json");
+	await writeFile(
+		bootstrapFile,
 		JSON.stringify({
 			schemaVersion: 1,
-			kind: "ack-poseidon-config-readback",
-			clusterId: "c0ffee0000",
-			component: "poseidon",
-			version: "v0.8.0",
-			eciNetworkPolicyEnabled: true,
-			readAt: minutesAgo(1),
+			objects: [
+				{
+					kind: "Secret",
+					name: "np-gate-worker-config",
+					files: { "configuration.mjs": configFile },
+				},
+			],
 		}),
+		{ mode: 0o600 },
 	);
-	const policySpec = {
-		podSelector: { matchLabels: { app: "probe-target" } },
-		policyTypes: ["Ingress"],
-	};
-	const evidenceFile = join(directory, "networkpolicy-evidence.json");
-	const enforcerConfigFile = join(directory, "poseidon-config.json");
-	await writeFile(enforcerConfigFile, enforcerConfig, { mode: 0o600 });
 	await writeFile(
 		evidenceFile,
 		JSON.stringify({
@@ -117,12 +226,14 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 			enforcer: {
 				runtime: "eci",
 				component: "poseidon",
-				version: "v0.8.0",
-				configSha256: createHash("sha256").update(enforcerConfig).digest("hex"),
+				version: "unobservable",
 			},
-			placement,
+			placement: {
+				...placement,
+				selectorSha256: placementSelectorSha256V1(placement.architecture),
+			},
 			nodes: [{ name: nodeName, uid: nodeUid }],
-			targets: [],
+			networkPolicy: { templateSha256: networkPolicyTemplateDigestsV1(config) },
 			probes: [
 				{
 					destination: {
@@ -139,7 +250,7 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 					policy: {
 						name: "probe-target",
 						uid: policyUid,
-						specSha256: networkPolicySpecSha256V1(policySpec),
+						...probePolicyEvidence(config),
 					},
 					allow: { at: minutesAgo(10), outcome: "connected" },
 					deny: {
@@ -159,9 +270,16 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 	return {
 		env: {
 			ACK_NETWORKPOLICY_EVIDENCE_FILE: evidenceFile,
-			ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE: enforcerConfigFile,
+			ACK_BOOTSTRAP_INPUTS_FILE: bootstrapFile,
 		},
+		configFile,
 		responses: {
+			// The mounted Worker configuration Secret that dependency readback also checks.
+			"Secret/np-gate-worker-config": {
+				kind: "Secret",
+				metadata: { name: "np-gate-worker-config", namespace },
+				data: { "configuration.mjs": "" },
+			},
 			[`namespace/${namespace}`]: {
 				metadata: { name: namespace, uid: namespaceUid },
 			},
@@ -192,32 +310,41 @@ export async function writeNetworkPolicyEvidence(directory, options) {
 				],
 			},
 			"statefulsets,deployments,jobs/-l": { items: [] },
-			"pod/probe-target-0": {
-				metadata: {
-					name: "probe-target-0",
-					uid: podUid,
-					namespace,
-					labels: { app: "probe-target" },
-					ownerReferences: [
-						{
-							kind: "StatefulSet",
-							name: "probe-target",
-							uid: controllerUid,
-							controller: true,
-						},
-					],
-				},
-				spec: {
-					nodeName,
-					containers: [{ name: "probe", ports: [{ containerPort: 3003 }] }],
-				},
-				status: { phase: "Running" },
-			},
-			"networkpolicy/probe-target": {
-				metadata: { name: "probe-target", uid: policyUid, namespace },
-				spec: policySpec,
-			},
 		},
 		rendered: renderedEnforcementManifest(namespace, placement),
+	};
+}
+
+/** A bootstrap input file plus rendered chart mounting `source` as the Worker configuration.mjs. */
+export async function workerConfigurationInputs(
+	directory,
+	source,
+	options = {},
+) {
+	const configFile = join(directory, "configuration.mjs");
+	await writeFile(configFile, source, { mode: 0o600 });
+	const bootstrapInputsFile = join(directory, "bootstrap-inputs.json");
+	await writeFile(
+		bootstrapInputsFile,
+		JSON.stringify({
+			schemaVersion: 1,
+			objects: [
+				{
+					kind: "Secret",
+					name: "np-gate-worker-config",
+					files: { "configuration.mjs": configFile },
+				},
+			],
+		}),
+		{ mode: 0o600 },
+	);
+	return {
+		bootstrapInputsFile,
+		renderedManifest: renderedEnforcementManifest(
+			options.namespace ?? "agent-infra",
+			{ architecture: "amd64", legacyUnplaced: "reject" },
+			"amd64",
+			options.workerEnvironment ?? [],
+		),
 	};
 }

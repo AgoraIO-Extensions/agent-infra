@@ -8,6 +8,7 @@ import type {
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
 	parseSessionSandboxReserveConfigurationV1,
+	resolveWorkerEffectiveEgressV1,
 	type SessionSandboxReserveConfigurationV1,
 	sessionSandboxReserveDigestV1,
 } from "@agent-infra/platform-core";
@@ -88,10 +89,6 @@ import {
 	createWorkloadReadinessLedgerV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
-import {
-	resolveWorkloadFileExchangeEgressV1,
-	resolveWorkloadFileExchangeOriginV1,
-} from "./workload-runtime-auth.js";
 
 type DeploymentConfiguration = {
 	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
@@ -410,38 +407,15 @@ export function readPlatformSessionReserveDeploymentV1() {
 	};
 }
 
-function nativeMetadataGatewayPortFromEnvironment() {
-	const enabled = process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED;
-	if (enabled === undefined || enabled === "false") return undefined;
-	if (enabled !== "true")
-		throw new Error(
-			"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
-		);
-	const value =
-		process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT ?? "3004";
-	const port = Number(value);
-	if (!Number.isSafeInteger(port) || port < 1 || port > 65_535)
-		throw new Error(
-			"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
-		);
-	return port;
-}
-
-const configuredNativeMetadataGatewayPort =
-	configuredNativeMetadataGateway?.port;
-const environmentNativeMetadataGatewayPort =
-	nativeMetadataGatewayPortFromEnvironment();
-const nativeMetadataGatewayEnabled =
-	configuredNativeMetadataGateway !== undefined ||
-	environmentNativeMetadataGatewayPort !== undefined;
+// #4351: file exchange and native metadata egress are resolved by the shared
+// function the ACK NetworkPolicy preflight digests (platform-core).
+const effectiveWorkerEgress = resolveWorkerEffectiveEgressV1({
+	policy: configuredWorkloadInput.policy,
+	nativeMetadataGateway: configuredNativeMetadataGateway,
+	environment: process.env,
+});
 const nativeMetadataGatewayPort =
-	configuredNativeMetadataGatewayPort ??
-	environmentNativeMetadataGatewayPort ??
-	(nativeMetadataGatewayEnabled ? 3004 : undefined);
-if (nativeMetadataGatewayEnabled && !configuredWorkloadInput.policy.runtimeAuth)
-	throw new Error(
-		"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
-	);
+	effectiveWorkerEgress.nativeMetadataGatewayPort;
 const configuredNativeMetadataWorkerOrigin =
 	process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN;
 if (
@@ -454,20 +428,6 @@ if (
 const nativeMetadataWorkerOrigin =
 	configuredNativeMetadataWorkerOrigin ??
 	"http://platform-worker-native-metadata";
-const nativeMetadataGatewaySelectorInstance =
-	process.env.PLATFORM_WORKER_RELEASE_NAME;
-if (
-	nativeMetadataGatewayEnabled &&
-	(!nativeMetadataGatewaySelectorInstance ||
-		!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(
-			nativeMetadataGatewaySelectorInstance,
-		))
-)
-	throw new Error(
-		"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
-	);
-const validatedNativeMetadataGatewaySelectorInstance =
-	nativeMetadataGatewaySelectorInstance as string;
 const nativeMetadataGateway =
 	nativeMetadataGatewayPort === undefined
 		? undefined
@@ -487,20 +447,8 @@ const nativeMetadataGateway =
 							},
 						}),
 			};
-// The mounted deployment module stays authoritative; the environment only
-// supplies a release-scoped origin for the fixed deployment and never a token.
-const fileExchangeOrigin = resolveWorkloadFileExchangeOriginV1({
-	configured: configuredWorkloadInput.policy.runtimeAuth?.fileExchangeOrigin,
-	environment: process.env.PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN,
-	hasRuntimeAuth: configuredWorkloadInput.policy.runtimeAuth !== undefined,
-});
-// #3289：文件交换 origin 必须带有部署声明的出站目的地，端口取 origin 端口；缺失或无效时
-// 在任何 Kubernetes 写入之前拒绝，避免“变量已注入、网络却不通”。
-const fileExchangeEgress = resolveWorkloadFileExchangeEgressV1({
-	origin: fileExchangeOrigin,
-	configured: configuredWorkloadInput.policy.fileExchangeEgress,
-	environment: process.env.PLATFORM_WORKER_FILE_EXCHANGE_EGRESS,
-});
+const fileExchangeOrigin = effectiveWorkerEgress.fileExchangeOrigin;
+const fileExchangeEgress = effectiveWorkerEgress.policy.fileExchangeEgress;
 const runtimeAuth =
 	configuredWorkloadInput.policy.runtimeAuth === undefined
 		? undefined
@@ -555,22 +503,10 @@ const workloadInput = {
 			: {}),
 		...(runtimeAuth ? { runtimeAuth } : {}),
 		...(fileExchangeEgress ? { fileExchangeEgress } : {}),
-		...(nativeMetadataGatewayPort !== undefined &&
-		configuredWorkloadInput.policy.nativeMetadataWorkerEgress === undefined
+		...(effectiveWorkerEgress.policy.nativeMetadataWorkerEgress
 			? {
-					nativeMetadataWorkerEgress: [
-						{
-							destination: {
-								namespace: process.env.PLATFORM_WORKER_NAMESPACE ?? "",
-								podLabels: {
-									"app.kubernetes.io/component": "platform-worker",
-									"app.kubernetes.io/instance":
-										validatedNativeMetadataGatewaySelectorInstance as string,
-								},
-							},
-							port: nativeMetadataGatewayPort,
-						},
-					],
+					nativeMetadataWorkerEgress:
+						effectiveWorkerEgress.policy.nativeMetadataWorkerEgress,
 				}
 			: {}),
 	},

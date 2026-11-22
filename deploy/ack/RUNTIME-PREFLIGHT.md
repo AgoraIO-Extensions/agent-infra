@@ -155,12 +155,11 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
 
 探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
-本节描述目标门禁；`networkpolicy-enforcement.mjs` 的实现 PR 合入前，脚本仍按旧规则要求 Poseidon 配置回读
-和 `targets` 等于全部控制器，因此不能用本节的证据格式通过现有脚本。
 
 | 环境变量 | 内容 |
 | --- | --- |
 | `ACK_NETWORKPOLICY_EVIDENCE_FILE` | 已批准的执行证据，`kind: agent-infra-networkpolicy-enforcement-evidence` |
+| `ACK_BOOTSTRAP_INPUTS_FILE` | 私有 Secret/ConfigMap 文件引用包（与 `redeploy.sh` 相同的输入）。预检按渲染结果里 Worker 的 `PLATFORM_WORKER_DEPLOYMENT_MODULE` 与 `configuration.mjs` 只读挂载找到本次要部署的 Worker `configuration.mjs`，在只能读该文件副本、无子进程、无原生扩展的隔离子进程里加载它（Node 24 权限模型没有网络开关，加载前锁死 `net`、`tls`、`http2`、`dgram`（含不能创建任何 UDP socket，因此拿不到原生 handle）、`dns`、`fetch`、`WebSocket` 的入口，模块只能看到下列 Worker 网络环境变量（来自渲染结果，不传入运维进程环境），读取（含反射读取）其他环境变量、写入/删除/重定义任何环境变量（即使模块捕获了错误）一律拒绝，负例用可达的本机监听器验证连接数为零），只取 `workloadInput.policy` 的 `workerSelector`、`routeNamespace`、`routeSelector`、`platformApiSelector` 与模型、Connection、原生元数据回调、文件交换、快照、DNS 和原生工具出站字段，`runtimeAuth.fileExchangeOrigin`、模块顶层 `nativeMetadataGateway.port`、是否配置了 `workloadInput.workspaceSnapshotResolver.project`；再用渲染结果里 Worker 容器的 `PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN`、`PLATFORM_WORKER_FILE_EXCHANGE_EGRESS`、`PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED`、`PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT`、`PLATFORM_WORKER_NAMESPACE`（`fieldRef: metadata.namespace` 取部署 namespace）与 `PLATFORM_WORKER_RELEASE_NAME`，调用 Worker 同一函数合并最终出站；这些变量用 `secretKeyRef` 等无法读取的来源、容器有 `envFrom`、或合并被 Worker 规则拒绝，一律拒绝；没有独立维护的副本，通过时摘要里记录该文件的 `workerConfigurationSha256`。读取、加载或字段校验失败一律拒绝（模块依赖了隔离环境读不到的文件或包也属于此类） |
 | `ACK_RENDERED_MANIFEST_FILE` | 本次 `helm template` 结果；`preflight.sh` 与 `template-preflight` 自动传入 |
 
 证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
@@ -183,11 +182,13 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
   Pod、临时 deny-all 与探针来源在探针结束后按 UID 删除；预检不要求它们仍存在，也不要求
   `probes` 覆盖现场全部 Agent 级控制器。
 - `networkPolicy`：`templateSha256`，按变体名记录全部规范化模板摘要（单服务三种 `route.exposure`，
-  多服务入口、非入口与迁移，及其带快照与不带快照的形态）。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
+  多服务入口、非入口与迁移，及其带快照与不带快照的形态；部署配置含 `nativeEgress` 时，单服务另有未绑定标准模板的 `+no-native` 形态）。摘要是“有效 spec 加原生工具出站受保护网段”的规范化 SHA-256。模板与摘要的定义、探针原策略的生成方式，只在工程 Spec 同条之后的
   “NetworkPolicy 规范化模板”维护。
 - `observedAt` 与 `expiresAt`：有效期不超过 7 天。
 
 以下情况都拒绝发布：
+
+- 探针所选变体的策略没有任何入站来源（迁移），`PROBE_VARIANT_NO_INGRESS`。
 
 - 执行组件不是 ECI 上的 Poseidon（包括 ECS 的 flannel），或证据的 `enforcer` 字段不符。
 - 证据超过 7 天、已过期或时间在未来；cluster、namespace 名称或 UID 与现场不符。
@@ -195,8 +196,8 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
-- 证据自相矛盾：探针记录的 Pod 与其控制器不在证据的 namespace，Pod 的 `nodeName` 不是该探针所属的可落节点，或没有声明该 TCP 端口；预检用渲染结果
-  重新计算的全部规范化模板摘要，与证据 `networkPolicy.templateSha256` 任一不一致；探针记录的
+- 证据自相矛盾：探针记录的 Pod 的 `nodeName` 不是该探针所属的可落节点，或替换表的端口不是探针的 `destination.port`；缺少 `ACK_BOOTSTRAP_INPUTS_FILE`（`WORKER_CONFIGURATION_REQUIRED`），Worker `configuration.mjs` 不可读取、不可加载或缺少 `workloadInput.policy`（`WORKER_CONFIGURATION_UNVERIFIABLE`），派生或合并出的部署配置不合法（`NETWORKPOLICY_CONFIG_INVALID`），或其 `workerSelector` 不被渲染结果中的 Worker Pod 满足；预检用部署配置
+  重新计算的全部规范化模板摘要，与证据 `networkPolicy.templateSha256` 的变体集合或任一摘要不一致；探针记录的
   `policy.instantiatedSha256` 与预检按其 `variant` 和 `substitutions` 复算的结果不同，或任一探针 Pod 的 `podLabels` 不满足 Spec 同条的标签条件；Worker placement 的 selector
   与 toleration 摘要与证据 `placement.selectorSha256` 不一致。
 - 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`
