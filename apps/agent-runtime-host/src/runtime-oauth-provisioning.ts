@@ -59,9 +59,32 @@ function bundle(value: unknown) {
 	};
 }
 
+/**
+ * #3054: fixed stages of the provisioning init, reported on failure without
+ * values, paths or material. Diagnostics only; every check is unchanged.
+ */
+export type RuntimeOAuthProvisioningStageV1 =
+	| "configuration"
+	| "origin"
+	| "dirs"
+	| "protection"
+	| "source"
+	| "cert"
+	| "write";
+type ProvisioningStageObserver = (
+	stage: RuntimeOAuthProvisioningStageV1,
+) => void;
+
 /** Kubelet-owned read-only sources may use atomic-writer symlinks inside the mount. */
-async function readSource(directory: string, name: string, maximum: number) {
+async function readSource(
+	directory: string,
+	name: string,
+	maximum: number,
+	onStage?: ProvisioningStageObserver,
+) {
+	onStage?.("protection");
 	assertStandardMcpProcessProtection();
+	onStage?.("source");
 	const root = await realpath(directory);
 	const rootBefore = await stat(root);
 	const path = await realpath(join(directory, name));
@@ -217,9 +240,14 @@ export async function provisionRuntimeOAuthFiles(options: {
 	configurationBundle: unknown;
 	registrationDescriptor?: unknown;
 	registrationSource?: string;
+	onStage?: ProvisioningStageObserver;
 }) {
+	const onStage = options.onStage;
+	onStage?.("dirs");
 	await prepareRuntimeOAuthProvisioningDirectories(options);
+	onStage?.("protection");
 	assertStandardMcpProcessProtection();
+	onStage?.("configuration");
 	const input = bundle(options.configurationBundle);
 	if (
 		(options.registrationDescriptor === undefined) !==
@@ -246,10 +274,15 @@ export async function provisionRuntimeOAuthFiles(options: {
 		options.dataDirectory === "/"
 	)
 		unavailable();
-	const cert = await readSource(options.tlsSource, "server.crt", 16384);
-	const key = await readSource(options.tlsSource, "server.key", 16384);
+	const cert = await readSource(
+		options.tlsSource,
+		"server.crt",
+		16384,
+		onStage,
+	);
+	const key = await readSource(options.tlsSource, "server.key", 16384, onStage);
 	const callback = validateStandardMcpToken(
-		await readSource(options.callbackSource, "callback.auth", 4096),
+		await readSource(options.callbackSource, "callback.auth", 4096, onStage),
 	);
 	const registrationAuth =
 		registration && options.registrationSource
@@ -258,10 +291,12 @@ export async function provisionRuntimeOAuthFiles(options: {
 						options.registrationSource,
 						"registration.auth",
 						4096,
+						onStage,
 					),
 				)
 			: undefined;
 	if (registrationAuth === callback) unavailable();
+	onStage?.("cert");
 	const certificate = new X509Certificate(cert);
 	const hostname = new URL(input.configuration.runtimeOrigin).hostname;
 	if (
@@ -271,6 +306,7 @@ export async function provisionRuntimeOAuthFiles(options: {
 		Date.parse(certificate.validTo) <= Date.now()
 	)
 		unavailable();
+	onStage?.("write");
 	const tls = join(options.privateDirectory, "tls");
 	await writePrivate(tls, "server.crt", cert, 16384);
 	await writePrivate(tls, "server.key", key, 16384);
@@ -286,6 +322,7 @@ export async function provisionRuntimeOAuthFiles(options: {
 			immutable: true,
 		});
 	await publishMetadata(bootstrap, "binding.json", input, { immutable: true });
+	onStage?.("protection");
 	assertStandardMcpProcessProtection();
 }
 
@@ -297,7 +334,10 @@ export async function provisionRuntimeConnectionInstallTrustV1(options: {
 	callbackSource: string;
 	readbackSource: string;
 	runtimeOrigin: string;
+	onStage?: ProvisioningStageObserver;
 }) {
+	const onStage = options.onStage;
+	onStage?.("origin");
 	const origin = new URL(options.runtimeOrigin);
 	if (
 		origin.protocol !== "https:" ||
@@ -310,20 +350,33 @@ export async function provisionRuntimeConnectionInstallTrustV1(options: {
 		origin.hash
 	)
 		unavailable();
+	onStage?.("dirs");
 	await prepareRuntimeOAuthProvisioningDirectories(options);
-	const certificate = await readSource(options.tlsSource, "server.crt", 16_384);
-	const privateKey = await readSource(options.tlsSource, "server.key", 16_384);
+	const certificate = await readSource(
+		options.tlsSource,
+		"server.crt",
+		16_384,
+		onStage,
+	);
+	const privateKey = await readSource(
+		options.tlsSource,
+		"server.key",
+		16_384,
+		onStage,
+	);
 	const callbackToken = validateStandardMcpToken(
-		await readSource(options.callbackSource, "callback.auth", 4096),
+		await readSource(options.callbackSource, "callback.auth", 4096, onStage),
 	);
 	const installToken = validateStandardMcpToken(
-		await readSource(options.readbackSource, "install.auth", 4096),
+		await readSource(options.readbackSource, "install.auth", 4096, onStage),
 	);
 	const workerCa = await readSource(
 		options.readbackSource,
 		"worker-ca.crt",
 		16_384,
+		onStage,
 	);
+	onStage?.("cert");
 	const leaf = new X509Certificate(certificate);
 	const now = Date.now();
 	if (
@@ -335,12 +388,14 @@ export async function provisionRuntimeConnectionInstallTrustV1(options: {
 		callbackToken === installToken
 	)
 		unavailable();
+	onStage?.("write");
 	const directory = join(options.privateDirectory, "tls");
 	await writePrivate(directory, "server.crt", certificate, 16_384);
 	await writePrivate(directory, "server.key", privateKey, 16_384);
 	await writePrivate(directory, "callback.auth", callbackToken, 4096);
 	await writePrivate(directory, "worker-ca.crt", workerCa, 16_384);
 	await writePrivate(directory, "install.auth", installToken, 4096);
+	onStage?.("protection");
 	assertStandardMcpProcessProtection();
 }
 
@@ -388,4 +443,72 @@ export async function validateRuntimeOAuthProvisioning(
 	)
 		unavailable();
 	assertStandardMcpProcessProtection();
+}
+
+/** Fixed mounts of the `runtime-oauth-provision` init container. */
+const provisioningInitMounts = {
+	privateDirectory: "/oauth-private",
+	tlsSource: "/oauth-source-tls",
+	callbackSource: "/oauth-source-callback",
+	readbackSource: "/oauth-source-install",
+	registrationSource: "/oauth-source-registration",
+};
+
+/**
+ * The provisioning init. Any failure yields one fixed line naming the last
+ * stage reached; the init still exits 0 and the Host rejects incomplete
+ * bootstrap while ordinary model/control startup continues (#3054).
+ */
+export async function runRuntimeOAuthProvisioningInitV1(
+	environment: NodeJS.ProcessEnv,
+	mounts: typeof provisioningInitMounts = provisioningInitMounts,
+): Promise<string | undefined> {
+	let stage: RuntimeOAuthProvisioningStageV1 = "configuration";
+	const onStage: ProvisioningStageObserver = (next) => {
+		stage = next;
+	};
+	try {
+		if (environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER === "v1") {
+			if (environment.AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING !== undefined)
+				throw new Error("RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE");
+			await provisionRuntimeConnectionInstallTrustV1({
+				dataDirectory: environment.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
+				privateDirectory: mounts.privateDirectory,
+				tlsSource: mounts.tlsSource,
+				callbackSource: mounts.callbackSource,
+				readbackSource: mounts.readbackSource,
+				runtimeOrigin:
+					environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN ?? "",
+				onStage,
+			});
+		} else {
+			onStage("dirs");
+			await prepareRuntimeOAuthProvisioningDirectories({
+				dataDirectory: environment.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
+				privateDirectory: mounts.privateDirectory,
+			});
+			onStage("configuration");
+			await provisionRuntimeOAuthFiles({
+				dataDirectory: environment.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
+				privateDirectory: mounts.privateDirectory,
+				tlsSource: mounts.tlsSource,
+				callbackSource: mounts.callbackSource,
+				configurationBundle: JSON.parse(
+					environment.AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING ?? "null",
+				),
+				...(environment.AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION === undefined
+					? {}
+					: {
+							registrationDescriptor: JSON.parse(
+								environment.AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION,
+							),
+							registrationSource: mounts.registrationSource,
+						}),
+				onStage,
+			});
+		}
+		return undefined;
+	} catch {
+		return `${JSON.stringify({ code: "RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE", stage })}\n`;
+	}
 }

@@ -16,11 +16,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
 import { runtimeOAuthConfigurationFingerprintV1 } from "@agent-infra/contracts/runtime/oauth-installation-node";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import {
 	provisionRuntimeConnectionInstallTrustV1,
 	provisionRuntimeOAuthFiles,
+	runRuntimeOAuthProvisioningInitV1,
 	validateRuntimeOAuthProvisioning,
 } from "./runtime-oauth-provisioning.js";
 
@@ -41,7 +42,10 @@ it("reports unavailable bootstrap without blocking ordinary Host startup", () =>
 		},
 	);
 	expect(result.status).toBe(0);
-	expect(result.stderr).toContain('"RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE"');
+	// #3054: the one fixed line names the stage reached; no data directory is configured.
+	expect(result.stderr).toBe(
+		'{"code":"RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE","stage":"dirs"}\n',
+	);
 });
 afterEach(async () => {
 	protection.check.mockReset();
@@ -333,4 +337,129 @@ it("validates the original Session bundle before the Host reads OAuth configurat
 				f.options.dataDirectory,
 			),
 		).rejects.toBeDefined();
+});
+
+describe("provisioning init failure stage (#3054)", () => {
+	const canary = "synthetic-secret-detail /proc/sys/kernel/yama/ptrace_scope";
+
+	async function receiverInit() {
+		const f = await fixture();
+		const worker = await runtimeTlsFixture({
+			dnsNames: ["install-worker.workload-test.svc"],
+		});
+		cleanup.push(worker.cleanup);
+		await writeFile(join(f.source, "worker-ca.crt"), worker.ca, {
+			mode: 0o440,
+		});
+		await writeFile(
+			join(f.source, "install.auth"),
+			"synthetic-install-readback-material",
+			{ mode: 0o440 },
+		);
+		const environment: NodeJS.ProcessEnv = {
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER: "v1",
+			AGENT_INFRA_RUNTIME_DATA_DIR: f.options.dataDirectory,
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN:
+				f.input.configuration.runtimeOrigin,
+		};
+		const mounts = {
+			privateDirectory: f.memory,
+			tlsSource: f.source,
+			callbackSource: f.source,
+			readbackSource: f.source,
+			registrationSource: f.source,
+		};
+		return { f, environment, mounts };
+	}
+
+	const line = (stage: string) =>
+		`${JSON.stringify({ code: "RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE", stage })}\n`;
+
+	it("writes no line when the receiver trust is provisioned", async () => {
+		const { f, environment, mounts } = await receiverInit();
+		expect(
+			await runRuntimeOAuthProvisioningInitV1(environment, mounts),
+		).toBeUndefined();
+		expect(await readFile(join(f.memory, "tls", "install.auth"), "utf8")).toBe(
+			"synthetic-install-readback-material",
+		);
+	});
+
+	it.each([
+		"configuration",
+		"origin",
+		"dirs",
+		"protection",
+		"source",
+		"cert",
+		"write",
+	] as const)(
+		"names the %s stage of a failed receiver bootstrap",
+		async (stage) => {
+			const { f, environment, mounts } = await receiverInit();
+			if (stage === "configuration")
+				environment.AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING = "null";
+			if (stage === "origin")
+				environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN = `${f.input.configuration.runtimeOrigin}path`;
+			if (stage === "dirs")
+				environment.AGENT_INFRA_RUNTIME_DATA_DIR = "relative/runtime";
+			if (stage === "protection")
+				protection.check.mockImplementation(() => {
+					throw Error(canary);
+				});
+			if (stage === "source") await rm(join(f.source, "install.auth"));
+			if (stage === "cert")
+				environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN =
+					"https://sandbox-b.workload-test.svc:3443/";
+			if (stage === "write") {
+				await mkdir(join(f.memory, "tls"), { mode: 0o700 });
+				await writeFile(
+					join(f.memory, "tls", "server.crt"),
+					"different-certificate",
+					{ mode: 0o600 },
+				);
+			}
+			const failure = await runRuntimeOAuthProvisioningInitV1(
+				environment,
+				mounts,
+			);
+			// Only the fixed code and stage; never a message, path or material.
+			expect(failure).toBe(line(stage));
+			expect(failure).not.toContain("synthetic");
+			await expect(
+				stat(join(f.memory, "tls", "install.auth")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+		},
+	);
+
+	it.each([
+		["configuration", "an invalid bundle"],
+		["cert", "a certificate for another Sandbox"],
+	] as const)(
+		"names the %s stage of a failed pre-registered bootstrap with %s",
+		async (stage, _case) => {
+			const f = await fixture();
+			if (stage === "cert")
+				f.input.configuration.runtimeOrigin =
+					"https://sandbox-b.workload-test.svc:3443/";
+			const failure = await runRuntimeOAuthProvisioningInitV1(
+				{
+					AGENT_INFRA_RUNTIME_DATA_DIR: f.options.dataDirectory,
+					AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING:
+						stage === "configuration" ? "null" : JSON.stringify(f.input),
+				},
+				{
+					privateDirectory: f.memory,
+					tlsSource: f.source,
+					callbackSource: f.source,
+					readbackSource: f.source,
+					registrationSource: f.source,
+				},
+			);
+			expect(failure).toBe(line(stage));
+			await expect(
+				stat(join(f.memory, "bootstrap", "binding.json")),
+			).rejects.toBeDefined();
+		},
+	);
 });

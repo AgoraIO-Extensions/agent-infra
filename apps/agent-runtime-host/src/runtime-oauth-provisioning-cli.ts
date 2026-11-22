@@ -1,46 +1,5 @@
-import {
-	prepareRuntimeOAuthProvisioningDirectories,
-	provisionRuntimeConnectionInstallTrustV1,
-	provisionRuntimeOAuthFiles,
-} from "./runtime-oauth-provisioning.js";
+import { runRuntimeOAuthProvisioningInitV1 } from "./runtime-oauth-provisioning.js";
 
-try {
-	if (process.env.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_RECEIVER === "v1") {
-		if (process.env.AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING !== undefined)
-			throw new Error("RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE");
-		await provisionRuntimeConnectionInstallTrustV1({
-			dataDirectory: process.env.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
-			privateDirectory: "/oauth-private",
-			tlsSource: "/oauth-source-tls",
-			callbackSource: "/oauth-source-callback",
-			readbackSource: "/oauth-source-install",
-			runtimeOrigin:
-				process.env.AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_ORIGIN ?? "",
-		});
-	} else {
-		await prepareRuntimeOAuthProvisioningDirectories({
-			dataDirectory: process.env.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
-			privateDirectory: "/oauth-private",
-		});
-		await provisionRuntimeOAuthFiles({
-			dataDirectory: process.env.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
-			privateDirectory: "/oauth-private",
-			tlsSource: "/oauth-source-tls",
-			callbackSource: "/oauth-source-callback",
-			configurationBundle: JSON.parse(
-				process.env.AGENT_INFRA_RUNTIME_OAUTH_PROVISIONING ?? "null",
-			),
-			...(process.env.AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION === undefined
-				? {}
-				: {
-						registrationDescriptor: JSON.parse(
-							process.env.AGENT_INFRA_RUNTIME_OAUTH_REGISTRATION,
-						),
-						registrationSource: "/oauth-source-registration",
-					}),
-		});
-	}
-} catch {
-	process.stderr.write('{"code":"RUNTIME_OAUTH_PROVISIONING_UNAVAILABLE"}\n');
-	// The Host rejects incomplete bootstrap; ordinary model/control startup continues.
-}
+const failure = await runRuntimeOAuthProvisioningInitV1(process.env);
+// The Host rejects incomplete bootstrap; ordinary model/control startup continues.
+if (failure) process.stderr.write(failure);
