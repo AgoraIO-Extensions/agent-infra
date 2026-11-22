@@ -117,6 +117,7 @@ import {
 import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
 import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
+import { runtimeHostStartupFailureReasonV1 } from "./startup-diagnostics.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 export {
@@ -1412,24 +1413,38 @@ async function startFromEnvironment() {
 	});
 }
 
+/**
+ * The Host's one startup failure line. Codes are chosen exactly as before; a
+ * generic `RUNTIME_STARTUP_FAILED` only adds a fixed `reason` (#3054).
+ */
+export function runtimeHostStartupFailureLineV1(error: unknown) {
+	const code =
+		error instanceof RuntimeHostError
+			? error.code
+			: error instanceof Error &&
+					[
+						"RUNTIME_CONFIGURATION_INVALID",
+						"RUNTIME_CODEX_PROVENANCE_MISMATCH",
+						// #3255：文件交换配置无效时原样输出错误码，不再归为启动失败。
+						"RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID",
+					].includes(error.message)
+				? error.message
+				: "RUNTIME_STARTUP_FAILED";
+	return JSON.stringify({
+		service: runtimeHostService,
+		code,
+		...(code === "RUNTIME_STARTUP_FAILED"
+			? { reason: runtimeHostStartupFailureReasonV1(error) }
+			: {}),
+	});
+}
+
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	try {
 		await startFromEnvironment();
 	} catch (error) {
-		const code =
-			error instanceof RuntimeHostError
-				? error.code
-				: error instanceof Error &&
-						[
-							"RUNTIME_CONFIGURATION_INVALID",
-							"RUNTIME_CODEX_PROVENANCE_MISMATCH",
-							// #3255：文件交换配置无效时原样输出错误码，不再归为启动失败。
-							"RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID",
-						].includes(error.message)
-					? error.message
-					: "RUNTIME_STARTUP_FAILED";
-		console.error(JSON.stringify({ service: runtimeHostService, code }));
+		console.error(runtimeHostStartupFailureLineV1(error));
 		process.exitCode = 1;
 	}
 }

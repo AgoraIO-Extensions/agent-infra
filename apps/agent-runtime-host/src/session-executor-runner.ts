@@ -21,6 +21,7 @@ import {
 	stageExecutorIdentitiesV1,
 } from "./executor-identity-startup.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
+import { codexExecutorStartupFailureLineV1 } from "./startup-diagnostics.js";
 
 const maximumProxyMessageBytes = 64 * 1024 * 1024;
 
@@ -315,13 +316,8 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-	void run().catch(() => {
-		console.error(
-			JSON.stringify({
-				service: "codex-session-executor",
-				code: "CODEX_EXECUTOR_STARTUP_FAILED",
-			}),
-		);
+	void run().catch((error: unknown) => {
+		console.error(codexExecutorStartupFailureLineV1(error));
 		process.exitCode = 1;
 	});
 }
