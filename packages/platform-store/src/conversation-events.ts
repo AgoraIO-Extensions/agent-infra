@@ -25,6 +25,19 @@ import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-r
 import postgres from "./observed-postgres.js";
 import { readSessionSandboxBinding } from "./session-sandbox.js";
 
+// postgres.js 3.4.9 src/connection.js and src/index.js emit ordinary Error objects;
+// socket errors preserve the Node system code. Only these exact codes classify transport failure.
+const clientConnectionErrorCodes = new Set([
+	"ECONNREFUSED",
+	"ECONNRESET",
+	"ETIMEDOUT",
+	"EPIPE",
+	"CONNECT_TIMEOUT",
+	"CONNECTION_CLOSED",
+	"CONNECTION_ENDED",
+	"CONNECTION_DESTROYED",
+]);
+
 type Transaction = postgres.TransactionSql;
 type JsonValue = Parameters<ReturnType<typeof postgres>["json"]>[0];
 type PersistRequest = Parameters<
@@ -1178,6 +1191,11 @@ export class PostgresConversationEventTransactionV1
 						reason = "EVENT_DATABASE_UNAVAILABLE";
 						break;
 				}
+			} else if (error instanceof Error) {
+				// Do not evaluate a getter or retain the original exception and its private fields.
+				const code = Object.getOwnPropertyDescriptor(error, "code")?.value;
+				if (typeof code === "string" && clientConnectionErrorCodes.has(code))
+					reason = "EVENT_DATABASE_UNAVAILABLE";
 			}
 			throw new ConversationEventError("unavailable", reason);
 		}

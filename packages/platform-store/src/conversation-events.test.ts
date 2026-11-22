@@ -1,8 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	ConversationEventError,
 	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
 	type ConversationOperationFactV2,
@@ -2513,7 +2515,7 @@ it.each([
 				code: "unavailable",
 				persistenceReason: reason,
 			});
-			expect(JSON.stringify(error)).not.toContain("SENTINEL");
+			expectFixedPersistenceFailure(error);
 			const [row] =
 				await client`select last_event_sequence::int as sequence, last_runtime_cursor from platform.conversation_executions where execution_id = ${ids.executionId}`;
 			expect(row).toMatchObject({ sequence: 0, last_runtime_cursor: null });
@@ -2528,3 +2530,104 @@ it.each([
 		}
 	},
 );
+
+it.each(["refused", "timeout"] as const)(
+	"classifies a real postgres.js client connection %s as unavailable (S1 #4377)",
+	async (mode) => {
+		const sockets = new Set<Socket>();
+		const server = createServer((socket) => {
+			sockets.add(socket);
+			socket.on("close", () => sockets.delete(socket));
+		});
+		let port = 1;
+		if (mode !== "refused") {
+			await new Promise<void>((resolve) =>
+				server.listen(0, "127.0.0.1", resolve),
+			);
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing local socket");
+			port = address.port;
+		}
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl: `postgres://synthetic:synthetic@127.0.0.1:${port}/synthetic?connect_timeout=1`,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		try {
+			const error = await events
+				.persist(eventInput("conversation_connection", "execution_connection"))
+				.catch((error: unknown) => error);
+			expect(error).toMatchObject({
+				code: "unavailable",
+				persistenceReason: "EVENT_DATABASE_UNAVAILABLE",
+			});
+			expectFixedPersistenceFailure(error);
+		} finally {
+			for (const socket of sockets) socket.destroy();
+			await transaction.close();
+			if (server.listening)
+				await new Promise<void>((resolve, reject) =>
+					server.close((error) => (error ? reject(error) : resolve())),
+				);
+		}
+	},
+);
+
+it.each([
+	["ECONNREFUSED", "EVENT_DATABASE_UNAVAILABLE"],
+	["ECONNRESET", "EVENT_DATABASE_UNAVAILABLE"],
+	["ETIMEDOUT", "EVENT_DATABASE_UNAVAILABLE"],
+	["EPIPE", "EVENT_DATABASE_UNAVAILABLE"],
+	["CONNECT_TIMEOUT", "EVENT_DATABASE_UNAVAILABLE"],
+	["CONNECTION_CLOSED", "EVENT_DATABASE_UNAVAILABLE"],
+	["CONNECTION_ENDED", "EVENT_DATABASE_UNAVAILABLE"],
+	["CONNECTION_DESTROYED", "EVENT_DATABASE_UNAVAILABLE"],
+	["CONNECTION_CLOSED_PRIVATE", undefined],
+	["PRIVATE_UNKNOWN", undefined],
+] as const)(
+	"only classifies the exact client code %s (S1 #4377)",
+	async (code, reason) => {
+		const ids = await seedConversation();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({
+			transaction: {
+				persistEvent(request, _decide) {
+					return transaction.persistEvent(request, () => {
+						throw Object.assign(new Error("PRIVATE_MESSAGE_SENTINEL"), {
+							code,
+							cause: "PRIVATE_CAUSE_SENTINEL",
+							query: "PRIVATE_QUERY_SENTINEL",
+						});
+					});
+				},
+			},
+		});
+		try {
+			const error = await events
+				.persist(eventInput(ids.conversationId, ids.executionId))
+				.catch((error: unknown) => error);
+			expect(error).toMatchObject({
+				code: "unavailable",
+				persistenceReason: reason,
+			});
+			expectFixedPersistenceFailure(error);
+		} finally {
+			await transaction.close();
+		}
+	},
+);
+
+function expectFixedPersistenceFailure(error: unknown) {
+	expect(error).toBeInstanceOf(ConversationEventError);
+	const failure = error as ConversationEventError;
+	expect(failure.message).toBe("Conversation event persistence is unavailable");
+	expect(failure).not.toHaveProperty("cause");
+	expect(Object.getPrototypeOf(failure)).toBe(ConversationEventError.prototype);
+	expect(Object.getOwnPropertyNames(failure).sort()).toEqual(
+		["code", "message", "name", "persistenceReason", "stack"].sort(),
+	);
+	expect(Object.getOwnPropertySymbols(failure)).toEqual([]);
+	expect(failure.stack).not.toContain("PRIVATE_");
+}
