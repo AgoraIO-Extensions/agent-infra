@@ -51,6 +51,7 @@ export * from "./pi-installation.js";
 export * from "./pi-native-command.js";
 export * from "./readiness.js";
 export type { RuntimeOriginalExecutionRef } from "./runtime-authorization.js";
+export * from "./runtime-control-observation.js";
 export * from "./runtime-file-bridge.js";
 export * from "./runtime-host.js";
 export * from "./safety-evidence-log.js";

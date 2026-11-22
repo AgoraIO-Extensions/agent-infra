@@ -13,6 +13,7 @@ import {
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
 	createExecutionGrantVerifier,
+	createRuntimeControlObserverV1,
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantValidatorV5,
 	createRuntimeExecutionGrantValidatorV6,
@@ -1090,7 +1091,11 @@ export async function assembleRuntimeHost(
 					return verified;
 				}
 			: undefined;
+		const podUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
 		const host = await RuntimeHost.open({
+			// #4358 I2: one observer per process, so its clock domain is this
+			// Pod UID plus process start; it writes fixed stdout records only.
+			controlObserver: createRuntimeControlObserverV1(podUid ? { podUid } : {}),
 			createBrowserExecutionContext,
 			probeBrowserCapability: async ({ declaration, binding, signal }) =>
 				probeRuntimeBrowserCapabilityV1({

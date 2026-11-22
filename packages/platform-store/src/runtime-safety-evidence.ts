@@ -34,6 +34,37 @@ export function runtimeSafetyEvidenceDigestV1(
 		.digest("hex");
 }
 
+/** The committed original binding of one Execution (see `readOriginalScope`). */
+export interface RuntimeSafetyEvidenceOriginalScopeV1 {
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly principal: {
+		readonly kind: "user" | "application";
+		readonly id: string;
+	};
+	readonly authorizationRecordId: string;
+	readonly authorizationRevision: string;
+	readonly revoked: boolean;
+	readonly sessionGeneration: number;
+	readonly executionDeliveryFence: number;
+	readonly sandbox: {
+		readonly ref: string;
+		readonly resourceFence: number;
+		readonly podUid: string;
+		readonly executorEpoch?: string;
+		readonly configurationRevision: number;
+		readonly imageDigest: string;
+	};
+	readonly operations: readonly {
+		readonly ref: string;
+		readonly attemptRef: string;
+	}[];
+}
+
+/** Evidence never makes a business write wait: a busy row leaves the entry in the Host log. */
+const evidenceLockTimeout = "200ms";
+
 /**
  * Engineering Spec §18.5.1: append-only Platform record of Worker-validated safety evidence.
  * It is never joined into conversation events, history or SSE.
@@ -68,6 +99,9 @@ export class PostgresRuntimeSafetyEvidenceStoreV1 {
 		const digest = runtimeSafetyEvidenceDigestV1(record);
 		const { binding } = record;
 		return this.#client.begin(async (transaction) => {
+			// A lock timeout fails this evidence write (retried on the next drain) instead of
+			// ever holding or aborting a business transaction on the same rows.
+			await transaction`select set_config('lock_timeout', ${evidenceLockTimeout}, true)`;
 			const existing = async () => {
 				const [row] = await transaction<{ record_sha256: string }[]>`
 					select record_sha256 from platform.runtime_safety_evidence
@@ -192,6 +226,84 @@ export class PostgresRuntimeSafetyEvidenceStoreV1 {
 				? [{ ref: row.operation_ref, attemptRef: row.attempt_ref }]
 				: [],
 		);
+	}
+
+	/**
+	 * The committed original binding of one Execution of the Conversation, for the Worker's
+	 * per-record scope (#4367): the Execution, its task authorization and original subject, and
+	 * the Session Sandbox's verified policy and observed Pod. Undefined when any of them is not
+	 * committed, so the record stays unconfirmed in the Host log.
+	 */
+	async readOriginalScope(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<RuntimeSafetyEvidenceOriginalScopeV1 | undefined> {
+		const [row] = await this.#client<
+			{
+				agent_id: string;
+				session_generation: string;
+				delivery_fence: string;
+				authorization_revision: string;
+				sandbox_id: string;
+				authorization_record_id: string;
+				revoked: boolean;
+				principal: unknown;
+				resource_fence: string;
+				resource_policy: unknown;
+				resource_observation: unknown;
+			}[]
+		>`
+			select e.agent_id, e.session_generation::text, e.delivery_fence::text,
+				e.authorization_revision, e.sandbox_id, a.id as authorization_record_id,
+				a.revoked_at is not null as revoked, a.boundary->'principal' as principal,
+				s.resource_fence::text, s.resource_policy, s.resource_observation
+			from platform.conversation_executions e
+			join platform.task_authorization_records a on a.execution_id = e.execution_id
+			join platform.session_sandbox_allocations s
+				on s.sandbox_id = e.sandbox_id and s.conversation_id = e.conversation_id
+			where e.execution_id = ${input.executionId}
+				and e.conversation_id = ${input.conversationId}
+		`;
+		const principal = row?.principal as
+			| { kind?: unknown; id?: unknown }
+			| null
+			| undefined;
+		const policy = row?.resource_policy as
+			| { configurationRevision?: unknown; imageDigest?: unknown }
+			| null
+			| undefined;
+		const podUid = row ? sandboxPodUid(row.resource_observation) : undefined;
+		if (
+			!row ||
+			(principal?.kind !== "user" && principal?.kind !== "application") ||
+			typeof principal.id !== "string" ||
+			!principal.id ||
+			typeof policy?.configurationRevision !== "number" ||
+			typeof policy.imageDigest !== "string" ||
+			!podUid
+		)
+			return undefined;
+		const executorEpoch = sandboxEpoch(row.resource_observation);
+		return {
+			agentId: row.agent_id,
+			conversationId: input.conversationId,
+			executionId: input.executionId,
+			principal: { kind: principal.kind, id: principal.id },
+			authorizationRecordId: row.authorization_record_id,
+			authorizationRevision: row.authorization_revision,
+			revoked: row.revoked,
+			sessionGeneration: Number(row.session_generation),
+			executionDeliveryFence: Number(row.delivery_fence),
+			sandbox: {
+				ref: row.sandbox_id,
+				resourceFence: Number(row.resource_fence),
+				podUid,
+				...(executorEpoch === undefined ? {} : { executorEpoch }),
+				configurationRevision: policy.configurationRevision,
+				imageDigest: policy.imageDigest,
+			},
+			operations: await this.readExecutionOperationAttempts(input),
+		};
 	}
 
 	async close(): Promise<void> {

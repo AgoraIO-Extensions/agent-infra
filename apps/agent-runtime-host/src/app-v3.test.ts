@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	createRuntimeControlObserverV1,
 	createRuntimeExecutionGrantVerifierV2,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -30,11 +31,15 @@ afterEach(async () => {
 			.map((path) => rm(path, { recursive: true, force: true })),
 	);
 });
-async function setup(logDiagnostic?: (entry: Record<string, string>) => void) {
+async function setup(
+	logDiagnostic?: (entry: Record<string, string>) => void,
+	controlObserver?: ReturnType<typeof createRuntimeControlObserverV1>,
+) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-http-v3-"));
 	directories.push(directory);
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
 	const host = await RuntimeHost.open({
+		...(controlObserver ? { controlObserver } : {}),
 		driver,
 		store: await FileRuntimeStore.open(join(directory, "host.json")),
 		grantValidation: {
@@ -322,5 +327,77 @@ describe("Runtime V3 authenticated HTTP", () => {
 			code: "RUNTIME_GRANT_INVALID",
 		});
 		expect(await driver.sideEffectCount()).toBe(0);
+	});
+});
+
+describe("Runtime V3 stop observation (#4358 I2)", () => {
+	it("timestamps the stop handler entry and records an unverifiable stop without identifiers", async () => {
+		const lines: string[] = [];
+		const { app } = await setup(
+			() => {},
+			createRuntimeControlObserverV1({
+				output: {
+					write(line) {
+						lines.push(line.trimEnd());
+						return true;
+					},
+				},
+			}),
+		);
+		const fixture = submitV3Fixture();
+		const accepted = await app.request(
+			"/internal/runtime/v3/turns",
+			post(signV3Fixture(fixture, "turn.submit")),
+		);
+		const { hostSessionRef } = (await accepted.json()) as {
+			hostSessionRef: string;
+		};
+		const { input: _input, ...base } = fixture;
+		const stop = signV3Fixture(
+			{
+				...base,
+				hostSessionRef,
+				operation: {
+					kind: "stop",
+					id: "stop-http",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+			},
+			"turn.stop",
+		);
+		const [header, payload] = stop.grant.token.split(".");
+		const forged = {
+			...stop,
+			grant: { ...stop.grant, token: `${header}.${payload}.AAAA` },
+		};
+		const denied = await app.request(
+			"/internal/runtime/v3/stops",
+			post(forged),
+		);
+		expect(denied.ok).toBe(false);
+		const stopped = await app.request("/internal/runtime/v3/stops", post(stop));
+		expect(stopped.status).toBe(200);
+		const records = lines.map((line) => JSON.parse(line));
+		expect(records[0]).toMatchObject({
+			stage: "control_received",
+			outcome: "rejected",
+			monoSequence: 1,
+		});
+		expect(records[0].executionId).toBeUndefined();
+		expect(records[0].stopRequestId).toBeUndefined();
+		expect(records.slice(1).map((record) => record.stage)).toEqual([
+			"control_received",
+			"control_validated",
+			"latch_commit_confirmed",
+		]);
+		expect(records[1]).toMatchObject({
+			stopRequestId: "stop-http",
+			elapsedMonoMs: 0,
+		});
+		expect(Date.parse(records[1].observedAtUtc)).toBeLessThanOrEqual(
+			Date.parse(records[2].observedAtUtc),
+		);
+		expect(lines.join("\n")).not.toContain(stop.grant.token);
 	});
 });

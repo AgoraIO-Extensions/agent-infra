@@ -26,6 +26,11 @@ import {
 	type RuntimeExecutionAuthority,
 	validStoredExecutionAuthority,
 } from "./runtime-authorization.js";
+import {
+	createRuntimeControlObserverV1,
+	projectRuntimeControlEvidenceV1,
+	type RuntimeControlObserverV1,
+} from "./runtime-control-observation.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 const directories: string[] = [];
@@ -43,7 +48,10 @@ afterEach(async () => {
 	);
 });
 async function setup(
-	options: { afterOperationPrepared?: () => void | Promise<void> } = {},
+	options: {
+		afterOperationPrepared?: () => void | Promise<void>;
+		controlObserver?: RuntimeControlObserverV1;
+	} = {},
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-v3-"));
 	directories.push(directory);
@@ -3013,4 +3021,228 @@ it("checks a separately authorized installation against current original facts w
 	).toThrow();
 	await env.host.close();
 	await env.store.close();
+});
+
+describe("stop control observation (#4358 I2)", () => {
+	function captured(write: (line: string) => boolean = () => true) {
+		const lines: string[] = [];
+		const observer = createRuntimeControlObserverV1({
+			output: {
+				write(line) {
+					lines.push(line.trimEnd());
+					return write(line);
+				},
+			},
+			podUid: "0f4a7c52-9b3e-4d1a-8c7f-2e6b5a4d3c21",
+		});
+		return { lines, observer, records: () => lines.map((l) => JSON.parse(l)) };
+	}
+	function stopRequest(
+		hostSessionRef: string,
+		operation: Partial<{
+			id: string;
+			deliveryFence: number;
+			executionDeliveryFence: number;
+		}> = {},
+		options: Parameters<typeof signV3Fixture>[2] = {},
+	) {
+		return signV3Fixture(
+			{
+				...base(hostSessionRef),
+				operation: {
+					kind: "stop",
+					id: "stop-observed",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+					...operation,
+				},
+			},
+			"turn.stop",
+			options,
+		);
+	}
+
+	it("observes received, validated and latch stages, then reads the original result on a repeated stop", async () => {
+		const out = captured();
+		const env = await setup({ controlObserver: out.observer });
+		try {
+			const accepted = await submit(env.host);
+			const stop = stopRequest(accepted.hostSessionRef);
+			const first = await env.host.stopV3(
+				stop,
+				verifyRuntimeV2Fixture(stop.grant),
+			);
+			const repeated = await env.host.stopV3(
+				stop,
+				verifyRuntimeV2Fixture(stop.grant),
+			);
+			expect(repeated.result).toEqual(first.result);
+			const records = out.records();
+			expect(records.map((r) => r.stage)).toEqual([
+				"control_received",
+				"control_validated",
+				"latch_commit_confirmed",
+				"control_received",
+				"control_validated",
+				"original_result_read",
+			]);
+			expect(records[0]).toMatchObject({
+				outcome: "observed",
+				executionId: "execution-fixture",
+				stopRequestId: "stop-observed",
+				controlFence: 1,
+				executionDeliveryFence: 1,
+				controlPurpose: "business",
+				authorizationRecordId: "authorization-fixture",
+				elapsedMonoMs: 0,
+			});
+			expect(records.map((r) => r.monoSequence)).toEqual([1, 2, 3, 4, 5, 6]);
+			expect(new Set(records.map((r) => r.clockId)).size).toBe(1);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("binds a revocation stop to its control record and reason", async () => {
+		const out = captured();
+		const env = await setup({ controlObserver: out.observer });
+		try {
+			const accepted = await submit(env.host);
+			const stop = stopRequest(
+				accepted.hostSessionRef,
+				{},
+				{ purpose: "control" },
+			);
+			await env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant));
+			const received = out.records()[0];
+			expect(received).toMatchObject({
+				stage: "control_received",
+				controlPurpose: "control",
+				controlRecordId: "control-fixture",
+				controlReason: "authorization_revoked",
+			});
+			expect(received.authorizationRecordId).toBeUndefined();
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("keeps the stop result unchanged when stdout throws or refuses writes", async () => {
+		const reference = await setup();
+		const failing = await setup({
+			controlObserver: createRuntimeControlObserverV1({
+				output: {
+					write() {
+						throw new Error("synthetic EPIPE");
+					},
+				},
+			}),
+		});
+		const refusing = captured(() => false);
+		const pressured = await setup({ controlObserver: refusing.observer });
+		try {
+			const results = [];
+			for (const env of [reference, failing, pressured]) {
+				const accepted = await submit(env.host);
+				const stop = stopRequest(accepted.hostSessionRef);
+				results.push(
+					await env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant)),
+				);
+			}
+			const comparable = results.map(
+				({ hostSessionRef: _ref, ...rest }) => rest,
+			);
+			expect(comparable[1]).toEqual(comparable[0]);
+			expect(comparable[2]).toEqual(comparable[0]);
+			// Backpressure kept only the first record; the reader cannot prove it.
+			expect(refusing.lines).toHaveLength(1);
+			expect(
+				projectRuntimeControlEvidenceV1(refusing.lines).timelines[0]?.status,
+			).toBe("unproven");
+		} finally {
+			await Promise.all(
+				[reference, failing, pressured].map((env) => env.host.close()),
+			);
+		}
+	});
+
+	it("records a forged, foreign or stale stop only as a fixed rejection", async () => {
+		const out = captured();
+		const env = await setup({ controlObserver: out.observer });
+		try {
+			const accepted = await submit(env.host);
+			const foreign = stopRequest(
+				accepted.hostSessionRef,
+				{ id: "stop-foreign" },
+				{ claims: { executionId: "execution-other" } },
+			);
+			await expect(
+				env.host.stopV3(foreign, verifyRuntimeV2Fixture(foreign.grant)),
+			).rejects.toThrow();
+			const otherAgent = stopRequest(
+				accepted.hostSessionRef,
+				{ id: "stop-agent" },
+				{ claims: { agentId: "agent-other" } },
+			);
+			await expect(
+				env.host.stopV3(otherAgent, verifyRuntimeV2Fixture(otherAgent.grant)),
+			).rejects.toThrow();
+			const stale = stopRequest(accepted.hostSessionRef, {
+				id: "stop-stale",
+				executionDeliveryFence: 2,
+			});
+			await expect(
+				env.host.stopV3(stale, verifyRuntimeV2Fixture(stale.grant)),
+			).rejects.toThrow();
+			const records = out.records();
+			const unbound = records.filter(
+				(r) => r.stage === "control_received" && r.outcome === "rejected",
+			);
+			expect(unbound).toHaveLength(2);
+			for (const record of unbound) {
+				expect(record.reason).toBe("authorization_denied");
+				expect(record.executionId).toBeUndefined();
+				expect(record.stopRequestId).toBeUndefined();
+			}
+			expect(JSON.stringify(records)).not.toContain("execution-other");
+			expect(JSON.stringify(records)).not.toContain("agent-other");
+			expect(
+				records.find(
+					(r) => r.stopRequestId === "stop-stale" && r.outcome === "rejected",
+				),
+			).toMatchObject({
+				stage: "control_validated",
+				reason: "authorization_denied",
+			});
+			// A fence lost between validation and the durable latch is a latch rejection.
+			vi.spyOn(env.store, "prepareOperation").mockRejectedValueOnce(
+				new RuntimeHostError(
+					"RUNTIME_FENCE_STALE",
+					"Runtime delivery fence is stale",
+					409,
+				),
+			);
+			const raced = stopRequest(accepted.hostSessionRef, { id: "stop-raced" });
+			await expect(
+				env.host.stopV3(raced, verifyRuntimeV2Fixture(raced.grant)),
+			).rejects.toThrow();
+			expect(out.records().at(-1)).toMatchObject({
+				stage: "latch_commit_confirmed",
+				outcome: "rejected",
+				reason: "stale_fence",
+				stopRequestId: "stop-raced",
+			});
+			expect(
+				projectRuntimeControlEvidenceV1(out.lines).timelines.map((t) => [
+					t.stopRequestId,
+					t.status,
+				]),
+			).toEqual([
+				["stop-stale", "rejected"],
+				["stop-raced", "rejected"],
+			]);
+		} finally {
+			await env.host.close();
+		}
+	});
 });
