@@ -470,22 +470,29 @@ for (const name of ["fetch", "WebSocket", "EventSource"]) {
 // WATCH_REPORT_DEPENDENCIES is read by Node's own module loader and is never set.
 const visible = [...${JSON.stringify(workerNetworkEnvironment)}, "WATCH_REPORT_DEPENDENCIES"];
 const environment = { ...process.env };
+// Any read of another variable, and any write, delete or redefinition, cannot be
+// reproduced by the parent's final merge. It is remembered so a module that catches
+// the error still cannot pass.
+let violated = false;
+const deny = () => { violated = true; throw new Error("ENVIRONMENT_UNVERIFIABLE"); };
+const known = (key) => typeof key !== "string" || visible.includes(key);
 Object.defineProperty(process, "env", {
 	value: new Proxy(environment, {
-		get(target, key) {
-			if (typeof key === "string" && !visible.includes(key)) throw new Error("ENVIRONMENT_UNVERIFIABLE");
-			return target[key];
-		},
-		has(target, key) {
-			if (typeof key === "string" && !visible.includes(key)) throw new Error("ENVIRONMENT_UNVERIFIABLE");
-			return key in target;
-		},
-		ownKeys() { throw new Error("ENVIRONMENT_UNVERIFIABLE"); },
+		get: (target, key) => (known(key) ? target[key] : deny()),
+		has: (target, key) => (known(key) ? key in target : deny()),
+		getOwnPropertyDescriptor: (target, key) =>
+			known(key) ? Reflect.getOwnPropertyDescriptor(target, key) : deny(),
+		ownKeys: deny,
+		set: deny,
+		defineProperty: deny,
+		deleteProperty: deny,
+		setPrototypeOf: deny,
 	}),
 	writable: false,
 	configurable: false,
 });
 const module = await import(${JSON.stringify(pathToFileURL(file).href)});
+if (violated) process.exit(4);
 const policy = module.workloadInput?.policy;
 if (!policy || typeof policy !== "object") process.exit(3);
 const egress = {};

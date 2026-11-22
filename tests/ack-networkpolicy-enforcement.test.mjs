@@ -1536,6 +1536,15 @@ test("the module is evaluated with the Worker's rendered network environment (R3
 		"process.env.HOME",
 		"process.env.SECRET_TOKEN",
 		"Object.keys(process.env)",
+		// Reflective reads, and writes/deletes/redefinitions (even if the module
+		// catches the error), cannot be reproduced by the final merge (#4385 round 4).
+		'Object.getOwnPropertyDescriptor(process.env, "PLATFORM_WORKER_WECOM_ENABLED")?.value',
+		'Reflect.get(process.env, "PLATFORM_WORKER_WECOM_ENABLED")',
+		'(process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT = "3005")',
+		"(delete process.env.PLATFORM_WORKER_NAMESPACE)",
+		'Object.defineProperty(process.env, "PLATFORM_WORKER_NAMESPACE", { value: "x" })',
+		'(() => { try { process.env.PLATFORM_WORKER_NAMESPACE = "x"; } catch {} })()',
+		"(() => { try { return process.env.HOME; } catch {} })()",
 	]) {
 		const inputs = await workerConfigurationInputs(
 			directory,
