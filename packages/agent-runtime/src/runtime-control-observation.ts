@@ -312,38 +312,103 @@ function interruptTargetsComplete(
 	);
 }
 
+const controlBindingCommonV1 = RuntimeControlBindingV1Schema.omit({
+	controlPurpose: true,
+	controlRecordId: true,
+	controlReason: true,
+	authorizationRecordId: true,
+}).shape;
+
 /**
- * #4360 round 3: a stage name alone is not proof (Spec §18.5.3). Receipt,
- * validation, the durable latch and the original terminal must be actually
- * observed, and the terminal must carry the original finite status, event
- * reference and time. An interrupt write or ACK may instead be `not_required`
- * only for a natural terminal, and only the ACK may be `not_applicable` (a
- * protocol without an interrupt response). Every record needs its control's
- * elapsed monotonic time.
+ * #4360 round 4, reader only: the complete original control binding a
+ * timeline needs before it can be signed (Spec §18.5.1/§18.5.3). Every scope,
+ * generation and fence field is required; a control-purpose Stop carries its
+ * control record and reason, a business Stop its authorization record, and
+ * neither may carry the other's fields.
+ */
+const RuntimeControlCompleteBindingV1Schema = z.discriminatedUnion(
+	"controlPurpose",
+	[
+		z.strictObject({
+			...controlBindingCommonV1,
+			controlPurpose: z.literal("control"),
+			controlRecordId: ref,
+			controlReason: RuntimeControlBindingV1Schema.shape.controlReason.unwrap(),
+		}),
+		z.strictObject({
+			...controlBindingCommonV1,
+			controlPurpose: z.literal("business"),
+			authorizationRecordId: ref,
+		}),
+	],
+);
+
+function hasCompleteBinding(record: RuntimeControlEvidenceV1) {
+	return RuntimeControlCompleteBindingV1Schema.safeParse(
+		Object.fromEntries(
+			controlBindingKeysV1
+				.filter((name) => record[name] !== undefined)
+				.map((name) => [name, record[name]]),
+		),
+	).success;
+}
+
+/**
+ * #4360 rounds 3 and 4: a timeline is signed only from a positive whitelist
+ * (Spec §18.5.3); a stage name alone is not proof. Each record needs the
+ * complete original binding, its control's elapsed monotonic time, no RPC
+ * error code, an outcome and reason its stage allows, and exactly its
+ * stage's result fields:
+ * - receipt, validation, the durable latch and a replayed read are observed;
+ * - the original terminal is observed, at most for a natural terminal, and
+ *   carries the finite status, event reference and time;
+ * - an interrupt write or ACK is observed, or `not_required` for a natural
+ *   terminal; only the ACK may be `not_applicable` (a protocol without an
+ *   interrupt response). Both carry their target index and count.
+ * Anything else leaves the timeline unproven.
  */
 function provesStage(record: RuntimeControlEvidenceV1) {
-	if (record.elapsedMonoMs === undefined) return false;
+	if (
+		record.elapsedMonoMs === undefined ||
+		record.rpcCode !== undefined ||
+		!hasCompleteBinding(record)
+	)
+		return false;
+	const interrupt =
+		record.stage === "interrupt_write_accepted" ||
+		record.stage === "native_interrupt_ack";
+	const terminal = record.stage === "terminal_commit_confirmed";
+	const interruptFields = [record.interruptTarget, record.interruptTargets];
+	const terminalFields = [
+		record.terminalStatus,
+		record.terminalRef,
+		record.terminalOccurredAtUtc,
+	];
+	if (
+		!interruptFields.every((field) => (field !== undefined) === interrupt) ||
+		!terminalFields.every((field) => (field !== undefined) === terminal)
+	)
+		return false;
+	const observed = record.outcome === "observed";
+	const natural = record.reason === "natural_terminal";
 	switch (record.stage) {
 		case "control_received":
 		case "control_validated":
 		case "latch_commit_confirmed":
 		case "original_result_read":
-			return record.outcome === "observed";
+			return observed && record.reason === undefined;
 		case "terminal_commit_confirmed":
-			return (
-				record.outcome === "observed" &&
-				record.terminalStatus !== undefined &&
-				record.terminalRef !== undefined &&
-				record.terminalOccurredAtUtc !== undefined
-			);
+			return observed && (record.reason === undefined || natural);
 		case "interrupt_write_accepted":
+			return (
+				(observed && record.reason === undefined) ||
+				(record.outcome === "not_required" && natural)
+			);
 		case "native_interrupt_ack":
 			return (
-				record.outcome === "observed" ||
-				(record.outcome === "not_required" &&
-					record.reason === "natural_terminal") ||
-				(record.outcome === "not_applicable" &&
-					record.stage === "native_interrupt_ack")
+				(observed && record.reason === undefined) ||
+				(record.outcome === "not_required" && natural) ||
+				(record.outcome === "not_applicable" && record.reason === undefined)
 			);
 	}
 }

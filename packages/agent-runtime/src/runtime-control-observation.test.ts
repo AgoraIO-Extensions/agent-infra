@@ -4,6 +4,7 @@ import {
 	createRuntimeControlObserverV1,
 	projectRuntimeControlEvidenceV1,
 	type RuntimeControlBindingV1,
+	RuntimeControlOutcomeV1Schema,
 	runtimeControlRejectionReasonV1,
 } from "./runtime-control-observation.js";
 
@@ -546,5 +547,131 @@ describe("Runtime control observation (#4358 I2)", () => {
 		// Every stage observed, but the terminal carries no original result.
 		expect(project("observed", false)).toBe("unproven");
 		expect(project("observed", true)).toBe("complete");
+	});
+
+	it("signs a timeline only from a strict positive whitelist (#4360 round 4)", () => {
+		const {
+			controlRecordId: _record,
+			controlReason: _reason,
+			...common
+		} = binding;
+		const businessBinding: RuntimeControlBindingV1 = {
+			...common,
+			controlPurpose: "business",
+			authorizationRecordId: "authorization-a",
+		};
+		// One complete timeline: target 0 interrupted, target 1 finished first.
+		const completeLines = (value: RuntimeControlBindingV1) => {
+			const out = sink();
+			const observer = observerFor(out.output);
+			const mark = observer.mark();
+			observer.emit({
+				stage: "control_received",
+				outcome: "observed",
+				binding: value,
+				mark,
+				atMark: true,
+			});
+			for (const stage of [
+				"control_validated",
+				"latch_commit_confirmed",
+			] as const)
+				observer.emit({ stage, outcome: "observed", binding: value, mark });
+			for (const stage of [
+				"interrupt_write_accepted",
+				"native_interrupt_ack",
+			] as const)
+				observer.emit({
+					stage,
+					outcome: "observed",
+					binding: value,
+					mark,
+					interrupt: { target: 0, targets: 2 },
+				});
+			observer.emit({
+				stage: "terminal_commit_confirmed",
+				outcome: "observed",
+				binding: value,
+				mark,
+				terminal: {
+					status: "cancelled",
+					ref: "codex-cursor-11",
+					occurredAt: "2026-11-21T21:00:00.050Z",
+				},
+			});
+			for (const stage of [
+				"interrupt_write_accepted",
+				"native_interrupt_ack",
+			] as const)
+				observer.emit({
+					stage,
+					outcome: "not_required",
+					reason: "natural_terminal",
+					binding: value,
+					mark,
+					interrupt: { target: 1, targets: 2 },
+				});
+			return out.lines.map(
+				(line) => JSON.parse(line) as Record<string, unknown>,
+			);
+		};
+		const statuses = (records: ReadonlyArray<Record<string, unknown>>) =>
+			projectRuntimeControlEvidenceV1(
+				records.map((record) => JSON.stringify(record)),
+			).timelines.map((timeline) => timeline.status);
+		const allowed: Record<string, readonly string[]> = {
+			control_received: ["observed"],
+			control_validated: ["observed"],
+			latch_commit_confirmed: ["observed"],
+			terminal_commit_confirmed: ["observed"],
+			interrupt_write_accepted: ["observed", "not_required"],
+			native_interrupt_ack: ["observed", "not_required", "not_applicable"],
+		};
+		for (const value of [binding, businessBinding]) {
+			const records = completeLines(value);
+			expect(statuses(records)).toEqual(["complete"]);
+			const unproven = (result: readonly string[]) =>
+				result.every((status) => status === "unproven");
+			// Remove a field from the whole timeline: no stage proves it any more.
+			for (const field of new Set(records.flatMap(Object.keys)))
+				if (field !== "podUid")
+					expect(
+						unproven(
+							statuses(records.map(({ [field]: _removed, ...rest }) => rest)),
+						),
+						`timeline without ${field}`,
+					).toBe(true);
+			records.forEach((record, index) => {
+				const replaced = (next: Record<string, unknown>) =>
+					records.map((item, position) => (position === index ? next : item));
+				// The Pod UID is an optional clock-domain hint, not proof.
+				for (const field of Object.keys(record).filter(
+					(name) => name !== "podUid",
+				)) {
+					const { [field]: _removed, ...rest } = record;
+					const result = statuses(replaced(rest));
+					expect(
+						result.length > 0 && unproven(result),
+						`${record.stage} without ${field}`,
+					).toBe(true);
+				}
+				// A rejection keeps its own fixed class; it is never complete.
+				for (const outcome of RuntimeControlOutcomeV1Schema.options.filter(
+					(option) => !allowed[record.stage as string]?.includes(option),
+				))
+					expect(
+						statuses(replaced({ ...record, outcome })),
+						`${record.stage} as ${outcome}`,
+					).toEqual([outcome === "rejected" ? "rejected" : "unproven"]);
+			});
+			// Another purpose's authority fields never complete a binding.
+			const foreign =
+				value.controlPurpose === "control"
+					? { authorizationRecordId: "authorization-a" }
+					: { controlRecordId: "control-a", controlReason: "stop" };
+			expect(
+				statuses(records.map((record) => ({ ...record, ...foreign }))),
+			).toEqual(["unproven"]);
+		}
 	});
 });
