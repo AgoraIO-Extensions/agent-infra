@@ -4030,6 +4030,37 @@ function isNativeMetadataOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #4358 publishes the original subject's read of one Runtime isolation
+// observation and its fixed projection as an additive Browser v2 contract. The
+// reviewed path and schema are pinned and stripped so the addition composes with
+// earlier reviewed additions; any other difference still fails the comparison.
+const runtimeEvidenceReadPathV1 =
+	"/api/v2/conversations/{conversationId}/executions/{executionId}/runtime-evidence/{evidenceRef}";
+const runtimeEvidenceReadSchemaV1 =
+	"RuntimeIsolationEvidencePrincipalProjectionV1";
+function normalizeRuntimeEvidenceReadOpenApiAddition(previous, current) {
+	if (
+		previous.paths?.[runtimeEvidenceReadPathV1] !== undefined ||
+		previous.components?.schemas?.[runtimeEvidenceReadSchemaV1] !== undefined
+	)
+		return current;
+	const addition = {
+		path: current.paths?.[runtimeEvidenceReadPathV1],
+		schema: current.components?.schemas?.[runtimeEvidenceReadSchemaV1],
+	};
+	if (addition.path === undefined && addition.schema === undefined)
+		return current;
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"7f5784e0c2fb02858cf3048d3719ea5aba7b9c781db0cda3d6410b24116ddc69"
+	)
+		return current;
+	const normalized = structuredClone(current);
+	delete normalized.paths[runtimeEvidenceReadPathV1];
+	delete normalized.components.schemas[runtimeEvidenceReadSchemaV1];
+	return normalized;
+}
+
 // #2562 publishes the existing native capability admission route and its
 // bounded request/receipt schemas as an additive Browser v2 contract.
 function isNativeCapabilityInvocationOpenApiAddition(previous, current) {
@@ -7983,6 +8014,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 		current = normalizeConversationTaskStatusOpenApiAddition(previous, current);
 		current = normalizeReasoningEventOpenApiAddition(previous, current);
 		current = normalizeSandboxResultFileOpenApiAddition(previous, current);
+		current = normalizeRuntimeEvidenceReadOpenApiAddition(previous, current);
 		if (!hasSelectedBrowserSideEffectEventOpenApiOption(previous)) {
 			const sideEffectNormalized =
 				stripBrowserSideEffectOpenApiAdditions(current);

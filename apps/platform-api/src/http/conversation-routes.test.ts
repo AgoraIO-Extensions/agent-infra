@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	ConversationDetailProjectionV1Schema,
@@ -8,6 +10,7 @@ import {
 	ExecutionDetailProjectionV1Schema,
 	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
+	runtimeEvidenceOpenApiPathsV1,
 } from "@agent-infra/contracts/pilot";
 import { ConversationExecutionError } from "@agent-infra/platform-core";
 import { ConversationEventWakeHubV1 } from "@agent-infra/platform-store";
@@ -3441,6 +3444,52 @@ describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
 		const response = await testApp(input).app.request(evidencePath);
 		expect(response.status).toBe(404);
 		expect(input.query.getExecution).toHaveBeenCalledTimes(2);
+	});
+
+	it("matches its published HTTP operation (Spec §6.4, §8.1)", async () => {
+		const honoPath =
+			"/api/v2/conversations/:conversationId/executions/:executionId/runtime-evidence/:evidenceRef";
+		const openApiPath = honoPath.replace(/:([A-Za-z]+)/g, "{$1}");
+		const operation =
+			runtimeEvidenceOpenApiPathsV1[
+				openApiPath as keyof typeof runtimeEvidenceOpenApiPathsV1
+			]?.get;
+		expect(operation?.operationId).toBe("readConversationRuntimeEvidenceV1");
+		expect(operation?.security).toEqual([{ PlatformSession: [] }]);
+		expect(
+			Object.keys(operation?.requestParams.path.shape ?? {}).sort(),
+		).toEqual(["conversationId", "evidenceRef", "executionId"]);
+		const ok = await testApp(
+			dependencies({ runtimeEvidence: evidence() }),
+		).app.request(evidencePath);
+		expect(ok.status).toBe(200);
+		expect(
+			operation?.responses["200"].content["application/json"].schema.safeParse(
+				await ok.json(),
+			).success,
+		).toBe(true);
+		for (const status of ["401", "404", "503"])
+			expect(operation?.responses).toHaveProperty(status);
+		// The published Browser v2 document carries the same operation.
+		const published = JSON.parse(
+			await readFile(
+				createRequire(import.meta.url).resolve(
+					"@agent-infra/contracts/openapi/pilot-browser.v2",
+				),
+				"utf8",
+			),
+		);
+		expect(published.paths[openApiPath]?.get).toMatchObject({
+			operationId: "readConversationRuntimeEvidenceV1",
+			security: [{ PlatformSession: [] }],
+		});
+		expect(
+			published.paths[openApiPath].get.responses["200"].content[
+				"application/json"
+			].schema,
+		).toEqual({
+			$ref: "#/components/schemas/RuntimeIsolationEvidencePrincipalProjectionV1",
+		});
 	});
 
 	describe("persistent API access audit (Spec §18.5.1 不改写业务, §18.3)", () => {

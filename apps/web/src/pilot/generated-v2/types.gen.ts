@@ -2642,6 +2642,39 @@ export type RuntimeConnectionAssociationV1 = {
     verification: 'unverified';
 };
 
+export type RuntimeIsolationEvidencePrincipalProjectionV1 = {
+    actionClass: 'open' | 'read' | 'write' | 'stat' | 'list' | 'signal' | 'model_request';
+    clockId: string;
+    code: 'RUNTIME_ISOLATION_EVIDENCE_V1';
+    conversationId: string;
+    durationMonoMs?: number;
+    evidenceRef: string;
+    executionId: string;
+    failureClass?: 'permission_denied' | 'not_found' | 'policy_denied' | 'io_unavailable' | 'unsupported' | 'unknown';
+    kind: 'isolation_observation';
+    modelContext?: {
+        foreignMarkerAbsent: boolean;
+        observationComplete: boolean;
+        selfMarkerPresent: boolean;
+    };
+    nativeObserved: boolean;
+    observedAt: string;
+    resourceClass: 'file' | 'env' | 'proc' | 'workspace' | 'memory_file' | 'model_context';
+    resultClass: 'allowed' | 'denied' | 'unproven' | 'isolation_violation';
+    scenario: {
+        id: string;
+        version: number;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    syntheticFile?: {
+        byteLength: number;
+        sha256: string;
+    };
+    targetScope: 'self' | 'foreign';
+    windowRef: string;
+};
+
 export type RuntimeOperationFactV2 = {
     attemptRef: string;
     durationMs?: number;
@@ -7723,6 +7756,47 @@ export type ReadConversationNativeMetadataV1Responses = {
 };
 
 export type ReadConversationNativeMetadataV1Response = ReadConversationNativeMetadataV1Responses[keyof ReadConversationNativeMetadataV1Responses];
+
+export type ReadConversationRuntimeEvidenceV1Data = {
+    body?: never;
+    path: {
+        conversationId: string;
+        executionId: string;
+        evidenceRef: string;
+    };
+    query?: never;
+    url: '/api/v2/conversations/{conversationId}/executions/{executionId}/runtime-evidence/{evidenceRef}';
+};
+
+export type ReadConversationRuntimeEvidenceV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Evidence is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Evidence or its required audit is unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadConversationRuntimeEvidenceV1Error = ReadConversationRuntimeEvidenceV1Errors[keyof ReadConversationRuntimeEvidenceV1Errors];
+
+export type ReadConversationRuntimeEvidenceV1Responses = {
+    /**
+     * The original subject's projection of the isolation observation
+     */
+    200: RuntimeIsolationEvidencePrincipalProjectionV1;
+};
+
+export type ReadConversationRuntimeEvidenceV1Response = ReadConversationRuntimeEvidenceV1Responses[keyof ReadConversationRuntimeEvidenceV1Responses];
 
 export type InvokeNativeCapabilityV1Data = {
     body: NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2 | NativeCapabilityInvocationRequestV3;
