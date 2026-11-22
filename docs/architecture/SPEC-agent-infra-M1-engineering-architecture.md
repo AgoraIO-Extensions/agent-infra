@@ -2892,11 +2892,19 @@ attach-mode 内存访问及 `pidfd_getfd`：
 `session-executor` 的绑定。Session 级 `container-boundary` 的 scope 是可打印的
 `agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
 `apps/platform-worker/src/session-workload-adapter.ts` 写入）；Agent 级路径的 scope 只有
-`agentId`。Host 不能靠字符串形态区分二者，所以每次读取受保护材料前，要求该 scope 逐字等于
-原执行的 `agentId:sessionId`，`session-executor` 则要求绑定的 Agent、Session 与 generation
+`agentId`。进程级判定只接受 Session 级 scope：scope 以本 Pod 自己的 `agentId:`（来自
+`AGENT_INFRA_RUNTIME_AGENT_ID`）开头且其后非空，或 `session-executor` 的绑定；Agent 级
+scope 恒不满足。每次读取受保护材料前，另要求该 scope 逐字等于原执行的
+`agentId:sessionId`，`session-executor` 则要求绑定的 Agent、Session 与 generation
 等于原执行。Agent 级 scope、没有 attestation，或普通 env（例如
 `AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。非 Codex 模板
 （例如 Claude）目前没有这类 attestation，因此同样只能满足第 1 项。
+
+安装供应 initializer 没有 service token，无法验证 attestation，所以不属于上述 Session 级
+scope。它只在 Worker 为 Session Sandbox 创建的 init container 中运行（[§13.5.6](#1356-标准-oauth-安装供应)），
+先于 Pod 内任何工具进程，其 PID namespace 内没有同 UID 的不受信进程；它因此只通过进程级判定，
+放置依据是该 Pod 由 Worker 只为一个 Session 创建，而不是 scope 验证。它不读取原 Execution 的
+材料，不通过上一段的逐次 Session 比较。
 
 第 2 项不保护同一 Pod 内的其他同 UID 进程。`container-boundary` 下同一 Session 的工具进程
 对 app-server 的暴露，由 [§10.14](#1014-标准模板-session-sandbox-原生工具) 的限定例外统一
