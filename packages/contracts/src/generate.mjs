@@ -129,6 +129,7 @@ import {
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimeOperationResponseV5Schema,
+	RuntimeOriginalAdmissionCheckV1SchemaDefinitions,
 	RuntimeReplayRequestV1Schema,
 	RuntimeRestoreExecutionKeyResponseV4Schema,
 	RuntimeRestoreExecutionKeyResponseV5Schema,
@@ -315,6 +316,10 @@ const artifactPaths = {
 		artifactRoot,
 		"json-schema/runtime-native-metadata.v1.schema.json",
 	),
+	runtimeOriginalAdmissionCheckJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/runtime-original-admission-check.v1.schema.json",
+	),
 	runtimeJsonSchemaV2: resolve(
 		artifactRoot,
 		"json-schema/runtime.v2.schema.json",
@@ -483,6 +488,11 @@ function buildArtifacts() {
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-native-metadata.v1.schema.json",
 		title: "Agent Infra Native Metadata Contracts V1",
 		definitions: RuntimeNativeMetadataV1SchemaDefinitions,
+	});
+	const runtimeOriginalAdmissionCheckJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-original-admission-check.v1.schema.json",
+		title: "Agent Infra Original Admission Check Contracts V1",
+		definitions: RuntimeOriginalAdmissionCheckV1SchemaDefinitions,
 	});
 	const runtimeOpenapi = createDocument({
 		openapi: "3.1.0",
@@ -1255,6 +1265,7 @@ function buildArtifacts() {
 		runtimeOpenapiV6,
 		runtimeJsonSchema,
 		runtimeNativeMetadataJsonSchema,
+		runtimeOriginalAdmissionCheckJsonSchema,
 		runtimeJsonSchemaV2,
 		runtimeConfigurationJsonSchemaV3: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-configuration.v3.schema.json",

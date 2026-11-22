@@ -1,0 +1,453 @@
+{
+  "$defs": {
+    "RuntimeOriginalAdmissionCheckProofClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "const": "runtime_host.original_admission_check",
+          "type": "string"
+        },
+        "challenge": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "checkId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "issuer": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "keyVersion": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "platform": {
+          "additionalProperties": false,
+          "properties": {
+            "resourceFence": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sessionGeneration",
+            "resourceFence"
+          ],
+          "type": "object"
+        },
+        "purpose": {
+          "const": "original_admission_check",
+          "type": "string"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRecordId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionDeliveryFence": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "originalOperationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "podUid": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "principal",
+            "agentId",
+            "conversationId",
+            "executionId",
+            "originalOperationId",
+            "authorizationRecordId",
+            "sessionGeneration",
+            "executionDeliveryFence",
+            "podUid"
+          ],
+          "type": "object"
+        },
+        "workerId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "checkId",
+        "challenge",
+        "issuedAt",
+        "expiresAt",
+        "scope",
+        "platform",
+        "purpose",
+        "audience",
+        "issuer",
+        "workerId",
+        "keyVersion",
+        "requestDigest"
+      ],
+      "type": "object"
+    },
+    "RuntimeOriginalAdmissionCheckRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "challenge": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "checkId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "platform": {
+          "additionalProperties": false,
+          "properties": {
+            "resourceFence": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sessionGeneration",
+            "resourceFence"
+          ],
+          "type": "object"
+        },
+        "proof": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "original-admission-check-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRecordId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionDeliveryFence": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "originalOperationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "podUid": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "principal",
+            "agentId",
+            "conversationId",
+            "executionId",
+            "originalOperationId",
+            "authorizationRecordId",
+            "sessionGeneration",
+            "executionDeliveryFence",
+            "podUid"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "checkId",
+        "challenge",
+        "issuedAt",
+        "expiresAt",
+        "scope",
+        "platform",
+        "proof"
+      ],
+      "type": "object"
+    },
+    "RuntimeOriginalAdmissionCheckResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "challenge": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "checkId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "checkedAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "checkedSurface": {
+          "const": "original_call_admission_predicate",
+          "type": "string"
+        },
+        "clockId": {
+          "pattern": "^[A-Za-z0-9_-]{22}$",
+          "type": "string"
+        },
+        "current": {
+          "additionalProperties": false,
+          "properties": {
+            "hostBarrier": {
+              "enum": [
+                "none",
+                "active",
+                "confirmed",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "hostExecutionFence": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "platformResourceFence": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "platformSessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "platformSessionGeneration",
+            "platformResourceFence",
+            "hostBarrier",
+            "hostExecutionFence"
+          ],
+          "type": "object"
+        },
+        "decision": {
+          "enum": [
+            "admissible",
+            "denied",
+            "unproven"
+          ],
+          "type": "string"
+        },
+        "dispatchAttempted": {
+          "const": false,
+          "type": "boolean"
+        },
+        "original": {
+          "additionalProperties": false,
+          "properties": {
+            "executionDeliveryFence": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "sessionGeneration",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "reason": {
+          "enum": [
+            "stale_generation",
+            "stale_fence",
+            "expired",
+            "revoked",
+            "scope_mismatch",
+            "original_binding_unavailable",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "checkId",
+        "challenge",
+        "decision",
+        "checkedSurface",
+        "original",
+        "current",
+        "checkedAt",
+        "clockId",
+        "dispatchAttempted"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-original-admission-check.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Original Admission Check Contracts V1"
+}

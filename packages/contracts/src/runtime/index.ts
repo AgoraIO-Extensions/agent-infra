@@ -31,6 +31,7 @@ export * from "./legacy-migration-v1.ts";
 export * from "./native-capability.ts";
 export * from "./native-metadata-v1.ts";
 export * from "./native-metadata-v2.ts";
+export * from "./original-admission-check-v1.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
 export * from "./saved-key-candidates.ts";
