@@ -1797,7 +1797,19 @@ allowlist 隐藏该目录中的 tool；新增或未知的原生 tool 必须沿�
   不继承宿主环境、代理变量或任意 `AGENT_INFRA_*` 变量；不挂载凭证类 Secret 或凭证文件，并在启动
   前关闭非必要的继承 FD。仅排除已知变量名不构成证明：部署须用负向验收证明上述凭证不能经环境、
   `/proc`、挂载文件或继承的 FD 读取。某模板做不到时，只关闭受影响的工具并记录缺口（fail closed），
-  不关闭其余原生工具。
+  不关闭其余原生工具。唯一例外见下条。
+- **`container-boundary` 限定例外（M1）。** 只适用于 Codex `container-boundary`、同一 Session、
+  本次执行。该模式下 app-server 与同 Session 的原生工具进程同 UID、同容器运行，工具进程能经
+  `/proc/<pid>/environ` 读到本次执行的模型 loopback token，也能经 `/proc/<pid>/fd` 重开
+  app-server 的 Driver 协议管道，伪造本次执行的 `item/tool/call` 与原生事件。两条路径都是
+  READ mode，Yama 与 non-dumpable 都拦不住。M1 接受这一暴露，不因此关闭 shell 与文件编辑等
+  原生工具。例外不扩大：不适用于其他 Session、Agent 或模板，也不适用于 Relay Key、Connection、
+  MCP 与 Browser token、平台服务凭证和 Runtime Host 内的 OAuth 材料，这些仍按上一条验收。
+  根治（token 代理或分离 UID）在 M1 之后，见
+  [#4381](https://github.com/AgoraIO-Extensions/agent-infra/issues/4381)；用户决定见
+  [#4199 评论 7078202782](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199#issuecomment-7078202782)，
+  取舍记录见 [ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。
+  #4381 完成后删除本例外。
 - **原生命令子进程后端。** 在固定非 root、只读根文件系统、移除全部 capabilities 与
   `no-new-privileges` 的部署中，上游 namespace 沙箱不可用时，不放宽部署权限。平台可以使用固定版本
   原生 shell 入口接入可信 TypeScript launcher，由 launcher 在每个命令子进程执行前安装完整 ABI V5
@@ -2855,11 +2867,51 @@ trace、dump 与诊断不能把秘密输出给模型或持久记录。关闭或�
 
 初始受保护 Host profile 限 Linux：真实非 root UID、无有效/许可/继承/ambient capabilities、
 `no_new_privs`、原有无 inspector/loader/dump 的进程准入，以及对 native/tool 子进程落实的
-文件边界须同时有效。另须从可信内核读取 Yama `ptrace_scope=2` 或 `3`，以阻止同 UID
-进程的 attach-mode 内存访问及 `pidfd_getfd`；proc FD/link/fdinfo 读取与重开另由真实
-文件边界限制，不能以 Yama 数值代替。最终镜像须分别验证 `ptrace`、`process_vm_readv`、
-`/proc/*/mem`、`pidfd_getfd`、`/proc/*/fd`、`fdinfo` 重开与继承攻击实际被拒绝。缺失、不可核实或
-策略变化时，先封闭该能力且不读取/领取新 token；原控制与只读恢复仍沿原执行可用。
+文件边界须同时有效。另须满足下列内存访问保护之一，以阻止同 UID 进程对凭据持有进程的
+attach-mode 内存访问及 `pidfd_getfd`：
+
+1. 从可信内核读取 Yama `ptrace_scope=2` 或 `3`。
+2. 凭据持有进程（Runtime Host 与 [§13.5.6](#1356-标准-oauth-安装供应) 的安装供应
+   initializer）在读取任何受保护材料、创建任何子进程之前以 `PR_SET_DUMPABLE=0` 设为
+   non-dumpable，并在每次读取受保护材料前回读确认仍为 non-dumpable。同时须满足：从可信
+   内核读取的 `fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程由 Pod 直接启动，不运行
+   在由工具 UID 创建的 user namespace 中。
+
+第 2 项的前提按下列方式核实，任一项无法核实即视为不成立：
+
+- 不在工具 UID 创建的 user namespace 中：比对 `/proc/self/uid_map` 与初始映射，或用
+  `NS_GET_OWNER_UID` 确认 user namespace 属主不是本进程的 UID。
+- 每次读取前回读 non-dumpable 时，同时确认 `/proc/self/fd` 的属主为 uid 0。
+- Pod 不与其他容器共享 PID namespace（没有 `shareProcessNamespace`）。这与“设置早于任何
+  不受信同 UID 进程出现”一起，保证 Host 设置完成时没有已持有其内存或 FD 的外部进程。
+
+第 2 项只保护设置了它的凭据持有进程本身，因此只在该进程所在 Pod 只属于一个 Session 时
+适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）。“只属于一个 Session”只能
+建立在 Worker 签发、Host 已验证的 scope 上：Codex `container-boundary` 的 HMAC attestation
+（`apps/agent-runtime-host/src/configuration.ts` 的 `readCodexIsolationMode`），或
+`session-executor` 的绑定。Session 级 `container-boundary` 的 scope 是可打印的
+`agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
+`apps/platform-worker/src/session-workload-adapter.ts` 写入）；Agent 级路径的 scope 只有
+`agentId`。Host 不能靠字符串形态区分二者，所以每次读取受保护材料前，要求该 scope 逐字等于
+原执行的 `agentId:sessionId`，`session-executor` 则要求绑定的 Agent、Session 与 generation
+等于原执行。Agent 级 scope、没有 attestation，或普通 env（例如
+`AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。非 Codex 模板
+（例如 Claude）目前没有这类 attestation，因此同样只能满足第 1 项。
+
+第 2 项不保护同一 Pod 内的其他同 UID 进程。`container-boundary` 下同一 Session 的工具进程
+对 app-server 的暴露，由 [§10.14](#1014-标准模板-session-sandbox-原生工具) 的限定例外统一
+规定，这里不重复；它与内核是否有 Yama 无关，选第 2 项也不改变它。Relay Key、Connection
+token、service token 与 Host 内的 OAuth 材料仍受 non-dumpable 保护。取舍与等价性依据见
+[ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。
+
+独立 executor 的工具启动隔离不适用第 2 项，仍按
+[§11.2.1](#1121-codex-session-独立-executor提案) 要求 Yama。
+
+proc FD/link/fdinfo 读取与重开另由真实文件边界限制，不能以 Yama 数值或 dumpable 状态代替。
+最终镜像须在目标放置上分别验证 `ptrace`（ATTACH 与 SEIZE）、`process_vm_readv`、
+`/proc/*/mem`、`pidfd_getfd`、`/proc/*/fd`、`fdinfo` 重开、经 unprivileged user namespace
+的同类尝试与继承攻击实际被拒绝。两项都不成立（第 2 项的任一前提缺失即不成立）、不可核实
+或策略变化时，先封闭该能力且不读取/领取新 token；原控制与只读恢复仍沿原执行可用。
 Runtime 不修改节点 sysctl、不提升权限、不接受 env 的保护声明，不回退另一 OS/profile。
 
 **执行与确认。** 每次工具请求严格复用原 Driver/Host 的 journal、fence、事务/游标和

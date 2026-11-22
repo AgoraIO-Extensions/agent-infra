@@ -39,8 +39,9 @@ token，并把实际发送与结果交付留在已有持久层可等待的边界
 
 初始 Linux profile 的内存准入采用实际内核
 [Yama ptrace_scope](https://www.kernel.org/doc/html/latest/admin-guide/LSM/Yama.html)
-限制及无特权进程约束，具体条件只由工程 Spec 定义。Host 不更改节点政策；数值或文件权限
-不足以签收保护，最终工具读取、FD、诊断与故障负例必须实际通过。
+限制，或凭据持有进程 non-dumpable（[ADR-0051](0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)），
+并配合无特权进程约束，具体条件只由工程 Spec 定义。Host 不更改节点政策；数值、dumpable 状态
+或文件权限不足以签收保护，最终工具读取、FD、诊断与故障负例必须实际通过。
 
 本路径不声明 Codex 原生 MCP 或全部 built-in 通过
 [ADR 0011](0011-require-codex-native-operation-barrier.md) 的 native barrier；
