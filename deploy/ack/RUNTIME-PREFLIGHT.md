@@ -154,48 +154,47 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
 （经 ReplicaSet 时连同 ReplicaSet）和原 NetworkPolicy。它不创建探针，也不写集群。
 任一输入缺失或不符都以退出码 2 失败，stderr 只输出固定原因码，不输出凭据或对象正文。
 
+探针何时重跑、其余部署做哪些静态检查、残余风险，只在工程 Spec 该条维护，本节只写文件字段与拒绝条件。
+本节描述目标门禁；`networkpolicy-enforcement.mjs` 的实现 PR 合入前，脚本仍按旧规则要求 Poseidon 配置回读
+和 `targets` 等于全部控制器，因此不能用本节的证据格式通过现有脚本。
+
 | 环境变量 | 内容 |
 | --- | --- |
 | `ACK_NETWORKPOLICY_EVIDENCE_FILE` | 已批准的执行证据，`kind: agent-infra-networkpolicy-enforcement-evidence` |
-| `ACK_NETWORKPOLICY_ENFORCER_CONFIG_FILE` | 部署 owner 或集群管理员回读的 Poseidon 配置，`kind: ack-poseidon-config-readback` |
 | `ACK_RENDERED_MANIFEST_FILE` | 本次 `helm template` 结果；`preflight.sh` 与 `template-preflight` 自动传入 |
 
-配置回读文件字段：`schemaVersion: 1`、`kind`、`clusterId`、`component: poseidon`、`version`、
-`eciNetworkPolicyEnabled`、`readAt`。证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
+证据文件字段（时间都用 UTC `Date#toISOString()` 格式）：
 
 - `cluster`：`kubeSystemNamespaceUid` 与 `clusterId`；`namespace`：`name` 与 `uid`。
-- `enforcer`：`runtime: eci`、`component: poseidon`、`version` 和配置回读文件字节的
-  `configSha256`。
+- `enforcer`：`runtime: eci`、`component: poseidon`、`version: "unobservable"`（托管侧不可见，
+  没有配置回读，也没有 `configSha256`）。
 - `placement`：`architecture` 与 `legacyUnplaced`，必须等于渲染结果中 Worker 容器的
   `AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT`（即 values `agentWorkloadScheduling`，见
   [Worker 部署说明](../platform-worker/README.md#agent-级-workload-placement)）。Worker 拒绝配置
   模块自带 placement，所以这一项绑定的就是 Worker 实际注入的值。
 - `nodes`：已证执行的 ECI 虚拟节点 `name` 与 `uid`。
-- `targets`：冻结的 Agent 级 StatefulSet、Deployment 与迁移 Job（`kind`、`name`、`uid`），
-  包括停止的副本。
 - `probes`：每个可落节点至少一组探针（目标 Pod 运行在该节点上）。`destination` 记录目标 Pod 的 `pod`、`uid`、`nodeName`、`port` 与其
   控制器 `controller`（`kind`、`name`、`uid`）；`policy` 记录原 NetworkPolicy 的 `name`、`uid`
   和 `specSha256`（`networkPolicySpecSha256V1`，即 spec 规范化 JSON 的 SHA-256）。按顺序记录
   `allow`（Worker 来源连通）、`deny`（施加临时 deny-all 后不通，含该策略 `policyUid`）、
-  `recovery`（恢复后连通），另记 `nonWorker`（非 Worker 来源在原策略下不通）。目标 Pod 与原
-  策略在预检时必须仍存在且未变；临时 deny-all 在恢复后可以已删除。
+  `recovery`（恢复后连通），另记 `nonWorker`（非 Worker 来源在原策略下不通）。探针目标
+  Pod、临时 deny-all 与探针来源在探针结束后按 UID 删除；预检不要求它们仍存在，也不要求
+  `probes` 覆盖现场全部 Agent 级控制器。
 - `observedAt` 与 `expiresAt`：有效期不超过 7 天。
 
 以下情况都拒绝发布：
 
-- 执行组件不是 ECI 上的 Poseidon（包括 ECS 的 flannel），配置回读缺失、字节与摘要不符、
-  不可解析、来自其他集群或 `eciNetworkPolicyEnabled` 不是 `true`。
-- 证据或配置回读超过 7 天、已过期或时间在未来；cluster、namespace 名称或 UID 与现场不符。
+- 执行组件不是 ECI 上的 Poseidon（包括 ECS 的 flannel），或证据的 `enforcer` 字段不符。
+- 证据超过 7 天、已过期或时间在未来；cluster、namespace 名称或 UID 与现场不符。
 - 按 placement 的 selector 与 toleration 可落的节点中，有节点不在证据里、UID 变化、缺少
   `virtual-kubelet.io/provider=alibabacloud:NoSchedule` 污点，证据节点已不存在，或没有可落节点。
 - 探针缺少 allow 或 recovery 的连通结果（只有 timeout 不算），deny 后仍连通，非 Worker
   来源可达，探针目标不在可落节点上，或时间顺序不对；任一可落节点没有自己的探针结果。
-- 探针目标 Pod 不存在、UID 变化（重建）、不在同一 namespace 或节点、未在运行、控制器不符，
-  或没有声明该 TCP 端口；原策略不存在、UID 或有效 spec 变化，或不再选中该 Pod。
+- 探针记录的 Pod 与控制器不在同一 namespace 或节点，或没有声明该 TCP 端口；探针记录的原策略
+  有效 spec 摘要，与 Worker 将为 Agent 级 Workload 渲染的 NetworkPolicy 有效 spec 摘要不一致
+  （同一 `networkPolicySpecSha256V1`）。
 - 渲染结果缺少 Worker 的 placement env、取值不合法，或与证据的 `architecture`、`legacyUnplaced`
   不一致；渲染结果不可解析或 Worker Deployment 不唯一。
-- 现场 Agent 级 StatefulSet、Deployment、Job 集合与 `targets` 不一致（漏列一个服务或 Job，
-  或对象已重建）。
 - 现场控制器带非部署注入的调度字段（包括没有 Worker 记录
   `agent-infra.agora.io/agent-workload-placement` 的 ECI 字段）；控制器记录的架构不是证据的
   架构（其可落节点未被证明）；`legacyUnplaced: reject` 时仍有未采用 placement 的运行中
@@ -213,7 +212,8 @@ Node、带 `agent-infra.agora.io/agent` 标签的 StatefulSet/Deployment/Job，�
 `false`：预检只证明发布前提，不代签部署后的现场正负矩阵。
 
 证据由部署 owner 在获批窗口内用已评审的探针包产生，并由非实现 lane 复核。缺少当期证据时
-预检直接失败，不在生产自动补造探针。
+预检直接失败，不在生产自动补造探针。探针包在产生证据后删除其创建的全部对象（按 UID），
+并回读确认。
 
 ## 验收顺序
 
