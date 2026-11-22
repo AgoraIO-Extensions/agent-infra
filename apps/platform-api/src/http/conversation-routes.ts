@@ -1771,27 +1771,32 @@ export function registerConversationRoutes(
 					await audit({ ...common, outcome: "rejected" });
 					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 				};
+				const readable = async () => {
+					await effectiveConversation(
+						dependencies.commands(identity),
+						conversationId,
+						metadata.traceId,
+					);
+					return query(
+						() =>
+							dependencies.query.getExecution(
+								scope(identity),
+								conversationId,
+								executionId,
+							),
+						metadata.traceId,
+					);
+				};
+				const failedOutcome = (error: unknown) =>
+					error instanceof HttpProtocolError &&
+					error.body.code !== "DEPENDENCY_UNAVAILABLE"
+						? ("rejected" as const)
+						: ("failed" as const);
 				let record: RuntimePersistedSafetyEvidenceV1 | undefined;
 				let projection: ReturnType<
 					typeof projectIsolationEvidenceForPrincipalV1
 				>;
 				try {
-					const readable = async () => {
-						await effectiveConversation(
-							dependencies.commands(identity),
-							conversationId,
-							metadata.traceId,
-						);
-						return query(
-							() =>
-								dependencies.query.getExecution(
-									scope(identity),
-									conversationId,
-									executionId,
-								),
-							metadata.traceId,
-						);
-					};
 					if (
 						!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(evidenceRef) ||
 						!(await readable())
@@ -1814,14 +1819,7 @@ export function registerConversationRoutes(
 					);
 				} catch (error) {
 					if (!audited)
-						await audit({
-							...common,
-							outcome:
-								error instanceof HttpProtocolError &&
-								error.body.code !== "DEPENDENCY_UNAVAILABLE"
-									? "rejected"
-									: "failed",
-						});
+						await audit({ ...common, outcome: failedOutcome(error) });
 					throw error;
 				}
 				await audit({
@@ -1834,6 +1832,17 @@ export function registerConversationRoutes(
 						executionId: record.binding.executionId,
 					},
 				});
+				// The audit write is the last I/O before the answer, so the permission is confirmed
+				// once more (§18.5.1 读取). A revocation that landed meanwhile answers like an
+				// invisible record and is recorded as a second, rejected entry.
+				let stillReadable: unknown;
+				try {
+					stillReadable = await readable();
+				} catch (error) {
+					await audit({ ...common, outcome: failedOutcome(error) });
+					throw error;
+				}
+				if (!stillReadable) return await reject();
 				return context.json(projection);
 			}),
 	);
