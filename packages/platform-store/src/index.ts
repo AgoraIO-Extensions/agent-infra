@@ -234,6 +234,10 @@ export {
 } from "./query-observability.js";
 export { PostgresRelayKeyVersionStoreV1 } from "./relay-key-versions.ts";
 export {
+	PostgresRuntimeSafetyEvidenceStoreV1,
+	runtimeSafetyEvidenceDigestV1,
+} from "./runtime-safety-evidence.js";
+export {
 	PostgresScopedPlatformAuditQueryV1,
 	type ScopedPlatformAuditDisplayNamesV1,
 	type ScopedPlatformAuditNamedPageV1,

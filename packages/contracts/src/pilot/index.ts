@@ -29,6 +29,7 @@ export * from "./operations-resource.ts";
 export * from "./operations-task.ts";
 export * from "./personal-api-credentials.ts";
 export * from "./personal-relay-key.ts";
+export * from "./runtime-evidence.ts";
 export * from "./skill-hub-agent-binding.ts";
 export * from "./skill-hub-import.ts";
 export * from "./skill-hub-installation.ts";

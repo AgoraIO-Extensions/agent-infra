@@ -9,7 +9,10 @@ import {
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
-import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	connectionConsumerProfileFingerprintV1,
+	connectionSystemAccessFingerprintV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	BrowserCapabilityDeclarationV1,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
@@ -59,6 +62,7 @@ import type {
 	V1Pod,
 	V1Secret,
 	V1Service,
+	V1ServicePort,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
@@ -9618,3 +9622,236 @@ it.each([false, true])(
 		).toBe(true);
 	},
 );
+
+describe("Session Service install listener port (#4199)", () => {
+	const installConfiguration = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "approved-egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/connection/callback",
+	};
+	const install = {
+		port: 9443,
+		workerOrigin: "https://install-worker.workload-test.svc:9444/",
+		apiSelector: { component: "platform-api" },
+		clientName: "Agent platform",
+		configuration: installConfiguration,
+		approval: {
+			schemaVersion: 1 as const,
+			configFingerprint:
+				connectionSystemAccessFingerprintV1(installConfiguration),
+			egressEnforced: true as const,
+			source: { ref: "approval", revision: "r1" },
+		},
+		callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+		workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+		tlsSecretForSandbox: () => ({
+			name: "session-tls",
+			certKey: "tls.crt",
+			keyKey: "tls.key",
+		}),
+	};
+	async function routed(
+		ports: (runtimePort: number) => V1ServicePort[],
+		options: { installEnabled: boolean; fence?: string; replaceUid?: boolean },
+	) {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "key",
+			privateKey: keys.privateKey,
+		};
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				runtimeAuth: {
+					workerId: signing.workerId,
+					grantIssuer: signing.issuer,
+					grantKeyId: signing.keyId,
+					grantPublicKey: keys.publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					serviceTokenSecret: { name: "transport", key: "token" },
+				},
+			},
+		});
+		await f.tick(8);
+		const ready = f.state;
+		if (ready?.phase !== "ready") throw Error("Expected ready fixture");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.candidate.deployment,
+		);
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId: "00000000-0000-4000-8000-00000000000c",
+			sessionId: "conversation-install",
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-a" },
+			channelId: "web",
+			generation: 1,
+			resourceName: "sandbox-00000000-0000-4000-8000-00000000000c",
+			workspaceScope: "00000000-0000-4000-8000-00000000000c",
+		};
+		const labels = { ...sessionSandboxLabelsV1(sandbox) };
+		const live = await f.client.create<V1Service>({
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: {
+				name: sandbox.resourceName,
+				namespace: f.options.policy.namespace,
+				labels,
+				annotations: {
+					...sessionSandboxIdentityAnnotationsV1(sandbox),
+					"agent-infra.agora.io/managed": "session-sandbox-v1",
+					"agent-infra.agora.io/fence": options.fence ?? "1",
+				},
+			},
+			spec: {
+				type: "ClusterIP",
+				selector: labels,
+				ports: ports(deployment.service.port),
+			},
+		});
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing,
+			serviceToken: "synthetic-transport",
+			...(options.installEnabled
+				? { connectionInstallBootstrap: install }
+				: {}),
+		});
+		return resolver({
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			sessionGeneration: 1,
+			workload: ready,
+			signal: new AbortController().signal,
+			purpose: "business",
+			command: "session.status",
+			sandboxResource: {
+				sandbox,
+				resourceFence: 1,
+				desiredState: "running",
+				status: "ready",
+				policy: {
+					namespace: f.options.policy.namespace,
+					resourceConfigurationHash: workloadResourceConfigurationHashV1(
+						f.options.policy,
+					),
+					configurationRevision: ready.sourceConfigurationRevision,
+					workloadRevision: ready.sourceLifecycleRevision,
+					managementFence: 1,
+					imageDigest: deployment.imageDigest,
+				},
+				observation: {
+					status: "ready",
+					resources: [
+						{
+							kind: "Service",
+							namespace: f.options.policy.namespace,
+							name: sandbox.resourceName,
+							uid: options.replaceUid
+								? "replaced-service-uid"
+								: (live.metadata?.uid ?? ""),
+							resourceVersion: live.metadata?.resourceVersion ?? "",
+						},
+					],
+				},
+			},
+		});
+	}
+	const runtimeOnly = (port: number) => [
+		{ name: "runtime", port, targetPort: port },
+	];
+	// The exact port the Adapter renders from the deployment install config.
+	const withInstall = (port: number) => [
+		...runtimeOnly(port),
+		{ name: "oauth", port: 9443, targetPort: 9443 },
+	];
+
+	it("routes a business call to a Session whose Service carries the deployed install port", async () => {
+		await expect(
+			routed(withInstall, { installEnabled: true }),
+		).resolves.toMatchObject({
+			baseUrl: expect.stringContaining(
+				"sandbox-00000000-0000-4000-8000-00000000000c",
+			),
+		});
+		// A Session without the install port still routes while the route is on.
+		await expect(
+			routed(runtimeOnly, { installEnabled: true }),
+		).resolves.toMatchObject({ baseUrl: expect.any(String) });
+	});
+
+	it.each([
+		[
+			"an extra undeclared port",
+			(port: number) => [
+				...withInstall(port),
+				{ name: "debug", port: 9229, targetPort: 9229 },
+			],
+		],
+		[
+			"a renamed install port",
+			(port: number) => [
+				...runtimeOnly(port),
+				{ name: "admin", port: 9443, targetPort: 9443 },
+			],
+		],
+		[
+			"another install port number",
+			(port: number) => [
+				...runtimeOnly(port),
+				{ name: "oauth", port: 9444, targetPort: 9444 },
+			],
+		],
+		[
+			"another install targetPort",
+			(port: number) => [
+				...runtimeOnly(port),
+				{ name: "oauth", port: 9443, targetPort: 9090 },
+			],
+		],
+		[
+			"a UDP install port",
+			(port: number) => [
+				...runtimeOnly(port),
+				{ name: "oauth", port: 9443, targetPort: 9443, protocol: "UDP" },
+			],
+		],
+		[
+			"the install port before runtime",
+			(port: number) => [
+				{ name: "oauth", port: 9443, targetPort: 9443 },
+				...runtimeOnly(port),
+			],
+		],
+	] as const)("still rejects %s", async (_name, ports) => {
+		await expect(
+			routed((port) => [...ports(port)], { installEnabled: true }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	});
+
+	it("still rejects an old fence or a replaced Service UID", async () => {
+		for (const options of [
+			{ installEnabled: true, fence: "0" },
+			{ installEnabled: true, replaceUid: true },
+		])
+			await expect(routed(withInstall, options)).rejects.toMatchObject({
+				code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			});
+	});
+
+	it("keeps the single-port contract unchanged while the install route is off", async () => {
+		await expect(
+			routed(runtimeOnly, { installEnabled: false }),
+		).resolves.toMatchObject({ baseUrl: expect.any(String) });
+		await expect(
+			routed(withInstall, { installEnabled: false }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	});
+});

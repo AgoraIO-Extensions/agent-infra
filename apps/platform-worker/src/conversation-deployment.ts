@@ -37,7 +37,12 @@ import {
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
-import type { V1Pod, V1Secret, V1Service } from "@kubernetes/client-node";
+import type {
+	V1Pod,
+	V1Secret,
+	V1Service,
+	V1ServicePort,
+} from "@kubernetes/client-node";
 import {
 	sessionExecutorAttestationSecretKeyV1,
 	sessionExecutorBindingSecretKeyV1,
@@ -127,6 +132,39 @@ export function resolveApprovedConnectionConsumerTargetV1(
 	return approvedConnectionConsumerTarget(profile, approval);
 }
 
+/**
+ * A Session Service routes only its `runtime` port, plus (#4199) the single
+ * install listener port the Adapter renders from deployment configuration
+ * when the install receiver is enabled (Spec §13.5.6). Any other or extra
+ * port, or the install port while the receiver is disabled, is drift.
+ */
+function sessionServicePortsMatchV1(
+	ports: readonly V1ServicePort[] | undefined,
+	runtimePort: number,
+	installPort: number | undefined,
+) {
+	const tcp = (protocol: string | undefined) =>
+		protocol === undefined || protocol === "TCP";
+	const [runtime, install, ...extra] = ports ?? [];
+	if (
+		!runtime ||
+		runtime.name !== "runtime" ||
+		runtime.port !== runtimePort ||
+		runtime.targetPort !== runtimePort ||
+		!tcp(runtime.protocol) ||
+		extra.length > 0
+	)
+		return false;
+	return (
+		install === undefined ||
+		(installPort !== undefined &&
+			install.name === "oauth" &&
+			install.port === installPort &&
+			install.targetPort === installPort &&
+			tcp(install.protocol))
+	);
+}
+
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
@@ -146,6 +184,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		>
 	>;
 	readonly requireConnectionConsumerProfile?: boolean;
+	/**
+	 * #4199: the deployment's install receiver. Eligible Sessions carry its one
+	 * listener port on their Service (Spec §13.5.6), so routing accepts exactly
+	 * that port and the observed allocation renders the same receiver.
+	 */
+	readonly connectionInstallBootstrap?: ConnectionInstallBootstrapDeploymentV1;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
 	const staticProfile = structuredClone(options.connectionConsumerProfile);
@@ -246,12 +290,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		);
 	}
 	const runtime = createWorkloadRuntimeV1(workload);
+	const installPort = options.connectionInstallBootstrap?.port;
 	const allocationFor = createSessionSandboxAllocationResolverV1(workload, {
 		serviceToken,
 		executorDrainStartupTimeoutMs: options.executorDrainStartupTimeoutMs,
+		...(options.connectionInstallBootstrap
+			? { connectionInstallBootstrap: options.connectionInstallBootstrap }
+			: {}),
 	});
 	const sandboxAdapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
+		...(options.connectionInstallBootstrap
+			? { connectionPublicationProofKey: serviceToken }
+			: {}),
 	});
 	const connectionDeliveryConfigured =
 		workload.policy.connectionConsumerSnapshot !== undefined ||
@@ -306,7 +357,6 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				const expectedIdentity = sessionSandboxIdentityAnnotationsV1(
 					controlSource.sandbox,
 				);
-				const port = liveService?.spec?.ports?.[0];
 				if (
 					workload.client.namespace !== service.namespace ||
 					!service.uid ||
@@ -333,11 +383,11 @@ export function createProductionConversationRuntimeResolverV2(options: {
 							liveService.metadata?.annotations?.[key] !== value,
 					) ||
 					liveService.spec?.type !== "ClusterIP" ||
-					liveService.spec.ports?.length !== 1 ||
-					port?.name !== "runtime" ||
-					port.port !== sourceDeployment.service.port ||
-					port.targetPort !== sourceDeployment.service.port ||
-					(port.protocol !== undefined && port.protocol !== "TCP")
+					!sessionServicePortsMatchV1(
+						liveService.spec.ports,
+						sourceDeployment.service.port,
+						installPort,
+					)
 				)
 					throw new Error();
 				return {
@@ -463,7 +513,6 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				const expectedIdentity = sessionSandboxIdentityAnnotationsV1(
 					sandboxResource.sandbox,
 				);
-				const livePort = liveService?.spec?.ports?.[0];
 				if (
 					!service.uid ||
 					liveService?.metadata?.uid !== service.uid ||
@@ -489,11 +538,11 @@ export function createProductionConversationRuntimeResolverV2(options: {
 							liveService.metadata?.annotations?.[key] !== value,
 					) ||
 					liveService.spec?.type !== "ClusterIP" ||
-					liveService.spec.ports?.length !== 1 ||
-					livePort?.name !== "runtime" ||
-					livePort.port !== deployment.service.port ||
-					livePort.targetPort !== deployment.service.port ||
-					(livePort.protocol !== undefined && livePort.protocol !== "TCP") ||
+					!sessionServicePortsMatchV1(
+						liveService.spec.ports,
+						deployment.service.port,
+						installPort,
+					) ||
 					liveService.spec.externalIPs?.length ||
 					liveService.spec.externalName
 				)

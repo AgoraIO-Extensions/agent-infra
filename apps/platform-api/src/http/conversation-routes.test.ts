@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	ConversationDetailProjectionV1Schema,
@@ -8,6 +10,7 @@ import {
 	ExecutionDetailProjectionV1Schema,
 	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
+	runtimeEvidenceOpenApiPathsV1,
 } from "@agent-infra/contracts/pilot";
 import { ConversationExecutionError } from "@agent-infra/platform-core";
 import { ConversationEventWakeHubV1 } from "@agent-infra/platform-store";
@@ -3315,4 +3318,326 @@ it("sends negotiated archive controls without a Runtime cursor after current aut
 		"conversation-1",
 		expect.any(AbortSignal),
 	);
+});
+
+describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
+	const evidencePath =
+		"/api/v2/conversations/conversation-1/executions/execution-1/runtime-evidence/evidence-1";
+	const stored = {
+		schemaVersion: 1,
+		code: "RUNTIME_ISOLATION_EVIDENCE_V1",
+		kind: "isolation_observation",
+		binding: {
+			evidenceId: "evidence-1",
+			scenario: { id: "u1-file", version: 1 },
+			windowRef: "window-1",
+			challengeRef: "challenge-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			operation: { ref: "operation-1", attemptRef: "attempt-1" },
+			principalRef: "principal-1",
+			purposeRef: "purpose-business",
+			sessionGeneration: 1,
+			executionDeliveryFence: 1,
+			sandbox: {
+				ref: "sandbox-1",
+				podUid: "11111111-2222-4333-8444-555555555555",
+				resourceFence: 1,
+			},
+			host: {
+				instanceRef: "host-1",
+				startRef: "start-1",
+				configurationRevision: "config-1",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			producer: { kind: "native_helper", version: "u1-helper-1" },
+			observedAt: "2026-11-22T00:00:00.000Z",
+			clockId: "clock-1",
+			sequence: 1,
+		},
+		resourceClass: "file",
+		actionClass: "write",
+		targetScope: "self",
+		resultClass: "allowed",
+		nativeObserved: true,
+		syntheticFile: { byteLength: 12, sha256: "b".repeat(64) },
+	} as const;
+	const evidence = (record: unknown = stored) => ({
+		read: vi.fn().mockResolvedValue(record),
+		recordReadAudit: vi.fn().mockResolvedValue(undefined),
+	});
+
+	it("returns the subject projection with the fixed results and without technical bindings", async () => {
+		const runtimeEvidence = evidence();
+		const response = await testApp(
+			dependencies({ runtimeEvidence }),
+		).app.request(evidencePath);
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(body).toMatchObject({
+			code: "RUNTIME_ISOLATION_EVIDENCE_V1",
+			evidenceRef: "evidence-1",
+			resultClass: "allowed",
+			nativeObserved: true,
+			syntheticFile: { byteLength: 12, sha256: "b".repeat(64) },
+		});
+		const text = JSON.stringify(body);
+		for (const technical of [
+			"11111111-2222-4333-8444-555555555555",
+			"host-1",
+			"operation-1",
+			"principal-1",
+			"challenge-1",
+		])
+			expect(text).not.toContain(technical);
+		expect(runtimeEvidence.read).toHaveBeenCalledWith({
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			evidenceId: "evidence-1",
+		});
+	});
+
+	it("answers like an invisible record for another subject, a missing record, an invalid reference or a disabled reader", async () => {
+		const denied = dependencies({ runtimeEvidence: evidence() });
+		denied.commands(identity).readConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		const cases = [
+			[denied, evidencePath],
+			[
+				dependencies({
+					runtimeEvidence: {
+						read: vi.fn().mockResolvedValue(undefined),
+						recordReadAudit: vi.fn().mockResolvedValue(undefined),
+					},
+				}),
+				evidencePath,
+			],
+			[
+				dependencies({ runtimeEvidence: evidence() }),
+				evidencePath.replace("evidence-1", "..%2Fetc"),
+			],
+			[dependencies(), evidencePath],
+		] as const;
+		for (const [index, [input, path]] of cases.entries()) {
+			const response = await testApp(input).app.request(path);
+			expect([index, response.status]).toEqual([index, 404]);
+			expect(await response.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+		}
+		expect(denied.runtimeEvidence?.read).not.toHaveBeenCalled();
+	});
+
+	it("re-checks the current read permission after the evidence read and before responding", async () => {
+		const input = dependencies({ runtimeEvidence: evidence() });
+		const visible = await input.query.getExecution(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+			"execution-1",
+		);
+		input.query.getExecution = vi
+			.fn()
+			.mockResolvedValueOnce(visible)
+			.mockResolvedValueOnce(null);
+		const response = await testApp(input).app.request(evidencePath);
+		expect(response.status).toBe(404);
+		expect(input.query.getExecution).toHaveBeenCalledTimes(2);
+	});
+
+	it("matches its published HTTP operation (Spec §6.4, §8.1)", async () => {
+		const honoPath =
+			"/api/v2/conversations/:conversationId/executions/:executionId/runtime-evidence/:evidenceRef";
+		const openApiPath = honoPath.replace(/:([A-Za-z]+)/g, "{$1}");
+		const operation =
+			runtimeEvidenceOpenApiPathsV1[
+				openApiPath as keyof typeof runtimeEvidenceOpenApiPathsV1
+			]?.get;
+		expect(operation?.operationId).toBe("readConversationRuntimeEvidenceV1");
+		expect(operation?.security).toEqual([{ PlatformSession: [] }]);
+		expect(
+			Object.keys(operation?.requestParams.path.shape ?? {}).sort(),
+		).toEqual(["conversationId", "evidenceRef", "executionId"]);
+		const ok = await testApp(
+			dependencies({ runtimeEvidence: evidence() }),
+		).app.request(evidencePath);
+		expect(ok.status).toBe(200);
+		expect(
+			operation?.responses["200"].content["application/json"].schema.safeParse(
+				await ok.json(),
+			).success,
+		).toBe(true);
+		for (const status of ["401", "404", "503"])
+			expect(operation?.responses).toHaveProperty(status);
+		// The published Browser v2 document carries the same operation.
+		const published = JSON.parse(
+			await readFile(
+				createRequire(import.meta.url).resolve(
+					"@agent-infra/contracts/openapi/pilot-browser.v2",
+				),
+				"utf8",
+			),
+		);
+		expect(published.paths[openApiPath]?.get).toMatchObject({
+			operationId: "readConversationRuntimeEvidenceV1",
+			security: [{ PlatformSession: [] }],
+		});
+		expect(
+			published.paths[openApiPath].get.responses["200"].content[
+				"application/json"
+			].schema,
+		).toEqual({
+			$ref: "#/components/schemas/RuntimeIsolationEvidencePrincipalProjectionV1",
+		});
+	});
+
+	describe("persistent API access audit (Spec §18.5.1 不改写业务, §18.3)", () => {
+		const audited = (...record: [unknown?]) => ({
+			read: vi.fn().mockResolvedValue(record.length > 0 ? record[0] : stored),
+			recordReadAudit: vi.fn().mockResolvedValue(undefined),
+		});
+
+		it("records the trusted subject, the confirmed original scope and the result before a 200", async () => {
+			const runtimeEvidence = audited();
+			let auditedBeforeResponse = false;
+			runtimeEvidence.recordReadAudit.mockImplementation(async () => {
+				auditedBeforeResponse = true;
+			});
+			const response = await testApp(
+				dependencies({ runtimeEvidence }),
+			).app.request(evidencePath);
+			expect(response.status).toBe(200);
+			expect(auditedBeforeResponse).toBe(true);
+			expect(runtimeEvidence.recordReadAudit).toHaveBeenCalledTimes(1);
+			const [event] = runtimeEvidence.recordReadAudit.mock.calls[0] ?? [];
+			expect(event).toEqual({
+				action: "runtime_evidence.read",
+				traceId: expect.any(String),
+				requestId: expect.any(String),
+				principal: { kind: "user", id: identity.userId },
+				outcome: "succeeded",
+				target: {
+					evidenceRef: "evidence-1",
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			});
+			// The audit never stores the evidence body, length or hash.
+			const text = JSON.stringify(event);
+			for (const body of ["b".repeat(64), "syntheticFile", "host-1", "allowed"])
+				expect(text).not.toContain(body);
+		});
+
+		it("records every rejection without echoing the caller's references", async () => {
+			const denied = dependencies({ runtimeEvidence: audited() });
+			denied.commands(identity).readConversation = vi
+				.fn()
+				.mockResolvedValue({ outcome: "denied" });
+			const missing = dependencies({ runtimeEvidence: audited(undefined) });
+			const invalid = dependencies({ runtimeEvidence: audited() });
+			const recheck = dependencies({ runtimeEvidence: audited() });
+			const visible = await recheck.query.getExecution(
+				{ actorId: identity.userId, channelId: "web" },
+				"conversation-1",
+				"execution-1",
+			);
+			recheck.query.getExecution = vi
+				.fn()
+				.mockResolvedValueOnce(visible)
+				.mockResolvedValueOnce(null);
+			for (const [index, [input, path]] of (
+				[
+					[denied, evidencePath],
+					[missing, evidencePath],
+					[invalid, evidencePath.replace("evidence-1", "..%2Fetc")],
+					[recheck, evidencePath],
+				] as const
+			).entries()) {
+				const response = await testApp(input).app.request(path);
+				expect([index, response.status]).toEqual([index, 404]);
+				const audit = input.runtimeEvidence?.recordReadAudit as ReturnType<
+					typeof vi.fn
+				>;
+				expect(audit).toHaveBeenCalledTimes(1);
+				const [event] = audit.mock.calls[0] ?? [];
+				expect(event).toEqual({
+					action: "runtime_evidence.read",
+					traceId: expect.any(String),
+					requestId: expect.any(String),
+					principal: { kind: "user", id: identity.userId },
+					outcome: "rejected",
+					target: null,
+					reason: "RESOURCE_UNAVAILABLE",
+				});
+				for (const reference of ["evidence-1", "..", "conversation-1"])
+					expect(JSON.stringify(event)).not.toContain(reference);
+			}
+		});
+
+		it("never answers 200 or a plain 404 when the required audit cannot be saved", async () => {
+			const failing = audited();
+			failing.recordReadAudit.mockRejectedValue(new Error("audit down"));
+			const success = await testApp(
+				dependencies({ runtimeEvidence: failing }),
+			).app.request(evidencePath);
+			expect(success.status).toBe(503);
+			expect(await success.json()).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+			});
+			const missing = audited(undefined);
+			missing.recordReadAudit.mockRejectedValue(new Error("audit down"));
+			const rejection = await testApp(
+				dependencies({ runtimeEvidence: missing }),
+			).app.request(evidencePath);
+			expect(rejection.status).toBe(503);
+		});
+
+		it("re-confirms the read permission after the audit write and before answering", async () => {
+			const runtimeEvidence = audited();
+			const input = dependencies({ runtimeEvidence });
+			const visible = await input.query.getExecution(
+				{ actorId: identity.userId, channelId: "web" },
+				"conversation-1",
+				"execution-1",
+			);
+			// Visible before and after the evidence read; revoked while the audit is written.
+			input.query.getExecution = vi
+				.fn()
+				.mockResolvedValueOnce(visible)
+				.mockResolvedValueOnce(visible)
+				.mockResolvedValueOnce(null);
+			const response = await testApp(input).app.request(evidencePath);
+			expect(response.status).toBe(404);
+			expect(input.query.getExecution).toHaveBeenCalledTimes(3);
+			expect(
+				runtimeEvidence.recordReadAudit.mock.calls.map(([event]) => [
+					event.outcome,
+					event.target === null,
+				]),
+			).toEqual([
+				["succeeded", false],
+				["rejected", true],
+			]);
+		});
+
+		it("records a dependency failure of the evidence read as failed", async () => {
+			const broken = audited();
+			broken.read.mockRejectedValue(new Error("store down"));
+			const response = await testApp(
+				dependencies({ runtimeEvidence: broken }),
+			).app.request(evidencePath);
+			expect(response.status).toBe(503);
+			expect(broken.recordReadAudit).toHaveBeenCalledWith({
+				action: "runtime_evidence.read",
+				traceId: expect.any(String),
+				requestId: expect.any(String),
+				principal: { kind: "user", id: identity.userId },
+				outcome: "failed",
+				target: null,
+				reason: "DEPENDENCY_UNAVAILABLE",
+			});
+		});
+	});
 });

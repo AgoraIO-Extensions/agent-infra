@@ -33,6 +33,7 @@ import type {
 	RuntimeNativeMetadataReadResponseV1OrV2,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
+	RuntimeOriginalAdmissionScopeV1,
 	RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrincipalV1,
 	RuntimeReplayRequestV1,
@@ -2065,6 +2066,22 @@ export class RuntimeHost {
 	/** #4358 I2: the process-wide stop-stage observer, if the deployment wired one. */
 	get controlObserver() {
 		return this.options.controlObserver;
+	}
+	/**
+	 * #4358 I3 (Spec §9.3.2): read the committed admission state of one
+	 * original reference. It never dispatches, binds, renews or recovers, and
+	 * never reaches the Driver.
+	 */
+	checkOriginalAdmissionV1(
+		scope: RuntimeOriginalAdmissionScopeV1,
+		platformSessionGeneration: number,
+	) {
+		if (this.closed) runtimeAuthorizationDenied();
+		return this.options.store.checkOriginalAdmissionV1(
+			scope,
+			platformSessionGeneration,
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
 	}
 	stopV3(
 		value: RuntimeStopRequestV3,

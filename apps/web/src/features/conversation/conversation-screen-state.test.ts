@@ -43,10 +43,42 @@ describe("current conversation execution", () => {
 			);
 		},
 	);
+	it("does not treat a V3 rejection's terminal Runtime event as accepted", () => {
+		const baseline = PersistedConversationEventV1Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		const rejected = PersistedConversationEventV1Schema.parse({
+			...event(1),
+			eventId: "rejected-terminal",
+			conversationCursor: "cursor-after-baseline",
+			executionId: "rejected-native",
+			type: "execution.status",
+			payload: { status: "failed" },
+		});
+		const snapshot = ConversationDetailProjectionV2Schema.parse(
+			history("conversation-1", [baseline, rejected]),
+		);
+		const current = currentExecution(snapshot, snapshot.events);
+		expect(current).toEqual({
+			executionId: "rejected-native",
+			status: "failed",
+		});
+		expect(nativeMetadataExecution(snapshot, snapshot.events, current)).toBe(
+			"execution-1",
+		);
+	});
 	it("keeps an accepted Runtime failure as its own metadata origin", () => {
 		const events = [
 			PersistedConversationEventV1Schema.parse({
 				...event(1),
+				executionId: "accepted-failed",
+				type: "execution.status",
+				payload: { status: "processing" },
+			}),
+			PersistedConversationEventV1Schema.parse({
+				...event(2),
 				executionId: "accepted-failed",
 				type: "execution.status" as const,
 				payload: { status: "failed" as const },
@@ -55,6 +87,36 @@ describe("current conversation execution", () => {
 		expect(
 			nativeMetadataExecution(null, events, currentExecution(null, events)),
 		).toBe("accepted-failed");
+	});
+	it.each(["submitted", "processing", "unknown"] as const)(
+		"does not fall back from a current %s execution",
+		(status) => {
+			const baseline = PersistedConversationEventV1Schema.parse({
+				...event(1),
+				type: "execution.status",
+				payload: { status: "completed" },
+			});
+			expect(
+				nativeMetadataExecution(null, [baseline], {
+					executionId: "current",
+					status,
+				}),
+			).toBe("current");
+		},
+	);
+	it("has no metadata origin when only an unaccepted terminal Runtime failure exists", () => {
+		const rejected = PersistedConversationEventV1Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "failed" },
+		});
+		expect(
+			nativeMetadataExecution(
+				null,
+				[rejected],
+				currentExecution(null, [rejected]),
+			),
+		).toBeUndefined();
 	});
 	it("has no metadata origin for a rejection with no accepted predecessor", () => {
 		const current = { executionId: "rejected", status: "failed" as const };

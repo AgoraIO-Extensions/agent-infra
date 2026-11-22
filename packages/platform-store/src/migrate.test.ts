@@ -2264,6 +2264,7 @@ describe("published Relay authority migration", () => {
 			94,
 			95,
 			96,
+			97,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2393,9 +2394,13 @@ describe("published Relay authority migration", () => {
 			idx: 95,
 			tag: "0095_connection_manual_permit",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 96)).toMatchObject({
 			idx: 96,
 			tag: "0096_connection_principal_pin_rules",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 97,
+			tag: "0097_runtime_safety_evidence",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3158,6 +3163,31 @@ describe("published Relay authority migration", () => {
 			expectedDelta.indexes.push(
 				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_unique",
 				"session_sandbox_executor_promotions:session_sandbox_executor_promotions_pkey",
+			);
+			// 0097: append-only Runtime safety evidence (#4358 I1, Spec §18.5.1).
+			expectedDelta.columns.push(
+				...[
+					"agent_id",
+					"challenge_ref",
+					"code",
+					"conversation_id",
+					"evidence_id",
+					"execution_id",
+					"kind",
+					"record",
+					"record_sha256",
+					"recorded_at",
+				].map((name) => `runtime_safety_evidence:${name}`),
+			);
+			expectedDelta.checks.push(
+				...["code", "digest", "kind", "record_object", "references"].map(
+					(name) => `runtime_safety_evidence:runtime_safety_evidence_${name}`,
+				),
+			);
+			expectedDelta.indexes.push(
+				"runtime_safety_evidence:runtime_safety_evidence_challenge",
+				"runtime_safety_evidence:runtime_safety_evidence_execution",
+				"runtime_safety_evidence:runtime_safety_evidence_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,
