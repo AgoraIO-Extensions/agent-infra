@@ -163,3 +163,83 @@ it("fails a read whose stored record no longer matches its digest", async () => 
 		}),
 	).rejects.toThrow("RUNTIME_SAFETY_EVIDENCE_DIGEST_MISMATCH");
 });
+
+it("persists the necessary read audit with the trusted subject, confirmed scope and result only", async () => {
+	await sql`delete from platform.audit_events where action = 'runtime_evidence.read'`;
+	await store.recordReadAudit({
+		action: "runtime_evidence.read",
+		traceId: "trace-1",
+		requestId: "request-1",
+		principal: { kind: "user", id: "user-1" },
+		outcome: "succeeded",
+		target: {
+			evidenceRef: "evidence-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		},
+	});
+	await store.recordReadAudit({
+		action: "runtime_evidence.read",
+		traceId: "trace-2",
+		requestId: "request-2",
+		principal: { kind: "user", id: "user-2" },
+		outcome: "rejected",
+		target: null,
+		reason: "RESOURCE_UNAVAILABLE",
+	});
+	const rows = await sql<
+		{
+			trace_id: string;
+			request_id: string;
+			actor_type: string;
+			actor_id: string;
+			target_type: string;
+			target_id: string;
+			outcome: string;
+			agent_id: string | null;
+			details: unknown;
+		}[]
+	>`
+		select trace_id, request_id, actor_type, actor_id, target_type, target_id, outcome, agent_id, details
+		from platform.audit_events where action = 'runtime_evidence.read' order by trace_id`;
+	expect(rows).toEqual([
+		{
+			trace_id: "trace-1",
+			request_id: "request-1",
+			actor_type: "user",
+			actor_id: "user-1",
+			target_type: "runtime_evidence",
+			target_id: "evidence-1",
+			outcome: "succeeded",
+			agent_id: "agent-1",
+			details: {
+				schemaVersion: 1,
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+			},
+		},
+		{
+			trace_id: "trace-2",
+			request_id: "request-2",
+			actor_type: "user",
+			actor_id: "user-2",
+			target_type: "runtime_evidence",
+			target_id: "unconfirmed",
+			outcome: "rejected",
+			agent_id: null,
+			details: { schemaVersion: 1, reason: "RESOURCE_UNAVAILABLE" },
+		},
+	]);
+	await expect(
+		store.recordReadAudit({
+			action: "runtime_evidence.read",
+			traceId: "",
+			requestId: "request-3",
+			principal: { kind: "user", id: "user-1" },
+			outcome: "rejected",
+			target: null,
+			reason: "RESOURCE_UNAVAILABLE",
+		}),
+	).rejects.toThrow();
+});

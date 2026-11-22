@@ -304,3 +304,95 @@ export async function ingestRuntimeSafetyEvidenceBatchV1<
 	}
 	return { ackCursor, recorded, duplicates, rejected };
 }
+
+/**
+ * §18.5.1 读取 and §18.3: the necessary persistent audit of one evidence read by the original
+ * subject. The principal is the server-resolved identity; the original scope is recorded only
+ * once it is confirmed (a success). A rejection or failure records a fixed reason and never the
+ * caller's references. The evidence body, its results, length and hash are never audited.
+ */
+export interface RuntimeSafetyEvidenceReadAuditV1 {
+	readonly action: "runtime_evidence.read";
+	readonly traceId: string;
+	readonly requestId: string;
+	readonly principal: {
+		readonly kind: "user" | "application";
+		readonly id: string;
+	};
+	readonly outcome: "succeeded" | "rejected" | "failed";
+	readonly target: {
+		readonly evidenceRef: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+	} | null;
+	readonly reason?: "RESOURCE_UNAVAILABLE" | "DEPENDENCY_UNAVAILABLE";
+}
+
+const nonEmpty = (value: unknown): value is string =>
+	typeof value === "string" && value.length > 0 && value.length <= 256;
+
+export function runtimeSafetyEvidenceReadAuditV1(
+	input:
+		| {
+				readonly traceId: string;
+				readonly requestId: string;
+				readonly principal: RuntimeSafetyEvidenceReadAuditV1["principal"];
+				readonly outcome: "succeeded";
+				readonly target: NonNullable<
+					RuntimeSafetyEvidenceReadAuditV1["target"]
+				>;
+		  }
+		| {
+				readonly traceId: string;
+				readonly requestId: string;
+				readonly principal: RuntimeSafetyEvidenceReadAuditV1["principal"];
+				readonly outcome: "rejected" | "failed";
+		  },
+): RuntimeSafetyEvidenceReadAuditV1 {
+	if (
+		!nonEmpty(input.traceId) ||
+		!nonEmpty(input.requestId) ||
+		(input.principal?.kind !== "user" &&
+			input.principal?.kind !== "application") ||
+		!nonEmpty(input.principal.id)
+	)
+		throw new TypeError("Runtime safety evidence read audit is invalid");
+	const common = {
+		action: "runtime_evidence.read" as const,
+		traceId: input.traceId,
+		requestId: input.requestId,
+		principal: { kind: input.principal.kind, id: input.principal.id },
+	};
+	if (input.outcome !== "succeeded")
+		return {
+			...common,
+			outcome: input.outcome,
+			target: null,
+			reason:
+				input.outcome === "rejected"
+					? "RESOURCE_UNAVAILABLE"
+					: "DEPENDENCY_UNAVAILABLE",
+		};
+	const target = (input as { readonly target?: unknown }).target as
+		| Record<string, unknown>
+		| undefined;
+	if (
+		!target ||
+		!nonEmpty(target.evidenceRef) ||
+		!nonEmpty(target.agentId) ||
+		!nonEmpty(target.conversationId) ||
+		!nonEmpty(target.executionId)
+	)
+		throw new TypeError("Runtime safety evidence read audit is invalid");
+	return {
+		...common,
+		outcome: "succeeded",
+		target: {
+			evidenceRef: target.evidenceRef,
+			agentId: target.agentId,
+			conversationId: target.conversationId,
+			executionId: target.executionId,
+		},
+	};
+}

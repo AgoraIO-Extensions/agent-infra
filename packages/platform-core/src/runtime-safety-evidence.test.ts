@@ -10,6 +10,7 @@ import {
 	type RuntimeSafetyEvidenceScopeV1,
 	RuntimeSafetyEvidenceUnsupportedErrorV1,
 	type RuntimeSafetyEvidenceWindowV1,
+	runtimeSafetyEvidenceReadAuditV1,
 } from "./runtime-safety-evidence.js";
 
 const podUid = "11111111-2222-4333-8444-555555555555";
@@ -456,5 +457,66 @@ describe("evidence log ingestion (Spec §18.5.1 载体与版本)", () => {
 			{ cursor: "c1", reason: "stale_binding" },
 		]);
 		expect(stored.size).toBe(0);
+	});
+});
+
+describe("evidence read audit event (Spec §18.3, §18.5.1)", () => {
+	const base = {
+		traceId: "trace-1",
+		requestId: "request-1",
+		principal: { kind: "user" as const, id: "user-1" },
+	};
+
+	it("records the confirmed original scope only on success", () => {
+		expect(
+			runtimeSafetyEvidenceReadAuditV1({
+				...base,
+				outcome: "succeeded",
+				target: {
+					evidenceRef: "evidence-1",
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			}),
+		).toEqual({
+			action: "runtime_evidence.read",
+			...base,
+			outcome: "succeeded",
+			target: {
+				evidenceRef: "evidence-1",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+			},
+		});
+		expect(
+			runtimeSafetyEvidenceReadAuditV1({ ...base, outcome: "rejected" }),
+		).toEqual({
+			action: "runtime_evidence.read",
+			...base,
+			outcome: "rejected",
+			target: null,
+			reason: "RESOURCE_UNAVAILABLE",
+		});
+		expect(
+			runtimeSafetyEvidenceReadAuditV1({ ...base, outcome: "failed" }),
+		).toMatchObject({ target: null, reason: "DEPENDENCY_UNAVAILABLE" });
+	});
+
+	it("refuses a success without a confirmed target and an untrusted principal", () => {
+		expect(() =>
+			runtimeSafetyEvidenceReadAuditV1({
+				...base,
+				outcome: "succeeded",
+			} as never),
+		).toThrow(TypeError);
+		expect(() =>
+			runtimeSafetyEvidenceReadAuditV1({
+				...base,
+				principal: { kind: "owner", id: "user-1" } as never,
+				outcome: "rejected",
+			}),
+		).toThrow(TypeError);
 	});
 });

@@ -3362,6 +3362,7 @@ describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
 	} as const;
 	const evidence = (record: unknown = stored) => ({
 		read: vi.fn().mockResolvedValue(record),
+		recordReadAudit: vi.fn().mockResolvedValue(undefined),
 	});
 
 	it("returns the subject projection with the fixed results and without technical bindings", async () => {
@@ -3403,7 +3404,10 @@ describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
 			[denied, evidencePath],
 			[
 				dependencies({
-					runtimeEvidence: { read: vi.fn().mockResolvedValue(undefined) },
+					runtimeEvidence: {
+						read: vi.fn().mockResolvedValue(undefined),
+						recordReadAudit: vi.fn().mockResolvedValue(undefined),
+					},
 				}),
 				evidencePath,
 			],
@@ -3437,5 +3441,126 @@ describe("Runtime safety evidence read (Spec §18.5.1, #4358 I1)", () => {
 		const response = await testApp(input).app.request(evidencePath);
 		expect(response.status).toBe(404);
 		expect(input.query.getExecution).toHaveBeenCalledTimes(2);
+	});
+
+	describe("persistent API access audit (Spec §18.5.1 不改写业务, §18.3)", () => {
+		const audited = (...record: [unknown?]) => ({
+			read: vi.fn().mockResolvedValue(record.length > 0 ? record[0] : stored),
+			recordReadAudit: vi.fn().mockResolvedValue(undefined),
+		});
+
+		it("records the trusted subject, the confirmed original scope and the result before a 200", async () => {
+			const runtimeEvidence = audited();
+			let auditedBeforeResponse = false;
+			runtimeEvidence.recordReadAudit.mockImplementation(async () => {
+				auditedBeforeResponse = true;
+			});
+			const response = await testApp(
+				dependencies({ runtimeEvidence }),
+			).app.request(evidencePath);
+			expect(response.status).toBe(200);
+			expect(auditedBeforeResponse).toBe(true);
+			expect(runtimeEvidence.recordReadAudit).toHaveBeenCalledTimes(1);
+			const [event] = runtimeEvidence.recordReadAudit.mock.calls[0] ?? [];
+			expect(event).toEqual({
+				action: "runtime_evidence.read",
+				traceId: expect.any(String),
+				requestId: expect.any(String),
+				principal: { kind: "user", id: identity.userId },
+				outcome: "succeeded",
+				target: {
+					evidenceRef: "evidence-1",
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+					executionId: "execution-1",
+				},
+			});
+			// The audit never stores the evidence body, length or hash.
+			const text = JSON.stringify(event);
+			for (const body of ["b".repeat(64), "syntheticFile", "host-1", "allowed"])
+				expect(text).not.toContain(body);
+		});
+
+		it("records every rejection without echoing the caller's references", async () => {
+			const denied = dependencies({ runtimeEvidence: audited() });
+			denied.commands(identity).readConversation = vi
+				.fn()
+				.mockResolvedValue({ outcome: "denied" });
+			const missing = dependencies({ runtimeEvidence: audited(undefined) });
+			const invalid = dependencies({ runtimeEvidence: audited() });
+			const recheck = dependencies({ runtimeEvidence: audited() });
+			const visible = await recheck.query.getExecution(
+				{ actorId: identity.userId, channelId: "web" },
+				"conversation-1",
+				"execution-1",
+			);
+			recheck.query.getExecution = vi
+				.fn()
+				.mockResolvedValueOnce(visible)
+				.mockResolvedValueOnce(null);
+			for (const [index, [input, path]] of (
+				[
+					[denied, evidencePath],
+					[missing, evidencePath],
+					[invalid, evidencePath.replace("evidence-1", "..%2Fetc")],
+					[recheck, evidencePath],
+				] as const
+			).entries()) {
+				const response = await testApp(input).app.request(path);
+				expect([index, response.status]).toEqual([index, 404]);
+				const audit = input.runtimeEvidence?.recordReadAudit as ReturnType<
+					typeof vi.fn
+				>;
+				expect(audit).toHaveBeenCalledTimes(1);
+				const [event] = audit.mock.calls[0] ?? [];
+				expect(event).toEqual({
+					action: "runtime_evidence.read",
+					traceId: expect.any(String),
+					requestId: expect.any(String),
+					principal: { kind: "user", id: identity.userId },
+					outcome: "rejected",
+					target: null,
+					reason: "RESOURCE_UNAVAILABLE",
+				});
+				for (const reference of ["evidence-1", "..", "conversation-1"])
+					expect(JSON.stringify(event)).not.toContain(reference);
+			}
+		});
+
+		it("never answers 200 or a plain 404 when the required audit cannot be saved", async () => {
+			const failing = audited();
+			failing.recordReadAudit.mockRejectedValue(new Error("audit down"));
+			const success = await testApp(
+				dependencies({ runtimeEvidence: failing }),
+			).app.request(evidencePath);
+			expect(success.status).toBe(503);
+			expect(await success.json()).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+			});
+			const missing = audited(undefined);
+			missing.recordReadAudit.mockRejectedValue(new Error("audit down"));
+			const rejection = await testApp(
+				dependencies({ runtimeEvidence: missing }),
+			).app.request(evidencePath);
+			expect(rejection.status).toBe(503);
+		});
+
+		it("records a dependency failure of the evidence read as failed", async () => {
+			const broken = audited();
+			broken.read.mockRejectedValue(new Error("store down"));
+			const response = await testApp(
+				dependencies({ runtimeEvidence: broken }),
+			).app.request(evidencePath);
+			expect(response.status).toBe(503);
+			expect(broken.recordReadAudit).toHaveBeenCalledWith({
+				action: "runtime_evidence.read",
+				traceId: expect.any(String),
+				requestId: expect.any(String),
+				principal: { kind: "user", id: identity.userId },
+				outcome: "failed",
+				target: null,
+				reason: "DEPENDENCY_UNAVAILABLE",
+			});
+		});
 	});
 });
