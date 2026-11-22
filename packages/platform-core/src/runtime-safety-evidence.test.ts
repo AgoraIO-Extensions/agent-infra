@@ -85,7 +85,12 @@ const scope = (
 	executionDeliveryFence: 3,
 	operations: [{ ref: "operation-1", attemptRef: "attempt-1" }],
 	sandbox: { ref: "sandbox-1", podUid, resourceFence: 4 },
-	host: { instanceRef: "host-1", startRef: "start-1" },
+	host: {
+		instanceRef: "host-1",
+		startRef: "start-1",
+		configurationRevision: "config-1",
+		imageDigest: `sha256:${"a".repeat(64)}`,
+	},
 	revoked: false,
 	...change,
 });
@@ -208,6 +213,20 @@ describe("isolation evidence admission (Spec §18.5.1 共同绑定)", () => {
 			"a restarted Host",
 			(v: Record<string, any>) => {
 				v.binding.host.startRef = "start-2";
+			},
+			"stale_binding",
+		],
+		[
+			"a Host configuration revision the execution was not bound to",
+			(v: Record<string, any>) => {
+				v.binding.host.configurationRevision = "config-2";
+			},
+			"stale_binding",
+		],
+		[
+			"a Host image the execution was not bound to",
+			(v: Record<string, any>) => {
+				v.binding.host.imageDigest = `sha256:${"b".repeat(64)}`;
 			},
 			"stale_binding",
 		],

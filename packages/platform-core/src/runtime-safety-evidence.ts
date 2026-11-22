@@ -47,7 +47,12 @@ export interface RuntimeIsolationEvidenceAdmissibleV1 {
 			readonly resourceFence: number;
 			readonly executorEpoch?: string;
 		};
-		readonly host: { readonly instanceRef: string; readonly startRef: string };
+		readonly host: {
+			readonly instanceRef: string;
+			readonly startRef: string;
+			readonly configurationRevision: string;
+			readonly imageDigest: string;
+		};
 		readonly producer: {
 			readonly kind: "native_helper" | "model_transport";
 			readonly version: string;
@@ -98,7 +103,16 @@ export interface RuntimeSafetyEvidenceScopeV1 {
 		readonly resourceFence: number;
 		readonly executorEpoch?: string;
 	};
-	readonly host: { readonly instanceRef: string; readonly startRef: string };
+	/**
+	 * The Host instance and the configuration and image the execution was originally bound to,
+	 * from its persisted binding; never the Agent's current configuration (§18.5.1 共同绑定).
+	 */
+	readonly host: {
+		readonly instanceRef: string;
+		readonly startRef: string;
+		readonly configurationRevision: string;
+		readonly imageDigest: string;
+	};
 	/** The original subject's current permission for this task has been revoked. */
 	readonly revoked: boolean;
 }
@@ -186,7 +200,8 @@ export function admitIsolationEvidenceV1(input: {
 		)
 	)
 		return reject("scope_mismatch");
-	// A changed Pod UID, epoch, generation or fence means late evidence of an older execution.
+	// A changed Pod UID, epoch, generation, fence, Host configuration or image means late
+	// evidence of an older execution.
 	if (
 		scope.sessionGeneration !== binding.sessionGeneration ||
 		scope.executionDeliveryFence !== binding.executionDeliveryFence ||
@@ -195,7 +210,9 @@ export function admitIsolationEvidenceV1(input: {
 		scope.sandbox.resourceFence !== binding.sandbox.resourceFence ||
 		scope.sandbox.executorEpoch !== binding.sandbox.executorEpoch ||
 		scope.host.instanceRef !== binding.host.instanceRef ||
-		scope.host.startRef !== binding.host.startRef
+		scope.host.startRef !== binding.host.startRef ||
+		scope.host.configurationRevision !== binding.host.configurationRevision ||
+		scope.host.imageDigest !== binding.host.imageDigest
 	)
 		return reject("stale_binding");
 	if (scope.revoked) return reject("revoked");
