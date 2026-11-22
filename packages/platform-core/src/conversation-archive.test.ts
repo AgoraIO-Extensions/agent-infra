@@ -118,3 +118,22 @@ it("records the first positively confirmed ACK as progress even on the initial c
 		deadlineAtMs: 1100,
 	});
 });
+
+it("requires target unavailability to expire an enum-only terminal archive (#4266)", () => {
+	for (const targetUnavailable of [false, true]) {
+		expect(
+			advanceConversationArchiveV1({
+				previous: state,
+				ref: "unchanged",
+				nowMs: 2000,
+				budgetMs: 999999,
+				cursor: null,
+				terminalSourceVerified: false,
+				targetUnavailable,
+			}),
+		).toMatchObject({
+			status: targetUnavailable ? "unavailable" : "pending",
+			deadlineAtMs: 2000,
+		});
+	}
+});
