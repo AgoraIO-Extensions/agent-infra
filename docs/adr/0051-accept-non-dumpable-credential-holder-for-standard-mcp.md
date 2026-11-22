@@ -34,7 +34,8 @@ Host 因此按原规则 fail closed，ECI Session 上的 Connection 安装与调
 第 2 项另有前提：`fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程不运行在由工具
 UID 创建的 user namespace 中；Pod 不共享 PID namespace。核实方法见工程 Spec §13.5.4。
 第 2 项只在 Pod 只属于一个 Session 时适用，该条件必须由 Worker 签发、Host 已验证的 scope
-证明（Codex `container-boundary` 的 HMAC attestation 或 `session-executor` 绑定）。只有
+证明（Codex `container-boundary` 的 HMAC attestation 或 `session-executor` 绑定）。这一证明适用于 Runtime Host；
+安装供应 initializer 没有 attestation，其放置依据与例外范围见工程 Spec §13.5.4。只有
 Agent 级 scope、没有 attestation 或普通 env 不够，非 Codex 模板目前也没有 attestation，这些
 情形只能用第 1 项。两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
 
