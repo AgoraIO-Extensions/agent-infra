@@ -136,6 +136,39 @@ export class PostgresRuntimeSafetyEvidenceStoreV1 {
 		`;
 	}
 
+	/**
+	 * The original operation/attempt pairs of one Execution, as its committed Runtime operation
+	 * facts recorded them. Evidence may bind only to one of these (§18.5.1 共同绑定).
+	 */
+	async readExecutionOperationAttempts(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<
+		readonly { readonly ref: string; readonly attemptRef: string }[]
+	> {
+		const rows = await this.#client<
+			{ operation_ref: unknown; attempt_ref: unknown }[]
+		>`
+			select distinct
+				event_payload->'fact'->>'operationRef' as operation_ref,
+				event_payload->'fact'->>'attemptRef' as attempt_ref
+			from platform.conversation_events
+			where conversation_id = ${input.conversationId}
+				and execution_id = ${input.executionId}
+				and source = 'runtime'
+				and event_type = 'execution.operation'
+			limit 4096
+		`;
+		return rows.flatMap((row) =>
+			typeof row.operation_ref === "string" &&
+			row.operation_ref &&
+			typeof row.attempt_ref === "string" &&
+			row.attempt_ref
+				? [{ ref: row.operation_ref, attemptRef: row.attempt_ref }]
+				: [],
+		);
+	}
+
 	async close(): Promise<void> {
 		await this.#client.end({ timeout: 5 });
 	}

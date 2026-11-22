@@ -68,6 +68,10 @@ import {
 	RuntimeRestoreExecutionKeyResponseV5Schema,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
 	RuntimeRestoreExecutionKeyTransportV5Schema,
+	RuntimeSafetyEvidenceCapabilityV1,
+	RuntimeSafetyEvidenceLogAckResponseV1Schema,
+	type RuntimeSafetyEvidenceLogEntryV1,
+	RuntimeSafetyEvidenceLogReadResponseV1Schema,
 	type RuntimeSelectionV1,
 	type RuntimeSkillDirectoryEntryV1,
 	RuntimeSkillDirectoryEntryV1Schema,
@@ -2161,4 +2165,93 @@ export function createWorkerRuntimeHostClientV4(
 			}
 		},
 	};
+}
+
+/** One evidence page can carry up to 100 fixed records; nothing else is accepted. */
+const maximumSafetyEvidencePageBytes = 1_048_576;
+
+interface WorkerRuntimeSafetyEvidenceTargetV1 {
+	readonly baseUrl: string;
+	readonly serviceToken: string;
+	readonly traceId: string;
+	readonly fetch?: typeof fetch;
+}
+
+/**
+ * Engineering Spec §18.5.1 载体与版本: reads the Host evidence log on the same resolved Session
+ * route and service token as the business events, declaring the negotiated capability. The
+ * log has its own cursor; this never touches the business journal or its ACK.
+ */
+export async function readRuntimeSafetyEvidenceV1(
+	target: WorkerRuntimeSafetyEvidenceTargetV1,
+	request: { readonly after: string | null; readonly limit: number },
+	signal?: AbortSignal,
+): Promise<readonly RuntimeSafetyEvidenceLogEntryV1[]> {
+	const base = new URL(
+		target.baseUrl.endsWith("/") ? target.baseUrl : `${target.baseUrl}/`,
+	);
+	const response = await post(
+		target.fetch ?? fetch,
+		new URL("internal/runtime/v1/safety-evidence/read", base),
+		target.serviceToken,
+		target.traceId,
+		{
+			schemaVersion: 1,
+			capability: RuntimeSafetyEvidenceCapabilityV1,
+			after: request.after,
+			limit: request.limit,
+		},
+		signal,
+	);
+	try {
+		const page = RuntimeSafetyEvidenceLogReadResponseV1Schema.parse(
+			JSON.parse(
+				await boundedResponseText(response, maximumSafetyEvidencePageBytes),
+			),
+		);
+		const cursors = new Set(page.entries.map((entry) => entry.cursor));
+		if (
+			page.entries.length > request.limit ||
+			cursors.size !== page.entries.length ||
+			(request.after !== null && cursors.has(request.after))
+		)
+			return failure("RUNTIME_RESPONSE_INVALID", true);
+		return page.entries;
+	} catch (error) {
+		if (error instanceof ConversationRuntimeHostError) throw error;
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+}
+
+/** Confirms the Host evidence cursor only after the Worker committed every entry up to it. */
+export async function acknowledgeRuntimeSafetyEvidenceV1(
+	target: WorkerRuntimeSafetyEvidenceTargetV1,
+	cursor: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	const base = new URL(
+		target.baseUrl.endsWith("/") ? target.baseUrl : `${target.baseUrl}/`,
+	);
+	const response = await post(
+		target.fetch ?? fetch,
+		new URL("internal/runtime/v1/safety-evidence/ack", base),
+		target.serviceToken,
+		target.traceId,
+		{
+			schemaVersion: 1,
+			capability: RuntimeSafetyEvidenceCapabilityV1,
+			cursor,
+		},
+		signal,
+	);
+	try {
+		const ack = RuntimeSafetyEvidenceLogAckResponseV1Schema.parse(
+			JSON.parse(await boundedResponseText(response)),
+		);
+		if (ack.acknowledged !== cursor)
+			return failure("RUNTIME_RESPONSE_INVALID", true);
+	} catch (error) {
+		if (error instanceof ConversationRuntimeHostError) throw error;
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
 }

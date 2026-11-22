@@ -26,6 +26,7 @@ import {
 	PostgresCommitWakeupListenerV1,
 	PostgresConversationEventTransactionV1,
 	PostgresLegacyTaskRecoveryReaderV1,
+	PostgresRuntimeSafetyEvidenceStoreV1,
 	PostgresTaskAuthorizationStoreV1,
 	platformQueueResourceSnapshotTimeoutMs,
 	type SessionSandboxClaimWaitReasonV1,
@@ -49,6 +50,8 @@ import {
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import type { RuntimeSafetyEvidenceDrainV1 } from "./runtime-safety-evidence-reader.js";
+import { readWorkerRuntimeSafetyEvidenceWindowV1 } from "./runtime-safety-evidence-window.js";
 import { createWorkspaceSnapshotObserverV1 } from "./workspace-snapshot-observation.js";
 
 export interface PlatformConversationWorkerOptionsV2
@@ -61,6 +64,8 @@ export interface PlatformConversationWorkerOptionsV2
 		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
+	/** Default off: the acceptance window that enables reading Host safety evidence. */
+	readonly safetyEvidenceWindow?: import("@agent-infra/contracts/runtime").RuntimeSafetyEvidenceWindowV1;
 	/** Closes deployment-owned stores assembled outside the Worker process. */
 	readonly closeDeployment?: () => Promise<void>;
 	readonly sandboxPolicy: SessionSandboxPolicyV1;
@@ -324,6 +329,54 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	// Spec §18.5.1: a deployment-injected, default-off acceptance window. An invalid document
+	// keeps evidence off with one fixed code and never stops the Worker. The evidence records
+	// are separate and append-only; nothing is assembled without a valid window.
+	const configuredWindow = options.safetyEvidenceWindow
+		? ({ status: "enabled", window: options.safetyEvidenceWindow } as const)
+		: readWorkerRuntimeSafetyEvidenceWindowV1(process.env);
+	if (configuredWindow.status === "invalid")
+		console.warn(
+			JSON.stringify({
+				service: "platform-worker",
+				code: "RUNTIME_SAFETY_EVIDENCE_WINDOW_INVALID",
+			}),
+		);
+	const safetyEvidenceStore =
+		configuredWindow.status === "enabled"
+			? new PostgresRuntimeSafetyEvidenceStoreV1({
+					databaseUrl: options.databaseUrl,
+				})
+			: undefined;
+	// Loaded only for an enabled window, so the default-off Worker never loads the reader.
+	const safetyEvidenceReader =
+		configuredWindow.status === "enabled" && safetyEvidenceStore
+			? import("./runtime-safety-evidence-reader.js").then((module) =>
+					module.createRuntimeSafetyEvidenceReaderV1({
+						window: configuredWindow.window,
+						store: safetyEvidenceStore,
+						...(options.fetch ? { fetch: options.fetch } : {}),
+					}),
+				)
+			: undefined;
+	// A reader that fails to load leaves evidence UNPROVEN; business is unaffected.
+	void safetyEvidenceReader?.catch(() => undefined);
+	const safetyEvidence = safetyEvidenceReader
+		? {
+				afterAcknowledge(input: RuntimeSafetyEvidenceDrainV1) {
+					void safetyEvidenceReader.then(
+						(reader) => reader.afterAcknowledge(input),
+						() => undefined,
+					);
+				},
+				async close() {
+					await safetyEvidenceReader.then(
+						(reader) => reader.close(),
+						() => undefined,
+					);
+				},
+			}
+		: undefined;
 	const observeSnapshot = createWorkspaceSnapshotObserverV1((event) => {
 		if (options.observability) record(options.observability, event);
 	});
@@ -342,6 +395,7 @@ export function createPlatformConversationWorkerV2(
 		const telemetry = options.observability;
 		runtime = createConversationRuntimeV2({
 			...options,
+			...(safetyEvidence ? { safetyEvidence } : {}),
 			signal,
 			recordDrainStage: telemetry
 				? (observation) =>
@@ -651,6 +705,10 @@ export function createPlatformConversationWorkerV2(
 			Promise.resolve().then(() => store.close()),
 			Promise.resolve().then(() => taskAuthorizationStore.close()),
 			Promise.resolve().then(() => legacyControlStore.close()),
+			Promise.resolve().then(async () => {
+				await safetyEvidence?.close();
+				await safetyEvidenceStore?.close();
+			}),
 			Promise.resolve().then(() => options.closeDeployment?.()),
 		]);
 		throw error;
@@ -1337,6 +1395,10 @@ export function createPlatformConversationWorkerV2(
 					Promise.resolve().then(() => store.close()),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),
 					Promise.resolve().then(() => legacyControlStore.close()),
+					Promise.resolve().then(async () => {
+						await safetyEvidence?.close();
+						await safetyEvidenceStore?.close();
+					}),
 					Promise.resolve().then(() => options.closeDeployment?.()),
 				]);
 				const failure = [...runningResults, ...closeResults].find(

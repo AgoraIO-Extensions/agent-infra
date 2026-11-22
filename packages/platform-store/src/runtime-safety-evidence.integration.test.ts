@@ -243,3 +243,85 @@ it("persists the necessary read audit with the trusted subject, confirmed scope 
 		}),
 	).rejects.toThrow();
 });
+
+it("reads the original operation/attempt pairs of one Execution from its committed Runtime facts", async () => {
+	const rows = [
+		[
+			"event-1",
+			"execution-1",
+			"operation-1",
+			"attempt-1",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-2",
+			"execution-1",
+			"operation-1",
+			"attempt-1",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-3",
+			"execution-1",
+			"operation-1",
+			"attempt-2",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-4",
+			"execution-2",
+			"operation-9",
+			"attempt-9",
+			"runtime",
+			"execution.operation",
+		],
+		[
+			"event-6",
+			"execution-1",
+			"operation-7",
+			"attempt-7",
+			"runtime",
+			"message.delta",
+		],
+	] as const;
+	// Only the evidence query is under test, so the Conversation and Execution fixtures are
+	// skipped by disabling the foreign-key triggers for this transaction.
+	await sql.begin(async (transaction) => {
+		await transaction`set local session_replication_role = replica`;
+		await transaction`delete from platform.conversation_events where conversation_id = 'conversation-1'`;
+		for (const [
+			index,
+			[eventId, executionId, operationRef, attemptRef, source, eventType],
+		] of rows.entries())
+			await transaction`
+				insert into platform.conversation_events (
+					event_id, conversation_id, execution_id, adapter_event_key, sequence,
+					conversation_cursor, event_type, event_payload, event_digest, runtime_cursor,
+					occurred_at, source
+				) values (
+					${eventId}, 'conversation-1', ${executionId}, ${eventId}, ${index + 1},
+					${index + 1}, ${eventType},
+					${transaction.json({ fact: { operationRef, attemptRef } })}, ${"d".repeat(64)},
+					${eventId}, now(), ${source}
+				)`;
+	});
+	const pairs = await store.readExecutionOperationAttempts({
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+	});
+	expect(
+		[...pairs].sort((a, b) => a.attemptRef.localeCompare(b.attemptRef)),
+	).toEqual([
+		{ ref: "operation-1", attemptRef: "attempt-1" },
+		{ ref: "operation-1", attemptRef: "attempt-2" },
+	]);
+	expect(
+		await store.readExecutionOperationAttempts({
+			conversationId: "conversation-2",
+			executionId: "execution-1",
+		}),
+	).toEqual([]);
+});
