@@ -453,7 +453,9 @@ lock(net.Socket.prototype, "connect");
 for (const key of ["listen", "listenFd"]) lock(net.Server.prototype, key);
 for (const key of ["connect", "createConnection"]) lock(net, key);
 const dgram = require("node:dgram");
-for (const key of ["bind", "connect", "send"]) lock(dgram.Socket.prototype, key);
+for (const key of ["bind", "connect", "send", "constructor"]) lock(dgram.Socket.prototype, key);
+// A socket's native handle (_handle) sends without the JS methods above: no socket may be created.
+for (const key of ["createSocket", "Socket"]) lock(dgram, key);
 for (const name of ["node:dns", "node:dns/promises"]) {
 	const dns = require(name);
 	for (const key of Object.keys(dns)) lock(dns, key);
@@ -463,6 +465,26 @@ for (const name of ["connect"]) { lock(require("node:tls"), name); lock(require(
 for (const name of ["fetch", "WebSocket", "EventSource"]) {
 	if (name in globalThis) Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false });
 }
+// The module sees exactly the Worker's rendered network environment. A read of any
+// other variable cannot be evaluated equivalently to the real Worker, so it is refused.
+// WATCH_REPORT_DEPENDENCIES is read by Node's own module loader and is never set.
+const visible = [...${JSON.stringify(workerNetworkEnvironment)}, "WATCH_REPORT_DEPENDENCIES"];
+const environment = { ...process.env };
+Object.defineProperty(process, "env", {
+	value: new Proxy(environment, {
+		get(target, key) {
+			if (typeof key === "string" && !visible.includes(key)) throw new Error("ENVIRONMENT_UNVERIFIABLE");
+			return target[key];
+		},
+		has(target, key) {
+			if (typeof key === "string" && !visible.includes(key)) throw new Error("ENVIRONMENT_UNVERIFIABLE");
+			return key in target;
+		},
+		ownKeys() { throw new Error("ENVIRONMENT_UNVERIFIABLE"); },
+	}),
+	writable: false,
+	configurable: false,
+});
 const module = await import(${JSON.stringify(pathToFileURL(file).href)});
 const policy = module.workloadInput?.policy;
 if (!policy || typeof policy !== "object") process.exit(3);
@@ -531,6 +553,8 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	} catch {
 		fail("WORKER_CONFIGURATION_UNVERIFIABLE");
 	}
+	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
+	const environment = workerNetworkEnvironmentV1(rendered, namespace);
 	const directory = mkdtempSync(join(realpathSync(tmpdir()), "agent-infra-np-config-"));
 	let projected;
 	try {
@@ -541,7 +565,7 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 			execFileSync(
 				process.execPath,
 				["--permission", `--allow-fs-read=${directory}`, "--input-type=module", "-e", projectionScript(file)],
-				{ encoding: "utf8", timeout: 20_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], env: {} },
+				{ encoding: "utf8", timeout: 20_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], env: environment },
 			),
 		);
 	} catch {
@@ -551,8 +575,6 @@ export async function deriveNetworkPolicyDeploymentConfigV1({
 	}
 	// Merge the file exchange and native metadata gateway egress exactly as the Worker
 	// does: same function, and the rendered Worker container environment.
-	const rendered = renderedWorkloadPlacementV1(renderedManifest, namespace);
-	const environment = workerNetworkEnvironmentV1(rendered, namespace);
 	let config;
 	try {
 		const { runtimeAuth, nativeMetadataGateway, ...base } = projected;

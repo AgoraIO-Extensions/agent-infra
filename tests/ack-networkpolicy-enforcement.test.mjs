@@ -1514,6 +1514,43 @@ test("the derived configuration follows the Worker's file exchange and gateway e
 	}
 });
 
+// ---- #4385 round 3: module evaluation environment (R3-1) ----
+test("the module is evaluated with the Worker's rendered network environment (R3-1)", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-np-moduleenv-"));
+	const source = `${configurationModule(networkPolicyDeploymentConfig())}export const nativeMetadataGateway = { port: Number(process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT ?? "3004") };\n`;
+	const port = (value) => [
+		envEntry("PLATFORM_WORKER_NAMESPACE", "agent-infra"),
+		envEntry("PLATFORM_WORKER_RELEASE_NAME", "agent-infra-ack"),
+		envEntry("PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT", value),
+	];
+	const p3004 = await digestsFor(directory, source, port("3004"));
+	const p3005 = await digestsFor(directory, source, port("3005"));
+	assert.notDeepEqual(p3004, p3005);
+	// Static module (no environment read) is unaffected by the isolation.
+	await digestsFor(
+		directory,
+		configurationModule(networkPolicyDeploymentConfig()),
+	);
+	// An environment read the preflight cannot reproduce is refused, not evaluated as unset.
+	for (const read of [
+		"process.env.HOME",
+		"process.env.SECRET_TOKEN",
+		"Object.keys(process.env)",
+	]) {
+		const inputs = await workerConfigurationInputs(
+			directory,
+			`${configurationModule(networkPolicyDeploymentConfig())}export const probe = ${read};\n`,
+		);
+		await assert.rejects(
+			deriveNetworkPolicyDeploymentConfigV1({
+				...inputs,
+				namespace: "agent-infra",
+			}),
+			(error) => error.code === "WORKER_CONFIGURATION_UNVERIFIABLE",
+		);
+	}
+});
+
 // ---- #4385 round 2: loading deployment code must not reach the network (R2-N1) ----
 test("the module loader reaches no listener over any network API", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "ack-np-network-"));
@@ -1548,6 +1585,14 @@ await attempt(() => http2.connect("http://127.0.0.1:${port}/").on("error", () =>
 await attempt(() => fetch("http://127.0.0.1:${port}/"));
 await attempt(() => new WebSocket("ws://127.0.0.1:${port}/"));
 await attempt(() => dgram.createSocket("udp4").send("x", ${udpPort}, "127.0.0.1"));
+await attempt(() => new dgram.Socket("udp4").send("x", ${udpPort}, "127.0.0.1"));
+await attempt(() => new (Object.getPrototypeOf(dgram.createSocket).constructor)("return 0"));
+await attempt(() => {
+	// Native handle path (#4385 round 3): bypasses the JS send/bind methods.
+	const handle = dgram.createSocket("udp4")._handle;
+	handle.bind("127.0.0.1", 0, 0);
+	handle.send({ length: 1 }, [Buffer.from("x")], 1, ${udpPort}, "127.0.0.1", false);
+});
 await new Promise((resolve) => setTimeout(resolve, 200));
 `;
 	// Positive control: the same module still yields its configuration.
