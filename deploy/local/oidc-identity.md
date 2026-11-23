@@ -10,7 +10,8 @@ Platform API 的受信配置模块由 `PLATFORM_API_CONFIGURATION_MODULE` 指向
 `https://<AgentInfra 主机>/auth/oidc/callback`。反向代理将登录与回调路径转发到 Platform API，
 同时沿用平台的可信代理头和外部 HTTPS 主机配置。
 
-使用标准发布镜像时，在 Web 容器环境中设置 `PLATFORM_WEB_LOGIN_MODE=oidc`
+ACK 部署在私有 Helm values 中将 `platformWeb.loginMode` 设为 `oidc`，或使用 `--set-string platformWeb.loginMode=oidc`。Chart 将该设置传入 Web 容器。
+使用标准发布镜像单独部署时，在 Web 容器环境中设置 `PLATFORM_WEB_LOGIN_MODE=oidc`
 并重新启动 Web。浏览器刷新后显示“使用公司账号登录”，导航到同源 `/auth/oidc/login`。
 未设置该变量或设为 `build` 时，Web 使用镜像构建时的登录入口。
 直接用 Vite 运行或构建 Web 时，通过 `VITE_PLATFORM_LOGIN_URL=/auth/oidc/login` 选择同一入口。

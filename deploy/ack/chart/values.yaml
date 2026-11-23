@@ -36,6 +36,8 @@ secrets:
   workerDirectoryRead: agent-infra-worker-directory-read
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
+platformWeb:
+  loginMode: build
 platformApi:
   # Approved console path; the origin remains in the Consumer profile.
   connectionWebPath: ""
