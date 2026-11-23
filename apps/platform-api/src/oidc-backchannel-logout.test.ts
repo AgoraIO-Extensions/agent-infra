@@ -252,7 +252,12 @@ it("clears both employee cookies over HTTP and retains a later login and other e
 						},
 					);
 					req.on("error", reject);
-					req.end(new URLSearchParams({ logout_token: token() }).toString());
+					req.end(
+						new URLSearchParams({
+							logout_token: token(),
+							sub: "peer",
+						}).toString(),
+					);
 				});
 			const first = await cookie("employee");
 			const second = await cookie("employee");

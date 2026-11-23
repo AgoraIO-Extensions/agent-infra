@@ -36,7 +36,8 @@ async function readToken(request: Request) {
 			chunks.push(item.value);
 		}
 		const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
-		return form.size === 1 ? form.get("logout_token") : null;
+		const tokens = form.getAll("logout_token");
+		return tokens.length === 1 ? tokens[0] : null;
 	} finally {
 		clearTimeout(timer);
 		reader.releaseLock();
