@@ -799,12 +799,10 @@ export async function assembleRuntimeHost(
 					store: opened,
 				}));
 		// §13.5.6: the receiver follows the Driver that can consume its reader.
-		// Claude and ACP reach it only through their protected transport.
-		// Pi has no dynamic reader consumer yet (#4349 PR 2).
-		connectionInstall =
-			supportsProtectedStandardMcp && binding !== "pi"
-				? await prepareConnectionInstall(store)
-				: undefined;
+		// Claude, ACP and Pi reach it only through their protected transport.
+		connectionInstall = supportsProtectedStandardMcp
+			? await prepareConnectionInstall(store)
+			: undefined;
 		// Missing or invalid input closes only this receiver; ordinary Sessions keep running.
 		if (connectionInstallRequested && connectionInstall?.status !== "available")
 			console.warn(
@@ -966,6 +964,7 @@ export async function assembleRuntimeHost(
 								...(standardConnectionClient
 									? { standardConnectionClient }
 									: {}),
+								...(dynamicConnectionClient ? { dynamicConnectionClient } : {}),
 								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4

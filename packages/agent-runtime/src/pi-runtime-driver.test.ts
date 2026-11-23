@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import { expect, it, vi } from "vitest";
+import { DynamicConnectionRefusalV1 } from "./dynamic-connection.js";
 import {
 	PiRuntimeDriver,
 	type PiRuntimeDriverOptions,
@@ -24,6 +25,10 @@ import {
 	RuntimeFileInputRejectedError,
 } from "./runtime-file-bridge.js";
 import type { SessionNativeCommandReadContext } from "./session-runtime-driver.js";
+import {
+	closeStandardMcpFixtures,
+	standardMcpFixture,
+} from "./standard-mcp.fixture.js";
 
 const command = {
 	schemaVersion: 2 as const,
@@ -154,6 +159,106 @@ it("keeps protected Connection MCP unavailable", async () => {
 		await value.close();
 	}
 });
+
+it.each([
+	["an installation backs the Execution", undefined],
+	["the reader refuses with authorization required", "authorization_required"],
+] as const)(
+	"declares the dynamic Connection tools to Pi through the loopback bridge when %s (§13.5.6)",
+	async (_label, refusal) => {
+		const connection = await standardMcpFixture();
+		const path = await mkdtemp(join(tmpdir(), "pi-driver-dynamic-"));
+		const seen: unknown[] = [];
+		let launched: { args: string[]; env: Record<string, string> } | undefined;
+		const driver = await PiRuntimeDriver.open({
+			path,
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "configured/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			dynamicConnectionClient: {
+				declared: {
+					contract: { ref: "fixture-mcp-contract", revision: "r1" },
+					tools: [
+						{
+							name: "write_note",
+							description: "Write a note",
+							inputSchema: {
+								type: "object",
+								properties: { text: { type: "string" } },
+								required: ["text"],
+								additionalProperties: false,
+							},
+						},
+					],
+				},
+				resolveTarget: async (ref) => {
+					seen.push(ref);
+					if (refusal) throw new DynamicConnectionRefusalV1(refusal);
+					return connection.target;
+				},
+				resolveInput: async (ref) => ({
+					...connection.input,
+					scope: { ...ref },
+				}),
+				fetch: connection.fetch,
+			},
+			launch: async () => {
+				launched = {
+					command: process.execPath,
+					args: [
+						fileURLToPath(
+							new URL("./pi-peer.test-support.mjs", import.meta.url),
+						),
+					],
+					env: { PI_PEER_MODE: "normal" },
+				} as never;
+				return launched as never;
+			},
+		});
+		try {
+			expect(await driver.getCapabilities()).toMatchObject({
+				connection: true,
+			});
+			const accepted = await driver.execute(command);
+			await vi.waitFor(
+				async () =>
+					expect(
+						await driver.getStatus(
+							accepted.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 10_000 },
+			);
+			expect(launched?.args).toContain("builtin:mcp");
+			expect(launched?.env.AGENT_INFRA_PI_CONNECTION_MCP_URL).toMatch(
+				/^http:\/\/127\.0\.0\.1:/,
+			);
+			// Only the short-lived loopback bearer reaches Pi, never the Connection token.
+			expect(JSON.stringify(launched)).not.toContain(connection.input.token);
+			expect(seen).toEqual([
+				expect.objectContaining({
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					executionId: command.executionId,
+					sessionGeneration: command.sessionGeneration,
+				}),
+			]);
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+			await closeStandardMcpFixtures();
+		}
+	},
+	15_000,
+);
 
 it.each(["result-file", "result-file-edit"] as const)(
 	"does not publish a completed Pi %s implicitly while its tool events stay (#3226)",

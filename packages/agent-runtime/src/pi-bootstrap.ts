@@ -10,6 +10,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
+import type { DynamicConnectionClientV1 } from "./dynamic-connection.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
@@ -36,6 +37,8 @@ export interface PiRuntimeOptions {
 	}[];
 	skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly standardConnectionClient?: StandardMcpClientOptions;
+	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
+	readonly dynamicConnectionClient?: DynamicConnectionClientV1;
 	readonly authorizeToolAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;

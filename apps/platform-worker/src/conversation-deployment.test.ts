@@ -2592,7 +2592,7 @@ describe("production SessionSandbox resource receiver", () => {
 
 	// #4349 / §13.5.6: the manual-installation receiver is rendered for every
 	// standard template Session Pod, not only Codex.
-	it.each(["codex", "claude", "acp"] as const)(
+	it.each(["codex", "claude", "acp", "pi"] as const)(
 		"renders the Connection install receiver into the %s Session Pod",
 		async (driver) => {
 			const f = fixture();
