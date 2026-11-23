@@ -2464,19 +2464,20 @@ function owned(
 		current.metadata?.annotations?.["agent-infra.agora.io/fence"];
 	const managed =
 		current.metadata?.annotations?.["agent-infra.agora.io/managed"];
+	const controllers =
+		current.metadata?.ownerReferences?.filter((owner) => owner.controller) ??
+		[];
+	const [controller] = controllers;
+	const controllerMatches = snapshotPod
+		? controllers.length === 1 &&
+			controller?.apiVersion === "v1" &&
+			controller.kind === "Pod" &&
+			controller.name === snapshotPod.name &&
+			controller.uid === snapshotPod.uid &&
+			snapshotPod.namespace === current.metadata?.namespace
+		: controllers.length === 0;
 	return (
-		!current.metadata?.ownerReferences?.some(
-			(owner) =>
-				owner.controller &&
-				!(
-					snapshotPod?.kind === "Pod" &&
-					snapshotPod.namespace === current.metadata?.namespace &&
-					snapshotPod.name === owner.name &&
-					owner.apiVersion === "v1" &&
-					owner.kind === "Pod" &&
-					owner.uid === snapshotPod.uid
-				),
-		) &&
+		controllerMatches &&
 		managed === "session-sandbox-v1" &&
 		sessionSandboxLabelsMatchV1(currentLabels, expectedLabels) &&
 		hasSessionSandboxIdentityV1(current, allocation) &&
@@ -3782,7 +3783,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				snapshotName,
 			);
 			if (snapshotSecret) {
+				const snapshotPod = deletedResources.find(
+					({ resource }) => resource.kind === "Pod",
+				)?.resource;
 				if (
+					!snapshotPod ||
 					!owned(
 						snapshotSecret,
 						{
@@ -3791,8 +3796,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							metadata: metadata(snapshotSource, snapshotName),
 						},
 						snapshotSource,
-						deletedResources.find(({ resource }) => resource.kind === "Pod")
-							?.resource,
+						snapshotPod,
 					)
 				)
 					throw new WorkloadKubernetesError("conflict");

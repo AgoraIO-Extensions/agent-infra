@@ -4153,7 +4153,13 @@ async function signedSnapshotAllocation() {
 	};
 }
 
-it.each(["bound", "wrong-uid", "wrong-controller"] as const)(
+it.each([
+	"bound",
+	"wrong-uid",
+	"wrong-controller",
+	"missing",
+	"non-controller",
+] as const)(
 	"cleans up a signed snapshot with a %s Secret owner",
 	async (scenario) => {
 		const selected = await signedSnapshotAllocation();
@@ -4169,6 +4175,12 @@ it.each(["bound", "wrong-uid", "wrong-controller"] as const)(
 		expect(owner.uid).toBe(
 			observed.resources.find(({ kind }) => kind === "Pod")?.uid,
 		);
+		if (scenario === "missing" && secret?.metadata)
+			delete secret.metadata.ownerReferences;
+		if (scenario === "non-controller") {
+			owner.controller = false;
+			owner.uid = "other-resource";
+		}
 		if (scenario === "wrong-uid") owner.uid = "another-pod";
 		if (scenario === "wrong-controller") owner.kind = "Sandbox";
 		const cleanup = adapter.cleanup(selected, observed.resources, {
