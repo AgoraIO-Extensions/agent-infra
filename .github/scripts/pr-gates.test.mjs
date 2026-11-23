@@ -290,3 +290,19 @@ test("an agent PR cannot pass when both PR and Issue have no session claim", asy
   fixture.issue.body = "Human-created Issue without an agent provenance block";
   assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
 });
+
+test("claim failures report bounded ignore counts without comment body or username", async () => {
+  const fixture = claimedGateFixture();
+  fixture.comments.push({
+    created_at: "2026-10-03T00:00:00Z",
+    updated_at: "2026-10-03T00:00:00Z",
+    author_association: "CONTRIBUTOR",
+    user: { id: 101, login: "private-user-name" },
+    body: "private-comment-text\n<!-- agent-claim:start -->\nClaimed-By-Session: session-beta\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+  });
+  fixture.pr.body = fixture.pr.body.replace("session-alpha", "session-beta");
+  const result = await runGate({ ...fixture, mode: "issue" });
+  assert.equal(result.ok, false);
+  assert.match(result.description, /association=CONTRIBUTOR:1/);
+  assert.doesNotMatch(result.description, /private-user-name|private-comment-text/);
+});

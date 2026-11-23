@@ -49,19 +49,35 @@ function parseClaimComment(comment) {
   return { claimed, from };
 }
 
-export function resolveIssueClaim(issue, comments = []) {
+export function resolveIssueClaimDiagnostics(issue, comments = []) {
   let current = extractAgentSessionId(issue?.body);
-  const ordered = [...comments].sort((a, b) => {
-    const left = Date.parse(a.created_at ?? "");
-    const right = Date.parse(b.created_at ?? "");
-    return left - right;
-  });
+  const ignored = {};
+  const count = (reason) => { ignored[reason] = (ignored[reason] ?? 0) + 1; };
+  const ordered = [...comments].sort((a, b) => Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""));
   for (const comment of ordered) {
+    if (typeof comment?.body !== "string" || !comment.body.includes("agent-claim:")) continue;
+    if (!CLAIM_ASSOCIATIONS.has(comment.author_association)) {
+      const association = ["CONTRIBUTOR", "NONE", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN"].includes(comment.author_association)
+        ? comment.author_association : "OTHER";
+      count(`association=${association}`);
+      continue;
+    }
+    if (comment.updated_at !== comment.created_at) { count("edited"); continue; }
     const claim = parseClaimComment(comment);
-    if (!claim) continue;
-    if (claim.from === (current ?? "none")) current = claim.claimed;
+    if (!claim) { count("format"); continue; }
+    if (claim.from !== (current ?? "none")) { count("handoff_from"); continue; }
+    current = claim.claimed;
   }
-  return current;
+  return { current, ignored };
+}
+
+export function resolveIssueClaim(issue, comments = []) {
+  return resolveIssueClaimDiagnostics(issue, comments).current;
+}
+
+function diagnosticSummary(ignored) {
+  return Object.entries(ignored).sort(([a], [b]) => a.localeCompare(b))
+    .map(([reason, count]) => `${reason}:${count}`).join(",") || "none";
 }
 
 export function extractPrimaryIssueNumbers(body = "") {
@@ -104,19 +120,20 @@ export function evaluateIssueGate({
 
   if (labelNames(pullRequestLabels).some((label) => label.startsWith("agent:"))) {
     const pullSession = extractAgentSessionId(pullRequestBody);
-    const issueSession = resolveIssueClaim(issue, issueComments);
+    const { current: issueSession, ignored } = resolveIssueClaimDiagnostics(issue, issueComments);
+    const counts = `; ignored claims ${diagnosticSummary(ignored)}`;
     if (!pullSession || !issueSession) {
       return {
         ok: false,
         description:
-          `Agent PR claim is incomplete (missing ${!pullSession ? "PR Agent-Session-ID" : "Issue claim"}); add a valid provenance or handoff before retrying the gate`,
+          `Agent PR claim is incomplete (missing ${!pullSession ? "PR Agent-Session-ID" : "Issue claim"}); add a valid provenance or handoff before retrying the gate${counts}`,
       };
     }
     if (pullSession !== issueSession) {
       return {
         ok: false,
         description:
-          `Agent PR session does not match Issue #${number} claim (PR session ${pullSession ?? "none"}, Issue claim ${issueSession ?? "none"}); add a valid handoff comment with Handoff-From to transfer the claim`,
+          `Agent PR session does not match Issue #${number} claim (PR session ${pullSession ?? "none"}, Issue claim ${issueSession ?? "none"}); add a valid handoff comment with Handoff-From to transfer the claim${counts}`,
       };
     }
   }
@@ -192,6 +209,17 @@ export async function runGate({ mode, repository, event, request = githubRequest
 }
 
 async function main() {
+  // Temporary/operational read-only diagnosis: only fixed aggregate reasons leave the API response.
+  if (process.argv[2] === "diagnose-claim") {
+    const issueNumber = Number(process.argv[3]);
+    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) throw new Error("Issue number required");
+    const repository = requiredEnvironment("GITHUB_REPOSITORY");
+    const issue = await githubRequest(`/repos/${repository}/issues/${issueNumber}`);
+    const comments = await readIssueComments(repository, issueNumber, githubRequest);
+    const diagnostics = resolveIssueClaimDiagnostics(issue, comments);
+    console.log(`ignored claims ${diagnosticSummary(diagnostics.ignored)}`);
+    return;
+  }
   if (requiredEnvironment("GITHUB_EVENT_NAME") !== "pull_request_target") {
     throw new Error("Only PR events are supported");
   }
