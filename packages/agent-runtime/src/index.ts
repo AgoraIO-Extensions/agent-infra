@@ -18,6 +18,7 @@ export {
 	validateModelAccess as validateCodexModelAccess,
 } from "./codex-app-server-bridge.js";
 export { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";
+export * from "./codex-driver-state-init.js";
 export * from "./codex-executor-bootstrap.js";
 export * from "./codex-executor-control.js";
 export * from "./codex-executor-drain-journal.js";
