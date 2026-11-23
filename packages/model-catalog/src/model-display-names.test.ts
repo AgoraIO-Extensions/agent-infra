@@ -73,7 +73,7 @@ describe("trusted deployment model display names", () => {
 		).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 	});
 
-	it("rejects unknown endpoints and models excluded by a finite catalog policy", async () => {
+	it("requires a known endpoint and accepts display names beyond the legacy list", async () => {
 		const snapshot = catalogFixture();
 		for (const models of [
 			[{ ...entry, endpointId: "endpoint-missing" }],
@@ -92,9 +92,13 @@ describe("trusted deployment model display names", () => {
 					}),
 				},
 			});
-			await expect(read(signal())).rejects.toThrow(
-				/^MODEL_CONFIGURATION_UNAVAILABLE$/,
-			);
+			if (models[0]?.endpointId === "endpoint-missing") {
+				await expect(read(signal())).rejects.toThrow(
+					/^MODEL_CONFIGURATION_UNAVAILABLE$/,
+				);
+			} else {
+				await expect(read(signal())).resolves.toEqual(expect.any(Function));
+			}
 		}
 	});
 

@@ -333,9 +333,7 @@ export function validateRuntimeModelProjectionV1(
 					option.reasoningLevels.some(
 						(level) =>
 							!option.endpoint.capabilities.reasoningLevels.includes(level),
-					) ||
-					(option.endpoint.allowedModels !== null &&
-						!option.endpoint.allowedModels.includes(option.modelId)),
+					),
 			)
 		)
 			throw new ModelConfigurationErrorV1();
@@ -384,7 +382,6 @@ export function validateRuntimeModelProjectionV1(
 function revalidateModelEndpoint(
 	saved: ModelEndpointV1,
 	current: ModelEndpointV1,
-	modelId: string,
 ) {
 	const endpoint = ModelEndpointV1Schema.parse(current);
 	// ADR-0030: catalog model/level lists do not rewrite an admitted combination.
@@ -396,11 +393,7 @@ function revalidateModelEndpoint(
 			reasoningLevels: saved.capabilities.reasoningLevels,
 		},
 	};
-	if (
-		(endpoint.allowedModels !== null &&
-			!endpoint.allowedModels.includes(modelId)) ||
-		!isDeepStrictEqual(comparable, saved)
-	)
+	if (!isDeepStrictEqual(comparable, saved))
 		throw new ModelConfigurationErrorV1();
 }
 
@@ -419,7 +412,7 @@ export async function revalidateRuntimeModelCatalogV1(
 				},
 				{ signal },
 			);
-			revalidateModelEndpoint(option.endpoint, endpoint, option.modelId);
+			revalidateModelEndpoint(option.endpoint, endpoint);
 		}
 	});
 }
@@ -570,12 +563,9 @@ export function validateRuntimeModelProjectionV4(
 					reasoningLevels.includes(content.defaultReasoningLevel),
 			) ||
 			content.options.some(
-				({ endpoint, modelId, reasoningLevels }) =>
+				({ endpoint, reasoningLevels }) =>
 					!validV4ModelEndpoint(endpoint, content.standardTemplateBinding) ||
-					new Set(reasoningLevels).size !== reasoningLevels.length ||
-					// ADR-0029：档位由平台固定并在保存时真实验证，不再要求落在端点登记的档位内。
-					(endpoint.allowedModels !== null &&
-						!endpoint.allowedModels.includes(modelId)),
+					new Set(reasoningLevels).size !== reasoningLevels.length,
 			)
 		)
 			throw new ModelConfigurationErrorV1();
@@ -634,7 +624,7 @@ export async function revalidateRuntimeModelCatalogV4(
 				},
 				{ signal },
 			);
-			revalidateModelEndpoint(option.endpoint, endpoint, option.modelId);
+			revalidateModelEndpoint(option.endpoint, endpoint);
 		}
 	});
 }

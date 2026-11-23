@@ -7,6 +7,7 @@ import {
 	ApplicationRevisionError,
 	ConnectionPrincipalPinAdministrationErrorV1,
 	FileLimitDeclarationErrorV1,
+	isModelRelayRejectionV1,
 	PersonalApiCredentialErrorV1,
 	PersonalRelayKeyErrorV1,
 	SkillHubAgentBindingErrorV1,
@@ -20,6 +21,14 @@ export function mapCoreError(
 	traceId: string,
 ): HttpProtocolError {
 	if (error instanceof HttpProtocolError) return error;
+	if (isModelRelayRejectionV1(error)) {
+		const codes = {
+			relay_key_rejected: "RELAY_KEY_REJECTED",
+			relay_access_denied: "RELAY_ACCESS_DENIED",
+			relay_codex_client_required: "RELAY_CODEX_CLIENT_REQUIRED",
+		} as const;
+		return new HttpProtocolError(codes[error.code], traceId);
+	}
 	if (error instanceof FileLimitDeclarationErrorV1) {
 		const codes = {
 			invalid_input: "INVALID_REQUEST",

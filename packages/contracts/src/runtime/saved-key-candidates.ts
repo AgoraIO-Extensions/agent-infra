@@ -44,7 +44,14 @@ export const RuntimeSavedKeyCandidatesResponseV1Schema = z.strictObject({
 	candidates: z.array(RuntimeSavedKeyCandidateV1Schema).max(32768),
 	/** 仅在请求带 `verify` 时返回。 */
 	verification: z
-		.enum(["verified", "key_invalid", "incompatible", "unavailable"])
+		.enum([
+			"verified",
+			"key_invalid",
+			"access_denied",
+			"codex_client_required",
+			"incompatible",
+			"unavailable",
+		])
 		.optional(),
 });
 

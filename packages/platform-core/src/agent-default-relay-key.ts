@@ -1,9 +1,15 @@
 import type { AgentConfigurationRecord } from "./agent-configuration-types.js";
 import type { PersonalRelayKeyIdentityV1 } from "./personal-relay-key.js";
 
+export type ModelRelayRejectionCodeV1 =
+	| "relay_key_rejected"
+	| "relay_access_denied"
+	| "relay_codex_client_required";
+
 export class AgentDefaultRelayKeyErrorV1 extends Error {
 	constructor(
 		readonly code:
+			| ModelRelayRejectionCodeV1
 			| "invalid_input"
 			| "not_authorized"
 			| "conflict"
@@ -13,6 +19,19 @@ export class AgentDefaultRelayKeyErrorV1 extends Error {
 	) {
 		super("Agent default Relay Key operation failed");
 	}
+}
+
+export function isModelRelayRejectionV1(
+	error: unknown,
+): error is AgentDefaultRelayKeyErrorV1 & {
+	readonly code: ModelRelayRejectionCodeV1;
+} {
+	return (
+		error instanceof AgentDefaultRelayKeyErrorV1 &&
+		(error.code === "relay_key_rejected" ||
+			error.code === "relay_access_denied" ||
+			error.code === "relay_codex_client_required")
+	);
 }
 
 export interface AgentDefaultRelayKeyBindingV1 {

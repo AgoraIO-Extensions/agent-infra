@@ -3,7 +3,11 @@ import type {
 	ModelAccessValidatorV1,
 	ResponsesModelProbeOutcomeV1,
 } from "./access.js";
-import { validateModelAccessPolicyV1 } from "./access.js";
+import {
+	boundedModelResponseBody,
+	modelProbeFailureV1,
+	validateModelAccessPolicyV1,
+} from "./access.js";
 import {
 	isModelTimeoutV1,
 	ModelConfigurationErrorV1,
@@ -15,26 +19,6 @@ import {
 const betas =
 	"claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01";
 const efforts = ["low", "medium", "high", "xhigh", "max"];
-
-async function boundedBody(response: Response, signal: AbortSignal) {
-	if (!response.body) throw new ModelConfigurationErrorV1();
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder("utf-8", { fatal: true });
-	let bytes = 0;
-	let body = "";
-	try {
-		while (true) {
-			const chunk = await modelOperationV1(signal, () => reader.read());
-			if (chunk.done) break;
-			bytes += chunk.value.byteLength;
-			if (bytes > 1_048_576) throw new ModelConfigurationErrorV1();
-			body += decoder.decode(chunk.value, { stream: true });
-		}
-		return body + decoder.decode();
-	} finally {
-		void reader.cancel().catch(() => {});
-	}
-}
 
 function verifyCompletion(body: string, model: string) {
 	let started = false;
@@ -215,7 +199,7 @@ export function createMessagesModelAccessValidatorV1(
 						count.status === 429 || count.status >= 500,
 					);
 				}
-				const value = JSON.parse(await boundedBody(count, signal));
+				const value = JSON.parse(await boundedModelResponseBody(count, signal));
 				if (!Number.isSafeInteger(value.input_tokens) || value.input_tokens < 0)
 					throw new ModelConfigurationErrorV1();
 				for (const level of input.reasoningLevels) {
@@ -244,7 +228,10 @@ export function createMessagesModelAccessValidatorV1(
 							response.status === 429 || response.status >= 500,
 						);
 					}
-					verifyCompletion(await boundedBody(response, signal), input.modelId);
+					verifyCompletion(
+						await boundedModelResponseBody(response, signal),
+						input.modelId,
+					);
 				}
 			});
 		},
@@ -268,14 +255,6 @@ export async function probeMessagesModelV1(input: {
 	if (!efforts.includes(input.reasoningLevel)) return "incompatible";
 	const fetcher = input.fetch ?? globalThis.fetch;
 	const { signal } = input;
-	const status = (response: Response): ResponsesModelProbeOutcomeV1 => {
-		void response.body?.cancel().catch(() => {});
-		if (response.status === 401 || response.status === 403)
-			return "key_invalid";
-		return response.status === 429 || response.status >= 500
-			? "unavailable"
-			: "incompatible";
-	};
 	const headers = {
 		"content-type": "application/json",
 		"anthropic-version": "2023-06-01",
@@ -327,9 +306,12 @@ export async function probeMessagesModelV1(input: {
 			response.headers.get("content-type") ?? "",
 		)
 	)
-		return status(response);
+		return modelProbeFailureV1(response, signal);
 	try {
-		verifyCompletion(await boundedBody(response, signal), input.modelId);
+		verifyCompletion(
+			await boundedModelResponseBody(response, signal),
+			input.modelId,
+		);
 		return "verified";
 	} catch (error) {
 		if (isModelTimeoutV1(error)) input.onTimeout?.();

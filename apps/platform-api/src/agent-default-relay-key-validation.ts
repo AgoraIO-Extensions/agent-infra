@@ -80,13 +80,14 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 			).catch(() => "unavailable" as const);
 			if (outcome === "verified") return;
 			recordHttpFailureContext({ failureStep: `model.validation.${outcome}` });
-			throw new AgentDefaultRelayKeyErrorV1(
-				outcome === "key_invalid"
-					? "invalid_input"
-					: outcome === "incompatible"
-						? "model_unsupported"
-						: "unavailable",
-			);
+			const codes = {
+				key_invalid: "relay_key_rejected",
+				access_denied: "relay_access_denied",
+				codex_client_required: "relay_codex_client_required",
+				incompatible: "model_unsupported",
+				unavailable: "unavailable",
+			} as const;
+			throw new AgentDefaultRelayKeyErrorV1(codes[outcome]);
 		},
 	};
 }

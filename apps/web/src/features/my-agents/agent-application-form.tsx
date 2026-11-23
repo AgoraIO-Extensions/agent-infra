@@ -1115,7 +1115,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 更换模板，由部署状态说明接手，不另写字段错误。两种模式都拦下、不发请求（#3389 N13-09）。
 	const deploymentBlocksStandard =
 		sourceKind === "standard" &&
-		!deploymentConfigurationUsable(deployment, managedModelCreate);
+		!deploymentConfigurationUsable(
+			deployment,
+			managedModelCreate || keyManaged,
+		);
 	// 部署选项读取失败：就绪状态与模型目录都读不到。就绪列表不按「尚未登记」说明（#3389 N13-08）。
 	const deploymentUnreadable = deployment.status === "unavailable";
 	useEffect(() => {
@@ -1301,10 +1304,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		!serverValidationDismissed;
 	const configurationMessage =
 		deployment.status === "stale" ||
-		(!managedModelCreate && deployment.modelCatalog.status === "stale")
+		(!managedModelCreate &&
+			!keyManaged &&
+			deployment.modelCatalog.status === "stale")
 			? "部署选项已过期，请重新加载后再提交。"
 			: deployment.status === "unavailable" ||
 					(!managedModelCreate &&
+						!keyManaged &&
 						deployment.modelCatalog.status === "unavailable")
 				? deploymentRetryable
 					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
@@ -1312,6 +1318,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				: deployment.status === "empty" ||
 						(deployment.templates.length === 0 && sourceKind === "standard") ||
 						(!managedModelCreate &&
+							!keyManaged &&
 							deployment.modelCatalog.status === "empty" &&
 							sourceKind === "standard")
 					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"

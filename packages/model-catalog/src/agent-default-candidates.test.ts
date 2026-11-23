@@ -199,7 +199,7 @@ describe("Agent default Relay Key model verification (ADR-0030)", () => {
 		]);
 	});
 
-	it("still applies a non-null deployment model allowlist", async () => {
+	it("uses Relay model visibility with a legacy deployment allowlist", async () => {
 		const fetcher = vi.fn<typeof fetch>(
 			async () =>
 				new Response(
@@ -216,6 +216,11 @@ describe("Agent default Relay Key model verification (ADR-0030)", () => {
 			{
 				endpointId: "relay",
 				modelId: "claude-opus-5",
+				reasoningLevels: [...standardTemplateReasoningLevelsV1],
+			},
+			{
+				endpointId: "relay",
+				modelId: "gpt-5.6-sol",
 				reasoningLevels: [...standardTemplateReasoningLevelsV1],
 			},
 		]);

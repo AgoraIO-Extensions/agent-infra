@@ -268,6 +268,8 @@ const operationalFailureSteps = new Set([
 	"model.candidates.invalid_input",
 	"model.candidates.unavailable",
 	"model.validation.key_invalid",
+	"model.validation.access_denied",
+	"model.validation.codex_client_required",
 	"model.validation.incompatible",
 	"model.validation.unavailable",
 	"store.query",

@@ -73,6 +73,7 @@ import {
 import {
 	AgentDefaultRelayKeyErrorV1,
 	admitAgentDefaultRelayKeyModelsV1,
+	isModelRelayRejectionV1,
 } from "./agent-default-relay-key.js";
 import { decideAgentAccessUpdatePolicy } from "./agent-management-access-policy.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
@@ -932,6 +933,7 @@ function createAgentConfigurationUseCaseV1Internal(
 					};
 			} catch (error) {
 				if (error instanceof AgentConfigurationError) throw error;
+				if (isModelRelayRejectionV1(error)) throw error;
 				if (
 					error instanceof AgentDefaultRelayKeyErrorV1 &&
 					error.code === "model_unsupported"

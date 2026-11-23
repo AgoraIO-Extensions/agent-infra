@@ -416,10 +416,6 @@ it("rejects invalid approved inputs before any request and preserves caller canc
 				...f.input,
 				credential: new TextEncoder().encode("contains\nheader\ncontrol"),
 			},
-			{
-				...f.input,
-				endpoint: { ...f.input.endpoint, allowedModels: ["different"] },
-			},
 			{ ...f.input, endpoint: { ...f.input.endpoint, available: false } },
 			{
 				...f.input,

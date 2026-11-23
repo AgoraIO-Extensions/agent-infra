@@ -15,6 +15,7 @@ import {
 	type ConnectionConsumerRegistrationPolicyV1,
 	captureAgentApiCreatePrincipalsV1,
 	captureConnectionConsumerRegistrationPolicyV1,
+	isModelRelayRejectionV1,
 	type PendingSecretRecordAttachmentsV1,
 	PersonalApiCredentialErrorV1,
 	planAgentApiCreationCompletionV1,
@@ -959,7 +960,8 @@ export class PostgresApplicationFoundationTransactionV1
 			});
 		} catch (error) {
 			const failure =
-				error instanceof PersonalApiCredentialErrorV1
+				error instanceof PersonalApiCredentialErrorV1 ||
+				isModelRelayRejectionV1(error)
 					? error
 					: error instanceof AgentConfigurationError
 						? error.code === "resource_cap_exceeded" ||
