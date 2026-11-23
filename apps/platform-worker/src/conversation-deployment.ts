@@ -1020,6 +1020,10 @@ export function createSessionSandboxResourceInputResolverV1(
 									resourceFence,
 								},
 							),
+							templateBinding: {
+								driver: templateBinding.driver,
+								templateId: templateBinding.templateId,
+							},
 						},
 					}
 				: {}),

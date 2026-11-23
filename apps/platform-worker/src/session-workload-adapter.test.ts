@@ -276,6 +276,67 @@ it("keeps the empty installation receiver on both cold and reserve Hosts", () =>
 	).toThrow();
 });
 
+it("asserts the OpenCode/Pi MCP bridge on the manual install route only for a supported standard template", () => {
+	const configuration = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp",
+		audience: "connection-api",
+		egressProfile: { ref: "approved-egress", revision: "r1" },
+		issuer: "https://connection.example.test/",
+		oauthCallbackUrl: "https://platform.example.test/connection/callback",
+	};
+	const bootstrap = {
+		port: 3443,
+		workerOrigin: "https://install-worker.workload-test.svc:3444/",
+		apiSelector: { component: "platform-api" },
+		clientName: "Agent platform",
+		configuration,
+		approval: {
+			schemaVersion: 1,
+			configFingerprint: connectionSystemAccessFingerprintV1(configuration),
+			egressEnforced: true,
+			source: { ref: "approval", revision: "r1" },
+		},
+		installToken: "install-readback-canary-Z9Z9Z9Z9Z9Z9Z9Z9Z9Z",
+		tlsSecretRef: {
+			name: "session-tls",
+			certKey: "tls.crt",
+			keyKey: "tls.key",
+		},
+		callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+		workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+	};
+	const env = (templateBinding?: {
+		driver: "codex" | "claude" | "acp" | "pi";
+		templateId: string;
+	}) =>
+		Object.fromEntries(
+			(
+				sessionSandboxResourcesV1({
+					...allocation,
+					connectionInstallBootstrap: { ...bootstrap, templateBinding },
+				}).find((resource) => resource.kind === "Pod") as V1Pod
+			).spec?.containers[0]?.env?.map((item) => [item.name, item.value]) ?? [],
+		);
+	expect(env({ driver: "acp", templateId: "opencode" })).toMatchObject({
+		AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE: "verified-v1",
+	});
+	expect(env({ driver: "pi", templateId: "pi" })).toMatchObject({
+		AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE: "verified-v1",
+	});
+	for (const binding of [
+		undefined,
+		{ driver: "codex" as const, templateId: "codex" },
+		{ driver: "claude" as const, templateId: "claude" },
+		{ driver: "acp" as const, templateId: "other" },
+	]) {
+		const values = env(binding);
+		expect(values).not.toHaveProperty("AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE");
+		expect(values).not.toHaveProperty("AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE");
+	}
+});
+
 describe("#4199 C2 publication contract on the Session Host", () => {
 	const configuration = {
 		schemaVersion: 1 as const,
