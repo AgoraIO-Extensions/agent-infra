@@ -1,3 +1,4 @@
+import type { TemplatePublicationCommitV1 } from "@agent-infra/contracts/pilot";
 import type {
 	AgentDefaultRelayKeyBindingV1,
 	AgentDefaultRelayKeyDependenciesV1,
@@ -6,10 +7,7 @@ import type {
 	AgentManagementActorContextV1,
 	AgentManagementStateV1,
 } from "./agent-management.js";
-import type {
-	AutomaticTemplatePublicationAuthorizationPortV1,
-	AutomaticTemplatePublicationCommitV1,
-} from "./automatic-template-publication.js";
+import type { AutomaticTemplatePublicationAuthorizationPortV1 } from "./automatic-template-publication.js";
 import type {
 	PendingSecretRecordAttachmentResolverV1,
 	PendingSecretRecordAttachmentsV1,
@@ -432,7 +430,7 @@ export interface AgentConfigurationResultV1 {
 }
 
 export interface AgentConfigurationWritePlanV1 {
-	readonly automaticPublication?: AutomaticTemplatePublicationCommitV1;
+	readonly automaticPublication?: TemplatePublicationCommitV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
 	readonly baseRevision: number;

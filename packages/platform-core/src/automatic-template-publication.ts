@@ -1,3 +1,7 @@
+import {
+	type TemplatePublicationCommitV1,
+	TemplatePublicationCommitV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { parseStandardTemplateReleaseTargetV1 } from "./agent-configuration-input.js";
 import {
 	type AgentConfigurationActorContextV1,
@@ -10,66 +14,11 @@ import {
 	sameValue,
 } from "./agent-configuration-values.js";
 
-export interface AutomaticTemplatePublicationCommitV1 {
-	readonly schemaVersion: 1;
-	readonly publicationId: string;
-	readonly authorizationRevision: string;
-	readonly batchRef: string;
-	readonly targetRef: string;
-	readonly servicePrincipalRef: string;
-	readonly approvedBy: string;
-	readonly lease: {
-		readonly schemaVersion: 1;
-		readonly itemId: string;
-		readonly leaseOwner: string;
-		readonly deliveryFence: string;
-	};
-}
-export function parseAutomaticTemplatePublicationCommitV1(
+export type AutomaticTemplatePublicationCommitV1 = TemplatePublicationCommitV1;
+export const parseAutomaticTemplatePublicationCommitV1 = (
 	input: unknown,
-): AutomaticTemplatePublicationCommitV1 {
-	if (!input || typeof input !== "object" || Array.isArray(input))
-		throw new Error();
-	const v = input as Record<string, unknown>;
-	const lease = v.lease;
-	if (
-		v.schemaVersion !== 1 ||
-		typeof v.publicationId !== "string" ||
-		typeof v.authorizationRevision !== "string" ||
-		typeof v.batchRef !== "string" ||
-		typeof v.targetRef !== "string" ||
-		typeof v.servicePrincipalRef !== "string" ||
-		typeof v.approvedBy !== "string" ||
-		!lease ||
-		typeof lease !== "object" ||
-		Array.isArray(lease)
-	)
-		throw new Error();
-	const l = lease as Record<string, unknown>;
-	if (
-		l.schemaVersion !== 1 ||
-		typeof l.itemId !== "string" ||
-		typeof l.leaseOwner !== "string" ||
-		typeof l.deliveryFence !== "string" ||
-		!/^[1-9][0-9]{0,18}$/.test(l.deliveryFence)
-	)
-		throw new Error();
-	return {
-		schemaVersion: 1,
-		publicationId: v.publicationId,
-		authorizationRevision: v.authorizationRevision,
-		batchRef: v.batchRef,
-		targetRef: v.targetRef,
-		servicePrincipalRef: v.servicePrincipalRef,
-		approvedBy: v.approvedBy,
-		lease: {
-			schemaVersion: 1,
-			itemId: l.itemId,
-			leaseOwner: l.leaseOwner,
-			deliveryFence: l.deliveryFence,
-		},
-	};
-}
+): TemplatePublicationCommitV1 =>
+	TemplatePublicationCommitV1Schema.parse(input);
 export interface AutomaticTemplatePublicationAuthorizationV1 {
 	readonly schemaVersion: 1;
 	readonly status: "admitted";

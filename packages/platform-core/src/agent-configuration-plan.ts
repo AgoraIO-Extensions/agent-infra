@@ -1,3 +1,4 @@
+import { TemplatePublicationCommitV1Schema } from "@agent-infra/contracts/pilot";
 import {
 	accessTargetKey,
 	parseAvailabilityScope,
@@ -34,7 +35,6 @@ import {
 	snapshotAgentManagementDataObject,
 	snapshotAgentManagementDenseArray,
 } from "./agent-management-input.js";
-import { parseAutomaticTemplatePublicationCommitV1 } from "./automatic-template-publication.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import { parseSkillHubAgentBindingWriteV1 } from "./skill-hub-agent-binding.js";
 
@@ -267,7 +267,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
 		const automaticPublication = Object.hasOwn(values, "automaticPublication")
-			? parseAutomaticTemplatePublicationCommitV1(values.automaticPublication)
+			? TemplatePublicationCommitV1Schema.parse(values.automaticPublication)
 			: undefined;
 		const configuration = decodeAgentConfigurationRecord(values.configuration);
 		requireAdmittedConfigurationPolicy(configuration);
