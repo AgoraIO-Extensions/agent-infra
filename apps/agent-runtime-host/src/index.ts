@@ -10,6 +10,7 @@ import type {
 } from "@agent-infra/agent-runtime";
 import {
 	assertRegisteredProvider,
+	resolveProviderRegistration,
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
@@ -191,7 +192,7 @@ interface StartOptions {
 
 export type RuntimeHostAssemblyOptionsV1 = Pick<
 	RuntimeHostOptions,
-	"createBrowserExecutionContext"
+	"createBrowserExecutionContext" | "providerDeploymentBinding"
 > & {
 	/** Deployment-owned Worker proof/current binding for native metadata reads. */
 	nativeMetadataRead?: RuntimeNativeMetadataReadAssemblyV1;
@@ -477,8 +478,7 @@ export async function assembleRuntimeHost(
 		runtimeConfigurationInvalid();
 	if (binding === "claude" || binding === "pi" || binding === "acp")
 		assertRegisteredProvider(binding === "acp" ? "opencode" : binding);
-	if (binding === "codex")
-		assertRegisteredProvider("codex");
+	if (binding === "codex") assertRegisteredProvider("codex");
 	assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
@@ -1173,10 +1173,15 @@ export async function assembleRuntimeHost(
 			: undefined;
 		const podUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
 		const host = await RuntimeHost.open({
+			...(options.providerDeploymentBinding
+				? { providerDeploymentBinding: options.providerDeploymentBinding }
+				: {}),
 			...(binding !== "fake"
 				? {
-						providerTemplate:
-							binding === "acp" ? ("opencode" as const) : binding,
+						runtimeDriverBinding:
+							(binding === "acp" ? "opencode" : binding) === "opencode"
+								? resolveProviderRegistration("opencode").runtimeDriverBinding
+								: resolveProviderRegistration(binding).runtimeDriverBinding,
 					}
 				: {}),
 			// #4358 I2: one observer per process, so its clock domain is this

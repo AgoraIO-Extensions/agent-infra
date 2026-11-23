@@ -1,17 +1,46 @@
+import type { RuntimeCapabilitiesV1 } from "@agent-infra/contracts/runtime";
+
 export type ProviderTemplate = "claude" | "pi" | "opencode" | "codex";
 export type ProviderPath = "paseo-derived" | "agent-infra-native";
+export type ProviderAdapter =
+	| "claude-query"
+	| "pi-jsonl-rpc"
+	| "generic-acp"
+	| "codex-native";
+
+/** Fixed package-local metadata for one Runtime Driver implementation. */
+export type RuntimeDriverBinding = Readonly<{
+	template: ProviderTemplate;
+	path: ProviderPath;
+	adapter: ProviderAdapter;
+}>;
+
+/** Platform-owned evidence required before standard capabilities are enabled. */
+export type ProviderCapabilityEvidence = Readonly<{
+	runtimeDriverBinding: RuntimeDriverBinding;
+	imageDigest: string;
+	configurationRevision: number;
+	conformance: "passed" | "failed" | "unknown";
+	probe: "passed" | "failed" | "unknown";
+	recovery: "supported" | "unsupported" | "unknown";
+	result: "confirmed" | "unknown";
+}>;
+
+/** Complete deployment binding assembled by Platform and injected into Host. */
+export type ProviderDeploymentBinding = Readonly<{
+	runtimeDriverBinding: RuntimeDriverBinding;
+	imageDigest: string;
+	configurationRevision: number;
+	evidence: ProviderCapabilityEvidence;
+}>;
 
 export type ProviderRegistration = {
-	/** This package owns the fixed Runtime Driver seam only. Deployment bindings are Platform-owned. */
+	/** Runtime package owns this fixed seam. Platform owns deployment bindings. */
 	readonly authority: "runtime-driver";
 	readonly template: ProviderTemplate;
 	readonly path: ProviderPath;
-	readonly deploymentBinding: "platform-standard-template-release";
-	readonly adapter:
-		| "claude-query"
-		| "pi-jsonl-rpc"
-		| "generic-acp"
-		| "codex-native";
+	readonly runtimeDriverBinding: RuntimeDriverBinding;
+	readonly adapter: ProviderAdapter;
 	readonly provenance: {
 		readonly source: "paseo" | "agent-infra";
 		readonly repository: string;
@@ -28,10 +57,7 @@ export type ProviderRegistration = {
 	};
 };
 
-/**
- * Fixed adapter registrations. The Platform registry remains authoritative for
- * image Digest, Service/health checks, capabilities and env/Secret bindings.
- */
+/** Fixed adapter registrations. Platform remains authoritative for deployment. */
 export const PROVIDER_REGISTRY: Readonly<
 	Record<ProviderTemplate, ProviderRegistration>
 > = {
@@ -39,7 +65,11 @@ export const PROVIDER_REGISTRY: Readonly<
 		authority: "runtime-driver",
 		template: "claude",
 		path: "paseo-derived",
-		deploymentBinding: "platform-standard-template-release",
+		runtimeDriverBinding: {
+			template: "claude",
+			path: "paseo-derived",
+			adapter: "claude-query",
+		},
 		adapter: "claude-query",
 		provenance: {
 			source: "paseo",
@@ -67,7 +97,11 @@ export const PROVIDER_REGISTRY: Readonly<
 		authority: "runtime-driver",
 		template: "pi",
 		path: "paseo-derived",
-		deploymentBinding: "platform-standard-template-release",
+		runtimeDriverBinding: {
+			template: "pi",
+			path: "paseo-derived",
+			adapter: "pi-jsonl-rpc",
+		},
 		adapter: "pi-jsonl-rpc",
 		provenance: {
 			source: "paseo",
@@ -96,7 +130,11 @@ export const PROVIDER_REGISTRY: Readonly<
 		authority: "runtime-driver",
 		template: "opencode",
 		path: "paseo-derived",
-		deploymentBinding: "platform-standard-template-release",
+		runtimeDriverBinding: {
+			template: "opencode",
+			path: "paseo-derived",
+			adapter: "generic-acp",
+		},
 		adapter: "generic-acp",
 		provenance: {
 			source: "paseo",
@@ -124,7 +162,11 @@ export const PROVIDER_REGISTRY: Readonly<
 		authority: "runtime-driver",
 		template: "codex",
 		path: "agent-infra-native",
-		deploymentBinding: "platform-standard-template-release",
+		runtimeDriverBinding: {
+			template: "codex",
+			path: "agent-infra-native",
+			adapter: "codex-native",
+		},
 		adapter: "codex-native",
 		provenance: {
 			source: "agent-infra",
@@ -150,14 +192,10 @@ export const PROVIDER_REGISTRY: Readonly<
 	},
 };
 
-/**
- * Resolve the fixed RuntimeHost seam and fail closed when an adapter claims a
- * different implementation path. Provider selection is deployment-owned.
- */
 export function assertProviderRegistration(
 	template: ProviderTemplate,
 	path: ProviderPath,
-	adapter: ProviderRegistration["adapter"],
+	adapter: ProviderAdapter,
 ): ProviderRegistration {
 	const registration = PROVIDER_REGISTRY[template];
 	if (registration.path !== path || registration.adapter !== adapter) {
@@ -166,7 +204,6 @@ export function assertProviderRegistration(
 	return registration;
 }
 
-/** Validate the complete fixed registration selected by a standard binding. */
 export function assertRegisteredProvider(
 	template: ProviderTemplate,
 ): ProviderRegistration {
@@ -184,27 +221,59 @@ export function resolveProviderRegistration(
 	return PROVIDER_REGISTRY[template];
 }
 
-type Gate = "passed" | "failed" | "unknown";
+/** Project Driver declarations only after Platform supplies complete evidence. */
 export function projectProviderCapabilities(
-	template: ProviderTemplate,
-	evidence: {
-		readonly conformance: Gate;
-		readonly probe: Gate;
-		readonly recovery: "supported" | "unsupported" | "unknown";
-		readonly result: "confirmed" | "unknown";
-		readonly declared: Readonly<Record<string, boolean>>;
-	},
-): Record<string, boolean> {
-	resolveProviderRegistration(template);
+	binding: ProviderDeploymentBinding | undefined,
+	declared: RuntimeCapabilitiesV1,
+	runtimeDriverBinding?: RuntimeDriverBinding,
+): RuntimeCapabilitiesV1 {
+	if (!binding) return disabledCapabilities();
+	const registration = resolveProviderRegistration(
+		binding.runtimeDriverBinding.template,
+	);
+	const expected = runtimeDriverBinding ?? registration.runtimeDriverBinding;
+	const supplied = binding.runtimeDriverBinding;
+	const evidenceBinding = binding.evidence.runtimeDriverBinding;
 	const enabled =
-		evidence.conformance === "passed" &&
-		evidence.probe === "passed" &&
-		evidence.recovery === "supported" &&
-		evidence.result === "confirmed";
-	return Object.fromEntries(
-		Object.entries(evidence.declared).map(([name, value]) => [
-			name,
-			enabled && value,
-		]),
+		matchesRuntimeDriverBinding(expected, supplied) &&
+		matchesRuntimeDriverBinding(supplied, evidenceBinding) &&
+		binding.imageDigest === binding.evidence.imageDigest &&
+		binding.configurationRevision === binding.evidence.configurationRevision &&
+		/^sha256:[a-f0-9]{64}$/.test(binding.imageDigest) &&
+		Number.isSafeInteger(binding.configurationRevision) &&
+		binding.configurationRevision > 0 &&
+		binding.evidence.conformance === "passed" &&
+		binding.evidence.probe === "passed" &&
+		binding.evidence.recovery === "supported" &&
+		binding.evidence.result === "confirmed";
+	return {
+		modelSelection: enabled && declared.modelSelection,
+		attachments: enabled && declared.attachments,
+		resultFiles: enabled && declared.resultFiles,
+		connection: enabled && declared.connection,
+		supplementaryInstruction: enabled && declared.supplementaryInstruction,
+		...(enabled && declared.skills ? { skills: declared.skills } : {}),
+		...(enabled && declared.browser ? { browser: declared.browser } : {}),
+	};
+}
+
+function disabledCapabilities(): RuntimeCapabilitiesV1 {
+	return {
+		modelSelection: false,
+		attachments: false,
+		resultFiles: false,
+		connection: false,
+		supplementaryInstruction: false,
+	};
+}
+
+function matchesRuntimeDriverBinding(
+	expected: RuntimeDriverBinding,
+	actual: RuntimeDriverBinding,
+): boolean {
+	return (
+		expected.template === actual.template &&
+		expected.path === actual.path &&
+		expected.adapter === actual.adapter
 	);
 }

@@ -16,6 +16,7 @@ import {
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
+import { PROVIDER_REGISTRY } from "./provider-registry.js";
 
 const directories: string[] = [];
 
@@ -122,11 +123,37 @@ function host(
 	store: FileRuntimeStore,
 	driver: FakeRuntimeDriver,
 	providerTemplate?: "claude" | "pi" | "opencode" | "codex",
+	includeEvidence = true,
 ) {
+	const registration = providerTemplate
+		? PROVIDER_REGISTRY[providerTemplate]
+		: undefined;
 	return RuntimeHost.open({
 		store,
 		driver,
-		...(providerTemplate ? { providerTemplate } : {}),
+		...(registration
+			? {
+					runtimeDriverBinding: registration.runtimeDriverBinding,
+					...(includeEvidence
+						? {
+								providerDeploymentBinding: {
+									runtimeDriverBinding: registration.runtimeDriverBinding,
+									imageDigest: `sha256:${"a".repeat(64)}`,
+									configurationRevision: 1,
+									evidence: {
+										runtimeDriverBinding: registration.runtimeDriverBinding,
+										imageDigest: `sha256:${"a".repeat(64)}`,
+										configurationRevision: 1,
+										conformance: "passed",
+										probe: "passed",
+										recovery: "supported",
+										result: "confirmed",
+									},
+								},
+							}
+						: {}),
+				}
+			: {}),
 		grantValidation: {
 			expectedIssuer: "agent-platform",
 			now: () => "2026-08-28T10:00:00Z",
@@ -944,7 +971,6 @@ describe("RuntimeHost durable Session", () => {
 			turnId: submittedRequest.turnId,
 			sessionGeneration: submittedRequest.sessionGeneration,
 			deliveryFence: 1,
-			hostSessionRef: submitted.hostSessionRef,
 			grant: grant(submittedRequest, ["capabilities.read"]),
 		});
 		expect(capabilities.capabilities).toMatchObject({

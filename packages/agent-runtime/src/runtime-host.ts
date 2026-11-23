@@ -164,7 +164,8 @@ import type {
 } from "./runtime-control-observation.js";
 import {
 	projectProviderCapabilities,
-	type ProviderTemplate,
+	type ProviderDeploymentBinding,
+	type RuntimeDriverBinding,
 } from "./provider-registry.js";
 import {
 	createRuntimeFileBridgeBindingV1,
@@ -181,8 +182,10 @@ import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 export interface RuntimeHostOptions {
-	/** Standard template identity fixed by RuntimeHost deployment admission. */
-	providerTemplate?: ProviderTemplate;
+	/** Fixed Runtime Driver metadata selected by deployment admission. */
+	runtimeDriverBinding?: RuntimeDriverBinding;
+	/** Complete Platform-owned binding and evidence. Missing evidence fails closed. */
+	providerDeploymentBinding?: ProviderDeploymentBinding;
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	/** #4358 I2: fixed stdout observation of stop stages; never an authority. */
 	controlObserver?: RuntimeControlObserverV1;
@@ -2744,11 +2747,20 @@ export class RuntimeHost {
 					},
 				});
 			}
+			const projectedReadinessCapabilities =
+				this.options.runtimeDriverBinding ||
+				this.options.providerDeploymentBinding
+					? projectProviderCapabilities(
+							this.options.providerDeploymentBinding,
+							capabilities,
+							this.options.runtimeDriverBinding,
+						)
+					: capabilities;
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
 				core: "passed",
-				capabilities,
+				capabilities: projectedReadinessCapabilities,
 			});
 		} catch (error) {
 			publishBrowserAssembly(
@@ -2795,31 +2807,18 @@ export class RuntimeHost {
 			await callDriver(() => this.options.driver.getCapabilities()),
 		);
 		if (!capabilities.success) driverInvalid();
-		const projectedCapabilities = this.options.providerTemplate
-			? projectProviderCapabilities(this.options.providerTemplate, {
-					conformance: "passed",
-					probe: "passed",
-					recovery: "supported",
-					result: "confirmed",
-					declared: {
-						modelSelection: capabilities.data.modelSelection,
-						attachments: capabilities.data.attachments,
-						resultFiles: capabilities.data.resultFiles,
-						connection: capabilities.data.connection,
-						supplementaryInstruction:
-							capabilities.data.supplementaryInstruction,
-					},
-				})
-			: capabilities.data;
-		const responseCapabilities = RuntimeCapabilitiesV1Schema.parse({
-			...projectedCapabilities,
-			...(capabilities.data.skills
-				? { skills: capabilities.data.skills }
-				: {}),
-			...(capabilities.data.browser
-				? { browser: capabilities.data.browser }
-				: {}),
-		});
+		const projectedCapabilities =
+			this.options.runtimeDriverBinding ||
+			this.options.providerDeploymentBinding
+				? projectProviderCapabilities(
+						this.options.providerDeploymentBinding,
+						capabilities.data,
+						this.options.runtimeDriverBinding,
+					)
+				: capabilities.data;
+		const responseCapabilities = RuntimeCapabilitiesV1Schema.parse(
+			projectedCapabilities,
+		);
 		return {
 			schemaVersion: 1,
 			capabilities: responseCapabilities,

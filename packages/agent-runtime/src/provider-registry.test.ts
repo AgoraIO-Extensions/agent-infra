@@ -50,9 +50,7 @@ describe("fixed Provider Registry", () => {
 			opencode: "paseo-derived",
 			codex: "agent-infra-native",
 		});
-		expect(resolveProviderRegistration("claude").template).toBe(
-			"claude",
-		);
+		expect(resolveProviderRegistration("claude").template).toBe("claude");
 	});
 
 	it("admits every standard template only through its complete registration", () => {
@@ -98,23 +96,83 @@ describe("fixed Provider Registry", () => {
 		});
 	});
 
-	it("keeps capabilities disabled until every conservative gate passes", () => {
-		const result = projectProviderCapabilities("claude", {
-			conformance: "passed",
-			probe: "passed",
-			recovery: "supported",
-			result: "confirmed",
-			declared: { modelSelection: true, connection: true },
+	it.each(["claude", "pi", "opencode", "codex"] as const)(
+		"uses the same evidence projection for %s",
+		(template) => {
+			const registration = PROVIDER_REGISTRY[template];
+			const declared = {
+				modelSelection: true,
+				attachments: true,
+				resultFiles: true,
+				connection: true,
+				supplementaryInstruction: true,
+			};
+			const projected = projectProviderCapabilities(
+				{
+					runtimeDriverBinding: registration.runtimeDriverBinding,
+					imageDigest: `sha256:${"d".repeat(64)}`,
+					configurationRevision: 7,
+					evidence: {
+						runtimeDriverBinding: registration.runtimeDriverBinding,
+						imageDigest: `sha256:${"d".repeat(64)}`,
+						configurationRevision: 7,
+						conformance: "passed",
+						probe: "passed",
+						recovery: "supported",
+						result: "confirmed",
+					},
+				},
+				declared,
+			);
+			expect(projected).toEqual(declared);
+		},
+	);
+
+	it("fails closed when deployment evidence is missing or unknown", () => {
+		const declared = {
+			modelSelection: true,
+			attachments: true,
+			resultFiles: true,
+			connection: true,
+			supplementaryInstruction: true,
+			skills: [
+				{
+					schemaVersion: 1 as const,
+					name: "skill",
+					version: "1",
+					manifestSha256: "a".repeat(64),
+					packageDigest: "b".repeat(64),
+					readOnly: true as const,
+				},
+			],
+		};
+		expect(projectProviderCapabilities(undefined, declared)).toEqual({
+			modelSelection: false,
+			attachments: false,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
 		});
-		expect(result).toEqual({ modelSelection: true, connection: true });
-		expect(
-			projectProviderCapabilities("claude", {
-				conformance: "passed",
-				probe: "unknown",
-				recovery: "supported",
-				result: "confirmed",
-				declared: { modelSelection: true },
-			}),
-		).toEqual({ modelSelection: false });
+		const binding = {
+			runtimeDriverBinding: PROVIDER_REGISTRY.claude.runtimeDriverBinding,
+			imageDigest: `sha256:${"c".repeat(64)}`,
+			configurationRevision: 1,
+			evidence: {
+				runtimeDriverBinding: PROVIDER_REGISTRY.claude.runtimeDriverBinding,
+				imageDigest: `sha256:${"c".repeat(64)}`,
+				configurationRevision: 1,
+				conformance: "unknown" as const,
+				probe: "passed" as const,
+				recovery: "supported" as const,
+				result: "confirmed" as const,
+			},
+		};
+		expect(projectProviderCapabilities(binding, declared)).toEqual({
+			modelSelection: false,
+			attachments: false,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		});
 	});
 });
