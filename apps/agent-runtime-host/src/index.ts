@@ -893,7 +893,7 @@ export async function assembleRuntimeHost(
 						});
 					},
 					isolationMode: codexIsolationMode,
-					coreConversationKey,
+					...(coreConversationKey ? { coreConversationKey } : {}),
 					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
