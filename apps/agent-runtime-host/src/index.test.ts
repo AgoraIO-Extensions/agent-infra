@@ -981,6 +981,70 @@ describe("RuntimeHost environment assembly", () => {
 		}
 	});
 
+	it("hands Pi the dynamic Connection reader of the install receiver", async () => {
+		const { values, dataDirectory } = await claudeAssemblyFixture("absent");
+		delete values.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE;
+		delete values.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION;
+		values.AGENT_INFRA_RUNTIME_DRIVER = "pi";
+		values.AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE = "verified-v1";
+		let openedWith: Record<string, unknown> | undefined;
+		runtimeAssemblyMocks.openPiRuntime.mockImplementation(
+			async (options: Record<string, unknown>) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(join(dataDirectory, "pi-driver.json"));
+			},
+		);
+		const tool = {
+			name: "write_note",
+			description: "Write a note",
+			inputSchema: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+		};
+		const prepare = vi.fn(async () => ({
+			status: "available" as const,
+			fetch: (async () => new Response(null, { status: 404 })) as never,
+			key: "synthetic-key",
+			cert: "synthetic-cert",
+			port: 0,
+			runtimeOrigin: "https://runtime.example.test",
+			dynamicReader: {
+				contract: {
+					serviceRef: "connection-fixture",
+					contract: {
+						ref: "fixture-mcp-contract",
+						revision: "r1",
+						serverInfo: { name: "fixture", version: "1" },
+						tools: [{ name: "write_note" }],
+					},
+					toolDeclarations: [tool],
+				},
+				resolveTarget: async () => {
+					throw new DynamicConnectionRefusalV1("unavailable");
+				},
+				resolveInput: async () => undefined,
+			},
+			close: async () => {},
+		}));
+		const runtime = await assembleRuntimeHost(values, undefined, {
+			prepareConnectionInstall: prepare,
+		});
+		try {
+			expect(prepare).toHaveBeenCalledTimes(1);
+			expect(openedWith?.standardConnectionClient).toBeUndefined();
+			expect(openedWith?.dynamicConnectionClient).toMatchObject({
+				declared: {
+					contract: { ref: "fixture-mcp-contract", revision: "r1" },
+					tools: [tool],
+				},
+			});
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	it("does not open the install receiver for a Driver without a protected Connection transport", async () => {
 		const { values, dataDirectory } = await claudeAssemblyFixture("absent");
 		values.AGENT_INFRA_RUNTIME_DRIVER = "pi";

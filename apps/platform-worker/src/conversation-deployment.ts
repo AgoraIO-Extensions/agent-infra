@@ -934,12 +934,7 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
-			...(install &&
-			runtime &&
-			// Pi has no dynamic reader consumer yet (#4349 PR 2).
-			runtime.driver !== "pi" &&
-			templateBinding &&
-			!runtime.custom
+			...(install && runtime && templateBinding && !runtime.custom
 				? {
 						connectionInstallBootstrap: {
 							port: install.port,

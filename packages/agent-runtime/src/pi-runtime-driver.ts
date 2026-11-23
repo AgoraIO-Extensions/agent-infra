@@ -12,6 +12,10 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
+import {
+	type DynamicConnectionClientV1,
+	resolveConnectionForBridgeV1,
+} from "./dynamic-connection.js";
 import type { RuntimeMessagesTransportOptions } from "./messages-model-transport.js";
 import {
 	type NativeProcessLaunch,
@@ -27,9 +31,9 @@ import {
 	createStandardMcpAcpBridge,
 	type StandardMcpAcpBridge,
 } from "./standard-mcp-acp-bridge.js";
-import {
+import type {
 	StandardMcpClient,
-	type StandardMcpClientOptions,
+	StandardMcpClientOptions,
 } from "./standard-mcp-client.js";
 
 export interface PiRuntimeDriverOptions {
@@ -45,6 +49,8 @@ export interface PiRuntimeDriverOptions {
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	/** Host-owned protected Connection client; only enabled by the verified Pi gate. */
 	readonly standardConnectionClient?: StandardMcpClientOptions;
+	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
+	readonly dynamicConnectionClient?: DynamicConnectionClientV1;
 	readonly authorizeToolAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -73,7 +79,9 @@ export const PiRuntimeDriver = {
 			workspaceAttachments: true,
 			supportsResultFiles: true,
 			sandboxReferences: true,
-			supportsConnection: options.standardConnectionClient !== undefined,
+			supportsConnection:
+				options.standardConnectionClient !== undefined ||
+				options.dynamicConnectionClient !== undefined,
 			cursorPrefix: "pi",
 			nativeCommandSourceVersion: "0.99.0",
 			retireSession: (directory) =>
@@ -159,16 +167,21 @@ export const PiRuntimeDriver = {
 						};
 						mcpExtensionEnabled = true;
 					}
-					if (options.standardConnectionClient) {
+					if (
+						options.standardConnectionClient ||
+						options.dynamicConnectionClient
+					) {
 						if (!session.connectionReference)
 							throw new Error("CONNECTION_STANDARD_CLIENT_UNAVAILABLE");
-						connectionClient = await StandardMcpClient.open(
-							options.standardConnectionClient,
+						const resolved = await resolveConnectionForBridgeV1(
+							options,
 							session.connectionReference,
 							AbortSignal.timeout(10_000),
 						);
+						connectionClient =
+							"client" in resolved ? resolved.client : undefined;
 						connectionGateway = await createStandardMcpAcpBridge({
-							client: connectionClient,
+							...resolved,
 							execution: session.connectionReference,
 							nativeSessionRef: () => session.runtimeSessionRef,
 							recordOperationFact: callbacks.recordOperationFact,
@@ -218,7 +231,9 @@ export const PiRuntimeDriver = {
 					return {
 						...native,
 						reusable: () =>
-							options.standardConnectionClient || browserGateway
+							options.standardConnectionClient ||
+							options.dynamicConnectionClient ||
+							browserGateway
 								? false
 								: (native.reusable?.() ?? true),
 						startTurn: (next) => {
