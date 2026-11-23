@@ -57,3 +57,28 @@ node deploy/observability/grafana/provision.mts ./dashboard-release https://plat
 
 Grafana 重启后从文件恢复固定 UID 的数据源和看板。将该面板的 HTTPS 地址配置到正式 /ops，
 停止临时预览的采样与端口转发，由第二位管理员重新登录查看新样本。
+
+## ACK 资源历史
+
+常驻 Grafana 可在生成同一业务看板时附加 ARMS 历史面板。为本环境选择系统管理员专用的
+Prometheus 数据源 UID、后端真实的集群标签名与值、以及目标 namespace。命令示例使用占位值。
+
+```sh
+node deploy/observability/grafana/provision.mts ./dashboard-release https://platform.example.invalid/ops \
+  approved-arms cluster_id cluster-a platform-a
+```
+
+已有数据源使用上述形式。若要随 Helm release 一起恢复数据源，可追加目标 ARMS 的 HTTPS 查询基址。
+部署方通过 Grafana 容器的受管 Secret 提供 OPS_ARMS_USER 与 OPS_ARMS_PASSWORD（ARMS V2 Basic），
+授予目标 MetricStore 最小只读权限。集群及 namespace 过滤决定图表统计范围；
+数据源自身的访问范围由云端授权限制。仅在源端能限定部署环境后启用。
+
+所有资源曲线沿用业务看板所选时段，按后端实际保留范围回查。最小查询步长 30 秒，
+CPU 为五分钟速率；原始样本超过两分钟时，用量与覆盖数留空。每个指标来源可回看其最后采样时间。
+Pod 就绪、容器重启、PVC 状态和容量均为当时的采样；重启数可随 Pod 回收下降。
+PVC 实际用量仅汇总有测量值的卷，申请量另列。节点按共享集群汇总；
+Agent 专属资源沿平台既有 UID、代次及时间绑定下钻。检查来源标签、采集间隔与保留期后，
+在固定故障窗口记录业务查询、资源查询耗时、返回样本数和后端开销。资源源故障时单独面板显示缺样或查询失败，
+业务数据仍通过 PostgreSQL 查询。Kubernetes API 当前快照在平台资源页展示采样时间。
+
+回归命令 `node tests/observability/operations-promql.mjs` 使用 promtool 对真实 PromQL 求值。
