@@ -229,6 +229,43 @@ add(
 	210,
 	[{ labels: "{}", value: 1 }],
 );
+const readyTarget = targets.find(
+	(t) => t.legendFormat === "Ready 指标 Pod",
+).expr;
+add(
+	"partial readiness feed retains its own coverage",
+	[
+		{
+			series:
+				'kube_pod_status_ready{cluster_id="a",namespace="ns",pod="p1",uid="u1",condition="true"}',
+			values: "1+0x10",
+		},
+		{
+			series:
+				'kube_pod_status_ready{cluster_id="a",namespace="ns",pod="p2",uid="u2",condition="true"}',
+			values: "1 stale",
+		},
+	],
+	readyTarget,
+	210,
+	[{ labels: "{}", value: 1 }],
+);
+const lastSeen = targets.find(
+	(t) => t.instant && t.legendFormat === "PVC 申请",
+).expr;
+add(
+	"last raw timestamp survives an entire selected window of missing PVC data",
+	[
+		{
+			series:
+				'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="ns",persistentvolumeclaim="data"}',
+			values: "10 10 10 stale",
+		},
+	],
+	lastSeen,
+	900,
+	[{ labels: "{}", value: 60000 }],
+);
 const directory = mkdtempSync(join(tmpdir(), "operations-promql-"));
 try {
 	const file = join(directory, "rules.yaml");

@@ -92,7 +92,7 @@ test("ACK resource panels use the selected window and the deployment's approved 
 		for (const target of panel.targets) {
 			assert.equal(target.datasource.uid, "approved-arms");
 			assert.ok(target.expr.includes('cluster_id="cluster-a"'));
-			assert.ok(target.range);
+			assert.ok(target.range || (panel.type === "stat" && target.instant));
 			assert.doesNotMatch(target.expr, /or vector\(0\)/);
 		}
 	}
