@@ -958,7 +958,7 @@ describe("RuntimeHost durable Session", () => {
 			"claude",
 		);
 		const submittedRequest = submitRequest();
-		const submitted = await runtimeHost.submitTurn(submittedRequest);
+		await runtimeHost.submitTurn(submittedRequest);
 		const capabilities = await runtimeHost.capabilities({
 			schemaVersion: 1,
 			requestId: "request-provider-capabilities",

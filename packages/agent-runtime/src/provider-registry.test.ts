@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	assertRegisteredProvider,
 	assertProviderRegistration,
+	assertRegisteredProvider,
 	PROVIDER_REGISTRY,
 	projectProviderCapabilities,
 	resolveProviderRegistration,
