@@ -4,10 +4,15 @@ import {
 	randomUUID,
 	timingSafeEqual,
 } from "node:crypto";
-import {
-	type TemplatePublicationServiceIdentityV1,
-	TemplatePublicationServiceIdentityV1Schema,
-} from "@agent-infra/contracts/pilot";
+export interface TemplatePublicationServiceIdentityV1 {
+	readonly schemaVersion:1; readonly principalRef:string; readonly deploymentRef:string; readonly publicationId:string; readonly issuer:string; readonly keyVersion:string;
+	readonly audience:"platform.template-publication.v1"; readonly purpose:"ready"|"activate"|"run"|"read"; readonly requestRef:string; readonly issuedAt:string; readonly expiresAt:string;
+}
+function parseTemplatePublicationServiceIdentityV1(value:unknown):TemplatePublicationServiceIdentityV1 {
+	if(!value || typeof value!=="object" || Array.isArray(value))reject(); const v=value as Record<string,unknown>;
+	if(v.schemaVersion!==1 || typeof v.principalRef!=="string" || typeof v.deploymentRef!=="string" || typeof v.publicationId!=="string" || typeof v.issuer!=="string" || typeof v.keyVersion!=="string" || v.audience!=="platform.template-publication.v1" || !["ready","activate","run","read"].includes(String(v.purpose)) || typeof v.requestRef!=="string" || typeof v.issuedAt!=="string" || typeof v.expiresAt!=="string") reject();
+	return v as TemplatePublicationServiceIdentityV1;
+}
 
 const header = "x-platform-template-publication";
 export interface TemplatePublicationServiceKeyV1 {
@@ -109,7 +114,7 @@ export function createTemplatePublicationServiceTransportV1(input: {
 				if (new URL(request.url).protocol !== "https:") reject();
 				const material = key(await input.currentKey());
 				const now = Date.now();
-				const identity = TemplatePublicationServiceIdentityV1Schema.parse({
+				const identity = parseTemplatePublicationServiceIdentityV1({
 					schemaVersion: 1,
 					principalRef: material.principalRef,
 					deploymentRef: material.deploymentRef,
@@ -189,7 +194,7 @@ export function createTemplatePublicationServiceVerifierV1(input: {
 						"bodyDigest,identity,method,path"
 				)
 					reject();
-				const identity = TemplatePublicationServiceIdentityV1Schema.parse(
+				const identity = parseTemplatePublicationServiceIdentityV1(
 					envelope.identity,
 				);
 				const url = new URL(request.url);
@@ -210,7 +215,7 @@ export function createTemplatePublicationServiceVerifierV1(input: {
 		async isServiceCurrent(identity: TemplatePublicationServiceIdentityV1) {
 			try {
 				return current(
-					TemplatePublicationServiceIdentityV1Schema.parse(identity),
+					parseTemplatePublicationServiceIdentityV1(identity),
 					key(await input.currentKey()),
 				);
 			} catch {

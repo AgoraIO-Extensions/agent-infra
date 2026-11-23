@@ -1,4 +1,4 @@
-import type { TemplatePublicationCommitV1 } from "@agent-infra/contracts/pilot";
+import type { AutomaticTemplatePublicationCommitV1 } from "./automatic-template-publication.js";
 import type {
 	AgentDefaultRelayKeyBindingV1,
 	AgentDefaultRelayKeyDependenciesV1,
@@ -430,7 +430,7 @@ export interface AgentConfigurationResultV1 {
 }
 
 export interface AgentConfigurationWritePlanV1 {
-	readonly automaticPublication?: TemplatePublicationCommitV1;
+	readonly automaticPublication?: AutomaticTemplatePublicationCommitV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
 	readonly baseRevision: number;

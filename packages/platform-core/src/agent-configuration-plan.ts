@@ -1,4 +1,4 @@
-import { TemplatePublicationCommitV1Schema } from "@agent-infra/contracts/pilot";
+import { parseAutomaticTemplatePublicationCommitV1 } from "./automatic-template-publication.js";
 import {
 	accessTargetKey,
 	parseAvailabilityScope,
@@ -267,7 +267,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
 		const automaticPublication = Object.hasOwn(values, "automaticPublication")
-			? TemplatePublicationCommitV1Schema.parse(values.automaticPublication)
+			? parseAutomaticTemplatePublicationCommitV1(values.automaticPublication)
 			: undefined;
 		const configuration = decodeAgentConfigurationRecord(values.configuration);
 		requireAdmittedConfigurationPolicy(configuration);
