@@ -22,6 +22,7 @@ export interface OperationsConfigurationV2 {
 		aggregateDays: number;
 		aggregateStepSeconds: number;
 	};
+	readonly dashboardUrl?: string;
 	readonly logs?: { url: string; retentionDays: number };
 	readonly traces?: { url: string; retentionDays: number };
 }
@@ -95,6 +96,7 @@ export async function readOperationsConfigurationV2(
 			"workloadNamespaceRef",
 			"alerts",
 			"prometheus",
+			"dashboardUrl",
 			"logs",
 			"traces",
 		]);
@@ -220,6 +222,9 @@ export async function readOperationsConfigurationV2(
 						},
 					}
 				: {}),
+			...(value.dashboardUrl === undefined
+				? {}
+				: { dashboardUrl: url(value.dashboardUrl) }),
 			...(value.logs === undefined ? {} : { logs: link(value.logs) }),
 			...(value.traces === undefined ? {} : { traces: link(value.traces) }),
 		};

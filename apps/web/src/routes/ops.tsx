@@ -13,10 +13,24 @@ import {
 
 import { TaskEvidence } from "../features/operations/task-evidence.js";
 
+function historyWindow(input: Record<string, unknown>) {
+	const from = Number(input.from);
+	const to = Number(input.to);
+	return Number.isSafeInteger(from) &&
+		Number.isSafeInteger(to) &&
+		from > 0 &&
+		to > from &&
+		to - from <= 30 * 86400000 &&
+		to <= Date.now() + 60000
+		? { from, to }
+		: {};
+}
+
 export const Route = createFileRoute("/ops")({
 	validateSearch: (
 		input: Record<string, unknown>,
-	): { agentId?: string; sessionId?: string } => ({
+	): { agentId?: string; sessionId?: string; from?: number; to?: number } => ({
+		...historyWindow(input),
 		agentId:
 			typeof input.agentId === "string" && input.agentId.length <= 256
 				? input.agentId
@@ -35,7 +49,7 @@ function OperationsRoute() {
 	const [forbiddenIdentity, setForbiddenIdentity] = useState<string | null>(
 		null,
 	);
-	const { agentId = "", sessionId = "" } = Route.useSearch();
+	const { agentId = "", sessionId = "", from, to } = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const query = useQuery({
 		queryKey: ["ops-resources", identityKey, agentId, sessionId],
@@ -86,7 +100,9 @@ function OperationsRoute() {
 	const taskEvidence =
 		!denied && agentId && sessionId ? (
 			<TaskEvidence
-				key={JSON.stringify([identityKey, agentId, sessionId])}
+				from={from}
+				to={to}
+				key={JSON.stringify([identityKey, agentId, sessionId, from, to])}
 				identityKey={identityKey}
 				agentId={agentId}
 				sessionId={sessionId}
@@ -105,15 +121,22 @@ function OperationsRoute() {
 						agentId={agentId}
 						sessionId={sessionId}
 						onSelectAgent={(value) => {
-							void navigate({ search: { agentId: value, sessionId: "" } });
+							void navigate({
+								search: { from, to, agentId: value, sessionId: "" },
+							});
 						}}
 						onSelectSession={(value) => {
-							void navigate({ search: { agentId, sessionId: value } });
+							void navigate({
+								search: { from, to, agentId, sessionId: value },
+							});
 						}}
 						history={
 							<div id="ops-history" className="space-y-4">
 								{taskEvidence}
 								<ResourceHistory
+									key={JSON.stringify([from, to])}
+									from={from}
+									to={to}
 									identityKey={identityKey}
 									onDenied={() => setForbiddenIdentity(identityKey)}
 									agentId={agentId}

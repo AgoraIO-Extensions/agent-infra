@@ -4091,6 +4091,39 @@ export type WithdrawQueuedMessageResponses = {
 
 export type WithdrawQueuedMessageResponse = WithdrawQueuedMessageResponses[keyof WithdrawQueuedMessageResponses];
 
+export type CheckOperationsDashboardAccessData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/ops/dashboard-access';
+};
+
+export type CheckOperationsDashboardAccessErrors = {
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Forbidden
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Identity service unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CheckOperationsDashboardAccessError = CheckOperationsDashboardAccessErrors[keyof CheckOperationsDashboardAccessErrors];
+
+export type CheckOperationsDashboardAccessResponses = {
+    /**
+     * Active system administrator
+     */
+    204: void;
+};
+
+export type CheckOperationsDashboardAccessResponse = CheckOperationsDashboardAccessResponses[keyof CheckOperationsDashboardAccessResponses];
+
 export type GetObservabilityStatusData = {
     body?: never;
     path?: never;

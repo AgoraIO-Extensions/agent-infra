@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { OperationsTasksV2Schema } from "@agent-infra/contracts/pilot";
 import { OperationsScopeErrorV2 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -22,7 +23,7 @@ const input = {
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("operations-task");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
-	sql = postgres(database.databaseUrl);
+	sql = postgres(database.databaseUrl, { max: 1 });
 	store = new PostgresOperationsTaskStoreV2(
 		database.databaseUrl,
 		"ops-namespace",
@@ -362,3 +363,29 @@ it.each(["timeout", "aborted"] as const)(
 	},
 	6000,
 );
+
+it("scopes Grafana to whole-window aggregates and denies ungranted roles", async () => {
+	const ddl = await readFile(
+		new URL(
+			"../../../deploy/observability/grafana/execution-impact.sql",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	await sql.unsafe(ddl);
+	const [impact] =
+		await sql`select * from platform_ops_dashboard.execution_impact(${input.start}, ${input.end}, 'total')`;
+	expect(impact).toMatchObject({
+		submissions: "0",
+		failed: "1",
+		failed_users: "1",
+		failed_applications: "0",
+	});
+	await expect(
+		sql`select * from platform_ops_dashboard.first_output(now()-interval '2 days',now())`,
+	).rejects.toMatchObject({ code: "22023" });
+	await sql`create role ops_dashboard_ungranted`;
+	const [access] =
+		await sql`select has_function_privilege('ops_dashboard_ungranted','platform_ops_dashboard.execution_impact(timestamptz,timestamptz,text)','execute') as allowed`;
+	expect(access?.allowed).toBe(false);
+});
