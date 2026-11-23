@@ -937,7 +937,8 @@ it("binds Core Runtime HTTP authorization to a fresh installation on this Pod an
 		expect(execute).not.toHaveBeenCalled();
 		const first = await send(renewed);
 		expect(first.status).toBe(200);
-		const firstAck = await first.json();
+		const firstAck = (await first.json()) as { hostSessionRef: string };
+		expect(typeof firstAck.hostSessionRef).toBe("string");
 		expect(execute).toHaveBeenCalledTimes(1);
 		const replay = await send(renewed);
 		expect(replay.status).toBe(200);
