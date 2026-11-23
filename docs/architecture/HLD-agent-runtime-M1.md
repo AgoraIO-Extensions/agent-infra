@@ -80,7 +80,7 @@ env/Secret、模型配置或 Skill 不能提供或覆盖 selector；Host 保留�
 [工程 Spec §10.4](SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)
 和本文的恢复契约。
 
-标准 Runtime 的 active 配置只包含获准 Relay endpoint、模型、reasoning 和 Driver 能力，不含个人或 Agent 默认 Relay Key。Worker 按 Execution 从其已固化的 Key 版本解密，经受认证的私有接口交付本次 Key；Host/Driver 仅在该执行内存中使用，不能跨用户或执行复用。模板只有真实镜像、Driver 和模型链路各自验证后才标记就绪；未就绪时目录显示原因并拒绝申请。权威配置与迁移边界见工程 Spec 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
+标准 Runtime 的 active 配置只包含获准 Relay endpoint、模型、reasoning 和 Driver 能力，不含个人或 Agent 默认 Relay Key。Worker 按 Execution 固化的授权类型取得执行材料：手动录入时解密原版本 Secret，自动授权时按工程 Spec §10.7 获取原版本受限材料，经受认证的私有接口交付本次 Key；Host/Driver 仅在该执行内存中使用，不能跨用户或执行复用。模板只有真实镜像、Driver 和模型链路各自验证后才标记就绪；未就绪时目录显示原因并拒绝申请。权威配置与迁移边界见工程 Spec 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
 标准模板的模型协议与原生 Driver 协议是不同边界。Codex Native 当前消费 Responses，Claude
 Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生协议不能证明模型端点可用。Host 只消费 Worker 已验证的
@@ -441,7 +441,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 ### 7.1 Session 生命周期
 
-1. 首个实际投递的 Execution 由 RuntimeHost Driver 创建 Runtime Session；尚在平台等待的任务不提前创建原生 Session。RuntimeHost 在所属 Sandbox PVC 中持久化 Host Session Ref 到原生 Session 的映射，worker 侧 Client Adapter 只保存 Conversation 到不透明 Host Session Ref 的映射。
+1. 对托管目标，首个实际投递的 Execution 由 RuntimeHost Driver 创建 Runtime Session；尚在平台等待的任务不提前创建原生 Session。RuntimeHost 在所属 Sandbox PVC 中持久化 Host Session Ref 到原生 Session 的映射，worker 侧 Client Adapter 只保存 Conversation 到不透明 Host Session Ref 的映射。
 2. 后续 Execution 必须恢复同一个 Session，不能以新 Session 代替恢复。
 3. Conversation 关闭或 Agent 停用时，按工程 Spec §10.1.1 拒绝新业务并停止/核实原执行；确认无剩余副作用后关闭原生 Session 和回收对应计算资源，保留原持久映射与历史。M1 不向用户提供删除 Conversation。
 
@@ -460,7 +460,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 - Generic ACP 使用未修改的原生 Runtime。原 Session 映射、已确认请求结果和首次转发前持久化的事件日志按 §§8.1–8.2 恢复；原生 `session/prompt` 的最终响应先持久化，才能发布对应终态。原生进程退出或最终响应丢失且没有可靠结果证据时，原 Turn 保持 `unknown`，不把进程退出、`cancel` 通知发送成功或 `loadSession` 成功推断为原任务完成、失败或取消。后续查询和同请求重放不重发 prompt，未知 Turn 仍占用该 Conversation 的活跃位置；只有取得可靠终态证据才能接受下一 Turn。用户可以明确新建 Conversation，平台不自动替换 Session。单次结果未知不等于 Session 无法恢复，不因此执行代次隔离；只有实际 Session 或持久状态恢复失败才进入本节的隔离流程。该边界不要求维护原生源码 fork 或增加专用协议扩展；Conformance 必须同时证明已确认终态、事件和游标可恢复，以及不确定窗口不会被伪造为确定结果。
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和不透明 Host Session Ref；未开始的 API 任务保留原顺序与等待期限，按当前授权继续调度。运行中任务沿原 Execution/Session 查询，不能因进程重启生成新任务。
-- 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
+- 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、原供应方授权版本无法取得、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在所属 Sandbox PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
 - Sandbox Pod 重启后仅复用该 Sandbox 的原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
 - 首次安装供应随原 Host 绑定失效，已发送的不明结果沿

@@ -1509,13 +1509,13 @@ UID 或不匹配的 fence 不能授权删除。停止、停用或更高管理 fe
 ### 10.7 标准模板模型配置
 
 - 部署通过既有 ModelCatalogAdapter 提供固定、获准的 Relay endpoint、protocol profile 和流式/tool/reasoning 能力政策；Owner 不能输入 Base URL、认证 header 或目录外 endpoint。目录快照继续使用 `schemaVersion: 1`、精确 `revision`、`validUntil`、TLS/禁止重定向和可用状态，过期、移除或不兼容时拒绝新配置。Responses 与 Messages 仍分别按目录 profile 和标准模板 Driver 绑定，不能按 URL 或模型名猜协议。
-- 依据[平台 PRD §8](../prd/PRD-agent-platform-M1.md#8-标准模板的模型配置)解析模型授权。Relay Adapter 按可信付费主体列出有序可用候选；显式候选或手动录入优先，否则取第一项。候选为空、覆盖失效或授权撤销时返回可操作的原因，不跨主体回退。人工录入的 Secret 按用户或 Agent 用途与 AAD 加密、版本化且只写；自动授权保存受限引用，实际材料沿受信执行路径交付。候选目录、浏览器、模型上下文、普通查询与审计均不得取得凭据原值。
+- 依据[平台 PRD §8](../prd/PRD-agent-platform-M1.md#8-标准模板的模型配置)解析模型授权。Relay Adapter 按可信付费主体列出有序可用候选；显式候选或手动录入优先，否则取第一项。候选为空、覆盖失效或授权撤销时返回可操作的原因，不跨主体回退。候选、显式选择和自备 Key 均由供应方或受信 Adapter 核验当前付费主体的使用权；仅验证 Key 能调用模型不足以确认主体归属。人工录入的 Secret 按用户或 Agent 用途与 AAD 加密、版本化且只写；自动授权保存受限引用。首次投递及恢复均按原供应方版本、付费主体和授权版本获取受限执行材料；版本失效或无法按原绑定取得时明确失败。候选目录、浏览器、模型上下文、普通查询与审计均不得取得凭据原值。
 - Owner 允许模型与默认模型从 Agent 默认 Key 的 Relay `/v1/models` 可见结果中选取；Relay 负责发布 Key 可见的模型和执行模型访问限制。reasoning 档位为平台固定的 `low`、`medium`、`high`、`xhigh`、`max`，不按模型、端点或模板登记。`/v1/models` 仅用于候选展示，不证明真实模型请求必然成功：保存时用默认 Key 对新增的（模型，档位）组合各发起一次按模板协议的极小真实请求，失败即拒绝保存，并返回稳定、可操作的原因；已保存且未变化的组合不重复验证。Web/企微只展示 Owner 允许清单，不按个人 Key 预过滤；API 使用同一 Owner 清单。候选、默认值或 capability 无效时拒绝保存或提交，不静默切换模型。实际认证、模型和额度错误由 Relay 返回后映射为稳定、脱敏、可操作的错误。来源与验证的取舍见 [ADR-0030](../adr/0030-source-standard-template-models-from-relay.md)。
 - 模型显示名由 API 的受信部署输入提供，按精确的 `endpointId`、`modelId` 关联，并由 ModelCatalog 模块校验名称表及其当前目录关联。名称只用于展示，不参与允许集合、协议、Key、版本或执行绑定；不能从浏览器输入、模型自报名称或解析 `optionId` 推导。名称非空、有界且不含控制字符，重复关联、未知端点或目录政策不允许的模型拒绝；缺少名称时保留真实 `modelId`，不杜撰名称或缩小候选集合。已授权配置查询为内部展示保留端点关联，对外明确选取既有 `ModelOptionProjectionV1` 字段，不透传端点或部署输入。
 - 带显示名的默认 Key 候选使用独立的 `GET` / `POST /api/v2/agents/{agentId}/default-relay-key/display-candidates`，响应 envelope 与候选项组成独立的 strict `schemaVersion: 2` 投影；新 Key 和已存 Key 两条路径沿用原授权、候选交集、配置修订及 Key 版本检查后，由 API 装配名称。旧 `/candidates` 路径精确保留原 V1 响应，政策 Catalog V1、部署目录 V2 与 Worker 私有 saved-Key V1 不增加字段。Web 显式消费新入口，选择、比较和保存仍使用原稳定 ID；同名不合并，不把旧响应推断为已支持显示名。契约继续按 §6.4 从 Zod 生成并验证精确兼容边界。
-- 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、供应方实例及生效配置版本、Key 用途、授权引用和版本：Web、企微及个人 API 绑定实际用户的个人授权，应用 API 及 Eval 样本运行绑定 Agent 默认授权；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
+- 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、供应方实例及生效配置版本、Key 用途、授权引用和版本：Web、企微及个人 API 绑定实际用户的个人授权，应用 API 及 Eval 样本运行绑定 Agent 默认授权；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。手动覆盖的旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
 - 标准模板 Workload 候选仅预检目录/Driver/profile/模型选项结构及固定 Relay 路由；四个模板的真实镜像与模型链路须逐项独立验证。模型选项集合以 `RuntimeModelConfigurationV4` 保存并校验；该配置仅包含 endpoint、protocol、authentication、模型、reasoning 和能力绑定，**不包含 Key 原值或引用**。它可以沿用现有 immutable 配置 Secret、candidate/verified 投影、指纹、fence 和回滚机制，但不再生成 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`。调谐、回滚和 Pod 重启不能从 Kubernetes Secret、env 或旧 active 配置取得任何用户或 Agent 默认 Relay Key。
-- Worker 在当前业务 Grant、Execution、选择与 Key 引用/版本一致后，才通过既有受认证且具传输保密的 Worker–Host 私有接口交付本次 Key；原值只在 Worker 解密缓冲区和 Host/Driver 的本次执行内存存在，不进入 Grant、公共 RuntimeSelection、配置、Pod env、PVC、journal、日志、事件或普通错误。Host 在模型请求前核对 Agent、Conversation、Execution、渠道/用途、版本及 operation/fence；同 Agent 的不同用户和相邻 Execution 不能复用传输能力。补充指令继续绑定原 Execution。Worker/Host 重启时只为仍获准的原执行重交同一版本；无法确认旧版本或授权时拒绝恢复，不用当前 Key 替代。执行结束排空在途请求后清除内存中的 Key。
+- Worker 在当前业务 Grant、Execution、选择与 Key 引用/版本一致后，才通过既有受认证且具传输保密的 Worker–Host 私有接口交付本次 Key；原值只在 Worker 受保护的执行期缓冲区和 Host/Driver 的本次执行内存存在，不进入 Grant、公共 RuntimeSelection、配置、Pod env、PVC、journal、日志、事件或普通错误。Host 在模型请求前核对 Agent、Conversation、Execution、渠道/用途、版本及 operation/fence；同 Agent 的不同用户和相邻 Execution 不能复用传输能力。补充指令继续绑定原 Execution。Worker/Host 重启时只为仍获准的原执行重交同一版本；无法确认旧版本或授权时拒绝恢复，不用当前 Key 替代。执行结束排空在途请求后清除内存中的 Key。
 - `RuntimeHostV4` 的 `existing-accepted-only` Key 恢复输入仅允许原 Submit 或原 native Skill 请求。Skill 保留原能力、目录修订、来源版本和参数摘要，不虚构普通 Turn 的 input/selection，不重新发现同名 Skill。Host 必须以原 journal 的 accepted/running 回执、操作摘要、Key scope、模型配置绑定和当前授权/fence 核实；缺少原记录或冻结绑定、unknown/终态、stop/control 均不安装 Key，command/supplement 不能冒充恢复原操作。恢复只重交原版本到受保护内存，不重新 invoke，也不改变既有控制绑定和元数据只读边界。
 - 四个 Driver 均须在每次实际模型请求前证明原 Execution Key 版本绑定。Codex/Claude 的本地传输按原生 Turn/Query 隔离；OpenCode/Pi 即使相邻执行选择同一模型，也不能复用在启动时固定了旧 Key 的原生 handle。若固定上游不支持可信的执行期换 Key，Driver 须先停止并排空旧 handle，再以同一原 Session 和新执行 Key 重建；无法确认旧 handle 退役或 Session 连续性时拒绝新执行。恢复旧执行只可重交旧版本，不能以新 Key 重建后继续旧执行。
 - 标准模板的 Worker–Host 使用 `RuntimeHostV4` 的独立版本化私有 Key 字段和共享 Schema；不能把旧 Runtime 配置 V2/V3 中静态 credential 当作新执行的默认值。旧 Host V1–V3 和 verified 投影保持原样可读以供已受理执行的查询、有界恢复和迁移，不推断缺失字段或重写指纹；迁移到 V4 无 Key 配置并完成实际链路验证前，旧版本不接纳新业务 Execution。候选失败沿原 verified 投影和精确清理机制收敛，但不能回滚到会重新准入静态 Key 的配置。既有 [Execution 模型选择 ADR](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)和[协议绑定 ADR](../adr/0009-bind-model-profiles-to-runtime-configuration.md)继续约束选择和 profile；静态凭证交付部分由[按 Execution 绑定 Relay Key ADR](../adr/0016-bind-relay-key-to-execution.md)替代。
@@ -2205,7 +2205,7 @@ Pod 停止与代次退休同时覆盖两容器及所有后台子进程；新增 
 
 ### 11.3 数据与生命周期边界
 
-Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在所属 Sandbox PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration`、§10.1.1 的 Sandbox 归属及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
+Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，托管会话保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref；外接会话按[外部服务接入契约](#923-外部服务接入契约)保存供应方、目标和外部会话引用。RuntimeHost 在所属 Sandbox PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration`、§10.1.1 的 Sandbox 归属及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
 
@@ -2298,7 +2298,7 @@ V3 只承载服务端受控目录认定的有状态 command，不接受附件、
 | 主体、Agent、Conversation、Execution、Turn、Session 代次和渠道 | 当前服务端授权与同一受理事务；沿既有 Sandbox 归属与 fence 校验，不由目录或原生 ID 建立身份 |
 | capability ID、目录修订、来源版本、参数及摘要 | 当前受控目录和校验后的输入；名称不能代替确定版本，参数摘要不能代替完整调用摘要 |
 | selection 与 configVersion | 当前获准的有效 modelOptionId、reasoningLevel 和 Runtime 配置修订；不得在投递时重选或从旧消息推导 |
-| keyBinding | 原 Execution 的 Key 用途、主体、密文引用和版本；只保存引用，不保存明文或明文摘要 |
+| keyBinding | 原 Execution 的供应方实例及配置版本、Key 用途、付费主体、授权类型、引用和版本（手动录入时为密文引用）；只保存引用，不保存明文或明文摘要 |
 
 受理幂等摘要覆盖公开 V3 输入、版本及主体、Agent、Conversation、Session 代次等授权范围；
 原操作摘要另覆盖完整冻结绑定。两者用途不同，重试同一公开输入应回读原受理结果，不能因
