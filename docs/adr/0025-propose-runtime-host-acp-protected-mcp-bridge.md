@@ -2,6 +2,8 @@
 
 状态：accepted for #851 implementation
 
+2026-11-23：OpenCode 与 Pi 的固定版本、用户决定和实际保护见文末“2026-11-23 增补”；下文对 Pi 与 OpenCode 旧版本的“保持 `connection: false`”描述为历史记录，以增补为准。
+
 本 ADR 已获本次任务的架构方向批准；本次只批准 RuntimeHost consumer bridge 的边界，不批准真实 Token 启用、Connection 运行实现或生产验收。
 
 ## 背景
@@ -165,3 +167,39 @@ tickets；不得把 bridge 当作 Connection 服务端或 Platform API 的第二
 
 在上述问题被评审和真实固定 artifact 证据覆盖前，本 ADR 不改变当前
 `connection: false` 行为。
+
+## 2026-11-23 增补：OpenCode 与 Pi 的受保护 loopback transport
+
+归属 [#4349](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349)。本节是 OpenCode 与 Pi 当前状态的唯一完整表述；Spec §13.5.4 只链接到这里。
+
+**用户决定。** 2026-11-23 用户决定：只要模板支持 MCP 就能用 Connection，不为各模板另设流程门禁
+（[评论 7088476261](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349#issuecomment-7088476261)、
+[评论 7088568400](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349#issuecomment-7088568400)）。
+这不放宽凭据保护：token 仍不进入原生进程，每次调用仍走持久屏障。
+
+**固定版本。**
+
+- OpenCode `1.19.0`、ACP SDK `1.4.0`，`opencode-release.json` 的 `protectedMcpTransport` 为
+  `acp-loopback-v1`，由 `supportsProtectedOpenCodeMcpTransport()` 读取。
+- Pi `0.99.0`，`pi-release.json` 的 `protectedMcpTransport` 为 `pi-extension-loopback-v1`，由
+  `pi-installation.ts` 的 `supportsProtectedPiMcpTransport()` 读取。Pi 0.86 没有 MCP session transport
+  的原文已被它取代。
+- Host 只在固定版本声明该 transport，且 Worker 下发 `AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE` 或
+  `AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE` 为 `verified-v1`（仅当存在安装修订）时，才把该 Driver 的
+  `supportsProtectedStandardMcp` 置真（`apps/agent-runtime-host/src/index.ts`）；否则 `connection` 保持 `false`。
+
+**实际保护（两者同一个 `standard-mcp-acp-bridge.ts`）。**
+
+- Connection token、SecretRef 与客户端对象留在 Host 的 `StandardMcpClient`；原生进程只收到
+  `127.0.0.1` 的 URL 和单 Execution 的短期 loopback bearer（OpenCode 经 ACP `mcpServers`，Pi 经原生进程环境
+  `AGENT_INFRA_PI_CONNECTION_MCP_URL` 与 `AGENT_INFRA_PI_CONNECTION_MCP_TOKEN`，`pi-runtime-driver.ts`）。
+- bridge 固定单一 `/mcp` 路径、有界 body、短 expiry、重复 JSON-RPC id 拒绝、无 bearer 拒绝，关闭时撤销 bearer
+  （`standard-mcp-acp-bridge.test.ts`）。
+- 每次 `tools/call` 经 `StandardMcpOperation` 的 `assertCurrent → prepare → started → confirm/block`；
+  结果 unknown 时封闭当前原生 Session。
+- Pi 的 bearer 位于原生进程环境，这是既有设计。Pi 工具子进程的环境由白名单构造，不继承它：由
+  `pi-native.test.ts` 的 native-shell 用例覆盖（`tokenKeys` 含 `AGENT_INFRA_PI_CONNECTION_MCP_TOKEN`），该用例
+  只在 Linux 且 `AGENT_INFRA_NATIVE_SHELL_TEST=1` 时运行，本机 macOS 不运行，须在真实镜像验收中补证。
+
+**不在本增补内。** Claude 的进程内 SDK MCP server 与“原生配置保持空”的关系见 Spec §13.5.4；
+真实 ACK 与最终镜像的 Linux 负例按 HLD §11.2 验收。

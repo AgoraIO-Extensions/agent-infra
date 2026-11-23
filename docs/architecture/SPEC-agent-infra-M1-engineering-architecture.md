@@ -2836,14 +2836,40 @@ access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产�
 完全一致，见该节“动态安装的 reader 与可见起点”）；
 每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
 不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
-SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空；ACP adapter 的本地 URL 不是 Connection endpoint，
-也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
-native MCP、private bootstrap 或 token helper 路径。M1 四个标准模板都经本节路径接入
-Connection，各 Driver 的会话级声明点为：Codex `thread/start.dynamicTools`；Claude 随原生
-query 注册的 SDK 进程内 MCP server（`mcpServers.connection`）；OpenCode 的 ACP
-`mcpServers`（上述 ADR-0025 adapter）；Pi 的固定扩展 loopback adapter。声明点之外的
-Connection 合同（受保护 Host、手工关联、Owner 按需启用、逐用户 OAuth、动态发布合同、
-`prepare → started → confirm/block` 屏障）四个模板一致，不按模板分叉。
+SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空：不向原生进程的
+配置文件、用户级 MCP 设置或环境写入任何 Connection MCP server、URL 或 token；ACP adapter 的本地 URL 不是
+Connection endpoint，也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
+native MCP、private bootstrap 或 token helper 路径。
+
+M1 四个标准模板都经本节路径接入 Connection。用户 2026-11-23 决定：只要模板支持 MCP 就能用
+Connection，不为各模板另设流程门禁（[#4349 评论](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349#issuecomment-7088476261)、
+[评论](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349#issuecomment-7088568400)）。
+各 Driver 的会话级声明点只在此列出：
+
+- Codex：`thread/start.dynamicTools`。
+- Claude：随原生 query 传入的 SDK 进程内 MCP server（`mcpServers.connection`），见下一段。
+- OpenCode：ACP `mcpServers` 指向 RuntimeHost 的 loopback adapter。
+- Pi：固定扩展 loopback adapter。OpenCode 与 Pi 的版本、保护与依据见
+  [ADR-0025 的 2026-11-23 增补](../adr/0025-propose-runtime-host-acp-protected-mcp-bridge.md#2026-11-23-增补opencode-与-pi-的受保护-loopback-transport)。
+
+其余合同（受保护 Host、手工关联、Owner 按需启用、逐用户 OAuth、动态发布合同）按 §13.5.3、§13.5.6
+与 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)，四个模板一致，
+这里不重复。每次 Connection 调用都先经 `StandardMcpOperation` 的 `assertCurrent`，并按
+`prepare → started → confirm/block` 持久屏障执行：Claude 在 `claude-runtime-driver.ts` 中直接实现，
+OpenCode 与 Pi 经同一个 `standard-mcp-acp-bridge.ts`。Claude 与 Pi 复用同一个 Host reader 和 permit。
+某模板的能力不可用（`connection: false`、无安装、许可缺失或保护不满足）时，不阻塞该模板其余功能：
+未声明工具时模型看不到 Connection；已声明而不可用时，调用得到 §13.5.6 的固定回答“需要先在平台完成
+Connection 授权”或“Connection 暂时不可用”，不含凭据、安装或许可标识。各模板的 Connection 验收按
+[HLD §11.2](HLD-agent-runtime-M1.md#112-codex-与-connection-接缝验收) 独立进行，一个模板未通过不影响其他模板。
+
+**Claude 的进程内 MCP server 与“保持空”。** `mcpServers.connection` 是 `createSdkMcpServer`
+创建的 `type: "sdk"` 实例（`claude-standard-mcp.ts`），实例留在 SDK 所在的 RuntimeHost/Driver 进程，
+原生 CLI 只经 SDK 控制通道的 `mcp_message` 转发 tool 调用，不收到 URL、header 或 token。
+原生 CLI 子进程的环境由 Driver 显式给出（`claude-runtime-driver.ts` 的 `env`：PATH、HOME、
+TMPDIR、`CLAUDE_CONFIG_DIR` 与模型访问，不含 Connection 材料），并设置 `strictMcpConfig: true`。
+`StandardMcpClient` 与 token 只在 Host 内存。因此它不是上文“原生 Connection MCP 配置”，而是对
+“保持空”的限定：原生配置面保持空，工具声明经 SDK 进程内通道。固定拒绝结果不含凭据，静态与动态输入
+互斥，由 `dynamic-connection.test.ts` 与 `claude-standard-mcp.test.ts` 覆盖。
 
 **ADR-0025 ACP adapter gate。** 只有固定 artifact/protocol 明确证明 ACP session 级
 HTTP MCP 注册、bounded discovery/call/close、native 不持久化本地 bearer、工具子进程
@@ -3503,8 +3529,8 @@ Thread 开始时就已声明，此后只有可用性随许可变化，所以不�
 [ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段以 Codex
 Driver（`thread/start`、`item/tool/call`）为写法基准；Claude、OpenCode、Pi 在各自会话级声明点
 （见 §13.5.4）按同一规则在会话开始时声明部署批准的工具，之后只有可用性随许可变化，并复用同一
-reader 接缝、固定的“需要授权/暂不可用”结果和撤销规则。首个受监督 Connection Pilot 仍只用 Codex
-标准模板，其结论不外推到其他模板，其余三个模板各自按本节验收。
+reader 接缝、固定的“需要授权/暂不可用”结果和撤销规则。Pilot 范围见
+[Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成)，其余三个模板各自按本节验收。
 
 - **工具声明。** 部署批准的动态发布合同另含每个工具在 Thread 开始时声明的完整定义（名称、说明、
   输入 schema），与合同的 `tools` 一一对应。Worker 只为当前已有已核实 Owner 手工关联的 Agent，

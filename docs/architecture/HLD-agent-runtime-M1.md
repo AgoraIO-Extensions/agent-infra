@@ -1640,6 +1640,12 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 标准 MCP/OAuth/PAT 路径按 [§9.1](#91-codex-独立-connection-consumer-profile) 与 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证 token 当前主体/实例、user/application + Agent 选择、工具子进程不可读取、独立撤销、跨实例隔离、幂等和未知不重放；缺 token 不回退 Owner 或共享凭据。profile 明确要求 sender constraint 时另验持有证明，准备层或 token 签发通过不替代真实运行。
 - 可信关联另验同次实际请求/响应、服务端原调用、跨 Execution/attempt 替换、丢响应与只读核实；缺失保持未核实，标准 token 接入不能代签关联。
 - Driver 直接标准 MCP 路径另验固定官方 dynamicTools/server request 的真实等待、受保护 Host 的文件/内存/FD 与诊断拒绝、原安装选择、每次真实发送、结果保存及 ACK；结果保存失败、unknown WRITE 已保存但未核实或 stdio 断连，均不得释放原执行继续推理。覆盖同 UID 工具、旧修订、跨主体/Agent/Sandbox、未知 WRITE、崩溃、撤销与原操作只读恢复，fixture 与真实 Connection/Provider 证据分别记录；通过不外推 native MCP 或其他原生工具。
+- 四个模板的 Connection 验收各自独立，声明点见工程 Spec §13.5.4：Claude 验 SDK 进程内 MCP server 的真实
+  tool 调用、原生 CLI 子进程环境与配置不含 Connection 材料、unknown WRITE 时原生 owner 被封闭；OpenCode
+  与 Pi 验真实固定版本的 loopback bridge（bearer 过期与重放拒绝、无 bearer 拒绝、token 不进原生
+  配置或日志，Pi 另含工具子进程不继承 bearer 的 native-shell 用例，需 Linux 与
+  `AGENT_INFRA_NATIVE_SHELL_TEST=1`）。每个模板另验授权前固定拒绝、授权后同一会话可用，以及同一套
+  跨用户、跨 Agent、跨 Connection 负例；fixture 与真实证据分别记录。
 - 对已批准的 ADR-0025 ACP adapter，RuntimeHost 仍是 Connection 的直接标准 MCP
   consumer；loopback URL/bearer 只连接同一 Host 内的 adapter，不把 Connection token
   或服务 header 交给 native。adapter 按单 Execution 生命周期绑定原
