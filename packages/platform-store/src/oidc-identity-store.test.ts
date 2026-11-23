@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { PostgresLdapSessionStoreV1 } from "./browser-session.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	OidcBindingError,
+	oidcBrowserSessionUidPrefix,
 	PostgresOidcIdentityStore,
 } from "./oidc-identity-store.js";
 import {
@@ -150,4 +152,82 @@ it("consumes a live login transaction exactly once and rejects expired transacti
 	expect(
 		await sql`select 1 from platform.oidc_login_transactions where key=${expired}`,
 	).toHaveLength(0);
+});
+
+it("atomically consumes a logout notification across replicas and revokes only the bound OIDC sessions", async () => {
+	const issuer = "https://logout.example.invalid";
+	const subject = "paired-employee";
+	const claims = {
+		issuer,
+		subject,
+		employeeId: "logout-employee",
+		email: "logout@example.invalid",
+	};
+	const account = await store.bind(claims);
+	const other = await store.bind({
+		...claims,
+		subject: "different",
+		employeeId: "different-logout",
+		email: "different-logout@example.invalid",
+	});
+	const prefix = oidcBrowserSessionUidPrefix(issuer);
+	const event = {
+		issuer,
+		subject,
+		jti: randomUUID(),
+		issuedAt: Math.floor(Date.now() / 1000),
+	};
+	const expires = Date.now() + 60_000;
+	const sessions = new PostgresLdapSessionStoreV1(database.databaseUrl);
+	const second = new PostgresOidcIdentityStore(database.databaseUrl);
+	const token = (digit: string) => digit.repeat(64);
+	try {
+		await sessions.create(
+			token("1"),
+			prefix + account.userId,
+			expires,
+			expires,
+		);
+		await sessions.create(
+			token("2"),
+			prefix + account.userId,
+			expires,
+			expires,
+		);
+		await sessions.create(token("3"), prefix + other.userId, expires, expires);
+		await sessions.create(
+			token("4"),
+			oidcBrowserSessionUidPrefix("other-issuer") + account.userId,
+			expires,
+			expires,
+		);
+		await store.logout({ ...event, issuer: "other-issuer" });
+		expect(await sessions.find(token("1"), Date.now())).not.toBeNull();
+		await sql`create function platform.test_deny_logout() returns trigger language plpgsql as $$
+			begin raise exception 'synthetic refusal'; end $$`;
+		await sql`create trigger test_deny_logout before delete on platform.browser_sessions for each row execute function platform.test_deny_logout()`;
+		try {
+			await expect(store.logout(event)).rejects.toThrow("synthetic refusal");
+			expect(await sessions.find(token("1"), Date.now())).not.toBeNull();
+		} finally {
+			await sql`drop trigger test_deny_logout on platform.browser_sessions`;
+		}
+
+		await Promise.all([store.logout(event), second.logout(event)]);
+		expect(await sessions.find(token("1"), Date.now())).toBeNull();
+		expect(await sessions.find(token("2"), Date.now())).toBeNull();
+		expect(await sessions.find(token("3"), Date.now())).not.toBeNull();
+		expect(await sessions.find(token("4"), Date.now())).not.toBeNull();
+		await sessions.create(
+			token("5"),
+			prefix + account.userId,
+			expires,
+			expires,
+		);
+		await store.logout(event);
+		expect(await sessions.find(token("5"), Date.now())).not.toBeNull();
+	} finally {
+		await sessions.close();
+		await second.close();
+	}
 });

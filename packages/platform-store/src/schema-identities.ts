@@ -266,3 +266,12 @@ export const oidcLoginTransactions = platformSchema.table(
 	},
 	(table) => [index("oidc_login_expiry").on(table.expiresAt)],
 );
+
+export const oidcLogoutReceipts = platformSchema.table(
+	"oidc_logout_receipts",
+	{
+		digest: varchar("digest", { length: 64 }).primaryKey(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [index("oidc_logout_receipts_expiry").on(table.expiresAt)],
+);
