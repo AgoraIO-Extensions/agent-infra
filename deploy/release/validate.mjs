@@ -11,7 +11,7 @@ import { runCommand } from "./run-command.mjs";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const chart = resolve(repositoryRoot, "deploy/helm/agent-infra");
 const imageKeys = ["web", "platformApi", "platformWorker", "runtimeHost"];
-const optionalImageKey = "enterpriseDirectorySync";
+const optionalImageKeys = ["enterpriseDirectorySync", "sub2apiAdapter"];
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const placeholderDigest = `sha256:${"0".repeat(64)}`;
 const timeoutMs = {
@@ -48,9 +48,10 @@ function validateManifest(manifest) {
 	if (!/^linux\/(?:amd64|arm64)$/.test(manifest.platform)) {
 		fail("image manifest platform is invalid");
 	}
-	const manifestImageKeys = Object.hasOwn(manifest.images ?? {}, optionalImageKey)
-		? [...imageKeys, optionalImageKey]
-		: imageKeys;
+	const manifestImageKeys = [
+		...imageKeys,
+		...optionalImageKeys.filter((key) => Object.hasOwn(manifest.images ?? {}, key)),
+	];
 	expectKeys(manifest.images, manifestImageKeys, "image manifest images");
 	for (const key of manifestImageKeys) {
 		const image = manifest.images[key];
@@ -65,14 +66,34 @@ function validateManifest(manifest) {
 }
 
 function validateImageReferences(manifest, values) {
-	if (values?.enterpriseDirectorySync?.enabled && !manifest.images[optionalImageKey]) {
-		fail("enterpriseDirectorySync image is required when directory sync is enabled");
+	for (const key of optionalImageKeys) {
+		const enabled =
+			key === "enterpriseDirectorySync"
+				? values?.enterpriseDirectorySync?.enabled
+				: values?.externalServiceAdapter?.enabled;
+		if (enabled && !manifest.images[key])
+			fail(`${key} image is required when the component is enabled`);
 	}
 	for (const key of Object.keys(manifest.images)) {
-		if (key === optionalImageKey && !values?.enterpriseDirectorySync?.enabled) {
+		if (
+			optionalImageKeys.includes(key) &&
+			!(key === "enterpriseDirectorySync"
+				? values?.enterpriseDirectorySync?.enabled
+				: values?.externalServiceAdapter?.enabled)
+		) {
 			continue;
 		}
-		const configured = values?.images?.[key];
+		const configured =
+			key === "sub2apiAdapter"
+				? (() => {
+					const image = values?.externalServiceAdapter?.image;
+					if (typeof image !== "string") return undefined;
+					const separator = image.lastIndexOf("@sha256:");
+					return separator < 0
+						? undefined
+						: { repository: image.slice(0, separator), digest: image.slice(separator + 1) };
+				})()
+				: values?.images?.[key];
 		if (
 			configured?.repository !== manifest.images[key].repository ||
 			configured?.digest !== manifest.images[key].digest

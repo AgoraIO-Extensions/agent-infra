@@ -85,6 +85,12 @@ const images = [
 		],
 	},
 	{
+		key: "sub2apiAdapter",
+		name: "sub2api-adapter",
+		dockerfile: "apps/sub2api-adapter/Dockerfile",
+		command: ["node", "--check", "dist/serve.mjs"],
+	},
+	{
 		key: "enterpriseDirectorySync",
 		name: "enterprise-directory-sync",
 		dockerfile: "apps/enterprise-directory-sync/Dockerfile",

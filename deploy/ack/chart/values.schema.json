@@ -17,6 +17,21 @@
         {"if": {"properties": {"clusterReads": {"const": true}}}, "then": {"properties": {"enabled": {"const": true}}}}
       ]
     },
+    "externalServiceAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "configSecret", "publicHost", "tlsSecret", "ingressClassName", "servicePort"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$"},
+        "configSecret": {"type": "string", "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
+        "publicHost": {"type": "string", "pattern": "^$|^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"},
+        "tlsSecret": {"type": "string", "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"},
+        "ingressClassName": {"const": "new-magic-nginx"},
+        "servicePort": {"type": "integer", "minimum": 1, "maximum": 65535}
+      },
+      "allOf": [{"if": {"properties": {"enabled": {"const": true}}}, "then": {"properties": {"configSecret": {"minLength": 1}, "publicHost": {"minLength": 1}, "tlsSecret": {"minLength": 1}}}}]
+    },
     "images": {
       "type": "object",
       "additionalProperties": true,

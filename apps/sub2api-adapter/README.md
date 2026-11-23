@@ -23,3 +23,8 @@ Adapter 使用 Node.js 24。安装仓库锁定的依赖后，执行
 Adapter 使用公开设置接口核对上游连通性。授权查询验证服务凭据、已关联账号和当前用户状态，
 按分组、状态、到期时间及配额过滤候选，按 Key ID 升序返回引用和脱敏显示名。
 供应方账号关联和分组策略只保存在 Adapter 一侧。
+
+ACK Helm 可通过 `externalServiceAdapter.enabled=true` 一键部署 Adapter。配置 Secret
+通过 `externalServiceAdapter.configSecret` 引用，入口 Host 和 TLS Secret 通过
+`externalServiceAdapter.publicHost` 与 `externalServiceAdapter.tlsSecret` 指定。Helm
+不会创建或读取凭据原值，Secret 需要由部署输入包预先提供。

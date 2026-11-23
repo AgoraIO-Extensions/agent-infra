@@ -3,7 +3,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"start": "node src/serve.ts",
+		"build": "tsdown",
+		"start": "node dist/serve.mjs",
 		"check-types": "tsc --noEmit",
 		"test": "vitest run src"
 	},
@@ -13,6 +14,7 @@
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
+		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
 	}
