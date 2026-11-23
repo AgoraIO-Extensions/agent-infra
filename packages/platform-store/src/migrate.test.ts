@@ -2272,6 +2272,7 @@ describe("published Relay authority migration", () => {
 			97,
 			98,
 			99,
+			100,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2413,9 +2414,13 @@ describe("published Relay authority migration", () => {
 			idx: 98,
 			tag: "0098_oidc_employee_accounts",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 99)).toMatchObject({
 			idx: 99,
 			tag: "0099_external_services",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 100,
+			tag: "0100_external_service_requeue",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3183,6 +3188,7 @@ describe("published Relay authority migration", () => {
 			expectedDelta.columns.push(
 				"conversation_executions:external_service_id",
 				"conversation_executions:external_service_revision",
+				"conversation_executions:queued_supplement_message_id",
 				...["id", "revision", "url", "credential"].map(
 					(name) => `external_service_versions:${name}`,
 				),

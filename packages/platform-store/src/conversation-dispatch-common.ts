@@ -95,6 +95,8 @@ export interface ExecutionRow {
 	relay_key_subject_id: string | null;
 	relay_key_id: string | null;
 	relay_key_version: string | number | null;
+	external_service_id: string | null;
+	external_service_revision: number | null;
 	runtime_submit_protocol: string | null;
 	original_operation_digest: string | null;
 	original_submit_host_session_ref: string | null;
@@ -121,7 +123,10 @@ export function executionPrincipalProjection(
 /** Project only the accepted immutable version, never a current Key alias. */
 export function executionKeyProjection(
 	execution: ExecutionRow,
-): Pick<ConversationDispatchClaimV1, "executionSource" | "relayKeyBinding"> {
+): Pick<
+	ConversationDispatchClaimV1,
+	"executionSource" | "relayKeyBinding" | "externalServiceBinding"
+> {
 	const fields = [
 		execution.execution_source,
 		execution.relay_key_purpose,
@@ -129,6 +134,12 @@ export function executionKeyProjection(
 		execution.relay_key_id,
 		execution.relay_key_version,
 	];
+	if (
+		(execution.external_service_id === null) !==
+			(execution.external_service_revision === null) ||
+		(execution.external_service_id && !execution.relay_key_id)
+	)
+		throw new TypeError("Stored external service binding is invalid");
 	if (fields.every((value) => value === null)) return {};
 	const executionSource = RuntimeExecutionSourceV1Schema.parse(
 		execution.execution_source,
@@ -147,6 +158,17 @@ export function executionKeyProjection(
 	)
 		throw new TypeError("Stored Execution Key binding is invalid");
 	return {
+		...(execution.external_service_id
+			? {
+					externalServiceBinding: {
+						id: execution.external_service_id,
+						revision: requireSafeCounter(
+							execution.external_service_revision,
+							1,
+						),
+					},
+				}
+			: {}),
 		executionSource,
 		relayKeyBinding: {
 			purpose: key.purpose,

@@ -5761,6 +5761,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			const store = open();
 			const runtimeHost = new FakeConversationRuntimeHostV1();
 			const fences: number[] = [];
+			const bindings: unknown[] = [];
+			await client`insert into platform.external_services(id,model_endpoint_id,revision,active,verified,enabled_once) values('retry-relay','endpoint-dispatch',2,1,2,true)`;
+			await client`insert into platform.external_service_versions(id,revision,url,credential) values('retry-relay',1,'https://a.example','{}'),('retry-relay',2,'https://b.example','{}')`;
+			await client`update platform.conversation_executions set external_service_id='retry-relay',external_service_revision=1 where execution_id=${work.executionId}`;
 			const original = runtimeHost.dispatch.bind(runtimeHost);
 			runtimeHost.dispatch = async (request) => {
 				fences.push(request.deliveryFence);
@@ -5779,7 +5783,16 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					{
 						store,
 						runtimeHost,
-						authorization: isolationAuthorization,
+						authorization: {
+							async authorize(input) {
+								bindings.push({
+									service: input.claim.externalServiceBinding,
+									key: input.claim.relayKeyBinding,
+									execution: input.claim.executionId,
+								});
+								return isolationAuthorization.authorize(input);
+							},
+						},
 						events: {
 							async persist(): Promise<never> {
 								throw new Error("No Runtime events in this fixture");
@@ -5801,12 +5814,24 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
 				});
 				expect((await dispatchState(work))?.execution_status).toBe("submitted");
+				await client`update platform.external_services set active=2 where id='retry-relay'`;
 				await waitForAvailableItem(work.itemId);
 				await useCase.dispatch({
 					schemaVersion: 1,
 					itemId: work.itemId,
 					workerId: "resubmission-core-worker",
 				});
+				expect(bindings.length).toBeGreaterThanOrEqual(2);
+				for (const binding of bindings)
+					expect(binding).toMatchObject({
+						service: { id: "retry-relay", revision: 1 },
+						key: {
+							purpose: "personal",
+							subjectId: "actor-dispatch",
+							keyVersion: 1,
+						},
+						execution: work.executionId,
+					});
 				expect(fences).toHaveLength(2);
 				expect(fences[1]).toBeGreaterThan(fences[0] ?? 0);
 				expect(runtimeHost.sideEffectCount()).toBe(1);
@@ -5815,6 +5840,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				);
 			} finally {
 				await store.close();
+				await client`truncate platform.external_services cascade`;
 			}
 		});
 
@@ -8113,6 +8139,45 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				order by array_position(${messageIds as string[]}::text[], message.message_id)
 			`;
 
+		it.each(["switched", "disabled", "previously-unbound"] as const)(
+			"keeps accepted provider authorization when requeueing a supplement (%s)",
+			async (change) => {
+				const work = await seed();
+				const message = await seedSupplement(work);
+				await client`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration)
+    select agent_id,4,'source',now(),state->'verified'->'configuration' from platform.workload_reconciliations where agent_id='agent-dispatch' on conflict do nothing`;
+				await client`insert into platform.external_services(id,model_endpoint_id,revision,active,verified,enabled_once)
+    values('supplement-relay','endpoint-dispatch',2,${change === "disabled" ? null : 2},2,true)`;
+				try {
+					await client`insert into platform.external_service_versions(id,revision,url,credential) values('supplement-relay',1,'https://a.example','{}'),('supplement-relay',2,'https://b.example','{}')`;
+					if (change !== "previously-unbound")
+						await client`update platform.conversation_executions set external_service_id='supplement-relay',external_service_revision=1 where execution_id=${work.executionId}`;
+					await client`update platform.conversation_executions set status='completed' where execution_id=${work.executionId}`;
+					const { store, decision } = await claim(
+						`conversation:supplement:${message}`,
+					);
+					try {
+						if (decision.outcome !== "claimed")
+							throw Error("Expected supplement claim");
+						expect(await store.queueSupplement({ claim: decision.claim })).toBe(
+							true,
+						);
+						const [queued] =
+							await client`select e.status,e.external_service_revision,e.relay_key_version from platform.conversation_messages m join platform.conversation_executions e on e.execution_id=m.execution_id where m.message_id=${message} and e.execution_id<>${work.executionId}`;
+						expect(queued).toMatchObject({
+							status: "waiting",
+							external_service_revision:
+								change === "previously-unbound" ? null : 1,
+							relay_key_version: "1",
+						});
+					} finally {
+						await store.close();
+					}
+				} finally {
+					await client`truncate platform.external_services cascade`;
+				}
+			},
+		);
 		it("converts the claimed supplement and the later pending ones of the same Execution in order", async () => {
 			const work = await seed("conversation.turn.supplement.v1", {
 				executionStatus: "completed",

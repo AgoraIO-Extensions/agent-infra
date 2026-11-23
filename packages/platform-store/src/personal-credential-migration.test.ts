@@ -195,6 +195,7 @@ beforeAll(async () => {
 		{ idx: 97, tag: "0097_runtime_safety_evidence" },
 		{ idx: 98, tag: "0098_oidc_employee_accounts" },
 		{ idx: 99, tag: "0099_external_services" },
+		{ idx: 100, tag: "0100_external_service_requeue" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -484,6 +485,7 @@ describe("personal credential disable authority append", () => {
 				terminal_observed_at: null,
 				external_service_id: null,
 				external_service_revision: null,
+				queued_supplement_message_id: null,
 			}));
 		expect(withoutTypedPrincipal(after.data)).toEqual(expectedData);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });

@@ -213,6 +213,11 @@ export interface ConversationDispatchClaimV1 {
 	readonly modelOptionId: string | null;
 	readonly reasoningLevel: string | null;
 	readonly executionSource?: ConversationExecutionSourceV1;
+	/** Authorization Adapter revision fixed when this Execution was accepted. */
+	readonly externalServiceBinding?: {
+		readonly id: string;
+		readonly revision: number;
+	};
 	readonly relayKeyBinding?: {
 		readonly purpose: "personal" | "agent-default";
 		readonly subjectId: string;

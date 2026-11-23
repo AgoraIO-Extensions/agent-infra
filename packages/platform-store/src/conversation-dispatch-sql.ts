@@ -137,7 +137,7 @@ export async function lockExecution(
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
 			model_configuration_revision::text, model_option_id, reasoning_level,
-			execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
+			external_service_id, external_service_revision, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
 			relay_key_version::text, runtime_submit_protocol, original_operation_digest,
 			original_submit_host_session_ref, accepted_original_host_session_ref,
 			task_wait_order::text, task_wait_deadline
@@ -862,6 +862,10 @@ function claimMatchesState(
 		state.conversation.principal_type !== principal.kind ||
 		claim.executionSource !== key.executionSource ||
 		!isDeepStrictEqual(claim.relayKeyBinding, key.relayKeyBinding) ||
+		!isDeepStrictEqual(
+			claim.externalServiceBinding,
+			key.externalServiceBinding,
+		) ||
 		JSON.stringify(payload.metadataRecovery) !==
 			JSON.stringify(claim.metadataRecovery) ||
 		(claim.metadataRecovery &&
@@ -1303,13 +1307,13 @@ export async function queueSupplementMessages(
 				 authorization_revision, model_configuration_revision, model_option_id,
 				 reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id,
 				 relay_key_id, relay_key_version, task_wait_order, task_wait_deadline,
-				 last_event_sequence, created_at, updated_at)
+				 queued_supplement_message_id, last_event_sequence, created_at, updated_at)
 			select ${executionId}, conversation_id, sandbox_id, agent_id, actor_id, principal_type,
 				channel_id, ${turnId}, 'waiting', session_generation, 0,
 				authorization_revision, model_configuration_revision, model_option_id,
 				reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id,
 				relay_key_id, relay_key_version, ${lastOrder}, ${deadline.value},
-				1, clock_timestamp(), clock_timestamp()
+				${message.message_id}, 1, clock_timestamp(), clock_timestamp()
 			from platform.conversation_executions
 			where execution_id = ${original.execution_id}
 			returning execution_id

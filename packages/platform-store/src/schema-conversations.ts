@@ -165,6 +165,7 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		externalServiceId: text("external_service_id"),
 		externalServiceRevision: integer("external_service_revision"),
+		queuedSupplementMessageId: text("queued_supplement_message_id"),
 	},
 	(table) => [
 		foreignKey({
