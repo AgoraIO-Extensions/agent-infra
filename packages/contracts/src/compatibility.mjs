@@ -6958,6 +6958,25 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 }
 
+// #4438 adds the admin-managed external-service and current-user authorization
+// endpoints as an additive Browser v2 surface. Keep the old contract strict
+// while allowing these reviewed paths to be introduced together.
+function isExternalServiceOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/admin/external-services",
+		"/api/v2/admin/external-services/commands",
+		"/api/v2/me/external-service-authorizations",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		paths.some((path) => current.paths?.[path] === undefined)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function evaluationRemoval(previous, current) {
 	const serialized = JSON.stringify(previous);
 	if (
@@ -7711,6 +7730,8 @@ function normalizeConversationArchive4266(document) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	if (isExternalServiceOpenApiAddition(originalPrevious, originalCurrent))
+		return [];
 	// Once published, the added endpoints/actions cannot be removed through normalization.
 	const prefix4264 =
 		"/api/v2/applications/{applicationId}/credential-material-deliveries";
