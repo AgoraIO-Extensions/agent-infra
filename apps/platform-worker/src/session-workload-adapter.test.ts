@@ -2490,6 +2490,33 @@ describe("session sandbox workload adapter", () => {
 		});
 	});
 
+	it("refuses to reconcile or stop a Pod controlled by SIG Core after rollback", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		if (!pod?.metadata) throw new Error("Missing Pod");
+		pod.metadata.ownerReferences = [
+			{
+				apiVersion: "agents.x-k8s.io/v1beta1",
+				kind: "Sandbox",
+				name: allocation.podName,
+				uid: "core-sandbox-uid",
+				controller: true,
+			},
+		];
+		await expect(adapter.observe(allocation)).resolves.toMatchObject({
+			status: "unknown",
+		});
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		await expect(
+			adapter.apply({ ...allocation, desiredState: "stopped" }),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(await client.read("Pod", allocation.podName)).toBe(pod);
+	});
+
 	it("reports unknown when an owned resource is terminating", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });

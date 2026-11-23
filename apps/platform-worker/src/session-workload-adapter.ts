@@ -2464,6 +2464,7 @@ function owned(
 	const managed =
 		current.metadata?.annotations?.["agent-infra.agora.io/managed"];
 	return (
+		!current.metadata?.ownerReferences?.some((owner) => owner.controller) &&
 		managed === "session-sandbox-v1" &&
 		sessionSandboxLabelsMatchV1(currentLabels, expectedLabels) &&
 		hasSessionSandboxIdentityV1(current, allocation) &&
