@@ -119,3 +119,40 @@ it("admits only enabled model endpoints and preserves the accepted destination a
 		await sql.end();
 	}
 });
+
+it("rejects a queued discovery after the actor is disabled before provider access", async () => {
+	const sql = openPostgresTestClient(database);
+	const operationId = "disabled-actor-discovery";
+	let providerCalls = 0;
+	try {
+		await sql`insert into platform.external_services(id,revision,active,verified,enabled_once)
+			values ('disabled-relay',1,1,1,true)`;
+		await sql`insert into platform.external_service_versions(id,revision,url,credential)
+			values ('disabled-relay',1,'https://disabled.example.test','{}'::jsonb)`;
+		await sql`insert into platform.external_service_queries(operation_id,instance_id,revision,actor_id,action,expires_at)
+			values (${operationId},'disabled-relay',1,'disabled-user','discover',clock_timestamp()+interval '15 seconds')`;
+		await sql`insert into platform.platform_user_disables(user_id) values ('disabled-user')`;
+		await store.processQuery(async () => {
+			providerCalls += 1;
+			return {
+				revision: 1,
+				discovery: {
+					schemaVersion: 1,
+					instanceId: "disabled-relay",
+					subjectId: "disabled-user",
+					items: [],
+				},
+			};
+		});
+		const [row] = await sql<{ receipt: unknown }[]>`
+			select receipt from platform.external_service_queries where operation_id=${operationId}`;
+		expect(providerCalls).toBe(0);
+		expect(row?.receipt).toEqual({ failed: true });
+	} finally {
+		await sql`delete from platform.platform_user_disables where user_id='disabled-user'`;
+		await sql`delete from platform.external_service_queries where operation_id=${operationId}`;
+		await sql`delete from platform.external_service_versions where id='disabled-relay'`;
+		await sql`delete from platform.external_services where id='disabled-relay'`;
+		await sql.end();
+	}
+});
