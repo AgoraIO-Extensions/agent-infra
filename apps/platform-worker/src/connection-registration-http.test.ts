@@ -4,7 +4,10 @@ import {
 	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
-import { createConnectionConsumerRegistrationHttpAdapterV1 } from "./connection-registration-http.js";
+import {
+	createConnectionConsumerRegistrationHttpAdapterV1,
+	createConnectionConsumerRegistrationHttpAdapterV2,
+} from "./connection-registration-http.js";
 
 const policy = {
 	schemaVersion: 1 as const,
@@ -841,4 +844,209 @@ describe("Connection Consumer disable over the fixed v1 lifecycle contract (#851
 		).toBe("disabled");
 		expect(readback.authenticatedRequest.mock.calls[0]?.[0].method).toBe("GET");
 	});
+});
+
+describe("Connection response credential v2", () => {
+	const secret = `conn_consumer_${"x".repeat(43)}`;
+	function v2Result() {
+		const value = result();
+		const json = JSON.stringify({
+			callbackUrl: intent.callbackUrl,
+			consumerName: "Agent A",
+			executionMode: "USER",
+			owner: {
+				companyId: owner.companyId,
+				principalId: owner.ownerPrincipalId,
+			},
+			platformAgentId: intent.platformAgentId,
+			policyRevision: intent.policyRevision,
+			resource: intent.resource,
+			schemaVersion: 2,
+			scopes: ["mcp", "mcp:tools"],
+			sourceNamespace: intent.sourceNamespace,
+			version: "platform-agent-consumer-v2",
+		});
+		const digest = `connection-json-v2:${createHash("sha256").update(`connection-json-v2:${json}`).digest("hex")}`;
+		for (const entry of [value.receipt, value.operation])
+			Object.assign(entry, {
+				schemaVersion: 2,
+				requestDigestVersion: "platform-agent-consumer-v2/connection-json-v2",
+				requestDigest: digest,
+			});
+		return value;
+	}
+	function v2Fixture(reply: () => Response) {
+		const authenticatedRequest = vi.fn(async (_request: Request) => reply());
+		const adapter = createConnectionConsumerRegistrationHttpAdapterV2({
+			publicOrigin: "https://connection.example.test",
+			policy,
+			authenticatedRequest,
+			resolveOwnerBinding: async () => owner,
+		});
+		if (!adapter) throw new Error("missing v2 adapter");
+		return { adapter, authenticatedRequest };
+	}
+	it("delivers a validated first secret privately, erases bytes and returns only the local receipt", async () => {
+		const { adapter, authenticatedRequest } = v2Fixture(() =>
+			response({ ...v2Result(), secret }, 201),
+		);
+		let bytes: Uint8Array | undefined;
+		const retain = vi.fn(async (delivery, credential) => {
+			expect(delivery.outcome).toBe("registered");
+			expect(JSON.stringify(delivery)).not.toContain(secret);
+			expect(Buffer.from(credential).toString()).toBe(secret);
+			bytes = credential;
+			return true;
+		});
+		const delivery = await adapter.register(intent, signal(), retain);
+		expect(delivery.outcome).toBe("registered");
+		expect(retain).toHaveBeenCalledOnce();
+		expect(bytes?.every((byte) => byte === 0)).toBe(true);
+		expect(authenticatedRequest.mock.calls[0]?.[0]?.url).toBe(
+			root.replace("/v1/", "/v2/"),
+		);
+		expect(
+			JSON.parse(
+				(await authenticatedRequest.mock.calls[0]?.[0]?.text()) ?? "{}",
+			).schemaVersion,
+		).toBe(2);
+	});
+	it("does not send without the approved custody sink", async () => {
+		const { adapter, authenticatedRequest } = v2Fixture(() =>
+			response({ ...v2Result(), secret }, 201),
+		);
+		expect((await adapter.register(intent, signal())).outcome).toBe("unknown");
+		expect(authenticatedRequest).not.toHaveBeenCalled();
+	});
+	it.each(["register", "reconcile"] as const)(
+		"%s without secret requires already retained material",
+		async (mode) => {
+			const { adapter } = v2Fixture(() => response(v2Result()));
+			const retain = vi.fn(
+				async (_delivery: unknown, _credential?: Uint8Array) => false,
+			);
+			expect((await adapter[mode](intent, signal(), retain)).outcome).toBe(
+				"unknown",
+			);
+			expect(retain.mock.calls[0]?.[1]).toBeUndefined();
+			expect(
+				(await adapter[mode](intent, signal(), async () => true)).outcome,
+			).toBe("registered");
+		},
+	);
+	it.each([
+		[200, () => ({ ...v2Result(), secret })],
+		[201, () => v2Result()],
+		[201, () => ({ ...result(), secret })],
+		[
+			201,
+			() => {
+				const r = v2Result();
+				r.receipt.ownerPrincipalId = "other";
+				return { ...r, secret };
+			},
+		],
+		[
+			201,
+			() => {
+				const r = v2Result();
+				r.operation.requestDigest = "wrong";
+				return { ...r, secret };
+			},
+		],
+		[201, () => ({ ...v2Result(), secret: "invalid" })],
+	] as const)(
+		"rejects invalid v2 envelope %s before custody",
+		async (status, body) => {
+			const { adapter } = v2Fixture(() => response(body(), status));
+			const retain = vi.fn(async () => true);
+			expect((await adapter.register(intent, signal(), retain)).outcome).toBe(
+				"unknown",
+			);
+			expect(retain).not.toHaveBeenCalled();
+		},
+	);
+	it("does not turn failed storage into associated; sanitizes thrown errors and erases bytes", async () => {
+		const { adapter } = v2Fixture(() =>
+			response({ ...v2Result(), secret }, 201),
+		);
+		let bytes: Uint8Array | undefined;
+		const delivery = await adapter.register(
+			intent,
+			signal(),
+			async (_delivery, credential) => {
+				bytes = credential;
+				throw new Error(secret);
+			},
+		);
+		expect(delivery.outcome).toBe("unknown");
+		expect(JSON.stringify(delivery)).not.toContain(secret);
+		expect(bytes?.every((byte) => byte === 0)).toBe(true);
+	});
+	it.each(["disable", "reconcileDisable"] as const)(
+		"v2 %s preserves lifecycle key, CAS and digest domain",
+		async (mode) => {
+			const disableIntent = planConnectionConsumerDisableV1({
+				policy,
+				registration: {
+					intent,
+					receipt: {
+						schemaVersion: 1,
+						operationId: intent.operationId,
+						sourceNamespace: intent.sourceNamespace,
+						sourceKey: intent.sourceKey,
+						consumerId: "consumer-a",
+						consumerRevision: "1",
+						registrationId: "registration-a",
+						requestDigest: intent.requestDigest,
+					},
+				},
+			});
+			const value = v2Result();
+			value.receipt.status = "DISABLED";
+			value.receipt.revision = "2";
+			const keyHash = createHash("sha256")
+				.update(disableIntent.idempotencyKey)
+				.digest("hex");
+			const payload = {
+				consumerId: disableIntent.consumerId,
+				expectedRevision: disableIntent.expectedRevision,
+				kind: "disable",
+				platformAgentId: intent.platformAgentId,
+				policyRevision: policy.revision,
+				schemaVersion: 2,
+				sourceNamespace: policy.sourceNamespace,
+				version: "platform-agent-consumer-lifecycle-v2",
+			};
+			value.operation = {
+				...value.operation,
+				kind: "disable",
+				requestKeyHash: keyHash,
+				requestDigestVersion:
+					"platform-agent-consumer-lifecycle-v2/connection-json-v2",
+				requestDigest: `connection-json-v2:${createHash("sha256")
+					.update(`connection-json-v2:${JSON.stringify(payload)}`)
+					.digest("hex")}`,
+				expectedRevision: "1",
+				resultRevision: "2",
+			};
+			const { adapter, authenticatedRequest } = v2Fixture(() =>
+				response(value),
+			);
+			expect((await adapter[mode]?.(disableIntent, signal()))?.outcome).toBe(
+				"disabled",
+			);
+			const sent = authenticatedRequest.mock.calls[0]?.[0];
+			expect(sent?.url).toBe(
+				root.replace("/v1/", "/v2/") +
+					(mode === "disable" ? "/disable" : `/operations/disable/${keyHash}`),
+			);
+			if (mode === "disable")
+				expect(JSON.parse((await sent?.text()) ?? "{}")).toEqual({
+					schemaVersion: 2,
+					policyRevision: policy.revision,
+					revision: "1",
+				});
+		},
+	);
 });
