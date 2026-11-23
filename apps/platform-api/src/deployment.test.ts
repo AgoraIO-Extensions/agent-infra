@@ -2550,6 +2550,11 @@ describe("production API creation with user and application Tokens", () => {
 						modelId: "model-a",
 						reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
 					},
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-from-relay",
+						reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+					},
 				],
 			});
 			expect(
