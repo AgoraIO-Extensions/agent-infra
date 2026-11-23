@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +14,7 @@ import {
 	assembleEvidenceV1,
 	buildEvidenceV1,
 	cleanup,
+	clientSource,
 	loadRun,
 	parseProbeOutput,
 	probeLabelKeysV1,
@@ -29,6 +31,7 @@ import {
 	networkPolicyDeploymentConfig,
 	workerConfigurationInputs,
 	workerConfigurationSource,
+	workerPodLabels,
 } from "./support/networkpolicy-evidence.mjs";
 import {
 	cluster,
@@ -89,6 +92,7 @@ async function harness(options = {}) {
 			step,
 			kubectl: world.kubectl,
 			exec: world.exec,
+			namespace,
 			sleep: async () => {},
 			now: clock,
 			intervalMs: 1,
@@ -550,13 +554,13 @@ test("cleanup deletes only this run's objects, checks UIDs and reads absence bac
 		spec: { podSelector: {} },
 	});
 	assert.equal(
-		code(() => cleanup({ dir: h.dir, kubectl: h.world.kubectl })),
+		code(() => cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace })),
 		"CLEANUP_UNEXPECTED_OBJECT",
 	);
 	h.world.kubectl(["delete", "networkpolicy", stray.metadata.name]);
 	const before = [...h.world.objects.values()].map((item) => item.metadata.uid);
 	const mark = h.world.state.calls.length;
-	const receipt = cleanup({ dir: h.dir, kubectl: h.world.kubectl });
+	const receipt = cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace });
 	assert.equal(receipt.status, "cleaned");
 	assert.equal(h.world.objects.size, 0);
 	assert.deepEqual(receipt.deleted.map((item) => item.kind).sort(), [
@@ -685,4 +689,211 @@ process.stdout.write(JSON.stringify({ items: ${JSON.stringify([virtualNode(nodeN
 		{ encoding: "utf8", env: { ...env, NP_PROBE_IMAGE: "node:24" } },
 	);
 	assert.equal(JSON.parse(unpinned.stderr).code, "PROBE_IMAGE_NOT_PINNED");
+});
+
+// The client runs inside a source Pod. Once the TCP handshake has completed the
+// connection was not blocked, so nothing after it may be recorded as blocked.
+async function withServer(onConnection, run) {
+	const sockets = new Set();
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		socket.on("error", () => {});
+		onConnection(socket);
+	});
+	await new Promise((done) => server.listen(0, "127.0.0.1", done));
+	try {
+		return await run(server.address().port);
+	} finally {
+		for (const socket of sockets) socket.destroy();
+		await new Promise((done) => server.close(done));
+	}
+}
+// spawnSync blocks this process, so the server runs in a helper process.
+async function clientAgainst(behavior, options) {
+	const directory = await mkdtemp(join(tmpdir(), "np-client-"));
+	const serverFile = join(directory, "server.cjs");
+	await writeFile(
+		serverFile,
+		`const net=require("net");
+const behavior=${JSON.stringify(behavior)};
+const server=net.createServer((s)=>{
+	s.on("error",()=>{});
+	if(behavior==="silent")return;
+	if(behavior==="reset")return s.resetAndDestroy();
+	if(behavior==="partial-then-reset"){s.write("np-probe-");return setTimeout(()=>s.resetAndDestroy(),50);}
+	if(behavior==="wrong")return s.end("something else");
+	if(behavior==="empty-close")return s.end();
+	if(behavior==="token")return s.end("np-probe-ok:t");
+});
+server.listen(0,"127.0.0.1",()=>process.stdout.write(String(server.address().port)+"\\n"));
+`,
+	);
+	const { spawn } = await import("node:child_process");
+	const child = spawn(process.execPath, [serverFile], {
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	const port = await new Promise((resolve) =>
+		child.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim()))),
+	);
+	try {
+		return await new Promise((resolve) => {
+			const client = spawn(
+				process.execPath,
+				[
+					...(options?.preload ? ["-r", options.preload] : []),
+					"-e",
+					clientSource,
+					"127.0.0.1",
+					String(options?.port ?? port),
+					"np-probe-ok:t",
+					String(options?.timeoutMs ?? 400),
+				],
+				{ stdio: ["ignore", "pipe", "ignore"] },
+			);
+			let out = "";
+			client.stdout.on("data", (chunk) => (out += chunk));
+			client.on("close", () => resolve(JSON.parse(out.trim()).outcome));
+		});
+	} finally {
+		child.kill();
+	}
+}
+
+test("the probe client never records a connection that completed the handshake as blocked", async () => {
+	assert.equal(await clientAgainst("token"), "connected");
+	// Handshake completed, then nothing, a reset, or the wrong bytes: not blocked.
+	assert.equal(await clientAgainst("silent"), "error");
+	assert.equal(await clientAgainst("reset"), "error");
+	assert.equal(await clientAgainst("partial-then-reset"), "error");
+	assert.equal(await clientAgainst("wrong"), "error");
+	assert.equal(await clientAgainst("empty-close"), "error");
+});
+
+test("the probe client records only pre-handshake failures as blocked", async () => {
+	// Nothing listens on the port: the handshake is refused.
+	const closed = await withServer(
+		() => {},
+		async (port) => port,
+	);
+	assert.equal(await clientAgainst("token", { port: closed }), "refused");
+	// A handshake that never completes times out.
+	const directory = await mkdtemp(join(tmpdir(), "np-client-stub-"));
+	const preload = join(directory, "never-connect.cjs");
+	await writeFile(
+		preload,
+		// A socket whose handshake never completes: no `connect`, only its idle timer.
+		`const net=require("net");const { EventEmitter }=require("events");
+net.connect=()=>Object.assign(new EventEmitter(),{setTimeout(ms){setTimeout(()=>this.emit("timeout"),ms);}});\n`,
+	);
+	assert.equal(await clientAgainst("silent", { preload }), "timeout");
+});
+
+test("assembly stops when the gate rejects what the builder accepted, and when a live policy was changed", async () => {
+	const h = await harness();
+	for (const index of [0, 1]) await h.runNode(index);
+	const live = (name) =>
+		[...h.world.objects.values()].find((item) => item.metadata.name === name);
+	// A source whose live labels contain the production Worker selector: the builder
+	// reports what it read, only the gate judges it.
+	const source = live("np-probe-abc123-n0-src-worker");
+	const original = structuredClone(source.metadata.labels);
+	Object.assign(source.metadata.labels, workerPodLabels);
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_LABELS_FORBIDDEN",
+	);
+	assert.equal(
+		await readdir(h.dir).then((files) => files.includes("evidence.json")),
+		false,
+	);
+	source.metadata.labels = original;
+	// The policy that is live at assembly time differs from the rendered one.
+	const policy = live("np-probe-abc123-n1-allow");
+	const spec = structuredClone(policy.spec);
+	policy.spec.ingress[0].ports[0].port = 18081;
+	assert.equal(
+		code(() => h.assemble()),
+		"PROBE_POLICY_READBACK_MISMATCH",
+	);
+	policy.spec = spec;
+	assert.equal(h.assemble().gate, "passed");
+});
+
+test("every step records the policy UID that was live; recovery runs under the re-created policy", async () => {
+	const h = await harness();
+	await h.runNode(0);
+	const { steps } = JSON.parse(
+		await readFile(join(h.dir, "results", "n0.json"), "utf8"),
+	);
+	assert.equal(steps.allow.policyUid, steps.nonWorker.policyUid);
+	assert.notEqual(steps.deny.policyUid, steps.allow.policyUid);
+	assert.notEqual(steps.recovery.policyUid, steps.allow.policyUid);
+	assert.notEqual(steps.recovery.policyUid, steps.deny.policyUid);
+});
+
+test("every cluster command is bound to the namespace the run was rendered for", async () => {
+	const h = await harness();
+	await h.runNode(0);
+	await h.runNode(1);
+	const other = "other-namespace";
+	assert.equal(
+		code(() =>
+			cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace: other }),
+		),
+		"RUN_NAMESPACE_MISMATCH",
+	);
+	assert.equal(
+		await codeAsync(() => h.record(0, "allow", { namespace: other })),
+		"RUN_NAMESPACE_MISMATCH",
+	);
+	assert.equal(
+		code(() => h.assemble({ namespace: other })),
+		"RUN_NAMESPACE_MISMATCH",
+	);
+	assert.equal(h.world.objects.size > 0, true, "nothing was deleted");
+	// run.json decides what cleanup may delete, so its names are re-validated.
+	const run = loadRun(h.dir);
+	run.nodes[0].names.target = "np-probe-other-n0-target";
+	await writeFile(join(h.dir, "run.json"), JSON.stringify(run));
+	assert.equal(
+		code(() => cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace })),
+		"RUN_FILE_INVALID",
+	);
+	run.nodes[0].names.target = "kube-system";
+	await writeFile(join(h.dir, "run.json"), JSON.stringify(run));
+	assert.equal(
+		code(() => cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace })),
+		"RUN_FILE_INVALID",
+	);
+});
+
+test("cleanup stops when an object was replaced between listing and deletion", async () => {
+	const h = await harness();
+	await h.runNode(0);
+	let swapped = false;
+	const kubectl = (args) => {
+		// The first single-object read after the listing sees a different UID.
+		if (!swapped && args[0] === "get" && args[2]?.startsWith("np-probe-")) {
+			swapped = true;
+			const object = JSON.parse(h.world.kubectl(args));
+			object.metadata.uid = "99999999-0000-4000-8000-000000000000";
+			return JSON.stringify(object);
+		}
+		return h.world.kubectl(args);
+	};
+	const mark = h.world.state.calls.length;
+	assert.equal(
+		code(() => cleanup({ dir: h.dir, kubectl, namespace })),
+		"CLEANUP_UID_CHANGED",
+	);
+	assert.equal(
+		h.world.state.calls.slice(mark).filter((call) => call[0] === "delete")
+			.length,
+		0,
+	);
+	// A re-run after the cause is gone completes.
+	assert.equal(
+		cleanup({ dir: h.dir, kubectl: h.world.kubectl, namespace }).status,
+		"cleaned",
+	);
 });

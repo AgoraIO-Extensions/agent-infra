@@ -89,18 +89,24 @@ net.createServer((s)=>{s.on("error",()=>{});s.end(token);}).listen(Number(port),
 const idleSource = "setInterval(()=>{},1<<30);";
 // Runs through `kubectl exec` in a source Pod. Only a reply carrying the expected
 // token counts as connected: a completed TCP handshake alone does not.
-export const clientSource = `const net=require("net");const [host,port,token]=process.argv.slice(1);
+export const clientSource = `const net=require("net");const [host,port,token,timeoutMs]=process.argv.slice(1);
 let done=false;
+let handshake=false;
 const finish=(outcome)=>{if(done)return;done=true;process.stdout.write(JSON.stringify({outcome})+"\\n");process.exit(0);};
 const socket=net.connect({host,port:Number(port)});
 let data="";
-socket.setTimeout(5000);
-socket.on("timeout",()=>finish("timeout"));
+socket.setTimeout(Number(timeoutMs)||5000);
+// A completed handshake means the policy did not block this connection. Whatever
+// happens after it (idle, reset, wrong bytes) is a client or target fault: "error",
+// never "timeout" or "reset", so it cannot count as blocked.
+socket.on("connect",()=>{handshake=true;});
+socket.on("timeout",()=>finish(handshake?"error":"timeout"));
 socket.on("data",(chunk)=>{data+=chunk;});
 socket.on("end",()=>finish(data===token?"connected":"error"));
 socket.on("close",()=>finish(data===token?"connected":"error"));
 socket.on("error",(error)=>{
-	if(error.code==="ECONNREFUSED")finish("refused");
+	if(handshake)finish("error");
+	else if(error.code==="ECONNREFUSED")finish("refused");
 	else if(error.code==="ECONNRESET"||error.code==="EPIPE")finish("reset");
 	else if(error.code==="ETIMEDOUT")finish("timeout");
 	else finish("error");
@@ -439,17 +445,35 @@ function writeJson(file, value, mode = 0o600) {
 	writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode });
 }
 
-export function loadRun(dir) {
+const objectNamePattern = (runId) =>
+	new RegExp(
+		`^np-probe-${runId}-n\\d{1,3}(?:-(?:target|allow|deny|src-worker|src-other))?$`,
+		"u",
+	);
+/**
+ * Reads `run.json`. Every command that touches the cluster passes the namespace it
+ * is about to act in; it must be the one the run was rendered for, and the run id
+ * and object names are re-validated because they decide what `cleanup` may delete.
+ */
+export function loadRun(dir, namespace) {
 	const run = readJson(join(dir, "run.json"), "RUN_FILE_INVALID");
 	if (run?.kind !== "agent-infra-networkpolicy-probe-run" || run.schemaVersion !== 1)
 		fail("RUN_FILE_INVALID");
+	if (namespace !== undefined && run.namespace !== namespace)
+		fail("RUN_NAMESPACE_MISMATCH");
+	if (!runIdPattern.test(run.runId ?? "") || !Array.isArray(run.nodes))
+		fail("RUN_FILE_INVALID");
+	const pattern = objectNamePattern(run.runId);
+	for (const entry of run.nodes)
+		for (const name of Object.values(entry?.names ?? {}))
+			if (typeof name !== "string" || !pattern.test(name)) fail("RUN_FILE_INVALID");
 	return run;
 }
 const resultsFile = (dir, index) => join(dir, "results", `n${index}.json`);
 const loadResults = (dir, index) =>
 	existsSync(resultsFile(dir, index))
 		? readJson(resultsFile(dir, index), "RESULTS_INVALID")
-		: { index, steps: {}, policyUids: {} };
+		: { index, steps: {} };
 
 /** Normalizes API defaults so the live spec can be compared to the rendered one. */
 export function normalizePolicySpecV1(spec) {
@@ -523,12 +547,13 @@ export async function recordProbeStepV1({
 	kubectl,
 	exec,
 	sleep,
+	namespace,
 	now = Date.now,
 	settleMs,
 	intervalMs,
 }) {
 	if (!probeSteps.includes(step)) fail("STEP_INVALID");
-	const run = loadRun(dir);
+	const run = loadRun(dir, namespace);
 	const entry = run.nodes.find((node) => node.index === index);
 	if (!entry) fail("NODE_UNKNOWN");
 	const results = loadResults(dir, index);
@@ -563,13 +588,12 @@ export async function recordProbeStepV1({
 		: denyAllSpecV1(entry.agentSelector);
 	if (!policySpecsMatch(live.spec, expectedSpec))
 		fail("PROBE_POLICY_READBACK_MISMATCH");
-	if (wantOriginal) {
-		if (step === "nonWorker" && live.metadata.uid !== results.policyUids.original)
-			fail("PROBE_POLICY_STATE_INVALID");
-		results.policyUids.original = live.metadata.uid;
-	} else {
-		results.policyUids.deny = live.metadata.uid;
-	}
+	// The policy UID live during each step is part of its record. The original
+	// policy is re-created for recovery, so allow and nonWorker must agree and
+	// recovery is expected to differ.
+	const policyUid = live.metadata.uid;
+	if (step === "nonWorker" && policyUid !== results.steps.allow.policyUid)
+		fail("PROBE_POLICY_STATE_INVALID");
 
 	const { source, expect } = expectations[step];
 	const sourcePodName = entry.names[source];
@@ -608,7 +632,7 @@ export async function recordProbeStepV1({
 	results.steps[step] = {
 		at: settled.at,
 		outcome: settled.outcome,
-		...(step === "deny" ? { policyUid: results.policyUids.deny } : {}),
+		policyUid,
 		samples: settled.samples,
 	};
 	delete results.failed;
@@ -755,7 +779,8 @@ function makeKubectl(namespace) {
 			["--request-timeout=30s", "--namespace", namespace, ...args],
 			{
 				encoding: "utf8",
-				timeout: 60_000,
+				// Foreground deletion of an ECI Pod can take minutes; `cleanup` is safe to re-run.
+				timeout: args[0] === "delete" ? 300_000 : 60_000,
 				maxBuffer: 64 * 1024 * 1024,
 				stdio: ["ignore", "pipe", "pipe"],
 			},
@@ -856,6 +881,7 @@ export async function main(argv) {
 			step,
 			kubectl,
 			exec: makeExec(namespace),
+			namespace,
 			sleep: delay,
 			settleMs: option(argv, "settle-seconds")
 				? Number(option(argv, "settle-seconds")) * 1000
@@ -899,7 +925,7 @@ export function assembleEvidenceV1({
 	validForMs,
 	now = Date.now(),
 }) {
-	const run = loadRun(dir);
+	const run = loadRun(dir, namespace);
 	if (
 		workerConfigurationSha256 !== run.workerConfigurationSha256 ||
 		sha256(renderedManifest) !== run.renderedManifestSha256
@@ -963,8 +989,8 @@ export function assembleEvidenceV1({
  * unexpected name stops the cleanup. UIDs are recorded in the receipt and checked
  * against the listing right before each delete; absence is read back afterwards.
  */
-export function cleanup({ dir, kubectl }) {
-	const run = loadRun(dir);
+export function cleanup({ dir, kubectl, namespace }) {
+	const run = loadRun(dir, namespace);
 	const expected = new Set(
 		run.nodes.flatMap((entry) => Object.values(entry.names)),
 	);
@@ -984,7 +1010,14 @@ export function cleanup({ dir, kubectl }) {
 		const current = getOptional(kubectl, [kind, item.metadata.name]);
 		if (current === null) continue;
 		if (current.metadata.uid !== item.metadata.uid) fail("CLEANUP_UID_CHANGED");
-		kubectl(["delete", kind, item.metadata.name, "--cascade=foreground", "--wait=true"]);
+		kubectl([
+			"delete",
+			kind,
+			item.metadata.name,
+			"--cascade=foreground",
+			"--wait=true",
+			"--timeout=240s",
+		]);
 		deleted.push({ kind, name: item.metadata.name, uid: item.metadata.uid });
 	}
 	for (const kind of ["deployments", "replicasets", "pods", "networkpolicies"])
