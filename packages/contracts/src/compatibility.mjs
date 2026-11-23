@@ -6935,19 +6935,18 @@ function normalizeEvaluationData3638(document) {
 let comparisonCache;
 
 // #4455: only the optional v2 recovery-capability metadata; all old routes/auth/fields stay exact.
-function isConnectionResponseCredentialRecoveryMetadataAddition(
+function normalizeConnectionResponseCredentialRecoveryMetadata(
 	previous,
 	current,
 ) {
 	const path = "/api/v2/agents/{agentId}/connection-association";
-	const normalized = structuredClone(current);
 	for (const method of ["get", "put", "delete"]) {
 		const before =
 			previous.paths?.[path]?.[method]?.responses?.["200"]?.content?.[
 				"application/json"
 			]?.schema;
 		const after =
-			normalized.paths?.[path]?.[method]?.responses?.["200"]?.content?.[
+			current.paths?.[path]?.[method]?.responses?.["200"]?.content?.[
 				"application/json"
 			]?.schema;
 		if (
@@ -6959,10 +6958,14 @@ function isConnectionResponseCredentialRecoveryMetadataAddition(
 			}) ||
 			after.required?.includes("credentialRecoveryAvailable")
 		)
-			return false;
-		delete after.properties.credentialRecoveryAvailable;
+			return current;
 	}
-	return findBreakingChanges(previous, normalized).length === 0;
+	const normalized = structuredClone(current);
+	for (const method of ["get", "put", "delete"])
+		delete normalized.paths[path][method].responses["200"].content[
+			"application/json"
+		].schema.properties.credentialRecoveryAvailable;
+	return normalized;
 }
 
 function findBreakingChanges(previousValue, currentValue) {
@@ -7742,6 +7745,14 @@ function normalizeConversationArchive4266(document) {
 }
 
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
+	// Normalize this exact additive metadata before the older pinned proofs. Otherwise
+	// every older proof rejects the extra field and repeats its normalization branches.
+	const recovery = normalizeConnectionResponseCredentialRecoveryMetadata(
+		originalPrevious,
+		originalCurrent,
+	);
+	if (recovery !== originalCurrent)
+		return findBreakingChanges(originalPrevious, recovery);
 	// Once published, the added endpoints/actions cannot be removed through normalization.
 	const prefix4264 =
 		"/api/v2/applications/{applicationId}/credential-material-deliveries";
@@ -8206,8 +8217,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV3OpenApiAddition(previous, current) &&
-			!isAgentManagementRevisionOpenApiAddition(previous, current) &&
-			!isConnectionResponseCredentialRecoveryMetadataAddition(previous, current)
+			!isAgentManagementRevisionOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

@@ -40,6 +40,12 @@ it("admits only optional true recovery metadata without changing old authenticat
 		}
 		expect(await compare(after)).toBe(0);
 		expect(await compare(after, await readEvaluationBaseline("v2"))).toBe(0);
+		// Early normalization must neither admit a partial capability nor remove a
+		// capability that the previous contract already published.
+		const partial = structuredClone(after);
+		delete schema(partial, "put").properties.credentialRecoveryAvailable;
+		expect(await compare(partial)).not.toBe(0);
+		expect(await compare(before, after)).not.toBe(0);
 		for (const mutate of [
 			(doc: typeof after) => {
 				doc.paths[path].put.security = [];
