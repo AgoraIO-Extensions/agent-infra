@@ -81,6 +81,10 @@ import {
 } from "./http/evaluation-data-routes.js";
 import { registerEvaluationExperimentRoutesV1 } from "./http/evaluation-experiment-routes.js";
 import {
+	type ExternalServiceAdmin,
+	registerExternalServiceRoutes,
+} from "./http/external-service-routes.js";
+import {
 	type FileLimitRoutesDependenciesV1,
 	registerFileLimitRoutesV2,
 } from "./http/file-limit-routes.js";
@@ -239,6 +243,7 @@ export interface PlatformAppDependencies {
 	readonly applications?: ApplicationRegistrationRouteDependencies;
 	readonly applicationMaterialGrants?: ApplicationMaterialGrantRouteDependencies;
 	readonly configuration: ConfigurationRoutesDependencies;
+	readonly externalServices?: ExternalServiceAdmin;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly nativeMetadata?: NativeMetadataRoutesDependenciesV1;
@@ -411,6 +416,12 @@ export function createPlatformApp(
 			dependencies.personalApiCredentials,
 		);
 	registerV2ConfigurationRoutes(app, dependencies.configuration);
+	if (dependencies.externalServices)
+		registerExternalServiceRoutes(
+			app,
+			dependencies.management.identity,
+			dependencies.externalServices,
+		);
 	if (dependencies.deploymentConfiguration)
 		registerDeploymentConfigurationRoutes(
 			app,

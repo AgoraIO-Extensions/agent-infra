@@ -659,6 +659,13 @@
       "when": 1795299591558,
       "tag": "0097_runtime_safety_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1795442372772,
+      "tag": "0098_external_services",
+      "breakpoints": true
     }
   ]
 }

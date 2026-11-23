@@ -46,6 +46,10 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
+	externalServices,
+	externalServiceVersions,
+} from "./schema-external-services";
+import {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
 	ldapIdentityIds,
@@ -67,6 +71,12 @@ import {
 	operationsResourceSnapshots,
 } from "./schema-operations-resources";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+
+export {
+	externalServices,
+	externalServiceVersions,
+} from "./schema-external-services";
+
 import { runtimeSafetyEvidence } from "./schema-runtime-safety-evidence";
 
 export {
@@ -293,6 +303,8 @@ export const platformInfrastructureTables = [
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 	workspaceSnapshotUploadAdmissions,
+	externalServices,
+	externalServiceVersions,
 	runtimeSafetyEvidence,
 ] as const;
 

@@ -20,6 +20,7 @@ export * from "./evaluation-analysis.ts";
 export * from "./evaluation-data.ts";
 export * from "./evaluation-experiments.ts";
 export * from "./execution-progress.ts";
+export * from "./external-services.ts";
 export * from "./multi-service.ts";
 export * from "./native-capability.ts";
 export * from "./native-metadata.ts";

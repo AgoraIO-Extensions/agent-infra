@@ -22,6 +22,7 @@ export const navigationLabels = {
 	connection: "我的 Connection",
 	approvals: "创建审批",
 	"admin-agents": "Agent 管理",
+	"external-services": "外部服务",
 	"skill-reviews": "Skill 审核",
 	eval: "评测",
 	"platform-audit": "平台审计",
@@ -64,6 +65,7 @@ export const navigationGroups: readonly {
 		items: [
 			"approvals",
 			"admin-agents",
+			"external-services",
 			"skill-reviews",
 			"platform-audit",
 			"ops",
@@ -178,6 +180,10 @@ const rules: readonly { pattern: RegExp; chrome: PageChrome }[] = [
 	},
 	{ pattern: /^\/audit$/, chrome: navigationPage("audit") },
 	{ pattern: /^\/admin\/approvals$/, chrome: navigationPage("approvals") },
+	{
+		pattern: /^\/admin\/external-services$/,
+		chrome: navigationPage("external-services"),
+	},
 	{ pattern: /^\/admin\/agents$/, chrome: navigationPage("admin-agents") },
 	{
 		pattern: /^\/admin\/skill-reviews$/,

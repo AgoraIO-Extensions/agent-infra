@@ -4144,6 +4144,213 @@ export type UpdateDeploymentFileLimitsV2Responses = {
 
 export type UpdateDeploymentFileLimitsV2Response = UpdateDeploymentFileLimitsV2Responses[keyof UpdateDeploymentFileLimitsV2Responses];
 
+export type ListExternalServicesV2Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/admin/external-services';
+};
+
+export type ListExternalServicesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListExternalServicesV2Error = ListExternalServicesV2Errors[keyof ListExternalServicesV2Errors];
+
+export type ListExternalServicesV2Responses = {
+    /**
+     * Service versions and audit
+     */
+    200: {
+        history: Array<{
+            action: string;
+            actor: string;
+            id: string;
+            outcome: string;
+            revision: number;
+            time: string;
+        }>;
+        services: Array<{
+            active: number | null;
+            activeUrl: string | null;
+            id: string;
+            modelEndpointId: string | null;
+            revision: number;
+            url: string;
+            verified: number | null;
+        }>;
+    };
+};
+
+export type ListExternalServicesV2Response = ListExternalServicesV2Responses[keyof ListExternalServicesV2Responses];
+
+export type SaveExternalServiceCandidateV2Data = {
+    body: {
+        credential: string;
+        expectedRevision: number | 0;
+        id: string;
+        modelEndpointId?: string;
+        url: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/admin/external-services';
+};
+
+export type SaveExternalServiceCandidateV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SaveExternalServiceCandidateV2Error = SaveExternalServiceCandidateV2Errors[keyof SaveExternalServiceCandidateV2Errors];
+
+export type SaveExternalServiceCandidateV2Responses = {
+    /**
+     * Candidate saved
+     */
+    200: {
+        discovery?: {
+            instanceId: string;
+            items: Array<{
+                displayName: string;
+                ref: string;
+            }>;
+            schemaVersion: 1;
+            subjectId: string;
+        };
+        manifest?: {
+            capabilities: Array<'discovery' | 'execution' | 'model-authorization'>;
+            instanceId: string;
+            schemaVersion: 1;
+        };
+        revision: number;
+    };
+};
+
+export type SaveExternalServiceCandidateV2Response = SaveExternalServiceCandidateV2Responses[keyof SaveExternalServiceCandidateV2Responses];
+
+export type ManageExternalServiceV2Data = {
+    body: {
+        action: 'test' | 'enable' | 'disable' | 'discover';
+        id: string;
+        revision: number;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/admin/external-services/commands';
+};
+
+export type ManageExternalServiceV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ManageExternalServiceV2Error = ManageExternalServiceV2Errors[keyof ManageExternalServiceV2Errors];
+
+export type ManageExternalServiceV2Responses = {
+    /**
+     * Command applied
+     */
+    200: {
+        discovery?: {
+            instanceId: string;
+            items: Array<{
+                displayName: string;
+                ref: string;
+            }>;
+            schemaVersion: 1;
+            subjectId: string;
+        };
+        manifest?: {
+            capabilities: Array<'discovery' | 'execution' | 'model-authorization'>;
+            instanceId: string;
+            schemaVersion: 1;
+        };
+        revision: number;
+    };
+};
+
+export type ManageExternalServiceV2Response = ManageExternalServiceV2Responses[keyof ManageExternalServiceV2Responses];
+
 export type GetPlatformUserDisabledV2Data = {
     body?: never;
     path: {
@@ -9505,6 +9712,73 @@ export type ListRecentPersonalConversationsV2Responses = {
 };
 
 export type ListRecentPersonalConversationsV2Response = ListRecentPersonalConversationsV2Responses[keyof ListRecentPersonalConversationsV2Responses];
+
+export type DiscoverMyExternalAuthorizationsV2Data = {
+    body: {
+        id: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/external-service-authorizations';
+};
+
+export type DiscoverMyExternalAuthorizationsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DiscoverMyExternalAuthorizationsV2Error = DiscoverMyExternalAuthorizationsV2Errors[keyof DiscoverMyExternalAuthorizationsV2Errors];
+
+export type DiscoverMyExternalAuthorizationsV2Responses = {
+    /**
+     * Current user authorizations
+     */
+    200: {
+        discovery?: {
+            instanceId: string;
+            items: Array<{
+                displayName: string;
+                ref: string;
+            }>;
+            schemaVersion: 1;
+            subjectId: string;
+        };
+        manifest?: {
+            capabilities: Array<'discovery' | 'execution' | 'model-authorization'>;
+            instanceId: string;
+            schemaVersion: 1;
+        };
+        revision: number;
+    };
+};
+
+export type DiscoverMyExternalAuthorizationsV2Response = DiscoverMyExternalAuthorizationsV2Responses[keyof DiscoverMyExternalAuthorizationsV2Responses];
 
 export type RevokePersonalRelayKeyV2Data = {
     body: PersonalRelayKeyRevokeRequestV1;

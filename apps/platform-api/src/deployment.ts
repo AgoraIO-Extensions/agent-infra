@@ -773,6 +773,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.agentVersion !== undefined
 			? { agentVersion: input.agentVersion }
 			: {}),
+		externalServiceEncryptor: secretEncryptor,
 		databaseUrl: input.databaseUrl,
 		userGovernance,
 		taskAdmissionPolicy: input.taskAdmissionPolicy,

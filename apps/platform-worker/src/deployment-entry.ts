@@ -1474,15 +1474,32 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 		templateBindings: deployment.workload
 			.templateModelBindings as readonly StandardTemplateModelBindingV1[],
 	});
+	const { ExternalServiceStore } = await import("@agent-infra/platform-store");
+	const { createExternalServiceProbe } = await import(
+		"./external-service-probe.js"
+	);
+	const services = new ExternalServiceStore(
+		deployment.conversation.databaseUrl,
+	);
+	const externalService = createExternalServiceProbe(
+		services,
+		deployment.workload.decryptor,
+	);
 	return {
-		app: createWorkerSavedKeyCandidatesApp({ serviceToken, reader }),
+		app: createWorkerSavedKeyCandidatesApp({
+			serviceToken,
+			reader,
+			externalService,
+		}),
 		...(savedKeyCandidatesPolicy.port === undefined
 			? {}
 			: { port: savedKeyCandidatesPolicy.port }),
 		...(savedKeyCandidatesPolicy.hostname === undefined
 			? {}
 			: { hostname: savedKeyCandidatesPolicy.hostname }),
-		close: reader.close,
+		close: async () => {
+			await Promise.all([reader.close(), services.close()]);
+		},
 	};
 }
 

@@ -5,6 +5,7 @@ import {
 	check,
 	foreignKey,
 	index,
+	integer,
 	jsonb,
 	text,
 	timestamp,
@@ -19,6 +20,7 @@ import {
 	conversationStopStatus,
 	platformSchema,
 } from "./schema-common";
+import { externalServiceVersions } from "./schema-external-services";
 import { relayKeyVersions } from "./schema-relay-keys";
 
 export const conversations = platformSchema.table(
@@ -139,6 +141,8 @@ export const conversationExecutions = platformSchema.table(
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
 		executionSource: text("execution_source"),
+		externalServiceId: text("external_service_id"),
+		externalServiceRevision: integer("external_service_revision"),
 		relayKeyPurpose: text("relay_key_purpose"),
 		relayKeySubjectId: text("relay_key_subject_id"),
 		relayKeyId: text("relay_key_id"),
@@ -163,6 +167,14 @@ export const conversationExecutions = platformSchema.table(
 		}),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.externalServiceId, table.externalServiceRevision],
+			foreignColumns: [
+				externalServiceVersions.id,
+				externalServiceVersions.revision,
+			],
+			name: "execution_external_service_version_fk",
+		}),
 		foreignKey({
 			columns: [table.conversationId],
 			foreignColumns: [conversations.id],

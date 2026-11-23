@@ -21343,6 +21343,650 @@
         "summary": "Create or replace the deployment file limit declaration"
       }
     },
+    "/api/v2/admin/external-services": {
+      "get": {
+        "operationId": "listExternalServicesV2",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "history": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "action": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "string"
+                          },
+                          "revision": {
+                            "type": "number"
+                          },
+                          "time": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "actor",
+                          "action",
+                          "id",
+                          "revision",
+                          "outcome",
+                          "time"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "services": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "active": {
+                            "anyOf": [
+                              {
+                                "exclusiveMinimum": 0,
+                                "maximum": 2147483647,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "activeUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                            "type": "string"
+                          },
+                          "modelEndpointId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "revision": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 2147483647,
+                            "type": "integer"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "verified": {
+                            "anyOf": [
+                              {
+                                "exclusiveMinimum": 0,
+                                "maximum": 2147483647,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "revision",
+                          "active",
+                          "verified",
+                          "url",
+                          "modelEndpointId",
+                          "activeUrl"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "services",
+                    "history"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service versions and audit"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "saveExternalServiceCandidateV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "credential": {
+                    "pattern": "^[\\x21-\\x7e]{16,8192}$",
+                    "type": "string"
+                  },
+                  "expectedRevision": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "maximum": 2147483647,
+                        "type": "integer"
+                      },
+                      {
+                        "const": 0,
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                    "type": "string"
+                  },
+                  "modelEndpointId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "url": {
+                    "format": "uri",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "expectedRevision",
+                  "url",
+                  "credential"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "discovery": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "items": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "ref": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref",
+                              "displayName"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "type": "array"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "subjectId": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "subjectId",
+                        "items"
+                      ],
+                      "type": "object"
+                    },
+                    "manifest": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "items": {
+                            "enum": [
+                              "discovery",
+                              "execution",
+                              "model-authorization"
+                            ],
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "capabilities"
+                      ],
+                      "type": "object"
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 2147483647,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Candidate saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/admin/external-services/commands": {
+      "post": {
+        "operationId": "manageExternalServiceV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "test",
+                      "enable",
+                      "disable",
+                      "discover"
+                    ],
+                    "type": "string"
+                  },
+                  "id": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 2147483647,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision",
+                  "action"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "discovery": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "items": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "ref": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref",
+                              "displayName"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "type": "array"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "subjectId": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "subjectId",
+                        "items"
+                      ],
+                      "type": "object"
+                    },
+                    "manifest": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "items": {
+                            "enum": [
+                              "discovery",
+                              "execution",
+                              "model-authorization"
+                            ],
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "capabilities"
+                      ],
+                      "type": "object"
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 2147483647,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Command applied"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
     "/api/v2/admin/users/{userId}/disable": {
       "get": {
         "operationId": "getPlatformUserDisabledV2",
@@ -35566,6 +36210,205 @@
             "PlatformSession": []
           }
         ]
+      }
+    },
+    "/api/v2/me/external-service-authorizations": {
+      "post": {
+        "operationId": "discoverMyExternalAuthorizationsV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "discovery": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "items": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "displayName": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "ref": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref",
+                              "displayName"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "type": "array"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "subjectId": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "subjectId",
+                        "items"
+                      ],
+                      "type": "object"
+                    },
+                    "manifest": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "capabilities": {
+                          "items": {
+                            "enum": [
+                              "discovery",
+                              "execution",
+                              "model-authorization"
+                            ],
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "instanceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "instanceId",
+                        "capabilities"
+                      ],
+                      "type": "object"
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 2147483647,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Current user authorizations"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
       }
     },
     "/api/v2/me/relay-key": {

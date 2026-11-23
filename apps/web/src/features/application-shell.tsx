@@ -428,6 +428,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						{label}
 					</Link>
 				);
+			case "external-services":
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/admin/external-services"
+					>
+						<Layers {...navigationIconProps} />
+						{label}
+					</Link>
+				);
 			case "admin-agents":
 				return (
 					<Link key={key} {...navigationItemProps(key)} to="/admin/agents">

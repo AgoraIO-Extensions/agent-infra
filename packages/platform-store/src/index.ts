@@ -178,6 +178,10 @@ export {
 export * from "./evaluation-feedback.js";
 export { PostgresEvaluationScoringV1 } from "./evaluation-scoring.js";
 export { PostgresEvaluationTaskAuthorityV1 } from "./evaluation-task-authority.js";
+export {
+	ExternalServiceConflict,
+	ExternalServiceStore,
+} from "./external-services.js";
 export { PostgresFileLimitDeclarationStoreV1 } from "./file-limit-declarations.js";
 export { PostgresFileStoreV1 } from "./files.js";
 export {
