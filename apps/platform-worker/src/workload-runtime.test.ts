@@ -8554,6 +8554,10 @@ it.each(["incompatible", "compatible", "newer fence"] as const)(
 			"Certificate",
 			hostnameCertificateName,
 		);
+		const certificateSecret = await f.client.read(
+			"Secret",
+			hostnameCertificateName,
+		);
 		if (variant === "compatible") {
 			const fetcher = f.options.fetch;
 			Object.assign(f.options, {
@@ -8636,11 +8640,109 @@ it.each(["incompatible", "compatible", "newer fence"] as const)(
 				await f.tick(4);
 				expect(f.state).toMatchObject({ phase: "stopped", fence: 3 });
 				expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+				expect(
+					remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+				).toHaveLength(0);
+				expect(
+					(await f.client.read("Certificate", hostnameCertificateName))
+						?.metadata?.uid,
+				).toBe(certificate?.metadata?.uid);
+				expect(
+					(await f.client.read("Secret", hostnameCertificateName))?.metadata
+						?.uid,
+				).toBe(certificateSecret?.metadata?.uid);
+				expect(
+					(await f.client.read("PersistentVolumeClaim", volumeName))?.metadata
+						?.uid,
+				).toBe(volume.metadata.uid);
+				expect(
+					(await f.client.read("StatefulSet", hostnameWorkloadName))?.metadata
+						?.uid,
+				).toBe(workload.metadata.uid);
 			} else expect(f.state?.phase).toBe("cleaning");
 		}
 		assertProtected();
 	},
 );
+
+it("retains the single-service Certificate, Secret, PVC and StatefulSet after direct disable", async () => {
+	const f = fixture(
+		{ registry: workloadRegistryFixture(), policy: hostnameTestPolicy },
+		{ configuration: hostnameConfiguration() },
+	);
+	await f.tick(4);
+	const pendingCertificate = await f.client.read(
+		"Certificate",
+		hostnameCertificateName,
+	);
+	assert(pendingCertificate);
+	f.seed({
+		...pendingCertificate,
+		status: {
+			conditions: [
+				{
+					type: "Ready",
+					status: "True",
+					observedGeneration: pendingCertificate.metadata?.generation,
+				},
+			],
+			notAfter: "2030-01-01T00:00:00Z",
+		},
+	} as KubernetesObject);
+	f.seed({
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: {
+			namespace: "workload-test",
+			name: hostnameCertificateName,
+			uid: "direct-disable-cert-secret",
+			resourceVersion: "1",
+		},
+	} as KubernetesObject);
+	await f.tick(5);
+	expect(f.state?.phase).toBe("ready");
+	const volumeName = `${hostnameWorkloadName}-data`;
+	const certificate = await f.client.read(
+		"Certificate",
+		hostnameCertificateName,
+	);
+	const certificateSecret = await f.client.read(
+		"Secret",
+		hostnameCertificateName,
+	);
+	const volume = await f.client.read("PersistentVolumeClaim", volumeName);
+	const workload = await f.client.read("StatefulSet", hostnameWorkloadName);
+	assert(certificate?.metadata?.uid && certificateSecret?.metadata?.uid);
+	assert(volume?.metadata?.uid && workload?.metadata?.uid);
+	const remove = vi.spyOn(f.client, "delete");
+	f.setManagement({
+		...f.management,
+		status: "disabled",
+		desiredState: "stopped",
+		revision: f.management.revision + 1,
+		workloadRevision: f.management.workloadRevision + 1,
+		fence: f.management.fence + 1,
+	});
+	await f.tick(7);
+	expect(f.state).toMatchObject({ phase: "stopped" });
+	expect(await f.client.read("Ingress", hostnameWorkloadName)).toBeNull();
+	expect(
+		remove.mock.calls.filter(([object]) => object.kind !== "Ingress"),
+	).toHaveLength(0);
+	expect(
+		(await f.client.read("Certificate", hostnameCertificateName))?.metadata
+			?.uid,
+	).toBe(certificate.metadata.uid);
+	expect(
+		(await f.client.read("Secret", hostnameCertificateName))?.metadata?.uid,
+	).toBe(certificateSecret.metadata.uid);
+	expect(
+		(await f.client.read("PersistentVolumeClaim", volumeName))?.metadata?.uid,
+	).toBe(volume.metadata.uid);
+	expect(
+		(await f.client.read("StatefulSet", hostnameWorkloadName))?.metadata?.uid,
+	).toBe(workload.metadata.uid);
+});
 
 it.each([
 	{ kind: "single", afterPreflight: false },
