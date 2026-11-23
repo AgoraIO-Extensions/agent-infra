@@ -3842,6 +3842,22 @@ function isDirectorySearchV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #4445: accept only the administrator access operation; all existing contracts must match.
+function isDashboardAccessV1Addition(previous, current) {
+	const path = "/api/v1/ops/dashboard-access";
+	if (previous.paths?.[path] || !current.paths?.[path]) return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths[path]))
+			.digest("hex") !==
+		"2ce0b46ddf08ea5328fe8aa4de8a3c0efc07802a173c80ecac39915abe115492"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 // #3058 把既有的运维观测查询 GET /api/v1/ops/observability 纳入浏览器 V1 契约；
 // 新增路径与 strict 投影用写死的 SHA-256 固定，删除新增后须与基线逐字节一致。
 function isObservabilityStatusV1OpenApiAddition(previous, current) {
@@ -5974,6 +5990,30 @@ function isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #4405 adds the isolated Core admission endpoint to the readiness document.
+function isCorePodAdmissionOpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v1/core-pod-admission";
+	const scheme = "CorePodChallengeBearer";
+	const operation = current.paths?.[path];
+	if (
+		previous.info?.title !== "Agent Infra Workload Readiness Contract" ||
+		previous.paths?.[path] !== undefined ||
+		previous.components?.securitySchemes?.[scheme] !== undefined ||
+		operation === undefined ||
+		createHash("sha256").update(JSON.stringify(operation)).digest("hex") !==
+			"1cf27d60696ceb7b7a5a70ba4f33cde025dc31bc11ab030c379d035bb63a98f4" ||
+		!sameValue(current.components?.securitySchemes?.[scheme], {
+			scheme: "bearer",
+			type: "http",
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.securitySchemes[scheme];
+	return sameValue(previous, normalized);
+}
+
 // #1717 delivers the optional, signed Browser declaration/probe facts through
 // the existing readiness and Runtime capability contracts. The fields are
 // additive and remain optional when Browser is absent; no existing operation,
@@ -8092,6 +8132,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
+			!isCorePodAdmissionOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isLocalToolBoundaryOpenApiAddition(previous, current) &&
@@ -8167,6 +8208,7 @@ function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 			!isWecomBotQrAvailabilityOpenApiAddition(previous, current) &&
 			!isDirectorySearchV2OpenApiAddition(previous, current) &&
 			!isApplicationModelCandidates3146OpenApiAddition(previous, current) &&
+			!isDashboardAccessV1Addition(previous, current) &&
 			!isObservabilityStatusV1OpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&

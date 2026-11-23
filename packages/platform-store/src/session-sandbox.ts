@@ -435,12 +435,17 @@ export async function insertSessionSandboxBinding(
 	transaction: Transaction,
 	input: SessionSandboxBindingV1,
 	audit: {
+		readonly cold: boolean;
 		readonly requestId: string;
 		readonly traceId: string;
 		readonly occurredAt: Date;
 	},
 ): Promise<void> {
 	const binding = parseSessionSandboxBindingV1(input);
+	const pilot =
+		audit.cold &&
+		process.env.PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE ===
+			"ack-community-m1-4405";
 	await transaction`
 		insert into platform.session_sandbox_allocations
 			(sandbox_id, conversation_id, agent_id, actor_id, principal_type, channel_id,
@@ -462,7 +467,7 @@ export async function insertSessionSandboxBinding(
 			 available_at, created_at, updated_at)
 		values (${`conversation:sandbox:${binding.sessionId}:${binding.generation}`},
 			'conversation', ${binding.sessionId}, 'conversation.sandbox.reconcile.v1',
-			${transaction.json({ schemaVersion: 1, conversationId: binding.sessionId, sessionGeneration: binding.generation })},
+			${transaction.json({ schemaVersion: 1, conversationId: binding.sessionId, sessionGeneration: binding.generation, ...(pilot ? { podController: "sig-core-v1.0.12" } : {}) })},
 			${audit.traceId}, ${audit.requestId}, ${audit.occurredAt}, ${audit.occurredAt}, ${audit.occurredAt})
 	`;
 }

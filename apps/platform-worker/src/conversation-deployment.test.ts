@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import * as runtimeIdentity from "@agent-infra/agent-runtime";
 import {
+	admittedCorePod,
+	corePodAdmissionPath,
 	createAppliedRuntimeSkillDirectoryV1,
 	pinCodexSessionExecutorEpochV1,
 	signExecutorControlV1,
@@ -194,6 +196,204 @@ function fixture() {
 		}),
 	};
 }
+
+it("reconciles a cold Core allocation through the production receiver and preserves its Worker Service and PVC", async () => {
+	const f = fixture();
+	const namespace = "ack-community-m1-4405";
+	const policy = {
+		...f.options.policy,
+		namespace,
+		agentWorkloadPlacement: {
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+		} as const,
+	};
+	const key = sessionSandboxServiceTokenV1(
+		sessionSandboxDeploymentTokenFixture,
+		namespace,
+		f.claim.sandbox.sandboxId,
+	);
+	let runtime: ReturnType<typeof admittedCorePod> | undefined;
+	const fetchAdmission: typeof fetch = async (url, init) => {
+		expect(String(url)).toBe(
+			`http://${f.claim.sandbox.resourceName}.${namespace}.svc:${(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>).service.port}${corePodAdmissionPath}`,
+		);
+		const headers = new Headers(init?.headers);
+		const nonce = headers.get("x-core-challenge") ?? "";
+		if (
+			!runtime ||
+			headers.get("authorization") !== "Bearer " + runtime.probeToken(nonce)
+		)
+			return new Response(null, { status: 401 });
+		const { token, proof } = await runtime.issue(nonce);
+		return new Response(null, {
+			status: 204,
+			headers: { "x-core-admission": token, "x-core-proof": proof },
+		});
+	};
+	const receive = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			fetch: fetchAdmission,
+			policy,
+			client: {
+				...f.client,
+				namespace,
+				async deleteResult(object) {
+					const result = await f.client.deleteResult(object);
+					if (object.kind === "Sandbox")
+						f.resources.delete(`Pod/${object.metadata?.name}`);
+					return result;
+				},
+			},
+		},
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	const claim = {
+		...f.claim,
+		policy: {
+			...f.claim.policy,
+			namespace,
+			podController: "sig-core-v1.0.12" as const,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		},
+	};
+	const signal = new AbortController().signal;
+	const initial = await receive(claim, signal);
+	expect(initial.status).toBe("observed");
+	const name = claim.sandbox.resourceName;
+	expect(f.resources.has(`Pod/${name}`)).toBe(false);
+	const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
+		spec: { service: boolean; podTemplate: V1Pod };
+	};
+	expect(sandbox.spec.service).toBe(false);
+	const pvcUid = f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata
+		?.uid;
+	expect(pvcUid).toBeTruthy();
+	const serviceUid = f.resources.get(`Service/${name}`)?.metadata?.uid;
+	if (!sandbox.metadata?.uid) throw Error("Missing Sandbox UID");
+	const pod = await f.client.create<V1Pod>({
+		...sandbox.spec.podTemplate,
+		apiVersion: "v1",
+		kind: "Pod",
+		status: {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		},
+		metadata: {
+			...sandbox.spec.podTemplate.metadata,
+			name,
+			namespace,
+			ownerReferences: [
+				{
+					apiVersion: "agents.x-k8s.io/v1beta1",
+					kind: "Sandbox",
+					name,
+					uid: sandbox.metadata.uid,
+					controller: true,
+				},
+			],
+		},
+	});
+	expect(
+		(await receive({ ...claim, previousObservation: initial }, signal)).status,
+	).toBe("unknown");
+	runtime = admittedCorePod(key, "foreign-uid", () => "native-process");
+	expect(
+		(await receive({ ...claim, previousObservation: initial }, signal)).status,
+	).toBe("unknown");
+	if (!pod.metadata?.uid) throw Error("missing uid");
+	runtime = admittedCorePod(key, pod.metadata.uid, () => "native-process");
+	const next = await receive(
+		{ ...claim, previousObservation: initial },
+		signal,
+	);
+	expect(next.status).toBe("ready");
+	expect(next.resources.find((r) => r.kind === "Pod")).toMatchObject({
+		uid: pod.metadata?.uid,
+		controllerUid: sandbox.metadata?.uid,
+	});
+	expect(next.resources.find((r) => r.kind === "Service")?.uid).toBe(
+		serviceUid,
+	);
+	expect(
+		next.resources.find((r) => r.kind === "PersistentVolumeClaim")?.uid,
+	).toBe(pvcUid);
+	const pvc = f.resources.get(`PersistentVolumeClaim/${name}`);
+	if (!pvc?.metadata || !pod.metadata?.ownerReferences?.[0])
+		throw Error("missing observed resources");
+	pvc.metadata.uid = "replacement-pvc";
+	await expect(
+		receive({ ...claim, previousObservation: next }, signal),
+	).rejects.toMatchObject({ code: "conflict" });
+	pvc.metadata.uid = pvcUid;
+	const storedPod = f.resources.get(`Pod/${name}`) as V1Pod;
+	if (!storedPod.metadata?.ownerReferences?.[0])
+		throw Error("missing Pod controller");
+	storedPod.metadata.ownerReferences[0].uid = "other-controller";
+	expect(
+		(await receive({ ...claim, previousObservation: next }, signal)).status,
+	).toBe("unknown");
+	storedPod.metadata.ownerReferences[0].uid = sandbox.metadata.uid;
+	if (!storedPod.metadata.uid) throw Error("missing Pod UID");
+
+	storedPod.metadata.uid = "rebuilt-pod";
+	const lost = await receive({ ...claim, previousObservation: next }, signal);
+	expect(lost).toMatchObject({
+		status: "unknown",
+		failureCode: "sandbox.pod_lost",
+		resources: next.resources,
+	});
+	expect(f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata?.uid).toBe(
+		pvcUid,
+	);
+	const drain = drainClaim({ ...f, claim }, next);
+	if (!drain.lifecycle) throw Error("missing lifecycle");
+	await expect(receive(drain, signal)).rejects.toThrow();
+	runtime = admittedCorePod(key, "rebuilt-pod", () => "native-process");
+	const refreshed = await receive(drain, signal);
+	const decide = (
+		observation: SessionSandboxObservationV1,
+		lifecycle: NonNullable<typeof drain.lifecycle>,
+	) =>
+		decideSessionSandboxDrainObservationV1({
+			observation,
+			lifecycle,
+			sandbox: drain.sandbox,
+			resourceFence: drain.resourceFence,
+			drainComputeAllowed: true,
+		});
+	const saved = decide(refreshed, drain.lifecycle).observation;
+	expect(saved.resources.find((r) => r.kind === "Pod")?.uid).toBe(
+		"rebuilt-pod",
+	);
+	const lifecycle = {
+		...drain.lifecycle,
+		source: { ...drain.lifecycle.source, observation: saved },
+	};
+	const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+	const stopped = await receive(
+		{ ...drain, lifecycle, previousObservation: saved },
+		signal,
+		async (entry) => {
+			progress.set(entry.resource.kind, entry);
+			return "committed";
+		},
+	);
+	expect(
+		decide(stopped, { ...lifecycle, deletionProgress: [...progress.values()] }),
+	).toMatchObject({ finished: true, status: "stopped" });
+	expect(
+		stopped.sourceStop?.removed.find((r) => r.resource.kind === "Pod")?.resource
+			.uid,
+	).toBe("rebuilt-pod");
+	expect(stopped.status).toBe("stopped");
+	expect(f.resources.has(`Sandbox/${name}`)).toBe(false);
+	expect(f.resources.has(`Pod/${name}`)).toBe(false);
+	expect(f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata?.uid).toBe(
+		pvcUid,
+	);
+});
 
 function oauthProvisioningFixture(f: ReturnType<typeof fixture>) {
 	const profile = {

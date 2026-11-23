@@ -452,6 +452,9 @@ describe("RuntimeHost environment assembly", () => {
 		const runtime = await assembling;
 		expect(runtime.sessionInstanceRead).toBeUndefined();
 		try {
+			expect(
+				runtimeAssemblyMocks.openCodexRuntimeDriver.mock.calls[0]?.[0],
+			).not.toHaveProperty("coreConversationKey");
 			expect(runtimeAssemblyMocks.openCodexRuntimeDriver).toHaveBeenCalledWith(
 				expect.objectContaining({
 					isolationMode: "session-executor",

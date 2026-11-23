@@ -2416,11 +2416,11 @@ describe("published Relay authority migration", () => {
 		});
 		expect(journal.entries.find((entry) => entry.idx === 99)).toMatchObject({
 			idx: 99,
-			tag: "0099_external_services",
+			tag: "0099_oidc_logout_receipts",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
 			idx: 100,
-			tag: "0100_external_service_requeue",
+			tag: "0100_external_services",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3246,6 +3246,8 @@ describe("published Relay authority migration", () => {
 				...["user_id", "employee_id", "issuer", "subject", "email"].map(
 					(name) => `oidc_employee_accounts:${name}`,
 				),
+				"oidc_logout_receipts:digest",
+				"oidc_logout_receipts:expires_at",
 				...["expires_at", "nonce", "verifier", "key"].map(
 					(name) => `oidc_login_transactions:${name}`,
 				),
@@ -3258,6 +3260,8 @@ describe("published Relay authority migration", () => {
 					"oidc_employee_accounts_email_unique",
 					"oidc_employee_accounts_employee_id_unique",
 				].map((n) => `oidc_employee_accounts:${n}`),
+				"oidc_logout_receipts:oidc_logout_receipts_expiry",
+				"oidc_logout_receipts:oidc_logout_receipts_pkey",
 				"oidc_login_transactions:oidc_login_expiry",
 				"oidc_login_transactions:oidc_login_transactions_pkey",
 			);

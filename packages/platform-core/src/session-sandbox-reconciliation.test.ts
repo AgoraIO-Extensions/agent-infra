@@ -209,6 +209,42 @@ describe("Session Sandbox actual resource receipt", () => {
 			}),
 		).toBe(false);
 	});
+	it("requires the allocated Core Sandbox UID as the Pod controller for candidate readiness", () => {
+		const pilot = {
+			...claim,
+			policy: { ...claim.policy, podController: "sig-core-v1.0.12" as const },
+		};
+		const controller = {
+			kind: "Sandbox" as const,
+			namespace: claim.policy.namespace,
+			name: sandbox.resourceName,
+			uid: "core-uid",
+			resourceVersion: "24",
+		};
+		const resources = ready.resources.map((resource) =>
+			resource.kind === "Pod"
+				? { ...resource, controllerUid: controller.uid }
+				: resource,
+		);
+		const candidate = { ...ready, resources: [...resources, controller] };
+		expect(isSessionSandboxObservationValidV1(pilot, candidate)).toBe(true);
+		expect(isSessionSandboxObservationValidV1(claim, candidate)).toBe(false);
+		expect(isSessionSandboxObservationValidV1(pilot, ready)).toBe(false);
+		for (const changed of [
+			{ ...controller, uid: "other-uid" },
+			{ ...controller, namespace: "other-namespace" },
+			{ ...controller, name: sandbox.resourceName + "-other" },
+			{ ...controller, kind: "StatefulSet" as const },
+		]) {
+			expect(
+				isSessionSandboxObservationValidV1(pilot, {
+					...ready,
+					resources: [...resources, changed],
+				}),
+			).toBe(false);
+		}
+	});
+
 	it("requires the real Pod controller relation when a StatefulSet is present", () => {
 		const controller = {
 			kind: "StatefulSet" as const,

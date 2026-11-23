@@ -206,6 +206,8 @@ export {
 export {
 	OidcBindingError,
 	type OidcEmployeeAccount,
+	type OidcLogoutEvent,
+	oidcBrowserSessionUidPrefix,
 	PostgresOidcIdentityStore,
 } from "./oidc-identity-store.js";
 export * from "./operations-resource.js";

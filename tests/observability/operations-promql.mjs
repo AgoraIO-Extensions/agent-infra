@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { operationsResourceHistoryPromqlV2 as build } from "../../apps/platform-api/src/operations-history-promql.ts";
+import { ackHistoryPanels } from "../../deploy/observability/grafana/ack-history.mts";
 
 const require = createRequire(import.meta.url);
 const YAML = require("yaml");
@@ -174,6 +175,125 @@ add(
 	expr("Node", "cpu"),
 	180,
 	[{ labels: nodeLabels, value: 0 }],
+);
+// Evaluate the exact Grafana targets against a source interruption and two unrelated environments.
+const ack = ackHistoryPanels("arms", "cluster_id", "a", "ns");
+const targets = ack.flatMap((panel) => panel.targets);
+for (const { expr, legendFormat } of targets)
+	add("parse ACK target " + legendFormat, [], expr, 60, []);
+const requestTarget = targets.find((t) => t.legendFormat === "申请容量").expr;
+const sampled = [
+	{
+		series:
+			'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="ns",persistentvolumeclaim="data",instance="r1"}',
+		values: "10 10 _ _ _ _ _ _ 20",
+	},
+	{
+		series:
+			'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="ns",persistentvolumeclaim="data",instance="r2"}',
+		values: "10 10 _ _ _ _ _ _ 20",
+	},
+	{
+		series:
+			'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="b",namespace="ns",persistentvolumeclaim="data"}',
+		values: "900+0x10",
+	},
+	{
+		series:
+			'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="neighbor",persistentvolumeclaim="data"}',
+		values: "800+0x10",
+	},
+	{
+		series:
+			'kube_pod_info{cluster_id="a",namespace="ns",pod="healthy",uid="uid1"}',
+		values: "1+0x10",
+	},
+];
+for (const [at, value] of [
+	[30, 10],
+	[210, null],
+	[240, 20],
+]) {
+	add(
+		"PVC isolated and deduplicated at " + at,
+		sampled,
+		requestTarget,
+		at,
+		value === null ? [] : [{ labels: "{}", value }],
+	);
+}
+add(
+	"unrelated source stays queryable during PVC gap",
+	sampled,
+	targets.find((t) => t.legendFormat === "已观测 Pod").expr,
+	210,
+	[{ labels: "{}", value: 1 }],
+);
+const containerCpu = targets.find(
+	(t) => t.legendFormat === "namespace 容器",
+).expr;
+const cpuStreams = ["0", "1"].flatMap((cpu) =>
+	["one", "two"].map((replica) => ({
+		series: `container_cpu_usage_seconds_total{cluster_id="a",namespace="ns",pod="p",container="worker",cpu="${cpu}",instance="${replica}"}`,
+		values: "0+30x12",
+	})),
+);
+add(
+	"sum distinct container CPUs once across replicas",
+	cpuStreams,
+	containerCpu,
+	300,
+	[{ labels: "{}", value: 2 }],
+);
+const readyTarget = targets.find(
+	(t) => t.legendFormat === "Ready 指标 Pod",
+).expr;
+add(
+	"partial readiness feed retains its own coverage",
+	[
+		{
+			series:
+				'kube_pod_status_ready{cluster_id="a",namespace="ns",pod="p1",uid="u1",condition="true"}',
+			values: "1+0x10",
+		},
+		{
+			series:
+				'kube_pod_status_ready{cluster_id="a",namespace="ns",pod="p2",uid="u2",condition="true"}',
+			values: "1 stale",
+		},
+	],
+	readyTarget,
+	210,
+	[{ labels: "{}", value: 1 }],
+);
+const lastSeen = targets.find(
+	(t) => t.instant && t.legendFormat === "PVC 申请",
+).expr;
+add(
+	"last raw timestamp survives an entire selected window of missing PVC data",
+	[
+		{
+			series:
+				'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="ns",persistentvolumeclaim="data"}',
+			values: "10 10 10 stale",
+		},
+	],
+	lastSeen,
+	900,
+	[{ labels: "{}", value: 60000 }],
+);
+add(
+	"last raw timestamp older than the window is absent without stale marker",
+	[
+		{
+			series:
+				'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="ns",persistentvolumeclaim="old"}',
+			values: "10",
+		},
+	],
+	lastSeen,
+	3720,
+	[],
 );
 const directory = mkdtempSync(join(tmpdir(), "operations-promql-"));
 try {

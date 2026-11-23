@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createDirectoryClient } from "@agent-infra/enterprise-directory";
-import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import {
+	createLdapIdentityDirectory,
+	createWecomEmployeeIdentity,
+} from "@agent-infra/identity";
 import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
@@ -60,6 +63,7 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 const {
 	ldap,
 	oidc,
+	verifiedWecomMember,
 	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
@@ -432,6 +436,20 @@ function assembleStandardTemplateReleaseApp() {
 	});
 }
 
+const employeeWecomAuthority =
+	oidcStore && verifiedWecomMember !== undefined
+		? createWecomEmployeeIdentity(
+				{
+					snapshot: createDirectoryClient(directorySnapshot),
+					organizationIdForDepartment:
+						directorySnapshot.organizationIdForDepartment,
+					administratorUserIds: oidc.administratorUserIds,
+					verifiedWecomMember,
+				},
+				oidcStore,
+				(id) => userGovernance.isPlatformDisabled(id),
+			)
+		: undefined;
 export const browserAuth = browser.browserAuth;
 export const standardTemplateReleaseApp = assembleStandardTemplateReleaseApp();
 export function createPlatformApiAssemblyInput() {
@@ -458,6 +476,7 @@ export function createPlatformApiAssemblyInput() {
 			: undefined);
 	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
 		apiInput,
+		employeeWecomAuthority,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(modelDirectory !== undefined ? { modelDirectory } : {}),
