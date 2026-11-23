@@ -48,7 +48,24 @@
           "format": "table",
           "rawSql": "SELECT submissions AS \"受理\", failed AS \"失败\", completed AS \"成功\", cancelled AS \"取消\", unknown_now AS \"期内受理且当前待核实\", terminal_time_missing AS \"期内受理但缺终态时间\", failed_users AS \"失败用户\", failed_applications AS \"失败应用\", round(100.0 * failed / nullif(completed + failed, 0), 2) AS \"失败率 (%)\", statement_timestamp() AS \"查询时间\" FROM platform_ops_dashboard.execution_impact($__timeFrom(), $__timeTo(), 'total')"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "失败率 (%)"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "无样本"
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "id": 2,
@@ -102,7 +119,13 @@
           "format": "time_series",
           "rawSql": "SELECT bucket AS time, 100.0 * failed / nullif(completed + failed, 0) AS \"失败率 (%)\" FROM platform_ops_dashboard.execution_impact($__timeFrom(), $__timeTo(), 'trend') ORDER BY bucket"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "无样本"
+        },
+        "overrides": []
+      }
     },
     {
       "id": 4,

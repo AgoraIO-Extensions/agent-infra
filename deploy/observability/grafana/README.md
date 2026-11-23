@@ -45,8 +45,9 @@ GRANT EXECUTE ON FUNCTION platform_ops_dashboard.first_output(timestamptz,timest
 node deploy/observability/grafana/provision.mts ./dashboard-release https://platform.example.invalid/ops
 ```
 
-在专用实例中，组织 1 的成员资格由平台系统管理员组管理。关闭匿名访问、自助注册及默认组织自动加入，
-并限制身份提供方允许的登录组。Grafana 通过自身身份认证保护面板与数据源。独立核对成员撤权后访问被拒。
+独立 Helm release 通过网关逐请求核对平台会话的系统管理员权限，Grafana Viewer 仅监听 Pod 回环。
+使用已有受管工作区时，组织 1 限定为系统管理员，关闭匿名、自助注册和默认组织自动加入。
+两种部署都须核对成员撤权后，面板及数据源直接访问被拒。
 
 将输出中的两个 provisioning 子目录内容分别装配到 Grafana 的 dashboards、datasources 配置目录。
 将 dashboards 中的看板文件挂载到 `/etc/grafana/platform-dashboards`，将数据库根证书挂载到
