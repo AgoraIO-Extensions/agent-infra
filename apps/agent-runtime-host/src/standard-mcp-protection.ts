@@ -103,7 +103,7 @@ export function assertStandardMcpOriginalSessionV1(original: {
 	if (assertProtection() === "yama") return;
 	const scope = credentialHolderSessionScopeV1();
 	if (
-		scope?.kind === "container-boundary"
+		scope?.kind === "container-boundary" || scope?.kind === "session-scope"
 			? scope.scope !== `${original.agentId}:${original.conversationId}`
 			: scope?.kind !== "session-executor" ||
 				scope.agentId !== original.agentId ||

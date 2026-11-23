@@ -14,6 +14,7 @@ import {
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
 	readRuntimeModelConfigurationV4,
+	readSessionScopeAttestationV1,
 } from "./configuration.js";
 
 const configuration = {
@@ -578,5 +579,79 @@ describe("Runtime file exchange configuration", () => {
 			expect((error as Error).message).toBe("RUNTIME_CONFIGURATION_INVALID");
 			expect((error as Error).message).not.toContain(token);
 		}
+	});
+});
+
+describe("non-Codex Session scope attestation", () => {
+	const serviceToken = "synthetic-service-token";
+	const scope = "agent-a:session-a";
+	const attest = (value: string, domain = "agent-infra-session-scope-v1") =>
+		createHmac("sha256", serviceToken)
+			.update(`${domain}\0${value}`)
+			.digest("base64url");
+	const env = (patch: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+		AGENT_INFRA_RUNTIME_DRIVER: "claude",
+		AGENT_INFRA_RUNTIME_SESSION_SCOPE: scope,
+		AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: attest(scope),
+		...patch,
+	});
+
+	it("returns the verified agentId:sessionId scope", () => {
+		expect(readSessionScopeAttestationV1(env(), serviceToken)).toBe(scope);
+	});
+
+	it("returns no scope when the Pod carries none", () => {
+		expect(
+			readSessionScopeAttestationV1(
+				{ AGENT_INFRA_RUNTIME_DRIVER: "claude" },
+				serviceToken,
+			),
+		).toBeUndefined();
+	});
+
+	it.each([
+		[
+			"a missing attestation",
+			{ AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: undefined },
+		],
+		["a missing scope", { AGENT_INFRA_RUNTIME_SESSION_SCOPE: undefined }],
+		[
+			"a scope that differs from the attested one",
+			{ AGENT_INFRA_RUNTIME_SESSION_SCOPE: "agent-a:session-b" },
+		],
+		[
+			"an Agent-level attestation for another scope",
+			{ AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: attest("agent-a") },
+		],
+		[
+			"a Codex container-boundary attestation",
+			{
+				AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: attest(
+					scope,
+					"agent-infra-container-boundary-v1",
+				),
+			},
+		],
+		[
+			"a malformed attestation",
+			{ AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION: "a" },
+		],
+		["the Codex driver", { AGENT_INFRA_RUNTIME_DRIVER: "codex" }],
+	])("fails closed on %s", (_name, patch) => {
+		expect(() =>
+			readSessionScopeAttestationV1(env(patch), serviceToken),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
+	it("fails closed without a service token", () => {
+		expect(() => readSessionScopeAttestationV1(env())).toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+	});
+
+	it("rejects an attestation made with another service token", () => {
+		expect(() => readSessionScopeAttestationV1(env(), "another-token")).toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
 	});
 });

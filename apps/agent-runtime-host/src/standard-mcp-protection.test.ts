@@ -265,6 +265,35 @@ describe("original Execution Session", () => {
 		);
 	});
 
+	it("applies the same rule to a non-Codex session-scope", () => {
+		nonDumpable({
+			scope: {
+				kind: "session-scope",
+				agentId: "agent-1",
+				scope: "agent-1:session-1",
+			},
+		});
+		expect(() => assertStandardMcpProcessProtection()).not.toThrow();
+		expect(() => assertStandardMcpOriginalSessionV1(original)).not.toThrow();
+		expect(() =>
+			assertStandardMcpOriginalSessionV1({
+				...original,
+				conversationId: "session-2",
+			}),
+		).toThrow("protection is unavailable");
+		expect(() =>
+			assertStandardMcpOriginalSessionV1({ ...original, agentId: "agent-2" }),
+		).toThrow("protection is unavailable");
+		for (const scope of ["agent-1", "agent-1:", "agent-2:session-1"]) {
+			nonDumpable({
+				scope: { kind: "session-scope", agentId: "agent-1", scope },
+			});
+			expect(() => assertStandardMcpProcessProtection()).toThrow(
+				"protection is unavailable",
+			);
+		}
+	});
+
 	it("binds a session-executor scope to Agent, Session and generation", () => {
 		const scope = { kind: "session-executor", ...original } as const;
 		nonDumpable({ scope });
