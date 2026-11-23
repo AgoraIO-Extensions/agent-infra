@@ -192,6 +192,7 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly requireSandboxObservation?: true;
 	}) => Promise<{
 		readonly baseUrl: string;
+		readonly corePodAdmission?: true;
 		readonly serviceToken: string;
 		readonly workerId: string;
 		readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;

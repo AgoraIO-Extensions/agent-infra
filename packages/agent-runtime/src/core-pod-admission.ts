@@ -4,6 +4,12 @@ export const corePodAdmissionPath = "/internal/runtime/v1/core-pod-admission";
 const lifetimeMs = 60_000;
 const sendMarginMs = 10_000;
 
+/** The Worker has already authenticated the permit. Recheck its age at send time. */
+export function hasCorePodAdmissionSendMargin(token: string) {
+	const expires = Number(token.split(".")[1]);
+	return Number.isSafeInteger(expires) && expires - Date.now() > sendMarginMs;
+}
+
 function mac(key: string, ...parts: string[]) {
 	return createHmac("sha256", key)
 		.update(JSON.stringify(parts))

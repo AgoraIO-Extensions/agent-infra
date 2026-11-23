@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { hasCorePodAdmissionSendMargin } from "@agent-infra/agent-runtime";
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
@@ -230,6 +231,7 @@ export interface WorkerExecutionKeyReaderV4 {
 
 export interface WorkerRuntimeHostClientOptionsV4
 	extends WorkerRuntimeHostClientOptionsV1 {
+	readonly corePodAdmission?: true;
 	readonly verifyGrant: (
 		grant: RuntimeBusinessRequestV4["grant"],
 	) => RuntimeBusinessGrantClaimsV4;
@@ -518,13 +520,13 @@ async function post(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
+	beforeSend?: () => void,
 ) {
+	const init = requestInit(serviceToken, traceId, body, signal);
+	beforeSend?.();
 	let response: Response;
 	try {
-		response = await fetcher(
-			url,
-			requestInit(serviceToken, traceId, body, signal),
-		);
+		response = await fetcher(url, init);
 	} catch {
 		return failure("RUNTIME_UNAVAILABLE", true);
 	}
@@ -1506,6 +1508,15 @@ export function createWorkerRuntimeHostClientV4(
 		options.fetch ?? runtimeFetch,
 		connectionConsumer,
 	);
+	const checkCoreAdmission = options.corePodAdmission
+		? () => {
+				if (!hasCorePodAdmissionSendMargin(options.serviceToken))
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true, {
+						notSent: true,
+					});
+			}
+		: undefined;
+
 	/**
 	 * 取 Key 时 Execution 不再处于可投递状态。先用发送前复核区分两种情况：准备之后状态变了（例如
 	 * stop 刚被受理），复核抛出可重试的过期错误；状态没变，就是授权本身无效（不可重试）。两种情况
@@ -1656,6 +1667,7 @@ export function createWorkerRuntimeHostClientV4(
 				request.traceId,
 				transport,
 				signal,
+				checkCoreAdmission,
 			);
 			try {
 				const result = RuntimeOperationResponseV4Schema.parse(
@@ -1789,6 +1801,7 @@ export function createWorkerRuntimeHostClientV4(
 				request.traceId,
 				transport,
 				signal,
+				checkCoreAdmission,
 			);
 			try {
 				const result = RuntimeOperationResponseV5Schema.parse(
@@ -1942,6 +1955,7 @@ export function createWorkerRuntimeHostClientV4(
 					request.traceId,
 					transport,
 					signal,
+					checkCoreAdmission,
 				);
 				const result = RuntimeRestoreExecutionKeyResponseV4Schema.parse(
 					JSON.parse(await boundedResponseText(response)),
@@ -2077,6 +2091,7 @@ export function createWorkerRuntimeHostClientV4(
 					request.traceId,
 					transport,
 					signal,
+					checkCoreAdmission,
 				);
 				const result = RuntimeRestoreExecutionKeyResponseV5Schema.parse(
 					JSON.parse(await boundedResponseText(response)),
@@ -2104,6 +2119,7 @@ export function createWorkerRuntimeHostClientV4(
 				parsed.data.traceId,
 				parsed.data,
 				signal,
+				checkCoreAdmission,
 			);
 			try {
 				const replay = validateRuntimeReplayResponseV4(
@@ -2149,6 +2165,7 @@ export function createWorkerRuntimeHostClientV4(
 				parsed.data.traceId,
 				parsed.data,
 				signal,
+				checkCoreAdmission,
 			);
 			try {
 				const ack = RuntimeEventAckResponseV4Schema.parse(

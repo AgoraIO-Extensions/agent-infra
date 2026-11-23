@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { admittedCorePod } from "@agent-infra/agent-runtime";
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
@@ -63,6 +64,72 @@ function clientHarness() {
 }
 
 describe("V4 authenticated confidential private Key client", () => {
+	it.each([9_999, 10_000, 10_001])(
+		"checks %i ms of Core admission after the last authorization await",
+		async (remaining) => {
+			const { h, options, request } = clientHarness();
+			const now = vi.spyOn(Date, "now");
+			const initial = Date.now();
+			const host = admittedCorePod(
+				"synthetic-key",
+				"fixture-pod",
+				() => "fixture-process",
+			);
+			const seen = new Set<string>();
+			let executions = 0;
+			const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
+				expect(
+					host.accepts(
+						new Headers(init?.headers).get("authorization")?.slice(7) ?? "",
+					),
+				).toBe(true);
+				const sent = JSON.parse(String(init?.body)).businessRequest;
+				expect(sent).toEqual(request);
+				if (!seen.has(sent.operation.id)) executions++;
+				seen.add(sent.operation.id);
+				return h.fetcher(url, init);
+			});
+			const send = async (token: string, delay: number) =>
+				createWorkerRuntimeHostClientV4({
+					...options,
+					serviceToken: token,
+					corePodAdmission: true,
+					fetch,
+					assertCurrentAuthorization: async () => {
+						await Promise.resolve();
+						now.mockReturnValue(initial + delay);
+					},
+				}).submitTurn(request);
+			try {
+				now.mockReturnValue(initial);
+				const { token } = await host.issue("initial");
+				const first = send(token, 60_000 - remaining);
+				if (remaining <= 10_000) {
+					await expect(first).rejects.toMatchObject({
+						code: "RUNTIME_UNAVAILABLE",
+						retryable: true,
+						notSent: true,
+					});
+					expect(fetch).toHaveBeenCalledTimes(0);
+					expect(executions).toBe(0);
+				} else {
+					await expect(first).resolves.toMatchObject({
+						operationId: request.operation.id,
+					});
+					expect(fetch).toHaveBeenCalledTimes(1);
+				}
+				const { token: renewed } = await host.issue("retry");
+				await expect(
+					send(renewed, 60_000 - remaining + 1),
+				).resolves.toMatchObject({ operationId: request.operation.id });
+				expect(fetch).toHaveBeenCalledTimes(remaining <= 10_000 ? 1 : 2);
+				expect(executions).toBe(1);
+			} finally {
+				now.mockRestore();
+			}
+		},
+	);
+
 	it.each([
 		{ kind: "command" as const, parameters: "" },
 		{ kind: "skill" as const, parameters: '请汇总工作区\n"文件"\\路径 🧪' },

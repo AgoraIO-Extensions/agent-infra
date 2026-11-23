@@ -334,6 +334,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		if (!podUid) throw new Error("Missing Core Pod identity");
 		return {
 			baseUrl,
+			corePodAdmission: true as const,
 			serviceToken: await requestCorePodAdmission(
 				baseUrl,
 				key,
