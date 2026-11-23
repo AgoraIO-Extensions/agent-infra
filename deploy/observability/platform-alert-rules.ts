@@ -65,7 +65,9 @@ export function platformAlertRules(input: unknown) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		if (process.argv.length !== 3) throw new Error();
-		process.stdout.write(stringify(platformAlertRules(JSON.parse(readFileSync(process.argv[2], "utf8")))));
+		const inputPath = process.argv[2];
+		if (!inputPath) throw new Error();
+		process.stdout.write(stringify(platformAlertRules(JSON.parse(readFileSync(inputPath, "utf8")))));
 	} catch {
 		process.stderr.write("Invalid platform alert scope\n");
 		process.exitCode = 1;
