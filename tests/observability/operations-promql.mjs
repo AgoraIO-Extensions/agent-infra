@@ -229,6 +229,22 @@ add(
 	210,
 	[{ labels: "{}", value: 1 }],
 );
+const containerCpu = targets.find(
+	(t) => t.legendFormat === "namespace 容器",
+).expr;
+const cpuStreams = ["0", "1"].flatMap((cpu) =>
+	["one", "two"].map((replica) => ({
+		series: `container_cpu_usage_seconds_total{cluster_id="a",namespace="ns",pod="p",container="worker",cpu="${cpu}",instance="${replica}"}`,
+		values: "0+30x12",
+	})),
+);
+add(
+	"sum distinct container CPUs once across replicas",
+	cpuStreams,
+	containerCpu,
+	300,
+	[{ labels: "{}", value: 2 }],
+);
 const readyTarget = targets.find(
 	(t) => t.legendFormat === "Ready 指标 Pod",
 ).expr;
