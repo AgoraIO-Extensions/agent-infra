@@ -65,6 +65,11 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 			join(directory, `${name}.json`),
 		]),
 	);
+	if (codexTrial)
+		files.trustedTrialTarget = await save(
+			join(directory, "operator-target.json"),
+			{ ...validationTarget, namespace },
+		);
 	const definitions = codexTrial
 		? [["codex", "codex"]]
 		: [
@@ -361,6 +366,119 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 	let afterReplace = () => {};
 	const kubectl = (args, input) => {
 		beforeCall(args);
+		if (codexTrial && args.includes("pods")) {
+			const component = args.includes(
+				"app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=platform-api",
+			)
+				? "api"
+				: "worker";
+			const deployment = cluster.get(`deployment/agent-infra-${component}`);
+			const podName = `test-pod-${component}`;
+			const rs = {
+				metadata: {
+					name: component,
+					uid: component,
+					ownerReferences: [
+						{
+							controller: true,
+							kind: "Deployment",
+							uid: deployment.metadata.uid,
+						},
+					],
+				},
+			};
+			const pod = {
+				metadata: {
+					name: podName,
+					uid: podName,
+					namespace,
+					annotations: deployment.spec.template.metadata.annotations,
+					ownerReferences: [
+						{
+							name: component,
+							uid: component,
+							kind: "ReplicaSet",
+							controller: true,
+						},
+					],
+				},
+				spec: {
+					volumes: [
+						{ name: "config", secret: { secretName: `${component}-config` } },
+					],
+					containers: [
+						{
+							name: `platform-${component}`,
+							volumeMounts: [
+								{
+									name: "config",
+									readOnly: true,
+									mountPath: join(directory, component),
+								},
+							],
+						},
+					],
+				},
+				status: {
+					containerStatuses: [{ name: `platform-${component}`, ready: true }],
+				},
+			};
+			cluster.set(`replicaset/${component}`, rs);
+			cluster.set(`pod/${podName}`, pod);
+			return JSON.stringify({ items: [pod] });
+		}
+		if (codexTrial && args.includes("exec")) {
+			const component = args.at(-2);
+			const configDir = join(directory, component);
+			const recordFile = join(configDir, "template-validation-codex.json");
+			const validation = JSON.parse(
+				Buffer.from(
+					cluster.get(`secret/${component}-config`).data[
+						"template-validation-codex.json"
+					],
+					"base64",
+				),
+			);
+			writeFileSync(recordFile, JSON.stringify(validation));
+			const binding = {
+				templateId: "codex",
+				driver: "codex",
+				protocol: "openai-responses-v1",
+				imageDigest: templates[0].imageDigest,
+			};
+			const workerProfiles = JSON.parse(
+				Buffer.from(
+					cluster.get("secret/worker-config").data["capacity.json"],
+					"base64",
+				),
+			).profiles;
+			const exports =
+				component === "api"
+					? `export const apiInput={templates:[{...${JSON.stringify(binding)},modelBinding:${JSON.stringify(binding)},configurationRevision:"revision-codex",validationContext:${JSON.stringify(validation.adoption.target)},loadValidation:async()=>${JSON.stringify(validation).replace(/^/, "(").concat(")")}}]};`
+					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources, resourceProfileRef: capacity.resourceProfileRef }, templateModelBindings: [binding], executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
+			writeFileSync(
+				join(configDir, "configuration.mjs"),
+				httpState.consumerFailure === "empty" ||
+					httpState.consumerFailure === `${component}-missing`
+					? "export {};"
+					: exports,
+			);
+			return execFileSync(
+				process.execPath,
+				["--input-type=module", "-", component, args.at(-1)],
+				{
+					input,
+					encoding: "utf8",
+					cwd: join(import.meta.dirname, "../packages/model-catalog"),
+					env: {
+						...process.env,
+						PLATFORM_API_CONFIGURATION_MODULE: `file://${configDir}/configuration.mjs`,
+						PLATFORM_WORKER_DEPLOYMENT_MODULE: `file://${configDir}/deployment.mjs`,
+					},
+					stdio: ["pipe", "pipe", "pipe"],
+				},
+			);
+		}
 		const verb = args.find((v) =>
 			["get", "replace", "patch", "rollout"].includes(v),
 		);
@@ -441,7 +559,16 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
 	);
 	const files = { ...f.files, codexTrial: true };
-	await publishRuntimeInputs(files, f.rendered, source, f.kubectl, true);
+	assert.equal(
+		(await publishRuntimeInputs(files, f.rendered, source, f.kubectl))
+			.templateCount,
+		1,
+	);
+	assert.equal(
+		(await publishRuntimeInputs(files, f.rendered, source, f.kubectl, true))
+			.templateCount,
+		1,
+	);
 	for (const name of ["api-config", "worker-config"]) {
 		const data = f.cluster.get(`secret/${name}`).data;
 		assert.deepEqual(
@@ -454,6 +581,60 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 		assert.equal(record.adoption.target.namespace, "ack-community-m1-4403");
 	}
 });
+
+for (const failure of ["empty", "api-missing", "worker-missing", "capacity"]) {
+	test(`trial apply reports verified writes when consumer fails: ${failure}`, async (t) => {
+		const f = await fixture(t, 1, true);
+		f.httpState.consumerFailure = failure;
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, codexTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			(error) => {
+				assert.equal(
+					error.receipt.failureCode,
+					"RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+				);
+				assert.equal(error.receipt.mutationStatus, "applied");
+				assert.equal(error.receipt.recoveryRequired, true);
+				assert.deepEqual(
+					error.receipt.objects.map((o) => [o.name, o.state]),
+					[
+						["worker-config", "verified"],
+						["api-config", "verified"],
+						["agent-infra-api", "verified"],
+						["agent-infra-worker", "verified"],
+					],
+				);
+				return true;
+			},
+		);
+	});
+}
+
+for (const key of ["clusterUid", "namespaceUid", "installationId"]) {
+	test(`self-consistent same-name trial cannot publish outside trusted ${key}`, async (t) => {
+		const f = await fixture(t, 1, true);
+		const approved = JSON.parse(await readFile(f.files.trustedTrialTarget));
+		approved[key] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+		await f.save(f.files.trustedTrialTarget, approved);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, codexTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			/RUNTIME_INPUT_TRIAL_TARGET_INVALID/,
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+}
 
 test("trial publication rejects a different namespace and an unselected mounted template", async (t) => {
 	const foreign = await fixture(t);
@@ -497,6 +678,7 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 		source,
 		f.kubectl,
 	);
+	assert.equal(plan.templateCount, 4);
 	assert.equal(plan.changedSecretCount, 2);
 	assert.equal(f.mutations.length, 0);
 	const result = await publishRuntimeInputs(
@@ -506,6 +688,7 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 		f.kubectl,
 		true,
 	);
+	assert.equal(result.templateCount, 4);
 	assert.equal(result.rolloutCount, 2);
 	assert(
 		f.mutations.findIndex((e) => e.startsWith("patch:")) >

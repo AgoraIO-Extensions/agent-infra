@@ -20,6 +20,7 @@ type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
 type Files = {
 	codexTrial?: boolean;
+	trustedTrialTarget?: string;
 	bootstrap: string;
 	templates: string;
 	capacity: string;
@@ -30,10 +31,11 @@ type Files = {
 type PublicationProgress = {
 	phase: "preflight" | "secret-write" | "local-promotion" | "rollout" | "login" | "verification";
 	mutationStatus: "not-applied" | "attempted" | "applied";
+	objects?: Array<{kind: string; name: string; uid: string; resourceVersion: string; state: "attempted" | "verified"}>;
 };
 const failureCodes = new Set([
 	"RUNTIME_INPUTS_INVALID", "RUNTIME_INPUT_LOGIN_REQUIRED", "RUNTIME_INPUT_CLUSTER_DRIFT",
-	"RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH",
+	"RUNTIME_INPUT_TRIAL_TARGET_INVALID", "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH", "RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
 	"RUNTIME_INPUT_NAMESPACE_OWNER_INVALID", "RUNTIME_INPUT_NAMESPACE_DRIFT",
 	"RUNTIME_INPUT_SECRET_MISSING", "RUNTIME_INPUT_SECRET_UNAVAILABLE", "RUNTIME_INPUT_SECRET_OWNER_INVALID",
 	"RUNTIME_INPUT_SECRET_DRIFT", "RUNTIME_INPUT_SECRET_VERSION_DRIFT", "RUNTIME_INPUT_SECRET_READBACK_FAILED",
@@ -411,7 +413,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}
 		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
-	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
+	return { capacity, profiles, bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin, templates, stageFile, validationGate, retainedTargets, reserveTargets, reserveModules, capacityAppend };
 }
 
 // A successor plan targets mounted immutable configuration Secrets. It adopts and validates the same final
@@ -431,6 +433,18 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 }
 
 async function publishRuntimeInputsWithProgress(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, progress: PublicationProgress, successor = false) {
+	// Operator-provided authority, independent of the bootstrap and measurement files.
+	const trusted = files.codexTrial && files.trustedTrialTarget
+		? templateValidationContextV1Schema.parse(await privateJson(files.trustedTrialTarget)) : undefined;
+	if (files.codexTrial) {
+		assert(trusted && trusted.sourceCommit === sourceSha && trusted.namespace === "ack-community-m1-4403", "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+		const bootstrap = await privateJson(files.bootstrap);
+		assert(bootstrap.clusterUid === trusted.clusterUid && bootstrap.installationId === trusted.installationId && bootstrap.namespace === trusted.namespace, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+		const ns = JSON.parse(kubectl(["get", "namespace", trusted.namespace, "-o", "json"]));
+		const cluster = JSON.parse(kubectl(["get", "namespace", "kube-system", "-o", "json"]));
+		assert(cluster.metadata?.uid === trusted.clusterUid && ns.metadata?.uid === trusted.namespaceUid &&
+			ns.metadata.labels?.[ownerLabel] === trusted.installationId && !ns.metadata.deletionTimestamp, "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+	}
 	const plan = await prepare(files, rendered, sourceSha, kubectl);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
@@ -446,6 +460,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	const validationContext = templateValidationContextV1Schema.parse({
 		sourceCommit: sourceSha, clusterUid, namespace, namespaceUid: ns.metadata.uid, installationId,
 	});
+	if (files.codexTrial) assert(isDeepStrictEqual(validationContext, trusted), "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
 	for (const target of plan.retainedTargets)
 		assert(isDeepStrictEqual(templateValidationContextV1Schema.safeParse(target).data, validationContext), "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
 	const adoptionInputs = await readTemplateValidationAdoptionInputs(plan.templates, validationContext, files.codexTrial);
@@ -610,6 +625,12 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 				isDeepStrictEqual(current.data, secret.desired.data), "RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT");
 		}
 	};
+	const recordAttempt = (kind: string, metadata: ObjectRecord) => {
+		if (!files.codexTrial) return;
+		const entry: NonNullable<PublicationProgress["objects"]>[number] = {kind, name: metadata.name, uid: metadata.uid, resourceVersion: metadata.resourceVersion, state: "attempted"};
+		(progress.objects ??= []).push(entry);
+		return entry;
+	};
 	if (apply) {
 		await assertCandidateFiles();
 		for (const [file, bytes] of plan.writes) assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
@@ -628,9 +649,11 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			const current = readSecret(secret.current.metadata.name);
 			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion &&
 				current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
+			let attempt;
 			if (secret.changed) {
 				if (!fullyAdopted) await stillFresh();
 				progress.mutationStatus = "attempted";
+				attempt = recordAttempt("Secret", current.metadata);
 				kubectl(["-n", namespace, "replace", "--field-manager=agent-infra-runtime-inputs", "-f", "-"],
 					JSON.stringify({ ...current, data: secret.desired.data }));
 			}
@@ -638,6 +661,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			assert(observed.metadata.uid === current.metadata.uid && observed.metadata.labels?.[ownerLabel] === installationId && !observed.metadata.deletionTimestamp &&
 				isDeepStrictEqual(observed.data, secret.desired.data), "RUNTIME_INPUT_SECRET_READBACK_FAILED");
 			secret.verifiedVersion = observed.metadata.resourceVersion;
+			if (attempt) Object.assign(attempt, { state: "verified", resourceVersion: secret.verifiedVersion });
 			if (secret.changed) progress.mutationStatus = "applied";
 		}
 		assertPublishedSecrets();
@@ -661,7 +685,10 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			assert(current.metadata.uid === consumer.current.metadata.uid && current.metadata.resourceVersion === consumer.current.metadata.resourceVersion, "RUNTIME_INPUT_CONSUMER_VERSION_DRIFT");
 			assert((current.spec?.replicas ?? 1) === consumer.replicas, "RUNTIME_INPUT_REPLICA_DRIFT");
 			assertPublishedSecrets();
+			let attempt;
 			if (consumer.changed) {
+				if (files.codexTrial && !fullyAdopted) await stillFresh();
+				attempt = recordAttempt("Deployment", current.metadata);
 				progress.mutationStatus = "attempted";
 				kubectl(["-n", namespace, "patch", "deployment", consumer.name, "--type=merge", "-p", JSON.stringify({
 					metadata: { uid: current.metadata.uid, resourceVersion: current.metadata.resourceVersion },
@@ -674,6 +701,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			assert(observed.metadata.uid === current.metadata.uid && consumerRolledOut(observed, consumer.revision, consumer.replicas),
 				"RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
 			consumer.observed = observed;
+			if (attempt) Object.assign(attempt, { state: "verified", resourceVersion: observed.metadata.resourceVersion });
 			assertPublishedSecrets();
 		}
 		progress.phase = "login";
@@ -686,6 +714,31 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			const current = read("deployment", consumer.name);
 			assert(current.metadata.uid === consumer.current.metadata.uid && (current.spec?.replicas ?? 1) === consumer.replicas && current.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision, "RUNTIME_INPUT_REPLICA_DRIFT");
 			assert(consumerRolledOut(current, consumer.revision, consumer.replicas), "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
+			if (files.codexTrial) {
+				try {
+					const component = consumer.component;
+					const containerName = `platform-${component}`;
+					const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
+					assert.equal(pods.length, consumer.replicas);
+					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0], resources: plan.capacity.resources, executor: plan.capacity.codexSessionExecutor};
+					const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
+					for (const pod of pods) {
+						const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
+						const rs = read("replicaset", owner.name);
+						assert(rs.metadata.uid === owner.uid && rs.metadata.ownerReferences.some((o: any) => o.controller && o.kind === "Deployment" && o.uid === current.metadata.uid));
+						assert(pod.metadata.namespace === namespace && pod.metadata.annotations?.[revisionAnnotation] === consumer.revision &&
+							pod.status?.containerStatuses?.find((c: any) => c.name === containerName)?.ready);
+						const volumes = pod.spec.volumes.filter((v: any) => v.secret?.secretName === consumer.secretName && !v.secret.items);
+						const mounts = pod.spec.containers.find((c: any) => c.name === containerName).volumeMounts.filter((m: any) => m.readOnly && !m.subPath && volumes.some((v: any) => v.name === m.name));
+						assert(mounts.length > 0 && expected.profile);
+						const recordFile = join(mounts[0].mountPath, "template-validation-codex.json");
+						assert.equal(kubectl(["-n", namespace, "exec", "-i", pod.metadata.name, "-c", containerName, "--", "node", "--input-type=module", "-", component, JSON.stringify({...expected, recordFile})], probe), "verified");
+						const end = read("pod", pod.metadata.name);
+						assert(end.metadata.uid === pod.metadata.uid && !end.metadata.deletionTimestamp && isDeepStrictEqual(end.status.containerStatuses, pod.status.containerStatuses));
+					}
+					assertPublishedSecrets();
+				} catch { throw new Error("RUNTIME_INPUT_TRIAL_CONSUMER_INVALID"); }
+			}
 			consumer.observed = current;
 		}
 	}
@@ -701,7 +754,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		...(successors ? { successor: { schemaVersion: 1, kind: "ack-runtime-input-successors", sourceSha, clusterUid, namespace, namespaceUid: ns.metadata.uid as string, installationId, secrets: successors } } : {}),
 		secretCount: secrets.length, changedSecretCount: secrets.filter((s) => s.changed).length,
 		consumers: consumers.map((c) => ({ component: c.component, desiredReplicas: c.replicas, declaredReplicas: c.observed.spec?.replicas ?? 1, updatedReplicas: c.observed.status?.updatedReplicas ?? null, availableReplicas: c.observed.status?.availableReplicas ?? null, readyReplicas: c.observed.status?.readyReplicas ?? null })),
-		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: 4, loginVerified: apply, businessVerified: false };
+		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: adoptionInputs.length, loginVerified: apply, businessVerified: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -728,11 +781,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const manifest = await readFile(rendered, "utf8");
 		const publish = async () => {
 			operationStarted = true;
-			return appliedResult = await publishRuntimeInputs({ codexTrial, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
+			return appliedResult = await publishRuntimeInputs({ codexTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
 		};
 		if (mode === "apply") {
 			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
-			await publishRuntimeInputs({ codexTrial, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
+			await publishRuntimeInputs({ codexTrial, trustedTrialTarget: process.env.ACK_TRUSTED_TRIAL_TARGET_FILE, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
 		let result: any = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();
