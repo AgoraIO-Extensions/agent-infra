@@ -41,6 +41,25 @@ it("loads an enabled deployment with cluster reads disabled by default", async (
 	});
 });
 
+it("accepts an HTTPS dashboard link and rejects embedded credentials", async () => {
+	const dashboardUrl = "https://grafana.example.test/d/impact";
+	expect(
+		(
+			await readOperationsConfigurationV2(
+				await configuration({ ...configured, dashboardUrl }),
+			)
+		)?.dashboardUrl,
+	).toBe(dashboardUrl);
+	await expect(
+		readOperationsConfigurationV2(
+			await configuration({
+				...configured,
+				dashboardUrl: dashboardUrl + "?token=example",
+			}),
+		),
+	).rejects.toThrow("OPERATIONS_CONFIGURATION_UNAVAILABLE");
+});
+
 it("rejects inline cloud credentials instead of silently ignoring them", async () => {
 	const path = await configuration({
 		...configured,

@@ -1,0 +1,184 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PLATFORM",
+      "label": "平台运维只读聚合",
+      "type": "datasource",
+      "pluginId": "grafana-postgresql-datasource",
+      "pluginName": "PostgreSQL"
+    },
+    {
+      "name": "PLATFORM_OPS",
+      "label": "平台 /ops 完整 HTTPS 地址",
+      "type": "constant",
+      "value": ""
+    }
+  ],
+  "uid": "platform-execution-impact",
+  "title": "运行观测 · 执行影响",
+  "schemaVersion": 40,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "title": "所选时段执行影响",
+      "type": "table",
+      "description": "按受理时间统计提交，按终态观测时间统计结果。失败率分母为成功加失败。",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "table",
+          "rawSql": "SELECT submissions AS \"受理\", failed AS \"失败\", completed AS \"成功\", cancelled AS \"取消\", unknown_now AS \"期内受理且当前待核实\", terminal_time_missing AS \"期内受理但缺终态时间\", failed_users AS \"失败用户\", failed_applications AS \"失败应用\", round(100.0 * failed / nullif(completed + failed, 0), 2) AS \"失败率 (%)\", statement_timestamp() AS \"查询时间\" FROM platform_ops_dashboard.execution_impact($__timeFrom(), $__timeTo(), 'total')"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "受理、失败与取消 · 每五分钟",
+      "type": "timeseries",
+      "description": "缩放时间轴可查看对应区间和 Agent 排行。",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT bucket AS time, submissions AS \"受理\", failed AS \"失败\", cancelled AS \"取消\" FROM platform_ops_dashboard.execution_impact($__timeFrom(), $__timeTo(), 'trend') ORDER BY bucket"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "执行失败率 · 每五分钟",
+      "type": "timeseries",
+      "description": "成功与失败合计为零时比例未知。",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT bucket AS time, 100.0 * failed / nullif(completed + failed, 0) AS \"失败率 (%)\" FROM platform_ops_dashboard.execution_impact($__timeFrom(), $__timeTo(), 'trend') ORDER BY bucket"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "受失败影响的 Agent",
+      "type": "table",
+      "description": "点击列头切换排序，点击 Agent 进入对应平台时段。",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "table",
+          "rawSql": "SELECT agent AS \"Agent\", failed_users AS \"失败用户\", failed_applications AS \"失败应用\", failed AS \"失败执行\" FROM platform_ops_dashboard.execution_impact($__timeFrom(), $__timeTo(), 'agent') WHERE failed > 0 ORDER BY failed_users DESC, failed DESC, agent"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Agent"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "平台运维详情",
+                    "url": "${PLATFORM_OPS}?agentId=${__value.raw}&from=${__from}&to=${__to}#ops-history"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "defaults": {}
+      }
+    },
+    {
+      "id": 5,
+      "title": "首段正文 · 服务端持久事件",
+      "type": "table",
+      "description": "当前等待取全部仍在处理且未持久化正文的用户。首段耗时按期内受理执行回看，取消按期内确认时间。浏览器展示、企微送达和 API 客户端接收缺乏统一回执，均为未知。",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "table",
+          "rawSql": "SELECT channel AS \"渠道\", waiting_users AS \"此刻等待用户\", round(longest_wait_seconds::numeric,1) AS \"当前最长等待 (s)\", replied AS \"已记录首段样本\", round(median_first_output_seconds::numeric,1) AS \"首段耗时中位数 (s)\", cancelled_before_output AS \"首段前取消\", round(median_cancel_wait_seconds::numeric,1) AS \"取消等待中位数 (s)\" FROM platform_ops_dashboard.first_output($__timeFrom(), $__timeTo()) ORDER BY channel"
+        }
+      ]
+    }
+  ]
+}
