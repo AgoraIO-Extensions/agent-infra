@@ -436,7 +436,7 @@ function assembleStandardTemplateReleaseApp() {
 	});
 }
 
-const employeeWecomIdentity =
+const employeeWecomAuthority =
 	oidcStore && verifiedWecomMember !== undefined
 		? createWecomEmployeeIdentity(
 				{
@@ -448,7 +448,7 @@ const employeeWecomIdentity =
 				},
 				oidcStore,
 				(id) => userGovernance.isPlatformDisabled(id),
-			).identity
+			)
 		: undefined;
 export const browserAuth = browser.browserAuth;
 export const standardTemplateReleaseApp = assembleStandardTemplateReleaseApp();
@@ -476,6 +476,7 @@ export function createPlatformApiAssemblyInput() {
 			: undefined);
 	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
 		apiInput,
+		employeeWecomAuthority,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(modelDirectory !== undefined ? { modelDirectory } : {}),
@@ -500,7 +501,6 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
-		...(employeeWecomIdentity ? { wecomIdentity: employeeWecomIdentity } : {}),
 		...(operations ? { operations } : {}),
 		...(deploymentAgentVersion !== undefined
 			? { agentVersion: deploymentAgentVersion }

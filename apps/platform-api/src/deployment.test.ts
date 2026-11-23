@@ -214,6 +214,33 @@ describe("explicit custom Agent deployment ports", () => {
 		).toThrow();
 	});
 
+	it("selects the employee authority for configured WeCom callbacks, durable admission and receipts", () => {
+		const identity = {
+			resolveSender: async () => null,
+			activeUsers: async () => [],
+		};
+		const directory = { resolveUser: async () => null };
+		const existing = {
+			identity: { ...identity },
+			userDirectory: { ...directory },
+			replyEncryptionPublicKeyPem: "fixture",
+			resolveBinding: async () => null,
+			observe: () => {},
+		};
+		const result = mergeProductionPlatformApiDeploymentPortsV1({
+			apiInput: {
+				...fixture.input,
+				wecom: existing,
+				wecomIdentity: existing.identity,
+			},
+			employeeWecomAuthority: { identity, directory },
+		});
+		expect(result.wecomIdentity).toBe(identity);
+		expect(result.wecom?.identity).toBe(identity);
+		expect(result.wecom?.userDirectory).toBe(directory);
+		expect(result.wecom?.resolveBinding).toBe(existing.resolveBinding);
+	});
+
 	it("rejects a duplicate file data plane authority", () => {
 		const files = {} as ProductionPlatformApiInputV1["files"];
 		expect(() =>

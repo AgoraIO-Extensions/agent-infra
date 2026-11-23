@@ -27,6 +27,29 @@ afterAll(async () => {
 	await database?.stop();
 });
 
+it("reuses the employee's ID for simultaneous first WeCom and OIDC logins without clearing the subject", async () => {
+	const input = {
+		employeeId: '["wecom","new-worker"]',
+		email: "worker@example.invalid",
+	};
+	const oidc = {
+		...input,
+		issuer: "https://test.invalid",
+		subject: "worker-sub",
+	};
+	const [fromWecom, fromWeb] = await Promise.all([
+		store.resolveDirectoryEmployee(input),
+		store.bind(oidc),
+	]);
+	expect(fromWeb.userId).toBe(fromWecom.userId);
+	expect((await store.resolveDirectoryEmployee(input)).userId).toBe(
+		fromWeb.userId,
+	);
+	expect(await store.findBySubject(oidc.issuer, oidc.subject)).toMatchObject(
+		fromWecom,
+	);
+});
+
 it("binds a verified legacy employee to the existing ID and rejects conflicting identity or email ownership", async () => {
 	const userId = randomUUID();
 	const claims = {
@@ -127,27 +150,4 @@ it("consumes a live login transaction exactly once and rejects expired transacti
 	expect(
 		await sql`select 1 from platform.oidc_login_transactions where key=${expired}`,
 	).toHaveLength(0);
-});
-
-it("reuses the employee's ID for simultaneous first WeCom and OIDC logins without clearing the subject", async () => {
-	const input = {
-		employeeId: '["wecom","new-worker"]',
-		email: "worker@example.invalid",
-	};
-	const oidc = {
-		...input,
-		issuer: "https://test.invalid",
-		subject: "worker-sub",
-	};
-	const [fromWecom, fromWeb] = await Promise.all([
-		store.resolveDirectoryEmployee(input),
-		store.bind(oidc),
-	]);
-	expect(fromWeb.userId).toBe(fromWecom.userId);
-	expect((await store.resolveDirectoryEmployee(input)).userId).toBe(
-		fromWeb.userId,
-	);
-	expect(await store.findBySubject(oidc.issuer, oidc.subject)).toMatchObject(
-		fromWecom,
-	);
 });
