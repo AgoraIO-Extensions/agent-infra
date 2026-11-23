@@ -33,6 +33,7 @@ import type {
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillCommandV1,
 } from "./driver.js";
+import { DynamicConnectionRefusalV1 } from "./dynamic-connection.js";
 import {
 	type RuntimeFileBridgePortV1,
 	RuntimeFileInputRejectedError,
@@ -1801,3 +1802,52 @@ it("delivers a per-execution key for a credential-free Claude option", async () 
 		await rm(path, { recursive: true, force: true });
 	}
 }, 30000);
+
+it("declares an unsubmitted Turn when the Connection tools cannot be set up for Claude", async () => {
+	const f = await claudeNativeFixture();
+	try {
+		await f.restart({
+			...f.options,
+			dynamicConnectionClient: {
+				declared: {
+					contract: { ref: "connection", revision: "r1" },
+					tools: [
+						{
+							name: "unsupported_tool",
+							description:
+								"uses a keyword the Claude conversion does not support",
+							inputSchema: {
+								type: "object",
+								properties: { value: { $ref: "#/$defs/value" } },
+							},
+						},
+					],
+				},
+				resolveTarget: async () => {
+					throw new DynamicConnectionRefusalV1("authorization_required");
+				},
+				resolveInput: async () => {
+					throw new DynamicConnectionRefusalV1("authorization_required");
+				},
+			},
+		});
+		const command = claudeCommand("connection-setup");
+		const failure = await f.driver
+			.execute(command)
+			.catch((error: unknown) => error);
+		// The failure happens before the native request: the Turn is rolled back and
+		// declared unsubmitted with a fixed code, not left as an unknown acceptance.
+		expect(failure).toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			retryable: true,
+			driverFailureKind: "not_submitted",
+			reason: "session_preparation_failed",
+		});
+		expect(f.calls).toHaveLength(0);
+		expect(await f.driver.lookupOperation(command)).toEqual({
+			state: "missing",
+		});
+	} finally {
+		await f.close();
+	}
+});

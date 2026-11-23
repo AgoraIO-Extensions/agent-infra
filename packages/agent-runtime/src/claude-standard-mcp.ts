@@ -68,6 +68,7 @@ export function toZod(value: unknown): ZodTypeAny {
 		...annotations,
 		"type",
 		"enum",
+		"const",
 		"anyOf",
 		...(typeof input.type === "string"
 			? (constraintsByType[input.type] ?? [])
@@ -91,6 +92,25 @@ export function toZod(value: unknown): ZodTypeAny {
 		if (nullable && alternatives.length === 1)
 			return toZod(alternatives[0]).nullable();
 		unavailable();
+	}
+	if (Object.hasOwn(input, "const")) {
+		// Only a primitive `const` with an agreeing `type`, and no other constraint.
+		const constKeys = new Set([...annotations, "type", "const"]);
+		if (Object.keys(input).some((key) => !constKeys.has(key))) unavailable();
+		const value = input.const;
+		const valueType =
+			value === null
+				? "null"
+				: typeof value === "string" || typeof value === "boolean"
+					? typeof value
+					: typeof value === "number" && Number.isFinite(value)
+						? Number.isInteger(value) && input.type === "integer"
+							? "integer"
+							: "number"
+						: undefined;
+		if (valueType === undefined) unavailable();
+		if (input.type !== undefined && input.type !== valueType) unavailable();
+		return z.literal(value as string | number | boolean | null);
 	}
 	if (Array.isArray(input.enum)) {
 		const enumKeys = new Set([...annotations, "type", "enum"]);
@@ -135,7 +155,9 @@ export function toZod(value: unknown): ZodTypeAny {
 		return result;
 	}
 	if (type === "object") {
-		const properties = input.properties;
+		// An object without `properties` declares none; extra keys follow
+		// `additionalProperties` below.
+		const properties = input.properties === undefined ? {} : input.properties;
 		if (!object(properties)) unavailable();
 		if (input.required !== undefined && !Array.isArray(input.required))
 			unavailable();
