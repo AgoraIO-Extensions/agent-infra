@@ -9,7 +9,10 @@ import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
-type Directory = ReturnType<typeof createLdapIdentityDirectory>;
+type Directory = Omit<
+	ReturnType<typeof createLdapIdentityDirectory>,
+	"userIdForUid"
+> & { userIdForUid(uid: string): Promise<string | null> };
 const SESSION_COOKIE = "__Host-platform-session";
 const SESSION_IDLE_MS = 2 * 60 * 60_000;
 const SESSION_ABSOLUTE_MS = 12 * 60 * 60_000;
@@ -185,6 +188,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			)
 				return null;
 			const userId = await input.directory.userIdForUid(session.uid);
+			if (!userId) {
+				await input.sessions.revoke(tokenDigest);
+				return null;
+			}
 			const platformDisabled = await input.isPlatformDisabled(userId);
 			if (typeof platformDisabled !== "boolean")
 				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");

@@ -505,6 +505,22 @@ describe("standalone login page", () => {
 		expect(document.title).toBe("登录 · Agora Agent");
 	});
 
+	it("uses the deployment OIDC mode even when the image was built for password login", () => {
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/login");
+		document.documentElement.dataset.platformLoginMode = "oidc";
+		try {
+			setup(anonymous);
+			expect(
+				screen
+					.getByRole("link", { name: "使用公司账号登录" })
+					.getAttribute("href"),
+			).toBe("/auth/oidc/login");
+			expect(screen.queryByLabelText("密码", { exact: true })).toBeNull();
+		} finally {
+			delete document.documentElement.dataset.platformLoginMode;
+		}
+	});
+
 	it("navigates the browser to the OIDC login endpoint without a credential form", () => {
 		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/oidc/login");
 		setup(anonymous);

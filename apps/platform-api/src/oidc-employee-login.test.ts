@@ -97,6 +97,7 @@ function employeeLogin(userId: string) {
 		audit: { listAudit: async () => ({ items: [], nextCursor: null }) },
 	});
 	return {
+		rows,
 		claims: { issuer, subject, email, emailVerified: true },
 		directory,
 		browser,
@@ -107,6 +108,26 @@ function employeeLogin(userId: string) {
 }
 
 describe("OIDC employee browser session", () => {
+	it("treats a pre-cutover session as signed out", async () => {
+		const { browser, app, rows, directory, claims } = employeeLogin(ownerId);
+		const account = await directory.verifiedAccount(claims);
+		if (!account) throw new Error("expected owner");
+		const login = await browser.issueSession(account);
+		const cookie = login.headers.get("set-cookie")?.split(";")[0];
+		if (!cookie) throw new Error("expected session");
+		for (const row of rows.values()) row.uid = "prior-ldap-uid";
+		expect(
+			(await app.request("/api/v1/session", { headers: { cookie } })).status,
+		).toBe(401);
+	});
+
+	it("keeps an unmapped owner's status unknown during migration", async () => {
+		const { browser } = employeeLogin(ownerId);
+		expect(await browser.identityAdapter.describeOwners([ownerId])).toEqual([
+			{ userId: ownerId, displayName: null, status: "unavailable" },
+		]);
+	});
+
 	it.each([
 		[ownerId, ["employee", "system_admin"], 200],
 		[newUserId, ["employee"], 403],

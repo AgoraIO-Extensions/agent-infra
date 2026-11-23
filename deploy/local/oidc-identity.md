@@ -7,9 +7,13 @@ Platform API 的受信配置模块由 `PLATFORM_API_CONFIGURATION_MODULE` 指向
 首次绑定依据受信 issuer 的已验证公司邮箱与当前目录唯一匹配。
 
 为 AgentInfra 注册专属机密 client，登记精确回调地址
-`https://<AgentInfra 主机>/auth/oidc/callback`。Web 使用
-`VITE_PLATFORM_LOGIN_URL=/auth/oidc/login`。反向代理将这两个路径转发到 Platform API，
+`https://<AgentInfra 主机>/auth/oidc/callback`。反向代理将登录与回调路径转发到 Platform API，
 同时沿用平台的可信代理头和外部 HTTPS 主机配置。
+
+使用标准发布镜像时，在 Web 容器环境中设置 `PLATFORM_WEB_LOGIN_MODE=oidc`
+并重新启动 Web。浏览器刷新后显示“使用公司账号登录”，导航到同源 `/auth/oidc/login`。
+未设置该变量或设为 `build` 时，Web 使用镜像构建时的登录入口。
+直接用 Vite 运行或构建 Web 时，通过 `VITE_PLATFORM_LOGIN_URL=/auth/oidc/login` 选择同一入口。
 
 ## 登记既有账号
 

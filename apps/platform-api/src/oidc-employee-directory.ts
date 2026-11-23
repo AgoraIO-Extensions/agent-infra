@@ -41,7 +41,7 @@ export function createOidcEmployeeDirectory(
 		"oidc:" + createHash("sha256").update(config.issuer).digest("hex") + ":";
 	async function currentByUserId(userId: string): Promise<LdapAccount | null> {
 		const record = await store.findByUserId(userId);
-		if (!record) return null;
+		if (!record) throw new Error("OIDC_EMPLOYEE_BINDING_UNAVAILABLE");
 		const snapshot = requireCurrentSnapshot(
 			await directory.loadCurrent(),
 			Date.now(),
@@ -86,12 +86,10 @@ export function createOidcEmployeeDirectory(
 		};
 	}
 	async function userIdForUid(uid: string) {
-		if (!uid.startsWith(prefix))
-			throw new Error("OIDC_SESSION_IDENTITY_INVALID");
+		if (!uid.startsWith(prefix)) return null;
 		const userId = uid.slice(prefix.length);
 		const record = await store.findByUserId(userId);
-		if (record?.issuer !== config.issuer || !record.subject)
-			throw new Error("OIDC_SESSION_IDENTITY_INVALID");
+		if (record?.issuer !== config.issuer || !record.subject) return null;
 		return userId;
 	}
 	async function verifiedAccount(identity: OidcBrowserIdentity) {
@@ -119,7 +117,10 @@ export function createOidcEmployeeDirectory(
 	return {
 		currentByUserId,
 		userIdForUid,
-		current: async (uid: string) => currentByUserId(await userIdForUid(uid)),
+		current: async (uid: string) => {
+			const id = await userIdForUid(uid);
+			return id ? currentByUserId(id) : null;
+		},
 		verifiedAccount,
 		authenticate: async () => null,
 	};
