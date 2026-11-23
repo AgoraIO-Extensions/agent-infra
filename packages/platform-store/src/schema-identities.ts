@@ -233,3 +233,36 @@ export const ldapIdentityIds = platformSchema.table(
 		),
 	],
 );
+
+export const oidcEmployeeAccounts = platformSchema.table(
+	"oidc_employee_accounts",
+	{
+		userId: text("user_id").primaryKey(),
+		employeeId: varchar("employee_id", { length: 256 }).notNull(),
+		email: varchar("email", { length: 320 }).notNull(),
+		issuer: text("issuer"),
+		subject: varchar("subject", { length: 255 }),
+	},
+	(table) => [
+		uniqueIndex("oidc_employee_accounts_employee_id_unique").on(
+			table.employeeId,
+		),
+		uniqueIndex("oidc_employee_accounts_email_unique").on(table.email),
+		uniqueIndex("oidc_bound_subject").on(table.issuer, table.subject),
+		check(
+			"oidc_complete_binding",
+			sql`(${table.issuer} is null) = (${table.subject} is null)`,
+		),
+	],
+);
+
+export const oidcLoginTransactions = platformSchema.table(
+	"oidc_login_transactions",
+	{
+		key: varchar("key", { length: 64 }).primaryKey(),
+		nonce: varchar("nonce", { length: 128 }).notNull(),
+		verifier: varchar("verifier", { length: 128 }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [index("oidc_login_expiry").on(table.expiresAt)],
+);

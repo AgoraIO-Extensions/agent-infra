@@ -249,7 +249,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const user =
 		session.state.kind === "ready" ? session.state.session.user : undefined;
 	const admin = user?.roles.includes("system_admin") ?? false;
-	const loginUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGIN_URL);
+	const loginUrl =
+		document.documentElement.dataset.platformLoginMode === "oidc"
+			? "/auth/oidc/login"
+			: safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGIN_URL);
 	const logoutUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGOUT_URL);
 	// 与 Agent 详情「打开 Connection」、对话上下文条共用同一个入口函数（NI-01 / NI-68、BR-04）。
 	const connectionUrl =

@@ -1,5 +1,5 @@
 {
-  "id": "a3e1f143-e3ff-40d9-bcfd-f285e470df4e",
+  "id": "88800ab1-318a-4142-a1f7-e304ac164584",
   "prevId": "ff9dd8a5-7737-4a4c-851f-2325d3a6ab0d",
   "version": "7",
   "dialect": "postgresql",
@@ -3812,18 +3812,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "external_service_id": {
-          "name": "external_service_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "external_service_revision": {
-          "name": "external_service_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "relay_key_purpose": {
           "name": "relay_key_purpose",
           "type": "text",
@@ -4109,22 +4097,6 @@
         }
       },
       "foreignKeys": {
-        "execution_external_service_version_fk": {
-          "name": "execution_external_service_version_fk",
-          "tableFrom": "conversation_executions",
-          "tableTo": "external_service_versions",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "external_service_id",
-            "external_service_revision"
-          ],
-          "columnsTo": [
-            "id",
-            "revision"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "conversation_execution_conversation_fk": {
           "name": "conversation_execution_conversation_fk",
           "tableFrom": "conversation_executions",
@@ -5669,196 +5641,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "platform.external_service_queries": {
-      "name": "external_service_queries",
-      "schema": "platform",
-      "columns": {
-        "operation_id": {
-          "name": "operation_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "actor_id": {
-          "name": "actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "instance_id": {
-          "name": "instance_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "receipt": {
-          "name": "receipt",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "external_service_queries_expiry": {
-          "name": "external_service_queries_expiry",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "platform.external_service_versions": {
-      "name": "external_service_versions",
-      "schema": "platform",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "url": {
-          "name": "url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "credential": {
-          "name": "credential",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "external_service_versions_id_external_services_id_fk": {
-          "name": "external_service_versions_id_external_services_id_fk",
-          "tableFrom": "external_service_versions",
-          "tableTo": "external_services",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "external_service_versions_id_revision_pk": {
-          "name": "external_service_versions_id_revision_pk",
-          "columns": [
-            "id",
-            "revision"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "platform.external_services": {
-      "name": "external_services",
-      "schema": "platform",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "model_endpoint_id": {
-          "name": "model_endpoint_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enabled_once": {
-          "name": "enabled_once",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "active": {
-          "name": "active",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified": {
-          "name": "verified",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "external_services_model_endpoint_id_unique": {
-          "name": "external_services_model_endpoint_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "model_endpoint_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "platform.file_limit_declarations": {
       "name": "file_limit_declarations",
       "schema": "platform",
@@ -6228,6 +6010,159 @@
           "value": "\"platform\".\"ldap_identity_ids\".\"user_id\" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'"
         }
       },
+      "isRLSEnabled": false
+    },
+    "platform.oidc_employee_accounts": {
+      "name": "oidc_employee_accounts",
+      "schema": "platform",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "employee_id": {
+          "name": "employee_id",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(320)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issuer": {
+          "name": "issuer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject": {
+          "name": "subject",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "oidc_employee_accounts_employee_id_unique": {
+          "name": "oidc_employee_accounts_employee_id_unique",
+          "columns": [
+            {
+              "expression": "employee_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "oidc_employee_accounts_email_unique": {
+          "name": "oidc_employee_accounts_email_unique",
+          "columns": [
+            {
+              "expression": "email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "oidc_bound_subject": {
+          "name": "oidc_bound_subject",
+          "columns": [
+            {
+              "expression": "issuer",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "subject",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "oidc_complete_binding": {
+          "name": "oidc_complete_binding",
+          "value": "(\"platform\".\"oidc_employee_accounts\".\"issuer\" is null) = (\"platform\".\"oidc_employee_accounts\".\"subject\" is null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.oidc_login_transactions": {
+      "name": "oidc_login_transactions",
+      "schema": "platform",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "varchar(64)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "nonce": {
+          "name": "nonce",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verifier": {
+          "name": "verifier",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "oidc_login_expiry": {
+          "name": "oidc_login_expiry",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "platform.operations_resource_identities": {
