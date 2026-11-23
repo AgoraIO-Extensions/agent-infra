@@ -160,7 +160,8 @@ export function checkProductionManifestDependencies(manifest, { path }) {
 				if (
 					forbiddenPlatformCoreImports.some((pattern) =>
 						pattern.test(dependency),
-					) && dependency !== "@agent-infra/contracts"
+					) &&
+					dependency !== "@agent-infra/contracts"
 				) {
 					violations.push(
 						`platform-core must not depend on ${dependency} via ${section}`,
