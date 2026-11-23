@@ -207,7 +207,7 @@ it("rejects a keyless V4 template Driver bound to the wrong model protocol", asy
 	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 });
 
-it("rejects non-admitted model or reasoning levels for a non-Codex V4 Driver", async () => {
+it("projects Relay-admitted models and reasoning beyond legacy endpoint lists", async () => {
 	const configuration = decodeAgentConfigurationRecordV3({
 		...configurationV2,
 		schemaVersion: 3,
@@ -252,7 +252,9 @@ it("rejects non-admitted model or reasoning levels for a non-Codex V4 Driver", a
 			},
 			signal: AbortSignal.timeout(1000),
 		}),
-	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+	).resolves.toMatchObject({
+		options: [{ modelId: "not-allowed", reasoningLevels: ["high"] }],
+	});
 });
 
 const standardBinding = {
@@ -650,6 +652,7 @@ for (const version of [1, 4] as const) {
 			"append model",
 			"unrestricted",
 			"remove unselected model",
+			"selected model removed",
 			"reasoning change",
 		] as const)(
 			`revalidates saved V${version} ${protocol} projection after compatible %s`,
@@ -666,13 +669,14 @@ for (const version of [1, 4] as const) {
 				else if (change === "unrestricted") endpoint.allowedModels = null;
 				else if (change === "remove unselected model")
 					endpoint.allowedModels = ["model-a"];
+				else if (change === "selected model removed")
+					endpoint.allowedModels = ["other-model"];
 				else endpoint.capabilities.reasoningLevels = ["low"];
 				await expect(revalidate()).resolves.toBeUndefined();
 				expect(JSON.stringify(saved)).toBe(original);
 			},
 		);
 		it.each([
-			"selected model removed",
 			"base URL",
 			"origin",
 			"protocol",
@@ -694,9 +698,6 @@ for (const version of [1, 4] as const) {
 				const endpoint = snapshot.endpoints[0];
 				if (!endpoint) throw new Error("Missing endpoint");
 				switch (change) {
-					case "selected model removed":
-						endpoint.allowedModels = ["other-model"];
-						break;
 					case "base URL":
 						endpoint.baseUrl = `${endpoint.origin}/changed/v1`;
 						break;

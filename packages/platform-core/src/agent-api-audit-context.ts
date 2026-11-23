@@ -1,4 +1,5 @@
 import type { AgentConfigurationError } from "./agent-configuration-types.js";
+import type { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.js";
 import type { ApiPrincipalV1 } from "./audit-query.js";
 import type { PersonalApiCredentialErrorV1 } from "./personal-api-credentials.js";
 
@@ -25,7 +26,10 @@ const contexts = new WeakMap<Error, AgentApiAuditContextV1>();
  * 配置终态拒绝（如多服务总量超限，#2396）。
  */
 export function withAgentApiAuditContextV1<
-	E extends PersonalApiCredentialErrorV1 | AgentConfigurationError,
+	E extends
+		| PersonalApiCredentialErrorV1
+		| AgentConfigurationError
+		| AgentDefaultRelayKeyErrorV1,
 >(error: E, context: AgentApiAuditContextV1): E {
 	contexts.set(
 		error,

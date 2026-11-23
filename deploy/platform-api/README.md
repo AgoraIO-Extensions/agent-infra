@@ -164,8 +164,8 @@ Agent 版本”。取值不符合规则时 API 以 `PLATFORM_DEPLOYMENT_CONFIGUR
 
 ## 标准模板的模型与推理档位
 
-标准模板的可选模型只来自 Agent 默认 Relay Key 调用 `/models` 返回的模型 ID。Model Catalog 端点的
-`allowedModels` 只做部署方收窄，`null` 表示不收窄。推理档位是平台固定的 `low`、`medium`、`high`，
+标准模板的可选模型只来自 Agent 默认 Relay Key 调用 `/models` 返回的模型 ID。Relay 负责模型白名单。
+推理档位是平台固定的 `low`、`medium`、`high`、`xhigh`、`max`，
 不按模型、端点或模板登记。Web 申请、API 创建和配置更新在保存前用默认 Key 按模板协议，对每个
 所选模型与档位各发一次有界的真实请求（Codex 用 Responses，Claude 用 Messages），全部通过才保存。
 用已保存 Key 改模型时，只验证新增的组合；已保存的组合沿用原档位。决策与边界见

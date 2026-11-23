@@ -20,6 +20,7 @@ import {
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
 import { parseKeylessUpdateCommand } from "./agent-configuration-input.js";
+import { isModelRelayRejectionV1 } from "./agent-default-relay-key.js";
 import {
 	type AgentManagementActorContextV1,
 	type AgentManagementStateV1,
@@ -992,6 +993,7 @@ async function captureConfigurationPlan(
 			now,
 		});
 	} catch (error) {
+		if (isModelRelayRejectionV1(error)) throw error;
 		const normalized = configurationError(error);
 		throw normalized;
 	}

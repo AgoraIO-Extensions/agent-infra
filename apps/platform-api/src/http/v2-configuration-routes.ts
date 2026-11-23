@@ -379,15 +379,19 @@ export function registerV2ConfigurationRoutes(
 				})
 			)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
-			if (verify.length && saved.verification !== "verified")
+			if (verify.length && saved.verification !== "verified") {
+				const codes = {
+					incompatible: "CODEX_MODEL_PROFILE_UNSUPPORTED",
+					key_invalid: "RELAY_KEY_REJECTED",
+					access_denied: "RELAY_ACCESS_DENIED",
+					codex_client_required: "RELAY_CODEX_CLIENT_REQUIRED",
+					unavailable: "DEPENDENCY_UNAVAILABLE",
+				} as const;
 				throw new HttpProtocolError(
-					saved.verification === "incompatible"
-						? "CODEX_MODEL_PROFILE_UNSUPPORTED"
-						: saved.verification === "key_invalid"
-							? "INVALID_REQUEST"
-							: "DEPENDENCY_UNAVAILABLE",
+					codes[saved.verification ?? "unavailable"],
 					metadata.traceId,
 				);
+			}
 		}
 		let prepared: Awaited<
 			ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>

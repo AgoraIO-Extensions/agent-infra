@@ -588,18 +588,13 @@ export function createDeploymentAdmissionsV1(
 					});
 					return null;
 				}
-				// 模型与档位由默认 Key 的 `/models` 和保存时真实请求判定（ADR-0029），
-				// 这里只保留端点可用与部署可选的 `allowedModels` 收窄。
+				// 模型与档位由默认 Key 的 `/models` 和保存时真实请求判定（ADR-0030）。
 				const options: AgentConfigurationModelV2["options"][number][] = [];
 				for (const option of request.requested.options) {
 					const endpoint = snapshot.endpoints.find(
 						(candidate) => candidate.endpointId === option.endpointId,
 					);
-					if (
-						!endpoint?.available ||
-						(endpoint.allowedModels !== null &&
-							!endpoint.allowedModels.includes(option.modelId))
-					) {
+					if (!endpoint?.available) {
 						recordHttpFailureContext({
 							failureStep: "application.model.selection_invalid",
 						});
@@ -886,8 +881,6 @@ export function createDeploymentAdmissionsV1(
 							{ signal },
 						);
 						if (
-							(endpoint.allowedModels !== null &&
-								!endpoint.allowedModels.includes(option.modelId)) ||
 							option.reasoningLevels.some(
 								(level) =>
 									!endpoint.capabilities.reasoningLevels.includes(level),

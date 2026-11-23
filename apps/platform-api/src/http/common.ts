@@ -17,6 +17,24 @@ const protocolErrors = {
 		"Personal Relay Key is unavailable. Configure it in personal settings.",
 		false,
 	],
+	RELAY_KEY_REJECTED: [
+		400,
+		"PROVIDER_REJECTED",
+		"Relay 拒绝了模型验证请求（上游 HTTP 401）。请检查 Agent 默认 Relay Key。",
+		false,
+	],
+	RELAY_ACCESS_DENIED: [
+		403,
+		"PROVIDER_REJECTED",
+		"Relay 拒绝了模型验证请求（上游 HTTP 403）。请检查默认 Relay Key 的模型调用权限。",
+		false,
+	],
+	RELAY_CODEX_CLIENT_REQUIRED: [
+		403,
+		"PROVIDER_REJECTED",
+		"Relay 拒绝了模型验证请求（上游 HTTP 403）。当前 Relay 账号仅允许官方 Codex 客户端，请使用允许平台执行模型验证的 Relay Key。",
+		false,
+	],
 	INVALID_REQUEST: [400, "INVALID_REQUEST", "Request is invalid.", false],
 	VERSION_RETIRED: [
 		400,
@@ -145,6 +163,9 @@ const protocolErrors = {
 		| "CONFLICT"
 		| "FORBIDDEN"
 		| "VERSION_RETIRED"
+		| "RELAY_KEY_REJECTED"
+		| "RELAY_ACCESS_DENIED"
+		| "RELAY_CODEX_CLIENT_REQUIRED"
 		| "CODEX_MODEL_PROFILE_UNSUPPORTED"
 		| "PLATFORM_IDENTITY_ENTRY_UNAVAILABLE"
 		| "PERSONAL_RELAY_KEY_UNAVAILABLE"

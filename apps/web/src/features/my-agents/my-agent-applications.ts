@@ -145,14 +145,20 @@ function requestError(
 		code?: string;
 		status?: number;
 		traceId?: string;
+		providerMessage?: string;
 	} = {},
 ) {
-	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
-		code: input.code,
-		retryable: input.retryable !== false,
-		status: input.status,
-		traceId: input.traceId,
-	});
+	return Object.assign(
+		new Error(
+			input.providerMessage ?? "My Agent data is temporarily unavailable",
+		),
+		{
+			code: input.code,
+			retryable: input.retryable !== false,
+			status: input.status,
+			traceId: input.traceId,
+		},
+	);
 }
 
 export function isRetryableMyAgentApplicationError(error: unknown): boolean {
@@ -278,6 +284,10 @@ export async function createMyAgentApplication(
 			retryable: result.error?.retryable,
 			status: result.response?.status,
 			traceId: result.error?.traceId,
+			providerMessage:
+				result.error?.code === "PROVIDER_REJECTED"
+					? result.error.message
+					: undefined,
 		});
 	}
 
@@ -310,6 +320,10 @@ export async function updateMyAgentApplication(
 			retryable: result.error?.retryable,
 			status: result.response?.status,
 			traceId: result.error?.traceId,
+			providerMessage:
+				result.error?.code === "PROVIDER_REJECTED"
+					? result.error.message
+					: undefined,
 		});
 	}
 	if (result.data.applicationId !== applicationId)

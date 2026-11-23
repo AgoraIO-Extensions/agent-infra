@@ -2336,6 +2336,7 @@ describe("production API creation with user and application Tokens", () => {
 			probeStatus = 200,
 			options: {
 				output?: Writable;
+				codexClientOnly?: boolean;
 				modelsStatus?: () => number | "timeout";
 				catalogFailure?: boolean;
 				identity?: IdentityAdapter["resolve"];
@@ -2386,7 +2387,18 @@ describe("production API creation with user and application Tokens", () => {
 					);
 				if (String(url).endsWith("/responses") && probeStatus !== 200)
 					return Response.json(
-						{ detail: "relay-response-canary" },
+						{
+							detail: "relay-response-canary",
+							...(options.codexClientOnly
+								? {
+										error: {
+											type: "forbidden_error",
+											message:
+												"This account only allows Codex official clients",
+										},
+									}
+								: {}),
+						},
 						{ status: probeStatus },
 					);
 				if (String(url).endsWith("/responses"))
@@ -2409,7 +2421,10 @@ describe("production API creation with user and application Tokens", () => {
 				const modelsStatus = options.modelsStatus?.() ?? 200;
 				if (modelsStatus === "timeout") return new Promise<Response>(() => {});
 				return Response.json(
-					{ data: [{ id: "model-a" }], detail: "relay-response-canary" },
+					{
+						data: [{ id: "model-a" }, { id: "model-from-relay" }],
+						detail: "relay-response-canary",
+					},
 					{ status: modelsStatus },
 				);
 			});
@@ -2533,6 +2548,11 @@ describe("production API creation with user and application Tokens", () => {
 					{
 						endpointId: "endpoint-a",
 						modelId: "model-a",
+						reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+					},
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-from-relay",
 						reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
 					},
 				],
@@ -3046,6 +3066,77 @@ describe("production API creation with user and application Tokens", () => {
 			},
 		);
 
+		it.each([200, 403])(
+			"submits a Web model outside the old allowlist and reports Relay HTTP %i",
+			async (status) => {
+				const logs = captureLogs();
+				await openWithDeploymentPolicy(200, undefined, status, {
+					output: logs.output,
+					codexClientOnly: true,
+				});
+				const choices = await json(await preview(), 200);
+				expect(choices).toMatchObject({
+					candidates: expect.arrayContaining([
+						expect.objectContaining({ modelId: "model-from-relay" }),
+					]),
+				});
+				const response = await request(
+					"/api/v2/agent-applications",
+					"alice",
+					{
+						...applicationBody,
+						defaultRelayKey: apiBody.defaultRelayKey,
+						modelConfiguration: {
+							...applicationBody.modelConfiguration,
+							options: [
+								{
+									optionId: "option-a",
+									endpointId: "endpoint-a",
+									modelId: "model-from-relay",
+									reasoningLevels: ["medium"],
+								},
+							],
+						},
+					},
+					"web-submit-relay",
+				);
+				const result = await json(response, status === 200 ? 201 : 403);
+				expect(JSON.stringify(result)).not.toContain("relay-response-canary");
+				expect(JSON.stringify(result)).not.toContain(apiBody.defaultRelayKey);
+				if (status === 200) {
+					const application = AgentApplicationProjectionV2Schema.parse(result);
+					const readback = await request(
+						`/api/v2/agent-applications/${application.applicationId}`,
+						"alice",
+					);
+					expect(await json(readback, 200)).toMatchObject({
+						status: "pending_approval",
+						configuration: {
+							modelOptions: [
+								expect.objectContaining({ modelId: "model-from-relay" }),
+							],
+						},
+					});
+				} else {
+					expect(result).toMatchObject({
+						code: "PROVIDER_REJECTED",
+						retryable: false,
+						message: expect.stringContaining("仅允许官方 Codex 客户端"),
+						traceId: expect.any(String),
+					});
+					expect(logs.read()).toContainEqual(
+						expect.objectContaining({
+							failureStep: "model.validation.codex_client_required",
+							status: 403,
+						}),
+					);
+					expect(await effects()).toEqual([
+						{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+					]);
+				}
+			},
+		);
+
 		it("uses the deployment default Relay Key policy shared with browser creation", async () => {
 			const relayFetch = await openWithDeploymentPolicy(200);
 			const response = await create();
@@ -3089,7 +3180,8 @@ describe("production API creation with user and application Tokens", () => {
 		);
 		it.each([
 			[400, 409, "MODEL_SELECTION_INVALID"],
-			[401, 400, "INVALID_REQUEST"],
+			[401, 400, "PROVIDER_REJECTED"],
+			[403, 403, "PROVIDER_REJECTED"],
 			[503, 503, "DEPENDENCY_UNAVAILABLE"],
 		] as const)(
 			"classifies verification status %i as HTTP %i without effects",

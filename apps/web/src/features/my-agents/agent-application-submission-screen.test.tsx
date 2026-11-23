@@ -163,6 +163,28 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expectSingleFooterCancel("/my-agents");
 	});
 
+	it("displays the Relay rejection reason and trace on the form", async () => {
+		const message =
+			"Relay 拒绝了模型验证请求（上游 HTTP 403）。当前 Relay 账号仅允许官方 Codex 客户端。";
+		const traceId = "1a119f6c-4be8-4fff-bbf2-5d01559659e4";
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreen
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+				error={Object.assign(new Error(message), {
+					code: "PROVIDER_REJECTED",
+					status: 403,
+					retryable: false,
+					traceId,
+				})}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			`${message} 追踪编号：${traceId}`,
+		);
+	});
+
 	it.each([
 		[
 			409,

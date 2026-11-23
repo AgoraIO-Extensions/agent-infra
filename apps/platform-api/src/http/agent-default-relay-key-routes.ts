@@ -14,9 +14,13 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type { ModelDisplayNameLookupV1 } from "@agent-infra/model-catalog";
 import type { createAgentDefaultRelayKeyUseCaseV1 } from "@agent-infra/platform-core";
-import { AgentDefaultRelayKeyErrorV1 } from "@agent-infra/platform-core";
+import {
+	AgentDefaultRelayKeyErrorV1,
+	isModelRelayRejectionV1,
+} from "@agent-infra/platform-core";
 import type { Context, Hono } from "hono";
 import { HttpProtocolError, parseJson, requestMetadata } from "./common.js";
+import { mapCoreError } from "./core-errors.js";
 import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface AgentDefaultRelayKeyRoutesDependencies {
@@ -164,6 +168,10 @@ export function registerAgentDefaultRelayKeyRoutes(
 				).parse(result),
 			);
 		} catch (error) {
+			if (isModelRelayRejectionV1(error)) {
+				const protocol = mapCoreError(error, metadata.traceId);
+				return context.json(protocol.body, protocol.status);
+			}
 			const protocol =
 				error instanceof HttpProtocolError
 					? error

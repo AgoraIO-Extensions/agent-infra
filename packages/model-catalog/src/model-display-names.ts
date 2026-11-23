@@ -73,14 +73,9 @@ export function createDeploymentModelDisplayNamesV1(input: {
 			const endpoints = new Map(
 				snapshot.endpoints.map((endpoint) => [endpoint.endpointId, endpoint]),
 			);
-			for (const { endpointId, modelId } of metadata.models) {
+			for (const { endpointId } of metadata.models) {
 				const endpoint = endpoints.get(endpointId);
-				if (
-					!endpoint ||
-					(endpoint.allowedModels !== null &&
-						!endpoint.allowedModels.includes(modelId))
-				)
-					throw new Error();
+				if (!endpoint) throw new Error();
 			}
 			return ({ endpointId, modelId }) =>
 				names.get(pair(endpointId, modelId)) ?? modelId;

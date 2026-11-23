@@ -9,6 +9,7 @@ import {
 import {
 	AgentDefaultRelayKeyErrorV1,
 	admitAgentDefaultRelayKeyModelsV1,
+	isModelRelayRejectionV1,
 } from "./agent-default-relay-key.js";
 import type {
 	AgentManagementStateV1,
@@ -329,6 +330,7 @@ export function createAgentApiCreationV1(dependencies: {
 							keyValue: key,
 							configuration: admitted.configuration,
 						}).catch((error: unknown) => {
+							if (isModelRelayRejectionV1(error)) throw error;
 							if (
 								error instanceof AgentDefaultRelayKeyErrorV1 &&
 								error.code === "model_unsupported"

@@ -248,6 +248,7 @@ describe("platform-core package surface", () => {
 			"isEvaluationFileRuntimeCurrentV1",
 			"isExactExecutionFailureCodeV1",
 			"isFileExchangeOriginV1",
+			"isModelRelayRejectionV1",
 			"isNativeCapabilityModelSelectionCurrentV6",
 			"isPersonalApiAgentMetadataReadAllowedV1",
 			"isPlatformConversationChannelCurrentV1",

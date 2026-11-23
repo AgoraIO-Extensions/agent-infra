@@ -248,7 +248,7 @@ it.each(["api-key", "bearer"] as const)(
 
 it.each([
 	[401, "key_invalid"],
-	[403, "key_invalid"],
+	[403, "access_denied"],
 	[400, "incompatible"],
 	[404, "incompatible"],
 	[429, "unavailable"],

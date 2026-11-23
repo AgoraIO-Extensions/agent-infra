@@ -33,8 +33,6 @@ export function validateModelAccessPolicyV1(input: ModelAccessInputV1): string {
 		if (
 			!endpoint.available ||
 			!/^[\x21-\x7e]{16,8192}$/.test(credential) ||
-			(endpoint.allowedModels !== null &&
-				!endpoint.allowedModels.includes(input.modelId)) ||
 			!input.reasoningLevels.length ||
 			input.reasoningLevels.length > 32 ||
 			new Set(input.reasoningLevels).size !== input.reasoningLevels.length ||
@@ -81,12 +79,72 @@ const completedSchema = z.object({
 	}),
 });
 
-/** Outcome of one bounded synthetic Responses request. */
+export async function boundedModelResponseBody(
+	response: Response,
+	signal: AbortSignal,
+	maxBytes = 1_048_576,
+) {
+	if (!response.body) throw new ModelConfigurationErrorV1();
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder("utf-8", { fatal: true });
+	let bytes = 0;
+	let body = "";
+	try {
+		while (true) {
+			const chunk = await modelOperationV1(signal, () => reader.read());
+			if (chunk.done) break;
+			bytes += chunk.value.byteLength;
+			if (bytes > maxBytes) throw new ModelConfigurationErrorV1();
+			body += decoder.decode(chunk.value, { stream: true });
+		}
+		return body + decoder.decode();
+	} finally {
+		void reader.cancel().catch(() => {});
+	}
+}
+
+/** Outcome of one bounded synthetic model request. */
 export type ResponsesModelProbeOutcomeV1 =
 	| "verified"
 	| "key_invalid"
+	| "access_denied"
+	| "codex_client_required"
 	| "incompatible"
 	| "unavailable";
+
+export async function modelProbeFailureV1(
+	response: Response,
+	signal: AbortSignal,
+): Promise<ResponsesModelProbeOutcomeV1> {
+	if (
+		response.status === 403 &&
+		/^application\/json(?:;|$)/i.test(
+			response.headers.get("content-type") ?? "",
+		)
+	) {
+		try {
+			const failure: unknown = JSON.parse(
+				await boundedModelResponseBody(response, signal, 4096),
+			);
+			const codexOnly = z.object({
+				error: z.object({
+					type: z.literal("forbidden_error"),
+					message: z.literal("This account only allows Codex official clients"),
+				}),
+			});
+			if (codexOnly.safeParse(failure).success) return "codex_client_required";
+		} catch {
+			return "access_denied";
+		}
+		return "access_denied";
+	}
+	void response.body?.cancel().catch(() => {});
+	if (response.status === 401) return "key_invalid";
+	if (response.status === 403) return "access_denied";
+	return response.status === 429 || response.status >= 500
+		? "unavailable"
+		: "incompatible";
+}
 
 /**
  * One bounded synthetic Responses request for one reasoning level; never contains an
@@ -155,12 +213,7 @@ export async function probeResponsesModelV1(input: {
 		) ||
 		!response.body
 	) {
-		void response.body?.cancel().catch(() => {});
-		if (response.status === 401 || response.status === 403)
-			return "key_invalid";
-		return response.status === 429 || response.status >= 500
-			? "unavailable"
-			: "incompatible";
+		return modelProbeFailureV1(response, signal);
 	}
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder("utf-8", { fatal: true });

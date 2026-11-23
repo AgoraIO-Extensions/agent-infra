@@ -1,6 +1,9 @@
 import { RuntimeModelProtocolV1Schema } from "@agent-infra/contracts/runtime";
 import { z } from "zod";
-import { probeResponsesModelV1 } from "./access.js";
+import {
+	probeResponsesModelV1,
+	type ResponsesModelProbeOutcomeV1,
+} from "./access.js";
 import {
 	ModelCatalogSnapshotV1Schema,
 	type ModelEndpointV1,
@@ -58,11 +61,7 @@ export interface AgentDefaultRelayKeyModelComboV1 {
 	readonly reasoningLevel: string;
 }
 
-export type AgentDefaultRelayKeyVerificationV1 =
-	| "verified"
-	| "key_invalid"
-	| "incompatible"
-	| "unavailable";
+export type AgentDefaultRelayKeyVerificationV1 = ResponsesModelProbeOutcomeV1;
 
 /**
  * 部署配置里的模板绑定可能仍带旧的 `reasoningLevels`（ADR-0030 之前要求填写），
@@ -232,7 +231,7 @@ async function visibleModelIds(
 	return [...ids];
 }
 
-/** Resolve default-Key candidates: Relay `/models` ids, optionally narrowed by the deployment (ADR-0030). */
+/** Resolve default-Key candidates: Relay `/models` IDs from the approved template endpoint (ADR-0030). */
 export function createAgentDefaultRelayKeyCandidateReaderV1(
 	input: RelayInputV1 & {
 		readonly validateKey: (
@@ -280,15 +279,11 @@ export function createAgentDefaultRelayKeyCandidateReaderV1(
 					),
 			);
 			for (const id of visible) {
-				if (
-					endpoint.allowedModels === null ||
-					endpoint.allowedModels.includes(id)
-				)
-					candidates.push({
-						endpointId: endpoint.endpointId,
-						modelId: id,
-						reasoningLevels: [...standardTemplateReasoningLevelsV1],
-					});
+				candidates.push({
+					endpointId: endpoint.endpointId,
+					modelId: id,
+					reasoningLevels: [...standardTemplateReasoningLevelsV1],
+				});
 			}
 		}
 		return candidates;

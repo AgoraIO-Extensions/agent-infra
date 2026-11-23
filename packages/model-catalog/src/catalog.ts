@@ -29,7 +29,13 @@ export const ModelEndpointV1Schema = z
 			tools: z.literal(true),
 			reasoningLevels: levels,
 		}),
-		allowedModels: z.array(modelIdentifier).min(1).max(1024).nullable(),
+		/** Legacy deployment metadata. Relay owns model visibility. */
+		allowedModels: z
+			.array(modelIdentifier)
+			.min(1)
+			.max(1024)
+			.nullable()
+			.default(null),
 		available: z.boolean(),
 	})
 	.refine((value) =>

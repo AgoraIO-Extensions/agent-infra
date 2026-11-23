@@ -245,8 +245,6 @@ export async function scoreEvaluationModelV1(
 			!Number.isFinite(maximum) ||
 			minimum >= maximum ||
 			!endpoint.available ||
-			(endpoint.allowedModels !== null &&
-				!endpoint.allowedModels.includes(modelId)) ||
 			!(input.credential instanceof Uint8Array) ||
 			input.credential.byteLength > 8192
 		)
