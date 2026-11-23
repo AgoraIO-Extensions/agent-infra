@@ -282,6 +282,19 @@ add(
 	900,
 	[{ labels: "{}", value: 60000 }],
 );
+add(
+	"last raw timestamp older than the window is absent without stale marker",
+	[
+		{
+			series:
+				'kube_persistentvolumeclaim_resource_requests_storage_bytes{cluster_id="a",namespace="ns",persistentvolumeclaim="old"}',
+			values: "10",
+		},
+	],
+	lastSeen,
+	3720,
+	[],
+);
 const directory = mkdtempSync(join(tmpdir(), "operations-promql-"));
 try {
 	const file = join(directory, "rules.yaml");

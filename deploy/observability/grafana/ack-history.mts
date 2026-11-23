@@ -159,7 +159,7 @@ export function ackHistoryPanels(
 			...t,
 			instant: true,
 			range: false,
-			expr: `max_over_time((${t.expr})[1h:1m])`,
+			expr: `max_over_time((${t.expr})[1h:30s]) >= (time() - 3600) * 1000`,
 		})),
 	};
 	return [...panels, lastSeen];
