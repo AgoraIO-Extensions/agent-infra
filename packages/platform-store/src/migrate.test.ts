@@ -2266,6 +2266,7 @@ describe("published Relay authority migration", () => {
 			96,
 			97,
 			98,
+			99,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2403,9 +2404,13 @@ describe("published Relay authority migration", () => {
 			idx: 97,
 			tag: "0097_runtime_safety_evidence",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 98)).toMatchObject({
 			idx: 98,
 			tag: "0098_oidc_employee_accounts",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 99,
+			tag: "0099_oidc_logout_receipts",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3198,6 +3203,8 @@ describe("published Relay authority migration", () => {
 				...["user_id", "employee_id", "issuer", "subject", "email"].map(
 					(name) => `oidc_employee_accounts:${name}`,
 				),
+				"oidc_logout_receipts:digest",
+				"oidc_logout_receipts:expires_at",
 				...["expires_at", "nonce", "verifier", "key"].map(
 					(name) => `oidc_login_transactions:${name}`,
 				),
@@ -3210,6 +3217,8 @@ describe("published Relay authority migration", () => {
 					"oidc_employee_accounts_email_unique",
 					"oidc_employee_accounts_employee_id_unique",
 				].map((n) => `oidc_employee_accounts:${n}`),
+				"oidc_logout_receipts:oidc_logout_receipts_expiry",
+				"oidc_logout_receipts:oidc_logout_receipts_pkey",
 				"oidc_login_transactions:oidc_login_expiry",
 				"oidc_login_transactions:oidc_login_transactions_pkey",
 			);

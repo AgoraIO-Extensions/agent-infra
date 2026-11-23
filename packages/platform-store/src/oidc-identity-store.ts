@@ -1,10 +1,21 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import postgres from "./observed-postgres.js";
 
 export interface OidcEmployeeAccount {
 	userId: string;
 	employeeId: string;
 	email: string;
+}
+
+export interface OidcLogoutEvent {
+	issuer: string;
+	subject: string;
+	jti: string;
+	issuedAt: number;
+}
+
+export function oidcBrowserSessionUidPrefix(issuer: string): string {
+	return `oidc:${createHash("sha256").update(issuer).digest("hex")}:`;
 }
 
 type Binding = OidcEmployeeAccount & {
@@ -136,6 +147,33 @@ export class PostgresOidcIdentityStore {
 				return { userId, employeeId, email };
 			})
 			.catch(rejectUniqueCollision);
+	}
+
+	/** Caller verified the logout token. Record delivery and revoke sessions together. */
+	async logout({
+		issuer,
+		subject,
+		jti,
+		issuedAt,
+	}: OidcLogoutEvent): Promise<void> {
+		const digest = createHash("sha256")
+			.update(JSON.stringify([issuer, jti]))
+			.digest("hex");
+		const prefix = oidcBrowserSessionUidPrefix(issuer);
+		await this.sql.begin(async (sql) => {
+			await sql`delete from platform.oidc_logout_receipts where digest in (
+				select digest from platform.oidc_logout_receipts where expires_at <= clock_timestamp()
+				order by expires_at limit 64 for update skip locked)`;
+			const [firstDelivery] =
+				await sql`insert into platform.oidc_logout_receipts (digest, expires_at)
+				select ${digest}, to_timestamp(${issuedAt}) + interval '1 day'
+				where to_timestamp(${issuedAt}) + interval '1 day' > clock_timestamp()
+				on conflict (digest) do nothing returning digest`;
+			if (!firstDelivery) return;
+			await sql`delete from platform.browser_sessions where uid = (
+				select ${prefix} || user_id from platform.oidc_employee_accounts
+				where issuer=${issuer} and subject=${subject} for share)`;
+		});
 	}
 
 	async put(key: string, value: LoginTransaction): Promise<void> {
