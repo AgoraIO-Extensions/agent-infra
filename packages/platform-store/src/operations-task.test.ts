@@ -389,3 +389,88 @@ it("scopes Grafana to whole-window aggregates and denies ungranted roles", async
 		await sql`select has_function_privilege('ops_dashboard_ungranted','platform_ops_dashboard.execution_impact(timestamptz,timestamptz,text)','execute') as allowed`;
 	expect(access?.allowed).toBe(false);
 });
+
+it("exposes all three channels and empty buckets without inventing reply samples", async () => {
+	const ddl = await readFile(
+		new URL(
+			"../../../deploy/observability/grafana/execution-impact.sql",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	await sql.unsafe(ddl);
+	const rows =
+		await sql`select * from platform_ops_dashboard.reply_observations('2000-01-01T00:00Z','2000-01-01T00:10Z','trend') order by bucket,channel`;
+	expect(rows.map((r) => r.channel)).toEqual([
+		"API",
+		"Web",
+		"企微",
+		"API",
+		"Web",
+		"企微",
+	]);
+	expect(
+		rows.every(
+			(r) =>
+				r.accepted === "0" &&
+				r.replied === "0" &&
+				r.median_first_output_seconds === null,
+		),
+	).toBe(true);
+});
+
+it.each([
+	["web", "Web"],
+	["wecom_bot:test", "企微"],
+	["api:user", "API"],
+])(
+	"reconciles %s waits, first text and a cancellation in the selected window",
+	async (channelId, channel) => {
+		await sql.begin(async (tx) => {
+			await tx.unsafe(
+				await readFile(
+					new URL(
+						"../../../deploy/observability/grafana/execution-impact.sql",
+						import.meta.url,
+					),
+					"utf8",
+				).then((text) =>
+					text.replace(/^BEGIN;$/m, "").replace(/^COMMIT;$/m, ""),
+				),
+			);
+			await tx`alter table platform.conversation_executions disable trigger conversation_execution_terminal_observed_at`;
+			const actor = "reply-test-user";
+			for (const [i, status] of [
+				"processing",
+				"cancelled",
+				"completed",
+			].entries()) {
+				const session = "reply-" + channel + "-" + i;
+				await tx`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values(${session},'ops-agent',${actor},${channelId},'ready',1,'auth')`;
+				const created =
+					i === 0 ? "2001-01-01T09:59:00Z" : "2001-01-01T10:00:00Z";
+				await tx`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,terminal_observed_at)
+			values(${session},${session},'ops-agent',${actor},${channelId},'turn',${status},1,'auth',${created},${i === 0 ? null : "2001-01-01T10:01:00Z"})`;
+				if (i === 2) {
+					for (const [index, body] of ["", "first", "again"].entries()) {
+						const id = session + "-" + index;
+						await tx`insert into platform.conversation_events(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,persisted_at,source)
+					values(${id},${session},${session},${id},${index + 1},${index + 1},'text.delta',${tx.json({ text: body, type: "text.delta" })},${"0".repeat(64)},${id},${"2001-01-01T10:00:0" + index + "Z"},${"2001-01-01T10:00:0" + index + "Z"},'runtime')`;
+					}
+				}
+			}
+			await tx`alter table platform.conversation_executions enable trigger conversation_execution_terminal_observed_at`;
+			const [row] =
+				await tx`select * from platform_ops_dashboard.reply_observations('2001-01-01T10:00Z','2001-01-01T10:05Z','summary') where channel=${channel}`;
+			expect(row).toMatchObject({
+				accepted: "2",
+				replied: "1",
+				waiting_users: "1",
+				median_first_output_seconds: 1,
+				cancelled_before_output: "1",
+				median_cancel_wait_seconds: 60,
+			});
+			expect(row.longest_wait_seconds).toBeGreaterThan(60);
+		});
+	},
+);
