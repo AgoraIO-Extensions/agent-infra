@@ -2719,7 +2719,7 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 上述主体映射规则。部署须显式批准例外策略 `consistency-exception-v1` 的 `ref/revision`，并绑定
 同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
 固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
-（不超过 24）以及已核实第 1 项前提的 Connection 发布版本或修订。任一项缺失或无效时，动态手工安装
+（不超过 24）以及 `connectionRelease`，即最近一次核实第 1 项前提时的 Connection 版本。任一项缺失或无效时，动态手工安装
 保持关闭。#4199 C2 启用前，本例外第 4、6、8 项的后续规则必须全部实现并通过非实现方独立复审；
 在此之前不得批准例外。风险接受与取舍见
 [ADR-0047](../adr/0047-m1-connection-principal-first-binding-exception.md)。
@@ -2728,10 +2728,25 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    Principal 或已绑定同一 Principal 时成功，并在同一事务把该 Principal 写入实例；其他 Principal
    批准同一实例返回 `access_denied`。因此同一安装发出的授权码都属于实例绑定的 Principal。该行为
    不在 EP-1060 已发布合同中，证据为 agora-connector `2019ca075149ec5184ceadc06d923b69e64c37e5`
-   的 `packages/connection-store/src/oauth-repository.ts` L1567–1582。Connection 升级到未核实的
-   版本前，部署负责人先撤回例外批准；重新只读核实并以新修订批准前，例外保持关闭。
-   现有已核实合同未提供供 Host 在 EP-1060 回读时比对的 Connection 运行发布标识；批准中的版本
-   仍由部署负责人核实发布出处，协议版本或资源修订不能代替它。人工依赖及残余风险见
+   的 `packages/connection-store/src/oauth-repository.ts` L1567–1582。
+
+   **批准绑定该不变式的源文件 blob，不绑定 Connection 当前运行的版本。** `connectionRelease` 仍必填，
+   只记录最近一次核实不变式时的 Connection 版本和出处，不要求等于 Connection 当前运行的版本。
+   Connection 的发版、重启和部署不暂停，也不撤回批准或中止进行中的现场轮；Platform 不为此比对
+   Connection 实例的启动时间。对 Connection main 的新提交，部署负责人只读比对下列两个源文件的
+   blob，不需要浏览器或凭据：
+   - `packages/connection-store/src/oauth-repository.ts`（实例绑定事务）：blob 与核实时相同，则无需
+     动作。blob 变化时，立即停止新的例外安装，已有安装不受影响；评估后请用户决定，决定前例外保持
+     关闭。
+   - `apps/connection-api/src/app.ts`（MCP 发布）：只改说明文字、没有放松限制的工具描述变化，按用户
+     常设授权同步 helm 的 `publication.contract`，不出新批准修订。工具名、`inputSchema`、结果 schema、
+     `serverInfo` 有变化，或限制被放松时，停止新的例外安装并请用户决定。
+
+   两个 blob 均与核实时相同，或只发生上述按常设授权同步的变化时，批准修订不变；其余情况由用户决定后
+   再出新修订。
+
+   现有已核实合同未提供供 Host 在 EP-1060 回读时比对的 Connection 运行发布标识，协议版本或资源
+   修订也不能代替它；源文件 blob 由部署负责人只读核实。人工依赖及残余风险见
    [ADR-0047“风险与接受”](../adr/0047-m1-connection-principal-first-binding-exception.md#风险与接受)。
 2. **换码前回读。** 原回跳已确认、原平台用户已明确确认后，Host 在读取 code 和 verifier 前，按
    §13.5.6 的实际安装绑定回读，用 EP-1060 读取本安装的登记键。同时满足以下条件才继续：结果为
@@ -3385,7 +3400,7 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
    安装及关联修订、原 confirm/阶段/请求摘要、Host ref/Pod UID、Sandbox/代次/resourceFence、
    固定描述符及供应引用/修订、例外批准修订，以及已核实的 issuer、登记键、Principal、client/
    Consumer/DEVICE 实例、callback、resource/scope 和实例状态。每项均与原 Worker 命令及固定
-   输入匹配，未知或含材料字段的响应拒绝；Connection 运行版本的人工核实仍按例外第 1 项，不从 EP-1060 响应虚构发布标识。
+   输入匹配，未知或含材料字段的响应拒绝；实例绑定不变式的源文件核实仍按例外第 1 项，不从 EP-1060 响应虚构发布标识。
 2. **Worker 在 Store 提交固定。** Worker 只接受这次原命令目标的响应，或原用户依下文 status
    核实的同一 Host 已保存结果；身份和目标不能由响应自报字段选择。Core 复核当前原用户和 Agent
    使用权后，由原 Platform 安装事务执行 Store CAS：按例外第 3 项串行核对 issuer/Principal 的
