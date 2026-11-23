@@ -275,11 +275,11 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
 		};
 		validateCapacityBindings([request], [template], capacity, [freshProfile], new Map([[template.imageDigest, measuredBytes]]));
-		if (files.codexTrial && profiles.length) {
-			assert(profiles.length === 1 && isDeepStrictEqual(profiles[0], freshProfile), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
-		}
 		const matches = (p: any) => p.imageDigest === template.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
 		const approved = profiles.filter(matches);
+		if (files.codexTrial && profiles.length) {
+			assert(profiles.length === 1 && approved.length === 1, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+		}
 		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
 		if (approved.length === 0) {
 			profiles = [...profiles, freshProfile];

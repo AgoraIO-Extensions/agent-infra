@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
@@ -413,7 +413,7 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 								{
 									name: "config",
 									readOnly: true,
-									mountPath: join(directory, component),
+									mountPath: join(directory, "pods", component),
 								},
 							],
 						},
@@ -429,7 +429,8 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 		}
 		if (codexTrial && args.includes("exec")) {
 			const component = args.at(-2);
-			const configDir = join(directory, component);
+			const configDir = join(directory, "pods", component);
+			mkdirSync(configDir, { recursive: true });
 			const recordFile = join(configDir, "template-validation-codex.json");
 			const validation = JSON.parse(
 				Buffer.from(
@@ -1160,7 +1161,11 @@ async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {
 			join(output, "validation.json"),
 			templatePreflightValidationReceipt({
 				...validation,
-				validationTarget: { ...validationTarget, sourceCommit: sourceSha },
+				validationTarget: {
+					...validationTarget,
+					namespace: f.bootstrap.namespace,
+					sourceCommit: sourceSha,
+				},
 				scope: "isolated-template-real-model",
 				terminalStatus: "completed",
 				modelFactSource: "protected-driver-journal",
@@ -1508,49 +1513,51 @@ test("the formal adoption attempt is never written into a Git worktree", async (
 	);
 });
 
-test("a new template validation preserves the approved capacity bytes and evidence references", async (t) => {
-	const f = await fixture(t);
-	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
-	const approved = await readFile(f.capacity.profilesFile);
-	const capacityBefore = await readFile(f.files.capacity);
-	const templates = await refreshMeasurements(f);
-	const result = await publishRuntimeInputs(
-		f.files,
-		f.rendered,
-		source,
-		f.kubectl,
-		true,
-	);
-	assert.equal(result.status, "passed");
-	assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
-	assert.deepEqual(await readFile(f.files.capacity), capacityBefore);
-	assert.deepEqual(
-		Buffer.from(
-			f.cluster.get("secret/worker-config").data["capacity.json"],
-			"base64",
-		),
-		approved,
-	);
-	for (const template of templates) {
-		for (const component of ["api", "worker"]) {
-			const bytes = f.cluster.get(`secret/${component}-config`).data[
-				`template-validation-${template.templateId}.json`
-			];
-			const record = JSON.parse(Buffer.from(bytes, "base64"));
-			assert.equal(record.schemaVersion, 2);
-			assert.deepEqual(
-				record.candidate,
-				JSON.parse(await readFile(template.validationFile)),
-			);
-			assert.equal(
-				bytes,
-				f.cluster.get("secret/api-config").data[
+for (const trial of [false, true])
+	test(`refresh preserves approved capacity bytes and evidence (trial=${trial})`, async (t) => {
+		const f = await fixture(t, 1, trial);
+		f.files.codexTrial = trial;
+		await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+		const approved = await readFile(f.capacity.profilesFile);
+		const capacityBefore = await readFile(f.files.capacity);
+		const templates = await refreshMeasurements(f);
+		const result = await publishRuntimeInputs(
+			f.files,
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		);
+		assert.equal(result.status, "passed");
+		assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
+		assert.deepEqual(await readFile(f.files.capacity), capacityBefore);
+		assert.deepEqual(
+			Buffer.from(
+				f.cluster.get("secret/worker-config").data["capacity.json"],
+				"base64",
+			),
+			approved,
+		);
+		for (const template of templates) {
+			for (const component of ["api", "worker"]) {
+				const bytes = f.cluster.get(`secret/${component}-config`).data[
 					`template-validation-${template.templateId}.json`
-				],
-			);
+				];
+				const record = JSON.parse(Buffer.from(bytes, "base64"));
+				assert.equal(record.schemaVersion, 2);
+				assert.deepEqual(
+					record.candidate,
+					JSON.parse(await readFile(template.validationFile)),
+				);
+				assert.equal(
+					bytes,
+					f.cluster.get("secret/api-config").data[
+						`template-validation-${template.templateId}.json`
+					],
+				);
+			}
 		}
-	}
-});
+	});
 
 test("a new template image receives a new capacity approval without replacing other approvals", async (t) => {
 	const f = await fixture(t);
