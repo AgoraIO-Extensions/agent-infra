@@ -61,6 +61,7 @@ import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
 } from "./native-metadata-deployment-assembly.js";
+import type { WecomEmployeeConfiguration } from "./oidc-wecom-identity.js";
 import {
 	createPlatformRuntimeModelDirectoryGatewayV1,
 	createPlatformRuntimeModelDirectoryPortsV1,
@@ -91,6 +92,7 @@ import {
 } from "./workload-runtime.js";
 
 type DeploymentConfiguration = {
+	readonly oidcEmployees?: WecomEmployeeConfiguration;
 	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 	readonly automaticTemplatePublications?: readonly import("./template-publication-worker.js").WorkerTemplatePublicationV1[];
 	readonly evaluationPolicy?: {
@@ -273,7 +275,8 @@ const {
 	workloadInput: configuredWorkloadInputFromModule,
 	signing,
 	serviceToken,
-	directory,
+	directory: configuredDirectory,
+	oidcEmployees,
 	relayKeyDecryptionKeys,
 	wecom,
 	connectionConsumerProfile,
@@ -972,9 +975,24 @@ async function createPreparedOwning(
 			throw new Error("WORKER_EXECUTION_KEY_CONFIGURATION_INVALID");
 		}
 	}
+	const employeeAuthority =
+		oidcEmployees === undefined
+			? undefined
+			: (await import("./oidc-wecom-identity.js")).openWecomEmployeeIdentity(
+					oidcEmployees,
+					workload.databaseUrl,
+				);
+	if (employeeAuthority) {
+		const previousClose = owned.close;
+		owned.close = async () => {
+			await Promise.all([employeeAuthority.close(), previousClose?.()]);
+		};
+	}
+	const directory = employeeAuthority?.directory ?? configuredDirectory;
 	const wecomDeployment = createWecomDeploymentCoordinatorV1({
 		databaseUrl: workload.databaseUrl,
 		configuration: wecom,
+		employeeAuthority,
 		sessionSandboxReserves,
 	});
 	const executorStartupTimeout =
@@ -1160,6 +1178,7 @@ async function createPreparedOwning(
 				? { connectionInstallation: authorizedInstallation }
 				: {}),
 			closeDeployment: async () => {
+				await employeeAuthority?.close();
 				await connectionDelivery?.close();
 				await installationStore?.close();
 				await manualWorker?.close();

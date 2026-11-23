@@ -199,6 +199,11 @@ export {
 	configureStorePoolMax,
 	configureStoreQueryObservability,
 } from "./observed-postgres.js";
+export {
+	OidcBindingError,
+	type OidcEmployeeAccount,
+	PostgresOidcIdentityStore,
+} from "./oidc-identity-store.js";
 export * from "./operations-resource.js";
 export * from "./operations-task.js";
 export {

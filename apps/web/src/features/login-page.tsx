@@ -1,7 +1,7 @@
 import { Clock } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { buttonVariants } from "@/components/ui/button";
-import { LoginAction } from "./login-action";
+import { isSafeLoginEndpoint, LoginAction } from "./login-action";
 
 type LoginPageProps = {
 	/** 部署配置的登录入口；未配置时只显示说明。 */
@@ -20,15 +20,29 @@ type LoginPageProps = {
 
 /**
  * 设计 login.html：确认未登录后整页渲染，不渲染应用侧栏、顶栏与身份卡。
- * 保持当前 URL，登录成功后由壳层直接显示原目标页，不引入跳转参数。
+ * OIDC 登录从服务端入口整页跳转到公司身份提供方。
  */
 export function LoginPage({
-	loginUrl,
+	loginUrl: configuredUrl,
 	development,
 	expired,
 	focusOnEntry = false,
 	onLoggedIn,
 }: LoginPageProps) {
+	// ApplicationShell has already parsed the deployment URL. OIDC starts at a fixed same-origin route.
+	const target = configuredUrl
+		? new URL(configuredUrl, window.location.origin)
+		: undefined;
+	const oidc = target?.pathname === "/auth/oidc/login";
+	let loginUrl = configuredUrl;
+	if (
+		oidc &&
+		(!isSafeLoginEndpoint(target.href, window.location.origin) ||
+			target.search ||
+			target.hash)
+	) {
+		loginUrl = undefined;
+	}
 	const main = useRef<HTMLElement>(null);
 	const title = useRef<HTMLHeadingElement>(null);
 	// 主动退出后「退出登录」（窄屏连同导航 Sheet）、「重新登录」确认会话已失效后的触发按钮都随壳层卸载，
@@ -82,12 +96,12 @@ export function LoginPage({
 						</div>
 					)}
 					{loginUrl ? (
-						development ? (
+						development || oidc ? (
 							<a
 								className={buttonVariants({ className: "login-submit" })}
 								href={loginUrl}
 							>
-								选择开发测试身份
+								{oidc ? "使用公司账号登录" : "选择开发测试身份"}
 							</a>
 						) : (
 							<LoginAction endpoint={loginUrl} onLoggedIn={onLoggedIn} />

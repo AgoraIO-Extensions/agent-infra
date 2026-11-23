@@ -270,6 +270,12 @@ export function resolveDeploymentSkillAgentVersionV1(
 
 /** Merge explicit mounted deployment ports without allowing duplicate authorities. */
 export function mergeProductionPlatformApiDeploymentPortsV1(input: {
+	readonly employeeWecomAuthority?: {
+		identity: NonNullable<PlatformApiAssemblyInput["wecomIdentity"]>;
+		directory: NonNullable<
+			NonNullable<PlatformApiAssemblyInput["wecom"]>["userDirectory"]
+		>;
+	};
 	readonly apiInput: ProductionPlatformApiInputV1;
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
@@ -339,6 +345,20 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		throw new Error("PLATFORM_FILES_DUPLICATE");
 	return {
 		...input.apiInput,
+		...(input.employeeWecomAuthority
+			? {
+					wecomIdentity: input.employeeWecomAuthority.identity,
+					...(input.apiInput.wecom
+						? {
+								wecom: {
+									...input.apiInput.wecom,
+									identity: input.employeeWecomAuthority.identity,
+									userDirectory: input.employeeWecomAuthority.directory,
+								},
+							}
+						: {}),
+				}
+			: {}),
 		...(input.customAgentGateway !== undefined
 			? { customAgentGateway: input.customAgentGateway }
 			: {}),

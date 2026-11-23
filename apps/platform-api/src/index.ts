@@ -177,7 +177,12 @@ export function startPlatformApi(options: StartOptions) {
 	const browserAuth = options.browserAuth;
 	const standardTemplateReleaseApp = options.standardTemplateReleaseApp;
 	if (browserAuth) {
-		for (const path of ["/auth/login", "/auth/logout"] as const) {
+		for (const path of [
+			"/auth/login",
+			"/auth/logout",
+			"/auth/oidc/login",
+			"/auth/oidc/callback",
+		] as const) {
 			app.all(path, async (context) => {
 				try {
 					const response = await browserAuth.handleRequest(context.req.raw);

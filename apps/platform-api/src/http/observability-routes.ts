@@ -27,6 +27,18 @@ export function registerObservabilityRoutes(
 	app: Hono,
 	dependencies: ObservabilityRoutesDependencies,
 ): void {
+	app.get("/api/v1/ops/dashboard-access", async (context) => {
+		const { traceId } = requestMetadata(context.req.raw);
+		const identity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			traceId,
+		);
+		if (!identity.roles.includes("system_admin"))
+			throw new HttpProtocolError("FORBIDDEN", traceId);
+		context.header("Cache-Control", "no-store");
+		return context.body(null, 204);
+	});
 	app.get("/api/v1/ops/observability", async (context) => {
 		const metadata = requestMetadata(context.req.raw);
 		const identity = await resolveIdentity(

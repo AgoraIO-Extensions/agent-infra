@@ -264,6 +264,18 @@ export function ResourceDashboard({
 			</section>
 			<Panel title="定位入口" id={`${id}-diagnosis`}>
 				<nav className="ops-diagnosis-links" aria-label="按问题定位">
+					{data.links
+						.filter((link) => link.kind === "metrics")
+						.map((link) => (
+							<a
+								key={link.kind}
+								href={link.url}
+								target="_blank"
+								rel="noreferrer"
+							>
+								执行影响看板 ↗
+							</a>
+						))}
 					<a href="#ops-capacity">创建受阻 · 预算与配额</a>
 					<a href="#ops-cache">启动缓慢 · 镜像与事件</a>
 					<a href="#ops-resources">资源占用 · Agent 与实例</a>

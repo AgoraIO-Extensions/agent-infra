@@ -14765,6 +14765,52 @@
         }
       }
     },
+    "/api/v1/ops/dashboard-access": {
+      "get": {
+        "operationId": "checkOperationsDashboardAccess",
+        "responses": {
+          "204": {
+            "description": "Active system administrator"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Identity service unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Check the current Platform session for administrator dashboard access"
+      }
+    },
     "/api/v1/ops/observability": {
       "get": {
         "description": "System administrators only, resolved by the server from the current browser session; caller-supplied identity fields are ignored. Returns only the redacted capture and export health of Platform API observability. A signed-out session returns 401; a non-administrator or disabled account returns 403. Observability that is not assembled or cannot report its status returns 503. A deployment that does not provide this query answers 404 without a protocol body.",

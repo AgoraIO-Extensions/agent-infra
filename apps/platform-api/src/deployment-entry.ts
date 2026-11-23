@@ -1,5 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import { createDirectoryClient } from "@agent-infra/enterprise-directory";
+import {
+	createLdapIdentityDirectory,
+	createWecomEmployeeIdentity,
+} from "@agent-infra/identity";
 import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
@@ -8,6 +12,7 @@ import {
 import {
 	type ConnectionManualInstallationDeploymentV1,
 	decideConnectionManualInstallationDeploymentV1,
+	PostgresOidcIdentityStore,
 	PostgresPlatformUserDisablesV1,
 	readConnectionManualInstallationEnvironmentV1,
 } from "@agent-infra/platform-store";
@@ -38,6 +43,7 @@ import {
 	createProductionSingleAgentTemplateReleaseAppV1,
 	type ProductionTemplateUpgradeInputV2,
 } from "./index.js";
+import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
 
 interface DeploymentStandardTemplateReleaseInputV1 {
@@ -58,6 +64,8 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 }
 const {
 	ldap,
+	oidc,
+	verifiedWecomMember,
 	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
@@ -233,7 +241,7 @@ const deploymentAgentVersion = resolveDeploymentSkillAgentVersionV1(
 	process.env.AGENT_INFRA_AGENT_VERSION,
 );
 const configuredDatabaseUrl = databaseUrl;
-if (typeof ldap?.verifyCurrentStatus !== "function") {
+if (oidc === undefined && typeof ldap?.verifyCurrentStatus !== "function") {
 	throw new Error("LDAP current account authority is required");
 }
 if (typeof directorySearch !== "function") {
@@ -256,7 +264,16 @@ if (!tokenFile?.startsWith("/")) {
 	throw new Error("PLATFORM_API_PROXY_TOKEN_FILE must be an absolute path");
 }
 const trustedProxyToken = await readFile(tokenFile, "utf8");
-const directory = createLdapIdentityDirectory(ldap);
+const oidcStore =
+	oidc === undefined ? undefined : new PostgresOidcIdentityStore(databaseUrl);
+const oidcDirectory =
+	oidcStore &&
+	createOidcEmployeeDirectory(
+		oidc,
+		oidcStore,
+		createDirectoryClient(directorySnapshot),
+	);
+const directory = oidcDirectory ?? createLdapIdentityDirectory(ldap);
 const userGovernance = new PostgresPlatformUserDisablesV1(
 	databaseUrl,
 	async (userId) => {
@@ -271,6 +288,15 @@ const userGovernance = new PostgresPlatformUserDisablesV1(
 	},
 );
 const browser = createPostgresLdapBrowserDeployment({
+	...(oidcDirectory && oidcStore
+		? {
+				oidc: {
+					...oidc,
+					store: oidcStore,
+					verifiedAccount: oidcDirectory.verifiedAccount,
+				},
+			}
+		: {}),
 	databaseUrl,
 	directory,
 	isPlatformDisabled: userGovernance.isPlatformDisabled.bind(userGovernance),
@@ -413,6 +439,20 @@ function assembleManualStandardTemplateReleaseApp() {
 	});
 }
 
+const employeeWecomAuthority =
+	oidcStore && verifiedWecomMember !== undefined
+		? createWecomEmployeeIdentity(
+				{
+					snapshot: createDirectoryClient(directorySnapshot),
+					organizationIdForDepartment:
+						directorySnapshot.organizationIdForDepartment,
+					administratorUserIds: oidc.administratorUserIds,
+					verifiedWecomMember,
+				},
+				oidcStore,
+				(id) => userGovernance.isPlatformDisabled(id),
+			)
+		: undefined;
 export const browserAuth = browser.browserAuth;
 function assembleStandardTemplateReleaseApp() {
 	const manual = assembleManualStandardTemplateReleaseApp();
@@ -470,6 +510,7 @@ export function createPlatformApiAssemblyInput() {
 			: undefined);
 	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
 		apiInput,
+		employeeWecomAuthority,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(modelDirectory !== undefined ? { modelDirectory } : {}),

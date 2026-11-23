@@ -2275,6 +2275,7 @@ describe("published Relay authority migration", () => {
 			96,
 			97,
 			98,
+			99,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2408,9 +2409,17 @@ describe("published Relay authority migration", () => {
 			idx: 96,
 			tag: "0096_connection_principal_pin_rules",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 97)).toMatchObject({
+			idx: 97,
+			tag: "0097_runtime_safety_evidence",
+		});
+		expect(journal.entries.find((entry) => entry.idx === 98)).toMatchObject({
 			idx: 98,
-			tag: "0098_template_auto_publications",
+			tag: "0098_oidc_employee_accounts",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 99,
+			tag: "0099_template_auto_publications",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3199,7 +3208,27 @@ describe("published Relay authority migration", () => {
 				"runtime_safety_evidence:runtime_safety_evidence_execution",
 				"runtime_safety_evidence:runtime_safety_evidence_pkey",
 			);
-			// 0098: deployment-owned automatic template publication.
+			expectedDelta.columns.push(
+				...["user_id", "employee_id", "issuer", "subject", "email"].map(
+					(name) => `oidc_employee_accounts:${name}`,
+				),
+				...["expires_at", "nonce", "verifier", "key"].map(
+					(name) => `oidc_login_transactions:${name}`,
+				),
+			);
+			expectedDelta.checks.push("oidc_employee_accounts:oidc_complete_binding");
+			expectedDelta.indexes.push(
+				...[
+					"oidc_bound_subject",
+					"oidc_employee_accounts_pkey",
+					"oidc_employee_accounts_email_unique",
+					"oidc_employee_accounts_employee_id_unique",
+				].map((n) => `oidc_employee_accounts:${n}`),
+				"oidc_login_transactions:oidc_login_expiry",
+				"oidc_login_transactions:oidc_login_transactions_pkey",
+			);
+
+			// 0099: deployment-owned automatic template publication.
 			expectedDelta.columns.push(
 				...["template_id", "publication_id", "revision"].map(
 					(name) => `template_publication_catalog:${name}`,

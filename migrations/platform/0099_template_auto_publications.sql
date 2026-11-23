@@ -51,10 +51,7 @@ ALTER TABLE "platform"."template_publication_targets" ADD CONSTRAINT "template_p
 ALTER TABLE "platform"."template_publication_targets" ADD CONSTRAINT "template_publication_targets_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "platform"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "template_publication_nonce_expiry" ON "platform"."template_publication_nonces" USING btree ("expires_at");--> statement-breakpoint
 CREATE INDEX "template_publication_target_pending" ON "platform"."template_publication_targets" USING btree ("publication_id","status","id");--> statement-breakpoint
-CREATE INDEX "template_publication_template" ON "platform"."template_publications" USING btree ("template_id");
---> statement-breakpoint
--- The ordering barrier also covers older writers during a rolling upgrade.
--- The existing runtime-revision default trigger runs first (0067).
+CREATE INDEX "template_publication_template" ON "platform"."template_publications" USING btree ("template_id");--> statement-breakpoint
 CREATE FUNCTION "platform"."guard_template_publication_source"()
 RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, platform AS $$
 DECLARE target_digest text;

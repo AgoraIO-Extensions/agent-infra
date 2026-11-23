@@ -52,7 +52,7 @@ const stateNames = {
 function localInput(value: Date) {
 	return new Date(value.getTime() - value.getTimezoneOffset() * 60000)
 		.toISOString()
-		.slice(0, 16);
+		.slice(0, -1);
 }
 
 function HistoryChart({
@@ -138,6 +138,8 @@ export function ResourceHistory({
 	identityKey,
 	agentId,
 	sessionId,
+	from,
+	to,
 	links,
 	objects,
 	onDenied,
@@ -145,6 +147,8 @@ export function ResourceHistory({
 	identityKey: string;
 	agentId: string;
 	sessionId: string;
+	from?: number;
+	to?: number;
 	links: OperationsResourcesV2["links"];
 	objects: readonly { uid: string; name: string }[];
 	onDenied?: () => void;
@@ -155,9 +159,9 @@ export function ResourceHistory({
 	const [statistic, setStatistic] = useState<"average" | "maximum">("average");
 	const [resourceUid, setResourceUid] = useState("");
 	const [start, setStart] = useState(() =>
-		localInput(new Date(Date.now() - 3600000)),
+		localInput(new Date(from ?? Date.now() - 3600000)),
 	);
-	const [end, setEnd] = useState(() => localInput(new Date()));
+	const [end, setEnd] = useState(() => localInput(new Date(to ?? Date.now())));
 	const [error, setError] = useState("");
 	const [request, setRequest] = useState<OperationsHistoryQueryV2 | null>(null);
 	const query = useQuery({
@@ -282,6 +286,7 @@ export function ResourceHistory({
 						<Label htmlFor={`${id}-start`}>开始时间</Label>
 						<Input
 							type="datetime-local"
+							step="0.001"
 							id={`${id}-start`}
 							value={start}
 							required
@@ -292,6 +297,7 @@ export function ResourceHistory({
 						<Label htmlFor={`${id}-end`}>结束时间</Label>
 						<Input
 							type="datetime-local"
+							step="0.001"
 							id={`${id}-end`}
 							value={end}
 							required
@@ -343,18 +349,28 @@ export function ResourceHistory({
 				)
 			)}
 			<div className="ops-diagnosis-links">
-				{links.map((link) => {
-					const url = new URL(link.url);
-					if (request) {
-						url.searchParams.set("from", request.start);
-						url.searchParams.set("to", request.end);
-					}
-					return (
-						<a key={link.kind} href={url.href} target="_blank" rel="noreferrer">
-							打开{link.kind === "logs" ? "日志" : "Trace"} ↗
-						</a>
-					);
-				})}
+				{links
+					.filter((link) => link.kind !== "metrics")
+					.map((link) => {
+						const url = new URL(link.url);
+						if (request) {
+							url.searchParams.set("from", request.start);
+							url.searchParams.set("to", request.end);
+						} else if (from !== undefined && to !== undefined) {
+							url.searchParams.set("from", new Date(from).toISOString());
+							url.searchParams.set("to", new Date(to).toISOString());
+						}
+						return (
+							<a
+								key={link.kind}
+								href={url.href}
+								target="_blank"
+								rel="noreferrer"
+							>
+								打开{link.kind === "logs" ? "日志" : "Trace"} ↗
+							</a>
+						);
+					})}
 			</div>
 		</Card>
 	);

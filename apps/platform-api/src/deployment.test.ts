@@ -214,6 +214,33 @@ describe("explicit custom Agent deployment ports", () => {
 		).toThrow();
 	});
 
+	it("selects the employee authority for configured WeCom callbacks, durable admission and receipts", () => {
+		const identity = {
+			resolveSender: async () => null,
+			activeUsers: async () => [],
+		};
+		const directory = { resolveUser: async () => null };
+		const existing = {
+			identity: { ...identity },
+			userDirectory: { ...directory },
+			replyEncryptionPublicKeyPem: "fixture",
+			resolveBinding: async () => null,
+			observe: () => {},
+		};
+		const result = mergeProductionPlatformApiDeploymentPortsV1({
+			apiInput: {
+				...fixture.input,
+				wecom: existing,
+				wecomIdentity: existing.identity,
+			},
+			employeeWecomAuthority: { identity, directory },
+		});
+		expect(result.wecomIdentity).toBe(identity);
+		expect(result.wecom?.identity).toBe(identity);
+		expect(result.wecom?.userDirectory).toBe(directory);
+		expect(result.wecom?.resolveBinding).toBe(existing.resolveBinding);
+	});
+
 	it("rejects a duplicate file data plane authority", () => {
 		const files = {} as ProductionPlatformApiInputV1["files"];
 		expect(() =>
@@ -2385,22 +2412,27 @@ describe("production API creation with user and application Tokens", () => {
 						}),
 						{ headers: { "content-type": "text/event-stream" } },
 					);
-				if (String(url).endsWith("/responses") && probeStatus !== 200)
+				if (String(url).endsWith("/responses") && probeStatus !== 200) {
+					if (options.codexClientOnly) {
+						const envelope = JSON.stringify({
+							error: {
+								message: "This account only allows Codex official clients",
+								type: "forbidden_error",
+							},
+						});
+						return new Response(
+							`${envelope}event: response.failed\ndata: {"detail":"relay-response-canary"}\n\n`,
+							{
+								status: probeStatus,
+								headers: { "content-type": "application/json; charset=utf-8" },
+							},
+						);
+					}
 					return Response.json(
-						{
-							detail: "relay-response-canary",
-							...(options.codexClientOnly
-								? {
-										error: {
-											type: "forbidden_error",
-											message:
-												"This account only allows Codex official clients",
-										},
-									}
-								: {}),
-						},
+						{ detail: "relay-response-canary" },
 						{ status: probeStatus },
 					);
+				}
 				if (String(url).endsWith("/responses"))
 					return new Response(
 						`data: ${JSON.stringify({

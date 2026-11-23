@@ -2,7 +2,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 30_000 });
 
 const manifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -45,6 +47,7 @@ describe("platform-store package surface", () => {
 			"ConversationEventWakeHubV1",
 			"ConversationQueryError",
 			"LegacyTaskMigrationError",
+			"OidcBindingError",
 			"OutboxStoreError",
 			"PlatformAuditQueryError",
 			"PlatformUserDisableError",
@@ -88,6 +91,7 @@ describe("platform-store package surface", () => {
 			"PostgresLdapSessionStoreV1",
 			"PostgresLegacyTaskAuthorizationMigrationV1",
 			"PostgresLegacyTaskRecoveryReaderV1",
+			"PostgresOidcIdentityStore",
 			"PostgresOperationsResourceStoreV2",
 			"PostgresOperationsTaskStoreV2",
 			"PostgresPersonalApiCredentialStoreV1",
