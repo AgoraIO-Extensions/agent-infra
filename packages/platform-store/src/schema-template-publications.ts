@@ -58,9 +58,7 @@ export const templatePublicationNonces = platformSchema.table(
 			.references(() => templatePublications.id),
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 	},
-	(t) => [
-		index("template_publication_nonce_expiry").on(t.expiresAt),
-	],
+	(t) => [index("template_publication_nonce_expiry").on(t.expiresAt)],
 );
 
 export const templatePublicationCatalog = platformSchema.table(

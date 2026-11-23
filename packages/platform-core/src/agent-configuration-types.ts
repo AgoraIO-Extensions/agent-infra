@@ -1,4 +1,3 @@
-import type { AutomaticTemplatePublicationCommitV1 } from "./automatic-template-publication.js";
 import type {
 	AgentDefaultRelayKeyBindingV1,
 	AgentDefaultRelayKeyDependenciesV1,
@@ -7,7 +6,10 @@ import type {
 	AgentManagementActorContextV1,
 	AgentManagementStateV1,
 } from "./agent-management.js";
-import type { AutomaticTemplatePublicationAuthorizationPortV1 } from "./automatic-template-publication.js";
+import type {
+	AutomaticTemplatePublicationAuthorizationPortV1,
+	AutomaticTemplatePublicationCommitV1,
+} from "./automatic-template-publication.js";
 import type {
 	PendingSecretRecordAttachmentResolverV1,
 	PendingSecretRecordAttachmentsV1,

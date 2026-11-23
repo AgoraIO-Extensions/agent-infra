@@ -11,15 +11,64 @@ import {
 } from "./agent-configuration-values.js";
 
 export interface AutomaticTemplatePublicationCommitV1 {
-	readonly schemaVersion: 1; readonly publicationId: string; readonly authorizationRevision: string; readonly batchRef: string; readonly targetRef: string; readonly servicePrincipalRef: string; readonly approvedBy: string;
-	readonly lease: { readonly schemaVersion: 1; readonly itemId: string; readonly leaseOwner: string; readonly deliveryFence: string };
+	readonly schemaVersion: 1;
+	readonly publicationId: string;
+	readonly authorizationRevision: string;
+	readonly batchRef: string;
+	readonly targetRef: string;
+	readonly servicePrincipalRef: string;
+	readonly approvedBy: string;
+	readonly lease: {
+		readonly schemaVersion: 1;
+		readonly itemId: string;
+		readonly leaseOwner: string;
+		readonly deliveryFence: string;
+	};
 }
-export function parseAutomaticTemplatePublicationCommitV1(input: unknown): AutomaticTemplatePublicationCommitV1 {
-	if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error();
-	const v = input as Record<string, unknown>; const lease = v.lease;
-	if(v.schemaVersion!==1 || typeof v.publicationId!=="string" || typeof v.authorizationRevision!=="string" || typeof v.batchRef!=="string" || typeof v.targetRef!=="string" || typeof v.servicePrincipalRef!=="string" || typeof v.approvedBy!=="string" || !lease || typeof lease!=="object" || Array.isArray(lease)) throw new Error();
-	const l=lease as Record<string,unknown>; if(l.schemaVersion!==1 || typeof l.itemId!=="string" || typeof l.leaseOwner!=="string" || typeof l.deliveryFence!=="string" || !/^[1-9][0-9]{0,18}$/.test(l.deliveryFence)) throw new Error();
-	return {schemaVersion:1,publicationId:v.publicationId,authorizationRevision:v.authorizationRevision,batchRef:v.batchRef,targetRef:v.targetRef,servicePrincipalRef:v.servicePrincipalRef,approvedBy:v.approvedBy,lease:{schemaVersion:1,itemId:l.itemId,leaseOwner:l.leaseOwner,deliveryFence:l.deliveryFence}};
+export function parseAutomaticTemplatePublicationCommitV1(
+	input: unknown,
+): AutomaticTemplatePublicationCommitV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new Error();
+	const v = input as Record<string, unknown>;
+	const lease = v.lease;
+	if (
+		v.schemaVersion !== 1 ||
+		typeof v.publicationId !== "string" ||
+		typeof v.authorizationRevision !== "string" ||
+		typeof v.batchRef !== "string" ||
+		typeof v.targetRef !== "string" ||
+		typeof v.servicePrincipalRef !== "string" ||
+		typeof v.approvedBy !== "string" ||
+		!lease ||
+		typeof lease !== "object" ||
+		Array.isArray(lease)
+	)
+		throw new Error();
+	const l = lease as Record<string, unknown>;
+	if (
+		l.schemaVersion !== 1 ||
+		typeof l.itemId !== "string" ||
+		typeof l.leaseOwner !== "string" ||
+		typeof l.deliveryFence !== "string" ||
+		!/^[1-9][0-9]{0,18}$/.test(l.deliveryFence)
+	)
+		throw new Error();
+	return {
+		schemaVersion: 1,
+		publicationId: v.publicationId,
+		authorizationRevision: v.authorizationRevision,
+		batchRef: v.batchRef,
+		targetRef: v.targetRef,
+		servicePrincipalRef: v.servicePrincipalRef,
+		approvedBy: v.approvedBy,
+		lease: {
+			schemaVersion: 1,
+			itemId: l.itemId,
+			leaseOwner: l.leaseOwner,
+			deliveryFence: l.deliveryFence,
+		},
+	};
 }
 export interface AutomaticTemplatePublicationAuthorizationV1 {
 	readonly schemaVersion: 1;
@@ -72,7 +121,9 @@ export async function admitAutomaticTemplatePublicationV1(
 			"authorizationRevision",
 			"publication",
 		]);
-		const publication = parseAutomaticTemplatePublicationCommitV1(value.publication);
+		const publication = parseAutomaticTemplatePublicationCommitV1(
+			value.publication,
+		);
 		if (
 			value.schemaVersion !== 1 ||
 			value.intent !== "standard_template.auto_publish" ||

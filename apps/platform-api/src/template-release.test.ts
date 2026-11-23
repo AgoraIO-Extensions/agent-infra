@@ -408,8 +408,12 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			candidateFileSha256: "b".repeat(64),
 			preflightFileSha256: "c".repeat(64),
 		});
+		const baseTemplate = input.templates.find(
+			(template) => template.templateId === target.templateId,
+		);
+		if (!baseTemplate) throw new Error("standard fixture expected");
 		automaticTemplate = {
-			...input.templates[0],
+			...baseTemplate,
 			configurationRevision: "catalog-2",
 			modelBinding: {
 				templateId: target.templateId,

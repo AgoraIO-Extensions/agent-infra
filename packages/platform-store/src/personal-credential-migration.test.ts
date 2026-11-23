@@ -420,7 +420,7 @@ describe("personal credential disable authority append", () => {
 		);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const after = await snapshot();
-	expect(after.history).toHaveLength(29 + appendedHistory.length);
+		expect(after.history).toHaveLength(29 + appendedHistory.length);
 		expect(after.history.slice(0, 29)).toEqual(before.history);
 		expect(after.history[29]).toMatchObject({
 			hash: checkpoint.newMigration.sqlSHA256,
@@ -518,7 +518,7 @@ describe("personal credential disable authority append", () => {
 		const originalHistory = await history();
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const upgradedHistory = await history();
-	expect(upgradedHistory).toHaveLength(prefixLength + appendedHistory.length);
+		expect(upgradedHistory).toHaveLength(prefixLength + appendedHistory.length);
 		expect(upgradedHistory.slice(0, prefixLength)).toEqual(originalHistory);
 		expect(
 			upgradedHistory
@@ -561,7 +561,7 @@ describe("personal credential disable authority append", () => {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const upgradedHistory = await history();
 		expect(upgradedHistory).toHaveLength(
-		originalHistory.length + appendedHistory.length,
+			originalHistory.length + appendedHistory.length,
 		);
 		expect(upgradedHistory.slice(0, originalHistory.length)).toEqual(
 			originalHistory,

@@ -1,4 +1,3 @@
-import { parseAutomaticTemplatePublicationCommitV1 } from "./automatic-template-publication.js";
 import {
 	accessTargetKey,
 	parseAvailabilityScope,
@@ -35,6 +34,7 @@ import {
 	snapshotAgentManagementDataObject,
 	snapshotAgentManagementDenseArray,
 } from "./agent-management-input.js";
+import { parseAutomaticTemplatePublicationCommitV1 } from "./automatic-template-publication.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import { parseSkillHubAgentBindingWriteV1 } from "./skill-hub-agent-binding.js";
 
