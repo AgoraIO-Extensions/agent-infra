@@ -6951,9 +6951,8 @@ function isConnectionResponseCredentialRecoveryMetadataAddition(
 				"application/json"
 			]?.schema;
 		if (
-			!before ||
 			!after ||
-			before.properties?.credentialRecoveryAvailable !== undefined ||
+			before?.properties?.credentialRecoveryAvailable !== undefined ||
 			!sameValue(after.properties?.credentialRecoveryAvailable, {
 				const: true,
 				type: "boolean",

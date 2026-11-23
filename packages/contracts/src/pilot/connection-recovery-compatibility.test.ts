@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { readEvaluationBaseline } from "../test/evaluation-baseline.js";
 
 it("admits only optional true recovery metadata without changing old authentication or response fields", async () => {
 	const after = JSON.parse(
@@ -22,8 +23,8 @@ it("admits only optional true recovery metadata without changing old authenticat
 		delete schema(before, method).properties.credentialRecoveryAvailable;
 	const dir = await mkdtemp(join(tmpdir(), "connection-recovery-compat-"));
 	try {
-		async function compare(current: typeof after) {
-			await writeFile(join(dir, "before.json"), JSON.stringify(before));
+		async function compare(current: typeof after, previous = before) {
+			await writeFile(join(dir, "before.json"), JSON.stringify(previous));
 			await writeFile(join(dir, "after.json"), JSON.stringify(current));
 			return spawnSync(
 				process.execPath,
@@ -38,6 +39,7 @@ it("admits only optional true recovery metadata without changing old authenticat
 			).status;
 		}
 		expect(await compare(after)).toBe(0);
+		expect(await compare(after, await readEvaluationBaseline("v2"))).toBe(0);
 		for (const mutate of [
 			(doc: typeof after) => {
 				doc.paths[path].put.security = [];
