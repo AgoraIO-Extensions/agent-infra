@@ -367,3 +367,61 @@ it("sums independent sources after deduplicating replicas by source", () => {
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+it("escapes configured source names in PromQL and excludes similar sources", () => {
+	const directory = mkdtempSync(join(tmpdir(), "platform-alert-regex-"));
+	try {
+		const rules = join(directory, "scoped.yaml");
+		const sourceConfiguration = {
+			...configuration,
+			databaseSources: ["db.a", "db-b"],
+			thresholds: { ...configuration.thresholds, forSeconds: 180 },
+		};
+		writeFileSync(rules, stringify(platformAlertRules(sourceConfiguration)));
+		execFileSync("promtool", ["check", "rules", rules], { stdio: "pipe" });
+		const testFile = join(directory, "regex-tests.yaml");
+		writeFileSync(
+			testFile,
+			stringify({
+				rule_files: [rules],
+				evaluation_interval: "30s",
+				tests: [
+					{
+						name: "escaped configured source and excluded similar source",
+						interval: "30s",
+						input_series: [
+							sourceSample("db.a", "a", 60),
+							sourceSample("db.a", "b", 60),
+							sourceSample("db-b", "b", 60),
+							sourceSample("dbXa", "x", 120),
+						],
+						alert_rule_test: [
+							{
+								eval_time: "4m",
+								alertname: "AgentPlatformOutboxBacklog",
+								exp_alerts: [
+									{
+										exp_labels: {
+											severity: "warning",
+											kind: "backlog",
+											...sourceConfiguration.scope,
+										},
+										exp_annotations: {
+											summary: "Platform outbox backlog is sustained",
+										},
+									},
+								],
+							},
+						],
+					},
+				],
+			}),
+		);
+		execFileSync("promtool", ["test", "rules", testFile], {
+			stdio: "pipe",
+			timeout: 30_000,
+		});
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
