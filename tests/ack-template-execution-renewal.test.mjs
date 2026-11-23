@@ -18,6 +18,9 @@ function bundle(entry) {
 		write: false,
 		logLevel: "error",
 		alias: {
+			"@agent-infra/contracts/pilot": resolve(
+				"packages/contracts/src/pilot/index.ts",
+			),
 			"@agent-infra/contracts/runtime": resolve(
 				"packages/contracts/src/runtime/index.ts",
 			),
