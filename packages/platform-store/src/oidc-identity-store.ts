@@ -96,7 +96,6 @@ export class PostgresOidcIdentityStore {
 	async bind(
 		input: DirectoryIdentity & { issuer: string; subject: string },
 	): Promise<OidcEmployeeAccount> {
-		const { employeeId, email } = employee(input);
 		const { issuer, subject } = input;
 		if (
 			!issuer.trim() ||
@@ -105,6 +104,22 @@ export class PostgresOidcIdentityStore {
 			subject.length > 255
 		)
 			conflict();
+		return this.resolveEmployee(input, { issuer, subject });
+	}
+
+	resolveDirectoryEmployee(
+		input: DirectoryIdentity,
+	): Promise<OidcEmployeeAccount> {
+		return this.resolveEmployee(input, null);
+	}
+
+	private async resolveEmployee(
+		input: DirectoryIdentity,
+		binding: { issuer: string; subject: string } | null,
+	): Promise<OidcEmployeeAccount> {
+		const { employeeId, email } = employee(input);
+		const issuer = binding?.issuer ?? null;
+		const subject = binding?.subject ?? null;
 		return this.sql
 			.begin(async (sql) => {
 				// Serialize first logins for this employee, including logins from different API replicas.
@@ -116,10 +131,12 @@ export class PostgresOidcIdentityStore {
 				if (existing) {
 					if (
 						existing.email !== email ||
-						(existing.issuer === issuer && existing.subject !== subject)
+						(binding &&
+							existing.issuer === issuer &&
+							existing.subject !== subject)
 					)
 						conflict();
-					if (existing.issuer !== issuer) {
+					if (binding && existing.issuer !== issuer) {
 						await sql`update platform.oidc_employee_accounts set issuer=${issuer},subject=${subject}
 						where user_id=${existing.userId}`;
 					}
