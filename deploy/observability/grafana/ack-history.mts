@@ -83,7 +83,7 @@ export function ackHistoryPanels(
 			})),
 		};
 	}
-	return [
+	const panels = [
 		panel("CPU 实测 · 有样本范围", "cores", [
 			["节点（共享）", sum("node,cpu,mode", rate(nodeCpu))],
 			["namespace 容器", sum("namespace,pod,container,id", rate(cpu))],
@@ -120,14 +120,19 @@ export function ackHistoryPanels(
 			],
 			["CPU Pod", count("pod", rate(cpu))],
 			["内存 Pod", count("pod", fresh(mem))],
+			["Ready 指标 Pod", count(pod, fresh(ready))],
+			["重启指标容器", count(pod + ",container", fresh(restarts))],
+			["状态指标 PVC", count(pvc, fresh(phase))],
+			["申请容量 PVC", count(pvc, fresh(request))],
 			["有实际用量的 PVC", count(pvc, fresh(used))],
 		]),
 		panel(
-			"最近原始采样时间 · 按指标来源",
+			"原始采样时间 · 按指标来源",
 			"dateTimeAsIso",
 			Object.entries({
 				"节点 CPU": nodeCpu,
-				节点内存: nodeMem,
+				节点总内存: nodeMem,
+				节点可用内存: nodeAvailable,
 				"容器 CPU": cpu,
 				容器内存: mem,
 				"Pod 库存": pods,
@@ -139,4 +144,23 @@ export function ackHistoryPanels(
 			}).map(([name, s]) => [name, `max(timestamp(${s})) * 1000`]),
 		),
 	];
+	// Evaluate this bounded lookback once at the selected end time, including windows
+	// entirely inside a gap. Aggregate before the subquery to bound its cardinality.
+	const timestamps = panels[panels.length - 1];
+	const lastSeen = {
+		...timestamps,
+		id: id++,
+		title: "窗口结束前最近采样 · 回看一小时",
+		type: "stat",
+		gridPos: { x: 0, y: 68, w: 24, h: 6 },
+		description:
+			"按选定窗口结束时间回看最近一小时；超出回看范围或无可读样本显示无数据。",
+		targets: timestamps.targets.map((t) => ({
+			...t,
+			instant: true,
+			range: false,
+			expr: `max_over_time((${t.expr})[1h:1m])`,
+		})),
+	};
+	return [...panels, lastSeen];
 }
