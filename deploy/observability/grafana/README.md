@@ -21,6 +21,8 @@
 
 ```sql
 GRANT USAGE ON SCHEMA platform_ops_dashboard TO dashboard_reader;
+GRANT EXECUTE ON FUNCTION platform_ops_dashboard.failed_sessions(timestamptz,timestamptz)
+  TO dashboard_reader;
 GRANT EXECUTE ON FUNCTION platform_ops_dashboard.execution_impact(timestamptz,timestamptz,text)
   TO dashboard_reader;
 GRANT EXECUTE ON FUNCTION platform_ops_dashboard.first_output(timestamptz,timestamptz)
