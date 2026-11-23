@@ -65,3 +65,64 @@ test("requires an HTTPS /ops destination before publishing any bundle", () => {
 		);
 	}
 });
+
+test("ACK resource panels use the selected window and the deployment's approved datasource and scope", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "grafana-ack-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const output = join(root, "bundle");
+	execFileSync(process.execPath, [
+		"deploy/observability/grafana/provision.mts",
+		output,
+		"https://platform.example.test/ops",
+		"approved-arms",
+		"cluster_id",
+		"cluster-a",
+		"platform-a",
+	]);
+	const dashboard = JSON.parse(
+		readFileSync(join(output, "dashboards/execution-impact.json"), "utf8"),
+	);
+	const history = dashboard.panels.filter(
+		(panel) => panel.datasource?.type === "prometheus",
+	);
+	assert.ok(history.length >= 6);
+	for (const panel of history) {
+		assert.equal(panel.timeFrom, undefined);
+		assert.equal(panel.timeShift, undefined);
+		for (const target of panel.targets) {
+			assert.equal(target.datasource.uid, "approved-arms");
+			assert.ok(target.expr.includes('cluster_id="cluster-a"'));
+			assert.ok(target.range);
+			assert.doesNotMatch(target.expr, /or vector\(0\)/);
+		}
+	}
+});
+
+test("provisions optional ARMS credentials by runtime reference and preserves the Postgres source", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "grafana-arms-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const output = join(root, "bundle");
+	const args = [
+		"deploy/observability/grafana/provision.mts",
+		output,
+		"https://platform.example.test/ops",
+		"approved-arms",
+		"cluster_id",
+		"cluster-a",
+		"platform-a",
+	];
+	const run = (endpoint) =>
+		execFileSync(process.execPath, [...args, endpoint], { stdio: "pipe" });
+	assert.throws(() => run("https://example.test/api?token=test"));
+	run("https://arms.example.test/prometheus");
+	const [pg, arms] = parse(
+		readFileSync(
+			join(output, "provisioning/datasources/platform.yaml"),
+			"utf8",
+		),
+	).datasources;
+	assert.equal(pg.type, "grafana-postgresql-datasource");
+	assert.equal(arms.uid, "approved-arms");
+	assert.equal(arms.basicAuthUser, "$OPS_ARMS_USER");
+	assert.equal(arms.secureJsonData.basicAuthPassword, "$OPS_ARMS_PASSWORD");
+});
