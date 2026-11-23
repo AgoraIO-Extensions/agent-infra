@@ -6,7 +6,10 @@ import {
 	resolveActiveMemberByEmail,
 } from "@agent-infra/enterprise-directory";
 import type { LdapAccount } from "@agent-infra/identity";
-import type { PostgresOidcIdentityStore } from "@agent-infra/platform-store";
+import {
+	oidcBrowserSessionUidPrefix,
+	type PostgresOidcIdentityStore,
+} from "@agent-infra/platform-store";
 import type { OidcBrowserIdentity } from "./oidc-browser-flow.js";
 
 export interface EmployeeOidcConfiguration {
@@ -37,8 +40,7 @@ export function createOidcEmployeeDirectory(
 	)
 		throw new Error("OIDC_EMPLOYEE_CONFIGURATION_INVALID");
 	const administrators = new Set(admins);
-	const prefix =
-		"oidc:" + createHash("sha256").update(config.issuer).digest("hex") + ":";
+	const prefix = oidcBrowserSessionUidPrefix(config.issuer);
 	async function currentByUserId(userId: string): Promise<LdapAccount | null> {
 		const record = await store.findByUserId(userId);
 		if (!record) throw new Error("OIDC_EMPLOYEE_BINDING_UNAVAILABLE");
