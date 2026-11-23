@@ -36,8 +36,9 @@ export function platformAlertRules(input: unknown) {
 	const seconds = positive(limits.forSeconds, 86_400);
 	if (!Number.isSafeInteger(pending) || !Number.isSafeInteger(seconds)) throw new Error("Invalid platform alert scope");
 	const selector = `cluster=${JSON.stringify(cluster)},namespace=${JSON.stringify(namespace)}`;
-	const gauge = (source: string) => `agent_platform_resource_count{${selector},kind="outbox_pending",database_source=${JSON.stringify(source)}}`;
-	const expected = `sum(${sources.map((source) => `max(${gauge(source)})`).join(" or ")})`;
+	const gauge = (source?: string) =>
+		`agent_platform_resource_count{${selector},kind="outbox_pending"${source ? `,database_source=${JSON.stringify(source)}` : ",database_source=~\".+\""}}`;
+	const expected = `sum(max by (database_source) (${gauge()}))`;
 	const missing = sources
 		.map((source) => `label_replace(absent(${gauge(source)}), "database_source", ${JSON.stringify(source)}, "", "")`)
 		.join(" or ");
