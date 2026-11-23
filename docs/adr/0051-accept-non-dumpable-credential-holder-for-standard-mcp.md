@@ -34,10 +34,15 @@ Host 因此按原规则 fail closed，ECI Session 上的 Connection 安装与调
 第 2 项另有前提：`fs.suid_dumpable` 不为 `1`；进程不改变自身凭据；进程不运行在由工具
 UID 创建的 user namespace 中；Pod 不共享 PID namespace。核实方法见工程 Spec §13.5.4。
 第 2 项只在 Pod 只属于一个 Session 时适用，该条件必须由 Worker 签发、Host 已验证的 scope
-证明（Codex `container-boundary` 的 HMAC attestation 或 `session-executor` 绑定）。这一证明适用于 Runtime Host；
+证明（四个模板的 Session Pod 都由 Worker 签发 Session 级 attestation，形式与 Host 的验证见工程 Spec
+§13.5.4，这里不重复）。这一证明适用于 Runtime Host；
 安装供应 initializer 没有 attestation，其放置依据与例外范围见工程 Spec §13.5.4。只有
-Agent 级 scope、没有 attestation 或普通 env 不够，非 Codex 模板目前也没有 attestation，这些
-情形只能用第 1 项。两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
+Agent 级 scope、没有 attestation 或普通 env 不够，这些情形只能用第 1 项。
+2026-11-23 增补（#4349）：原文写“非 Codex 模板目前没有 attestation”，使 Claude、OpenCode、Pi
+在没有 Yama 的 ECI 上只能走第 1 项而恒不可用。现在由 Worker 为它们也签发同形的 Session 级
+attestation，把本决定的第 2 项用到这三个模板。不新增门禁，也不放宽任何现有检查。
+
+两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
 
 独立 executor 的工具启动隔离（工程 Spec §11.2.1）不在本决定范围内。它要保护的 upstream
 `exec-server` 由 execve 启动，启动后恢复 dumpable，Host 设置的 non-dumpable 管不到它。该路径
