@@ -57,20 +57,29 @@ function missingStages(task: OperationsTasksV2["tasks"][number]) {
 function localTime(date: Date) {
 	return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
 		.toISOString()
-		.slice(0, 16);
+		.slice(0, -1);
 }
 
 export function TaskEvidence({
 	agentId,
 	sessionId,
 	identityKey,
+	from,
+	to,
 }: {
 	agentId: string;
 	sessionId: string;
 	identityKey: string;
+	from?: number;
+	to?: number;
 }) {
 	const prefix = useId();
 	const [window, setWindow] = useState(() => {
+		if (from !== undefined && to !== undefined)
+			return {
+				start: new Date(from).toISOString(),
+				end: new Date(to).toISOString(),
+			};
 		const end = new Date();
 		// Include the current minute in the half-open range.
 		end.setSeconds(59, 999);
@@ -131,6 +140,7 @@ export function TaskEvidence({
 					<Input
 						id={`${prefix}-start`}
 						type="datetime-local"
+						step="0.001"
 						value={start}
 						onChange={(event) => setStart(event.target.value)}
 						required
@@ -141,6 +151,7 @@ export function TaskEvidence({
 					<Input
 						id={`${prefix}-end`}
 						type="datetime-local"
+						step="0.001"
 						value={end}
 						onChange={(event) => setEnd(event.target.value)}
 						required

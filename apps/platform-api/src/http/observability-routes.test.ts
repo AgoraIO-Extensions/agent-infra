@@ -322,3 +322,15 @@ describe("observability status contract (#3058)", () => {
 		},
 	);
 });
+
+it("authorizes dashboard access on the current administrator session even when telemetry is unavailable", async () => {
+	const { app } = createContractApp({ assembled: false });
+	const gate = "/api/v1/ops/dashboard-access";
+	expect((await app.request(gate, withSession("admin-session"))).status).toBe(
+		204,
+	);
+	expect(
+		(await app.request(gate, withSession("employee-session"))).status,
+	).toBe(403);
+	expect((await app.request(gate)).status).toBe(401);
+});
