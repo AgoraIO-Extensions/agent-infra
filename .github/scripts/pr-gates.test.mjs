@@ -283,3 +283,10 @@ test("human PRs skip claim checks and comment API failures fail closed", async (
   };
   await assert.rejects(runGate({ ...failing, mode: "issue" }), /API down/);
 });
+
+test("an agent PR cannot pass when both PR and Issue have no session claim", async () => {
+  const fixture = claimedGateFixture();
+  fixture.pr.body = "Refs #42";
+  fixture.issue.body = "Human-created Issue without an agent provenance block";
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+});

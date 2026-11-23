@@ -105,6 +105,13 @@ export function evaluateIssueGate({
   if (labelNames(pullRequestLabels).some((label) => label.startsWith("agent:"))) {
     const pullSession = extractAgentSessionId(pullRequestBody);
     const issueSession = resolveIssueClaim(issue, issueComments);
+    if (!pullSession || !issueSession) {
+      return {
+        ok: false,
+        description:
+          `Agent PR claim is incomplete (missing ${!pullSession ? "PR Agent-Session-ID" : "Issue claim"}); add a valid provenance or handoff before retrying the gate`,
+      };
+    }
     if (pullSession !== issueSession) {
       return {
         ok: false,
