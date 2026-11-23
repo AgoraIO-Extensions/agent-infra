@@ -9,6 +9,7 @@ import type {
 	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
 import {
+	assertProviderRegistration,
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
@@ -474,6 +475,8 @@ export async function assembleRuntimeHost(
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
+	if (binding === "claude")
+		assertProviderRegistration("claude", "paseo-derived", "claude-query");
 	assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
