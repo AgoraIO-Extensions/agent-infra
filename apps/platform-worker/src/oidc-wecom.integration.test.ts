@@ -61,6 +61,12 @@ function createFixture() {
 			snapshot,
 			organizationIdForDepartment: (d) => `org-${d.id}`,
 			verifiedWecomMember: async (scope) => {
+				if (scope.kind === "wecom_app") {
+					return scope.bindingReference === "app-binding" &&
+						scope.senderId === "employee"
+						? { source: "wecom", userId: "employee" }
+						: null;
+				}
 				if (scope.bindingReference !== "binding-1") return null;
 				const id = {
 					"encrypted-employee": "employee",
@@ -170,6 +176,32 @@ it("accepts a verified department member before web login and retains their stab
 	).toMatchObject({ outcome: "denied" });
 	disabled.add(id);
 	expect(await channel.authorize(scope)).toMatchObject({ outcome: "denied" });
+});
+it("resolves a verified WeCom application callback only under its application binding", async () => {
+	const { authority } = createFixture();
+	const signed = {
+		...scope,
+		kind: "wecom_app" as const,
+		bindingReference: "app-binding",
+		senderId: "employee",
+	};
+	const user = await authority.identity.resolveSender(signed);
+	expect(user?.accountStatus).toBe("active");
+	expect(await authority.identity.resolveSender(scope)).toMatchObject({
+		userId: user?.userId,
+	});
+	expect(
+		await authority.identity.resolveSender({
+			...signed,
+			bindingReference: scope.bindingReference,
+		}),
+	).toBeNull();
+	expect(
+		await authority.identity.resolveSender({
+			...scope,
+			senderId: signed.senderId,
+		}),
+	).toBeNull();
 });
 it("rejects incomplete, stale and ambiguous directory publications independently", async () => {
 	const { authority, replace } = createFixture();

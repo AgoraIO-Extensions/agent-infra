@@ -83,7 +83,7 @@ export function createWecomEmployeeIdentity(
 	}
 	const identity: WecomIdentityPortV1 = {
 		async resolveSender(scope) {
-			if (scope.kind !== "wecom_bot") return null;
+			if (scope.kind !== "wecom_bot" && scope.kind !== "wecom_app") return null;
 			const verified = await config.verifiedWecomMember(scope);
 			if (!verified) return null;
 			const current = await snapshot();
