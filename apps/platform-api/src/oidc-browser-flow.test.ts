@@ -91,6 +91,7 @@ async function journey(fault?: string) {
 		clientId,
 		clientSecret: "fixture",
 		publicOrigin: origin,
+		logout:vi.fn(),
 		login,
 		transactions: {
 			async put(k, v) {

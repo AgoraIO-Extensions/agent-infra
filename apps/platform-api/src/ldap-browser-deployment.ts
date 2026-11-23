@@ -44,6 +44,7 @@ export function createPostgresLdapBrowserDeployment(
 			...oidc,
 			publicOrigin: input.publicOrigin,
 			transactions: oidc.store,
+			logout: (notice) => oidc.store.logout(notice),
 			login: async (identity) => {
 				try {
 					const account = await oidc.verifiedAccount(identity);
@@ -107,7 +108,7 @@ export function createPostgresLdapBrowserDeployment(
 					const publicUrl = new URL(publicOrigin.origin);
 					publicUrl.pathname = incoming.pathname;
 					publicUrl.search = incoming.search;
-					return handle(new Request(publicUrl, request.clone()));
+					return handle(new Request(publicUrl, request));
 				}
 				return handle(request);
 			},
