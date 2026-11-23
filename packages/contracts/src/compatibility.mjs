@@ -3846,7 +3846,13 @@ function isDirectorySearchV2OpenApiAddition(previous, current) {
 function isDashboardAccessV1Addition(previous, current) {
 	const path = "/api/v1/ops/dashboard-access";
 	if (previous.paths?.[path] || !current.paths?.[path]) return false;
-	if (createHash("sha256").update(JSON.stringify(current.paths[path])).digest("hex") !== "2ce0b46ddf08ea5328fe8aa4de8a3c0efc07802a173c80ecac39915abe115492") return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths[path]))
+			.digest("hex") !==
+		"2ce0b46ddf08ea5328fe8aa4de8a3c0efc07802a173c80ecac39915abe115492"
+	)
+		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
 	return sameValue(previous, normalized);
