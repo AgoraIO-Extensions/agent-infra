@@ -836,14 +836,11 @@ describe("Platform PostgreSQL migration foundation", () => {
 					name ===
 					"workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_fk"
 						? "workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_"
-						: name ===
-								"template_publication_catalog_publication_id_template_publications_id_fk"
+						: name === "template_publication_catalog_publication_id_template_publications_id_fk"
 							? "template_publication_catalog_publication_id_template_publicatio"
-							: name ===
-									"template_publication_nonces_publication_id_template_publications_id_fk"
+							: name === "template_publication_nonces_publication_id_template_publications_id_fk"
 								? "template_publication_nonces_publication_id_template_publication"
-								: name ===
-										"template_publication_targets_publication_id_template_publications_id_fk"
+								: name === "template_publication_targets_publication_id_template_publications_id_fk"
 									? "template_publication_targets_publication_id_template_publicatio"
 									: name,
 				)
@@ -2276,6 +2273,7 @@ describe("published Relay authority migration", () => {
 			97,
 			98,
 			99,
+			100,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2417,9 +2415,13 @@ describe("published Relay authority migration", () => {
 			idx: 98,
 			tag: "0098_oidc_employee_accounts",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 99)).toMatchObject({
 			idx: 99,
-			tag: "0099_template_auto_publications",
+			tag: "0099_oidc_logout_receipts",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 100,
+			tag: "0100_template_auto_publications",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3212,6 +3214,8 @@ describe("published Relay authority migration", () => {
 				...["user_id", "employee_id", "issuer", "subject", "email"].map(
 					(name) => `oidc_employee_accounts:${name}`,
 				),
+				"oidc_logout_receipts:digest",
+				"oidc_logout_receipts:expires_at",
 				...["expires_at", "nonce", "verifier", "key"].map(
 					(name) => `oidc_login_transactions:${name}`,
 				),
@@ -3224,11 +3228,12 @@ describe("published Relay authority migration", () => {
 					"oidc_employee_accounts_email_unique",
 					"oidc_employee_accounts_employee_id_unique",
 				].map((n) => `oidc_employee_accounts:${n}`),
+				"oidc_logout_receipts:oidc_logout_receipts_expiry",
+				"oidc_logout_receipts:oidc_logout_receipts_pkey",
 				"oidc_login_transactions:oidc_login_expiry",
 				"oidc_login_transactions:oidc_login_transactions_pkey",
 			);
-
-			// 0099: deployment-owned automatic template publication.
+			// 0100: deployment-owned automatic template publication.
 			expectedDelta.columns.push(
 				...["template_id", "publication_id", "revision"].map(
 					(name) => `template_publication_catalog:${name}`,

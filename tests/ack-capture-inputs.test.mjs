@@ -3,13 +3,14 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
-import { parse, parseAllDocuments, stringify } from "yaml";
+import { parse, parseAllDocuments } from "yaml";
 import {
 	assertCaptureDestination,
 	capturedValues,
 	freshDatabaseAccounts,
 	freshDatabaseValues,
 	sanitizeValues,
+	stringifyCapturedValues,
 } from "../deploy/ack/capture-inputs.ts";
 
 const installationId = "22222222-2222-2222-2222-222222222222";
@@ -151,7 +152,11 @@ test("captured reuse and fresh values preserve the original Worker selector thro
 				"--values",
 				"-",
 			],
-			{ input: stringify(values), encoding: "utf8", maxBuffer: 2 ** 20 },
+			{
+				input: stringifyCapturedValues(values),
+				encoding: "utf8",
+				maxBuffer: 2 ** 20,
+			},
 		);
 		assert.equal(result.status, 0, result.stderr);
 		const documents = parseAllDocuments(result.stdout).map((d) => d.toJSON());
@@ -173,6 +178,39 @@ test("captured reuse and fresh values preserve the original Worker selector thro
 		render(freshDatabaseValues(captured, installationId)),
 		original,
 	);
+});
+
+test("captured pilot modes survive Helm's YAML 1.1 parser", () => {
+	for (const mode of ["off", "new", "drain"]) {
+		const input = stringifyCapturedValues({
+			sigCorePilot: mode,
+			agentWorkloadScheduling: { enabled: true },
+		});
+		assert.equal(parse(input, { version: "1.1" }).sigCorePilot, mode);
+		const rendered = spawnSync(
+			"helm",
+			[
+				"template",
+				"capture-pilot",
+				"deploy/ack/chart",
+				"--namespace",
+				"ack-community-m1-4405",
+				"--values",
+				"-",
+			],
+			{ input, encoding: "utf8" },
+		);
+		if (rendered.error?.code === "ENOENT") continue;
+		assert.equal(rendered.status, 0, rendered.stderr);
+		assert.equal(
+			rendered.stdout.includes("PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE"),
+			mode === "new",
+		);
+		assert.equal(
+			rendered.stdout.includes("resources: [sandboxes]"),
+			mode !== "off",
+		);
+	}
 });
 
 test("fresh values enable the database-only bootstrap contract", () => {

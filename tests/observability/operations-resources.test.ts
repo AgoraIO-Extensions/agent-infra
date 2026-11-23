@@ -528,6 +528,7 @@ it("separates unclaimed reserve budget from retained Session storage without cha
 		);
 		expect(admission.profile).toBeNull();
 		await insertSessionSandboxBinding(tx, admission.binding, {
+			cold: true,
 			requestId: "unprepared-request",
 			traceId: "unprepared-trace",
 			occurredAt: new Date(),

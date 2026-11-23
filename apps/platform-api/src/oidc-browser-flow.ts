@@ -1,5 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { OidcLogoutEvent } from "@agent-infra/platform-store";
 import * as oidc from "openid-client";
+
+import {
+	backchannelLogoutPath,
+	createBackchannelLogout,
+} from "./oidc-backchannel-logout.js";
 
 const loginPath = "/auth/oidc/login";
 const callbackPath = "/auth/oidc/callback";
@@ -29,6 +35,7 @@ interface OidcBrowserFlowInput {
 		/** Atomically delete and return a live transaction. Store TTL is five minutes. */
 		take(key: string): Promise<OidcLoginTransaction | null>;
 	};
+	logout(notice: OidcLogoutEvent): Promise<void>;
 	login(identity: OidcBrowserIdentity): Promise<Response>;
 }
 
@@ -88,6 +95,8 @@ export function createOidcBrowserFlow(input: OidcBrowserFlowInput) {
 			});
 		return pending;
 	}
+
+	const logout = createBackchannelLogout({ ...input, configuration });
 
 	async function start() {
 		const config = await configuration();
@@ -184,12 +193,18 @@ export function createOidcBrowserFlow(input: OidcBrowserFlowInput) {
 	return {
 		async handleRequest(request: Request): Promise<Response | null> {
 			const url = new URL(request.url);
-			if (url.pathname !== loginPath && url.pathname !== callbackPath)
+			if (
+				url.pathname !== loginPath &&
+				url.pathname !== callbackPath &&
+				url.pathname !== backchannelLogoutPath
+			)
 				return null;
-			if (request.method !== "GET") return response(405);
 			if (url.origin !== origin.origin || request.url.length > 8192 || url.hash)
 				return response(400);
 			try {
+				if (url.pathname === backchannelLogoutPath)
+					return response(url.search ? 400 : await logout(request));
+				if (request.method !== "GET") return response(405);
 				if (url.pathname === loginPath)
 					return url.search ? response(400) : await start();
 				return await complete(request, url);

@@ -14,6 +14,7 @@
 # - secrets.*                                       Secret names in this namespace
 # - files.enabled=true and files.configurationFile  when enabling the file data plane;
 #   the referenced file must be a key in secrets.apiConfiguration.
+# - platformWeb.loginMode=oidc after configuring the matching Platform API client.
 # - wecom.enabled=true after configuring the API and Worker WeCom inputs
 #   described in docs/architecture/WECOM-text-deployment.md.
 #

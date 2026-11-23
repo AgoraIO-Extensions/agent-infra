@@ -229,7 +229,7 @@
       "id": 5,
       "title": "首段正文 · 服务端持久事件",
       "type": "table",
-      "description": "当前等待取全部仍在处理且未持久化正文的用户。首段耗时按期内受理执行回看，取消按期内确认时间。浏览器展示、企微送达和 API 客户端接收缺乏统一回执，均为未知。",
+      "description": "等待从平台受理开始，服务端观测止于第一段非空持久正文。当前等待包括窗口前受理的活动执行。样本数与受理数按所选窗口核对；取消按确认时间统计。",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "${DS_PLATFORM}"
@@ -248,7 +248,43 @@
             "uid": "${DS_PLATFORM}"
           },
           "format": "table",
-          "rawSql": "SELECT channel AS \"渠道\", waiting_users AS \"此刻等待用户\", round(longest_wait_seconds::numeric,1) AS \"当前最长等待 (s)\", replied AS \"已记录首段样本\", round(median_first_output_seconds::numeric,1) AS \"首段耗时中位数 (s)\", cancelled_before_output AS \"首段前取消\", round(median_cancel_wait_seconds::numeric,1) AS \"取消等待中位数 (s)\" FROM platform_ops_dashboard.first_output($__timeFrom(), $__timeTo()) ORDER BY channel"
+          "rawSql": "SELECT channel AS \"渠道\", waiting_users AS \"当前等待用户\", round(longest_wait_seconds::numeric,1) AS \"当前最长等待 (s)\", queued_executions AS \"已记录排队的执行\", accepted AS \"窗口受理\", replied AS \"首正文样本\", accepted-replied AS \"窗口内未观察到首正文\", round(median_first_output_seconds::numeric,1) AS \"首正文中位数 (s)\", cancelled_before_output AS \"首正文前取消\", round(median_cancel_wait_seconds::numeric,1) AS \"取消等待中位数 (s)\", CASE channel WHEN 'Web' THEN '浏览器展示时间未知' WHEN '企微' THEN '首段送达时间未知' WHEN 'API' THEN '客户端接收时间未知' ELSE '未确认' END AS \"渠道回执覆盖\", '展示回执未知' AS \"排队与加载提示\", latest_first_output_at AS \"最近首正文样本时间\", statement_timestamp() AS \"查询更新时间\" FROM platform_ops_dashboard.reply_observations($__timeFrom(), $__timeTo(), 'summary') ORDER BY channel"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "服务端首正文与回复前取消等待 · 五分钟中位数",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "description": "首正文按受理时刻分桶，取消按确认时刻分桶。缺少对应样本的区间留空。",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT bucket AS time, channel, median_first_output_seconds AS \"首正文\", median_cancel_wait_seconds AS \"回复前取消\" FROM platform_ops_dashboard.reply_observations($__timeFrom(), $__timeTo(), 'trend') ORDER BY bucket, channel"
         }
       ]
     }

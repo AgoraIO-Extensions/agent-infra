@@ -9,6 +9,7 @@ import type {
 	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
 import {
+	admittedCorePod,
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
@@ -134,6 +135,7 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	corePod?: ReturnType<typeof admittedCorePod>;
 	sessionInstanceRead?: ReturnType<typeof createSessionInstanceReaderV1>;
 	executorInstanceRead?: (
 		request: import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionReadV2,
@@ -519,6 +521,17 @@ export async function assembleRuntimeHost(
 		binding === "codex"
 			? readCodexIsolationMode(environment, serviceToken)
 			: undefined;
+	const coreUid = environment.AGENT_INFRA_CORE_POD_UID;
+	const coreConversationKey = environment.AGENT_INFRA_CORE_CONVERSATION_KEY;
+	if (coreUid !== undefined || coreConversationKey !== undefined) {
+		if (
+			!coreUid ||
+			!coreConversationKey ||
+			process.platform !== "linux" ||
+			codexIsolationMode !== "landlock"
+		)
+			runtimeConfigurationInvalid();
+	}
 	const sessionExecutorBinding =
 		codexIsolationMode === "session-executor"
 			? readCodexSessionExecutorBindingV1(environment, serviceToken)
@@ -880,6 +893,7 @@ export async function assembleRuntimeHost(
 						});
 					},
 					isolationMode: codexIsolationMode,
+					...(coreConversationKey ? { coreConversationKey } : {}),
 					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
@@ -1167,6 +1181,11 @@ export async function assembleRuntimeHost(
 				}
 			: undefined;
 		const podUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
+		if (
+			coreUid &&
+			(!(driver instanceof CodexRuntimeDriver) || !driver.liveCoreProcessId)
+		)
+			runtimeConfigurationInvalid();
 		const host = await RuntimeHost.open({
 			// #4358 I2: one observer per process, so its clock domain is this
 			// Pod UID plus process start; it writes fixed stdout records only.
@@ -1313,6 +1332,15 @@ export async function assembleRuntimeHost(
 		}
 		return {
 			host,
+			...(coreUid && driver instanceof CodexRuntimeDriver
+				? {
+						corePod: admittedCorePod(
+							serviceToken,
+							coreUid,
+							() => driver.liveCoreProcessId,
+						),
+					}
+				: {}),
 			browserCapability: () => browserCapabilityAssembly,
 			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding

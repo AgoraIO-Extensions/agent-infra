@@ -45,7 +45,8 @@ describe("published Workload readiness contract", () => {
 			"openapi/runtime-readiness.v1.openapi.json",
 		);
 		expect(readiness.openapi).toBe("3.1.0");
-		expect(Object.keys(readiness.paths)).toEqual([
+		expect(Object.keys(readiness.paths).sort()).toEqual([
+			"/internal/runtime/v1/core-pod-admission",
 			"/internal/runtime/v1/readiness",
 		]);
 		expect(readiness.security).toEqual([{ RuntimeServiceBearer: [] }]);

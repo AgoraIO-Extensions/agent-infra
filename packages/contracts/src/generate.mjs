@@ -1157,6 +1157,39 @@ function buildArtifacts() {
 			},
 			security: [{ RuntimeServiceBearer: [] }],
 			paths: {
+				"/internal/runtime/v1/core-pod-admission": {
+					post: {
+						operationId: "attestCorePodLandlockV1",
+						description:
+							"Core pilot only. Authenticates a fresh Worker challenge for the expected Pod UID. The permit requires the live Landlock-confined Codex process initialized for this Conversation.",
+						security: [{ CorePodChallengeBearer: [] }],
+						parameters: [
+							{
+								in: "header",
+								name: "x-core-challenge",
+								required: true,
+								schema: { type: "string", format: "uuid" },
+							},
+						],
+						responses: {
+							204: {
+								description: "Instance admission valid for up to 60 seconds",
+								headers: {
+									"x-core-admission": {
+										required: true,
+										schema: { type: "string" },
+									},
+									"x-core-proof": {
+										required: true,
+										schema: { type: "string" },
+									},
+								},
+							},
+							401: { description: "Invalid instance challenge" },
+							503: { description: "Landlock installation unavailable" },
+						},
+					},
+				},
 				"/internal/runtime/v1/readiness": {
 					post: postOperation(
 						"readWorkloadReadinessV1",
@@ -1168,6 +1201,7 @@ function buildArtifacts() {
 			},
 			components: {
 				securitySchemes: {
+					CorePodChallengeBearer: { type: "http", scheme: "bearer" },
 					RuntimeServiceBearer: { type: "http", scheme: "bearer" },
 				},
 				schemas: WorkloadReadinessV1SchemaDefinitions,

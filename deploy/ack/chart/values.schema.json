@@ -3,6 +3,7 @@
   "type": "object",
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "quota", "postgres", "ingress", "migrations", "encryption", "worker"],
   "properties": {
+    "sigCorePilot": {"type": "string", "enum": ["off", "new", "drain"]},
     "operations": {
       "type": "object",
       "additionalProperties": false,
@@ -33,6 +34,14 @@
       }
     },
     "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "platformWeb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["loginMode"],
+      "properties": {
+        "loginMode": {"type": "string", "enum": ["build", "oidc"]}
+      }
+    },
     "platformApi": {
       "type": "object",
       "additionalProperties": false,

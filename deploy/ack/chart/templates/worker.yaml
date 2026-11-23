@@ -16,6 +16,14 @@ kind: Role
 metadata:
   name: agent-infra-worker
 rules:
+  {{- if ne .Values.sigCorePilot "off" }}
+  {{- if or (ne .Release.Namespace "ack-community-m1-4405") (not .Values.agentWorkloadScheduling.enabled) }}
+  {{- fail "sigCorePilot requires ack-community-m1-4405 and deployment-owned ECI placement" }}
+  {{- end }}
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [get, create, delete]
+  {{- end }}
   - apiGroups: [""]
     resources: [pods, configmaps, persistentvolumeclaims, secrets, serviceaccounts, services]
     verbs: [create, delete, get, list, patch, update, watch]

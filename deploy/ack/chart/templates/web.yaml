@@ -47,6 +47,10 @@ spec:
           resources: {{ toYaml .Values.resources.web | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           env:
+            {{- with .Values.platformWeb }}
+            - name: PLATFORM_WEB_LOGIN_MODE
+              value: {{ .loginMode | quote }}
+            {{- end }}
             - name: PLATFORM_PROXY_TOKEN
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.apiProxyToken }}, key: token}}
             - {name: PLATFORM_PROXY_TOKEN_REQUIRED, value: "true"}

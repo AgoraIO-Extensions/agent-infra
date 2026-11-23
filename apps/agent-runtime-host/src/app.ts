@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import {
+	type admittedCorePod,
+	corePodAdmissionPath,
 	discoverRuntimeBrowserCapabilityV1,
 	type RuntimeBrowserCapabilityAssemblyV1,
 	type RuntimeHost,
@@ -118,6 +120,7 @@ interface RuntimeHostAppOptions {
 	 */
 	logDiagnostic?: (entry: Record<string, string>) => void;
 	serviceToken: string;
+	corePod?: ReturnType<typeof admittedCorePod>;
 	/**
 	 * Safety evidence log of an enabled acceptance window (Spec §18.5.1); absent by default,
 	 * in which case no evidence route exists.
@@ -193,9 +196,32 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		context.json({ service: runtimeHostService, status: "ok" }),
 	);
 
+	if (options.corePod) {
+		const core = options.corePod;
+		app.post(corePodAdmissionPath, async (context) => {
+			const nonce = context.req.header("x-core-challenge") ?? "";
+			if (
+				!/^[0-9a-f-]{36}$/.test(nonce) ||
+				!authorized(context.req.header("authorization"), core.probeToken(nonce))
+			)
+				return context.body(null, 401);
+			context.header("cache-control", "no-store");
+			const admission = await core.issue(nonce).catch(() => null);
+			if (!admission) return context.body(null, 503);
+			const { token, proof } = admission;
+			context.header("x-core-admission", token);
+			context.header("x-core-proof", proof);
+			return context.body(null, 204);
+		});
+	}
 	app.use("/internal/runtime/*", async (context, next) => {
 		if (
-			!authorized(context.req.header("authorization"), options.serviceToken)
+			!(options.corePod
+				? options.corePod.accepts(
+						context.req.header("authorization")?.match(/^Bearer (.+)$/)?.[1] ??
+							"",
+					)
+				: authorized(context.req.header("authorization"), options.serviceToken))
 		) {
 			return context.json(
 				{
