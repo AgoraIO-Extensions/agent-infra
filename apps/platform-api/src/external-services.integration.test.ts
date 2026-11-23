@@ -117,7 +117,7 @@ it("routes employee discovery to the verified provider across cutover and compon
 	const a = await provider("a");
 	const b = await provider("b");
 	let store = new ExternalServiceStore(db.databaseUrl);
-	let worker: ReturnType<typeof createExternalServiceProbe>;
+	let worker!: ReturnType<typeof createExternalServiceProbe>;
 	function assemble() {
 		worker = createExternalServiceProbe(store, decryptor, (input, init) => {
 			const url = new URL(String(input));
