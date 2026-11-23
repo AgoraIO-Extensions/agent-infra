@@ -1,5 +1,8 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { admittedCorePod } from "@agent-infra/agent-runtime";
+import {
+	admittedCorePod,
+	hasCorePodAdmissionSendMargin,
+} from "@agent-infra/agent-runtime";
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
@@ -7,7 +10,10 @@ import {
 	RuntimeSubmitTurnRequestV4Schema,
 	validateRuntimePrivateRelayKeyFieldV1,
 } from "@agent-infra/contracts/runtime";
-import { nativeCapabilityParametersDigestV1 } from "@agent-infra/platform-core";
+import {
+	ConversationRuntimeHostError,
+	nativeCapabilityParametersDigestV1,
+} from "@agent-infra/platform-core";
 import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { describe, expect, it, vi } from "vitest";
@@ -93,7 +99,14 @@ describe("V4 authenticated confidential private Key client", () => {
 				createWorkerRuntimeHostClientV4({
 					...options,
 					serviceToken: token,
-					corePodAdmission: true,
+					assertCoreAdmissionSendMargin: () => {
+						if (!hasCorePodAdmissionSendMargin(token))
+							throw new ConversationRuntimeHostError(
+								"RUNTIME_UNAVAILABLE",
+								true,
+								{ notSent: true },
+							);
+					},
 					fetch,
 					assertCurrentAuthorization: async () => {
 						await Promise.resolve();

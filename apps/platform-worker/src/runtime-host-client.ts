@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { hasCorePodAdmissionSendMargin } from "@agent-infra/agent-runtime";
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
@@ -231,7 +230,7 @@ export interface WorkerExecutionKeyReaderV4 {
 
 export interface WorkerRuntimeHostClientOptionsV4
 	extends WorkerRuntimeHostClientOptionsV1 {
-	readonly corePodAdmission?: true;
+	readonly assertCoreAdmissionSendMargin?: () => void;
 	readonly verifyGrant: (
 		grant: RuntimeBusinessRequestV4["grant"],
 	) => RuntimeBusinessGrantClaimsV4;
@@ -1508,14 +1507,6 @@ export function createWorkerRuntimeHostClientV4(
 		options.fetch ?? runtimeFetch,
 		connectionConsumer,
 	);
-	const checkCoreAdmission = options.corePodAdmission
-		? () => {
-				if (!hasCorePodAdmissionSendMargin(options.serviceToken))
-					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true, {
-						notSent: true,
-					});
-			}
-		: undefined;
 
 	/**
 	 * 取 Key 时 Execution 不再处于可投递状态。先用发送前复核区分两种情况：准备之后状态变了（例如
@@ -1667,7 +1658,7 @@ export function createWorkerRuntimeHostClientV4(
 				request.traceId,
 				transport,
 				signal,
-				checkCoreAdmission,
+				options.assertCoreAdmissionSendMargin,
 			);
 			try {
 				const result = RuntimeOperationResponseV4Schema.parse(
@@ -1801,7 +1792,7 @@ export function createWorkerRuntimeHostClientV4(
 				request.traceId,
 				transport,
 				signal,
-				checkCoreAdmission,
+				options.assertCoreAdmissionSendMargin,
 			);
 			try {
 				const result = RuntimeOperationResponseV5Schema.parse(
@@ -1955,7 +1946,7 @@ export function createWorkerRuntimeHostClientV4(
 					request.traceId,
 					transport,
 					signal,
-					checkCoreAdmission,
+					options.assertCoreAdmissionSendMargin,
 				);
 				const result = RuntimeRestoreExecutionKeyResponseV4Schema.parse(
 					JSON.parse(await boundedResponseText(response)),
@@ -2091,7 +2082,7 @@ export function createWorkerRuntimeHostClientV4(
 					request.traceId,
 					transport,
 					signal,
-					checkCoreAdmission,
+					options.assertCoreAdmissionSendMargin,
 				);
 				const result = RuntimeRestoreExecutionKeyResponseV5Schema.parse(
 					JSON.parse(await boundedResponseText(response)),
@@ -2119,7 +2110,7 @@ export function createWorkerRuntimeHostClientV4(
 				parsed.data.traceId,
 				parsed.data,
 				signal,
-				checkCoreAdmission,
+				options.assertCoreAdmissionSendMargin,
 			);
 			try {
 				const replay = validateRuntimeReplayResponseV4(
@@ -2165,7 +2156,7 @@ export function createWorkerRuntimeHostClientV4(
 				parsed.data.traceId,
 				parsed.data,
 				signal,
-				checkCoreAdmission,
+				options.assertCoreAdmissionSendMargin,
 			);
 			try {
 				const ack = RuntimeEventAckResponseV4Schema.parse(
