@@ -177,6 +177,55 @@
       }
     },
     {
+      "id": 7,
+      "title": "故障时段的失败会话",
+      "type": "table",
+      "description": "按最近一次失败列出最多 100 个会话。可缩短窗口；点击会话进入平台授权详情。",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_PLATFORM}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 84,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_PLATFORM}"
+          },
+          "format": "table",
+          "rawSql": "SELECT agent AS \"Agent\", session_id AS \"会话\", failures AS \"失败执行\", latest AS \"最近失败\" FROM platform_ops_dashboard.failed_sessions($__timeFrom(), $__timeTo()) ORDER BY latest DESC, agent, session_id"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "会话"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "平台运维详情",
+                    "url": "${PLATFORM_OPS}?agentId=${__data.fields[\"Agent\"]}&sessionId=${__value.raw}&from=${__from}&to=${__to}#ops-history"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "defaults": {}
+      }
+    },
+    {
       "id": 5,
       "title": "首段正文 · 服务端持久事件",
       "type": "table",
