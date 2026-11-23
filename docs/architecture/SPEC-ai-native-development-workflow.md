@@ -69,8 +69,12 @@ Handoff-From: <当前认领会话 ID 或 none>
 <!-- agent-claim:end -->
 ```
 
-交接只有在评论作者的 `author_association` 为 `OWNER`、`MEMBER` 或 `COLLABORATOR`，评论没有被
-编辑（`updated_at` 等于 `created_at`），块格式合法且 `Handoff-From` 等于当时认领时才生效。
+交接只有在评论作者获准，评论没有被编辑（`updated_at` 等于 `created_at`），块格式合法且
+`Handoff-From` 等于当时认领时才生效。作者获准是指 GitHub API 返回的 `author_association`
+为 `OWNER`、`MEMBER` 或 `COLLABORATOR`，或评论与原 Issue 的作者均为 `User` 且 API 返回的
+不可变用户 ID 逐值相同；后一种核对不依赖 Actions token 对私有组织成员身份的可见性。
+只比较 API 的实际作者身份，不采信评论正文、用户名相似性或自报来源；缺失、非法 ID、Bot 或
+其他作者不能凭 `CONTRIBUTOR` / `NONE` 取得交接权。读取身份或评论失败时 fail closed。
 无效评论不改变认领；认领会话需要并行拆成 GitHub sub-issue。会话 ID 仅作追踪标识，不得包含
 凭证或会话正文。
 
@@ -116,7 +120,8 @@ Issue Gate 在 PR 的 opened、reopened、synchronize、edited 和 ready_for_rev
 按自身 workflow 事件运行。
 
 Issue Gate 的认领检查读取主 Issue 评论的全部分页；交接评论读取失败时 fail closed。认领不一致时
-失败描述只说明当前会话和交接方法，不输出评论正文。没有 `agent:*` 标签的人工 PR 跳过认领检查。
+失败描述说明当前会话和交接方法，并按固定类别计数被忽略的认领评论，不输出评论正文或用户名。
+没有 `agent:*` 标签的人工 PR 跳过认领检查。
 取消 Issue 事件派发、定时巡检和额外汇总 job。检查读取实时 PR，若已不是触发时的 head 则失败，
 不把旧事件的结果当成新 head 的验证。
 

@@ -32,10 +32,20 @@ export function extractAgentSessionId(body) {
   return typeof session === "string" && session.length > 0 ? session : null;
 }
 
-function parseClaimComment(comment) {
+function authorizedClaimAuthor(issue, comment) {
+  if (CLAIM_ASSOCIATIONS.has(comment?.author_association)) return true;
+  const author = issue?.user;
+  const commenter = comment?.user;
+  // API-owned immutable IDs survive the installation token's private-membership filtering.
+  return author?.type === "User" && commenter?.type === "User" &&
+    Number.isSafeInteger(author.id) && author.id > 0 &&
+    Number.isSafeInteger(commenter.id) && commenter.id === author.id;
+}
+
+function parseClaimComment(comment, issue) {
   if (
     !comment ||
-    !CLAIM_ASSOCIATIONS.has(comment.author_association) ||
+    !authorizedClaimAuthor(issue, comment) ||
     comment.updated_at !== comment.created_at
   ) return null;
   const values = parseKeyValueBlock(comment.body, CLAIM_BLOCK);
@@ -56,14 +66,14 @@ export function resolveIssueClaimDiagnostics(issue, comments = []) {
   const ordered = [...comments].sort((a, b) => Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""));
   for (const comment of ordered) {
     if (typeof comment?.body !== "string" || !comment.body.includes("agent-claim:")) continue;
-    if (!CLAIM_ASSOCIATIONS.has(comment.author_association)) {
+    if (!authorizedClaimAuthor(issue, comment)) {
       const association = ["CONTRIBUTOR", "NONE", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN"].includes(comment.author_association)
         ? comment.author_association : "OTHER";
       count(`association=${association}`);
       continue;
     }
     if (comment.updated_at !== comment.created_at) { count("edited"); continue; }
-    const claim = parseClaimComment(comment);
+    const claim = parseClaimComment(comment, issue);
     if (!claim) { count("format"); continue; }
     if (claim.from !== (current ?? "none")) { count("handoff_from"); continue; }
     current = claim.claimed;
@@ -217,7 +227,9 @@ async function main() {
     const issue = await githubRequest(`/repos/${repository}/issues/${issueNumber}`);
     const comments = await readIssueComments(repository, issueNumber, githubRequest);
     const diagnostics = resolveIssueClaimDiagnostics(issue, comments);
-    console.log(`ignored claims ${diagnosticSummary(diagnostics.ignored)}`);
+    const authorMatches = comments.filter((comment) => comment?.body?.includes("agent-claim:") &&
+      !CLAIM_ASSOCIATIONS.has(comment.author_association) && authorizedClaimAuthor(issue, comment)).length;
+    console.log(`ignored claims ${diagnosticSummary(diagnostics.ignored)}; original-author matches ${authorMatches}`);
     return;
   }
   if (requiredEnvironment("GITHUB_EVENT_NAME") !== "pull_request_target") {

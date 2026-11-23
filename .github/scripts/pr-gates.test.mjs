@@ -306,3 +306,61 @@ test("claim failures report bounded ignore counts without comment body or userna
   assert.match(result.description, /association=CONTRIBUTOR:1/);
   assert.doesNotMatch(result.description, /private-user-name|private-comment-text/);
 });
+
+for (const association of ["CONTRIBUTOR", "NONE"]) {
+  test(`the original Issue author can hand off when Actions returns ${association}`, async () => {
+    const fixture = claimedGateFixture();
+    fixture.issue.user = { id: 101, type: "User", login: "original-author" };
+    fixture.comments.push({
+      created_at: "2026-10-03T00:00:00Z",
+      updated_at: "2026-10-03T00:00:00Z",
+      author_association: association,
+      user: { id: 101, type: "User", login: "renamed-author" },
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-beta\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+    });
+    fixture.pr.body = fixture.pr.body.replace("session-alpha", "session-beta");
+    assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+    fixture.pr.body = fixture.pr.body.replace("session-beta", "session-alpha");
+    assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+  });
+}
+
+test("external, missing or bot identities cannot use the original-author exception", async () => {
+  for (const user of [
+    { id: 202, type: "User", login: "same-login" },
+    { id: 101, type: "Bot", login: "same-login" },
+    { id: 0, type: "User" },
+    { id: "101", type: "User" },
+    undefined,
+  ]) {
+    const fixture = claimedGateFixture();
+    fixture.issue.user = { id: 101, type: "User", login: "same-login" };
+    fixture.comments.push({
+      created_at: "2026-10-03T00:00:00Z", updated_at: "2026-10-03T00:00:00Z",
+      author_association: "NONE", user,
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-beta\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+    });
+    fixture.pr.body = fixture.pr.body.replace("session-alpha", "session-beta");
+    const result = await runGate({ ...fixture, mode: "issue" });
+    assert.equal(result.ok, false);
+    assert.match(result.description, /association=NONE:1/);
+    assert.doesNotMatch(result.description, /same-login/);
+  }
+});
+
+test("the original-author exception still rejects edited, malformed and stale handoffs", async () => {
+  for (const invalid of ["edited", "format", "handoff_from"]) {
+    const fixture = claimedGateFixture();
+    fixture.issue.user = { id: 101, type: "User" };
+    fixture.comments.push({
+      created_at: "2026-10-03T00:00:00Z",
+      updated_at: invalid === "edited" ? "2026-10-03T00:00:01Z" : "2026-10-03T00:00:00Z",
+      author_association: "CONTRIBUTOR", user: { id: 101, type: "User" },
+      body: `<!-- agent-claim:start -->\nClaimed-By-Session: session-beta\n${invalid === "format" ? "Wrong-Field" : "Handoff-From"}: ${invalid === "handoff_from" ? "other-session" : "session-alpha"}\n<!-- agent-claim:end -->`,
+    });
+    fixture.pr.body = fixture.pr.body.replace("session-alpha", "session-beta");
+    const result = await runGate({ ...fixture, mode: "issue" });
+    assert.equal(result.ok, false);
+    assert.match(result.description, new RegExp(`${invalid}:1`));
+  }
+});
