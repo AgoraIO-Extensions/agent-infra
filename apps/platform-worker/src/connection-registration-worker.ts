@@ -17,16 +17,28 @@ import {
 /** A lifecycle adapter throws this only when the disable POST was certainly never started. */
 export const connectionConsumerDisableNotSentV1 = "CONNECTION_DISABLE_NOT_SENT";
 
+/** Private one-shot custody boundary; never part of a delivery/result object. */
+export type ConnectionRegistrationCredentialSinkV2 = (
+	delivery: Extract<
+		ConnectionConsumerRegistrationDeliveryV1,
+		{ outcome: "registered" }
+	>,
+	credential?: Uint8Array,
+) => Promise<boolean>;
+
 /** An approved machine adapter must verify the published receipt; this seam has no HTTP default. */
 export interface ConnectionConsumerRegistrationAdapterV1 {
+	readonly credentialDelivery?: "RESPONSE";
 	register(
 		intent: ConnectionConsumerRegistrationIntentV1,
 		signal: AbortSignal,
+		retainCredential?: ConnectionRegistrationCredentialSinkV2,
 	): Promise<ConnectionConsumerRegistrationDeliveryV1>;
 	/** Unknown attempts only read back the original source key/operation; they never create a replacement. */
 	reconcile(
 		intent: ConnectionConsumerRegistrationIntentV1,
 		signal: AbortSignal,
+		retainCredential?: ConnectionRegistrationCredentialSinkV2,
 	): Promise<ConnectionConsumerRegistrationDeliveryV1>;
 	/** Spec §13.5.7 lifecycle `POST R/disable`; absent means disable intents stay unsent. */
 	disable?(
@@ -44,6 +56,8 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 	readonly databaseUrl: string;
 	readonly policy: ConnectionConsumerRegistrationPolicyV1;
 	readonly adapter?: ConnectionConsumerRegistrationAdapterV1;
+	/** Approved ADR 0002 encryptor; absent keeps v2 registration unsent. */
+	readonly encryptCredential?: import("@agent-infra/platform-core").AgentConnectionAssociationDependenciesV1["encrypt"];
 	readonly batchSize?: number;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
@@ -68,6 +82,7 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 		batchSize > 20
 	)
 		throw new Error("CONNECTION_CONSUMER_REGISTRATION_INVALID");
+	const encryptCredential = input.encryptCredential;
 	const store = new PostgresConnectionConsumerRegistrationStoreV1(input);
 	const disables = new PostgresConnectionConsumerDisableStoreV1(input);
 	const outbox = createPostgresOutboxStore(input);
@@ -216,7 +231,9 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 			try {
 				const attempt = await store.beginAttempt(
 					claim,
-					input.adapter !== undefined,
+					input.adapter !== undefined &&
+						(input.adapter.credentialDelivery !== "RESPONSE" ||
+							encryptCredential !== undefined),
 				);
 				if (!attempt) continue;
 				if (attempt.outcome !== "deliver") outcome = attempt.outcome;
@@ -241,19 +258,43 @@ export function createConnectionConsumerRegistrationWorkerV1(input: {
 									once: true,
 								});
 							});
+							let credentialCommitted = false;
+							const retain: ConnectionRegistrationCredentialSinkV2 | undefined =
+								encryptCredential
+									? async (delivery, credential) => {
+											controller.signal.throwIfAborted();
+											credentialCommitted = await store.complete(
+												claim,
+												delivery,
+												{
+													credential,
+													encrypt: encryptCredential,
+												},
+											);
+											return credentialCommitted;
+										}
+									: undefined;
 							const delivery = parseConnectionConsumerRegistrationDeliveryV1(
 								await Promise.race([
 									attempt.mode === "register"
-										? input.adapter.register(attempt.intent, controller.signal)
+										? input.adapter.register(
+												attempt.intent,
+												controller.signal,
+												...(retain ? ([retain] as const) : ([] as const)),
+											)
 										: input.adapter.reconcile(
 												attempt.intent,
 												controller.signal,
+												...(retain ? ([retain] as const) : ([] as const)),
 											),
 									aborted,
 								]),
 								attempt.intent,
 							);
-							if (await store.complete(claim, delivery))
+							if (
+								credentialCommitted ||
+								(await store.complete(claim, delivery))
+							)
 								outcome = delivery.outcome;
 						} finally {
 							clearTimeout(timeout);

@@ -3,6 +3,21 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import { connectionManualAssociations } from "./schema-connection-registration.js";
 
+/** Historical table name retained; automatic v2 custody is usable only with its exact committed registration. */
+export function connectionCredentialAssociationUsableSqlV2(alias: string) {
+	if (!["a", "m", "association"].includes(alias))
+		throw new Error("CONNECTION_ASSOCIATION_ALIAS_INVALID");
+	return `(exists(select 1 from platform.agent_owners own where own.agent_id=${alias}.agent_id and own.owner_id=${alias}.owner_id)
+		and not exists(select 1 from platform.platform_user_disables disabled where disabled.user_id=${alias}.owner_id)
+		and (not exists(select 1 from platform.connection_consumer_registrations r where r.agent_id=${alias}.agent_id)
+		or exists(select 1 from platform.connection_consumer_registrations r
+			where r.agent_id=${alias}.agent_id and r.status='registered'
+			and r.consumer_id=${alias}.connection_agent_id and r.association_revision=${alias}.association_revision
+			and r.request->>'platformOwnerId'=${alias}.owner_id
+			and not exists(select 1 from platform.connection_consumer_disables d
+				where d.agent_id=r.agent_id and d.status <> 'not_required'))))`;
+}
+
 type Query = (
 	template: TemplateStringsArray,
 	...values: string[]
@@ -21,6 +36,11 @@ export async function hasCurrentConnectionManualAssociationV1(
 		await query`select a.agent_id from platform.connection_manual_associations a
 		join platform.agent_owners own on own.agent_id = a.agent_id and own.owner_id = a.owner_id
 		where a.agent_id = ${agentId}
+			and (not exists(select 1 from platform.connection_consumer_registrations r where r.agent_id=a.agent_id)
+				or exists(select 1 from platform.connection_consumer_registrations r where r.agent_id=a.agent_id
+					and r.status='registered' and r.consumer_id=a.connection_agent_id
+					and r.association_revision=a.association_revision and r.request->>'platformOwnerId'=a.owner_id
+					and not exists(select 1 from platform.connection_consumer_disables d where d.agent_id=r.agent_id and d.status <> 'not_required')))
 			and not exists(select 1 from platform.platform_user_disables disabled
 				where disabled.user_id = a.owner_id)
 		limit 1`;

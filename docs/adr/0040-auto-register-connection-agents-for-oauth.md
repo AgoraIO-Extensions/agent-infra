@@ -12,6 +12,12 @@
 并增加 Owner 手工关联既有 Consumer 的入口；逐 Agent 关联不进入部署配置。下文的登记、回执、
 恢复与 OAuth 取舍对自动登记继续有效，手工关联的合同见工程 Spec §13.5.7。
 
+2026-11-23 修订（[#4455](https://github.com/AgoraIO-Extensions/agent-infra/issues/4455)）：
+负责人接受独立 v2 首次响应交付 Agent 服务凭据，由获准登记后端加密保管、沿既有受保护 Host
+供应处理。复用现有密文关联和 outbox 事务，不新增 publication 接收服务；丢响应后原 secret
+无法领取，代价是必须保持待核实并由有权主体明确轮换原 Consumer。v1 和用户秘密边界不变，
+完整合同仍只在工程 Spec §13.5.7 维护。源码实现不批准生产启用或现场验收。
+
 ## 问题
 
 Platform Agent 的长期 Consumer 关联与用户 OAuth 安装属于不同生命周期。只配置 MCP endpoint、

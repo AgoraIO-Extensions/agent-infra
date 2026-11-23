@@ -35,6 +35,7 @@ import {
 import { sql } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 import { readAgentManagementState } from "./agent-management.js";
+import { connectionCredentialAssociationUsableSqlV2 } from "./connection-manual-association-reader.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -157,6 +158,7 @@ export async function lockConnectionManualAssociationForInstallationV1(
 		where installation.authorization_id=${authorizationId}
 			and installation.association_revision=association.association_revision
 			and installation.connection_agent_id=association.connection_agent_id
+			and ${sql.raw(connectionCredentialAssociationUsableSqlV2("association"))}
 		for share of association
 	`);
 	return locked.length === 1;
@@ -205,7 +207,7 @@ export async function readConnectionManualInstallationFactsV1(
 			and not exists(select 1 from platform.platform_user_disables where user_id=${userId})
 			and not exists(select 1 from platform.conversation_stops where execution_id=e.execution_id and status='submitted')
 			and not exists(select 1 from platform.conversation_generation_tombstones where execution_id=e.execution_id and status='pending')
-			and not exists(select 1 from platform.connection_consumer_registrations r where r.agent_id=a.id)
+			and ${sql.raw(connectionCredentialAssociationUsableSqlV2("m"))}
 		for share of a,c,e,t,s,m
 	`);
 	const row = rows[0];

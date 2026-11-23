@@ -144,14 +144,16 @@ function operations(
 				.where(eq(connectionManualAssociations.agentId, agentId))
 				.limit(1)
 				.for("update");
-			if (manual)
-				return { source: "manual", associationRevision: manual.revision };
+
 			const [registration] = await transaction
 				.select({ status: connectionConsumerRegistrations.status })
 				.from(connectionConsumerRegistrations)
 				.where(eq(connectionConsumerRegistrations.agentId, agentId))
 				.limit(1);
-			if (!registration) return null;
+			if (!registration)
+				return manual
+					? { source: "manual", associationRevision: manual.revision }
+					: null;
 			const [disable] = await transaction
 				.select({ status: connectionConsumerDisables.status })
 				.from(connectionConsumerDisables)

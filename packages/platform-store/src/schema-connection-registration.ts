@@ -199,8 +199,8 @@ export const connectionConsumerDisables = platformSchema.table(
 );
 
 /**
- * Spec §13.5.7 Owner manual association: one row per Agent, written only after a
- * read-only Connection verification. The service credential is stored only as
+ * Spec §13.5.7 private service-credential custody: manual verification or v2
+ * automatic registration, one row per Agent. The registration row determines automatic origin. The service credential is stored only as
  * ADR 0002 application ciphertext; the fingerprint only rejects reuse across Agents.
  */
 export const connectionManualAssociations = platformSchema.table(
