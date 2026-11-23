@@ -13,11 +13,11 @@ import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
-	type CodexDynamicConnectionClientV1,
-	CodexDynamicConnectionRefusalV1,
 	type ConnectionHostSupplyBindingV1,
 	type ConnectionInstallTlsExporterV1,
 	connectionInstallServerExporterV1,
+	type DynamicConnectionClientV1,
+	DynamicConnectionRefusalV1,
 	encodeConnectionHostSupplyAadV1,
 	type FileRuntimeStore,
 	openConnectionHostSupplyV1,
@@ -183,18 +183,18 @@ export type ConnectionInstallReceiverAssemblyV1 =
 	  };
 
 /**
- * §13.5.6 (Codex only, ADR-0048): the Codex Driver input for a receiver's
- * dynamic reader. The Thread declares the contract's tools; each call reads
- * its installation through the reader.
+ * §13.5.6 (ADR-0048): the Driver input for a receiver's dynamic reader. The
+ * Codex Thread, or the Claude, ACP and Pi Execution, declares the contract's
+ * tools; each call reads its installation through the reader.
  */
-export function codexDynamicConnectionClientForReaderV1(
+export function dynamicConnectionClientForReaderV1(
 	reader: NonNullable<
 		Extract<
 			ConnectionInstallReceiverAssemblyV1,
 			{ status: "available" }
 		>["dynamicReader"]
 	>,
-): CodexDynamicConnectionClientV1 | undefined {
+): DynamicConnectionClientV1 | undefined {
 	const declarations = reader.contract.toolDeclarations;
 	if (!declarations) return undefined;
 	// Live discovery lists tools in the contract's order; declare them the same way.
@@ -217,6 +217,10 @@ export function codexDynamicConnectionClientForReaderV1(
 		resolveInput: (reference, signal) => reader.resolveInput(reference, signal),
 	};
 }
+
+/** Same input under its Codex-era name. */
+export const codexDynamicConnectionClientForReaderV1 =
+	dynamicConnectionClientForReaderV1;
 
 export interface ConnectionInstallReceiverOptionsV1 {
 	readonly environment: NodeJS.ProcessEnv;
@@ -2241,7 +2245,7 @@ async function assembleConnectionInstallReceiver(
 			);
 			current();
 		} catch {
-			throw new CodexDynamicConnectionRefusalV1("unavailable");
+			throw new DynamicConnectionRefusalV1("unavailable");
 		}
 		const entry = [...fixed.values()].find(
 			(candidate) =>
@@ -2252,8 +2256,7 @@ async function assembleConnectionInstallReceiver(
 				candidate.template.reference.sessionGeneration ===
 					reference.sessionGeneration,
 		);
-		if (!entry)
-			throw new CodexDynamicConnectionRefusalV1("authorization_required");
+		if (!entry) throw new DynamicConnectionRefusalV1("authorization_required");
 		let consumer: ApprovedConnectionConsumerTargetV1;
 		try {
 			consumer = verifyConnectionRegistrationTemplateV1(
@@ -2262,7 +2265,7 @@ async function assembleConnectionInstallReceiver(
 				clientName,
 			).target;
 		} catch {
-			throw new CodexDynamicConnectionRefusalV1("unavailable");
+			throw new DynamicConnectionRefusalV1("unavailable");
 		}
 		return { binding, hostRef, entry, consumer };
 	}
@@ -2280,10 +2283,10 @@ async function assembleConnectionInstallReceiver(
 		signal: AbortSignal,
 	): Promise<unknown> {
 		const required = () => {
-			throw new CodexDynamicConnectionRefusalV1("authorization_required");
+			throw new DynamicConnectionRefusalV1("authorization_required");
 		};
 		const refuse = () => {
-			throw new CodexDynamicConnectionRefusalV1("unavailable");
+			throw new DynamicConnectionRefusalV1("unavailable");
 		};
 		const { binding, hostRef, entry, consumer } = await locateDynamic(
 			reference,

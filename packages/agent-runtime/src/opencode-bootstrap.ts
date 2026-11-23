@@ -21,6 +21,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
+import type { DynamicConnectionClientV1 } from "./dynamic-connection.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import {
 	nativeShellAvailable,
@@ -144,6 +145,8 @@ export interface OpenCodeRuntimeOptions {
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	readonly standardConnectionClient?: StandardMcpClientOptions;
+	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
+	readonly dynamicConnectionClient?: DynamicConnectionClientV1;
 	/** Deployment-owned Applied Skill root; never selected by a wire request. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly authorizeToolAction?: (
@@ -244,7 +247,8 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 	return GenericAcpRuntimeDriver.open({
 		...options,
 		nativeSkillPrompt: openCodeNativeSkillPrompt,
-		reuseNativeSession: !options.standardConnectionClient,
+		reuseNativeSession:
+			!options.standardConnectionClient && !options.dynamicConnectionClient,
 		sandboxReferences: true,
 		// #3225：附件物化到 Conversation 工作区并追加清单；ACP image 块需协商
 		// promptCapabilities.image，未协商时只给清单。

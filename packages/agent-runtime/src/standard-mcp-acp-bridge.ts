@@ -12,6 +12,11 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
+import {
+	type DynamicConnectionClientV1,
+	declaredConnectionDefinitions,
+	dynamicConnectionRefusalsV1,
+} from "./dynamic-connection.js";
 import type { RuntimeOriginalExecutionRef } from "./runtime-authorization.js";
 import type {
 	StandardMcpClient,
@@ -34,7 +39,14 @@ export interface StandardMcpAcpBridge {
 }
 
 export interface StandardMcpAcpBridgeOptions {
-	readonly client: StandardMcpClient;
+	/**
+	 * The Execution's protected client. Absent only with `declared` and
+	 * `refusal` (§13.5.6): every call then answers the fixed refusal and sends
+	 * nothing to Connection.
+	 */
+	readonly client?: StandardMcpClient;
+	readonly declared?: DynamicConnectionClientV1["declared"];
+	readonly refusal?: keyof typeof dynamicConnectionRefusalsV1;
 	readonly execution: RuntimeOriginalExecutionRef;
 	readonly nativeSessionRef: () => string;
 	readonly recordOperationFact?: (
@@ -78,10 +90,10 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 		: undefined;
 }
 
-function tools(client: StandardMcpClient): Tool[] {
-	const namespace = client.toolDefinitions.find(
-		(entry) => entry.name === "connection",
-	);
+function tools(
+	definitions: ReturnType<typeof declaredConnectionDefinitions>,
+): Tool[] {
+	const namespace = definitions.find((entry) => entry.name === "connection");
 	if (!namespace) unavailable();
 	return namespace.tools.map((tool) => ({
 		name: tool.name,
@@ -109,13 +121,26 @@ export async function createStandardMcpAcpBridge(
 	options: StandardMcpAcpBridgeOptions,
 ): Promise<StandardMcpAcpBridge> {
 	const token = randomBytes(32).toString("base64url");
+	const client = options.client;
+	if (
+		client
+			? options.declared !== undefined || options.refusal !== undefined
+			: options.declared === undefined || options.refusal === undefined
+	)
+		unavailable();
 	const bridgeExpiresAt = Math.min(
-		options.client.expiresAt,
+		client?.expiresAt ?? Number.POSITIVE_INFINITY,
 		Date.now() + maximumBridgeLifetimeMs,
 	);
 	if (bridgeExpiresAt <= Date.now()) unavailable();
 	const descriptorMap = new Map(
-		tools(options.client).map((tool) => [tool.name, tool]),
+		tools(
+			client
+				? client.toolDefinitions
+				: declaredConnectionDefinitions(
+						options.declared as DynamicConnectionClientV1["declared"],
+					),
+		).map((tool) => [tool.name, tool]),
 	);
 	const replayKeys = new Set<string>();
 	let closed = false;
@@ -131,7 +156,7 @@ export async function createStandardMcpAcpBridge(
 	let close: () => Promise<void>;
 	mcp.setRequestHandler(ListToolsRequestSchema, async () => {
 		if (closed || blocked || expired()) unavailable();
-		await options.client.assertCurrent();
+		await client?.assertCurrent();
 		return { tools: [...descriptorMap.values()] };
 	});
 	mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -154,6 +179,22 @@ export async function createStandardMcpAcpBridge(
 		if (replayKeys.has(replayKey) || replayKeys.size >= maximumReplayKeys)
 			unavailable();
 		replayKeys.add(replayKey);
+		if (!client) {
+			// §13.5.6: a deterministic refusal decided before any Connection request.
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							dynamicConnectionRefusalsV1[
+								options.refusal as keyof typeof dynamicConnectionRefusalsV1
+							],
+						),
+					},
+				],
+				isError: true,
+			};
+		}
 		active = true;
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();
@@ -181,11 +222,11 @@ export async function createStandardMcpAcpBridge(
 				// Preserve the independently validated ConsumerInstance mapping while
 				// keeping the call association explicitly unverified.
 				connection: {
-					serviceRef: options.client.serviceRef,
+					serviceRef: client.serviceRef,
 					verification: "unverified",
-					consumerId: options.client.consumerId,
-					instanceRef: options.client.instanceRef,
-					credentialRevision: options.client.credentialRevision,
+					consumerId: client.consumerId,
+					instanceRef: client.instanceRef,
+					credentialRevision: client.credentialRevision,
 					reason: "record_unavailable",
 				},
 				...(phase === "started"
@@ -207,7 +248,7 @@ export async function createStandardMcpAcpBridge(
 		const operation: StandardMcpOperation = {
 			assertCurrent: async () => {
 				if (closed || blocked || expired()) unavailable();
-				await options.client.assertCurrent();
+				await client.assertCurrent();
 				const nativeSessionRef = options.nativeSessionRef();
 				if (!nativeSessionRef.trim()) unavailable();
 				const authorized = await options.authorizeToolAction?.({
@@ -253,7 +294,7 @@ export async function createStandardMcpAcpBridge(
 		};
 		try {
 			return result(
-				await options.client.call(
+				await client.call(
 					name,
 					args,
 					operation,
@@ -306,7 +347,7 @@ export async function createStandardMcpAcpBridge(
 			if (expiryTimer) clearTimeout(expiryTimer);
 			await transport.close().catch(() => {});
 			await mcp.close().catch(() => {});
-			await options.client.close().catch(() => {});
+			await client?.close().catch(() => {});
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		})();
 		return closePromise;

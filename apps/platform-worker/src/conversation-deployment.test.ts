@@ -2590,6 +2590,83 @@ describe("production SessionSandbox resource receiver", () => {
 		},
 	);
 
+	// #4349 / §13.5.6: the manual-installation receiver is rendered for every
+	// standard template Session Pod, not only Codex.
+	it.each(["codex", "claude", "acp"] as const)(
+		"renders the Connection install receiver into the %s Session Pod",
+		async (driver) => {
+			const f = fixture();
+			const installConfiguration = {
+				schemaVersion: 1 as const,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				audience: "connection-api",
+				egressProfile: { ref: "approved-egress", revision: "r1" },
+				issuer: "https://connection.example.test/",
+				oauthCallbackUrl: "https://platform.example.test/connection/callback",
+			};
+			const install = {
+				port: 9443,
+				workerOrigin: "https://install-worker.workload-test.svc:9444/",
+				apiSelector: { component: "platform-api" },
+				clientName: "Agent platform",
+				configuration: installConfiguration,
+				approval: {
+					schemaVersion: 1 as const,
+					configFingerprint:
+						connectionSystemAccessFingerprintV1(installConfiguration),
+					egressEnforced: true as const,
+					source: { ref: "approval", revision: "r1" },
+				},
+				callbackAuthSecretRef: { name: "callback-auth", key: "auth" },
+				workerCaSecretRef: { name: "worker-ca", key: "ca.crt" },
+				tlsSecretForSandbox: () => ({
+					name: "session-tls",
+					certKey: "tls.crt",
+					keyKey: "tls.key",
+				}),
+			};
+			const modelProjection = sessionSandboxModelProjectionFixture({
+				agentId: f.claim.sandbox.agentId,
+				configurationRevision: 1,
+				imageDigest: f.claim.policy.imageDigest,
+				driver,
+			});
+			const receive = createProductionSessionSandboxReceiverV1(
+				{
+					...f.options,
+					templateModelBindings: [modelProjection.standardTemplateBinding],
+				},
+				{
+					serviceToken: sessionSandboxDeploymentTokenFixture,
+					connectionInstallBootstrap: install,
+				},
+			);
+			await receive(
+				{ ...f.claim, modelProjection },
+				new AbortController().signal,
+			);
+			const service = f.resources.get(
+				"Service/sandbox-allocation-a",
+			) as V1Service;
+			expect(service.spec?.ports).toContainEqual({
+				name: "oauth",
+				port: 9443,
+				targetPort: 9443,
+			});
+			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			expect(pod.spec?.containers[0]?.env).toContainEqual({
+				name: "AGENT_INFRA_RUNTIME_DRIVER",
+				value: driver,
+			});
+			expect(
+				pod.spec?.containers[0]?.env?.some((entry) =>
+					entry.name.startsWith("AGENT_INFRA_RUNTIME_CONNECTION_INSTALL_"),
+				),
+			).toBe(true);
+		},
+	);
+
 	it("rejects a mismatched persisted policy before any resource write", async () => {
 		const f = fixture();
 		await expect(
