@@ -1,4 +1,3 @@
-import { execFile as execCoreProbe } from "node:child_process";
 import { createPublicKey, type KeyObject } from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
@@ -523,33 +522,15 @@ export async function assembleRuntimeHost(
 			? readCodexIsolationMode(environment, serviceToken)
 			: undefined;
 	const coreUid = environment.AGENT_INFRA_CORE_POD_UID;
-	let corePod: ReturnType<typeof admittedCorePod> | undefined;
-	if (coreUid !== undefined) {
+	const coreConversationKey = environment.AGENT_INFRA_CORE_CONVERSATION_KEY;
+	if (coreUid !== undefined || coreConversationKey !== undefined) {
 		if (
 			!coreUid ||
+			!coreConversationKey ||
 			process.platform !== "linux" ||
 			codexIsolationMode !== "landlock"
 		)
 			runtimeConfigurationInvalid();
-		const install = () =>
-			new Promise<void>((resolve, reject) =>
-				execCoreProbe(
-					"/usr/bin/setpriv",
-					[
-						"--no-new-privs",
-						"--landlock-access",
-						"fs:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-char,make-dir,make-reg,make-sock,make-fifo,make-block,make-sym,refer,truncate,ioctl-dev",
-						"--landlock-rule",
-						"path-beneath:execute,read-file,read-dir:/",
-						"--",
-						"/bin/true",
-					],
-					{ timeout: 3000, env: { PATH: "/usr/bin:/bin" } },
-					(error) =>
-						error ? reject(new Error("CORE_LANDLOCK_UNAVAILABLE")) : resolve(),
-				),
-			);
-		corePod = admittedCorePod(serviceToken, coreUid, install);
 	}
 	const sessionExecutorBinding =
 		codexIsolationMode === "session-executor"
@@ -912,6 +893,7 @@ export async function assembleRuntimeHost(
 						});
 					},
 					isolationMode: codexIsolationMode,
+					coreConversationKey,
 					...(sessionExecutor ? { sessionExecutor } : {}),
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
@@ -1199,6 +1181,11 @@ export async function assembleRuntimeHost(
 				}
 			: undefined;
 		const podUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
+		if (
+			coreUid &&
+			(!(driver instanceof CodexRuntimeDriver) || !driver.liveCoreProcessId)
+		)
+			runtimeConfigurationInvalid();
 		const host = await RuntimeHost.open({
 			// #4358 I2: one observer per process, so its clock domain is this
 			// Pod UID plus process start; it writes fixed stdout records only.
@@ -1345,7 +1332,15 @@ export async function assembleRuntimeHost(
 		}
 		return {
 			host,
-			corePod,
+			...(coreUid && driver instanceof CodexRuntimeDriver
+				? {
+						corePod: admittedCorePod(
+							serviceToken,
+							coreUid,
+							() => driver.liveCoreProcessId,
+						),
+					}
+				: {}),
 			browserCapability: () => browserCapabilityAssembly,
 			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding

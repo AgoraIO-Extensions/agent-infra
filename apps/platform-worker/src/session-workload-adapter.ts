@@ -9,6 +9,7 @@ import {
 	CODEX_SESSION_EXECUTOR_ATTESTATION_ENV,
 	CODEX_SESSION_EXECUTOR_BINDING_ENV,
 	type CodexSessionExecutorBindingV1,
+	codexConversationKey,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	issueExecutorStartIdentityV1,
@@ -1327,10 +1328,22 @@ function renderSessionSandboxResourcesV1(
 		},
 	};
 	if (allocation.podController && pod.spec) {
-		pod.spec.containers[0]?.env?.push({
-			name: "AGENT_INFRA_CORE_POD_UID",
-			valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" } },
-		});
+		pod.spec.containers[0]?.env?.push(
+			{
+				name: "AGENT_INFRA_CORE_POD_UID",
+				valueFrom: {
+					fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" },
+				},
+			},
+			{
+				name: "AGENT_INFRA_CORE_CONVERSATION_KEY",
+				value: codexConversationKey({
+					agentId: allocation.agentId,
+					conversationId: allocation.sessionId,
+					sessionGeneration: allocation.generation,
+				}),
+			},
+		);
 		if (!allocation.corePlacement) throw new WorkloadKubernetesError("policy");
 		Object.assign(
 			pod.spec,

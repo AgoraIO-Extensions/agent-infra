@@ -1156,7 +1156,7 @@ function buildArtifacts() {
 					post: {
 						operationId: "attestCorePodLandlockV1",
 						description:
-							"Core pilot only. Authenticates a fresh Worker challenge for the expected Pod UID. Successful Landlock installation authorizes only this Host boot.",
+							"Core pilot only. Authenticates a fresh Worker challenge for the expected Pod UID. The permit requires the live Landlock-confined Codex process initialized for this Conversation.",
 						security: [{ CorePodChallengeBearer: [] }],
 						parameters: [
 							{

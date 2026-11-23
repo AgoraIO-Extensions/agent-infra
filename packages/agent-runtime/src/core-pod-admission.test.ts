@@ -7,8 +7,8 @@ import {
 it("requires a fresh kernel result for the expected UID and boot, including after expiry", async () => {
 	vi.useFakeTimers();
 	try {
-		const install = vi.fn(async () => {});
-		const host = admittedCorePod("fixture", "pod-a", install);
+		const current = vi.fn<() => string | undefined>(() => "native-one");
+		const host = admittedCorePod("fixture", "pod-a", current);
 		let replay: Headers | undefined;
 		const transport: typeof fetch = async (_url, init) => {
 			const h = new Headers(init?.headers);
@@ -34,19 +34,20 @@ it("requires a fresh kernel result for the expected UID and boot, including afte
 				uid,
 				transport,
 			);
-		install.mockRejectedValueOnce(new Error("kernel refused ruleset"));
+		current.mockReturnValueOnce(undefined);
 		await expect(probe("pod-a")).rejects.toThrow();
 		const permit = await probe("pod-a");
 		expect(host.accepts(permit)).toBe(true);
-		expect(admittedCorePod("fixture", "pod-a", install).accepts(permit)).toBe(
-			false,
-		);
+		expect(
+			admittedCorePod("fixture", "pod-a", () => "native-two").accepts(permit),
+		).toBe(false);
 		await expect(probe("pod-b")).rejects.toThrow();
 		await expect(probe("pod-a")).rejects.toThrow();
 		vi.advanceTimersByTime(60_001);
 		expect(host.accepts(permit)).toBe(false);
 		await expect(probe("pod-a")).rejects.toThrow();
-		expect(install).toHaveBeenCalledTimes(3);
+		current.mockReturnValue(undefined);
+		expect(host.accepts(permit)).toBe(false);
 	} finally {
 		vi.useRealTimers();
 	}

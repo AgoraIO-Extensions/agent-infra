@@ -1253,7 +1253,7 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事�
 
 Worker 在投递前回读 Sandbox UID、Pod controller owner UID、实际 Pod UID、挂载卷与原 PVC UID，验证部署指定的调度约束、网络隔离与 Runtime 准入。Pod 重建后重新验证并按既有 Store CAS 更新绑定。候选 Pod 使用要求实际安装 Landlock 规则集的路径；Worker 独占管理前提下签发的 container-boundary attestation 不适用于 Core Pod。
 
-候选 Runtime 通过 Downward API 取得实际 Pod UID。Worker 使用当前会话密钥、该 UID 和一次性随机数认证内部准入请求。Runtime 在执行环境中实际安装 Landlock ABI V5 文件系统规则集后，签发绑定该 UID、进程启动实例和有效期的传输凭据，并对本次随机数和凭据做 HMAC 回证。Worker 验证回证和到期时间后投递，Runtime 在接收请求时再次校验凭据。凭据有效期为 60 秒，续期需要重新安装规则集。排空过程中更新重建 Pod 的身份，需要 Store 确认可以排空、尚未开始删除、其余全部绑定一致，并重新取得该 Pod 的准入证明。
+候选 Runtime 通过 Downward API 取得实际 Pod UID。Worker 使用当前会话密钥、该 UID 和一次性随机数认证内部准入请求。Driver 通过业务 Conversation 的原生启动入口安装 Landlock 规则集并执行固定 Codex app-server。该子进程完成 initialize 和受限配置核验后，Driver 固定业务 RPC。Runtime 按该 RPC 的活跃进程实例、Pod UID 和有效期签发传输凭据，并对本次随机数和凭据做 HMAC 回证。Worker 验证回证和到期时间后投递，Runtime 在接收请求时再次校验凭据。凭据有效期为 60 秒，签发和收包均要求同一原生业务进程仍然活跃。Worker 要求至少 10 秒的发送余量；超时或结果不确定时沿既有 Execution 幂等路径核对原操作。排空过程中更新重建 Pod 的身份，需要 Store 确认可以排空、尚未开始删除、其余全部绑定一致，并重新取得该 Pod 的准入证明。
 
 发现错绑、双写或错误就绪时，停止分配新的候选会话，由原 Worker 路径接收后续新会话。已有候选维持原分配，排空后按身份回读 Pod 回收、原卷 UID 与合成标记，再清理试验控制器。比较时记录同一 ACK 工作负载下从创建到首次可投递的耗时、故障定位步骤、缓存与存储条件。
 

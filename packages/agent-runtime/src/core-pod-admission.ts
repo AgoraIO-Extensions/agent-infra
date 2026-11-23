@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 export const corePodAdmissionPath = "/internal/runtime/v1/core-pod-admission";
 const lifetimeMs = 60_000;
+const sendMarginMs = 10_000;
 
 function mac(key: string, ...parts: string[]) {
 	return createHmac("sha256", key)
@@ -12,7 +13,13 @@ export function coreProbeToken(key: string, uid: string, nonce: string) {
 	return mac(key, "core-probe-v1", uid, nonce);
 }
 
-function valid(token: string, key: string, uid: string, boot?: string) {
+function valid(
+	token: string,
+	key: string,
+	uid: string,
+	boot?: string,
+	minimumRemainingMs = 0,
+) {
 	const [instance, expires, signature, ...extra] = token.split(".");
 	const remaining = Number(expires) - Date.now();
 	if (
@@ -20,7 +27,7 @@ function valid(token: string, key: string, uid: string, boot?: string) {
 		!instance ||
 		(boot && boot !== instance) ||
 		!Number.isSafeInteger(Number(expires)) ||
-		remaining <= 0 ||
+		remaining <= minimumRemainingMs ||
 		remaining > lifetimeMs ||
 		!signature ||
 		!expires
@@ -35,37 +42,30 @@ function valid(token: string, key: string, uid: string, boot?: string) {
 	);
 }
 
-/** Admission belongs to one Host boot. Only a successful kernel probe renews it. */
+/** The live id comes from the initialized, contained RPC used by the business driver. */
 export function admittedCorePod(
 	key: string,
 	uid: string,
-	install: () => Promise<void>,
+	currentProcess: () => string | undefined,
 ) {
-	const boot = randomUUID();
 	let expires = 0;
-	let pending: Promise<void> | undefined;
 	return {
 		probeToken: (nonce: string) => coreProbeToken(key, uid, nonce),
 		async issue(nonce: string) {
-			if (Date.now() >= expires) {
-				pending ??= install()
-					.then(() => {
-						expires = Date.now() + lifetimeMs;
-					})
-					.finally(() => {
-						pending = undefined;
-					});
-				await pending;
-			}
+			const instance = currentProcess();
+			if (!instance) throw new Error("CORE_NATIVE_PROCESS_UNAVAILABLE");
+			if (expires - Date.now() <= sendMarginMs * 2)
+				expires = Date.now() + lifetimeMs;
 			const token = [
-				boot,
+				instance,
 				expires,
-				mac(key, "core-landlock-v1", uid, boot, String(expires)),
+				mac(key, "core-landlock-v1", uid, instance, String(expires)),
 			].join(".");
 			return { token, proof: mac(key, "core-response-v1", uid, nonce, token) };
 		},
 		accepts(token: string) {
-			return valid(token, key, uid, boot);
+			const instance = currentProcess();
+			return !!instance && valid(token, key, uid, instance);
 		},
 	};
 }
@@ -93,7 +93,7 @@ export async function requestCorePodAdmission(
 		const token = response.headers.get("x-core-admission");
 		if (
 			token &&
-			valid(token, key, uid) &&
+			valid(token, key, uid, undefined, sendMarginMs) &&
 			response.headers.get("x-core-proof") ===
 				mac(key, "core-response-v1", uid, nonce, token)
 		)

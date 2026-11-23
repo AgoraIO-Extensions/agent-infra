@@ -298,12 +298,12 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	expect(
 		(await receive({ ...claim, previousObservation: initial }, signal)).status,
 	).toBe("unknown");
-	runtime = admittedCorePod(key, "foreign-uid", async () => {});
+	runtime = admittedCorePod(key, "foreign-uid", () => "native-process");
 	expect(
 		(await receive({ ...claim, previousObservation: initial }, signal)).status,
 	).toBe("unknown");
 	if (!pod.metadata?.uid) throw Error("missing uid");
-	runtime = admittedCorePod(key, pod.metadata.uid, async () => {});
+	runtime = admittedCorePod(key, pod.metadata.uid, () => "native-process");
 	const next = await receive(
 		{ ...claim, previousObservation: initial },
 		signal,
@@ -350,7 +350,7 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	const drain = drainClaim({ ...f, claim }, next);
 	if (!drain.lifecycle) throw Error("missing lifecycle");
 	await expect(receive(drain, signal)).rejects.toThrow();
-	runtime = admittedCorePod(key, "rebuilt-pod", async () => {});
+	runtime = admittedCorePod(key, "rebuilt-pod", () => "native-process");
 	const refreshed = await receive(drain, signal);
 	const decide = (
 		observation: SessionSandboxObservationV1,

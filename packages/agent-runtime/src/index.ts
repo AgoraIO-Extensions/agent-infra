@@ -13,7 +13,10 @@ export {
 	verifyClaudeInstallation,
 } from "./claude-installation.js";
 export * from "./claude-runtime-driver.js";
-export { validateModelAccess as validateCodexModelAccess } from "./codex-app-server-bridge.js";
+export {
+	codexConversationKey,
+	validateModelAccess as validateCodexModelAccess,
+} from "./codex-app-server-bridge.js";
 export { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";
 export * from "./codex-executor-bootstrap.js";
 export * from "./codex-executor-control.js";

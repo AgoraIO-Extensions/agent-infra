@@ -1067,7 +1067,7 @@
   "paths": {
     "/internal/runtime/v1/core-pod-admission": {
       "post": {
-        "description": "Core pilot only. Authenticates a fresh Worker challenge for the expected Pod UID. Successful Landlock installation authorizes only this Host boot.",
+        "description": "Core pilot only. Authenticates a fresh Worker challenge for the expected Pod UID. The permit requires the live Landlock-confined Codex process initialized for this Conversation.",
         "operationId": "attestCorePodLandlockV1",
         "parameters": [
           {
