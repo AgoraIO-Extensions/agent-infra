@@ -1065,7 +1065,7 @@ Agent 级授权、幂等、锁顺序、resourceFence、执行容量或预留池�
 
 **预留身份与授权。** 服务端为每个预留事实生成最终 `sessionId`、`sandboxId`，
 从首次创建 Pod 起使用该组 ID；领取不改名、不改标签中的身份，也不重新生成 Codex 的
-`agentId:sessionId` 容器边界 attestation。预留 Session ID 尚不是 Conversation，不能出现在
+`agentId:sessionId` 容器边界 attestation，或其他模板的同形 Session scope attestation（§13.5.4）。预留 Session ID 尚不是 Conversation，不能出现在
 用户历史、业务路由或授权查询结果中。预留表不伪造主体、渠道或 `system` Conversation，
 不向当前要求真实 Conversation 外键的 `session_sandbox_allocations` 填入占位行。
 领取前的调谐使用独立预留输入，不能以伪造的 `SessionSandboxBindingV1` 通过旧路径校验。
@@ -1087,7 +1087,7 @@ custom Owner Secret、自有交互入口及不满足这些条件的模板保持�
 
 未领取实例只有全新专属 PVC、原临时目录及已验证的只读 Skill 挂载；不复制业务工作区、
 原生会话历史或个人记忆。Secret 只能包含该 Sandbox 的派生服务凭据、无 Key 模型投影及
-适用的文件交换 token/容器边界 attestation；独立 executor 预留另含 §11.2.1 的 Worker-owned
+适用的文件交换 token/容器边界 attestation 或 Session scope attestation；独立 executor 预留另含 §11.2.1 的 Worker-owned
 executor 绑定及其 attestation。一次性启动身份投影是下文单独记录的临时 Secret。
 Secret 不包含部署级服务 token、个人/默认 Relay Key、
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
@@ -2893,18 +2893,24 @@ attach-mode 内存访问及 `pidfd_getfd`：
 第 2 项只保护设置了它的凭据持有进程本身，因此只在该进程所在 Pod 只属于一个 Session 时
 适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）。对 Runtime Host，“只属于一个
 Session”只能建立在 Worker 签发、Host 已验证的 scope 上；安装供应 initializer 不是 Host，
-依据见下一段。Host 的 scope 为：Codex `container-boundary` 的 HMAC attestation
-（`apps/agent-runtime-host/src/configuration.ts` 的 `readCodexIsolationMode`），或
-`session-executor` 的绑定。Session 级 `container-boundary` 的 scope 是可打印的
-`agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
+依据见下一段。四个模板的 Session Pod 都由 Worker 签发 Session 级 attestation，Host 的
+scope 为下列之一：Codex `container-boundary` 的 HMAC attestation
+（`apps/agent-runtime-host/src/configuration.ts` 的 `readCodexIsolationMode`）；Claude、
+OpenCode、Pi 的 Session scope attestation（同文件的 `readSessionScopeAttestationV1`，
+Worker 用本 Sandbox 的 service token 以独立 HMAC 域 `agent-infra-session-scope-v1` 签发，
+env 为 `AGENT_INFRA_RUNTIME_SESSION_SCOPE` 与
+`AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION`，不启用任何 Codex 隔离模式，也不能由
+`container-boundary` 的签名冒充）；或 Codex `session-executor` 的绑定。两类 HMAC attestation
+的 scope 都是可打印的 `agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
 `apps/platform-worker/src/session-workload-adapter.ts` 写入）；Agent 级路径的 scope 只有
 `agentId`。进程级判定只接受 Session 级 scope：scope 以本 Pod 自己的 `agentId:`（来自
 `AGENT_INFRA_RUNTIME_AGENT_ID`）开头且其后非空，或 `session-executor` 的绑定；Agent 级
 scope 恒不满足。每次读取受保护材料前，另要求该 scope 逐字等于原执行的
 `agentId:sessionId`，`session-executor` 则要求绑定的 Agent、Session 与 generation
 等于原执行。Agent 级 scope、没有 attestation，或普通 env（例如
-`AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。非 Codex 模板
-（例如 Claude）目前没有这类 attestation，因此同样只能满足第 1 项。
+`AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。
+Session scope attestation 只证明“本 Pod 属于这个 Session”，不替代上述前提核实与每次读取前的
+non-dumpable 回读。
 
 安装供应 initializer 没有 service token，无法验证 attestation，所以不属于上述 Session 级
 scope。它只在 Worker 为 Session Sandbox 创建的 init container 中运行（[§13.5.6](#1356-标准-oauth-安装供应)），
