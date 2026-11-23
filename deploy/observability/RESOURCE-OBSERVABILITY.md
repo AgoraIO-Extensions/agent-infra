@@ -101,3 +101,5 @@ PostgreSQL 连接视图只聚合当前 API 数据库账号的活动、空闲、�
 历史表达式的同名重建与样本缺失回归可用 `node tests/observability/operations-promql.mjs` 执行，需本地 Prometheus `promtool`（可通过第一个参数指定路径）。
 正式接入须回读当前 source、image、配置、权限、样本时间、后端查询和保留范围；专项配额耗尽、
 OOM、缓存过期、积压及后端中断演练按已确认顺序在实现后安排。
+
+管理员可配置[执行影响看板](grafana/README.md)，按选定时段查看失败人数与任务趋势，再回到平台定位。

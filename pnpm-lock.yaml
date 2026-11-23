@@ -609,6 +609,9 @@ importers:
 
   packages/identity:
     dependencies:
+      '@agent-infra/enterprise-directory':
+        specifier: workspace:*
+        version: link:../enterprise-directory
       '@agent-infra/platform-core':
         specifier: workspace:*
         version: link:../platform-core

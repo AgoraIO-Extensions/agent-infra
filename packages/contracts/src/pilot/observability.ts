@@ -29,6 +29,23 @@ const response = (description: string, schema: z.ZodType) => ({
 });
 
 export const observabilityOpenApiPathsV1 = {
+	"/api/v1/ops/dashboard-access": {
+		get: {
+			operationId: "checkOperationsDashboardAccess",
+			summary:
+				"Check the current Platform session for administrator dashboard access",
+			security: [{ PlatformSession: [] }],
+			responses: {
+				"204": { description: "Active system administrator" },
+				"401": response("Authentication required", PilotProtocolErrorV1Schema),
+				"403": response("Forbidden", PilotProtocolErrorV1Schema),
+				"503": response(
+					"Identity service unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
 	"/api/v1/ops/observability": {
 		get: {
 			operationId: "getObservabilityStatus",

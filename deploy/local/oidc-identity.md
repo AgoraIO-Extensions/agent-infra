@@ -42,3 +42,20 @@ pnpm --filter @agent-infra/platform-store oidc:stage-legacy < reviewed-account.j
 此操作只预留普通用户身份，后续首次网页绑定仍需验证邮箱。
 
 完成后以原 Owner 和管理员身份分别登录，回读原 Agent 权限及管理员权限。
+
+## 托管企微渠道
+
+Worker 的受信配置模块导出 `oidcEmployees`，包含目录客户端 `snapshot`、
+与 API 一致的 `organizationIdForDepartment` 和 `administratorUserIds`，以及
+`verifiedWecomMember(scope)`。API 配置模块也导出同一发送者解析函数，
+供企微回执和渠道管理重验身份。
+
+解析函数接受经过验证的机器人长连接消息、企业应用回调或对应渠道保存的范围。
+应用回调先验签、解密并匹配企业、应用及绑定，以回调内的发送人解析员工。机器人按所属企业和当前
+Agent/Bot 绑定使用企微官方发送者转换，返回对应目录的 `{source, userId}`。
+只有经部署逐个核实使用明文 userid 的机器人，才能按其当前有效绑定解释明文发送者。
+转换失败、归属冲突或绑定不匹配时拒绝解析。不得从消息正文或调用方传入的平台 ID 构造映射。
+
+平台逐次检查完整有效的目录、唯一在职员工、平台禁用、Agent 可用范围和有效 Owner。
+首次使用在 Platform DB 建立员工引用，之后网页登录关联到相同用户 ID。仍有未核实旧账号时，
+继续按上节的原账号或已确认新员工登记流程处理。
