@@ -3131,6 +3131,10 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			},
 		],
 		["an extra input", { credential: "synthetic" }],
+		[
+			"a Session scope attestation on the Codex Driver",
+			{ sessionScopeAttestation: "a".repeat(43) },
+		],
 	])("rejects %s before any resource write", async (_name, override) => {
 		const client = api();
 		let writes = 0;

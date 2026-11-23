@@ -60,7 +60,10 @@ import {
 	connectionManualPublicationProofV1,
 	withConnectionManualPublicationV1,
 } from "./connection-manual-publication.js";
-import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
+import {
+	containerBoundaryAttestationV1,
+	sessionScopeAttestationV1,
+} from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createExecutorInstanceControlV2 } from "./executor-instance-startup.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -85,6 +88,7 @@ import {
 	sessionSandboxLabelsV1,
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
+	sessionSandboxSessionScopeAttestationSecretKey,
 	sessionSnapshotSecretNameV1,
 } from "./session-workload-adapter.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
@@ -877,6 +881,14 @@ export function createSessionSandboxResourceInputResolverV1(
 							: {}),
 					}
 				: {}),
+			...(templateBinding.driver !== "codex"
+				? {
+						sessionScopeAttestation: sessionScopeAttestationV1(
+							serviceToken,
+							`${deployment.agentId}:${binding.sessionId}`,
+						),
+					}
+				: {}),
 			modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 			workerId: auth.workerId,
 			grantKeyId: auth.grantKeyId,
@@ -1042,6 +1054,7 @@ const sessionPlatformSecretKeys: ReadonlySet<string> = new Set([
 	"model-config",
 	sessionSandboxFileExchangeSecretKey,
 	sessionSandboxContainerBoundaryAttestationSecretKey,
+	sessionSandboxSessionScopeAttestationSecretKey,
 	sessionExecutorBindingSecretKeyV1,
 	sessionExecutorAttestationSecretKeyV1,
 ]);

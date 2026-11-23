@@ -78,6 +78,36 @@ export function readCodexIsolationMode(
 	return value;
 }
 
+/**
+ * Worker-issued Session scope for a non-Codex Session Pod (Claude, OpenCode,
+ * Pi). Returns the verified `agentId:sessionId` scope, or undefined when the Pod
+ * carries none. A partial, malformed or forged input is a configuration error,
+ * never a silently weaker scope.
+ */
+export function readSessionScopeAttestationV1(
+	environment: NodeJS.ProcessEnv,
+	serviceToken?: string,
+) {
+	const scope = environment.AGENT_INFRA_RUNTIME_SESSION_SCOPE;
+	const actual = environment.AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION;
+	if (scope === undefined && actual === undefined) return undefined;
+	if (
+		scope === undefined ||
+		actual === undefined ||
+		!serviceToken ||
+		environment.AGENT_INFRA_RUNTIME_DRIVER === "codex" ||
+		!/^[\x21-\x7e]{1,256}$/.test(scope) ||
+		!/^[A-Za-z0-9_-]{43}$/.test(actual)
+	)
+		runtimeConfigurationInvalid();
+	const expected = createHmac("sha256", serviceToken as string)
+		.update(`agent-infra-session-scope-v1\0${scope}`)
+		.digest("base64url");
+	if (!timingSafeEqual(Buffer.from(expected), Buffer.from(actual)))
+		runtimeConfigurationInvalid();
+	return scope;
+}
+
 export function readCodexSessionExecutorBindingV1(
 	environment: NodeJS.ProcessEnv,
 	serviceToken?: string,

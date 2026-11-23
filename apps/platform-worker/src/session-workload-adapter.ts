@@ -136,6 +136,8 @@ export interface SessionSandboxRuntimeInputV1 {
 	/** Explicit deployment approval for the Codex container-boundary mode. */
 	readonly codexContainerBoundaryEnabled?: boolean;
 	readonly codexContainerBoundaryAttestation?: string;
+	/** Non-Codex Session scope attestation for `agentId:sessionId`. */
+	readonly sessionScopeAttestation?: string;
 	readonly sessionExecutor?: {
 		readonly binding: CodexSessionExecutorBindingV1;
 		readonly attestation: string;
@@ -218,6 +220,8 @@ export const sessionSandboxRuntimeContainerName = "runtime";
 export const sessionSandboxFileExchangeSecretKey = "file-exchange-token";
 export const sessionSandboxContainerBoundaryAttestationSecretKey =
 	"container-boundary-attestation";
+export const sessionSandboxSessionScopeAttestationSecretKey =
+	"session-scope-attestation";
 const runtimeTextPattern = /^[\x21-\x7e]{1,256}$/;
 export function isNativeMetadataWorkerOriginV1(
 	value: unknown,
@@ -791,6 +795,7 @@ const requiredRuntimeInputKeys = [
 const optionalRuntimeInputKeys = [
 	"codexContainerBoundaryEnabled",
 	"codexContainerBoundaryAttestation",
+	"sessionScopeAttestation",
 	"custom",
 	"fileExchange",
 	"nativeMetadataWorkerOrigin",
@@ -829,6 +834,12 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!/^[A-Za-z0-9_-]{43}$/.test(
 						runtime.codexContainerBoundaryAttestation,
 					))) ||
+			// Only non-Codex templates carry it; Codex uses container-boundary or
+			// the executor binding instead.
+			(runtime.sessionScopeAttestation !== undefined &&
+				(runtime.driver === "codex" ||
+					typeof runtime.sessionScopeAttestation !== "string" ||
+					!/^[A-Za-z0-9_-]{43}$/.test(runtime.sessionScopeAttestation))) ||
 			(runtime.codexContainerBoundaryEnabled === true &&
 				(typeof runtime.codexContainerBoundaryAttestation !== "string" ||
 					!/^[A-Za-z0-9_-]{43}$/.test(
@@ -1071,6 +1082,20 @@ function runtimeEnvironment(
 						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
 						valueFrom: secretRef(
 							sessionSandboxContainerBoundaryAttestationSecretKey,
+						),
+					},
+				]
+			: []),
+		...(runtime.sessionScopeAttestation !== undefined
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE",
+						value: `${allocation.agentId}:${allocation.sessionId}`,
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION",
+						valueFrom: secretRef(
+							sessionSandboxSessionScopeAttestationSecretKey,
 						),
 					},
 				]
@@ -1560,6 +1585,13 @@ function renderSessionSandboxResourcesV1(
 										Buffer.from(
 											allocation.runtime.codexContainerBoundaryAttestation,
 										).toString("base64"),
+								}
+							: {}),
+						...(allocation.runtime.sessionScopeAttestation
+							? {
+									[sessionSandboxSessionScopeAttestationSecretKey]: Buffer.from(
+										allocation.runtime.sessionScopeAttestation,
+									).toString("base64"),
 								}
 							: {}),
 						...(allocation.runtime.sessionExecutor

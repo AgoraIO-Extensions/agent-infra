@@ -58,6 +58,7 @@ import {
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionInstallationRevisionEnvironment,
 } from "./connection-consumer-projection.js";
+import { sessionScopeAttestationV1 } from "./container-boundary-attestation.js";
 import {
 	createProductionConversationRuntimeResolverV2,
 	createProductionSessionSandboxReceiverV1,
@@ -2587,8 +2588,61 @@ describe("production SessionSandbox resource receiver", () => {
 			expect(
 				Buffer.from(secret.data?.["model-config"] ?? "", "base64").toString(),
 			).toBe(runtimeModelInjectionV4(modelProjection).configuration);
+			// #4349: the Worker attests the Session scope `agentId:sessionId`.
+			const scope = `${f.claim.sandbox.agentId}:${f.claim.sandbox.sessionId}`;
+			const env = new Map(
+				(pod.spec?.containers[0]?.env ?? []).map((entry) => [
+					entry.name,
+					entry,
+				]),
+			);
+			expect(env.get("AGENT_INFRA_RUNTIME_SESSION_SCOPE")?.value).toBe(scope);
+			expect(
+				env.get("AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION")?.valueFrom,
+			).toEqual({
+				secretKeyRef: {
+					name: f.claim.sandbox.resourceName,
+					key: "session-scope-attestation",
+					optional: false,
+				},
+			});
+			expect(
+				Buffer.from(
+					secret.data?.["session-scope-attestation"] ?? "",
+					"base64",
+				).toString(),
+			).toBe(
+				sessionScopeAttestationV1(
+					sessionSandboxServiceTokenV1(
+						sessionSandboxDeploymentTokenFixture,
+						f.claim.policy.namespace,
+						f.claim.sandbox.sandboxId,
+					),
+					scope,
+				),
+			);
+			// It is not a Codex isolation mode and is not valid as one.
+			expect(env.has("AGENT_INFRA_RUNTIME_ISOLATION_MODE")).toBe(false);
+			expect(env.has("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE")).toBe(
+				false,
+			);
 		},
 	);
+
+	it("does not issue the non-Codex Session scope attestation to a Codex Session Pod", async () => {
+		const f = fixture();
+		await f.receive(f.claim, new AbortController().signal);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		expect(
+			pod.spec?.containers[0]?.env?.some((entry) =>
+				entry.name.startsWith("AGENT_INFRA_RUNTIME_SESSION_SCOPE"),
+			),
+		).toBe(false);
+		const secret = [...f.resources.values()].find(
+			(resource) => resource.kind === "Secret",
+		) as V1Secret;
+		expect(secret.data?.["session-scope-attestation"]).toBeUndefined();
+	});
 
 	// #4349 / §13.5.6: the manual-installation receiver is rendered for every
 	// standard template Session Pod, not only Codex.

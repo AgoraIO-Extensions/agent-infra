@@ -60,6 +60,7 @@ import {
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
 	readRuntimeModelConfigurationV4,
+	readSessionScopeAttestationV1,
 	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
@@ -527,6 +528,10 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE === "session-executor"
 	)
 		runtimeConfigurationInvalid();
+	const sessionScope =
+		binding === "codex"
+			? undefined
+			: readSessionScopeAttestationV1(environment, serviceToken);
 	// Only Worker-issued, Host-verified Session scope can admit non-dumpable
 	// protection (ADR-0051); an Agent-level or unattested Pod never does.
 	establishCredentialHolderSessionScopeV1(
@@ -543,7 +548,13 @@ export async function assembleRuntimeHost(
 						agentId: required("AGENT_INFRA_RUNTIME_AGENT_ID"),
 						scope: required("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE"),
 					}
-				: undefined,
+				: sessionScope !== undefined
+					? {
+							kind: "session-scope",
+							agentId: required("AGENT_INFRA_RUNTIME_AGENT_ID"),
+							scope: sessionScope,
+						}
+					: undefined,
 	);
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
