@@ -47,8 +47,6 @@ Connection 是这些对象的唯一权威。Platform 只保存自身 Agent、登
 
 ### 3.2 Platform 负责
 
-Platform 标准模板的 Connection 接入范围见 [Platform PRD 第 9 节](PRD-agent-platform-M1.md#9-connection-集成)。
-
 - Agent、Owner、使用范围、任务和自身工具执行事实。
 - 作为已注册 Consumer 使用 Connection 的公开 MCP/API；不通过 Platform API 代理调用。
 - 为 Owner 启用 Connection 的 Agent 自动登记专用 Consumer，或接受 Owner 填入的已有 Consumer，并保存对应关联和本平台的处理状态。

@@ -57,9 +57,9 @@ M1 Driver Registry 是平台维护的固定配置，不支持运行时 Driver �
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
 | Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Browser Capability、真实模型/工具观测与 Eval 复用；Connection 范围见 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) |
-| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Browser Capability、真实模型/工具观测与 Eval 复用；Connection 范围见 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) |
-| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Browser Capability、真实模型/工具观测与 Eval 复用；Connection 范围见 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) |
+| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。补充指令按 Driver 分别开启：Codex 按 [§5](#5-platform-conversation-contract) 的 `turn/steer` 映射通过 Conformance 后首先开启；Claude、OpenCode、Pi 通过各自 Conformance 前保持 `false`，执行中消息按[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)排队。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
@@ -1575,7 +1575,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 执行中消息按工程 Spec §12.5 验证：capability 为真、为假的 Driver 下补充、排队与繁忙三个分支；Codex `turn/steer` 的 accepted、明确拒绝转入排队、超时或断连保持 unknown 且不重复提交、同一 `messageId` 重放返回原结果；排队容量与期限、位次、撤回与认领竞态，以及停止、unknown、重启、撤权和会话不可用后的收敛。
 - 取消故障注入覆盖等待与认领并发、API/Web 同时受理、Agent 启动/更新/停止/停用/故障与准入/实际发送竞态、投递前后崩溃、旧 Worker 迟到提交、unknown、停止未确认与自然完成竞态、停止确认超时及重启/重复取消不延长期限、代次隔离和等待任务收敛；必须证明旧 Turn 无剩余副作用才启动下一任务，不能用超时/换 executionId/新 Session 掩盖不确定结果。
 - API 授权负向验证主体类型/ID、Agent/Conversation/Execution 替换、应用冒用责任人权限、Owner/责任人读取/订阅/取消他人任务。凭证失效关闭旧流但任务继续，同主体新凭证可访问；主体撤权取消等待/活跃任务并阻止后续受控操作，两种失效不得混同。
-- 四模板逐一用真实模型与受控工具操作验证开始/终态/耗时/实际选择/可得用量及原执行关联；摘要、自报 callId、缺失字段、零耗时推断不能冒充事实。Connection 按 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) 的模板范围验收，直连与两侧独立鉴权按上位 Spec 验证，覆盖同主体/Agent 的跨 Execution 真实引用调换、伪造响应及丢响应后的只读核实；原生核心 conformance 通过不替代整装验收。
+- 四模板逐一用真实模型与受控工具操作验证开始/终态/耗时/实际选择/可得用量及原执行关联；摘要、自报 callId、缺失字段、零耗时推断不能冒充事实。Connection 直连与两侧独立鉴权按上位 Spec 验证，覆盖同主体/Agent 的跨 Execution 真实引用调换、伪造响应及丢响应后的只读核实；原生核心 conformance 通过不替代整装验收。
 - 四模板的 Session Sandbox 原生工具（[8.5.4](#854-session-sandbox-原生工具)）各用真实镜像、Host/Driver 与模型链路验证：
   - 正向：在本人 Conversation 内执行 shell（`ls`、`find`、运行脚本）、编辑文件、列举与搜索目录；工具事实可见，工具调用不使 Turn 失败。
   - 负向：读取、列举或修改兄弟 Conversation 目录被拒绝；`env`、`/proc` 和文件中读不到 Relay Key、模型传输 token、Connection/MCP/Browser token；到出站策略外目标的连接被拒绝，策略内目标可达。Codex `container-boundary` 的模型 loopback token 与 Driver 管道按工程 Spec §10.14 的限定例外处理：该两项读到不判失败，但验收须如实记录读到的结果，不得据此声称无暴露；其余凭证仍须读不到。
@@ -1621,7 +1621,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
   开始和结果/失败/取消；覆盖内部新尝试、重用 tool ID、跨主体/Execution、回执丢失与结果
   保存失败、原 Session 重启和控制端隔离。验证源码/target/artifact 与覆盖清单、旧终态
   读取和 active/unknown 兼容；合成敏感哨兵不进入事实、错误或遥测。Fixture 只证明其受控
-  路径，四模板真实模型、V4 Key 和 Worker 事务验收继续逐项完成；Connection 按 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) 的模板范围验收。
+  路径，四模板真实模型/Connection、V4 Key 和 Worker 事务验收继续逐项完成。
 - 官方扩展替代边界另外验证同参数并发请求的原 Execution/attempt 绑定、旧 slot/请求重放、
   伪造回执、可写配置替换及原工具绕过。intent 保存或授权失败时真实 I/O 为零；实际 I/O
   完成但 terminal ACK 扣留时，后续模型请求为零，释放 ACK 后才能继续；结果已保存后断连
@@ -1640,6 +1640,12 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 标准 MCP/OAuth/PAT 路径按 [§9.1](#91-codex-独立-connection-consumer-profile) 与 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证 token 当前主体/实例、user/application + Agent 选择、工具子进程不可读取、独立撤销、跨实例隔离、幂等和未知不重放；缺 token 不回退 Owner 或共享凭据。profile 明确要求 sender constraint 时另验持有证明，准备层或 token 签发通过不替代真实运行。
 - 可信关联另验同次实际请求/响应、服务端原调用、跨 Execution/attempt 替换、丢响应与只读核实；缺失保持未核实，标准 token 接入不能代签关联。
 - Driver 直接标准 MCP 路径另验固定官方 dynamicTools/server request 的真实等待、受保护 Host 的文件/内存/FD 与诊断拒绝、原安装选择、每次真实发送、结果保存及 ACK；结果保存失败、unknown WRITE 已保存但未核实或 stdio 断连，均不得释放原执行继续推理。覆盖同 UID 工具、旧修订、跨主体/Agent/Sandbox、未知 WRITE、崩溃、撤销与原操作只读恢复，fixture 与真实 Connection/Provider 证据分别记录；通过不外推 native MCP 或其他原生工具。
+- 四个模板的 Connection 验收各自独立，声明点见工程 Spec §13.5.4：Claude 验 SDK 进程内 MCP server 的真实
+  tool 调用、原生 CLI 子进程环境与配置不含 Connection 材料、unknown WRITE 时原生 owner 被封闭；OpenCode
+  与 Pi 验真实固定版本的 loopback bridge（bearer 过期与重放拒绝、无 bearer 拒绝、token 不进原生
+  配置或日志，Pi 另含工具子进程不继承 bearer 的 native-shell 用例，需 Linux 与
+  `AGENT_INFRA_NATIVE_SHELL_TEST=1`）。每个模板另验授权前固定拒绝、授权后同一会话可用，以及同一套
+  跨用户、跨 Agent、跨 Connection 负例；fixture 与真实证据分别记录。
 - 对已批准的 ADR-0025 ACP adapter，RuntimeHost 仍是 Connection 的直接标准 MCP
   consumer；loopback URL/bearer 只连接同一 Host 内的 adapter，不把 Connection token
   或服务 header 交给 native。adapter 按单 Execution 生命周期绑定原

@@ -1065,7 +1065,7 @@ Agent 级授权、幂等、锁顺序、resourceFence、执行容量或预留池�
 
 **预留身份与授权。** 服务端为每个预留事实生成最终 `sessionId`、`sandboxId`，
 从首次创建 Pod 起使用该组 ID；领取不改名、不改标签中的身份，也不重新生成 Codex 的
-`agentId:sessionId` 容器边界 attestation。预留 Session ID 尚不是 Conversation，不能出现在
+`agentId:sessionId` 容器边界 attestation，或其他模板的同形 Session scope attestation（§13.5.4）。预留 Session ID 尚不是 Conversation，不能出现在
 用户历史、业务路由或授权查询结果中。预留表不伪造主体、渠道或 `system` Conversation，
 不向当前要求真实 Conversation 外键的 `session_sandbox_allocations` 填入占位行。
 领取前的调谐使用独立预留输入，不能以伪造的 `SessionSandboxBindingV1` 通过旧路径校验。
@@ -1087,7 +1087,7 @@ custom Owner Secret、自有交互入口及不满足这些条件的模板保持�
 
 未领取实例只有全新专属 PVC、原临时目录及已验证的只读 Skill 挂载；不复制业务工作区、
 原生会话历史或个人记忆。Secret 只能包含该 Sandbox 的派生服务凭据、无 Key 模型投影及
-适用的文件交换 token/容器边界 attestation；独立 executor 预留另含 §11.2.1 的 Worker-owned
+适用的文件交换 token/容器边界 attestation 或 Session scope attestation；独立 executor 预留另含 §11.2.1 的 Worker-owned
 executor 绑定及其 attestation。一次性启动身份投影是下文单独记录的临时 Secret。
 Secret 不包含部署级服务 token、个人/默认 Relay Key、
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
@@ -2836,10 +2836,40 @@ access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产�
 完全一致，见该节“动态安装的 reader 与可见起点”）；
 每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
 不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
-SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空；ACP adapter 的本地 URL 不是 Connection endpoint，
-也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
-native MCP、private bootstrap 或 token helper 路径。Pi 和不满足固定 artifact 门禁的
-Generic ACP 继续 `connection:false`。
+SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空：不向原生进程的
+配置文件、用户级 MCP 设置或环境写入任何 Connection MCP server、URL 或 token；ACP adapter 的本地 URL 不是
+Connection endpoint，也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
+native MCP、private bootstrap 或 token helper 路径。
+
+M1 四个标准模板都经本节路径接入 Connection。用户 2026-11-23 决定：只要模板支持 MCP 就能用
+Connection，不为各模板另设流程门禁（[#4349 评论](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349#issuecomment-7088476261)、
+[评论](https://github.com/AgoraIO-Extensions/agent-infra/issues/4349#issuecomment-7088568400)）。
+各 Driver 的会话级声明点只在此列出：
+
+- Codex：`thread/start.dynamicTools`。
+- Claude：随原生 query 传入的 SDK 进程内 MCP server（`mcpServers.connection`），见下一段。
+- OpenCode：ACP `mcpServers` 指向 RuntimeHost 的 loopback adapter。
+- Pi：固定扩展 loopback adapter。OpenCode 与 Pi 的版本、保护与依据见
+  [ADR-0025 的 2026-11-23 增补](../adr/0025-propose-runtime-host-acp-protected-mcp-bridge.md#2026-11-23-增补opencode-与-pi-的受保护-loopback-transport)。
+
+其余合同（受保护 Host、手工关联、Owner 按需启用、逐用户 OAuth、动态发布合同）按 §13.5.3、§13.5.6
+与 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)，四个模板一致，
+这里不重复。每次 Connection 调用都先经 `StandardMcpOperation` 的 `assertCurrent`，并按
+`prepare → started → confirm/block` 持久屏障执行：Claude 在 `claude-runtime-driver.ts` 中直接实现，
+OpenCode 与 Pi 经同一个 `standard-mcp-acp-bridge.ts`。Claude 与 Pi 复用同一个 Host reader 和 permit。
+某模板的能力不可用（`connection: false`、无安装、许可缺失或保护不满足）时，不阻塞该模板其余功能：
+未声明工具时模型看不到 Connection；已声明而不可用时，调用得到 §13.5.6 的固定回答“需要先在平台完成
+Connection 授权”或“Connection 暂时不可用”，不含凭据、安装或许可标识。各模板的 Connection 验收按
+[HLD §11.2](HLD-agent-runtime-M1.md#112-codex-与-connection-接缝验收) 独立进行，一个模板未通过不影响其他模板。
+
+**Claude 的进程内 MCP server 与“保持空”。** `mcpServers.connection` 是 `createSdkMcpServer`
+创建的 `type: "sdk"` 实例（`claude-standard-mcp.ts`），实例留在 SDK 所在的 RuntimeHost/Driver 进程，
+原生 CLI 只经 SDK 控制通道的 `mcp_message` 转发 tool 调用，不收到 URL、header 或 token。
+原生 CLI 子进程的环境由 Driver 显式给出（`claude-runtime-driver.ts` 的 `env`：PATH、HOME、
+TMPDIR、`CLAUDE_CONFIG_DIR` 与模型访问，不含 Connection 材料），并设置 `strictMcpConfig: true`。
+`StandardMcpClient` 与 token 只在 Host 内存。因此它不是上文“原生 Connection MCP 配置”，而是对
+“保持空”的限定：原生配置面保持空，工具声明经 SDK 进程内通道。固定拒绝结果不含凭据，静态与动态输入
+互斥，由 `dynamic-connection.test.ts` 与 `claude-standard-mcp.test.ts` 覆盖。
 
 **ADR-0025 ACP adapter gate。** 只有固定 artifact/protocol 明确证明 ACP session 级
 HTTP MCP 注册、bounded discovery/call/close、native 不持久化本地 bearer、工具子进程
@@ -2889,18 +2919,27 @@ attach-mode 内存访问及 `pidfd_getfd`：
 第 2 项只保护设置了它的凭据持有进程本身，因此只在该进程所在 Pod 只属于一个 Session 时
 适用（[§10.1.1](#1011-session-owned-sandbox-权威与资源绑定)）。对 Runtime Host，“只属于一个
 Session”只能建立在 Worker 签发、Host 已验证的 scope 上；安装供应 initializer 不是 Host，
-依据见下一段。Host 的 scope 为：Codex `container-boundary` 的 HMAC attestation
-（`apps/agent-runtime-host/src/configuration.ts` 的 `readCodexIsolationMode`），或
-`session-executor` 的绑定。Session 级 `container-boundary` 的 scope 是可打印的
-`agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
+依据见下一段。四个模板的 Session Pod 都由 Worker 签发 Session 级 attestation，Host 的
+scope 为下列之一：Codex `container-boundary` 的 HMAC attestation
+（`apps/agent-runtime-host/src/configuration.ts` 的 `readCodexIsolationMode`）；Claude、
+OpenCode、Pi 的 Session scope attestation（同文件的 `readSessionScopeAttestationV1`，
+Worker 用本 Sandbox 的 service token 以独立 HMAC 域 `agent-infra-session-scope-v1` 签发，
+env 为 `AGENT_INFRA_RUNTIME_SESSION_SCOPE` 与
+`AGENT_INFRA_RUNTIME_SESSION_SCOPE_ATTESTATION`，不启用任何 Codex 隔离模式，也不能由
+`container-boundary` 的签名冒充）；或 Codex `session-executor` 的绑定。两类 HMAC attestation
+的 scope 都是可打印的 `agentId:sessionId`（Kubernetes 环境变量不能含 NUL，Worker 在
 `apps/platform-worker/src/session-workload-adapter.ts` 写入）；Agent 级路径的 scope 只有
 `agentId`。进程级判定只接受 Session 级 scope：scope 以本 Pod 自己的 `agentId:`（来自
 `AGENT_INFRA_RUNTIME_AGENT_ID`）开头且其后非空，或 `session-executor` 的绑定；Agent 级
 scope 恒不满足。每次读取受保护材料前，另要求该 scope 逐字等于原执行的
 `agentId:sessionId`，`session-executor` 则要求绑定的 Agent、Session 与 generation
 等于原执行。Agent 级 scope、没有 attestation，或普通 env（例如
-`AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。非 Codex 模板
-（例如 Claude）目前没有这类 attestation，因此同样只能满足第 1 项。
+`AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。
+Session scope attestation 只证明“本 Pod 属于这个 Session”，不替代上述前提核实与每次读取前的
+non-dumpable 回读。Worker 只为非 Codex 的 Session Sandbox 签发它，运行输入带入 Codex 时在写资源前
+拒绝；非 Codex 的 Host 对 scope 与 attestation 只给一半、格式不符、签名不符或没有 service token，一律判为
+配置无效，不降级为较弱的 scope；Codex 的 Host 不读取这组 env，它的 scope 只来自 `container-boundary`
+或 `session-executor`。
 
 安装供应 initializer 没有 service token，无法验证 attestation，所以不属于上述 Session 级
 scope。它只在 Worker 为 Session Sandbox 创建的 init container 中运行（[§13.5.6](#1356-标准-oauth-安装供应)），
@@ -3490,9 +3529,11 @@ refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确
 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)：使用者在某个
 会话中完成本人授权并写入许可后，该会话后续的 Connection 调用即可使用，不要求新开会话。工具在
 Thread 开始时就已声明，此后只有可用性随许可变化，所以不热改已有 Thread 工具快照。取舍见
-[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段写法针对 Codex
-Driver（`thread/start`、`item/tool/call`），M1 Connection Pilot 只用 Codex 标准模板；其他 Driver
-未满足同等的声明与门禁时保持 `connection:false`。
+[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段以 Codex
+Driver（`thread/start`、`item/tool/call`）为写法基准；Claude、OpenCode、Pi 在各自会话级声明点
+（见 §13.5.4）按同一规则在会话开始时声明部署批准的工具，之后只有可用性随许可变化，并复用同一
+reader 接缝、固定的“需要授权/暂不可用”结果和撤销规则。Pilot 范围见
+[Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成)，其余三个模板各自按本节验收。
 
 - **工具声明。** 部署批准的动态发布合同另含每个工具在 Thread 开始时声明的完整定义（名称、说明、
   输入 schema），与合同的 `tools` 一一对应。Worker 只为当前已有已核实 Owner 手工关联的 Agent，
@@ -4966,7 +5007,7 @@ Playwright 覆盖：
 
 - 申请、撤回、审批、创建、停止、重启和停用。
 - Owner、范围、每日完整企微目录快照及账号禁用；组织变化按最新快照生效且最多延迟一天，LDAP 停用与管理员禁用立即生效。平台对话页、平台托管渠道和平台身份入口须按当前结果撤权，确认撤权后平台中止仍可中止的活跃 Execution。
-- 四个标准模板分别用真实镜像、Driver、Relay 模型链路验证就绪和可申请状态，再验证平台 Web、API 真实任务、企微、模型切换、附件和长任务恢复；Connection 按 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) 的模板范围验收；逐一验证实际模型/工具事件和完整 Trace，不以总任务耗时冒充模型耗时。
+- 四个标准模板分别用真实镜像、Driver、Relay 模型链路验证就绪和可申请状态，再验证平台 Web、API 真实任务、企微、模型切换、附件、独立 Connection 和长任务恢复；逐一验证实际模型/工具事件和完整 Trace，不以总任务耗时冒充模型耗时。
 - 标准模板用两名使用者的不同个人 Key 及 Agent 默认 Key 验证 Web/企微、API、Eval 的费用主体；覆盖 Key 缺失、过期、额度不足不回退，模型可见但无权调用，Key 替换后旧执行固定原版本、新执行使用新版本，Relay 撤销、Worker/Pod 重启恢复及跨用户/Agent/Execution 负向隔离。
 - 用户和应用分别 API 创建/启动/停止/重启、提交/查询/订阅/取消任务；无审批且初始授权和 Owner 归属正确，应用不继承责任人权限。审计 API 与基础管理页按条件查询，跨主体和两侧管理员越权拒绝。
 - 同一获授权固定集含回答和受控工具样本，以两组模型或配置真实运行；查看汇总/失败样本、规则/人工/模型评分与独立复核，修订后再跑并保留历史。线上反馈独立汇总，评分失败/缺失不算通过，Eval 内容及真实材料用途授权有负向验证。
