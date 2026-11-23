@@ -18,11 +18,13 @@
 		"build": "tsdown && node src/copy-migrations.mjs",
 		"check-migrations": "node src/check-migrations.mjs",
 		"check-types": "tsc --noEmit",
+		"oidc:stage-legacy": "node dist/oidc-stage-legacy.mjs",
 		"migrate": "pnpm build && node dist/migrate-cli.mjs",
 		"test": "pnpm --filter @agent-infra/platform-core build && pnpm build && pnpm check-migrations && vitest run src"
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/enterprise-directory": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"drizzle-orm": "catalog:",
