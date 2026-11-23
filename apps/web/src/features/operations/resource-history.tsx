@@ -356,6 +356,9 @@ export function ResourceHistory({
 						if (request) {
 							url.searchParams.set("from", request.start);
 							url.searchParams.set("to", request.end);
+						} else if (from !== undefined && to !== undefined) {
+							url.searchParams.set("from", new Date(from).toISOString());
+							url.searchParams.set("to", new Date(to).toISOString());
 						}
 						return (
 							<a

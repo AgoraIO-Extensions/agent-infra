@@ -382,6 +382,14 @@ it("scopes Grafana to whole-window aggregates and denies ungranted roles", async
 		failed_users: "1",
 		failed_applications: "0",
 	});
+	const sessions =
+		await sql`select * from platform_ops_dashboard.failed_sessions(${input.start},${input.end})`;
+	expect(sessions).toMatchObject([
+		{ agent: "ops-agent", session_id: "ops-session", failures: "1" },
+	]);
+	const trend =
+		await sql`select failed,completed from platform_ops_dashboard.execution_impact(${input.start}, '2026-11-01T00:11Z','trend') order by bucket`;
+	expect(trend.map((r) => r.failed)).toEqual(["1", "0", "0"]);
 	await expect(
 		sql`select * from platform_ops_dashboard.first_output(now()-interval '2 days',now())`,
 	).rejects.toMatchObject({ code: "22023" });

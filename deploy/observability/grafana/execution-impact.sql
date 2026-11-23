@@ -50,11 +50,37 @@ BEGIN
     )
     SELECT * FROM grouped
     UNION ALL
+    SELECT tick, NULL::text, 0::bigint, 0, 0, 0, 0, 0, 0, 0
+    FROM generate_series(window_start, window_end - interval '1 microsecond', interval '5 minutes') AS tick
+    WHERE breakdown = 'trend' AND NOT EXISTS (SELECT FROM grouped WHERE t = tick)
+    UNION ALL
     SELECT window_start, NULL::text, 0::bigint, 0, 0, 0, 0, 0, 0, 0
     WHERE breakdown = 'total' AND NOT EXISTS (SELECT FROM grouped);
 END
 $$;
 REVOKE ALL ON FUNCTION platform_ops_dashboard.execution_impact(timestamptz,timestamptz,text) FROM PUBLIC;
+-- Bounded historical drill-down for the single environment assigned to this dashboard.
+CREATE OR REPLACE FUNCTION platform_ops_dashboard.failed_sessions(
+    window_start timestamptz, window_end timestamptz
+)
+RETURNS TABLE (agent text, session_id text, failures bigint, latest timestamptz)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog
+AS $$
+BEGIN
+    IF window_start IS NULL OR window_end IS NULL OR NOT isfinite(window_start)
+       OR NOT isfinite(window_end) OR window_end <= window_start
+       OR window_end - window_start > interval '24 hours' THEN
+        RAISE EXCEPTION 'Invalid dashboard window' USING ERRCODE = '22023';
+    END IF;
+    RETURN QUERY
+    SELECT e.agent_id, e.conversation_id, count(*), max(e.terminal_observed_at)
+    FROM platform.conversation_executions e
+    WHERE e.status = 'failed' AND e.terminal_observed_at >= window_start AND e.terminal_observed_at < window_end
+    GROUP BY e.agent_id, e.conversation_id
+    ORDER BY max(e.terminal_observed_at) DESC, e.agent_id, e.conversation_id LIMIT 100;
+END
+$$;
+REVOKE ALL ON FUNCTION platform_ops_dashboard.failed_sessions(timestamptz,timestamptz) FROM PUBLIC;
 -- Summary combines the current queue with window-scoped observations. Trend only
 -- reads window candidates and uses separate acceptance and cancellation clocks.
 CREATE OR REPLACE FUNCTION platform_ops_dashboard.reply_observations(
