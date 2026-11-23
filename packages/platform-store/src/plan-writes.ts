@@ -26,6 +26,7 @@ import {
 	skillHubVersions,
 } from "./schema.js";
 import { persistSessionSandboxManagementIntents } from "./session-sandbox-management.js";
+import { assertTemplatePublicationSourceV1 } from "./template-publication-guards.js";
 import { insertWorkspaceSnapshotBindingsV1 } from "./workspace-snapshot-binding-writes.js";
 
 type Transaction = Parameters<
@@ -157,6 +158,8 @@ export async function advanceAgentConfigurationRevision(
 	plan: AgentConfigurationWritePlanV1,
 	configuration: AgentConfigurationRecord,
 ): Promise<boolean> {
+	if (plan.outboxIntent)
+		await assertTemplatePublicationSourceV1(transaction, configuration.source);
 	if (plan.nextRevision !== plan.baseRevision) {
 		await transaction.insert(agentConfigurationRevisions).values({
 			agentId: plan.agentId,
@@ -251,13 +254,25 @@ export async function insertAgentConfigurationEffects(
 		traceId: plan.auditEvent.traceId,
 		requestId: plan.auditEvent.requestId,
 		agentId: plan.agentId,
-		actorType: "user",
+		actorType: plan.automaticPublication ? "service" : "user",
 		actorId: plan.auditEvent.actorId,
 		action: plan.auditEvent.action,
 		targetType: plan.auditEvent.subjectType,
 		targetId: plan.auditEvent.subjectId,
 		outcome: "succeeded",
-		details: { changedFields: plan.auditEvent.changedFields },
+		details: {
+			changedFields: plan.auditEvent.changedFields,
+			...(plan.automaticPublication
+				? {
+						publicationId: plan.automaticPublication.publicationId,
+						batchRef: plan.automaticPublication.batchRef,
+						targetRef: plan.automaticPublication.targetRef,
+						approvedBy: plan.automaticPublication.approvedBy,
+						authorizationRevision:
+							plan.automaticPublication.authorizationRevision,
+					}
+				: {}),
+		},
 		occurredAt: plan.auditEvent.occurredAt,
 	});
 }

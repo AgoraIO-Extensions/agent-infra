@@ -76,6 +76,7 @@ import {
 	isModelRelayRejectionV1,
 } from "./agent-default-relay-key.js";
 import { decideAgentAccessUpdatePolicy } from "./agent-management-access-policy.js";
+import { admitAutomaticTemplatePublicationV1 } from "./automatic-template-publication.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
@@ -171,6 +172,29 @@ function createAgentConfigurationUseCaseV1Internal(
 	options: AgentConfigurationUseCaseOptionsV1 = {},
 ): AgentConfigurationUseCaseV1 {
 	const now = options.now ?? systemNow;
+	if (
+		dependencies.standardTemplateReleaseAuthorization &&
+		dependencies.automaticTemplatePublicationAuthorization
+	)
+		throw new AgentConfigurationError("not_authorized");
+	const admitRelease = (
+		target: StandardTemplateReleaseTargetV1,
+		command: { requestId: string; traceId: string },
+		actor: AgentConfigurationActorContextV1,
+	) =>
+		dependencies.automaticTemplatePublicationAuthorization
+			? admitAutomaticTemplatePublicationV1(
+					dependencies.automaticTemplatePublicationAuthorization,
+					target,
+					command,
+					actor,
+				)
+			: admitStandardTemplateRelease(
+					dependencies.standardTemplateReleaseAuthorization,
+					target,
+					command,
+					actor,
+				);
 	type ExecutionCommand = Pick<
 		UpdateAgentConfigurationCommandV2,
 		"agentId" | "idempotencyKey" | "requestId" | "traceId"
@@ -191,8 +215,7 @@ function createAgentConfigurationUseCaseV1Internal(
 		allowAdministratorRescue = false,
 	): Promise<AgentConfigurationResultV1> => {
 		const firstReleaseAuthority = release
-			? await admitStandardTemplateRelease(
-					dependencies.standardTemplateReleaseAuthorization,
+			? await admitRelease(
 					release,
 					{ requestId: command.requestId, traceId: command.traceId },
 					actorContext,
@@ -816,6 +839,9 @@ function createAgentConfigurationUseCaseV1Internal(
 			changedFields,
 		};
 		const plan: AgentConfigurationWritePlanV1 = {
+			...(firstReleaseAuthority && "publication" in firstReleaseAuthority
+				? { automaticPublication: firstReleaseAuthority.publication }
+				: {}),
 			schemaVersion: 1,
 			agentId: command.agentId,
 			baseRevision: current.revision,
@@ -875,15 +901,18 @@ function createAgentConfigurationUseCaseV1Internal(
 			}
 		}
 		if (release && firstReleaseAuthority) {
-			const latest = await admitStandardTemplateRelease(
-				dependencies.standardTemplateReleaseAuthorization,
+			const latest = await admitRelease(
 				release,
 				{ requestId: command.requestId, traceId: command.traceId },
 				actorContext,
 			);
 			if (
 				latest.identityRevision !== firstReleaseAuthority.identityRevision ||
-				latest.deploymentRevision !== firstReleaseAuthority.deploymentRevision
+				latest.deploymentRevision !==
+					firstReleaseAuthority.deploymentRevision ||
+				("publication" in latest &&
+					(!("publication" in firstReleaseAuthority) ||
+						!sameValue(latest.publication, firstReleaseAuthority.publication)))
 			)
 				throw new AgentConfigurationError("not_authorized");
 			if (
@@ -988,7 +1017,9 @@ function createAgentConfigurationUseCaseV1Internal(
 			const actorContext = parseActorContext(actorContextInput);
 			const digest = platformIdempotencyV1.canonicalRequestDigest({
 				schemaVersion: 1,
-				operation: "standard_template.release_to_agent.v1",
+				operation: dependencies.automaticTemplatePublicationAuthorization
+					? "standard_template.auto_publish.v1"
+					: "standard_template.release_to_agent.v1",
 				target: command.target as never,
 				actorId: actorContext.actorId,
 				rawRequestDigest: actorContext.rawRequestDigest,

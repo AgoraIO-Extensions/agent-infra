@@ -541,3 +541,8 @@ if (
 			process.exitCode = 1;
 		});
 }
+
+export {
+	type AutomaticTemplatePublicationInputV1,
+	createAutomaticTemplatePublicationAppV1,
+} from "./template-publication.js";

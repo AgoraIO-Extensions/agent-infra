@@ -572,3 +572,8 @@ export {
 } from "./session-sandbox-egress.js";
 export * from "./session-workload-adapter.js";
 export * from "./skill-materializer-production-assembly.js";
+
+export {
+	createWorkerTemplatePublicationV1,
+	type WorkerTemplatePublicationV1,
+} from "./template-publication-worker.js";

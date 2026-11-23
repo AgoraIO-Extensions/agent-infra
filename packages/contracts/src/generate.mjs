@@ -85,6 +85,7 @@ import {
 	skillHubVersionDetailSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 	standardTemplateReleaseOpenApiPathsV2,
+	templatePublicationOpenApiPathsV1,
 	wecomBotConnectionOpenApiPathsV2,
 	wecomBotConnectionSchemasV2,
 } from "./pilot/index.ts";
@@ -213,6 +214,10 @@ const artifactPaths = {
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
 		"openapi/standard-template-release.v1.openapi.json",
+	),
+	templatePublicationOpenapiV1: resolve(
+		artifactRoot,
+		"openapi/template-publication.v1.openapi.json",
 	),
 	standardTemplateReleaseOpenapiV2: resolve(
 		artifactRoot,
@@ -1204,6 +1209,14 @@ function buildArtifacts() {
 			openapi: "3.1.0",
 			info: { title: "Standard template deployment release", version: "1.0.0" },
 			paths: standardTemplateReleaseOpenApiPathsV1,
+		}),
+		templatePublicationOpenapiV1: createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Deployment-owned automatic template publication",
+				version: "1.0.0",
+			},
+			paths: templatePublicationOpenApiPathsV1,
 		}),
 		standardTemplateReleaseOpenapiV2: createDocument({
 			openapi: "3.1.0",
