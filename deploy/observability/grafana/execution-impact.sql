@@ -63,7 +63,7 @@ CREATE OR REPLACE FUNCTION platform_ops_dashboard.reply_observations(
 RETURNS TABLE (bucket timestamptz, channel text, waiting_users bigint,
     longest_wait_seconds double precision, accepted bigint, replied bigint,
     median_first_output_seconds double precision, cancelled_before_output bigint,
-    median_cancel_wait_seconds double precision)
+    median_cancel_wait_seconds double precision, latest_first_output_at timestamptz, queued_executions bigint)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog
 AS $$
 BEGIN
@@ -80,13 +80,16 @@ BEGIN
                          OR starts_with(e.channel_id,'wecom_app:') THEN '企微'
                     WHEN e.channel_id = 'api' OR starts_with(e.channel_id,'api:') THEN 'API'
                     ELSE '其他' END AS source,
-               e.actor_id, e.principal_type, e.created_at, e.status, e.terminal_observed_at, first_text.at
+               e.actor_id, e.principal_type, e.created_at, e.status, e.terminal_observed_at, first_text.at, first_text.queued
         FROM platform.conversation_executions e
         LEFT JOIN LATERAL (
-            SELECT min(ev.persisted_at) AS at
+            SELECT min(ev.persisted_at) FILTER (WHERE ev.event_type='text.delta') AS at,
+                   bool_or(ev.event_type='task.status' AND ev.persisted_at < window_end) AS queued
             FROM platform.conversation_events ev
-            WHERE ev.execution_id = e.execution_id AND ev.event_type = 'text.delta'
-              AND length(ev.event_payload->>'text') > 0
+            WHERE ev.execution_id = e.execution_id AND (
+                (ev.event_type='text.delta' AND length(ev.event_payload->>'text') > 0)
+                OR (ev.source='platform' AND ev.event_type='task.status' AND ev.event_payload->>'status'='waiting')
+            )
         ) first_text ON true
         WHERE (projection = 'summary' AND e.status IN ('waiting','submitted','processing'))
            OR (e.created_at >= window_start AND e.created_at < window_end)
@@ -95,17 +98,18 @@ BEGIN
         SELECT source, actor_id, created_at AS clock, 'accepted' AS kind,
                CASE WHEN at >= created_at AND at < window_end
                          AND (terminal_observed_at IS NULL OR at <= terminal_observed_at)
-                    THEN extract(epoch FROM at-created_at)::float8 END AS seconds
+                    THEN extract(epoch FROM at-created_at)::float8 END AS seconds,
+               CASE WHEN at >= created_at AND at < window_end AND (terminal_observed_at IS NULL OR at <= terminal_observed_at) THEN at END AS observed_at, queued
         FROM observations WHERE created_at >= window_start AND created_at < window_end
         UNION ALL
         SELECT source, actor_id, terminal_observed_at, 'cancelled',
-               extract(epoch FROM terminal_observed_at-created_at)::float8
+               extract(epoch FROM terminal_observed_at-created_at)::float8, NULL::timestamptz, false
         FROM observations WHERE status = 'cancelled' AND terminal_observed_at >= created_at
           AND terminal_observed_at >= window_start AND terminal_observed_at < window_end
           AND (at IS NULL OR at > terminal_observed_at)
         UNION ALL
         SELECT source, actor_id, window_start, 'waiting',
-               extract(epoch FROM statement_timestamp()-created_at)::float8
+               extract(epoch FROM statement_timestamp()-created_at)::float8, NULL::timestamptz, false
         FROM observations WHERE projection = 'summary' AND principal_type = 'user'
           AND status IN ('submitted','processing','waiting') AND at IS NULL
     ), aggregated AS (
@@ -117,14 +121,15 @@ BEGIN
                count(seconds) FILTER (WHERE kind='accepted') AS replies,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) FILTER (WHERE kind='accepted') AS reply_median,
                count(*) FILTER (WHERE kind='cancelled') AS cancellations,
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) FILTER (WHERE kind='cancelled') AS cancel_median
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) FILTER (WHERE kind='cancelled') AS cancel_median,
+               max(observed_at) AS latest_reply, count(*) FILTER (WHERE queued) AS queued_count
         FROM facts GROUP BY 1,2
     ), sources AS (
         SELECT unnest(ARRAY['Web','企微','API']) AS source
         UNION SELECT a.source FROM aggregated a
     )
     SELECT t.bucket, s.source, CASE WHEN projection='summary' THEN coalesce(a.waiting,0) END, a.longest,
-           coalesce(a.submissions,0), coalesce(a.replies,0), a.reply_median, coalesce(a.cancellations,0), a.cancel_median
+           coalesce(a.submissions,0), coalesce(a.replies,0), a.reply_median, coalesce(a.cancellations,0), a.cancel_median, a.latest_reply, coalesce(a.queued_count,0)
     FROM generate_series(window_start, CASE WHEN projection='summary' THEN window_start
                              ELSE window_end - interval '1 microsecond' END, interval '5 minutes') AS t(bucket)
     CROSS JOIN sources s LEFT JOIN aggregated a ON a.t=t.bucket AND a.source=s.source;

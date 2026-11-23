@@ -199,7 +199,7 @@
             "uid": "${DS_PLATFORM}"
           },
           "format": "table",
-          "rawSql": "SELECT channel AS \"渠道\", waiting_users AS \"当前等待用户\", round(longest_wait_seconds::numeric,1) AS \"当前最长等待 (s)\", accepted AS \"窗口受理\", replied AS \"首正文样本\", accepted-replied AS \"窗口内未观察到首正文\", round(median_first_output_seconds::numeric,1) AS \"首正文中位数 (s)\", cancelled_before_output AS \"首正文前取消\", round(median_cancel_wait_seconds::numeric,1) AS \"取消等待中位数 (s)\", CASE channel WHEN 'Web' THEN '浏览器展示时间未知' WHEN '企微' THEN '首段送达时间未知' WHEN 'API' THEN '客户端接收时间未知' ELSE '未确认' END AS \"渠道回执覆盖\", statement_timestamp() AS \"查询更新时间\" FROM platform_ops_dashboard.reply_observations($__timeFrom(), $__timeTo(), 'summary') ORDER BY channel"
+          "rawSql": "SELECT channel AS \"渠道\", waiting_users AS \"当前等待用户\", round(longest_wait_seconds::numeric,1) AS \"当前最长等待 (s)\", queued_executions AS \"已记录排队的执行\", accepted AS \"窗口受理\", replied AS \"首正文样本\", accepted-replied AS \"窗口内未观察到首正文\", round(median_first_output_seconds::numeric,1) AS \"首正文中位数 (s)\", cancelled_before_output AS \"首正文前取消\", round(median_cancel_wait_seconds::numeric,1) AS \"取消等待中位数 (s)\", CASE channel WHEN 'Web' THEN '浏览器展示时间未知' WHEN '企微' THEN '首段送达时间未知' WHEN 'API' THEN '客户端接收时间未知' ELSE '未确认' END AS \"渠道回执覆盖\", '展示回执未知' AS \"排队与加载提示\", latest_first_output_at AS \"最近首正文样本时间\", statement_timestamp() AS \"查询更新时间\" FROM platform_ops_dashboard.reply_observations($__timeFrom(), $__timeTo(), 'summary') ORDER BY channel"
         }
       ]
     },

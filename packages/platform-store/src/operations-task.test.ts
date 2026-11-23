@@ -28,6 +28,15 @@ beforeAll(async () => {
 		database.databaseUrl,
 		"ops-namespace",
 	);
+	await sql.unsafe(
+		await readFile(
+			new URL(
+				"../../../deploy/observability/grafana/execution-impact.sql",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision)
 		values ('ops-agent',1,'auth')`;
 	await sql`insert into platform.conversations
@@ -365,14 +374,6 @@ it.each(["timeout", "aborted"] as const)(
 );
 
 it("scopes Grafana to whole-window aggregates and denies ungranted roles", async () => {
-	const ddl = await readFile(
-		new URL(
-			"../../../deploy/observability/grafana/execution-impact.sql",
-			import.meta.url,
-		),
-		"utf8",
-	);
-	await sql.unsafe(ddl);
 	const [impact] =
 		await sql`select * from platform_ops_dashboard.execution_impact(${input.start}, ${input.end}, 'total')`;
 	expect(impact).toMatchObject({
@@ -391,14 +392,6 @@ it("scopes Grafana to whole-window aggregates and denies ungranted roles", async
 });
 
 it("exposes all three channels and empty buckets without inventing reply samples", async () => {
-	const ddl = await readFile(
-		new URL(
-			"../../../deploy/observability/grafana/execution-impact.sql",
-			import.meta.url,
-		),
-		"utf8",
-	);
-	await sql.unsafe(ddl);
 	const rows =
 		await sql`select * from platform_ops_dashboard.reply_observations('2000-01-01T00:00Z','2000-01-01T00:10Z','trend') order by bucket,channel`;
 	expect(rows.map((r) => r.channel)).toEqual([
@@ -427,30 +420,24 @@ it.each([
 	"reconciles %s waits, first text and a cancellation in the selected window",
 	async (channelId, channel) => {
 		await sql.begin(async (tx) => {
-			await tx.unsafe(
-				await readFile(
-					new URL(
-						"../../../deploy/observability/grafana/execution-impact.sql",
-						import.meta.url,
-					),
-					"utf8",
-				).then((text) =>
-					text.replace(/^BEGIN;$/m, "").replace(/^COMMIT;$/m, ""),
-				),
-			);
 			await tx`alter table platform.conversation_executions disable trigger conversation_execution_terminal_observed_at`;
 			const actor = "reply-test-user";
 			for (const [i, status] of [
 				"processing",
 				"cancelled",
 				"completed",
+				"processing",
 			].entries()) {
 				const session = "reply-" + channel + "-" + i;
 				await tx`insert into platform.conversations(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values(${session},'ops-agent',${actor},${channelId},'ready',1,'auth')`;
 				const created =
-					i === 0 ? "2001-01-01T09:59:00Z" : "2001-01-01T10:00:00Z";
+					i === 0 || i === 3 ? "2001-01-01T09:59:00Z" : "2001-01-01T10:00:00Z";
 				await tx`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at,terminal_observed_at)
-			values(${session},${session},'ops-agent',${actor},${channelId},'turn',${status},1,'auth',${created},${i === 0 ? null : "2001-01-01T10:01:00Z"})`;
+			values(${session},${session},'ops-agent',${actor},${channelId},'turn',${status},1,'auth',${created},${i === 0 || i === 3 ? null : "2001-01-01T10:01:00Z"})`;
+				if (i === 1) {
+					await tx`insert into platform.conversation_events(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,occurred_at,persisted_at,source)
+					values(${session + "-queue"},${session},${session},'queue',1,1,'task.status','{"type":"task.status","status":"waiting"}',${"0".repeat(64)},'2001-01-01T10:00Z','2001-01-01T10:00Z','platform')`;
+				}
 				if (i === 2) {
 					for (const [index, body] of ["", "first", "again"].entries()) {
 						const id = session + "-" + index;
@@ -469,8 +456,48 @@ it.each([
 				median_first_output_seconds: 1,
 				cancelled_before_output: "1",
 				median_cancel_wait_seconds: 60,
+				queued_executions: "1",
 			});
-			expect(row.longest_wait_seconds).toBeGreaterThan(60);
+			expect(row?.latest_first_output_at.toISOString()).toBe(
+				"2001-01-01T10:00:01.000Z",
+			);
+			expect(row?.longest_wait_seconds).toBeGreaterThan(60);
+			// A reconnect retries the same durable event key; the existing record wins.
+			await tx`insert into platform.conversation_events select * from platform.conversation_events where event_id=${"reply-" + channel + "-2-1"} on conflict do nothing`;
+			const repeated =
+				await tx`select replied, waiting_users from platform_ops_dashboard.reply_observations('2001-01-01T10:00Z','2001-01-01T10:05Z','summary') where channel=${channel}`;
+			expect(repeated[0]).toMatchObject({ replied: "1", waiting_users: "1" });
+			await tx`update platform.conversation_executions set status='cancelled' where execution_id=${"reply-" + channel + "-3"}`;
+			const [remaining] =
+				await tx`select waiting_users from platform_ops_dashboard.reply_observations('2001-01-01T10:00Z','2001-01-01T10:05Z','summary') where channel=${channel}`;
+			expect(remaining?.waiting_users).toBe("1");
 		});
 	},
 );
+
+it("only the granted datasource role can query reply aggregates", async () => {
+	await sql`create role reply_reader`;
+	await sql`create role reply_employee`;
+	await sql`grant usage on schema platform_ops_dashboard to reply_reader,reply_employee`;
+	await sql`grant execute on function platform_ops_dashboard.reply_observations(timestamptz,timestamptz,text) to reply_reader`;
+	await expect(
+		sql.begin(async (tx) => {
+			await tx`set local role reply_employee`;
+			await tx`select * from platform_ops_dashboard.reply_observations(now()-interval '1h',now(),'summary')`;
+		}),
+	).rejects.toMatchObject({ code: "42501" });
+	await sql.begin(async (tx) => {
+		await tx`set local role reply_reader`;
+		expect(
+			(
+				await tx`select channel from platform_ops_dashboard.reply_observations(now()-interval '1h',now(),'summary')`
+			).length,
+		).toBeGreaterThanOrEqual(3);
+	});
+	await expect(
+		sql.begin(async (tx) => {
+			await tx`set local role reply_reader`;
+			await tx`select actor_id from platform.conversation_executions limit 1`;
+		}),
+	).rejects.toMatchObject({ code: "42501" });
+});
