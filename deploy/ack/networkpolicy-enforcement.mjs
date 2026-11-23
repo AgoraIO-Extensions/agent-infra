@@ -116,6 +116,20 @@ function tolerated(taint, tolerations) {
 	);
 }
 
+/** Nodes the Worker's Agent-level placement can land on (the probes' scope). */
+export function eciCandidateNodesV1(nodes, architecture) {
+	const fields = eciPlacementFieldsV1(architecture);
+	return nodes.filter((node) => {
+		const labels = node.metadata?.labels ?? {};
+		return (
+			Object.entries(fields.nodeSelector).every(([key, value]) => labels[key] === value) &&
+			(node.spec?.taints ?? [])
+				.filter((taint) => taint.effect === "NoSchedule" || taint.effect === "NoExecute")
+				.every((taint) => tolerated(taint, fields.tolerations))
+		);
+	});
+}
+
 function renderedDocuments(renderedManifest) {
 	if (typeof renderedManifest !== "string" || !renderedManifest)
 		fail("RENDERED_MANIFEST_REQUIRED");
@@ -670,16 +684,10 @@ export function validateNetworkPolicyEnforcementV1({
 	)
 		fail("EVIDENCE_SCOPE_MISMATCH");
 
-	const fields = eciPlacementFieldsV1(evidence.placement.architecture);
-	const candidates = (observed.nodes ?? []).filter((node) => {
-		const labels = node.metadata?.labels ?? {};
-		return (
-			Object.entries(fields.nodeSelector).every(([key, value]) => labels[key] === value) &&
-			(node.spec?.taints ?? [])
-				.filter((taint) => taint.effect === "NoSchedule" || taint.effect === "NoExecute")
-				.every((taint) => tolerated(taint, fields.tolerations))
-		);
-	});
+	const candidates = eciCandidateNodesV1(
+		observed.nodes ?? [],
+		evidence.placement.architecture,
+	);
 	if (candidates.length === 0) fail("NO_CANDIDATE_NODE");
 	const proven = new Map(evidence.nodes.map((node) => [node.name, node.uid]));
 	for (const node of candidates) {
@@ -858,7 +866,8 @@ export function validateNetworkPolicyEnforcementV1({
 	};
 }
 
-function collect(namespace, kubectl) {
+/** Read-only `kubectl get` observation the gate judges the evidence against. */
+export function collectNetworkPolicyObservedV1(namespace, kubectl) {
 	const read = (args) => {
 		try {
 			return JSON.parse(kubectl(args));
@@ -924,7 +933,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			evidence,
 			deploymentConfig,
 			renderedManifest,
-			observed: collect(namespace, kubectl),
+			observed: collectNetworkPolicyObservedV1(namespace, kubectl),
 		});
 		process.stdout.write(`${JSON.stringify({ ...summary, workerConfigurationSha256 })}\n`);
 	} catch (error) {

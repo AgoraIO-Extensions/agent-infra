@@ -220,7 +220,10 @@ Pod 或原 NetworkPolicy（探针对象已删除），不创建探针，也不�
 
 证据由部署 owner 在获批窗口内用已评审的探针包产生，并由非实现 lane 复核。缺少当期证据时
 预检直接失败，不在生产自动补造探针。探针包在产生证据后删除其创建的全部对象（按 UID），
-并回读确认。
+并回读确认。探针包是 [`networkpolicy-probe.mjs`](networkpolicy-probe.mjs)（`render`、`probe`、
+`assemble`、`cleanup`）：原策略由 Worker 的同一模板函数按替换表生成，标签从存活 Pod 回读，
+`assemble` 在清理前用本门禁的校验函数自检。NetworkPolicy 按并集生效，deny 步只能先撤原策略、只留临时 deny-all，所以证据里的 `policy.uid` 是 recovery 时重建的那条原策略。它不自动创建或应用对象，窗口内的具体步骤由部署 owner
+的执行计划给出。
 
 ## 验收顺序
 
