@@ -76,3 +76,25 @@ it.each([
 		"WeCom Worker deployment dependencies are unavailable",
 	);
 });
+
+it("selects the shared employee identity for Worker channel, task and setup checks", async () => {
+	const employeeAuthority = {
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		directory: { resolveUser: async () => null },
+	};
+	const coordinator = createWecomDeploymentCoordinatorV1({
+		databaseUrl: "postgres://fixture",
+		configuration: configuration(),
+		employeeAuthority,
+	});
+	const worker = coordinator.start(new AbortController().signal);
+	try {
+		expect(mocks.options?.identity).toBe(employeeAuthority.identity);
+		expect(mocks.options?.userDirectory).toBe(employeeAuthority.directory);
+		expect(mocks.options?.setup).toMatchObject({
+			directory: employeeAuthority.directory,
+		});
+	} finally {
+		await worker.close();
+	}
+});

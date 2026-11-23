@@ -20,6 +20,7 @@
 		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/enterprise-directory": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"ldapts": "9.0.0"
 	},

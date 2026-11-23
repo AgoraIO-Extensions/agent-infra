@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import {
 	type DirectorySnapshotLoaderV1,
-	displayNameForDirectoryMember,
 	requireCurrentSnapshot,
 	resolveActiveMemberByEmail,
 } from "@agent-infra/enterprise-directory";
-import type { LdapAccount } from "@agent-infra/identity";
+import {
+	directoryEmployeeKey,
+	type LdapAccount,
+	resolveDirectoryEmployeeAccount,
+} from "@agent-infra/identity";
 import type { PostgresOidcIdentityStore } from "@agent-infra/platform-store";
 import type { OidcBrowserIdentity } from "./oidc-browser-flow.js";
 
@@ -42,48 +45,13 @@ export function createOidcEmployeeDirectory(
 	async function currentByUserId(userId: string): Promise<LdapAccount | null> {
 		const record = await store.findByUserId(userId);
 		if (!record) throw new Error("OIDC_EMPLOYEE_BINDING_UNAVAILABLE");
-		const snapshot = requireCurrentSnapshot(
-			await directory.loadCurrent(),
-			Date.now(),
-		);
-		const [source, employeeId] = JSON.parse(record.employeeId) as [
-			string,
-			string,
-		];
-		if (snapshot.source !== source)
-			throw new Error("OIDC_DIRECTORY_SOURCE_MISMATCH");
-		const member = snapshot.members.find(
-			(value) => value.userId === employeeId,
-		);
-		if (!member) return null;
-		if (
-			member.active &&
-			resolveActiveMemberByEmail(snapshot, member.email)?.userId !== employeeId
-		)
-			throw new Error("OIDC_EMPLOYEE_EMAIL_AMBIGUOUS");
-		const roles = administrators.has(userId)
-			? (["employee", "system_admin"] as const)
-			: (["employee"] as const);
-		return {
-			uid: prefix + userId,
+		return resolveDirectoryEmployeeAccount({
 			userId,
-			email: member.email,
-			displayName: displayNameForDirectoryMember(member),
-			accountStatus: member.active ? "active" : "disabled",
-			roles,
-			authorizationRevision: createHash("sha256")
-				.update(
-					JSON.stringify([
-						record.issuer,
-						record.subject,
-						record.employeeId,
-						member.email,
-						member.active,
-						roles,
-					]),
-				)
-				.digest("hex"),
-		};
+			uid: prefix + userId,
+			record,
+			snapshot: requireCurrentSnapshot(await directory.loadCurrent()),
+			isAdministrator: administrators.has(userId),
+		});
 	}
 	async function userIdForUid(uid: string) {
 		if (!uid.startsWith(prefix)) return null;
@@ -108,7 +76,7 @@ export function createOidcEmployeeDirectory(
 				issuer: identity.issuer,
 				subject: identity.subject,
 				email: member.email,
-				employeeId: JSON.stringify([snapshot.source, member.userId]),
+				employeeId: directoryEmployeeKey(snapshot.source, member.userId),
 			});
 			record = await store.findBySubject(identity.issuer, identity.subject);
 		}
