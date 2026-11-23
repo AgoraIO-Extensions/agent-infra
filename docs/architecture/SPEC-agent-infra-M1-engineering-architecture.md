@@ -1247,6 +1247,14 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事�
 - 平台会话的 Kubernetes 资源使用稳定 label 和 annotation 关联 Agent、Session、Sandbox、代次与修订/fence。
 - M1 不创建 CRD；Platform DB 是产品期望状态的唯一来源。
 
+#### 隔离环境的 SIG Core 冷启动试验
+
+仅在独立 Kubernetes 控制面内安装上游 SIG Agent Sandbox Core v1.0.12 的 CRD、RBAC 与控制器。宿主 ACK 的共享控制面保持现有配置。Worker 只为试验中新分配的冷启动会话创建 Sandbox，固定 `spec.service=false`，Pod 模板引用原 PVC。Core 独占创建与重建该 Pod，Worker 独占 Service、PVC、ServiceAccount、Secret 与 NetworkPolicy。分配、执行和资源绑定由 Platform DB 持久化。
+
+Worker 在投递前回读 Sandbox UID、Pod controller owner UID、实际 Pod UID、挂载卷与原 PVC UID，验证部署指定的调度约束、网络隔离与 Runtime 准入。Pod 重建后重新验证并按既有 Store CAS 更新绑定。候选 Pod 使用要求实际安装 Landlock 规则集的路径；Worker 独占管理前提下签发的 container-boundary attestation 不适用于 Core Pod。
+
+发现错绑、双写或错误就绪时，停止分配新的候选会话，由原 Worker 路径接收后续新会话。已有候选维持原分配，排空后按身份回读 Pod 回收、原卷 UID 与合成标记，再清理试验控制器。比较时记录同一 ACK 工作负载下从创建到首次可投递的耗时、故障定位步骤、缓存与存储条件。
+
 ### 10.4 模板与自定义镜像升级
 
 - 标准模板目录保存当前镜像 Digest。模板更新后，所有关联 Agent 进入新修订并自动调谐。
