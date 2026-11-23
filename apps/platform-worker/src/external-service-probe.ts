@@ -28,16 +28,6 @@ export function createExternalServiceProbe(
 					throw new Error("Incompatible model authorization adapter");
 				return manifest;
 			};
-			inspect(
-				await readJson(
-					await transport(manifestPath, {
-						headers: { accept: "application/json" },
-						signal,
-						redirect: "error",
-						credentials: "omit",
-					}),
-				),
-			);
 			const record = validatePlatformSecretRecordV1(version.credential);
 			const expected = createHash("sha256").update(version.url).digest("hex");
 			if (
@@ -57,6 +47,20 @@ export function createExternalServiceProbe(
 			if (decoded.outcome !== "decrypted") throw new Error();
 			try {
 				const credential = Buffer.from(decoded.plaintext).toString("utf8");
+				const manifest = inspect(
+					await readJson(
+						await transport(manifestPath, {
+							headers: {
+								authorization: `Bearer ${credential}`,
+								accept: "application/json",
+							},
+							signal,
+							redirect: "error",
+							credentials: "omit",
+						}),
+					),
+				);
+				if (action === "test") return { revision, manifest };
 				const path =
 					action === "test"
 						? "/.well-known/agent-infra-adapter"
@@ -81,10 +85,6 @@ export function createExternalServiceProbe(
 					signal,
 				});
 				const data = await readJson(response);
-				if (action === "test") {
-					const manifest = inspect(data);
-					return { revision, manifest };
-				}
 				const discovery = ExternalAuthorizations.parse(data);
 				if (
 					discovery.instanceId !== id ||

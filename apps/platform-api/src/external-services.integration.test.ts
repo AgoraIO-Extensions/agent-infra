@@ -58,11 +58,7 @@ async function provider(name: string) {
 	let foreign = false;
 	const server = createServer(async (req, res) => {
 		calls.push(req.url ?? "");
-		if (
-			(req.url !== "/.well-known/agent-infra-adapter" ||
-				req.headers.authorization) &&
-			req.headers.authorization !== `Bearer ${credential}`
-		) {
+		if (req.headers.authorization !== `Bearer ${credential}`) {
 			res.writeHead(403).end();
 			return;
 		}
