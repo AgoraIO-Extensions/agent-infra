@@ -28,6 +28,26 @@ describe("fixed Provider Registry", () => {
 		);
 	});
 
+	it("records the Pi Paseo-derived JSONL RPC closure", () => {
+		expect(PROVIDER_REGISTRY.pi).toEqual({
+			template: "pi",
+			path: "paseo-derived",
+			adapter: "pi-jsonl-rpc",
+			provenance: {
+				source: "paseo",
+				sourceCommit: "d1b705a0cd91617a5707fae25d80cb0be305795",
+				sdk: "@earendil-works/pi-coding-agent",
+				version: "0.99.0",
+				license: "MIT",
+				adaptations: [
+					"runtime-host-driver-contract",
+					"verified-session-checkpoint",
+					"sandbox-and-credential-boundary",
+				],
+			},
+		});
+	});
+
 	it("keeps capabilities disabled until every conservative gate passes", () => {
 		const result = projectProviderCapabilities("claude", {
 			conformance: "passed",
