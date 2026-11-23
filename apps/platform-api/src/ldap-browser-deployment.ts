@@ -1,14 +1,31 @@
 import { timingSafeEqual } from "node:crypto";
-import { PostgresLdapSessionStoreV1 } from "@agent-infra/platform-store";
+import {
+	OidcBindingError,
+	PostgresLdapSessionStoreV1,
+	type PostgresOidcIdentityStore,
+} from "@agent-infra/platform-store";
 import {
 	createLdapBrowserAdapter,
 	type LdapBrowserInput,
 } from "./ldap-browser.js";
+import {
+	createOidcBrowserFlow,
+	type OidcBrowserIdentity,
+} from "./oidc-browser-flow.js";
 
 /** Bind login routes and API identity to one directory and persistent session store. */
 export function createPostgresLdapBrowserDeployment(
 	input: Omit<LdapBrowserInput, "sessions"> & {
 		databaseUrl: string;
+		oidc?: {
+			issuer: string;
+			clientId: string;
+			clientSecret: string;
+			store: PostgresOidcIdentityStore;
+			verifiedAccount: (
+				identity: OidcBrowserIdentity,
+			) => Promise<import("@agent-infra/identity").LdapAccount | null>;
+		};
 		/** Shared only by the trusted TLS proxy and API deployment. */
 		trustedProxyToken: string;
 	},
@@ -20,6 +37,35 @@ export function createPostgresLdapBrowserDeployment(
 		throw new Error("LDAP_BROWSER_PROXY_CONFIGURATION_INVALID");
 	const sessions = new PostgresLdapSessionStoreV1(input.databaseUrl);
 	const adapter = createLdapBrowserAdapter({ ...input, sessions });
+	const oidc = input.oidc;
+	const flow =
+		oidc &&
+		createOidcBrowserFlow({
+			...oidc,
+			publicOrigin: input.publicOrigin,
+			transactions: oidc.store,
+			login: async (identity) => {
+				try {
+					const account = await oidc.verifiedAccount(identity);
+					return account
+						? adapter.issueSession(account)
+						: new Response(null, { status: 401 });
+				} catch (error) {
+					if (error instanceof OidcBindingError)
+						return new Response(null, { status: 401 });
+					throw error;
+				}
+			},
+		});
+	async function handle(request: Request) {
+		if (flow) {
+			const path = new URL(request.url).pathname;
+			if (path === "/auth/login") return new Response(null, { status: 404 });
+			const result = await flow.handleRequest(request);
+			if (result) return result;
+		}
+		return adapter.handleRequest(request);
+	}
 	const publicOrigin = new URL(input.publicOrigin);
 	const proxyToken = Buffer.from(input.trustedProxyToken);
 	const trustedProxy = (request: Request) => {
@@ -49,16 +95,25 @@ export function createPostgresLdapBrowserDeployment(
 					request.headers.get("host") === publicOrigin.host &&
 					request.headers.get("x-forwarded-proto") === "https"
 				) {
-					if (request.method !== "POST")
+					if (
+						request.method !== "POST" &&
+						!(
+							flow &&
+							incoming.pathname.startsWith("/auth/oidc/") &&
+							request.method === "GET"
+						)
+					)
 						return new Response(null, { status: 405 });
 					const publicUrl = new URL(publicOrigin.origin);
 					publicUrl.pathname = incoming.pathname;
 					publicUrl.search = incoming.search;
-					return adapter.handleRequest(new Request(publicUrl, request.clone()));
+					return handle(new Request(publicUrl, request.clone()));
 				}
-				return adapter.handleRequest(request);
+				return handle(request);
 			},
-			close: () => sessions.close(),
+			close: async () => {
+				await Promise.all([sessions.close(), oidc?.store.close()]);
+			},
 		},
 	};
 }

@@ -505,6 +505,29 @@ describe("standalone login page", () => {
 		expect(document.title).toBe("登录 · Agora Agent");
 	});
 
+	it("navigates the browser to the OIDC login endpoint without a credential form", () => {
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/oidc/login");
+		setup(anonymous);
+		expect(
+			screen
+				.getByRole("link", { name: "使用公司账号登录" })
+				.getAttribute("href"),
+		).toBe("/auth/oidc/login");
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.queryByLabelText("密码", { exact: true })).toBeNull();
+	});
+
+	it.each([
+		"https://other.example.test/auth/oidc/login",
+		"/auth/oidc/login?next=https://other.example.test",
+	])("disables an unusable OIDC login URL (%s)", (loginUrl) => {
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", loginUrl);
+		setup(anonymous);
+		expect(screen.getByText("登录入口尚未配置。")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "使用公司账号登录" })).toBeNull();
+		expect(screen.queryByLabelText("密码", { exact: true })).toBeNull();
+	});
+
 	it("explains a missing login entry inside the same panel", () => {
 		setup(anonymous);
 		const panel = document.querySelector(".login-panel");

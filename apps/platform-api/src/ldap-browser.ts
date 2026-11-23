@@ -324,6 +324,43 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		},
 	};
 
+	async function issueSession(account: LdapAccount) {
+		let principal: Awaited<ReturnType<typeof current>>;
+		try {
+			principal = await current(account);
+			if (principal.accountStatus !== "active") return response(401);
+		} catch (error) {
+			recordHttpFailureContext({
+				failureStep: "auth.login.directory_principal",
+				error,
+			});
+			return response(503);
+		}
+		const token = randomBytes(32).toString("base64url");
+		const loginNow = now();
+		try {
+			await input.sessions.create(
+				digest(token),
+				account.uid,
+				loginNow + SESSION_IDLE_MS,
+				loginNow + SESSION_ABSOLUTE_MS,
+				principal,
+			);
+		} catch (error) {
+			recordHttpFailureContext({
+				failureStep: "auth.login.session_store_create",
+				error,
+			});
+			return response(503);
+		}
+		const result = response(204);
+		result.headers.append(
+			"Set-Cookie",
+			sessionCookie(token, SESSION_ABSOLUTE_MS / 1000),
+		);
+		return result;
+	}
+
 	async function handleRequest(request: Request): Promise<Response | null> {
 		const url = new URL(request.url);
 		if (url.pathname !== "/auth/login" && url.pathname !== "/auth/logout")
@@ -346,40 +383,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return response(503);
 			}
 			if (!account) return response(401);
-			let principal: Awaited<ReturnType<typeof current>>;
-			try {
-				principal = await current(account);
-				if (principal.accountStatus !== "active") return response(401);
-			} catch (error) {
-				recordHttpFailureContext({
-					failureStep: "auth.login.directory_principal",
-					error,
-				});
-				return response(503);
-			}
-			const token = randomBytes(32).toString("base64url");
-			const loginNow = now();
-			try {
-				await input.sessions.create(
-					digest(token),
-					account.uid,
-					loginNow + SESSION_IDLE_MS,
-					loginNow + SESSION_ABSOLUTE_MS,
-					principal,
-				);
-			} catch (error) {
-				recordHttpFailureContext({
-					failureStep: "auth.login.session_store_create",
-					error,
-				});
-				return response(503);
-			}
-			const result = response(204);
-			result.headers.append(
-				"Set-Cookie",
-				sessionCookie(token, SESSION_ABSOLUTE_MS / 1000),
-			);
-			return result;
+			return issueSession(account);
 		}
 		if (request.method !== "POST") return response(405);
 		if (
@@ -398,5 +402,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		return result;
 	}
 
-	return { identityAdapter, handleRequest, resolveCurrentIdentity };
+	return {
+		identityAdapter,
+		handleRequest,
+		resolveCurrentIdentity,
+		issueSession,
+	};
 }
