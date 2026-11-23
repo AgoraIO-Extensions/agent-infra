@@ -4,6 +4,7 @@ import {
 	codexSessionExecutorAttestationV1,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	requestCorePodAdmission,
 } from "@agent-infra/agent-runtime";
 import {
 	type ApprovedConnectionConsumerTargetV1,
@@ -303,6 +304,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			: {}),
 	});
 	const sandboxAdapter = createSessionSandboxWorkloadAdapterV1({
+		fetch: workload.fetch,
 		client: workload.client,
 		...(options.connectionInstallBootstrap
 			? { connectionPublicationProofKey: serviceToken }
@@ -313,6 +315,34 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		workload.policy.connectionInstallationRevision !== undefined ||
 		workload.policy.connectionConsumerSnapshotsByAgent !== undefined ||
 		workload.policy.connectionInstallationRevisionsByAgent !== undefined;
+	const sessionTransport = async (
+		name: string,
+		namespace: string,
+		port: number,
+		sandboxId: string,
+		core: boolean,
+		podUid: string | undefined,
+		signal: AbortSignal,
+	) => {
+		const baseUrl = `http://${name}.${namespace}.svc:${port}`;
+		const key = sessionSandboxServiceTokenV1(
+			serviceToken,
+			namespace,
+			sandboxId,
+		);
+		if (!core) return { baseUrl, serviceToken: key };
+		if (!podUid) throw new Error("Missing Core Pod identity");
+		return {
+			baseUrl,
+			serviceToken: await requestCorePodAdmission(
+				baseUrl,
+				key,
+				podUid,
+				workload.fetch ?? fetch,
+				signal,
+			),
+		};
+	};
 	return async (input) => {
 		try {
 			const connectionConsumer = connectionConsumerFor(input.agentId);
@@ -395,13 +425,16 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					baseUrl: `http://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
-					// The source Sandbox's own token; the deployment token is never sent.
-					serviceToken: sessionSandboxServiceTokenV1(
-						serviceToken,
+					...(await sessionTransport(
+						service.name,
 						service.namespace,
+						sourceDeployment.service.port,
 						controlSource.sandbox.sandboxId,
-					),
+						!!controlSource.policy.podController,
+						controlSource.observation?.resources.find((r) => r.kind === "Pod")
+							?.uid,
+						input.signal,
+					)),
 					workerId: signing.workerId,
 					connectionConsumer,
 				};
@@ -634,13 +667,16 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				return {
 					// Session sandboxes use their own Service contract; the bound Service
 					// is consumed in-cluster over plaintext HTTP (ADR-0020).
-					baseUrl: `http://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
-					// Bound to this Sandbox (#1466); Agent-level routes keep the deployment token.
-					serviceToken: sessionSandboxServiceTokenV1(
-						serviceToken,
+					...(await sessionTransport(
+						service.name,
 						service.namespace,
+						deployment.service.port,
 						sandboxResource.sandbox.sandboxId,
-					),
+						!!sandboxResource.policy.podController,
+						sandboxResource.observation?.resources.find((r) => r.kind === "Pod")
+							?.uid,
+						input.signal,
+					)),
 					workerId: signing.workerId,
 					connectionConsumer,
 				};
@@ -1431,6 +1467,7 @@ export function createProductionSessionSandboxReceiverV1(
 	)
 		throw new Error("WORKER_EXECUTOR_V2_APPROVALS_REQUIRED");
 	const adapter = createSessionSandboxWorkloadAdapterV1({
+		fetch: workload.fetch,
 		client: workload.client,
 		executorIdentityIssuer: options.executorIdentityIssuer,
 		connectionPublicationProofKey: options.serviceToken,
@@ -1736,6 +1773,22 @@ export function createProductionSessionSandboxReceiverV1(
 									resource.name === prior.name,
 							),
 						);
+					if (
+						refreshed.status !== "unknown" &&
+						sameResourceSet &&
+						sourceAllocation.podController
+					) {
+						const pod = refreshed.resources.find((r) => r.kind === "Pod");
+						if (!pod || !sourceAllocation.runtime)
+							throw new WorkloadKubernetesError("conflict");
+						await requestCorePodAdmission(
+							`http://${sourceAllocation.serviceName}.${sourceAllocation.namespace}.svc:${sourceAllocation.containerPort}`,
+							sourceAllocation.runtime.serviceToken,
+							pod.uid,
+							workload.fetch ?? fetch,
+							signal,
+						);
+					}
 					if (refreshed.status !== "unknown" && sameResourceSet)
 						return {
 							status: "observed" as const,

@@ -169,6 +169,7 @@ function isPreparedWithoutModelProjectionV1(source: SessionSandboxSourceV1) {
 
 /** Only a complete per-object stop proof may replace the saved source identities. */
 export function decideSessionSandboxDrainObservationV1(input: {
+	readonly drainComputeAllowed?: boolean;
 	readonly sandbox: SessionSandboxBindingV1;
 	readonly resourceFence: number;
 	readonly lifecycle: SessionSandboxLifecycleV1;
@@ -200,6 +201,29 @@ export function decideSessionSandboxDrainObservationV1(input: {
 				? "Sandbox"
 				: "StatefulSet"),
 	);
+	const recorded = source.observation?.resources ?? [];
+	const priorPod = recorded.find((r) => r.kind === "Pod");
+	const rebound =
+		input.drainComputeAllowed === true &&
+		!lifecycle.deletionProgress?.length &&
+		source.policy?.podController === "sig-core-v1.0.12" &&
+		!!pod &&
+		!!priorPod &&
+		pod.uid !== priorPod.uid &&
+		!!controller &&
+		controller.uid === pod.controllerUid &&
+		controller.uid === priorPod.controllerUid &&
+		recorded.some((r) => r.kind === "Sandbox" && r.uid === controller.uid) &&
+		recorded.some((r) => r.kind === "PersistentVolumeClaim") &&
+		resources.length === recorded.length &&
+		isSessionSandboxObservationValidV1(
+			{
+				sandbox: source.sandbox,
+				policy: source.policy,
+				desiredState: "running",
+			},
+			{ ...observation, status: "ready" },
+		);
 	if (
 		observation.status === "observed" &&
 		resources.length > 0 &&
@@ -222,7 +246,7 @@ export function decideSessionSandboxDrainObservationV1(input: {
 					current.kind === prior.kind &&
 					current.namespace === prior.namespace &&
 					current.name === prior.name &&
-					current.uid === prior.uid &&
+					(current.uid === prior.uid || (rebound && prior.kind === "Pod")) &&
 					current.controllerUid === prior.controllerUid,
 			),
 		)

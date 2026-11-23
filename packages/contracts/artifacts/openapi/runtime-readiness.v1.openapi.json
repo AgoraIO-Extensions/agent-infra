@@ -1049,6 +1049,10 @@
       }
     },
     "securitySchemes": {
+      "CorePodChallengeBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      },
       "RuntimeServiceBearer": {
         "scheme": "bearer",
         "type": "http"
@@ -1061,6 +1065,53 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/internal/runtime/v1/core-pod-admission": {
+      "post": {
+        "description": "Core pilot only. Authenticates a fresh Worker challenge for the expected Pod UID. Successful Landlock installation authorizes only this Host boot.",
+        "operationId": "attestCorePodLandlockV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-core-challenge",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Instance admission valid for up to 60 seconds",
+            "headers": {
+              "x-core-admission": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-core-proof": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid instance challenge"
+          },
+          "503": {
+            "description": "Landlock installation unavailable"
+          }
+        },
+        "security": [
+          {
+            "CorePodChallengeBearer": []
+          }
+        ]
+      }
+    },
     "/internal/runtime/v1/readiness": {
       "post": {
         "operationId": "readWorkloadReadinessV1",

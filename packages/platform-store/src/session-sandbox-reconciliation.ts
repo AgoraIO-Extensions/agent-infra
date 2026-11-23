@@ -1323,6 +1323,7 @@ export async function recordSandboxObservation(
 	const decision =
 		context.purpose === "drain" && context.lifecycle
 			? decideSessionSandboxDrainObservationV1({
+					drainComputeAllowed: context.drainComputeAllowed,
 					sandbox: claim.sandbox,
 					resourceFence: claim.resourceFence,
 					lifecycle: context.lifecycle,

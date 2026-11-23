@@ -1,3 +1,4 @@
+import { execFile as execCoreProbe } from "node:child_process";
 import { createPublicKey, type KeyObject } from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
@@ -9,6 +10,7 @@ import type {
 	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
 import {
+	admittedCorePod,
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
@@ -134,6 +136,7 @@ export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-cu
 export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
+	corePod?: ReturnType<typeof admittedCorePod>;
 	sessionInstanceRead?: ReturnType<typeof createSessionInstanceReaderV1>;
 	executorInstanceRead?: (
 		request: import("@agent-infra/contracts/runtime").ExecutorInstanceAdoptionReadV2,
@@ -519,6 +522,35 @@ export async function assembleRuntimeHost(
 		binding === "codex"
 			? readCodexIsolationMode(environment, serviceToken)
 			: undefined;
+	const coreUid = environment.AGENT_INFRA_CORE_POD_UID;
+	let corePod: ReturnType<typeof admittedCorePod> | undefined;
+	if (coreUid !== undefined) {
+		if (
+			!coreUid ||
+			process.platform !== "linux" ||
+			codexIsolationMode !== "landlock"
+		)
+			runtimeConfigurationInvalid();
+		const install = () =>
+			new Promise<void>((resolve, reject) =>
+				execCoreProbe(
+					"/usr/bin/setpriv",
+					[
+						"--no-new-privs",
+						"--landlock-access",
+						"fs:execute,write-file,read-file,read-dir,remove-dir,remove-file,make-char,make-dir,make-reg,make-sock,make-fifo,make-block,make-sym,refer,truncate,ioctl-dev",
+						"--landlock-rule",
+						"path-beneath:execute,read-file,read-dir:/",
+						"--",
+						"/bin/true",
+					],
+					{ timeout: 3000, env: { PATH: "/usr/bin:/bin" } },
+					(error) =>
+						error ? reject(new Error("CORE_LANDLOCK_UNAVAILABLE")) : resolve(),
+				),
+			);
+		corePod = admittedCorePod(serviceToken, coreUid, install);
+	}
 	const sessionExecutorBinding =
 		codexIsolationMode === "session-executor"
 			? readCodexSessionExecutorBindingV1(environment, serviceToken)
@@ -1313,6 +1345,7 @@ export async function assembleRuntimeHost(
 		}
 		return {
 			host,
+			corePod,
 			browserCapability: () => browserCapabilityAssembly,
 			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding

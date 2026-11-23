@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+	admittedCorePod,
 	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	type RuntimeDriver,
 	RuntimeHost,
 	RuntimeHostError,
+	requestCorePodAdmission,
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantClaimsV1,
@@ -882,4 +884,38 @@ it("keeps Session instance evidence default-off and wires only an explicitly con
 	expect((await issue(enabled, "wrong-worker")).status).toBe(401);
 	expect(reads).toBe(0);
 	expect((await issue(enabled)).status).toBe(400);
+});
+
+it("binds Core Runtime HTTP authorization to a fresh installation on this Pod and boot", async () => {
+	const { host } = await setup();
+	const key = "synthetic-session-key";
+	let supported = false;
+	const runtime = admittedCorePod(key, "pod-a", async () => {
+		if (!supported) throw Error("unavailable");
+	});
+	const app = createRuntimeHostApp({
+		host,
+		serviceToken: key,
+		corePod: runtime,
+		verifyGrant: createExecutionGrantVerifier(
+			new Map([["key-http", publicKey]]),
+		),
+	});
+	const transport: typeof fetch = async (url, init) =>
+		app.request(new Request(url, init));
+	const probe = (uid: string) =>
+		requestCorePodAdmission("http://fixture.invalid", key, uid, transport);
+	await expect(probe("pod-a")).rejects.toThrow();
+	supported = true;
+	await expect(probe("pod-b")).rejects.toThrow();
+	const token = await probe("pod-a");
+	const command = (token: string) =>
+		app.request("/internal/runtime/v1/readiness", {
+			method: "POST",
+			headers: { authorization: "Bearer " + token },
+		});
+	expect((await command(key)).status).toBe(401);
+	expect((await command(token)).status).toBe(503); // Authenticated; this fixture has no Agent readiness route.
+	const other = admittedCorePod(key, "pod-b", async () => {});
+	expect(other.accepts(token)).toBe(false);
 });

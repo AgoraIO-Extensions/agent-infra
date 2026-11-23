@@ -27,6 +27,7 @@ export {
 	connectionInstallServerExporterV1,
 	requestOverConnectionInstallTlsV1,
 } from "./connection-install-tls.js";
+export * from "./core-pod-admission.js";
 export * from "./driver.js";
 export * from "./dynamic-connection.js";
 export * from "./errors.js";

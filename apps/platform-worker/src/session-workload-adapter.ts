@@ -1,9 +1,4 @@
 import {
-	type AgentWorkloadPlacementV1,
-	agentWorkloadPodPlacementV1,
-	agentWorkloadPlacementShapeV1,
-} from "./agent-workload-placement.js";
-import {
 	createHash,
 	createHmac,
 	type KeyObject,
@@ -17,6 +12,7 @@ import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	issueExecutorStartIdentityV1,
+	requestCorePodAdmission,
 	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import type { ExecutorInstanceStateV2 } from "@agent-infra/contracts/runtime";
@@ -54,6 +50,11 @@ import type {
 	V1Service,
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
+import {
+	type AgentWorkloadPlacementV1,
+	agentWorkloadPlacementShapeV1,
+	agentWorkloadPodPlacementV1,
+} from "./agent-workload-placement.js";
 import {
 	type CodexSessionExecutorPolicyV1,
 	executorStartupDeadlineAnnotationV1,
@@ -1326,6 +1327,10 @@ function renderSessionSandboxResourcesV1(
 		},
 	};
 	if (allocation.podController && pod.spec) {
+		pod.spec.containers[0]?.env?.push({
+			name: "AGENT_INFRA_CORE_POD_UID",
+			valueFrom: { fieldRef: { apiVersion: "v1", fieldPath: "metadata.uid" } },
+		});
 		if (!allocation.corePlacement) throw new WorkloadKubernetesError("policy");
 		Object.assign(
 			pod.spec,
@@ -2549,6 +2554,7 @@ export class SessionExecutorStartupExpiredV1 extends WorkloadKubernetesError {
 }
 
 export function createSessionSandboxWorkloadAdapterV1(options: {
+	readonly fetch?: typeof fetch;
 	readonly client: WorkerKubernetesClientV1;
 	readonly executorIdentityIssuer?: KeyObject;
 	/** #4199 C2: deployment service token keying the declaration proof; absent compares strictly. */
@@ -3446,6 +3452,22 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					))
 			)
 				status = "observed";
+			if (core && status === "ready" && purpose === "business") {
+				const pod = resources.find((resource) => resource.kind === "Pod");
+				if (!pod || !allocation.runtime) status = "unknown";
+				else {
+					try {
+						await requestCorePodAdmission(
+							`http://${allocation.serviceName}.${allocation.namespace}.svc:${allocation.containerPort}`,
+							allocation.runtime.serviceToken,
+							pod.uid,
+							options.fetch ?? fetch,
+						);
+					} catch {
+						status = "unknown";
+					}
+				}
+			}
 			return {
 				status:
 					purpose === "control" && status === "ready" ? "observed" : status,

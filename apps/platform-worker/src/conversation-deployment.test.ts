@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import * as runtimeIdentity from "@agent-infra/agent-runtime";
 import {
+	admittedCorePod,
+	corePodAdmissionPath,
 	createAppliedRuntimeSkillDirectoryV1,
 	pinCodexSessionExecutorEpochV1,
 	signExecutorControlV1,
@@ -206,9 +208,33 @@ it("reconciles a cold Core allocation through the production receiver and preser
 			legacyUnplaced: "reject",
 		} as const,
 	};
+	const key = sessionSandboxServiceTokenV1(
+		sessionSandboxDeploymentTokenFixture,
+		namespace,
+		f.claim.sandbox.sandboxId,
+	);
+	let runtime: ReturnType<typeof admittedCorePod> | undefined;
+	const fetchAdmission: typeof fetch = async (url, init) => {
+		expect(String(url)).toBe(
+			`http://${f.claim.sandbox.resourceName}.${namespace}.svc:${(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>).service.port}${corePodAdmissionPath}`,
+		);
+		const headers = new Headers(init?.headers);
+		const nonce = headers.get("x-core-challenge") ?? "";
+		if (
+			!runtime ||
+			headers.get("authorization") !== "Bearer " + runtime.probeToken(nonce)
+		)
+			return new Response(null, { status: 401 });
+		const { token, proof } = await runtime.issue(nonce);
+		return new Response(null, {
+			status: 204,
+			headers: { "x-core-admission": token, "x-core-proof": proof },
+		});
+	};
 	const receive = createProductionSessionSandboxReceiverV1(
 		{
 			...f.options,
+			fetch: fetchAdmission,
 			policy,
 			client: {
 				...f.client,
@@ -269,6 +295,15 @@ it("reconciles a cold Core allocation through the production receiver and preser
 			],
 		},
 	});
+	expect(
+		(await receive({ ...claim, previousObservation: initial }, signal)).status,
+	).toBe("unknown");
+	runtime = admittedCorePod(key, "foreign-uid", async () => {});
+	expect(
+		(await receive({ ...claim, previousObservation: initial }, signal)).status,
+	).toBe("unknown");
+	if (!pod.metadata?.uid) throw Error("missing uid");
+	runtime = admittedCorePod(key, pod.metadata.uid, async () => {});
 	const next = await receive(
 		{ ...claim, previousObservation: initial },
 		signal,
@@ -301,7 +336,7 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	).toBe("unknown");
 	storedPod.metadata.ownerReferences[0].uid = sandbox.metadata.uid;
 	if (!storedPod.metadata.uid) throw Error("missing Pod UID");
-	const recordedPodUid = storedPod.metadata.uid;
+
 	storedPod.metadata.uid = "rebuilt-pod";
 	const lost = await receive({ ...claim, previousObservation: next }, signal);
 	expect(lost).toMatchObject({
@@ -312,12 +347,46 @@ it("reconciles a cold Core allocation through the production receiver and preser
 	expect(f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata?.uid).toBe(
 		pvcUid,
 	);
-	storedPod.metadata.uid = recordedPodUid;
-	const stopped = await receive(
-		{ ...claim, desiredState: "stopped", previousObservation: next },
-		signal,
-		async () => "committed",
+	const drain = drainClaim({ ...f, claim }, next);
+	if (!drain.lifecycle) throw Error("missing lifecycle");
+	await expect(receive(drain, signal)).rejects.toThrow();
+	runtime = admittedCorePod(key, "rebuilt-pod", async () => {});
+	const refreshed = await receive(drain, signal);
+	const decide = (
+		observation: SessionSandboxObservationV1,
+		lifecycle: NonNullable<typeof drain.lifecycle>,
+	) =>
+		decideSessionSandboxDrainObservationV1({
+			observation,
+			lifecycle,
+			sandbox: drain.sandbox,
+			resourceFence: drain.resourceFence,
+			drainComputeAllowed: true,
+		});
+	const saved = decide(refreshed, drain.lifecycle).observation;
+	expect(saved.resources.find((r) => r.kind === "Pod")?.uid).toBe(
+		"rebuilt-pod",
 	);
+	const lifecycle = {
+		...drain.lifecycle,
+		source: { ...drain.lifecycle.source, observation: saved },
+	};
+	const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+	const stopped = await receive(
+		{ ...drain, lifecycle, previousObservation: saved },
+		signal,
+		async (entry) => {
+			progress.set(entry.resource.kind, entry);
+			return "committed";
+		},
+	);
+	expect(
+		decide(stopped, { ...lifecycle, deletionProgress: [...progress.values()] }),
+	).toMatchObject({ finished: true, status: "stopped" });
+	expect(
+		stopped.sourceStop?.removed.find((r) => r.resource.kind === "Pod")?.resource
+			.uid,
+	).toBe("rebuilt-pod");
 	expect(stopped.status).toBe("stopped");
 	expect(f.resources.has(`Sandbox/${name}`)).toBe(false);
 	expect(f.resources.has(`Pod/${name}`)).toBe(false);
