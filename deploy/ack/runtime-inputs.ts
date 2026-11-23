@@ -19,6 +19,7 @@ import { workloadResourceConfigurationHashV1 } from "../../packages/platform-cor
 type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
 type Files = {
+	codexTrial?: boolean;
 	bootstrap: string;
 	templates: string;
 	capacity: string;
@@ -175,7 +176,8 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const capacity = await privateJson(files.capacity);
 	const requests = await privateJson(files.requests);
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha) && templates.sourceSha === sourceSha && capacity.sourceSha === sourceSha);
-	const validationGate = await validateTemplateValidationExpectations(templates);
+	if (files.codexTrial) assert(bootstrap.namespace === "ack-community-m1-4403", "RUNTIME_INPUT_TRIAL_TARGET_INVALID");
+	const validationGate = await validateTemplateValidationExpectations(templates, { codexTrial: files.codexTrial });
 	assert(validationGate.pass || validationGate.results.every((r: any) => r.status === "passed" || r.reason === "VALIDATION_EXPIRED_OR_CLOCK_INVALID"), "RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED");
 	const objects = await prepareBootstrapInputs(bootstrap, rendered);
 	const documents = parseAllDocuments(rendered).map((d) => {
@@ -227,6 +229,10 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	assert(requests.schemaVersion === 1 && Array.isArray(requests.requests));
 	const bodies = await Promise.all(requests.requests.map((r: any) => privateJson(r.bodyFile)));
 	assert(templates.templates.every((t: any) => bodies.some((b: any) => b.source?.kind === "standard" && b.source.templateId === t.templateId)), "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING");
+	if (files.codexTrial) {
+		assert(bodies.every((b: any) => b.source?.kind === "standard" && b.source.templateId === "codex"), "RUNTIME_INPUT_TRIAL_REQUEST_INVALID");
+		assert(!capacity.retainedTemplateMeasurements?.length, "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+	}
 	let profiles = profilesDocument.profiles;
 	if (capacity.candidateProfilesFile !== undefined && capacity.candidateProfilesFile !== capacity.profilesFile) {
 		assert(!Object.values(files).includes(capacity.candidateProfilesFile) && !bootstrap.objects.some((o: any) => Object.values(o.files ?? {}).includes(capacity.candidateProfilesFile)), "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
@@ -343,6 +349,8 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const added = await adoptMeasuredProfile({ source: { kind: "standard", templateId: entry.templateId } }, entry, file, measuredBytes);
 		if (added) retainedAppends.push({ profile: added, evidence: { imageDigest: entry.imageDigest, file } });
 	}
+	if (files.codexTrial) assert(profiles.every((p: any) => p.imageDigest === templates.templates[0].imageDigest) &&
+		[...evidenceFiles.keys()].every((digest) => digest === templates.templates[0].imageDigest), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
 	assert(evidenceFiles.size <= 64 && profiles.length <= 64);
 	const evidence = new Map<string, Uint8Array>();
 	for (const [digest, file] of evidenceFiles) evidence.set(digest, await privateBytes(file));
@@ -440,7 +448,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 	});
 	for (const target of plan.retainedTargets)
 		assert(isDeepStrictEqual(templateValidationContextV1Schema.safeParse(target).data, validationContext), "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
-	const adoptionInputs = await readTemplateValidationAdoptionInputs(plan.templates, validationContext);
+	const adoptionInputs = await readTemplateValidationAdoptionInputs(plan.templates, validationContext, files.codexTrial);
 	const assertCandidateFiles = async () => {
 		for (const input of adoptionInputs) {
 			assert.deepEqual(await privateBytes(input.validationFile), input.candidateBytes, "RUNTIME_INPUT_LOCAL_DRIFT");
@@ -463,6 +471,11 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		assert(current.kind === "Secret" && current.metadata?.name === entry.desired.metadata.name && current.metadata.namespace === namespace && current.metadata.uid && current.metadata.resourceVersion &&
 			current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp && current.type === "Opaque" &&
 			(successor ? current.immutable === true : !current.immutable), "RUNTIME_INPUT_SECRET_OWNER_INVALID");
+		if (files.codexTrial) {
+			for (const data of [current.data, entry.desired.data]) {
+				assert(Object.keys(data).every(key => !key.startsWith("template-validation-") || key === "template-validation-codex.json"), "RUNTIME_INPUT_TRIAL_TEMPLATE_CONFLICT");
+			}
+		}
 		return { ...entry, current };
 	});
 	const existingAdoptionBytes = new Map<string, Buffer>();
@@ -695,7 +708,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	let operationStarted = false;
 	let appliedResult: Awaited<ReturnType<typeof publishRuntimeInputs>> | undefined;
 	try {
-		const [mode, bootstrap, templates, capacity, requests, rendered] = process.argv.slice(2);
+		const [mode, bootstrap, templates, capacity, requests, rendered, scope, ...extra] = process.argv.slice(2);
+		assert((scope === undefined || scope === "--codex-trial") && extra.length === 0, "RUNTIME_INPUTS_INVALID");
+		const codexTrial = scope === "--codex-trial";
 		const { ACK_SOURCE_SHA: source, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = process.env;
 		assert(["plan", "apply", "successor-plan"].includes(mode) && source && kubeconfig && namespace);
 		const successorFile = process.env.ACK_RUNTIME_INPUT_SUCCESSOR_FILE;
@@ -713,11 +728,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const manifest = await readFile(rendered, "utf8");
 		const publish = async () => {
 			operationStarted = true;
-			return appliedResult = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
+			return appliedResult = await publishRuntimeInputs({ codexTrial, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply", undefined, { successor: mode === "successor-plan" });
 		};
 		if (mode === "apply") {
 			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
-			await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
+			await publishRuntimeInputs({ codexTrial, bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
 		let result: any = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();

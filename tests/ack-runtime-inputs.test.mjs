@@ -44,7 +44,10 @@ const resources = {
 	limits: { cpu: "1", memory: "2Gi" },
 };
 
-async function fixture(t, apiReplicas = 1) {
+async function fixture(t, apiReplicas = 1, codexTrial = false) {
+	const namespace = codexTrial
+		? "ack-community-m1-4403"
+		: validationTarget.namespace;
 	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-inputs-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const save = async (path, value) => {
@@ -62,12 +65,14 @@ async function fixture(t, apiReplicas = 1) {
 			join(directory, `${name}.json`),
 		]),
 	);
-	const definitions = [
-		["codex", "codex"],
-		["claude", "claude"],
-		["opencode", "acp"],
-		["pi", "pi"],
-	];
+	const definitions = codexTrial
+		? [["codex", "codex"]]
+		: [
+				["codex", "codex"],
+				["claude", "claude"],
+				["opencode", "acp"],
+				["pi", "pi"],
+			];
 	const templates = [];
 	const requests = [];
 	const now = Date.now();
@@ -89,7 +94,7 @@ async function fixture(t, apiReplicas = 1) {
 		};
 		const measured = {
 			...validation,
-			validationTarget,
+			validationTarget: { ...validationTarget, namespace },
 			scope: "isolated-template-real-model",
 			terminalStatus: "completed",
 			modelFactSource: "protected-driver-journal",
@@ -429,6 +434,53 @@ async function fixture(t, apiReplicas = 1) {
 		},
 	};
 }
+
+test("trial publication adopts only the qualified Codex on both consumers", async (t) => {
+	const f = await fixture(t, 1, true);
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl),
+	);
+	const files = { ...f.files, codexTrial: true };
+	await publishRuntimeInputs(files, f.rendered, source, f.kubectl, true);
+	for (const name of ["api-config", "worker-config"]) {
+		const data = f.cluster.get(`secret/${name}`).data;
+		assert.deepEqual(
+			Object.keys(data).filter((k) => k.startsWith("template-validation-")),
+			["template-validation-codex.json"],
+		);
+		const record = JSON.parse(
+			Buffer.from(data["template-validation-codex.json"], "base64"),
+		);
+		assert.equal(record.adoption.target.namespace, "ack-community-m1-4403");
+	}
+});
+
+test("trial publication rejects a different namespace and an unselected mounted template", async (t) => {
+	const foreign = await fixture(t);
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...foreign.files, codexTrial: true },
+			foreign.rendered,
+			source,
+			foreign.kubectl,
+			true,
+		),
+	);
+	assert.equal(foreign.mutations.length, 0);
+	const f = await fixture(t, 1, true);
+	f.cluster.get("secret/worker-config").data["template-validation-pi.json"] =
+		"e30=";
+	await assert.rejects(
+		publishRuntimeInputs(
+			{ ...f.files, codexTrial: true },
+			f.rendered,
+			source,
+			f.kubectl,
+			true,
+		),
+	);
+	assert.equal(f.mutations.length, 0);
+});
 
 test("fresh measured outputs reach both consumers and pass the capacity gate; reruns do not rewrite or restart", async (t) => {
 	const f = await fixture(t);
