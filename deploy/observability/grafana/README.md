@@ -7,7 +7,7 @@
 
 1. 在目标库由专用非超级用户安装 [聚合函数](execution-impact.sql)。
    函数所有者需要 platform schema 的 USAGE 和函数引用列的 SELECT。
-   目标 schema 归该受信角色所有，数据源账号只获得下面两项函数的调用权。
+   目标 schema 归该受信角色所有，数据源账号只获得下面聚合函数的调用权。
 2. 在系统管理员专用的 Grafana 组织或等效数据源权限范围内创建 PostgreSQL 数据源。
    使用专用只读登录角色，设置查询超时和连接数上限，并启用 TLS 服务端校验。
    用普通账号直接访问数据源、看板和平台深链，核对拒绝结果。
@@ -17,7 +17,7 @@
 4. 按现场数据量核对查询计划与耗时，记录实际数据覆盖和刷新周期。
    默认窗口一小时，单次查询最多一天，每五分钟一个趋势点。点击 Agent 行回到运维历史区间。
 
-具名数据源账号仅授予 schema USAGE 与两个函数的 EXECUTE，例如以已建立的专用角色执行以下授权。
+具名数据源账号仅授予 schema USAGE 与聚合函数的 EXECUTE，例如以已建立的专用角色执行以下授权。
 
 ```sql
 GRANT USAGE ON SCHEMA platform_ops_dashboard TO dashboard_reader;
@@ -25,7 +25,7 @@ GRANT EXECUTE ON FUNCTION platform_ops_dashboard.failed_sessions(timestamptz,tim
   TO dashboard_reader;
 GRANT EXECUTE ON FUNCTION platform_ops_dashboard.execution_impact(timestamptz,timestamptz,text)
   TO dashboard_reader;
-GRANT EXECUTE ON FUNCTION platform_ops_dashboard.first_output(timestamptz,timestamptz)
+GRANT EXECUTE ON FUNCTION platform_ops_dashboard.reply_observations(timestamptz,timestamptz,text)
   TO dashboard_reader;
 ```
 
@@ -37,7 +37,9 @@ GRANT EXECUTE ON FUNCTION platform_ops_dashboard.first_output(timestamptz,timest
 
 首正文表使用第一次持久化非空正文的服务端时间，等待数取当前活动执行，包含所选窗口前已开始的等待。
 一个用户在同一渠道有多个等待仍计一人；取消终结该次执行的等待。按渠道单列，跨渠道人数不可相加。
-回复耗时统计窗口内受理且已有正文的样本。浏览器实际展示、企微送达和 API 客户端收到时间仍需独立回执。
+回复耗时统计窗口内受理、且截至窗口结束已持久化首段正文的样本。按受理时刻绘制五分钟中位数，
+取消时长按确认时刻绘图。没有样本的时间桶保留空值；有受理但未观察到正文可包括未完成或失败的执行。
+查询更新时间为本次统计时间。升级既有看板时，先重跑聚合函数安装并补授新函数 EXECUTE，再更新面板。浏览器实际展示、企微送达和 API 客户端收到时间仍需独立回执。
 
 ## 专用 Grafana 的文件配置
 
