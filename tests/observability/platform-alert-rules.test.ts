@@ -48,6 +48,18 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 				oldMissing: false,
 			},
 			{
+				name: "unconfigured source does not enter the configured aggregate",
+				series: [
+					sample("a", 0),
+					sourceSample("platform-b", "b", 0),
+					sourceSample("platform-c", "c", 120),
+				],
+				backlog: false,
+				missing: false,
+				oldBacklog: true,
+				oldMissing: false,
+			},
+			{
 				name: "real sustained backlog",
 				series: [sample("a", 120), sourceSample("platform-b", "b", 0)],
 				backlog: true,
