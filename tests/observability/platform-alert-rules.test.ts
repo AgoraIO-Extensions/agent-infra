@@ -6,16 +6,21 @@ import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { platformAlertRules } from "../../deploy/observability/platform-alert-rules.ts";
 
-const configuration = {
+	const configuration = {
 	schemaVersion: 1,
 	scope: { cluster: "approved-cluster", namespace: "ack-community-m1-4403" },
-	databaseSources: ["platform-main"],
+	databaseSources: ["platform-a", "platform-b"],
 	thresholds: { outboxPending: 100, httpErrorsPerSecond: 0.1, forSeconds: 300 },
 };
 const labels =
-	'{cluster="approved-cluster",namespace="ack-community-m1-4403",kind="outbox_pending",database_source="platform-main"';
+	(source: string) =>
+		`{cluster="approved-cluster",namespace="ack-community-m1-4403",kind="outbox_pending",database_source="${source}"`;
 const sample = (replica: string, count: number) => ({
-	series: `agent_platform_resource_count${labels},instance="${replica}"}`,
+	series: `agent_platform_resource_count${labels("platform-a")},instance="${replica}"}`,
+	values: `${count}+0x25`,
+});
+const sourceSample = (source: string, replica: string, count: number) => ({
+	series: `agent_platform_resource_count${labels(source)},instance="${replica}"}`,
 	values: `${count}+0x25`,
 });
 
@@ -29,7 +34,7 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 			baseline,
 			readFileSync("deploy/observability/prometheus-rules.yaml"),
 		);
-		const neighbor = sample("neighbor", 120);
+		const neighbor = sourceSample("platform-a", "neighbor", 120);
 		neighbor.series = neighbor.series.replace(
 			"ack-community-m1-4403",
 			"neighbor",
@@ -37,7 +42,7 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 		const scenarios = [
 			{
 				name: "healthy zero is not missing",
-				series: [sample("a", 0)],
+				series: [sample("a", 0), sourceSample("platform-b", "b", 0)],
 				backlog: false,
 				missing: false,
 				oldBacklog: false,
@@ -45,7 +50,7 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 			},
 			{
 				name: "real sustained backlog",
-				series: [sample("a", 120)],
+				series: [sample("a", 120), sourceSample("platform-b", "b", 0)],
 				backlog: true,
 				missing: false,
 				oldBacklog: true,
@@ -53,7 +58,7 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 			},
 			{
 				name: "two replicas report one database",
-				series: [sample("a", 70), sample("b", 70)],
+				series: [sample("a", 70), sample("b", 70), sourceSample("platform-b", "b", 0)],
 				backlog: false,
 				missing: false,
 				oldBacklog: true,
@@ -61,7 +66,7 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 			},
 			{
 				name: "neighbor backlog does not enter target",
-				series: [sample("a", 0), neighbor],
+				series: [sample("a", 0), sourceSample("platform-b", "b", 0), neighbor],
 				backlog: false,
 				missing: false,
 				oldBacklog: true,
@@ -69,8 +74,18 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 			},
 			{
 				name: "neighbor cannot mask target absence",
-				series: [neighbor],
+				series: [sample("a", 0), neighbor],
 				backlog: false,
+				missing: true,
+				oldBacklog: true,
+				oldMissing: false,
+			},
+			{
+				name: "known shard backlog and missing shard fire together",
+				series: [
+					sourceSample("platform-a", "a", 120),
+				],
+				backlog: true,
 				missing: true,
 				oldBacklog: true,
 				oldMissing: false,
@@ -92,7 +107,7 @@ it("evaluates the five shared-backend scenarios and recovery with the real rule 
 								kind,
 								...(scoped ? configuration.scope : {}),
 								...(kind === "telemetry" && scoped
-									? { database_source: "platform-main" }
+									? { database_source: "platform-b" }
 									: {}),
 							},
 							exp_annotations: scoped
@@ -170,4 +185,37 @@ it("rejects absent topology, duplicate shards and arbitrary labels before genera
 		expect(() => platformAlertRules(invalid)).toThrow(
 			"Invalid platform alert scope",
 		);
+});
+
+it("fires both alerts and resolves them on the same recovered sequence", () => {
+	const directory = mkdtempSync(join(tmpdir(), "platform-alert-recovery-"));
+	try {
+		const rules = join(directory, "scoped.yaml");
+		writeFileSync(rules, stringify(platformAlertRules({
+			...configuration,
+			thresholds: { ...configuration.thresholds, forSeconds: 120 },
+		})));
+		const testFile = join(directory, "recovery-tests.yaml");
+		writeFileSync(testFile, stringify({ rule_files: [rules], evaluation_interval: "30s",
+			tests: [
+				{ name: "both fire", interval: "30s", input_series: [
+					{ series: `agent_platform_resource_count${labels("platform-a")},instance="a"}`, values: "120+0x10 0+0x15" },
+					{ series: `agent_platform_resource_count${labels("platform-b")},instance="b"}`, values: "_x10 0+0x15" },
+				], alert_rule_test: [
+					{ eval_time: "2m30s", alertname: "AgentPlatformOutboxBacklog", exp_alerts: [{ exp_labels: { severity: "warning", kind: "backlog", ...configuration.scope }, exp_annotations: { summary: "Platform outbox backlog is sustained" } }] },
+					{ eval_time: "2m30s", alertname: "AgentPlatformTelemetryMissing", exp_alerts: [{ exp_labels: { severity: "warning", kind: "telemetry", ...configuration.scope, database_source: "platform-b" }, exp_annotations: { summary: "Platform telemetry is missing" } }] },
+				] },
+				{ name: "both resolve", interval: "30s", input_series: [
+					{ series: `agent_platform_resource_count${labels("platform-a")},instance="a"}`, values: "120+0x10 0+0x15" },
+					{ series: `agent_platform_resource_count${labels("platform-b")},instance="b"}`, values: "_x10 0+0x15" },
+				], alert_rule_test: [
+					{ eval_time: "6m30s", alertname: "AgentPlatformOutboxBacklog", exp_alerts: [] },
+					{ eval_time: "6m30s", alertname: "AgentPlatformTelemetryMissing", exp_alerts: [] },
+				] },
+			],
+		}));
+		execFileSync(process.env.PROMTOOL_PATH ?? "promtool", ["test", "rules", testFile], { stdio: "pipe", timeout: 30_000 });
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
 });

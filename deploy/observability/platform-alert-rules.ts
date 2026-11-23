@@ -37,7 +37,10 @@ export function platformAlertRules(input: unknown) {
 	if (!Number.isSafeInteger(pending) || !Number.isSafeInteger(seconds)) throw new Error("Invalid platform alert scope");
 	const selector = `cluster=${JSON.stringify(cluster)},namespace=${JSON.stringify(namespace)}`;
 	const gauge = (source: string) => `agent_platform_resource_count{${selector},kind="outbox_pending",database_source=${JSON.stringify(source)}}`;
-	const expected = sources.map((source) => `max(${gauge(source)})`).join(" + ");
+	const expected = `sum(${sources.map((source) => `max(${gauge(source)})`).join(" or ")})`;
+	const missing = sources
+		.map((source) => `label_replace(absent(${gauge(source)}), "database_source", ${JSON.stringify(source)}, "", "")`)
+		.join(" or ");
 	const rule = (alert: string, expr: string, kind: string, summary: string) => ({
 		alert, expr, for: `${seconds}s`,
 		labels: { severity: "warning", kind, cluster, namespace },
@@ -47,7 +50,7 @@ export function platformAlertRules(input: unknown) {
 		// A source is the same durable database/shard, not an exporter or a service replica.
 		rule("AgentPlatformOutboxBacklog", `(${expected}) >= ${pending}`, "backlog", "Platform outbox backlog is sustained"),
 		rule("AgentPlatformHttpErrors", `sum(rate(agent_platform_operations_total{${selector},stage="http",outcome="failed"}[5m])) >= ${errors}`, "errors", "Platform HTTP errors are sustained"),
-		rule("AgentPlatformTelemetryMissing", sources.map((source) => `absent(${gauge(source)})`).join(" or "), "telemetry", "Platform telemetry is missing"),
+		rule("AgentPlatformTelemetryMissing", missing, "telemetry", "Platform telemetry is missing"),
 	] }] };
 }
 
