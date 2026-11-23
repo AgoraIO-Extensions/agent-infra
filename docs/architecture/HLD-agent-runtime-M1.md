@@ -108,6 +108,16 @@ Host 的只读 readiness 不调用模型或工具；custom 业务使用工程 Sp
 
 `self-managed` 的应用接口由镜像负责，但 StatefulSet、Service、Ingress 和 NetworkPolicy 仍只由 `platform-worker` 调谐。自有身份入口不经过 Auth Gateway，也不获得可信平台身份或撤权上下文，账号生命周期由 Owner 的身份体系负责；平台身份入口必须经过 Auth Gateway。网络与鉴权细节见工程 Spec 14.3。
 
+### 3.3 执行目标注册与投递
+
+固定 Driver Registry 决定 RuntimeHost 内可运行的 Driver。可被 Worker 派发的执行目标按
+[工程 Spec §9.2.3](SPEC-agent-infra-M1-engineering-architecture.md#923-外部服务接入契约)登记；
+托管实例通过就绪验证后发布当前绑定，外接实例通过声明能力的 Adapter 接入。
+Worker 认领同一 Execution 的 outbox，在投递前重验目标、实例版本和使用者。RuntimeHost 接入继续验签 Execution Grant；
+经外部服务 API 接入时，由受信 Adapter 在平台执行边界核验绑定并以当前授权主体调用供应方，供应方独立校验设备及 Runtime 归属。
+外部会话与任务引用按供应方实例隔离，同名设备或重连的旧进程不能替换已有绑定。
+读回核实实际工作区，按供应方能力续接、取消与恢复；回执未知时沿原操作核实，平台 SSE 仅发布已保存事件。
+
 ## 4. Runtime Manifest
 
 自定义镜像通过固定 OCI Image Label `io.agora.agent.runtime.manifest` 提供 JSON Runtime Manifest。ImageRegistryAdapter 只为已准入的不可变 Digest 返回 OCI config 和该 Label；具体 Registry、credential、签名与扫描政策不进入 Runtime 契约。平台必须在解析前拒绝超过 64 KiB 的 UTF-8 Label，并使用最大嵌套深度为 8、能够检测重复键的 JSON Object 解析器读取；根对象或任意嵌套对象存在重复键时，在 Schema 校验前拒绝。M1 只接受整数 `schemaVersion: 1`，根对象以及 `service`、`health`、`capabilities` 对象中的未知字段均拒绝。实现阶段必须在 `packages/contracts` 维护与本节一致的版本化 JSON Schema，并以该 Schema 作为创建、升级和契约测试的机器校验入口。
@@ -1570,7 +1580,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - Codex 思考过程验证覆盖：原始推理与推理摘要通知映射为 `reasoning` 事件，并与正文增量保持同批与到达顺序；`encrypted_content` 和签名不输出；回答正文、任务输出与企微答案不含思考内容；V1 SSE 与 Task 投影跳过该事件但推进游标；跨用户、跨 Agent 读不到思考过程；推理中出现的凭证片段被模型传输拦截。真实验收在固定环境用提供原始推理的模型完成 Web 与企微链路。
 - 四模板分别以真实镜像、Driver 与 Relay 模型链路验证可申请状态；未就绪项显示受限原因并拒绝申请。合成目录、`/v1/models` 可见、Fake Driver 或单个模板通过不证明其他模板就绪。
-- 标准模板 Key 契约覆盖同 Agent 的 Alice/Bob 使用不同个人 Key、Web/企微与全部 API/Eval 费用归属、缺失/失效/额度不足不回退、Owner 清单与个人 Key 实际权限不一致的调用失败、Key K1→K2 替换后的新旧执行分离、Relay 撤销 K1、Worker/Pod 重启后同版本恢复，以及跨主体、Agent、Execution、渠道/用途和 Grant/fence 的负向替换。OpenCode/Pi 还须以同一模型的相邻执行验证旧 native handle 退役、新 Key 实际生效和原 Session 连续；旧 handle 排空失败必须拒绝。证实 Key 原值不进入 Pod env/Kubernetes Secret、持久状态、日志、事件、错误或普通查询。
+- 标准模板 Key 契约覆盖同 Agent 的 Alice/Bob 使用不同个人 Key、Web、企微、个人 API 与应用 API、Eval 的费用归属、缺失/失效/额度不足不回退、Owner 清单与个人 Key 实际权限不一致的调用失败、Key K1→K2 替换后的新旧执行分离、Relay 撤销 K1、Worker/Pod 重启后同版本恢复，以及跨主体、Agent、Execution、渠道/用途和 Grant/fence 的负向替换。OpenCode/Pi 还须以同一模型的相邻执行验证旧 native handle 退役、新 Key 实际生效和原 Session 连续；旧 handle 排空失败必须拒绝。证实 Key 原值不进入 Pod env/Kubernetes Secret、持久状态、日志、事件、错误或普通查询。
 - API 与 Store/Worker 组合验证用户/应用任务的受理、默认新会话幂等、显式续接、同会话排队、不同会话容量、启动/更新等待、满容量受理前拒绝、等待到期及重启后原顺序/期限恢复；Web 仍可合法补充指令且新 Turn 不插队，停止/停用/故障不能由提交任务绕过。
 - 执行中消息按工程 Spec §12.5 验证：capability 为真、为假的 Driver 下补充、排队与繁忙三个分支；Codex `turn/steer` 的 accepted、明确拒绝转入排队、超时或断连保持 unknown 且不重复提交、同一 `messageId` 重放返回原结果；排队容量与期限、位次、撤回与认领竞态，以及停止、unknown、重启、撤权和会话不可用后的收敛。
 - 取消故障注入覆盖等待与认领并发、API/Web 同时受理、Agent 启动/更新/停止/停用/故障与准入/实际发送竞态、投递前后崩溃、旧 Worker 迟到提交、unknown、停止未确认与自然完成竞态、停止确认超时及重启/重复取消不延长期限、代次隔离和等待任务收敛；必须证明旧 Turn 无剩余副作用才启动下一任务，不能用超时/换 executionId/新 Session 掩盖不确定结果。
@@ -1654,6 +1664,16 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
   provenance、native bearer 泄漏、close/replay/unknown WRITE 和 Linux 负例须在最终
   artifact 上独立验证，不能用 Codex 或 fixture 证据外推。
 - 明确启用的私有 FD callback、bootstrap 或 recovery 在 intent/permit/结果确认失败、断连、过期、跨代次或主体绑定不一致时，不得产生 Provider/工具副作用。该 lane 未通过不按普通 token 绕过；标准 MCP 路径按自己的获准合同验证，不要求具备未启用的私有接缝。
+
+### 外部服务验收
+
+从现有 Web、企微及 API 入口核对实际目标、平台 Execution 和原会话结果。覆盖个人目标跨用户发现、绑定、派发、读取及并发撤权；
+托管实例替换后旧实例拒绝接单。分别验证投递前离线、已投递回执丢失、重复通知、进程重启和停止确认。
+
+[统一注册实验](https://github.com/AgoraIO-Extensions/agent-infra/issues/4402)验证了实验实例的注册和网络重连。
+[WSS 会话实验](https://github.com/AgoraIO-Extensions/agent-infra/issues/4413)验证了真实 Worker、隔离 PostgreSQL 和本机 ACP 的单轮回传。
+[Agents Anywhere 实验](https://github.com/AgoraIO-Extensions/agent-infra/issues/4421)验证了预选 Mac Connector 的真实 Codex 回复；
+项目 ID 回读与请求不同，实际工作目录一致。后台配置切换、自动发现、持久绑定、个人隔离、正式托管注册、重启恢复和 Relay 自动授权仍待正式验收。
 
 ## 12. RuntimeHost 未来抽取与维护标准
 
