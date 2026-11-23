@@ -10,7 +10,6 @@ import type {
 } from "@agent-infra/agent-runtime";
 import {
 	assertRegisteredProvider,
-	resolveProviderRegistration,
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
@@ -35,6 +34,7 @@ import {
 	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
+	resolveProviderRegistration,
 	supportsProtectedOpenCodeMcpTransport,
 	supportsProtectedPiMcpTransport,
 	verifyCodexPilotInstallation,

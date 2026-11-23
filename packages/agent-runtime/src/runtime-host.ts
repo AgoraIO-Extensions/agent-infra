@@ -152,6 +152,11 @@ import {
 	validateRuntimeExecutionGrant,
 } from "./grant.js";
 import type { RuntimeGrantValidationOptionsV2 } from "./grant-v2.js";
+import {
+	type ProviderDeploymentBinding,
+	projectProviderCapabilities,
+	type RuntimeDriverBinding,
+} from "./provider-registry.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
 	type RuntimeOriginalExecutionRef,
@@ -162,11 +167,6 @@ import type {
 	RuntimeControlMarkV1,
 	RuntimeControlObserverV1,
 } from "./runtime-control-observation.js";
-import {
-	projectProviderCapabilities,
-	type ProviderDeploymentBinding,
-	type RuntimeDriverBinding,
-} from "./provider-registry.js";
 import {
 	createRuntimeFileBridgeBindingV1,
 	createRuntimeNativeTextInputBindingV5,
@@ -843,6 +843,19 @@ export class RuntimeHost {
 	private browserAssemblyEpoch = 0;
 	private browserExecutionContext?: RuntimeBrowserExecutionContextV1;
 	private closed = false;
+
+	private projectProviderCapabilities(
+		declared: RuntimeCapabilitiesV1,
+	): RuntimeCapabilitiesV1 {
+		return this.options.runtimeDriverBinding ||
+			this.options.providerDeploymentBinding
+			? projectProviderCapabilities(
+					this.options.providerDeploymentBinding,
+					declared,
+					this.options.runtimeDriverBinding,
+				)
+			: declared;
+	}
 
 	private readonly v3?: RuntimeHostV3;
 	private readonly v4?: RuntimeHostV4;
@@ -2748,14 +2761,7 @@ export class RuntimeHost {
 				});
 			}
 			const projectedReadinessCapabilities =
-				this.options.runtimeDriverBinding ||
-				this.options.providerDeploymentBinding
-					? projectProviderCapabilities(
-							this.options.providerDeploymentBinding,
-							capabilities,
-							this.options.runtimeDriverBinding,
-						)
-					: capabilities;
+				this.projectProviderCapabilities(capabilities);
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
@@ -2807,15 +2813,9 @@ export class RuntimeHost {
 			await callDriver(() => this.options.driver.getCapabilities()),
 		);
 		if (!capabilities.success) driverInvalid();
-		const projectedCapabilities =
-			this.options.runtimeDriverBinding ||
-			this.options.providerDeploymentBinding
-				? projectProviderCapabilities(
-						this.options.providerDeploymentBinding,
-						capabilities.data,
-						this.options.runtimeDriverBinding,
-					)
-				: capabilities.data;
+		const projectedCapabilities = this.projectProviderCapabilities(
+			capabilities.data,
+		);
 		const responseCapabilities = RuntimeCapabilitiesV1Schema.parse(
 			projectedCapabilities,
 		);
