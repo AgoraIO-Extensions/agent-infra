@@ -4,6 +4,11 @@ import {
 	tool as sdkTool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { type ZodTypeAny, z } from "zod";
+import {
+	type DynamicConnectionClientV1,
+	declaredConnectionDefinitions,
+	dynamicConnectionRefusalsV1,
+} from "./dynamic-connection.js";
 import { RuntimeHostError } from "./errors.js";
 import type {
 	StandardMcpClient,
@@ -164,6 +169,41 @@ function resultToCallToolResult(result: StandardMcpResult) {
 		})),
 		isError: result.phase !== "completed" || !result.success,
 	};
+}
+
+/**
+ * §13.5.6: the declared tools of an Execution that has no usable
+ * installation. Every call answers the fixed refusal and sends nothing to
+ * Connection.
+ */
+export function createClaudeConnectionRefusalMcpServer(options: {
+	declared: DynamicConnectionClientV1["declared"];
+	refusal: keyof typeof dynamicConnectionRefusalsV1;
+	onRefused?: (toolName: string) => Promise<void>;
+}): McpSdkServerConfigWithInstance {
+	const namespace = declaredConnectionDefinitions(options.declared)[0];
+	if (!namespace) unavailable();
+	const text = JSON.stringify(dynamicConnectionRefusalsV1[options.refusal]);
+	const tools = namespace.tools.map((definition) => {
+		const parsed = toZod(definition.inputSchema);
+		if (!(parsed instanceof z.ZodObject)) unavailable();
+		return sdkTool(
+			definition.name,
+			definition.description,
+			parsed as unknown as Record<string, ZodTypeAny>,
+			async () => {
+				await options.onRefused?.(definition.name);
+				return { content: [{ type: "text" as const, text }], isError: true };
+			},
+			{ alwaysLoad: true },
+		);
+	});
+	return createSdkMcpServer({
+		name: "agent-infra-connection",
+		version: "1",
+		tools,
+		alwaysLoad: true,
+	});
 }
 
 export function createClaudeStandardMcpServer(options: {

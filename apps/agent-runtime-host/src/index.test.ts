@@ -30,6 +30,7 @@ import {
 	codexSessionExecutorAttestationV1,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	DynamicConnectionRefusalV1,
 	executorIdentityFileRootV1,
 	executorIdentityFileV1,
 	FakeRuntimeDriver,
@@ -902,6 +903,99 @@ describe("RuntimeHost environment assembly", () => {
 			);
 		} finally {
 			await runtime?.close();
+		}
+	});
+
+	// §13.5.6 (#4349): the manual installation receiver follows the Driver that
+	// consumes its reader, not only Codex.
+	it("hands Claude the dynamic Connection reader of the install receiver", async () => {
+		const { values, dataDirectory } = await claudeAssemblyFixture("absent");
+		// A dynamic Pod carries no static consumer; the two inputs never coexist.
+		delete values.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE;
+		delete values.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION;
+		let openedWith: ClaudeRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+			async (options: ClaudeRuntimeDriverOptions) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(dataDirectory, "claude-driver.json"),
+				);
+			},
+		);
+		const tool = {
+			name: "write_note",
+			description: "Write a note",
+			inputSchema: {
+				type: "object",
+				properties: {},
+				additionalProperties: false,
+			},
+		};
+		const resolveTarget = vi.fn(async () => {
+			throw new DynamicConnectionRefusalV1("authorization_required");
+		});
+		const prepare = vi.fn(async () => ({
+			status: "available" as const,
+			fetch: (async () => new Response(null, { status: 404 })) as never,
+			key: "synthetic-key",
+			cert: "synthetic-cert",
+			port: 0,
+			runtimeOrigin: "https://runtime.example.test",
+			dynamicReader: {
+				contract: {
+					serviceRef: "connection-fixture",
+					contract: {
+						ref: "fixture-mcp-contract",
+						revision: "r1",
+						serverInfo: { name: "fixture", version: "1" },
+						tools: [{ name: "write_note" }],
+					},
+					toolDeclarations: [tool],
+				},
+				resolveTarget,
+				resolveInput: async () => undefined,
+			},
+			close: async () => {},
+		}));
+		let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+		try {
+			runtime = await assembleRuntimeHost(values, undefined, {
+				prepareConnectionInstall: prepare,
+			});
+			expect(prepare).toHaveBeenCalledTimes(1);
+			expect(openedWith?.standardConnectionClient).toBeUndefined();
+			expect(openedWith?.dynamicConnectionClient?.declared).toEqual({
+				contract: { ref: "fixture-mcp-contract", revision: "r1" },
+				tools: [tool],
+			});
+			// The reader a Claude Execution calls refuses with the platform-owned
+			// fixed reason; it never reaches Connection.
+			await expect(
+				openedWith?.dynamicConnectionClient?.resolveTarget(
+					reference,
+					new AbortController().signal,
+				),
+			).rejects.toBeInstanceOf(DynamicConnectionRefusalV1);
+		} finally {
+			await runtime?.close();
+		}
+	});
+
+	it("does not open the install receiver for a Driver without a protected Connection transport", async () => {
+		const { values, dataDirectory } = await claudeAssemblyFixture("absent");
+		values.AGENT_INFRA_RUNTIME_DRIVER = "pi";
+		// No `AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE=verified-v1`: Pi stays without Connection.
+		runtimeAssemblyMocks.openPiRuntime.mockImplementation(async () =>
+			FakeRuntimeDriver.open(join(dataDirectory, "pi-driver.json")),
+		);
+		const prepare = vi.fn();
+		const runtime = await assembleRuntimeHost(values, undefined, {
+			prepareConnectionInstall: prepare as never,
+		});
+		try {
+			expect(prepare).not.toHaveBeenCalled();
+		} finally {
+			await runtime.close();
 		}
 	});
 

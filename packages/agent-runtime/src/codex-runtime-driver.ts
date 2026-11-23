@@ -630,93 +630,26 @@ export interface CodexInstalledSkillDescriptorV1 {
 }
 
 import {
+	type DynamicConnectionClientV1,
+	DynamicConnectionRefusalV1,
+	declaredConnectionDefinitions,
+	declaredConnectionFingerprint,
+	dynamicConnectionRefusalsV1,
+} from "./dynamic-connection.js";
+import {
 	StandardMcpClient,
 	type StandardMcpClientOptions,
 	standardMcpDigest,
 } from "./standard-mcp-client.js";
 
-/**
- * §13.5.6 动态安装的 reader 与可见起点 (ADR-0048, Codex only). A Thread declares
- * these tools at `thread/start` before any installation exists; each
- * Execution then resolves its target and input through the Host's reader. A
- * refusal answers the call with a fixed result and sends nothing to Connection.
- */
-export interface CodexDynamicConnectionClientV1 {
-	readonly declared: {
-		readonly contract: { readonly ref: string; readonly revision: string };
-		readonly tools: readonly {
-			readonly name: string;
-			readonly description: string;
-			readonly inputSchema: Readonly<Record<string, unknown>>;
-		}[];
-	};
-	readonly resolveTarget: (
-		reference: RuntimeOriginalExecutionRef,
-		signal: AbortSignal,
-	) => Promise<StandardMcpClientOptions["target"]>;
-	readonly resolveInput: StandardMcpClientOptions["resolveInput"];
-	readonly fetch?: StandardMcpClientOptions["fetch"];
-}
+export type CodexDynamicConnectionClientV1 = DynamicConnectionClientV1;
+export {
+	DynamicConnectionRefusalV1 as CodexDynamicConnectionRefusalV1,
+	dynamicConnectionRefusalsV1 as codexDynamicConnectionRefusalsV1,
+};
 
-/**
- * Thrown by the Host reader (`resolveTarget`/`resolveInput`) before any
- * Connection request. It carries no credential, installation or permit
- * identifier; the Driver answers the call with the fixed result and never
- * retries.
- */
-export class CodexDynamicConnectionRefusalV1 extends Error {
-	constructor(readonly reason: "authorization_required" | "unavailable") {
-		super(
-			reason === "authorization_required"
-				? "Connection authorization on the platform is required"
-				: "Connection is unavailable",
-		);
-		this.name = "CodexDynamicConnectionRefusalV1";
-	}
-}
-
-/** The fixed results of §13.5.6 for a call no usable installation backs. */
-export const codexDynamicConnectionRefusalsV1 = Object.freeze({
-	authorization_required: Object.freeze({
-		reason: "connection_authorization_required",
-		message: "需要先在平台完成 Connection 授权",
-	}),
-	unavailable: Object.freeze({
-		reason: "connection_unavailable",
-		message: "Connection 暂时不可用",
-	}),
-});
-
-/** Same shape and aliases as `StandardMcpClient.toolDefinitions`. */
-function codexDeclaredConnectionDefinitions(
-	declared: CodexDynamicConnectionClientV1["declared"],
-) {
-	return [
-		{
-			type: "namespace" as const,
-			name: "connection",
-			description: "Approved Connection tools",
-			tools: declared.tools.map((tool) => ({
-				type: "function" as const,
-				name: `mcp_${standardMcpDigest(tool.name).slice(0, 32)}`,
-				description: `${tool.name}: ${tool.description}`,
-				inputSchema: structuredClone(tool.inputSchema) as Record<
-					string,
-					unknown
-				>,
-			})),
-		},
-	];
-}
-
-function codexDeclaredConnectionFingerprint(
-	declared: CodexDynamicConnectionClientV1["declared"],
-) {
-	return standardMcpDigest([
-		codexDeclaredConnectionDefinitions(declared),
-		declared.contract,
-	]);
-}
+const codexDeclaredConnectionDefinitions = declaredConnectionDefinitions;
+const codexDeclaredConnectionFingerprint = declaredConnectionFingerprint;
 
 function isCodexDeclaredConnection(
 	value: unknown,
@@ -13155,7 +13088,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal: AbortSignal,
 	): Promise<
 		| { client: StandardMcpClient }
-		| { refusal: keyof typeof codexDynamicConnectionRefusalsV1 }
+		| { refusal: keyof typeof dynamicConnectionRefusalsV1 }
 	> {
 		if (this.closed) unavailable();
 		const session = this.session(nativeSessionRef);
@@ -13181,7 +13114,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (this.closed) unavailable();
 			return {
 				refusal:
-					error instanceof CodexDynamicConnectionRefusalV1
+					error instanceof DynamicConnectionRefusalV1
 						? error.reason
 						: ("unavailable" as const),
 			};
@@ -13787,7 +13720,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					contentItems: [
 						{
 							type: "inputText",
-							text: JSON.stringify(codexDynamicConnectionRefusalsV1[refusal]),
+							text: JSON.stringify(dynamicConnectionRefusalsV1[refusal]),
 						},
 					],
 				};

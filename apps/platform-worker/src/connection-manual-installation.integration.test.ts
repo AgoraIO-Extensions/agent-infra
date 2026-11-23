@@ -2158,7 +2158,7 @@ describe("first manual Owner EP-1060 install over real TLS, Store and Host (§13
 						(error: { name?: string; reason?: string }) => error,
 					);
 				expect(before).toMatchObject({
-					name: "CodexDynamicConnectionRefusalV1",
+					name: "DynamicConnectionRefusalV1",
 					reason: "authorization_required",
 				});
 				expect(permitReadbacks()).toEqual([]);

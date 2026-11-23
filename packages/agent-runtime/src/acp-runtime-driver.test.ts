@@ -16,6 +16,7 @@ import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import type { RuntimeNativeSkillCommandV1 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
+import { DynamicConnectionRefusalV1 } from "./dynamic-connection.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	RuntimeFileInputRejectedError,
@@ -245,6 +246,118 @@ it("passes only a local bearer to an ACP protected MCP session", async () => {
 		await closeStandardMcpFixtures();
 	}
 });
+
+it.each([
+	["an installation backs the Execution", undefined],
+	["the reader refuses with authorization required", "authorization_required"],
+] as const)(
+	"declares the dynamic Connection tools to an ACP session when %s (§13.5.6)",
+	async (_label, refusal) => {
+		const fixture = await standardMcpFixture();
+		const path = await mkdtemp(join(tmpdir(), "acp-connection-dynamic-"));
+		const seen: unknown[] = [];
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			dynamicConnectionClient: {
+				declared: {
+					contract: { ref: "fixture-mcp-contract", revision: "r1" },
+					tools: [
+						{
+							name: "write_note",
+							description: "Write a note",
+							inputSchema: {
+								type: "object",
+								properties: { text: { type: "string" } },
+								required: ["text"],
+								additionalProperties: false,
+							},
+						},
+					],
+				},
+				resolveTarget: async (ref) => {
+					seen.push(ref);
+					if (refusal) throw new DynamicConnectionRefusalV1(refusal);
+					return fixture.target;
+				},
+				resolveInput: async (ref) => ({
+					...fixture.input,
+					scope: { ...ref },
+				}),
+				fetch: fixture.fetch,
+			},
+			launch: async () => ({
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: "mcp-servers" },
+			}),
+		});
+		try {
+			expect(await driver.getCapabilities()).toMatchObject({
+				connection: true,
+			});
+			const accepted = await driver.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: reference.agentId,
+				conversationId: reference.conversationId,
+				sessionGeneration: reference.sessionGeneration,
+				executionId: reference.executionId,
+				turnId: "turn-connection",
+				operationId: "operation-connection",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			});
+			await vi.waitFor(async () =>
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						reference.executionId,
+					),
+				).toBe("completed"),
+			);
+			const session = JSON.parse(
+				await readFile(
+					join(path, accepted.nativeSessionRef, "workspace", "session.json"),
+					"utf8",
+				),
+			) as { mcpServers: { url: string }[] };
+			expect(session.mcpServers).toHaveLength(1);
+			expect(session.mcpServers[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
+			expect(JSON.stringify(session)).not.toContain(fixture.input.token);
+			// The reader sees this Execution's own reference, never a native field.
+			expect(seen).toEqual([
+				expect.objectContaining({
+					agentId: reference.agentId,
+					conversationId: reference.conversationId,
+					executionId: reference.executionId,
+					sessionGeneration: reference.sessionGeneration,
+				}),
+			]);
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+			await closeStandardMcpFixtures();
+		}
+	},
+);
 
 function acpResultWriter() {
 	let count = 0;

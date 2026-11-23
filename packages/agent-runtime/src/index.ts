@@ -28,6 +28,7 @@ export {
 	requestOverConnectionInstallTlsV1,
 } from "./connection-install-tls.js";
 export * from "./driver.js";
+export * from "./dynamic-connection.js";
 export * from "./errors.js";
 export * from "./fake-runtime-driver.js";
 export * from "./file-runtime-store.js";

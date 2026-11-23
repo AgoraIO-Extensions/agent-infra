@@ -52,7 +52,10 @@ import {
 	claudeShellAvailable,
 	claudeShellEnvironment,
 } from "./claude-shell.js";
-import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
+import {
+	createClaudeConnectionRefusalMcpServer,
+	createClaudeStandardMcpServer,
+} from "./claude-standard-mcp.js";
 import {
 	type ClaudeToolOperationCallbacks,
 	claudeWorkspaceTools,
@@ -90,6 +93,10 @@ import {
 	driverOperationResult as result,
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
+import {
+	type DynamicConnectionClientV1,
+	openDynamicConnectionV1,
+} from "./dynamic-connection.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	openRuntimeMessagesTransport,
@@ -158,6 +165,8 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	/** Deployment-owned protected standard MCP consumer input. */
 	readonly standardConnectionClient?: StandardMcpClientOptions;
+	/** §13.5.6 dynamic manual installation; never together with `standardConnectionClient`. */
+	readonly dynamicConnectionClient?: DynamicConnectionClientV1;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -892,6 +901,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	static async open(options: ClaudeRuntimeDriverOptions) {
 		try {
 			if (!isAbsolute(options.path) || options.path === "/") throw new Error();
+			if (options.standardConnectionClient && options.dynamicConnectionClient)
+				throw new Error();
 			RuntimeModelConfigurationV3Schema.parse({
 				configVersion: options.configVersion,
 				defaultModelOptionId: options.defaultModelOptionId,
@@ -1896,17 +1907,44 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		});
 		let handle: Handle | undefined;
 		try {
-			if (this.options.standardConnectionClient) {
-				standardMcp = await StandardMcpClient.open(
-					this.options.standardConnectionClient,
-					{
-						agentId: command.agentId,
-						conversationId: command.conversationId,
-						executionId: command.executionId,
-						sessionGeneration: command.sessionGeneration,
+			const connectionReference = {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				executionId: command.executionId,
+				sessionGeneration: command.sessionGeneration,
+			};
+			const dynamicOpen = this.options.dynamicConnectionClient
+				? await openDynamicConnectionV1(
+						this.options.dynamicConnectionClient,
+						connectionReference,
+						AbortSignal.timeout(10_000),
+					)
+				: undefined;
+			if (dynamicOpen && "refusal" in dynamicOpen) {
+				const declared = this.options.dynamicConnectionClient?.declared;
+				if (!declared) unavailable();
+				standardMcpServer = createClaudeConnectionRefusalMcpServer({
+					declared,
+					refusal: dynamicOpen.refusal,
+					onRefused: async (name) => {
+						await this.event(file, command.executionId, {
+							type: "tool",
+							payload: {
+								toolCallId: randomUUID(),
+								name,
+								phase: "failed",
+							},
+						});
 					},
-					AbortSignal.timeout(10_000),
-				);
+				});
+			} else if (this.options.standardConnectionClient || dynamicOpen) {
+				standardMcp =
+					dynamicOpen?.client ??
+					(await StandardMcpClient.open(
+						this.options.standardConnectionClient as StandardMcpClientOptions,
+						connectionReference,
+						AbortSignal.timeout(10_000),
+					));
 				standardMcpServer = createClaudeStandardMcpServer({
 					client: standardMcp,
 					operation: (alias): StandardMcpOperation => {
@@ -3005,7 +3043,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			modelSelection: true,
 			attachments: true,
 			resultFiles: true,
-			connection: this.options.standardConnectionClient !== undefined,
+			connection:
+				this.options.standardConnectionClient !== undefined ||
+				this.options.dynamicConnectionClient !== undefined,
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),
 		};

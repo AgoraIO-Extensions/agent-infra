@@ -73,7 +73,7 @@ import {
 } from "./connection-consumer-profile.js";
 import {
 	type ConnectionInstallReceiverAssemblyV1,
-	codexDynamicConnectionClientForReaderV1,
+	dynamicConnectionClientForReaderV1,
 	prepareConnectionInstallReceiverV1,
 	startConnectionInstallReceiverServerV1,
 } from "./connection-install-receiver.js";
@@ -798,8 +798,13 @@ export async function assembleRuntimeHost(
 					serviceToken,
 					store: opened,
 				}));
+		// §13.5.6: the receiver follows the Driver that can consume its reader.
+		// Claude and ACP reach it only through their protected transport.
+		// Pi has no dynamic reader consumer yet (#4349 PR 2).
 		connectionInstall =
-			binding === "codex" ? await prepareConnectionInstall(store) : undefined;
+			supportsProtectedStandardMcp && binding !== "pi"
+				? await prepareConnectionInstall(store)
+				: undefined;
 		// Missing or invalid input closes only this receiver; ordinary Sessions keep running.
 		if (connectionInstallRequested && connectionInstall?.status !== "available")
 			console.warn(
@@ -813,7 +818,7 @@ export async function assembleRuntimeHost(
 				? connectionInstall.dynamicReader
 				: undefined;
 		const dynamicConnectionClient = dynamicReader
-			? codexDynamicConnectionClientForReaderV1(dynamicReader)
+			? dynamicConnectionClientForReaderV1(dynamicReader)
 			: undefined;
 		await sessionExecutor?.assertCurrent();
 		const driver = configuration
@@ -928,6 +933,7 @@ export async function assembleRuntimeHost(
 							...messagesConfiguration,
 							browserCapability: verifiedBrowserCapability,
 							...(standardConnectionClient ? { standardConnectionClient } : {}),
+							...(dynamicConnectionClient ? { dynamicConnectionClient } : {}),
 							...(skillDirectory ? { skillDirectory } : {}),
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
@@ -989,6 +995,7 @@ export async function assembleRuntimeHost(
 								...(standardConnectionClient
 									? { standardConnectionClient }
 									: {}),
+								...(dynamicConnectionClient ? { dynamicConnectionClient } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4
 									? {

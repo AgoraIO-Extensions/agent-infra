@@ -935,7 +935,9 @@ export function createSessionSandboxResourceInputResolverV1(
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
 			...(install &&
-			runtime?.driver === "codex" &&
+			runtime &&
+			// Pi has no dynamic reader consumer yet (#4349 PR 2).
+			runtime.driver !== "pi" &&
 			templateBinding &&
 			!runtime.custom
 				? {
