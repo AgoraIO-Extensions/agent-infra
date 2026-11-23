@@ -707,7 +707,10 @@ test("rejects pull Secret and unrelated layout drift", () => {
 		fixture.observed.spec.imagePullSecrets = value;
 		assert.throws(fixture.observe, /EXECUTOR_LAYOUT_DRIFT/u);
 	}
-	const requiredJob = { ...executorJob, imagePullSecret: "expected-pull-secret" };
+	const requiredJob = {
+		...executorJob,
+		imagePullSecret: "expected-pull-secret",
+	};
 	for (const value of [[], [{ name: "different" }], undefined]) {
 		const fixture = executorFixture(requiredJob);
 		if (value === undefined) delete fixture.observed.spec.imagePullSecrets;
