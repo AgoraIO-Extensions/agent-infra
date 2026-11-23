@@ -19,6 +19,7 @@ if (component === "api") {
 		binding: template.modelBinding, configurationRevision: template.configurationRevision,
 		validation, validationContext: template.validationContext, now: Date.now(),
 	}).state, "ready");
+	process.stdout.write("verified");
 } else {
 	assert.equal(component, "worker");
 	const config = new URL("./configuration.mjs", process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE);
@@ -30,11 +31,9 @@ if (component === "api") {
 	assert.equal(binding.driver, "codex");
 	assert.equal(binding.protocol, "openai-responses-v1");
 	assert.equal(workloadInput.policy.namespace, context.namespace);
-	assert.equal(workloadInput.policy.resourceProfileRef, expected.profile.resourceProfileRef);
-	assert.deepEqual(workloadInput.policy.resources, expected.resources);
-	assert.deepEqual(workloadInput.policy.codexSessionExecutor, expected.executor);
 	assert.deepEqual(workloadInput.executionCapacityProfiles, [expected.profile]);
 	const validation = JSON.parse(await readFile(expected.recordFile, "utf8"));
 	assert.deepEqual(validation, expected.record);
+	const {resourceProfileRef, resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName} = workloadInput.policy;
+	process.stdout.write(JSON.stringify({resourceProfileRef, resources, codexSessionExecutor, workspaceSnapshotEgress, storageSize, storageClassName}));
 }
-process.stdout.write("verified");

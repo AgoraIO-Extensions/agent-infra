@@ -452,10 +452,12 @@ async function fixture(t, apiReplicas = 1, codexTrial = false) {
 					"base64",
 				),
 			).profiles;
+			if (httpState.consumerFailure === "profile-hash")
+				workerProfiles[0].resourceConfigurationHash = "f".repeat(64);
 			const exports =
 				component === "api"
 					? `export const apiInput={templates:[{...${JSON.stringify(binding)},modelBinding:${JSON.stringify(binding)},configurationRevision:"revision-codex",validationContext:${JSON.stringify(validation.adoption.target)},loadValidation:async()=>${JSON.stringify(validation).replace(/^/, "(").concat(")")}}]};`
-					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources, resourceProfileRef: capacity.resourceProfileRef }, templateModelBindings: [binding], executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
+					: `export const workloadInput=${JSON.stringify({ policy: { namespace, resources: capacity.resources, resourceProfileRef: capacity.resourceProfileRef, codexSessionExecutor: capacity.codexSessionExecutor, workspaceSnapshotEgress: httpState.consumerFailure === "workspaceSnapshotEgress" ? { unexpected: true } : capacity.workspaceSnapshotEgress, storageSize: httpState.consumerFailure === "storageSize" ? "40Gi" : capacity.storageSize, storageClassName: httpState.consumerFailure === "storageClassName" ? "wrong-storage" : capacity.storageClassName }, templateModelBindings: [binding], executionCapacityProfiles: httpState.consumerFailure === "capacity" ? [] : workerProfiles })};`;
 			writeFileSync(
 				join(configDir, "configuration.mjs"),
 				httpState.consumerFailure === "empty" ||
@@ -582,9 +584,19 @@ test("trial publication adopts only the qualified Codex on both consumers", asyn
 	}
 });
 
-for (const failure of ["empty", "api-missing", "worker-missing", "capacity"]) {
+for (const failure of [
+	"empty",
+	"api-missing",
+	"worker-missing",
+	"capacity",
+	"profile-hash",
+	"workspaceSnapshotEgress",
+	"storageSize",
+	"storageClassName",
+]) {
 	test(`trial apply reports verified writes when consumer fails: ${failure}`, async (t) => {
 		const f = await fixture(t, 1, true);
+		await executorMeasurements(f);
 		f.httpState.consumerFailure = failure;
 		await assert.rejects(
 			publishRuntimeInputs(
@@ -636,8 +648,57 @@ for (const key of ["clusterUid", "namespaceUid", "installationId"]) {
 	});
 }
 
+for (const changedKey of ["resourceProfileRef", "resourceConfigurationHash"]) {
+	test(`trial rejects second same-image profile with different ${changedKey} before writing`, async (t) => {
+		const f = await fixture(t, 1, true);
+		const t0 = f.templates[0];
+		const measurement = await readFile(
+			join(dirname(t0.validationFile), "runtime-capacity.receipt.json"),
+		);
+		const profile = {
+			schemaVersion: 1,
+			imageDigest: t0.imageDigest,
+			resourceProfileRef: f.capacity.resourceProfileRef,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.capacity,
+			),
+			maximumConcurrentExecutions: 1,
+			conformanceEvidenceHash: createHash("sha256")
+				.update(measurement)
+				.digest("hex"),
+		};
+		f.capacity.candidateProfilesFile = await f.save(
+			join(dirname(f.files.capacity), "proposed-profiles.json"),
+			{
+				schemaVersion: 1,
+				profiles: [
+					{
+						...profile,
+						[changedKey]:
+							changedKey === "resourceProfileRef" ? "other" : "b".repeat(64),
+					},
+				],
+			},
+		);
+		await f.save(f.files.capacity, f.capacity);
+		await assert.rejects(
+			publishRuntimeInputs(
+				{ ...f.files, codexTrial: true },
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			),
+			/RUNTIME_INPUT_TRIAL_CAPACITY_INVALID/,
+		);
+		assert.deepEqual(f.mutations, []);
+	});
+}
+
 test("trial publication rejects a different namespace and an unselected mounted template", async (t) => {
-	const foreign = await fixture(t);
+	const foreign = await fixture(t, 1, true);
+	const bootstrap = { ...foreign.bootstrap, namespace: "another-trial" };
+	await foreign.save(foreign.files.bootstrap, bootstrap);
 	await assert.rejects(
 		publishRuntimeInputs(
 			{ ...foreign.files, codexTrial: true },
@@ -646,6 +707,7 @@ test("trial publication rejects a different namespace and an unselected mounted 
 			foreign.kubectl,
 			true,
 		),
+		/RUNTIME_INPUT_TRIAL_TARGET_INVALID/,
 	);
 	assert.equal(foreign.mutations.length, 0);
 	const f = await fixture(t, 1, true);

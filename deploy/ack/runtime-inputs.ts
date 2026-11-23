@@ -10,7 +10,7 @@ import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { readTemplateValidationAdoptionInputs, validateTemplateValidationExpectations } from "./template-validation.mjs";
 import { adoptTemplateValidationV2, parseAdoptedTemplateValidationV2, templateValidationContextV1Schema } from "../../packages/model-catalog/dist/index.mjs";
-import { parseRetainedTemplateMeasurements, validateCapacityBindings, validateRetainedTemplateCapacity } from "./workload-capacity.ts";
+import { assertWorkerCapacityPolicy, parseRetainedTemplateMeasurements, validateCapacityBindings, validateRetainedTemplateCapacity } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
 import { prepareReserveInput, readReserveApi, readReserveWorker } from "./session-reserve-inputs.ts";
 import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
@@ -35,7 +35,7 @@ type PublicationProgress = {
 };
 const failureCodes = new Set([
 	"RUNTIME_INPUTS_INVALID", "RUNTIME_INPUT_LOGIN_REQUIRED", "RUNTIME_INPUT_CLUSTER_DRIFT",
-	"RUNTIME_INPUT_TRIAL_TARGET_INVALID", "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH", "RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
+	"RUNTIME_INPUT_TRIAL_TARGET_INVALID", "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID", "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH", "RUNTIME_INPUT_TRIAL_CONSUMER_INVALID",
 	"RUNTIME_INPUT_NAMESPACE_OWNER_INVALID", "RUNTIME_INPUT_NAMESPACE_DRIFT",
 	"RUNTIME_INPUT_SECRET_MISSING", "RUNTIME_INPUT_SECRET_UNAVAILABLE", "RUNTIME_INPUT_SECRET_OWNER_INVALID",
 	"RUNTIME_INPUT_SECRET_DRIFT", "RUNTIME_INPUT_SECRET_VERSION_DRIFT", "RUNTIME_INPUT_SECRET_READBACK_FAILED",
@@ -275,6 +275,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
 		};
 		validateCapacityBindings([request], [template], capacity, [freshProfile], new Map([[template.imageDigest, measuredBytes]]));
+		if (files.codexTrial && profiles.length) {
+			assert(profiles.length === 1 && isDeepStrictEqual(profiles[0], freshProfile), "RUNTIME_INPUT_TRIAL_CAPACITY_INVALID");
+		}
 		const matches = (p: any) => p.imageDigest === template.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
 		const approved = profiles.filter(matches);
 		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
@@ -720,7 +723,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 					const containerName = `platform-${component}`;
 					const pods = JSON.parse(kubectl(["-n", namespace, "get", "pods", "-l", `app.kubernetes.io/name=agent-infra,app.kubernetes.io/component=${containerName}`, "-o", "json"])).items.filter((pod: any) => !pod.metadata.deletionTimestamp);
 					assert.equal(pods.length, consumer.replicas);
-					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0], resources: plan.capacity.resources, executor: plan.capacity.codexSessionExecutor};
+					const expected = {record: JSON.parse(adoptionBytes.get("codex")!.toString("utf8")), profile: plan.profiles[0]};
 					const probe = await readFile(new URL("./trial-consumer-readback.mjs", import.meta.url), "utf8");
 					for (const pod of pods) {
 						const owner = pod.metadata.ownerReferences?.find((o: any) => o.controller && o.kind === "ReplicaSet");
@@ -732,7 +735,9 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 						const mounts = pod.spec.containers.find((c: any) => c.name === containerName).volumeMounts.filter((m: any) => m.readOnly && !m.subPath && volumes.some((v: any) => v.name === m.name));
 						assert(mounts.length > 0 && expected.profile);
 						const recordFile = join(mounts[0].mountPath, "template-validation-codex.json");
-						assert.equal(kubectl(["-n", namespace, "exec", "-i", pod.metadata.name, "-c", containerName, "--", "node", "--input-type=module", "-", component, JSON.stringify({...expected, recordFile})], probe), "verified");
+						const readback = kubectl(["-n", namespace, "exec", "-i", pod.metadata.name, "-c", containerName, "--", "node", "--input-type=module", "-", component, JSON.stringify({...expected, recordFile})], probe);
+						if (component === "worker") assertWorkerCapacityPolicy(JSON.parse(readback), plan.capacity, expected.profile.resourceConfigurationHash);
+						else assert.equal(readback, "verified");
 						const end = read("pod", pod.metadata.name);
 						assert(end.metadata.uid === pod.metadata.uid && !end.metadata.deletionTimestamp && isDeepStrictEqual(end.status.containerStatuses, pod.status.containerStatuses));
 					}
