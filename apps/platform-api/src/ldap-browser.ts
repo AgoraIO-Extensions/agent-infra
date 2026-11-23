@@ -9,7 +9,10 @@ import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
-type Directory = ReturnType<typeof createLdapIdentityDirectory>;
+type Directory = Omit<
+	ReturnType<typeof createLdapIdentityDirectory>,
+	"userIdForUid"
+> & { userIdForUid(uid: string): Promise<string | null> };
 const SESSION_COOKIE = "__Host-platform-session";
 const SESSION_IDLE_MS = 2 * 60 * 60_000;
 const SESSION_ABSOLUTE_MS = 12 * 60 * 60_000;
@@ -185,6 +188,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			)
 				return null;
 			const userId = await input.directory.userIdForUid(session.uid);
+			if (!userId) {
+				await input.sessions.revoke(tokenDigest);
+				return null;
+			}
 			const platformDisabled = await input.isPlatformDisabled(userId);
 			if (typeof platformDisabled !== "boolean")
 				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
@@ -324,6 +331,43 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		},
 	};
 
+	async function issueSession(account: LdapAccount) {
+		let principal: Awaited<ReturnType<typeof current>>;
+		try {
+			principal = await current(account);
+			if (principal.accountStatus !== "active") return response(401);
+		} catch (error) {
+			recordHttpFailureContext({
+				failureStep: "auth.login.directory_principal",
+				error,
+			});
+			return response(503);
+		}
+		const token = randomBytes(32).toString("base64url");
+		const loginNow = now();
+		try {
+			await input.sessions.create(
+				digest(token),
+				account.uid,
+				loginNow + SESSION_IDLE_MS,
+				loginNow + SESSION_ABSOLUTE_MS,
+				principal,
+			);
+		} catch (error) {
+			recordHttpFailureContext({
+				failureStep: "auth.login.session_store_create",
+				error,
+			});
+			return response(503);
+		}
+		const result = response(204);
+		result.headers.append(
+			"Set-Cookie",
+			sessionCookie(token, SESSION_ABSOLUTE_MS / 1000),
+		);
+		return result;
+	}
+
 	async function handleRequest(request: Request): Promise<Response | null> {
 		const url = new URL(request.url);
 		if (url.pathname !== "/auth/login" && url.pathname !== "/auth/logout")
@@ -346,40 +390,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return response(503);
 			}
 			if (!account) return response(401);
-			let principal: Awaited<ReturnType<typeof current>>;
-			try {
-				principal = await current(account);
-				if (principal.accountStatus !== "active") return response(401);
-			} catch (error) {
-				recordHttpFailureContext({
-					failureStep: "auth.login.directory_principal",
-					error,
-				});
-				return response(503);
-			}
-			const token = randomBytes(32).toString("base64url");
-			const loginNow = now();
-			try {
-				await input.sessions.create(
-					digest(token),
-					account.uid,
-					loginNow + SESSION_IDLE_MS,
-					loginNow + SESSION_ABSOLUTE_MS,
-					principal,
-				);
-			} catch (error) {
-				recordHttpFailureContext({
-					failureStep: "auth.login.session_store_create",
-					error,
-				});
-				return response(503);
-			}
-			const result = response(204);
-			result.headers.append(
-				"Set-Cookie",
-				sessionCookie(token, SESSION_ABSOLUTE_MS / 1000),
-			);
-			return result;
+			return issueSession(account);
 		}
 		if (request.method !== "POST") return response(405);
 		if (
@@ -398,5 +409,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		return result;
 	}
 
-	return { identityAdapter, handleRequest, resolveCurrentIdentity };
+	return {
+		identityAdapter,
+		handleRequest,
+		resolveCurrentIdentity,
+		issueSession,
+	};
 }

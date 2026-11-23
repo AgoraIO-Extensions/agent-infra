@@ -32,7 +32,7 @@ main `2019ca075149ec5184ceadc06d923b69e64c37e5` 的
 `principal_id IS NULL OR principal_id = 当前 Principal` 为条件更新实例，另一 Principal 再批准同一
 实例返回 `access_denied`。所以一个安装只会绑定一个 Principal，换码前读到的 `principalId` 就是
 token 将绑定的 Principal。这一行为不在 EP-1060 已发布合同中，工程 Spec §13.5.1 例外第 1 项把它
-列为启用前提，并把例外批准绑定到已核实的 Connection 版本。缺的是这个不透明 ID 与公司员工的
+列为启用前提，并把例外批准绑定到该不变式所在源文件的 blob（见下文“增补”）。缺的是这个不透明 ID 与公司员工的
 对应关系。
 
 ## 决策
@@ -76,13 +76,9 @@ Grant。
 版本；EP-1123 的版本与发布出处仍是未发布提案，不能作为现行接口。接口现状见
 [#4155 的合同对照](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155#issuecomment-7028245236)
 及[只读核对](https://github.com/AgoraIO-Extensions/agent-infra/issues/4155#issuecomment-7028819877)。
-当前人工处理沿工程 Spec §13.5.1 例外第 1 项的版本核实、升级前撤批和重新批准流程；Platform
-不能自动发现未通知的升级或人工漏撤批准，实例绑定前提可能因此未被及时复核。该人工撤批门禁
-已在 [提交 `6b66e59d`](https://github.com/AgoraIO-Extensions/agent-infra/commit/6b66e59d764a2d2d4dcdb4f4349d69e0acc46524)
-写入工程 Spec §13.5.1 例外第 1 项，早于下述
-[用户接受记录](https://github.com/AgoraIO-Extensions/agent-infra/pull/4269#issuecomment-7033676112)。
-此处仅说明该人工门禁已有的残余风险，不是新的风险接受，也不表示持续自动检测能力或授权未核实
-版本继续使用例外；原试点上限、已接受的最坏情况和全部补偿门禁仍适用。
+实例绑定前提改由部署负责人按工程 Spec §13.5.1 例外第 1 项只读比对源文件 blob 核实（见下文“增补”）；
+Platform 不能自动发现 blob 变化，前提可能因此未被及时复核。此处仅说明该人工依赖已有的残余风险，
+不是新的风险接受；原试点上限、已接受的最坏情况和全部补偿门禁仍适用。
 
 **唯一性冲突的可用性影响。** 攻击者诱导持有方批准另一安装的链接，也可能触发唯一性冲突，
 使本无错绑的持有方全部例外安装暂时不能取得新的 MCP 许可，影响其工具调用。临时暂停的核对
@@ -108,6 +104,19 @@ Grant。
 | 到达 `notAfter` 后保留仍未转为标准安装的例外 | 不选。EP-1123 获批不等于安装已按标准核实；到期处理以工程 Spec §13.5.1 例外第 8 项为准。 |
 
 EP-1123 获批后另开后续 PR：接入事务回读、完成回溯核对并移除例外。
+
+## 增补：批准绑定不变式源文件，不绑定 Connection 运行版本
+
+原做法把例外批准绑定到已核实的 Connection 版本，Connection 每次发版都要撤回并重新签批，
+并请 Connection 暂停发版。2026-11-23 一天内 Connection 部署了 4 次，#4157 的现场轮因此反复中断。
+用户 2026-11-23T10:1xZ 指示：“我都说了你不用关心这个啊，只要功能能用就好了，你为何要限制别的
+系统发版”。规则来源见
+[#4199 评论 7097860854](https://github.com/AgoraIO-Extensions/agent-infra/issues/4199#issuecomment-7097860854)，
+完整规则只在工程 Spec §13.5.1 例外第 1 项维护。
+
+取舍：不限制 Connection 发版，批准改为绑定实例绑定不变式所在源文件的 blob。接受的代价是 Platform
+不会自动发现 Connection 变更，只能靠部署负责人只读比对 blob；换来的是 Connection 发布不再阻断
+Platform 现场工作。不扩大试点、攻击影响面或已批准的上限，其余门禁（例外第 2、3、4、6、8 项）不变。
 
 ## 验证
 

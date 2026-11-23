@@ -69,7 +69,7 @@ web-deploy: docker
 server-deploy: docker
 ```
 
-选择 `auth=none` 是为了不引入第二套框架认证协议。仓库提供第一方 LDAP IdentityAdapter，Platform Core 仍只消费可信 IdentityContext，其他部署可替换 Adapter。独立 Connection 按其 HLD 登录，不复用 Platform 浏览器会话。选择 `api=none` 是为了避免同时维护 tRPC/oRPC 与 OpenAPI 两套契约；M1 的浏览器接口、内部接口和 Agent Runtime Contract 统一以 HTTP/OpenAPI 为主，SSE 事件单独定义 Schema。
+选择 `auth=none` 是为了不引入第二套框架认证协议。仓库提供第一方 OIDC IdentityAdapter，Platform Core 仍只消费可信 IdentityContext，其他部署可替换 Adapter。独立 Connection 按其 HLD 登录，不复用 Platform 浏览器会话。选择 `api=none` 是为了避免同时维护 tRPC/oRPC 与 OpenAPI 两套契约；M1 的浏览器接口、内部接口和 Agent Runtime Contract 统一以 HTTP/OpenAPI 为主，SSE 事件单独定义 Schema。
 
 脚手架版本固定为 `create-better-t-stack@3.38.1`。生成依赖作为项目初始化基线；生成后代码归本项目维护，不通过重复运行脚手架升级项目，也不在初始化过程中主动升级生成依赖。
 
@@ -99,8 +99,8 @@ flowchart LR
 
     PA --> PD[(Platform DB)]
     PA --> OS[(Object Storage)]
-    PA --> IDP[LDAP IdentityAdapter]
-    IDP --> LDAP[Company LDAP]
+    PA --> IDP[OIDC IdentityAdapter]
+    IDP --> SSO[Company OIDC Provider]
     PA --> DIR[Enterprise Directory Sync]
     DIR --> DD[(Directory Snapshot DB)]
     DIR --> QW
@@ -113,7 +113,7 @@ flowchart LR
 
     AP -->|独立身份 / MCP + API| CA
     CA --> CD[(Connection DB)]
-    CA --> LDAP
+    CA --> CIDP[Connection 独立身份提供方]
     PA -.->|写入版本化 Secret 密文| PD
     PW -.->|读取 active Secret 密文| PD
     PUB[Deployment Encryption Public Keys] --> PA
@@ -136,7 +136,7 @@ flowchart LR
 | `connection-api` | 独立登录与客户端身份、MCP/API、Provider/Action、OAuth、Grant、凭证、外部执行、恢复和审计 | 否 |
 | `agent pod` | 标准模板与 `platform-adapter` 按 Session-owned Sandbox 运行 RuntimeHost/Driver；`self-managed` 保持自有服务边界 | 仅保存所属运行实例的自有数据 |
 | `platform database` | Agent、Owner、范围、管理员手动禁用、应用/API 凭证及授权、个人和 Agent 默认 Relay Key 密文、审批、配置、会话、执行、Eval、反馈和平台审计 | 是 |
-| `directory snapshot database` | 企微员工与部门的已确认完整快照、同步版本和有效期；不是 LDAP 身份或 Platform 授权权威 | 是，仅对目录快照 |
+| `directory snapshot database` | 企微员工与部门的已确认完整快照、同步版本和有效期；不是网页登录身份或 Platform 授权权威 | 是，仅对目录快照 |
 | `connection database` | 独立身份与客户端授权、Grant、Provider/Action、外部账号、加密凭证、OAuth 状态、调用/效果和审计 | 是 |
 
 `platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署，并通过 Platform DB 状态与 outbox 协作；除下述 `native_metadata_read` 例外外，不建立直接 RPC 依赖。Web 和 `platform-api` 的部署位置不受 Kubernetes Workload Plane 限制；只有 `platform-worker` 获得目标 Kubernetes namespace 的 API 权限。Connection 使用独立数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。
@@ -181,7 +181,7 @@ Worker 保持唯一证明签发与投递方；Host 不直接查询 Platform DB �
 任务调度、Execution/Session/Turn 创建和 control/recovery 仍通过 Platform DB/outbox，不能使用此通路；
 metadata 读取不写任务、恢复、fence 或 Key 状态，也不新增持久授权或消息状态机。
 
-目录服务与 Platform 同集群部署，经内部受认证服务边界通信，可使用同一 PostgreSQL 集群的独立数据库账号。它不读取 Platform 或 Connection 数据库；Platform 不把同步快照当作 LDAP 账号状态。Connection 的单一账号级权威和独立 Web 部署取舍分别见 [ADR: Connection 使用单一账号级权威](../adr/0005-use-one-account-backed-connection-authority.md)与 [ADR: 独立部署 Connection Web](../adr/0006-deploy-connection-web-independently.md)。
+目录服务与 Platform 同集群部署，经内部受认证服务边界通信，可使用同一 PostgreSQL 集群的独立数据库账号。它不读取 Platform 或 Connection 数据库；Platform 不把同步快照当作网页会话状态。Connection 的单一账号级权威和独立 Web 部署取舍分别见 [ADR: Connection 使用单一账号级权威](../adr/0005-use-one-account-backed-connection-authority.md)与 [ADR: 独立部署 Connection Web](../adr/0006-deploy-connection-web-independently.md)。
 
 ### 4.2 不拆分的部署单元
 
@@ -247,7 +247,7 @@ agent-infra/
 | 模块 | 负责 | 不负责 |
 | --- | --- | --- |
 | Agent Lifecycle | Web 申请审批、API 直接创建、启动/停止/重启/停用、期望版本与状态迁移 | 直接操作 Kubernetes |
-| Agent Access | Owner、员工/组织范围、管理员手动禁用、应用与责任人、API 凭证范围/失效、显式授权及当前权限交集 | LDAP 员工身份、企微目录快照、Connection 授权 |
+| Agent Access | Owner、员工/组织范围、管理员手动禁用、应用与责任人、API 凭证范围/失效、显式授权及当前权限交集 | 公司员工身份、企微目录快照、Connection 授权 |
 | Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、个人与 Agent 默认 Relay Key、模型、渠道和已验证的集成能力 | Relay 路由和 Connection Provider 凭证 |
 | Builder / 多服务 Agent | 普通 Agent 通过现有 Connection 读写 Repo；平台准入受限的多服务资源描述、Digest 版本和最终部署资源 | 用户业务授权、Connection 凭证、生产合并与发布决定 |
 | Conversation | 会话、消息、回答版本、思考过程、附件引用、执行事件和历史查询 | 模型未公开的推理（加密内容、签名或被隐藏的思考） |
@@ -264,7 +264,7 @@ Connection 在自己的 Core/Store/API/Web 中负责客户端身份、Provider/A
 
 以下位置必须形成明确接口，并至少提供部署 Adapter 或项目实现，以及测试 Fake：
 
-- IdentityAdapter 与可信 IdentityContext；仓库提供第一方 LDAP 实现和测试 Fake。
+- IdentityAdapter 与可信 IdentityContext；仓库提供第一方 OIDC 实现和测试 Fake。
 - 企微目录服务的版本化、受认证快照读取契约与测试 Fake。
 - ImageRegistryAdapter、OCI Digest 与 Runtime Manifest 准入。
 - RepositoryConnectionAdapter 与受控分支/工作区操作；Builder 只能通过现有 Connection 授权读取或修改 Repo。
@@ -408,19 +408,22 @@ M1 不引入 tRPC/oRPC/ConnectRPC。
 
 ### 9.1 IdentityAdapter
 
-- 仓库提供第一方 LDAP IdentityAdapter 作为企业部署默认实现：浏览器登录由平台服务端查找唯一员工条目并以用户密码完成 LDAP bind，仅从受信查询取得稳定 UID、邮箱与当前账号状态。密码不保存、不送入 Worker/Agent、不进入日志或审计；LDAP 连接通过服务端 `tls` 开关选择协议：默认 `true` 使用受信 `ldaps://`，显式 `false` 使用 `ldap://`；显式端口保留，未指定端口时使用协议默认端口。开关不来自浏览器登录请求，不允许 URL 内嵌凭据，不改变用户 bind、稳定 UID、账号状态或会话校验。Platform Core 仍只消费 IdentityContext，其他部署可替换 Adapter，不要求配置 LDAP。
+- AgentInfra 网页使用标准 OIDC Authorization Code + PKCE（S256）。企业部署以 Authentik 为 issuer，由其对接公司 OAuth。各部署在服务端配置受信 issuer、专属 client 和精确 HTTPS 回调地址。回调原子消费绑定到发起浏览器的一次性 state，验证 ID Token 签名、issuer、audience、有效期和 nonce。使用 UserInfo 时校验 sub 一致及邮箱声明一致，再建立本地会话。上游令牌与客户端密钥仅在服务端处理。平台登录和身份解析均无需 LDAP。
+- 以 `(iss, sub)` 查找绑定的内部 `user_id`。启用邮箱关联时，仅接受该部署的受信 issuer 验证的公司邮箱，与权威目录及既有账号唯一匹配。迁移时为旧账号建立可核实的邮箱关联，沿用原内部 ID。企微先使用时可依据完整有效的目录员工记录解析或建立同一内部 ID。两个入口并发首次使用时也只产生一个账号。已确认无旧账号的新员工仅获普通角色。邮箱缺失、未验证或归属不明时拒绝首次邮箱绑定。当前 issuer 下已绑定其他 sub 时拒绝覆盖。部署切换受信 issuer 时可用同一已验证邮箱唯一关联原账号并更新旧绑定。
+- OIDC Back-Channel Logout 接收端验证签名、issuer、audience、登出事件、iat、可选 exp、sub 和唯一 jti，拒绝带 nonce 的令牌。按 `(iss, sub)` 撤销该用户已有的全部本地网页登录会话。重复投递不得扩大撤销范围，处理失败应可重试。普通登出不触发主体禁用或 Execution 取消。
 - 部署通过进程内可信 Adapter、经过认证的服务边界或版本化签名信封向 `platform-api` 提供当前 IdentityContext；跨进程传递时必须校验签发方、audience、签发/过期时间、唯一 context ID、keyVersion 和部署身份绑定，并在缺失、过期、重放或验证失败时 fail closed。
 - IdentityContext 至少包含稳定且不透明的用户 ID、当前账号状态、组织成员关系、平台角色，以及足以判断上下文是否仍有效的版本或时效信息。
 - 浏览器、Agent、模型和普通调用方不能提交、覆盖或伪造这些字段；`platform-api` 必须验证部署身份边界后才创建 HttpOnly、Secure、SameSite 会话，且不在 Local Storage 保存上游身份凭证。
-- Helm 以环境变量向第一方 Adapter 注入允许成为 `system_admin` 的 LDAP 稳定 UID 集合；每次敏感管理员操作按当前 LDAP UID 精确匹配并检查账号有效。邮箱、企微 userid、Relay 角色和请求字段都不能赋予平台管理员身份。该配置为空时不产生隐式管理员。
-- Platform 通过受认证的版本化接口消费通用组织目录，不直接调用企业上游协议。独立配套同步服务的 Adapter 每天从企微或企业内部接口拉取员工与部门，上游 Adapter 负责核实成员有效性与部门归属语义，不能把未知状态默认为有效或把查询范围当成直接归属。只有全量校验成功才原子发布带来源、版本、完整性标记和最长一天有效期的快照；失败保留上一版用于诊断，但过期或不完整快照不能继续授权。Platform 以 LDAP 与快照中唯一、有效的邮箱一对一关联，缺失、重复、停用或无法核实均拒绝依赖该映射的 Owner/可用范围新增与敏感操作；不按名字或请求提交的邮箱猜测。组织成员变化以新完整快照生效，允许最长一天延迟。
-- 目录快照的 V3 展示投影可携带来源提供的可选姓名；姓名仅用于展示与搜索，不参与 LDAP 关联、稳定用户 ID 或权限判定。V1/V2 继续输出既有严格字段，旧快照无姓名时可回退邮箱本地部分。
-- 平台不维护独立员工目录，只保存业务所需的稳定 LDAP 用户引用、管理员手动禁用状态和授权记录。管理员禁用在 Platform DB 中持久化并审计，优先于 LDAP active 结果；解除禁用也须当前 LDAP 账号有效，不修改 LDAP 或企微源数据。
-- LDAP 当前账号状态、Platform 手动禁用及适用的组织快照在每次敏感操作前重新解析；LDAP 停用和手动禁用立即拒绝，短期缓存不能成为独立权限来源。IdentityAdapter 或目录依赖缺失、非法、过期或不可用时，依赖其结果的敏感操作 fail closed，不能使用调用方字段或不受控旧缓存继续授权。
-- Agent 详情投影 `GET /api/v2/agents/{agentId}/detail` 为每个 Owner 返回服务端当次解析的有效状态，可见性与 `GET /api/v2/agents/{agentId}` 相同，不可见与不存在不可区分；`AgentProjectionV2`、列表和命令响应保持不变。第一方 LDAP IdentityAdapter 逐个 Owner 按上述当前事实判定：LDAP 中已查不到该账号为 `departed`；LDAP 停用或 Platform 管理员禁用为 `disabled`；LDAP、禁用记录与适用的目录快照均确认有效才为 `active`；任一依赖失败、快照缺失或过期、邮箱关联无法核实时为 `unavailable`。单个 Owner 的状态不使整个投影失败，也不以默认值、旧缓存或调用方字段补齐；未提供该能力的 IdentityAdapter 只返回 `unavailable`。状态只用于展示，不替代 9.2 的授权检查。
+- Helm 以环境变量向第一方 Adapter 注入允许成为 `system_admin` 的平台稳定用户 ID 集合；每次敏感管理员操作按当前平台用户 ID 精确匹配并检查账号有效。邮箱、企微 userid、Relay 角色和请求字段都不能赋予平台管理员身份。该配置为空时不产生隐式管理员。
+- Platform 通过受认证的版本化接口消费通用组织目录，不直接调用企业上游协议。独立配套同步服务的 Adapter 每天从企微或企业内部接口拉取员工与部门，上游 Adapter 负责核实成员有效性与部门归属语义，不能把未知状态默认为有效或把查询范围当成直接归属。只有全量校验成功才原子发布带来源、版本、完整性标记和最长一天有效期的快照；失败保留上一版用于诊断，但过期或不完整快照不能继续授权。Platform 按上文员工绑定关联快照中唯一、有效的员工记录，缺失、重复、停用或无法核实均拒绝依赖该映射的 Owner/可用范围新增与敏感操作；不按名字或请求提交的邮箱猜测。组织成员变化以新完整快照生效，允许最长一天延迟。
+- 目录快照的 V3 展示投影可携带来源提供的可选姓名；姓名仅用于展示与搜索，不参与员工身份关联、稳定用户 ID 或权限判定。V1/V2 继续输出既有严格字段，旧快照无姓名时可回退邮箱本地部分。
+- 平台保存内部用户 ID、可信身份绑定、管理员手动禁用状态和授权记录。管理员禁用在 Platform DB 中持久化并审计，优先于任何入口的登录结果。解除禁用须重新确认员工有效。
+- 每次敏感操作按入口校验当前登录会话或渠道身份、平台手动禁用及适用的目录快照和授权。依赖缺失、非法、过期或不可用时拒绝依赖该结果的操作。企微渠道账号由企微停用，处理每条消息无需查询 OIDC 提供方。
+- 标准模板自动发布的部署服务身份按 [10.4.2](#1042-标准模板自动发布) 的专用授权执行，不产生用户 IdentityContext，也不取得系统管理员或 Owner 权限。
+- Agent 详情投影 `GET /api/v2/agents/{agentId}/detail` 为每个 Owner 返回服务端当次解析的有效状态，可见性与 `GET /api/v2/agents/{agentId}` 相同，不可见与不存在不可区分；`AgentProjectionV2`、列表和命令响应保持不变。第一方 IdentityAdapter 逐个 Owner 按上述当前事实判定：完整权威目录确认该员工已离开为 `departed`；员工已确认停用或 Platform 管理员禁用为 `disabled`；员工身份、禁用记录与适用的目录快照均确认有效才为 `active`；任一依赖失败、快照缺失或过期、邮箱关联无法核实时为 `unavailable`。单个 Owner 的状态不使整个投影失败，也不以默认值、旧缓存或调用方字段补齐；未提供该能力的 IdentityAdapter 只返回 `unavailable`。状态只用于展示，不替代 9.2 的授权检查。
 - IdentityAdapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
-Connection 不消费 Platform 浏览器会话或 Platform API 凭证；其 LDAP 登录、OAuth 客户端身份、授权及复核机制由 [Connection M1 HLD](HLD-connection-M1.md) 定义。
+Connection 不消费 Platform 浏览器会话或 Platform API 凭证；其独立登录、OAuth 客户端身份、授权及复核机制由 [Connection M1 HLD](HLD-connection-M1.md) 定义。
 
 ### 9.2 权限顺序
 
@@ -430,7 +433,7 @@ Web/企微依次校验可信用户当前状态、Agent 可用范围/有效 Owner
 
 应用凭证管理与取得/使用凭证材料分别授权。责任人角色只授予元数据、范围、轮换和撤销等管理权限，不自动获得凭证值或应用任务权限；签发与轮换时由 Core 重验接收者当前的独立凭证使用授权，只向该接收者受控交付，不能回显给仅有管理权的请求者，也不能通过重设接收者或交付入口绕过授权。授权、接收者及实际交付结果记录必要审计，凭证值不入审计；不引入新的身份或凭证服务。获授权接收者调用时仍以应用为任务主体，当前 Agent 权限和凭证范围继续生效。
 
-应用凭证材料 grant 的授予/撤销遵循[平台 PRD 7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)：writer 仅来自 9.1 的可信 `system_admin`，每次操作重验当前账号有效、Platform 未禁用及 LDAP 稳定 UID 仍精确匹配管理员配置；责任人或凭证管理角色不能替代该检查。Access 持久保存应用 ID 与接收者可信主体类型、稳定 ID 的绑定，授予、撤销及材料使用均按完整绑定检查，不能仅比较裸 ID。授权变更与必要审计原子保存，审计失败不得放行；授予命令仅返回授权元数据，不签发或交付材料。管理员作为接收者（包括显式自授）仍须在签发、轮换和交付时通过当前独立 grant 检查，撤销后不能继续交付；材料不得进入普通读取、日志、Trace 或审计。生产进程外交付见 [§9.2.1](#921-应用凭证材料的进程外一次性交付)。
+应用凭证材料 grant 的授予/撤销遵循[平台 PRD 7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)：writer 仅来自 9.1 的可信 `system_admin`，每次操作重验当前账号有效、Platform 未禁用及平台稳定用户 ID 仍精确匹配管理员配置；责任人或凭证管理角色不能替代该检查。Access 持久保存应用 ID 与接收者可信主体类型、稳定 ID 的绑定，授予、撤销及材料使用均按完整绑定检查，不能仅比较裸 ID。授权变更与必要审计原子保存，审计失败不得放行；授予命令仅返回授权元数据，不签发或交付材料。管理员作为接收者（包括显式自授）仍须在签发、轮换和交付时通过当前独立 grant 检查，撤销后不能继续交付；材料不得进入普通读取、日志、Trace 或审计。生产进程外交付见 [§9.2.1](#921-应用凭证材料的进程外一次性交付)。
 
 API 创建许可由部署显式配置获准主体集合，以主体类型和稳定 ID 精确匹配，并与凭证的 `agent:create` 范围取交集。集合缺失、主体未列入或当前主体不可确认时拒绝创建；应用不借用责任人的许可，用户与同名应用的裸 ID 不互相代替。该集合只控制创建，不构成逐次审批，也不替代目标 Agent 的独立管理/使用授权。
 
@@ -509,7 +512,7 @@ fixture、写文件成功或部署声明冒充生产接收者。Runtime、Worker
 
 接收与确认使用独立的 POST；普通 GET 不生成、交付或重放材料。接收者用平台已有的可信身份认证单独请求该意图的材料响应。
 端点的认证方式由版本化 OpenAPI 固定，不能混用 Cookie/Bearer，
-也不接受调用方指定身份；用户会话沿用 Origin/CSRF 与当前 LDAP/Platform 禁用检查。应用接收者仍须满足现有同应用约束，
+也不接受调用方指定身份；用户会话沿用 Origin/CSRF 与当前会话和平台禁用检查。应用接收者仍须满足现有同应用约束，
 不能用本次尚未取得的凭证证明自身身份。尚未接入某种主体的真实认证入口时拒绝该种接收，不伪造 consumer。
 Core 从原意图取得管理 actor 后重新解析其当前权限，不能将其伪造成接收请求的身份。
 `attemptId` 不是 bearer capability；知道它或持有管理权均不能接收。请求不能覆盖接收者、回调 URL、通道或 Adapter。
@@ -627,6 +630,34 @@ credential/attempt 引用、grant 修订、阶段、时间和固定原因码；�
   移除的人员加回范围。现有 V1/V2 投影只返回用户和组织条目，
   现有请求版本只替换这两类条目并原样保留应用条目。对外 API 的现有投影不返回应用条目；需要返回时按
   [§6.4](#64-contract-schema-authority) 发布新版本，不静默改变旧版本的 wire 含义。
+
+### 9.2.3 外部服务接入契约
+
+供应方通过版本化接口分别声明资源发现、任务执行、模型授权能力。平台按供应方实例和实例内稳定资源引用定位目标。
+已有能力可由服务原生提供或独立 Adapter 映射；供应方专用标识、排序与协议由 Adapter 解释。
+发现接口依据服务端认证主体返回获准资源的名称、类型、状态、能力及设备与 Runtime 的关系。
+企业委托或个人账号关联建立身份映射；仅凭请求中的用户、Owner 或目标标识不能扩大可见范围。
+查询用于核对当前事实，推送或 Webhook 可提示变化。
+
+系统管理员经管理 API 登记和维护实例。Platform DB 保存实例、候选与生效配置版本、URL、启停状态及受保护的认证引用。
+Secret 只写。测试候选配置时核对获准目的地、服务身份、协议版本及能力；地址变化须重新验证，并使用获准用于新目的地的认证材料。
+启用时按已验证的候选版本原子切换，过期候选或验证失败保留原生效版本。API 和 Worker 按生效版本处理新请求，
+停用后拒绝新任务。权限拒绝、配置变更、验证和切换记录操作主体、版本及脱敏结果。服务地址由管理后台维护，无需更改 Helm 或重启 Pod。
+
+平台持久化 Agent、目标归属及显式绑定。托管部署者和外部 Adapter 均按同一契约登记运行实例；
+核验服务身份、目标归属、当前实例代次、就绪和有效权限后才可派发。重连须核对原绑定；
+实例替换以版本条件更新，拒绝旧实例覆盖、接单或代交结果。托管部署仍由 Worker 管理，外接 Runtime 的生命周期与模型配置由供应方管理。
+保存绑定与修改共享范围时在同一一致性边界检查个人目标的唯一使用者；在实际投递、读取、控制和订阅时重验当前主体和渠道。企微个人目标只接受已验证的本人私聊；回复 outbox 出队时重验原接收者及私聊地址，群聊触发或目标变化均拒绝。
+
+Conversation 绑定供应方实例、目标和外部会话引用；Execution 与 outbox 固定配置版本、操作标识和受理边界。
+回执校验目标、工作区约束及执行关联后才能确认；无法核实的工作区明确标记，涉及该约束的后续执行拒绝准入。
+已受理操作的凭据、重试、查询和停止沿原目的地及授权处理，配置切换不能转投新地址。
+按供应方能力选择受认证 HTTP、出站长连接或原有通道。断线、重启或重复事件按原操作引用核对，结果幂等入库。
+停止请求与已确认停止分别记录。Web 读取平台已持久化事件的 SSE。
+
+Connection 的外部账号凭证、独立 Grant 与撤权仍由 Connection 管理，适用
+[Connection PRD](../prd/PRD-connection-M1.md) 和 [Connection HLD §6](HLD-connection-M1.md#6-catalog-与授权)。
+供应方登记、模型授权和平台 Execution Grant 均不授予 Connection 调用权限。
 
 ### 9.3 服务端授权上下文
 
@@ -1316,6 +1347,76 @@ ModelCatalog 快照、凭据、运行授权及镜像缓存证明各自的期限�
 模板目录就绪不证明这些门禁或真实业务已通过。本契约不延长候选 TTL，不新增定时器、
 服务、后台执行身份或权限。平台团队仍通过原正式预检和配置发布路径维护验证结论。
 
+#### 10.4.2 标准模板自动发布
+
+模板目录的正式发布必须触发所有关联标准 Agent 的升级，不能以新建 Agent 的 accept、
+Owner restart 或受控单 Agent 发布代替。模板验证结论仍只按 [10.4.1](#1041-标准模板验证生命周期)
+采用；本节定义的是采用之后的发布执行，不给验证器增加发布权限。
+
+**触发与权威。** 部署发布流程在切换目录前，经受保护的 Platform 运维入口准备版本化
+发布记录；Platform DB 是发布授权状态、进度和结果的权威，部署配置仍是模板目录及镜像政策的来源。
+记录固定 deployment/安装身份、目录修订、template ID、release ID、目标不可变 Digest、
+已采用验证来源及规范化发布摘要，不从 Kubernetes 当前镜像推导目标。
+API 与 Worker 都回读并接受同一目录修订及目标绑定后，部署流程按原记录 CAS 激活发布，
+由现有 Worker 消费持久 outbox 自动续做，不增加部署单元或要求 Owner 逐 Agent 操作。
+切换后响应丢失、部署进程退出或 Worker 重启，均核对并恢复原记录，不能只依赖一次内存回调。
+输入未准备、两端目录不一致或验证/目标无法确认时不记激活成功，也不宣布部署升级闭环完成。
+
+**授权与执行身份。** 自动发布授权由真实身份入口解析的 active 系统管理员批准；该主体
+还须具备当前部署的模板发布运维资格。批准固定本次 deployment、目录修订、模板、目标
+Digest、执行服务身份及授权修订/有效期，不是对任意 Agent 配置的通用委托。
+自动执行者是部署绑定的专用服务身份，不能伪造批准人的用户会话、IdentityContext 或角色。
+批准与撤销经同一受保护运维入口持久保存授权修订；服务身份的签发方、验证身份与撤销状态
+由受信部署身份 Adapter 提供，不能从业务请求、Pod 标签或审批引用字符串推断。
+跨进程请求沿受认证且保密的内部传输，校验签发方、audience、用途、时间、唯一请求引用、
+keyVersion、部署安装身份及发布绑定；原 key 的结果核实不免除当前认证与授权。
+身份材料只在发布控制面持有，不交给 Agent、模型、浏览器、Runtime 或业务 Grant。
+
+Core 通过独立的 `standard_template.auto_publish` 用途取得受限 authority，复用逐 Agent
+发布用例的准入和事务；人工 V1 入口仍要求原真实管理员及精确单 Agent binding。
+服务身份不调用普通 Owner update，也不能消费人工入口的 authority 或修改模型、Secret、
+Owner、可用范围、渠道及其他配置。每批认领、每个目标准入以及 Registry 返回后的提交前，
+重新核对执行服务、批准人当前账号及运维资格、授权修订/期限、当前有效目录与发布记录；
+目录不可用、身份停用、资格撤销、授权超期或绑定变化一律拒绝继续提交，不缓存一次通过的授权。
+提交事务以发布授权/目录修订及 Agent 原修订 CAS，不能在复核后跨撤销或被取代的发布提交。
+
+**发现与分批。** Store 按当前 DB 标准来源和 template ID 发现全部非目标 Digest 的 Agent，
+包括运行、停止和停用状态，不只查本次目录直接前一版 Digest；自定义来源不参与。
+固定每个目标的 Agent ID、原配置修订、原 Digest、目标 Digest 和原发布引用，按旧 Digest
+分组，每批至多 256 个；发现分页、目标与断点持久保存，超过 256 不截断或把剩余项当成功。
+复用已有 V2 扇出及逐 Agent 发布的 CAS、幂等、审计和 outbox，不建立第二套配置写入路径。
+新建及并发配置提交必须核对当前生效目录修订；目录激活的写入屏障与这些提交共用事务排序边界，
+旧目录下取得的准入不能在扫描完成后继续提交旧 Digest。收口前在该边界重新检查遗漏目标。
+新发布取代旧发布时推进模板发布修订，旧批次不能把 Agent 写回已过时目标；平台回滚也形成
+新的受准入发布修订并沿本节恢复规则执行，不改写原发布历史。
+
+**逐 Agent 提交与运行。** 每个目标只改变同模板 source 的镜像与准入证据；原配置事务
+原子提交新期望、幂等结果、审计和调谐 outbox，保留既有 Agent 授权修订 CAS。
+运行中 Agent 继续走本节已有候选验证、提升及失败恢复。停止/停用 Agent 只推进 DB 期望，
+保持原管理状态和运行资格；保留配置、渠道、历史与原 PVC，允许零副本控制器保留原候选，
+之后获准的正式 restart 才使用已提交的新期望。managementRevision 未变或停止态控制器
+仍为旧镜像不能单独判发布遗漏。已受理 Execution 的冻结 Key、选择、代次/fence 和恢复
+事实不改；本发布不授权跨 Runtime 隔离模式迁移或重放业务副作用。
+
+**恢复、审计与完成。** 发布、批次和每个目标的原引用、完整请求摘要及幂等键在发送前
+持久固定，认领使用租约/fence。响应未知时只核实该原键/原目标及提交事实，不用新 key
+重复发布；授权仍先于原结果 replay。确定的 CAS 拒绝须保留历史，重新读当前基线后，
+仅在原授权仍有效、目标仍适用且旧尝试已确定未提交时，登记关联的新目标尝试。
+部分 Agent 被拒绝不回滚其他已提交目标，也不能静默跳过；分别保存固定原因和续做状态。
+后续 Workload 验证失败并恢复旧版本时，保留原提交与回滚的分别记录，该目标计为失败待处理；
+不能在同一发布扫描中把它当成新遗漏反复重投，或用原受理结果宣称当前已升级成功。
+撤销或身份不可确认时发布保持阻塞/待核实，保留断点；已提交的 Worker 调谐与原恢复义务
+继续按其既有授权和屏障收口，不能借发布失败释放占用或补造成功。
+
+审计分别保存真实批准人引用、经认证的执行服务身份、授权修订、发布/批次/目标引用、
+Agent、原/新配置修订与 Digest、提交结果、固定原因和 DB 时间，不能把服务执行记成人工操作。
+受保护的部署运维查询按原发布引用读取进度、逐目标结果和聚合计数；普通用户不能据此
+读取其他 Agent，输出不含凭据、正文或原始异常。仅当全部发现及并发收口目标均已提交新期望，
+或有可信原提交结果时才记“期望发布完成”；失败、缺失、未知与阻塞数量独立显示。
+配置受理/期望完成与 Workload 已验证提升分别回读，停止态无需启动来证明期望完成。
+模板自动升级验收须用当前 DB 标准来源聚合与原 Workload/PVC 回读证明覆盖范围；新建
+accept 样本、官方镜像 repository 的控制器计数或 Helm 成功不能代签已有 Agent 的升级。
+
 ### 10.5 自定义 Agent Runtime Manifest
 
 Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#4-runtime-manifest) 中维护。
@@ -1410,13 +1511,13 @@ UID 或不匹配的 fence 不能授权删除。停止、停用或更高管理 fe
 ### 10.7 标准模板模型配置
 
 - 部署通过既有 ModelCatalogAdapter 提供固定、获准的 Relay endpoint、protocol profile 和流式/tool/reasoning 能力政策；Owner 不能输入 Base URL、认证 header 或目录外 endpoint。目录快照继续使用 `schemaVersion: 1`、精确 `revision`、`validUntil`、TLS/禁止重定向和可用状态，过期、移除或不兼容时拒绝新配置。Responses 与 Messages 仍分别按目录 profile 和标准模板 Driver 绑定，不能按 URL 或模型名猜协议。
-- 标准模板申请或 API 创建提交一把 Agent 默认 Relay Key；任一当前 Owner 可替换。使用者在个人设置提交本人用于 Web/企微的 Relay Key。两类 Key 分别以 Agent 或用户为用途和 AAD 加密、版本化、不可回显；API 只写密文，Worker-only keyring 按授权用途解密。平台审计提交者，不使用 Relay Admin API 枚举 Key，也不声称已核实个人 Key 的 Relay 账号归属。Relay 实际按 Key 归属计费和授权；Platform 不建 Agent Group 权威。
+- 依据[平台 PRD §8](../prd/PRD-agent-platform-M1.md#8-标准模板的模型配置)解析模型授权。Relay Adapter 按可信付费主体列出有序可用候选；显式候选或手动录入优先，否则取第一项。候选为空、覆盖失效或授权撤销时返回可操作的原因，不跨主体回退。候选、显式选择和自备 Key 均由供应方或受信 Adapter 核验当前付费主体的使用权；仅验证 Key 能调用模型不足以确认主体归属。人工录入的 Secret 按用户或 Agent 用途与 AAD 加密、版本化且只写；自动授权保存受限引用。首次投递及恢复均按原供应方版本、付费主体和授权版本获取受限执行材料；版本失效或无法按原绑定取得时明确失败。候选目录、浏览器、模型上下文、普通查询与审计均不得取得凭据原值。
 - Owner 允许模型与默认模型从 Agent 默认 Key 的 Relay `/v1/models` 可见结果中选取；Relay 负责发布 Key 可见的模型和执行模型访问限制。reasoning 档位为平台固定的 `low`、`medium`、`high`、`xhigh`、`max`，不按模型、端点或模板登记。`/v1/models` 仅用于候选展示，不证明真实模型请求必然成功：保存时用默认 Key 对新增的（模型，档位）组合各发起一次按模板协议的极小真实请求，失败即拒绝保存，并返回稳定、可操作的原因；已保存且未变化的组合不重复验证。Web/企微只展示 Owner 允许清单，不按个人 Key 预过滤；API 使用同一 Owner 清单。候选、默认值或 capability 无效时拒绝保存或提交，不静默切换模型。实际认证、模型和额度错误由 Relay 返回后映射为稳定、脱敏、可操作的错误。来源与验证的取舍见 [ADR-0030](../adr/0030-source-standard-template-models-from-relay.md)。
 - 模型显示名由 API 的受信部署输入提供，按精确的 `endpointId`、`modelId` 关联，并由 ModelCatalog 模块校验名称表及其当前目录关联。名称只用于展示，不参与允许集合、协议、Key、版本或执行绑定；不能从浏览器输入、模型自报名称或解析 `optionId` 推导。名称非空、有界且不含控制字符，重复关联、未知端点或目录政策不允许的模型拒绝；缺少名称时保留真实 `modelId`，不杜撰名称或缩小候选集合。已授权配置查询为内部展示保留端点关联，对外明确选取既有 `ModelOptionProjectionV1` 字段，不透传端点或部署输入。
 - 带显示名的默认 Key 候选使用独立的 `GET` / `POST /api/v2/agents/{agentId}/default-relay-key/display-candidates`，响应 envelope 与候选项组成独立的 strict `schemaVersion: 2` 投影；新 Key 和已存 Key 两条路径沿用原授权、候选交集、配置修订及 Key 版本检查后，由 API 装配名称。旧 `/candidates` 路径精确保留原 V1 响应，政策 Catalog V1、部署目录 V2 与 Worker 私有 saved-Key V1 不增加字段。Web 显式消费新入口，选择、比较和保存仍使用原稳定 ID；同名不合并，不把旧响应推断为已支持显示名。契约继续按 §6.4 从 Zod 生成并验证精确兼容边界。
-- 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、Key 用途、密文引用和版本：Web/企微绑定实际发送者的个人 Key，全部 Platform API 调用及 Eval 样本运行绑定 Agent 默认 Key；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
+- 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、供应方实例及生效配置版本、Key 用途、授权引用和版本：Web、企微及个人 API 绑定实际用户的个人授权，应用 API 及 Eval 样本运行绑定 Agent 默认授权；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。手动覆盖的旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
 - 标准模板 Workload 候选仅预检目录/Driver/profile/模型选项结构及固定 Relay 路由；四个模板的真实镜像与模型链路须逐项独立验证。模型选项集合以 `RuntimeModelConfigurationV4` 保存并校验；该配置仅包含 endpoint、protocol、authentication、模型、reasoning 和能力绑定，**不包含 Key 原值或引用**。它可以沿用现有 immutable 配置 Secret、candidate/verified 投影、指纹、fence 和回滚机制，但不再生成 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`。调谐、回滚和 Pod 重启不能从 Kubernetes Secret、env 或旧 active 配置取得任何用户或 Agent 默认 Relay Key。
-- Worker 在当前业务 Grant、Execution、选择与 Key 引用/版本一致后，才通过既有受认证且具传输保密的 Worker–Host 私有接口交付本次 Key；原值只在 Worker 解密缓冲区和 Host/Driver 的本次执行内存存在，不进入 Grant、公共 RuntimeSelection、配置、Pod env、PVC、journal、日志、事件或普通错误。Host 在模型请求前核对 Agent、Conversation、Execution、渠道/用途、版本及 operation/fence；同 Agent 的不同用户和相邻 Execution 不能复用传输能力。补充指令继续绑定原 Execution。Worker/Host 重启时只为仍获准的原执行重交同一版本；无法确认旧版本或授权时拒绝恢复，不用当前 Key 替代。执行结束排空在途请求后清除内存中的 Key。
+- Worker 在当前业务 Grant、Execution、选择与 Key 引用/版本一致后，才通过既有受认证且具传输保密的 Worker–Host 私有接口交付本次 Key；原值只在 Worker 受保护的执行期缓冲区和 Host/Driver 的本次执行内存存在，不进入 Grant、公共 RuntimeSelection、配置、Pod env、PVC、journal、日志、事件或普通错误。Host 在模型请求前核对 Agent、Conversation、Execution、渠道/用途、版本及 operation/fence；同 Agent 的不同用户和相邻 Execution 不能复用传输能力。补充指令继续绑定原 Execution。Worker/Host 重启时只为仍获准的原执行重交同一版本；无法确认旧版本或授权时拒绝恢复，不用当前 Key 替代。执行结束排空在途请求后清除内存中的 Key。
 - `RuntimeHostV4` 的 `existing-accepted-only` Key 恢复输入仅允许原 Submit 或原 native Skill 请求。Skill 保留原能力、目录修订、来源版本和参数摘要，不虚构普通 Turn 的 input/selection，不重新发现同名 Skill。Host 必须以原 journal 的 accepted/running 回执、操作摘要、Key scope、模型配置绑定和当前授权/fence 核实；缺少原记录或冻结绑定、unknown/终态、stop/control 均不安装 Key，command/supplement 不能冒充恢复原操作。恢复只重交原版本到受保护内存，不重新 invoke，也不改变既有控制绑定和元数据只读边界。
 - 四个 Driver 均须在每次实际模型请求前证明原 Execution Key 版本绑定。Codex/Claude 的本地传输按原生 Turn/Query 隔离；OpenCode/Pi 即使相邻执行选择同一模型，也不能复用在启动时固定了旧 Key 的原生 handle。若固定上游不支持可信的执行期换 Key，Driver 须先停止并排空旧 handle，再以同一原 Session 和新执行 Key 重建；无法确认旧 handle 退役或 Session 连续性时拒绝新执行。恢复旧执行只可重交旧版本，不能以新 Key 重建后继续旧执行。
 - 标准模板的 Worker–Host 使用 `RuntimeHostV4` 的独立版本化私有 Key 字段和共享 Schema；不能把旧 Runtime 配置 V2/V3 中静态 credential 当作新执行的默认值。旧 Host V1–V3 和 verified 投影保持原样可读以供已受理执行的查询、有界恢复和迁移，不推断缺失字段或重写指纹；迁移到 V4 无 Key 配置并完成实际链路验证前，旧版本不接纳新业务 Execution。候选失败沿原 verified 投影和精确清理机制收敛，但不能回滚到会重新准入静态 Key 的配置。既有 [Execution 模型选择 ADR](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)和[协议绑定 ADR](../adr/0009-bind-model-profiles-to-runtime-configuration.md)继续约束选择和 profile；静态凭证交付部分由[按 Execution 绑定 Relay Key ADR](../adr/0016-bind-relay-key-to-execution.md)替代。
@@ -2010,7 +2111,7 @@ Web、任务 API、Eval 执行和平台托管渠道只面对统一 Platform Conv
 
 ### 11.2 Adapter 部署与 Registry 边界
 
-`platform-worker` 只运行 RuntimeHost Client Adapter，并通过 Agent Service 的内部 HTTP/SSE Interface 调用 Pod；RuntimeHost 和 Native/ACP Driver 在 Agent Pod 内运行。M1 使用固定 Registry，不动态发现或加载 Driver；标准模板绑定、自定义交互模式和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#3-runtime-registry-与交互模式) 中完整维护。RuntimeHost 的依赖方向和未来抽取维护标准见 [RuntimeHost 未来抽取与维护标准](HLD-agent-runtime-M1.md#12-runtimehost-未来抽取与维护标准)，工程 Spec 不重复定义。
+托管目标完成[统一注册](#923-外部服务接入契约)后，`platform-worker` 运行 RuntimeHost Client Adapter，并通过 Agent Service 的内部 HTTP/SSE Interface 调用 Pod；RuntimeHost 和 Native/ACP Driver 在 Agent Pod 内运行。M1 使用固定 Registry，不动态发现或加载 Driver；标准模板绑定、自定义交互模式和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#3-runtime-registry-与交互模式) 中完整维护。RuntimeHost 的依赖方向和未来抽取维护标准见 [RuntimeHost 未来抽取与维护标准](HLD-agent-runtime-M1.md#12-runtimehost-未来抽取与维护标准)，工程 Spec 不重复定义。
 
 Codex Linux 的默认 Landlock 部署必须启用并完整支持 ABI V5 的文件系统权限，且允许运行用户在非 root、只读根文件系统、移除全部 capabilities 和 `no-new-privileges` 的约束下安装并应用规则集。原生执行前必须通过实际规则集安装完成能力准入；不能根据 `uname` 或内核版本推断支持，也不能接受部分权限降级。对于每个由 Worker 独占管理、具备专属 Pod/PVC/NetworkPolicy/Secret 的标准 Runtime Pod，可以按 [ADR-0035](../adr/0035-codex-container-boundary-mode.md) 选择 `container-boundary`：Codex 保持 Provider `workspace-write`，专属 Pod 是文件/进程边界；该模式适用于标准 Agent-level Workload 和 Session Sandbox，不适用于共享 Pod、私有 callback lane 或自定义 Agent。Worker 必须以部署 service token 对唯一 Agent 或 Agent/Session scope 生成 HMAC attestation，Runtime Host 只接受匹配的 `worker-v1` boundary 输入。内部后端、可信部署工具与启动顺序见 [Codex Linux sandbox 启动准入](HLD-agent-runtime-M1.md#101-codex-linux-sandbox-启动准入)。
 
@@ -2106,7 +2207,7 @@ Pod 停止与代次退休同时覆盖两容器及所有后台子进程；新增 
 
 ### 11.3 数据与生命周期边界
 
-Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，只保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref。RuntimeHost 在所属 Sandbox PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration`、§10.1.1 的 Sandbox 归属及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
+Platform DB 是 Conversation、Message、Execution 和规范化事件的权威来源，托管会话保存 worker 侧 Client Adapter 使用的不透明 RuntimeHost Session Ref；外接会话按[外部服务接入契约](#923-外部服务接入契约)保存供应方、目标和外部会话引用。RuntimeHost 在所属 Sandbox PVC 上保存该引用与 `agentId`、`conversationId`、`sessionGeneration`、§10.1.1 的 Sandbox 归属及 Native Session ID 的绑定；Native Session ID 和原生事件细节不能跨出 RuntimeHost。Host Session Ref 和 Native Session ID 都不能成为浏览器、API、渠道或 Agent 请求中的身份与授权依据。API 与 Eval 复用这套权威关系，不新增 Session 或调度服务。
 
 Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的完整契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)，本文不重复定义协议字段。
 
@@ -2199,7 +2300,7 @@ V3 只承载服务端受控目录认定的有状态 command，不接受附件、
 | 主体、Agent、Conversation、Execution、Turn、Session 代次和渠道 | 当前服务端授权与同一受理事务；沿既有 Sandbox 归属与 fence 校验，不由目录或原生 ID 建立身份 |
 | capability ID、目录修订、来源版本、参数及摘要 | 当前受控目录和校验后的输入；名称不能代替确定版本，参数摘要不能代替完整调用摘要 |
 | selection 与 configVersion | 当前获准的有效 modelOptionId、reasoningLevel 和 Runtime 配置修订；不得在投递时重选或从旧消息推导 |
-| keyBinding | 原 Execution 的 Key 用途、主体、密文引用和版本；只保存引用，不保存明文或明文摘要 |
+| keyBinding | 原 Execution 的供应方实例及配置版本、Key 用途、付费主体、授权类型、引用和版本（手动录入时为密文引用）；只保存引用，不保存明文或明文摘要 |
 
 受理幂等摘要覆盖公开 V3 输入、版本及主体、Agent、Conversation、Session 代次等授权范围；
 原操作摘要另覆盖完整冻结绑定。两者用途不同，重试同一公开输入应回读原受理结果，不能因
@@ -2562,7 +2663,7 @@ Connection 在实际外部操作开始前持久保存意图，并在执行前重
 
 Connection 只复用固定且经 allowlist 审核的 OpenConnector Provider/OAuth/executor Kernel，保留来源、许可证、notice 和 digest；上游 Runtime Server、Credential Store 和 Web Console 不进入正式拓扑。首个受监督 GitHub Pilot 的范围以 PRD 为准，不把局部 Pilot 推广为完整 M1。
 
-Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provider Action、幂等/对账及 Pilot 验证矩阵由 [Connection M1 HLD](HLD-connection-M1.md) 细化。跨文档整合按第 25 节完成，不能以旧的代调用协议覆盖本节独立直连边界。
+Connection 的员工登录、OAuth 客户端、MCP/API、Grant、凭证保护、Provider Action、幂等/对账及 Pilot 验证矩阵由 [Connection M1 HLD](HLD-connection-M1.md) 细化。跨文档整合按第 25 节完成，不能以旧的代调用协议覆盖本节独立直连边界。
 
 ### 13.5 Platform 外部 Connection Consumer 配置契约
 
@@ -2648,7 +2749,7 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
 上述主体映射规则。部署须显式批准例外策略 `consistency-exception-v1` 的 `ref/revision`，并绑定
 同一系统接入指纹及审批来源修订。批准内容包括 UTC 截止时间 `notAfter`（不晚于 M1 结束）、可首次
 固定的 `principalId` 总数上限 `maximumPinnedPrincipals`、人工核对期限 `verificationWindowHours`
-（不超过 24）以及已核实第 1 项前提的 Connection 发布版本或修订。任一项缺失或无效时，动态手工安装
+（不超过 24）以及 `connectionRelease`，即最近一次核实第 1 项前提时的 Connection 版本。任一项缺失或无效时，动态手工安装
 保持关闭。#4199 C2 启用前，本例外第 4、6、8 项的后续规则必须全部实现并通过非实现方独立复审；
 在此之前不得批准例外。风险接受与取舍见
 [ADR-0047](../adr/0047-m1-connection-principal-first-binding-exception.md)。
@@ -2657,10 +2758,25 @@ Platform 服务端从当前 IdentityAdapter 和 Agent 使用权限取得原用�
    Principal 或已绑定同一 Principal 时成功，并在同一事务把该 Principal 写入实例；其他 Principal
    批准同一实例返回 `access_denied`。因此同一安装发出的授权码都属于实例绑定的 Principal。该行为
    不在 EP-1060 已发布合同中，证据为 agora-connector `2019ca075149ec5184ceadc06d923b69e64c37e5`
-   的 `packages/connection-store/src/oauth-repository.ts` L1567–1582。Connection 升级到未核实的
-   版本前，部署负责人先撤回例外批准；重新只读核实并以新修订批准前，例外保持关闭。
-   现有已核实合同未提供供 Host 在 EP-1060 回读时比对的 Connection 运行发布标识；批准中的版本
-   仍由部署负责人核实发布出处，协议版本或资源修订不能代替它。人工依赖及残余风险见
+   的 `packages/connection-store/src/oauth-repository.ts` L1567–1582。
+
+   **批准绑定该不变式的源文件 blob，不绑定 Connection 当前运行的版本。** `connectionRelease` 仍必填，
+   只记录最近一次核实不变式时的 Connection 版本和出处，不要求等于 Connection 当前运行的版本。
+   Connection 的发版、重启和部署不暂停，也不撤回批准或中止进行中的现场轮；Platform 不为此比对
+   Connection 实例的启动时间。对 Connection main 的新提交，部署负责人只读比对下列两个源文件的
+   blob，不需要浏览器或凭据：
+   - `packages/connection-store/src/oauth-repository.ts`（实例绑定事务）：blob 与核实时相同，则无需
+     动作。blob 变化时，立即停止新的例外安装，已有安装不受影响；评估后请用户决定，决定前例外保持
+     关闭。
+   - `apps/connection-api/src/app.ts`（MCP 发布）：只改说明文字、没有放松限制的工具描述变化，按用户
+     常设授权同步 helm 的 `publication.contract`，不出新批准修订。工具名、`inputSchema`、结果 schema、
+     `serverInfo` 有变化，或限制被放松时，停止新的例外安装并请用户决定。
+
+   两个 blob 均与核实时相同，或只发生上述按常设授权同步的变化时，批准修订不变；其余情况由用户决定后
+   再出新修订。
+
+   现有已核实合同未提供供 Host 在 EP-1060 回读时比对的 Connection 运行发布标识，协议版本或资源
+   修订也不能代替它；源文件 blob 由部署负责人只读核实。人工依赖及残余风险见
    [ADR-0047“风险与接受”](../adr/0047-m1-connection-principal-first-binding-exception.md#风险与接受)。
 2. **换码前回读。** 原回跳已确认、原平台用户已明确确认后，Host 在读取 code 和 verifier 前，按
    §13.5.6 的实际安装绑定回读，用 EP-1060 读取本安装的登记键。同时满足以下条件才继续：结果为
@@ -3314,7 +3430,7 @@ Sandbox/generation/Pod、完整 profile/source、当前授权修订、期限、�
    安装及关联修订、原 confirm/阶段/请求摘要、Host ref/Pod UID、Sandbox/代次/resourceFence、
    固定描述符及供应引用/修订、例外批准修订，以及已核实的 issuer、登记键、Principal、client/
    Consumer/DEVICE 实例、callback、resource/scope 和实例状态。每项均与原 Worker 命令及固定
-   输入匹配，未知或含材料字段的响应拒绝；Connection 运行版本的人工核实仍按例外第 1 项，不从 EP-1060 响应虚构发布标识。
+   输入匹配，未知或含材料字段的响应拒绝；实例绑定不变式的源文件核实仍按例外第 1 项，不从 EP-1060 响应虚构发布标识。
 2. **Worker 在 Store 提交固定。** Worker 只接受这次原命令目标的响应，或原用户依下文 status
    核实的同一 Host 已保存结果；身份和目标不能由响应自报字段选择。Core 复核当前原用户和 Agent
    使用权后，由原 Platform 安装事务执行 Store CAS：按例外第 3 项串行核对 issuer/Principal 的
@@ -4031,7 +4147,7 @@ API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解
 2. 长连接入站验证已认证连接的机器人身份、帧结构、大小、有效期和稳定消息标识，不能信任任意帧自报的身份。
    自建应用与显式机器人回调由 `platform-api` 验证签名、加密接收方、有效期和大小；
    两类传输统一转换为 Core 命令，不向 Core 传递 SDK 对象。
-3. 通过受认证的企微目录快照与 LDAP 唯一邮箱关联，把企微发送者映射为公司稳定用户 ID；校验当前 LDAP 状态、管理员禁用、目录有效期、组织、Agent 可用范围和绑定。无法唯一关联或依赖不可用时拒绝，不按显示名或请求字段猜测。
+3. 从已验证的企微消息取得发送者，按 9.1 的完整有效目录映射到平台稳定用户 ID，校验平台禁用记录、组织、Agent 可用范围和渠道绑定。首次使用无需网页会话。无法唯一关联或依赖不可用时拒绝。
 4. 按单聊、群聊和协议支持的线程生成稳定的 Conversation 映射，键包含 Agent、绑定、渠道及服务端发送者；
    同群不同发送者保持独立 Runtime Session，协议无独立线程标识时不伪造线程支持。
    每个映射键在 Platform DB 中有一个当前会话轮次，默认为 0，表示沿用原有映射。
@@ -4364,7 +4480,7 @@ Web 与托管渠道的执行失败按下表归入渠道无关的用户可见分�
 - 所有跨主体（用户或应用）资源访问测试按“资源不存在”返回，避免枚举。
 - 任务、会话、附件、执行详情和自身审计查询始终匹配提交主体；Owner/应用责任人不因此获得他人内容或使用记录。Eval 按独立用途和对象授权，不能成为会话访问旁路。
 
-网络、可替换 IdentityAdapter、OCI Registry、固定 Relay 目录、加密公钥/解密 keyring 注入和对象存储的具体装配由部署环境决定，但上述访问结果是 M1 的硬性要求。企业部署默认使用本仓第一方 LDAP Adapter 和独立企微目录同步服务。
+网络、可替换 IdentityAdapter、OCI Registry、固定 Relay 目录、加密公钥/解密 keyring 注入和对象存储的具体装配由部署环境决定，但上述访问结果是 M1 的硬性要求。企业部署默认使用本仓第一方 OIDC Adapter 和独立企微目录同步服务。
 
 ## 18. 运行观测、持久审计与 Eval
 
@@ -4980,7 +5096,7 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
 
 - Contract 测试执行 [Contract Schema authority](#64-contract-schema-authority) 定义的单向生成、漂移、merge-base breaking-change、consumer contract 和发布边界；数据库/领域类型不能绕过映射直接成为 wire contract。
 - IdentityAdapter、企微目录快照、ImageRegistryAdapter、ModelCatalogAdapter、部署加密公钥/Worker-only 解密 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
-- 第一方 LDAP 登录验证唯一 UID、密码 bind、当前 active 状态、TLS、会话与 Helm 管理员 UID 精确匹配；IdentityAdapter 负向测试覆盖签发方、audience、签发/过期时间、context ID、keyVersion、部署身份绑定和重放。企微目录测试覆盖完整快照原子发布、过期、邮箱缺失/重复、账号停用、LDAP 与企微映射不一致和管理员立即禁用；调用方字段、旧快照或身份依赖不可用都不能形成授权。Connection 会话和角色不被 Platform 继承。
+- 登录覆盖受信 issuer、audience、PKCE、nonce、一次性 state 和 UserInfo 主体校验，覆盖旧账号保权、新账号普通角色、绑定冲突拒绝及两入口并发首次使用。后通道登出覆盖无效签名、重放、同主体多会话失效、其他主体隔离和普通登出后任务继续。验证 Helm 管理员配置精确匹配。IdentityContext 负向测试覆盖签发方、audience、签发/过期时间、context ID、keyVersion、部署身份绑定和重放。企微覆盖无网页登录首次使用、目录过期或不完整、员工关联异常和平台禁用后拒绝。
 - Platform Secret 负向测试覆盖 API 进程无解密私钥、非 CSPRNG/错误长度、重用 DEK/nonce、DEK fingerprint 冲突、失败重试复用加密材料、非 canonical AAD、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingAlgorithmVersion`/`wrappingKeyVersion`、AEAD 认证失败、原地更新被引用的 Kubernetes Secret、候选 Workload 引用错误版本化名称、Worker 在创建 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 Agent/Secret/config revision/Workload UID/generation/fence 任一 stale 值试图激活候选版本；任何路径都不能泄露明文、改变旧 Workload 的 active Secret、错误提升 active 或提前回收旧版本。
 - Model Contract 负向测试覆盖目录外 Base URL、Relay Key 被当普通字段读取/返回、个人与 Agent 默认 Key 跨主体/Agent/Execution/渠道用途复用、旧 V2/V3 静态 Key 接纳新执行、模型或 reasoning 未获 Owner 允许，以及 Runtime capability 验证失败；浏览器与普通使用者响应中不得出现 Key 或 Secret 明文。`/v1/models` 可见不算真实调用成功。
 - Agent Runtime Contract 和 Conformance Suite 实现 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)，工程 Spec 不重复维护用例清单。
@@ -5006,14 +5122,14 @@ query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluat
 Playwright 覆盖：
 
 - 申请、撤回、审批、创建、停止、重启和停用。
-- Owner、范围、每日完整企微目录快照及账号禁用；组织变化按最新快照生效且最多延迟一天，LDAP 停用与管理员禁用立即生效。平台对话页、平台托管渠道和平台身份入口须按当前结果撤权，确认撤权后平台中止仍可中止的活跃 Execution。
+- Owner、范围、每日完整企微目录快照及账号禁用；组织变化按最新快照生效且最多延迟一天，管理员禁用立即生效。平台对话页、平台托管渠道和平台身份入口须按当前结果撤权，确认撤权后平台中止仍可中止的活跃 Execution。
 - 四个标准模板分别用真实镜像、Driver、Relay 模型链路验证就绪和可申请状态，再验证平台 Web、API 真实任务、企微、模型切换、附件、独立 Connection 和长任务恢复；逐一验证实际模型/工具事件和完整 Trace，不以总任务耗时冒充模型耗时。
-- 标准模板用两名使用者的不同个人 Key 及 Agent 默认 Key 验证 Web/企微、API、Eval 的费用主体；覆盖 Key 缺失、过期、额度不足不回退，模型可见但无权调用，Key 替换后旧执行固定原版本、新执行使用新版本，Relay 撤销、Worker/Pod 重启恢复及跨用户/Agent/Execution 负向隔离。
+- 标准模板用两名使用者的不同个人 Key 及 Agent 默认 Key 验证 Web、企微、个人 API、应用 API 和 Eval 的费用主体；覆盖 Key 缺失、过期、额度不足不回退，模型可见但无权调用，Key 替换后旧执行固定原版本、新执行使用新版本，Relay 撤销、Worker/Pod 重启恢复及跨用户/Agent/Execution 负向隔离。
 - 用户和应用分别 API 创建/启动/停止/重启、提交/查询/订阅/取消任务；无审批且初始授权和 Owner 归属正确，应用不继承责任人权限。审计 API 与基础管理页按条件查询，跨主体和两侧管理员越权拒绝。
 - 同一获授权固定集含回答和受控工具样本，以两组模型或配置真实运行；查看汇总/失败样本、规则/人工/模型评分与独立复核，修订后再跑并保留历史。线上反馈独立汇总，评分失败/缺失不算通过，Eval 内容及真实材料用途授权有负向验证。
 - 受控的自有身份样例验证匿名、伪造身份字段或在 Owner 身份体系中无权限的请求被 Agent 服务端拒绝，合法身份只能按该体系的权限使用；该入口不获得平台身份或撤权上下文。自有交互入口经平台 Auth Gateway 访问时不能绕过权限，调用方身份 Header 不能改变最终签名身份，缺失、签名无效或过期的上下文、错误签发者、错误受众和错误 Agent 绑定均被拒绝，且两类入口的历史都不进入平台。
 - Generic ACP 自定义 Agent 的平台入口、capability、Runtime 模型选项读取与选择转发，以及创建拒绝路径；`self-managed` 的 capability 声明不能开放平台能力，Adapter 不从 Runtime 模型选项读取或保存凭证，平台只按 10.6 把 Owner env/Secret 作为不透明配置保存和注入，选项失效时不能静默改用其他模型。
-- Connection 独立 Web 的 LDAP 登录、GitHub OAuth、Grant 再确认、三项 Action、调用记录、管理员未知结果处理、换账号和撤销。
+- Connection 独立 Web 的登录、GitHub OAuth、Grant 再确认、三项 Action、调用记录、管理员未知结果处理、换账号和撤销。
 - Alice/Bob 分别绑定专用 GitHub 账号；跨主体、客户端、Connection、Credential、OAuth transaction 和调用记录访问按资源不存在拒绝。
 - 企微身份映射、群聊和线程按发送者隔离 Platform Conversation/Runtime Session、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
 - 执行中消息按 §12.5 与 §14.2.4 验证：Web 与企微在补充指令 capability 为真、为假两种 Runtime 下的补充、排队与繁忙；入队、位次变化、开始处理、撤回（Web）、排队超时和取消的提示；停止、待核实、重启、撤权和会话不可用后排队消息的收敛；企微先图后文合并、同一会话保序、流式进度、超时定稿，以及失败提示在复核依赖暂时不可用时仍在有效期内送达。
@@ -5026,7 +5142,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 | 领域 | 前端交付 | 后端交付 |
 | --- | --- | --- |
-| 身份与权限 | LDAP 登录态、Owner/范围、个人 Relay Key 与 API 凭证管理 | 第一方 LDAP Adapter、独立企微目录快照、管理员禁用、可信用户/应用上下文与当前授权交集 |
+| 身份与权限 | OIDC 登录态、Owner/范围、个人 Relay Key 与 API 凭证管理 | 第一方 OIDC Adapter、独立企微目录快照、管理员禁用、可信用户/应用上下文与当前授权交集 |
 | Agent 生命周期 | Web 申请/审批、状态和操作入口 | API 直接创建与显式授权、状态机、Profile、outbox 和调谐 |
 | Agent 使用 | 对话/任务详情、SSE、停止、重生成、模型选择 | API 闭环、会话/Execution、有界 Dispatch、RuntimeHost/Driver、恢复 |
 | 附件 | 上传、预览、限制和下载 | 预签名地址、对象权限、元数据和 Agent 临时访问 |
@@ -5131,7 +5247,7 @@ rollback 当作旧 lane 数据恢复。当前 lane 的 A1 数据不进入新 rel
 3. Agent 停止、重启、升级和平台进程重启后，配置、历史、附件引用和授权关系不丢失。
 4. Web 断线或离开页面不影响已提交长任务，返回后可以按游标恢复状态。
 5. Codex、Claude、OpenCode 和 Pi 通过统一 Runtime Conformance Suite；Generic ACP 自定义镜像无需新增 Adapter 即可使用平台入口。
-   四个标准模板还须分别有真实镜像、Driver 与 Relay 模型链路证据；未就绪项显示原因且不可申请。标准模板 Key 按 Web/企微个人、API/Eval Agent 默认用途和受理版本隔离，不能从旧 Pod 静态凭证恢复。
+   四个标准模板还须分别有真实镜像、Driver 与 Relay 模型链路证据；未就绪项显示原因且不可申请。标准模板 Key 按 Web/企微/个人 API 个人、应用 API/Eval Agent 默认用途和受理版本隔离，不能从旧 Pod 静态凭证恢复。
 6. Pod 重启恢复原 Runtime Session；恢复失败时只有原 Conversation 保持不可用，不静默创建新 Session，其他 Conversation 和 Agent 服务保持正常。
 7. 自有交互入口只使用 `platform-worker` 发布的网络入口；自有身份入口由 Agent 服务端鉴权，平台身份入口不能绕过可信 IdentityContext 与 Agent 范围校验；其会话不进入平台历史。
 8. 首个受监督 GitHub Pilot 使用两个测试 Principal、两个专用账号和一个受控 private 仓库完成 Direct MCP OAuth、Consumer/Actor Grant、三项 Action、真实 PR、幂等、审计和撤销；Connection 独立身份与 Grant 任一失败都拒绝调用，伪造关联不成立且两侧审计分别鉴权查询，结果只适用于具名环境和固定镜像。

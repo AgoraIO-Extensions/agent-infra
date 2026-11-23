@@ -78,7 +78,8 @@ Connection 尚未发布原 OAuth 事务回读合同时，Platform 的动态手�
 [§13.5.1 的 M1 限时例外](SPEC-agent-infra-M1-engineering-architecture.md#1351-字段与配置来源)，
 用 EP-1060 实例回读和一致性约束代替主体映射核对；Connection 侧的行为和检查不变。该例外以
 Connection 实例绑定不变式为外部前提：DEVICE 实例只接受首个批准它的 Principal。该前提不在
-EP-1060 已发布合同中，核实范围、证据和不成立时的处理见该例外第 1 项。
+EP-1060 已发布合同中，核实范围、证据、对 Connection 新提交的只读比对和不成立时的处理见该例外第 1 项；
+Connection 的发版和部署不因该例外受限。
 换码前首次固定经 Platform Worker 处理两阶段 confirm 的结果提交，不赋予 Host 写 Platform Store 的
 入口；命令、提交回执与未知结果的唯一合同见
 [工程 Spec §13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
