@@ -804,7 +804,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			for (const component of ["api", "worker"] as const) {
 				const deployment = documents.find((doc) => doc?.kind === "Deployment" && doc.metadata?.name === `agent-infra-${component}`);
 				const readConsumer = component === "api" ? readReserveApi : readReserveWorker;
-				const actual = readConsumer({ ACK_SOURCE_SHA: source, ACK_NAMESPACE: namespace, ACK_KUBECONFIG: kubeconfig }, input, configurationSecret(deployment, component), run);
+				const actual: ReturnType<typeof readReserveWorker> | ReturnType<typeof readReserveApi> = readConsumer({ ACK_SOURCE_SHA: source, ACK_NAMESPACE: namespace, ACK_KUBECONFIG: kubeconfig }, input, configurationSecret(deployment, component), run);
 				assert(actual?.sourceSha === source && actual.configurationHash === sessionSandboxReserveDigestV1(expected) && actual.configuration?.revision === expected.revision && actual.configuration?.enabled === expected.enabled, "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH");
 			}
 			reserveConsumersVerified = true;
