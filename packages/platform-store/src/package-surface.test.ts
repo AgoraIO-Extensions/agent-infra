@@ -133,6 +133,7 @@ describe("platform-store package surface", () => {
 			"isConnectionManualClientNameV1",
 			"migratePlatformDatabase",
 			"observePostgresClient",
+			"oidcBrowserSessionUidPrefix",
 			"openPostgresConversationDispatchStoreV1",
 			"openPostgresPlatformIdempotencyStore",
 			"openPostgresSecretActivationStoreV1",
