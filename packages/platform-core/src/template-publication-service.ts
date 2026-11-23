@@ -5,13 +5,57 @@ import {
 	timingSafeEqual,
 } from "node:crypto";
 export interface TemplatePublicationServiceIdentityV1 {
-	readonly schemaVersion:1; readonly principalRef:string; readonly deploymentRef:string; readonly publicationId:string; readonly issuer:string; readonly keyVersion:string;
-	readonly audience:"platform.template-publication.v1"; readonly purpose:"ready"|"activate"|"run"|"read"; readonly requestRef:string; readonly issuedAt:string; readonly expiresAt:string;
+	readonly schemaVersion: 1;
+	readonly principalRef: string;
+	readonly deploymentRef: string;
+	readonly publicationId: string;
+	readonly issuer: string;
+	readonly keyVersion: string;
+	readonly audience: "platform.template-publication.v1";
+	readonly purpose: "ready" | "activate" | "run" | "read";
+	readonly requestRef: string;
+	readonly issuedAt: string;
+	readonly expiresAt: string;
 }
-function parseTemplatePublicationServiceIdentityV1(value:unknown):TemplatePublicationServiceIdentityV1 {
-	if(!value || typeof value!=="object" || Array.isArray(value))reject(); const v=value as Record<string,unknown>;
-	if(v.schemaVersion!==1 || typeof v.principalRef!=="string" || typeof v.deploymentRef!=="string" || typeof v.publicationId!=="string" || typeof v.issuer!=="string" || typeof v.keyVersion!=="string" || v.audience!=="platform.template-publication.v1" || !["ready","activate","run","read"].includes(String(v.purpose)) || typeof v.requestRef!=="string" || typeof v.issuedAt!=="string" || typeof v.expiresAt!=="string") reject();
-	return v as TemplatePublicationServiceIdentityV1;
+function parseTemplatePublicationServiceIdentityV1(
+	value: unknown,
+): TemplatePublicationServiceIdentityV1 {
+	if (!value || typeof value !== "object" || Array.isArray(value)) reject();
+	const v = value as Record<string, unknown>;
+	if (
+		v.schemaVersion !== 1 ||
+		typeof v.principalRef !== "string" ||
+		typeof v.deploymentRef !== "string" ||
+		typeof v.publicationId !== "string" ||
+		typeof v.issuer !== "string" ||
+		typeof v.keyVersion !== "string" ||
+		v.audience !== "platform.template-publication.v1" ||
+		!["ready", "activate", "run", "read"].includes(String(v.purpose)) ||
+		typeof v.requestRef !== "string" ||
+		typeof v.issuedAt !== "string" ||
+		typeof v.expiresAt !== "string"
+	)
+		reject();
+	const text = (name: string) => {
+		const item = v[name];
+		if (typeof item !== "string") reject();
+		return item;
+	};
+	return {
+		schemaVersion: 1,
+		principalRef: text("principalRef"),
+		deploymentRef: text("deploymentRef"),
+		publicationId: text("publicationId"),
+		issuer: text("issuer"),
+		keyVersion: text("keyVersion"),
+		audience: "platform.template-publication.v1",
+		purpose: String(
+			v.purpose,
+		) as TemplatePublicationServiceIdentityV1["purpose"],
+		requestRef: text("requestRef"),
+		issuedAt: text("issuedAt"),
+		expiresAt: text("expiresAt"),
+	};
 }
 
 const header = "x-platform-template-publication";

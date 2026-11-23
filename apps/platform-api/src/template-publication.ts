@@ -319,7 +319,8 @@ export function createAutomaticTemplatePublicationAppV1(
 							apply: async (command) => {
 								const saved = batch.find(
 									(row) => row.target.agentId === target.agentId,
-								)!;
+								);
+								if (!saved) throw new TemplatePublicationStoreError("conflict");
 								const configuration = createAgentConfigurationUseCaseV1({
 									...admissions,
 									transaction,
@@ -395,7 +396,9 @@ export function createAutomaticTemplatePublicationAppV1(
 						if (result.status === "failed") {
 							const original = batch.find(
 								(row) => row.target.agentId === result.agentId,
-							)!;
+							);
+							if (!original)
+								throw new TemplatePublicationStoreError("conflict");
 							await store.rejected(
 								original.targetRef,
 								result.errorCode ?? "dependency_unavailable",

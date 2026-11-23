@@ -409,7 +409,7 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 			preflightFileSha256: "c".repeat(64),
 		});
 		automaticTemplate = {
-			...input.templates[0]!,
+			...input.templates[0],
 			configurationRevision: "catalog-2",
 			modelBinding: {
 				templateId: target.templateId,
