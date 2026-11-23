@@ -219,19 +219,6 @@ export async function runGate({ mode, repository, event, request = githubRequest
 }
 
 async function main() {
-  // Temporary/operational read-only diagnosis: only fixed aggregate reasons leave the API response.
-  if (process.argv[2] === "diagnose-claim") {
-    const issueNumber = Number(process.argv[3]);
-    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) throw new Error("Issue number required");
-    const repository = requiredEnvironment("GITHUB_REPOSITORY");
-    const issue = await githubRequest(`/repos/${repository}/issues/${issueNumber}`);
-    const comments = await readIssueComments(repository, issueNumber, githubRequest);
-    const diagnostics = resolveIssueClaimDiagnostics(issue, comments);
-    const authorMatches = comments.filter((comment) => comment?.body?.includes("agent-claim:") &&
-      !CLAIM_ASSOCIATIONS.has(comment.author_association) && authorizedClaimAuthor(issue, comment)).length;
-    console.log(`ignored claims ${diagnosticSummary(diagnostics.ignored)}; original-author matches ${authorMatches}`);
-    return;
-  }
   if (requiredEnvironment("GITHUB_EVENT_NAME") !== "pull_request_target") {
     throw new Error("Only PR events are supported");
   }
