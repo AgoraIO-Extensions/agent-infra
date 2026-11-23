@@ -40,7 +40,9 @@ UID 创建的 user namespace 中；Pod 不共享 PID namespace。核实方法见
 Agent 级 scope、没有 attestation 或普通 env 不够，这些情形只能用第 1 项。
 2026-11-23 增补（#4349）：原文写“非 Codex 模板目前没有 attestation”，使 Claude、OpenCode、Pi
 在没有 Yama 的 ECI 上只能走第 1 项而恒不可用。现在由 Worker 为它们也签发同形的 Session 级
-attestation，把本决定的第 2 项用到这三个模板。不新增门禁，也不放宽任何现有检查。两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
+attestation，把本决定的第 2 项用到这三个模板。不新增门禁，也不放宽任何现有检查。
+
+两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
 
 独立 executor 的工具启动隔离（工程 Spec §11.2.1）不在本决定范围内。它要保护的 upstream
 `exec-server` 由 execve 启动，启动后恢复 dumpable，Host 设置的 non-dumpable 管不到它。该路径

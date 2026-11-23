@@ -2936,7 +2936,9 @@ scope 恒不满足。每次读取受保护材料前，另要求该 scope 逐字�
 等于原执行。Agent 级 scope、没有 attestation，或普通 env（例如
 `AGENT_INFRA_RUNTIME_SESSION_ID`）都不足以证明，这些情形只能满足第 1 项。
 Session scope attestation 只证明“本 Pod 属于这个 Session”，不替代上述前提核实与每次读取前的
-non-dumpable 回读。
+non-dumpable 回读。Worker 只为非 Codex 的 Session Sandbox 签发它，运行输入带入 Codex 时在写资源前
+拒绝；Host 对 scope 与 attestation 只给一半、格式不符、签名不符、没有 service token 或 Codex Driver
+带入，一律判为配置无效，不降级为较弱的 scope。
 
 安装供应 initializer 没有 service token，无法验证 attestation，所以不属于上述 Session 级
 scope。它只在 Worker 为 Session Sandbox 创建的 init container 中运行（[§13.5.6](#1356-标准-oauth-安装供应)），
