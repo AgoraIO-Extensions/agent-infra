@@ -46,7 +46,4 @@ const server = createServer(async (req, res) => {
 	}
 });
 server.requestTimeout = 8000;
-server.listen(
-	Number(process.env.PORT ?? 8090),
-	process.env.ADAPTER_BIND_ADDRESS ?? "127.0.0.1",
-);
+server.listen(Number(process.env.PORT ?? 8090), "127.0.0.1");

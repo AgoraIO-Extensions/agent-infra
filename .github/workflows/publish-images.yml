@@ -280,7 +280,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
           node deploy/release/build-images.mjs "$RUNNER_TEMP/platform-images.json" \
-            --images=web,platformApi,platformWorker,enterpriseDirectorySync,sub2apiAdapter
+            --images=web,platformApi,platformWorker,enterpriseDirectorySync
       - name: Upload Platform receipts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
@@ -323,7 +323,7 @@ jobs:
         run: |
           set -o pipefail
           GITHUB_SHA="$RELEASE_SOURCE_SHA" node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
-            web,platform-api,platform-worker,enterprise-directory-sync,sub2api-adapter \
+            web,platform-api,platform-worker,enterprise-directory-sync \
             "$RUNNER_TEMP/receipts"/*/platform-images.json \
             | tee "$RUNNER_TEMP/published-platform-indexes.jsonl"
       - name: Upload published Platform index receipts

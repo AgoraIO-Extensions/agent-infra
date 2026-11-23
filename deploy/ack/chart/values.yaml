@@ -21,17 +21,6 @@ images:
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   pullSecrets:
     - ack-ghcr-pull
-externalServiceAdapter:
-  # The adapter is optional. When enabled, Helm deploys the Adapter and exposes
-  # its versioned discovery endpoints through a dedicated HTTPS host. Provider
-  # credentials remain in the referenced Secret and never enter values.yaml.
-  enabled: false
-  image: ghcr.io/agoraio-extensions/agent-infra/sub2api-adapter@sha256:0000000000000000000000000000000000000000000000000000000000000000
-  configSecret: ""
-  publicHost: ""
-  tlsSecret: ""
-  ingressClassName: new-magic-nginx
-  servicePort: 8090
 secrets:
   database: agent-infra-platform-database
   apiConfiguration: agent-infra-api-configuration
@@ -153,9 +142,6 @@ sessionRuntimeScheduling:
     required: false
     entries: []
 resources:
-  externalServiceAdapter:
-    requests: {cpu: 50m, memory: 64Mi}
-    limits: {cpu: 250m, memory: 256Mi}
   skillObjectStorage:
     requests: {cpu: 10m, memory: 64Mi}
     limits: {cpu: 250m, memory: 256Mi}
