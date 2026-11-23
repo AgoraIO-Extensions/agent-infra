@@ -36,3 +36,23 @@ GRANT EXECUTE ON FUNCTION platform_ops_dashboard.first_output(timestamptz,timest
 首正文表使用第一次持久化非空正文的服务端时间，等待数取当前活动执行，包含所选窗口前已开始的等待。
 一个用户在同一渠道有多个等待仍计一人；取消终结该次执行的等待。按渠道单列，跨渠道人数不可相加。
 回复耗时统计窗口内受理且已有正文的样本。浏览器实际展示、企微送达和 API 客户端收到时间仍需独立回执。
+
+## 专用 Grafana 的文件配置
+
+在发布工作区执行下列命令生成看板和数据源配置。输出目录须为新目录。部署工具应将产物和源版本关联。
+
+```sh
+node deploy/observability/grafana/provision.mts ./dashboard-release https://platform.example.invalid/ops
+```
+
+在专用实例中，组织 1 的成员资格由平台系统管理员组管理。关闭匿名访问、自助注册及默认组织自动加入，
+并限制身份提供方允许的登录组。Grafana 通过自身身份认证保护面板与数据源。独立核对成员撤权后访问被拒。
+
+将输出中的两个 provisioning 子目录内容分别装配到 Grafana 的 dashboards、datasources 配置目录。
+将 dashboards 中的看板文件挂载到 `/etc/grafana/platform-dashboards`，将数据库根证书挂载到
+`/etc/grafana/platform-ca/ca.crt`。通过部署配置提供 OPS_PG_HOSTPORT、OPS_PG_DATABASE、OPS_PG_USER，
+通过受管 Secret 注入 OPS_PG_PASSWORD。使用具备证书匹配主机名的 PostgreSQL TLS 端点。
+数据源使用独立账号，设置适合现场负载的数据库 statement_timeout。
+
+Grafana 重启后从文件恢复固定 UID 的数据源和看板。将该面板的 HTTPS 地址配置到正式 /ops，
+停止临时预览的采样与端口转发，由第二位管理员重新登录查看新样本。
