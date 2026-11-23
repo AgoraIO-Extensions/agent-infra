@@ -32,10 +32,20 @@ export function extractAgentSessionId(body) {
   return typeof session === "string" && session.length > 0 ? session : null;
 }
 
-function parseClaimComment(comment) {
+function authorizedClaimAuthor(issue, comment) {
+  if (CLAIM_ASSOCIATIONS.has(comment?.author_association)) return true;
+  const author = issue?.user;
+  const commenter = comment?.user;
+  // API-owned immutable IDs survive the installation token's private-membership filtering.
+  return author?.type === "User" && commenter?.type === "User" &&
+    Number.isSafeInteger(author.id) && author.id > 0 &&
+    Number.isSafeInteger(commenter.id) && commenter.id === author.id;
+}
+
+function parseClaimComment(comment, issue) {
   if (
     !comment ||
-    !CLAIM_ASSOCIATIONS.has(comment.author_association) ||
+    !authorizedClaimAuthor(issue, comment) ||
     comment.updated_at !== comment.created_at
   ) return null;
   const values = parseKeyValueBlock(comment.body, CLAIM_BLOCK);
@@ -49,19 +59,35 @@ function parseClaimComment(comment) {
   return { claimed, from };
 }
 
-export function resolveIssueClaim(issue, comments = []) {
+export function resolveIssueClaimDiagnostics(issue, comments = []) {
   let current = extractAgentSessionId(issue?.body);
-  const ordered = [...comments].sort((a, b) => {
-    const left = Date.parse(a.created_at ?? "");
-    const right = Date.parse(b.created_at ?? "");
-    return left - right;
-  });
+  const ignored = {};
+  const count = (reason) => { ignored[reason] = (ignored[reason] ?? 0) + 1; };
+  const ordered = [...comments].sort((a, b) => Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""));
   for (const comment of ordered) {
-    const claim = parseClaimComment(comment);
-    if (!claim) continue;
-    if (claim.from === (current ?? "none")) current = claim.claimed;
+    if (typeof comment?.body !== "string" || !comment.body.includes("agent-claim:")) continue;
+    if (!authorizedClaimAuthor(issue, comment)) {
+      const association = ["CONTRIBUTOR", "NONE", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN"].includes(comment.author_association)
+        ? comment.author_association : "OTHER";
+      count(`association=${association}`);
+      continue;
+    }
+    if (comment.updated_at !== comment.created_at) { count("edited"); continue; }
+    const claim = parseClaimComment(comment, issue);
+    if (!claim) { count("format"); continue; }
+    if (claim.from !== (current ?? "none")) { count("handoff_from"); continue; }
+    current = claim.claimed;
   }
-  return current;
+  return { current, ignored };
+}
+
+export function resolveIssueClaim(issue, comments = []) {
+  return resolveIssueClaimDiagnostics(issue, comments).current;
+}
+
+function diagnosticSummary(ignored) {
+  return Object.entries(ignored).sort(([a], [b]) => a.localeCompare(b))
+    .map(([reason, count]) => `${reason}:${count}`).join(",") || "none";
 }
 
 export function extractPrimaryIssueNumbers(body = "") {
@@ -104,19 +130,20 @@ export function evaluateIssueGate({
 
   if (labelNames(pullRequestLabels).some((label) => label.startsWith("agent:"))) {
     const pullSession = extractAgentSessionId(pullRequestBody);
-    const issueSession = resolveIssueClaim(issue, issueComments);
+    const { current: issueSession, ignored } = resolveIssueClaimDiagnostics(issue, issueComments);
+    const counts = `; ignored claims ${diagnosticSummary(ignored)}`;
     if (!pullSession || !issueSession) {
       return {
         ok: false,
         description:
-          `Agent PR claim is incomplete (missing ${!pullSession ? "PR Agent-Session-ID" : "Issue claim"}); add a valid provenance or handoff before retrying the gate`,
+          `Agent PR claim is incomplete (missing ${!pullSession ? "PR Agent-Session-ID" : "Issue claim"}); add a valid provenance or handoff before retrying the gate${counts}`,
       };
     }
     if (pullSession !== issueSession) {
       return {
         ok: false,
         description:
-          `Agent PR session does not match Issue #${number} claim (PR session ${pullSession ?? "none"}, Issue claim ${issueSession ?? "none"}); add a valid handoff comment with Handoff-From to transfer the claim`,
+          `Agent PR session does not match Issue #${number} claim (PR session ${pullSession ?? "none"}, Issue claim ${issueSession ?? "none"}); add a valid handoff comment with Handoff-From to transfer the claim${counts}`,
       };
     }
   }

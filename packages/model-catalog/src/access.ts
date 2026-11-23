@@ -123,16 +123,28 @@ export async function modelProbeFailureV1(
 		)
 	) {
 		try {
-			const failure: unknown = JSON.parse(
-				await boundedModelResponseBody(response, signal, 4096),
-			);
+			const body = (
+				await boundedModelResponseBody(response, signal, 4096)
+			).trimStart();
+			const error = {
+				message: "This account only allows Codex official clients",
+				type: "forbidden_error",
+			} as const;
+			// Relay can append an SSE failure event after this exact JSON envelope (#4407).
+			const envelope = JSON.stringify({ error });
+			if (
+				body.startsWith(envelope) &&
+				body.slice(envelope.length).trimStart().startsWith("event:")
+			)
+				return "codex_client_required";
 			const codexOnly = z.object({
 				error: z.object({
-					type: z.literal("forbidden_error"),
-					message: z.literal("This account only allows Codex official clients"),
+					type: z.literal(error.type),
+					message: z.literal(error.message),
 				}),
 			});
-			if (codexOnly.safeParse(failure).success) return "codex_client_required";
+			if (codexOnly.safeParse(JSON.parse(body)).success)
+				return "codex_client_required";
 		} catch {
 			return "access_denied";
 		}
