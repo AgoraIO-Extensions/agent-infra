@@ -86,7 +86,7 @@ export function ackHistoryPanels(
 	const panels = [
 		panel("CPU 实测 · 有样本范围", "cores", [
 			["节点（共享）", sum("node,cpu,mode", rate(nodeCpu))],
-			["namespace 容器", sum("namespace,pod,container,id", rate(cpu))],
+			["namespace 容器", sum("namespace,pod,container,id,cpu", rate(cpu))],
 		]),
 		panel("内存实测 · 有样本范围", "bytes", [
 			[
