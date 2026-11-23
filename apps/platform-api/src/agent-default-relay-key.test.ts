@@ -248,7 +248,7 @@ beforeEach(async () => {
 });
 
 describe("existing Agent default Relay Key HTTP and original PostgreSQL authority", () => {
-	it("previews the Key/catalog/template intersection without persisting material", async () => {
+	it("previews Key-visible models for the template without persisting material", async () => {
 		const response = await request(
 			"POST",
 			{ keyValue: key, configurationRevision: 7 },
@@ -264,6 +264,11 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 					endpointId: "endpoint_01",
 					modelId: "gpt-5",
 					// 推理档位是平台固定集合，不取端点或模板配置（ADR-0029）。
+					reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+				},
+				{
+					endpointId: "endpoint_01",
+					modelId: "outside-policy",
 					reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
 				},
 			],
@@ -465,6 +470,11 @@ describe("keyless (V3) Agent default Relay Key HTTP and PostgreSQL authority", (
 					endpointId: "endpoint_01",
 					modelId: "gpt-5",
 					// 推理档位是平台固定集合，不取端点或模板配置（ADR-0029）。
+					reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+				},
+				{
+					endpointId: "endpoint_01",
+					modelId: "outside-policy",
 					reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
 				},
 			],

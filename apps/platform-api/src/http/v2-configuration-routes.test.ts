@@ -400,7 +400,9 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 
 		it.each([
 			["incompatible", 409, "MODEL_SELECTION_INVALID"],
-			["key_invalid", 400, "INVALID_REQUEST"],
+			["key_invalid", 400, "PROVIDER_REJECTED"],
+			["access_denied", 403, "PROVIDER_REJECTED"],
+			["codex_client_required", 403, "PROVIDER_REJECTED"],
 			["unavailable", 503, "DEPENDENCY_UNAVAILABLE"],
 			[undefined, 503, "DEPENDENCY_UNAVAILABLE"],
 		] as const)(

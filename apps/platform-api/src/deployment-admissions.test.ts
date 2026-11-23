@@ -1810,7 +1810,7 @@ describe("production deployment admissions", () => {
 		});
 		const endpoint = f.catalog.endpoints[0];
 		if (!endpoint) throw new Error();
-		const rejected = await createDeploymentAdmissionsV1({
+		const admittedWithLegacyList = await createDeploymentAdmissionsV1({
 			...f.input,
 			modelCatalog: {
 				...f.input.modelCatalog,
@@ -1830,7 +1830,7 @@ describe("production deployment admissions", () => {
 			traceId: request.traceId,
 			requested,
 		});
-		expect(rejected).toBeNull();
+		expect(admittedWithLegacyList).toEqual(result);
 	});
 
 	it("admits standard API model selection before image admission supplies a digest", async () => {
@@ -1863,7 +1863,6 @@ describe("production deployment admissions", () => {
 		"expired",
 		"unavailable",
 		"missing-endpoint",
-		"model",
 		"reasoning",
 	])("rejects a catalog %s violation", async (kind) => {
 		const f = fixture();
@@ -1873,7 +1872,6 @@ describe("production deployment admissions", () => {
 		if (kind === "expired") f.catalog.validUntil = Date.now() - 1;
 		if (kind === "unavailable") endpoint.available = false;
 		if (kind === "missing-endpoint") endpoint.endpointId = "other-endpoint";
-		if (kind === "model") endpoint.allowedModels = ["other-model"];
 		if (kind === "reasoning")
 			endpoint.capabilities.reasoningLevels = ["medium"];
 		expect(
@@ -1979,7 +1977,7 @@ describe("production deployment admissions", () => {
 		).toMatchObject({
 			options: [{ modelId: "model-b", reasoningLevels: ["low"] }],
 		});
-		// 部署显式收窄的 allowedModels 仍然生效。
+		// 部署旧名单以外的模型也进入 Relay 的实际校验。
 		expect(
 			await keyless.admitModels({
 				...request,
@@ -1989,7 +1987,7 @@ describe("production deployment admissions", () => {
 					options: [{ ...option, modelId: "gpt-6.1-sol" }],
 				},
 			}),
-		).toBeNull();
+		).toMatchObject({ options: [{ modelId: "gpt-6.1-sol" }] });
 	});
 
 	it.each(["registry", "policy"] as const)(

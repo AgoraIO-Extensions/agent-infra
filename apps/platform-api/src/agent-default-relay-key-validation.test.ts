@@ -134,6 +134,7 @@ describe("default Key visibility with controlled Relay responses", () => {
 		});
 		await expect(f.candidates(key, configuration)).resolves.toMatchObject([
 			{ endpointId: "endpoint_01", modelId: "gpt-5" },
+			{ endpointId: "endpoint_01", modelId: "hidden" },
 		]);
 		await expect(
 			f.verify(key, configuration, [
@@ -152,6 +153,11 @@ describe("default Key visibility with controlled Relay responses", () => {
 			{
 				endpointId: "endpoint_01",
 				modelId: "gpt-5",
+				reasoningLevels: fixedLevels,
+			},
+			{
+				endpointId: "endpoint_01",
+				modelId: "hidden",
 				reasoningLevels: fixedLevels,
 			},
 		]);
@@ -257,8 +263,8 @@ describe("save-time verification with the default Key (ADR-0029)", () => {
 	it.each([
 		[400, "model_unsupported"],
 		[404, "model_unsupported"],
-		[401, "invalid_input"],
-		[403, "invalid_input"],
+		[401, "relay_key_rejected"],
+		[403, "relay_access_denied"],
 		[429, "unavailable"],
 		[503, "unavailable"],
 	] as const)("maps HTTP %s to %s", async (status, code) => {
