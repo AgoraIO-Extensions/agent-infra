@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	assertRegisteredProvider,
 	assertProviderRegistration,
 	PROVIDER_REGISTRY,
 	projectProviderCapabilities,
@@ -49,13 +50,36 @@ describe("fixed Provider Registry", () => {
 			opencode: "paseo-derived",
 			codex: "agent-infra-native",
 		});
-		expect(resolveProviderRegistration("claude", "codex").template).toBe(
+		expect(resolveProviderRegistration("claude").template).toBe(
 			"claude",
 		);
 	});
 
+	it("admits every standard template only through its complete registration", () => {
+		for (const template of ["claude", "pi", "opencode", "codex"] as const) {
+			expect(assertRegisteredProvider(template).template).toBe(template);
+		}
+	});
+
+	it("records source provenance required for every fixed adapter seam", () => {
+		for (const registration of Object.values(PROVIDER_REGISTRY)) {
+			expect(registration.provenance).toEqual(
+				expect.objectContaining({
+					repository: expect.any(String),
+					sourceRevision: expect.any(String),
+					file: expect.any(String),
+					symbol: expect.any(String),
+					license: expect.any(String),
+					copyright: expect.any(String),
+					adaptations: expect.arrayContaining([expect.any(String)]),
+					regressionEvidence: expect.arrayContaining([expect.any(String)]),
+				}),
+			);
+		}
+	});
+
 	it("records the Pi Paseo-derived JSONL RPC closure", () => {
-		expect(PROVIDER_REGISTRY.pi).toEqual({
+		expect(PROVIDER_REGISTRY.pi).toMatchObject({
 			template: "pi",
 			path: "paseo-derived",
 			adapter: "pi-jsonl-rpc",

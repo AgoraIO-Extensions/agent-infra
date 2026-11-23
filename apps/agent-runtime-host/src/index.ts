@@ -9,7 +9,7 @@ import type {
 	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
 import {
-	assertProviderRegistration,
+	assertRegisteredProvider,
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createAppliedRuntimeSkillDirectoryV1,
@@ -475,10 +475,10 @@ export async function assembleRuntimeHost(
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
-	if (binding === "claude")
-		assertProviderRegistration("claude", "paseo-derived", "claude-query");
+	if (binding === "claude" || binding === "pi" || binding === "acp")
+		assertRegisteredProvider(binding === "acp" ? "opencode" : binding);
 	if (binding === "codex")
-		assertProviderRegistration("codex", "agent-infra-native", "codex-native");
+		assertRegisteredProvider("codex");
 	assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
@@ -1173,6 +1173,12 @@ export async function assembleRuntimeHost(
 			: undefined;
 		const podUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
 		const host = await RuntimeHost.open({
+			...(binding !== "fake"
+				? {
+						providerTemplate:
+							binding === "acp" ? ("opencode" as const) : binding,
+					}
+				: {}),
 			// #4358 I2: one observer per process, so its clock domain is this
 			// Pod UID plus process start; it writes fixed stdout records only.
 			controlObserver: createRuntimeControlObserverV1(podUid ? { podUid } : {}),

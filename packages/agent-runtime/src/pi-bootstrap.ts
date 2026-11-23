@@ -16,6 +16,7 @@ import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
 import { piNativeShellAvailable, piNativeShellToolName } from "./pi-shell.js";
 import { piWorkspaceToolNames } from "./pi-tools.js";
+import { assertProviderRegistration } from "./provider-registry.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
@@ -73,6 +74,7 @@ export function piNativeSkillArguments(
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
+	assertProviderRegistration("pi", "paseo-derived", "pi-jsonl-rpc");
 	try {
 		RuntimeModelConfigurationV3Schema.parse({
 			configVersion: options.configVersion,

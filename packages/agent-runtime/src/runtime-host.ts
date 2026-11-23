@@ -163,6 +163,10 @@ import type {
 	RuntimeControlObserverV1,
 } from "./runtime-control-observation.js";
 import {
+	projectProviderCapabilities,
+	type ProviderTemplate,
+} from "./provider-registry.js";
+import {
 	createRuntimeFileBridgeBindingV1,
 	createRuntimeNativeTextInputBindingV5,
 	createRuntimeNativeTextInputPortV1,
@@ -177,6 +181,8 @@ import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
 export interface RuntimeHostOptions {
+	/** Standard template identity fixed by RuntimeHost deployment admission. */
+	providerTemplate?: ProviderTemplate;
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	/** #4358 I2: fixed stdout observation of stop stages; never an authority. */
 	controlObserver?: RuntimeControlObserverV1;
@@ -2789,9 +2795,34 @@ export class RuntimeHost {
 			await callDriver(() => this.options.driver.getCapabilities()),
 		);
 		if (!capabilities.success) driverInvalid();
+		const projectedCapabilities = this.options.providerTemplate
+			? projectProviderCapabilities(this.options.providerTemplate, {
+					conformance: "passed",
+					probe: "passed",
+					recovery: "supported",
+					result: "confirmed",
+					declared: {
+						modelSelection: capabilities.data.modelSelection,
+						attachments: capabilities.data.attachments,
+						resultFiles: capabilities.data.resultFiles,
+						connection: capabilities.data.connection,
+						supplementaryInstruction:
+							capabilities.data.supplementaryInstruction,
+					},
+				})
+			: capabilities.data;
+		const responseCapabilities = RuntimeCapabilitiesV1Schema.parse({
+			...projectedCapabilities,
+			...(capabilities.data.skills
+				? { skills: capabilities.data.skills }
+				: {}),
+			...(capabilities.data.browser
+				? { browser: capabilities.data.browser }
+				: {}),
+		});
 		return {
 			schemaVersion: 1,
-			capabilities: capabilities.data,
+			capabilities: responseCapabilities,
 		};
 	}
 

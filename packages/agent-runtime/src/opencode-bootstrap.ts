@@ -37,6 +37,7 @@ import {
 	openCodePatchAllowed,
 	openCodeToolName,
 } from "./opencode-tools.js";
+import { assertProviderRegistration } from "./provider-registry.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
@@ -227,6 +228,7 @@ export function validateOpenCodeRuntimeOptions(
 
 /** Static OpenCode bootstrap for the single Generic ACP driver. */
 export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
+	assertProviderRegistration("opencode", "paseo-derived", "generic-acp");
 	validateOpenCodeRuntimeOptions(options);
 	// OpenCode is admitted only through the reviewed Generic ACP loopback seam.
 	// A release without that explicit transport gate must never start with the
