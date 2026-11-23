@@ -33,10 +33,12 @@ export const AgentConnectionAssociationStateV1Schema = z.strictObject({
 	status: AgentConnectionAssociationStatusV1Schema,
 	/** How the current association was produced; null when not enabled. */
 	source: z.enum(["manual", "automatic"]).nullable(),
-	/** Compare-and-swap token for manual replacement and disconnect. */
+	/** Compare-and-swap token for credential replacement/recovery and manual disconnect. */
 	associationRevision: revision.nullable(),
 	/** True only when the one-time system access enables automatic registration. */
 	automaticRegistrationAvailable: z.boolean(),
+	/** Explicit v2 deployment capability; absent for the unchanged v1 route. */
+	credentialRecoveryAvailable: z.literal(true).optional(),
 });
 
 export const AgentConnectionAssociationRequestV1Schema = z.discriminatedUnion(

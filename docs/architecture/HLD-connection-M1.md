@@ -72,7 +72,8 @@ Platform 按 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按�
 Connection 创建后手工关联。受限机器登记、手工关联核实、真实回执、长期关联与逐用户/安装的
 OAuth client 准备只在
 [工程 Spec §13.5.7](SPEC-agent-infra-M1-engineering-architecture.md#1357-agent-关联与-oauth-安装准备)
-定义；登记认证和手工关联的服务凭据都不成为 MCP 或用户 Grant 权限，Connection 的当前身份、
+定义；获准 v2 登记后端的服务凭据保管例外沿同节及 §13.5.3，v1 无秘密合同保持。
+登记认证及 Agent 服务凭据都不成为 MCP 或用户 Grant 权限，Connection 的当前身份、
 实例与授权检查不变。
 Connection 尚未发布原 OAuth 事务回读合同时，Platform 的动态手工安装可按工程 Spec
 [§13.5.1 的 M1 限时例外](SPEC-agent-infra-M1-engineering-architecture.md#1351-字段与配置来源)，

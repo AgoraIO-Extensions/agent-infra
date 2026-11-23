@@ -92,7 +92,8 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 - 拒绝响应不能泄露其他 Principal、Connection、Grant、Credential、调用或审计是否存在。
 
 自动登记时，Connection 独立验证系统登记权限、登记归属与 Owner，并只建立该 Agent 的专用
-Consumer。手工关联时，Consumer 由有权在 Connection 创建 Agent 的主体创建，Platform 使用其
+Consumer；经明确批准的登记后端可以一次接收该 Agent 的服务凭据，负责加密保管和受保护供应，
+不得扩展为用户或 Provider 凭据接收权限。手工关联时，Consumer 由有权在 Connection 创建 Agent 的主体创建，Platform 使用其
 服务凭据核实身份并接入。两条路径的启用、关联和安装时机均遵循
 [Platform PRD §9.1](PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)。用户 OAuth 安装
 由使用者发起时按需准备。登记权限和服务凭据都不授予 Provider/Action 能力，不替用户创建

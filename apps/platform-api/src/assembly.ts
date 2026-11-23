@@ -268,7 +268,7 @@ export interface PlatformApiAssemblyInput {
 	 */
 	readonly connectionAssociation?: Pick<
 		Parameters<typeof createAgentConnectionAssociationUseCaseV1>[0],
-		"verify" | "encrypt"
+		"verify" | "encrypt" | "responseCredentialRecovery"
 	>;
 	readonly validateDefaultRelayKey?: (
 		keyValue: string,

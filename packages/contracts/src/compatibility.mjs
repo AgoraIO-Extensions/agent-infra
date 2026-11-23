@@ -6974,6 +6974,40 @@ function normalizeEvaluationData3638(document) {
 
 let comparisonCache;
 
+// #4455: only the optional v2 recovery-capability metadata; all old routes/auth/fields stay exact.
+function normalizeConnectionResponseCredentialRecoveryMetadata(
+	previous,
+	current,
+) {
+	const path = "/api/v2/agents/{agentId}/connection-association";
+	for (const method of ["get", "put", "delete"]) {
+		const before =
+			previous.paths?.[path]?.[method]?.responses?.["200"]?.content?.[
+				"application/json"
+			]?.schema;
+		const after =
+			current.paths?.[path]?.[method]?.responses?.["200"]?.content?.[
+				"application/json"
+			]?.schema;
+		if (
+			!after ||
+			before?.properties?.credentialRecoveryAvailable !== undefined ||
+			!sameValue(after.properties?.credentialRecoveryAvailable, {
+				const: true,
+				type: "boolean",
+			}) ||
+			after.required?.includes("credentialRecoveryAvailable")
+		)
+			return current;
+	}
+	const normalized = structuredClone(current);
+	for (const method of ["get", "put", "delete"])
+		delete normalized.paths[path][method].responses["200"].content[
+			"application/json"
+		].schema.properties.credentialRecoveryAvailable;
+	return normalized;
+}
+
 function findBreakingChanges(previousValue, currentValue) {
 	const isRoot = comparisonCache === undefined;
 	comparisonCache ??= new Map();
@@ -7772,6 +7806,14 @@ function normalizeConversationArchive4266(document) {
 function evaluateBreakingChanges(originalPrevious, originalCurrent) {
 	if (isExternalServiceOpenApiAddition(originalPrevious, originalCurrent))
 		return [];
+	// Normalize this exact additive metadata before the older pinned proofs. Otherwise
+	// every older proof rejects the extra field and repeats its normalization branches.
+	const recovery = normalizeConnectionResponseCredentialRecoveryMetadata(
+		originalPrevious,
+		originalCurrent,
+	);
+	if (recovery !== originalCurrent)
+		return findBreakingChanges(originalPrevious, recovery);
 	// Once published, the added endpoints/actions cannot be removed through normalization.
 	const prefix4264 =
 		"/api/v2/applications/{applicationId}/credential-material-deliveries";

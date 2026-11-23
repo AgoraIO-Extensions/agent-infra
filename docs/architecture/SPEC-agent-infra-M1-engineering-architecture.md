@@ -2889,8 +2889,9 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置、自�
 授权与审计权威。Platform API/Worker 不取得客户端凭据来代调用或查询 Connection。
 客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
 前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
-唯一例外是 §13.5.7 Owner 手工关联的 Consumer 服务凭据：它只以应用层密文保存在该关联下，
-API 受理时仅用明文做一次只读核实。Worker 只在物化该 Agent 的受保护 Host 供应时解密。
+例外仅限 §13.5.7 Owner 手工关联或获准 v2 自动登记的 Consumer 服务凭据：它只以应用层密文保存在该关联下，
+API 手工受理时仅用明文做一次只读核实；v2 的受信 Worker 仅在首次登记响应中接收并加密保存。
+Worker 只在物化该 Agent 的受保护 Host 供应时解密。
 受保护 Host 只按 §13.5.7 使用该服务凭据对同一 Consumer 执行获准的 EP-1060 逐安装操作。
 凭据不进入 env、argv 或工具进程，不能用于 MCP、用户代理或外部系统授权，其余禁止位置不变。
 
@@ -3238,7 +3239,7 @@ Host 只为获准的原用户、Agent 和安装修订领取及使用 Connection 
 [EP-1060](https://jira.agoralab.co/browse/EP-1060) 的逐登记键 READ；只能在该版本接口已发布且
 部署批准后启用。非秘密描述符固定 registrationKey、实际 client/DEVICE instance、服务合同和
 完整 profile/source；机器服务凭据只由受保护 Host 从独占秘密文件读取，API/Worker/Web 除
-§13.5.7 手工关联的受理、核实与物化外不取得。
+§13.5.7 获准服务凭据受理、核实、登记与物化外不取得。
 Host 在读取 code/verifier 前，从固定 issuer 和当前 Consumer 派生的精确 HTTPS 路径回读，
 不用 Cookie、不跟随重定向、不隐式重试；UNKNOWN、未绑定、错 client/instance/Consumer、
 资源、callback、来源或实际 Principal 与原安装签名中的批准映射不一致时拒绝兑换。
@@ -3283,7 +3284,7 @@ native client metadata，并把每个 Agent 的返回 `client_id` 绑定到该 A
 只创建独立 OAuth client/Consumer 入口，不创建 Grant、不替代用户确认，也不能把多个 Agent
 折叠到一个部署 client。DCR 成功、Consumer 可见或本机登录本身不构成连接器授权；不得使用
 其他产品 Consumer 或 Portable PAT 作为自动 fallback。API/Worker/Web 不持有 Consumer
-secret（§13.5.7 手工关联的服务凭据按 §13.5.3 的例外处理）、PKCE verifier、access/refresh
+secret（§13.5.7 的获准 Agent 服务凭据按 §13.5.3 的例外处理）、PKCE verifier、access/refresh
 Token，也不兑换授权码、刷新或代调用 MCP。
 
 **逐 Agent 安装配置。** 每个已关联 Agent 的完整非敏感安装绑定由 §13.5.7 的关联与一次性
@@ -3868,13 +3869,54 @@ Worker 不持有明文执行 EP-1060。凭据不进入 env、argv、日志、模
 管理员 Cookie、Owner、请求自报身份及另一 Consumer 的服务凭据均不能替代它。
 
 登记请求只包含原 Agent 的必要非敏感信息。Connection 根据受信来源与其批准政策验证登记
-归属和 Owner，不从邮箱、显示名或 Platform userId 猜测 Connection Principal。登记回执不得
-返回 Consumer 原始 secret、用户 access/refresh Token、PAT 或 Provider Credential；若路线
-需要额外秘密，须先具名批准其受保护接收边界，不能把秘密投递给 API/Worker 再补安全声明。
+归属和 Owner，不从邮箱、显示名或 Platform userId 猜测 Connection Principal。v1 登记回执不得
+返回 Consumer 原始 secret；用户 access/refresh Token、PAT 或 Provider Credential 仍不得交给
+Platform。负责人批准的 v2 Agent 服务凭据例外见下文；不能把该例外扩展为用户秘密接收权限。
 固定服务目标、认证、method/path、版本化 schema、限额和恢复语义须由 Connection 原 owner
 的既有或经批准更新的合同明确，并与消费方共同评审。现有路由/配置满足所需
 权限和语义时直接复用；仅对已确认无法满足的具体步骤讨论扩展。拒绝重定向、调用方
 URL/header 覆盖和 SDK 隐藏重试。
+
+**v2 首次响应凭据（#4455）。** Connection 的独立 v2 合同以
+[EP-1146](https://jira.agoralab.co/browse/EP-1146) 为准。部署显式选择
+`createConnectionConsumerRegistrationHttpAdapterV2`，并注入真实机器认证、受信 Owner/公司映射和
+ADR 0002 公钥 encryptor；缺少任一输入时不发送创建。源在 Connection 侧必须独立获准
+`credentialDelivery: RESPONSE`。本地 policy/intent/receipt 的 schemaVersion 仍为 1，不等于
+HTTP DTO 的版本；v1 路径、摘要域与无 secret 语义保持。
+
+资源路径固定为 `/connection/internal/v2/platform-agent-consumer-registrations/{sourceNamespace}/{platformAgentId}`。
+首次 POST 仅接受 HTTP 201 严格 `{receipt, operation, secret}`；重复 POST/原 create operation GET
+只接受 HTTP 200 严格 `{receipt, operation}`，不可含 secret。请求和回执 schemaVersion 为 2，
+create/lifecycle 摘要域分别为 `platform-agent-consumer-v2`、`platform-agent-consumer-lifecycle-v2`，
+算法仍为 connection-json-v2。适配器先核对原来源/键、metadata、Owner/公司、完整摘要及 ACTIVE/APPLIED，
+再把 secret bytes 交给 Worker 私有 custody callback，不放入普通 delivery。bytes 使用后清零。
+
+Worker 沿原 outbox claim/fence，在同一事务复核原 Agent/Owner/策略及 lease，分配不可复用的关联
+代次，加密保存服务凭据，并提交原登记 receipt。复用现有 `connection_manual_associations` 的密文
+存储及安装供应边界；历史表名保留，自动来源由原 registration 行确定，不伪造手工关联或用户核实。
+自动来源不开放普通手工替换/解除；原停用生命周期不变。所有安装/供应资格同时核对原注册、Consumer、
+Owner、关联修订及未进入停用；受保护 Host 沿原 EP-1060、逐用户 OAuth 和 TLS-exporter 供应通道处理。
+没有迁移或新增接收服务，不把 Host 安装回执当作 Connection 注册证明。
+
+ACTIVE/APPLIED 仅证明 Connection 已提交。v2 Platform 的 registered/associated 要求本地密文和关联
+事务也已提交，仍不证明 Host 已收到、OAuth/Grant 已完成或工具可用。存储或 CAS 失败保持 unknown，
+原回读不再返回 secret，缺少本地材料时不得凭 ACTIVE 推进。若本地提交回执丢失，重启沿原持久状态
+及原键核实；不得重新 POST、换键创建或自动轮换。确认凭据丢失后，只能由获权本人/管理员在
+Connection 原凭据管理入口明确轮换原 Consumer，再按获准保管流程处理；本 Worker 不读取 Browser
+Cookie、不调用轮换、不增加机器凭据恢复接口。
+
+仅当部署在 API 的 `connectionAssociation` 显式设置 `responseCredentialRecovery: true`（仅批准的
+v2 路线）、原自动登记为 unknown、当前调用者仍是原登记 Owner、未进入停用、登记来源及策略与当前
+部署相同，Owner 才能经既有手工关联命令补交服务凭据（原 Web/API 认证、CSRF 和 expectedRevision
+CAS 不变）。可选非秘密响应标记 `credentialRecoveryAvailable: true` 仅对当前符合条件的原 Owner
+返回；未批准的旧 v1 路线不返回该字段、不显示补交入口、不接受候选。API 仍先调用 Connection 只读 actions 接口核实所填 Consumer 与服务凭据，候选密文
+保存在原 Agent 下，来源仍为 automatic，界面保持待核实，不开放解除。Worker 只读核实原 create
+operation，完整 v2 回执通过后还须精确匹配候选的 Consumer、原 Owner 和关联代次，才原子提交
+registered；错 Consumer、过期 revision、其他 Owner 或停用时不得启用。回读不能生成秘密或把候选
+挂到另一 Agent。补交复用现有一次性输入和密文替换，不回显、不改变 Consumer/Grant，不新增浏览器请求或路由；响应只增加上述可选能力标记。
+
+自动登记生产启用仍需 Connection v2 已发布及
+真实 D1/Owner、系统接入和 Host 批准；源码和 fixture 通过不能代替现场签收。
 
 **回执与持久关联。** Platform DB 保存本平台的登记来源/外部引用、原操作、请求摘要、
 实际 Consumer ID、服务端回执/修订、关联修订及交付状态，不复制远端 Grant、凭据、调用或

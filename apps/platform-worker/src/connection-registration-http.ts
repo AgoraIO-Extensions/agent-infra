@@ -12,6 +12,7 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	type ConnectionConsumerRegistrationAdapterV1,
+	type ConnectionRegistrationCredentialSinkV2,
 	connectionConsumerDisableNotSentV1,
 } from "./connection-registration-worker.js";
 
@@ -35,9 +36,6 @@ export interface ConnectionRegistrationHttpOptionsV1 {
 	) => Promise<ConnectionRegistrationOwnerBindingV1 | undefined>;
 }
 
-const digestVersion = "platform-agent-consumer-v1/connection-json-v2";
-const lifecycleDigestVersion =
-	"platform-agent-consumer-lifecycle-v1/connection-json-v2";
 const component = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/;
 const receiptKeys = [
 	"schemaVersion",
@@ -132,6 +130,7 @@ function remoteDigest(
 	name: string,
 	scopes: readonly string[],
 	owner: ConnectionRegistrationOwnerBindingV1,
+	version: 1 | 2,
 ) {
 	// Fixed ASCII keys are in canonical scalar order; every string is already NFC.
 	const json = JSON.stringify({
@@ -142,25 +141,28 @@ function remoteDigest(
 		platformAgentId: intent.platformAgentId,
 		policyRevision: intent.policyRevision,
 		resource: intent.resource,
-		schemaVersion: 1,
+		schemaVersion: version,
 		scopes: [...scopes].sort(),
 		sourceNamespace: intent.sourceNamespace,
-		version: "platform-agent-consumer-v1",
+		version: `platform-agent-consumer-v${version}`,
 	});
 	return `connection-json-v2:${hash(`connection-json-v2:${json}`)}`;
 }
 
 /** Connection lifecycle digest (registration Spec §4); keys are in canonical ASCII order. */
-function lifecycleDigest(intent: ConnectionConsumerDisableIntentV1) {
+function lifecycleDigest(
+	intent: ConnectionConsumerDisableIntentV1,
+	version: 1 | 2,
+) {
 	const json = JSON.stringify({
 		consumerId: intent.consumerId.normalize("NFC"),
 		expectedRevision: intent.expectedRevision,
 		kind: "disable",
 		platformAgentId: intent.platformAgentId,
 		policyRevision: intent.policyRevision,
-		schemaVersion: 1,
+		schemaVersion: version,
 		sourceNamespace: intent.sourceNamespace,
-		version: "platform-agent-consumer-lifecycle-v1",
+		version: `platform-agent-consumer-lifecycle-v${version}`,
 	});
 	return `connection-json-v2:${hash(`connection-json-v2:${json}`)}`;
 }
@@ -219,6 +221,22 @@ async function readJson(
 export function createConnectionConsumerRegistrationHttpAdapterV1(
 	options: ConnectionRegistrationHttpOptionsV1,
 ): ConnectionConsumerRegistrationAdapterV1 | undefined {
+	return createHttpAdapter(options, 1);
+}
+
+/** EP-1146: explicitly opt into the one-time response credential contract. */
+export function createConnectionConsumerRegistrationHttpAdapterV2(
+	options: ConnectionRegistrationHttpOptionsV1,
+): ConnectionConsumerRegistrationAdapterV1 | undefined {
+	return createHttpAdapter(options, 2);
+}
+
+function createHttpAdapter(
+	options: ConnectionRegistrationHttpOptionsV1,
+	version: 1 | 2,
+): ConnectionConsumerRegistrationAdapterV1 | undefined {
+	const digestVersion = `platform-agent-consumer-v${version}/connection-json-v2`;
+	const lifecycleDigestVersion = `platform-agent-consumer-lifecycle-v${version}/connection-json-v2`;
 	if (
 		typeof options.authenticatedRequest !== "function" ||
 		typeof options.resolveOwnerBinding !== "function"
@@ -242,10 +260,12 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 		input: ConnectionConsumerRegistrationIntentV1,
 		signal: AbortSignal,
 		mode: "register" | "reconcile",
+		retainCredential?: ConnectionRegistrationCredentialSinkV2,
 	): Promise<ConnectionConsumerRegistrationDeliveryV1> {
 		let requested = false;
 		try {
 			signal.throwIfAborted();
+			if (version === 2 && !retainCredential) return unknown();
 			const intent = parseConnectionConsumerRegistrationIntentV1(input);
 			if (
 				intent.sourceNamespace !== policy.sourceNamespace ||
@@ -265,9 +285,9 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 				throw invalid();
 			const scopes = intent.scope.split(" ");
 			const keyHash = hash(intent.idempotencyKey);
-			const root = `${origin.origin}/connection/internal/v1/platform-agent-consumer-registrations/${encodeURIComponent(intent.sourceNamespace)}/${encodeURIComponent(intent.platformAgentId)}`;
+			const root = `${origin.origin}/connection/internal/v${version}/platform-agent-consumer-registrations/${encodeURIComponent(intent.sourceNamespace)}/${encodeURIComponent(intent.platformAgentId)}`;
 			const body = JSON.stringify({
-				schemaVersion: 1,
+				schemaVersion: version,
 				policyRevision: intent.policyRevision,
 				consumerName: name,
 				callbackUrl: intent.callbackUrl,
@@ -299,7 +319,13 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 			if (
 				response.redirected ||
 				(response.url && response.url !== target) ||
-				![200, 202].includes(response.status)
+				!(
+					version === 2
+						? mode === "register"
+							? [200, 201]
+							: [200]
+						: [200, 202]
+				).includes(response.status)
 			) {
 				void response.body?.cancel().catch(() => {});
 				return unknown();
@@ -307,9 +333,10 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 			const value = exact(await readJson(response, signal), [
 				"receipt",
 				"operation",
+				...(version === 2 && response.status === 201 ? ["secret"] : []),
 			]);
 			const receipt = exact(value.receipt, receiptKeys, [
-				"protectedHandoffRef",
+				...(version === 1 ? ["protectedHandoffRef"] : []),
 			]);
 			const operation = exact(value.operation, operationKeys);
 			const owner = await resolveOwner(intent, signal);
@@ -323,9 +350,9 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 				!reference(owner.companyId)
 			)
 				throw invalid();
-			const digest = remoteDigest(intent, name, scopes, owner);
+			const digest = remoteDigest(intent, name, scopes, owner, version);
 			if (
-				receipt.schemaVersion !== 1 ||
+				receipt.schemaVersion !== version ||
 				receipt.sourceNamespace !== intent.sourceNamespace ||
 				receipt.platformAgentId !== intent.platformAgentId ||
 				receipt.executionMode !== "USER" ||
@@ -359,7 +386,7 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 			)
 				throw invalid();
 			if (
-				operation.schemaVersion !== 1 ||
+				operation.schemaVersion !== version ||
 				operation.kind !== "create" ||
 				operation.sourceNamespace !== receipt.sourceNamespace ||
 				operation.platformAgentId !== receipt.platformAgentId ||
@@ -381,22 +408,28 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 					: operation.resultRevision !== null)
 			)
 				throw invalid();
-			if (response.status !== 200) return unknown();
+			if (version === 1 && response.status !== 200) return unknown();
+			if (
+				version === 2 &&
+				response.status === 201 &&
+				operation.status !== "APPLIED"
+			)
+				return unknown();
 			if (operation.status === "FAILED")
 				return {
 					outcome: "failed",
 					failureCode: "CONNECTION_REGISTRATION_REJECTED",
 				};
 			if (
-				response.status !== 200 ||
+				(version === 1 && response.status !== 200) ||
 				operation.status !== "APPLIED" ||
 				receipt.status !== "ACTIVE"
 			)
 				return unknown();
-			return {
-				outcome: "registered",
+			const delivery = {
+				outcome: "registered" as const,
 				receipt: {
-					schemaVersion: 1,
+					schemaVersion: 1 as const,
 					operationId: intent.operationId,
 					sourceNamespace: intent.sourceNamespace,
 					sourceKey: intent.sourceKey,
@@ -406,6 +439,26 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 					requestDigest: intent.requestDigest,
 				},
 			};
+			if (version === 2) {
+				let credential: Uint8Array | undefined;
+				try {
+					if (response.status === 201) {
+						if (
+							typeof value.secret !== "string" ||
+							!/^conn_consumer_[A-Za-z0-9_-]{32,128}$/.test(value.secret)
+						)
+							throw invalid();
+						credential = Buffer.from(value.secret, "utf8");
+						delete value.secret;
+					}
+					if (!(await retainCredential?.(delivery, credential)))
+						return unknown();
+					signal.throwIfAborted();
+				} finally {
+					credential?.fill(0);
+				}
+			}
+			return delivery;
 		} catch {
 			if (!requested && mode === "register" && !signal.aborted)
 				return {
@@ -433,8 +486,8 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 			)
 				throw invalid();
 			const keyHash = hash(intent.idempotencyKey);
-			const digest = lifecycleDigest(intent);
-			const root = `${origin.origin}/connection/internal/v1/platform-agent-consumer-registrations/${encodeURIComponent(intent.sourceNamespace)}/${encodeURIComponent(intent.platformAgentId)}`;
+			const digest = lifecycleDigest(intent, version);
+			const root = `${origin.origin}/connection/internal/v${version}/platform-agent-consumer-registrations/${encodeURIComponent(intent.sourceNamespace)}/${encodeURIComponent(intent.platformAgentId)}`;
 			const target =
 				mode === "disable"
 					? `${root}/disable`
@@ -450,7 +503,7 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 				...(mode === "disable"
 					? {
 							body: JSON.stringify({
-								schemaVersion: 1,
+								schemaVersion: version,
 								policyRevision: intent.policyRevision,
 								revision: intent.expectedRevision,
 							}),
@@ -477,11 +530,11 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 				"operation",
 			]);
 			const receipt = exact(value.receipt, receiptKeys, [
-				"protectedHandoffRef",
+				...(version === 1 ? ["protectedHandoffRef"] : []),
 			]);
 			const operation = exact(value.operation, operationKeys);
 			if (
-				receipt.schemaVersion !== 1 ||
+				receipt.schemaVersion !== version ||
 				receipt.sourceNamespace !== intent.sourceNamespace ||
 				receipt.platformAgentId !== intent.platformAgentId ||
 				receipt.consumerId !== intent.consumerId ||
@@ -498,7 +551,7 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 			)
 				throw invalid();
 			if (
-				operation.schemaVersion !== 1 ||
+				operation.schemaVersion !== version ||
 				operation.kind !== "disable" ||
 				operation.sourceNamespace !== intent.sourceNamespace ||
 				operation.platformAgentId !== intent.platformAgentId ||
@@ -549,8 +602,11 @@ export function createConnectionConsumerRegistrationHttpAdapterV1(
 		}
 	}
 	return {
-		register: (intent, signal) => execute(intent, signal, "register"),
-		reconcile: (intent, signal) => execute(intent, signal, "reconcile"),
+		...(version === 2 ? { credentialDelivery: "RESPONSE" as const } : {}),
+		register: (intent, signal, retain) =>
+			execute(intent, signal, "register", retain),
+		reconcile: (intent, signal, retain) =>
+			execute(intent, signal, "reconcile", retain),
 		disable: (intent, signal) => lifecycle(intent, signal, "disable"),
 		reconcileDisable: (intent, signal) =>
 			lifecycle(intent, signal, "reconcile"),

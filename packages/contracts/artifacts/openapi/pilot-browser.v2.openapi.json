@@ -25300,6 +25300,10 @@
                     "automaticRegistrationAvailable": {
                       "type": "boolean"
                     },
+                    "credentialRecoveryAvailable": {
+                      "const": true,
+                      "type": "boolean"
+                    },
                     "schemaVersion": {
                       "const": 1,
                       "type": "number"
@@ -25459,6 +25463,10 @@
                       ]
                     },
                     "automaticRegistrationAvailable": {
+                      "type": "boolean"
+                    },
+                    "credentialRecoveryAvailable": {
+                      "const": true,
                       "type": "boolean"
                     },
                     "schemaVersion": {
@@ -25695,6 +25703,10 @@
                       ]
                     },
                     "automaticRegistrationAvailable": {
+                      "type": "boolean"
+                    },
+                    "credentialRecoveryAvailable": {
+                      "const": true,
                       "type": "boolean"
                     },
                     "schemaVersion": {
