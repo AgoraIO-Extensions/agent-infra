@@ -764,6 +764,7 @@ it("v2 deferred COMMIT failure rolls back custody; restart GET cannot recreate t
 	const recover = createAgentConnectionAssociationUseCaseV1({
 		transaction: association,
 		registrationPolicy: policy,
+		responseCredentialRecovery: true,
 		verify: async () => "verified",
 		encrypt: encryptCredential,
 	});
@@ -784,6 +785,15 @@ it("v2 deferred COMMIT failure rolls back custody; restart GET cannot recreate t
 		expectedRevision,
 	});
 	try {
+		const legacy = createAgentConnectionAssociationUseCaseV1({
+			transaction: association,
+			registrationPolicy: policy,
+			verify: async () => "verified",
+			encrypt: encryptCredential,
+		});
+		await expect(
+			legacy.associate(request, candidate("consumer-agent-a", null)),
+		).rejects.toThrow();
 		await expect(
 			recover.associate(
 				{ ...request, entry: { kind: "browser", userId: "other-owner" } },

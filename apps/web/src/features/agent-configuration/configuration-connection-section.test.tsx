@@ -184,6 +184,7 @@ describe("Agent settings Connection section", () => {
 			source: "automatic" as const,
 			status: "unverified" as const,
 			automaticRegistrationAvailable: true,
+			credentialRecoveryAvailable: true as const,
 			associationRevision: 2,
 		};
 		vi.mocked(loadAgentConnectionAssociation).mockResolvedValue(pending);
@@ -224,5 +225,18 @@ describe("Agent settings Connection section", () => {
 			),
 		).not.toContain(credential);
 		expect(document.body.innerHTML).not.toContain(credential);
+	});
+	it("does not offer recovery for the unchanged v1 automatic route", async () => {
+		vi.mocked(loadAgentConnectionAssociation).mockResolvedValue({
+			...notEnabled,
+			source: "automatic",
+			status: "unverified",
+			automaticRegistrationAvailable: true,
+		});
+		renderSection();
+		await screen.findByTestId("connection-association-status");
+		expect(
+			screen.queryByRole("button", { name: "补交原 Agent 服务凭据" }),
+		).toBeNull();
 	});
 });

@@ -609,7 +609,7 @@ it("presents each Agent's own association status in the visibility snapshot (#85
 		const [automatic] =
 			await sql`select operation_id,consumer_id,source_namespace from platform.connection_consumer_registrations where agent_id='agent-a'`;
 		await sql`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at)
-			values ('agent-a',${automatic?.consumer_id},${"b".repeat(64)},1,${owner},${sql.json({ schemaVersion: 1, agentId: "agent-a", ownerId: owner, secretVersion: 1, crypto: { dekFingerprint: "c".repeat(64) } })},clock_timestamp())`;
+			values ('agent-a',${automatic?.consumer_id},${"b".repeat(64)},1,${owner},${JSON.stringify({ schemaVersion: 1, agentId: "agent-a", ownerId: owner, secretVersion: 1, crypto: { dekFingerprint: "c".repeat(64) } })}::jsonb,clock_timestamp())`;
 		const disable = planConnectionConsumerDisableIdentityV1({
 			registrationOperationId: automatic?.operation_id,
 			sourceNamespace: automatic?.source_namespace,

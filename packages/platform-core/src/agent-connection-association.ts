@@ -59,6 +59,7 @@ export interface AgentConnectionAssociationStateV1 {
 	readonly source: "manual" | "automatic" | null;
 	readonly associationRevision: number | null;
 	readonly automaticRegistrationAvailable: boolean;
+	readonly credentialRecoveryAvailable?: true;
 }
 
 /** Current association facts for one Agent, read in the Owner transaction. */
@@ -177,6 +178,8 @@ export interface AgentConnectionAssociationDependenciesV1 {
 		serviceCredential: string,
 	) => unknown;
 	readonly registrationPolicy?: ConnectionConsumerRegistrationPolicyV1;
+	/** Explicit deployment opt-in for v2 response credential custody; v1 remains unchanged. */
+	readonly responseCredentialRecovery?: true;
 	readonly verificationTimeoutMs?: number;
 }
 
@@ -288,6 +291,7 @@ function parseDisconnect(input: unknown): number {
 export function presentAgentConnectionAssociationStateV1(
 	record: AgentConnectionAssociationRecordV1 | null,
 	automaticRegistrationAvailable: boolean,
+	credentialRecoveryAvailable = false,
 ): AgentConnectionAssociationStateV1 {
 	const base = {
 		schemaVersion: 1 as const,
@@ -317,6 +321,9 @@ export function presentAgentConnectionAssociationStateV1(
 		status: projected,
 		source: "automatic",
 		associationRevision: record.credentialRevision ?? null,
+		...(credentialRecoveryAvailable
+			? { credentialRecoveryAvailable: true as const }
+			: {}),
 	};
 }
 
@@ -335,6 +342,23 @@ export function createAgentConnectionAssociationUseCaseV1(
 		input.registrationPolicy === undefined
 			? undefined
 			: captureConnectionConsumerRegistrationPolicyV1(input.registrationPolicy);
+	const responseCredentialRecovery = input.responseCredentialRecovery === true;
+	function canRecover(
+		record: AgentConnectionAssociationRecordV1 | null,
+		ownerId: string | null,
+	) {
+		return (
+			responseCredentialRecovery &&
+			policy !== undefined &&
+			record?.source === "automatic" &&
+			record.status === "unknown" &&
+			record.registrationOwnerId === ownerId &&
+			record.registrationPolicyRevision === policy.revision &&
+			record.registrationSourceNamespace === policy.sourceNamespace &&
+			(record.disableStatus === null || record.disableStatus === "not_required")
+		);
+	}
+
 	const timeoutMs = input.verificationTimeoutMs ?? 10_000;
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
 		throw new AgentConnectionAssociationErrorV1("unavailable");
@@ -459,18 +483,7 @@ export function createAgentConnectionAssociationUseCaseV1(
 			const owner = await owned(tx, request, true);
 			actorId = owner.userId;
 			const current = await tx.current(request.agentId);
-			if (
-				current?.source === "automatic" &&
-				!(
-					policy &&
-					current.status === "unknown" &&
-					current.registrationOwnerId === owner.userId &&
-					current.registrationPolicyRevision === policy.revision &&
-					current.registrationSourceNamespace === policy.sourceNamespace &&
-					(current.disableStatus === null ||
-						current.disableStatus === "not_required")
-				)
-			)
+			if (current?.source === "automatic" && !canRecover(current, owner.userId))
 				throw new AgentConnectionAssociationErrorV1("conflict");
 			const currentRevision =
 				current?.source === "automatic"
@@ -544,6 +557,7 @@ export function createAgentConnectionAssociationUseCaseV1(
 						? { ...current, credentialRevision: saved }
 						: { source: "manual", associationRevision: saved },
 					policy !== undefined,
+					canRecover(current, owner.userId),
 				);
 			});
 		} catch (error) {
@@ -607,9 +621,11 @@ export function createAgentConnectionAssociationUseCaseV1(
 			try {
 				return await input.transaction.execute(async (tx) => {
 					actorId = (await owned(tx, request, false)).userId;
+					const record = await tx.current(request.agentId);
 					return presentAgentConnectionAssociationStateV1(
-						await tx.current(request.agentId),
+						record,
 						policy !== undefined,
+						canRecover(record, actorId),
 					);
 				});
 			} catch (error) {

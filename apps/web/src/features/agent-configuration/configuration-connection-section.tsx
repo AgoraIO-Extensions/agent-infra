@@ -254,7 +254,7 @@ export function ConfigurationConnectionSection({
 	const recovering =
 		state?.source === "automatic" &&
 		state.status === "unverified" &&
-		state.automaticRegistrationAvailable;
+		state.credentialRecoveryAvailable === true;
 	const update = (next: AgentConnectionAssociationState) =>
 		queryClient.setQueryData(queryKey, next);
 

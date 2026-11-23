@@ -3895,13 +3895,15 @@ ACTIVE/APPLIED 仅证明 Connection 已提交。v2 Platform 的 registered/assoc
 Connection 原凭据管理入口明确轮换原 Consumer，再按获准保管流程处理；本 Worker 不读取 Browser
 Cookie、不调用轮换、不增加机器凭据恢复接口。
 
-仅当原自动登记为 unknown、当前调用者仍是原登记 Owner、未进入停用、登记来源及策略与当前
+仅当部署在 API 的 `connectionAssociation` 显式设置 `responseCredentialRecovery: true`（仅批准的
+v2 路线）、原自动登记为 unknown、当前调用者仍是原登记 Owner、未进入停用、登记来源及策略与当前
 部署相同，Owner 才能经既有手工关联命令补交服务凭据（原 Web/API 认证、CSRF 和 expectedRevision
-CAS 不变）。API 仍先调用 Connection 只读 actions 接口核实所填 Consumer 与服务凭据，候选密文
+CAS 不变）。可选非秘密响应标记 `credentialRecoveryAvailable: true` 仅对当前符合条件的原 Owner
+返回；未批准的旧 v1 路线不返回该字段、不显示补交入口、不接受候选。API 仍先调用 Connection 只读 actions 接口核实所填 Consumer 与服务凭据，候选密文
 保存在原 Agent 下，来源仍为 automatic，界面保持待核实，不开放解除。Worker 只读核实原 create
 operation，完整 v2 回执通过后还须精确匹配候选的 Consumer、原 Owner 和关联代次，才原子提交
 registered；错 Consumer、过期 revision、其他 Owner 或停用时不得启用。回读不能生成秘密或把候选
-挂到另一 Agent。补交复用现有一次性输入和密文替换，不回显、不改变 Consumer/Grant、不新增浏览器协议。
+挂到另一 Agent。补交复用现有一次性输入和密文替换，不回显、不改变 Consumer/Grant，不新增浏览器请求或路由；响应只增加上述可选能力标记。
 
 自动登记生产启用仍需 Connection v2 已发布及
 真实 D1/Owner、系统接入和 Host 批准；源码和 fixture 通过不能代替现场签收。
