@@ -102,6 +102,7 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		!help.includes("ACK_RUNTIME_IMAGE_MANIFEST") ||
 		!help.includes("ACK_CA_CERT_FILE") ||
 		!help.includes("ACK_TEMPLATE_VALIDATIONS_FILE") ||
+		!help.includes("ACK_TEMPLATE_E2E_EVIDENCE_FILE") ||
 		!help.includes("ACK_TEMPLATE_PREFLIGHT_JOBS_FILE") ||
 		!help.includes("ACK_TEMPLATE_IMAGE_MANIFEST")
 	)
@@ -128,7 +129,8 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		);
 	if (
 		!source.includes('"$repo_root/deploy/ack/runtime-inputs.ts" apply') ||
-		!source.includes("template-validation.mjs")
+		!source.includes("template-validation.mjs") ||
+		!source.includes("four-template-e2e-receipt.mjs")
 	)
 		throw new Error(
 			"configuration reload and template receipt gates are missing",

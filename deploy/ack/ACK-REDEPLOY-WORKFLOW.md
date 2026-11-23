@@ -449,6 +449,13 @@ Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Work
 完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不改变角色授权，也不代表真实模型
 或完整重建验收已经通过。
 
+`ACK_TEMPLATE_E2E_EVIDENCE_FILE` 是四个标准模板在同一部署上的真实 Web 旅程证据清单。每个条目必须绑定
+`ACK_SOURCE_SHA`、该模板的 immutable image digest、configuration revision、Sandbox identity、Provider version、
+Runtime event hash 和 final receipt hash，并分别通过 create、prompt、stream、completion、restart、recovery、
+并发 Conversation、跨 Conversation native session、credential、workspace 和 event replay 检查。`validate`
+在浏览器旅程之后读取该清单，使用 `four-template-e2e-receipt.mjs` 生成有界 receipt；缺失、漂移、`unknown` 或
+失败都会阻止验收。模型 preflight、healthz、fixture、上游测试和单独的 Runtime Conformance 不能替代该清单。
+
 Custom `platform-adapter` 的第一份容量收据不能由 Platform Agent 反向产生，否则会形成“创建前
 要求 capacity、测量又要求已创建 Agent”的循环。独立 CLI
 [`custom-model-preflight.mts`](./custom-model-preflight.mts) 为获准 custom ACP 镜像测量单执行容量；

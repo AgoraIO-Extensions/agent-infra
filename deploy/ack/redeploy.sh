@@ -51,6 +51,7 @@ Optional validation inputs:
   ACK_BOOTSTRAP_INPUTS_FILE private Secret/ConfigMap file-reference bundle
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
   ACK_TEMPLATE_VALIDATIONS_FILE private four-template validation expectation bundle
+  ACK_TEMPLATE_E2E_EVIDENCE_FILE private four-template Web-to-Provider evidence input
   ACK_WORKLOAD_CAPACITY_FILE private capacity profile/evidence and mounted Secret binding
   ACK_CUSTOM_CAPACITY_JOB_FILE private custom ACP capacity job; optional for all
   ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
@@ -545,6 +546,28 @@ NODE
 	done
 }
 
+validate_four_template_e2e_receipt() {
+	local input=${ACK_TEMPLATE_E2E_EVIDENCE_FILE:-}
+	require_file ACK_TEMPLATE_E2E_EVIDENCE_FILE "$input"
+	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
+	local image_digests
+	image_digests=$(node - "$template_manifest" <<'NODE'
+const fs = require("node:fs");
+const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const result = {};
+for (const template of ["claude", "pi", "opencode", "codex"]) {
+		const digest = value.images?.[template]?.digest;
+		if (typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(digest)) process.exit(1);
+		result[template] = digest;
+}
+process.stdout.write(JSON.stringify(result));
+NODE
+	) || die "ACK_TEMPLATE_IMAGE_MANIFEST lacks four immutable template digests"
+	if ! node "$repo_root/deploy/ack/four-template-e2e-receipt.mjs" "$input" "$source_sha" "$image_digests" >"$evidence_dir/four-template-e2e-receipt.json"; then
+		die "four-template ACK end-to-end evidence is incomplete, drifted, or unknown"
+	fi
+}
+
 validate_custom_agents() {
 	local configs=${ACK_CUSTOM_AGENT_CONFIGS:-}
 	if ! ACK_CUSTOM_AGENT_CONFIGS="$configs" node --experimental-strip-types "$repo_root/deploy/ack/custom-validation.ts" \
@@ -625,6 +648,7 @@ validate() {
 	validate_endpoint
 	validate_template_receipts
 	validate_templates
+	validate_four_template_e2e_receipt
 	snapshot validated
 	validate_custom_agents
 	date -u +%Y-%m-%dT%H:%M:%SZ >"$evidence_dir/completed-at"
