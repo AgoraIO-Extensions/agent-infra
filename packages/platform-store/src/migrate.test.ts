@@ -836,11 +836,14 @@ describe("Platform PostgreSQL migration foundation", () => {
 					name ===
 					"workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_fk"
 						? "workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_"
-						: name === "template_publication_catalog_publication_id_template_publications_id_fk"
+						: name ===
+								"template_publication_catalog_publication_id_template_publications_id_fk"
 							? "template_publication_catalog_publication_id_template_publicatio"
-							: name === "template_publication_nonces_publication_id_template_publications_id_fk"
+							: name ===
+									"template_publication_nonces_publication_id_template_publications_id_fk"
 								? "template_publication_nonces_publication_id_template_publication"
-								: name === "template_publication_targets_publication_id_template_publications_id_fk"
+								: name ===
+										"template_publication_targets_publication_id_template_publications_id_fk"
 									? "template_publication_targets_publication_id_template_publicatio"
 									: name,
 				)
