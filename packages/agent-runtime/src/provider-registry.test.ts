@@ -12,6 +12,32 @@ describe("fixed Provider Registry", () => {
 			assertProviderRegistration("claude", "paseo-derived", "claude-query"),
 		).toEqual(PROVIDER_REGISTRY.claude);
 	});
+	it("keeps Codex on the agent-infra Native Driver contract", () => {
+		expect(
+			assertProviderRegistration("codex", "agent-infra-native", "codex-native"),
+		).toEqual(PROVIDER_REGISTRY.codex);
+		expect(PROVIDER_REGISTRY.codex.provenance).toMatchObject({
+			source: "agent-infra",
+			sourceCommit: "41e22fee981a63b3698df7ed36bad393cda24715",
+			sdk: "codex app-server",
+			version: "0.153.0",
+			license: "Apache-2.0",
+		});
+		expect(PROVIDER_REGISTRY.codex.provenance.adaptations).toEqual([
+			"native-execution-fence",
+			"connection-mcp-boundary",
+			"sandbox-and-credential-boundary",
+		]);
+	});
+
+	it("rejects a path or adapter that crosses the fixed Native boundary", () => {
+		expect(() =>
+			assertProviderRegistration("codex", "paseo-derived", "codex-native"),
+		).toThrowError("RUNTIME_PROVIDER_REGISTRATION_MISMATCH");
+		expect(() =>
+			assertProviderRegistration("codex", "agent-infra-native", "generic-acp"),
+		).toThrowError("RUNTIME_PROVIDER_REGISTRATION_MISMATCH");
+	});
 	it("binds each standard template to its immutable implementation path", () => {
 		expect(
 			Object.fromEntries(

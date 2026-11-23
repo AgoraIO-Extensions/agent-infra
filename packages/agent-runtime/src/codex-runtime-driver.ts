@@ -167,6 +167,7 @@ import {
 } from "./errors.js";
 import type { ModelTransportDiagnostic } from "./model-transport-diagnostic.js";
 import { observeNativeMetadataRpcV1 } from "./native-metadata-telemetry.js";
+import { assertProviderRegistration } from "./provider-registry.js";
 import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
@@ -6527,6 +6528,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	static async open(options: CodexRuntimeDriverOptions) {
+		// Codex is the agent-infra Native Driver. Keep the fixed registry binding
+		// on the normal admission path so a Paseo-derived adapter cannot be
+		// substituted by deployment configuration or a future caller.
+		assertProviderRegistration("codex", "agent-infra-native", "codex-native");
 		// The deployment's Driver file and its sibling native storage share one
 		// Agent PVC. Losing the mapping must never initialize replacement sessions.
 		// 状态早于原生进程启动时（#3174），缺失的存储不是丢失的映射。

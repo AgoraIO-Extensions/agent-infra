@@ -477,6 +477,8 @@ export async function assembleRuntimeHost(
 		runtimeConfigurationInvalid();
 	if (binding === "claude")
 		assertProviderRegistration("claude", "paseo-derived", "claude-query");
+	if (binding === "codex")
+		assertProviderRegistration("codex", "agent-infra-native", "codex-native");
 	assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
