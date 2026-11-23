@@ -2838,8 +2838,12 @@ access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产�
 不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
 SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空；ACP adapter 的本地 URL 不是 Connection endpoint，
 也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
-native MCP、private bootstrap 或 token helper 路径。Pi 和不满足固定 artifact 门禁的
-Generic ACP 继续 `connection:false`。
+native MCP、private bootstrap 或 token helper 路径。M1 四个标准模板都经本节路径接入
+Connection，各 Driver 的会话级声明点为：Codex `thread/start.dynamicTools`；Claude 随原生
+query 注册的 SDK 进程内 MCP server（`mcpServers.connection`）；OpenCode 的 ACP
+`mcpServers`（上述 ADR-0025 adapter）；Pi 的固定扩展 loopback adapter。声明点之外的
+Connection 合同（受保护 Host、手工关联、Owner 按需启用、逐用户 OAuth、动态发布合同、
+`prepare → started → confirm/block` 屏障）四个模板一致，不按模板分叉。
 
 **ADR-0025 ACP adapter gate。** 只有固定 artifact/protocol 明确证明 ACP session 级
 HTTP MCP 注册、bounded discovery/call/close、native 不持久化本地 bearer、工具子进程
@@ -3490,9 +3494,11 @@ refresh/revoke 开始前先持久封闭旧 publication；仅在远端 revoke 确
 [Platform PRD §9.1](../prd/PRD-agent-platform-M1.md#91-owner-按需关联与用户-oauth)：使用者在某个
 会话中完成本人授权并写入许可后，该会话后续的 Connection 调用即可使用，不要求新开会话。工具在
 Thread 开始时就已声明，此后只有可用性随许可变化，所以不热改已有 Thread 工具快照。取舍见
-[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段写法针对 Codex
-Driver（`thread/start`、`item/tool/call`），M1 Connection Pilot 只用 Codex 标准模板；其他 Driver
-未满足同等的声明与门禁时保持 `connection:false`。
+[ADR-0048](../adr/0048-declare-dynamic-connection-tools-at-thread-start.md)。本段以 Codex
+Driver（`thread/start`、`item/tool/call`）为写法基准；Claude、OpenCode、Pi 在各自会话级声明点
+（见 §13.5.4）按同一规则在会话开始时声明部署批准的工具，之后只有可用性随许可变化，并复用同一
+reader 接缝、固定的“需要授权/暂不可用”结果和撤销规则。首个受监督 Connection Pilot 仍只用 Codex
+标准模板，其结论不外推到其他模板，其余三个模板各自按本节验收。
 
 - **工具声明。** 部署批准的动态发布合同另含每个工具在 Thread 开始时声明的完整定义（名称、说明、
   输入 schema），与合同的 `tools` 一一对应。Worker 只为当前已有已核实 Owner 手工关联的 Agent，
@@ -4966,7 +4972,7 @@ Playwright 覆盖：
 
 - 申请、撤回、审批、创建、停止、重启和停用。
 - Owner、范围、每日完整企微目录快照及账号禁用；组织变化按最新快照生效且最多延迟一天，LDAP 停用与管理员禁用立即生效。平台对话页、平台托管渠道和平台身份入口须按当前结果撤权，确认撤权后平台中止仍可中止的活跃 Execution。
-- 四个标准模板分别用真实镜像、Driver、Relay 模型链路验证就绪和可申请状态，再验证平台 Web、API 真实任务、企微、模型切换、附件和长任务恢复；Connection 按 [Platform PRD §9](../prd/PRD-agent-platform-M1.md#9-connection-集成) 的模板范围验收；逐一验证实际模型/工具事件和完整 Trace，不以总任务耗时冒充模型耗时。
+- 四个标准模板分别用真实镜像、Driver、Relay 模型链路验证就绪和可申请状态，再验证平台 Web、API 真实任务、企微、模型切换、附件、独立 Connection 和长任务恢复；逐一验证实际模型/工具事件和完整 Trace，不以总任务耗时冒充模型耗时。
 - 标准模板用两名使用者的不同个人 Key 及 Agent 默认 Key 验证 Web/企微、API、Eval 的费用主体；覆盖 Key 缺失、过期、额度不足不回退，模型可见但无权调用，Key 替换后旧执行固定原版本、新执行使用新版本，Relay 撤销、Worker/Pod 重启恢复及跨用户/Agent/Execution 负向隔离。
 - 用户和应用分别 API 创建/启动/停止/重启、提交/查询/订阅/取消任务；无审批且初始授权和 Owner 归属正确，应用不继承责任人权限。审计 API 与基础管理页按条件查询，跨主体和两侧管理员越权拒绝。
 - 同一获授权固定集含回答和受控工具样本，以两组模型或配置真实运行；查看汇总/失败样本、规则/人工/模型评分与独立复核，修订后再跑并保留历史。线上反馈独立汇总，评分失败/缺失不算通过，Eval 内容及真实材料用途授权有负向验证。
