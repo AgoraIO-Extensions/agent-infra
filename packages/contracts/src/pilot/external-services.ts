@@ -4,13 +4,24 @@ export const ExternalServiceId = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/);
 export const ExternalServiceDiscoveryRequest = z.strictObject({
 	id: ExternalServiceId,
 });
+export function externalServiceOrigin(input: string) {
+	const url = new URL(input);
+	if (
+		url.protocol !== "https:" ||
+		url.origin !== input.replace(/\/$/, "") ||
+		!url.hostname.includes(".") ||
+		url.hostname.startsWith("[") ||
+		/^[.\d]+$/.test(url.hostname) ||
+		url.hostname.endsWith(".localhost") ||
+		url.hostname.endsWith(".")
+	)
+		throw Error("Invalid external service origin");
+	return url.origin;
+}
 const revision = z.number().int().positive().max(2147483647);
 export const ExternalServiceCandidate = z.strictObject({
 	id: ExternalServiceId,
-	modelEndpointId: z
-		.string()
-		.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
-		.optional(),
+	modelEndpointId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
 	expectedRevision: revision.or(z.literal(0)),
 	url: z.string().url().max(2048),
 	credential: z.string().regex(/^[\x21-\x7e]{16,8192}$/),

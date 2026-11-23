@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { isIP } from "node:net";
+
 import {
 	ExternalAuthorizations,
-	ExternalServiceCommand,
 	ExternalServiceManifest,
+	externalServiceOrigin,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type { SecretActivationDecryptorPortV1 } from "@agent-infra/platform-core";
@@ -14,47 +14,30 @@ export function createExternalServiceProbe(
 	decryptor: SecretActivationDecryptorPortV1,
 	transport: typeof fetch = fetch,
 ) {
-	return async (request: Request) => {
-		const body = await request.json().catch(() => null);
-		if (
-			!body ||
-			typeof body !== "object" ||
-			!("command" in body) ||
-			!("actorId" in body)
-		)
-			return new Response(null, { status: 400 });
-		const command = ExternalServiceCommand.safeParse(body?.command);
-		if (
-			!command.success ||
-			typeof body.actorId !== "string" ||
-			!body.actorId.length ||
-			body.actorId.length > 256
-		)
-			return new Response(null, { status: 400 });
-		const { id, revision, action } = command.data;
-		if (action !== "test" && action !== "discover")
-			return new Response(null, { status: 400 });
-		const version =
-			action === "test"
-				? await store.version(id, revision)
-				: await store.active(id);
-		if (!version || version.revision !== revision)
-			return new Response(null, { status: 409 });
-		try {
-			const url = new URL(version.url);
-			const signal = AbortSignal.any([
-				request.signal,
-				AbortSignal.timeout(5000),
-			]);
-			if (
-				url.protocol !== "https:" ||
-				url.origin !== version.url ||
-				isIP(url.hostname) ||
-				url.hostname.startsWith("[") ||
-				!url.hostname.includes(".") ||
-				url.hostname.endsWith(".localhost")
-			)
-				throw new Error();
+	return () =>
+		store.processQuery(async ({ id, revision, action, actorId }, version) => {
+			const signal = AbortSignal.timeout(5000);
+			const url = new URL(externalServiceOrigin(version.url));
+			const manifestPath = new URL("/.well-known/agent-infra-adapter", url);
+			const inspect = (data: unknown) => {
+				const manifest = ExternalServiceManifest.parse(data);
+				if (
+					manifest.instanceId !== id ||
+					!manifest.capabilities.includes("model-authorization")
+				)
+					throw new Error("Incompatible model authorization adapter");
+				return manifest;
+			};
+			inspect(
+				await readJson(
+					await transport(manifestPath, {
+						headers: { accept: "application/json" },
+						signal,
+						redirect: "error",
+						credentials: "omit",
+					}),
+				),
+			);
 			const record = validatePlatformSecretRecordV1(version.credential);
 			const expected = createHash("sha256").update(version.url).digest("hex");
 			if (
@@ -69,7 +52,7 @@ export function createExternalServiceProbe(
 				throw new Error();
 			const decoded = await decryptor.decrypt({
 				encryptedRecord: record,
-				traceId: request.headers.get("x-trace-id") ?? "external-service",
+				traceId: "external-service",
 			});
 			if (decoded.outcome !== "decrypted") throw new Error();
 			try {
@@ -89,7 +72,7 @@ export function createExternalServiceProbe(
 						? {
 								body: JSON.stringify({
 									schemaVersion: 1,
-									subjectId: body.actorId,
+									subjectId: actorId,
 								}),
 							}
 						: {}),
@@ -97,50 +80,48 @@ export function createExternalServiceProbe(
 					credentials: "omit",
 					signal,
 				});
-				if (
-					!response.ok ||
-					response.redirected ||
-					!response.body ||
-					!/^application\/json\b/i.test(
-						response.headers.get("content-type") ?? "",
-					)
-				) {
-					await response.body?.cancel();
-					throw new Error();
-				}
-				const reader = response.body.getReader();
-				const chunks: Uint8Array[] = [];
-				let size = 0;
-				try {
-					while (true) {
-						const part = await reader.read();
-						if (part.done) break;
-						size += part.value.length;
-						if (size > 65536) throw new Error();
-						chunks.push(part.value);
-					}
-				} finally {
-					await reader.cancel().catch(() => {});
-				}
-				const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+				const data = await readJson(response);
 				if (action === "test") {
-					const manifest = ExternalServiceManifest.parse(data);
-					if (manifest.instanceId !== id) throw new Error();
-					return Response.json({ revision, manifest });
+					const manifest = inspect(data);
+					return { revision, manifest };
 				}
 				const discovery = ExternalAuthorizations.parse(data);
 				if (
 					discovery.instanceId !== id ||
-					discovery.subjectId !== body.actorId ||
+					discovery.subjectId !== actorId ||
 					JSON.stringify(discovery).includes(credential)
 				)
 					throw new Error();
-				return Response.json({ revision, discovery });
+				return { revision, discovery };
 			} finally {
 				decoded.plaintext.fill(0);
 			}
-		} catch {
-			return new Response(null, { status: 502 });
+		});
+}
+
+async function readJson(response: Response): Promise<unknown> {
+	if (
+		!response.ok ||
+		response.redirected ||
+		!response.body ||
+		!/^application\/json\b/i.test(response.headers.get("content-type") ?? "")
+	) {
+		await response.body?.cancel();
+		throw new Error();
+	}
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const part = await reader.read();
+			if (part.done) break;
+			size += part.value.length;
+			if (size > 65536) throw new Error();
+			chunks.push(part.value);
 		}
-	};
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }

@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+	type ExternalServiceCommand,
+	ExternalServiceReceipt,
+} from "@agent-infra/contracts/pilot";
 import type { JSONValue, TransactionSql } from "postgres";
 import postgres from "./observed-postgres.js";
 
@@ -114,6 +119,62 @@ export class ExternalServiceStore {
     where id=${id} and revision=${revision} and (${action}='disable' or verified=${revision}) returning id`;
 			if (!changed.length) throw new ExternalServiceConflict();
 			await audit(tx, actor, id, revision, action, true);
+		});
+	}
+	async query(
+		command: ReturnType<typeof ExternalServiceCommand.parse>,
+		actor: Actor,
+		signal: AbortSignal,
+	) {
+		const operationId = randomUUID();
+		const inserted = await this
+			.sql`insert into platform.external_service_queries(operation_id,instance_id,revision,actor_id,action,expires_at)
+    select ${operationId},id,${command.revision},${actor.actorId},${command.action},clock_timestamp()+interval '15 seconds'
+    from platform.external_services where id=${command.id} and (case when ${command.action}='test' then revision else active end)=${command.revision} for share`;
+		if (!inserted.count) throw new ExternalServiceConflict();
+		const deadline = AbortSignal.any([signal, AbortSignal.timeout(14000)]);
+		for (;;) {
+			await delay(150, undefined, { signal: deadline });
+			const [row] = await this.sql<
+				{ receipt: unknown }[]
+			>`delete from platform.external_service_queries where operation_id=${operationId} and actor_id=${actor.actorId} and receipt is not null returning receipt`;
+			if (row) return ExternalServiceReceipt.parse(row.receipt);
+		}
+	}
+	async processQuery(
+		run: (
+			command: {
+				id: string;
+				revision: number;
+				actorId: string;
+				action: string;
+			},
+			version: Version,
+		) => Promise<unknown>,
+	) {
+		await this.sql.begin(async (tx) => {
+			await tx`delete from platform.external_service_queries where expires_at < clock_timestamp()`;
+			const [job] = await tx<
+				{
+					operationId: string;
+					id: string;
+					actorId: string;
+					revision: number;
+					action: string;
+				}[]
+			>`select operation_id as "operationId",instance_id as id,actor_id as "actorId",revision,action from platform.external_service_queries where receipt is null and expires_at>clock_timestamp() order by expires_at limit 1 for update skip locked`;
+			if (!job) return;
+			const [version] = await tx<
+				Version[]
+			>`select * from platform.external_service_versions where id=${job.id} and revision=${job.revision}`;
+			let receipt: unknown = null;
+			try {
+				if (!version) throw new Error();
+				receipt = ExternalServiceReceipt.parse(await run(job, version));
+			} catch {
+				receipt = { failed: true };
+			}
+			await tx`update platform.external_service_queries set receipt=${tx.json(receipt as JSONValue)} where operation_id=${job.operationId}`;
 		});
 	}
 	async denied(actor: Actor) {

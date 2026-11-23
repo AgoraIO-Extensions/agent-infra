@@ -481,6 +481,8 @@ describe("personal credential disable authority append", () => {
 			expectedData.conversation_executions.map((row) => ({
 				...(row as Record<string, unknown>),
 				terminal_observed_at: null,
+				external_service_id: null,
+				external_service_revision: null,
 			}));
 		expect(withoutTypedPrincipal(after.data)).toEqual(expectedData);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });

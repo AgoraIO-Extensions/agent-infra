@@ -141,8 +141,6 @@ export const conversationExecutions = platformSchema.table(
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
 		executionSource: text("execution_source"),
-		externalServiceId: text("external_service_id"),
-		externalServiceRevision: integer("external_service_revision"),
 		relayKeyPurpose: text("relay_key_purpose"),
 		relayKeySubjectId: text("relay_key_subject_id"),
 		relayKeyId: text("relay_key_id"),
@@ -165,6 +163,8 @@ export const conversationExecutions = platformSchema.table(
 		terminalObservedAt: timestamp("terminal_observed_at", {
 			withTimezone: true,
 		}),
+		externalServiceId: text("external_service_id"),
+		externalServiceRevision: integer("external_service_revision"),
 	},
 	(table) => [
 		foreignKey({

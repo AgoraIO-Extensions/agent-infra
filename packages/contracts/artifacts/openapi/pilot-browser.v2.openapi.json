@@ -21586,6 +21586,7 @@
                 },
                 "required": [
                   "id",
+                  "modelEndpointId",
                   "expectedRevision",
                   "url",
                   "credential"

@@ -2265,6 +2265,7 @@ describe("published Relay authority migration", () => {
 			95,
 			96,
 			97,
+			98,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2398,9 +2399,13 @@ describe("published Relay authority migration", () => {
 			idx: 96,
 			tag: "0096_connection_principal_pin_rules",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 97)).toMatchObject({
 			idx: 97,
 			tag: "0097_runtime_safety_evidence",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 98,
+			tag: "0098_external_services",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -3163,6 +3168,38 @@ describe("published Relay authority migration", () => {
 			expectedDelta.indexes.push(
 				"session_sandbox_executor_promotions:session_sandbox_executor_promotion_unique",
 				"session_sandbox_executor_promotions:session_sandbox_executor_promotions_pkey",
+			);
+			// 0098: provider configuration, discovery outbox and admission binding.
+			expectedDelta.columns.push(
+				"conversation_executions:external_service_id",
+				"conversation_executions:external_service_revision",
+				...["id", "revision", "url", "credential"].map(
+					(name) => `external_service_versions:${name}`,
+				),
+				...[
+					"id",
+					"revision",
+					"active",
+					"verified",
+					"model_endpoint_id",
+					"enabled_once",
+				].map((name) => `external_services:${name}`),
+				...[
+					"operation_id",
+					"actor_id",
+					"instance_id",
+					"revision",
+					"action",
+					"expires_at",
+					"receipt",
+				].map((name) => `external_service_queries:${name}`),
+			);
+			expectedDelta.indexes.push(
+				"external_service_queries:external_service_queries_expiry",
+				"external_service_queries:external_service_queries_pkey",
+				"external_service_versions:external_service_versions_id_revision_pk",
+				"external_services:external_services_model_endpoint_id_unique",
+				"external_services:external_services_pkey",
 			);
 			// 0097: append-only Runtime safety evidence (#4358 I1, Spec §18.5.1).
 			expectedDelta.columns.push(

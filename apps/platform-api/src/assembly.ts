@@ -1550,7 +1550,6 @@ export function assemblePlatformApi(
 					externalServices: {
 						store: externalStore,
 						encryptor: input.externalServiceEncryptor,
-						worker: input.savedKeyCandidates,
 					},
 				}
 			: {}),

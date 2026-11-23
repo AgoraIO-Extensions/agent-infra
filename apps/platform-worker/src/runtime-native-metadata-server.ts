@@ -59,8 +59,7 @@ export function composePlatformWorkerInternalGatewayServerOptionsV1(options: {
 			async fetch(request) {
 				const pathname = new URL(request.url).pathname;
 				if (
-					(pathname === "/internal/worker/v1/saved-key-candidates" ||
-						pathname === "/internal/worker/v1/external-service") &&
+					pathname === "/internal/worker/v1/saved-key-candidates" &&
 					savedKeyCandidates
 				)
 					return savedKeyCandidates.app.fetch(request);

@@ -13,6 +13,11 @@ import {
 	NativeSelectOption,
 } from "../../components/ui/native-select";
 import { useApplicationSession } from "../../features/application-shell";
+import {
+	listExternalServicesV2,
+	manageExternalServiceV2,
+	saveExternalServiceCandidateV2,
+} from "../../pilot/generated-v2";
 
 export const Route = createFileRoute("/admin/external-services")({
 	component: ExternalServicesPage,
@@ -30,28 +35,19 @@ function ExternalServicesPage() {
 		</main>
 	);
 }
-const path = "/api/v2/admin/external-services";
-async function request(suffix: string, body?: object) {
-	const response = await fetch(path + suffix, {
-		method: body ? "POST" : "GET",
-		credentials: "same-origin",
-		cache: "no-store",
-		...(body
-			? {
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify(body),
-				}
-			: {}),
-	});
-	if (!response.ok)
+async function readResult(
+	result: Promise<{ data?: unknown; response?: Response }>,
+) {
+	const { response, data } = await result;
+	if (!response?.ok)
 		throw Error(
-			response.status === 409
+			response?.status === 409
 				? "配置版本已改变，请刷新后重试。"
-				: response.status === 403
+				: response?.status === 403
 					? "需要系统管理员权限。"
 					: "请求失败，请核对地址、凭据及服务状态。",
 		);
-	return response.json();
+	return data;
 }
 function ServiceSettings() {
 	const [snapshot, setSnapshot] =
@@ -64,7 +60,10 @@ function ServiceSettings() {
 	const [busy, setBusy] = useState(false);
 	const selected = snapshot?.services.find((item) => item.id === id);
 	const refresh = useCallback(
-		async () => setSnapshot(ExternalServiceView.parse(await request(""))),
+		async () =>
+			setSnapshot(
+				ExternalServiceView.parse(await readResult(listExternalServicesV2())),
+			),
 		[],
 	);
 	useEffect(() => {
@@ -79,19 +78,27 @@ function ServiceSettings() {
 			const revision = selected?.revision ?? 0;
 			const result = ExternalServiceReceipt.parse(
 				type === "save"
-					? await request("", {
-							id,
-							expectedRevision: revision,
-							url,
-							credential,
-							modelEndpointId:
-								selected?.modelEndpointId ?? (endpoint || undefined),
-						})
-					: await request("/commands", {
-							id,
-							revision: type === "discover" ? selected?.active : revision,
-							action: type,
-						}),
+					? await readResult(
+							saveExternalServiceCandidateV2({
+								body: {
+									id,
+									expectedRevision: revision,
+									url,
+									credential,
+									modelEndpointId: selected?.modelEndpointId ?? endpoint,
+								},
+							}),
+						)
+					: await readResult(
+							manageExternalServiceV2({
+								body: {
+									id,
+									revision:
+										type === "discover" ? (selected?.active ?? 0) : revision,
+									action: type,
+								},
+							}),
+						),
 			);
 			if (type === "save") setCredential("");
 			setMessage(
@@ -158,7 +165,7 @@ function ServiceSettings() {
 					/>
 				</Label>
 				<Label htmlFor="external-service-endpoint">
-					关联的模型端点 ID（可选，登记后固定）
+					关联的模型端点 ID（登记后固定）
 					<Input
 						id="external-service-endpoint"
 						value={selected?.modelEndpointId ?? endpoint}
@@ -192,7 +199,14 @@ function ServiceSettings() {
 					/>
 				</Label>
 				<Button
-					disabled={!snapshot || busy || !id || !url || !credential}
+					disabled={
+						!snapshot ||
+						busy ||
+						!id ||
+						!(selected?.modelEndpointId ?? endpoint) ||
+						!url ||
+						!credential
+					}
 					onClick={() => void action("save")}
 				>
 					保存候选配置

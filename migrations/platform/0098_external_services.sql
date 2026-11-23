@@ -1,3 +1,13 @@
+CREATE TABLE "platform"."external_service_queries" (
+	"operation_id" text PRIMARY KEY NOT NULL,
+	"actor_id" text NOT NULL,
+	"instance_id" text NOT NULL,
+	"revision" integer NOT NULL,
+	"action" text NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"receipt" jsonb
+);
+--> statement-breakpoint
 CREATE TABLE "platform"."external_service_versions" (
 	"id" text NOT NULL,
 	"revision" integer NOT NULL,
@@ -19,6 +29,7 @@ CREATE TABLE "platform"."external_services" (
 ALTER TABLE "platform"."conversation_executions" ADD COLUMN "external_service_id" text;--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" ADD COLUMN "external_service_revision" integer;--> statement-breakpoint
 ALTER TABLE "platform"."external_service_versions" ADD CONSTRAINT "external_service_versions_id_external_services_id_fk" FOREIGN KEY ("id") REFERENCES "platform"."external_services"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "external_service_queries_expiry" ON "platform"."external_service_queries" USING btree ("expires_at");--> statement-breakpoint
 ALTER TABLE "platform"."conversation_executions" ADD CONSTRAINT "execution_external_service_version_fk" FOREIGN KEY ("external_service_id","external_service_revision") REFERENCES "platform"."external_service_versions"("id","revision") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 -- Bind at admission, under the same transaction as the Execution and outbox.

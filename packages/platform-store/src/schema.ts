@@ -46,6 +46,7 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
+	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
 } from "./schema-external-services";
@@ -73,6 +74,7 @@ import {
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 
 export {
+	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
 } from "./schema-external-services";
@@ -303,6 +305,7 @@ export const platformInfrastructureTables = [
 	workspaceSnapshots,
 	workspaceSnapshotBindings,
 	workspaceSnapshotUploadAdmissions,
+	externalServiceQueries,
 	externalServices,
 	externalServiceVersions,
 	runtimeSafetyEvidence,

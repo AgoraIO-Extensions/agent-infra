@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import { expect, it } from "vitest";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import { createExternalServiceProbe } from "../../platform-worker/src/external-service-probe.js";
-import { createWorkerSavedKeyCandidatesApp } from "../../platform-worker/src/saved-key-candidates-service.js";
+
 import { HttpProtocolError } from "./http/common.js";
 import { registerExternalServiceRoutes } from "./http/external-service-routes.js";
 
@@ -52,9 +52,14 @@ async function provider(name: string) {
 	const credential = randomUUID();
 	const calls: string[] = [];
 	let valid = true;
+	let foreign = false;
 	const server = createServer(async (req, res) => {
 		calls.push(req.url ?? "");
-		if (req.headers.authorization !== `Bearer ${credential}`) {
+		if (
+			(req.url !== "/.well-known/agent-infra-adapter" ||
+				req.headers.authorization) &&
+			req.headers.authorization !== `Bearer ${credential}`
+		) {
 			res.writeHead(403).end();
 			return;
 		}
@@ -76,7 +81,7 @@ async function provider(name: string) {
 			JSON.stringify({
 				schemaVersion: 1,
 				instanceId: "relay",
-				subjectId,
+				subjectId: foreign ? "other-user" : subjectId,
 				items: [{ ref: name, displayName: name }],
 			}),
 		);
@@ -91,6 +96,9 @@ async function provider(name: string) {
 		calls,
 		origin: `https://${name}.example.test`,
 		local: `http://127.0.0.1:${address.port}`,
+		foreign: (value: boolean) => {
+			foreign = value;
+		},
 		valid: (value: boolean) => {
 			valid = value;
 		},
@@ -105,25 +113,13 @@ it("routes employee discovery to the verified provider across cutover and compon
 	const a = await provider("a");
 	const b = await provider("b");
 	let store = new ExternalServiceStore(db.databaseUrl);
-	const serviceToken = randomUUID();
+	let worker: ReturnType<typeof createExternalServiceProbe>;
 	function assemble() {
-		const worker = createWorkerSavedKeyCandidatesApp({
-			serviceToken,
-			reader: {
-				read: async () => {
-					throw Error();
-				},
-			},
-			externalService: createExternalServiceProbe(
-				store,
-				decryptor,
-				(input, init) => {
-					const url = new URL(String(input));
-					const target = [a, b].find((p) => p.origin === url.origin);
-					if (!target) throw Error("unexpected destination");
-					return fetch(new URL(url.pathname, target.local), init);
-				},
-			),
+		worker = createExternalServiceProbe(store, decryptor, (input, init) => {
+			const url = new URL(String(input));
+			const target = [a, b].find((p) => p.origin === url.origin);
+			if (!target) throw Error("unexpected destination");
+			return fetch(new URL(url.pathname, target.local), init);
 		});
 		const app = new Hono();
 		app.onError((error, c) =>
@@ -151,16 +147,21 @@ it("routes employee discovery to the verified provider across cutover and compon
 			{
 				store,
 				encryptor,
-				worker: {
-					baseUrl: "http://worker",
-					serviceToken,
-					fetch: (input, init) => worker.fetch(new Request(input, init)),
-				},
 			},
 		);
 		return app;
 	}
 	let app = assemble();
+	let pending: Promise<void> | undefined;
+	let timer: ReturnType<typeof setInterval> | undefined;
+	function start() {
+		return setInterval(() => {
+			if (!pending)
+				pending = worker().finally(() => {
+					pending = undefined;
+				});
+		}, 30);
+	}
 	const path = "/api/v2/admin/external-services";
 	const call = (url: string, body?: object, admin = true) =>
 		app.request(url, {
@@ -179,11 +180,13 @@ it("routes employee discovery to the verified provider across cutover and compon
 			url: target.origin,
 			credential: target.credential,
 			expectedRevision,
+			modelEndpointId: "fixture-endpoint",
 		});
 	const discover = () =>
 		call("/api/v2/me/external-service-authorizations", { id: "relay" }, false);
 	try {
 		await migratePlatformDatabase({ databaseUrl: db.databaseUrl });
+		timer = start();
 		expect((await call(path, undefined, false)).status).toBe(403);
 		expect((await call(path, { id: "relay" }, false)).status).toBe(403);
 		expect((await save(0, a)).status).toBe(200);
@@ -201,9 +204,12 @@ it("routes employee discovery to the verified provider across cutover and compon
 		b.valid(true);
 		expect((await command(2, "test")).status).toBe(200);
 		expect((await command(2, "enable")).status).toBe(200);
+		clearInterval(timer);
+		await pending;
 		await store.close();
 		store = new ExternalServiceStore(db.databaseUrl);
 		app = assemble();
+		timer = start();
 		expect(await (await discover()).json()).toMatchObject({
 			revision: 2,
 			discovery: { subjectId: "employee", items: [{ ref: "b" }] },
@@ -214,6 +220,17 @@ it("routes employee discovery to the verified provider across cutover and compon
 		expect(
 			b.calls.filter((p) => p === "/v1/model-authorizations"),
 		).toHaveLength(1);
+		b.foreign(true);
+		expect((await discover()).status).toBe(503);
+		expect(
+			(
+				await call(
+					"/api/v2/me/external-service-authorizations",
+					{ id: "relay", subjectId: "other-user" },
+					false,
+				)
+			).status,
+		).toBe(400);
 		expect((await command(2, "disable")).status).toBe(200);
 		expect((await discover()).status).toBe(409);
 		const view = await (await call(path)).text();
@@ -221,6 +238,8 @@ it("routes employee discovery to the verified provider across cutover and compon
 		expect(view).not.toContain(a.credential);
 		expect(view).not.toContain(b.credential);
 	} finally {
+		clearInterval(timer);
+		await pending;
 		await Promise.all([a.close(), b.close(), store.close()]);
 		await db.stop();
 	}

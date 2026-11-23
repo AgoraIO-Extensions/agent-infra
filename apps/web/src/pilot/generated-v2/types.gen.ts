@@ -4216,7 +4216,7 @@ export type SaveExternalServiceCandidateV2Data = {
         credential: string;
         expectedRevision: number | 0;
         id: string;
-        modelEndpointId?: string;
+        modelEndpointId: string;
         url: string;
     };
     path?: never;

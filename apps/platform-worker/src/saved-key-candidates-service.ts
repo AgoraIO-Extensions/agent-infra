@@ -29,7 +29,6 @@ export interface WorkerSavedKeyCandidatesReaderV1 {
 export function createWorkerSavedKeyCandidatesApp(options: {
 	readonly serviceToken: string;
 	readonly reader: WorkerSavedKeyCandidatesReaderV1;
-	readonly externalService?: (request: Request) => Promise<Response>;
 }) {
 	if (
 		!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken) ||
@@ -39,13 +38,7 @@ export function createWorkerSavedKeyCandidatesApp(options: {
 	return {
 		async fetch(request: Request) {
 			const url = new URL(request.url);
-			const external =
-				options.externalService &&
-				url.pathname === "/internal/worker/v1/external-service";
-			if (
-				!external &&
-				url.pathname !== "/internal/worker/v1/saved-key-candidates"
-			)
+			if (url.pathname !== "/internal/worker/v1/saved-key-candidates")
 				return new Response(null, { status: 404 });
 			if (
 				!authorized(
@@ -58,8 +51,6 @@ export function createWorkerSavedKeyCandidatesApp(options: {
 					{ status: 401 },
 				);
 			if (request.method !== "POST") return new Response(null, { status: 405 });
-			if (external && options.externalService)
-				return options.externalService(request);
 			const raw = await request.json().catch(() => undefined);
 			const parsed = RuntimeSavedKeyCandidatesRequestV1Schema.safeParse(raw);
 			if (!parsed.success)

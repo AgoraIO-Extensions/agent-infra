@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { isIP } from "node:net";
+
 import {
 	ExternalServiceCandidate,
 	ExternalServiceCommand,
 	ExternalServiceDiscoveryRequest,
-	ExternalServiceReceipt,
+	type ExternalServiceReceipt,
 	ExternalServiceView,
+	externalServiceOrigin,
 } from "@agent-infra/contracts/pilot";
 import {
 	ExternalServiceConflict,
@@ -19,7 +20,6 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface ExternalServiceAdmin {
 	store: ExternalServiceStore;
 	encryptor: SecretEncryptorV1;
-	worker?: { baseUrl: string; serviceToken: string; fetch?: typeof fetch };
 }
 export function registerExternalServiceRoutes(
 	app: Hono,
@@ -32,33 +32,7 @@ export function registerExternalServiceRoutes(
 		actor: { actorId: string; traceId: string },
 		signal: AbortSignal,
 	) {
-		if (!admin.worker) throw new Error();
-		const base = new URL(admin.worker.baseUrl);
-		if (
-			base.protocol !== "http:" ||
-			base.username ||
-			base.password ||
-			base.pathname !== "/" ||
-			base.search ||
-			base.hash
-		)
-			throw new Error();
-		const response = await (admin.worker.fetch ?? fetch)(
-			new URL("/internal/worker/v1/external-service", base),
-			{
-				method: "POST",
-				redirect: "error",
-				headers: {
-					authorization: `Bearer ${admin.worker.serviceToken}`,
-					"content-type": "application/json",
-					"x-trace-id": actor.traceId,
-				},
-				body: JSON.stringify({ actorId: actor.actorId, command: value }),
-				signal: AbortSignal.any([signal, AbortSignal.timeout(7000)]),
-			},
-		);
-		if (!response.ok) throw new Error();
-		const receipt = ExternalServiceReceipt.parse(await response.json());
+		const receipt = await admin.store.query(value, actor, signal);
 		if (
 			receipt.revision !== value.revision ||
 			(value.action === "test"
@@ -118,21 +92,17 @@ export function registerExternalServiceRoutes(
 			ExternalServiceCandidate,
 			actor.traceId,
 		);
-		const url = new URL(value.url);
-		if (
-			url.protocol !== "https:" ||
-			url.origin !== value.url.replace(/\/$/, "") ||
-			isIP(url.hostname) ||
-			url.hostname.startsWith("[") ||
-			url.hostname === "localhost" ||
-			url.hostname.endsWith(".localhost")
-		)
+		let origin: string;
+		try {
+			origin = externalServiceOrigin(value.url);
+		} catch {
 			throw new HttpProtocolError("INVALID_REQUEST", actor.traceId);
+		}
 		try {
 			const revision = await admin.store.candidate(
 				value.id,
 				value.expectedRevision,
-				url.origin,
+				origin,
 				(version) =>
 					admin.encryptor.encrypt({
 						schemaVersion: 1,
@@ -140,7 +110,7 @@ export function registerExternalServiceRoutes(
 						ownerId: value.id,
 						agentId: value.id,
 						name: "adapter-credential",
-						secretId: createHash("sha256").update(url.origin).digest("hex"),
+						secretId: createHash("sha256").update(origin).digest("hex"),
 						secretVersion: version,
 						configRevision: version,
 						plaintext: value.credential,
