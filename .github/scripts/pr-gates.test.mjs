@@ -31,6 +31,39 @@ function gateFixture() {
   return { pr, event, calls, request, repository: "example/repo" };
 }
 
+function claimedGateFixture() {
+  const fixture = gateFixture();
+  fixture.pr.body = [
+    "Refs #42",
+    "",
+    "<!-- agent-provenance:start -->",
+    "Agent: codex",
+    "Agent-Session-ID: session-alpha",
+    "<!-- agent-provenance:end -->",
+  ].join("\n");
+  fixture.pr.labels = [{ name: "agent:codex" }];
+  fixture.issue = {
+    number: 42,
+    state: "open",
+    labels: [],
+    created_at: "2026-10-01T00:00:00Z",
+    body: fixture.pr.body,
+  };
+  const comments = [];
+  fixture.request = async (apiPath, options = {}) => {
+    fixture.calls.push({ apiPath, ...options });
+    if (apiPath === "/repos/example/repo/pulls/7") return structuredClone(fixture.pr);
+    if (apiPath === "/repos/example/repo/issues/42") return structuredClone(fixture.issue);
+    if (apiPath.startsWith("/repos/example/repo/issues/42/comments")) {
+      const page = Number(new URL(`https://example.test${apiPath}`).searchParams.get("page"));
+      return page === 1 ? comments.slice(0, 100) : comments.slice(100, 200);
+    }
+    throw new Error(`Unexpected request: ${apiPath}`);
+  };
+  fixture.comments = comments;
+  return fixture;
+}
+
 test("the native Issue job reads the live primary Issue and rejects missing references", async () => {
   const fixture = gateFixture();
   assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
@@ -151,4 +184,102 @@ test("Issue Gate rejects a wontfix Issue", () => {
     }).ok,
     false,
   );
+});
+
+test("agent PR must match the Issue provenance claim exactly", async () => {
+  const fixture = claimedGateFixture();
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  fixture.pr.body = fixture.pr.body.replace("session-alpha", "Session-Alpha");
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+});
+
+test("an Issue without provenance starts unclaimed and accepts Handoff-From none", async () => {
+  const fixture = claimedGateFixture();
+  fixture.issue.body = "Problem\nNo provenance";
+  fixture.comments.push({
+    created_at: "2026-10-03T00:00:00Z",
+    updated_at: "2026-10-03T00:00:00Z",
+    author_association: "COLLABORATOR",
+    body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-alpha\nHandoff-From: none\n<!-- agent-claim:end -->",
+  });
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+});
+
+test("valid handoffs replace the claim and stale or malformed handoffs do not", async () => {
+  const fixture = claimedGateFixture();
+  fixture.comments.push(
+    {
+      created_at: "2026-10-02T00:00:00Z",
+      updated_at: "2026-10-02T00:00:00Z",
+      author_association: "MEMBER",
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: malformed\nHandoff-From: session-alpha\n<!-- agent-claim:end -->\n<!-- agent-claim:start -->\nClaimed-By-Session: duplicate\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+    },
+    {
+      created_at: "2026-10-02T12:00:00Z",
+      updated_at: "2026-10-02T12:00:00Z",
+      author_association: "NONE",
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: unauthorized\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+    },
+    {
+      created_at: "2026-10-03T00:00:00Z",
+      updated_at: "2026-10-03T00:00:00Z",
+      author_association: "MEMBER",
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-beta\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+    },
+    {
+      created_at: "2026-10-04T00:00:00Z",
+      updated_at: "2026-10-04T00:00:01Z",
+      author_association: "OWNER",
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-gamma\nHandoff-From: session-beta\n<!-- agent-claim:end -->",
+    },
+    {
+      created_at: "2026-10-05T00:00:00Z",
+      updated_at: "2026-10-05T00:00:00Z",
+      author_association: "OWNER",
+      body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-delta\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+    },
+  );
+  fixture.pr.body = fixture.pr.body.replace("session-alpha", "session-beta");
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  fixture.pr.body = fixture.pr.body.replace("session-beta", "session-gamma");
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, false);
+});
+
+test("claim comments require valid association and paginate", async () => {
+  const fixture = claimedGateFixture();
+  for (let index = 0; index < 100; index += 1) {
+    fixture.comments.push({
+      created_at: `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      updated_at: `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      author_association: "NONE",
+      body: "noise",
+    });
+  }
+  fixture.comments.push({
+    created_at: "2026-12-01T00:00:00Z",
+    updated_at: "2026-12-01T00:00:00Z",
+    author_association: "MEMBER",
+    body: "<!-- agent-claim:start -->\nClaimed-By-Session: session-beta\nHandoff-From: session-alpha\n<!-- agent-claim:end -->",
+  });
+  fixture.pr.body = fixture.pr.body.replace("session-alpha", "session-beta");
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  assert(fixture.calls.some((call) => call.apiPath.includes("page=2")));
+});
+
+test("human PRs skip claim checks and comment API failures fail closed", async () => {
+  const fixture = claimedGateFixture();
+  fixture.pr.labels = [];
+  fixture.request = async (apiPath) => {
+    if (apiPath.includes("/pulls/7")) return structuredClone(fixture.pr);
+    if (apiPath.includes("/issues/42")) return structuredClone(fixture.issue);
+    throw new Error("comments must not be read for human PRs");
+  };
+  assert.equal((await runGate({ ...fixture, mode: "issue" })).ok, true);
+  const failing = claimedGateFixture();
+  const original = failing.request;
+  failing.request = async (apiPath, options) => {
+    if (apiPath.includes("comments")) throw new Error("API down");
+    return original(apiPath, options);
+  };
+  await assert.rejects(runGate({ ...failing, mode: "issue" }), /API down/);
 });

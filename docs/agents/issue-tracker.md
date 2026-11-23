@@ -4,6 +4,9 @@
 
 ## Conventions
 
+Issue 认领、交接块和带 `agent:*` PR 的 Gate 约束统一见
+[工作流 Spec §5.3](../architecture/SPEC-ai-native-development-workflow.md#53-issue-认领与交接)。
+
 - 创建：`gh issue create --title "..." --body "..."`
 - 读取：`gh issue view <number> --comments`
 - 列出：`gh issue list --state open --json number,title,body,labels,comments`

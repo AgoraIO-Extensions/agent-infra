@@ -54,7 +54,27 @@ Implementation Issue 包含唯一的 `Problem`、`Scope`、`Acceptance criteria`
 本地 Agent 协助；它不触发任何自动执行。`ready-for-human` 用于标记需人工处理或验证的任务。
 标签、Issue 编辑和依赖完成均不会自动创建 branch/PR 或修复代码。
 
-### 5.3 依赖
+### 5.3 Issue 认领与交接
+
+Issue 的当前认领会话默认取正文 provenance 块中的 `Agent-Session-ID`。没有 provenance 块的
+Issue 初始认领为空；第一条有效交接评论必须使用 `Handoff-From: none`。之后按评论创建时间顺序
+应用有效交接，当前认领只有一个会话。会话 ID 逐字比较，不做前缀、大小写或其他归一化。
+
+交接评论必须包含且只能包含一个以下机器可读块，块外写当前状态、在途 PR 和下一步：
+
+```text
+<!-- agent-claim:start -->
+Claimed-By-Session: <新会话 ID>
+Handoff-From: <当前认领会话 ID 或 none>
+<!-- agent-claim:end -->
+```
+
+交接只有在评论作者的 `author_association` 为 `OWNER`、`MEMBER` 或 `COLLABORATOR`，评论没有被
+编辑（`updated_at` 等于 `created_at`），块格式合法且 `Handoff-From` 等于当时认领时才生效。
+无效评论不改变认领；认领会话需要并行拆成 GitHub sub-issue。会话 ID 仅作追踪标识，不得包含
+凭证或会话正文。
+
+### 5.4 依赖
 
 GitHub native issue dependencies 是依赖权威，正文 `Blocked by` 作为投影。负责人和本地 Agent
 维护依赖，确认前置任务完成后再开始实现；不再运行后台依赖图协调器或恢复授权。
@@ -88,12 +108,15 @@ Issue。文档和普通代码 PR 使用同一规则。
 | 原生 job / required check | 条件 |
 | --- | --- |
 | `CI` | 确定性构建、静态检查和测试通过，或按 §7.2.1 明确豁免 |
-| `Issue Gate` | 唯一主 Issue 存在、非 wontfix，创建时间早于 PR |
+| `Issue Gate` | 唯一主 Issue 存在、非 wontfix，创建时间早于 PR；带 `agent:*` 标签的 PR 还必须使正文 provenance 的 `Agent-Session-ID` 与主 Issue 当前认领会话逐字一致 |
 
 `ready-for-human` 仅作为需要人工处理或验证的 label，不生成 required check，也不阻塞合并。
 
 Issue Gate 在 PR 的 opened、reopened、synchronize、edited 和 ready_for_review 事件运行；CI
 按自身 workflow 事件运行。
+
+Issue Gate 的认领检查读取主 Issue 评论的全部分页；交接评论读取失败时 fail closed。认领不一致时
+失败描述只说明当前会话和交接方法，不输出评论正文。没有 `agent:*` 标签的人工 PR 跳过认领检查。
 取消 Issue 事件派发、定时巡检和额外汇总 job。检查读取实时 PR，若已不是触发时的 head 则失败，
 不把旧事件的结果当成新 head 的验证。
 
