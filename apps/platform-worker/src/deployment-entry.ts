@@ -94,6 +94,7 @@ import {
 type DeploymentConfiguration = {
 	readonly oidcEmployees?: WecomEmployeeConfiguration;
 	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
+	readonly automaticTemplatePublications?: readonly import("./template-publication-worker.js").WorkerTemplatePublicationV1[];
 	readonly evaluationPolicy?: {
 		data: () => Promise<
 			import("@agent-infra/platform-core").EvaluationPolicyV1
@@ -269,6 +270,7 @@ function resolveConnectionInstallation(
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
 const {
 	sessionSandboxReserves: configuredSessionSandboxReservesFromModule,
+	automaticTemplatePublications,
 	evaluationPolicy,
 	workloadInput: configuredWorkloadInputFromModule,
 	signing,
@@ -950,6 +952,9 @@ async function createPreparedOwning(
 	});
 	const workload = {
 		...productionWorkload,
+		...(automaticTemplatePublications === undefined
+			? {}
+			: { automaticTemplatePublications }),
 		readinessLedger: createWorkloadReadinessLedgerV1(),
 		sessionOwnerSecrets,
 		// Every Pod delivery of the startup-selected Consumer rechecks the current source.

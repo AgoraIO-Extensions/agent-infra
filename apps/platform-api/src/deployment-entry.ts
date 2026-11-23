@@ -36,6 +36,8 @@ import {
 } from "./directory-authority.js";
 import { createProductionPlatformFileDeploymentFromEnvironmentV1 } from "./file-deployment.js";
 import {
+	type AutomaticTemplatePublicationInputV1,
+	createAutomaticTemplatePublicationAppV1,
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
 	createProductionSingleAgentTemplateReleaseAppV1,
@@ -96,6 +98,7 @@ const {
 	providerImport,
 	directorySearch,
 	standardTemplateReleaseInput,
+	automaticTemplatePublication,
 } = await import(configurationModule);
 
 const connectionConsumerRegistration =
@@ -411,7 +414,7 @@ const fileDeployment =
 		resolveActor: (actorId) => browser.resolveCurrentIdentity(actorId),
 	});
 
-function assembleStandardTemplateReleaseApp() {
+function assembleManualStandardTemplateReleaseApp() {
 	if (standardTemplateReleaseInput === undefined) return undefined;
 	if (
 		typeof standardTemplateReleaseInput !== "object" ||
@@ -451,6 +454,37 @@ const employeeWecomAuthority =
 			)
 		: undefined;
 export const browserAuth = browser.browserAuth;
+function assembleStandardTemplateReleaseApp() {
+	const manual = assembleManualStandardTemplateReleaseApp();
+	if (automaticTemplatePublication === undefined) return manual;
+	if (
+		!automaticTemplatePublication ||
+		typeof automaticTemplatePublication.loadBinding !== "function" ||
+		typeof automaticTemplatePublication.resolveAdministrator !== "function" ||
+		!(
+			typeof automaticTemplatePublication.serviceAuthentication?.currentKey ===
+				"function" ||
+			(typeof automaticTemplatePublication.resolveService === "function" &&
+				typeof automaticTemplatePublication.isServiceCurrent === "function")
+		)
+	)
+		throw new Error("PLATFORM_TEMPLATE_PUBLICATION_CONFIGURATION_INVALID");
+	const automatic = createAutomaticTemplatePublicationAppV1({
+		...apiInput,
+		databaseUrl: configuredDatabaseUrl,
+		identity: browser.identity,
+		automaticPublication:
+			automaticTemplatePublication as AutomaticTemplatePublicationInputV1,
+	});
+	if (!manual) return automatic;
+	manual.app.route("/", automatic.app);
+	return {
+		app: manual.app,
+		close: async () => {
+			await Promise.all([manual.close(), automatic.close()]);
+		},
+	};
+}
 export const standardTemplateReleaseApp = assembleStandardTemplateReleaseApp();
 export function createPlatformApiAssemblyInput() {
 	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);

@@ -673,6 +673,13 @@
       "when": 1795443683650,
       "tag": "0099_oidc_logout_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1795453980503,
+      "tag": "0100_template_auto_publications",
+      "breakpoints": true
     }
   ]
 }

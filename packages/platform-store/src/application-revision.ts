@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-
 import type {
 	AgentConfigurationAccessTargetV1,
 	AgentConfigurationRecord,
@@ -43,6 +42,7 @@ import {
 	outboxItems,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
+import { lockTemplatePublicationV1 } from "./template-publication-guards.js";
 
 const scopeType = "agent_application";
 const commandType = "agent.application.revise.v1";
@@ -401,6 +401,8 @@ export class PostgresApplicationRevisionTransactionV1
 			)
 				throw new ApplicationRevisionStoreError();
 			return await this.#database.transaction(async (transaction) => {
+				if (configuration)
+					await lockTemplatePublicationV1(transaction, configuration.source);
 				const [agent] = await transaction
 					.select({
 						configurationRevision: agents.currentConfigurationRevision,

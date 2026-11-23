@@ -55,6 +55,10 @@ import {
 	platformUserDisables,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
+import {
+	assertTemplatePublicationSourceV1,
+	lockTemplatePublicationV1,
+} from "./template-publication-guards.js";
 import { insertWorkspaceSnapshotBindingsV1 } from "./workspace-snapshot-binding-writes.js";
 
 export interface PostgresApplicationFoundationOptions {
@@ -339,6 +343,8 @@ async function persistApplicationFoundationRowsV1(
 	attachments?: PendingSecretRecordAttachmentsV1,
 	defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
 ) {
+	await lockTemplatePublicationV1(transaction, configuration.source);
+	await assertTemplatePublicationSourceV1(transaction, configuration.source);
 	await transaction.insert(agents).values({
 		id: plan.agent.agentId,
 		currentConfigurationRevision: plan.agent.currentConfigurationRevision,

@@ -1,0 +1,1252 @@
+{
+  "info": {
+    "title": "Deployment-owned automatic template publication",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/internal/ops/standard-template-releases/{publicationId}/activate-automatic": {
+      "post": {
+        "operationId": "templatePublicationV1_activate_automatic",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "counts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applied": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "unknown": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "unknown",
+                        "applied",
+                        "rejected"
+                      ],
+                      "type": "object"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9._~:-]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~-]+$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "prepared",
+                        "active",
+                        "partial",
+                        "blocked",
+                        "completed",
+                        "revoked",
+                        "superseded"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "attempt": {
+                            "maximum": 2147483647,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "batchRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "unknown",
+                              "applied",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
+                          "targetRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "batchRef",
+                          "attempt",
+                          "targetRef",
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "publicationId",
+                    "status",
+                    "counts",
+                    "targets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Persisted publication progress, not Workload readiness"
+          }
+        },
+        "summary": "Deployment-bound template publication: activate-automatic"
+      }
+    },
+    "/internal/ops/standard-template-releases/{publicationId}/prepare-automatic": {
+      "post": {
+        "operationId": "templatePublicationV1_prepare_automatic",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "counts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applied": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "unknown": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "unknown",
+                        "applied",
+                        "rejected"
+                      ],
+                      "type": "object"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9._~:-]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~-]+$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "prepared",
+                        "active",
+                        "partial",
+                        "blocked",
+                        "completed",
+                        "revoked",
+                        "superseded"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "attempt": {
+                            "maximum": 2147483647,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "batchRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "unknown",
+                              "applied",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
+                          "targetRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "batchRef",
+                          "attempt",
+                          "targetRef",
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "publicationId",
+                    "status",
+                    "counts",
+                    "targets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Persisted publication progress, not Workload readiness"
+          }
+        },
+        "summary": "Deployment-bound template publication: prepare-automatic"
+      }
+    },
+    "/internal/ops/standard-template-releases/{publicationId}/revoke-automatic": {
+      "post": {
+        "operationId": "templatePublicationV1_revoke_automatic",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "counts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applied": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "unknown": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "unknown",
+                        "applied",
+                        "rejected"
+                      ],
+                      "type": "object"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9._~:-]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~-]+$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "prepared",
+                        "active",
+                        "partial",
+                        "blocked",
+                        "completed",
+                        "revoked",
+                        "superseded"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "attempt": {
+                            "maximum": 2147483647,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "batchRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "unknown",
+                              "applied",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
+                          "targetRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "batchRef",
+                          "attempt",
+                          "targetRef",
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "publicationId",
+                    "status",
+                    "counts",
+                    "targets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Persisted publication progress, not Workload readiness"
+          }
+        },
+        "summary": "Deployment-bound template publication: revoke-automatic"
+      }
+    },
+    "/internal/ops/standard-template-releases/{publicationId}/run-automatic": {
+      "post": {
+        "operationId": "templatePublicationV1_run_automatic",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "deliveryFence": {
+                    "pattern": "^[1-9][0-9]{0,18}$",
+                    "type": "string"
+                  },
+                  "itemId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "leaseOwner": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._~:-]+$",
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "itemId",
+                  "leaseOwner",
+                  "deliveryFence"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "counts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applied": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "unknown": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "unknown",
+                        "applied",
+                        "rejected"
+                      ],
+                      "type": "object"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9._~:-]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~-]+$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "prepared",
+                        "active",
+                        "partial",
+                        "blocked",
+                        "completed",
+                        "revoked",
+                        "superseded"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "attempt": {
+                            "maximum": 2147483647,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "batchRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "unknown",
+                              "applied",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
+                          "targetRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "batchRef",
+                          "attempt",
+                          "targetRef",
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "publicationId",
+                    "status",
+                    "counts",
+                    "targets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Persisted publication progress, not Workload readiness"
+          }
+        },
+        "summary": "Deployment-bound template publication: run-automatic"
+      }
+    },
+    "/internal/ops/standard-template-releases/{publicationId}/status-automatic": {
+      "get": {
+        "operationId": "readAutomaticTemplatePublicationV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "pattern": "^target-[a-f0-9]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "counts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applied": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "unknown": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "unknown",
+                        "applied",
+                        "rejected"
+                      ],
+                      "type": "object"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9._~:-]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~-]+$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "prepared",
+                        "active",
+                        "partial",
+                        "blocked",
+                        "completed",
+                        "revoked",
+                        "superseded"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "attempt": {
+                            "maximum": 2147483647,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "batchRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "unknown",
+                              "applied",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
+                          "targetRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "batchRef",
+                          "attempt",
+                          "targetRef",
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "publicationId",
+                    "status",
+                    "counts",
+                    "targets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Counts cover each Agent latest attempt; targets retain bounded original attempt history"
+          }
+        },
+        "summary": "Read bounded publication history with current operator or service authorization"
+      }
+    },
+    "/internal/ops/standard-template-releases/{publicationId}/worker-ready": {
+      "post": {
+        "operationId": "templatePublicationV1_worker_ready",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~:-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "catalogRevision": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._~:-]+$",
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "targetImageDigest": {
+                    "pattern": "^sha256:[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "templateId": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._~:-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "catalogRevision",
+                  "templateId",
+                  "targetImageDigest"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "counts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "applied": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "unknown": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "unknown",
+                        "applied",
+                        "rejected"
+                      ],
+                      "type": "object"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9._~:-]+$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "publicationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9._~-]+$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "prepared",
+                        "active",
+                        "partial",
+                        "blocked",
+                        "completed",
+                        "revoked",
+                        "superseded"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "attempt": {
+                            "maximum": 2147483647,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "batchRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "unknown",
+                              "applied",
+                              "rejected"
+                            ],
+                            "type": "string"
+                          },
+                          "targetRef": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9._~:-]+$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "batchRef",
+                          "attempt",
+                          "targetRef",
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "publicationId",
+                    "status",
+                    "counts",
+                    "targets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Persisted publication progress, not Workload readiness"
+          }
+        },
+        "summary": "Deployment-bound template publication: worker-ready"
+      }
+    }
+  }
+}
