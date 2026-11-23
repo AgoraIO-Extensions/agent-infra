@@ -78,5 +78,6 @@ GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
 
 标签遵循 [Issue Tracker](issue-tracker.md#agent-provenance) 与
 [Triage Labels](triage-labels.md)。新建 Issue/PR 显式传入唯一 `agent:*` 来源标签，
-正文 `Agent` 与标签一致并保留 `Agent-Session-ID`；处理其他 Agent 创建的 Issue 保留原来源。
+正文 `Agent` 与标签一致并保留 `Agent-Session-ID`；处理其他 Agent 创建的 Issue 保留原来源，并按
+[工作流 Spec §5.3](../architecture/SPEC-ai-native-development-workflow.md#53-issue-认领与交接) 写交接评论。
 优先级按实际开发顺序设置，标签不替代依赖和权限判断。
