@@ -3884,16 +3884,26 @@ create/lifecycle 摘要域分别为 `platform-agent-consumer-v2`、`platform-age
 Worker 沿原 outbox claim/fence，在同一事务复核原 Agent/Owner/策略及 lease，分配不可复用的关联
 代次，加密保存服务凭据，并提交原登记 receipt。复用现有 `connection_manual_associations` 的密文
 存储及安装供应边界；历史表名保留，自动来源由原 registration 行确定，不伪造手工关联或用户核实。
-自动来源不开放手工替换/解除；原停用生命周期不变。所有安装/供应资格同时核对原注册、Consumer、
+自动来源不开放普通手工替换/解除；原停用生命周期不变。所有安装/供应资格同时核对原注册、Consumer、
 Owner、关联修订及未进入停用；受保护 Host 沿原 EP-1060、逐用户 OAuth 和 TLS-exporter 供应通道处理。
 没有迁移或新增接收服务，不把 Host 安装回执当作 Connection 注册证明。
 
-ACTIVE/APPLIED 仅证明 Connection 已提交。Platform 的 registered/associated 要求本地密文和关联
+ACTIVE/APPLIED 仅证明 Connection 已提交。v2 Platform 的 registered/associated 要求本地密文和关联
 事务也已提交，仍不证明 Host 已收到、OAuth/Grant 已完成或工具可用。存储或 CAS 失败保持 unknown，
 原回读不再返回 secret，缺少本地材料时不得凭 ACTIVE 推进。若本地提交回执丢失，重启沿原持久状态
 及原键核实；不得重新 POST、换键创建或自动轮换。确认凭据丢失后，只能由获权本人/管理员在
 Connection 原凭据管理入口明确轮换原 Consumer，再按获准保管流程处理；本 Worker 不读取 Browser
-Cookie、不调用轮换、不增加机器凭据恢复接口。自动登记生产启用仍需 Connection v2 已发布及
+Cookie、不调用轮换、不增加机器凭据恢复接口。
+
+仅当原自动登记为 unknown、当前调用者仍是原登记 Owner、未进入停用、登记来源及策略与当前
+部署相同，Owner 才能经既有手工关联命令补交服务凭据（原 Web/API 认证、CSRF 和 expectedRevision
+CAS 不变）。API 仍先调用 Connection 只读 actions 接口核实所填 Consumer 与服务凭据，候选密文
+保存在原 Agent 下，来源仍为 automatic，界面保持待核实，不开放解除。Worker 只读核实原 create
+operation，完整 v2 回执通过后还须精确匹配候选的 Consumer、原 Owner 和关联代次，才原子提交
+registered；错 Consumer、过期 revision、其他 Owner 或停用时不得启用。回读不能生成秘密或把候选
+挂到另一 Agent。补交复用现有一次性输入和密文替换，不回显、不改变 Consumer/Grant、不新增浏览器协议。
+
+自动登记生产启用仍需 Connection v2 已发布及
 真实 D1/Owner、系统接入和 Host 批准；源码和 fixture 通过不能代替现场签收。
 
 **回执与持久关联。** Platform DB 保存本平台的登记来源/外部引用、原操作、请求摘要、

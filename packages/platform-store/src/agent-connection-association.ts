@@ -146,7 +146,10 @@ function operations(
 				.for("update");
 
 			const [registration] = await transaction
-				.select({ status: connectionConsumerRegistrations.status })
+				.select({
+					status: connectionConsumerRegistrations.status,
+					request: connectionConsumerRegistrations.request,
+				})
 				.from(connectionConsumerRegistrations)
 				.where(eq(connectionConsumerRegistrations.agentId, agentId))
 				.limit(1);
@@ -163,6 +166,10 @@ function operations(
 				source: "automatic",
 				status: registration.status,
 				disableStatus: disable?.status ?? null,
+				credentialRevision: manual?.revision ?? null,
+				registrationOwnerId: registration.request.platformOwnerId,
+				registrationPolicyRevision: registration.request.policyRevision,
+				registrationSourceNamespace: registration.request.sourceNamespace,
 			};
 		},
 		async inUseElsewhere({

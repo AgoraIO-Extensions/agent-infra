@@ -73,6 +73,11 @@ export type AgentConnectionAssociationRecordV1 =
 			readonly status: string;
 			/** Consumer disable status, or null. */
 			readonly disableStatus: string | null;
+			/** Private recovery candidate revision; original registration provenance is retained. */
+			readonly credentialRevision?: number | null;
+			readonly registrationOwnerId?: string;
+			readonly registrationPolicyRevision?: string;
+			readonly registrationSourceNamespace?: string;
 	  };
 
 export interface AgentConnectionAssociationOwnerV1 {
@@ -311,7 +316,7 @@ export function presentAgentConnectionAssociationStateV1(
 		...base,
 		status: projected,
 		source: "automatic",
-		associationRevision: null,
+		associationRevision: record.credentialRevision ?? null,
 	};
 }
 
@@ -454,10 +459,25 @@ export function createAgentConnectionAssociationUseCaseV1(
 			const owner = await owned(tx, request, true);
 			actorId = owner.userId;
 			const current = await tx.current(request.agentId);
-			if (current?.source === "automatic")
+			if (
+				current?.source === "automatic" &&
+				!(
+					policy &&
+					current.status === "unknown" &&
+					current.registrationOwnerId === owner.userId &&
+					current.registrationPolicyRevision === policy.revision &&
+					current.registrationSourceNamespace === policy.sourceNamespace &&
+					(current.disableStatus === null ||
+						current.disableStatus === "not_required")
+				)
+			)
 				throw new AgentConnectionAssociationErrorV1("conflict");
 			const currentRevision =
-				current?.source === "manual" ? current.associationRevision : null;
+				current?.source === "automatic"
+					? (current.credentialRevision ?? null)
+					: current?.source === "manual"
+						? current.associationRevision
+						: null;
 			if (currentRevision !== command.expectedRevision)
 				throw new AgentConnectionAssociationErrorV1("conflict");
 			// Reuse is checked only after Connection accepted the credential, so an Owner
@@ -518,8 +538,11 @@ export function createAgentConnectionAssociationUseCaseV1(
 					outcome: "succeeded",
 					associationRevision: saved,
 				});
+				const current = await tx.current(request.agentId);
 				return presentAgentConnectionAssociationStateV1(
-					{ source: "manual", associationRevision: saved },
+					current?.source === "automatic"
+						? { ...current, credentialRevision: saved }
+						: { source: "manual", associationRevision: saved },
 					policy !== undefined,
 				);
 			});

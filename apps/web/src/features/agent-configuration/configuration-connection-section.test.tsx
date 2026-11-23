@@ -178,4 +178,51 @@ describe("Agent settings Connection section", () => {
 			await screen.findByRole("button", { name: "手工关联" }),
 		).toBeTruthy();
 	});
+	it("keeps an automatic recovery candidate unverified and submits the current revision without retaining the secret", async () => {
+		const pending = {
+			...notEnabled,
+			source: "automatic" as const,
+			status: "unverified" as const,
+			automaticRegistrationAvailable: true,
+			associationRevision: 2,
+		};
+		vi.mocked(loadAgentConnectionAssociation).mockResolvedValue(pending);
+		vi.mocked(associateAgentConnection).mockResolvedValue({
+			...pending,
+			associationRevision: 3,
+		});
+		const client = renderSection();
+		fireEvent.click(
+			await screen.findByRole("button", { name: "补交原 Agent 服务凭据" }),
+		);
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.change(within(dialog).getByLabelText("Connection Agent ID"), {
+			target: { value: "original-agent" },
+		});
+		fireEvent.change(within(dialog).getByLabelText("服务凭据"), {
+			target: { value: credential },
+		});
+		fireEvent.click(within(dialog).getByRole("button", { name: "核实并关联" }));
+		await waitFor(() =>
+			expect(associateAgentConnection).toHaveBeenCalledWith("agent-1", {
+				connectionAgentId: "original-agent",
+				serviceCredential: credential,
+				expectedRevision: 2,
+			}),
+		);
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(
+			screen.getByTestId("connection-association-status").textContent,
+		).toContain("待核实");
+		expect(screen.queryByRole("button", { name: "解除关联" })).toBeNull();
+		expect(
+			JSON.stringify(
+				client
+					.getQueryCache()
+					.getAll()
+					.map((q) => q.state),
+			),
+		).not.toContain(credential);
+		expect(document.body.innerHTML).not.toContain(credential);
+	});
 });

@@ -463,42 +463,57 @@ export class PostgresConnectionConsumerRegistrationStoreV1 {
 			if (delivery.outcome === "registered") {
 				let associationRevision = 1;
 				if (custody) {
-					// Only the validated first 201 can create custody. Readback never invents it.
-					if (!custody.credential) return false;
-					const credential = new TextDecoder("utf-8", { fatal: true }).decode(
-						custody.credential,
-					);
-					if (!/^conn_consumer_[A-Za-z0-9_-]{32,128}$/.test(credential))
-						return false;
-					const existing =
-						await transaction`select agent_id from platform.connection_manual_associations
-						where agent_id = ${intent.platformAgentId}`;
-					if (existing.length) return false;
-					const [generation] = await transaction<{ revision: string }[]>`
+					const [candidate] = await transaction<
+						{
+							connection_agent_id: string;
+							owner_id: string;
+							association_revision: string;
+						}[]
+					>`
+						select connection_agent_id,owner_id,association_revision::text from platform.connection_manual_associations
+						where agent_id=${intent.platformAgentId} for update`;
+					if (!custody.credential) {
+						// An explicit Owner submission is only a candidate until this exact remote readback.
+						if (
+							!candidate ||
+							candidate.connection_agent_id !== delivery.receipt.consumerId ||
+							candidate.owner_id !== intent.platformOwnerId
+						)
+							return false;
+						associationRevision = Number(candidate.association_revision);
+					} else {
+						const credential = new TextDecoder("utf-8", { fatal: true }).decode(
+							custody.credential,
+						);
+						if (!/^conn_consumer_[A-Za-z0-9_-]{32,128}$/.test(credential))
+							return false;
+						if (candidate) return false;
+						const [generation] = await transaction<{ revision: string }[]>`
 						insert into platform.connection_association_generations(agent_id,last_revision)
 						values (${intent.platformAgentId},1) on conflict(agent_id) do update
 						set last_revision=platform.connection_association_generations.last_revision+1,updated_at=clock_timestamp()
 						returning last_revision::text as revision`;
-					associationRevision = Number(generation?.revision);
-					if (
-						!Number.isSafeInteger(associationRevision) ||
-						associationRevision < 1
-					)
-						throw new Error("CONNECTION_CREDENTIAL_STORE_INVALID");
-					const encrypted = validatePlatformSecretRecordV1(
-						custody.encrypt(
-							{
-								agentId: intent.platformAgentId,
-								ownerId: intent.platformOwnerId,
-								associationRevision,
-							},
-							credential,
-						),
-					);
-					await transaction`insert into platform.connection_manual_associations
+						associationRevision = Number(generation?.revision);
+						if (
+							!Number.isSafeInteger(associationRevision) ||
+							associationRevision < 1
+						)
+							throw new Error("CONNECTION_CREDENTIAL_STORE_INVALID");
+						const encrypted = validatePlatformSecretRecordV1(
+							custody.encrypt(
+								{
+									agentId: intent.platformAgentId,
+									ownerId: intent.platformOwnerId,
+									associationRevision,
+								},
+								credential,
+							),
+						);
+						await transaction`insert into platform.connection_manual_associations
 						(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at)
 						values (${intent.platformAgentId},${delivery.receipt.consumerId},${connectionServiceCredentialFingerprintV1(credential)},
 						${associationRevision},${intent.platformOwnerId},${transaction.json(encrypted as postgres.JSONValue)},clock_timestamp())`;
+					}
 				}
 				await transaction`
 					update platform.connection_consumer_registrations set status = 'registered',

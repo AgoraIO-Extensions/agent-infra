@@ -251,6 +251,10 @@ export function ConfigurationConnectionSection({
 	const buttonRef = useRef<HTMLButtonElement>(null);
 	const state = query.data;
 	const manual = state?.source === "manual";
+	const recovering =
+		state?.source === "automatic" &&
+		state.status === "unverified" &&
+		state.automaticRegistrationAvailable;
 	const update = (next: AgentConnectionAssociationState) =>
 		queryClient.setQueryData(queryKey, next);
 
@@ -330,6 +334,17 @@ export function ConfigurationConnectionSection({
 							) : null}
 						</>
 					) : null}
+					{recovering ? (
+						<Button
+							ref={buttonRef}
+							type="button"
+							variant="secondary"
+							disabled={disabled || busy}
+							onClick={() => setDialogOpen(true)}
+						>
+							补交原 Agent 服务凭据
+						</Button>
+					) : null}
 					{manual && state.associationRevision !== null ? (
 						<>
 							<Button
@@ -375,6 +390,11 @@ export function ConfigurationConnectionSection({
 					) : null}
 				</div>
 			) : null}
+			{recovering ? (
+				<p className="mt-[8px] text-[13px] text-muted-foreground">
+					请在 Connection 原 Agent 中明确轮换服务凭据后补交；核实前保持待核实。
+				</p>
+			) : null}
 			{state && state.status !== "not_enabled" ? (
 				<p className="mt-[8px] text-[13px] text-muted-foreground">
 					关联不代表本人已授权或工具可调用。
@@ -388,12 +408,19 @@ export function ConfigurationConnectionSection({
 				onSubmit={async (input) => {
 					const next = await associateAgentConnection(agentId, {
 						...input,
-						expectedRevision: manual
-							? (state?.associationRevision ?? null)
-							: null,
+						expectedRevision:
+							manual || recovering
+								? (state?.associationRevision ?? null)
+								: null,
 					});
 					update(next);
-					toast(manual ? "服务凭据已替换" : "Connection 已关联");
+					toast(
+						recovering
+							? "凭据已保存，等待核实原登记"
+							: manual
+								? "服务凭据已替换"
+								: "Connection 已关联",
+					);
 				}}
 			/>
 		</ConfigurationHeadSection>

@@ -4,6 +4,7 @@ import {
 	type ConnectionConsumerDisableIntentV1,
 	type ConnectionConsumerRegistrationIntentV1,
 	connectionServiceCredentialSecretInputV1,
+	createAgentConnectionAssociationUseCaseV1,
 	planConnectionConsumerDisableIdentityV1,
 	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
@@ -756,6 +757,85 @@ it("v2 deferred COMMIT failure rolls back custody; restart GET cannot recreate t
 		).toEqual([]);
 	} finally {
 		await restarted.close();
+	}
+	const association = new PostgresAgentConnectionAssociationStoreV1({
+		databaseUrl: database.databaseUrl,
+	});
+	const recover = createAgentConnectionAssociationUseCaseV1({
+		transaction: association,
+		registrationPolicy: policy,
+		verify: async () => "verified",
+		encrypt: encryptCredential,
+	});
+	const request = {
+		entry: { kind: "browser" as const, userId: "owner-a" },
+		agentId: "agent-a",
+		traceId: "recovery",
+		requestId: "recovery",
+	};
+	const candidate = (
+		connectionAgentId: string,
+		expectedRevision: number | null,
+	) => ({
+		schemaVersion: 1,
+		mode: "manual",
+		connectionAgentId,
+		serviceCredential: `conn_consumer_${"r".repeat(43)}`,
+		expectedRevision,
+	});
+	try {
+		await expect(
+			recover.associate(
+				{ ...request, entry: { kind: "browser", userId: "other-owner" } },
+				candidate("consumer-agent-a", null),
+			),
+		).rejects.toThrow();
+		expect(
+			await recover.associate(request, candidate("wrong-consumer", null)),
+		).toMatchObject({
+			source: "automatic",
+			status: "unverified",
+			associationRevision: 1,
+		});
+		const retry = async () => {
+			await sql`update platform.outbox_items set available_at=clock_timestamp() where status='retry_scheduled'`;
+			const worker = createConnectionConsumerRegistrationWorkerV1({
+				databaseUrl: database.databaseUrl,
+				policy,
+				adapter,
+				encryptCredential,
+			});
+			try {
+				await worker.runOnce();
+			} finally {
+				await worker.close();
+			}
+		};
+		await retry();
+		expect(
+			(
+				await sql`select status from platform.connection_consumer_registrations`
+			)[0]?.status,
+		).toBe("unknown");
+		await expect(
+			recover.associate(request, candidate("consumer-agent-a", null)),
+		).rejects.toThrow();
+		expect(
+			await recover.associate(request, candidate("consumer-agent-a", 1)),
+		).toMatchObject({
+			source: "automatic",
+			status: "unverified",
+			associationRevision: 2,
+		});
+		await retry();
+		expect(
+			(
+				await sql`select status,association_revision from platform.connection_consumer_registrations`
+			)[0],
+		).toMatchObject({ status: "registered", association_revision: "2" });
+		expect(calls.filter((method) => method === "POST")).toHaveLength(1);
+	} finally {
+		await association.close();
 	}
 });
 it("v2 committed custody survives a lost adapter result and restart never POSTs again", async () => {

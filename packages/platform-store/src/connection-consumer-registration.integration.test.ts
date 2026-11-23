@@ -2,6 +2,7 @@ import {
 	createAgentConnectionAssociationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationFoundationUseCaseV1,
+	planConnectionConsumerDisableIdentityV1,
 	planConnectionConsumerRegistrationV1,
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -603,6 +604,21 @@ it("presents each Agent's own association status in the visibility snapshot (#85
 		expect(await present("agent-d")).toMatchObject({
 			outcome: "found",
 			connectionAssociation: { status: "associated" },
+		});
+		// v2 custody shares the private table, but automatic disable always wins in the projection.
+		const [automatic] =
+			await sql`select operation_id,consumer_id,source_namespace from platform.connection_consumer_registrations where agent_id='agent-a'`;
+		await sql`insert into platform.connection_manual_associations(agent_id,connection_agent_id,credential_fingerprint,association_revision,owner_id,credential_ciphertext,verified_at)
+			values ('agent-a',${automatic?.consumer_id},${"b".repeat(64)},1,${owner},${sql.json({ schemaVersion: 1, agentId: "agent-a", ownerId: owner, secretVersion: 1, crypto: { dekFingerprint: "c".repeat(64) } })},clock_timestamp())`;
+		const disable = planConnectionConsumerDisableIdentityV1({
+			registrationOperationId: automatic?.operation_id,
+			sourceNamespace: automatic?.source_namespace,
+			platformAgentId: "agent-a",
+		});
+		await sql`insert into platform.connection_consumer_disables(operation_id,registration_operation_id,agent_id,source_namespace,idempotency_key)
+			values (${disable.operationId},${disable.registrationOperationId},'agent-a',${disable.sourceNamespace},${disable.idempotencyKey})`;
+		expect(await present("agent-a")).toMatchObject({
+			connectionAssociation: { status: "disabling" },
 		});
 		// 不可见的主体既看不到 Agent，也看不到关联状态。
 		await expect(present("agent-a", "unrelated-user")).resolves.toEqual({

@@ -752,18 +752,14 @@ export class PostgresAgentConfigurationQueryV1 {
 						.from(connectionManualAssociations)
 						.where(eq(connectionManualAssociations.agentId, input.agentId))
 						.limit(1);
-					const [automaticRegistration] = manualAssociation
-						? []
-						: await transaction
-								.select({ status: connectionConsumerRegistrations.status })
-								.from(connectionConsumerRegistrations)
-								.where(
-									eq(connectionConsumerRegistrations.agentId, input.agentId),
-								)
-								.limit(1);
-					const registration = manualAssociation
-						? { status: "registered" as const }
-						: automaticRegistration;
+					const [automaticRegistration] = await transaction
+						.select({ status: connectionConsumerRegistrations.status })
+						.from(connectionConsumerRegistrations)
+						.where(eq(connectionConsumerRegistrations.agentId, input.agentId))
+						.limit(1);
+					const registration =
+						automaticRegistration ??
+						(manualAssociation ? { status: "registered" as const } : undefined);
 					const [consumerDisable] = automaticRegistration
 						? await transaction
 								.select({ status: connectionConsumerDisables.status })
