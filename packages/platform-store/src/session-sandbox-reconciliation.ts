@@ -160,7 +160,8 @@ async function lockedContext(
 					([key]) =>
 						key !== "lifecycle" &&
 						key !== "deployment" &&
-						key !== "modelProjection",
+						key !== "modelProjection" &&
+						key !== "podController",
 				),
 			),
 			{
@@ -399,7 +400,17 @@ async function lockedContext(
 			: captureTaskAuthorizationBoundaryV1({ ...common, user });
 	}
 	if (!authorization) return waiting("authorization_changed");
+	const controller =
+		allocation.resource_policy?.podController ??
+		(payload as { podController?: unknown }).podController;
+	if (
+		controller !== undefined &&
+		(controller !== "sig-core-v1.0.12" ||
+			policy.namespace !== "ack-community-m1-4405")
+	)
+		return waiting("policy_changed");
 	const currentPolicy: SessionSandboxVerifiedPolicyV1 = {
+		...(controller === "sig-core-v1.0.12" ? { podController: controller } : {}),
 		...policy,
 		configurationRevision: runtimeRevision,
 		workloadRevision: deployment.workloadRevision,

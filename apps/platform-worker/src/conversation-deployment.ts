@@ -557,6 +557,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				if (
 					(input.purpose === "business" &&
 						(connectionDeliveryConfigured ||
+							sandboxResource.policy.podController !== undefined ||
 							sandboxResource.executorInstance !== undefined)) ||
 					requireSandboxObservation
 				) {
@@ -862,7 +863,9 @@ export function createSessionSandboxResourceInputResolverV1(
 						},
 					}
 				: {}),
-			...(templateBinding.driver === "codex" && !executorBinding
+			...(templateBinding.driver === "codex" &&
+			!executorBinding &&
+			!policy.podController
 				? {
 						codexContainerBoundaryEnabled:
 							workload.policy.codexContainerBoundaryEnabled === true,
@@ -946,6 +949,12 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(policy.podController
+				? {
+						podController: policy.podController,
+						corePlacement: workload.policy.agentWorkloadPlacement,
+					}
+				: {}),
 			...(install && runtime && templateBinding && !runtime.custom
 				? {
 						connectionInstallBootstrap: {
@@ -1577,6 +1586,7 @@ export function createProductionSessionSandboxReceiverV1(
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影（runtime 为 null），
 			// 当时也不创建 Runtime Secret：其余 5 种资源就是完整来源（#2885）。
 			const sourceKinds = [
+				...(sourceAllocation.podController ? ["Sandbox"] : []),
 				"Pod",
 				"Service",
 				"ServiceAccount",
@@ -1944,7 +1954,11 @@ export function createProductionSessionSandboxReceiverV1(
 			(!allocation.executorDrainIdentity ||
 				claim.previousObservation?.status === "ready")
 		) {
-			if ((await workload.client.read("Pod", recordedPod.name)) === null) {
+			const livePod = await workload.client.read("Pod", recordedPod.name);
+			if (
+				!livePod ||
+				(allocation.podController && livePod.metadata?.uid !== recordedPod.uid)
+			) {
 				signal.throwIfAborted();
 				return {
 					status: "unknown" as const,

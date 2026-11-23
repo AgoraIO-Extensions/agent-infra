@@ -1,4 +1,9 @@
 import {
+	type AgentWorkloadPlacementV1,
+	agentWorkloadPodPlacementV1,
+	agentWorkloadPlacementShapeV1,
+} from "./agent-workload-placement.js";
+import {
 	createHash,
 	createHmac,
 	type KeyObject,
@@ -282,6 +287,8 @@ export interface SessionSandboxOAuthProvisioningV1 {
 }
 
 export interface SessionSandboxAllocationV1 {
+	readonly podController?: "sig-core-v1.0.12";
+	readonly corePlacement?: AgentWorkloadPlacementV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
 	readonly sessionId: string;
@@ -1318,6 +1325,13 @@ function renderSessionSandboxResourcesV1(
 			],
 		},
 	};
+	if (allocation.podController && pod.spec) {
+		if (!allocation.corePlacement) throw new WorkloadKubernetesError("policy");
+		Object.assign(
+			pod.spec,
+			agentWorkloadPodPlacementV1(allocation.corePlacement),
+		);
+	}
 	const skillProjection = skillHubDeliveryProjectionV1(
 		allocation.skillHub,
 		allocation.skillDeliveryImage,
@@ -2456,7 +2470,7 @@ function owned(
 	current: KubernetesObject,
 	expected: KubernetesObject,
 	allocation: SessionSandboxResourceInputV1,
-	snapshotPod?: SessionSandboxResourceIdentityV1,
+	controllerResource?: SessionSandboxResourceIdentityV1,
 ) {
 	const currentLabels = current.metadata?.labels ?? {};
 	const expectedLabels = expected.metadata?.labels ?? {};
@@ -2468,13 +2482,16 @@ function owned(
 		current.metadata?.ownerReferences?.filter((owner) => owner.controller) ??
 		[];
 	const [controller] = controllers;
-	const controllerMatches = snapshotPod
+	const controllerMatches = controllerResource
 		? controllers.length === 1 &&
-			controller?.apiVersion === "v1" &&
-			controller.kind === "Pod" &&
-			controller.name === snapshotPod.name &&
-			controller.uid === snapshotPod.uid &&
-			snapshotPod.namespace === current.metadata?.namespace
+			controller?.apiVersion ===
+				(controllerResource.kind === "Sandbox"
+					? "agents.x-k8s.io/v1beta1"
+					: "v1") &&
+			controller.kind === controllerResource.kind &&
+			controller.name === controllerResource.name &&
+			controller.uid === controllerResource.uid &&
+			controllerResource.namespace === current.metadata?.namespace
 		: controllers.length === 0;
 	return (
 		controllerMatches &&
@@ -2537,6 +2554,103 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 	/** #4199 C2: deployment service token keying the declaration proof; absent compares strictly. */
 	readonly connectionPublicationProofKey?: string;
 }) {
+	const coreApiVersion = "agents.x-k8s.io/v1beta1";
+	const pvcUidAnnotation = "agent-infra.agora.io/core-pvc-uid";
+	type CoreSandbox = KubernetesObject & {
+		spec: {
+			service: boolean;
+			operatingMode: "Running" | "Suspended";
+			volumeClaimTemplates?: unknown[];
+			podTemplate: Pick<V1Pod, "metadata" | "spec">;
+		};
+	};
+	const coreBinding = async (
+		allocation: SessionSandboxAllocationV1,
+		pod: V1Pod,
+		previous: readonly SessionSandboxResourceIdentityV1[],
+		create: boolean,
+	) => {
+		const pvc = await options.client.read(
+			"PersistentVolumeClaim",
+			allocation.pvcName,
+		);
+		const pvcUid = pvc?.metadata?.uid;
+		if (
+			!pvc ||
+			!pvcUid ||
+			pvc.metadata?.deletionTimestamp ||
+			!owned(
+				pvc,
+				{ metadata: metadata(allocation, allocation.pvcName) },
+				allocation,
+			)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		const expected: CoreSandbox = {
+			apiVersion: coreApiVersion,
+			kind: "Sandbox",
+			metadata: {
+				...metadata(allocation, allocation.podName),
+				annotations: {
+					...metadata(allocation, allocation.podName).annotations,
+					[pvcUidAnnotation]: pvcUid,
+				},
+			},
+			spec: {
+				service: false,
+				operatingMode: "Running",
+				podTemplate: {
+					metadata: {
+						labels: pod.metadata?.labels,
+						annotations: pod.metadata?.annotations,
+					},
+					spec: pod.spec,
+				},
+			},
+		};
+		const prior = previous.find((resource) => resource.kind === "Sandbox");
+		let current = await options.client.read<CoreSandbox>(
+			"Sandbox",
+			allocation.podName,
+		);
+		if (!current && create && !prior) {
+			if (await options.client.read("Pod", allocation.podName))
+				throw new WorkloadKubernetesError("conflict");
+			await options.client.create(expected);
+			current = await options.client.read<CoreSandbox>(
+				"Sandbox",
+				allocation.podName,
+			);
+		}
+		const uid = current?.metadata?.uid;
+		const resourceVersion = current?.metadata?.resourceVersion;
+		if (
+			!current ||
+			!uid ||
+			!resourceVersion ||
+			current.metadata?.deletionTimestamp ||
+			current.metadata?.name !== allocation.podName ||
+			current.metadata.namespace !== allocation.namespace ||
+			current.apiVersion !== coreApiVersion ||
+			current.kind !== "Sandbox" ||
+			!owned(current, expected, allocation) ||
+			(prior && prior.uid !== uid) ||
+			current.metadata.annotations?.[pvcUidAnnotation] !== pvcUid ||
+			current.spec.service !== false ||
+			current.spec.operatingMode !== "Running" ||
+			current.spec.volumeClaimTemplates?.length ||
+			stableJson(current.spec.podTemplate) !==
+				stableJson(expected.spec.podTemplate)
+		)
+			throw new WorkloadKubernetesError("conflict");
+		return {
+			kind: "Sandbox" as const,
+			namespace: allocation.namespace,
+			name: allocation.podName,
+			uid,
+			resourceVersion,
+		};
+	};
 	const ensureExecutorIdentity = async (
 		pod: KubernetesObject,
 		allocation: SessionSandboxAllocationV1,
@@ -2687,6 +2801,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				...allocation,
 				desiredState: "stopped",
 			});
+			if (
+				allocation.podController &&
+				(await options.client.read("Sandbox", allocation.podName))
+			)
+				throw new WorkloadKubernetesError("conflict");
 			for (const expected of expectedResources) {
 				if (expected.kind === "PersistentVolumeClaim") continue;
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
@@ -2839,7 +2958,30 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			// 缺 Secret / env 的 Pod，必须在任何写入之前拒绝（#2885）。
 			if (allocation.desiredState === "running" && allocation.runtime === null)
 				throw new WorkloadKubernetesError("policy");
+			if (
+				allocation.podController &&
+				(allocation.namespace !== "ack-community-m1-4405" ||
+					allocation.desiredState !== "running" ||
+					allocation.runtime?.driver !== "codex" ||
+					allocation.runtime.custom ||
+					allocation.runtime.codexContainerBoundaryEnabled ||
+					allocation.codexSessionExecutor ||
+					allocation.runtime.sessionExecutor ||
+					allocation.workspaceSnapshotProjection)
+			)
+				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
+			if (allocation.podController) {
+				const current = await options.client.read(
+					"Sandbox",
+					allocation.podName,
+				);
+				if (current || previous.some((r) => r.kind === "Sandbox")) {
+					await coreBinding(allocation, resources[5], previous, false);
+				} else if (await options.client.read("Pod", allocation.podName)) {
+					throw new WorkloadKubernetesError("conflict");
+				}
+			}
 			await validateSkillSource(allocation);
 			if (
 				allocation.desiredState === "running" &&
@@ -2854,6 +2996,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			// Check the complete previous set before any write. A vanished or replaced
 			// instance needs Store-authorized recovery, not implicit allocation here.
 			for (const prior of previous) {
+				if (
+					allocation.podController &&
+					(prior.kind === "Sandbox" || prior.kind === "Pod")
+				)
+					continue;
 				const expected = resources.find(
 					(resource) => resource.kind === prior.kind,
 				);
@@ -2995,7 +3142,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						),
 					};
 				}
-				await ensure(pod);
+				if (allocation.podController)
+					await coreBinding(allocation, pod as V1Pod, previous, true);
+				else await ensure(pod);
 				if (allocation.executorInstance) {
 					if (!executorInstanceControl)
 						throw new WorkloadKubernetesError("policy");
@@ -3096,6 +3245,27 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					return { expected, kind, name, current };
 				}),
 			);
+			const needsCoreBinding =
+				allocation.podController &&
+				allocation.desiredState === "running" &&
+				(purpose === "business" ||
+					(await options.client.read("Sandbox", allocation.podName)));
+			const core = needsCoreBinding
+				? await coreBinding(
+						allocation,
+						purpose === "business"
+							? expectedResources[5]
+							: sessionSandboxResourcesV1(allocation)[5],
+						previous,
+						false,
+					)
+				: undefined;
+			if (core) resources.push(core);
+			else if (
+				allocation.podController &&
+				allocation.desiredState === "running"
+			)
+				status = "unknown";
 			for (const { expected, kind, name, current } of observed) {
 				if (
 					allocation.desiredState === "stopped" &&
@@ -3104,11 +3274,25 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					if (current) status = "unknown";
 					continue;
 				}
+				if (
+					core &&
+					kind === "Pod" &&
+					!current &&
+					!previous.some((resource) => resource.kind === "Pod")
+				) {
+					if (status !== "unknown") status = "observed";
+					continue;
+				}
 				if (!current && kind === "Secret" && preparedBeforeRuntimeInputs)
 					continue;
 				if (
 					!current ||
-					!owned(current, expected, allocation) ||
+					!owned(
+						current,
+						expected,
+						allocation,
+						kind === "Pod" ? core : undefined,
+					) ||
 					!current.metadata?.uid ||
 					!current.metadata.resourceVersion ||
 					current.metadata.deletionTimestamp ||
@@ -3118,7 +3302,20 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					status = "unknown";
 					continue;
 				}
+				if (
+					core &&
+					kind === "Pod" &&
+					agentWorkloadPlacementShapeV1(
+						allocation.corePlacement,
+						(current as V1Pod).spec,
+						true,
+					) !== "placed"
+				) {
+					status = "unknown";
+					continue;
+				}
 				const identity = {
+					...(kind === "Pod" && core ? { controllerUid: core.uid } : {}),
 					kind,
 					namespace: allocation.namespace,
 					name,
@@ -3371,13 +3568,53 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				...allocation,
 				desiredState: "stopped",
 			});
+			const cleanupResources: KubernetesObject[] = [...expectedResources];
+			if (allocation.podController) {
+				if (allocation.namespace !== "ack-community-m1-4405")
+					throw new WorkloadKubernetesError("policy");
+				const sandbox = {
+					apiVersion: coreApiVersion,
+					kind: "Sandbox",
+					metadata: metadata(allocation, allocation.podName),
+				};
+				const current = await options.client.read<CoreSandbox>(
+					"Sandbox",
+					allocation.podName,
+				);
+				const recorded = previous.find((r) => r.kind === "Sandbox");
+				const pvc = await options.client.read(
+					"PersistentVolumeClaim",
+					allocation.pvcName,
+				);
+				const originalPvc = previous.find(
+					(r) => r.kind === "PersistentVolumeClaim",
+				);
+				const pod = await options.client.read("Pod", allocation.podName);
+				if (
+					current &&
+					(!recorded ||
+						!owned(current, sandbox, allocation) ||
+						current.metadata?.uid !== recorded.uid ||
+						!originalPvc ||
+						!pvc ||
+						pvc.metadata?.uid !== originalPvc.uid ||
+						!owned(pvc, expectedResources[1], allocation) ||
+						current.metadata.annotations?.[pvcUidAnnotation] !==
+							originalPvc.uid ||
+						current.spec.service !== false ||
+						current.spec.volumeClaimTemplates?.length ||
+						(pod && !owned(pod, expectedResources[5], allocation, recorded)))
+				)
+					throw new WorkloadKubernetesError("conflict");
+				cleanupResources.push(sandbox);
+			}
 			const previousByKind = new Map(
 				previous.map((resource) => [resource.kind, resource]),
 			);
 			// #2918：部分来源先确认所有未记录的种类都不存在，再删除任何资源；任一同名对象存在
 			// 都失败关闭，不接管也不留下删了一半的状态。
 			if (context.partialSource)
-				for (const expected of expectedResources) {
+				for (const expected of cleanupResources) {
 					const kind =
 						expected.kind as SessionSandboxResourceIdentityV1["kind"];
 					if (previousByKind.has(kind)) continue;
@@ -3437,7 +3674,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				existing.deleteCallResult !== "failed" &&
 				current.metadata?.uid === existing.resource.uid &&
 				!!current.metadata.deletionTimestamp;
-			const resources = expectedResources
+			const resources = cleanupResources
 				.filter((resource) => resource.kind !== "PersistentVolumeClaim")
 				.reverse();
 			for (const expected of resources) {
@@ -3495,6 +3732,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					continue;
 				}
 				if (!current) throw new WorkloadKubernetesError("unavailable");
+				// Foreground deletion of the Sandbox retires its Pod. The Worker never deletes a Core Pod.
+				if (allocation.podController && kind === "Pod")
+					throw new WorkloadKubernetesError("conflict");
 				if (!owned(current, expected, allocation))
 					throw new WorkloadKubernetesError("conflict");
 				const prior = previousByKind.get(kind);
@@ -3636,7 +3876,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				});
 			}
 			const expectedKinds = new Set(
-				expectedResources.map((resource) => resource.kind),
+				cleanupResources.map((resource) => resource.kind),
 			);
 			for (const prior of previous) {
 				if (

@@ -194,7 +194,11 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		: [];
 	const pod = resources.find((resource) => resource?.kind === "Pod");
 	const controller = resources.find(
-		(resource) => resource?.kind === "StatefulSet",
+		(resource) =>
+			resource?.kind ===
+			(source.policy?.podController === "sig-core-v1.0.12"
+				? "Sandbox"
+				: "StatefulSet"),
 	);
 	if (
 		observation.status === "observed" &&

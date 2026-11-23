@@ -195,6 +195,137 @@ function fixture() {
 	};
 }
 
+it("reconciles a cold Core allocation through the production receiver and preserves its Worker Service and PVC", async () => {
+	const f = fixture();
+	const namespace = "ack-community-m1-4405";
+	const policy = {
+		...f.options.policy,
+		namespace,
+		agentWorkloadPlacement: {
+			architecture: "amd64",
+			legacyUnplaced: "reject",
+		} as const,
+	};
+	const receive = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			policy,
+			client: {
+				...f.client,
+				namespace,
+				async deleteResult(object) {
+					const result = await f.client.deleteResult(object);
+					if (object.kind === "Sandbox")
+						f.resources.delete(`Pod/${object.metadata?.name}`);
+					return result;
+				},
+			},
+		},
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	const claim = {
+		...f.claim,
+		policy: {
+			...f.claim.policy,
+			namespace,
+			podController: "sig-core-v1.0.12" as const,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		},
+	};
+	const signal = new AbortController().signal;
+	const initial = await receive(claim, signal);
+	expect(initial.status).toBe("observed");
+	const name = claim.sandbox.resourceName;
+	expect(f.resources.has(`Pod/${name}`)).toBe(false);
+	const sandbox = f.resources.get(`Sandbox/${name}`) as KubernetesObject & {
+		spec: { service: boolean; podTemplate: V1Pod };
+	};
+	expect(sandbox.spec.service).toBe(false);
+	const pvcUid = f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata
+		?.uid;
+	expect(pvcUid).toBeTruthy();
+	const serviceUid = f.resources.get(`Service/${name}`)?.metadata?.uid;
+	if (!sandbox.metadata?.uid) throw Error("Missing Sandbox UID");
+	const pod = await f.client.create<V1Pod>({
+		...sandbox.spec.podTemplate,
+		apiVersion: "v1",
+		kind: "Pod",
+		status: {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		},
+		metadata: {
+			...sandbox.spec.podTemplate.metadata,
+			name,
+			namespace,
+			ownerReferences: [
+				{
+					apiVersion: "agents.x-k8s.io/v1beta1",
+					kind: "Sandbox",
+					name,
+					uid: sandbox.metadata.uid,
+					controller: true,
+				},
+			],
+		},
+	});
+	const next = await receive(
+		{ ...claim, previousObservation: initial },
+		signal,
+	);
+	expect(next.status).toBe("ready");
+	expect(next.resources.find((r) => r.kind === "Pod")).toMatchObject({
+		uid: pod.metadata?.uid,
+		controllerUid: sandbox.metadata?.uid,
+	});
+	expect(next.resources.find((r) => r.kind === "Service")?.uid).toBe(
+		serviceUid,
+	);
+	expect(
+		next.resources.find((r) => r.kind === "PersistentVolumeClaim")?.uid,
+	).toBe(pvcUid);
+	const pvc = f.resources.get(`PersistentVolumeClaim/${name}`);
+	if (!pvc?.metadata || !pod.metadata?.ownerReferences?.[0])
+		throw Error("missing observed resources");
+	pvc.metadata.uid = "replacement-pvc";
+	await expect(
+		receive({ ...claim, previousObservation: next }, signal),
+	).rejects.toMatchObject({ code: "conflict" });
+	pvc.metadata.uid = pvcUid;
+	const storedPod = f.resources.get(`Pod/${name}`) as V1Pod;
+	if (!storedPod.metadata?.ownerReferences?.[0])
+		throw Error("missing Pod controller");
+	storedPod.metadata.ownerReferences[0].uid = "other-controller";
+	expect(
+		(await receive({ ...claim, previousObservation: next }, signal)).status,
+	).toBe("unknown");
+	storedPod.metadata.ownerReferences[0].uid = sandbox.metadata.uid;
+	if (!storedPod.metadata.uid) throw Error("missing Pod UID");
+	const recordedPodUid = storedPod.metadata.uid;
+	storedPod.metadata.uid = "rebuilt-pod";
+	const lost = await receive({ ...claim, previousObservation: next }, signal);
+	expect(lost).toMatchObject({
+		status: "unknown",
+		failureCode: "sandbox.pod_lost",
+		resources: next.resources,
+	});
+	expect(f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata?.uid).toBe(
+		pvcUid,
+	);
+	storedPod.metadata.uid = recordedPodUid;
+	const stopped = await receive(
+		{ ...claim, desiredState: "stopped", previousObservation: next },
+		signal,
+		async () => "committed",
+	);
+	expect(stopped.status).toBe("stopped");
+	expect(f.resources.has(`Sandbox/${name}`)).toBe(false);
+	expect(f.resources.has(`Pod/${name}`)).toBe(false);
+	expect(f.resources.get(`PersistentVolumeClaim/${name}`)?.metadata?.uid).toBe(
+		pvcUid,
+	);
+});
+
 function oauthProvisioningFixture(f: ReturnType<typeof fixture>) {
 	const profile = {
 		schemaVersion: 1 as const,

@@ -3,6 +3,7 @@
   "type": "object",
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "quota", "postgres", "ingress", "migrations", "encryption", "worker"],
   "properties": {
+    "sigCorePilot": {"type": "string", "enum": ["off", "new", "drain"]},
     "operations": {
       "type": "object",
       "additionalProperties": false,

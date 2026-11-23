@@ -120,6 +120,7 @@ scheduling:
 # AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT and injects it at each Agent's next formal
 # lifecycle; publishing it does not rebuild running Hosts. Keep
 # retain-until-lifecycle while pre-placement Hosts remain, then switch to reject.
+sigCorePilot: "off"
 agentWorkloadScheduling:
   enabled: false
   architecture: amd64
