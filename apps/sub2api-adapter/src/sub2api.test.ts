@@ -63,3 +63,34 @@ it("returns only eligible metadata for the provider-linked active account", asyn
 	owner = 66;
 	expect((await discover("employee")).status).toBe(502);
 });
+
+it("rejects authenticated activation when the Relay cannot read the linked account", async () => {
+	const token = randomUUID();
+	const app = createSub2ApiAdapter(
+		{
+			instanceId: "relay",
+			origin: "https://upstream.example",
+			serviceBearer: token,
+			relayReadKey: randomUUID(),
+			agentGroupIds: [8],
+			accounts: { employee: 12 },
+		},
+		async (input) => {
+			if (new URL(String(input)).pathname === "/api/v1/settings/public")
+				return Response.json({
+					code: 0,
+					data: { site_name: "Sub2API", version: "test" },
+				});
+			return new Response(null, { status: 403 });
+		},
+	);
+	const url = "https://adapter.example/.well-known/agent-infra-adapter";
+	expect((await app(new Request(url))).status).toBe(200);
+	expect(
+		(
+			await app(
+				new Request(url, { headers: { authorization: `Bearer ${token}` } }),
+			)
+		).status,
+	).toBe(502);
+});

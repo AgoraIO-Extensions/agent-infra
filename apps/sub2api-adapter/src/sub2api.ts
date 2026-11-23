@@ -92,6 +92,21 @@ export function createSub2ApiAdapter(
 					version: z.string().min(1),
 					site_name: z.string().min(1),
 				}).parse(await read("/api/v1/settings/public", signal, false));
+				if (authenticated) {
+					const linked = Object.values(config.accounts)[0];
+					if (!linked) throw Error();
+					const profile = z
+						.object({ id: identifier, status: z.literal("active") })
+						.parse(await read(`/api/v1/admin/users/${linked}`, signal));
+					if (profile.id !== linked) throw Error();
+					const page = pageSchema.parse(
+						await read(
+							`/api/v1/admin/users/${linked}/api-keys?page=1&page_size=1`,
+							signal,
+						),
+					);
+					if (page.items.some((key) => key.user_id !== linked)) throw Error();
+				}
 				return Response.json(manifest);
 			}
 			if (path !== "/v1/model-authorizations" || request.method !== "POST")

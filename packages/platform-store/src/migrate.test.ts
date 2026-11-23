@@ -808,6 +808,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 					return [
 						...config.indexes.map((index) => index.config.name),
 						...config.uniqueConstraints.map((constraint) => constraint.name),
+						...config.columns
+							.filter((column) => column.isUnique)
+							.map((column) => column.uniqueName),
 					];
 				})
 				.toSorted();
@@ -969,6 +972,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 				"connection_manual_installations.connection_agent_id",
 				"connection_principal_pin_receipts",
 				"connection_principal_pins",
+				// §9.2.3: write-only, origin- and version-bound Adapter service envelope.
+				"external_service_versions.credential",
 				"platform_api_credentials",
 				"platform_api_credentials.credential_hash",
 				"wecom_connections",

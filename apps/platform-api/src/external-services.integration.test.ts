@@ -8,8 +8,11 @@ import {
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { Hono } from "hono";
-import { expect, it } from "vitest";
-import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { expect, it, vi } from "vitest";
+import {
+	openPostgresTestClient,
+	startPostgresTestDatabase,
+} from "../../../packages/platform-store/src/postgres-test.js";
 import { createExternalServiceProbe } from "../../platform-worker/src/external-service-probe.js";
 
 import { HttpProtocolError } from "./http/common.js";
@@ -110,6 +113,7 @@ async function provider(name: string) {
 }
 it("routes employee discovery to the verified provider across cutover and component restart", async () => {
 	const db = await startPostgresTestDatabase("external-service-cutover");
+	const sql = openPostgresTestClient(db);
 	const a = await provider("a");
 	const b = await provider("b");
 	let store = new ExternalServiceStore(db.databaseUrl);
@@ -203,9 +207,26 @@ it("routes employee discovery to the verified provider across cutover and compon
 		});
 		b.valid(true);
 		expect((await command(2, "test")).status).toBe(200);
-		expect((await command(2, "enable")).status).toBe(200);
 		clearInterval(timer);
 		await pending;
+		// Roll back the first receipt after A has answered. The original row survives.
+		await sql`create function reject_fixture_receipt() returns trigger language plpgsql as $$ begin raise exception 'fixture receipt rollback';end $$`;
+		await sql`create trigger reject_fixture_receipt before update on platform.external_service_queries for each row execute function reject_fixture_receipt()`;
+		const accepted = discover();
+		await vi.waitFor(async () => {
+			const [row] =
+				await sql`select count(*)::int as n from platform.external_service_queries where receipt is null`;
+			expect(row?.n).toBe(1);
+		});
+		await expect(worker()).rejects.toThrow();
+		expect((await command(2, "enable")).status).toBe(200);
+		await sql`drop trigger reject_fixture_receipt on platform.external_service_queries`;
+		await worker();
+		expect(await (await accepted).json()).toMatchObject({
+			revision: 1,
+			discovery: { items: [{ ref: "a" }] },
+		});
+
 		await store.close();
 		store = new ExternalServiceStore(db.databaseUrl);
 		app = assemble();
@@ -216,7 +237,7 @@ it("routes employee discovery to the verified provider across cutover and compon
 		});
 		expect(
 			a.calls.filter((p) => p === "/v1/model-authorizations"),
-		).toHaveLength(2);
+		).toHaveLength(4);
 		expect(
 			b.calls.filter((p) => p === "/v1/model-authorizations"),
 		).toHaveLength(1);
@@ -240,7 +261,7 @@ it("routes employee discovery to the verified provider across cutover and compon
 	} finally {
 		clearInterval(timer);
 		await pending;
-		await Promise.all([a.close(), b.close(), store.close()]);
+		await Promise.all([a.close(), b.close(), store.close(), sql.end()]);
 		await db.stop();
 	}
 }, 120000);
