@@ -78,6 +78,7 @@ function policy(value: unknown): SessionSandboxVerifiedPolicyV1 | null {
 	const p = object(value);
 	if (
 		!p ||
+		(p.podController !== undefined && p.podController !== "sig-core-v1.0.12") ||
 		typeof p.namespace !== "string" ||
 		!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(p.namespace) ||
 		typeof p.resourceConfigurationHash !== "string" ||
@@ -89,6 +90,9 @@ function policy(value: unknown): SessionSandboxVerifiedPolicyV1 | null {
 	try {
 		return {
 			namespace: p.namespace,
+			...(p.podController === "sig-core-v1.0.12"
+				? { podController: p.podController }
+				: {}),
 			resourceConfigurationHash: p.resourceConfigurationHash,
 			imageDigest: p.imageDigest,
 			configurationRevision: counter(p.configurationRevision),
@@ -110,6 +114,7 @@ function resources(value: unknown) {
 			![
 				"Pod",
 				"StatefulSet",
+				"Sandbox",
 				"Service",
 				"ServiceAccount",
 				"PersistentVolumeClaim",

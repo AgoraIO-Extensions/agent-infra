@@ -23,7 +23,15 @@ import {
 	FakeNativeCapabilityMetadataRevalidationV1,
 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import {
@@ -734,6 +742,41 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("pins the Core choice only at cold allocation and preserves it across rollback and replay", async () => {
+		await persistConformanceModelConfiguration(undefined, authority);
+		const { transaction, useCase } = createConversation();
+		const open = (id: string) =>
+			useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: id,
+				requestId: id,
+				traceId: id,
+			});
+		try {
+			vi.stubEnv("PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE", "");
+			expect((await open("direct-before")).outcome).toBe("accepted");
+			vi.stubEnv(
+				"PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE",
+				"ack-community-m1-4405",
+			);
+			expect((await open("direct-before")).outcome).toBe("replayed");
+			expect((await open("core-new")).outcome).toBe("accepted");
+			vi.stubEnv("PLATFORM_SIG_CORE_NEW_SESSIONS_NAMESPACE", "");
+			expect((await open("core-new")).outcome).toBe("replayed");
+			expect((await open("direct-after")).outcome).toBe("accepted");
+			const rows =
+				await client`select request_id, payload->>'podController' as controller from platform.outbox_items where operation='conversation.sandbox.reconcile.v1' order by request_id`;
+			expect(rows).toEqual([
+				{ request_id: "core-new", controller: "sig-core-v1.0.12" },
+				{ request_id: "direct-after", controller: null },
+				{ request_id: "direct-before", controller: null },
+			]);
+		} finally {
+			vi.unstubAllEnvs();
+			await transaction.close();
+		}
+	});
 	it.each(["skill", "command", "custom"] as const)(
 		"freezes only the legacy %s model context and accepts matching model facts",
 		async (kind) => {

@@ -1,6 +1,7 @@
 import type { KeyObject } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { hasCorePodAdmissionSendMargin } from "@agent-infra/agent-runtime";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	RuntimeBrowserHandoffRequestV3,
@@ -192,6 +193,7 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly requireSandboxObservation?: true;
 	}) => Promise<{
 		readonly baseUrl: string;
+		readonly corePodAdmission?: true;
 		readonly serviceToken: string;
 		readonly workerId: string;
 		readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
@@ -1029,6 +1031,18 @@ export function createConversationRuntimeV2(
 		const claim = prepared.context.claim;
 		return createWorkerRuntimeHostClientV4({
 			...prepared.target,
+			...(prepared.target.corePodAdmission
+				? {
+						assertCoreAdmissionSendMargin: () => {
+							if (!hasCorePodAdmissionSendMargin(prepared.target.serviceToken))
+								throw new ConversationRuntimeHostError(
+									"RUNTIME_UNAVAILABLE",
+									true,
+									{ notSent: true },
+								);
+						},
+					}
+				: {}),
 			...(prepared.route.workload?.candidate.configuration.source.kind ===
 				"standard" &&
 			prepared.route.workload.candidate.configuration.source.templateId ===

@@ -1364,6 +1364,7 @@ export class PostgresConversationExecutionTransactionV1
 			`,
 			);
 			await insertSessionSandboxBinding(transaction, plan.sandbox, {
+				cold: admission.profile === null,
 				requestId: request.command.requestId,
 				traceId: request.command.traceId,
 				occurredAt,

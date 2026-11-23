@@ -725,6 +725,7 @@ export interface NativeCompactStageObservation {
 }
 
 export interface CodexRuntimeDriverOptions {
+	readonly coreConversationKey?: string;
 	/** Best-effort operational metadata, never persisted as a Runtime fact. */
 	readonly observeModelTransportFailure?: (
 		event: ModelTransportFailureObservation,
@@ -4718,6 +4719,12 @@ class CodexRpc {
 		this.consuming = this.consume();
 	}
 
+	get liveCoreProcessId() {
+		return !this.failed && this.bridge instanceof CodexAppServerBridge
+			? this.bridge.liveCoreProcessId
+			: undefined;
+	}
+
 	async request<T>(
 		method: string,
 		params: Record<string, unknown>,
@@ -5109,6 +5116,16 @@ class CodexRpc {
 }
 
 export class CodexRuntimeDriver implements RuntimeDriver {
+	private coreProcess?: { key: string; rpc: CodexRpc };
+	get liveCoreProcessId() {
+		const pinned = this.coreProcess;
+		return !this.closed &&
+			pinned &&
+			this.conversationRpcs.get(pinned.key) === pinned.rpc
+			? pinned.rpc.liveCoreProcessId
+			: undefined;
+	}
+
 	private readonly nativeSkillProcesses = new Map<string, NativeSkillProcess>();
 	private readonly nativeSkillProcessesByRpc = new WeakMap<
 		CodexRpc,
@@ -6226,6 +6243,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (this.closed) unavailable();
 		this.assertRuntimeRequirements(this.session(nativeSessionRef));
 		const key = this.conversationKeyFor(nativeSessionRef);
+		if (this.coreProcess) {
+			if (key !== this.coreProcess.key || !this.liveCoreProcessId)
+				unavailable();
+			return this.coreProcess.rpc;
+		}
 		const existing = this.conversationRpcs.get(key);
 		// The real executor/current checks above cover this synchronous cache lookup.
 		if (existing) return existing;
@@ -6832,6 +6854,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				await sessionExecutor.assertCurrent();
 			}
 			return openBridge({
+				...(options.coreConversationKey
+					? { coreAdmission: true as const }
+					: {}),
 				isolationMode: options.isolationMode,
 				...(sessionExecutor ? { sessionExecutor } : {}),
 				dataDirectory: `${options.path}.native`,
@@ -7052,6 +7077,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		try {
+			if (options.coreConversationKey !== undefined) {
+				if (
+					!/^[a-f0-9]{64}$/.test(options.coreConversationKey) ||
+					privateLane ||
+					options.isolationMode !== "landlock"
+				)
+					configurationInvalid();
+				const rpc = await driver.openConversationRpc(
+					options.coreConversationKey,
+				);
+				if (!rpc.liveCoreProcessId) unavailable();
+				driver.coreProcess = { key: options.coreConversationKey, rpc };
+			}
 			await driver.loadArchivedJournals(codexJournalArchiveRoot(options.path));
 			const executorRebound = await driver.receiveSessionExecutorReplacement();
 			// #3226：先沿已保存进度收敛中断的结果发布，再处理其他未确认操作。

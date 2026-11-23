@@ -4,19 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+	admittedCorePod,
 	createExecutionGrantVerifier,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	type RuntimeDriver,
 	RuntimeHost,
 	RuntimeHostError,
+	requestCorePodAdmission,
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantClaimsV1,
 	ExecutionGrantCommandV1,
 	ExecutionGrantV1,
 } from "@agent-infra/contracts/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createRuntimeHostApp } from "./app.js";
 
@@ -882,4 +884,72 @@ it("keeps Session instance evidence default-off and wires only an explicitly con
 	expect((await issue(enabled, "wrong-worker")).status).toBe(401);
 	expect(reads).toBe(0);
 	expect((await issue(enabled)).status).toBe(400);
+});
+
+it("binds Core Runtime HTTP authorization to a fresh installation on this Pod and boot", async () => {
+	const { host, driver } = await setup();
+	const key = "synthetic-session-key";
+	let supported = false;
+	const runtime = admittedCorePod(key, "pod-a", () =>
+		supported ? "native-1" : undefined,
+	);
+	const app = createRuntimeHostApp({
+		host,
+		serviceToken: key,
+		corePod: runtime,
+		verifyGrant: createExecutionGrantVerifier(
+			new Map([["key-http", publicKey]]),
+		),
+	});
+	const transport: typeof fetch = async (url, init) =>
+		app.request(new Request(url, init));
+	const probe = (uid: string) =>
+		requestCorePodAdmission("http://fixture.invalid", key, uid, transport);
+	await expect(probe("pod-a")).rejects.toThrow();
+	supported = true;
+	await expect(probe("pod-b")).rejects.toThrow();
+	const token = await probe("pod-a");
+	const command = (token: string) =>
+		app.request("/internal/runtime/v1/readiness", {
+			method: "POST",
+			headers: { authorization: "Bearer " + token },
+		});
+	expect((await command(key)).status).toBe(401);
+	expect((await command(token)).status).toBe(503); // Authenticated; this fixture has no Agent readiness route.
+	const other = admittedCorePod(key, "pod-b", () => "native-2");
+	expect(other.accepts(token)).toBe(false);
+	const clock = vi.spyOn(Date, "now");
+	const start = Date.now();
+	const execute = vi.spyOn(driver, "execute");
+	const body = JSON.stringify(submitBody());
+	const send = (permit: string) =>
+		app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: { ...authorizedHeaders, authorization: "Bearer " + permit },
+			body,
+		});
+	try {
+		clock.mockReturnValue(start + 55_000);
+		const renewed = await probe("pod-a");
+		expect(renewed).not.toBe(token);
+		clock.mockReturnValue(start + 61_000);
+		expect((await send(token)).status).toBe(401);
+		expect(execute).not.toHaveBeenCalled();
+		const first = await send(renewed);
+		expect(first.status).toBe(200);
+		const firstAck = (await first.json()) as { hostSessionRef: string };
+		expect(typeof firstAck.hostSessionRef).toBe("string");
+		expect(execute).toHaveBeenCalledTimes(1);
+		const replay = await send(renewed);
+		expect(replay.status).toBe(200);
+		expect(await replay.json()).toMatchObject({
+			hostSessionRef: firstAck.hostSessionRef,
+		});
+		expect(execute).toHaveBeenCalledTimes(1);
+		supported = false;
+		expect((await send(renewed)).status).toBe(401);
+	} finally {
+		clock.mockRestore();
+		execute.mockRestore();
+	}
 });

@@ -552,6 +552,7 @@ function assembleReserveAdapter(
 				!Number.isSafeInteger(claim.deliveryFence) ||
 				claim.deliveryFence < 1 ||
 				identity.kind === "StatefulSet" ||
+				identity.kind === "Sandbox" ||
 				identity.namespace !== client.namespace ||
 				identity.name !== `sandbox-${claim.sandboxId}`
 			)
