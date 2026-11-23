@@ -87,6 +87,7 @@ import {
 	sessionSandboxRuntimeContainerName,
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
+	sessionSnapshotSecretNameV1,
 } from "./session-workload-adapter.js";
 import { nativeEgressFixture } from "./test-support/native-egress.js";
 import {
@@ -4108,15 +4109,10 @@ describe("native Session policy binding", () => {
 	});
 });
 
-it("creates a Session-scoped signed manifest and rejects altered snapshot init", async () => {
+async function signedSnapshotAllocation() {
 	const { projectWorkspaceSnapshotMaterializerV1 } = await import(
 		"./workspace-snapshot-materializer.js"
 	);
-	const { sessionSnapshotSecretNameV1 } = await import(
-		"./session-workload-adapter.js"
-	);
-	const client = api();
-	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 	const projection = projectWorkspaceSnapshotMaterializerV1(
 		[
 			{
@@ -4140,7 +4136,7 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 			credentialSecretName: sessionSnapshotSecretNameV1(allocation),
 		},
 	);
-	const selected = {
+	return {
 		...allocation,
 		workspaceSnapshotProjection: projection,
 		egress: {
@@ -4155,6 +4151,50 @@ it("creates a Session-scoped signed manifest and rejects altered snapshot init",
 			],
 		},
 	};
+}
+
+it.each(["bound", "wrong-uid", "wrong-controller"] as const)(
+	"cleans up a signed snapshot with a %s Secret owner",
+	async (scenario) => {
+		const selected = await signedSnapshotAllocation();
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(selected);
+		const observed = await adapter.observe(selected);
+		expect(observed.status).toBe("observed");
+		const name = sessionSnapshotSecretNameV1(selected);
+		const secret = await client.read<V1Secret>("Secret", name);
+		const owner = secret?.metadata?.ownerReferences?.[0];
+		if (!owner) throw Error("missing snapshot owner");
+		expect(owner.uid).toBe(
+			observed.resources.find(({ kind }) => kind === "Pod")?.uid,
+		);
+		if (scenario === "wrong-uid") owner.uid = "another-pod";
+		if (scenario === "wrong-controller") owner.kind = "Sandbox";
+		const cleanup = adapter.cleanup(selected, observed.resources, {
+			recordDeletionProgress: async () => "committed",
+		});
+		if (scenario === "bound") {
+			await cleanup;
+			expect(await client.read("Secret", name)).toBeNull();
+			expect(
+				(await client.read("PersistentVolumeClaim", selected.pvcName))?.metadata
+					?.uid,
+			).toBe(
+				observed.resources.find(({ kind }) => kind === "PersistentVolumeClaim")
+					?.uid,
+			);
+		} else {
+			await expect(cleanup).rejects.toMatchObject({ code: "conflict" });
+			expect(await client.read("Secret", name)).toBe(secret);
+		}
+	},
+);
+
+it("creates a Session-scoped signed manifest and rejects altered snapshot init", async () => {
+	const selected = await signedSnapshotAllocation();
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 	await adapter.apply(selected);
 	const foreign: V1NetworkPolicy = {
 		kind: "NetworkPolicy",
