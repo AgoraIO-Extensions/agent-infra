@@ -56,13 +56,43 @@ function checkEntry(value, path, reasons, output) {
 	else output[path.split(".").at(-1)] = entry.evidenceHash;
 }
 
+// Status describes the observed Web behavior. Missing catalog/readback evidence blocks acceptance.
+function nativeCommandEvidence(item, path, reasons) {
+	const commands = record(item.nativeCommands);
+	if (!commands) {
+		add(reasons, `${path}:missing`);
+		return;
+	}
+	const normalized = {};
+	for (const name of ["compact", "goal"]) {
+		const entry = record(commands[name]);
+		const allowed = item.templateId === "codex"
+			? [name === "compact" ? "completed" : "unavailable"]
+			: ["completed", "unavailable", "discovery-only"];
+		if (!entry || !allowed.includes(entry.outcome)) {
+			add(reasons, `${path}.${name}:outcome`);
+			continue;
+		}
+		const hashes = entry.outcome === "completed"
+			? ["catalogHash", "invocationHash", "terminalHash", "reconnectHash"]
+			: ["catalogHash", "blockedSubmissionHash"];
+		for (const key of hashes) {
+			if (typeof entry[key] !== "string" || !hashPattern.test(entry[key])) add(reasons, `${path}.${name}:${key}`);
+		}
+		if (Object.keys(entry).some((key) => key !== "outcome" && !hashes.includes(key))) add(reasons, `${path}.${name}:unbounded-field`);
+		normalized[name] = entry;
+	}
+	if (Object.keys(commands).some((name) => !["compact", "goal"].includes(name))) add(reasons, `${path}:unbounded-field`);
+	return normalized;
+}
+
 function validateRecord(value, index, sourceCommit, imageDigest) {
 	const reasons = [];
 	const item = record(value);
 	if (!item) return [`evidence[${index}]:shape`];
 	const allowed = new Set([
 		"templateId", "driver", "sourceCommit", "imageDigest", "configurationRevision",
-		"sandboxIdentityHash", "providerVersion", "runtimeEvents", "finalReceiptHash", "checks",
+		"sandboxIdentityHash", "providerVersion", "runtimeEvents", "finalReceiptHash", "checks", "nativeCommands",
 	]);
 	for (const key of Object.keys(item)) if (!allowed.has(key)) add(reasons, `evidence[${index}]:unbounded-field`);
 	if (!ackFourTemplateIds.includes(item.templateId)) add(reasons, `evidence[${index}]:template-id`);
@@ -87,7 +117,8 @@ function validateRecord(value, index, sourceCommit, imageDigest) {
 		for (const check of ackFourTemplateChecks) checkEntry(checks[check], `evidence[${index}].checks.${check}`, reasons, boundedChecks);
 		for (const key of Object.keys(checks)) if (!ackFourTemplateChecks.includes(key)) add(reasons, `evidence[${index}].checks:unknown-${key}`);
 	}
-	return { reasons, item, boundedChecks };
+	const nativeCommands = nativeCommandEvidence(item, `evidence[${index}].nativeCommands`, reasons);
+	return { reasons, item, boundedChecks, nativeCommands };
 }
 
 /**
@@ -136,6 +167,7 @@ export function validateAckFourTemplateEvidence(value, expected = {}) {
 			runtimeEventHashes: checked.item.runtimeEvents?.eventIdHashes,
 			finalReceiptHash: checked.item.finalReceiptHash,
 			checks: checked.boundedChecks,
+			nativeCommands: checked.nativeCommands,
 		});
 	}
 	for (const template of ackFourTemplateIds) if (!seen.has(template)) add(reasons, `evidence:missing-${template}`);

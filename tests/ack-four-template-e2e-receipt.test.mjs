@@ -24,6 +24,20 @@ function evidence(templateId) {
 		configurationRevision: `configuration-${templateId}`,
 		sandboxIdentityHash: "c".repeat(64),
 		providerVersion: `provider-${templateId}-1.0.0`,
+		nativeCommands: {
+			compact: {
+				outcome: "completed",
+				catalogHash: "1".repeat(64),
+				invocationHash: "2".repeat(64),
+				terminalHash: "3".repeat(64),
+				reconnectHash: "4".repeat(64),
+			},
+			goal: {
+				outcome: "unavailable",
+				catalogHash: "1".repeat(64),
+				blockedSubmissionHash: "5".repeat(64),
+			},
+		},
 		runtimeEvents: {
 			count: 6,
 			eventIdHashes: ["d".repeat(64), "e".repeat(64)],
@@ -84,4 +98,39 @@ test("rejects source, image, template, and unbounded-field drift", () => {
 	assert(result.reasons.includes("evidence[1]:image-digest-drift"));
 	assert(result.reasons.includes("evidence[2]:unbounded-field"));
 	assert(result.reasons.includes("evidence[3]:template-id"));
+});
+
+test("requires real Codex compact completion, reconnect and M1 goal non-submission evidence", () => {
+	const data = input();
+	const codex = data.evidence[3].nativeCommands;
+	delete codex.compact.reconnectHash;
+	codex.goal = { ...codex.compact, outcome: "completed" };
+	delete data.evidence[0].nativeCommands;
+	const result = validateAckFourTemplateEvidence(data);
+	assert.equal(result.status, "blocked");
+	for (const reason of [
+		"evidence[0].nativeCommands:missing",
+		"evidence[3].nativeCommands.compact:reconnectHash",
+		"evidence[3].nativeCommands.goal:outcome",
+	])
+		assert(result.reasons.includes(reason));
+	codex.compact = { ...evidence("claude").nativeCommands.goal };
+	assert(
+		validateAckFourTemplateEvidence(data).reasons.includes(
+			"evidence[3].nativeCommands.compact:outcome",
+		),
+	);
+});
+
+test("accepts a discoverable but non-invocable command on a non-Codex template", () => {
+	const data = input();
+	data.evidence[1].nativeCommands.compact = {
+		...data.evidence[1].nativeCommands.goal,
+		outcome: "discovery-only",
+	};
+	assert.equal(
+		validateAckFourTemplateEvidence(data).templates[1].nativeCommands.compact
+			.outcome,
+		"discovery-only",
+	);
 });
