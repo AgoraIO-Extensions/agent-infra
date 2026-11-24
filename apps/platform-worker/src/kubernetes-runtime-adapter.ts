@@ -208,6 +208,7 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	 * ADR-0049). Owner, Manifest and request inputs cannot supply scheduling fields.
 	 */
 	readonly agentWorkloadPlacement?: AgentWorkloadPlacementV1;
+	readonly piSessionPlacement?: AgentWorkloadPlacementV1;
 	/** Optional deployment-owned Platform API selector for platform-auth routes. */
 	readonly platformApiSelector?: Readonly<Record<string, string>>;
 	readonly routeNamespace: string;

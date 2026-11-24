@@ -998,6 +998,12 @@ export function createSessionSandboxResourceInputResolverV1(
 			resourceFence,
 		);
 		const allocation: SessionSandboxResourceInputV1 = {
+			...(runtime &&
+			!runtime.custom &&
+			runtime.transport === "paseo-sdk-pod" &&
+			workload.policy.piSessionPlacement
+				? { piSessionPlacement: workload.policy.piSessionPlacement }
+				: {}),
 			...(policy.podController
 				? {
 						podController: policy.podController,

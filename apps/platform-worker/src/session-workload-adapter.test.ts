@@ -194,6 +194,36 @@ const allocation: SessionSandboxAllocationV1 = {
 	desiredState: "running",
 };
 
+it("renders the approved ECI placement when reconciling a Pi companion", () => {
+	const config = JSON.parse(allocation.runtime!.modelConfiguration);
+	for (const opt of config.modelOptions) {
+		opt.protocol = "anthropic-messages-v1";
+		opt.authentication = "api-key";
+	}
+	const expected = sessionSandboxResourcesV1({
+		...allocation,
+		runtime: {
+			...allocation.runtime!,
+			modelConfiguration: JSON.stringify(config),
+			driver: "pi",
+			transport: "paseo-sdk-pod",
+			codexContainerBoundaryEnabled: undefined,
+			codexContainerBoundaryAttestation: undefined,
+		},
+		piSessionPlacement: { architecture: "amd64", legacyUnplaced: "reject" },
+	})[5] as V1Pod;
+	expect(expected.spec?.nodeSelector).toEqual({
+		type: "virtual-kubelet",
+		"kubernetes.io/arch": "amd64",
+	});
+	expect(expected.spec?.tolerations).toContainEqual({
+		key: "virtual-kubelet.io/provider",
+		operator: "Equal",
+		value: "alibabacloud",
+		effect: "NoSchedule",
+	});
+});
+
 it("keeps the empty installation receiver on both cold and reserve Hosts", () => {
 	const configuration = {
 		schemaVersion: 1 as const,

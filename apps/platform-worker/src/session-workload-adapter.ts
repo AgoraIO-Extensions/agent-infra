@@ -296,6 +296,7 @@ export interface SessionSandboxOAuthProvisioningV1 {
 export interface SessionSandboxAllocationV1 {
 	readonly podController?: "sig-core-v1.0.12";
 	readonly corePlacement?: AgentWorkloadPlacementV1;
+	readonly piSessionPlacement?: AgentWorkloadPlacementV1;
 	readonly schemaVersion: 1;
 	readonly agentId: string;
 	readonly sessionId: string;
@@ -1392,6 +1393,11 @@ function renderSessionSandboxResourcesV1(
 	}
 	if (allocation.runtime?.transport === "paseo-sdk-pod") {
 		if (!pod.spec) throw new WorkloadKubernetesError("policy");
+		if (!allocation.podController && allocation.piSessionPlacement)
+			Object.assign(
+				pod.spec,
+				agentWorkloadPodPlacementV1(allocation.piSessionPlacement),
+			);
 		addPiCompanion(pod.spec, "workspace", allocation.resources);
 	}
 	if (allocation.runtime?.sessionExecutor && allocation.codexSessionExecutor) {

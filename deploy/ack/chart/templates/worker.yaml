@@ -123,6 +123,10 @@ spec:
             {{- with .Values.agentVersion }}
             - {name: AGENT_INFRA_AGENT_VERSION, value: {{ . | quote }}}
             {{- end }}
+            {{- if and .Values.sessionRuntimeScheduling.enabled (not .Values.sessionRuntimeScheduling.runtimeClassName) }}
+            - name: AGENT_INFRA_PI_SESSION_ECI_PLACEMENT
+              value: {{ dict "architecture" .Values.sessionRuntimeScheduling.architecture "legacyUnplaced" "reject" | toJson | quote }}
+            {{- end }}
             {{- if .Values.agentWorkloadScheduling.enabled }}
             - name: AGENT_INFRA_AGENT_WORKLOAD_PLACEMENT
               value: {{ dict "architecture" .Values.agentWorkloadScheduling.architecture "legacyUnplaced" .Values.agentWorkloadScheduling.legacyUnplaced | toJson | quote }}
