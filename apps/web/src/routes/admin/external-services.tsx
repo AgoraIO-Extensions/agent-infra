@@ -244,10 +244,7 @@ function ServiceSettings() {
 						>
 							查询当前授权
 						</Button>
-						<Button
-							disabled={busy || !selected.active}
-							onClick={() => void action("disable")}
-						>
+						<Button disabled={busy} onClick={() => void action("disable")}>
 							停用服务
 						</Button>
 					</div>

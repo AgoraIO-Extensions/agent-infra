@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-test("管理员登记、验证并启用实例，刷新后看见生效版本", async ({ page }) => {
+test("管理员首次启用前可停用，验证启用后刷新保留版本", async ({ page }) => {
 	let revision = 0;
 	let verified: number | null = null;
 	let active: number | null = null;
+	const actions: string[] = [];
 	const url = "https://relay.example.test";
 	await page.route("**/api/**", async (route) => {
 		const request = route.request();
@@ -21,6 +22,11 @@ test("管理员登记、验证并启用实例，刷新后看见生效版本", as
 			});
 		if (path === "/api/v2/admin/external-services/commands") {
 			const { action } = request.postDataJSON();
+			expect(request.postDataJSON()).toMatchObject({
+				id: "relay",
+				revision: 1,
+			});
+			actions.push(action);
 			if (action === "test") {
 				verified = revision;
 				return route.fulfill({
@@ -34,7 +40,7 @@ test("管理员登记、验证并启用实例，刷新后看见生效版本", as
 					},
 				});
 			}
-			active = revision;
+			active = action === "disable" ? null : revision;
 			return route.fulfill({ json: { revision } });
 		}
 		if (path === "/api/v2/admin/external-services") {
@@ -75,6 +81,13 @@ test("管理员登记、验证并启用实例，刷新后看见生效版本", as
 	await page.getByLabel("该地址的服务凭据").fill("browser-fixture-credential");
 	await page.getByRole("button", { name: "保存候选配置" }).click();
 	await expect(page.getByLabel("该地址的服务凭据")).toHaveValue("");
+	const disable = page.getByRole("button", { name: "停用服务" });
+	await expect(disable).toBeEnabled();
+	await disable.click();
+	await expect(
+		page.getByRole("status").filter({ hasText: "操作已保存" }),
+	).toBeVisible();
+	expect(actions).toEqual(["disable"]);
 	await page.getByRole("button", { name: "测试连接" }).click();
 	await expect(
 		page.getByText("连接成功 · 协议 v1 · model-authorization", { exact: true }),
@@ -83,4 +96,5 @@ test("管理员登记、验证并启用实例，刷新后看见生效版本", as
 	await expect(page.getByText("生效 v1", { exact: false })).toBeVisible();
 	await page.reload();
 	await expect(page.getByText("生效 v1", { exact: false })).toBeVisible();
+	expect(actions).toEqual(["disable", "test", "enable"]);
 });
