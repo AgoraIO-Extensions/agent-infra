@@ -32,7 +32,10 @@ import {
 	RuntimeSkillHubBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
+import {
+	createFakeModelCatalogAdapterV1,
+	runtimeModelInjectionV4,
+} from "@agent-infra/model-catalog";
 import {
 	decideSessionSandboxDrainObservationV1,
 	type SessionSandboxDeletionProgressV1,
@@ -40,6 +43,7 @@ import {
 	type SessionSandboxReconciliationClaimV1,
 	sessionSandboxFileExchangeTokenV1,
 	transitionExecutorInstanceV2,
+	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
@@ -72,6 +76,7 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 import { skillHubDeliveryIdentityV1 } from "./skill-hub-delivery.js";
@@ -505,6 +510,127 @@ it("prepares a Core SDK Session with ordinary RuntimeHost authentication", async
 	expect(env.some((entry) => entry.name.startsWith("AGENT_INFRA_CORE_"))).toBe(
 		false,
 	);
+	const agentAdapter = createKubernetesRuntimeAdapterV1({
+		client: { ...f.client, namespace },
+		policy,
+		modelProjection: projection,
+		standardTemplateBinding: projection.standardTemplateBinding,
+		probe: async () => true,
+	});
+	const identity = await agentAdapter.apply(deployment);
+	if (!identity || identity === "pending")
+		throw new Error("Agent fixture is not ready");
+	await agentAdapter.promote(deployment, identity);
+	const capacity = {
+		schemaVersion: 1 as const,
+		imageDigest: deployment.imageDigest,
+		resourceProfileRef: policy.resourceProfileRef,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		conformanceEvidenceHash: "c".repeat(64),
+		maximumConcurrentExecutions: 1,
+	};
+	const configuration = {
+		schemaVersion: 2 as const,
+		agentId: deployment.agentId,
+		revision: 1,
+		source: {
+			kind: "standard" as const,
+			templateId: projection.standardTemplateBinding.templateId,
+			imageDigest: deployment.imageDigest,
+			admissionRevision: "admitted",
+			allowedEnvironmentKeys: [],
+			allowedSecretKeys: [],
+			platformManagedKeys: [],
+			connectionEnabled: false,
+		},
+		modelConfiguration: {
+			catalogRevision: projection.catalogRevision,
+			defaultOptionId: projection.defaultOptionId,
+			defaultReasoningLevel: projection.defaultReasoningLevel,
+			options: projection.options.map(
+				({ optionId, endpoint, modelId, reasoningLevels }) => ({
+					optionId,
+					endpointId: endpoint.endpointId,
+					modelId,
+					reasoningLevels,
+				}),
+			),
+		},
+		environment: [],
+		secrets: [],
+		channels: [],
+		channelRevision: "channels-1",
+	};
+	const version = {
+		configuration,
+		deployment,
+		modelProjection: projection,
+		executionCapacity: capacity,
+	};
+	const state: WorkloadReconciliationStateV1 = {
+		schemaVersion: 1,
+		agentId: deployment.agentId,
+		sourceConfigurationRevision: 1,
+		sourceLifecycleRevision: 1,
+		revision: 1,
+		fence: 1,
+		phase: "ready",
+		candidate: version,
+		verified: version,
+		verifiedRevision: 1,
+		identity,
+		rollback: false,
+		failureCode: null,
+		attempts: 0,
+	};
+	const businessResolver = createProductionConversationRuntimeResolverV2({
+		workload: {
+			...f.options,
+			policy,
+			client: { ...f.client, namespace },
+			templateModelBindings: [projection.standardTemplateBinding],
+			executionCapacityProfiles: [capacity],
+			modelCatalog: createFakeModelCatalogAdapterV1({
+				schemaVersion: 1,
+				revision: projection.catalogRevision,
+				validUntil: Date.now() + 60_000,
+				endpoints: projection.options.map((option) => option.endpoint),
+			}),
+			fetch: async (url) =>
+				String(url).endsWith(corePodAdmissionPath)
+					? legacyAdmission()
+					: new Response("ok"),
+		},
+		signing,
+		serviceToken: sessionSandboxDeploymentTokenFixture,
+	});
+	const businessTarget = await businessResolver({
+		agentId: claim.sandbox.agentId,
+		conversationId: claim.sandbox.sessionId,
+		sessionGeneration: claim.sandbox.generation,
+		purpose: "business",
+		command: "turn.submit",
+		principal: claim.sandbox.principal,
+		workload: state,
+		signal,
+		sandboxResource: {
+			sandbox: claim.sandbox,
+			resourceFence: claim.resourceFence,
+			desiredState: "running",
+			status: "ready",
+			policy: claim.policy,
+			observation: ready,
+		},
+	});
+	expect(businessTarget.serviceToken).toBe(
+		sessionSandboxServiceTokenV1(
+			sessionSandboxDeploymentTokenFixture,
+			namespace,
+			claim.sandbox.sandboxId,
+		),
+	);
+	expect(businessTarget).not.toHaveProperty("corePodAdmission");
+	expect(legacyAdmission).not.toHaveBeenCalled();
 	const resolver = createProductionConversationRuntimeResolverV2({
 		workload: {
 			...f.options,
