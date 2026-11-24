@@ -44,10 +44,12 @@ attestation，把本决定的第 2 项用到这三个模板。不新增门禁，
 
 两项都不成立时，仍按原规则 fail closed。无论选哪一项，最终镜像都须在目标放置上逐项通过负例。
 
-独立 executor 的工具启动隔离（工程 Spec §11.2.1）不在本决定范围内。它要保护的 upstream
-`exec-server` 由 execve 启动，启动后恢复 dumpable，Host 设置的 non-dumpable 管不到它。该路径
-仍要求 Yama `1`、`2` 或 `3`，M1 不启用，现场项见
-[#4374](https://github.com/AgoraIO-Extensions/agent-infra/issues/4374)。
+独立 executor 的工具启动隔离不在本决定范围内。仅在 Node 父进程中设置 non-dumpable
+不保证 `exec` 后原生 `exec-server` 的保护。其适用启动方式、部署授权和失败规则统一见
+[工程 Spec §11.2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)。
+本决定不授权启用独立 executor；未证现场项继续由
+[#4374](https://github.com/AgoraIO-Extensions/agent-infra/issues/4374) 跟踪，新增启动保护的实现与
+目标环境验收由 [#4512](https://github.com/AgoraIO-Extensions/agent-infra/issues/4512) 承接。
 
 ## 等价性依据
 

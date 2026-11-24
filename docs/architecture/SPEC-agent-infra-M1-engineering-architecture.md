@@ -2240,8 +2240,23 @@ Sandbox、Session generation 和 resource fence，再按原所有权、部署修
 [Runtime HLD §10.3](HLD-agent-runtime-M1.md#103-codex-session-独立-executor-提案)。
 身份启动路径的启用边界、V1 兼容范围，以及同 binding 重建的实例 pin 授权、原事实保留与混合版本/回退，
 统一遵循 [Runtime HLD §10.3.1](HLD-agent-runtime-M1.md#1031-排空通道的实例身份交付)。
-该路径的 runner 在开放控制入口前用固定探针确认工具启动隔离，要求可信内核的 Yama `ptrace_scope`
-为 `1`、`2` 或 `3`，否则以 `CODEX_EXECUTOR_LAUNCH_NOT_ISOLATED` 启动失败。
+该路径的 runner 在开放控制入口前，从固定 `exec-server` 自身的工具启动入口验证父进程
+内存与协议 FD 不可读写、控制通道未继承给工具，并满足以下一种启动保护：
+
+1. 从可信内核读取 Yama `ptrace_scope` 为 `1`、`2` 或 `3`。
+2. 使用发布镜像声明的专用不可读 ELF 启动 `exec-server`。原生程序、固定路径和文件布局
+   随同一镜像与发布来源绑定。构建时核对固定原生程序的字节摘要，运行时核对同一镜像
+   与清单中的路径、权限；该 ELF 及父目录由 root 持有，执行者可以执行，但不能读取
+   ELF、更改模式或替换路径。运行容器保持只读 rootfs；不从工作区、Owner env 或请求选择
+   路径。启动前核对无符号链接、root 归属、文件与目录权限、来源和 `fs.suid_dumpable` 不为
+   `1`，再验证上述实际工具访问保护。仅在 Node 父进程中设置 non-dumpable 不代替
+   `exec` 后的保护。发布清单未声明该方式时，保留原 Yama 路径。
+
+两种方式均保持 non-root、无额外 capabilities、`no_new_privs`、RuntimeDefault 和既有实例
+身份。不可读 ELF 方式不增加 setuid、文件 capabilities、运行时 UID 切换或宿主 sysctl 修改。
+来源或布局不匹配、前提不可核实、任一访问保护失败时，以
+`CODEX_EXECUTOR_LAUNCH_NOT_ISOLATED` 启动失败。该启动保护不代替同一实际 Pod、runner
+与原生进程实例的认证，也不结清未确认的执行或 Stop。
 启用仍由部署显式授权。需要 Helm 装配或新增 RBAC 时另开默认关闭的 Helm PR，权限限于
 该启动投影实际所需操作，由部署负责人 sess_fccff4b2 安排目标环境部署。
 
@@ -3152,8 +3167,8 @@ scope。它只在 Worker 为 Session Sandbox 创建的 init container 中运行�
 token、service token 与 Host 内的 OAuth 材料仍受 non-dumpable 保护。取舍与等价性依据见
 [ADR-0051](../adr/0051-accept-non-dumpable-credential-holder-for-standard-mcp.md)。
 
-独立 executor 的工具启动隔离不适用第 2 项，仍按
-[§11.2.1](#1121-codex-session-独立-executor提案) 要求 Yama。
+独立 executor 的工具启动隔离不由第 2 项的 Host 保护代签，适用启动方式与实际工具访问检查
+统一见 [§11.2.1](#1121-codex-session-独立-executor提案)。
 
 proc FD/link/fdinfo 读取与重开另由真实文件边界限制，不能以 Yama 数值或 dumpable 状态代替。
 最终镜像须在目标放置上分别验证 `ptrace`（ATTACH 与 SEIZE）、`process_vm_readv`、

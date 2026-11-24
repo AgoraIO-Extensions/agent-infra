@@ -47,6 +47,14 @@ local fallback。标准 native 事件和平台授权/持久化边界保持，不
 - 现有父进程 HOME 和完整 PVC 不可挂给 executor。工作区路径须在 Worker 侧从权威绑定确定，
   不能让 Sidecar 或模型启动时自行挑选其他目录。
 
+## exec-server 启动保护
+
+无 Yama 的运行环境需要验证 `exec` 后仍有效的工具到 `exec-server` 访问保护。专用不可读
+ELF 方案复用固定原生程序，以镜像来源、root 归属、不可替换布局和真实工具访问检查绑定
+启动保护；适用条件与拒绝规则统一由[工程 Spec §11.2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)定义。
+该选择先由 [#4512](https://github.com/AgoraIO-Extensions/agent-infra/issues/4512) 完成实现和目标环境验证。
+它不扩大既有 `container-boundary` 例外，也不单独授权 SIG Core 与 executor 的组合。
+
 ## 实施与验收顺序
 
 1. 工程 Spec/HLD 与本方案已按 #4085 评审合入；文档和代码合入均不代替真实业务验收。

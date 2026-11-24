@@ -1205,6 +1205,11 @@ Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生
 [§11.2.1](SPEC-agent-infra-M1-engineering-architecture.md#1121-codex-session-独立-executor提案)为准；
 本方案按 #4085 评审后以独立 `session-executor` 模式实现；上文模式保持，目标部署仍须单独验收。
 
+runner 从发布镜像的固定启动方式打开原生 `exec-server`；启动保护以工程 Spec §11.2.1
+为准。专用不可读 ELF 的来源、路径、root 归属和不可替换布局随镜像绑定，工作区和请求
+不能覆盖。每个新原生进程实例均须通过自身工具入口的访问保护检查，才建立可用的执行
+通道；初始化 RPC 成功不代替该检查。其结果随原实例失效，不能用于另一实例的准入或排空。
+
 固定 Codex `0.153.0` 的 app-server 保留在控制容器，通过部署固定的
 `CODEX_EXEC_SERVER_URL` 只选择同 Session Pod 的 remote environment。启动前拒绝可覆盖
 environment 选择的持久/工作区配置；不能继承请求、Owner 或宿主提供的 executor override。
