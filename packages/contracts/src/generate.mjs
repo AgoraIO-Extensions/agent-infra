@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
+import { connectionRegistrationOwnerOpenApiPathsV1 } from "./connection-registration-owner.ts";
 import {
 	EnterpriseDirectorySnapshotV1Schema,
 	EnterpriseDirectorySnapshotV2Schema,
@@ -210,6 +211,10 @@ const artifactPaths = {
 	platformAuthOpenapi: resolve(
 		artifactRoot,
 		"openapi/platform-auth.v1.openapi.json",
+	),
+	connectionRegistrationOwnerOpenapi: resolve(
+		artifactRoot,
+		"openapi/connection-registration-owner.v1.openapi.json",
 	),
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
@@ -1239,6 +1244,19 @@ function buildArtifacts() {
 		jsonSchema,
 		openapi,
 		pilotBrowserOpenapi,
+		connectionRegistrationOwnerOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Connection registration current Owner",
+				version: "1.0.0",
+			},
+			paths: connectionRegistrationOwnerOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					ConnectionOwnerReader: { type: "http", scheme: "bearer" },
+				},
+			},
+		}),
 		standardTemplateReleaseOpenapi: createDocument({
 			openapi: "3.1.0",
 			info: { title: "Standard template deployment release", version: "1.0.0" },
