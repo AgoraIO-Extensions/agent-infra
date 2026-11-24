@@ -1,5 +1,5 @@
 import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { LdapIdentityUnavailableError } from "@agent-infra/identity";
+import { EmployeeIdentityUnavailableError } from "@agent-infra/identity";
 import type { OperationalEvent } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
@@ -84,9 +84,12 @@ describe("deployment configuration projection", () => {
 				causeCode: "ECONNRESET",
 				elapsedMs: 25,
 			};
-			const error = Object.assign(new LdapIdentityUnavailableError(failure), {
-				privateDetail: "PRIVATE_COOKIE_UID_DN_CANARY",
-			});
+			const error = Object.assign(
+				new EmployeeIdentityUnavailableError(failure),
+				{
+					privateDetail: "PRIVATE_COOKIE_UID_DN_CANARY",
+				},
+			);
 			const app = new Hono();
 			app.use(
 				"*",
@@ -112,7 +115,7 @@ describe("deployment configuration projection", () => {
 			expect(read).not.toHaveBeenCalled();
 			expect(events[0]).toMatchObject({
 				failureStep: "identity.resolve",
-				errorClass: "LdapIdentityUnavailableError",
+				errorClass: "EmployeeIdentityUnavailableError",
 				identityFailure: failure,
 			});
 			expect(JSON.stringify(events)).not.toContain(

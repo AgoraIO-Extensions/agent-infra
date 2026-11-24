@@ -41,7 +41,7 @@ test("local API auth probe requires the configured token and rejects another", a
 		});
 		const correctRoute =
 			request.method === "HEAD" &&
-			request.url === "/auth/login" &&
+			request.url === "/auth/oidc/login" &&
 			request.headers.host === "localhost:3001" &&
 			request.headers["x-forwarded-proto"] === "https";
 		response.statusCode = !correctRoute

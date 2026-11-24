@@ -1,9 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createDirectoryClient } from "@agent-infra/enterprise-directory";
-import {
-	createLdapIdentityDirectory,
-	createWecomEmployeeIdentity,
-} from "@agent-infra/identity";
+import { createWecomEmployeeIdentity } from "@agent-infra/identity";
 import { readOperationsConfigurationV2 } from "@agent-infra/observability/operations";
 import {
 	captureConnectionConsumerRegistrationPolicyV1,
@@ -38,7 +35,7 @@ import { createProductionPlatformFileDeploymentFromEnvironmentV1 } from "./file-
 import {
 	type AutomaticTemplatePublicationInputV1,
 	createAutomaticTemplatePublicationAppV1,
-	createPostgresLdapBrowserDeployment,
+	createPostgresOidcBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
 	createProductionSingleAgentTemplateReleaseAppV1,
 	type ProductionTemplateUpgradeInputV2,
@@ -63,10 +60,8 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 	throw new Error("PLATFORM_API_CONFIGURATION_MODULE must be a file URL");
 }
 const {
-	ldap,
 	oidc,
 	verifiedWecomMember,
-	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
 	connectionWebPath,
@@ -241,39 +236,25 @@ const deploymentAgentVersion = resolveDeploymentSkillAgentVersionV1(
 	process.env.AGENT_INFRA_AGENT_VERSION,
 );
 const configuredDatabaseUrl = databaseUrl;
-if (oidc === undefined && typeof ldap?.verifyCurrentStatus !== "function") {
-	throw new Error("LDAP current account authority is required");
-}
-if (typeof directorySearch !== "function") {
+if (!oidc || !directorySnapshot)
+	throw new Error("OIDC and directory snapshot configuration are required");
+if (typeof directorySearch !== "function")
 	throw new Error("Directory search authority is required");
-}
-let organizationIds = configuredOrganizationIds;
-let organizationAuthority:
-	| ReturnType<typeof createDirectoryOrganizationAuthorityResolverV1>
-	| undefined;
-if (directorySnapshot !== undefined) {
-	organizationAuthority =
-		createDirectoryOrganizationAuthorityResolverV1(directorySnapshot);
-	organizationIds = createDirectoryOrganizationIdsResolverV1(directorySnapshot);
-}
-if (typeof organizationIds !== "function") {
-	throw new Error("Directory organization authority is required");
-}
+const organizationAuthority =
+	createDirectoryOrganizationAuthorityResolverV1(directorySnapshot);
+const organizationIds =
+	createDirectoryOrganizationIdsResolverV1(directorySnapshot);
 const tokenFile = process.env.PLATFORM_API_PROXY_TOKEN_FILE;
 if (!tokenFile?.startsWith("/")) {
 	throw new Error("PLATFORM_API_PROXY_TOKEN_FILE must be an absolute path");
 }
 const trustedProxyToken = await readFile(tokenFile, "utf8");
-const oidcStore =
-	oidc === undefined ? undefined : new PostgresOidcIdentityStore(databaseUrl);
-const oidcDirectory =
-	oidcStore &&
-	createOidcEmployeeDirectory(
-		oidc,
-		oidcStore,
-		createDirectoryClient(directorySnapshot),
-	);
-const directory = oidcDirectory ?? createLdapIdentityDirectory(ldap);
+const oidcStore = new PostgresOidcIdentityStore(databaseUrl);
+const directory = createOidcEmployeeDirectory(
+	oidc,
+	oidcStore,
+	createDirectoryClient(directorySnapshot),
+);
 const userGovernance = new PostgresPlatformUserDisablesV1(
 	databaseUrl,
 	async (userId) => {
@@ -287,21 +268,17 @@ const userGovernance = new PostgresPlatformUserDisablesV1(
 			: null;
 	},
 );
-const browser = createPostgresLdapBrowserDeployment({
-	...(oidcDirectory && oidcStore
-		? {
-				oidc: {
-					...oidc,
-					store: oidcStore,
-					verifiedAccount: oidcDirectory.verifiedAccount,
-				},
-			}
-		: {}),
+const browser = createPostgresOidcBrowserDeployment({
+	oidc: {
+		...oidc,
+		store: oidcStore,
+		verifiedAccount: directory.verifiedAccount,
+	},
 	databaseUrl,
 	directory,
 	isPlatformDisabled: userGovernance.isPlatformDisabled.bind(userGovernance),
 	organizationIds,
-	...(organizationAuthority ? { organizationAuthority } : {}),
+	organizationAuthority,
 	publicOrigin,
 	trustedProxyToken,
 });
@@ -440,7 +417,7 @@ function assembleManualStandardTemplateReleaseApp() {
 }
 
 const employeeWecomAuthority =
-	oidcStore && verifiedWecomMember !== undefined
+	verifiedWecomMember !== undefined
 		? createWecomEmployeeIdentity(
 				{
 					snapshot: createDirectoryClient(directorySnapshot),

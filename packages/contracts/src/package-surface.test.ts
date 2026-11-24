@@ -35,6 +35,9 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./openapi/platform-auth.v1"]).toBe(
 			"./artifacts/openapi/platform-auth.v1.openapi.json",
 		);
+		expect(manifest.exports["./openapi/platform-auth.v2"]).toBe(
+			"./artifacts/openapi/platform-auth.v2.openapi.json",
+		);
 		expect(manifest.exports["./workload"]).toEqual({
 			types: "./dist/workload/index.d.mts",
 			import: "./dist/workload/index.mjs",

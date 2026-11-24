@@ -5,7 +5,7 @@ import {
 	parseCurrentTaskUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import { LdapIdentityUnavailableError } from "./ldap.js";
+import { EmployeeIdentityUnavailableError } from "./employee-identity.js";
 
 export class TaskIdentityUnavailableErrorV1 extends Error {
 	constructor(readonly timedOut = false) {
@@ -49,7 +49,7 @@ export async function resolveCurrentTaskUserV1(
 				(error instanceof Error &&
 					error.cause instanceof DOMException &&
 					error.cause.name === "TimeoutError") ||
-				(error instanceof LdapIdentityUnavailableError &&
+				(error instanceof EmployeeIdentityUnavailableError &&
 					error.failure?.deadlineExpired === true) ||
 				(error instanceof TaskIdentityUnavailableErrorV1 && error.timedOut),
 		);

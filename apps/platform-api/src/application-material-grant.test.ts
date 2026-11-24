@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import { ApplicationMaterialGrantResponseV1Schema } from "@agent-infra/contracts/pilot";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
@@ -22,13 +22,13 @@ import {
 } from "../../../packages/platform-store/src/postgres-test.ts";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
-import { createLdapBrowserAdapter } from "./ldap-browser.js";
+import { createBrowserSessionAdapter } from "./browser-session.js";
 
 // Real HTTP/assembly/Core/PostgreSQL; LDAP and session authority are controlled ports.
 // This exercises governance, never an issuer or credential-material delivery.
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 120_000 });
 const origin = "https://platform.example.test";
-const admin: LdapAccount = {
+const admin: EmployeeAccount = {
 	uid: "stable-admin",
 	userId: "admin-1",
 	email: "admin@example.test",
@@ -42,10 +42,10 @@ let sql: ReturnType<typeof postgres>;
 let assembly: PlatformApiAssembly;
 let server: ReturnType<typeof serve>;
 let baseUrl: string;
-let account: LdapAccount | null;
+let account: EmployeeAccount | null;
 let disabled: boolean;
 const currentByUserId = vi.fn(
-	async (_id: string): Promise<LdapAccount | null> => account,
+	async (_id: string): Promise<EmployeeAccount | null> => account,
 );
 
 beforeAll(async () => {
@@ -59,13 +59,13 @@ beforeEach(async () => {
 	currentByUserId.mockReset().mockImplementation(async () => account);
 	await sql`truncate platform.platform_applications, platform.audit_events, platform.platform_user_disables cascade`;
 	await sql`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values ('app-1','First','manager-1','revision-1'), ('app-2','Second','manager-2','revision-2')`;
-	const browser = createLdapBrowserAdapter({
+	const browser = createBrowserSessionAdapter({
 		publicOrigin: origin,
 		directory: {
 			userIdForUid: async () => admin.userId,
 			current: async () => account,
 			currentByUserId,
-		} as unknown as ReturnType<typeof createLdapIdentityDirectory>,
+		} as unknown as EmployeeIdentityDirectory,
 		sessions: {
 			find: async () => ({
 				uid: admin.uid,

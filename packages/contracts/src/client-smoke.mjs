@@ -42,6 +42,26 @@ try {
 		output: resolve(temporaryRoot, "auth-generated"),
 		plugins: ["@hey-api/client-fetch", "@hey-api/typescript", "@hey-api/sdk"],
 	});
+	await createClient({
+		input: resolve(
+			packageRoot,
+			"artifacts/openapi/platform-auth.v2.openapi.json",
+		),
+		output: resolve(temporaryRoot, "oidc-generated"),
+		plugins: ["@hey-api/client-fetch", "@hey-api/typescript", "@hey-api/sdk"],
+	});
+	await writeFile(
+		resolve(temporaryRoot, "oidc-consumer.ts"),
+		`import {beginPlatformOidcLogin, completePlatformOidcLogin, receivePlatformOidcLogout, logoutPlatformEmployeeV1} from "./oidc-generated/sdk.gen.js";
+export async function check(code: string, state: string, logout_token: string) {
+	await beginPlatformOidcLogin();
+	await completePlatformOidcLogin({query:{code,state}});
+	await receivePlatformOidcLogout({body:{logout_token}});
+	await logoutPlatformEmployeeV1({headers:{"X-Platform-CSRF":"1"}});
+}
+`,
+		"utf8",
+	);
 	await writeFile(
 		resolve(temporaryRoot, "auth-consumer.ts"),
 		'import { loginPlatformEmployeeV1, logoutPlatformEmployeeV1 } from "./auth-generated/sdk.gen.js";\nexport const login = loginPlatformEmployeeV1;\nexport const logout = logoutPlatformEmployeeV1;\n',
@@ -65,6 +85,8 @@ try {
 					"generated/**/*.ts",
 					"auth-consumer.ts",
 					"auth-generated/**/*.ts",
+					"oidc-consumer.ts",
+					"oidc-generated/**/*.ts",
 				],
 			},
 			null,

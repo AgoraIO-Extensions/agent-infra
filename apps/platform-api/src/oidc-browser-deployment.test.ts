@@ -1,20 +1,24 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
-import { migratePlatformDatabase } from "@agent-infra/platform-store";
+import {
+	migratePlatformDatabase,
+	PostgresLdapSessionStoreV1 as PostgresBrowserSessionStoreV1,
+	PostgresOidcIdentityStore,
+} from "@agent-infra/platform-store";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { loadPlatformApiAssembly, startPlatformApi } from "./index.js";
-import { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+import { createPostgresOidcBrowserDeployment } from "./oidc-browser-deployment.js";
 
 const origin = "https://localhost:3001";
-const account: LdapAccount = {
+const account: EmployeeAccount = {
 	uid: "stable-uid-a",
 	userId: "e8c99945-5b39-4bcb-8f99-c29a7788432f",
 	email: "person.a@example.test",
@@ -33,15 +37,15 @@ beforeAll(async () => {
 afterAll(async () => database?.stop());
 
 describe("Platform API PostgreSQL browser deployment", () => {
-	it("shares login and UID revocation across API instances", async () => {
+	it("checks the trusted OIDC proxy and shares session revocation across API instances", async () => {
 		let disabled = false;
 		const trustedProxyToken = randomBytes(32).toString("base64url");
 		const directory = {
 			userIdForUid: async () => account.userId,
-			authenticate: async () => account,
+
 			current: async () => account,
 			currentByUserId: async () => account,
-		} as unknown as ReturnType<typeof createLdapIdentityDirectory>;
+		} as unknown as EmployeeIdentityDirectory;
 		const input = {
 			databaseUrl: database.databaseUrl,
 			publicOrigin: origin,
@@ -50,16 +54,30 @@ describe("Platform API PostgreSQL browser deployment", () => {
 			isPlatformDisabled: async () => disabled,
 			organizationIds: async () => ["org-a"],
 		};
-		const first = createPostgresLdapBrowserDeployment(input);
-		const second = createPostgresLdapBrowserDeployment(input);
+		const oidc = {
+			issuer: "https://issuer.example.test",
+			clientId: "fixture",
+			clientSecret: "fixture",
+			verifiedAccount: async () => account,
+			store: new PostgresOidcIdentityStore(database.databaseUrl),
+		};
+		const sessions = new PostgresBrowserSessionStoreV1(database.databaseUrl);
+		const first = createPostgresOidcBrowserDeployment({ ...input, oidc });
+		const second = createPostgresOidcBrowserDeployment({
+			...input,
+			oidc: {
+				...oidc,
+				store: new PostgresOidcIdentityStore(database.databaseUrl),
+			},
+		});
 		try {
 			const requestAtProxy = (
 				host: string,
 				forwardedProto: string,
 				token?: string,
 			) =>
-				new Request("http://localhost:3001/auth/login", {
-					method: "POST",
+				new Request("http://localhost:3001/auth/oidc/login", {
+					method: "HEAD",
 					headers: {
 						host,
 						"x-forwarded-proto": forwardedProto,
@@ -67,14 +85,14 @@ describe("Platform API PostgreSQL browser deployment", () => {
 						origin,
 						"content-type": "application/json",
 					},
-					body: JSON.stringify({ login: "person.a", password: "controlled" }),
 				});
 			expect(() =>
-				createPostgresLdapBrowserDeployment({
+				createPostgresOidcBrowserDeployment({
 					...input,
+					oidc,
 					trustedProxyToken: "short",
 				}),
-			).toThrow("LDAP_BROWSER_PROXY_CONFIGURATION_INVALID");
+			).toThrow("BROWSER_SESSION_PROXY_CONFIGURATION_INVALID");
 			expect(
 				(
 					await first.browserAuth.handleRequest(
@@ -106,16 +124,12 @@ describe("Platform API PostgreSQL browser deployment", () => {
 			expect(
 				(
 					await first.browserAuth.handleRequest(
-						new Request("https://localhost:3001/auth/login", {
-							method: "POST",
+						new Request("https://localhost:3001/auth/oidc/login", {
+							method: "HEAD",
 							headers: {
 								origin,
 								"content-type": "application/json",
 							},
-							body: JSON.stringify({
-								login: "person.a",
-								password: "controlled",
-							}),
 						}),
 					)
 				)?.status,
@@ -132,7 +146,8 @@ describe("Platform API PostgreSQL browser deployment", () => {
 				log: () => {},
 				port: 0,
 			});
-			let cookie: string | undefined;
+			const rawCookie = randomBytes(32).toString("base64url");
+			const cookie = `__Host-platform-session=${rawCookie}`;
 			try {
 				const address = server.address();
 				if (!address || typeof address === "string")
@@ -143,7 +158,7 @@ describe("Platform API PostgreSQL browser deployment", () => {
 							{
 								hostname: "127.0.0.1",
 								port: address.port,
-								path: "/auth/login",
+								path: "/auth/oidc/login",
 								method: "HEAD",
 								headers: {
 									host: "localhost:3001",
@@ -161,41 +176,13 @@ describe("Platform API PostgreSQL browser deployment", () => {
 					});
 				expect(await probeStatus(trustedProxyToken)).toBe(405);
 				expect(await probeStatus("wrong-token")).toBe(400);
-				const login = await new Promise<{
-					status: number | undefined;
-					setCookie: string | undefined;
-				}>((resolve, reject) => {
-					const request = httpRequest(
-						{
-							hostname: "127.0.0.1",
-							port: address.port,
-							path: "/auth/login",
-							method: "POST",
-							headers: {
-								host: "localhost:3001",
-								"x-forwarded-proto": "https",
-								"x-platform-proxy-token": trustedProxyToken,
-								origin,
-								"content-type": "application/json",
-							},
-						},
-						(response) => {
-							response.resume();
-							response.on("end", () =>
-								resolve({
-									status: response.statusCode,
-									setCookie: response.headers["set-cookie"]?.[0],
-								}),
-							);
-						},
-					);
-					request.on("error", reject);
-					request.end(
-						JSON.stringify({ login: "person.a", password: "controlled" }),
-					);
-				});
-				expect(login.status).toBe(204);
-				cookie = login.setCookie?.split(";")[0];
+				const expiry = Date.now() + 60000;
+				await sessions.create(
+					createHash("sha256").update(rawCookie).digest("hex"),
+					account.uid,
+					expiry,
+					expiry,
+				);
 			} finally {
 				await new Promise<void>((resolve, reject) =>
 					server.close((error) => (error ? reject(error) : resolve())),
@@ -217,6 +204,7 @@ describe("Platform API PostgreSQL browser deployment", () => {
 			await Promise.all([
 				first.browserAuth.close(),
 				second.browserAuth.close(),
+				sessions.close(),
 			]);
 		}
 	});

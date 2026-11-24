@@ -1,23 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
-import { PlatformLoginRequestV1Schema } from "@agent-infra/contracts/platform-auth";
 import type {
-	createLdapIdentityDirectory,
-	LdapAccount,
+	EmployeeAccount,
+	EmployeeIdentityDirectory,
 } from "@agent-infra/identity";
-import { resolveLdapPrincipal } from "@agent-infra/identity";
+import { resolveEmployeePrincipal } from "@agent-infra/identity";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
-type Directory = Omit<
-	ReturnType<typeof createLdapIdentityDirectory>,
-	"userIdForUid"
-> & { userIdForUid(uid: string): Promise<string | null> };
 const SESSION_COOKIE = "__Host-platform-session";
 const SESSION_IDLE_MS = 2 * 60 * 60_000;
 const SESSION_ABSOLUTE_MS = 12 * 60 * 60_000;
-const MAX_LOGIN_BYTES = 32_768;
-const LOGIN_BODY_TIMEOUT_MS = 5000;
 
 function response(status: number): Response {
 	return new Response(null, {
@@ -45,71 +38,24 @@ function sessionCookie(value: string, seconds: number): string {
 	return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${seconds}`;
 }
 
-async function loginBody(
-	request: Request,
-): Promise<{ login: string; password: string } | null> {
-	if (
-		!/^application\/json(?:;|$)/iu.test(
-			request.headers.get("content-type") ?? "",
-		) ||
-		!request.body
-	)
-		return null;
-	const reader = request.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let length = 0;
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const deadline = new Promise<never>((_, reject) => {
-		timeout = setTimeout(
-			() => reject(new Error("LOGIN_BODY_TIMEOUT")),
-			LOGIN_BODY_TIMEOUT_MS,
-		);
-	});
-	try {
-		for (;;) {
-			const { done, value } = await Promise.race([reader.read(), deadline]);
-			if (done) break;
-			length += value.byteLength;
-			if (length > MAX_LOGIN_BYTES) return null;
-			chunks.push(value);
-		}
-		const parsed = PlatformLoginRequestV1Schema.safeParse(
-			JSON.parse(
-				new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)),
-			),
-		);
-		return parsed.success ? parsed.data : null;
-	} catch {
-		return null;
-	} finally {
-		if (timeout) clearTimeout(timeout);
-		void reader.cancel().catch(() => undefined);
-		try {
-			reader.releaseLock();
-		} catch {
-			/* A timed-out read may still be pending. */
-		}
-	}
-}
-
-export interface LdapBrowserInput {
+export interface BrowserSessionInput {
 	readonly publicOrigin: string;
-	readonly directory: Directory;
-	readonly sessions: LdapSessionStore;
+	readonly directory: EmployeeIdentityDirectory;
+	readonly sessions: BrowserSessionStore;
 	/** Platform DB authority supplied by #481; unavailable results must throw. */
 	readonly isPlatformDisabled: (userId: string) => Promise<boolean>;
 	/** Complete, current directory mapping supplied by the #889/#504 integration. */
 	readonly organizationIds: (
-		account: LdapAccount,
+		account: EmployeeAccount,
 	) => Promise<readonly string[]>;
-	readonly organizationAuthority?: (account: LdapAccount) => Promise<{
+	readonly organizationAuthority?: (account: EmployeeAccount) => Promise<{
 		readonly organizationIds: readonly string[];
 		readonly binding: DirectorySnapshotBindingV1;
 	}>;
 	readonly now?: () => number;
 }
 
-export interface LdapSessionStore {
+export interface BrowserSessionStore {
 	create(
 		digest: string,
 		uid: string,
@@ -131,7 +77,7 @@ export interface LdapSessionStore {
 	revokeUid(uid: string): Promise<void>;
 }
 
-export function createLdapBrowserAdapter(input: LdapBrowserInput) {
+export function createBrowserSessionAdapter(input: BrowserSessionInput) {
 	let origin: URL;
 	try {
 		origin = new URL(input.publicOrigin);
@@ -145,7 +91,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			!input.sessions ||
 			["create", "find", "renew", "revoke", "revokeUid"].some(
 				(method) =>
-					typeof input.sessions[method as keyof LdapSessionStore] !==
+					typeof input.sessions[method as keyof BrowserSessionStore] !==
 					"function",
 			) ||
 			typeof input.isPlatformDisabled !== "function" ||
@@ -153,18 +99,18 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		)
 			throw new Error();
 	} catch {
-		throw new Error("LDAP_BROWSER_CONFIGURATION_INVALID");
+		throw new Error("BROWSER_SESSION_CONFIGURATION_INVALID");
 	}
 	const now = input.now ?? Date.now;
 	const digest = (token: string) =>
 		createHash("sha256").update(token).digest("hex");
 
-	const current = (account: LdapAccount) =>
-		resolveLdapPrincipal(account, input);
+	const current = (account: EmployeeAccount) =>
+		resolveEmployeePrincipal(account, input);
 
 	/**
 	 * 文件交换的 Actor 解析必须与浏览器会话使用同一组当前事实（#3060）：
-	 * 每次调用都重新读取 LDAP 当前账户与 Platform 停用状态，不复用会话或请求中的旧身份。
+	 * 每次调用都重新读取 目录中的当前员工与 Platform 停用状态，不复用会话或请求中的旧身份。
 	 * 账户缺失或映射不一致返回 null；目录、停用记录或组织快照不可用时抛错，由调用方失败关闭。
 	 */
 	const resolveCurrentIdentity = async (userId: string) => {
@@ -194,7 +140,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			}
 			const platformDisabled = await input.isPlatformDisabled(userId);
 			if (typeof platformDisabled !== "boolean")
-				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+				throw new Error("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 			if (platformDisabled) {
 				await input.sessions.revokeUid(session.uid);
 				return null;
@@ -238,10 +184,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				ids.map(async (id) => {
 					const account = await input.directory.currentByUserId(id);
 					if (!account || account.userId !== id)
-						throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+						throw new Error("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 					const identity = await current(account);
 					if (identity.accountStatus !== "active")
-						throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+						throw new Error("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 					return {
 						userId: identity.userId,
 						displayName: identity.displayName,
@@ -252,7 +198,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		},
 		/**
 		 * Agent 详情的 Owner 当前状态（#2910，工程 Spec §9.1）。与会话校验使用同一组当前事实：
-		 * LDAP 中查不到为 departed；LDAP 停用或 Platform 禁用为 disabled；LDAP、禁用记录与
+		 * 目录确认员工已离开为 departed；目录停用或 Platform 禁用为 disabled；目录员工、禁用记录与
 		 * 目录快照都确认有效才是 active；其余（依赖失败、快照不可用、映射不一致）为 unavailable。
 		 * 每个 Owner 单独判定，一个 Owner 读不到不影响其他 Owner，也不让整个详情失败。
 		 */
@@ -264,7 +210,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 						displayName: null,
 						status: "unavailable" as const,
 					};
-					let account: LdapAccount | null;
+					let account: EmployeeAccount | null;
 					try {
 						account = await input.directory.currentByUserId(id);
 					} catch {
@@ -278,7 +224,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 						};
 					if (account.userId !== id) return unavailable;
 					const displayName = account.displayName.trim() || null;
-					// LDAP 已确认停用时不再依赖其他来源。
+					// 目录已确认停用时不再依赖其他来源。
 					if (account.accountStatus === "disabled")
 						return { userId: id, displayName, status: "disabled" as const };
 					try {
@@ -302,7 +248,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			const account = await input.directory.currentByUserId(id);
 			if (!account) return null;
 			if (account.userId !== id)
-				throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+				throw new Error("BROWSER_SESSION_AUTHORITY_UNAVAILABLE");
 			const identity = await current(account);
 			return {
 				userId: identity.userId,
@@ -331,7 +277,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		},
 	};
 
-	async function issueSession(account: LdapAccount) {
+	async function issueSession(account: EmployeeAccount) {
 		let principal: Awaited<ReturnType<typeof current>>;
 		try {
 			principal = await current(account);
@@ -370,28 +316,10 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 
 	async function handleRequest(request: Request): Promise<Response | null> {
 		const url = new URL(request.url);
-		if (url.pathname !== "/auth/login" && url.pathname !== "/auth/logout")
-			return null;
+		if (url.pathname !== "/auth/logout") return null;
 		if (url.origin !== origin.origin || request.url.length > 8192 || url.search)
 			return response(400);
-		if (url.pathname === "/auth/login") {
-			if (request.method !== "POST") return response(405);
-			if (request.headers.get("origin") !== origin.origin) return response(403);
-			const body = await loginBody(request);
-			if (!body) return response(400);
-			let account: LdapAccount | null;
-			try {
-				account = await input.directory.authenticate(body.login, body.password);
-			} catch (error) {
-				recordHttpFailureContext({
-					failureStep: "auth.login.ldap_authenticate",
-					error,
-				});
-				return response(503);
-			}
-			if (!account) return response(401);
-			return issueSession(account);
-		}
+
 		if (request.method !== "POST") return response(405);
 		if (
 			request.headers.get("origin") !== origin.origin ||

@@ -32,6 +32,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/platform-auth.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/platform-auth.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",

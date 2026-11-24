@@ -573,7 +573,12 @@ describe("Platform API production assembly", () => {
 			const login = await fetch(`http://127.0.0.1:${address.port}/auth/login`, {
 				method: "POST",
 			});
-			expect(login.status).toBe(204);
+			expect(login.status).toBe(404);
+			expect(browserAuth.handleRequest).not.toHaveBeenCalled();
+			const oidcLogin = await fetch(
+				`http://127.0.0.1:${address.port}/auth/oidc/login`,
+			);
+			expect(oidcLogin.status).toBe(204);
 			expect(browserAuth.handleRequest).toHaveBeenCalledOnce();
 			const release = await fetch(
 				`http://127.0.0.1:${address.port}/internal/ops/standard-template-releases/release/apply`,
@@ -779,9 +784,7 @@ describe("Platform API production assembly", () => {
 		}
 		try {
 			const origin = `http://127.0.0.1:${address.port}`;
-			expect(
-				(await fetch(`${origin}/auth/login`, { method: "POST" })).status,
-			).toBe(204);
+			expect((await fetch(`${origin}/auth/oidc/login`)).status).toBe(204);
 			expect((await fetch(`${origin}/healthz`)).status).toBe(200);
 		} finally {
 			await createPlatformApiShutdown(running)();

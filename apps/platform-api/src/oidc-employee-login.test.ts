@@ -2,12 +2,12 @@ import { createSnapshot } from "@agent-infra/enterprise-directory";
 import { captureTaskAuthorizationBoundaryV1 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
+import {
+	type BrowserSessionStore,
+	createBrowserSessionAdapter,
+} from "./browser-session.js";
 import { HttpProtocolError } from "./http/common.js";
 import { registerSessionAuditRoutes } from "./http/session-audit-routes.js";
-import {
-	createLdapBrowserAdapter,
-	type LdapSessionStore,
-} from "./ldap-browser.js";
 import { createOidcEmployeeDirectory } from "./oidc-employee-directory.js";
 
 const origin = "https://platform.example.test";
@@ -64,10 +64,10 @@ function employeeLogin(userId: string) {
 	);
 	const rows = new Map<
 		string,
-		NonNullable<Awaited<ReturnType<LdapSessionStore["find"]>>>
+		NonNullable<Awaited<ReturnType<BrowserSessionStore["find"]>>>
 	>();
 	const isPlatformDisabled = vi.fn(async () => false);
-	const browser = createLdapBrowserAdapter({
+	const browser = createBrowserSessionAdapter({
 		publicOrigin: origin,
 		directory,
 		sessions: {

@@ -615,9 +615,6 @@ importers:
       '@agent-infra/platform-core':
         specifier: workspace:*
         version: link:../platform-core
-      ldapts:
-        specifier: 9.0.0
-        version: 9.0.0
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*
@@ -4191,10 +4188,6 @@ packages:
   koffi@3.3.8:
     resolution: {integrity: sha512-CTDlV3BDh8LFyCgv9vamD+5eu49HQ5wBetAJ9wxERAoAy6rfodahgo28tqhz010l2OGcZvrnBC6MOTyQUt4EIQ==}
 
-  ldapts@9.0.0:
-    resolution: {integrity: sha512-OaaoYBSuan7g0Nm2e1wsRl+9xol41zY+pDlRRSsBq36iKCd2tG/K8WifevNRDjyEfhz4bvkxKdDvJ6xHXwj7+Q==}
-    engines: {node: '>=22'}
-
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
     engines: {node: '>= 12.0.0'}
@@ -5157,9 +5150,6 @@ packages:
 
   streamx@2.28.1:
     resolution: {integrity: sha512-zEzXb0s5Cds7tqMH6rhZ05lcJydCWiQPEwiNngVqzsxCc962vLY4Uw+mW7od8kDH258k2Uz/JrOkdIAAhSh9VA==}
-
-  strict-event-emitter-types@2.0.0:
-    resolution: {integrity: sha512-Nk/brWYpD85WlOgzw5h173aci0Teyv8YdIAEtV+N88nDB0dLlazZyJMIsN6eo1/AR61l+p6CJTG1JIyFaoNEEA==}
 
   string-width@7.2.0:
     resolution: {integrity: sha512-tsaTIkKW9b4N+AEj+SVA+WhJzV7/zMhcSu78mLKWSk7cXMOSHsBKFWUs0fWwq8QyK3MgJBQRX6Gbi4kYbdvGkQ==}
@@ -8700,10 +8690,6 @@ snapshots:
       '@koromix/koffi-win32-ia32': 3.3.8
       '@koromix/koffi-win32-x64': 3.3.8
 
-  ldapts@9.0.0:
-    dependencies:
-      strict-event-emitter-types: 2.0.0
-
   lightningcss-android-arm64@1.32.0:
     optional: true
 
@@ -9855,8 +9841,6 @@ snapshots:
     transitivePeerDependencies:
       - bare-abort-controller
       - react-native-b4a
-
-  strict-event-emitter-types@2.0.0: {}
 
   string-width@7.2.0:
     dependencies:

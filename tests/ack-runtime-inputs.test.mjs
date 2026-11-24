@@ -155,36 +155,23 @@ async function fixture(t, apiReplicas = 1) {
 		templates,
 	});
 	const httpCalls = [];
-	const httpState = { rolledOut: false, failure: null, onFreshLogin: () => {} };
+	const httpState = {
+		rolledOut: false,
+		failure: null,
+		onSessionVerification: () => {},
+	};
 	const server = createServer(async (request, response) => {
 		httpCalls.push({
 			method: request.method,
 			url: request.url,
 			rolledOut: httpState.rolledOut,
 		});
-		if (request.url === "/auth/login") {
-			assert.equal(
-				request.headers.cookie,
-				undefined,
-				"fresh login must not reuse storageState",
-			);
-			if (httpState.rolledOut && httpState.failure === "login") {
-				response.writeHead(503).end();
-				return;
-			}
-			let body = "";
-			for await (const chunk of request) body += chunk;
-			const input = JSON.parse(body);
-			assert.equal(input.password, " fixture-password ");
-			const token = input.login === "fixture-owner" ? "A" : "B";
-			if (httpState.rolledOut) httpState.onFreshLogin();
-			response
-				.writeHead(204, {
-					"Set-Cookie": `__Host-platform-session=${token.repeat(43)}; Path=/; HttpOnly; SameSite=Lax`,
-				})
-				.end();
-			return;
-		}
+		assert.equal(request.method, "GET");
+		assert.match(
+			request.headers.cookie,
+			/^__Host-platform-session=(?:A{43}|B{43})$/u,
+		);
+		if (httpState.rolledOut) httpState.onSessionVerification();
 		assert.equal(request.url, "/api/v1/session");
 		if (httpState.rolledOut && httpState.failure === "session") {
 			response.writeHead(503).end();
@@ -212,14 +199,21 @@ async function fixture(t, apiReplicas = 1) {
 	for (const name of ["owner", "other"])
 		subjects.push({
 			name,
-			loginFile: await save(
-				join(directory, `${name}.login`),
-				`fixture-${name}`,
-			),
-			passwordFile: await save(
-				join(directory, `${name}.password`),
-				" fixture-password \n",
-			),
+			oidcStorageStateFile: await save(join(directory, name + ".input.json"), {
+				cookies: [
+					{
+						name: "__Host-platform-session",
+						value: (name === "owner" ? "A" : "B").repeat(43),
+						domain: "127.0.0.1",
+						path: "/",
+						secure: false,
+						httpOnly: true,
+						sameSite: "Lax",
+						expires: -1,
+					},
+				],
+				origins: [],
+			}),
 			storageStateFile: join(directory, `${name}.state`),
 		});
 	const identityTarget = await save(
@@ -1757,9 +1751,9 @@ test("a missing Secret immediately before rollout prevents all Deployment patche
 	assert(!f.mutations.some((m) => m.startsWith("patch:")));
 });
 
-test("a Secret replacement during fresh login invalidates publication", async (t) => {
+test("a Secret replacement during OIDC session verification invalidates publication", async (t) => {
 	const f = await fixture(t);
-	f.httpState.onFreshLogin = () => {
+	f.httpState.onSessionVerification = () => {
 		f.cluster.get("secret/api-config").metadata.uid = "changed-during-login";
 	};
 	await assert.rejects(
@@ -2000,8 +1994,8 @@ test("a Secret delete and recreate during rollout cannot be reported as publishe
 	);
 });
 
-for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
-	test(`publication requires post-rollout login and session (${scenario})`, async (t) => {
+for (const scenario of ["correct", "wrongTarget", "session"]) {
+	test(`publication requires post-rollout session verification (${scenario})`, async (t) => {
 		const f = await fixture(t);
 		const beforeCandidate = await readFile(f.loginConfig.identityFile);
 		const beforeStates = await Promise.all(
@@ -2023,12 +2017,7 @@ for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
 					assert.equal(error.receipt.phase, "login");
 					assert.equal(error.receipt.recoveryRequired, true);
 					assert.equal(error.receipt.loginVerified, false);
-					assert.equal(
-						error.receipt.failureCode,
-						scenario === "login"
-							? "LOGIN_AUTHENTICATION_FAILED"
-							: "LOGIN_SESSION_READ_FAILED",
-					);
+					assert.equal(error.receipt.failureCode, "LOGIN_SESSION_READ_FAILED");
 					return true;
 				},
 			);
@@ -2043,12 +2032,7 @@ for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
 			assert.equal(result.mutationStatus, "applied");
 			assert.equal(result.loginVerified, true);
 			const afterRollout = f.httpCalls.filter((c) => c.rolledOut);
-			assert.equal(
-				afterRollout.filter(
-					(c) => c.method === "POST" && c.url === "/auth/login",
-				).length,
-				2,
-			);
+			assert.equal(afterRollout.filter((c) => c.method !== "GET").length, 0);
 			assert.equal(
 				afterRollout.filter((c) => c.url === "/api/v1/session").length,
 				6,
@@ -2207,7 +2191,7 @@ for (const scenario of ["before-write", "after-rollout", "during-login"]) {
 				if (args.includes("rollout")) api.spec.replicas = 3;
 			});
 		if (scenario === "during-login")
-			f.httpState.onFreshLogin = () => {
+			f.httpState.onSessionVerification = () => {
 				api.spec.replicas = 3;
 			};
 		await assert.rejects(

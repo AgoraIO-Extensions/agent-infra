@@ -43,7 +43,7 @@ export function createPlatformApiAssemblyInput() {
 
 export const browserAuth = {
 	handleRequest(request) {
-		if (new URL(request.url).pathname !== "/auth/login") return null;
+		if (new URL(request.url).pathname !== "/auth/oidc/login") return null;
 		return new Response(null, { status: 204 });
 	},
 };

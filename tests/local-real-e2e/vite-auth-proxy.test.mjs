@@ -27,7 +27,25 @@ async function freePort() {
 	return address.port;
 }
 
-async function fakeApi() {
+async function fakeApi(publicOrigin) {
+	// Simulate the external authorization endpoint and the registered callback as
+	// separate origins. This fixture exercises browser navigation and proxy headers.
+	const callback = new URL("/auth/oidc/callback", publicOrigin);
+	const issuer = createServer((request, response) => {
+		if (request.url !== "/authorize?state=synthetic-state") {
+			response.writeHead(400).end();
+			return;
+		}
+		response
+			.writeHead(302, {
+				Location: `${callback.href}?code=synthetic-code&state=synthetic-state`,
+			})
+			.end();
+	});
+	issuer.listen(0, "127.0.0.1");
+	await once(issuer, "listening");
+	const issuerAddress = issuer.address();
+	assert(issuerAddress && typeof issuerAddress !== "string");
 	const seen = [];
 	const server = createServer(async (request, response) => {
 		const path = new URL(request.url ?? "/", "http://api.test").pathname;
@@ -72,24 +90,35 @@ async function fakeApi() {
 			}
 			return;
 		}
-		if (path === "/auth/login" && request.method === "POST") {
-			const chunks = [];
-			for await (const chunk of request) chunks.push(chunk);
-			const body = JSON.parse(Buffer.concat(chunks).toString());
+		if (path === "/auth/oidc/login" && request.method === "GET") {
+			response
+				.writeHead(302, {
+					Location: `http://127.0.0.1:${issuerAddress.port}/authorize?state=synthetic-state`,
+					"Set-Cookie":
+						"oidc_tx=synthetic-state; Path=/auth/oidc; Secure; HttpOnly; SameSite=Lax",
+				})
+				.end();
+			return;
+		}
+		if (path === "/auth/oidc/callback" && request.method === "GET") {
+			const params = new URL(request.url, publicOrigin).searchParams;
 			if (
-				body.login !== "synthetic-user" ||
-				body.password !== "synthetic-pass"
+				params.get("code") !== "synthetic-code" ||
+				params.get("state") !== "synthetic-state" ||
+				!(headers.cookie ?? "").includes("oidc_tx=synthetic-state")
 			) {
-				response.statusCode = 401;
-				response.end();
+				response.writeHead(400).end();
 				return;
 			}
-			response.statusCode = 204;
-			response.setHeader(
-				"Set-Cookie",
-				"proxy_session=synthetic; Path=/; Secure; HttpOnly; SameSite=Lax",
-			);
-			response.end();
+			response
+				.writeHead(303, {
+					Location: "/agents",
+					"Set-Cookie": [
+						"proxy_session=synthetic; Path=/; Secure; HttpOnly; SameSite=Lax",
+						"oidc_tx=; Path=/auth/oidc; Secure; HttpOnly; SameSite=Lax; Max-Age=0",
+					],
+				})
+				.end();
 			return;
 		}
 		if (path === "/auth/logout" && request.method === "POST") {
@@ -111,7 +140,10 @@ async function fakeApi() {
 	return {
 		target: `http://127.0.0.1:${address.port}`,
 		seen,
-		close: () => new Promise((resolve) => server.close(resolve)),
+		close: () =>
+			Promise.all(
+				[issuer, server].map((s) => new Promise((resolve) => s.close(resolve))),
+			),
 	};
 }
 
@@ -141,7 +173,7 @@ async function startWeb(port, target, tlsFiles) {
 				PLATFORM_API_PROXY_TARGET: target,
 				PLATFORM_WEB_TLS_CERT_FILE: tlsFiles?.cert ?? "",
 				PLATFORM_WEB_TLS_KEY_FILE: tlsFiles?.key ?? "",
-				VITE_PLATFORM_LOGIN_URL: "/auth/login",
+				VITE_PLATFORM_LOGIN_URL: "/auth/oidc/login",
 				VITE_PLATFORM_LOGOUT_URL: "/auth/logout",
 				VITE_PLATFORM_DEVELOPMENT_MODE: "",
 			},
@@ -171,13 +203,13 @@ async function startWeb(port, target, tlsFiles) {
 	throw new Error(`pnpm dev:web did not start: ${output}`);
 }
 
-function assertBoundary(events, path, origin, proto) {
+function assertBoundary(events, path, origin, method) {
 	const event = events.find((value) => value.path === path);
 	assert(event, `${path} must reach the fake API`);
-	assert.equal(event.method, "POST");
+	assert.equal(event.method, method);
 	assert.equal(event.host, new URL(origin).host);
-	assert.equal(event.origin, origin);
-	assert.equal(event.proto, proto);
+	if (method === "POST") assert.equal(event.origin, origin);
+	assert.equal(event.proto, new URL(origin).protocol.slice(0, -1));
 	assert.equal(event.protoCount, 1);
 	return event;
 }
@@ -210,8 +242,9 @@ test("TLS pnpm dev:web proxies browser login and logout with trusted public head
 		{ stdio: "ignore" },
 	);
 	assert(readFileSync(cert).length > 0);
-	const api = await fakeApi();
 	const port = await freePort();
+	const origin = `https://127.0.0.1:${port}`;
+	const api = await fakeApi(origin);
 	let web;
 	let browser;
 	try {
@@ -219,34 +252,24 @@ test("TLS pnpm dev:web proxies browser login and logout with trusted public head
 		browser = await chromium.launch();
 		const context = await browser.newContext({ ignoreHTTPSErrors: true });
 		const page = await context.newPage();
-		const origin = `https://127.0.0.1:${port}`;
 		await page.goto(`${origin}/agents`);
-		await page.getByRole("heading", { name: "登录工作空间" }).waitFor();
-		const spoofed = await page.evaluate(
-			async () =>
-				(
-					await fetch("/auth/login", {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							"X-Forwarded-Proto": "http,https",
-						},
-						body: JSON.stringify({
-							login: "synthetic-user",
-							password: "wrong",
-						}),
-					})
-				).status,
+		await page.getByRole("heading", { name: "登录工作区" }).waitFor();
+		// Forge the client header on real browser navigations. Vite must overwrite it.
+		await page.route("**/auth/**", (route) =>
+			route.continue({
+				headers: {
+					...route.request().headers(),
+					"X-Forwarded-Proto": "http,https",
+				},
+			}),
 		);
-		assert.equal(spoofed, 401);
-		await page.getByLabel("账号").fill("synthetic-user");
-		await page.getByLabel("密码").fill("synthetic-pass");
-		await page.getByRole("button", { name: "登录" }).click();
+		await page.getByRole("link", { name: "使用公司账号登录" }).click();
 		await page.getByRole("button", { name: "退出登录" }).waitFor();
 		await page.getByRole("button", { name: "退出登录" }).click();
-		await page.getByRole("heading", { name: "登录工作空间" }).waitFor();
-		const login = assertBoundary(api.seen, "/auth/login", origin, "https");
-		const logout = assertBoundary(api.seen, "/auth/logout", origin, "https");
+		await page.getByRole("heading", { name: "登录工作区" }).waitFor();
+		const login = assertBoundary(api.seen, "/auth/oidc/login", origin, "GET");
+		assertBoundary(api.seen, "/auth/oidc/callback", origin, "GET");
+		const logout = assertBoundary(api.seen, "/auth/logout", origin, "POST");
 		assert.equal(logout.csrf, "1");
 		assert.equal(logout.hasSession, true);
 		assert.equal(login.hasSession, false);
@@ -267,23 +290,18 @@ test("TLS pnpm dev:web proxies browser login and logout with trusted public head
 test("plain HTTP dev server overrides a forged HTTPS forwarding claim", {
 	timeout: 30_000,
 }, async () => {
-	const api = await fakeApi();
 	const port = await freePort();
+	const origin = `http://127.0.0.1:${port}`;
+	const api = await fakeApi(origin);
 	let web;
 	try {
 		web = await startWeb(port, api.target);
-		const origin = `http://127.0.0.1:${port}`;
-		const response = await fetch(`${origin}/auth/login`, {
-			method: "POST",
-			headers: {
-				Origin: origin,
-				"Content-Type": "application/json",
-				"X-Forwarded-Proto": "https",
-			},
-			body: JSON.stringify({ login: "synthetic-user", password: "wrong" }),
+		const response = await fetch(`${origin}/auth/oidc/login`, {
+			redirect: "manual",
+			headers: { "X-Forwarded-Proto": "https" },
 		});
-		assert.equal(response.status, 401);
-		assertBoundary(api.seen, "/auth/login", origin, "http");
+		assert.equal(response.status, 302);
+		assertBoundary(api.seen, "/auth/oidc/login", origin, "GET");
 	} finally {
 		web?.stop();
 		await api.close();

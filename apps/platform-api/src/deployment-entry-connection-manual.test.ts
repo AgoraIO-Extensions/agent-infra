@@ -25,10 +25,6 @@ import {
 // an approved, bound, live exception record and a complete DB-resolved
 // Principal set. Real deployment entry, deployment assembly and PostgreSQL.
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 180_000 });
-vi.mock("@agent-infra/identity", async (original) => ({
-	...(await original<typeof import("@agent-infra/identity")>()),
-	createLdapIdentityDirectory: () => ({ currentByUserId: async () => null }),
-}));
 vi.mock("@agent-infra/platform-store", async (original) => ({
 	...(await original<typeof import("@agent-infra/platform-store")>()),
 	PostgresPlatformUserDisablesV1: class {
@@ -40,7 +36,7 @@ vi.mock("@agent-infra/platform-store", async (original) => ({
 vi.mock("./index.js", async () => ({
 	createProductionPlatformApiAssemblyInputV1: (await import("./deployment.js"))
 		.createProductionPlatformApiAssemblyInputV1,
-	createPostgresLdapBrowserDeployment: () => ({
+	createPostgresOidcBrowserDeployment: () => ({
 		browserAuth: { handleRequest: async () => null },
 		identity: {
 			resolve: async () => null,
@@ -169,8 +165,8 @@ async function load(exports = "") {
 	await writeFile(
 		configuration,
 		`
-export const ldap = { verifyCurrentStatus: async () => "active" };
-export const organizationIds = async () => [];
+export const oidc = {issuer:"https://issuer.example.test",clientId:"platform",clientSecret:"fixture",allowEmailLink:true};
+export const directorySnapshot = {endpoint:"https://directory.example.test",token:"x".repeat(32),organizationIdForDepartment:()=>"org"};
 export const directorySearch = async () => [];
 export const publicOrigin = ${JSON.stringify(publicOrigin)};
 export const apiInput = {

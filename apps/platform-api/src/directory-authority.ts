@@ -4,7 +4,7 @@ import {
 	type DirectoryDepartment,
 	type DirectoryOrganizationAuthorityV1,
 } from "@agent-infra/enterprise-directory";
-import type { LdapAccount } from "@agent-infra/identity";
+import type { EmployeeAccount } from "@agent-infra/identity";
 
 export interface DirectorySnapshotDeploymentInputV1 {
 	readonly endpoint: string;
@@ -20,7 +20,7 @@ export interface DirectorySnapshotDeploymentInputV1 {
 /** Deployment-owned Platform consumer for current directory organization facts. */
 export function createDirectoryOrganizationIdsResolverV1(
 	input: DirectorySnapshotDeploymentInputV1,
-): (account: LdapAccount) => Promise<readonly string[]> {
+): (account: EmployeeAccount) => Promise<readonly string[]> {
 	const resolveAuthority =
 		createDirectoryOrganizationAuthorityResolverV1(input);
 	return async (account) => (await resolveAuthority(account)).organizationIds;
@@ -29,7 +29,7 @@ export function createDirectoryOrganizationIdsResolverV1(
 /** Full sidecar for consumers that can carry snapshot binding metadata. */
 export function createDirectoryOrganizationAuthorityResolverV1(
 	input: DirectorySnapshotDeploymentInputV1,
-): (account: LdapAccount) => Promise<DirectoryOrganizationAuthorityV1> {
+): (account: EmployeeAccount) => Promise<DirectoryOrganizationAuthorityV1> {
 	const client = createDirectoryClient(input);
 	const resolver = createDirectoryOrganizationResolverV1({
 		snapshot: client,

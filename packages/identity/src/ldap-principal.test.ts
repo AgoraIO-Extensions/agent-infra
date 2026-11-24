@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { LdapAccount } from "./ldap.js";
+import type { EmployeeAccount } from "./employee-identity.js";
 import { resolveLdapPrincipal } from "./ldap-principal.js";
 
-const account: LdapAccount = {
+const account: EmployeeAccount = {
 	uid: "stable-a",
 	userId: "e8c99945-5b39-4bcb-8f99-c29a7788432f",
 	email: "person.a@example.test",
