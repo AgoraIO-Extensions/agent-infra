@@ -176,3 +176,31 @@ describe("fixed Provider Registry", () => {
 		});
 	});
 });
+
+it("selects only reviewed evidence for the exact deployed driver, image and configuration", async () => {
+	const { selectProviderDeploymentBinding } = await import(
+		"./provider-registry.js"
+	);
+	const driver = PROVIDER_REGISTRY.claude.runtimeDriverBinding;
+	const image = "sha256:" + "a".repeat(64);
+	const evidence = {
+		runtimeDriverBinding: driver,
+		imageDigest: image,
+		configurationRevision: 3,
+		configVersion: "configuration-3-" + "a".repeat(64),
+		conformance: "passed",
+		probe: "passed",
+		recovery: "supported",
+		result: "confirmed",
+	} as const;
+	const select = (
+		records: readonly (typeof evidence)[],
+		version = evidence.configVersion,
+	) => selectProviderDeploymentBinding(records, "claude", image, version);
+	expect(select([evidence])?.evidence).toEqual(evidence);
+	expect(
+		select([evidence], "configuration-3-" + "b".repeat(64)),
+	).toBeUndefined();
+	expect(select([evidence, evidence])).toBeUndefined();
+	expect(select([])).toBeUndefined();
+});

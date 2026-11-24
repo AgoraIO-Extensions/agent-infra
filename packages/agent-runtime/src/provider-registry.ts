@@ -221,6 +221,41 @@ export function resolveProviderRegistration(
 	return PROVIDER_REGISTRY[template];
 }
 
+/** Deployment configuration supplies the operator-reviewed rows for the installed release. */
+export const providerEvidenceEnv = "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE";
+export const providerImageEnv = "AGENT_INFRA_RUNTIME_PROVIDER_IMAGE_DIGEST";
+export function selectProviderDeploymentBinding(
+	rows:
+		| readonly (ProviderCapabilityEvidence & { configVersion: string })[]
+		| undefined,
+	driver: "codex" | "claude" | "acp" | "pi",
+	imageDigest: string,
+	configVersion: string,
+): ProviderDeploymentBinding | undefined {
+	const expected = resolveProviderRegistration(
+		driver === "acp" ? "opencode" : driver,
+	).runtimeDriverBinding;
+	const revision = /^configuration-([1-9][0-9]*)-[a-f0-9]{64}$/.exec(
+		configVersion,
+	);
+	if (!revision || !/^sha256:[a-f0-9]{64}$/.test(imageDigest)) return undefined;
+	const configurationRevision = Number(revision[1]);
+	const matches = rows?.filter(
+		(row) =>
+			row.configVersion === configVersion &&
+			row.imageDigest === imageDigest &&
+			row.configurationRevision === configurationRevision &&
+			matchesRuntimeDriverBinding(expected, row.runtimeDriverBinding),
+	);
+	if (!matches || matches.length !== 1) return undefined;
+	return {
+		runtimeDriverBinding: expected,
+		imageDigest,
+		configurationRevision,
+		evidence: matches[0]!,
+	};
+}
+
 /** Project Driver declarations only after Platform supplies complete evidence. */
 export function projectProviderCapabilities(
 	binding: ProviderDeploymentBinding | undefined,

@@ -1,3 +1,8 @@
+import {
+	providerEvidenceEnv,
+	providerImageEnv,
+	selectProviderDeploymentBinding,
+} from "@agent-infra/agent-runtime";
 import { runtimeSkillHubBindingEnvironmentNameV1 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
@@ -162,6 +167,20 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			Object.keys(value.env).some(isRuntimeConnectionEnvironmentV1)
 		)
 			throw new WorkloadKubernetesError("policy");
+		if (
+			Object.hasOwn(value.env, providerEvidenceEnv) ||
+			Object.hasOwn(value.env, providerImageEnv)
+		)
+			throw new WorkloadKubernetesError("policy");
+		const providerBinding =
+			templateBinding &&
+			modelProjection &&
+			selectProviderDeploymentBinding(
+				policy.providerCapabilityEvidence,
+				templateBinding.driver,
+				value.imageDigest,
+				`configuration-${modelProjection.configurationRevision}-${modelProjection.fingerprint}`,
+			);
 		const injection = modelBindings(value);
 		const skillHubRuntime = skillHubRuntimeEnvironmentV1(value);
 		if (Object.hasOwn(value.env, runtimeSkillHubBindingEnvironmentNameV1))
@@ -213,6 +232,17 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				)
 				.map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
+			...(runtimeDriver
+				? [
+						{
+							name: providerEvidenceEnv,
+							value: providerBinding
+								? JSON.stringify(providerBinding.evidence)
+								: "",
+						},
+						{ name: providerImageEnv, value: value.imageDigest },
+					]
+				: []),
 			...(runtimeDriver
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
 				: []),

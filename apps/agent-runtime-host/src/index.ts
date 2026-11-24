@@ -31,10 +31,13 @@ import {
 	openOpenCodeRuntime,
 	openPiRuntime,
 	pinCodexSessionExecutorEpochV1,
+	providerEvidenceEnv,
+	providerImageEnv,
 	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
 	resolveProviderRegistration,
+	selectProviderDeploymentBinding,
 	supportsProtectedOpenCodeMcpTransport,
 	supportsProtectedPiMcpTransport,
 	verifyCodexPilotInstallation,
@@ -609,6 +612,28 @@ export async function assembleRuntimeHost(
 				})()
 			: undefined;
 	const activeConfiguration = configuration ?? messagesConfiguration;
+	let providerDeploymentBinding = options.providerDeploymentBinding;
+	const wire = environment[providerEvidenceEnv];
+	if (wire) {
+		try {
+			if (binding === "fake" || wire.length > 4096)
+				runtimeConfigurationInvalid();
+			const digest = environment[providerImageEnv];
+			if (
+				!digest ||
+				(readinessBinding && readinessBinding.imageDigest !== digest)
+			)
+				runtimeConfigurationInvalid();
+			providerDeploymentBinding = selectProviderDeploymentBinding(
+				[JSON.parse(wire)],
+				binding,
+				digest,
+				activeConfiguration?.configVersion ?? "",
+			);
+		} catch {
+			runtimeConfigurationInvalid();
+		}
+	}
 	const messagesRuntimeOptions = messagesConfiguration?.modelOptions.map(
 		(option) => ({
 			...option,
@@ -1173,15 +1198,12 @@ export async function assembleRuntimeHost(
 			: undefined;
 		const podUid = environment.AGENT_INFRA_RUNTIME_POD_UID;
 		const host = await RuntimeHost.open({
-			...(options.providerDeploymentBinding
-				? { providerDeploymentBinding: options.providerDeploymentBinding }
-				: {}),
+			...(providerDeploymentBinding ? { providerDeploymentBinding } : {}),
 			...(binding !== "fake"
 				? {
-						runtimeDriverBinding:
-							(binding === "acp" ? "opencode" : binding) === "opencode"
-								? resolveProviderRegistration("opencode").runtimeDriverBinding
-								: resolveProviderRegistration(binding).runtimeDriverBinding,
+						runtimeDriverBinding: resolveProviderRegistration(
+							binding === "acp" ? "opencode" : binding,
+						).runtimeDriverBinding,
 					}
 				: {}),
 			// #4358 I2: one observer per process, so its clock domain is this

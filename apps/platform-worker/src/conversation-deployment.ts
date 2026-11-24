@@ -4,6 +4,7 @@ import {
 	codexSessionExecutorAttestationV1,
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
+	selectProviderDeploymentBinding,
 } from "@agent-infra/agent-runtime";
 import {
 	type ApprovedConnectionConsumerTargetV1,
@@ -849,7 +850,14 @@ export function createSessionSandboxResourceInputResolverV1(
 						imageDigest: `${templateBinding.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 					})
 				: undefined;
+		const providerBinding = selectProviderDeploymentBinding(
+			workload.policy.providerCapabilityEvidence,
+			templateBinding.driver,
+			deployment.imageDigest,
+			`configuration-${projection.configurationRevision}-${projection.fingerprint}`,
+		);
 		return {
+			...(providerBinding ? { providerBinding } : {}),
 			driver: templateBinding.driver,
 			...(executorBinding
 				? {

@@ -1163,6 +1163,10 @@ it("materializes custom Owner Secret values only into the Session Secret", () =>
 			(entry) => entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 		),
 	).toBe(false);
+	expect(pod.spec?.containers[0]?.env).toContainEqual({
+		name: "AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE",
+		value: "",
+	});
 	expect(secret.data?.MODEL_API_KEY).toBe(
 		Buffer.from("redacted-test-value").toString("base64"),
 	);
@@ -2982,6 +2986,8 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		);
 		expect([...env.keys()].sort()).toEqual(
 			[
+				"AGENT_INFRA_RUNTIME_PROVIDER_EVIDENCE",
+				"AGENT_INFRA_RUNTIME_PROVIDER_IMAGE_DIGEST",
 				"SESSION_ID",
 				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 				"AGENT_INFRA_RUNTIME_DRIVER",

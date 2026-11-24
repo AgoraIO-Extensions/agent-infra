@@ -222,6 +222,9 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
+	readonly providerCapabilityEvidence?: readonly (import("@agent-infra/agent-runtime").ProviderCapabilityEvidence & {
+		readonly configVersion: string;
+	})[];
 	readonly runtimeAuth?: WorkloadRuntimeAuthV1;
 }
 

@@ -12,6 +12,8 @@ import {
 	codexSessionExecutorBindingDigestV1,
 	createCodexSessionExecutorBindingV1,
 	issueExecutorStartIdentityV1,
+	providerEvidenceEnv,
+	providerImageEnv,
 	verifyCodexSessionExecutorBindingV1,
 } from "@agent-infra/agent-runtime";
 import type { ExecutorInstanceStateV2 } from "@agent-infra/contracts/runtime";
@@ -124,6 +126,7 @@ import { writeWorkspaceSnapshotSecretV1 } from "./workspace-snapshot-secret.js";
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
+	readonly providerBinding?: import("@agent-infra/agent-runtime").ProviderDeploymentBinding;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
 	readonly modelConfiguration: string;
@@ -793,6 +796,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"providerBinding",
 	"codexContainerBoundaryEnabled",
 	"codexContainerBoundaryAttestation",
 	"sessionScopeAttestation",
@@ -975,6 +979,17 @@ function runtimeEnvironment(
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
 	const platform = [
+		{
+			name: providerEvidenceEnv,
+			value:
+				!runtime.custom && runtime.providerBinding
+					? JSON.stringify(runtime.providerBinding.evidence)
+					: "",
+		},
+		{
+			name: providerImageEnv,
+			value: allocation.imageDigest.split("@")[1] ?? "",
+		},
 		...(allocation.skillHub
 			? [
 					{
